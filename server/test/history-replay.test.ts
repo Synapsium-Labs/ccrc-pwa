@@ -196,7 +196,7 @@ describe('history-replay W2-4 Task 1: the argument grammar', () => {
     }
   };
 
-  it('FLAG_SPECS declares exactly W2-4\'s seven flags and W2-5a Task 7\'s, frozen', () => {
+  it('FLAG_SPECS declares exactly W2-4\'s seven flags, W2-5a Task 7\'s and W2-5b1 Task 1\'s, frozen', () => {
     expect(Object.isFrozen(replay.FLAG_SPECS)).toBe(true);
     expect(replay.FLAG_SPECS).toEqual({ out: 'string', account: 'string', budget: 'int', 'writer-model': 'string',
       'judge-model': 'string', 'arm-model': 'string', 'settings-mode': 'string',
@@ -210,7 +210,9 @@ describe('history-replay W2-4 Task 1: the argument grammar', () => {
       power: 'string', 'power-sha256': 'string', 'pilot-result': 'string', 'pilot-result-sha256': 'string',
       'sha-min-prefix': 'int', 'writer-input': 'string', 'n-fidelity': 'int', 'n-usage': 'int',
       'spend-budget': 'int', 'window-start': 'int', 'window-end': 'int', 'q18-decision': 'string',
-      draft: 'bool', finalize: 'bool', template: 'bool', registry: 'bool', section: 'string' });
+      draft: 'bool', finalize: 'bool', template: 'bool', registry: 'bool', section: 'string',
+      // W2-5b1 Task 1 (W2-D24, Q23): a part 2 consumer's stamp, taken at or after window start only
+      'allow-code-change': 'bool' });
   });
 
   it('a subcommand, a string, an int and a bool parse to {sub, flags}', () => {
@@ -883,7 +885,7 @@ describe('W2-4 Task 4: spawned text, the stream-json reader and the spend ledger
 
   it('the rest of the stream: one tool pair by id, the result event, its permission denial, its usage, the message count and the malformed line', () => {
     const f = t4Replay.readStreamJson(STREAM);
-    expect(f.toolPairs).toEqual([{ id: 'toolu_1', name: 'Bash', input: { command: 'true' }, result: 'ok', isError: false }]);
+    expect(f.toolPairs).toEqual([{ id: 'toolu_1', name: 'Bash', input: { command: 'true' }, result: 'ok', isError: false, parentToolUseId: null }]);
     expect(f.result).toEqual({ subtype: 'success', isError: false, numTurns: 2, text: 'done' });
     expect(f.permissionDenials).toEqual([DENIAL]);
     expect(f.usageSource).toBe('result');
@@ -907,6 +909,7 @@ describe('W2-4 Task 4: spawned text, the stream-json reader and the spend ledger
     expect(t4Replay.readStreamJson('')).toEqual({
       init: null, usage: { input: 0, cacheCreation: 0, cacheRead: 0, output: 0 }, usageSource: 'none', toolPairs: [],
       permissionDenials: null, result: null, assistantMessages: 0, malformedLines: 0, firstCallUsage: null,
+      resultUsage: null, assistantUsage: { input: 0, cacheCreation: 0, cacheRead: 0, output: 0 }, messages: [],
     });
   });
 
@@ -942,7 +945,7 @@ describe('W2-4 Task 4: spawned text, the stream-json reader and the spend ledger
       { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_3', content: [{ type: 'text', text: 'one' }, { type: 'image' }, { type: 'text', text: 'two' }] }] } },
       { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_stray', content: 'stray' }] } },
     ));
-    expect(f.toolPairs).toEqual([{ id: 'toolu_3', name: 'Agent', input: { prompt: 'look' }, result: 'one\ntwo', isError: null }]);
+    expect(f.toolPairs).toEqual([{ id: 'toolu_3', name: 'Agent', input: { prompt: 'look' }, result: 'one\ntwo', isError: null, parentToolUseId: null }]);
     expect(f.assistantMessages).toBe(1);
     expect(f.usageSource).toBe('none');
   });
@@ -1153,7 +1156,9 @@ function t5Box(prefix: string): { home: string; out: string; up: T5Launch; gen: 
   };
 }
 
-const T5_RECALL = { session: 'fixture-recall-session', arm: 'fixture-arm-value', asof: 'fixture-asof-uuid' };
+/** W2-5b1 Task 1: spawnEnv takes only values the seam takes (W2-D50, W2-D42), so the contract's fixture is real-shaped:
+ *  a session id idOk takes, a RECALL_ARMS word (through lib, never spelled here) and a lowercase UUID. */
+const T5_RECALL = { session: 'fixture-recall-session', arm: t4Lib.RECALL_ARMS[1] as string, asof: '0189abcd-0000-4000-8000-0000000005b1' };
 /** An explicit no-op gate: runBatch requires one, and these cases test the runner, not Task 6's stop. */
 const T5_NO_GATE = (): void => {};
 const T5_BASE_KEYS = ['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH'];
@@ -1565,6 +1570,20 @@ describe('W2-4 Task 5: the batch runner, at most 2 at once, gated, resumable (W2
     await claimedRun(t5job(b, b.up, 'box', 'left-1'));
     expect(ledgerRows(b.out)).toEqual([{ name: 'left-1', tokens: T5_LEFTOVER_TOKENS }, { name: 'left-1', tokens: T5_TOKENS }]);
   }, 60_000);
+
+  it('F9: a resumed leftover stream records the clamped charge and clears its .part instead of throwing', () => {
+    const b = t5Box('ccrc-replay-t5-leftover-overflow-');
+    const out = t5drv.prepareOut(t5path.join(b.home, 'overflow-out'));
+    const stream = JSON.stringify({ type: 'result', usage: { input_tokens: Number.MAX_SAFE_INTEGER, output_tokens: 1 } }) + '\n';
+    t5fs.writeFileSync(t5path.join(out, 'overflow-0.jsonl.part'), stream);
+    const claim = t5drv.claimOut(out);
+    try {
+      expect(ledgerRows(out)).toEqual([{ name: 'overflow-0', tokens: Number.MAX_SAFE_INTEGER }]);
+      expect(t5fs.existsSync(t5path.join(out, 'overflow-0.jsonl.part'))).toBe(false);
+    } finally {
+      claim.release();
+    }
+  });
 
   it('a gate sees a leftover\'s charge: a budget the leftover alone exhausts refuses budget-exhausted with no spawn', async () => {
     const b = t5Box('ccrc-replay-t5-leftover-gate-');
@@ -3053,7 +3072,9 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
   // lib.mjs bring in exactly the names the plan's tasks use (W2-D33, W2-D74). A later W2-5a task that adds a name to a
   // module's braces updates that module's entry here in the same commit. So no edit adds a second reader unseen: keptOf
   // (W2-D68), sweep.mjs's recall-off content reader (W2-D29, R6) or a decode of its own. W2-D24's code hash covers the
-  // driver and the gate. The other ccd/history modules ride the release tag (W2-D24).
+  // driver and the gate. The other ccd/history modules ride the release tag (W2-D24). W2-5b1 Task 1 adds asOfCutOf to
+  // recall.mjs's names (W2-2a's cut, which the card's parent and W2-D78(iii) read); lib's and the gate's names are not
+  // pinned here, and W2-5b1 Task 1's own case holds the names that PR consumes from them.
   const EXPECTED_IMPORTS = ['node:fs', 'node:os', 'node:path', 'node:child_process', 'node:url', 'node:crypto',
     '../ccd/history/lib.mjs', '../ccd/history/store.mjs', '../ccd/history/derive.mjs', '../ccd/history/recall.mjs',
     '../ccd/history/cli.mjs', '../ccd/history/sweep.mjs', './history-gate.mjs', '../shared/roster-json.mjs'];
@@ -3062,7 +3083,7 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
     'node:crypto': '{ randomBytes }',
     '../ccd/history/store.mjs': '{ StoreError, openReader, readBounded, userVersion }',
     '../ccd/history/derive.mjs': '{ blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf }',
-    '../ccd/history/recall.mjs': '{ expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf }',
+    '../ccd/history/recall.mjs': '{ asOfCutOf, expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf }',
     '../ccd/history/cli.mjs': '{ pairIndexOf }',
     '../ccd/history/sweep.mjs': '{ ftsTextOfBlob, readRegPresence }',
   };
@@ -4810,7 +4831,8 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     const doc = JSON.parse(bytes.toString('utf8'));
     expect(Object.keys(doc).sort()).toEqual(['account', 'budget', 'kind', 'measured_ms', 'model', 'settings_mode', 'spellings', 'spend', 'v']);
     expect(doc).toMatchObject({ kind: t9Driver.PROBE_KIND, v: 1, account: 'up-a', settings_mode: 'restricted', model: T9_MODEL, budget: 1_000_000 });
-    expect(doc.spend, 'the ledger under --out counts the three runs').toBe(3 * 5);
+    // W2-5b1 Task 1 (Q7): each run is charged the larger reading, its four messages' 4 x 5 against its result's 5.
+    expect(doc.spend, 'the ledger under --out counts the three runs').toBe(3 * 20);
     expect(doc.spellings).toEqual([
       { spelling: t9Driver.allowedToolSpellings(home)[0], denied: false, tool_error: false, ran: true, result_seen: true },
       { spelling: t9Driver.allowedToolSpellings(home)[1], denied: true, tool_error: true, ran: true, result_seen: true },
@@ -4819,9 +4841,9 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     expect(t9Fs.readdirSync(t9Path.join(out, 'probe')).sort(), 'the streams live under out/probe').toEqual([
       'spelling-1.jsonl', 'spelling-1.run.json', 'spelling-2.jsonl', 'spelling-2.run.json', 'spelling-3.jsonl', 'spelling-3.run.json',
     ]);
-    // The driver's whole subcommand set, in registration order: W2-4's two, then W2-5a Task 7's six (Task 1's grammar
-    // cases use an unregistered name).
-    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify']);
+    // The driver's whole subcommand set, in registration order: W2-4's two, W2-5a Task 7's six, then W2-5b1's, in task
+    // order (Task 1's grammar cases use an unregistered name).
+    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify', 'marker', 'arms', 'judge']);
   });
 
   // D-5983: the sha256 line is on stderr (as open and freeze print it), exactly one line, and stdout is empty.
@@ -7192,7 +7214,7 @@ describe('W2-5a Task 4: B fails closed on a body that cannot be rendered, D-6304
   it('body-unrenderable is an existing RECON_DISCARDS word, and no word was added for it', () => {
     expect(w5a4Drv.RECON_DISCARDS).toContain('body-unrenderable');
     expect(w5a4Drv.RECON_DISCARDS.at(-1)).toBe('body-unrenderable');
-    expect(w5a4Drv.RECON_DISCARDS).toHaveLength(35 + 1);
+    expect(w5a4Drv.RECON_DISCARDS).toHaveLength(35 + 2);   // the second +1 is W2-5b1 Task 2's 'card-unrenderable'
   });
 });
 
@@ -8930,6 +8952,7 @@ import * as r7gate from '../../deploy/history-gate.mjs';
 import { RECALL_OFF_KEYS as R7_KEYS, canonicalJson as r7Canon, historyPaths as r7Paths, sha256Hex as r7Sha } from '../../ccd/history/lib.mjs';
 import { mkTmp as r7MkTmp } from './tmpHelpers.js';
 import { REPO as R7_REPO, scrubbedEnv as r7Scrubbed } from './historyHelpers.js';
+import { HEADLESS_LIST_MAX_BYTES as W5B3_MAX, asOfBinds as w5b3Binds, formatHeadlessList as w5b3Format, parseHeadlessList as w5b3Parse } from '../../ccd/history/lib.mjs';
 
 r7describe('W2-5a Task 7: the record subcommands', () => {
   type R7 = Record<string, any>;
@@ -9246,12 +9269,15 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect(run7(null, null, ['open', '--draft', '--template']).stderr).toBe(refusalLine('args-invalid', 'open wants exactly one of --draft, --finalize and --template'));
       r7expect(run7(null, null, ['verify']).stderr).toBe(refusalLine('args-invalid', 'verify wants exactly one of --registry and --section'));
       r7expect(run7(null, null, ['verify', '--registry', '--section', 'ab']).stderr).toBe(refusalLine('args-invalid', 'verify wants exactly one of --registry and --section'));
-      r7expect(run7(null, null, ['verify', '--section', 'quiz']).stderr).toBe(refusalLine('args-invalid', 'section "quiz": this build verifies ab only'));
+      // W2-5b1 Task 3: verify reads ab, pilot and quiz; any other section is refused before its flags are read (edited in place, R27).
+      r7expect(run7(null, null, ['verify', '--section', 'judge']).stderr).toBe(refusalLine('args-invalid', 'section "judge": verify reads ab, pilot or quiz'));
     });
 
     r7it('no W2-5a subcommand takes --allow-code-change: before window start a code change is a superseding draft (W2-D6, W2-D24)', () => {
       for (const sub of [['quiz-source'], ['freeze'], ['power'], ['open', '--finalize'], ['verify', '--registry']]) {
-        r7expect(run7(null, null, [...sub, '--allow-code-change']).stderr, sub.join(' ')).toBe(refusalLine('args-invalid', 'unknown flag "--allow-code-change"'));
+        // W2-5b1 Task 1 declares the flag for W2-5b's part 2 consumers (Q23): each W2-5a form now refuses it as a flag it
+        // never reads (checkFlags), where the grammar refused it as unknown before. Edited in place under R27.
+        r7expect(run7(null, null, [...sub, '--allow-code-change']).stderr, sub.join(' ')).toBe(refusalLine('args-invalid', `--allow-code-change is not a ${sub.join(' ')} flag`));
       }
     });
   });
@@ -10499,6 +10525,431 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect(r7drv.abStateOf('treatment', gen(1), { state: 'absent' })).toBe('ok');
     });
   });
+
+  // ── W2-5b1 Task 1: part 2 for W2-5b's consumers (W2-D24, W2-D25, W2-D90; S2 C22, Q23) ────────────────────────────
+  // In-process over chain7's final, so the validator's chain is the real one. A moved tree is tree7's. No case spawns.
+  r7describe('W2-5b1 Task 1: loadFinalRecord, the part 2 loader every W2-5b consumer shares', () => {
+    /** A part 2 consumer's flags for the saved final `rec`, over chain7's draft and frozen list. */
+    const flagsOf = (c: R7, rec: Saved, extra: R7 = {}): R7 => ({ record: rec.path, 'record-sha256': rec.sha, part1: c.d.path,
+      'part1-sha256': c.d.sha, frozen: c.fz.path, 'frozen-sha256': c.fz.sha, ...extra });
+    const START = T0 + DAY;   // chain7's window.start_ms
+    const AFTER = T0 + 2 * DAY;
+    const load = (flags: R7, o: { nowMs: number; root?: string }): R7 => r7drv.loadFinalRecord(flags as never, o) as R7;
+    const refusalOf = (fn: () => unknown): [string, string] | null => {
+      try { fn(); return null; } catch (e) {
+        if (e instanceof r7drv.DriverRefusal) return [(e as R7).word, (e as R7).detail];
+        throw e;
+      }
+    };
+    /** chain7's final superseded after window start by one that appends `amendment`, its detail_sha256 computed (W2-D90). */
+    const amended7 = (c: R7, amendment: R7): Saved => save7({ ...c.final, finalized_ms: AFTER, supersedes: c.f.sha,
+      amendments: [{ ...amendment, detail_sha256: r7Sha(r7Canon(amendment.detail)) }] }, 'part2-amended.json');
+    const MOVE = (over: R7 = {}): R7 => ({ kind: 'version-move', node_label_ref: 'node-a', at_ms: AFTER,
+      detail: { claude_code_version: '9.9.8 (Claude Code)', repilot_sha256: hex('repilot') }, ...over });
+    const BEFORE = `--allow-code-change before window start ${START}: before it a code change is a re-pilot and a superseding part 2 (W2-D6, W2-D24)`;
+
+    r7it('CONTROL: chain7\'s final loads with its draft and frozen list, re-checked against the tree it runs under, with no stamp', () => {
+      const c = chain7(home7(null));
+      const got = load(flagsOf(c, c.f), { nowMs: T0 });
+      r7expect([got.sha256, got.stamps, r7Canon(got.record)]).toEqual([c.f.sha, [], r7Canon(c.final)]);
+      r7expect(got.frozen.sha256).toBe(c.fz.sha);
+    });
+
+    r7it('a moved tree refuses code-changed; --allow-code-change at or after window start loads it stamped, before it is args-invalid; an unmeasured file is never stamped (W2-D24, Q23)', () => {
+      const c = chain7(home7(null));
+      const moved = tree7({ edit: 'deploy/measure-history.py' });
+      const flag = flagsOf(c, c.f, { 'allow-code-change': true });
+      r7expect(refusalOf(() => load(flagsOf(c, c.f), { nowMs: AFTER, root: moved }))).toEqual(['code-changed', 'changed deploy/measure-history.py']);
+      r7expect(load(flag, { nowMs: AFTER, root: moved }).stamps).toEqual(['code-changed']);
+      r7expect(load(flag, { nowMs: START, root: moved }).stamps, 'at window start exactly').toEqual(['code-changed']);
+      r7expect(refusalOf(() => load(flag, { nowMs: START - 1, root: moved }))).toEqual(['args-invalid', BEFORE]);
+      r7expect(refusalOf(() => load(flag, { nowMs: START - 1 })), 'before window start, with the code unmoved too').toEqual(['args-invalid', BEFORE]);
+      r7expect(refusalOf(() => load(flag, { nowMs: AFTER, root: tree7({ drop: 'deploy/measure-history.py' }) })))
+        .toEqual(['code-unmeasured', 'deploy/measure-history.py is absent']);
+    });
+
+    r7it('the re-check comes first: a moved tree beside an out-of-range spend_budget answers code-changed (W2-D24, S2 C22)', () => {
+      const c = chain7(home7(null));
+      const bad = save7({ ...c.final, spend_budget: 0 }, 'part2.json');
+      r7expect(refusalOf(() => load(flagsOf(c, bad), { nowMs: T0, root: tree7({ edit: 'deploy/measure-history.py' }) })))
+        .toEqual(['code-changed', 'changed deploy/measure-history.py']);
+      r7expect(refusalOf(() => load(flagsOf(c, bad), { nowMs: T0 })), 'CONTROL: under the unmoved tree the range check answers')
+        .toEqual(['record-invalid', 'spend_budget out-of-range']);
+    });
+
+    r7it.each([
+      ['a zero spend_budget', (f: R7): R7 => ({ ...f, spend_budget: 0 }), 'spend_budget out-of-range'],
+      ['a negative spend_budget', (f: R7): R7 => ({ ...f, spend_budget: -5 }), 'spend_budget out-of-range'],
+      ['a settings mode that is not a SETTINGS_MODES word', (f: R7): R7 => ({ ...f, pilot_result: { ...f.pilot_result, settings_mode: 'open' } }), 'pilot_result.settings_mode out-of-range'],
+    ] as Array<[string, (f: R7) => R7, string]>)('a signed final with %s refuses record-invalid, naming the field, before any --out (S2 C22, D-6309\'s rule)', (_what, edit, detail) => {
+      const c = chain7(home7(null));
+      const rec = save7(edit(c.final), 'part2.json');
+      r7expect(r7gate.validateOpenRecord(rec.value, { draft: c.draft, predecessor: null, frozen: { families: c.frozen.families, n_questions: 5 } }),
+        'CONTROL: the gate signs it').toEqual({ ok: true });
+      r7expect(refusalOf(() => load(flagsOf(c, rec), { nowMs: T0 }))).toEqual(['record-invalid', detail]);
+    });
+
+    r7it('a version-move amendment names a node by its label and carries a non-empty Claude Code version; CONTROL: a well-formed one, and a freeze exception, load (W2-D90, Q13, S2 C22)', () => {
+      const c = chain7(home7(null));
+      const flags = (s: Saved): R7 => flagsOf(c, s, { supersedes: c.f.path, 'supersedes-sha256': c.f.sha });
+      r7expect(load(flags(amended7(c, MOVE())), { nowMs: AFTER }).record.amendments).toHaveLength(1);
+      r7expect(refusalOf(() => load(flags(amended7(c, MOVE({ node_label_ref: 'node-z' }))), { nowMs: AFTER })))
+        .toEqual(['record-invalid', 'amendments[0].node_label_ref out-of-range']);
+      r7expect(refusalOf(() => load(flags(amended7(c, MOVE({ node_label_ref: null }))), { nowMs: AFTER })))
+        .toEqual(['record-invalid', 'amendments[0].node_label_ref out-of-range']);
+      r7expect(refusalOf(() => load(flags(amended7(c, MOVE({ detail: { claude_code_version: '', repilot_sha256: hex('repilot') } }))), { nowMs: AFTER })))
+        .toEqual(['record-invalid', 'amendments[0].detail.claude_code_version out-of-range']);
+      const exception = { kind: 'freeze-exception', node_label_ref: null, at_ms: AFTER, detail: { surface: 'ccd/history/lib.mjs', ruling: 'fixture ruling' } };
+      r7expect(load(flags(amended7(c, exception)), { nowMs: AFTER }).record.amendments[0].kind, 'another kind is not ranged').toBe('freeze-exception');
+    });
+  });
+
+  // ── W2-5b1 Task 3: marker, verify --section pilot|quiz, and the headless-on reader (W2-D84, W2-D76, W2-D78 (i), W2-D24; D-5781) ──
+  // Nested in W2-5a Task 7's describe for its signed fixtures (chain7's draft, final and frozen list; home7, run7, tree7,
+  // snapshot7). The marker is planted by the test at historyPaths(home).headlessOn. marker and verify spawn nothing; the
+  // arm preflight's reader (requireListed) is called in-process here, and with the stub's log in Task 4.
+  r7describe('W2-5b1 Task 3: marker and verify section pilot and quiz', () => {
+    type Found = { state: string; sha256: string | null; missing: string[]; extra: string[] };
+    type Plant = { text: string } | { dir: true } | { link: true } | null;
+    type Refusal = { word: string; detail: string } | null;
+    const markerPath = (home: string): string => r7Paths(home).headlessOn;
+    /** marker's argv over a chain: pilot reads part 1; quiz and ab read part 2 beside its draft and frozen list (W2-D84). */
+    const markerArgv = (c: R7, section: string, label: string): string[] => (section === 'pilot'
+      ? ['marker', '--section', section, ...inp('record', c.d), '--node-label', label]
+      : ['marker', '--section', section, ...inp('record', c.f), ...inp('part1', c.d), ...inp('frozen', c.fz), '--node-label', label]);
+    const verifyArgv = (c: R7, section: string): string[] => (section === 'pilot'
+      ? ['verify', '--section', section, ...inp('record', c.d)]
+      : ['verify', '--section', section, ...inp('record', c.f), ...inp('part1', c.d), ...inp('frozen', c.fz)]);
+    /** One marker pair line (W2-D44): `<ccrc_id> <generation>`. */
+    const line = (f: Ref): string => `${f.ccrc_id} ${f.generation}\n`;
+    const PILOT_A = `store ${STORE_A}\n${line(PILOT_FAMILY)}`;
+    const QUIZ_A = `store ${STORE_A}\n${line(A_T1)}${line(A_T2)}`;
+    const QUIZ_B = `store ${STORE_B}\n${line(B_T1)}`;
+    const AB_A = `ccrc history recall-off a-c1 --generation ${A_C1.generation}\nccrc history recall-off a-c2 --generation ${A_C2.generation}\n`;
+    const AB_B = `ccrc history recall-off b-c1 --generation ${B_C1.generation}\n`;
+    /** Put `what` where the marker lives: its text, a directory, a link to a file holding QUIZ_A, or nothing. */
+    function plant(home: string, what: Plant): void {
+      const p = markerPath(home);
+      r7fs.mkdirSync(r7path.dirname(p), { recursive: true });
+      r7fs.rmSync(p, { recursive: true, force: true });
+      if (what === null) return;
+      if ('dir' in what) { r7fs.mkdirSync(p); return; }
+      if ('link' in what) {
+        const target = r7path.join(r7MkTmp('ccrc-w2-5b1-t3-link-'), 'marker');
+        r7fs.writeFileSync(target, QUIZ_A, { mode: 0o600 });
+        r7fs.symlinkSync(target, p);
+        return;
+      }
+      r7fs.writeFileSync(p, what.text, { mode: 0o600 });
+    }
+    const found = (r: { stdout: string }): Found => JSON.parse(r.stdout).found as Found;
+    /** A synchronous call's refusal as {word, detail}; null when it returns. Any other throw fails the case. */
+    function refusalOf(fn: () => unknown): Refusal {
+      try {
+        fn();
+        return null;
+      } catch (e) {
+        if (e instanceof r7drv.DriverRefusal) return { word: (e as R7).word, detail: (e as R7).detail };
+        throw e;
+      }
+    }
+    /** Three leaves and a condensed node over the first, in `home`'s store (home7's). L000001: its boundary stamped at
+     *  1,000 and no stored summary, so it is shown under the all-visible cut (CONTROL), unless `storedOnTimed` gives it
+     *  a stored summary. L000002: stamped at 2,000, with a stored summary blob and no copy holding its boundary, so its
+     *  read-time pick is NULL and D-6284 hides it. L000003: its boundary's ts_ms is NULL, which no cut ever shows. */
+    function plantLeaves(home: string, storedOnTimed = false): void {
+      const w = r7Store.openWriter(r7Paths(home).dbFile) as unknown as { exec: (sql: string) => void; prepare: (sql: string) => { run: (...a: unknown[]) => unknown } };
+      try {
+        w.exec('BEGIN');
+        w.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, ?, 'br5', ?, 1)").run(Buffer.alloc(32, 0xb3), Buffer.from([0]));
+        w.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, 'a-t1', ?, 'demo', 1)").run(A_T1.generation);
+        w.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(gen(7000));
+        const entry = w.prepare("INSERT INTO entries (entry_id, uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 1, 'system', 'harness', 1, 0, 0, 1, ?)");
+        const boundary = w.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord) VALUES (?, 1, ?)');
+        ([[1, 1_000], [2, 2_000], [3, null]] as Array<[number, number | null]>).forEach(([id, ts]) => { entry.run(id, gen(7000 + id), ts); boundary.run(id, id); });
+        const node = w.prepare("INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, summary_blob_id, boundary_entry_id, parser_version, created_ms) VALUES (?, 1, 1, 1, ?, ?, 'ok', ?, ?, 1, 1)");
+        node.run('L000001', 'native_leaf', 0, storedOnTimed ? 1 : null, 1);
+        node.run('L000002', 'native_leaf', 0, 1, 2);
+        node.run('L000003', 'raw_leaf', 0, null, 3);
+        node.run('N000001', 'condensed', 1, null, null);
+        w.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, 1)').run('N000001', 'L000001');
+        w.exec('COMMIT');
+      } finally {
+        r7Store.closeWriter(w as never);
+      }
+    }
+
+    r7it('marker prints one node\'s exact text on stdout and its sha256 on stderr, with no store on the box: pilot from part 1, quiz from part 2, ab as recall-off commands with --generation (W2-D84, W2-D76, D-5781)', () => {
+      const home = home7(null);
+      const c = chain7(home);
+      for (const [section, label, want] of [
+        ['pilot', 'node-a', PILOT_A], ['quiz', 'node-a', QUIZ_A], ['quiz', 'node-b', QUIZ_B], ['ab', 'node-a', AB_A], ['ab', 'node-b', AB_B],
+      ] as Array<[string, string, string]>) {
+        const r = run7(null, home, markerArgv(c, section, label));
+        r7expect([r.code, r.stdout, r.stderr], `${section} ${label}`).toEqual([0, want, `sha256 ${r7Sha(want)}\n`]);
+      }
+    });
+
+    r7it('the W2-D84 round trip: marker\'s text parses to exactly its pairs and formats back to the same bytes; planted as printed, verify reads ok and requireListed lists every pair', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      for (const [section, text, fams] of [['pilot', PILOT_A, [PILOT_FAMILY]], ['quiz', QUIZ_A, [A_T1, A_T2]]] as Array<[string, string, Ref[]]>) {
+        const r = run7(null, home, markerArgv(c, section, 'node-a'));
+        r7expect([r.code, r.stdout], section).toEqual([0, text]);
+        const parsed = w5b3Parse(r.stdout);
+        r7expect(parsed, section).toEqual({ ok: true, storeId: STORE_A, pairs: fams.map((f) => ({ ccrcId: f.ccrc_id, generation: f.generation })) });
+        r7expect(w5b3Format(parsed as never), section).toBe(r.stdout);
+        plant(home, { text: r.stdout });
+        const v = run7(null, home, verifyArgv(c, section));
+        r7expect(v.code, v.stderr).toBe(0);
+        r7expect(v.stderr).toBe(`sha256 ${r7Sha(v.stdout)}\n`);
+        const out = JSON.parse(v.stdout);
+        r7expect([out.kind, out.v, out.section, out.store_id, out.record_sha256, out.expected_sha256, out.found, out.ok], section).toEqual([
+          r7drv.VERIFY_HEADLESS_KIND, 1, section, STORE_A, section === 'pilot' ? c.d.sha : c.f.sha, r7Sha(text),
+          { state: 'ok', sha256: r7Sha(text), missing: [], extra: [] }, true]);
+        r7expect(refusalOf(() => r7drv.requireListed(home, STORE_A, fams)), section).toBeNull();
+      }
+    });
+
+    r7it('marker and verify write nothing: the HOME tree, the store and a planted marker are byte-identical after every section (W2-D84)', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      plant(home, { text: PILOT_A });
+      const before = snapshot7(home);
+      r7expect(before.some((l) => l.startsWith('.ccrc/history/headless-on ')), 'CONTROL: the snapshot lists the marker').toBe(true);
+      for (const argv of [markerArgv(c, 'pilot', 'node-a'), markerArgv(c, 'quiz', 'node-b'), markerArgv(c, 'ab', 'node-a'), verifyArgv(c, 'pilot'), verifyArgv(c, 'quiz')]) {
+        r7expect(run7(null, home, argv).code, argv.slice(0, 3).join(' ')).toBe(0);
+      }
+      r7expect(snapshot7(home)).toEqual(before);
+    });
+
+    r7it.each([
+      ['absent', null, 'absent'],
+      ['a directory', { dir: true }, 'unreadable'],
+      ['a link to the right text, never followed', { link: true }, 'unreadable'],
+      ['one byte over the 65,536-byte bound', { text: '#'.repeat(W5B3_MAX + 1) }, 'over-cap'],
+      ['a space before the store line', { text: ` ${QUIZ_A}` }, 'malformed'],
+      ['the right pairs under another store line', { text: QUIZ_A.replace(STORE_A, STORE_B) }, 'store-other'],
+      ['a pair missing and one extra', { text: `store ${STORE_A}\n${line(A_T1)}zz-extra ${gen(1)}\n` }, 'pairs-differ'],
+      ['the same pairs after a comment', { text: `# written by hand\n${QUIZ_A}` }, 'bytes-differ'],
+      ['the same pairs in another order', { text: `store ${STORE_A}\n${line(A_T2)}${line(A_T1)}` }, 'bytes-differ'],
+      ['the same pairs with one line repeated', { text: `${QUIZ_A}${line(A_T1)}` }, 'bytes-differ'],
+      ['the same pairs without the final newline', { text: QUIZ_A.slice(0, -1) }, 'bytes-differ'],
+    ] as Array<[string, Plant, string]>)('verify --section quiz reports %s as itself, never folded, and ok is false (W2-D84)', (_name, what, state) => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      plant(home, what);
+      const r = run7(null, home, verifyArgv(c, 'quiz'));
+      r7expect(r.code, r.stderr).toBe(0);
+      const f = found(r);
+      r7expect(f.state).toBe(state);
+      r7expect(r7drv.HEADLESS_ON_STATES).toContain(state);
+      r7expect(JSON.parse(r.stdout).ok).toBe(false);
+      r7expect(f.sha256, 'the sha256 of the text read, or null when none was read')
+        .toBe(what !== null && 'text' in what && state !== 'over-cap' ? r7Sha(what.text) : null);
+      r7expect([f.missing, f.extra]).toEqual(state === 'pairs-differ' ? [[`a-t2 ${A_T2.generation}`], [`zz-extra ${gen(1)}`]] : [[], []]);
+    });
+
+    r7it('verify --section pilot reads part 1 and holds the marker to the pilot pairs; the quiz text there is pairs-differ, and over_hide is the quiz section\'s alone', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      plant(home, { text: PILOT_A });
+      const ok = run7(null, home, verifyArgv(c, 'pilot'));
+      r7expect([found(ok).state, JSON.parse(ok.stdout).over_hide]).toEqual(['ok', null]);
+      plant(home, { text: QUIZ_A });
+      const f = found(run7(null, home, verifyArgv(c, 'pilot')));
+      r7expect([f.state, f.missing, f.extra]).toEqual(['pairs-differ', [`pilot-0 ${PILOT_FAMILY.generation}`], [`a-t1 ${A_T1.generation}`, `a-t2 ${A_T2.generation}`]]);
+    });
+
+    // F1 (fix round 1): a marker holding an invalid UTF-8 byte. readBounded decodes with U+FFFD (D-5768), which
+    // formatHeadlessList's text never holds, so the marker is malformed: never ok, never bytes-differ, and unlisted.
+    r7it.each([['quiz', QUIZ_A, [A_T1, A_T2]], ['pilot', PILOT_A, [PILOT_FAMILY]]] as Array<[string, string, Ref[]]>)(
+      'verify --section %s reads a marker holding an invalid UTF-8 byte as malformed, never ok or bytes-differ, and requireListed refuses it family-unlisted (W2-D84, D-5768; F1)', (section, text, fams) => {
+        const home = home7(STORE_A);
+        const c = chain7(home);
+        const bytes = (...parts: Array<string | number[]>): Buffer => Buffer.concat(parts.map((p) => (typeof p === 'string' ? Buffer.from(p, 'utf8') : Buffer.from(p))));
+        const put = (b: Buffer): void => { r7fs.mkdirSync(r7path.dirname(markerPath(home)), { recursive: true }); r7fs.writeFileSync(markerPath(home), b, { mode: 0o600 }); };
+        const stateOf = (): Found & { ok: boolean } => { const r = run7(null, home, verifyArgv(c, section)); r7expect(r.code, r.stderr).toBe(0); return { ...found(r), ok: JSON.parse(r.stdout).ok }; };
+        const listed = (): Refusal => refusalOf(() => r7drv.requireListed(home, STORE_A, fams));
+        // CONTROL: the same text as bytes, no invalid byte, reads ok and lists every pair.
+        put(bytes(text));
+        r7expect([stateOf().state, stateOf().ok, listed()], 'CONTROL').toEqual(['ok', true, null]);
+        const [a, b] = text.split('\n');   // the store line and the first pair line
+        const rest = text.slice(a!.length + 1 + b!.length + 1);
+        for (const [where, planted] of [
+          ['in a comment line', bytes('# ', [0xff], '\n', text)],
+          ['in a pair line', bytes(a!, '\n', b!.slice(0, 2), [0xff], b!.slice(2), '\n', rest)],
+          ['as a lone continuation byte after the last newline', bytes(text, [0x80])],
+        ] as Array<[string, Buffer]>) {
+          put(planted);
+          const f = stateOf();
+          r7expect([f.state, f.ok], where).toEqual(['malformed', false]);
+          r7expect(f.sha256, `${where}: the sha256 of the text as read`).not.toBeNull();
+          r7expect(listed(), where).toEqual({ word: 'family-unlisted', detail: 'headless-on malformed' });
+        }
+      });
+
+    // F2 (fix round 1): verify --section pilot reads part 1 only; a final is refused as marker --section pilot refuses it.
+    r7it('verify --section pilot with a FINAL record is record-invalid, as marker --section pilot is, and nothing is written or spawned; CONTROL: the draft is admitted (W2-D84; F2)', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      plant(home, { text: PILOT_A });
+      const before = snapshot7(home);
+      const want = refusalLine('record-invalid', 'record part "final", wanted draft');
+      const viaFinal = run7(null, home, ['verify', '--section', 'pilot', ...inp('record', c.f)]);
+      r7expect([viaFinal.code, viaFinal.stdout, viaFinal.stderr]).toEqual([2, '', want]);
+      r7expect(run7(null, home, ['marker', '--section', 'pilot', ...inp('record', c.f), '--node-label', 'node-a']).stderr, 'the same refusal marker gives').toBe(want);
+      r7expect(snapshot7(home), 'nothing written').toEqual(before);
+      r7expect(stubLog(home), 'nothing spawned').toBeNull();
+      const ok = run7(null, home, verifyArgv(c, 'pilot'));
+      r7expect([ok.code, found(ok).state], 'CONTROL: the draft is admitted').toEqual([0, 'ok']);
+    });
+
+    r7it('marker and verify refuse, each with its word: no section or an unknown one, a flag the form never reads, no label or two, a label the record does not name, the wrong part, a node holding no family of the section, a store the record does not name', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      const err = (argv: string[], h: string | null = null): string => run7(null, h, argv).stderr;
+      r7expect(err(['marker', ...inp('record', c.d)])).toBe(refusalLine('args-invalid', 'section-required'));
+      r7expect(err(['marker', '--section', 'judge'])).toBe(refusalLine('args-invalid', 'section "judge": marker prints pilot, quiz, ab'));
+      r7expect(err(['verify', '--section', 'judge'])).toBe(refusalLine('args-invalid', 'section "judge": verify reads ab, pilot or quiz'));
+      r7expect(err(['marker', '--section', 'quiz', '--census', '/c'])).toBe(refusalLine('args-invalid', '--census is not a marker --section quiz flag'));
+      r7expect(err(['marker', '--section', 'ab', '--out', '/o'])).toBe(refusalLine('args-invalid', '--out is not a marker --section ab flag'));
+      r7expect(err(['verify', '--section', 'pilot', ...inp('frozen', c.fz)])).toBe(refusalLine('args-invalid', '--frozen is not a verify --section pilot flag'));
+      r7expect(err(['marker', '--section', 'pilot', ...inp('record', c.d)])).toBe(refusalLine('args-invalid', 'node-label-required'));
+      r7expect(err([...markerArgv(c, 'pilot', 'node-a'), '--node-label', 'node-b'])).toBe(refusalLine('args-invalid', 'marker prints one node: --node-label given 2 times'));
+      r7expect(err(markerArgv(c, 'quiz', 'node-x'))).toBe(refusalLine('args-invalid', 'node-label "node-x" names no node of the record'));
+      r7expect(err(['marker', '--section', 'pilot', ...inp('record', c.f), '--node-label', 'node-a'])).toBe(refusalLine('record-invalid', 'record part "final", wanted draft'));
+      const none = `pilot lists no family on store ${STORE_B}: that node has no headless-on marker`;
+      r7expect(err(markerArgv(c, 'pilot', 'node-b'))).toBe(refusalLine('input-invalid', none));
+      r7expect(err(verifyArgv(c, 'pilot'), home7(STORE_B))).toBe(refusalLine('input-invalid', none));
+      r7expect(err(verifyArgv(c, 'quiz'), home7(STORE_C))).toBe(refusalLine('input-invalid', `store ${STORE_C} is not one of the record's nodes`));
+    });
+
+    r7it('marker and verify take no --allow-code-change: Q23 grants it to arms, judge and report only', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      for (const [form, argv] of [['marker --section quiz', markerArgv(c, 'quiz', 'node-a')], ['verify --section quiz', verifyArgv(c, 'quiz')]] as Array<[string, string[]]>) {
+        r7expect(run7(null, home, [...argv, '--allow-code-change']).stderr, form)
+          .toBe(refusalLine('args-invalid', `--allow-code-change is not a ${form} flag`));   // Task 1 declared it; no form here lists it
+      }
+    });
+
+    // W2-D24: every --record consumer re-checks the code it runs under, right after the record validates (R23: W2-5a's titles,
+    // this task's own rows).
+    const rows: Array<[string, (c: R7) => string[]]> = [
+      ['marker --section pilot', (c) => markerArgv(c, 'pilot', 'node-a')],
+      ['marker --section quiz', (c) => markerArgv(c, 'quiz', 'node-a')],
+      ['marker --section ab', (c) => markerArgv(c, 'ab', 'node-a')],
+      ['verify --section pilot', (c) => verifyArgv(c, 'pilot')],
+      ['verify --section quiz', (c) => verifyArgv(c, 'quiz')],
+    ];
+    r7it.each(rows)('code-changed before any other input is read, re-checks the code it runs under: %s', (_sub, argv) => {
+      const home = home7(null);   // no store: verify's next read would refuse store-unreadable store-missing
+      const c = chain7(home);
+      const r = run7(tree7({ edit: 'deploy/measure-history.py' }), home, argv(c));
+      r7expect([r.code, r.stdout, r.stderr]).toEqual([2, '', refusalLine('code-changed', 'changed deploy/measure-history.py')]);
+    });
+    r7it.each(rows)('code-unmeasured, never code-changed, for a gate_code file that cannot be read: %s', (_sub, argv) => {
+      const home = home7(null);
+      const c = chain7(home);
+      r7expect(run7(tree7({ drop: 'deploy/measure-history.py' }), home, argv(c)).stderr).toBe(refusalLine('code-unmeasured', 'deploy/measure-history.py is absent'));
+    });
+    r7it('CONTROL: under an unchanged copy of the tree, marker prints and verify reaches the store it was built to miss', () => {
+      const home = home7(null);
+      const c = chain7(home);
+      const tree = tree7();
+      for (const [sub, argv] of rows) {
+        const r = run7(tree, home, argv(c));
+        if (sub.startsWith('marker')) r7expect([r.code, r.stderr], sub).toEqual([0, `sha256 ${r7Sha(r.stdout)}\n`]);
+        else r7expect(r.stderr, sub).toBe(refusalLine('store-unreadable', 'store-missing'));
+      }
+    });
+
+    r7it('a family list no marker can carry is record-invalid, never an internal error: RangeError past either bound, TypeError for a grammar fault', () => {
+      const fam = (i: number, id = `fam-${String(i).padStart(4, '0')}`): Ref => ({ store_id: STORE_A, ccrc_id: id, generation: gen(10_000 + i) });
+      const rec = (families: Ref[]): R7 => ({ pilot: { families }, quiz: { families } });
+      const text = (families: Ref[], section: 'pilot' | 'quiz'): Refusal => refusalOf(() => r7drv.headlessTextOf(rec(families), section, STORE_A));
+      r7expect(text(Array.from({ length: 1000 }, (_, i) => fam(i)), 'quiz'), 'CONTROL: 1,000 pairs').toBeNull();
+      const many = text(Array.from({ length: 1001 }, (_, i) => fam(i)), 'quiz');
+      r7expect(many?.word).toBe('record-invalid');
+      r7expect(many?.detail).toMatch(new RegExp(`^quiz marker for store ${STORE_A} cannot be formatted: RangeError: `));
+      // 224-character ids (SPOOL_ID_MAX): 262 bytes a line, so 200 fit and 300 pass 65,536 bytes before 1,000 pairs.
+      const long = Array.from({ length: 300 }, (_, i) => fam(i, `${'x'.repeat(220)}${String(i).padStart(4, '0')}`));
+      r7expect(text(long.slice(0, 200), 'pilot'), 'CONTROL: 200 long ids fit').toBeNull();
+      r7expect(text(long, 'pilot')?.detail).toMatch(new RegExp(`^pilot marker for store ${STORE_A} cannot be formatted: RangeError: `));
+      const named = text([fam(1, 'store')], 'quiz');
+      r7expect(named?.word).toBe('record-invalid');
+      r7expect(named?.detail).toMatch(new RegExp(`^quiz marker for store ${STORE_A} cannot be formatted: TypeError: `));
+    });
+
+    r7it('W2-D78 (i), the arm preflight\'s reader: requireListed passes a batch whose every pair is on this store\'s marker, and refuses family-unlisted otherwise, naming why', () => {
+      const home = home7(null);
+      const listed = (store: string, fams: Ref[]): Refusal => refusalOf(() => r7drv.requireListed(home, store, fams));
+      r7expect(listed(STORE_A, [A_T1])).toEqual({ word: 'family-unlisted', detail: 'headless-on absent' });
+      plant(home, { text: QUIZ_A });
+      r7expect(listed(STORE_A, [A_T1, A_T2]), 'CONTROL: every pair listed').toBeNull();
+      r7expect(listed(STORE_A, [A_T1, A_C1, A_C2])).toEqual({ word: 'family-unlisted', detail: `not listed for store ${STORE_A}: a-c1 ${A_C1.generation}, a-c2 ${A_C2.generation}` });
+      r7expect(listed(STORE_A, [{ ...A_T2, generation: gen(1) }]), 'the generation is part of the pair')
+        .toEqual({ word: 'family-unlisted', detail: `not listed for store ${STORE_A}: a-t2 ${gen(1)}` });
+      r7expect(listed(STORE_B, [{ ...A_T1, store_id: STORE_B }]), 'the store line')
+        .toEqual({ word: 'family-unlisted', detail: `headless-on names store ${STORE_A}, not this store ${STORE_B}` });
+      plant(home, { text: `store ${STORE_A}\n` });
+      r7expect(listed(STORE_A, [A_T1]), 'zero pairs list nothing').toEqual({ word: 'family-unlisted', detail: `not listed for store ${STORE_A}: a-t1 ${A_T1.generation}` });
+      for (const [what, p] of [['malformed', { text: ` ${QUIZ_A}` }], ['over-cap', { text: '#'.repeat(W5B3_MAX + 1) }], ['unreadable', { dir: true }], ['unreadable', { link: true }]] as Array<[string, Plant]>) {
+        plant(home, p);
+        r7expect(listed(STORE_A, [A_T1]), `${what} ${JSON.stringify(p)}`).toEqual({ word: 'family-unlisted', detail: `headless-on ${what}` });
+      }
+    });
+
+    r7it('O13: the driver names the marker\'s field on one code line, readHeadlessOn\'s bounded read; no line spells its path text; no code line pairs a write verb with it', () => {
+      const text = r7fs.readFileSync(r7path.join(R7_REPO, 'deploy', 'history-replay.mjs'), 'utf8');
+      const code = text.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
+      // single-definition.test.ts' O13 verb list, restated (that one is closed over its describe).
+      const VERB = /\b(?:writeFile|appendFile|rename|unlink|rm|rmdir|mkdir|copyFile|cp|symlink|link|truncate|open)(?:Sync)?\s*\(/;
+      const pairsWrite = (l: string): boolean => { const m = VERB.exec(l); return m !== null && /\.headlessOn\b/.test(l.slice(m.index + m[0].length)); };
+      r7expect(pairsWrite('rmSync(historyPaths(home).headlessOn, { force: true });'), 'CONTROL: a write').toBe(true);
+      r7expect(pairsWrite('writeFileSync(P.headlessOn, text);'), 'CONTROL: a write').toBe(true);
+      r7expect(pairsWrite('const read = readBounded(historyPaths(home).headlessOn, HEADLESS_LIST_MAX_BYTES, false);'), 'CONTROL: the read').toBe(false);
+      r7expect(code.filter((l) => l.includes('.headlessOn')).map((l) => l.trim()))
+        .toEqual(['const read = readBounded(historyPaths(home).headlessOn, HEADLESS_LIST_MAX_BYTES, false);']);
+      r7expect(text.split('\n').filter((l) => l.includes('/headless-on')), 'comment or code').toEqual([]);
+      r7expect(code.filter(pairsWrite)).toEqual([]);
+    });
+
+    r7it('verify --section quiz counts the leaves lib\'s node rule hides under the stated all-visible cut: D-6284\'s over-hide on this node, read-only (Q16)', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      plantLeaves(home);
+      plant(home, { text: QUIZ_A });
+      const before = snapshot7(home);
+      const r = run7(null, home, verifyArgv(c, 'quiz'));
+      r7expect(r.code, r.stderr).toBe(0);
+      r7expect(snapshot7(home), 'read-only').toEqual(before);
+      const out = JSON.parse(r.stdout);
+      r7expect(out.over_hide).toEqual({ cut: 'all-visible', binds: w5b3Binds(r7drv.ALL_VISIBLE_CUT as never), leaves: 3, hidden: 2, hidden_ids: ['L000002', 'L000003'],
+        hidden_ids_max: r7drv.OVER_HIDE_IDS_MAX });
+      // The stated binds: every timed row shown; no holding copy, no exempt boundary or summary, no kept member.
+      r7expect(out.over_hide.binds).toEqual({ asof_ts: Number.MAX_SAFE_INTEGER, asof_file: -1, asof_line: -1, asof_boundary: -1, asof_summary: null, asof_kept: '[]' });
+      r7expect(out.found.state, 'CONTROL: the marker half is unchanged by the count').toBe('ok');
+    });
+
+    r7it('CONTROL: a stored summary on the timed leaf hides it too (lib\'s D-6284 arm, not a copy), a store with no leaf counts nothing, and the ids are capped at 1,000 with the total always given (R10, R29)', () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      plant(home, { text: QUIZ_A });
+      r7expect(JSON.parse(run7(null, home, verifyArgv(c, 'quiz')).stdout).over_hide).toMatchObject({ leaves: 0, hidden: 0, hidden_ids: [] });
+      plantLeaves(home, true);
+      r7expect(JSON.parse(run7(null, home, verifyArgv(c, 'quiz')).stdout).over_hide).toMatchObject({ leaves: 3, hidden: 3, hidden_ids: ['L000001', 'L000002', 'L000003'] });
+      const rs = r7drv.openReplayStore(home) as R7;
+      try {
+        r7expect(r7drv.overHideOf(rs.db, 1), 'the ids are capped; the count is the total').toMatchObject({ leaves: 3, hidden: 3, hidden_ids: ['L000001'], hidden_ids_max: 1 });
+        r7expect(r7drv.overHideOf(rs.db, 3), 'CONTROL (R29): at the cap every hidden id is listed beside the same total').toMatchObject({ hidden: 3, hidden_ids: ['L000001', 'L000002', 'L000003'], hidden_ids_max: 3 });
+        r7expect(r7drv.OVER_HIDE_IDS_MAX, 'R29: the default cap is 1,000 ids').toBe(1000);
+      } finally {
+        rs.close();
+      }
+    });
+  });
 });
 
 // ── W2-5a fix wave (the whole-branch review's items A to F): fw-prefixed helpers, one describe per item ────────────────
@@ -10675,4 +11126,5421 @@ describe('W2-5a fix wave: the review\'s minors', () => {
     expect(src).toHaveLength(1);
     expect(src[0], 'not spelled a second time').not.toMatch(/'v1'/);
   });
+});
+
+// ── W2-5b1 Task 1: w5b1-prefixed bindings, so none collides with a binding above. Pure cases read the driver in
+// process; RP1-arm and the run case spawn W2-4's recording stub in a t5Box fixture HOME (W2-4 Task 5's harness).
+import * as w5b1Fs from 'node:fs';
+import * as w5b1Path from 'node:path';
+import * as w5b1Lib from '../../ccd/history/lib.mjs';
+import * as w5b1Recall from '../../ccd/history/recall.mjs';
+import * as w5b1Gate from '../../deploy/history-gate.mjs';
+import * as w5b1Drv from '../../deploy/history-replay.mjs';
+
+const W5B1_SRC = w5b1Path.join(REPO, 'deploy', 'history-replay.mjs');
+const w5b1IsComment = (t: string): boolean => t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
+/** The driver's code lines with their 1-based numbers: a line whose trimmed text opens a comment is not one. */
+const w5b1CodeLines = (text: string): Array<[number, string]> =>
+  text.split('\n').map((l, i): [number, string] => [i + 1, l]).filter(([, l]) => !w5b1IsComment(l.trim()));
+/** W2-D42's scan: each code line that spells an arm word as a whole string literal (any quote), an object key or a member
+ *  name. A longer word (`control-absent`, `controlIds`, `CONTROL_ARM`) is not an arm word. */
+const w5b1ArmWordLines = (text: string, arms: readonly string[]): string[] => {
+  const w = arms.join('|');
+  const res = [
+    new RegExp('([\'"`])(?:' + w + ')\\1'),
+    new RegExp('(?<![\\w$.-])(?:' + w + ')(?![\\w$-])\\s*:'),
+    new RegExp('\\.(?:' + w + ')(?![\\w$-])'),
+  ];
+  return w5b1CodeLines(text).filter(([, l]) => res.some((re) => re.test(l))).map(([n, l]) => `${n}: ${l.trim()}`);
+};
+/** A stream usage object in Claude Code's field names. */
+const W5B1_U = (input: number, cc: number, cr: number, out: number): Record<string, number> =>
+  ({ input_tokens: input, cache_creation_input_tokens: cc, cache_read_input_tokens: cr, output_tokens: out });
+/** A main thread that calls Agent once; the subagent's one message makes one Bash call; the result event's usage counts
+ *  the main thread only, the shape C6 fears. Main messages: 15 and 25 tokens; the subagent's: 300; the result's
+ *  default: 40, so the messages sum to 340. `result` null leaves the result event out. */
+const w5b1SubStream = (result: Record<string, number> | null = W5B1_U(30, 0, 0, 10)): string => [
+  { type: 'system', subtype: 'init', session_id: 'fixture-session-id', model: 'fixture-model', tools: ['Bash', 'Agent'], mcp_servers: [], plugins: [], skills: [], slash_commands: [] },
+  { type: 'assistant', parent_tool_use_id: null, message: { id: 'msg-main-1', content: [{ type: 'tool_use', id: 'toolu-agent', name: 'Agent', input: { prompt: 'look' } }], usage: W5B1_U(10, 0, 0, 5) } },
+  { type: 'assistant', parent_tool_use_id: 'toolu-agent', message: { id: 'msg-sub-1', content: [{ type: 'tool_use', id: 'toolu-bash', name: 'Bash', input: { command: 'ccrc history status --json' } }], usage: W5B1_U(100, 50, 100, 50) } },
+  { type: 'user', parent_tool_use_id: 'toolu-agent', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu-bash', content: '{}', is_error: false }] } },
+  { type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'toolu-agent', content: [{ type: 'text', text: 'found it' }] }] } },
+  { type: 'assistant', parent_tool_use_id: null, message: { id: 'msg-main-2', content: [{ type: 'text', text: 'ANSWER: x' }], usage: W5B1_U(20, 0, 0, 5) } },
+  ...(result === null ? [] : [{ type: 'result', subtype: 'success', is_error: false, num_turns: 2, result: 'ANSWER: x', permission_denials: [], usage: result }]),
+].map((e) => JSON.stringify(e)).join('\n') + '\n';
+
+describe('W2-5b1 Task 1: the arm words come from RECALL_ARMS by position, and the driver spells none (W2-D42; S2 C9)', () => {
+  const ARMS = w5b1Lib.RECALL_ARMS as readonly string[];
+
+  it('CONTROL: the scan sees an arm word as a literal in each quote, an object key and a member name, and not a longer word or a comment', () => {
+    const [c, t] = [ARMS[0]!, ARMS[1]!];
+    const seen = [`if (a.arm === '${c}') x();`, `const k = "${t}";`, 'const k = `' + c + '`;', `const n = { ${t}: 1 };`, `const v = counts.${c};`];
+    for (const l of seen) expect(w5b1ArmWordLines(l, ARMS), l).toEqual([`1: ${l}`]);
+    const unseen = [`return '${c}-absent';`, `const ${c}Ids = new Set();`, 'if (arm === CONTROL_ARM) x();', `// the ${c} arm's file`, ` * the ${t} arm`];
+    for (const l of unseen) expect(w5b1ArmWordLines(l, ARMS), l).toEqual([]);
+  });
+
+  it('deploy/history-replay.mjs spells no arm word on a code line (W2-D42)', () => {
+    expect(w5b1ArmWordLines(w5b1Fs.readFileSync(W5B1_SRC, 'utf8'), ARMS)).toEqual([]);
+  });
+
+  it('CONTROL_ARM and TREATMENT_ARM are RECALL_ARMS[0] and [1], the words W2 means by them, and the driver indexes RECALL_ARMS on those two lines only', () => {
+    expect([w5b1Drv.CONTROL_ARM, w5b1Drv.TREATMENT_ARM]).toEqual([ARMS[0], ARMS[1]]);
+    expect([w5b1Drv.CONTROL_ARM, w5b1Drv.TREATMENT_ARM], 'a reorder of RECALL_ARMS would swap them').toEqual(['control', 'treatment']);
+    const indexing = w5b1CodeLines(w5b1Fs.readFileSync(W5B1_SRC, 'utf8')).filter(([, l]) => /\bRECALL_ARMS\s*\[/.test(l)).map(([, l]) => l.trim());
+    expect(indexing).toEqual(['export const CONTROL_ARM = RECALL_ARMS[0];', 'export const TREATMENT_ARM = RECALL_ARMS[1];']);
+  });
+
+  it('the gate\'s ASSIGNMENT_ARMS and lib\'s RECALL_ARMS hold the same two words as a set; the gate keeps its own order (S2 C9)', () => {
+    const asSet = (l: readonly string[]): string[] => [...new Set(l)].sort();
+    expect([ARMS.length, (w5b1Gate.ASSIGNMENT_ARMS as readonly string[]).length]).toEqual([2, 2]);
+    expect(asSet(w5b1Gate.ASSIGNMENT_ARMS as readonly string[])).toEqual(asSet(ARMS));
+    // CONTROL: the comparison is a set's, so order never reds and a renamed word does.
+    expect(asSet([...ARMS].reverse())).toEqual(asSet(ARMS));
+    expect(asSet([ARMS[0]!, 'placebo'])).not.toEqual(asSet(ARMS));
+  });
+
+  it('the names W2-5b1 consumes from lib, recall.mjs and the gate are in the driver\'s import braces, and each module exports them (W2-2a, W2-2b, W2-3)', () => {
+    const text = w5b1Fs.readFileSync(W5B1_SRC, 'utf8');
+    const braces = (spec: string): string[] => {
+      const tail = ` } from '${spec}';`;
+      const line = text.split('\n').find((l) => l.startsWith('import { ') && l.endsWith(tail));
+      return line === undefined ? [] : line.slice('import { '.length, -tail.length).split(', ');
+    };
+    const want: Array<[string, Record<string, unknown>, string[]]> = [
+      ['../ccd/history/lib.mjs', w5b1Lib as unknown as Record<string, unknown>, ['HEADLESS_LIST_MAX_BYTES', 'RECALL_ARMS', 'asOfBinds', 'asOfHiddenNodesSql',
+        'asOfVisibleEntriesSql', 'cardLine', 'displayPrefixes', 'formatHeadlessList', 'parseHeadlessList']],
+      ['../ccd/history/recall.mjs', w5b1Recall as unknown as Record<string, unknown>, ['asOfCutOf']],
+      ['./history-gate.mjs', w5b1Gate as unknown as Record<string, unknown>, ['RUBRICS', 'classifyRun', 'labelCorrect', 'parseAnswerField', 'parseLabelLine', 'questionOutcome']],
+    ];
+    for (const [spec, mod, names] of want) {
+      expect(names.filter((n) => !braces(spec).includes(n)), `${spec}: not imported`).toEqual([]);
+      expect(names.filter((n) => mod[n] === undefined), `${spec}: not exported`).toEqual([]);
+    }
+  });
+});
+
+describe('W2-5b1 Task 1: every driver word is a stop or a refusal, exactly once (W2-D80 as amended, decisions section 7; Q24)', () => {
+  const STOPS = ['claude-version-moved', 'tree-moved', 'wrapper-moved', 'code-changed', 'limits-threshold', 'limits-stale', 'budget-exhausted',
+    'out-refused', 'code-unmeasured', 'version-unmeasured', 'tree-unmeasured', 'wrapper-unmeasured', 'run-live', 'out-in-use', 'interrupted', 'store-unreadable'];
+  /** Each word of `reasons` not in exactly one of the two lists, then each listed word that is not in `reasons`. */
+  const misclassified = (reasons: readonly string[], stops: readonly string[], refusals: readonly string[]): string[] => {
+    const all = [...stops, ...refusals];
+    return [...reasons.filter((w) => all.filter((x) => x === w).length !== 1), ...all.filter((w) => !reasons.includes(w))];
+  };
+
+  it('CONTROL: the check names a word in neither list, a word in both, and a listed word that is no driver word', () => {
+    const R = ['w-a', 'w-b', 'w-c'];
+    expect(misclassified(R, ['w-a'], ['w-b', 'w-c'])).toEqual([]);
+    expect(misclassified(R, ['w-a'], ['w-b'])).toEqual(['w-c']);
+    expect(misclassified(R, ['w-a', 'w-b'], ['w-b', 'w-c'])).toEqual(['w-b']);
+    expect(misclassified(R, ['w-a', 'w-z'], ['w-b', 'w-c'])).toEqual(['w-z']);
+  });
+
+  it('DRIVER_STOPS is W2-D80\'s seven, section 7\'s eight and W2-5a\'s store-unreadable; both lists frozen, in DRIVER_REASONS order', () => {
+    expect(Object.isFrozen(w5b1Drv.DRIVER_STOPS) && Object.isFrozen(w5b1Drv.DRIVER_REFUSALS)).toBe(true);
+    expect([...w5b1Drv.DRIVER_STOPS]).toEqual(w5b1Drv.DRIVER_REASONS.filter((w) => STOPS.includes(w)));
+    expect([...w5b1Drv.DRIVER_STOPS].sort()).toEqual([...STOPS].sort());
+    expect([...w5b1Drv.DRIVER_REFUSALS]).toEqual(w5b1Drv.DRIVER_REASONS.filter((w) => !STOPS.includes(w)));
+  });
+
+  it('each DRIVER_REASONS word is classified exactly once, and the lists hold no other word (Q24)', () => {
+    expect(misclassified(w5b1Drv.DRIVER_REASONS, w5b1Drv.DRIVER_STOPS, w5b1Drv.DRIVER_REFUSALS)).toEqual([]);
+  });
+
+  it('driverWordClass answers each word\'s class and refuses a word outside DRIVER_REASONS', () => {
+    for (const w of w5b1Drv.DRIVER_REASONS) expect(w5b1Drv.driverWordClass(w), w).toBe(STOPS.includes(w) ? 'stop' : 'refusal');
+    expect(() => w5b1Drv.driverWordClass('bad-args')).toThrow(/not a DRIVER_REASONS word/);
+    expect(() => w5b1Drv.driverWordClass('')).toThrow(TypeError);
+  });
+});
+
+describe('W2-5b1 Task 1: the stream reader attributes each message and tool pair, and spend is charged fail-closed (W2-D82, W2-D58, Q7)', () => {
+  t5afterEach(() => { t5vi.unstubAllEnvs(); });
+
+  it('each tool pair and each message names the Agent tool_use it ran under, or null on the main thread', () => {
+    const f = w5b1Drv.readStreamJson(w5b1SubStream());
+    expect(f.toolPairs).toEqual([
+      { id: 'toolu-agent', name: 'Agent', input: { prompt: 'look' }, result: 'found it', isError: null, parentToolUseId: null },
+      { id: 'toolu-bash', name: 'Bash', input: { command: 'ccrc history status --json' }, result: '{}', isError: false, parentToolUseId: 'toolu-agent' },
+    ]);
+    expect(f.messages).toEqual([
+      { id: 'msg-main-1', parentToolUseId: null, usage: { input: 10, cacheCreation: 0, cacheRead: 0, output: 5 } },
+      { id: 'msg-sub-1', parentToolUseId: 'toolu-agent', usage: { input: 100, cacheCreation: 50, cacheRead: 100, output: 50 } },
+      { id: 'msg-main-2', parentToolUseId: null, usage: { input: 20, cacheCreation: 0, cacheRead: 0, output: 5 } },
+    ]);
+    expect(f.assistantMessages, 'W2-4\'s count is unchanged: every message, the subagent\'s included').toBe(3);
+  });
+
+  it('both readings are kept, W2-4\'s usage stays the result\'s, and spend charges the larger (Q7); CONTROL: a larger result usage is charged as it is', () => {
+    const f = w5b1Drv.readStreamJson(w5b1SubStream());
+    expect(f.resultUsage).toEqual({ input: 30, cacheCreation: 0, cacheRead: 0, output: 10 });
+    expect(f.assistantUsage).toEqual({ input: 130, cacheCreation: 50, cacheRead: 100, output: 60 });
+    expect([f.usageSource, f.usage]).toEqual(['result', f.resultUsage]);
+    expect([w5b1Drv.usageTokens(f.resultUsage), w5b1Drv.usageTokens(f.assistantUsage), w5b1Drv.spendTokens(f)]).toEqual([40, 340, 340]);
+    expect(w5b1Drv.spendTokens(w5b1Drv.readStreamJson(w5b1SubStream(W5B1_U(990, 0, 0, 10)))), 'the larger reading, never the sum').toBe(1000);
+    const none = w5b1Drv.readStreamJson(w5b1SubStream(null));
+    expect([none.resultUsage, none.usageSource, w5b1Drv.spendTokens(none)]).toEqual([null, 'assistant', 340]);
+    expect(w5b1Drv.usageTokens(null)).toBe(0);
+  });
+
+  it('F9: spend clamps an unsafe usage sum to the largest safe charge, never leaving a recordSpend-invalid amount', () => {
+    const f = w5b1Drv.readStreamJson(w5b1SubStream(W5B1_U(Number.MAX_SAFE_INTEGER, 1, 0, 0)));
+    expect(w5b1Drv.usageTokens(f.resultUsage), 'CONTROL: the source stream really overflows a safe integer').toBeGreaterThan(Number.MAX_SAFE_INTEGER);
+    expect(w5b1Drv.spendTokens(f)).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('a parent_tool_use_id that is not a string reads null, and a message with no id keeps its parent', () => {
+    const s = [
+      { type: 'assistant', parent_tool_use_id: 7, message: { id: 'msg-odd', content: [{ type: 'tool_use', id: 'toolu-odd', name: 'Bash', input: {} }] } },
+      { type: 'assistant', parent_tool_use_id: 'toolu-agent', message: { usage: W5B1_U(1, 0, 0, 1) } },
+    ].map((e) => JSON.stringify(e)).join('\n') + '\n';
+    const f = w5b1Drv.readStreamJson(s);
+    expect(f.toolPairs[0]!.parentToolUseId).toBeNull();
+    expect(f.messages).toEqual([
+      { id: 'msg-odd', parentToolUseId: null, usage: null },
+      { id: null, parentToolUseId: 'toolu-agent', usage: { input: 1, cacheCreation: 0, cacheRead: 0, output: 1 } },
+    ]);
+    expect([f.resultUsage, w5b1Drv.spendTokens(f)]).toEqual([null, 2]);
+  });
+
+  it('a run on the stub is charged the larger reading, and its run.json records both beside the charge (Q7)', async () => {
+    const b = t5Box('ccrc-replay-w5b1-q7-');
+    t5fs.writeFileSync(t5path.join(b.home, STUB_STREAM), w5b1SubStream());
+    const o = await claimedRun(t5job(b, b.up, 'box', 'q7-run'));
+    const run = JSON.parse(t5fs.readFileSync(t5path.join(b.out, 'q7-run.run.json'), 'utf8'));
+    expect([o.tokens, run.tokens, run.usage_result_tokens, run.usage_assistant_tokens]).toEqual([340, 340, 40, 340]);
+    t5fs.writeFileSync(t5path.join(b.home, STUB_STREAM), w5b1SubStream(null));
+    await claimedRun(t5job(b, b.up, 'box', 'q7-noresult'));
+    const bare = JSON.parse(t5fs.readFileSync(t5path.join(b.out, 'q7-noresult.run.json'), 'utf8'));
+    expect([bare.tokens, bare.usage_result_tokens, bare.usage_assistant_tokens]).toEqual([340, null, 340]);
+    expect(t5drv.spentSoFar(b.out)).toBe(680);
+  }, 60_000);
+});
+
+describe('W2-5b1 Task 1: RP1-arm, the arm env with real values (W2-D50, W2-D42)', () => {
+  t5afterEach(() => { t5vi.unstubAllEnvs(); });
+  const SESSION = 'up-a-fixture-family';
+  const ASOF = '0189abcd-0000-4000-8000-0000000005b2';
+
+  it.each([0, 1])('upstream, RECALL_ARMS[%i]: exactly the seven keys, each the real value, none of the ambient ones', async (i) => {
+    const arm = w5b1Lib.RECALL_ARMS[i] as string;
+    const b = t5Box(`ccrc-replay-w5b1-rp1-${i}-`);
+    t5Ambient();
+    await claimedRun(t5job(b, b.up, 'arm', `rp1-arm-${i}`, { recall: { session: SESSION, arm, asof: ASOF } }));
+    const log = stubLog(b.home);
+    expect(log, 'the stub ran once').toHaveLength(1);
+    const l = log![0]!;
+    const keys = withoutDarwinAdded(l.envKeys);
+    expect(keys).toEqual(['CCRC_RECALL_ARM', 'CCRC_RECALL_ASOF', 'CCRC_RECALL_SESSION', 'CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH']);
+    expect(Object.fromEntries(keys.map((k) => [k, l.env[k]]))).toEqual({
+      CCRC_RECALL_ARM: arm, CCRC_RECALL_ASOF: ASOF, CCRC_RECALL_SESSION: SESSION, CLAUDE_CONFIG_DIR: t5path.join(b.home, '.claude'),
+      HOME: b.home, LANG: 'fixture.UTF-8', PATH: `${b.out}/poison-bin:${t5path.dirname(process.execPath)}:/usr/bin:/bin`,
+    });
+    for (const k of T5_NEVER_KEYS) expect(l.envKeys, k).not.toContain(k);
+  }, 60_000);
+
+  it('generated: the same three seam values reach the stub through the wrapper, and CLAUDE_CODE_OAUTH_TOKEN by name only', async () => {
+    const arm = w5b1Lib.RECALL_ARMS[1] as string;
+    const b = t5Box('ccrc-replay-w5b1-rp1-gen-');
+    t5Ambient();
+    await claimedRun(t5job(b, b.gen, 'arm', 'rp1-arm-gen', { recall: { session: SESSION, arm, asof: ASOF } }));
+    const l = stubLog(b.home)![0]!;
+    expect(withoutDarwinAdded(l.envKeys).filter((k) => !T5_BASH_KEYS.includes(k))).toEqual([...T5_BASE_KEYS, ...T5_RECALL_KEYS, 'CLAUDE_CODE_OAUTH_TOKEN'].sort());
+    expect([l.env['CCRC_RECALL_SESSION'], l.env['CCRC_RECALL_ARM'], l.env['CCRC_RECALL_ASOF']]).toEqual([SESSION, arm, ASOF]);
+    for (const k of T5_NEVER_KEYS) expect(l.envKeys, k).not.toContain(k);
+    expect(t5fs.readFileSync(t5path.join(b.home, T5_STUB_LOG), 'utf8')).not.toContain(T5_TOKEN);
+  }, 60_000);
+
+  it('a value the seam would refuse is a TypeError before any spawn, with the stub log absent; CONTROL: the real values spawn once', async () => {
+    const arm = w5b1Lib.RECALL_ARMS[1] as string;
+    const bad: Array<[string, { session: string; arm: string; asof: string }, RegExp]> = [
+      ['an arm outside RECALL_ARMS', { session: SESSION, arm: 'fixture-arm-value', asof: ASOF }, /recall\.arm "fixture-arm-value" is not one of RECALL_ARMS/],
+      ['an ASOF that is not a lowercase UUID', { session: SESSION, arm, asof: ASOF.toUpperCase() }, /recall\.asof ".*" is not a lowercase UUID/],
+      ['a session id idOk refuses', { session: '../up-a', arm, asof: ASOF }, /recall\.session "\.\.\/up-a" is not a session id/],
+    ];
+    for (const [what, recall, re] of bad) {
+      const b = t5Box('ccrc-replay-w5b1-rp1-bad-');
+      t5typeError(await t5caught(() => claimedRun(t5job(b, b.up, 'arm', 'rp1-arm-bad', { recall }))), re);
+      expect(stubLog(b.home), `${what}: the stub never ran`).toBeNull();
+    }
+    const ok = t5Box('ccrc-replay-w5b1-rp1-ok-');
+    await claimedRun(t5job(ok, ok.up, 'arm', 'rp1-arm-ok', { recall: { session: SESSION, arm, asof: ASOF } }));
+    expect(stubLog(ok.home)).toHaveLength(1);
+  }, 120_000);
+});
+
+describe('W2-5b1 Task 1: the gate_code re-check verdict and the part 2 ranges, pure', () => {
+  type Verdict = { ok: true; stamps: string[] } | { ok: false; word: string; detail: string };
+  const V = w5b1Drv.codeRecheckVerdict as unknown as (r: object, s: object, o?: { allowCodeChange?: boolean; nowMs?: number | null }) => Verdict;
+  const FILES: Record<string, string> = Object.fromEntries((w5b1Gate.GATE_CODE_FILES as readonly string[]).map((f, i) => [f, 'abcd'[i]!.repeat(64)]));
+  const START = 1_800_086_400_000;
+  const rec = (window: object | null = { start_ms: START, end_ms: START + 14 * 86_400_000 }): Record<string, unknown> =>
+    ({ gate_code: { release_tag: 'v9.9.7', files: FILES }, ...(window === null ? {} : { window }) });
+  const measured = (over: Record<string, string> = {}): object => ({ state: 'measured', files: { ...FILES, ...over } });
+  const MOVED = measured({ 'deploy/measure-history.py': 'e'.repeat(64) });
+  const BEFORE = `--allow-code-change before window start ${START}: before it a code change is a re-pilot and a superseding part 2 (W2-D6, W2-D24)`;
+  const NO_WINDOW = '--allow-code-change is taken only by a part 2 consumer, after window start (W2-D6, W2-D24)';
+  const LIM = w5b1Drv.LIMITS_DEFAULTS as Record<string, number>;
+  const P2 = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    nodes: [{ label: 'node-a', store_id: '00000000-0000-4000-8000-0000000005b1' }], limits: { ...LIM },
+    quiz: { n_questions: 5 }, pilot_result: { settings_mode: 'restricted' }, amendments: [], ...over,
+  });
+  /** refuseOutOfRangeValues as a part 2 consumer calls it: its line, or null when it passes. */
+  const range = (p: Record<string, unknown>, budget: unknown = 30_000_000): string | null => {
+    try {
+      w5b1Drv.refuseOutOfRangeValues({ budget, budgetField: 'spend_budget', limits: p['limits'], quotas: null, part2: p } as never);
+      return null;
+    } catch (e) {
+      if (e instanceof w5b1Drv.DriverRefusal) return `${e.word}: ${e.detail}`;
+      throw e;
+    }
+  };
+  const move = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ kind: w5b1Drv.VERSION_MOVE_KIND, node_label_ref: 'node-a', at_ms: 1,
+    detail: { claude_code_version: '9.9.8 (Claude Code)', repilot_sha256: 'f'.repeat(64) }, ...over });
+
+  it('unchanged code is ok with no stamp, with or without the flag after window start', () => {
+    expect(V(rec(), measured())).toEqual({ ok: true, stamps: [] });
+    expect(V(rec(), measured(), { allowCodeChange: true, nowMs: START })).toEqual({ ok: true, stamps: [] });
+  });
+
+  it('a measured change is code-changed without the flag, and the stamp with it at or after window start', () => {
+    expect(V(rec(), MOVED)).toEqual({ ok: false, word: 'code-changed', detail: 'changed deploy/measure-history.py' });
+    expect(V(rec(), MOVED, { allowCodeChange: true, nowMs: START })).toEqual({ ok: true, stamps: ['code-changed'] });
+    expect(V(rec(), MOVED, { allowCodeChange: true, nowMs: START + 1 })).toEqual({ ok: true, stamps: ['code-changed'] });
+  });
+
+  it('the flag before window start, or on a record with no window, is args-invalid, whether or not the code moved (Q23, W2-D6)', () => {
+    for (const shas of [measured(), MOVED]) {
+      expect(V(rec(), shas, { allowCodeChange: true, nowMs: START - 1 })).toEqual({ ok: false, word: 'args-invalid', detail: BEFORE });
+      expect(V(rec(null), shas, { allowCodeChange: true, nowMs: START })).toEqual({ ok: false, word: 'args-invalid', detail: NO_WINDOW });
+    }
+    expect(() => V(rec(), MOVED, { allowCodeChange: true, nowMs: null }), 'a caller that takes the flag passes its clock').toThrow(TypeError);
+  });
+
+  it('an unmeasured file, on either side, is code-unmeasured whatever the flag says (W2-D24 as amended)', () => {
+    const opts = { allowCodeChange: true, nowMs: START };
+    expect(V(rec(), { state: 'unmeasured', path: 'deploy/measure-history.py', cause: 'absent' }, opts))
+      .toEqual({ ok: false, word: 'code-unmeasured', detail: 'deploy/measure-history.py is absent' });
+    const lacking = { ...rec(), gate_code: { release_tag: 'v9.9.7', files: Object.fromEntries(Object.entries(FILES).filter(([k]) => k !== 'ccd/history/lib.mjs')) } };
+    expect(V(lacking, MOVED, opts)).toEqual({ ok: false, word: 'code-unmeasured', detail: 'gate_code lacks ccd/history/lib.mjs' });
+  });
+
+  it('refuseOutOfRangeValues with part2 names each part 2 field a W2-5b consumer reads that is out of range, in order (S2 C22)', () => {
+    expect(range(P2()), 'CONTROL: the defaults pass').toBeNull();
+    expect(range(P2({ limits: { ...LIM, batch_max: w5b1Drv.BATCH_MAX, concurrency: w5b1Drv.CONCURRENCY_MAX } })), 'CONTROL: the runner caps pass').toBeNull();
+    expect(range(P2({ limits: { ...LIM, batch_max: 2, concurrency: 1 } })), 'CONTROL (R28): the floors pass, batch_max 2 (a batch holds both arms of one question)').toBeNull();
+    expect(range(P2({ limits: { ...LIM, batch_max: 1 } })), 'a batch that cannot hold both arms (R4, R28: the floor is RECALL_ARMS.length)').toBe('record-invalid: limits.batch_max out-of-range');
+    expect(range(P2(), 0)).toBe('record-invalid: spend_budget out-of-range');
+    expect(range(P2({ limits: { ...LIM, batch_max: w5b1Drv.BATCH_MAX + 1 } }))).toBe('record-invalid: limits.batch_max out-of-range');
+    expect(range(P2({ limits: { ...LIM, concurrency: w5b1Drv.CONCURRENCY_MAX + 1 } }))).toBe('record-invalid: limits.concurrency out-of-range');
+    expect(range(P2({ limits: { ...LIM, concurrency: 0 } }))).toBe('record-invalid: limits.concurrency out-of-range');
+    expect(range(P2({ quiz: { n_questions: 0 } }))).toBe('record-invalid: quiz.n_questions out-of-range');
+    expect(range(P2({ pilot_result: { settings_mode: 'open' } }))).toBe('record-invalid: pilot_result.settings_mode out-of-range');
+    expect(range({ nodes: [], limits: { threshold_pct: 101, max_age_ms: 0, batch_max: 0, concurrency: 3 }, quiz: {}, pilot_result: {}, amendments: [] }, -1))
+      .toBe('record-invalid: spend_budget out-of-range; limits.threshold_pct out-of-range; limits.max_age_ms out-of-range; limits.batch_max out-of-range; '
+        + 'limits.concurrency out-of-range; quiz.n_questions out-of-range; pilot_result.settings_mode out-of-range');
+  });
+
+  it('a version-move amendment needs a node label of the record and a non-empty Claude Code version; another kind is not ranged (W2-D90, Q13, S2 C22)', () => {
+    expect(range(P2({ amendments: [move()] }))).toBeNull();
+    expect(range(P2({ amendments: [move(), move({ node_label_ref: 'node-z' })] }))).toBe('record-invalid: amendments[1].node_label_ref out-of-range');
+    expect(range(P2({ amendments: [move({ node_label_ref: null, detail: { claude_code_version: '', repilot_sha256: 'f'.repeat(64) } })] })))
+      .toBe('record-invalid: amendments[0].node_label_ref out-of-range; amendments[0].detail.claude_code_version out-of-range');
+    expect(range(P2({ amendments: [{ kind: 'forced-act', node_label_ref: null, at_ms: 1, detail: { act: 'fixture-act', at_ms: 1 } }] }))).toBeNull();
+    expect(w5b1Gate.AMENDMENT_KINDS as readonly string[]).toContain(w5b1Drv.VERSION_MOVE_KIND);
+  });
+
+  it('W2-5a\'s two callers are unchanged: the budget is pilot_budget by default, and the quotas are checked unless null', () => {
+    const good = { budget: 100_000, limits: LIM, quotas: { target: 100, caps: { family: 5, boundary: 3, kind_per_family: 2 } } };
+    expect(() => w5b1Drv.refuseOutOfRangeValues({ ...good, budget: 0 } as never)).toThrow(/record-invalid: pilot_budget out-of-range$/);
+    expect(() => w5b1Drv.refuseOutOfRangeValues({ ...good, quotas: { target: 0, caps: good.quotas.caps } } as never)).toThrow(/record-invalid: quiz.target out-of-range$/);
+    expect(() => w5b1Drv.refuseOutOfRangeValues({ ...good, quotas: null } as never)).not.toThrow();
+  });
+});
+
+// ── W2-5b1 Task 2: the as-of pieces (W2-D75, W2-D78(iii), W2-D38; rulings Q20, Q21, Q22) ─────────────────────────────
+import { createHash as b1t2Hash } from 'node:crypto';
+import { readFileSync as b1t2Read } from 'node:fs';
+import { join as b1t2Join } from 'node:path';
+import type { DatabaseSync as B1t2Db } from 'node:sqlite';
+import { describe as b1t2describe, expect as b1t2expect, it as b1t2it } from 'vitest';
+import * as b1t2Drv from '../../deploy/history-replay.mjs';
+import * as b1t2LibMod from '../../ccd/history/lib.mjs';
+import * as b1t2Gate from '../../deploy/history-gate.mjs';
+import * as b1t2StoreMod from '../../ccd/history/store.mjs';
+import * as b1t2SweepMod from '../../ccd/history/sweep.mjs';
+import { mkTmp as b1t2MkTmp } from './tmpHelpers.js';
+import { REPO as B1T2_REPO } from './historyHelpers.js';
+
+type B1t2Cut = { asof: string; tsCut: number; boundaryEntryId: number; summaryEntryId: number | null; keptUuids: readonly string[]; holdingFileId: number; boundaryLine: number };
+type B1t2Rs = { db: B1t2Db; storeId: string; idx: unknown; close(): void };
+type B1t2CountRow = { n: number };
+type B1t2FixtureBelt = { units: Uint8Array[]; texts: string[]; widths: Array<ReturnType<typeof t4Lib.makeBelt>['widths'][number]>; grams: number; overflow: number };
+type B1t2FixtureIndex = { belt: B1t2FixtureBelt; byLen: Map<number, Set<string>>; };
+type B1t2Discard = { state: 'discard'; why: string };
+type B1t2Card = { state: 'card'; line: string; leafId: string; parentId: string | null; parent: string };
+type B1t2Entry = { boundary_uuid: string; ccrc_id: string; fact: string; fact_raw: string; generation: string; kind: string; qid: string;
+  question: string; repo_roots: string[]; source_entry_uuid: string; store_id: string };
+type B1t2Verdict = { ok: true; boundaryEntryId: number; cut: B1t2Cut } | { ok: false; clause: 'a' | 'b' | 'c'; why: string };
+/** The exports this task adds, and the W2-5a ones it reads, typed for the test: the driver is JavaScript. */
+interface B1t2Api {
+  RECON_DISCARDS: readonly string[];
+  DRIVER_REASONS: readonly string[];
+  CARD_PARENTS: readonly string[];
+  openReplayStore(home: string): B1t2Rs;
+  admitStoreBoundaries(rs: B1t2Rs): { boundaries: Array<{ uuid: string; entry_id: number; ts_ms: number | null; file_id: number | null }> };
+  boundaryCopyOf(rs: B1t2Rs, boundaryEntryId: number): { state: 'copy'; boundary: { kept_blob_id: number | null } } | B1t2Discard;
+  keptMembersOf(rs: B1t2Rs, boundary: { kept_blob_id: number | null }): { state: 'kept'; uuids: string[] } | B1t2Discard;
+  reconstructPayload(rs: B1t2Rs, boundaryEntryId: number, question: string): { state: 'payload'; text: string } | B1t2Discard;
+  composePayload(parts: { summary: string; kept: readonly string[] }, question: string): string;
+  familyScopeOf(db: B1t2Db, f: { ccrc_id: string; generation: string }): number[];
+  asofSameMsHits(db: B1t2Db, ctx: { tsMs: number; holdingFileId: number; transcriptPks: number[] }, factRaw: string): number;
+  answerability(db: B1t2Db, idx: unknown, ctx: { tsMs: number; transcriptPk: number; spanEntryIds: number[] }, factRaw: string): Promise<{ state: string }>;
+  qidOf(e: { store_id: string; ccrc_id: string; generation: string; boundary_uuid: string; kind: string; fact: string }): string;
+  armCut(rs: B1t2Rs, boundaryUuid: string): { ok: true; cut: B1t2Cut } | { ok: false; rc: number; reason: string };
+  cardOf(rs: B1t2Rs, boundaryEntryId: number, cut: B1t2Cut): B1t2Card | B1t2Discard;
+  prependCard(line: string, payload: string): string;
+  armPayloads(rs: B1t2Rs, boundaryEntryId: number, question: string, cut: B1t2Cut):
+    { state: 'payloads'; plain: string; carded: string; card: B1t2Card; counts: Record<string, number> } | B1t2Discard;
+  recheckQuestion(rs: B1t2Rs, entry: B1t2Entry, ctx: { configDirs: readonly string[] }): Promise<B1t2Verdict>;
+  recheckBatch(rs: B1t2Rs, entries: B1t2Entry[], ctx: { configDirs: readonly string[] }): Promise<Map<string, Extract<B1t2Verdict, { ok: true }>>>;
+  MINE_COMMAND_CHARS: { min: number; max: number };
+  mineStoredBoundary(rs: B1t2Rs, b: { entry_id: number; uuid: string; ts_ms: number | null; transcript_pk: number }, family: { ccrc_id: string; generation: string }, configDirs: readonly string[]):
+    { state: 'mined'; mined: { candidates: Array<{ kind: string; fact: string; fact_raw: string; source_entry_uuid: string; repo_roots: string[] }> } } | B1t2Discard;
+}
+const B1T2 = b1t2Drv as unknown as B1t2Api;
+const b1t2Lib = b1t2LibMod as unknown as {
+  INDEXED_PROVENANCE: readonly string[];
+  CARD_LINE_RE: RegExp;
+  asOfBinds(cut: B1t2Cut): Record<string, string | number | null>;
+  asOfHiddenNodesSql(): string;
+  asOfVisibleEntriesSql(): string;
+  displayPrefixes(ids: string[]): Map<string, string>;
+  cardLine(o: { leaf: string; parent: string | null }): string;
+  canonicalJson(v: unknown): string;
+  sha256Hex(s: string): string;
+  historyPaths(home: string): { dbFile: string };
+  ftsPhrase(s: string): string;
+  secretPairs(values: string[]): { pairs: Array<{ len: number; sha256: string }>; unsegmentable: number };
+  secretUnits(value: string): string[];
+  beltUnits(values: string[]): string[];
+  beltFold(width: number): number;
+  makePairIndex(pairs: Array<{ len: number; sha256: string }>, belt?: unknown | null): unknown;
+  redactField(text: string, idx: unknown): string;
+};
+const b1t2Store = b1t2StoreMod as unknown as {
+  createStore(home: string): void; openWriter(p: string): B1t2Db; closeWriter(db: B1t2Db): void; createFtsTables(db: B1t2Db): void;
+  brotli(b: Buffer): Buffer; CODEC: string;
+};
+const b1t2Sweep = b1t2SweepMod as unknown as {
+  ftsTextOfBlob(z: Uint8Array, isSidecar: boolean, idx: unknown, rawLen: number): Promise<{ text: string | null; overCap?: boolean }>;
+  indexBlob(db: B1t2Db, blobId: number, text: string, idx: unknown, overCap?: boolean): void;
+};
+
+const B1T2_T = 1_760_000_000_000;              // T_N: boundary N's own ts_ms
+const B1T2_T2 = B1T2_T + 60_000;               // T_N2: the next boundary's
+const B1T2_UUID = (n: number): string => `b1720000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+const B1T2_CC = B1T2_UUID(0xcc1);              // the family's one epoch's session uuid
+const B1T2_GEN = B1T2_UUID(0x6e1);
+const B1T2_FAM = 'fam-a';
+const B1T2_MODEL = 'claude-fixture-4';
+/** A value the store learns as a redaction pair after the freeze, assembled at runtime. */
+const B1T2_VALUE = ['zq', 'b1t2', 'widened', 'pkg01'].join('');
+const B1T2_CMD = `npm run fixture-card --workspace ${B1T2_VALUE}`;
+const B1T2_SHA = '9c0ffee1';
+const B1T2_PHRASE = 'zqsame52 marker';
+const B1T2_QUESTION = 'Which npm command built the fixture card?';
+const B1T2_DIRS = ['/home/u/.claude'];
+const B1T2_ELL = String.fromCharCode(0x2026);
+const B1T2_DOT = String.fromCharCode(0xb7);
+/** The family's node ids: LN (N's leaf) and L2 (N2's) share a 9-character prefix; P is their depth-1 parent, formed after
+ *  N; Q is a childless condensed node whose id shares 11 characters with P's. */
+const B1T2_IDS = { LN: 'La1b2c3d4e5f6a7b8c9d0', L2: 'La1b2c3d4ff0011223344', P: 'N0f1e2d3c4b5a69788796', Q: 'N0f1e2d3c4b0000000000' };
+/** A leaf id lib's card grammar refuses (uppercase hex): a damaged store's shape. */
+const B1T2_BAD_LEAF = 'LA1B2C3D4E5F6A7B8C9D0';
+const b1t2Text = (text: string): unknown[] => [{ type: 'text', text }];
+/** p1 carries the span source's own command on purpose: a second blob holding the phrase is what once hid an unindexed
+ *  source from the (b) case, because a rowid bound as a JS number is not applied by FTS5 (D-6479). */
+const b1t2Bash = (id: string): unknown[] => [{ type: 'tool_use', id, name: 'Bash', input: { command: B1T2_CMD } }];
+type B1t2RowSpec = { key: string; type: string; provenance: string; ts: number; body: unknown; files: number[]; model?: string; summary?: boolean };
+/** Transcript 1's rows, in order. File 2 is the live copy and holds both boundaries; file 1 is a retired copy that also
+ *  holds N, and alone holds the three same-millisecond rows outside N's holding copy. p1 sits after N in the holding copy,
+ *  stamped before T_N (a backward clock step). Leaf N's span is a1 and r1; leaf N2's is a2. */
+const B1T2_ROWS: B1t2RowSpec[] = [
+  { key: 'u1', type: 'user', provenance: 'operator', ts: B1T2_T - 50_000, body: b1t2Text('build the fixture card'), files: [1, 2] },
+  { key: 'a1', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T - 40_000,
+    body: [{ type: 'text', text: `at commit ${B1T2_SHA} now` }, { type: 'tool_use', id: 'toolu_b1t2a1', name: 'Bash', input: { command: B1T2_CMD } }], files: [1, 2] },
+  { key: 'r1', type: 'user', provenance: 'tool', ts: B1T2_T - 30_000, body: [{ type: 'tool_result', tool_use_id: 'toolu_b1t2a1', content: 'card build ok' }], files: [1, 2] },
+  { key: 'mIn', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T, body: b1t2Text(`noted ${B1T2_PHRASE} inside`), files: [2] },
+  { key: 'bn', type: 'system', provenance: 'harness', ts: B1T2_T, body: b1t2Text('compact boundary one'), files: [1, 2] },
+  { key: 'sn', type: 'user', provenance: 'summary', summary: true, ts: B1T2_T + 10, body: b1t2Text('Summary: the fixture card build ran.'), files: [2] },
+  { key: 'p1', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T - 500, body: b1t2Bash('toolu_b1t2p1'), files: [2] },
+  { key: 'mOutBefore', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T - 1, body: b1t2Text(`noted ${B1T2_PHRASE} before`), files: [1] },
+  { key: 'mOut', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T, body: b1t2Text(`noted ${B1T2_PHRASE} at`), files: [1] },
+  { key: 'mOutAfter', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T + 1, body: b1t2Text(`noted ${B1T2_PHRASE} after`), files: [1] },
+  { key: 'a2', type: 'assistant', provenance: 'model', model: B1T2_MODEL, ts: B1T2_T + 30_000, body: b1t2Text('second stretch of work'), files: [2] },
+  { key: 'b2', type: 'system', provenance: 'harness', ts: B1T2_T2, body: b1t2Text('compact boundary two'), files: [2] },
+  { key: 's2', type: 'user', provenance: 'summary', summary: true, ts: B1T2_T2 + 10, body: b1t2Text('Summary: the second stretch.'), files: [2] },
+];
+type B1t2Opts = {
+  kept?: 'list' | 'null' | 'tombstone' | 'object' | 'mixed'; learn?: string[]; prune?: string[]; unindex?: string[];
+  retime?: Record<string, number>; uncopy?: boolean; twoParents?: boolean; noParent?: boolean; noLeaf?: boolean; badLeaf?: boolean;
+  untimedBoundary?: boolean; command?: string; summaryText?: string;
+};
+type B1t2Fx = { home: string; entry: Record<string, number>; blob: Record<string, number>; uuid: Record<string, string>; leaf: string };
+
+/** A store made by store.mjs's createStore under a fresh mkTmp HOME, written through openWriter and closed: one family
+ *  (fam-a, one confirmed epoch with cwd /home/u/tree), transcript 1 with B1T2_ROWS, both boundaries, their leaves, P and
+ *  Q. Every row of an indexed provenance is indexed through the sweep's own functions under an empty pair index, as the
+ *  freeze saw it. The options make the store changes each case reads:
+ *  - `kept`: N's kept list is the default list (r1 twice and an unstored uuid), NULL, a tombstone, a JSON object, or a
+ *    list holding a non-string;
+ *  - `learn`: redaction pairs the store learned after the freeze (redact_hashes rows, which pairIndexOf reads);
+ *  - `prune`, `unindex`, `retime`: a row's blob pruned, its index row deleted, or its ts_ms moved;
+ *  - `uncopy`: no copy holds N; `noLeaf`: N has no leaf node; `badLeaf`: N's leaf id is B1T2_BAD_LEAF;
+ *  - `noParent`: P has no children; `twoParents`: Q is also L2's depth-1 parent;
+ *  - `untimedBoundary`: N's own ts_ms is NULL (clause (b)'s boundary-untimed). */
+async function b1t2Plant(o: B1t2Opts = {}): Promise<B1t2Fx> {
+  const home = b1t2MkTmp('b1t2-store-');
+  b1t2Store.createStore(home);
+  const w = b1t2Store.openWriter(b1t2Lib.historyPaths(home).dbFile);
+  b1t2Store.createFtsTables(w);
+  const idx0 = b1t2Lib.makePairIndex([]);
+  const fx: B1t2Fx = { home, entry: {}, blob: {}, uuid: {}, leaf: o.badLeaf === true ? B1T2_BAD_LEAF : B1T2_IDS.LN };
+  w.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, ?, ?, 'demo', 1)").run(B1T2_FAM, B1T2_GEN);
+  w.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, cwd, confirmed_ms) VALUES (1, 1, ?, 'startup', 'hook', '/home/u/tree', 1)").run(B1T2_CC);
+  w.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(B1T2_CC);
+  const file = w.prepare("INSERT INTO ingest_files (file_id, dev, ino, source_key, transcript_pk, status, parser_version) VALUES (?, 1, ?, ?, 1, 'live', 1)");
+  file.run(1, 7201, 'retired-fixture');
+  file.run(2, 7202, '');
+  const blobOf = (bytes: Buffer): number => Number((w.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?) RETURNING blob_id')
+    .get(b1t2Hash('sha256').update(bytes).digest(), b1t2Store.CODEC, b1t2Store.brotli(bytes), bytes.length) as { blob_id: number | bigint }).blob_id);
+  const ent = w.prepare(`INSERT INTO entries (uuid, transcript_pk, type, model, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms,
+      is_compact_summary) VALUES (?, 1, ?, ?, ?, 1, ?, 2, ?, ?, ?) RETURNING entry_id`);
+  const member = w.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
+  const lines: Record<number, number> = { 1: 0, 2: 0 };
+  for (const [i, original] of B1T2_ROWS.entries()) {
+    const r = o.command !== undefined && original.key === 'a1'
+      ? { ...original, body: b1t2Bash('toolu_b1t2a1').map((block) => ({ ...(block as Record<string, unknown>), input: { command: o.command } })) }
+      : o.summaryText !== undefined && original.key === 'sn'
+        ? { ...original, body: b1t2Text(o.summaryText) }
+        : original;
+    const bytes = Buffer.from(b1t2Lib.canonicalJson(r.body));
+    const blobId = blobOf(bytes);
+    const uuid = B1T2_UUID(i + 1);
+    const id = Number((ent.get(uuid, r.type, r.model ?? null, r.provenance, i, blobId, o.retime?.[r.key] ?? r.ts, r.summary === true ? 1 : 0) as { entry_id: number | bigint }).entry_id);
+    for (const f of r.files) {
+      lines[f] = lines[f]! + 1;
+      if (!(o.uncopy === true && r.key === 'bn')) member.run(f, id, lines[f]!);
+    }
+    fx.entry[r.key] = id;
+    fx.blob[r.key] = blobId;
+    fx.uuid[r.key] = uuid;
+    if (b1t2Lib.INDEXED_PROVENANCE.includes(r.provenance)) {
+      const z = (w.prepare('SELECT z FROM blobs WHERE blob_id = ?').get(blobId) as { z: Uint8Array }).z;
+      const t = await b1t2Sweep.ftsTextOfBlob(z, false, idx0, bytes.length);
+      b1t2Sweep.indexBlob(w, blobId, t.text ?? '', idx0, t.overCap === true);
+    }
+  }
+  const keptBodies: Record<string, unknown> = {
+    list: [fx.uuid.r1, B1T2_UUID(0x999), fx.uuid.r1], tombstone: [fx.uuid.r1, 'tombstoned'], object: { kept: fx.uuid.r1 }, mixed: [fx.uuid.r1, 5],
+  };
+  const kept = o.kept ?? 'list';
+  let keptId: number | null = null;
+  if (kept !== 'null') {
+    keptId = blobOf(Buffer.from(JSON.stringify(keptBodies[kept])));
+    if (kept === 'tombstone') w.prepare('UPDATE blobs SET z = NULL, pruned_ms = 1 WHERE blob_id = ?').run(keptId);
+  }
+  const bnd = w.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, anchor_uuid, kept_blob_id) VALUES (?, 1, ?, ?, ?)');
+  bnd.run(fx.entry.bn!, 1, fx.uuid.sn!, keptId);
+  bnd.run(fx.entry.b2!, 2, fx.uuid.s2!, null);
+  const node = w.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, summary_blob_id, boundary_entry_id,
+      parser_version, created_ms) VALUES (?, 1, 1, 1, ?, ?, 'final', ?, ?, 1, ?)`);
+  if (o.noLeaf !== true) node.run(fx.leaf, 'native_leaf', 0, fx.blob.sn!, fx.entry.bn!, B1T2_T + 100);
+  node.run(B1T2_IDS.L2, 'native_leaf', 0, fx.blob.s2!, fx.entry.b2!, B1T2_T2 + 100);
+  node.run(B1T2_IDS.P, 'condensed', 1, null, null, B1T2_T2 + 200);   // formed after N: its second leaf is N2's
+  node.run(B1T2_IDS.Q, 'condensed', 1, null, null, 1);
+  const source = w.prepare('INSERT INTO node_sources (node_id, entry_id, ord) VALUES (?, ?, ?)');
+  if (o.noLeaf !== true) {
+    source.run(fx.leaf, fx.entry.a1!, 0);
+    source.run(fx.leaf, fx.entry.r1!, 1);
+  }
+  source.run(B1T2_IDS.L2, fx.entry.a2!, 0);
+  const child = w.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)');
+  if (o.noParent !== true) {
+    if (o.noLeaf !== true) child.run(B1T2_IDS.P, fx.leaf, 0);
+    child.run(B1T2_IDS.P, B1T2_IDS.L2, 1);
+  }
+  if (o.twoParents === true) child.run(B1T2_IDS.Q, B1T2_IDS.L2, 0);
+  for (const v of o.learn ?? []) {
+    w.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, 1)').run(v.length, Buffer.from(b1t2Lib.sha256Hex(v), 'hex'));
+  }
+  for (const k of o.prune ?? []) w.prepare('UPDATE blobs SET z = NULL, pruned_ms = ? WHERE blob_id = ?').run(B1T2_T, fx.blob[k]!);
+  for (const k of o.unindex ?? []) w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(fx.blob[k]!);
+  if (o.untimedBoundary === true) w.prepare('UPDATE entries SET ts_ms = NULL WHERE entry_id = ?').run(fx.entry.bn!);
+  b1t2Store.closeWriter(w);
+  return fx;
+}
+/** The driver's own store opener (W2-5a's openReplayStore: read-only, the pair index from the store and the HOME). */
+async function b1t2With<R>(fx: B1t2Fx, fn: (rs: B1t2Rs) => Promise<R> | R): Promise<R> {
+  const rs = B1T2.openReplayStore(fx.home);
+  try { return await fn(rs); } finally { rs.close(); }
+}
+function b1t2CutAt(rs: B1t2Rs, uuid: string): B1t2Cut {
+  const c = B1T2.armCut(rs, uuid);
+  if (!c.ok) throw new Error(`fixture: no cut at ${uuid}: ${c.reason}`);
+  return c.cut;
+}
+/** The frozen entry W2-5a's sourcing would write for the command fact at N (W2-D73's keys), with `over` applied. */
+function b1t2Entry(fx: B1t2Fx, storeId: string, over: Partial<B1t2Entry> = {}): B1t2Entry {
+  const key = { store_id: storeId, ccrc_id: B1T2_FAM, generation: B1T2_GEN, boundary_uuid: fx.uuid.bn!, kind: 'command', fact: B1T2_CMD, ...over };
+  return { fact_raw: B1T2_CMD, question: B1T2_QUESTION, repo_roots: ['/home/u/tree'], source_entry_uuid: fx.uuid.a1!, ...key, qid: B1T2.qidOf(key), ...over } as B1t2Entry;
+}
+/** §8.6's grammar, written out here, not built from lib's constants. */
+const b1t2Line = (leaf: string, parent: string | null): string =>
+  `History: node ${leaf}${B1T2_ELL} (this compaction)${parent === null ? '' : ` ${B1T2_DOT} parent ${parent}${B1T2_ELL}`} ${B1T2_DOT} ~/.local/bin/ccrc history describe ${leaf}`;
+const B1T2_LINE_N = b1t2Line('La1b2c3d4e', null);
+const B1T2_LINE_N2 = b1t2Line('La1b2c3d4f', 'N0f1e2d3c4b5');
+const b1t2Nums = (rows: unknown, col: string): number[] => (rows as Array<Record<string, number>>).map((r) => Number(r[col])).sort((a, b) => a - b);
+
+b1t2describe('W2-5b1 Task 2: the as-of pieces', () => {
+  b1t2describe('the card line (W2-D75, Q20)', () => {
+    b1t2it('at N the card names leaf N and no parent: P has a leaf, N2, formed after N, so lib hides it (CONTROL: lib\'s own statement hides P)', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        const cut = b1t2CutAt(rs, fx.uuid.bn!);
+        b1t2expect(B1T2.cardOf(rs, fx.entry.bn!, cut)).toEqual({ state: 'card', line: B1T2_LINE_N, leafId: B1T2_IDS.LN, parentId: null, parent: 'hidden' });
+        const hidden = rs.db.prepare(b1t2Lib.asOfHiddenNodesSql()).all({ ...b1t2Lib.asOfBinds(cut), asof_nodes: JSON.stringify([B1T2_IDS.P]) });
+        b1t2expect((hidden as Array<{ node_id: string }>).map((r) => r.node_id), 'CONTROL: lib hides P under the cut at N').toEqual([B1T2_IDS.P]);
+      });
+    });
+
+    b1t2it('at N2 the card names P: every leaf under it is visible under the cut at N2 (CONTROL for the case above)', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        const card = B1T2.cardOf(rs, fx.entry.b2!, b1t2CutAt(rs, fx.uuid.b2!));
+        b1t2expect(card).toEqual({ state: 'card', line: B1T2_LINE_N2, leafId: B1T2_IDS.L2, parentId: B1T2_IDS.P, parent: 'shown' });
+        b1t2expect(b1t2Lib.CARD_LINE_RE.test((card as B1t2Card).line), 'lib\'s grammar takes the line').toBe(true);
+      });
+    });
+
+    b1t2it('display prefixes run over the family\'s whole node-id set (Q20), so the leaf\'s is longer than over the card\'s own ids', async () => {
+      const whole = b1t2Lib.displayPrefixes([B1T2_IDS.LN, B1T2_IDS.L2, B1T2_IDS.P, B1T2_IDS.Q]);
+      b1t2expect([whole.get(B1T2_IDS.LN), whole.get(B1T2_IDS.P)]).toEqual(['La1b2c3d4e', 'N0f1e2d3c4b5']);
+      b1t2expect(b1t2Lib.displayPrefixes([B1T2_IDS.LN, B1T2_IDS.P]).get(B1T2_IDS.LN), 'CONTROL: over the card\'s two ids alone').toBe('La1b2c3');
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        const card = B1T2.cardOf(rs, fx.entry.bn!, b1t2CutAt(rs, fx.uuid.bn!)) as B1t2Card;
+        b1t2expect(card.line.startsWith(`History: node La1b2c3d4e${B1T2_ELL} `)).toBe(true);
+      });
+    });
+
+    b1t2it('a leaf with two depth-1 parents names none (several), and one with none names none (none); CARD_PARENTS holds the four words', async () => {
+      b1t2expect(Object.isFrozen(B1T2.CARD_PARENTS) && [...B1T2.CARD_PARENTS]).toEqual(['shown', 'none', 'hidden', 'several']);
+      const two = await b1t2Plant({ twoParents: true });
+      await b1t2With(two, (rs) => {
+        b1t2expect(B1T2.cardOf(rs, two.entry.b2!, b1t2CutAt(rs, two.uuid.b2!)))
+          .toEqual({ state: 'card', line: b1t2Line('La1b2c3d4f', null), leafId: B1T2_IDS.L2, parentId: null, parent: 'several' });
+      });
+      const none = await b1t2Plant({ noParent: true });
+      await b1t2With(none, (rs) => {
+        b1t2expect(B1T2.cardOf(rs, none.entry.bn!, b1t2CutAt(rs, none.uuid.bn!)))
+          .toEqual({ state: 'card', line: B1T2_LINE_N, leafId: B1T2_IDS.LN, parentId: null, parent: 'none' });
+      });
+    });
+
+    b1t2it('store data never throws (D-6309\'s rule): no leaf for N is leaf-absent, and a leaf id lib\'s grammar refuses is card-unrenderable (CONTROL: lib\'s cardLine throws on it)', async () => {
+      b1t2expect(() => b1t2Lib.cardLine({ leaf: 'LA1B2C3', parent: null })).toThrow(TypeError);
+      const noLeaf = await b1t2Plant({ noLeaf: true });
+      await b1t2With(noLeaf, (rs) => {
+        const cut = b1t2CutAt(rs, noLeaf.uuid.bn!);
+        b1t2expect(B1T2.cardOf(rs, noLeaf.entry.bn!, cut)).toEqual({ state: 'discard', why: 'leaf-absent' });
+        b1t2expect(B1T2.armPayloads(rs, noLeaf.entry.bn!, B1T2_QUESTION, cut)).toEqual({ state: 'discard', why: 'leaf-absent' });
+      });
+      const bad = await b1t2Plant({ badLeaf: true });
+      await b1t2With(bad, (rs) => {
+        b1t2expect(B1T2.cardOf(rs, bad.entry.bn!, b1t2CutAt(rs, bad.uuid.bn!))).toEqual({ state: 'discard', why: 'card-unrenderable' });
+      });
+    });
+
+    b1t2it('a cut of another boundary is the caller\'s defect: a TypeError, never a discard', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        b1t2expect(() => B1T2.cardOf(rs, fx.entry.bn!, b1t2CutAt(rs, fx.uuid.b2!))).toThrow(TypeError);
+      });
+    });
+  });
+
+  b1t2describe('the payloads (Q20; spec 10.2 Two arms)', () => {
+    b1t2it('the plain payload is W2-5a\'s composer output byte for byte, and the carded one is the card line, one blank line, then that same text', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        const cut = b1t2CutAt(rs, fx.uuid.bn!);
+        const want = B1T2.composePayload({ summary: 'Summary: the fixture card build ran.', kept: ['[tool_result] card build ok'] }, B1T2_QUESTION);
+        b1t2expect(B1T2.reconstructPayload(rs, fx.entry.bn!, B1T2_QUESTION), 'CONTROL: W2-5a\'s reconstruction').toMatchObject({ state: 'payload', text: want });
+        const p = B1T2.armPayloads(rs, fx.entry.bn!, B1T2_QUESTION, cut);
+        if (p.state !== 'payloads') throw new Error(`fixture: payloads discarded ${p.why}`);
+        b1t2expect(p.plain).toBe(want);
+        b1t2expect(p.carded).toBe(`${B1T2_LINE_N}\n\n${want}`);
+        b1t2expect(p.card).toEqual(B1T2.cardOf(rs, fx.entry.bn!, cut));
+        b1t2expect(B1T2.prependCard('line', 'payload')).toBe('line\n\npayload');
+      });
+    });
+
+    b1t2it('no line of the plain payload is a card line; the carded payload\'s first line is one, and its second is empty', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        const p = B1T2.armPayloads(rs, fx.entry.bn!, B1T2_QUESTION, b1t2CutAt(rs, fx.uuid.bn!));
+        if (p.state !== 'payloads') throw new Error(`fixture: payloads discarded ${p.why}`);
+        b1t2expect(p.plain.split('\n').filter((l) => b1t2Lib.CARD_LINE_RE.test(l))).toEqual([]);
+        const [first, second] = p.carded.split('\n');
+        b1t2expect([b1t2Lib.CARD_LINE_RE.test(first!), second]).toEqual([true, '']);
+      });
+    });
+  });
+
+  b1t2describe('the re-check before every arm batch (W2-D78(iii), Q21)', () => {
+    b1t2it('CONTROL: a question re-checks clean on the store it was sourced from, and its verdict carries the cut the payloads take', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        const v = await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId), { configDirs: B1T2_DIRS });
+        b1t2expect(v).toEqual({ ok: true, boundaryEntryId: fx.entry.bn, cut: b1t2CutAt(rs, fx.uuid.bn!) });
+        if (!v.ok) return;
+        b1t2expect(B1T2.armPayloads(rs, v.boundaryEntryId, B1T2_QUESTION, v.cut).state).toBe('payloads');
+      });
+    });
+
+    b1t2it('(a): a pair the store learned after the freeze masks F_raw, so the question fails redact-fact (CONTROL: that pair masks the command)', async () => {
+      const pair = { len: B1T2_VALUE.length, sha256: b1t2Lib.sha256Hex(B1T2_VALUE) };
+      b1t2expect(b1t2Lib.redactField(B1T2_CMD, b1t2Lib.makePairIndex([pair])), 'CONTROL').not.toContain(B1T2_VALUE);
+      const fx = await b1t2Plant({ learn: [B1T2_VALUE] });
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId), { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'a', why: 'redact-fact' });
+      });
+    });
+
+    b1t2it('(a) comes first: a source pruned after the freeze fails the re-mine, span-tombstone, though (b) fails too (CONTROL: answerability alone answers unanswerable)', async () => {
+      const fx = await b1t2Plant({ prune: ['a1'] });
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId), { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'a', why: 'span-tombstone' });
+        const a = await B1T2.answerability(rs.db, rs.idx, { tsMs: B1T2_T, transcriptPk: 1, spanEntryIds: [fx.entry.a1!, fx.entry.r1!] }, B1T2_CMD);
+        b1t2expect(a.state, 'CONTROL').toBe('unanswerable');
+      });
+    });
+
+    b1t2it('(a): a frozen fact boundary N no longer yields is fact-unmined, and a boundary uuid the store does not hold is boundary-absent', async () => {
+      const fx = await b1t2Plant();
+      const gone = 'npm run fixture-gone --workspace pkg-z';
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId, { fact: gone, fact_raw: gone }), { configDirs: B1T2_DIRS }))
+          .toEqual({ ok: false, clause: 'a', why: 'fact-unmined' });
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId, { boundary_uuid: B1T2_UUID(0x997) }), { configDirs: B1T2_DIRS }))
+          .toEqual({ ok: false, clause: 'a', why: 'boundary-absent' });
+        // W2-D50: a frozen uuid that is not a lowercase UUID is data, refused here, never spawnEnv's TypeError after --out.
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId, { boundary_uuid: B1T2_UUID(0xabc).toUpperCase() }), { configDirs: B1T2_DIRS }))
+          .toEqual({ ok: false, clause: 'a', why: 'boundary-uuid-invalid' });
+      });
+    });
+
+    b1t2it('(b): the source\'s index row gone is unanswerable, and its stamp moved past T_N is unanswerable-untimed (W2-D70, D-5780)', async () => {
+      const unindexed = await b1t2Plant({ unindex: ['a1'] });
+      await b1t2With(unindexed, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(unindexed, rs.storeId), { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'b', why: 'unanswerable' });
+      });
+      const late = await b1t2Plant({ retime: { a1: B1T2_T + 5 } });
+      await b1t2With(late, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(late, rs.storeId), { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'b', why: 'unanswerable-untimed' });
+      });
+    });
+
+    b1t2it('(b): a boundary row with no timestamp is boundary-untimed, whatever its source answers (CONTROL: answerability over the same store with a numeric T_N answers answerable)', async () => {
+      const fx = await b1t2Plant({ untimedBoundary: true });
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId), { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'b', why: 'boundary-untimed' });
+        const a = await B1T2.answerability(rs.db, rs.idx, { tsMs: B1T2_T, transcriptPk: 1, spanEntryIds: [fx.entry.a1!, fx.entry.r1!] }, B1T2_CMD);
+        b1t2expect(a.state, 'CONTROL: the source itself is answerable at a numeric T_N').toBe('answerable');
+      });
+    });
+
+    b1t2it('(c): a frozen source in N\'s holding copy after N, stamped before T_N, is hidden by lib\'s cut (source-hidden; CONTROL: its stamp alone would show it)', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        const cut = b1t2CutAt(rs, fx.uuid.bn!);
+        const p1 = rs.db.prepare('SELECT e.ts_ms AS ts, m.line AS line FROM entries e JOIN memberships m ON m.entry_id = e.entry_id AND m.file_id = ? WHERE e.entry_id = ?')
+          .get(cut.holdingFileId, fx.entry.p1!) as { ts: number; line: number };
+        b1t2expect(p1.ts, 'CONTROL: stamped before T_N').toBeLessThan(cut.tsCut);
+        b1t2expect(p1.line, 'CONTROL: after N in N\'s holding copy').toBeGreaterThan(cut.boundaryLine);
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId, { source_entry_uuid: fx.uuid.p1! }), { configDirs: B1T2_DIRS }))
+          .toEqual({ ok: false, clause: 'c', why: 'source-hidden' });
+      });
+    });
+
+    b1t2it('(c): no copy holds N, so asOfCutOf answers asof-invalid, which is clause (c); a source uuid the store does not hold is source-absent', async () => {
+      const uncopied = await b1t2Plant({ uncopy: true });
+      await b1t2With(uncopied, async (rs) => {
+        b1t2expect(B1T2.armCut(rs, uncopied.uuid.bn!), 'CONTROL: the store half refuses').toMatchObject({ ok: false, reason: 'asof-invalid' });
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(uncopied, rs.storeId), { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'c', why: 'asof-invalid' });
+      });
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId, { source_entry_uuid: B1T2_UUID(0x998) }), { configDirs: B1T2_DIRS }))
+          .toEqual({ ok: false, clause: 'c', why: 'source-absent' });
+      });
+    });
+
+    b1t2it('recheckBatch refuses quiz-unanswerable naming every failing qid and its clause, in batch order; a clean batch answers each qid\'s verdict', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        const gone = 'npm run fixture-gone --workspace pkg-z';
+        const good = b1t2Entry(fx, rs.storeId);
+        const sha = b1t2Entry(fx, rs.storeId, { kind: 'sha', fact: B1T2_SHA, fact_raw: B1T2_SHA });
+        const unmined = b1t2Entry(fx, rs.storeId, { fact: gone, fact_raw: gone });
+        const shaHidden = b1t2Entry(fx, rs.storeId, { kind: 'sha', fact: B1T2_SHA, fact_raw: B1T2_SHA, source_entry_uuid: fx.uuid.p1! });
+        await b1t2expect(B1T2.recheckBatch(rs, [good, unmined, shaHidden], { configDirs: B1T2_DIRS })).rejects.toMatchObject({
+          word: 'quiz-unanswerable', detail: `${unmined.qid} clause (a) fact-unmined; ${shaHidden.qid} clause (c) source-hidden`,
+        });
+        const clean = await B1T2.recheckBatch(rs, [good, sha], { configDirs: B1T2_DIRS });
+        const cut = b1t2CutAt(rs, fx.uuid.bn!);
+        b1t2expect([...clean.entries()]).toEqual([[good.qid, { ok: true, boundaryEntryId: fx.entry.bn, cut }], [sha.qid, { ok: true, boundaryEntryId: fx.entry.bn, cut }]]);
+      });
+    });
+
+    b1t2it('a question of another store is the caller\'s defect: a TypeError, never a refusal', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        await b1t2expect(B1T2.recheckQuestion(rs, b1t2Entry(fx, 'another-store'), { configDirs: B1T2_DIRS })).rejects.toThrow(TypeError);
+      });
+    });
+  });
+
+  b1t2describe('the parity pins against lib\'s cut (the ledger\'s R8 carry, Q22)', () => {
+    b1t2it('C1: the same-millisecond count reads asOfCutOf\'s T_N and holding file, and counts exactly the entries lib\'s cut shows at T_N outside that file', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        const row = B1T2.admitStoreBoundaries(rs).boundaries.find((b) => b.uuid === fx.uuid.bn)!;
+        const cut = b1t2CutAt(rs, fx.uuid.bn!);
+        b1t2expect({ tsMs: row.ts_ms, holdingFileId: row.file_id }).toEqual({ tsMs: cut.tsCut, holdingFileId: cut.holdingFileId });
+        b1t2expect(cut, 'CONTROL: T_N is N\'s own stamp, and the live file 2 holds N beside the retired file 1').toMatchObject({ tsCut: B1T2_T, holdingFileId: 2 });
+        const planted = ['mIn', 'mOutBefore', 'mOut', 'mOutAfter'].map((k) => fx.entry[k]!);
+        const shown = b1t2Nums(rs.db.prepare(b1t2Lib.asOfVisibleEntriesSql()).all({ ...b1t2Lib.asOfBinds(cut), asof_entries: JSON.stringify(planted) }), 'entry_id');
+        b1t2expect(shown, 'CONTROL: lib shows the hits stamped at or before T_N, before N in the holding copy or in another copy, and hides the one after')
+          .toEqual([fx.entry.mIn!, fx.entry.mOutBefore!, fx.entry.mOut!].sort((a, b) => a - b));
+        const sameMsOutside = b1t2Nums(rs.db.prepare(`SELECT e.entry_id AS entry_id FROM entries e WHERE e.entry_id IN (SELECT value FROM json_each(?))
+            AND e.ts_ms = ? AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.file_id = ? AND m.entry_id = e.entry_id)`)
+          .all(JSON.stringify(planted), cut.tsCut, cut.holdingFileId), 'entry_id');
+        const lib = sameMsOutside.filter((id) => shown.includes(id));
+        b1t2expect(lib).toEqual([fx.entry.mOut]);
+        const scope = B1T2.familyScopeOf(rs.db, { ccrc_id: B1T2_FAM, generation: B1T2_GEN });
+        b1t2expect(B1T2.asofSameMsHits(rs.db, { tsMs: row.ts_ms!, holdingFileId: row.file_id!, transcriptPks: scope }, B1T2_PHRASE)).toBe(lib.length);
+      });
+    });
+
+    b1t2it('C2: on a readable kept list the driver\'s kept(N) members are the set asOfCutOf keeps', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, (rs) => {
+        const copy = B1T2.boundaryCopyOf(rs, fx.entry.bn!);
+        if (copy.state !== 'copy') throw new Error(`fixture: N answered ${copy.why}`);
+        const k = B1T2.keptMembersOf(rs, copy.boundary);
+        if (k.state !== 'kept') throw new Error(`fixture: kept(N) answered ${k.why}`);
+        b1t2expect(k.uuids, 'CONTROL: the stored list repeats r1 and names a uuid the store does not hold').toEqual([fx.uuid.r1, B1T2_UUID(0x999)]);
+        b1t2expect([...k.uuids].sort()).toEqual([...b1t2CutAt(rs, fx.uuid.bn!).keptUuids]);
+      });
+    });
+
+    b1t2it.each([
+      ['null', 'kept-absent', false], ['tombstone', 'kept-unreadable', false], ['object', 'kept-unreadable', false], ['mixed', 'kept-unreadable', true],
+    ] as Array<[NonNullable<B1t2Opts['kept']>, string, boolean]>)('C2 CONTROL: a kept list that is %s: the driver discards N as %s while asOfCutOf keeps the strings it can read, and the payloads never reach an arm', async (kept, word, keepsR1) => {
+      const fx = await b1t2Plant({ kept });
+      await b1t2With(fx, (rs) => {
+        const copy = B1T2.boundaryCopyOf(rs, fx.entry.bn!);
+        if (copy.state !== 'copy') throw new Error(`fixture: N answered ${copy.why}`);
+        b1t2expect(B1T2.keptMembersOf(rs, copy.boundary)).toEqual({ state: 'discard', why: word });
+        const cut = b1t2CutAt(rs, fx.uuid.bn!);
+        b1t2expect([...cut.keptUuids]).toEqual(keepsR1 ? [fx.uuid.r1] : []);
+        b1t2expect(B1T2.armPayloads(rs, fx.entry.bn!, B1T2_QUESTION, cut)).toEqual({ state: 'discard', why: word });
+      });
+    });
+  });
+
+  b1t2describe('answerability\'s clause 3 decides on the matched rowid (D-6479)', () => {
+    type Chk = (db: B1t2Db, idx: unknown, src: { via: string; entryId: number | null; blobId: number; name: string | null }, factRaw: string, tsMs: number) =>
+      Promise<{ ok: boolean; clause?: number; why?: string }>;
+    const checkSource = (B1T2 as unknown as { checkSource: Chk }).checkSource;
+    const src = (fx: B1t2Fx, key: string) => ({ via: 'entry', entryId: fx.entry[key]!, blobId: fx.blob[key]!, name: null });
+
+    b1t2it('CONTROL: the source\'s own live index row holds the phrase, so it is answerable (p1 holds the same command, as in the cases below)', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(await checkSource(rs.db, rs.idx, src(fx, 'a1'), B1T2_CMD, B1T2_T)).toMatchObject({ ok: true });
+        b1t2expect((await B1T2.answerability(rs.db, rs.idx, { tsMs: B1T2_T, transcriptPk: 1, spanEntryIds: [fx.entry.a1!, fx.entry.r1!] }, B1T2_CMD)).state).toBe('answerable');
+      });
+    });
+
+    b1t2it('F5: a higher-id source stays answerable when a lower matching blob exists, so the FTS rowid bind must remain an INTEGER', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(fx.blob.p1, 'CONTROL: p1 is the higher-id source').toBeGreaterThan(fx.blob.a1!);
+        b1t2expect(await checkSource(rs.db, rs.idx, src(fx, 'p1'), B1T2_CMD, B1T2_T)).toMatchObject({ ok: true });
+      });
+    });
+
+    b1t2it('the source\'s index row is gone while another blob holds the phrase: no-match, clause 3, unanswerable (never the other blob\'s row)', async () => {
+      const fx = await b1t2Plant({ unindex: ['a1'] });
+      await b1t2With(fx, async (rs) => {
+        const held = (rs.db.prepare('SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH ?').all(b1t2Lib.ftsPhrase(B1T2_CMD)) as Array<{ rowid: number }>).map((r) => Number(r.rowid));
+        b1t2expect(held, 'CONTROL: p1\'s own row holds the phrase and a1\'s is gone').toEqual([fx.blob.p1]);
+        b1t2expect(await checkSource(rs.db, rs.idx, src(fx, 'a1'), B1T2_CMD, B1T2_T)).toEqual({ ok: false, clause: 3, why: 'no-match' });
+        b1t2expect(await B1T2.answerability(rs.db, rs.idx, { tsMs: B1T2_T, transcriptPk: 1, spanEntryIds: [fx.entry.a1!, fx.entry.r1!] }, B1T2_CMD)).toEqual({ state: 'unanswerable' });
+      });
+    });
+
+    b1t2it('the source\'s own blob does not hold the phrase (its row is live) while another blob does: no-match, clause 3', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        // r1 is a live, indexed tool_result whose text is 'card build ok'; p1 holds B1T2_CMD.
+        b1t2expect(await checkSource(rs.db, rs.idx, src(fx, 'r1'), B1T2_CMD, B1T2_T)).toEqual({ ok: false, clause: 3, why: 'no-match' });
+      });
+    });
+
+    b1t2it('at arm time the re-check names clause (b): a source whose index row is gone is unanswerable though p1 holds the same command', async () => {
+      const fx = await b1t2Plant({ unindex: ['a1'] });
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(await B1T2.recheckQuestion(rs, b1t2Entry(fx, rs.storeId), { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'b', why: 'unanswerable' });
+        await b1t2expect(B1T2.recheckBatch(rs, [b1t2Entry(fx, rs.storeId)], { configDirs: B1T2_DIRS })).rejects.toMatchObject({ word: 'quiz-unanswerable', detail: expect.stringContaining('clause (b) unanswerable') });
+      });
+    });
+  });
+
+  b1t2describe('one spelling each (W2-D38, W2-D12, S2)', () => {
+    b1t2it('RECON_DISCARDS gains card-unrenderable directly before body-unrenderable, which stays last, and it is no DRIVER_REASONS or GATE_REASONS word (W2-5a R5)', () => {
+      b1t2expect(B1T2.RECON_DISCARDS.slice(35)).toEqual(['card-unrenderable', 'body-unrenderable']);
+      b1t2expect(new Set(B1T2.RECON_DISCARDS).size).toBe(B1T2.RECON_DISCARDS.length);
+      b1t2expect(B1T2.DRIVER_REASONS.includes('card-unrenderable') || (b1t2Gate.GATE_REASONS as readonly string[]).includes('card-unrenderable')).toBe(false);
+    });
+
+    b1t2it('the driver calls asOfCutOf, cardLine, displayPrefixes, lib\'s node and entry statements and mineBoundary on one code line each, spells leaf N\'s node rule once, and never splices asOfEntrySql, composes R8 or reads card.mjs', () => {
+      const code = b1t2Read(b1t2Join(B1T2_REPO, 'deploy', 'history-replay.mjs'), 'utf8').split('\n').filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l));
+      const lines = (re: RegExp): string[] => code.filter((l) => re.test(l));
+      for (const re of [/\basOfCutOf\(/, /\bcardLine\(/, /\bdisplayPrefixes\(/, /\basOfHiddenNodesSql\(\)/, /\basOfVisibleEntriesSql\(\)/,
+        /(?<!function )\bmineBoundary\(/, /boundary_entry_id = \? AND depth = 0/]) {
+        b1t2expect(lines(re), String(re)).toHaveLength(1);
+      }
+      b1t2expect(lines(/\basOfEntrySql\b|\bcutHidesASource\b|\blineageEntries\b|card\.mjs/)).toEqual([]);
+    });
+  });
+});
+
+// ── W2-5b1 Task 4: the arm engine, `arms --section pilot|quiz` (W2-D78, W2-D80, W2-D56, W2-D55, W2-D64, W2-D82) ──
+// Every HOME is a fixture: up-a (upstream) with the arm stub below, a fresh limits row, a tagged stamp, a store made by
+// store.mjs's createStore (or, in the end-to-end describe, W2-5a Task 6's swept w6SourceBox), and headless-on written from lib's
+// formatHeadlessList. `arms` runs in-process with Task 2's question re-check and payload injected (Task 2 pins its own),
+// except the end-to-end case, which runs them for real. No case spawns a real model, reads the live HOME, or writes
+// outside its own mkTmp trees. The test may spell the arm words; the driver never does (W2-D42).
+import { describe as w5b4Describe, expect as w5b4Expect, it as w5b4It, vi as w5b4Vi, beforeAll as w5b4BeforeAll } from 'vitest';
+import * as w5b4Drv from '../../deploy/history-replay.mjs';
+import * as w5b4Gate from '../../deploy/history-gate.mjs';
+import * as w5b4Lib from '../../ccd/history/lib.mjs';
+import { createStore as w5b4CreateStore } from '../../ccd/history/store.mjs';
+import { mkTmp as w5b4MkTmp } from './tmpHelpers.js';
+import { REPO as W5B4_REPO } from './historyHelpers.js';
+
+type W5b4R = Record<string, any>;
+type W5b4Ref = { store_id: string; ccrc_id: string; generation: string };
+type W5b4Saved = { path: string; sha: string; value: W5b4R };
+type W5b4Result = { code: unknown; stdout: string; stderr: string; refusal: { word: string; detail: string } | null };
+const D4 = w5b4Drv as unknown as W5b4R;
+const W5B4_DAY = 86_400_000;
+const W5B4_T0 = 1_800_000_000_000;
+const W5B4_STORE_A = '00000000-0000-4000-8000-0000000004a1';
+const W5B4_STORE_B = '00000000-0000-4000-8000-0000000004b1';
+const W5B4_OPUS = 'claude-opus-9-1';
+const W5B4_ARM_MODEL = 'claude-arm-9-1';
+const W5B4_STAMP = 'v9.9.8';
+const W5B4_LANG = 'fixture.UTF-8';
+const w5b4Gen = (n: number): string => `0189abcd-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const w5b4Hex = (label: string): string => w5b4Lib.sha256Hex(`w2-5b1 task 4 fixture: ${label}`) as string;
+const W5B4_SEED = w5b4Hex('seed');
+/** The arm values in W2-2b's frozen order, positionally. */
+const W5B4_ARMS: string[] = [...(w5b4Lib.RECALL_ARMS as readonly string[])];
+const W5B4_CONTROL = W5B4_ARMS[0]!;
+const W5B4_TREATMENT = W5B4_ARMS[1]!;
+const W5B4_PILOT: W5b4Ref = { store_id: W5B4_STORE_A, ccrc_id: 'pilot-4', generation: w5b4Gen(940) };
+const W5B4_HEAD = { writer_model: W5B4_OPUS, labeller: { ...w5b4Gate.LABELLER, sha_min_prefix: 7 } };
+/** The stub's per-key controls live here: `<asof>.<arm>[.<k>]<ext>`, k the key's k-th -p run (1-based). */
+const W5B4_ARM_DIR = 'stub-arm';
+
+/** W2-4's recording stub, reshaped for arm runs: the same log line (so stubLog reads it), and for an arm run (a -p run
+ *  with CCRC_RECALL_ARM set) a per-(ASOF, ARM) choice of stream, exit code, sleep, and three acts taken before it exits
+ *  (rewrite the limits row, create a path, remove a path). `--version` prints STUB_STREAM, as W2-4's stub does. */
+const W5B4_ARM_STUB = `#!/usr/bin/env node
+(async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const start = Date.now();
+  const home = path.resolve(path.dirname(process.argv[1]), '..', '..');
+  const at = (f) => path.join(home, f);
+  const opt = (f) => { try { return fs.readFileSync(at(f), 'utf8'); } catch { return null; } };
+  const argv = process.argv.slice(2);
+  const print = argv.includes('-p');
+  const stdin = print ? fs.readFileSync(0, 'utf8') : '';
+  const arm = process.env.CCRC_RECALL_ARM;
+  const key = print && typeof arm === 'string' ? process.env.CCRC_RECALL_ASOF + '.' + arm : null;
+  const dir = ${JSON.stringify(W5B4_ARM_DIR)};
+  let k = 0;
+  if (key !== null) {
+    fs.mkdirSync(at(dir), { recursive: true });
+    fs.appendFileSync(at(dir + '/' + key + '.count'), 'x');
+    k = fs.statSync(at(dir + '/' + key + '.count')).size;
+  }
+  const per = (ext) => (key === null ? null : (opt(dir + '/' + key + '.' + k + ext) ?? opt(dir + '/' + key + ext)));
+  const sleep = Number(per('.sleep') ?? '0');
+  if (sleep > 0) await new Promise((r) => setTimeout(r, sleep));
+  const limits = per('.limits');
+  if (limits !== null) fs.writeFileSync(at('.cc-limits/up-a.json'), limits);
+  const touch = per('.touch');
+  if (touch !== null) { fs.mkdirSync(path.dirname(touch), { recursive: true }); fs.writeFileSync(touch, ''); }
+  const rm = per('.rm');
+  if (rm !== null) fs.rmSync(rm, { force: true });
+  const env = {};
+  for (const [n, v] of Object.entries(process.env)) if (n !== 'CLAUDE_CODE_OAUTH_TOKEN') env[n] = v;
+  fs.appendFileSync(at(${JSON.stringify(T5_STUB_LOG)}), JSON.stringify({ argv, envKeys: Object.keys(process.env).sort(), env,
+    cwd: process.cwd(), cwdMode: fs.statSync(process.cwd()).mode & 0o777, cwdEntries: fs.readdirSync(process.cwd()), stdin,
+    start, end: Date.now() }) + '\\n');
+  process.stdout.write(per('.jsonl') ?? opt(${JSON.stringify(STUB_STREAM)}) ?? '');
+  process.exitCode = Number(per('.exit') ?? '0');
+})();
+`;
+
+const w5b4LimitsRow = (pct: number): string => {
+  const nowS = Math.floor(Date.now() / 1000);
+  return JSON.stringify({ five: pct, seven: pct, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 });
+};
+function w5b4Limits(home: string, pct: number): void {
+  mkdirSync(join(home, '.cc-limits'), { recursive: true });
+  writeFileSync(join(home, '.cc-limits', 'up-a.json'), w5b4LimitsRow(pct));
+}
+/** Make `home` a fixture node: up-a and the arm stub, a fresh limits row at 10%, a tagged stamp. */
+function w5b4Node(home: string): void {
+  writeRoster(home, [FIXTURE_ACCOUNTS[0]!]);
+  const bin = join(home, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, 'up-a'), W5B4_ARM_STUB, { mode: 0o700 });
+  if (!existsSync(join(home, STUB_STREAM))) writeFileSync(join(home, STUB_STREAM), T5_STREAM);
+  w5b4Limits(home, 10);
+  writeFileSync(join(home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-10-22T00:00:00Z', dirty: false, version: W5B4_STAMP }));
+}
+/** A fixture node with a createStore store of id `store` (none when null). */
+function w5b4Home(store: string | null = W5B4_STORE_A): string {
+  const home = w5b4MkTmp('ccrc-w5b4-home-');
+  w5b4Node(home);
+  if (store !== null) w5b4CreateStore(home, { storeId: store });
+  return home;
+}
+/** headless-on as the operator writes it from `marker` (W2-D84): lib's formatHeadlessList. */
+function w5b4Marker(home: string, storeId: string, refs: W5b4Ref[]): void {
+  const p = w5b4Lib.historyPaths(home).headlessOn as string;
+  mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+  const text = w5b4Lib.formatHeadlessList({ storeId, pairs: refs.map((r) => ({ ccrcId: r.ccrc_id, generation: r.generation })) }) as string;
+  writeFileSync(p, text, { mode: 0o600 });
+}
+/** One stub control for the runs of (question, arm): every run of that key, or only its k-th. */
+function w5b4Act(home: string, q: W5b4R, arm: string, ext: string, text: string, k: number | null = null): void {
+  const dir = join(home, W5B4_ARM_DIR);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${q.boundary_uuid as string}.${arm}${k === null ? '' : `.${k}`}${ext}`), text);
+}
+/** A stream-json an arm run prints: init, one Bash tool pair per call (with the event's parent_tool_use_id), an optional
+ *  event carrying an `error` field, and a result whose usage sums to T5_TOKENS (none when `result` is false). */
+function w5b4Stream(o: { text?: string; calls?: Array<{ command: string; isError?: boolean; parent?: string }>; error?: string; result?: boolean }): string {
+  const ev: object[] = [{ type: 'system', subtype: 'init', session_id: 'fixture-arm-session', model: W5B4_ARM_MODEL, tools: ['Bash', 'Agent'],
+    mcp_servers: [], plugins: [], skills: [], slash_commands: [] }];
+  (o.calls ?? []).forEach((c, i) => {
+    const id = `toolu_w5b4_${i}`;
+    ev.push({ type: 'assistant', parent_tool_use_id: c.parent ?? null, message: { id: `msg-w5b4-${i}`, usage: { input_tokens: 1, output_tokens: 1 },
+      content: [{ type: 'tool_use', id, name: 'Bash', input: { command: c.command } }] } });
+    ev.push({ type: 'user', parent_tool_use_id: c.parent ?? null, message: { content: [{ type: 'tool_result', tool_use_id: id,
+      content: c.isError === true ? 'exit 8' : 'ok', is_error: c.isError === true }] } });
+  });
+  if (o.error !== undefined) ev.push({ type: 'assistant', error: o.error, message: { id: 'msg-w5b4-error', content: [{ type: 'text', text: 'x' }] } });
+  if (o.result !== false) {
+    ev.push({ type: 'result', subtype: 'success', is_error: false, num_turns: 2, result: o.text ?? '', permission_denials: [],
+      usage: { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 30, output_tokens: 5 } });
+  }
+  return ev.map((e) => JSON.stringify(e)).join('\n') + '\n';
+}
+
+const w5b4Shas = (): Record<string, string> => (D4.codeShas(W5B4_REPO) as { files: Record<string, string> }).files;
+/** What the stub answers to --version: STUB_STREAM's first line (W2-4 Task 7's measureClaudeVersion). */
+const w5b4Version = (home: string): string => readFileSync(join(home, STUB_STREAM), 'utf8').split('\n')[0]!.trim();
+/** One frozen entry on family `f` (W2-D73's eleven fields, its qid by W2-5a Task 6's qidOf): a sha fact of 7 hex digits. */
+function w5b4Entry(f: W5b4Ref, n: number): W5b4R {
+  const fact = (0xbd40000 + n).toString(16);
+  const e = { store_id: f.store_id, ccrc_id: f.ccrc_id, generation: f.generation, boundary_uuid: w5b4Gen(8400 + n), kind: 'sha', fact,
+    fact_raw: fact, question: `Which commit did arm fixture step ${n} record?`, source_entry_uuid: w5b4Gen(9400 + n), repo_roots: ['/home/u/tree'] };
+  return { ...e, qid: D4.qidOf(e) as string };
+}
+/** Part 1 through the driver's own buildDraft (W2-5a), every node's step 0a measured under `shas`, HOME's stub and stamp. */
+function w5b4Draft(home: string, o: { stores?: string[]; pilotFamilies?: W5b4Ref[]; pilotFrozenSha?: string; over?: W5b4R; shas?: Record<string, string> } = {}): W5b4R {
+  const stores = o.stores ?? [W5B4_STORE_A];
+  const shas = o.shas ?? w5b4Shas();
+  const s0 = { kind: D4.STEP0A_KIND, v: 1, measured_ms: W5B4_T0 - 40 * W5B4_DAY, account: 'up-a', settings_mode: 'restricted',
+    claude_code_version: w5b4Version(home), wrapper_sha256: null,
+    flags_accepted: Object.fromEntries((D4.contractFlags('restricted') as string[]).map((f) => [f, true])),
+    writer_init: { tools: [] }, judge_init: { tools: [] }, box_init: { tools: ['Bash', 'Agent'] },
+    code_shas: shas, release_stamp: W5B4_STAMP, budget: 100_000, spend: 600 };
+  const pilot = { kind: D4.PILOT_SOURCE_KIND, v: 1, store_id: stores[0], seed: w5b4Hex('pilot seed'), n_fidelity: 5, n_usage: 5,
+    families: o.pilotFamilies ?? [W5B4_PILOT], fidelity: [], frozen_sha256: o.pilotFrozenSha ?? w5b4Hex('pilot frozen'), writer_model: W5B4_OPUS,
+    used: { labeller: { ...w5b4Gate.LABELLER, path_forms: [...w5b4Gate.LABELLER.path_forms] }, sha_min_prefix: 7, writer_input: 'excerpt',
+      baseline_files: 'v1', writer_prompt_sha256: w5b4Gate.WRITER_PROMPT_SHA256, answer_protocol_sha256: w5b4Gate.ANSWER_PROTOCOL_SHA256 },
+    code_shas: shas, release_stamp: W5B4_STAMP, budget: 3_000_000, spend: 900_000, counts: {} };
+  return D4.buildDraft({ nodes: stores.map((s, i) => ({ label: `node-${i}`, store_id: s })),
+    step0a: stores.map((s, i) => ({ ...s0, label: `node-${i}`, store_id: s })), pilot, account: 'up-a',
+    models: { arm: W5B4_ARM_MODEL, writer: W5B4_OPUS, judge: W5B4_OPUS }, gateCode: { release_tag: W5B4_STAMP, files: shas },
+    seedHex: W5B4_SEED, nowMs: W5B4_T0 - 30 * W5B4_DAY, overrides: o.over ?? {}, supersedes: null }) as W5b4R;
+}
+/** Saved as the operator saves a record: canonical JSON and one newline, 0600, outside any git tree. */
+function w5b4Save(value: unknown, name: string): W5b4Saved {
+  const p = join(w5b4MkTmp('ccrc-w5b4-in-'), name);
+  const text = `${w5b4Lib.canonicalJson(value) as string}\n`;
+  writeFileSync(p, text, { mode: 0o600 });
+  return { path: p, sha: w5b4Lib.sha256Hex(text) as string, value: value as W5b4R };
+}
+/** A frozen list's bytes saved as they are (W2-D73: no trailing newline). */
+function w5b4SaveText(text: string, name: string): W5b4Saved {
+  const p = join(w5b4MkTmp('ccrc-w5b4-in-'), name);
+  writeFileSync(p, text, { mode: 0o600 });
+  return { path: p, sha: w5b4Lib.sha256Hex(text) as string, value: JSON.parse(text) as W5b4R };
+}
+const w5b4Inp = (name: string, s: W5b4Saved): string[] => [`--${name}`, s.path, `--${name}-sha256`, s.sha];
+const w5b4Out = (): string => join(w5b4MkTmp('ccrc-w5b4-out-'), 'out');
+/** The pilot section: `n` usage questions on `family`, the pilot frozen list, part 1 naming its sha, headless-on listing
+ *  the family (unless `marker` is false), and the argv. `entries` is the list as the driver reads it, in qid order. */
+function w5b4Pilot(home: string, o: { n?: number; over?: W5b4R; shas?: Record<string, string>; stores?: string[]; family?: W5b4Ref;
+  frozenSha?: string; marker?: boolean } = {}) {
+  const family = o.family ?? W5B4_PILOT;
+  const made = Array.from({ length: o.n ?? 2 }, (_, i) => w5b4Entry(family, i + 1));
+  const fz = w5b4SaveText(D4.frozenListText('pilot', W5B4_HEAD, made) as string, 'pilot-frozen.json');
+  const draft = w5b4Draft(home, { stores: o.stores, pilotFamilies: [family], pilotFrozenSha: o.frozenSha ?? fz.sha, over: o.over, shas: o.shas });
+  const d = w5b4Save(draft, 'part1.json');
+  if (o.marker !== false) w5b4Marker(home, W5B4_STORE_A, [family]);
+  const out = w5b4Out();
+  return { entries: fz.value.entries as W5b4R[], fz, draft, d, out,
+    argv: ['arms', '--section', 'pilot', '--out', out, ...w5b4Inp('record', d), ...w5b4Inp('frozen', fz)] };
+}
+/** The quiz section over two nodes: three questions on node A's family, two on node B's; part 1, the quiz frozen list,
+ *  and part 2 through the driver's own buildFinal (an empty assignment, no registry drop), with `spendBudget` and the
+ *  pilot result's settings mode; headless-on on node A listing A's family. */
+function w5b4Quiz(home: string, o: { over?: W5b4R; shas?: Record<string, string>; spendBudget?: number; settingsMode?: string } = {}) {
+  const famA: W5b4Ref = { store_id: W5B4_STORE_A, ccrc_id: 'quiz-a', generation: w5b4Gen(410) };
+  const famB: W5b4Ref = { store_id: W5B4_STORE_B, ccrc_id: 'quiz-b', generation: w5b4Gen(420) };
+  const made = [w5b4Entry(famA, 11), w5b4Entry(famA, 12), w5b4Entry(famA, 13), w5b4Entry(famB, 14), w5b4Entry(famB, 15)];
+  const draft = w5b4Draft(home, { stores: [W5B4_STORE_A, W5B4_STORE_B], over: o.over, shas: o.shas });
+  const d = w5b4Save(draft, 'part1.json');
+  const fz = w5b4SaveText(D4.frozenListText('quiz', W5B4_HEAD, made) as string, 'frozen.json');
+  const final = D4.buildFinal({ draft, draftSha256: d.sha,
+    assembled: { nodes: [W5B4_STORE_A, W5B4_STORE_B].map((s) => ({ store_id: s, census_sha256: w5b4Hex(`census ${s}`), report: { census: { as_of_ms: W5B4_T0 } } })), drops: [] },
+    assignment: { list: [], sha256: w5b4Gate.assignmentSha256([]) },
+    power: { headline: null, at_power_80: null, at_rho_0: null, rho_hat: null, n_f: {}, coverage: {}, pre_window_uptake: {} }, powerSha256: w5b4Hex('power'),
+    frozen: { sha256: fz.sha, list: fz.value, families: D4.familiesOf(fz.value.entries) },
+    pilotResult: { fidelity: [], usage_extrapolation: {}, step0b_sha256: w5b4Hex('step0b'), settings_mode: o.settingsMode ?? 'restricted', absent_rate: { num: 0, den: 10 } },
+    spendBudget: o.spendBudget ?? 1_000_000, window: { start: W5B4_T0 + W5B4_DAY, end: W5B4_T0 + 15 * W5B4_DAY }, decision: 'keep', nowMs: W5B4_T0 }) as W5b4R;
+  const f = w5b4Save(final, 'part2.json');
+  w5b4Marker(home, W5B4_STORE_A, [famA]);
+  const out = w5b4Out();
+  const entries = fz.value.entries as W5b4R[];
+  return { entries, mine: entries.filter((e) => e.store_id === W5B4_STORE_A), famA, draft, d, fz, final, f, out,
+    argv: (rec: W5b4Saved = f, extra: string[] = []): string[] =>
+      ['arms', '--section', 'quiz', '--out', out, ...w5b4Inp('record', rec), ...w5b4Inp('part1', d), ...w5b4Inp('frozen', fz), ...extra] };
+}
+/** A version-move amendment (W2-D90, Q13's detail) for node `label`. */
+function w5b4Move(label: string, version: string, i: number): W5b4R {
+  const detail = { claude_code_version: version, repilot_sha256: w5b4Hex(`repilot ${i}`) };
+  return { kind: 'version-move', node_label_ref: label, at_ms: W5B4_T0 + W5B4_DAY + i,
+    detail_sha256: w5b4Lib.sha256Hex(w5b4Lib.canonicalJson(detail)) as string, detail };
+}
+/** Part 2 superseded after window start, appending `amendments` (W2-D90: only amendments, finalized_ms and supersedes move). */
+function w5b4Amend(fx: { final: W5b4R }, amendments: W5b4R[]): W5b4Saved {
+  return w5b4Save({ ...fx.final, supersedes: w5b4Gate.recordSha256(fx.final), finalized_ms: W5B4_T0 + W5B4_DAY + 3_600_000, amendments }, 'part2-amended.json');
+}
+
+/** Task 2's recheckBatch and armPayloads, stood in with their shapes: every question passes (its verdict's cut carries
+ *  its qid), and each payload names its qid and the arm it goes to (plain to the control arm, carded to the treatment). */
+const W5B4_FAKE: W5b4R = {
+  recheck: async (_rs: unknown, es: W5b4R[]): Promise<Map<string, W5b4R>> =>
+    new Map(es.map((e) => [e.qid as string, { ok: true, boundaryEntryId: 0, cut: { qid: e.qid } }])),
+  payloads: (_rs: unknown, _id: number, _question: string, cut: W5b4R): W5b4R => ({ state: 'payloads',
+    plain: `fixture payload ${cut.qid as string} ${W5B4_CONTROL}\n`, carded: `fixture payload ${cut.qid as string} ${W5B4_TREATMENT}\n` }),
+  now: (): number => W5B4_T0 + 2 * W5B4_DAY,
+};
+/** `arms` in-process, as main runs it (parseArgs, then the handler) with W5B4_FAKE's deps under `deps`: stdout and stderr
+ *  captured, a refusal answered as {word, detail}; any other throw is the case's failure (D-6309's rule). */
+async function w5b4Arms(home: string, argv: string[], deps: W5b4R = {}): Promise<W5b4Result> {
+  const err: string[] = [];
+  const out: string[] = [];
+  const e1 = w5b4Vi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write);
+  const o1 = w5b4Vi.spyOn(process.stdout, 'write').mockImplementation(((s: string | Uint8Array) => { out.push(String(s)); return true; }) as typeof process.stdout.write);
+  try {
+    const { flags } = D4.parseArgs(argv) as { flags: W5b4R };
+    const code = await D4.armsCommand(flags, { HOME: home, TMUX_PANE: undefined, LANG: W5B4_LANG }, { ...W5B4_FAKE, ...deps });
+    return { code, stdout: out.join(''), stderr: err.join(''), refusal: null };
+  } catch (e) {
+    if (e instanceof w5b4Drv.DriverRefusal) return { code: null, stdout: out.join(''), stderr: err.join(''), refusal: { word: (e as W5b4R).word, detail: (e as W5b4R).detail } };
+    throw e;
+  } finally {
+    e1.mockRestore();
+    o1.mockRestore();
+  }
+}
+/** Runs a complete temporary driver variant; its own DriverRefusal class remains the classifier. */
+async function w5b4VariantArms(driver: W5b4R, home: string, argv: string[], deps: W5b4R = {}): Promise<W5b4Result> {
+  const err: string[] = [];
+  const spy = w5b4Vi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write);
+  try {
+    const { flags } = driver.parseArgs(argv) as { flags: W5b4R };
+    const code = await driver.armsCommand(flags, { HOME: home, TMUX_PANE: undefined, LANG: W5B4_LANG }, { ...W5B4_FAKE, ...deps });
+    return { code, stdout: '', stderr: err.join(''), refusal: null };
+  } catch (e) {
+    if (e instanceof driver.DriverRefusal) return { code: null, stdout: '', stderr: err.join(''), refusal: { word: (e as W5b4R).word, detail: (e as W5b4R).detail } };
+    throw e;
+  } finally { spy.mockRestore(); }
+}
+const w5b4Runs = (home: string): W5b4R[] => ((stubLog(home) ?? []) as unknown as W5b4R[]).filter((e) => e.argv.includes('-p'));
+const w5b4Versions = (home: string): number => ((stubLog(home) ?? []) as unknown as W5b4R[]).filter((e) => e.argv[0] === '--version').length;
+const w5b4Json = (p: string): W5b4R => JSON.parse(readFileSync(p, 'utf8')) as W5b4R;
+const w5b4Manifests = (out: string, section: string): W5b4R[] => {
+  const dir = join(out, section, 'arms', 'batches');
+  return existsSync(dir) ? readdirSync(dir).sort().map((n) => w5b4Json(join(dir, n))) : [];
+};
+const w5b4Answer = (out: string, section: string, q: W5b4R, arm: string): W5b4R => w5b4Json(join(out, section, 'answers', `${q.qid as string}.${arm}.json`));
+const w5b4Summary = (out: string, section: string): W5b4R => w5b4Json(join(out, section, 'arms', 'summary.json'));
+const w5b4Names = (section: string, es: W5b4R[], attempt = 1): string[] =>
+  es.flatMap((e) => W5B4_ARMS.map((arm) => `${section}/arms/${e.qid as string}/${arm}.a${attempt}`));
+const w5b4Stop = (section: string, kind: string, word: string, notRun: number, rerun: number): string =>
+  `ccrc history-replay: arms ${section} ${kind} ${word}: ${notRun} question(s) not run, ${rerun} owing a re-run; nothing is retried\n`;
+
+w5b4Describe('W2-5b1 Task 4: the arm engine, pure parts', () => {
+  w5b4It('spendShareOf is ceil(budget x n / N) in integers, exact past 2^53 products (Q5)', () => {
+    w5b4Expect(D4.spendShareOf(1_000_001, 3, 5)).toBe(600_001);
+    w5b4Expect(D4.spendShareOf(1_000_000, 3, 5), 'CONTROL: an exact division adds nothing').toBe(600_000);
+    w5b4Expect(D4.spendShareOf(100, 3, 5)).toBe(60);
+    w5b4Expect(D4.spendShareOf(7, 5, 5), 'the whole list is the whole budget').toBe(7);
+    w5b4Expect(D4.spendShareOf(Number.MAX_SAFE_INTEGER, 2, 3), 'exact where a float product rounds').toBe(6_004_799_503_160_661);
+    for (const bad of [[0, 1, 1], [5, 0, 1], [5, 2, 1], [5, 1, 0], [1.5, 1, 1]]) {
+      w5b4Expect(() => D4.spendShareOf(...bad), JSON.stringify(bad)).toThrow(TypeError);
+    }
+  });
+
+  w5b4It('questionStateOf: a run-failed arm fails the question, two answered arms answer it, an owed re-run is rerun, else not-run (W2-D80)', () => {
+    const rows: Array<[string[], string]> = [
+      [['answered', 'answered'], 'answered'],
+      [['answered', 'run-failed'], 'run-failed'],
+      [['run-failed', 'rerun'], 'run-failed'],
+      [['answered', 'rerun'], 'rerun'],
+      [['rerun', 'not-run'], 'rerun'],
+      [['answered', 'not-run'], 'not-run'],
+      [['not-run', 'not-run'], 'not-run'],
+    ];
+    for (const [arms, want] of rows) w5b4Expect(D4.questionStateOf(arms), arms.join(' ')).toBe(want);
+    w5b4Expect(() => D4.questionStateOf(['answered', 'infra-failed']), 'a run class is not an outcome').toThrow(TypeError);
+    w5b4Expect(() => D4.questionStateOf([]), 'no arm is no question').toThrow(TypeError);
+    w5b4Expect(D4.questionCountsOf(['answered', 'run-failed', 'rerun', 'not-run', 'not-run'])).toEqual({ questions: 5, answered: 1, run_failed: 1, rerun_owed: 1, not_run: 2 });
+  });
+
+  w5b4It('uptakeOf counts a paired, non-error history Bash call, and via_agent for one inside a subagent (W2-D82)', () => {
+    const pair = (o: W5b4R): W5b4R => ({ id: 't', name: 'Bash', input: { command: 'ccrc history grep x' }, result: 'ok', isError: false, parentToolUseId: null, ...o });
+    w5b4Expect(D4.uptakeOf([
+      pair({}),
+      pair({ parentToolUseId: 'toolu_agent' }),
+      pair({ input: { command: '"$HOME/.local/bin/ccrc" history show y' }, result: null, isError: false }),
+      pair({ isError: true, result: 'exit 8' }),
+      pair({ result: null, isError: null }),
+      pair({ input: { command: 'ls -la' } }),
+      pair({ name: 'Read', input: { command: 'ccrc history grep x' } }),
+      pair({ input: 'ccrc history grep x' }),
+    ])).toEqual({ calls: 3, via_agent: 1, errored: 1 });
+    w5b4Expect(D4.uptakeOf([]), 'CONTROL: no pair, no call').toEqual({ calls: 0, via_agent: 0, errored: 0 });
+  });
+
+  w5b4It('armAnswerOf: the last ANSWER line, labelCorrect on a value only, unknown and absent kept apart (W2-D64)', () => {
+    const e = w5b4Entry(W5B4_PILOT, 1);
+    const facts = (text: string | null, toolPairs: W5b4R[] = []): W5b4R => ({ result: text === null ? null : { text }, toolPairs });
+    w5b4Expect(D4.armAnswerOf(e, facts(`ANSWER: deadbee\nthen\nANSWER: ${e.fact as string}`), 7)).toEqual({
+      answer_field: { state: 'value', value: e.fact }, correct: true, absent: false, reply: `ANSWER: deadbee\nthen\nANSWER: ${e.fact as string}`,
+      uptake: { calls: 0, via_agent: 0, errored: 0 } });
+    w5b4Expect(D4.armAnswerOf(e, facts(`ANSWER: ${e.fact as string} or abc1234`), 7).correct, 'a hedged pair is not correct').toBe(false);
+    w5b4Expect(D4.armAnswerOf(e, facts('ANSWER: UNKNOWN'), 7)).toMatchObject({ answer_field: { state: 'unknown' }, correct: false, absent: false });
+    w5b4Expect(D4.armAnswerOf(e, facts(`The commit is ${e.fact as string}.`), 7), 'F in the reply without the line is absent').toMatchObject({ answer_field: { state: 'absent' }, correct: false, absent: true });
+    w5b4Expect(D4.armAnswerOf(e, facts(null), 7)).toMatchObject({ answer_field: { state: 'absent' }, correct: false, absent: true, reply: null });
+  });
+
+  w5b4It('expectedForNode: part 1\'s step 0a entry, or the node\'s newest version-move amendment (W2-D56, W2-D90)', () => {
+    const home = w5b4MkTmp('ccrc-w5b4-pure-');
+    writeFileSync(join(home, STUB_STREAM), T5_STREAM);
+    const draft = w5b4Draft(home, { stores: [W5B4_STORE_A, W5B4_STORE_B] });
+    const plain = D4.expectedForNode(draft, W5B4_STORE_A);
+    w5b4Expect(plain).toEqual({ from: 'step0a', expected: { claude_code_version: w5b4Version(home), release_stamp: W5B4_STAMP,
+      wrapper_sha256: null, code_shas: draft.gate_code.files } });
+    const final = { ...draft, amendments: [w5b4Move('node-0', 'v-a', 1), w5b4Move('node-1', 'v-b', 2), w5b4Move('node-0', 'v-c', 3)] };
+    w5b4Expect(D4.expectedForNode(final, W5B4_STORE_A)).toMatchObject({ from: 'amendments[2]', expected: { claude_code_version: 'v-c' } });
+    w5b4Expect(D4.expectedForNode(final, W5B4_STORE_B)).toMatchObject({ from: 'amendments[1]', expected: { claude_code_version: 'v-b' } });
+    const other = { ...draft, amendments: [w5b4Move('node-1', 'v-b', 2), { kind: 'freeze-exception', node_label_ref: null, at_ms: 1, detail_sha256: w5b4Hex('d'), detail: {} }] };
+    w5b4Expect(D4.expectedForNode(other, W5B4_STORE_A), 'CONTROL: another node\'s move and another kind leave node A\'s step 0a version').toMatchObject({ from: 'step0a' });
+    const refusal = (rec: W5b4R, store: string): unknown => { try { D4.expectedForNode(rec, store); return null; } catch (e) { return [(e as W5b4R).word, (e as W5b4R).detail]; } };
+    w5b4Expect(refusal({ ...draft, amendments: [w5b4Move('node-9', 'v', 1)] }, W5B4_STORE_A)).toEqual(['record-invalid', 'amendments[0].node_label_ref out-of-range']);
+    w5b4Expect(refusal({ ...draft, amendments: [{ ...w5b4Move('node-0', 'v', 1), detail: { repilot_sha256: w5b4Hex('r') } }] }, W5B4_STORE_A))
+      .toEqual(['record-invalid', 'amendments[0].detail.claude_code_version out-of-range']);
+    w5b4Expect(refusal(draft, '00000000-0000-4000-8000-0000000004c1')).toEqual(['input-invalid', 'store 00000000-0000-4000-8000-0000000004c1 is not one of the record\'s nodes']);
+    w5b4Expect(refusal({ ...draft, amendments: [w5b4Move('node-0', 'v-a', 1), { ...w5b4Move('node-1', 'v', 2), detail: { repilot_sha256: w5b4Hex('r') } }] }, W5B4_STORE_A),
+      'another node\'s move with no version is refused too: the record is out of range whatever node asks (R30, as loadFinalRecord reads it)')
+      .toEqual(['record-invalid', 'amendments[1].detail.claude_code_version out-of-range']);
+    // R30 (W2-D12): the version-move ranges are spelled once, in Task 1's versionMoveChecks, and refused once, through
+    // refuseRangeRows; expectedForNode reads both. A code line is one whose trimmed text does not open a comment.
+    const code = readFileSync(join(W5B4_REPO, 'deploy', 'history-replay.mjs'), 'utf8').split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
+    w5b4Expect(code.filter((l) => l.includes('.node_label_ref') && l.includes('labels.has(')).length, 'R30: the label range on one code line').toBe(1);
+    w5b4Expect(code.filter((l) => l.includes('out-of-range') && /node_label_ref|claude_code_version/.test(l)), 'R30: no second refusal of either row').toEqual([]);
+    w5b4Expect(code.filter((l) => l.includes('versionMoveChecks(')).length, 'R30: defined once, read by part2RangeChecks and expectedForNode').toBe(3);
+  });
+
+  w5b4It('armsSummaryOf: the counts, the per-arm rates over answered questions only, and the stop (Q30, W2-D64)', () => {
+    const ans = (state: string, correct: boolean, calls: number): W5b4R => ({ answer_field: state === 'value' ? { state, value: 'x' } : { state }, correct,
+      absent: state === 'absent', reply: 'r', uptake: { calls, via_agent: calls > 1 ? 1 : 0, errored: 0 } });
+    const q = (qid: string, state: string, c: W5b4R | null, t: W5b4R | null): W5b4R => ({ qid, state, arms: [{ arm: W5B4_CONTROL, answer: c }, { arm: W5B4_TREATMENT, answer: t }] });
+    const s = D4.armsSummaryOf({ section: 'quiz', recordSha256: w5b4Hex('rec'), storeId: W5B4_STORE_A, budget: { in_force: 60, spend_budget: 100, n_node: 3, n_all: 5 },
+      spend: 130, batches: 2, stop: { word: 'budget-exhausted', kind: 'stop', detail: 'spent 130 of 60' }, stamps: new Set(['code-changed']),
+      questions: [q('q1', 'answered', ans('unknown', false, 0), ans('value', true, 2)), q('q2', 'answered', ans('absent', false, 0), ans('value', false, 1)),
+        q('q3', 'run-failed', ans('value', true, 1), null), q('q4', 'not-run', null, null)] });
+    w5b4Expect(s).toEqual({ kind: D4.ARMS_SUMMARY_KIND, v: 1, section: 'quiz', record_sha256: w5b4Hex('rec'), store_id: W5B4_STORE_A,
+      budget: { in_force: 60, spend_budget: 100, n_node: 3, n_all: 5 }, spend: 130, batches: 2,
+      stop: { word: 'budget-exhausted', kind: 'stop', detail: 'spent 130 of 60' }, stamps: ['code-changed'],
+      counts: { questions: 4, answered: 2, run_failed: 1, rerun_owed: 0, not_run: 1 },
+      arms: {
+        [W5B4_CONTROL]: { answered: 2, value: 0, unknown: 1, absent: 1, correct: 0, uptake_questions: 0, uptake_calls: 0, via_agent: 0, errored: 0 },
+        [W5B4_TREATMENT]: { answered: 2, value: 2, unknown: 0, absent: 0, correct: 1, uptake_questions: 2, uptake_calls: 3, via_agent: 1, errored: 0 },
+      },
+      absent_rate: { [W5B4_CONTROL]: { num: 1, den: 2 }, [W5B4_TREATMENT]: { num: 0, den: 2 } },
+      questions: [{ qid: 'q1', state: 'answered' }, { qid: 'q2', state: 'answered' }, { qid: 'q3', state: 'run-failed' }, { qid: 'q4', state: 'not-run' }] });
+  });
+
+  w5b4It('armRunName, answerRel and armsSummaryRel carry the section, the attempt and a RECALL_ARMS member only (Q4)', () => {
+    w5b4Expect(D4.armRunName('quiz', '0123456789abcdef', W5B4_TREATMENT, 2)).toBe(`quiz/arms/0123456789abcdef/${W5B4_TREATMENT}.a2`);
+    w5b4Expect(D4.answerRel('pilot', '0123456789abcdef', W5B4_CONTROL)).toBe(`pilot/answers/0123456789abcdef.${W5B4_CONTROL}.json`);
+    w5b4Expect(D4.armsSummaryRel('pilot')).toBe('pilot/arms/summary.json');
+    w5b4Expect(() => D4.armRunName('quiz', '0123456789abcdef', 'placebo', 1)).toThrow(TypeError);
+    w5b4Expect(() => D4.armRunName('quiz', '0123456789abcdef', W5B4_CONTROL, 3)).toThrow(TypeError);
+    w5b4Expect(() => D4.armRunName('ab', '0123456789abcdef', W5B4_CONTROL, 1)).toThrow(TypeError);
+    w5b4Expect(() => D4.answerRel('quiz', '0123456789abcdef', 'placebo')).toThrow(TypeError);
+  });
+
+  w5b4It('streamEventsOf keeps every JSON object line, and errorFieldsOf every error field a run carried, once each (Q31)', () => {
+    const text = [JSON.stringify({ type: 'assistant', error: 'fixture_b' }), 'not json', '[1]', '', JSON.stringify({ type: 'assistant', error: 'fixture_a' }),
+      JSON.stringify({ type: 'assistant', error: 'fixture_b' }), JSON.stringify({ type: 'result', error: 7 })].join('\n');
+    const events = D4.streamEventsOf(text) as W5b4R[];
+    w5b4Expect(events.map((e) => e.type)).toEqual(['assistant', 'assistant', 'assistant', 'result']);
+    w5b4Expect(D4.errorFieldsOf(events)).toEqual(['fixture_a', 'fixture_b']);
+    w5b4Expect(D4.errorFieldsOf(D4.streamEventsOf(T5_STREAM)), 'CONTROL: a clean stream carries none').toEqual([]);
+  });
+
+  w5b4It('readArmAnswers refuses out-refused for an answer file it cannot read and for one that is not this section\'s answer record; CONTROL: the same record read directly (R26, R31)', () => {
+    const out = w5b4MkTmp('ccrc-w5b4-answers-');
+    const dir = join(out, 'pilot', 'answers');
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const q = w5b4Entry(W5B4_PILOT, 1);
+    const name = `${q.qid as string}.${W5B4_CONTROL}.json`;
+    const at = join(dir, name);
+    const record = { kind: D4.ANSWER_KIND, v: 1, section: 'pilot', qid: q.qid, arm: W5B4_CONTROL, arm_state: 'answered', reply: 'ANSWER: UNKNOWN', correct: false };
+    const kept = join(out, 'kept.json');
+    writeFileSync(kept, `${w5b4Lib.canonicalJson(record) as string}\n`, { mode: 0o600 });
+    const put = (text: string): void => { rmSync(at, { recursive: true, force: true }); writeFileSync(at, text, { mode: 0o600 }); };
+    const read = (): unknown => {
+      try {
+        return D4.readArmAnswers(out, 'pilot');
+      } catch (e) {
+        if (e instanceof w5b4Drv.DriverRefusal) return [(e as W5b4R).word, (e as W5b4R).detail];
+        throw e;
+      }
+    };
+    w5b4Expect(D4.readArmAnswers(join(out, 'none'), 'pilot'), 'no answers directory is no record').toEqual([]);
+    copyFileSync(kept, at);
+    w5b4Expect(read(), 'CONTROL: the record itself reads').toEqual([{ qid: q.qid, arm: W5B4_CONTROL, outcome: 'answered', reply: 'ANSWER: UNKNOWN', correct: false }]);
+    rmSync(at);
+    symlinkSync(kept, at);
+    w5b4Expect(read(), 'a link to that same record is never followed (D-5986)').toEqual(['out-refused', `pilot/answers/${name} not-regular`]);
+    rmSync(at);
+    mkdirSync(at);
+    w5b4Expect(read(), 'a directory where a record belongs').toEqual(['out-refused', `pilot/answers/${name} not-regular`]);
+    put('not json');
+    w5b4Expect(read(), 'bytes that are not JSON').toEqual(['out-refused', `pilot/answers/${name} is not JSON`]);
+    put(`${w5b4Lib.canonicalJson({ ...record, kind: D4.ARMS_SUMMARY_KIND }) as string}\n`);
+    w5b4Expect(read(), 'another kind').toEqual(['out-refused', `pilot/answers/${name} is not an answer record`]);
+    put(`${w5b4Lib.canonicalJson({ ...record, section: 'quiz' }) as string}\n`);
+    w5b4Expect(read(), 'another section').toEqual(['out-refused', `pilot/answers/${name} is not an answer record`]);
+    put(`${w5b4Lib.canonicalJson({ ...record, arm: W5B4_TREATMENT }) as string}\n`);
+    w5b4Expect(read(), 'a record under another (qid, arm)\'s name').toEqual(['out-refused', `pilot/answers/${name} is not an answer record`]);
+    put(`${w5b4Lib.canonicalJson(record) as string}\n`);
+    w5b4Expect(read(), 'CONTROL: written back, it reads again').toHaveLength(1);
+  });
+});
+
+w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4: arms on the stub', () => {
+  w5b4It('RP1-arm: both arms of each question, the exact env with the real ARM values, one manifest and the summary sha (W2-D50, W2-D42, Q14)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 2 });
+    const r = await w5b4Arms(home, fx.argv);
+    w5b4Expect(r.refusal).toBeNull();
+    w5b4Expect(r.code).toBe(0);
+    w5b4Expect(r.stdout, 'stdout stays empty (D-5983)').toBe('');
+    w5b4Expect(r.stderr).toBe(`sha256 ${w5b4Lib.sha256Hex(readFileSync(join(fx.out, 'pilot', 'arms', 'summary.json'))) as string}\n`);
+    const runs = w5b4Runs(home);
+    w5b4Expect(runs).toHaveLength(4);
+    for (const run of runs) {
+      w5b4Expect(withoutDarwinAdded(run.envKeys as string[]), 'RP1-arm: exactly the seven keys').toEqual([...T5_BASE_KEYS, ...T5_RECALL_KEYS].sort());
+      for (const k of T5_NEVER_KEYS) w5b4Expect(run.env[k], k).toBeUndefined();
+      w5b4Expect(run.argv).toEqual(t5Argv('arm', W5B4_ARM_MODEL, home));
+      w5b4Expect(run.env.HOME).toBe(home);
+      w5b4Expect(run.env.CLAUDE_CONFIG_DIR).toBe(join(home, '.claude'));
+      w5b4Expect(run.env.LANG).toBe(W5B4_LANG);
+      w5b4Expect((run.env.PATH as string).split(':')[0]!.endsWith('/poison-bin'), 'the poisoned gh first').toBe(true);
+    }
+    const seen = runs.map((x) => [x.env.CCRC_RECALL_SESSION, x.env.CCRC_RECALL_ASOF, x.env.CCRC_RECALL_ARM, x.stdin].join('|')).sort();
+    const want = fx.entries.flatMap((e) => W5B4_ARMS.map((arm) => [e.ccrc_id, e.boundary_uuid, arm, `fixture payload ${e.qid as string} ${arm}\n`].join('|'))).sort();
+    w5b4Expect(seen, 'SESSION is the family id, ASOF its boundary, ARM each RECALL_ARMS member once per question').toEqual(want);
+    const m = w5b4Manifests(fx.out, 'pilot');
+    w5b4Expect(m).toHaveLength(1);
+    w5b4Expect(m[0]).toMatchObject({ kind: D4.ARM_BATCH_KIND, v: 1, section: 'pilot', record_sha256: fx.d.sha, store_id: W5B4_STORE_A, batch: 1,
+      claude_code_version: w5b4Version(home), stamps: [] });
+    w5b4Expect((m[0]!.runs as W5b4R[]).map((x) => x.name), 'frozen qid order, each question\'s arms side by side').toEqual(w5b4Names('pilot', fx.entries));
+    w5b4Expect(m[0]!.runs[0]).toEqual({ name: w5b4Names('pilot', fx.entries)[0], qid: fx.entries[0]!.qid, arm: W5B4_CONTROL, attempt: 1,
+      stdin_sha256: w5b4Lib.sha256Hex(`fixture payload ${fx.entries[0]!.qid as string} ${W5B4_CONTROL}\n`) });
+    w5b4Expect(w5b4Summary(fx.out, 'pilot')).toMatchObject({ kind: D4.ARMS_SUMMARY_KIND, section: 'pilot', record_sha256: fx.d.sha, store_id: W5B4_STORE_A,
+      batches: 1, stop: null, stamps: [], spend: 4 * T5_TOKENS, budget: { in_force: fx.draft.pilot_budget, spend_budget: null, n_node: 2, n_all: 2 },
+      counts: { questions: 2, answered: 2, run_failed: 0, rerun_owed: 0, not_run: 0 } });
+  }, 120_000);
+
+  w5b4It('answer records per (qid, arm): the answer field, labelCorrect, uptake with via_agent, absent, every error field, and the per-arm rates (W2-D82, W2-D64, Q31)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 2 });
+    const [q1, q2] = fx.entries as [W5b4R, W5b4R];
+    w5b4Act(home, q1, W5B4_TREATMENT, '.jsonl', w5b4Stream({ text: `I checked the history.\nANSWER: ${q1.fact as string}`,
+      calls: [{ command: 'ccrc history grep fixture --json', parent: 'toolu_agent_w5b4' }, { command: 'ls -la' }] }));
+    w5b4Act(home, q1, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'ANSWER: UNKNOWN', calls: [{ command: '~/.local/bin/ccrc history grep fixture', isError: true }] }));
+    w5b4Act(home, q2, W5B4_TREATMENT, '.jsonl', w5b4Stream({ text: 'ANSWER: abc1234 or def5678', error: 'fixture_error_field' }));
+    const r = await w5b4Arms(home, fx.argv);
+    w5b4Expect(r.code).toBe(0);
+    const t1 = `pilot/arms/${q1.qid as string}/${W5B4_TREATMENT}.a1`;
+    w5b4Expect(w5b4Answer(fx.out, 'pilot', q1, W5B4_TREATMENT)).toEqual({ kind: D4.ANSWER_KIND, v: 1, section: 'pilot', record_sha256: fx.d.sha,
+      store_id: W5B4_STORE_A, qid: q1.qid, arm: W5B4_TREATMENT, ccrc_id: q1.ccrc_id, generation: q1.generation, boundary_uuid: q1.boundary_uuid,
+      fact_kind: 'sha', question_state: 'answered', arm_state: 'answered',
+      attempts: [{ name: t1, class: 'answered', code: 0, signal: null, tokens: T5_TOKENS, error_fields: [] }],
+      run: t1, answer_field: { state: 'value', value: q1.fact }, correct: true, absent: false,
+      reply: `I checked the history.\nANSWER: ${q1.fact as string}`, uptake: { calls: 1, via_agent: 1, errored: 0 }, stamps: [] });
+    w5b4Expect(w5b4Answer(fx.out, 'pilot', q1, W5B4_CONTROL), 'the exit-8 call is errored, never a call (W2-D82)').toMatchObject({
+      answer_field: { state: 'unknown' }, correct: false, absent: false, uptake: { calls: 0, via_agent: 0, errored: 1 } });
+    w5b4Expect(w5b4Answer(fx.out, 'pilot', q2, W5B4_TREATMENT), 'a hedged pair is a value, not correct').toMatchObject({
+      answer_field: { state: 'value', value: 'abc1234 or def5678' }, correct: false, absent: false });
+    w5b4Expect(w5b4Answer(fx.out, 'pilot', q2, W5B4_TREATMENT).attempts[0].error_fields, 'Q31: an error field is recorded').toEqual(['fixture_error_field']);
+    w5b4Expect(w5b4Answer(fx.out, 'pilot', q2, W5B4_CONTROL), 'the default stream has no ANSWER line').toMatchObject({
+      answer_field: { state: 'absent' }, correct: false, absent: true, reply: 'ok' });
+    const read = D4.readArmAnswers(fx.out, 'pilot') as W5b4R[];
+    w5b4Expect(read, 'readArmAnswers: one row per (qid, arm), projected from the records (R26)').toHaveLength(4);
+    w5b4Expect(read).toContainEqual({ qid: q1.qid, arm: W5B4_TREATMENT, outcome: 'answered', reply: `I checked the history.\nANSWER: ${q1.fact as string}`, correct: true });
+    const s = w5b4Summary(fx.out, 'pilot');
+    w5b4Expect(s.arms).toEqual({
+      [W5B4_CONTROL]: { answered: 2, value: 0, unknown: 1, absent: 1, correct: 0, uptake_questions: 0, uptake_calls: 0, via_agent: 0, errored: 1 },
+      [W5B4_TREATMENT]: { answered: 2, value: 2, unknown: 0, absent: 0, correct: 1, uptake_questions: 1, uptake_calls: 1, via_agent: 1, errored: 0 },
+    });
+    w5b4Expect(s.absent_rate).toEqual({ [W5B4_CONTROL]: { num: 1, den: 2 }, [W5B4_TREATMENT]: { num: 0, den: 2 } });
+  }, 120_000);
+
+  w5b4It('batches: limits.batch_max / 2 questions each, both arms side by side, in frozen qid order, the preflight before each (Q3)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 7 });
+    w5b4Expect((await w5b4Arms(home, fx.argv)).code).toBe(0);
+    w5b4Expect(w5b4Manifests(fx.out, 'pilot').map((m) => (m.runs as W5b4R[]).map((x) => x.name)))
+      .toEqual([w5b4Names('pilot', fx.entries.slice(0, 5)), w5b4Names('pilot', fx.entries.slice(5))]);
+    w5b4Expect(w5b4Runs(home)).toHaveLength(14);
+    w5b4Expect(w5b4Versions(home), 'one --version per batch').toBe(2);
+    const home2 = w5b4Home();
+    const fx2 = w5b4Pilot(home2, { n: 5, over: { limits: { batch_max: 4 } } });
+    w5b4Expect((await w5b4Arms(home2, fx2.argv)).code).toBe(0);
+    w5b4Expect(w5b4Manifests(fx2.out, 'pilot').map((m) => (m.runs as W5b4R[]).map((x) => x.name)), 'CONTROL: batch_max 4 holds two questions')
+      .toEqual([w5b4Names('pilot', fx2.entries.slice(0, 2)), w5b4Names('pilot', fx2.entries.slice(2, 4)), w5b4Names('pilot', fx2.entries.slice(4))]);
+  }, 180_000);
+
+  type W5b4Before = [string, string, RegExp, () => { home: string; argv: string[]; out: string }];
+  const pilotIn = (home: string, o: Parameters<typeof w5b4Pilot>[1] = {}): { home: string; argv: string[]; out: string } => {
+    const fx = w5b4Pilot(home, o);
+    return { home, argv: fx.argv, out: fx.out };
+  };
+  const BEFORE_OUT: W5b4Before[] = [
+    ['code-changed is asked first, before the frozen list is read (W2-D24)', 'code-changed', /measure-history\.py/, () => {
+      const home = w5b4Home();
+      const fx = w5b4Pilot(home, { shas: { ...w5b4Shas(), 'deploy/measure-history.py': w5b4Hex('moved') } });
+      return { home, out: fx.out, argv: fx.argv.map((a) => (a === fx.fz.path ? join(home, 'no-such-frozen.json') : a)) };
+    }],
+    ['a pilot list that is not part 1\'s', 'quiz-sha-mismatch', /is not the record's pilot\.frozen_sha256/, () => pilotIn(w5b4Home(), { frozenSha: w5b4Hex('another list') })],
+    ['no store on the node', 'store-unreadable', /./, () => pilotIn(w5b4Home(null))],
+    ['a store the record does not name', 'input-invalid', /^store 00000000-0000-4000-8000-0000000004b1 is not one of the record's nodes$/, () => pilotIn(w5b4Home(W5B4_STORE_B))],
+    ['a pilot question on another node\'s store', 'input-invalid', /^pilot question [0-9a-f]{16} is on store 00000000-0000-4000-8000-0000000004b1, not this node's/,
+      () => pilotIn(w5b4Home(), { stores: [W5B4_STORE_A, W5B4_STORE_B], family: { ...W5B4_PILOT, store_id: W5B4_STORE_B } })],
+    ['a batch_max that cannot hold both arms (R28)', 'record-invalid', /^limits\.batch_max out-of-range$/, () => pilotIn(w5b4Home(), { over: { limits: { batch_max: 1 } } })],
+    ['a concurrency past CONCURRENCY_MAX', 'record-invalid', /^limits\.concurrency out-of-range$/, () => pilotIn(w5b4Home(), { over: { limits: { concurrency: 3 } } })],
+    ['the record\'s account is hidden in the roster (W2-D52)', 'account-refused', /^hidden$/, () => {
+      const home = w5b4Home();
+      // The roster needs exactly one upstream account (shared/roster-json.mjs), so up-a stays, marked hidden.
+      writeRoster(home, [fixtureAccount('up-a', { kind: 'upstream' }, { configDirSuffix: '.claude', homeAble: true, telemetry: 'anthropic', hidden: true })]);
+      return pilotIn(home);
+    }],
+    ['the limits row at the threshold', 'limits-threshold', /^five 90 seven 90 at or over 70$/, () => {
+      const home = w5b4Home();
+      w5b4Limits(home, 90);
+      return pilotIn(home);
+    }],
+    ['the installed stamp moved (W2-D6)', 'tree-moved', /^recorded v9\.9\.8, measured v0\.0\.1$/, () => {
+      const home = w5b4Home();
+      writeFileSync(join(home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-10-22T00:00:00Z', dirty: false, version: 'v0.0.1' }));
+      return pilotIn(home);
+    }],
+    ['W2-D78 (i): no headless-on', 'family-unlisted', /./, () => pilotIn(w5b4Home(), { marker: false })],
+    ['W2-D78 (i): headless-on names another store', 'family-unlisted', /./, () => {
+      const home = w5b4Home();
+      const fx = pilotIn(home);
+      w5b4Marker(home, W5B4_STORE_B, [W5B4_PILOT]);
+      return fx;
+    }],
+    ['W2-D78 (i): headless-on lists another generation', 'family-unlisted', /./, () => {
+      const home = w5b4Home();
+      const fx = pilotIn(home);
+      w5b4Marker(home, W5B4_STORE_A, [{ ...W5B4_PILOT, generation: w5b4Gen(941) }]);
+      return fx;
+    }],
+    ['W2-D78 (ii), family-recall-off: a recall-off entry for the family', 'family-recall-off', /^present pilot-4$/, () => {
+      const home = w5b4Home();
+      const p = w5b4Lib.recallOffPath(home, 'pilot-4') as string;
+      mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+      writeFileSync(p, '');
+      return pilotIn(home);
+    }],
+  ];
+  w5b4It.each(BEFORE_OUT)('refuses before --out, with the stub log absent: %s', async (_label, word, detail, setup) => {
+    const { home, argv, out } = setup();
+    const r = await w5b4Arms(home, argv);
+    w5b4Expect(r.refusal?.word).toBe(word);
+    w5b4Expect(r.refusal?.detail).toMatch(detail);
+    w5b4Expect(existsSync(out), 'no --out is made').toBe(false);
+    w5b4Expect(stubLog(home), 'no spawn, not even --version').toBeNull();
+  }, 60_000);
+
+  // W2-D24 (R23): arms re-checks the code it runs under before any other input, under W2-5a's title; the record is
+  // signed with a code sha this tree does not have, and the input read next is unreadable (pilot) or the store absent (quiz).
+  const W5B4_MOVED = (): Record<string, string> => ({ ...w5b4Shas(), 'deploy/measure-history.py': w5b4Hex('moved') });
+  w5b4It.each([
+    ['arms --section pilot', (home: string): { out: string; argv: string[] } => {
+      const fx = w5b4Pilot(home, { shas: W5B4_MOVED() });
+      return { out: fx.out, argv: fx.argv.map((a) => (a === fx.fz.path ? join(home, 'no-such-frozen.json') : a)) };
+    }],
+    ['arms --section quiz', (home: string): { out: string; argv: string[] } => {
+      const fx = w5b4Quiz(home, { shas: W5B4_MOVED() });
+      return { out: fx.out, argv: fx.argv() };
+    }],
+  ] as Array<[string, (home: string) => { out: string; argv: string[] }]>)('code-changed before any other input is read, re-checks the code it runs under: %s', async (_sub, setup) => {
+    const home = w5b4Home(null);   // no store: a re-check after the store open would answer store-unreadable
+    const { out, argv } = setup(home);
+    const r = await w5b4Arms(home, argv);
+    w5b4Expect(r.refusal).toEqual({ word: 'code-changed', detail: 'changed deploy/measure-history.py' });
+    w5b4Expect(existsSync(out), 'no --out').toBe(false);
+    w5b4Expect(stubLog(home), 'no spawn').toBeNull();
+  }, 60_000);
+
+  w5b4It('an --out holding pilot-source.json is refused, and the same --out without it runs (Q25)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 1 });
+    const out = D4.prepareOut(fx.out) as string;
+    writeFileSync(join(out, 'pilot-source.json'), '{}\n', { mode: 0o600 });
+    const r = await w5b4Arms(home, fx.argv);
+    w5b4Expect(r.refusal).toEqual({ word: 'out-refused', detail: 'pilot-source.json is here: arms run on a fresh --out, never pilot-source\'s' });
+    w5b4Expect(stubLog(home)).toBeNull();
+    w5b4Expect(existsSync(join(out, 'pilot'))).toBe(false);
+    rmSync(join(out, 'pilot-source.json'));
+    w5b4Expect((await w5b4Arms(home, fx.argv)).code, 'CONTROL: without it').toBe(0);
+  }, 60_000);
+
+  w5b4It('W2-D78 (iii) before every batch: an unanswerable question refuses its batch, the earlier batch ran, the summary names it (Q30)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 6 });
+    const last = fx.entries[5]!;
+    const r = await w5b4Arms(home, fx.argv, { recheck: async (rs: unknown, es: W5b4R[]): Promise<Map<string, W5b4R>> => {
+      if (es.some((e) => e.qid === last.qid)) D4.refuse('quiz-unanswerable', `${last.qid as string} clause (b) unanswerable`);
+      return W5B4_FAKE.recheck(rs, es);
+    } });
+    w5b4Expect(r.refusal).toEqual({ word: 'quiz-unanswerable', detail: `${last.qid as string} clause (b) unanswerable` });
+    w5b4Expect(w5b4Runs(home), 'batch 1 ran, batch 2 spawned nothing').toHaveLength(10);
+    w5b4Expect(w5b4Versions(home), 'batch 2 refused before its --version').toBe(1);
+    w5b4Expect(r.stderr).toBe(w5b4Stop('pilot', 'refusal', 'quiz-unanswerable', 1, 0));
+    const s = w5b4Summary(fx.out, 'pilot');
+    w5b4Expect(s.stop).toEqual({ word: 'quiz-unanswerable', kind: 'refusal', detail: `${last.qid as string} clause (b) unanswerable` });
+    w5b4Expect(s.counts).toEqual({ questions: 6, answered: 5, run_failed: 0, rerun_owed: 0, not_run: 1 });
+    w5b4Expect(readdirSync(join(fx.out, 'pilot', 'answers')).sort(), 'the five settled questions have their records')
+      .toEqual(fx.entries.slice(0, 5).flatMap((e) => W5B4_ARMS.map((arm) => `${e.qid as string}.${arm}.json`)).sort());
+  }, 120_000);
+
+  w5b4It('W2-D78 (iii): a payload that no longer reconstructs refuses quiz-unanswerable, never a dropped question (D-6469)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 2 });
+    const gone = fx.entries[1]!;
+    const r = await w5b4Arms(home, fx.argv, { payloads: (rs: unknown, id: number, question: string, cut: W5b4R): W5b4R =>
+      (cut.qid === gone.qid ? { state: 'discard', why: 'summary-absent' } : W5B4_FAKE.payloads(rs, id, question, cut)) });
+    w5b4Expect(r.refusal).toEqual({ word: 'quiz-unanswerable', detail: `${gone.qid as string} payload summary-absent` });
+    w5b4Expect(stubLog(home), 'the batch spawned nothing').toBeNull();
+    w5b4Expect(w5b4Summary(fx.out, 'pilot').counts).toEqual({ questions: 2, answered: 0, run_failed: 0, rerun_owed: 0, not_run: 2 });
+  }, 60_000);
+
+  w5b4It('W2-D78 (i) and (ii) before every batch: headless-on removed, or a recall-off entry written, during a batch refuses the next', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 6 });
+    w5b4Act(home, fx.entries[0]!, W5B4_CONTROL, '.touch', w5b4Lib.recallOffPath(home, 'pilot-4') as string, 1);
+    const r = await w5b4Arms(home, fx.argv);
+    w5b4Expect(r.refusal).toEqual({ word: 'family-recall-off', detail: 'present pilot-4' });
+    w5b4Expect(w5b4Runs(home)).toHaveLength(10);
+    w5b4Expect(w5b4Versions(home), 'batch 2 refused before its --version').toBe(1);
+    w5b4Expect(w5b4Summary(fx.out, 'pilot').stop).toMatchObject({ word: 'family-recall-off', kind: 'refusal' });
+    const home2 = w5b4Home();
+    const fx2 = w5b4Pilot(home2, { n: 6 });
+    w5b4Act(home2, fx2.entries[0]!, W5B4_CONTROL, '.rm', w5b4Lib.historyPaths(home2).headlessOn as string, 1);
+    const r2 = await w5b4Arms(home2, fx2.argv);
+    w5b4Expect(r2.refusal?.word).toBe('family-unlisted');
+    w5b4Expect(w5b4Runs(home2)).toHaveLength(10);
+    w5b4Expect(w5b4Versions(home2), 'batch 2 refused before its --version').toBe(1);
+  }, 180_000);
+
+  w5b4It('a driver timeout is infra-failed and re-run once as attempt 2 in a later batch; a second infra failure is run-failed in both arms (Q4, W2-D80)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 2 });
+    const [q1, q2] = fx.entries as [W5b4R, W5b4R];
+    w5b4Act(home, q1, W5B4_CONTROL, '.sleep', '30000', 1);
+    w5b4Act(home, q2, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'x', result: false }));
+    w5b4Act(home, q2, W5B4_CONTROL, '.exit', '1');
+    const r = await w5b4Arms(home, fx.argv, { timeoutMs: 8000 });
+    w5b4Expect(r.refusal).toBeNull();
+    const name = (q: W5b4R, arm: string, n: number): string => `pilot/arms/${q.qid as string}/${arm}.a${n}`;
+    const c1 = w5b4Answer(fx.out, 'pilot', q1, W5B4_CONTROL);
+    w5b4Expect((c1.attempts as W5b4R[]).map((t) => [t.name, t.class, t.code, t.signal])).toEqual([
+      [name(q1, W5B4_CONTROL, 1), 'infra-failed', null, 'SIGTERM'], [name(q1, W5B4_CONTROL, 2), 'answered', 0, null]]);
+    w5b4Expect(c1).toMatchObject({ question_state: 'answered', arm_state: 'answered', run: name(q1, W5B4_CONTROL, 2) });
+    const c2 = w5b4Answer(fx.out, 'pilot', q2, W5B4_CONTROL);
+    w5b4Expect((c2.attempts as W5b4R[]).map((t) => [t.class, t.code])).toEqual([['infra-failed', 1], ['infra-failed', 1]]);
+    w5b4Expect(c2).toMatchObject({ question_state: 'run-failed', arm_state: 'run-failed', run: null, answer_field: null, correct: null, uptake: null });
+    w5b4Expect(w5b4Answer(fx.out, 'pilot', q2, W5B4_TREATMENT), 'the answered arm of a run-failed question is recorded and excluded')
+      .toMatchObject({ question_state: 'run-failed', arm_state: 'answered', run: name(q2, W5B4_TREATMENT, 1) });
+    w5b4Expect(w5b4Manifests(fx.out, 'pilot').map((m) => (m.runs as W5b4R[]).map((x) => x.name)), 'each re-run in a later batch')
+      .toEqual([w5b4Names('pilot', fx.entries), [name(q1, W5B4_CONTROL, 2), name(q2, W5B4_CONTROL, 2)]]);
+    w5b4Expect(existsSync(join(fx.out, `${name(q2, W5B4_CONTROL, 3)}.run.json`)), 'never a third attempt').toBe(false);
+    const s = w5b4Summary(fx.out, 'pilot');
+    w5b4Expect(s.counts).toEqual({ questions: 2, answered: 1, run_failed: 1, rerun_owed: 0, not_run: 0 });
+    w5b4Expect(s.arms[W5B4_TREATMENT].answered, 'q2 is excluded from both arms').toBe(1);
+  }, 180_000);
+
+  w5b4It('a stop never consumes the re-run: the limits stop before the re-run batch, then the resume spawns attempt 2 (W2-D80, Q24, Q30)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 1 });
+    const q = fx.entries[0]!;
+    w5b4Act(home, q, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'x', result: false }), 1);
+    w5b4Act(home, q, W5B4_CONTROL, '.exit', '1', 1);
+    w5b4Act(home, q, W5B4_CONTROL, '.limits', w5b4LimitsRow(90), 1);
+    const r = await w5b4Arms(home, fx.argv);
+    w5b4Expect(r.refusal?.word).toBe('limits-threshold');
+    w5b4Expect(r.stderr).toBe(w5b4Stop('pilot', 'stop', 'limits-threshold', 0, 1));
+    w5b4Expect(w5b4Summary(fx.out, 'pilot')).toMatchObject({ stop: { word: 'limits-threshold', kind: 'stop' },
+      counts: { questions: 1, answered: 0, run_failed: 0, rerun_owed: 1, not_run: 0 } });
+    w5b4Limits(home, 10);
+    const again = await w5b4Arms(home, fx.argv);
+    w5b4Expect(again.refusal).toBeNull();
+    const c = w5b4Answer(fx.out, 'pilot', q, W5B4_CONTROL);
+    w5b4Expect((c.attempts as W5b4R[]).map((t) => [t.name, t.class])).toEqual([
+      [`pilot/arms/${q.qid as string}/${W5B4_CONTROL}.a1`, 'infra-failed'], [`pilot/arms/${q.qid as string}/${W5B4_CONTROL}.a2`, 'answered']]);
+    w5b4Expect(w5b4Manifests(fx.out, 'pilot').map((m) => (m.runs as W5b4R[]).map((x) => x.name)), 'the stopped batch wrote no manifest')
+      .toEqual([w5b4Names('pilot', [q]), [`pilot/arms/${q.qid as string}/${W5B4_CONTROL}.a2`]]);
+    w5b4Expect(w5b4Summary(fx.out, 'pilot')).toMatchObject({ stop: null, counts: { answered: 1, rerun_owed: 0 } });
+  }, 120_000);
+
+  w5b4It('quiz: the per-node spend share is printed, and the node ledger enforces it; a mid-batch stop is summarised (Q5, Q30)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { spendBudget: 1_000_001 });
+    const r = await w5b4Arms(home, fx.argv());
+    w5b4Expect(r.refusal).toBeNull();
+    const summary = join(fx.out, 'quiz', 'arms', 'summary.json');
+    w5b4Expect(r.stderr).toBe(`ccrc history-replay: spend share 600001 = ceil(1000001 x 3 / 5)\nsha256 ${w5b4Lib.sha256Hex(readFileSync(summary)) as string}\n`);
+    w5b4Expect(w5b4Json(summary).budget).toEqual({ in_force: 600_001, spend_budget: 1_000_001, n_node: 3, n_all: 5 });
+    w5b4Expect(w5b4Runs(home).map((x) => x.env.CCRC_RECALL_SESSION), 'only this node\'s questions').toEqual(Array(6).fill('quiz-a'));
+    w5b4Expect(w5b4Runs(home)[0]!.argv, 'CONTROL for Q26: a restricted pilot result').toEqual(t5Argv('arm', W5B4_ARM_MODEL, home));
+    const home2 = w5b4Home();
+    const fx2 = w5b4Quiz(home2, { spendBudget: 100, over: { limits: { concurrency: 1 } } });
+    const r2 = await w5b4Arms(home2, fx2.argv());
+    w5b4Expect(r2.refusal).toEqual({ word: 'budget-exhausted', detail: 'spent 65 of 60' });
+    w5b4Expect(w5b4Runs(home2), 'the share, 60, stops the second spawn').toHaveLength(1);
+    w5b4Expect(r2.stderr).toBe(`ccrc history-replay: spend share 60 = ceil(100 x 3 / 5)\n${w5b4Stop('quiz', 'stop', 'budget-exhausted', 3, 0)}`);
+    w5b4Expect(w5b4Summary(fx2.out, 'quiz')).toMatchObject({ stop: { word: 'budget-exhausted', kind: 'stop', detail: 'spent 65 of 60' },
+      counts: { questions: 3, answered: 0, run_failed: 0, rerun_owed: 0, not_run: 3 } });
+  }, 120_000);
+
+  w5b4It('quiz: the arms run under part 2\'s pilot_result.settings_mode (Q26)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { settingsMode: 'fallback' });
+    w5b4Expect((await w5b4Arms(home, fx.argv())).code).toBe(0);
+    for (const run of w5b4Runs(home)) {
+      w5b4Expect(run.argv).toEqual(['--setting-sources', 'project,local', '--settings', '{"disableAllHooks":true}', ...t5Argv('arm', W5B4_ARM_MODEL, home).slice(1)]);
+    }
+  }, 120_000);
+
+  w5b4It('pilot: part 1\'s settings mode is ranged before --out, and a SETTINGS_MODES word runs under it (Q26, R31)', async () => {
+    // Part 1 re-saved with its settings mode, and every step 0a entry's with it (the validator holds the two equal).
+    const pilotWith = (mode: string): { home: string; argv: string[]; out: string } => {
+      const home = w5b4Home();
+      const fx = w5b4Pilot(home);
+      const d = w5b4Save({ ...fx.draft, settings_mode: mode, step0a: (fx.draft.step0a as W5b4R[]).map((x) => ({ ...x, settings_mode: mode })) }, 'part1-mode.json');
+      return { home, out: fx.out, argv: fx.argv.map((a) => (a === fx.d.path ? d.path : a === fx.d.sha ? d.sha : a)) };
+    };
+    const bad = pilotWith('open');
+    const r = await w5b4Arms(bad.home, bad.argv);
+    w5b4Expect(r.refusal).toEqual({ word: 'record-invalid', detail: 'settings_mode out-of-range' });
+    w5b4Expect(existsSync(bad.out), 'no --out is made').toBe(false);
+    w5b4Expect(stubLog(bad.home), 'no spawn, not even --version').toBeNull();
+    const good = pilotWith('fallback');
+    const ok = await w5b4Arms(good.home, good.argv);
+    w5b4Expect(ok.refusal, 'CONTROL: another SETTINGS_MODES word is admitted').toBeNull();
+    w5b4Expect(w5b4Runs(good.home).length, 'CONTROL: both arms ran').toBe(4);
+    for (const run of w5b4Runs(good.home)) w5b4Expect((run.argv as string[]).slice(0, 2), 'under part 1\'s mode').toEqual(['--setting-sources', 'project,local']);
+  }, 120_000);
+
+  w5b4It('quiz: the version preflight reads this node\'s newest version-move amendment, and no other node\'s (W2-D56, W2-D90)', async () => {
+    const moved = async (amendments: (home: string) => W5b4R[]): Promise<{ home: string; r: W5b4Result; out: string }> => {
+      const home = w5b4Home();
+      const fx = w5b4Quiz(home);
+      const r = await w5b4Arms(home, fx.argv(w5b4Amend(fx, amendments(home)), w5b4Inp('supersedes', fx.f)));
+      return { home, r, out: fx.out };
+    };
+    const a = await moved(() => [w5b4Move('node-0', 'fixture-version-moved', 1)]);
+    w5b4Expect(a.r.refusal).toEqual({ word: 'claude-version-moved', detail: `recorded fixture-version-moved, measured ${w5b4Version(a.home)}` });
+    w5b4Expect(w5b4Runs(a.home), 'no arm run').toHaveLength(0);
+    w5b4Expect(w5b4Versions(a.home), 'the one --version the preflight asks').toBe(1);
+    const b = await moved(() => [w5b4Move('node-1', 'fixture-version-moved', 1)]);
+    w5b4Expect(b.r.refusal, 'CONTROL: node B\'s move leaves node A on part 1\'s version').toBeNull();
+    const c = await moved((home) => [w5b4Move('node-0', 'fixture-version-moved', 1), w5b4Move('node-0', w5b4Version(home), 2)]);
+    w5b4Expect(c.r.refusal, 'CONTROL: the newest move names the measured version').toBeNull();
+    const d = await moved(() => [w5b4Move('node-9', 'fixture-version-moved', 1)]);
+    w5b4Expect(d.r.refusal).toEqual({ word: 'record-invalid', detail: 'amendments[0].node_label_ref out-of-range' });
+    w5b4Expect(existsSync(d.out), 'refused before --out').toBe(false);
+  }, 180_000);
+
+  w5b4It('quiz: --allow-code-change after window start stamps the manifest, every answer and the summary; without it, code-changed before --out (Q23, W2-D24)', async () => {
+    const shas = { ...w5b4Shas(), 'deploy/measure-history.py': w5b4Hex('moved') };
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { shas });
+    const plain = await w5b4Arms(home, fx.argv());
+    w5b4Expect(plain.refusal?.word).toBe('code-changed');
+    w5b4Expect(existsSync(fx.out)).toBe(false);
+    const r = await w5b4Arms(home, fx.argv(fx.f, ['--allow-code-change']));
+    w5b4Expect(r.refusal).toBeNull();
+    w5b4Expect(w5b4Manifests(fx.out, 'quiz')[0]!.stamps).toEqual(['code-changed']);
+    w5b4Expect(w5b4Summary(fx.out, 'quiz').stamps).toEqual(['code-changed']);
+    for (const q of fx.mine) for (const arm of W5B4_ARMS) w5b4Expect(w5b4Answer(fx.out, 'quiz', q, arm).stamps).toEqual(['code-changed']);
+    const home2 = w5b4Home();
+    const fx2 = w5b4Quiz(home2, { shas });
+    const early = await w5b4Arms(home2, fx2.argv(fx2.f, ['--allow-code-change']), { now: () => W5B4_T0 });
+    w5b4Expect(early.refusal?.word, 'before window start the flag is refused (Task 1\'s rule)').toBe('args-invalid');
+    w5b4Expect(stubLog(home2)).toBeNull();
+  }, 120_000);
+
+  w5b4It('a data case after --out refuses, never a defect: a run.json with no exit code, an answer path that is a directory (D-6309\'s rule)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home, { n: 1 });
+    const q = fx.entries[0]!;
+    w5b4Expect((await w5b4Arms(home, fx.argv)).code).toBe(0);
+    const rj = join(fx.out, 'pilot', 'arms', q.qid as string, `${W5B4_CONTROL}.a1.run.json`);
+    writeFileSync(rj, `${w5b4Lib.canonicalJson({ ...w5b4Json(rj), code: 'x' }) as string}\n`, { mode: 0o600 });
+    const r = await w5b4Arms(home, fx.argv);
+    w5b4Expect(r.refusal).toEqual({ word: 'out-refused', detail: `run-json-invalid pilot/arms/${q.qid as string}/${W5B4_CONTROL}.a1` });
+    w5b4Expect(r.stderr).toBe('ccrc history-replay: arms pilot stop out-refused: not-run count unmeasured; nothing is retried\n');
+    const home2 = w5b4Home();
+    const fx2 = w5b4Pilot(home2, { n: 1 });
+    const q2 = fx2.entries[0]!;
+    w5b4Expect((await w5b4Arms(home2, fx2.argv)).code).toBe(0);
+    const ap = join(fx2.out, 'pilot', 'answers', `${q2.qid as string}.${W5B4_CONTROL}.json`);
+    rmSync(ap);
+    mkdirSync(ap);
+    const r2 = await w5b4Arms(home2, fx2.argv);
+    w5b4Expect(r2.refusal).toEqual({ word: 'out-refused', detail: `pilot/answers/${q2.qid as string}.${W5B4_CONTROL}.json is not a regular file` });
+    w5b4Expect(r2.stderr).toBe(w5b4Stop('pilot', 'stop', 'out-refused', 0, 0));
+  }, 120_000);
+
+  w5b4It('arms takes only its form\'s flags, and --section is pilot or quiz', async () => {
+    const home = w5b4Home();
+    const said = async (argv: string[]): Promise<unknown> => (await w5b4Arms(home, argv)).refusal;
+    w5b4Expect(await said(['arms'])).toEqual({ word: 'args-invalid', detail: 'arms wants --section pilot or --section quiz, not null' });
+    w5b4Expect(await said(['arms', '--section', 'ab'])).toEqual({ word: 'args-invalid', detail: 'arms wants --section pilot or --section quiz, not "ab"' });
+    w5b4Expect(await said(['arms', '--section', 'pilot', '--allow-code-change'])).toEqual({ word: 'args-invalid', detail: '--allow-code-change is not a arms --section pilot flag' });
+    w5b4Expect(await said(['arms', '--section', 'quiz', '--account', 'up-a'])).toEqual({ word: 'args-invalid', detail: '--account is not a arms --section quiz flag' });
+    w5b4Expect(await said(['arms', '--section', 'pilot', '--out', '/o'])).toEqual({ word: 'args-invalid', detail: 'record-required' });
+    w5b4Expect(stubLog(home)).toBeNull();
+  });
+});
+
+w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4: arms end to end over a swept store', () => {
+  let sb: W6SourceBox;
+  w5b4BeforeAll(() => { sb = w6SourceBox('ccrc-w5b4-e2e-'); }, 360_000);
+
+  w5b4It('RP1-arm on a real store: the control stdin is W2-5a\'s payload byte for byte, the treatment one card line, a blank line and that payload (Q20, W2-D50)', async () => {
+    const home = sb.box.home;
+    w5b4Node(home);
+    const rs0 = D4.openReplayStore(home) as W5b4R;
+    const storeId = rs0.storeId as string;
+    rs0.close();
+    const fam: W5b4Ref = { store_id: storeId, ccrc_id: sb.id, generation: sb.gen };
+    const e = { ...fam, boundary_uuid: sb.u(5), kind: 'command', fact: sb.cmd, fact_raw: sb.cmd, question: 'Which command rebuilt the fixture package?',
+      source_entry_uuid: sb.u(2), repo_roots: [sb.cwd] };
+    const entry = { ...e, qid: D4.qidOf(e) as string };
+    const fz = w5b4SaveText(D4.frozenListText('pilot', W5B4_HEAD, [entry]) as string, 'pilot-frozen.json');
+    const d = w5b4Save(w5b4Draft(home, { stores: [storeId], pilotFamilies: [fam], pilotFrozenSha: fz.sha }), 'part1.json');
+    w5b4Marker(home, storeId, [fam]);
+    const out = w5b4Out();
+    const r = await w5b4Arms(home, ['arms', '--section', 'pilot', '--out', out, ...w5b4Inp('record', d), ...w5b4Inp('frozen', fz)],
+      { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(r.refusal).toBeNull();
+    const runs = w5b4Runs(home);
+    w5b4Expect(runs).toHaveLength(2);
+    for (const run of runs) {
+      w5b4Expect(run.envKeys).toEqual([...T5_BASE_KEYS, ...T5_RECALL_KEYS].sort());
+      w5b4Expect([run.env.CCRC_RECALL_SESSION, run.env.CCRC_RECALL_ASOF]).toEqual([sb.id, sb.u(5)]);
+    }
+    w5b4Expect(runs.map((x) => x.env.CCRC_RECALL_ARM).sort()).toEqual([...W5B4_ARMS].sort());
+    const rs = D4.openReplayStore(home) as W5b4R;
+    try {
+      const id = Number((rs.db.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(sb.u(5)) as { entry_id: number }).entry_id);
+      const want = D4.reconstructPayload(rs, id, entry.question) as { state: string; text: string };
+      w5b4Expect(want.state, 'CONTROL: the boundary reconstructs').toBe('payload');
+      const byArm = Object.fromEntries(runs.map((x) => [x.env.CCRC_RECALL_ARM as string, x.stdin as string]));
+      w5b4Expect(byArm[W5B4_CONTROL], 'the control payload is W2-5a\'s composer\'s, byte for byte').toBe(want.text);
+      const t = byArm[W5B4_TREATMENT]!;
+      w5b4Expect(t.endsWith(`\n\n${want.text}`)).toBe(true);
+      const card = t.slice(0, t.length - want.text.length - 2);
+      w5b4Expect(card.length, 'a card line').toBeGreaterThan(0);
+      w5b4Expect(card.includes('\n'), 'one line').toBe(false);
+    } finally {
+      rs.close();
+    }
+  }, 360_000);
+});
+
+// ── W2-5b1 Task 5: the judge (W2-D79, W2-D54, W2-D80, W2-D18; Q18, Q2) ──────────────────────────────────────────
+// Live safety: every spawn reaches W2-4's recording stub at `$HOME/.local/bin/<id>` in a mkTmp fixture HOME (W2-5a Task
+// 6's w6Box), through spawnEnv's allow-list, with the poisoned gh first on PATH; nothing spawns a real model. The
+// subcommand cases open a createStore store in that HOME and inject Task 4's three readers (the record, the node, the
+// answers), except the W2-D24 rows and the --allow-code-change case, which read Task 4's fixture records (mkTmp files)
+// through its real loader; no case reads a real record or the live HOME. Key-shaped values are assembled at runtime, and non-ASCII
+// ones are built with String.fromCharCode. Arm values are RECALL_ARMS' own, never spelled here.
+import * as w5b5Lib from '../../ccd/history/lib.mjs';
+import * as w5b5Gate from '../../deploy/history-gate.mjs';
+import { createStore as w5b5CreateStore } from '../../ccd/history/store.mjs';
+
+type W5b5Entry = {
+  qid: string; store_id: string; ccrc_id: string; generation: string; boundary_uuid: string; kind: string; fact: string;
+  fact_raw: string; question: string; source_entry_uuid: string; repo_roots: string[];
+};
+type W5b5Answer = { qid: string; arm: string; outcome: string; reply: string | null; correct: boolean | null };
+type W5b5Input = { v: number; kind: string; question: string; expected: string; answer_field: string | null; reply: string };
+type W5b5Attempt = { run: string; code: number | null; signal: string | null; skipped: boolean; tokens: number; result: boolean; label: string | null; error_fields: string[] };
+type W5b5Item = { id: string; outcome: string; label: string | null; attempts: W5b5Attempt[] };
+type W5b5Job = { id: string; input: W5b5Input };
+type W5b5MapRow = { id: string; qid: string; arm: string };
+type W5b5Judge = { launch: unknown; stamps(): string[]; judge(section: string, jobs: W5b5Job[]): Promise<W5b5Item[]> };
+type W5b5Picked = { items: Array<{ qid: string; arm: string; entry: W5b5Entry; reply: string }>; excluded: { correct: number; run_failed_questions: number } };
+/** The driver's judge surface, typed once here, so no case needs its own cast. */
+type W5b5Drv = {
+  JUDGE_REPLY_MAX_BYTES: number; JUDGE_INPUT_KEYS: readonly string[]; JUDGE_ATTEMPTS: number; JUDGE_OUTCOMES: readonly string[];
+  JUDGE_ID_RE: RegExp; JUDGED_KIND: string; JUDGE_MAP_KIND: string; ARM_SECTIONS: readonly string[];
+  FLAG_SPECS: Record<string, string>;
+  DRIVER_REASONS: readonly string[]; HANDLERS: Map<string, unknown>; LIMITS_DEFAULTS: Record<string, number>;
+  capUtf8Bytes(text: string, maxBytes: number): string;
+  maskValue(value: unknown, idx: unknown): unknown;
+  judgeInputOf(entry: W5b5Entry, reply: string | null, idx: unknown): W5b5Input;
+  judgeStdin(rubricId: string, input: W5b5Input): string;
+  judgeMapOf(seedHex: string, entries: ReadonlyArray<{ qid: string }>, arms: readonly string[]): W5b5MapRow[];
+  judgeMapText(section: string, frozenSha256: string, map: W5b5MapRow[]): string;
+  judgeItemsOf(o: { entries: W5b5Entry[]; answers: W5b5Answer[]; arms: readonly string[]; shaMinPrefix: number }): W5b5Picked;
+  judgeJobsOf(o: { items: W5b5Picked['items']; map: W5b5MapRow[]; idx: unknown }): W5b5Job[];
+  openJudge(o: Record<string, unknown>): Promise<W5b5Judge>;
+  judgeCommand(flags: Record<string, unknown>, env: Record<string, unknown>, deps?: Record<string, unknown>): Promise<number>;
+  refuse(word: string, detail: string): never;
+};
+const W5B5 = replay as unknown as W5b5Drv;
+const W5B5_ARMS = w5b5Lib.RECALL_ARMS as unknown as readonly string[];
+const [W5B5_ARM0, W5B5_ARM1] = W5B5_ARMS as unknown as [string, string];
+const W5B5_STORE = '00000000-0000-4000-8000-0000000005b5';
+const W5B5_OTHER_STORE = '00000000-0000-4000-8000-0000000005b6';
+const W5B5_SEED = sha256Hex('w2-5b1 task 5 fixture: seed');
+/** The (qid, arm) key's separator, a NUL built at runtime (no escape in the file, Global Constraints), as the driver's is. */
+const W5B5_NUL = String.fromCharCode(0);
+/** Judge streams: W2-5a's writer stream builder, so the init line (the stub's --version) never moves. */
+const W5B5_LABELLED = w6Reply('The answer names one other command, with no hedge.\nLABEL: fabricated');
+const W5B5_MALFORMED = w6Reply('I cannot tell which of the two labels fits this answer.');
+/** A stream the variant stub prints once, to the first print-mode run that takes it (w5b5PlantOnce). */
+const W5B5_ONCE = 'stub-stream-once.jsonl';
+const W5B5_ENV = (home: string): Record<string, unknown> => ({ HOME: home, TMUX_PANE: undefined, LANG: 'fixture.UTF-8' });
+
+/** A frozen entry (W2-D73's fields) on `storeId`, its qid computed by qidOf. No question names an arm. */
+function w5b5Entry(fact: string, storeId: string = W5B5_STORE, kind = 'command'): W5b5Entry {
+  const six = { store_id: storeId, ccrc_id: 'fixture-ccrc-a', generation: W6_GEN, boundary_uuid: W6_BOUNDARY, kind, fact };
+  return { qid: replay.qidOf(six as never) as string, ...six, fact_raw: fact,
+    question: `Which command rebuilt step ${fact.length} of the fixture package?`, source_entry_uuid: W6_SOURCE, repo_roots: ['/home/u/tree'] };
+}
+const w5b5Answer = (qid: string, arm: string, outcome: string, reply: string | null, correct: boolean | null): W5b5Answer =>
+  ({ qid, arm, outcome, reply, correct });
+/** `n` jobs with positional ids j0001.., each a wrong answer to its own command question. */
+function w5b5Jobs(n: number): W5b5Job[] {
+  return Array.from({ length: n }, (_, k) => ({
+    id: `j${String(k + 1).padStart(4, '0')}`,
+    input: W5B5.judgeInputOf(w5b5Entry(`npm run fixture-step-${k} --workspace pkg-a`), `ANSWER: npm run other-${k}`, W6_IDX),
+  }));
+}
+function w5b5Open(b: W6Box, id: string, over: Record<string, unknown> = {}): Promise<W5b5Judge> {
+  return W5B5.openJudge({
+    home: b.home, accountId: id, model: W6_MODEL, settingsMode: 'restricted', rubricId: 'v1', claim: b.claim, budget: 100_000,
+    limits: W5B5.LIMITS_DEFAULTS, expected: w6Expected(b.home, id), lang: 'fixture.UTF-8', ...over,
+  });
+}
+/** The recording stub with one more setting: in print mode only, a W5B5_ONCE stream is taken (renamed away, so exactly
+ *  one run gets it) and printed instead of STUB_STREAM. Its --version calls never take it. The shared stub is untouched. */
+function w5b5PlantOnce(home: string, id: string): void {
+  const tail = `process.stdout.write(opt(${JSON.stringify(STUB_STREAM)}) ?? '');`;
+  expect(T5_STUB_SOURCE.split(tail)).toHaveLength(2);
+  const once = [
+    'let once = null;',
+    "if (process.argv.slice(2).includes('-p')) {",
+    `  const taken = at(${JSON.stringify(W5B5_ONCE)} + '.' + process.pid);`,
+    `  try { fs.renameSync(at(${JSON.stringify(W5B5_ONCE)}), taken); once = fs.readFileSync(taken, 'utf8'); } catch { once = null; }`,
+    '}',
+    `process.stdout.write(once ?? opt(${JSON.stringify(STUB_STREAM)}) ?? '');`,
+  ].join('\n  ');
+  writeFileSync(join(home, '.local', 'bin', id), T5_STUB_SOURCE.replace(tail, once), { mode: 0o700 });
+}
+/** The judge order spelled independently of the driver: (qid, arm) pairs sorted by code unit, then Fisher-Yates over
+ *  the gate's own stream for `label`, by randInt, as W2-D18 and W2-D79 state it. */
+function w5b5Order(seed: string, pairs: Array<[string, string]>, label = 'judge-order'): Array<[string, string]> {
+  const key = ([q, a]: [string, string]): string => `${q}${W5B5_NUL}${a}`;
+  const out = [...pairs].sort((x, y) => (key(x) < key(y) ? -1 : key(x) > key(y) ? 1 : 0));
+  const rng = w5b5Gate.substream(seed, label);
+  for (let s = 0; s < out.length - 1; s += 1) {
+    const j = s + w5b5Gate.randInt(rng, out.length - s);
+    [out[s], out[j]] = [out[j]!, out[s]!];
+  }
+  return out;
+}
+/** Every path under `root`, relative, sorted. */
+function w5b5Files(root: string): string[] {
+  const out: string[] = [];
+  const walk = (dir: string, rel: string): void => {
+    for (const n of readdirSync(dir)) {
+      const r = rel === '' ? n : `${rel}/${n}`;
+      out.push(r);
+      if (lstatSync(join(dir, n)).isDirectory()) walk(join(dir, n), r);
+    }
+  };
+  walk(root, '');
+  return out.sort();
+}
+/** An in-process call, its stderr captured and its refusal, if any, answered as {word, detail}. */
+async function w5b5InProcess(fn: () => Promise<unknown>, driver: W5b4R = D4): Promise<{ code: unknown; stderr: string; refusal: { word: string; detail: string } | null }> {
+  const lines: string[] = [];
+  const spy = vi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { lines.push(String(s)); return true; }) as typeof process.stderr.write);
+  try {
+    return { code: await fn(), stderr: lines.join(''), refusal: null };
+  } catch (e) {
+    if (e instanceof driver.DriverRefusal) return { code: null, stderr: lines.join(''), refusal: { word: (e as W5b4R).word as string, detail: (e as W5b4R).detail as string } };
+    throw e;
+  } finally {
+    spy.mockRestore();
+  }
+}
+/** Flags that pass `judge --section <section>`'s grammar (its form repeats the arms form's lists), each input a placeholder:
+ *  the injected loaders never read them. */
+function w5b5Flags(out: string, section: string): Record<string, unknown> {
+  const sha = 'a'.repeat(64);
+  const input = '/home/u/fixture-input.json';
+  const part1 = section === 'quiz' ? { part1: input, 'part1-sha256': sha } : {};
+  return { record: input, 'record-sha256': sha, ...part1, frozen: input, 'frozen-sha256': sha, out, section };
+}
+/** Task 4's ArmRun, as the judge reads it: the record's four judge fields, the section's frozen list, no stamps. */
+function w5b5Run(entries: W5b5Entry[], over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    record: { judge_model: W6_MODEL, rubric_id: 'v1', bootstrap: { seed: W5B5_SEED }, labeller: { sha_min_prefix: 7 } },
+    recordSha256: sha256Hex('w2-5b1 task 5 fixture: record'),
+    frozen: { sha256: sha256Hex('w2-5b1 task 5 fixture: frozen'), list: { entries } },
+    allowCodeChange: false, codeStamps: [], ...over,
+  };
+}
+/** Task 4's ArmNode for up-a on a w6Box HOME. */
+function w5b5NodeOf(home: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+  return { account: 'up-a', expected: w6Expected(home, 'up-a'), budget: 100_000, limits: W5B5.LIMITS_DEFAULTS, settingsMode: 'restricted', ...over };
+}
+const w5b5Deps = (run: unknown, node: unknown, answers: unknown[]): Record<string, unknown> =>
+  ({ loadArmRun: () => run, armNodeOf: () => node, readArmAnswers: () => answers, now: () => Date.now() });
+/** A w6Box HOME (roster, stubs, limits rows, stamp, a claimed --out the command never uses) and, with `store`, a store
+ *  made by createStore with W5B5_STORE as its id: the node the subcommand opens. */
+function w5b5Home(prefix: string, store = true): W6Box {
+  const b = w6Box(prefix);
+  if (store) w5b5CreateStore(b.home, { storeId: W5B5_STORE });
+  return b;
+}
+
+describe('W2-5b1 Task 5: the judge input, W2-D79 and W2-D54', () => {
+  it('the input is canonical v1 with kind, question, expected, answer_field and reply, and the stdin is the signed rubric, a blank line and that input', () => {
+    const e = w5b5Entry(W6_CMD);
+    const reply = `I think it was the lint step.\nANSWER: ${W6_CMD2}`;
+    const input = W5B5.judgeInputOf(e, reply, W6_IDX);
+    expect(input).toEqual({ v: 1, kind: 'command', question: e.question, expected: W6_CMD, answer_field: W6_CMD2, reply });
+    expect(W5B5.JUDGE_INPUT_KEYS).toEqual(['answer_field', 'expected', 'kind', 'question', 'reply', 'v']);
+    expect(Object.keys(input).sort()).toEqual([...W5B5.JUDGE_INPUT_KEYS]);
+    for (const id of ['v1', 'v1-strict'] as const) {
+      expect(W5B5.judgeStdin(id, input), id).toBe(`${w5b5Gate.RUBRICS[id]}\n\n${w5b5Lib.canonicalJson(input)}\n`);
+    }
+    expect(() => W5B5.judgeStdin('v2', input)).toThrow(TypeError);
+  });
+
+  it('answer_field is the ANSWER line as parseAnswerField reads it: the value, UNKNOWN, or null when there is none', () => {
+    const e = w5b5Entry(W6_CMD);
+    const field = (reply: string): string | null => W5B5.judgeInputOf(e, reply, W6_IDX).answer_field;
+    expect(field(`Thinking it over.\nANSWER: \`${W6_CMD2}\``)).toBe(W6_CMD2);
+    expect(field('ANSWER: unknown')).toBe('UNKNOWN');
+    expect(field('ANSWER: UNKNOWN')).toBe('UNKNOWN');
+    expect(field('I do not remember which command it was.')).toBeNull();
+    expect(field(`ANSWER: ${W6_CMD}\nANSWER: ${W6_CMD2}`), 'the last ANSWER line').toBe(W6_CMD2);
+  });
+
+  it('the reply is redacted, then capped at 16 KiB of UTF-8, never splitting a code point; answer_field is carried beside it, cut at the same cap (D-6470)', () => {
+    expect(W5B5.JUDGE_REPLY_MAX_BYTES).toBe(16384);
+    const e = w5b5Entry(W6_CMD);
+    const han = `${String.fromCharCode(0x4e2d)} `;   // three UTF-8 bytes and a space
+    const reply = `${han.repeat(5500)}\nANSWER: ${W6_CMD2}`;
+    expect(W5B5.maskValue(reply, W6_IDX), 'CONTROL: the fixture holds nothing to redact').toBe(reply);
+    const input = W5B5.judgeInputOf(e, reply, W6_IDX);
+    expect(Buffer.byteLength(input.reply)).toBeLessThanOrEqual(16384);
+    expect(Buffer.byteLength(input.reply)).toBeGreaterThan(16384 - 4);
+    expect(reply.startsWith(input.reply)).toBe(true);
+    expect(input.answer_field, 'the ANSWER line past the cut reaches the judge in its own field').toBe(W6_CMD2);
+    const smile = `${String.fromCharCode(0xd83d, 0xde00)} `;   // four UTF-8 bytes and a space
+    const wide = W5B5.judgeInputOf(e, smile.repeat(4000), W6_IDX).reply;
+    expect(Buffer.byteLength(wide)).toBeLessThanOrEqual(16384);
+    expect(Buffer.byteLength(wide)).toBeGreaterThan(16384 - 5);
+    expect(wide).not.toMatch(W6_LONE_SURROGATE);
+    const short = 'A short reply.\nANSWER: UNKNOWN';
+    expect(W5B5.judgeInputOf(e, short, W6_IDX).reply, 'CONTROL: a reply under the cap is whole').toBe(short);
+    const longField = `npm run ${'x'.repeat(20_000)}`;
+    const capped = W5B5.judgeInputOf(e, `ANSWER: ${longField}`, W6_IDX).answer_field!;
+    expect(Buffer.byteLength(capped), 'D-6470: a 20,000-byte ANSWER value is cut at the same cap').toBe(16384);
+    expect(longField.startsWith(capped)).toBe(true);
+  });
+
+  it('W2-D54 order: a secret straddling the 16 KiB edge is redacted whole before the cap, and no head of it survives', () => {
+    // Spaced filler, so the secret is a run of its own and its (length, sha256) pair matches it whole.
+    const reply = `${'a '.repeat(8187)}${W6_SECRET} tail\nANSWER: ${W6_CMD2}`;
+    expect(Buffer.byteLength(reply.slice(0, reply.indexOf(W6_SECRET))), 'the fixture: the secret starts 10 bytes before the cut').toBe(16374);
+    const input = W5B5.judgeInputOf(w5b5Entry(W6_CMD), reply, W6_IDX);
+    expect(input.reply).not.toContain(W6_SECRET.slice(0, 6));
+    expect(input.reply).toContain(t4Lib.REDACTED_MARK);
+    // CONTROL: cut the raw reply first and redact afterwards, and the head the cut leaves matches no pair.
+    expect(t4Lib.redactField(W5B5.capUtf8Bytes(reply, 16384), W6_IDX)).toContain(W6_SECRET.slice(0, 10));
+  });
+
+  it('a key-shaped value in the question, expected fact, reply or its ANSWER line reaches the input redacted', () => {
+    const key = w6Akia('JUDGEKY');
+    const e = { ...w5b5Entry(key), question: `Which command ran after the key ${key} was exported?` };
+    const input = W5B5.judgeInputOf(e, `It read the key from ${key} first.\nANSWER: ${key}`, W6_IDX);
+    expect(w5b5Lib.canonicalJson(input)).not.toContain(key);
+    expect(input.question).toContain(t4Lib.REDACTED_MARK);
+    expect(input.expected).toContain(t4Lib.REDACTED_MARK);
+    expect(input.reply).toContain(t4Lib.REDACTED_MARK);
+    expect(input.answer_field).toContain(t4Lib.REDACTED_MARK);
+  });
+
+  it('an ANSWER line swallowed by a PEM mask carries the same mark as the complete reply', () => {
+    const fact = 'npm run fixture-lint';
+    const body = ['QyNTUxOQ', 'AAACDx3B', 'q9yC2mT0', 'm4w5'].join('');
+    const pem = [
+      [['-----', 'BEGIN'].join(''), ['OPEN', 'SSH', 'PRIVATE', 'KEY-----'].join(' ')].join(' '),
+      body,
+      `ANSWER: ${body}`,
+      [['-----', 'END'].join(''), ['OPEN', 'SSH', 'PRIVATE', 'KEY-----'].join(' ')].join(' '),
+    ].join('\n');
+    const idx = t4Lib.makePairIndex([]);
+    const reply = `ANSWER: ${fact}\n${pem}`;
+    expect(w5b5Gate.parseAnswerField(reply), 'the raw last ANSWER is inside the PEM').toMatchObject({ state: 'value', value: body });
+    const input = W5B5.judgeInputOf(w5b5Entry(fact), reply, idx);
+    expect(input.reply).toBe(`ANSWER: ${fact}\n${t4Lib.REDACTED_MARK}`);
+    expect(input.answer_field).toBe(t4Lib.REDACTED_MARK);
+    expect(w5b5Lib.canonicalJson(input)).not.toContain(body);
+    const long = W5B5.judgeInputOf(w5b5Entry(W6_CMD), `${'plain prefix '.repeat(2_000)}${pem}`, W6_IDX);
+    expect(Buffer.byteLength(long.answer_field!), 'a swallowed answer field remains bounded').toBeLessThanOrEqual(W5B5.JUDGE_REPLY_MAX_BYTES);
+    expect(long.answer_field, 'a swallowed answer field still carries the mask mark').toBe(t4Lib.REDACTED_MARK);
+    const plain = W5B5.judgeInputOf(w5b5Entry(W6_CMD), `ANSWER: ${W6_CMD}\nANSWER: ${W6_CMD2}`, idx);
+    expect(plain).toMatchObject({ answer_field: W6_CMD2, reply: `ANSWER: ${W6_CMD}\nANSWER: ${W6_CMD2}` });
+  });
+
+  it('a reply of null is judged as the empty string, with no answer_field', () => {
+    expect(W5B5.judgeInputOf(w5b5Entry(W6_CMD), null, W6_IDX)).toMatchObject({ reply: '', answer_field: null });
+  });
+});
+
+describe('W2-5b1 Task 5: who reaches the judge, and the judge order', () => {
+  const arms = W5B5_ARMS;
+  const pickOf = (entries: W5b5Entry[], answers: W5b5Answer[]): W5b5Picked =>
+    W5B5.judgeItemsOf({ entries, answers, arms, shaMinPrefix: 7 });
+  const refusalOf = (fn: () => unknown): unknown => { try { fn(); return null; } catch (e) { return e; } };
+
+  it('a correct answer never reaches the judge; UNKNOWN, a missing ANSWER line and a wrong value do', () => {
+    const e1 = w5b5Entry(W6_CMD);
+    const e2 = w5b5Entry(W6_CMD2);
+    const right = `It was this one.\nANSWER: ${W6_CMD}`;
+    expect(w5b5Gate.labelCorrect('command', W6_CMD, W6_CMD, { repoRoots: ['/home/u/tree'], shaMinPrefix: 7 }), 'CONTROL: the gate scores it correct').toBe(true);
+    const answers = [
+      w5b5Answer(e1.qid, W5B5_ARM0, 'answered', right, true),
+      w5b5Answer(e1.qid, W5B5_ARM1, 'answered', `ANSWER: ${W6_CMD2}`, false),
+      w5b5Answer(e2.qid, W5B5_ARM0, 'answered', 'ANSWER: UNKNOWN', false),
+      w5b5Answer(e2.qid, W5B5_ARM1, 'answered', 'I do not remember the command.', false),
+    ];
+    const r = pickOf([e1, e2], answers);
+    const got = r.items.map((i) => JSON.stringify([i.qid, i.arm, i.reply])).sort();
+    const want = [[e1.qid, W5B5_ARM1, `ANSWER: ${W6_CMD2}`], [e2.qid, W5B5_ARM0, 'ANSWER: UNKNOWN'], [e2.qid, W5B5_ARM1, 'I do not remember the command.']]
+      .map((x) => JSON.stringify(x)).sort();
+    expect(got).toEqual(want);
+    expect(r.excluded).toEqual({ correct: 1, run_failed_questions: 0 });
+  });
+
+  it('W2-D80: a run-failed question leaves the judge in both arms', () => {
+    const e1 = w5b5Entry(W6_CMD);
+    const e2 = w5b5Entry(W6_CMD2);
+    const r = pickOf([e1, e2], [
+      w5b5Answer(e1.qid, W5B5_ARM0, 'answered', `ANSWER: ${W6_ERR}`, false),
+      w5b5Answer(e1.qid, W5B5_ARM1, 'run-failed', null, null),
+      w5b5Answer(e2.qid, W5B5_ARM0, 'answered', `ANSWER: ${W6_ERR}`, false),
+      w5b5Answer(e2.qid, W5B5_ARM1, 'answered', `ANSWER: ${W6_ERR}`, false),
+    ]);
+    expect(r.items.map((i) => i.qid), 'CONTROL: the other question is judged in both arms').toEqual([e2.qid, e2.qid]);
+    expect(r.excluded).toEqual({ correct: 0, run_failed_questions: 1 });
+  });
+
+  it('an unsettled pair refuses input-invalid arms-unsettled, never a TypeError', () => {
+    const e = w5b5Entry(W6_CMD);
+    const done = w5b5Answer(e.qid, W5B5_ARM0, 'answered', `ANSWER: ${W6_ERR}`, false);
+    for (const [label, other] of [['rerun', [w5b5Answer(e.qid, W5B5_ARM1, 'rerun', null, null)]],
+      ['not-run', [w5b5Answer(e.qid, W5B5_ARM1, 'not-run', null, null)]], ['no record', []]] as Array<[string, W5b5Answer[]]>) {
+      const err = refusalOf(() => pickOf([e], [done, ...other]));
+      expect(err, label).toBeInstanceOf(DriverRefusal);
+      expect(err, label).toMatchObject({ word: 'input-invalid' });
+      expect((err as DriverRefusal).detail, label).toMatch(/^arms-unsettled 1 \(first [0-9a-f]{16}\)/);
+    }
+    expect(refusalOf(() => pickOf([e], [done, w5b5Answer(e.qid, W5B5_ARM1, 'answered', `ANSWER: ${W6_ERR}`, false)])), 'CONTROL: settled').toBeNull();
+  });
+
+  it('W2-D80, R14: a run-failed arm settles its question, so the other arm\'s rerun or not-run record is excluded with it and refuses nothing', () => {
+    // Task 4 writes both records when either arm is run-failed, and never spawns the other arm's owed attempt again.
+    const e1 = w5b5Entry(W6_CMD);
+    const e2 = w5b5Entry(W6_CMD2);
+    const wrong = (e: W5b5Entry): W5b5Answer[] => [W5B5_ARM0, W5B5_ARM1].map((a) => w5b5Answer(e.qid, a, 'answered', `ANSWER: ${W6_ERR}`, false));
+    for (const other of ['rerun', 'not-run']) {
+      const r = pickOf([e1, e2], [w5b5Answer(e1.qid, W5B5_ARM0, other, null, null), w5b5Answer(e1.qid, W5B5_ARM1, 'run-failed', null, null), ...wrong(e2)]);
+      expect(r.excluded, other).toEqual({ correct: 0, run_failed_questions: 1 });
+      expect(r.items.map((i) => i.qid), `${other}: the other question is judged in both arms`).toEqual([e2.qid, e2.qid]);
+    }
+    const err = refusalOf(() => pickOf([e1], [w5b5Answer(e1.qid, W5B5_ARM1, 'run-failed', null, null)]));
+    expect(err, 'CONTROL: a missing record still refuses, a run-failed arm beside it or not').toMatchObject({ word: 'input-invalid' });
+  });
+
+  it('an answer record that disagrees with its own reply, names an unknown question or arm, is non-string, or is recorded twice refuses out-refused', () => {
+    const e = w5b5Entry(W6_CMD);
+    const wrong = w5b5Answer(e.qid, W5B5_ARM1, 'answered', `ANSWER: ${W6_ERR}`, false);
+    const numeric = { ...w5b5Answer(e.qid, W5B5_ARM0, 'answered', `ANSWER: ${W6_ERR}`, false), reply: 7 } as unknown as W5b5Answer;
+    const cases: Array<[string, W5b5Answer[], RegExp]> = [
+      ['a correct reply flagged wrong', [w5b5Answer(e.qid, W5B5_ARM0, 'answered', `ANSWER: ${W6_CMD}`, false), wrong], /^answer-record-mismatch [0-9a-f]{16}$/],
+      ['a wrong reply flagged correct', [w5b5Answer(e.qid, W5B5_ARM0, 'answered', `ANSWER: ${W6_ERR}`, true), wrong], /^answer-record-mismatch [0-9a-f]{16}$/],
+      ['a numeric reply', [numeric, wrong], /^answer-record-invalid [0-9a-f]{16}$/],
+      ['an unknown question', [w5b5Answer('0'.repeat(16), W5B5_ARM0, 'answered', 'x', false), wrong], /^answer-record-unknown /],
+      ['an unknown arm', [w5b5Answer(e.qid, 'fixture-arm', 'answered', 'x', false), wrong], /^answer-record-unknown /],
+      ['a pair recorded twice', [wrong, wrong], /^answer-record-duplicate [0-9a-f]{16}$/],
+    ];
+    for (const [label, answers, detail] of cases) {
+      const err = refusalOf(() => pickOf([e], answers));
+      expect(err, label).toBeInstanceOf(DriverRefusal);
+      expect(err, label).toMatchObject({ word: 'out-refused' });
+      expect((err as DriverRefusal).detail, label).toMatch(detail);
+    }
+  });
+
+  it('the judge order is the judge-order substream over every qid and arm pair sorted by code unit, with positional ids from j0001', () => {
+    const es = [W6_CMD, W6_CMD2, W6_ERR].map((f) => w5b5Entry(f));
+    const map = W5B5.judgeMapOf(W5B5_SEED, es, arms);
+    const pairs = es.flatMap((e) => arms.map((a): [string, string] => [e.qid, a]));
+    expect(map.map((m) => [m.qid, m.arm])).toEqual(w5b5Order(W5B5_SEED, pairs));
+    expect(map.map((m) => m.id)).toEqual(['j0001', 'j0002', 'j0003', 'j0004', 'j0005', 'j0006']);
+    expect(map.every((m) => Object.keys(m).sort().join(',') === 'arm,id,qid' && W5B5.JUDGE_ID_RE.test(m.id))).toBe(true);
+    expect(w5b5Order(W5B5_SEED, pairs, 'handcheck'), 'CONTROL: another label draws another order').not.toEqual(w5b5Order(W5B5_SEED, pairs));
+    const text = W5B5.judgeMapText('quiz', 'f'.repeat(64), map);
+    expect(JSON.parse(text)).toEqual({ kind: W5B5.JUDGE_MAP_KIND, v: 1, section: 'quiz', frozen_sha256: 'f'.repeat(64), items: map });
+    expect(text).toBe(`${w5b5Lib.canonicalJson(JSON.parse(text))}\n`);
+  });
+
+  it('the order is the same in any input order, mixes the arms across batches, and moves with the seed', () => {
+    const es = Array.from({ length: 10 }, (_, k) => w5b5Entry(`npm run fixture-step-${k} --workspace pkg-a`));
+    const a = W5B5.judgeMapOf(W5B5_SEED, es, arms);
+    expect(W5B5.judgeMapOf(W5B5_SEED, [...es].reverse(), [...arms].reverse())).toEqual(a);
+    expect(new Set(a.slice(0, 10).map((m) => m.arm)).size, 'both arms in the first batch of ten').toBe(2);
+    const sorted = [...a].sort((x, y) => (`${x.qid}${W5B5_NUL}${x.arm}` < `${y.qid}${W5B5_NUL}${y.arm}` ? -1 : 1));
+    expect(a.map((m) => m.qid + m.arm), 'CONTROL: a real shuffle, not the sorted list').not.toEqual(sorted.map((m) => m.qid + m.arm));
+    expect(W5B5.judgeMapOf(sha256Hex('w2-5b1 task 5 fixture: another seed'), es, arms).map((m) => m.qid + m.arm)).not.toEqual(a.map((m) => m.qid + m.arm));
+  });
+
+  it('ids widen past 9999 pairs and keep one width', () => {
+    const es = Array.from({ length: 5000 }, (_, k) => ({ qid: k.toString(16).padStart(16, '0') }));
+    const map = W5B5.judgeMapOf(W5B5_SEED, es, arms);
+    expect(map).toHaveLength(10000);
+    expect([map[0]!.id, map[9999]!.id]).toEqual(['j00001', 'j10000']);
+    expect(map.every((m) => /^j[0-9]{5}$/.test(m.id) && W5B5.JUDGE_ID_RE.test(m.id))).toBe(true);
+    expect(W5B5.judgeMapOf(W5B5_SEED, es.slice(0, 4999), arms)[0]!.id, 'CONTROL: 9998 pairs keep four digits').toBe('j0001');
+  });
+});
+
+describe('W2-5b1 Task 5: the judge spawn, RP1-judge and RP3-judge', () => {
+  it.each(['up-a', 'gen-a'])('RP1-judge %s: the judge call goes through W2-4 spawn in judge mode, with the rubric and the canonical input on stdin', async (id) => {
+    const b = w6Box(`ccrc-w2-5b1-t5-rp1-${id}-`);
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const j = await w5b5Open(b, id);
+    const [job] = w5b5Jobs(1);
+    const [item] = await j.judge('quiz', [job!]);
+    expect(item).toEqual({ id: 'j0001', outcome: 'judged', label: 'fabricated', attempts: [
+      { run: 'quiz/judge/j0001-1', code: 0, signal: null, skipped: false, tokens: 45, result: true, label: 'fabricated', error_fields: [] }] });
+    const runs = w6Runs(b.home);
+    expect(runs, 'one judge spawn').toHaveLength(1);
+    const l = runs[0]!;
+    expect(l.argv).toEqual(t5Argv('judge', W6_MODEL, b.home));
+    expect(l.argv).not.toContain('--allowedTools');
+    const keys = withoutDarwinAdded(l.envKeys).filter((k) => !T5_BASH_KEYS.includes(k));
+    expect(keys).toEqual(id === 'gen-a' ? [...T5_BASE_KEYS, 'CLAUDE_CODE_OAUTH_TOKEN'].sort() : [...T5_BASE_KEYS].sort());
+    for (const k of [...T5_NEVER_KEYS, ...T5_RECALL_KEYS]) expect(l.envKeys, k).not.toContain(k);
+    expect(l.env['PATH']).toBe(`${b.out}/poison-bin:${path.dirname(process.execPath)}:/usr/bin:/bin`);
+    expect(l.env['CLAUDE_CONFIG_DIR']).toBe(join(b.home, id === 'gen-a' ? '.gen-a' : '.claude'));
+    expect(l.stdin).toBe(`${w5b5Gate.RUBRICS.v1}\n\n${w5b5Lib.canonicalJson(job!.input)}\n`);
+    const dir = join(b.out, 'quiz', 'judge');
+    expect(readFileSync(join(dir, 'j0001-1.jsonl'), 'utf8')).toBe(W5B5_LABELLED);
+    expect(JSON.parse(readFileSync(join(dir, 'j0001-1.run.json'), 'utf8'))).toMatchObject({ mode: 'judge', model: W6_MODEL, account: id });
+    expect(readFileSync(join(dir, 'j0001.input.json'), 'utf8')).toBe(`${w5b5Lib.canonicalJson(job!.input)}\n`);
+    expect(readFileSync(join(b.home, T5_STUB_LOG), 'utf8')).not.toContain(T5_TOKEN);
+  }, 60_000);
+
+  it.each([['cx-a', 'kind-codex'], ['ext-n', 'kind-external'], ['ext-a', 'kind-external'], ['gen-o', 'provider-openai']])(
+    'RP3-judge %s: refused account-refused before any spawn, and the stub log stays absent', async (id, detail) => {
+      const b = w6Box(`ccrc-w2-5b1-t5-rp3-${id}-`);
+      const err = await w5b5Open(b, id).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(DriverRefusal);
+      expect(err).toMatchObject({ word: 'account-refused', detail });
+      expect(stubLog(b.home), 'no spawn, not even --version').toBeNull();
+      expect(existsSync(join(b.out, 'quiz'))).toBe(false);
+    }, 60_000);
+
+  it('a judge model that is not an exact Opus id refuses args-invalid before admission and any spawn', async () => {
+    for (const model of ['opus', 'claude-opus-latest', 'claude-other-9-1']) {
+      const b = w6Box('ccrc-w2-5b1-t5-model-');
+      const err = await w5b5Open(b, 'up-a', { model }).then(() => null, (e: unknown) => e);
+      expect(err, model).toMatchObject({ word: 'args-invalid', detail: `judge-model ${JSON.stringify(model)} is not an exact Opus model id` });
+      expect(stubLog(b.home), model).toBeNull();
+    }
+    const refused = w6Box('ccrc-w2-5b1-t5-model-refused-');
+    const err = await w5b5Open(refused, 'cx-a', { model: 'opus' }).then(() => null, (e: unknown) => e);
+    expect(err, 'the model refusal comes first: a refused account with a bad model is args-invalid').toMatchObject({ word: 'args-invalid' });
+    expect(stubLog(refused.home)).toBeNull();
+  }, 60_000);
+
+  it('the last LABEL line is the label, and a labelled reply is never retried', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-last-');
+    writeFileSync(join(b.home, STUB_STREAM), w6Reply('LABEL: fabricated\nOn reflection the one value is hedged.\nLABEL: uncertain'));
+    const j = await w5b5Open(b, 'up-a');
+    const [item] = await j.judge('quiz', w5b5Jobs(1));
+    expect(item).toMatchObject({ outcome: 'judged', label: 'uncertain' });
+    expect(item!.attempts).toHaveLength(1);
+    expect(w6Runs(b.home)).toHaveLength(1);
+  }, 60_000);
+
+  it('W2-D79: a reply malformed twice is judge-failed, after two spawns with identical stdin', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-failed-');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_MALFORMED);
+    const j = await w5b5Open(b, 'up-a');
+    const [job] = w5b5Jobs(1);
+    const [item] = await j.judge('quiz', [job!]);
+    expect(item).toMatchObject({ id: 'j0001', outcome: 'judge-failed', label: null, attempts: [
+      { run: 'quiz/judge/j0001-1', code: 0, result: true, label: null }, { run: 'quiz/judge/j0001-2', code: 0, result: true, label: null }] });
+    expect(W5B5.JUDGE_ATTEMPTS).toBe(2);
+    const runs = w6Runs(b.home);
+    expect(runs, 'one spawn, then its one retry').toHaveLength(2);
+    expect(runs[0]!.stdin).toBe(`${w5b5Gate.RUBRICS.v1}\n\n${w5b5Lib.canonicalJson(job!.input)}\n`);
+    expect(runs[1]!.stdin, 'identical input').toBe(runs[0]!.stdin);
+  }, 60_000);
+
+  it('CONTROL: malformed once, then labelled on the retry with identical stdin', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-retry-');
+    w5b5PlantOnce(b.home, 'up-a');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    writeFileSync(join(b.home, W5B5_ONCE), W5B5_MALFORMED);
+    const j = await w5b5Open(b, 'up-a');
+    expect(existsSync(join(b.home, W5B5_ONCE)), 'CONTROL: the --version call leaves the once-stream for the first print run').toBe(true);
+    const [item] = await j.judge('quiz', w5b5Jobs(1));
+    expect(item).toMatchObject({ outcome: 'judged', label: 'fabricated', attempts: [
+      { run: 'quiz/judge/j0001-1', label: null }, { run: 'quiz/judge/j0001-2', label: 'fabricated' }] });
+    const runs = w6Runs(b.home);
+    expect(runs).toHaveLength(2);
+    expect(runs[1]!.stdin).toBe(runs[0]!.stdin);
+    expect(existsSync(join(b.home, W5B5_ONCE)), 'the first print run took it').toBe(false);
+  }, 60_000);
+
+  it('a run that exits non-zero, or shows no result event, is a malformed attempt even when it printed a LABEL line', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-runfail-');
+    w6PlantPrintExit(b.home, 'up-a');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const j = await w5b5Open(b, 'up-a');
+    writeFileSync(join(b.home, W6_PRINT_EXIT), '0');
+    const [ok] = await j.judge('quiz', w5b5Jobs(1));
+    expect(ok, 'CONTROL: exit 0 is judged on its first attempt').toMatchObject({ outcome: 'judged', label: 'fabricated', attempts: [{ code: 0 }] });
+    writeFileSync(join(b.home, W6_PRINT_EXIT), '3');
+    const [exited] = await j.judge('pilot', w5b5Jobs(1));
+    expect(exited).toMatchObject({ outcome: 'judge-failed', label: null, attempts: [
+      { run: 'pilot/judge/j0001-1', code: 3, result: true, label: null }, { run: 'pilot/judge/j0001-2', code: 3, result: true, label: null }] });
+    writeFileSync(join(b.home, W6_PRINT_EXIT), '0');
+    writeFileSync(join(b.home, STUB_STREAM), w6Reply('LABEL: fabricated', { result: false }));
+    const [silent] = await j.judge('quiz', w5b5Jobs(2).slice(1));
+    expect(silent).toMatchObject({ id: 'j0002', outcome: 'judge-failed', attempts: [
+      { code: 0, result: false, label: null }, { code: 0, result: false, label: null }] });
+  }, 60_000);
+
+  it('Q31: every error field a judge run carries is recorded on its attempt, and a clean run records none', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-errors-');
+    const head = JSON.stringify({ type: 'result' }).slice(0, -1);   // the result line's opening, `{"type":"result"`
+    expect(W5B5_LABELLED.split(head), 'the fixture: one result line').toHaveLength(2);
+    const errorEvent = JSON.stringify({ type: 'assistant', error: 'fixture_error_field', message: { id: 'msg-w5b5-error', content: [{ type: 'text', text: 'x' }] } });
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED.replace(head, `${errorEvent}\n${head}`));
+    const j = await w5b5Open(b, 'up-a');
+    const [item] = await j.judge('quiz', w5b5Jobs(1));
+    expect(item).toMatchObject({ outcome: 'judged', label: 'fabricated', attempts: [{ error_fields: ['fixture_error_field'] }] });
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const [clean] = await j.judge('pilot', w5b5Jobs(1));
+    expect(clean!.attempts.map((a) => a.error_fields), 'CONTROL: a clean run records none').toEqual([[]]);
+  }, 60_000);
+
+  it('no arm token reaches the judge stdin, an input file, a run name or any file name under the section', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-blind-');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const es = [W6_CMD, W6_CMD2].map((f) => w5b5Entry(f));
+    const answers = es.flatMap((e) => [W5B5_ARM0, W5B5_ARM1].map((a) => w5b5Answer(e.qid, a, 'answered', `ANSWER: ${W6_ERR}`, false)));
+    const picked = W5B5.judgeItemsOf({ entries: es, answers, arms: W5B5_ARMS, shaMinPrefix: 7 });
+    const map = W5B5.judgeMapOf(W5B5_SEED, es, W5B5_ARMS);
+    const jobs = W5B5.judgeJobsOf({ items: picked.items, map, idx: W6_IDX });
+    expect(jobs, 'CONTROL: both arms of both questions are judged').toHaveLength(4);
+    const j = await w5b5Open(b, 'up-a');
+    await j.judge('quiz', jobs);
+    for (const a of W5B5_ARMS) expect(w5b5Gate.RUBRICS.v1, 'CONTROL: the rubric names no arm').not.toContain(a);
+    const runs = w6Runs(b.home);
+    expect(runs).toHaveLength(4);
+    for (const r of runs) for (const a of W5B5_ARMS) expect(r.stdin, a).not.toContain(a);
+    const files = w5b5Files(join(b.out, 'quiz'));
+    expect(files.length, 'CONTROL: the walk saw every run').toBeGreaterThanOrEqual(13);
+    for (const f of files) for (const a of W5B5_ARMS) expect(f, a).not.toContain(a);
+    for (const f of files.filter((x) => x.endsWith('.input.json'))) {
+      for (const a of W5B5_ARMS) expect(readFileSync(join(b.out, 'quiz', f), 'utf8'), `${f} ${a}`).not.toContain(a);
+    }
+    const text = W5B5.judgeMapText('quiz', 'f'.repeat(64), map);
+    for (const a of W5B5_ARMS) expect(text, 'CONTROL: the map file is where the arms live').toContain(a);
+  }, 60_000);
+
+  it('batches of at most ten at most two at once, and the preflight before every batch', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-batches-');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    writeFileSync(join(b.home, T5_STUB_SLEEP), '1500');   // D-6480: W2-4's concurrency case margin, so the pair overlaps under load
+    const j = await w5b5Open(b, 'up-a');
+    const items = await j.judge('quiz', w5b5Jobs(12));
+    expect(items.every((i) => i.outcome === 'judged')).toBe(true);
+    const log = stubLog(b.home)!;
+    // V: a --version preflight (at open, then before each batch); P: a print-mode judge run.
+    expect(log.map((e) => (e.argv.includes('-p') ? 'P' : 'V')).join('')).toBe(`VV${'P'.repeat(10)}VPP`);
+    const prints = log.filter((e) => e.argv.includes('-p'));
+    // D-6480: the depth when a run starts (W2-4's own measure, the most stubs alive at once): the runs whose interval holds
+    // that instant, itself included. A count of every run that overlaps a run at any time reads 3 for a run that straddles
+    // two others one after the other.
+    const depth = (r: T5Log): number => prints.filter((s) => s.start <= r.start && r.start < s.end).length;
+    expect(Math.max(...prints.map(depth)), 'two at once, never three').toBe(2);
+  }, 120_000);
+
+  it('a stop never consumes the retry: a budget stop after a malformed first attempt, and a resume that judges on the second', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-stop-');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_MALFORMED);
+    const jobs = w5b5Jobs(1);
+    const first = await w5b5Open(b, 'up-a', { budget: 1 });
+    const err = await first.judge('quiz', jobs).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ word: 'budget-exhausted' });
+    expect(w6Runs(b.home), 'attempt 1 ran and was charged; attempt 2 never spawned').toHaveLength(1);
+    expect(existsSync(join(b.out, 'quiz', 'judge', 'j0001-2.run.json'))).toBe(false);
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const again = await w5b5Open(b, 'up-a', { budget: 100_000 });
+    const [item] = await again.judge('quiz', jobs);
+    expect(item).toMatchObject({ outcome: 'judged', label: 'fabricated', attempts: [
+      { run: 'quiz/judge/j0001-1', skipped: true, label: null }, { run: 'quiz/judge/j0001-2', skipped: false, label: 'fabricated' }] });
+    expect(w6Runs(b.home)).toHaveLength(2);
+  }, 60_000);
+
+  it('a resumed judge reuses finished runs with no spawn, and changed input for the same id refuses out-refused', async () => {
+    const b = w6Box('ccrc-w2-5b1-t5-resume-');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const j = await w5b5Open(b, 'up-a');
+    const jobs = w5b5Jobs(1);
+    await j.judge('quiz', jobs);
+    const [again] = await j.judge('quiz', jobs);
+    expect(again).toMatchObject({ outcome: 'judged', label: 'fabricated', attempts: [{ skipped: true }] });
+    expect(w6Runs(b.home)).toHaveLength(1);
+    const changed = [{ id: 'j0001', input: { ...jobs[0]!.input, reply: 'ANSWER: npm run changed' } }];
+    const err = await j.judge('quiz', changed).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ word: 'out-refused', detail: 'judge-input-changed quiz/judge/j0001.input.json' });
+    expect(w6Runs(b.home)).toHaveLength(1);
+  }, 60_000);
+});
+
+describe('W2-5b1 Task 5: the judge subcommand', () => {
+  it('judge takes only its form\'s flags, and --section is pilot or quiz', () => {
+    const home = mkTmp('ccrc-w2-5b1-t5-grammar-');
+    const out = join(home, 'judge-out');
+    const said = (argv: string[]): [unknown, string] => { const r = runDriver(home, argv); return [r.code, r.stderr]; };
+    expect(said(['judge', '--section', 'quiz', '--n-usage', '5'])).toEqual([2, refusalLine('args-invalid', '--n-usage is not a judge --section quiz flag')]);
+    expect(said(['judge', '--section', 'pilot', '--out', out, '--allow-code-change'])).toEqual([2, refusalLine('args-invalid', '--allow-code-change is not a judge --section pilot flag')]);
+    expect(said(['judge', '--section', 'ab', '--out', out])).toEqual([2, refusalLine('args-invalid', 'judge wants --section pilot or --section quiz, not "ab"')]);
+    expect(said(['judge', '--out', out])).toEqual([2, refusalLine('args-invalid', 'judge wants --section pilot or --section quiz, not null')]);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it('the record is loaded first: a code-changed refusal leaves no --out, opens no store and spawns nothing', async () => {
+    const b = w5b5Home('ccrc-w2-5b1-t5-first-', false);
+    const out = join(b.home, 'judge-out');
+    let nodeAsked = false;
+    const deps = {
+      loadArmRun: () => W5B5.refuse('code-changed', 'changed deploy/history-gate.mjs'),
+      armNodeOf: () => { nodeAsked = true; return w5b5NodeOf(b.home); },
+      readArmAnswers: () => [],
+      now: () => Date.now(),
+    };
+    const r = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(out, 'quiz'), W5B5_ENV(b.home), deps));
+    expect(r.refusal).toEqual({ word: 'code-changed', detail: 'changed deploy/history-gate.mjs' });
+    expect(nodeAsked).toBe(false);
+    expect(existsSync(out)).toBe(false);
+    expect(stubLog(b.home)).toBeNull();
+    // CONTROL: past the loader, this HOME (which has no store) refuses at the store open, before --out.
+    const c = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(out, 'quiz'), W5B5_ENV(b.home),
+      w5b5Deps(w5b5Run([w5b5Entry(W6_CMD)]), w5b5NodeOf(b.home), [])));
+    expect(c.refusal?.word).toBe('store-unreadable');
+    expect(existsSync(out)).toBe(false);
+  }, 60_000);
+
+  // W2-D24 (R23): judge re-checks the code it runs under before any other input, under W2-5a's title, through Task 4's real
+  // loader over Task 4's fixtures: the record is signed with a code sha this tree does not have, and the input read next
+  // is unreadable (pilot) or the store absent (quiz).
+  const W5B5_MOVED = (): Record<string, string> => ({ ...w5b4Shas(), 'deploy/measure-history.py': w5b4Hex('moved') });
+  it.each([
+    ['judge --section pilot', (home: string): { out: string; argv: string[] } => {
+      const fx = w5b4Pilot(home, { shas: W5B5_MOVED() });
+      return { out: fx.out, argv: ['judge', ...fx.argv.slice(1).map((a) => (a === fx.fz.path ? join(home, 'no-such-frozen.json') : a))] };
+    }],
+    ['judge --section quiz', (home: string): { out: string; argv: string[] } => {
+      const fx = w5b4Quiz(home, { shas: W5B5_MOVED() });
+      return { out: fx.out, argv: ['judge', ...fx.argv().slice(1)] };
+    }],
+  ] as Array<[string, (home: string) => { out: string; argv: string[] }]>)('code-changed before any other input is read, re-checks the code it runs under: %s', async (_sub, setup) => {
+    const home = w5b4Home(null);   // no store: a re-check after the store open would answer store-unreadable
+    const { out, argv } = setup(home);
+    const flags = (replay.parseArgs(argv) as { flags: Record<string, unknown> }).flags;
+    const r = await w5b5InProcess(() => W5B5.judgeCommand(flags, W5B5_ENV(home)));
+    expect(r.refusal).toEqual({ word: 'code-changed', detail: 'changed deploy/measure-history.py' });
+    expect(existsSync(out), 'no --out').toBe(false);
+    expect(stubLog(home), 'no spawn').toBeNull();
+  }, 60_000);
+
+  it.each([
+    ['account-refused', (h: string): Record<string, unknown> => ({ account: 'cx-a', expected: w6Expected(h, 'cx-a') })],
+    ['limits-threshold', (h: string): Record<string, unknown> => {
+      const nowS = Math.floor(Date.now() / 1000);
+      writeFileSync(join(h, '.cc-limits', 'up-a.json'), JSON.stringify({ five: 90, seven: 20, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+      return {};
+    }],
+    ['tree-moved', (h: string): Record<string, unknown> => ({ expected: { ...w6Expected(h, 'up-a'), release_stamp: 'v0.0.1' } })],
+  ] as Array<[string, (h: string) => Record<string, unknown>]>)('%s: a refusal that needs no store and no spawn answers before --out', async (word, over) => {
+    const b = w5b5Home(`ccrc-w2-5b1-t5-pre-${word}-`);
+    const out = join(b.home, 'judge-out');
+    const node = w5b5NodeOf(b.home, over(b.home));
+    const r = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(out, 'quiz'), W5B5_ENV(b.home), w5b5Deps(w5b5Run([w5b5Entry(W6_CMD)]), node, [])));
+    expect(r.refusal?.word).toBe(word);
+    expect(existsSync(out), 'no --out').toBe(false);
+    expect(stubLog(b.home), 'no spawn, not even --version').toBeNull();
+  }, 60_000);
+
+  it('an --out holding \':\', a judge model that is not an exact Opus id, or a budget or limits out of range refuses before --out, in either section (D-5813, D-6309)', async () => {
+    const b = w5b5Home('ccrc-w2-5b1-t5-pre-inputs-');
+    const run = w5b5Run([w5b5Entry(W6_CMD)]);
+    const colon = join(b.home, 'judge:out');
+    const c = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(colon, 'quiz'), W5B5_ENV(b.home), w5b5Deps(run, w5b5NodeOf(b.home), [])));
+    expect(c.refusal).toEqual({ word: 'args-invalid', detail: "out contains ':'" });
+    expect(existsSync(colon), 'no --out').toBe(false);
+    const out = join(b.home, 'judge-out');
+    const notOpus = w5b5Run([w5b5Entry(W6_CMD)], { record: { ...(run['record'] as Record<string, unknown>), judge_model: 'claude-other-9-1' } });
+    const m = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(out, 'quiz'), W5B5_ENV(b.home), w5b5Deps(notOpus, w5b5NodeOf(b.home), [])));
+    expect(m.refusal, 'the judge model').toMatchObject({ word: 'args-invalid' });
+    expect(existsSync(out), 'the judge model: no --out').toBe(false);
+    for (const [section, field] of [['pilot', 'pilot_budget'], ['quiz', 'spend_budget']] as const) {
+      const node = w5b5NodeOf(b.home, { budget: 0, limits: { ...W5B5.LIMITS_DEFAULTS, threshold_pct: 101 } });
+      const r = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(out, section), W5B5_ENV(b.home), w5b5Deps(run, node, [])));
+      expect(r.refusal, section).toEqual({ word: 'record-invalid', detail: `${field} out-of-range; limits.threshold_pct out-of-range` });
+      expect(existsSync(out), `${section}: no --out`).toBe(false);
+    }
+    expect(stubLog(b.home), 'no spawn, not even --version').toBeNull();
+  }, 60_000);
+
+  // Q23 through Task 4's real loader and node reader on Task 4's quiz fixture (its arm-stub HOME, so darwin skips it as
+  // Task 4's stub cases are skipped); the answers are injected, every one correct, so the judge opens, spawns only its
+  // --version preflight and judges nothing. The clock is deps.now: W5B4_T0's window starts after the real one.
+  it.skipIf(process.platform === 'darwin')('quiz: --allow-code-change after window start stamps judged.json; without it, code-changed before --out, and before window start args-invalid (Q23, W2-D24)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { shas: W5B5_MOVED() });
+    const right = fx.mine.flatMap((q) => W5B5_ARMS.map((a) => w5b5Answer(q.qid as string, a, 'answered', `ANSWER: ${q.fact as string}`, true)));
+    const deps = (nowMs: number): Record<string, unknown> =>
+      ({ loadArmRun: replay.loadArmRun, armNodeOf: replay.armNodeOf, readArmAnswers: () => right, now: () => nowMs });
+    const flagsOf = (extra: string[]): Record<string, unknown> =>
+      (replay.parseArgs(['judge', ...fx.argv(fx.f, extra).slice(1)]) as { flags: Record<string, unknown> }).flags;
+    const after = W5B4_T0 + 2 * W5B4_DAY;
+    const plain = await w5b5InProcess(() => W5B5.judgeCommand(flagsOf([]), W5B5_ENV(home), deps(after)));
+    expect(plain.refusal?.word, 'without the flag').toBe('code-changed');
+    const early = await w5b5InProcess(() => W5B5.judgeCommand(flagsOf(['--allow-code-change']), W5B5_ENV(home), deps(W5B4_T0)));
+    expect(early.refusal?.word, 'before window start the flag is refused (Task 1\'s rule)').toBe('args-invalid');
+    expect(existsSync(fx.out), 'neither made --out').toBe(false);
+    expect(stubLog(home), 'neither spawned').toBeNull();
+    const r = await w5b5InProcess(() => W5B5.judgeCommand(flagsOf(['--allow-code-change']), W5B5_ENV(home), deps(after)));
+    expect(r.refusal).toBeNull();
+    expect(r.code).toBe(0);
+    const judged = JSON.parse(readFileSync(join(fx.out, 'quiz', 'judged.json'), 'utf8')) as Record<string, any>;
+    expect(judged.stamps, 'Q23: the measured change is a stamp on the output').toEqual(['code-changed']);
+    expect(judged.items, 'every answer correct: nothing judged').toEqual([]);
+    expect(judged.counts.excluded_correct).toBe(2 * fx.mine.length);
+  }, 120_000);
+
+  // Q5 on the judge's spawn gate, through Task 4's real loader and node reader on Task 4's quiz fixture (darwin skips it, as
+  // above): spend_budget 100 over this node's 3 of 5 questions is a share of 60. One answer is non-correct, so one judge
+  // run spawns and is charged T5_TOKENS (65: the arm stub's default STUB_STREAM, whose reply carries no LABEL line, so the
+  // attempt is malformed); the re-run's preflight gate then refuses. Part 2's whole spend_budget, 100, would let it spawn.
+  it.skipIf(process.platform === 'darwin')('quiz: the judge spends under this node\'s spend share, and budget-exhausted stops its re-run (Q5, W2-D55)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { spendBudget: 100 });
+    const wrong = fx.mine[0]!;
+    const answers = [
+      w5b5Answer(wrong.qid as string, W5B5_ARM0, 'answered', 'ANSWER: UNKNOWN', false),
+      w5b5Answer(wrong.qid as string, W5B5_ARM1, 'answered', `ANSWER: ${wrong.fact as string}`, true),
+      ...fx.mine.slice(1).flatMap((q) => W5B5_ARMS.map((a) => w5b5Answer(q.qid as string, a, 'answered', `ANSWER: ${q.fact as string}`, true))),
+    ];
+    const flagsOf = (): Record<string, unknown> => (replay.parseArgs(['judge', ...fx.argv().slice(1)]) as { flags: Record<string, unknown> }).flags;
+    const r = await w5b5InProcess(() => W5B5.judgeCommand(flagsOf(), W5B5_ENV(home),
+      { loadArmRun: replay.loadArmRun, armNodeOf: replay.armNodeOf, readArmAnswers: () => answers, now: () => W5B4_T0 + 2 * W5B4_DAY }));
+    expect(r.refusal).toEqual({ word: 'budget-exhausted', detail: 'spent 65 of 60' });
+    expect(w5b4Runs(home), 'attempt 1 ran and was charged; the re-run never spawned').toHaveLength(1);
+    expect(existsSync(join(fx.out, 'quiz', 'judged.json')), 'a stop writes no judged.json').toBe(false);
+  }, 120_000);
+
+  it('end to end on the stub: judged.json, the map file and the sha line, each node judging only its own non-correct answers', async () => {
+    const b = w5b5Home('ccrc-w2-5b1-t5-e2e-');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const [e1, e2, e3] = [W6_CMD, W6_CMD2, 'npm run fixture-test --workspace pkg-c'].map((f) => w5b5Entry(f)) as [W5b5Entry, W5b5Entry, W5b5Entry];
+    const far = w5b5Entry('npm run fixture-docs --workspace pkg-d', W5B5_OTHER_STORE);
+    const answers = [
+      w5b5Answer(e1.qid, W5B5_ARM0, 'answered', `ANSWER: ${e1.fact}`, true),
+      w5b5Answer(e1.qid, W5B5_ARM1, 'answered', `ANSWER: ${W6_ERR}`, false),
+      w5b5Answer(e2.qid, W5B5_ARM0, 'answered', 'ANSWER: UNKNOWN', false),
+      w5b5Answer(e2.qid, W5B5_ARM1, 'run-failed', null, null),
+      w5b5Answer(e3.qid, W5B5_ARM0, 'answered', 'I would guess a lint command.', false),
+      w5b5Answer(e3.qid, W5B5_ARM1, 'answered', `ANSWER: ${e3.fact}`, true),
+    ];
+    const out = join(b.home, 'judge-out');
+    const r = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(out, 'quiz'), W5B5_ENV(b.home),
+      w5b5Deps(w5b5Run([e1, e2, e3, far]), w5b5NodeOf(b.home), answers)));
+    expect(r.refusal).toBeNull();
+    expect(r.code).toBe(0);
+    const judgedText = readFileSync(join(out, 'quiz', 'judged.json'), 'utf8');
+    expect(r.stderr, 'only the sha line, of the bytes on disk (D-5983)').toBe(`sha256 ${sha256Hex(judgedText)}\n`);
+    const mapText = readFileSync(join(out, 'quiz', 'judge.map.json'), 'utf8');
+    const map = JSON.parse(mapText) as { items: W5b5MapRow[] };
+    expect(map.items, 'every pair of the frozen list, the other node\'s included').toEqual(W5B5.judgeMapOf(W5B5_SEED, [e1, e2, e3, far], W5B5_ARMS));
+    expect(map.items).toHaveLength(8);
+    const idOf = (q: string, a: string): string => map.items.find((m) => m.qid === q && m.arm === a)!.id;
+    const judged = JSON.parse(judgedText) as Record<string, any>;
+    expect(judged.items.map((i: W5b5Item) => i.id)).toEqual([idOf(e1.qid, W5B5_ARM1), idOf(e3.qid, W5B5_ARM0)].sort());
+    expect(judged).toMatchObject({
+      kind: W5B5.JUDGED_KIND, v: 1, section: 'quiz', store_id: W5B5_STORE, judge_model: W6_MODEL, rubric_id: 'v1',
+      rubric_sha256: w5b5Gate.RUBRIC_SHA256.v1, settings_mode: 'restricted', reply_max_bytes: 16384, map_sha256: sha256Hex(mapText),
+      counts: { judged: 2, judge_failed: 0, uncertain: 0, fabricated: 2, excluded_correct: 2, excluded_run_failed_questions: 1 },
+      budget: 100_000, stamps: [],
+    });
+    expect(judged.spend, 'two judge runs charged, 45 each').toBe(90);
+    for (const a of W5B5_ARMS) {
+      expect(judgedText, `judged.json names ids only (${a})`).not.toContain(a);
+      expect(mapText, 'CONTROL: the map names both arms').toContain(a);
+    }
+    const runs = w6Runs(b.home);
+    expect(runs).toHaveLength(2);
+    for (const run of runs) for (const a of W5B5_ARMS) expect(run.stdin, a).not.toContain(a);
+    expect(runs.map((run) => run.stdin.includes(e1.question) || run.stdin.includes(e3.question))).toEqual([true, true]);
+  }, 120_000);
+
+  it('a judge map that changed under --out refuses out-refused before any spawn; the same inputs resume', async () => {
+    const b = w5b5Home('ccrc-w2-5b1-t5-map-');
+    writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
+    const e1 = w5b5Entry(W6_CMD);
+    const e2 = w5b5Entry(W6_CMD2);
+    const wrong = (e: W5b5Entry): W5b5Answer[] => [W5B5_ARM0, W5B5_ARM1].map((a) => w5b5Answer(e.qid, a, 'answered', `ANSWER: ${W6_ERR}`, false));
+    const out = join(b.home, 'judge-out');
+    const call = (entries: W5b5Entry[], answers: W5b5Answer[]) => w5b5InProcess(() =>
+      W5B5.judgeCommand(w5b5Flags(out, 'quiz'), W5B5_ENV(b.home), w5b5Deps(w5b5Run(entries), w5b5NodeOf(b.home), answers)));
+    expect((await call([e1], wrong(e1))).code).toBe(0);
+    expect(w6Runs(b.home)).toHaveLength(2);
+    const same = await call([e1], wrong(e1));
+    expect(same.code, 'CONTROL: the same inputs resume').toBe(0);
+    expect(w6Runs(b.home), 'CONTROL: and spawn nothing').toHaveLength(2);
+    const moved = await call([e1, e2], [...wrong(e1), ...wrong(e2)]);
+    expect(moved.refusal).toEqual({ word: 'out-refused', detail: 'judge-map-changed quiz/judge.map.json' });
+    expect(w6Runs(b.home)).toHaveLength(2);
+  }, 120_000);
+
+  it('JUDGE_OUTCOMES are driver-local report words, disjoint from DRIVER_REASONS and GATE_REASONS', () => {
+    expect(W5B5.JUDGE_OUTCOMES).toEqual(['judged', 'judge-failed']);
+    expect(Object.isFrozen(W5B5.JUDGE_OUTCOMES)).toBe(true);
+    for (const w of W5B5.JUDGE_OUTCOMES) {
+      expect(W5B5.DRIVER_REASONS, w).not.toContain(w);
+      expect(w5b5Gate.GATE_REASONS as readonly string[], w).not.toContain(w);
+    }
+    expect([...W5B5.HANDLERS.keys()].slice(-2), 'judge is registered right after arms').toEqual(['arms', 'judge']);
+  });
+});
+
+// ── W2-5b1 Task 6: the arms-then-judge walk over one --out (R21) ─────────────────────────────────────────────────
+// Task 4's real `arms --section pilot` on the arm stub (Task 2's re-check and payloads stood in, as Task 4's stub cases
+// stand them in), then `judge --section pilot` over the same --out with every loader real: Task 4's loadArmRun,
+// armNodeOf and readArmAnswers. The --version line and every judge run print one labelled stream (W5B5_LABELLED, written
+// before part 1 measures the version); each arm run prints its own. Every HOME is a mkTmp fixture; nothing spawns a model.
+describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 6: the arms-then-judge walk over one --out (R21)', () => {
+  it('arms then judge: the answer records reach the judge through readArmAnswers, a correct answer never does, and judged.json names ids only (W2-D79, W2-D80, Q2)', async () => {
+    const home = w5b4MkTmp('ccrc-w5b6-walk-');
+    writeFileSync(join(home, STUB_STREAM), W5B5_LABELLED);   // before w5b4Node, so --version and part 1's step 0a read it
+    w5b4Node(home);
+    w5b4CreateStore(home, { storeId: W5B4_STORE_A });
+    const fx = w5b4Pilot(home, { n: 2 });
+    const [q1, q2] = fx.entries as [W5b4R, W5b4R];
+    w5b4Act(home, q1, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'ANSWER: UNKNOWN' }));
+    w5b4Act(home, q1, W5B4_TREATMENT, '.jsonl', w5b4Stream({ text: `ANSWER: ${q1.fact as string}` }));
+    w5b4Act(home, q2, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'ANSWER: deadbee' }));
+    w5b4Act(home, q2, W5B4_TREATMENT, '.jsonl', w5b4Stream({ text: 'I do not remember the commit.' }));
+    const arms = await w5b4Arms(home, fx.argv);
+    expect([arms.refusal, arms.code]).toEqual([null, 0]);
+    expect(D4.readArmAnswers(fx.out, 'pilot'), 'one record per (qid, arm)').toHaveLength(4);
+    const flags = (D4.parseArgs(['judge', ...fx.argv.slice(1)]) as { flags: Record<string, unknown> }).flags;
+    const r = await w5b5InProcess(() => W5B5.judgeCommand(flags, W5B5_ENV(home)));
+    expect(r.refusal).toBeNull();
+    expect(r.code).toBe(0);
+    const judgedText = readFileSync(join(fx.out, 'pilot', 'judged.json'), 'utf8');
+    expect(r.stderr, 'only the sha line (D-5983)').toBe(`sha256 ${sha256Hex(judgedText)}\n`);
+    const map = JSON.parse(readFileSync(join(fx.out, 'pilot', 'judge.map.json'), 'utf8')) as { items: W5b5MapRow[] };
+    expect(map.items).toEqual(W5B5.judgeMapOf((fx.draft.bootstrap as W5b4R).seed as string, fx.entries as unknown as W5b5Entry[], W5B5_ARMS));
+    const idOf = (q: W5b4R, a: string): string => map.items.find((m) => m.qid === q.qid && m.arm === a)!.id;
+    const judged = JSON.parse(judgedText) as Record<string, any>;
+    expect(judged.items.map((i: W5b5Item) => i.id)).toEqual([idOf(q1, W5B4_CONTROL), idOf(q2, W5B4_CONTROL), idOf(q2, W5B4_TREATMENT)].sort());
+    expect(judged.counts).toEqual({ judged: 3, judge_failed: 0, uncertain: 0, fabricated: 3, excluded_correct: 1, excluded_run_failed_questions: 0 });
+    const judgeRuns = w5b4Runs(home).filter((x) => x.env.CCRC_RECALL_ARM === undefined);
+    expect(judgeRuns, 'one judge spawn per non-correct answer').toHaveLength(3);
+    for (const run of judgeRuns) for (const a of W5B5_ARMS) expect(run.stdin as string, a).not.toContain(a);
+    for (const a of W5B5_ARMS) expect(judgedText, a).not.toContain(a);
+  }, 180_000);
+});
+
+// ── W2-5b1 Task 4, final fix wave: the arm batches over a hand-built store whose pairs change between batches ────────
+// D-6481 (the pair index is refreshed before every arm batch) and D-6482 (an owed arm whose sibling's payload changed is
+// excluded as run-failed). Both are cases of "a pair the store learned after the batch before it": the store is Task 2's
+// b1t2Plant, the re-check and the payloads are the real ones, and the pair is learned through a store writer from inside the
+// test (an injected payloads wrapper for D-6481, between two invocations for D-6482). No spawn reaches a model.
+type FwSetup = { home: string; storeId: string; entries: W5b4R[]; argv: string[]; out: string; draft: W5b4R;
+  originalSourceQuestion: string | null; sourceQid: string | null; frozen: W5b4Saved };
+type FwSourceFixture = {
+  declaredSourceValue: string | null;
+  storedSummary: string;
+  laterQuestion: string | null;
+  declareSourcePathWhenAbsent?: boolean;
+};
+/** Two questions on Task 2's store, serialized in qid order. `batch_max` 2 makes each real arm batch one question. */
+async function fwSetup(over: W5b4R = { limits: { batch_max: 2 } }, sourceFact: string | null = null, sourceInOriginal = false,
+  sourceFixture: FwSourceFixture | null = null): Promise<FwSetup> {
+  const declaredSourceValue = sourceFixture === null ? sourceFact : sourceFixture.declaredSourceValue;
+  const storedSummary = sourceFixture === null ? (sourceFact === null ? undefined : `Summary: ${sourceFact}`) : sourceFixture.storedSummary;
+  const laterQuestion = sourceFixture === null ? (sourceInOriginal ? `fixture original ${sourceFact}` : null) : sourceFixture.laterQuestion;
+  const fx = await b1t2Plant({ summaryText: storedSummary });
+  const home = fx.home;
+  const source = join(home, '.ccrc', 'fixture.token');
+  if (declaredSourceValue !== null) {
+    mkdirSync(join(home, '.ccrc'), { recursive: true, mode: 0o700 });
+    writeFileSync(source, `${declaredSourceValue}\n`, { mode: 0o600 });
+  }
+  w5b4Node(home);
+  const rs0 = D4.openReplayStore(home) as B1t2Rs;
+  let storeId: string;
+  try { storeId = rs0.storeId; }
+  finally { rs0.close(); }
+  if (declaredSourceValue !== null || sourceFixture?.declareSourcePathWhenAbsent === true) {
+    const writer = b1t2Store.openWriter(b1t2Lib.historyPaths(home).dbFile);
+    try { writer.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').run('redact_sources', JSON.stringify([source])); }
+    finally { b1t2Store.closeWriter(writer); }
+  }
+  const fam: W5b4Ref = { store_id: storeId, ccrc_id: B1T2_FAM, generation: B1T2_GEN };
+  const normal = [b1t2Entry(fx, storeId), b1t2Entry(fx, storeId, { kind: 'sha', fact: B1T2_SHA, fact_raw: B1T2_SHA })];
+  const sourceQid = laterQuestion === null ? null : [...normal].map((e) => e.qid).sort().at(-1)!;
+  const originalSourceQuestion = sourceQid === null ? null : laterQuestion;
+  const made = normal.map((entry) => entry.qid === sourceQid ? { ...entry, question: originalSourceQuestion! } : entry);
+  const fz = w5b4SaveText(D4.frozenListText('pilot', W5B4_HEAD, made) as string, 'pilot-frozen.json');
+  const entries = fz.value.entries as W5b4R[];
+  if (sourceQid !== null) {
+    const parsed = entries.findIndex((entry) => entry.qid === sourceQid);
+    if (parsed !== 1) throw new Error(`fixture: source qid persisted at ${parsed}`);
+    w5b4Expect(entries[parsed]!.question, 'the serialized and reloaded later entry carries the original source question').toBe(originalSourceQuestion);
+  }
+  const draft = w5b4Draft(home, { stores: [storeId], pilotFamilies: [fam], pilotFrozenSha: fz.sha, over });
+  const d = w5b4Save(draft, 'part1.json');
+  w5b4Marker(home, storeId, [fam]);
+  const out = w5b4Out();
+  return { home, storeId, entries, out, draft, frozen: fz, originalSourceQuestion, sourceQid,
+    argv: ['arms', '--section', 'pilot', '--out', out, ...w5b4Inp('record', d), ...w5b4Inp('frozen', fz)] };
+}
+/** The value whose learned pair masks question `q`'s fact, and the pair itself (CONTROL: lib's redaction does mask the fact). */
+function fwPairFor(q: W5b4R): { value: string; pair: { len: number; sha256: string } } {
+  const value = q.kind === 'command' ? B1T2_VALUE : B1T2_SHA;
+  const pair = { len: value.length, sha256: b1t2Lib.sha256Hex(value) };
+  return { value, pair };
+}
+/** The store learns `value` as a redaction pair, as the sweep's recordPairs does between two batches. */
+function fwLearn(home: string, value: string): void {
+  const w = b1t2Store.openWriter(b1t2Lib.historyPaths(home).dbFile);
+  w.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, 1)').run(value.length, Buffer.from(b1t2Lib.sha256Hex(value), 'hex'));
+  b1t2Store.closeWriter(w);
+}
+
+type C04Prerequisite = { home: string; source: string; fx: B1t2Fx; entry: B1t2Entry; argv: string[]; out: string };
+/** C04's source is read through the store's real declared-source metadata, never a durable redact_hashes row. */
+async function c04Prerequisite(): Promise<C04Prerequisite> {
+  const value = ['zq', 'old6481', 'retained', 'command', 'only'].join('-');
+  const command = ['printf', '  ', value, '   fixture'].join('');
+  w5b4Expect(value.length, 'the real secret-source minimum is met').toBeGreaterThanOrEqual(20);
+  w5b4Expect(command.length).toBeGreaterThanOrEqual(B1T2.MINE_COMMAND_CHARS.min);
+  w5b4Expect(command.length).toBeLessThanOrEqual(B1T2.MINE_COMMAND_CHARS.max);
+  const fx = await b1t2Plant({ command });
+  const source = join(fx.home, '.ccrc', 'fixture.token');
+  mkdirSync(join(fx.home, '.ccrc'), { recursive: true, mode: 0o700 });
+  writeFileSync(source, `${value}\n`, { mode: 0o600 });
+  const writer = b1t2Store.openWriter(b1t2Lib.historyPaths(fx.home).dbFile);
+  try {
+    writer.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').run('redact_sources', JSON.stringify([source]));
+  } finally { b1t2Store.closeWriter(writer); }
+  w5b4Node(fx.home);
+  const rs = D4.openReplayStore(fx.home) as B1t2Rs;
+  try {
+    const row = rs.db.prepare(`SELECT b.entry_id AS entry_id, e.uuid AS uuid, e.ts_ms AS ts_ms, b.transcript_pk AS transcript_pk
+      FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id WHERE e.uuid = ?`).get(fx.uuid.bn!) as { entry_id: number; uuid: string; ts_ms: number | null; transcript_pk: number } | undefined;
+    if (row === undefined) throw new Error('fixture: boundary N absent');
+    const mined = B1T2.mineStoredBoundary(rs, row, { ccrc_id: B1T2_FAM, generation: B1T2_GEN }, B1T2_DIRS);
+    if (mined.state !== 'mined') throw new Error(`fixture: boundary N ${mined.why}`);
+    const candidate = mined.mined.candidates.filter((c) => c.kind === 'command' && c.fact_raw === command);
+    w5b4Expect(candidate, 'the stored raw command has exactly one real mined candidate').toHaveLength(1);
+    const [c] = candidate;
+    w5b4Expect(c!.fact, 'real mining normalizes the repeated-whitespace command').not.toBe(c!.fact_raw);
+    const base = { store_id: rs.storeId, ccrc_id: B1T2_FAM, generation: B1T2_GEN, boundary_uuid: fx.uuid.bn!, kind: c!.kind,
+      fact: c!.fact, fact_raw: c!.fact_raw, question: 'Which command ran the neutral fixture?', source_entry_uuid: c!.source_entry_uuid, repo_roots: c!.repo_roots };
+    const entry = { ...base, qid: D4.qidOf(base) as string } as B1t2Entry;
+    const fz = w5b4SaveText(D4.frozenListText('pilot', W5B4_HEAD, [entry]) as string, 'c04-pilot-frozen.json');
+    const parsed = fz.value.entries[0] as B1t2Entry;
+    const fam: W5b4Ref = { store_id: rs.storeId, ccrc_id: B1T2_FAM, generation: B1T2_GEN };
+    const draft = w5b4Draft(fx.home, { stores: [rs.storeId], pilotFamilies: [fam], pilotFrozenSha: fz.sha, over: { limits: { batch_max: 2 } } });
+    const record = w5b4Save(draft, 'c04-part1.json');
+    w5b4Marker(fx.home, rs.storeId, [fam]);
+    const out = w5b4Out();
+    return { home: fx.home, source, fx, entry: parsed, out,
+      argv: ['arms', '--section', 'pilot', '--out', out, ...w5b4Inp('record', record), ...w5b4Inp('frozen', fz)] };
+  } finally { rs.close(); }
+}
+
+w5b4It('W2-5b1 Task 4: C04 prerequisite, stored command mines and old/fresh rechecks differ', async () => {
+  const c = await c04Prerequisite();
+  let oldPayloads: { plain: string; carded: string };
+  const old = D4.openReplayStore(c.home) as B1t2Rs;
+  try {
+    w5b4Expect((old.db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as B1t2CountRow).n, 'no durable pair before source removal').toBe(0);
+    w5b4Expect(b1t2Lib.redactField(c.entry.fact, old.idx), 'the old index changes the real mined fact').not.toBe(c.entry.fact);
+    w5b4Expect(await B1T2.recheckQuestion(old, c.entry, { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'a', why: 'redact-fact' });
+    await w5b4Expect(B1T2.recheckBatch(old, [c.entry], { configDirs: B1T2_DIRS })).rejects.toMatchObject({
+      word: 'quiz-unanswerable', detail: `${c.entry.qid} clause (a) redact-fact`,
+    });
+    const cut = B1T2.armCut(old, c.entry.boundary_uuid);
+    if (!cut.ok) throw new Error(`fixture: old arm cut ${cut.reason}`);
+    const payloads = B1T2.armPayloads(old, c.fx.entry.bn!, c.entry.question, cut.cut);
+    if (payloads.state !== 'payloads') throw new Error(`fixture: old payloads ${payloads.why}`);
+    oldPayloads = { plain: payloads.plain, carded: payloads.carded };
+  } finally { old.close(); }
+  rmSync(c.source);
+  const fresh = D4.openReplayStore(c.home) as B1t2Rs;
+  try {
+    w5b4Expect((fresh.db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as B1t2CountRow).n, 'source removal never writes a durable pair').toBe(0);
+    const verdict = await B1T2.recheckQuestion(fresh, c.entry, { configDirs: B1T2_DIRS });
+    if (!verdict.ok) throw new Error(`fixture: fresh recheck ${verdict.clause} ${verdict.why}`);
+    const batch = await B1T2.recheckBatch(fresh, [c.entry], { configDirs: B1T2_DIRS });
+    w5b4Expect(batch.get(c.entry.qid)).toEqual(verdict);
+    const payloads = B1T2.armPayloads(fresh, verdict.boundaryEntryId, c.entry.question, verdict.cut);
+    if (payloads.state !== 'payloads') throw new Error(`fixture: fresh payloads ${payloads.why}`);
+    w5b4Expect({ plain: payloads.plain, carded: payloads.carded }, 'both original payload arms ignore the removed source').toEqual(oldPayloads!);
+  } finally { fresh.close(); }
+}, 180_000);
+
+/** The accepted concrete snapshot shape: backing storage is charged while visible content stays owner-generated. */
+function c14FixtureIndex(backing: number): B1t2FixtureIndex {
+  const belt = t4Lib.makeBelt([['synthetic', 'phasea', 'unit'].join('')]) as unknown as B1t2FixtureBelt;
+  const original = belt.units[0]!;
+  const unit = new Uint8Array(new ArrayBuffer(backing), 0, original.byteLength);
+  unit.set(original);
+  belt.units[0] = unit;
+  return t4Lib.makePairIndex([], belt) as B1t2FixtureIndex;
+}
+/** The variant's finally sets this only after a successful import has created and removed the temporary module. */
+let c04VariantCleaned = false;
+/** Imports a complete current driver variant whose imports and code-root point at the original tree. */
+async function c04Variant(options: { acquireRetainedSnapshots?: boolean; nodeOverride?: boolean; judgeObservers?: boolean; judgeComparisonObserver?: boolean; c14Observers?: boolean; n2ExcludedReader?: boolean; n2ManifestReader?: boolean } = {}): Promise<W5b4R> {
+  c04VariantCleaned = false;
+  const source = readFileSync(join(B1T2_REPO, 'deploy', 'history-replay.mjs'), 'utf8');
+  const originalUrl = pathToFileURL(join(B1T2_REPO, 'deploy', 'history-replay.mjs')).href;
+  const rebase = (spec: string): string => pathToFileURL(fileURLToPath(new URL(spec, originalUrl))).href;
+  let text = source.replace(/from '((?:\.\.\/|\.\/)[^']+)'/g, (_whole, spec: string) => `from '${rebase(spec)}'`);
+  const rootAnchor = 'path.resolve(path.dirname(fileURLToPath(import.meta.url)), \'..\')';
+  const rootReplacement = `path.resolve(path.dirname(fileURLToPath(${JSON.stringify(originalUrl)})), '..')`;
+  if (text.split(rootAnchor).length !== 2) throw new Error('fixture: C04 TREE_ROOT anchor is not unique');
+  text = text.replace(rootAnchor, rootReplacement);
+  const declaration = 'export async function armsCommand(flags, driverEnv, deps = { recheck: recheckBatch, payloads: armPayloads, now: () => Date.now() }) {';
+  const registration = "HANDLERS.set('arms', (flags, env) => armsCommand(flags, env));";
+  if (text.split(declaration).length !== 2 || text.split(registration).length !== 2) throw new Error('fixture: C04 arms region markers are not unique');
+  const start = text.indexOf(declaration);
+  const end = text.indexOf(registration, start);
+  if (start < 0 || end <= start) throw new Error('fixture: C04 arms region ordering');
+  const prefix = text.slice(0, start);
+  const region = text.slice(start, end);
+  const suffix = text.slice(end);
+  const callbackAnchor = '  try {\n    const storeId = rs.storeId;';
+  const callbackReplacement = '  try {\n    deps.afterOpen?.();\n    const storeId = rs.storeId;';
+  if (region.split(callbackAnchor).length !== 2) throw new Error('fixture: C04 afterOpen anchor is not unique in armsCommand');
+  let armsRegion = region.replace(callbackAnchor, callbackReplacement);
+  if (options.nodeOverride === true) {
+    const nodeAnchor = '    const node = armNodeOf(run, storeId);';
+    const nodeReplacement = '    const measuredNode = armNodeOf(run, storeId);\n    const node = deps.nodeOverride?.(measuredNode) ?? measuredNode;';
+    if (armsRegion.split(nodeAnchor).length !== 2) throw new Error('fixture: C11 node override anchor is not unique in armsCommand');
+    armsRegion = armsRegion.replace(nodeAnchor, nodeReplacement);
+  }
+  let rebuilt = `${prefix}${armsRegion}${suffix}`;
+  if (options.n2ExcludedReader === true) {
+    const excludedDeclaration = 'function excludedReasonOf(ctx, q, arm) {';
+    const excludedEnd = 'const answeredAttempt =';
+    const excludedStartAt = rebuilt.indexOf(excludedDeclaration); const excludedEndAt = rebuilt.indexOf(excludedEnd, excludedStartAt);
+    if (excludedStartAt < 0 || excludedEndAt <= excludedStartAt) throw new Error('fixture: N2 excluded reader bounds missing');
+    const excludedPrefix = rebuilt.slice(0, excludedStartAt); const excludedRegion = rebuilt.slice(excludedStartAt, excludedEndAt); const excludedSuffix = rebuilt.slice(excludedEndAt);
+    const readAnchor = '  const read = readPlain(path.join(ctx.out, rel), OUT_JSON_CAP);';
+    const readReplacement = '  const answerPath = path.join(ctx.out, rel);\n  const read = ctx.n2ReadPlain?.({ path: answerPath, cap: OUT_JSON_CAP, actual: readPlain }) ?? readPlain(answerPath, OUT_JSON_CAP);';
+    if (excludedRegion.split(readAnchor).length !== 2) throw new Error('fixture: N2 read seam is not unique');
+    rebuilt = `${excludedPrefix}${excludedRegion.replace('function excludedReasonOf(ctx, q, arm) {', 'export function excludedReasonOf(ctx, q, arm) {').replace(readAnchor, readReplacement)}${excludedSuffix}`;
+  }
+  if (options.n2ManifestReader === true) {
+    const manifestDeclaration = 'function armManifestShas(ctx) {';
+    const manifestEnd = 'function excludeOwedArms(ctx, s) {';
+    const manifestStartAt = rebuilt.indexOf(manifestDeclaration); const manifestEndAt = rebuilt.indexOf(manifestEnd, manifestStartAt);
+    if (manifestStartAt < 0 || manifestEndAt <= manifestStartAt) throw new Error('fixture: N2 manifest reader bounds missing');
+    const manifestPrefix = rebuilt.slice(0, manifestStartAt); const manifestRegion = rebuilt.slice(manifestStartAt, manifestEndAt); const manifestSuffix = rebuilt.slice(manifestEndAt);
+    const tryAnchor = '  let names;\n  try {';
+    const dirAnchor = 'readdirSync(path.join(ctx.out, rel))';
+    const readAnchor = '    const read = readPlain(path.join(ctx.out, rel, n), OUT_JSON_CAP);';
+    const readReplacement = '    const manifestPath = path.join(ctx.out, rel, n);\n    const read = ctx.n2ReadPlain?.({ path: manifestPath, cap: OUT_JSON_CAP, actual: readPlain }) ?? readPlain(manifestPath, OUT_JSON_CAP);';
+    if (manifestRegion.split(tryAnchor).length !== 2 || manifestRegion.split(dirAnchor).length !== 2 || manifestRegion.split(readAnchor).length !== 2) throw new Error('fixture: N2 manifest seams are not unique');
+    const withDir = manifestRegion.replace(tryAnchor, '  let names;\n  const batchPath = path.join(ctx.out, rel);\n  try {').replace(dirAnchor, '(ctx.n2ReadDir?.({ path: batchPath, actual: readdirSync }) ?? readdirSync(batchPath))');
+    rebuilt = `${manifestPrefix}${withDir.replace('function armManifestShas(ctx) {', 'export function armManifestShas(ctx) {').replace(readAnchor, readReplacement)}${manifestSuffix}`;
+  }
+  if (options.c14Observers === true) {
+    const refreshDeclaration = 'function refreshPairIndex(rs, home) {';
+    const refreshEnd = '/** @param {ReplayStore} rs @param {string} home */\nfunction maskingSnapshotsOf';
+    const refreshStartAt = rebuilt.indexOf(refreshDeclaration); const refreshEndAt = rebuilt.indexOf(refreshEnd, refreshStartAt);
+    if (refreshStartAt < 0 || refreshEndAt <= refreshStartAt) throw new Error('fixture: C14 refresh bounds missing');
+    const refreshPrefix = rebuilt.slice(0, refreshStartAt); const refreshRegion = rebuilt.slice(refreshStartAt, refreshEndAt); const refreshSuffix = rebuilt.slice(refreshEndAt);
+    const candidateAnchor = '    candidate = pairIndexOf(rs.db, home);';
+    const candidateReplacement = '    candidate = rs.candidateOverride?.({ db: rs.db, home, actual: pairIndexOf, material: maskingMaterialOf, checked: maskingIndexChecked, materialLimit: MASKING_SNAPSHOT_MATERIAL_MAX }) ?? pairIndexOf(rs.db, home);';
+    if (refreshRegion.split(candidateAnchor).length !== 2) throw new Error('fixture: C14 candidate seam is not unique');
+    rebuilt = `${refreshPrefix}${refreshRegion.replace(candidateAnchor, candidateReplacement)}${refreshSuffix}`;
+  }
+  if (options.judgeObservers === true) {
+    const judgeDeclaration = 'export async function judgeCommand(flags, driverEnv, deps = { loadArmRun, armNodeOf, readArmAnswers, now: () => Date.now() }) {';
+    const judgeRegistration = "HANDLERS.set('judge', (flags, env) => judgeCommand(flags, env));";
+    const judgeStart = rebuilt.indexOf(judgeDeclaration); const judgeEnd = rebuilt.indexOf(judgeRegistration, judgeStart);
+    if (judgeStart < 0 || judgeEnd <= judgeStart) throw new Error('fixture: C12 judgeCommand bounds missing');
+    const judgePrefix = rebuilt.slice(0, judgeStart); const judgeRegion = rebuilt.slice(judgeStart, judgeEnd); const judgeSuffix = rebuilt.slice(judgeEnd);
+    const pickedAnchor = "      const picked = judgeItemsOf({ entries: own, answers: deps.readArmAnswers(out, section), arms: RECALL_ARMS, shaMinPrefix: r.labeller.sha_min_prefix });";
+    const pickedReplacement = "      const answers = deps.readArmAnswers(out, section);\n      const picked = pick({ entries: own, answers, arms: RECALL_ARMS, shaMinPrefix: r.labeller.sha_min_prefix });";
+    const snapshotsAnchor = '      const snapshots = maskingSnapshotsOf(rs, home);';
+    const snapshotsPrefix = '      const snapshots = ';
+    if (judgeRegion.split(pickedAnchor).length !== 2) throw new Error('fixture: C12 pick anchor is not unique');
+    let selected = judgeRegion.replace(pickedAnchor, pickedReplacement);
+    if (options.c14Observers === true) {
+      if (selected.split(snapshotsPrefix).length !== 2) throw new Error('fixture: C14 snapshot assignment prefix is not unique');
+      selected = selected.replace(snapshotsPrefix, '      deps.acquireJudgeSnapshots?.({ rs, home, refresh: maskingSnapshotsOf });\n' + snapshotsPrefix);
+    } else {
+      if (selected.split(snapshotsAnchor).length !== 2) throw new Error('fixture: C12 snapshot anchor is not unique');
+      selected = selected.replace(snapshotsAnchor, '      deps.acquireJudgeSnapshots?.({ rs, home, refresh: maskingSnapshotsOf });\n' + snapshotsAnchor);
+    }
+    let routed = selected.replaceAll('judgeItemsOf(', 'pick(').replaceAll('judgeJobsOf(', 'build(');
+    if (options.c14Observers === true) routed = routed.replaceAll('maskingSnapshotsOf(', 'acquire(').replaceAll('openJudge(', 'open(');
+    if (options.judgeComparisonObserver === true) routed = routed.replaceAll('sameMaskingText(', 'same(');
+    const wrapperAnchor = '      const answers = deps.readArmAnswers(out, section);';
+    const wrapper = `      const pick = (args) => { const result = judgeItemsOf(args); deps.afterPick?.({ args, result }); return result; };\n      const build = (args) => { const built = judgeJobsOf(args); deps.afterBuild?.({ args, built }); return deps.transformJobs?.({ args, built }) ?? built; };\n${options.c14Observers === true ? '      const acquire = (rs, home) => { deps.afterAcquire?.({ phase: \'before\', rs, home }); const snapshots = maskingSnapshotsOf(rs, home); deps.afterAcquire?.({ phase: \'after\', rs, home, snapshots }); return snapshots; };\n      const open = async (args) => { deps.afterOpenJudge?.({ phase: \'before\' }); const judge = await openJudge(args); deps.afterOpenJudge?.({ phase: \'after\', judge }); return judge; };\n' : ''}${options.judgeComparisonObserver === true ? '      const same = (a, b) => { deps.afterComparison?.({ a, b }); return sameMaskingText(a, b); };\n' : ''}`;
+    if (routed.split(wrapperAnchor).length !== 2) throw new Error('fixture: C12 wrapper insertion anchor is not unique');
+    rebuilt = `${judgePrefix}${routed.replace(wrapperAnchor, wrapper + wrapperAnchor)}${judgeSuffix}`;
+  }
+  if (options.acquireRetainedSnapshots === true) {
+    const preflightDeclaration = 'async function armBatchPreflight(ctx, pending) {';
+    const preflightEnd = 'function armManifestShas(ctx) {';
+    const preflightStartAt = rebuilt.indexOf(preflightDeclaration);
+    const preflightEndAt = rebuilt.indexOf(preflightEnd, preflightStartAt);
+    if (preflightStartAt < 0 || preflightEndAt <= preflightStartAt) throw new Error('fixture: C09 armBatchPreflight bounds missing');
+    const preflightPrefix = rebuilt.slice(0, preflightStartAt);
+    const preflight = rebuilt.slice(preflightStartAt, preflightEndAt);
+    const preflightSuffix = rebuilt.slice(preflightEndAt);
+    const acquisitionAnchor = '  const snapshots = maskingSnapshotsOf(ctx.rs, ctx.home);';
+    const acquisitionReplacement = '  ctx.deps.acquireRetainedSnapshots?.({ rs: ctx.rs, home: ctx.home, refresh: maskingSnapshotsOf });\n  const snapshots = maskingSnapshotsOf(ctx.rs, ctx.home);';
+    if (preflight.split(acquisitionAnchor).length !== 2) throw new Error('fixture: C09 acquisition anchor is not unique in armBatchPreflight');
+    rebuilt = `${preflightPrefix}${preflight.replace(acquisitionAnchor, acquisitionReplacement)}${preflightSuffix}`;
+  }
+  text = rebuilt;
+  const variant = join(mkTmp('ccrc-w2-5b1-t4-c04-'), 'c04-current-driver.mjs');
+  writeFileSync(variant, text, { mode: 0o600 });
+  try { return await import(`${pathToFileURL(variant).href}?v=${Date.now()}`) as W5b4R; }
+  finally { rmSync(variant); c04VariantCleaned = !existsSync(variant); }
+}
+
+w5b4It('W2-5b1 Task 4: C04 consumer, retained old recheck refuses before effects', async () => {
+  const c = await c04Prerequisite();
+  const variant = await c04Variant();
+  let callbacks = 0;
+  const r = await w5b4VariantArms(variant, c.home, c.argv, {
+    recheck: variant.recheckBatch, payloads: variant.armPayloads,
+    afterOpen: () => { callbacks += 1; rmSync(c.source); },
+  });
+  w5b4Expect(c04VariantCleaned, 'the imported variant was removed by its own finally').toBe(true);
+  w5b4Expect(callbacks, 'the sole post-open callback removes the fixture source once').toBe(1);
+  w5b4Expect(r.refusal).toEqual({ word: 'quiz-unanswerable', detail: `${c.entry.qid} clause (a) redact-fact` });
+  w5b4Expect(w5b4Manifests(c.out, 'pilot')).toEqual([]);
+  w5b4Expect(w5b4Versions(c.home)).toBe(0);
+  w5b4Expect(w5b4Runs(c.home)).toEqual([]);
+}, 180_000);
+
+w5b4It.skipIf(process.platform === 'darwin')('W2-5b1 Task 4: C04 CONTROL, unrelated fact without source reaches effects', async () => {
+  const s = await fwSetup({ limits: { batch_max: 2 } });
+  const r = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+  w5b4Expect(r.refusal).toBeNull();
+  w5b4Expect(w5b4Manifests(s.out, 'pilot')).toHaveLength(2);
+  w5b4Expect(w5b4Versions(s.home)).toBe(2);
+  w5b4Expect(w5b4Runs(s.home)).toHaveLength(4);
+}, 180_000);
+
+w5b4It.skipIf(process.platform === 'darwin')('W2-5b1 Task 4: F2 consumer, a failed refresh refuses before the next batch effects', async () => {
+  const s = await fwSetup({ limits: { batch_max: 2 } });
+  let broken = false;
+  const payloads = (view: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+    const payload = D4.armPayloads(view, id, question, cut) as W5b4R;
+    if (!broken && question === String(s.entries[0]!.question)) {
+      const writer = b1t2Store.openWriter(b1t2Lib.historyPaths(s.home).dbFile);
+      try { writer.exec('DROP TABLE meta'); broken = true; }
+      finally { b1t2Store.closeWriter(writer); }
+    }
+    return payload;
+  };
+  const r = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads });
+  w5b4Expect(r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshot-refresh-failed' });
+  w5b4Expect(broken, 'the first batch reached the real payload builder before the next refresh failed').toBe(true);
+  w5b4Expect(w5b4Manifests(s.out, 'pilot')).toHaveLength(1);
+  w5b4Expect(w5b4Versions(s.home)).toBe(1);
+  w5b4Expect(w5b4Runs(s.home)).toHaveLength(2);
+  for (const arm of W5B4_ARMS) w5b4Expect(existsSync(join(s.out, 'pilot', 'answers', `${s.entries[1]!.qid as string}.${arm}.json`))).toBe(false);
+}, 180_000);
+
+w5b4It.skipIf(process.platform === 'darwin')('W2-5b1 Task 4: F2 consumer, nine distinct readings refuse the ninth batch at the count cap', async () => {
+  const home = w5b4Home();
+  const fx = w5b4Pilot(home, { n: 9, over: { limits: { batch_max: 2 } } });
+  const values = Array.from({ length: 8 }, (_, i) => `f2 distinct snapshot fixture value ${String(i + 1).padStart(2, '0')}`);
+  let batchBuilds = 0;
+  const payloads = (_view: B1t2Rs, _id: number, _question: string, cut: W5b4R): W5b4R => {
+    if (batchBuilds < fx.entries.length && String(cut.qid) === String(fx.entries[batchBuilds]!.qid)) {
+      batchBuilds += 1;
+      if (batchBuilds <= values.length) fwLearn(home, values[batchBuilds - 1]!);
+    }
+    return { state: 'payloads', plain: `f2 plain ${String(cut.qid)}\n`, carded: `f2 carded ${String(cut.qid)}\n` };
+  };
+  const r = await w5b4Arms(home, fx.argv, { recheck: W5B4_FAKE.recheck, payloads });
+  w5b4Expect(r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-count-cap' });
+  w5b4Expect(batchBuilds, 'eight distinct batches built before the refused ninth was selected').toBe(8);
+  w5b4Expect(w5b4Manifests(fx.out, 'pilot')).toHaveLength(8);
+  w5b4Expect(w5b4Versions(home)).toBe(8);
+  w5b4Expect(w5b4Runs(home)).toHaveLength(16);
+  for (const arm of W5B4_ARMS) w5b4Expect(existsSync(join(fx.out, 'pilot', 'answers', `${fx.entries[8]!.qid as string}.${arm}.json`))).toBe(false);
+}, 240_000);
+
+w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4: fix wave, the pair index across arm batches', () => {
+  const learnedPairRun = async (learn: boolean): Promise<{ s: FwSetup; second: W5b4R; rechecks: string[][]; r: W5b4Result }> => {
+    const s = await fwSetup();
+    const reloaded = JSON.parse(readFileSync(s.frozen.path, 'utf8')) as { entries: W5b4R[] };
+    const second = s.entries[1]!;
+    w5b4Expect(reloaded.entries[1]!.qid, 'the selected later pending question is parsed frozen order').toBe(second.qid);
+    w5b4Expect(reloaded.entries[1]!.question, 'the observed recheck question is the reloaded question').toBe(second.question);
+    const { value, pair } = fwPairFor(second);
+    w5b4Expect(b1t2Lib.redactField(second.fact_raw as string, b1t2Lib.makePairIndex([pair])), 'CONTROL: the learned pair masks the selected later question fact').not.toContain(value);
+    const rechecks: string[][] = []; let calls = 0;
+    const recheck = async (rs: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => {
+      rechecks.push(entries.map((entry) => entry.qid as string));
+      w5b4Expect(entries[0]!.question, 'recheck receives the parsed pending question reference').toBe(s.entries.find((entry) => entry.qid === entries[0]!.qid)!.question);
+      return D4.recheckBatch(rs, entries, ctx);
+    };
+    const payloads = (rs: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+      const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
+      if (p.state !== 'payloads') throw new Error(`fixture: C01 payload ${p.why}`);
+      calls += 1;
+      if (learn && calls === 1) fwLearn(s.home, value);   // q1 completed before q2's refresh
+      return p;
+    };
+    return { s, second, rechecks, r: await w5b4Arms(s.home, s.argv, { recheck, payloads }) };
+  };
+
+  w5b4It('D-6481: a pair learned between batch 1 and batch 2 of one invocation refuses batch 2 quiz-unanswerable clause (a), because the pair index is refreshed per batch', async () => {
+    const learned = await learnedPairRun(true);
+    w5b4Expect(learned.r.refusal).toEqual({ word: 'quiz-unanswerable', detail: `${learned.second.qid as string} clause (a) redact-fact` });
+    w5b4Expect(learned.rechecks).toEqual([[learned.s.entries[0]!.qid], [learned.second.qid], [learned.second.qid]]);
+    const manifests = w5b4Manifests(learned.s.out, 'pilot');
+    w5b4Expect(manifests).toHaveLength(1);
+    w5b4Expect((manifests[0]!.runs as W5b4R[]).map((run) => run.qid)).toEqual([learned.s.entries[0]!.qid, learned.s.entries[0]!.qid]);
+    w5b4Expect(w5b4Runs(learned.s.home), 'batch 1 ran both arms, batch 2 spawned nothing').toHaveLength(2);
+    w5b4Expect(w5b4Versions(learned.s.home), 'batch 2 refused before its --version').toBe(1);
+  }, 180_000);
+
+  w5b4It('D-6481 CONTROL: without a learned durable pair, the later batch reaches its version and both arms', async () => {
+    const clean = await learnedPairRun(false);
+    w5b4Expect(clean.r.refusal).toBeNull();
+    w5b4Expect(clean.rechecks).toEqual([[clean.s.entries[0]!.qid], [clean.second.qid]]);
+    w5b4Expect(w5b4Manifests(clean.s.out, 'pilot')).toHaveLength(2);
+    w5b4Expect(w5b4Versions(clean.s.home)).toBe(2);
+    w5b4Expect(w5b4Runs(clean.s.home)).toHaveLength(4);
+  }, 180_000);
+
+  w5b4It('C03: removing a source after the first build refuses before the later batch manifest, version, or runs', async () => {
+    const value = ['zq', 'source6481', 'original', 'question'].join('-');
+    const s = await fwSetup({ limits: { batch_max: 2 } }, value, true);
+    const source = join(s.home, '.ccrc', 'fixture.token');
+    const first = s.entries[0]!;
+    const sourceEntry = s.entries.find((entry) => entry.qid === s.sourceQid)!;
+    const reloaded = JSON.parse(readFileSync(s.frozen.path, 'utf8')) as { entries: W5b4R[] };
+    const opened = D4.openReplayStore(s.home) as B1t2Rs;
+    try {
+      w5b4Expect(s.entries.indexOf(sourceEntry), 'the source question is later in parsed frozen order').toBe(1);
+      w5b4Expect(sourceEntry.question, 'the original source question was built before serialization').toBe(s.originalSourceQuestion);
+      w5b4Expect((sourceEntry.question as string).includes(value), 'the actual parsed source question contains the runtime source').toBe(true);
+      w5b4Expect(reloaded.entries[1]!.qid).toBe(s.sourceQid);
+      w5b4Expect(reloaded.entries[1]!.question).toBe(s.originalSourceQuestion);
+      w5b4Expect(b1t2Lib.redactField(sourceEntry.question as string, opened.idx), 'the real owner masks that same parsed question field').not.toContain(value);
+      w5b4Expect((opened.db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as B1t2CountRow).n, 'the transient source is not a durable pair before removal').toBe(0);
+    } finally { opened.close(); }
+    const rechecks: string[][] = []; const built: Array<{ qid: string; question: string; plain: string; carded: string }> = []; let removed = false;
+    const recheck = async (rs: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => {
+      rechecks.push(entries.map((entry) => entry.qid as string));
+      return D4.recheckBatch(rs, entries, ctx);
+    };
+    const payloads = (rs: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+      const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
+      if (p.state !== 'payloads') throw new Error(`fixture: payload ${p.why}`);
+      const qid = s.entries.find((entry) => entry.question === question)!.qid as string;
+      built.push({ qid, question, plain: p.plain as string, carded: p.carded as string });
+      if (qid === first!.qid && !removed) { removed = true; rmSync(source); }
+      return p;
+    };
+    const r = await w5b4Arms(s.home, s.argv, { recheck, payloads });
+    w5b4Expect(r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    w5b4Expect(rechecks, 'one-question batches retain actual snapshot iteration order').toEqual([[first.qid], [sourceEntry.qid], [sourceEntry.qid]]);
+    w5b4Expect(built.map((call) => call.qid), 'first builds once, then the later source question builds old and fresh').toEqual([first.qid, sourceEntry.qid, sourceEntry.qid]);
+    w5b4Expect(built.slice(1).every((call) => call.question === sourceEntry.question), 'both retained reads build the actual parsed source question').toBe(true);
+    const [oldRead, freshRead] = built.slice(1);
+    w5b4Expect({ plain: oldRead!.plain, carded: oldRead!.carded }).not.toEqual({ plain: freshRead!.plain, carded: freshRead!.carded });
+    w5b4Expect([oldRead!.plain.includes(value), oldRead!.carded.includes(value)]).toEqual([false, false]);
+    w5b4Expect([freshRead!.plain.includes(value), freshRead!.carded.includes(value)]).toEqual([true, true]);
+    const manifests = w5b4Manifests(s.out, 'pilot');
+    w5b4Expect(manifests).toHaveLength(1);
+    w5b4Expect((manifests[0]!.runs as W5b4R[]).map((run) => run.qid)).toEqual([first.qid, first.qid]);
+    w5b4Expect(w5b4Versions(s.home)).toBe(1);
+    w5b4Expect(w5b4Runs(s.home)).toHaveLength(2);
+    const after = D4.openReplayStore(s.home) as B1t2Rs;
+    try { w5b4Expect((after.db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as B1t2CountRow).n, 'the source removal never writes a durable pair').toBe(0); }
+    finally { after.close(); }
+  }, 180_000);
+
+  w5b4It('C03 CONTROL: real owner baseline bytes match every persisted qid and arm', async () => {
+    const value = ['zq', 'source6481', 'original', 'control'].join('-');
+    const s = await fwSetup({ limits: { batch_max: 2 } }, value, true);
+    const baseline = new Map<string, Map<string, string>>();
+    const opened = D4.openReplayStore(s.home) as B1t2Rs;
+    try {
+      const verdicts = await D4.recheckBatch(opened, s.entries, { configDirs: B1T2_DIRS });
+      for (const entry of s.entries) {
+        const verdict = verdicts.get(entry.qid as string)!;
+        const p = D4.armPayloads(opened, verdict.boundaryEntryId, entry.question as string, verdict.cut) as W5b4R;
+        if (p.state !== 'payloads' || typeof p.plain !== 'string' || typeof p.carded !== 'string') throw new Error('fixture: owner baseline payloads');
+        baseline.set(entry.qid as string, new Map([[W5B4_CONTROL, p.plain], [W5B4_TREATMENT, p.carded]]));
+      }
+      w5b4Expect((opened.db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as B1t2CountRow).n, 'the unchanged source is not durable').toBe(0);
+    } finally { opened.close(); }
+    const r = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(r.refusal).toBeNull();
+    const manifests = w5b4Manifests(s.out, 'pilot'); const runs = w5b4Runs(s.home);
+    w5b4Expect(manifests).toHaveLength(2); w5b4Expect(w5b4Versions(s.home)).toBe(2); w5b4Expect(runs).toHaveLength(4);
+    const expectedPairs = new Set(s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`)));
+    const seen = new Set<string>();
+    for (const manifest of manifests) for (const run of manifest.runs as W5b4R[]) {
+      const pair = `${run.qid as string}:${run.arm as string}`;
+      w5b4Expect(expectedPairs.has(pair), `manifest pair ${pair}`).toBe(true); w5b4Expect(seen.has(pair), `duplicate manifest pair ${pair}`).toBe(false); seen.add(pair);
+      const expected = baseline.get(run.qid as string)!.get(run.arm as string)!;
+      w5b4Expect(run.stdin_sha256).toBe(sha256Hex(expected));
+      const persisted = w5b4Json(join(s.out, `${run.name as string}.run.json`));
+      const matching = runs.filter((item) => item.cwd === persisted.cwd);
+      w5b4Expect(matching, `one stub run for ${pair}`).toHaveLength(1);
+      w5b4Expect([matching[0]!.env.CCRC_RECALL_ARM, matching[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, s.entries.find((entry) => entry.qid === run.qid)!.boundary_uuid]);
+      w5b4Expect(matching[0]!.stdin).toBe(expected);
+    }
+    w5b4Expect(seen).toEqual(expectedPairs);
+    const after = D4.openReplayStore(s.home) as B1t2Rs;
+    try { w5b4Expect((after.db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as B1t2CountRow).n, 'the unchanged source remains non-durable').toBe(0); }
+    finally { after.close(); }
+  }, 180_000);
+
+  const C05_OLD = ['Qa7', 'Mb2', 'Lc9', 'Rd4', 'Xe6', 'Tf3', 'Hg8', 'Pk5'].join('');
+  const C05_NEW = ['Zu1', 'Yi2', 'Xo3', 'Wv4', 'Ns5', 'Kr6', 'Jq7', 'Ip8'].join('');
+  const C05_STABLE = ['neutral', 'stable', 'content'].join('-');
+  const c05Source = (s: FwSetup): string => join(s.home, '.ccrc', 'fixture.token');
+  const c05Replace = (s: FwSetup, value: string): void => writeFileSync(c05Source(s), `${value}\n`, { mode: 0o600 });
+  const c05Pairs = (rs: B1t2Rs, label: string, expectedCount = 0, member: string | null = null): void => {
+    w5b4Expect((rs.db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as B1t2CountRow).n, label).toBe(expectedCount);
+    if (member !== null) w5b4Expect((rs.db.prepare('SELECT count(*) AS n FROM redact_hashes WHERE len = ? AND sha256 = ?')
+      .get(member.length, Buffer.from(b1t2Lib.sha256Hex(member), 'hex')) as B1t2CountRow).n, `${label}: pair membership`).toBe(1);
+  };
+  type C05PayloadSet = { payloads: Map<string, Map<string, string>>; idx: W5b4R };
+  const c05Payloads = async (s: FwSetup, pairs: { count?: number; member?: string | null } = {}): Promise<C05PayloadSet> => {
+    const rs = D4.openReplayStore(s.home) as B1t2Rs;
+    try {
+      c05Pairs(rs, 'C05 declared source pair state', pairs.count ?? 0, pairs.member ?? null);
+      const verdicts = await D4.recheckBatch(rs, s.entries, { configDirs: B1T2_DIRS });
+      const payloads = new Map<string, Map<string, string>>();
+      for (const entry of s.entries) {
+        const verdict = verdicts.get(entry.qid as string)!;
+        const p = D4.armPayloads(rs, verdict.boundaryEntryId, entry.question as string, verdict.cut) as W5b4R;
+        if (p.state !== 'payloads' || typeof p.plain !== 'string' || typeof p.carded !== 'string') throw new Error('fixture: C05 owner payloads');
+        payloads.set(entry.qid as string, new Map([[W5B4_CONTROL, p.plain], [W5B4_TREATMENT, p.carded]]));
+      }
+      return { payloads, idx: rs.idx as W5b4R };
+    } finally { rs.close(); }
+  };
+  const c05ArmPrecondition = async (s: FwSetup, target: string | null): Promise<Map<string, Map<string, string>>> => {
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    const original = s.entries[1]!.question as string;
+    w5b4Expect(target === null || original.includes(target), 'C05 original target is present in the parsed later question').toBe(true);
+    const old = await c05Payloads(s);
+    c05Replace(s, C05_NEW);
+    const fresh = await c05Payloads(s);
+    c05Replace(s, C05_OLD);
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8') === frozen, 'C05 source rotation never changes frozen original bytes').toBe(true);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8') === `${C05_OLD}\n`, 'C05 precondition restores the initial declared source').toBe(true);
+    const oldMasked = target === null ? false : !b1t2Lib.redactField(original, old.idx).includes(target);
+    const freshMasked = target === null ? false : !b1t2Lib.redactField(original, fresh.idx).includes(target);
+    if (target === C05_OLD) w5b4Expect([oldMasked, freshMasked], 'C05 old-only target is masked only by the old loaded source').toEqual([true, false]);
+    else if (target === C05_NEW) w5b4Expect([oldMasked, freshMasked], 'C05 new-only target is masked only by the fresh loaded source').toEqual([false, true]);
+    else {
+      for (const entry of s.entries) {
+        const before = old.payloads.get(entry.qid as string)!;
+        const after = fresh.payloads.get(entry.qid as string)!;
+        for (const arm of W5B4_ARMS) w5b4Expect(before.get(arm), 'C05 unaffected whole arm input remains equal').toBe(after.get(arm));
+      }
+      return old.payloads;
+    }
+    const qid = s.entries[1]!.qid as string;
+    for (const arm of W5B4_ARMS) w5b4Expect(old.payloads.get(qid)!.get(arm), 'C05 affected real payload bytes differ across the loaded source rotation').not.toBe(fresh.payloads.get(qid)!.get(arm));
+    return old.payloads;
+  };
+  const c05ArmCase = async (target: string, control = false): Promise<{ s: FwSetup; baseline: Map<string, Map<string, string>>; r: W5b4Result }> => {
+    const fixture: FwSourceFixture = { declaredSourceValue: C05_OLD, storedSummary: C05_STABLE,
+      laterQuestion: control ? C05_STABLE : `fixture rotation ${target}` };
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, fixture);
+    const sourceEntry = s.entries[1]!;
+    const reloaded = JSON.parse(readFileSync(s.frozen.path, 'utf8')) as { entries: W5b4R[] };
+    w5b4Expect(reloaded.entries[1]!.qid, 'C05 parsed qid order retains the source-isolated later entry').toBe(sourceEntry.qid);
+    w5b4Expect(fixture.storedSummary === C05_STABLE, 'C05 stored summary is isolated from the declared source value').toBe(true);
+    w5b4Expect(reloaded.entries[1]!.question, 'C05 later parsed question is the original source-isolated field').toBe(fixture.laterQuestion);
+    const baseline = await c05ArmPrecondition(s, control ? null : target);
+    let calls = 0;
+    const recheck = (rs: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => D4.recheckBatch(rs, entries, ctx);
+    const payloads = (rs: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+      const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
+      if (p.state !== 'payloads') throw new Error(`fixture: C05 payload ${p.why}`);
+      calls += 1;
+      if (calls === 1) c05Replace(s, C05_NEW);
+      return p;
+    };
+    return { s, baseline, r: await w5b4Arms(s.home, s.argv, { recheck, payloads }) };
+  };
+
+  const c05ArmRefusalEffects = (c: { s: FwSetup; r: W5b4Result }): void => {
+    w5b4Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    const manifests = w5b4Manifests(c.s.out, 'pilot');
+    w5b4Expect(manifests).toHaveLength(1);
+    w5b4Expect((manifests[0]!.runs as W5b4R[]).map((run) => `${run.qid as string}:${run.arm as string}`).sort()).toEqual(W5B4_ARMS.map((arm) => `${c.s.entries[0]!.qid as string}:${arm}`).sort());
+    w5b4Expect(w5b4Versions(c.s.home)).toBe(1);
+    w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(2);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs;
+    try { c05Pairs(rs, 'C05 affected arms source rotation remains non-durable after the consumer'); }
+    finally { rs.close(); }
+  };
+
+  w5b4It('C05 arms old-only rotation refuses', async () => {
+    c05ArmRefusalEffects(await c05ArmCase(C05_OLD));
+  }, 180_000);
+
+  w5b4It('C05 arms new-only rotation refuses', async () => {
+    c05ArmRefusalEffects(await c05ArmCase(C05_NEW));
+  }, 180_000);
+
+  w5b4It('C05 arms rotation keeps unaffected inputs equal', async () => {
+    const c = await c05ArmCase(C05_STABLE, true);
+    w5b4Expect(c.r.refusal).toBeNull();
+    const manifests = w5b4Manifests(c.s.out, 'pilot');
+    w5b4Expect(manifests).toHaveLength(2); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4);
+    const expectedPairs = new Set(c.s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`)));
+    const seen = new Set<string>();
+    const stubs = w5b4Runs(c.s.home);
+    for (const manifest of manifests) for (const run of manifest.runs as W5b4R[]) {
+      const pair = `${run.qid as string}:${run.arm as string}`;
+      w5b4Expect(expectedPairs.has(pair), 'C05 control manifest has only expected qid/arm pairs').toBe(true);
+      w5b4Expect(seen.has(pair), 'C05 control manifest records each qid/arm once').toBe(false); seen.add(pair);
+      const expected = c.baseline.get(run.qid as string)!.get(run.arm as string)!;
+      w5b4Expect(run.stdin_sha256).toBe(sha256Hex(expected));
+      const persisted = w5b4Json(join(c.s.out, `${run.name as string}.run.json`));
+      const matches = stubs.filter((item) => item.cwd === persisted.cwd);
+      w5b4Expect(matches).toHaveLength(1);
+      w5b4Expect([matches[0]!.env.CCRC_RECALL_ARM, matches[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, c.s.entries.find((entry) => entry.qid === run.qid)!.boundary_uuid]);
+      w5b4Expect(matches[0]!.stdin).toBe(expected);
+    }
+    w5b4Expect(seen).toEqual(expectedPairs);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs;
+    try { c05Pairs(rs, 'C05 unchanged arms control remains non-durable after the consumer'); }
+    finally { rs.close(); }
+  }, 180_000);
+
+  const c05SeedAnswers = async (s: FwSetup, reply: string): Promise<void> => {
+    // Both frozen questions share the stored boundary, so the recording stub has one key per arm.
+    for (const arm of W5B4_ARMS) w5b4Act(s.home, s.entries[0]!, arm, '.jsonl', w5b4Stream({ text: reply }));
+    const armed = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(armed.refusal, 'C05 judge setup uses real settled arm records').toBeNull();
+    const actual = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[];
+    const expected = new Set(s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`)));
+    w5b4Expect(actual).toHaveLength(4);
+    w5b4Expect(new Set(actual.map((record) => `${record.qid}:${record.arm}`))).toEqual(expected);
+    w5b4Expect(actual.every((record) => record.outcome === 'answered' && record.reply === reply), 'C05 actual settled replies retain the selected raw source field').toBe(true);
+  };
+  const c05JudgePrecondition = (s: FwSetup, target: string | null): { map: W5b4R[]; old: W5b4R[] } => {
+    const records = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[];
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    const raw = records.map((record) => record.reply ?? '');
+    w5b4Expect(records).toHaveLength(4);
+    w5b4Expect(target === null || raw.every((reply) => reply.includes(target)), 'C05 actual settled replies contain the selected original target').toBe(true);
+    w5b4Expect(target !== null || raw.every((reply) => !reply.includes(C05_OLD) && !reply.includes(C05_NEW)), 'C05 stable actual replies contain neither rotation source').toBe(true);
+    const map = D4.judgeMapOf(W5B5_SEED, s.entries, W5B4_ARMS) as W5b4R[];
+    const jobs = (): { jobs: W5b4R[]; idx: W5b4R } => {
+      const rs = D4.openReplayStore(s.home) as B1t2Rs;
+      try {
+        c05Pairs(rs, 'C05 judge declared source does not write durable pairs');
+        const picked = D4.judgeItemsOf({ entries: s.entries, answers: records, arms: W5B4_ARMS, shaMinPrefix: 7 });
+        return { jobs: D4.judgeJobsOf({ items: picked.items, map, idx: rs.idx as W5b4R }) as W5b4R[], idx: rs.idx as W5b4R };
+      } finally { rs.close(); }
+    };
+    const old = jobs(); c05Replace(s, C05_NEW); const fresh = jobs(); c05Replace(s, C05_OLD);
+    w5b4Expect(old.jobs).toHaveLength(4); w5b4Expect(fresh.jobs).toHaveLength(4);
+    w5b4Expect(JSON.stringify(D4.readArmAnswers(s.out, 'pilot')) === JSON.stringify(records), 'C05 source rotation never changes settled raw answers').toBe(true);
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8') === frozen, 'C05 source rotation never changes frozen judge input').toBe(true);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8') === `${C05_OLD}\n`, 'C05 judge precondition restores seed source').toBe(true);
+    if (target === C05_OLD || target === C05_NEW) {
+      const oldMasked = old.jobs.every((job) => !String((job.input as W5b4R).reply).includes(target));
+      const freshMasked = fresh.jobs.every((job) => !String((job.input as W5b4R).reply).includes(target));
+      w5b4Expect([oldMasked, freshMasked], target === C05_OLD ? 'C05 old reply is masked only by old source' : 'C05 new reply is masked only by fresh source').toEqual(target === C05_OLD ? [true, false] : [false, true]);
+      w5b4Expect(JSON.stringify(old.jobs.map((job) => job.input)) !== JSON.stringify(fresh.jobs.map((job) => job.input)), 'C05 real old and fresh job bytes differ').toBe(true);
+    } else w5b4Expect(old.jobs.map((job) => job.input)).toEqual(fresh.jobs.map((job) => job.input));
+    return { map, old: old.jobs };
+  };
+  const c05JudgeCase = async (target: string, control = false): Promise<{ s: FwSetup; old: W5b4R[]; reads: number; judge: Awaited<ReturnType<typeof w5b5InProcess>> }> => {
+    const fixture: FwSourceFixture = { declaredSourceValue: C05_OLD, storedSummary: C05_STABLE, laterQuestion: C05_STABLE };
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, fixture);
+    const reply = control ? `ANSWER: UNKNOWN\n${C05_STABLE}` : `ANSWER: UNKNOWN\n${target}`;
+    await c05SeedAnswers(s, reply);
+    const pre = c05JudgePrecondition(s, control ? null : target);
+    let reads = 0;
+    const records = (): W5b5Answer[] => { reads += 1; const actual = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[]; c05Replace(s, C05_NEW); return actual; };
+    const judge = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(s.out, 'pilot'), W5B5_ENV(s.home),
+      { loadArmRun: () => w5b5Run(s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(s.home, { expected: D4.expectedForNode(s.draft, s.storeId).expected }), readArmAnswers: records, now: () => Date.now() }));
+    return { s, old: pre.old, reads, judge };
+  };
+
+  const c05JudgeRefusalEffects = (c: { s: FwSetup; reads: number; judge: Awaited<ReturnType<typeof w5b5InProcess>> }): void => {
+    w5b4Expect(c.judge.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree judge' });
+    w5b4Expect(c.reads, 'C05 command seam returns actual settled records once').toBe(1);
+    w5b4Expect(w5b4Versions(c.s.home)).toBe(2);
+    w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4);
+    w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judge'))).toBe(false);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs;
+    try { c05Pairs(rs, 'C05 affected judge source rotation remains non-durable after the consumer'); }
+    finally { rs.close(); }
+  };
+
+  w5b4It('C05 judge old-only rotation refuses', async () => {
+    c05JudgeRefusalEffects(await c05JudgeCase(C05_OLD));
+  }, 180_000);
+
+  w5b4It('C05 judge new-only rotation refuses', async () => {
+    c05JudgeRefusalEffects(await c05JudgeCase(C05_NEW));
+  }, 180_000);
+
+  w5b4It('C05 judge rotation keeps unaffected inputs equal', async () => {
+    const c = await c05JudgeCase(C05_STABLE, true);
+    w5b4Expect(c.judge.refusal).toBeNull();
+    w5b4Expect(c.reads, 'C05 control command seam returns actual settled records once').toBe(1);
+    const dir = join(c.s.out, 'pilot', 'judge');
+    const inputs = readdirSync(dir).filter((name) => name.endsWith('.input.json'));
+    w5b4Expect(c.old).toHaveLength(4); w5b4Expect(inputs).toHaveLength(4);
+    const armRuns = 4;
+    const allRuns = w5b4Runs(c.s.home);
+    const judgeRuns = allRuns.slice(armRuns);
+    w5b4Expect(w5b4Versions(c.s.home)).toBe(5);
+    w5b4Expect(judgeRuns).toHaveLength(8);
+    const expectedAttempts = new Set(c.old.flatMap((job) => [1, 2].map((attempt) => `${job.id as string}:${attempt}`)));
+    const seen = new Set<string>();
+    for (const job of c.old) {
+      const persisted = readFileSync(join(dir, `${job.id as string}.input.json`), 'utf8');
+      w5b4Expect(persisted).toBe(`${w5b4Lib.canonicalJson(job.input)}\n`);
+      for (const attempt of [1, 2]) {
+        const key = `${job.id as string}:${attempt}`;
+        const runRecord = w5b4Json(join(dir, `${job.id as string}-${attempt}.run.json`));
+        const matches = judgeRuns.filter((run) => run.cwd === runRecord.cwd);
+        w5b4Expect(matches).toHaveLength(1);
+        w5b4Expect(seen.has(key), 'C05 control judge attempt is unique').toBe(false); seen.add(key);
+        w5b4Expect(matches[0]!.stdin).toBe(W5B5.judgeStdin('v1', job.input));
+      }
+    }
+    w5b4Expect(seen).toEqual(expectedAttempts);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs;
+    try { c05Pairs(rs, 'C05 unchanged judge control remains non-durable after the consumer'); }
+    finally { rs.close(); }
+  }, 180_000);
+
+  // C06 derives four fixed belt-only forms from the owner suite's runtime construction; pair-only indexes stay direct controls.
+  const C06_BELT = ['QP', 'aB3cD4e', 'Fg5Hi6Jk', 'Lm7No8Pq', 'R9sT0uV'].join('');
+  const C06_PARTIAL = C06_BELT.slice(1);
+  const C06_BS = String.fromCharCode(0x5c);
+  const C06_ESC = String.fromCharCode(0x1b);
+  const C06_JSON = [...C06_PARTIAL].map((c, i) => i % 8 === 7 ? `${C06_BS}u00${c.charCodeAt(0).toString(16).padStart(2, '0')}` : c).join('');
+  const C06_ANSI = [C06_PARTIAL.slice(0, 10), `${C06_ESC}[1m`, C06_PARTIAL.slice(10, 20), `${C06_ESC}[0m`, C06_PARTIAL.slice(20)].join('');
+  const C06_GLUED = ['ab', C06_PARTIAL, 'cd'].join('');
+  const c06PairOnly = (): W5b4R => b1t2Lib.makePairIndex(b1t2Lib.secretPairs([C06_BELT]).pairs, null) as W5b4R;
+  const c06OwnerForms = (forms: ReadonlyArray<readonly [string, string]>, idx: W5b4R, pairOnly: W5b4R, label: string): void => {
+    for (const [name, form] of forms) {
+      w5b4Expect(b1t2Lib.redactField(form, pairOnly) === form, `${label}: pair-only leaves ${name}`).toBe(true);
+      w5b4Expect(b1t2Lib.redactField(form, idx) !== form, `${label}: source-loaded belt changes ${name}`).toBe(true);
+    }
+  };
+  const c06PayloadSet = async (s: FwSetup, sourcePresent: boolean): Promise<C05PayloadSet> => {
+    const built = await c05Payloads(s);
+    w5b4Expect((built.idx.belt as W5b4R).texts.includes(C06_BELT), 'C06 source-loader admission matches the declared source state').toBe(sourcePresent);
+    return built;
+  };
+  const c06Remove = (s: FwSetup): void => rmSync(c05Source(s));
+  const c06ArmCase = async (remove: boolean): Promise<{ s: FwSetup; baseline: Map<string, Map<string, string>>; r: W5b4Result }> => {
+    const forms = [['proper partial', C06_PARTIAL], ['JSON escaped partial', C06_JSON]] as const;
+    w5b4Expect([C06_BELT.length, C06_PARTIAL.length], 'C06 fixed source and proper partial lengths').toEqual([32, 31]);
+    const fixture: FwSourceFixture = { declaredSourceValue: C06_BELT, storedSummary: C05_STABLE, laterQuestion: ['fixture belt', ...forms.map(([, form]) => form)].join(' ') };
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, fixture);
+    const reloaded = JSON.parse(readFileSync(s.frozen.path, 'utf8')) as { entries: W5b4R[] };
+    w5b4Expect(reloaded.entries[1]!.qid, 'C06 arm source qid remains parsed later order').toBe(s.entries[1]!.qid);
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    w5b4Expect(forms.every(([, form]) => reloaded.entries[1]!.question.includes(form)), 'C06 arm original question holds partial and JSON forms before serialization').toBe(true);
+    const old = await c06PayloadSet(s, true);
+    c06OwnerForms(forms, old.idx, c06PairOnly(), 'C06 arms');
+    if (remove) c06Remove(s); else c05Replace(s, C06_BELT);
+    const fresh = await c06PayloadSet(s, !remove);
+    if (remove) {
+      for (const [, form] of forms) w5b4Expect(b1t2Lib.redactField(form, fresh.idx) === form, 'C06 arms fresh index leaves each original form unchanged').toBe(true);
+      c05Replace(s, C06_BELT);
+    }
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8') === frozen, 'C06 arm source state never changes frozen original bytes').toBe(true);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8') === `${C06_BELT}\n`, 'C06 arms precondition restores the declared source').toBe(true);
+    const qid = s.entries[1]!.qid as string;
+    if (remove) for (const arm of W5B4_ARMS) w5b4Expect(old.payloads.get(qid)!.get(arm), 'C06 old and fresh real arm bytes differ').not.toBe(fresh.payloads.get(qid)!.get(arm));
+    else for (const entry of s.entries) for (const arm of W5B4_ARMS) w5b4Expect(old.payloads.get(entry.qid as string)!.get(arm), 'C06 unchanged source preserves every arm byte').toBe(fresh.payloads.get(entry.qid as string)!.get(arm));
+    let calls = 0;
+    const recheck = (rs: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => D4.recheckBatch(rs, entries, ctx);
+    const payloads = (rs: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+      const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
+      if (p.state !== 'payloads') throw new Error(`fixture: C06 payload ${p.why}`);
+      calls += 1;
+      if (remove && calls === 1) c06Remove(s);
+      return p;
+    };
+    return { s, baseline: old.payloads, r: await w5b4Arms(s.home, s.argv, { recheck, payloads }) };
+  };
+
+  w5b4It('C06 arms belt partial and JSON escape refuse', async () => {
+    const c = await c06ArmCase(true);
+    w5b4Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    const manifests = w5b4Manifests(c.s.out, 'pilot');
+    w5b4Expect(manifests).toHaveLength(1);
+    w5b4Expect((manifests[0]!.runs as W5b4R[]).map((run) => `${run.qid as string}:${run.arm as string}`).sort()).toEqual(W5B4_ARMS.map((arm) => `${c.s.entries[0]!.qid as string}:${arm}`).sort());
+    w5b4Expect(w5b4Versions(c.s.home)).toBe(1); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(2);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C06 arms removal stays non-durable'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('C06 arms belt source unchanged succeeds', async () => {
+    const c = await c06ArmCase(false);
+    w5b4Expect(c.r.refusal).toBeNull();
+    const manifests = w5b4Manifests(c.s.out, 'pilot'); const stubs = w5b4Runs(c.s.home);
+    w5b4Expect(manifests).toHaveLength(2); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(stubs).toHaveLength(4);
+    const expectedPairs = new Set(c.s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`)));
+    const seen = new Set<string>();
+    for (const manifest of manifests) for (const run of manifest.runs as W5b4R[]) {
+      const pair = `${run.qid as string}:${run.arm as string}`;
+      w5b4Expect(expectedPairs.has(pair), 'C06 arms control only emits expected qid/arm keys').toBe(true);
+      w5b4Expect(seen.has(pair), 'C06 arms control emits each qid/arm once').toBe(false); seen.add(pair);
+      const expected = c.baseline.get(run.qid as string)!.get(run.arm as string)!;
+      w5b4Expect(run.stdin_sha256).toBe(sha256Hex(expected));
+      const persisted = w5b4Json(join(c.s.out, `${run.name as string}.run.json`));
+      const matches = stubs.filter((stub) => stub.cwd === persisted.cwd); w5b4Expect(matches).toHaveLength(1);
+      w5b4Expect([matches[0]!.env.CCRC_RECALL_ARM, matches[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, c.s.entries.find((entry) => entry.qid === run.qid)!.boundary_uuid]);
+      w5b4Expect(matches[0]!.stdin).toBe(expected);
+    }
+    w5b4Expect(seen).toEqual(expectedPairs);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C06 unchanged arms control remains non-durable'); } finally { rs.close(); }
+  }, 180_000);
+
+  // C09 uses the full declared command so source admission retains its 18-character workspace unit.
+  const C09_MIDDLE = B1T2_CMD;
+  type C09Call = { view: B1t2Rs; idx: unknown; entries: W5b4R[]; rootIdx: unknown };
+  const c09WithStore = async <T>(s: FwSetup, value: string, fn: (rs: B1t2Rs) => Promise<T>): Promise<T> => {
+    c05Replace(s, value);
+    const rs = D4.openReplayStore(s.home) as B1t2Rs;
+    try { c05Pairs(rs, 'C09 declared source remains non-durable'); return await fn(rs); }
+    finally { rs.close(); }
+  };
+  const c09Payloads = async (s: FwSetup, value: string): Promise<Map<string, Map<string, string>>> => {
+    c05Replace(s, value);
+    return (await c05Payloads(s)).payloads;
+  };
+  const c09Case = async (middle: string): Promise<{ s: FwSetup; baseline: Map<string, Map<string, string>>; calls: C09Call[]; snapshots: unknown[]; seed: unknown; rootIdx: unknown; cleaned: boolean; r: W5b4Result }> => {
+    const fixture: FwSourceFixture = { declaredSourceValue: C05_OLD, storedSummary: C05_STABLE, laterQuestion: null };
+    const s = await fwSetup({ limits: { batch_max: 4 } }, null, false, fixture);
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    const command = s.entries.find((entry) => entry.kind === 'command')!;
+    const sha = s.entries.find((entry) => entry.kind === 'sha')!;
+    w5b4Expect(s.entries).toHaveLength(2);
+    w5b4Expect(command.fact).toBe(B1T2_CMD); w5b4Expect(sha.fact).toBe(B1T2_SHA);
+    const baseline = await c09Payloads(s, C05_OLD);
+    if (middle === C09_MIDDLE) {
+      await c09WithStore(s, middle, async (rs) => {
+        w5b4Expect(C09_MIDDLE.length, 'C09 admits the full command source, never the short workspace unit alone').toBeGreaterThanOrEqual(20);
+        w5b4Expect(b1t2Lib.secretUnits(C09_MIDDLE)).toContain(B1T2_VALUE);
+        w5b4Expect(((rs.idx as W5b4R).belt as W5b4R).texts).toContain(B1T2_VALUE);
+        w5b4Expect(b1t2Lib.redactField(command.fact as string, rs.idx)).not.toContain(B1T2_VALUE);
+        await w5b4Expect(D4.recheckBatch(rs, s.entries, { configDirs: B1T2_DIRS })).rejects.toMatchObject({
+          word: 'quiz-unanswerable', detail: `${command.qid as string} clause (a) redact-fact`,
+        });
+      });
+    } else {
+      const controlMiddle = await c09Payloads(s, middle);
+      for (const entry of s.entries) for (const arm of W5B4_ARMS) w5b4Expect(controlMiddle.get(entry.qid as string)!.get(arm), 'C09 control middle owner payload baseline agrees').toBe(baseline.get(entry.qid as string)!.get(arm));
+    }
+    await c09WithStore(s, C05_OLD, async (rs) => { await w5b4Expect(D4.recheckBatch(rs, s.entries, { configDirs: B1T2_DIRS })).resolves.toBeInstanceOf(Map); });
+    const newPayloads = await c09Payloads(s, C05_NEW);
+    for (const entry of s.entries) for (const arm of W5B4_ARMS) w5b4Expect(newPayloads.get(entry.qid as string)!.get(arm), 'C09 new owner payload baseline agrees').toBe(baseline.get(entry.qid as string)!.get(arm));
+    c05Replace(s, C05_OLD);
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8'), 'C09 source rotations never mutate frozen bytes').toBe(frozen);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8'), 'C09 restores the declared old source before variant store open').toBe(`${C05_OLD}\n`);
+    const variant = await c04Variant({ acquireRetainedSnapshots: true });
+    const calls: C09Call[] = []; const snapshots: unknown[] = []; let seed: unknown = null; let root: B1t2Rs | null = null; let acquired = 0;
+    const recheck = async (view: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => {
+      const idx = view.idx; calls.push({ view, idx, entries, rootIdx: root!.idx });
+      await Promise.resolve();
+      w5b4Expect(view.idx, 'C09 isolated view index remains stable through recheck await').toBe(idx);
+      w5b4Expect(root!.idx, 'C09 root store stays on the final retained index during isolated builds').toBe(snapshots[2]);
+      return variant.recheckBatch(view, entries, ctx);
+    };
+    const acquireRetainedSnapshots = ({ rs, home, refresh }: W5b4R) => {
+      acquired += 1; w5b4Expect(acquired, 'C09 acquisition runs once in one arms command').toBe(1);
+      root = rs as B1t2Rs; seed = rs.idx;
+      const old = refresh(rs, home); const oldIdx = (old as W5b4R[])[0]!.idx;
+      c05Replace(s, middle);
+      const middleRead = refresh(rs, home); const middleIdx = (middleRead as W5b4R[])[1]!.idx;
+      c05Replace(s, C05_NEW);
+      const newest = refresh(rs, home); const newIdx = (newest as W5b4R[])[2]!.idx;
+      snapshots.push(oldIdx, middleIdx, newIdx);
+      w5b4Expect((newest as W5b4R[]).every((snapshot: W5b4R, i: number) => snapshot.idx === snapshots[i]), 'C09 descriptor order retains exact index identities').toBe(true);
+      w5b4Expect(new Set(snapshots).size, 'C09 retains three actual distinct indexes').toBe(3);
+      w5b4Expect(seed, 'C09 seed identity is retained snapshot zero').toBe(oldIdx);
+      w5b4Expect(rs.idx, 'C09 real root store advances to the final retained index').toBe(newIdx);
+    };
+    const r = await w5b4VariantArms(variant, s.home, s.argv, { recheck, payloads: variant.armPayloads, acquireRetainedSnapshots });
+    return { s, baseline, calls, snapshots, seed, rootIdx: root!.idx, cleaned: c04VariantCleaned, r };
+  };
+
+  w5b4It('C09 middle-recheck-veto', async () => {
+    const c = await c09Case(C09_MIDDLE);
+    const command = c.s.entries.find((entry) => entry.kind === 'command')!;
+    w5b4Expect(c.r.refusal).toEqual({ word: 'quiz-unanswerable', detail: `${command.qid as string} clause (a) redact-fact` });
+    w5b4Expect(c.cleaned, 'C09 complete variant is removed after expected refusal').toBe(true);
+    w5b4Expect(c.calls).toHaveLength(2);
+    const actual = c.calls[0]!.entries;
+    w5b4Expect(actual.map((entry) => [entry.qid, entry.question, entry.fact, entry.kind]), 'C09 first actual qs matches the parsed frozen content').toEqual(c.s.entries.map((entry) => [entry.qid, entry.question, entry.fact, entry.kind]));
+    w5b4Expect(c.calls.every((call) => call.entries === actual && call.entries.length === 2 && call.entries[0] === actual[0] && call.entries[1] === actual[1]), 'C09 reached views share one full reparsed qs array and objects').toBe(true);
+    w5b4Expect(c.calls.every((call, i) => call.idx === c.snapshots[i]), 'C09 reached views retain exact descriptor index identities').toBe(true);
+    w5b4Expect(new Set(c.calls.map((call) => call.view)).size, 'C09 reached views are distinct isolated objects').toBe(c.calls.length);
+    w5b4Expect(c.calls.every((call) => call.rootIdx === c.snapshots[2]), 'C09 root index never swaps into an isolated retained view').toBe(true);
+    w5b4Expect(c.seed).toBe(c.snapshots[0]); w5b4Expect(c.rootIdx).toBe(c.snapshots[2]);
+    w5b4Expect(w5b4Manifests(c.s.out, 'pilot')).toEqual([]); w5b4Expect(w5b4Versions(c.s.home)).toBe(0); w5b4Expect(w5b4Runs(c.s.home)).toEqual([]);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C09 affected consumer remains non-durable'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('C09 three-reading control', async () => {
+    const c = await c09Case(C06_BELT);
+    w5b4Expect(c.r.refusal).toBeNull(); w5b4Expect(c.r.code).toBe(0);
+    w5b4Expect(c.cleaned, 'C09 complete variant is removed after success').toBe(true);
+    w5b4Expect(c.calls).toHaveLength(3);
+    const actual = c.calls[0]!.entries;
+    w5b4Expect(actual.map((entry) => [entry.qid, entry.question, entry.fact, entry.kind]), 'C09 control first actual qs matches the parsed frozen content').toEqual(c.s.entries.map((entry) => [entry.qid, entry.question, entry.fact, entry.kind]));
+    w5b4Expect(c.calls.every((call) => call.entries === actual && call.entries.length === 2 && call.entries[0] === actual[0] && call.entries[1] === actual[1]), 'C09 control views share one full reparsed qs array and objects').toBe(true);
+    w5b4Expect(c.calls.every((call, i) => call.idx === c.snapshots[i]), 'C09 control views retain exact descriptor index identities').toBe(true); w5b4Expect(new Set(c.calls.map((call) => call.view)).size, 'C09 control views are distinct isolated objects').toBe(c.calls.length); w5b4Expect(c.calls.every((call) => call.rootIdx === c.snapshots[2])).toBe(true); w5b4Expect(c.seed).toBe(c.snapshots[0]); w5b4Expect(c.rootIdx).toBe(c.snapshots[2]);
+    const manifests = w5b4Manifests(c.s.out, 'pilot'); const stubs = w5b4Runs(c.s.home);
+    w5b4Expect(manifests).toHaveLength(1); w5b4Expect(w5b4Versions(c.s.home)).toBe(1); w5b4Expect(stubs).toHaveLength(4);
+    const seen = new Set<string>();
+    for (const run of manifests[0]!.runs as W5b4R[]) {
+      const key = `${run.qid as string}:${run.arm as string}`; w5b4Expect(seen.has(key), `C09 control duplicate ${key}`).toBe(false); seen.add(key);
+      const expected = c.baseline.get(run.qid as string)!.get(run.arm as string)!;
+      w5b4Expect(run.stdin_sha256).toBe(sha256Hex(expected));
+      const persisted = w5b4Json(join(c.s.out, `${run.name as string}.run.json`)); const matching = stubs.filter((stub) => stub.cwd === persisted.cwd);
+      w5b4Expect(matching).toHaveLength(1); w5b4Expect(matching[0]!.stdin).toBe(expected);
+      w5b4Expect([matching[0]!.env.CCRC_RECALL_ARM, matching[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, c.s.entries.find((entry) => entry.qid === run.qid)!.boundary_uuid]);
+    }
+    w5b4Expect(seen).toEqual(new Set(c.s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`))));
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C09 control remains non-durable'); } finally { rs.close(); }
+  }, 180_000);
+
+  const c06JudgeJobs = (s: FwSetup, records: W5b5Answer[], sourcePresent: boolean): { jobs: W5b4R[]; idx: W5b4R } => {
+    const rs = D4.openReplayStore(s.home) as B1t2Rs;
+    try {
+      c05Pairs(rs, 'C06 judge declared source remains non-durable');
+      w5b4Expect(((rs.idx as W5b4R).belt as W5b4R).texts.includes(C06_BELT), 'C06 judge source-loader admission matches the declared source state').toBe(sourcePresent);
+      const picked = D4.judgeItemsOf({ entries: s.entries, answers: records, arms: W5B4_ARMS, shaMinPrefix: 7 });
+      const map = D4.judgeMapOf(W5B5_SEED, s.entries, W5B4_ARMS);
+      return { jobs: D4.judgeJobsOf({ items: picked.items, map, idx: rs.idx as W5b4R }) as W5b4R[], idx: rs.idx as W5b4R };
+    } finally { rs.close(); }
+  };
+  const c06JudgeCase = async (remove: boolean): Promise<{ s: FwSetup; baseline: W5b4R[]; reads: number; judge: Awaited<ReturnType<typeof w5b5InProcess>> }> => {
+    const forms = [['ANSI escaped partial', C06_ANSI], ['letter-glued partial', C06_GLUED]] as const;
+    const fixture: FwSourceFixture = { declaredSourceValue: C06_BELT, storedSummary: C05_STABLE, laterQuestion: C05_STABLE };
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, fixture);
+    const reply = `ANSWER: UNKNOWN\n${forms.map(([, form]) => form).join(' ')}`;
+    await c05SeedAnswers(s, reply);
+    const records = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[];
+    w5b4Expect(records).toHaveLength(4);
+    w5b4Expect(records.every((record) => record.reply === reply), 'C06 actual shared-boundary records retain ANSI and glued originals').toBe(true);
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    const beforeRecords = JSON.stringify(records);
+    const old = c06JudgeJobs(s, records, true); c06OwnerForms(forms, old.idx, c06PairOnly(), 'C06 judge');
+    if (remove) c06Remove(s); else c05Replace(s, C06_BELT);
+    const fresh = c06JudgeJobs(s, records, !remove);
+    if (remove) {
+      for (const [, form] of forms) w5b4Expect(b1t2Lib.redactField(form, fresh.idx) === form, 'C06 judge fresh index leaves each original form unchanged').toBe(true);
+      c05Replace(s, C06_BELT);
+    }
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8') === frozen, 'C06 judge source state never changes frozen original bytes').toBe(true);
+    w5b4Expect(JSON.stringify(D4.readArmAnswers(s.out, 'pilot')) === beforeRecords, 'C06 judge precondition leaves actual settled records unchanged').toBe(true);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8') === `${C06_BELT}\n`, 'C06 judge precondition restores the declared source').toBe(true);
+    w5b4Expect(old.jobs).toHaveLength(4); w5b4Expect(fresh.jobs).toHaveLength(4);
+    if (remove) w5b4Expect(JSON.stringify(old.jobs.map((job) => job.input)) !== JSON.stringify(fresh.jobs.map((job) => job.input)), 'C06 real original ANSI and glued job bytes differ').toBe(true);
+    else w5b4Expect(old.jobs.map((job) => job.input)).toEqual(fresh.jobs.map((job) => job.input));
+    let reads = 0;
+    const actualRecords = (): W5b5Answer[] => { reads += 1; const actual = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[]; if (remove) c06Remove(s); return actual; };
+    const judge = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(s.out, 'pilot'), W5B5_ENV(s.home),
+      { loadArmRun: () => w5b5Run(s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(s.home, { expected: D4.expectedForNode(s.draft, s.storeId).expected }), readArmAnswers: actualRecords, now: () => Date.now() }));
+    return { s, baseline: old.jobs, reads, judge };
+  };
+
+  w5b4It('C06 judge belt ANSI and glued refuse', async () => {
+    const c = await c06JudgeCase(true);
+    w5b4Expect(c.judge.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree judge' });
+    w5b4Expect(c.reads).toBe(1); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4);
+    w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judge'))).toBe(false);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C06 judge removal stays non-durable'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('C06 judge belt source unchanged succeeds', async () => {
+    const c = await c06JudgeCase(false);
+    w5b4Expect(c.judge.refusal).toBeNull(); w5b4Expect(c.reads).toBe(1);
+    const dir = join(c.s.out, 'pilot', 'judge'); const judgeRuns = w5b4Runs(c.s.home).slice(4);
+    w5b4Expect(readdirSync(dir).filter((name) => name.endsWith('.input.json'))).toHaveLength(4);
+    w5b4Expect(c.baseline).toHaveLength(4); w5b4Expect(w5b4Versions(c.s.home)).toBe(5); w5b4Expect(judgeRuns).toHaveLength(8);
+    const expectedAttempts = new Set(c.baseline.flatMap((job) => [1, 2].map((attempt) => `${job.id as string}:${attempt}`)));
+    const seen = new Set<string>();
+    for (const job of c.baseline) {
+      w5b4Expect(readFileSync(join(dir, `${job.id as string}.input.json`), 'utf8')).toBe(`${w5b4Lib.canonicalJson(job.input)}\n`);
+      for (const attempt of [1, 2]) {
+        const key = `${job.id as string}:${attempt}`;
+        const runRecord = w5b4Json(join(dir, `${job.id as string}-${attempt}.run.json`));
+        const matches = judgeRuns.filter((run) => run.cwd === runRecord.cwd); w5b4Expect(matches).toHaveLength(1);
+        w5b4Expect(seen.has(key), 'C06 judge control maps every attempt once').toBe(false); seen.add(key);
+        w5b4Expect(matches[0]!.stdin).toBe(W5B5.judgeStdin('v1', job.input));
+      }
+    }
+    w5b4Expect(seen).toEqual(expectedAttempts);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C06 unchanged judge control remains non-durable'); } finally { rs.close(); }
+  }, 180_000);
+
+  // C07 keeps the real 12-character segment grammar and tests owner case folding without supplying a full pair occurrence.
+  const C07_UNIT_A = ['aB3cD4eF5gH', 'R'].join('');
+  const C07_UNIT_B = ['J6kL7mN8pQ9', 'S'].join('');
+  const C07_COMPOUND = [C07_UNIT_A, C07_UNIT_B].join('/');
+  const C07_OCCURRENCE = C07_UNIT_A.toUpperCase();
+  const c07PairOnly = (): W5b4R => b1t2Lib.makePairIndex(b1t2Lib.secretPairs([C07_COMPOUND]).pairs, null) as W5b4R;
+  const c07OwnerPrecondition = async (s: FwSetup, remove: boolean): Promise<Map<string, Map<string, string>>> => {
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    w5b4Expect([C07_UNIT_A.length, C07_UNIT_B.length, C07_COMPOUND.length], 'C07 fixed source unit lengths').toEqual([12, 12, 25]);
+    w5b4Expect(b1t2Lib.secretUnits(C07_COMPOUND)).toEqual([C07_UNIT_A, C07_UNIT_B]);
+    w5b4Expect(b1t2Lib.beltUnits([C07_COMPOUND])).toEqual([C07_UNIT_A, C07_UNIT_B]);
+    const old = await c05Payloads(s);
+    const at = (old.idx.belt as W5b4R).texts.indexOf(C07_UNIT_A);
+    w5b4Expect(at >= 0, 'C07 loaded belt retains the selected 12-character unit').toBe(true);
+    const unit = (old.idx.belt as W5b4R).units[at] as Uint8Array;
+    const folded = Uint8Array.from([...C07_OCCURRENCE].map((c) => b1t2Lib.beltFold(c.codePointAt(0)!)));
+    w5b4Expect(unit.byteLength, 'C07 retained owner unit has twelve bytes').toBe(12);
+    w5b4Expect([...unit].every((code, i) => code === folded[i]), 'C07 retained bytes equal owner folded occurrence codes').toBe(true);
+    w5b4Expect(b1t2Lib.redactField(C07_OCCURRENCE, c07PairOnly()) === C07_OCCURRENCE, 'C07 pair-only control leaves folded occurrence').toBe(true);
+    w5b4Expect(b1t2Lib.redactField(C07_OCCURRENCE, old.idx) !== C07_OCCURRENCE, 'C07 loaded belt changes folded occurrence').toBe(true);
+    if (remove) c06Remove(s); else c05Replace(s, C07_COMPOUND);
+    const fresh = await c05Payloads(s);
+    if (remove) {
+      w5b4Expect(b1t2Lib.redactField(C07_OCCURRENCE, fresh.idx) === C07_OCCURRENCE, 'C07 fresh source-free owner leaves occurrence').toBe(true);
+      c05Replace(s, C07_COMPOUND);
+    }
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8') === frozen, 'C07 source transition leaves frozen original bytes unchanged').toBe(true);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8') === `${C07_COMPOUND}\n`, 'C07 precondition restores declared compound source').toBe(true);
+    const qid = s.entries[1]!.qid as string;
+    if (remove) for (const arm of W5B4_ARMS) w5b4Expect(old.payloads.get(qid)!.get(arm), 'C07 old and fresh real payloads differ').not.toBe(fresh.payloads.get(qid)!.get(arm));
+    else for (const entry of s.entries) for (const arm of W5B4_ARMS) w5b4Expect(old.payloads.get(entry.qid as string)!.get(arm), 'C07 unchanged source preserves every arm payload').toBe(fresh.payloads.get(entry.qid as string)!.get(arm));
+    return old.payloads;
+  };
+  const c07ArmCase = async (remove: boolean): Promise<{ s: FwSetup; baseline: Map<string, Map<string, string>>; r: W5b4Result }> => {
+    const fixture: FwSourceFixture = { declaredSourceValue: C07_COMPOUND, storedSummary: C05_STABLE, laterQuestion: `fixture C07 ${C07_OCCURRENCE}` };
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, fixture);
+    const reloaded = JSON.parse(readFileSync(s.frozen.path, 'utf8')) as { entries: W5b4R[] };
+    w5b4Expect(reloaded.entries[1]!.qid, 'C07 selected qid remains parsed later order').toBe(s.entries[1]!.qid);
+    w5b4Expect(reloaded.entries[1]!.question.includes(C07_OCCURRENCE), 'C07 original folded occurrence is present before serialization').toBe(true);
+    const baseline = await c07OwnerPrecondition(s, remove);
+    let calls = 0;
+    const recheck = (rs: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => D4.recheckBatch(rs, entries, ctx);
+    const payloads = (rs: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+      const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
+      if (p.state !== 'payloads') throw new Error(`fixture: C07 payload ${p.why}`);
+      calls += 1; if (remove && calls === 1) c06Remove(s);
+      return p;
+    };
+    return { s, baseline, r: await w5b4Arms(s.home, s.argv, { recheck, payloads }) };
+  };
+
+  w5b4It('C07 arms retained twelve-character belt segment refuses', async () => {
+    const c = await c07ArmCase(true);
+    w5b4Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    const manifests = w5b4Manifests(c.s.out, 'pilot');
+    w5b4Expect(manifests).toHaveLength(1);
+    w5b4Expect((manifests[0]!.runs as W5b4R[]).map((run) => `${run.qid as string}:${run.arm as string}`).sort()).toEqual(W5B4_ARMS.map((arm) => `${c.s.entries[0]!.qid as string}:${arm}`).sort());
+    w5b4Expect(w5b4Versions(c.s.home)).toBe(1); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(2);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C07 removal remains non-durable after consumer'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('C07 arms retained twelve-character source unchanged succeeds', async () => {
+    const c = await c07ArmCase(false);
+    w5b4Expect(c.r.refusal).toBeNull();
+    const manifests = w5b4Manifests(c.s.out, 'pilot'); const stubs = w5b4Runs(c.s.home);
+    w5b4Expect(manifests).toHaveLength(2); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(stubs).toHaveLength(4);
+    const expectedPairs = new Set(c.s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`)));
+    const seen = new Set<string>();
+    for (const manifest of manifests) for (const run of manifest.runs as W5b4R[]) {
+      const pair = `${run.qid as string}:${run.arm as string}`;
+      w5b4Expect(expectedPairs.has(pair)).toBe(true); w5b4Expect(seen.has(pair)).toBe(false); seen.add(pair);
+      const expected = c.baseline.get(run.qid as string)!.get(run.arm as string)!;
+      w5b4Expect(run.stdin_sha256).toBe(sha256Hex(expected));
+      const persisted = w5b4Json(join(c.s.out, `${run.name as string}.run.json`));
+      const matches = stubs.filter((stub) => stub.cwd === persisted.cwd); w5b4Expect(matches).toHaveLength(1);
+      w5b4Expect([matches[0]!.env.CCRC_RECALL_ARM, matches[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, c.s.entries.find((entry) => entry.qid === run.qid)!.boundary_uuid]);
+      w5b4Expect(matches[0]!.stdin).toBe(expected);
+    }
+    w5b4Expect(seen).toEqual(expectedPairs);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C07 unchanged source remains non-durable after consumer'); } finally { rs.close(); }
+  }, 180_000);
+
+  // C08 keeps a declared-but-absent source path so the added identifier pair is the only changing input.
+  const C08_IDENTIFIER = ['fixture', 'service', 'api', 'key', 'anchor'].join('_');
+  const C08_VALUE = ['plain', 'response', 'field', 'alpha'].join('-');
+  const C08_ANCHOR = `${C08_IDENTIFIER}: ${C08_VALUE}`;
+  const c08Absent = (s: FwSetup): void => rmSync(c05Source(s), { force: true });
+  const c08Fixture = (summary: string, question: string): FwSourceFixture => ({
+    declaredSourceValue: null, declareSourcePathWhenAbsent: true, storedSummary: summary, laterQuestion: question,
+  });
+  const c08AbsentContext = (original: string, oldIdx: W5b4R, label: string): void => {
+    w5b4Expect(original.includes(C08_IDENTIFIER) && original.includes(C08_VALUE), `${label}: original anchor contains identifier and value`).toBe(true);
+    w5b4Expect((oldIdx.byLen as Map<number, Set<string>>).get(C08_IDENTIFIER.length) === undefined, `${label}: absent source has no identifier pair`).toBe(true);
+    const oldText = b1t2Lib.redactField(original, oldIdx);
+    w5b4Expect(!oldText.includes(C08_VALUE) && oldText.includes(C08_IDENTIFIER), `${label}: absent source context masks value and preserves identifier`).toBe(true);
+  };
+  const c08OwnerRelation = (original: string, oldIdx: W5b4R, freshIdx: W5b4R, label: string): void => {
+    c08AbsentContext(original, oldIdx, label);
+    const pair = b1t2Lib.sha256Hex(C08_IDENTIFIER);
+    w5b4Expect((freshIdx.byLen as Map<number, Set<string>>).get(C08_IDENTIFIER.length)?.has(pair) === true, `${label}: loaded identifier source admits its real hash pair`).toBe(true);
+    w5b4Expect((freshIdx.belt as W5b4R).texts.includes(C08_IDENTIFIER), `${label}: loaded identifier source admits its real belt text`).toBe(true);
+    const freshText = b1t2Lib.redactField(original, freshIdx);
+    w5b4Expect(freshText.includes(C08_VALUE) && !freshText.includes(C08_IDENTIFIER), `${label}: identifier pair erases anchor before context masks value`).toBe(true);
+  };
+  const c08ArmCase = async (add: boolean): Promise<{ s: FwSetup; baseline: Map<string, Map<string, string>>; r: W5b4Result }> => {
+    const fixture = c08Fixture(C08_ANCHOR, C08_ANCHOR);
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, fixture);
+    const reloaded = JSON.parse(readFileSync(s.frozen.path, 'utf8')) as { entries: W5b4R[] };
+    w5b4Expect(reloaded.entries[1]!.qid, 'C08 anchor question remains parsed later qid').toBe(s.entries[1]!.qid);
+    w5b4Expect(reloaded.entries[1]!.question, 'C08 original question is serialized before source addition').toBe(C08_ANCHOR);
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    w5b4Expect(!existsSync(c05Source(s)), 'C08 arms declared source starts absent').toBe(true);
+    const old = await c05Payloads(s);
+    if (add) c05Replace(s, C08_IDENTIFIER);
+    const fresh = await c05Payloads(s);
+    if (add) c08Absent(s);
+    if (add) {
+      c08OwnerRelation(C08_ANCHOR, old.idx, fresh.idx, 'C08 arms');
+      const qid = s.entries[1]!.qid as string;
+      for (const arm of W5B4_ARMS) w5b4Expect(old.payloads.get(qid)!.get(arm), 'C08 old and fresh real payloads differ').not.toBe(fresh.payloads.get(qid)!.get(arm));
+    } else {
+      c08AbsentContext(C08_ANCHOR, old.idx, 'C08 arms control');
+      const qid = s.entries[1]!.qid as string;
+      for (const arm of W5B4_ARMS) {
+        const baseline = old.payloads.get(qid)!.get(arm)!;
+        w5b4Expect(baseline.includes(C08_IDENTIFIER) && !baseline.includes(C08_VALUE), 'C08 arms control baseline remains context-masked').toBe(true);
+      }
+      for (const entry of s.entries) for (const arm of W5B4_ARMS) w5b4Expect(old.payloads.get(entry.qid as string)!.get(arm), 'C08 absent source preserves all arm payloads').toBe(fresh.payloads.get(entry.qid as string)!.get(arm));
+    }
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8') === frozen, 'C08 source addition leaves frozen originals unchanged').toBe(true);
+    w5b4Expect(!existsSync(c05Source(s)), 'C08 precondition restores declared source to absent').toBe(true);
+    let calls = 0;
+    const recheck = (rs: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => D4.recheckBatch(rs, entries, ctx);
+    const payloads = (rs: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+      const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
+      if (p.state !== 'payloads') throw new Error(`fixture: C08 payload ${p.why}`);
+      calls += 1; if (add && calls === 1) c05Replace(s, C08_IDENTIFIER);
+      return p;
+    };
+    return { s, baseline: old.payloads, r: await w5b4Arms(s.home, s.argv, { recheck, payloads }) };
+  };
+
+  w5b4It('C08 arms identifier-pair context-anchor refusal', async () => {
+    const c = await c08ArmCase(true);
+    w5b4Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    const manifests = w5b4Manifests(c.s.out, 'pilot');
+    w5b4Expect(manifests).toHaveLength(1);
+    w5b4Expect((manifests[0]!.runs as W5b4R[]).map((run) => `${run.qid as string}:${run.arm as string}`).sort()).toEqual(W5B4_ARMS.map((arm) => `${c.s.entries[0]!.qid as string}:${arm}`).sort());
+    w5b4Expect(w5b4Versions(c.s.home)).toBe(1); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(2);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C08 arms added-source remains non-durable after consumer'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('C08 arms no identifier pair remains context-masked', async () => {
+    const c = await c08ArmCase(false);
+    w5b4Expect(c.r.refusal).toBeNull();
+    const manifests = w5b4Manifests(c.s.out, 'pilot'); const stubs = w5b4Runs(c.s.home);
+    w5b4Expect(manifests).toHaveLength(2); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(stubs).toHaveLength(4);
+    const expectedPairs = new Set(c.s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`)));
+    const seen = new Set<string>();
+    for (const manifest of manifests) for (const run of manifest.runs as W5b4R[]) {
+      const pair = `${run.qid as string}:${run.arm as string}`;
+      w5b4Expect(expectedPairs.has(pair), 'C08 arms control emits only expected qid/arm keys').toBe(true);
+      w5b4Expect(seen.has(pair), 'C08 arms control emits each qid/arm once').toBe(false); seen.add(pair);
+      const expected = c.baseline.get(run.qid as string)!.get(run.arm as string)!;
+      w5b4Expect(run.stdin_sha256).toBe(sha256Hex(expected));
+      const persisted = w5b4Json(join(c.s.out, `${run.name as string}.run.json`));
+      const matches = stubs.filter((stub) => stub.cwd === persisted.cwd); w5b4Expect(matches).toHaveLength(1);
+      w5b4Expect([matches[0]!.env.CCRC_RECALL_ARM, matches[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, c.s.entries.find((entry) => entry.qid === run.qid)!.boundary_uuid]);
+      w5b4Expect(matches[0]!.stdin).toBe(expected);
+    }
+    w5b4Expect(seen).toEqual(expectedPairs);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C08 absent arms control remains non-durable after consumer'); } finally { rs.close(); }
+  }, 180_000);
+
+  const c08JudgeJobs = (s: FwSetup, records: W5b5Answer[]): { jobs: W5b4R[]; idx: W5b4R } => {
+    const rs = D4.openReplayStore(s.home) as B1t2Rs;
+    try {
+      c05Pairs(rs, 'C08 judge source-derived pair remains non-durable');
+      const picked = D4.judgeItemsOf({ entries: s.entries, answers: records, arms: W5B4_ARMS, shaMinPrefix: 7 });
+      const map = D4.judgeMapOf(W5B5_SEED, s.entries, W5B4_ARMS);
+      return { idx: rs.idx as W5b4R, jobs: D4.judgeJobsOf({ items: picked.items, map, idx: rs.idx as W5b4R }) as W5b4R[] };
+    } finally { rs.close(); }
+  };
+  const c08JudgeCase = async (add: boolean): Promise<{ s: FwSetup; baseline: W5b4R[]; reads: number; judge: Awaited<ReturnType<typeof w5b5InProcess>> }> => {
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, c08Fixture(C05_STABLE, C05_STABLE));
+    await c05SeedAnswers(s, C08_ANCHOR);
+    const records = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[];
+    w5b4Expect(records).toHaveLength(4); w5b4Expect(records.every((record) => record.reply === C08_ANCHOR), 'C08 actual settled records retain original context anchor').toBe(true);
+    const frozen = readFileSync(s.frozen.path, 'utf8'); const beforeRecords = JSON.stringify(records);
+    w5b4Expect(!existsSync(c05Source(s)), 'C08 judge declared source starts absent').toBe(true);
+    const old = c08JudgeJobs(s, records); if (add) c05Replace(s, C08_IDENTIFIER); const fresh = c08JudgeJobs(s, records); if (add) c08Absent(s);
+    if (add) c08OwnerRelation(C08_ANCHOR, old.idx, fresh.idx, 'C08 judge');
+    if (add) w5b4Expect(`${w5b4Lib.canonicalJson(old.jobs.map((job) => job.input))}\n` !== `${w5b4Lib.canonicalJson(fresh.jobs.map((job) => job.input))}\n`, 'C08 old and fresh canonical judge input bytes differ').toBe(true);
+    else {
+      c08AbsentContext(C08_ANCHOR, old.idx, 'C08 judge control');
+      w5b4Expect(old.jobs.every((job) => String((job.input as W5b4R).reply).includes(C08_IDENTIFIER) && !String((job.input as W5b4R).reply).includes(C08_VALUE)), 'C08 judge control baseline replies remain context-masked').toBe(true);
+      w5b4Expect(old.jobs.map((job) => job.input)).toEqual(fresh.jobs.map((job) => job.input));
+    }
+    w5b4Expect(old.jobs).toHaveLength(4); w5b4Expect(fresh.jobs).toHaveLength(4);
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8') === frozen, 'C08 judge source addition leaves frozen originals unchanged').toBe(true);
+    w5b4Expect(JSON.stringify(D4.readArmAnswers(s.out, 'pilot')) === beforeRecords, 'C08 judge precondition leaves settled records unchanged').toBe(true);
+    w5b4Expect(!existsSync(c05Source(s)), 'C08 judge precondition restores declared source to absent').toBe(true);
+    let reads = 0;
+    const actualRecords = (): W5b5Answer[] => { reads += 1; const actual = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[]; if (add) c05Replace(s, C08_IDENTIFIER); return actual; };
+    const judge = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(s.out, 'pilot'), W5B5_ENV(s.home),
+      { loadArmRun: () => w5b5Run(s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(s.home, { expected: D4.expectedForNode(s.draft, s.storeId).expected }), readArmAnswers: actualRecords, now: () => Date.now() }));
+    return { s, baseline: old.jobs, reads, judge };
+  };
+
+  w5b4It('C08 judge identifier-pair context-anchor refusal', async () => {
+    const c = await c08JudgeCase(true);
+    w5b4Expect(c.judge.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree judge' });
+    w5b4Expect(c.reads).toBe(1); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4);
+    w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judge'))).toBe(false);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C08 added-source judge remains non-durable after consumer'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('C08 judge no identifier pair remains context-masked', async () => {
+    const c = await c08JudgeCase(false);
+    w5b4Expect(c.judge.refusal).toBeNull(); w5b4Expect(c.reads).toBe(1);
+    const dir = join(c.s.out, 'pilot', 'judge'); const judgeRuns = w5b4Runs(c.s.home).slice(4);
+    w5b4Expect(readdirSync(dir).filter((name) => name.endsWith('.input.json'))).toHaveLength(4);
+    w5b4Expect(c.baseline).toHaveLength(4); w5b4Expect(w5b4Versions(c.s.home)).toBe(5); w5b4Expect(judgeRuns).toHaveLength(8);
+    const expectedAttempts = new Set(c.baseline.flatMap((job) => [1, 2].map((attempt) => `${job.id as string}:${attempt}`)));
+    const seen = new Set<string>();
+    for (const job of c.baseline) {
+      w5b4Expect(readFileSync(join(dir, `${job.id as string}.input.json`), 'utf8')).toBe(`${w5b4Lib.canonicalJson(job.input)}\n`);
+      for (const attempt of [1, 2]) {
+        const key = `${job.id as string}:${attempt}`;
+        const runRecord = w5b4Json(join(dir, `${job.id as string}-${attempt}.run.json`));
+        const matches = judgeRuns.filter((run) => run.cwd === runRecord.cwd); w5b4Expect(matches).toHaveLength(1);
+        w5b4Expect(seen.has(key), 'C08 judge control maps every attempt once').toBe(false); seen.add(key);
+        w5b4Expect(matches[0]!.stdin).toBe(W5B5.judgeStdin('v1', job.input));
+      }
+    }
+    w5b4Expect(seen).toEqual(expectedAttempts);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C08 absent judge control remains non-durable after consumer'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('D-6481: a durable pair learned while reading real settled arm records refuses judge before its version, input, or run', async () => {
+    const s = await fwSetup();
+    const reloaded = JSON.parse(readFileSync(s.frozen.path, 'utf8')) as { entries: W5b4R[] };
+    const selected = s.entries[0]!;
+    w5b4Expect(reloaded.entries.find((entry) => entry.qid === selected.qid)!.fact).toBe(selected.fact);
+    const learned = fwPairFor(selected);
+    const armed = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(armed.refusal).toBeNull();
+    const before = D4.openReplayStore(s.home) as B1t2Rs;
+    const beforeIdx = before.idx;
+    before.close();
+    let reads = 0; let inputChanged = false;
+    const records = (): unknown[] => {
+      reads += 1;
+      const actual = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[];
+      if (reads === 1) {
+        const picked = D4.judgeItemsOf({ entries: s.entries, answers: actual, arms: W5B4_ARMS, shaMinPrefix: 7 });
+        const map = D4.judgeMapOf((s.draft.bootstrap as W5b4R).seed as string, s.entries, W5B4_ARMS);
+        const oldJobs = D4.judgeJobsOf({ items: picked.items, map, idx: beforeIdx });
+        fwLearn(s.home, learned.value);
+        const after = D4.openReplayStore(s.home) as B1t2Rs;
+        try {
+          const freshJobs = D4.judgeJobsOf({ items: picked.items, map, idx: after.idx });
+          inputChanged = JSON.stringify(oldJobs.map((job: W5b4R) => job.input)) !== JSON.stringify(freshJobs.map((job: W5b4R) => job.input));
+        } finally { after.close(); }
+      }
+      return actual;
+    };
+    const judge = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(s.out, 'pilot'), W5B5_ENV(s.home),
+      { loadArmRun: () => w5b5Run(s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(s.home, { expected: D4.expectedForNode(s.draft, s.storeId).expected }), readArmAnswers: records, now: () => Date.now() }));
+    w5b4Expect(judge.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree judge' });
+    w5b4Expect(inputChanged, 'independent real judgeJobsOf calls over original settled records observe the learned fact').toBe(true);
+    w5b4Expect(reads, 'the injected seam returned the actual persisted records once').toBe(1);
+    w5b4Expect(w5b4Versions(s.home), 'only the two arm batches measured versions').toBe(2);
+    w5b4Expect(w5b4Runs(s.home), 'no judge run was spawned').toHaveLength(4);
+    w5b4Expect(existsSync(join(s.out, 'pilot', 'judge')), 'no judge input was persisted').toBe(false);
+  }, 180_000);
+
+  w5b4It('D-6481 CONTROL: real settled arm records without a learned pair reach judge preflight and input persistence', async () => {
+    const s = await fwSetup();
+    const armed = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(armed.refusal).toBeNull();
+    const judge = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(s.out, 'pilot'), W5B5_ENV(s.home),
+      { loadArmRun: () => w5b5Run(s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(s.home, { expected: D4.expectedForNode(s.draft, s.storeId).expected }),
+        readArmAnswers: () => D4.readArmAnswers(s.out, 'pilot'), now: () => Date.now() }));
+    w5b4Expect(judge.refusal).toBeNull();
+    w5b4Expect(w5b4Versions(s.home)).toBeGreaterThan(2);
+    const judgeDir = join(s.out, 'pilot', 'judge');
+    w5b4Expect(existsSync(judgeDir)).toBe(true);
+    w5b4Expect(readdirSync(judgeDir).some((name) => name.endsWith('.input.json')), 'the real judge persisted an input from the actual records').toBe(true);
+  }, 180_000);
+
+  const C12_COMPOUND_OLD = `${C06_BELT}/${C05_OLD}`;
+  const C12_COMPOUND_NEW = `${C06_BELT}/${C05_NEW}`;
+  const C12_REPLY = `${'a '.repeat(8187)}${C06_BELT} tail\nANSWER: ${B1T2_CMD}`;
+  const C12_SOURCE_MIDDLE = () => `${C06_BELT}/${C10_MID20}`;
+  const c12Source = async (): Promise<{ s: FwSetup; frozen: string; answerBytes: C10Bytes; records: W5b5Answer[]; baseline: W5b5Job[] }> => {
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, { declaredSourceValue: C12_COMPOUND_OLD, storedSummary: C05_STABLE, laterQuestion: C05_STABLE });
+    const prefix = 'a '.repeat(8187); const head = C06_BELT.slice(0, 10); const marker = t4Lib.REDACTED_MARK;
+    w5b4Expect(Buffer.byteLength(prefix)).toBe(16_374); w5b4Expect(Buffer.byteLength(C12_REPLY.slice(0, 16_374))).toBe(16_374); w5b4Expect(C06_BELT.length).toBe(32);
+    w5b4Expect(C12_REPLY.slice(16_374, 16_374 + C06_BELT.length)).toBe(C06_BELT); w5b4Expect(C12_REPLY.slice(0, W5B5.JUDGE_REPLY_MAX_BYTES)).toBe(`${prefix}${head}`);
+    w5b4Expect(C12_REPLY.indexOf(`ANSWER: ${B1T2_CMD}`)).toBeGreaterThan(W5B5.JUDGE_REPLY_MAX_BYTES); w5b4Expect(C12_REPLY.includes(marker)).toBe(false);
+    await c05SeedAnswers(s, C12_REPLY);
+    const frozen = readFileSync(s.frozen.path, 'utf8'); const answerBytes = c10Tree(join(s.out, 'pilot', 'answers'));
+    const records = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[];
+    w5b4Expect(records).toHaveLength(4); w5b4Expect(records.every((record) => record.outcome === 'answered' && record.reply === C12_REPLY)).toBe(true);
+    const picked = D4.judgeItemsOf({ entries: s.entries as W5b5Entry[], answers: records, arms: W5B4_ARMS, shaMinPrefix: 7 }) as W5b5Picked;
+    w5b4Expect([picked.excluded.correct, picked.items.length]).toEqual([2, 2]);
+    const builds: W5b5Job[][] = [];
+    for (const source of [C12_COMPOUND_OLD, C12_COMPOUND_NEW, C12_SOURCE_MIDDLE()]) {
+      c05Replace(s, source); const rs = D4.openReplayStore(s.home) as B1t2Rs;
+      try { c05Pairs(rs, 'C12 compound sources remain non-durable'); const texts = ((rs.idx as W5b4R).belt as W5b4R).texts as string[]; w5b4Expect(texts).toEqual(expect.arrayContaining([C06_BELT, ...source.split('/')])); builds.push(D4.judgeJobsOf({ items: picked.items, map: D4.judgeMapOf(W5B5_SEED, s.entries, W5B4_ARMS), idx: rs.idx as W5b4R }) as W5b5Job[]); }
+      finally { rs.close(); }
+    }
+    c05Replace(s, C12_COMPOUND_OLD);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8'), 'C12 restores first compound before command store open').toBe(`${C12_COMPOUND_OLD}\n`);
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8')).toBe(frozen); w5b4Expect(c10Tree(join(s.out, 'pilot', 'answers'))).toEqual(answerBytes);
+    w5b4Expect(builds[1]!.map((job) => `${job.id}\n${w5b4Lib.canonicalJson(job.input)}\n`)).toEqual(builds[0]!.map((job) => `${job.id}\n${w5b4Lib.canonicalJson(job.input)}\n`)); w5b4Expect(builds[2]!.map((job) => `${job.id}\n${w5b4Lib.canonicalJson(job.input)}\n`)).toEqual(builds[0]!.map((job) => `${job.id}\n${w5b4Lib.canonicalJson(job.input)}\n`));
+    return { s, frozen, answerBytes, records, baseline: builds[0]! };
+  };
+
+  const c12Case = async (): Promise<{ s: FwSetup; frozen: string; answerBytes: C10Bytes; records: W5b5Answer[]; actualReads: W5b5Answer[][]; baseline: W5b5Job[]; picks: W5b4R[]; builds: W5b4R[]; snapshots: unknown[]; retained: W5b4R[]; seed: unknown; rootIdx: unknown; selectedProjection: string | null; ownProjection: string | null; readProjection: string | null; cleaned: boolean; judge: Awaited<ReturnType<typeof w5b5InProcess>> }> => {
+    const c = await c12Source(); const variant = await c04Variant({ judgeObservers: true });
+    const picks: W5b4R[] = []; const builds: W5b4R[] = []; const snapshots: unknown[] = []; let retained: W5b4R[] = []; let seed: unknown = null; let root: B1t2Rs | null = null; const actualReads: W5b5Answer[][] = [];
+    let selectedProjection: string | null = null; let ownProjection: string | null = null; let readProjection: string | null = null;
+    const acquireJudgeSnapshots = ({ rs, home, refresh }: W5b4R) => {
+      if (snapshots.length > 0) return;
+      root = rs as B1t2Rs; seed = rs.idx; const old = refresh(rs, home); const oldIdx = (old as W5b4R[])[0]!.idx;
+      c05Replace(c.s, C12_COMPOUND_NEW); const fresh = refresh(rs, home); const freshIdx = (fresh as W5b4R[])[1]!.idx;
+      c05Replace(c.s, C12_SOURCE_MIDDLE()); const middle = refresh(rs, home); const middleIdx = (middle as W5b4R[])[2]!.idx;
+      snapshots.push(oldIdx, freshIdx, middleIdx); retained = middle as W5b4R[]; w5b4Expect(retained).toHaveLength(3); w5b4Expect(new Set(snapshots).size).toBe(3); w5b4Expect(retained.every((snapshot: W5b4R, i: number) => snapshot.idx === snapshots[i])).toBe(true); w5b4Expect(seed).toBe(snapshots[0]); w5b4Expect(rs.idx).toBe(snapshots[2]);
+    };
+    const readArmAnswers = (out: string, section: string) => { const read = D4.readArmAnswers(out, section) as W5b5Answer[]; actualReads.push(read); return read; };
+    const judge = await w5b5InProcess(() => variant.judgeCommand(w5b5Flags(c.s.out, 'pilot'), W5B5_ENV(c.s.home), {
+      loadArmRun: () => w5b5Run(c.s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(c.s.home, { expected: D4.expectedForNode(c.s.draft, c.s.storeId).expected }), readArmAnswers,
+      now: () => Date.now(), acquireJudgeSnapshots,
+      afterPick: (value: W5b4R) => {
+        picks.push(value);
+        selectedProjection = w5b4Lib.canonicalJson(value.result.items);
+        ownProjection = w5b4Lib.canonicalJson(value.args.entries);
+        readProjection = w5b4Lib.canonicalJson(value.args.answers);
+      },
+      afterBuild: (value: W5b4R) => builds.push(value),
+    }), variant);
+    return { ...c, actualReads, picks, builds, snapshots, retained, seed, rootIdx: root!.idx, selectedProjection, ownProjection, readProjection, cleaned: c04VariantCleaned, judge };
+  };
+  type C12CanonicalIoCase = Pick<Awaited<ReturnType<typeof c12Case>>, 's' | 'frozen' | 'answerBytes' | 'baseline' | 'judge' | 'cleaned'>;
+  const c12CanonicalIoAssertions = (c: C12CanonicalIoCase): void => {
+    w5b4Expect(c.judge.refusal).toBeNull(); w5b4Expect(c.judge.code).toBe(0); w5b4Expect(c.cleaned, 'the complete-current variant removed its temporary module').toBe(true); const dir = join(c.s.out, 'pilot', 'judge'); const allRuns = w5b4Runs(c.s.home); const runs = allRuns.slice(4);
+    const inputNames = readdirSync(dir).filter((name) => name.endsWith('.input.json')).sort(); const runNames = readdirSync(dir).filter((name) => name.endsWith('.run.json')).sort(); const map = w5b4Json(join(c.s.out, 'pilot', 'judge.map.json')) as W5b4R;
+    const selected = new Set(c.baseline.map((job: W5b5Job) => job.id)); const mapRows = map.items as W5b5MapRow[]; const mapped = new Set(mapRows.map((row) => row.id)); const expectedKeys = new Set(c.s.entries.flatMap((entry) => W5B5_ARMS.map((arm) => `${entry.qid}:${arm}`)));
+    w5b4Expect(c.baseline).toHaveLength(2); w5b4Expect(mapped.size).toBe(4); w5b4Expect(selected.size).toBe(2); w5b4Expect(mapRows.map((row) => `${row.qid}:${row.arm}`).sort()).toEqual([...expectedKeys].sort()); w5b4Expect(mapRows.filter((row) => selected.has(row.id)).map((row) => row.qid).every((qid: string) => c.s.entries.some((entry) => entry.qid === qid && entry.kind === 'sha'))).toBe(true); w5b4Expect(mapRows.filter((row) => !selected.has(row.id)).map((row) => row.qid).every((qid: string) => c.s.entries.some((entry) => entry.qid === qid && entry.kind === 'command'))).toBe(true);
+    w5b4Expect(inputNames).toEqual([...selected].sort().map((id) => `${id}.input.json`)); w5b4Expect(runNames).toEqual([...selected].flatMap((id) => [`${id}-1.run.json`, `${id}-2.run.json`]).sort()); w5b4Expect(w5b4Versions(c.s.home)).toBe(5); w5b4Expect(allRuns).toHaveLength(8); w5b4Expect(runs).toHaveLength(4);
+    const attempts = new Set<string>();
+    for (const job of c.baseline as W5b5Job[]) { w5b4Expect(readFileSync(join(dir, `${job.id}.input.json`), 'utf8')).toBe(`${w5b4Lib.canonicalJson(job.input)}\n`); for (const attempt of [1, 2]) { const key = `${job.id}:${attempt}`; w5b4Expect(attempts.has(key)).toBe(false); attempts.add(key); const record = w5b4Json(join(dir, `${job.id}-${attempt}.run.json`)); w5b4Expect(record).toMatchObject({ name: `pilot/judge/${job.id}-${attempt}`, mode: 'judge', model: W6_MODEL }); const matching = runs.filter((run) => run.cwd === record.cwd); w5b4Expect(matching).toHaveLength(1); w5b4Expect(matching[0]!.stdin).toBe(W5B5.judgeStdin('v1', job.input)); w5b4Expect(matching[0]!.env.CCRC_RECALL_ARM).toBeUndefined(); w5b4Expect(matching[0]!.env.CCRC_RECALL_ASOF).toBeUndefined(); } }
+    w5b4Expect(attempts).toEqual(new Set((c.baseline as W5b5Job[]).flatMap((job: W5b5Job) => [1, 2].map((attempt) => `${job.id}:${attempt}`)))); w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers'))).toEqual(c.answerBytes); const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'canonical IO remains non-durable'); } finally { rs.close(); }
+  };
+  w5b4It('C12 raw-selection-mask-before-cap', async () => {
+    const c = await c12Case();
+    w5b4Expect(c.picks).toHaveLength(1); w5b4Expect(c.judge.refusal).toBeNull(); w5b4Expect(c.judge.code).toBe(0); w5b4Expect(c.cleaned, 'the complete-current variant removed its temporary module').toBe(true);
+    w5b4Expect(c.actualReads).toHaveLength(1); w5b4Expect(c.picks[0]!.args.answers, 'C12 actual selector receives the one real read array').toBe(c.actualReads[0]); w5b4Expect(c.picks[0]!.result.excluded).toEqual({ correct: 2, run_failed_questions: 0 });
+    const selectedKeys = c.picks[0]!.result.items.map((item: W5b4R) => `${item.qid}:${item.arm}`).sort(); const shaQids = new Set(c.s.entries.filter((entry) => entry.kind === 'sha').map((entry) => entry.qid)); const commandQids = new Set(c.s.entries.filter((entry) => entry.kind === 'command').map((entry) => entry.qid));
+    w5b4Expect(selectedKeys).toEqual(c.records.filter((record) => record.correct === false).map((record) => `${record.qid}:${record.arm}`).sort()); w5b4Expect(selectedKeys).toHaveLength(2); w5b4Expect(selectedKeys.every((key: string) => shaQids.has(key.split(':')[0]!))).toBe(true);
+    w5b4Expect(c.records.filter((record) => record.correct === true).map((record) => `${record.qid}:${record.arm}`).sort()).toHaveLength(2); w5b4Expect(c.records.filter((record) => record.correct === true).every((record) => commandQids.has(record.qid))).toBe(true);
+    w5b4Expect(w5b4Lib.canonicalJson(c.picks[0]!.result.items)).toBe(c.selectedProjection); w5b4Expect(w5b4Lib.canonicalJson(c.picks[0]!.args.entries)).toBe(c.ownProjection); w5b4Expect(w5b4Lib.canonicalJson(c.picks[0]!.args.answers)).toBe(c.readProjection);
+    w5b4Expect(c.builds).toHaveLength(3); w5b4Expect(c.snapshots).toHaveLength(3); w5b4Expect(c.retained).toHaveLength(3); w5b4Expect(c.seed).toBe(c.snapshots[0]); w5b4Expect(c.rootIdx).toBe(c.snapshots[2]);
+    for (let i = 0; i < c.builds.length; i += 1) { const build = c.builds[i]!; w5b4Expect(build.args.items).toBe(c.picks[0]!.result.items); w5b4Expect(build.args.idx).toBe(c.snapshots[i]); w5b4Expect(build.built).toEqual(c.baseline); for (const item of build.args.items as W5b4R[]) { const entry = c.s.entries.find((candidate) => candidate.qid === item.qid)!; w5b4Expect(item.entry).toBe(entry); w5b4Expect(c.picks[0]!.args.entries.includes(entry)).toBe(true); w5b4Expect(item.reply).toBe(C12_REPLY); } }
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C12 raw selection remains non-durable'); } finally { rs.close(); }
+    w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers'))).toEqual(c.answerBytes);
+  }, 180_000);
+  w5b4It('C12 canonical-IO control', async () => {
+    c12CanonicalIoAssertions(await c12Case());
+  }, 180_000);
+  w5b4It('C12 cap-order owner control', async () => {
+    const c = await c12Source(); const rs = D4.openReplayStore(c.s.home) as B1t2Rs;
+    try {
+      const masked = W5B5.judgeInputOf(c.s.entries[0] as W5b5Entry, C12_REPLY, rs.idx); const capFirst = W5B5.capUtf8Bytes(C12_REPLY, W5B5.JUDGE_REPLY_MAX_BYTES); const wrong = W5B5.maskValue(capFirst, rs.idx); const whole = W5B5.maskValue(C12_REPLY, rs.idx); const head = C06_BELT.slice(0, 10); const marker = t4Lib.REDACTED_MARK;
+      w5b4Expect(Buffer.byteLength(C12_REPLY.slice(0, 16_374))).toBe(16_374); w5b4Expect(Buffer.byteLength(capFirst)).toBe(W5B5.JUDGE_REPLY_MAX_BYTES); w5b4Expect(capFirst.endsWith(head)).toBe(true); w5b4Expect(C12_REPLY.indexOf(head)).toBe(16_374); w5b4Expect(C12_REPLY.indexOf(`ANSWER: ${B1T2_CMD}`)).toBeGreaterThan(W5B5.JUDGE_REPLY_MAX_BYTES);
+      w5b4Expect(String(wrong)).toContain(head); w5b4Expect(String(wrong)).not.toContain(marker); w5b4Expect(String(whole)).toContain(marker); w5b4Expect(String(whole)).not.toContain(C06_BELT); w5b4Expect(String(whole)).not.toContain(head);
+      w5b4Expect(Buffer.byteLength(masked.reply)).toBeLessThanOrEqual(W5B5.JUDGE_REPLY_MAX_BYTES); w5b4Expect(masked.reply).toContain(marker); w5b4Expect(masked.reply).not.toContain(C06_BELT); w5b4Expect(masked.reply).not.toContain(head); w5b4Expect(masked.answer_field).toBe(B1T2_CMD);
+    } finally { rs.close(); }
+  }, 180_000);
+
+  type C13Kind = 'longer' | 'ordered-id' | 'full-input' | 'control';
+  const c13Case = async (kind: C13Kind): Promise<W5b4R> => {
+    const c = await c12Source(); const variant = await c04Variant({ judgeObservers: true, judgeComparisonObserver: true });
+    const picks: W5b4R[] = []; const pickProjections: Array<{ selected: string; entries: string; answers: string }> = []; const builds: W5b4R[] = []; const buildProjections: string[] = []; const comparisons: W5b4R[] = []; const transformedOutputs: W5b5Job[][] = []; const actualReads: W5b5Answer[][] = []; let transformed = 0;
+    const snapshots: unknown[] = []; let retained: W5b4R[] = []; let seed: unknown = null; let root: B1t2Rs | null = null;
+    const acquireJudgeSnapshots = ({ rs, home, refresh }: W5b4R) => {
+      root = rs as B1t2Rs; seed = rs.idx; const old = refresh(rs, home) as W5b4R[]; const oldIdx = old[0]!.idx;
+      c05Replace(c.s, C12_COMPOUND_NEW); const fresh = refresh(rs, home) as W5b4R[]; const freshIdx = fresh[1]!.idx;
+      c05Replace(c.s, C12_SOURCE_MIDDLE()); retained = refresh(rs, home) as W5b4R[]; const middleIdx = retained[2]!.idx;
+      snapshots.push(oldIdx, freshIdx, middleIdx);
+    };
+    const judge = await w5b5InProcess(() => variant.judgeCommand(w5b5Flags(c.s.out, 'pilot'), W5B5_ENV(c.s.home), {
+      loadArmRun: () => w5b5Run(c.s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(c.s.home, { expected: D4.expectedForNode(c.s.draft, c.s.storeId).expected }), readArmAnswers: (out: string, section: string) => { const read = D4.readArmAnswers(out, section) as W5b5Answer[]; actualReads.push(read); return read; },
+      now: () => Date.now(), acquireJudgeSnapshots, afterPick: (value: W5b4R) => { picks.push(value); pickProjections.push({ selected: w5b4Lib.canonicalJson(value.result.items), entries: w5b4Lib.canonicalJson(value.args.entries), answers: w5b4Lib.canonicalJson(value.args.answers) }); }, afterBuild: (value: W5b4R) => { builds.push(value); buildProjections.push(w5b4Lib.canonicalJson(value.built)); }, afterComparison: (value: W5b4R) => comparisons.push(value),
+      transformJobs: ({ built }: W5b4R) => {
+        transformed += 1;
+        const result = transformed !== 2 || kind === 'control' ? built
+          : kind === 'longer' ? [...built, { id: 'j9999', input: { ...built[0]!.input } }]
+            : kind === 'ordered-id' ? built.map((job: W5b5Job, i: number) => i === 0 ? { ...job, id: 'j9999' } : job)
+              : built.map((job: W5b5Job, i: number) => i === 0 ? { ...job, input: { ...job.input, reply: `${job.input.reply} neutral-field-delta` } } : job);
+        transformedOutputs.push(result as W5b5Job[]); return result;
+      },
+    }), variant);
+    return { c, picks, pickProjections, builds, buildProjections, comparisons, transformedOutputs, actualReads, snapshots, retained, seed, rootIdx: root!.idx, judge, transformed, cleaned: c04VariantCleaned };
+  };
+  for (const [kind, title] of [['longer', 'C13 longer-second-build refuses'], ['ordered-id', 'C13 ordered-id-second-build refuses'], ['full-input', 'C13 full-input-second-build refuses']] as const) {
+    w5b4It(title, async () => {
+      const r = await c13Case(kind); const c = r.c as Awaited<ReturnType<typeof c12Source>>;
+      w5b4Expect(r.judge.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree judge' });
+      w5b4Expect(r.actualReads).toHaveLength(1); w5b4Expect(r.picks).toHaveLength(1); w5b4Expect(r.picks[0]!.args.answers).toBe(r.actualReads[0]); w5b4Expect(r.pickProjections).toHaveLength(1); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.result.items)).toBe(r.pickProjections[0]!.selected); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.entries)).toBe(r.pickProjections[0]!.entries); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.answers)).toBe(r.pickProjections[0]!.answers); for (const item of r.picks[0]!.result.items as W5b4R[]) { w5b4Expect(item.reply).toBe(C12_REPLY); w5b4Expect(item.entry).toBe(c.s.entries.find((entry: W5b4R) => entry.qid === item.qid)); }
+      w5b4Expect(r.builds).toHaveLength(2); w5b4Expect(r.transformed).toBe(2); w5b4Expect(r.comparisons).toHaveLength(kind === 'full-input' ? 1 : 0); w5b4Expect(r.cleaned).toBe(true);
+      w5b4Expect(r.snapshots).toHaveLength(3); w5b4Expect(new Set(r.snapshots).size).toBe(3); w5b4Expect(r.retained).toHaveLength(3); w5b4Expect(r.seed).toBe(r.snapshots[0]); w5b4Expect(r.rootIdx).toBe(r.snapshots[2]); for (let i = 0; i < r.retained.length; i += 1) w5b4Expect(r.retained[i]!.idx).toBe(r.snapshots[i]); for (let i = 0; i < r.builds.length; i += 1) w5b4Expect(r.builds[i]!.args.idx).toBe(r.snapshots[i]);
+      const first = r.builds[0]!.built as W5b5Job[]; const second = r.builds[1]!.built as W5b5Job[]; const changed = r.transformedOutputs[1]!; w5b4Expect(first).not.toBe(second); w5b4Expect(w5b4Lib.canonicalJson(first)).toBe(r.buildProjections[0]); w5b4Expect(w5b4Lib.canonicalJson(second)).toBe(r.buildProjections[1]); w5b4Expect(first).toEqual(c.baseline); w5b4Expect(second).toEqual(c.baseline); w5b4Expect(r.builds.every((build: W5b4R) => build.args.items === r.picks[0]!.result.items)).toBe(true);
+      if (kind === 'longer') { w5b4Expect(changed).toHaveLength(3); w5b4Expect(changed.slice(0, 2)).toEqual(c.baseline); w5b4Expect(changed[2]!.id).toBe('j9999'); w5b4Expect(changed[2]!.input).toEqual(c.baseline[0]!.input); w5b4Expect((w5b4Json(join(c.s.out, 'pilot', 'judge.map.json')).items as W5b5MapRow[]).some((row) => row.id === 'j9999')).toBe(false); }
+      if (kind === 'ordered-id') { w5b4Expect(changed).toHaveLength(2); w5b4Expect(changed.map((job: W5b5Job) => job.id)).toEqual(['j9999', c.baseline[1]!.id]); w5b4Expect(changed[0]!.input).toBe(second[0]!.input); w5b4Expect(w5b4Lib.canonicalJson(changed[1]!)).toBe(w5b4Lib.canonicalJson(second[1]!)); w5b4Expect((w5b4Json(join(c.s.out, 'pilot', 'judge.map.json')).items as W5b5MapRow[]).some((row) => row.id === 'j9999')).toBe(false); }
+      if (kind === 'full-input') { w5b4Expect(changed.map((job: W5b5Job) => job.id)).toEqual(c.baseline.map((job: W5b5Job) => job.id)); w5b4Expect(changed[0]!.input.reply).toBe(`${second[0]!.input.reply} neutral-field-delta`); w5b4Expect({ ...changed[0]!.input, reply: second[0]!.input.reply }).toEqual(second[0]!.input); w5b4Expect(w5b4Lib.canonicalJson(changed[1]!)).toBe(w5b4Lib.canonicalJson(second[1]!)); }
+      w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4); w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judge'))).toBe(false);
+      w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers'))).toEqual(c.answerBytes); const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, `C13 ${kind} remains non-durable`); } finally { rs.close(); }
+    }, 180_000);
+  }
+  w5b4It('C13 canonical-newline and stdin control', async () => {
+    const r = await c13Case('control'); const c = r.c as Awaited<ReturnType<typeof c12Source>>; const comparisons = r.comparisons as Array<{ a: string; b: string }>;
+    w5b4Expect(r.judge.refusal).toBeNull(); w5b4Expect(r.judge.code).toBe(0); w5b4Expect(r.actualReads).toHaveLength(1); w5b4Expect(r.picks).toHaveLength(1); w5b4Expect(r.picks[0]!.args.answers).toBe(r.actualReads[0]); w5b4Expect(r.pickProjections).toHaveLength(1); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.result.items)).toBe(r.pickProjections[0]!.selected); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.entries)).toBe(r.pickProjections[0]!.entries); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.answers)).toBe(r.pickProjections[0]!.answers); for (const item of r.picks[0]!.result.items as W5b4R[]) { w5b4Expect(item.reply).toBe(C12_REPLY); w5b4Expect(item.entry).toBe(c.s.entries.find((entry: W5b4R) => entry.qid === item.qid)); }
+    w5b4Expect(r.builds).toHaveLength(3); w5b4Expect(r.transformed).toBe(3); w5b4Expect(comparisons).toHaveLength(4); w5b4Expect(r.cleaned).toBe(true);
+    w5b4Expect(r.snapshots).toHaveLength(3); w5b4Expect(r.retained).toHaveLength(3); w5b4Expect(new Set(r.snapshots).size).toBe(3); w5b4Expect(r.seed).toBe(r.snapshots[0]); w5b4Expect(r.rootIdx).toBe(r.snapshots[2]); for (let i = 0; i < r.retained.length; i += 1) w5b4Expect(r.retained[i]!.idx).toBe(r.snapshots[i]); for (let i = 0; i < r.builds.length; i += 1) { w5b4Expect(r.builds[i]!.args.idx).toBe(r.snapshots[i]); w5b4Expect(r.builds[i]!.args.items).toBe(r.picks[0]!.result.items); w5b4Expect(w5b4Lib.canonicalJson(r.builds[i]!.built)).toBe(r.buildProjections[i]); w5b4Expect(r.builds[i]!.built).toEqual(c.baseline); }
+    const expectedComparisons = (c.baseline as W5b5Job[]).map((job) => `${w5b4Lib.canonicalJson(job.input)}\n`);
+    for (let i = 0; i < comparisons.length; i += 1) { const expected = expectedComparisons[i % expectedComparisons.length]!; w5b4Expect(comparisons[i]!.a).toBe(expected); w5b4Expect(comparisons[i]!.b).toBe(expected); w5b4Expect(Buffer.byteLength(comparisons[i]!.a)).toBe(Buffer.byteLength(expected)); }
+    c12CanonicalIoAssertions({ ...c, judge: r.judge, cleaned: r.cleaned });
+  }, 180_000);
+
+  type C14Kind = 'normal' | 'overflow' | 'material' | 'throw';
+  const c14Source = async (): Promise<{ s: FwSetup; frozen: string; answerBytes: C10Bytes; records: W5b5Answer[] }> => {
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, { declaredSourceValue: C12_COMPOUND_OLD, storedSummary: C05_STABLE, laterQuestion: C05_STABLE });
+    for (const [i, entry] of s.entries.entries()) for (const arm of W5B4_ARMS) w5b4Act(s.home, entry, arm, '.jsonl', w5b4Stream({ text: `ANSWER: ${entry.fact}` }), i + 1);
+    const armed = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(armed.refusal).toBeNull(); const frozen = readFileSync(s.frozen.path, 'utf8'); const answerBytes = c10Tree(join(s.out, 'pilot', 'answers')); const records = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[];
+    w5b4Expect(w5b4Versions(s.home)).toBe(2); w5b4Expect(w5b4Runs(s.home)).toHaveLength(4); w5b4Expect(records).toHaveLength(4); w5b4Expect(records.every((record) => record.outcome === 'answered' && record.correct === true && record.reply === `ANSWER: ${s.entries.find((entry) => entry.qid === record.qid)!.fact}`)).toBe(true); w5b4Expect(new Set(records.map((record) => `${record.qid}:${record.arm}`))).toEqual(new Set(s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid}:${arm}`))));
+    return { s, frozen, answerBytes, records };
+  };
+  const c14Case = async (kind: C14Kind): Promise<W5b4R> => {
+    type C14Root = B1t2Rs & { maskingSnapshots?: { snapshots: Array<{ idx: unknown; material: number }>; material: number }; candidateOverride?: (o: W5b4R) => unknown };
+    const c = await c14Source(); const variant = await c04Variant({ judgeObservers: true, c14Observers: true }); const reads: W5b5Answer[][] = []; let candidateCalls = 0; let delegatedCandidateCalls = 0; const picks: W5b4R[] = []; const pickProjections: W5b4R[] = []; const builds: W5b4R[] = []; const acquisitions: W5b4R[] = []; const opens: W5b4R[] = []; const events: W5b4R[] = []; const candidateFacts: W5b4R[] = []; let root: C14Root | null = null; let seed: unknown = null; let seedState: W5b4R | null = null;
+    const mark = (name: string) => events.push({ name, versions: w5b4Versions(c.s.home), runs: w5b4Runs(c.s.home).length });
+    const acquireJudgeSnapshots = ({ rs, home, refresh }: W5b4R) => {
+      root = rs as C14Root; seed = rs.idx;
+      if (kind === 'normal') { refresh(rs, home); c05Replace(c.s, C12_COMPOUND_NEW); refresh(rs, home); c05Replace(c.s, C12_SOURCE_MIDDLE()); refresh(rs, home); }
+      else root.candidateOverride = ({ db, home: candidateHome, actual, material, checked, materialLimit }: W5b4R) => {
+        candidateCalls += 1; const actualCandidate = actual(db, candidateHome); delegatedCandidateCalls += 1; const state = root!.maskingSnapshots!; seedState = { state, array: state.snapshots, material: state.material, descriptor: state.snapshots[0], root: root!.idx }; candidateFacts.push({ actualCandidate, seedMaterial: state.material });
+        if (kind === 'throw') throw new Error('fixture C14 refresh throw');
+        if (kind === 'overflow') { const overflow = c14FixtureIndex(64); const checkedIndex = checked(overflow); const unlimited = material(overflow, Number.MAX_SAFE_INTEGER); overflow.belt.overflow = 1; candidateFacts.push({ candidate: overflow, checkedIndex, overflow: overflow.belt.overflow, unlimited }); return overflow; }
+        const probe = c14FixtureIndex(64); const probeMaterial = material(probe, Number.MAX_SAFE_INTEGER); const base = probeMaterial - 64; const backing = materialLimit - base + 1; const over = c14FixtureIndex(backing); const checkedIndex = checked(over); const unlimited = material(over, Number.MAX_SAFE_INTEGER); candidateFacts.push({ probe, probeMaterial, base, backing, limit: materialLimit, candidate: over, checkedIndex, unlimited }); return over;
+      };
+    };
+    const judge = await w5b5InProcess(() => variant.judgeCommand(w5b5Flags(c.s.out, 'pilot'), W5B5_ENV(c.s.home), {
+      loadArmRun: () => w5b5Run(c.s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(c.s.home, { expected: D4.expectedForNode(c.s.draft, c.s.storeId).expected }), readArmAnswers: (out: string, section: string) => { const read = D4.readArmAnswers(out, section) as W5b5Answer[]; reads.push(read); return read; }, now: () => Date.now(), acquireJudgeSnapshots,
+      afterPick: (value: W5b4R) => { picks.push(value); pickProjections.push({ selected: w5b4Lib.canonicalJson(value.result.items), entries: w5b4Lib.canonicalJson(value.args.entries), answers: w5b4Lib.canonicalJson(value.args.answers) }); }, afterBuild: (value: W5b4R) => { builds.push(value); mark('build'); }, afterAcquire: (value: W5b4R) => { acquisitions.push(value); mark(`acquire-${value.phase}`); }, afterOpenJudge: (value: W5b4R) => { opens.push(value); mark(`open-${value.phase}`); },
+    }), variant);
+    return { c, reads, picks, pickProjections, builds, acquisitions, opens, events, candidateFacts, candidateCalls, delegatedCandidateCalls, seed, seedState, rootIdx: root!.idx, snapshotState: root!.maskingSnapshots, sourceText: readFileSync(c05Source(c.s), 'utf8'), judge, cleaned: c04VariantCleaned };
+  };
+  w5b4It('C14 zero-jobs refreshes and initial-preflights', async () => {
+    const r = await c14Case('normal'); const c = r.c as W5b4R;
+    w5b4Expect(r.judge.refusal).toBeNull(); w5b4Expect(r.judge.code).toBe(0); w5b4Expect(r.cleaned).toBe(true); w5b4Expect(r.acquisitions.filter((x: W5b4R) => x.phase === 'before')).toHaveLength(1); w5b4Expect(w5b4Versions(c.s.home)).toBe(3);
+    w5b4Expect(r.reads).toHaveLength(1); w5b4Expect(r.reads[0]).toEqual(c.records); w5b4Expect(r.picks).toHaveLength(1); w5b4Expect(r.picks[0]!.args.answers).toBe(r.reads[0]); w5b4Expect(r.pickProjections).toHaveLength(1); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.result.items)).toBe(r.pickProjections[0]!.selected); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.entries)).toBe(r.pickProjections[0]!.entries); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.answers)).toBe(r.pickProjections[0]!.answers); w5b4Expect(r.picks[0]!.result.items).toEqual([]); w5b4Expect(r.picks[0]!.result.excluded).toEqual({ correct: 4, run_failed_questions: 0 });
+    const retained = r.acquisitions.find((x: W5b4R) => x.phase === 'after')!.snapshots as W5b4R[]; w5b4Expect(retained).toHaveLength(3); const retainedIdx = retained.map((snapshot) => snapshot.idx); w5b4Expect(new Set(retainedIdx).size).toBe(3); w5b4Expect(r.seed).toBe(retainedIdx[0]); w5b4Expect(r.rootIdx).toBe(retainedIdx[2]); w5b4Expect(r.builds).toHaveLength(3); for (let i = 0; i < r.builds.length; i += 1) { w5b4Expect(r.builds[i]!.args.idx).toBe(retainedIdx[i]); w5b4Expect(r.builds[i]!.args.items).toBe(r.picks[0]!.result.items); w5b4Expect(r.builds[i]!.built).toEqual([]); }
+    w5b4Expect(r.opens.map((x: W5b4R) => x.phase)).toEqual(['before', 'after']); w5b4Expect(r.events.map((event: W5b4R) => event.name)).toEqual(['acquire-before', 'acquire-after', 'build', 'build', 'build', 'open-before', 'open-after']); w5b4Expect(r.events.slice(0, 6).every((event: W5b4R) => event.versions === 2 && event.runs === 4)).toBe(true); w5b4Expect(r.events[6]).toMatchObject({ versions: 3, runs: 4 }); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4);
+    const map = w5b4Json(join(c.s.out, 'pilot', 'judge.map.json')); const mapRows = map.items as W5b5MapRow[]; w5b4Expect(new Set(mapRows.map((row) => row.id)).size).toBe(4); w5b4Expect(new Set(mapRows.map((row) => `${row.qid}:${row.arm}`))).toEqual(new Set(c.s.entries.flatMap((entry: W5b4R) => W5B4_ARMS.map((arm) => `${entry.qid}:${arm}`)))); const judged = w5b4Json(join(c.s.out, 'pilot', 'judged.json')); w5b4Expect(judged).toMatchObject({ kind: W5B5.JUDGED_KIND, section: 'pilot', items: [], counts: { judged: 0, judge_failed: 0, uncertain: 0, fabricated: 0, excluded_correct: 4, excluded_run_failed_questions: 0 } }); w5b4Expect(readdirSync(join(c.s.out, 'pilot', 'judge'))).toEqual([]); w5b4Expect(r.sourceText).toBe(`${C12_SOURCE_MIDDLE()}\n`); w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers'))).toEqual(c.answerBytes); const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C14 normal remains non-durable'); } finally { rs.close(); }
+  }, 180_000);
+  for (const [kind, detail, title] of [['overflow', 'masking-snapshot-belt-overflow', 'C14 zero-jobs candidate-overflow refuses before version'], ['material', 'masking-snapshots-material-cap', 'C14 zero-jobs material-cap refuses before version'], ['throw', 'masking-snapshot-refresh-failed', 'C14 zero-jobs refresh-throw refuses before version']] as const) {
+    w5b4It(title, async () => {
+      const r = await c14Case(kind); const c = r.c as W5b4R;
+      w5b4Expect(r.judge.refusal).toEqual({ word: 'input-invalid', detail }); w5b4Expect(r.cleaned).toBe(true); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4); w5b4Expect(r.opens).toEqual([]); w5b4Expect(r.builds).toEqual([]); w5b4Expect(r.acquisitions.filter((x: W5b4R) => x.phase === 'before')).toHaveLength(1); w5b4Expect(r.reads).toHaveLength(1); w5b4Expect(r.reads[0]).toEqual(c.records); w5b4Expect(r.picks).toHaveLength(1); w5b4Expect(r.picks[0]!.args.answers).toBe(r.reads[0]); w5b4Expect(r.pickProjections).toHaveLength(1); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.result.items)).toBe(r.pickProjections[0]!.selected); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.entries)).toBe(r.pickProjections[0]!.entries); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.answers)).toBe(r.pickProjections[0]!.answers); w5b4Expect(r.picks[0]!.result.items).toEqual([]); w5b4Expect(r.picks[0]!.result.excluded).toEqual({ correct: 4, run_failed_questions: 0 });
+      const state = r.snapshotState as W5b4R; const before = r.seedState as W5b4R; w5b4Expect(r.rootIdx).toBe(r.seed); w5b4Expect(state).toBe(before.state); w5b4Expect(state.snapshots).toBe(before.array); w5b4Expect(state.material).toBe(before.material); w5b4Expect(state.snapshots).toHaveLength(1); w5b4Expect(state.snapshots[0]).toBe(before.descriptor); w5b4Expect(state.snapshots[0]!.idx).toBe(r.seed); w5b4Expect(r.candidateCalls).toBe(1); w5b4Expect(r.delegatedCandidateCalls).toBe(1); w5b4Expect(r.candidateFacts[0]).toMatchObject({ seedMaterial: before.material });
+      if (kind === 'overflow') { const fact = r.candidateFacts[1]!; w5b4Expect(fact).toMatchObject({ overflow: 1 }); w5b4Expect(fact.checkedIndex).toBe(fact.candidate); w5b4Expect(fact.unlimited).toBeGreaterThan(0); w5b4Expect((fact.candidate as ReturnType<typeof c14FixtureIndex>).belt.texts).toEqual(c14FixtureIndex(64).belt.texts); }
+      if (kind === 'material') { const fact = r.candidateFacts[1]!; w5b4Expect(fact.limit).toBe(16_777_216); w5b4Expect(fact.probeMaterial).toBe(fact.base + 64); w5b4Expect(fact.backing).toBe(fact.limit - fact.base + 1); w5b4Expect(fact.backing).toBeGreaterThan(0); w5b4Expect(fact.backing).toBeLessThanOrEqual(fact.limit); w5b4Expect((fact.candidate as ReturnType<typeof c14FixtureIndex>).belt.units[0]!.buffer.byteLength).toBe(fact.backing); w5b4Expect(fact.checkedIndex).toBe(fact.candidate); w5b4Expect(fact.unlimited).toBe(16_777_217); }
+      if (kind === 'throw') w5b4Expect(r.candidateFacts).toHaveLength(1);
+      w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judge'))).toBe(false); w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judged.json'))).toBe(false); w5b4Expect(r.sourceText).toBe(`${C12_COMPOUND_OLD}\n`); w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers'))).toEqual(c.answerBytes); const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, `C14 ${kind} remains non-durable`); } finally { rs.close(); }
+    }, 180_000);
+  }
+
+  type N2ExcludedCase = { out: string; q: { qid: string }; arm: string; rel: string };
+  const n2ExcludedFixture = (): N2ExcludedCase => { const out = join(mkTmp('ccrc-n2-excluded-'), 'out'); const q = { qid: 'n2fixtureqid0001' }; const arm = W5B4_CONTROL; return { out, q, arm, rel: D4.answerRel('pilot', q.qid, arm) }; };
+  const n2Excluded = async (write: (c: N2ExcludedCase) => void = () => {}, seam: W5b4R = {}): Promise<W5b4R> => {
+    const variant = await c04Variant({ n2ExcludedReader: true }); const fixture = n2ExcludedFixture(); const calls: W5b4R[] = []; write(fixture); let result: unknown = null; let caught: unknown = null;
+    try { result = variant.excludedReasonOf({ section: 'pilot', out: fixture.out, ...seam, n2ReadPlain: seam.n2ReadPlain === undefined ? undefined : (o: W5b4R) => { calls.push(o); return seam.n2ReadPlain(o); } }, fixture.q, fixture.arm); } catch (error) { caught = error; }
+    return { variant, fixture, calls, result, caught, cleaned: c04VariantCleaned };
+  };
+  const n2Answer = (kind: string, reason: string): string => w5b4Lib.canonicalJson({ kind, reason });
+  w5b4It('N201 excluded reader absent returns null', async () => {
+    const r = await n2Excluded(); w5b4Expect(r.caught).toBeNull(); w5b4Expect(r.result).toBeNull(); w5b4Expect(r.calls).toEqual([]); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N202 excluded reader directory refuses', async () => {
+    const r = await n2Excluded((c) => mkdirSync(join(c.out, c.rel), { recursive: true })); w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: `${r.fixture.rel} is not a regular file` }); w5b4Expect(r.calls).toEqual([]); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N203 excluded reader reached unreadable refuses', async () => {
+    const actualStates: W5b4R[] = []; let originalBytes = ''; let targetPath = ''; const r = await n2Excluded((c) => { mkdirSync(join(c.out, 'pilot', 'answers'), { recursive: true }); targetPath = join(c.out, c.rel); originalBytes = n2Answer(D4.ANSWER_KIND, 'ordinary'); writeFileSync(targetPath, originalBytes, { mode: 0o600 }); }, { n2ReadPlain: ({ path, cap, actual }: W5b4R) => { const actualState = actual(path, cap); actualStates.push(actualState); return path === targetPath ? { state: 'bad', why: 'unreadable', code: 'EACCES' } : actualState; } });
+    w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: `${r.fixture.rel} EACCES` }); w5b4Expect(r.calls).toHaveLength(1); w5b4Expect(r.calls[0]!.path).toBe(targetPath); w5b4Expect(actualStates).toHaveLength(1); w5b4Expect(actualStates[0]).toMatchObject({ state: 'bytes', bytes: expect.any(Buffer) }); w5b4Expect((actualStates[0]!.bytes as Buffer).toString('utf8')).toBe(originalBytes); w5b4Expect(r.calls[0]!.cap).toBeGreaterThan((actualStates[0]!.bytes as Buffer).length); w5b4Expect(readFileSync(targetPath, 'utf8')).toBe(originalBytes); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N204 excluded reader malformed JSON refuses', async () => {
+    const r = await n2Excluded((c) => { mkdirSync(join(c.out, 'pilot', 'answers'), { recursive: true }); writeFileSync(join(c.out, c.rel), '{bad', { mode: 0o600 }); }); w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: `${r.fixture.rel} is not JSON` }); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N205 excluded reader matching reason control', async () => {
+    const r = await n2Excluded((c) => { mkdirSync(join(c.out, 'pilot', 'answers'), { recursive: true }); writeFileSync(join(c.out, c.rel), n2Answer(D4.ANSWER_KIND, D4.ARM_PAYLOAD_CHANGED), { mode: 0o600 }); }); w5b4Expect(r.caught).toBeNull(); w5b4Expect(r.result).toBe(D4.ARM_PAYLOAD_CHANGED); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N205 excluded reader null returns null', async () => {
+    const r = await n2Excluded((c) => { mkdirSync(join(c.out, 'pilot', 'answers'), { recursive: true }); writeFileSync(join(c.out, c.rel), 'null', { mode: 0o600 }); }); w5b4Expect(r.caught).toBeNull(); w5b4Expect(r.result).toBeNull(); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N205 excluded reader wrong-kind returns null', async () => {
+    const r = await n2Excluded((c) => { mkdirSync(join(c.out, 'pilot', 'answers'), { recursive: true }); writeFileSync(join(c.out, c.rel), n2Answer('ordinary-kind', D4.ARM_PAYLOAD_CHANGED), { mode: 0o600 }); }); w5b4Expect(r.caught).toBeNull(); w5b4Expect(r.result).toBeNull(); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N205 excluded reader wrong-reason ordinary control', async () => {
+    const r = await n2Excluded((c) => { mkdirSync(join(c.out, 'pilot', 'answers'), { recursive: true }); writeFileSync(join(c.out, c.rel), n2Answer(D4.ANSWER_KIND, 'ordinary'), { mode: 0o600 }); }); w5b4Expect(r.caught).toBeNull(); w5b4Expect(r.result).toBeNull(); w5b4Expect(r.cleaned).toBe(true);
+  });
+
+  type N2ManifestCase = { out: string; rel: string };
+  const n2ManifestFixture = (): N2ManifestCase => { const out = join(mkTmp('ccrc-n2-manifest-'), 'out'); return { out, rel: 'pilot/arms/batches' }; };
+  const n2Manifest = async (write: (c: N2ManifestCase) => void = () => {}, seam: W5b4R = {}): Promise<W5b4R> => {
+    const variant = await c04Variant({ n2ManifestReader: true }); const fixture = n2ManifestFixture(); const dirCalls: W5b4R[] = []; const readCalls: W5b4R[] = []; write(fixture); let result: unknown = null; let caught: unknown = null;
+    try { result = variant.armManifestShas({ section: 'pilot', out: fixture.out, ...seam, n2ReadDir: seam.n2ReadDir === undefined ? undefined : (o: W5b4R) => { dirCalls.push(o); return seam.n2ReadDir(o); }, n2ReadPlain: seam.n2ReadPlain === undefined ? undefined : (o: W5b4R) => { readCalls.push(o); return seam.n2ReadPlain(o); } }); } catch (error) { caught = error; }
+    return { variant, fixture, dirCalls, readCalls, result, caught, cleaned: c04VariantCleaned };
+  };
+  const n2ManifestText = (runs: unknown, kind: string = D4.ARM_BATCH_KIND): string => w5b4Lib.canonicalJson({ kind, runs });
+  const n2ManifestWrite = (c: N2ManifestCase, name: string, runs: unknown, kind: string = D4.ARM_BATCH_KIND): string => { mkdirSync(join(c.out, c.rel), { recursive: true }); const target = join(c.out, c.rel, name); writeFileSync(target, n2ManifestText(runs, kind), { mode: 0o600 }); return target; };
+  w5b4It('N206 manifest reader absent returns empty map', async () => {
+    const r = await n2Manifest(); w5b4Expect(r.caught).toBeNull(); w5b4Expect(r.result).toEqual(new Map()); w5b4Expect(r.dirCalls).toEqual([]); w5b4Expect(r.readCalls).toEqual([]); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N207 manifest reader reached readdir errno refuses', async () => {
+    let batchPath = ''; const actualNames: string[][] = []; const r = await n2Manifest((c) => { mkdirSync(join(c.out, c.rel), { recursive: true }); batchPath = join(c.out, c.rel); }, { n2ReadDir: ({ path, actual }: W5b4R) => { const names = actual(path) as string[]; actualNames.push(names); if (path === batchPath) throw Object.assign(new Error('fixture N207'), { code: 'EACCES' }); return names; } });
+    w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: 'pilot/arms/batches unreadable EACCES' }); w5b4Expect(r.caught).toBeInstanceOf(r.variant.DriverRefusal); w5b4Expect(r.dirCalls).toHaveLength(1); w5b4Expect(r.dirCalls[0]!.path).toBe(batchPath); w5b4Expect(actualNames).toEqual([[]]); w5b4Expect(r.readCalls).toEqual([]); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N207 manifest reader sorted matching-files control', async () => {
+    let batchPath = ''; let actualNames: string[] = []; let suppliedNames: string[] = []; const r = await n2Manifest((c) => { n2ManifestWrite(c, '0002.json', [{ name: 'run-two', stdin_sha256: 'sha-two' }]); n2ManifestWrite(c, '0001.json', [{ name: 'run-one', stdin_sha256: 'sha-one' }]); batchPath = join(c.out, c.rel); writeFileSync(join(c.out, c.rel, 'notes.txt'), '{bad', { mode: 0o600 }); }, { n2ReadDir: ({ path, actual }: W5b4R) => { actualNames = actual(path) as string[]; suppliedNames = [...actualNames].sort().reverse(); return suppliedNames; }, n2ReadPlain: ({ path, cap, actual }: W5b4R) => actual(path, cap) });
+    w5b4Expect(r.caught).toBeNull(); w5b4Expect([...r.result as Map<string, string>].map((entry) => entry)).toEqual([['run-one', 'sha-one'], ['run-two', 'sha-two']]); w5b4Expect(r.dirCalls).toHaveLength(1); w5b4Expect(r.dirCalls[0]!.path).toBe(batchPath); w5b4Expect(actualNames).toEqual(expect.arrayContaining(['0001.json', '0002.json', 'notes.txt'])); w5b4Expect(suppliedNames).toEqual([...actualNames].sort().reverse()); w5b4Expect(r.readCalls.map((o: W5b4R) => o.path)).toEqual([join(batchPath, '0001.json'), join(batchPath, '0002.json')]); w5b4Expect(readFileSync(join(batchPath, '0001.json'), 'utf8')).toBe(n2ManifestText([{ name: 'run-one', stdin_sha256: 'sha-one' }])); w5b4Expect(readFileSync(join(batchPath, '0002.json'), 'utf8')).toBe(n2ManifestText([{ name: 'run-two', stdin_sha256: 'sha-two' }])); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N208 manifest reader nonbytes refuses', async () => {
+    let targetPath = ''; let originalBytes = ''; const actualStates: W5b4R[] = []; const r = await n2Manifest((c) => { targetPath = n2ManifestWrite(c, '0001.json', []); originalBytes = readFileSync(targetPath, 'utf8'); }, { n2ReadPlain: ({ path, cap, actual }: W5b4R) => { const state = actual(path, cap); actualStates.push(state); return path === targetPath ? { state: 'bad', why: 'unreadable', code: 'EACCES' } : state; } });
+    w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: 'pilot/arms/batches/0001.json EACCES' }); w5b4Expect(r.readCalls).toHaveLength(1); w5b4Expect(r.readCalls[0]!.path).toBe(targetPath); w5b4Expect(actualStates).toHaveLength(1); w5b4Expect(actualStates[0]).toMatchObject({ state: 'bytes', bytes: expect.any(Buffer) }); w5b4Expect((actualStates[0]!.bytes as Buffer).toString('utf8')).toBe(originalBytes); w5b4Expect(readFileSync(targetPath, 'utf8')).toBe(originalBytes); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N209 manifest reader malformed JSON refuses', async () => {
+    const r = await n2Manifest((c) => { mkdirSync(join(c.out, c.rel), { recursive: true }); writeFileSync(join(c.out, c.rel, '0001.json'), '{bad', { mode: 0o600 }); }); w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: 'pilot/arms/batches/0001.json is not JSON' }); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N210 manifest reader null refuses', async () => {
+    const r = await n2Manifest((c) => { mkdirSync(join(c.out, c.rel), { recursive: true }); writeFileSync(join(c.out, c.rel, '0001.json'), 'null', { mode: 0o600 }); }); w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: 'pilot/arms/batches/0001.json is not an arm batch manifest' }); w5b4Expect(r.caught).toBeInstanceOf(r.variant.DriverRefusal); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N210 manifest reader wrong-kind refuses', async () => {
+    const r = await n2Manifest((c) => { n2ManifestWrite(c, '0001.json', [], 'ordinary-kind'); }); w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: 'pilot/arms/batches/0001.json is not an arm batch manifest' }); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N210 manifest reader nonarray runs refuses', async () => {
+    const r = await n2Manifest((c) => { n2ManifestWrite(c, '0001.json', { not: 'an-array' }); }); w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: 'pilot/arms/batches/0001.json is not an arm batch manifest' }); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N211 manifest reader valid and malformed runs control', async () => {
+    const r = await n2Manifest((c) => { n2ManifestWrite(c, '0001.json', [null, { name: 1, stdin_sha256: 'bad-name' }, { name: 'bad-sha', stdin_sha256: 1 }, { name: 'valid-a', stdin_sha256: 'sha-a' }, { name: 'valid-b', stdin_sha256: 'not-validated' }]); }); w5b4Expect(r.caught).toBeNull(); w5b4Expect([...r.result as Map<string, string>].map((entry) => entry)).toEqual([['valid-a', 'sha-a'], ['valid-b', 'not-validated']]); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N211 manifest reader later sorted manifest overrides', async () => {
+    const r = await n2Manifest((c) => { n2ManifestWrite(c, '0002.json', [{ name: 'same', stdin_sha256: 'new' }, { name: 'later', stdin_sha256: 'later-sha' }]); n2ManifestWrite(c, '0001.json', [{ name: 'same', stdin_sha256: 'old' }, { name: 'first', stdin_sha256: 'first-sha' }]); }); w5b4Expect(r.caught).toBeNull(); w5b4Expect([...r.result as Map<string, string>].map((entry) => entry)).toEqual([['same', 'new'], ['first', 'first-sha'], ['later', 'later-sha']]); w5b4Expect(r.cleaned).toBe(true);
+  });
+
+  type C15ArmKind = 'recheck' | 'payload' | 'control';
+  const c15Arms = async (kind: C15ArmKind): Promise<W5b4R> => {
+    const f = await c11Fixture(); const variant = await c04Variant({ acquireRetainedSnapshots: true }); const snapshots: unknown[] = []; const rechecks: W5b4R[] = []; const payloads: W5b4R[] = []; const qsProjections: string[] = []; const answerBefore = c10Tree(join(f.s.out, 'pilot', 'answers')); const manifestsBefore = c10Tree(join(f.s.out, 'pilot', 'arms', 'batches')); let root: B1t2Rs | null = null; let seed: unknown = null; const thrown = kind === 'recheck' ? new Error('fixture C15 recheck Error') : null; const payloadRefusal = kind === 'payload' ? new variant.DriverRefusal('quiz-unanswerable', 'fixture C15 payload refusal') : null;
+    const acquireRetainedSnapshots = ({ rs, home, refresh }: W5b4R) => {
+      root = rs as B1t2Rs; seed = rs.idx; const old = refresh(rs, home) as W5b4R[]; const oldIdx = old[0]!.idx;
+      c05Replace(f.s, C06_BELT); const middle = refresh(rs, home) as W5b4R[]; const middleIdx = middle[1]!.idx;
+      c05Replace(f.s, C05_NEW); const newest = refresh(rs, home) as W5b4R[]; const newIdx = newest[2]!.idx;
+      snapshots.push(oldIdx, middleIdx, newIdx); w5b4Expect(rs.idx).toBe(newIdx);
+    };
+    const recheck = async (view: B1t2Rs, qs: W5b4R[], ctx: W5b4R) => {
+      const beforeIdx = view.idx; const qsProjection = w5b4Lib.canonicalJson(qs); const verdicts = await variant.recheckBatch(view, qs, ctx); rechecks.push({ idx: beforeIdx, afterIdx: view.idx, qs, verdicts }); qsProjections.push(qsProjection);
+      if (kind === 'recheck' && beforeIdx === snapshots[1]) throw thrown;
+      return verdicts;
+    };
+    const payloadsOf = (view: B1t2Rs, boundaryEntryId: number, question: string, cut: W5b4R) => {
+      const payload = variant.armPayloads(view, boundaryEntryId, question, cut) as W5b4R; payloads.push({ idx: view.idx, boundaryEntryId, question, cut, payload });
+      if (kind === 'payload' && view.idx === snapshots[1] && payloads.filter((x) => x.idx === view.idx).length === 1) throw payloadRefusal;
+      return payload;
+    };
+    const oldBaseline = await c11Payloads(f.s, C05_OLD); const middleBaseline = await c11Payloads(f.s, C06_BELT); const newBaseline = await c11Payloads(f.s, C05_NEW); c05Replace(f.s, C05_OLD);
+    for (const entry of f.s.entries) for (const arm of W5B4_ARMS) { const expected = oldBaseline.payloads.get(entry.qid as string)!.get(arm); w5b4Expect(middleBaseline.payloads.get(entry.qid as string)!.get(arm)).toBe(expected); w5b4Expect(newBaseline.payloads.get(entry.qid as string)!.get(arm)).toBe(expected); }
+    let result: W5b4Result | null = null; let caught: unknown = null;
+    try { result = await w5b4VariantArms(variant, f.s.home, f.s.argv, { recheck, payloads: payloadsOf, acquireRetainedSnapshots }); } catch (error) { caught = error; }
+    return { f, snapshots, rechecks, payloads, baseline: oldBaseline.payloads, qsProjections, answerBefore, manifestsBefore, seed, rootIdx: root!.idx, result, caught, thrown, payloadRefusal, cleaned: c04VariantCleaned };
+  };
+  w5b4It('C15 recheck Error identity escapes', async () => {
+    const r = await c15Arms('recheck'); const f = r.f as Awaited<ReturnType<typeof c11Fixture>>;
+    w5b4Expect(r.caught).toBe(r.thrown);
+    w5b4Expect(r.rechecks).toHaveLength(2); w5b4Expect(new Set(r.snapshots).size).toBe(3); w5b4Expect(r.seed).toBe(r.snapshots[0]); w5b4Expect(r.rootIdx).toBe(r.snapshots[2]); w5b4Expect(r.rechecks[0]!.qs).toBe(r.rechecks[1]!.qs); w5b4Expect(r.qsProjections[0]).toBe(r.qsProjections[1]); w5b4Expect(r.rechecks[0]!.idx).toBe(r.snapshots[0]); w5b4Expect(r.rechecks[0]!.afterIdx).toBe(r.snapshots[0]); w5b4Expect(r.rechecks[1]!.idx).toBe(r.snapshots[1]); w5b4Expect(r.rechecks[1]!.afterIdx).toBe(r.snapshots[1]); w5b4Expect(r.payloads.filter((x: W5b4R) => x.idx === r.snapshots[0])).toHaveLength(2); w5b4Expect(r.payloads.filter((x: W5b4R) => x.idx === r.snapshots[1])).toHaveLength(0);
+    w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'answers'))).toEqual(r.answerBefore); w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'arms', 'batches'))).toEqual(r.manifestsBefore); w5b4Expect(w5b4Manifests(f.s.out, 'pilot')).toEqual([]); w5b4Expect(w5b4Versions(f.s.home)).toBe(0); w5b4Expect(w5b4Runs(f.s.home)).toEqual([]); w5b4Expect(readFileSync(f.s.frozen.path, 'utf8')).toBe(f.frozen); const rs = D4.openReplayStore(f.s.home) as B1t2Rs; try { c05Pairs(rs, 'C15 recheck remains non-durable'); } finally { rs.close(); } w5b4Expect(r.cleaned).toBe(true);
+  }, 180_000);
+  w5b4It('C15 payload DriverRefusal is preserved', async () => {
+    const r = await c15Arms('payload'); const f = r.f as Awaited<ReturnType<typeof c11Fixture>>;
+    w5b4Expect(r.result!.refusal).toEqual({ word: 'quiz-unanswerable', detail: 'fixture C15 payload refusal' });
+    w5b4Expect(r.rechecks).toHaveLength(2); w5b4Expect(r.payloads).toHaveLength(3); w5b4Expect(r.payloads[2]!.payload.state).toBe('payloads'); w5b4Expect(r.payloads[2]!.idx).toBe(r.snapshots[1]); w5b4Expect(w5b4Manifests(f.s.out, 'pilot')).toEqual([]); w5b4Expect(w5b4Versions(f.s.home)).toBe(0); w5b4Expect(w5b4Runs(f.s.home)).toEqual([]); const summary = w5b4Summary(f.s.out, 'pilot'); w5b4Expect(summary.stop).toMatchObject({ word: 'quiz-unanswerable', detail: 'fixture C15 payload refusal' }); w5b4Expect(readFileSync(f.s.frozen.path, 'utf8')).toBe(f.frozen); const rs = D4.openReplayStore(f.s.home) as B1t2Rs; try { c05Pairs(rs, 'C15 payload remains non-durable'); } finally { rs.close(); } w5b4Expect(r.cleaned).toBe(true);
+  }, 180_000);
+  w5b4It('C15 arms unchanged-boundaries control', async () => {
+    const r = await c15Arms('control'); const f = r.f as Awaited<ReturnType<typeof c11Fixture>>;
+    w5b4Expect(r.result!.refusal).toBeNull(); w5b4Expect(r.result!.code).toBe(0); w5b4Expect(r.rechecks).toHaveLength(3); w5b4Expect(r.payloads).toHaveLength(6); const manifests = w5b4Manifests(f.s.out, 'pilot'); const stubs = w5b4Runs(f.s.home); w5b4Expect(manifests).toHaveLength(1); w5b4Expect(w5b4Versions(f.s.home)).toBe(1); w5b4Expect(stubs).toHaveLength(4); const seen = new Set<string>(); for (const run of manifests[0]!.runs as W5b4R[]) { const pair = `${run.qid}:${run.arm}`; w5b4Expect(seen.has(pair)).toBe(false); seen.add(pair); const entry = f.s.entries.find((candidate) => candidate.qid === run.qid)!; const payload = r.baseline.get(run.qid)!.get(run.arm)!; w5b4Expect(run.stdin_sha256).toBe(sha256Hex(payload)); const record = w5b4Json(join(f.s.out, `${run.name}.run.json`)); const matching = stubs.filter((item) => item.cwd === record.cwd); w5b4Expect(matching).toHaveLength(1); w5b4Expect(matching[0]!.stdin).toBe(payload); w5b4Expect([matching[0]!.env.CCRC_RECALL_ARM, matching[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, entry.boundary_uuid]); seen.add(pair); }
+    w5b4Expect(seen).toEqual(new Set(f.s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid}:${arm}`)))); const rs = D4.openReplayStore(f.s.home) as B1t2Rs; try { c05Pairs(rs, 'C15 arms control remains non-durable'); } finally { rs.close(); } w5b4Expect(readFileSync(f.s.frozen.path, 'utf8')).toBe(f.frozen); w5b4Expect(r.cleaned).toBe(true);
+  }, 180_000);
+
+  type C15JudgeKind = 'jobs' | 'canonical' | 'control';
+  const c15Judge = async (kind: C15JudgeKind): Promise<W5b4R> => {
+    const c = await c12Source(); const variant = await c04Variant({ judgeObservers: true }); const picks: W5b4R[] = []; const pickProjections: W5b4R[] = []; const builds: W5b4R[] = []; const buildProjections: string[] = []; const reads: W5b5Answer[][] = []; let root: B1t2Rs | null = null; const snapshots: unknown[] = []; let questionEntry: W5b4R | null = null; let questionDescriptor: PropertyDescriptor | undefined; let replyDescriptor: PropertyDescriptor | undefined; let replyInput: W5b4R | null = null; let questionRestored: PropertyDescriptor | undefined; let replyRestored: PropertyDescriptor | undefined; let jobError: Error | null = null; let canonicalError: Error | null = null; let questionHits = 0; let replyHits = 0; let questionStack = ''; let replyStack = ''; let transformed = 0;
+    const acquireJudgeSnapshots = ({ rs, home, refresh }: W5b4R) => { root = rs as B1t2Rs; const old = refresh(rs, home) as W5b4R[]; c05Replace(c.s, C12_COMPOUND_NEW); const fresh = refresh(rs, home) as W5b4R[]; c05Replace(c.s, C12_SOURCE_MIDDLE()); const newest = refresh(rs, home) as W5b4R[]; snapshots.push(old[0]!.idx, fresh[1]!.idx, newest[2]!.idx); };
+    const readArmAnswers = (out: string, section: string) => { const records = D4.readArmAnswers(out, section) as W5b5Answer[]; reads.push(records); return records; };
+    let output: W5b4R | null = null;
+    try {
+      const call = () => variant.judgeCommand(w5b5Flags(c.s.out, 'pilot'), W5B5_ENV(c.s.home), {
+        loadArmRun: () => w5b5Run(c.s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(c.s.home, { expected: D4.expectedForNode(c.s.draft, c.s.storeId).expected }), readArmAnswers, now: () => Date.now(), acquireJudgeSnapshots,
+        afterPick: (value: W5b4R) => { picks.push(value); pickProjections.push({ selected: w5b4Lib.canonicalJson(value.result.items), entries: w5b4Lib.canonicalJson(value.args.entries), answers: w5b4Lib.canonicalJson(value.args.answers) }); const entry = value.result.items[0]!.entry as W5b4R; questionEntry = entry; questionDescriptor = Object.getOwnPropertyDescriptor(entry, 'question'); Object.defineProperty(entry, 'question', { enumerable: true, configurable: true, get: () => { questionHits += 1; questionStack = new Error().stack ?? ''; if (kind === 'jobs') throw jobError!; return questionDescriptor!.value; } }); },
+        afterBuild: (value: W5b4R) => { builds.push(value); buildProjections.push(w5b4Lib.canonicalJson(value.built)); },
+        transformJobs: ({ built }: W5b4R) => { transformed += 1; if (transformed !== 2) return built; const jobs = built.map((job: W5b5Job, i: number) => i === 0 ? { ...job, input: { ...job.input } } : job); const input = jobs[0]!.input as W5b4R; replyInput = input; replyDescriptor = Object.getOwnPropertyDescriptor(input, 'reply'); Object.defineProperty(input, 'reply', { enumerable: true, configurable: true, get: () => { replyHits += 1; replyStack = new Error().stack ?? ''; if (kind === 'canonical') throw canonicalError!; return replyDescriptor!.value; } }); return jobs;
+        },
+      });
+      if (kind === 'jobs') { jobError = new Error('fixture C15 jobs Error'); output = { caught: await call().then(() => null, (error: unknown) => error) }; }
+      else if (kind === 'canonical') { canonicalError = new Error('fixture C15 canonical Error'); output = { caught: await call().then(() => null, (error: unknown) => error) }; }
+      else output = { judge: await w5b5InProcess(call, variant) };
+    } finally {
+      if (questionEntry !== null && questionDescriptor !== undefined) { Object.defineProperty(questionEntry, 'question', questionDescriptor); questionRestored = Object.getOwnPropertyDescriptor(questionEntry, 'question'); } if (replyInput !== null && replyDescriptor !== undefined) { Object.defineProperty(replyInput, 'reply', replyDescriptor); replyRestored = Object.getOwnPropertyDescriptor(replyInput, 'reply'); }
+    }
+    return { c, picks, pickProjections, builds, buildProjections, reads, snapshots, root, questionHits, replyHits, questionStack, replyStack, jobError, canonicalError, questionDescriptor, replyDescriptor, questionRestored, replyRestored, output, cleaned: c04VariantCleaned };
+  };
+  w5b4It('C15 real jobs Error identity escapes', async () => {
+    const r = await c15Judge('jobs'); const c = r.c as Awaited<ReturnType<typeof c12Source>>;
+    w5b4Expect(r.output!.caught).toBe(r.jobError); w5b4Expect(r.questionRestored).toEqual(r.questionDescriptor); w5b4Expect(r.reads).toEqual([c.records]); w5b4Expect(r.picks).toHaveLength(1); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.result.items)).toBe(r.pickProjections[0]!.selected); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.entries)).toBe(r.pickProjections[0]!.entries); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.answers)).toBe(r.pickProjections[0]!.answers); w5b4Expect(r.questionHits).toBe(1); w5b4Expect(r.questionStack).toContain('judgeInputOf'); w5b4Expect(r.questionStack).toContain('judgeJobsOf'); w5b4Expect(r.builds).toEqual([]); w5b4Expect(r.snapshots).toHaveLength(3); w5b4Expect(r.root!.idx).toBe(r.snapshots[2]); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4); w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judge'))).toBe(false); w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judged.json'))).toBe(false); w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers'))).toEqual(c.answerBytes); const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C15 jobs remains non-durable'); } finally { rs.close(); } w5b4Expect(c04VariantCleaned).toBe(true);
+  }, 180_000);
+  w5b4It('C15 canonical comparison Error identity escapes', async () => {
+    const r = await c15Judge('canonical'); const c = r.c as Awaited<ReturnType<typeof c12Source>>;
+    w5b4Expect(r.output!.caught).toBe(r.canonicalError); w5b4Expect(r.questionRestored).toEqual(r.questionDescriptor); w5b4Expect(r.replyRestored).toEqual(r.replyDescriptor); w5b4Expect(r.reads).toEqual([c.records]); w5b4Expect(r.picks).toHaveLength(1); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.result.items)).toBe(r.pickProjections[0]!.selected); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.entries)).toBe(r.pickProjections[0]!.entries); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.answers)).toBe(r.pickProjections[0]!.answers); w5b4Expect(r.builds).toHaveLength(2); for (let i = 0; i < r.builds.length; i += 1) w5b4Expect(w5b4Lib.canonicalJson(r.builds[i]!.built)).toBe(r.buildProjections[i]); w5b4Expect(r.replyHits).toBe(1); w5b4Expect(r.replyStack).toContain('canonicalJson'); w5b4Expect(r.replyStack).toContain('judgeCommand'); w5b4Expect(r.snapshots).toHaveLength(3); w5b4Expect(r.root!.idx).toBe(r.snapshots[2]); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4); w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judge'))).toBe(false); w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judged.json'))).toBe(false); w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers'))).toEqual(c.answerBytes); const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C15 canonical remains non-durable'); } finally { rs.close(); } w5b4Expect(c04VariantCleaned).toBe(true);
+  }, 180_000);
+  w5b4It('C15 judge unchanged-boundaries control', async () => {
+    const r = await c15Judge('control'); const c = r.c as Awaited<ReturnType<typeof c12Source>>; const judge = r.output!.judge;
+    w5b4Expect(judge.refusal).toBeNull(); w5b4Expect(judge.code).toBe(0); w5b4Expect(r.questionRestored).toEqual(r.questionDescriptor); w5b4Expect(r.replyRestored).toEqual(r.replyDescriptor); w5b4Expect(r.questionHits).toBeGreaterThan(0); w5b4Expect(r.replyHits).toBeGreaterThan(0); c12CanonicalIoAssertions({ ...c, judge, cleaned: r.cleaned }); w5b4Expect(c04VariantCleaned).toBe(true);
+  }, 180_000);
+
+  const C10_MID20 = ['Mid9', 'Qa8', 'Wz7', 'Lp6', 'Rx5', 'Tc4', 'N'].join('');
+  type C10Bytes = Array<[string, string]>;
+  const c10Tree = (dir: string): C10Bytes => existsSync(dir) ? readdirSync(dir).sort().map((name) => [name, readFileSync(join(dir, name), 'utf8')]) : [];
+  const c10Pairs = (rs: B1t2Rs, label: string): void => c05Pairs(rs, label, 1, 'Summary');
+  const c10Payloads = async (s: FwSetup, value: string): Promise<C05PayloadSet> => {
+    c05Replace(s, value);
+    return c05Payloads(s, { count: 1, member: 'Summary' });
+  };
+  const c10Case = async (middle: string): Promise<{ s: FwSetup; q1: W5b4R; q2: W5b4R; baseline: Map<string, Map<string, string>>; frozen: string;
+    answersBefore: C10Bytes; manifestsBefore: C10Bytes; versionsBefore: number; runsBefore: W5b4R[]; r2: W5b4Result; snapshots: unknown[]; retained: W5b4R[]; seed: unknown; rootIdx: unknown; acquired: number; cleaned: boolean }> => {
+    w5b4Expect(C10_MID20.length, 'C10 fixed stored-summary unit length').toBe(20);
+    const fixture: FwSourceFixture = { declaredSourceValue: C05_OLD, storedSummary: `Summary: ${C10_MID20}`, laterQuestion: null };
+    const s = await fwSetup(undefined, null, false, fixture);
+    const [q1, q2] = s.entries as [W5b4R, W5b4R];
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    w5b4Expect(fixture.storedSummary, 'C10 fixed middle source was in stored content before frozen serialization').toBe(`Summary: ${C10_MID20}`);
+    w5b4Act(s.home, q1, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'x', result: false }), 1);
+    w5b4Act(s.home, q1, W5B4_CONTROL, '.exit', '1', 1);
+    w5b4Act(s.home, q1, W5B4_CONTROL, '.limits', w5b4LimitsRow(90), 1);
+    const first = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(first.refusal).toEqual({ word: 'limits-threshold', detail: 'five 90 seven 90 at or over 70' });
+    const firstManifest = w5b4Json(join(s.out, 'pilot', 'arms', 'batches', '0001.json')) as W5b4R;
+    const firstRuns = firstManifest.runs as W5b4R[];
+    w5b4Expect(firstRuns.map((run) => `${run.qid as string}:${run.arm as string}`)).toEqual(W5B4_ARMS.map((arm) => `${q1.qid as string}:${arm}`));
+    const firstInputs = firstRuns.map((run) => w5b4Runs(s.home).find((stub) => stub.cwd === w5b4Json(join(s.out, `${run.name as string}.run.json`)).cwd)!.stdin);
+    w5b4Expect(firstInputs.every((stdin) => stdin.includes(C10_MID20) && stdin.includes('Summary')), 'C10 original stored summary reaches every pre-learn first-run input').toBe(true);
+    const firstStubs = w5b4Runs(s.home); w5b4Expect(firstStubs).toHaveLength(2); w5b4Expect(w5b4Versions(s.home)).toBe(1);
+    for (const run of firstRuns) {
+      const record = w5b4Json(join(s.out, `${run.name as string}.run.json`));
+      const stream = readFileSync(join(s.out, `${run.name as string}.jsonl`), 'utf8');
+      const stub = firstStubs.filter((item) => item.cwd === record.cwd); w5b4Expect(stub).toHaveLength(1);
+      const klass = w5b1Gate.classifyRun(D4.streamEventsOf(stream), record.code, { spawned: true, stopped: false });
+      w5b4Expect([run.qid, run.arm, record.code, klass]).toEqual(run.arm === W5B4_CONTROL ? [q1.qid, W5B4_CONTROL, 1, 'infra-failed'] : [q1.qid, W5B4_TREATMENT, 0, 'answered']);
+    }
+    const answersBefore = c10Tree(join(s.out, 'pilot', 'answers'));
+    const manifestsBefore = c10Tree(join(s.out, 'pilot', 'arms', 'batches'));
+    const versionsBefore = w5b4Versions(s.home); const runsBefore = w5b4Runs(s.home);
+    w5b4Expect(answersBefore, 'C10 partial question has no settled answer records before invocation two').toEqual([]);
+    w5b4Expect(w5b4Summary(s.out, 'pilot').counts).toEqual({ questions: 2, answered: 0, run_failed: 0, rerun_owed: 1, not_run: 1 });
+    w5b4Expect(existsSync(join(s.out, 'pilot', 'arms', q1.qid as string, `${W5B4_CONTROL}.a2.run.json`))).toBe(false);
+    for (const arm of W5B4_ARMS) w5b4Expect(existsSync(join(s.out, 'pilot', 'arms', q2.qid as string, `${arm}.a1.run.json`))).toBe(false);
+    fwLearn(s.home, 'Summary'); w5b4Limits(s.home, 10);
+    const old = await c10Payloads(s, C05_OLD);
+    const middleRead = await c10Payloads(s, middle);
+    const newest = await c10Payloads(s, C05_NEW);
+    if (middle === C10_MID20) {
+      w5b4Expect(C10_MID20.length).toBe(20); w5b4Expect(b1t2Lib.secretUnits(C10_MID20)).toEqual([C10_MID20]);
+      w5b4Expect((middleRead.idx.belt as W5b4R).texts).toContain(C10_MID20);
+    }
+    for (const entry of s.entries) for (const arm of W5B4_ARMS) {
+      w5b4Expect(newest.payloads.get(entry.qid as string)!.get(arm), 'C10 old and new payloads agree after Summary learn').toBe(old.payloads.get(entry.qid as string)!.get(arm));
+    }
+    const middleDiffers = s.entries.some((entry) => W5B4_ARMS.some((arm) => middleRead.payloads.get(entry.qid as string)!.get(arm) !== old.payloads.get(entry.qid as string)!.get(arm)));
+    w5b4Expect(middleDiffers, 'C10 middle source changes real payload bytes').toBe(middle === C10_MID20);
+    if (middle !== C10_MID20) for (const entry of s.entries) for (const arm of W5B4_ARMS) w5b4Expect(middleRead.payloads.get(entry.qid as string)!.get(arm), 'C10 agreeing control middle equals old for every qid and arm').toBe(old.payloads.get(entry.qid as string)!.get(arm));
+    const treatment = (firstManifest.runs as W5b4R[]).find((run) => run.qid === q1.qid && run.arm === W5B4_TREATMENT)!;
+    w5b4Expect(sha256Hex(old.payloads.get(q1.qid as string)!.get(W5B4_TREATMENT)!)).not.toBe(treatment.stdin_sha256);
+    c05Replace(s, C05_OLD);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8'), 'C10 restores old source before the second invocation').toBe(`${C05_OLD}\n`);
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8')).toBe(frozen);
+    const variant = await c04Variant({ acquireRetainedSnapshots: true });
+    const snapshots: unknown[] = []; let retained: W5b4R[] = []; let seed: unknown = null; let root: B1t2Rs | null = null; let acquired = 0;
+    const acquireRetainedSnapshots = ({ rs, home, refresh }: W5b4R) => {
+      acquired += 1;
+      if (acquired !== 1) return;
+      root = rs as B1t2Rs; seed = rs.idx;
+      const old = refresh(rs, home); const oldIdx = (old as W5b4R[])[0]!.idx;
+      c05Replace(s, middle); const mid = refresh(rs, home); const midIdx = (mid as W5b4R[])[1]!.idx;
+      c05Replace(s, C05_NEW); const newest = refresh(rs, home); const newIdx = (newest as W5b4R[])[2]!.idx;
+      snapshots.push(oldIdx, midIdx, newIdx); retained = newest as W5b4R[];
+      w5b4Expect(snapshots).toHaveLength(3); w5b4Expect(retained).toHaveLength(3); w5b4Expect(new Set(snapshots).size).toBe(3);
+      w5b4Expect(retained.every((snapshot: W5b4R, i: number) => snapshot.idx === snapshots[i])).toBe(true);
+      w5b4Expect(seed).toBe(oldIdx); w5b4Expect(rs.idx).toBe(newIdx);
+    };
+    const r2 = await w5b4VariantArms(variant, s.home, s.argv, { recheck: variant.recheckBatch, payloads: variant.armPayloads, acquireRetainedSnapshots });
+    return { s, q1, q2, baseline: old.payloads, frozen, answersBefore, manifestsBefore, versionsBefore, runsBefore, r2, snapshots, retained, seed, rootIdx: root!.idx, acquired, cleaned: c04VariantCleaned };
+  };
+
+  w5b4It('C10 middle-payload-before-exclusion', async () => {
+    const c = await c10Case(C10_MID20);
+    w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers')), 'C10 mismatch writes no exclusion answer before refusal').toEqual(c.answersBefore);
+    w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'arms', 'batches')), 'C10 mismatch writes no manifest before refusal').toEqual(c.manifestsBefore);
+    w5b4Expect(c.r2.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    w5b4Expect(c.cleaned).toBe(true); w5b4Expect(c.acquired).toBe(1); w5b4Expect(c.snapshots).toHaveLength(3); w5b4Expect(c.retained).toHaveLength(3); w5b4Expect(c.seed).toBe(c.snapshots[0]); w5b4Expect(c.rootIdx).toBe(c.snapshots[2]);
+    w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(w5b4Versions(c.s.home)).toBe(c.versionsBefore); w5b4Expect(w5b4Runs(c.s.home)).toEqual(c.runsBefore);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c10Pairs(rs, 'C10 mismatch preserves durable Summary pair'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('C10 D-6482 agreeing control', async () => {
+    const c = await c10Case(C06_BELT);
+    w5b4Expect(c.r2.refusal).toBeNull(); w5b4Expect(c.r2.code).toBe(0); w5b4Expect(c.cleaned).toBe(true);
+    w5b4Expect(c.acquired).toBe(2); w5b4Expect(c.snapshots).toHaveLength(3); w5b4Expect(c.retained).toHaveLength(3); w5b4Expect(c.seed).toBe(c.snapshots[0]); w5b4Expect(c.rootIdx).toBe(c.snapshots[2]);
+    w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen);
+    w5b4Expect(existsSync(join(c.s.out, 'pilot', 'arms', c.q1.qid as string, `${W5B4_CONTROL}.a2.run.json`))).toBe(false);
+    w5b4Expect(w5b4Answer(c.s.out, 'pilot', c.q1, W5B4_CONTROL)).toMatchObject({ question_state: 'run-failed', arm_state: 'run-failed', reason: 'arm-payload-changed' });
+    const sibling = w5b4Answer(c.s.out, 'pilot', c.q1, W5B4_TREATMENT);
+    w5b4Expect(sibling).toMatchObject({ question_state: 'run-failed', arm_state: 'answered' }); w5b4Expect(Object.hasOwn(sibling, 'reason')).toBe(false);
+    for (const arm of W5B4_ARMS) w5b4Expect(w5b4Answer(c.s.out, 'pilot', c.q2, arm)).toMatchObject({ question_state: 'answered', arm_state: 'answered' });
+    const manifests = c10Tree(join(c.s.out, 'pilot', 'arms', 'batches'));
+    w5b4Expect(manifests.slice(0, c.manifestsBefore.length)).toEqual(c.manifestsBefore); w5b4Expect(manifests).toHaveLength(2);
+    const newManifest = w5b4Json(join(c.s.out, 'pilot', 'arms', 'batches', '0002.json')) as W5b4R;
+    const expectedKeys = new Set(W5B4_ARMS.map((arm) => `${c.q2.qid as string}:${arm}`)); const seen = new Set<string>();
+    const stubs = w5b4Runs(c.s.home); w5b4Expect(w5b4Versions(c.s.home)).toBe(c.versionsBefore + 1); w5b4Expect(stubs).toHaveLength(c.runsBefore.length + 2);
+    for (const run of newManifest.runs as W5b4R[]) {
+      const key = `${run.qid as string}:${run.arm as string}`; w5b4Expect(expectedKeys.has(key)).toBe(true); w5b4Expect(seen.has(key)).toBe(false); seen.add(key);
+      const expected = c.baseline.get(c.q2.qid as string)!.get(run.arm as string)!;
+      w5b4Expect(run.stdin_sha256).toBe(sha256Hex(expected));
+      const record = w5b4Json(join(c.s.out, `${run.name as string}.run.json`)); const matching = stubs.filter((stub) => stub.cwd === record.cwd);
+      w5b4Expect(matching).toHaveLength(1); w5b4Expect(matching[0]!.stdin).toBe(expected);
+      w5b4Expect([matching[0]!.env.CCRC_RECALL_ARM, matching[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, c.q2.boundary_uuid]);
+    }
+    w5b4Expect(seen).toEqual(expectedKeys);
+    w5b4Expect((w5b4Answer(c.s.out, 'pilot', c.q1, W5B4_CONTROL).attempts as W5b4R[]).map((attempt) => [attempt.class, attempt.code])).toEqual([['infra-failed', 1]]);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c10Pairs(rs, 'C10 control preserves durable Summary pair'); } finally { rs.close(); }
+  }, 180_000);
+
+  const C11_QUESTION = 'Which fixture revision was recorded?';
+  const C11_SUFFIX = ' fixture middle-only delta';
+  type C11Built = { idx: unknown; qid: string; arm: string; original: string; returned: string };
+  type C11Mode = 'carded' | 'last' | 'sibling' | null;
+  const c11Fixture = async (): Promise<{ s: FwSetup; q1: W5b4R; q2: W5b4R; frozen: string }> => {
+    const s = await fwSetup({ limits: { batch_max: 4 } }, null, false, { declaredSourceValue: C05_OLD, storedSummary: C05_STABLE, laterQuestion: C11_QUESTION });
+    const [q1, q2] = s.entries as [W5b4R, W5b4R]; const frozen = readFileSync(s.frozen.path, 'utf8');
+    w5b4Expect([q1.question, q2.question]).toEqual([B1T2_QUESTION, C11_QUESTION]);
+    w5b4Expect(new Set([q1.question, q2.question]).size, 'C11 maps callbacks through questions distinct before frozen serialization').toBe(2);
+    return { s, q1, q2, frozen };
+  };
+  const c11Payloads = async (s: FwSetup, value: string): Promise<C05PayloadSet> => { c05Replace(s, value); return c05Payloads(s); };
+  const c11Run = async (f: { s: FwSetup; q1: W5b4R; q2: W5b4R; frozen: string }, mode: C11Mode): Promise<{ r: W5b4Result; baseline: Map<string, Map<string, string>>; built: C11Built[]; snapshots: unknown[]; retained: W5b4R[]; qs: W5b4R[] | null; views: B1t2Rs[]; seed: unknown; rootIdx: unknown; cleaned: boolean }> => {
+    const old = await c11Payloads(f.s, C05_OLD); const middle = await c11Payloads(f.s, C06_BELT); const newest = await c11Payloads(f.s, C05_NEW);
+    for (const entry of f.s.entries) for (const arm of W5B4_ARMS) {
+      w5b4Expect(middle.payloads.get(entry.qid as string)!.get(arm), 'C11 real owner middle baseline equals old').toBe(old.payloads.get(entry.qid as string)!.get(arm));
+      w5b4Expect(newest.payloads.get(entry.qid as string)!.get(arm), 'C11 real owner new baseline equals old').toBe(old.payloads.get(entry.qid as string)!.get(arm));
+    }
+    c05Replace(f.s, C05_OLD); w5b4Expect(readFileSync(f.s.frozen.path, 'utf8')).toBe(f.frozen);
+    const variant = await c04Variant({ acquireRetainedSnapshots: true });
+    const snapshots: unknown[] = []; let retained: W5b4R[] = []; let qs: W5b4R[] | null = null; let middleIdx: unknown = null; let seed: unknown = null; let root: B1t2Rs | null = null;
+    const verdicts = new Map<unknown, Map<string, W5b4R>>(); const built: C11Built[] = []; const views: B1t2Rs[] = [];
+    const acquireRetainedSnapshots = ({ rs, home, refresh }: W5b4R) => {
+      if (snapshots.length > 0) return;
+      root = rs as B1t2Rs; seed = rs.idx;
+      const oldRead = refresh(rs, home); const oldIdx = (oldRead as W5b4R[])[0]!.idx;
+      c05Replace(f.s, C06_BELT); const midRead = refresh(rs, home); middleIdx = (midRead as W5b4R[])[1]!.idx;
+      c05Replace(f.s, C05_NEW); const newRead = refresh(rs, home); const newIdx = (newRead as W5b4R[])[2]!.idx;
+      snapshots.push(oldIdx, middleIdx, newIdx); retained = newRead as W5b4R[];
+      w5b4Expect(retained).toHaveLength(3); w5b4Expect(new Set(snapshots).size).toBe(3);
+      w5b4Expect(retained.every((snapshot: W5b4R, i: number) => snapshot.idx === snapshots[i])).toBe(true);
+      w5b4Expect(seed).toBe(snapshots[0]); w5b4Expect(rs.idx).toBe(snapshots[2]);
+    };
+    const recheck = async (view: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => {
+      if (qs === null) qs = entries; else w5b4Expect(entries, 'C11 retained views retain one full pending qs array').toBe(qs);
+      const idx = view.idx; views.push(view); await Promise.resolve();
+      w5b4Expect(view.idx, 'C11 isolated view stays stable through real recheck await').toBe(idx);
+      w5b4Expect(root!.idx, 'C11 root store remains on retained NEW through isolated recheck').toBe(snapshots[2]);
+      const got = await variant.recheckBatch(view, entries, ctx) as Map<string, W5b4R>; verdicts.set(view.idx, got); return got;
+    };
+    const payloads = (view: B1t2Rs, boundaryEntryId: number, question: string, cut: W5b4R): W5b4R => {
+      const p = variant.armPayloads(view, boundaryEntryId, question, cut) as W5b4R;
+      if (p.state !== 'payloads') throw new Error(`fixture: C11 payload ${p.why}`);
+      const matches = f.s.entries.filter((candidate) => candidate.question === question);
+      w5b4Expect(matches, 'C11 payload question maps to one parsed frozen entry').toHaveLength(1);
+      const entry = matches[0]!;
+      const verdict = verdicts.get(view.idx)!.get(entry.qid as string)!;
+      w5b4Expect(boundaryEntryId, 'C11 payload boundary id is its real recheck verdict identity').toBe(verdict.boundaryEntryId);
+      w5b4Expect(cut, 'C11 payload cut is its real recheck verdict identity').toBe(verdict.cut);
+      const originalPlain = p.plain as string; const originalCarded = p.carded as string;
+      let plain = originalPlain; let carded = originalCarded;
+      if (view.idx === middleIdx && ((mode === 'carded' && entry.qid === f.q1.qid) || (mode === 'last' && entry.qid === f.q2.qid) || (mode === 'sibling' && entry.qid === f.q1.qid))) {
+        if (mode === 'last') plain += C11_SUFFIX; else carded += C11_SUFFIX;
+      }
+      built.push({ idx: view.idx, qid: entry.qid as string, arm: W5B4_CONTROL, original: originalPlain, returned: plain }, { idx: view.idx, qid: entry.qid as string, arm: W5B4_TREATMENT, original: originalCarded, returned: carded });
+      return { ...p, plain, carded };
+    };
+    const r = await w5b4VariantArms(variant, f.s.home, f.s.argv, { recheck, payloads, acquireRetainedSnapshots });
+    return { r, baseline: old.payloads, built, snapshots, retained, qs, views, seed, rootIdx: root!.idx, cleaned: c04VariantCleaned };
+  };
+  const c11AssertBuilds = (c: Awaited<ReturnType<typeof c11Run>>, f: { q1: W5b4R; q2: W5b4R }, mode: C11Mode, reached: number): void => {
+    const expected = new Set([`${f.q1.qid}:${W5B4_CONTROL}`, `${f.q1.qid}:${W5B4_TREATMENT}`, `${f.q2.qid}:${W5B4_CONTROL}`, `${f.q2.qid}:${W5B4_TREATMENT}`]);
+    for (let i = 0; i < reached; i += 1) {
+      const rows = c.built.filter((x) => x.idx === c.snapshots[i]); const keys = new Set(rows.map((x) => `${x.qid}:${x.arm}`));
+      w5b4Expect(rows).toHaveLength(4); w5b4Expect(keys).toEqual(expected);
+      for (const row of rows) {
+        const original = c.baseline.get(row.qid)!.get(row.arm)!;
+        const target = i === 1 && ((mode === 'last' && row.qid === f.q2.qid && row.arm === W5B4_CONTROL) || ((mode === 'carded' || mode === 'sibling') && row.qid === f.q1.qid && row.arm === W5B4_TREATMENT));
+        w5b4Expect(row.original, 'C11 real payload builder returns independent owner baseline').toBe(original);
+        w5b4Expect(row.returned, 'C11 only the named middle result field is perturbed').toBe(target ? `${original}${C11_SUFFIX}` : original);
+      }
+    }
+    w5b4Expect(c.built.some((x) => x.idx === c.snapshots[2]), 'C11 new reading is admitted but not built after middle refusal').toBe(reached === 3);
+    w5b4Expect(c.qs!.map((entry) => entry.qid)).toEqual([f.q1.qid, f.q2.qid]);
+    w5b4Expect(new Set(c.views).size, 'C11 reached views are distinct isolated objects').toBe(reached);
+    w5b4Expect(c.views.every((view, i) => view.idx === c.snapshots[i]), 'C11 reached views retain descriptor identities').toBe(true);
+    w5b4Expect(c.seed).toBe(c.snapshots[0]); w5b4Expect(c.rootIdx).toBe(c.snapshots[2]);
+  };
+  const c11NoEffects = (s: FwSetup, frozen: string): void => {
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8')).toBe(frozen); w5b4Expect(c10Tree(join(s.out, 'pilot', 'answers'))).toEqual([]);
+    w5b4Expect(w5b4Manifests(s.out, 'pilot')).toEqual([]); w5b4Expect(w5b4Versions(s.home)).toBe(0); w5b4Expect(w5b4Runs(s.home)).toEqual([]);
+    const rs = D4.openReplayStore(s.home) as B1t2Rs; try { c05Pairs(rs, 'C11 affected source remains non-durable'); } finally { rs.close(); }
+  };
+  w5b4It('C11 carded-only', async () => {
+    const f = await c11Fixture(); const c = await c11Run(f, 'carded');
+    w5b4Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    c11AssertBuilds(c, f, 'carded', 2); c11NoEffects(f.s, f.frozen); w5b4Expect(c.cleaned).toBe(true);
+  }, 180_000);
+  w5b4It('C11 last-pending-only', async () => {
+    const f = await c11Fixture(); const c = await c11Run(f, 'last');
+    w5b4Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    c11AssertBuilds(c, f, 'last', 2); w5b4Expect(c.qs!.at(-1)!.qid, 'C11 last pending qid is observed from actual full qs').toBe(f.q2.qid); c11NoEffects(f.s, f.frozen); w5b4Expect(c.cleaned).toBe(true);
+  }, 180_000);
+  w5b4It('C11 answered-sibling-side', async () => {
+    const f = await c11Fixture(); const firstVariant = await c04Variant({ nodeOverride: true });
+    w5b4Act(f.s.home, f.q1, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'x', result: false }), 1); w5b4Act(f.s.home, f.q1, W5B4_CONTROL, '.exit', '1', 1); w5b4Act(f.s.home, f.q1, W5B4_CONTROL, '.limits', w5b4LimitsRow(90), 1);
+    const first = await w5b4VariantArms(firstVariant, f.s.home, f.s.argv, { recheck: firstVariant.recheckBatch, payloads: firstVariant.armPayloads, nodeOverride: (measured: W5b4R) => ({ ...measured, limits: { ...(measured.limits as W5b4R), batch_max: 2 } }) });
+    w5b4Expect(first.refusal).toEqual({ word: 'limits-threshold', detail: 'five 90 seven 90 at or over 70' }); w5b4Expect(c04VariantCleaned, 'C11 first variant cleans after the expected stop').toBe(true);
+    const firstManifest = w5b4Manifests(f.s.out, 'pilot'); const firstRuns = firstManifest[0]!.runs as W5b4R[]; const firstStubs = w5b4Runs(f.s.home);
+    w5b4Expect(firstManifest).toHaveLength(1); w5b4Expect(firstRuns.map((run) => `${run.qid as string}:${run.arm as string}`)).toEqual(W5B4_ARMS.map((arm) => `${f.q1.qid as string}:${arm}`)); w5b4Expect(firstStubs).toHaveLength(2); w5b4Expect(w5b4Versions(f.s.home)).toBe(1);
+    for (const run of firstRuns) { const record = w5b4Json(join(f.s.out, `${run.name as string}.run.json`)); const stream = readFileSync(join(f.s.out, `${run.name as string}.jsonl`), 'utf8'); const klass = w5b1Gate.classifyRun(D4.streamEventsOf(stream), record.code, { spawned: true, stopped: false }); w5b4Expect([run.arm, record.code, klass]).toEqual(run.arm === W5B4_CONTROL ? [W5B4_CONTROL, 1, 'infra-failed'] : [W5B4_TREATMENT, 0, 'answered']); }
+    w5b4Expect(w5b4Summary(f.s.out, 'pilot').counts).toEqual({ questions: 2, answered: 0, run_failed: 0, rerun_owed: 1, not_run: 1 });
+    w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'answers'))).toEqual([]); w5b4Expect(existsSync(join(f.s.out, 'pilot', 'arms', f.q1.qid as string, `${W5B4_CONTROL}.a2.run.json`))).toBe(false); for (const arm of W5B4_ARMS) w5b4Expect(existsSync(join(f.s.out, 'pilot', 'arms', f.q2.qid as string, `${arm}.a1.run.json`))).toBe(false);
+    w5b4Limits(f.s.home, 10); const beforeAnswers = c10Tree(join(f.s.out, 'pilot', 'answers')); const beforeManifests = c10Tree(join(f.s.out, 'pilot', 'arms', 'batches')); const beforeVersions = w5b4Versions(f.s.home); const beforeRuns = w5b4Runs(f.s.home);
+    const c = await c11Run(f, 'sibling');
+    w5b4Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    c11AssertBuilds(c, f, 'sibling', 2); w5b4Expect(c.cleaned).toBe(true); w5b4Expect(readFileSync(f.s.frozen.path, 'utf8')).toBe(f.frozen);
+    w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'answers'))).toEqual(beforeAnswers); w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'arms', 'batches'))).toEqual(beforeManifests); w5b4Expect(w5b4Versions(f.s.home)).toBe(beforeVersions); w5b4Expect(w5b4Runs(f.s.home)).toEqual(beforeRuns);
+    const rs = D4.openReplayStore(f.s.home) as B1t2Rs; try { c05Pairs(rs, 'C11 sibling remains non-durable'); } finally { rs.close(); }
+  }, 180_000);
+  w5b4It('C11 persisted-baseline control', async () => {
+    const f = await c11Fixture(); const c = await c11Run(f, null);
+    w5b4Expect(c.r.refusal).toBeNull(); w5b4Expect(c.r.code).toBe(0); c11AssertBuilds(c, f, null, 3); w5b4Expect(c.cleaned).toBe(true); w5b4Expect(readFileSync(f.s.frozen.path, 'utf8')).toBe(f.frozen);
+    const manifest = w5b4Manifests(f.s.out, 'pilot'); const stubs = w5b4Runs(f.s.home); w5b4Expect(manifest).toHaveLength(1); w5b4Expect(w5b4Versions(f.s.home)).toBe(1); w5b4Expect(stubs).toHaveLength(4);
+    const expected = new Set(f.s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`))); const seen = new Set<string>();
+    for (const run of manifest[0]!.runs as W5b4R[]) { const key = `${run.qid as string}:${run.arm as string}`; w5b4Expect(expected.has(key)).toBe(true); w5b4Expect(seen.has(key)).toBe(false); seen.add(key); const stdin = c.baseline.get(run.qid as string)!.get(run.arm as string)!; w5b4Expect(run.stdin_sha256).toBe(sha256Hex(stdin)); const record = w5b4Json(join(f.s.out, `${run.name as string}.run.json`)); const matching = stubs.filter((stub) => stub.cwd === record.cwd); w5b4Expect(matching).toHaveLength(1); w5b4Expect(matching[0]!.stdin).toBe(stdin); w5b4Expect([matching[0]!.env.CCRC_RECALL_ARM, matching[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, f.s.entries.find((entry) => entry.qid === run.qid)!.boundary_uuid]); }
+    w5b4Expect(seen).toEqual(expected); const rs = D4.openReplayStore(f.s.home) as B1t2Rs; try { c05Pairs(rs, 'C11 control remains non-durable'); } finally { rs.close(); }
+  }, 180_000);
+
+  type N212Mode = 'absent' | 'missing-entry' | 'control';
+  type N212Fixture = { s: FwSetup; q1: W5b4R; q2: W5b4R; real: W5b4R; batch: string; originalManifest: string; won: W5b4R; control: W5b4R; beforeRuns: W5b4R[]; beforeVersions: number; beforeAnswers: unknown[]; beforeManifests: unknown[]; frozen: string };
+  const n212Fixture = async (mode: N212Mode): Promise<N212Fixture> => {
+    const s = await fwSetup(); const [q1, q2] = s.entries as [W5b4R, W5b4R];
+    w5b4Act(s.home, q1, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'x', result: false }), 1);
+    w5b4Act(s.home, q1, W5B4_CONTROL, '.exit', '1', 1);
+    w5b4Act(s.home, q1, W5B4_CONTROL, '.limits', w5b4LimitsRow(90), 1);
+    const real = { recheck: D4.recheckBatch, payloads: D4.armPayloads };
+    const first = await w5b4Arms(s.home, s.argv, real);
+    w5b4Expect(first.refusal).toEqual({ word: 'limits-threshold', detail: 'five 90 seven 90 at or over 70' });
+    const batch = join(s.out, 'pilot', 'arms', 'batches', '0001.json'); const originalManifest = readFileSync(batch, 'utf8'); const manifest = w5b4Json(batch); const runs = manifest.runs as W5b4R[];
+    const won = runs.find((run) => run.qid === q1.qid && run.arm === W5B4_TREATMENT)!; const control = runs.find((run) => run.qid === q1.qid && run.arm === W5B4_CONTROL)!;
+    w5b4Expect(runs.map((run) => run.name)).toEqual(w5b4Names('pilot', [q1])); w5b4Expect(w5b4Runs(s.home)).toHaveLength(2); w5b4Expect(w5b4Versions(s.home)).toBe(1);
+    for (const run of runs) { const record = w5b4Json(join(s.out, `${run.name as string}.run.json`)); const stream = readFileSync(join(s.out, `${run.name as string}.jsonl`), 'utf8'); const klass = w5b1Gate.classifyRun(D4.streamEventsOf(stream), record.code, { spawned: true, stopped: false }); w5b4Expect([run.arm, record.code, klass]).toEqual(run.arm === W5B4_CONTROL ? [W5B4_CONTROL, 1, 'infra-failed'] : [W5B4_TREATMENT, 0, 'answered']); }
+    w5b4Expect(w5b4Summary(s.out, 'pilot').counts).toEqual({ questions: 2, answered: 0, run_failed: 0, rerun_owed: 1, not_run: 1 }); w5b4Expect(c10Tree(join(s.out, 'pilot', 'answers'))).toEqual([]);
+    w5b4Expect(existsSync(join(s.out, `pilot/arms/${q1.qid as string}/${W5B4_CONTROL}.a2.run.json`))).toBe(false); for (const arm of W5B4_ARMS) w5b4Expect(existsSync(join(s.out, `pilot/arms/${q2.qid as string}/${arm}.a1.run.json`))).toBe(false);
+    w5b4Limits(s.home, 10);
+    if (mode === 'absent') rmSync(batch);
+    if (mode === 'missing-entry') writeFileSync(batch, w5b4Lib.canonicalJson({ ...manifest, runs: runs.filter((run) => run.name !== won.name) }) + '\n');
+    if (mode === 'missing-entry') { const rewritten = w5b4Json(batch); w5b4Expect(rewritten.kind).toBe(D4.ARM_BATCH_KIND); w5b4Expect((rewritten.runs as W5b4R[]).map((run) => run.name)).toEqual([control.name]); }
+    if (mode === 'control') w5b4Expect(readFileSync(batch, 'utf8')).toBe(originalManifest);
+    return { s, q1, q2, real, batch, originalManifest, won, control, beforeRuns: w5b4Runs(s.home), beforeVersions: w5b4Versions(s.home), beforeAnswers: c10Tree(join(s.out, 'pilot', 'answers')), beforeManifests: c10Tree(join(s.out, 'pilot', 'arms', 'batches')), frozen: readFileSync(s.frozen.path, 'utf8') };
+  };
+  const n212MissingUnchanged = (f: N212Fixture): void => {
+    w5b4Expect(w5b4Versions(f.s.home)).toBe(f.beforeVersions); w5b4Expect(w5b4Runs(f.s.home)).toEqual(f.beforeRuns); w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'arms', 'batches'))).toEqual(f.beforeManifests); w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'answers'))).toEqual(f.beforeAnswers); w5b4Expect(readFileSync(f.s.frozen.path, 'utf8')).toBe(f.frozen);
+    for (const arm of W5B4_ARMS) w5b4Expect(existsSync(join(f.s.out, 'pilot', 'answers', `${f.q1.qid as string}.${arm}.json`))).toBe(false);
+  };
+  w5b4It('N212 missing answered-sibling manifest refuses', async () => {
+    const f = await n212Fixture('absent'); const second = await w5b4Arms(f.s.home, f.s.argv, f.real);
+    w5b4Expect(second.refusal).toEqual({ word: 'out-refused', detail: `arm-manifest-missing ${f.won.name as string}` });
+    w5b4Expect(w5b4Summary(f.s.out, 'pilot').stop).toMatchObject({ word: 'out-refused', kind: 'stop', detail: `arm-manifest-missing ${f.won.name as string}` }); n212MissingUnchanged(f);
+  }, 180_000);
+  w5b4It('N212 present manifest missing answered-sibling entry refuses', async () => {
+    const f = await n212Fixture('missing-entry'); const second = await w5b4Arms(f.s.home, f.s.argv, f.real);
+    w5b4Expect(second.refusal).toEqual({ word: 'out-refused', detail: `arm-manifest-missing ${f.won.name as string}` });
+    w5b4Expect(w5b4Summary(f.s.out, 'pilot').stop).toMatchObject({ word: 'out-refused', kind: 'stop', detail: `arm-manifest-missing ${f.won.name as string}` }); n212MissingUnchanged(f);
+  }, 180_000);
+  w5b4It('N212 valid answered-sibling manifest control', async () => {
+    const f = await n212Fixture('control'); const second = await w5b4Arms(f.s.home, f.s.argv, f.real);
+    w5b4Expect(second.refusal).toBeNull(); w5b4Expect(second.code).toBe(0); w5b4Expect(w5b4Runs(f.s.home)).toHaveLength(5); w5b4Expect(w5b4Versions(f.s.home)).toBe(f.beforeVersions + 2);
+    const manifest = w5b4Manifests(f.s.out, 'pilot'); const owed = (manifest[1]!.runs as W5b4R[]).find((run) => run.qid === f.q1.qid && run.arm === W5B4_CONTROL)!; w5b4Expect(owed.stdin_sha256).toBe(f.control.stdin_sha256);
+    for (const q of [f.q1, f.q2]) for (const arm of W5B4_ARMS) w5b4Expect(w5b4Answer(f.s.out, 'pilot', q, arm).question_state).toBe('answered');
+    w5b4Expect(Object.hasOwn(w5b4Summary(f.s.out, 'pilot'), 'payload_changed')).toBe(false); w5b4Expect(readFileSync(f.batch, 'utf8')).toBe(f.originalManifest);
+  }, 180_000);
+
+  w5b4It('W2-5b1 Task 4: F3 existing ordinary owed record refuses without overwrite', async () => {
+    const f = await n212Fixture('control');
+    fwLearn(f.s.home, 'Summary');
+    const rel = `pilot/answers/${f.q1.qid as string}.${W5B4_CONTROL}.json`;
+    const recordPath = join(f.s.out, rel);
+    const original = `${w5b4Lib.canonicalJson({ kind: D4.ANSWER_KIND, ordinary: true })}\n`;
+    let planted = false;
+    const payloads = (view: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+      const payload = D4.armPayloads(view, id, question, cut) as W5b4R;
+      if (!planted) {
+        planted = true;
+        mkdirSync(path.dirname(recordPath), { recursive: true, mode: 0o700 });
+        writeFileSync(recordPath, original, { mode: 0o600 });
+      }
+      return payload;
+    };
+    const result = await w5b4Arms(f.s.home, f.s.argv, { recheck: D4.recheckBatch, payloads });
+    w5b4Expect(result.refusal).toEqual({ word: 'out-refused', detail: `${rel} already exists` });
+    w5b4Expect(planted, 'the real payload operation runs before the ordinary record is planted').toBe(true);
+    w5b4Expect(readFileSync(recordPath, 'utf8')).toBe(original);
+    w5b4Expect(w5b4Versions(f.s.home)).toBe(f.beforeVersions);
+    w5b4Expect(w5b4Runs(f.s.home)).toEqual(f.beforeRuns);
+    w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'arms', 'batches'))).toEqual(f.beforeManifests);
+  }, 180_000);
+
+  w5b4It('W2-5b1 Task 4: F3 CONTROL excludes the owed arm and runs the independent question', async () => {
+    const f = await n212Fixture('control');
+    fwLearn(f.s.home, 'Summary');
+    const result = await w5b4Arms(f.s.home, f.s.argv, f.real);
+    w5b4Expect(result.refusal).toBeNull();
+    w5b4Expect(w5b4Answer(f.s.out, 'pilot', f.q1, W5B4_CONTROL)).toMatchObject({ reason: D4.ARM_PAYLOAD_CHANGED, arm_state: 'run-failed' });
+    w5b4Expect(w5b4Runs(f.s.home)).toHaveLength(f.beforeRuns.length + 2);
+    w5b4Expect(w5b4Versions(f.s.home)).toBe(f.beforeVersions + 1);
+  }, 180_000);
+
+  const task4StopReset = async (): Promise<void> => {
+    D4.HANDLERS.set('task4-reset', async () => 0);
+    try { await D4.main(['task4-reset'], {}); } finally { D4.HANDLERS.delete('task4-reset'); }
+  };
+  const task4AllExcluded = async (signalDuringRecheck: boolean): Promise<{ f: N212Fixture; code: number; stderr: string; rechecks: number }> => {
+    const f = await n212Fixture('control');
+    fwLearn(f.s.home, 'Summary');
+    const narrowed = { ...f.s, entries: [f.q1] } as FwSetup;
+    const fz = w5b4SaveText(D4.frozenListText('pilot', W5B4_HEAD, narrowed.entries) as string, 'task4-sigint-frozen.json');
+    const draft = w5b4Draft(f.s.home, { stores: [f.s.storeId], pilotFamilies: [W5B4_PILOT], pilotFrozenSha: fz.sha, over: { limits: { batch_max: 2 } } });
+    const record = w5b4Save(draft, 'task4-sigint-part1.json');
+    const argv = ['arms', '--section', 'pilot', '--out', f.s.out, ...w5b4Inp('record', record), ...w5b4Inp('frozen', fz)];
+    let rechecks = 0;
+    let stderr = '';
+    const quiet = w5b4Vi.spyOn(process.stderr, 'write').mockImplementation(((line: string | Uint8Array) => { stderr += String(line); return true; }) as typeof process.stderr.write);
+    D4.HANDLERS.set('task4-interrupt', async () => {
+      const flags = D4.parseArgs(argv).flags;
+      return D4.armsCommand(flags, { HOME: f.s.home, TMUX_PANE: undefined, LANG: W5B4_LANG }, {
+        ...W5B4_FAKE,
+        recheck: async (view: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => {
+          rechecks += 1;
+          const result = await D4.recheckBatch(view, entries, ctx);
+          if (signalDuringRecheck) (process.listeners('SIGINT').at(-1) as () => void)();
+          return result;
+        },
+        payloads: D4.armPayloads,
+      });
+    });
+    let code: number;
+    try { code = await D4.main(['task4-interrupt'], { HOME: f.s.home, TMUX_PANE: undefined, LANG: W5B4_LANG }); }
+    finally { D4.HANDLERS.delete('task4-interrupt'); quiet.mockRestore(); await task4StopReset(); }
+    return { f, code, stderr, rechecks };
+  };
+  w5b4It('W2-5b1 Task 4: SIGINT during async recheck after every pending arm is excluded refuses before a success summary', async () => {
+    const r = await task4AllExcluded(true);
+    w5b4Expect(r.rechecks, 'the signal follows the real async recheck decode').toBe(1);
+    w5b4Expect(r.code).toBe(EXIT.REFUSED);
+    w5b4Expect(r.stderr).toContain('ccrc history-replay: interrupted: SIGINT received;');
+    w5b4Expect(w5b4Summary(r.f.s.out, 'pilot').stop, 'the interrupted pass cannot overwrite the earlier stop with a success summary').not.toBeNull();
+    w5b4Expect(w5b4Answer(r.f.s.out, 'pilot', r.f.q1, W5B4_CONTROL)).toMatchObject({ reason: D4.ARM_PAYLOAD_CHANGED, arm_state: 'run-failed' });
+    w5b4Expect(w5b4Runs(r.f.s.home)).toEqual(r.f.beforeRuns);
+    w5b4Expect(w5b4Versions(r.f.s.home)).toBe(r.f.beforeVersions);
+  }, 180_000);
+
+  w5b4It('W2-5b1 Task 4: SIGINT CONTROL after every pending arm is excluded writes the success summary', async () => {
+    const r = await task4AllExcluded(false);
+    w5b4Expect(r.rechecks).toBe(1);
+    w5b4Expect(r.code).toBe(EXIT.OK);
+    w5b4Expect(w5b4Summary(r.f.s.out, 'pilot').counts.run_failed).toBe(1);
+  }, 180_000);
+
+  w5b4It('D-6482: an owed arm whose answered sibling\'s payload changed is never spawned, it is excluded run-failed with the reason, and the invocation goes on to the next question', async () => {
+    const WORD = 'Summary';   // a word of the stored summary, outside every fact: a pair for it changes the payload and fails no re-check clause
+    const run = async (learn: boolean, damage: null | 'missing-manifest' | 'bad-manifest' | 'wrong-kind' = null): Promise<{ s: FwSetup; r1: W5b4Result; r2: W5b4Result; q1: W5b4R; q2: W5b4R }> => {
+      const s = await fwSetup();
+      const [q1, q2] = s.entries as [W5b4R, W5b4R];
+      // Invocation 1: q1's control run fails at its infrastructure (no result, exit 1) and raises the limits row, so the
+      // re-run batch stops at its gate; the treatment arm answers. q1 now owes its control arm an attempt 2.
+      w5b4Act(s.home, q1, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'x', result: false }), 1);
+      w5b4Act(s.home, q1, W5B4_CONTROL, '.exit', '1', 1);
+      w5b4Act(s.home, q1, W5B4_CONTROL, '.limits', w5b4LimitsRow(90), 1);
+      const real = { recheck: D4.recheckBatch, payloads: D4.armPayloads };
+      const r1 = await w5b4Arms(s.home, s.argv, real);
+      w5b4Expect(r1.refusal?.word).toBe('limits-threshold');
+      w5b4Expect(w5b4Runs(s.home), 'invocation 1 ran q1\'s two arms').toHaveLength(2);
+      w5b4Limits(s.home, 10);
+      if (learn) fwLearn(s.home, WORD);   // the sweep learns a pair between the two invocations
+      const batch = join(s.out, 'pilot', 'arms', 'batches', '0001.json');
+      if (damage === 'missing-manifest') rmSync(batch);
+      if (damage === 'bad-manifest') writeFileSync(batch, '{');
+      if (damage === 'wrong-kind') writeFileSync(batch, `${JSON.stringify({ kind: 'wrong', runs: [] })}\n`);
+      return { s, r1, r2: await w5b4Arms(s.home, s.argv, real), q1, q2 };
+    };
+    const rel = (q: W5b4R, arm: string, attempt: number): string => `pilot/arms/${q.qid as string}/${arm}.a${attempt}.run.json`;
+    const learned = await run(true);
+    const { s, q1, q2 } = learned;
+    w5b4Expect(learned.r2.refusal, 'the invocation goes on: no refusal').toBeNull();
+    w5b4Expect(learned.r2.code).toBe(0);
+    w5b4Expect(existsSync(join(s.out, rel(q1, W5B4_CONTROL, 2))), 'the owed arm was never spawned').toBe(false);
+    w5b4Expect(w5b4Runs(s.home), 'invocation 2 spawned only q2\'s two arms').toHaveLength(4);
+    for (const arm of W5B4_ARMS) w5b4Expect(existsSync(join(s.out, rel(q2, arm, 1))), `q2 ${arm} ran`).toBe(true);
+    w5b4Expect(w5b4Answer(s.out, 'pilot', q1, W5B4_CONTROL)).toMatchObject({ question_state: 'run-failed', arm_state: 'run-failed', reason: 'arm-payload-changed',
+      run: null, answer_field: null, correct: null });
+    w5b4Expect((w5b4Answer(s.out, 'pilot', q1, W5B4_CONTROL).attempts as W5b4R[]).map((t) => [t.class, t.code]), 'its recorded attempt stays').toEqual([['infra-failed', 1]]);
+    const sibling = w5b4Answer(s.out, 'pilot', q1, W5B4_TREATMENT);
+    w5b4Expect(sibling, 'the answered sibling keeps its answer (R14)').toMatchObject({ question_state: 'run-failed', arm_state: 'answered' });
+    w5b4Expect(Object.hasOwn(sibling, 'reason'), 'the reason is the excluded arm\'s alone').toBe(false);
+    for (const arm of W5B4_ARMS) w5b4Expect(w5b4Answer(s.out, 'pilot', q2, arm)).toMatchObject({ question_state: 'answered', arm_state: 'answered' });
+    const summary = w5b4Summary(s.out, 'pilot');
+    w5b4Expect(summary.counts).toEqual({ questions: 2, answered: 1, run_failed: 1, rerun_owed: 0, not_run: 0 });
+    w5b4Expect(summary.payload_changed, 'the summary names the excluded count and qids').toEqual({ count: 1, qids: [q1.qid] });
+    w5b4Expect(summary.stop).toBeNull();
+    w5b4Expect(learned.r2.stderr).toContain(`excluded ${q1.qid as string}: arm-payload-changed`);
+    // The judge settles the question as it settles any run-failed one (R14, R20): both its arms excluded, none judged.
+    const picked = D4.judgeItemsOf({ entries: s.entries, answers: D4.readArmAnswers(s.out, 'pilot'), arms: W5B4_ARMS, shaMinPrefix: 7 }) as W5b4R;
+    w5b4Expect(picked.excluded.run_failed_questions).toBe(1);
+    w5b4Expect([...new Set((picked.items as W5b4R[]).map((i) => i.qid))], 'only q2 reaches the judge').toEqual([q2.qid]);
+    const invalidRecord = await run(true);
+    const invalidRel = join(invalidRecord.s.out, 'pilot', 'answers', `${invalidRecord.q1.qid as string}.${W5B4_CONTROL}.json`);
+    writeFileSync(invalidRel, '{');
+    const invalidResult = await w5b4Arms(invalidRecord.s.home, invalidRecord.s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(invalidResult.refusal).toEqual({ word: 'out-refused', detail: `pilot/answers/${invalidRecord.q1.qid as string}.${W5B4_CONTROL}.json is not JSON` });
+    for (const [damage, detail] of [
+      ['missing-manifest', 'arm-manifest-missing'],
+      ['bad-manifest', 'pilot/arms/batches/0001.json is not JSON'],
+      ['wrong-kind', 'pilot/arms/batches/0001.json is not an arm batch manifest'],
+    ] as const) {
+      const damaged = await run(true, damage);
+      w5b4Expect(damaged.r2.refusal?.word, `${damage} refuses from the D-6482 persistence reader`).toBe('out-refused');
+      w5b4Expect(damaged.r2.refusal?.detail, `${damage} detail remains value-free`).toContain(detail);
+    }
+    // CONTROL: no pair learned, the payload is the sibling\'s own, so the owed arm spawns and answers.
+    const control = await run(false);
+    w5b4Expect(control.r2.refusal).toBeNull();
+    w5b4Expect(w5b4Runs(control.s.home), 'CONTROL: q1\'s attempt 2 and q2\'s two arms').toHaveLength(5);
+    w5b4Expect(w5b4Answer(control.s.out, 'pilot', control.q1, W5B4_CONTROL)).toMatchObject({ question_state: 'answered', arm_state: 'answered', run: `pilot/arms/${control.q1.qid as string}/${W5B4_CONTROL}.a2` });
+    w5b4Expect(Object.hasOwn(w5b4Summary(control.s.out, 'pilot'), 'payload_changed'), 'CONTROL: nothing excluded').toBe(false);
+  }, 240_000);
+});
+
+// ── W2-5b1 Task 4: correction Phase A, bounded snapshot helper contract (D-6481) ─────────────────────────────────
+describe('W2-5b1 Task 4: correction Phase A, bounded snapshot helper contract', () => {
+  const replaceOnce = (source: string, anchor: string, replacement: string) => {
+    if (source.split(anchor).length !== 2) throw new Error('snapshot helper seam is not unique');
+    return source.replace(anchor, replacement);
+  };
+  const helpers = (transform: (source: string) => string = (source) => source, probes: {
+    seed?: () => void; material?: (index: unknown) => void; same?: (a: unknown, b: unknown) => boolean | undefined;
+    decision?: (kind: string) => void;
+  } = {}) => {
+    const text = readFileSync(join(REPO, 'deploy', 'history-replay.mjs'), 'utf8');
+    const start = text.indexOf('const MASKING_SNAPSHOT_MAX = 8;');
+    const end = text.indexOf('/** A failed open', start);
+    if (start < 0 || end < 0) throw new Error('snapshot helper bounds missing');
+    let source = text.slice(start, end);
+    if (probes.seed) source = replaceOnce(source, 'const seed = rs.idx; const material = maskingMaterialOf(seed, MASKING_SNAPSHOT_MATERIAL_MAX);', 'seedProbe(); const seed = rs.idx; const material = maskingMaterialOf(seed, MASKING_SNAPSHOT_MATERIAL_MAX);');
+    if (probes.material) source = replaceOnce(source, 'function maskingMaterialOf(idx, limit) {', 'function maskingMaterialOf(idx, limit) { materialProbe(idx);');
+    if (probes.same) source = replaceOnce(source, 'function maskingIndexSame(a, b) {', 'function maskingIndexSame(a, b) { const probed = sameProbe(a, b); if (probed !== undefined) return probed;');
+    if (probes.decision) {
+      source = replaceOnce(source, 'state.snapshots.length >= MASKING_SNAPSHOT_MAX', "(decisionProbe('count'), state.snapshots.length >= MASKING_SNAPSHOT_MAX)");
+      source = replaceOnce(source, 'state.material > MASKING_SNAPSHOT_MATERIAL_TOTAL_MAX - material', "(decisionProbe('aggregate'), state.material > MASKING_SNAPSHOT_MATERIAL_TOTAL_MAX - material)");
+    }
+    const transformed = transform(source);
+    class Refusal extends Error { constructor(readonly word: string, readonly detail: string) { super(`${word}: ${detail}`); } }
+    let next: () => unknown = () => { throw new Error('pair index unset'); };
+    const out = new Function('pairIndexOf', 'refuse', 'DriverRefusal', 'seedProbe', 'materialProbe', 'sameProbe', 'decisionProbe', `${transformed}\nreturn { checked: maskingIndexChecked, material: maskingMaterialOf, same: maskingIndexSame, refresh: refreshPairIndex };`)(
+      () => next(), (word: string, detail: string) => { throw new Refusal(word, detail); }, Refusal, probes.seed, probes.material, probes.same, probes.decision,
+    ) as {
+      checked(index: unknown): unknown; material(index: unknown, limit: number): number; same(a: unknown, b: unknown): boolean;
+      refresh(rs: Record<string, unknown>, home: string): unknown;
+    };
+    return { ...out, setNext: (fn: () => unknown) => { next = fn; }, Refusal };
+  };
+  const emptyIndex = (): { belt: { units: Uint8Array[]; texts: string[]; widths: unknown[]; grams: number; overflow: number }; byLen: Map<number, Set<string>> } => ({
+    belt: { units: [], texts: [], widths: [], grams: 0, overflow: 0 }, byLen: new Map(),
+  });
+  const comparisonIndex = (): ReturnType<typeof emptyIndex> => {
+    const value = emptyIndex();
+    value.belt.texts.push('a'); value.belt.units.push(new Uint8Array([1]));
+    value.belt.widths.push({ w: 1, pw: 0, table: new Map([[7, [{ unit: 0, off: 0 }]]]) });
+    value.byLen.set(20, new Set(['0'.repeat(64)]));
+    return value;
+  };
+  const index = c14FixtureIndex;
+  const indexContent = (value: ReturnType<typeof emptyIndex>) => ({
+    belt: {
+      units: value.belt.units.map((unit) => ({ bytes: [...unit], byteLength: unit.byteLength, byteOffset: unit.byteOffset, backingBytes: unit.buffer.byteLength })),
+      texts: [...value.belt.texts], grams: value.belt.grams, overflow: value.belt.overflow,
+      widths: (value.belt.widths as Array<{ w: number; pw: number; table: Map<number, Array<{ unit: number; off: number }>> }>).map((width) => ({
+        w: width.w, pw: width.pw, table: [...width.table].map(([key, collisions]) => [key, collisions.map((collision) => ({ ...collision }))]),
+      })),
+    },
+    byLen: [...value.byLen].map(([length, hashes]) => [length, [...hashes]]),
+  });
+
+  it('charges each Uint8Array backing allocation and rejects attached backing or typed-array state before reading it', () => {
+    const { checked, material, same } = helpers();
+    const small = index(64); const large = index(8192);
+    expect(material(small, 16_777_216)).not.toBe(material(large, 16_777_216));
+    const attached = index(64);
+    Object.defineProperty(attached.belt.units[0]!.buffer, Symbol('extra'), { value: new Uint8Array(4096) });
+    expect(() => checked(attached)).toThrow();
+    const shadowed = index(64);
+    Object.defineProperty(shadowed.belt.units[0]!.buffer, 'byteLength', { value: 0 });
+    expect(() => checked(shadowed)).toThrow();
+    const accessor = index(64);
+    let reads = 0;
+    Object.defineProperty(accessor.belt.units[0]!, 'length', { get: () => { reads += 1; return 0; } });
+    expect(() => checked(accessor)).toThrow();
+    expect(reads).toBe(0);
+    const arrayAttached = index(64);
+    Object.defineProperty(arrayAttached.belt.units, Symbol('extra'), { value: 1 });
+    expect(() => checked(arrayAttached)).toThrow();
+    const mapAttached = index(64);
+    Object.defineProperty(mapAttached.byLen, Symbol('extra'), { value: 1 });
+    expect(() => checked(mapAttached)).toThrow();
+    const setAttached = index(64);
+    setAttached.byLen.set(20, new Set(['0'.repeat(64)]));
+    Object.defineProperty(setAttached.byLen.get(20)!, Symbol('extra'), { value: 1 });
+    expect(() => checked(setAttached)).toThrow();
+    expect(same(small, large)).toBe(false);
+  });
+
+  it('deduplicates twelve independently allocated unchanged refreshes to one retained representative', () => {
+    const h = helpers(); const seed = comparisonIndex(); const rs = { idx: seed, db: {} } as Record<string, unknown>;
+    h.setNext(() => comparisonIndex());
+    for (let i = 0; i < 12; i += 1) expect(h.refresh(rs, 'fixture')).toBe(seed);
+    const state = rs.maskingSnapshots as { snapshots: Array<{ idx: unknown; material: number }>; material: number };
+    expect(state.snapshots).toHaveLength(1); expect(state.snapshots[0]!.idx).toBe(seed); expect(state.material).toBe(h.material(seed, 16_777_216));
+  });
+
+  it('retains A-B-A as two immutable representatives and A-B-C as three despite output equivalence', () => {
+    const h = helpers();
+    const tagged = (n: number) => { const value = comparisonIndex(); value.byLen.set(20 + n, new Set([n.toString(16).padStart(64, '0')])); return value; };
+    const first = tagged(0); const rs = { idx: first, db: {} } as Record<string, unknown>;
+    h.setNext(() => tagged(1)); const second = h.refresh(rs, 'fixture');
+    h.setNext(() => tagged(0)); expect(h.refresh(rs, 'fixture')).toBe(first);
+    expect((rs.maskingSnapshots as { snapshots: unknown[] }).snapshots).toEqual([expect.objectContaining({ idx: first }), expect.objectContaining({ idx: second })]);
+    h.setNext(() => tagged(2)); h.refresh(rs, 'fixture');
+    expect((rs.maskingSnapshots as { snapshots: unknown[] }).snapshots).toHaveLength(3);
+  });
+
+  it('accepts separately allocated complete identical indexes', () => {
+    const h = helpers(); const a = comparisonIndex(); const same = comparisonIndex();
+    expect(() => h.checked(a)).not.toThrow(); expect(() => h.checked(same)).not.toThrow(); expect(h.same(a, same)).toBe(true);
+  });
+
+  it('preserves byLen and Set iteration order', () => {
+    const h = helpers(); const mapOrder = comparisonIndex(); mapOrder.byLen.set(21, new Set(['0'.repeat(64)]));
+    const reorderedMap = comparisonIndex(); reorderedMap.byLen.clear(); reorderedMap.byLen.set(21, new Set(['0'.repeat(64)])); reorderedMap.byLen.set(20, new Set(['0'.repeat(64)]));
+    expect(h.same(mapOrder, reorderedMap)).toBe(false);
+    const setOrder = comparisonIndex(); setOrder.byLen.set(20, new Set(['0'.repeat(64), '1'.repeat(64)]));
+    const reorderedSet = comparisonIndex(); reorderedSet.byLen.set(20, new Set(['1'.repeat(64), '0'.repeat(64)]));
+    expect(h.same(setOrder, reorderedSet)).toBe(false);
+  });
+
+  it('distinguishes same-size belt bytes and texts without normalizing visible content', () => {
+    const h = helpers(); const bytesA = comparisonIndex(); const bytesB = comparisonIndex();
+    bytesB.belt.units[0]![0] = 2;
+    expect(h.same(bytesA, bytesB)).toBe(false);
+    const textA = comparisonIndex(); const textB = comparisonIndex(); textB.belt.texts[0] = 'b';
+    expect(h.same(textA, textB)).toBe(false);
+  });
+
+  it('preserves width record order', () => {
+    const h = helpers(); const widthA = comparisonIndex(); const widthB = comparisonIndex();
+    widthA.belt.widths.push({ w: 2, pw: 0, table: new Map() }); widthB.belt.widths.unshift({ w: 2, pw: 0, table: new Map() });
+    expect(h.same(widthA, widthB)).toBe(false);
+  });
+
+  it('preserves equal-cardinality table entry order', () => {
+    type TableWidth = { table: Map<number, Array<{ unit: number; off: number }>> };
+    const h = helpers(); const tableA = comparisonIndex(); const tableB = comparisonIndex();
+    const a = tableA.belt.widths as unknown as TableWidth[]; const b = tableB.belt.widths as unknown as TableWidth[];
+    a[0]!.table.set(8, [{ unit: 0, off: 0 }]); b[0]!.table = new Map([[8, [{ unit: 0, off: 0 }]], [7, [{ unit: 0, off: 0 }]]]);
+    expect(h.same(tableA, tableB)).toBe(false);
+  });
+
+  it('preserves equal-cardinality collision-list order', () => {
+    type TableWidth = { table: Map<number, Array<{ unit: number; off: number }>> };
+    const h = helpers(); const collisionA = comparisonIndex(); const collisionB = comparisonIndex();
+    const ca = collisionA.belt.widths as unknown as TableWidth[]; const cb = collisionB.belt.widths as unknown as TableWidth[];
+    ca[0]!.table.set(7, [{ unit: 0, off: 0 }, { unit: 0, off: 1 }]); cb[0]!.table.set(7, [{ unit: 0, off: 1 }, { unit: 0, off: 0 }]);
+    expect(h.same(collisionA, collisionB)).toBe(false);
+  });
+
+  type ComparisonWidth = { pw: number; table: Map<number, Array<{ unit: number; off: number }>> };
+  it.each([
+    ['width pw', (value: ReturnType<typeof comparisonIndex>) => { (value.belt.widths[0] as { pw: number }).pw = 1; }],
+    ['grams', (value: ReturnType<typeof comparisonIndex>) => { value.belt.grams = 1; }],
+    ['overflow', (value: ReturnType<typeof comparisonIndex>) => { value.belt.overflow = 1; }],
+    ['byLen cardinality', (value: ReturnType<typeof comparisonIndex>) => { value.byLen.set(21, new Set(['1'.repeat(64)])); }],
+    ['Set cardinality', (value: ReturnType<typeof comparisonIndex>) => { value.byLen.get(20)!.add('1'.repeat(64)); }],
+    ['unit/text cardinality', (value: ReturnType<typeof comparisonIndex>) => { value.belt.units.push(new Uint8Array([2])); value.belt.texts.push('b'); }],
+    ['width cardinality', (value: ReturnType<typeof comparisonIndex>) => { value.belt.widths.push({ w: 2, pw: 0, table: new Map() }); }],
+    ['table cardinality', (value: ReturnType<typeof comparisonIndex>) => { (value.belt.widths[0] as { table: Map<number, unknown> }).table.set(8, []); }],
+    ['collision-list cardinality', (value: ReturnType<typeof comparisonIndex>) => { (value.belt.widths[0] as ComparisonWidth).table.set(7, [{ unit: 0, off: 0 }, { unit: 0, off: 1 }]); }],
+  ])('distinguishes direct equality %s fields and cardinalities', (_name, mutate) => {
+    const h = helpers(); const a = comparisonIndex(); const b = comparisonIndex(); mutate(b);
+    expect(() => h.checked(a)).not.toThrow(); expect(() => h.checked(b)).not.toThrow(); expect(h.same(a, b)).toBe(false);
+  });
+
+  it('distinguishes a valid collision unit from a different valid unit', () => {
+    const h = helpers(); const a = comparisonIndex(); const b = comparisonIndex();
+    for (const value of [a, b]) { value.belt.units.push(new Uint8Array([2])); value.belt.texts.push('b'); }
+    (b.belt.widths[0] as ComparisonWidth).table.set(7, [{ unit: 1, off: 0 }]);
+    expect(() => h.checked(a)).not.toThrow(); expect(() => h.checked(b)).not.toThrow(); expect(h.same(a, b)).toBe(false);
+  });
+
+  it('retains order-different equal-membership candidate as a distinct snapshot', () => {
+    const h = helpers(); const seed = comparisonIndex(); const reordered = comparisonIndex();
+    seed.byLen.set(21, new Set(['0'.repeat(64)])); reordered.byLen.clear(); reordered.byLen.set(21, new Set(['0'.repeat(64)])); reordered.byLen.set(20, new Set(['0'.repeat(64)]));
+    const rs = { idx: seed, db: {} } as Record<string, unknown>; h.setNext(() => reordered); const returned = h.refresh(rs, 'fixture');
+    expect(returned).toBe(reordered); expect((rs.maskingSnapshots as { snapshots: Array<{ idx: unknown }> }).snapshots).toEqual([expect.objectContaining({ idx: seed }), expect.objectContaining({ idx: reordered })]);
+  });
+
+  it('accepts exact material limits and refuses over-cap, overflow, invalid and refresh-failed readings', () => {
+    const h = helpers();
+    const base = h.material(index(64), 67_108_864) - 64;
+    const exactBacking = 16_777_216 - base;
+    const exact = index(exactBacking);
+    expect(h.material(exact, 67_108_864)).toBe(16_777_216);
+    expect(() => h.material(index(exactBacking + 1), 16_777_216)).toThrow();
+    const overflow = index(64); overflow.belt.overflow = 1;
+    h.setNext(() => index(64));
+    expect(() => h.refresh({ idx: overflow, db: {} }, 'fixture')).toThrow(/masking-snapshot-belt-overflow/);
+    h.setNext(() => overflow);
+    expect(() => h.refresh({ idx: index(64), db: {} }, 'fixture')).toThrow(/masking-snapshot-belt-overflow/);
+    const invalid = index(64); Object.defineProperty(invalid, Symbol('extra'), { value: 1 });
+    h.setNext(() => invalid);
+    expect(() => h.refresh({ idx: index(64), db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+    h.setNext(() => { throw new Error('fixture'); });
+    expect(() => h.refresh({ idx: index(64), db: {} }, 'fixture')).toThrow(/masking-snapshot-refresh-failed/);
+  });
+
+  it('rejects unsupported backing prototypes and compares actual backing allocations', () => {
+    const { checked, same } = helpers();
+    const small = index(64); const large = index(8192);
+    expect(same(small, large)).toBe(false);
+    const unsupported = index(64);
+    const prototype = Object.create(ArrayBuffer.prototype);
+    Object.defineProperty(prototype, 'byteLength', { value: 0 });
+    Object.setPrototypeOf(unsupported.belt.units[0]!.buffer, prototype);
+    expect(() => checked(unsupported)).toThrow();
+  });
+
+  it('accepts ordinary fixed owner backing', () => {
+    const { checked } = helpers();
+    expect(() => checked(index(64))).not.toThrow();
+  });
+
+  it('rejects resizable ArrayBuffer backing', () => {
+    const { checked } = helpers(); const value = index(64); const original = value.belt.units[0]!;
+    const buffer = new (ArrayBuffer as unknown as { new (length: number, options: { maxByteLength: number }): ArrayBuffer })(64, { maxByteLength: 128 });
+    const view = new Uint8Array(buffer, 0, original.length); view.set(original); value.belt.units[0] = view;
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects detached ArrayBuffer backing', () => {
+    const { checked } = helpers(); const value = index(64);
+    structuredClone(value.belt.units[0]!.buffer, { transfer: [value.belt.units[0]!.buffer] });
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects attached ArrayBuffer state and unsupported typed-array subtypes', () => {
+    const { checked } = helpers();
+    const attached = index(64); Object.defineProperty(attached.belt.units[0]!.buffer, Symbol('extra'), { value: 1 });
+    expect(() => checked(attached)).toThrow();
+    const subtype = index(64); subtype.belt.units[0] = new Uint8ClampedArray(subtype.belt.units[0]!) as unknown as Uint8Array;
+    expect(() => checked(subtype)).toThrow();
+  });
+
+  it('rejects detached zero-length backing before matching empty text/unit alignment', () => {
+    const { checked } = helpers(); const value = emptyIndex();
+    value.belt.units.push(new Uint8Array(0)); value.belt.texts.push('');
+    expect(() => checked(value), 'CONTROL: ordinary fixed empty backing').not.toThrow();
+    structuredClone(value.belt.units[0]!.buffer, { transfer: [value.belt.units[0]!.buffer] });
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('at zero material limit refuses before traversing an invalid nested hash', () => {
+    const { material } = helpers();
+    const late = index(64);
+    late.byLen.set(20, new Set(['invalid']));
+    expect(() => material(late, 0)).toThrow(/material/);
+  });
+
+  it('preserves signed owner width powers and gram-table keys while rejecting invalid structural fields', () => {
+    const { checked } = helpers();
+    const signed = index(64);
+    const widths = signed.belt.widths as unknown as Array<{ w: number; pw: number; table: Map<number, unknown[]> }>;
+    widths[0]!.pw = -1;
+    widths[0]!.table = new Map([[-7, []]]);
+    expect(() => checked(signed)).not.toThrow();
+    const invalid = index(64);
+    invalid.belt.grams = -1;
+    expect(() => checked(invalid)).toThrow();
+  });
+
+  it('accounts the empty concrete index base exactly and refuses one byte below it', () => {
+    const { material } = helpers(); const value = emptyIndex();
+    // 114 top record + 202 belt record properties + 16 scalar values + 3*64 arrays + 64 empty Map.
+    const expected = 588;
+    expect(material(value, expected)).toBe(expected);
+    expect(() => material(value, expected - 1)).toThrow(/material/);
+  });
+
+  it('accounts byLen Map/Set entries and repeated hash occurrences exactly', () => {
+    const { material } = helpers(); const value = emptyIndex();
+    const hash = '0'.repeat(64);
+    value.byLen.set(20, new Set([hash]));
+    // Empty base + Map entry 32 + length 8 + Set 64 + member 16 + string 128.
+    expect(material(value, 836)).toBe(836);
+    value.byLen.get(20)!.add('1'.repeat(64));
+    expect(material(value, 980)).toBe(980); // additional Set member plus second string occurrence.
+    value.byLen.set(21, new Set([hash]));
+    expect(material(value, 1228)).toBe(1228); // repeated identical hash is charged per occurrence.
+    expect(() => material(value, 1227)).toThrow(/material/);
+  });
+
+  it('accounts text/unit strings and backing storage per occurrence exactly', () => {
+    const { material } = helpers(); const value = emptyIndex();
+    const text = String.fromCharCode(0xe9);
+    const backing = new ArrayBuffer(4); const first = new Uint8Array(backing, 0, 1); const second = new Uint8Array(backing, 1, 1);
+    value.belt.texts.push(text); value.belt.units.push(first);
+    // Base + text array element/string (8+2) + unit element/view/backing (8+64+4).
+    expect(material(value, 674)).toBe(674);
+    value.belt.texts.push(text); value.belt.units.push(second);
+    expect(material(value, 760)).toBe(760); // shared backing and repeated text are each charged again.
+    const larger = new Uint8Array(new ArrayBuffer(8), 3, 1);
+    value.belt.texts.push(text); value.belt.units.push(larger);
+    expect(material(value, 850)).toBe(850); // same visible length, nonzero offset, but full larger backing.
+    expect(() => material(value, 849)).toThrow(/material/);
+  });
+
+  it('charges the same typed-array reference once per retained occurrence', () => {
+    const { material } = helpers(); const one = emptyIndex(); const shared = new Uint8Array(new ArrayBuffer(4), 0, 1);
+    one.belt.texts.push('a'); one.belt.units.push(shared);
+    expect(material(one, 674), 'CONTROL: one typed-array occurrence').toBe(674);
+    const twice = emptyIndex(); twice.belt.texts.push('a', 'a'); twice.belt.units.push(shared, shared);
+    expect(material(twice, 760)).toBe(760);
+    expect(() => material(twice, 759)).toThrow(/material/);
+  });
+
+  it('accounts width tables and each collision record exactly', () => {
+    const { material } = helpers(); const value = emptyIndex();
+    value.belt.texts.push('a'); value.belt.units.push(new Uint8Array(1));
+    const collisions = [{ unit: 0, off: 0 }];
+    value.belt.widths.push({ w: 1, pw: 0, table: new Map([[7, collisions]]) });
+    // Base 588 + text/unit 83 + width array/record/table 216 + entry/collision list/record 238.
+    expect(material(value, 1125)).toBe(1125);
+    collisions.push({ unit: 0, off: 0 });
+    expect(material(value, 1259)).toBe(1259); // array element + independent collision record.
+    expect(() => material(value, 1258)).toThrow(/material/);
+  });
+
+  it('accepts the unmodified owner PairIndex and its dense concrete containers', () => {
+    const { checked } = helpers();
+    expect(() => checked(index(64))).not.toThrow();
+  });
+
+  it.each([
+    ['top record symbol', (value: ReturnType<typeof index>) => Object.defineProperty(value, Symbol('extra'), { value: 1 })],
+    ['top record missing byLen', (value: ReturnType<typeof index>) => delete (value as Partial<ReturnType<typeof index>>).byLen],
+    ['belt record non-enumerable', (value: ReturnType<typeof index>) => Object.defineProperty(value.belt, 'hidden', { value: 1 })],
+    ['width record accessor', (value: ReturnType<typeof index>) => {
+      let reads = 0;
+      Object.defineProperty((value.belt.widths as Array<object>)[0]!, 'w', { get: () => { reads += 1; return 1; }, enumerable: true, configurable: true });
+      return () => expect(reads).toBe(0);
+    }],
+    ['collision record symbol', (value: ReturnType<typeof index>) => {
+      const widths = value.belt.widths as unknown as Array<{ w: number; pw: number; table: Map<number, Array<object>> }>;
+      const collision = { unit: 0, off: 0 };
+      widths[0]!.table = new Map([[7, [collision]]]);
+      Object.defineProperty(collision, Symbol('extra'), { value: 1 });
+    }],
+    ['texts array non-enumerable', (value: ReturnType<typeof index>) => Object.defineProperty(value.belt.texts, 'hidden', { value: 1 })],
+    ['widths array symbol', (value: ReturnType<typeof index>) => Object.defineProperty(value.belt.widths, Symbol('extra'), { value: 1 })],
+    ['byLen map symbol', (value: ReturnType<typeof index>) => Object.defineProperty(value.byLen, Symbol('extra'), { value: 1 })],
+  ] as Array<[string, (value: ReturnType<typeof index>) => void | (() => void)]>)('rejects malformed %s before consuming its value', (_name: string, mutate: (value: ReturnType<typeof index>) => void | (() => void)) => {
+    const { checked } = helpers();
+    const value = index(64);
+    const assertUnread = mutate(value);
+    expect(() => checked(value)).toThrow();
+    if (typeof assertUnread === 'function') assertUnread();
+  });
+
+  it('rejects an otherwise complete record with an unsupported prototype', () => {
+    const { checked } = helpers(); const value = index(64);
+    Object.setPrototypeOf(value.belt, null);
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('maps record accessor, missing-key and prototype failures to fixed invalid shape', () => {
+    const h = helpers();
+    const accessor = index(64);
+    Object.defineProperty((accessor.belt.widths as Array<object>)[0]!, 'w', { get: () => 1, set: () => undefined, enumerable: true, configurable: true });
+    expect(() => h.refresh({ idx: accessor, db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+    const missing = index(64); delete (missing as Partial<ReturnType<typeof index>>).byLen;
+    h.setNext(() => missing);
+    expect(() => h.refresh({ idx: index(64), db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+    const prototype = index(64); Object.setPrototypeOf(prototype.belt, null);
+    expect(() => h.refresh({ idx: prototype, db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+  });
+
+  it.each([
+    ['texts', (value: ReturnType<typeof index>) => value.belt.texts, (value: ReturnType<typeof index>) => value.belt.texts[0]!],
+    ['units', (value: ReturnType<typeof index>) => value.belt.units, (value: ReturnType<typeof index>) => value.belt.units[0]!],
+    ['widths', (value: ReturnType<typeof index>) => value.belt.widths, (value: ReturnType<typeof index>) => value.belt.widths[0]!],
+    ['collision list', (value: ReturnType<typeof index>) => {
+      const widths = value.belt.widths as unknown as Array<{ table: Map<number, Array<{ unit: number; off: number }>> }>;
+      widths[0]!.table.set(7, [{ unit: 0, off: 0 }]);
+      return widths[0]!.table.get(7)!;
+    }, (value: ReturnType<typeof index>) => {
+      const widths = value.belt.widths as unknown as Array<{ table: Map<number, Array<{ unit: number; off: number }>> }>;
+      return widths[0]!.table.get(7)![0]!;
+    }],
+  ])('rejects %s array index accessors before reading their otherwise valid values', (_name, arrayOf, elementOf) => {
+    const { checked } = helpers();
+    const value = index(64);
+    const array = arrayOf(value); const element = elementOf(value);
+    let reads = 0;
+    Object.defineProperty(array, '0', { get: () => { reads += 1; return element; }, enumerable: true, configurable: true });
+    expect(() => checked(value)).toThrow();
+    expect(reads).toBe(0);
+  });
+
+  it.each([
+    ['texts', (value: ReturnType<typeof index>) => value.belt.texts],
+    ['units', (value: ReturnType<typeof index>) => value.belt.units],
+    ['widths', (value: ReturnType<typeof index>) => value.belt.widths],
+  ])('rejects a %s hole despite its otherwise valid Array shape', (_name, arrayOf) => {
+    const { checked } = helpers();
+    const value = index(64);
+    const array = arrayOf(value);
+    array.length = Math.max(array.length, 2);
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects unexpected Array material through the array-shape predicate', () => {
+    const { checked } = helpers();
+    const attached = index(64);
+    Object.defineProperty(attached.belt.texts, Symbol('extra'), { value: 1 });
+    expect(() => checked(attached)).toThrow();
+    const wrongPrototype = index(64);
+    Object.setPrototypeOf(wrongPrototype.belt.units, null);
+    expect(() => checked(wrongPrototype)).toThrow();
+    const equalOwnKeyCount = index(64);
+    delete equalOwnKeyCount.belt.texts[0];
+    Object.defineProperty(equalOwnKeyCount.belt.texts, 'extra', { value: 1, enumerable: true, configurable: true, writable: true });
+    expect(Reflect.ownKeys(equalOwnKeyCount.belt.texts)).toHaveLength(equalOwnKeyCount.belt.texts.length + 1);
+    expect(() => checked(equalOwnKeyCount)).toThrow();
+  });
+
+  it('rejects a dense Array with an unsupported prototype before its elements are read', () => {
+    const { checked } = helpers();
+    const value = index(64);
+    Object.setPrototypeOf(value.belt.units, null);
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('maps Map prototype shells and membership wrappers to fixed invalid shape at seed and candidate', () => {
+    const h = helpers();
+    const mapShell = index(64); mapShell.byLen = Object.create(Map.prototype) as Map<number, Set<string>>;
+    expect(() => h.refresh({ idx: mapShell, db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+    const membershipWrapper = index(64); membershipWrapper.byLen = { has: () => true } as unknown as Map<number, Set<string>>;
+    expect(() => h.refresh({ idx: membershipWrapper, db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+    h.setNext(() => membershipWrapper);
+    expect(() => h.refresh({ idx: index(64), db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+  });
+
+  it('maps Set prototype shells to fixed invalid shape at seed and candidate', () => {
+    const h = helpers();
+    const setShell = index(64); setShell.byLen.set(20, Object.create(Set.prototype) as Set<string>);
+    expect(() => h.refresh({ idx: setShell, db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+    h.setNext(() => setShell);
+    expect(() => h.refresh({ idx: index(64), db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+  });
+
+  it('rejects attached Map state independently of native Map branding', () => {
+    const { checked } = helpers();
+    const value = index(64);
+    Object.defineProperty(value.byLen, Symbol('extra'), { value: 1 });
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects attached Set state independently of native Set branding', () => {
+    const { checked } = helpers();
+    const value = index(64);
+    value.byLen.set(20, new Set(['0'.repeat(64)]));
+    Object.defineProperty(value.byLen.get(20)!, 'hidden', { value: 1 });
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('accepts owner-created native Map and Set controls', () => {
+    const { checked } = helpers();
+    const value = index(64);
+    value.byLen.set(20, new Set(['0'.repeat(64)]));
+    expect(() => checked(value)).not.toThrow();
+  });
+
+  it.each([
+    ['texts contains itself', (value: ReturnType<typeof index>) => { value.belt.texts.push(value.belt.texts as unknown as string); value.belt.units.push(new Uint8Array(0)); }],
+    ['width table stores itself as a collision list', (value: ReturnType<typeof index>) => {
+      const widths = value.belt.widths as unknown as Array<{ table: Map<number, unknown> }>;
+      widths[0]!.table.set(7, widths[0]!.table);
+    }],
+    ['membership set stores itself as a hash', (value: ReturnType<typeof index>) => {
+      const hashes = new Set<unknown>(); hashes.add(hashes); value.byLen.set(20, hashes as Set<string>);
+    }],
+  ])('rejects cyclic supported %s at its required scalar position', (_name, mutate) => {
+    const { checked } = helpers();
+    const value = index(64);
+    mutate(value);
+    expect(() => checked(value)).toThrow();
+  });
+
+  it.each([0, -1])('rejects width.w %d while preserving signed pw and table-key compatibility', (w) => {
+    const { checked } = helpers();
+    const value = index(64);
+    const widths = value.belt.widths as unknown as Array<{ w: number }>;
+    widths[0]!.w = w;
+    expect(() => checked(value)).toThrow();
+  });
+
+  it.each([
+    ['grams', (value: ReturnType<typeof index>) => { value.belt.grams = -1; }],
+    ['overflow', (value: ReturnType<typeof index>) => { value.belt.overflow = -1; }],
+    ['collision offset', (value: ReturnType<typeof index>) => {
+      const widths = value.belt.widths as unknown as Array<{ table: Map<number, Array<{ unit: number; off: number }>> }>;
+      widths[0]!.table.set(7, [{ unit: 0, off: -1 }]);
+    }],
+    ['collision unit', (value: ReturnType<typeof index>) => {
+      const widths = value.belt.widths as unknown as Array<{ table: Map<number, Array<{ unit: number; off: number }>> }>;
+      widths[0]!.table.set(7, [{ unit: -1, off: 0 }]);
+    }],
+  ])('rejects nonnegative %s scalar slots', (_name, mutate) => {
+    const { checked } = helpers(); const value = index(64); mutate(value); expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects a nonpositive byLen key', () => {
+    const { checked } = helpers(); const value = index(64);
+    value.byLen.set(0, new Set(['0'.repeat(64)])); expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects a malformed hash member', () => {
+    const { checked } = helpers(); const value = index(64);
+    value.byLen.set(20, new Set(['not-a-hash'])); expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects text and unit length disagreements after both elements are otherwise valid', () => {
+    const { checked } = helpers(); const value = index(64); value.belt.texts[0] = 'short'; expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects a non-string text that otherwise has the matching concrete length', () => {
+    const { checked } = helpers(); const value = index(64);
+    value.belt.texts[0] = new String(value.belt.texts[0]!) as unknown as string;
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects a non-safe width power and gram-table key', () => {
+    const { checked } = helpers();
+    const power = index(64); const pw = power.belt.widths as unknown as Array<{ pw: number }>; pw[0]!.pw = 1.5;
+    expect(() => checked(power)).toThrow();
+    const key = index(64); const table = key.belt.widths as unknown as Array<{ table: Map<number, unknown[]> }>;
+    table[0]!.table = new Map([[1.5, []]]); expect(() => checked(key)).toThrow();
+  });
+
+  it('rejects a collision unit outside the concrete units array', () => {
+    const { checked } = helpers(); const value = index(64);
+    const widths = value.belt.widths as unknown as Array<{ table: Map<number, Array<{ unit: number; off: number }>> }>;
+    widths[0]!.table.set(7, [{ unit: 1, off: 0 }]);
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('admits exact-16MiB seed before acquisition and refuses seed+1 without calling acquisition', () => {
+    const h = helpers(); const base = h.material(index(64), 67_108_864) - 64; const exactBacking = 16_777_216 - base;
+    let calls = 0; const exact = index(exactBacking); h.setNext(() => { calls += 1; return exact; });
+    const exactRs = { idx: exact, db: {} } as Record<string, unknown>; expect(h.refresh(exactRs, 'fixture')).toBe(exact); expect(calls).toBe(1);
+    const over = index(exactBacking + 1); const overRs = { idx: over, db: {} } as Record<string, unknown>;
+    let refusal: unknown; try { h.refresh(overRs, 'fixture'); } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshots-material-cap' }); expect((refusal as Error).message).toBe('input-invalid: masking-snapshots-material-cap'); expect(calls).toBe(1); expect(overRs.maskingSnapshots).toBeUndefined(); expect(overRs.idx).toBe(over);
+  });
+
+  it('admits an exact per-index candidate and refuses one byte over without exposure', () => {
+    const h = helpers(); const base = h.material(index(64), 67_108_864) - 64; const exactBacking = 16_777_216 - base;
+    const seed = index(64); const exact = index(exactBacking); h.setNext(() => exact);
+    const exactRs = { idx: seed, db: {} } as Record<string, unknown>; expect(h.refresh(exactRs, 'fixture')).toBe(exact);
+    const failedRs = { idx: seed, db: {} } as Record<string, unknown>; h.setNext(() => seed); expect(h.refresh(failedRs, 'fixture')).toBe(seed);
+    const state = failedRs.maskingSnapshots as { snapshots: Array<{ idx: ReturnType<typeof emptyIndex>; material: number }>; material: number };
+    const beforeState = state; const beforeArray = state.snapshots; const beforeSnapshots = [...state.snapshots]; const beforeRepresentatives = state.snapshots.map((snapshot) => snapshot.idx);
+    const beforeContents = state.snapshots.map((snapshot) => ({ material: snapshot.material, content: indexContent(snapshot.idx) }));
+    const beforeIndex = failedRs.idx; const beforeMaterial = state.material; const candidate = index(exactBacking + 1); h.setNext(() => candidate);
+    let refusal: unknown; try { h.refresh(failedRs, 'fixture'); } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshots-material-cap' }); expect((refusal as Error).message).toBe('input-invalid: masking-snapshots-material-cap');
+    expect(failedRs.maskingSnapshots).toBe(beforeState); expect(failedRs.idx).toBe(beforeIndex); expect(state.material).toBe(beforeMaterial); expect(state.snapshots).toBe(beforeArray); expect(state.snapshots).toEqual(beforeSnapshots);
+    expect(state.snapshots.map((snapshot) => snapshot.idx)).toEqual(beforeRepresentatives); for (let i = 0; i < state.snapshots.length; i += 1) { expect(state.snapshots[i]).toBe(beforeSnapshots[i]); expect({ material: state.snapshots[i]!.material, content: indexContent(state.snapshots[i]!.idx) }).toEqual(beforeContents[i]); }
+    expect(state.snapshots.some((snapshot) => snapshot.idx === candidate)).toBe(false); expect(failedRs.idx).not.toBe(candidate);
+  });
+
+  it('refuses an invalid seed before candidate acquisition with fixed mapping', () => {
+    const h = helpers(); let calls = 0; h.setNext(() => { calls += 1; return comparisonIndex(); });
+    const invalid = comparisonIndex(); Object.defineProperty(invalid, Symbol('extra'), { value: 1 }); const rs = { idx: invalid, db: {} } as Record<string, unknown>;
+    let refusal: unknown; try { h.refresh(rs, 'fixture'); } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshot-invalid' }); expect((refusal as Error).message).toBe('input-invalid: masking-snapshot-invalid'); expect(calls).toBe(0); expect(rs.maskingSnapshots).toBeUndefined(); expect(rs.idx).toBe(invalid);
+  });
+
+  it('refuses an overflowing seed before candidate acquisition with fixed mapping', () => {
+    const h = helpers(); let calls = 0; h.setNext(() => { calls += 1; return comparisonIndex(); });
+    const overflow = comparisonIndex(); overflow.belt.overflow = 1; const rs = { idx: overflow, db: {} } as Record<string, unknown>;
+    let refusal: unknown; try { h.refresh(rs, 'fixture'); } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshot-belt-overflow' }); expect((refusal as Error).message).toBe('input-invalid: masking-snapshot-belt-overflow'); expect(calls).toBe(0); expect(rs.maskingSnapshots).toBeUndefined(); expect(rs.idx).toBe(overflow);
+  });
+
+  it.each([
+    ['malformed', (value: ReturnType<typeof comparisonIndex>) => Object.defineProperty(value, Symbol('extra'), { value: 1 }), 'masking-snapshot-invalid'],
+    ['overflowing', (value: ReturnType<typeof comparisonIndex>) => { value.belt.overflow = 1; }, 'masking-snapshot-belt-overflow'],
+  ])('maps %s candidate before exposure', (_name, mutate, detail) => {
+    const h = helpers(); const seed = comparisonIndex(); const candidate = comparisonIndex(); mutate(candidate); h.setNext(() => candidate);
+    const rs = { idx: seed, db: {} } as Record<string, unknown>; const returned = h.refresh.bind(null, rs, 'fixture');
+    let refusal: unknown; try { returned(); } catch (error) { refusal = error; }
+    const state = rs.maskingSnapshots as { snapshots: Array<{ idx: unknown }>; material: number };
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail }); expect((refusal as Error).message).toBe(`input-invalid: ${detail}`); expect(rs.idx).toBe(seed); expect(state.snapshots).toEqual([expect.objectContaining({ idx: seed })]); expect(state.snapshots.some((snapshot) => snapshot.idx === candidate)).toBe(false);
+  });
+
+  it('maps candidate acquisition failure without source detail', () => {
+    const h = helpers(); const seed = comparisonIndex(); const rs = { idx: seed, db: {} } as Record<string, unknown>;
+    const original = new Error('fixture acquisition detail must not escape'); h.setNext(() => { throw original; });
+    let failure: unknown; try { h.refresh(rs, 'fixture'); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(h.Refusal); expect(failure).not.toBe(original);
+    expect(failure).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshot-refresh-failed' }); expect((failure as Error).message).toBe('input-invalid: masking-snapshot-refresh-failed'); expect((failure as Error).message).not.toContain(original.message);
+    expect(rs.idx).toBe(seed); expect((rs.maskingSnapshots as { snapshots: unknown[] }).snapshots).toEqual([expect.objectContaining({ idx: seed })]);
+  });
+
+  it('maps candidate equality failure without source detail', () => {
+    const original = new Error('fixture equality detail must not escape');
+    const h = helpers(undefined, { same: () => { throw original; } });
+    const seed = comparisonIndex(); const rs = { idx: seed, db: {} } as Record<string, unknown>; h.setNext(() => comparisonIndex());
+    let failure: unknown; try { h.refresh(rs, 'fixture'); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(h.Refusal); expect(failure).not.toBe(original);
+    expect(failure).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshot-refresh-failed' }); expect((failure as Error).message).toBe('input-invalid: masking-snapshot-refresh-failed'); expect((failure as Error).message).not.toContain(original.message);
+    expect(rs.idx).toBe(seed); expect((rs.maskingSnapshots as { snapshots: unknown[] }).snapshots).toEqual([expect.objectContaining({ idx: seed })]);
+  });
+
+  it('passes candidate DriverRefusal through unchanged', () => {
+    const h = helpers(); const seed = comparisonIndex(); const expected = new h.Refusal('input-invalid', 'fixture-candidate-passthrough'); h.setNext(() => { throw expected; });
+    let failure: unknown; try { h.refresh({ idx: seed, db: {} }, 'fixture'); } catch (error) { failure = error; }
+    expect(failure).toBe(expected); expect(failure).toMatchObject({ word: 'input-invalid', detail: 'fixture-candidate-passthrough' }); expect((failure as Error).message).toBe('input-invalid: fixture-candidate-passthrough');
+  });
+
+  it('rethrows the same unexpected seed validation defect', () => {
+    const expected = new Error('fixture seed validation defect');
+    const h = helpers(undefined, { seed: () => { throw expected; } });
+    let failure: unknown; try { h.refresh({ idx: comparisonIndex(), db: {} }, 'fixture'); } catch (error) { failure = error; }
+    expect(failure).toBe(expected);
+  });
+
+  it('H4 passes the exact seed DriverRefusal object through unchanged', () => {
+    let expected: Error;
+    const h = helpers(undefined, { seed: () => { throw expected; } });
+    expected = new h.Refusal('input-invalid', 'fixture-seed-passthrough');
+    let failure: unknown; try { h.refresh({ idx: comparisonIndex(), db: {} }, 'fixture'); } catch (error) { failure = error; }
+    expect(failure).toBe(expected); expect(failure).toBeInstanceOf(h.Refusal);
+    expect(failure).toMatchObject({ word: 'input-invalid', detail: 'fixture-seed-passthrough' }); expect((failure as Error).message).toBe('input-invalid: fixture-seed-passthrough');
+  });
+
+  it('H4 independently initializes a valid seed', () => {
+    const h = helpers(); const seed = comparisonIndex(); const candidate = comparisonIndex(); let calls = 0;
+    h.setNext(() => { calls += 1; return candidate; }); const rs = { idx: seed, db: {} } as Record<string, unknown>;
+    expect(candidate).not.toBe(seed); expect(h.refresh(rs, 'fixture')).toBe(seed); expect(calls).toBe(1);
+    expect(rs.maskingSnapshots).toEqual({ snapshots: [{ idx: seed, material: h.material(seed, 16_777_216) }], material: h.material(seed, 16_777_216) });
+  });
+
+  const countSetup = () => {
+    const h = helpers();
+    const tagged = (n: number) => { const value = comparisonIndex(); value.byLen.set(30 + n, new Set([n.toString(16).padStart(64, '0')])); return value; };
+    const seed = tagged(0); const rs = { idx: seed, db: {} } as Record<string, unknown>;
+    let n = 1; h.setNext(() => tagged(n++)); for (let i = 0; i < 7; i += 1) h.refresh(rs, 'fixture');
+    return { h, seed, rs, tagged };
+  };
+  const aggregateSetup = () => {
+    const h = helpers(); const tagged = (n: number, target: number) => {
+      const probe = index(64); probe.byLen.set(40 + n, new Set([n.toString(16).padStart(64, '0')]));
+      const value = index(target - (h.material(probe, 67_108_864) - 64)); value.byLen.set(40 + n, new Set([n.toString(16).padStart(64, '0')])); return value;
+    };
+    const seed = tagged(0, 16_777_216); const rs = { idx: seed, db: {} } as Record<string, unknown>; let n = 1;
+    h.setNext(() => tagged(n++, 16_777_216)); for (let i = 0; i < 2; i += 1) h.refresh(rs, 'fixture');
+    h.setNext(() => tagged(n++, 16_777_216 - 588)); h.refresh(rs, 'fixture'); h.setNext(() => emptyIndex()); h.refresh(rs, 'fixture');
+    expect((rs.maskingSnapshots as { material: number }).material).toBe(67_108_864);
+    return { h, seed, rs, tagged };
+  };
+  const unchangedAfter = (rs: Record<string, unknown>) => {
+    const state = rs.maskingSnapshots as { snapshots: Array<{ idx: ReturnType<typeof emptyIndex>; material: number }>; material: number };
+    const array = state.snapshots; const snapshots = [...array]; const representatives = snapshots.map((snapshot) => snapshot.idx); const material = state.material; const current = rs.idx;
+    const contents = snapshots.map((snapshot) => ({ material: snapshot.material, content: indexContent(snapshot.idx) }));
+    return () => {
+      expect(rs.maskingSnapshots).toBe(state); expect(rs.idx).toBe(current); expect(state.snapshots).toBe(array); expect(state.material).toBe(material); expect(array).toHaveLength(snapshots.length);
+      for (let i = 0; i < snapshots.length; i += 1) {
+        expect(array[i]).toBe(snapshots[i]); expect(array[i]!.idx).toBe(representatives[i]);
+        expect({ material: array[i]!.material, content: indexContent(array[i]!.idx) }).toEqual(contents[i]);
+      }
+    };
+  };
+
+  it('H2 independently deduplicates unchanged at count capacity', () => {
+    const { h, seed, rs, tagged } = countSetup(); h.setNext(() => tagged(0)); expect(h.refresh(rs, 'fixture')).toBe(seed);
+    const candidate = tagged(0); const unchanged = unchangedAfter(rs);
+    expect(candidate).not.toBe(seed); h.setNext(() => candidate);
+    expect(h.refresh(rs, 'fixture')).toBe(seed); unchanged(); expect((rs.maskingSnapshots as { snapshots: unknown[] }).snapshots).toHaveLength(8);
+    expect(seed).not.toBe(candidate);
+  });
+
+  it.each(['invalid-count', 'material-aggregate', 'overflow-aggregate'] as const)('H2 %s candidate before decisions', (kind) => {
+    const setup = kind === 'invalid-count' ? countSetup() : aggregateSetup();
+    const candidate = kind === 'material-aggregate' ? index(16_777_216 - (setup.h.material(index(64), 67_108_864) - 64) + 1) : comparisonIndex();
+    if (kind === 'invalid-count') Object.defineProperty(candidate, Symbol('extra'), { value: 1 });
+    else { if (kind === 'overflow-aggregate') candidate.belt.overflow = 1; expect(() => setup.h.checked(candidate)).not.toThrow(); }
+    const detail = kind === 'invalid-count' ? 'masking-snapshot-invalid' : kind === 'material-aggregate' ? 'masking-snapshots-material-cap' : 'masking-snapshot-belt-overflow';
+    let calls = 0; let meters = 0; let equality = 0; const decisions: string[] = [];
+    // The forced match exposes early dedup; these rejected candidates are not claimed structurally equal.
+    const h = helpers(undefined, {
+      material: (value) => { if (value === candidate) meters += 1; },
+      same: (_a, value) => { if (value === candidate) { equality += 1; return true; } return undefined; },
+      decision: (value) => { decisions.push(value); },
+    });
+    const unchanged = unchangedAfter(setup.rs); h.setNext(() => { calls += 1; return candidate; });
+    let refusal: unknown; try { h.refresh(setup.rs, 'fixture'); } catch (error) { refusal = error; }
+    expect(calls).toBe(1); expect(equality, 'candidate equality must not precede rejection').toBe(0);
+    expect(decisions, 'capacity conditions must not precede candidate rejection').toEqual([]); expect(meters).toBe(1);
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail }); expect((refusal as Error).message).toBe(`input-invalid: ${detail}`); unchanged();
+  });
+
+  it('admits eight distinct snapshots, reuses unchanged at capacity, and refuses a ninth without exposure', () => {
+    const h = helpers(); const tagged = (n: number) => { const value = comparisonIndex(); value.byLen.set(30 + n, new Set([n.toString(16).padStart(64, '0')])); return value; };
+    const seed = tagged(0); const rs = { idx: seed, db: {} } as Record<string, unknown>;
+    let n = 1; h.setNext(() => tagged(n++)); for (let i = 0; i < 7; i += 1) h.refresh(rs, 'fixture');
+    const state = rs.maskingSnapshots as { snapshots: Array<{ idx: unknown }>; material: number }; const beforeMaterial = state.material;
+    expect(state.snapshots).toHaveLength(8);
+    h.setNext(() => tagged(0)); expect(h.refresh(rs, 'fixture')).toBe(seed); expect(state.snapshots).toHaveLength(8);
+    const beforeIndex = rs.idx;
+    const unchanged = unchangedAfter(rs); h.setNext(() => tagged(8)); let refusal: unknown; try { h.refresh(rs, 'fixture'); } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshots-count-cap' }); expect((refusal as Error).message).toBe('input-invalid: masking-snapshots-count-cap'); unchanged();
+    expect(rs.idx).toBe(beforeIndex); expect(state.snapshots).toHaveLength(8); expect(state.material).toBe(beforeMaterial);
+  });
+
+  it('admits exact aggregate material and refuses one charged byte over before exposure', () => {
+    const h = helpers();
+    const tagged = (n: number, target: number) => {
+      const probe = index(64); probe.byLen.set(40 + n, new Set([n.toString(16).padStart(64, '0')]));
+      const backing = target - (h.material(probe, 67_108_864) - 64);
+      const value = index(backing); value.byLen.set(40 + n, new Set([n.toString(16).padStart(64, '0')])); return value;
+    };
+    const seed = tagged(0, 16_777_216); const rs = { idx: seed, db: {} } as Record<string, unknown>;
+    let n = 1; h.setNext(() => tagged(n++, 16_777_216)); for (let i = 0; i < 2; i += 1) h.refresh(rs, 'fixture');
+    h.setNext(() => tagged(n++, 16_777_216 - 588)); h.refresh(rs, 'fixture');
+    h.setNext(() => emptyIndex()); h.refresh(rs, 'fixture');
+    const state = rs.maskingSnapshots as { snapshots: unknown[]; material: number }; const beforeIndex = rs.idx;
+    expect(state.material).toBe(67_108_864); expect(state.snapshots).toHaveLength(5);
+    const oneOverRs = { idx: seed, db: {} } as Record<string, unknown>;
+    let overN = 1; h.setNext(() => tagged(overN++, 16_777_216)); for (let i = 0; i < 2; i += 1) h.refresh(oneOverRs, 'fixture');
+    h.setNext(() => tagged(overN++, 16_777_216 - 587)); h.refresh(oneOverRs, 'fixture'); h.setNext(() => emptyIndex());
+    const oneOverState = oneOverRs.maskingSnapshots as { snapshots: Array<{ idx: ReturnType<typeof emptyIndex>; material: number }>; material: number };
+    const oneOverStateObject = oneOverState; const oneOverArray = oneOverState.snapshots; const oneOverSnapshots = [...oneOverState.snapshots]; const oneOverRepresentatives = oneOverState.snapshots.map((snapshot) => snapshot.idx);
+    const oneOverContents = oneOverState.snapshots.map((snapshot) => ({ material: snapshot.material, content: indexContent(snapshot.idx) }));
+    const oneOverIndex = oneOverRs.idx; const oneOverMaterial = oneOverState.material;
+    let refusal: unknown; try { h.refresh(oneOverRs, 'fixture'); } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshots-material-cap' }); expect((refusal as Error).message).toBe('input-invalid: masking-snapshots-material-cap');
+    expect(oneOverRs.maskingSnapshots).toBe(oneOverStateObject); expect(oneOverRs.idx).toBe(oneOverIndex); expect(oneOverState.material).toBe(oneOverMaterial); expect(oneOverState.snapshots).toBe(oneOverArray); expect(oneOverState.snapshots).toEqual(oneOverSnapshots);
+    expect(oneOverState.snapshots.map((snapshot) => snapshot.idx)).toEqual(oneOverRepresentatives); for (let i = 0; i < oneOverState.snapshots.length; i += 1) { expect(oneOverState.snapshots[i]).toBe(oneOverSnapshots[i]); expect({ material: oneOverState.snapshots[i]!.material, content: indexContent(oneOverState.snapshots[i]!.idx) }).toEqual(oneOverContents[i]); }
+    expect(oneOverState.snapshots).toHaveLength(4); expect(state.material).toBe(67_108_864); expect(rs.idx).toBe(beforeIndex);
+  });
+
+  it('deduplicates an independently allocated candidate at full aggregate without charge', () => {
+    const h = helpers(); const tagged = (n: number, target: number) => {
+      const probe = index(64); probe.byLen.set(40 + n, new Set([n.toString(16).padStart(64, '0')])); const backing = target - (h.material(probe, 67_108_864) - 64);
+      const value = index(backing); value.byLen.set(40 + n, new Set([n.toString(16).padStart(64, '0')])); return value;
+    };
+    const seed = tagged(0, 16_777_216); const rs = { idx: seed, db: {} } as Record<string, unknown>; let n = 1;
+    h.setNext(() => tagged(n++, 16_777_216)); for (let i = 0; i < 2; i += 1) h.refresh(rs, 'fixture'); h.setNext(() => tagged(n++, 16_777_216 - 588)); h.refresh(rs, 'fixture'); h.setNext(() => emptyIndex()); h.refresh(rs, 'fixture');
+    const state = rs.maskingSnapshots as { snapshots: unknown[]; material: number }; const beforeArray = state.snapshots; const beforeSnapshots = [...state.snapshots]; const beforeMaterial = state.material;
+    const equal = tagged(0, 16_777_216); expect(equal).not.toBe(seed); h.setNext(() => equal); expect(h.refresh(rs, 'fixture')).toBe(seed); expect(rs.idx).toBe(seed); expect(state.snapshots).toBe(beforeArray); expect(state.snapshots).toEqual(beforeSnapshots); expect(state.material).toBe(beforeMaterial);
+
+  });
+  it('H1 distinct small candidate refuses at full aggregate', () => {
+    const { h, rs } = aggregateSetup(); const unchanged = unchangedAfter(rs); h.setNext(() => comparisonIndex());
+    let refusal: unknown; try { h.refresh(rs, 'fixture'); } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshots-material-cap' }); expect((refusal as Error).message).toBe('input-invalid: masking-snapshots-material-cap'); unchanged();
+  });
+
 });
