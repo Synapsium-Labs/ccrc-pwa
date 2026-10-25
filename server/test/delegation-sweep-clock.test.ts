@@ -9,6 +9,7 @@ import { FleetWatcher, DELEGATION_SWEEP_MS } from '../src/watch.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import type { DelegationCensusPass } from '../src/coord/gitref.js';
+import { laneRow } from '../src/laneSchedule.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -71,16 +72,25 @@ describe('the delegation lane\'s cadence (D-5862)', () => {
     expect(w.reads(), 'and now it is spent').toBe(3);
   });
 
-  it('a call beside a pass still running is refused, and the next one after it ends runs', async () => {
+  it('a call beside a pass still running is refused even after the cadence, and the next one after it ends runs', async () => {
     const w = world();
+    let release!: () => void;
+    const held = new Promise<null>((resolve) => { release = () => resolve(null); });
+    vi.spyOn(w.watcher['delegationLane']() as never as { applier(): Promise<unknown> }, 'applier').mockReturnValueOnce(held);
     at(NOW); w.plant();
-    const first = w.call();
-    const second = w.call();                                          // refused by the single flight before it reads the census
-    await Promise.all([first, second]);
+    const first = w.call();                                           // reads the census, then waits on the held applier
     expect(w.reads()).toBe(1);
-    at(NOW + DELEGATION_SWEEP_MS);
+    at(NOW + DELEGATION_SWEEP_MS + 1);                                // the cadence has elapsed and the first pass is still open
     await w.call();
-    expect(w.reads()).toBe(2);
+    expect(w.reads(), 'a second pass started beside the first: the row\'s flight is not skip').toBe(1);
+    release();
+    await first;
+    await w.call();
+    expect(w.reads(), 'the first pass ended: single flight is not a latch').toBe(2);
+  });
+
+  it('the lane\'s cadence is the `delegation` row\'s: DELEGATION_SWEEP_MS and the row agree', () => {
+    expect(laneRow('delegation').cadenceMs).toBe(DELEGATION_SWEEP_MS);
   });
 
   it('a wall clock stepped back by an hour does not hold the lane: a whole cadence of real time passed, so it runs (monotonic since D-5862)', async () => {

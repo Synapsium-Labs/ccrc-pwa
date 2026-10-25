@@ -9785,10 +9785,11 @@ function renderAskBrief(
 // L4: it GATHERS (the owner's directory listing and a bounded byte range through `FleetIO`) and it APPLIES; every decision is a
 // pure module's (`ingestDelegationBucket`, `correlateDelegation`, `planDelegationReconciliation`, the health arithmetic).
 //
-//   ONE PASS AT A TIME (M5/M6). the `delegation` row of `LANE_SCHEDULE` (`flight: 'skip'`) is the single-flight latch; a pass that finds another running returns at once, which also
-//   keeps two census passes from being reconciled side by side (the newer `measuredAt` only). A pass has a BUDGET enforced by a
-//   deadline the work cannot veto: a read that never answers ends the pass, its late answer is discarded (`signal.aborted` is checked
-//   after every await before anything is applied), and the next pass is not blocked by it.
+//   ONE PASS AT A TIME (M5/M6). The `delegation` row of `LANE_SCHEDULE` (`flight: 'skip'`) is the single-flight latch; a pass that
+//   finds another running returns at once, which also keeps two census passes from being reconciled side by side (the newer
+//   `measuredAt` only). A pass has a BUDGET enforced by a deadline the work cannot veto: a read that never answers ends the pass, its
+//   late answer is discarded (`signal.aborted` is checked after every await before anything is applied), and the next pass is not
+//   blocked by it.
 //   A DOCUMENTED RELAXATION (M2): a budget cut releases the latch while the cut pass's work may still be unwinding, so "a pass never
 //   starts while the previous one runs" holds for a pass that ends and is relaxed for one that is cut. That is deliberate: holding the
 //   latch until a hung read answered would wedge the lane for good. The late work is inert because an abort check follows every
