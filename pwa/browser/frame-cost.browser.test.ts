@@ -141,7 +141,7 @@ describe('frame cost (D-6438)', () => {
     // Its own page visit, not shared with the ceiling case: each case then reads on its own, and a failure of one does
     // not hide the other. The changing frames come first, as in the ceiling case, so the identical ones follow a page
     // that has just rendered a changed list.
-    it(`an identical fleet frame costs under a third of a changing frame's script (${skin}, 1920)`, async () => {
+    it(`an identical fleet frame's script stays below 35% of a changing frame's (${skin}, 1920)`, async () => {
       const { app } = await boot({ skin, theme: PHOSPHOR, width: 1920 }, '/');
       try {
         expect(app.errors).toEqual([]);
