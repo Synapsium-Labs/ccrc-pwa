@@ -6518,6 +6518,11 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   `20261024-150005` and `-181918` both predate migration 30, and `20261024-122217` was kept as well, about 2.75 GB on a box
   whose soak has a 10 GB stop line. Credit a counted set that predates the migration, and keep the extra one only when none
   does, with a row for each case.
+- **R47 (2026-10-25; the review-round cap from #1331).** The cap's lift, `POST /api/coord/review-cap`, is session-gated by
+  design, so that no machine lane lifts a cap on its own work. But no console control calls it: the console shows the cap's
+  push notice and nothing to act on, and no `ccrc` verb exists either. On a box with the auth gate armed, the operator's only
+  way is a hand-written request from a signed-in browser. When the operator authorized the lift for run 855, this session could
+  not carry it out, and must not. Give the notice, or the run's review card, a lift control.
 
 ## Next-wave brief
 
