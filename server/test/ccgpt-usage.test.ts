@@ -12,6 +12,7 @@ import { codexAuthDir } from './codexLaneFixture.js';
 import {
   AUTH_LIB, CLOSED_AUTH_BASE, driverLines, fakeAuthServer, plantBackendCredential, runAuthDriver,
 } from './codexAuthFixture.js';
+import { BRIDGE_FILES, runBridgeDriver } from './codexBridgeFixture.js';
 
 // Probed once at module scope — same shape as ccgpt-harness.test.ts and
 // ccgpt-proxy.test.ts (task-10-rulings.md (commit af7cc0bc) §5): a missing interpreter must be
@@ -1364,6 +1365,166 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       expect(existsSync(join(bin, '__pycache__')), 'loading the library wrote bytecode beside it').toBe(false);
     } finally {
       await close();
+    }
+  });
+});
+
+// ── codex bridge Stage 2, Task 14: the poller's direct arm (spec 2026-10-15 §2.6's table: "in `direct` mode reads the
+// usage the bridge saw on real traffic and asks upstream only when the lane is idle; sends the account id and
+// `originator: ccrc`"). The bridge keeps the `x-codex-` values of its last upstream response in its stats file
+// (`usageHeaders`, `ccd/codexbridge/stats.py`); these cases write that file with the bridge's own writer, through the
+// driver, never by hand, so the shape the poller reads is the shape the bridge writes.
+
+/** The values the bridge saw, distinct from `fullHeaders`' 42/17, so a row says which source it came from. */
+const BRIDGE_VALUES = {
+  'x-codex-primary-used-percent': '61',
+  'x-codex-secondary-used-percent': '23',
+  'x-codex-secondary-window-minutes': '300',
+  'x-codex-primary-reset-at': '4102444800',
+  'x-codex-secondary-reset-at': '4102358400',
+};
+
+/** `plantLane`'s lane, with lane.json carrying the mode word and the bridge's file names as `laneManifest` renders
+ *  them (`deploy/models-op.mjs`). */
+function plantModeLane(home: string, id: string, bridge: 'litellm' | 'direct'): void {
+  plantLane(home, id);
+  const lane = join(home, '.ccrc', 'codex', id, 'lane.json');
+  const doc = JSON.parse(readFileSync(lane, 'utf8')) as Record<string, unknown>;
+  writeFileSync(lane, JSON.stringify({ ...doc, id, bridge, upstream: 'backend', bridgeFiles: BRIDGE_FILES }));
+}
+
+const statsPath = (home: string, id: string): string => join(home, '.ccrc', 'codex', id, BRIDGE_FILES.stats);
+
+/** The bridge's stats file for lane `id`, written by `codexbridge.stats.Stats` itself: one response's headers seen
+ *  at `atS` (epoch seconds), then a forced flush. */
+async function bridgeSaw(home: string, id: string, headers: Record<string, string>, atS: number): Promise<void> {
+  const ops = [
+    { op: 'stats-open', path: statsPath(home, id), lane: id },
+    { op: 'stats-call', method: 'usage_headers', args: [headers], kwargs: { now: atS } },
+    { op: 'stats-call', method: 'flush', args: [], kwargs: { force: true } },
+  ];
+  const r = await runBridgeDriver(home, { ops }, {}, { timeoutMs: 30_000 });
+  expect(r.timedOut, r.stderr).toBe(false);
+  const lines = driverLines(r.stdout);
+  expect(lines.map((l) => l['op']), `${r.stdout}\n${r.stderr}`).toEqual(ops.map((o) => o.op));
+  for (const l of lines) expect(l['raised'], JSON.stringify(l)).toBeUndefined();
+  const doc = JSON.parse(readFileSync(statsPath(home, id), 'utf8')) as { usageHeaders: { values: unknown } | null };
+  expect(doc.usageHeaders?.values).toEqual(headers);
+}
+
+const nowS = (): number => Math.floor(Date.now() / 1000);
+
+describe.skipIf(!PY)('ccgpt-usage.py: the direct arm (codex bridge Stage 2, Task 14)', () => {
+  it('a direct lane with fresh bridge headers publishes with no request', async () => {
+    const home = mkTmp('ccgpt-usage-direct-fresh-');
+    const id = mintId();
+    plantModeLane(home, id, 'direct');
+    await bridgeSaw(home, id, BRIDGE_VALUES, nowS() - 60);
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status, r.stderr).toBe(0);
+      expect(requests.length, 'the poller asked upstream though the bridge\'s headers were fresh').toBe(0);
+      const row = readRow(home, id);
+      expect(row).toEqual({
+        five: 23, seven: 61, ts: row['ts'], fiveResetAt: 4102358400, sevenResetAt: 4102444800, fiveWindowMinutes: 300,
+      });
+      expect(typeof row['ts']).toBe('number');
+      expect(r.stdout).toContain(`ccgpt-usage: ${id} 23%/5h 61%/7d (from the bridge's headers)`);
+    } finally {
+      await close();
+    }
+  });
+
+  it('stale headers fall back to one request, originator ccrc', async () => {
+    const home = mkTmp('ccgpt-usage-direct-stale-');
+    const id = mintId();
+    plantModeLane(home, id, 'direct');
+    // 901 s: one second past BRIDGE_FRESH_S = 900.
+    await bridgeSaw(home, id, BRIDGE_VALUES, nowS() - 901);
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status, r.stderr).toBe(0);
+      expect(requests.length).toBe(1);
+      expect(requests[0].headers['originator']).toBe('ccrc');
+      expect(requests[0].headers['chatgpt-account-id']).toBe(`acct-${id}`);
+      expect(readRow(home, id)).toMatchObject({ five: 17, seven: 42 });
+    } finally {
+      await close();
+    }
+  });
+
+  it('a litellm lane is unchanged', async () => {
+    const home = mkTmp('ccgpt-usage-litellm-mode-');
+    const id = mintId();
+    plantModeLane(home, id, 'litellm');
+    // Fresh headers in a stats file a litellm lane never reads (one left behind by a switch back from direct).
+    await bridgeSaw(home, id, BRIDGE_VALUES, nowS() - 60);
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status, r.stderr).toBe(0);
+      expect(requests.length).toBe(1);
+      expect(requests[0].headers['originator']).toBe('codex_cli_rs');
+      expect(requests[0].headers['chatgpt-account-id']).toBe(`acct-${id}`);
+      expect(readRow(home, id)).toMatchObject({ five: 17, seven: 42 });
+      expect(r.stdout).not.toContain('bridge');
+    } finally {
+      await close();
+    }
+  });
+
+  // Each shape is a stats file the poller cannot take a measurement from; each falls back to today's request (on a
+  // direct lane, so `originator: ccrc`), never to a refusal and never to a number nobody measured.
+  it('an unreadable stats file falls back to the request', async () => {
+    const shapes: Record<string, (home: string, id: string) => Promise<void>> = {
+      'not-json': async (home, id) => { writeFileSync(statsPath(home, id), '{"version": 1, "lane"', { mode: 0o600 }); },
+      absent: async () => { /* the bridge never flushed one */ },
+      'a-directory': async (home, id) => { mkdirSync(statsPath(home, id)); },
+      'another-lane': async (home, id) => {
+        await bridgeSaw(home, id, BRIDGE_VALUES, nowS() - 60);
+        const doc = JSON.parse(readFileSync(statsPath(home, id), 'utf8')) as Record<string, unknown>;
+        writeFileSync(statsPath(home, id), JSON.stringify({ ...doc, lane: `${id}-other` }), { mode: 0o600 });
+      },
+      'another-version': async (home, id) => {
+        await bridgeSaw(home, id, BRIDGE_VALUES, nowS() - 60);
+        const doc = JSON.parse(readFileSync(statsPath(home, id), 'utf8')) as Record<string, unknown>;
+        writeFileSync(statsPath(home, id), JSON.stringify({ ...doc, version: 2 }), { mode: 0o600 });
+      },
+      'a-bad-stamp': async (home, id) => {
+        await bridgeSaw(home, id, BRIDGE_VALUES, nowS() - 60);
+        const doc = JSON.parse(readFileSync(statsPath(home, id), 'utf8')) as { usageHeaders: Record<string, unknown> };
+        writeFileSync(statsPath(home, id), JSON.stringify({ ...doc, usageHeaders: { ...doc.usageHeaders, at: 'soon' } }),
+          { mode: 0o600 });
+      },
+      'a-future-stamp': async (home, id) => { await bridgeSaw(home, id, BRIDGE_VALUES, nowS() + 3600); },
+      'no-primary-figure': async (home, id) => {
+        const rest: Record<string, string> = { ...BRIDGE_VALUES };
+        delete rest['x-codex-primary-used-percent'];
+        await bridgeSaw(home, id, rest, nowS() - 60);
+      },
+    };
+    for (const [shape, plant] of Object.entries(shapes)) {
+      const home = mkTmp(`ccgpt-usage-direct-${shape}-`);
+      const id = mintId();
+      plantModeLane(home, id, 'direct');
+      await plant(home, id);
+      const { url, close, requests } = await startEndpoint(fullHeaders());
+      try {
+        const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+        expect(r.timedOut, shape).toBe(false);
+        expect(r.status, `${shape}: ${r.stderr}`).toBe(0);
+        expect(r.stderr.includes('Traceback'), `${shape}: a traceback`).toBe(false);
+        expect(requests.length, shape).toBe(1);
+        expect(requests[0].headers['originator'], shape).toBe('ccrc');
+        expect(readRow(home, id), shape).toMatchObject({ five: 17, seven: 42 });
+      } finally {
+        await close();
+      }
     }
   });
 });
