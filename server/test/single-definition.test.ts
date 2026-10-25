@@ -8554,10 +8554,12 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
     ]);
     const shapes = laneClockShapes().map((x) => x.text.trim());
     expect(shapes.filter((t) => !/lastStopDoneSweep|lastHibernateSweep/.test(t)), 'no lane clock outside runLane').toEqual([
-      // Two lanes that landed on main while this ratchet was in review, each with its own clock: the disk alarm (D-6615)
-      // and the orphan-worktree lane (D-6631). Reported by name until a later slice makes them rows; this list only shrinks.
+      // Three lanes that landed on main while this ratchet was in review, each with its own clock: the disk alarm (D-6615),
+      // the orphan-worktree lane (D-6631) and the tmp sweep census beside the disk alarm (D-6624). Reported by name until a
+      // later slice makes them rows; this list only shrinks.
       'if (this.lastOrphanTreeSweep !== null && gate - this.lastOrphanTreeSweep < CHILD_RECLAIM_SWEEP_MS) return;',
       'if (this.lastDiskSweep !== 0 && now - this.lastDiskSweep < DISK_SWEEP_MS) return;',
+      'if (this.lastTmpSweepCensus !== 0 && now - this.lastTmpSweepCensus < TMP_SWEEP_CENSUS_MS) return;',
     ]);
   });
 
