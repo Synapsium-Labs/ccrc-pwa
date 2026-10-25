@@ -6207,6 +6207,29 @@ describe('ccrc account remove', () => {
     for (const f of state.laneOnly) expect(existsSync(f), `${f} was reaped past an unproven tier`).toBe(true);
   });
 
+  it('C11d: a shim still starting as this lane\'s after the stop refuses the removal by the shim alone: the bridge tier its shared unit covers is not running', async () => {
+    const home = box('ccrc-account-remove-codex-other-mode-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    plantLaneState(home, lane);
+    asLitellmLane(home, lane.id);
+    plantTmux(home, []);
+    // The real `_codex_tier_ours` records each answer in CX_TIER_SEEN, which `_codex_tier_is_other_mode` reads; this
+    // stub does too. The shim is this lane's and still starting (4), and the bridge tier reads its shared unit.
+    const r = removeWithStubs(home, ['_codex_stop_lane() { return 0; }',
+      '_codex_tier_ours() { _codex_row "$1" >/dev/null 2>&1; CX_TIER_VIA=""; CX_TIER_PID=""; CX_TIER_WHY=""; local rc=1; '
+      + 'case "$2" in shim) rc=4 ;; bridge) CX_TIER_WHY=unit-unproven; rc=2 ;; esac; '
+      + 'declare -p CX_TIER_SEEN >/dev/null 2>&1 || declare -gA CX_TIER_SEEN=(); CX_TIER_SEEN["$1/$2"]="$rc"; return "$rc"; }',
+    ].join('\n'));
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('codex-reap-failed');
+    expect(String(j['detail'])).toMatch(new RegExp(`codex lane ${lane.id}'s shim tier\\(s\\) still run`));
+    expect(r.stderr).not.toMatch(/bridge tier/);
+  });
+
   itSystemd('C12: removing a codex account disables ccrc\'s own usage timer for it, reports the link removed, keeps its OAuth and logs, and never names another repository\'s (Plan 3a Task 7)', async () => {
     const home = box('ccrc-account-remove-codex-usage-');
     const lane = await codexLaneOnFreePorts();

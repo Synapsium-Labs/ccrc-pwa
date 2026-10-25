@@ -4780,6 +4780,8 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
       expect(r.code).toBe(1);
       expect(r.stdout).toBe('');
       expect(r.stderr).toMatch(/^ccrc codex: upstream-unsupported: .*siwc.*Stage 3.*Nothing was stopped, and the roster was not written\.$/m);
+      // The whole-wave fix round (L1): the remedy names the act that re-renders lane.json from the roster.
+      expect(r.stderr).toContain('Set the lane\'s upstream back to "backend" (or remove it) in ~/.ccrc/accounts.json, then run \'ccrc doctor --fix\' (it re-renders lane.json from the roster), then re-run.');
       expect([rosterBytes(home), laneBytes(home), fs.readFileSync(join(d, 'litellm.pid'), 'utf8'),
         fs.readFileSync(join(d, 'shim.pid'), 'utf8')]).toEqual(before);
       expect(alive(lit) && alive(shim), 'the switch stopped a tier before it refused').toBe(true);

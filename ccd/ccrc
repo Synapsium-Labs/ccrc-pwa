@@ -14320,7 +14320,7 @@ _codex_cmd_switch() {   # <id> <litellm|direct>
   if [ "$to" = direct ]; then
     up="$(_codex_lane_upstream "$id")" || exit 1
     if [ "$up" != backend ]; then
-      _codex_say upstream-unsupported "$id's upstream is \"$up\", and the $up route arrives in Stage 3: this ccrc runs a direct lane on the backend route only. Set the lane's upstream to \"backend\" (or remove it) in ~/.ccrc/accounts.json, then re-run. Nothing was stopped, and the roster was not written."
+      _codex_say upstream-unsupported "$id's upstream is \"$up\", and the $up route arrives in Stage 3: this ccrc runs a direct lane on the backend route only. Set the lane's upstream back to \"backend\" (or remove it) in ~/.ccrc/accounts.json, then run 'ccrc doctor --fix' (it re-renders lane.json from the roster), then re-run. Nothing was stopped, and the roster was not written."
       exit 1
     fi
   fi
