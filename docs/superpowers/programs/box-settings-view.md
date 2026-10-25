@@ -14,7 +14,7 @@ answered "yes please do that".
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | A read-only `ccrc settings` verb and its snapshot; a five-minute timer on every Linux box; the snapshot as an eleventh node file on `NodeWire.settings`; a Box settings card under Settings › Updates. | — | **PLANNED** 2026-10-25 17:25 UTC. It is dispatched after review-cap-lift's wave 1 is accepted, and once the operator rules on the spec's D2, D3 and D7. |
+| 1 | A read-only `ccrc settings` verb and its snapshot; a five-minute timer on every Linux box; the snapshot as an eleventh node file on `NodeWire.settings`; a Box settings card under Settings › Updates. | — | **PLANNED** 2026-10-25 17:22 UTC. It is dispatched after review-cap-lift's wave 1 is accepted, and once the operator rules on the spec's D2, D3 and D7. |
 
 ## Decisions & deviations
 
