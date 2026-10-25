@@ -65,8 +65,9 @@ export function runsTouching(
  *  ownerless; `{ok:false}` is `run(id)`'s own failure, a row this process cannot represent (an id past 2^53, or a wave,
  *  waveOf or reviews value the hydrate refuses). A lane that latches or records "nobody to tell" on `null` reads THIS and
  *  defers on `ok:false` (D-2545: an unreadable row is not an empty answer): the landing lane, whose prior read
- *  (`openRunsForSession`/`survivorOf`, two columns, no hydrate) proves nothing of the row, the checks lane and the brief
- *  lane. The run-keyed half of the store's old `resolveCoordinator`; the no-run arm is `CoordStore.soleActiveCoordinator`. */
+ *  (`openRunsForSession`/`survivorOf`, two columns, no hydrate) proves nothing of the row, the checks lane, the brief
+ *  lane, the tmp sweep's budget notice (it latches the episode) and the stale reclaim's told step (it records once). The
+ *  run-keyed half of the store's old `resolveCoordinator`; the no-run arm is `CoordStore.soleActiveCoordinator`. */
 export type CoordinatorRead = { readonly ok: true; readonly id: string | null } | { readonly ok: false; readonly detail: string };
 export const readCoordinatorOfRun = (port: Pick<BindingReadPort, 'run'>, runId: number): CoordinatorRead => {
   const read = port.run(runId);
@@ -74,8 +75,9 @@ export const readCoordinatorOfRun = (port: Pick<BindingReadPort, 'run'>, runId: 
 };
 
 /** `readCoordinatorOfRun` collapsed to the ADDRESSING answer: the claim, or `null` for absent, ownerless or unreadable. Only
- *  for a caller whose `null` refuses or degrades the one act in hand (an addressed mail answers unresolved, a sender is not
- *  tagged, a reclaim names nobody) and so repeats on its own next ask; never for one that latches or records on `null`. */
+ *  for a caller whose `null` refuses or degrades the one act in hand: an addressed mail answers unresolved (the sender asks
+ *  again), and a mail's sender is not tagged (`mailSender`: the one-shot sender notice of a role mail on an unreadable run
+ *  is lost, not retried, an accepted degrade). Never for one that latches or records "nobody to tell" on `null`. */
 export const coordinatorOfRun = (port: Pick<BindingReadPort, 'run'>, runId: number): string | null => {
   const read = readCoordinatorOfRun(port, runId);
   return read.ok ? read.id : null;

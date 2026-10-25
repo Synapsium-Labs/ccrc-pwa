@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  ATTRIBUTE_READS, FOLDED_RUN_KEYED_READS, NOT_BINDING_SITES, RUN_NAMES_SESSION_CALLERS, runNamesSessionCallers, runNamesSessionCallsOf, countsByFile, equalitySites, equalitySitesOf, REPO, storeBindingReaders, unroutedSites,
+  ATTRIBUTE_READS, FOLDED_RUN_KEYED_READS, NOT_BINDING_SITES, RUN_NAMES_SESSION_CALLERS, runNamesSessionCallers, runNamesSessionCallsOf, runNamesSessionEscapes, runNamesSessionEscapesOf, countsByFile, equalitySites, equalitySitesOf, REPO, storeBindingReaders, unroutedSites,
 } from './runSessionCensus.js';
 import { BINDING_WRITER_VERBS } from '../src/coord/runBinding.js';
 import { coordinatorOfRun, workerOfRun } from '../src/coord/bindingReads.js';
@@ -103,6 +103,28 @@ describe('the callers of runNamesSession (an id-string decision behind a name; A
   it('counts a call, not an import', () => {
     const src = "import { runNamesSession } from './runBinding.js';\nif (runNamesSession(r, id)) {}\n";
     expect(runNamesSessionCallsOf(src, 'x.ts')).toBe(1);
+  });
+
+  it('counts a call through an aliased import or a namespace import', () => {
+    const aliased = "import { runNamesSession as names } from './coord/runBinding.js';\nif (names(r, id)) {}\n";
+    expect(runNamesSessionCallsOf(aliased, 'x.ts')).toBe(1);
+    const spaced = "import {\n  bindingOf,\n  runNamesSession  as  n2,\n} from './runBinding.js';\nn2(r, id); n2(q, id);\n";
+    expect(runNamesSessionCallsOf(spaced, 'x.ts')).toBe(2);
+    const ns = "import * as rb from './runBinding.js';\nif (rb.runNamesSession(r, id)) {}\n";
+    expect(runNamesSessionCallsOf(ns, 'x.ts')).toBe(1);
+  });
+
+  it('names every use of the helper that is neither its import nor a call (a re-export, a copy, a value passed on)', () => {
+    expect(runNamesSessionEscapesOf("import { runNamesSession } from './runBinding.js';\nrunNamesSession(r, id);\n", 'x.ts')).toEqual([]);
+    expect(runNamesSessionEscapesOf("export { runNamesSession as names } from './coord/runBinding.js';\n", 'x.ts')).toHaveLength(1);
+    expect(runNamesSessionEscapesOf("import { runNamesSession } from './runBinding.js';\nexport { runNamesSession as names };\n", 'x.ts')).toHaveLength(1);
+    expect(runNamesSessionEscapesOf("import { runNamesSession } from './runBinding.js';\nconst f = runNamesSession;\nf(r, id);\n", 'x.ts')).toHaveLength(1);
+    expect(runNamesSessionEscapesOf("import { runNamesSession as n } from './runBinding.js';\nruns.filter(n);\n", 'x.ts')).toHaveLength(1);
+    expect(runNamesSessionEscapesOf("import * as rb from './runBinding.js';\nconst { runNamesSession: g } = rb;\nconst h = rb.runNamesSession;\n", 'x.ts')).toHaveLength(2);
+  });
+
+  it('has no such use under server/src, so the pinned calls are every way the helper is reached', () => {
+    expect(runNamesSessionEscapes()).toEqual([]);
   });
 });
 

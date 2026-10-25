@@ -539,6 +539,26 @@ describe('reclaimChild on the stale arm (D-6639)', () => {
     expect(r.feed()).toContain('stale child reclaimed');
   });
 
+  it('a coordinator read that fails after the reclaim is not "nobody to tell": the feed row says the coordinator could not be read, and why', async () => {
+    const r = await rig();
+    const real = r.coord.run.bind(r.coord);
+    // only the told step's read fails: every read before the verb ran answers as the store does
+    const spy = vi.spyOn(r.coord, 'run').mockImplementation((id) => (r.calls.some((c) => c[0] === 'ws-reclaim')
+      ? { ok: false, kind: 'run-unreadable', detail: 'wave past 2^53' } : real(id)));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const out = await reclaimChild(r.deps, r.req({ word: 'review', holdDigest: null, holdText: null }));
+      expect(out.kind, 'the reclaim stands').toBe('reclaimed');
+      expect(r.mail()).toEqual([]);
+      const row = r.coord.feedEvents(50).find((e) => e.title === 'stale child reclaimed');
+      expect(row).toBeDefined();
+      expect(row!.body).toContain('could not be read');
+      expect(row!.body).toContain('wave past 2^53');
+      expect(row!.body).toContain(REF);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('wave past 2^53'))).toBe(true);
+    } finally { warn.mockRestore(); spy.mockRestore(); }
+  });
+
   it('the mail is not sent when the reclaim did not finish', async () => {
     const r = await rig();
     const run: Runner = async (_c, args) => (args[0] === 'ws-audit'

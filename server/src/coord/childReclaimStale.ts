@@ -6,7 +6,8 @@
 //     per seven idle days.
 //   - `childStaleHoldDigest`, the sha256 of the hold file's raw bytes, which ccd compares to its own hash of the same file.
 //   - `childReclaimStaleTold`, the executor's last step after a stale-arm reclaim: system mail from the `operator`
-//     role to the minting run's coordinator naming the attic refs, or a coord feed row when there is nobody to tell.
+//     role to the minting run's coordinator naming the attic refs, or a coord feed row when there is nobody to tell (or
+//     the run row cannot be read, which the row then says).
 // The marker this arm reads has NO writer in the tree (`single-definition.test.ts` pins it); this file only reads a
 // listing the caller already took.
 import { createHash } from 'node:crypto';
@@ -25,7 +26,7 @@ import {
 import { CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, readSwitches } from '../../../shared/switches.js';
 import type { CoordStore } from './store.js';
 import { queueSystemMail } from './rundefsTx.js';
-import { coordinatorOfRun } from './bindingReads.js';
+import { readCoordinatorOfRun } from './bindingReads.js';
 import type { ChildReclaimDeps, ChildReclaimRequest } from './childReclaim.js';
 
 /** `review-report-superseded` (D-6922): what the sweep reads of the run a review child's
@@ -254,12 +255,20 @@ export async function childReclaimStaleTold(
       refs = res.ran === false || !res.ok ? null : parseAtticRefs(req.sessionId, res.stdout);
     }
     const { subject, body } = childStaleMail({ sessionId: req.sessionId, runId: req.runId, ask, refs });
-    const coordinator = ask.word === 'run-absent' ? null : coordinatorOfRun(deps.coord, req.runId);
-    if (coordinator !== null) {
-      queueSystemMail(deps.coord, null, { fromId: 'operator', toId: coordinator, runId: null, kind: 'status', subject, body });
+    // `readCoordinatorOfRun`, not the collapsing `coordinatorOfRun`: this step is told once and records on "nobody", so a
+    // run row that cannot be read must not read as an ownerless run (D-2545). It has no retry, so the record says so.
+    const read = ask.word === 'run-absent' ? { ok: true as const, id: null } : readCoordinatorOfRun(deps.coord, req.runId);
+    if (read.ok && read.id !== null) {
+      queueSystemMail(deps.coord, null, { fromId: 'operator', toId: read.id, runId: null, kind: 'status', subject, body });
       return;
     }
-    notify(deps, { kind: 'coord', sessionId: req.sessionId, runId: req.runId, title: CHILD_STALE_TOLD_TITLE, body },
+    if (!read.ok) {
+      console.warn(`ccrc-server: the coordinator of run #${req.runId} could not be read (${read.detail}); `
+        + `${req.sessionId}'s stale reclaim is recorded in the feed instead of mailed`);
+    }
+    const recorded = read.ok ? body
+      : `The coordinator of run #${req.runId} could not be read (${read.detail}), so this was not mailed to it.\n${body}`;
+    notify(deps, { kind: 'coord', sessionId: req.sessionId, runId: req.runId, title: CHILD_STALE_TOLD_TITLE, body: recorded },
       'record-only', { degraded: 'stale child reclaimed, feed archive degraded' });
   } catch (err) {
     console.warn(`ccrc-server: telling the coordinator of ${req.sessionId}'s stale reclaim failed `

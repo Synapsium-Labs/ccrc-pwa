@@ -13,6 +13,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript-api';
 import { parseSource } from './scan/parse.js';
 import { BINDING_WRITER_VERBS } from '../src/coord/runBinding.js';
 
@@ -191,7 +192,7 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "a hook record's Claude Code session uuid against the pane's current uuid: pane identity, no run is read" },
   { file: 'server/src/stopDoneSweep.ts', text: 'l.sessionId === id',
     why: 'indexes the batched answer of lastRunBySession by the session it was asked about (the store did the last-closed decision): a keyed row, no series is decided' },
-  { file: 'server/src/tmpSweepLane.ts', text: 'claimant !== sessionId',
+  { file: 'server/src/tmpSweepLane.ts', text: 'read.id !== sessionId',
     why: 'excludes a self-claimed run from the coordinators to mail: a claimant against the session whose coordinator is asked, the run having been chosen by survivorOf' },
   { file: 'server/src/transcript/parse.ts', text: "r['sessionId'] === ofUuid",
     why: "a transcript line's session uuid against the transcript's own: transcript parsing, no run is read" },
@@ -267,7 +268,8 @@ export const FOLDED_RUN_KEYED_READS: readonly string[] = ['resolveCoordinator', 
 
 /** A caller of `runNamesSession` outside `runBinding.ts`. The helper is `run.sessionId === id` behind a name, which the
  *  equality detector cannot see, so wrapping a site in it must not lower the census silently: each caller is pinned here with
- *  its exact count and a reason. These are id-string decisions by name, NOT routing through `bindingOf`/`childrenOf`; the
+ *  its exact count and a reason. A call counts under the helper's name, a local alias of its import or a namespace; any
+ *  other reference (a re-export, a copy, a value passed on) is red in `runNamesSessionEscapes`, so no name can hide a call. These are id-string decisions by name, NOT routing through `bindingOf`/`childrenOf`; the
  *  exit measurement of the final routing slice accounts for them. */
 export interface NamesSessionCaller { readonly file: string; readonly count: number; readonly why: string }
 
@@ -280,9 +282,66 @@ export const RUN_NAMES_SESSION_CALLERS: readonly NamesSessionCaller[] = [
     why: 'a hold candidate and a minting run are single runs with no series in hand: the sweep asks only whether the run names the session' },
 ];
 
-/** The calls of `runNamesSession` in one source text (an import is not a call). */
+const HELPER = 'runNamesSession';
+
+/** Every reference to the helper in one source text, sorted into the CALLS (`runNamesSession(…)`, a call through a local
+ *  alias of an aliased import `import { runNamesSession as n }`, or `ns.runNamesSession(…)` through a namespace import)
+ *  and the ESCAPES: any other reference (a re-export under any name, a copy into a local, a destructure, a value passed
+ *  on), each of which would let a call be made under a name the call count cannot see. An import specifier is neither. */
+function runNamesSessionUsesOf(text: string, file: string): { calls: number; escapes: string[] } {
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const aliases = new Set<string>([HELPER]);
+  const visitImports = (n: ts.Node): void => {
+    if (ts.isImportSpecifier(n) && (n.propertyName ?? n.name).text === HELPER) aliases.add(n.name.text);
+    ts.forEachChild(n, visitImports);
+  };
+  visitImports(sf);
+  let calls = 0;
+  const escapes: string[] = [];
+  const isCallee = (id: ts.Node): boolean => {
+    const p = id.parent;
+    if (ts.isCallExpression(p) && p.expression === id) return true;
+    // `ns.runNamesSession(…)`: the property name of an access that is itself the callee.
+    return ts.isPropertyAccessExpression(p) && p.name === id && ts.isCallExpression(p.parent) && p.parent.expression === p;
+  };
+  const visit = (n: ts.Node): void => {
+    if (ts.isIdentifier(n) && aliases.has(n.text)) {
+      const p = n.parent;
+      const inImport = ts.isImportSpecifier(p);
+      if (!inImport) {
+        if (isCallee(n)) calls += 1;
+        else {
+          const { line } = sf.getLineAndCharacterOfPosition(n.getStart(sf));
+          escapes.push(`${file}:${line + 1}: ${p.getText(sf).replace(/\s*\n\s*/g, ' ').slice(0, 120)}`);
+        }
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return { calls, escapes };
+}
+
+/** The calls of `runNamesSession` in one source text, under its own name, a local alias or a namespace (an import is not a call). */
 export function runNamesSessionCallsOf(text: string, file: string): number {
-  return parseSource(text, file).calls.filter((c) => c.name === 'runNamesSession').length;
+  return runNamesSessionUsesOf(text, file).calls;
+}
+
+/** The references to `runNamesSession` in one source text that are neither its import nor a call (see `runNamesSessionUsesOf`). */
+export function runNamesSessionEscapesOf(text: string, file: string): string[] {
+  return runNamesSessionUsesOf(text, file).escapes;
+}
+
+/** Every escaping reference to `runNamesSession` under `server/src` outside `runBinding.ts`: the census of its callers is
+ *  every way the helper is reached only while this is empty. */
+export function runNamesSessionEscapes(root: string = REPO): string[] {
+  const out: string[] = [];
+  for (const f of tsFiles(root, 'server/src')) {
+    const file = path.relative(root, f).split(path.sep).join('/');
+    if (file === 'server/src/coord/runBinding.ts') continue;
+    out.push(...runNamesSessionEscapesOf(readFileSync(f, 'utf8'), file));
+  }
+  return out;
 }
 
 /** The callers of `runNamesSession` under `server/src` outside `runBinding.ts`: file -> count. */

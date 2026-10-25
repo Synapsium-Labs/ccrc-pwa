@@ -363,7 +363,7 @@ describe('the landing lane latches only what it told', () => {
     g.stop();
   });
 
-  it('a merge whose run STATE cannot be read (the coordinator read) defers too, and mails once it reads', async () => {
+  it('a merge whose run STATE cannot be read (after the coordinator read answered) defers too, and mails once it reads', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const f = await harness(mergedLine());
     const realRun = f.coord.run.bind(f.coord);
