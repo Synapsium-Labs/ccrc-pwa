@@ -4413,8 +4413,8 @@ fourteen-rung ladder or mints a token, and `ccd ws-orphan --expect <token> --tre
 `git worktree remove`, never `--force`. A tree is removed only when it is clean, its HEAD is on a remote, no registry row
 names it or a path inside it, nothing holds it, and nothing in it has changed for 7 days. The server is the only
 composer of `ws-orphan`, and a child's deny list names the verb.
-The lane (`server/src/orphanTreeLane.ts`, `coord/collectOrphanTree.ts`, `orphanTreeSweep.ts`, the beat in
-`watch.ts`'s `sweepOrphanTrees`) takes a census every 6 hours (hourly in pressure mode), audits at most 2 trees per
+The lane (`server/src/orphanTreeLane.ts`, `coord/collectOrphanTree.ts`, `orphanTreeSweep.ts`, the wiring in
+`orphanTreeBeat.ts`, the cadence the `orphanTrees` row of `LANE_SCHEDULE`) takes a census every 6 hours (hourly in pressure mode), audits at most 2 trees per
 pass (4 under pressure) and acts at most once per pass fleet-wide, only on two audits of one unchanged token at least an
 hour apart. It needs `orphan-v1` from ccd and is stopped by `reclaim-paused`.
 

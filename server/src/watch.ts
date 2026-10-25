@@ -3,7 +3,7 @@ import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
 import { answeredByBody, approvalRuledBody, askPushBody, withCoordinatorBody } from './askbody.js';
-import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
+import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { buildFleetReadModel, type FleetReadModel } from './fleetReadModel.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
@@ -74,10 +74,9 @@ import {
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 // The delegation lane's (wave 3, Task 13) imports, in one block of their own: the pure modules it composes, and the durable applier.
 import { createHash, randomUUID } from 'node:crypto';
-import type { MeasuredDirectoryRead, MeasuredDisk } from './io.js';
-import { diskMarkFate, diskNotice, diskVerdict, type DiskVerdict } from './disk.js';
-import { newTmpSweepLaneState, runTmpSweepCensusLane } from './tmpSweepLane.js';
-import { clearDiskEpisode, readDiskEpisode, writeDiskEpisode } from './diskepisode.js';
+import type { MeasuredDirectoryRead } from './io.js';
+import { TmpCensusBeat } from './tmpSweepLane.js';
+import { DiskAlarmLane } from './diskAlarmLane.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
 import {
@@ -149,7 +148,7 @@ import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
-  childMarkLeftListing, childReclaimBornAt, childReclaimEverClaimedIds, childReclaimGeneration, childReclaimGenerationRead, childReclaimLatest, childReclaimRowUuid,
+  childMarkLeftListing, childReclaimBornAt, childReclaimGeneration, childReclaimGenerationRead, childReclaimLatest, childReclaimRowUuid,
   childReclaimSweepOutcomeOf, childReclaimTokenKind, isChildReclaimStuckToken, reclaimChild,
   recordChildReclaimKeptFeed, recordChildReclaimLeafKeptFeed, releaseRetiredChildHold, type ChildReclaimOutcome, type ChildReclaimReleaseOutcome,
   type ChildReclaimReleaseRequest, type ChildReclaimRequest,
@@ -212,9 +211,7 @@ import { NO_FLEET_IDENTITY } from './fleetidentity.js';
 import { stopDonePass, type StopDoneMemory } from './stopDoneSweep.js';
 import { STOP_DONE_SWEEP_MS } from './stopDone.js';
 import { hibernatePass, type HibernateSweepMemory } from './hibernateSweep.js';
-import {
-  STALE_ARCHIVE_SWEEP_MS, paneFromLiveWord, staleArchivePass, transcriptMtimeVia, wokeAtVia, type StaleArchiveMemory,
-} from './coord/staleArchive.js';
+import { StaleArchiveBeat } from './staleArchiveBeat.js';
 import { wakeAdmit, type WakeKind } from './coord/wakeBudget.js';
 import { HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_SWEEP_MS } from './coord/hibernate.js';
 import { liveRowFor, liveWordFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
@@ -235,14 +232,9 @@ import {
   collectRetireLatch,
 } from './coord/collectTempRoot.js';
 
-import { OrphanTreeSweep } from './orphanTreeSweep.js';
-import { orphanCoordinatorSet } from './orphanTreeLane.js';
+import { OrphanTreeBeat } from './orphanTreeBeat.js';
 import type { DiskOrphanTrees } from '../../shared/disk.js';
 
-/** The disk alarm's clock (D-6615, spec §2.5): one `statfs` pass a minute. */
-const DISK_SWEEP_MS = 60_000;
-/** The tmp sweep census lane's clock (D-6624, spec §2.1): the census is read and its mail queued every 5 minutes. */
-const TMP_SWEEP_CENSUS_MS = 5 * 60_000;
 
 /** At most this many lane-asked reclaims outstanding at once. Close-path
  *  reclaims are not counted, and neither is a hold-release job: the bound is
@@ -1020,9 +1012,8 @@ export class FleetWatcher {
   private readonly collectStartMono: number;
   private collectGen = 0;
   private collectLaneGen = 0;
-  /** The orphan-worktree lane (D-6631): its pass, built on first use, and its throttle on the monotonic clock. */
-  private orphanTrees: OrphanTreeSweep | null = null;
-  private lastOrphanTreeSweep: number | null = null;
+  /** The orphan-worktree lane (D-6631): its pass, built on first use. Its cadence is the `orphanTrees` row of `LANE_SCHEDULE`. */
+  private readonly orphanBeat = new OrphanTreeBeat(() => this.deps, () => this.childReclaimLaneNow().monoMs);
   private collectState = new Map<string, CollectEntry>();
   private collectInFlight = new Map<string, CollectFlight>();
   private collectSlot: CollectSlot = { kind: 'free' };
@@ -1088,16 +1079,10 @@ export class FleetWatcher {
    *  `undefined` until the first sweep lands — the same contract every other
    *  `currentX()` on this class already has, and the route turns it into a
    *  `readiness: null` on the wire rather than omitting the key. */
-  /** The disk alarm's clock, the decider's memory and the block the route serves (D-6615). `diskBlock` is `null` until
-   *  the first sweep lands: absence on the wire reads as UNKNOWN. */
-  private lastDiskSweep = 0;
-  private diskState: DiskVerdict | null = null;
-  private diskBlock: DiskHealth | null = null;
-  /** The tmp sweep census lane (D-6624): its clock, its memory, the holders it last named and the registry ids of the
-   *  last good listing (`null` until one lands: nothing is mailed without it). */
-  private lastTmpSweepCensus = 0;
-  private readonly tmpSweepLane = newTmpSweepLaneState();
-  private tmpHolders: DiskHealth['holders'] = [];
+  /** The disk alarm (D-6615) and the tmp sweep census lane (D-6624): each holds its clock and its memory. */
+  private readonly diskAlarm = new DiskAlarmLane(() => this.deps);
+  private readonly tmpCensus = new TmpCensusBeat(() => this.deps);
+  /** The registry ids of the last good listing (`null` until one lands: nothing is mailed without it). */
   private registryIds: ReadonlySet<string> | null = null;
   private readiness: FleetReadiness | undefined;
   /** The stale set last reported, as JSON — one warn per CHANGING set, the
@@ -1327,9 +1312,7 @@ export class FleetWatcher {
   private lastHibernateSweep = 0;
   private hibernateSweeping = false;
   private readonly hibernateMemory: HibernateSweepMemory = { lastLine: new Map(), lastActLine: new Map() };
-  private lastStaleArchiveSweep = 0;
-  private staleArchiveSweeping = false;
-  private readonly staleArchiveMemory: StaleArchiveMemory = { sightings: new Map(), would: new Set(), failed: new Map() };
+  private readonly staleArchive = new StaleArchiveBeat(() => this.deps, this, (a) => this.transcripts.resolve(a));
   private readonly hibernateStartedAt = Date.now();
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
@@ -1923,7 +1906,8 @@ export class FleetWatcher {
   /** The disk alarm's block as the last sweep held it (D-6615), or `null` before the first sweep: absence on the wire
    *  reads as UNKNOWN, never as a healthy disk. */
   disk(): DiskHealth | null {
-    return this.diskBlock === null ? null : { ...this.diskBlock, holders: this.tmpHolders };
+    const block = this.diskAlarm.block();
+    return block === null ? null : { ...block, holders: this.tmpCensus.holders() };
   }
 
   /** What the lane last concluded, for tests and diagnostics: nothing here is wire. */
@@ -2143,31 +2127,10 @@ export class FleetWatcher {
     }
   }
 
-  /** The STALE-ARCHIVE ARM (D-6643, fleet disk retention spec §2.7.5): hourly, one pass at a time, on the tick's rows and
-   *  listing. `staleArchivePass` (`coord/staleArchive.ts`) holds the rest; SHADOW until `$REG/stale-archive-live`. */
+  /** The STALE-ARCHIVE ARM (D-6643, fleet disk retention spec §2.7.5): `StaleArchiveBeat` holds the clock, the memory and the
+   *  pass. Hourly, one pass at a time, on the tick's rows and listing; SHADOW until `$REG/stale-archive-live`. */
   async sweepStaleArchive(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
-    const now = Date.now();
-    if (this.staleArchiveSweeping || (this.lastStaleArchiveSweep !== 0 && now - this.lastStaleArchiveSweep < STALE_ARCHIVE_SWEEP_MS)) return;
-    this.lastStaleArchiveSweep = now;
-    this.staleArchiveSweeping = true;
-    try {
-      const reads = turnReadDeps(this.deps, this);
-      const { io, cfg, coord, notifyLog } = this.deps;
-      await staleArchivePass({
-        coord, viewers: this.deps.viewers, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
-        notice: (e) => { notify({ notifyLog, coord }, e, 'record-only', { degraded: 'stale archive, feed archive degraded' }); },
-        pane: async (rec) => paneFromLiveWord(await liveWordFor(reads, rec)),
-        transcriptMtimeMs: (rec) => transcriptMtimeVia(io, cfg, rec, (a) => this.transcripts.resolve(a)),
-        wokeAtMs: (rec) => wokeAtVia(io, cfg, rec),
-        listRegistry: () => io.readdirMeasured(cfg.registryDir),
-        rowNow: async (rec) => { const a = await readSessionRecord(io, cfg, rec.id); return a.kind === 'found' ? a.record : null; },
-        queueRun: (id, fn) => this.deps.queue.run(id, fn), log: (line) => console.warn(line), now: Date.now,
-      }, this.staleArchiveMemory, records, names);
-    } catch (err) {
-      console.warn(`ccrc-server: sweepStaleArchive failed (${err instanceof Error ? err.message : String(err)}) — no archives this pass`);
-    } finally {
-      this.staleArchiveSweeping = false;
-    }
+    await this.staleArchive.sweep(records, names);
   }
 
   /** At an unattended act (the stop-done lane's, hibernation's): the registry record read AGAIN and the frame's row
@@ -2251,10 +2214,10 @@ export class FleetWatcher {
       // The disk alarm (D-6615) is gated HERE too, above the registry read's fail-shut return, because it reads no
       // registry: a full disk is exactly when the registry read fails, and the one alarm must still sound. NEVER
       // awaited: a `statfs` of a stalled volume is what hangs (the agent bounds each root, the link bounds the request),
-      // and the dialog detector must not wait behind it. Own clock (`DISK_SWEEP_MS`).
+      // and the dialog detector must not wait behind it. Own clock (`DiskAlarmLane`).
       void this.sweepDisk().catch(() => { /* one bad sweep must not kill the poll */ });
       // The tmp sweep's census (D-6624) sits beside it for the same reason: a file read, and the holders are wanted
-      // exactly when the registry read fails. Own clock (`TMP_SWEEP_CENSUS_MS`), never awaited.
+      // exactly when the registry read fails. Own clock (`TmpCensusBeat`), never awaited.
       void this.sweepTmpSweepCensus().catch(() => { /* one bad sweep must not kill the poll */ });
 
       // The server-caps beat (D-5232's mechanism, Task 9b) sits BESIDE the inventory lane, never inside it: that lane
@@ -4849,36 +4812,16 @@ export class FleetWatcher {
     await this.runLane('collect', () => this.collectPass(coord, names));
   }
 
-  /** THE ORPHAN-WORKTREE LANE's beat (D-6631; spec 2026-10-23 section 2.3): throttled here, decided in `orphanTreeLane.ts`,
-   *  asked in `coord/collectOrphanTree.ts`, remembered in `orphanTreeSweep.ts`. Shadow until `orphan-tree-live` stands. */
+  /** THE ORPHAN-WORKTREE LANE's beat (D-6631; spec 2026-10-23 section 2.3): the `orphanTrees` row of `LANE_SCHEDULE` throttles
+   *  it, `orphanTreeBeat.ts` builds and runs it. A server with no coord store has no lane and spends no slot. */
   async sweepOrphanTrees(): Promise<void> {
-    const coord = this.deps.coord;
-    if (!coord) return;
-    const gate = this.childReclaimLaneNow().monoMs;
-    if (this.lastOrphanTreeSweep !== null && gate - this.lastOrphanTreeSweep < CHILD_RECLAIM_SWEEP_MS) return;
-    this.lastOrphanTreeSweep = gate;
-    this.orphanTrees ??= new OrphanTreeSweep({
-      io: this.deps.io, registryDir: this.deps.cfg.registryDir, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
-      queue: this.deps.queue, mono: () => this.childReclaimLaneNow().monoMs,
-      epochNow: () => (this.deps.fleetIdentity ?? NO_FLEET_IDENTITY).epochNow(), pressure: () => false,
-      coordinators: () => { const c = orphanCoordinatorSet({ everClaimedIds: () => childReclaimEverClaimedIds(coord), openCoordinatorIds: () => coord.openCoordinatorIds() }); if (c === null) throw new Error('coordinator claims unreadable'); return c; },
-      // A containing row that is no workspace (a plain session, a main checkout) is no nesting; an unreadable or absent row keeps the tree.
-      isWorkspace: async (id) => {
-        const r = await readSessionRecord(this.deps.io, this.deps.cfg, id);
-        if (r.kind !== 'found' || r.record.unmeasured.length > 0) return null;
-        // MEASURED: field() collapses an unreadable marker to null, which would read as 'plain session' and audit a worker's tree.
-        const w = await fieldMeasured(this.deps.io, this.deps.cfg.registryDir, id, 'workspace');
-        return w.ok ? true : w.reason === 'absent' ? false : null;
-      },
-      record: (title, body) => notify({ notifyLog: this.deps.notifyLog, coord },
-        { kind: 'coord', sessionId: '', runId: null, title, body }, 'record-only', { degraded: `orphan-tree lane ${title}, feed archive degraded` }),
-    });
-    await this.orphanTrees.pass();
+    if (!this.deps.coord) return;
+    await this.runLane('orphanTrees', () => this.orphanBeat.pass());
   }
 
   /** The `disk` block's `orphanTrees` (D-6631), or null before the lane's first census. */
   orphanTreesHealth(): DiskOrphanTrees | null {
-    return this.orphanTrees?.health() ?? null;
+    return this.orphanBeat.health();
   }
 
   /** One pass of the collector's lane, run only while no other pass runs. Its ONE await is the gather. It queues its
@@ -6955,90 +6898,13 @@ export class FleetWatcher {
     }
   }
 
-  /**
-   * The disk alarm (D-6615, spec §2.5): ask the fleet io what the work filesystems read, fold it through the pure
-   * decider (`diskVerdict`: the larger of bytes and inodes, hysteresis, a two-measurement debounce) and hold the block
-   * `GET /api/fleet/health` serves. A read that could not be taken (an older agent, a fault on the link) leaves the
-   * decider's memory alone and marks the block `unmeasured`, never `ok`: it keeps a known `warn` or `critical`, so the
-   * one alarm does not go dark exactly when a full box stalls. `holders` stays empty until the holder census fills it.
-   *
-   * PUBLIC for the reason `sweepReadiness` is: `tick()` dispatches it with `void`, so a test that awaits `tick()` has
-   * not awaited this.
-   */
-  async sweepDisk(): Promise<void> {
-    const now = Date.now();
-    if (this.lastDiskSweep !== 0 && now - this.lastDiskSweep < DISK_SWEEP_MS) return;
-    this.lastDiskSweep = now;
-    let read: MeasuredDisk;
-    try { read = await this.deps.io.statfsMeasured(); } catch { read = { ok: false, reason: 'unreadable' }; }
-    const held = this.diskBlock;
-    if (!read.ok) {
-      const standing = held !== null && (held.level === 'warn' || held.level === 'critical');
-      this.diskBlock = {
-        at: held?.at ?? now,
-        level: standing ? held.level : 'unmeasured',
-        filesystems: held?.filesystems ?? [],
-        expectedMounts: held?.expectedMounts ?? [],
-        pressure: held?.pressure ?? false,
-        holders: [],
-      };
-      return;
-    }
-    const before = this.diskState;
-    let verdict = diskVerdict(before, read.measured, now);
-    // The open episode is durable (the `pushRelease` rule: a latch that forgets on restart repeats the push). A process
-    // that saw its own held episode close forgets the mark. One with no episode of its own judges the mark by the
-    // filesystem(s) that pushed it: standing now, it resumes that episode (its key is already archived); every one clear
-    // or gone, it forgets (a later rise is new); otherwise it keeps. A mark with no filesystem is stale.
-    const dir = this.deps.cfg.ccrcDir;
-    if (before?.episode !== undefined) {
-      if (verdict.level === 'ok') clearDiskEpisode(dir);
-    } else {
-      const mark = readDiskEpisode(dir);
-      const fate = mark === null ? 'keep' : diskMarkFate(mark.devs, verdict, read.measured);
-      if (mark !== null && fate === 'resume') verdict = { ...verdict, episode: mark.episode };
-      else if (fate === 'forget') clearDiskEpisode(dir);
-    }
-    this.diskState = verdict;
-    this.raiseDiskNotice(before, verdict);
-    this.diskBlock = {
-      at: verdict.at,
-      level: verdict.level,
-      filesystems: verdict.filesystems.map(({ pending: _pending, ...fs }) => fs),
-      expectedMounts: verdict.expectedMounts,
-      pressure: verdict.level === 'critical',
-      holders: [],
-    };
-  }
+  /** The disk alarm (D-6615, spec §2.5): `DiskAlarmLane` holds the pass. PUBLIC for the reason `sweepReadiness` is: `tick()`
+   *  dispatches it with `void`, so a test that awaits `tick()` has not awaited this. */
+  async sweepDisk(): Promise<void> { await this.diskAlarm.sweep(); }
 
-  /**
-   * The disk notice (D-6616, spec §2.5): `diskNotice` decides, this sends it through the notice funnel as a sessionless
-   * `coord` notice. The once-only key is READ before the write (`hasNotice`), so a watcher restarted inside the same
-   * episode raises nothing twice; the archive row `notify` writes carries the key for the next read. A store that
-   * cannot answer costs the dedupe only, never the notice.
-   */
-  private raiseDiskNotice(before: DiskVerdict | null, after: DiskVerdict): void {
-    const n = diskNotice(before, after);
-    if (n === null) return;
-    // Mark the episode BEFORE the push, so a restart between the two finds it.
-    if (n.mode === 'push' && after.episode !== undefined) writeDiskEpisode(this.deps.cfg.ccrcDir, after.episode, n.dev);
-    try { if (this.deps.coord?.hasNotice('coord', '', n.dedupeKey) === true) return; } catch { /* send it: a repeat beats silence */ }
-    notify(this.deps, { kind: 'coord', sessionId: '', runId: null, title: n.title, body: n.body }, n.mode,
-      { tag: 'disk', dedupeKey: n.dedupeKey, degraded: 'feed archive degraded, ring/push unaffected' });
-  }
-
-  /**
-   * The tmp sweep's census (D-6624, spec §2.1): read through the fleet io, the receipts and the once-per-episode
-   * budget notice queued as system mail, `disk.holders` filled with the five largest sessions. The decisions are
-   * `tmpSweep.ts`'s and the reads and mail `tmpSweepLane.ts`'s. PUBLIC for the reason `sweepDisk` is.
-   */
-  async sweepTmpSweepCensus(): Promise<void> {
-    const now = Date.now();
-    if (this.lastTmpSweepCensus !== 0 && now - this.lastTmpSweepCensus < TMP_SWEEP_CENSUS_MS) return;
-    this.lastTmpSweepCensus = now;
-    const { io, cfg, coord } = this.deps;
-    this.tmpHolders = (await runTmpSweepCensusLane({ io, ccrcDir: cfg.ccrcDir, coord }, this.tmpSweepLane, this.registryIds)).holders;
-  }
+  /** The tmp sweep's census (D-6624, spec §2.1): `TmpCensusBeat` holds the pass, on the last good registry listing. PUBLIC for
+   *  the reason `sweepDisk` is. */
+  async sweepTmpSweepCensus(): Promise<void> { await this.tmpCensus.sweep(this.registryIds); }
 
   /**
    * F3: the program-ready preconditions, measured once per lane tick and

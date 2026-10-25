@@ -4,7 +4,7 @@
 // clock, and that a coord-less server stamps nothing. Green on the old code, and the move changes only where the
 // clocks live.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
@@ -58,6 +58,32 @@ describe('the tmp sweep census beat (D-6624): the wall clock, one pass in five m
     vi.setSystemTime(2_000_000 + 5 * MINUTE);
     await watcher.sweepTmpSweepCensus();
     expect(reads, 'the cadence elapsed').toBe(2);
+  });
+});
+
+describe('the tmp sweep census beat hands the last good registry listing to the lane (D-6624)', () => {
+  const T0 = 1_800_000_000_000;
+  const ID = 'project-a-quiet-basin';
+  const subject = `tmp-sweep: moved 1 entries (seq 1-1, pass ${T0})`;
+  function build(): { watcher: FleetWatcher; coord: CoordStore } {
+    const home = mkTmp('ccrc-tmp-beat-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    mkdirSync(cfg.ccrcDir, { recursive: true });
+    const row = { seq: 1, id: ID, uuid: 'a'.repeat(36), name: 'entry-1', kind: 'scratch', bytes: 1024, at: T0, shadow: false, quarantine: '/q/a/1.entry-1' };
+    writeFileSync(path.join(cfg.ccrcDir, 'tmp-sweep.json'), JSON.stringify({ v: 1, at: T0, pressure: false, arm: 'live', seq: 1, sessions: [], moved: [row] }));
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    return { watcher: new FleetWatcher({ ...testDeps(home), coord } as Deps, new Bus()), coord };
+  }
+
+  it('mails a receipt to a session the listing names, and none while no listing has landed', async () => {
+    const held = build();
+    await held.watcher.sweepTmpSweepCensus();
+    expect(held.coord.hasMailWithSubject('operator', null, ID, subject), 'no listing yet: nothing is mailed').toBe(false);
+    const listed = build();
+    (listed.watcher as unknown as { registryIds: ReadonlySet<string> }).registryIds = new Set([ID]);
+    await listed.watcher.sweepTmpSweepCensus();
+    expect(listed.coord.hasMailWithSubject('operator', null, ID, subject)).toBe(true);
   });
 });
 

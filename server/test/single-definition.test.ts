@@ -8595,13 +8595,11 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
     ]);
     const shapes = laneClockShapes().map((x) => x.text.trim());
     expect(shapes.filter((t) => !/lastStopDoneSweep|lastHibernateSweep/.test(t)), 'no lane clock outside runLane').toEqual([
-      // Four lanes that landed on main while this ratchet was in review, each with its own clock: the stale-archive arm
-      // (D-6643), the disk alarm (D-6615), the orphan-worktree lane (D-6631) and the tmp sweep census beside the disk alarm
-      // (D-6624). Reported by name until a later slice makes them rows; this list only shrinks.
-      'if (this.staleArchiveSweeping || (this.lastStaleArchiveSweep !== 0 && now - this.lastStaleArchiveSweep < STALE_ARCHIVE_SWEEP_MS)) return;',
-      'if (this.lastOrphanTreeSweep !== null && gate - this.lastOrphanTreeSweep < CHILD_RECLAIM_SWEEP_MS) return;',
-      'if (this.lastDiskSweep !== 0 && now - this.lastDiskSweep < DISK_SWEEP_MS) return;',
-      'if (this.lastTmpSweepCensus !== 0 && now - this.lastTmpSweepCensus < TMP_SWEEP_CENSUS_MS) return;',
+      // Nothing remains in `FleetWatcher`. Four lanes that landed on main while this ratchet was in review kept clocks of their
+      // own, and the consolidation (GitHub #1279) moved them out: the orphan-worktree lane (D-6631) is the `orphanTrees` row now,
+      // and the stale-archive arm (D-6643), the disk alarm (D-6615) and the tmp sweep census (D-6624) keep their wall-clock
+      // throttles in `StaleArchiveBeat`, `DiskAlarmLane` and `TmpCensusBeat`. Making those three rows is a follow-up (the
+      // rows are monotonic, so it changes their clock). This list only shrinks.
     ]);
   });
 
