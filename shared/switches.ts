@@ -67,6 +67,11 @@ export const LANDING_CHECKS_LIVE_MARKER = 'landing-checks-live';
  *  digest's drift section has landed: the summary push (and an item with no run or session) opens the day's digest. */
 export const DRIFT_PUSH_LIVE_MARKER = 'drift-push-live';
 
+/** `$REG/child-reclaim-disabled` (ARCH-77, #812): child reclaim's own off switch. Absent, child reclaim runs as it does
+ *  today. Stood, it is meant to stop the child-spent reason alone, where `reclaim-paused` also stops expiry, collect and
+ *  the coordinator reclaim. Touched only by hand: no writer in the tree. The child-spent reader lands with that reason's change. */
+export const CHILD_RECLAIM_DISABLED_MARKER = 'child-reclaim-disabled';
+
 /** The spec's bounded contexts (consolidation spec 2026-10-19 §2), the `owner` of a row. */
 export const SWITCH_OWNER_MAP = {
   C1: 'Fleet Registry & Accounts',
@@ -175,6 +180,11 @@ export const SWITCHES = {
     storage: { marker: DRIFT_PUSH_LIVE_MARKER }, default: 'absent: shadow, the reconciler records what it would push',
     owner: 'C5', meaning: 'The drift reconciler pushes the operator once about a finding that stands past 24 hours. ' +
       "Arm it only once the digest lists drift findings: its summary push opens the day's digest.",
+    writer: 'hand-only',
+  },
+  [CHILD_RECLAIM_DISABLED_MARKER]: {
+    storage: { marker: CHILD_RECLAIM_DISABLED_MARKER }, default: 'absent: child reclaim runs', owner: 'C4',
+    meaning: 'Meant to switch off child reclaim alone, leaving expiry, collect and the coordinator reclaim running. Nothing reads it yet: touching it stops nothing until the child-spent reason moves (ARCH-44).',
     writer: 'hand-only',
   },
   [IDLE_NUDGE_DISABLED_MARKER]: {

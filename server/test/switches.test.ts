@@ -19,7 +19,7 @@ import { STOP_DONE_DISABLED_MARKER } from '../src/stopDone.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER } from '../src/turnidle.js';
 import { isMarkerState } from '../../shared/api.js';
 import {
-  ASKS_DISABLED_MARKER, COLLECT_LOOSE_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER, NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER,
+  ASKS_DISABLED_MARKER, CHILD_RECLAIM_DISABLED_MARKER, COLLECT_LOOSE_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER, NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER,
   ORPHAN_TREE_RESCUE_LIVE_MARKER, SWITCHES, markerSwitchNames, readSwitches,
 } from '../../shared/switches.js';
 
@@ -71,8 +71,27 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(COLLECT_LOOSE_LIVE_MARKER).toBe('collect-loose-live');
     // D-5922: the drift reconciler's push arm, a hand-armed row with no writer in the tree.
     expect(DRIFT_PUSH_LIVE_MARKER).toBe('drift-push-live');
-    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live'].sort());
+    // ARCH-77 (#812): child reclaim's own off switch, a hand-touched row with no writer in the tree.
+    expect(CHILD_RECLAIM_DISABLED_MARKER).toBe('child-reclaim-disabled');
+    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled'].sort());
     expect([...markerSwitchNames].sort()).toEqual(markers.sort());
+  });
+
+  it('ARCH-77: child reclaim has its own off switch, hand-only, whose absence means armed (#812)', () => {
+    const row = SWITCHES[CHILD_RECLAIM_DISABLED_MARKER];
+    expect(row.writer).toBe('hand-only');
+    expect(row.owner).toBe('C4');
+    expect(row.default).toMatch(/^absent: /);
+    // No reader yet (the child-spent reader lands with ARCH-44): the operator sentence must not claim the switch acts today.
+    expect(row.meaning).toMatch(/Nothing reads it yet/);
+    // Absence changes nothing: a listing without the marker reads 'clear' for it and leaves every other row as it was.
+    const without = readSwitches(['mail-disabled']);
+    const withIt = readSwitches(['mail-disabled', CHILD_RECLAIM_DISABLED_MARKER]);
+    expect(without[CHILD_RECLAIM_DISABLED_MARKER]).toBe('clear');
+    expect(withIt[CHILD_RECLAIM_DISABLED_MARKER]).toBe('set');
+    expect(readSwitches(['reclaim-paused'])[CHILD_RECLAIM_DISABLED_MARKER]).toBe('clear');
+    expect({ ...withIt, [CHILD_RECLAIM_DISABLED_MARKER]: 'clear' }).toEqual(without);
+    expect(readSwitches(null)[CHILD_RECLAIM_DISABLED_MARKER]).toBe('unmeasurable');
   });
 
   it('the settings switches are rows that name their table and column', () => {
