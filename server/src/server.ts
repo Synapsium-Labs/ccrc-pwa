@@ -2254,7 +2254,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const day = q.day === undefined ? digestDayFor(Date.now(), hourUtc) : parseDigestDay(q.day);
     if (day === null) return refuseRoute(reply, 'bad-request');
     const { fromMs, toMs } = digestWindow(day, hourUtc);
-    const built = buildDigest(deps.coord, fromMs, toMs);
+    // A `?day=` whose window has not closed yet: a drift line's age stops at now, never past it.
+    const built = buildDigest(deps.coord, fromMs, toMs, Math.min(toMs, Date.now()));
     if (!built.ok) return refuseRoute(reply, 'digest-unreadable', { detail: built.detail });
     const mark = deps.coord.digestDay(day);
     const answer: DigestAnswer = {

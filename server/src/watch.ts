@@ -9264,7 +9264,7 @@ export class FleetWatcher {
       const claimed = coord.claimDigestDay(day, now, n);
       this.lastDigestDay = day;
       if (!claimed || n === 0) return;
-      const copy = digestPushCopy(day, built.digest.totals);
+      const copy = digestPushCopy(day, built.digest.totals, built.digest.drift?.lines.length);
       this.pushOne({ kind: 'coord', sessionId: '', project: '', title: copy.title, body: copy.body, tag: copy.tag,
         url: copy.url, recordAlways: true }, this.activeProjects);
     } catch (err) {

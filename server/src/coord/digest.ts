@@ -13,8 +13,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   ASK_OPERATOR_PRINCIPAL, DIGEST_COMMAND_CHARS, DIGEST_CORRECTION_MAX_CHARS, DIGEST_HOUR_FILE, DIGEST_LINE_KINDS,
-  DIGEST_REFUSALS,
-  type DigestAnswer, type DigestCorrectBody, type DigestLine, type DigestLineKind, type DigestRowKind, type DigestTotals,
+  DIGEST_REFUSALS, DRIFT_KINDS,
+  type DigestAnswer, type DigestCorrectBody, type DriftKind, type DriftLine, type DigestLine, type DigestLineKind, type DigestRowKind, type DigestTotals,
 } from '../../../shared/api.js';
 import { redactCommand } from './redact.js';
 import { insertSystemMailTx } from './rundefsTx.js';
@@ -99,11 +99,12 @@ export function approvalDecision(r: ApprovalRow): { kind: DigestLineKind; at: nu
   return null;
 }
 
-export type DigestBuilt = Pick<DigestAnswer, 'totals' | 'byCoordinator' | 'lines'>;
+export type DigestBuilt = Pick<DigestAnswer, 'totals' | 'byCoordinator' | 'lines' | 'drift'>;
 
 /** The digest over `[dayStartMs, dayEndMs)`: one line per coordinator decision, in time order (ties by table, then
- *  id), the totals, and each coordinator's count. Pure over the store's reads. */
-export function buildDigest(store: CoordStore, dayStartMs: number, dayEndMs: number):
+ *  id), the totals, and each coordinator's count. Pure over the store's reads. `ageEndMs` is where a drift line's age
+ *  stops: the window's end by default; a caller reading a window that has not closed yet passes `now`. */
+export function buildDigest(store: CoordStore, dayStartMs: number, dayEndMs: number, ageEndMs = dayEndMs):
   { ok: true; digest: DigestBuilt } | { ok: false; detail: string } {
   const asks = store.digestAsks(dayStartMs, dayEndMs);
   if (!asks.ok) return asks;
@@ -144,15 +145,32 @@ export function buildDigest(store: CoordStore, dayStartMs: number, dayEndMs: num
   for (const l of lines) per.set(l.coordinator, (per.get(l.coordinator) ?? 0) + 1);
   const byCoordinator = [...per].map(([coordinator, decisions]) => ({ coordinator, decisions }))
     .sort((a, b) => b.decisions - a.decisions || a.coordinator.localeCompare(b.coordinator));
-  return { ok: true, digest: { totals, byCoordinator, lines } };
+  const drift = driftSection(store, dayEndMs, ageEndMs);
+  return { ok: true, digest: { totals, byCoordinator, lines, ...(drift ? { drift } : {}) } };
+}
+
+/** The drift section (D-5923): the findings open at the window's end, never counted into `decisions`. An unreadable
+ *  table leaves the section out (absence permits) and never fails the digest, which is about decisions. */
+function driftSection(store: CoordStore, dayEndMs: number, ageEndMs: number): DigestBuilt['drift'] | null {
+  const read = store.driftFindingsOpenAt(dayEndMs);
+  if (!read.ok) return null;
+  const totals = Object.fromEntries(DRIFT_KINDS.map((k) => [k, 0])) as Record<DriftKind, number>;
+  const lines: DriftLine[] = read.rows.map((r) => {
+    totals[r.kind] += 1;
+    return { key: r.key, kind: r.kind, subject: r.subject, detail: redactCommand(r.detail),
+      ageMs: Math.max(0, ageEndMs - (r.factAt ?? r.firstSeenAt)), sessionId: r.sessionId, runId: r.runId };
+  });
+  return { totals, lines };
 }
 
 /** The one `coord` push (spec §10): a title with the count, a body that names what was decided (never empty,
  *  D-5302), one tag per day so a repeat replaces, and the deep link to that day's digest screen. */
-export function digestPushCopy(day: string, t: DigestTotals): { title: string; body: string; tag: string; url: string } {
+export function digestPushCopy(day: string, t: DigestTotals, driftOpen = 0): { title: string; body: string; tag: string; url: string } {
   const parts = [
     [t.answers, 'answered'], [t.allows, 'allowed'], [t.denies, 'denied'], [t.handOvers, 'handed over'], [t.lapses, 'lapsed'],
   ].filter(([n]) => (n as number) > 0).map(([n, w]) => `${n} ${w}`);
+  // D-5923: drift is named only when there is some, and never counts as a decision.
+  if (driftOpen > 0) parts.push(`${driftOpen} out of step`);
   return {
     title: `Coordinators decided ${t.decisions} ${t.decisions === 1 ? 'thing' : 'things'} in your name`,
     body: `${parts.join(' · ')} — tap to review and correct`,
