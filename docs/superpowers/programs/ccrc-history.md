@@ -34,14 +34,14 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 | 5 | W1-B4 "sole-copy export" (ruled Q6, e) | fleet | #623 | **merged** 2026-10-19 04:14Z as `ad65fb394` at head `2eca753d7` (run 587; reviews 614, 621, 623, 624 and 625; four fix rounds); **live on every session-hosting node before the earliest W1-k date, at the latest 2026-12-19** |
 | 5h-1 | B4's export hardening ("Owed from B4", items 1–8): the check after a bind in bounded, resumable batches, with doctor's rule for a check that cannot finish; a carried segment that counts only when whole and this store's; a vanished segment that re-arms the check; replay that marks by the last carrier; `expand`'s variants and `ENTRY_UPSERT`'s tie; the history-off advice for a carry; B4's errata | fleet | #737 | **merged** 2026-10-20 12:58Z as `3af16cf97` at head `adcea723e` (run 626; reviews 644, 675, 689 and 700; three fix rounds) |
 | 5h-2 | B2's owed items 1–5 ("Owed from B2") and B3's errata ("Owed from B3"): the named value class widened (the `Bearer` and box-token header classes stay as they are), with stored text re-cleaned as a sweep phase; the relay's look-behind window; the op marker's identity; `lag-high`'s remedy; the errata. B2's item 6 stays later | fleet | #1010 | **merged** 2026-10-21 15:39Z as `02d75ae5f` at head `90bfaadf9` (run 702; reviews 711, 721, 725, 744, 749 and 753; five fix rounds) |
-| 6 | W2: the replay eval and its gate (ruled Q7, Q14), in nine PRs on two lanes (rows below; W2-5b split in two, S1); the W2 decisions document is the authority | fleet + deploy | — | the build runs now; the window waits on the operator's acts (decisions §5) |
+| 6 | W2: the replay eval and its gate (ruled Q7, Q14), in nine PRs on two lanes (rows below; W2-5b split in two, S1); the W2 decisions document is the authority | fleet + deploy | — | the build runs now; the window waits on the operator's acts (decisions §5); the completion plan of 2026-10-25 (below) orders what is left |
 | W2-1 | the recall-off verb and its generation checks, the per-tick presence record, the exports the deploy lane reads | fleet | #1105 | **merged** 2026-10-22 02:23Z as `cd622b2f6` at head `69105d4f9` (run 755; reviews 761 and 763; one fix round) |
 | W2-2a | the as-of cut | fleet | #1126 | **merged** 2026-10-22 15:55Z as `ecbab815e` at head `d119d6e90` (run 764; reviews 778 and 791; one fix round) |
 | W2-2b | the headless seam | fleet | #1154 | **merged** 2026-10-23 11:50Z as `92dac5764` at head `42c9aaf24` (run 809; reviews 829 and 849; one fix round) |
 | W2-3 | `deploy/history-gate.mjs`, pure: windows, bootstrap, assignment, the gate, the quiz's labeller and admission, the open-record validator; `measure-history.py`'s raw rows and census | deploy | #856 | **merged** 2026-10-20 08:27Z as `36d0a92c1` at head `99325dc26` (run 636; reviews 664, 680 and 686; two fix rounds) |
 | W2-4 | `deploy/history-replay.mjs`, the driver core: the spawn contract, account admission, `--out`, limits and budget, preflights, step 0a and the probe | deploy | #826 | **merged** 2026-10-20 13:28Z as `780c8126c` at head `8660b6cf9` (run 637; reviews 657, 681, 696 and 701; three fix rounds) |
 | W2-5a | reconstruction, admission, the quiz builder and the open-record subcommands | deploy | #1134 | **merged** 2026-10-22 17:54Z as `c34f82830` at head `ac30619a3` (run 765; reviews 795 and 811; one fix round) |
-| W2-5b1 | the arms and the judge: `marker`, `verify` for the pilot and quiz sections, `arms` and `judge` | deploy | — | run 828, dispatched once W2-2b merged; in build |
+| W2-5b1 | the arms and the judge: `marker`, `verify` for the pilot and quiz sections, `arms` and `judge` | deploy | — | run 828, dispatched once W2-2b merged; built, with the whole `history-replay` file green (1121 of 1121); finishing under one consolidated contract (2026-10-25, the completion plan's CP-10 to CP-18) |
 | W2-5b2 | the pilot and the verdict: `step0b`, `fidelity`, `pilot-result`, `open --amend`, `handcheck`, `report`, `open --finalize`'s derived budget, README's driver paragraph and the spec errata | deploy | — | run 864; its plan merges with this file's PR, then it dispatches after W2-5b1 merges, beside W2-6 under Q29 (its plan shows the two line-disjoint, landing in either order); merges before open-record part 1 |
 | W2-6 | the report-only counters: `deploy/history-counters.mjs`, its `count` and `combine` | deploy | — | run 851; its plan merged with #1174 on 2026-10-23 (`35c436e58`); it dispatches after W2-5b1 merges, beside W2-5b2 under Q29 |
 | 7 | W3: steering (session-written leaves) | fleet (hook) | — | only if the operator records the W2 gate as passed |
@@ -1038,6 +1038,51 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
       with this file's PR, and it dispatches after W2-5b1 merges, beside W2-6 (run 851) under Q29: the plan's Q29 table
       shows the two line-disjoint file by file, and K20 finds no pin of either that the other's additions red, so they
       land in either order. Whichever lands second merges `main` and keeps both sides.
+  - **W2-5b1 (run 828), 2026-10-23 to 10-25: the corrections, and the stall.**
+    - **The corrections.** The wave's own whole-branch review found three real defects, and the coordinator approved
+      a correction for each as a departure in W2-5b1's plan. The plan defines all three; they are named here once it
+      merges.
+      - The FTS source-answerability lookup could be satisfied by another matching row. It now fails closed on a
+        rowid mismatch.
+      - Refreshing the pair index could drop transient secret coverage after a source rotated or vanished. The
+        fix keeps a bounded set of retained snapshots: at most 8, 16 MiB per index and 64 MiB in all, one
+        admission candidate. Every arm payload and judge job is rebuilt from its original inputs under each
+        snapshot, and the batch is refused before any spawn or persistence unless every reading agrees. There is no
+        union, no chaining and no newest-only fallback.
+      - An answered sibling whose payload drifted is excluded as `arm-payload-changed`: run-failed, counted toward
+        W2-D89's 5%, never refused outright.
+    - **The suite.** By 2026-10-24 about 11:27Z the test-project typecheck and the whole `history-replay` file
+      (1121 of 1121) were green.
+    - **What stalled it after that.** Packaging and evidence did:
+      - a checker built against the wrong baseline;
+      - missing provenance records;
+      - a model-identity stop (the worker's session runs on a non-Anthropic lane);
+      - PR-body sections found missing one at a time.
+
+      These took eleven operator exception cycles on 2026-10-24. On 2026-10-24 at 21:36Z the worker's outbound
+      privacy gate refused its own blocker report. Nothing was sent, and worker and coordinator waited on each other
+      until 2026-10-25 about 17:20Z.
+    - **The coordinator's share.** Its own diagnosis names: oversized evidence contracts; a wrong readonly-type
+      recommendation; a whitespace-literal precheck defect; repairs authorised one at a time instead of reconciling
+      the whole PR-body template once; and no minimal route for a blocked report. The original first whole run stays
+      "suite: red, failure: unclear".
+  - **The completion plan (2026-10-25).** The operator asked for a plan to programme completion, logged as tickets
+    after plan review, then executed without stopping unless the operator's input is truly needed. The plan and its
+    rulings are under "Completion plan" below.
+    - **Rulings G1–G8, landing rule L and the run continuity rule** replace the regime that stalled run 828. They are
+      the coordinator's, made in the operator's place under the directives of 2026-10-19 and 2026-10-25, and the
+      operator may change any of them. Under G2, the narrow method exceptions the operator granted on 2026-10-24 are
+      neither extended nor reused: the requirements they excepted from are retired.
+    - **Run 828** received one consolidated completion contract to wave-done. It supersedes the last stop and every
+      earlier single-item exception. Its held scoped review is folded into the held-out review as a wave lens (G5).
+    - **The operator's answers, 2026-10-25:**
+      - Run 828 finishes on its current lane, with its held-out review on an Anthropic lane as the independent gate.
+      - The operator arms the server's stall watch to live.
+      - The coordinator may run read-only history measurements, and may re-run the backfill (`import --apply`, with
+        the sweep timer paused around it), answering the question of 2026-10-19.
+      - W2's named node is the fleet box only. The account and the arm, writer and judge models are named at step 0a.
+    - **The two questions of 2026-10-18** keep today's behaviour, as ruled by default under G7. The coordinator's
+      scope reading stands, and a restore keeps a held tombstone's text out. The operator may change either.
 - **Later (coordinator), from the build:**
   - The check after a bind runs two DISTINCT scans, over `blobs.exported_seg` and `entries.exported_seg`, on every
     check step. `exported_seg` sits after `z` and has no index, so a check spanning N steps likely reads the blob table
@@ -1153,9 +1198,362 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
     command and error facts but not decisions (D-5775); a 7-character prefix of a longer SHA scores correct
     (D-5777); residual answers are labelled uncertain (D-5778); the question writer sees a bounded excerpt (D-5779);
     `ROW_CAP` 400; the limits threshold; and the maintenance and build freezes on the named nodes.
-  - **Asked 2026-10-19:** W2 (wave 6) waits on the backfill. The operator stopped it on 2026-10-18, with the
-    transcripts imported and the sidecars only in part. May the coordinator re-run it to finish the sidecars, with the
-    sweep timer paused around it as before?
+  - **Asked 2026-10-19, answered 2026-10-25:** W2 (wave 6) waits on the backfill. The operator stopped it on
+    2026-10-18, with the transcripts imported and the sidecars only in part. May the coordinator re-run it to finish the
+    sidecars, with the sweep timer paused around it as before? **Yes** (the operator, 2026-10-25): the coordinator
+    re-runs it on the fleet box (CP-33).
+
+## Completion plan (2026-10-25)
+
+The coordinator wrote this plan on the operator's instruction of 2026-10-25: "Formulate a comprehensive plan from here to programme completion, log it as tickets in Linear (once you've been through plan review), and then start execution of the plan, and do not stop until programme is completed." A held-out review checked it before it was filed: three Opus · high lenses (completeness, governance and safety, convergence), Sonnet · high refuters on every finding, then a fold check. Its 51 work items (CP-01 to CP-82) are filed as tickets in the project's tracker, one per item, with the same dependencies. The work-item ids below are the tickets' titles.
+
+
+The programme has shipped its foundations: capture, recall, the card line, the sole-copy export, two hardening waves and
+six of the nine W2 build PRs. It has not delivered its outcome: a measured W2 verdict, and, only if that verdict
+passes, W3 (steering) and W4 (subagents and `touched`). Nor has it measured W1's own acceptance rows.
+
+What is left, in order:
+
+1. **Finish the W2 build.**
+   - Land W2-5b1 (run 828). It is functionally complete and stalled on packaging.
+   - Finish the coordinator's K25–K27 amendment to the W2-5b2 plan.
+   - Build W2-6 (run 851) and W2-5b2 (run 864) side by side.
+2. **Run W2's live evaluation.** This is the 29 numbered acts of decisions §5, most of them the operator's, including a
+   14–15 day live window. It ends in `verdict.json` and the operator's recorded gate decision. In parallel, measure
+   W1's acceptance rows (spec §10.7) and hold B4's export deadline.
+3. **If the gate passes, ship W3 and W4.** W4 first needs a spec addendum that the operator approves.
+4. **Close the programme.** File the deferred follow-ups as separate tickets, close the final run and finalise the
+   ledger.
+
+This plan also changes how the programme runs, because last week's way of running it caused the stall. Run 828 needed
+11 operator exception cycles in one day over evidence and prose defects. Then a blocker report that was never sent left
+the worker and the coordinator waiting on each other for about 19 hours. Section 3's rulings G1–G8 replace that regime
+and keep every product and safety pin.
+
+### 1. Where the programme stands (measured 2026-10-25)
+
+| Item | State |
+|---|---|
+| Merged | W1 Part A #300, B1 #315, B2 #404, B3 #425, B4 #623, 5h-1 #737, 5h-2 #1010, W2-1 #1105, W2-2a #1126, W2-2b #1154, W2-3 #856, W2-4 #826, W2-5a #1134; the plans for W2-5b1, W2-6 and W2-5b2 |
+| Run 828, W2-5b1 "the arms and the judge" | `dispatched`, no PR. One commit since the correction base, plus three tracked files uncommitted. The test-project typecheck is green, whole `history-replay` is green at 1121/1121, and 28 further check receipts are green at the current file contents. Blocked on the PR body: three template sections are missing and several fixed lines are paraphrased. The held scoped review is unspent. The worker session runs on a non-Anthropic lane although its route says Opus |
+| Run 851, W2-6 "the report-only counters" | `planned`. Its plan is on main (4 tasks). It dispatches after W2-5b1 merges. Every name it imports from the driver exists in run 828's branch |
+| Run 864, W2-5b2 "the pilot and the verdict" | `planned`. Its plan is on main (6 tasks). The coordinator's local amendment is unfinished: K25 is the judge-scoped spend gate, K26 carries the pair-index refresh, K27 carries the payload-change exclusion, and it has one departure number issued. K26 and the M31 mutant wait on W2-5b1's merged snapshot-agreement code |
+| Fleet box | runs v0.0.691, which contains 5h-1 (v0.0.454), 5h-2 (v0.0.536) and B4 (v0.0.319). The 5h-2 re-clean, the backfill finish and the W1-k dates are not recorded |
+| Open operator questions | the backfill re-run (asked 2026-10-19), and two questions from 2026-10-18 on which no wave depends |
+| Stall watch | runs in shadow only (no live arming), which is why the 19-hour silence raised no `stall:` mail |
+| Committed ledger | stale since 2026-10-23: it shows W2-5b1 "in build" and carries no ruling made since |
+
+### 2. The critical path
+
+```mermaid
+flowchart LR
+  A[828 completion contract] --> B[828 PR + held-out review]
+  B --> C[828 merged]
+  C --> D[851 build + review]
+  C --> E[K25-K27 amendment + Q29 re-measure + docs PR B]
+  E --> F[864 build + review]
+  D --> G[final W2 release]
+  F --> G
+  P[act 1 names, re-clean, backfill, W1-k dates] --> H
+  G --> H[rollout + update intent pinned]
+  H --> I[step 0a, part 1, census, power]
+  I --> J[pilot]
+  J --> K[quiz + part 2]
+  K --> L[14-15 day window]
+  L --> M[counters + report]
+  M --> N{operator records gate}
+  J -. halt .-> N
+  L -. halt .-> N
+  N --> S[close acts 26-29]
+  S -- pass --> O[W3 steering]
+  S -- pass --> Q[W4 subagents + touched]
+  S -- fail --> R[close-out]
+  O --> R
+  Q --> R
+```
+
+*Figure 1. The critical path. Pre-window operator acts (P), W1's acceptance measurement and the W3/W4 drafting run
+beside the build and the window, so none of them adds calendar time. A halt goes straight to the operator's ruling
+and the close acts.*
+
+The longest fixed wait is the window itself, 14–15 days (W2-D25). Everything before it is build and review time plus
+how quickly the operator acts. So the plan front-loads every operator act that does not depend on the build, and
+drafts W3 and W4 during the window.
+
+### 3. How the programme runs from here (rulings G1–G8)
+
+These are the coordinator's rulings under the operator's directives of 2026-10-19 ("proceed through the remaining build
+waves without stopping unless you're blocked by something") and 2026-10-25 (above). They are recorded in the ledger
+through docs PR A, and every brief from now on cites them rather than restating them. The operator can change any of
+them.
+
+- **G1. One contract per wave, and stops only on genuine reds.** Each wave gets one complete authority. A worker stops
+  on any of these:
+  - a failing test, check or CI leg;
+  - a privacy-scan hit;
+  - a review finding;
+  - a consumed interface that is missing or whose contract changed;
+  - a genuinely new product decision;
+  - anything the repo's SAFETY rules, an operator-owned gate (push protection, a cap, a pause file) or a worker-skill
+    clause refuses.
+
+  A drifted anchor, line number or predicted count is a corrected prediction: it is recorded in the task's commit, and
+  it is never a stop. G1 never narrows a pinned worker-skill clause.
+- **G2. Evidence is what a reviewer or a gate consumes.** That means:
+  - tests and their mutants, measured red then green;
+  - each check's command and result, in the commit or the PR body;
+  - the privacy scans (G8).
+
+  These are retired as requirements:
+  - pre-use hash records;
+  - per-cell receipt ledgers;
+  - preservation copies;
+  - "all-cell controller reconciliation";
+  - model-identity attestations.
+
+  The operator's narrow method exceptions of 2026-10-24 (9001, 9381) were granted under the old regime. G2 does not
+  extend or reuse them; it removes the requirement they excepted from. History is not rewritten: run 828's original
+  "suite: red / failure: unclear" stays its signal.
+- **G3. A stop must reach the coordinator.** If the outbound privacy gate refuses a full report package, the worker
+  sends a short body-only mail naming its reports by relative file name. If that also fails, it sends the fixed mail
+  `blocked: run <N> outbound gate refused` and nothing else. No session ever waits on a mail it did not send.
+- **G4. The routed model is the model that runs.**
+  - Worker main loops and every review panel run on an Anthropic account.
+  - Right after each dispatch, the coordinator reads the session's lane with `peers list`.
+  - A non-Anthropic placement goes to the operator for a swap at the session's next idle point. If the session must
+    hold until then, the coordinator sends one `wait:` mail. A swap keeps the run, so no review slot is spent.
+  - A review that ran on the wrong lane does not count as the held-out review.
+  - Run 828's remaining work is mechanical. It continues on its current lane unless and until the operator swaps it,
+    and its held-out review (on an Anthropic lane) is the independent gate.
+- **G5. One independent gate per wave.** The held-out panel is that gate: three Opus · high lenses, Sonnet · high
+  refuters, and any wave lens the brief names. The panel's refute and unverified rules apply to the wave lens exactly
+  as they apply to the three standard lenses. A worker's own whole-branch review before wave-done stays as a
+  self-check. There are no further reserved or scoped reviews. Run 828's held scoped review is folded into its
+  held-out review as a wave lens that carries the bounded-review checklist verbatim (CP-16).
+- **G6. Silence is caught by the server's stall watch, not by coordinator polling.** Clause 7 stands: the coordinator
+  does not poll. The server's `sweepStalls` already mails a silent worker, then its coordinator, then pushes the
+  operator. It ran in shadow only, which is why the 19-hour wait raised nothing. The operator arms it to live from
+  Settings (CP-04). The coordinator may set a one-shot wake tied to a named deadline, such as a claim's hard expiry or a
+  window date. It never sets a recurring one, and it never sends an unsolicited `wait:` that would reset the server's
+  watch.
+- **G7. Who decides what.**
+  - Build questions are ruled by the coordinator in the operator's place, recorded in the ledger and named in each PR
+    body.
+  - Product intent, scope, spend or other tradeoffs nobody has ruled on, and irreversible acts, are released to the
+    operator, never ruled (clause 11).
+  - An open question with a stated default is answered by that default and recorded as a ruling. The operator may
+    change it.
+  - Section 6's acts stay the operator's.
+- **G8. Public safety on every outward act.**
+  - Every PR, docs PRs included, scans every file changed against `origin/main`, plus every commit message, the title
+    and the body, for private names, hosts and home paths, and runs `deviation-refs` after `git fetch origin main`
+    before each push.
+  - Every coordinator mail and dispatch is sent only when its scan reads 0, checked in the same command.
+  - Linear tickets go to team CCRC-PWA (CCRCP). Every title and description is scanned before saving. After filing,
+    `gh issue list` is checked for a public mirror.
+  - The ledger names no Linear URL or ticket id.
+  - A D-number that has been issued but not yet defined on main is described by count in tracked text, never named.
+
+**Landing rule L (every PR the coordinator lands).** Before enqueueing, re-read the PR's reviews and threads at the
+handoff commit.
+- On any CHANGES_REQUESTED, do not merge or enqueue. Ask the operator one single-select question, address or ignore,
+  and record the answer in the ledger (operator ruling 2026-10-22).
+- An open CodeQL thread is fixed in code. A test-only false positive is dismissed only as the standing memory rule
+  describes.
+- Then land with `gh pr merge <n> --match-head-commit <sha>` (never `--squash`, `--admin` or `update-branch`). Prove the
+  PR is MERGED at the handoff commit before the run closes.
+
+**Run continuity rule (clause and lifecycle).** The programme must never reach zero open runs, because the server
+retires a programme with none and nothing reactivates it.
+- Every close is preceded by the next run's open.
+- A holding run, "W2 live evaluation", is opened before the second of runs 851 and 864 closes (CP-26). It stays
+  `planned` through the window. A run that was never dispatched cannot take an ordinary close, so the holding run is
+  ended with the abandon arm (`state:'failed'`) only once another run is open. The ledger records it as a holding run,
+  not a failure.
+- The programme's last run is always a real, dispatched wave that closes `done` with `final:true`. On a pass it is the
+  last W3 or W4 run. On a fail it is the close-out wave (CP-82).
+
+### 4. Work items
+
+Owner key:
+- **C**: the coordinator
+- **W**: the wave's worker
+- **R**: the review run
+- **O**: the operator
+
+"Depends" names the items that must finish first. Each item's exit criterion is what closes it.
+
+#### Stage 0: reset (now)
+
+| ID | Item | Owner | Depends | Exit criterion |
+|---|---|---|---|---|
+| CP-01 | Break the circular wait on run 828 | C | — | **Done**: mail 9641 told the worker its unsent result had been received and one consolidated contract follows |
+| CP-02 | This plan: draft, run the held-out plan review, fold the findings, log it in Linear: a project in team CCRC-PWA, milestones per stage, one ticket per item, blocking relations set. Every ticket is scanned before saving (G8); duplicates are checked with `list_issues` first | C | — | reviewed plan saved; project and tickets filed; scans 0; `gh issue list` checked |
+| CP-03 | Docs PR A: G1–G8, rule L, the run continuity rule and this plan, recorded in the ledger. W2-5b1's row brought current. Numbers not yet on main described by count; no Linear link | C | CP-02 | PR A merged under rule L; G8 scans 0; deviation-refs green |
+| CP-04 | Stall watch: the operator sets the watch level to live, with escalation, in Settings (G6). The coordinator records it | O (C asks) | — | the watch reads live |
+| CP-05 | Lane: swap run 828's worker onto an Anthropic account while it is idle, or the operator accepts the current lane for the mechanical remainder (G4) | O (C asks) | — | the lane reads Anthropic, or the operator's choice is recorded |
+
+#### Stage 1: W2-5b1, run 828
+
+| ID | Item | Owner | Depends | Exit criterion |
+|---|---|---|---|---|
+| CP-10 | One consolidated completion contract (G1), superseding the 9390 stop. It lists every permitted body addition by name and section, the exact order of steps, the hash check by content, and a pre-authorised `git commit --amend` of an unpushed message after a scan hit | C | CP-02 | mail sent behind the G8 gate; acknowledged |
+| CP-11 | Draft the PR body **from Task 6 Step 11's fenced template, verbatim**. Changes are allowed only at the six substitution slots and at the named additions: the W2-4 re-pins; the `RECON_DISCARDS` re-pin; the two inaccurate historical commit messages; the FTS fail-closed departure's floor scope; the residuals L1-1, `.tmp-<pid>`, stream rereads and in-flight freshness; "W2-D78(iii) runs after `--out` is claimed"; the original first-run red; the Darwin skip census; the restored E21/E22 paragraph. The sections "Decisions this PR applies" and "Steps for the coordinator or the operator, never the worker" appear verbatim, and the opening line names #1154. Test status uses one fixed sentence: measured on bytes identical to the committed tip | W | CP-10 | a literal diff against the template shows only the slots and the named additions |
+| CP-12 | Scan the two commit message texts first (private names, hosts, home paths, D-ranges, D-TBD). Then make two commits: `fix(history-replay): …` (driver and test) and `docs(plan): …`. Check `git show HEAD:<path> \| sha256sum` against the receipted sha256 of the driver and the test | W | CP-11 | `git status --short` empty; both sha256 equal the receipts, so the suite receipts carry over (on a mismatch: one whole `history-replay` run and one test typecheck) |
+| CP-13 | `git fetch`, the clause 16 merge-tree probe (merge main only on a reported conflict), then the checks that read commits, the plan or main, using the plan's own commands: Step 2's departures checker with its CONTROL, bare-cited, D-TBD; Step 5's d-ranges; deviation-refs, citations, `GROWTH_CHECK=1` growth, dtbd, docs-policy, topology-clean. Fill `### Tests run`. Last, Step 9's private-name/host/home scan with both CONTROLs over added lines, every branch message, the title and the **final** body | W | CP-12 | every check rc 0 with its total in the body; scans 0 |
+| CP-14 | Push, open the PR (ready, the plan's title), read threads and `gh pr checks --required`, wave-done | W | CP-13 | PR open; required checks green; 0 open threads; wave-done fingerprint with tip = PR head |
+| CP-15 | Verify wave-done and advance to `awaiting-review`. Confirm the CI selection lists `history-replay`, `lifecycle` and `single-definition`, or dispatch a full run. Literal body diff against the template (N3) | C | CP-14 | advance `ok`; selection confirmed; body diff clean |
+| CP-16 | Held-out review run with the reviewer's lane checked right after dispatch (G4). Its wave lens carries `bounded-review-brief.md`'s N1/N2 checklist verbatim: base `dcc3f0417`; at most 8 retained snapshots, 16,777,216 bytes per index, 67,108,864 aggregate, one admission candidate; validation before use; agreement of every reading on the original inputs before any spawn or persistence; the judge's raw selection made once; and per-guard negative, CONTROL and mutant pins for the payload-change exclusion's resume readers. The lens runs Opus · high under the panel's refute and unverified rules | C, R | CP-15 | review-done accepted by the server |
+| CP-17 | Rule on the review; fix rounds as needed. The server allows three review runs per work run; a fourth needs the operator's lift | C, W, R | CP-16 | a clean review |
+| CP-18 | Open-before-close holds: runs 851 and 864 are open. Land under rule L, prove MERGED at the handoff commit, close run 828 | C | CP-17 | run 828 `done`; merge SHA recorded |
+
+#### Stage 2: the rest of the W2 build
+
+| ID | Item | Owner | Depends | Exit criterion |
+|---|---|---|---|---|
+| CP-20 | Finish the K25–K27 amendment against the merged W2-5b1 code. First rule a new K row: the merged code has no named agreement helper (`maskingSnapshotsOf` and an inline loop in `armBatchPreflight` and in `judgeCommand`), so W2-5b2 Task 1 factors one module-private agreement function out of those two callers, licensed in place and pinned by their existing cases, and step 0b, fidelity and the re-pilot call it. Then rewrite K26 in Tasks 1–3 to it: drop the replacement-semantics case, the `refreshPairIndex` recipe and the K26F mutant; turn the two `.skip` recipes into real cases (AK-2); re-anchor M31; rename the K27 mutants away from Task 2's M47/M48. Re-measure the Q29 table (U15/K20) file by file against the amended tasks and the merged tree. One refute pass | C | CP-18 | the held markers (`K26 STOP`, `handoff STOP`, `STOP for K26`, `implementation-handoff STOP`, `HELD`, `PLACEHOLDER ONLY`, `b23It.skip('K26 handoff recipe`) count 0; Q29 re-ruled; refuters find no open blocker |
+| CP-21 | Docs PR B: the amendment (defining its one departure number), W2-5b1's close in the ledger, the re-ruled Q29, and the 864 brief rewritten to cite G1–G8 (plus the 851 brief only if 851 has not yet dispatched). If the Q29 re-ruling changes any region W2-6 keeps off or owns, the running 851 worker is mailed the re-ruled regions behind the G8 gate | C | CP-20, CP-03 | PR B merged under rule L; G8 scans 0; issued-but-undefined numbers described by count; the 851 worker informed if needed |
+| CP-22 | Dispatch run 851 (W2-6) on W2-5b1's merge. Its brief cites G1–G8 from PR A and carries the run's issued block, the claims read at dispatch (as an artifact) and a pre-ruled correction for Task 4 Step 5's stale "last describe" anchor. The composed size is measured against the 8,090-byte ceiling before dispatch. Lane checked (G4). Run 851 needs nothing from the amendment | C | CP-18, CP-03 | dispatch `ok`; lane Anthropic |
+| CP-23 | Run 851: build, held-out review, fix rounds, landing under rule L | W, R, C | CP-22 | PR merged; run 851 closed only after CP-26 if it is the second of 851/864 to close |
+| CP-24 | Dispatch run 864 (W2-5b2) after PR B merges. Lane checked | C | CP-21 | dispatch `ok`; lane Anthropic |
+| CP-25 | Run 864: build, held-out review, fix rounds, landing under rule L. Whichever of 851 and 864 lands second absorbs main only under worker clause 16's triggers, by merge, keeping both sides (Q29) | W, R, C | CP-24 | PR merged; run 864 closed (after CP-26 if second) |
+| CP-26 | Open the holding run "W2 live evaluation" (planned, never dispatched) before the second of 851/864 closes. It is ended with the abandon arm only after another run is open: W3's first run on a pass (CP-61), or the close-out wave on a fail (CP-82) | C | CP-22, CP-24 | `runs list` shows the holding run open before the second of 851/864 is closed |
+
+#### Stage 3: the release, the window's prerequisites and W1's acceptance
+
+Items CP-30 to CP-34 and CP-37 do not wait for the build; they start now.
+
+| ID | Item | Owner | Depends | Exit criterion |
+|---|---|---|---|---|
+| CP-30 | Measure read-only, and record, what every session-hosting node runs. The fleet box runs v0.0.691, which contains 5h-1, 5h-2 and B4 | C | — | per-node version record in the ledger |
+| CP-31 | Act 1: name the nodes, including every node pilot or quiz families may come from; the account; the arm model (not Fable); and the writer and judge model ids | O | — | recorded |
+| CP-32 | Acts 2–3: any named or family node whose CP-30 version lacks 5h-1 or 5h-2 is first updated by the operator through the update mechanism. Then record per node that 5h-2's re-clean measured complete | O updates; C measures read-only on O's ask; O confirms | CP-31, CP-30 | every named and family node runs both, re-clean recorded per node |
+| CP-33 | Act 4: finish the backfill on every named and family node, with the sweep timer paused around it. The question has been open since 2026-10-19. The operator runs it, or the coordinator does on the operator's explicit ask | O | CP-31 | per-node completion recorded |
+| CP-34 | (a) Measure read-only each session-hosting node's W1-k dates (oldest row, first due date, first deletion date) and record the binding B4 deadline. (b) B4 is live on each node with doctor showing no `export-overdue` before that deadline, with #623's "After merge" checks as operator acts on any adopt or restore. Required on **both** the pass and the fail branch | C measures; O acts if a node lags | CP-30 | deadline recorded; every node clear |
+| CP-35 | Act 5: the final W2 release. The release lane cuts it automatically on the last W2 merge; the coordinator posts its tag | C | CP-23, CP-25 | tag recorded |
+| CP-36 | Act 6: roll that release onto every named node through ccrc's update mechanism, with update intent off or pinned to the tag until close. The coordinator monitors and records; it never rolls out by hand | O; C monitors | CP-35, CP-31 | every named node reads the tag; intent pinned |
+| CP-37 | W1's acceptance rows (spec §10.7, W1-a to W1-k): census coverage, lag p95, duplicates, first-week growth, card-line serve rate, CLI p95, doctor PASS, gateway-lane recall, journal completeness, export dates. Measured read-only per node and recorded. W1-l, the rebuild drill on real data, is run by the operator from a terminal outside any session into a scratch HOME. A row that misses its target gets a recorded operator ruling | C measures (on O's ask for live reads); O runs W1-l | CP-30 | every W1 row recorded or ruled |
+
+#### Stage 4: W2's live evaluation (decisions §5, acts 7–24)
+
+The operator performs the acts. The coordinator writes the runbook beforehand, re-measures what §5 gives it to measure,
+and computes the gate from the verdict.
+
+| ID | Item | Owner | Depends | Exit criterion |
+|---|---|---|---|---|
+| CP-40 | Runbook for acts 7–29: the exact commands, inputs, outputs, stop and halt rules, and what to post. It includes the abort path from any halt (which markers exist at each act, then acts 26–29, and whether W2-D86's counter report still runs) and the coordinator's window duties: measure `git diff --quiet <piloted-tag> <candidate> -- <surface>` before any freeze exception, record every `--accept-failed-pilot` use, and record each forced frozen act's amendment and its W2-D78 re-check. Written during Stage 2 | C | CP-21 | runbook in the ledger, refuted against decisions §5 |
+| CP-41 | Acts 7–12: step 0a per node; the maintenance freeze begins; `pilot-source`; `open --draft` (part 1, 0600, off-repo); census and `verify --registry`; `power` and the Q18 decision | O | CP-40, CP-36, CP-32, CP-33 | part 1's sha and the power decision posted |
+| CP-41a | Only if Q18 adds nodes: on each added node, the 5h-1/5h-2 rollouts, re-clean, backfill, the final release with intent pinned, step 0a and its freeze start, all before the superseding draft (W2-D8, act 12) | O; C measures | CP-41 | each added node recorded |
+| CP-42 | Acts 13–15: the pilot (headless-on marker; step 0b; fidelity and usage pilot; marker removed). A failed pilot halts W2 for the operator's ruling | O | CP-41 (and CP-41a if triggered) | pilot-result sha posted, or a halt ruling |
+| CP-43 | Acts 16–17: quiz source and freeze (floor: 60 questions and 12 families); `open --finalize` (part 2, window dates, spend budget) | O | CP-42 | part 2's sha posted before window start |
+| CP-44 | Acts 18–20: recall-off markers and headless-on; the verifies; the coordinator re-measures stamps and Claude Code versions at window start | O, C | CP-43 | verifies ok; start record |
+| CP-45 | Act 21: the window (14–15 days). Arm and judge batches, resumes after limits stops, version moves through re-pilot and `open --amend`. The coordinator's runbook duties apply | O, C | CP-44 | every question run or classified, or a halt ruling |
+| CP-46 | Acts 22–23: hand-check labels (operator only); the coordinator re-measures at window end; `measure-history.py` and `history-counters.mjs` per node | O, C | CP-45 | labels complete; counter reports |
+| CP-47 | Act 24: `report` produces `verdict.json`; the coordinator computes the gate and reports only shas, counts and aggregates | O, C | CP-46 | verdict sha and gate computation posted |
+
+#### Stage 5: the decision and the close acts
+
+| ID | Item | Owner | Depends | Exit criterion |
+|---|---|---|---|---|
+| CP-50 | Act 25: the operator records the gate decision against the verdict's sha (pass or fail), or a ruling on a halt or `code-changed`, including a halt that ends W2 before a verdict | O | CP-47, or any halt ruling that ends W2 | decision in the ledger |
+| CP-51 | Acts 26–29 under either outcome: `recall-off --clear-all` (check `skipped` is empty); remove headless-on; restore update intent and lift the freeze; archive privately and remove each `--out` | O | CP-50 | close acts recorded |
+
+#### Stage 6: W3 steering (only on a pass)
+
+| ID | Item | Owner | Depends | Exit criterion |
+|---|---|---|---|---|
+| CP-60 | W3 plan from spec §7, drafted during the window. Every hook line re-anchored by content; the spike as Task 1; the Plan B `STEER_TEXT` ordering (PX16) settled; the precompute reuse re-measured on the installed version. Adversarial review; docs PR | C | CP-21 (drafting); CP-50 pass (merge) | plan merged |
+| CP-61 | W3 build waves, each opened before the previous run closes: expected the spike PR, then the hook, receipt, breaker and parser PRs. Each gets a held-out review and lands under rule L. Once W3's first run is open, the holding run is ended with the abandon arm (CP-26) | W, R, C | CP-60 | all W3 PRs merged |
+| CP-62 | Per-backend compliance bars, set by the operator from the spike | O | CP-61 spike | bars recorded |
+| CP-63 | Release, rollout and per-backend arming (`history-steer-live.<backend>`). The 48-hour kill rule watched. §10.7's W3 row measured: compliance at the bar, truncation 0, added p50 compaction time at most +10% | O arms; C measures | CP-61, CP-62, CP-51 | W3 row recorded |
+
+#### Stage 7: W4 subagents and `touched` (only on a pass, and only with B4 live on every node)
+
+| ID | Item | Owner | Depends | Exit criterion |
+|---|---|---|---|---|
+| CP-70 | W4 spec addendum, drafted during the window: a pin table, a failure table, the output and ranking of `touched`, the scan rules for subagent boundaries, cap and growth policy (about ×2.7), files and ownership, a PR split. These are new product decisions, so the operator approves it | C drafts; O approves | CP-21 (drafting); CP-50 pass (approval and merge) | addendum merged |
+| CP-71 | W4 plan, adversarial review, docs PR | C | CP-70 | plan merged |
+| CP-72 | W4 build waves, each opened before the previous run closes, each with a held-out review and landed under rule L | W, R, C | CP-71, CP-34 | all W4 PRs merged |
+| CP-73 | Release, rollout, then §10.7's W4 row: at least 95% of subagent and workflow transcripts carry a parent link | O, C | CP-72, CP-51 | W4 row recorded |
+
+#### Stage 8: close
+
+| ID | Item | Owner | Depends | Exit criterion |
+|---|---|---|---|---|
+| CP-80 | File the programme's "Later" lists (about 40 items) and every PR residual as separate CCRC-PWA backlog tickets under G8. They do not block completion | C | CP-03 | every Later item has a ticket or a recorded drop |
+| CP-82 | On a fail: the close-out wave. A small dispatched follow-up PR fixing programme-owned residuals the ledger assigns to "the next PR that holds the file": for example, `history-counters.mjs` as a lifecycle creator in `shared/lifecycle.ts`, the gate's arm-word literals, and the gate validator's range checks. Opened before the holding run is abandoned; held-out review; landed under rule L | C, W, R | CP-51 (fail) | PR merged; it is the programme's last run |
+| CP-81 | Final ledger; close the last run with `final:true` (CP-82's run on a fail, the last W3/W4 run on a pass), after making sure no other run is open; memory updated | C | CP-51, CP-34, CP-37; on a pass also CP-63 and CP-73; on a fail CP-82 | the server retires the programme as `done`; ledger final |
+
+On a **fail**, CP-60 to CP-73 are cancelled with the verdict as their reason. The programme ends at CP-51, CP-34, CP-37,
+CP-80, CP-82 and CP-81. W1 stays: every session keeps its lossless, searchable history (spec §10.4).
+
+### 5. Timeline (estimates, not commitments)
+
+| Segment | Estimate | Main uncertainty |
+|---|---|---|
+| CP-10 to CP-18 (run 828 to merge) | 2–4 days | review findings; a fourth review round needs the operator's lift |
+| CP-20 to CP-21 (the amendment) | 1–2 days, beside run 851 | K26's agreement function |
+| CP-22 to CP-25 (runs 851 and 864) | 4–8 days, in parallel | run 864 is the largest remaining wave (11,900-line plan) |
+| CP-35 to CP-44 (release to window start) | 2–4 days | operator availability; the pilot can halt |
+| CP-45 (the window) | 14–15 days | fixed by W2-D25; Q18 may lengthen it |
+| CP-46 to CP-51 (report, decision, close acts) | 1–2 days | hand-check labelling is the operator's |
+| **W2 verdict** | **about 2026-11-20 to 2026-11-30** | |
+| Stage 6 and Stage 7, on a pass | 3–5 weeks, partly parallel | approval of W4's spec addendum |
+| **Programme complete on a pass** | **about late December 2026** | |
+| **Programme complete on a fail** | **about early December 2026** | |
+
+### 6. What the operator owns
+
+**Wanted now, so the window is not delayed later:**
+- CP-04: arm the stall watch to live in Settings.
+- CP-05: swap run 828's worker onto an Anthropic account, or accept its current lane.
+- CP-31: act 1's names.
+- CP-33: the backfill answer.
+- A standing permission for the coordinator to run read-only history measurements on live nodes: doctor without fix, status, the census. CP-32, CP-34 and CP-37 need it.
+- The Linear sign-in, if an account swap loses it.
+
+**At their time:**
+- CP-36: rollout and intent.
+- CP-41 to CP-46: every live act, signing parts 1 and 2, and the hand-check labels.
+- CP-50: the gate record.
+- CP-51: the close acts.
+- CP-37: W1-l's drill.
+- CP-62: the W3 bars.
+- CP-63: arming.
+- CP-70: approval of the W4 spec addendum.
+- Any lift of a review-round cap.
+- Any ruling on a halt.
+- Any address-or-ignore question under rule L.
+
+**Ruled by default and recorded (G7), changeable by the operator:**
+- G1–G8, rule L and the run continuity rule.
+- G5's fold of the scoped review into the held-out panel.
+- K25's judge-scoped spend gate, whose exposure is about twice a node's share plus in-flight overshoot. It is disclosed in README and the PR body, and is the operator's to change at act 17's budget approval.
+- The two questions of 2026-10-18 keep today's behaviour: the coordinator's scope reading stands, and a restore keeps a held tombstone's text out.
+
+### 7. Risks
+
+- **A halt.** A failed pilot or re-pilot, more than 5% `run-failed`, an absent rate over 0.05, or hand-check agreement
+  under 0.8 halts W2 for the operator's ruling (W2-D89). CP-50 and CP-51 then run the abort path.
+- **Limits.** Arm and judge batches pause at 70% of the account's limits.
+- **K26.** If run 828's review reshapes the snapshot-agreement code, CP-20 re-anchors to whatever merges. That is why it
+  waits for CP-18.
+- **Review-round cap.** A fourth review run needs the operator's lift.
+- **Main moves fast.** `single-definition.test.ts` and README are hot files. The second lander absorbs main by merge
+  under clause 16, never by rebase.
+- **Lane placement.** A fresh spawn can land on a non-Anthropic lane when every Anthropic home is at its ceiling. G4
+  catches it at dispatch.
+- **Disk.** The worktree volume has fallen below `ccd`'s 10G floor before. A refused dispatch is re-sent unchanged once
+  there is room.
+- **B4's deadline.** It is unknown until CP-34(a) measures the W1-k dates. It may be earlier than 2026-12-19.
+
+### Where things stand
+
+**Agreed:** the operator's instruction of 2026-10-25, and this plan and its rulings as the coordinator's.
+
+**Waiting on you:** CP-04, CP-05, CP-31, CP-33 and the read-only measurement permission.
+
+**Later:** every Stage 4 act at its time; W3 and W4 only after the gate.
 
 ## Carried constraints
 
@@ -1220,6 +1618,8 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
   - not taken: the gate's arm-word literals in four places beside `ASSIGNMENT_ARMS` (review 829's carry). W2-5b2 never
     edits the gate and names them as a PR residual; the fix stays under "Later".
   - kept: the coordinator records here each use of `--accept-failed-pilot` (Q27, K14).
+- **W2's named node is the fleet box only** (the operator, 2026-10-25). The account and the arm, writer and judge models
+  are named at step 0a.
 - **Operator acts, still owed, in this order on each session-hosting node:**
   1. If the node keeps its store on a volume, link `~/.ccrc/history/db` onto it (spec §9.3: a 0700 root and target).
   2. **Done on both nodes (measured 2026-10-15).** Once the node runs B2 (v0.0.195 or later), run `ccrc history
@@ -1229,7 +1629,9 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
   3. **Partly done:** the backfill B1 left. `ccrc history import --apply` ran on the fleet box from 2026-10-18
      08:17Z and was stopped at 11:31Z by the operator's choice, with the transcripts imported and the sidecars only in
      part. A re-run finishes the sidecars. Pause the sweep timer around it, because back-to-back passes take the lock.
-  4. **B4's rollout** (#623's body, "After merge"). Before an adopt or a restore whose export directory does not come
+     The operator approved the re-run on 2026-10-25, and the coordinator runs it (CP-33).
+  4. **B4's rollout** (#623's body, "After merge"). The fleet box runs v0.0.691 or later (measured 2026-10-25), which
+     contains B4, 5h-1 and 5h-2. On that date its store's export showed nothing due (CP-34 measures the deadline). Before an adopt or a restore whose export directory does not come
      with it, check for room first (step 9). On an adopt, compare every carried segment's size with its source before
      the first tick (step 8).
   A rollback to B1 after the migrate reads the store as `schema-newer` and captures nothing until the node is
