@@ -238,6 +238,15 @@ describe('_ws_leaf_checkouts — passes: rc 0, the leaf’s own scratch', () => 
     expect(a.why).toContain('no longer exists');
   }, 60_000);
 
+  it('a RELATIVE gitdir with no dot segment naming an absent dir under the tree refuses: only an absolute spelling is claimed', () => {
+    const wt = path.join(leafOf(), 'x', 'side');
+    fs.mkdirSync(wt, { recursive: true });
+    fs.writeFileSync(path.join(wt, '.git'), 'gitdir: gone/.git/worktrees/side\n');
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('no longer exists');
+  }, 60_000);
+
   it('an empty leaf, and a leaf with no `.git` anywhere', () => {
     fs.mkdirSync(path.join(leafOf(), 'cdk.out', 'deep'), { recursive: true });
     fs.writeFileSync(path.join(leafOf(), 'cdk.out', 'manifest.json'), '{}');
