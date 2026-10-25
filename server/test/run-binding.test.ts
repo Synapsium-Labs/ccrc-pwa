@@ -34,24 +34,24 @@ describe('Incarnation', () => {
 describe('bindsRun', () => {
   const inc = bornIncarnation('demo-w', BORN);
   it('another session\'s run never binds', () => {
-    expect(bindsRun(inc, run({ sessionId: 'demo-x' }))).toBe(false);
-    expect(bindsRun(inc, run({ sessionId: null }))).toBe(false);
+    expect(bindsRun(inc, run({ sessionId: 'demo-x' }))).toBe('unbound');
+    expect(bindsRun(inc, run({ sessionId: null }))).toBe('unbound');
   });
   it('a run carrying this birth binds, one carrying another birth or another occupant\'s does not', () => {
-    expect(bindsRun(inc, run({ sessionBornAt: BORN, sessionBornFor: 'demo-w', openedAt: BORN - 5 }))).toBe(true);
-    expect(bindsRun(inc, run({ sessionBornAt: BORN - 1, sessionBornFor: 'demo-w' }))).toBe(false);
-    expect(bindsRun(inc, run({ sessionBornAt: BORN, sessionBornFor: 'demo-other' }))).toBe(false);
-    expect(bindsRun(inc, run({ sessionBornAt: BORN, sessionBornFor: null }))).toBe(false);
+    expect(bindsRun(inc, run({ sessionBornAt: BORN, sessionBornFor: 'demo-w', openedAt: BORN - 5 }))).toBe('bound');
+    expect(bindsRun(inc, run({ sessionBornAt: BORN - 1, sessionBornFor: 'demo-w' }))).toBe('unbound');
+    expect(bindsRun(inc, run({ sessionBornAt: BORN, sessionBornFor: 'demo-other' }))).toBe('unbound');
+    expect(bindsRun(inc, run({ sessionBornAt: BORN, sessionBornFor: null }))).toBe('unbound');
   });
   it('a run with no birth binds only when it was opened at or after the birth (a later wave on a live worker)', () => {
-    expect(bindsRun(inc, run({ openedAt: BORN }))).toBe(true);
-    expect(bindsRun(inc, run({ openedAt: BORN + 1 }))).toBe(true);
-    expect(bindsRun(inc, run({ openedAt: BORN - 1 }))).toBe(false);
+    expect(bindsRun(inc, run({ openedAt: BORN }))).toBe('bound');
+    expect(bindsRun(inc, run({ openedAt: BORN + 1 }))).toBe('bound');
+    expect(bindsRun(inc, run({ openedAt: BORN - 1 }))).toBe('undecidable');
   });
   it('an unborn incarnation matches on the id alone, the rule that held before the binding', () => {
     const unborn = unbornIncarnation('demo-w', 'not-a-child');
-    expect(bindsRun(unborn, run({ openedAt: 1, sessionBornAt: 5, sessionBornFor: 'x' }))).toBe(true);
-    expect(bindsRun(unborn, run({ sessionId: 'demo-x' }))).toBe(false);
+    expect(bindsRun(unborn, run({ openedAt: 1, sessionBornAt: 5, sessionBornFor: 'x' }))).toBe('bound');
+    expect(bindsRun(unborn, run({ sessionId: 'demo-x' }))).toBe('unbound');
   });
 });
 
@@ -64,8 +64,8 @@ describe('bindingOf, parentOf, claimantsOf', () => {
     const b1 = bindingOf([a, b, c], inc);
     expect(b1.newest?.id).toBe(c.id);
     expect(b1.open?.id).toBe(a.id);
-    expect(bindingOf([b, c], inc)).toEqual({ newest: c, open: null });
-    expect(bindingOf([], inc)).toEqual({ newest: null, open: null });
+    expect(bindingOf([b, c], inc)).toEqual({ newest: c, open: null, undecided: [] });
+    expect(bindingOf([], inc)).toEqual({ newest: null, open: null, undecided: [] });
   });
   it('a state this build cannot name counts as open', () => {
     const u = run({ state: 'unknown' });
@@ -86,7 +86,7 @@ describe('bindingOf, parentOf, claimantsOf', () => {
     expect(claimantsOf([a, b], inc)).toEqual(['coord-1']);
   });
   it('a run where the session is the claimant does not make the series\' other role a worker', () => {
-    expect(bindingOf([run({ sessionId: 'demo-x', claimedBy: 'demo-w' })], inc)).toEqual({ newest: null, open: null });
+    expect(bindingOf([run({ sessionId: 'demo-x', claimedBy: 'demo-w' })], inc)).toEqual({ newest: null, open: null, undecided: [] });
   });
 });
 
@@ -153,6 +153,29 @@ describe('the #746 fixture, through a store', () => {
     const series = readSeries(s, 'coord-gone');
     expect(childrenOf(series, 'coord-gone', (id) => bornIncarnation(id, BORN))).toEqual([]);
     expect(childrenOf(series, 'coord-gone', (id) => unbornIncarnation(id, 'not-a-child')).map((r) => r.id)).toEqual([stale]);
+  });
+
+  it('the dup-arm re-open: a planned run opened before the birth, then bound after it, is undecidable, never a parent and never dropped', () => {
+    const s = store();
+    const input = { program: 'prog-two', title: 't', project: 'p', wave: 2, waveOf: null, claimedBy: 'coord-1' };
+    const wave2 = (s.openRun(input) as { id: number }).id;
+    s.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(BORN - 1000, wave2);
+    const wave1 = open(s, 'prog-one', 'coord-1');
+    s.setSession(wave1, 'demo-w', BORN);
+    const again = (s.openRun(input) as { id: number }).id;
+    expect(again).toBe(wave2);
+    s.setSession(again, 'demo-w');
+    const series = readSeries(s, 'demo-w');
+    const inc = bornIncarnation('demo-w', BORN);
+    const b = bindingOf(series, inc);
+    expect(s.parentOfSession('demo-w')).toBe('coord-1');
+    expect(parentOf(b)).toBe('coord-1');
+    expect(b.undecided.map((r) => r.id)).toEqual([wave2]);
+    for (const to of ['dispatched', 'closing', 'done'] as const) s.advance(wave1, to, 'coordinator');
+    const after = bindingOf(readSeries(s, 'demo-w'), inc);
+    expect(parentOf(after)).toBeNull();
+    expect(after.undecided.map((r) => r.id)).toEqual([wave2]);
+    expect(childrenOf(readSeries(s, 'coord-1'), 'coord-1', () => inc).map((r) => r.id)).not.toContain(wave2);
   });
 
   it('bindingRunsOf answers the runs a session works on and the runs it claims, by id', () => {

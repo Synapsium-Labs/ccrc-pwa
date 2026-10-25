@@ -23,9 +23,15 @@ import type { ChildBirth } from './childSpent.js';
  *
  * WHICH RUNS BIND A BORN INCARNATION. A run names the session, and
  *   - carries a birth: it binds iff that birth is THIS incarnation's (same instant, recorded for this session id);
- *   - carries none (a later wave opened on a worker that already exists, which `bindSession` leaves unstamped): it binds
- *     iff it was opened at or after the birth, because a run opened before the occupant existed cannot have been
- *     opened for it. Both clocks are the server's own.
+ *   - carries none (a later wave opened on a worker that already exists, which `bindSession` leaves unstamped): opened
+ *     at or after the birth it binds; opened BEFORE the birth it is UNDECIDABLE, a third answer and not `false`. Two
+ *     histories produce that row and the columns cannot tell them apart: a ghost (#746, #758: the run was opened for an
+ *     earlier occupant of a reused name) and a live binding (`openRun`'s dup arm returns the planned run with its
+ *     original `openedAt`, and the open route then binds it, so a run opened before the occupant was born is bound to
+ *     it). Deviation from #758: the rule is not "a run opened before the birth cannot bind". An undecidable run is
+ *     never a parent, a claimant or a child (no ghost coordinator), and is never dropped: `bindingOf` lists it in
+ *     `undecided`, so a reader says "unknown" and not "coordinator gone". The exact answer needs the bind to record
+ *     the incarnation it bound (a bound-birth column written by `bindSession`); that migration is a follow-up.
  *
  * TWO QUERIES, NAMED. `newest` is the newest run that binds the incarnation in ANY state (the card's `session.run`);
  * `open` is the newest that is not terminal (`session.openRun`). A state this build cannot name counts as open, as
@@ -67,15 +73,20 @@ export interface BindingRun {
   readonly sessionBornFor: string | null;
 }
 
+/** Whether `run` binds `incarnation`: yes, no, or `'undecidable'` (an unstamped run opened before the birth). */
+export type RunBinds = 'bound' | 'unbound' | 'undecidable';
+
 /** Whether `run` is bound to `incarnation`, by the rules above. */
-export function bindsRun(incarnation: Incarnation, run: BindingRun): boolean {
-  if (run.sessionId !== incarnation.sessionId) return false;
-  if (incarnation.kind === 'unborn') return true;
+export function bindsRun(incarnation: Incarnation, run: BindingRun): RunBinds {
+  if (run.sessionId !== incarnation.sessionId) return 'unbound';
+  if (incarnation.kind === 'unborn') return 'bound';
   if (run.sessionBornAt !== null) {
-    return run.sessionBornFor === incarnation.sessionId && run.sessionBornAt === incarnation.bornAt;
+    return run.sessionBornFor === incarnation.sessionId && run.sessionBornAt === incarnation.bornAt ? 'bound' : 'unbound';
   }
-  return run.openedAt >= incarnation.bornAt;
+  return run.openedAt >= incarnation.bornAt ? 'bound' : 'undecidable';
 }
+
+const binds = (incarnation: Incarnation, run: BindingRun): boolean => bindsRun(incarnation, run) === 'bound';
 
 const isOpen = (run: BindingRun): boolean => !(TERMINAL_RUN_STATES as readonly RunState[]).includes(run.state);
 
@@ -83,13 +94,16 @@ const isOpen = (run: BindingRun): boolean => !(TERMINAL_RUN_STATES as readonly R
 export interface SessionBinding {
   readonly newest: BindingRun | null;
   readonly open: BindingRun | null;
+  /** Runs naming the session that neither bind nor are known not to (`'undecidable'`), newest first. Never a parent. */
+  readonly undecided: readonly BindingRun[];
 }
 
 const byIdDesc = (a: BindingRun, b: BindingRun): number => b.id - a.id;
 
 export function bindingOf(runs: readonly BindingRun[], incarnation: Incarnation): SessionBinding {
-  const bound = runs.filter((r) => bindsRun(incarnation, r)).sort(byIdDesc);
-  return { newest: bound[0] ?? null, open: bound.find(isOpen) ?? null };
+  const bound = runs.filter((r) => binds(incarnation, r)).sort(byIdDesc);
+  const undecided = runs.filter((r) => bindsRun(incarnation, r) === 'undecidable').sort(byIdDesc);
+  return { newest: bound[0] ?? null, open: bound.find(isOpen) ?? null, undecided };
 }
 
 /** The worker's parent: the claimant of its open binding, `null` when it has none or the open run is ownerless. */
@@ -98,7 +112,7 @@ export const parentOf = (binding: SessionBinding): string | null => binding.open
 /** EVERY coordinator that currently has this incarnation working for it, newest open run first, each once. */
 export function claimantsOf(runs: readonly BindingRun[], incarnation: Incarnation): string[] {
   const seen = new Set<string>();
-  for (const r of runs.filter((x) => bindsRun(incarnation, x) && isOpen(x)).sort(byIdDesc)) {
+  for (const r of runs.filter((x) => binds(incarnation, x) && isOpen(x)).sort(byIdDesc)) {
     if (r.claimedBy !== null) seen.add(r.claimedBy);
   }
   return [...seen];
@@ -110,7 +124,7 @@ export function childrenOf(
   runs: readonly BindingRun[], coordinatorId: string, incarnationFor: (sessionId: string) => Incarnation,
 ): BindingRun[] {
   return runs
-    .filter((r) => r.claimedBy === coordinatorId && r.sessionId !== null && isOpen(r) && bindsRun(incarnationFor(r.sessionId), r))
+    .filter((r) => r.claimedBy === coordinatorId && r.sessionId !== null && isOpen(r) && binds(incarnationFor(r.sessionId), r))
     .sort((a, b) => a.id - b.id);
 }
 
