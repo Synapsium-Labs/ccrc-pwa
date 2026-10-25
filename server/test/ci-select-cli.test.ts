@@ -208,6 +208,12 @@ function expectValidMatrix(matrixJson: string, expectedWorkers: number): void {
 }
 
 describe('decideMode', () => {
+  it('merge_group -> full/none: the queue runs the whole server suite whatever the change (operator ruling 2026-10-25)', () => {
+    for (const inputMode of [undefined, 'full']) {
+      expect(decideMode({ event: 'merge_group', inputMode, fullGreen: false })).toEqual({ tests: 'full', trace: 'none', skip: false });
+    }
+  });
+
   it('pull_request -> selected/none', () => {
     expect(decideMode({ event: 'pull_request', fullGreen: false })).toEqual({ tests: 'selected', trace: 'none', skip: false });
   });
@@ -273,9 +279,9 @@ describe('modeInvariantViolation: what a trigger can never answer (ruling T2)', 
     expect(modeInvariantViolation('pull_request', 'full', 'full')).toBeNull();
   });
 
-  it('a merge_group never answers tests none either — a queue run runs what a pull request runs (operator ruling 2026-09-28)', () => {
+  it('a merge_group never answers tests none either, and runs the full suite (operator ruling 2026-10-25)', () => {
     expect(modeInvariantViolation('merge_group', undefined, 'none')).toMatch(/merge_group/);
-    expect(modeInvariantViolation('merge_group', undefined, 'selected')).toBeNull();
+    expect(modeInvariantViolation('merge_group', undefined, 'selected')).toMatch(/merge_group/);
     expect(modeInvariantViolation('merge_group', 'full', 'full')).toBeNull();
   });
 
@@ -316,15 +322,17 @@ describe('select.mjs CLI — pull_request', () => {
     expect(summary).not.toContain('server/test/d.test.ts');
   });
 
-  it('merge_group (a merge-queue run) -> the SAME selection as the pull request, matrices and all (operator ruling 2026-09-28)', () => {
-    const { repo, mapFile, baseSha } = buildMainFixture();
+  it('merge_group (a merge-queue run) -> the FULL server matrix, the same one a full dispatch plans, whatever the change (operator ruling 2026-10-25)', () => {
+    const { repo, mapFile } = buildMainFixture();
+    const full = runSelect(repo, { event: 'workflow_dispatch', inputMode: 'full', selection: 'enforce', mapFile });
     const pr = runSelect(repo, { event: 'pull_request', selection: 'enforce', mapFile });
     const queue = runSelect(repo, { event: 'merge_group', selection: 'enforce', mapFile });
     expect(queue.status).toBe(0);
-    expect(queue.outputs.tests).toBe('selected');
-    expect(queue.outputs.map_sha).toBe(baseSha);
-    expect(queue.outputs.count).toBe(pr.outputs.count);
-    expect(queue.outputs.server_matrix).toBe(pr.outputs.server_matrix);
+    expect(queue.outputs.tests).toBe('full');
+    expect(queue.outputs.count).toBe(full.outputs.count);
+    expect(queue.outputs.server_matrix).toBe(full.outputs.server_matrix);
+    // …and the light pull request ran fewer files than the queue will, which is the saving.
+    expect(Number(pr.outputs.count)).toBeLessThan(Number(queue.outputs.count));
     expect(queue.summary).toContain('- event: `merge_group`');
   });
 
