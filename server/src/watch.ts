@@ -969,10 +969,10 @@ export class FleetWatcher {
    *  longer carries is dropped. A pass whose mirror read fails returns before the prune, and prunes
    *  nothing. What neither the key nor the prune tells apart is the same run minting the same slug
    *  again with no pruning pass between. IN MEMORY ONLY: a restart feeds each kept child once more. */
-  /** The kept reason's pacing (D-TBD-kept-reason-visible): one feed row per child, kind and run per day. IN MEMORY ONLY. */
-  private readonly childReclaimKeptReasons = new KeptReasonLimiter();
   private childReclaimKeptReported =
     new Map<string, { readonly runId: number; readonly words: Set<ChildReclaimKeptWord> }>();
+  /** The kept reason's pacing (D-6923): one feed row per child, kind and run per day. IN MEMORY ONLY. */
+  private readonly childReclaimKeptReasons = new KeptReasonLimiter();
   /** The kept-leaf items (spec §5.6, §5.9), as the sweep's last successful kept-leaf read derived them.
    *  Kept, never erased, across a read that failed. `[]` until the first pass. Derived from the mirror on
    *  every pass that gets past the fail-shut try, so a restart rebuilds them on its first pass. */

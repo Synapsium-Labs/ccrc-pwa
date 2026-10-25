@@ -307,7 +307,7 @@ export type ChildReclaimMintingRunRead =
 export type ChildReclaimReviewedRunRead =
   | { readonly kind: 'not-a-review' }
   | { readonly kind: 'run'; readonly state: RunState; readonly superseded?: ChildReclaimSuperseded;
-      /** The reviewed run's id and `openedAt`, for the kept reason (D-TBD-kept-reason-visible). Display only. */
+      /** The reviewed run's id and `openedAt`, for the kept reason (D-6923). Display only. */
       readonly id?: number; readonly openedAt?: number }
   | { readonly kind: 'absent' }
   | { readonly kind: 'unreadable'; readonly detail: string };
@@ -319,7 +319,7 @@ export interface ChildReclaimSuperseded { readonly by: number; readonly live: bo
 
 /** The open runs naming this child, counted — or unreadable. `open` counts only the siblings that KEEP the child:
  *  a stale sibling (`coord/staleSibling.ts`) is listed in `stale` and not counted. `blocking` and `stale` name the
- *  runs for the kept reason (D-TBD-kept-reason-visible) and decide nothing. */
+ *  runs for the kept reason (D-6923) and decide nothing. */
 export type ChildReclaimSiblingsRead =
   | { readonly ok: true; readonly open: number; readonly blocking?: readonly SiblingRef[];
       readonly stale?: readonly SiblingRef[] }
@@ -552,7 +552,7 @@ export type ChildReclaimSkipRow =
  *    - `terminal-refusal`: the mirror's terminal row decides the chip, and the banner's terminal
  *      arm lists the child.
  *    - `review-report-live`: the chip's own review rows say it, and the feed names the reviewed run and its age, once a
- *      day per child (`coord/keptReason.ts`, D-TBD-kept-reason-visible).
+ *      day per child (`coord/keptReason.ts`, D-6923).
  *    - `not-a-child`: the lane skips a row with no child marker before it judges one, so there is
  *      no child for a chip to speak of.
  *    - `minting-run-open`, `dispatch-in-flight` and `siblings-open`: they never reach a closed

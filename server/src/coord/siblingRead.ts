@@ -11,7 +11,7 @@ export type ClaimantCache = Map<string, Promise<ClaimantState>>;
 export interface SiblingReadDeps { readonly coord: CoordStore; readonly io: FleetIO; readonly cfg: CcrcConfig }
 
 /**
- * THE ONE READ of a child's open sibling runs (D-TBD-kept-reason-visible): the open runs naming the session,
+ * THE ONE READ of a child's open sibling runs (D-6923): the open runs naming the session,
  * split by `splitSiblings` into the ones that keep the child (`open`, `blocking`) and the stale ones it ignores. The
  * sweep lane, the executor's step 2 and the hold-release job all read through it, so their answers cannot differ.
  * L3/L4: it reads the store and the registry and decides nothing; the rule is `coord/staleSibling.ts`.

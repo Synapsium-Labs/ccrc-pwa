@@ -1,7 +1,7 @@
 import type { RunState } from '../../../shared/api.js';
 
 /**
- * The stale sibling (D-TBD-kept-reason-visible). L1: pure, no store, no
+ * The stale sibling (D-6923). L1: pure, no store, no
  * registry, no clock.
  *
  * A child's workspace is kept while another open run names its session (`siblings-open`). A run that opened for an
@@ -10,7 +10,7 @@ import type { RunState } from '../../../shared/api.js';
  * child, on all four counts:
  *  - it is `planned`: no worker was ever sent;
  *  - it has no dispatch stamp of either kind (`dispatchStartedAt`, `dispatchedAt`);
- *  - it opened more than fourteen days ago, written `!(age > ceiling)` so a stamp from the future or a NaN keeps it;
+ *  - it opened more than fourteen days ago: stale only when age > ceiling, so a NaN or future stamp is never stale;
  *  - its claimant is provably archived or no longer listed. A live claimant, an unmeasured one and an ownerless run
  *    all keep it: only a proven absence of anyone to dispatch it lets a run be ignored.
  *

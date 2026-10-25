@@ -1,7 +1,7 @@
 // A sibling run that ties a child's workspace down is ignored when it is provably abandoned: planned, never
 // dispatched, older than fourteen days, and owned by a coordinator the registry archived or no longer lists. The
-// rule is pure (`coord/staleSibling.ts`); the readers and the sweep lane are proved elsewhere in this file's
-// neighbours (`child-reclaim-kept-reason-lane.test.ts`).
+// rule is pure (`coord/staleSibling.ts`); the readers and the sweep lane are proved in `child-reclaim-sweep.test.ts`,
+// `child-reclaim.test.ts` and `child-reclaim-hold-retired-generation.test.ts`.
 import { describe, it, expect } from 'vitest';
 import {
   STALE_SIBLING_MS, claimantStateOfRead, isStaleSibling, splitSiblings, type ClaimantState, type SiblingFact,

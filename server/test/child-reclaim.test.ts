@@ -23,6 +23,7 @@ import {
 import type { ChildReclaimFeedQuiet } from '../src/childReclaimSweep.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { readSessionRecord } from '../src/registry.js';
+import { readChildSiblings } from '../src/coord/siblingRead.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
 import { SENTENCES } from '../src/wsaudit.js';
@@ -805,6 +806,23 @@ describe('reclaimChild — the one executor', () => {
     expect(await reclaimChild({ ...live.deps, now: later.now }, live.req())).toMatchObject({ kind: 'deferred', why: 'siblings-open' });
     expect(await reclaimChild(later, s.req())).not.toMatchObject({ kind: 'deferred', why: 'siblings-open' });
     expect(s.coord.run(next.id)).toMatchObject({ ok: true, run: { state: 'planned' } });
+  });
+
+  it('a planned sibling older than fourteen days whose claimant read REJECTS or is UNLISTABLE keeps the child (fail-closed)', async () => {
+    const DAY = 24 * 3_600_000;
+    for (const readdir of [
+      async (): Promise<string[] | null> => { throw new Error('registry read failed'); },
+      async (): Promise<string[] | null> => null,
+    ]) {
+      const s = await rig();
+      const next = s.coord.openRun({ program: 'p', title: 't', project: 'demo', wave: 2, waveOf: 2, claimedBy: 'demo-coordinator' });
+      if (!('id' in next)) throw new Error('openRun refused');
+      s.coord.setSession(next.id, ID);
+      const io = { ...s.deps.io, readdir };
+      const read = await readChildSiblings({ coord: s.coord, io, cfg: s.deps.cfg }, ID, Date.now() + 15 * DAY);
+      expect(read).toMatchObject({ ok: true, open: 1, stale: [] });
+      expect(read.ok ? (read.blocking ?? []).map((b) => b.id) : null).toEqual([next.id]);
+    }
   });
 
   it('an open sibling defers, and an UNREADABLE sibling list defers — never read as "none"', async () => {
