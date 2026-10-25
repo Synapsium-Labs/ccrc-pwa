@@ -100,7 +100,25 @@ export interface OpenedApp {
   /** Send `frame` (as JSON) to the NEWEST socket opened on `path` (a pathname such as `/ws/fleet`) and throw when none
    *  is open. Test code only: a frame-cost measure drives the app's own socket exactly as the server would. */
   send(path: string, frame: unknown): void;
+  /** The harness's own order log (R104): every `/api` request's interception and fulfilment, and the meter's reads,
+   *  in one monotonic sequence on the test side. Test code only; the page never sees it. */
+  readonly events: readonly HarnessEvent[];
+  /** Call `listener` with each new event, synchronously as it is logged; returns the unsubscribe. */
+  watch(listener: (event: HarnessEvent) => void): () => void;
+  /** Log a meter read, with the number of `/api` fulfilments still in flight at that moment. */
+  mark(kind: 'readA' | 'readB'): void;
+  /** Hold `path`'s fulfilment until `gate` settles: it is in flight (logged `fulfil-start`) from the moment its turn
+   *  comes until then. A self-test's controlled boundary, never a gate case's. */
+  answerAfter(path: string, gate: Promise<void>): void;
 }
+
+/** One entry of `OpenedApp.events`. `fulfil-start` is logged when a request's answer is due (it then counts as in
+ *  flight), before `route.fulfill` is called; `fulfil-done` once that call has settled. */
+export type HarnessEvent =
+  | { readonly seq: number; readonly kind: 'intercept' | 'fulfil-start' | 'fulfil-done'; readonly path: string }
+  | { readonly seq: number; readonly kind: 'readA' | 'readB' | 'drainWait'; readonly inFlight: number }
+  | { readonly seq: number; readonly kind: 'flush' };
+type Unsequenced<E> = E extends HarnessEvent ? Omit<E, 'seq'> : never;
 
 /** A context at `view.width` (844 tall below 900, as a phone; 900 above), with a touch screen below 900 or when
  *  `view.touch` asks, the skin and
@@ -117,10 +135,29 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
       localStorage.setItem(themeKey, theme);
     } catch { /* a context without storage boots the defaults; the measure then says which skin it drew */ }
   }, [SKIN_STORAGE_KEY, view.skin, THEME_STORAGE_KEY, view.theme] as const);
+  const events: HarnessEvent[] = [];
+  const listeners = new Set<(event: HarnessEvent) => void>();
+  const log = (entry: Unsequenced<HarnessEvent>): void => {
+    const event = { ...entry, seq: events.length } as HarnessEvent;
+    events.push(event);
+    for (const listener of listeners) listener(event);
+  };
+  const inFlight = new Set<string>();
+  const gates = new Map<string, Promise<void>>();
   await ctx.route('**/api/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname;
+    log({ kind: 'intercept', path: pathname });
     const body = Object.hasOwn(fixture.api, pathname) ? fixture.api[pathname] : {};
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    const id = `${events.length}:${pathname}`;
+    inFlight.add(id);
+    log({ kind: 'fulfil-start', path: pathname });
+    try {
+      await gates.get(pathname);
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    } finally {
+      inFlight.delete(id);
+      log({ kind: 'fulfil-done', path: pathname });
+    }
   });
   // Every routed socket, per pathname, in the order it opened: `send` talks to the newest one, and a socket that closed
   // (a reconnect replaced it) leaves the list.
@@ -141,7 +178,12 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
     if (newest === undefined) throw new Error(`no socket is open on ${path} (open: ${[...sockets.keys()].join(', ') || 'none'})`);
     newest.send(JSON.stringify(frame));
   };
-  return { ctx, page, errors, send };
+  return {
+    ctx, page, errors, send, events,
+    watch: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    mark: (kind) => { log({ kind, inFlight: inFlight.size }); },
+    answerAfter: (path, gate) => { gates.set(path, gate); },
+  };
 }
 
 // ---- frame cost: the fleet fixture and the meter (D-6438, C6; C7 and C9 reuse them) --------------------------------
@@ -259,6 +301,17 @@ export interface FrameCost {
   readonly frames: readonly Cost[];
   readonly median: Cost;
   readonly mean: Cost;
+  /** Per window, the idle one first: how many `/api` requests the harness intercepted between its two reads. */
+  readonly deferred: readonly number[];
+  /** Per window, the idle one first: whether the drain before it saw the main thread go quiet. */
+  readonly drainQuiet: readonly boolean[];
+}
+
+/** `frameCost`'s options. `during` runs inside each frame's window, after the frame is sent and before the wait, with
+ *  the frame's index; `quiet: false` skips the drain's quiet wait. Both are the self-test's, never a gate case's. */
+export interface FrameCostOptions {
+  readonly during?: (index: number) => Promise<void>;
+  readonly quiet?: boolean;
 }
 
 const medianOf = (xs: readonly number[]): number => {
@@ -281,8 +334,12 @@ export function summarize(costs: readonly Cost[]): { readonly median: Cost; read
  *  no frame is measured first, on the page as it stands before `frames`: it is not matched to a page that has taken
  *  them (an identical frame re-sent after many changes is measured against this one idle window). Nothing runs in the
  *  page: the meter is a CDP session on the test side. */
-export async function frameCost(app: OpenedApp, path: string, frames: readonly unknown[], gapMs: number): Promise<FrameCost> {
+export async function frameCost(
+  app: OpenedApp, path: string, frames: readonly unknown[], gapMs: number, options: FrameCostOptions = {},
+): Promise<FrameCost> {
   const cdp = await app.ctx.newCDPSession(app.page);
+  const deferred: number[] = [];
+  const drainQuiet: boolean[] = [];
   try {
     await cdp.send('Performance.enable');
     const read = async (): Promise<Cost> => {
@@ -290,17 +347,25 @@ export async function frameCost(app: OpenedApp, path: string, frames: readonly u
       const get = (name: string): number => metrics.find((m) => m.name === name)?.value ?? Number.NaN;
       return { taskMs: get('TaskDuration') * 1000, scriptMs: get('ScriptDuration') * 1000 };
     };
-    const window = async (frame: { readonly frame: unknown } | null): Promise<Cost> => {
+    const window = async (frame: { readonly frame: unknown; readonly index: number } | null): Promise<Cost> => {
+      drainQuiet.push(false);
       const a = await read();
-      if (frame !== null) app.send(path, frame.frame);
+      app.mark('readA');
+      const from = app.events.length;
+      if (frame !== null) {
+        app.send(path, frame.frame);
+        await options.during?.(frame.index);
+      }
       await app.page.waitForTimeout(gapMs);
       const b = await read();
+      app.mark('readB');
+      deferred.push(app.events.slice(from).filter((e) => e.kind === 'intercept').length);
       return { taskMs: b.taskMs - a.taskMs, scriptMs: b.scriptMs - a.scriptMs };
     };
     const idle = await window(null);
     const costs: Cost[] = [];
-    for (const frame of frames) costs.push(await window({ frame }));
-    return { idle, frames: costs, ...summarize(costs) };
+    for (const [index, frame] of frames.entries()) costs.push(await window({ frame, index }));
+    return { idle, frames: costs, ...summarize(costs), deferred, drainQuiet };
   } finally {
     await cdp.detach().catch(() => { /* the context closing first is fine */ });
   }

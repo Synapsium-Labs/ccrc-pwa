@@ -27,7 +27,7 @@ import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import {
   backlogFrame, buildDist, fleetApi, fleetFixture, fleetFrame, fleetFrameAt, FIXTURE_NOW_MS, frameCost, longTranscript, openApp,
-  removeDist, serveDist, summarize, type AppFixture, type AppView, type DistServer, type OpenedApp,
+  removeDist, serveDist, summarize, type AppFixture, type AppView, type DistServer, type HarnessEvent, type OpenedApp,
 } from './app';
 
 /** A CEILING only: it catches a gross regression of a CHANGING frame on `/`, and it is not below the before-measurement.
@@ -124,6 +124,118 @@ async function boot(view: AppView, route: string): Promise<{ app: OpenedApp; row
   await app.page.waitForTimeout(1500);
   return { app, rows };
 }
+
+// ---- the harness self-test (R104) -----------------------------------------------------------------------------------
+// The gates below rest on `frameCost` deferring every fixture `/api` answer out of its measured windows, so these two
+// cases pin that, by the ORDER of the harness's own log (`OpenedApp.events`), never by elapsed time. The request is
+// started inside window 0 by the test and never awaited there (a held request awaited in its own window would
+// deadlock). Its fulfilment then waits on a gate the log releases: at the drain's in-flight wait (`drainWait`), or, so
+// the case cannot hang, at the next `readA`. The release is armed only once this request's `fulfil-start` is logged,
+// so the `readA`s before it cannot release it.
+
+type Page$ = { selftest?: Promise<unknown>; stuck?: Promise<unknown>; parked?: Promise<unknown> };
+const SELFTEST = '/api/selftest';
+
+/** Start a fetch of `url` in the page, stored as `window[key]`, and resolve once the harness has intercepted it. */
+async function startFetch(app: OpenedApp, key: keyof Page$, url: string): Promise<void> {
+  const seen = new Promise<void>((done) => {
+    const off = app.watch((e) => { if (e.kind === 'intercept' && e.path === url) { off(); done(); } });
+  });
+  await app.page.evaluate(([k, u]) => { (window as unknown as Page$)[k] = fetch(u).then((r) => r.json()); }, [key, url] as const);
+  await seen;
+}
+
+/** The events of `path` of one kind, in order. */
+const ofPath = (app: OpenedApp, kind: 'intercept' | 'fulfil-start' | 'fulfil-done', path: string): HarnessEvent[] =>
+  app.events.filter((e) => e.kind === kind && 'path' in e && e.path === path);
+
+describe('the deferred fixture answers (R104): the harness self-test', () => {
+  it('an answer requested inside a window is fulfilled only after it, and the next window waits for that fulfilment', async () => {
+    const { app } = await boot({ skin: REFINED, theme: PHOSPHOR, width: 1920 }, '/');
+    let release = (): void => undefined;
+    try {
+      app.answerAfter(SELFTEST, new Promise<void>((done) => { release = done; }));
+      let armed: HarnessEvent | null = null;
+      let released: HarnessEvent | null = null;
+      const stop = app.watch((e) => {
+        if (e.kind === 'fulfil-start' && e.path === SELFTEST) { armed = e; return; }
+        if (armed === null || released !== null) return;
+        if ((e.kind === 'drainWait' && e.inFlight >= 1) || e.kind === 'readA') { released = e; release(); }
+      });
+      await frameCost(app, '/ws/fleet', changing().slice(0, 2), 500, {
+        quiet: false,
+        during: async (index) => { if (index === 0) await startFetch(app, 'selftest', SELFTEST); },
+      });
+      stop();
+      expect(ofPath(app, 'intercept', SELFTEST)).toHaveLength(1);
+      expect(ofPath(app, 'fulfil-start', SELFTEST)).toHaveLength(1);
+      const intercept = ofPath(app, 'intercept', SELFTEST)[0]!;
+      const start = ofPath(app, 'fulfil-start', SELFTEST)[0]!;
+      // H1 (nothing held) logs the fulfil-start before the window's readB; H2 (the flush inside the window) logs the
+      // flush before it.
+      const seen = new Set<string>();
+      const order = app.events.filter((e) => e.seq >= intercept.seq).flatMap((e) => {
+        const kind = e === intercept || e === start || e.kind === 'readB' || e.kind === 'flush' ? e.kind : null;
+        if (kind === null || seen.has(kind)) return [];
+        seen.add(kind);
+        return [kind];
+      });
+      expect(order, 'on the harness log: the request, the window\'s end, the drain\'s flush, then its fulfilment')
+        .toEqual(['intercept', 'readB', 'flush', 'fulfil-start']);
+      // H3 (the drain skips its in-flight wait) reaches the next readA with the answer still in flight, and only the
+      // fallback releases it.
+      const before = app.events.filter((e) => e.kind === 'readA' && e.seq < start.seq);
+      expect(before.length, 'the readAs before the fulfil-start (the idle window and window 0) left the gate held').toBeGreaterThanOrEqual(2);
+      expect((released as HarnessEvent | null)?.kind, 'the drain released the gate while it waited for the answer').toBe('drainWait');
+      const done = ofPath(app, 'fulfil-done', SELFTEST)[0]!;
+      const next = app.events.find((e) => e.kind === 'readA' && e.seq > start.seq);
+      expect(next !== undefined && done.seq < next.seq && 'inFlight' in next && next.inFlight === 0,
+        `the answer was fulfilled before the next readA, with nothing in flight there (${JSON.stringify(next)})`).toBe(true);
+      expect(await app.page.evaluate(() => (window as unknown as Page$).selftest)).toEqual({});
+    } finally {
+      release();
+      await app.ctx.close();
+    }
+  }, 90_000);
+
+  it('a fulfilment that never settles fails the attempt with drain-inflight-timeout, and leaves no answer parked', async () => {
+    const { app } = await boot({ skin: REFINED, theme: PHOSPHOR, width: 1920 }, '/');
+    const stuck = '/api/selftest-stuck';
+    const parked = '/api/selftest-parked';
+    let release = (): void => undefined;
+    try {
+      app.answerAfter(stuck, new Promise<void>((done) => { release = done; }));
+      // A second request made while the drain waits on the stuck one is parked when the attempt fails.
+      let asked = false;
+      const stop = app.watch((e) => {
+        if (asked || e.kind !== 'drainWait') return;
+        asked = true;
+        void app.page.evaluate((u) => { (window as unknown as Page$).parked = fetch(u).then((r) => r.json()); }, parked);
+      });
+      const attempt = frameCost(app, '/ws/fleet', changing().slice(0, 2), 500, {
+        quiet: false,
+        during: async (index) => { if (index === 0) await startFetch(app, 'stuck', stuck); },
+      });
+      await expect(attempt).rejects.toThrow(/drain-inflight-timeout: \/api\/selftest-stuck/);
+      stop();
+      // The parked request reached the harness before the attempt failed, and the finally's flush answered it.
+      const [intercept] = ofPath(app, 'intercept', parked);
+      expect(intercept, 'the parked request was intercepted').toBeDefined();
+      const flush = app.events.find((e) => e.kind === 'flush' && e.seq > intercept!.seq);
+      const start = ofPath(app, 'fulfil-start', parked)[0];
+      expect(flush !== undefined && start !== undefined && flush.seq < start.seq,
+        'the parked request was answered by a flush after it, not left parked').toBe(true);
+      const answer = await app.page.evaluate(() =>
+        Promise.race([(window as unknown as Page$).parked, new Promise((done) => { setTimeout(() => { done('stranded'); }, 2000); })]));
+      expect(answer).toEqual({});
+      // Parking is off after the attempt: a new request is fulfilled with no flush.
+      expect(await app.page.evaluate(() => fetch('/api/selftest-after').then((r) => r.json()))).toEqual({});
+    } finally {
+      release();
+      await app.ctx.close();
+    }
+  }, 90_000);
+});
 
 // ---- the gate ------------------------------------------------------------------------------------------------------
 
