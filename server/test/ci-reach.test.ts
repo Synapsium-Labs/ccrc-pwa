@@ -8,11 +8,11 @@
  */
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { skipsTests, scopeOf, FOREIGN } from '../../.github/ci/reach.mjs';
+import { skipsTests, scopeOf, FOREIGN, alwaysRunPwaTests } from '../../.github/ci/reach.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const REACH = path.join(ROOT, '.github', 'ci', 'reach.mjs');
@@ -72,11 +72,68 @@ describe('scopeOf: the pwa shards run only what vitest can relate to the change,
     }
   });
 
+  it('a change under pwa/src or ui/src that is not .ts/.tsx (CSS, JSON, an asset) is `all`: the tests that read it from disk are not reached by imports', () => {
+    for (const f of ['pwa/src/index.css', 'pwa/src/styles/skin-a.css', 'ui/src/tokens.css', 'pwa/src/data/words.json', 'ui/src/icons/x.svg', 'pwa/src/fonts/a.woff2']) {
+      expect(scopeOf('pwa', [f]), f).toBe('all');
+      expect(scopeOf('pwa', ['pwa/src/a.ts', f]), f).toBe('all');
+    }
+    // and only those: a .ts or .tsx source change stays `changed`
+    expect(scopeOf('pwa', ['pwa/src/a.tsx', 'ui/src/b.ts'])).toBe('changed');
+  });
+
+  it('a non-TypeScript change under shared/ is `all` too', () => {
+    expect(scopeOf('pwa', ['shared/fixtures/a.json'])).toBe('all');
+    expect(scopeOf('pwa', ['shared/base-url.mjs'])).toBe('changed');
+  });
+
   it('skip stays skip, and the other packages are never `changed`', () => {
     expect(scopeOf('pwa', ['agent/src/a.ts'])).toBe('skip');
     expect(scopeOf('agent', ['shared/x.ts'])).toBe('all');
     expect(scopeOf('browser', ['pwa/src/a.ts'])).toBe('all');
     expect(scopeOf('pwa', [])).toBe('all');
+  });
+});
+
+describe('alwaysRunPwaTests: the pwa tests that read source from disk run on every `changed` pull request', () => {
+  const always = alwaysRunPwaTests(ROOT);
+
+  it('a CSS-only change runs css-vars.test.ts (the change is `all`, and css-vars reads the CSS with fs)', () => {
+    expect(scopeOf('pwa', ['pwa/src/index.css'])).toBe('all');
+    expect(always).toContain('test/css-vars.test.ts');
+  });
+
+  it('holds the suites that scan pwa/src and ui/src with node:fs, however they reach fs (directly or through a helper)', () => {
+    for (const f of ['css-vars', 'contrast', 'design-system-boundary', 'skin-boundary', 'ui-package-boundary', 'quiet-control',
+      'utility-pairs', 'hover-states', 'fleet-css', 'refusal-literal-ratchet', 'focus-ring']) {
+      expect(always, f).toContain(`test/${f}.test.ts`);
+    }
+  });
+
+  it('holds every census and guard suite', () => {
+    const names = readdirSync(path.join(ROOT, 'pwa', 'test')).filter((f) => /-(census|guard)\.test\.tsx?$/.test(f));
+    expect(names.length).toBeGreaterThan(0);
+    for (const f of names) expect(always, f).toContain(`test/${f}`);
+  });
+
+  // An independent census: a test that CALLS an fs read, however it got fs, must be in the set, so a new way of
+  // reaching node:fs that the import scan misses goes red here instead of silently skipping on a pull request.
+  it('census: every pwa test file that calls an fs read is in the set', () => {
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) return e.name === 'node_modules' ? [] : walk(p);
+      return /\.test\.tsx?$/.test(e.name) ? [p] : [];
+    });
+    const pwa = path.join(ROOT, 'pwa');
+    const missing = [path.join(pwa, 'test'), path.join(pwa, 'src')].flatMap(walk)
+      .filter((p) => /\b(readFileSync|readdirSync|readFile|readdir|existsSync|statSync|lstatSync|opendirSync|globSync|createReadStream)\s*\(/.test(readFileSync(p, 'utf8')))
+      .map((p) => path.relative(pwa, p).split(path.sep).join('/'))
+      .filter((f) => !always.includes(f));
+    expect(missing).toEqual([]);
+  });
+
+  it('every path is a plain pwa-relative test path the shell can pass as one argument', () => {
+    expect(always.length).toBeGreaterThan(50);
+    for (const f of always) expect(f).toMatch(/^(test|src)\/[A-Za-z0-9._/-]+\.test\.tsx?$/);
   });
 });
 
@@ -99,6 +156,21 @@ describe('reach.mjs CLI', () => {
     for (const event of ['merge_group', 'schedule', 'workflow_dispatch', 'workflow_call', 'push', '']) {
       expect(run(['--pkg', 'agent', '--event', event], changed).skip, event).toBe('false');
     }
+  });
+
+  it('a `changed` pwa scope writes the always-run list to the output', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-reach-'));
+    const list = path.join(dir, 'changed.txt');
+    const out = path.join(dir, 'output.txt');
+    writeFileSync(list, 'pwa/src/a.ts\n');
+    writeFileSync(out, '');
+    execFileSync('node', [REACH, '--pkg', 'pwa', '--event', 'pull_request', '--changed-file', list], {
+      cwd: ROOT, env: { ...process.env, GITHUB_OUTPUT: out }, encoding: 'utf8',
+    });
+    const text = readFileSync(out, 'utf8');
+    expect(text).toMatch(/^scope=changed$/m);
+    const always = /^always=(.*)$/m.exec(text)?.[1]?.split(' ') ?? [];
+    expect(always).toContain('test/css-vars.test.ts');
   });
 
   it('the full-ci label forces the tests on a pull request', () => {

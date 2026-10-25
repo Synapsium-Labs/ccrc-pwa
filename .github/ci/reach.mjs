@@ -19,7 +19,8 @@
 // both for the server suite; this module repeats the label and the `.github/`
 // rule, which falls out of `.github/` being foreign to nobody).
 
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
+import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
@@ -59,15 +60,17 @@ export function skipsTests(pkg, changed) {
 
 /**
  * Paths whose effect on the pwa tests vitest can follow through imports, so
- * `vitest --changed` selects them exactly. Anything else (docs/, a fixture read
- * with fs, package files, vite and vitest configs, the root) is reached some
- * other way and runs every pwa test.
+ * `vitest --changed` selects them exactly: TypeScript (and the .mjs/.mts of
+ * shared/) only. Anything else — a stylesheet, JSON, an asset or a font under
+ * pwa/src or ui/src, docs/, a fixture read with fs, package files, vite and
+ * vitest configs, the root — is reached some other way (many pwa suites read
+ * the CSS and the source tree with node:fs) and runs every pwa test.
  */
-const IMPORTABLE = [/^pwa\/src\//, /^ui\/src\//, /^shared\//, /^pwa\/test\/[^/]+\.(?:ts|tsx|mts)$/];
+const IMPORTABLE = [/^pwa\/src\/.+\.tsx?$/, /^ui\/src\/.+\.tsx?$/, /^shared\/.+\.(?:ts|tsx|mts|mjs)$/, /^pwa\/test\/[^/]+\.(?:ts|tsx|mts)$/];
 
 /**
  * How much of a package's tests a pull request runs: `skip` (none), `changed`
- * (only the tests vitest relates to the change, plus the always-run guards) or
+ * (only the tests vitest relates to the change, plus `alwaysRunPwaTests`) or
  * `all`. Only the pwa shards have `changed`.
  * @param {string} pkg @param {string[]} changed @returns {'skip'|'changed'|'all'}
  */
@@ -80,6 +83,67 @@ export function scopeOf(pkg, changed) {
   const reads = READS.pwa;
   const isForeign = (/** @type {string} */ f) => foreign.some((p) => f.startsWith(p)) && !reads.some((r) => (r.endsWith('/') ? `${f}/`.startsWith(r) : f === r));
   return files.every((f) => isForeign(f) || IMPORTABLE.some((re) => re.test(f))) ? 'changed' : 'all';
+}
+
+/** A string literal naming node:fs (`'fs'`, `'node:fs'`, `'node:fs/promises'`), in any import form. */
+const FS_MODULE = /['"`](?:node:)?fs(?:\/promises)?['"`]/;
+/** A relative module specifier in an import, a re-export, a dynamic import or a require. */
+const RELATIVE_IMPORT = /(?:\bfrom|\bimport|\bimport\s*\(|\brequire\s*\()\s*['"](\.{1,2}\/[^'"]+)['"]/g;
+const RESOLVE_EXT = ['', '.ts', '.tsx', '.mts', '.mjs', '.js', '/index.ts', '/index.tsx'];
+
+/**
+ * The pwa test files a `changed` pull request runs whatever it changed: every
+ * test that can read the tree from disk, because `vitest --changed` follows
+ * imports and a suite that scans pwa/src or ui/src with node:fs (css-vars,
+ * contrast, the boundary and census suites, ...) imports none of what it reads.
+ * DERIVED, not listed: a test is in the set when it, or a pwa/test helper it
+ * imports (transitively: sourceScan.ts, literalWalker.ts, ...), names node:fs.
+ * That is a superset of "reads src/" on purpose — it costs a few suites that
+ * only read fixtures, and it cannot miss one that reads the source through a
+ * helper. Every census and guard suite rides along by name. Paths are
+ * pwa-relative (`test/css-vars.test.ts`), sorted. A census in
+ * server/test/ci-reach.test.ts pins it from the other side: a pwa test that
+ * calls an fs read must be in this set.
+ * @param {string} root the repository root
+ * @returns {string[]}
+ */
+export function alwaysRunPwaTests(root) {
+  const pwa = path.join(root, 'pwa');
+  /** @type {Map<string, boolean>} */
+  const memo = new Map();
+  const usesFs = (/** @type {string} */ file) => {
+    if (memo.has(file)) return /** @type {boolean} */ (memo.get(file));
+    memo.set(file, false); // a cycle reads as "no" until proven otherwise
+    let text = '';
+    try { text = readFileSync(file, 'utf8'); } catch { return false; }
+    let yes = FS_MODULE.test(text);
+    if (!yes) {
+      for (const m of text.matchAll(RELATIVE_IMPORT)) {
+        const spec = m[1].replace(/\.js$/, '');
+        const base = path.resolve(path.dirname(file), spec);
+        // Only the pwa test tree's own helpers: a pwa/src or shared/ module that names fs does so for the server
+        // side (shared/api.ts), and a change to it is an import vitest follows.
+        if (!base.startsWith(path.join(pwa, 'test') + path.sep) || base.includes(`${path.sep}node_modules${path.sep}`)) continue;
+        const hit = RESOLVE_EXT.map((e) => base + e).find((c) => existsSync(c) && statSync(c).isFile());
+        if (hit && /\.(?:ts|tsx|mts|mjs|js)$/.test(hit) && usesFs(hit)) { yes = true; break; }
+      }
+    }
+    memo.set(file, yes);
+    return yes;
+  };
+  /** @param {string} dir @returns {string[]} */
+  const walk = (dir) => {
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) return e.name === 'node_modules' || e.name === 'dist' ? [] : walk(p);
+      return /\.test\.tsx?$/.test(e.name) ? [p] : [];
+    });
+  };
+  return [path.join(pwa, 'test'), path.join(pwa, 'src')].flatMap(walk)
+    .filter((f) => /-(?:census|guard)\.test\.tsx?$/.test(f) || usesFs(f))
+    .map((f) => path.relative(pwa, f).split(path.sep).join('/'))
+    .sort();
 }
 
 function parseArgs(argv) {
@@ -110,8 +174,22 @@ function main() {
   } else if (opt['full-label'] === 'true') {
     why = 'the full-ci label asks for every test';
   }
+  // A `changed` pwa run also runs the suites that read the tree from disk (alwaysRunPwaTests): they ride every
+  // shard, sharded with the rest. Unreadable: fall back to everything, the safe direction.
+  let always = '';
+  if (scope === 'changed') {
+    try {
+      always = alwaysRunPwaTests(path.resolve(opt.repo ?? process.cwd())).join(' ');
+      if (!always) throw new Error('no pwa test reads from disk');
+      console.log(`${opt.pkg}: ${always.split(' ').length} test file(s) that read the tree from disk run whatever changed`);
+    } catch (e) {
+      console.log(`::warning::could not list the pwa tests that read from disk (${e instanceof Error ? e.message : e}); running every pwa test`);
+      scope = 'all';
+      always = '';
+    }
+  }
   console.log(`${opt.pkg}: ${skip ? 'tests skipped' : `tests run (${scope})`} — ${why}`);
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `skip=${skip}\nscope=${scope}\n`);
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `skip=${skip}\nscope=${scope}\nalways=${always}\n`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
