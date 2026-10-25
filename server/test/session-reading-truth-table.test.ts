@@ -3,15 +3,19 @@
 // ladder (`measureClaimant`, the destructive callers' fail-shut reading) BEFORE `readSession`
 // existed; the pure function now answers the same rows, `measureClaimant` is its fail-shut
 // policy, and `ccd-tmp-sweep`'s box-side predicate (it runs without the server, so it stays) is
-// held to the same rows: it protects exactly `alive` and `asleep`.
-import { describe, it, expect } from 'vitest';
+// run on the same rows (it protects what the table does not call `dead`, except on the rows the test names).
+import { describe, it, expect, afterEach } from 'vitest';
 import path from 'node:path';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { measureClaimant, type ReclaimDeps } from '../src/coord/reclaim.js';
 import { readSession, type Presence, type SessionFacts } from '../src/sessionReading.js';
-import { readFileSync } from 'node:fs';
+import fs from 'node:fs';
+import os from 'node:os';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { fakeDf } from './tmpSweepHelpers.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import type { SessionVerdict } from '../src/exec.js';
 import { testDeps } from './helpers.js';
@@ -97,7 +101,9 @@ describe('the same rows through readSession (the pure function over facts)', () 
       const r = readSession(row.facts);
       expect(r.presence).toBe(row.presence);
       // The destructive callers' fail-shut policy over the reading: doubt is never dead, asleep is alive.
-      const state = r.presence === 'dead' ? 'dead' : r.presence === 'unknown' ? 'unmeasurable' : 'alive';
+      // The one doubt it answers alive is a lifecycle it could not measure behind a gone pane (D-1140).
+      const state = r.presence === 'dead' ? 'dead'
+        : r.presence === 'unknown' && r.why !== 'lifecycleDoubt' ? 'unmeasurable' : 'alive';
       expect(state).toBe(row.state);
       if (row.cause !== undefined) expect(r.deadCause).toBe(row.cause);
       else expect(r.deadCause).toBeNull();
@@ -119,10 +125,11 @@ describe('the same rows through readSession (the pure function over facts)', () 
     }
   });
 
-  it('a gone pane over a lifecycle that could not be measured is alive, never dead (D-1140)', () => {
+  it('a gone pane over a lifecycle that could not be measured reads unknown, and the door treats it as alive (D-1140)', () => {
     for (const lifecycle of ['unmeasurable', null] as const) {
       const r = readSession({ row: 'present', pane: 'gone', lifecycle, hibernatedAt: null, turn: null });
-      expect(r).toMatchObject({ presence: 'alive', why: 'lifecycleDoubt', deadCause: null });
+      // The reading is a doubt, not an answer: display readers get `unknown`; the destructive door maps it to alive.
+      expect(r).toMatchObject({ presence: 'unknown', why: 'lifecycleDoubt', deadCause: null });
     }
   });
 
@@ -150,16 +157,90 @@ describe('the same rows through readSession (the pure function over facts)', () 
   });
 });
 
-describe('ccd-tmp-sweep keeps its box-side twin of the table', () => {
-  // The sweep runs without the server and cannot import `readSession`, so a drift is made visible here: it protects a
-  // session's paths while the session is alive, and while it is asleep (a hibernated session is live to it though no
-  // process runs it), and nothing else.
-  const sweep = readFileSync(path.join(__dirname, '../../ccd/ccd-tmp-sweep'), 'utf8');
-  it('names hibernated sessions as live, as the table\'s asleep rows do', () => {
-    expect(sweep).toContain('A HIBERNATED session is live too, though no process runs it');
+// ccd-tmp-sweep runs on the box without the server, so it cannot import `readSession` and keeps its own predicate. The
+// table makes a drift visible by RUNNING that predicate on the same rows: each row below is seeded into a fixture HOME,
+// the real script sweeps a ten-day-old temp directory of that session's uuid, and the directory's survival is the
+// sweep's answer. The sweep protects a session when a process publishes its uuid (alive) or when the registry row has a
+// `.hibernated` file (asleep, or anything else with that file); it knows no other word. Where that differs from the
+// row's presence the row says so in `differs`, and the test holds the difference to exactly those rows: a change to the
+// sweep's predicate, or to a row's presence, must be re-recorded here.
+describe.skipIf(process.platform !== 'linux')('ccd-tmp-sweep, driven on the table\'s rows (its box-side twin)', () => {
+  const SWEEP = path.resolve(__dirname, '../../ccd/ccd-tmp-sweep');
+  const TAG = `fakeclaude-${randomBytes(4).toString('hex')}`;
+  const SID = '11111111-1111-4111-8111-111111111111';
+  const PROJ = '-home-fixture-worktrees-demo';
+  const OLD = new Date(Date.now() - 10 * 86_400_000);
+  let procs: ChildProcess[] = [];
+  afterEach(() => {
+    for (const p of procs) { try { process.kill(-p.pid!, 'SIGKILL'); } catch { /* already gone */ } }
+    procs = [];
   });
-  it('the table has the asleep row and the doubt rows the sweep must not read as dead', () => {
-    expect(ROWS.some((r) => r.presence === 'asleep')).toBe(true);
-    expect(ROWS.filter((r) => r.presence === 'unknown').length).toBeGreaterThan(0);
-  });
+
+  /** What the sweep does per row: does it protect the session's temp directory, with a live process publishing the uuid
+   *  or not. `differs` names the rows where that is not what the presence says. `null`: the sweep has no such input. */
+  interface SweepRow { protectedDir: boolean; proc?: true; differs?: string }
+  const SWEEP_ROWS: Record<string, SweepRow | null> = {
+    'the registry directory will not list': null,
+    'an id that is not a registry id': null,
+    'no row in a directory that listed cleanly': { protectedDir: false },
+    'listed but unassembled (a coordinator mid-write, D-1144)': { protectedDir: false, differs: 'doubt is unknown to the table, an unprotected dir to the sweep (no process, no hibernated file)' },
+    'a live pane outranks a stop stamp': { protectedDir: true, proc: true },
+    'tmux did not answer': { protectedDir: false, differs: 'the sweep asks processes, not tmux: no process publishing the uuid is an unprotected dir' },
+    'gone + a stop stamp': { protectedDir: false },
+    'gone + a stop stamp + hibernated (asleep, not dead)': { protectedDir: true },
+    'gone + a long-gone heartbeat, stale hibernated stamp': { protectedDir: true, differs: 'the sweep protects every row with a .hibernated file, whatever its lifecycle; the table reads this one as dead (orphan)' },
+    'gone + a row that never started': { protectedDir: false },
+    'gone + a fresh supervisor heartbeat (restarting)': { protectedDir: false, differs: 'a restarting session has no process yet; the sweep does not look at heartbeats' },
+  };
+
+  const age = (p: string): void => {
+    const st = fs.lstatSync(p);
+    if (st.isDirectory()) for (const e of fs.readdirSync(p)) age(path.join(p, e));
+    fs.utimesSync(p, OLD, OLD);
+  };
+  const sweepsAndKeeps = (row: Row, o: SweepRow): boolean => {
+    const base = mkTmp('ccrc-truth-sweep-');
+    const home = path.join(base, 'home');
+    const root = path.join(base, 'claude-9999');
+    fs.mkdirSync(path.join(home, '.claude', 'sessions'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    row.seed(home);
+    // The seeded rows carry a placeholder uuid; the sweep reads a real one.
+    const uuidFile = path.join(home, '.cc-sessions', `${ID}.uuid`);
+    if (fs.existsSync(uuidFile)) fs.writeFileSync(uuidFile, `${SID}\n`);
+    const dir = path.join(root, PROJ, SID, 'scratchpad');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'work.txt'), 'x\n');
+    age(path.join(root, PROJ)); fs.utimesSync(root, OLD, OLD);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env, HOME: home, CCD_TMP_SWEEP_ROOT: root, CCD_TMP_SWEEP_CLAUDE_RE: `/${TAG}$`,
+      TMPDIR: fs.realpathSync(os.tmpdir()), CCD_TMP_SWEEP_DF: fakeDf(base),
+    };
+    delete env['FAKE_DF_PCT']; delete env['CCD_TMP_SWEEP_MAX_AGE_DAYS'];
+    if (o.proc === true) {
+      const p = spawn('bash', ['-c', `exec -a /opt/${TAG} bash -c 'sleep 60; :'`], { cwd: home, env, stdio: 'ignore', detached: true });
+      procs.push(p);
+      const cmdline = (): string => { try { return fs.readFileSync(`/proc/${p.pid}/cmdline`, 'utf8'); } catch { return ''; } };
+      for (let i = 0; i < 200 && !cmdline().startsWith(`/opt/${TAG}`); i += 1) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      fs.writeFileSync(path.join(home, '.claude', 'sessions', `${p.pid}.json`),
+        JSON.stringify({ pid: p.pid, sessionId: SID, cwd: '/home/fixture' }, null, 2));
+    }
+    const r = spawnSync('bash', [SWEEP], { encoding: 'utf8', env });
+    expect(r.status, r.stderr).toBe(0);
+    return fs.existsSync(dir);
+  };
+
+  for (const row of ROWS) {
+    const o = SWEEP_ROWS[row.name];
+    if (o === undefined) throw new Error(`the table has a row the sweep twin does not name: ${row.name}`);
+    if (o === null) continue;
+    it(`${row.name}: the sweep ${o.protectedDir ? 'protects' : 'removes'} the dir${o.differs ? ' (a known difference)' : ''}`, () => {
+      const kept = sweepsAndKeeps(row, o);
+      expect(kept).toBe(o.protectedDir);
+      // Doubt is never dead, so a fail-shut reader protects everything the table does not call dead; the sweep does so
+      // except on the rows that say otherwise.
+      const tableProtects = row.presence !== 'dead';
+      expect(kept === tableProtects, o.differs ?? 'agrees with the table').toBe(o.differs === undefined);
+    });
+  }
 });

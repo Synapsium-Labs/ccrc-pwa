@@ -6,8 +6,10 @@
 // is shared, never the reading. It imports L0 alone.
 //
 // THE LIVENESS TRUTH TABLE lives in `test/session-reading-truth-table.test.ts`: one row per input, the same rows driven
-// through this function, through `measureClaimant` and against `ccd-tmp-sweep`'s box-side predicate, which stays (it
-// runs without the server) and whose protected set the table holds equal to `alive` and `asleep`. The other readers of
+// through this function, through `measureClaimant` and through the real `ccd-tmp-sweep` on fixture HOMEs. The sweep's box-side predicate stays
+// (it runs without the server); the table records, row by row, whether it protects the session's temp directory, and
+// names the rows where that differs from `presence` (it protects any row with a `.hibernated` file, whatever its
+// lifecycle, and it knows no heartbeat or tmux). The other readers of
 // the old ladders (`liveStatus`, the fleet frame, `liveRowFor`, `resolve`, `claimProbe`, the dead-coordinator
 // predicate) are pinned on the same rows in `test/session-ladders-characterization.test.ts`.
 //
@@ -21,8 +23,9 @@
 // DOUBT IS NEVER DEAD. Only a proven absence (`absent`) and a lifecycle `lifecycleIsDead` names are `dead`; a listed
 // row that could not be assembled, an unlistable registry, an id that is not a registry id and a tmux that did not
 // answer are `unknown`. A hibernated session whose pane is gone is `asleep`, not dead (D-5242). A lifecycle that reads
-// `unmeasurable` with the pane gone is answered `alive`, on purpose and as the destructive ladder always has (D-1140):
-// the word is a doubt, and the caller that acts on `dead` must be refused.
+// `unmeasurable` with the pane gone is `unknown` too, `why: 'lifecycleDoubt'`. The destructive door answers that one
+// doubt `alive` (D-1140, in `measureClaimant`'s switch on `why`): fail-shut is that caller's policy, not the reading's,
+// so a display reader of `presence` sees the doubt as a doubt.
 import { lifecycleIsDead, type SessionLifecycle } from '../../shared/api.js';
 
 /** What the registry said about the one id: `SingleRead`'s kinds, with `found` spelled `present`. */
@@ -113,7 +116,7 @@ function presenceOf(f: SessionFacts): Verdict {
   if (f.pane === 'unknown' || f.pane === null) return { presence: 'unknown', why: 'paneUnknown', substrate: 'unmeasurable' };
   const lc = f.lifecycle;
   if (lc === 'stopped' && f.hibernatedAt !== null) return { presence: 'asleep', why: 'hibernated', substrate: 'absent', asleep: true };
-  if (lc === null || lc === 'unmeasurable') return { presence: 'alive', why: 'lifecycleDoubt', substrate: 'absent' };
+  if (lc === null || lc === 'unmeasurable') return { presence: 'unknown', why: 'lifecycleDoubt', substrate: 'absent' };
   if (lifecycleIsDead(lc)) return { presence: 'dead', why: 'lifecycleDead', substrate: 'absent', deadCause: lc as DeadCause };
   return { presence: 'alive', why: 'lifecycleAlive', substrate: 'absent' };
 }
