@@ -60,7 +60,8 @@ function ChatItemBody({
   onRetry?: (key: string) => void;
   onDiscard?: (key: string) => void;
   askPending?: boolean;
-  /** D-6326: an inline ask surface is mounted below the transcript (the desk), so a live ask card points at it. */
+  /** D-6326: an inline ask surface is mounted below the transcript (the desk), so a live ask card points at it. It also holds a
+   *  failed bubble's Retry (R89, passed to `PendingBubble` as `sendHeld`): Retry is a send, deferred while the card is up. */
   askBelow?: boolean;
   /** The transcript's Answer control's word (decision `ask-answer-control-says-submit`). */
   answerLabel?: string;
@@ -154,7 +155,8 @@ export interface ChatListProps {
    *  two sources the ask card's state axis is derived from; the other is the
    *  card's own `tool_result`. */
   askPending?: boolean;
-  /** D-6326: the inline ask surface is mounted (the desk): a live ask card says where it is instead of offering Answer. */
+  /** D-6326: the inline ask surface is mounted (the desk): a live ask card says where it is instead of offering Answer. It also
+   *  holds a failed bubble's Retry (R89, `PendingBubble`'s `sendHeld`): Retry is a send, deferred while the card is up. */
   askBelow?: boolean;
   /** The transcript's Answer control's word (decision `ask-answer-control-says-submit`). */
   answerLabel?: string;
