@@ -6,7 +6,7 @@
  *  from defining anything. */
 const DEF = /(?:\/\/|#|\*|<!--)\s*@anchor\s+([A-Za-z0-9_-]+)\s*(?:-->)?\s*$/;
 /** A citation: a path with an extension (or the extensionless `ccd/…` executables), `#@`, a name. */
-const CITE = /((?:[A-Za-z0-9_.-]+\/)*(?:[A-Za-z0-9_-]+\.[A-Za-z0-9]+|ccd\/[A-Za-z0-9_-]+))#@([A-Za-z0-9_-]+)/g;
+const CITE = /(?<![\w./-])((?:[A-Za-z0-9_.-]+\/)*(?:[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.[A-Za-z0-9]+|ccd\/[A-Za-z0-9_-]+))#@([A-Za-z0-9_-]+)/g;
 
 /** The anchor names a text defines, in order, duplicates kept. */
 export const anchorDefs = (text: string): string[] => {

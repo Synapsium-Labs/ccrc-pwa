@@ -78,6 +78,22 @@ describe('anchor resolver', () => {
     expect(anchorCites('`a/b.ts#@x-1` and ccd/ccd#@y_2, foo.ts#symbol, bar.ts#@')).toEqual([
       { file: 'a/b.ts', name: 'x-1' }, { file: 'ccd/ccd', name: 'y_2' }]);
   });
+
+  it('a file name with more than one dot is cited whole (test, config, data and d.ts files)', () => {
+    expect(anchorCites('`server/test/a.test.ts#@x` `server/vitest.config.ts#@y` `pwa/src/b.d.ts#@z`')).toEqual([
+      { file: 'server/test/a.test.ts', name: 'x' }, { file: 'server/vitest.config.ts', name: 'y' },
+      { file: 'pwa/src/b.d.ts', name: 'z' }]);
+    // A longer path that merely ends the same way is not a left-truncated citation.
+    expect(anchorCites('xserver/a.ts#@q')).toEqual([{ file: 'xserver/a.ts', name: 'q' }]);
+  });
+
+  it('a cited anchor in a .test.ts file passes the census, a missing one is dangling', () => {
+    const files = new Map([
+      ['server/test/a.test.ts', file('row')],
+      ['README.md', '`server/test/a.test.ts#@row` and `server/test/a.test.ts#@gone`\n'],
+    ]);
+    expect(anchorProblems(files)).toEqual(['README.md: dangling citation server/test/a.test.ts#@gone']);
+  });
 });
 
 describe('anchor census over the tree', () => {
