@@ -316,7 +316,7 @@ function addedInlineSends(diff: string, textOf: (rel: string) => string | null):
     const text = textOf(file.slice('server/src/'.length));
     if (text === null) continue;
     for (const s of refusalSends(text)) {
-      if (s.status !== null && lines.has(s.line)) out.push(`${file}:${s.line}: .code(${s.arg})`);
+      if (s.status !== null && lines.has(s.line)) out.push(`${file} line ${s.line}: .code(${s.arg})`);
     }
   }
   return out;
@@ -354,7 +354,7 @@ describe('the inline-send ratchet (D-5381) — ceilings, and none added', () => 
   it('a fixture diff that adds one literal-status refusal send fails the added-lines rule', () => {
     const text = ['const a = 1;', "reply.code(409).send({ ok: false, error: 'gone' });", 'const b = 2;'].join('\n');
     const diff = ['--- a/server/src/x.ts', '+++ b/server/src/x.ts', '@@ -1,0 +2 @@', "+reply.code(409).send({ ok: false, error: 'gone' });"].join('\n');
-    expect(addedInlineSends(diff, () => text)).toEqual(['server/src/x.ts:2: .code(409)']);
+    expect(addedInlineSends(diff, () => text)).toEqual(['server/src/x.ts line 2: .code(409)']);
     // The same send already on the base side (the diff touches another line) is slack, not an addition.
     const other = ['--- a/server/src/x.ts', '+++ b/server/src/x.ts', '@@ -3 +3 @@', '+const b = 2;'].join('\n');
     expect(addedInlineSends(other, () => text)).toEqual([]);
