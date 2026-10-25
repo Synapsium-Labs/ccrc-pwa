@@ -86,6 +86,27 @@ describe('the readers take the worker\'s incarnation (ARCH-62)', () => {
     const verdict = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: a } as never, [], BORN + 5000);
     expect(verdict).toMatchObject({ kind: 'released', runId: a });
   });
+
+  it('heldFor keeps the hold for a pre-planned wave 2 bound without a birth, once wave 1 (the mark) closed', async () => {
+    const s = store();
+    const w1 = open(s, 'prog-a', 'coord-1');
+    const w2 = open(s, 'prog-b', 'coord-1');
+    s.db.prepare('UPDATE runs SET openedAt = ? WHERE id IN (?, ?)').run(BORN - 1000, w1, w2);
+    s.setSession(w1, 'demo-w', BORN);
+    s.setSession(w2, 'demo-w');
+    s.db.prepare('UPDATE runs SET dispatchStartedAt = ?, coordProject = ? WHERE id = ?').run(BORN, 'p', w1);
+    finish(s, w1);
+    const verdict = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: w1 } as never, [], BORN + 5000);
+    expect(verdict).toMatchObject({ kind: 'released', runId: w1 });
+    expect(verdict).not.toEqual({ kind: 'not-a-child' });
+    // The undecided run of ANOTHER claimant stays no parent.
+    const g = open(s, 'prog-g', 'coord-ghost');
+    s.setSession(g, 'demo-w');
+    s.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(BORN - 1000, g);
+    finish(s, w2);
+    const after = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: w1 } as never, [], BORN + 5000);
+    expect(after).toEqual({ kind: 'not-a-child' });
+  });
 });
 
 describe('the drift lane reads the worker\'s parent through its incarnation (ARCH-62)', () => {

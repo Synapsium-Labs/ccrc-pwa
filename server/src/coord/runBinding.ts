@@ -110,6 +110,16 @@ export function bindingOf(runs: readonly BindingRun[], incarnation: Incarnation)
 /** The worker's parent: the claimant of its open binding, `null` when it has none or the open run is ownerless. */
 export const parentOf = (binding: SessionBinding): string | null => binding.open?.claimedBy ?? null;
 
+/** `parentOf`, or else the claimant of an UNDECIDED open run that `minter` also claims: a run planned before the worker's
+ *  birth and then bound to it (the openRun dup arm, a wave N >= 2 run) is a real binding `bindsRun` cannot prove, and its
+ *  claimant is the minting run's own, so it cannot be a ghost of another programme. Undecided runs of other claimants stay
+ *  excluded (#746, D6 of D-5920). */
+export function parentOrMinter(binding: SessionBinding, minter: string | null): string | null {
+  const proven = parentOf(binding);
+  if (proven !== null || minter === null) return proven;
+  return binding.undecided.find((r) => isOpen(r) && r.claimedBy === minter)?.claimedBy ?? null;
+}
+
 /** EVERY coordinator that currently has this incarnation working for it, newest open run first, each once. */
 export function claimantsOf(runs: readonly BindingRun[], incarnation: Incarnation): string[] {
   const seen = new Set<string>();

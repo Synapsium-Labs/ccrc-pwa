@@ -1,43 +1,39 @@
 // ARCH-62 (#797), the counted exit: the store's session-keyed run readers are projections of ONE series read, decided
 // through `bindingOf`/`claimantsOf`/`boundRunsOf` (coord/runBinding.ts) by coord/bindingRows.ts. This is the pin: a new
 // reader of the run↔session link goes through `seriesRows`, or states why it is a different query here.
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
+// Keyed on symbols (scan/symbols.ts), not on text, so a method that moves keeps its pin.
 import { describe, expect, it } from 'vitest';
+import { callsIn, parsedFile, sqlStatementsIn, symbolOf } from './scan/symbols.js';
 
-const src = (rel: string): string => readFileSync(path.join(__dirname, '..', 'src', rel), 'utf8');
-const store = src('coord/store.ts');
-
-/** A method's text: its signature line to the first line that is a lone `  }`. */
-function method(name: string): string {
-  const at = store.search(new RegExp(`^  (?:private )?${name}\\(`, 'm'));
-  expect(at, `${name} is a CoordStore method`).toBeGreaterThanOrEqual(0);
-  return store.slice(at, store.indexOf('\n  }\n', at));
-}
+const STORE = 'server/src/coord/store.ts';
+const ROWS = 'server/src/coord/bindingRows.ts';
 
 // The readers of the link, and the one SQL reader they share. `runsTouching` is the routing door's OR walk and
 // `lastRunBySession` the last-closed query: different queries, kept (consolidation spec §3 K10).
 const PROJECTIONS = ['bindingRunsOf', 'parentOfSession', 'openClaimantsOf', 'openRunsForSession', 'openRunsClaimedBy',
-  'runsNamingSession'];
+  'runsNamingSession'].map((n) => `CoordStore.${n}`);
+const calls = (file: string, name: string): string[] => callsIn(symbolOf(file, name)).map((c) => c.callee);
+const callsSeries = (text: string): boolean => /\bseriesRows\b/.test(text);
 
 describe('the run↔session readers are projections of one series (ARCH-62)', () => {
   it('each projection reads through seriesRows and holds no SQL of its own', () => {
     for (const name of PROJECTIONS) {
-      const body = method(name);
-      expect(body, name).toMatch(/this\.seriesRows\(/);
-      expect(body, name).not.toMatch(/FROM runs|\.prepare\(/);
+      expect(calls(STORE, name).some(callsSeries), `${name} does not call seriesRows`).toBe(true);
+      expect(sqlStatementsIn(symbolOf(STORE, name)), `${name} holds SQL`).toEqual([]);
     }
   });
 
   it('seriesRows is called by those projections and by nothing else', () => {
-    const calls = [...store.matchAll(/this\.seriesRows\(/g)].length;
-    const inProjections = PROJECTIONS.reduce((n, name) => n + [...method(name).matchAll(/this\.seriesRows\(/g)].length, 0);
-    expect(calls).toBe(inProjections);
+    const file = parsedFile(STORE);
+    const all = file.calls.filter((c) => callsSeries(c.callee)).length;
+    const inProjections = PROJECTIONS.reduce((n, name) => n + calls(STORE, name).filter(callsSeries).length, 0);
+    expect(all).toBe(inProjections);
   });
 
   it('the projections decide through the binding, not an equality of their own', () => {
-    const rows = src('coord/bindingRows.ts');
-    for (const fn of ['bindingOf', 'claimantsOf', 'boundRunsOf']) expect(rows).toContain(fn);
-    expect(rows).not.toMatch(/\.sessionId\s*===|\.claimedBy\s*===/);
+    const decide = [['parentFromRows', 'bindingOf'], ['claimantsFromRows', 'claimantsOf'], ['boundRows', 'boundRunsOf']] as const;
+    for (const [fn, via] of decide) {
+      expect(calls(ROWS, fn).some((t) => new RegExp(`\\b${via}\\b`).test(t)), `${fn} does not call ${via}`).toBe(true);
+    }
   });
 });

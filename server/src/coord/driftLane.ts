@@ -17,7 +17,7 @@ import { deadCoordinatorLaneArmed } from './endDeadCoordinator.js';
 import { driftFindings, type DriftInput, type DriftWorkerRow } from './drift.js';
 import { chooseDriftPushes } from './driftPush.js';
 import { childBirthOf } from './childSpent.js';
-import { incarnationOf } from './runBinding.js';
+import { bindingOf, incarnationOf, parentOrMinter } from './runBinding.js';
 import type { CoordStore } from './store.js';
 
 /** The lane's two fixed notice tags: the summary push and the shadow notice. A tag names a ring row, never a
@@ -31,7 +31,7 @@ export function isDriftLaneTag(v: string): boolean {
 
 export interface DriftLaneDeps {
   readonly coord: Pick<CoordStore, 'driftOpenRuns' | 'driftOutstandingDeliveries' | 'driftAwaitingReview'
-    | 'driftHeldQuestions' | 'driftFindingRows' | 'driftStallToldRows' | 'driftPushesOnDay' | 'parentOfSession' | 'run'
+    | 'driftHeldQuestions' | 'driftFindingRows' | 'driftStallToldRows' | 'driftPushesOnDay' | 'parentOfSession' | 'bindingRunsOf' | 'run'
     | 'recordDriftPass' | 'markDriftPushed' | 'markDriftShadowed'>;
   /** The reclaim ladder's verdict for one claimant (`measureClaimant`, bound by the watcher): no second vocabulary. */
   readonly measure: (id: string, at: number) => Promise<ClaimantReading>;
@@ -86,8 +86,14 @@ async function pass(d: DriftLaneDeps, now: number): Promise<void> {
   for (const [sessionId, mark] of d.childMarks ?? []) {
     if (mark.kind !== 'child') continue;
     // The worker's incarnation, from the birth the run its mark names recorded: a reused name has no ghost parent (ARCH-62).
-    const incarnation = incarnationOf(sessionId, childBirthOf(d.coord.run(mark.runId), sessionId));
-    workers.push({ sessionId, markRunId: mark.runId, parentId: d.coord.parentOfSession(sessionId, incarnation),
+    const minting = d.coord.run(mark.runId);
+    const incarnation = incarnationOf(sessionId, childBirthOf(minting, sessionId));
+    let parentId = d.coord.parentOfSession(sessionId, incarnation);
+    if (parentId === null && minting.ok && minting.run !== null) {
+      const series = d.coord.bindingRunsOf(sessionId);
+      if (series.ok) parentId = parentOrMinter(bindingOf(series.runs, incarnation), minting.run.claimedBy);
+    }
+    workers.push({ sessionId, markRunId: mark.runId, parentId,
       runClaimedBy: claimedBy.get(mark.runId) ?? null });
   }
   const input: DriftInput = { runs: runs.rows, claimants, deliveries: deliveries.rows, reviews: reviews.rows,
