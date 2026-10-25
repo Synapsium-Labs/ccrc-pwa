@@ -480,6 +480,8 @@ const GATE_FILES = [
   'server.ts', 'registry.ts', 'watch.ts',
   'coord/routes.ts', 'coord/route.ts', 'coord/openRun.ts', 'coord/advance.ts', 'coord/dispatchDecide.ts', 'coord/closeDecide.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
   'coord/expireArchived.ts',
+  // orphanTreeLane.ts (D-6635): the orphan census's `inside` id is vetted by the predicate before the lane reads that row.
+  'orphanTreeLane.ts',
 ] as const;
 
 const IMPORTS_PREDICATE = /import\s*\{[^}]*\bisRegistryId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/;
