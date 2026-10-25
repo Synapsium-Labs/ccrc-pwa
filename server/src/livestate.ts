@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FleetIO } from './io.js';
 import type { SessionStatus } from '../../shared/api.js';
+import { turnSays, turnWordOf } from './sessionReading.js';
 import { CLAUDE_MIN_BUILD, compareClaudeVersions, isClaudeVersion } from '../../shared/claudeVersion.js';
 
 export interface LiveState {
@@ -61,7 +62,7 @@ export interface LiveState {
  * A status we don't recognise is far likelier to be new work than new rest.
  */
 export function liveSessionStatus(status: string): SessionStatus {
-  return status === 'idle' ? 'idle' : 'busy';
+  return turnSays('keystroke', turnWordOf(status)) === 'rest' ? 'idle' : 'busy';
 }
 
 /**

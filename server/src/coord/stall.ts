@@ -1,6 +1,7 @@
 import { ACTIVE_RUN_STATES, MAIL_REPLAY_MS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT, isRunState, isSessionLifecycle, lifecycleIsDead } from '../../../shared/api.js';
 import type { MailGate, RunState } from '../../../shared/api.js';
 import type { MailTurnMode } from '../turnidle.js';
+import { turnSays, turnWordOf } from '../sessionReading.js';
 /**
  * The worker stall watch's pure half (design 2026-09-29 §4.2, wave 1). L1: clock-free, fs-free, fastify-free and
  * store-free. `stall-vocabulary.test.ts` pins that, and the coord-ring scan in `single-definition.test.ts` forbids
@@ -660,7 +661,7 @@ function isWatchNotice(m: StallMailRow): boolean {
 }
 
 function isIdleWord(word: string): boolean {
-  return word === 'idle' || word === 'shell';
+  return turnSays('stall-watch', turnWordOf(word)) === 'rest';
 }
 
 /** Whose turn it is, read from the newest mail between the worker and anyone but the watch (spec §4.2).
