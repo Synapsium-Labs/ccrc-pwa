@@ -6253,6 +6253,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **The orphan-tree lane's memory** cleared again at the 21:33:40 boot. The lane wrote no record in the hour.
   `STATUS 2026-10-25T22:25:45Z fleet=v0.0.702 server=v0.0.702 health=v0.0.702 newest=v0.0.704 intent=*:dev/auto=off`
   `pin=None link=<versions>/v0.0.702 backups=fleet:165M/server:9341M disk=fleet:98G/work:413G/server:21G`
+- **2026-10-25 23:25 UTC — v0.0.705 to v0.0.709 released; no move; no anomaly.**
+  - **The releases.** Among them, #1390 moves the disk-retention sweeps out of `watch.ts` and gives the orphan-tree lane
+    its own lane-schedule row, and #1525 stamps the installed ccd at install time.
+  - **The soak.** All five are daily-only by the 9472 rule. The session hook's one change is the text of a nudge, with no
+    exit and nowhere near the spool, and the divergences row is untouched.
+  `STATUS 2026-10-25T23:25:42Z fleet=v0.0.702 server=v0.0.702 health=v0.0.702 newest=v0.0.709 intent=*:dev/auto=off`
+  `pin=None link=<versions>/v0.0.702 backups=fleet:165M/server:9341M disk=fleet:98G/work:424G/server:21G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
