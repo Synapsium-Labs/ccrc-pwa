@@ -2007,10 +2007,11 @@ button.metachip:active {
   color: var(--ink-primary);
   overflow-wrap: anywhere;
 }
-/* Send held while a question is up (Composer's `askUp`): the refusal's own sentence, under the field. The page ground the
-   composer sits on is restated, as `.composer-hints` does, so the contrast gate measures the pair. */
+/* Send held while a question is up (Composer's `askUp`): the refusal's own sentence, ABOVE the field (R93), so the field
+   does not move when it appears: the gap is below the sentence. The page ground the composer sits on is restated, as
+   `.composer-hints` does, so the contrast gate measures the pair. */
 .composer-refusal {
-  margin: var(--sp-2) 0 0;
+  margin: 0 0 var(--sp-2);
   font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
   color: var(--ink-secondary);
   background: var(--bg-page);

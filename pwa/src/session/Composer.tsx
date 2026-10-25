@@ -37,7 +37,7 @@ export interface ComposerProps {
    *  W2 changes no wire (D-5471), so the type admits no new source. */
   onInterrupt?: (source: 'keycap') => void;
   /** D-6326: an inline ask card is mounted, so Send is deferred LOCALLY for as long as it is: the button is DISABLED
-   *  before any click, the `dialog-open` sentence shows under the field the whole time (with a draft or without one), and
+   *  before any click, the `dialog-open` sentence shows ABOVE the field (R93) the whole time (with a draft or without one), and
    *  the text stays in the field. `send()`'s own guard is defence behind that, because Enter in the field calls it
    *  directly: it makes no request either. This is the client's own rule, not the server's predicate: the server refuses
    *  with `dialog-open` only while the pane has a menu, so an approval with no pane menu (fixture 7) would not be refused
@@ -171,7 +171,7 @@ export function Composer({
     if (!canSend) return;
     // A local deferral while the inline card is mounted, whatever the server would say about the pane: no request is made
     // and the text stays in the field. The Send button is disabled for the same reason (R77 F1), so this guard is the
-    // defence for Enter, which calls `send()` directly. The sentence under the field is the surface's own and shows
+    // defence for Enter, which calls `send()` directly. The sentence above the field (R93) is the surface's own and shows
     // while the card is up, not after a try.
     if (askUp) return;
     const text = value.trim();
@@ -323,6 +323,11 @@ export function Composer({
         </ul>
       )}
       <AttachTray images={staged.images} onRemove={staged.remove} onRetry={staged.retry} />
+      {/* ABOVE the field (R93): the composer is at the foot of the pane, so a line here grows it upward and the field,
+          Send and Stop stay where they were; below the field the same line pushed them up by its own height. */}
+      {askUp && (
+        <p className="composer-refusal" role="status">{sendErrorText('dialog-open')}</p>
+      )}
       <div className="inputbar">
         <span className="prompt-glyph" aria-hidden="true">
           ❯
@@ -370,10 +375,6 @@ export function Composer({
           </>
         )}
       </div>
-
-      {askUp && (
-        <p className="composer-refusal" role="status">{sendErrorText('dialog-open')}</p>
-      )}
 
       {keyHints && (
         <>
