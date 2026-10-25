@@ -16,6 +16,8 @@
 // missing `[data-ask-surface]` or on the behaviour that follows from its absence (a key on the page answering, an
 // arriving ask taking focus, Send making its request); the regression pins (a busy turn still interrupts with no ask up;
 // the phone halves) pass today and keep passing.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
@@ -1145,6 +1147,30 @@ describe('the own-words field takes focus only on a deliberate open inside the c
     await frame();
     expect(within(dialogs()[0]!).getByText(QUESTION), 'premise: question 1 is back in the Sheet').toBeInTheDocument();
     expect(document.activeElement, 'the Sheet\'s rule focuses the field').toBe(field());
+  });
+});
+
+// R102: "no automatic focus in the card" holds only while no code in the ask files assigns focus except the sites that were
+// reviewed. This is the census of those sites, a text scan with comments removed: a new `.focus(` (or an `autoFocus`) in any of
+// the five files is red until it is reviewed against the release and the fence and added here.
+describe('every focus mover in the ask files is a reviewed one (R102)', () => {
+  const SESSION_DIR = path.join(import.meta.dirname, '..', 'src', 'session');
+  const stripped = (file: string): string =>
+    readFileSync(path.join(SESSION_DIR, file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const movers = (file: string): string[] => [...stripped(file).matchAll(/([\w.?()]*)\.focus\(/g)].map((m) => `${m[1]}.focus(`);
+
+  it.each([
+    // `focusRow` (a handled key) and the screen-change effect (its timer re-reads `engaged()`, false after the release).
+    ['useAskKeys.ts', ['els.current.get(key)?.focus(', 'els.current.get(key)?.focus(']],
+    // The own-words effect (a deliberate open inline, a `chosen` change in the Sheet) and the row's click.
+    ['AskParts.tsx', ['field.current?.focus(', 'field.current?.focus(']],
+    // The raise (Go to question, deliberate by the operator).
+    ['AskSurface.tsx', ['first.focus(']],
+    ['DialogSheet.tsx', []],
+    ['EnvelopeSheet.tsx', []],
+  ] as const)('%s: the focus call sites are exactly the reviewed ones', (file, expected) => {
+    expect(movers(file)).toEqual(expected);
+    expect(stripped(file), `${file}: no autoFocus`).not.toMatch(/autoFocus/);
   });
 });
 
