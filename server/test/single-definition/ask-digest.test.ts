@@ -107,14 +107,8 @@ describe('the multiSelect commit row is spelled once, in shared/ask-menu.ts (D-5
 });
 
 
-// APPENDED AT THE END OF THE FILE, DELIBERATELY. `session-hook.test.ts` pins a
-// measured census of how many line citations in two frozen corpus documents
-// fail to anchor, grouped by the file they cite — and this file is one of
-// them. Inserting a describe block in the MIDDLE shifts every line below it
-// and moved that census from 8 to 15 (measured, on CI and locally). The
-// citations are frozen by design and Task 11 owns repairing them; a new guard
-// is not a reason to re-measure someone else's debt, so it goes where it
-// shifts nothing.
+// (This block sat at the end of the file so a citation of the file by line kept resolving; the file is split by area now
+// and the rule is retired, see the note at the head of ./helpers.ts.)
 
 describe("one 'tmux unreachable' sentence (design-system wave)", () => {
   // SEVEN COPIES, and three of them carried a comment saying the string was

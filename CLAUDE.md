@@ -373,7 +373,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   context" rules and table. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
   collapse to the same value; that's a defect, not style. The server runs `Fastify({ logger: false })`, so `req.log.*` is a silent no-op — a server log line is `console.warn('ccrc-server: …')`, never `req.log`.
 - **Single-source-of-truth values are enumerated once and derived:** runtime lists come from the type
-  (`PR_REASONS = Object.keys(PR_REASON_MAP)`), not hand-maintained. `server/test/single-definition.test.ts`
+  (`PR_REASONS = Object.keys(PR_REASON_MAP)`), not hand-maintained. `server/test/single-definition/*.test.ts`
   text-scans four roots and fails the build on a 2nd copy. **The account roster is runtime DATA** since Stage 2a
   (`b1f54fe`): `~/.ccrc/accounts.json`, parsed by `shared/roster.ts`'s `parseRoster`, carried on
   `CcrcConfig.roster`, shipped as `RosterWire[]`, generated into `~/.ccrc/accounts.sh` for `ccd`. Adding an
@@ -407,6 +407,12 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   orphan warning reports and nothing refuses. Source files carry `D-N` refs in comments; **read them
   as authoritative history, don't delete them.** Anchors in plans are snapshots — trust shipped source's own
   comments over a plan document.
+- **Cite code by anchor, not by line:** a `file.ts:123` citation conflicts whenever any PR touches the lines above it, though
+  the cited code did not change. Put `// @anchor name` (or `# @anchor name`) on the cited line, or on its own line above it, and
+  cite `path/to/file.ts#@name`; `server/test/anchors.test.ts` fails on a citation whose anchor does not exist and on an anchor
+  defined twice in one file. A symbol that already has a name is cited as `file.ts#symbol` (D-5893's ratchet in
+  `citations.test.ts` still lets numeric citations only get fewer). New guards go in the area file of
+  `server/test/single-definition/`, and a new derived list in `shared/api.ts` goes beside its type, not at the end of the file.
 - **Wire discipline — additive-only, absence-permits:** frames are ADDITIVE; do NOT bump `FLEET_PROTO`
   (=1, `FLEET_PROTO_MIN`=1, defined once in `shared/api.ts`) for a new field. A newer peer must tolerate an older
   peer omitting a field, through a SINGLE reader per field. Reading a persisted `FleetSession[]` from an older
@@ -525,7 +531,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   record shadow only until `stall-watch-w2-live` exists, and while `mail-disabled` stands every
   rung that would send mail holds. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
   `stall-watch-w2-live`, `mail-gate-busy-shadow` and `mail-gate-busy` arm them (no `stall-watch-live`: shadow only) and,
-  like `mail-gate-strict`, have **no writer in the tree** — `single-definition.test.ts` pins that. A level chosen in
+  like `mail-gate-strict`, have **no writer in the tree** — `single-definition/*.test.ts` pins that. A level chosen in
   Settings (`/api/coord/stall-watch`, the operator's control) overrides the arming markers, but never
   `stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`; the markers still have no writer.
 - **Done-fingerprint re-measures the WORKSPACE BRANCH** (`handoffCommit === branchTip`). A worker commits on its
@@ -565,7 +571,7 @@ built by `.join` from L0 (`TERMINAL_DELIVERY_STATES` and its derived complement 
 (`DeliveryWrite`), `{changed}` for a scoped bulk write (D-5998) — so no delivery-row writer returns `void`, and
 `watch.ts`'s `sweepMail` consumes each answer: a refused write is logged and the step that assumed it skipped.
 Pinned by `mail-hardening.test.ts`'s one-writer census, `mail-deliveries-writer.test.ts`, and two scans in
-`single-definition.test.ts`. STILL OPEN, and do not assume otherwise: an out-of-vocabulary `state` token (the
+`single-definition/*.test.ts`. STILL OPEN, and do not assume otherwise: an out-of-vocabulary `state` token (the
 column is `schema.ts:138-139`; the deploy-rollback that can reach it is argued at `schema.ts:41-45`) is LIVE to every negative-form guard and to `markAcked`,
 while `dueDeliveries` and the positive-form writers treat it as not-outstanding — an asymmetry nothing has
 ruled on. D-114's measured read is **LANDED, not open** — corrected 2026-09-04 (D-1441), because the paragraph
@@ -580,7 +586,7 @@ The agent's wire no longer lies either: `absent` is a separate positive marker s
 ENOENT (`statPayload`, `agent/src/server.ts`), so EACCES answers a bare `{missing: true}` and a newer
 server reads that as UNMEASURED rather than as absence (D-1396) — the sentence here previously said the
 opposite. And `ReadFailure` lives in **`shared/agent-protocol.ts`**, not `server/src/io.ts`: D-1438 moved
-it there so both sides declare the vocabulary once, and `single-definition.test.ts` pins that home
+it there so both sides declare the vocabulary once, and `single-definition/*.test.ts` pins that home
 (`expect(holders).toEqual(['shared/agent-protocol.ts'])`). Read the interface, not this paragraph
 (D-114, `docs/superpowers/plans/2026-08-20-fleetio-measured-read.md`). **Live build/roadmap state is NOT tracked here** — it lives in the orchestrator
 task list and `docs/superpowers/plans/`, so this file never goes stale on it.

@@ -14,6 +14,13 @@
 // field-by-field, spell the union across a type alias in another file). The
 // bar is "a reasonable person adding a fourth copy in the ordinary way is
 // stopped before review", not "unforgeable".
+//
+// WHERE A NEW GUARD GOES (D-TBD-named-anchors). This guard used to be one file that could only be appended to,
+// because `session-hook.test.ts` cited it by line, and every new row landed in the same hunk. It is split by area
+// into `server/test/single-definition/<area>.test.ts`, the shared walkers live in `./helpers.ts`, and code is
+// cited by anchor (`file#@name`, resolved by `anchors.test.ts`), not by line. Add a guard to the area file it
+// belongs to, wherever it reads best. Older block comments that say a block is APPENDED, or that this file is cited
+// by line, record why it sat where it did; they no longer bind anyone.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -154,8 +161,7 @@ export const holdersOf = (needle: string): string[] =>
 
 
 // ── Worker stall watch, wave 1 (spec 2026-09-29 §9.14 and §4.2 "Spelled once").
-// APPENDED after the last describe, never nested above it: session-hook.test.ts's
-// citation audit cites this file by line, so nothing above this point may move.
+// (Formerly APPENDED after the last describe so no cited line moved; see the note at the head of this file.)
 
 /** Comment LINES removed — the filter the setDeliveryEnvelope describe keeps
  *  block-local as `codeOnly` (hoisting it would move this file's cited lines,
@@ -167,9 +173,8 @@ export const stallCodeText = (t: string): string =>
 export const stallCode = (f: string): string => stallCodeText(readFileSync(f, 'utf8'));
 
 
-// CCRC HISTORY (spec 2026-10-05 §9.11 O13, O14; §10.1 Seams). APPENDED after the last describe, for the reason
-// the blocks above state: session-hook.test.ts's citation audit cites this file by line, so no import line is
-// added at the head either — the history modules are imported dynamically inside each case.
+// CCRC HISTORY (spec 2026-10-05 §9.11 O13, O14; §10.1 Seams). The history modules are imported dynamically inside
+// each case.
 export const HISTORY_DIR = path.join(ccrcRoot, 'ccd', 'history');
 
 /** Every `.mjs` under a root: never a `.d.mts` (a type mirror declares types, it defines nothing), and the
