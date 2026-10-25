@@ -6121,6 +6121,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   broker's census check over the move hour and the next is due after 09:00. `STATUS 2026-10-25T07:25:40Z fleet=v0.0.668`
   `server=v0.0.668 health=v0.0.668 newest=v0.0.669 intent=*:dev/auto=off backups=fleet:188M/server:11598M`
   `disk=fleet:103G/server:19G`
+- **2026-10-25 08:25 UTC — a console move to v0.0.670; v0.0.671 released; no anomalies.** A second tap moved the fleet box
+  (07:53:39 to 07:55:17) and the server box (07:56:26 to 08:07:01) from v0.0.668; both reports `done`, `from: pwa`, with the
+  same designed doctor line and the same stale unit on the fleet, and `ok` on the server. v0.0.670 brings coord.db's
+  migration 31, one new table. The server kept 5, four with data: the newest was taken before that migration, which is
+  R46's case. Neither release changes the parts the broker's soak watches. Wave 24's branch still merges clean with main.
+  `STATUS 2026-10-25T08:25:42Z fleet=v0.0.670 server=v0.0.670 health=v0.0.670 newest=v0.0.671 intent=*:dev/auto=off`
+  `backups=fleet:188M/server:11729M disk=fleet:103G/server:19G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
