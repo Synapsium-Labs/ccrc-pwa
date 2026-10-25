@@ -1502,9 +1502,12 @@ const timeOf = (v) => (typeof v === 'string' && Number.isFinite(Date.parse(v)) ?
  *  writes nothing; an unreadable windows file is refused, as the two window verbs refuse it. */
 function lowerWindowsOp(a, account, registry, catalogue, reading) {
   const parsed = PARSED_OF.get(account);
-  // The kind test is belt-and-braces: the projection sets `upstream` only on a codex-kind row
-  // (`codexTopology`, shared/roster-json.mjs), so the `parsed.upstream` half is the one that refuses, and no test
-  // can tell the kind half apart from it. To simplify, drop the kind test, never the `parsed.upstream` test.
+  // Three of these four halves are belt-and-braces over the fourth, `typeof parsed.upstream !== 'string'`:
+  // `rosterFromJson` (shared/roster-json.mjs) refuses a row whose `exec` is not an object, so `!isObj(account.exec)`
+  // never holds for an account `readRoster` accepted; `readRoster` records a projection for every account it accepted
+  // (`PARSED_OF`), so `parsed === undefined` never holds either; and the projection sets `upstream` only on a
+  // codex-kind row (`codexTopology`), so the kind test refuses nothing the `parsed.upstream` test does not. No test can
+  // tell the three apart from it. To simplify, drop any of the three, never the `parsed.upstream` test.
   if (!isObj(account.exec) || account.exec.kind !== 'codex' || parsed === undefined
     || typeof parsed.upstream !== 'string') {
     return refuse(1, 'not-a-codex-lane',

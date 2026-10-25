@@ -4513,6 +4513,7 @@ describe('lower-windows: a refusal lowers the window (codex-bridge D25, Stage 2 
     ['no at', { tokens: 380000, window: 400000, estimated: true }],
     ['tokens of 0', { tokens: 0, window: 400000, at: AT, estimated: true }],
     ['tokens of -5', { tokens: -5, window: 400000, at: AT, estimated: true }],
+    ['an entry that is null', null],
   ])('a refusal with %s is skipped refusal-invalid, and nothing is recorded', (_label, ref) => {
     plantWindows(ID, { windows: { [OPUS]: entry(400000, '2026-10-01T00:00:00Z') } });
     const before = fs.readFileSync(winPath(ID), 'utf8');
