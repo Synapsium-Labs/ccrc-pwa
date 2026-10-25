@@ -25,7 +25,7 @@
 //   good: the ask that comes back later with equal content starts unengaged), and on a deliberate move out of the
 //   card (a pointerdown or a focusin outside it: the composer, the transcript, the fleet column, the body). With it
 //   not engaged (an ask arriving beside the composer, a successor ask, a skin switch) focus moves not at all, and
-//   enters the card only through `raise` (`AskSurface`) or a click. After a send (R102, R105, R106), Tab moves focus in but
+//   enters the card only through `raise` (`AskSurface`), a Tab or a click. After a send (R102, R105, R106), Tab moves focus in but
 //   does not lift the fence, and the fence stands across later asks and crossings until a pointer press in the card or Go to
 //   question, made while eligible. A reconnect does not disengage by itself:
 //   the held gap keeps the same `askIdentity`, and the new connection's first frames keep it too, except when the
