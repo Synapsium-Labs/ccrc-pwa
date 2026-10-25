@@ -155,7 +155,7 @@ import {
   type ChildReclaimReleaseRequest, type ChildReclaimRequest,
 } from './coord/childReclaim.js';
 import { childReclaimDisabledOf, childReclaimDisabledStops } from './coord/childReclaimDisabled.js';
-import { readChildSiblings, type ClaimantCache } from './coord/siblingRead.js';
+import { childSiblingsFromListing } from './coord/siblingRead.js';
 import { KeptReasonLimiter } from './coord/keptReason.js';
 import {
   childReclaimAskOrder, childReclaimAttention, childReclaimAttentionWithKept, childReclaimDeferExpired, childReclaimDue,
@@ -4210,7 +4210,6 @@ export class FleetWatcher {
     // second consecutive sighting fires — it does not wait for the bound or
     // the fairness sort below, neither of which it is subject to.
     const acts: Promise<void>[] = [];
-    const claimantCache: ClaimantCache = new Map();
     for (const r of records) {
       if (r.child.kind === 'none') continue;
       seen.add(r.id);
@@ -4278,7 +4277,8 @@ export class FleetWatcher {
                     id: reviewedId, openedAt: reviewed.run.openedAt };
             }
           }
-          siblings = await readChildSiblings({ coord, io: this.deps.io, cfg: this.deps.cfg }, r.id, now, claimantCache);
+          // D-6923: the claimants are placed from this pass's listing, so the loop stays synchronous (spec §5.5).
+          siblings = childSiblingsFromListing(coord, r.id, now, records, names);
           // THE RUN-ID FENCE (spec §5.1: the marker's run id and the argv the
           // server composed are the two authorities, and neither alone
           // authorises anything): after a coordination-database loss,
