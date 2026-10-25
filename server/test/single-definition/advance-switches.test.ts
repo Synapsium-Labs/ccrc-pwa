@@ -591,7 +591,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     // The reader functions an area file imports from this directory's helpers (`stallCode`) are read by the
     // counting rule where they are defined, so a file that imports them is scanned with the helpers' text after
     // its own: the split of this guard by area moved them out of the one file that used to hold them, and the
-    // pins that reach a src file through them must keep counting (D-TBD-named-anchors; the ratchet is exact).
+    // pins that reach a src file through them must keep counting (D-6928; the ratchet is exact).
     const helpersText = readFileSync(path.join(here, 'single-definition', 'helpers.ts'), 'utf8');
     for (const f of files) {
       const own = readFileSync(path.join(ccrcRoot, f), 'utf8');

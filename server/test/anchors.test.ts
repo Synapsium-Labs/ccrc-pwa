@@ -1,4 +1,4 @@
-// Named anchors for citations (root-cause fix 10 of the 2026-10-25 landing measurement; D-TBD-named-anchors).
+// Named anchors for citations (root-cause fix 10 of the 2026-10-25 landing measurement; D-6928).
 //
 // A citation by line (a file name, a colon and a line range) conflicts whenever any PR
 // touches the lines above it, even though the cited code did not change, and

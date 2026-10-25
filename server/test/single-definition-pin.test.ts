@@ -1,4 +1,4 @@
-// Characterization for the split of `single-definition.test.ts` by area (D-TBD-named-anchors; ARCH rule (e):
+// Characterization for the split of `single-definition.test.ts` by area (D-6928; ARCH rule (e):
 // moving a test must not silently drop scanner coverage).
 //
 // The guard file was 9203 lines in one hunk-prone tail, and `session-hook.test.ts` cited it by line, which is why

@@ -1,4 +1,4 @@
-// The resolver behind `anchors.test.ts` (D-TBD-named-anchors): pure functions over a map of
+// The resolver behind `anchors.test.ts` (D-6928): pure functions over a map of
 // repo-relative path -> text, so the census and its own rows read the same code.
 
 /** A definition: a comment opener, `@anchor name`, and the end of the line, on a line of its own or

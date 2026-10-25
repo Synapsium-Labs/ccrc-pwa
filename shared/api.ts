@@ -11974,7 +11974,7 @@ export const SECRET_MASK = '‹secret masked›';
 export const SECRET_MASK_TOO_LARGE = '‹output too large to check, masked›';
 
 /* D-6048 (ARCH-12): the derived runtime lists. They sat at the end of the file so adding them moved no line that other
- * files cite by number; citations are anchors now (D-TBD-named-anchors), so a derived list goes beside its type. */
+ * files cite by number; citations are anchors now (D-6928), so a derived list goes beside its type. */
 /** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom): a member added
  *  to the union with no key here fails to compile. `server/test/rings/wire-totality.test.ts` holds every exported
  *  literal union in `shared/` to that. */

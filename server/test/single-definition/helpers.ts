@@ -15,7 +15,7 @@
 // bar is "a reasonable person adding a fourth copy in the ordinary way is
 // stopped before review", not "unforgeable".
 //
-// WHERE A NEW GUARD GOES (D-TBD-named-anchors). This guard used to be one file that could only be appended to,
+// WHERE A NEW GUARD GOES (D-6928). This guard used to be one file that could only be appended to,
 // because `session-hook.test.ts` cited it by line, and every new row landed in the same hunk. It is split by area
 // into `server/test/single-definition/<area>.test.ts`, the shared walkers live in `./helpers.ts`, and code is
 // cited by anchor (`file#@name`, resolved by `anchors.test.ts`), not by line. Add a guard to the area file it
