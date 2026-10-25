@@ -1306,7 +1306,12 @@ describe('8. the closed scope census', () => {
       expect(routes.split('\n').filter((l) => /(^|[/:\-\s])leases?\b|adopt|promot|retain|resolve|carrier|cleanup/i.test(l) && !OTHER_SENSE.includes(l)), 'no later wave\'s route').toEqual([]);
       expect(routes.split('\n').filter((l) => OTHER_SENSE.includes(l)), 'the exemption names a route that exists').toEqual(OTHER_SENSE);
       expect(routes.split('\n').filter((l) => /coordinators/.test(l))).toEqual(['├── /api/coordinators/:session/intent (POST)']);
-      expect(routes.split('\n').filter((l) => /delegation|journal|checkpoint|spool/i.test(l))).toEqual([]);
+      // A journal in another sense: D-6861's `GET /api/coord/shadow-journal` reads what the unarmed disk lanes would have done.
+      // It touches no lease, checkpoint or delegation journal, and it is listed by its exact printed line, so a second
+      // `journal` route, or this one under another verb, is still red.
+      const OTHER_JOURNAL = ['├── /api/coord/shadow-journal (GET, HEAD)'];
+      expect(routes.split('\n').filter((l) => /delegation|journal|checkpoint|spool/i.test(l) && !OTHER_JOURNAL.includes(l))).toEqual([]);
+      expect(routes.split('\n').filter((l) => OTHER_JOURNAL.includes(l)), 'the exemption names a route that exists').toEqual(OTHER_JOURNAL);
     } finally { await app.close(); }
     // `POST /api/runs` takes no lease to promote, and no source names the verb a promotion would call
     expect(filesUnder('server/src', /\.ts$/).filter((f) => /promotesLease|operator-retain|leases\/:id/.test(code(read(f))))).toEqual([]);
