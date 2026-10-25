@@ -114,7 +114,7 @@ describe('the same rows through readSession (the pure function over facts)', () 
   it('a gone pane over a lifecycle that could not be measured is alive, never dead (D-1140)', () => {
     for (const lifecycle of ['unmeasurable', null] as const) {
       const r = readSession({ row: 'present', pane: 'gone', lifecycle, hibernated: false, turn: null });
-      expect(r).toMatchObject({ presence: 'alive', why: 'lifecycle-doubt', deadCause: null });
+      expect(r).toMatchObject({ presence: 'alive', why: 'lifecycleDoubt', deadCause: null });
     }
   });
 

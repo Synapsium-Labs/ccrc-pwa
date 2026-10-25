@@ -139,31 +139,31 @@ export async function measureClaimant(
   switch (r.why) {
     // D-1144: a row the listing NAMED and `buildRecord` could not assemble is a live coordinator caught between two
     // `_reg_set` writes, so it is doubt, never a death.
-    case 'row-unassembled':
+    case 'rowUnassembled':
       return { state: 'unmeasurable',
         why: `the registry lists ${id}.uuid but the row behind it could not be assembled — a session `
           + 'mid-write or mid-teardown, transient, not a fact about the claimant' };
-    case 'row-absent':
+    case 'rowAbsent':
       return { state: 'dead', cause: 'absent', why: 'no registry row in a directory that listed cleanly' };
-    case 'row-unlistable':
+    case 'rowUnlistable':
       return { state: 'unmeasurable',
         why: 'the registry directory could not be listed — transient, not a fact about the claimant' };
     // Path identity (spec §2.3): UNMEASURABLE, never dead (`bad-id` is answered before any listing).
-    case 'bad-id':
+    case 'badId':
       return { state: 'unmeasurable',
         why: 'the claimant id is not a registry id, so it is never measured or composed' };
-    case 'pane-live': return { state: 'alive', why: 'tmux reports the pane live' };
+    case 'paneLive': return { state: 'alive', why: 'tmux reports the pane live' };
     // The message IS the diagnosis, carried verbatim rather than summarised (`SessionVerdict`'s rule, exec.ts:75-84).
-    case 'pane-unknown': return { state: 'unmeasurable', why: sv !== null && sv.verdict === 'unknown' ? sv.detail : 'tmux was not asked' };
+    case 'paneUnknown': return { state: 'unmeasurable', why: sv !== null && sv.verdict === 'unknown' ? sv.detail : 'tmux was not asked' };
     case 'hibernated':
       return { state: 'alive', why: 'the pane is gone but the session is hibernated (asleep, woken by mail or ensure)' };
-    case 'lifecycle-dead':
+    case 'lifecycleDead':
       if (r.deadCause === null) throw new Error('readSession: a dead reading carries its cause');
       return { state: 'dead', cause: r.deadCause, why: `the pane is gone and the lifecycle reads ${lc}` };
     // D-1140: the `otherwise` is total and its name narrower than its contents: `running`/`unsupervised`/`unclaimed`,
     // `restarting` (the arm this whole file exists to keep) and `unmeasurable` (a doubt answered alive on purpose, since
     // fail-shut is the only safe direction for a destructive re-pointing). `why` names which of them produced it.
-    case 'lifecycle-alive': case 'lifecycle-doubt':
+    case 'lifecycleAlive': case 'lifecycleDoubt':
       return { state: 'alive', why: `the pane is gone but the lifecycle reads ${lc}` };
     default: {
       const _x: never = r.why;

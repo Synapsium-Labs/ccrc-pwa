@@ -40,8 +40,8 @@ export type DeadCause = 'absent' | Extract<SessionLifecycle, 'stopped' | 'orphan
 
 /** Why the presence is what it is, one word per arm of the ladder (a caller words its own sentence from it). */
 export type PresenceWhy =
-  | 'row-absent' | 'row-unassembled' | 'row-unlistable' | 'bad-id'
-  | 'pane-live' | 'pane-unknown' | 'hibernated' | 'lifecycle-dead' | 'lifecycle-alive' | 'lifecycle-doubt';
+  | 'rowAbsent' | 'rowUnassembled' | 'rowUnlistable' | 'badId'
+  | 'paneLive' | 'paneUnknown' | 'hibernated' | 'lifecycleDead' | 'lifecycleAlive' | 'lifecycleDoubt';
 
 export interface SessionReading {
   readonly presence: Presence;
@@ -56,22 +56,22 @@ const reading = (presence: Presence, why: PresenceWhy, turn: TurnFact, deadCause
 
 export function readSession(f: SessionFacts): SessionReading {
   switch (f.row) {
-    case 'absent': return reading('dead', 'row-absent', null, 'absent');
-    case 'unmeasurable': return reading('unknown', 'row-unassembled', null);
-    case 'unlistable': return reading('unknown', 'row-unlistable', null);
-    case 'bad-id': return reading('unknown', 'bad-id', null);
+    case 'absent': return reading('dead', 'rowAbsent', null, 'absent');
+    case 'unmeasurable': return reading('unknown', 'rowUnassembled', null);
+    case 'unlistable': return reading('unknown', 'rowUnlistable', null);
+    case 'bad-id': return reading('unknown', 'badId', null);
     case 'present': break;
     default: {
       const _x: never = f.row;
       return _x;
     }
   }
-  if (f.pane === 'live') return reading('alive', 'pane-live', f.turn);
+  if (f.pane === 'live') return reading('alive', 'paneLive', f.turn);
   // `null` on a present row is a caller that never asked tmux: nothing measured the pane.
-  if (f.pane === 'unknown' || f.pane === null) return reading('unknown', 'pane-unknown', null);
+  if (f.pane === 'unknown' || f.pane === null) return reading('unknown', 'paneUnknown', null);
   const lc = f.lifecycle;
   if (lc === 'stopped' && f.hibernated) return reading('asleep', 'hibernated', null);
-  if (lc === null || lc === 'unmeasurable') return reading('alive', 'lifecycle-doubt', null);
-  if (lifecycleIsDead(lc)) return reading('dead', 'lifecycle-dead', null, lc as DeadCause);
-  return reading('alive', 'lifecycle-alive', null);
+  if (lc === null || lc === 'unmeasurable') return reading('alive', 'lifecycleDoubt', null);
+  if (lifecycleIsDead(lc)) return reading('dead', 'lifecycleDead', null, lc as DeadCause);
+  return reading('alive', 'lifecycleAlive', null);
 }
