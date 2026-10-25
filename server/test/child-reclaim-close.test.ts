@@ -18,6 +18,7 @@ import type { FleetIO } from '../src/io.js';
 import type { RunState } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 import { okRun } from './coordReadHelpers.js';
 
 const ID = 'demo-quiet-basin';
@@ -592,7 +593,10 @@ describe('the two seams a runtime case cannot see', () => {
     // and nowhere else in the file. ARCH-77 (#812): behind the child-reclaim-disabled gate, which queues nothing while set.
     const src = coordSrc('routes.ts');
     expect(src).toContain('() => deps.queue.run(req.sessionId, () => reclaimChild({');
-    expect(src).toContain('void childReclaimUnlessDisabled({');
+    // The gate is read off the port's own symbol, not a second literal pin: the port queues only through it.
+    const port = sourceOfSymbol('server/src/coord/routes.ts', 'childReclaimPort');
+    expect(port.indexOf('childReclaimUnlessDisabled(')).toBeGreaterThanOrEqual(0);
+    expect(port.indexOf('childReclaimUnlessDisabled(')).toBeLessThan(port.indexOf('deps.queue.run('));
     expect(src.match(/reclaimChild\(/g) ?? []).toHaveLength(1);
   });
 });
