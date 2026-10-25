@@ -789,6 +789,24 @@ describe('reclaimChild — the one executor', () => {
     expect(s.deliveryState().state).toBe('queued');
   });
 
+  it('a STALE sibling (planned, undispatched, 15 days old, its coordinator gone) does not defer; a live coordinator\'s still does', async () => {
+    const s = await rig();
+    const next = s.coord.openRun({ program: 'p', title: 't', project: 'demo', wave: 2, waveOf: 2, claimedBy: 'demo-coordinator' });
+    if (!('id' in next)) throw new Error('openRun refused');
+    s.coord.setSession(next.id, ID);
+    const later = { ...s.deps, now: () => Date.now() + 15 * 24 * 3_600_000 };
+    const live = await rig();
+    const n2 = live.coord.openRun({ program: 'p', title: 't', project: 'demo', wave: 2, waveOf: 2, claimedBy: 'demo-coordinator' });
+    if (!('id' in n2)) throw new Error('openRun refused');
+    live.coord.setSession(n2.id, ID);
+    for (const [k, v] of Object.entries({ wrapper: 'claude', project: 'demo', workdir: '/w/c', uuid: 'u-c', started: '1' })) {
+      writeFileSync(path.join(live.reg, `demo-coordinator.${k}`), v);
+    }
+    expect(await reclaimChild({ ...live.deps, now: later.now }, live.req())).toMatchObject({ kind: 'deferred', why: 'siblings-open' });
+    expect(await reclaimChild(later, s.req())).not.toMatchObject({ kind: 'deferred', why: 'siblings-open' });
+    expect(s.coord.run(next.id)).toMatchObject({ ok: true, run: { state: 'planned' } });
+  });
+
   it('an open sibling defers, and an UNREADABLE sibling list defers — never read as "none"', async () => {
     const s = await rig();
     const next = s.coord.openRun({ program: 'p', title: 't', project: 'demo', wave: 2, waveOf: 2, claimedBy: 'demo-coordinator' });

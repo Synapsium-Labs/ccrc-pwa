@@ -17,7 +17,7 @@ import {
   type ChildReclaimPreLockToken, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
   childReclaimDetailText, type ChildReclaimLeafKept,
   CHILD_RECLAIM_STUCK_RETRY, childReclaimStuckHeld, childReclaimStuckRow, childReclaimStuckSentence,
-  type ChildReclaimSweepOutcome, type ChildStaleAsk, isChildReclaimPreLockToken,
+  type ChildReclaimSweepOutcome, type ChildStaleAsk, isChildReclaimPreLockToken, type ChildReclaimSweepInput,
 } from '../childReclaimSweep.js';
 import { readCcdRefusal, withoutCcdRefusal } from '../../../shared/ccd-refusal.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
@@ -34,6 +34,8 @@ import { notify } from '../notice.js';
 import {
   CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledRead, childReclaimDisabledSentence,
 } from './childReclaimDisabled.js';
+import { readChildSiblings } from './siblingRead.js';
+import { KeptReasonLimiter, keptReasonBody, keptReasonOf } from './keptReason.js';
 import { notRanSentence } from '../unmeasured.js';
 import { recordNestedRescueShadow } from './nestedRescueShadow.js';
 import { nestedWouldRescueCount, nestedWouldRescuePaths } from '../../../shared/nestedRescue.js';
@@ -1151,10 +1153,11 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
     return deferred('marker-mismatch', `the child marker names run ${mark.runId}, not run ${runId}`);
   }
   // 2 — no open run names it. Unreadable is INELIGIBLE, never "none".
-  const sib = deps.coord.openRunsForSession(sessionId);
+  // A stale sibling (`coord/staleSibling.ts`) is ignored here as in the sweep's verdict, so the two cannot disagree.
+  const sib = await readChildSiblings(deps, sessionId, (deps.now ?? Date.now)());
   if (!sib.ok) return deferred('siblings-unreadable', sib.detail);
-  if (sib.siblings.length > 0) {
-    return deferred('siblings-open', `open run(s) ${sib.siblings.map((s) => `#${s.id}`).join(', ')} still name this workspace`);
+  if (sib.open > 0) {
+    return deferred('siblings-open', `open run(s) ${(sib.blocking ?? []).map((s) => `#${s.id}`).join(', ')} still name this workspace`);
   }
   // 2a — COORDINATING, ANY STATE (spec §1, rule 4: manual cleanup is
   // reserved for a coordinator's OWN workspace, never a sub-workspace a sweep
@@ -1605,16 +1608,16 @@ export async function releaseRetiredChildHold(
   // bare (its `db.prepare().all()` sits outside any catch in `store.ts`), so
   // this is its own try like every other read above — never a throw that
   // rejects the job instead of answering `failed`.
-  let sib: ReturnType<CoordStore['openRunsForSession']>;
+  let sib: Awaited<ReturnType<typeof readChildSiblings>>;
   try {
-    sib = deps.coord.openRunsForSession(sessionId);
+    sib = await readChildSiblings(deps, sessionId, (deps.now ?? Date.now)());
   } catch (err) {
     console.warn(`ccrc-server: releaseRetiredChildHold: re-reading ${sessionId}'s open siblings failed `
       + `(${err instanceof Error ? err.message : String(err)})`);
     return 'failed';
   }
   if (!sib.ok) return 'failed';
-  if (sib.siblings.length > 0) return 'changed';
+  if (sib.open > 0) return 'changed';
 
   // 5 — the coordinator read: this child has still not coordinated in its own
   // generation (`childReclaimHasCoordinated`; spec §1 rule 4, spec §5.6). The
@@ -1830,6 +1833,23 @@ export function recordChildReclaimKeptFeed(
   // Through the funnel (`notice.ts`, D-5859), `'record-only'`: recorded whatever the presence, never pushed.
   notify(deps, { kind: 'run', sessionId: a.sessionId, runId: a.runId,
     title: CHILD_RECLAIM_KEPT_FEED_TITLE, body: `${a.sessionId}, child of run #${a.runId}: ${a.sentence}` },
+  'record-only', { degraded: 'child reclaim kept, feed archive degraded' });
+}
+
+/**
+ * The kept reason's feed row (D-TBD-kept-reason-visible; ARCH-76): names the reviewed run behind `review-report-live`
+ * or the sibling runs behind `siblings-open`, and any stale sibling the sweep ignored, so a stuck run shows in the feed
+ * without a manual join. `limiter` paces it to one row per child, kind and run per day. Written from a judging pass
+ * alone, in `recordChildReclaimKeptFeed`'s idiom: `kind: 'run'`, recorded and never pushed.
+ */
+export function recordChildReclaimKeptReason(
+  deps: Pick<ChildReclaimDeps, 'coord' | 'notifyLog'>, limiter: KeptReasonLimiter,
+  i: ChildReclaimSweepInput, v: ChildReclaimSweepVerdict,
+): void {
+  const reason = keptReasonOf(i, v);
+  if (reason === null || i.child.kind !== 'child' || !limiter.due(i.sessionId, i.child.runId, reason.kind, i.nowMs)) return;
+  notify(deps, { kind: 'run', sessionId: i.sessionId, runId: i.child.runId,
+    title: CHILD_RECLAIM_KEPT_FEED_TITLE, body: keptReasonBody(i.sessionId, i.child.runId, reason) },
   'record-only', { degraded: 'child reclaim kept, feed archive degraded' });
 }
 

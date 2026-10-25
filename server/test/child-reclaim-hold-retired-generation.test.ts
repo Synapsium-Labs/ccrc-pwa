@@ -218,3 +218,26 @@ describe('the hold-retired memory at the lane: keyed by generation (spec §5.7)'
     expect(src).toMatch(/for \(const id of \[\.\.\.this\.childReclaimHoldRetiredSeen\.keys\(\)\]\) \{/);
   });
 });
+
+describe('releaseRetiredChildHold — step 4, the child\'s open runs, ignores a stale sibling (D-TBD-kept-reason-visible)', () => {
+  const sibling = (f: Awaited<ReturnType<typeof rrig>>): number => {
+    const r = f.deps.coord.openRun({ program: 'other', title: 'other', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-gone' });
+    if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
+    f.deps.coord.setSession(r.id, RID);
+    return r.id;
+  };
+
+  it('a planned, undispatched sibling of a gone coordinator, fifteen days old, no longer answers changed', async () => {
+    const f = await rrig();
+    sibling(f);
+    const later = { ...f.deps, now: () => Date.now() + 15 * 24 * 3_600_000 };
+    expect(await releaseRetiredChildHold(later, f.req(value(G1)))).toBe('released');
+  });
+
+  it('the same sibling inside fourteen days still answers changed', async () => {
+    const f = await rrig();
+    sibling(f);
+    expect(await releaseRetiredChildHold(f.deps, f.req(value(G1)))).toBe('changed');
+    expect(f.releases()).toEqual([]);
+  });
+});

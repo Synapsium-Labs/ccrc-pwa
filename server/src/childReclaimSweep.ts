@@ -22,6 +22,7 @@ import {
 } from '../../shared/api.js';
 import { CCD_LOCK_UNOPENABLE } from '../../shared/ccd-refusal.js';
 import { runNamesSession } from './coord/runBinding.js';
+import type { SiblingRef } from './coord/staleSibling.js';
 
 /** How long a presence defer may continue before the reclaim proceeds past it
  *  (spec §5.7, "Presence, and its bound"). Unbounded would be worse than
@@ -305,7 +306,9 @@ export type ChildReclaimMintingRunRead =
  *  `unreadable` are the two answers that are not a run, never folded. */
 export type ChildReclaimReviewedRunRead =
   | { readonly kind: 'not-a-review' }
-  | { readonly kind: 'run'; readonly state: RunState; readonly superseded?: ChildReclaimSuperseded }
+  | { readonly kind: 'run'; readonly state: RunState; readonly superseded?: ChildReclaimSuperseded;
+      /** The reviewed run's id and `openedAt`, for the kept reason (D-TBD-kept-reason-visible). Display only. */
+      readonly id?: number; readonly openedAt?: number }
   | { readonly kind: 'absent' }
   | { readonly kind: 'unreadable'; readonly detail: string };
 
@@ -314,9 +317,12 @@ export type ChildReclaimReviewedRunRead =
  *  one. `live` is whether `$REG/child-superseded-reclaim-live` stands: only then does it release the child. */
 export interface ChildReclaimSuperseded { readonly by: number; readonly live: boolean }
 
-/** The open runs naming this child, counted — or unreadable. */
+/** The open runs naming this child, counted — or unreadable. `open` counts only the siblings that KEEP the child:
+ *  a stale sibling (`coord/staleSibling.ts`) is listed in `stale` and not counted. `blocking` and `stale` name the
+ *  runs for the kept reason (D-TBD-kept-reason-visible) and decide nothing. */
 export type ChildReclaimSiblingsRead =
-  | { readonly ok: true; readonly open: number }
+  | { readonly ok: true; readonly open: number; readonly blocking?: readonly SiblingRef[];
+      readonly stale?: readonly SiblingRef[] }
   | { readonly ok: false; readonly detail: string };
 
 // ── the hold (spec §5.7, "no hold") ─────────────────────────────────────────
@@ -545,11 +551,13 @@ export type ChildReclaimSkipRow =
  *    - `hold-retired`: the hold-release job is acting.
  *    - `terminal-refusal`: the mirror's terminal row decides the chip, and the banner's terminal
  *      arm lists the child.
- *    - `review-report-live`: the chip's own review rows say it.
+ *    - `review-report-live`: the chip's own review rows say it, and the feed names the reviewed run and its age, once a
+ *      day per child (`coord/keptReason.ts`, D-TBD-kept-reason-visible).
  *    - `not-a-child`: the lane skips a row with no child marker before it judges one, so there is
  *      no child for a chip to speak of.
  *    - `minting-run-open`, `dispatch-in-flight` and `siblings-open`: they never reach a closed
- *      run's row rule, because the hand-over conjunct answers first. */
+ *      run's row rule, because the hand-over conjunct answers first. The feed names the runs that keep a
+ *      `siblings-open` child, once a day, and any stale sibling the count ignores (`coord/staleSibling.ts`). */
 export const CHILD_RECLAIM_SKIP = {
   // kept
   coordinating: { class: 'kept', sentence:
