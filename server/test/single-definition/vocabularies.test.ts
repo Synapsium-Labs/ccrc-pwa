@@ -476,7 +476,7 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
 // `BranchEvidence`
 // DERIVES it (`'named' | ReadFailure | 'empty'`) rather than restating the
 // pair — it used to spell `'absent' | 'unreadable'` a second time at
-// `registry.ts:21`. `oneDefinition` above is per-named-symbol and hardcodes
+// `registry.ts`. `oneDefinition` above is per-named-symbol and hardcodes
 // `shared/api.ts` as the one legal home, so it cannot be reused for a
 // symbol whose home is `shared/agent-protocol.ts` — this is a bespoke assertion in
 // the same style.
@@ -933,7 +933,7 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
     // LC_REFUSAL_WORD IS THE EXCEPTION, AND THE EXCEPTION IS THE RULE READ
     // CORRECTLY: it renders a token for a person, it narrows nothing, the
     // PWA types its own renderer against it, and `isLcRefusalToken` is still
-    // the only door. `SENTENCES` (`wsaudit.ts:17`) is the precedent. A
+    // the only door. `SENTENCES` (`wsaudit.ts`) is the precedent. A
     // private `LC_REFUSAL_WORD_MAP` twin aliased to an export would be a
     // second name for one value, declared only to satisfy a guard written
     // for the other case — so this test forbids it in BOTH directions.

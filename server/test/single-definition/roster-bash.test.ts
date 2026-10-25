@@ -136,7 +136,7 @@ describe('the account roster — runtime data, no compile-time copies', () => {
 // The provider table, §4.2. This describe is the `.tsx?` half; the other half —
 // the one that can see a copy in a `.mjs` — is `server/test/providers.test.ts`,
 // because `sources()` above (:40-57) filters `/\.tsx?$/` at :54 and has never
-// seen a `.mjs`, a `.d.mts` or a bash script (D-76, and `source-bytes.test.ts:30-36`
+// seen a `.mjs`, a `.d.mts` or a bash script (D-76, and `source-bytes.test.ts`
 // records the incident that fact caused). Both halves ship in the same commit
 // as the promise: a single-definition claim whose scanner cannot reach the file
 // a copy would land in is a comment, not a mechanism (D-1860).
@@ -218,10 +218,10 @@ describe('the provider table — one table, one home', () => {
     // /['"]127\.0\.0\.1['"]/ is RED on this tree, and not because anything is
     // wrong: four shipped files legitimately quote that host as a BIND ADDRESS
     // or a loopback test, and none of them is a copy of this decision —
-    // measured 2026-09-07 over the four ROOTS: `server/src/config.ts:310`
-    // (`host: env.CCRC_HOST || '127.0.0.1'`), `server/src/auth/webauthn.ts:342`
-    // (`url.hostname === '127.0.0.1'`), `agent/src/index.ts:25` and
-    // `agent/src/server.ts:712` (`rawOpts.host ?? '127.0.0.1'`). Pinning the
+    // measured 2026-09-07 over the four ROOTS: `server/src/config.ts`
+    // (`host: env.CCRC_HOST || '127.0.0.1'`), `server/src/auth/webauthn.ts`
+    // (`url.hostname === '127.0.0.1'`), `agent/src/index.ts` and
+    // `agent/src/server.ts` (`rawOpts.host ?? '127.0.0.1'`). Pinning the
     // ordered three-element spelling catches the copy this task is about and
     // leaves those four alone. Measured before writing it: the set spelling has
     // ZERO holders under the four roots today, so this goes from `[]` to

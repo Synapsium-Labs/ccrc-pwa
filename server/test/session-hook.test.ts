@@ -9228,7 +9228,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/session-hook.sh:1175-1177',
         // ENTERS at the design-system wave, on this branch's one added import
         // line in the cited file — see the note above this assertion.
-        // single-definition.test.ts:32-37 left the census: the file was split by area (D-TBD-named-anchors)
+        // single-definition.test.ts line 32-37 left the census: the file was split by area (D-TBD-named-anchors)
         'deploy/deploy.sh:560',
         // LEFT at box-token-lifecycle wave 2 B7 (removed `ship_secret` from deploy.sh): `deploy/deploy.sh:629` now holds
         // a comment naming `install_atomic`, which its clause quotes. Coincidence, not repair; see D2849_INVISIBLE_SINCE_PR136.
@@ -9914,8 +9914,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // drifted anchors were RE-POINTED by content (the dead-reg intent x2, the purge loop, the generation-read link, the
         // slug-residue body, the add refusal and its comment) and five entries left as genuine fixes; none entered. S6-R11.
         'ccd/ccd:203',
-        // single-definition.test.ts:1274 left the census: the file was split by area (D-TBD-named-anchors)
-        // single-definition.test.ts:1319-1320 left the census: the file was split by area (D-TBD-named-anchors)
+        // single-definition.test.ts line 1274 left the census: the file was split by area (D-TBD-named-anchors)
+        // single-definition.test.ts line 1319-1320 left the census: the file was split by area (D-TBD-named-anchors)
         'server/test/ccd-ws-reap.test.ts:344',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'ccd/ccd' + ':3038',
@@ -10175,8 +10175,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // FROM THE SAME RUN as the row-pass set above: nothing entered or left. S6-R11, no D-number.
       // LOWERED at disk retention DR-26 (D-6638), 38 -> 36, FROM THE SAME RUN as the row-pass set above: both
       // dead-reg intent sites (spec 2123 and 2210) were re-pointed by content and left; none entered. S6-R11.
-        // spec:308 server/test/single-definition.test.ts:1274 left the census: the file was split by area (D-TBD-named-anchors)
-        // spec:308 server/test/single-definition.test.ts:1319-1320 left the census: the file was split by area (D-TBD-named-anchors)
+        // spec:308 server/test/single-definition.test.ts line 1274 left the census: the file was split by area (D-TBD-named-anchors)
+        // spec:308 server/test/single-definition.test.ts line 1319-1320 left the census: the file was split by area (D-TBD-named-anchors)
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'spec:2124 ccd/ccd' + ':3038',
         'spec:2125 ccd/ccd:5797',

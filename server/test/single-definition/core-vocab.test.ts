@@ -238,12 +238,12 @@ describe('extraction finding — one path to the ccd script', () => {
 
 describe('one KeyedQueue for the process', () => {
   // The seam the naming sweep needs. `buildServer` used to construct its own
-  // KeyedQueue inline (`server.ts:330` on origin/main, the tree this diverged
+  // KeyedQueue inline (`server.ts` on origin/main, the tree this diverged
   // from), which FleetWatcher — built two lines EARLIER in index.ts (`:62` vs
   // `:64` on that same tree; `:69` vs `:71` on this one, now that the queue
-  // itself hoisted one level further to `index.ts:37`) — had no way to reach.
+  // itself hoisted one level further to `index.ts`) — had no way to reach.
   // A watcher that built its own would serialise its rename against nothing,
-  // and `POST /workspace/reap` (`server.ts:727`) is exactly the write it must
+  // and `POST /workspace/reap` (`server.ts`) is exactly the write it must
   // not race. An optional Deps field with a `?? new KeyedQueue()` fallback is
   // the same bug with a green suite, which is why this scans for the
   // CONSTRUCTOR rather than for the field.
@@ -269,7 +269,7 @@ describe('one KeyedQueue for the process', () => {
 describe('one sessionLabel', () => {
   // `pwa/src/fleet/sessionLabel.ts`'s whole docstring is "what to call a
   // session, everywhere" — and by the time smart branch naming landed there
-  // were two: the sheet's title (`SessionActionsSheet.tsx:203`) had grown a
+  // were two: the sheet's title (`SessionActionsSheet.tsx`) had grown a
   // verbatim copy of the chain. Same class as UNCHECKED_PR above, same fix, and
   // this is the mechanism rather than another comment asking nicely.
   const CHAIN = /session\.name \?\? session\.branch/;

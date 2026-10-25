@@ -409,7 +409,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   comments over a plan document.
 - **Cite code by anchor, not by line:** a `file.ts:123` citation conflicts whenever any PR touches the lines above it, though
   the cited code did not change. Put `// @anchor name` (or `# @anchor name`) on the cited line, or on its own line above it, and
-  cite `path/to/file.ts#@name`; `server/test/anchors.test.ts` fails on a citation whose anchor does not exist and on an anchor
+  cite `ccd/session-hook.sh#@emit-context-print` (that form: a path, `#@`, the name); `server/test/anchors.test.ts` fails on a citation whose anchor does not exist and on an anchor
   defined twice in one file. A symbol that already has a name is cited as `file.ts#symbol` (D-5893's ratchet in
   `citations.test.ts` still lets numeric citations only get fewer). New guards go in the area file of
   `server/test/single-definition/`, and a new derived list in `shared/api.ts` goes beside its type, not at the end of the file.
