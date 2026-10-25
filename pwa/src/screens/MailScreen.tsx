@@ -21,6 +21,8 @@ import { backToFleet } from '../command/door';
 import { ack, acksSnapshot, FEED_ACK_KEY, isUnseenAt, subscribeAcks } from '../lib/seen';
 import { Button, EmptyState, MAIL_GLYPH, PageScaffold, SETTINGS_GLYPH, useNow } from '@ccrc/ui';
 import { formatAge } from '../fleet/formatReset';
+import { LiftCapSheet } from '../fleet/LiftCapSheet';
+import { capRecordRun } from '../fleet/reviewCapWords';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 
@@ -120,6 +122,8 @@ export function MailScreen({
   const [runsById, setRunsById] = useState<ReadonlyMap<number, RunSummary>>(new Map());
   const loadRunsRef = useRef(loadRuns);
   loadRunsRef.current = loadRuns;
+  // `runsRead` bumps to re-read after a lift (D-6911), so the cap's record loses its door once the run is lifted.
+  const [runsRead, setRunsRead] = useState(0);
   useEffect(() => {
     let live = true;
     void loadRunsRef.current()
@@ -129,7 +133,9 @@ export function MailScreen({
       })
       .catch(() => { /* the headers degrade; the feed does not */ });
     return () => { live = false; };
-  }, [store]);
+  }, [store, runsRead]);
+  // D-6911: the screen's one lift sheet, opened from the cap's record.
+  const [liftTarget, setLiftTarget] = useState<RunSummary | null>(null);
 
   // Opening the screen is the ack. Floored to the newest record's own instant
   // (seen.ts's `stampFor`) so a device behind the fleet host's clock does not
@@ -249,6 +255,7 @@ export function MailScreen({
                   // `source=… outcome=…` line — the title already says both. A body off its grammar has no title
                   // standing in for it, so it still prints. `raisesUnread` keeps the row from ever reading unseen.
                   const line = interruptLine(ev);
+                  const capRun = capRecordRun(ev, (id) => runsById.get(id));
                   return (
                     <li
                       key={recordKey(ev)}
@@ -262,6 +269,12 @@ export function MailScreen({
                       <span className="mail-row-title">{line ?? ev.title}</span>
                       <span className="mail-when">{formatAge(nowSec - Math.floor(ev.at / 1000))}</span>
                       {ev.body !== '' && line === null && <p className="mail-body">{ev.body}</p>}
+                      {capRun !== null && (
+                        <Button variant="primary" size="fit" className="mail-cap-door text-xs leading-none"
+                          onClick={() => setLiftTarget(capRun)}>
+                          Lift cap
+                        </Button>
+                      )}
                     </li>
                   );
                 })}
@@ -270,6 +283,7 @@ export function MailScreen({
           ))}
         </>
       )}
+      <LiftCapSheet run={liftTarget} onClose={() => setLiftTarget(null)} onDone={() => setRunsRead((n) => n + 1)} />
     </PageScaffold>
   );
 }

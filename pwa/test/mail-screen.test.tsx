@@ -657,3 +657,56 @@ describe('the mail screen on the page scaffold (D-5102)', () => {
     await waitFor(() => expect(screen.getByText('Nothing yet.').closest('[data-state]')?.getAttribute('data-state')).toBe('ok'));
   });
 });
+
+// D-6911: the review cap's notice carries a Lift cap door while its run is waiting.
+describe('the review cap door on the cap\'s record', () => {
+  const capRun = (over: Partial<RunSummary> = {}): RunSummary => ({
+    id: 12, program: 'programme-a', programTitle: 'Programme A', wave: 2, waveOf: 3, project: 'project-a',
+    homeProject: null, sessionId: 'lane-a-w', workspace: 'w', branch: 'ws/w', state: 'awaiting-review', kind: 'work',
+    reviews: null, claimedBy: 'lane-a-coord', resumed: false, clearedAt: null, openedAt: 1, dispatchStartedAt: null,
+    dispatchedAt: 2, closedAt: null, handoffCommit: null, items: { done: 0, total: 0 }, unreadMail: 0,
+    health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
+              briefQueued: true, clearError: null, coordKickoffPendingSince: null },
+    childReclaim: null, reviewCap: { rounds: 3, cap: 3, askedAt: 5, liftedAt: null }, ...over,
+  });
+  const notice = (over: Partial<NotifyEvent> = {}): NotifyEvent =>
+    e({ seq: 9, kind: 'run', sessionId: '', runId: 12, title: 'Review cap reached on run 12', body: 'Lift the cap…', ...over });
+  const mount = async (ev: NotifyEvent, runs: RunSummary[]) => {
+    const store = makeStore();
+    render(<MailScreen store={store} loadFeed={async () => ({ events: [ev] })} loadRuns={async () => ({ runs })} />);
+    await screen.findByText(ev.title);
+    // The runs read lands after the feed: wait for its programme header.
+    await screen.findAllByText(runs[0]?.programTitle ?? 'never');
+  };
+  const door = () => screen.queryByRole('button', { name: /lift cap/i });
+
+  it('shows a Lift cap door on the cap notice of a waiting run, and opens the sheet', async () => {
+    vi.spyOn(api, 'reviewCap').mockReturnValue(new Promise(() => {}));
+    await mount(notice(), [capRun()]);
+    expect(door()).toBeInTheDocument();
+    fireEvent.click(door()!);
+    expect(await screen.findByText('Lift the review cap?')).toBeInTheDocument();
+  });
+
+  it('shows no door on a run record that names a session', async () => {
+    await mount(notice({ sessionId: 'lane-a-w' }), [capRun()]);
+    expect(door()).toBeNull();
+  });
+
+  it('shows no door once the run is lifted', async () => {
+    await mount(notice(), [capRun({ reviewCap: { rounds: 3, cap: 3, askedAt: 5, liftedAt: 6 } })]);
+    expect(door()).toBeNull();
+  });
+
+  it('shows no door on a closed run', async () => {
+    await mount(notice(), [capRun({ state: 'done' })]);
+    expect(door()).toBeNull();
+  });
+
+  it('shows no door when the run carries no reviewCap (an older server)', async () => {
+    const r: Partial<RunSummary> = capRun();
+    delete r.reviewCap;
+    await mount(notice(), [r as RunSummary]);
+    expect(door()).toBeNull();
+  });
+});
