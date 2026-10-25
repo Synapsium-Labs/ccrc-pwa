@@ -8598,9 +8598,30 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
       // Nothing remains in `FleetWatcher`. Four lanes that landed on main while this ratchet was in review kept clocks of their
       // own, and the consolidation (GitHub #1279) moved them out: the orphan-worktree lane (D-6631) is the `orphanTrees` row now,
       // and the stale-archive arm (D-6643), the disk alarm (D-6615) and the tmp sweep census (D-6624) keep their wall-clock
-      // throttles in `StaleArchiveBeat`, `DiskAlarmLane` and `TmpCensusBeat`. Making those three rows is a follow-up (the
-      // rows are monotonic, so it changes their clock). This list only shrinks.
+      // throttles in `StaleArchiveBeat`, `DiskAlarmLane` and `TmpCensusBeat`. Making those three rows is a follow-up (#1391; the
+      // rows are monotonic, so it changes their clock); the next test names them. This list only shrinks.
     ]);
+  });
+
+  // The three wall-clock throttles the `laneClockShapes` census cannot see (it scans `FleetWatcher` only), named so they stay bound
+  // (GitHub #1391, the follow-up that makes them rows and so changes their clock). This list only shrinks.
+  it('the three beat classes keep exactly their three throttle lines and the one single-flight guard, #1391', () => {
+    const lines = (f: string): string[] => readFileSync(path.join(ccrcRoot, f), 'utf8').split('\n')
+      .map((l) => l.trim()).filter((l) => /now - this\.\w+ < \w+|this\.sweeping\b|private sweeping\b/.test(l));
+    expect({
+      'server/src/diskAlarmLane.ts': lines('server/src/diskAlarmLane.ts'),
+      'server/src/tmpSweepLane.ts': lines('server/src/tmpSweepLane.ts'),
+      'server/src/staleArchiveBeat.ts': lines('server/src/staleArchiveBeat.ts'),
+    }, 'a beat\'s clock or guard is a row of LANE_SCHEDULE (#1391); no new one').toEqual({
+      'server/src/diskAlarmLane.ts': ['if (this.lastSweep !== 0 && now - this.lastSweep < DISK_SWEEP_MS) return;'],
+      'server/src/tmpSweepLane.ts': ['if (this.last !== 0 && now - this.last < TMP_SWEEP_CENSUS_MS) return;'],
+      'server/src/staleArchiveBeat.ts': [
+        'private sweeping = false;',
+        'if (this.sweeping || (this.last !== 0 && now - this.last < STALE_ARCHIVE_SWEEP_MS)) return;',
+        'this.sweeping = true;',
+        'this.sweeping = false;',
+      ],
+    });
   });
 
   it('only the tick\'s guard, dispatchNow\'s run and its follow-up, and W4\'s two guards remain as single-flight fields', async () => {
