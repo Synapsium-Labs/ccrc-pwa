@@ -290,8 +290,9 @@ jobs:
           FULL_GREEN: ${{ steps.green.outputs.full_green || 'false' }}
           PIPELINE_CHANGED: ${{ steps.pipeline.outputs.changed }}
           FLOOR: ${{ steps.floor.outputs.run }}
+          BASE: ${{ format('origin/{0}', github.base_ref) }}
         run: |
-          args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")
+          args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --base "$BASE" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")
           if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); elif [ "$PIPELINE_CHANGED" = true ] || [ "$FULL_LABEL" = true ]; then args+=(--input-mode full); fi
           if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi
           # D-6771: the files the node floor runs, read from its own job so the list has one source; select.mjs
@@ -650,7 +651,19 @@ jobs:
       - name: Test
         if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: pwa
-        run: ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }}
+        env:
+          SCOPE: ${{ steps.reach.outputs.scope }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$SCOPE" = changed ]; then
+            # The light pull-request run: the tests vitest relates to this change (its imports, from the merge base),
+            # sharded, then the suites that scan source trees run whole on shard 1 whatever changed.
+            mb=$(git merge-base "origin/$BASE_REF" HEAD)
+            ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }} --changed "$mb" --passWithNoTests
+            if [ "${{ matrix.shard }}" = 1 ]; then ./node_modules/.bin/vitest run test/*-census.test.ts test/*-guard.test.ts test/focus-ring.test.ts; fi
+          else
+            ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }}
+          fi
 
   # The pwa checks that are not tests, once (D-6768): the typecheck of pwa runs
   # here and nowhere else. @ccrc/ui rides this job rather than the shards: the

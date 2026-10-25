@@ -31,6 +31,18 @@ export const FOREIGN = {
 };
 
 /**
+ * Paths under a foreign prefix that the package's tests DO read, so a change
+ * to one still runs them. A path ending in `/` is a directory. The list is
+ * pinned to the tests by the census in server/test/ci-reach-census.test.ts,
+ * which scans every path literal that leaves a tree and goes red when one
+ * resolves under a foreign prefix without an entry here.
+ */
+export const READS = {
+  pwa: ['server/test/fixtures/', 'server/src/laneSchedule.ts'],
+  browser: ['server/test/fixtures/', 'server/src/laneSchedule.ts'],
+};
+
+/**
  * Whether a package may skip its tests for this change: true only when the
  * change is non-empty and every file is under one of its foreign prefixes.
  * @param {string} pkg @param {string[]} changed
@@ -40,7 +52,34 @@ export function skipsTests(pkg, changed) {
   if (!foreign) return false;
   const files = changed.map((f) => f.trim()).filter(Boolean);
   if (files.length === 0) return false;
-  return files.every((f) => foreign.some((p) => f.startsWith(p)));
+  const reads = Object.hasOwn(READS, pkg) ? READS[pkg] : [];
+  const read = (/** @type {string} */ f) => reads.some((r) => (r.endsWith('/') ? `${f}/`.startsWith(r) : f === r));
+  return files.every((f) => foreign.some((p) => f.startsWith(p)) && !read(f));
+}
+
+/**
+ * Paths whose effect on the pwa tests vitest can follow through imports, so
+ * `vitest --changed` selects them exactly. Anything else (docs/, a fixture read
+ * with fs, package files, vite and vitest configs, the root) is reached some
+ * other way and runs every pwa test.
+ */
+const IMPORTABLE = [/^pwa\/src\//, /^ui\/src\//, /^shared\//, /^pwa\/test\/[^/]+\.(?:ts|tsx|mts)$/];
+
+/**
+ * How much of a package's tests a pull request runs: `skip` (none), `changed`
+ * (only the tests vitest relates to the change, plus the always-run guards) or
+ * `all`. Only the pwa shards have `changed`.
+ * @param {string} pkg @param {string[]} changed @returns {'skip'|'changed'|'all'}
+ */
+export function scopeOf(pkg, changed) {
+  if (skipsTests(pkg, changed)) return 'skip';
+  if (pkg !== 'pwa') return 'all';
+  const files = changed.map((f) => f.trim()).filter(Boolean);
+  if (files.length === 0) return 'all';
+  const foreign = FOREIGN.pwa;
+  const reads = READS.pwa;
+  const isForeign = (/** @type {string} */ f) => foreign.some((p) => f.startsWith(p)) && !reads.some((r) => (r.endsWith('/') ? `${f}/`.startsWith(r) : f === r));
+  return files.every((f) => isForeign(f) || IMPORTABLE.some((re) => re.test(f))) ? 'changed' : 'all';
 }
 
 function parseArgs(argv) {
@@ -58,10 +97,12 @@ function changedFiles(opt) {
 function main() {
   const opt = parseArgs(process.argv.slice(2));
   let skip = false;
+  let scope = 'all';
   let why = 'every test runs';
   if (opt.event === 'pull_request' && opt['full-label'] !== 'true') {
     try {
-      skip = skipsTests(opt.pkg, changedFiles(opt));
+      scope = scopeOf(opt.pkg, changedFiles(opt));
+      skip = scope === 'skip';
       why = skip ? `no changed file can reach the ${opt.pkg} tests` : `a changed file can reach the ${opt.pkg} tests`;
     } catch (e) {
       console.log(`::warning::could not diff this change (${e instanceof Error ? e.message : e}); running the ${opt.pkg} tests`);
@@ -69,8 +110,8 @@ function main() {
   } else if (opt['full-label'] === 'true') {
     why = 'the full-ci label asks for every test';
   }
-  console.log(`${opt.pkg}: ${skip ? 'tests skipped' : 'tests run'} — ${why}`);
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `skip=${skip}\n`);
+  console.log(`${opt.pkg}: ${skip ? 'tests skipped' : `tests run (${scope})`} — ${why}`);
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `skip=${skip}\nscope=${scope}\n`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) main();
