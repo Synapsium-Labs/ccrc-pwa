@@ -115,6 +115,9 @@ describe('pr-landing argv', () => {
     const pairs = Array.from({ length: 17 }, (_, i) => `demo-quiet-basin${i}:${40 + i}`).join(',');
     const r = h.run(`${GH} cmd_pr_landing --project demo --sessions ${pairs}`);
     expect(r.code).toBe(1);
+    // The count refusal, not the per-id 'no such session' one: the cap runs before the session loop, so this line
+    // is what fails when the 16-pair cap is removed.
+    expect(r.stderr).toMatch(/between 1 and 16/);
     expect(calls()).toEqual([]);
   });
 
@@ -385,6 +388,12 @@ describe('the required contexts', () => {
     const l = one(Array.from({ length: 41 }, (_, i) => run(`job-${i}`, 'SUCCESS', { databaseId: 2000 + i })));
     expect(l.required).toHaveLength(32);
     expect(l.requiredCut).toBe(true);
+  });
+
+  it('a rollup with more than 100 contexts (hasNextPage) sets requiredCut: true', () => {
+    const ctxs = [run('build', 'SUCCESS')];
+    const more = { commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { pageInfo: { hasNextPage: true }, nodes: ctxs } } } }] } };
+    expect(one(ctxs, more).requiredCut).toBe(true);
   });
 
   it('a name is cut to 120 bytes', () => {

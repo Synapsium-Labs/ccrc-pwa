@@ -9857,8 +9857,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // (`:13673`, `:13560-13562`) because main's insertions above them shift the anchors again off text
         // carrying a row token. Dumped from the merged tree, never retyped. S6-R11 covers it.
         'ccd/ccd:13673',
+        'ccd/ccd' + ':13560-13562',
         'ccd/ccd:19109',
         'ccd/ccd:19098',
+        'ccd/ccd' + ':19120',
         'ccd/ccd:19131',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
@@ -10110,8 +10112,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // the same two sites leave for the same 2-line shift. S6-R11 covers it.
         // RE-MEASURED AGAIN on the refusal-v1 (#560) merge, 36 -> 38: the same two sites re-enter. S6-R11.
         'spec:2125 ccd/ccd:13673',
+        // RE-MEASURED at pr-landing PL-1's rebase onto main (S6-R11): `:13560-13562` and `:19120` ENTER, the same shift as above.
+        'spec:2125 ccd/ccd' + ':13560-13562',
         'spec:2125 ccd/ccd:19109',
         'spec:2125 ccd/ccd:19098',
+        'spec:2125 ccd/ccd' + ':19120',
         'spec:2125 ccd/ccd:19131',
         'spec:2204 ccd/ccd:12032-12034',
         'spec:2204 ccd/ccd:12032-12034',

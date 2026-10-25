@@ -11349,7 +11349,7 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
 # `pullRequest(number:)`: either way every real call would fail. No datum from a session, a PR or GitHub enters the
 # text. The owner and name travel as `$o` and `$r`, the numbers as `-F n<i>=<int>`.
 PR_LANDING_RULES_TTL=600
-PR_LANDING_ALIAS='    p@I@: pullRequest(number: $n@I@) { number state isDraft isCrossRepository headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name status conclusion databaseId checkSuite { app { databaseId } workflowRun { databaseId } } isRequired(pullRequestNumber: $n@I@) } ... on StatusContext { context state isRequired(pullRequestNumber: $n@I@) } } } } } } } }'
+PR_LANDING_ALIAS='    p@I@: pullRequest(number: $n@I@) { number state isDraft isCrossRepository headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion databaseId checkSuite { app { databaseId } workflowRun { databaseId } } isRequired(pullRequestNumber: $n@I@) } ... on StatusContext { context state isRequired(pullRequestNumber: $n@I@) } } } } } } } }'
 
 _gh_pr_landing_query() {   # K -> the GraphQL document for K aliased pull requests, on stdout
   local k="$1" i decl='$o: String!, $r: String!' body=""
@@ -11579,6 +11579,10 @@ elif mode == 'final':
             req = required_of(row, frozenset(pins)) if isinstance(row, dict) else []
             cut = len(req) > LIST_MAX
             cut = cut or bool(rules and rules['cut']) or bool(prot and prot['cut'])
+            try:   # a required context past the 100th is not read: say the list is cut
+                cut = cut or row['commits']['nodes'][0]['commit']['statusCheckRollup']['contexts']['pageInfo']['hasNextPage'] is True
+            except Exception:
+                pass
             line.update({'bound': True, 'number': b.get('number'), 'state': b.get('state'),
                          'isDraft': b.get('isDraft') is True, 'base': b.get('baseRefName'), 'head': b.get('headRefOid'),
                          'required': req[:LIST_MAX], 'requiredCut': cut,
