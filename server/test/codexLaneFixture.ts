@@ -5,10 +5,10 @@
 // file that imports it.
 //
 // CONTAINMENT, stated once for everything below:
-//  - Every listener binds 127.0.0.1 on a port the KERNEL chose (`freePort`, or
-//    a listener told port 0). No constant port appears in this file: the fleet
-//    box's live Codex lanes hold fixed ports, and a fixture that bound one would
-//    answer as a live lane.
+//  - Every listener binds 127.0.0.1 on a port the KERNEL chose (a listener told
+//    port 0) or one `freePort` probed free below the ephemeral range. This file
+//    binds no fixed port: the fleet box's live Codex lanes hold fixed
+//    ports, and a fixture that bound one would answer as a live lane.
 //  - Direct children are tracked by the fixture HOME they serve, and
 //    `killLaneProcesses` ends them through their current-run ChildProcess
 //    handles — never by name or pattern. Node reaps a child only after it exits,
@@ -36,6 +36,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { harnessBin, seedAccountsSh } from './ccdWsHelpers.js';
 import { pythonOrSkip } from './ccgptHarness.js';
+import { plantBackendCredential } from './codexAuthFixture.js';
 import { psArgs } from './laneReaper.js';
 import { rosterFromJson } from '../../shared/roster-json.mjs';
 import { renderLitellmConfig } from '../../shared/litellm.mjs';
@@ -45,27 +46,87 @@ const REPO = path.resolve(here, '..', '..');
 
 // ── ports ────────────────────────────────────────────────────────────────
 
-/** A port nothing was listening on a moment ago: listen on 0, read, close. A
- *  window remains between the close and whoever binds it next; a caller that
- *  needs the port HELD passes 0 to {@link spawnListener} instead. */
-export function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
+// A port the fixture hands out is bound LATER — by a listener a case spawns, or by
+// a tier ccrc starts — so between the probe and that bind any other process on the
+// machine can take it (D-6856). Three kinds of taker, three rules:
+//  - other tests binding port 0: the kernel serves those from its ephemeral range
+//    (Linux starts at 32768, macOS higher), so every port here is BELOW it;
+//  - the one fixed-port suite in the tree: `shutdown-seal.test.ts` binds
+//    `26000 + pid % 3000`, so 26000-28999 is left out;
+//  - a parallel vitest worker running this same allocator: each worker draws from
+//    its OWN slice, keyed by `VITEST_POOL_ID` (unique among the workers alive at
+//    once), so two workers can never issue one port. Within a slice the walk
+//    starts at a random point, for two vitest runs on one machine.
+const PORT_FLOOR = 12_000;
+const PORT_CEILING = 32_000; // exclusive; under the lowest ephemeral port of any supported kernel
+/** `shutdown-seal.test.ts`'s fixed `26000 + pid % 3000`, [start, end). */
+export const SEAL_PORTS = [26_000, 29_000] as const;
+export const PORT_SLICE = 500;
+/** Every slice, in order: whole PORT_SLICE-wide runs of [PORT_FLOOR, PORT_CEILING)
+ *  that never touch SEAL_PORTS. */
+export const PORT_SLICES: readonly (readonly [number, number])[] = (() => {
+  const out: [number, number][] = [];
+  for (let lo = PORT_FLOOR; lo + PORT_SLICE <= PORT_CEILING; lo += PORT_SLICE) {
+    const hi = lo + PORT_SLICE;
+    if (hi > SEAL_PORTS[0] && lo < SEAL_PORTS[1]) continue;
+    out.push([lo, hi]);
+  }
+  return out;
+})();
+
+function probeFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
     const srv = createServer();
-    srv.once('error', reject);
-    srv.listen(0, '127.0.0.1', () => {
-      const addr = srv.address();
-      if (addr === null || typeof addr === 'string') {
-        srv.close();
-        reject(new Error('freePort: the listener reported no port'));
-        return;
-      }
-      srv.close(() => resolve(addr.port));
-    });
+    srv.once('error', () => resolve(false));
+    srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(true)));
   });
 }
 
-/** `n` DISTINCT free ports — the roster refuses two lanes sharing one, and two
- *  sequential `freePort()` calls may legitimately return the same number. */
+/** The worker's slot: `VITEST_POOL_ID` (1-based), else `VITEST_WORKER_ID`, else 0.
+ *  More live workers than slices wraps, sharing a slice (each still starts at its
+ *  own random point) — at `maxWorkers: '40%'` that takes a box over 80 cores. */
+export function poolSlot(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.VITEST_POOL_ID ?? env.VITEST_WORKER_ID;
+  const n = raw === undefined ? NaN : Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? (n - 1) % PORT_SLICES.length : 0;
+}
+
+/** One allocator over one slot's slice. `probe` and `random` exist for the
+ *  allocator's own suite; the fixture's instance uses the real ones. */
+export function portAllocator(opts: {
+  slot: number;
+  probe?: (port: number) => Promise<boolean>;
+  random?: () => number;
+}): () => Promise<number> {
+  const [lo, hi] = PORT_SLICES[opts.slot % PORT_SLICES.length]!;
+  const probe = opts.probe ?? probeFree;
+  const issued = new Set<number>();
+  let cursor = lo + Math.floor((opts.random ?? Math.random)() * (hi - lo));
+  return async () => {
+    for (let tries = 0; tries < hi - lo; tries++) {
+      const port = cursor;
+      cursor = cursor + 1 >= hi ? lo : cursor + 1;
+      if (issued.has(port)) continue;
+      if (await probe(port)) { issued.add(port); return port; }
+    }
+    throw new Error(`freePort: no free port left in ${lo}-${hi - 1}`);
+  };
+}
+
+const allocate = portAllocator({ slot: poolSlot() });
+
+/** A port nothing was listening on a moment ago, from this worker's slice — below
+ *  the kernel's ephemeral range, outside the fixed-port suite's band, disjoint
+ *  from every other live worker's, and never handed out twice by this process. A
+ *  window remains between the probe and whoever binds it next, but no other
+ *  taker named above can land in it; a caller that needs the port HELD passes 0
+ *  to {@link spawnListener} instead. */
+export function freePort(): Promise<number> {
+  return allocate();
+}
+
+/** `n` DISTINCT free ports — the roster refuses two lanes sharing one. `freePort`
+ *  never repeats within a process, so the set is belt and braces. */
 export async function freePorts(n: number): Promise<number[]> {
   const out = new Set<number>();
   while (out.size < n) out.add(await freePort());
@@ -95,7 +156,7 @@ export interface CodexLaneRow {
  *  runs before `accounts.sh` is written. So a fixture either production
  *  reader would refuse throws here instead of testing nothing. Returns the
  *  roster object. `accountsSh: false` (Plan 3a Task 4) writes the JSON alone:
- *  `ccrc-doctor.test.ts`' healthy box has no `accounts.sh`, and one would
+ *  `ccrc-doctorFixture.ts`' healthy box has no `accounts.sh`, and one would
  *  give `graphify`'s skills/excludes arms a subject that fixture never set up. */
 export function codexRoster(
   home: string,
@@ -135,7 +196,7 @@ export function codexRoster(
  *  `ccd/ccrc`). ONE test-side spelling for the install and uninstall suites,
  *  which typed this list about ten times (final review F4); the product's own
  *  census is `install-census.test.ts`, which reads the gate itself.
- *  `ccrc-install.test.ts` pins this constant against that literal, so a
+ *  `ccrc-install-*.test.ts` pins this constant against that literal, so a
  *  sixth name, or a new order, reds there before any copy can drift. The auth
  *  library `ccgpt-auth.py` is first (codex bridge Stage 1, Task 5): the files
  *  after it will read their credential through it. */
@@ -700,9 +761,13 @@ ready = os.path.join(unit, "supervisor-ready")
 # unit directory, or the whole fixture HOME, deleted under a live unit must
 # never stop the supervisor signalling or reaping its one child.
 def write(path, text):
+    # Whole-file replace: a reader polling \`state\` must never see a file that
+    # \`open(path, "w")\` has truncated and not yet filled (D-6788).
     try:
-        with open(path, "w") as stream:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as stream:
             stream.write(text)
+        os.replace(tmp, path)
     except OSError:
         pass
 
@@ -714,8 +779,10 @@ def record(event):
         pass
 
 def complete_inactive():
-    write(state_path, "inactive\\n")
+    # pid first: \`state\` going inactive is what a test polls, and the pid it
+    # then reads must already be final.
     write(pid_path, "0\\n")
+    write(state_path, "inactive\\n")
     try:
         with open(events, "a") as stream:
             stream.flush()
@@ -1256,8 +1323,8 @@ export async function killLaneProcesses(home: string): Promise<void> {
 //
 // WHY A JOIN AND NOT `plantSystemd` ITSELF. `plantSystemd` above plants
 // `systemctl` and `systemd-run` into `<home>/.local/bin` for the codex suites.
-// The three spine harnesses — `ccrcEnv` (ccrc-install.test.ts), `updateEnv`
-// (ccrc-update.test.ts), `verbEnv` (ccrc-uninstall.test.ts) — write their
+// The three spine harnesses — `ccrcEnv` (ccrc-installFixture.ts), `updateEnv`
+// (ccrc-updateFixture.ts), `verbEnv` (ccrc-uninstall.test.ts) — write their
 // OWN `systemctl` over that path on EVERY run, because theirs answer the
 // spine's verbs and plantSystemd's answers the codex tiers'. And none of them
 // planted any `systemd-run`, so on a Linux box the name resolved to the REAL
@@ -1361,7 +1428,7 @@ function spineSystemctlBaseline(): string {
  *
  *  `opts.expectAbsent` names any of `systemd-run`/`systemctl` a SPECIFIC
  *  runner call legitimately runs with no spine for at all (round 2, item 1's
- *  "must reach no manager" case — e.g. `ccrc-install.test.ts`'s "a box with
+ *  "must reach no manager" case — e.g. `ccrc-install-*.test.ts`'s "a box with
  *  no systemd" refusal test, whose PATH is built to exclude `systemctl`
  *  everywhere, fixture bin included). For a named tool this REQUIRES
  *  resolution to be EMPTY — nothing on PATH at all — and still THROWS if it
@@ -1566,7 +1633,7 @@ export const strayManagerCalls = (home: string): string[] => recordedLines(join(
 const CCRC_SRC = fileURLToPath(new URL('../../ccd/ccrc', import.meta.url));
 
 /** One function out of ccd/ccrc, column-0 signature to column-0 `}` — the
- *  `_inst_installed` extraction idiom in ccrc-install.test.ts. */
+ *  `_inst_installed` extraction idiom in ccrc-installFixture.ts. */
 export function ccrcFunction(name: string): string {
   const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}`, 'm').exec(readFileSync(CCRC_SRC, 'utf8'));
   if (m === null) throw new Error(`ccd/ccrc has no ${name}() { … } at column 0`);
@@ -1691,12 +1758,13 @@ export function authDirOf(home: string, id: string): string {
   return join(home, dir);
 }
 
-/** A synthetic credential at `authDirOf`'s path, so it too wraps Task 4's
- *  `codexAuthDir` (ruling R39): `ccrc codex start` checks EXISTENCE only. */
+/** A signed-in lane at `authDirOf`'s path, so it too wraps Task 4's
+ *  `codexAuthDir` (ruling R39): `plantBackendCredential`'s synthetic backend
+ *  credential (codex-bridge Stage 1, Task 7), fresh, mode 0600, its account id
+ *  `acct-<id>`. A reader goes through the auth library now, which reads the
+ *  old `{"fixture": …}` stub `foreign-family` (family `unknown`). */
 export function plantLaneAuth(home: string, id: string): void {
-  const dir = authDirOf(home, id);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'auth.json'), '{"fixture": "test-token-not-a-secret"}\n', { mode: 0o600 });
+  plantBackendCredential(authDirOf(home, id), { accountId: `acct-${id}` });
 }
 
 /** The unit names the lane manifest carries — never re-derived from a pattern. */
@@ -1768,150 +1836,42 @@ export function plantForeignUsage(home: string, id: string | null): string {
 // m-tiers §1), a tracked child that `killLaneProcesses` ends.
 
 // ════════════════════════════════════════════════════════════════════════
-// Plan 3a Task 1 — the MODEL PROBE's runtime interpreter, and a stand-in
-// Authenticator.
+// Plan 3a Task 1 — the MODEL PROBE's runtime interpreter.
 //
 // `ccd/ccrc-models-probe`'s codex arm runs `<runtime python> -I -` with its
-// program on stdin, importing `litellm.llms.chatgpt.authenticator`. The
-// interpreter below is what a fake generation carries for it: plant it with
-// `plantFakeRuntime(home, { python })`, or hand its path to the probe as
-// CCRC_CODEX_PYTHON.
+// program on stdin, which loads the auth library from the path in
+// CCRC_MODELS_AUTH_LIB (codex-bridge Stage 1, Task 7) and imports nothing of
+// LiteLLM. The interpreter below is what a fake generation carries for it:
+// plant it with `plantFakeRuntime(home, { python })`, or hand its path to the
+// probe as CCRC_CODEX_PYTHON.
 //   - Any argv but exactly `-I -` exits 90, so a probe that dropped `-I` reds.
-//   - It runs THIS box's python3 on the program with the stand-in on
-//     sys.path. `-I` ignores PYTHONPATH, so a wrapper program inserts it.
+//   - It runs THIS box's python3 on the program, under `-I`.
 //   - An audit hook denies every socket connect and name lookup.
 //   - The probe's one `urllib.request.urlopen` is answered from a recorded
 //     catalogue file.
 //   - Per run it records one JSON line: the CHATGPT_/LITELLM_/OPENAI_
 //     environment plus CODEX_CLIENT_VERSION, every request's url and headers,
-//     and every open() of a file named auth.json.
-//
-// The stand-in (`writeAuthStub`) follows litellm 1.101.0's get_access_token,
-// read from that version's source: a usable token, a refresh, the cooldown
-// wait (`_wait_for_access_token`), then the device flow (`_login_device_code`,
-// which WRITES device_code_requested_at into auth.json before it prints a code
-// and polls). Each device-side step here records a mark in `<rec>/device-flow`,
-// makes that same auth.json write, and returns AT ONCE, so a guard that fails
-// reds on the mark instead of hanging a suite. Its mode is `<rec>/mode`,
-// default `token`, read at import.
-//
-// Two more modes, from fix round 1 of Plan 3a Task 1:
-//   - `refresh-fails` is litellm's dead-refresh-token path: it LOGS a warning
-//     carrying the token endpoint's answer through the `LiteLLM` logger, whose
-//     handler here is a plain StreamHandler that bound sys.stderr at import
-//     (an older litellm `_logging`'s shape, which contextlib.redirect_stderr
-//     cannot reach), then falls through to the device flow;
-//   - `no-get-account-id` is a litellm whose Authenticator has no
-//     get_account_id.
-// Every get_access_token call is recorded in `<rec>/asked` (`authAsks`).
+//     and, for every open of a file named auth.json, the file name of the
+//     frame that called the open (`authOpens`): the library's own path when
+//     the library read it, `<stdin>` when the probe's program did.
+// Task 7 retired the stand-in Authenticator this section carried: no caller
+// imports LiteLLM's Authenticator any more, so no test needs one.
 // ════════════════════════════════════════════════════════════════════════
-
-export type AuthStubMode =
-  'token' | 'no-account-id' | 'device' | 'cooldown' | 'renamed' | 'refresh-fails' | 'no-get-account-id';
 
 export interface ProbeRuntimeCall {
   env: Record<string, string>;
   requests: { url: string; headers: Record<string, string> }[];
+  /** For each open of a file named auth.json, the file name of the calling frame. */
   authOpens: string[];
 }
 
 export interface ProbeRuntime {
   /** The interpreter BODY: `plantFakeRuntime`'s `python` option, or a file to hand the probe. */
   python: string;
-  /** Where each run is recorded, and where the stand-in reads its mode. */
+  /** Where each run is recorded. */
   rec: string;
-  /** The stand-in `litellm` package root. */
-  stub: string;
 }
 
-const authStubSource = (rec: string): string => [
-  '# A stand-in for litellm.llms.chatgpt.authenticator (codexLaneFixture.ts,',
-  '# Plan 3a Task 1). NOT litellm: it models the one control flow the',
-  '# unattended guard exists for, and nothing else.',
-  'import json, logging, os, sys, time',
-  `_REC = ${JSON.stringify(rec)}`,
-  'try:',
-  '    with open(os.path.join(_REC, "mode")) as _f:',
-  '        MODE = _f.read().strip() or "token"',
-  'except OSError:',
-  '    MODE = "token"',
-  'TOKEN = "test-token-not-a-secret"',
-  '# litellm\'s own logger name, with a handler that binds sys.stderr NOW, at import.',
-  '_LOG = logging.getLogger("LiteLLM")',
-  '_LOG.addHandler(logging.StreamHandler(sys.stderr))',
-  '',
-  '',
-  'class Authenticator:',
-  '    def __init__(self):',
-  '        self.token_dir = os.getenv("CHATGPT_TOKEN_DIR", os.path.expanduser("~/.config/litellm/chatgpt"))',
-  '        self.auth_file = os.path.join(self.token_dir, os.getenv("CHATGPT_AUTH_FILE", "auth.json"))',
-  '',
-  '    def get_access_token(self):',
-  '        # litellm 1.101.0 order: a usable token, a refresh, the cooldown wait, the device flow.',
-  '        with open(os.path.join(_REC, "asked"), "a") as f:',
-  '            f.write("get_access_token\\n")',
-  '        if MODE in ("token", "no-account-id", "no-get-account-id"):',
-  '            return TOKEN',
-  '        if MODE == "refresh-fails":',
-  '            # litellm logs the refresh failure, the endpoint\'s answer in it, and falls through.',
-  '            _LOG.warning("ChatGPT refresh token failed, re-login required: %s",',
-  '                         "Refresh response missing fields: {\'detail\': \'stand-in-token-endpoint-body\'}")',
-  '        if MODE == "cooldown":',
-  '            token = self._wait_for_access_token(300.0)',
-  '            if token:',
-  '                return token',
-  '        login = self._login_device_code_v2 if MODE == "renamed" else self._login_device_code',
-  '        return login()["access_token"]',
-  '',
-  '    def get_account_id(self):',
-  '        if MODE == "no-account-id":',
-  '            return None',
-  '        return "acct-" + os.path.basename(self.token_dir)',
-  '',
-  '    def _login_device_code(self):',
-  '        self._device_step("device-code")',
-  '        print("Sign in with ChatGPT using device code:\\n2) Enter code: WXYZ-4321", flush=True)',
-  '        return {"access_token": "device-token-not-a-secret"}',
-  '',
-  '    def _wait_for_access_token(self, timeout_seconds):',
-  '        self._device_step("cooldown-wait")',
-  '        return None',
-  '',
-  '    def _device_step(self, what):',
-  '        with open(os.path.join(_REC, "device-flow"), "a") as f:',
-  '            f.write(what + "\\n")',
-  '        with open(self.auth_file, "w") as f:',
-  '            json.dump({"device_code_requested_at": time.time()}, f)',
-  '',
-  '',
-  'if MODE == "renamed":',
-  '    # A litellm whose device flow moved to another name: a guard that only',
-  '    # overrides the old name guards nothing.',
-  '    Authenticator._login_device_code_v2 = Authenticator._login_device_code',
-  '    del Authenticator._login_device_code',
-  'if MODE == "no-get-account-id":',
-  '    del Authenticator.get_account_id',
-].join('\n') + '\n';
-
-/** The stand-in package under `dir`, reading its mode from `<rec>/mode`. */
-export function writeAuthStub(dir: string, rec: string): void {
-  const pkg = path.join(dir, 'litellm', 'llms', 'chatgpt');
-  mkdirSync(pkg, { recursive: true });
-  mkdirSync(rec, { recursive: true });
-  writeFileSync(path.join(dir, 'litellm', '__init__.py'), '# codexLaneFixture.ts stand-in (Plan 3a Task 1): NOT litellm\n');
-  writeFileSync(path.join(dir, 'litellm', 'llms', '__init__.py'), '');
-  writeFileSync(path.join(pkg, '__init__.py'), '');
-  writeFileSync(path.join(pkg, 'authenticator.py'), authStubSource(rec));
-}
-
-export function setAuthStubMode(rec: string, mode: AuthStubMode): void {
-  writeFileSync(path.join(rec, 'mode'), `${mode}\n`);
-}
-
-/** Every get_access_token call the stand-in answered. Empty: no token was asked. */
-export const authAsks = (rec: string): string[] => lines(path.join(rec, 'asked'));
-/** Each device-side step the stand-in took, in order. Empty is the guard holding. */
-export const deviceFlowMarks = (rec: string): string[] => lines(path.join(rec, 'device-flow'));
 /** The `$0` of every run of the probe-runtime interpreter. Empty: it never ran. */
 export const probeArgv0 = (rec: string): string[] => lines(path.join(rec, 'argv0'));
 export const probeRuntimeCalls = (rec: string): ProbeRuntimeCall[] =>
@@ -1920,9 +1880,8 @@ export const probeRuntimeCalls = (rec: string): ProbeRuntimeCall[] =>
 const PROBE_RUNTIME_WRAPPER = [
   'import atexit, json, os, sys, urllib.request',
   'sys.dont_write_bytecode = True',
-  'stub, rec, answer = sys.argv[1], sys.argv[2], sys.argv[3]',
+  'rec, answer = sys.argv[1], sys.argv[2]',
   'sys.argv = ["-"]',
-  'sys.path.insert(0, stub)',
   'call = {"env": {k: v for k, v in os.environ.items()',
   '                if k.startswith(("CHATGPT_", "LITELLM_", "OPENAI_")) or k == "CODEX_CLIENT_VERSION"},',
   '        "requests": [], "authOpens": []}',
@@ -1935,7 +1894,8 @@ const PROBE_RUNTIME_WRAPPER = [
   '    if event in ("socket.connect", "socket.getaddrinfo"):',
   '        raise PermissionError("fixture probe runtime: no network under test")',
   '    if event == "open" and args and isinstance(args[0], str) and os.path.basename(args[0]) == "auth.json":',
-  '        call["authOpens"].append(args[0])',
+  '        # The open is a C function, so the nearest Python frame above this hook is the one that called it.',
+  '        call["authOpens"].append(sys._getframe(1).f_code.co_filename)',
   '',
   '',
   'sys.addaudithook(_audit)',
@@ -1974,16 +1934,14 @@ const PROBE_RUNTIME_WRAPPER = [
 ].join('\n');
 
 /** The model probe's fake runtime interpreter, recording under `<home>/probe-rec`,
- *  its stand-in Authenticator under `<home>/probe-stub`, answering the one
- *  catalogue request from `catalogueFile`. Throws on a box with no python3:
- *  guard the describe with `pythonOrSkip()`. */
+ *  answering the one catalogue request from `catalogueFile`. Throws on a box
+ *  with no python3: guard the describe with `pythonOrSkip()`. */
 export function probeRuntime(home: string, catalogueFile: string): ProbeRuntime {
   const py = pythonOrSkip();
   if (py === null) throw new Error('probeRuntime: no python3 on this box — guard the case with pythonOrSkip()');
   if (!fs.existsSync(catalogueFile)) throw new Error(`probeRuntime: ${catalogueFile} does not exist`);
   const rec = path.join(home, 'probe-rec');
-  const stub = path.join(home, 'probe-stub');
-  writeAuthStub(stub, rec);
+  mkdirSync(rec, { recursive: true });
   const python = [
     '#!/bin/sh',
     "# The model probe's fake runtime interpreter (codexLaneFixture.ts, Plan 3a Task 1). NOT a runtime.",
@@ -1992,13 +1950,13 @@ export function probeRuntime(home: string, catalogueFile: string): ProbeRuntime 
     '  exit 90',
     'fi',
     `printf '%s\\n' "$0" >> ${shq(path.join(rec, 'argv0'))}`,
-    `exec ${shq(py)} -I -c ${shq(PROBE_RUNTIME_WRAPPER)} ${shq(stub)} ${shq(rec)} ${shq(catalogueFile)}`,
+    `exec ${shq(py)} -I -c ${shq(PROBE_RUNTIME_WRAPPER)} ${shq(rec)} ${shq(catalogueFile)}`,
   ].join('\n') + '\n';
-  return { python, rec, stub };
+  return { python, rec };
 }
 
 // ── Plan 3a Task 10 — the flip's fixtures (begin) ────────────────────────
-// What the flip cases in `ccrc-install.test.ts` plant, in fixture vocabulary
+// What the flip cases in `ccrc-install-*.test.ts` plant, in fixture vocabulary
 // (ruling R13: by shape only): an `external` row in the shape the GPT lanes
 // had before their flip and the launcher such a row owes, and the class
 // registry and catalogue a flipped lane's `init codex` and refresh leave.

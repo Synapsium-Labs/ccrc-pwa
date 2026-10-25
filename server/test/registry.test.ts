@@ -392,7 +392,7 @@ describe('the measured read reaching the registry ladder (Task 5)', () => {
     });
 
     it('a LISTED .uuid whose measured read is absent drops the row, and readSessionRecord ' +
-       'reports {kind:\'absent\'} (B4)', async () => {
+       'reports {kind:\'unmeasurable\'} (B4; ARCH-47)', async () => {
       // `.uuid` is the one identity-triple member `buildRecord`'s own
       // docstring calls TRUE BY CONSTRUCTION — `names.includes(id+'.uuid')`
       // holds for every id either caller ever derives `id` from, so before
@@ -408,7 +408,8 @@ describe('the measured read reaching the registry ladder (Task 5)', () => {
       const io = absentField('demo-quiet-basin', 'uuid');
       const out = await readRegistry(io, cfg());
       expect(out.find((r) => r.id === 'demo-quiet-basin')).toBeUndefined();
-      expect(await readSessionRecord(io, cfg(), 'demo-quiet-basin')).toEqual({ kind: 'absent' });
+      // The listing named the row and the build dropped it: doubt, not a proven absence (D-1145, ARCH-47).
+      expect(await readSessionRecord(io, cfg(), 'demo-quiet-basin')).toEqual({ kind: 'unmeasurable' });
     });
   });
 
@@ -737,12 +738,12 @@ describe('readSessionRecord', () => {
     expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ kind: 'unlistable' });
   });
 
-  it('answers {kind:\'absent\'} for an incomplete entry (own field never written, not just ' +
-     'unreadable), same as readRegistry dropping it', async () => {
+  it('answers {kind:\'unmeasurable\'} for an incomplete entry (own field never written, not just ' +
+     'unreadable): readRegistry drops it, and the single read says the row was listed (ARCH-47)', async () => {
     const reg = path.join(home, '.cc-sessions');
     seed(reg, 'claude-demo', { uuid: 'c'.repeat(36), wrapper: 'claude' }); // no workdir file at all
     const cfg = loadConfig({ CCRC_HOME: home });
-    expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ kind: 'absent' });
+    expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ kind: 'unmeasurable' });
   });
 
   it('costs exactly one readdir plus the one id\'s buildRecord field reads — never a per-session Promise.all for a sibling', async () => {

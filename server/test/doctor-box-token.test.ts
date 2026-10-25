@@ -14,7 +14,7 @@
 // guard), then the checks file, then `_check_box-token` alone, under a fixture HOME and a PATH holding only
 // links to the real `python3` and `stat`. Nothing reaches the live `$HOME`, `gh` is unreachable by
 // construction, and no network, tmux or unit is touched. The end-to-end census (the check in the table,
-// counted as a skip by `cmd_doctor`) is `ccrc-doctor.test.ts`'s.
+// counted as a skip by `cmd_doctor`) is the `ccrc-doctor-*` test files's.
 //
 // NEVER A VALUE. Every fixture value is minted here at runtime (`randomBytes`), and every run's stdout and
 // stderr is searched for it and for its sha256 hex.

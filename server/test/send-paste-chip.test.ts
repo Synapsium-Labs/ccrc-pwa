@@ -61,14 +61,14 @@ function phaseTmux(o: { start: string; typed: string; cleared?: string; entered?
     if (args[0] === 'capture-pane') {
       const pane = enters > 0 ? entered[Math.min(enters, entered.length) - 1]!
         : phase === 'typed' ? o.typed : phase === 'cleared' ? (o.cleared ?? EMPTY) : o.start;
-      return { code: 0, stdout: pane, stderr: '' };
+      return { ran: true, code: 0, stdout: pane, stderr: '' };
     }
     if (args[0] === 'send-keys') {
       if (args[3] === '-l') phase = 'typed';
       else if (args.at(-1) === 'C-u' && phase === 'start') phase = 'cleared';
       else if (args.at(-1) === 'Enter') enters++;
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { tmux: new Tmux(run), calls };
 }
@@ -526,5 +526,22 @@ describe('adversarial cases (the branch verifier)', () => {
   it('C1 the box holds ONLY lines 20..39 of a 40-line message (head already gone): indistinguishable from TALL40', () => {
     // TALL40 IS that rendering: 20 rows, lines 20..39. Nothing on screen says lines 0..19 are above the window.
     expect(ownRenderedBox(TALL40, TEXT.tall40.split('\n'), 'proven-empty')).not.toBeNull();
+  });
+  it('a resume whose box holds our text with a hidden head (row-capped) is draft-present', async () => {
+    // `ownRenderedBox` accepts TALL40 as ours (a suffix of ours, the box exactly at the cap); a whole-box read must
+    // not, because the first 20 lines are not on screen.
+    const { tmux, calls } = phaseTmux({ start: TALL40, typed: TALL40 });
+    const res = await sendPrompt(deps(tmux), 'lane-a', TEXT.tall40, { resumeIfOwn: 'whole' });
+    expect(res).toMatchObject({ ok: false, error: 'draft-present' });
+    expect(keysOf(calls)).toEqual([]);
+  });
+  it('a resume whose claim equals the visible rows of a capped box is draft-present (rows may hide above the window)', async () => {
+    // The claim is exactly lines 20..39, what TALL40 shows. The box is at the row cap, so rows above the window may hold
+    // lines 0..19 that were never claimed; one Enter would submit them too.
+    const claimed = TEXT.tall40.split('\n').slice(20).join('\n');
+    const { tmux, calls } = phaseTmux({ start: TALL40, typed: TALL40 });
+    const res = await sendPrompt(deps(tmux), 'lane-a', claimed, { resumeIfOwn: 'whole' });
+    expect(res).toMatchObject({ ok: false, error: 'draft-present' });
+    expect(keysOf(calls)).toEqual([]);
   });
 });

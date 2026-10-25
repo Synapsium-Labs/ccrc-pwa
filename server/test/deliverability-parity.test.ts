@@ -44,26 +44,26 @@ const harness = (row: DeliverabilityRow): Harness => {
   const run: Runner = async (_cmd, args) => {
     calls.push([...args]);
     if (args[0] === 'has-session') {
-      if (row.tmux === 'gone') return { code: 1, stdout: '', stderr: "can't find session: cc-x\n" };
-      if (row.tmux === 'unknown') return { code: 1, stdout: '', stderr: 'server exited unexpectedly\n' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (row.tmux === 'gone') return { ran: true, code: 1, stdout: '', stderr: "can't find session: cc-x\n" };
+      if (row.tmux === 'unknown') return { ran: true, code: 1, stdout: '', stderr: 'server exited unexpectedly\n' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     }
     if (args[0] === 'list-panes') {
       return row.panePid
-        ? { code: 0, stdout: `${PARITY_PID}\n`, stderr: '' }
-        : { code: 1, stdout: '', stderr: '' };
+        ? { ran: true, code: 0, stdout: `${PARITY_PID}\n`, stderr: '' }
+        : { ran: true, code: 1, stdout: '', stderr: '' };
     }
     if (args[0] === 'capture-pane') {
       // Echo whatever sendPrompt last typed: the happy three-capture script
       // without hand-scripting pane order per row.
-      return { code: 0, stdout: lastLiteral === '' ? emptyBox : anyEchoBox(lastLiteral), stderr: '' };
+      return { ran: true, code: 0, stdout: lastLiteral === '' ? emptyBox : anyEchoBox(lastLiteral), stderr: '' };
     }
     if (args[0] === 'send-keys') {
       if (args[3] === '-l') lastLiteral = args[5] ?? '';   // the text sits after `--` (D-5046)
       else if (args[3] === 'Enter') lastLiteral = '';
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     }
-    return { code: 1, stdout: '', stderr: '' };
+    return { ran: true, code: 1, stdout: '', stderr: '' };
   };
   return { home, calls, run };
 };

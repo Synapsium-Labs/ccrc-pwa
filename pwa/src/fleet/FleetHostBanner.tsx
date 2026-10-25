@@ -177,9 +177,9 @@ export function FleetHostBanner(
             // already had. `Button`'s default size is `full` (`w-full`), so
             // `flex-none` alone kept this button at the row's full width: it
             // claimed the row and collapsed the message to its `min-width:
-            // 0`. The three sibling banners — halt, update, coord,
-            // child-reclaim — all write `size="fit" className="flex-none"`,
-            // which is the same shape `.update-banner-actions` reached for
+            // 0`. The sibling banners — halt, coord, child-reclaim — all
+            // write `size="fit" className="flex-none"`, which is the same
+            // shape the retired update banner's action row reached for
             // with `flex: none` and `width: auto`. This one had the first
             // half and not the second.
             //

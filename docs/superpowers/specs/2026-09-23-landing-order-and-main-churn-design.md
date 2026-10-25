@@ -19,8 +19,8 @@ skill clauses after this spec's stage 1.
 The operator's complaint, 2026-09-22: *"the order in which commits land, then cancelled work for some tasks due
 to main having moved on … wasted time by agents and constantly having to rebase/pull main into PRs
 mid-workflow."* This spec makes landing order a recorded fact, stops the fleet manufacturing absorb rounds, and
-lets the coordinator land a tested composition. **The coordinator merges, workers never do, and nothing merges
-unattended** (§3, ruling R5).
+lets the coordinator land a tested composition. **The coordinator merges, workers never do, and an unattended
+landing is the goal when every safeguard holds** (§3, ruling R5 as amended 2026-10-25).
 
 Stages are numbered 1–5 and stage N is §5.N. References outside §5 use stage numbers.
 
@@ -110,7 +110,7 @@ repositories are on plans that exclude it.
 | R2 | Two specs: landing (this) and session continuity. | §9. |
 | R3 | Coordinators may enqueue on this repository's native queue on their own. | Stage 2. |
 | R4 | A fresh workspace per wave. | Delivered by #166 rule 3 on `main` (#178), so stage 1 carries no step of its own (§5.1). |
-| R5 | **No unattended lander.** "It's the coordinator's job to do merges, not the sub-workspace's, as it is the coordinator that bears ultimate merge responsibility (ultimate after the human)." | No timer holds MERGE authority; workers never merge; the coordinator composes, tests and merges from its own shell. |
+| R5 | **Unattended landing is the goal.** Originally (2026-09-22): "It's the coordinator's job to do merges, not the sub-workspace's, as it is the coordinator that bears ultimate merge responsibility (ultimate after the human)." **Amended 2026-10-25:** the operator overturned "no unattended lander": "WE WANT UNATTENDED MERGES ... maximise autonomy with safeguards". | A lane, a timer or the operator's keeper may land a PR unattended when every safeguard holds: GitHub's native merge queue re-tests the combined code, the required checks gate the enqueue, the landing is bound to the verified head with `--match-head-commit`, and there is no `--admin` and no `update-branch`. **Orchestrator call, for the operator to overturn:** a worker still never merges its own PR (separation of duties is one of the safeguards). |
 | R6 | No headroom estimation. | Nothing here reads account headroom. |
 | R7 | The knowledge graph is not used for landing (measured). | §1's closing paragraph; §13. |
 | R8 | Mergify and other queue apps rejected; file-level lanes rejected. | §13. |
@@ -736,8 +736,13 @@ required/advisory split waits. None of it is needed for 5.7.1–5.7.6.
   `land-candidate` is a fleet git act in the `pr-open` class: it pushes and deletes only its own
   `refs/heads/ccrc/land/*` family, non-force. `ccd-land-probe` is read-only by code. The operator reshapes the
   rule's wording in `CLAUDE.md`; a worker does not.
-- **R5 restated precisely:** no timer holds MERGE authority. The probe holds the repo-write credential and is
-  read-only by code, pinned.
+- **R5 restated precisely (amended 2026-10-25):** unattended landing is the goal. A lane, a timer or the operator's
+  keeper may land a PR with no human present while every safeguard holds: the native queue re-tests the combined
+  code, the required checks gate the enqueue, the landing binds the verified head (`--match-head-commit`), and
+  there is no `--admin` and no `update-branch`. Orchestrator call (the operator may overturn it): a worker never
+  merges its own PR. The probe still holds the repo-write credential and is read-only by code, pinned.
+  The operator's keeper is the operator's own tool and may rebase or force-push PR branches; the worker skill's
+  absorb clause (16) binds workers only.
 
 ## 8. The companion programme: this repository's test design
 
@@ -801,6 +806,8 @@ A stage whose metric has not moved two weeks after rollout is retired or redesig
 (clauses, the advisory) are explicitly subject to this rule.
 
 ## 11. Operator decisions
+
+**Amendment 2026-10-25 (ruling R5, overturned).** The operator overturned "no unattended lander": "WE WANT UNATTENDED MERGES ... maximise autonomy with safeguards". Unattended landing is now the goal when every safeguard holds (§3, R5): the native merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and there is no `--admin` and no `update-branch`. Orchestrator call, open to the operator's overturn: workers still never merge their own PR. Stages 3 to 5 are untouched here; whether to withdraw them is a separate operator decision. Where stage text says a landing never comes from a timer or the PWA (§5.5), R5 as amended governs. Rulings of the same day, recorded with it: **ruling 5** — governance of merges (who may merge, `--admin`, GitHub API merges, bypass) belongs to the repository's external policy authority, not to ccrc text; ccrc provides the enforcement points. It supersedes the wave lifecycle's pointer to the narrow approval licence (§5.7.4, §11 item 10): `--admin` and GitHub API merge or enqueue calls are governed by that authority, and until it answers (wave 2b) a coordinator never uses them. **Ruling 2** — the live queue's grouping (build 2, merge 3) is accepted; one release may cover several commits. **Ruling 3** — the two private repositories should drop strict protection; the native queue is not available on their plan, so how they land is open. Ledger: D-6857.
 
 Decided on the written spec, 2026-09-23:
 
@@ -876,5 +883,8 @@ Decided on the draft of §5.7, 2026-10-21 (each as the draft recommended):
 
 The edit ledger and anchored review comments; the knowledge graph in any landing role (measured no signal);
 third-party queue apps; file-level lanes; serialising dispatch by path ownership (reverses the advisory-claims
-ruling); an unattended lander (R5); headroom estimation (R6); controlling actors outside the fleet (their
+ruling); headroom estimation (R6); controlling actors outside the fleet (their
 inversions are recorded, not prevented).
+
+An unattended lander was listed here until 2026-10-25; it is now in scope under R5 as amended (§3), so it is no
+longer an exclusion. Third-party queue apps stay out: the safeguard is GitHub's native queue.

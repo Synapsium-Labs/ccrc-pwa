@@ -55,7 +55,7 @@
 // or lstat through a PARENT the process may not search, so with
 // `~/.cc-sessions` at mode 000 the correctly-paired guard in `_check_pools`
 // read "absent" for a tag that was present and printed the reassuring PASS
-// all over again (measured; `ccrc-doctor.test.ts` now pins both directions).
+// all over again (measured; the `ccrc-doctor-*` test files now pins both directions).
 // The cure is a searchability test on the PARENT, one level up, and this
 // scan deliberately does NOT require one:
 //   - It would be REDUNDANT at every per-tag site there is — each already
@@ -84,7 +84,7 @@
 //     server box, which owns no registry at all. A scan cannot choose
 //     between those; only the caller's contract can.
 // So the parent-guard class is mechanised where it can actually be measured:
-// as BEHAVIOUR, by the two `ccrc-doctor.test.ts` cases that go red when the
+// as BEHAVIOUR, by the two the `ccrc-doctor-*` test files cases that go red when the
 // `$reg` guard is deleted and when it is widened to the reader's own test.
 // This scan keeps the narrower rule it can enforce on text, and says so.
 //

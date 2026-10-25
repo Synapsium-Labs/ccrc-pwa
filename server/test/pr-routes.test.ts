@@ -1,11 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Runner } from '../src/exec.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { buildServer } from '../src/server.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { seedRow } from './idGateFixture.js';
+import { countingIO } from './countingIO.js';
 
 /** A registry home with one workspace session, so `knownId` resolves — and its worktree really there, which the
  *  archive door measures before it acts (workspace lifecycle §5.2). */
@@ -34,8 +37,8 @@ async function app(stdout = '', code = 0, stderr = '', ccdVerbs?: string[] | nul
   // archive door refuses `status-unknown` (D-5274) ahead of the verbs these tests are about.
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
-    if (args[0] === 'list-panes' && code === 0) return { code: 0, stdout: '4242\n', stderr: '' };
-    return { code, stdout, stderr };
+    if (args[0] === 'list-panes' && code === 0) return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+    return { ran: true, code, stdout, stderr };
   };
   const deps = testDeps(seedWorkspace(), run);
   return {
@@ -127,8 +130,8 @@ describe('GET /api/sessions/:id/pr', () => {
     const calls: string[][] = [];
     const run: Runner = async (_cmd, args) => {
       calls.push(args);
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      return { code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      return { ran: true, code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
     };
     const a = await buildServer(testDeps(seedWorkspace(), run));
     const res = await a.inject({ method: 'GET', url: '/api/sessions/demo-quiet-basin/pr' });
@@ -183,7 +186,7 @@ describe('GET /api/sessions/:id/pr', () => {
       description: '', status: 'in_progress',
     }));
 
-    const run: Runner = async () => ({ code: 0, stdout: LINE, stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: LINE, stderr: '' });
     const deps = testDeps(home, run);
     const a = await buildServer(deps);
     const res = await a.inject({ method: 'GET', url: '/api/sessions/demo-quiet-basin/pr' });
@@ -205,6 +208,112 @@ describe('GET /api/sessions/:id/pr', () => {
     expect(res.json().pr).toMatchObject({ phase: 'unknown', reason: 'unsupported' });
     expect(calls).toEqual([]);
     await a.close();
+  });
+});
+
+describe('GET /api/sessions/:id/pr reads one registry row (D-6434)', () => {
+  /** A fixture HOME of `rows` registry rows (the target plus `rows - 1` others); the IO calls one request makes. */
+  async function callsFor(rows: number): Promise<Record<string, number>> {
+    const home = mkTmp('ccrc-pr-rows-');
+    for (let i = 0; i < rows - 1; i++) seedRow(home, `project-a-other-${i}`);
+    const id = 'project-a-ws-a';
+    seedRow(home, id, { wrapper: 'claude', uuid: 'u' });
+    const tasksDir = path.join(home, '.claude', 'tasks', 'u');
+    mkdirSync(tasksDir, { recursive: true });
+    writeFileSync(path.join(tasksDir, '1.json'), JSON.stringify({
+      id: '1', subject: 'Wire the route', activeForm: 'Wiring the route', description: '', status: 'in_progress',
+    }));
+    const c = countingIO();
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: LINE, stderr: '' });
+    const a = await buildServer({ ...testDeps(home, run), io: c.io });
+    c.reset();
+    const res = await a.inject({ method: 'GET', url: `/api/sessions/${id}/pr` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().draft.body).toContain('- [ ] Wire the route');
+    const calls = c.calls();
+    await a.close();
+    return calls;
+  }
+
+  it('pr: 8 rows cost what 80 do', async () => {
+    expect(await callsFor(8)).toEqual(await callsFor(80));
+  });
+});
+
+describe('GET /api/sessions/:id/pr reads its tasks beside pr-state (D-6434)', () => {
+  const ID = 'project-a-ws-a';
+  /** A fixture HOME whose one row has a task file, and an IO that tells the task directory's read (which only
+   *  `prTasks` makes) from every other: `onTasksDir` runs on it, and may throw to make the task read reject. */
+  function rig(onTasksDir: () => void): { home: string; io: FleetIO } {
+    const home = mkTmp('ccrc-pr-beside-');
+    seedRow(home, ID, { wrapper: 'claude', uuid: 'u' });
+    const tasksDir = path.join(home, '.claude', 'tasks', 'u');
+    mkdirSync(tasksDir, { recursive: true });
+    writeFileSync(path.join(tasksDir, '1.json'), JSON.stringify({
+      id: '1', subject: 'Wire the route', activeForm: 'Wiring the route', description: '', status: 'in_progress',
+    }));
+    const io: FleetIO = new Proxy(localIO, {
+      get(target, prop, receiver) {
+        const v = Reflect.get(target, prop, receiver) as unknown;
+        if (prop !== 'readdir' || typeof v !== 'function') return v;
+        return (p: string) => {
+          if (p === tasksDir) onTasksDir();
+          return (v as (q: string) => unknown).call(target, p);
+        };
+      },
+    });
+    return { home, io };
+  }
+
+  it('pr: the task read starts before pr-state resolves', async () => {
+    let seen = false;
+    const { home, io } = rig(() => { seen = true; });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'pr-state') { await gate; return { ran: true, code: 0, stdout: LINE, stderr: '' }; }
+      return { ran: true, code: 1, stdout: '', stderr: '' };
+    };
+    const a = await buildServer({ ...testDeps(home, run), io });
+    try {
+      const pending = a.inject({ method: 'GET', url: `/api/sessions/${ID}/pr` });
+      // Released in `finally`, so a task read that waits on pr-state fails here by assertion, not by hanging.
+      await vi.waitFor(() => { expect(seen).toBe(true); }, { timeout: 2000 });
+      release();
+      const res = await pending;
+      expect(res.statusCode).toBe(200);
+      expect(res.json().draft.body).toContain('- [ ] Wire the route');
+    } finally {
+      release();
+      await a.close();
+    }
+  });
+
+  it('pr: a rejecting task read never breaks a failed pr-state\'s answer', async () => {
+    // pr-state is GATED until the task read has thrown: a rejection nobody has caught yet, while pr-state is still
+    // pending, is an unhandled rejection, which exits the Node process (and fails vitest's run).
+    let thrown = false;
+    const { home, io } = rig(() => { thrown = true; throw new Error('tasks dir unreadable'); });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'pr-state') { await gate; return { ran: true, code: 1, stdout: '', stderr: 'boom' }; }
+      return { ran: true, code: 1, stdout: '', stderr: '' };
+    };
+    const a = await buildServer({ ...testDeps(home, run), io });
+    try {
+      const pending = a.inject({ method: 'GET', url: `/api/sessions/${ID}/pr` });
+      await vi.waitFor(() => { expect(thrown).toBe(true); }, { timeout: 2000 });
+      // Let the rejection settle and the process see an uncaught one, if there is one, before pr-state answers.
+      await new Promise<void>((r) => setTimeout(r, 100));
+      release();
+      const res = await pending;
+      expect(res.statusCode).toBe(200);
+      expect(res.json().pr).toMatchObject({ phase: 'unknown', reason: 'agent-down' });
+    } finally {
+      release();
+      await a.close();
+    }
   });
 });
 
@@ -395,6 +504,21 @@ describe('audit and reap', () => {
     await a.close();
   });
 
+  it('a reap that never ran (a dropped link, with its words on stderr) is INDETERMINATE, never a refusal (D-6840)', async () => {
+    // The agent link failing forges `code: 1` and puts the error's words on stderr, so the empty-stderr rule above
+    // never saw it: it read as `refused: 'error'`, a claim about the filesystem nobody could make.
+    const run: Runner = async (_cmd, args) => (args[0] === 'list-panes'
+      ? { ran: true, code: 0, stdout: '4242\n', stderr: '' }
+      : { code: 1, stdout: '', stderr: 'disconnected', ran: false, reason: 'transport', detail: 'disconnected' });
+    const a = await buildServer(testDeps(seedWorkspace(), run));
+    const res = await a.inject({ method: 'POST', url: '/api/sessions/demo-quiet-basin/workspace/reap',
+      payload: { expect: 'a'.repeat(64) } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().indeterminate).toBe(true);
+    expect(res.json().refused).toBeUndefined();
+    await a.close();
+  });
+
   it('501s when the deployed ccd has no ws-audit, and shells out to nothing', async () => {
     // INTEGRATION NEW FINDING 10 — the audit route was the one ccd route with
     // no verbSupported gate, so version skew came back as a bare 502 (ccd
@@ -452,6 +576,14 @@ describe('POST /api/sessions/:id/forget', () => {
     const res = await a.inject({ method: 'POST', url: '/api/sessions/demo-quiet-basin/forget' });
     expect(res.statusCode).toBe(502);
     expect(res.json().stderr).toContain('still running');
+    await a.close();
+  });
+
+  it("relays a refused forget's stderr without the refusal-v1 machine line (#560)", async () => {
+    const { app: a } = await app('', 1, 'ccd-refusal: forget session-live\nccd: demo-quiet-basin is still running — stop it first');
+    const res = await a.inject({ method: 'POST', url: '/api/sessions/demo-quiet-basin/forget' });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().stderr).toBe('ccd: demo-quiet-basin is still running — stop it first');
     await a.close();
   });
 

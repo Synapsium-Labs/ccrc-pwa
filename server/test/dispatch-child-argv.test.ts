@@ -14,6 +14,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import type { Runner } from '../src/exec.js';
 import { ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, ROUTE_ARGV_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 import { configDirFor } from '../src/config.js';
@@ -41,13 +42,13 @@ function makeRunner(home: string, creates: string): { run: Runner; calls: string
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
-    if (verb === 'ws-add') { seed(home, creates); return { code: 0, stdout: '', stderr: '' }; }
+    if (verb === 'ws-add') { seed(home, creates); return { ran: true, code: 0, stdout: '', stderr: '' }; }
     if (verb === 'capture-pane') {
       const p = CLEAR_PANES[Math.min(capIdx, CLEAR_PANES.length - 1)]!;
       capIdx++;
-      return { code: 0, stdout: p, stderr: '' };
+      return { ran: true, code: 0, stdout: p, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 }
@@ -87,11 +88,12 @@ const harness = (cfg: HarnessCfg) => {
   const deps: DispatchRunDeps = {
     ...base, coord,
     fleetState: { connected: true, downSince: null, ccdVerbs: cfg.ccdVerbs, rosterFp: null, build: null },
-    configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
+    configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const, sendClear: clearSender(base),
   };
   return {
     runId: opened.id, calls,
-    dispatch: (route?: unknown, slug?: unknown) => dispatchRun(deps, opened.id, 'go', undefined, route, slug),
+    // An EMPTY route is a passed route (D-6794): these rows are about `--child`, not the run kind's default row.
+    dispatch: (route: unknown = {}, slug?: unknown) => dispatchRun(deps, opened.id, 'go', undefined, route, slug),
     wsAdds: (): string[][] => calls.filter((c) => c[0] === 'ws-add'),
     events: (): string[] =>
       coord.runEvents(opened.id).map((e) => e.detail).filter((d): d is string => d !== null),

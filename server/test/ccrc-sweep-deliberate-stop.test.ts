@@ -22,7 +22,7 @@
 // pins the seven tree helpers the frozen function calls (a helper the tree changes is frozen into the fixture
 // first), and X0b pins that the next move still resolves the script at call time.
 //
-// THE TECHNIQUE is `ccrc-update.test.ts`'s `sourcedCcrc`: a shell that SOURCES `ccd/ccrc` — its dispatch is
+// THE TECHNIQUE is `ccrc-updateFixture.ts`'s `sourcedCcrc`: a shell that SOURCES `ccd/ccrc` — its dispatch is
 // guarded by `BASH_SOURCE[0] == $0`, so sourcing defines functions and runs no verb — then sources the frozen
 // file, which redefines `_upd_sweep`, and calls it, on a fixture HOME whose `systemctl` is a stub. The builders
 // live in `sweepFixture.ts` (wave 11's window file uses them too).
@@ -164,11 +164,13 @@ describe('the move INTO wave 11: the pre-wave-11 _upd_sweep (frozen, v0.0.60–v
 
   itLinux('X0c the frozen sweep\'s helpers are v0.0.84\'s', () => {
     const ccrc = readFileSync(CCRC_SRC, 'utf8');
-    // `_upd_phase` gained its eighth key in wave 17 (D-5314), so v0.0.84's copy is frozen in the fixture, below the sweep.
+    // `_upd_phase` gained its eighth key in wave 17 (D-5314), and `_upd_redact` its scheme-less mask in wave 24
+    // (D-6748), so v0.0.84's copy of each is frozen in the fixture, below the sweep.
     const frozen = readFileSync(FROZEN_SWEEP, 'utf8');
+    const inFixture = new Set(['_upd_phase', '_upd_redact']);
     for (const [name, want] of HELPER_SHAS) {
-      const text = extractHelper(name === '_upd_phase' ? frozen : ccrc, name);
-      expect(text, `${name} not found in ${name === '_upd_phase' ? 'the frozen fixture' : 'ccd/ccrc'}`).not.toBeNull();
+      const text = extractHelper(inFixture.has(name) ? frozen : ccrc, name);
+      expect(text, `${name} not found in ${inFixture.has(name) ? 'the frozen fixture' : 'ccd/ccrc'}`).not.toBeNull();
       expect(sha256(text!), `${name} differs from v0.0.84's copy — freeze v0.0.84's copy into `
         + 'fixtures/upd-sweep-pre-wave11.bash (below the function) before changing it').toBe(want);
     }

@@ -19,7 +19,7 @@
 //   functional stub AFTER the poisons, and must win; a stub planted BEFORE them must be kept. A poison that
 //   overwrote would turn every functional `ssh` or `systemctl` a case wrote first into a refusal.
 //
-// * loopbackCurlFront. Four cases in ccrc-update.test.ts (each calls `allowCurlPort`) measure the REAL curl: its own
+// * loopbackCurlFront. Four cases in ccrc-update-*.test.ts (each calls `allowCurlPort`) measure the REAL curl: its own
 //   `--max-time`/`--max-filesize` bounds against a listener the case itself opened, and a refused connection at
 //   port 9. A poison would answer 97 and measure nothing. So their curl is a front that execs the real one ONLY
 //   for a URL on 127.0.0.1 at a port the case listed in `$HOME/curl-allow-ports`: never the live server's 7788 or the agent's 7789 by default, never another host, never
@@ -159,7 +159,7 @@ export function loopbackCurlFront(realCurl: string): string {
     '      -d|--data-binary) [ $# -gt 0 ] || refuse; case "$1" in @*) refuse ;; esac; shift ;;',
     '      -K) [ $# -gt 0 ] && [ "$1" = - ] || refuse',
     '          if [ "$mode" = check ]; then [ -z "$have_cfg" ] || refuse; cfg=$(cat); have_cfg=1; cfg_ok || refuse; fi; shift ;;',
-    '      -[sSfL]*) case "${a#-}" in *[!sSfL]*) refuse ;; esac ;;',
+    '      -[gsSfL]*) case "${a#-}" in *[!gsSfL]*) refuse ;; esac ;;',
     '      -*) refuse ;;',
     '      *) url_ok "$a" ;;',
     '    esac',

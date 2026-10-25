@@ -21,10 +21,11 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { renderMailNudge } from '../src/coord/envelope.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import { ACTOR_FLAGS_CAP, ROUTE_ARGV_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 import { configDirFor } from '../src/config.js';
 import type { PushPayload } from '../src/push.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { sourceOfSymbol } from './scan/symbols.js';
 
@@ -57,13 +58,13 @@ const render = (p: Pane): string => [
 ].join('\n') + '\n';
 
 /** A Runner for the tmux verbs over `p`; `inertStash` models a rebound `C-s`. Other verbs answer `other`. */
-const paneRunner = (p: Pane, o: { inertStash?: boolean; other?: (args: string[]) => { code: number; stdout: string; stderr: string } } = {}): Runner =>
+const paneRunner = (p: Pane, o: { inertStash?: boolean; other?: (args: string[]) => { ran: true, code: number; stdout: string; stderr: string } } = {}): Runner =>
   async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: render(p), stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: render(p), stderr: '' };
     if (args[0] === 'send-keys') {
-      if (args[3] === '-l') { p.keys.push(`lit:${args.at(-1)}`); p.box += args.at(-1)!; return { code: 0, stdout: '', stderr: '' }; }
+      if (args[3] === '-l') { p.keys.push(`lit:${args.at(-1)}`); p.box += args.at(-1)!; return { ran: true, code: 0, stdout: '', stderr: '' }; }
       const key = args.at(-1)!;
       p.keys.push(key);
       if (key === 'C-u') p.box = '';
@@ -74,9 +75,9 @@ const paneRunner = (p: Pane, o: { inertStash?: boolean; other?: (args: string[])
         p.box = '';
         if (p.stash !== null) { p.box = p.stash; p.stash = null; }
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     }
-    return o.other?.(args) ?? { code: 0, stdout: '', stderr: '' };
+    return o.other?.(args) ?? { ran: true, code: 0, stdout: '', stderr: '' };
   };
 
 // ── the mail lane ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -102,7 +103,7 @@ const mailRig = async (p: Pane, o: { inertStash?: boolean } = {}) => {
   const sent: PushPayload[] = [];
   const deps: Deps = { ...testDeps(home, paneRunner(p, o)), coord,
     push: { notify: async (x: PushPayload) => { sent.push(x); } } as never };
-  const w = new FleetWatcher(deps, new Bus(), 2000);
+  const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
   await w.tick();                 // primed on an empty registry: no pane is captured
   seedRecipient(home);
   const mail = coord.insertMail({ fromId: 'project-a-sender', fromUuid: 'b'.repeat(36), toId: ID, runId: null,
@@ -215,7 +216,7 @@ describe("dispatch's `/clear` stashes a draft (D-5912)", () => {
       ...base, coord,
       fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-add', 'ensure', 'ws-hold', ACTOR_FLAGS_CAP, ROUTE_ARGV_CAP, ROUTE_CAP],
         rosterFp: null, build: null },
-      configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
+      configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const, sendClear: clearSender(base),
     };
     const out = await dispatchRun(deps, opened.id, 'go', undefined, undefined);
     expect(out).toMatchObject({ ok: true, resumed: true, clearedAt: expect.any(Number) });
@@ -233,8 +234,8 @@ const blankComments = (src: string): string =>
   src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
     .replace(/(^|[^:'"`\\])\/\/[^\n]*/g, (m, pre: string) => pre + ' '.repeat(m.length - pre.length));
 
-/** `sweepMail`'s code, keyed on its symbol (D-5854: no literal source pin over a W1a file), comments blanked. */
-const sweepMailCode = (): string => blankComments(sourceOfSymbol('server/src/watch.ts', 'FleetWatcher.sweepMail'));
+/** `mailPass`'s code (the body `sweepMail` runs through its lane), keyed on its symbol (D-5854: no literal source pin over a W1a file), comments blanked. */
+const sweepMailCode = (): string => blankComments(sourceOfSymbol('server/src/watch.ts', 'FleetWatcher.mailPass'));
 
 type Policy = 'stash' | 'refuse-or-replace';
 interface Site { file: string; fn: string; policy: Policy }
@@ -243,10 +244,10 @@ interface Site { file: string; fn: string; policy: Policy }
  *  operator-initiated send refuses or replaces it, as the operator asked. A new call is red until it is classified
  *  here. The definition in `inject/send.ts` is not a call. */
 const CALL_SITES: readonly Site[] = [
-  { file: 'coord/dispatch.ts', fn: 'dispatchRun', policy: 'stash' },              // the wave N>=2 `/clear`
+  { file: 'inject/send.ts', fn: 'clearSender', policy: 'stash' },                 // the wave N>=2 `/clear`, dispatch's `sendClear` port (ARCH-22)
   { file: 'server.ts', fn: 'POST /api/sessions/:id/prompt', policy: 'refuse-or-replace' },   // the PWA's human send
   { file: 'watch.ts', fn: 'idleNudgeOne', policy: 'stash' },                     // the idle compact nudge
-  { file: 'watch.ts', fn: 'sweepMail', policy: 'stash' },                        // every mail
+  { file: 'watch.ts', fn: 'mailPass', policy: 'stash' },                        // every mail
 ];
 
 const FN_RE = /^ {2}(?:private |public |protected )?(?:static )?(?:async )?(?!(?:if|for|while|switch|catch|return|await)\b)([A-Za-z_]\w*)\s*\(|^(?:export )?(?:async )?function\s+([A-Za-z_]\w*)|app\.(get|post|put|patch|delete)\('([^']+)'/;
@@ -321,8 +322,8 @@ describe('every `sendPrompt` call is classified (D-5912)', () => {
   });
 
   it('…and a lane that drops `stash` is red', () => {
-    const files = srcFiles().map((f) => f.rel === 'coord/dispatch.ts'
+    const files = srcFiles().map((f) => f.rel === 'inject/send.ts'
       ? { ...f, text: f.text.replace("'/clear', { onDraft: 'stash' })", "'/clear')") } : f);
-    expect(tableFaults(callSites(files))).toEqual(['coord/dispatch.ts dispatchRun: onDraft (none) breaks policy stash']);
+    expect(tableFaults(callSites(files))).toEqual(['inject/send.ts clearSender: onDraft (none) breaks policy stash']);
   });
 });

@@ -196,6 +196,26 @@ describe('cmd_ws_add places by class and stamps the rung it took', () => {
     expect(fs.existsSync(path.join(h.home, 'worktrees', 'demo', 'quiet-mesa'))).toBe(false);
   });
 
+  it('(g) D-6794: --route-default beside the server\'s class places at the seven-day ceiling; the same class typed refuses', () => {
+    // The pool's only lane is at the ceiling for `opus`. The dispatch path's default row used to ride a bare
+    // `--route class=opus` (strict) and refused; `--route-default` makes it the preference it is.
+    gptOnlyPool(98);
+    const typed = shStatus(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc --route class=opus demo`);
+    expect(typed.status).toBe(1);
+    expect(typed.out).toContain('gpt:class=opus-unservable');
+    const dflt = shStatus(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc --route class=opus --route-default demo`);
+    expect(dflt.status).toBe(0);
+    expect(h.reg('demo-quiet-mesa', 'wrapper')).toBe('gpt');
+    expect(h.reg('demo-quiet-mesa', 'class')).toBe('opus');
+  });
+
+  it('(h) D-6794: a gpt-only pool at 98 places the review row (class=sonnet --route-default) too', () => {
+    gptOnlyPool(98);
+    const r = shStatus(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc --route class=sonnet --route-default demo`);
+    expect(r.status).toBe(0);
+    expect(h.reg('demo-quiet-mesa', 'class')).toBe('sonnet');
+  });
+
   it('an UNMEASURED lane is never named as the reason — it is placeable, and saying otherwise is a fabricated fact', () => {
     // The pool's one lane has no sweep row, so `_class_gate` answers 2. The
     // verb must place, not refuse.

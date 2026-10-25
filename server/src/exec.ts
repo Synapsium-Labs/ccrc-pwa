@@ -25,13 +25,14 @@ interface ExecAnswer {
   signal?: string | null;
 }
 
-/** D-6034: the `ran` discriminant, ADDITIVE for now. `ran: false` is a runner's own answer that the command never
- *  ran (or may not have); `code: 1` and `stderr` stay forged on that arm exactly as before, so every reader that
- *  reads only `code` is unchanged. `ran` absent is today's every other answer; step 2 makes it required. A reader
- *  that classifies a refusal must narrow on `ran === false` FIRST: no refusal, die or composition error is ever
- *  read off a forged code. */
+/** D-6034, D-6840: the `ran` discriminant; it is required on both arms, `ran: true` on the ran arm and `ran: false` on the not-ran arm.
+ *  `ran: true` is a command that ran and exited; `ran: false` is a runner's own answer that it never ran (or may not have); `code: 1` and `stderr`
+ *  stay forged on that arm exactly as before, so a reader of `code` alone is unchanged. A reader that classifies a
+ *  refusal must narrow on `ran === false` FIRST: no refusal, die or composition error is ever read off a forged code.
+ *  An agent older than the arm answers no `ran` key; `asExecResult` (`remote/runner.ts`) reads that as `ran: true`,
+ *  the answer it always was. */
 export type ExecResult =
-  | (ExecAnswer & { ran?: true })
+  | (ExecAnswer & { ran: true })
   | (ExecAnswer & NotRan);
 export type Runner = (cmd: string, args: string[]) => Promise<ExecResult>;
 
@@ -55,6 +56,7 @@ export const realRunner: Runner = (cmd, args) =>
       const e = err as (NodeJS.ErrnoException & { code?: number; killed?: boolean; signal?: string }) | null;
       const code = err ? (e?.code as number | undefined ?? 1) : 0;
       const measured = {
+        ran: true as const,
         code: typeof code === 'number' ? code : 1,
         stdout: String(stdout), stderr: String(stderr),
         killed: e?.killed === true,

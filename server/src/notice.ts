@@ -17,7 +17,8 @@ import type { NotifyEvent } from '../../shared/api.js';
 import type { NotifyLog } from './notifylog.js';
 import type { CoordStore } from './coord/store.js';
 import type { PushPayload, PushService } from './push.js';
-import type { Presence } from './presence.js';
+import type { Viewers } from './viewer.js';
+import type { Bus } from './bus.js';
 
 /** The record gate and the push: the three combinations a writer can reach (there is no record-unless-visible-and-never-
  *  push writer).
@@ -61,7 +62,7 @@ export interface NoticeDeps {
   readonly notifyLog?: NotifyLog | undefined;
   readonly coord?: Pick<CoordStore, 'recordFeedEvent'> | undefined;
   readonly push?: Pick<PushService, 'notify'> | undefined;
-  readonly presence?: Pick<Presence, 'isVisible'> | undefined;
+  readonly viewers?: Pick<Viewers, 'isVisible'> | undefined;
 }
 
 /** The port a writer outside `watch.ts` receives: `notify` bound to the composition root's sinks. */
@@ -105,7 +106,7 @@ export function notifyEach(
  *  push for one notice. */
 function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: NoticeOpts, flush: boolean): NoticeOutcome {
   // `'record-only'` never pushes, so presence decides nothing for it and is not consulted.
-  const visible = mode !== 'record-only' && deps.presence?.isVisible(event.sessionId) === true;
+  const visible = mode !== 'record-only' && deps.viewers?.isVisible(event.sessionId) === true;
   if (visible && mode === 'push') return { recorded: false, archived: 'none' };
   const log = deps.notifyLog;
   let recorded = false;
@@ -127,13 +128,47 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
     }
   }
   if (mode === 'record-only' || visible) return { recorded, archived };
-  void deps.push?.notify({
+  sendPush(deps.push, {
     title: event.title, body: event.body, sessionId: event.sessionId,
     tag: opts.tag ?? `${event.kind}-${event.sessionId}`,
     ...(opts.actions ? { actions: opts.actions } : {}),
     ...(opts.url !== undefined ? { url: opts.url } : {}),
   });
   return { recorded, archived };
+}
+
+/** D-6732 (ARCH-59 (#794)): a push that is no `NotifyEvent`, for the one writer that has no ring row to
+ *  make: the `notify.sh` banner's model-class push (`POST /api/notify` with `push: true`). Its missing feed record is
+ *  a residual of W2 that D-5211 states, and no `NotifyEvent` kind fits a model-class line (a new kind widens `shared/api.ts`'s union and the
+ *  PWA's per-kind tables), so it takes neither the gate, the ring nor the archive: the caller's policy has already
+ *  decided it is pushable, and this only sends it. The push is the funnel's, so the one `PushService.notify` call for a
+ *  notice stays in this file. A rejected send is logged under `failed` (the text before ` (reason)`) and never thrown,
+ *  because the caller has already answered. */
+export function notifyPushOnly(deps: Pick<NoticeDeps, 'push'>, payload: PushPayload, failed: string): void {
+  sendPush(deps.push, payload, failed);
+}
+
+/** D-6732 (ARCH-59 (#794)): the `notify.sh` banner, the bus frames `POST /api/notify` raises. A banner is a
+ *  transient channel the open sockets read, not a ring record: it writes no `NotifyLog` row and no archive row, and it
+ *  has no presence gate (it reaches every open console). It is ONE global `notice` frame, and for a
+ *  `cc swap: <id> moved <from> -> <to>` line a second frame on the moved session's own stream, after the global one, so
+ *  that session's chat surfaces the account change inline. The route authenticates and parses, and this is the only
+ *  writer of either frame (the census in `notify-push.test.ts` reds if `server.ts` emits a `notice` again). */
+export function noticeBanner(deps: { readonly bus: Pick<Bus, 'emit'> }, message: string): void {
+  deps.bus.emit('notice', { message });
+  const swap = /^cc swap: (\S+) moved (\S+) -> (\S+)/.exec(message);
+  if (swap) deps.bus.emit(`session:${swap[1]}`, { type: 'notice', message });
+}
+
+/** The ONE `PushService.notify` call in this file (the census in `notify-push.test.ts` counts it). `failed` names the
+ *  caller's sentence for a rejected send; `raise` names none and keeps its send unguarded, as it always was. */
+function sendPush(push: NoticeDeps['push'], payload: PushPayload, failed?: string): void {
+  const sent = push?.notify(payload);
+  if (failed !== undefined) {
+    void sent?.catch((err: unknown) => {
+      console.warn(`${failed} (${err instanceof Error ? err.message : String(err)})`);
+    });
+  }
 }
 
 /** The composition root's one sink over its deps. */

@@ -257,6 +257,11 @@ describe('who may roll, install or select a build (D-5696)', () => {
       expect(bash(c), c).toBe('forbidden');
     }
   });
+  it('a child\'s `ccd ws-orphan --expect <t> --tree-hex <h>` is forbidden, in every spelling the verb list reaches', () => {
+    for (const c of ['ccd ws-orphan --expect t --tree-hex 2f', '~/.local/bin/ccd ws-orphan --expect t', 'cd x && ccd ws-orphan --rescue']) {
+      expect(bash(c), c).toBe('forbidden');
+    }
+  });
   it('a child\'s `ccd claude roll-live on` (an operator switch verb) is forbidden', () => {
     for (const c of ['ccd claude roll-live on', 'ccd claude self-update keep', 'cd x && ccd claude mode off']) expect(bash(c), c).toBe('forbidden');
   });

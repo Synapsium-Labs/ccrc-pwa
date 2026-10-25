@@ -94,7 +94,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The seventeen clauses, verbatim. Kept as a literal array rather than a regex per
+// The eighteen clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -123,17 +123,19 @@ const CONTRACT = [
   "The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.",
   // Landing-order wave 1 (spec 2026-09-23 §5.1). Written with no apostrophe at
   // all, so neither the straight nor the curly spelling can drift.
-  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`.',
+  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing uses `--admin` or an update of the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.',
   // Worker stall watch, wave 3 (spec 2026-09-29 §6.1), amended by wave 7 (D-3805). Typographic apostrophes
   // and quotes, as clauses 3–12 are typed; no straight apostrophe at all.
   'A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well, whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.',
   // Delegation broker wave 3, Task 15 (spec 2026-10-04 §5.1, §13). Written with no apostrophe at all, so neither the straight nor
   // the curly spelling can drift. It names the CLIENT verb, not the route; it is an identity declaration, never a restriction.
   'Before delegating, declare coordinator intent for this session with `ccrc-api coordinators intent set --session <id>`; clear that declaration when the coordinator role ends. This is an identity declaration, not a restriction on ordinary Agent or Workflow use.',
+  // Fleet disk retention, DR-25 (spec 2026-10-23 §2.7.2, §10). ASCII only, no apostrophe, no quote.
+  'A workflow script, a worker brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree.',
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all seventeen clauses verbatim', () => {
+  it('carries all eighteen clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -147,6 +149,14 @@ describe('the coordinator skill: its contract', () => {
     expect(flat(refs('wave-lifecycle.md'))).not.toContain('your ordinary review');
   });
 
+  it('withdraws the loose --admin allowance (R5 as amended 2026-10-25, ruling 5)', () => {
+    const lifecycle = flat(refs('wave-lifecycle.md'));
+    expect(lifecycle).not.toMatch(/where the repository(\u2019|')?s? ruleset requires it/);
+    expect(lifecycle).not.toContain('narrow approval licence');
+    expect(lifecycle).toContain("`--admin` and GitHub API merge or enqueue calls are governed by the repository's "
+      + 'external policy authority; until that authority answers (wave 2b), a coordinator never uses them');
+  });
+
   // ── the COUNT, which the verbatim pin above structurally cannot see ──────
   //
   // D-2175: the loop above is a SUBSET check (`toContain`), so a twelfth
@@ -155,7 +165,7 @@ describe('the coordinator skill: its contract', () => {
   // "pinned verbatim" exists to prevent. `worker-skill.test.ts` already
   // carries this guard; this ports it, with two adaptations the worker's
   // version does not need. First, the coordinator states its count in prose as
-  // "These seventeen sentences" (SKILL.md:67), not "clauses"/"lines" as the
+  // "These eighteen sentences" (SKILL.md:67), not "clauses"/"lines" as the
   // worker skill says, so the in-file harvest is widened to accept all three.
   // Second, README.md's own mention line-wraps the count word onto the line
   // after "clauses" (measured — CLAUDE.md's does not), so the cross-file
@@ -190,7 +200,7 @@ describe('the coordinator skill: its contract', () => {
   it('spells that same count, as one derived word, everywhere prose states it', () => {
     expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
       .toBeTruthy();
-    // SKILL.md states it once in its own words ("These seventeen sentences").
+    // SKILL.md states it once in its own words ("These eighteen sentences").
     // HARVESTED, never matched literally, so a revert to "ten" fails with the
     // wrong word named rather than with a missing string. The filter against
     // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause
@@ -451,11 +461,23 @@ describe('the coordinator skill: its contract', () => {
 // Delegation broker wave 3, Task 15 (spec 2026-10-04 §5.1, §13): clause 17, the coordinator's explicit intent declaration. The clause
 // is pinned VERBATIM with the others above; these rows hold what the verbatim pin cannot: that it is an IDENTITY declaration and not a
 // restriction, that the client verb it names exists, and that the skill still names none of the later waves' lease or cleanup verbs.
-describe('the coordinator skill: clause 17, coordinator intent', () => {
-  const CLAUSE_17 = CONTRACT[CONTRACT.length - 1]!;
+// DR-25 (D-6637): clause 18, where scratch and long output go. Pinned verbatim above; these rows hold the halves by name.
+describe('the coordinator skill: clause 18, temp and long output', () => {
+  it('keeps scratch out of a work tree and sends long output to a file or tail (D-6637)', () => {
+    const line = skill.split('\n').find((l) => l.startsWith('18. '));
+    expect(line, 'SKILL.md has no clause 18').toBeTruthy();
+    expect(line).toContain('never sets `TMPDIR` to a path inside a work tree');
+    expect(line).toContain('never writes scratch inside one');
+    expect(line).toContain('`CCRC_SESSION_TMPDIR`');
+    expect(line).toContain('Long command output goes to a file there, or through `tail`');
+  });
+});
 
-  it('is the seventeenth and last clause, and SKILL.md numbers it so', () => {
-    expect(CONTRACT).toHaveLength(17);
+describe('the coordinator skill: clause 17, coordinator intent', () => {
+  const CLAUSE_17 = CONTRACT[16]!;
+
+  it('is the seventeenth clause, and SKILL.md numbers it so', () => {
+    expect(CONTRACT).toHaveLength(18);
     expect(CLAUSE_17.startsWith('Before delegating, declare coordinator intent for this session with ')).toBe(true);
     expect(skill).toContain(`\n17. ${CLAUSE_17}\n`);
   });
@@ -615,6 +637,10 @@ describe('the coordinator skill: linkage', () => {
       // first half of the invitation.
       'GET /api/coord/collect-lane',
       'POST /api/coord/collect-lane',
+      // BUILD-SPEND CONTROLS (D-6795) — the operator-dial shape a fifth time. A coordinator told about this door
+      // would be told how to lift the review-round cap on its own run, which is the cap's own defeat. The
+      // forbid-mention case below is what turns this permission-to-omit into a prohibition.
+      'POST /api/coord/review-cap',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -1713,6 +1739,12 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     expect(named(allSkillText)).toEqual([]);
   });
 
+  it('never names the review-cap door — a door that would tell a coordinator how to lift the cap on its own review rounds', () => {
+    // D-6795, the caps dial's accounting: EXEMPT above only PERMITS the omission; this FORBIDS the mention.
+    expect(allSkillText).not.toContain('/api/coord/review-cap');
+    expect(allSkillText).not.toContain('review-cap');
+  });
+
   it('never names the break door — a door the claimant is not the one to walk through', () => {
     // D16's accounting: `POST /api/claims/:id/break` is EXEMPT (the
     // `/api/runs/:id/abandon` shape) and stays unnamed in EVERY corpus file.
@@ -2367,10 +2399,11 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
   // frame does not have. HARVESTED from the two refusal frames rather than
   // typed, so renaming a field, or adding a third cap, reds here.
   const capRefusalFields = (code: string): string[] => {
-    const src = readFileSync(path.join(root, 'server/src/coord/dispatch.ts'), 'utf8');
+    // ARCH-22 (#553): the refusal frames moved with the admit step into the decider (`refused({ ... })`).
+    const src = readFileSync(path.join(root, 'server/src/coord/dispatchDecide.ts'), 'utf8');
     const at = src.indexOf(`code: '${code}',`);
-    if (at < 0) throw new Error(`dispatch.ts sends no ${code} refusal — this harvest is stale`);
-    const frame = src.slice(at, src.indexOf('};', at));
+    if (at < 0) throw new Error(`dispatchDecide.ts sends no ${code} refusal — this harvest is stale`);
+    const frame = src.slice(at, src.indexOf('});', at));
     return [...new Set([...frame.matchAll(/(\w+):/g)].map((m) => m[1]!))]
       .filter((f) => f !== 'code').sort();
   };
@@ -2864,5 +2897,15 @@ describe('the stall clause quotes what the stall watch sends and reads (stall wa
       expect(reliedOn.has(q),
         `the clause quotes \`${q}\`, which is outside the constants it relies on: add the constant here, or unquote it`).toBe(true);
     }
+  });
+});
+
+describe('wave-lifecycle route default (D-6794)', () => {
+  it('says an omitted route fills the run kind default, not a bare argv', () => {
+    const text = refs('wave-lifecycle.md').replace(/\s+/g, ' ');
+    expect(text).toContain('Omitting `route` on a fresh spawn fills the run kind\'s default row');
+    expect(text).toContain('`route-defaulted:<kind>`');
+    expect(text).toContain('an empty `{}` is a passed route and is sent bare');
+    expect(text).not.toContain('sends the identical bare argv it always has');
   });
 });

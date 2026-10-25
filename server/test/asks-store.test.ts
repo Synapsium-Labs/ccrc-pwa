@@ -40,7 +40,7 @@ describe('the asks table', () => {
     // touch the asks table. This pin only needs the CURRENT total — it
     // asserts "no migration after the one this test knows about has changed
     // the asks table's columns", not anything about any of the twelve.
-    expect(COORD_SCHEMA_VERSION).toBe(29);
+    expect(COORD_SCHEMA_VERSION).toBe(31);
     const cols = (db.prepare("SELECT name FROM pragma_table_info('asks')").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(cols).toEqual([

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import type { FleetSession, WsAudit } from '../../shared/api';
+import { parseReapCrumb } from '../../shared/reapcrumb';
 import { fleetSession } from './fleetFixture';
 import { ToastHost } from '@ccrc/ui';
 import { ReapSheet } from '../src/session/ReapSheet';
@@ -418,11 +419,39 @@ describe('refusals', () => {
     expect(screen.queryByText(/failed/i)).not.toBeInTheDocument();
   });
 
+  // ccd's crumb is a string; the server's `reviveWsAudit` makes it a `ReapCrumb` before the PWA sees it.
+  const crumbAudit = (wire: string): unknown => ({
+    ...audit({ exists: false, verdict: 'worktree-missing', token: undefined,
+      sentence: 'The worktree is already gone; the branch and the registry entry are still here. `ccd ws-attic` lists the commits ccrc pinned.' }),
+    reaping: parseReapCrumb(wire),
+  });
+
   it('explains a breadcrumb instead of certifying an empty workspace', async () => {
-    auditBody = audit({ exists: false, reaping: 'branch', verdict: 'worktree-missing', token: undefined,
-      sentence: 'The worktree is already gone; the branch and the registry entry are still here. `ccd ws-attic` lists the commits ccrc pinned.' });
+    auditBody = crumbAudit('branch');
     open();
-    expect(await screen.findByText(/cleanup stopped part-way \(branch\)/i)).toBeInTheDocument();
+    expect(await screen.findByText(/cleanup stopped part-way, while removing its branch/i)).toBeInTheDocument();
+  });
+
+  // ARCH-25 (#531): the sheet never shows a raw token — one render per member of the
+  // vocabulary, and one for a crumb it does not know.
+  const WIRE_CRUMBS = [
+    'children', 'worktree', 'branch', 'clips',
+    'reclaim:children', 'reclaim:worktree', 'reclaim:branch', 'reclaim:artifacts',
+    'expire:children', 'expire:worktree', 'expire:branch', 'expire:artifacts',
+    'sometime-else', 'reclaim:clips', 'wat:branch',
+  ];
+  it.each(WIRE_CRUMBS)('never shows the raw crumb %s', async (wire) => {
+    auditBody = crumbAudit(wire);
+    const { container } = open();
+    await screen.findByText(/cleanup stopped part-way|stopped part-way/i);
+    const text = container.ownerDocument.body.textContent ?? '';
+    expect(text).not.toContain(wire.includes(':') ? wire : `(${wire})`);
+    expect(text).not.toMatch(/\((children|worktree|branch|clips|sometime-else)\)|reclaim:|expire:|wat:/);
+  });
+  it('says plainly that it does not know a crumb it does not know', async () => {
+    auditBody = crumbAudit('sometime-else');
+    open();
+    expect(await screen.findByText(/at a step this screen does not recognise/i)).toBeInTheDocument();
   });
 
   it('never hands control back on a mid-flight refusal', async () => {

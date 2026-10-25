@@ -418,7 +418,7 @@ through your own server. What does leave the box, all of it on your behalf:
   request for each class it would move to a new model, and again on each run while that request is refused: a user
   turn that reads "Reply with the single word OK." (at most 512 tokens, streamed, at the lowest effort level the model
   lists), with no session data (see "Turning the step off" in
-  [Model classes per lane](#model-classes-per-lane-ccrc-models) for where `CCRC_MODELS_ADVANCE_BUDGET_S=0` must be set).
+  [Model classes per lane](#model-classes-per-lane-ccrc-models) for where to set `CCRC_MODELS_ADVANCE_BUDGET_S=0` (a `~/.ccrc/ccrc.env` line)).
 - **Only if you set them up** — DuckDNS and an ACME CA, as `ccrc expose` uses them (DuckDNS
   for its `duckdns` arm, the CA for `duckdns` and `byo`, neither for `ip`); your browser's
   push service once VAPID keys are set (each notification is encrypted to the
@@ -613,7 +613,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `config`, `auth`, `rc` | `ccrc.env` coherent for its fleet mode; the session gate and its passphrase file; this box's `--remote-control` setting |
 | `exposure`, `update-exposure`, `caddy`, `caddyfile`, `cert`, `name` | the exposure pieces ("Exposure", below) |
 | `wrappers`, `skills`, `accounts`, `credentials` | the roster against `~/.local/bin` (Claude Code's binary included); the ccrc skills in every home; declared credential files and provider env blocks (a Codex lane's may omit `ANTHROPIC_BASE_URL`, which its launcher exports, but may not name an endpoint other than its loopback shim); a token file for every account the health probe measures |
-| `codex` | for each `exec.kind: "codex"` lane: the five GPT-lane executables in `~/.local/bin` against the shipped tree; the isolated runtime (`ccgpt-runtime check`, which trusts the build's stamp and compares the installed LiteLLM patch with `patch-source`); the roster row and its ports; `exec.authDir` and its `auth.json`, for existence and mode only; `lane.json` against the roster row and the class registry; a `codex` class registry and its haiku-class probe model; the rendered LiteLLM config against the catalogue; the two tiers (half up, foreign, unmeasurable, down under a live session, or running and not proven to run the installed bytes); and its usage timer and `~/.cc-limits` row. Lane state left under `~/.ccrc/codex/` for an id no longer `codex` is a WARN |
+| `codex` | for each `exec.kind: "codex"` lane: the five GPT-lane executables in `~/.local/bin` against the shipped tree; the isolated runtime (`ccgpt-runtime check`, which trusts the build's stamp and compares the installed LiteLLM patch with `patch-source`); the roster row and its ports; `exec.authDir`, then its `auth.json` through the auth library's non-secret status (signed in or not, `needs-signin`, `config-error`, another family's or an unreadable file) and the file's owner and mode; `lane.json` against the roster row and the class registry; a `codex` class registry and its haiku-class probe model; the rendered LiteLLM config against the catalogue; the two tiers (half up, foreign, unmeasurable, down under a live session, or running and not proven to run the installed bytes); and its usage timer and `~/.cc-limits` row. Lane state left under `~/.ccrc/codex/` for an id no longer `codex` is a WARN |
 | `pools`, `memory`, `routing`, `models` | project pool tags; one memory store per project; lane routing; model-catalogue freshness |
 | `transcripts` | every registry row's uuid against its transcript, read by the one `continued-in` rule `ccd` and the server share: a WARN names the sessions reading a transcript Claude Code has superseded (a supervised one clears on its next supervise tick; a stopped or archived one is followed when it is next resumed) and, apart, a session whose marker names a successor never written (it clears at that job's first line, or at the first prompt the session answers on its own transcript; the row's wrapper is named, because `<wrapper> agents` lists only that account's jobs); rows it could not measure (at neither direct spelling, unreadable, or a registry row it cannot read) are counted apart inside the PASS, never claimed clean; a FAIL when `~/.cc-sessions` is not a readable, searchable directory |
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
@@ -627,7 +627,7 @@ the shipped tree's own installer — and measures them again; the second verdict
 doctor writes nothing. Only a FAIL reaches a fixer, never a WARN. `wrappers` re-runs `ccrc wrappers` with no flag,
 which overwrites only a launcher whose ccrc marker still verifies. `codex` re-places a GPT-lane executable that is
 missing or differs, rebuilds a runtime its check refuses, re-renders a lane's stale `lane.json` or `litellm.yaml`
-under the lane's lock, and — only when it replaced the shim or the runtime — re-runs the install step that
+under the lane's lock, and — only when it replaced the shim, the auth library or the runtime — re-runs the install step that
 restarts a stale ccrc-owned tier; it never edits the roster, chooses a port, signs a lane in or enables a unit,
 so a usage timer that is not enabled is a WARN whose remedy is `ccrc install`.
 
@@ -757,12 +757,7 @@ the local tag is dropped, nothing is attested, pushed or published, and one line
 job summary reads `built unchanged: <N> entries identical to vX.Y.Z`. Anything else releases, and the
 line names the first entry that differs, or why it could not compare; a merge that changes
 `release-main.yml` or `release-main.sh` always releases, so the comparer never approves its own change.
-Where it releases, `actions/attest-build-provenance` signs the tarball's digest with the workflow's own
-OIDC identity (keyless — the repo holds no signing secret); and `release-main.sh publish` pushes the tag and
-publishes the tarball, `SHA256SUMS` and the bundle `ccrc-<tag>.tar.gz.sigstore.json` with `gh release
-create --verify-tag --prerelease`, deleting the tag again if the publish never completes (nothing
-reaches origin before that push). A hand-pushed `vX.Y.0`/`vX.0.0` tag rides `release.yml` instead —
-same attest step, its identity at the tag — and the next merge derives past it. The tarball is the
+The run is two jobs, and only the second holds a write credential. Everything above runs in a `build` job whose token can only read, whose checkout keeps no credential and which cannot mint the workflow's signing identity; where compare releases, it checks that the tarball's `build.json` names this tag and this commit, then hands the tarball and `SHA256SUMS` on as an artifact, with the tarball's digest; a decision the build job's step output loses fails the run, while a value dropped at the job boundary skips the `publish` job, an availability effect a hostile build already has. A `publish` job that installs nothing, runs no build script and never opens the tarball (the download action, at a major, `actions/download-artifact@v8`, extracts the hand-over with an extractor that confines every entry under its directory, or writes a hand-over that is not a zip as one file in that directory, and `verify` refuses any extra entry) then re-derives the tag from its own checkout and refuses unless it matches the build's, the handed-over files are exactly those two, the tarball hashes to the recorded digest, and `SHA256SUMS` is exactly that one line (`release-main.sh receive`). Only then does `actions/attest-build-provenance` sign the tarball's digest with the workflow's own OIDC identity (keyless — the repo holds no signing secret), and `release-main.sh publish` push the tag and publish the tarball, `SHA256SUMS` and the bundle `ccrc-<tag>.tar.gz.sigstore.json` with `gh release create --verify-tag --prerelease`, deleting the tag again if the publish never completes (nothing reaches origin before that push). A merge whose build is unchanged never starts the `publish` job. A hand-pushed `vX.Y.0`/`vX.0.0` tag rides `release.yml` instead — the same two jobs and the same attest step, its identity at the tag — and the next merge derives past it. The tarball is the
 matched set — prebuilt dists, the three `package.json`+lock pairs, `shared/`, `ccd/`, the deploy units
 and helpers, `install.sh` — with a `MANIFEST` of per-file sha256 digests and a shipped `build.json`
 that carries the tag as `version` (`ccrc version` prints it; `/health` emits a sibling `version`;
@@ -869,9 +864,9 @@ the first that fails; macOS runs the same window and re-check in-process, with n
 session stopped on purpose while the sweep walks (its unit settled `inactive` with ccd's
 `~/.cc-sessions/<id>.stopped` stamp present or its registry row purged; a stop with neither still fails) passes on a
 line of its own, as it does in `deploy.sh agent`'s sweep (a serial loop with no re-check); then the from→to report, and, after a passed gate and a
-finished sweep, the `~/ccrc-backups` prune (`CCRC_BACKUP_KEEP` from the process environment, default 10) and the coordination
-data set thinned out of every backup past the newest `CCRC_BACKUP_DATA_KEEP` (default 3, at least 2; the environment, else
-`~/.ccrc/ccrc.env`) that carry one, by an update or `ccrc backup`, never a rollback by flip (a rollback by re-install
+finished sweep, the `~/ccrc-backups` prune (`CCRC_BACKUP_KEEP`, default 10) and the coordination
+data set thinned out of every backup past the newest `CCRC_BACKUP_DATA_KEEP` (default 3, at least 2)
+that carry one, by an update or `ccrc backup`, never a rollback by flip (a rollback by re-install
 thins as the update it runs).
 Rolling back is `ccrc rollback` (below), which, like any move below the floor, prints the coord.db restore commands rather than
 auto-restoring. **Across a two-box fleet, `ccrc rollout [--to] [--server-first] [--check] [--force]`** (with `--channel`,
@@ -1025,7 +1020,7 @@ every later update runs. Whoever controls the environment can substitute the ven
 `CCRC_SIGSTORE_TRUSTED_ROOT` — including a value set in the user manager's environment, which reaches a
 `--detach` unit and the watchdog, though a value exported only in a shell does not. A separate supply-chain fact,
 not a third root: the verifier's own npm dependencies are fetched from the registry, pinned by the attested
-tarball's own lockfile integrity hashes, never installed from the tarball's bytes directly. Doctor's `provenance`
+tarball's own lockfile integrity hashes, never installed from the tarball's bytes directly. Nor is the release build a root: the jobs that install dependencies and build hold a read-only token and cannot mint the signing identity, and the jobs that hold the write token and the signing identity install nothing (`server/test/release-job-boundary.test.ts`). The attested bytes are still the build's — the bundle says which run of which commit made them, not that every dependency was benign. Doctor's `provenance`
 check PASSes, naming the next step, while `~/.ccrc/installed` says `unsigned`, whatever made it so (a checkout
 install, that first install, or `--allow-unsigned`); the next `ccrc update` that installs a release (a newer one, or `--force` on this one) verifies it and clears the mark.
 To narrow the first-install gap by hand, verify the artifact before running `install.sh`: fetch the release's
@@ -1039,7 +1034,7 @@ against `SHA256SUMS` (`sha256sum -c SHA256SUMS`, or `shasum -a 256 -c` on macOS)
 `install.sh --release vX.Y.Z` fetches and checks its own copy against the release's `SHA256SUMS` again, so
 this narrows the first-install gap rather than closing it.
 
-**Settings, the update banner and release pushes (update-management W3).** The fleet header's **Settings**
+**Settings, the update line and release pushes (update-management W3).** The fleet header's **Settings**
 door opens `/settings`, which reads `GET /api/updates` once a minute and whenever the page is shown again.
 Updates: the fleet's channel (stable or dev); auto-install (off; stable releases only and every release on
 my channel — the latter two disabled, naming the nodes, until every node lists `update-gate`); **Check
@@ -1092,13 +1087,16 @@ In remote mode the foot of the fleet screen always
 carries `BuildLine`: `fleet <version> · server <version>`, read from the node inventory. A side reads
 `unversioned (<sha>)` for a stamp with no tag and adds `dirty` for a dirty tree; it is amber unless the side
 is a clean versioned release, and `—` when that node's stamp cannot be stated (never measured, unread, or the
-node unreachable). On the fleet screen an update banner (`vX is out on <channel> — …`, with a door to
-`/settings`) and a `→ vX` on that node's side of `BuildLine` appear while a measured node with a channel,
-whose stamp was read, that is not a macOS node, has a newer desired tag; the banner also waits until GitHub
-has answered since the server started. While a node halts the fleet (below), a halt banner above that one
-names each halting node — `<label>: <state> (last tried <target>) — <detail>` — with that node's own **Ack**
-in place, the same Ack as its row in Settings, which reads **Acked** after a clean ack until a poll shows a
-new lease; Update all is disabled meanwhile, under a line naming the nodes to Ack first. The amber banner for
+node unreachable). On the fleet screen one quiet update line (`↑ vX available`, a door to Settings › Updates,
+its title `vX is out on <channel> — …`) and a `→ vX` on that node's side of `BuildLine` appear while a measured
+node with a channel, whose stamp was read, that is not a macOS node, has a newer desired tag; the line also waits
+until GitHub has answered since the server started. Refined shows it as a row under its bar at a desk, Instrument
+in its status bar, and both as a row below 900 px. Its × hides the line on that device until a newer release waits;
+Settings › Updates, `BuildLine`'s arrow, the push and the halt banner never read that dismissal. While a node
+halts the fleet (below), a halt banner names each halting node — `<label>: <state> (last tried <target>) —
+<detail>` — with that node's own **Ack** in place, the same Ack as its row in Settings, which reads **Acked**
+after a clean ack until a poll shows a new lease; Update all, in Settings › Updates, is disabled meanwhile, under
+a line naming the nodes to Ack first. The amber banner for
 two boxes on different builds names its remedy from the same rows: while a halt stands, the halt banner's
 Ack first, then whichever of the next two would apply; when auto-install is on and would move every lagging
 box, so that every node ends on one release tag, the console's own move, followed in Settings; otherwise —
@@ -1111,7 +1109,7 @@ measured node already runs is recorded without a push. It has no session, so an 
 it; tapping it opens `/settings`.
 
 **Moving a node from the console (update-management W4, server side).** Install and Roll back on a release, Update and Roll
-back on a node, and Update all on the fleet screen's banner each open one confirm sheet that names the nodes the move takes,
+back on a node, and Update all in Settings › Updates each open one confirm sheet that names the nodes the move takes,
 fleet first, and sends `POST /api/updates/apply` (`{nodeId}` or `{all: true}`, with an optional `tag` — without one, the node's
 desired tag) or `POST /api/updates/rollback` (`{nodeId}`, with an optional `to` — without one, the node's previous version).
 Both are session-only: the box token never moves a node. A single-node move the dispatcher would refuse answers `409` with its
@@ -1192,7 +1190,7 @@ bytes are no longer the kept ones, and `unmeasured` one `ccrc` cannot show to be
 `ccd/ccrc` or its role's build missing, or its kept stamp missing, unparseable or naming another tag; neither changes a prune verdict). After an install or update whose
 gate passes, and by `ccrc versions --prune`, the trees nothing needs are removed, each by a rename to a dot-name first: never the one `~/ccrc` points at, `previous`, a
 tag this node's projection names, or a version a running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_KEEP` (default 3) complete trees
-stay. An input that cannot be read prunes nothing (a `CCRC_VERSIONS_KEEP` that is not a whole number from 0 to 9999 is one), a dead process's `.pruning-`/`.incoming.` leftover is swept once per prune, and only `--prune` removes an incomplete tree. `deploy.sh` still
+stay. An input that cannot be read prunes nothing (a `CCRC_VERSIONS_KEEP` that is not a whole number from 0 to 9999, or that `ccrc.env` names on a line the reader cannot take, is one), a dead process's `.pruning-`/`.incoming.` leftover is swept once per prune, and only `--prune` removes an incomplete tree. `deploy.sh` still
 pushes its tree through `~/ccrc`, into whichever version directory that points at.
 
 **The `ccrc` verbs at a glance** (`ccrc --help` has each one's full text; exit 0 is success, 1 the tool ran
@@ -1214,30 +1212,31 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `models <id> <subcommand>`, `models refresh <id>\|--all`, `models litellm <id>` | a lane's model-class registry, and the provider catalogue it is classified against |
 | `codex start\|stop\|status\|login <id>` | a Codex lane's LiteLLM gateway and shim; refused on a server-role box |
 | `token sync\|probe` | the box token's fleet side: `sync --from agent` is ccrc-agent's token-sync op (a one-time code on stdin, trade for the new value, write `~/.cc-secrets/ccrc-mail.token`, prove it with one call); `probe --file <path> [--url <base>]` presents a file's value once and prints only the HTTP status and accepted, refused or unmeasured |
-| `restamp <file>` | re-stamp a file carrying a `ccrc:generated` marker after its body changed |
+| `restamp <file>` | re-stamp a file carrying a `ccrc:generated` marker after its body changed; for `ccd/session-hook.sh`, regenerate its generated helpers region from `ccd/ccd` |
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same directory shape, pruned
 to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — never the backup it just made, a dir named
 at or after the second it began, or the newest earlier tree backup, the newest earlier valid coordination snapshot and the
 newest earlier one that holds data (each chosen on its own, so a newer snapshot of an empty box never evicts the last one
 with data; `deploy/coordination-snapshot.mjs` decides what is valid, and a classifier that cannot run or answers out of
-its table prunes nothing and says why), and nothing at all, exit 0, while another ccrc run holds `~/.ccrc/update.lock`, `flock` is missing or
+its table prunes nothing and says why), and nothing at all, exit 0 (1 after a setting refusal, D-6590), while another ccrc run holds `~/.ccrc/update.lock`, `flock` is missing or
 the lock cannot be measured; hand-made siblings are never touched), as update and rollback do after a passed gate.
 After its prune, and only an update or `ccrc backup` (never a rollback by flip, which takes no backup; a rollback by re-install thins as the update it runs), the run thins the coordination
 data set (D-6346): of the backups that carry one, the newest `CCRC_BACKUP_DATA_KEEP` keep it, counting this run's own first, and
 every older one loses its `coord.db`, delegation journal, checkpoint and manifest and keeps the rest (its code, `memory/`, the
-units). The knob is a whole number from 2 to 9999, default 3, read from the process environment and else from
-`~/.ccrc/ccrc.env` alone, never `~/.ccrc/exposure.env`, which no process that thins receives on Linux; `0` and `1` are refused and an
-invalid value stops the prune and the thinning alike. So does a `ccrc.env` that is
-there but cannot be read, or that names the knob on a line the reader does not take. Read as bytes, after its leading spaces and
+units). The knob is a whole number from 2 to 9999, default 3, read as every ccrc setting is (below); `0` and `1` are
+refused, and an invalid value, or a line naming the knob that the reader does not take, stops the thinning only, while the
+count prune still runs (D-6590). A `ccrc.env` that is there but cannot be read at all stops each keep it is read for
+(a keep set in the environment is never read from the file), and each says so. Read as bytes, after its leading spaces and
 tabs, a line is skipped when it is a comment (`#` or `;`) or another key's `[export ]NAME=`, read when it begins
 `CCRC_BACKUP_DATA_KEEP=`, its value taken as systemd's `EnvironmentFile=` takes it (spaces and tabs around it trimmed), and
 refused when it names the knob as a whole word any other way, `export CCRC_BACKUP_DATA_KEEP=` included; a line holding a CR
-past its lead is never skipped, a file holding a NUL byte cannot be scanned, and a file that names the knob anywhere, a comment
-included, but that the box's model of systemd cannot decide (a value a quote or a backslash carries across lines, a CR that leads
-a line or sits inside one, a non-ASCII byte in an assignment) refuses too: unmeasured is not unset (D-6365). On Linux a `ccrc.env`
-that never names the knob reads as the default, whatever else it holds but a NUL byte, since systemd cannot set it from that file; on macOS,
-whose launchd job sources the file with bash, one the model cannot decide still refuses. A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
+past its lead is never skipped, a file holding a NUL byte cannot be scanned, and a file that names the knob on a line that could
+assign it (a comment line counts only when a CR sits inside it, D-6604), but that the box's model of systemd cannot decide (a value a quote or a backslash carries across lines, a CR that leads
+a line or sits inside one, a non-ASCII byte in an assignment, the last two on any line of the file, not only the knob's own) refuses too: unmeasured is not unset (D-6365). On Linux a `ccrc.env`
+that names the knob only on comment lines with no CR inside them, or not at all, reads as the default, whatever else it holds
+but a NUL byte, since systemd cannot set it from that file; on macOS,
+whose launchd job sources the file with bash, one the model cannot decide still refuses (this knob alone; every other setting reads the Linux rule there). A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
 a dir is read on presence and size (a `coord.db` with no manifest is also opened for its header and tables), so damage of the
 same length there is not seen (D-6350, D-6364). On an update, `thin` also works to a time budget inside the console's deadline:
 it starts no full verification that could not finish in time, leaves the rest for the next update and exits 0 unless a dir was refused (D-6464). The newest data set from
@@ -1279,6 +1278,27 @@ tier it can prove is that lane's own. It leaves, for you to remove by hand, the 
 the `ccrc-ddns` units `ccrc expose duckdns` installed, whose timer keeps re-pointing the DNS record (after
 `--purge` removes `~/.ccrc/exposure.env` it fails every five minutes instead —
 `systemctl --user disable --now ccrc-ddns.timer` first).
+
+**ccrc's own settings.** Seven values decide what ccrc keeps or removes, how long it waits before judging an update, where
+it fetches a release from, and whether a step runs at all: `CCRC_BACKUP_KEEP`, `CCRC_BACKUP_DATA_KEEP`,
+`CCRC_VERSIONS_KEEP`, `CCRC_UPDATE_HEALTH_S`, `CCRC_UPDATE_DEADLINE_MS`, `CCRC_RELEASE_BASE_URL` and
+`CCRC_MODELS_ADVANCE_BUDGET_S`. `deploy/ccrc.env.example` documents each, with its default and range. ccrc takes each
+from its process environment, else from `~/.ccrc/ccrc.env`, read by name as systemd's `EnvironmentFile=` reads a line and
+never sourced, else the default. A console-driven update, the update watchdog and the models timer run with no shell of
+yours, so the file is where a lasting setting goes. A line ccrc cannot read stops only the act that reads it: the backup
+keep stops the count prune and the data keep the thinning (D-6590), the deadline lets no verification start this run past
+the keep-set's first (D-6591, D-6592), the health gate waits its default 90 seconds (D-6593), the release base stops the
+update before anything on the box changes (D-6594), the models budget turns the advance step off for that run (D-6595),
+and the versions keep stops the versions prune while `ccrc versions` still lists (D-6596). When `ccrc.env` cannot be
+read at all (unreadable, or holding a NUL byte), every act that reads a setting from it refuses, or falls back as its
+own text says (the health gate waits its 90 seconds; the watchdog uses the largest reading it could decide), and each
+says so. Two causes are model-wide too: a non-ASCII (UTF-8) `NAME=value` line, and a line with an inner CR. Each refuses
+every setting the file names on an assignment-capable line, whichever line the fault sits on, while a setting the file
+does not name may still read its default. The thinning's time bound takes the smallest reading of
+`CCRC_UPDATE_DEADLINE_MS` the server may hold (the environment, `ccrc.env`, and `~/.ccrc/exposure.env`, which the server
+reads too), and the watchdog the largest (D-6591, D-6602). On macOS a file the box's model of systemd cannot decide
+refuses only the settings it names, and `CCRC_BACKUP_DATA_KEEP` always (D-6587). `ccrc doctor`'s `box-settings` check
+reads `ccrc.env` alone and names a line the reader refuses (D-6599).
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
@@ -1352,13 +1372,13 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the thirty-four machine lanes the
-fleet host reaches (thirty-one box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the thirty-six machine lanes the
+fleet host reaches (thirty-three box-token-consulting coordination routes plus
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
-`/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
+`/api/runs/:id`, `/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
 `/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`) take a live session
 cookie **or** the token, which is how a coordinator reads its own wave ledger from
 the fleet host), `POST /api/token/claim` (the box token's claim door, which
@@ -1495,7 +1515,7 @@ without it neither half of ccrc runs:
 produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`,
 `CCRC_ANTHROPIC_BACKEND`, `CCRC_SUBAGENT_CLASSES`, `CCRC_CODEX_BACKEND`,
 `CCRC_UPSTREAM`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
-`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_secrets_file` — the whole emitted surface, because a
+`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_secrets_file`, `_ccrc_auth_dir` — the whole emitted surface, because a
 field the projection drops is a field no drift detector can see). `ccrc install` generates it from the box's
 own installed roster, and the deploy fallback from the
 roster **read back off the box**, never from the local file, so ccd's routing
@@ -1899,9 +1919,12 @@ lane whose `exec.kind` is not `codex`: only a codex lane declares the `authDir` 
 registry anywhere else fails its probe (`no-token-dir`, or `runtime-absent` when its secrets file sets
 `CHATGPT_TOKEN_DIR`) on every hourly refresh (a registry that already exists is left as it is). On a codex lane
 `ccrc-models-probe` runs under the isolated runtime's interpreter with that lane's own
-`exec.authDir` and no default, and refuses with the remedy first — `ccrc install` when no runtime is current,
-`ccrc codex login <id>` when the authDir holds no `auth.json` or a token that can be neither used nor refreshed;
-it never starts a device-code sign-in. `show` says when no class on a lane is available, and a Codex
+`exec.authDir` and no default. It reads the credential through the auth library and never refreshes it, and it
+refuses with the remedy first — `ccrc install` when no runtime is current, `ccrc update` when the library is
+missing (`auth-library-absent`), `ccrc codex login <id>` when the authDir holds no credential or one that needs a
+sign-in, and `ccrc doctor` for a file it cannot use (`credential-unusable`; after a `config-error`, `ccrc update`
+and then the login). An expired token is `token-expired`: no request is made and the catalogue is kept, because
+the lane's own tier refreshes it on its next request. It never starts a device-code sign-in. `show` says when no class on a lane is available, and a Codex
 lane's launcher refuses to start on such a lane. Doctor's `models` check WARNs on a catalogue that is stale,
 unrewritten for three hours, or never probed. Every subcommand prints one JSON object on stdout; `show` adds a human summary on stderr unless `--json`. An
 account whose id is `refresh` or `litellm` cannot be addressed here — `ccrc models refresh …` refuses rather
@@ -1978,13 +2001,14 @@ possibly none.
 
 **Turning the step off.** `CCRC_MODELS_ADVANCE_BUDGET_S=0` turns it off. So does any value that is not a whole number
 (`off`, `false`, `-1`, `1.5`, a space): the step is off for that run, and the refresh says so in one line on standard
-error, which names the variable but not its value. Unset or empty, the budget is the default, 250; a whole number is read
-in base 10 (`0250` is 250), and one over 3600 is read as 3600. Set it in the environment of each run you mean to switch
-off. The hourly unit gets it from a drop-in of two lines (`systemctl --user edit ccrc-models.service`, then `[Service]` and
-`Environment=CCRC_MODELS_ADVANCE_BUDGET_S=0`; without the `[Service]` line systemd ignores the assignment). A hand
-`ccrc models refresh`, including the one `ccrc doctor`'s remedies name, does not read the drop-in: it reads its own
-environment, so it runs the step unless its command line sets the variable too. `~/.ccrc/ccrc.env` does not set it: the
-unit reads no environment file, and `ccrc` never sources that one. To keep one class still under every run, hold it. The
+error, which names the variable but not its value. The budget is read from the environment, else `~/.ccrc/ccrc.env`,
+else the default, 250 (an empty value is the default too); a whole number is read in base 10 (`0250` is 250), and one over
+3600 is read as 3600. The lasting place is a `CCRC_MODELS_ADVANCE_BUDGET_S=0` line in `~/.ccrc/ccrc.env`: the hourly
+timer and a hand `ccrc models refresh` (the one `ccrc doctor`'s remedies name included) both honour it. A drop-in
+(`systemctl --user edit ccrc-models.service`, then `[Service]` and `Environment=CCRC_MODELS_ADVANCE_BUDGET_S=0`; without
+the `[Service]` line systemd ignores the assignment) still works as an override for that one unit, because a set
+environment wins. A `ccrc.env` line ccrc cannot read turns the step off for that run and says why on standard error. To
+keep one class still under every run, hold it. The
 step also does nothing where there is no `flock`, where the lock directory is absent and `mkdir` is not to be had, or
 where `timeout` cannot escalate to KILL.
 
@@ -2085,7 +2109,7 @@ the two ports are examples — any two free ports above 1023 that no other `code
 
 ```bash
 ccrc install                      # accounts.sh, the wrapper, the Codex runtime and the lane's usage timer
-ccrc codex login <id>             # device-code sign-in through the lane's own runtime, into exec.authDir
+ccrc codex login <id>             # device-code sign-in through ccrc's auth library, into exec.authDir
 ccrc models <id> init codex       # seed the class registry — the launcher refuses a lane with no model class
 ccrc codex status <id> [--json]   # each tier: running, starting, stopped, foreign or unknown
 ccrc codex start <id>             # optional: the lane's wrapper runs it on every session start
@@ -2110,10 +2134,17 @@ Per-lane state lives in
 `~/.ccrc/logs/codex/<id>/`. The verbs need `jq` (and every one but `login` needs `node`) and are refused on a
 `server`-role box.
 
-**`exec.authDir` is the lane's, not ccrc's.** ccrc hands the path to the lane's own runtime and never moves,
-rewrites or removes what is in it — not on `ccrc account remove`, not on `ccrc uninstall` (which stops the
-lane's proven tiers, removes the runtime, and keeps the lane directory and logs), and not on `--purge`, because
-the parser refuses an `authDir` under `~/.ccrc`.
+**One library owns the credential.** Exactly one ccrc program reads and writes `auth.json` in `exec.authDir`:
+the auth library `ccgpt-auth.py`, placed beside the shim. `ccrc codex login` is its device-code sign-in and needs
+no Codex runtime; it writes nothing until the sign-in completes, so an abandoned one leaves the authDir as it was,
+and it never writes over another tool's credential file. The lane's LiteLLM tier is the one refresher, through
+the library's lock, and every other reader only reads. Beside the credential the library keeps `auth.json.lock`,
+the checkpoint `auth.pending.json` and the non-secret `auth.status.json`, each 0600; a refresh token the token
+endpoint refuses is the state `needs-signin` there, which the tier answers with a 401 at once and `ccrc codex
+start` and doctor name with `ccrc codex login <id>` as the remedy. History's redaction loads the credential as a
+secret source. ccrc never moves or removes the authDir — not on `ccrc account remove`, not on `ccrc uninstall`
+(which stops the lane's proven tiers, removes the runtime, and keeps the lane directory and logs), and not on
+`--purge`, because the parser refuses an `authDir` under `~/.ccrc`.
 
 **Usage.** `ccgpt-usage.py` publishes a lane's Codex usage into `~/.cc-limits/<id>.json` — the weekly window
 as `seven`, a 5h-style window as `five` only while it is active — so the swapper and the accounts screen see
@@ -2124,10 +2155,15 @@ Linux `fleet` or `both` box `ccrc install` (and every update) places ccrc's own
 lanes: `ccrc-codex-usage@<id>.timer` (every 15 minutes) is enabled for each, and one still enabled for an id
 that is no longer a `codex` lane is disabled. A lane's instance is withheld — and disabled if ccrc had enabled
 it — while another tool's `ccgpt-usage@<id>.timer` is enabled for that lane, because two publishers would race
-its `~/.cc-limits` row and two token refreshes its OAuth (the install names the unit to disable, and never
-disables it for you); a roster it cannot read converges nothing, and each of those is a degraded step. macOS
-places none. The publisher never starts a device-code sign-in: a lane whose token can be neither used nor
-refreshed fails the poll naming `ccrc codex login <id>`, and the unit is bounded at 300 s. Doctor's `codex`
+its `~/.cc-limits` row (the install names the unit to disable, and never disables it for you; ccrc's own poll adds
+no credential race, because it only reads through the auth library and never refreshes, but that other timer
+refreshes outside the library's lock, so it can still race the tier's refresh); a roster it cannot read converges
+nothing, and each of those is a degraded step. macOS places none. The publisher reads the lane's credential
+through the auth library and never refreshes it or starts a
+sign-in: an expired token fails the poll `token-expired`, and nothing is published until the lane's tier refreshes
+it on its next request; a credential that needs a sign-in fails it naming `ccrc codex login <id>`, and one it
+cannot use (`credential-unusable`) names `ccrc doctor`, or `ccrc update` and then `ccrc codex login <id>` after a
+`config-error`; with a library it cannot load (`auth-library-absent`) it names `ccrc update`. The unit is bounded at 300 s. Doctor's `codex`
 check WARNs when a lane's timer is not enabled, when another tool's is, and when the lane's row is missing or
 older than three polls. `ccrc account remove` disables the removed lane's instance and `ccrc uninstall` every
 one, each found through systemd's own enablement links rather than the roster. Because the lane's `telemetry` is
@@ -2962,10 +2998,12 @@ fleet `ccd` that does not advertise `route-apply-v1`); the chip wears `queued` u
 back (on a session whose row carries no routing record yet, a toast says so after 60 s without a read-back). The
 new-session sheet seeds `class`, `effort` and `workflow` at creation. An operator spawn with nothing chosen gets
 the coordinator row, `class=opus effort=ultracode subagent=sonnet workflow=on`; a dispatched worker gets a record
-only when its run names one. **Fable is never reached by a default or an escalation** — both automatic ladders
-(`shared/routing-ladder.ts`) stop at `opus` — only by an explicit class choice: the picker's Fable row,
-`ccd route --set class=fable`, `--route class=fable` at creation, a coordinator's manual `field`/`value` write
-through `POST /api/runs/:id/route`, or the operator's own `/model fable` typed in the session, which the next
+only when its run names one. **Fable runs only when the operator selects it** (D-6790, ruling 2026-10-24). Neither automatic ladder
+(`shared/routing-ladder.ts`) reaches it — both stop at `opus`, and a reversal of a demotion off `fable` answers `ceiling`
+rather than restoring it — and every box-token route write refuses it with `409 fable-operator-only`: a coordinator's
+manual `field`/`value` write or ladder result through `POST /api/runs/:id/route`, and the `route` a dispatch sends. Only
+the operator's own paths remain: the picker's Fable row, the new-session sheet's class and a new workspace's route (all
+behind the cookie session), or the operator's own `/model fable` typed in the session, which the next
 stop or spawn keeps in the record (`[actor=operator-session]`, stage 7 above).
 
 **Placement and swaps route by class.** A lane serves `fable` only on an Anthropic backend whose **Fable share** —
@@ -3447,9 +3485,10 @@ general remote-shell:
   and checks it's still under an allowed canonical prefix — closing the
   classic symlink-escape hole. Reads: `$HOME/.cc-sessions/`,
   `$HOME/.cc-limits/`, `$HOME/.cc-clips/`, `$HOME/.claude*/` (glob), the
-  fleet's projects root, and exactly the nine `$HOME/.ccrc` node files by
+  fleet's projects root, and exactly the ten `$HOME/.ccrc` node files by
   name (`NODE_FILES`, `shared/agent-protocol.ts`; the ninth,
-  `box-token-generation`, holds a generation id, never a token) — a live symlink inside
+  `box-token-generation`, holds a generation id, never a token; the tenth, `tmp-sweep.json`, is the tmp sweep's
+  census, which the server's census lane reads and mails from, D-6624) — a live symlink inside
   `$HOME/.ccrc` carrying one is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the update inventory refuses to read as that file; never `$HOME/.ccrc` itself. Writes: `$HOME/.cc-clips/` only. **This
   list did not widen for the transcript resolver or the supervisor
   heartbeat**: the resolver's uuid search (rungs 5 and 6 of its ladder)
@@ -3483,6 +3522,17 @@ the last-known-good fleet snapshot instead of going blank:
   snapshot with `stale: true` and `downSince: <epoch ms>`; the PWA's banner
   ("Fleet host unreachable since …", with **Reboot**) comes from `GET /api/fleet/health`, which it
   polls every 15 s, and appears on `connected: false`.
+- The server bounds every attempt to reach the agent. An attempt with no `ready` within a fixed deadline of its
+  socket being created (a connect or an upgrade never answered, a hello never answered) is terminated and retried
+  after a delay that grows on each failure and resets once a link is ready, and a ready link that stops answering
+  the server's periodic ping is terminated and retried the same way. The server's log says so, once per kind per
+  stretch without a link, each line starting `ccrc-server: agent link:`: when a ready link is lost (or, in its
+  place, when an unanswered ping ends it), when an attempt times out (with the deadline, and whether the attempt was
+  still connecting or upgrading or had sent its hello), when an attempt closes, or its socket cannot be created,
+  before the first ready since the server started and no other line has opened the stretch, when the agent refuses
+  the hello (with its close code and a printable cut of its reason, withheld if it repeats the token), and when
+  the link is ready again, with the time since that stretch's first line. None of these values is an operator
+  setting.
 - `GET /api/fleet/health` → `{mode, connected, downSince, roster, build, projectPools}`, plus
   `builds` (each box's stamp) in remote mode and a `lifecycle` block (the journal mirror's state,
   `unknown` until its first sweep) on a box running the coordination database —
@@ -3538,7 +3588,7 @@ Build 4 dogfood runbook, cross-repo programmes, and workspace holds.
 
 **All four skills ship to every rostered account's config dir.** The
 coordinator's protocol is now a trio: its worker counterpart is the
-`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, seventeen clauses pinned by
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, eighteen clauses pinned by
 `server/test/worker-skill.test.ts`), and its reviewer counterpart is the
 `ccrc-reviewer` skill (`ccd/reviewer-skill/SKILL.md`, ten clauses pinned by
 `server/test/reviewer-skill.test.ts`), which reads a finished wave in its own
@@ -4156,10 +4206,10 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its seventeen
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its eighteen
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
-shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), seventeen clauses,
+shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), eighteen clauses,
 pinned the same way by `server/test/worker-skill.test.ts`, and it is what a
 dispatched session is told to run by the kickoff sentence dispatch composes
 onto every brief mail. That is why a wave brief is short: the standing
@@ -4275,6 +4325,22 @@ cleanup row, and an answer that stands for the whole box is listed once.
   lane reports a change only when an act job next reads the file, so a missing "now live" or "now shadowed" row means not
   yet seen, never unchanged.
 
+**The loose arm (fleet disk retention, spec 2026-10-23 §2.4, D-6627; reverses D-5888).** The lane also takes an entry
+directly under `~/.cc-tmp` that no witness and no registry row names. Each pass asks `ccd ws-audit --collect-census` once, a
+read-only listing of those entries, classed and bounded at 1,024, every name travelling as hex. Only the `loose` class (a
+regular file or a directory of this uid) joins the population, as an id `loose:<hex>` that the temp-root id predicate refuses,
+so no witnessed argv can be built from it; a census that is unreadable or cut at its bound adds no entry, and says why. An
+entry a killed verb left in the quarantine joins by its record. The lane's licence, pacing and gates are the witnessed arm's,
+with two changes: the open-run hold's "a fresh collection whose witness names no run" does not apply (a loose entry has no run
+to wait for), and the verb is composed only while `$REG/collect-loose-live` stands **and** the lane itself is effectively
+live. The marker is read from the act job's last registry listing, after the lane's own switch, so a pause, a withdrawn
+capability or a shadowed lane stops a loose act too, and the marker alone arms nothing. Without both, the lane records
+"temp entry would be collected" once per entry and token. Nothing in the tree writes the marker; it is the operator's to
+touch by hand, as `collect-lane-live` is. It needs `collect-loose-v1` in `ccd caps`: without it the census is never asked.
+Its rows read "temp entry collected" and "temp entry would be collected", name the entry (decoded, made one safe line), and
+list no attention item, because a loose entry is no session. When the census is cut, unmeasured, past the population cap, or has quarantine records it could not read, the arm considers
+nothing it cannot vouch for and one box line ("collector / loose temp entries") says why.
+
 **The switch in Settings (child reclamation wave 10).** The lane now has two arms, then one. It is live when either
 holds:
 - the legacy file `$REG/collect-lane-live` stands and its retirement has not been recorded;
@@ -4338,6 +4404,27 @@ listing on the same connection shows the file absent and records its retirement 
 such a snapshot, make sure the legacy file is gone. A restore that rolls both files back together, a whole home or a
 whole file system, is outside this proof: after one, raise the cleanup pause and make a fresh confirmed change in
 Settings before allowing Live.
+
+**Orphan worktrees (fleet disk retention, D-6631).** A linked worktree that no registry row names, and that no collector
+owns, is the orphan-tree lane's: the registry orphans under the worktree root, and the `.claude/worktrees/*` and
+`.superpowers/worktrees/*` checkouts of any project. `ccd ws-audit --orphans` lists them by location class (a path
+outside those places is reported and never audited), `ws-audit --orphan-hex <hex>` answers the first refusal of a
+fourteen-rung ladder or mints a token, and `ccd ws-orphan --expect <token> --tree-hex <hex>` removes the tree with
+`git worktree remove`, never `--force`. A tree is removed only when it is clean, its HEAD is on a remote, no registry row
+names it or a path inside it, nothing holds it, and nothing in it has changed for 7 days. The server is the only
+composer of `ws-orphan`, and a child's deny list names the verb.
+The lane (`server/src/orphanTreeLane.ts`, `coord/collectOrphanTree.ts`, `orphanTreeSweep.ts`, the beat in
+`watch.ts`'s `sweepOrphanTrees`) takes a census every 6 hours (hourly in pressure mode), audits at most 2 trees per
+pass (4 under pressure) and acts at most once per pass fleet-wide, only on two audits of one unchanged token at least an
+hour apart. It needs `orphan-v1` from ccd and is stopped by `reclaim-paused`.
+
+It ships in **shadow**: it records `orphan worktree would be removed` in the feed and runs no verb until the operator
+touches `$REG/orphan-tree-live` by hand. A tree whose HEAD is on no remote is `orphan worktree left` until
+`$REG/orphan-tree-rescue-live` also stands (set it only after the lane has run live for a week); the rescue pins HEAD and
+the tree's own reflog under `refs/ccrc/attic/orphan/` first, and a failed pin stops the act. Neither file has a writer
+in the tree. A `ccd-root` tree's branch is deleted with `branch -d`; the branches of the other two classes are left. The
+feed has one row per change of a tree's outcome and none per repeat, and `FleetHealth.disk.orphanTrees` carries counts by
+class and outcome.
 
 **Reclaim's tail, corrected in wave 7 (it is shared with `ws-expire`).** `containment-refuted` is the failed word the
 tail prints when it proves that what it would remove is not only the child's own (another session's row or tree at,
@@ -4875,7 +4962,18 @@ the PR merges while its run waits at `merging`, asking for the merge proof befor
 naming the queue's own `merge_group` CI run as the place to read why, plus a `⤺ dequeued` feed
 record. Each notice goes out once; a restart repeats neither, and since wave 3d it does not repeat
 the merged lane's `✓ merged` feed record either while that record is still in the archive (one written
-before wave 3d whose run has closed since is repeated once, at the deploy). `ci.yml` answers
+before wave 3d whose run has closed since is repeated once, at the deploy). Beside it runs the checks
+lane, `sweepLandingChecks` (stage 1 of PR landing in ccrc; its own beat, never inside the PR sweep, and every
+decision in `server/src/coord/landing.ts`): for each run at `merging` whose advance recorded an episode
+(`merging-at:<head>:<pr>:<mode>`), it reads the PR's required checks with `ccd pr-landing` (one read-only call
+per project, at most 16 sessions each, every 30 s while a check is unsettled or red and every 120 s
+otherwise) and, in `live` mode, mails the coordinator `checks:#<pr>:<episode>.<generation>:<word>@<head7>`
+once per edge — `green`, `red`, `stuck` (still unsettled, or red with nothing after it, 45 minutes on),
+`moved` (the PR head changed) or `left` (closed, draft or no longer bound) — each a `run_events` row written
+with its mail in one transaction, so a restart repeats none. In `shadow` mode, the default until an operator
+creates `landing-checks-live`, it writes the same rows as `landing-shadow:` and mails nothing;
+`landing-disabled` stops every read and edge, and only a live episode's stuck bound still goes. The lane
+merges nothing, writes no branch and touches no merge queue. `ci.yml` answers
 `merge_group` and runs
 what a pull request runs. **Workers never merge**: the session hook denies `gh pr merge` — `--auto`,
 `--squash` and `--admin` included — at any command head it can parse, after stripping quoted text,
@@ -5159,7 +5257,7 @@ removal** (below), which takes back what D-1243 wrote into each rostered home's 
 `~/.ccrc/graph-noise/_default.list`; **excludes**, `graphify-out/` and `.graphifyignore` converged
 into each tree's common-dir `info/exclude`; and **legacy hooks off** — the old per-repo graphify git
 hooks are removed if wholly graphify-generated, left in place and reported if they chain other
-content. (`server/test/ccrc-install.test.ts` pins that sequence, and
+content. (`server/test/ccrc-install-*.test.ts` pins that sequence, and
 `ccrc-install-graphify.test.ts` pins this paragraph's count against it — the enumeration went stale
 for two deviations before that guard existed.)
 
@@ -5231,7 +5329,7 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   `server/test/session-hook-sync-advisory.test.ts`, the merge deny by
   `server/test/session-hook-merge-deny.test.ts`, the role-skill deny by
   `server/test/session-hook-role-skill-deny.test.ts`.
-- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries seventeen clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16, the stall watch added 17), pinned verbatim: a
+- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries eighteen clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16, the stall watch added 17, the temp-root clause added 18), pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
   and every other word makes a query answer a lead to verify by opening the file it names — and never
@@ -5528,15 +5626,15 @@ things at that moment: it builds a SECOND card — the files this context was wo
 community and dependents read out of the same graph — and it MEASURES the compaction, writing one line to a
 per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them opens a new output
 channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
-arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3160`), which appends the second
+arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3198`), which appends the second
 subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`:97`) before the single `jq -cn` print (`:103-105`) — and `PreCompact` and
 `PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
 working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8501-8503`), each with an operator sentence of its own at `:8553`,
-`:8561` and `:8574`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8526-8528`), each with an operator sentence of its own at `:8578`,
+`:8586` and `:8599`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5717,6 +5815,48 @@ resolve inside `/tmp` or `$TMPDIR` or that another uid owns, and prints one summ
 the journal (`journalctl --user -u ccd-tmp-sweep.service`). `ccd-tmp-sweep --dry-run` prints what a
 pass would remove and removes nothing; `touch ~/.ccrc/tmp-sweep-paused` short-circuits every pass
 until removed. `ccrc doctor`'s `services` check warns when the timer is installed and stopped.
+
+**The live arm and the size budget** (fleet disk retention, D-6620). The rules above spare every unit a
+running or hibernated session owns, however old its contents. After the dead pass, under the same lock and
+pause file, the live arm reaches into those units' `scratchpad/` and `tasks/` (never the two directories, never
+the unit) and takes a top-level entry in two cases. **Age:** every entry under it has an mtime and ctime older
+than 14 days (3 under pressure) and every regular file an atime older too, unless its mount is `noatime`
+(then atime is not read, and the census says so; a directory's own atime never is). **Budget:** a session's
+scratch, summed over every root and unit of its uuid, is over `CCD_TMP_BUDGET_GB` (20); the first pass that
+sees it records `overSince` and gives 24 hours of grace (none under pressure), and after that the sweep takes
+entries oldest first until the total is under `CCD_TMP_BUDGET_TARGET_GB` (15), skipping any entry touched in
+the last 48 hours (a floor pressure never lowers), any entry a process holds, and any entry holding a
+repository with work on no remote (`git-work-unrescued`). Both knobs can only be raised. The roots walked are
+today's, `/tmp/claude-<uid>` when it differs, and each witnessed child leaf's `claude-<uid>`. "Held" is the one
+holder probe, `ccd path-users --json`: a cwd, an open fd, a file mapping or a `TMPDIR` at or under the entry,
+and any doubt (the probe failing, a walk running out of time) keeps the entry.
+
+A taken entry is renamed into `<root>/.ccd-tmp-quarantine/<uuid>/<ns>.<name>`; a pass 24 hours later (1 hour
+under pressure) asks the holder probe again and deletes it, so the session has a working day to move it back.
+**Finished task output is capped, not moved.** A `tasks/*.output` regular file over 1 GiB, unheld, with no mtime or
+ctime in the last hour, is rewritten as its first 64 MiB, one marker line (`[ccd-tmp-sweep: <n> bytes cut at <ts>]`)
+and its last 64 MiB. The new file is written beside it and renamed over, so a failed write leaves the original
+byte-identical, and the holder probe is asked last, just before the rename. The census records it as a `moved` row
+of kind `output-capped` (counted `capped`, or `wouldCap` in shadow).
+
+**It ships in shadow:** without `~/.ccrc/tmp-sweep-live-arm` it records what it would take and touches
+nothing (no code in the tree creates that file; arming is the operator's). Pressure is the sweep's own
+measure of its filesystem (92% of bytes or inodes used, the same figure `shared/disk.ts` holds; `disk-twins.test.ts`
+pins them equal) and also shortens the dead arm to 2 days. The live arm scans at most every 6 hours, or every
+pass under pressure. Its census, `~/.ccrc/tmp-sweep.json` (`v`, `at`, `liveAt`, `pressure`, `arm`, `seq`,
+`roots`, `sessions` with each one's `budget`, `moved` rows kept 7 days or 1,000, `counts`), is replaced whole
+by a rename at the end of every pass, shadow or live. The sweep is its only writer.
+
+**The test-run arm** (D-6622) rides the same switch and rows. A server test run keeps its fixtures in one
+`ccrc-testrun-XXXXXX` directory under its `TMPDIR`; a later run under the same `TMPDIR` collects one whose
+owner died, but a root no later run visits (a child workspace's own `TMPDIR`, a box nobody tests on any more)
+stays. In the box's `TMPDIR` and in each witnessed child leaf that still has a registry row, the sweep takes a
+top-level directory named exactly `ccrc-testrun-` and six letters or digits (or that name with `.dead`) when no
+socket is bound at its `live.sock` in the kernel's table (the run's own liveness test), nothing under it has
+changed (ctime, not mtime) for 6 hours (1 under pressure), and the holder probe answers nobody. It renames the
+root to its `.dead` twin and then removes it, as the run's own cleanup does, so there is no quarantine and
+the census row (kind `test-run`) carries none. A leaf whose row is gone is not this arm's: `ws-collect` takes
+the whole leaf. Any doubt (a walk that cannot finish, an unreadable socket table, a failing probe) keeps the root.
 
 ### Pane-scope sweep (ccd-scope-sweep)
 
@@ -6554,8 +6694,8 @@ runs the same selection and `probe-macos` a fixed probe; neither blocks a pull r
 `.github/` or `server/scripts/`, to a `package.json` or lockfile, a `vitest.*config.*`, a
 `tsconfig*.json`, `.gitattributes` or `.npmrc`, a symlink, a path the map's own baseline reads, or a
 missing map runs the whole server suite instead. A **merge-queue** run (`merge_group`) runs what a
-pull request runs, minus the macOS legs. A **push to `main`** runs no test legs: it re-traces what the
-merge affected and refreshes the map. The **daily** run runs every leg in full, macOS included, ending
+pull request runs, minus the macOS legs. A **push to `main`** starts no run; an **hourly** refresh runs no test legs: it re-traces what
+every merge since the last one affected and refreshes the map. The **daily** run runs every leg in full, macOS included, ending
 in `full-suite` — skipped when `main`'s head already carries a green one from a trusted run;
 `gh workflow run ci.yml --ref <branch> -f mode=full` asks for a full run by hand. A promotion to
 `stable` needs a green `full-suite` on its commit, and `release-stable.yml` runs one first when none
@@ -6976,6 +7116,10 @@ Three conventions carry more weight here than style:
   either side of it, resolve every other hunk as source, then restamp. `restamp` refuses a
   file with no marker, a symlink, and any generator's output under `~/.local/bin` or
   `~/.ccrc` — regenerate those with `ccrc wrappers` or `ccrc install`.
+  `ccd/session-hook.sh` carries a generated helpers region (`shared/hook-helpers.mjs`);
+  after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
+  `bash ccd/ccrc restamp ccd/session-hook.sh`. Restamping `ccd/ccd` says when the hook's
+  region has gone stale.
 
 Design records live in `docs/superpowers/specs/`; the architecture rules the code is held to
 are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`.

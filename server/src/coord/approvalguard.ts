@@ -122,7 +122,7 @@ export interface ApprovalCtx extends ApprovalRoots {
  *  operator's `claude …` switch verbs join it, so a session never rolls, installs or selects a Claude Code build.
  *  No account verb is here: account switching and the auto-swap are never blocked (operator ruling 2026-10-19). */
 export const FORBIDDEN_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|roll|claude'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|roll|claude'.split('|');
 
 // ── roots ──────────────────────────────────────────────────────────────────
 

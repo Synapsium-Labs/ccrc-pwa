@@ -2,12 +2,18 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { type ChildProcess } from 'node:child_process';
 import { createServer, request as httpRequest, type Server } from 'node:http';
-import { connect as netConnect, type AddressInfo } from 'node:net';
+import { connect as netConnect } from 'node:net';
 import { writeFileSync, mkdirSync, utimesSync, chmodSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { gzipSync, gunzipSync, deflateSync, inflateSync } from 'node:zlib';
 import { pythonOrSkip, spawnPy, ccgptFile, PYSTUB_DIR } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
+// Task 9 of the codex bridge Stage 2 plan (2026-10-22): the shim's direct entry, served from the package.
+import { cpSync, existsSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
+import { createServer as createNetServer, type Server as NetServer } from 'node:net';
+import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
+import { freePort } from './codexLaneFixture.js';
+import { BRIDGE_AUTH_LIB, BRIDGE_DIR, BRIDGE_MODELS, fakeResponses, plantBridgeLane } from './codexBridgeFixture.js';
 
 const PROXY_PORT = 45010;
 const UPSTREAM_PORT = 45011;
@@ -1711,18 +1717,11 @@ describe.skipIf(!PY)('ccgpt-proxy: a refused upstream connection is waited out, 
   }
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-  /** A port nothing listens on: bound at 0 so the kernel picks it, read, and
-   *  closed again. Each refused-connection case takes its OWN, so the fixed
-   *  `UPSTREAM_PORT` is never left unbound for one of them to be refused on,
-   *  where any other process (or a sibling suite) that bound it would turn a
-   *  "refused" case into a connected one. */
-  async function freePort(): Promise<number> {
-    const s = createServer();
-    await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()));
-    const port = (s.address() as AddressInfo).port;
-    await new Promise<void>((r) => s.close(() => r()));
-    return port;
-  }
+  // A port nothing listens on comes from the codex-lane fixture's `freePort`
+  // (D-6856), below the kernel's ephemeral range: a refused-connection case
+  // binds its upstream LATER (`listenUpstream`), and a sibling suite's port-0
+  // bind could otherwise take it in between. Each case takes its OWN, so the
+  // fixed `UPSTREAM_PORT` is never left unbound for one of them to be refused on.
   /** `startPair` with nothing listening upstream yet, on a port of its own. */
   async function startRefusedPair(
     home: string, handler: (req: any, body: Buffer, res: any) => void, env: Record<string, string> = {},
@@ -2878,5 +2877,341 @@ describe.skipIf(!PY)('ccgpt-proxy: a non-2xx upstream response relays through re
     expect(r.status).toBe(404);
     expect(r.headers.get('content-type')).toBe('application/json');
     expect(await r.text()).toBe('{"error":"model not found"}');
+  });
+});
+
+// ── the direct entry (codex bridge Stage 2, Task 9) ─────────────────────────────────────────────────────────────
+//
+// With CCGPT_BRIDGE unset the shim is today's shim; with CCGPT_BRIDGE=direct its `__main__` hands the process to the
+// `codexbridge` package (`_run_direct`), passing the shim's own request hooks; any other value exits 2. A direct case
+// runs the shim as a lane's unit does, `python3 -I <home>/.local/bin/ccgpt-proxy.py`, with the package copied to
+// `<home>/ccrc/ccd/codexbridge` and the auth library to `<home>/.local/bin/ccgpt-auth.py`: `-I` implies `-E`, so the
+// PYTHONDONTWRITEBYTECODE the harness sets is ignored there, as on a box, and a `__pycache__` the entry let through
+// lands in the fixture HOME, never in this tree. Containment is `spawnPy`'s (the fixture HOME, both endpoint bases);
+// the launcher only re-execs the interpreter with `-I`. The upstream is `fakeResponses` on loopback, the credential
+// a fresh synthetic one (so no token request is made), and the LiteLLM port is a listener that counts connections.
+
+/** The shim in direct mode, the package and the auth library, placed in the fixture HOME as a box places them. */
+function placeDirectTree(home: string): { shim: string; bridgeDir: string; authLib: string } {
+  const bin = join(home, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  const shim = join(bin, 'ccgpt-proxy.py');
+  cpSync(ccgptFile('ccgpt-proxy.py'), shim);
+  const authLib = join(bin, 'ccgpt-auth.py');
+  cpSync(BRIDGE_AUTH_LIB, authLib);
+  const bridgeDir = join(home, 'ccrc', 'ccd', 'codexbridge');
+  cpSync(BRIDGE_DIR, bridgeDir, { recursive: true, filter: (src) => !src.split('/').includes('__pycache__') });
+  return { shim, bridgeDir, authLib };
+}
+
+/** Run as `python3 -I -c` with the shim's path after it: `socket.getfqdn` raises, then the shim runs as `__main__`. A
+ *  server class that binds through `HTTPServer.server_bind` (which calls it) dies before it listens; the shim's own
+ *  `_Server` never calls it (fix round 2, T9-R2-1). */
+const NO_FQDN_PRELUDE = [
+  'import runpy, socket, sys',
+  'def _no_lookup(*a, **k):',
+  '    raise RuntimeError("getfqdn")',
+  'socket.getfqdn = _no_lookup',
+  'sys.argv = sys.argv[1:]',
+  'runpy.run_path(sys.argv[0], run_name="__main__")',
+].join('\n');
+
+/** `python3 -I <shim>`, through spawnPy's containment: a launcher that re-execs the same interpreter with `-I`.
+ *  `noFqdn` runs the shim under NO_FQDN_PRELUDE instead. */
+function spawnIsolated(home: string, shim: string, env: Record<string, string>, noFqdn = false): ChildProcess {
+  const launcher = join(home, 'isolated-launcher.py');
+  const head = noFqdn ? `[sys.executable, "-I", "-c", ${JSON.stringify(NO_FQDN_PRELUDE)}]` : '[sys.executable, "-I"]';
+  writeFileSync(launcher, `import os, sys\nos.execv(sys.executable, ${head} + sys.argv[1:])\n`);
+  const { child } = spawnPy(launcher, { home, args: [shim], env });
+  return child;
+}
+
+/** A listener on the LiteLLM port that counts the connections it is offered and drops each one at once, so a shim
+ *  that relays there answers its own 502 rather than waiting. */
+async function countingListener(port: number): Promise<{ count(): number; close(): Promise<void> }> {
+  let n = 0;
+  const srv: NetServer = createNetServer((sock) => { n += 1; sock.destroy(); });
+  await new Promise<void>((r) => srv.listen(port, '127.0.0.1', () => r()));
+  return { count: () => n, close: () => new Promise<void>((r) => srv.close(() => r())) };
+}
+
+type DirectShim = { child: ChildProcess; lane: string; key: string; laneAnswer: unknown; stderr(): string };
+
+/** Start the shim in direct mode on PROXY_PORT for a lane planted under `home`, and wait until it answers its lane.
+ *  The answer is kept (`laneAnswer`), not judged: a case asserts its shape. */
+async function startDirect(home: string, upstreamBase: string, noFqdn = false): Promise<DirectShim> {
+  const lane = mintLane();
+  const planted = plantBridgeLane(home, lane);
+  const { shim, bridgeDir, authLib } = placeDirectTree(home);
+  const child = spawnIsolated(home, shim, {
+    CCGPT_BRIDGE: 'direct',
+    CCGPT_ACCOUNT_ID: lane,
+    CCGPT_PROXY_PORT: String(PROXY_PORT),
+    CCGPT_LITELLM_PORT: String(UPSTREAM_PORT),
+    CCGPT_BRIDGE_DIR: bridgeDir,
+    CCGPT_LANE_DIR: planted.laneDir,
+    CCRC_CODEX_AUTH_LIB: authLib,
+    CCGPT_CCRC_VERSION: 'dev',
+    CCGPT_CATALOGUE: planted.catalogue,
+    CCGPT_BRIDGE_UPSTREAM_BASE: upstreamBase,
+    CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE,
+  }, noFqdn);
+  proc = child;
+  let stderr = '';
+  child.stderr?.on('data', (c) => { stderr += c.toString(); });
+  let closed = false;
+  child.once('close', () => { closed = true; });
+  for (let i = 0; i < 200; i++) {
+    if (closed) throw new Error(`the direct shim exited before answering its lane: ${stderr || '(no stderr)'}`);
+    try {
+      const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/ccgpt/lane`);
+      if (r.ok) {
+        const body: unknown = await r.json();
+        if (body && typeof body === 'object' && (body as { lane?: unknown }).lane === lane) {
+          return { child, lane, key: planted.key, laneAnswer: body, stderr: () => stderr };
+        }
+      }
+    } catch { /* not up yet */ }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`the direct shim did not answer as lane ${JSON.stringify(lane)} (stderr: ${stderr || '(none)'})`);
+}
+
+const DIRECT_MODEL = BRIDGE_MODELS[0];
+const sseEvent = (type: string, o: Record<string, unknown> = {}): string =>
+  `event: ${type}\ndata: ${JSON.stringify({ type, ...o })}\n\n`;
+/** One whole synthetic text reply, the fixture corpus's shape (`resp_fx<n>`, `msg_fx<n>`). */
+const directTextReply = (text: string): string =>
+  sseEvent('response.created', { response: { id: 'resp_fx1' } })
+  + sseEvent('response.output_item.done', {
+    output_index: 0,
+    item: { type: 'message', id: 'msg_fx1', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text }] },
+  })
+  + sseEvent('response.completed', {
+    response: { id: 'resp_fx1', status: 'completed', usage: { input_tokens: 12, output_tokens: 3, input_tokens_details: { cached_tokens: 0 } } },
+  });
+
+async function postDirect(key: string, body: Record<string, unknown>): Promise<{ status: number; type: string; text: string }> {
+  const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages?beta=true`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': key },
+    body: JSON.stringify(body),
+  });
+  return { status: r.status, type: r.headers.get('content-type') ?? '', text: await r.text() };
+}
+
+function pycacheDirs(dir: string): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (!e.isDirectory()) continue;
+    const p = join(dir, e.name);
+    if (e.name === '__pycache__') out.push(p);
+    else out.push(...pycacheDirs(p));
+  }
+  return out;
+}
+
+describe.skipIf(!PY)('ccgpt-proxy: the direct entry (codex bridge Stage 2, Task 9)', () => {
+  it('with CCGPT_BRIDGE unset the shim is today\'s shim', async () => {
+    const home = mkTmp('ccgpt-proxy-direct-unset-');
+    let seenPath = '';
+    const { lane } = await startPair(home, (req, _body, res) => {
+      seenPath = req.url;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"relayed":true}');
+    });
+    const ans = await fetch(`http://127.0.0.1:${PROXY_PORT}/ccgpt/lane`);
+    expect(await ans.json()).toEqual({ lane });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: DIRECT_MODEL, max_tokens: 8, messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(r.status).toBe(200);
+    expect(await r.text()).toBe('{"relayed":true}');
+    expect(seenPath).toBe('/v1/messages');
+  });
+
+  it('CCGPT_BRIDGE=direct serves /v1/messages from the package and never connects to the LiteLLM port', async () => {
+    const home = mkTmp('ccgpt-proxy-direct-serve-');
+    const litellm = await countingListener(UPSTREAM_PORT);
+    const fake = await fakeResponses([{ status: 200, sse: directTextReply('hello from the package') }]);
+    try {
+      const d = await startDirect(home, fake.base);
+      const r = await postDirect(d.key, {
+        model: DIRECT_MODEL, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'hi' }],
+      });
+      // Judged first (fix round 1, T9-SPEC-2), so a shim that relays is red here, on the port the title names.
+      expect(litellm.count()).toBe(0);
+      expect(d.laneAnswer).toEqual({ lane: d.lane, mode: 'direct' });
+      expect(r.status).toBe(200);
+      expect(r.type).toMatch(/^text\/event-stream/);
+      expect(r.text).toContain('event: message_start');
+      expect(r.text).toContain('hello from the package');
+      expect(r.text).toContain('event: message_stop');
+      expect(fake.requests.map((q) => `${q.method} ${q.path}`)).toEqual(['POST /responses']);
+    } finally {
+      await fake.close();
+      await litellm.close();
+    }
+  });
+
+  it.each([
+    ['bogus', "ccgpt-proxy: unknown CCGPT_BRIDGE 'bogus'"],
+    ['litellm', "ccgpt-proxy: unknown CCGPT_BRIDGE 'litellm'"],
+    ['', "ccgpt-proxy: unknown CCGPT_BRIDGE ''"],
+  ])('an unknown CCGPT_BRIDGE exits 2 (%j)', async (value, line) => {
+    const home = mkTmp('ccgpt-proxy-direct-unknown-');
+    const { child } = spawnPy(ccgptFile('ccgpt-proxy.py'), {
+      home,
+      env: {
+        PYTHONPATH: PYSTUB_DIR,
+        CCGPT_BRIDGE: value,
+        CCGPT_ACCOUNT_ID: mintLane(),
+        CCGPT_PROXY_PORT: String(PROXY_PORT),
+        CCGPT_LITELLM_PORT: String(UPSTREAM_PORT),
+      },
+    });
+    proc = child;
+    let stderr = '';
+    child.stderr?.on('data', (c) => { stderr += c.toString(); });
+    const outcome = await raceExitOrDeadline(child);
+    if (outcome.kind === 'exited') proc = null;
+    expect(outcome).toEqual({ kind: 'exited', code: 2 });
+    expect(stderr.trim()).toBe(line);
+  });
+
+  // Fix round 1 (T9-SPEC-1, T9-CQ-1): the directory is checked before the import, so `absent`, `another directory`
+  // and `an empty package directory` (which Python would import as a namespace package, `__file__` None) each get
+  // the pre-import line, and no sibling package runs first. The post-import check is reached by an `__init__.py`
+  // that links out of the named directory. Fix round 2 (T9-R2-CQ-1): an `__init__.py` that sets `__file__` to None
+  // leaves the state a namespace package would, had its `__init__.py` gone between the check and the import. Fix
+  // round 3 (T9-R3-CQ-1): that line states what was measured (`__file__` is not a string), not a cause.
+  it.each([
+    ['unset', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not set$/],
+    ['absent', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'$/],
+    ['another directory', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'$/],
+    ['an empty package directory', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'$/],
+    ['a package whose __init__.py links elsewhere', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not the directory the codexbridge package imported from; run 'ccrc update'$/],
+    ['a package whose __init__.py has no __file__', /^ccgpt-proxy: direct: the codexbridge package imported with no file path \(its __file__ is not a string\); run 'ccrc update'$/],
+    ['a broken package', /^ccgpt-proxy: direct: the codexbridge package did not import from CCGPT_BRIDGE_DIR \(RuntimeError\); run 'ccrc update'$/],
+  ] as const)('a missing package dir exits with one direct: line (%s)', async (shape, line) => {
+    const home = mkTmp('ccgpt-proxy-direct-nopkg-');
+    const { shim, bridgeDir } = placeDirectTree(home);
+    const sentinel = `SENTINEL-${process.pid}-broken-package`;
+    let dir: string | null = bridgeDir;
+    if (shape === 'unset') dir = null;
+    else if (shape === 'absent') dir = join(home, 'nowhere', 'ccd', 'codexbridge');
+    else if (shape === 'another directory') dir = join(home, 'ccrc', 'ccd', 'not-the-bridge');
+    else if (shape === 'an empty package directory') dir = join(home, 'empty', 'ccd', 'codexbridge');
+    else if (shape === 'a package whose __init__.py links elsewhere') {
+      const elsewhere = join(home, 'elsewhere');
+      mkdirSync(elsewhere, { recursive: true });
+      cpSync(join(bridgeDir, '__init__.py'), join(elsewhere, '__init__.py'));
+      rmSync(join(bridgeDir, '__init__.py'));
+      symlinkSync(join(elsewhere, '__init__.py'), join(bridgeDir, '__init__.py'));
+    } else if (shape === 'a package whose __init__.py has no __file__') {
+      writeFileSync(join(bridgeDir, '__init__.py'), '__file__ = None\n');
+    } else writeFileSync(join(bridgeDir, '__init__.py'), `raise RuntimeError(${JSON.stringify(sentinel)})\n`);
+    if (shape === 'another directory' || shape === 'an empty package directory') mkdirSync(dir!, { recursive: true });
+    const env: Record<string, string> = {
+      CCGPT_BRIDGE: 'direct',
+      CCGPT_ACCOUNT_ID: mintLane(),
+      CCGPT_PROXY_PORT: String(PROXY_PORT),
+      CCGPT_LITELLM_PORT: String(UPSTREAM_PORT),
+    };
+    if (dir !== null) env.CCGPT_BRIDGE_DIR = dir;
+    const child = spawnIsolated(home, shim, env);
+    proc = child;
+    let stderr = '';
+    child.stderr?.on('data', (c) => { stderr += c.toString(); });
+    const outcome = await raceExitOrDeadline(child);
+    if (outcome.kind === 'exited') proc = null;
+    expect(outcome.kind).toBe('exited');
+    expect(outcome.kind === 'exited' ? outcome.code : null).toBe(1);
+    const lines = stderr.split('\n').filter(Boolean);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(line);
+    expect(stderr).not.toContain(sentinel);
+    expect(stderr).not.toMatch(/Traceback/);
+  });
+
+  it('the direct entry hands the popped output_config to inbound', async () => {
+    const home = mkTmp('ccgpt-proxy-direct-format-');
+    const fake = await fakeResponses([{ status: 200, sse: directTextReply('{"a":"b"}') }]);
+    const schema = { type: 'object', properties: { a: { type: 'string' } }, required: ['a'], additionalProperties: false };
+    try {
+      const d = await startDirect(home, fake.base);
+      const r = await postDirect(d.key, {
+        model: DIRECT_MODEL, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'hi' }],
+        output_config: { effort: 'low', format: { type: 'json_schema', schema } },
+      });
+      expect(r.status).toBe(200);
+      expect(fake.requests).toHaveLength(1);
+      const sent = fake.requests[0]!.body!;
+      // `_apply_effort` ran on the very body the format was read from (fix round 1, T9-CQ-3: the body is built field by
+      // field, so an `output_config` key could never reach it and asserting its absence decided nothing).
+      expect(sent.reasoning).toEqual({ effort: 'low' });
+      expect(sent.text?.format?.type).toBe('json_schema');
+      expect(sent.text?.format?.schema).toEqual(schema);
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it('the direct entry decodes a gzip body through the shim\'s own hook', async () => {
+    const home = mkTmp('ccgpt-proxy-direct-gzip-');
+    const fake = await fakeResponses([{ status: 200, sse: directTextReply('decoded') }]);
+    try {
+      const d = await startDirect(home, fake.base);
+      const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages?beta=true`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-encoding': 'gzip', 'x-api-key': d.key },
+        body: gzipSync(Buffer.from(JSON.stringify({
+          model: DIRECT_MODEL, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'hi' }],
+        }))),
+      });
+      expect(r.status).toBe(200);
+      expect(await r.text()).toContain('decoded');
+      expect(fake.requests.map((q) => `${q.method} ${q.path}`)).toEqual(['POST /responses']);
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it('the direct entry binds through the shim\'s own _Server (no reverse lookup of its address)', async () => {
+    const home = mkTmp('ccgpt-proxy-direct-bind-');
+    const fake = await fakeResponses([{ status: 200, sse: directTextReply('bound') }]);
+    try {
+      // With socket.getfqdn raising, a lane answer at all means the package bound with the shim's `_Server`.
+      const d = await startDirect(home, fake.base, true);
+      expect(d.laneAnswer).toEqual({ lane: d.lane, mode: 'direct' });
+      const r = await postDirect(d.key, {
+        model: DIRECT_MODEL, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'hi' }],
+      });
+      expect(r.status).toBe(200);
+      expect(r.text).toContain('bound');
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it('the direct entry writes no __pycache__ beside the package', async () => {
+    const home = mkTmp('ccgpt-proxy-direct-pyc-');
+    const fake = await fakeResponses([{ status: 200, sse: directTextReply('no bytecode') }]);
+    try {
+      const d = await startDirect(home, fake.base);
+      // A served request has imported the package and loaded the auth library (its `ensure_fresh` ran), so every
+      // module the direct entry loads has been loaded by now.
+      const r = await postDirect(d.key, {
+        model: DIRECT_MODEL, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'hi' }],
+      });
+      expect(r.status).toBe(200);
+      expect(r.text).toContain('no bytecode');
+      expect(existsSync(join(home, 'ccrc', 'ccd', 'codexbridge', '__init__.py'))).toBe(true);
+      expect(pycacheDirs(home)).toEqual([]);
+    } finally {
+      await fake.close();
+    }
   });
 });

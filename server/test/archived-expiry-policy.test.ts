@@ -36,13 +36,19 @@ const bodyOf = (name: string): string => {
   return ccd.slice(from, ccd.indexOf('\n}\n', from));
 };
 
+// D-6633: the two words the pin prints on a failed document; the audit journal list, which only a refusal reaches, has neither.
+const NESTED_RESCUE_WORDS = ['nested-rescue-failed', 'nested-rescue-too-large'];
+
 describe('the nineteen words', () => {
   it('are exactly what ccd’s EXPIRE region and the shared ladder refuse with — harvested, both directions', () => {
     const begin = ccd.indexOf('EXPIRE-BEGIN');
     const end = ccd.indexOf('EXPIRE-END');
     expect(begin, 'the EXPIRE region is missing its BEGIN marker').toBeGreaterThan(0);
     expect(end).toBeGreaterThan(begin);
-    const harvested = new Set([...words(nonComment(ccd.slice(begin, end))), ...words(nonComment(bodyOf('_ws_reclaim_ladder')))]);
+    const pinWords = [...new Set([...nonComment(ccd).matchAll(/RECLAIM_PIN_WORD=(nested-rescue-[a-z-]+)/g)].map((m) => m[1]!))].sort();
+    expect(pinWords, 'guards the guard: the pin names both rescue words, which ride the act failed document (D-6633)')
+      .toEqual(NESTED_RESCUE_WORDS);
+    const harvested = new Set([...words(nonComment(ccd.slice(begin, end))), ...words(nonComment(bodyOf('_ws_reclaim_ladder'))), ...pinWords]);
     expect(harvested.size, 'guards the guard: an empty harvest would equal an empty map').toBeGreaterThan(10);
     expect([...harvested].sort()).toEqual(Object.keys(EXPIRE_TOKEN_KIND).sort());
   });
@@ -52,7 +58,7 @@ describe('the nineteen words', () => {
       /case "\$REAP_VERDICT" in\n\s+([a-z|-]+)\)\n\s+_lc_emit expire refused "\$id" "" verb ws-audit/g,
     )];
     expect(matches, 'the expiry audit no longer journals a terminal refusal, or a second site appeared').toHaveLength(1);
-    const terminal = Object.entries(EXPIRE_TOKEN_KIND).filter(([, k]) => k === 'terminal').map(([t]) => t).sort();
+    const terminal = Object.entries(EXPIRE_TOKEN_KIND).filter(([t, k]) => k === 'terminal' && !NESTED_RESCUE_WORDS.includes(t)).map(([t]) => t).sort();
     expect(terminal.length).toBeGreaterThan(0);
     expect(matches[0]![1]!.split('|').sort()).toEqual(terminal);
   });
@@ -235,6 +241,8 @@ describe('the verb’s answer — box words told apart from composition errors (
     // `_ws_reclaim_fail`, refuses through its ONE `_ws_collect_refused "<id>" "<tx>" <word>`, and sets `REAP_VERDICT`
     // for that refusal when the token it was given is not the one it recomputed (`verdict`). Those two collector
     // shapes are placed INSIDE the region only; anywhere else they read `unplaced`, and so does any other spelling.
+    //   THE LOOSE ARM'S FAMILY (D-6625). The LOOSE region, ws-collect's loose arm, uses the collector's same shapes and
+    // is placed in a third list, held exactly; outside COLLECT and LOOSE those shapes still read `unplaced`.
     const fnStarts = [...ccd.matchAll(/\n([A-Za-z_][A-Za-z0-9_]*)\(\) \{/g)].map((m) => ({ name: m[1]!, at: m.index! }));
     const holder = (at: number): string => fnStarts.filter((f) => f.at < at).at(-1)?.name ?? '';
     const lockedAt = ccd.indexOf('\n_ws_expire_locked() {');
@@ -250,15 +258,21 @@ describe('the verb’s answer — box words told apart from composition errors (
     expect(collectBegin, 'the COLLECT region').toBeGreaterThan(crumbAt);
     expect(collectEnd, 'its end marker').toBeGreaterThan(collectBegin);
     const inCollect = (at: number): boolean => at > collectBegin && at < collectEnd;
+    const looseBegin = ccd.indexOf('LOOSE-BEGIN');
+    const looseEnd = ccd.indexOf('LOOSE-END');
+    expect(looseBegin, 'the LOOSE region, after COLLECT').toBeGreaterThan(collectEnd);
+    expect(looseEnd, 'its end marker').toBeGreaterThan(looseBegin);
+    const inLoose = (at: number): boolean => at > looseBegin && at < looseEnd;
     const shape = (w: string, pre: string, collect: boolean): string =>
-      new RegExp(`(?:_ws_reclaim_fail "[^"\\n]*" "[^"\\n]*" |_ws_reclaim_failed_json )${w}$`).test(pre) ? 'failed'
-        : new RegExp(`(?:_reap_refuse |\\{"refused":")${w}$`).test(pre) ? 'refused'
+      new RegExp(`(?:_ws_reclaim_fail "[^"\\n]*" "[^"\\n]*" |_ws_orphan_failed "[^"\\n]*" "[^"\\n]*" |_ws_reclaim_failed_json )${w}$`).test(pre) ? 'failed'
+        : new RegExp(`(?:_reap_refuse |_ws_orphan_refused "[^"\\n]*" "[^"\\n]*" |\\{"refused":")${w}$`).test(pre) ? 'refused'
           : new RegExp(`_lc_fail reclaim "[^"\\n]*" "[^"\\n]*" ${w}$`).test(pre) ? 'journal'
             : collect && new RegExp(`_ws_collect_refused "[^"\\n]*" "[^"\\n]*" ${w}$`).test(pre) ? 'refused'
               : collect && new RegExp(`^\\s*REAP_VERDICT=${w}$`).test(pre) ? 'verdict' : 'unplaced';
     const word = new RegExp(`(?<![\\w-])(${EXPIRE_PRE_CRUMB_FAILED.join('|')})(?![\\w-])`, 'g');
     const placed: string[] = [];
     const collected: string[] = [];
+    const loosed: string[] = [];
     let at = 0;
     for (const l of ccd.split('\n')) {
       if (!/^\s*#/.test(l)) {
@@ -266,12 +280,12 @@ describe('the verb’s answer — box words told apart from composition errors (
           const w = m[1]!;
           const where = at + m.index!;
           const fn = holder(where);
-          const kind = shape(w, l.slice(0, m.index! + w.length), inCollect(where));
+          const kind = shape(w, l.slice(0, m.index! + w.length), inCollect(where) || inLoose(where));
           if (fn === '_ws_expire_locked' && kind === 'failed' && w === 'state-changed') {
             expect(where, 'state-changed in _ws_expire_locked is not on its fresh arm').toBeGreaterThan(freshAt);
             expect(where, 'state-changed in _ws_expire_locked prints after the tombstone').toBeLessThan(tombAt);
           }
-          (inCollect(where) ? collected : placed).push(`${fn} ${kind} ${w}`);
+          (inCollect(where) ? collected : inLoose(where) ? loosed : placed).push(`${fn} ${kind} ${w}`);
         }
       }
       at += l.length + 1;
@@ -281,6 +295,10 @@ describe('the verb’s answer — box words told apart from composition errors (
       '_ws_reap_locked refused state-changed',
       '_ws_reap_locked refused state-changed',
       '_ws_reap_tail refused state-changed',
+      '_ws_orphan_locked failed probe-unmeasured',
+      '_ws_orphan_locked refused state-changed',
+      '_ws_orphan_locked refused state-changed',
+      '_ws_orphan_locked failed probe-unmeasured',
       '_ws_reclaim_locked refused state-changed',
       '_ws_reclaim_locked failed probe-unmeasured',
       '_ws_reclaim_locked failed state-changed',
@@ -320,6 +338,28 @@ describe('the verb’s answer — box words told apart from composition errors (
       '_ws_collect_locked failed probe-unmeasured',
       '_ws_collect_locked failed probe-unmeasured',
       '_ws_collect_locked failed probe-unmeasured',
+    ]);
+    expect(loosed).toEqual([
+      '_ws_loose_putback failed probe-unmeasured',
+      '_ws_loose_after_move failed probe-unmeasured',
+      '_ws_loose_after_move failed probe-unmeasured',
+      '_ws_loose_after_move failed probe-unmeasured',
+      '_ws_loose_fresh refused state-changed',
+      '_ws_loose_fresh failed probe-unmeasured',
+      '_ws_loose_fresh failed probe-unmeasured',
+      '_ws_loose_fresh failed probe-unmeasured',
+      '_ws_loose_fresh failed probe-unmeasured',
+      '_ws_loose_fresh failed probe-unmeasured',
+      '_ws_loose_fresh failed probe-unmeasured',
+      '_ws_loose_fresh failed probe-unmeasured',
+      '_ws_loose_resume refused state-changed',
+      '_ws_loose_resume failed probe-unmeasured',
+      '_ws_loose_resume refused state-changed',
+      '_ws_loose_resume failed probe-unmeasured',
+      '_ws_loose_locked verdict state-changed',
+      '_ws_loose_locked failed probe-unmeasured',
+      '_ws_loose_locked failed probe-unmeasured',
+      '_ws_loose_locked failed probe-unmeasured',
     ]);
   });
 });
@@ -1110,6 +1150,7 @@ describe('L1', () => {
     const src = readFileSync(path.join(path.dirname(CCD), '..', 'server', 'src', 'archivedExpiry.ts'), 'utf8');
     const froms = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
     // D-5855: the live switch is re-exported from its row in the L0 switchboard.
-    expect(froms).toEqual(['../../shared/api.js', '../../shared/switches.js']);
+    // ARCH-14 (#560): the machine token's reader is L0 too (`shared/ccd-refusal.ts`).
+    expect(froms).toEqual(['../../shared/nestedRescue.js', '../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js']);
   });
 });

@@ -240,6 +240,8 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.settings-release-running': META,
     '.settings-node-detail': META,
     '.settings-theme-name': UI,
+    '.update-indicator-door': META,
+    '.update-indicator-stale': META,
   },
   'shell.css': {
     '.shell-accounts .account-gauge-label': META,

@@ -64,6 +64,11 @@ describe('the verdict table is ccd\'s collector refusal words, and agrees with t
     expect([...COLLECT_VERDICT_WORDS].sort()).toEqual(words);
   });
 
+  it('`not-loose` keeps ccd\'s spelling and is a deferral its own continuity never lists (D-6625)', () => {
+    expect(COLLECT_VERDICT_TABLE['not-loose']).toEqual({ pace: 'defer', listedAfterMs: null });
+    expect(collectRefusalClass('not-loose')).toBe('retry');
+  });
+
   it('a word is terminal here exactly when the verb\'s refusal table reads it terminal', () => {
     expect(TERMINAL_WORDS).toEqual(['witness-mismatch', 'quarantine-kept', 'containment-unproven']);
     for (const w of COLLECT_VERDICT_WORDS) {
@@ -803,9 +808,10 @@ describe('wave 8\'s formula, imported: one definer', () => {
   it('the collector imports the derivation and both waits, and spells no formula of its own', () => {
     const lane = codeOnly(readFileSync(path.join(srcRoot, 'collectLane.ts'), 'utf8'));
     const from = [...new Set([...lane.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]))].sort();
-    // `shared/switches.js` is L0: the lane's live marker is spelled once there (D-5855).
+    // `shared/switches.js` is L0: the lane's live marker is spelled once there (D-5855). So is `shared/ccd-refusal.js`
+    // (ARCH-14, #560): the machine token's reader.
     expect(from, 'L1: L0 and the one L1 file whose formula it shares')
-      .toEqual(['../../shared/api.js', '../../shared/switches.js', './childReclaimSweep.js']);
+      .toEqual(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js', './childReclaimSweep.js']);
     const imported = /import\s*\{([^}]*)\}\s*from\s*'\.\/childReclaimSweep\.js'/.exec(lane)?.[1] ?? '';
     for (const name of ['childReclaimTierFrom', 'childReclaimTierPaceMs', 'childReclaimBackoffMs']) {
       expect(imported, name).toMatch(new RegExp(`\\b${name}\\b`));

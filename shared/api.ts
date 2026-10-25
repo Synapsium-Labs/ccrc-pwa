@@ -13,8 +13,14 @@ import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
 import type { WorkflowView } from './workflows.js';
+import type { CHECKS_MAIL_TOKEN } from './landing.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
+
+/** Whether a session is there (ARCH-48, #783): the wire word `readSession` derives (`server/src/sessionReading.ts`). The
+ *  ONE definition, in L0, so the frame's field and the reading's part cannot name different words. */
+export const PRESENCES = ['alive', 'asleep', 'dead', 'unknown'] as const;
+export type Presence = typeof PRESENCES[number];
 
 /** Which attention bucket a session belongs to. THE authority: the fleet
  *  screen's sections, its counts and the row's own state word all read this one
@@ -304,6 +310,18 @@ export interface FleetSession {
    *  malformed marker. ADDITIVE: the row's lifecycle reads `stopped` and its bucket `dead` as for any deliberate stop
    *  (no new `SessionBucket` member), and this field alone tells a sleeping session from one that is gone. */
   hibernatedAt: number | null;
+  /** ARCH-48 (#783): whether this session is there, computed ONCE by the server's `readSession` (`sessionReading.ts`) and
+   *  only rendered by a reader: `alive`, `asleep` (hibernated, woken by mail or ensure), `dead` (the pane is gone and the
+   *  lifecycle is one `lifecycleIsDead` names) or `unknown` (a doubt: tmux did not answer, the lifecycle could not be
+   *  read; doubt is never `dead`). ADDITIVE: no `FLEET_PROTO` bump, and an older server omits it, so a reader treats an
+   *  absent key as "not said" (a cached row revives without it). */
+  presence?: Presence;
+  /** ARCH-48 (#783): when a `dead` presence began, epoch MS, from the stop stamp. THE NARROW READING: set ONLY for a
+   *  `stopped` death (the stop stamp is the death's own instant), and null for every other row. A dead `orphan` gets null
+   *  even though its last supervisor heartbeat has a time: that time is when supervision was last seen, not when the
+   *  session died, and dating an orphan from it is a later decision. `never-started` has nothing to date. ADDITIVE like
+   *  `presence`. */
+  deadSince?: number | null;
   /** How many graph READS this session has made — `hookstate.ts`'s
    *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
    *  bump, and an older peer that omits it revives as `null` below.
@@ -1204,7 +1222,7 @@ export interface WsAudit {
    *  It used to imply a refusal (drift was one); it no longer does, so a
    *  `reapable` verdict can carry `false` here. */
   headMatchesRegistry: boolean;
-  reaping: string | null;
+  reaping: ReapCrumb | null;   // ccd's `.reaping` breadcrumb, parsed once at the wire (`optReapCrumb`, at the foot); null when none stands
   /* ── THE SESSION BEHIND THE WORKSPACE ──────────────────────────────────────
    * Computed by ccd BEFORE `_ws_reap_eval`'s early refusal, unlike everything
    * in the `null MEANS NOBODY LOOKED` block below — a `not-archived` verdict
@@ -3526,7 +3544,7 @@ export function reviveWsAudit(v: unknown, sentence: string): WsAudit {
     repo: reqStr(o, 'repo'),
     exists: reqBool(o, 'exists'),
     headMatchesRegistry: reqBool(o, 'headMatchesRegistry'),
-    reaping: optStr(o, 'reaping'),
+    reaping: optReapCrumb(o, 'reaping'),
     // optBool/optStr, NOT reqBool — DELIBERATE, and decided beside the writer.
     // An older ccd on the fleet host omits all three; reqBool would throw and
     // the whole sheet would render nothing, against a rolled-back ccd or a
@@ -4069,7 +4087,9 @@ export function isMarkerState(v: unknown): v is MarkerState {
 
 /** The sweep's words for a marked child it keeps for a person (child-reclamation
  *  spec §5.9): standing answers, read from records rather than a failed read, that
- *  automatic reclamation never acts on while they stand. Spelled ONCE, as the keys
+ *  automatic reclamation never acts on while they stand. D-6639: `minting-run-absent` and
+ *  `review-report-stale` (and the hold, which is no kept word) now LAPSE: the stale arm reclaims such a child once
+ *  nothing has touched it for seven days and the operator has armed it. No word is removed; their sentences say when. Spelled ONCE, as the keys
  *  of a total table, and the runtime list is derived. The SERVER's sweep answers
  *  them and composes their sentences (`server/src/childReclaimSweep.ts`, which
  *  says what ends each). The PWA renders sentences and never switches on a word. */
@@ -5077,7 +5097,7 @@ export const MAIL_BODY_MAX_BYTES = 8 * 1024;
  *  running count on the wire, so a client that wants to show how much room is
  *  left before a park would otherwise carry a second copy of a policy number.
  *  The reasoning for the VALUE — and for everything this counter deliberately
- *  does NOT count — lives beside its enforcement, on `watch.ts`'s import. */
+ *  does NOT count — lives beside its enforcement, in `server/src/coord/delivery.ts`. */
 export const MAIL_MAX_ATTEMPTS = 6;
 
 /**
@@ -6122,6 +6142,9 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * `reviews`, or a send-back while one is open (design 2026-09-14 §5.1, §9
  * invariant 3).
  *
+ * `cap-review-rounds` (D-6795) — the work run already has `REVIEW_ROUND_CAP` review runs, and the operator has
+ * not lifted the cap for it; the open is refused, an ask is raised once, and `by` carries the round count.
+ *
  * `workspace-spent` and `spent-unmeasured` are rule 3 of the child-reclamation
  * programme (spec 2026-09-22 §5.3-§5.4): a CHILD — a workspace the server
  * minted for a run and marked `$REG/<id>.child` at creation — carries at most
@@ -6154,7 +6177,8 @@ export type RunRefuseCode =
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
   | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight'
   | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
-  | 'status-unmeasurable' | 'worker-starting' | 'attribution-required' | 'not-a-child';   // the last two: D-5298
+  | 'status-unmeasurable' | 'worker-starting' | 'attribution-required' | 'not-a-child'   // the last two: D-5298
+  | 'cap-review-rounds';   // D-6795: a fourth review run for one work run
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6165,6 +6189,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'review-in-flight': true, 'claimant-is-a-worker': true,
   'workspace-spent': true, 'spent-unmeasured': true,
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
+  'cap-review-rounds': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -6933,9 +6958,9 @@ export function armEventDetail(fields: RouteFields): string {
  *                             union in this file) — distinct from `no-session`
  *                             (nothing there at all): a value here would
  *                             silently fail to round-trip through
- *                             `routeEventDetail`/`parseRouteEventDetail`'s
- *                             `:`-delimited grammar (fix round 1, finding #2),
+ *                             `routeEventDetail`/`parseRouteEventDetail`'s `:`-delimited grammar (fix round 1, finding #2),
  *                             so this door refuses it before ever writing one
+ *   409 fable-operator-only — the write names class `fable` (manual or ladder): the operator's to select
  *   501 unsupported         — the fleet does not report `route-v1`
  *   409 no-record           — the target session's registry has no `.class`
  *                             file at all (S5-R18: an absent `.effort`
@@ -6986,7 +7011,7 @@ export function armEventDetail(fields: RouteFields): string {
  */
 export const RUN_ROUTE_REFUSE_CODES = [
   'no-session', 'bad-session', 'no-record', 'unrouteable-record', 'registry-unreadable', 'run-closed',
-  'ceiling', 'floor', 'no-effort-rungs',
+  'ceiling', 'floor', 'no-effort-rungs', 'fable-operator-only',
 ] as const;
 export type RunRouteRefuseCode = (typeof RUN_ROUTE_REFUSE_CODES)[number];
 export function isRunRouteRefuseCode(v: unknown): v is RunRouteRefuseCode {
@@ -8225,7 +8250,7 @@ export interface LifecycleMeas {
   /** The prompt's exit status on a re-spawn (`cmd_ensure`, `ccd:11240`).
    *  Carried unconverted, like `archivedAt`. */
   readonly rc: number | null;
-  /** The start mode `cmd_start` resolved before spawning. */
+  /** The start mode `cmd_start` resolved; `ws-orphan` reuses it for its orphan class. */
   readonly mode: string | null;
   /** `${CCD_IN_UNIT:-0}` — whether `cmd_ensure` ran inside the supervising
    *  unit or as an outside request for one (`ccd:12035`). */
@@ -8244,8 +8269,8 @@ export interface LifecycleMeas {
   /** `_ws_wt_branch`'s exit status for the worktree being removed — decides
    *  whether there is a git-side record to clean up (`cmd_ws_rm`'s intent). */
   readonly registered: number | null;
-  /** A `ws-gc` sweep's classification of the row it is about to reclaim —
-   *  `dead-reg` or `orphan`, never anything else the encoder has seen. */
+  /** A `ws-gc` sweep's classification of the row it will reclaim — `dead-reg` or
+   *  `orphan`; `ws-orphan` reuses the key for `rescue` or `plain`. */
   readonly state: string | null;
   /** How many bytes `ws-reap` measured before destroying the worktree, or
    *  `null` when `_ws_gc_bytes` did not return a plain integer. */
@@ -9186,6 +9211,13 @@ export const PANE_HISTORY_LINES = 2000;
  */
 export const PINNED_WINDOW_COLS = 220;
 export const PINNED_WINDOW_ROWS = 50;
+
+/**
+ * The close code the pty bridge (`/ws/pty/:id`) ends the drawer's socket with when its pty exits (D-6368): the pty's
+ * own exit, the agent link's synthesized exit on a drop, and a failed open alike. The drawer re-attaches once on it
+ * (`TerminalDrawer.tsx`); any other close keeps the connection-lost state and its Reconnect.
+ */
+export const PTY_EXIT_CLOSE = 4000;
 
 /**
  * The rows tmux takes from every attached client for its status line. A client
@@ -10437,6 +10469,12 @@ declare const collectTokenBrand: unique symbol;
  *    string parameter. */
 export type CollectToken = string & { readonly [collectTokenBrand]: true };
 
+declare const orphanTokenBrand: unique symbol;
+/** The consent `ws-orphan` spends (fleet disk retention spec 2026-10-23 §2.3, D-6630): the `token` or the `rescueToken` of a
+ *  `ws-audit --orphan-hex` answer, 64 lowercase hex characters. Phantom brand, like `CollectToken`; the lane's audit reader
+ *  is the one place that casts to it, and `CCD_ARGV.wsOrphan` takes nothing else. */
+export type OrphanToken = string & { readonly [orphanTokenBrand]: true };
+
 /** One arm of `ChildReclaimAttention` (spec §5.9, §5.10): an item of the temp-root collector's.
  *  - `sessionId` is the temp-root id on a per-id item. On a box-wide line it is a `COLLECT_BOX_LABELS` label, which no
  *    session id can equal.
@@ -10469,6 +10507,7 @@ export const COLLECT_BOX_LABELS = {
   tmproots: '~/.cc-sessions/tmproots',
   tmpquarantine: '~/.cc-sessions/tmpquarantine',
   'refused-names': 'unusable names under ~/.cc-sessions',
+  'loose-census': 'collector / loose temp entries',
   'box-probe': 'collector / the fleet box',
   'no-document': 'collector / audits that printed nothing',
   lock: 'collector / temp-root reap locks',
@@ -11336,7 +11375,7 @@ export const DELEGATION_SPOOL_BOUNDS = {
  *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
  *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
 const CHILD_DENY_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|roll|claude'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|roll|claude'.split('|');
 
 /** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
  *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's
@@ -11728,6 +11767,9 @@ export interface DigestAnswer {
   readonly totals: DigestTotals;
   readonly byCoordinator: readonly { readonly coordinator: string; readonly decisions: number }[];
   readonly lines: readonly DigestLine[];
+  /** The drift reconciler's findings open at `toMs` (D-5923). Additive: an answer without it is a build before the
+   *  reconciler, and a reader treats it as no drift. It is never counted into `totals.decisions`. */
+  readonly drift?: { readonly totals: Readonly<Record<DriftKind, number>>; readonly lines: readonly DriftLine[] };
   readonly sentAt: number | null;
   readonly pushed: boolean;
 }
@@ -12018,3 +12060,128 @@ export const ACCOUNT_DENY_RULES: readonly string[] = [
   ...ACCOUNT_SECRET_PATHS.map((p) => `Read(${p})`),
   ...ACCOUNT_WRITE_DIRS.map((p) => `Edit(${p})`),
 ];
+
+/** `FleetHealth`'s disk block (D-6615), declared HERE at the foot as an interface merge, with its type import beside it,
+ *  so no line above moves and every line citation into this file (the README's, the specs', the compaction card's)
+ *  still holds. TypeScript merges it into `FleetHealth` above: it is one member of that interface. */
+import type { DiskHealth } from './disk.js';
+export interface FleetHealth {
+  /**
+   * The fleet's disk alarm (`DiskHealth`): the level of the worst work filesystem, each filesystem's own level,
+   * the expected mounts and the pressure flag, held by the watcher's `sweepDisk` once a minute. Optional for the same
+   * absence-permits reason as the blocks above: absent until the first sweep. Read it through `readDiskHealth` alone;
+   * absent reads as UNKNOWN, never as a healthy disk.
+   */
+  disk?: DiskHealth;
+}
+
+// ── THE REAPING BREADCRUMB (ARCH-25, #531) ── at the foot, like the lane block above, so no line cited above it
+// moves. The one runtime import here, and from an L0 sibling that itself imports nothing (`reapcrumb.test.ts`).
+import { parseReapCrumb, type ReapCrumb } from './reapcrumb.js';
+/** An absent, null or empty crumb is none; any other string goes through `parseReapCrumb`. */
+const optReapCrumb = (o: RawObj, k: string): ReapCrumb | null => {
+  const raw = optStr(o, k);
+  return raw === null || raw === '' ? null : parseReapCrumb(raw);
+};
+
+/**
+ * D-6790: the ONE predicate every box-token route write asks before it names a class (operator ruling 2026-10-24: Fable
+ * runs only when the operator selects it). `true` when the fields set `class` to `fable`, spelled as ccd's vocabulary
+ * spells it or with the case and padding ccd would have to fold. `POST /api/runs/:id/route` (the manual write and a
+ * ladder result) and a dispatch's route (`coord/dispatchDecide.ts`) refuse on it with `409 fable-operator-only`. The
+ * cookie-session routes the operator's PWA uses never ask it: a human's explicit choice of Fable stays open there.
+ */
+export function routeNamesFable(r: Readonly<Partial<Record<string, string>>>): boolean {
+  return r.class?.trim().toLowerCase() === 'fable';
+}
+
+// D-6778's inbox wire shapes sit at the file's end so no line this file's citations name moves.
+/** D-6778 (mail inbox, spec §3.3 step 4): the page budget of `GET /api/mail/inbox`, in bytes of rendered text.
+ *  Twenty KiB holds two bodies at `MAIL_BODY_MAX_BYTES` with their headers; a page always holds one entry. */
+export const MAIL_INBOX_PAGE_MAX_BYTES = 20 * 1024;
+
+/** D-6778: the info string on the fence one inbox entry is printed in. Deliberately NOT `MAIL_ENVELOPE_FENCE`, so
+ *  `parseFetchedMailEnvelope` answers `not-mail` on an inbox print (spec §3.4). */
+export const MAIL_INBOX_FENCE_INFO = 'ccrc-inbox';
+
+/** One printed inbox entry: the DELIVERY id (the only id shown) and the rendered, masked text. */
+export interface MailInboxEntry { deliveryId: number; text: string }
+
+/** `GET /api/mail/inbox`'s 200 body. `remaining` counts ackable deliveries the page budget left out; `abandoned`
+ *  counts mailbox rows the inbox set leaves out (parks an ack refuses). */
+export interface MailInboxAnswer { ok: true; deliveries: MailInboxEntry[]; remaining: number; abandoned: number }
+
+/** D-6778: read the inbox answer off the wire, or `null` when it is not that shape. */
+export function readMailInboxAnswer(x: unknown): MailInboxAnswer | null {
+  if (typeof x !== 'object' || x === null) return null;
+  const o = x as Record<string, unknown>;
+  if (o.ok !== true || !Array.isArray(o.deliveries)) return null;
+  const count = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+  if (!count(o.remaining) || !count(o.abandoned)) return null;
+  const deliveries: MailInboxEntry[] = [];
+  for (const d of o.deliveries) {
+    if (typeof d !== 'object' || d === null) return null;
+    const e = d as Record<string, unknown>;
+    if (typeof e.deliveryId !== 'number' || !Number.isSafeInteger(e.deliveryId) || e.deliveryId <= 0) return null;
+    if (typeof e.text !== 'string') return null;
+    deliveries.push({ deliveryId: e.deliveryId, text: e.text });
+  }
+  return { ok: true, deliveries, remaining: o.remaining, abandoned: o.abandoned };
+}
+
+/**
+ * What a run's bound sessions have spent, from the usage sweep (D-6799). A
+ * MEASUREMENT, never a budget: no route refuses on it. `proxyUsd` is the sweep's
+ * API-rate-card proxy over its PRICED classes (an unpriced class adds tokens and
+ * no dollars), so it ranks work and is never an invoice. `measuredAt` is the
+ * sweep pass's own `finishedAt`, so a reader can age the figure.
+ *
+ * Two answers, never one: `measured: false` says WHY nothing could be added up
+ * (no session bound yet, no sweep file, an unreadable or malformed one, or a
+ * sweep that has not yet seen any of the run's sessions), and is never folded
+ * into `measured: true` with zero tokens.
+ */
+export type RunSpendUnmeasuredReason = 'no-session' | 'no-sweep' | 'unreadable' | 'malformed' | 'not-swept';
+const RUN_SPEND_UNMEASURED_REASON_MAP: Record<RunSpendUnmeasuredReason, true> = {
+  'no-session': true, 'no-sweep': true, unreadable: true, malformed: true, 'not-swept': true,
+};
+export const RUN_SPEND_UNMEASURED_REASONS: readonly RunSpendUnmeasuredReason[] =
+  Object.keys(RUN_SPEND_UNMEASURED_REASON_MAP) as RunSpendUnmeasuredReason[];
+
+/** The only way to narrow an untrusted word to a `RunSpendUnmeasuredReason`. */
+export const isRunSpendUnmeasuredReason = (v: unknown): v is RunSpendUnmeasuredReason =>
+  typeof v === 'string' && Object.hasOwn(RUN_SPEND_UNMEASURED_REASON_MAP, v);
+export interface RunSpendTokens { input: number; cacheWrite: number; cacheRead: number; output: number }
+export type RunSpend =
+  | { measured: true; tokens: RunSpendTokens; proxyUsd: number; measuredAt: string }
+  | { measured: false; reason: RunSpendUnmeasuredReason };
+
+/** One drift line of the digest (D-5923, spec 4.6): a finding open at the window's end. `ageMs` runs from the fact's
+ *  own time where it has one, else from first sight, to the window's end (to now, for a window not closed yet). `sessionId` is the session a session kind
+ *  names and `runId` the run a run kind names (the programme's newest open run for `claimant-gone`); each is null
+ *  where it does not apply, and the PWA maps them to a target through the Inbox target model. */
+export interface DriftLine {
+  readonly key: string;
+  readonly kind: DriftKind;
+  readonly subject: string;
+  readonly detail: string;
+  readonly ageMs: number;
+  readonly sessionId: string | null;
+  readonly runId: number | null;
+}
+
+/** Which death: the registry never listed the id, or one of the lifecycle words `lifecycleIsDead` names. The ONE
+ *  definition (ARCH-47, #782), in L0 so `server/src/sessionReading.ts` and `server/src/deadCoordinator.ts` both import it
+ *  without either importing the other: `deadCoordinator.ts`'s `ClaimantDeadCause` and `CLAIMANT_DEAD_CAUSES` are these,
+ *  so a new word lands in both. `DEAD_LIFECYCLES` is its other half; it sits at the file's end rather than beside that
+ *  list so no line citation into this file moves. `coord-reclaim.test.ts` holds it equal to
+ *  `['absent', ...DEAD_LIFECYCLES]`. */
+export const DEAD_CAUSES = ['absent', 'stopped', 'orphan', 'never-started'] as const satisfies
+  readonly ('absent' | SessionLifecycle)[];
+export type DeadCause = typeof DEAD_CAUSES[number];
+
+/** The answer of a successful `POST /api/runs/:id/advance`. `checksMail` is the capability token of PR landing in ccrc
+ *  (stage 1, spec §3.7): present only on an advance to `merging` whose episode was decided `live`, so a coordinator that
+ *  reads it knows the server will mail the checks and may end its turn. Its one reader is the coordinator, through the
+ *  answer `ccrc-api runs advance` prints. */
+export interface AdvanceOk { ok: true; run: RunSummary; checksMail?: typeof CHECKS_MAIL_TOKEN }

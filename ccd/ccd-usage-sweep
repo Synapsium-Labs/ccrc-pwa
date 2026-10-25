@@ -3,7 +3,8 @@
 # 2026-09-14 §6). Serialized oneshot driven by ccd-usage-sweep.timer, owned the
 # way ccd-graph-sweep is: one lock, one census of the last ten passes, one pause
 # file. READ-ONLY over transcripts; the only writes are `latest.json`, the
-# census, and (`--reap-orphans`) usage sidecars whose registry row is gone.
+# census, the uuid ledger (`<out>.uuids.json`, D-6799, plus its .tmp), and
+# (`--reap-orphans`) usage sidecars whose registry row is gone.
 set -uo pipefail
 REG="$HOME/.cc-sessions"
 LIMITS="$HOME/.cc-limits"

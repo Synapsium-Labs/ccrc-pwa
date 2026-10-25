@@ -1,11 +1,11 @@
 // `install.sh` (repo root) — the stage-2 BOOTSTRAP, not the converger. It
 // exists only to get a bare checkout to the point where `ccrc install` (the
-// verb `ccrc-install.test.ts` measures) can run: refuse a too-old or absent
+// verb `ccrc-install-*.test.ts` measures) can run: refuse a too-old or absent
 // `node`, build the three artifacts `ccrc install` itself refuses without
 // (`server/dist`, `server/dist-pwa`, `server/node_modules` is implied by the
 // build), then hand off. This file measures ONLY the bootstrap's own logic —
 // the floor read/compare and the two early exits — not the handoff itself,
-// which is `ccrc-install.test.ts`'s "install.sh hands off to it" describe
+// which is `ccrc-install-*.test.ts`'s "install.sh hands off to it" describe
 // (it needs the full fixture TREE these three tests do not).
 //
 // ── WHY THE FLOOR IS NEVER HARDCODED HERE ─────────────────────────────────

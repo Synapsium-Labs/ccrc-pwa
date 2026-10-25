@@ -196,12 +196,12 @@ export const rig = (o: RigOpts = {}) => {
   const hooks: {
     audit?: () => void; act?: () => void; listing?: (n: number) => 'null' | 'reject' | void; retire?: () => void;
   } = {};
-  let auditAnswer = (): ExecResult => ({ code: 0, stdout: auditDoc({ witness, resume: o.resume }), stderr: '' });
-  let actAnswer = (): ExecResult => ({ code: 0, stdout: collectedDoc(), stderr: '' });
+  let auditAnswer = (): ExecResult => ({ ran: true, code: 0, stdout: auditDoc({ witness, resume: o.resume }), stderr: '' });
+  let actAnswer = (): ExecResult => ({ ran: true, code: 0, stdout: collectedDoc(), stderr: '' });
   const run: Runner = async (_cmd, args) => {
     if (args[0] === 'ws-audit') { hooks.audit?.(); return auditAnswer(); }
     if (args[0] === 'ws-collect') { hooks.act?.(); return actAnswer(); }
-    return { code: 1, stdout: '', stderr: `unscripted ${args[0] ?? ''}` };
+    return { ran: true, code: 1, stdout: '', stderr: `unscripted ${args[0] ?? ''}` };
   };
   const base = testDeps(home, run);
   let listings = 0;
@@ -267,7 +267,7 @@ export const rig = (o: RigOpts = {}) => {
   const deps: CollectTempRootDeps = {
     coord: o.coord?.(coord) ?? coord, io, cfg: base.cfg, fleetState: state,
     runCcd: async (argv) => { attempts.push([...argv]); return base.runCcd(argv); },
-    presence: { isVisible: (id: string) => visible && id === ID },
+    viewers: { isVisible: (id: string) => visible && id === ID },
     lane: lane.port, observeIntervalMs: INTERVAL, control, link,
   };
   return {

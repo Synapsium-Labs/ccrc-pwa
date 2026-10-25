@@ -71,8 +71,8 @@ const rrig = async (o: { readonly generation?: string | null | 'dir'; readonly p
   const log: string[] = [];
   const run: Runner = async (_cmd, args) => {
     log.push(`ccd:${args[0]}`);
-    return args[0] === 'ws-release' ? { code: 0, stdout: `released ${RID}\n`, stderr: '' }
-      : { code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
+    return args[0] === 'ws-release' ? { ran: true, code: 0, stdout: `released ${RID}\n`, stderr: '' }
+      : { ran: true, code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
   };
   const base = testDeps(home, run);
   const logged: FleetIO = {

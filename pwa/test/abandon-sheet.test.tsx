@@ -75,7 +75,7 @@ it("the run number survives in Abandon's and Resume's accessible names and the r
       sessions: [fleetSession({ id: 'ccrc-pwa-coordinator', project: 'ccrc-pwa', status: 'dead', bucket: 'dead', lifecycle: 'orphan' })],
     });
   });
-  const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+  const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
   expect(screen.getByRole('button', { name: 'Abandon run 3' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Resume run 3' })).toBeInTheDocument();
   const row = container.querySelector<HTMLElement>('li.run-row')!;
@@ -114,6 +114,8 @@ function Harness({
  *  assertions here are about which routes the board calls. `never` keeps the
  *  control unrendered, which is what these tests want it to be. */
 const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
+/** A held spend read: the board's default would send GET /api/runs/:id through the global fetch. */
+const NO_SPEND = (): Promise<import('../../shared/api').RunSpend> => new Promise(() => {});
 
 describe('AbandonSheet — the copy and the refusals', () => {
   it('names the run AND its workspace in the confirm line', () => {
@@ -185,7 +187,7 @@ describe('AbandonSheet — the copy and the refusals', () => {
   // Whole-branch review, M2: this sentence shipped as TWO byte-identical
   // literals in source — `ABANDON_COPY.unsupported` here and
   // `inlinePauseError`'s own 501 arm in `CoordBanner.tsx` — with
-  // `UNSUPPORTED_VERB_TEXT` (`lib/api.ts`) a third, DELIBERATELY different
+  // `UNSUPPORTED_VERB_TEXT` (`lib/refusalWords.ts`) a third, DELIBERATELY different
   // spelling for the lifecycle routes. The two coordination sites now read
   // one constant. This renders BOTH surfaces at 501 and compares what the
   // operator actually sees, so a re-inlined literal at either site is caught
@@ -209,7 +211,7 @@ describe('AbandonSheet — the copy and the refusals', () => {
     expect(fromSheet).toBe(fromBanner);
     expect(fromSheet).toBe(COORD_UNSUPPORTED_TEXT);
     // …and it stays DISTINCT from the lifecycle routes' own sentence: that
-    // third spelling is argued for by name in `lib/api.ts`'s own docstring,
+    // third spelling is argued for by name in `lib/refusalWords.ts`'s own docstring,
     // not drift, and collapsing the three into one is not what this pins.
     expect(fromSheet).not.toBe(UNSUPPORTED_VERB_TEXT);
   });
@@ -389,7 +391,7 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
       { status: 200, headers: { 'content-type': 'application/json' } },
     ));
     vi.stubGlobal('fetch', fetchImpl);
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
 
     // Task 13, spec §4.4: `RunsScreen` also mounts `StartProgramSheet` now,
     // whose own `useProjectedHome(open)` (review fix round 1, Minor 2) is
@@ -442,7 +444,7 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [run()], runsFrameSeen: true, sessions, fleetFrameSeen: true }); });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })));
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     fireEvent.click(screen.getByRole('button', { name: /abandon run 3/i }));
     expect(await screen.findByText(expected)).toBeInTheDocument();
   });
@@ -454,7 +456,7 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
   it('the run row never nests a button inside a button', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [run()], runsFrameSeen: true }); });
-    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     for (const btn of container.querySelectorAll('button')) {
       expect(btn.querySelector('button')).toBeNull();
     }
@@ -465,7 +467,7 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     act(() => {
       store.setState({ runs: [run({ sessionId: null, state: 'planned' })], runsFrameSeen: true });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     // No session to open — .run-open is absent — but the release valve
     // (an ambiguous-dispatch wedge is exactly a `planned` run with no
     // session) is still there.

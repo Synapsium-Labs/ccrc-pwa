@@ -60,10 +60,10 @@ async function makeApp(
     if (args[0] === 'capture-pane') {
       const pane = resolvedPanes[Math.min(capIdx, resolvedPanes.length - 1)] ?? null;
       capIdx++;
-      return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
     }
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const bus = new Bus();
   const cfg = loadConfig({ CCRC_HOME: home });
@@ -208,7 +208,7 @@ describe('canonical positive-safe decimal parser', () => {
 });
 
 describe('canonical coordination id route census', () => {
-  it('keeps all nineteen textual resource-id seams on the shared parser', () => {
+  it('keeps all twenty textual resource-id seams on the shared parser', () => {
     expect(canonicalCoordIdRoutes()).toEqual([
       { method: 'POST', routePath: '/api/mail/:id/ack' },
       { method: 'GET', routePath: '/api/mail/:id' },
@@ -222,6 +222,8 @@ describe('canonical coordination id route census', () => {
       { method: 'POST', routePath: '/api/runs/:id/route' },
       { method: 'POST', routePath: '/api/runs/:id/items' },
       { method: 'GET', routePath: '/api/runs/:id/signals' },
+      // D-6799: the run plus its spend.
+      { method: 'GET', routePath: '/api/runs/:id' },
       { method: 'GET', routePath: '/api/runs/:id/items' },
       { method: 'POST', routePath: '/api/claims/:id/release' },
       { method: 'POST', routePath: '/api/claims/:id/break' },
@@ -337,6 +339,65 @@ describe('write routes', () => {
     await app.close();
   });
 
+  // D-6367: Retry's whole-box resume rides the body's one optional `resume` field (`=== true`, one reader).
+  const RULE = '─'.repeat(60);
+  const boxPane = (text: string): string => `earlier turn\n${RULE}\n❯ ${text}\n${RULE}\n  👤 team·max\n`;
+
+  it('a /prompt body with resume: true resumes the box whole: one Enter, nothing typed', async () => {
+    const { app, calls } = await makeApp([boxPane('hello'), boxPane('')]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
+    await app.close();
+  });
+
+  it('a /prompt body with resume: true over an empty box is 409 nothing-to-submit, nothing typed', async () => {
+    const { app, calls } = await makeApp([boxPane('')]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'nothing-to-submit' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  // R38: Retry now resumes after every enter-ignored, drafted or not; the server never sees the draft, so this pins its half.
+  it('a Retry after an enter-ignored with no draft: resume over an empty box is nothing-to-submit and over our own text one Enter', async () => {
+    const empty = await makeApp([boxPane('')]);
+    const emptyRes = await empty.app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(emptyRes.statusCode).toBe(409);
+    expect(emptyRes.json()).toEqual({ ok: false, error: 'nothing-to-submit' });
+    expect(sendKeysCalls(empty.calls)).toEqual([]);
+    await empty.app.close();
+
+    const own = await makeApp([boxPane('hello'), boxPane('')]);
+    const ownRes = await own.app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(ownRes.statusCode).toBe(200);
+    expect(ownRes.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(own.calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
+    await own.app.close();
+  });
+
+  it("a /prompt body with resume: 'yes' (not true) behaves as today", async () => {
+    const { app, calls } = await makeApp([boxPane('hello')]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: 'yes' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'draft-present', draft: 'hello' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  it('a /prompt body with resume: true and replaceDraft: true over a foreign box is draft-present and clears nothing', async () => {
+    const { app, calls } = await makeApp([boxPane('somebody else was typing')]);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true, replaceDraft: true },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'draft-present', draft: 'somebody else was typing' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
   // D-6366: a refused send leaves one countable line, naming the outcome and the box's shape and never the text.
   it('a refused send writes one warn line naming its outcome, without the text', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -385,10 +446,10 @@ describe('write routes', () => {
       if (args[0] === 'capture-pane') {
         const pane = panes[Math.min(capIdx, panes.length - 1)];
         capIdx++;
-        return { code: 0, stdout: pane!, stderr: '' };
+        return { ran: true, code: 0, stdout: pane!, stderr: '' };
       }
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     // The shape `remote/io.ts` produces when one of the 31
     // [registry-read-census:fields] field reads a session's `readRegistry` fires
@@ -416,7 +477,7 @@ describe('write routes', () => {
     seedSession(home, ID, 'claude-a');
     const workdirUnreadableIO = unreadableField(ID, 'workdir');
     const cfg = loadConfig({ CCRC_HOME: home });
-    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: workdirUnreadableIO, queue: new KeyedQueue() },
       new Bus(),
@@ -1261,7 +1322,7 @@ describe('POST /api/sessions/:id/stop', () => {
     seedRoster(home);
     seedWellFormed(home, 'demo-a-demo');
     const calls: string[][] = [];
-    const run: Runner = async (_c, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (_c, args) => { calls.push(args); return { ran: true, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField('demo-a-demo', 'wrapper'),
@@ -1280,7 +1341,7 @@ describe('POST /api/sessions/:id/stop', () => {
     seedRoster(home);
     seedWellFormed(home, 'demo-a-demo');
     const calls: string[][] = [];
-    const run: Runner = async (_c, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (_c, args) => { calls.push(args); return { ran: true, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField('demo-a-demo', 'wrapper'),
@@ -1305,7 +1366,7 @@ describe('POST /api/sessions/:id/stop', () => {
     // the directory present but no `<ID>.uuid` file in it, the listing
     // genuinely names this id absent.
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, new Bus(),
@@ -1329,7 +1390,7 @@ describe('POST /api/sessions/:id/stop', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, ID, 'claude-a');
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     const unlistable: FleetIO = { ...localIO, readdir: async () => null };
     const app = await buildServer(
@@ -1348,7 +1409,7 @@ describe('POST /api/sessions/:id/stop', () => {
     const id = 'demo-a-demo';
     seedWellFormed(home, id);
     const calls: string[][] = [];
-    const run: Runner = async (_c, args) => { calls.push([...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (_c, args) => { calls.push([...args]); return { ran: true, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, new Bus(),
@@ -1389,7 +1450,7 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     seedRoster(home);
     seedSession(home, ID, 'claude-a');
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true, code: 0, stdout: '', stderr: '' }; };
     const deps = { ...testDeps(home, run), fleetState: { connected: true, downSince: null, ccdVerbs: ['start'], rosterFp: null, build: null } };
     const app = await buildServer(deps);
     const resHold = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason: 'w' } });
@@ -1409,9 +1470,9 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => {
       calls.push([cmd, ...args]);
-      if (args[0] === 'ws-hold') return { code: 0, stdout: `held ${ID}`, stderr: '' };
-      if (args[0] === 'ws-release') return { code: 0, stdout: `released ${ID}`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'ws-hold') return { ran: true, code: 0, stdout: `held ${ID}`, stderr: '' };
+      if (args[0] === 'ws-release') return { ran: true, code: 0, stdout: `released ${ID}`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const app = await buildServer(testDeps(home, run));
 
@@ -1440,7 +1501,7 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     seedRoster(home);
     seedSession(home, ID, 'claude-a');
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true, code: 0, stdout: '', stderr: '' }; };
     const app = await buildServer(testDeps(home, run));
     const reason = 'x'.repeat(HOLD_ROUTE_REASON_MAX_BYTES);
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason } });
@@ -1551,16 +1612,16 @@ describe('layer 1 — the guard runner', () => {
     // Free on every existing route test: testDeps wraps its runner, so a route
     // that starts emitting a non-whitelisted argv fails HERE rather than on
     // the fleet.
-    const inner: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const inner: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     await expect(guardRunner(inner)('/home/u/.local/bin/ccd', ['ws-rm', 'x']))
       .rejects.toThrow(/argv not in the agent EXEC_WHITELIST: ccd ws-rm x/);
   });
 
   it('lets a whitelisted argv through untouched — the guard is not a blanket refusal', async () => {
     // Without this, "rejects everything" would satisfy the test above.
-    const inner: Runner = async () => ({ code: 0, stdout: 'ok', stderr: '' });
+    const inner: Runner = async () => ({ ran: true, code: 0, stdout: 'ok', stderr: '' });
     await expect(guardRunner(inner)('/home/u/.local/bin/ccd', ['ensure', 'demo-quiet-basin']))
-      .resolves.toEqual({ code: 0, stdout: 'ok', stderr: '' });
+      .resolves.toEqual({ ran: true, code: 0, stdout: 'ok', stderr: '' });
   });
 
   // MUTATION-SWEEP FINDING (Task 11): replacing `ccdRunner(guarded, cfg)` with
@@ -1574,7 +1635,7 @@ describe('layer 1 — the guard runner', () => {
   // there is no raw runner on Deps any more) to `deps.runCcd`; it observes the
   // same composition, one link further down the same chain.
   it('testDeps wires the guard onto deps.runCcd, not just reachable via a direct guardRunner call', async () => {
-    const deps = testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' }));
+    const deps = testDeps(undefined, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
     // The cast is deliberate and is the point: since task 13S no route CAN
     // build this argv — that half is the brand, pinned in
     // ccdargv-brand.test.ts. This half is that a whitelist check still stands
@@ -1594,7 +1655,7 @@ describe('layer 1 — the guard runner', () => {
   // guard is actually load-bearing on this path rather than one refactor away
   // from being deleted as dead code.
   it('testDeps wires the guard onto deps.tmux as well, not just onto deps.runCcd', async () => {
-    const deps = testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' }));
+    const deps = testDeps(undefined, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
     const tmuxRunner = (deps.tmux as unknown as { run: Runner }).run;
     await expect(tmuxRunner('tmux', ['kill-session', '-t', '=cc-x:']))
       .rejects.toThrow(/argv not in the agent EXEC_WHITELIST/);
@@ -1644,8 +1705,8 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
   // UNMEASURED row (`status-unknown`, D-5274), and these tests are about the coordination checks behind it.
   const recording = (calls: string[][]): Runner => async (_cmd, args) => {
     calls.push(args);
-    if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
 
   // D-2545 REGRESSION PIN, and the reason it is called out by name: the

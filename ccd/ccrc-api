@@ -26,6 +26,10 @@
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
 #
+# OUTPUT. stdout is the response body and exactly one newline. stderr ends in
+# `http <code>` today; set `CCRC_API_STATUS=line` to keep it once a later release
+# stops writing it by default. Exit 0 whenever a response arrived, 3 when none did.
+#
 # `server/test/ccrc-api-closed.test.ts` pins those as standing tests, because a
 # property this load-bearing must be a mechanism and not a docstring.
 #
@@ -198,6 +202,8 @@ refuse() {  # code, detail
 usage() {
   {
     printf '%s <group> <verb> [<id>] [--json <file|->] [--<key> <value>]\n\n' "$SELF"
+    printf 'stdout is the body and one newline. CCRC_API_STATUS=line keeps the `http <code>` line on stderr,\n'
+    printf 'which a later release stops writing by default.\n\n'
     printf 'Closed table — no URL, host or path is an argument.\n\n'
     for k in $(printf '%s\n' "${!ROUTES[@]}" | sort); do
       IFS='|' read -r m p _ q <<< "${ROUTES[$k]}"
@@ -582,6 +588,14 @@ main() {
   fi
 
   cat "$out"
+  # The body ends in exactly one newline: a session's shell tool shows both
+  # streams together, and a body with none ran into the status line (`}http 200`).
+  # Empty prints nothing; one already ending in a newline gets no second.
+  [[ -s "$out" && -n "$(tail -c 1 "$out")" ]] && printf '\n'
+  # `CCRC_API_STATUS=line` is the caller's spelling for "keep this line". It is
+  # an environment variable, not a flag, because an older client refuses an
+  # unknown flag and ignores an unknown variable. Today the line is written
+  # whatever it says; a later release stops writing it by default.
   printf 'http %s\n' "$code" >&2
   # An HTTP response happened, so this succeeded — whatever the status says. A
   # 4xx is an ANSWER here, and a client that exited non-zero on one would rebuild

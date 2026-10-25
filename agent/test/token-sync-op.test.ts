@@ -11,7 +11,7 @@
 //  - At the bound the group gets SIGTERM (the verb's trap runs) before SIGKILL.
 //  - The child's answer maps to one closed word, by exit code AND first stderr line; success carries `transport`.
 //  - One gate per agent PROCESS: a second op while one runs is `busy`, on any connection.
-//  - The ready frame advertises ['update', 'token-sync', 'account'] (the third word is the accounts plan's A8,
+//  - The ready frame advertises ['update', 'token-sync', 'account', 'disk'] (the third word is the accounts plan's A8,
 //    pinned with its op in `account-op.test.ts`).
 //  - The op reaches no exec path (a SOURCE scan: no behavioural case sees an extra call whose answer is the same).
 import { describe, it, expect, afterEach } from 'vitest';
@@ -204,12 +204,12 @@ describe('the token-sync op', () => {
     });
   });
 
-  it("the ready frame advertises exactly ['update', 'token-sync', 'account']", async () => {
+  it("the ready frame advertises exactly ['update', 'token-sync', 'account', 'disk']", async () => {
     fixture = makeFixture();
     agent = await boot(fixture, { spawnTokenSync: recorder().spawn });
     const c = new TestClient(agent.port);
     clients.push(c);
-    expect((await c.hello() as AgentReady).ops).toEqual(['update', 'token-sync', 'account']);
+    expect((await c.hello() as AgentReady).ops).toEqual(['update', 'token-sync', 'account', 'disk']);
   });
 
   describe('the op reaches no exec path — read from the source', () => {

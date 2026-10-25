@@ -32,11 +32,11 @@
 // a DIFFERENT type), and `items` carries only `{done,total}` — no
 // `failed`/`blocked` columns exist anywhere yet. This file renders exactly
 // what PR I actually shipped, not the plan's historical sample.
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { type CoordCapsView, type RunSummary } from '../../../shared/api';
+import { type CoordCapsView, type RunSpend, type RunSummary } from '../../../shared/api';
 import {
-  anyDispatchPending, isRunClosed, programWave, programsWithOpenRun, runClosedAt,
+  FINISHED_FOLD, anyDispatchPending, finishedClock, finishedMoreLabel, isRunClosed, programWave, programsWithOpenRun, runClosedAt,
   programmeTitle, runsByProgram, waveLabel,
 } from '../fleet/runWords';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
@@ -76,6 +76,8 @@ const loadRunsDefault = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
  *  render, so the control's own effect does not re-fire on every parent
  *  re-render. */
 const loadCapsDefault = (): Promise<CoordCapsView> => api.coordCaps();
+/** D-6799: one run's spend. Module-level so its identity is stable across renders. */
+const loadSpendDefault = (id: number): Promise<RunSpend> => api.run(id).then((r) => r.spend);
 
 import { RunRow } from './RunRow';
 import { useColdRuns } from './useColdRuns';
@@ -85,6 +87,7 @@ export function RunsScreen({
   store = useFleetStore,
   loadRuns = loadRunsDefault,
   loadCaps = loadCapsDefault,
+  loadSpend = loadSpendDefault,
 }: {
   store?: FleetStore;
   loadRuns?: () => Promise<{ runs: RunSummary[] }>;
@@ -96,6 +99,8 @@ export function RunsScreen({
    *  resume-door test's `expect(fetchImpl).not.toHaveBeenCalled()`, which is a
    *  guard worth keeping exactly as strict as it was. */
   loadCaps?: () => Promise<CoordCapsView>;
+  /** Each row's spend read (D-6799), injected like `loadCaps`. */
+  loadSpend?: (id: number) => Promise<RunSpend>;
 }): ReactNode {
   const live = store((s) => s.runs);
   const runsFrameSeen = store((s) => s.runsFrameSeen);
@@ -182,9 +187,30 @@ export function RunsScreen({
   // `runs` slice `active` used (the pre-fix shape) meant the Finished group
   // vanished the instant anything went active, because `live` winning that
   // switch discarded whatever `cold` had found (finding 3, failure B).
-  const finished = (cold ?? [])
+  //
+  // Memoised on `cold` (D-6442): the 1 s tick re-renders this screen, and a sort
+  // of up to 500 rows is no work for a tick to repeat. The FOLD is the other half:
+  // only the newest `shownFinished` rows mount, and a door adds the next batch.
+  const finished = useMemo(() => (cold ?? [])
     .filter((r) => isRunClosed(r))
-    .sort((a, b) => (runClosedAt(b) ?? 0) - (runClosedAt(a) ?? 0));
+    .sort((a, b) => (runClosedAt(b) ?? 0) - (runClosedAt(a) ?? 0)), [cold]);
+  const [shownFinished, setShownFinished] = useState(FINISHED_FOLD);
+  const finishedHead = useRef<HTMLParagraphElement>(null);
+  const focusHeadNext = useRef(false);
+  const showMoreFinished = (): void => {
+    focusHeadNext.current = true;
+    setShownFinished((n) => n + FINISHED_FOLD);
+  };
+  // The click's own commit consumes the flag, whether or not focus moves: the
+  // door unmounts with the last batch, so focus has to land somewhere that stays,
+  // the group's heading, never the body (D-6442). "Last batch" is read from the
+  // committed state here, so a `cold` that grew meanwhile leaves the door, and
+  // focus, where they are, and no flag outlives the click that set it.
+  useEffect(() => {
+    if (!focusHeadNext.current) return;
+    focusHeadNext.current = false;
+    if (shownFinished >= finished.length) finishedHead.current?.focus();
+  }, [shownFinished, finished.length]);
   // Review finding 19: neither half is trustworthy enough to assert "there
   // are none of these" until IT has a real answer — `runsFrameSeen` for
   // active, `coldState === 'ok'` for finished (finished has no other
@@ -246,17 +272,21 @@ export function RunsScreen({
   // for the second half: active rows present, finished's own read failed.
   const coldFailed = coldState === 'error';
 
-  const rowFor = (run: RunSummary): ReactNode => (
+  // A finished row reads `finishedClock(now)`, not the 1 s tick (D-6442): its
+  // readouts are minute-grained, and a steady `nowMs` is what lets its `memo` hold.
+  const finishedNow = finishedClock(now);
+  const rowFor = (run: RunSummary, nowMs: number = now): ReactNode => (
     <RunRow
       key={run.id}
       run={run}
-      nowMs={now}
+      nowMs={nowMs}
       session={run.sessionId === null ? null : sessionById.get(run.sessionId) ?? null}
       coordSession={run.claimedBy === null ? null : sessionById.get(run.claimedBy) ?? null}
       frameSeen={fleetFrameSeen}
       programHasOpenRun={programsOpen.has(run.program)}
       onAbandon={setAbandonTarget}
       onResume={setResumeTarget}
+      loadSpend={loadSpend}
     />
   );
 
@@ -353,7 +383,7 @@ export function RunsScreen({
                   <span className="runs-wave">{waveLabel({ wave, waveOf })}</span>
                 </p>
                 <ul className="runs-list">
-                  {list.map(rowFor)}
+                  {list.map((run) => rowFor(run))}
                 </ul>
               </div>
             );
@@ -361,10 +391,19 @@ export function RunsScreen({
 
           {finished.length > 0 ? (
             <div className="runs-group" role="group" aria-label={`finished (${finished.length})`}>
-              <p className="runs-group-head"><span className="runs-program">Finished</span></p>
+              <p className="runs-group-head" ref={finishedHead} tabIndex={-1}>
+                <span className="runs-program">Finished</span>
+              </p>
               <ul className="runs-list">
-                {finished.map(rowFor)}
+                {finished.slice(0, shownFinished).map((run) => rowFor(run, finishedNow))}
               </ul>
+              {shownFinished < finished.length && (
+                <Button variant="quiet" size="fit" className="runs-finished-more text-xs leading-none"
+                  onClick={showMoreFinished}>
+                  {finishedMoreLabel(Math.min(FINISHED_FOLD, finished.length - shownFinished),
+                    finished.length - shownFinished)}
+                </Button>
+              )}
             </div>
           ) : coldFailed ? (
             // I6, second half: at least one run is active (this branch is

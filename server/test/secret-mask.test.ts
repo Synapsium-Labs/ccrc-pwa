@@ -144,7 +144,7 @@ const backlogFrame = async (transcript: string, masker?: SecretMasker): Promise<
   seedRoster(home);
   seedSession(home, transcript);
   const run: Runner = async (_c, args) => (args[0] === 'list-panes'
-    ? { code: 0, stdout: `${PID}\n`, stderr: '' } : { code: 0, stdout: '', stderr: '' });
+    ? { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' } : { ran: true, code: 0, stdout: '', stderr: '' });
   const cfg = loadConfig({ CCRC_HOME: home });
   const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker };
   const app = await buildServer(deps, new Bus());
@@ -194,7 +194,7 @@ describe('the session socket carries only the mask (D-5513)', () => {
     const home = mkTmp('ccrc-mask-ask-');
     seedRoster(home);
     const cfg = loadConfig({ CCRC_HOME: home });
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
     const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
     const send = (stream as unknown as { send(m: SessionStreamMsg): void }).send;
@@ -369,7 +369,7 @@ describe('the drawer stream (D-5513)', () => {
     const home = mkTmp('ccrc-mask-pty-');
     seedRoster(home);
     const cfg = loadConfig({ CCRC_HOME: home });
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), spawnPty }, new Bus());
     const port = await listen(app);
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/${ID}?cols=80&rows=24`);
@@ -423,9 +423,9 @@ describe('every other egress of session-derived text (D-5513)', () => {
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const run: Runner = async (_c, args) => {
-      if (args[0] === 'capture-pane') return { code: 0, stdout: `$ env\nKEY=${OAT}\nOR=${ORKEY}\n`, stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '1 10 2000 220 50 0\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: `$ env\nKEY=${OAT}\nOR=${ORKEY}\n`, stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '1 10 2000 220 50 0\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify-log.json'));
@@ -806,7 +806,7 @@ describe('the review findings: every egress of session text is masked (D-5995)',
     const cachePath = path.join(home, 'state-cache.json');
     await saveSnapshot([session(ID)], cachePath);
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const bus = new Bus();
     app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
       stateCachePath: cachePath, fleetState: { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null, build: null } }, bus);
@@ -840,8 +840,9 @@ describe('the review findings: every egress of session text is masked (D-5995)',
       const day = new Date(t + 86_400_000).toISOString().slice(0, 10);
       const d = (await f.app.inject({ method: 'GET', url: `/api/digest?day=${day}` })).body;
       const prev = (await f.app.inject({ method: 'GET', url: `/api/digest?day=${new Date(t).toISOString().slice(0, 10)}` })).body;
-      // The digest's lines already pass `redactCommand` (shapes only); the mask adds the exact-bytes half.
-      const body = d.includes('"lines":[]') ? prev : d;
+      // The digest's lines already pass `redactCommand` (shapes only); the mask adds the exact-bytes half. The
+      // decision lines are read by key: the drift section (D-5923) carries its own `lines`, which may be empty.
+      const body = (JSON.parse(d) as { lines: unknown[] }).lines.length === 0 ? prev : d;
       expect(body).toContain('"rowKind":"ask"');
       expect(leaksNone(body, OAT) && leaksNone(body, ORKEY), body.slice(0, 300)).toBe(true);
     } finally { await f.close(); }
@@ -998,21 +999,41 @@ describe('the rulings: one frame never blocks the event loop past 25 ms (D-5995)
   // pins the ORDER of the cost (a quadratic or per-string regression is seconds), the PR body gives the measured ms.
   const BOUND = 250;
   it('4 MB of undelimited drawer output in 4 KB chunks: no push blocks, and nothing is held past the bound', () => {
-    const { m } = maskerOver(() => TOKEN_1, [CMP]);
-    const d = m.drawer(() => {});
+    // What the test proves: masking 4 MB never holds the event loop for one long stretch. Each push is one
+    // synchronous slice, timed on the monotonic clock (`performance.now`). The input is deterministic, so a stall in
+    // the CODE comes back at the same push index every run, while a loaded runner pre-empts the process (a GC pause,
+    // a lost timeslice) at arbitrary pushes. The two CI failures that motivated this were single slices of 513 and
+    // 442 ms. So: (1) the 95th-percentile slice stays under 25 ms, which catches a uniform per-push cost (a rescan of
+    // everything held, a quadratic join); (2) every push that crosses BOUND (250 ms, below both CI stalls) is
+    // replayed on a fresh drawer, and the test fails only if the SAME index crosses BOUND in both runs. That catches a
+    // sparse or periodic stall in the code, which a bound on the percentile alone would miss, and tolerates one
+    // pre-emption in either run.
     const chunk = 'A'.repeat(4096);
-    let worst = 0;
-    d.push('key sk-');
-    for (let i = 0; i < 1024; i++) {
-      const t0 = performance.now();
-      d.push(chunk);
-      worst = Math.max(worst, performance.now() - t0);
-      expect((d as unknown as { held: string }).held.length + ((d as unknown as { pending: string | null }).pending?.length ?? 0))
-        .toBeLessThanOrEqual(8192 + 1024 + 4096);
+    const run = (): number[] => {
+      const { m } = maskerOver(() => TOKEN_1, [CMP]);
+      const d = m.drawer(() => {});
+      const slices: number[] = [];
+      d.push('key sk-');
+      for (let i = 0; i < 1024; i++) {
+        const t0 = performance.now();
+        d.push(chunk);
+        slices.push(performance.now() - t0);
+        expect((d as unknown as { held: string }).held.length + ((d as unknown as { pending: string | null }).pending?.length ?? 0))
+          .toBeLessThanOrEqual(8192 + 1024 + 4096);
+      }
+      d.dispose();
+      m.close();
+      return slices;
+    };
+    const first = run();
+    const sorted = [...first].sort((a, b) => a - b);
+    expect(sorted[Math.floor(sorted.length * 0.95)]!, 'the 95th-percentile push slice (ms)').toBeLessThan(25);
+    const slow = first.flatMap((ms, i) => (ms > BOUND ? [i] : []));
+    if (slow.length > 0) {
+      const again = run();
+      const repeated = slow.filter((i) => again[i]! > BOUND);
+      expect(repeated, `push indices over ${BOUND} ms in both runs: a stall in the code, not a pre-emption`).toEqual([]);
     }
-    d.dispose();
-    expect(worst).toBeLessThan(BOUND);
-    m.close();
   });
 
   it('20,000 shape matches, and a frame of 50 strings each at the run ceiling, mask within the bound', () => {
@@ -1063,6 +1084,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/sessions/:id/pane/history': /maskTextSliced\(r\.text, \{ rows: true \}\)/,
     '/api/mail': /mail: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(mail\)/,
     '/api/mail/:id': /envelope: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(row\.envelope\)/,
+    '/api/mail/inbox': /text: masker\.maskDeep\(renderInboxEntry\(/,   // D-6778: each rendered entry is masked before paging
     '/api/runs/:id/items': /items: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
     '/api/feed': /events: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
   };
@@ -1324,9 +1346,9 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     seedRoster(home);
     seedSession(home, '');
     const run: Runner = async (_c, args) => {
-      if (args[0] === 'capture-pane') return { code: 0, stdout: pane, stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: pane, stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     return buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker }, new Bus());
@@ -1492,10 +1514,10 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
     seedRoster(home);
     seedSession(home, '');
     const run: Runner = async (_c, args) => {
-      if (args[0] === 'capture-pane') return { code: 0, stdout: pane(), stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: pane(), stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
       if (args[0] === 'send-keys') onKeys?.(args);
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     return buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker, ...extra }, new Bus());
@@ -1612,7 +1634,7 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
     const cachePath = path.join(home, 'state-cache.json');
     await saveSnapshot([fleetRow()], cachePath);
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const bus = new Bus();
     app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
       stateCachePath: cachePath, fleetState: { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null, build: null } }, bus);
@@ -1647,7 +1669,7 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
     const home = mkTmp('ccrc-mask-fu-ws-');
     seedRoster(home);
     const cfg = loadConfig({ CCRC_HOME: home });
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const bus = new Bus();
     app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker: m }, bus);
     const port = await listen(app);

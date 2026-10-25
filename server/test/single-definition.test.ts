@@ -1468,7 +1468,7 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
     // until then reported "unstamped" for ever. It does not widen either list,
     // because it writes through `BOX_STAMP_FILE` — the one line this file
     // already pins — and that is exactly the property these assertions are
-    // for. `server/test/ccrc-install.test.ts` ("writes the stamp through
+    // for. `server/test/ccrc-install-units.test.ts` ("writes the stamp through
     // BOX_STAMP_FILE") holds the other half: that the new writer really goes
     // through that variable rather than merely not duplicating the literal.
     expect(holdersOf('.ccrc/build.json')).toEqual([
@@ -1901,6 +1901,7 @@ describe('the model files, and who reads each one', () => {
     expect(holders).toEqual([
       'ccd/ccd',                // ROUTE_CLASSES and _route_valid's degraded arm — routing spec §5.1
       'ccd/ccrc',               // MODELS_CLASSES — the usage-error gate
+      'ccd/session-hook.sh',    // the Fable arm's deny reason and prefilter name the classes in prose (D-6792) — no walk
       'deploy/models-op.mjs',   // CLASSES — the mutation walk
       'pwa/src/lib/models.ts',  // the picker's aliases — spec §1/§8/§13.4, deleted by Plan 3a
       'shared/modelenv.mjs',    // the env block's key order and the TSV's
@@ -1961,7 +1962,7 @@ describe('one ~/.ccrc/remote-control, spelled once per tool and equal across all
   //   - `ccrc` (`_inst_rc`) is the single-box WRITER, seeding `off`.
   //   - `ccrc-doctor-checks` (`_dr_rc_state`) re-measures it for the operator.
   //     It is sourced under `set -u` by things that are not `ccrc`
-  //     (`ccrc-doctor.test.ts`'s `tableNames()` does exactly that), so a
+  //     (`ccrc-doctorFixture.ts`'s `tableNames()` does exactly that), so a
   //     top-level reference to another tool's variable would make sourcing it
   //     FAIL, and a `${…:-…}` fallback is the second spelling with a branch in
   //     front of it. That is D-92's trade for `CCRC_UNIT_DIR`, unchanged.
@@ -2314,7 +2315,8 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     // that pretended they were copies would be describing the tree wrongly.
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'mail-disabled'")).map(rel).sort();
     expect(holders).toEqual([
-      'server/src/coord/dispatch.ts',   // the refusal CODE
+      'server/src/coord/dispatch.ts',   // the refusal CODE (the outcome union's member)
+      'server/src/coord/dispatchDecide.ts', // the refusal CODE, decided (ARCH-22, #553)
       'server/src/coord/stall.ts',      // the hold named for the marker it honours
       'shared/api.ts',                  // the refusal-code vocabulary
       'shared/switches.ts',             // the marker literal (its one definition, D-5855)
@@ -2350,7 +2352,7 @@ describe("child-reclamation wave 4 — one 'reclaim-paused' literal", () => {
   it('watch.ts reaches the reclaim marker through readSwitches, never a private parse (D-5856)', () => {
     // Not just "no second literal" — that is satisfied by deleting the reader. Symbol-keyed (scan/symbols.ts): each lane
     // site calls the switchboard's one reader, and no `includes(RECLAIM_PAUSE_MARKER)` is left in watch.ts.
-    for (const m of ['emitCoord', 'sweepChildReclaim', 'archivedExpiryPass', 'deadCoordinatorPass']) expect(callsIn(symbolOf('server/src/watch.ts', `FleetWatcher.${m}`)).map((c) => c.name), m).toContain('readSwitches');
+    for (const m of ['emitCoord', 'childReclaimPass', 'archivedExpiryPass', 'deadCoordinatorPass']) expect(callsIn(symbolOf('server/src/watch.ts', `FleetWatcher.${m}`)).map((c) => c.name), m).toContain('readSwitches');
     expect(reclaimPauseParseSites().filter((x) => x.file === 'server/src/watch.ts'), 'a private parse in watch.ts').toEqual([]);
     const src = readFileSync(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'utf8');
     expect(src).toMatch(/import \{[^}]*\bRECLAIM_PAUSE_MARKER\b[^}]*\} from '\.\/coord\/rundefs\.js'/);
@@ -3039,7 +3041,7 @@ describe('the release owner literal — two named assignments, and no third spel
   // deliberate:
   //   - license.test.ts pins the VALUE — both lanes name the ruled owner, and
   //     the previous org survives nowhere in shipping code;
-  //   - ccrc-update.test.ts pins the AGREEMENT — install.sh's owner/repo pair
+  //   - ccrc-update-kept.test.ts pins the AGREEMENT — install.sh's owner/repo pair
   //     and ccd/ccrc's are equal, so the two lanes download the same release;
   //   - THIS pins the COUNT — those two assignments are the only spellings of
   //     the org anywhere in shipped code, so a third copy (a hardcoded release
@@ -3355,7 +3357,7 @@ describe('the Codex runtime — one LiteLLM requirement, in one file', () => {
 describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTree', () => {
   // The same shape as "extraction finding — one path to the ccd script"
   // above, applied to a copy that was made for a stated reason and copied
-  // anyway: `ccrc-install.test.ts` and `ccrc-install-graphify.test.ts` each
+  // anyway: the `ccrc-install-*.test.ts` family (one fixture module since D-6767) and `ccrc-install-graphify.test.ts` each
   // carried their own `TREE_FILES` / `TREE_STUBS` / `installFixtureTree`,
   // both headers citing the same excuse (importing a sibling `.test.ts` module
   // for its helpers double-registers that file's `describe` blocks). The
@@ -3395,7 +3397,7 @@ describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTr
     for (const d of testDirs) expect(sources(d).length, rel(d)).toBeGreaterThan(0);
     expect(testFiles.length).toBeGreaterThan(40);
     expect(testFiles.map(rel)).toContain('server/test/installTreeFixture.ts');
-    expect(testFiles.map(rel)).toContain('server/test/ccrc-install.test.ts');
+    expect(testFiles.map(rel)).toContain('server/test/ccrc-installFixture.ts');
     expect(testFiles.map(rel)).toContain('server/test/ccrc-install-graphify.test.ts');
     expect(testFiles.map(rel)).toContain('server/test-e2e/helpers.ts');
   });
@@ -3427,7 +3429,7 @@ describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTr
   it('is what the two former copy sites now import', () => {
     // Not just "the copies are gone" — that is satisfied by deleting the
     // fixture. Each former copy site must still reach the shared module.
-    for (const f of ['ccrc-install.test.ts', 'ccrc-install-graphify.test.ts']) {
+    for (const f of ['ccrc-installFixture.ts', 'ccrc-install-graphify.test.ts']) {
       const src = readFileSync(path.join(testDir, f), 'utf8');
       expect(src, f).toMatch(
         /import\s*\{[^}]*\binstallFixtureTree\b[^}]*\}\s*from\s*'\.\/installTreeFixture\.js'/);
@@ -3443,7 +3445,7 @@ describe('one scratch-slug predicate — four prefixes and one infix, three bash
   //   - `ccrc`'s `_mem_is_scratch` is the rule and carries the measurement.
   //     Its two callers (the census and `--apply`) reach it directly.
   //   - `ccrc-doctor-checks`'s `_check_memory` cannot: the table is sourced
-  //     under `set -u` by things that are not `ccrc` (`ccrc-doctor.test.ts`'s
+  //     under `set -u` by things that are not `ccrc` (`ccrc-doctorFixture.ts`'s
   //     `tableNames()`), so a `declare -F` guard would be the second spelling
   //     with a branch in front of it. D-92's trade, unchanged.
   //   - `session-hook.sh` is installed INTO an agent home and sources nothing
@@ -3985,7 +3987,7 @@ describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
     // Anti-vacuity (F16, m2): the derived list really does carry all nine —
     // a NODE_FILES shrink or a broken import would otherwise let this
     // describe run over an empty or partial set and pass for the wrong reason.
-    expect(NINE_BASENAMES, 'NODE_FILE_BASENAMES did not import, or the vocabulary shrank').toHaveLength(9);
+    expect(NINE_BASENAMES, 'NODE_FILE_BASENAMES did not import, or the vocabulary shrank').toHaveLength(10);
     const files = ALL.filter((f) => rel(f).startsWith('agent/src/'))
       .map((f) => ({ path: rel(f), src: readFileSync(f, 'utf8') }));
     expect(files.length, 'the agent/src scan is over nothing').toBeGreaterThan(3);
@@ -3994,7 +3996,7 @@ describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
 
   it('CONTROL: a planted re-list of all nine basenames beside the import reds the check above (F16)', () => {
     const real = readFileSync(path.join(ccrcRoot, 'agent', 'src', 'whitelist.ts'), 'utf8');
-    const planted = `${real}\nconst ALSO = ["build.json", 'installed', \`ccrc-caps\`, 'floor', "previous", 'node-id', \`update.json\`, "update-intent", 'box-token-generation'];\n`;
+    const planted = `${real}\nconst ALSO = ["build.json", 'installed', \`ccrc-caps\`, 'floor', "previous", 'node-id', \`update.json\`, "update-intent", 'box-token-generation', 'tmp-sweep.json'];\n`;
     expect(agentBasenameHolders([{ path: 'agent/src/whitelist.ts', src: planted }]),
       'a planted re-list of all nine went unseen').toEqual(['agent/src/whitelist.ts']);
     expect(agentBasenameHolders([{ path: 'agent/src/whitelist.ts', src: real }]),
@@ -4708,10 +4710,14 @@ describe('docs failure vocabulary, redactor and ccd wire types are declared once
     for (const name of FUNCTIONS) expect(holdersOf(FUNCTION_DEF(name)), name).toEqual(['shared/docs.ts']);
   });
 
-  it('spells the redactor patterns in one TS file: no second copy of a rule', () => {
-    // Fragments every copy of rules 2 and 3 must contain however it is escaped or quoted.
+  it('spells the redactor patterns in one file, shared/redact.mjs: no second copy of a rule', () => {
+    // Fragments every copy of rules 2 and 3 must contain however it is escaped or quoted. D-5867 (Task C1l; ARCH-66
+    // (#801)): the rows' one home moved from shared/docs.ts to shared/redact.mjs, which `ALL` (`.ts` and `.tsx`) does
+    // not walk, so it is read by path.
+    const home = readFileSync(path.join(ccrcRoot, 'shared', 'redact.mjs'), 'utf8');
     for (const fragment of ['(?:access_token|token)=', 'gh[opsu]_']) {
-      expect(ALL.filter((f) => readFileSync(f, 'utf8').includes(fragment)).map(rel), fragment).toEqual(['shared/docs.ts']);
+      expect(home.includes(fragment), `${fragment} in shared/redact.mjs`).toBe(true);
+      expect(ALL.filter((f) => readFileSync(f, 'utf8').includes(fragment)).map(rel), fragment).toEqual([]);
     }
   });
 
@@ -4987,6 +4993,41 @@ describe('the pane-scope sweep: its arming file has no writer in the tree', () =
   });
 });
 
+// DISK RETENTION DR-20 (D-6632). APPENDED for the reason the stall-watch blocks above state. `nested-rescue-live` arms the
+// nested-repository rescue; the operator touches it by hand, so the ONE shell line that names it is ccd/ccd's read and nothing
+// else under ccd/ or deploy/ names it on a code line.
+describe('the nested rescue: its arming file has no writer in the tree', () => {
+  // DR-21 (D-6633) gives it its one TS holder, its switchboard row in `shared/switches.ts` (L0, no `node:` module, so it
+  // cannot write the marker); the server only shows what the arm would do.
+  it('nested-rescue-live: one shell holder, ccd/ccd, whose one line is a read; one TS holder, its definer, which reaches no write', () => {
+    expect(holdersOf('nested-rescue-live'), 'a line of shell other than ccd/ccd names it — a writer in waiting').toEqual(['ccd/ccd']);
+    expect(codeLines(BASH.find((f) => rel(f) === 'ccd/ccd') ?? '').filter((l) => l.includes('nested-rescue-live')))
+      .toEqual(['_ws_nested_rescue_live() { [[ -e "$REG/nested-rescue-live" ]]; }']);
+    expect(ALL.filter((f) => stallCode(f).includes('nested-rescue-live')).map(rel), 'spelled on a code line outside shared/switches.ts')
+      .toEqual(['shared/switches.ts']);
+    expect(stallCode(path.join(ccrcRoot, 'shared/switches.ts')), 'shared/switches.ts reaches a node: module or require, so it could write the marker')
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+    // THE WIDER WRITER: a file that imports the constant and holds an io could write it without spelling the name.
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    for (const f of ALL.filter((x) => stallCode(x).includes('NESTED_RESCUE_LIVE_MARKER'))) {
+      expect(stallCode(f), `${rel(f)} names the constant and reaches a write`).not.toMatch(WRITE);
+    }
+  });
+  it('nested-rescue-live: no other file under ccd/ or deploy/ names it on a code line', () => {
+    const others = bashRoots.flatMap((dir) => {
+      const walk = (d: string): string[] => readdirSync(d).flatMap((e) => {
+        const p = path.join(d, e);
+        return statSync(p).isDirectory() ? walk(p) : (BASH.includes(p) || p.endsWith('.md') ? [] : [p]);
+      });
+      return walk(dir);
+    });
+    expect(others.length, 'the walk reached the non-shell files').toBeGreaterThan(40);
+    expect(others.filter((f) => readFileSync(f, 'utf8').split('\n')
+      .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes('nested-rescue-live'))).map(rel)).toEqual([]);
+  });
+});
+
 // WORKSPACE LIFECYCLE WAVE 3b (spec 2026-09-24 §5.3, the coordinator's safety ruling (E)). APPENDED, for the reason
 // the stall-watch blocks above state: `session-hook.test.ts`'s citation audit cites this file by line. The expiry lane
 // SHIPS SHADOWED: until `$REG/expire-lane-live` exists it audits and records "would expire" and never composes
@@ -5014,6 +5055,56 @@ describe('workspace lifecycle wave 3b: the expiry lane’s live switch has no wr
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
     const holders = ALL.filter((f) => stallCode(f).includes('EXPIRE_LANE_LIVE_MARKER')).map(rel).sort();
     expect(holders).toEqual(['server/src/archivedExpiry.ts', 'server/src/coord/expireArchived.ts', DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
+
+// FLEET DISK RETENTION DR-29 (D-6641, spec 2026-10-23 section 2.7.4). The expiry lane's child arm SHIPS SHADOWED behind
+// `$REG/expire-child-live`, which the operator touches by hand: no shell line names it, its one TS spelling is its
+// definer, and the files naming its constant are the definer, its re-exporter, the lane's executor and the lane, none
+// of which reaches a write.
+describe('fleet disk retention DR-29: the expiry lane’s child switch has no writer in the tree', () => {
+  const NAME = 'expire-child-live';
+  const DEFINER = 'shared/switches.ts';
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`).toEqual([DEFINER]);
+  });
+  it('the files that name its constant are the definer, its re-exporter, the executor and the lane, and none reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('EXPIRE_CHILD_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/archivedExpiry.ts', 'server/src/coord/expireArchived.ts', DEFINER, 'server/src/watch.ts'].sort());
+    for (const f of holders.filter((h) => h !== 'server/src/watch.ts')) {
+      expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+    }
+  });
+});
+
+// FLEET DISK RETENTION DR-27 (D-6639; spec 2026-10-23 §2.7.3). APPENDED, for the reason the blocks above state. The
+// child reclaim's stale arm SHIPS SHADOWED: until `$REG/child-stale-reclaim-live` exists the lane records "child would be
+// reclaimed (stale)" and composes no `--stale` argv. The file is the operator's to touch BY HAND on the fleet box, so no
+// line of shell names it, and its TS holders are its definer (an L0 file that reaches no `node:` module and so cannot
+// write it) and the one arm that reads a listing the lane already took.
+describe('fleet disk retention DR-27: the stale arm’s live switch has no writer in the tree', () => {
+  const NAME = 'child-stale-reclaim-live';
+  const DEFINER = 'shared/switches.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  // THE WIDER WRITER, as the expiry lane's block states it: a file that imports the constant and holds an `io` could
+  // write the marker without spelling its name. The files whose code names the constant are pinned, and none reaches a write.
+  it('the files that name its constant are the definer and the arm, and none reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('CHILD_STALE_RECLAIM_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/coord/childReclaimStale.ts', DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
 });
@@ -6489,7 +6580,8 @@ describe("one 'tmux unreachable' sentence (design-system wave)", () => {
 // D-5089 (plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 1). APPENDED at the very end, for the reason
 // the note above the 'tmux unreachable' block states: `session-hook.test.ts` cites this file by line. The sheet tells
 // AskUserQuestion's review screen by its last line ("Ready to submit your answers?") and its two rows, and reads its
-// summary up to that line (`pwa/src/session/askLive.ts`'s `isAskReview` and `reviewSummary`). Those are screen facts,
+// summary up to that line (`pwa/src/session/askLive.ts`'s `isAskReview` and `reviewSummary`; D-6325 deleted the
+// summary reader, and the sheet's review prints Claude's headers instead). Those are screen facts,
 // so each is ONE rule in `shared/ask-menu.ts` beside the server half's four, and the sheet imports them. A second
 // spelling that drifts would let one reader call a screen the review that the other does not. Code lines only
 // (`stallCode`): prose names the screen in quotes. KNOWN WIDTH: `Cancel` is common copy and is not scanned, and nor is
@@ -6511,17 +6603,21 @@ describe('the review screen\'s rows and last line are spelled once, in shared/as
     expect(holders(READY)).toEqual(['shared/ask-menu.ts']);
   });
 
-  it('the Submit answers row is spelled on a code line in shared/ask-menu.ts and nowhere else', () => {
-    expect(holders(SUBMIT)).toEqual(['shared/ask-menu.ts']);
+  it('the Submit answers row is spelled on a code line in shared/ask-menu.ts, and the sheet\'s fixed label beside it and nowhere else', () => {
+    // D-6325: the pane's row is still told by ONE rule (`REVIEW_SUBMIT_ROW_RE`). The review the sheet draws no longer
+    // prints the pane's label for it: its word is the sheet's own, `SUBMIT_ANSWERS` in `askLive.ts` (which the
+    // transcript's Answer control reads too), so that one pwa file spells it, as a label to show and not a rule to match.
+    expect(holders(SUBMIT)).toEqual(['pwa/src/session/askLive.ts', 'shared/ask-menu.ts']);
   });
 
   it('the sheet reads the L0 rules: askLive.ts imports and tests each review rule', () => {
     const live = stallCode(path.join(ccrcRoot, 'pwa/src/session/askLive.ts'));
     const fromL0 = (name: string): RegExp =>
       new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'(?:\\.\\./)+shared/ask-menu(?:\\.js)?'`);
+    // D-6325: `reviewSummary`, the one reader of the ready line and the heading in the sheet, is deleted (the review's
+    // summary is Claude's headers now), so askLive.ts reads the review only through `reviewRows`, below.
     for (const name of ['REVIEW_READY_RE', 'REVIEW_HEADING_RE']) {
-      expect(live, `askLive.ts does not import ${name} from L0`).toMatch(fromL0(name));
-      expect(live, `askLive.ts does not test ${name}`).toMatch(new RegExp(`\\b${name}\\.test\\(`));
+      expect(live, `askLive.ts spells ${name} again`).not.toMatch(new RegExp(`\\b${name}\\b`));
     }
     // Decision `ask-review-lenient-arm`: the two rows are told by ONE L0 reader, `reviewRows`, which the sheet and the
     // server's frame log both call, so neither spells the row rules again. It tests each of them; askLive imports it.
@@ -6599,7 +6695,7 @@ describe('the turn verdict\'s reads and rule each have one home (D-5238)', () =>
 
   it('dispatch.ts reads no live file of its own: it asks the turnVerdict port', () => {
     const dispatch = stallCode(path.join(ccrcRoot, 'server/src/coord/dispatch.ts'));
-    expect(dispatch).toMatch(/deps\.turnVerdict\(/);
+    expect(dispatch).toMatch(/turnVerdict: deps\.turnVerdict\b/);
     expect(dispatch).not.toMatch(/readLiveStateMeasured|readLiveState\b|panePid\(/);
   });
 });
@@ -6631,6 +6727,18 @@ describe('the approval classifier, its class map and the redactor each have one 
 
   it('redactCommand is defined once, in coord/redact.ts', () => {
     expect(holders(/\bfunction redactCommand\b|\bconst redactCommand\s*=/)).toEqual(['server/src/coord/redact.ts']);
+  });
+
+  // D-5867 (Task C1l, ARCH-66 (#801)): the egress rule patterns' one home is `shared/redact.mjs`. `.mjs` is not in
+  // `ALL`, so the home is read by path; the TypeScript holders are `ALL`'s.
+  it('the egress rule patterns have one home, shared/redact.mjs: no TypeScript file spells one', () => {
+    const FRAGMENTS = [/hooks\\\.slack\\\.com/, /gh\[pousr\]_/, /\bSECRET_NAME_TEST\b/, /\(\?:Proxy-\)\?Authorization/];
+    const home = readFileSync(path.join(ccrcRoot, 'shared', 'redact.mjs'), 'utf8');
+    for (const f of FRAGMENTS) {
+      expect(f.test(home), `${f} in shared/redact.mjs`).toBe(true);
+      expect(holders(f), `${f} in a .ts file`).toEqual([]);
+    }
+    expect(FRAGMENTS[0]!.test('const SLACK = /(hooks\\.slack\\.com\\/)/;'), 'CONTROL: the pattern sees a spelling').toBe(true);
   });
 });
 
@@ -7188,6 +7296,40 @@ describe('D-5242: hibernation’s markers have no writer, and its holds one home
   it('PRESENCE_OPEN_TTL_MS is declared once, in shared/api.ts beside PRESENCE_TTL_MS', () => {
     const decl = /\b(?:const|let|var)\s+PRESENCE_OPEN_TTL_MS\b/;
     expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel)).toEqual(['shared/api.ts']);
+  });
+});
+
+// D-6631 (fleet disk retention DR-19; spec 2026-10-23 sections 2.3 and 4). The orphan-worktree lane ships SHADOW behind two
+// markers, `orphan-tree-live` and `orphan-tree-rescue-live`, set BY HAND in `$REG`. Nothing in the tree writes either:
+// the one file that spells each on a code line is the switchboard (L0, no `node:` import), and every file that names its
+// constant reaches no write. The verb's argv has one composing site, and `--force` has none.
+describe('D-6631: the orphan lane\'s markers have no writer, and its verb one composer', () => {
+  const DEFINER = 'shared/switches.ts';
+  const MARKERS = [['orphan-tree-live', 'ORPHAN_TREE_LIVE_MARKER'], ['orphan-tree-rescue-live', 'ORPHAN_TREE_RESCUE_LIVE_MARKER']] as const;
+  const SHELL_WRITE = /(?:>>?|\btouch\b|\btee\b|\b_reg_set\b|\bprintf\b[^|]*>|\bcp\b|\bmv\b|\bln\b|\binstall\b)/;
+  const TS_WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+  it.each(MARKERS)('%s: no line of shell writes it', (name) => {
+    expect(SHELL_WRITE.test(`touch "$REG/${name}"`), 'CONTROL: the pattern sees a write').toBe(true);
+    const writers = BASH.flatMap((f) => codeLines(f).filter((l) => l.includes(name) && SHELL_WRITE.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
+    expect(writers, `${name}: a line of shell writes it`).toEqual([]);
+  });
+  it.each(MARKERS)('%s: its one TS holder is the switchboard, which reaches no node: module', (name) => {
+    expect(ALL.filter((f) => stallCode(f).includes(`'${name}'`) || stallCode(f).includes(`"${name}"`)
+      || stallCode(f).includes(`\`${name}`) || stallCode(f).includes(`/${name}`)).map(rel).sort(),
+    `${name} spelled on a code line outside ${DEFINER}`).toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+  it.each(MARKERS)('%s: the files that name its constant reach no write', (_name, constant) => {
+    const holders = ALL.filter((f) => stallCode(f).includes(constant)).map(rel).sort();
+    expect(holders, `${constant}: nobody names it`).toContain(DEFINER);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(TS_WRITE);
+  });
+  it('CCD_ARGV.wsOrphan is composed by the executor alone, and nothing composes --force beside it', () => {
+    const composers = ALL.filter((f) => stallCode(f).includes('CCD_ARGV.wsOrphan(')).map(rel).sort();
+    expect(composers).toEqual(['server/src/coord/collectOrphanTree.ts']);
+    for (const f of ['server/src/orphanTreeLane.ts', 'server/src/coord/collectOrphanTree.ts', 'server/src/orphanTreeSweep.ts']) {
+      expect(stallCode(path.join(ccrcRoot, f)), `${f} spells --force`).not.toContain('--force');
+    }
   });
 });
 
@@ -7858,6 +8000,23 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(writersOf('mail-disabled')).toEqual([]);
   });
 
+  // D-6785 (PR landing in ccrc, stage 1): the checks lane's two markers are rows of the switchboard with writer
+  // `hand-only`. Nothing in the tree writes `landing-disabled` or `landing-checks-live` (the operator arms the lane
+  // by hand, after a week of agreeing shadow rows).
+  it.each(['landing-disabled', 'landing-checks-live'])('%s: hand-only, no writer in the tree', (name) => {
+    expect(SWITCHES[name as 'landing-disabled' | 'landing-checks-live'].writer).toBe('hand-only');
+    expect(constsOf(name), 'CONTROL: the switchboard defines it').toHaveLength(1);
+    expect(writersOf(name)).toEqual([]);
+  });
+
+  // D4 (#757): the roster card's arming marker is hand-only too. Nothing in the tree writes it; the operator arms the
+  // card by hand after reading the shadow log.
+  it('coordinator-roster-card-live: hand-only, no writer in the tree', () => {
+    expect(SWITCHES['coordinator-roster-card-live'].writer).toBe('hand-only');
+    expect(constsOf('coordinator-roster-card-live'), 'CONTROL: the switchboard defines it').toHaveLength(1);
+    expect(writersOf('coordinator-roster-card-live')).toEqual([]);
+  });
+
   // D-5855 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1a; ARCH-70 (#805)).
   // The switchboard's exit: `mail-disabled` is defined once (2 -> 1 on C1a's tip; the count may only shrink), and so
   // is every other marker row; and every marker literal a `const *_MARKER` defines under `server/src` or `shared/` is
@@ -7946,7 +8105,8 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(lock.packages[`node_modules/${SCAN_PARSER}`]).toMatchObject({ version: spec.split('@').pop(), dev: true });
   });
 
-  // D-5854 (Task C0g; ARCH-06 (#554), the W1a slice). The ratchet on literal source-text pins over W1a's files, by the
+  // D-5854 (Task C0g; ARCH-06 (#554), the W1a slice). The ratchet on literal source-text pins over W1a's files (ARCH-06's
+  // whole-tree slice widened the rule to every server/src .ts file: `namesSrcFile`, `SRC_FILES`, and the last ratchet below), by the
   // ticket's written counting rule, `literalSourcePins`: a test file counts when it reads one of W1A_FILES with
   // `readFileSync` (directly, through a path constant one hop away, or through a function whose body reads it), and a
   // pin counts when `indexOf`, `match`, `toContain` or `toMatch` (the `expect` spelling of `match`) is called with a
@@ -7965,30 +8125,49 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   // `coord/routes.ts` (shared with W1a), and the three only W1b moves.
   const W1B_FILES = ['server/src/watch.ts', 'server/src/coord/routes.ts', 'server/src/ccdargv.ts',
     'server/src/registry.ts', 'server/src/coord/redact.ts'];
-  const RATCHET_FILES = [...new Set([...W1A_FILES, ...W1B_FILES])];
-  /** The ratcheted files a read's source text names: its basename quoted or after a `/`; `routes.ts` and `redact.ts`
-   *  only beside `coord`; nothing when the text (or the reading function's, `context`) names another package. */
-  const namesW1aFile = (text: string, context = ''): string[] => {
+  // ARCH-06 (#554), the whole-tree slice: the rule counts a read of ANY server/src .ts file, not only W1a's and W1b's.
+  // `SRC_FILES` is what git lists under server/src; W1A_FILES and W1B_FILES keep their own rows (and ceilings) above.
+  const SRC_FILES: string[] = (() => {
+    const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'server/src/*.ts'],
+      { cwd: ccrcRoot, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    return r.stdout.split('\0').filter((x) => x && existsSync(path.join(ccrcRoot, x))).sort();
+  })();
+  const RATCHET_FILES = SRC_FILES;
+  const SRC_BASENAMES = new Set(SRC_FILES.map((f) => path.basename(f)));
+  /** Does `text` quote a server/src basename at all? The cheap test that decides whether a test file is parsed. */
+  const spellsSrcBasename = (text: string): boolean =>
+    [...text.matchAll(/['"`/]([\w.-]+\.ts)['"`]/g)].some((m) => SRC_BASENAMES.has(m[1]!));
+  /** The server/src files a read's source text names: the basename quoted or after a `/`; a basename that two
+   *  directories share (`routes.ts`, `redact.ts`, `io.ts`) resolves to the directory the text (or the reading function's,
+   *  `context`) also quotes, else to the one at server/src's root, else to nothing; a basename only ONE file has resolves
+   *  to that file whatever directory the text spells (`path.join(dirVar, 'delegation-ingest.ts')`); nothing when the text names
+   *  another package. */
+  const namesSrcFile = (text: string, context = ''): string[] => {
     const all = `${text}\n${context}`;
     if (/['"`/](?:agent|pwa|ui|ccd|shared)['"`/]/.test(all)) return [];
-    return RATCHET_FILES.filter((f) => {
-      const base = path.basename(f);
-      if (!new RegExp(`['"\`/]${esc(base)}['"\`]`).test(text)) return false;
-      return (base !== 'routes.ts' && base !== 'redact.ts') || /['"`/]coord['"`/]/.test(all);
-    });
+    const out: string[] = [];
+    for (const base of SRC_BASENAMES) {
+      if (!new RegExp(`['"\`/]${esc(base)}['"\`]`).test(text)) continue;
+      const same = SRC_FILES.filter((f) => path.basename(f) === base);
+      const dir = (f: string): string => path.basename(path.dirname(f));
+      const beside = same.filter((f) => dir(f) !== 'src' && new RegExp(`['"\`/]${esc(dir(f))}['"\`/]`).test(all));
+      out.push(...(beside.length ? beside : same.length === 1 ? same : same.filter((f) => dir(f) === 'src')));
+    }
+    return out;
   };
   interface SourcePin { line: number; target: string; method: string; literal: string }
   /** How many texts `literalSourcePins` has parsed (D-6111's guard reads it). */
   let pinParses = 0;
   /** ARCH-06's counting rule over one test file's text (D-5854). */
   const literalSourcePins = (text: string, file = 'probe.ts'): SourcePin[] => {
-    // D-6111: every target below comes from `namesW1aFile` over a substring of `text`, and it answers nothing unless
+    // D-6111: every target below comes from `namesSrcFile` over a substring of `text`, and it answers nothing unless
     // that substring spells a W1a basename, so a text that spells none has no pin and is not parsed. Parsing all of
     // server/test took 9.9 s of the 20 s Linux budget untraced, and timed out under the map's trace. KNOWN WIDTH: a
-    // template that splits a basename across lines is joined by `flat` before `namesW1aFile` reads it, so this raw-text
+    // template that splits a basename across lines is joined by `flat` before `namesSrcFile` reads it, so this raw-text
     // check would miss it; no such pin exists (the counts with and without this check were measured equal).
     // D-6114: every ratcheted file's basename, W1b's too, or a pin over `ccdargv.ts` alone would never be parsed.
-    if (!RATCHET_FILES.some((f) => text.includes(path.basename(f)))) return [];
+    if (!text.includes('readFileSync') || !spellsSrcBasename(text)) return [];
     pinParses += 1;
     const p = parseSource(text, file);
     const raw = (c: { start: number; end: number }): string => text.slice(c.start, c.end);
@@ -8015,7 +8194,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     const readNames = (callText: string, at: number): string[] => {
       const id = /^readFileSync\s*\(\s*([A-Za-z_$][\w$]*)\s*[,)]/.exec(callText)?.[1];
       const j = id === undefined ? -1 : resolve(id, at);
-      return [...new Set([...namesW1aFile(callText), ...(j < 0 ? [] : namesW1aFile(p.bindings[j]!.init, callText))])];
+      return [...new Set([...namesSrcFile(callText), ...(j < 0 ? [] : namesSrcFile(p.bindings[j]!.init, callText))])];
     };
     const readers = new Map<string, { fixed: string[]; context: string }>();
     for (const r of p.calls.filter((c) => c.name === 'readFileSync')) {
@@ -8030,7 +8209,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       const m = /^([A-Za-z_$][\w$]*)\s*\(/.exec(expr);
       const rd = m ? readers.get(m[1]!) : undefined;
       return !m ? [] : m[1] === 'readFileSync' ? readNames(expr, at)
-        : !rd ? [] : rd.fixed.length ? rd.fixed : namesW1aFile(expr, rd.context);
+        : !rd ? [] : rd.fixed.length ? rd.fixed : namesSrcFile(expr, rd.context);
     };
     for (const c of p.calls) if (c.boundTo !== null && c.name !== null && c.callee === c.name && readers.has(c.name)) {
       track(resolve(c.boundTo, c.start), inlineRead(raw(c), c.start));
@@ -8063,19 +8242,28 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   };
   /** Every tracked or new untracked .ts file under server/test, its pins' count per ratcheted file (W1a's and W1b's,
    *  D-6114), and how many files were listed and parsed. Scanned once and shared by both ratchets and D-6111's guard. */
-  let pinScan: { counts: Record<string, number>; listed: number; parsed: number } | undefined;
+  /** The security censuses' test files (#554: they are exempt from the ratchet and migrate one at a time, each in its own
+   *  PR). Their pins are tallied in `exempt` for information and carry no ceiling, so a security PR that adds a route
+   *  or a pin never goes red here. */
+  const SECURITY_CENSUS_TESTS: readonly string[] = ['server/test/auth-gate.test.ts', 'server/test/box-token-census.test.ts',
+    'server/test/token-policy.test.ts', 'server/test/token-claim-route.test.ts', 'server/test/notify-token.test.ts'];
+  let pinScan: { counts: Record<string, number>; exempt: Record<string, number>; listed: number; parsed: number } | undefined;
   const literalSourcePinScan = (): NonNullable<typeof pinScan> => {
     if (pinScan) return pinScan;
     const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'server/test/*.ts'],
       { cwd: ccrcRoot, encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
     const counts: Record<string, number> = Object.fromEntries(RATCHET_FILES.map((f) => [f, 0]));
+    const exempt: Record<string, number> = {};
     const files = new Set(r.stdout.split('\0').filter((x) => x && existsSync(path.join(ccrcRoot, x))));
     const before = pinParses;
     for (const f of files) {
-      for (const pin of literalSourcePins(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)) counts[pin.target]! += 1;
+      for (const pin of literalSourcePins(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)) {
+        if (SECURITY_CENSUS_TESTS.includes(f)) exempt[pin.target] = (exempt[pin.target] ?? 0) + 1;
+        else counts[pin.target]! += 1;
+      }
     }
-    pinScan = { counts, listed: files.size, parsed: pinParses - before };
+    pinScan = { counts, exempt, listed: files.size, parsed: pinParses - before };
     return pinScan;
   };
   /** The shared scan's counts for `files` alone, in their order (D-6114: one scan serves both ratchets). */
@@ -8115,13 +8303,23 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       "expect(update).toContain('app.get(');",
       "const agent = readFileSync(path.join(root, 'agent', 'src', 'server.ts'), 'utf8');",
       "expect(agent.indexOf('listen(')).toBeGreaterThan(0);",
-    ))).toEqual(['3 coord/routes.ts toContain app.post(', '4 coord/childReclaim.ts toMatch /x/']);
+    ))).toEqual(['3 coord/routes.ts toContain app.post(', '4 coord/childReclaim.ts toMatch /x/',
+      '6 update/routes.ts toContain app.get(']);   // the counting rule sees it; whether it is ratcheted depends on the reading test file
     expect(pins(L(
       "describe('a', () => { const src = readFileSync(join(dir, 'server.ts'), 'utf8'); expect(src).toContain('a'); });",
       "describe('b', () => { const src = readFileSync(join(dir, 'other.ts'), 'utf8'); expect(src).toContain('b'); });",
       "const watchSrc = (): string => readFileSync(join(dir, 'watch.ts'), 'utf8');",
       "it('c', () => { const w = watchSrc(); expect(w.indexOf('c')).toBe(1); });",
     ))).toEqual(['1 server.ts toContain a', '4 watch.ts indexOf c']);
+    // A basename one file owns counts when the directory is built elsewhere; a shared one still needs its directory.
+    expect(pins(L(
+      "const a = readFileSync(path.join(dirVar, 'childReclaim.ts'), 'utf8');",
+      "expect(a.indexOf('x')).toBe(1);",
+      "const b = readFileSync(path.join(dirVar, 'delegation-ingest.ts'), 'utf8');",
+      "expect(b).toContain('y');",
+      "const c = readFileSync(path.join(dirVar, 'routes.ts'), 'utf8');",
+      "expect(c).toContain('z');",
+    ))).toEqual(['2 coord/childReclaim.ts indexOf x', '4 coord/delegation-ingest.ts toContain y']);
     // A read whose path sits in a constant resolves one hop through that constant's binding.
     expect(pins(L(
       "const W = path.resolve(dir, '../src/watch.ts');",
@@ -8137,10 +8335,10 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   it('literal source pins over W1a\'s files may only shrink (D-5854; ARCH-06\'s counting rule)', () => {
     // Measured on merge day. Lower a row when a pin moves onto scan/symbols.ts; never raise one.
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 113,
-      'server/src/server.ts': 31,
+      'server/src/watch.ts': 79,
+      'server/src/server.ts': 23,
       'server/src/interruptlog.ts': 0,
-      'server/src/coord/routes.ts': 40,
+      'server/src/coord/routes.ts': 38,
       'server/src/coord/childReclaim.ts': 6,
       'server/src/coord/expireArchived.ts': 0,
       'server/src/coord/collectTempRoot.ts': 0,
@@ -8151,12 +8349,12 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(Object.keys(counts)).toEqual(Object.keys(CEILING));
     for (const f of W1A_FILES) {
       expect(counts[f], `${f}: a new literal source pin — key it on scan/symbols.ts (sourceOfSymbol) `
-        + 'or a parse.ts-based census instead')
-        .toBeLessThanOrEqual(CEILING[f]!);
+        + 'or a parse.ts-based census instead (and lower the row to the new count: the ratchet is exact)')
+        .toBe(CEILING[f]!);
     }
   });
 
-  it('CONTROL (fixture, D-6114): W1b\'s three files are counted the same way, and `redact.ts` only beside `coord`', () => {
+  it('CONTROL (fixture, D-6114): W1b\'s three files are counted the same way, `redact.ts` whatever directory is spelled, a package\'s own `registry.ts` not', () => {
     const pins = (code: string): string[] =>
       literalSourcePins(code).map((x) => `${x.line} ${x.target.replace('server/src/', '')} ${x.method} ${x.literal}`);
     expect(pins([
@@ -8170,15 +8368,16 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       "expect(d).toContain('w');",
       "const e = readFileSync(path.join(root, 'pwa', 'src', 'command', 'registry.ts'), 'utf8');",
       "expect(e).toContain('v');",
-    ].join('\n'))).toEqual(['2 ccdargv.ts toContain x', '4 registry.ts indexOf y', '6 coord/redact.ts toMatch /z/']);
+    ].join('\n'))).toEqual(['2 ccdargv.ts toContain x', '4 registry.ts indexOf y', '6 coord/redact.ts toMatch /z/',
+      '8 coord/redact.ts toContain w']);   // ARCH-06: a basename one file owns resolves to it whatever directory the text spells
   });
 
   // D-6114 (Task C0o; ARCH-06 (#554), the W1b slice). The same rule over W1b's files, its own ceiling, so a slice moved
   // onto scan/symbols.ts ahead of W1b lowers a row here. Measured on this slice's tip; may only shrink.
   it('literal source pins over W1b\'s files may only shrink (D-6114; ARCH-06\'s counting rule)', () => {
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 85,
-      'server/src/coord/routes.ts': 40,
+      'server/src/watch.ts': 79,
+      'server/src/coord/routes.ts': 38,
       'server/src/ccdargv.ts': 6,
       'server/src/registry.ts': 2,
       'server/src/coord/redact.ts': 0,
@@ -8187,9 +8386,116 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(Object.keys(counts)).toEqual(Object.keys(CEILING));
     for (const f of W1B_FILES) {
       expect(counts[f], `${f}: a new literal source pin — key it on scan/symbols.ts (sourceOfSymbol) `
-        + 'or a parse.ts-based census instead')
-        .toBeLessThanOrEqual(CEILING[f]!);
+        + 'or a parse.ts-based census instead (and lower the row to the new count: the ratchet is exact)')
+        .toBe(CEILING[f]!);
     }
+  });
+
+  // ARCH-06 (#554), the whole-tree slice. W1a's and W1b's rows above keep their own ceilings; this is every OTHER
+  // server/src file, measured on merge day. A file absent from the table has a ceiling of 0, so the first literal pin
+  // over a file nobody pinned before is red. Lower a row when a pin moves onto `scan/symbols.ts`; never raise one.
+  // The security censuses' test files (SECURITY_CENSUS_TESTS) are exempt, as the ticket says: their pins are not counted
+  // here and have no row, so each migrates in its own PR. Another test's pin over those src files still counts.
+  /** The files whose pin count exceeds their ceiling (absent = 0), in `files`' order. A named function so a fixture can
+   *  prove the check is red on a new pin. */
+  const overCeiling = (counts: Record<string, number>, ceiling: Record<string, number>, files: readonly string[]): string[] =>
+    files.filter((f) => (counts[f] ?? 0) > (ceiling[f] ?? 0));
+
+  it('CONTROL (fixture, ARCH-06): a new pin in a security census test file is exempt, in any other test file it counts', () => {
+    const { exempt } = literalSourcePinScan();
+    expect(Object.keys(exempt).length, 'the exempt tally saw no security census pin').toBeGreaterThan(0);
+    expect(SECURITY_CENSUS_TESTS.every((f) => existsSync(path.join(ccrcRoot, f))), 'an exempt file is gone').toBe(true);
+    const gate = 'server/src/auth/gate.ts';
+    const extra = literalSourcePins("expect(readFileSync(path.join(srcRoot, 'auth', 'gate.ts'), 'utf8')).toContain('x');", 'probe.ts');
+    expect(extra.map((x) => x.target)).toEqual([gate]);
+    // The scan's rule: a pin read from an exempt file never reaches `counts`, so a new one cannot be over a ceiling.
+    expect(SECURITY_CENSUS_TESTS.includes('server/test/auth-gate.test.ts')).toBe(true);
+    expect(SECURITY_CENSUS_TESTS.includes('server/test/other.test.ts')).toBe(false);
+    expect(literalSourcePinScan().counts[gate] ?? 0, 'auth/gate.ts has no row: only a non-census test may pin it').toBe(0);
+    expect(overCeiling({ [gate]: 1 }, {}, [gate])).toEqual([gate]);
+  });
+
+  it('CONTROL (fixture, ARCH-06): one new indexOf source pin over an unpinned file is counted, and over its ceiling', () => {
+    const code = "const src = readFileSync(path.join(srcDir, 'coord', 'rundefs.ts'), 'utf8');\nexpect(src.indexOf('x')).toBe(1);";
+    expect(literalSourcePins(code).map((x) => `${x.target} ${x.method}`)).toEqual(['server/src/coord/rundefs.ts indexOf']);
+    expect(overCeiling({ 'server/src/coord/rundefs.ts': 1 }, {}, ['server/src/coord/rundefs.ts'])).toEqual(['server/src/coord/rundefs.ts']);
+    expect(overCeiling({ 'server/src/coord/store.ts': 56 }, { 'server/src/coord/store.ts': 56 }, ['server/src/coord/store.ts'])).toEqual([]);
+  });
+
+  it('literal source pins over every other server/src file may only shrink (ARCH-06; the counting rule)', () => {
+    const CEILING: Record<string, number> = {
+      'server/src/accounts/mask.ts': 1,
+      'server/src/askbody.ts': 1,
+      'server/src/askkey.ts': 1,
+      'server/src/askwindow.ts': 1,
+      'server/src/auth/sessions.ts': 3,
+      'server/src/auth/webauthn.ts': 2,
+      'server/src/childReclaimSweep.ts': 7,
+      'server/src/collectLane.ts': 7,
+      'server/src/config.ts': 3,
+      'server/src/coord/caps.ts': 6,
+      'server/src/coord/close.ts': 2,
+      'server/src/coord/collectLaneJournal.ts': 5,
+      'server/src/coord/db.ts': 4,
+      'server/src/coord/delegation-checkpoint.ts': 33,
+      'server/src/coord/delegation-correlation.ts': 4,
+      'server/src/coord/delegation-ingest.ts': 5,
+      'server/src/coord/delegation-journal.ts': 14,
+      'server/src/coord/delegation-model.ts': 5,
+      'server/src/coord/delegation-policy.ts': 6,
+      'server/src/coord/digest.ts': 2,
+      'server/src/coord/dispatch.ts': 5,
+      'server/src/coord/dispatchDecide.ts': 3,
+      'server/src/coord/drift.ts': 1,
+      'server/src/coord/envelope.ts': 3,
+      'server/src/coord/heldFor.ts': 2,
+      'server/src/coord/items.ts': 5,
+      'server/src/coord/kickoff.ts': 4,
+      'server/src/coord/landing.ts': 6,
+      'server/src/coord/placement.ts': 7,
+      'server/src/coord/reclaim.ts': 4,
+      'server/src/coord/released.ts': 5,
+      'server/src/coord/schema.ts': 3,
+      'server/src/coord/stall.ts': 6,
+      'server/src/coord/stallsettings.ts': 5,
+      'server/src/coord/store.ts': 56,
+      'server/src/coord/token.ts': 1,
+      'server/src/deps.ts': 2,
+      'server/src/docs/policy.ts': 10,
+      'server/src/exec.ts': 1,
+      'server/src/fleet.ts': 3,
+      'server/src/hibernateSweep.ts': 2,
+      'server/src/hookstate.ts': 3,
+      'server/src/index.ts': 38,
+      'server/src/inject/ask.ts': 4,
+      'server/src/inject/send.ts': 3,
+      'server/src/io.ts': 8,
+      'server/src/limits.ts': 1,
+      'server/src/linear/client.ts': 2,
+      'server/src/livestate.ts': 2,
+      'server/src/localcaps.ts': 3,
+      'server/src/pane/dialog.ts': 4,
+      'server/src/poolrule.ts': 6,
+      'server/src/pools.ts': 2,
+      'server/src/prstate.ts': 2,
+      'server/src/remote/io.ts': 1,
+      'server/src/remote/runner.ts': 1,
+      'server/src/stopDoneSweep.ts': 5,
+      'server/src/turnidle.ts': 9,
+      'server/src/update/converge.ts': 12,
+      'server/src/update/dispatch.ts': 8,
+      'server/src/update/resolve.ts': 2,
+      'server/src/update/routes.ts': 1,
+    };
+    const { counts } = literalSourcePinScan();
+    const taken = new Set([...W1A_FILES, ...W1B_FILES]);
+    const rest = SRC_FILES.filter((f) => !taken.has(f));
+    expect(Object.keys(CEILING).filter((f) => !rest.includes(f)), 'a ceiling row names a file that is gone or has its own table').toEqual([]);
+    for (const f of Object.keys(CEILING)) {
+      expect(counts[f] ?? 0, `${f}: the row is not what the scan measures — lower it when a pin moves (exact, so no slack hides a new pin)`).toBe(CEILING[f]!);
+    }
+    expect(overCeiling(counts, CEILING, rest), 'a new literal source pin over these files — key it on scan/symbols.ts '
+      + '(sourceOfSymbol, callsIn, sqlStatementsIn) or a parse.ts-based census instead').toEqual([]);
   });
 });
 
@@ -8197,23 +8503,17 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 // ARCH-71 (#806); spec §5.1 rule 3). The capability ratchet, placed directly after the ARCH-40 tail block and ahead of
 // the next appended block, so no cited line above it moves. Every verb question goes through `ccdCan(state, row)`:
 // a `verbSupported(` or a verb-tagged `capSupported(` (`consolidationCensus.ts`'s `capabilityChoiceSites`, tagged
-// from `CCD_CAN`) may stand only in W4's two files, which W1b never edits (three `verbSupported(` there), and in
-// `watch.ts`, whose commit waits its turn in the one `watch.ts` queue behind C1f (named in the C1k PR body as the
-// follow-up `c1k-watch-after-c1f`). Both sets may only shrink. Flag and verb-precondition sites are reported, never
-// ratcheted. The census is loaded inside the rows, so this block adds no import line.
+// from `CCD_CAN`) may stand only in W4's two files, which W1b never edits (three `verbSupported(` there). `watch.ts`'s
+// seven deferred calls moved in the follow-up `c1k-watch-after-c1f`, so nothing else is exempt. The W4 set may only
+// shrink. Flag and verb-precondition sites are reported, never ratcheted. The census is loaded inside the rows, so
+// this block adds no import line.
 describe('one verb question (ARCH-71): ccdCan(state, row) (D-5866)', () => {
-  /** `watch.ts`'s legacy verb calls at C1k's tip: the name sweep's probe, child reclaim's and the collector's gates
-   *  (each with its pause beside it), the expiry selection and the project PR read. */
-  const WATCH_DEFERRED = 7;
-
-  it('no verb question outside ccdCan, except W4\'s three (and watch.ts\'s deferred commit)', async () => {
+  it('no verb question outside ccdCan, except W4\'s three', async () => {
     const { capabilityChoiceSites, W4_HELD_FILES } = await import('./consolidationCensus.js');
     const sites = await capabilityChoiceSites();
     const legacy = sites.filter((x) => x.tag === 'verb' && x.form !== 'ccdCan');
     const show = (xs: typeof sites): string[] => xs.map((x) => `${x.file}:${x.line} ${x.text.trim()}`);
-    expect(show(legacy.filter((x) => x.file !== 'server/src/watch.ts')), 'ask ccdCan(state, row) instead').toEqual([]);
-    expect(legacy.filter((x) => x.file === 'server/src/watch.ts').length, 'watch.ts may only shrink')
-      .toBeLessThanOrEqual(WATCH_DEFERRED);
+    expect(show(legacy), 'ask ccdCan(state, row) instead').toEqual([]);
     const w4 = sites.filter((x) => x.tag === 'w4-held');
     expect(w4.filter((x) => x.form === 'verbSupported').length, 'W4\'s three verb sites may only shrink')
       .toBeLessThanOrEqual(3);
@@ -8233,6 +8533,169 @@ describe('one verb question (ARCH-71): ccdCan(state, row) (D-5866)', () => {
       wf(path.join(tree, 'server/src/x.ts'), 'if (!verbSupported(state, CCD_ARGV.wsHold(id, r, null))) return;\n');
       const [x] = await capabilityChoiceSites(tree);
       expect([x?.form, x?.tag]).toEqual(['verbSupported', 'verb']);
+    } finally {
+      rm(tree, { recursive: true, force: true });
+    }
+  });
+});
+
+// D-5861 (plan docs/superpowers/plans/2026-10-20-consolidation-w1b-schedule-listing-redactor.md, Task C1g, Step 4;
+// ARCH-76 (#811); spec §5.1 rule 3). The change-latch ratchet, placed after the capability ratchet above and ahead of
+// the next appended block. "Warn once until it changes" is `changeLatch` (`server/src/changeLatch.ts`): no `last*` field
+// of `FleetWatcher` is compared with a key before a `console.warn` and assigned in the same method
+// (`consolidationCensus.ts`'s `changeLatchSites`, a parse.ts-based query). The count may only shrink, and it is 0.
+// `DelegationLane#lastMarkWarnHour` has the same shape and is another series' file, so it is reported
+// (`changeLatchReported`), never counted, until a later PR moves it. The census is loaded inside the rows, so this
+// block adds no import line.
+describe('one change latch (ARCH-76): changeLatch (D-5861)', () => {
+  it('no hand-rolled change latch remains', async () => {
+    const { changeLatchSites } = await import('./consolidationCensus.js');
+    expect(changeLatchSites().map((x) => `${x.file}:${x.line} ${x.text.trim()}`),
+      'use changeLatch() from server/src/changeLatch.ts instead of a last* field').toEqual([]);
+  });
+
+  it('CONTROL: the census sees a planted latch', async () => {
+    const { changeLatchSites } = await import('./consolidationCensus.js');
+    const { mkdtempSync: mk, mkdirSync: md, writeFileSync: wf, rmSync: rm } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const tree = mk(path.join(tmpdir(), 'change-latch-ratchet-'));
+    try {
+      md(path.join(tree, 'server/src'), { recursive: true });
+      wf(path.join(tree, 'server/src/watch.ts'), [
+        'class FleetWatcher {',
+        '  f(key: string): void {',
+        '    if (key !== this.lastFooWhy) console.warn(key);',
+        '    this.lastFooWhy = key;',
+        '  }',
+        '}',
+      ].join('\n'));
+      expect(changeLatchSites(tree)).toHaveLength(1);
+    } finally {
+      rm(tree, { recursive: true, force: true });
+    }
+  });
+});
+
+// D-5862 (plan docs/superpowers/plans/2026-10-20-consolidation-w1b-schedule-listing-redactor.md, Task C1h, Step 6;
+// ARCH-68 (#803); spec K11, §2.3's clock row, §5.1 rule 1b). The lane-schedule ratchet, placed after the change-latch
+// ratchet above and ahead of the next appended block. A lane's cadence, clock, single flight and catch are one row of
+// `LANE_SCHEDULE` (`server/src/laneSchedule.ts`) and one `runLane` (`FleetWatcher`): no lane keeps a `last*` clock or a
+// guard field of its own. Named by `consolidationCensus.ts`'s `laneClockFields` and `singleFlightGuards`, and for a clock
+// nobody named by `laneClockShapes` (a numeric field compared as `now - this.X < CONST`). What stays is reported by name:
+// W4's two lanes (`stopDoneSweeping`/`lastStopDoneSweep`, `hibernateSweeping`/`lastHibernateSweep`), the tick's own guard,
+// `dispatchNow`'s run and its one follow-up (a trigger with no cadence), and `DelegationLane#lastSweepAt` while another series
+// holds that class. Each counts only down. The census is loaded inside the rows, so this block adds no import line.
+describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () => {
+  const text = (xs: ReadonlyArray<{ text: string }>): string[] => xs.map((x) => x.text.trim());
+
+  it('only W4\'s two clocks remain as lane clock fields, and no unnamed clock is compared with a constant', async () => {
+    const { laneClockFields, laneClockShapes } = await import('./consolidationCensus.js');
+    expect(text(laneClockFields()), 'a lane clock is a row of LANE_SCHEDULE, not a field').toEqual([
+      'private lastStopDoneSweep = 0;', 'private lastHibernateSweep = 0;',
+    ]);
+    const shapes = laneClockShapes().map((x) => x.text.trim());
+    expect(shapes.filter((t) => !/lastStopDoneSweep|lastHibernateSweep/.test(t)), 'no lane clock outside runLane').toEqual([
+      // Four lanes that landed on main while this ratchet was in review, each with its own clock: the stale-archive arm
+      // (D-6643), the disk alarm (D-6615), the orphan-worktree lane (D-6631) and the tmp sweep census beside the disk alarm
+      // (D-6624). Reported by name until a later slice makes them rows; this list only shrinks.
+      'if (this.staleArchiveSweeping || (this.lastStaleArchiveSweep !== 0 && now - this.lastStaleArchiveSweep < STALE_ARCHIVE_SWEEP_MS)) return;',
+      'if (this.lastOrphanTreeSweep !== null && gate - this.lastOrphanTreeSweep < CHILD_RECLAIM_SWEEP_MS) return;',
+      'if (this.lastDiskSweep !== 0 && now - this.lastDiskSweep < DISK_SWEEP_MS) return;',
+      'if (this.lastTmpSweepCensus !== 0 && now - this.lastTmpSweepCensus < TMP_SWEEP_CENSUS_MS) return;',
+    ]);
+  });
+
+  it('only the tick\'s guard, dispatchNow\'s run and its follow-up, and W4\'s two guards remain as single-flight fields', async () => {
+    const { singleFlightGuards } = await import('./consolidationCensus.js');
+    expect(text(singleFlightGuards()).sort(), 'a lane\'s single flight is its row\'s flight').toEqual([
+      'private dispatchAgain = false;', 'private dispatchRun: Promise<DispatchRunResult> | null = null;',
+      'private hibernateSweeping = false;', 'private stopDoneSweeping = false;', 'private ticking = false;',
+    ]);
+  });
+
+  it('no throttle reads the wall clock: every row of LANE_SCHEDULE is monotonic (OA-C4, ruled (a) on #803), 0 wall rows', async () => {
+    const { LANE_SCHEDULE } = await import('../src/laneSchedule.js');
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now(): verdicts keep the wall clock, cadences do not').toEqual([]);
+  });
+
+  it('no bare cadence literal is compared with a lane clock', async () => {
+    const { cadenceLiterals } = await import('./consolidationCensus.js');
+    expect(text(cadenceLiterals()), 'a cadence is a named row').toEqual([]);
+  });
+
+  it('each declared derivation is a reference to the constant it follows, 3 of 3', async () => {
+    const { declaredDerivations } = await import('./consolidationCensus.js');
+    const d = declaredDerivations();
+    expect(d.filter((x) => x.file === null).map((x) => x.name), 'a derivation is declared nowhere').toEqual([]);
+    expect(d.filter((x) => !x.reference).map((x) => x.name), 'each derivation is a reference').toEqual([]);
+    expect(d).toHaveLength(3);
+  });
+
+  it('CONTROL: the census sees a planted clock, guard, literal and re-declared derivation', async () => {
+    const { laneClockShapes, singleFlightGuards, cadenceLiterals, declaredDerivations } = await import('./consolidationCensus.js');
+    const { mkdtempSync: mk, mkdirSync: md, writeFileSync: wf, rmSync: rm } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const tree = mk(path.join(tmpdir(), 'lane-schedule-ratchet-'));
+    try {
+      md(path.join(tree, 'server/src'), { recursive: true });
+      wf(path.join(tree, 'server/src/watch.ts'), [
+        'class FleetWatcher {',
+        '  private lastFooSweep = 0;',
+        '  private collectSweeping = false;',
+        '  f(now: number): void { if (now - this.lastFooSweep < 60_000) return; }',
+        '}',
+        'export const COLLECT_OBSERVE_INTERVAL_MS = 60_000;',
+      ].join('\n'));
+      expect(laneClockShapes(tree)).toHaveLength(1);
+      expect(singleFlightGuards(tree)).toHaveLength(1);
+      expect(cadenceLiterals(tree)).toHaveLength(1);
+      expect((declaredDerivations(tree)).find((x) => x.name === 'COLLECT_OBSERVE_INTERVAL_MS')?.reference).toBe(false);
+    } finally {
+      rm(tree, { recursive: true, force: true });
+    }
+  });
+});
+
+// D-5864 (plan docs/superpowers/plans/2026-10-20-consolidation-w1b-schedule-listing-redactor.md, Task C1j, Step 4;
+// ARCH-51 (#786); spec K13's listing half). The one-listing ratchet, placed after the lane-schedule ratchet above and ahead
+// of the next appended block. A steady tick lists the registry once to choose rows (`FleetWatcher.tick`, which builds the
+// `FleetReadModel`); every lane that chooses its rows takes that model. What stays fresh is named: the mail lane's switch
+// read and the divergence census's listing (`ACT_LISTING_METHODS`), the tick's snapshot re-confirmation, and each lane's
+// own read when called with no model, reached by tests alone (`TESTS_ONLY_LISTING_METHODS`). Named by `consolidationCensus.ts`'s
+// `registryListingSites`, a parse-based query. The count of selection sites outside the tick may only shrink, and it is 0.
+// The census is loaded inside the rows, so this block adds no import line.
+describe('one registry listing per tick (ARCH-51): the tick\'s FleetReadModel (D-5864)', () => {
+  const where = (xs: ReadonlyArray<{ line: number; method: string; text: string }>): string[] => xs.map((x) => `${x.method}:${x.line} ${x.text.trim()}`);
+
+  it('no lane selects its rows from a registry listing of its own: a selection site stands only in tick', async () => {
+    const { registryListingSites, SELECTION_LISTING_METHOD } = await import('./consolidationCensus.js');
+    const lanes = registryListingSites().filter((x) => x.tag === 'selection' && x.method !== SELECTION_LISTING_METHOD);
+    expect(where(lanes), 'take the tick\'s FleetReadModel (fleetFor) instead of listing the registry').toEqual([]);
+  });
+
+  it('the tick lists once to select, and the act-time reads stand where they are named', async () => {
+    const { registryListingSites, SELECTION_LISTING_METHOD, ACT_LISTING_METHODS } = await import('./consolidationCensus.js');
+    const sites = registryListingSites();
+    expect(where(sites.filter((x) => x.tag === 'selection')), 'exactly one selection listing, the tick\'s').toHaveLength(1);
+    expect(sites.filter((x) => x.tag === 'selection').every((x) => x.method === SELECTION_LISTING_METHOD)).toBe(true);
+    expect([...new Set(sites.filter((x) => x.tag === 'act' && x.method !== SELECTION_LISTING_METHOD).map((x) => x.method))].sort())
+      .toEqual([...ACT_LISTING_METHODS].sort());
+  });
+
+  it('CONTROL: the census sees a lane that lists for itself', async () => {
+    const { registryListingSites } = await import('./consolidationCensus.js');
+    const { mkdtempSync: mk, mkdirSync: md, writeFileSync: wf, rmSync: rm } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const tree = mk(path.join(tmpdir(), 'listing-ratchet-'));
+    try {
+      md(path.join(tree, 'server/src'), { recursive: true });
+      wf(path.join(tree, 'server/src/watch.ts'), [
+        'class FleetWatcher {',
+        '  async tick(): Promise<void> { await readRegistryMeasured(io, cfg); }',
+        '  private async fooPass(): Promise<void> { await readRegistry(io, cfg); }',
+        '}',
+      ].join('\n'));
+      expect(registryListingSites(tree).filter((x) => x.tag === 'selection' && x.method !== 'FleetWatcher.tick')).toHaveLength(1);
     } finally {
       rm(tree, { recursive: true, force: true });
     }
@@ -8562,5 +9025,179 @@ describe('ccrc history: the headless marker and the arm words are defined once, 
     const named = HISTORY_MJS.flatMap((f) => stallCode(f).split('\n').filter((l) => NAMES_MARKER.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
     expect(named, 'CONTROL: historyPaths names it').toContain(`ccd/history/lib.mjs: ${PATHS_FIELD}`);
     expect(named.filter((x) => !allowed(x.slice(x.indexOf(': ') + 2)))).toEqual([]);
+  });
+});
+
+// D-5867 (plan docs/superpowers/plans/2026-10-20-consolidation-w1b-schedule-listing-redactor.md, Task C1l, Step 4;
+// ARCH-66 (#801); spec §5.1 rule 3). The redactor ratchet, appended after the capability ratchet so no cited line above
+// it moves. The JS/TS modules that spell redaction rule patterns of their own (`consolidationCensus.ts`'s
+// `redactRuleTables`, `shared/redact.mjs` counted) were three: `coord/redact.ts`, `shared/docs.ts` and
+// `ccd/history/lib.mjs`. PR 1 moved the first two into `shared/redact.mjs`; PR 2 moves the third, and then the bound
+// is one. The set may only shrink. The census is loaded inside the row, so this block adds no import line.
+describe('one redaction rule table (ARCH-66): shared/redact.mjs (D-5867)', () => {
+  it('at most two modules spell redaction rule patterns, and no TypeScript module is one', async () => {
+    const { redactRuleTables } = await import('./consolidationCensus.js');
+    const tables = redactRuleTables();
+    expect(tables.length, `a new redaction rule table: ${tables.join(', ')}; add the rules to shared/redact.mjs`).toBeLessThanOrEqual(2);
+    expect(tables.filter((f) => /\.tsx?$/.test(f)), 'a TypeScript redaction table').toEqual([]);
+    expect(tables).toContain('shared/redact.mjs');
+  });
+});
+
+describe('the tmp sweep\'s live-arm marker has no writer in the tree (fleet disk retention DR-8, D-6620)', () => {
+  // `~/.ccrc/tmp-sweep-live-arm` arms the live arm's moves and its budget removals; without it the arm only records
+  // what it would take. Like the stall watch's markers it is touched by hand and removed by hand, so nothing in the
+  // tree may create it. Three halves: exactly one shell file names it on a code line (the sweep, which READS it);
+  // in that file the name is assigned once and the variable is only ever tested with `-e`; and in TypeScript exactly
+  // one file names it, shared/lifecycle.ts, which says so in a row's text and imports no node: module, so it cannot
+  // write the marker.
+  const NAME = 'tmp-sweep-live-arm';
+  const SWEEP = path.join(ccrcRoot, 'ccd', 'ccd-tmp-sweep');
+
+  it('CONTROL: the shell corpus was walked and the sweep is in it', () => {
+    expect(BASH.map(rel)).toContain('ccd/ccd-tmp-sweep');
+  });
+  it('the sweep is the one shell file that names it', () => {
+    expect(holdersOf(NAME)).toEqual(['ccd/ccd-tmp-sweep']);
+  });
+  it('in the sweep it is assigned once and only ever tested with -e', () => {
+    const lines = codeLines(SWEEP);
+    expect(lines.filter((l) => l.includes(NAME)).map((l) => l.trim())).toEqual(['LIVE_ARM="$HOME/.ccrc/tmp-sweep-live-arm"']);
+    const uses = lines.filter((l) => /\bLIVE_ARM\b/.test(l) && !l.includes(NAME)).map((l) => l.trim());
+    expect(uses.length, 'CONTROL: the sweep reads it').toBeGreaterThan(0);
+    for (const u of uses) expect(u, 'a use of LIVE_ARM that is not a -e test could write it').toMatch(/\[ -e "\$LIVE_ARM" \]/);
+  });
+  it('in TypeScript only the lifecycle manifest names it, and that file reaches no node: module', () => {
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel)).toEqual(['shared/lifecycle.ts']);
+    expect(stallCode(path.join(ccrcRoot, 'shared/lifecycle.ts'))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+});
+
+// CODEX BRIDGE STAGE 2, TASK 1: the upstream error codes (the seven sets) are module constants in
+// ccd/codexbridge/errors.py, and every other reader imports errors.ALL_CODES rather than spell one. APPENDED, for the
+// reason the blocks above state: session-hook.test.ts's citation audit cites this file by line. The codes are read from
+// the module itself, so this row holds no second copy of them. ccd/ccgpt-usage.py and ccd/ccgpt-auth.py are left out:
+// they classify other endpoints.
+describe('codex bridge Stage 2 Task 1: the bridge owns the upstream error codes', () => {
+  it('the upstream error codes are spelled once, in codexbridge/errors.py', () => {
+    const py = spawnSync('python3', ['-I', '-c', [
+      'import sys', 'sys.dont_write_bytecode = True', 'sys.path.insert(0, sys.argv[1])',
+      'from codexbridge import errors', 'print("\\n".join(sorted(errors.ALL_CODES)))',
+    ].join('\n'), path.join(ccrcRoot, 'ccd')], { encoding: 'utf8' });
+    expect(py.status, py.stderr).toBe(0);
+    const codes = py.stdout.split('\n').filter(Boolean);
+    expect(codes.length).toBeGreaterThanOrEqual(16);
+    const r = spawnSync('git', ['-C', ccrcRoot, 'grep', '-l', '-w', ...codes.flatMap((c) => ['-e', c]), '--',
+      'ccd', 'shared', 'deploy', 'server/src', ':!ccd/ccgpt-usage.py', ':!ccd/ccgpt-auth.py'], { encoding: 'utf8' });
+    // git grep answers 1 for "no match" and above 1 for a failure: neither is the answer this row expects, and a
+    // failure must never read as an empty list.
+    if (r.status !== 0 && r.status !== 1) throw new Error(`git grep exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    expect(r.stdout.split('\n').filter(Boolean).sort()).toEqual(['ccd/codexbridge/errors.py']);
+  });
+});
+
+// The ack guard's single spelling (D-6777). Placed at the END of the file so
+// the line anchors other documents cite in this file do not move. It reads
+// `server/src/coord/store.ts` ALONE, never itself, so its needles are whole.
+describe('one ack guard', () => {
+  it('spells the ack guard ONCE — ackableDeliverySql, never a second copy of its clauses (D-6777)', () => {
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+    const CLAUSE = "AND ${prefix}rejectCode = 'undeliverable' AND ${prefix}lastError = ?";
+    const BUILDER = 'const ackableDeliverySql = ';
+    const EXCEPTION = "rejectCode = 'undeliverable' AND";
+    expect(store.split(CLAUSE).length - 1, 'the ack guard clause is not written exactly once').toBe(1);
+    expect(store.split(BUILDER).length - 1, 'the builder is not defined once').toBe(1);
+    expect(store.split(EXCEPTION).length - 1, 'a second spelling of the replay-ceiling exception').toBe(1);
+  });
+});
+
+// FLEET DISK RETENTION DR-15 (D-6627; spec 2026-10-23 §2.4). APPENDED, for the reason the blocks above state:
+// `session-hook.test.ts`'s citation audit cites this file by line. The collector's LOOSE arm SHIPS SHADOWED: a loose
+// `~/.cc-tmp` entry is removed only while `$REG/collect-loose-live` stands AND the lane itself is effectively live. The
+// file is the operator's to touch BY HAND, as `collect-lane-live` is, so no line of shell names it and its one
+// TypeScript spelling is its switchboard row, an L0 file that reaches no `node:` module and so cannot write it.
+describe('fleet disk retention DR-15: the collector’s loose-arm marker has no writer in the tree', () => {
+  const NAME = 'collect-loose-live';
+  const DEFINER = 'shared/switches.ts';
+  const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  it('the files that name its constant are the definer and the executor, which reads it from the registry listing alone', () => {
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('COLLECT_LOOSE_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/coord/collectTempRoot.ts', DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+
+  it('it is read in ONE place, nearest the argv: the job consults it after the lane’s own switch and before the loose verb', () => {
+    // D-6114: keyed on the job's symbol (scan/symbols.ts), never a literal slice of the file.
+    const job = stallCodeText(sourceOfSymbol(path.join(ccrcRoot, 'server/src/coord/collectTempRoot.ts'), 'collectTempRoot'));
+    expect(job.match(/\blooseMarker\b/g)?.length, 'the job reads the final listing’s marker once').toBe(1);
+    const at = (needle: string): number => job.split('\n').findIndex((l) => l.includes(needle));
+    const [live, marker, verb] = [at('collectLaneLive(lane)'), at('looseMarker'), at('wsCollectLoose(')];
+    expect([live, marker, verb].every((i) => i > -1), 'an anchor is gone').toBe(true);
+    expect(live).toBeLessThan(marker);
+    expect(marker).toBeLessThan(verb);
+  });
+});
+
+// FLEET DISK RETENTION (D-6643, spec 2026-10-23 §2.7.5). APPENDED, for the reason the blocks above state. The stale-archive
+// arm SHIPS SHADOWED: until `$REG/stale-archive-live` exists it records "would archive" and never composes `ws-archive`.
+// The file is the operator's to touch BY HAND on the fleet box, as `expire-lane-live` is, so no line of shell names it
+// and its one TS holder is its definer, an L1 file that reaches no `node:` module and so cannot write it.
+describe('fleet disk retention: the stale-archive arm’s live switch has no writer in the tree', () => {
+  const NAME = 'stale-archive-live';
+  const DEFINER = 'shared/switches.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  it('the files that name its constant are the definer, its re-exporter and the arm, and none reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('STALE_ARCHIVE_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/archivedExpiry.ts', 'server/src/coord/staleArchive.ts', DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+
+  it('the arm’s verb is composed in one place: only the arm sends ws-archive its --if-no-pane flag', () => {
+    const senders = ALL.filter((f) => /ifNoPane\s*:\s*true/.test(stallCode(f))).map(rel).sort();
+    expect(senders).toEqual(['server/src/coord/staleArchive.ts']);
+  });
+});
+
+// ARCH-77 (#812). APPENDED, for the reason the blocks above state. Child reclaim's own off switch is the operator's to touch
+// BY HAND: its absence means armed, and no line of shell names it, so its one TypeScript spelling is its switchboard row, an L0
+// file that reaches no `node:` module and so cannot write it. The child-spent reader lands with that reason's own change.
+describe('ARCH-77: child reclaim’s off switch has no writer in the tree', () => {
+  const NAME = 'child-reclaim-disabled';
+  const DEFINER = 'shared/switches.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  it('the files that name its constant reach no write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('CHILD_RECLAIM_DISABLED_MARKER')).map(rel).sort();
+    expect(holders).toEqual([DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
 });

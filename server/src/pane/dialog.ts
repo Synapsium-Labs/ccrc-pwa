@@ -47,8 +47,16 @@ export function autoContinueArmed(pane: string): boolean { return AUTO_CONTINUE_
  *  proves nothing. It is a drift tripwire behind the live status file and the
  *  turn marker, never a proof of idleness (worker stall watch §4.1, §5.1). */
 export function turnRunning(pane: string): boolean { return BUSY_RE.test(pane); }
+/** The row starts with Claude Code's prompt glyph (`❯`): the input box's marker row, or a past
+ *  turn in the scrollback, or the cursor resting on a menu option. ONE spelling of the test
+ *  (ARCH-24): `inject/send.ts` reads the box through it rather than with inline literals. The
+ *  caller strips escapes first. */
+export function startsWithPromptGlyph(row: string): boolean { return row.startsWith('❯'); }
 const MENU_RE = /Enter to (confirm|select)/;
-const SGR = /\x1b\[[0-9;]*m/g; // any ANSI colour/attr code — same idiom as inject/send.ts:80
+const SGR = /\x1b\[[0-9;]*m/g;
+/** The ONE SGR (colour/attribute) stripper (ARCH-63): every reader of pane or terminal text that wants the escapes off
+ *  goes through it. Only `ESC [ … m` comes off; any other control sequence stays. */
+export function stripSgr(text: string): string { return text.replace(SGR, ''); }
 const MULTISELECT_RE = /Space to select/;
 /** A numbered menu option line, optionally carrying the ❯ selection marker.
  *  A list taller than its window marks its edge rows with a scroll arrow where
@@ -122,7 +130,7 @@ export function paneState(pane: string): PaneState {
   // The input box marker is `❯` followed by either a space or a U+00A0
   // non-breaking space (empty box), so match the marker alone. Menus are already
   // handled above, so a bare `❯` here is the prompt.
-  if (pane.split('\n').some((l) => l.startsWith('❯'))) return 'prompt';
+  if (pane.split('\n').some(startsWithPromptGlyph)) return 'prompt';
   return 'other';
 }
 
@@ -308,11 +316,11 @@ export function parseDialog(pane: string): Dialog | null {
   // it — a real, expected combined screen — so the old gate answered 'busy'
   // and refused to parse a dialog that was genuinely on screen. hasMenu is
   // deliberately independent of the busy check for exactly this reason
-  // (:33-45 above); it's the same idiom inject/send.ts:324 uses. SGR strip
+  // (:33-45 above); it's the same gate inject/send.ts's menu check uses. SGR strip
   // mirrors that idiom too — every current caller already captures pane text
   // without escape codes (tmux.capture, never captureAnsi), so this is
   // defensive idiom-consistency, not a behavior change today.
-  if (!hasMenu(pane.replace(SGR, ''))) return null;
+  if (!hasMenu(stripSgr(pane))) return null;
 
   const lines = pane.split('\n');
   const best = paneOptionRows(pane);

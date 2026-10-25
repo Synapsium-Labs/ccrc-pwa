@@ -77,7 +77,7 @@ const CASES: readonly (readonly [HibernateHold, Partial<HibernateInput>, string]
   ['runs-unreadable', { store: { ok: false, detail: 'run-unreadable' } }, 'a run read that fails'],
   ['claim', { store: { ...STORE, claim: true } }, 'a claim held'],
   ['mail', { store: { ...STORE, mail: true } }, 'queued mail'],
-  ['viewer', { viewer: true }, 'an open screen (Presence.isOpen), visible or not'],
+  ['viewer', { viewer: true }, 'an open screen (Viewers.isOpen), visible or not'],
   ['stranded', { row: row({ stranded: { at: NOW - HOUR, reason: 'fixture' } }) }, 'stranded'],
   ['swap-blocked', { row: row({ swapBlocked: { at: NOW - HOUR, reason: 'fixture' } }) }, 'swap-blocked'],
   ['substrate', { row: row({ substrate: { at: NOW - HOUR, text: 'fixture' } }) }, 'substrate'],

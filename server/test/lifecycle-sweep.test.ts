@@ -11,7 +11,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
 import { genFile } from './lifecycleHelpers.js';
 import { sourceOfSymbol } from './scan/symbols.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 import {
@@ -36,9 +36,8 @@ const rig = () => {
   const dir = path.join(deps.cfg.registryDir, LC_DIR_NAME);
   fs.mkdirSync(dir, { recursive: true });
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const w = new FleetWatcher(
-    { ...deps, coord,
-      fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-rm', LC_CAP_TOKEN] } } as never,
+  const w = new FleetWatcher(withFakeClock({ ...deps, coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-rm', LC_CAP_TOKEN] } } as never),
     new Bus(),
   );
   return { w, dir, coord };
@@ -77,7 +76,7 @@ describe('FleetWatcher.sweepLifecycle', () => {
   });
 
   it('answers null with no coordination database', () => {
-    const bare = new FleetWatcher(testDeps(mkTmp('ccrc-lcsweep-')), new Bus());
+    const bare = new FleetWatcher(withFakeClock(testDeps(mkTmp('ccrc-lcsweep-'))), new Bus());
     expect(bare.lifecycleHealth()).toBeNull();
   });
 
@@ -125,7 +124,7 @@ describe('the tick itself', () => {
   // commit SHA — and was confirmed that way in review (`sweepMail`
   // unchanged against `05033c5`). This test is the parity SIGNAL, named for
   // exactly that.
-  it('sweepMail has not shrunk, and takes NO dependency on the lifecycle subsystem — a parity SIGNAL, not a proof of byte-identity', () => {
+  it('mailPass (the body of sweepMail) has not shrunk, and takes NO dependency on the lifecycle subsystem — a parity SIGNAL, not a proof of byte-identity', () => {
     // The most load-bearing loop on the box. Wave 4 adds a producer beside it,
     // never inside it. The slice ends on the method's OWN closing brace —
     // `\n  }\n` at two-space indent — rather than on the next member, so it
@@ -152,7 +151,7 @@ describe('the tick itself', () => {
     // could only say "none", and had no way to say "these, and nothing else".
     // D-6114: keyed on the method's symbol (scan/symbols.ts), so the slice follows `sweepMail` wherever it moves; a
     // renamed or missing method throws by name.
-    const body = sourceOfSymbol(path.join(srcRoot, 'watch.ts'), 'FleetWatcher.sweepMail');
+    const body = sourceOfSymbol(path.join(srcRoot, 'watch.ts'), 'FleetWatcher.mailPass');
     expect.soft(body.length).toBeGreaterThan(2000);
 
     // The producer and its neighbours stay out, by name.

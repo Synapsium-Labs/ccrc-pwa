@@ -7,7 +7,7 @@
 // The script's two refusals are `git status --porcelain` and `git tag
 // --points-at HEAD`, and its staging step is `git archive HEAD` — all three
 // are questions only git itself can answer, so the fixture is a real
-// one-commit repo (ccrc-install.test.ts:510's idiom, copied here rather than
+// one-commit repo (ccrc-install-*.test.ts's idiom, copied here rather than
 // imported: importing a .test.ts module would register its 2,600 lines of
 // tests inside this file's run). The script under test is COPIED into the
 // fixture's `deploy/` (install-sh.test.ts's idiom) so its own
@@ -34,7 +34,9 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { parse } from 'yaml';
 import { onBlock } from './workflowTrigger.js';
+import { workflowJobs, type WorkflowJob, type WorkflowStep } from './workflowJobs.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -52,7 +54,7 @@ const TAR = realPath('tar');
 const SHA256SUM = realPath('sha256sum');
 
 /** Hermetic git env — identity from variables, ambient config unread — the
- *  `gitInit` idiom (ccrc-install.test.ts:510), plus this file's one addition:
+ *  `gitInit` idiom (ccrc-installFixture.ts), plus this file's one addition:
  *  the same env is handed to the RUNNER below, so the script's own `git
  *  status`/`git archive` answer for the fixture and never for whatever
  *  templates or hooks this box's operator configured globally. */
@@ -530,6 +532,144 @@ function expectAttestingWorkflow(src: string, name: string): void {
   expect(src, `${name}: no other permission`).not.toMatch(/(packages|pull-requests|actions|deployments|issues):/);
 }
 
+/** A parsed step as written: every key it carries, each with its value, so
+ *  an exact comparison reds on a key added or dropped while a comment stays
+ *  free. A key this reader has no field for shows as itself and never
+ *  compares equal. */
+const STEP_FIELDS: Record<string, (s: WorkflowStep) => unknown> = {
+  name: (s) => s.name, id: (s) => s.id, uses: (s) => s.uses, run: (s) => s.run,
+  with: (s) => s.with, env: (s) => s.env, if: (s) => s.if,
+};
+const asWritten = (s: WorkflowStep): Record<string, unknown> =>
+  Object.fromEntries(s.keys.map((k) => [k, STEP_FIELDS[k]?.(s) ?? `<the key ${k}>`]));
+const jobNamed = (jobs: WorkflowJob[], id: string): WorkflowJob => {
+  const j = jobs.find((x) => x.id === id);
+  expect(j, `no job ${id}`).toBeDefined();
+  return j!;
+};
+const stepUsing = (j: WorkflowJob, action: string): WorkflowStep[] =>
+  j.steps.filter((s) => s.uses !== null && s.uses.replace(/@.*$/, '') === action);
+const onlyStep = (steps: WorkflowStep[], what: string): WorkflowStep => {
+  expect(steps, `exactly one ${what}`).toHaveLength(1);
+  return steps[0]!;
+};
+
+const RECEIVE_LINE = 'bash deploy/release-main.sh receive --in "$RUNNER_TEMP/release-in" --tag "$CCRC_BUILD_TAG" --digest "$CCRC_BUILD_DIGEST" --out release-out';
+const VERIFY_LINE = 'bash deploy/release-artifact.sh verify --tag "$GITHUB_REF_NAME" --digest "$CCRC_BUILD_DIGEST" --in "$RUNNER_TEMP/release-in" --out release-out';
+// The decision check's step name and its one line (D-6658, renamed by D-6738:
+// the check reads compare's own step output, not the job output).
+const DECISION_NAME = 'Fail when the release decision did not reach compare\'s step output';
+const DECISION_IF = "steps.compare.outputs.release != 'true' && steps.compare.outputs.release != 'false'";
+const DECISION_LINE = 'echo "release-main.yml: the release decision did not reach compare\'s step output; failing rather than skipping a release; re-run all jobs" >&2; exit 1';
+
+/** What differs between the two split workflows; everything else is held
+ *  alike (D-6647, D-6653, D-6657). */
+interface SplitShape {
+  /** The expression the artifact is named by in the build job. */
+  tagExpr: string;
+  /** The download's artifact name. */
+  downloadName: string;
+  publishCheckout: Record<string, unknown>;
+  check: Record<string, unknown>;
+  record: Record<string, unknown>;
+  outputs: Record<string, unknown>;
+  /** The publish job's keys, as a set, and its job-level `if:` exactly
+   *  (null: it carries none). */
+  publishKeys: string[];
+  publishIf: string | null;
+  /** Every publish step that carries an `env:`, by name, with its whole
+   *  env, values included. */
+  publishEnv: Record<string, Record<string, unknown>>;
+}
+
+/** Both build jobs' keys, as a set (D-6727): no `continue-on-error`, no
+ *  job-level `if:`, no `strategy`, nothing else. */
+const BUILD_JOB_KEYS = ['outputs', 'permissions', 'runs-on', 'steps', 'timeout-minutes'];
+/** Each publish action at its pinned version, in order (D-6726, D-6729):
+ *  the checkout at `@v7`, the download at `@v8`, the attest at `@v4`. A
+ *  version pin is a deliberate edit, so a future bump reds it again (D-6739:
+ *  the pins name the majors #364 moved to). */
+const PUBLISH_USES_PINNED = ['actions/checkout@v7', 'actions/download-artifact@v8', 'actions/attest-build-provenance@v4'];
+/** The two values the publish steps are handed (D-6729). */
+const GH_TOKEN_VALUE = '${{ github.token }}';
+const BUNDLE_PATH_VALUE = '${{ steps.attest.outputs.bundle-path }}';
+
+function splitRows(file: string, shape: SplitShape): void {
+  const src = (): string => readFileSync(join(REPO, '.github', 'workflows', file), 'utf8');
+  const jobs = (): WorkflowJob[] => workflowJobs(src());
+
+  it(`W26-Y1: ${file}: the build job holds contents: read and nothing else; build has 30 minutes, publish 10`, () => {
+    expect(src(), 'the four-space build permission block, nothing after it')
+      .toMatch(/^    permissions:\n      contents: read(?!\n      [a-z-]+:)$/m);
+    expect(jobNamed(jobs(), 'build').permissions).toEqual({ contents: 'read' });
+    const raw = parse(src()) as { jobs: Record<string, Record<string, unknown>> };
+    expect(raw.jobs.build?.['timeout-minutes']).toBe(30);
+    expect(raw.jobs.publish?.['timeout-minutes']).toBe(10);
+  });
+
+  it(`W26-Y2: ${file}: each job's one checkout takes exactly its with: keys`, () => {
+    const js = jobs();
+    expect(onlyStep(stepUsing(jobNamed(js, 'build'), 'actions/checkout'), 'build checkout').with)
+      .toEqual({ 'fetch-depth': 0, 'persist-credentials': false });
+    expect(onlyStep(stepUsing(jobNamed(js, 'publish'), 'actions/checkout'), 'publish checkout').with)
+      .toEqual(shape.publishCheckout);
+  });
+
+  it(`W26-Y3: ${file}: the hand-over is one artifact of exactly two files, downloaded outside the checkout`, () => {
+    const js = jobs();
+    expect(onlyStep(stepUsing(jobNamed(js, 'build'), 'actions/upload-artifact'), 'upload').with).toEqual({
+      name: `release-${shape.tagExpr}`,
+      path: `release-out/ccrc-${shape.tagExpr}.tar.gz\nrelease-out/SHA256SUMS\n`,
+      'if-no-files-found': 'error',
+      'retention-days': 7,
+      'compression-level': 0,
+    });
+    expect(onlyStep(stepUsing(jobNamed(js, 'publish'), 'actions/download-artifact'), 'download').with).toEqual({
+      name: shape.downloadName,
+      path: '${{ runner.temp }}/release-in',
+    });
+  });
+
+  it(`W26-Y4: ${file}: the check and the record step are exactly their shapes, and record is the build job's one step with that id`, () => {
+    const js = jobs();
+    const publish = jobNamed(js, 'publish');
+    const check = onlyStep(publish.steps.filter((s) => s.run === shape.check.run), 'check step');
+    expect(asWritten(check)).toEqual(shape.check);
+    const records = js.flatMap((j) => j.steps.filter((s) => s.id === 'record').map((s) => [j.id, s] as const));
+    expect(records.map(([j]) => j), 'exactly one step with id: record, in build').toEqual(['build']);
+    expect(asWritten(records[0]![1])).toEqual(shape.record);
+  });
+
+  it(`W26-Y5: ${file}: the build job's outputs are exactly the ones publish reads`, () => {
+    expect(jobNamed(jobs(), 'build').outputs).toEqual(shape.outputs);
+  });
+
+  // D-6727 (review 871's F10): parsed, so a quoted "if": or a key moved
+  // anywhere in the job is seen; a build job that may fail and pass, run
+  // conditionally or fan out is not the one verdict publish reads.
+  it(`W26-Y7: ${file}: the build job's keys are exactly its five, and publish's job-level if: is exactly its own`, () => {
+    const js = jobs();
+    expect([...jobNamed(js, 'build').keys].sort()).toEqual(BUILD_JOB_KEYS);
+    const publish = jobNamed(js, 'publish');
+    expect([...publish.keys].sort()).toEqual([...shape.publishKeys].sort());
+    expect(publish.if).toBe(shape.publishIf);
+    expect(publish.keys.includes('if')).toBe(shape.publishIf !== null);
+  });
+
+  // D-6729 (F13): each publish action at its version, read from the parsed
+  // step, so a SHA, a minor pin or a moved major is a red here.
+  it(`W26-Y8: ${file}: the publish job uses exactly checkout@v7, download-artifact@v8 and attest-build-provenance@v4, in that order`, () => {
+    expect(jobNamed(jobs(), 'publish').steps.flatMap((s) => (s.uses === null ? [] : [s.uses]))).toEqual(PUBLISH_USES_PINNED);
+  });
+
+  // D-6729 (F15): the values, parsed, so a changed value with the old line
+  // kept as a comment is a red here.
+  it(`W26-Y9: ${file}: every publish step's env:, values included, is exactly its own`, () => {
+    const publish = jobNamed(jobs(), 'publish');
+    expect(Object.fromEntries(publish.steps.filter((s) => s.keys.includes('env')).map((s) => [s.name, s.env]))).toEqual(shape.publishEnv);
+  });
+}
+
 describe('release.yml: the thin workflow, pinned to the script', () => {
   const WORKFLOW = join(REPO, '.github', 'workflows', 'release.yml');
   const wf = (): string => readFileSync(WORKFLOW, 'utf8');
@@ -569,12 +709,81 @@ describe('release.yml: the thin workflow, pinned to the script', () => {
     // Located by the STEP LINE itself, not a bare substring a nearby comment
     // could also contain (the collision that forced Task 3's own comments to
     // be reworded around a literal-substring version of this same check).
-    const build = src.search(/^        run: bash deploy\/build-release\.sh /m);
-    const attest = src.search(/^      - uses: actions\/attest-build-provenance@v4$/m);
-    const publish = src.search(/^        run: gh release create /m);
-    expect(build).toBeGreaterThan(-1);
-    expect(attest).toBeGreaterThan(build);
-    expect(publish).toBeGreaterThan(attest);
+    // Split (D-6653): the build job builds, records and uploads; the publish
+    // job downloads, verifies, attests, names the bundle, writes the notes
+    // and publishes, in that order.
+    // A version pin is a deliberate edit, so a future bump reds it again
+    // (D-6739: the pins name the majors #364 moved to).
+    const at = (re: RegExp): number => src.search(re);
+    const order = [
+      at(/^        run: bash deploy\/build-release\.sh /m),
+      at(/^        run: bash deploy\/release-artifact\.sh record /m),
+      at(/^      - uses: actions\/upload-artifact@v7$/m),
+      at(/^      - uses: actions\/download-artifact@v8$/m),
+      at(/^        run: bash deploy\/release-artifact\.sh verify /m),
+      at(/^      - uses: actions\/attest-build-provenance@v4$/m),
+      at(/^      - name: Name the provenance bundle$/m),
+      at(/^        run: \|\n          node deploy\/release-notes\.mjs /m),
+      at(/^        run: gh release create /m),
+    ];
+    expect(order.every((i) => i > -1), `every step is present: ${order.join(',')}`).toBe(true);
+    expect([...order].sort((x, y) => x - y)).toEqual(order);
+  });
+
+  splitRows('release.yml', {
+    tagExpr: '${{ github.ref_name }}',
+    downloadName: 'release-${{ github.ref_name }}',
+    // Nothing in its publish job pushes: gh release create uses GH_TOKEN (D-6653).
+    publishCheckout: { 'fetch-depth': 0, 'persist-credentials': false },
+    check: {
+      name: "Check the build's artifact against its recorded digest",
+      env: { CCRC_BUILD_DIGEST: '${{ needs.build.outputs.digest }}' },
+      run: VERIFY_LINE,
+    },
+    record: {
+      name: "Record the release files' digest",
+      id: 'record',
+      run: 'bash deploy/release-artifact.sh record --tag "$GITHUB_REF_NAME" --dir release-out',
+    },
+    outputs: { digest: '${{ steps.record.outputs.digest }}' },
+    // No release decision, so no job-level if: (D-6658).
+    publishKeys: ['needs', 'runs-on', 'timeout-minutes', 'permissions', 'steps'],
+    publishIf: null,
+    publishEnv: {
+      "Check the build's artifact against its recorded digest": { CCRC_BUILD_DIGEST: '${{ needs.build.outputs.digest }}' },
+      'Name the provenance bundle': { CCRC_BUNDLE_PATH: BUNDLE_PATH_VALUE },
+      'Publish the GitHub Release': { GH_TOKEN: GH_TOKEN_VALUE },
+    },
+  });
+
+  // D-6729 (review 871's F16): the trigger, parsed, exactly; the text row
+  // above lists five events, and this one admits no other.
+  const EXACT_TRIGGER = { push: { tags: ['v*'] } };
+  const triggerOf = (src: string): unknown => (parse(src, { uniqueKeys: true }) as { on?: unknown }).on;
+
+  it('W26-F1: release.yml\'s trigger, parsed, is exactly a push of v* tags', () => {
+    expect(triggerOf(wf())).toEqual(EXACT_TRIGGER);
+  });
+
+  it('W26-F1: the parsed trigger sees each added event and each widening (the pin is not vacuous)', () => {
+    const src = wf();
+    const ON = "on:\n  push:\n    tags: ['v*']\n";
+    expect(src.split(ON).length - 1, 'the trigger block is there once').toBe(1);
+    const variants = [
+      `${ON}  workflow_run:\n    workflows: [ci]\n    types: [completed]\n`,
+      `${ON}  repository_dispatch:\n`,
+      `${ON}  release:\n    types: [published]\n`,
+      `${ON}  create:\n`,
+      "on:\n  push:\n    tags: ['v*']\n    branches: [main]\n",
+      "on:\n  push:\n    tags: ['v*', 'x*']\n",
+    ];
+    for (const v of variants) expect(triggerOf(src.replace(ON, v)), v).not.toEqual(EXACT_TRIGGER);
+  });
+
+  it('W26-Y6: release.yml has no release decision, so no decision check (D-6653, D-6658)', () => {
+    const src = wf();
+    expect(src).not.toContain(DECISION_IF);
+    expect(workflowJobs(src).flatMap((j) => j.steps).filter((s) => s.name === DECISION_NAME)).toEqual([]);
   });
 });
 
@@ -662,13 +871,12 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
     expect(wf()).toMatch(/fetch-depth: 0/);
   });
 
-  it('runs prepare, compare, attests, then publish — the bundle path handed to the script, the attest step run only on an explicit release decision (D-3122, D-6499)', () => {
+  it('runs prepare, compare, attests, then publish — the bundle path handed to the script, the publish job run only on an explicit release decision (D-3122, D-6499, D-6658)', () => {
     const src = wf();
     expectAttestingWorkflow(src, 'release-main.yml');
     expect(src).toContain('bash deploy/release-main.sh prepare --out release-out');
     expect(src).toContain('bash deploy/release-main.sh compare --out release-out');
     expect(src).toContain('bash deploy/release-main.sh publish --out release-out');
-    expect(src, 'the attest gate is exactly the compare output, nothing appended').toMatch(/^        if: steps\.compare\.outputs\.release == 'true'$/m);
     expect(src).not.toContain('hashFiles');
     expect(src).toContain('CCRC_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}');
     expect(src).toContain('GH_TOKEN: ${{ github.token }}');
@@ -682,6 +890,21 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
     expect(publish).toBeGreaterThan(attest);
     expect(src, 'the YAML must not build').not.toMatch(/npm ci|npm run|build-release\.sh/);
     expect(src, 'the YAML must not publish — the script owns the publish and its cleanup').not.toMatch(/gh release/);
+    // The decision gates the publish JOB (D-6658): a skip never starts it,
+    // so it never mints a write token. The attest step carries no if: of
+    // its own; the build job's record and upload carry the compare output.
+    const jobs = workflowJobs(src);
+    const build = jobNamed(jobs, 'build');
+    const pub = jobNamed(jobs, 'publish');
+    expect(onlyStep(stepUsing(pub, 'actions/attest-build-provenance'), 'attest step').keys).not.toContain('if');
+    expect(src.match(/^    if: .*$/gm) ?? [], 'the publish job\'s if:, exactly, nothing appended').toEqual(["    if: needs.build.outputs.release == 'true'"]);
+    expect(pub.if).toBe("needs.build.outputs.release == 'true'");
+    expect(src.match(/^        if: steps\.compare\.outputs\.release == 'true'.*$/gm) ?? [], 'record and upload, each exactly the compare output')
+      .toEqual(["        if: steps.compare.outputs.release == 'true'", "        if: steps.compare.outputs.release == 'true'"]);
+    const record = onlyStep(build.steps.filter((s) => s.id === 'record'), 'record step');
+    const upload = onlyStep(stepUsing(build, 'actions/upload-artifact'), 'upload step');
+    expect(record.if).toBe("steps.compare.outputs.release == 'true'");
+    expect(upload.if).toBe("steps.compare.outputs.release == 'true'");
   });
 
   // W25 (D-6397, D-6401, D-6499): every merge builds, then compare decides.
@@ -745,20 +968,27 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
     expect(wf()).toMatch(/^      - name: Compare the build with the newest release it contains\n        id: compare\n        env:\n          GH_TOKEN: \$\{\{ github\.token \}\}\n        run: bash deploy\/release-main\.sh compare --out release-out$/m);
   });
 
-  it('W25-Y3: the steps run in one order — checkout, setup-node, prepare, compare, attest, publish — and setup-node carries no condition', () => {
+  it('W25-Y3: the steps run in one order — checkout, setup-node, prepare, compare, the decision check, record, upload, download, receive, attest, publish — and setup-node carries no condition', () => {
     const src = wf();
+    // A version pin is a deliberate edit, so a future bump reds it again
+    // (D-6739: the pins name the majors #364 moved to).
     const at = (re: RegExp): number => src.search(re);
     const order = [
-      at(/^      - uses: actions\/checkout@v4$/m),
-      at(/^      - uses: actions\/setup-node@v4$/m),
+      at(/^      - uses: actions\/checkout@v7$/m),
+      at(/^      - uses: actions\/setup-node@v7$/m),
       at(/^        run: bash deploy\/release-main\.sh prepare /m),
       at(/^        run: bash deploy\/release-main\.sh compare /m),
+      at(/^      - name: Fail when the release decision did not reach compare's step output$/m),
+      at(/^        run: bash deploy\/release-artifact\.sh record /m),
+      at(/^      - uses: actions\/upload-artifact@v7$/m),
+      at(/^      - uses: actions\/download-artifact@v8$/m),
+      at(/^        run: bash deploy\/release-main\.sh receive /m),
       at(/^      - uses: actions\/attest-build-provenance@v4$/m),
       at(/^        run: bash deploy\/release-main\.sh publish /m),
     ];
     expect(order.every((i) => i > -1), `every step is present: ${order.join(',')}`).toBe(true);
     expect([...order].sort((x, y) => x - y)).toEqual(order);
-    const setup = src.indexOf('      - uses: actions/setup-node@v4\n');
+    const setup = src.indexOf('      - uses: actions/setup-node@v7\n');
     const setupBlock = src.slice(setup, src.indexOf('\n      - ', setup + 1));
     expect(setupBlock, 'setup-node runs on every merge').not.toMatch(/^\s+if:/m);
   });
@@ -780,6 +1010,54 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
     expect(prepare).not.toContain('${{');
     expect(prepare).not.toContain('GH_TOKEN');
     expect(src).not.toContain('continue-on-error');
+  });
+
+  splitRows('release-main.yml', {
+    tagExpr: '${{ steps.compare.outputs.tag }}',
+    downloadName: 'release-${{ needs.build.outputs.tag }}',
+    // The tag push needs the persisted credential (D-6647).
+    publishCheckout: { 'fetch-depth': 0 },
+    check: {
+      name: "Check the build's artifact and tag it for this commit",
+      env: { CCRC_BUILD_TAG: '${{ needs.build.outputs.tag }}', CCRC_BUILD_DIGEST: '${{ needs.build.outputs.digest }}' },
+      run: RECEIVE_LINE,
+    },
+    record: {
+      name: "Record the release files' digest",
+      id: 'record',
+      if: "steps.compare.outputs.release == 'true'",
+      env: { CCRC_TAG: '${{ steps.compare.outputs.tag }}' },
+      run: 'bash deploy/release-artifact.sh record --tag "$CCRC_TAG" --dir release-out',
+    },
+    outputs: {
+      release: '${{ steps.compare.outputs.release }}',
+      tag: '${{ steps.compare.outputs.tag }}',
+      digest: '${{ steps.record.outputs.digest }}',
+    },
+    publishKeys: ['needs', 'if', 'runs-on', 'timeout-minutes', 'permissions', 'steps'],
+    publishIf: "needs.build.outputs.release == 'true'",
+    publishEnv: {
+      "Check the build's artifact and tag it for this commit": {
+        CCRC_BUILD_TAG: '${{ needs.build.outputs.tag }}', CCRC_BUILD_DIGEST: '${{ needs.build.outputs.digest }}',
+      },
+      'Push the tag and publish the prerelease': { GH_TOKEN: GH_TOKEN_VALUE, CCRC_BUNDLE_PATH: BUNDLE_PATH_VALUE },
+    },
+  });
+
+  it('W26-Y6: a release decision that did not reach compare\'s step output fails the build job, right after compare (D-6658, D-6738)', () => {
+    const src = wf();
+    const build = jobNamed(workflowJobs(src), 'build');
+    const compare = build.steps.findIndex((s) => s.id === 'compare');
+    expect(compare).toBeGreaterThan(-1);
+    const check = build.steps[compare + 1];
+    expect(check, 'a step follows compare').toBeDefined();
+    // A `|` block: the line carries `: `, which a plain scalar cannot.
+    expect(asWritten(check!)).toEqual({
+      name: DECISION_NAME,
+      if: DECISION_IF,
+      run: `${DECISION_LINE}\n`,
+    });
+    expect(src.split(DECISION_IF).length - 1, 'the decision check\'s if: is spelled once').toBe(1);
   });
 });
 
@@ -895,8 +1173,10 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     expect(g).toMatch(/^    timeout-minutes: 5$/m);
     expect(g).toMatch(/^      found: \$\{\{ steps\.look\.outputs\.found \}\}$/m);
     const gateSteps = g.split(/^(?= {6}- )/m).filter((p) => /^ {6}- /.test(p));
+    // A version pin is a deliberate edit, so a future bump reds it again
+    // (D-6739: the pins name the majors #364 moved to).
     expect(gateSteps.map((st) => /^ {6}- (?:name: (.*)|uses: (.*))$/m.exec(st)?.slice(1).find(Boolean))).toEqual([
-      'actions/checkout@v4', 'Look for a green full-suite on this commit',
+      'actions/checkout@v7', 'Look for a green full-suite on this commit',
     ]);
     const look = gateSteps[1];
     expect(look).toMatch(/^ {8}id: look$/m);

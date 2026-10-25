@@ -65,7 +65,7 @@ describe('verify-provenance.mjs: the sigstore backend, offline, against real bun
   it('offered for a DIFFERENT tag it refuses on the subject name (§5 refusal 3; §18 "the verifier asserts the subject name")', () => {
     const r = verify(mainArgs({ tag: 'v9.9.9' }));
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/subject is ccrc-v[0-9.]+\.tar\.gz, not ccrc-v9\.9\.9\.tar\.gz — a tarball attested under another tag/);
+    expect(r.stderr).toMatch(/subject is ccrc-v[0-9.]+\.tar\.gz, not ccrc-v9\.9\.9\.tar\.gz - a tarball attested under another tag/);
   });
 
   it('a different --owner refuses — the identity set is built from owner/repo', () => {
@@ -77,7 +77,7 @@ describe('verify-provenance.mjs: the sigstore backend, offline, against real bun
   it('one flipped digit in the blob\'s digest refuses — the bytes are bound', () => {
     const r = verify(mainArgs({ digest: flip(mainMeta.sha256) }));
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/but the blob's is [0-9a-f]{64} — not the bytes the workflow built/);
+    expect(r.stderr).toMatch(/but the blob's is [0-9a-f]{64} - not the bytes the workflow built/);
   });
 
   it('--blob with a file that is not the tarball refuses the same way', () => {
@@ -296,7 +296,7 @@ describe('verify-provenance.mjs: the gh backend under a recording stub', () => {
     writeVerified(home, [{ name: `ccrc-${mainMeta.tag}.tar.gz`, sha256: '1'.repeat(64) }]);
     const r = verify(['--backend', 'gh', '--bundle', join(FIX, 'release-main.sigstore.json'), '--blob', blobFile(home), '--tag', mainMeta.tag, '--owner', OWNER, '--repo', REPO_NAME], { HOME: home }, bin);
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/but the blob's is [0-9a-f]{64} — not the bytes the workflow built/);
+    expect(r.stderr).toMatch(/but the blob's is [0-9a-f]{64} - not the bytes the workflow built/);
   });
 
   it('unparseable --format json output is refused (D-3133)', () => {

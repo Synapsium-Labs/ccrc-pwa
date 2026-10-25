@@ -3,11 +3,14 @@ import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { RunCcd } from './ports.js';
-import { CCD_ARGV, ccdCan, sweepDec } from '../ccdargv.js';
-import { readPrHistory } from './prhistory.js';
-import { verifyDone, verifyReviewDone, type DoneClaim } from './fingerprint.js';
 import {
-  type AdvanceResult, type CoordStore, type OpenSibling, type OpenSiblingsResult, type RunRow,
+  abandonMove, decideClose, type CloseHalt, type CloseStop, type FleetAct, type RequestPlan,
+} from './closeDecide.js';
+import { CCD_ARGV, ccdCan, sweepDec, type CcdArgv } from '../ccdargv.js';
+import { readPrHistory } from './prhistory.js';
+import { verifyDone, verifyReviewDone } from './fingerprint.js';
+import {
+  type AdvanceResult, type CoordStore, type OpenSiblingsResult, type RunRow,
 } from './store.js';
 import {
   HANDOFF_SHA,
@@ -28,17 +31,15 @@ import {
   type ChildReclaimReviewed,
 } from './childReclaim.js';
 import {
-  isRegistryId, transitionsFor, type ChildMark, type DoneRejectCode, type RunRefuseCode, type RunState,
+  transitionsFor, type ChildMark, type DoneRejectCode, type RunRefuseCode, type RunState,
 } from '../../../shared/api.js';
 
 /**
- * L1 decision function (architecture doc increment 4). Same model as
- * `dispatch.ts`'s `dispatchRun`: narrowed deps, no `reply`, a typed result
- * union out, and the precondition -> irreversible fleet act -> commit ORDER
- * owned in one place rather than split across a Fastify closure. See that
- * file's own docstring for why "L1" here does not mean "pure" — it means
- * every side effect is reached through a declared port and the decision is
- * nameable, testable and callable without a running Fastify instance.
+ * `closeRun`'s executor (architecture doc increment 4; ARCH-35, GitHub #556). Same model as `dispatch.ts`'s
+ * `dispatchRun`: narrowed deps, no `reply`, a typed result union out, and the precondition -> irreversible fleet act ->
+ * commit ORDER owned in one place. Every precondition is DATA in `closeDecide.ts` (L1, pure): `decideClose` answers
+ * what each read means, this file reads, acts and writes. "L1" never meant "pure" for the executor: every side effect
+ * here is reached through a declared port, so a close is nameable, testable and callable without a Fastify instance.
  */
 export interface CloseRunDeps {
   coord: CoordStore;
@@ -156,20 +157,9 @@ export interface CloseRunBody {
   final?: unknown; state?: unknown; archive?: unknown;
 }
 
-/**
- * The operator abandon's one move (D-2807): a `planned` run, or any review run (its machine has no `closing`), fails
- * directly; every other run moves to `closing` — unless its own machine has no such edge (a run already `closing`, or
- * in `unknown`), which is the arm's `bad-transition`. ONE spelling, two readers: `closeRun`'s abandon arm below, and
- * `abandonRefusal`, which the archive door asks of every run a programme holds BEFORE it ends the first (workspace
- * lifecycle §5.2: every check that can refuse runs before any act that cannot be undone).
- */
-export function abandonMove(run: Pick<RunRow, 'state' | 'kind'>):
-  | { readonly ok: true; readonly to: RunState }
-  | { readonly ok: false; readonly kind: 'bad-transition'; readonly from: RunState; readonly to: RunState } {
-  const to: RunState = run.state === 'planned' || run.kind === 'review' ? 'failed' : 'closing';
-  return transitionsFor(run.kind)[run.state].includes(to)
-    ? { ok: true, to } : { ok: false, kind: 'bad-transition', from: run.state, to };
-}
+/** The operator abandon's one move (D-2807) lives in `closeDecide.ts` with the rest of the close's decisions; this
+ *  re-export keeps its readers (`abandonRefusal` below, the archive door) where they were. */
+export { abandonMove };
 
 /**
  * What `closeRun`'s abandon arm would refuse for this run from the ROW ALONE — its read, then `abandonMove` — asked
@@ -219,412 +209,181 @@ export async function closeRun(
   deps: CloseRunDeps, id: number, body: unknown,
   causedBy: CloseCause, sweep?: SweepCloseGuard,
 ): Promise<CloseOutcome> {
-  const coord = deps.coord;
-  const read = coord.run(id);
-  // D-2545. THE ROW IS THERE AND THIS PROCESS CANNOT REPRESENT ITS INTEGERS —
-  // a different condition from "no such run", answered before any fleet act
-  // and in words, never by throwing: `CoordMutex.run` is `try`/`finally` with
-  // no catch and the root `app.setErrorHandler` only masks the message (D-5995),
-  // so a throw here became a bare Fastify 500 with no `CloseOutcome` shape at
-  // all. `hold-invalid` is the right existing code rather than a new one: the
-  // refusal is that a persisted number in the hold's own domain cannot be
-  // accepted, which is exactly what that code names — and it carries `detail`,
-  // which names the COLUMN and never the value.
-  if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
-  const run = read.run;
-  if (!run) return { ok: false, kind: 'unknown-run' };
-
-  /** The OTHER open runs on this workspace. Read fresh at the decision point,
-   *  never cached: a snapshot consulted at a destructive decision point is
-   *  the shape `watch.ts` already had to fix once. The closing run excludes
-   *  itself — it has not transitioned yet (D-48 puts the fleet act first).
-   *
-   *  Returns the RESULT, not the list (D-2545): every caller below is one step
-   *  from an irreversible fleet act, and "the sibling rows could not be read"
-   *  must never arrive at one of them spelled `[]` — that is precisely how
-   *  "nothing else claims this workspace" gets asserted about a workspace
-   *  something else claims. */
-  const siblingsOf = (sessionId: string): OpenSiblingsResult => coord.openRunsForSession(sessionId, id);
-  // `survivorOf` is `rundefs.ts`'s (F13): the same rule `dispatch.ts`'s
-  // `refuseSpentChild` uses, hoisted so the two doors can never drift apart.
-
-  // The body is read HERE, above every precondition, because the abandon arm
-  // below branches on it — and the ordinary path's own validation is left
-  // exactly where it was, one `const b` shorter.
-  const b = (body ?? {}) as CloseRunBody;
-  const abandon = b.intent === 'abandon';
-  if (abandon && (b.fingerprint !== undefined || b.final !== undefined ||
-                  b.state !== undefined || b.archive !== undefined)) {
-    // A mixed shape is not a shape. An abandon asserts nothing about a branch,
-    // a PR or a wave boundary, so a body carrying those fields is a caller
-    // that has confused two acts — answered as `bad-request` rather than
-    // silently ignoring half of it.
-    return { ok: false, kind: 'bad-request' };
+  // Everything the request says, ahead of any fleet act: `decideClose` names the arm and refuses what that arm cannot
+  // take. The three arms are separate executors by construction (D-290): what an arm skips is ABSENT from it, not
+  // skipped by a flag threaded through a shared path.
+  const req = decideClose({ step: 'request', read: deps.coord.run(id), body, causedBy });
+  if (req.kind !== 'go') return stopped(deps, req);
+  const plan = req.plan;
+  switch (plan.arm) {
+    case 'abandon': return abandonRun(deps, id, plan, causedBy, sweep);
+    case 'review': return closeReviewRun(deps, plan.run, plan.body, causedBy);
+    case 'work': return closeWorkRun(deps, id, plan, causedBy);
+    default: return plan satisfies never;
   }
-  // The sweep only ever ABANDONS (workspace lifecycle spec §5.4): a close body under its word is a caller that has
-  // confused two acts, refused before anything is read or composed.
-  if (causedBy === 'sweep' && !abandon) return { ok: false, kind: 'bad-request' };
+}
 
-  if (abandon) {
-    /**
-     * THE OPERATOR ABANDON, as ONE contiguous arm (D-290 (was D-B4-17)). It returns; it
-     * never falls through into the ordinary close below.
-     *
-     * What is skipped is skipped BY CONSTRUCTION, not by four flags threaded
-     * through a hundred lines:
-     *   - the `not-dispatched` refusal below: a `planned` run with no session
-     *     is precisely the `ambiguous-dispatch` wedge this route exists for,
-     *     so there is nothing to refuse;
-     *   - the fingerprint validation and its derivations: an abandon carries
-     *     no claim, so `handoffCommit`/`final`/`state`/`archive` are
-     *     `null`/`false`/`'failed'`/`false` here and are not read from a body
-     *     at all (D-274);
-     *   - `verifyDone` (step 1): D-49's own reasoning, reached from a second
-     *     door — there is no done-claim to re-measure;
-     *   - the `.prhistory` fold (step 2, D-275 (was D-B4-2)): an unreadable ledger must
-     *     not disable the control that exists for a broken box;
-     *   - `wsArchive` (step 3): a release destroys nothing and this arm has no
-     *     archive branch to reach (D-280 (was D-B4-7) closes the other half at the route).
-     * Each of those is pinned by a negative test in `coord-abandon.test.ts`,
-     * and each is true because the call is ABSENT, not because a guard skipped
-     * it.
-     *
-     * Cost, named: ~14 lines of transition/fleet-act/commit shape appear twice
-     * inside one function, and the commit a third time, in the refused-id block
-     * below (spec §2.3). That block stands apart by the same doctrine: its
-     * fleet act is absent, not skipped by a flag on the shared path. And no
-     * await sits between its sweep gate and its commit, so it has no fleet-act
-     * window for its compare-and-set to guard. That is the price of the
-     * property.
-     */
-    // D-2807: a review run has no `closing` (REVIEW_RUN_TRANSITIONS); the
-    // operator's ungated valve must still reach it, so it fails directly — its
-    // own machine's terminal hop. `abandonMove` (above) is that rule, spelled
-    // once for this arm and for the archive door's pre-read.
-    const move = abandonMove(run);
-    if (!move.ok) return move;
-    const target = move.to;
-    /** THE SWEEP'S GATE, run IMMEDIATELY BEFORE the fleet act (workspace lifecycle spec 2026-09-24 §5.4, "No
-     *  successor"). First the claimant RE-MEASURED — a revive of the same id is the race the spec names, and a
-     *  compare-and-set on `claimedBy` cannot see it — then the compare-and-set's FIRST HALF on a FRESH read of the run:
-     *  a run whose `claimedBy` is no longer the crashed id is refused before the fleet act, since a release that ran
-     *  under a close that then refused would leave a successor's worker unheld. The second half is the store's, inside
-     *  the commit's transaction (`expectClaimedBy` below). */
-    const sweepGate = async (g: SweepCloseGuard): Promise<Extract<CloseOutcome, { ok: false }> | null> => {
-      const stop = await g.stillCrashed();
-      if (stop !== null) return { ok: false, kind: 'sweep-stopped', stop, fleetAct: null };
-      const fresh = coord.run(id);
-      if (!fresh.ok) return { ok: false, kind: 'hold-invalid', detail: fresh.detail };
-      if (fresh.run === null) return { ok: false, kind: 'unknown-run' };
-      return fresh.run.claimedBy === g.claimedBy ? null : { ok: false, kind: 'claimant-changed', claimedBy: fresh.run.claimedBy };
-    };
-    // SPEC §2.3: A STORED ID NO VERB MAY NAME. A `sessionId` that is not a registry id can be named by no id-taking
-    // argv, so this arm takes no fleet act for it: no sibling read, no child gate, no hold and no release.
-    //
-    // It still CLOSES the run. This arm is the release valve of three doors: the operator's abandon, the archive
-    // door's programme end and the dead-coordinator sweep. A coordinator's own `POST /api/runs/:id/close` whose body
-    // is `{ intent: 'abandon' }` reaches this arm too, and closes such a run the same way. A valve that refused would
-    // leave such a run holding its slot for good.
-    //
-    // The order: the sweep's gate runs first, as it does before any act; then the store's close, with the sweep's
-    // compare-and-set; and only once that commits, ONE run event, so the trail tells this close from an ordinary
-    // `failed`.
-    //
-    // The answer is spelled here rather than through the child hand-off. That path would say `not-a-child`, which
-    // nobody measured; `marker-unreadable` says the child question was never asked. `abandonRefusal` refuses nothing
-    // new for such a run, so the archive door ends such a programme whole.
-    if (run.sessionId !== null && !isRegistryId(run.sessionId)) {
-      if (sweep !== undefined) {
-        const gate = await sweepGate(sweep);
-        if (gate !== null) return gate;
+/** The one place a decider's non-`go` answer becomes a `CloseOutcome`. The `switch` is exhaustive: a fourth arm in
+ *  `closeDecide.ts` is a compile error here until it is answered. A refused done-claim is recorded against the run
+ *  and mailed back to its worker first, as the inline code did; the run state is unchanged. */
+function stopped(deps: CloseRunDeps, d: CloseStop, run?: RunRow): CloseHalt {
+  switch (d.kind) {
+    case 'refused':
+      if (d.rejection !== undefined && run !== undefined && run.sessionId !== null) {
+        deps.coord.recordRejection({ ...d.rejection, runId: run.id, toId: run.sessionId });
+        queueSystemMail(deps.coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: run.id,
+          kind: 'status', subject: 'wave-done-rejected', body: `${d.rejection.code}: ${d.rejection.detail}` });
       }
-      const omitted = coord.closeRun({
-        runId: id, finalState: 'failed', causedBy, handoffCommit: null,
-        program: run.program, viaClosing: target === 'closing',
-        ...(sweep === undefined ? {} : { expectClaimedBy: sweep.claimedBy }),
-      });
-      if (!omitted.ok) {
-        return omitted.error === 'claimant-changed' ? { ok: false, kind: 'claimant-changed', claimedBy: omitted.claimedBy }
-          : { ok: false, kind: 'advanceFailed', adv: omitted };
-      }
-      coord.recordRunEvent(id, causedBy, 'fleet-act-omitted:bad-session');
-      return { ok: true, id, state: 'failed', released: false,
-        childReclaim: 'not-queued', childReclaimWhy: 'marker-unreadable' };
-    }
-    // The fleet act, AHEAD of the commit (D-48), and only when there is
-    // something to act on: a `planned` run that never dispatched holds no
-    // workspace. RELEASE ONLY WHEN NOTHING ELSE CLAIMS IT — otherwise HAND
-    // THE CLAIM OVER by re-holding with the surviving run's own reason. The
-    // abandoned run still transitions either way; the workspace stays
-    // claimed. Never `wsArchive` on this arm (D-280).
-    let released = false;
-    // A run with no session names no workspace, so it names no child.
-    let childGate: ChildGate = NO_CHILD_GATE;
-    if (run.sessionId !== null) {
-      const sibRead = siblingsOf(run.sessionId);
-      // Fail-shut ahead of the fleet act, for the reason `siblingsOf` states.
-      if (!sibRead.ok) return { ok: false, kind: 'hold-invalid', detail: sibRead.detail };
-      const siblings = sibRead.siblings;
-      // An abandon is FINISHED (spec §5.7), so an eligible child is exactly
-      // the no-survivor case below — it is already released, never re-held.
-      // An abandon never runs `verifyDone` (there is no done-claim to
-      // re-measure — see step 1 below), so there is no measured line to
-      // reuse — `null` here is not a decision, it is what "verifyDone did not
-      // run" IS on this arm.
-      childGate = await childGateAtClose(deps, run, run.sessionId, sibRead, false, 'failed', null);
-      const survivor = survivorOf(siblings);
-      // DECIDED ONCE, USED TWICE (review finding, W2b). The act and the
-      // reported field used to come from two independent expressions —
-      // `releaseIsSafe(siblings) || survivor === null` chose the argv while
-      // `releaseIsSafe(siblings)` alone set the field. Today the disjunct is
-      // dead (`releaseIsSafe(s) === (s.length === 0) === (survivorOf(s) ===
-      // null)`), but the whole point of giving `releaseIsSafe` one home is
-      // that it may grow a condition — and the moment it does, the route
-      // would report `released:false` for a close that actually ran
-      // `ws-release`, the response contradicting the fleet act. The main
-      // path below already decides once, via `safe`.
-      const release = releaseIsSafe(siblings) || survivor === null;
-      // Spelled hand-over-first so the compiler narrows `survivor` on the arm
-      // that reads it; `survivor !== null && !release` is exactly `!release`
-      // (`release` already absorbs `survivor === null`).
-      let handoff: HoldReasonVerdict | null = null;
-      if (survivor !== null && !release) {
-        handoff = holdReasonVerdict(
-          survivor.program, survivor.wave, survivor.waveOf, survivor.id,
-        );
-        if (!handoff.ok) return handoff;
-      }
-      const argv = handoff !== null && handoff.ok
-        ? CCD_ARGV.wsHold(run.sessionId, handoff.reason,
-            sweepDec(deps.fleetState, `run:${id} close`))
-        : CCD_ARGV.wsRelease(run.sessionId, sweepDec(deps.fleetState, `run:${id} close`));
-      // D-5866: the row the argv above was built from — the hold when a survivor takes the claim, else the release.
-      if (!ccdCan(deps.fleetState, handoff !== null && handoff.ok ? 'wsHold' : 'wsRelease')) {
-        return { ok: false, kind: 'unsupported' };
-      }
-      if (sweep !== undefined) {
-        const gate = await sweepGate(sweep);
-        if (gate !== null) return gate;
-      }
-      const res = await deps.runCcd(argv);
-      if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
-      released = release;
-      // AFTER the fleet act, before the commit: the claimant once more. A revive that landed during the release keeps
-      // its run open — a released worker is unheld until its coordinator re-holds it, and a re-held one stays claimed
-      // under the surviving run, which is the residual a successor's race already has. What remains is the round trip of
-      // this last re-measure.
-      if (sweep !== undefined) {
-        const stop = await sweep.stillCrashed();
-        if (stop !== null) return { ok: false, kind: 'sweep-stopped', stop, fleetAct: release ? 'released' : 're-held' };
-      }
-    } else if (sweep !== undefined) {
-      const gate = await sweepGate(sweep);
-      if (gate !== null) return gate;
-    }
-    const closed = coord.closeRun({
-      runId: id, finalState: 'failed', causedBy, handoffCommit: null,
-      program: run.program, viaClosing: target === 'closing',
-      ...(sweep === undefined ? {} : { expectClaimedBy: sweep.claimedBy }),
-    });
-    // A successor that took the programme DURING the fleet act (a claimant writer outside this serialiser — none
-    // exists in this build: `reclaimProgram`, the one rewriter of `claimedBy`, runs behind the same `CoordMutex`) is
-    // refused here, and the run stays open under it. The residual, stated: the release above has run, so its worker
-    // is unheld until that coordinator re-holds it.
-    if (!closed.ok) {
-      return closed.error === 'claimant-changed' ? { ok: false, kind: 'claimant-changed', claimedBy: closed.claimedBy }
-        : { ok: false, kind: 'advanceFailed', adv: closed };
-    }
-    return { ok: true, id, state: 'failed', released, ...handOffChildReclaim(deps, childGate) };
+      return d.outcome;
+    case 'stale':
+      return d.outcome;
+    default:
+      return d satisfies never;
   }
+}
 
-  if (run.sessionId === null) {
-    // Never dispatched: there is no worker session for `verifyDone` to
-    // re-measure against and no worker to mail a rejection back to.
-    return { ok: false, kind: 'refused', code: 'not-dispatched' };
+interface FleetVerb { readonly argv: CcdArgv; readonly can: boolean }
+/** The fleet verb a decision composed, as the argv ccd takes (every close names its actor by the run, `close`), and
+ *  D-5866's verb question asked of the very row that argv was built from, beside it: the argv first, then `ccdCan`,
+ *  as the inline code did. */
+function fleetArgv(deps: CloseRunDeps, id: number, sessionId: string, act: FleetAct): FleetVerb {
+  const dec = sweepDec(deps.fleetState, `run:${id} close`);
+  switch (act.verb) {
+    case 'wsArchive':
+      return { argv: CCD_ARGV.wsArchive(sessionId, dec), can: ccdCan(deps.fleetState, 'wsArchive') };
+    case 'wsRelease':
+      return { argv: CCD_ARGV.wsRelease(sessionId, dec), can: ccdCan(deps.fleetState, 'wsRelease') };
+    case 'wsHold':
+      return { argv: CCD_ARGV.wsHold(sessionId, act.reason, dec), can: ccdCan(deps.fleetState, 'wsHold') };
+    default: return act satisfies never;
   }
-  // Spec §2.3: a stored `sessionId` that is not a registry id refuses every close but the abandon above, this work
-  // close and the review close below alike. The refusal comes before `verifyDone`, the child gate, the PR ledger, or
-  // any hold, release or archive can name the id, and before any rejection is recorded against it or mailed to it.
-  // It is a stored defect, not a transient: the run is left exactly as it was, and the abandon is its door.
-  if (!isRegistryId(run.sessionId)) return { ok: false, kind: 'bad-session' };
-  // Design 2026-09-14 §5: a REVIEW run closes on its own claim, with no
-  // `closing` hop, no `.prhistory` and no PR check. One arm, one function.
-  if (run.kind === 'review') return closeReviewRun(deps, run, b, causedBy, siblingsOf, survivorOf);
-  // A second precondition, read-only, checked BEFORE the fleet act (fix,
-  // found in Task 9 review — D-48, the close-route half of D-46's same
-  // ordering fix for dispatch): a run that cannot legally reach `closing`
-  // from its CURRENT state — already `done`/`failed` (a second close), or
-  // still `planned` (sessionId set at OPEN time for a wave N>=2 reclaim,
-  // but never actually dispatched) — must never reach the fleet act at
-  // all. Without this, moving the fleet act ahead of the transition commit
-  // below would have made a double-close run `ws-release`/`ws-hold`/
-  // `ws-archive` a SECOND time before discovering the transition was
-  // always going to be refused — trading one wedge for another.
-  // `advance()` below still re-checks the live row and is still the only
-  // WRITER of `state`.
-  if (!transitionsFor(run.kind)[run.state].includes('closing')) {
-    return { ok: false, kind: 'bad-transition', from: run.state, to: 'closing' };
-  }
+}
 
-  const fp = b.fingerprint;
-  if (typeof fp !== 'object' || fp === null ||
-      typeof fp.branchTip !== 'string' || typeof fp.handoffCommit !== 'string' ||
-      typeof fp.prPhase !== 'string' || !(fp.prNumber === null || typeof fp.prNumber === 'number') ||
-      typeof b.final !== 'boolean' ||
-      (b.state !== undefined && b.state !== 'done' && b.state !== 'failed') ||
-      (b.archive !== undefined && typeof b.archive !== 'boolean')) {
-    return { ok: false, kind: 'bad-request' };
-  }
-  // The claim is UNTRUSTED off the wire: `verifyDone` re-validates
-  // `branchTip`/`handoffCommit`/`prPhase`/`prNumber` itself, when it runs at
-  // all (see D-49, step 1 below).
-  const claim: DoneClaim = { branchTip: fp.branchTip, prNumber: fp.prNumber as number | null,
-    prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
-  const final = b.final;
-  const state: 'done' | 'failed' = b.state === 'failed' ? 'failed' : 'done';
-  const archive = b.archive === true;
+/** The check, (the caller's last look,) the act and ccd's answer for one composed fleet verb, in that order. */
+async function actOnFleet(
+  deps: CloseRunDeps, id: number, sessionId: string, act: FleetAct,
+  /** Run between the check and the act: the sweep's gate, which must read the world right before ccd is asked. */
+  before: () => Promise<CloseHalt | null> = async () => null,
+): Promise<CloseHalt | null> {
+  const verb = fleetArgv(deps, id, sessionId, act);
+  const can = decideClose({ step: 'verb', verb: act.verb, can: verb.can });
+  if (can.kind !== 'go') return stopped(deps, can);
+  const held = await before();
+  if (held !== null) return held;
+  const done = decideClose({ step: 'fleet', res: await deps.runCcd(verb.argv) });
+  return done.kind === 'go' ? null : stopped(deps, done);
+}
 
-  // 1: verifyDone re-measures a DONE CLAIM. `state:'failed'` is an explicit
-  // operator ABANDON, not a claim of doneness (deviation D-49) — it skips
-  // this step entirely, and `verifiedLine` stays null on that arm — there is
-  // nothing to reuse.
-  //
-  // Spec §5.7: `verdict.line` is the exact `pr-state` row this call already
-  // measured for `run.sessionId` — carried past this block so the child-spent
-  // redate below (`childGateAtClose`) can reuse it instead of asking
-  // `pr-state` a second time inside the same mutex section.
-  let verifiedLine: CcdPrLine | null = null;
-  if (state !== 'failed') {
-    const verdict = await verifyDone(
-      { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
-      { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
-      claim,
-    );
-    if (!verdict.ok) {
-      // The run state is UNCHANGED. The rejection is recorded, and a
-      // `status` mail carrying the code and detail is mailed back to the
-      // worker.
-      coord.recordRejection({ code: verdict.code, runId: id, toId: run.sessionId, detail: verdict.detail });
-      queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: id,
-        kind: 'status', subject: 'wave-done-rejected', body: `${verdict.code}: ${verdict.detail}` });
-      return { ok: false, kind: 'doneVerdict', code: verdict.code, detail: verdict.detail };
-    }
-    verifiedLine = verdict.line;
-  }
+/** The sweep's gate (`decideClose`'s `sweep` step), or nothing for a door that has no guard. */
+async function sweepGateOf(
+  deps: CloseRunDeps, id: number, sweep: SweepCloseGuard | undefined,
+): Promise<CloseHalt | null> {
+  if (sweep === undefined) return null;
+  const d = decideClose({ step: 'sweep', stop: await sweep.stillCrashed(), fresh: () => deps.coord.run(id), claimedBy: sweep.claimedBy });
+  return d.kind === 'go' ? null : stopped(deps, d);
+}
 
-  // Decide and validate the hold before any close-path write. In particular,
-  // `foldPrLineage` persists measured history, so it must not run when the
-  // subsequent hold boundary is already known to be unrepresentable.
-  const sibRead = siblingsOf(run.sessionId);
-  // Fail-shut ahead of `foldPrLineage` and the fleet act alike, for the reason
-  // `siblingsOf` states. Placed exactly where the hold verdict already is: this
-  // block's own comment says the hold must be decided before any close-path
-  // write, and an unreadable sibling list is the same class of answer.
-  if (!sibRead.ok) return { ok: false, kind: 'hold-invalid', detail: sibRead.detail };
-  const siblings = sibRead.siblings;
-  const survivor = survivorOf(siblings);
-  const safe = releaseIsSafe(siblings);
-  // Child reclamation (spec 2026-09-22 §5.7), decided HERE — inside the
-  // coordination mutex, on the sibling list just read, before any close-path
-  // write — because it changes the fleet act below: a child the coordinator
-  // has FINISHED with is RELEASED, never re-held. That includes a non-final
-  // close that retires its program, whose hold would claim the child for a
-  // wave that can never be opened, and a hold defers reclaim for ever.
-  const childGate = await childGateAtClose(deps, run, run.sessionId, sibRead, final, state, verifiedLine);
-  const needsHold = !((state === 'failed' && archive && safe) || (final && safe) || childGate.decision.reclaim);
-  const nextHold: HoldReasonVerdict | null = needsHold
-    ? survivor === null
-      ? holdReasonVerdict(run.program, run.wave + 1, run.waveOf, null)
-      : holdReasonVerdict(survivor.program, survivor.wave, survivor.waveOf, survivor.id)
-    : null;
-  if (nextHold !== null && !nextHold.ok) return nextHold;
-
-  // 2: `.prhistory` — refuse to close on an unreadable ledger; nothing
-  // closes.
-  const history = await readPrHistory(deps.io, deps.cfg.registryDir, run.sessionId);
-  if (!history.ok) {
-    return { ok: false, kind: 'refused', code: 'prhistory-unreadable' };
-  }
-  coord.foldPrLineage(id, history.entries);
-
-  // 3: the fleet act — AHEAD of the transition commit (deviation D-48). It
-  // is a RELEASE (D-5), never an autonomous archive. `state:'failed'` with
-  // `archive:true` is the ONE explicit `wsArchive` call in the whole
-  // coordination lane — and, Wave 2, IT IS GATED ON THE SAME SIBLING CHECK
-  // as the release. `ws-archive` has no hold rung in ccd (deliberately: a
-  // by-hand archive of a held workspace must still work), so an ungated arm
-  // here archives a SIBLING run's workspace and leaves that sibling's
-  // `.hold` standing over it — F9's harm through a different door. When a
-  // sibling is open the archive does not happen, the claim is handed to the
-  // survivor by the `else` arm below, the run still transitions to `failed`,
-  // and `released:false` is the signal. The cost is stated rather than
-  // hidden: the operator asked for an archive and did not get one. It is
-  // recoverable by the same hands — `POST /api/sessions/:id/archive` with
-  // `{force:true}` — and the corrective act is the one every other arm
-  // implies anyway: close the sibling first.
-  let released = false;
-  // A child is never archived (spec §5.9): the reclaim pins everything the
-  // archive would have kept, and an archived child would wait on a human's
-  // reap — rule 4 inverted. So an eligible child takes the release arm even
-  // when the close asked for an archive.
-  if (state === 'failed' && archive && safe && !childGate.decision.reclaim) {
-    const argv = CCD_ARGV.wsArchive(run.sessionId, sweepDec(deps.fleetState, `run:${id} close`));
-    if (!ccdCan(deps.fleetState, 'wsArchive')) return { ok: false, kind: 'unsupported' };
-    const res = await deps.runCcd(argv);
-    if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
-  } else if ((final && safe) || childGate.decision.reclaim) {
-    const argv = CCD_ARGV.wsRelease(run.sessionId, sweepDec(deps.fleetState, `run:${id} close`));
-    if (!ccdCan(deps.fleetState, 'wsRelease')) return { ok: false, kind: 'unsupported' };
-    const res = await deps.runCcd(argv);
-    if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
-    released = true;
-  } else {
-    // TWO cases land here, and the reason they share an arm is that they need
-    // the same act with a different reason string:
-    //   - the ordinary NON-FINAL close, no sibling: claim the workspace for
-    //     wave N+1, whose run does not exist yet — hence `null` for the run
-    //     id, and the string is byte-identical to what shipped;
-    //   - ANY close, final or not, with a SIBLING still open: the surviving
-    //     run's own reason wins. Before Wave 2 the non-final arm wrote its
-    //     OWN row's `wave + 1` unconditionally, silently rewriting the live
-    //     run's claim whenever the two rows disagree.
-    if (nextHold === null || !nextHold.ok) {
-      throw new Error('closeRun invariant: hold verdict was not available');
-    }
-    const argv = CCD_ARGV.wsHold(
-      run.sessionId, nextHold.reason,
-      sweepDec(deps.fleetState, `run:${id} close`),
-    );
-    if (!ccdCan(deps.fleetState, 'wsHold')) return { ok: false, kind: 'unsupported' };
-    const res = await deps.runCcd(argv);
-    if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
-  }
-
-  // 4: the transition, the handoff commit, the outstanding-delivery
-  // cancellation and the program-retirement check — as ONE transaction
-  // now (fix, review finding 25: `closeRun` below replaces two
-  // INDEPENDENT `advance()` calls that used to let a crash, a full-disk
-  // write failure, or a SIGTERM landing between them wedge the run in
-  // `closing` PERMANENTLY — see `CoordStore.closeRun`'s own docstring for
-  // the full reasoning, including why it also folds in review findings
-  // 8/14's delivery cancellation and D-51's program retirement). Only a
-  // SHAPE-VALID handoff commit is ever passed through to be written (fix,
-  // review findings 6/18): `verifyDone` is skipped entirely on an
-  // abandon (`state:'failed'`, D-49), so its own 40-hex `SHA` check never
-  // ran over `claim.handoffCommit` on that path — checking it again here,
-  // independent of whether `verifyDone` ran, closes the gap without
-  // reintroducing a re-measurement an abandon has nothing left to
-  // re-measure against.
-  const handoffCommit = HANDOFF_SHA.test(claim.handoffCommit) ? claim.handoffCommit : null;
-  const closed = coord.closeRun({
-    runId: id, finalState: state, causedBy, handoffCommit, program: run.program,
-    // The ordinary close always takes the `closing` hop it always took — the
-    // only path that skips it is the abandon arm above (D-281 (was D-B4-8)).
-    viaClosing: true,
+/** The abandon's commit: the store's close of the run `failed`, and what its answer means (`commit` step). */
+function commitAbandon(
+  deps: CloseRunDeps, id: number, plan: Extract<RequestPlan, { arm: 'abandon' }>,
+  causedBy: CloseCause, sweep: SweepCloseGuard | undefined, acted: boolean,
+): CloseHalt | null {
+  const closed = deps.coord.closeRun({
+    runId: id, finalState: 'failed', causedBy, handoffCommit: null,
+    program: plan.run.program, viaClosing: plan.target === 'closing',
+    ...(sweep === undefined ? {} : { expectClaimedBy: sweep.claimedBy }),
   });
-  if (!closed.ok) return { ok: false, kind: 'advanceFailed', adv: closed };
+  const d = decideClose({ step: 'commit', closed, acted });
+  return d.kind === 'go' ? null : stopped(deps, d);
+}
 
-  return { ok: true, id, state, released, ...handOffChildReclaim(deps, childGate) };
+/**
+ * THE OPERATOR ABANDON, as ONE contiguous arm (D-290 (was D-B4-17)). It returns; it never falls through into the
+ * ordinary close. No `not-dispatched` refusal (a `planned` run with no session is the `ambiguous-dispatch` wedge this
+ * route exists for), no fingerprint, no `verifyDone` (D-49: there is no done-claim to re-measure), no `.prhistory` fold
+ * (D-275: an unreadable ledger must not disable the control that exists for a broken box) and no `wsArchive` (D-280).
+ * Each is pinned by a negative test in `coord-abandon.test.ts`, and each is true because the call is ABSENT.
+ *
+ * THE SWEEP'S GATE runs IMMEDIATELY BEFORE the fleet act and the claimant is re-measured once more AFTER it
+ * (workspace lifecycle spec §5.4): a revive of the SAME id is the race a compare-and-set cannot see.
+ *
+ * A STORED ID NO VERB MAY NAME (spec §2.3): the run is still CLOSED, with no sibling read, child gate, hold or release,
+ * and one `fleet-act-omitted:bad-session` run event, so the trail tells this close from an ordinary `failed`.
+ */
+async function abandonRun(
+  deps: CloseRunDeps, id: number, plan: Extract<RequestPlan, { arm: 'abandon' }>,
+  causedBy: CloseCause, sweep: SweepCloseGuard | undefined,
+): Promise<CloseOutcome> {
+  const { run } = plan;
+  if (plan.unnamed) {
+    const halt = await sweepGateOf(deps, id, sweep) ?? commitAbandon(deps, id, plan, causedBy, sweep, false);
+    if (halt !== null) return halt;
+    deps.coord.recordRunEvent(id, causedBy, 'fleet-act-omitted:bad-session');
+    return { ok: true, id, state: 'failed', released: false, childReclaim: 'not-queued', childReclaimWhy: 'marker-unreadable' };
+  }
+  // The fleet act, AHEAD of the commit (D-48), and only when there is something to act on: a `planned` run that never
+  // dispatched holds no workspace, and a run with no session names no child.
+  const sessionId = run.sessionId;
+  if (sessionId === null) {
+    const halt = await sweepGateOf(deps, id, sweep) ?? commitAbandon(deps, id, plan, causedBy, sweep, false);
+    return halt ?? { ok: true, id, state: 'failed', released: false, ...handOffChildReclaim(deps, NO_CHILD_GATE) };
+  }
+  const sibRead = deps.coord.openRunsForSession(sessionId, id);
+  // An abandon never runs `verifyDone`, so there is no measured line to reuse: `null` is what "it did not run" IS.
+  const act = await decideClose({ step: 'abandon', run, siblings: sibRead,
+    gate: () => childGateAtClose(deps, run, sessionId, sibRead, false, 'failed', null) });
+  if (act.kind !== 'go') return stopped(deps, act);
+  const halt = await actOnFleet(deps, id, sessionId, act.plan.fleet, () => sweepGateOf(deps, id, sweep));
+  if (halt !== null) return halt;
+  if (sweep !== undefined) {
+    const after = decideClose({ step: 'recheck', stop: await sweep.stillCrashed(), release: act.plan.released });
+    if (after.kind !== 'go') return stopped(deps, after);
+  }
+  const late = commitAbandon(deps, id, plan, causedBy, sweep, true);
+  return late ?? { ok: true, id, state: 'failed', released: act.plan.released, ...handOffChildReclaim(deps, act.plan.gate) };
+}
+
+/**
+ * The ordinary close of a work run: re-measure the done claim (never believe it) — unless the close is an explicit
+ * ABANDON of the claim (`state: 'failed'`, D-49) — then fold `.prhistory` (refusing to close on an unreadable ledger),
+ * then the FLEET ACT, then, only once it has succeeded, the transition (D-48: a failed `ws-release` leaves the run
+ * exactly where it was, never wedged terminal). The act is a RELEASE (D-5), never an autonomous archive, with ONE
+ * explicit `wsArchive` in the whole coordination lane, gated on the same sibling check as the release. Which verb, and
+ * why, is `decideClose`'s `close` step; this function reads, acts and writes.
+ */
+async function closeWorkRun(
+  deps: CloseRunDeps, id: number, plan: Extract<RequestPlan, { arm: 'work' }>, causedBy: CloseCause,
+): Promise<CloseOutcome> {
+  const { coord } = deps;
+  const { run, sessionId, final, state } = plan;
+  // Spec §5.7: `verifyDone`'s own measured `pr-state` row is carried past this block so the child-spent redate reuses
+  // it instead of asking a second time inside the same mutex section.
+  let line: CcdPrLine | null = null;
+  if (plan.verify) {
+    const measured = await verifyDone(
+      { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
+      { sessionId, project: run.project, branch: run.branch ?? '' }, plan.claim);
+    const verdict = decideClose({ step: 'verified', verdict: measured });
+    if (verdict.kind !== 'go') return stopped(deps, verdict, run);
+    line = verdict.plan.line;
+  }
+  // Decide and validate the hold before any close-path write: `foldPrLineage` persists measured history.
+  const sibRead = coord.openRunsForSession(sessionId, id);
+  const act = await decideClose({ step: 'close', run, siblings: sibRead, final, state, archive: plan.archive,
+    gate: () => childGateAtClose(deps, run, sessionId, sibRead, final, state, line) });
+  if (act.kind !== 'go') return stopped(deps, act);
+  const ledger = decideClose({ step: 'ledger', history: await readPrHistory(deps.io, deps.cfg.registryDir, sessionId) });
+  if (ledger.kind !== 'go') return stopped(deps, ledger);
+  coord.foldPrLineage(id, ledger.plan.entries);
+  const halt = await actOnFleet(deps, id, sessionId, act.plan.fleet);
+  if (halt !== null) return halt;
+  // The transition, the handoff commit, the delivery cancellation and the program-retirement check, as ONE
+  // transaction (review finding 25). The ordinary close always takes the `closing` hop (D-281).
+  const closed = coord.closeRun({ runId: id, finalState: state, causedBy, handoffCommit: plan.handoffCommit,
+    program: run.program, viaClosing: true });
+  const committed = decideClose({ step: 'commit', closed, acted: true });
+  if (committed.kind !== 'go') return stopped(deps, committed);
+  return { ok: true, id, state, released: act.plan.released, ...handOffChildReclaim(deps, act.plan.gate) };
 }
 
 /** The review-kind close (design 2026-09-14 §5.3–5.4, D-2796). Body:
@@ -638,10 +397,11 @@ export async function closeRun(
  *  shape-checked — malformed is refused, never silently ignored. */
 async function closeReviewRun(
   deps: CloseRunDeps, run: RunRow, b: CloseRunBody, causedBy: CloseCause,
-  siblingsOf: (sessionId: string) => OpenSiblingsResult,
-  survivorOf: (s: readonly OpenSibling[]) => OpenSibling | null,
 ): Promise<CloseOutcome> {
   const coord = deps.coord;
+  /** The OTHER open runs on this workspace, read fresh at the decision point and never cached; the closing run
+   *  excludes itself. Returns the RESULT, not the list (D-2545): "unreadable" must never arrive as `[]`. */
+  const siblingsOf = (sessionId: string): OpenSiblingsResult => coord.openRunsForSession(sessionId, run.id);
   if (b.final !== undefined || b.archive !== undefined ||
       (b.state !== undefined && b.state !== 'done' && b.state !== 'failed')) {
     return { ok: false, kind: 'bad-request' };
@@ -750,7 +510,7 @@ async function closeReviewRun(
 // ── child reclamation: close decides, it does not wait (spec 2026-09-22 §5.7) ──
 
 /** What a close decided about the child, and the request it would hand off. */
-interface ChildGate { readonly decision: ChildReclaimDecision; readonly request: ChildReclaimRequest | null }
+export interface ChildGate { readonly decision: ChildReclaimDecision; readonly request: ChildReclaimRequest | null }
 
 const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child' }, request: null };
 
@@ -827,7 +587,7 @@ export async function childGateAtClose(
     case 'unlistable':
       mark = { kind: 'unreadable' };
       break;
-    case 'absent': {
+    case 'absent': case 'unmeasurable': {
       // A6/P5: `absent` is re-listed once, folding ONLY `.child` (never
       // `.uuid`) — the close's own question, distinct from the executor's.
       const listing = await childReclaimRowListing(deps, sessionId);

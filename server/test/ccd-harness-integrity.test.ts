@@ -102,20 +102,24 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'ccd-leaf-root-newline.test.ts': ['_fp', '_fpp'],
   'ccd-lifecycle-emit.test.ts': ['_lc_obs_probe'],
   'ccd-limit-banner.test.ts': ['_leaky'],
+  'ccd-orphan-audit.test.ts': ['_fpp'],
   'ccd-path-users-esrch.test.ts': ['_fpp'],
+  'ccd-path-users-many.test.ts': ['_fpp'],
   'ccd-path-users.test.ts': ['_fpp'],
   'ccd-route-apply.test.ts': ['_tmux_recording'],
   'ccd-route-tick.test.ts': ['_advance'],
   'ccd-tick-diet-clock-seam.test.ts': ['_advance'],
-  'ccd-tick-diet-equivalence.test.ts': ['_diet_raw', '_diet_v', '_doc', '_frob_to', '_has_it', '_lc_like', '_user'],
+  'ccd-tick-diet-equivalence-static.test.ts': ['_diet_raw', '_diet_v', '_doc', '_frob_to', '_has_it', '_lc_like', '_user'],
   'ccd-tick-diet-seams.test.ts': ['__memo_scope'],
+  'ccd-ws-collect-loose.test.ts': ['_fpp'],
   'ccd-ws-expire-ladder.test.ts': ['_fp'],
+  'ccd-ws-orphan-verb.test.ts': ['_fpp'],
   // The tick diet's runner and row builders, which the two per-locale files share.
   'ccdTickDietRunner.ts': ['__diet_caller', '__diet_side', '__hm2', '__lfc', '__lfx', '__lj6', '__rg4', '__rt', '__rt_snap',
     '__seq'],
-  'ccrc-doctor.test.ts': ['_check_alpha', '_check_beta', '_check_boom', '_check_dual', '_check_failed', '_check_gamma',
-    '_check_liar', '_check_mute', '_check_nothing', '_check_omega', '_check_sneak', '_check_warned', '_check_weird',
-    '_fix_failed', '_fix_warned'],
+  'ccrc-doctor-codex.test.ts': ['_check_failed', '_check_warned', '_fix_failed', '_fix_warned'],
+  'ccrc-doctor-fleet.test.ts': ['_check_alpha', '_check_beta', '_check_boom', '_check_dual', '_check_gamma', '_check_liar',
+    '_check_mute', '_check_nothing', '_check_omega', '_check_sneak', '_check_weird'],
   'ccrc-models.test.ts': ['_fk_cfg', '_fk_log', '_fk_probe', '_fk_rc', '_fk_ret'],
   'collectFixture.ts': ['_t'],
   'pool-name-parity.test.ts': ['_doctor_omits'],
@@ -206,9 +210,9 @@ describe('every `_x() {` a test writes names a shipped function or a listed test
 });
 
 describe('every python heredoc a shipped shell script holds parses and compiles (D-6051)', () => {
-  /** The count `pythonHeredocs` finds over the shipped shell scripts, measured on this tree: seven in ccd/ccd, two in
+  /** The count `pythonHeredocs` finds over the shipped shell scripts, measured on this tree: eight in ccd/ccd, two in
    *  ccd-graph-sweep, one in ccgpt-runtime, three in ccrc-models-probe. */
-  const PINNED_COUNT = 13;
+  const PINNED_COUNT = 14;
 
   const all = (): { where: string; tag: string; body: string }[] => shippedShellScripts().flatMap((rel) =>
     pythonHeredocs(fs.readFileSync(path.join(REPO, rel), 'utf8')).map((d) => ({ where: `${rel}:${d.line}`, ...d })));

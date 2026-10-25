@@ -509,7 +509,7 @@ describe('_sync_uuid follows a fork', () => {
   });
 
   it('a row with no transcript at EITHER spelling resolves ONCE, and still heals when the file appears', () => {
-    // Whole-branch review, F7. `_ci_transcript_path` memoized SUCCESSES only,
+    // Whole-branch review, F7. `_ci_addrs`/`_ci_extant` memoized SUCCESSES only,
     // so a row whose transcript is at neither spelling stored nothing and
     // re-paid the whole resolution every five seconds, for ever — a `$( )`
     // fork for the call, `_reg_get`'s own `cat` fork (`ccd/ccd`'s `_reg_get`

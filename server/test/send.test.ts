@@ -47,9 +47,9 @@ function fakeTmux(panes: (string | null)[]) {
     if (args[0] === 'capture-pane') {
       const pane = panes[Math.min(capIdx, panes.length - 1)] ?? null;
       capIdx++;
-      return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { tmux: new Tmux(run), calls };
 }
@@ -201,13 +201,13 @@ const SPAWN_MS = 8;   // measured order of magnitude for a `tmux` subprocess
  *    read as flags (`unknown flag -x`, `invalid flag -`): exit 1, nothing typed;
  *  - anything else is typed verbatim: exit 0.
  */
-function tmuxLiteral(args: readonly string[]): { code: number; typed: string | null; stderr: string } {
+function tmuxLiteral(args: readonly string[]): { ran: true, code: number; typed: string | null; stderr: string } {
   const rest = args.slice(4);
-  if (rest[0] === '--') return { code: 0, typed: rest[1] ?? null, stderr: '' };
+  if (rest[0] === '--') return { ran: true, code: 0, typed: rest[1] ?? null, stderr: '' };
   const tok = rest[0] ?? '';
-  if (tok === '--') return { code: 0, typed: null, stderr: '' };
-  if (tok.startsWith('-') && tok !== '-') return { code: 1, typed: null, stderr: `command send-keys: unknown flag ${tok.slice(0, 2)}\n` };
-  return { code: 0, typed: tok, stderr: '' };
+  if (tok === '--') return { ran: true, code: 0, typed: null, stderr: '' };
+  if (tok.startsWith('-') && tok !== '-') return { ran: true, code: 1, typed: null, stderr: `command send-keys: unknown flag ${tok.slice(0, 2)}\n` };
+  return { ran: true, code: 0, typed: tok, stderr: '' };
 }
 
 function boxTmux(opts: {
@@ -236,26 +236,26 @@ function boxTmux(opts: {
     ms += SPAWN_MS;
     if (args[0] === 'capture-pane') {
       captures++;
-      if (opts.dieFrom !== undefined && captures >= opts.dieFrom) return { code: 1, stdout: '', stderr: '' };
+      if (opts.dieFrom !== undefined && captures >= opts.dieFrom) return { ran: true, code: 1, stdout: '', stderr: '' };
       if (opts.overlayFrom !== undefined && captures >= opts.overlayFrom) {
-        return { code: 0, stdout: opts.overlay ?? '', stderr: '' };
+        return { ran: true, code: 0, stdout: opts.overlay ?? '', stderr: '' };
       }
-      return { code: 0, stdout: captures <= stale ? frozen : box.render(), stderr: '' };
+      return { ran: true, code: 0, stdout: captures <= stale ? frozen : box.render(), stderr: '' };
     }
     if (args[0] === 'send-keys') {
       const key = args[args.length - 1]!;
       if (args[3] === '-l') {
         literals++;
-        if (literals === opts.failLiteralAt) return { code: 1, stdout: '', stderr: "can't find session: cc-x\n" };
+        if (literals === opts.failLiteralAt) return { ran: true, code: 1, stdout: '', stderr: "can't find session: cc-x\n" };
         const t = tmuxLiteral(args);
         if (t.typed !== null) box.type(t.typed);
-        return { code: t.code, stdout: '', stderr: t.stderr };
+        return { ran: true, code: t.code, stdout: '', stderr: t.stderr };
       }
       if (key === 'M-Enter') box.newline();
       else if (key === 'C-u') box.pressCu();
       else if (key === 'Enter') box.submit();
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { tmux: new Tmux(run), calls, box, clock };
 }
@@ -894,6 +894,88 @@ describe('sendPrompt resumeIfOwn (F3 / bug #21)', () => {
     const { tmux } = fakeTmux(['❯ hello world\n']); // last pane repeats: never empties, never leaves
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world', { resumeIfOwn: true });
     expect(res).toMatchObject({ ok: false, error: 'enter-ignored', draft: 'hello world' });
+  });
+});
+
+// D-6367: Retry's whole-box resume. A send refused with our own text left in the box (`verify-failed`, `enter-ignored`)
+// used to Retry into `draft-present`, because the server saw a non-empty box. `resumeIfOwn: 'whole'` reads the box WHOLE
+// (every visual row, wrapped lines and blank rows included) and presses Enter only when it renders the composed text:
+// equal up to whitespace, which wrapping moves and a blank row is (no non-space character added or removed, so one Enter
+// sends our own non-space characters and no second copy exists). It never types, and an empty box answers `nothing-to-submit` (a landed send can still have been answered
+// `enter-ignored`, so retyping would be a second copy).
+describe("sendPrompt resumeIfOwn: 'whole' (D-6367, Retry resumes our own text)", () => {
+  const RULE = '─'.repeat(60);
+  /** The box the way Claude Code draws it: the marker on row one, continuation rows indented, blank rows blank. */
+  const boxPane = (rows: string[]): string =>
+    ['earlier turn', RULE, `❯ ${rows[0]}`, ...rows.slice(1).map((r) => (r === '' ? '' : `  ${r}`)), RULE, '  👤 team·max'].join('\n') + '\n';
+  const EMPTY_BOX = boxPane(['']);
+  const deps = (tmux: Tmux) => ({ tmux, queue: new KeyedQueue(), sleep: noSleep });
+  const ENTER = ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'];
+
+  it('a resume over our own text, read whole, sends one Enter and types nothing', async () => {
+    const { tmux, calls } = fakeTmux([boxPane(['hello world']), EMPTY_BOX]);
+    const res = await sendPrompt(deps(tmux), 'x', 'hello world', { resumeIfOwn: 'whole' });
+    expect(res).toEqual({ ok: true });
+    // No `-l` literal send and exactly one Enter: the text was never retyped, only submitted.
+    expect(sendKeysCalls(calls)).toEqual([ENTER]);
+  });
+
+  it('a resume over our own wrapped two-paragraph text sends one Enter', async () => {
+    // The first paragraph wraps across two visual rows (Claude Code breaks at a space), then a blank row, then the
+    // second paragraph. Joined rows would read 'alpha …foxtrot\ngolf …' and differ from the composed text at the wrap.
+    const para1 = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike';
+    const para2 = 'second paragraph, short';
+    const { tmux, calls } = fakeTmux([
+      boxPane(['alpha bravo charlie delta echo foxtrot', 'golf hotel india juliet kilo lima mike', '', para2]),
+      EMPTY_BOX,
+    ]);
+    const res = await sendPrompt(deps(tmux), 'x', `${para1}\n\n${para2}`, { resumeIfOwn: 'whole' });
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([ENTER]);
+  });
+
+  it('a resume over a longer human draft with the same prefix is draft-present', async () => {
+    const ours = 'please review the latest diff of the module';
+    const theirs = `${ours} and also check the tests`;
+    const { tmux, calls } = fakeTmux([boxPane([theirs])]);
+    const res = await sendPrompt(deps(tmux), 'x', ours, { resumeIfOwn: 'whole' });
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: theirs });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('a resume over a draft that continues on later rows is draft-present', async () => {
+    const { tmux, calls } = fakeTmux([boxPane(['hello world', 'and a second line of the human'])]);
+    const res = await sendPrompt(deps(tmux), 'x', 'hello world', { resumeIfOwn: 'whole' });
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: 'hello world\nand a second line of the human' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('a resume over an empty box types nothing and answers nothing-to-submit', async () => {
+    const { tmux, calls } = fakeTmux([EMPTY_BOX]);
+    const res = await sendPrompt(deps(tmux), 'x', 'hello world', { resumeIfOwn: 'whole' });
+    expect(res).toEqual({ ok: false, error: 'nothing-to-submit' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('no resume field behaves as today', async () => {
+    // The pane of the first case, no resume: the box is non-empty, so the ordinary refusal.
+    const held = fakeTmux([boxPane(['hello world'])]);
+    expect(await sendPrompt(deps(held.tmux), 'x', 'hello world'))
+      .toEqual({ ok: false, error: 'draft-present', draft: 'hello world' });
+    expect(sendKeysCalls(held.calls)).toEqual([]);
+    // An empty box without resume types and submits.
+    const { tmux, box } = boxTmux();
+    expect(await sendPrompt(deps(tmux), 'x', 'hello world')).toEqual({ ok: true });
+    expect(box.submitted).toEqual([['hello world']]);
+  });
+
+  it('the prefix mode is still a different mode: `true` resumes a box that merely starts with our text', async () => {
+    // Pins that 'whole' did not widen or narrow `true`: the same longer-draft pane the 'whole' case refuses.
+    const ours = 'please review the latest diff of the module';
+    const { tmux, calls } = fakeTmux([boxPane([`${ours} and also check the tests`]), EMPTY_BOX]);
+    const res = await sendPrompt(deps(tmux), 'x', ours, { resumeIfOwn: true });
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([ENTER]);
   });
 });
 
@@ -2234,15 +2316,15 @@ describe('a lost reply after Enter does not end the proof (D-6366)', () => {
       calls.push([cmd, ...args]);
       if (args[0] === 'send-keys') {
         if (args.includes('-l')) typed = true;
-        if (args.at(-1) === 'Enter') { entered = true; return { code: o.enterCode, stdout: '', stderr: '' }; }
-        return { code: 0, stdout: '', stderr: '' };
+        if (args.at(-1) === 'Enter') { entered = true; return { ran: true, code: o.enterCode, stdout: '', stderr: '' }; }
+        return { ran: true, code: 0, stdout: '', stderr: '' };
       }
       if (args[0] === 'capture-pane') {
-        if (!entered) return { code: 0, stdout: typed ? OURS : (o.before ?? EMPTY), stderr: '' };
+        if (!entered) return { ran: true, code: 0, stdout: typed ? OURS : (o.before ?? EMPTY), stderr: '' };
         const pane = afterEnter[Math.min(post++, afterEnter.length - 1)] ?? null;
-        return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+        return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     return { tmux: new Tmux(run), calls };
   }
@@ -2332,9 +2414,9 @@ describe("answerDialogText's echo wait (D-6366)", () => {
       if (args[0] === 'send-keys' && args.includes('-l')) literal = true;
       if (args[0] === 'capture-pane') {
         if (literal) capturesAfterLiteral++;
-        return { code: 0, stdout: script[Math.min(idx++, script.length - 1)]!, stderr: '' };
+        return { ran: true, code: 0, stdout: script[Math.min(idx++, script.length - 1)]!, stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const res = await answerDialogText(
       { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: noSleep }, 'lane-a:project-a', parseDialog(open)!.id, 3, 'only in staging',

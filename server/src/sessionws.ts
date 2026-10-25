@@ -6,11 +6,12 @@ import type { Bus, Notice } from './bus.js';
 import { configDirFor, type CcrcConfig } from './config.js';
 import { measuredIdentity, readSessionRecord } from './registry.js';
 import { liveSessionStatus, readLiveStateMeasured } from './livestate.js';
+import { readSession } from './sessionReading.js';
 import {
   continuesInto, resumedPastMarker, rungRank, TranscriptResolver, type TranscriptResolution,
 } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
-import { hasMenu, parseDialog } from './pane/dialog.js';
+import { parseDialog } from './pane/dialog.js';
 import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
 import { SessionWorkflows, sessionDirOf } from './workflows/read.js';
@@ -25,7 +26,6 @@ const POLL_MS = 2000;
  *  three polls, at least 6 s of the pane unreadable. One or two are the blips a slow remote call produces. */
 const FAILED_CAPTURES_CLEAR = 3;
 const BACKLOG_N = 50;
-const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see checkDialog's own comment
 
 interface Resolved {
   uuid: string;
@@ -399,16 +399,8 @@ export class SessionStream {
     }
     this.failedCaptures = 0;
     this.captureHeld = false;
-    // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the
-    // WHOLE pane, and an RC-off pane renders the busy marker WHILE a dialog is
-    // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
-    // 'busy' here and this call site would suppress the parse forever. hasMenu
-    // is deliberately independent of the busy check for exactly that reason
-    // (pane/dialog.ts:42-54); it's the same idiom send.ts:320 uses to decide
-    // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
-    // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
-    // captureAnsi().
-    let dialog = hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
+    // parseDialog opens with the hasMenu gate (not paneState), so a busy marker painted beside a menu does not veto the parse (D-102).
+    let dialog = parseDialog(pane);
     // Read the transcript only while this menu is still unexplained. Once its ask
     // is latched, re-reading costs a 256 KB tail every 2 s and can buy nothing:
     // nextDialogFrame would suppress the frame anyway. Menus that never latch are
@@ -689,23 +681,17 @@ export class SessionStream {
     // C0.3: one session's own row, not the whole registry — this stream only
     // ever asks about `this.id`, every 2 s, for as long as the socket is open.
     const read = await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
-    switch (read.kind) {
-      case 'found': break;
-      // `unlistable` is the SAME whole-fleet collapse `RegistryRead`'s own
-      // `listed: false` types elsewhere in this build — it proves nothing
-      // about whether THIS id exists, only that this read could not say.
-      // Only a proven `absent` earns the terminal "unknown session".
-      case 'unlistable': return { ok: false, reason: 'unmeasurable' };
-      case 'absent': return { ok: false, reason: 'absent' };
-      // An id `isRegistryId` refuses (spec §2.3) is terminal too: it never
-      // heals by polling, so no poll is installed. It answers exactly as
-      // `absent` does, by design, so folding it there changes nothing
-      // observable; its pin is `readSessionRecord`'s zero-listing case.
-      case 'bad-id': return { ok: false, reason: 'absent' };
-      default: {
-        const _x: never = read;
-        return _x;
-      }
+    if (read.kind !== 'found') {
+      // The registry ladder is `readSession`'s row arm (ARCH-48, #783); this door keeps only its terminal answers.
+      // `unlistable` is the SAME whole-fleet collapse `RegistryRead`'s own `listed: false` types elsewhere in this
+      // build: it proves nothing about whether THIS id exists, only that this read could not say, so it heals by
+      // polling. Every other arm is terminal "unknown session": a proven absence, an id `isRegistryId` refuses
+      // (spec §2.3, which never heals by polling) and `unmeasurable`, a listed row `buildRecord` could not assemble,
+      // which answered `absent` before `SingleRead` split it out (ARCH-47) and keeps that answer here: the unassembled
+      // row is NOT given the terminal-absent-vs-doubt split `measureClaimant` makes, because this door's consumer
+      // is a socket whose only choices are "keep polling" and "close".
+      const row = readSession({ row: read.kind, pane: null, lifecycle: null, hibernatedAt: null, turn: null });
+      return { ok: false, reason: row.why === 'rowUnlistable' ? 'unmeasurable' : 'absent' };
     }
     // Display/connectivity — DEGRADE-AND-HEAL, not a refusal: a degraded
     // `uuid`/`workdir` would resolve `transcriptPath` against `''`, a path
@@ -743,7 +729,8 @@ export class SessionStream {
       return { ok: false, reason: 'absent' };
     }
     let cwd = identity.workdir;
-    let status: SessionStatus = 'dead';
+    // The turn fact `readSession` reads at the end: null while the pane is not live (that reads `dead` below).
+    let turn: 'busy' | 'idle' | null = null;
     let statusUpdatedAt: number | null = null;
     // D-5561: one `has-session`, as before — its verdict kept, because the
     // workflow reader must not read a substrate fault (`unknown`) as a process
@@ -754,14 +741,14 @@ export class SessionStream {
     // header shows 'dead' during a substrate fault — display-only, and the
     // same deferred product decision as assembleFleet's (see fleet.ts).
     if (verdict === 'live') {
-      status = 'idle';
+      turn = 'idle';
       const pid = await this.deps.tmux.panePid(this.id);
       if (pid === null) {
         // D-5275: mirror `assembleFleet` (D-5234). The pane is alive and its
         // pid read FAILED, which measured nothing about the session; the card
         // paints that `busy`, so the header does too — the D-115 mirror rule
         // below. `statusUpdatedAt` stays null and `cwd` at the registry's.
-        status = 'busy';
+        turn = 'busy';
       } else {
         // D-115, the chat half of the same fix `assembleFleet` takes (see its
         // block in fleet.ts for the full argument). The folded read answered
@@ -770,15 +757,14 @@ export class SessionStream {
         // open transcript said the session was at rest when the truth was
         // that its `<pid>.json` could not be read at all.
         //
-        // MIRRORED RATHER THAN INVENTED HERE: these two surfaces are two
-        // renderings of one measurement, and a fleet card reading `busy`
-        // beside a chat header reading `idle` for the same session in the
-        // same second is worse than either answer on its own — the operator
-        // has no way to tell which one to believe.
+        // The two surfaces are two renderings of one measurement: a fleet card reading `busy` beside a chat header
+        // reading `idle` for the same session in the same second leaves the operator no way to tell which to believe.
+        // Each surface pins its half in its own tests (`fleet.test.ts`, `sessionws.test.ts`); the card/header pair is held to one
+        // word, row by row, in `session-ladders-characterization.test.ts`, and the liveness half is the truth table.
         const read = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
         if (read.ok) {
           if (read.state.cwd) cwd = read.state.cwd;
-          status = liveSessionStatus(read.state.status);
+          turn = liveSessionStatus(read.state.status) === 'idle' ? 'idle' : 'busy';
           statusUpdatedAt = read.state.statusUpdatedAt;
           proc = { kind: 'live', startedAt: read.state.startedAt };
         } else if (read.reason === 'unmeasured') {
@@ -791,10 +777,14 @@ export class SessionStream {
           // since D-5234) still leaves this at `idle`,
           // which is the ordinary shape for a pane that has published
           // nothing yet.
-          status = 'busy';
+          turn = 'busy';
         }
       }
     }
+    // The header's word is the reading's turn: a pane that is not live has none, and reads `dead` (display-only, D-309).
+    const reading = readSession({ row: 'present', pane: verdict, lifecycle: null, hibernatedAt: null, turn });
+    const word = reading.turn.word;
+    const status: SessionStatus = word === 'busy' || word === 'idle' ? word : 'dead';
     const resolution = await this.transcripts.resolve({
       configDir: cfgDir,
       dir: cwd,

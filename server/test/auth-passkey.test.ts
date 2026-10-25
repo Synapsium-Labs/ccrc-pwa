@@ -2365,7 +2365,7 @@ describe('GET /api/runs takes EITHER credential, and never neither', () => {
       // refusal envelope as its own code and both callers name the gate; doctor
       // SKIPs rather than WARNs, and says out loud that build skew and roster
       // divergence are consequently not being measured. Pinned in
-      // `ccrc-doctor.test.ts`. Still no exemption — that remains the wrong fix.
+      // the `ccrc-doctor-*` test files. Still no exemption — that remains the wrong fix.
       '/api/fleet/health': 'ccrc doctor — gated on purpose; degraded, and D-150 made it say so',
     };
     const unaccounted = [...called]

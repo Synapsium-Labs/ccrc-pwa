@@ -51,8 +51,8 @@ export type NeedsReason = 'ask' | 'allow' | 'fault' | 'sign-in';
  *  `SessionBucket` member is a compile error here, never a silently missing group. */
 export const STATUS_GROUPS: Record<SessionBucket, { readonly order: number; readonly label: string; readonly folds: boolean }> = {
   attention: { order: 0, label: 'Needs you', folds: false },
-  working: { order: 1, label: 'Working', folds: false },
-  done: { order: 2, label: 'Done', folds: false },
+  done: { order: 1, label: 'Done', folds: false },
+  working: { order: 2, label: 'Working', folds: false },
   idle: { order: 3, label: 'Idle', folds: true },
   cleanup: { order: 4, label: 'Cleanup', folds: true },
   archived: { order: 5, label: 'Archived', folds: true },

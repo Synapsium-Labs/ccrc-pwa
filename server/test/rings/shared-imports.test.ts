@@ -88,7 +88,7 @@ describe('shared/*.ts imports only ./ siblings (ARCH-04 stage 1, D-6045)', () =>
 
   it('the walk covers the L0 kernel files, and only shared/ top-level .ts files', () => {
     const f = files();
-    expect(f).toEqual(expect.arrayContaining(['shared/api.ts', 'shared/lifecycle.ts', 'shared/ask-menu.ts']));
+    expect(f).toEqual(expect.arrayContaining(['shared/api.ts', 'shared/lifecycle.ts', 'shared/ask-menu.ts', 'shared/disk.ts']));
     expect(f.every((x) => /^shared\/[^/]+\.ts$/.test(x))).toBe(true);
   });
 

@@ -73,7 +73,7 @@ const notifyShPath = path.join(repoRoot, 'deploy', 'notify.sh');
 
 // libuv resolves a bare executable against the CHILD's env, not this
 // process's — so a fixture PATH holding only `stub-bin` would make a bare
-// `spawnSync('bash', …)` ENOENT. Same trick `ccrc-doctor.test.ts` uses.
+// `spawnSync('bash', …)` ENOENT. Same trick `ccrc-doctorFixture.ts` uses.
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 const realPath = (name: string): string => {
   const p = spawnSync('bash', ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
@@ -110,7 +110,7 @@ function writeAgentEnv(home: string, text: string): void {
   writeFileSync(path.join(home, '.ccrc', 'agent.env'), text);
 }
 
-/** `~/.ccrc/ccrc.env` — written as TEXT, same as `ccrc-doctor.test.ts`'s
+/** `~/.ccrc/ccrc.env` — written as TEXT, same as `ccrc-doctorFixture.ts`'s
  *  fixture, because half of what the reader has to get right is which lines
  *  it ignores (comments, blanks, unrelated keys, indentation). */
 function writeCcrcEnv(home: string, text: string): void {

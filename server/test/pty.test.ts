@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
+import { PTY_EXIT_CLOSE } from '../../shared/api.js';
 import type { PtyLike } from '../src/pty.js';
 import { testDeps } from './helpers.js';
 import { NotifyLog } from '../src/notifylog.js';
@@ -52,7 +53,7 @@ describe('pty drawer bridge', () => {
     const calls: string[][] = [];
     const run = async (cmd: string, args: string[]) => {
       calls.push([cmd, ...args]);
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true as const, code: 0, stdout: '', stderr: '' };
     };
     const stub = new StubPty();
     let spawned: { id: string; cols: number; rows: number } | undefined;
@@ -93,6 +94,51 @@ describe('pty drawer bridge', () => {
       wait);
   });
 
+  it('the PWA socket closes with 4000 when its pty exits', async () => {
+    // D-6368: a drawer never sits open on a dead pty. The exit may be the pty's own, the agent link's synthesized
+    // one on a drop, or a failed open; the bridge cannot tell them apart and does not need to.
+    const exitListeners = new Set<() => void>();
+    const stub = new StubPty() as StubPty & { onExit(l: () => void): { dispose(): void } };
+    stub.onExit = (l) => { exitListeners.add(l); return { dispose: () => exitListeners.delete(l) }; };
+    app = await buildServer({ ...testDeps(), spawnPty: () => stub });
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const addr = app.server.address();
+    const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/claude9-project-f`);
+    const closed = new Promise<{ code: number; reason: string }>((resolve) =>
+      ws.on('close', (code, reason) => resolve({ code, reason: String(reason) })));
+    await opened(ws);
+    await vi.waitFor(() => expect(exitListeners.size).toBe(1), wait);
+
+    for (const l of exitListeners) l();
+
+    expect(await closed).toEqual({ code: PTY_EXIT_CLOSE, reason: 'pty-exit' });
+    expect(PTY_EXIT_CLOSE).toBe(4000);
+    // the socket's own close handler ran: it killed the pty and released the exit subscription
+    await vi.waitFor(() => expect(stub.killed).toBe(true), wait);
+    expect(exitListeners.size).toBe(0);
+  });
+
+  it('a PtyLike without onExit still bridges', async () => {
+    const stub = new StubPty();   // no onExit member at all
+    expect('onExit' in stub).toBe(false);
+    app = await buildServer({ ...testDeps(), spawnPty: () => stub });
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const addr = app.server.address();
+    const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/claude9-project-f`);
+    const frames: string[] = [];
+    ws.on('message', (d) => frames.push(String(d)));
+    await opened(ws);
+    await vi.waitFor(() => expect(frames).toContain('WELCOME-FROM-TMUX'), wait);
+    ws.send(JSON.stringify({ type: 'input', data: 'ls\r' }));
+    await vi.waitFor(() => expect(stub.written).toContain('ls\r'), wait);
+    ws.close();
+    await vi.waitFor(() => expect(stub.killed).toBe(true), wait);
+  });
+
   it('PINS the canonical grid BEFORE the pty attaches, so the client cannot reflow the history', async () => {
     // F14, measured end to end on one session with `window-size latest` as ccd
     // spawns it, 1153 stored lines / 1203 logical:
@@ -110,7 +156,7 @@ describe('pty drawer bridge', () => {
     const log: string[] = [];
     const run = async (cmd: string, args: string[]) => {
       log.push([cmd, ...args].join(' '));
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true as const, code: 0, stdout: '', stderr: '' };
     };
     const stub = new StubPty();
     const deps = {
@@ -211,7 +257,7 @@ describe('pty drawer bridge records a lone Escape or Ctrl-C (D-5237)', () => {
     await notifyLog.load();
     const notify = vi.fn(async () => {});
     app = await buildServer({
-      ...testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' })),
+      ...testDeps(undefined, async () => ({ ran: true as const, code: 0, stdout: '', stderr: '' })),
       spawnPty: () => stub, notifyLog, push: { notify } as unknown as PushService,
     });
     await app.listen({ host: '127.0.0.1', port: 0 });

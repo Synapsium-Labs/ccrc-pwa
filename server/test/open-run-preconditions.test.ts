@@ -537,7 +537,7 @@ describe('openRunPreconditions reads its facts lazily, in gate order (D-5384)', 
 
 describe('the route answers the decider\'s refusals with the inline sends\' exact bytes (D-5384)', () => {
   const TOKEN = 'f'.repeat(64);
-  const runner: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+  const runner: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
   const openApp = async (): Promise<FastifyInstance> => {

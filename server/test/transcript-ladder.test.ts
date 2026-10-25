@@ -1266,7 +1266,7 @@ describe('the successor is the predecessor\'s sibling, never a search (D-4949)',
   it('a successor that exists only in ANOTHER project dir is declined, not found by the uuid glob', async () => {
     // #189 review, F4. A fork writes its successor beside the transcript it
     // forked from; a successor uuid found anywhere else is not this session's
-    // continuation, and `ccd` (`_ci_transcript_path`) would never follow it —
+    // continuation, and `ccd` (`_ci_addrs`/`_ci_extant`) would never follow it —
     // so the two authorities disagreed for good and the doctor WARNed for ever.
     const b = box();
     const own = plantChain(b, A, turn('one') + marker(A, B));

@@ -96,15 +96,27 @@ export const ROUTING_LADDER_CASES: readonly RoutingLadderCase[] = [
       why: 'demoting class from fable to opus and resetting effort to high' },
   },
   {
-    // And a reversal is not an escalation: it puts back a rung the session
-    // was already on, which above the main ceiling can only have been a
-    // human's own choice. `_route_restore`'s restoration of a recorded intent
-    // after a serviceability degrade is the same argument in ccd.
-    name: 'on main, a demotion off the top class reverses — a reversal restores an explicit choice, it does not reach for one',
+    // D-6790: Fable runs only when the operator selects it, so a reversal does not restore it either: the demotion off
+    // the top class stays, and the answer is `ceiling` for every failure kind.
+    name: 'on main, a demotion off the top class is NOT reversed — a reversal never restores fable (D-6790)',
     kind: 'shallow', current: cur('opus', 'high'), scope: 'main', prior: 0,
     lastDemotion: { field: 'class', from: 'fable', to: 'opus' },
-    want: { kind: 'move', mode: 'reverse-demotion', field: 'class', from: 'opus', to: 'fable',
-      why: 'reversing the unreversed demotion (class fable->opus) before the ladder applies to this failure, effort reset to high' },
+    want: { kind: 'ceiling',
+      why: "the unreversed demotion's origin (class fable) is above opus — no automatic step restores it; only the operator selects it" },
+  },
+  {
+    name: 'on main, the same clamp holds for the unclear and ceiling kinds (D-6790)',
+    kind: 'unclear', current: cur('opus', 'high'), scope: 'main', prior: 2,
+    lastDemotion: { field: 'class', from: 'fable', to: 'opus' },
+    want: { kind: 'ceiling',
+      why: "the unreversed demotion's origin (class fable) is above opus — no automatic step restores it; only the operator selects it" },
+  },
+  {
+    name: 'on main, an EFFORT demotion off max still reverses (the clamp is the class ceiling only)',
+    kind: 'shallow', current: cur('opus', 'high'), scope: 'main', prior: 0,
+    lastDemotion: { field: 'effort', from: 'max', to: 'high' },
+    want: { kind: 'move', mode: 'reverse-demotion', field: 'effort', from: 'high', to: 'max',
+      why: 'reversing the unreversed demotion (effort max->high) before the ladder applies to this failure' },
   },
   {
     name: 'unclear: opus·high escalates effort to xhigh — opus is not the class-aware case',

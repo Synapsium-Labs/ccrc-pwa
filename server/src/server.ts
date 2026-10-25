@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
+import fastifyRateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import { pwaStaticOptions } from './pwaStatic.js';
 import { configDirFor } from './config.js';
@@ -22,6 +23,7 @@ import {
 import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE, rosterKindOf } from '../../shared/roster.js';
 import { workspaceId } from '../../shared/slug.js';
+import { withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAgreement } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
@@ -48,7 +50,7 @@ import {
   type InterruptVerdict, type SendDeps,
 } from './inject/send.js';
 import { answerAsk, readAskAnswer, type AskDeps } from './inject/ask.js';
-import { freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
+import { freshAskAt, measuredIdentity, readRegistryMeasured, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { listProjects, type CcdResult } from './lifecycle.js';
@@ -58,7 +60,7 @@ import { CLIP_MIME, CLIP_NAME_RE, clipPath, clipStem, isSafeSessionId, stageUplo
 import type { SpawnPty } from './pty.js';
 import { SHAPE_ONLY_MASKER, type SecretMasker } from './accounts/mask.js';
 import { maskBody, maskedError, maskFleetFrame } from './accounts/egress.js';
-import { Presence } from './presence.js';
+import { Viewers } from './viewer.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { registerUpdateRoutes } from './update/routes.js';
@@ -100,15 +102,17 @@ import {
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { ARCHIVE_REFUSALS, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
 import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
-import { noticeSink } from './notice.js';
+import { noticeBanner, noticeSink, notifyPushOnly } from './notice.js';
 import type { Dialog, DigestAnswer, DigestCorrectAnswer } from '../../shared/api.js';
 import {
-  archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, frameRowVerdict, refusedAtStop, worktreeOf, type ArchiveMeasure,
+  busyReadFailsClosed, decideArchive, frameRowVerdict, worktreeOf, type ArchiveMeasure,
   type TurnVerdict,
 } from './coord/archiveDoor.js';
+import { admitArchive } from './coord/archiveAdmission.js';
+import { actArchive, replyArchiveRefused } from './archiveAct.js';
 import { liveRowFor, liveRowWithHookFor, liveWordFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import { ccdSwapRefusal, swapTurnRefusal } from './swapguard.js';
 
@@ -200,7 +204,7 @@ export const WRITE_ANSWER_EXEMPT = /^\/api\/(?:auth\/|token\/|sessions\/:id\/upl
  *  in `secret-mask.test.ts`'s egress inventory. */
 export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/fleet', '/api/digest', '/api/sessions/:id/pr', '/api/sessions/:id/workspace/audit', '/api/coord/stall-watch',
-  '/api/runs', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/asks',
+  '/api/runs', '/api/runs/:id', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/asks',
   '/api/approvals/:id',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
@@ -322,20 +326,30 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const app = Fastify({ logger: false });
   await app.register(fastifyWebsocket);
   await app.register(fastifyMultipart, { limits: { fileSize: 25 * 1024 * 1024 } });
+  // `global: false`: only a route that opts in with `config.rateLimit` is limited (coord/routes.ts).
+  // The limiter is GLOBAL: a constant key, so it never reads `req.ip` (no proxy trust, spec 3b D5), and it
+  // runs on `preHandler` so a route's own auth `onRequest` hook refuses before any budget is spent.
+  await app.register(fastifyRateLimit, {
+    global: false,
+    hook: 'preHandler',
+    keyGenerator: () => 'GET /api/runs/:id',
+    // Thrown into Fastify's error path; the route's own `errorHandler` (coord/routes.ts) writes ccrc's refusal shape.
+    errorResponseBuilder: () => Object.assign(new Error('rate-limited'), { statusCode: 429 }),
+  });
   // D-5857: the one notice sink this server's writers outside `watch.ts` raise their feed rows through (`notice.ts`).
   const notice = noticeSink(deps);
 
-  // Presence is cheap and needs no config, unlike `push` — a caller that
+  // Viewers is cheap and needs no config, unlike `push` — a caller that
   // didn't wire one into Deps (an older test, a one-off script) still gets
   // working suppression. Written BACK onto `deps`, not just held locally:
-  // `FleetWatcher.pushOne` reads `this.deps.presence` on every push, and a
+  // `FleetWatcher.pushOne` reads `this.deps.viewers` on every push, and a
   // presence instance only this route can see would be write-only — the
   // route marks visibility nobody ever reads, so nothing is actually
   // suppressed. `deps` is a shared reference (the same object `FleetWatcher`
   // was constructed with, or will be), so this makes both sides see the
   // SAME instance regardless of construction order.
-  deps.presence ??= new Presence();
-  const presence = deps.presence;
+  deps.viewers ??= new Viewers();
+  const viewers = deps.viewers;
 
   // ── The session gate (Stage 3a) ───────────────────────────────────────
   //
@@ -1254,6 +1268,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // The ranked held bytes (D-5943), composed by the expiry lane once per pass and read here ONCE. Absent before the
     // lane's first pass: absence reads as UNKNOWN, never as nothing held (`FleetHealth.archivedHeld`).
     const archivedHeld = watcher?.archivedHeld() ?? undefined;
+    // The disk alarm's block (D-6615), held by `sweepDisk`. Absent before its first sweep: absence reads as UNKNOWN.
+    const disk = watcher?.disk() ?? undefined;
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       // The two stamps: with a coordination database, the inventory's rows —
       // re-measured every minute by `sweepInventory`, superseded rows excluded
@@ -1277,6 +1293,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         ...(lifecycle ? { lifecycle } : {}),
         ...(delegation ? { delegation } : {}),
         ...(archivedHeld ? { archivedHeld } : {}),
+        ...(disk ? { disk } : {}),
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
@@ -1299,6 +1316,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       ...(lifecycle ? { lifecycle } : {}),
       ...(delegation ? { delegation } : {}),
       ...(archivedHeld ? { archivedHeld } : {}),
+      ...(disk ? { disk } : {}),
     };
   });
 
@@ -1654,9 +1672,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const message = body.message;
-    bus.emit('notice', { message });
-    const swap = /^cc swap: (\S+) moved (\S+) -> (\S+)/.exec(message);
-    if (swap) bus.emit(`session:${swap[1]}`, { type: 'notice', message });
+    noticeBanner({ bus }, message);
     // Auto-advance spec §2.3 steps 5 and 6 (plan W2 Task 12): a class that
     // moved, or was held back, reaches the PHONE too - the banner alone reaches
     // only an open console. Exactly `true`, never a truthy string, and behind
@@ -1719,44 +1735,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // cap written from MODELS_PUSH_MAX. The message itself is never logged: it
     // is free text from a process we do not trust.
     //
-    // THIS IS A DIRECT `PushService.notify`, OUTSIDE notice.ts's `notify()` FUNNEL,
-    // AND IS LEGITIMATELY DIFFERENT FOR NOW, for three reasons. (1) The
-    // composition root's bound sink (`notice = noticeSink(deps)`, above) records
-    // every notice it can push: in `raise` (notice.ts) `push` and `record-always`
-    // run `log.record` and then `recordFeedEvent` before `deps.push?.notify`
-    // (`record-only` records and never pushes; index.ts passes the ring in
-    // `deps`), and the one path that records nothing, `push` for a session the
-    // operator is looking at, pushes nothing either. D-5211 rules a feed record out
-    // for this push in W2. (A notice with no session is not the obstacle: the
-    // daily digest goes through the funnel with `sessionId: ''`.) (2) The raw
-    // `notify` with a push-only set of sinks is reachable (`NoticeDeps`' sinks are
-    // each optional, and watch.ts already passes subsets), but its event is a
-    // `NoticeRecord`, which carries a `NotifyEvent` kind, and no kind in
-    // shared/api.ts's union fits a model-class notice: a new kind widens that union
-    // and the PWA's per-kind tables (`KIND_WORD` and `KIND_GLYPH` in
-    // MailScreen.tsx), and an existing kind misfiles it. (3) The owner that will
-    // absorb it is the consolidation design's K6 funnel, whose ARCH-59 item moves
-    // the notify.sh banner into the funnel
-    // (docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md, §3
-    // K6, and the ARCH-59 row of its §4). A census in notify-push.test.ts lists
-    // the direct callers of `PushService.notify` in server/src, so that wave
-    // finds this one mechanically. It is lexical. It strips a line's inline
-    // `/* … */` spans first, so a line that begins with an inline block comment
-    // and then has code is counted, and it skips the line when what is left
-    // begins with `//`, `/*` or `*`. On every other line it counts a spelling
-    // of a call of a member named `notify`: a call, an optional or
-    // non-null-asserted call, a call with a type argument that has no nested
-    // angle brackets or parentheses, a `bind`/`call`/`apply`, a bracketed name,
-    // or a line ending in `.notify` or `.notify!`. It sees only those
-    // spellings. It does not see any other spelling (a parenthesised member,
-    // `Reflect.apply`, a reference destructured or aliased and called later),
-    // or code on a line that begins with `*` or `*/`.
+    // THE PUSH IS THE NOTICE FUNNEL'S (ARCH-59, #794): `notifyPushOnly` (notice.ts) sends it, so no `PushService.notify`
+    // call is left in this file (the census in notify-push.test.ts counts the callers). It is the push-only entry, not
+    // `notify()`: D-5211 rules a feed record out for a models push, and no `NotifyEvent` kind fits a model-class line
+    // (a new kind widens shared/api.ts's union and the PWA's per-kind tables, an existing one misfiles it). The banner's
+    // bus frames are the funnel's too (`noticeBanner`): a transient channel read by the open sockets, not a record.
     //
     // The decision is made whether or not a push service exists: no VAPID keys
     // is delivery configuration, not a way around the policy. With none,
     // `deps.push` is undefined and nothing is sent. The response never waits
     // for the send, and a send that rejects (a subscription store that cannot
-    // be written) is logged rather than left unhandled: the banner has already
+    // be written) is logged by the funnel rather than left unhandled: the banner has already
     // gone out. The tag is the decision's (per lane and class, D-5212).
     if (body.push === true) {
       const decision = modelsPushDecision(message, deps.cfg.roster.byId);
@@ -1780,10 +1769,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         console.warn('ccrc-server: /api/notify: push:true on a notice that is not a model-class line of a codex-kind '
           + `lane (${decision.reason})${detail}; the banner went out, the phone push did not`);
       } else {
-        void deps.push?.notify({ title: 'Model classes', body: message, tag: decision.tag, url: '/accounts' })
-          .catch((err: unknown) => {
-            console.warn(`ccrc-server: /api/notify: the push did not go out (${err instanceof Error ? err.message : String(err)})`);
-          });
+        notifyPushOnly(deps, { title: 'Model classes', body: message, tag: decision.tag, url: '/accounts' },
+          'ccrc-server: /api/notify: the push did not go out');
       }
     }
     return { ok: true };
@@ -1808,7 +1795,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const read = await readSessionRecord(deps.io, deps.cfg, id);
       switch (read.kind) {
         case 'found': break;
-        case 'absent': case 'unlistable': return null;
+        case 'absent': case 'unmeasurable': case 'unlistable': return null;
         // Masked on both of its paths (spec §2.3): `knownId` refuses a
         // non-registry id on `POST /api/sessions/:id/ask`, and on
         // `POST /api/asks/:id/answer` `freshAskAt`'s own `bad-id` answers
@@ -1924,21 +1911,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // get un-notified by the first one's disconnect. It is the TTL, not this
     // key, that handles a socket dying WITHOUT a close frame — every frame
     // below re-stamps the claim, and the client sends one every
-    // PRESENCE_REFRESH_MS for exactly that reason (see Presence's own doc).
+    // PRESENCE_REFRESH_MS for exactly that reason (see the Viewers class's own doc).
     const token = Symbol('viewer');
     // D-5242's presence contract: the OPEN claim, stamped at connect and re-stamped by EVERY frame — before the frame
     // is parsed, so even one that fails to parse proves the socket alive. A hidden tab beats too, and holds its session
     // awake for `PRESENCE_OPEN_TTL_MS` after its last frame; `drop` at close removes both claims.
-    presence.markOpen(token, id);
+    viewers.markOpen(token, id);
     socket.on('message', (raw) => {
-      presence.touch(token);
+      viewers.touch(token);
       try {
         const m = asSessionClientMsg(JSON.parse(String(raw)));
-        if (m !== null) presence.setVisible(token, m.visible ? id : null);
-      } catch { /* a client that sends garbage simply isn't reporting presence */ }
+        if (m !== null) viewers.setVisible(token, m.visible ? id : null);
+      } catch { /* a client that sends garbage simply isn't reporting visibility */ }
     });
     socket.on('close', () => {
-      presence.drop(token);
+      viewers.drop(token);
       stream.stop();
     });
   });
@@ -2031,6 +2018,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // ends inside a run that could begin a secret is held back until the next chunk or 6 ms (`DrawerMask`, D-5995).
     const drawerMask = (deps.masker ?? SHAPE_ONLY_MASKER).drawer((text) => socket.send(text));
     const sub = p.onData((data) => drawerMask.push(data));
+    const exitSub = p.onExit?.(() => socket.close(PTY_EXIT_CLOSE, 'pty-exit'));   // a drawer never sits open on a dead pty (D-6368)
     socket.on('message', (raw) => {
       try {
         const m = JSON.parse(String(raw)) as { type?: unknown; data?: unknown; cols?: unknown; rows?: unknown };
@@ -2045,6 +2033,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
     socket.on('close', () => {
       sub.dispose();
+      exitSub?.dispose();
       drawerMask.dispose();
       p.kill();
       // Restore the canonical size ccd spawned with — a phone-sized drawer must
@@ -2178,7 +2167,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/prompt', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown; attachments?: unknown };
+    const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown; attachments?: unknown; resume?: unknown };
     const raw = Array.isArray(body.attachments) ? body.attachments : [];
     if (raw.length > MAX_ATTACHMENTS) {
       return reply.code(400).send({ ok: false, error: 'bad-attachment' });
@@ -2203,7 +2192,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (typeof body.text !== 'string' || (body.text.length === 0 && attachments.length === 0)) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const res = await sendPrompt(sendDeps, id, body.text, { onDraft: body.replaceDraft === true ? 'replace' : 'refuse', attachments });
+    // D-6367: Retry over our own left text. `resume === true` is this field's one reader; anything else is today's call.
+    const res = await sendPrompt(sendDeps, id, body.text, {
+      onDraft: body.replaceDraft === true ? 'replace' : 'refuse', attachments,
+      ...(body.resume === true ? { resumeIfOwn: 'whole' as const } : {}),
+    });
     if (!res.ok) console.warn(`ccrc-server: prompt ${id}: ${res.error} ${refusalShape(res)}`); // D-6366: countable, no text
     return res.ok ? res : reply.code(409).send(res);
   });
@@ -2261,7 +2254,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const day = q.day === undefined ? digestDayFor(Date.now(), hourUtc) : parseDigestDay(q.day);
     if (day === null) return refuseRoute(reply, 'bad-request');
     const { fromMs, toMs } = digestWindow(day, hourUtc);
-    const built = buildDigest(deps.coord, fromMs, toMs);
+    // A `?day=` whose window has not closed yet: a drift line's age stops at now, never past it.
+    const built = buildDigest(deps.coord, fromMs, toMs, Math.min(toMs, Date.now()));
     if (!built.ok) return refuseRoute(reply, 'digest-unreadable', { detail: built.detail });
     const mark = deps.coord.digestDay(day);
     const answer: DigestAnswer = {
@@ -2368,7 +2362,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     switch (read.kind) {
       case 'found': break;
       case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
-      case 'absent': return refuseRoute(reply, 'unknown-session');
+      case 'absent': case 'unmeasurable': return refuseRoute(reply, 'unknown-session');
       // An id `isRegistryId` refuses (spec §2.3) is a malformed request, never an unknown session: 400 in
       // this file's request-shape word, the one `isSafeSessionId` above answers.
       case 'bad-id': return refuseRoute(reply, 'bad-session-id');
@@ -2669,10 +2663,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/interrupt', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    // D-5236: what Escape would interrupt, from the RAW live word (never `liveStatus()`'s collapse, which reads `shell`
+    // D-5236: what Escape would interrupt, from the RAW live word (never `liveSessionStatus()`'s collapse, which reads `shell`
     // and `waiting` busy) and the frame's row with its hook stamp — the turn reads' one home, `turnverdict.ts`.
     // `interruptVerdict` holds the rule. A row that cannot be found, or a word that cannot be read, is `not-busy`, as
-    // `liveStatus()` answered it (D-115); with an unmeasured identity no row is read, so any non-idle word sends Escape.
+    // the old interrupt reader answered it (D-115); with an unmeasured identity no row is read, so any non-idle word sends Escape.
     const res = await interrupt(sendDeps, id, async (): Promise<InterruptVerdict> => {
       const read = await readSessionRecord(deps.io, deps.cfg, id);
       // `bad-id` is masked here (spec §2.3): `knownId` above refuses a non-registry id before this read. Were it ever
@@ -2792,7 +2786,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   };
 
   /** ccd failed in a way no route maps to a refusal word: its stderr, at 502. One send for every caller. */
-  const ccd502 = (reply: FastifyReply, res: { stderr: string }) => reply.code(502).send({ ok: false, stderr: res.stderr });
+  const ccd502 = (reply: FastifyReply, res: { stderr: string }) => reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr) });
   const runCcdOr502 = async (reply: FastifyReply, argv: CcdArgv) => {
     const res = await deps.runCcd(argv);
     return res.ok ? { ok: true } : ccd502(reply, res);
@@ -3113,7 +3107,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     const res = await deps.runCcd(argv);
-    if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    if (!res.ok) return reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr) });
     const measured = poolFor(await readProjectPools(
       deps.io,
       deps.cfg,
@@ -3462,7 +3456,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // route that answered 404 for both would be reopening the exact
       // overloaded-null this 502 gate exists to close, one branch over.
       case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
-      case 'absent': return refuseRoute(reply, 'unknown-session');
+      case 'absent': case 'unmeasurable': return refuseRoute(reply, 'unknown-session');
       // This read is the ONLY gate in front of `stopArgvFor` (spec §2.3), so an id `isRegistryId` refuses
       // is refused here, before any argv: 400, this file's request-shape word, never a proven absence's 404.
       case 'bad-id': return refuseRoute(reply, 'bad-session-id');
@@ -3625,7 +3619,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     switch (read.kind) {
       case 'found': break;
       case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
-      case 'absent': return refuseRoute(reply, 'unknown-session');
+      case 'absent': case 'unmeasurable': return refuseRoute(reply, 'unknown-session');
       // The ordinary arm's id gate (spec §2.3): an id `isRegistryId` refuses is a malformed request.
       case 'bad-id': return refuseRoute(reply, 'bad-session-id');
       default: {
@@ -3717,7 +3711,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // ccd's own two refusals (D-5240: `cmd_swap`'s manual gate, after both reads above) are the same two 409s, so a
     // turn that began between the in-queue read and ccd's act reaches the operator as `session-busy` with its "swap
     // anyway". Every other ccd failure keeps the generic 502 with ccd's sentence.
-    const ccdRefused = ccdSwapRefusal(res.ran.stderr);
+    // D-6840: a call that never ran has no refusal word to read, only the runner's own words (the 502).
+    const ccdRefused = res.ran.ran === false ? null : ccdSwapRefusal(res.ran.stderr);
     if (ccdRefused !== null) return refuseRoute(reply, ccdRefused);   // `ccd: hibernated:` too (D-5242)
     return reply.code(502).send({ ok: false, stderr: res.ran.stderr });
   });
@@ -3736,8 +3731,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // wrapper, i.e. no task list could be looked for at all — and `draftPr`
   // treats that as "print no Plan section", same as an empty list.
   const prTasks = async (id: string): Promise<TaskItem[] | null> => {
-    // [registry-refused:knownId] GET /pr's knownId refuses a non-registry id before this read.
-    const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
+    const read = await readSessionRecord(deps.io, deps.cfg, id);
+    const rec = read.kind === 'found' ? read.record : undefined;
     const cfgDir = rec ? configDirFor(deps.cfg, rec.wrapper) : undefined;
     return rec && cfgDir ? (await readTasks(deps.io, cfgDir, rec.uuid)).tasks : null;
   };
@@ -3753,10 +3748,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // silence §2 forbids, and the client would render it as "no control" rather
     // than "we could not look".
     if (!ccdCan(deps.fleetState, 'prStateSession')) return unknownView('unsupported');
+    // The task read starts beside pr-state, not after it, and is caught at once (below): a failed pr-state answers
+    // `unknownView` and ignores it, and a rejection while pr-state is pending is not unhandled. Never `Promise.all`.
+    const tasks = prTasks(id);
+    tasks.catch(() => {}); // caught from the start: a read that rejects while pr-state is pending is not unhandled
     const res = await deps.runCcd(argv);
     if (!res.ok) return unknownView(sweepFailureReason(res));
     const [first] = parsePrLines(res.stdout);
-    return prView(first ?? null, await prTasks(id), null);
+    return prView(first ?? null, await tasks, null);
   });
 
   app.post('/api/sessions/:id/pr', async (req, reply) => {
@@ -3779,7 +3778,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     // Through the per-session queue, so it serialises with every other write.
     const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));
-    return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: r.stderr });
+    return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(r.stderr) });
   });
 
   /**
@@ -3817,39 +3816,24 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    */
   app.post('/api/sessions/:id/archive', async (req, reply) => {
     const { id } = req.params as { id: string };
-    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
-    // A registry that did not LIST is `502 registry-unmeasurable` (the table's status, D-5971) — never folded into `404 unknown-session`, which is
-    // what `knownId` alone answers for it (workspace lifecycle wave 3b, wave 2's carried follow-up). Asked BEFORE
-    // `knownId`, whose call is left as every other request-id gate's (`routes.test.ts` derives that census).
-    if ((await deps.io.readdir(deps.cfg.registryDir)) === null) {
-      return refuseRoute(reply, 'registry-unmeasurable');
-    }
-    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const flags = archiveFlags(req.body);
-    if (flags === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    // The row itself, `/stop`'s ladder. An unlistable registry has already answered 502 above; the `unlistable` arm
-    // below can only answer if the registry goes unreadable between the two reads (502 too, D-5971). The identity fields are a
-    // separate arm: an unmeasured one is refused rather than guessed at — the stop argv recomputes a tmux name from them.
-    const read = await readSessionRecord(deps.io, deps.cfg, id);
-    switch (read.kind) {
-      case 'found': break;
-      case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
-      case 'absent': return refuseRoute(reply, 'unknown-session');
-      // Masked by `knownId` above (spec §2.3), which answers 404 for an id `isRegistryId` refuses before
-      // its listing. This arm answers the request-shape word all the same.
-      case 'bad-id': return refuseRoute(reply, 'bad-session-id');
-      default: {
-        const _x: never = read;
-        return refuseRoute(reply, 'internal', { kind: (_x as { kind: string }).kind });
-      }
-    }
-    const identity = measuredIdentity(read.record);
-    // `/stop`'s pair-part refusal (`stopPairRefused`), asked HERE, before the turn read, the claim reads and the
+    // ARCH-36: the gates in front of the first measurement are `admitArchive`'s (`coord/archiveAdmission.ts`), asked in
+    // its order; the row and its identity come back from it. A registry that did not LIST is `registry-unmeasurable`
+    // (D-5971), asked BEFORE `knownId`, whose call is left as every other request-id gate's (`routes.test.ts` derives
+    // that census); `/stop`'s pair-part refusal is the last gate, ahead of the turn read, the claim reads and the
     // programme's end, so a refused part ends nothing, stops nothing and composes no argv.
-    if (identity === null || stopPairRefused(id, read.record, identity)) {
-      return refuseRoute(reply, 'registry-unmeasurable');
-    }
-    const rec = read.record;
+    const admitted = await admitArchive<SessionRecord, NonNullable<ReturnType<typeof measuredIdentity>>>(id, req.body, {
+      idSafe: isSafeSessionId,
+      registryListed: async () => (await deps.io.readdir(deps.cfg.registryDir)) !== null,
+      known: () => knownId(id),
+      readRecord: async () => {
+        const read = await readSessionRecord(deps.io, deps.cfg, id);
+        return read.kind === 'found' ? { kind: 'found', record: read.record } : { kind: read.kind };
+      },
+      identityOf: measuredIdentity,
+      pairRefused: (rec, identity) => stopPairRefused(id, rec, identity),
+    });
+    if (!admitted.ok) return refuseRoute(reply, admitted.word);
+    const { flags, record: rec, identity } = admitted;
     const archiveArgv = rec.workspace === null ? null : CCD_ARGV.wsArchive(id, pwaDec(req));
     const measure: ArchiveMeasure = {
       workspace: rec.workspace !== null,
@@ -3875,51 +3859,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         abandonRefusal,
         abandon,
       }, id, flags, measure));
-    if (!plan.ok) {
-      // A store this box could not read refuses fail-shut WITH its detail, and the server says so in its log
-      // (workspace lifecycle wave 3b: the base dropped both).
-      const { error, detail } = plan.reply.body;
-      if (typeof detail === 'string'
-          && (error === ARCHIVE_REFUSALS.runOpen || error === ARCHIVE_REFUSALS.coordinatorHasOpenRuns)) {
-        console.warn(`ccrc-server: archive ${id}: the coordination store could not be read (${detail}) — refused fail-shut`);
-      }
-      return reply.code(plan.reply.status).send(plan.reply.body);
-    }
-    const endedSpread = plan.ended.length > 0 ? { ended: plan.ended } : {};
-    let stopped = false;
-    if (plan.stop) {
-      // Re-read at the act, fail-closed, unless the operator consented to lose the turn. A turn measured in progress
-      // is `session-busy`, a state nobody could read `status-unknown` — the word is `refusedAtStop`'s (3881).
-      if (!flags.interrupt) {
-        const verdict = await turnVerdictFor(turnReads, rec, identity.uuid);
-        if (verdict !== 'idle') {
-          const refused = refusedAtStop(verdict, plan.ended);
-          return reply.code(refused.status).send(refused.body);
-        }
-      }
-      const res = await deps.runCcd(stopArgvFor(id, rec, identity));
-      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr, ...endedSpread });
-      stopped = true;
-    }
-    if (archiveArgv === null || !plan.wsArchive) return { ok: true, archived: true, stopped, ended: plan.ended };
-    const archived = await deps.runCcd(archiveArgv);
-    // REVIEW 240's F1 (workspace lifecycle wave 3b): `ws-archive` answers `already archived <id>` at exit 0 having
-    // stopped NOTHING — a row archived earlier whose pane came back without a spawn path clearing the stamp (a pre-#143
-    // pane). Read as `archived:true` alone, the door said a session was put away that tmux still runs. A pane tmux
-    // PROVES up is stopped here, as the archive's own act would have — but only after the turn is re-read at the act,
-    // fail-closed (`turnVerdictFor`, the rule for a stop nobody agreed to: this branch is never `interrupt`'s, whose
-    // stop has already run), because `ws-archive`'s own fail-closed `_ws_status` is skipped on `already archived` and
-    // the turn the door measured came from the frame's row. Only an `idle` answer stops; a busy or unreadable turn, a
-    // pane gone, or one tmux cannot be asked about, is left as before — archived, not stopped.
-    if (archived.ok && !stopped && /^already archived /m.test(archived.stdout)
-        && (await deps.tmux.sessionVerdict(id)).verdict === 'live'
-        && (await turnVerdictFor(turnReads, rec, identity.uuid)) === 'idle') {
-      const res = await deps.runCcd(stopArgvFor(id, rec, identity));
-      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr, ...endedSpread });
-      stopped = true;
-    }
-    const out = archiveOutcome(stopped, plan.ended, archived);
-    return reply.code(out.status).send(out.body);
+    if (!plan.ok) return replyArchiveRefused(reply, id, plan);
+    return actArchive(reply, plan, flags, archiveArgv, {
+      turnVerdict: () => turnVerdictFor(turnReads, rec, identity.uuid),
+      stopArgv: () => stopArgvFor(id, rec, identity),
+      paneLive: async () => (await deps.tmux.sessionVerdict(id)).verdict === 'live',
+      runCcd: deps.runCcd,
+    });
   });
 
   app.post('/api/sessions/:id/restore', async (req, reply) => {
@@ -3947,7 +3893,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // judgement. Through the per-session queue like the reap, so a purge
     // cannot interleave with another write to the same session.
     const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));
-    return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: r.stderr });
+    return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(r.stderr) });
   });
 
   app.post('/api/sessions/:id/hold', async (req, reply) => {
@@ -4105,7 +4051,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const res = await deps.runCcd(argv);
     const audit = parseAudit(res.stdout);
-    if (audit === null) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    if (audit === null) return reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(res.stderr) });
     return audit;
   });
 
@@ -4124,6 +4070,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));
+    // D-6840: the reap is destructive, so a call that never ran, or may have, is `indeterminate` (the
+    // empty-handed `parseReap`), never a refusal built from the runner's forged stderr.
+    if (res.ran === false) return parseReap('', 1, '');
     return parseReap(res.stdout, res.ok ? 0 : 1, res.stderr);
   });
 

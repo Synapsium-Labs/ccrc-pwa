@@ -9,6 +9,7 @@ import { renderEnvelope } from './envelope.js';
 import type { CoordStore, RunRow, StallObservation } from './store.js';
 import type { SystemMailSender } from './rundefs.js';
 import type { MailKind } from '../../../shared/api.js';
+import { readChecksRowDetail } from '../../../shared/landing.js';
 
 /**
  * What `queueSystemMail` did, said out loud (D-1042). It used to return `void`
@@ -183,6 +184,42 @@ export function queueStallNotice(
     if (!seen.recorded) return { queued: false, why: seen.why };
     const q = insertSystemMailTx(coord, run, { fromId: 'operator', toId: n.toId, runId: run.id,
       kind: n.kind, subject: n.subject, body: n.body });
+    return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId, eventId: seen.eventId };
+  });
+}
+
+/** What `queueLandingNotice` did: `queueStallNotice`'s answer, with the observation's own `why`. */
+export type LandingNoticeQueued = StallNoticeQueued;
+
+/**
+ * The checks lane's mailed row (PR landing in ccrc, stage 1; spec §3.5): the episode's observation row and its mail in
+ * ONE transaction, in `queueStallNotice`'s shape: the row first (`insertObservation` under the `episode` predicate, so a
+ * run that left `merging` or re-entered it as a new episode writes neither), then `insertSystemMailTx` from `operator`.
+ * A `duplicate` or `run-gone` answer writes no mail, and a throw after the row rolls both back.
+ *
+ * The `(runId, detail)` dedupe alone does not make a generation's `stuck` or its edge once-only, because a `stuck`
+ * row's detail carries its reading and two edge rows of one generation differ by word. So, INSIDE the transaction, a
+ * `stuck` row is refused when the generation already holds one (any reading), and an edge row when the generation
+ * already holds an edge. `tx` is not re-entrant: no caller may hold one around this.
+ */
+export function queueLandingNotice(
+  coord: CoordStore,
+  run: Pick<RunRow, 'id' | 'program' | 'wave' | 'waveOf'>,
+  n: { detail: string; at: number; episode: number; toId: string; subject: string; body: string },
+): LandingNoticeQueued {
+  return tx(coord.db, (): LandingNoticeQueued => {
+    const row = readChecksRowDetail(n.detail);
+    if (row !== null && row.gen !== null && (row.what === 'stuck' || row.what === 'green' || row.what === 'red')) {
+      const own = coord.checksRows(run.id, n.episode).filter((r) => !r.row.shadow && r.row.gen === row.gen);
+      const held = row.what === 'stuck'
+        ? own.some((r) => r.row.what === 'stuck')
+        : own.some((r) => r.row.what === 'green' || r.row.what === 'red');
+      if (held) return { queued: false, why: 'duplicate' };
+    }
+    const seen = coord.insertObservation(run.id, n.detail, n.at, { kind: 'episode', episode: n.episode });
+    if (!seen.recorded) return { queued: false, why: seen.why };
+    const q = insertSystemMailTx(coord, run, { fromId: 'operator', toId: n.toId, runId: run.id,
+      kind: 'status', subject: n.subject, body: n.body });
     return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId, eventId: seen.eventId };
   });
 }

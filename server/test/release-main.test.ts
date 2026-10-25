@@ -26,6 +26,7 @@ const REPO = path.resolve(here, '..', '..');
 const SCRIPT = join(REPO, 'deploy', 'release-main.sh');
 const BUILDER = join(REPO, 'deploy', 'build-release.sh');
 const NOTES = join(REPO, 'deploy', 'release-notes.mjs');
+const ARTIFACT = join(REPO, 'deploy', 'release-artifact.sh');
 
 const GIT_ENV = {
   GIT_AUTHOR_NAME: 'ccrc fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
@@ -98,11 +99,14 @@ function fixture(home: string, opts: {
   }
   copyFileSync(BUILDER, join(root, 'deploy', 'build-release.sh'));
   copyFileSync(SCRIPT, join(root, 'deploy', 'release-main.sh'));
+  // receive verifies the hand-over with it, as the publish job does (D-6656).
+  copyFileSync(ARTIFACT, join(root, 'deploy', 'release-artifact.sh'));
   // D-5548: the notes writer rides beside the script, as in the real tree;
   // `notes: false` leaves it out, the shape of a writer that fails.
   if (opts.notes !== false) copyFileSync(NOTES, join(root, 'deploy', 'release-notes.mjs'));
   chmodSync(join(root, 'deploy', 'build-release.sh'), 0o755);
   chmodSync(join(root, 'deploy', 'release-main.sh'), 0o755);
+  chmodSync(join(root, 'deploy', 'release-artifact.sh'), 0o755);
   if (opts.seed !== undefined) opts.seed(root);
   git(root, 'init', '-q', '-b', 'main');
   git(root, 'add', '-A');
@@ -209,6 +213,29 @@ function pipeline(root: string, home: string, out: string, gh: GhView = {}, env:
   const c = run(root, home, ['compare', '--out', out], 0, env, gh);
   const q = run(root, home, ['publish', '--out', out], 0, { CCRC_BUNDLE_PATH: plantBundle(home), ...env }, gh);
   return { p, c, q };
+}
+/** The publish job's checkout: a fresh clone of origin, so it holds origin's
+ *  tags, has `main` checked out at origin's tip and carries no local candidate
+ *  tag. `name` tells a second publish job's clone apart from the first. */
+function publishClone(home: string, name = 'publish'): string {
+  const clone = join(home, name);
+  const r = spawnSync('git', ['clone', '-q', '-b', 'main', join(home, 'origin.git'), clone], { env: { ...process.env, ...GIT_ENV }, encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`fixture publish clone failed: ${r.stderr}`);
+  return clone;
+}
+/** The upload and the download: the tarball and SHA256SUMS from `out`, copied
+ *  into a fresh `dir`; returns the tarball's sha256. */
+function handOver(out: string, dir: string, tag: string): string {
+  mkdirSync(dir, { recursive: true });
+  copyFileSync(join(out, `ccrc-${tag}.tar.gz`), join(dir, `ccrc-${tag}.tar.gz`));
+  copyFileSync(join(out, 'SHA256SUMS'), join(dir, 'SHA256SUMS'));
+  return sha256(join(dir, `ccrc-${tag}.tar.gz`));
+}
+/** release-artifact.sh, run as `run()` runs release-main.sh. */
+function artifact(root: string, home: string, args: string[], extraEnv: NodeJS.ProcessEnv = {}): Result {
+  const r = spawnSync('bash', [join(root, 'deploy', 'release-artifact.sh'), ...args],
+    { env: { ...process.env, ...GIT_ENV, HOME: home, GITHUB_STEP_SUMMARY: '', GITHUB_OUTPUT: '', ...extraEnv }, cwd: root, encoding: 'utf8' });
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 /** What the attest step leaves behind: any file — the script copies it, never reads it. */
 function plantBundle(home: string): string {
@@ -527,7 +554,7 @@ describe('release-main.sh: compare — a build identical to the newest release H
     expect(p.code, p.stderr).toBe(0);
     expect(c.code, c.stderr).toBe(0);
     expect(c.stdout).toBe(`${L.differs('v0.0.1', k, first, 'v0.0.2')}\n`);
-    expect(readFileSync(join(home, 'output'), 'utf8')).toBe('release=true\n');
+    expect(readFileSync(join(home, 'output'), 'utf8')).toBe('release=true\ntag=v0.0.2\n');
     expect(stateOf(out)).toBe(`built true\ntag v0.0.2\nhead ${sha}\n`);
     expect(tarballsIn(out)).toEqual(['ccrc-v0.0.2.tar.gz']);
     expect(q.code, q.stderr).toBe(0);
@@ -564,7 +591,7 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const c = run(root, home, ['compare', '--out', out], 0, { GITHUB_OUTPUT: join(home, 'output') });
     expect(c.code, c.stderr).toBe(0);
     expect(c.stdout).toBe(`${L.cant(why, 'v0.0.2')}\n`);
-    expect(readFileSync(join(home, 'output'), 'utf8')).toBe('release=true\n');
+    expect(readFileSync(join(home, 'output'), 'utf8')).toBe('release=true\ntag=v0.0.2\n');
     expect(tarballsIn(out)).toEqual(['ccrc-v0.0.2.tar.gz']);
   });
 
@@ -902,7 +929,7 @@ describe('release-main.sh: compare — a build identical to the newest release H
     const c = run(root, home, ['compare', '--out', out], 0, { GITHUB_OUTPUT: join(home, 'output') });
     expect(c.code, c.stderr).toBe(0);
     expect(c.stdout).toBe(`${L.cant('the fingerprint of v0.0.1 failed', 'v0.0.2')}\n`);
-    expect(readFileSync(join(home, 'output'), 'utf8')).toBe('release=true\n');
+    expect(readFileSync(join(home, 'output'), 'utf8')).toBe('release=true\ntag=v0.0.2\n');
   });
 
   it.each([
@@ -1089,10 +1116,13 @@ describe('release-main.sh: compare — a build identical to the newest release H
     expect(ghReads(home)).toHaveLength(2);
   });
 
-  // A listing that fails (rc) and one that exits 0 with nothing to show
-  // (awk then prints a bare TAB, which the shape check refuses) both release.
+  // Three shapes of a listing that cannot be trusted all release: one that
+  // fails (rc), one that exits 0 with nothing to show (awk then prints a bare
+  // TAB, which the shape check refuses), and one that prints a well-formed
+  // line yet exits 1 (the shape check accepts it, so only the rc half refuses).
   it.each([
     ['comm exits 1', 'exit 1'], ['comm exits 0 and prints nothing', 'exit 0'],
+    ['comm prints one well-formed line and exits 1', "printf '\"ccd/ccrc\"\\tx\\n'; exit 1"],
   ])('W25-C35: a difference that cannot be listed releases with that reason — the line is never empty (%s)', (_name, body) => {
     const home = mkTmp('ccrc-relmain-w25c35-');
     const root = fixture(home, { tags: ['v0.0.1'], assets: ['v0.0.1'] });
@@ -1140,6 +1170,220 @@ describe('release-main.sh: compare — a build identical to the newest release H
       expect(stateOf(out)).toMatch(/^built true\n/);
       expect(ghCalls(home).filter((l) => l.startsWith('release download'))).toEqual([]);
     });
+
+  // The build job's outputs (D-6658): a release hands the publish job its tag in
+  // the same append as the decision; every other outcome writes the one word.
+  const outcomes: Array<[string, { merge?: (r: string) => void; assets?: string[]; tagHead?: string }, boolean, string]> = [
+    ['a release', {}, false, 'release=true\ntag=v0.0.2\n'],
+    ['a skip', { merge: docsOnly, assets: ['v0.0.1'] }, false, 'release=false\n'],
+    ['an already-tagged HEAD', { tagHead: 'v1.0.0' }, false, 'release=false\n'],
+    ['a HEAD a later release contains', {}, true, 'release=false\n'],
+  ];
+  it.each(outcomes)('W26-C1: compare\'s output for %s', (_name, opts, contained, want) => {
+    const home = mkTmp('ccrc-relmain-w26c1-');
+    const root = fixture(home, { tags: ['v0.0.1'], ...opts });
+    if (contained) {
+      // W25-C28's shape: a later merge was released first.
+      const sha = git(root, 'rev-parse', 'HEAD');
+      git(root, 'commit', '-q', '--allow-empty', '-m', 'a later merge');
+      git(root, 'tag', 'v0.0.5');
+      git(root, 'checkout', '-q', '--detach', sha);
+    }
+    const out = join(home, 'out');
+    const output = join(home, 'output');
+    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    const c = run(root, home, ['compare', '--out', out], 0, { GITHUB_OUTPUT: output });
+    expect(c.code, c.stderr).toBe(0);
+    expect(readFileSync(output, 'utf8')).toBe(want);
+  });
+});
+
+// ── W26: the publish job re-proves the build's artifact (D-6649, D-6656 to D-6658, D-6662)
+// The build job (prepare, compare, record) runs in the fixture repo; the
+// publish job (receive, then publish) runs in a fresh clone of origin, with only
+// the hand-over directory and the tag and digest between them.
+const RECEIVED = (tag: string, digest: string): string =>
+  `release-main.sh: received ${tag} from the build job (sha256 ${digest}) — tagged locally (NOT pushed); next: attest, then publish\n`;
+const tarballsUnder = (dir: string): string[] => existsSync(dir) ? tarballsIn(dir) : [];
+
+describe('release-main.sh: receive — the publish job re-derives the tag and verifies the build\'s artifact before any write (W26)', () => {
+  interface Built { root: string; out: string; handed: string; digest: string; sha: string }
+  /** The build job: prepare, compare (a release: the fixture serves no base
+   *  asset), record; then the hand-over into `<home>/handed`. The publish job
+   *  runs on another machine, so the build job's gh record is cleared. */
+  function buildHalf(home: string): Built {
+    const root = fixture(home, { tags: ['v0.0.1'] });
+    const out = join(home, 'out');
+    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    const c = run(root, home, ['compare', '--out', out]);
+    expect(c.code, c.stderr).toBe(0);
+    expect(stateOf(out)).toMatch(/^built true\ntag v0\.0\.2\n/);
+    const output = join(home, 'record-output');
+    const rec = artifact(root, home, ['record', '--tag', 'v0.0.2', '--dir', out], { GITHUB_OUTPUT: output });
+    expect(rec.code, rec.stderr).toBe(0);
+    const handed = join(home, 'handed');
+    const digest = handOver(out, handed, 'v0.0.2');
+    expect(readFileSync(output, 'utf8')).toBe(`digest=${digest}\n`);
+    rmSync(join(home, 'gh-argv'), { force: true });
+    rmSync(join(home, 'gh-env'), { force: true });
+    return { root, out, handed, digest, sha: git(root, 'rev-parse', 'HEAD') };
+  }
+  const receive = (clone: string, home: string, handed: string, tag: string, digest: string, out = 'release-out'): Result =>
+    run(clone, home, ['receive', '--in', handed, '--tag', tag, '--digest', digest, '--out', out]);
+
+  it('W26-R1: the two-job pipeline — receive tags locally and leaves compare\'s state; publish pushes and publishes the received files', () => {
+    const home = mkTmp('ccrc-relmain-w26r1-');
+    const { handed, digest, sha } = buildHalf(home);
+    expect(originTags(home)).not.toContain('v0.0.2');
+    expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
+    const clone = publishClone(home);
+    expect(git(clone, 'rev-parse', 'HEAD')).toBe(sha);
+    expect(git(clone, 'tag', '--points-at', 'HEAD')).toBe('');
+    const r = receive(clone, home, handed, 'v0.0.2', digest);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain(RECEIVED('v0.0.2', digest));
+    expect(git(clone, 'tag', '--points-at', 'HEAD')).toBe('v0.0.2');
+    expect(stateOf(join(clone, 'release-out'))).toBe(`built true\ntag v0.0.2\nhead ${sha}\n`);
+    expect(sha256(join(clone, 'release-out', 'ccrc-v0.0.2.tar.gz'))).toBe(digest);
+    expect(existsSync(join(home, 'gh-argv'))).toBe(false);
+    expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
+    const q = run(clone, home, ['publish', '--out', 'release-out'], 0, { CCRC_BUNDLE_PATH: plantBundle(home) });
+    expect(q.code, `stderr: ${q.stderr}\nstdout: ${q.stdout}`).toBe(0);
+    expect(originTags(home)).toContain('v0.0.2');
+    expect(readFileSync(join(home, 'origin-pushes'), 'utf8')).toBe('refs/tags/v0.0.2\n');
+    expect(releaseCreates(home)).toEqual([
+      'release create v0.0.2 release-out/ccrc-v0.0.2.tar.gz release-out/SHA256SUMS release-out/ccrc-v0.0.2.tar.gz.sigstore.json --verify-tag --prerelease --notes-file release-out/release-notes.txt',
+    ]);
+    expect(readFileSync(join(clone, 'release-out', 'release-notes.txt'), 'utf8')).toBe([
+      'Changes since v0.0.1', '', 'Behind the scenes', '- The merge under release', '',
+    ].join('\n'));
+  });
+
+  it('W26-R2: a release tag that reaches origin between the two jobs — receive refuses, tags nothing, pushes nothing (D-6662)', () => {
+    const home = mkTmp('ccrc-relmain-w26r2-');
+    const { root, handed, digest } = buildHalf(home);
+    // Another run's v0.0.2 lands on origin, on an earlier commit, after the build job derived its own.
+    spawnSync('git', ['-C', join(home, 'origin.git'), 'tag', 'v0.0.2', git(root, 'rev-parse', 'HEAD~1')], { env: { ...process.env, ...GIT_ENV } });
+    rmSync(join(home, 'origin-pushes'), { force: true });
+    const clone = publishClone(home);
+    const r = receive(clone, home, handed, 'v0.0.2', digest);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('release-main.sh: the build job derived v0.0.2; this checkout derives v0.0.3 — a release tag reached origin between the two jobs; re-run all jobs; nothing was tagged or pushed');
+    expect(git(clone, 'tag', '--points-at', 'HEAD')).toBe('');
+    expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
+    expect(existsSync(join(home, 'gh-argv'))).toBe(false);
+    expect(tarballsUnder(join(clone, 'release-out'))).toEqual([]);
+  });
+
+  it('W26-R3: a digest of another file — verify\'s hash reason, then "did not verify"; nothing tagged', () => {
+    const home = mkTmp('ccrc-relmain-w26r3-');
+    const { handed, digest } = buildHalf(home);
+    const other = sha256(join(handed, 'SHA256SUMS'));
+    expect(other).not.toBe(digest);
+    const clone = publishClone(home);
+    const r = receive(clone, home, handed, 'v0.0.2', other);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`release-artifact.sh: ccrc-v0.0.2.tar.gz hashes to ${digest}, not the ${other} the build job recorded`);
+    expect(r.stderr).toContain('release-main.sh: the build\'s artifact did not verify; nothing was tagged or pushed');
+    expect(git(clone, 'tag', '--points-at', 'HEAD')).toBe('');
+    expect(tarballsUnder(join(clone, 'release-out'))).toEqual([]);
+    expect(existsSync(join(clone, 'release-out', 'release-main.state'))).toBe(false);
+  });
+
+  it('W26-R4: a HEAD that already carries a release tag on origin — receive refuses', () => {
+    const home = mkTmp('ccrc-relmain-w26r4-');
+    fixture(home, { tags: ['v0.0.1'], tagHead: 'v1.0.0' });
+    const clone = publishClone(home);
+    const r = receive(clone, home, join(home, 'handed'), 'v1.0.1', 'a'.repeat(64));
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('release-main.sh: HEAD already carries v1.0.0 — it was published already, or release.yml owns it; nothing was tagged or pushed');
+    expect(git(clone, 'tag', '--points-at', 'HEAD')).toBe('v1.0.0');
+    expect(existsSync(join(clone, 'release-out'))).toBe(false);
+  });
+
+  it('W26-R5: a HEAD a later release tag contains — a re-run of an older merge; receive refuses', () => {
+    const home = mkTmp('ccrc-relmain-w26r5-');
+    const root = fixture(home, { tags: ['v0.0.1'] });
+    // A later merge was released first: v0.0.5 reaches origin on a descendant
+    // of origin's main, which stays at the older merge.
+    git(root, 'commit', '-q', '--allow-empty', '-m', 'a later merge');
+    git(root, 'tag', 'v0.0.5');
+    git(root, 'push', '-q', 'origin', 'refs/tags/v0.0.5');
+    rmSync(join(home, 'origin-pushes'), { force: true });
+    const clone = publishClone(home);
+    expect(git(clone, 'rev-parse', 'HEAD')).toBe(git(root, 'rev-parse', 'HEAD~1'));
+    const r = receive(clone, home, join(home, 'handed'), 'v0.0.6', 'a'.repeat(64));
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('release-main.sh: HEAD is already contained in v0.0.5 — a re-run of an older merge; nothing was tagged or pushed');
+    expect(git(clone, 'tag', '--points-at', 'HEAD')).toBe('');
+    expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
+  });
+
+  const DIRTY = 'release-main.sh: refusing a dirty tree — a release is built from a commit; commit or stash, then re-run (git status --porcelain is non-empty); nothing was tagged or pushed';
+  const FILLED = (out: string): string => `release-main.sh: ${out} already holds a state or a tarball — receive runs once, into an empty out directory; nothing was tagged or pushed`;
+  // D-6656: in the workflow, release-out lies inside the checkout and is not
+  // gitignored, so the dirty check is what catches a pre-filled one; the
+  // out-directory check catches one outside the tree.
+  it.each([
+    ['a dirty publish clone', 'outside', null, true, 'dirty'],
+    ['an out directory outside the clone holding a state', 'outside', 'release-main.state', false, 'filled'],
+    ['an out directory outside the clone holding a tarball', 'outside', 'ccrc-v0.0.1.tar.gz', false, 'filled'],
+    ['the in-clone release-out holding a state', 'inside', 'release-main.state', false, 'dirty'],
+  ] as const)('W26-R6: %s — receive refuses before any write', (_name, where, plant, dirty, why) => {
+    const home = mkTmp('ccrc-relmain-w26r6-');
+    fixture(home, { tags: ['v0.0.1'] });
+    const clone = publishClone(home);
+    const out = where === 'outside' ? join(home, 'out') : join(clone, 'release-out');
+    if (plant !== null) {
+      mkdirSync(out, { recursive: true });
+      writeFileSync(join(out, plant), 'planted\n');
+    }
+    if (dirty) writeFileSync(join(clone, 'straggler.txt'), 'untracked\n');
+    const r = receive(clone, home, join(home, 'handed'), 'v0.0.2', 'a'.repeat(64), out);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(why === 'dirty' ? DIRTY : FILLED(out));
+    expect(git(clone, 'tag', '--points-at', 'HEAD')).toBe('');
+    if (plant !== null) expect(readFileSync(join(out, plant), 'utf8')).toBe('planted\n');
+    expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
+  });
+
+  const WRONG_ARM = (arm: string): string => `release-main.sh: --in, --tag and --digest are receive's flags, not ${arm}'s`;
+  it.each([
+    ['prepare --tag', ['prepare', '--tag', 'v0.0.2'], WRONG_ARM('prepare')],
+    ['publish --in', ['publish', '--in', 'x'], WRONG_ARM('publish')],
+    ['compare --digest', ['compare', '--digest', 'a'.repeat(64)], WRONG_ARM('compare')],
+    ['receive without --in', ['receive', '--tag', 'v0.0.2', '--digest', 'a'.repeat(64)], 'release-main.sh: receive needs --in'],
+    ['receive without --tag', ['receive', '--in', 'x', '--digest', 'a'.repeat(64)], 'release-main.sh: receive needs --tag'],
+    ['receive without --digest', ['receive', '--in', 'x', '--tag', 'v0.0.2'], 'release-main.sh: receive needs --digest'],
+  ] as const)('W26-R7: %s is a usage error, exit 2, and says why', (_name, args, why) => {
+    const home = mkTmp('ccrc-relmain-w26r7-');
+    const root = fixture(home, { tags: ['v0.0.1'] });
+    const r = run(root, home, [...args]);
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toContain(why);
+    expect(git(root, 'tag', '--points-at', 'HEAD')).toBe('');
+    expect(existsSync(join(home, 'gh-argv'))).toBe(false);
+  });
+
+  it('W26-R9: re-running only the failed publish job — a fresh clone receives the same hand-over and publishes the same tag', () => {
+    const home = mkTmp('ccrc-relmain-w26r9-');
+    const { handed, digest } = buildHalf(home);
+    const first = publishClone(home);
+    expect(receive(first, home, handed, 'v0.0.2', digest).code).toBe(0);
+    const q1 = run(first, home, ['publish', '--out', 'release-out'], 1, { CCRC_BUNDLE_PATH: plantBundle(home) });
+    expect(q1.code).toBe(1);
+    expect(q1.stderr).toMatch(/deleting tag v0\.0\.2 from origin/);
+    expect(originTags(home)).toEqual(['v0.0.1']);
+    const second = publishClone(home, 'publish-rerun');
+    const r = receive(second, home, handed, 'v0.0.2', digest);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain(RECEIVED('v0.0.2', digest));
+    const q2 = run(second, home, ['publish', '--out', 'release-out'], 0, { CCRC_BUNDLE_PATH: plantBundle(home) });
+    expect(q2.code, q2.stderr).toBe(0);
+    expect(originTags(home).filter((t) => t === 'v0.0.2')).toEqual(['v0.0.2']);
+    expect(releaseCreates(home)).toHaveLength(2);
+    expect(git(second, 'tag', '--points-at', 'HEAD')).toBe('v0.0.2');
+  });
 });
 
 describe('release-main.sh: source pins', () => {
@@ -1213,5 +1457,88 @@ describe('release-main.sh: source pins', () => {
     const req = [...s.matchAll(/require\('([^']+)'\)/g)].map((m) => m[1]).sort();
     expect(req).toEqual(['node:crypto', 'node:fs', 'node:path']);
     expect(s).toContain('fingerprint() { node -e "$FP_JS" "$1" | LC_ALL=C sort; }');
+  });
+  // W26-P1 scans each write-job arm's body AND the body of every function of
+  // release-main.sh that the arm calls, transitively, an unquoted `trap`
+  // handler included (review 886's F7): a helper the arm reaches runs in the
+  // write job too. A call is a defined name as a word in a body's code, which is
+  // the body with its comments and quoted text removed, keeping what a `$( … )`
+  // runs inside double quotes: so `trap cleanup EXIT` counts, and a name inside
+  // a message ("re-run prepare") does not. So a quoted handler
+  // (`trap 'cleanup' EXIT`), an `eval` string and a `bash -c` string are not
+  // followed. A one-line function (`die() { …; }`) is a body too. The
+  // assertions read the bodies as written, comments and strings included.
+  const defined = (): string[] => [...src().matchAll(/^([a-z_]+)\(\) \{/gm)].map((m) => m[1]!);
+  const bodyOf = (name: string): string =>
+    fn(name) || (new RegExp(`^${name}\\(\\) \\{ .*\\}$`, 'm').exec(src())?.[0] ?? '');
+  const shellCode = (text: string): string => {
+    let out = '';
+    const frames: { dq: boolean; depth: number }[] = [{ dq: false, depth: 0 }];
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i]!;
+      const top = frames[frames.length - 1]!;
+      if (c === '\\') { i++; continue; }
+      if (c === '$' && text[i + 1] === '(') { frames.push({ dq: false, depth: 0 }); out += ' '; i++; continue; }
+      if (top.dq) {
+        if (c === '"') frames.pop();
+        else if (c === '\n') out += c;
+        continue;
+      }
+      if (c === '"') { frames.push({ dq: true, depth: 0 }); continue; }
+      if (c === "'") { const j = text.indexOf("'", i + 1); i = j < 0 ? text.length : j; continue; }
+      if (c === '#' && (i === 0 || /\s/.test(text[i - 1]!))) { const j = text.indexOf('\n', i); i = j < 0 ? text.length : j - 1; continue; }
+      if (c === '(') top.depth++;
+      if (c === ')') {
+        if (top.depth > 0) top.depth--;
+        else if (frames.length > 1) { frames.pop(); out += ' '; continue; }
+      }
+      out += c;
+    }
+    return out;
+  };
+  const reached = (arm: string): string[] => {
+    const names = defined();
+    const seen = [arm];
+    for (let k = 0; k < seen.length; k++) {
+      const code = shellCode(bodyOf(seen[k]!).replace(/^[a-z_]+\(\) \{/, ''));
+      for (const n of names) if (!seen.includes(n) && new RegExp(`\\b${n}\\b`).test(code)) seen.push(n);
+    }
+    return seen;
+  };
+  it('W26-P1: the call closure reads calls, not words: a name in a message or a comment is not a call', () => {
+    expect(shellCode('a "x $(b "y" | c) z" # d\ne \'f\' "g"')).not.toMatch(/\b[dfgxyz]\b/);
+    expect(shellCode('a "x $(b "y" | c) z" # d\ne \'f\' "g"')).toMatch(/\ba\b[\s\S]*\bb\b[\s\S]*\bc\b[\s\S]*\be\b/);
+    expect(defined().length, 'release-main.sh\'s functions were not found').toBeGreaterThan(10);
+    for (const n of defined()) expect(bodyOf(n).length, `${n}'s body was not found`).toBeGreaterThan(20);
+  });
+  it('W26-P1: receive and every function it calls run no gh, no token, no builder, no install and no tar; receive verifies once, and shares compare\'s state writer (D-6656)', () => {
+    const body = fn('receive');
+    expect(body.length, 'receive\'s body was not found').toBeGreaterThan(200);
+    const closure = reached('receive');
+    expect(closure, 'receive\'s closure reaches its helpers').toEqual(expect.arrayContaining(['die', 'derive_tags', 'newest', 'record_release']));
+    const all = closure.map(bodyOf).join('\n');
+    expect(all).not.toContain('gh ');
+    expect(all).not.toContain('GH_TOKEN');
+    expect(all).not.toContain('build-release');
+    expect(all).not.toContain('npm');
+    expect(all).not.toContain('tar ');
+    expect(body.match(/release-artifact\.sh" verify/g) ?? []).toHaveLength(1);
+    expect(fn('record_release')).toContain("printf 'built true\\ntag %s\\nhead %s\\n'");
+    expect(fn('compare')).toContain('record_release "$tag" "$head"');
+    expect(body).toContain('record_release "$tag" "$head"');
+  });
+  // D-6729 (review 871's F12): publish runs in the write job too, so neither
+  // it nor anything it calls, its `trap cleanup EXIT` handler included,
+  // reaches a builder, an install or tar.
+  it('W26-P1: publish, the write job\'s other arm, and every function it calls run no builder, no install and no tar', () => {
+    const body = fn('publish');
+    expect(body.length, 'publish\'s body was not found').toBeGreaterThan(200);
+    expect(body).toContain('gh release create "$tag"');
+    const closure = reached('publish');
+    expect(closure, 'publish\'s closure reaches its helpers and its trap handler').toEqual(expect.arrayContaining(['die', 'read_state', 'cleanup']));
+    const all = closure.map(bodyOf).join('\n');
+    expect(all).not.toContain('build-release');
+    expect(all).not.toContain('npm');
+    expect(all).not.toContain('tar ');
   });
 });

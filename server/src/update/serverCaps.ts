@@ -21,9 +21,8 @@ import type { WriteProjectionResult } from './project.js';
 /** The file's mode: the update-intent projection's, beside it in ~/.ccrc. */
 export const SERVER_CAPS_FILE_MODE = 0o600;
 
-/** The server's own beat: once a minute, a third of `SERVER_CAPS_LEASE_S`, so one missed write never turns an arm
- *  off. The fleet node's writer (`ccd-update-sync.timer`, `OnUnitActiveSec=60s`) keeps the same period. */
-export const SERVER_CAPS_WRITE_MS = 60_000;
+/** The server's own beat: declared in `laneSchedule.ts` with the watcher's other cadences (D-5862) and re-exported here. */
+export { SERVER_CAPS_WRITE_MS } from '../laneSchedule.js';
 
 /** `writeOwnProjection`'s result shape: `code` is the fs errno when the failure carries one, the stable half a caller
  *  dedupes warnings on (never `detail`, whose tmp path is unique per attempt). A word the grammar refuses is

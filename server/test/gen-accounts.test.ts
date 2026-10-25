@@ -219,6 +219,23 @@ const EXHAUSTED_HUE_ROSTER = {
   ],
 };
 
+/** Two codex lanes beside an upstream account: the only shape that reaches
+ *  `_ccrc_auth_dir`'s arms (codex-bridge Stage 1, Task 10). `parseRoster` nests
+ *  `authDir` under `exec` and `rosterFromJson` flattens it beside `execKind`, so
+ *  an emitter that reads one shape only emits two different files. */
+const CODEX_LANES_ROSTER = {
+  version: 1,
+  accounts: [
+    { id: 'up', label: 'Up', configDirSuffix: '.up', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'codex-a', label: 'Codex A', configDirSuffix: '.claude-codex-a',
+      exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir: '.local/share/ccrc/codex/codex-a' },
+      homeAble: false, hue: 'violet', telemetry: 'codex' },
+    { id: 'codex-b', label: 'Codex B', configDirSuffix: '.claude-codex-b',
+      exec: { kind: 'codex', provider: 'openai', proxyPort: 45012, litellmPort: 45013, authDir: '.local/share/ccrc/codex/codex-b' },
+      homeAble: false, hue: 'blue', telemetry: 'codex' },
+  ],
+};
+
 const SHIPPED = ['accounts.default.json'] as const;
 
 describe('gen-accounts.mjs agrees with the TypeScript pipeline it cannot import', () => {
@@ -241,6 +258,7 @@ describe('gen-accounts.mjs agrees with the TypeScript pipeline it cannot import'
     ['seven hueless accounts against six hues', OVERFLOW_HUE_ROSTER],
     ['all six hues claimed, with two accounts still needing one', EXHAUSTED_HUE_ROSTER],
     ['ids that are strict prefixes of one another, two of them tied on length', PREFIX_COLLISION_ROSTER],
+    ['two codex lanes, each with an authDir', CODEX_LANES_ROSTER],
   ] as const)('%s: stdout is byte-identical to markGenerated(generateAccountsSh(parseRoster(json)))', (_label, spec) => {
     const r = runOn(spec);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);

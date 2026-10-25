@@ -1618,7 +1618,9 @@ export function producerOfCopy(rows, summaryIndex) {
  *  value layer's sources. The other half, every account's declared
  *  `exec.secretsFile`, arrives at runtime from the roster (the shim's
  *  `--secrets`), so no account list is in source. `exec.authDir` is never
- *  named: nothing in ccrc opens it.
+ *  named here, because an authDir is per-row roster data: the roster half
+ *  brings each codex lane's credential and checkpoint, which the shim asks the
+ *  auth library for (`secret-files`; codex-bridge Stage 1, Task 10).
  *  D-4205 D-4201 */
 export const SECRET_SOURCES = Object.freeze([
   Object.freeze({ glob: '.cc-secrets/*' }),
@@ -3700,7 +3702,7 @@ export function decidePassLive(marker, identityNow) {
 //      places the shim and ends with doctor before the timer's first
 //      2-minute tick, so every fresh fleet/both install would end with a
 //      WARN, and "a fresh install ends green" is an operator ruling
-//      (ccrc-install.test.ts pins it). So within SHIM_GRACE_MS of the shim's
+//      (ccrc-install-*.test.ts pins it). So within SHIM_GRACE_MS of the shim's
 //      mtime, and ONLY while no tick has run yet (exit 6, or a bound store
 //      with no ticks row), the answer is PASS `first-tick-pending` and
 //      nothing else is judged. A box that has ticked is judged by its ticks
@@ -3912,7 +3914,10 @@ function remedyFor(word, h) {
         ? `free space on the filesystem holding ${h.dbPath} until more than ${h.thresholdBytes + h.sizeBytes} bytes are free (the snapshot needs the store's size above the floor)`
         : HEALTH_REMEDIES['migration-refused'];
     case 'redact-source-unreadable':
-      return `make ${h.redactUnreadable.join(', ')} readable by this user; a value never yet seen in them goes unredacted meanwhile`;
+      // A codex lane's authDir is listed here when the tree's auth library could not name its secret files
+      // (codex-bridge Stage 1, Task 10): no library, no python3 or a failed secret-files run. Only the shim's stderr
+      // line says which, and it goes to the sweep's journal, so the remedy points there (fix round 1, M2).
+      return `make ${h.redactUnreadable.join(', ')} readable by this user, or, for a codex lane's auth directory, check that ~/ccrc/ccd/ccgpt-auth.py and python3 are present (the sweep's log names which: ${SWEEP_LOG}); a value never yet seen in them goes unredacted meanwhile`;
     case 'retention-unmeasured':
       return `make cleanupPeriodDays readable in the settings.json of ${h.retentionUnmeasured.join(', ')}`;
     case 'retention-lowered':

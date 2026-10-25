@@ -367,15 +367,15 @@ const rig = async (verbStdout: string) => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
   const audit = JSON.stringify({ id: ID, mode: 'reclaim', childOf: runId, verdict: 'reclaimable', detail: '', token: TOK });
   const run: Runner = async (_cmd, args) => {
-    if (args[0] === 'ws-audit') return { code: 0, stdout: audit, stderr: '' };
-    if (args[0] === 'ws-reclaim') return { code: 1, stdout: verbStdout, stderr: '' };
-    return { code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
+    if (args[0] === 'ws-audit') return { ran: true, code: 0, stdout: audit, stderr: '' };
+    if (args[0] === 'ws-reclaim') return { ran: true, code: 1, stdout: verbStdout, stderr: '' };
+    return { ran: true, code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
   };
   const base = testDeps(home, run);
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
   const deps: ChildReclaimDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd, fleetState: CAPS,
-    presence: { isVisible: () => false }, notifyLog };
+    viewers: { isVisible: () => false }, notifyLog };
   // Close's request: `licenceGeneration` none, so the executor's generation re-read is skipped.
   const req: ChildReclaimRequest = { sessionId: ID, runId, trigger: 'close' as const, deferExpired: false,
     deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'none' } };

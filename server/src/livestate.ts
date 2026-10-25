@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FleetIO } from './io.js';
 import type { SessionStatus } from '../../shared/api.js';
+import { turnSays, turnWordOf } from './sessionReading.js';
 import { CLAUDE_MIN_BUILD, compareClaudeVersions, isClaudeVersion } from '../../shared/claudeVersion.js';
 
 export interface LiveState {
@@ -41,8 +42,8 @@ export interface LiveState {
  *
  * `waiting` COLLAPSES TO BUSY HERE, DELIBERATELY, and the fix for it is not
  * in this function. Its readers are `fleet.ts`'s `assembleFleet` (the fleet
- * card) and `liveStatus` (the interrupt route) and the per-session socket (the
- * chat header), and none of them may paint a human-blocked session as at rest.
+ * card) and the per-session socket (the chat header); the interrupt route
+ * reads the RAW word through `turnverdict.ts`, and none of them may paint a human-blocked session as at rest.
  * The mail delivery gate (`watch.ts`) no longer reads this collapse: it takes
  * the RAW word through `mailTurnIdle` (`turnidle.ts`), which delivers on `idle`
  * and on `shell` and refuses `waiting` by its own rule. What `waiting` actually
@@ -61,7 +62,11 @@ export interface LiveState {
  * A status we don't recognise is far likelier to be new work than new rest.
  */
 export function liveSessionStatus(status: string): SessionStatus {
-  return status === 'idle' ? 'idle' : 'busy';
+  // `keystroke` ON PURPOSE, not a display policy of its own: `SessionStatus` is not only the badge, it still gates
+  // acts (the mail delivery gate and the per-session socket, `livestate.test.ts`), and its direction is keystroke's,
+  // only `idle` is rest. `livestate.test.ts` pins every word's answer here directly, so an edit to the keystroke
+  // policy that moved this collapse reds there instead of changing the fleet badge silently.
+  return turnSays('keystroke', turnWordOf(status)) === 'rest' ? 'idle' : 'busy';
 }
 
 /**
@@ -131,9 +136,9 @@ export function liveStatusCoversDelegation(version: string | null): boolean {
  * `not-idle` and delivers only on an affirmative `idle` or `shell`, so an
  * unreadable file already fails shut there through the null.
  * `commands.ts` wants a cwd and has a registry
- * fallback for not having one. And `fleet.ts`'s `liveStatus` answers `'idle'`
- * on this same failure ON PURPOSE: its sole consumer is the interrupt route's
- * `… === 'busy'`, which REFUSES on idle, so there the reassuring word is the
+ * fallback for not having one. And the interrupt route's verdict
+ * (`turnverdict.ts`'s `interruptVerdict`) reads this same failure as `idle` ON
+ * PURPOSE (D-5236): it REFUSES on an unread word, so there the reassuring word is the
  * fail-shut one and "fail toward busy" would GRANT interrupts on a read that
  * measured nothing. Only the two DISPLAY surfaces — the fleet card and the
  * chat header — had the polarity the wrong way round, and they take the
@@ -228,8 +233,8 @@ function parseLiveBody(content: string): any {
 
 /**
  * The folded form, unchanged in signature and in every answer it gives: null
- * for every condition the measured read tells apart. Its three callers —
- * `fleet.ts`'s `liveStatus`, `commands.ts`'s cwd lookup, and `watch.ts`'s mail
+ * for every condition the measured read tells apart. Its callers —
+ * `commands.ts`'s cwd lookup and `watch.ts`'s mail
  * gate (one read, handed to `mailTurnIdle`, which fails shut on the null) —
  * are each indifferent to the
  * distinction (see `LiveStateRead` for why, one by one), and widening them to

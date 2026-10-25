@@ -45,6 +45,23 @@ export function useFrameSet(): SkinSet | null {
 /** The skip link's target: the one main landmark. */
 export const CONTENT_ID = 'content';
 
+/** The fleet column's landmark (`FleetScreen`'s `<section aria-label="Fleet">`, `tabIndex={-1}`): the one landmark a
+ *  phone's fleet view shows, where the main landmark is hidden. */
+export const FLEET_ID = 'fleet';
+
+/** Move focus to a landmark that is on screen, for a control that leaves the page and must not drop focus to the body.
+ *  The phone swap hides the main landmark on the fleet view (`display: none`), and `focus()` on an element that is not
+ *  rendered does nothing, so the main landmark is tried first and, when it did not take the focus, the fleet column's
+ *  is. Decided by what the browser accepted, never by a skin id, a width or a media query. Without a scroll, as the
+ *  frame's switch restore focuses main (`skipToContent`, the skip link's, passes no `preventScroll`): a landmark is a
+ *  page region, not a control to bring into view. */
+export function focusShownLandmark(): void {
+  const main = document.getElementById(CONTENT_ID);
+  main?.focus({ preventScroll: true });
+  if (main !== null && document.activeElement === main) return;
+  document.getElementById(FLEET_ID)?.focus({ preventScroll: true });
+}
+
 /** Move focus to the main landmark. Not left to the fragment: a hash on the URL would reach the router's
  *  `popstate`, and a fragment jump does not move focus in every browser. */
 function skipToContent(e: MouseEvent<HTMLAnchorElement>): void {
@@ -82,7 +99,10 @@ export function ShellFrame({ set, view, detailRef, children }: ShellFrameProps):
   }, [set]);
   return (
     <SkinSetProvider set={set}>
-      <div className={`app-shell ${set.frameClass}`} data-view={view}>
+      {/* `data-inspector` is a PART FACT, never a skin-id comparison (W2 desk polish T2e, D-6335): `placed` when the set
+          has an Inspector part, `none` when it does not. A skin's sheet keys its inspector track on it, so a set that
+          places no inspector draws no empty column for one (Instrument's 320px fourth track at >=1600, which S12 fills). */}
+      <div className={`app-shell ${set.frameClass}`} data-view={view} data-inspector={Inspector !== null ? 'placed' : 'none'}>
         <a key="skip" className="skip-link" href={`#${CONTENT_ID}`} onClick={skipToContent}>
           Skip to content
         </a>

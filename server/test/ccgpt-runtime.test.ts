@@ -3,7 +3,7 @@
 // (spec §5.2; Plan 2b-2 Task 3: D-3480, D-3481, D-3487,
 // D-3484).
 //
-// FIVE LAYERS, because no CI box has litellm and none may reach an index:
+// SIX LAYERS, because no CI box has litellm and none may reach an index:
 //  (a) THE BUILDER'S DECISIONS — the real script, over a scripted fake runtime
 //      python planted by a fake `python3 -m venv`. pip, the probe's verdict and
 //      the version re-measure are scripted; every `-I -c` call (hash, stamp,
@@ -26,13 +26,17 @@
 //      litellm), and its hook against an inline fake of the bridge's module
 //      written into a mkTmp tree, never into PYSTUB_DIR; stdlib python3 only.
 //      Whether it fixes the REAL bridge is layer (c)'s question.
+//  (f) THE PATCH'S AUTHENTICATOR PART (codex-bridge Stage 1, Task 6) — in a REAL
+//      venv over a stand-in authenticator written into a mkTmp tree, with the
+//      REAL auth library and a fake token endpoint; and the probe's auth
+//      scenario over that venv.
 //
 // CONTAINMENT: every HOME is `mkTmp`; `ghContainedEnv` poisons `gh`; the fake
 // `python3` answers ONLY `-m venv <path>` (the install suite's positional
 // contract) and refuses every other argv at 90; nothing here reaches a network,
 // a user manager or the real ~/.ccrc.
 import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync,
@@ -44,6 +48,9 @@ import { mkTmp } from './tmpHelpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { pythonOrSkip, runPy, PYSTUB_DIR } from './ccgptHarness.js';
+import {
+  ACCOUNT_CLAIM, AUTH_LIB, CLOSED_AUTH_BASE, FIXTURE_ACCOUNT_ID, fakeAuthServer, plantBackendCredential, syntheticJwt,
+} from './codexAuthFixture.js';
 import { renderLitellmConfig } from '../../shared/litellm.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -231,7 +238,7 @@ const FAKE_RUNTIME_PYTHON = [
 ].join('\n') + '\n';
 
 /** The install suite's OWN venv python, byte for byte in behaviour: records
- *  its argv, prints nothing, exits 0 for anything (`ccrc-install.test.ts`,
+ *  its argv, prints nothing, exits 0 for anything (`ccrc-install-*.test.ts`,
  *  the `-m venv` arm of its `python3` stub). m-spine H5's vacuous pass. */
 const STOCK_VENV_PYTHON = '#!/bin/sh\necho "$@" >> "$HOME/venv-python-calls"\nexit 0\n';
 
@@ -1256,7 +1263,8 @@ function mutatedPatch(from: string, to: string): Buffer {
  *  copy, and this directory's `sitecustomize.py` imports it for an interpreter
  *  with no `.pth` (PYTHONPATH also precedes the stdlib's own sitecustomize, the
  *  reason M2's works). So the copy written here is the only patch that ever
- *  runs: an EMPTY one (M7) shadows any installed patch. `before` is
+ *  runs: M7's copy switches off only the stream part and still shadows any
+ *  installed patch (D-6668). `before` is
  *  sitecustomize text run AHEAD of the import (M2's mutation), so the patch's
  *  finder lands first on sys.meta_path and wraps whatever loader follows it. */
 function patchSite(home: string, patch: Buffer = patchSource(), before = ''): string {
@@ -1319,11 +1327,14 @@ describe.skipIf(!LITELLM_PY)('the behaviour probe against a real litellm (CCRC_T
     expect(r.stdout).toMatch(/^behaviour_probe: FAIL stream-deltas-not-duplicated: /m);
   }, 180_000);
 
-  it('M7: no patch at all FAILS stream-tool-args-kept — stock LiteLLM drops a no-delta stream\'s arguments', () => {
+  it('M7: a patch with no stream part FAILS stream-tool-args-kept — stock LiteLLM drops a no-delta stream\'s arguments', () => {
     const home = mkTmp('ccgpt-rt-2b-m7-');
-    // An EMPTY patch module on PYTHONPATH, not no PYTHONPATH: it shadows any patch
-    // the borrowed interpreter's own generation installed (see `patchSite`).
-    const r = runRealProbe(home, probeSource(), patchSite(home, Buffer.alloc(0)));
+    // The stream part alone switched off, never the whole module: since codex-bridge
+    // Stage 1 the probe's auth scenario runs first and would FAIL an empty patch as
+    // auth-patch-not-applied. The copy still shadows any patch the borrowed
+    // interpreter's own generation installed (see `patchSite`).
+    const r = runRealProbe(home, probeSource(), patchSite(home, mutatedPatch(
+      '    cls = getattr(module, _CLASS, None)\n', '    cls = None\n')));
     expect(r.status, r.stdout + r.stderr).toBe(1);
     expect(r.stdout).toMatch(/^behaviour_probe: FAIL stream-tool-args-kept: /m);
   }, 180_000);
@@ -1766,5 +1777,585 @@ describe.skipIf(!PY)('ccrc_litellm_patch: loaded by its .pth under -I, lazily, a
     expect(out['patchedBefore']).toBe(false);
     expect(out['patched'], 'a bridge module loaded before the patch was never patched').toBe(true);
     expect(out['noDelta']).toEqual([hookAdded(hookFc('')), hookArgsDelta()]);
+  });
+});
+
+// ── layer (f): the patch's authenticator part (codex-bridge Stage 1, Task 6; D-6372) ──
+//
+// A REAL `python3 -m venv` per case, whose site-packages hold the patch's `.pth` and a
+// stand-in `litellm` package written into a mkTmp tree here, never into PYSTUB_DIR: an
+// authenticator with LiteLLM's five names, `token_dir`, `auth_file` and its read-path
+// write-backs, recording every method it runs in `CALLS`, a `common_utils` carrying
+// `GetAccessTokenError`, and the two transformation modules the probe imports. The
+// library is the REAL `ccd/ccgpt-auth.py`, and every token request goes to
+// `fakeAuthServer` or to CLOSED_AUTH_BASE: the driver is spawned asynchronously, because a
+// synchronous child deadlocks against a server on this event loop.
+
+/** The authenticator's methods, by name, so a case can leave one out. */
+const STANDIN_METHODS: Record<string, string[]> = {
+  get_access_token: [
+    '    def get_access_token(self):',
+    '        CALLS.append("get_access_token")',
+    '        data = self._read_auth_file()',
+    '        if data and data.get("access_token") and not self._is_token_expired(data, data["access_token"]):',
+    '            return data["access_token"]',
+    '        if data and data.get("refresh_token"):',
+    '            CALLS.append("refresh")',
+    '            return "stand-in-refreshed"',
+    '        token = self._wait_for_access_token(1)',
+    '        if token:',
+    '            return token',
+    '        return self._login_device_code()["access_token"]',
+  ],
+  get_account_id: [
+    '    def get_account_id(self):',
+    '        CALLS.append("get_account_id")',
+    '        data = self._read_auth_file()',
+    '        if not data:',
+    '            return None',
+    '        if data.get("account_id"):',
+    '            return data["account_id"]',
+    '        self._write_auth_file(dict(data, account_id="stand-in-derived"))',
+    '        return "stand-in-derived"',
+  ],
+  _read_auth_file: [
+    '    def _read_auth_file(self):',
+    '        CALLS.append("read")',
+    '        try:',
+    '            with open(self.auth_file) as f:',
+    '                return json.load(f)',
+    '        except (OSError, ValueError):',
+    '            return None',
+  ],
+  _write_auth_file: [
+    '    def _write_auth_file(self, data):',
+    '        CALLS.append("write")',
+    '        with open(self.auth_file, "w") as f:',
+    '            json.dump(data, f)',
+  ],
+  // LiteLLM's own expiry rule writes a derived `expires_at` back on a read.
+  _is_token_expired: [
+    '    def _is_token_expired(self, data, token):',
+    '        exp = data.get("expires_at")',
+    '        if isinstance(exp, (int, float)):',
+    '            return time.time() >= exp - 60',
+    '        self._write_auth_file(dict(data, expires_at=1))',
+    '        return True',
+  ],
+  _wait_for_access_token: [
+    '    def _wait_for_access_token(self, timeout):',
+    '        CALLS.append("wait")',
+    '        return None',
+  ],
+  // LiteLLM's device flow: a network attempt (the probe's audit hook counts it), then
+  // the marker it writes into the file.
+  _login_device_code: [
+    '    def _login_device_code(self):',
+    '        CALLS.append("device")',
+    '        try:',
+    '            socket.create_connection(("127.0.0.1", 1), timeout=1).close()',
+    '        except OSError:',
+    '            pass',
+    '        self._write_auth_file({"device_code_requested_at": 1})',
+    '        raise GetAccessTokenError(status_code=599, message="the stand-in device flow ran")',
+  ],
+};
+
+function standinAuthenticator(omit?: string): string {
+  if (omit !== undefined && !(omit in STANDIN_METHODS)) throw new Error(`standinAuthenticator: no method ${omit}`);
+  return [
+    'import json, os, socket, time',
+    'from .common_utils import GetAccessTokenError',
+    '',
+    'CALLS = []',
+    '',
+    '',
+    'class Authenticator:',
+    '    def __init__(self):',
+    '        self.token_dir = os.getenv("CHATGPT_TOKEN_DIR", os.path.expanduser("~/.config/litellm/chatgpt"))',
+    '        self.auth_file = os.path.join(self.token_dir, os.getenv("CHATGPT_AUTH_FILE", "auth.json"))',
+    '        if not os.path.exists(self.token_dir):',
+    '            os.makedirs(self.token_dir, exist_ok=True)',
+    '',
+    ...Object.entries(STANDIN_METHODS).filter(([n]) => n !== omit).flatMap(([, body]) => [...body, '']),
+  ].join('\n');
+}
+
+const STANDIN_COMMON_PY = [
+  'class GetAccessTokenError(Exception):',
+  '    def __init__(self, status_code, message, **kwargs):',
+  '        super().__init__(message)',
+  '        self.status_code = status_code',
+  '        self.message = message',
+].join('\n') + '\n';
+
+/** Runs ops against the stand-in's Authenticator in one interpreter and prints one JSON
+ *  line: which of the five names carry `_ccrc_auth`, each op's answer or error, and
+ *  the stand-in's own CALLS. `replant` renames `cfg.replant` over the token dir's
+ *  credential, as a sign-in's atomic commit replaces it, between two ops of the SAME
+ *  process. */
+const AUTH_OPS_PY = [
+  'import json, os, sys, threading',
+  'sys.dont_write_bytecode = True',
+  'cfg = json.loads(sys.argv[1])',
+  'from litellm.llms.chatgpt import authenticator as m',
+  'A = m.Authenticator',
+  'NAMES = ("get_access_token", "get_account_id", "_login_device_code", "_wait_for_access_token", "_write_auth_file")',
+  'out = {"marks": [n for n in NAMES if getattr(getattr(A, n, None), "_ccrc_auth", False) is True], "ops": []}',
+  '',
+  'def call(fn):',
+  '    try:',
+  '        return {"ok": fn()}',
+  '    except Exception as e:',
+  '        return {"error": type(e).__name__, "status": getattr(e, "status_code", None), "message": str(e)}',
+  '',
+  'def threads():',
+  '    barrier, res = threading.Barrier(2), [None, None]',
+  '    def go(i):',
+  '        a = A()',
+  '        barrier.wait()',
+  '        res[i] = call(a.get_access_token)',
+  '    ts = [threading.Thread(target=go, args=(i,)) for i in range(2)]',
+  '    for t in ts:',
+  '        t.start()',
+  '    for t in ts:',
+  '        t.join()',
+  '    return {"threads": res}',
+  '',
+  'OPS = {',
+  '    "token": lambda: call(lambda: A().get_access_token()),',
+  '    "account": lambda: call(lambda: A().get_account_id()),',
+  '    "device": lambda: call(lambda: A()._login_device_code()),',
+  '    "wait": lambda: call(lambda: A()._wait_for_access_token(1)),',
+  '    "write": lambda: call(lambda: A()._write_auth_file({"access_token": cfg.get("secret", "driver-write")})),',
+  '    "expiry-writeback": lambda: call(lambda: A()._is_token_expired({"access_token": "x"}, "x")),',
+  '    "threads": threads,',
+  '    "replant": lambda: call(lambda: os.replace(cfg["replant"], os.path.join(os.environ["CHATGPT_TOKEN_DIR"], "auth.json"))),',
+  '}',
+  'for op in cfg["ops"]:',
+  '    out["ops"].append(OPS[op]())',
+  'out["calls"] = list(m.CALLS)',
+  'print(json.dumps(out))',
+].join('\n') + '\n';
+
+/** A real venv in `home` whose one site-packages holds `patch` (default: the shipped
+ *  patch-source) beside its `.pth`, and the stand-in litellm package, `omit` left out of
+ *  its authenticator. Returns the venv's interpreter, or null when this python3 has no
+ *  venv module (the case then skips). */
+function standinVenv(home: string, o: { patch?: Buffer; omit?: string } = {}): string | null {
+  const venv = path.join(home, 'venv');
+  const vars = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home };
+  const hasVenv = spawnSync(PY!, ['-c', 'import venv'], { cwd: home, env: vars, encoding: 'utf8', timeout: 60_000 });
+  if (hasVenv.status === 1 && /No module named/.test(String(hasVenv.stderr))) return null;
+  expect(hasVenv.status, String(hasVenv.stderr)).toBe(0);
+  const mk = spawnSync(PY!, ['-m', 'venv', '--without-pip', venv], { cwd: home, env: vars, encoding: 'utf8', timeout: 60_000 });
+  expect(mk.status, String(mk.stderr)).toBe(0);
+  const lib = path.join(venv, 'lib');
+  const sites = readdirSync(lib).filter((n) => n.startsWith('python3'))
+    .map((n) => path.join(lib, n, 'site-packages')).filter((d) => existsSync(d));
+  expect(sites, 'the venv has not exactly one lib/python3*/site-packages').toHaveLength(1);
+  const site = sites[0]!;
+  writeFileSync(path.join(site, 'ccrc_litellm_patch.py'), o.patch ?? patchSource());
+  writeFileSync(path.join(site, 'ccrc_litellm_patch.pth'), PTH_LINE);
+  const pkg = path.join(site, 'litellm', 'llms', 'chatgpt');
+  for (const d of ['chat', 'responses']) mkdirSync(path.join(pkg, d), { recursive: true });
+  for (const d of [path.join(site, 'litellm'), path.join(site, 'litellm', 'llms'), pkg,
+    path.join(pkg, 'chat'), path.join(pkg, 'responses')]) writeFileSync(path.join(d, '__init__.py'), '');
+  writeFileSync(path.join(pkg, 'common_utils.py'), STANDIN_COMMON_PY);
+  writeFileSync(path.join(pkg, 'authenticator.py'), standinAuthenticator(o.omit));
+  writeFileSync(path.join(pkg, 'chat', 'transformation.py'), 'class ChatGPTConfig:\n    pass\n');
+  writeFileSync(path.join(pkg, 'responses', 'transformation.py'), 'class ChatGPTResponsesAPIConfig:\n    pass\n');
+  return path.join(venv, 'bin', 'python');
+}
+
+type OpAnswer = { ok?: unknown; error?: string; status?: number | null; message?: string; threads?: OpAnswer[] };
+type OpsOut = { marks: string[]; ops: OpAnswer[]; calls: string[] };
+
+/** `py -I <driver> <cfg>`, spawned ASYNCHRONOUSLY in the fixture `home` (its cwd and
+ *  HOME), with an environment built from scratch: CCRC_CODEX_AUTH_BASE is
+ *  CLOSED_AUTH_BASE unless `vars` names a non-empty one, so no run can reach a live
+ *  endpoint. */
+function runOps(py: string, home: string, cfg: object, vars: Record<string, string> = {}):
+  Promise<{ status: number | null; out: OpsOut | null; stdout: string; stderr: string }> {
+  const file = path.join(home, 'ops.py');
+  writeFileSync(file, AUTH_OPS_PY);
+  const named = vars.CCRC_CODEX_AUTH_BASE;
+  const tmp = path.join(home, 'tmp');
+  mkdirSync(tmp, { recursive: true });
+  const childVars: Record<string, string> = {
+    PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: tmp, ...vars,
+    CCRC_CODEX_AUTH_BASE: typeof named === 'string' && named !== '' ? named : CLOSED_AUTH_BASE, HOME: home,
+  };
+  return new Promise((resolve, reject) => {
+    const c = spawn(py, ['-I', file, JSON.stringify(cfg)], { cwd: home, env: childVars, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => c.kill('SIGKILL'), 15_000);
+    c.stdout.on('data', (x: Buffer) => { stdout += x.toString(); });
+    c.stderr.on('data', (x: Buffer) => { stderr += x.toString(); });
+    c.once('error', (e) => { clearTimeout(timer); reject(e); });
+    c.once('close', (status) => {
+      clearTimeout(timer);
+      let out: OpsOut | null = null;
+      try { out = JSON.parse(stdout) as OpsOut; } catch { out = null; }
+      resolve({ status, out, stdout, stderr });
+    });
+  });
+}
+
+const AUTH_NAMES = ['get_access_token', 'get_account_id', '_login_device_code', '_wait_for_access_token', '_write_auth_file'];
+/** The file's bytes and mtime, to prove nothing wrote it. */
+const fileState = (f: string): { bytes: string; mtimeMs: number } =>
+  ({ bytes: readFileSync(f, 'utf8'), mtimeMs: lstatSync(f).mtimeMs });
+/** A token answer carrying a fresh access token for the fixture's account. */
+function freshAnswer(): { access: string; body: Record<string, unknown> } {
+  const now = Math.floor(Date.now() / 1000);
+  const claim = { [ACCOUNT_CLAIM]: { chatgpt_account_id: FIXTURE_ACCOUNT_ID } };
+  const access = syntheticJwt({ exp: now + 3600, iat: now, ...claim });
+  return {
+    access,
+    body: { access_token: access, refresh_token: 'rtok-fixture-rotated', id_token: syntheticJwt({ exp: now + 3600, ...claim }) },
+  };
+}
+/** A library whose import raises with a planted secret as its argument: a warning that
+ *  formatted the exception's arguments would print it. */
+function brokenLibrary(home: string, secret: string): string {
+  const f = path.join(home, 'broken-ccgpt-auth.py');
+  writeFileSync(f, `raise RuntimeError(${JSON.stringify(secret)})\n`);
+  return f;
+}
+
+describe.skipIf(!PY)('the patch\'s authenticator part (codex-bridge Stage 1)', () => {
+  it('inert without CCRC_CODEX_AUTH_LIB: the stand-in\'s own methods run', async (ctx) => {
+    const home = mkTmp('ccgpt-rt-auth-inert-');
+    const py = standinVenv(home);
+    if (py === null) { ctx.skip(); return; }
+    const auth = path.join(home, 'auth');
+    const planted = plantBackendCredential(auth);
+    const r = await runOps(py, home, { ops: ['token', 'device'] }, { CHATGPT_TOKEN_DIR: auth });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.out!.marks).toEqual([]);
+    expect(r.out!.ops[0]).toEqual({ ok: planted.access });
+    expect(r.out!.ops[1]).toMatchObject({ error: 'GetAccessTokenError', status: 599 });
+    expect(r.out!.calls).toEqual(expect.arrayContaining(['get_access_token', 'read', 'device']));
+    expect(r.stderr).toBe('');
+  });
+
+  it('with it: an expiring token is refreshed by the library, under its lock, with one request', async (ctx) => {
+    const home = mkTmp('ccgpt-rt-auth-refresh-');
+    const py = standinVenv(home);
+    if (py === null) { ctx.skip(); return; }
+    const auth = path.join(home, 'auth');
+    const planted = plantBackendCredential(auth, { expiresIn: 30 });
+    const fresh = freshAnswer();
+    const srv = await fakeAuthServer({ token: [{ status: 200, body: fresh.body }] });
+    try {
+      const r = await runOps(py, home, { ops: ['token', 'account', 'token'] },
+        { CHATGPT_TOKEN_DIR: auth, CCRC_CODEX_AUTH_LIB: AUTH_LIB, CCRC_CODEX_LANE: 'codex-a', CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.out!.marks).toEqual(AUTH_NAMES);
+      expect(r.out!.ops).toEqual([{ ok: fresh.access }, { ok: FIXTURE_ACCOUNT_ID }, { ok: fresh.access }]);
+      expect(srv.requests.map((q) => [q.path, q.form?.['grant_type'], q.form?.['refresh_token']]))
+        .toEqual([['/oauth/token', 'refresh_token', planted.refresh]]);
+      const after = JSON.parse(readFileSync(path.join(auth, 'auth.json'), 'utf8')) as Record<string, unknown>;
+      expect(after['access_token']).toBe(fresh.access);
+      expect(after['refresh_token']).toBe('rtok-fixture-rotated');
+      // The library's lock, never the credential's own inode, which the commit's rename replaces.
+      expect(existsSync(path.join(auth, 'auth.json.lock'))).toBe(true);
+      expect(r.out!.calls, 'a stand-in method ran under the patch').toEqual([]);
+      expect(r.stderr).toBe('');
+    } finally { await srv.close(); }
+  });
+
+  it('with it: two threads asking at once make one request', async (ctx) => {
+    const home = mkTmp('ccgpt-rt-auth-threads-');
+    const py = standinVenv(home);
+    if (py === null) { ctx.skip(); return; }
+    const auth = path.join(home, 'auth');
+    plantBackendCredential(auth, { expiresIn: 30 });
+    const fresh = freshAnswer();
+    // Slow enough that the second thread asks while the first one's request is in flight.
+    const srv = await fakeAuthServer({ token: [{ status: 200, body: fresh.body, delayMs: 400 }] });
+    try {
+      const r = await runOps(py, home, { ops: ['threads'] },
+        { CHATGPT_TOKEN_DIR: auth, CCRC_CODEX_AUTH_LIB: AUTH_LIB, CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.out!.ops[0]!.threads).toEqual([{ ok: fresh.access }, { ok: fresh.access }]);
+      expect(srv.requests).toHaveLength(1);
+    } finally { await srv.close(); }
+  });
+
+  it('with it: a dead token is a 401 GetAccessTokenError naming needs-signin, and no device flow starts', async (ctx) => {
+    const home = mkTmp('ccgpt-rt-auth-dead-');
+    const py = standinVenv(home);
+    if (py === null) { ctx.skip(); return; }
+    const auth = path.join(home, 'auth');
+    plantBackendCredential(auth, { expiresIn: 30 });
+    const srv = await fakeAuthServer({ token: [{ status: 400, body: { error: 'invalid_grant' } }] });
+    try {
+      const r = await runOps(py, home, { ops: ['token', 'token', 'device', 'wait'] },
+        { CHATGPT_TOKEN_DIR: auth, CCRC_CODEX_AUTH_LIB: AUTH_LIB, CCRC_CODEX_LANE: 'codex-a', CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.out!.ops).toHaveLength(4);
+      for (const a of r.out!.ops) {
+        expect(a).toMatchObject({ error: 'GetAccessTokenError', status: 401 });
+        expect(a.message).toMatch(/^needs-signin: .*run ccrc codex login codex-a$/);
+      }
+      // One request: the second call is barred by the status the first one wrote, never retried.
+      expect(srv.requests).toHaveLength(1);
+      expect(r.out!.calls, 'the stand-in\'s device flow, wait or refresh ran').toEqual([]);
+    } finally { await srv.close(); }
+  });
+
+  it('with it: LiteLLM\'s write is disabled: the stand-in\'s write-backs leave the file unchanged', async (ctx) => {
+    const home = mkTmp('ccgpt-rt-auth-write-');
+    const py = standinVenv(home);
+    if (py === null) { ctx.skip(); return; }
+    const auth = path.join(home, 'auth');
+    plantBackendCredential(auth, { storedExpiresAt: null });
+    const before = fileState(path.join(auth, 'auth.json'));
+    const r = await runOps(py, home, { ops: ['write', 'expiry-writeback', 'write'] },
+      { CHATGPT_TOKEN_DIR: auth, CCRC_CODEX_AUTH_LIB: AUTH_LIB });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.out!.ops).toEqual([{ ok: null }, { ok: true }, { ok: null }]);
+    expect(fileState(path.join(auth, 'auth.json'))).toEqual(before);
+    expect(r.out!.calls).toEqual([]);
+    // Said once, not once per write.
+    expect(r.stderr).toMatch(/^ccrc_litellm_patch: [^\n]*write[^\n]*disabled[^\n]*\n$/);
+  });
+
+  it('with it, and a library that fails to load: every token request is a 401 auth-library-absent, the stand-in\'s refresh is never called, the device flow is killed and the file is unchanged', async (ctx) => {
+    const home = mkTmp('ccgpt-rt-auth-noload-');
+    const py = standinVenv(home);
+    if (py === null) { ctx.skip(); return; }
+    const auth = path.join(home, 'auth');
+    // Expiring, so a stock refresh would be the next thing LiteLLM did.
+    const planted = plantBackendCredential(auth, { expiresIn: 30 });
+    const before = fileState(path.join(auth, 'auth.json'));
+    const broken = brokenLibrary(home, planted.refresh);
+    const srv = await fakeAuthServer({});
+    try {
+      const r = await runOps(py, home, { ops: ['token', 'token', 'account', 'device', 'wait', 'write'], secret: planted.access },
+        { CHATGPT_TOKEN_DIR: auth, CCRC_CODEX_AUTH_LIB: broken, CCRC_CODEX_LANE: 'codex-a', CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.out!.marks).toEqual(AUTH_NAMES);
+      const [t1, t2, acct, device, wait, write] = r.out!.ops;
+      for (const a of [t1!, t2!, acct!]) {
+        expect(a).toMatchObject({ error: 'GetAccessTokenError', status: 401 });
+        expect(a.message).toMatch(/^auth-library-absent: .*run ccrc update$/);
+      }
+      for (const a of [device!, wait!]) {
+        expect(a).toMatchObject({ error: 'GetAccessTokenError', status: 401 });
+        expect(a.message).toMatch(/^needs-signin: /);
+      }
+      expect(write).toEqual({ ok: null });
+      expect(r.out!.calls, 'a stand-in method ran: LiteLLM\'s own refresh was reached').toEqual([]);
+      expect(srv.requests).toEqual([]);
+      expect(fileState(path.join(auth, 'auth.json'))).toEqual(before);
+      // One line for the load, naming the path and the exception's type.
+      expect(r.stderr.split('\n').filter((l) => l.includes(broken))).toHaveLength(1);
+      expect(r.stderr).toMatch(/RuntimeError/);
+    } finally { await srv.close(); }
+  });
+
+  it('with it, and CHATGPT_AUTH_FILE naming another file: a 401 config-error, and neither file is read', async (ctx) => {
+    const home = mkTmp('ccgpt-rt-auth-authfile-');
+    const py = standinVenv(home);
+    if (py === null) { ctx.skip(); return; }
+    const auth = path.join(home, 'auth');
+    // auth.json expiring, so a library that read it would ask the endpoint.
+    plantBackendCredential(auth, { expiresIn: 30 });
+    const other = plantBackendCredential(path.join(home, 'other'));
+    writeFileSync(path.join(auth, 'other.json'), readFileSync(path.join(home, 'other', 'auth.json')));
+    const srv = await fakeAuthServer({});
+    try {
+      const r = await runOps(py, home, { ops: ['token', 'account'] },
+        { CHATGPT_TOKEN_DIR: auth, CHATGPT_AUTH_FILE: 'other.json', CCRC_CODEX_AUTH_LIB: AUTH_LIB, CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.out!.ops).toHaveLength(2);
+      for (const a of r.out!.ops) {
+        expect(a).toMatchObject({ error: 'GetAccessTokenError', status: 401 });
+        expect(a.message).toMatch(/^config-error: /);
+        expect(JSON.stringify(a)).not.toContain(other.access);
+      }
+      expect(srv.requests, 'the library read auth.json and asked the endpoint').toEqual([]);
+      expect(r.out!.calls, 'the stand-in read the other file').toEqual([]);
+    } finally { await srv.close(); }
+  });
+
+  it('with it, and a relative CHATGPT_TOKEN_DIR: a 401 config-error from both token and account, and no request', async (ctx) => {
+    const home = mkTmp('ccgpt-rt-auth-reldir-');
+    const py = standinVenv(home);
+    if (py === null) { ctx.skip(); return; }
+    // Expiring, so a library that resolved the relative dir against the cwd (the fixture
+    // home) would ask the endpoint.
+    const planted = plantBackendCredential(path.join(home, 'auth'), { expiresIn: 30 });
+    const srv = await fakeAuthServer({});
+    try {
+      const r = await runOps(py, home, { ops: ['token', 'account'] },
+        { CHATGPT_TOKEN_DIR: 'auth', CCRC_CODEX_AUTH_LIB: AUTH_LIB, CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.out!.ops).toHaveLength(2);
+      for (const a of r.out!.ops) {
+        // Never the library's ValueError escaping as a non-GetAccessTokenError.
+        expect(a).toMatchObject({ error: 'GetAccessTokenError', status: 401 });
+        // The cause named is the token dir, never CHATGPT_AUTH_FILE, which this case does not set.
+        expect(a.message).toMatch(/^config-error: this tier's token dir \(CHATGPT_TOKEN_DIR\) is not an absolute path/);
+        expect(a.message).not.toContain('CHATGPT_AUTH_FILE');
+        expect(JSON.stringify(a)).not.toContain(planted.access);
+      }
+      expect(srv.requests).toEqual([]);
+      expect(r.out!.calls, 'a stand-in method ran').toEqual([]);
+    } finally { await srv.close(); }
+  });
+
+  it('with it: a lane signed in again while its tier runs is served its new credential by the next request, in the same process', async (ctx) => {
+    const home = mkTmp('ccgpt-rt-auth-resignin-');
+    const py = standinVenv(home);
+    if (py === null) { ctx.skip(); return; }
+    const auth = path.join(home, 'auth');
+    const planted = plantBackendCredential(auth, { expiresIn: 30 });
+    // The new sign-in's credential, a new identity for another account, staged on the
+    // same filesystem so the driver's rename replaces the file as a commit does. Expiring
+    // too, so the next request crosses the status bar (a fresh one is answered before the
+    // status is read): only a needs-signin bound to the credential it was measured on lets
+    // this refresh through.
+    const signedIn = plantBackendCredential(path.join(home, 'signin'), { claimAccountId: 'acct-fixture-1', expiresIn: 30 });
+    const now = Math.floor(Date.now() / 1000);
+    const claim = { [ACCOUNT_CLAIM]: { chatgpt_account_id: 'acct-fixture-1' } };
+    const freshAccess = syntheticJwt({ exp: now + 3600, iat: now, ...claim });
+    const srv = await fakeAuthServer({ token: [
+      { status: 400, body: { error: 'invalid_grant' } },
+      { status: 200, body: { access_token: freshAccess, refresh_token: 'rtok-fixture-rotated', id_token: syntheticJwt({ exp: now + 3600, ...claim }) } },
+    ] });
+    try {
+      const r = await runOps(py, home,
+        { ops: ['token', 'replant', 'token', 'account'], replant: path.join(home, 'signin', 'auth.json') },
+        { CHATGPT_TOKEN_DIR: auth, CCRC_CODEX_AUTH_LIB: AUTH_LIB, CCRC_CODEX_LANE: 'codex-a', CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status, r.stderr).toBe(0);
+      const [dead, replant, token, account] = r.out!.ops;
+      expect(dead).toMatchObject({ error: 'GetAccessTokenError', status: 401 });
+      expect(dead!.message).toMatch(/^needs-signin: /);
+      expect(replant).toEqual({ ok: null });
+      // No per-process verdict: the needs-signin the first request met is not kept.
+      expect(token).toEqual({ ok: freshAccess });
+      expect(account).toEqual({ ok: 'acct-fixture-1' });
+      expect(srv.requests.map((q) => [q.path, q.form?.['grant_type'], q.form?.['refresh_token']]),
+        'the dead refresh, then the new sign-in\'s own').toEqual([
+        ['/oauth/token', 'refresh_token', planted.refresh],
+        ['/oauth/token', 'refresh_token', signedIn.refresh],
+      ]);
+      expect(r.out!.calls, 'a stand-in method ran').toEqual([]);
+    } finally { await srv.close(); }
+  });
+
+  it('a stand-in missing one of the five names is left stock, said on stderr', async (ctx) => {
+    const home = mkTmp('ccgpt-rt-auth-missing-');
+    const py = standinVenv(home, { omit: '_wait_for_access_token' });
+    if (py === null) { ctx.skip(); return; }
+    const auth = path.join(home, 'auth');
+    const planted = plantBackendCredential(auth);
+    const r = await runOps(py, home, { ops: ['token'] }, { CHATGPT_TOKEN_DIR: auth, CCRC_CODEX_AUTH_LIB: AUTH_LIB });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.out!.marks).toEqual([]);
+    expect(r.out!.ops).toEqual([{ ok: planted.access }]);
+    expect(r.out!.calls).toContain('get_access_token');
+    expect(r.stderr).toMatch(/^ccrc_litellm_patch: [^\n]*_wait_for_access_token[^\n]*left stock[^\n]*\n$/);
+  });
+
+  it('the warnings format no argument', async (ctx) => {
+    const home = mkTmp('ccgpt-rt-auth-warn-');
+    const py = standinVenv(home);
+    if (py === null) { ctx.skip(); return; }
+    // The two cases above that warn: a disabled write handed the planted token, and a
+    // library whose import raises with the planted refresh token as its argument.
+    const auth = path.join(home, 'auth');
+    const planted = plantBackendCredential(auth);
+    const write = await runOps(py, home, { ops: ['write'], secret: planted.access },
+      { CHATGPT_TOKEN_DIR: auth, CCRC_CODEX_AUTH_LIB: AUTH_LIB });
+    const noload = await runOps(py, home, { ops: ['token', 'write'], secret: planted.access },
+      { CHATGPT_TOKEN_DIR: auth, CCRC_CODEX_AUTH_LIB: brokenLibrary(home, planted.refresh) });
+    for (const r of [write, noload]) {
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stderr).toMatch(/^ccrc_litellm_patch: /m);
+      for (const t of [planted.access, planted.refresh, planted.id]) expect(r.stderr).not.toContain(t);
+    }
+  });
+});
+
+/** The probe over a stand-in venv: `py -I -` with probe-source on stdin, in `home`,
+ *  TMPDIR inside it so the probe's own temp dir is seen to go. */
+function venvProbe(py: string, home: string, probe: Buffer = probeSource()) {
+  const tmp = path.join(home, 'tmp');
+  mkdirSync(tmp, { recursive: true });
+  const r = spawnSync(py, ['-I', '-'], {
+    cwd: home, input: probe, encoding: 'utf8', timeout: 120_000,
+    env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, TMPDIR: tmp },
+  });
+  return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '', leftInTmp: readdirSync(tmp) };
+}
+
+/** F2's shape for the auth library's two variables: an authenticator that refuses to
+ *  import while either is set, so a probe that did not scrub them FAILs
+ *  authenticator-import instead of the unmodified stub's transformation-import. */
+const AUTH_VARS_CHECK_AUTHENTICATOR = [
+  '# A content copy, never PYSTUB_DIR itself.',
+  'import os',
+  '',
+  '_leaked = sorted(k for k in ("CCRC_CODEX_AUTH_LIB", "CCRC_CODEX_AUTH_BASE") if k in os.environ)',
+  'if _leaked:',
+  '    raise RuntimeError("auth-vars-leak: " + ",".join(_leaked))',
+  '',
+  '',
+  'class Authenticator:',
+  '    def get_access_token(self):',
+  '        return "stub-token-not-a-secret"',
+].join('\n') + '\n';
+
+describe.skipIf(!PY)('the probe\'s auth scenario (codex-bridge Stage 1)', () => {
+  it('the probe\'s auth scenario runs in CI: over a stand-in with the five names and stub transformation modules, it raises no auth-* FAIL and the probe\'s one FAIL is translate', (ctx) => {
+    const home = mkTmp('ccgpt-rt-probe-auth-');
+    const py = standinVenv(home);
+    if (py === null) { ctx.skip(); return; }
+    const r = venvProbe(py, home);
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('behaviour_probe: '))).toEqual([
+      "behaviour_probe: FAIL translate: ModuleNotFoundError: No module named 'httpx'",
+    ]);
+    expect(r.leftInTmp, 'the probe left its temp dir behind').toEqual([]);
+  });
+
+  it('with the device-flow kill removed from a copy of patch-source, the probe FAILs auth-device-flow-alive', (ctx) => {
+    const home = mkTmp('ccgpt-rt-probe-auth-alive-');
+    const py = standinVenv(home, { patch: mutatedPatch(
+      '_DEVICE_FLOW = ("_login_device_code", "_wait_for_access_token")', '_DEVICE_FLOW = ()') });
+    if (py === null) { ctx.skip(); return; }
+    const r = venvProbe(py, home);
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    expect(r.stdout).toMatch(/^behaviour_probe: FAIL auth-device-flow-alive: /m);
+    expect(r.leftInTmp).toEqual([]);
+  });
+
+  it('the probe gates on the authenticator part: auth-patch-not-applied and auth-device-flow-alive are its names', () => {
+    const src = probeSource().toString('utf8');
+    const from = src.indexOf('fail("transformation-import"');
+    const to = src.indexOf('import httpx');
+    expect(from).toBeGreaterThan(0);
+    expect(to).toBeGreaterThan(from);
+    // Both names are failed on between the transformation imports and the translate block.
+    const scenario = src.slice(from, to);
+    expect(scenario).toMatch(/^_AUTH_FAILS = \("auth-patch-not-applied", "auth-device-flow-alive"\)$/m);
+    expect(scenario).toMatch(/^\s+fail\(_auth_name, _auth_detail\)$/m);
+  });
+
+  it('the probe\'s parent scrubs CCRC_CODEX_AUTH_LIB and CCRC_CODEX_AUTH_BASE before its authenticator import', () => {
+    const home = mkTmp('ccgpt-rt-probe-auth-scrub-');
+    const stub = stubWithOverride(home, 'pystub', 'litellm/llms/chatgpt/authenticator.py', AUTH_VARS_CHECK_AUTHENTICATOR);
+    const r = runProbe(home, stub, {
+      CCRC_CODEX_AUTH_LIB: path.join(home, 'no-such-ccgpt-auth.py'), CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE,
+    });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stdout).toMatch(/^behaviour_probe: FAIL transformation-import: ModuleNotFoundError: No module named 'litellm\.llms\.chatgpt\.chat'$/m);
+    expect(r.stdout).not.toMatch(/auth-vars-leak/);
   });
 });

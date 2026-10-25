@@ -338,6 +338,10 @@ describe('orphan D (§5.2): any session, a restart that cut background tasks sho
     expect(stallOrphanDVerdict({ ...w, notices: [notice('live', 'orphan-d', 1, R, NOW - 90 * MIN)] }, NOW)).toEqual(NONE);
     expect(stallOrphanDVerdict({ ...w, ...sent(w, null, 67) }, NOW), 'a mail with no notice').toEqual(d1());
   });
+  it('D: a run worker\'s rung 1 is still sent when its run holds notices of other arms for the same key (D-6853 pin)', () => {
+    const w = dInput(R, {}, { role: 'worker', run: runRow(), notices: [notice('live', 'orphan-e', 1, R, NOW - 90 * MIN), notice('live', 'failed', 1, R, NOW - 80 * MIN)] });
+    expect(stallOrphanDVerdict(w, NOW)).toEqual(d1());
+  });
   it('D: a shadow rung-1 row stands while dark, and the rung is sent once armed', () => {
     const w = dInput(R, {}, { role: 'worker', run: runRow(), notices: [notice('shadow', 'orphan-d', 1, R, NOW - 90 * MIN)] });
     expect(stallOrphanDVerdict({ ...w, arming: DARK }, NOW)).toEqual(NONE);

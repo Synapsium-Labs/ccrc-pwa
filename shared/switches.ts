@@ -29,11 +29,29 @@ export const HIBERNATE_DISABLED_MARKER = 'hibernate-disabled';
 export const HIBERNATE_LIVE_MARKER = 'hibernate-live';
 /** `$REG/expire-lane-live`: arms the expiry lane's act. */
 export const EXPIRE_LANE_LIVE_MARKER = 'expire-lane-live';
+/** `$REG/expire-child-live`: arms the expiry lane's child arm (an archived child, spec 2026-10-23 section 2.7.4). */
+export const EXPIRE_CHILD_LIVE_MARKER = 'expire-child-live';
+/** `$REG/stale-archive-live`: arms the stale-archive arm's act (D-6643). */
+export const STALE_ARCHIVE_LIVE_MARKER = 'stale-archive-live';
 /** `$REG/collect-lane-live`: the LEGACY arm of the collector's switch (Settings is the other arm). Kept: it still
  *  arms the lane while it stands and its latch is unset (spec K12). */
 export const COLLECT_LANE_LIVE_MARKER = 'collect-lane-live';
+/** `$REG/orphan-tree-live`: arms the orphan-worktree lane's act (fleet disk retention spec 2026-10-23 section 2.3). */
+export const ORPHAN_TREE_LIVE_MARKER = 'orphan-tree-live';
+/** `$REG/orphan-tree-rescue-live`: arms the lane's rescue arm, for a tree whose HEAD is on no remote; it means nothing
+ *  unless `orphan-tree-live` also stands. */
+export const ORPHAN_TREE_RESCUE_LIVE_MARKER = 'orphan-tree-rescue-live';
+/** `$REG/collect-loose-live`: arms the collector's LOOSE arm (fleet disk retention spec 2026-10-23 section 2.4, D-6627):
+ *  a loose `~/.cc-tmp` entry is removed only while it stands AND the lane itself is effectively live. No writer in the
+ *  tree. */
+export const COLLECT_LOOSE_LIVE_MARKER = 'collect-loose-live';
+/** `$REG/nested-rescue-live`: arms rung 9's rescue of a nested repository (D-6632); the server only shows what the arm would do. */
+export const NESTED_RESCUE_LIVE_MARKER = 'nested-rescue-live';
 /** `$REG/dead-coordinator-lane-live`: arms the dead-coordinator lane's act. */
 export const DEAD_COORDINATOR_LANE_LIVE_MARKER = 'dead-coordinator-lane-live';
+/** `$REG/child-stale-reclaim-live`: arms the child reclaim's stale arm (D-6639): a kept child idle for seven days is
+ *  reclaimed. Absent, the lane records "child would be reclaimed (stale)" and acts on nothing. */
+export const CHILD_STALE_RECLAIM_LIVE_MARKER = 'child-stale-reclaim-live';
 /** `$REG/idle-compact-nudge-disabled`: the idle-compaction nudge's kill switch. */
 export const IDLE_NUDGE_DISABLED_MARKER = 'idle-compact-nudge-disabled';
 /** `$REG/mail-gate-strict`: the mail gate's pre-wave-1 rule. */
@@ -42,6 +60,23 @@ export const MAIL_GATE_STRICT_MARKER = 'mail-gate-strict';
 export const MAIL_GATE_BUSY_MARKER = 'mail-gate-busy';
 /** `$REG/mail-gate-busy-shadow`: the mail gate's first hand-armed step. */
 export const MAIL_GATE_BUSY_SHADOW_MARKER = 'mail-gate-busy-shadow';
+/** `$REG/coordinator-roster-card-live`: arms the session hook's roster card (durability D4, #757). Unarmed, the card goes
+ *  to a shadow log only. No writer in the tree. */
+export const COORDINATOR_ROSTER_CARD_LIVE_MARKER = 'coordinator-roster-card-live';
+/** `$REG/landing-disabled`: the PR-landing checks lane's kill switch; it wins over the live marker. */
+export const LANDING_DISABLED_MARKER = 'landing-disabled';
+/** `$REG/landing-checks-live`: arms NEW episodes of the checks lane live (otherwise they run in shadow). */
+export const LANDING_CHECKS_LIVE_MARKER = 'landing-checks-live';
+
+/** `$REG/drift-push-live`: arms the drift reconciler's operator pushes. Absent, the lane records what is out of step and
+ *  a single shadow notice per finding names what it would have pushed. No writer in the tree. Arm it only after the
+ *  digest's drift section has landed: the summary push (and an item with no run or session) opens the day's digest. */
+export const DRIFT_PUSH_LIVE_MARKER = 'drift-push-live';
+
+/** `$REG/child-reclaim-disabled` (ARCH-77, #812): child reclaim's own off switch. Absent, child reclaim runs as it does
+ *  today. Stood, it is meant to stop the child-spent reason alone, where `reclaim-paused` also stops expiry, collect and
+ *  the coordinator reclaim. Touched only by hand: no writer in the tree. The child-spent reader lands with that reason's change. */
+export const CHILD_RECLAIM_DISABLED_MARKER = 'child-reclaim-disabled';
 
 /** The spec's bounded contexts (consolidation spec 2026-10-19 §2), the `owner` of a row. */
 export const SWITCH_OWNER_MAP = {
@@ -109,14 +144,58 @@ export const SWITCHES = {
     storage: { marker: EXPIRE_LANE_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would expire',
     owner: 'C4', meaning: 'The expiry lane acts: an archived workspace past its time is expired.', writer: 'hand-only',
   },
+  [EXPIRE_CHILD_LIVE_MARKER]: {
+    storage: { marker: EXPIRE_CHILD_LIVE_MARKER }, default: 'absent: shadow, the lane records which archived children it would expire',
+    owner: 'C4', meaning: 'The expiry lane takes an archived child too, once the lane itself acts.', writer: 'hand-only',
+  },
+  [STALE_ARCHIVE_LIVE_MARKER]: {
+    storage: { marker: STALE_ARCHIVE_LIVE_MARKER }, default: 'absent: shadow, the arm records what it would archive',
+    owner: 'C4', meaning: 'The stale-archive arm acts: a workspace with no pane for 14 days is archived.', writer: 'hand-only',
+  },
   [COLLECT_LANE_LIVE_MARKER]: {
     storage: { marker: COLLECT_LANE_LIVE_MARKER }, default: 'absent: the Settings arm alone decides', owner: 'C4',
     meaning: 'The legacy arm of the collector: it arms the lane while it stands and its latch is unset.',
     writer: 'hand-only',
   },
+  [ORPHAN_TREE_LIVE_MARKER]: {
+    storage: { marker: ORPHAN_TREE_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would remove',
+    owner: 'C4', meaning: 'The orphan-worktree lane acts: a clean tree no registry row names, whose commits are all on a remote, is removed.',
+    writer: 'hand-only',
+  },
+  [ORPHAN_TREE_RESCUE_LIVE_MARKER]: {
+    storage: { marker: ORPHAN_TREE_RESCUE_LIVE_MARKER }, default: 'absent: a tree with commits on no remote is left',
+    owner: 'C4', meaning: 'With the orphan lane live, a tree whose HEAD is on no remote is pinned into the attic and then removed.',
+    writer: 'hand-only',
+  },
+  [COLLECT_LOOSE_LIVE_MARKER]: {
+    storage: { marker: COLLECT_LOOSE_LIVE_MARKER }, default: 'absent: shadow, the lane records what loose entries it would remove',
+    owner: 'C4', meaning: 'The collector\'s loose arm acts: an idle entry under the fleet temp directory that no session '
+      + 'witnessed is removed, once the lane itself is live.', writer: 'hand-only',
+  },
   [DEAD_COORDINATOR_LANE_LIVE_MARKER]: {
     storage: { marker: DEAD_COORDINATOR_LANE_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would end',
     owner: 'C5', meaning: 'The dead-coordinator lane acts: a programme whose coordinator is gone is ended.',
+    writer: 'hand-only',
+  },
+  [NESTED_RESCUE_LIVE_MARKER]: {
+    storage: { marker: NESTED_RESCUE_LIVE_MARKER }, default: 'absent: shadow, a nested repository is refused and the audit names what the arm would rescue',
+    owner: 'C4', meaning: 'Rung 9 rescues a nested repository into the attic instead of refusing a tree that holds one.',
+    writer: 'hand-only',
+  },
+  [DRIFT_PUSH_LIVE_MARKER]: {
+    storage: { marker: DRIFT_PUSH_LIVE_MARKER }, default: 'absent: shadow, the reconciler records what it would push',
+    owner: 'C5', meaning: 'The drift reconciler pushes the operator once about a finding that stands past 24 hours. ' +
+      "Arm it only once the digest lists drift findings: its summary push opens the day's digest.",
+    writer: 'hand-only',
+  },
+  [CHILD_RECLAIM_DISABLED_MARKER]: {
+    storage: { marker: CHILD_RECLAIM_DISABLED_MARKER }, default: 'absent: child reclaim runs', owner: 'C4',
+    meaning: 'Meant to switch off child reclaim alone, leaving expiry, collect and the coordinator reclaim running. Nothing reads it yet: touching it stops nothing until the child-spent reason moves (ARCH-44).',
+    writer: 'hand-only',
+  },
+  [CHILD_STALE_RECLAIM_LIVE_MARKER]: {
+    storage: { marker: CHILD_STALE_RECLAIM_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would reclaim',
+    owner: 'C4', meaning: 'The stale arm acts: a kept child idle for seven days is reclaimed, its work pinned to the attic.',
     writer: 'hand-only',
   },
   [IDLE_NUDGE_DISABLED_MARKER]: {
@@ -135,6 +214,21 @@ export const SWITCHES = {
   [MAIL_GATE_BUSY_SHADOW_MARKER]: {
     storage: { marker: MAIL_GATE_BUSY_SHADOW_MARKER }, default: 'absent: the shell mode', owner: 'C5',
     meaning: 'The gate decides busy as the busy mode would, delivers nothing more, and logs what it would have sent.',
+    writer: 'hand-only',
+  },
+  [COORDINATOR_ROSTER_CARD_LIVE_MARKER]: {
+    storage: { marker: COORDINATOR_ROSTER_CARD_LIVE_MARKER }, default: 'absent: shadow, the card goes to ~/.ccrc/roster-card-shadow.log', owner: 'C5',
+    meaning: 'A coordinator\'s first context after a compaction, resume or clear carries the open runs it claims.',
+    writer: 'hand-only',
+  },
+  [LANDING_DISABLED_MARKER]: {
+    storage: { marker: LANDING_DISABLED_MARKER }, default: 'absent: the checks lane reads and writes its rows', owner: 'C4',
+    meaning: 'The PR-landing checks lane makes no read and writes no edge or mail; it wins over the live marker, and a live episode keeps only its stuck bound.',
+    writer: 'hand-only',
+  },
+  [LANDING_CHECKS_LIVE_MARKER]: {
+    storage: { marker: LANDING_CHECKS_LIVE_MARKER }, default: 'absent: new episodes run in shadow, nothing is mailed', owner: 'C4',
+    meaning: 'New PR-landing episodes are live: the checks lane mails the coordinator when the required checks settle.',
     writer: 'hand-only',
   },
   'stall-watch-level': {

@@ -33,8 +33,8 @@ const makeRunner = (fail = false): { run: Runner; calls: string[][] } => {
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
-    if (fail && args[0] === 'reclaim-pause') return { code: 1, stdout: '', stderr: 'ccd: reclaim-pause refused on the box' };
-    return { code: 0, stdout: args[0] === 'reclaim-pause' ? 'paused' : '', stderr: '' };
+    if (fail && args[0] === 'reclaim-pause') return { ran: true, code: 1, stdout: '', stderr: 'ccd: reclaim-pause refused on the box' };
+    return { ran: true, code: 0, stdout: args[0] === 'reclaim-pause' ? 'paused' : '', stderr: '' };
   };
   return { run, calls };
 };

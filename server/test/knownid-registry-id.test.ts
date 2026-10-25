@@ -172,8 +172,8 @@ describe('the two request-id routes outside knownId (spec §2.3, as built)', () 
     // own runner, never recorded in `calls`: the pane is proven gone, so the verdict is `idle` with no further read
     // (`swap-route-pool.test.ts`'s own adapter for the same gate).
     const paneGone: Runner = async (_cmd, args) =>
-      args[0] === 'has-session' ? { code: 1, stdout: '', stderr: `can't find session: ${args[2] ?? ''}` }
-        : { code: 0, stdout: '', stderr: '' };
+      args[0] === 'has-session' ? { ran: true, code: 1, stdout: '', stderr: `can't find session: ${args[2] ?? ''}` }
+        : { ran: true, code: 0, stdout: '', stderr: '' };
     const r = await rig(['a--actor'], { fleetState: POOLS_ADVERTISED, tmux: new Tmux(paneGone) });
     const res = await post(r.app, 'a--actor', 'swap', { wrapper: 'claude-b', crossPool: true });
     expect(res.statusCode).toBe(200);

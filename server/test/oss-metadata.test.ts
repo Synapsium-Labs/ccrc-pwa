@@ -407,8 +407,9 @@ describe('dependabot.yml', () => {
   });
 
   it('updates the actions the workflows pin', () => {
-    // ci.yml and release.yml pin actions/checkout@v4 and setup-node@v4 by
-    // major tag. That floats within v4 and never crosses to v5, so without
+    // The workflows pin each action by major tag (now checkout @v7,
+    // setup-node @v7, upload-artifact @v7, download-artifact @v8). That
+    // floats within that major and never crosses to the next, so without
     // this ecosystem the pins go stale until a deprecation turns a green leg
     // red with no warning.
     const ecosystems = dependabotUpdates(read(CONF)).map((u) => u.ecosystem);

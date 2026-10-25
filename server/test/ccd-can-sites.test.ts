@@ -65,8 +65,8 @@ async function hit(v: Verbs, method: 'GET' | 'POST', url: string, payload?: unkn
   const calls: string[][] = [];
   const run: Runner = async (_c, args) => {
     calls.push(args);
-    if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const home = seedWorkspace();
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
@@ -150,7 +150,7 @@ describe('the stop verb is ungated by decision; only the stop-surface FLAG is as
 describe('ws-expire and its audit (D-5866, Step 1)', () => {
   const runner = () => {
     const calls: string[][] = [];
-    return { calls, runCcd: async (argv: readonly string[]) => { calls.push([...argv]); return { ok: false, stdout: '', stderr: 'x' }; } };
+    return { calls, runCcd: async (argv: readonly string[]) => { calls.push([...argv]); return { ran: true, ok: false, stdout: '', stderr: 'x' }; } };
   };
 
   it.each(FOUR(EXPIRE_CAP))('the learning audit over %s', async (_what, v) => {
@@ -184,7 +184,7 @@ describe('ws-expire and its audit (D-5866, Step 1)', () => {
     const r = runner();
     const home = mkTmp('ccrc-ccd-can-expire-');
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-    const base = testDeps(home, async () => ({ code: 1, stdout: '', stderr: '' }));
+    const base = testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' }));
     const o = await expireArchived({ ...base, coord, runCcd: r.runCcd as never, fleetState: stateOf(null) } as never,
       { sessionId: ID, archivedAt: 1, expiresAt: 2 } as never);
     expect(o).toMatchObject({ kind: 'deferred', why: 'unsupported' });
@@ -213,13 +213,13 @@ describe('ws-reclaim and its audit (D-5866, Step 1)', () => {
     const run: Runner = async (_cmd, args) => {
       sent.push(args[0]!);
       const a = model(args);
-      return a === undefined ? { code: 1, stdout: '', stderr: `unscripted ${args[0]}` } : { code: a.code, stdout: a.stdout, stderr: a.stderr ?? '' };
+      return a === undefined ? { ran: true, code: 1, stdout: '', stderr: `unscripted ${args[0]}` } : { ran: true, code: a.code, stdout: a.stdout, stderr: a.stderr ?? '' };
     };
     const base = testDeps(home, run);
     const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
     await notifyLog.load();
     const deps: ChildReclaimDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd, fleetState: stateOf(v),
-      presence: { isVisible: () => false }, notifyLog };
+      viewers: { isVisible: () => false }, notifyLog };
     const o = await reclaimChild(deps, { sessionId: ID, runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
       feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'none' } });
     return { o, sent };
@@ -299,7 +299,7 @@ describe('ws-collect, its audit and its pause precondition (D-5866, Step 1)', ()
 describe('the docs verbs (D-5866, Step 1)', () => {
   const docs = (v: Verbs) => {
     const sent: string[] = [];
-    const deps = { fleetState: stateOf(v), runCcd: async (argv: readonly string[]) => { sent.push(argv[0]!); return { ok: false, stdout: '', stderr: '' }; } };
+    const deps = { fleetState: stateOf(v), runCcd: async (argv: readonly string[]) => { sent.push(argv[0]!); return { ran: true, ok: false, stdout: '', stderr: '' }; } };
     return { sent, reader: ccdDocsReader(deps as never), fetcher: ccdDocsFetcher(deps as never) };
   };
   it.each(FOUR(DOCS_CAP))('docs-index and docs-fetch over %s', async (_what, v) => {

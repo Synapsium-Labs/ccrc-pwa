@@ -3,7 +3,7 @@
 // accepted ready and every close invalidates it synchronously. An inventory read may publish a directly measured
 // node id only while the epoch it captured still stands; a result from an earlier connection is discarded."
 //
-// One small synchronous memory cell, in `presence.ts`'s shape: nothing persisted, no timer, no clock (a
+// One small synchronous memory cell, in `viewer.ts`'s shape: nothing persisted, no timer, no clock (a
 // measurement brings its own `measuredAt`), and no import of any kind. It FAILS SHUT. A server that just started,
 // a connection that just changed and a node-id nobody could read all answer `unmeasured`; only a measurement
 // published under the epoch it was taken on answers `known`. The temp-root collector's Settings arm binds to this

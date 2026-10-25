@@ -216,9 +216,9 @@ describe('the role-skill deny (D-4934)', () => {
     expect(fire('Bash', { command: 'echo ccrc-worker' }, sub).stdout,
       'a subagent\'s Bash call that only names the skill was answered').toBe('');
     expect(fire('Bash', { command: 'ls' }, sub).stdout, 'a subagent\'s plain Bash call was answered').toBe('');
-    expect(fire('Task', { skill: 'ccrc-worker', prompt: 'ccrc-worker' }, sub).stdout,
+    expect(fire('Task', { skill: 'ccrc-worker', prompt: 'ccrc-worker', model: 'sonnet' }, sub).stdout,
       'a subagent\'s Task call carrying skill: \'ccrc-worker\' was answered — the gate does not require tool_name Skill').toBe('');
-    expect(fire('Agent', { skill: 'ccrc-reviewer' }, sub).stdout,
+    expect(fire('Agent', { skill: 'ccrc-reviewer', model: 'sonnet' }, sub).stdout,
       'a subagent\'s Agent call carrying skill: \'ccrc-reviewer\' was answered').toBe('');
   });
 
@@ -244,7 +244,7 @@ describe('the role-skill deny (D-4934)', () => {
     expect(reads(() => mainSkill('ccrc-worker')), 'the main thread\'s Skill call').toBe(0);
     expect(reads(() => fire('Bash', { command: 'ls' }, sub)), 'a subagent\'s Bash call').toBe(0);
     expect(reads(() => fire('Bash', { command: 'ls' })), 'the main thread\'s Bash call').toBe(0);
-    expect(reads(() => fire('Task', { skill: 'ccrc-worker' }, sub)), 'a subagent\'s call to another tool').toBe(0);
+    expect(reads(() => fire('Task', { skill: 'ccrc-worker', model: 'sonnet' }, sub)), 'a subagent\'s call to another tool').toBe(0);
     expect(reads(() => fire('AskUserQuestion', { questions: [] }, sub)), 'a subagent\'s question').toBe(0);
   });
 

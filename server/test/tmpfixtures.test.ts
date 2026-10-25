@@ -59,7 +59,7 @@ describe('mkTmp', () => {
 });
 
 // R20a (centralised-update wave 13): a file whose one end-of-file sweep is too big for one hook removes each
-// test's homes after that test instead. `ccrc-update.test.ts` is that file: its `afterAll` overran vitest's 20 s
+// test's homes after that test instead. Each `ccrc-update-*.test.ts` is such a file: the former single file's `afterAll` overran vitest's 20 s
 // hook timeout on CI shards at 670d25fd and 7b0a5454 while every test passed.
 describe('removeTmpFixturesSince (R20a)', () => {
   it('removes what was made from the mark on, forgets it, and leaves what came before for the afterAll', () => {
@@ -104,12 +104,12 @@ describe('removeTmpFixturesEachTest (R20a)', () => {
   let fromBeforeAll = '';
   let fromFirst = '';
   beforeAll(() => { fromBeforeAll = mkTmp('ccrc-tmpfix-each-all-'); });
-  // Registered on THIS describe here; `ccrc-update.test.ts` calls it at its top level, on the root suite.
+  // Registered on THIS describe here; each `ccrc-update-*.test.ts` calls it at its top level, on the root suite.
   removeTmpFixturesEachTest();
 
   describe('an inner describe with its own teardown', () => {
     afterEach(() => {
-      // The holder/lingerer kills in ccrc-update.test.ts are describe-level afterEach hooks that still need the
+      // The holder/lingerer kills in the ccrc-update-*.test.ts files are describe-level afterEach hooks that still need the
       // home: an outer afterEach must run after them.
       expect(existsSync(fromFirst), 'the test\'s home was removed before an inner afterEach ran').toBe(true);
     });
@@ -126,7 +126,20 @@ describe('removeTmpFixturesEachTest (R20a)', () => {
     expect(existsSync(fromBeforeAll), 'a home made in a beforeAll was removed after one test').toBe(true);
   });
 
-  it.each(['ccrc-update.test.ts', 'ccrc-install-graphify.test.ts', 'ccrc-doctor.test.ts'])('%s opts in, at its top level, outside any comment', (file) => {
+  it.each([
+    'ccrc-update-fetch.test.ts',
+    'ccrc-update-phases.test.ts',
+    'ccrc-update-kept.test.ts',
+    'ccrc-update-flip-backups.test.ts',
+    'ccrc-install-tree.test.ts',
+    'ccrc-install-versioned.test.ts',
+    'ccrc-install-units.test.ts',
+    'ccrc-install-landing.test.ts',
+    'ccrc-install-role.test.ts',
+    'ccrc-install-codex.test.ts',
+    'ccrc-install-graphify.test.ts', 'ccrc-doctor-core.test.ts', 'ccrc-doctor-fleet.test.ts',
+    'ccrc-doctor-exposure.test.ts', 'ccrc-doctor-codex.test.ts',
+  ])('%s opts in, at its top level, outside any comment', (file) => {
     const src = readFileSync(path.join(__dirname, file), 'utf8').split('\n');
     expect(src.filter((l) => l === 'removeTmpFixturesEachTest();'),
       `${file} must call removeTmpFixturesEachTest() once, unindented`).toHaveLength(1);
@@ -137,7 +150,20 @@ describe('removeTmpFixturesEachTest (R20a)', () => {
   // a running test's home included. Refused here, by reading the file, rather than at run time: a runtime refusal
   // keyed on a still-open mark would also fire after any describe-level afterEach threw (vitest then skips the root
   // afterEach that closes the mark) and turn one red into a red for every later test in the file.
-  it.each(['ccrc-update.test.ts', 'ccrc-install-graphify.test.ts', 'ccrc-doctor.test.ts'])('%s runs no test concurrently', (file) => {
+  it.each([
+    'ccrc-update-fetch.test.ts',
+    'ccrc-update-phases.test.ts',
+    'ccrc-update-kept.test.ts',
+    'ccrc-update-flip-backups.test.ts',
+    'ccrc-install-tree.test.ts',
+    'ccrc-install-versioned.test.ts',
+    'ccrc-install-units.test.ts',
+    'ccrc-install-landing.test.ts',
+    'ccrc-install-role.test.ts',
+    'ccrc-install-codex.test.ts',
+    'ccrc-install-graphify.test.ts', 'ccrc-doctor-core.test.ts', 'ccrc-doctor-fleet.test.ts',
+    'ccrc-doctor-exposure.test.ts', 'ccrc-doctor-codex.test.ts',
+  ])('%s runs no test concurrently', (file) => {
     const code = readFileSync(path.join(__dirname, file), 'utf8').split('\n')
       .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
     expect(code.filter((l) => /\.concurrent\b|concurrent:\s*true/.test(l)),

@@ -55,13 +55,24 @@ const CENSUS: readonly Row[] = [
   { source: 'tmux-verdict', file: 'server/src/watch.ts', hits: 2, stances: ['consults'],
     why: 'the dead-coordinator lane\'s tmux port (it feeds `measureClaimant`) and the mail lane\'s rung, which consults '
       + '`hibernatedAt` on `gone` before the lifecycle' },
-  { source: 'dead-lifecycle', file: 'server/src/coord/reclaim.ts', hits: 3, stances: ['consults'],
-    why: '`measureClaimant`: a `stopped` row with `.hibernated` answers `alive`, so the reclaim door refuses as for a '
-      + 'live claimant, and the dead-coordinator lane and the ask hold read the same verdict' },
-  { source: 'stopped-compare', file: 'server/src/coord/reclaim.ts', hits: 1, stances: ['consults'],
-    why: 'that same rung: `lc === \'stopped\' && hibernatedAt !== null` answers alive' },
+  { source: 'dead-lifecycle', file: 'server/src/sessionReading.ts', hits: 1, stances: ['consults'],
+    why: '`readSession`, the one liveness ladder (ARCH-47): a `stopped` row with `.hibernated` reads `asleep` before the '
+      + 'dead word is asked, so `measureClaimant` answers `alive` and the reclaim door, the dead-coordinator lane and the '
+      + 'ask hold read the same verdict' },
+  { source: 'stopped-compare', file: 'server/src/sessionReading.ts', hits: 1, stances: ['consults'],
+    why: 'that same rung: `lc === \'stopped\' && f.hibernatedAt !== null` reads asleep' },
+  { source: 'tmux-verdict', file: 'server/src/sessionReading.ts', hits: 1, stances: ['consults'],
+    why: '`PaneFact` mirrors the verdict\'s words; `gone` falls to the hibernated rung' },
+  { source: 'dead-compare', file: 'server/src/fleet.ts', hits: 1, stances: ['consults'],
+    why: 'the frame row hands `readSession` the turn word and keeps it only while the row is not dead; a sleeping row '
+      + 'reads asleep there, so it carries no turn' },
+  { source: 'stopped-compare', file: 'server/src/fleet.ts', hits: 1, stances: ['consults'],
+    why: 'the frame row\'s `deadSince` reads `readSession`\'s dead cause: a sleeper reads asleep, not dead, so it has no '
+      + 'dead-since stamp' },
+  { source: 'tmux-verdict', file: 'server/src/fleet.ts', hits: 1, stances: ['consults'],
+    why: 'the frame hands tmux\'s verdict and the `.hibernated` stamp to `readSession`, which reads a sleeping row as asleep' },
   { source: 'tmux-verdict', file: 'server/src/coord/reclaim.ts', hits: 1, stances: ['consults'],
-    why: '`measureClaimant`\'s tmux rung; `gone` falls to the hibernated rung' },
+    why: '`measureClaimant`\'s tmux rung; it hands the verdict and the `.hibernated` stamp to `readSession`' },
   { source: 'dead-lifecycle', file: 'server/src/coord/stall.ts', hits: 1, stances: ['held-awake'],
     why: 'the stall watch reads an open run\'s worker, and an open run as worker or claimant holds `run-worker` or '
       + '`run-claimant`; were it to meet one, `stopped` holds `lifecycle-stopped` (no push), which is right for a sleep' },
@@ -133,6 +144,9 @@ const CENSUS: readonly Row[] = [
   { source: 'dead-compare', file: 'pwa/src/fleet/groupFleet.ts', hits: 2, stances: ['true-of-pane'],
     why: 'a dead row\'s rank on the card and the stranded count over live rows: a sleeper\'s pane is not running; '
       + '`inArchivedFold` keeps it at the top level' },
+  { source: 'dead-compare', file: 'pwa/src/command/sessionEntries.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'the palette\'s session entries (D-6714) rank a dead row last among equal matches (tier 3): a sleeper\'s pane '
+      + 'is not running; it is still listed and found, and opening it is the session screen\'s wake' },
   { source: 'dead-compare', file: 'pwa/src/fleet/ArchiveAllPlane.tsx', hits: 1, stances: ['true-of-pane'],
     why: 'counts the batch\'s live rows: a sleeper is not running' },
   { source: 'dead-compare', file: 'pwa/src/screens/AccountsScreen.tsx', hits: 1, stances: ['true-of-pane'],
@@ -145,9 +159,14 @@ const CENSUS: readonly Row[] = [
 
 /** Readers outside the scan's reach, by name, each with the text that holds its stance. */
 const NAMED: readonly { name: string; stances: readonly Stance[]; file: string; holds: (src: string) => boolean; why: string }[] = [
+  { name: 'readSession', stances: ['consults'], file: 'server/src/sessionReading.ts',
+    holds: (s) => /function presenceOf[\s\S]*?lc === 'stopped' && f\.hibernatedAt !== null/.test(s),
+    why: 'reads a sleeping row `asleep`, never dead' },
   { name: 'measureClaimant', stances: ['consults'], file: 'server/src/coord/reclaim.ts',
-    holds: (s) => /export async function measureClaimant[\s\S]*?lc === 'stopped' && read\.record\.hibernatedAt !== null/.test(s),
-    why: 'answers a sleeping claimant `alive`, why hibernated' },
+    holds: (s) => /export async function measureClaimant[\s\S]*?await claimantFacts\([\s\S]*?case 'hibernated'/.test(s)
+      && /export async function claimantFacts[\s\S]*?hibernatedAt: read\.kind === 'found' \? read\.record\.hibernatedAt : null/.test(s),
+    why: 'hands the `.hibernated` stamp to `readSession` (its adapter, `claimantFacts`) and answers a sleeping claimant '
+      + '`alive`, why hibernated' },
   { name: 'ccd cmd_forget', stances: ['consults'], file: 'ccd/ccd', holds: (s) => /hibernated/.test(bashFn(s, 'cmd_forget')),
     why: 'refuses a hibernated row (`_lc_refuse hibernated`): wake it or stop it first' },
   { name: 'ccd cmd_stop', stances: ['consults'], file: 'ccd/ccd', holds: (s) => /hibernat/.test(bashFn(s, 'cmd_stop')),

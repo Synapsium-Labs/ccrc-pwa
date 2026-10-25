@@ -39,7 +39,7 @@ const POOLED = {
     : a.id === 'claude-d' ? { ...a, pool: 'pool-b' } : a),
 };
 
-const dead: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+const dead: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
 
 const open = async (io: FleetIO = localIO, watcher?: FleetWatcher): Promise<FastifyInstance> => {
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: projectsRoot });

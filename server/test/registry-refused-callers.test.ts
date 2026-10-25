@@ -12,6 +12,7 @@ import { configDirFor, loadConfig } from '../src/config.js';
 import { closeRun, type CloseRunDeps } from '../src/coord/close.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import { verifyDone, type DoneClaim } from '../src/coord/fingerprint.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
@@ -23,7 +24,7 @@ import { tasksDir } from '../src/tasks/read.js';
 import { FleetWatcher } from '../src/watch.js';
 import { MAIL_MAX_ATTEMPTS } from '../../shared/api.js';
 import { okRun } from './coordReadHelpers.js';
-import { seedRoster, testDeps } from './helpers.js';
+import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const PROJECT = 'demo';
@@ -59,7 +60,7 @@ const gitRoot = (branch: string, tip: string): string => {
 /** A runner that records every argv and answers `code`. */
 const recording = (calls: string[][], code = 0): Runner => async (_cmd, args) => {
   calls.push([...args]);
-  return { code, stdout: '', stderr: '' };
+  return { ran: true, code, stdout: '', stderr: '' };
 };
 
 const connected: FleetState = { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null };
@@ -137,7 +138,7 @@ describe('dispatch refuses what subtraction cannot see (spec §2.3)', () => {
     const runCcd = async (argv: CcdArgv): Promise<CcdResult> => {
       calls.push([...argv]);
       if (argv[0] === 'ws-add') for (const id of cfg.after ?? []) plant(home, id);
-      return { ok: true, stdout: '', stderr: '', killed: false, signal: null };
+      return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null };
     };
     const base = testDeps(home);
     let listings = 0;
@@ -151,7 +152,8 @@ describe('dispatch refuses what subtraction cannot see (spec §2.3)', () => {
         return localIO.readdir(p, timeoutMs, signal);
       },
     };
-    const deps = { ...base, io, coord, runCcd, configDir: (w: string) => configDirFor(base.cfg, w) } as DispatchRunDeps;
+    const deps = { ...base, io, coord, runCcd, configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
+      sendClear: clearSender(base) } as DispatchRunDeps;
     return {
       coord, runId: opened.id, calls,
       listings: (): number => listings,
@@ -279,7 +281,7 @@ describe('mail holds a delivery to a refused recipient (spec §2.3)', () => {
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });   // empty but listable: the priming tick needs it
     const calls: string[][] = [];
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-    const deps: Deps = { ...testDeps(home, recording(calls, 1)), coord, stateCachePath: path.join(home, 'state-cache.json') };
+    const deps: Deps = withFakeClock({ ...testDeps(home, recording(calls, 1)), coord, stateCachePath: path.join(home, 'state-cache.json') });
     const w = new FleetWatcher(deps, new Bus(), 2000);
     await w.tick();                                                    // primes the watcher
     plant(home, BAD);                                                  // the recipient: listed, refused, never read
@@ -295,8 +297,11 @@ describe('mail holds a delivery to a refused recipient (spec §2.3)', () => {
     expect(row().attempts).toBe(0);
     // Well past the point that parks a genuinely absent recipient.
     for (let i = 1; i < MAIL_MAX_ATTEMPTS + 4; i++) {
-      vi.setSystemTime(row().nextAttemptAt + 1_000);
+      const before = row().nextAttemptAt;
+      vi.setSystemTime(before + 1_000);
       await w.sweepMail();
+      // The mail lane really ran this pass (its throttle opened on the faked monotonic clock): it re-armed the row.
+      expect(row().nextAttemptAt, `pass ${i} re-armed the delivery`).toBeGreaterThan(before);
     }
     expect(row()).toMatchObject({ state: 'queued', rejectCode: null, attempts: 0, lastGate: 'registry-unmeasurable' });
     expect(calls.filter((c) => c[0] === 'send-keys'), 'nothing is typed into any pane').toEqual([]);
@@ -327,12 +332,12 @@ describe('one refused row wedges nothing fleet-wide (Review Focus 3)', () => {
       if (args[0] === 'capture-pane') {
         const pane = CLEAR_PANES[Math.min(capIdx, CLEAR_PANES.length - 1)]!;
         capIdx += 1;
-        return { code: 0, stdout: pane, stderr: '' };
+        return { ran: true, code: 0, stdout: pane, stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const base = testDeps(home, run);
-    const deps = { ...base, coord, configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const } as DispatchRunDeps;
+    const deps = { ...base, coord, configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const, sendClear: clearSender(base) } as DispatchRunDeps;
 
     expect(await dispatchRun(deps, opened.id, 'go', undefined))
       .toMatchObject({ ok: true, resumed: true, sessionId: GOOD });

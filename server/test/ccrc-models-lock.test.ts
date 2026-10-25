@@ -1,6 +1,6 @@
 // The lane-files lock (auto-advance spec D21): ONE per-lane flock that every write of a lane's model files takes —
 // every writing `ccrc models <id>` verb, the hourly refresh's re-materialise and `ccrc codex`'s lane.json ensure
-// (`ccrc doctor --fix`'s re-render is measured in ccrc-doctor.test.ts, where its harness lives). Measured through
+// (`ccrc doctor --fix`'s re-render is measured in the `ccrc-doctor-*` test files, where its harness lives). Measured through
 // real bash and a REAL `flock` holder in another process, never a fake of the lock itself.
 //
 // CONTAINED. HOME is a `mkTmp` directory and `ccrc` runs from `<home>/ccrc/ccd/ccrc`, the shape a deployed box has.
@@ -435,7 +435,7 @@ describe('with no flock on PATH (D-5201)', () => {
 });
 
 // `ccrc doctor --fix` re-renders lane.json on the box doctor most needs to work on, one whose PATH has lost
-// coreutils (`ccd/ccrc`'s CCRC_HERE note), and ccrc-doctor.test.ts's fixture PATH carries no `mkdir`. The lock's
+// coreutils (`ccd/ccrc`'s CCRC_HERE note), and ccrc-doctorFixture.ts's fixture PATH carries no `mkdir`. The lock's
 // first use on a box makes `~/.ccrc/locks`, so there, and only there, it degrades as it does with no flock.
 describe.skipIf(!HAVE_FLOCK)('with no mkdir on PATH (D-5205)', () => {
   it('and no ~/.ccrc/locks yet: a hand verb answers as today, unserialised, and makes no lock directory', () => {

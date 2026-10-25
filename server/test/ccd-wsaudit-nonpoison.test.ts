@@ -112,11 +112,13 @@ describe('the lifecycle block cannot poison wsaudit.test.ts\'s scan', () => {
     // 66 -> 67 (Task 9A, amendment 3: 3962): `in-use`, rung 5's refusal of a process working
     // in an archived worktree, spelled in the EXPIRE region and given `SENTENCES` copy. ENTERED that
     // one word, LEFT none; the scan outside the three blocks still answers 55.
+    // 67 -> 68 (fleet disk retention DR-26, D-6638): `not-idle`, the stale reclaim's refusal of a child that worked
+    // within seven days, spelled in the RECLAIM region and given `SENTENCES` copy. ENTERED one word, LEFT none.
     const full = readFileSync(CCD, 'utf8');
-    expect.soft(scan(full)).toHaveLength(67);
+    expect.soft(scan(full)).toHaveLength(68);
     expect.soft(scan(full).filter((t) => !scan(src).includes(t)))
       .toEqual(['attached', 'child', 'containment-unproven', 'expire-in-progress', 'in-use', 'live', 'not-a-child',
-        'not-expired', 'paused', 'reap-in-progress', 'reclaim-in-progress', 'tree-busy']);
+        'not-expired', 'not-idle', 'paused', 'reap-in-progress', 'reclaim-in-progress', 'tree-busy']);
     expect.soft(reclaimRegion(full).length, 'the region was found — an empty cut proves nothing').toBeGreaterThan(5000);
     expect.soft(markedBlock(full, 'MIRROR-BEGIN', 'MIRROR-END'), 'the mirror block was found, and holds ws-reap’s breadcrumb word')
       .toContain('"refused":"reclaim-in-progress"');

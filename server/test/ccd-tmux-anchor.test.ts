@@ -60,7 +60,7 @@ const REAL_TMUX: string | null = (() => {
 // has none. The source census below runs regardless.
 const NO_TMUX = REAL_TMUX === null;
 /** The bash a spawn under a NARROWED PATH must run, resolved ONCE through the
- *  parent's PATH (`ccrc-update.test.ts`'s idiom). A bare `'bash'` under
+ *  parent's PATH (`ccrc-updateFixture.ts`'s idiom). A bare `'bash'` under
  *  `/usr/bin:/bin` is macOS's 3.2. */
 const BASH: string = (() => {
   const r = spawnSync('sh', ['-c', 'command -v bash'], { encoding: 'utf8' });
@@ -256,7 +256,7 @@ describe.skipIf(NO_TMUX)(BEHAVIOURAL, () => {
     const run: Runner = (cmd, args) => new Promise((resolve) => {
       expect(cmd).toBe('tmux');
       const r = spawnSync(REAL_TMUX!, ['-L', SOCK, '-f', '/dev/null', ...args], { encoding: 'utf8', env: cleanEnv() });
-      resolve({ code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' });
+      resolve({ ran: true, code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' });
     });
     const tx = new Tmux(run);
 

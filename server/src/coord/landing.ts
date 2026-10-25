@@ -1,9 +1,17 @@
-import type { PrQueueRead } from '../prstate.js';
+import type { MarkerState } from '../../../shared/api.js';
+import {
+  CHECKS_MODES, LANDING_CHECKS_STUCK_MS, LANDING_KEBABS, REQUIRED_CHECKS_PRECEDENCE, isHead40, isFp12,
+  type ChecksMailWord, type ChecksMode, type LeftPhase, type RequiredChecksWord, type StuckCause,
+} from '../../../shared/landing.js';
+import type { SwitchReading } from '../../../shared/switches.js';
+import type { PrLandingLine, PrQueueRead } from '../prstate.js';
+import { GITHUB_TEXT_PREFACE, untrustedBlock } from './untrusted.js';
 /**
  * The landing lane's pure half (landing-order wave 2, `landing-verdict-is-l1` (D-3883)). L1: clock-free, fs-free,
  * fastify-free and store-free, on `stall.ts`'s precedent — the coord-ring scan in `single-definition.test.ts` forbids
  * this file `./db.js` and `node:sqlite`, and `landing-verdict.test.ts` pins the rest: no node builtin, and no value
- * import but L0's `shared/api.ts` (today its imports are TYPES only). `watch.ts`'s `sweepLanding` keeps the READS
+ * import but L0's `shared/landing.ts` and `./untrusted.ts` (which imports nothing); `shared/api.ts` and `shared/switches.ts` are
+ * admitted too, today as TYPES only. `watch.ts`'s `sweepLanding` keeps the READS
  * (the store, the registry, `survivorOf`, `resolveCoordinator`, `hasMailWithSubject`, `hasNotice`) and the
  * DELIVERIES (`queueSystemMail`, the feed record, the latch write); every DECISION is here: which notice a line asks
  * for, its latch key and whether it is already latched, whom to tell, whether a merge is told at all, which durable
@@ -192,4 +200,329 @@ export function renderMergedBrief(sessionId: string, pr: number): string {
     `\`headRefOid\` equal to the run's verified handoffCommit — then close the run as ` +
     `references/wave-lifecycle.md §5 closes a producer.\n\n` +
     `Run the ccrc-coordinator skill.`;
+}
+
+// ══ PR landing in ccrc, stage 1: the checks mail (D-6785; spec §3.1, §3.4 to §3.8) ════════════════════════════════
+//
+// The deciders of the checks lane, all pure: the required verdict, the edge fold over an episode's durable rows, the
+// act a line asks for, the stuck bound, the mode, the check-name sanitiser and the brief. `watch.ts`'s checks lane
+// (PL-4) keeps the reads, the clock, the digest (`node:crypto`) and the deliveries; every DECISION is here.
+
+/** The marker rows this file reads, checked against `SwitchReading` so a typo is a compile error. */
+const LANDING_MARKER_KEYS = ['landing-disabled', 'landing-checks-live'] as const satisfies readonly (keyof SwitchReading)[];
+
+/** True for every hyphenated word this file spells as a single-quoted literal: the words of `shared/landing.ts`'s
+ *  maps, derived and never listed here, and the two marker rows. `mail-routes.test.ts`'s kebab scan reads it. */
+export function isLandingKebab(token: string): boolean {
+  return LANDING_KEBABS.has(token) || (LANDING_MARKER_KEYS as readonly string[]).includes(token);
+}
+
+// ── the required verdict (§3.4) ───────────────────────────────────────────────────────────────────────────────────
+
+/** The verdict of a line's required set: one word, a fingerprint of the reported check runs and the failing names. */
+export interface RequiredVerdict {
+  word: RequiredChecksWord;
+  /** First 12 hex of `digest` over the sorted `name=checkId` pairs of the required CHECK RUNS that have reported. A
+   *  commit status is not in it: it carries no attempt id, and its own final post must not read as a rerun. */
+  fp: string;
+  failing: Array<{ name: string; runId: number | null }>;
+}
+
+const RUN_RUNNING = new Set(['', 'pending', 'queued', 'in_progress', 'waiting', 'requested']);
+const RUN_PASSING = new Set(['success', 'neutral', 'skipped']);
+
+/** One required context's word. A check run (it has a `checkId`) with an empty conclusion has not completed, so it is
+ *  running; any completed conclusion that is not a pass is red. A commit status answers by its state. */
+function contextWord(r: { state: string; checkId: number | null }): RequiredChecksWord {
+  const st = r.state.toLowerCase();
+  if (r.checkId !== null) {
+    if (RUN_RUNNING.has(st)) return 'pending';
+    return RUN_PASSING.has(st) ? 'green' : 'red';
+  }
+  if (st === 'success') return 'green';
+  if (st === 'failure' || st === 'error') return 'red';
+  if (st === 'pending' || st === 'expected' || st === '') return 'pending';
+  return 'unmeasured';
+}
+
+/** The ONE total precedence, `REQUIRED_CHECKS_PRECEDENCE`: unmeasured, red, unverifiable, pending, not-reported,
+ *  green. So a head whose set mixes `unverifiable` with `pending` always reads `unverifiable`, never flipping. */
+const stronger = (a: RequiredChecksWord, b: RequiredChecksWord): RequiredChecksWord =>
+  REQUIRED_CHECKS_PRECEDENCE.indexOf(a) <= REQUIRED_CHECKS_PRECEDENCE.indexOf(b) ? a : b;
+
+/** The required set is the union of the contexts marked required, the rules' names and the branch view's names. The
+ *  set is never empty by default: a repository with no required checks reads `green` only when all three sources
+ *  answered and named none. A required name no context carries is `not-reported`, never `green`. */
+export function requiredChecksVerdict(line: PrLandingLine, digest: (s: string) => string): RequiredVerdict {
+  const pairs = line.required.filter((r) => r.checkId !== null).map((r) => `${r.name}=${String(r.checkId)}`).sort();
+  const fp = digest(pairs.join('\n')).slice(0, 12);
+  const seen = new Set<string>();
+  const failing: Array<{ name: string; runId: number | null }> = [];
+  for (const r of line.required) {
+    const key = `${r.name}\n${String(r.runId)}`;
+    if (contextWord(r) === 'red' && !seen.has(key)) { seen.add(key); failing.push({ name: r.name, runId: r.runId }); }
+  }
+  failing.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  // A read that did not answer, a line that does not bind, a list ccd cut: nothing here may be called green.
+  if (!line.bound || line.unmeasured.length > 0 || line.requiredCut) return { word: 'unmeasured', fp, failing };
+  const pinned = new Set(line.pinnedNames);
+  const names = new Set([...line.required.map((r) => r.name), ...line.rulesNamed, ...line.protectionNamed]);
+  let word: RequiredChecksWord = 'green';
+  for (const name of names) {
+    const own = line.required.filter((r) => r.name === name);
+    let w: RequiredChecksWord = own.length === 0 ? 'not-reported' : 'green';
+    for (const r of own) w = stronger(w, contextWord(r));
+    // Pinned to an App, but only a commit status shows it: a status carries no App id (a parent §5.7.5 stop).
+    if (own.length > 0 && pinned.has(name) && own.every((r) => r.checkId === null)) w = stronger(w, 'unverifiable');
+    word = stronger(word, w);
+  }
+  return { word, fp, failing };
+}
+
+// ── the edge fold (§3.5) ──────────────────────────────────────────────────────────────────────────────────────────
+
+/** One row of an episode's generations, parsed from its `run_events` detail by `readChecksRowDetail`. `fp` is an
+ *  edge row's fingerprint, `reading` a `stuck` row's (`unread`, or `<word>@<fp12>`), `atMs` the row's `at`. */
+export interface ChecksRow {
+  gen: number;
+  what: 'open' | 'green' | 'red' | 'stuck';
+  fp: string | null;
+  reading: string | null;
+  atMs: number;
+}
+/** What one pass read of the episode: the verdict word and its fingerprint (`fp` is ignored for `unmeasured`). */
+export interface ChecksRead { word: RequiredChecksWord; fp: string }
+export interface ChecksMailAsk { gen: number; word: ChecksMailWord; cause?: StuckCause }
+export interface ChecksFold {
+  /** The rows to write, in order. */
+  write: ChecksRow[];
+  /** At most one mail, for the generation it names. */
+  mail: ChecksMailAsk | null;
+  /** The current generation's bound as the rows stand after this answer, or null when it owes none (green-settled, or
+   *  it holds its `stuck` row). The latch spares a read only until this time. */
+  dueAtMs: number | null;
+}
+
+const readingOf = (read: ChecksRead | null): string => {
+  if (read === null || !isFp12(read.fp)) return 'unread';
+  return read.word === 'pending' || read.word === 'not-reported' || read.word === 'unverifiable' || read.word === 'red'
+    ? `${read.word}@${read.fp}` : 'unread';
+};
+const parseReading = (reading: string | null): { word: string | null; fp: string | null } => {
+  if (reading === null || reading === 'unread') return { word: null, fp: null };
+  const at = reading.indexOf('@');
+  return at < 0 ? { word: null, fp: null } : { word: reading.slice(0, at), fp: reading.slice(at + 1) };
+};
+
+/** The state of the current generation (the count of `open` rows, minus one). */
+function currentGen(rows: readonly ChecksRow[]) {
+  const gen = rows.filter((r) => r.what === 'open').length - 1;
+  const own = rows.filter((r) => r.gen === gen);
+  return {
+    gen,
+    open: own.find((r) => r.what === 'open'),
+    edge: own.find((r) => r.what === 'green' || r.what === 'red'),
+    stuck: own.find((r) => r.what === 'stuck'),
+  };
+}
+
+function dueOf(rows: readonly ChecksRow[]): number | null {
+  const c = currentGen(rows);
+  if (c.stuck !== undefined || c.open === undefined) return null;
+  if (c.edge !== undefined) return c.edge.what === 'red' ? c.edge.atMs + LANDING_CHECKS_STUCK_MS : null;
+  return c.open.atMs + LANDING_CHECKS_STUCK_MS;
+}
+
+/** The one fold. `read` null is a pass that did not read (the bound alone, with `forced` the cause). */
+function foldChecks(rows: readonly ChecksRow[], read: ChecksRead | null, nowMs: number, episodeAtMs: number,
+  forced: StuckCause | null): ChecksFold {
+  const all = [...rows];
+  const write: ChecksRow[] = [];
+  const push = (r: ChecksRow): void => { all.push(r); write.push(r); };
+  let mail: ChecksMailAsk | null = null;
+  // Generation 0 opens on the first pass that sees the episode, at the transition row's time, not the sighting's.
+  if (!all.some((r) => r.what === 'open')) push({ gen: 0, what: 'open', fp: null, reading: null, atMs: episodeAtMs });
+  const answered = read !== null && read.word !== 'unmeasured' ? read : null;
+
+  if (answered !== null) {
+    const w = answered.word;
+    const settled = w === 'green' || w === 'red';
+    const c = currentGen(all);
+    const openNext = (): number => {
+      const next = c.gen + 1;
+      push({ gen: next, what: 'open', fp: null, reading: null, atMs: nowMs });
+      return next;
+    };
+    const settle = (gen: number): void => {
+      push({ gen, what: w as 'green' | 'red', fp: answered.fp, reading: null, atMs: nowMs });
+      mail = { gen, word: w as ChecksMailWord };
+    };
+    if (c.edge === undefined && c.stuck !== undefined) {
+      // After an unsettled `stuck`: the same hung wait opens nothing, a rerun the lane saw or a settle does.
+      const sr = parseReading(c.stuck.reading);
+      const running = w === 'pending' || w === 'not-reported';
+      if (settled) settle(openNext());
+      else if ((w === 'pending' && sr.word !== 'pending') || (running && answered.fp !== sr.fp)) openNext();
+    } else if (c.edge !== undefined) {
+      // A settled generation opens the next on a rerun seen running, a changed fingerprint, or the other settled word.
+      if (w === 'pending' || w === 'not-reported') openNext();
+      else if (settled && (w !== c.edge.what || answered.fp !== c.edge.fp)) settle(openNext());
+    } else if (settled) {
+      settle(c.gen);
+    }
+  }
+
+  if (mail === null) {
+    const c = currentGen(all);
+    if (c.open !== undefined && c.stuck === undefined && !(c.edge !== undefined && c.edge.what === 'green')) {
+      const unverifiable = c.edge === undefined && answered !== null && answered.word === 'unverifiable';
+      const due = c.edge !== undefined ? c.edge.atMs + LANDING_CHECKS_STUCK_MS : c.open.atMs + LANDING_CHECKS_STUCK_MS;
+      if (unverifiable || nowMs >= due) {
+        const cause: StuckCause = unverifiable ? 'unverifiable' : forced ?? (answered !== null ? 'timeout' : 'unmeasured');
+        push({ gen: c.gen, what: 'stuck', fp: null, reading: readingOf(answered), atMs: nowMs });
+        mail = { gen: c.gen, word: 'stuck', cause };
+      }
+    }
+  }
+  return { write, mail, dueAtMs: dueOf(all) };
+}
+
+/** The edge of one read over an episode's rows (spec §3.5): generations, edges, the stuck bound and the due time. Pure:
+ *  it reads no clock and no memory. `live` is the caller's (a shadow pass folds the same rows and writes them as
+ *  `landing-shadow:` rows), so it changes nothing here. */
+export function checksEdge(rows: readonly ChecksRow[], read: ChecksRead, nowMs: number, episodeAtMs: number,
+  _live: boolean): ChecksFold {
+  return foldChecks(rows, read, nowMs, episodeAtMs, null);
+}
+
+/** The bound alone, for an owed episode the pass does not read: `disabled` under `landing-disabled`; `unmeasured` with
+ *  no capability, a workspace gone from the registry, or a registry that cannot be listed. It writes the `stuck` row
+ *  with reading `unread`, with both of `checksEdge`'s clocks, and a green-settled generation owes nothing. */
+export function stuckOnly(rows: readonly ChecksRow[], nowMs: number, episodeAtMs: number, cause: StuckCause): ChecksFold {
+  return foldChecks(rows, null, nowMs, episodeAtMs, cause);
+}
+
+// ── what a line asks for (§3.2) ───────────────────────────────────────────────────────────────────────────────────
+
+/** The two facts of an episode a line is judged against: the PR it advanced at and the head it verified. */
+export interface LandingEpisode { pr: number; head: string }
+export type LandingLineAct =
+  | { act: 'unmeasured' }
+  | { act: 'edge' }
+  | { act: 'moved'; head: string }
+  | { act: 'left'; phase: LeftPhase };
+
+/** Spec §3.2's four acts, in order. `unmeasured` (the read, or the binding, did not answer) is never `left`. */
+export function landingLineAct(episode: LandingEpisode, line: PrLandingLine | null): LandingLineAct {
+  if (line === null || line.unmeasured.length > 0) return { act: 'unmeasured' };
+  if (!line.bound || line.number !== episode.pr) return { act: 'left', phase: 'unbound' };
+  if (line.state === 'MERGED') return { act: 'left', phase: 'merged' };
+  if (line.state === 'CLOSED') return { act: 'left', phase: 'closed' };
+  if (line.state !== 'OPEN' || line.head === null || !isHead40(line.head)) return { act: 'unmeasured' };
+  if (line.isDraft) return { act: 'left', phase: 'draft' };
+  return line.head === episode.head ? { act: 'edge' } : { act: 'moved', head: line.head };
+}
+
+// ── the mode (§3.7) ───────────────────────────────────────────────────────────────────────────────────────────────
+
+/** The mode an episode is decided in, once, at the advance. `off` unless a bound PR in phase `open` was measured, the
+ *  ccd answers `pr-landing-v1` and `landing-disabled` is clear; `live` when `landing-checks-live` stands, else
+ *  `shadow`. A marker that reads `unmeasurable` (the registry could not be listed) is `off`: this reader's own
+ *  mapping, so no token is sent and nothing is owed to a coordinator that was not told `live`. */
+export function checksModeAt(switches: SwitchReading, capable: boolean,
+  measured: { prNumber: number | null; prPhase: string | undefined }): ChecksMode {
+  const disabled: MarkerState = switches['landing-disabled'];
+  const live: MarkerState = switches['landing-checks-live'];
+  if (disabled !== 'clear' || live === 'unmeasurable') return 'off';
+  if (!capable || measured.prNumber === null || measured.prPhase !== 'open') return 'off';
+  const mode: ChecksMode = live === 'set' ? 'live' : 'shadow';
+  return (CHECKS_MODES as readonly string[]).includes(mode) ? mode : 'off';
+}
+
+/** What the lane's disable marker says of a pass: `disabled` (it stands: no read, no edge row, no mail of an edge),
+ *  `unmeasurable` (the registry could not be listed) or `enabled`. The one place L4 asks, so `watch.ts` never names the
+ *  marker (`landing-words.test.ts`'s no-writer pin lists the files that do). */
+export function checksGate(switches: SwitchReading): 'enabled' | 'disabled' | 'unmeasurable' {
+  const s: MarkerState = switches['landing-disabled'];
+  return s === 'set' ? 'disabled' : s === 'unmeasurable' ? 'unmeasurable' : 'enabled';
+}
+
+// ── GitHub-supplied names (§3.6) ──────────────────────────────────────────────────────────────────────────────────
+
+const NAME_OUTSIDE = /[^A-Za-z0-9 _.,:()/+#-]/gu;
+const NAME_MAX = 80;
+const NAMES_MAX = 10;
+
+/** Reduce a GitHub-supplied check name before it enters any mail: NFKC-normalise, replace every character outside
+ *  `[A-Za-z0-9 _.,:()/+#-]` with `?` (backticks, control characters, newlines and bidirectional overrides go), collapse
+ *  runs of spaces and cap at 80. A name is never an argv, a shell word, a subject or a file name. */
+export function landingCheckName(raw: string): string {
+  return raw.normalize('NFKC').replace(NAME_OUTSIDE, '?').replace(/ {2,}/g, ' ').trim().slice(0, NAME_MAX).trimEnd();
+}
+
+/** The names a mail shows: the first 10 reduced, and the count of the rest. */
+export function landingCheckNames(list: readonly string[]): { names: string[]; more: number } {
+  return { names: list.slice(0, NAMES_MAX).map(landingCheckName), more: Math.max(0, list.length - NAMES_MAX) };
+}
+
+// ── the mail (§3.6) ───────────────────────────────────────────────────────────────────────────────────────────────
+
+/** `checks:#<pr>:<e>.<gen>:<word>@<head7>`, beside `dequeuedSubject` and `mergedSubject`. The episode and the
+ *  generation are in it, because a second red of the same head, or a red after a re-entry, is a new fact. */
+export const checksSubject = (pr: number, e: number, gen: number, word: ChecksMailWord, head: string): string =>
+  `checks:#${pr}:${e}.${gen}:${word}@${head.slice(0, 7)}`;
+
+export interface ChecksBriefInput {
+  pr: number; sessionId: string; head: string; e: number; gen: number; word: ChecksMailWord;
+  /** `stuck` only. */
+  cause?: StuckCause;
+  /** `red` only: the failing required contexts, names as GitHub wrote them (reduced here). */
+  failing?: ReadonlyArray<{ name: string; runId: number | null }>;
+  /** `moved` only: the measured head. */
+  movedHead?: string;
+  /** `left` only: the measured phase. */
+  phase?: LeftPhase;
+}
+
+const STUCK_SENTENCE: Record<StuckCause, string> = {
+  timeout: 'the lane read the checks and they were still unsettled (or still red) 45 minutes on',
+  unmeasured: 'the lane could not read this PR, so it cannot tell you when its checks settle',
+  unverifiable: 'a required check is pinned to an App and shows only as a commit status, so it cannot be verified from here',
+  disabled: 'the landing lane was switched off while this episode was live',
+};
+
+/** The mail's body, built in one place. Every value is this server's own except a failing check name, which reaches
+ *  the body only through `landingCheckNames` and inside `untrustedBlock` with a GitHub preface. The server names the
+ *  next act and never performs it. */
+export function renderChecksBrief(a: ChecksBriefInput): string {
+  const sid = /^[A-Za-z0-9._-]+$/.test(a.sessionId) ? a.sessionId : '?';
+  const head = isHead40(a.head) ? a.head : '?';
+  const out: string[] = [
+    `PR #${a.pr} (workspace \`${sid}\`), episode ${a.e}, generation ${a.gen}: ${a.word}.`,
+    `The run advanced to \`merging\` at head \`${head}\`.`,
+  ];
+  if (a.word === 'green') {
+    out.push('Every required check passed on that head. Confirm it once, then run your own enqueue and its read-back.');
+  } else if (a.word === 'red') {
+    out.push('At least one required check failed on that head.');
+    const { names, more } = landingCheckNames((a.failing ?? []).map((f) => f.name));
+    if (names.length > 0) {
+      out.push(untrustedBlock(names.join('\n'), 2048, 'on the PR', GITHUB_TEXT_PREFACE) + (more > 0 ? `\n+${more} more` : ''));
+    }
+    const ids = [...new Set((a.failing ?? []).map((f) => f.runId).filter((n): n is number => n !== null && Number.isSafeInteger(n) && n > 0))].slice(0, 5);
+    out.push('Either send the owning worker a fix round on the `merging → working` edge, or, when the failure is not this PR\'s own, '
+      + (ids.length > 0 ? `rerun the failed jobs once: ${ids.map((n) => `\`gh run rerun ${n} --failed\``).join(', ')}.` : 'rerun the failed jobs once.'));
+  } else if (a.word === 'stuck') {
+    const cause: StuckCause = a.cause ?? 'unmeasured';
+    out.push(`The wait has no end the server can see (${cause}): ${STUCK_SENTENCE[cause]}.`);
+    out.push('Go back to the foreground wait for this episode, or act on the cause.');
+  } else if (a.word === 'moved') {
+    out.push(`The PR head moved to \`${a.movedHead !== undefined && isHead40(a.movedHead) ? a.movedHead : '?'}\`.`);
+    out.push('Send the run back to `working` and advance again through `awaiting-review`.');
+  } else {
+    out.push(`The PR is no longer one this episode can wait on (${a.phase ?? 'unbound'}).`);
+    out.push('Go back to the foreground wait, or send the run back.');
+  }
+  out.push('The server performs none of this; it only tells you.', 'Run the ccrc-coordinator skill.');
+  return out.join('\n\n');
 }

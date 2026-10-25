@@ -1,5 +1,6 @@
 import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../../shared/api.js';
 import { HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER } from '../../../shared/switches.js';
+import { turnSays, turnWordOf } from '../sessionReading.js';
 
 /**
  * HIBERNATE LONG-IDLE SESSIONS (D-5242, `hibernate-long-idle-sessions`, spec §5.11): the server's pure verdict.
@@ -25,7 +26,7 @@ import { HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER } from '../../../share
  *   (the row's `statusUpdatedAt` is never read), so a session Claude Code compacts while it idles still ages;
  * - no hold, no open run naming it as worker or claimant in ANY non-terminal state (the store's `state NOT IN` the
  *   terminal set, so `planned`, `awaiting-review`, `merging`, `closing` and `unknown` hold too), no claim, no mail;
- * - nobody has it open (`Presence.isOpen`, a hidden tab included), and nothing is believed about presence for
+ * - nobody has it open (`Viewers.isOpen`, a hidden tab included), and nothing is believed about presence for
  *   `PRESENCE_OPEN_TTL_MS` after the server starts, since presence is never persisted;
  * - not stranded, swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate`.
  *
@@ -167,7 +168,7 @@ export interface HibernateInput {
   /** `$REG/<id>.no-hibernate` is listed. */
   readonly optedOut: boolean;
   readonly store: HibernateStoreRead;
-  /** `Presence.isOpen` for this id. */
+  /** `Viewers.isOpen` for this id. */
   readonly viewer: boolean;
   /** Milliseconds since the server started (presence is never persisted). */
   readonly sinceStartMs: number;
@@ -209,7 +210,7 @@ export function hibernateVerdict(i: HibernateInput, now: number, afterMs: number
   if (i.live.kind === 'unread') return { act: 'measure' };
   const w = i.live.word;
   if (!w.ok) return hold(w.reason === 'unmeasured' ? 'unmeasured' : 'pane');
-  if (w.word !== 'idle') return hold('live-word');
+  if (turnSays('sleep', turnWordOf(w.word)) !== 'rest') return hold('live-word');
   const m = i.live.mark;
   if (!m.ok || m.state !== 'done') return hold('marker');
   if (m.bg !== 0) return hold('marker-background');

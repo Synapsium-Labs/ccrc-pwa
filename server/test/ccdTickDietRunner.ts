@@ -1,11 +1,12 @@
-// The tick diet's differential runner, shared by the two files that run its per-locale rows (#387, tick-diet spec §9).
+// The tick diet's differential runner, shared by the files that run its per-locale rows (#387, tick-diet spec §9).
 //
-// `ccd-tick-diet-equivalence.test.ts` runs the locale-free parts (E0, E1, E2, E4 and the static censuses E8d, E8g and
-// E10d) and the rows under `C`; `ccd-tick-diet-equivalence-utf8.test.ts` runs the same rows under the UTF-8 locale.
-// Both call `registerLocaleRows`, at the end of this file, with their own entry of `LOCALES`. Everything above it is
-// the harness's body, moved here whole from the one file that held it: the vendored-name tables the rows read, the
-// function reader, the runner (`runBatch`, `PRELUDE`, `runScript`), the locale probe, and every row builder and constant
-// of E3 and E5 to E10. The header comment of `ccd-tick-diet-equivalence.test.ts` says what each part proves.
+// `ccd-tick-diet-equivalence-static.test.ts` runs the locale-free parts (E0, E1, E2, E4 and the static censuses E8d,
+// E8g and E10d), `-rows` and `-route` the rows under `C` (D-6767), and `ccd-tick-diet-equivalence-utf8-<part>.test.ts` the
+// same rows under the UTF-8 locale. Those files call `registerLocaleRows`, at the end of this file, with their own
+// entry of `LOCALES`. Everything above it is the harness's body, moved here whole from the one file that held it: the
+// vendored-name tables the rows read, the function reader, the runner (`runBatch`, `PRELUDE`, `runScript`), the locale
+// probe, and every row builder and constant of E3 and E5 to E10. The static file's header comment says what
+// each part proves.
 //
 // It is named `ccd*.ts`, so `ccd-workspaces.test.ts`'s census of bash spawns reads it: its three spawns (the UTF-8
 // probe, `runBatch` and `runScript`) carry `ghContainedEnv` and the systemd and tmux poisons.
@@ -1252,10 +1253,15 @@ export function rawHomeMeasuredCalls(src: string): string[] {
 
 /** Registers the seven per-locale blocks (E3, E5 to E10) for ONE entry of `LOCALES`. Each keeps its
  *  `describe.each(…)` form, called on a one-element array, so a full test name is the one it was when a single file
- *  ran both locales (`… under 'C' (…)` and `… under 'the UTF-8 locale' (…)`). `ccd-tick-diet-equivalence.test.ts`
- *  calls it with `LOCALES[0]` and `ccd-tick-diet-equivalence-utf8.test.ts` with `LOCALES[1]`. */
-export function registerLocaleRows(loc: (typeof LOCALES)[number]): void {
-  describe.each([loc])('E3 the W1 rows under $name (tick-diet spec §6.2, plan Task 2 Step 5)', ({ locale }) => {
+ *  ran both locales (`… under 'C' (…)` and `… under 'the UTF-8 locale' (…)`).
+ *  `ccd-tick-diet-equivalence-rows` and `-route.test.ts` call it with `LOCALES[0]` and the `ccd-tick-diet-equivalence-utf8-<part>.test.ts` files with `LOCALES[1]`. `parts`, when given, names
+ *  the blocks to register (`'E3'`, `'E5'`, …); a file that runs a share of a locale's rows passes its share, so the blocks
+ *  split across files by `describe` with every title unchanged (D-6767). Omitted, every block is registered. */
+export function registerLocaleRows(loc: (typeof LOCALES)[number], parts?: readonly string[]): void {
+  /** `describe.each([loc])` for block `id`, or a no-op when `parts` is given and leaves `id` out. */
+  const each = describe.each([loc]);
+  const rowsBlock = (id: string): typeof each => (parts === undefined || parts.includes(id) ? each : ((() => undefined) as never));
+  rowsBlock('E3')('E3 the W1 rows under $name (tick-diet spec §6.2, plan Task 2 Step 5)', ({ locale }) => {
     const rows = w1Rows();
     let h: CcdHarness;
     let batch: Batch | null = null;
@@ -1318,7 +1324,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number]): void {
     });
   });
 
-  describe.each([loc])('E5 the W2 limits rows under $name (tick-diet spec §6.3, D-4962, plan Task 8)', ({ locale }) => {
+  rowsBlock('E5')('E5 the W2 limits rows under $name (tick-diet spec §6.3, D-4962, plan Task 8)', ({ locale }) => {
     const rows = w2LimitsRows();
     let h: CcdHarness;
     let fixed: Batch | null = null;
@@ -1415,7 +1421,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number]): void {
     });
   });
 
-  describe.each([loc])('E6 the W2 share rows under $name (tick-diet spec §6.3, D-4962, plan Task 10)', ({ locale }) => {
+  rowsBlock('E6')('E6 the W2 share rows under $name (tick-diet spec §6.3, D-4962, plan Task 10)', ({ locale }) => {
     const rows = [...e6aRows(), ...e6bRows(), E6C_ROW];
     let h: CcdHarness;
     let batch: Batch | null = null;
@@ -1463,7 +1469,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number]): void {
     });
   });
 
-  describe.each([loc])('E7 W2 Task 9 under $name: `_limit_field_to`, its one read, its callers (tick-diet spec §6.3, D-4962)', ({ locale }) => {
+  rowsBlock('E7')('E7 W2 Task 9 under $name: `_limit_field_to`, its one read, its callers (tick-diet spec §6.3, D-4962)', ({ locale }) => {
     const rows = w2FieldRows();
     let h: CcdHarness;
     let fixed: Batch | null = null;
@@ -1540,7 +1546,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number]): void {
     });
   });
 
-  describe.each([loc])('E8 W3 Task 13 under $name: `_reg_get`, `_reg_read` and their `_to` forms (tick-diet spec §6.4, D-4963)', ({ locale }) => {
+  rowsBlock('E8')('E8 W3 Task 13 under $name: `_reg_get`, `_reg_read` and their `_to` forms (tick-diet spec §6.4, D-4963)', ({ locale }) => {
     const rows = w3RegRows();
     let h: CcdHarness;
     let fixed: Batch | null = null;
@@ -1625,7 +1631,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number]): void {
     });
   });
 
-  describe.each([loc])('E9 W3 Task 15 under $name: the route chain\'s out-var forms (tick-diet spec §6.4, D-4963)', ({ locale }) => {
+  rowsBlock('E9')('E9 W3 Task 15 under $name: the route chain\'s out-var forms (tick-diet spec §6.4, D-4963)', ({ locale }) => {
     const rows = w3RouteRows();
     let h: CcdHarness;
     let batch: Batch | null = null;
@@ -1682,7 +1688,7 @@ export function registerLocaleRows(loc: (typeof LOCALES)[number]): void {
     });
   });
 
-  describe.each([loc])('E10 W3 Task 16 under $name: `_home_measured_to` and `_authdead`\'s builtin read (tick-diet spec §6.4, D-4963)', ({ locale }) => {
+  rowsBlock('E10')('E10 W3 Task 16 under $name: `_home_measured_to` and `_authdead`\'s builtin read (tick-diet spec §6.4, D-4963)', ({ locale }) => {
     const rows = w3HomeRows();
     let h: CcdHarness;
     let batch: Batch | null = null;

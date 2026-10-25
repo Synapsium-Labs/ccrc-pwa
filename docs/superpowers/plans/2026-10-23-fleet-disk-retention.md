@@ -787,7 +787,7 @@ One contiguous block of thirty-one, D-6613 to D-6643, issued by the allocator (`
 - **D-6632** (DR-20): under `nested-rescue-live`, rung 9 classes a nested repository with work on no remote as rescuable. The pin WIP-commits it, fetches its refs and the WIP into `refs/ccrc/attic/<id>/nested/<pathhex>/`, re-proves each sha and bounds the bytes at 512 MiB. Then the ladder proceeds. Both lanes get it, and the token binds it. Reverses the 2026-09-22 spec's "reap, and note" refusal for nested repositories only.
 - **D-6633** (DR-21): `nested-rescue-too-large` is terminal and `nested-rescue-failed` is retry on both lanes; shadow rows name what would be rescued.
 - **D-6634** (DR-22): orphan rung 11 rescues; the census sees `.claude/worktrees` and `.superpowers/worktrees` of every checkout, and a containing row passes rung 4 as `inside`.
-- **D-6635** (DR-23): a nested tree is a candidate only inside a coordinator's workspace.
+- **D-6635** (DR-23): a nested tree is a candidate only inside a coordinator's workspace. A containing row that is no workspace (registry `workspace` null: a plain session or the main checkout, the same `workspace !== null` test 2.7.5 uses for G1) is no nesting, because a main checkout has no reclaim or expiry exit; the server reads the row itself (`isWorkspace`), so no ccd change is needed, and a row it cannot read keeps the tree. Ruled (orchestrator): the departure from 2.7.5 read literally is accepted, and the spec text now says so; the server reads the `.workspace` marker measured, and an unreadable marker keeps the tree.
 - **D-6636** (DR-24): the suite moves a run parent out of any work tree; every spawn exports `CCRC_SESSION_TMPDIR`.
 - **D-6637** (DR-25): one clause each in the coordinator and worker skills, on temp placement and long output.
 - **D-6638** (DR-26): `ws-reclaim --stale <word> [--hold-digest]`; a hold passes only by digest; a box-measured 7-day idle rung; the token binds both.
@@ -796,6 +796,9 @@ One contiguous block of thirty-one, D-6613 to D-6643, issued by the allocator (`
 - **D-6641** (DR-29): the expiry lane stops skipping a readable child mark under `expire-child-live`.
 - **D-6642** (DR-30): `ws-archive --if-no-pane` refuses `live`; the reason word `stale`.
 - **D-6643** (DR-31): a workspace that is not a child and was never a claimant, with no pane for 14 days, is archived, one per pass, shadow until `stale-archive-live`.
+- **D-6766** — (DR-12; allocated by the orchestrator) the census session row carries `top`, the session's five largest entries as `[{name, bytes}]`, written by `ccd-tmp-sweep` and read by DR-12's notice; optional on the wire, absent reads `[]`. `kept` is bounded to the first fifty with a `keptMore` count.
+- **D-6858** — (DR-13; allocated by the orchestrator) the loose arm's rows rung reads a standing regular file against the registry by spelling: a row at or through the file, as written or under the root's physical path, holds it; an unreadable row is `unmeasured`. A file is no workdir, so the shared directory rung is not asked of it (#1393).
+- **D-6859** — (DR-15; allocated by the orchestrator) the collect lane offers loose ids only while none is in flight, and at most one across the act and the learning audits, because ccd's loose audit and act share one non-waiting lock; witnessed ids still fill the learning cap (#1393).
 
 ### Decisions recorded while planning
 
