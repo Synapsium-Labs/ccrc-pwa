@@ -281,7 +281,7 @@ describe('the executor stops on its own, whatever the pass did', () => {
       registryDir: '/reg', epochNow: () => 1, fleetState: { ccdVerbs: ['orphan-v1'] },
       runCcd: async (argv: readonly string[]) => {
         calls.push([...argv]);
-        return { ok: true, stdout: JSON.stringify({ mode: 'orphan', pathHex: hex, verdict: 'token', token: tok('a') }), stderr: '', killed: false, signal: null };
+        return { ran: true, ok: true, stdout: JSON.stringify({ mode: 'orphan', pathHex: hex, verdict: 'token', token: tok('a') }), stderr: '', killed: false, signal: null };
       },
     };
     return collectOrphanTree(deps as never, hex, { token: tok('a'), rescue: false, atMono: 0 }, () => 2 * HOUR, 1);
@@ -314,7 +314,7 @@ describe('the executor stops on its own, whatever the pass did', () => {
     const deps = {
       io: { readdirMeasured: async () => ({ ok: true, entries: [ORPHAN_TREE_LIVE_MARKER] }) } as never, registryDir: '/reg', epochNow: () => 2,
       fleetState: { ccdVerbs: ['orphan-v1'] },
-      runCcd: async (a: readonly string[]) => { calls.push([...a]); return { ok: true, stdout: JSON.stringify({ mode: 'orphan', pathHex: hex, verdict: 'token', token: tok('a') }), stderr: '', killed: false, signal: null }; },
+      runCcd: async (a: readonly string[]) => { calls.push([...a]); return { ran: true, ok: true, stdout: JSON.stringify({ mode: 'orphan', pathHex: hex, verdict: 'token', token: tok('a') }), stderr: '', killed: false, signal: null }; },
     };
     expect(await collectOrphanTree(deps as never, hex, { token: tok('a'), rescue: false, atMono: 0 }, () => 2 * HOUR, 1)).toEqual({ kind: 'stopped', why: 'epoch' });
     expect(calls.some((c) => c[0] === 'ws-orphan')).toBe(false);
