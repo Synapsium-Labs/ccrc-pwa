@@ -90,4 +90,34 @@ by its function name before editing.
   rows since v0.0.637, and the reader (DR-12) refused them, so one dead test-run root made the whole census read as
   malformed. The spec said nothing about these two fields on a test-run row. The reader now follows the writer, and the
   spec says so.
-- **D-6855.** Spare, for a departure found while executing this task. If unused, it says "spare, unused".
+- **D-6855.** Spare, unused.
+
+## As built (2026-10-25)
+
+- **Readers of the row.** A `grep` for `\.moved\b` and `TmpSweepMoved` under `server/src` finds only
+  `server/src/tmpSweep.ts`: the type, `parseMoved`, `parseTmpSweepCensus` and `tmpSweepReceipts`. Under `pwa/src`,
+  `shared` and `agent/src` it finds nothing. `server/src/tmpSweepLane.ts` calls `parseTmpSweepCensus` and
+  `tmpSweepReceipts`, but it reads only the receipt mails, whose `toId` stays `string`. It never reads a `moved` row.
+- **The reader.** `parseMoved` checks the other fields first. It then sets `sessionless` (kind `test-run`, and `id`
+  and `uuid` both `''`), and refuses any other empty `id` or `uuid`. The comment that names the writer's line
+  (`test_run_arm` in `ccd/ccd-tmp-sweep`) is on that check. `tmpSweepReceipts` skips a row whose `id` is `null`
+  before it skips shadow and expired rows.
+- **Red first.** The contract row (`tmp-sweep-test-runs.test.ts`) failed on the old reader with
+  `the writer's own census reads as measured: expected null not to be null`. The three malformed rows
+  (`tmp-sweep-mail.test.ts`) were already green on the old reader, as they should be: they pin that the carve-out stays
+  narrow.
+- **Mutation table.** Each mutant was made in place, with a copy of the original in the session's scratch directory. Each
+  ran in a subshell with `ulimit -u` set to the measured thread count plus 1500, under `timeout -k 10 600`. The file was
+  then restored, and `cmp` exited 0 every time.
+
+  | Mutant | `tsc --noEmit` | Rows that went red |
+  |---|---|---|
+  | M1: delete the receipts skip (`r.id === null`) | refused (TS2322 at the receipt's `id`) | the receipts row (`tmp-sweep-mail`, 1 of 57) |
+  | M2: drop the test-run carve-out (`sessionless = false`) | clean | the contract row (`tmp-sweep-test-runs`, 1 of 17); `tmp-sweep-mail` stays green |
+  | M3: allow an empty `id` on any kind | clean | the `scratch` row and the test-run row with only `id` empty (2 of 57) |
+  | M4: allow one-sided emptiness on a test-run row | clean | both one-sided test-run rows (2 of 57) |
+
+  M1 is held twice: by the type, because a `null` id cannot reach a mail's `toId`, and by the receipts row. M2 is held
+  only by the contract row, which runs on Linux alone, like its whole file.
+- **The writer's row matched the plan.** The contract row read `kind: 'test-run'`, `id: ''` and `uuid: ''` from the
+  real sweep. So D-6855 was not needed.

@@ -56,6 +56,9 @@ describe('parseTmpSweepCensus — the one reader', () => {
     ['a negative size', json({ ...census({ sessions: [session({ bytes: -1 })] }) })],
     ['a moved row with no seq', json({ ...census(), moved: [{ ...moved(1), seq: undefined }] })],
     ['a half-written file', json(census()).slice(0, 40)],
+    ['a scratch row with an empty id', json({ ...census(), moved: [moved(1, { id: '' })] })],
+    ['a test-run row with only its id empty', json({ ...census(), moved: [moved(1, { kind: 'test-run', id: '', quarantine: null })] })],
+    ['a test-run row with only its uuid empty', json({ ...census(), moved: [moved(1, { kind: 'test-run', uuid: '', quarantine: null })] })],
   ])('%s is null (unmeasured), never an empty census', (_name, text) => {
     expect(parseTmpSweepCensus(text)).toBeNull();
   });
@@ -88,6 +91,12 @@ describe('tmpSweepReceipts — one mail per session per pass, never for shadow',
       ['project-a-quiet-basin', `tmp-sweep: moved 2 entries (seq 1-3, pass ${T0})`],
       ['project-b-calm-mesa', `tmp-sweep: moved 1 entries (seq 2-2, pass ${T0})`],
     ]);
+  });
+
+  it('a live test-run row (no session owns it, D-6854) is mailed to no one; the session beside it still is', () => {
+    const c = census({ seq: 2, moved: [moved(1), moved(2, { kind: 'test-run', id: null, uuid: null, quarantine: null })] });
+    const r = tmpSweepReceipts(c, 0);
+    expect(r.mails.map((m) => [m.toId, m.subject])).toEqual([['project-a-quiet-basin', `tmp-sweep: moved 1 entries (seq 1-1, pass ${T0})`]]);
   });
 
   it('a census whose seq fell below the high-water (a recreated file) is read from the start', () => {
