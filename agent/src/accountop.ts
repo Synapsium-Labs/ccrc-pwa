@@ -144,3 +144,5 @@ export function readFleetIdentity(home: string): string | null {
     if (fd !== undefined) { try { closeSync(fd); } catch { /* closed */ } }
   }
 }
+
+// light-run measurement probe, do not merge
