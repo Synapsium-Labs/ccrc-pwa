@@ -40,6 +40,7 @@ usage: measure-landing.py <subcommand> [args] [--since YYYY-MM-DD] [--until YYYY
   mail-latency
   green-to-merge OWNER/REPO [--required a,b,..]
   queue-ejections OWNER/REPO
+  queue-waits    OWNER/REPO [--required a,b,..]
   inversions     OWNER/REPO --fleet-login L1,L2,.. [--required a,b,..]
 The window defaults to the frozen baseline, 2026-09-08..2026-09-22 inclusive.
 """
@@ -509,6 +510,62 @@ def job_signal(repo, job_id, cache):
     return cache.get(f'logsignal-{repo}-{job_id}', read)
 
 
+def queue_wait_split(green, merged, events):
+    """Where a queued PR's green-to-merge wait went. `events` are (kind, time)
+    pairs from the PR's timeline, kind 'added_to_merge_queue' or
+    'removed_from_merge_queue'. FIRST ENTRY is the earliest add at or after
+    `green`; LAST ENTRY is the latest add at or before `merged` (an add not
+    followed by a removal before the merge is the one that landed, and every
+    later add supersedes an ejected earlier one). Returns minutes
+    (green to first entry, last entry to merge, green to merge), or None when
+    the PR was never added to the queue inside [green, merged]."""
+    adds = sorted(P(t) for k, t in events if k == 'added_to_merge_queue')
+    g, m = P(green), P(merged)
+    first = next((a for a in adds if a >= g), None)
+    last = next((a for a in reversed(adds) if a <= m), None)
+    if first is None or last is None:
+        return None
+    mins = lambda a, b: round((b - a).total_seconds() / 60, 1)
+    return mins(g, first), mins(last, m), mins(g, m)
+
+
+def cmd_queue_waits(repo, required, win, cache):
+    """ADDED for the 2026-10-25 re-measurement: stage 2's green-to-merge wait split
+    at the queue door, for PRs merged in the window that went through the merge queue.
+    `green` is as in green-to-merge; the queue events come from each PR's issue
+    timeline (`added_to_merge_queue`, `removed_from_merge_queue`). A PR merged
+    without a queue entry, or whose head was not green, is counted apart."""
+    lo, hi = win[0] + 'T00:00:00Z', win[1] + 'T23:59:59Z'
+    pre, post, total, noqueue, notgreen, ejected = [], [], [], 0, 0, 0
+    for p in pulls(repo, win, cache):
+        if not p.get('merged_at') or not lo <= p['merged_at'] <= hi:
+            continue
+        cs = [c for c in checks(repo, p['head']['sha'], cache) if c.get('name') in required]
+        if required_state(cs, required) != 'green':
+            notgreen += 1
+            continue
+        green = max(c['completed_at'] for c in cs if c.get('conclusion') == 'success')
+        n = p['number']
+        tl = cache.get(f'timeline-{repo}-{n}', lambda: [
+            {'event': e['event'], 'created_at': e['created_at']}
+            for e in _pages(f'repos/{repo}/issues/{n}/timeline')
+            if e.get('event') in ('added_to_merge_queue', 'removed_from_merge_queue')])
+        ev = [(e['event'], e['created_at']) for e in tl]
+        sp = queue_wait_split(green, p['merged_at'], ev)
+        if sp is None:
+            noqueue += 1
+            continue
+        pre.append(sp[0]); post.append(sp[1]); total.append(sp[2])
+        # GitHub also logs a removal when the entry merges, so a removal counts as an ejection
+        # only when the PR was added again afterwards
+        last_add = max(P(t) for k, t in ev if k == 'added_to_merge_queue')
+        ejected += any(k == 'removed_from_merge_queue' and P(t) < last_add for k, t in ev)
+    return {'repo': repo, 'window': win, 'prs': len(total), 'mergedWithoutQueueEntry': noqueue,
+            'headNotGreen': notgreen, 'prsReQueued': ejected,
+            'greenToFirstEntryMin': summary(pre), 'lastEntryToMergeMin': summary(post),
+            'greenToMergeMin': summary(total)}
+
+
 def cmd_queue_ejections(repo, win, cache):
     """ADDED for the 2026-10-25 re-measurement (the spec's §10 has no queue metric,
     because the queue came after it): every merge_group run in the window, the failed
@@ -837,6 +894,8 @@ def main(argv):
         rep = cmd_green_to_merge(repo, req(), win, cache)
     elif sub == 'queue-ejections':
         rep = cmd_queue_ejections(repo, win, cache)
+    elif sub == 'queue-waits':
+        rep = cmd_queue_waits(repo, req(), win, cache)
     elif sub == 'inversions':
         logins = fleet_logins(args)   # BEFORE req(): the refusal precedes every GET and every cache write
         rep = cmd_inversions(repo, req(), win, cache, logins)

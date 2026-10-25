@@ -940,9 +940,9 @@ baseline from here on (§10).
 
 | Metric | Baseline | Target | 10-02..10-20 | 10-21..10-25 | 10-22..10-25 | Verdict |
 |---|---|---|---|---|---|---|
-| fleet `update-branch` commits | 8 (tool: 2) | 0 | 10, all on 10-20 | 12, all on 10-21 | 0 | missed at the two-week check; 0 since 10-21 22:20 UTC |
-| repeat absorptions, per merge | 0.47 (16 of 34) | under 1/3 | 0.51 (270 of 527) | 0.33 (20 of 61) | 0.24 (7 of 29) | missed before the queue; met after it |
-| merges per PR (fleet local merges of `main`) | 1.9 | n/a | 2.05 (527 merges, 257 PRs) | 1.49 (61, 41) | 1.32 (29, 22) | context for the row above |
+| fleet `update-branch` commits | 8 (tool: 2) | 0 | 10, all on 10-20 | 12, all on 10-21 | 0 | met at the two-week mark (0 on 10-02..10-16); the 10-20/10-21 burst was legacy PRs; 0 since 10-21 22:20 UTC |
+| repeat absorptions, per merge | 0.58 (41 of 71) | under 1/3 | 0.51 (270 of 527) | 0.33 (20 of 61) | 0.24 (7 of 29) | fell 0.58 to 0.51 before the queue, target still missed; met after it |
+| merges per PR (fleet local merges of `main`) | 2.4 (71, 30) | n/a | 2.05 (527 merges, 257 PRs) | 1.49 (61, 41) | 1.32 (29, 22) | context for the row above |
 | ritual syncs per week | about 76 (episodes) | halved | not computable here; proxy below | not computable here; proxy below | n/a | proxy only |
 | green-to-merge median | 33 min (tool: 32.0) | under 10 min | 1.0 min | 77.7 min (p90 310) | 99.6 min (p90 276) | missed, and the wrong way |
 | fleet-on-fleet inversions | 14 | 0 | 125 (153 all actors) | 54 (58) | 36 (36) | missed; the scan's meaning under a queue is doubtful (below) |
@@ -951,9 +951,11 @@ baseline from here on (§10).
 
 Notes on the rows.
 - **update-branch.** Every one of the 22 commits since 10-02 is on 10-20 or 10-21, on PRs opened before the rollout
-  (#956, #960, #983, #984, #985, #987, #1069, #1075). There were none from 10-02 to 10-19 and none after 10-21 22:20 UTC. The
+  (#956, #960, #983, #984, #985, #987, #1069, #1075). There were none from 10-02 to 10-19 (so none at the two-week mark, 10-16) and none after 10-21 22:20 UTC. The
   repository setting that removes the button (`allow_update_branch=false`) came with the queue on 10-21.
-- **Repeat absorptions.** Before the queue the share did not move off the baseline (0.51 against 0.47). The volume
+- **Repeat absorptions.** The baseline is measured over the ruled two-identity fleet set (the gh login plus the
+  placeholder identity that made 37 of the window's 75 merges of `main`): 41 repeats in 71 merges of 30 PRs, 0.58.
+  Before the queue the share fell to 0.51, a small fall that misses the one-third target. The volume
   fell with the queue: 527 fleet merges of `main` in 19 days (about 28 a day) against 29 in the last 4 days (about 7
   a day). Clause 16 and the queue arrived together, so this run cannot say which earned the drop.
 - **Ritual syncs.** The metric is the transcript episode scan, which reads Claude Code transcripts on the fleet box.
@@ -964,11 +966,20 @@ Notes on the rows.
   queue. The baseline window has too few of its commits in the local clone to compare (66 of 75 unmeasured).
 - **Green-to-merge** (a merged PR's final head going green on every required context, to its merge). Before the
   queue the wait was one minute because a coordinator merged at once, with no test of the composition. In the
-  queue era it splits (10-21 12:00 onward, 174 merged PRs with a measurable green): green to the first queue entry
-  43.4 min median (p90 185), then the last successful entry to merge 17.3 min (p90 30), green to merge 90.3 min
-  (p90 262). The queue entry alone is the merge_group CI run: its median is 16.7 min (p90 29.8). **A median under
-  10 minutes cannot be reached while one successful entry takes 17.** The rest is the wait before enqueue and
-  the time lost to ejected entries (below).
+  queue era it is split by `queue-waits` (PRs merged 10-21..10-25 with a green head and a queue entry in each PR's
+  timeline: 194 PRs, 14 merged with no entry, 3 with a head not green): green to the first queue entry **0.5 min
+  median** (p90 107.6), last queue entry to merge **38.4 min median** (p90 135.3), green to merge 82.4 min (p90
+  318.9). For 10-22..10-25 (164 PRs): 0.4, 54.5 and 99.6 min. A "first entry" is the earliest
+  `added_to_merge_queue` event at or after the green time; the "last entry" is the latest such event before the
+  merge, so an entry that was ejected and re-added counts from its last add. The wait is therefore NOT before the
+  queue: PRs are enqueued within a minute of going green at the median (the p90 of about 107 min is the tail
+  that waited for something else). It is inside the queue: one merge_group run is 16.7 min median (p90 29.8, from
+  the merge_group runs list), and the remainder is time behind other entries and re-runs. 54 of the 194 PRs were
+  added again after a removal. **A median under 10 minutes cannot be reached while one successful entry takes
+  17.** An earlier draft of this section put the split at 43 min before enqueue and 17 min inside; that split is
+  withdrawn, because its enqueue times cannot be reproduced from the commands below. The `green-to-merge`
+  row in the table (77.7 min) is the older subcommand's PR set (PRs created, merged or closed in the window) and
+  differs a little from the 82.4 above (PRs merged in the window).
 - **Inversions.** The scan dates a PR as ready from its first sync, and counts any PR open then that merged before
   it. A queue lands in queue order by design, so a non-zero count no longer separates a landing-order fault from the
   queue's own ordering. The figures are stated for completeness; the metric needs a redefinition before it can
@@ -1010,15 +1021,17 @@ were ejected twice.
 
 ### Kill-rule verdict (spec §10: a stage whose metric has not moved two weeks after rollout is retired or redesigned)
 
-- **Stage 1, prose parts (clauses 15 and 16, the sync advisory): the rule fires.** Two weeks after 2026-10-02 the
-  `update-branch` count was not 0 (10, all on the last day of the window) and the repeat share was flat (0.51 against
-  0.47). The ritual-sync rate cannot be judged on this machine. What moved the numbers was the queue on 10-21, and the
+- **Stage 1, prose parts (clauses 15 and 16, the sync advisory): the rule fires, on the repeat share.** At the
+  two-week mark (10-16) the `update-branch` count was 0, so that metric met its target; the 22 commits on 10-20 and
+  10-21 were on PRs opened before the rollout. The repeat share fell from 0.58 to 0.51 over 10-02..10-20 (0.45 over
+  10-02..10-16) and stayed above one third, so that target was not met; the ritual-sync rate cannot be judged on
+  this machine. What moved the numbers was the queue on 10-21, and the
   drop in fleet merges of `main` with it. This section does not retire the clauses: with `allow_update_branch` off
   and the queue in place, clause 16's three triggers cover what remains. Whether to retire the advisory or keep
   it is the operator's call.
 - **Stage 2 (the queue), due about 2026-11-04: not yet due, and heading the wrong way on green-to-merge.** The
-  median is 77.7 min against the target 10, from three measured parts: 43 min before enqueue, 17 min of CI in the
-  queue, and the cost of a 19.5% ejection rate. The target as written is not reachable with a 17-minute
+  median is 77.7 min against the target 10, almost all of it inside the queue: PRs enqueue within a minute of green at the median, then spend 38 min
+  from last entry to merge (one run is 17 min of CI; the rest is time behind other entries) and pay for a 19.5% ejection rate. The target as written is not reachable with a 17-minute
   merge_group run. Redesign candidates, measured here: shorten the queue entry's CI; remove the flakes behind 23 of
   the 47 ejections (starting with the one test that made 13); re-define the target as "enqueue to merge" or as the
   wait the queue adds over the PR's own CI, since the queue's job is the composition test that 10-02..10-20 never had.
@@ -1027,8 +1040,8 @@ were ejected twice.
 ### Re-running this
 
 The tool writes a cache and one JSON report per subcommand under `--out`; read-only, no `gh` token scope beyond
-read. `<fleet-login>` is the fleet's gh login (its placeholder git identity, if still present in a window, is
-appended with a comma). Run from any directory; `<clone>` is a local clone of the repository.
+read. `<fleet-login>` is the fleet's gh login. For a window before 2026-09-23 append the placeholder git identity with a
+comma (the baseline needs it; the `absorptions` census lists the actors to choose from); later windows have none. Run from any directory; `<clone>` is a local clone of the repository.
 
 ```
 T=deploy/measure-landing.py; R=Synapsium-Labs/ccrc-pwa
@@ -1042,6 +1055,10 @@ for W in "2026-09-08 2026-09-22" "2026-10-02 2026-10-20" "2026-10-21 2026-10-25"
   python3 -I $T remerge        $R --clone <clone> --since $1 --until $2 --out out
 done
 python3 -I $T queue-ejections $R --since 2026-10-21 --until 2026-10-25 --out out
+# the queue wait split: green -> first entry -> last entry -> merge (reads each PR's issue timeline,
+# filtered to added_to_merge_queue and removed_from_merge_queue; GET only)
+python3 -I $T queue-waits $R --since 2026-10-21 --until 2026-10-25 --out out
+python3 -I $T queue-waits $R --since 2026-10-22 --until 2026-10-25 --out out
 # ritual syncs: on the fleet box, where the transcripts are
 python3 -I $T episodes --project ccrc-pwa --since 2026-10-02 --until 2026-10-25 --out out
 # the queue's entry-to-merge time and the live queue settings

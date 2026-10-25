@@ -423,3 +423,43 @@ describe('measure-landing: queue-ejections — a merge_group run that failed, by
     expect(gh.every((c) => c.startsWith('api -X GET --allow-escape-sequences '))).toBe(true);
   });
 });
+
+describe('measure-landing: queue-waits — where the green-to-merge wait went', () => {
+  const split = (green: string, merged: string, ev: [string, string][]) => py('m.queue_wait_split(a[0], a[1], a[2])', [green, merged, ev]);
+  const add = (t: string): [string, string] => ['added_to_merge_queue', t];
+  const rem = (t: string): [string, string] => ['removed_from_merge_queue', t];
+
+  it('queue_wait_split: first entry after green, last entry before merge, an ejection between them', () => {
+    expect(split('2026-10-22T00:00:00Z', '2026-10-22T01:00:00Z',
+      [add('2026-10-22T00:10:00Z'), rem('2026-10-22T00:20:00Z'), add('2026-10-22T00:40:00Z')])).toEqual([10, 20, 60]);
+  });
+  it('queue_wait_split: an add before green is not the first entry, and a PR never queued is None', () => {
+    expect(split('2026-10-22T00:30:00Z', '2026-10-22T01:00:00Z',
+      [add('2026-10-22T00:10:00Z'), add('2026-10-22T00:40:00Z')])).toEqual([10, 20, 30]);
+    expect(split('2026-10-22T00:00:00Z', '2026-10-22T01:00:00Z', [])).toBeNull();
+  });
+  it('read-only through a recording stub: the split per PR, from the timeline, GET only', () => {
+    const pr = (n: number, sha: string) => JSON.stringify({ number: n, created_at: '2026-10-21T00:00:00Z', updated_at: '2026-10-22T00:00:00Z',
+      merged_at: '2026-10-22T01:00:00Z', head: { sha } });
+    const ev = (e: string, t: string) => ({ event: e, created_at: t });
+    const h = stubHome([
+      `  *pulls?state=all*) echo '[${pr(7, 'abc')},${pr(8, 'def')},${pr(9, 'ghi')}]' ;;`,
+      '  *commits/*/check-runs*) echo \'{"check_runs":[{"name":"a","conclusion":"success","completed_at":"2026-10-22T00:00:00Z"}]}\' ;;',
+      `  *issues/7/timeline*) echo '${JSON.stringify([ev('added_to_merge_queue', '2026-10-22T00:10:00Z'), ev('labeled', '2026-10-22T00:11:00Z'),
+        ev('removed_from_merge_queue', '2026-10-22T00:20:00Z'), ev('added_to_merge_queue', '2026-10-22T00:40:00Z')])}' ;;`,
+      "  *issues/8/timeline*) echo '[]' ;;",
+      `  *issues/9/timeline*) echo '${JSON.stringify([ev('added_to_merge_queue', '2026-10-22T00:10:00Z'), ev('removed_from_merge_queue', '2026-10-22T01:00:00Z')])}' ;;`,
+    ]);
+    const r = tool(h, ['queue-waits', 'o/r', '--required', 'a', '--since', '2026-10-21', '--until', '2026-10-25']);
+    expect(r.status, r.stderr).toBe(0);
+    const rep = JSON.parse(r.stdout);
+    expect(rep.prs).toBe(2); // 9 merged with the removal GitHub logs at the merge itself: not an ejection
+    expect(rep.mergedWithoutQueueEntry).toBe(1);
+    expect(rep.prsReQueued).toBe(1);
+    expect(rep.greenToFirstEntryMin.n).toBe(2);
+    expect(rep.greenToFirstEntryMin.median).toBe(10);
+    expect(rep.lastEntryToMergeMin.median).toBe(35);
+    expect(rep.greenToMergeMin.median).toBe(60);
+    expect(calls(h.home, 'gh-calls')!.every((c) => c.startsWith('api -X GET --allow-escape-sequences '))).toBe(true);
+  });
+});
