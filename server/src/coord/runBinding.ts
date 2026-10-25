@@ -77,9 +77,14 @@ export interface BindingRun {
 /** Whether `run` binds `incarnation`: yes, no, or `'undecidable'` (an unstamped run opened before the birth). */
 export type RunBinds = 'bound' | 'unbound' | 'undecidable';
 
+/** Whether `run` names `sessionId` as its worker: the id-string rule, the first test of `bindsRun` and the whole test for a
+ *  caller that holds ONE run (the minting run of a child's marker, a hold candidate) and no series. It proves no birth, so a
+ *  decision that must tell one occupant of a reused name from another reads the series through `bindingOf` instead. */
+export const runNamesSession = (run: { readonly sessionId: string | null }, sessionId: string): boolean => run.sessionId === sessionId;
+
 /** Whether `run` is bound to `incarnation`, by the rules above. */
 export function bindsRun(incarnation: Incarnation, run: BindingRun): RunBinds {
-  if (run.sessionId !== incarnation.sessionId) return 'unbound';
+  if (!runNamesSession(run, incarnation.sessionId)) return 'unbound';
   if (incarnation.kind === 'unborn') return 'bound';
   if (run.sessionBornAt !== null) {
     return run.sessionBornFor === incarnation.sessionId && run.sessionBornAt === incarnation.bornAt ? 'bound' : 'unbound';
