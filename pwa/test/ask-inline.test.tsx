@@ -338,6 +338,7 @@ describe('the keys survive a screen change inside the card (D-6326)', () => {
     // question 2 takes no focus (before R102 it took the highlighted row, and the next digit answered it).
     expectNoRefocus(watch, at.node, 'question 2');
     answer.mockReturnValue(new Promise(() => {}));
+    expect(document.activeElement, 'question 2: the premise of the digit is body focus, so it lands outside the card').toBe(document.body);
     key(document.activeElement ?? document.body, '2');
     expect(answer, 'a digit sends nothing').toHaveBeenCalledTimes(1);
   });
@@ -412,6 +413,7 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
     expect(opt(card(), /^Submit answers/), 'premise: the review is mounted').toBeInTheDocument();
     expectNoRefocus(watch, at.node, 'the review');
     answer.mockReturnValue(new Promise(() => {}));
+    expect(document.activeElement, 'the review: the premise of the digit is body focus, so it lands outside the card').toBe(document.body);
     key(document.activeElement ?? document.body, '1');
     expect(answer, 'a digit on the review sends nothing').toHaveBeenCalledTimes(1);
   });
@@ -433,6 +435,7 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
     expect(within(card()).getByText(QUESTION), 'premise: the question is back').toBeInTheDocument();
     expectNoRefocus(watch, at.node, 'the question');
     const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    expect(document.activeElement, 'the question: the premise of the digit is body focus, so it lands outside the card').toBe(document.body);
     key(document.activeElement ?? document.body, '2');
     expect(answer, 'a digit sends nothing').not.toHaveBeenCalled();
   });
@@ -573,6 +576,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     expect(opt(card(), /^Submit answers/), 'premise: the review is mounted').toBeInTheDocument();
     expectNoRefocus(watch, at.node, 'the aged review');
     answer.mockReturnValue(new Promise(() => {}));
+    expect(document.activeElement, 'the aged review: the premise of the digit is body focus, so it lands outside the card').toBe(document.body);
     key(document.activeElement ?? document.body, '1');
     expect(answer, 'a digit on the aged review sends nothing').toHaveBeenCalledTimes(1);
   });
@@ -597,6 +601,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     expect(within(card()).getByText(QUESTION), 'premise: the question is back').toBeInTheDocument();
     expectNoRefocus(watch, at.node, 'the aged question');
     const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    expect(document.activeElement, 'the aged question: the premise of the digit is body focus, so it lands outside the card').toBe(document.body);
     key(document.activeElement ?? document.body, '2');
     expect(answer, 'a digit sends nothing').not.toHaveBeenCalled();
   });
@@ -677,6 +682,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     await frame();
     expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
     expectNoRefocus(watch, at.node, 'the reconnect');
+    expect(document.activeElement, 'the reconnect: the premise of the digit is body focus, so it lands outside the card').toBe(document.body);
     key(document.activeElement ?? document.body, '2');
     expect(answer, 'a digit sends nothing').toHaveBeenCalledTimes(1);
   });
@@ -730,6 +736,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     expect(card(), 'premise: the same card carries question 2').toBe(section);
     expect(within(section).getByText(QUESTION_2), 'premise: question 2 is in the card').toBeInTheDocument();
     expectNoRefocus(watch, at.node, 'the question after the transient clear');
+    expect(document.activeElement, 'the question after the transient clear: the premise of the digit is body focus, so it lands outside the card').toBe(document.body);
     key(document.activeElement ?? document.body, '2');
     expect(answer, 'a digit sends nothing').toHaveBeenCalledTimes(1);
   });
@@ -756,6 +763,7 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     await frame();
     expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
     expectNoRefocus(watch, at.node, 'the next aged question');
+    expect(document.activeElement, 'the next aged question: the premise of the digit is body focus, so it lands outside the card').toBe(document.body);
     key(document.activeElement ?? document.body, '2');
     expect(answer, 'a digit sends nothing').toHaveBeenCalledTimes(1);
   });
@@ -828,6 +836,7 @@ describe('a send this client initiates releases the keyboard (R102)', () => {
     await frame();
     expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
     expectNoRefocus(watch, at.node, 'the frame-delivered question');
+    expect(document.activeElement, 'the frame-delivered question: the premise of the digit is the retained node, which the answer left focused').toBe(at.node);
     key(document.activeElement ?? document.body, '2');
     expect(answer, 'a digit sends nothing').toHaveBeenCalledTimes(1);
   });
