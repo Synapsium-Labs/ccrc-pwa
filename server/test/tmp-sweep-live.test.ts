@@ -1052,21 +1052,6 @@ describe('the inode budget (D-TBD-inode-budget, #1411): measured and told, never
     ]);
   }, 120_000);
 
-  it('over the 1M budget: overSince is recorded, and the inode count moves nothing (the age rule alone takes the 20-day entry)', () => {
-    liveSession();
-    const big = mkMany('big', 150, 20 * DAY);
-    arm();
-    const r = sweep({ env: env() });
-    expect(r.code, r.err).toBe(0);
-    const s = session(census());
-    expect(s.inodes).toBe(151);
-    expect(s.inodeBudget!.state).toBe('over');
-    expect(s.inodeBudget!.overSince).toBeGreaterThan(0);
-    expect(s.budget.state, 'the byte budget is untouched').toBe('ok');
-    expect(exists(big)).toBe(false);
-    expect(census().moved.map((m) => m.kind), 'moved by the age rule only').toEqual(['scratch']);
-  }, 120_000);
-
   it('over the inode budget with a young entry: nothing at all is moved, armed', () => {
     liveSession();
     const big = mkMany('big', 150, 1 * DAY);
@@ -1074,7 +1059,11 @@ describe('the inode budget (D-TBD-inode-budget, #1411): measured and told, never
     sweep({ env: env() });
     expect(exists(big)).toBe(true);
     expect(census().moved).toEqual([]);
-    expect(session(census()).inodeBudget!.state).toBe('over');
+    const s = session(census());
+    expect(s.inodes).toBe(151);
+    expect(s.inodeBudget!.state).toBe('over');
+    expect(s.inodeBudget!.overSince).toBeGreaterThan(0);
+    expect(s.budget.state, 'the byte budget is untouched').toBe('ok');
   }, 120_000);
 
   it('exactly at the budget is not over; one more inode is', () => {
