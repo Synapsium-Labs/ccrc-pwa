@@ -12,7 +12,7 @@ import { GITHUB_TEXT_PREFACE, untrustedBlock } from './untrusted.js';
  * this file `./db.js` and `node:sqlite`, and `landing-verdict.test.ts` pins the rest: no node builtin, and no value
  * import but L0's `shared/landing.ts` and `./untrusted.ts` (which imports nothing); `shared/api.ts` and `shared/switches.ts` are
  * admitted too, today as TYPES only. `watch.ts`'s `sweepLanding` keeps the READS
- * (the store, the registry, `survivorOf`, `resolveCoordinator`, `hasMailWithSubject`, `hasNotice`) and the
+ * (the store, the registry, `survivorOf`, `coordinatorOfRun`, `hasMailWithSubject`, `hasNotice`) and the
  * DELIVERIES (`queueSystemMail`, the feed record, the latch write); every DECISION is here: which notice a line asks
  * for, its latch key and whether it is already latched, whom to tell, whether a merge is told at all, which durable
  * read proves "already told", when to defer instead of latching, and the notice bodies.
@@ -91,7 +91,7 @@ export interface LandingRun { id: number }
  *  APART from its empty answer: `runs.ok === false` is not `run === null`. */
 export interface LandingFacts {
   runs?: { ok: true; run: LandingRun | null } | { ok: false; detail: string };
-  /** `resolveCoordinator(run.id)`: asked only of a run. */
+  /** `coordinatorOfRun(run.id)`: asked only of a run. */
   coordinator?: string | null;
   /** The survivor run's own state, read for a merge only. `null` is a run row that is gone. */
   runState?: { ok: true; state: string | null } | { ok: false; detail: string };

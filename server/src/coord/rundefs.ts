@@ -197,7 +197,7 @@ export const survivorOf = (s: readonly OpenSibling[]): OpenSibling | null => s[s
 
 /**
  * The two SYSTEM MAIL senders. Neither is a registry row: both are fixed ROLE
- * identities, the same way `resolveCoordinator`'s own docstring already treats
+ * identities, the same way `coordinatorOfRun`'s own docstring already treats
  * `toId:'coordinator'`. Enumerated once, here, and DERIVED into `MAIL_ROLE_IDS`
  * below rather than hand-listed twice — `watch.ts` is the second reader and a
  * second copy is exactly the drift `single-definition.test.ts` exists to refuse.

@@ -109,6 +109,25 @@ describe('the bind records the occupant\'s birth (ARCH-62 slice 4, #1407)', () =
     expect(s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(c)).toEqual({ sessionBornAt: BORN });
   });
 
+  it('LEGACY exception: a backfilled wave-N row outranks the minting run, so a later wave is unbound for the live occupant', () => {
+    // Migration 16's backfill dated every bound run to its own dispatchStartedAt, wave 2 included. The columns cannot
+    // tell that row from a minting run, so the stamp takes it (newest) and the new wave is not the live occupant's.
+    const s = store();
+    const w1 = open(s, 'prog-a', 'coord-1', OLD - 10);
+    mint(s, w1, 'demo-w', OLD);
+    const w2 = open(s, 'prog-b', 'coord-1', OLD + 100);
+    s.setSession(w2, 'demo-w');
+    s.db.prepare("UPDATE runs SET dispatchStartedAt = ?, sessionBornAt = ?, sessionBornFor = 'demo-w' WHERE id = ?")
+      .run(OLD + 500, OLD + 500, w2);
+    for (const id of [w1, w2]) s.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(id);
+    const w3 = open(s, 'prog-c', 'coord-1', OLD + 1000);
+    s.setSession(w3, 'demo-w');
+    expect(s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(w3)).toEqual({ sessionBornAt: OLD + 500 });
+    const binding = bindingOf(series(s, 'demo-w'), bornIncarnation('demo-w', OLD));
+    expect(binding.open).toBeNull();
+    expect(binding.undecided).toEqual([]);
+  });
+
   it('a birth the minting run cannot place (it differs from the run\'s dispatchStartedAt) is not stamped', () => {
     const s = store();
     const a = open(s, 'prog-a', 'coord-1', OLD);

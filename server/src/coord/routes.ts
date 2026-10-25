@@ -1714,7 +1714,7 @@ export function registerCoordRoutes(
    * `POST /api/claims/:id/break` frees the claim a dead holder still holds.
    * None of them can hand a LIVE program to a new session once the old
    * claimant is a corpse — `openRun`'s one-coordinator guard and
-   * `resolveCoordinator` both read the same lowest-id `claimedBy` with no
+   * `coordinatorOfRun` both read the same lowest-id `claimedBy` with no
    * state predicate, so until this door existed the dead name answered both
    * for ever and every later wave opened onto a grave.
    *

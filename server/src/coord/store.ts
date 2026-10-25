@@ -2018,10 +2018,10 @@ export class CoordStore {
    * blocking review MAJOR 1 and MINOR 9). Until this round the reclaim rewrote
    * `runs.claimedBy` and NOTHING else, and `mail_deliveries.toId` is frozen to
    * the RESOLVED id at queue time — `coord/routes.ts` resolves `coordinator` once
-   * through `resolveCoordinator` and hands the answer to `queueDelivery`, which
+   * through `coordinatorOfRun` and hands the answer to `queueDelivery`, which
    * is the only writer of that column in the tree. `GET /api/mail` is
    * recipient-scoped. So a wave-done the worker sent minutes before the reclaim
-   * stayed addressed to the corpse while `resolveCoordinator(runId)` answered the
+   * stayed addressed to the corpse while `coordinatorOfRun(runId)` answered the
    * heir: the heir's box read empty, the sweep walked the report to
    * `rejected('undeliverable')`, and the wave's own report was lost — with the
    * coordinator corpus (`ccd/coordinator-skill/references/resume.md`) sending the
@@ -2258,7 +2258,7 @@ export class CoordStore {
    * fact stored anywhere. Measured: no column, no join and no read in this store
    * can recover it. So repointing such a row would be this method GUESSING that a
    * message with no program on it belonged to the program being reclaimed, on a
-   * door whose entire discipline is refusing to guess (`resolveCoordinator`'s own
+   * door whose entire discipline is refusing to guess (`soleActiveCoordinator()`'s own
    * "no guessing", `measureClaimant`'s "doubt is not evidence"). It stays on the
    * outgoing claimant, outstanding and visible at `outstandingMailFor(<that
    * id>)` — the honest outcome, since the party that can tell which program it
@@ -3009,6 +3009,8 @@ export class CoordStore {
     const row = this.db.prepare('SELECT sessionId FROM runs WHERE id = ?')
       .get(runId) as { sessionId: string | null } | undefined;
     const predecessor = row?.sessionId ?? null;
+    // Asked once: both the birth clear and the occupant stamp below act only when this bind changes the occupant.
+    const changesOccupant = predecessor !== sessionId;
     this.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run(sessionId, runId);
     // The child's BIRTH is write-once PER BOUND SESSION, never a first stamp
     // per run (child-reclamation spec §5.1, §5.3 — `childBirthOf` reads these
@@ -3035,7 +3037,7 @@ export class CoordStore {
     if (bornAt !== undefined) {
       this.db.prepare('UPDATE runs SET sessionBornAt = ?, sessionBornFor = ? WHERE id = ?')
         .run(bornAt, bornAt === null ? null : sessionId, runId);
-    } else if (predecessor !== sessionId) {
+    } else if (changesOccupant) {
       this.db.prepare('UPDATE runs SET sessionBornAt = NULL, sessionBornFor = NULL WHERE id = ?').run(runId);
     }
     // The bound incarnation (ARCH-62, #1407): a bind that names no birth of its own (a later wave bound to a worker that
@@ -3043,7 +3045,7 @@ export class CoordStore {
     // today's answers, where the session never had a placeable birth.
     // Only when the bind changes the occupant: a same-session re-statement (markDispatched after an adopted bind's
     // explicit null) must not date the run to an earlier occupant's birth.
-    if (bornAt === undefined && predecessor !== sessionId) this.stampOccupantBirth(runId, sessionId);
+    if (bornAt === undefined && changesOccupant) this.stampOccupantBirth(runId, sessionId);
     // NULL is a FIRST bind, not a re-bind, and it re-issues nothing: there is no
     // predecessor to inherit from, and every wave-1 dispatch on the box lands
     // here. The same-session case is a re-statement, not a change of occupant.
@@ -3055,7 +3057,9 @@ export class CoordStore {
   /** Stamp run `runId` (just bound to `sessionId`, with no birth of its own) with the birth of `sessionId`'s newest
    *  placeable occupant: the newest run recording a birth FOR this session that `childBirthOf` places (the birth equals
    *  the run's `dispatchStartedAt`). Write-once: a run that carries a birth keeps it. A session with no such run is a
-   *  coordinator, a manual workspace or an adopted one: it stays unstamped and keeps the id-string rule. */
+   *  coordinator, a manual workspace or an adopted one: it stays unstamped and keeps the id-string rule. On a worker
+   *  alive across migration 16 the newest placeable birth can be a backfilled wave-N row, not the minting run: the
+   *  legacy exception `runBinding.ts` names (WHICH RUNS BIND A BORN INCARNATION). */
   private stampOccupantBirth(runId: number, sessionId: string): void {
     this.db.prepare(
       'UPDATE runs SET sessionBornAt = b.at, sessionBornFor = ? FROM ' +
@@ -4232,7 +4236,7 @@ export class CoordStore {
    *  question `setProgramState`'s caller (the close route, D-51) needs
    *  answered to know whether the run it just closed was the LAST one: zero
    *  remaining means nothing under this program can dispatch, mail, or hold
-   *  a workspace open any more, so `resolveCoordinator`'s "exactly one
+   *  a workspace open any more, so `soleActiveCoordinator()`'s "exactly one
    *  active program" guard (D-26) must stop counting it. NOT the same
    *  question `capsUsage().running` asks since design 2026-09-14 §7.1 (as
    *  corrected by D-2803): that one now names `INACTIVE_RUN_STATES_SQL`
@@ -5411,7 +5415,7 @@ export class CoordStore {
    * interface list named PR I as the author of this GET route, and neither
    * shipped it). Joins through `mail_deliveries.toId` — the RESOLVED
    * recipient session, never the literal `'coordinator'` role `mail.toId`
-   * may still carry (the same resolution `resolveCoordinator` already
+   * may still carry (the same resolution `coordinatorOfRun` already
    * performs before `queueDelivery` is ever called) — so a session reading
    * its own outstanding mail sees exactly what it was actually sent.
    * `limit` clamped the same way `feedEvents` clamps its own: a route
@@ -5437,7 +5441,7 @@ export class CoordStore {
    * a delivery that was still genuinely queued, but older than the newest
    * 100 deliveries to that recipient, silently fell out of the window the
    * session mail strip watches. The coordinator session is the run-of-the-
-   * mill victim: every worker's mail resolves to it (`resolveCoordinator`)
+   * mill victim: every worker's mail resolves to it (`coordinatorOfRun`)
    * across every wave of a program.
    *
    * `OUTSTANDING_OR_ABANDONED_SQL`, not the narrower `OUTSTANDING_STATES_SQL`
@@ -5508,7 +5512,7 @@ export class CoordStore {
    * Every delivery of a mail belonging to THIS PROGRAMME (design §4), newest
    * first — the read side of `GET /api/mail?program=<slug>`.
    *
-   * The join is the one `resolveCoordinator` already walks: `mail.runId` →
+   * The join is the one `coordinatorOfRun` already walks: `mail.runId` →
    * `runs.program`. An INNER join, deliberately, and it is the whole filter: a
    * mail with no `runId` cannot be PROVEN to belong to any programme — the
    * resolution that placed it is spent, and no column records which programme
@@ -5545,7 +5549,7 @@ export class CoordStore {
    *
    *  `fromId` is returned RAW, including the literal `'coordinator'`, which is
    *  a ROLE rather than a session id. Resolving it is the caller's job
-   *  (`resolveCoordinator`) because only the caller knows whether it is about
+   *  (`coordinatorOfRun`, `soleActiveCoordinator()`) because only the caller knows whether it is about
    *  to push, and resolving here would hide the unresolvable case behind a
    *  value that looks like an id. */
   mailOrigin(mailId: number): { fromId: string; runId: number | null; subject: string } | null {

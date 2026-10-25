@@ -170,7 +170,7 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
   { file: 'server/src/coord/store.ts', text: 'row.claimedBy !== input.expectClaimedBy',
     why: "closeRun's compare-and-set: the claimant of ONE re-read run against the one the caller measured, whichever session works it" },
   { file: 'server/src/coord/store.ts', text: 'predecessor !== sessionId',
-    why: "the open path's own duplicate and claimant decision inside its transaction: a binding WRITER (BINDING_WRITER_VERBS), not a reader (bindSession: the occupant it replaces)" },
+    why: "the open path's own duplicate and claimant decision inside its transaction: a binding WRITER (BINDING_WRITER_VERBS), not a reader (bindSession: whether the bind replaces the occupant, asked once and reused by the birth clear and the occupant stamp)" },
   { file: 'server/src/coord/store.ts', text: 'predecessor === sessionId',
     why: "the open path's own duplicate and claimant decision inside its transaction: a binding WRITER (BINDING_WRITER_VERBS), not a reader (bindSession: a same-session re-statement)" },
   { file: 'server/src/coord/store.ts', text: "'SELECT 1 AS x FROM run_events e JOIN runs r ON r.id = e.runId ' +`WHERE r.sessionId = ? AND e.detail = ? AND r.state NO",
