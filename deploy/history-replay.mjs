@@ -7312,6 +7312,8 @@ export function capUtf8Bytes(text, maxBytes) {
 /** The ANSWER field as the judge is shown it (the gate's RUBRIC_HEAD: "null when it gave none"): a value as parsed, the
  *  protocol's own `UNKNOWN` for an unknown, null for no ANSWER line. */
 const answerFieldOf = (a) => (a.state === 'value' ? a.value : a.state === 'unknown' ? 'UNKNOWN' : null);
+// Mirrors parseAnswerField's line split without copying its private ANSWER matcher.
+const ANSWER_FIELD_LINE_BREAK = new RegExp(`\\r\\n|[\\n\\r${String.fromCharCode(0x2028, 0x2029)}]`, 'u');
 
 /** The (qid, arm) key's separator: a NUL, built at runtime, so this file holds no escape an agent's write could decode
  *  into a raw byte (a qid is 16 hex digits, so no qid holds it). */
@@ -7321,8 +7323,8 @@ const JUDGE_PAIR_SEP = String.fromCharCode(0);
 const judgePairKey = (qid, arm) => `${qid}${JUDGE_PAIR_SEP}${arm}`;
 
 /** The judge's input for one answer (W2-D79), every string masked as a value (W2-D54, D-6308) and only then the reply cut
- *  to JUDGE_REPLY_MAX_BYTES. answer_field is parsed from that complete masked reply, so it is never less masked than the reply
- *  (a whole-block mask that swallows ANSWER carries its mark); both fields are cut at the same cap (D-6470). Pure.
+ *  to JUDGE_REPLY_MAX_BYTES. answer_field is parsed from that complete masked reply; if any raw ANSWER line is swallowed by
+ *  whole-block masking it carries the mask mark, otherwise it is never less masked than the reply. Both fields are cut at the same cap (D-6470). Pure.
  *  @param {{ kind: string, question: string, fact: string }} entry  @param {string|null} reply
  *  @param {import('../ccd/history/lib.mjs').PairIndex} idx  @returns {JudgeInput} */
 export function judgeInputOf(entry, reply, idx) {
@@ -7331,8 +7333,10 @@ export function judgeInputOf(entry, reply, idx) {
   const raw = reply ?? '';
   const text = /** @type {string} */ (maskValue(raw, idx));
   const field = answerFieldOf(parseAnswerField(text));
-  // A whole-block mask can erase the ANSWER line; retain the owner's mark, never the raw value.
-  const swallowed = field === null && answerFieldOf(parseAnswerField(raw)) !== null && text.includes(REDACTED_MARK) ? REDACTED_MARK : null;
+  // Keep the parser's line rule without re-spelling its ANSWER regex.
+  const rawAnswers = raw.split(ANSWER_FIELD_LINE_BREAK).filter((line) => answerFieldOf(parseAnswerField(line)) !== null).length;
+  const maskedAnswers = text.split(ANSWER_FIELD_LINE_BREAK).filter((line) => answerFieldOf(parseAnswerField(line)) !== null).length;
+  const swallowed = rawAnswers > maskedAnswers && text.includes(REDACTED_MARK) ? REDACTED_MARK : null;
   return {
     v: 1, kind: entry.kind,
     question: /** @type {string} */ (maskValue(entry.question, idx)),

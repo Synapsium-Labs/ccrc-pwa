@@ -13163,6 +13163,7 @@ describe('W2-5b1 Task 5: the judge input, W2-D79 and W2-D54', () => {
   });
 
   it('an ANSWER line swallowed by a PEM mask carries the same mark as the complete reply', () => {
+    const fact = 'npm run fixture-lint';
     const body = ['QyNTUxOQ', 'AAACDx3B', 'q9yC2mT0', 'm4w5'].join('');
     const pem = [
       [['-----', 'BEGIN'].join(''), ['OPEN', 'SSH', 'PRIVATE', 'KEY-----'].join(' ')].join(' '),
@@ -13170,15 +13171,18 @@ describe('W2-5b1 Task 5: the judge input, W2-D79 and W2-D54', () => {
       `ANSWER: ${body}`,
       [['-----', 'END'].join(''), ['OPEN', 'SSH', 'PRIVATE', 'KEY-----'].join(' ')].join(' '),
     ].join('\n');
-    const input = W5B5.judgeInputOf(w5b5Entry(W6_CMD), pem, W6_IDX);
-    expect(input.reply).toBe(t4Lib.REDACTED_MARK);
+    const idx = t4Lib.makePairIndex([]);
+    const reply = `ANSWER: ${fact}\n${pem}`;
+    expect(w5b5Gate.parseAnswerField(reply), 'the raw last ANSWER is inside the PEM').toMatchObject({ state: 'value', value: body });
+    const input = W5B5.judgeInputOf(w5b5Entry(fact), reply, idx);
+    expect(input.reply).toBe(`ANSWER: ${fact}\n${t4Lib.REDACTED_MARK}`);
     expect(input.answer_field).toBe(t4Lib.REDACTED_MARK);
     expect(w5b5Lib.canonicalJson(input)).not.toContain(body);
     const long = W5B5.judgeInputOf(w5b5Entry(W6_CMD), `${'plain prefix '.repeat(2_000)}${pem}`, W6_IDX);
     expect(Buffer.byteLength(long.answer_field!), 'a swallowed answer field remains bounded').toBeLessThanOrEqual(W5B5.JUDGE_REPLY_MAX_BYTES);
     expect(long.answer_field, 'a swallowed answer field still carries the mask mark').toBe(t4Lib.REDACTED_MARK);
-    const plain = W5B5.judgeInputOf(w5b5Entry(W6_CMD), `ANSWER: ${W6_CMD2}`, W6_IDX);
-    expect(plain).toMatchObject({ answer_field: W6_CMD2, reply: `ANSWER: ${W6_CMD2}` });
+    const plain = W5B5.judgeInputOf(w5b5Entry(W6_CMD), `ANSWER: ${W6_CMD}\nANSWER: ${W6_CMD2}`, idx);
+    expect(plain).toMatchObject({ answer_field: W6_CMD2, reply: `ANSWER: ${W6_CMD}\nANSWER: ${W6_CMD2}` });
   });
 
   it('a reply of null is judged as the empty string, with no answer_field', () => {
