@@ -93,10 +93,13 @@
 #     pressure); then, oldest first, entries untouched for 48 hours (a floor pressure never lowers),
 #     unheld, with no git work on no remote, are taken until the total is under
 #     CCD_TMP_BUDGET_TARGET_GB (15). Both knobs can only be raised.
-# THE INODE BUDGET (#1411, D-TBD-inode-budget). The same walk counts distinct inodes (a hardlinked file once, across
+# THE INODE BUDGET (#1411, D-6920). The same walk counts distinct inodes (a hardlinked file once, across
 # the session's entries). A session over CCD_TMP_INODE_BUDGET_M million (1) is recorded in its census row's `inodeBudget`
 # (`overSince`, ended only by a finished count under 75% of it) and the server mails it once; an unfinished walk
-# reports `inodes: null` with `inodesAtLeast`, never a low count. It removes nothing for inodes.
+# reports `inodes: null` with `inodesAtLeast`, never a low count; one unfinished three passes running with a lower
+# bound that grew each time is told too (`inodeBudget.state` `growing`). The shared walk counter is not spent on the
+# same sessions every pass: the census's `walkFirst` names the ones a pass left unmeasured and the next walks them first.
+# It removes nothing for inodes.
 # Holders come from `ccd path-users --json` (the one probe); any doubt keeps the entry. A taken
 # entry is RENAMED into `<root>/.ccd-tmp-quarantine/<uuid>/<ns>.<name>` and deleted by a pass one
 # grace later (24 h; 1 h under pressure) after a fresh holder ask. The roots are today's, `/tmp/
@@ -502,6 +505,8 @@ TARGET = int(E['TS_TARGET_BYTES'])
 INODE_BUDGET = int(E['TS_INODE_BUDGET'])
 INODE_TARGET = INODE_BUDGET * int(E['TS_INODE_TARGET_PCT']) // 100
 INODE_TOP = 5
+# an unfinished count whose lower bound has grown this many passes running is told too, as "at least" (D-6920)
+INODE_GROW_PASSES = 3
 REG = E['TS_REG']
 CENSUS = E['TS_CENSUS']
 CCD = E['TS_CCD']
@@ -760,6 +765,9 @@ due = bool(PRESSURE) or prev.get('liveAt') is None or (NOW - prev['liveAt'] / 10
 sessions = {}
 newrows = []
 live_at = prev.get('liveAt') if not due else now_ms
+# the sessions a pass left unmeasured, walked first by the next (D-6920): the one shared walk counter would otherwise
+# run out on the same sessions every pass, in the same sorted order, and they would never be counted
+walk_first = [x for x in prev.get('walkFirst', []) if isinstance(x, str)] if isinstance(prev.get('walkFirst'), list) else []
 if due:
     cands = []
     for r in roots:
@@ -784,7 +792,10 @@ if due:
                         cands.append({'root': r, 'uuid': u, 'id': idof[u], 'unit': pj + '/' + u, 'sub': sub, 'name': nm,
                                       'path': os.path.join(sd, nm)})
     nlinked = {}   # a session's hardlinked inodes, shared by every walk of its entries
-    for c in cands:
+    wrank = {u: i for i, u in enumerate(walk_first)}
+    wstart = {}    # the shared counter when a session's first walk began: at the bound, it never started
+    for c in sorted(cands, key=lambda c: wrank.get(c['uuid'], len(wrank))):
+        wstart.setdefault(c['uuid'], ENTRIES[0])
         w = walk(c['path'], c['root']['noatime'], None, nlinked.setdefault(c['uuid'], set()))
         c.update(w)
         if not w['ok']: bump('unmeasured')
@@ -938,6 +949,7 @@ if due:
     for c in cands: by.setdefault(c['uuid'], []).append(c)
     pb = {s.get('uuid'): s.get('budget') for s in prev.get('sessions', []) if isinstance(s, dict) and isinstance(s.get('budget'), dict)}
     pib = {s.get('uuid'): s.get('inodeBudget') for s in prev.get('sessions', []) if isinstance(s, dict) and isinstance(s.get('inodeBudget'), dict)}
+    pial = {s.get('uuid'): s.get('inodesAtLeast') for s in prev.get('sessions', []) if isinstance(s, dict) and isinstance(s.get('inodesAtLeast'), int)}
     for u, cs in by.items():
         counted = sum(c['bytes'] for c in cs if not c.get('gone'))
         sp = any(c['root']['p'] for c in cs)
@@ -978,18 +990,29 @@ if due:
         exact = at_least if all(x['ok'] for x in live_cs) else None
         ib = pib.get(u) or {}
         i_since = ib.get('overSince')
+        # unfinished passes running whose lower bound grew each time (D-6920); a finished count resets it
+        p_runs = ib.get('unfinishedRuns') if isinstance(ib.get('unfinishedRuns'), int) else 0
+        runs = 0 if exact is not None else (p_runs + 1 if p_runs >= 1 and u in pial and at_least > pial[u] else 1)
+        i_state = 'over' if ib.get('state') != 'growing' or at_least > INODE_BUDGET else 'growing'
         if i_since is not None and exact is not None and exact < INODE_TARGET: i_since = None
-        elif i_since is None and at_least > INODE_BUDGET: i_since = now_ms
+        elif i_since is None and at_least > INODE_BUDGET: i_since, i_state = now_ms, 'over'
+        elif i_since is None and runs >= INODE_GROW_PASSES: i_since, i_state = now_ms, 'growing'
         sessions[u] = {'id': cs[0]['id'], 'uuid': u, 'bytes': counted,
                        'inodes': exact, 'inodesAtLeast': at_least,
                        'inodeTop': [{'name': x['name'], 'inodes': x['inodes']} for x in sorted(live_cs, key=lambda x: (-x['inodes'], x['name']))[:INODE_TOP] if x['inodes'] > 0],
-                       'inodeBudget': {'state': 'over' if i_since is not None else ('ok' if exact is not None else 'unmeasured'), 'overSince': i_since, 'limit': INODE_BUDGET},
+                       'inodeBudget': {'state': i_state if i_since is not None else ('ok' if exact is not None else 'unmeasured'), 'overSince': i_since,
+                                       'limit': INODE_BUDGET, 'unfinishedRuns': runs},
                        'scratchBytes': sum(c['bytes'] for c in cs if c['sub'] == 'scratchpad' and not c.get('gone')),
                        'tasksBytes': sum(c['bytes'] for c in cs if c['sub'] == 'tasks' and not c.get('gone')),
                        'entries': sum(1 for c in cs if not c.get('gone')),
                        'top': [{'name': c['name'], 'bytes': c['bytes']} for c in sorted((x for x in cs if not x.get('gone')), key=lambda x: (-x['bytes'], x['name']))[:5]],
                        'budget': {'state': state, 'overSince': over_since, 'enforceAt': enforce_at,
                                   'removedBytes': removed, 'kept': kept[:KEPT_MAX], 'keptMore': max(0, len(kept) - KEPT_MAX)}}
+    # next pass: the sessions that never started first, then the ones whose walks did not finish, each in this pass's order
+    wpos = {}
+    for i, c in enumerate(sorted(cands, key=lambda c: wrank.get(c['uuid'], len(wrank)))): wpos.setdefault(c['uuid'], i)
+    unm = {c['uuid'] for c in cands if not c['ok']}
+    walk_first = sorted(unm, key=lambda u: (wstart[u] < WALK_ENTRIES, wpos[u]))
     bump('candidates', len(cands))
 else:
     for s in prev.get('sessions', []):
@@ -1092,7 +1115,7 @@ for k, v in pprobed.items():
     if k not in probed and isinstance(v, list) and os.path.lexists(k): probed[k] = v
 out = {'v': 1, 'at': now_ms, 'liveAt': live_at, 'pressure': PRESSURE, 'arm': 'live' if ARMED else 'shadow', 'seq': seq,
        'roots': [{'arm': r['arm'], 'path': r['path'], 'noatime': r['noatime']} for r in roots],
-       'probed': probed, 'sessions': sorted(sessions.values(), key=lambda s: -s['bytes']), 'moved': moved, 'counts': counts}
+       'probed': probed, 'sessions': sorted(sessions.values(), key=lambda s: -s['bytes']), 'walkFirst': walk_first, 'moved': moved, 'counts': counts}
 if not DRY:
     tmp = '%s.%d.tmp' % (CENSUS, os.getpid())
     try:

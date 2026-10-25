@@ -1008,7 +1008,7 @@ describe('the size budget', () => {
   }, 120_000);
 });
 
-describe('the inode budget (D-TBD-inode-budget, #1411): measured and told, never enforced', () => {
+describe('the inode budget (D-6920, #1411): measured and told, never enforced', () => {
   /** One "million" is this many inodes here, so the 1M default budget is 100 inodes and its 75% target is 75. */
   const IU = 100;
   const env = (o: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({ CCD_TMP_INODE_UNIT: String(IU), ...o });
@@ -1052,15 +1052,20 @@ describe('the inode budget (D-TBD-inode-budget, #1411): measured and told, never
     ]);
   }, 120_000);
 
-  it('over the inode budget with a young entry: nothing at all is moved, armed', () => {
+  it('over the inode budget: nothing at all is moved, armed, not even an entry past the 48 h floor that the overage takes in', () => {
     liveSession();
     const big = mkMany('big', 150, 1 * DAY);
+    // 5 days: past the byte budget's 48 h floor, inside the 14-day age rule, and its 31 inodes sit inside the 82-inode
+    // overage, so an inode rule that took entries the way the byte budget does would take this one first
+    const old = mkMany('old', 30, 5 * DAY);
     arm();
     sweep({ env: env() });
     expect(exists(big)).toBe(true);
+    expect(exists(old), 'nothing is removed for inodes').toBe(true);
+    expect(quarantined()).toEqual([]);
     expect(census().moved).toEqual([]);
     const s = session(census());
-    expect(s.inodes).toBe(151);
+    expect(s.inodes).toBe(151 + 31);
     expect(s.inodeBudget!.state).toBe('over');
     expect(s.inodeBudget!.overSince).toBeGreaterThan(0);
     expect(s.budget.state, 'the byte budget is untouched').toBe('ok');
@@ -1098,6 +1103,63 @@ describe('the inode budget (D-TBD-inode-budget, #1411): measured and told, never
     expect(s.inodesAtLeast).toBeGreaterThan(100);
     expect(s.inodeBudget!.state).toBe('over');
     expect(s.inodeTop![0]!.name).toBe('a');
+  }, 120_000);
+
+  /** A second live session (`ws-b`): its own fake claude publishing U2, and a registry row. Its uuid sorts after U.live. */
+  const U2 = '44444444-4444-4444-8444-444444444444';
+  function secondSession(): void {
+    fs.mkdirSync(path.join(unit(U2), 'scratchpad'), { recursive: true });
+    fs.writeFileSync(path.join(reg(), 'ws-b.uuid'), `${U2}\n`);
+    fakeClaude(`--resume ${U2}`);
+  }
+  const sessionOf = (c: Census, u: string): Census['sessions'][number] => c.sessions.find((s) => s.uuid === u)!;
+
+  it('the shared walk counter does not starve the same sessions every pass: the next pass starts with the ones left unmeasured', () => {
+    liveSession();
+    secondSession();
+    mkMany('a', 60);
+    const b = path.join(unit(U2), 'scratchpad', 'b');
+    fs.mkdirSync(b);
+    for (let i = 0; i < 5; i++) fs.writeFileSync(path.join(b, `f${i}`), '');
+    setTimes(b, NOW0 - DAY);
+    const e = env({ CCD_TMP_SWEEP_WALK_ENTRIES: '40' });
+    expect(sweep({ env: e }).code).toBe(0);
+    const c1 = census() as Census & { walkFirst?: string[] };
+    expect(sessionOf(c1, U2).inodes, 'the first pass spends the counter on ws-a').toBeNull();
+    expect(c1.walkFirst, 'the never-started session first, then the one that ran the counter out').toEqual([U2, U.live]);
+    expect(sweep({ plusS: 7 * HOUR, env: e }).code).toBe(0);
+    const c2 = census() as Census & { walkFirst?: string[] };
+    expect(sessionOf(c2, U2).inodes, 'the next pass walks ws-b first and finishes it').toBe(6);
+    expect(sessionOf(c2, U.live).inodes).toBeNull();
+    expect(c2.walkFirst).toEqual([U.live]);
+  }, 120_000);
+
+  it('a walk unmeasured three passes running with a lower bound that keeps growing is told once, as "at least"', () => {
+    liveSession();
+    mkMany('a', 200);
+    // the lower bound stays under the 100-inode budget, so only the growth can open the episode
+    sweep({ env: env({ CCD_TMP_SWEEP_WALK_ENTRIES: '30' }) });
+    expect(session(census()).inodeBudget).toMatchObject({ state: 'unmeasured', overSince: null });
+    sweep({ plusS: 7 * HOUR, env: env({ CCD_TMP_SWEEP_WALK_ENTRIES: '45' }) });
+    expect(session(census()).inodeBudget, 'two passes are not yet three').toMatchObject({ state: 'unmeasured', overSince: null });
+    sweep({ plusS: 14 * HOUR, env: env({ CCD_TMP_SWEEP_WALK_ENTRIES: '60' }) });
+    const s = session(census());
+    expect(s.inodes).toBeNull();
+    expect(s.inodesAtLeast).toBeLessThan(100);
+    expect(s.inodeBudget!.state).toBe('growing');
+    const since = s.inodeBudget!.overSince;
+    expect(since).toBeGreaterThan(0);
+    sweep({ plusS: 21 * HOUR, env: env({ CCD_TMP_SWEEP_WALK_ENTRIES: '75' }) });
+    expect(session(census()).inodeBudget, 'the same episode: told once').toMatchObject({ state: 'growing', overSince: since });
+    const got = parseTmpSweepCensus(fs.readFileSync(censusPath(), 'utf8'));
+    expect(got).not.toBeNull();
+  }, 120_000);
+
+  it('an unmeasured walk whose lower bound does not grow is not told', () => {
+    liveSession();
+    mkMany('a', 200);
+    for (const [i, n] of [[0, '30'], [1, '45'], [2, '45'], [3, '45']] as const) sweep({ plusS: i * 7 * HOUR, env: env({ CCD_TMP_SWEEP_WALK_ENTRIES: n }) });
+    expect(session(census()).inodeBudget).toMatchObject({ state: 'unmeasured', overSince: null });
   }, 120_000);
 
   it('the episode ends only on a finished count under 75% of the budget; between the two it stays open, unmeasured never ends it', () => {

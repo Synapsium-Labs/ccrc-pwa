@@ -62,7 +62,7 @@ export interface TmpSweepSession {
 }
 
 export interface TmpSweepInodeBudgetState {
-  /** `ok`, `over` or `unmeasured`. */
+  /** `ok`, `over`, `unmeasured`, or `growing`: unfinished three passes running with a lower bound that grew each time (D-6920). */
   readonly state: string;
   readonly overSince: number | null;
   /** The budget the sweep applied, in inodes; absent reads as "the inode budget" in the words. */
@@ -306,7 +306,8 @@ export function tmpSweepBudget(census: TmpSweepCensus, noticed: ReadonlySet<stri
 /**
  * One notice per over-inode-budget episode (#1411), keyed on the row's `inodeBudget.overSince`, in its own key space
  * (`<uuid>:inodes:<overSince>`) so it never collides with the byte budget's. A session whose walk did not finish and which is over on
- * a lower bound alone is told "at least". Like the byte notice it deletes nothing, shadow or live: the sweep
+ * a lower bound alone is told "at least", and so is one whose unfinished count kept growing (`growing`, D-6920), which is not
+ * called over. Like the byte notice it deletes nothing, shadow or live: the sweep
  * does not remove anything for inodes, and the words say so.
  */
 export function tmpSweepInodeBudget(census: TmpSweepCensus, noticed: ReadonlySet<string>): TmpSweepBudgetNotice[] {
@@ -317,15 +318,18 @@ export function tmpSweepInodeBudget(census: TmpSweepCensus, noticed: ReadonlySet
     const key = `${s.uuid}:inodes:${overSince}`;
     if (noticed.has(key)) continue;
     const count = s.inodes ?? null;
-    const held = count !== null ? `${num(count)} inodes` : `at least ${num(s.inodesAtLeast ?? 0)} inodes (the count could not be finished)`;
+    const held = count !== null ? `${num(count)} inodes` : `at least ${num(s.inodesAtLeast ?? 0)} inodes, could not finish counting`;
     const limit = s.inodeBudget?.limit;
+    const budget = `${limit === undefined ? '' : `${num(limit)}-inode `}inode budget`;
+    const growing = s.inodeBudget?.state === 'growing';
     const top = [...(s.inodeTop ?? [])].sort((a, b) => b.inodes - a.inodes || (a.name < b.name ? -1 : 1)).slice(0, TMP_NOTICE_TOP);
     const largest = top.length > 0 ? `Its largest entries by inodes: ${top.map((t) => `${t.name} (${num(t.inodes)})`).join(', ')}. ` : '';
-    const body = `Your scratch and task output hold ${held}, over the ${limit === undefined ? '' : `${num(limit)}-inode `}inode budget. ${largest}` +
+    const standing = growing ? `; the count has grown three passes running and may be past the ${budget}` : `, over the ${budget}`;
+    const body = `Your scratch and task output hold ${held}${standing}. ${largest}` +
       'Many small files can fill the disk\'s inode table long before its bytes; delete or move the trees you no longer need ' +
       '(build and test scratch is the usual cause). Nothing is removed for inodes: this is a notice only.';
     out.push({
-      sessionId: s.id, key, subject: `tmp-sweep: ${s.id} over inode budget (since ${stamp(overSince)})`, body,
+      sessionId: s.id, key, subject: `tmp-sweep: ${s.id} ${growing ? 'inode count growing' : 'over inode budget'} (since ${stamp(overSince)})`, body,
       coordinatorBody: `Session ${s.id}: ${body}`,
     });
   }

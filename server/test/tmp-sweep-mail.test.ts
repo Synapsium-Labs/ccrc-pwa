@@ -476,7 +476,7 @@ describe('runTmpSweepCensusLane', () => {
   });
 });
 
-// ── inodes (#1411, D-TBD-inode-budget): measured next to bytes, told once per episode, deleting nothing ────────────────
+// ── inodes (#1411, D-6920): measured next to bytes, told once per episode, deleting nothing ────────────────
 const MI = 1_000_000;
 const inodeTop = [['mut-a', 3_400_000], ['mut-b', 200_000], ['mut-c', 90_000], ['mut-d', 40_000], ['mut-e', 9_000], ['mut-f', 1]] as const;
 const overInodes = (over: Partial<TmpSweepSession> = {}): TmpSweepSession => session({
@@ -521,7 +521,17 @@ describe('tmpSweepInodeBudget — one notice per over-inode-budget episode', () 
   });
   it('an unfinished walk says "at least", never a plain count', () => {
     const [n] = tmpSweepInodeBudget(census({ sessions: [overInodes({ inodes: null, inodesAtLeast: 2_000_000 })] }), new Set());
-    expect(n!.body).toContain('at least 2,000,000 inodes');
+    expect(n!.body).toContain('at least 2,000,000 inodes, could not finish counting');
+  });
+  it('an unfinished walk whose lower bound kept growing (state growing) is told once, "at least N inodes, could not finish counting", never "over"', () => {
+    const grow = overInodes({ inodes: null, inodesAtLeast: 400_000, inodeBudget: { state: 'growing', overSince: T0, limit: MI } });
+    const [n, ...rest] = tmpSweepInodeBudget(census({ sessions: [grow] }), new Set());
+    expect(rest).toEqual([]);
+    expect(n!.body).toContain('at least 400,000 inodes, could not finish counting');
+    expect(n!.body).not.toMatch(/, over the/);
+    expect(n!.body).toMatch(/nothing is removed/i);
+    expect(n!.key).toBe(`${grow.uuid}:inodes:${T0}`);
+    expect(tmpSweepInodeBudget(census({ sessions: [grow] }), new Set([n!.key])), 'once').toEqual([]);
   });
   it('the same episode sends no second notice; a new overSince sends one; its key never collides with the byte budget\'s', () => {
     const c = census({ sessions: [overInodes()] });
