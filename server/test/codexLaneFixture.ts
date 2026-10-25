@@ -649,9 +649,10 @@ case "\${1:-}" in
       else
         # A seeded fakeUnit has no exact-child supervisor. It becomes inactive
         # without treating its observed PID as signal authority.
-        printf 'inactive\\n' > "$unit/state"
+        # pid first, state last, each whole-file: state marks the commit.
+        printf '0\\n' > "$unit/pid.tmp" && mv "$unit/pid.tmp" "$unit/pid"
         gap
-        printf '0\\n' > "$unit/pid"
+        printf 'inactive\\n' > "$unit/state.tmp" && mv "$unit/state.tmp" "$unit/state"
       fi
     done
     exit "$rc" ;;
@@ -856,8 +857,8 @@ PY
 # Every state write the launcher makes lands BEFORE the fork. From the fork on,
 # only the supervisor writes this unit's state and pid, so a launcher that is
 # descheduled after it can never overwrite the supervisor's \`active\` and pid.
-printf '0\\n' > "$u/pid"
-printf 'starting\\n' > "$u/state"
+printf '0\\n' > "$u/pid.tmp" && mv "$u/pid.tmp" "$u/pid"
+printf 'starting\\n' > "$u/state.tmp" && mv "$u/state.tmp" "$u/state"
 : > "$u/spawned"
 ( cd "$wd" || exit 1; exec env -i "PATH=$PATH" "PYTHONPATH=\${PYTHONPATH:-}" "PYTHONNOUSERSITE=\${PYTHONNOUSERSITE:-}" "PYTHONDONTWRITEBYTECODE=\${PYTHONDONTWRITEBYTECODE:-}" "\${envs[@]}" "\${fenv[@]}" "$py" -B "$u/supervisor.py" "$u" "$wd" "\${out:-/dev/null}" "\${err:-/dev/null}" "$@" ) \\
   </dev/null >/dev/null 2>&1 &
@@ -1042,9 +1043,11 @@ export async function spawnFakeLitellm(
       '    signal.signal(sig, finish)',
       'with open(log, "ab", buffering=0) as stream:',
       '    proc = subprocess.Popen(argv, cwd=os.getcwd(), env=os.environ.copy(), stdin=subprocess.DEVNULL, stdout=stream, stderr=stream)',
-      '    with open(pidfile, "w") as out:',
+      '    tmp = pidfile + ".tmp"',
+      '    with open(tmp, "w") as out:',
       '        time.sleep(float(os.environ.get("CCRC_FIXTURE_WRITE_GAP_MS", "0")) / 1000)',
       '        out.write(str(proc.pid) + "\\n")',
+      '    os.replace(tmp, pidfile)',
       '    while proc.poll() is None:',
       '        time.sleep(0.05)',
       '    if not finishing:',
