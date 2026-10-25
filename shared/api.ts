@@ -316,9 +316,11 @@ export interface FleetSession {
    *  read; doubt is never `dead`). ADDITIVE: no `FLEET_PROTO` bump, and an older server omits it, so a reader treats an
    *  absent key as "not said" (a cached row revives without it). */
   presence?: Presence;
-  /** ARCH-48 (#783): when a `dead` presence began, epoch MS, from the stop stamp; set ONLY for a dead lifecycle that
-   *  carries a dated stamp (`stopped`), and null for every other row, including a dead `orphan` or `never-started`, which
-   *  nothing dates. ADDITIVE like `presence`. */
+  /** ARCH-48 (#783): when a `dead` presence began, epoch MS, from the stop stamp. THE NARROW READING: set ONLY for a
+   *  `stopped` death (the stop stamp is the death's own instant), and null for every other row. A dead `orphan` gets null
+   *  even though its last supervisor heartbeat has a time: that time is when supervision was last seen, not when the
+   *  session died, and dating an orphan from it is a later decision. `never-started` has nothing to date. ADDITIVE like
+   *  `presence`. */
   deadSince?: number | null;
   /** How many graph READS this session has made — `hookstate.ts`'s
    *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`

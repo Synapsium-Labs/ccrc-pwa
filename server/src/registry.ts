@@ -438,8 +438,7 @@ export interface SessionRecord {
  * original problem runs the other way, into false POSITIVES on unrelated
  * code, which is the failure mode that erodes trust in a scanner rather than
  * the one it exists to catch. The remaining `SessionRecord`-typed direct
- * reads of these three fields (`fleet.ts`'s display assembly and
- * `liveStatus`'s deliberately wrapper-only tolerance, `watch.ts`'s
+ * reads of these three fields (`fleet.ts`'s display assembly, `watch.ts`'s
  * hookstate/task display lanes, `lifecycle.ts`'s project listing,
  * `commands.ts`'s skill listing, `server.ts`'s PR-task listing) are all
  * DISPLAY/connectivity, degrade-and-heal by THE PRINCIPLE, and reviewed by

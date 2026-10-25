@@ -999,7 +999,7 @@ describe('dialog enrichment', () => {
 
   // Stage 2e Task 3 (D-102). With RC off, a genuinely busy pane renders "esc
   // to interrupt" WHILE a permission/AskUserQuestion dialog is painted below
-  // it — a real, expected combined screen (fleet.ts's liveStatus doc: an
+  // it — a real, expected combined screen (the deleted liveStatus's doc said so: an
   // RC-off pane DOES render the busy marker, unlike a --remote-control one).
   // `checkDialog`'s own gate asks `hasMenu`, not `paneState() === 'menu'` —
   // the send.ts:320 idiom, independent of the busy check for exactly this

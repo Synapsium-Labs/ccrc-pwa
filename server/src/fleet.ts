@@ -828,8 +828,8 @@ export async function assembleFleet(
       // way its predecessor did.
       lifecycle,
       presence: reading.presence,
-      // Only a dead lifecycle with a dated stamp: `stopped` (the stop stamp's own instant); an `orphan` or a
-      // `never-started` row has nothing that dates its death.
+      // The narrow reading (`FleetSession.deadSince`): only a `stopped` death, dated by the stop stamp's own instant.
+      // An `orphan` reads null (its last heartbeat dates supervision, not the death); `never-started` has no date.
       deadSince: reading.deadCause === 'stopped' && r.stopped !== null ? r.stopped.at * 1000 : null,
       // Epoch MS on the wire — the timebase `statusUpdatedAt`/`bucketSince`
       // already use and the PWA's relative-time helpers already read.

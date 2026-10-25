@@ -182,12 +182,10 @@ describe('assembleFleet: the session role (D-5301)', () => {
 // pane showed the spinner: rest asserted on the strength of a permission bit,
 // or of one dropped agent-WS round trip in remote mode.
 //
-// THE ASYMMETRY WITH `liveStatus` DIRECTLY ABOVE IS DELIBERATE, and the third
-// case here pins it so the next reader finds the reason beside the pin rather
-// than in a plan. Same failure, opposite answer, and both are fail-shut:
-// `assembleFleet` DISPLAYS, so its dangerous direction is the reassuring one
-// (`idle`); `liveStatus`'s sole consumer is the interrupt route
-// (`server.ts`'s `… === 'busy'`), which REFUSES on anything but `busy`, so
+// THE ASYMMETRY WITH THE INTERRUPT ROUTE IS DELIBERATE. Same failure, opposite
+// answer, and both are fail-shut: `assembleFleet` DISPLAYS, so its dangerous
+// direction is the reassuring one (`idle`); the interrupt route's verdict
+// (`turnverdict.ts`'s `interruptVerdict`, D-5236) REFUSES on an unread word, so
 // there the reassuring word is the safe one and "fail toward busy" would GRANT
 // interrupts on a read that measured nothing. The two surfaces are not
 // inconsistent — they are each failing away from the act that cannot be taken

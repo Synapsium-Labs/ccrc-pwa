@@ -10,7 +10,7 @@
 // (it runs without the server); the table records, row by row, whether it protects the session's temp directory, and
 // names the rows where that differs from `presence` (it protects any row with a `.hibernated` file, whatever its
 // lifecycle, and it knows no heartbeat or tmux). The other readers of
-// the old ladders (`liveStatus`, the fleet frame, `liveRowFor`, `resolve`, `claimProbe`, the dead-coordinator
+// the old ladders (the deleted `liveStatus`, the fleet frame, `liveRowFor`, `resolve`, `claimProbe`, the dead-coordinator
 // predicate) are pinned on the same rows in `test/session-ladders-characterization.test.ts`.
 //
 // THE SHAPE IS THE SPEC'S (consolidation spec C1, SessionReading): five parts, not one word. `substrate` is whether the
