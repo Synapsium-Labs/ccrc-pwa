@@ -182,3 +182,5 @@ export function App(): ReactNode {
     </FleetChromeProvider>
   );
 }
+
+// probe: light-run measurement (not for merge)
