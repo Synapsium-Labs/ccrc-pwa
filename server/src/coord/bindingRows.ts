@@ -1,7 +1,5 @@
 import { isRunState } from '../../../shared/api.js';
-import {
-  bindingOf, boundRunsOf, claimantsOf, isOpen, parentOf, unbornIncarnation, type BindingRun, type Incarnation,
-} from './runBinding.js';
+import { boundRunsOf, isOpen, unbornIncarnation, type BindingRun, type Incarnation } from './runBinding.js';
 
 /**
  * The store's session-keyed readers, as projections of ONE series (ARCH-62, GitHub #797; epic #771; consolidation spec
@@ -42,14 +40,6 @@ const runsOf = (rows: readonly SeriesRow[]): BindingRun[] => rows.map((r, i) => 
   id: i + 1, sessionId: r.sessionId, claimedBy: r.claimedBy, state: isRunState(r.state) ? r.state : 'unknown',
   openedAt: r.openedAt, sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor,
 }));
-
-/** The parent of `sessionId`: the claimant of its open binding, `null` when it has none or the open run is ownerless. */
-export const parentFromRows = (rows: readonly SeriesRow[], sessionId: string, incarnation?: Incarnation): string | null =>
-  parentOf(bindingOf(runsOf(rows), incarnationFor(sessionId, incarnation)));
-
-/** Every coordinator that has `sessionId` working for it, newest open run first, each once. */
-export const claimantsFromRows = (rows: readonly SeriesRow[], sessionId: string, incarnation?: Incarnation): string[] =>
-  claimantsOf(runsOf(rows), incarnationFor(sessionId, incarnation));
 
 /** The raw rows of the runs that bind `sessionId`'s incarnation, by id: in any state, or only the open ones. */
 export function boundRows(

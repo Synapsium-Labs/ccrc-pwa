@@ -31,7 +31,7 @@ const SITES: Record<string, number> = {
   'server/src/coord/routes.ts': 2,
   'server/src/coord/runBinding.ts': 4,
   'server/src/coord/stall.ts': 8,
-  'server/src/coord/store.ts': 14,
+  'server/src/coord/store.ts': 13,
   'server/src/hookstate.ts': 1,
   'server/src/stopDoneSweep.ts': 1,
   'server/src/tmpSweepLane.ts': 1,
@@ -39,13 +39,12 @@ const SITES: Record<string, number> = {
   'server/src/turnmark.ts': 1,
   'server/src/watch.ts': 10,
 };
-const SITES_TOTAL = 71;
+const SITES_TOTAL = 70;
 
 /** The store's binding readers at this commit, by name. */
-const READERS: readonly string[] = ['bindingRunsOf', 'lastRunBySession', 'openClaimantsOf', 'openRunsClaimedBy',
-  'openRunsForSession', 'parentOfSession', 'runsNamingSession', 'runsTouching'];
-/** Lowered to the counted exit's 4 by the fold commit. */
-const READERS_CEILING = 8;
+const READERS: readonly string[] = ['bindingRunsOf', 'lastRunBySession', 'openRunsForSession', 'runsNamingSession'];
+/** The counted exit's number (spec §5.9): open-only, any state, last-closed, and the series the binding decides over. */
+const READERS_CEILING = 4;
 
 describe('the equality-site query (ARCH-62 census)', () => {
   const sites = (src: string) => equalitySitesOf(src, 'fixture.ts');

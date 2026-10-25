@@ -11,7 +11,7 @@ import { bornIncarnation, unbornIncarnation } from '../src/coord/runBinding.js';
 import { heldFor } from '../src/coord/heldFor.js';
 import { runDriftPass, type DriftLaneDeps } from '../src/coord/driftLane.js';
 import { mkTmp } from './tmpHelpers.js';
-import { okSiblings } from './coordReadHelpers.js';
+import { okSiblings, openClaimantsOf, parentOfSession } from './coordReadHelpers.js';
 
 const BORN = 1_700_000_000_000;
 const store = (): CoordStore =>
@@ -42,20 +42,20 @@ describe('the readers take the worker\'s incarnation (ARCH-62)', () => {
     s.setSession(a, 'demo-w', BORN);
     const b = open(s, 'prog-b', 'coord-2');
     s.setSession(b, 'demo-w');
-    expect(s.parentOfSession('demo-w', inc)).toBe('coord-2');
-    expect(s.openClaimantsOf('demo-w', inc)).toEqual(['coord-2', 'coord-1']);
+    expect(parentOfSession(s, 'demo-w', inc)).toBe('coord-2');
+    expect(openClaimantsOf(s, 'demo-w', inc)).toEqual(['coord-2', 'coord-1']);
     expect(okSiblings(s.openRunsForSession('demo-w', undefined, inc)).map((r) => r.id)).toEqual([a, b]);
   });
 
   it('a recycled id: the run of the earlier occupant is no parent, no claimant and no sibling', () => {
     const s = store();
     const { stale, fresh } = recycled(s, true);
-    expect(s.parentOfSession('demo-w', inc)).toBeNull();
-    expect(s.openClaimantsOf('demo-w', inc)).toEqual([]);
+    expect(parentOfSession(s, 'demo-w', inc)).toBeNull();
+    expect(openClaimantsOf(s, 'demo-w', inc)).toEqual([]);
     expect(okSiblings(s.openRunsForSession('demo-w', undefined, inc))).toEqual([]);
     // Without an incarnation the readers keep the id-string rule (a coordinator, a manual workspace).
-    expect(s.parentOfSession('demo-w')).toBe('coord-gone');
-    expect(s.openClaimantsOf('demo-w', unbornIncarnation('demo-w', 'not-a-child'))).toEqual(['coord-gone']);
+    expect(parentOfSession(s, 'demo-w')).toBe('coord-gone');
+    expect(openClaimantsOf(s, 'demo-w', unbornIncarnation('demo-w', 'not-a-child'))).toEqual(['coord-gone']);
     expect([stale, fresh].length).toBe(2);
   });
 

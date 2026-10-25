@@ -126,18 +126,12 @@ export function parentOrMinter(binding: SessionBinding, minter: string | null): 
 export const hasOwnerlessUndecidedOpen = (binding: SessionBinding): boolean =>
   binding.undecided.some((r) => isOpen(r) && r.claimedBy === null);
 
-/** A child's parent, decided once for every caller (heldFor, the drift lane): the store's proven parent when it has one,
- *  else `parentOrMinter` over the child's binding series, so a run planned before the birth and bound to it (wave N >= 2)
- *  keeps the minting run's claimant while a ghost of another programme never becomes the parent. `series` is the
- *  store's `bindingRunsOf` read; a failed read decides nothing (`null`). */
-export function childParentOf(
-  proven: string | null,
-  series: { readonly ok: true; readonly runs: readonly BindingRun[] } | { readonly ok: false },
-  minter: string | null,
-  incarnation: Incarnation,
-): string | null {
-  if (proven !== null || !series.ok) return proven;
-  return parentOrMinter(bindingOf(series.runs, incarnation), minter);
+/** A child's parent, decided once for every caller (heldFor, the drift lane): the claimant of its open binding, else
+ *  `parentOrMinter` over the same series, so a run planned before the birth and bound to it (wave N >= 2) keeps the
+ *  minting run's claimant while a ghost of another programme never becomes the parent. `runs` is the store's
+ *  `bindingRunsOf` series for the child; `minter` the claimant of the run the child's mark names. */
+export function childParentOf(runs: readonly BindingRun[], minter: string | null, incarnation: Incarnation): string | null {
+  return parentOrMinter(bindingOf(runs, incarnation), minter);
 }
 
 /** EVERY coordinator that currently has this incarnation working for it, newest open run first, each once. */

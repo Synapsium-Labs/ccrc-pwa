@@ -30,7 +30,7 @@ import {
   WORK_ITEM_TITLE_MAX,
   isSkillState,
 } from '../../shared/api.js';
-import { okRun, okRuns } from './coordReadHelpers.js';
+import { okRun, okRuns, parentOfSession } from './coordReadHelpers.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { NotifyLog } from '../src/notifylog.js';
 
@@ -480,7 +480,7 @@ describe('POST /api/runs', () => {
     // this door used to make answers the session's OWN id here, which the
     // self-claim admission then waves through — `demo-existing` is still
     // `other-coordinator`'s worker on the older open run the whole time.
-    expect(w.coord.parentOfSession('demo-existing')).toBe('demo-existing');
+    expect(parentOfSession(w.coord, 'demo-existing')).toBe('demo-existing');
     const res = await postOpen(app, { ...OPEN_BODY, program: 'build5-third', title: 'A worker coordinating',
       claimedBy: 'demo-existing' });
     expect(res.statusCode).toBe(409);

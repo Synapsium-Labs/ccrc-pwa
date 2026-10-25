@@ -6,7 +6,7 @@ import path from 'node:path';
 import { COORD_SCHEMA_VERSION, openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
-import { okAsk, okAsksByChild } from './coordReadHelpers.js';
+import { okAsk, okAsksByChild, parentOfSession } from './coordReadHelpers.js';
 import { ASK_STATES, isAskState, RUN_HOLD_NUMBER_MAX } from '../../shared/api.js';
 
 const dbPathIn = (home: string): string => path.join(home, '.ccrc', 'coord.db');
@@ -63,8 +63,8 @@ describe('ask store methods', () => {
     const run = s.openRun({ program: 'prog', title: 'Prog', project: 'p',
       wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
     s.setSession(run.id, 'child-1');
-    expect(s.parentOfSession('child-1')).toBe('coord-1');
-    expect(s.parentOfSession('nobody')).toBeNull();
+    expect(parentOfSession(s, 'child-1')).toBe('coord-1');
+    expect(parentOfSession(s, 'nobody')).toBeNull();
   });
 
   it('follows a reclaim, because the parent is derived and not stored', () => {
@@ -76,7 +76,7 @@ describe('ask store methods', () => {
     // real signature (`reclaimProgram(runId, to, at, null)`), not the brief's
     // illustrative `('prog', 'coord-2', ...)`.
     s.reclaimProgram(run.id, 'coord-2', Date.now(), null);
-    expect(s.parentOfSession('child-1')).toBe('coord-2');
+    expect(parentOfSession(s, 'child-1')).toBe('coord-2');
   });
 
   it('refuses a second taker — the row is the mutex (D-2171)', () => {
@@ -115,7 +115,7 @@ describe('ask store methods', () => {
       wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
     s.setSession(run.id, 'child-1');
     s.db.prepare("UPDATE runs SET state = 'unknown' WHERE id = ?").run(run.id);
-    expect(s.parentOfSession('child-1')).toBe('coord-1');
+    expect(parentOfSession(s, 'child-1')).toBe('coord-1');
   });
 
   // Fix round 1, finding 2: the `ORDER BY id DESC` tie-break was a comment,
@@ -136,7 +136,7 @@ describe('ask store methods', () => {
     const second = s.openRun({ program: 'prog-b', title: 'B', project: 'p',
       wave: 1, waveOf: null, claimedBy: 'coord-2' }) as { id: number };
     s.setSession(second.id, 'child-1');
-    expect(s.parentOfSession('child-1')).toBe('coord-2');
+    expect(parentOfSession(s, 'child-1')).toBe('coord-2');
   });
 
   // Fix round 1, finding 3: `untakeAsk` — the rollback for a take whose

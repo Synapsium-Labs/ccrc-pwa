@@ -5,6 +5,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
+import { openRunsClaimedBy } from './coordReadHelpers.js';
 
 const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
@@ -23,7 +24,7 @@ describe('CoordStore.openRunsClaimedBy', () => {
     const other = open(s, 'elsewhere', 1, 'another-coordinator');
     const closed = open(s, 'over', 1);
     expect(s.advance(closed, 'failed', 'test-close').ok).toBe(true);
-    expect(s.openRunsClaimedBy('demo-coordinator')).toEqual({
+    expect(openRunsClaimedBy(s, 'demo-coordinator')).toEqual({
       ok: true,
       siblings: [
         { id: a, program: 'lifecycle', wave: 1, waveOf: 3 },
@@ -31,7 +32,7 @@ describe('CoordStore.openRunsClaimedBy', () => {
       ],
     });
     // CONTROL: the other claimant's run is a real open run — it is excluded by its column, not by its state.
-    expect(s.openRunsClaimedBy('another-coordinator')).toEqual({
+    expect(openRunsClaimedBy(s, 'another-coordinator')).toEqual({
       ok: true, siblings: [{ id: other, program: 'elsewhere', wave: 1, waveOf: 3 }],
     });
   });
@@ -40,14 +41,14 @@ describe('CoordStore.openRunsClaimedBy', () => {
     const s = store();
     const r = open(s, 'lifecycle', 1, 'someone-else');
     s.bindSession(r, 'demo-coordinator');
-    expect(s.openRunsClaimedBy('demo-coordinator')).toEqual({ ok: true, siblings: [] });
+    expect(openRunsClaimedBy(s, 'demo-coordinator')).toEqual({ ok: true, siblings: [] });
   });
 
   it('counts a row in a state this build cannot name as open — the terminal set is the only exclusion', () => {
     const s = store();
     const r = open(s, 'lifecycle', 1);
     s.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run('reconciling', r);
-    expect(s.openRunsClaimedBy('demo-coordinator')).toMatchObject({ ok: true, siblings: [{ id: r }] });
+    expect(openRunsClaimedBy(s, 'demo-coordinator')).toMatchObject({ ok: true, siblings: [{ id: r }] });
   });
 
   it('refuses the WHOLE read when one row cannot be represented — never a partial list', () => {
@@ -56,6 +57,6 @@ describe('CoordStore.openRunsClaimedBy', () => {
     s.db.prepare(
       'INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(4242, 'lifecycle', BigInt(Number.MAX_SAFE_INTEGER) + 1n, 3, 'ccrc-pwa', 'planned', 'demo-coordinator', Date.now());
-    expect(s.openRunsClaimedBy('demo-coordinator')).toMatchObject({ ok: false, kind: 'run-unreadable' });
+    expect(openRunsClaimedBy(s, 'demo-coordinator')).toMatchObject({ ok: false, kind: 'run-unreadable' });
   });
 });

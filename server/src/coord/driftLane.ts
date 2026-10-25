@@ -31,7 +31,7 @@ export function isDriftLaneTag(v: string): boolean {
 
 export interface DriftLaneDeps {
   readonly coord: Pick<CoordStore, 'driftOpenRuns' | 'driftOutstandingDeliveries' | 'driftAwaitingReview'
-    | 'driftHeldQuestions' | 'driftFindingRows' | 'driftStallToldRows' | 'driftPushesOnDay' | 'parentOfSession' | 'bindingRunsOf' | 'run'
+    | 'driftHeldQuestions' | 'driftFindingRows' | 'driftStallToldRows' | 'driftPushesOnDay' | 'bindingRunsOf' | 'run'
     | 'recordDriftPass' | 'markDriftPushed' | 'markDriftShadowed'>;
   /** The reclaim ladder's verdict for one claimant (`measureClaimant`, bound by the watcher): no second vocabulary. */
   readonly measure: (id: string, at: number) => Promise<ClaimantReading>;
@@ -88,9 +88,9 @@ async function pass(d: DriftLaneDeps, now: number): Promise<void> {
     // The worker's incarnation, from the birth the run its mark names recorded: a reused name has no ghost parent (ARCH-62).
     const minting = d.coord.run(mark.runId);
     const incarnation = incarnationOf(sessionId, childBirthOf(minting, sessionId));
-    const proven = d.coord.parentOfSession(sessionId, incarnation);
-    const parentId = proven !== null || !minting.ok || minting.run === null ? proven
-      : childParentOf(proven, d.coord.bindingRunsOf(sessionId), minting.run.claimedBy, incarnation);
+    const series = d.coord.bindingRunsOf(sessionId);
+    if (!series.ok) { d.warn(`ccrc-server: sweepDrift could not read the runs of ${sessionId} (${series.detail}) — nothing recorded this pass`); return; }
+    const parentId = childParentOf(series.runs, minting.ok && minting.run !== null ? minting.run.claimedBy : null, incarnation);
     workers.push({ sessionId, markRunId: mark.runId, parentId,
       // The mark's run may be closed and so absent from `runs.rows`; its claimant is the minting run's own.
       runClaimedBy: claimedBy.get(mark.runId) ?? (minting.ok ? minting.run?.claimedBy ?? null : null) });

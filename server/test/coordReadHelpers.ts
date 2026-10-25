@@ -39,3 +39,26 @@ export const okAsks = (r: AsksReadResult): AskRow[] =>
 
 export const okAsksByChild = (r: AsksByChildResult): Map<string, AskRow> =>
   r.ok ? r.asks : refused('ask map', r.detail);
+
+// ARCH-62 (#797), slice 2: the store's `parentOfSession`, `openClaimantsOf` and `openRunsClaimedBy` readers were folded into
+// `bindingRunsOf` / `openRunsForSession` (the census pins the four that remain). These keep the tests that characterise
+// them reading as they did: each asks the store's series the way a production caller does, through the binding.
+import { bindingOf, claimantsOf, parentOf, unbornIncarnation, type Incarnation } from '../src/coord/runBinding.js';
+import { openRunsClaimedBy as openRunsClaimedByPort } from '../src/coord/bindingReads.js';
+import type { CoordStore } from '../src/coord/store.js';
+
+const seriesOf = (s: Pick<CoordStore, 'bindingRunsOf'>, id: string) => okSeries(s.bindingRunsOf(id));
+const okSeries = (r: ReturnType<CoordStore['bindingRunsOf']>) => (r.ok ? r.runs : refused('run series', r.detail));
+const incOf = (id: string, inc?: Incarnation): Incarnation => inc ?? unbornIncarnation(id, 'not-a-child');
+
+/** The claimant of the session's open binding (`null`: none, or the open run is ownerless). */
+export const parentOfSession = (s: Pick<CoordStore, 'bindingRunsOf'>, id: string, inc?: Incarnation): string | null =>
+  parentOf(bindingOf(seriesOf(s, id), incOf(id, inc)));
+
+/** Every coordinator that has the session working for it, newest open run first. */
+export const openClaimantsOf = (s: Pick<CoordStore, 'bindingRunsOf'>, id: string, inc?: Incarnation): string[] =>
+  claimantsOf(seriesOf(s, id), incOf(id, inc));
+
+/** The open runs a coordinator claims, unwrapped. */
+export const openRunsClaimedBy = (s: Pick<CoordStore, 'openRunsForSession'>, id: string): ReturnType<typeof openRunsClaimedByPort> =>
+  openRunsClaimedByPort(s, id);

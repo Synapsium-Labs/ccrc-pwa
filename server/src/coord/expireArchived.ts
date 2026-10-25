@@ -7,6 +7,7 @@ import type { Viewers } from '../viewer.js';
 import type { NotifyLog } from '../notifylog.js';
 import { CCD_ARGV, EXPIRE_CAP, EXPIRE_CHILD_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import type { CoordStore } from './store.js';
+import { openRunsClaimedBy } from './bindingReads.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { childReclaimHasCoordinated } from './childReclaim.js';
 import { readSwitches } from '../../../shared/switches.js';
@@ -200,7 +201,7 @@ export function readExpiryStore(coord: CoordStore, id: string, child?: { readonl
   try {
     const worker = coord.openRunsForSession(id);
     if (!worker.ok) return { ok: false, detail: worker.detail };
-    const claims = coord.openRunsClaimedBy(id);
+    const claims = openRunsClaimedBy(coord, id);
     if (!claims.ok) return { ok: false, detail: claims.detail };
     const openWorker = worker.siblings.length > 0;
     const openClaimant = claims.siblings.length > 0;

@@ -25,7 +25,7 @@ import type { FleetIO } from '../src/io.js';
 import { isRegistryId } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { okRun } from './coordReadHelpers.js';
+import { okRun, openRunsClaimedBy } from './coordReadHelpers.js';
 import { REFUSED_IDS } from './registryIdCases.js';
 import { appFor, recorder, seedRow, storedRun } from './idGateFixture.js';
 
@@ -293,7 +293,7 @@ describe('the abandon arm closes a bad stored id failed with no fleet act (spec 
       { tmux: d.base.tmux, queue: d.base.queue, readAsk: async () => null });
     const plan = await handle.withAbandon(d.coord, (abandon, refusalOf) => decideArchive({
       openRunsForSession: (sid) => d.coord.openRunsForSession(sid),
-      openRunsClaimedBy: (sid) => d.coord.openRunsClaimedBy(sid),
+      openRunsClaimedBy: (sid) => openRunsClaimedBy(d.coord, sid),
       abandonRefusal: refusalOf,
       abandon,
     }, CLAIMED_BY, { force: false, interrupt: false, programmeEnd: true }, IDLE_MAIN));

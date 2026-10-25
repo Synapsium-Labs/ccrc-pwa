@@ -15,7 +15,7 @@ import { CoordStore } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { okRuns } from './coordReadHelpers.js';
+import { okRuns, parentOfSession } from './coordReadHelpers.js';
 
 const TOKEN = 'f'.repeat(64);
 const headers = { 'x-ccrc-mail-token': TOKEN };
@@ -100,7 +100,7 @@ describe('cross-project claimant — exploit probes (D-5523)', () => {
     const r = await post(app, { ...OPEN, ...att(FOREIGN), sessionId: B_CHILD });
     expect(r.statusCode).toBe(409);
     expect(r.json()).toMatchObject({ refused: 'project-mismatch' });
-    expect(w.coord.parentOfSession(B_CHILD)).toBeNull();
+    expect(parentOfSession(w.coord, B_CHILD)).toBeNull();
   });
 
   it('E3b a third-project claimant cannot rebind an existing child of the run project held by another programme', async () => {
@@ -109,7 +109,7 @@ describe('cross-project claimant — exploit probes (D-5523)', () => {
     const s0 = await post(app, { ...OPEN, ...att(PARENT), sessionId: CHILD }); expect([s0.statusCode, s0.json()]).toMatchObject([200, { ok: true }]);
     const r = await post(app, { ...OPEN, program: 'program-z', homeProject: 'project-z', ...att(THIRD), sessionId: CHILD });
     expect([r.statusCode, r.json()]).toMatchObject([409, { refused: 'project-mismatch', by: 'project-c' }]);
-    expect(w.coord.parentOfSession(CHILD)).toBe(PARENT);
+    expect(parentOfSession(w.coord, CHILD)).toBe(PARENT);
   });
 
   it('E4 a live worker of another coordinator, in another project, still cannot coordinate a new programme anywhere', async () => {

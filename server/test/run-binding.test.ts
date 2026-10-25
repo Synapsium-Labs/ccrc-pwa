@@ -15,6 +15,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
 import { walkSrc } from './rings/walkSrc.js';
+import { parentOfSession } from './coordReadHelpers.js';
 
 const BORN = 1_700_000_000_000;
 let n = 0;
@@ -134,7 +135,7 @@ describe('the #746 fixture, through a store', () => {
     expect(claimantsOf(series, inc)).toEqual(['coord-live']);
     // In this shape the old reader agrees: the fresh run is the newest open one. The next case is where it
     // inherits the ghost. ARCH-62 moves the sites; this commit adds the owner.
-    expect(s.parentOfSession('demo-w')).toBe('coord-live');
+    expect(parentOfSession(s, 'demo-w')).toBe('coord-live');
   });
 
   it('a recycled id with only the stale run left open has no parent at all, not a ghost coordinator', () => {
@@ -148,7 +149,7 @@ describe('the #746 fixture, through a store', () => {
     for (const to of ['dispatched', 'closing', 'done'] as const) s.advance(fresh, to, 'coordinator');
     const series = readSeries(s, 'demo-w');
     const inc = bornIncarnation('demo-w', BORN);
-    expect(s.parentOfSession('demo-w')).toBe('coord-gone');
+    expect(parentOfSession(s, 'demo-w')).toBe('coord-gone');
     expect(parentOf(bindingOf(series, inc))).toBeNull();
     expect(bindingOf(series, inc).newest?.id).toBe(fresh);
     expect(bindingOf(series, inc).open).toBeNull();
@@ -178,7 +179,7 @@ describe('the #746 fixture, through a store', () => {
     const series = readSeries(s, 'demo-w');
     const inc = bornIncarnation('demo-w', BORN);
     const b = bindingOf(series, inc);
-    expect(s.parentOfSession('demo-w')).toBe('coord-1');
+    expect(parentOfSession(s, 'demo-w')).toBe('coord-1');
     expect(parentOf(b)).toBe('coord-1');
     expect(b.undecided.map((r) => r.id)).toEqual([wave2]);
     for (const to of ['dispatched', 'closing', 'done'] as const) s.advance(wave1, to, 'coordinator');
