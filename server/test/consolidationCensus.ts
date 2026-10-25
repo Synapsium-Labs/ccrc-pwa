@@ -13,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD } from './ccdWsHelpers.js';
 import { parsedFile } from './scan/symbols.js';
+import { scheduleFacts, type ScheduleFacts } from './scan/parse.js';
 
 /** The repository root: every query's default tree. A fixture tree passes its own root in its place. */
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -512,4 +513,100 @@ export function redactRuleTables(root: string = REPO): string[] {
     }
   }
   return out.sort();
+}
+
+/**
+ * D-5862 (Task C1h; ARCH-68 #803; spec K11, §2.3's clock row): the watcher's lane schedule, four queries over
+ * `server/src/watch.ts`, read from its syntax tree (`scan/parse.ts`'s `scheduleFacts`, the one parser importer), never from a
+ * count typed by hand. Exit targets (C1h): `laneClockFields` and `laneClockShapes` list only W4's two clocks (and
+ * `DelegationLane#lastSweepAt`, reported, while another series holds that class); `singleFlightGuards` lists only
+ * `ticking`, `dispatchRun` and `dispatchAgain`, and W4's two; `cadenceLiterals` is empty.
+ * KNOWN WIDTH: a clock or guard reached through a computed name, a field of another class and a literal assembled from
+ * pieces (`60 * 1000`, which is read, but `MINUTE * 5` is not a literal) are other shapes; a cadence compared through
+ * a local alias (`const gap = now - this.lastX; if (gap < 5000)`) is not seen.
+ */
+
+/** The fields that were a lane's throttle clock on `a8a5b9f56`, by name: 25 in `FleetWatcher` (23 on `Date.now()`, 2 on
+ *  the monotonic clock) and W4's two, which a later series moves. */
+export const LANE_CLOCK_NAMES: readonly string[] = [
+  'lastCapsAt', 'lastCatalogueAt', 'lastInventoryAt', 'lastServerCapsAt',
+  'lastTaskSweep', 'lastUsageSweep', 'lastPrSweep', 'lastNameSweep', 'lastDivergenceSweep', 'lastLifecycleSweep',
+  'lastReadinessSweep', 'lastLedgerReconcile', 'lastLedgerFloor',
+  'lastClaimRenew', 'lastClaimLapse', 'lastStallSweep', 'lastIdleNudgeAt', 'lastMailSweep', 'lastAskSweep',
+  'lastApprovalPrune', 'lastDigestBeat',
+  'lastChildReclaimSweep', 'lastCollectSweep', 'lastArchivedExpirySweep', 'lastDeadCoordinatorSweep',
+  'lastStopDoneSweep', 'lastHibernateSweep',
+];
+
+/** The fields that were a lane's single-flight guard on `a8a5b9f56` (the stuck-run stamp, the booleans, the promises and
+ *  the one queued rerun), by name. */
+export const SINGLE_FLIGHT_NAMES: readonly string[] = [
+  'ticking', 'collectSweeping', 'stallSweepRunning', 'idleNudgeRunning', 'archivedExpirySweeping', 'stopDoneSweeping',
+  'hibernateSweeping', 'deadCoordinatorSweeping', 'serverCapsRun', 'deadCoordinatorPassRun', 'inventoryRun',
+  'inventoryRerunPending', 'dispatchRun', 'dispatchAgain', 'prSweepStartedAt',
+];
+
+/** The facts of `server/src/watch.ts` (or a fixture's), with the file's lines; `null` when the tree has none. */
+function watcherFacts(root: string, rel = 'server/src/watch.ts'): { facts: ScheduleFacts; lines: string[]; file: string } | null {
+  const abs = path.join(root, rel);
+  if (!existsSync(abs)) return null;
+  const parsed = parsedFile(abs);
+  return { facts: scheduleFacts(parsed), lines: parsed.text.split('\n'), file: rel };
+}
+
+const siteAt = (w: { lines: string[]; file: string }, line: number): CensusSite => ({ file: w.file, line, text: w.lines[line - 1] ?? '' });
+
+/** The named lane clocks (`LANE_CLOCK_NAMES`) still declared as fields of `FleetWatcher`. */
+export function laneClockFields(root: string = REPO): CensusSite[] {
+  const w = watcherFacts(root);
+  return w === null ? [] : w.facts.fields.filter((f) => f.cls === 'FleetWatcher' && LANE_CLOCK_NAMES.includes(f.name)).map((f) => siteAt(w, f.line));
+}
+
+/** `DelegationLane#lastSweepAt`, a cadence clock in a class another series holds: reported by name, never ratcheted. */
+export function laneClockReported(root: string = REPO): CensusSite[] {
+  const w = watcherFacts(root);
+  return w === null ? [] : w.facts.fields.filter((f) => f.cls === 'DelegationLane' && f.name === 'lastSweepAt').map((f) => siteAt(w, f.line));
+}
+
+/** Numeric fields of `FleetWatcher` that are compared with a constant and are NOT a lane's throttle: `lastStallJudgedAt` is
+ *  the stall watch's gap rule (slug `stall-clocks-drop-on-an-unobserved-gap`, D-3750), a state test on how long the watch
+ *  went unobserved, which decides whether to drop its clocks and does not decide whether a lane runs. */
+export const LANE_CLOCK_SHAPE_EXEMPT: readonly string[] = ['lastStallJudgedAt'];
+
+/** The structural query: a numeric field of `FleetWatcher` (bar `LANE_CLOCK_SHAPE_EXEMPT`) compared as
+ *  `<now> - this.X <op> CONST` (`<`, `<=`, `>`, `>=`), CONST an UPPER_CASE name, a numeric literal or a product of those. So a
+ *  new, unnamed clock is caught. */
+export function laneClockShapes(root: string = REPO): CensusSite[] {
+  const w = watcherFacts(root);
+  if (w === null) return [];
+  const numeric = new Set(w.facts.fields.filter((f) => f.cls === 'FleetWatcher' && f.numeric && !LANE_CLOCK_SHAPE_EXEMPT.includes(f.name)).map((f) => f.name));
+  return w.facts.comparisons.filter((c) => c.cls === 'FleetWatcher' && numeric.has(c.field) && c.other !== 'other').map((c) => siteAt(w, c.line));
+}
+
+/** The single-flight guards (`SINGLE_FLIGHT_NAMES`) still declared as fields of `FleetWatcher`. */
+export function singleFlightGuards(root: string = REPO): CensusSite[] {
+  const w = watcherFacts(root);
+  return w === null ? [] : w.facts.fields.filter((f) => f.cls === 'FleetWatcher' && SINGLE_FLIGHT_NAMES.includes(f.name)).map((f) => siteAt(w, f.line));
+}
+
+/** A bare millisecond literal (a numeric literal of 1000 or more, `60_000`, or a product with one, `60 * 1000`) compared
+ *  against a `last…` clock: `<now> - this.last… <op> LITERAL`. A cadence is a row of `LANE_SCHEDULE`. */
+export function cadenceLiterals(root: string = REPO): CensusSite[] {
+  const w = watcherFacts(root);
+  return w === null ? [] : w.facts.comparisons.filter((c) => c.field.startsWith('last') && c.literalMs).map((c) => siteAt(w, c.line));
+}
+
+/** The three cadences the spec declares as derivations, each `export const NAME = OTHER;` where it lives (`laneSchedule.ts`
+ *  or `watch.ts`): `reference` is true when the declaration's initializer is a bare name, false when it is a literal or an
+ *  expression, and `file` is null when no declaration is found. A derivation is a reference, never a second literal. */
+export const DECLARED_DERIVATIONS: readonly string[] = ['COLLECT_OBSERVE_INTERVAL_MS', 'STALL_SWEEP_MS', 'DELEGATION_SWEEP_MS'];
+
+export function declaredDerivations(root: string = REPO): Array<{ name: string; file: string | null; reference: boolean }> {
+  const found = new Map<string, { file: string; reference: boolean }>();
+  for (const rel of ['server/src/laneSchedule.ts', 'server/src/watch.ts']) {
+    const w = watcherFacts(root, rel);
+    if (w === null) continue;
+    for (const c of w.facts.constants) if (DECLARED_DERIVATIONS.includes(c.name)) found.set(c.name, { file: rel, reference: c.reference });
+  }
+  return DECLARED_DERIVATIONS.map((name) => ({ name, file: found.get(name)?.file ?? null, reference: found.get(name)?.reference ?? false }));
 }

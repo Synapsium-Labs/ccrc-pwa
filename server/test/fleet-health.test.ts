@@ -680,7 +680,7 @@ describe('/api/fleet/health: the archived-held block (D-5943)', () => {
       try {
         await watcher.sweepArchivedExpiry(ARCHIVED as never, []);
         expect(((await health())['archivedHeld'] as { rows: unknown[] }).rows).toHaveLength(2);
-        (watcher as unknown as { lastArchivedExpirySweep: number }).lastArchivedExpirySweep = 0;
+        watcher.kick('archivedExpiry');
         (watcher as unknown as { deps: { fleetState: { ccdVerbs: readonly string[] } } }).deps.fleetState.ccdVerbs = [...verbs];
         await watcher.sweepArchivedExpiry([ARCHIVED[1]] as never, [...names]);
         expect((await health())['archivedHeld']).toEqual({ totalBytes: 0, unmeasured: 1, rows: [

@@ -2352,7 +2352,7 @@ describe("child-reclamation wave 4 — one 'reclaim-paused' literal", () => {
   it('watch.ts reaches the reclaim marker through readSwitches, never a private parse (D-5856)', () => {
     // Not just "no second literal" — that is satisfied by deleting the reader. Symbol-keyed (scan/symbols.ts): each lane
     // site calls the switchboard's one reader, and no `includes(RECLAIM_PAUSE_MARKER)` is left in watch.ts.
-    for (const m of ['emitCoord', 'sweepChildReclaim', 'archivedExpiryPass', 'deadCoordinatorPass']) expect(callsIn(symbolOf('server/src/watch.ts', `FleetWatcher.${m}`)).map((c) => c.name), m).toContain('readSwitches');
+    for (const m of ['emitCoord', 'childReclaimPass', 'archivedExpiryPass', 'deadCoordinatorPass']) expect(callsIn(symbolOf('server/src/watch.ts', `FleetWatcher.${m}`)).map((c) => c.name), m).toContain('readSwitches');
     expect(reclaimPauseParseSites().filter((x) => x.file === 'server/src/watch.ts'), 'a private parse in watch.ts').toEqual([]);
     const src = readFileSync(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'utf8');
     expect(src).toMatch(/import \{[^}]*\bRECLAIM_PAUSE_MARKER\b[^}]*\} from '\.\/coord\/rundefs\.js'/);
@@ -8288,7 +8288,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   it('literal source pins over W1a\'s files may only shrink (D-5854; ARCH-06\'s counting rule)', () => {
     // Measured on merge day. Lower a row when a pin moves onto scan/symbols.ts; never raise one.
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 80,
+      'server/src/watch.ts': 79,
       'server/src/server.ts': 23,
       'server/src/interruptlog.ts': 0,
       'server/src/coord/routes.ts': 38,
@@ -8329,7 +8329,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   // onto scan/symbols.ts ahead of W1b lowers a row here. Measured on this slice's tip; may only shrink.
   it('literal source pins over W1b\'s files may only shrink (D-6114; ARCH-06\'s counting rule)', () => {
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 80,
+      'server/src/watch.ts': 79,
       'server/src/coord/routes.ts': 38,
       'server/src/ccdargv.ts': 6,
       'server/src/registry.ts': 2,
@@ -8529,6 +8529,81 @@ describe('one change latch (ARCH-76): changeLatch (D-5861)', () => {
         '}',
       ].join('\n'));
       expect(changeLatchSites(tree)).toHaveLength(1);
+    } finally {
+      rm(tree, { recursive: true, force: true });
+    }
+  });
+});
+
+// D-5862 (plan docs/superpowers/plans/2026-10-20-consolidation-w1b-schedule-listing-redactor.md, Task C1h, Step 6;
+// ARCH-68 (#803); spec K11, §2.3's clock row, §5.1 rule 1b). The lane-schedule ratchet, placed after the change-latch
+// ratchet above and ahead of the next appended block. A lane's cadence, clock, single flight and catch are one row of
+// `LANE_SCHEDULE` (`server/src/laneSchedule.ts`) and one `runLane` (`FleetWatcher`): no lane keeps a `last*` clock or a
+// guard field of its own. Named by `consolidationCensus.ts`'s `laneClockFields` and `singleFlightGuards`, and for a clock
+// nobody named by `laneClockShapes` (a numeric field compared as `now - this.X < CONST`). What stays is reported by name:
+// W4's two lanes (`stopDoneSweeping`/`lastStopDoneSweep`, `hibernateSweeping`/`lastHibernateSweep`), the tick's own guard,
+// `dispatchNow`'s run and its one follow-up (a trigger with no cadence), and `DelegationLane#lastSweepAt` while another series
+// holds that class. Each counts only down. The census is loaded inside the rows, so this block adds no import line.
+describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () => {
+  const text = (xs: ReadonlyArray<{ text: string }>): string[] => xs.map((x) => x.text.trim());
+
+  it('only W4\'s two clocks remain as lane clock fields, and no unnamed clock is compared with a constant', async () => {
+    const { laneClockFields, laneClockShapes } = await import('./consolidationCensus.js');
+    expect(text(laneClockFields()), 'a lane clock is a row of LANE_SCHEDULE, not a field').toEqual([
+      'private lastStopDoneSweep = 0;', 'private lastHibernateSweep = 0;',
+    ]);
+    const shapes = laneClockShapes().map((x) => x.text.trim());
+    expect(shapes.filter((t) => !/lastStopDoneSweep|lastHibernateSweep/.test(t)), 'no lane clock outside runLane').toEqual([
+      // Four lanes that landed on main while this ratchet was in review, each with its own clock: the stale-archive arm
+      // (D-6643), the disk alarm (D-6615), the orphan-worktree lane (D-6631) and the tmp sweep census beside the disk alarm
+      // (D-6624). Reported by name until a later slice makes them rows; this list only shrinks.
+      'if (this.staleArchiveSweeping || (this.lastStaleArchiveSweep !== 0 && now - this.lastStaleArchiveSweep < STALE_ARCHIVE_SWEEP_MS)) return;',
+      'if (this.lastOrphanTreeSweep !== null && gate - this.lastOrphanTreeSweep < CHILD_RECLAIM_SWEEP_MS) return;',
+      'if (this.lastDiskSweep !== 0 && now - this.lastDiskSweep < DISK_SWEEP_MS) return;',
+      'if (this.lastTmpSweepCensus !== 0 && now - this.lastTmpSweepCensus < TMP_SWEEP_CENSUS_MS) return;',
+    ]);
+  });
+
+  it('only the tick\'s guard, dispatchNow\'s run and its follow-up, and W4\'s two guards remain as single-flight fields', async () => {
+    const { singleFlightGuards } = await import('./consolidationCensus.js');
+    expect(text(singleFlightGuards()).sort(), 'a lane\'s single flight is its row\'s flight').toEqual([
+      'private dispatchAgain = false;', 'private dispatchRun: Promise<DispatchRunResult> | null = null;',
+      'private hibernateSweeping = false;', 'private stopDoneSweeping = false;', 'private ticking = false;',
+    ]);
+  });
+
+  it('no bare cadence literal is compared with a lane clock', async () => {
+    const { cadenceLiterals } = await import('./consolidationCensus.js');
+    expect(text(cadenceLiterals()), 'a cadence is a named row').toEqual([]);
+  });
+
+  it('each declared derivation is a reference to the constant it follows, 3 of 3', async () => {
+    const { declaredDerivations } = await import('./consolidationCensus.js');
+    const d = declaredDerivations();
+    expect(d.filter((x) => x.file === null).map((x) => x.name), 'a derivation is declared nowhere').toEqual([]);
+    expect(d.filter((x) => !x.reference).map((x) => x.name), 'each derivation is a reference').toEqual([]);
+    expect(d).toHaveLength(3);
+  });
+
+  it('CONTROL: the census sees a planted clock, guard, literal and re-declared derivation', async () => {
+    const { laneClockShapes, singleFlightGuards, cadenceLiterals, declaredDerivations } = await import('./consolidationCensus.js');
+    const { mkdtempSync: mk, mkdirSync: md, writeFileSync: wf, rmSync: rm } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const tree = mk(path.join(tmpdir(), 'lane-schedule-ratchet-'));
+    try {
+      md(path.join(tree, 'server/src'), { recursive: true });
+      wf(path.join(tree, 'server/src/watch.ts'), [
+        'class FleetWatcher {',
+        '  private lastFooSweep = 0;',
+        '  private collectSweeping = false;',
+        '  f(now: number): void { if (now - this.lastFooSweep < 60_000) return; }',
+        '}',
+        'export const COLLECT_OBSERVE_INTERVAL_MS = 60_000;',
+      ].join('\n'));
+      expect(laneClockShapes(tree)).toHaveLength(1);
+      expect(singleFlightGuards(tree)).toHaveLength(1);
+      expect(cadenceLiterals(tree)).toHaveLength(1);
+      expect((declaredDerivations(tree)).find((x) => x.name === 'COLLECT_OBSERVE_INTERVAL_MS')?.reference).toBe(false);
     } finally {
       rm(tree, { recursive: true, force: true });
     }
