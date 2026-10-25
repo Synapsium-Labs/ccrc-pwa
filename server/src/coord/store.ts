@@ -1372,7 +1372,7 @@ const ABANDONED_PARK_SQL =
  * The READ-side "still needs a human's attention" predicate (fix, review
  * finding 2) — `OUTSTANDING_STATES_SQL` above, unioned with a `rejected`
  * delivery THIS BUILD gave up retrying before anyone ever acted on it: the
- * replay-ceiling park (`watch.ts`'s `MAIL_REPLAY_MAX_ATTEMPTS`), a delivery
+ * replay-ceiling park (`coord/delivery.ts`'s `MAIL_REPLAY_MAX_ATTEMPTS`), a delivery
  * that never sent at all past `MAIL_MAX_ATTEMPTS`, or a recipient the
  * registry no longer lists. `renderEnvelope`'s own ack line promises
  * replay "until you ack" — true only up to that ceiling, never past it —
