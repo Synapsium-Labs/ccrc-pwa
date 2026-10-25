@@ -12,7 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { skipsTests, FOREIGN } from '../../.github/ci/reach.mjs';
+import { skipsTests, scopeOf, FOREIGN } from '../../.github/ci/reach.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const REACH = path.join(ROOT, '.github', 'ci', 'reach.mjs');
@@ -29,6 +29,10 @@ describe('skipsTests: a package skips its tests only when EVERY changed file is 
   it('pwa and browser: a change only under agent/, server/, ccd/ or deploy/ skips; docs/, shared/, ui/ and the root run', () => {
     for (const pkg of ['pwa', 'browser']) {
       expect(skipsTests(pkg, ['agent/src/a.ts', 'server/src/b.ts', 'ccd/ccd', 'deploy/x.sh'])).toBe(true);
+      // what the pwa tests read out of server/ still reaches them (the census pins the list)
+      expect(skipsTests(pkg, ['server/src/laneSchedule.ts'])).toBe(false);
+      expect(skipsTests(pkg, ['server/test/fixtures/panes/ask-user-question-real.txt'])).toBe(false);
+      expect(skipsTests(pkg, ['agent/src/a.ts', 'server/test/fixtures/panes/x.txt'])).toBe(false);
       expect(skipsTests(pkg, ['server/src/b.ts', 'docs/superpowers/specs/x.md'])).toBe(false); // pwa tests render docs
       expect(skipsTests(pkg, ['shared/docs.ts'])).toBe(false);
       expect(skipsTests(pkg, ['ui/src/a.tsx'])).toBe(false);
@@ -52,6 +56,27 @@ describe('skipsTests: a package skips its tests only when EVERY changed file is 
       expect(list).not.toContain('.github/');
       expect(list).not.toContain(`${pkg}/`);
     }
+  });
+});
+
+describe('scopeOf: the pwa shards run only what vitest can relate to the change, else everything', () => {
+  it('a change vitest can follow through imports is `changed`; foreign files are ignored', () => {
+    expect(scopeOf('pwa', ['pwa/src/a.ts', 'ui/src/b.tsx', 'shared/api.ts', 'pwa/test/x.test.tsx'])).toBe('changed');
+    expect(scopeOf('pwa', ['pwa/src/a.ts', 'server/src/b.ts', 'agent/src/c.ts'])).toBe('changed');
+  });
+
+  it('a change reached by a file read (docs, fixtures, package files, configs, the root) is `all`', () => {
+    for (const f of ['docs/superpowers/specs/x.md', 'server/test/fixtures/panes/a.txt', 'server/src/laneSchedule.ts', 'pwa/package.json',
+      'pwa/vite.config.ts', 'pwa/test/fixtures/x.json', 'pwa/public/a.png', 'README.md']) {
+      expect(scopeOf('pwa', ['pwa/src/a.ts', f]), f).toBe('all');
+    }
+  });
+
+  it('skip stays skip, and the other packages are never `changed`', () => {
+    expect(scopeOf('pwa', ['agent/src/a.ts'])).toBe('skip');
+    expect(scopeOf('agent', ['shared/x.ts'])).toBe('all');
+    expect(scopeOf('browser', ['pwa/src/a.ts'])).toBe('all');
+    expect(scopeOf('pwa', [])).toBe('all');
   });
 });
 
