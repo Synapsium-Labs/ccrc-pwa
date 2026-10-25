@@ -12,7 +12,8 @@
 #                       the agent, pwa and browser TESTS only when the change
 #                       can reach them (.github/ci/reach.mjs); every typecheck,
 #                       the build and the static checks always. The `full-ci`
-#                       label, or a change under .github/, makes it a full run.
+#                       label (read when a run starts: a label starts none),
+#                       or a change under .github/, makes it a full run.
 #   merge_group         full     — the queue is where the whole suite runs
 #                       (operator ruling 2026-10-25, replacing 2026-09-28's
 #                       "what a pull request runs"): every server shard, the
@@ -51,10 +52,15 @@ permissions:
   contents: read
 
 on:
-  # `labeled` so that adding the `full-ci` label to an open pull request
-  # re-runs it as a full run (a label alone starts no run otherwise).
+  # The default activity types only (opened, synchronize, reopened): NOT
+  # `labeled`. A run started by any label gets this PR's concurrency group, so
+  # it cancels the run in progress, and its check runs supersede the earlier
+  # ones on the same head commit. Ending such a run early would report the
+  # required checks green over a red or cancelled run, and a job-level `if:`
+  # would too (a skipped required job reads as success); so a label starts no
+  # run at all. The `full-ci` label is read when the next run starts: add it,
+  # then push (or close and reopen the pull request).
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
   # THE MERGE QUEUE (landing-order stage 2, spec §5.2). A queue runs the
   # REQUIRED checks on the group it built before it merges, and a workflow that
   # does not listen for `merge_group` never reports them — the entry waits out
@@ -652,14 +658,18 @@ jobs:
         working-directory: pwa
         env:
           SCOPE: ${{ steps.reach.outputs.scope }}
+          ALWAYS: ${{ steps.reach.outputs.always }}
           BASE_REF: ${{ github.base_ref }}
         run: |
           if [ "$SCOPE" = changed ]; then
             # The light pull-request run: the tests vitest relates to this change (its imports, from the merge base),
-            # sharded, then the suites that scan source trees run whole on shard 1 whatever changed.
+            # sharded; then, sharded too, every test that reads the tree from disk (reach.mjs's alwaysRunPwaTests:
+            # the CSS, boundary, census and guard suites import none of what they read), whatever changed.
             mb=$(git merge-base "origin/$BASE_REF" HEAD)
             ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }} --changed "$mb" --passWithNoTests
-            if [ "${{ matrix.shard }}" = 1 ]; then ./node_modules/.bin/vitest run test/*-census.test.ts test/*-guard.test.ts test/focus-ring.test.ts; fi
+            # Word-split on purpose: one pwa-relative path per word (ci-reach.test.ts pins the shape).
+            # shellcheck disable=SC2086
+            ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }} --passWithNoTests $ALWAYS
           else
             ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }}
           fi

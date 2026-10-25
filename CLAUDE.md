@@ -276,7 +276,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   required check name still reports, a skipped test step reading green. `test-macos` runs the same selection, advisory.
   A change under `.github/` or `server/scripts/`, to any
   `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`, `.gitattributes` or `.npmrc`, a missing
-  map, or the **`full-ci` label** on the pull request runs the full suite instead (`labeled` re-runs an open PR). `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
+  map, or the **`full-ci` label** on the pull request runs the full suite instead (a label starts no run: add it, then push or close and reopen). On a `pwa` change that is only `.ts`/`.tsx` the pwa shards run what vitest relates to it plus every pwa test that reads the tree from disk (derived in `reach.mjs`); any other change under `pwa/src` or `ui/src` (CSS, JSON, assets) runs them all. Server tests the map has no entry for, or whose record is older than a change to what it read, are selected only when the pull request touches them; the rest are left to the merge queue, and the select summary counts them. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
   `shadow`, the selection is only reported and every server test runs. **A merge-queue run** (`merge_group`) is the FULL run (operator ruling 2026-10-25, replacing 2026-09-28's "what a pull
   request runs"): every server shard, the agent, pwa and browser tests, in a concurrency group of its own, and never the
   macOS legs or `full-suite`. **A merge
