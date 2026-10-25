@@ -165,8 +165,18 @@ const MAX_CHECK_NAME_LEN = 120;
 export function checksFor(row: CcdPrRow): { checks: PrChecks; checkNames: string[] | null } {
   const raw = Array.isArray(row.statusCheckRollup) ? (row.statusCheckRollup as unknown[]) : null;
   if (raw === null || raw.length === 0) return { checks: null, checkNames: null };
-  const stateOf = (c: unknown): string =>
-    isRecord(c) ? String(c.conclusion ?? c.state ?? c.status ?? '').toUpperCase() : '';
+  // `gh` writes a check run that has not finished with `conclusion: ""`, not
+  // null, and `??` keeps an empty string, so the empty conclusion used to
+  // shadow the run's `status` (QUEUED, IN_PROGRESS) and the entry fell through
+  // to `pass`. An empty or missing field is no answer: the first NON-EMPTY of
+  // conclusion, state, status speaks for the entry.
+  const stateOf = (c: unknown): string => {
+    if (!isRecord(c)) return '';
+    for (const v of [c.conclusion, c.state, c.status]) {
+      if (v !== null && v !== undefined && String(v) !== '') return String(v).toUpperCase();
+    }
+    return '';
+  };
   const nameOf = (c: unknown): string =>
     (isRecord(c) ? String(c.name ?? c.context ?? 'check') : 'check').slice(0, MAX_CHECK_NAME_LEN);
   const failing = raw.filter((c) => FAILED.has(stateOf(c))).map(nameOf).slice(0, MAX_CHECK_NAMES);
