@@ -4948,20 +4948,6 @@ export interface DriftFinding {
   readonly sessionId: string | null;
 }
 
-/** One drift line of the digest (D-5923, spec 4.6): a finding open at the window's end. `ageMs` runs from the fact's
- *  own time where it has one, else from first sight, to the window's end (to now, for a window not closed yet). `sessionId` is the session a session kind
- *  names and `runId` the run a run kind names (the programme's newest open run for `claimant-gone`); each is null
- *  where it does not apply, and the PWA maps them to a target through the Inbox target model. */
-export interface DriftLine {
-  readonly key: string;
-  readonly kind: DriftKind;
-  readonly subject: string;
-  readonly detail: string;
-  readonly ageMs: number;
-  readonly sessionId: string | null;
-  readonly runId: number | null;
-}
-
 /**
  * The REVIEW run's machine (design 2026-09-14 §5.2). A review run has no
  * `awaiting-review`, `merging` or `closing`: it has nothing to review, merge
@@ -12149,3 +12135,17 @@ export interface RunSpendTokens { input: number; cacheWrite: number; cacheRead: 
 export type RunSpend =
   | { measured: true; tokens: RunSpendTokens; proxyUsd: number; measuredAt: string }
   | { measured: false; reason: RunSpendUnmeasuredReason };
+
+/** One drift line of the digest (D-5923, spec 4.6): a finding open at the window's end. `ageMs` runs from the fact's
+ *  own time where it has one, else from first sight, to the window's end (to now, for a window not closed yet). `sessionId` is the session a session kind
+ *  names and `runId` the run a run kind names (the programme's newest open run for `claimant-gone`); each is null
+ *  where it does not apply, and the PWA maps them to a target through the Inbox target model. */
+export interface DriftLine {
+  readonly key: string;
+  readonly kind: DriftKind;
+  readonly subject: string;
+  readonly detail: string;
+  readonly ageMs: number;
+  readonly sessionId: string | null;
+  readonly runId: number | null;
+}

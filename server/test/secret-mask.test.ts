@@ -840,8 +840,9 @@ describe('the review findings: every egress of session text is masked (D-5995)',
       const day = new Date(t + 86_400_000).toISOString().slice(0, 10);
       const d = (await f.app.inject({ method: 'GET', url: `/api/digest?day=${day}` })).body;
       const prev = (await f.app.inject({ method: 'GET', url: `/api/digest?day=${new Date(t).toISOString().slice(0, 10)}` })).body;
-      // The digest's lines already pass `redactCommand` (shapes only); the mask adds the exact-bytes half.
-      const body = d.includes('"lines":[]') ? prev : d;
+      // The digest's lines already pass `redactCommand` (shapes only); the mask adds the exact-bytes half. The
+      // decision lines are read by key: the drift section (D-5923) carries its own `lines`, which may be empty.
+      const body = (JSON.parse(d) as { lines: unknown[] }).lines.length === 0 ? prev : d;
       expect(body).toContain('"rowKind":"ask"');
       expect(leaksNone(body, OAT) && leaksNone(body, ORKEY), body.slice(0, 300)).toBe(true);
     } finally { await f.close(); }
