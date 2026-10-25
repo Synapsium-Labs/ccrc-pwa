@@ -25,3 +25,19 @@ export const readAtSha = (repo: string, sha: string, rel: string): string[] | nu
       { env: scrubbed(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).split('\n');
   } catch { return null; }
 };
+
+/** Whether the checkout is shallow, the only reason a freeze commit may legitimately be absent. */
+export const isShallow = (repo: string): boolean => {
+  try {
+    return execFileSync('git', ['-C', repo, 'rev-parse', '--is-shallow-repository'],
+      { env: scrubbed(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'true';
+  } catch { return false; }
+};
+
+/** Whether `sha` is an ancestor of HEAD, so it survives a squash-merge and branch deletion. */
+export const isAncestorOfHead = (repo: string, sha: string): boolean => {
+  try {
+    execFileSync('git', ['-C', repo, 'merge-base', '--is-ancestor', sha, 'HEAD'], { env: scrubbed(), stdio: 'ignore' });
+    return true;
+  } catch { return false; }
+};

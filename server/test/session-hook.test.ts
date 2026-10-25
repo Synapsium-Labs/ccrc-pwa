@@ -10,7 +10,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { CCD } from './ccdWsHelpers.js';
 import { tl, GRAPH, type GraphContent } from './compactCardFixtures.js';
 import { isScratchSlug } from './scratchSlugs.js';
-import { hasCommit, readAtSha } from './frozenSource.js';
+import { hasCommit, isAncestorOfHead, isShallow, readAtSha } from './frozenSource.js';
 import { itLinux, IS_DARWIN } from './platformFixtures.js'; import { anchorCites } from './anchors.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -7258,12 +7258,18 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // plans/2026-09-10-graphify-compaction-card-plan-a.md
     plan: 'a5333c6253875ea6baaedaf148828d2c0e9b5922',
   };
-  /** A shallow checkout lacks the freeze commits: the frozen-doc rows skip with a notice. */
-  const freezeAvailable = Object.values(FREEZE).every((sha) => hasCommit(REPO, sha));
+  /** Only a shallow checkout may lack a freeze commit, and then the frozen-doc rows skip with a
+   *  notice. In any other checkout a missing freeze commit is a mistake (a branch-only sha that a
+   *  squash-merge dropped), so the rows fail naming it rather than switching themselves off. */
+  const missingFreeze = Object.entries(FREEZE).filter(([, sha]) => !hasCommit(REPO, sha));
   const skipUnlessFreeze = (ctx: { skip: () => void }): void => {
-    if (freezeAvailable) return;
-    console.warn('session-hook: skipped the frozen-doc citation rows, a freeze commit is not in this checkout');
-    ctx.skip();
+    if (missingFreeze.length === 0) return;
+    if (isShallow(REPO)) {
+      console.warn('session-hook: skipped the frozen-doc citation rows, a freeze commit is not in this shallow checkout');
+      ctx.skip();
+      return;
+    }
+    throw new Error(`freeze commit missing from a full checkout: ${missingFreeze.map(([d, s]) => `${d} ${s}`).join(', ')}`);
   };
 
   type Resolve = (rel: string, doc?: string) => string[] | null;
@@ -7749,12 +7755,20 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     expect(r.history, 'and the quoted-history allow-list is doing work').toBeGreaterThanOrEqual(120);
   });
 
+  it('every FREEZE commit is an ancestor of HEAD, so a squash-merge cannot drop it', (ctx) => {
+    skipUnlessFreeze(ctx);
+    for (const [doc, sha] of Object.entries(FREEZE)) {
+      expect(isAncestorOfHead(REPO, sha), `${doc} freeze ${sha} is on this history`).toBe(true);
+    }
+  });
+
   it('THE CITATION DEBT of the two frozen documents is a constant, measured per cited file', (ctx) => {
     skipUnlessFreeze(ctx);
     // Each document is read against its cited files AS THEY STOOD at its freeze commit
     // (`FREEZE`), so an edit to a cited file after that commit moves nothing here. The debt
-    // changes only when a document is edited: burn it down there, lower this map, and move the
-    // document's `FREEZE` entry to the commit that made the edit. Never widen the rule.
+    // changes only when a document is edited: burn it down there, lower this map, and set the
+    // document's `FREEZE` entry to a commit already on origin/main, such as the edit's base,
+    // never the branch commit (a squash-merge drops it). Never widen the rule.
     const r = audit(realCorpus());
     const byFile: Record<string, number> = {};
     for (const f of r.failures) byFile[f.file] = (byFile[f.file] ?? 0) + 1;
