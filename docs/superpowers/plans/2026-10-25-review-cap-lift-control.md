@@ -457,3 +457,12 @@ the brief, Task 5 and correction 10 name is green, and `session-hook` too. `secr
 TUI pane history" timing test (red at load 47 in the batch). That test is red on a clean `origin/main` checkout at the
 same load as well, and it passed alone on both trees at load 35. The whole PWA suite passed, all 314 files, and
 `npm run build` is green.
+
+Then, before the push, the merge-tree probe exited 1: main had moved, and #1515 added a method directly above
+`reviewRounds` in `store.ts`. That is clause 16's conflict trigger, the first on this PR, so `origin/main` was merged
+again, at `a24ff9c47`, keeping both sides of that one hunk. Growth against the new merge-base is unchanged (+19, +16,
++3, +0). Every gate re-ran on that tree, one file at a time, at loads from 43 to 63, and all are green. Two server
+files went red under load and passed in full alone: `secret-mask`, on its 20,000-match timing bound, and
+`deviation-refs`, on its tree scan's 20 s case budget. In the whole PWA suite, 311 of 314 files passed. The other three,
+`contrast`, `dialog-sheet` and `wrap-screen-golden`, were red only on per-case 5 s timeouts, and each passed in full
+alone. `npm run build` is green.
