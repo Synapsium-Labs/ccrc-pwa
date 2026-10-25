@@ -1832,6 +1832,30 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX drift_findings_pushed ON drift_findings(pushedAt);
   CREATE INDEX drift_findings_open ON drift_findings(clearedAt, kind);
   `,
+  // ── 32: user_version 31 -> 32 ─────────────────────────────────────────────
+  // D-TBD-shadow-journal (disk retention): `shadow_journal`, the durable record of what an UNARMED disk
+  // lane (`expire-child`, `stale-archive`, `nested-rescue`) would have done, so a lane can be reviewed before it is armed
+  // after the 2000-row feed archive has rolled over. `key` is the once-only key (lane, subject, path, epoch), so a verdict
+  // asked again after a restart is the same row; `at` is the first write; `bytes`/`inodes` are NULL where the lane does
+  // not measure them. Its one writer is `CoordStore.recordShadowVerdict`, which also prunes by age and by row count.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 32` takes rule 3 (it warns, reads as-is
+  // and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot before the PR and
+  // before merge (the count above).
+  `
+  CREATE TABLE shadow_journal (
+    key     TEXT    PRIMARY KEY,
+    lane    TEXT    NOT NULL,
+    subject TEXT    NOT NULL,
+    path    TEXT,
+    rung    TEXT    NOT NULL,
+    bytes   INTEGER,
+    inodes  INTEGER,
+    detail  TEXT    NOT NULL,
+    at      INTEGER NOT NULL
+  );
+  CREATE INDEX shadow_journal_at ON shadow_journal(at);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

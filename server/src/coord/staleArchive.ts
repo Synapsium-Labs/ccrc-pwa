@@ -11,6 +11,8 @@ import { configDirFor } from '../config.js';
 import { ARCHIVE_IF_NO_PANE_CAP, CCD_ARGV, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { childReclaimEverClaimedIds } from './childReclaim.js';
+import { journalShadowVerdict } from './shadowJournal.js';
+import { SHADOW_LANE } from '../../../shared/shadowJournal.js';
 import { notRanSentence } from '../unmeasured.js';
 import { readSwitches } from '../../../shared/switches.js';
 import {
@@ -54,7 +56,8 @@ const JOURNAL_ROWS = 500;
 
 export interface StaleArchiveDeps {
   /** Undefined without a coordination store: the claims cannot be read, so every row is kept. */
-  readonly coord: Pick<CoordStore, 'childReclaimCoordinatorClaims' | 'openCoordinatorIds' | 'lifecycleFor'> | undefined;
+  readonly coord: (Pick<CoordStore, 'childReclaimCoordinatorClaims' | 'openCoordinatorIds' | 'lifecycleFor'>
+    & Partial<Pick<CoordStore, 'recordShadowVerdict'>>) | undefined;
   /** Undefined: every row has a viewer (fail closed). */
   readonly viewers: Pick<Viewers, 'isVisible'> | undefined;
   /** The feed, `record-only`, bound by the composition root. */
@@ -220,6 +223,9 @@ export async function staleArchivePass(
       out.push({ kind: 'would-archive', id: rec.id });
       if (mem.would.has(rec.id)) continue;
       mem.would.add(rec.id);
+      journalShadowVerdict(coord, { lane: SHADOW_LANE.staleArchive, subject: rec.id, path: null, epoch: String(evidenceAtMs),
+        bytes: null, inodes: null,
+        detail: `no pane for ${Math.floor((now - evidenceAtMs) / 86_400_000)} days; would be archived (shadow: the arm is not armed).` });
       deps.notice({
         kind: 'coord', sessionId: '', runId: null, title: 'Would archive a stale workspace',
         body: `${rec.id} has had no pane for ${Math.floor((now - evidenceAtMs) / 86_400_000)} days, was never a coordinator, and would be archived (shadow: the arm is not armed).`,

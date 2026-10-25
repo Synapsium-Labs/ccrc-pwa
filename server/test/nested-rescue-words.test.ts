@@ -52,7 +52,7 @@ describe('both audit parsers read nestedRescue.wouldRescue', () => {
     const doc = (extra: Record<string, unknown>): string => JSON.stringify({ id: ID, mode: 'reclaim', childOf: 7,
       verdict: 'containment-unproven', detail: 'd', ...extra });
     expect(parseChildReclaimAudit(ID, doc({ nestedRescue: { wouldRescue: ['/x/a', '/x/b'], rescue: [] } })))
-      .toEqual({ kind: 'refused', token: 'containment-unproven', detail: 'd', wouldRescue: 2 });
+      .toEqual({ kind: 'refused', token: 'containment-unproven', detail: 'd', wouldRescue: 2, wouldRescuePaths: ['/x/a', '/x/b'] });
     expect(parseChildReclaimAudit(ID, doc({}))).toEqual({ kind: 'refused', token: 'containment-unproven', detail: 'd' });
     expect(parseChildReclaimAudit(ID, doc({ nestedRescue: { wouldRescue: [], rescue: [] } })))
       .toEqual({ kind: 'refused', token: 'containment-unproven', detail: 'd' });

@@ -35,7 +35,7 @@ import {
 } from './childReclaimDisabled.js';
 import { notRanSentence } from '../unmeasured.js';
 import { recordNestedRescueShadow } from './nestedRescueShadow.js';
-import { nestedWouldRescueCount } from '../../../shared/nestedRescue.js';
+import { nestedWouldRescueCount, nestedWouldRescuePaths } from '../../../shared/nestedRescue.js';
 
 /**
  * CHILD-WORKSPACE RECLAMATION, the server half (spec 2026-09-22 §5.5–§5.7).
@@ -780,7 +780,8 @@ export type ChildReclaimAuditRead =
       readonly generation: ChildReclaimAuditGeneration }
   | { readonly kind: 'refused'; readonly token: ChildReclaimToken; readonly detail: string;
       /** How many nested repositories the audit says the rescue arm would rescue (D-6633); absent when none. */
-      readonly wouldRescue?: number }
+      readonly wouldRescue?: number;
+      readonly wouldRescuePaths?: readonly string[] }
   | { readonly kind: 'unreadable'; readonly detail: string };
 
 /** The audit's own `unmeasured` answer, read off an exit-1 document (spec
@@ -847,7 +848,7 @@ export function parseChildReclaimAudit(sessionId: string, stdout: string): Child
   if (isChildReclaimToken(v.verdict)) {
     const wouldRescue = nestedWouldRescueCount(v);
     return { kind: 'refused', token: v.verdict, detail: typeof v.detail === 'string' ? v.detail : '',
-      ...(wouldRescue > 0 ? { wouldRescue } : {}) };
+      ...(wouldRescue > 0 ? { wouldRescue, wouldRescuePaths: nestedWouldRescuePaths(v) } : {}) };
   }
   return { kind: 'unreadable', detail: `ws-audit --reclaim answered a verdict this build does not know: ${String(v.verdict)}` };
 }
@@ -1262,7 +1263,7 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   }
   if (audit.kind === 'refused') {
     recordNestedRescueShadow(deps, { sessionId, runId, key: String(runId), who: `${sessionId}, child of run #${runId}`,
-      count: audit.wouldRescue ?? 0 });
+      count: audit.wouldRescue ?? 0, paths: audit.wouldRescuePaths ?? [] });
     return childReclaimRefusal(req, audit.token, audit.detail);
   }
   if (audit.childOf !== runId) {

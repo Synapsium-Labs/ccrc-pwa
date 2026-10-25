@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import { SHAPE_ONLY_MASKER } from '../accounts/mask.js';
+import { decideShadowJournalQuery } from './shadowJournal.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
 import {
@@ -2412,6 +2413,16 @@ export function registerCoordRoutes(
     const coord = deps.coord;
     const names = await deps.io.readdir(deps.cfg.registryDir);
     return reply.code(200).send({ ok: true, ...stallWatchView(coord, names, Date.now(), watcher?.stallFallback() ?? null) });
+  });
+
+  // The unarmed disk lanes' shadow journal (D-TBD-shadow-journal), read only: what `expire-child`, `stale-archive` and
+  // `nested-rescue` would have done, newest first, kept past the feed's 2000 rows. `?lane=`, `?subject=`, `?limit=`.
+  app.get('/api/coord/shadow-journal', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const q = decideShadowJournalQuery(req.query as Record<string, unknown>);
+    if (!q.ok) return reply.code(400).send({ ok: false, error: 'bad-request', detail: q.detail });
+    // A path and a detail came off a session's workspace: masked before they leave (D-5995).
+    return reply.code(200).send({ ok: true, rows: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(deps.coord.shadowVerdicts(q)) });
   });
 
   app.post('/api/coord/stall-watch', async (req, reply) => {

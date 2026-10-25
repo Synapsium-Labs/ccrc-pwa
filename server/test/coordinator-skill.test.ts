@@ -641,6 +641,9 @@ describe('the coordinator skill: linkage', () => {
       // would be told how to lift the review-round cap on its own run, which is the cap's own defeat. The
       // forbid-mention case below is what turns this permission-to-omit into a prohibition.
       'POST /api/coord/review-cap',
+      // DISK RETENTION shadow journal (D-TBD-shadow-journal) — a read-only view for the operator (and the agent that
+      // reviews a disk lane before the operator arms it), not a coordination door: no session decides or acts through it.
+      'GET /api/coord/shadow-journal',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {

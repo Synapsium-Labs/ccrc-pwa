@@ -7,13 +7,22 @@
 import type { NotifyLog } from '../notifylog.js';
 import type { CoordStore } from './store.js';
 import { notify } from '../notice.js';
+import { journalShadowVerdict } from './shadowJournal.js';
+import { SHADOW_LANE } from '../../../shared/shadowJournal.js';
 import { NESTED_RESCUE_SHADOW_TITLE, nestedRescueShadowBody } from '../../../shared/nestedRescue.js';
 
 export function recordNestedRescueShadow(
   deps: { readonly coord: CoordStore; readonly notifyLog?: NotifyLog | undefined },
-  row: { readonly sessionId: string; readonly runId: number | null; readonly key: string; readonly who: string; readonly count: number },
+  row: { readonly sessionId: string; readonly runId: number | null; readonly key: string; readonly who: string; readonly count: number;
+    readonly paths?: readonly string[] },
 ): void {
   if (row.count <= 0) return;
+  // The durable journal first (D-TBD-shadow-journal): one row per path, keyed durably, so it records on a refusal asked
+  // again after a restart or after the feed row rolled over. A count with no paths is one row naming the session only.
+  for (const path of (row.paths ?? []).length > 0 ? row.paths! : [null]) {
+    journalShadowVerdict(deps.coord, { lane: SHADOW_LANE.nestedRescue, subject: row.sessionId, path, epoch: row.key, bytes: null, inodes: null,
+      detail: nestedRescueShadowBody(row.who, row.count) });
+  }
   const dedupeKey = `nested-rescue-shadow:${row.sessionId}:${row.key}`;
   if (deps.coord.hasNotice('run', row.sessionId, dedupeKey)) return;
   notify(deps, { kind: 'run', sessionId: row.sessionId, runId: row.runId, title: NESTED_RESCUE_SHADOW_TITLE,

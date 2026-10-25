@@ -20,6 +20,8 @@ import { isRegistryId } from '../../../shared/api.js';
 import { notify } from '../notice.js';
 import { notRanSentence } from '../unmeasured.js';
 import { recordNestedRescueShadow } from './nestedRescueShadow.js';
+import { journalShadowVerdict } from './shadowJournal.js';
+import { SHADOW_LANE } from '../../../shared/shadowJournal.js';
 
 /**
  * THE EXPIRY LANE'S ONE EXECUTOR (workspace lifecycle spec 2026-09-24 §5.3, wave 3b): `ws-audit --expire`, then
@@ -123,7 +125,7 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
   if (audit.verdict.kind === 'refused') {
     const { token, detail } = audit.verdict;
     recordNestedRescueShadow(deps, { sessionId, runId: null, key: String(archivedAt), who: `${sessionId} (archived ${archivedAt})`,
-      count: audit.nestedWouldRescue ?? 0 });
+      count: audit.nestedWouldRescue ?? 0, paths: audit.nestedWouldRescuePaths ?? [] });
     return EXPIRE_TOKEN_KIND[token] === 'gone' ? answer({ kind: 'gone' })
       : answer({ kind: 'refused', token, detail, inUse: audit.inUse,
         auditExpiresAt: audit.expiresAt.kind === 'at' ? audit.expiresAt.at : null });
@@ -335,6 +337,11 @@ export function expireFeedBody(r: ExpireArchivedResult, standing = false): strin
 export function recordExpireFeed(deps: Pick<ExpireArchivedDeps, 'coord' | 'notifyLog'>, r: ExpireArchivedResult, standing = false): void {
   // Through the funnel (`notice.ts`, D-5859), `'record-only'`: recorded whatever the presence, never pushed.
   const title = r.child === true && r.kind === 'would-expire' ? 'archived child workspace would be cleaned up' : FEED_TITLE[r.kind];
+  // The durable journal beside the feed row (D-TBD-shadow-journal): a marked child the verdict would take but for its arm.
+  if (r.kind === 'would-expire' && r.child === true) {
+    journalShadowVerdict(deps.coord, { lane: SHADOW_LANE.expireChild, subject: r.sessionId, path: null, epoch: String(r.archivedAt),
+      bytes: null, inodes: null, detail: expireFeedBody(r, standing) });
+  }
   notify(deps, { kind: 'run', sessionId: r.sessionId, runId: null, title, body: expireFeedBody(r, standing) },
     'record-only', { degraded: `archived expiry ${r.kind}, feed archive degraded` });
 }
