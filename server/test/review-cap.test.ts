@@ -9,6 +9,10 @@
 //   delete the store's guard .................... both the refusal case and the lifted case (never refuses)
 //   `reviewCapLifted` always false .............. the lifted case (the 4th stays refused)
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import type { ReadFailure } from '../../shared/agent-protocol.js';
+import { REVIEW_FINDINGS_STATES, type ReviewFindingsState } from '../../shared/api.js';
 import { REVIEW_ROUND_CAP, extractOpenFindings, reviewCapAsk, reviewCapNotice, reviewCapRefuses, reviewCapStatus, reviewFindingsOf } from '../src/coord/reviewcap.js';
 
 describe('reviewCapRefuses', () => {
@@ -64,5 +68,40 @@ describe('reviewCapStatus', () => {
   it('a review run, and a run of unknown kind, carry null', () => {
     expect(reviewCapStatus('review', 0, undefined)).toBeNull();
     expect(reviewCapStatus('unknown', 3, { askedAt: 1, liftedAt: null })).toBeNull();
+  });
+});
+
+// D-6910: the ask's types live in `shared/api.ts` so the PWA can read them. Its findings states are derived from one
+// array (`STALL_STORED_STATES`' idiom, since that file cannot import `ReadFailure`), and their two read-failure words
+// are held EQUAL to `ReadFailure` here, in both directions, at compile time.
+type _Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const _failuresAreReadFailure: _Same<Exclude<ReviewFindingsState, 'read' | 'unnamed'>, ReadFailure> = true;
+void _failuresAreReadFailure;
+
+describe('the ask\'s types moved to shared/api.ts (D-6910)', () => {
+  it('names four findings states, read first', () => {
+    expect(REVIEW_FINDINGS_STATES).toEqual(['read', 'unnamed', 'absent', 'unreadable']);
+  });
+  it('reviewcap.ts declares none of the three any more', () => {
+    const src = readFileSync(new URL('../src/coord/reviewcap.ts', import.meta.url), 'utf8');
+    for (const t of ['LastReviewReport', 'ReviewFindings', 'ReviewCapAsk']) {
+      expect(src, `${t} is declared in reviewcap.ts again`).not.toMatch(new RegExp(`(?:interface|type)\\s+${t}\\b`));
+    }
+  });
+});
+
+// D-6911 relies on this: the PWA's Mail door matches the cap's record by `kind: 'run'` and an empty session, so the cap
+// notice must stay the one writer of that literal shape in the server's source.
+describe('the cap notice is the one kind run record with no session (D-6911)', () => {
+  it('a scan of server/src finds exactly one such writer, and it is the cap notice', () => {
+    const root = new URL('../..', import.meta.url).pathname;
+    const grep = (args: string[]): string[] =>
+      execFileSync('git', ['grep', '-n', ...args, "kind: 'run', sessionId: ''", '--', 'server/src'], { cwd: root, encoding: 'utf8' })
+        .trim().split('\n');
+    const hits = grep([]);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatch(/^server\/src\/coord\/routes\.ts:\d+:.*title: n\.title/);
+    // The line after it carries the cap notice's own tag: this writer is the review cap's, not another run notice's.
+    expect(grep(['-A1'])[1]).toContain('tag: `review-cap-${work}`');
   });
 });

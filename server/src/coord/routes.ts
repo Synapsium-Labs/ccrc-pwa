@@ -72,6 +72,7 @@ import {
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult,
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type AdvanceOk, type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
+  type ReviewCapAsk, type ReviewCapView,
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal } from '../../../shared/refusal.js';
 import { CHECKS_MAIL_TOKEN, mergingAtDetail, type ChecksMode } from '../../../shared/landing.js';
@@ -343,6 +344,16 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
  * when it was queued, so `fleetState` is the box's current answer. A
  * rejection is a bug, logged; the sweep reaches the child either way.
  */
+/** D-6910: the review cap's ask, composed ONCE for both of its readers: the `cap-review-rounds` refusal and
+ *  `GET /api/coord/review-cap/:id`. The operator rules with the open findings in front of them, so the last review's
+ *  report is read here (L4, the agent's read allowlist covers its folder); absent and unreadable stay two values and
+ *  the notice falls back to the summary for both. */
+async function composeReviewCapAsk(coord: CoordStore, io: Deps['io'], work: number, rounds: number): Promise<ReviewCapAsk> {
+  const last = coord.lastReviewReport(work);
+  const read = last.report === null ? null : await io.readFileMeasured(last.report, 5000);
+  return reviewCapAsk(work, rounds, last, reviewFindingsOf(read));
+}
+
 function childReclaimPort(deps: Deps, coord: CoordStore): (req: ChildReclaimRequest) => void {
   return (req) => {
     void deps.queue.run(req.sessionId, () => reclaimChild({
@@ -1542,12 +1553,7 @@ export function registerCoordRoutes(
       // D-6795: the refusal carries the structured ask, and the operator is told ONCE per work run: the store's insert
       // is the once-only writer (`raiseReviewCapAsk`), so a repeated refusal or a restart raises nothing more.
       const work = open.reviews!;
-      // The operator rules with the open findings in front of them, so the last review's report is read here (L4, the
-      // agent's read allowlist covers its folder); absent and unreadable stay two values and the notice falls back
-      // to the summary for both.
-      const last = coord.lastReviewReport(work);
-      const read = last.report === null ? null : await deps.io.readFileMeasured(last.report, 5000);
-      const ask = reviewCapAsk(work, Number(opened.by), last, reviewFindingsOf(read));
+      const ask = await composeReviewCapAsk(coord, deps.io, work, Number(opened.by));
       if (coord.raiseReviewCapAsk(work, Date.now())) {
         const n = reviewCapNotice(ask);
         notice({ kind: 'run', sessionId: '', title: n.title, body: n.body, runId: work }, 'push',
@@ -2179,6 +2185,24 @@ export function registerCoordRoutes(
     notice({ kind: 'coord', sessionId: '', title: 'review cap lifted', body: `run ${run}`, runId: run },
       'record-only', { degraded: 'cap lifted, feed archive degraded' });
     return reply.code(200).send({ ok: true, run, rounds: coord.reviewRounds(run), cap: REVIEW_ROUND_CAP, lifted: true });
+  });
+
+  /**
+   * `GET /api/coord/review-cap/:id` (D-6910): the operator's sheet reads a work run's review-cap ask before lifting it,
+   * through the refusal's own helper, so it shows what the notice said. Session-gated with no box token, like the lift.
+   * 404 for an id that is not a work run, 400 for a bad id.
+   */
+  app.get('/api/coord/review-cap/:id', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const run = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (run === null) return refuseRoute(reply, 'bad-request', { detail: 'id must be a positive work run id' });
+    const read = deps.coord.run(run);
+    if (!read.ok) return refuseRoute(reply, 'run-unreadable', { detail: read.detail });
+    const cap = read.run?.reviewCap ?? null;
+    if (cap === null) return refuseRoute(reply, 'not-found', { detail: `run ${run} is not a work run` });
+    const ask = await composeReviewCapAsk(deps.coord, deps.io, run, cap.rounds);
+    const view: ReviewCapView = { ok: true, ask, askedAt: cap.askedAt, liftedAt: cap.liftedAt };
+    return reply.code(200).send(view);
   });
 
   app.get('/api/coord/caps', async (_req, reply) => {

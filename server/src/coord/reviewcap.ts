@@ -1,5 +1,5 @@
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
-import type { ReviewCapStatus, RunKind } from '../../../shared/api.js';
+import type { LastReviewReport, ReviewCapAsk, ReviewCapStatus, ReviewFindings, RunKind } from '../../../shared/api.js';
 import { redactCommand } from './redact.js';
 
 /**
@@ -23,24 +23,6 @@ export const reviewCapStatus = (kind: RunKind, rounds: number,
   row: { askedAt: number | null; liftedAt: number | null } | undefined): ReviewCapStatus | null =>
   kind !== 'work' ? null
     : { rounds, cap: REVIEW_ROUND_CAP, askedAt: row?.askedAt ?? null, liftedAt: row?.liftedAt ?? null };
-
-/** The last review's report as the store reads it from its `review-done` mail; both fields are null when no review
- *  has reported. `summary` is the mail body after its fingerprint line. */
-export interface LastReviewReport { reviewRunId: number | null; summary: string | null; report: string | null }
-
-/** What reading the last review's report gave; four answers, never three. `read` carries the open findings (possibly
- *  none); `unnamed` is no report path on file; `absent` and `unreadable` are the two read failures `readFileMeasured`
- *  keeps apart, and the notice falls back to the summary for all three. */
-export type ReviewFindings =
-  | { state: 'read'; lines: string[] }
-  | { state: 'unnamed' }
-  | { state: ReadFailure };
-
-/** The structured ask the refusal answers with and the notice words. */
-export interface ReviewCapAsk {
-  run: number; rounds: number; cap: number;
-  lastReview: LastReviewReport & { findings: ReviewFindings };
-}
 
 /** At most this many finding lines ride the ask, each at most `REVIEW_FINDING_MAX` characters. */
 export const REVIEW_FINDINGS_MAX = 8;

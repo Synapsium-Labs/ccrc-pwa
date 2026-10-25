@@ -4297,6 +4297,64 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
       expect(okRun(w.coord.run(workId))!.reviewCap).toEqual(lifted);
     });
 
+    // D-6910: the operator's sheet reads the refusal's own ask, through the one helper both compose it with.
+    it("GET /api/coord/review-cap/:id answers the refusal's own ask, with when it was raised and lifted", async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      const reportPath = path.join(home, 'review-3.md');
+      writeFileSync(reportPath, '# Review\n\n## Findings\n- **F1 (tests, minor)** `b.ts#case` — no case.\n');
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: ids[2]!,
+        kind: 'status', subject: 'review-done', body: '{"reviewedTip":"x"}\n1 finding', artifacts: [reportPath] });
+      const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
+      expect(refused.statusCode).toBe(409);
+      const { ask } = refused.json() as { ask: unknown };
+      const read = async () => app.inject({ method: 'GET', url: `/api/coord/review-cap/${workId}` });
+      const before = await read();
+      expect(before.statusCode).toBe(200);
+      const view = before.json() as { ok: boolean; ask: unknown; askedAt: unknown; liftedAt: unknown };
+      expect(view.ok).toBe(true);
+      expect(view.ask).toEqual(ask);
+      expect((view.ask as { lastReview: { findings: unknown } }).lastReview.findings)
+        .toEqual({ state: 'read', lines: ['**F1 (tests, minor)** `b.ts#case` — no case.'] });
+      expect(typeof view.askedAt).toBe('number');
+      expect(view.liftedAt).toBeNull();
+      expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: workId } })).statusCode).toBe(200);
+      const after = (await read()).json() as { askedAt: unknown; liftedAt: unknown };
+      expect(after.askedAt).toBe(view.askedAt);
+      expect(typeof after.liftedAt).toBe('number');
+      // The report deleted: the same read says so, in the findings' own word.
+      rmSync(reportPath);
+      expect(((await read()).json() as { ask: { lastReview: { findings: unknown } } }).ask.lastReview.findings)
+        .toEqual({ state: 'absent' });
+    });
+
+    it('GET /api/coord/review-cap/:id says unnamed when no review has reported, and nulls before any ask', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { workId } = await capApp(home);
+      const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${workId}` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true, askedAt: null, liftedAt: null, ask: {
+        run: workId, rounds: 0, cap: 3,
+        lastReview: { reviewRunId: null, summary: null, report: null, findings: { state: 'unnamed' } } } });
+    });
+
+    it('GET /api/coord/review-cap/:id answers 404 for a review run or no run, and 400 for a bad id', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const r1 = await round(w, workId, 1);
+      for (const id of [String(r1), '999999']) {
+        const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${id}` });
+        expect(res.statusCode, id).toBe(404);
+        expect(res.json()).toMatchObject({ ok: false, error: 'not-found' });
+      }
+      for (const id of ['0', '01', 'abc']) {
+        const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${id}` });
+        expect(res.statusCode, id).toBe(400);
+        expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+      }
+    });
+
     it('counts every state: a failed or abandoned round still spent one', async () => {
       const home = mkTmp('ccrc-runs-');
       const { w, workId } = await capApp(home);

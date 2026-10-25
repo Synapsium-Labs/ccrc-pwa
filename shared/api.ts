@@ -6462,6 +6462,33 @@ export interface ChildReclaimStatus {
  */
 export interface ReviewCapStatus { rounds: number; cap: number; askedAt: number | null; liftedAt: number | null }
 
+/** The last review's report as the store reads it from its `review-done` mail; both fields are null when no review
+ *  has reported. `summary` is the mail body after its fingerprint line. Moved here from `server/src/coord/reviewcap.ts`
+ *  (D-6910) so the PWA reads the same type the refusal sends. */
+export interface LastReviewReport { reviewRunId: number | null; summary: string | null; report: string | null }
+
+/** What reading the last review's report gave; four answers, never three. `read` carries the open findings (possibly
+ *  none); `unnamed` is no report path on file; `absent` and `unreadable` are the two read failures `readFileMeasured`
+ *  keeps apart. Those two are `ReadFailure`'s words (`shared/agent-protocol.ts`). This file cannot import that type
+ *  (its type-only imports are pinned, `peers-claims-l0.test.ts`), so the states are DERIVED from this array, as
+ *  `STALL_STORED_STATES` does, and `review-cap.test.ts` holds the failure pair EQUAL to `ReadFailure` at compile time. */
+export const REVIEW_FINDINGS_STATES = ['read', 'unnamed', 'absent', 'unreadable'] as const;
+export type ReviewFindingsState = (typeof REVIEW_FINDINGS_STATES)[number];
+export type ReviewFindings =
+  | { state: 'read'; lines: string[] }
+  | { state: Exclude<ReviewFindingsState, 'read'> };
+
+/** The structured ask the `cap-review-rounds` refusal answers with, the notice words, and
+ *  `GET /api/coord/review-cap/:id` reads back (D-6910). */
+export interface ReviewCapAsk {
+  run: number; rounds: number; cap: number;
+  lastReview: LastReviewReport & { findings: ReviewFindings };
+}
+
+/** `GET /api/coord/review-cap/:id`'s answer (D-6910): the ask, composed by the same helper as the refusal's, and when
+ *  it was raised and lifted (`ReviewCapStatus`'s two times). */
+export interface ReviewCapView { ok: true; ask: ReviewCapAsk; askedAt: number | null; liftedAt: number | null }
+
 export interface RunSummary {
   id: number;
   program: string;              // slug
