@@ -37,6 +37,7 @@ import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isCollectLaneKebab } from '../src/collectLane.js';
 import { isNoticeMode } from '../src/notice.js';
 import { isArchiveGateKebab } from '../src/coord/archiveAdmission.js';
+import { isStaleArchiveKebab } from '../src/coord/staleArchive.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -961,8 +962,13 @@ describe('the rejection table is total, in both directions', () => {
         // THE RUN SPEND READ (D-6799): `coord/runSpend.ts` names why a run's spend could not be measured as literals. A
         // reason rides the `spend` block of `GET /api/runs/:id`, never a `refused` or `reject.code`. Admitted through
         // `shared/api.ts`'s exported guard, derived from `RUN_SPEND_UNMEASURED_REASON_MAP`, never NOT_CODES.
-        || isRunSpendUnmeasuredReason(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode or archive gate`).toBe(true);
+        || isRunSpendUnmeasuredReason(tok)
+        // THE STALE-ARCHIVE ARM (D-6643): the next union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/staleArchive.ts` names its outcome kinds and defer reasons as literals. They ride
+        // the feed and the log, never a `refused` or `reject.code`. Admitted through the exported guard, derived from
+        // `STALE_ARCHIVE_OUTCOME_KINDS` and `STALE_ARCHIVE_DEFER_WHYS`, never NOT_CODES.
+        || isStaleArchiveKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate or stale-archive outcome`).toBe(true);
     }
   });
 });

@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 47 id-taking calls across 12 files.
+// THE CLAIM: 48 id-taking calls across 13 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -335,6 +335,11 @@ const GATES = {
     file: 'coord/childReclaim.ts', scope: 'childReclaimOutcome',
     re: /deferred\('marker-unreadable', 'the session id is not a registry id'\)/,
   },
+  /** The stale-archive act asks the capability once more, nearest the argv, after `rowNow` re-read the row. */
+  'stale-archive-act': {
+    file: 'coord/staleArchive.ts', scope: 'act',
+    re: /deps\.rowNow\(rec\)[\s\S]*?capSupported\(deps\.fleetState, ARCHIVE_IF_NO_PANE_CAP\)/,
+  },
   /** Expiry's step 0, before its capability read. */
   'expiry-step-0': { file: 'coord/expireArchived.ts', scope: 'expireArchived', re: EXPIRY_STEP_0 },
   /** The learning audit's own step 0, before its capability read. */
@@ -423,6 +428,8 @@ const CENSUS: readonly CensusRow[] = [
   // coord/expireArchived.ts: the audit serves both the executor and the learning read.
   { file: 'coord/expireArchived.ts', scope: 'expireAudit', builder: 'wsExpireAudit', id: 'sessionId', origin: ['registry'], gate: ['expiry-step-0', 'learn-expiry-step-0'] },
   { file: 'coord/expireArchived.ts', scope: 'expireAct', builder: 'wsExpire', id: 'sessionId', origin: ['registry'], gate: ['expiry-step-0'] },
+  // coord/staleArchive.ts: the id is a registry row's, re-read by `rowNow` at the act.
+  { file: 'coord/staleArchive.ts', scope: 'act', builder: 'wsArchive', id: 'id', origin: ['registry'], gate: ['stale-archive-act'] },
   // coord/fingerprint.ts: reached from close (below close's gate) and advance (below advance's gate).
   { file: 'coord/fingerprint.ts', scope: 'verifyDone', builder: 'prStateSession', id: 'run.sessionId', origin: ['stored'], gate: ['close-gate', 'advance-gate', 'fingerprint-check'], entry: /\bresolveDoneBranch\(deps, run\)/ },
   // coord/routes.ts: the open's hold, in the helper `POST /api/runs` calls once its decider admitted the open (the
@@ -513,7 +520,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     }
   });
 
-  it('the header claim, "47 id-taking calls across 12 files", matches the scan', () => {
+  it('the header claim, "48 id-taking calls across 13 files", matches the scan', () => {
     const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
     const claim = /^\/\/ THE CLAIM: (\d+) id-taking calls across (\d+) files\b/m.exec(self);
     expect(claim, 'the census claim was removed or reworded without its guard').not.toBeNull();
