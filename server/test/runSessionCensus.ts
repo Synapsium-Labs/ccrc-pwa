@@ -5,7 +5,7 @@
 // WHAT COUNTS AS AN EQUALITY SITE. A comparison (`===`, `!==`, `==`, `!=`) one of whose operands is a field or a bare
 // name `sessionId`, `claimedBy` or `coordinatorId` (the three words the server uses for "which session is this run's
 // worker or claimant"), in a `.ts` file under `server/src`; plus a store query (`db.prepare(...)`) that selects `runs`
-// rows by one of the first two columns (`sessionId = ?`, `sessionId IN (...)`, `claimedBy = ?`, `OR` of the two, and the
+// rows by one of the first two columns (through `prepare` or any local wrapper that is handed the SQL string) (`sessionId = ?`, `sessionId IN (...)`, `claimedBy = ?`, `OR` of the two, and the
 // `seriesRows` template whose column rides in `${where}`). An `.includes` or `Set.has` test is not a comparison here.
 // KNOWN WIDTH: a comparison through a differently named local (`const sid = run.sessionId; sid === x`), a destructured
 // name and a call assembled from pieces are not seen; the census is a floor on the sites a reader of the code would
@@ -45,6 +45,10 @@ const QUERY_COLUMN = /\b(?:r\.)?(?:sessionId|claimedBy)\s*(?:=|IN)\s*[?(]/;
 const isRunsQuery = (arg: string, templated = false): boolean =>
   /\bruns\b/.test(arg) && /\bSELECT\b/.test(arg) && (QUERY_COLUMN.test(arg) || (templated && /WHERE \$\{where\}/.test(arg)));
 
+/** An argument that STARTS with a quote or backtick: the SQL itself (a literal, a template, a concatenation), not a lambda or a
+ *  call that merely holds it, which would count one site twice. */
+const isLiteralArg = (a: { kind: string; text: string }): boolean => a.kind === 'string' || /^['"`]/.test(a.text.trimStart());
+
 /** The equality sites of one source text, `file` being the label they carry. */
 export function equalitySitesOf(text: string, file: string): EqualitySite[] {
   const parsed = parseSource(text, file);
@@ -54,9 +58,10 @@ export function equalitySitesOf(text: string, file: string): EqualitySite[] {
     if (named && !c.absent) out.push({ file, line: c.line, kind: 'comparison', text: c.text.slice(0, 120) });
   }
   for (const c of parsed.calls) {
-    if (c.name === 'prepare' && c.args.length > 0 && isRunsQuery(c.args[0]!.text, true)) {
-      out.push({ file, line: c.line, kind: 'query', text: c.args[0]!.text.slice(0, 120) });
-    }
+    // Any call, not only `prepare`: a local wrapper (`t(sql)`) that runs the query is the same site. The first argument that
+    // is a runs query by the session columns is the site.
+    const q = c.args.find((a) => isLiteralArg(a) && isRunsQuery(a.text, true));
+    if (q !== undefined) out.push({ file, line: c.line, kind: 'query', text: q.text.slice(0, 120) });
   }
   return out.sort((a, b) => a.line - b.line);
 }
@@ -94,7 +99,7 @@ export function storeBindingReaders(text: string, file = 'server/src/coord/store
     if (!text.slice(m.start, m.end).startsWith('private') && /\bseriesRows\b/.test(text.slice(m.start, m.end))) hits.add(m.name);
   }
   for (const c of parsed.calls) {
-    if (c.name !== 'prepare' || c.args.length === 0 || !isRunsQuery(c.args[0]!.text)) continue;
+    if (!c.args.some((a) => isLiteralArg(a) && isRunsQuery(a.text))) continue;
     const m = inside(c.start).sort((a, b) => (b.start - a.start))[0];
     if (m !== undefined && !text.slice(m.start, m.end).startsWith('private')) hits.add(m.name);
   }
@@ -104,7 +109,7 @@ export function storeBindingReaders(text: string, file = 'server/src/coord/store
 
 /** The store methods that read the runs by session or claimant for an ATTRIBUTE, not for a run (see above). Named, so a
  *  new one is a deliberate entry. */
-export const ATTRIBUTE_READS: readonly string[] = ['sessionProject', 'strandedClear'];
+export const ATTRIBUTE_READS: readonly string[] = ['sessionProject', 'strandedClear', 'childStaleActivity'];
 
 /** The store methods the spec's reader list names that select by a RUN id, not by a session or claimant: they read one run's
  *  own `claimedBy` / `sessionId` column (the run is already chosen), so they decide nothing about which run is a session's.

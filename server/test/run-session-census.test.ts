@@ -31,7 +31,7 @@ const SITES: Record<string, number> = {
   'server/src/coord/routes.ts': 2,
   'server/src/coord/runBinding.ts': 4,
   'server/src/coord/stall.ts': 8,
-  'server/src/coord/store.ts': 13,
+  'server/src/coord/store.ts': 14,
   'server/src/hookstate.ts': 1,
   'server/src/stopDoneSweep.ts': 1,
   'server/src/tmpSweepLane.ts': 1,
@@ -39,7 +39,7 @@ const SITES: Record<string, number> = {
   'server/src/turnmark.ts': 1,
   'server/src/watch.ts': 10,
 };
-const SITES_TOTAL = 70;
+const SITES_TOTAL = 71;
 
 /** The store's binding readers at this commit, by name. */
 const READERS: readonly string[] = ['bindingRunsOf', 'lastRunBySession', 'openRunsForSession', 'runsNamingSession'];
@@ -71,10 +71,11 @@ describe('the equality-site query (ARCH-62 census)', () => {
       "db.prepare('SELECT id FROM runs WHERE sessionId = ? OR claimedBy = ?').all(a, a);",
       "db.prepare('SELECT 1 FROM runs r WHERE r.claimedBy IN (?, ?)').all(a, b);",
       "db.prepare(`SELECT id FROM runs WHERE ${where} ORDER BY id`).all(a);",
+      "const t = (sql) => db.prepare(sql).get(); t('SELECT MAX(at) FROM run_events WHERE runId IN (SELECT id FROM runs WHERE sessionId = ?)', a);",
       "db.prepare('SELECT * FROM lifecycle_events WHERE sessionId = ?').all(a);",
       "db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run(a, 1);",
     ].join('\n'));
-    expect(found.map((s) => [s.line, s.kind])).toEqual([[1, 'query'], [2, 'query'], [3, 'query'], [4, 'query']]);
+    expect(found.map((s) => [s.line, s.kind])).toEqual([[1, 'query'], [2, 'query'], [3, 'query'], [4, 'query'], [5, 'query']]);
   });
 });
 
@@ -104,7 +105,7 @@ describe('the store binding readers (ARCH-62 census)', () => {
   });
 
   it('a binding writer and an attribute read are named, not counted', () => {
-    expect(ATTRIBUTE_READS).toEqual(['sessionProject', 'strandedClear']);
+    expect(ATTRIBUTE_READS).toEqual(['sessionProject', 'strandedClear', 'childStaleActivity']);
     expect(BINDING_WRITER_VERBS).toContain('openRun');
     expect(found.filter((n) => ATTRIBUTE_READS.includes(n) || BINDING_WRITER_VERBS.includes(n))).toEqual([]);
   });

@@ -89,8 +89,9 @@ async function pass(d: DriftLaneDeps, now: number): Promise<void> {
     const minting = d.coord.run(mark.runId);
     const incarnation = incarnationOf(sessionId, childBirthOf(minting, sessionId));
     const series = d.coord.bindingRunsOf(sessionId);
-    if (!series.ok) { d.warn(`ccrc-server: sweepDrift could not read the runs of ${sessionId} (${series.detail}) — nothing recorded this pass`); return; }
-    const parentId = childParentOf(series.runs, minting.ok && minting.run !== null ? minting.run.claimedBy : null, incarnation);
+    // A series this process cannot represent leaves this worker without a parent (as before the fold); the pass goes on.
+    if (!series.ok) d.warn(`ccrc-server: sweepDrift could not read the runs of ${sessionId} (${series.detail}) — no parent for it this pass`);
+    const parentId = series.ok ? childParentOf(series.runs, minting.ok && minting.run !== null ? minting.run.claimedBy : null, incarnation) : null;
     workers.push({ sessionId, markRunId: mark.runId, parentId,
       // The mark's run may be closed and so absent from `runs.rows`; its claimant is the minting run's own.
       runClaimedBy: claimedBy.get(mark.runId) ?? (minting.ok ? minting.run?.claimedBy ?? null : null) });

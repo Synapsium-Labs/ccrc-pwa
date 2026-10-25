@@ -15,13 +15,17 @@ export interface BindingReadPort {
   openRunsForSession(sessionId: string, excludeRunId?: number, incarnation?: undefined, role?: 'worker' | 'claimant'): OpenSiblingsResult;
 }
 
+/** A session's run series this process cannot represent (an id beyond 2^53). Its own class so the routing door can answer
+ *  a named refusal for it and let every other throw stay a 500. */
+export class UnreadableSeries extends Error {}
+
 /** EVERY coordinator that currently has `sessionId` working for it (the id-string rule: a coordinator or a manual workspace
  *  has no birth), newest open run first, each once. A series this process cannot represent THROWS, naming why, so a partial
  *  list never reads as "nobody else's worker"; every caller either sits in a route that answers a refusal on a throw or
  *  guards a handover that must not proceed on doubt. */
 export function claimantsOfSession(port: Pick<BindingReadPort, 'bindingRunsOf'>, sessionId: string): string[] {
   const series = port.bindingRunsOf(sessionId);
-  if (!series.ok) throw new Error(`claimantsOfSession: ${series.detail}`);
+  if (!series.ok) throw new UnreadableSeries(`claimantsOfSession: ${series.detail}`);
   return claimantsOf(series.runs, unbornIncarnation(sessionId, 'not-a-child'));
 }
 
@@ -38,6 +42,6 @@ export function runsTouching(
   port: Pick<BindingReadPort, 'bindingRunsOf'>, sessionId: string,
 ): { id: number; sessionId: string | null; claimedBy: string | null }[] {
   const series = port.bindingRunsOf(sessionId);
-  if (!series.ok) throw new Error(`runsTouching: ${series.detail}`);
+  if (!series.ok) throw new UnreadableSeries(`runsTouching: ${series.detail}`);
   return series.runs.map((r) => ({ id: r.id, sessionId: r.sessionId, claimedBy: r.claimedBy }));
 }

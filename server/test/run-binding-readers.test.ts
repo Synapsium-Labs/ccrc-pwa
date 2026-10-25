@@ -10,7 +10,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { bornIncarnation, unbornIncarnation } from '../src/coord/runBinding.js';
 import { heldFor } from '../src/coord/heldFor.js';
 import { runDriftPass, type DriftLaneDeps } from '../src/coord/driftLane.js';
-import { claimantsOfSession, openRunsClaimedBy, runsTouching } from '../src/coord/bindingReads.js';
+import { claimantsOfSession, openRunsClaimedBy, runsTouching, UnreadableSeries } from '../src/coord/bindingReads.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okSiblings, openClaimantsOf, parentOfSession } from './coordReadHelpers.js';
 
@@ -156,6 +156,7 @@ describe('the folded readers, asked through bindingReads (ARCH-62 slice 2)', () 
     const bad = { bindingRunsOf: () => ({ ok: false as const, detail: 'id out of range' }) };
     expect(() => claimantsOfSession(bad, 'x')).toThrow('id out of range');
     expect(() => runsTouching(bad, 'x')).toThrow('id out of range');
+    expect(() => runsTouching(bad, 'x')).toThrow(UnreadableSeries);
   });
 });
 
@@ -170,6 +171,26 @@ const mismatches = (s: CoordStore): string[] => {
 };
 
 describe('the drift lane reads the worker\'s parent through its incarnation (ARCH-62)', () => {
+  // Slice 1 went on with parentId null for a worker whose series could not be read; the fold must not end the pass.
+  it('one worker whose series cannot be represented does not end the pass: another worker\'s real mismatch is still raised', async () => {
+    const s = store();
+    const mark = open(s, 'prog-a', 'coord-1');
+    s.setSession(mark, 'demo-x');
+    const newer = open(s, 'prog-b', 'coord-2');
+    s.setSession(newer, 'demo-x');
+    const bad = Object.create(s) as CoordStore;
+    bad.bindingRunsOf = (id: string) => id === 'demo-w' ? { ok: false as const, kind: 'run-unreadable' as const, detail: 'id out of range' } : s.bindingRunsOf(id);
+    const warns: string[] = [];
+    await runDriftPass({
+      coord: bad, names: ['demo-w', 'demo-x'], warn: (m: string) => { warns.push(m); },
+      childMarks: new Map([['demo-w', { kind: 'child', runId: mark }], ['demo-x', { kind: 'child', runId: mark }]]) as never,
+      measure: () => Promise.resolve({ state: 'alive', why: 'pane live' }),
+      notice: () => ({ recorded: true, archived: 'none' }),
+    }, BORN + 5000);
+    expect(warns.some((w) => w.includes('demo-w'))).toBe(true);
+    expect(mismatches(s)).toEqual(['parent-mismatch:demo-x']);
+  });
+
   // The positive arm: a real parent mismatch is still raised. A lane whose parent always read null (the `parentId =
   // null` mutant) passes every negative test below; these go red under it.
   it('a real mismatch is raised: the mark\'s run is claimed by coord-1, a newer open run of the same worker by coord-2', async () => {
