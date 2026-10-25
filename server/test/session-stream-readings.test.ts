@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Deps } from '../src/server.js';
 import { SessionStream } from '../src/sessionws.js';
+import { feedFor, type FeedFacts, type FeedReading } from '../src/sessionFeed.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { ccdRunner } from '../src/lifecycle.js';
@@ -32,10 +33,12 @@ const MENU = pane('ask-2col-chat-about.txt');
 const BUSY = pane('busy.txt');
 
 /** One poll of a live stream: what the 2 s interval does, awaited, so these tests never sleep. After ARCH-52 the
- *  stream's timer drives only its own reading; the shared per-session feed has one of its own, polled here too. */
+ *  stream's timer drives only its own reading; the per-session feed is polled once per DISTINCT feed the streams hold,
+ *  so a feed per stream (the mutant the cost row exists for) is polled, and read, once per stream. */
 const pollOnce = async (...streams: SessionStream[]): Promise<void> => {
   for (const s of streams) await (s as unknown as { tick: () => Promise<void> }).tick();
-  await (streams[0] as unknown as { feed?: { poll(): Promise<void> } }).feed?.poll();
+  const feeds = new Set(streams.map((s) => (s as unknown as { feed?: { poll(): Promise<void> } }).feed));
+  for (const f of feeds) await f?.poll();
 };
 
 describe('a session stream\'s four readings (ARCH-52)', () => {
@@ -190,12 +193,12 @@ describe('a session stream\'s four readings (ARCH-52)', () => {
       captures = 0; hookReads = 0; taskReads = 0;
       const at = Date.now();
       bus.emit(`hook:${ID}`, { at, uuid: UUID_A, raw: { ok: false, reason: 'absent' } });
-      bus.emit(`pane:${ID}`, { at, pane: MENU });
+      bus.emit(`pane:${ID}`, { at, doneAt: at, pane: MENU });
       await new Promise((r) => setTimeout(r, 50));
       expect({ captures, hookReads }).toEqual({ captures: 0, hookReads: 0 });
       expect(taskReads).toBe(1);   // the plan is the feed's own read: the watcher holds its counts on a slower clock
       for (const f of [fa, fb]) expect(f.filter((m) => m.type === 'dialog')).toHaveLength(1);
-      bus.emit(`pane:${ID}`, { at: Date.now(), pane: BUSY });
+      bus.emit(`pane:${ID}`, { at: Date.now(), doneAt: Date.now(), pane: BUSY });
       await new Promise((r) => setTimeout(r, 50));
       for (const f of [fa, fb]) expect(f.filter((m) => m.type === 'dialog_cleared')).toHaveLength(1);
       expect(captures).toBe(0);
@@ -210,17 +213,32 @@ describe('a session stream\'s four readings (ARCH-52)', () => {
     const sa = await open(bus, fa);
     let sb: SessionStream | undefined;
     try {
-      bus.emit(`pane:${ID}`, { at: Date.now(), pane: MENU });
+      bus.emit(`pane:${ID}`, { at: Date.now(), doneAt: Date.now(), pane: MENU });
       await new Promise((r) => setTimeout(r, 50));
       expect(fa.filter((m) => m.type === 'dialog')).toHaveLength(1);
       const nullAt = Date.now() + 1;
-      bus.emit(`pane:${ID}`, { at: nullAt, pane: null });     // failure 1
+      bus.emit(`pane:${ID}`, { at: nullAt, doneAt: nullAt, pane: null });     // failure 1
       await new Promise((r) => setTimeout(r, 50));
       sb = await open(bus, fb);                                // its opening read sees the same look
-      bus.emit(`pane:${ID}`, { at: nullAt + 1, pane: null }); // failure 2
+      bus.emit(`pane:${ID}`, { at: nullAt + 1, doneAt: nullAt + 1, pane: null }); // failure 2
       await new Promise((r) => setTimeout(r, 50));
       expect(fa.filter((m) => m.type === 'dialog_cleared')).toHaveLength(0);
     } finally { sa.stop(); sb?.stop(); }
+  });
+
+  // The ask-failed-capture-holds outage is a slow remote link: a capture the remote tmux timeout (10 s) ended took 10 s.
+  // Counted from its start it would arrive stale and the feed would capture again, exactly when the link is slow.
+  it('a look from a capture that ran into the remote timeout is still the reading: freshness counts from its return', async () => {
+    const bus = new Bus();
+    const sa = await open(bus, []);
+    try {
+      captures = 0; hookReads = 0;
+      const done = Date.now();
+      bus.emit(`hook:${ID}`, { at: done, uuid: UUID_A, raw: { ok: false, reason: 'absent' } });
+      bus.emit(`pane:${ID}`, { at: done - 12_000, doneAt: done, pane: null });
+      await new Promise((r) => setTimeout(r, 50));
+      expect({ captures, hookReads }).toEqual({ captures: 0, hookReads: 0 });
+    } finally { sa.stop(); }
   });
 
   it('a pane captured before the last answer is not the reading: the feed looks again', async () => {
@@ -231,7 +249,7 @@ describe('a session stream\'s four readings (ARCH-52)', () => {
       await new Promise((r) => setTimeout(r, 5));
       bus.emit(`answered:${ID}`, null);
       captures = 0;
-      bus.emit(`pane:${ID}`, { at: old, pane: MENU });
+      bus.emit(`pane:${ID}`, { at: old, doneAt: Date.now(), pane: MENU });   // returned after the answer: still begun before it
       await new Promise((r) => setTimeout(r, 50));
       expect(captures).toBe(1);
     } finally { sa.stop(); }
@@ -256,6 +274,29 @@ describe('a session stream\'s four readings (ARCH-52)', () => {
         expect(a.filter((f) => f.type === 'dialog')).toHaveLength(1);
       } finally { sb.stop(); }
     } finally { sa.stop(); }
+  });
+
+  // A feed reads with ONE set of facts for all its streams. After a uuid rotation the stream that re-resolved first
+  // states the new uuid; the feed reads under it, not under the stale uuid of a stream that joined later.
+  it('the feed reads under the facts stated most recently, not under the latest joiner\'s', async () => {
+    const UUID_B = 'b'.repeat(36);
+    const tasks = path.join(home, '.claude-a', 'tasks', UUID_B);
+    mkdirSync(tasks, { recursive: true });
+    writeFileSync(path.join(tasks, '1.json'), JSON.stringify({ id: '1', subject: 'after-rotation', description: '', activeForm: 'Doing it', status: 'pending' }));
+    const bus = new Bus();
+    const feed = feedFor(deps, bus, ID);
+    const got: FeedReading[] = [];
+    const a = { onReading: async (r: FeedReading) => { got.push(r); } };
+    const b = { onReading: async () => {} };
+    const facts = (uuid: string): FeedFacts => ({ file: path.join(home, '.claude-a', 'projects', MUNGED, `${uuid}.jsonl`), cfgDir: path.join(home, '.claude-a'), uuid });
+    await feed.join(a, facts(UUID_A));
+    await feed.join(b, facts(UUID_A));
+    try {
+      feed.setFacts(a, facts(UUID_B));   // a re-resolved after the rotation; b has not ticked yet
+      got.length = 0;
+      await feed.poll();
+      expect(JSON.stringify(got.at(-1)?.tasks)).toContain('after-rotation');
+    } finally { feed.leave(a); feed.leave(b); }
   });
 
   it('the last socket to leave takes the feed with it: no listener, and a new socket starts a new feed', async () => {

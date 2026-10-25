@@ -12,12 +12,14 @@ export type SessionEventName = `session:${string}`;
 export type AnsweredEventName = `answered:${string}`;
 
 /** The watcher's look at one session's pane this tick, for the session's feed (ARCH-52, #787): `pane:<id>`. `at` is when
- *  the capture began; `pane` is null for a pane tmux could not capture. */
+ *  the capture began (what an answer handled since is judged against); `doneAt` is when it returned (what freshness is
+ *  judged against: a capture the remote tmux timeout ended took that long and is not stale for it). `pane` is null for
+ *  a pane tmux could not capture. */
 export type PaneEventName = `pane:${string}`;
-export interface PaneReading { readonly at: number; readonly pane: string | null }
+export interface PaneReading { readonly at: number; readonly doneAt: number; readonly pane: string | null }
 
-/** The watcher's raw read of one session's hookstate this tick, for the session's feed: `hook:<id>`. `uuid` is the
- *  identity the read was gated on. */
+/** The watcher's raw read of one session's hookstate this tick, for the session's feed: `hook:<id>`. `at` is when the
+ *  read returned; `uuid` is the identity the read was gated on. */
 export type HookEventName = `hook:${string}`;
 export interface HookReading { readonly at: number; readonly uuid: string; readonly raw: HookStateRawRead }
 

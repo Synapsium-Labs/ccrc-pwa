@@ -3344,7 +3344,8 @@ export class FleetWatcher {
         }
         // The raw read, folded here, is what `readHookState` is; the same raw read goes to the session's feed.
         const raw = await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, r.id, r.uuid);
-        this.bus.emit(`hook:${r.id}`, { at: now, uuid: r.uuid, raw });
+        // `at` is when the read returned, not the sweep's `now`: a slow remote read is as fresh as its answer.
+        this.bus.emit(`hook:${r.id}`, { at: Date.now(), uuid: r.uuid, raw });
         const hs = foldHookStateRead(raw, now);
         if (hs.ok) next.set(r.id, hs.state);
       }),
@@ -8831,7 +8832,7 @@ export class FleetWatcher {
       // The look is published once for the session's feed (ARCH-52): an open session's stream reads the pane from here,
       // not from a capture of its own. The `dialog` / `dialog_cleared` frames this sweep used to emit were dropped by
       // every stream (it frames its own reading), so they are gone with the second copy.
-      this.bus.emit(`pane:${r.id}`, { at: paneAt, pane });
+      this.bus.emit(`pane:${r.id}`, { at: paneAt, doneAt: Date.now(), pane });
       // Same capture feeds the statusline read — no extra tmux call. FOUR
       // conditions, four outcomes (D-2012, corrected by Finding 3 of the
       // fix round below — the three-outcome version this replaced treated

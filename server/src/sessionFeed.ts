@@ -23,8 +23,11 @@ import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
 import { readHookStateRawMeasured, type HookStateRawRead } from './hookstate.js';
 
-/** How old a published pane or hookstate may be and still be the reading. The watcher publishes every tick (2 s); past
- *  this the watcher is not publishing for this session (not registered yet, a stalled tick) and the feed looks itself. */
+/** How old a published pane or hookstate may be and still be the reading, counted from when the watcher's capture or
+ *  read RETURNED (`doneAt`, `at`): counted from its start, a capture the remote tmux timeout (10 s) ended would always
+ *  arrive stale, and the feed would capture again exactly when the link is slow. The watcher publishes every tick
+ *  (2 s); past this the watcher is not publishing for this session (not registered yet, a stalled tick) and the feed
+ *  looks itself. */
 const PUBLISHED_FRESH_MS = 10_000;
 /** Failed captures in a row after which the menu the client holds is cleared (decision `ask-failed-capture-holds`):
  *  three polls, at least 6 s of the pane unreadable. One or two are the blips a slow remote call produces. */
@@ -82,7 +85,8 @@ export function feedFor(deps: Deps, bus: Bus, id: string): SessionFeed {
 }
 
 export class SessionFeed {
-  /** Every subscriber that has joined, with the facts it last stated (null: its session did not resolve). */
+  /** Every subscriber that has joined, with the facts it last stated (null: its session did not resolve), oldest
+   *  statement first. */
   private readonly facts = new Map<FeedSubscriber, FeedFacts | null>();
   /** The subscribers the poll fans out to: those whose join has been delivered its first reading. */
   private readonly ready = new Set<FeedSubscriber>();
@@ -137,9 +141,13 @@ export class SessionFeed {
     this.ready.add(sub);
   }
 
-  /** The facts `sub` now holds. Read on the next reading. */
+  /** The facts `sub` now holds. Read on the next reading. Re-inserted, so the map's order is the order the facts were
+   *  last stated in and `current` reads the newest resolve, not the latest join's (after a uuid rotation an earlier
+   *  stream that has re-resolved must not be read under a later stream's stale uuid until that one ticks). */
   setFacts(sub: FeedSubscriber, facts: FeedFacts | null): void {
-    if (this.facts.has(sub)) this.facts.set(sub, facts);
+    if (!this.facts.has(sub)) return;
+    this.facts.delete(sub);
+    this.facts.set(sub, facts);
   }
 
   leave(sub: FeedSubscriber): void {
@@ -178,7 +186,7 @@ export class SessionFeed {
     return this.inflight;
   }
 
-  /** The facts to read with: the latest-joined subscriber's that resolved. */
+  /** The facts to read with: the most recently stated that resolved (`setFacts` keeps the map in that order). */
   private current(): FeedFacts | null {
     let found: FeedFacts | null = null;
     for (const f of this.facts.values()) if (f !== null) found = f;
@@ -202,7 +210,7 @@ export class SessionFeed {
    *  capture of our own (the opening reading, or a watcher that is not publishing). */
   private async paneLook(now: number): Promise<{ pane: string | null; counted: boolean }> {
     const p = this.pane;
-    if (p !== null && now - p.at <= PUBLISHED_FRESH_MS && p.at >= this.answeredAt) {
+    if (p !== null && now - p.doneAt <= PUBLISHED_FRESH_MS && p.at >= this.answeredAt) {
       // Failures count per look, not per read: a published look already counted is not a new failure.
       const counted = p.pane === null && p.at === this.countedPaneAt;
       if (p.pane === null) this.countedPaneAt = p.at;

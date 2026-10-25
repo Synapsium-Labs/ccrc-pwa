@@ -3425,7 +3425,7 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
 
     queueTo(ID, 'fresh mail after connect');
     // The tick is the watcher's (ARCH-52): a session's feed has no clock, a published pane is what wakes it.
-    bus.emit(`pane:${ID}`, { at: Date.now(), pane: 'idle\n❯ \n' });
+    bus.emit(`pane:${ID}`, { at: Date.now(), doneAt: Date.now(), pane: 'idle\n❯ \n' });
     let mailFrame: { type: string; mail: { subject: string }[] } | undefined;
     for (let i = 0; i < 6 && !mailFrame; i++) {
       const m = await next(6000);
