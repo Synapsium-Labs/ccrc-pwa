@@ -6113,6 +6113,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
 - **2026-10-25 06:50 UTC — the broker's soak coordinator ruled on v0.0.668: the soak clock is unchanged.** When v0.0.668 or a
   later build is tapped, the move hour and the hour after it are measured for unmeasured rows and census lines, as after
   v0.0.646, and the probe says so until that is done.
+- **2026-10-25 07:25 UTC — a console move to v0.0.668; v0.0.669 released; no anomalies.** A tap moved the fleet box
+  (07:03:27 to 07:04:52) and then the server box (07:04:54 to 07:15:13) from v0.0.646; both reports `done`, `from: pwa`. The
+  fleet record names "doctor exited 1 - the box moved", as designed. Its sweep `down: 1` is a session unit that has been
+  failed since before 10-24 18:18 and has no registry row; every sweep since has skipped it, and it is not the update's
+  doing. The server's sweep read `ok`. The server took a new snapshot and kept 5: backups 11,419M to 11,598M. The
+  broker's census check over the move hour and the next is due after 09:00. `STATUS 2026-10-25T07:25:40Z fleet=v0.0.668`
+  `server=v0.0.668 health=v0.0.668 newest=v0.0.669 intent=*:dev/auto=off backups=fleet:188M/server:11598M`
+  `disk=fleet:103G/server:19G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
