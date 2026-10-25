@@ -73,7 +73,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(DRIFT_PUSH_LIVE_MARKER).toBe('drift-push-live');
     // ARCH-77 (#812): child reclaim's own off switch, a hand-touched row with no writer in the tree.
     expect(CHILD_RECLAIM_DISABLED_MARKER).toBe('child-reclaim-disabled');
-    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled'].sort());
+    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live'].sort());
     expect([...markerSwitchNames].sort()).toEqual(markers.sort());
   });
 

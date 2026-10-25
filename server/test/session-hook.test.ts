@@ -2712,7 +2712,7 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
     expect(src).toMatch(/^COMPACT_LIVE_S=120$/m);
     expect(src).toMatch(/^COMPACT_HELPER_TIMEOUT=8$/m);
     expect(src).toMatch(/^COMPACT_WORKSET_MAX=12$/m);
-    expect(2400 + 1 + 4000).toBeLessThan(10000);      // under the harness's spill (2.1.266 `Pdr=1e4`)
+    expect(2400 + 1 + 4000 + 1 + Number(src.match(/^ *ROSTER_CARD_MAX_CHARS=(\d+)$/m)?.[1])).toBeLessThan(10000);  // the emitter's REAL maximum (standing + compact + D4 roster) under the harness's spill (2.1.266 `Pdr=1e4`)
     expect(src.match(/^COMPACT_SHAPE_PRED=/gm)).toHaveLength(1);
   });
 });
