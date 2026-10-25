@@ -439,6 +439,14 @@ export function checksModeAt(switches: SwitchReading, capable: boolean,
   return (CHECKS_MODES as readonly string[]).includes(mode) ? mode : 'off';
 }
 
+/** What the lane's disable marker says of a pass: `disabled` (it stands: no read, no edge row, no mail of an edge),
+ *  `unmeasurable` (the registry could not be listed) or `enabled`. The one place L4 asks, so `watch.ts` never names the
+ *  marker (`landing-words.test.ts`'s no-writer pin lists the files that do). */
+export function checksGate(switches: SwitchReading): 'enabled' | 'disabled' | 'unmeasurable' {
+  const s: MarkerState = switches['landing-disabled'];
+  return s === 'set' ? 'disabled' : s === 'unmeasurable' ? 'unmeasurable' : 'enabled';
+}
+
 // ── GitHub-supplied names (§3.6) ──────────────────────────────────────────────────────────────────────────────────
 
 const NAME_OUTSIDE = /[^A-Za-z0-9 _.,:()/+#-]/gu;

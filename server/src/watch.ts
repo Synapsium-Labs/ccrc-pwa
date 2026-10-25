@@ -16,7 +16,8 @@ import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, EXPIRE_CHILD_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
 import {
-  isFullLine, parsePrLines, phaseFor, queueFor, repoCellFor, sweepFailureReason, type CcdPrFailure, type PrQueueRead,
+  isFullLine, parsePrLines, phaseFor, queueFor, readPrLandingLine, repoCellFor, sweepFailureReason, type CcdPrFailure, type PrLandingLine,
+  type PrQueueRead,
 } from './prstate.js';
 import { readLiveState, readLiveStateMeasured } from './livestate.js';
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
@@ -57,18 +58,22 @@ import {
   COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, askNudgeSubject, isApprovalNudgeMail, isAskNudgeMail,
   survivorOf,
 } from './coord/rundefs.js';
-import { queueStallNotice, queueSystemMail } from './coord/rundefsTx.js';
+import { queueLandingNotice, queueStallNotice, queueSystemMail, type LandingNoticeQueued } from './coord/rundefsTx.js';
 import {
   BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, BRIEF_WATCH_HORIZON_MS, briefNotTakenBody, briefNotTakenReason,
   briefNotTakenSubject, briefNotTakenTag, briefStep, type UnlandedBrief,
 } from './coord/briefwatch.js';
-import { landingAsk, landingVerdict, type LandingFacts } from './coord/landing.js';
+import {
+  checksEdge, checksGate, checksSubject, landingAsk, landingLineAct, landingVerdict, renderChecksBrief, requiredChecksVerdict, stuckOnly,
+  type ChecksFold, type ChecksRead, type ChecksRow, type LandingFacts,
+} from './coord/landing.js';
+import { checksEndDetail, checksRowDetail, type LeftPhase, type StuckCause } from '../../shared/landing.js';
 import {
   readParentGenerations, readWorktreeCensus, settleParentIncarnations, type DelegationCensusPass, type WorktreeCensus,
 } from './coord/gitref.js';
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 // The delegation lane's (wave 3, Task 13) imports, in one block of their own: the pure modules it composes, and the durable applier.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { MeasuredDirectoryRead, MeasuredDisk } from './io.js';
 import { diskMarkFate, diskNotice, diskVerdict, type DiskVerdict } from './disk.js';
 import { newTmpSweepLaneState, runTmpSweepCensusLane } from './tmpSweepLane.js';
@@ -445,6 +450,14 @@ function projectionWarn(p: ProjectionOutcome): { key: string; message: string } 
   const message = p.why === 'unwritable' || p.why === 'no-channel' ? `${p.why}: ${p.detail}` : p.why;
   return { key, message };
 }
+
+/** The checks lane (PR landing in ccrc, stage 1): one `pr-landing` call names at most 16 sessions (ccd refuses more), so
+ *  a project's read set is chunked; a project is read every 30 s while an episode is unsettled or red, else every 120 s. */
+const CHECKS_CALL_MAX = 16;
+const CHECKS_FAST_MS = 30_000;
+const CHECKS_SLOW_MS = 120_000;
+/** The facts of an episode the lane keeps (spec §3.1): its id, its transition row's time, its head and its PR. */
+interface LaneEpisode { e: number; at: number; head: string; pr: number }
 
 /** The mail lane (the seventh; cadence `MAIL_SWEEP_MS`, `laneSchedule.ts`; the rest of this block is the gate's arithmetic).
  *
@@ -2296,6 +2309,12 @@ export class FleetWatcher {
       // null. The listed arm's bounded cost and why it stays awaited are stated
       // on `emitPools`; `project-pools-read.test.ts` pins both cost arms.
       await this.emitPools(registryRead.listed ? registryRead.names : null);
+      // PR landing in ccrc, stage 1: the checks lane, BEFORE the fail-shut return below, because an unlistable registry
+      // still owes a live episode its stuck bound (spec §3.8). NEVER awaited, and its own beat (`LANE_SCHEDULE`), never
+      // inside `sweepPr`: its reads are `ccd pr-landing` calls over the network.
+      void this.runLane('landingChecks', () => this.sweepLandingChecks(
+        registryRead.listed ? registryRead.names : null, registryRead.listed ? registryRead.records : []))
+        ?.catch(() => { /* one bad sweep must not kill the poll */ });
       this.noteDelegationRegistry(registryRead.listed);
       if (!registryRead.listed) {
         // Retain, don't erase, at fleet scale: `this.hookStates`/
@@ -8505,6 +8524,267 @@ export class FleetWatcher {
         console.warn(`ccrc-server: landing notice for ${r.id} failed (${err instanceof Error ? err.message : String(err)})`);
       }
     }
+  }
+
+  // ── PR landing in ccrc, stage 1: the checks lane (D-6786; spec §3.2, §3.5, §3.6, §3.8) ─────────────────────────
+
+  /** `checksNotified`'s value is `checksEdge`'s `dueAtMs` for the generation as its rows stand: the latch spares the
+   *  coord.db read of an episode whose reading did not change, and only until that time (null: no further bound).
+   *  KEYED `(runId, e, gen, word, fp)`. It is a read-sparing cache, never the record: the rows are. Written only after
+   *  a row landed or answered `duplicate`, or after a fold that had nothing to write, and never for a fold whose
+   *  answer `mail-disabled` held (such a fold also writes nothing, and a green latched here would never go). */
+  private checksNotified = new Map<string, number | null>();
+  /** The generation the last latched fold left each episode (`<runId>:<e>`), the part of the latch key a pass cannot
+   *  know without reading the rows. */
+  private checksGenOf = new Map<string, number>();
+  /** Whether the episode's last fold left it unsettled or red (the 30 s cadence) or not (120 s). */
+  private checksFast = new Map<string, boolean>();
+  /** Episodes whose rows this process has read once, and the ones those rows (or a write) showed ended. */
+  private checksKnown = new Set<string>();
+  private checksEnded = new Set<string>();
+  /** The earliest the next `pr-landing` read of each project may be. */
+  private checksNextRead = new Map<string, number>();
+
+  /**
+   * The checks lane, one pass (spec §3.2 to §3.8). Dispatched by `tick()` through `runLane('landingChecks')`, never
+   * from inside `sweepPr`, on the tick's own registry listing (null when it cannot be listed) and records.
+   *
+   *  - The OWED set is every open run at `merging` whose current episode is `live` or `shadow` and has no `moved` or
+   *    `left` row, read from coord.db and filtered by nothing the PR sweep stored.
+   *  - The READ set is the owed members whose workspace is a registry workspace of the run's project: one
+   *    `pr-landing` call per project per chunk of 16, every 30 s while an episode is unsettled or red, else every 120 s.
+   *  - An unlistable registry, the lane's disable marker and a ccd without `pr-landing-v1` make no read: a LIVE episode folds
+   *    the stuck bound alone, a shadow one nothing. A member outside the registry folds it every pass.
+   *  - Read-only: the only ccd verb composed is `CCD_ARGV.prLanding`, and the only writes are coord.db rows and mail.
+   */
+  async sweepLandingChecks(listing: readonly string[] | null, records: readonly SessionRecord[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (coord === undefined) return;
+    const nowMs = Date.now();
+    const gate = checksGate(readSwitches(listing));
+    const unlistable = listing === null || gate === 'unmeasurable';
+    const disabled = gate === 'disabled';
+    const capable = ccdCan(this.deps.fleetState, 'prLanding');
+    // `mail-disabled` is read off the listing. An unlistable registry cannot say, and spec §3.8 still owes a live episode
+    // its one stuck mail then (the bound is the one thing this lane keeps doing without a listing), so null holds nothing.
+    const mailHeld = listing !== null && listing.includes(MAIL_DISABLED_MARKER);
+    type Owed = { run: ReturnType<CoordStore['mergingRuns']>[number]; ep: LaneEpisode; key: string; live: boolean };
+    let runs: ReturnType<CoordStore['mergingRuns']>;
+    try { runs = coord.mergingRuns(); } catch (err) {
+      console.warn(`ccrc-server: landing checks read failed (${err instanceof Error ? err.message : String(err)})`);
+      return;
+    }
+    const present = new Set<string>();
+    const byProject = new Map<string, Owed[]>();
+    for (const run of runs) {
+      try {
+        const cur = coord.currentEpisode(run.id);
+        if (cur === null || cur.mode === 'off' || cur.pr === null) continue;
+        const key = `${run.id}:${cur.e}`;
+        present.add(key);
+        if (this.checksEnded.has(key)) continue;
+        if (!this.checksKnown.has(key)) {
+          // A first sighting is read at once, whatever the project's cadence says.
+          this.checksNextRead.delete(run.project);
+          const rows = coord.checksRows(run.id, cur.e);
+          this.checksKnown.add(key);
+          if (rows.some((r) => r.row.what === 'moved' || r.row.what === 'left')) { this.checksEnded.add(key); continue; }
+        }
+        const list = byProject.get(run.project) ?? [];
+        list.push({ run, ep: { e: cur.e, at: cur.at, head: cur.head, pr: cur.pr }, key, live: cur.mode === 'live' });
+        byProject.set(run.project, list);
+      } catch (err) {
+        console.warn(`ccrc-server: landing checks run ${run.id} failed (${err instanceof Error ? err.message : String(err)})`);
+      }
+    }
+    // No per-project try: every call that can throw (the argv builder, the ccd call, a member's fold) sits in its own
+    // try below, so one project's failure folds that project's members and the next project still runs.
+    for (const [project, members] of byProject) {
+      // No read: the bound alone, for a live episode only.
+      if (unlistable || disabled || !capable) {
+        for (const m of members) {
+          if (!m.live) continue;
+          this.checksStuckOnly(coord, m, disabled ? 'disabled' : 'unmeasured', nowMs, mailHeld);
+        }
+        continue;
+      }
+      const workspaces = new Set(records.filter((r) => r.workspace !== null && r.project === project).map((r) => r.id));
+      const readable: Owed[] = [];
+      const seenIds = new Set<string>();
+      for (const m of members) {
+        if (workspaces.has(m.run.sessionId) && !seenIds.has(m.run.sessionId)) { seenIds.add(m.run.sessionId); readable.push(m); }
+        else this.checksStuckOnly(coord, m, 'unmeasured', nowMs, mailHeld);
+      }
+      if (readable.length === 0) continue;
+      if (nowMs < (this.checksNextRead.get(project) ?? 0)) continue;
+      const lines = new Map<string, PrLandingLine>();
+      for (let i = 0; i < readable.length; i += CHECKS_CALL_MAX) {
+        const chunk = readable.slice(i, i + CHECKS_CALL_MAX);
+        try {
+          const res = await this.deps.runCcd(CCD_ARGV.prLanding(project, chunk.map((m) => ({ id: m.run.sessionId, pr: m.ep.pr }))));
+          // A ccd that never ran (or may not have) is no reading: the chunk's members fold unmeasured, never a verdict.
+          if (res.ran === false || !res.ok) continue;
+          for (const raw of res.stdout.split('\n')) {
+            const text = raw.trim();
+            if (text === '') continue;
+            try {
+              const line = readPrLandingLine(JSON.parse(text));
+              if (line !== null) lines.set(line.id, line);
+            } catch { /* a truncated line is skipped, never thrown */ }
+          }
+        } catch (err) {
+          console.warn(`ccrc-server: landing checks read of ${project} failed (${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
+      let fast = false;
+      for (const m of readable) {
+        try {
+          if (this.checksOne(coord, m, lines.get(m.run.sessionId) ?? null, nowMs, mailHeld)) fast = true;
+        } catch (err) {
+          console.warn(`ccrc-server: landing checks run ${m.run.id} failed (${err instanceof Error ? err.message : String(err)})`);
+          fast = true;
+        }
+      }
+      this.checksNextRead.set(project, nowMs + (fast ? CHECKS_FAST_MS : CHECKS_SLOW_MS));
+    }
+    this.pruneChecks(present);
+  }
+
+  private pruneChecks(present: ReadonlySet<string>): void {
+    for (const k of [...this.checksKnown]) if (!present.has(k)) this.checksKnown.delete(k);
+    for (const k of [...this.checksEnded]) if (!present.has(k)) this.checksEnded.delete(k);
+    for (const k of [...this.checksGenOf.keys()]) if (!present.has(k)) { this.checksGenOf.delete(k); this.checksFast.delete(k); }
+    for (const k of [...this.checksNotified.keys()]) if (!present.has(k.split(':').slice(0, 2).join(':'))) this.checksNotified.delete(k);
+  }
+
+  /** One owed episode's rows as the fold reads them: the live or the shadow form, per the episode's mode. */
+  private checksRowsOf(coord: CoordStore, m: { run: { id: number }; ep: LaneEpisode; live: boolean }): ChecksRow[] {
+    const out: ChecksRow[] = [];
+    for (const r of coord.checksRows(m.run.id, m.ep.e)) {
+      if (r.row.shadow === m.live || r.row.gen === null) continue;
+      if (r.row.what !== 'open' && r.row.what !== 'green' && r.row.what !== 'red' && r.row.what !== 'stuck') continue;
+      out.push({ gen: r.row.gen, what: r.row.what, fp: r.row.fp, reading: r.row.reading, atMs: r.at });
+    }
+    return out;
+  }
+
+  /** The latch key of a fold's answer, and whether this pass may skip the episode (its reading is latched and its
+   *  bound is not yet due). */
+  private checksLatched(m: { key: string }, tail: string, nowMs: number): boolean {
+    const gen = this.checksGenOf.get(m.key);
+    if (gen === undefined) return false;
+    const due = this.checksNotified.get(`${m.key}:${gen}:${tail}`);
+    return due !== undefined && (due === null || nowMs < due);
+  }
+
+  /** The bound alone (`stuckOnly`) for an owed episode this pass does not read. */
+  private checksStuckOnly(coord: CoordStore, m: { run: ReturnType<CoordStore['mergingRuns']>[number]; ep: LaneEpisode; key: string; live: boolean },
+    cause: StuckCause, nowMs: number, mailHeld: boolean): void {
+    try {
+      const tail = `unread:${cause}`;
+      if (this.checksLatched(m, tail, nowMs)) return;
+      const rows = this.checksRowsOf(coord, m);
+      const fold = stuckOnly(rows, nowMs, m.ep.at, cause);
+      void this.checksDeliver(coord, m, rows, fold, tail, null, mailHeld);
+    } catch (err) {
+      console.warn(`ccrc-server: landing checks run ${m.run.id} failed (${err instanceof Error ? err.message : String(err)})`);
+    }
+  }
+
+  /** One read member: the line's act (`landingLineAct`), then the edge fold, the end row or the bound. Answers whether
+   *  the episode wants the fast cadence. */
+  private checksOne(coord: CoordStore, m: { run: ReturnType<CoordStore['mergingRuns']>[number]; ep: LaneEpisode; key: string; live: boolean },
+    line: PrLandingLine | null, nowMs: number, mailHeld: boolean): boolean {
+    const act = landingLineAct({ pr: m.ep.pr, head: m.ep.head }, line);
+    if (act.act === 'moved' || act.act === 'left') {
+      this.checksEnd(coord, m, act, mailHeld);
+      return false;
+    }
+    let read: ChecksRead;
+    let failing: ReadonlyArray<{ name: string; runId: number | null }> = [];
+    if (act.act === 'edge' && line !== null) {
+      const v = requiredChecksVerdict(line, (s) => createHash('sha256').update(s).digest('hex'));
+      read = { word: v.word, fp: v.fp };
+      failing = v.failing;
+    } else {
+      read = { word: 'unmeasured', fp: '000000000000' };
+    }
+    const tail = `${read.word}:${read.fp}`;
+    if (this.checksLatched(m, tail, nowMs)) return this.checksFast.get(m.key) === true;
+    const rows = this.checksRowsOf(coord, m);
+    const fold = checksEdge(rows, read, nowMs, m.ep.at, m.live);
+    return this.checksDeliver(coord, m, rows, fold, tail, failing, mailHeld);
+  }
+
+  /** The row and the mail of a `moved` or `left` act, once per episode. A merged PR writes the row and no mail
+   *  (`sweepLanding`'s `merged:` is the wake). */
+  private checksEnd(coord: CoordStore, m: { run: ReturnType<CoordStore['mergingRuns']>[number]; ep: LaneEpisode; key: string; live: boolean },
+    act: { act: 'moved'; head: string } | { act: 'left'; phase: LeftPhase }, mailHeld: boolean): void {
+    const detail = checksEndDetail(m.ep.e, act.act, !m.live);
+    const when = { kind: 'episode', episode: m.ep.e } as const;
+    const nowAt = Date.now();
+    let answer: ReturnType<CoordStore['recordObservation']> | LandingNoticeQueued;
+    if (!m.live || (act.act === 'left' && act.phase === 'merged')) {
+      answer = coord.recordObservation(m.run.id, detail, nowAt, when);
+    } else {
+      const to = coord.resolveCoordinator(m.run.id);
+      if (mailHeld || to === null) return;
+      answer = queueLandingNotice(coord, m.run, {
+        detail, at: nowAt, episode: m.ep.e, toId: to,
+        subject: checksSubject(m.ep.pr, m.ep.e, 0, act.act, m.ep.head),
+        body: renderChecksBrief({ pr: m.ep.pr, sessionId: m.run.sessionId, head: m.ep.head, e: m.ep.e, gen: 0, word: act.act,
+          ...(act.act === 'moved' ? { movedHead: act.head } : { phase: act.phase }) }),
+      });
+    }
+    const told = 'recorded' in answer ? answer.recorded : answer.queued;
+    if (told || (!('why' in answer) ? false : answer.why === 'duplicate')) this.checksEnded.add(m.key);
+  }
+
+  /** Writes a fold's rows (the unmailed ones first, the mailed one last, through `queueLandingNotice`) and latches its
+   *  answer. A mail `mail-disabled` holds (or that has no recipient) keeps no row and latches nothing. Answers whether
+   *  the episode wants the fast cadence (unsettled, red, or held). */
+  private checksDeliver(coord: CoordStore, m: { run: ReturnType<CoordStore['mergingRuns']>[number]; ep: LaneEpisode; key: string; live: boolean },
+    rows: readonly ChecksRow[], fold: ChecksFold, tail: string, failing: ReadonlyArray<{ name: string; runId: number | null }> | null,
+    mailHeld: boolean): boolean {
+    const e = m.ep.e;
+    const when = { kind: 'episode', episode: e } as const;
+    const detailOf = (w: ChecksRow): string => checksRowDetail(e, w.gen, w.what,
+      w.what === 'green' || w.what === 'red' ? (w.fp ?? '') : w.what === 'stuck' ? (w.reading ?? 'unread') : undefined, !m.live);
+    const ask = fold.mail;
+    const mailIdx = ask === null || !m.live ? -1 : fold.write.findIndex((w) => w.gen === ask.gen && w.what === ask.word);
+    let held = false;
+    let gone = false;
+    fold.write.forEach((w, i) => {
+      if (gone || i === mailIdx) return;
+      const seen = coord.recordObservation(m.run.id, detailOf(w), w.atMs, when);
+      if (!seen.recorded && seen.why === 'run-gone') gone = true;
+    });
+    if (!gone && mailIdx >= 0 && ask !== null) {
+      const w = fold.write[mailIdx]!;
+      const to = coord.resolveCoordinator(m.run.id);
+      if (mailHeld || to === null) held = true;
+      else {
+        const q = queueLandingNotice(coord, m.run, {
+          detail: detailOf(w), at: w.atMs, episode: e, toId: to,
+          subject: checksSubject(m.ep.pr, e, ask.gen, ask.word, m.ep.head),
+          body: renderChecksBrief({ pr: m.ep.pr, sessionId: m.run.sessionId, head: m.ep.head, e, gen: ask.gen, word: ask.word,
+            ...(ask.cause !== undefined ? { cause: ask.cause } : {}), ...(failing !== null && ask.word === 'red' ? { failing } : {}) }),
+        });
+        if (!q.queued && q.why === 'run-gone') gone = true;
+      }
+    }
+    if (held) return true;
+    if (gone) return false;
+    const after = [...rows, ...fold.write];
+    const gen = after.filter((r) => r.what === 'open').length - 1;
+    const cur = after.filter((r) => r.gen === gen);
+    const edge = cur.find((r) => r.what === 'green' || r.what === 'red');
+    const stuck = cur.some((r) => r.what === 'stuck');
+    this.checksGenOf.set(m.key, gen);
+    this.checksNotified.set(`${m.key}:${gen}:${tail}`, fold.dueAtMs);
+    const fast = edge === undefined ? !stuck : edge.what === 'red';
+    this.checksFast.set(m.key, fast);
+    return fast;
   }
 
   /**
