@@ -89,6 +89,21 @@ describe('ccrc restamp <file>', () => {
     }
   });
 
+  // Install-time stamping: ccd/ccd carries no committed stamp, only the fixed placeholder on line 2, and
+  // ccd-entry-install.py writes the marker into the INSTALLED copy. A restamp there would put a digest back
+  // into the committed file, which is the line that conflicted in 85 of 98 absorptions.
+  it('REFUSES ccd/ccd, whose stamp is written at install time, and leaves it untouched', () => {
+    const dir = mkTmp('ccrc-restamp-');
+    const f = join(dir, 'ccd');
+    const committed = readFileSync(CCD, 'utf8');
+    writeFileSync(f, committed, { mode: 0o755 });
+    const r = run([f]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('is stamped at install time');
+    expect(r.stderr).toContain('nothing to restamp');
+    expect(readFileSync(f, 'utf8')).toBe(committed);
+  });
+
   it('refuses a symlink rather than stamping what it points at', () => {
     const dir = mkTmp('ccrc-restamp-');
     const target = join(dir, 'target');

@@ -62,9 +62,9 @@
 #
 # Do NOT add a `# ccrc:generated …` marker line to this file by imitation of
 # `ccd`'s line 2: that marker is `shared/mark.mjs`'s format for files a
-# generator writes and would refuse to run over hand edits to; `ccd` carries
-# one spuriously (it predates the marker meaning something), and `ccrc` is,
-# and stays, hand-written.
+# generator writes and would refuse to run over hand edits to. `ccd` is stamped
+# only in its INSTALLED copy, by ccd-entry-install.py; `ccrc` is, and stays,
+# hand-written.
 set -uo pipefail
 
 # THE APPLICATION'S OWN ENTRY TIME, FIRST (auto-advance Codex arm, plan W2 Task 11). `SECONDS` counts from the start of
@@ -2655,8 +2655,9 @@ already running).
             [--url <base>]" presents a file's value once and prints only the
             HTTP status and accepted, refused or unmeasured
   restamp   re-stamp one file ccrc generated (a "ccrc:generated" marker, as
-            on ccd/ccd's line 2) after its body changed: the regenerator a
-            merge needs there. A file with no marker is refused, never adopted$(_usage_history_paragraph)
+            on the session hook's generated region) after its body changed. A file
+            with no marker is refused, never adopted; so is ccd/ccd, which is
+            stamped at install time$(_usage_history_paragraph)
 
   -h, --help   print this message and exit 0
 
@@ -27066,10 +27067,13 @@ _restamp_hook_note() {
 # Landing-order spec 2026-09-23 §5.1. Worker clause 16 says a generated stamp
 # is never hand-resolved: on a conflict in the stamp line, take either side of
 # THAT LINE only, resolve every other hunk of the file as the source it is, then
-# run this. For a file stamped by `shared/mark.mjs` — `ccd/ccd` foremost, whose
-# line 2 is a digest of its own hand-written body — the regenerator was a
+# run this. For a file stamped by `shared/mark.mjs` — `ccd/ccd` was the foremost, whose
+# line 2 was a digest of its own hand-written body — the regenerator was a
 # four-line `node -e` every plan re-typed; 17 of 25 hand resolutions measured on
-# that file were the stamp alone. This is the one spelling of it. (Taking
+# that file were the stamp alone. This is the one spelling of it. `ccd/ccd` is no
+# longer stamped in the repository (its marker is written at install time), and
+# this command REFUSES it; the session hook's generated region is still
+# regenerated here. (Taking
 # either side of the whole FILE would silently drop the other side's hunks;
 # the digest would then bless the loss.)
 #
@@ -27110,6 +27114,12 @@ cmd_restamp() {
     esac
   done
   [ -f "$mark" ] || _ccrc_die "restamp: the marker module is missing ($mark)"
+  # ccd/ccd is stamped AT INSTALL TIME (ccd-entry-install.py writes the marker into the installed copy), so its
+  # committed line 2 is a fixed placeholder and there is nothing to restamp: a restamp would put a digest back
+  # into the committed file, the line that conflicted in 85 of 98 conflicted absorptions.
+  case "$(sed -n 2p -- "$f" 2>/dev/null)" in
+    '# ccrc:stamp-at-install'*) _ccrc_die "restamp: $f is stamped at install time (ccd/ccd-entry-install.py writes its marker into the installed copy), so there is nothing to restamp; resolve its hunks as source and commit. Nothing was written." ;;
+  esac
   # A hook carrying the generated-helpers region (ARCH-74, #809) is regenerated
   # from the TARGET'S OWN tree: its shared/hook-helpers.mjs and its sibling ccd,
   # never this script's tree (the installed ccrc would otherwise regenerate a

@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync, readdirSync, rmSync, symlinkSync, utimesSync, lstatSync, readlinkSync, realpathSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { markGenerated } from '../../shared/mark.mjs';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { renderCcdEntry } from './ccdWsHelpers.js';
 import { CONTAINED_TOOLS, assertNoRealTool, plantPoison } from './containedTools.js';
@@ -1031,7 +1032,7 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(installed.r.stdout).toMatch(/^install: files: /m);
   });
 
-  it('ccd reaches PATH as an executable byte copy of the tree it was placed from', () => {
+  it('ccd reaches PATH as an executable, stamped copy of the tree it was placed from', () => {
     // FROM THE PLACED TREE, not from the checkout. After `_inst_tree` the two
     // are identical, so the assertion cannot tell them apart — but the box's
     // own invariant can: the `ccd` on PATH and the `ccd` inside the tree the
@@ -1051,7 +1052,11 @@ describe('ccrc install: the executables and files it installs', () => {
     // box's `~/ccrc` — so the answer is to not wear that shape, rather than to
     // add this file to the guard's exclusion list and blind it to a real second
     // spelling arriving here later.
-    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd/ccd')));
+    // Install-time stamping: the body is the placed tree's ccd with its line-2 placeholder swapped, in place, for the
+    // marker (ccd-entry-install.py; ccd-install-stamp.test.ts owns the rule) - so the bytes are the stamped copy.
+    const placedLines = readFileSync(placed(home, 'ccd/ccd'), 'utf8').split('\n');
+    if ((placedLines[1] ?? '').startsWith('# ccrc:stamp-at-install')) placedLines.splice(1, 1);
+    expect(readFileSync(bin, 'utf8')).toBe(markGenerated(placedLines.join('\n')));
     expect(mode(bin)).toBe(0o644);
     // The launcher: the placed template rendered for the canonical python3 its
     // own shebang names and the body's digest — nothing else, byte for byte.

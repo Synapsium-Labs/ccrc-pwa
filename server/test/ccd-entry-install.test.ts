@@ -20,6 +20,7 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { CCD, canonicalPython3, ghContainedEnv } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
+import { markGenerated } from '../../shared/mark.mjs';
 
 const REPO = path.resolve(__dirname, '..', '..');
 const PYTHON = canonicalPython3();
@@ -39,6 +40,13 @@ afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 const tree = (): string => path.join(home, 'ccrc');
 const entry = (): string => path.join(home, '.local', 'bin', 'ccd');
 const body = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
+/** What the installer publishes for the tree's ccd source: the source with its line-2 placeholder swapped, in place,
+ *  for the marker `markGenerated` writes (install-time stamping; ccd-install-stamp.test.ts owns the rule itself). */
+const stampedTreeBody = (): Buffer => {
+  const lines = fs.readFileSync(path.join(tree(), 'ccd/ccd'), 'utf8').split('\n');
+  if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
+  return Buffer.from(markGenerated(lines.join('\n')));
+};
 const sha = (p: string): string => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 
 /** The template's self-test branch, extended by a fixture HOOK that runs
@@ -159,7 +167,7 @@ function assertPair(): void {
   expect(fs.lstatSync(entry()).isFile(), 'the launcher is a regular file, not a link').toBe(true);
   expect(fs.statSync(body()).mode & 0o777).toBe(0o644);
   expect(fs.statSync(entry()).mode & 0o777).toBe(0o755);
-  expect(fs.readFileSync(body()).equals(fs.readFileSync(path.join(tree(), 'ccd/ccd'))), 'the body is the tree\'s ccd').toBe(true);
+  expect(fs.readFileSync(body()).equals(stampedTreeBody()), 'the body is the tree\'s ccd').toBe(true);
   const text = fs.readFileSync(entry(), 'utf8');
   expect(text.split('\n')[0]).toBe(`#!${RENDERED} -IS`);
   expect(/^BODY_SHA256 = '([0-9a-f]{64})'$/m.exec(text)?.[1], 'the launcher names the published body').toBe(sha(body()));
@@ -358,7 +366,7 @@ describe('the pre-publication kernel self-test, and the order of publication, pr
       `the launcher did not move, so what stands at ${entry()} is not proved to be the launcher this run self-tested beside this body`);
     expect(r.stderr, 'what stands there is a directory, so no start refuses by digest').not.toContain('every ccd start refuses by digest');
     expect(r.stderr).not.toContain('the pair stands as staged');
-    expect(fs.readFileSync(body()).equals(fs.readFileSync(path.join(tree(), 'ccd/ccd'))), 'the body is the new one').toBe(true);
+    expect(fs.readFileSync(body()).equals(stampedTreeBody()), 'the body is the new one').toBe(true);
     expect(fs.lstatSync(entry()).isDirectory(), 'the obstruction stands').toBe(true);
     // Both lanes say the same thing about it.
     expect(LANES['ccrc install/update']!().stderr).toMatch(/is a directory/);
@@ -493,7 +501,7 @@ describe('a REALLY closed stdout — a pipe whose reader is gone — leaves the 
     expect(r.stderr, 'the body arm claimed a pair that stands').not.toContain('the pair stands as staged');
     expect(r.stderr, 'the shutdown flush failed again').not.toContain('Exception ignored');
     // The pair state: the new body behind the old launcher, which refuses it.
-    expect(fs.readFileSync(body()).equals(fs.readFileSync(path.join(tree(), 'ccd/ccd'))), 'the body is the new one').toBe(true);
+    expect(fs.readFileSync(body()).equals(stampedTreeBody()), 'the body is the new one').toBe(true);
     expect(fs.readFileSync(entry()).equals(oldLauncher), 'the launcher moved').toBe(true);
     const st = startThrough();
     expect(st.code, st.stderr).toBe(125);
