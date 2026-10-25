@@ -19,7 +19,8 @@ export type SessionStatus = 'busy' | 'idle' | 'dead';
 
 /** Whether a session is there (ARCH-48, #783): the wire word `readSession` derives (`server/src/sessionReading.ts`). The
  *  ONE definition, in L0, so the frame's field and the reading's part cannot name different words. */
-export type Presence = 'alive' | 'asleep' | 'dead' | 'unknown';
+export const PRESENCES = ['alive', 'asleep', 'dead', 'unknown'] as const;
+export type Presence = typeof PRESENCES[number];
 
 /** Which attention bucket a session belongs to. THE authority: the fleet
  *  screen's sections, its counts and the row's own state word all read this one
