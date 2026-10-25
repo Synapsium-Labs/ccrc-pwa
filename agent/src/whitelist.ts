@@ -454,6 +454,8 @@ export const EXEC_WHITELIST = {
     ['hibernate'],
     ['pr-state', '--session'],
     ['pr-state', '--project'],
+    // D-6784: the checks lane's read-only PR read; the verb takes only --project and --sessions.
+    ['pr-landing', '--project'],
     ['pr-open',  '--session'],
     ['ws-archive', '--session'],
     ['ws-restore', '--session'],

@@ -49,7 +49,11 @@ const ID_BUILDERS = {
   ensure: 'id', stopId: 'id', stopPair: 'id', forget: 'id', swap: 'id', swapCross: 'id',
   swapInterrupt: 'id', swapCrossInterrupt: 'id', hibernate: 'id',
   wsAdd: 'no-id', wsAddNamed: 'no-id', wsAddWorker: 'no-id',
-  prStateSession: 'id', prStateProject: 'no-id', prOpen: 'id',
+  prStateSession: 'id', prStateProject: 'no-id',
+  // D-6784: `prLanding`'s ids ride inside `<id>:<pr>` pairs the builder validates itself, never as a bare argv word.
+  // The lane's ids come from the registry listing (the project's own sessions), never from a request body; the
+  // call site PL-4 adds must keep it so, since this row is not checked for a gate over where its ids come from.
+  prLanding: 'no-id', prOpen: 'id',
   wsArchive: 'id', wsRestore: 'id', wsAudit: 'id', wsReap: 'id',
   wsReclaimAudit: 'id', wsReclaim: 'id', wsExpireAudit: 'id', wsExpire: 'id',
   wsCollectAudit: 'id', wsCollect: 'id', wsAttic: 'id',

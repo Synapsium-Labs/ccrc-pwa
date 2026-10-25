@@ -538,6 +538,19 @@ export const CCD_ARGV = {
                    ...(slug === null ? [] : [slug]), ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
+  /** D-6784: the checks lane's read. One call names 1 to 16 `<id>:<pr>` pairs (ccd refuses more, and refuses the
+   *  whole call), each id a registry id (no comma, no colon: they delimit the pairs; no leading dash; no repeat) and
+   *  each pr a positive integer with no leading zero. The builder refuses all of these itself, so a bad pair throws
+   *  here instead of failing every pair in the call; the caller still chunks into calls of at most 16. */
+  prLanding: (p: string, sessions: readonly { readonly id: string; readonly pr: number | string }[]) => {
+               if (sessions.length < 1 || sessions.length > 16) throw new Error('CCD_ARGV.prLanding: one call names 1 to 16 sessions');
+               if (new Set(sessions.map(({ id }) => id)).size !== sessions.length) throw new Error('CCD_ARGV.prLanding: a session id appears once per call');
+               return argv(['pr-landing', '--project', p, '--sessions', sessions.map(({ id, pr }) => {
+                 if (!/^[A-Za-z0-9._][A-Za-z0-9._-]*$/.test(id)) throw new Error('CCD_ARGV.prLanding: a session id is letters, digits, dot, dash and underscore only, and does not start with a dash');
+                 if (!/^[1-9][0-9]{0,8}$/.test(String(pr))) throw new Error('CCD_ARGV.prLanding: a pr number is a positive integer with no leading zero');
+                 return `${id}:${String(pr)}`;
+               }).join(',')]);
+             },
   prOpen:    (id: string, t: string, b64: string, draft: boolean) =>
                argv(['pr-open', '--session', id, '--title', t, '--body-b64', b64, '--draft', draft ? 'true' : 'false']),
   /** `opts.ifNoPane` (D-6642/D-6643, `ARCHIVE_IF_NO_PANE_CAP`): ccd refuses `live` before anything is written when a pane or
@@ -1258,6 +1271,7 @@ export const CCD_CAN = {
   // flag tokens (`WS_TITLE_CAP`, `WS_WRAPPER_CAP`) with `capSupported`. `ws-title` is a verb `ccd caps` lists by name.
   wsAddNamed: 'none', wsTitle: verbRow(WS_TITLE_VERB),
   prStateSession: verbRow('pr-state'), prStateProject: verbRow('pr-state'), prOpen: verbRow('pr-open'),
+  prLanding: capRow('pr-landing-v1'),
   wsArchive: verbRow('ws-archive'), wsRestore: verbRow('ws-restore'),
   wsAudit: verbRow('ws-audit'), wsReap: verbRow('ws-reap'),
   wsReclaimAudit: verbRow('ws-audit'), wsReclaim: capRow(RECLAIM_CAP),

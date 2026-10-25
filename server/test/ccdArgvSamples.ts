@@ -63,6 +63,7 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   wsAddWorker: ['demo', { surface: 'agent', actor: 'run:7 dispatch', reason: null }, null, 7],
   prStateSession: ['demo-quiet-basin'],
   prStateProject: ['demo'],
+  prLanding: ['demo', [{ id: 'demo-quiet-basin', pr: 41 }]],
   prOpen: ['demo-quiet-basin', 'the work', 'Ym9keQ==', 'false'],
   wsArchive: ['demo-quiet-basin', null],
   wsRestore: ['demo-quiet-basin', null],
