@@ -18,6 +18,15 @@ import { driftFindings, type DriftInput, type DriftWorkerRow } from './drift.js'
 import { chooseDriftPushes } from './driftPush.js';
 import type { CoordStore } from './store.js';
 
+/** The lane's two fixed notice tags: the summary push and the shadow notice. A tag names a ring row, never a
+ *  `refused` or `reject.code`; an item's tag is `drift-<key>`, built from the finding's key. */
+export const DRIFT_LANE_TAGS = { summary: 'drift-summary', shadow: 'drift-shadow' } as const;
+
+/** True when `v` is one of the lane's fixed notice tags (the mail-routes kebab census reads it). */
+export function isDriftLaneTag(v: string): boolean {
+  return Object.values(DRIFT_LANE_TAGS).some((t) => t === v);
+}
+
 export interface DriftLaneDeps {
   readonly coord: Pick<CoordStore, 'driftOpenRuns' | 'driftOutstandingDeliveries' | 'driftAwaitingReview'
     | 'driftHeldQuestions' | 'driftFindingRows' | 'driftStallToldRows' | 'driftPushesOnDay' | 'parentOfSession'
@@ -103,7 +112,7 @@ async function pass(d: DriftLaneDeps, now: number): Promise<void> {
     if (won.length > 0) {
       d.notice({ kind: 'coord', sessionId: '', runId: null, title: 'Out of step',
         body: `${won.length} ${won.length === 1 ? 'item is' : 'items are'} out of step; see today's digest` },
-      'push', { tag: 'drift-summary', url: `/digest?day=${day}` });
+      'push', { tag: DRIFT_LANE_TAGS.summary, url: `/digest?day=${day}` });
     }
   }
   for (const r of plan.items) {
@@ -120,7 +129,7 @@ async function pass(d: DriftLaneDeps, now: number): Promise<void> {
       const lines = plan.shadow.filter((r) => won.includes(r.key)).map((r) => r.detail).join('; ');
       d.notice({ kind: 'coord', sessionId: '', runId: null, title: 'Drift reconciler (shadow)',
         body: `would have pushed ${won.length} ${won.length === 1 ? 'item' : 'items'} out of step: ${lines}` },
-      'record-only', { tag: 'drift-shadow' });
+      'record-only', { tag: DRIFT_LANE_TAGS.shadow });
     }
   }
 }
