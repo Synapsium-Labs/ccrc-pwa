@@ -7376,74 +7376,73 @@ export class FleetWatcher {
   private async actOnSendFailure(store: CoordStore, d: ReturnType<CoordStore['dueDeliveries']>[number], error: string, now: number,
                                  gated: (d: ReturnType<CoordStore['dueDeliveries']>[number], gate: MailGate) => void,
                                  sessionProjects: ReadonlyMap<string, string>, projects: Set<string>): Promise<void> {
-      /**
-       * TELL THE SENDER, ONCE (Task 409). Every operator-visible signal this
-       * lane had was recipient-side and arrived only AFTER the park — and
-       * coordinator<->worker mail is the only channel Build 7 has, so one
-       * dirty input box silences a whole wave with nothing anywhere saying
-       * why, on the screen of the session that actually needed to know.
-       *
-       * `recordAlways: true` for the same reason `pushNewMail` sets it: an
-       * undeliverable message is a fact that happened whether or not the
-       * operator is looking at the sender's pane. The PUSH stays
-       * presence-gated, exactly as it is for every kind.
-       *
-       * THE EXISTING `'mail'` KIND, deliberately. `KIND_WORD`/`KIND_GLYPH`
-       * in `MailScreen` are TOTAL maps, so a seventh kind means editing both
-       * plus `NOTIFY_KINDS`, and every older client renders `undefined`.
-       *
-       * AND A DURABLE FEED ROW, NOT A `run_events` ROW (operator-accepted
-       * deviation from §4.5). `advanceInner` is the only TRANSITION writer
-       * of `run_events`: every insert there is paired with a transition
-       * validated against `RUN_TRANSITIONS`, which has no self-transition
-       * for any state. The other writers (`recordRunEvent`, the stall
-       * watch's `insertStallObservation`) write `fromState === toState`
-       * observation rows, which `pushNewRuns` skips, so they push nothing.
-       * A park is not a run transition, so a transition row would lie about
-       * the run's state and an observation row would never reach the
-       * sender. `pushOne` mirrors into
-       * `CoordStore.recordFeedEvent` — the durable archive behind the feed —
-       * at exactly this point, which is the durability that was wanted.
-       */
-      const tellSender = (why: string, tag: string): void => {
-        this.pushSenderNotice(store, d.mailId, d.toId, why, tag, sessionProjects, projects);
-      };
+    /**
+     * TELL THE SENDER, ONCE (Task 409). Every operator-visible signal this
+     * lane had was recipient-side and arrived only AFTER the park — and
+     * coordinator<->worker mail is the only channel Build 7 has, so one
+     * dirty input box silences a whole wave with nothing anywhere saying
+     * why, on the screen of the session that actually needed to know.
+     *
+     * `recordAlways: true` for the same reason `pushNewMail` sets it: an
+     * undeliverable message is a fact that happened whether or not the
+     * operator is looking at the sender's pane. The PUSH stays
+     * presence-gated, exactly as it is for every kind.
+     *
+     * THE EXISTING `'mail'` KIND, deliberately. `KIND_WORD`/`KIND_GLYPH`
+     * in `MailScreen` are TOTAL maps, so a seventh kind means editing both
+     * plus `NOTIFY_KINDS`, and every older client renders `undefined`.
+     *
+     * AND A DURABLE FEED ROW, NOT A `run_events` ROW (operator-accepted
+     * deviation from §4.5). `advanceInner` is the only TRANSITION writer
+     * of `run_events`: every insert there is paired with a transition
+     * validated against `RUN_TRANSITIONS`, which has no self-transition
+     * for any state. The other writers (`recordRunEvent`, the stall
+     * watch's `insertStallObservation`) write `fromState === toState`
+     * observation rows, which `pushNewRuns` skips, so they push nothing.
+     * A park is not a run transition, so a transition row would lie about
+     * the run's state and an observation row would never reach the
+     * sender. `pushOne` mirrors into
+     * `CoordStore.recordFeedEvent` — the durable archive behind the feed —
+     * at exactly this point, which is the durability that was wanted.
+     */
+    const tellSender = (why: string, tag: string): void => {
+      this.pushSenderNotice(store, d.mailId, d.toId, why, tag, sessionProjects, projects);
+    };
 
-      // The guard order is `decideSendFailure`'s: the two holds, then the park (never for a delivered row), then the
-      // park ceiling, then the back-off. D-5912: the two stash refusals are the delivery's GATE as well as its
-      // `lastError`, so `mail-stuck`'s "Its last gate:" names them (its port carries no `lastError`, D-792).
-      const failure = decideSendFailure(d, error, now);
-      if (failure.gate === 'stash-failed') gated(d, 'stash-failed');
-      if (failure.gate === 'stash-occupied') gated(d, 'stash-occupied');
-      const act = failure.action;
-      if (act.kind === 'hold') {
-        // D-2369 / worker stall watch §4.1: told once per hold, and only for a blocked recipient, never a running turn.
-        if (act.tellSender) {
-          tellSender('the recipient is waiting out a usage limit on its own; the nudge is held until it resumes',
-            `mail-blocked-${d.id}`);
-        }
-        this.landed(store.backOff(d.id, act.why, act.until, false), 'backOff', d.id);
-      } else if (act.kind === 'park') {
-        // D-5838 (#754): PARK, never reject, a live recipient's mail. What the box holds NOW, for the probe to compare
-        // against, read once more. (D-5912: no refusal on this lane carries the box any more; the lane's sends stash a
-        // draft, so `draft-present` cannot reach here.)
-        const box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId);
-        if (!this.landed(store.parkDelivery(d.id, act.reason, box, now, act.retryAt), 'parkDelivery', d.id)) return;
-        this.parkProbeAt.set(d.id, now);
-        if (act.tellSender) this.tellParkedSender(store, d.mailId, d.toId, 'parked', act.reason);
-        // A park that followed `MAIL_MAX_ATTEMPTS` failures has already been stuck about `MAIL_PARK_ESCALATE_MS`:
-        // the operator hears it now.
-        if (act.escalate && store.markParkEscalated(d.id, now).changed) {
-          this.escalatePark(store, { id: d.id, mailId: d.mailId, toId: d.toId, parkReason: act.reason },
-            sessionProjects, projects);
-        }
-      } else {
-        // D-5997: told only once the write LANDED: an ack that beat it means the mail arrived. D-5912: no sender notice
-        // on a back-off; a long wait is the park's `mail-parked` push (spec §2.4).
-        this.settleDelivery(store, d.id, act, d);
+    // The guard order is `decideSendFailure`'s: the two holds, then the park (never for a delivered row), then the
+    // park ceiling, then the back-off. D-5912: the two stash refusals are the delivery's GATE as well as its
+    // `lastError`, so `mail-stuck`'s "Its last gate:" names them (its port carries no `lastError`, D-792).
+    const failure = decideSendFailure(d, error, now);
+    if (failure.gate === 'stash-failed') gated(d, 'stash-failed');
+    if (failure.gate === 'stash-occupied') gated(d, 'stash-occupied');
+    const act = failure.action;
+    if (act.kind === 'hold') {
+      // D-2369 / worker stall watch §4.1: told once per hold, and only for a blocked recipient, never a running turn.
+      if (act.tellSender) {
+        tellSender('the recipient is waiting out a usage limit on its own; the nudge is held until it resumes',
+          `mail-blocked-${d.id}`);
       }
+      this.landed(store.backOff(d.id, act.why, act.until, false), 'backOff', d.id);
+    } else if (act.kind === 'park') {
+      // D-5838 (#754): PARK, never reject, a live recipient's mail. What the box holds NOW, for the probe to compare
+      // against, read once more. (D-5912: no refusal on this lane carries the box any more; the lane's sends stash a
+      // draft, so `draft-present` cannot reach here.)
+      const box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId);
+      if (!this.landed(store.parkDelivery(d.id, act.reason, box, now, act.retryAt), 'parkDelivery', d.id)) return;
+      this.parkProbeAt.set(d.id, now);
+      if (act.tellSender) this.tellParkedSender(store, d.mailId, d.toId, 'parked', act.reason);
+      // A park that followed `MAIL_MAX_ATTEMPTS` failures has already been stuck about `MAIL_PARK_ESCALATE_MS`:
+      // the operator hears it now.
+      if (act.escalate && store.markParkEscalated(d.id, now).changed) {
+        this.escalatePark(store, { id: d.id, mailId: d.mailId, toId: d.toId, parkReason: act.reason },
+          sessionProjects, projects);
+      }
+    } else {
+      // D-5997: told only once the write LANDED: an ack that beat it means the mail arrived. D-5912: no sender notice
+      // on a back-off; a long wait is the park's `mail-parked` push (spec §2.4).
+      this.settleDelivery(store, d.id, act, d);
+    }
   }
-
 
   private async mailPass(store: CoordStore, fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
@@ -7683,15 +7682,15 @@ export class FleetWatcher {
           // backing off forever — the same as every ordinary gate below —
           // while only a recipient PROVEN absent can ever park.
           //
-          // `store.backOff`'s `countsAsAttempt: false` on the unmeasurable arm
-          // (checked every reader of the `attempts` column first: the ONLY
-          // other reader is this same file's own `d.attempts + 1` two lines
-          // below and `dueDeliveries`' pass-through select — no ratchet here
+          // `decideRecipientAbsent`'s `countsAsAttempt: false` on the
+          // unmeasurable arm (`coord/delivery.ts`; checked every reader of the
+          // `attempts` column first: the ONLY other reader is that decider's
+          // own `d.attempts + 1` and `dueDeliveries`' pass-through select — no ratchet here
           // means this row's own local `attempts` snapshot never advances
           // past 1, so its backoff step stays fixed at `MAIL_BACKOFF_BASE_MS`
           // rather than climbing toward `MAIL_MAX_ATTEMPTS` — the ceiling this
           // branch must never reach) — attempts is SEND-FAILURE budget
-          // (`MAIL_MAX_ATTEMPTS`'s own docstring), and this row was never
+          // (`MAIL_MAX_ATTEMPTS`'s docstring in `coord/delivery.ts`), and this row was never
           // attempted at all, only found unmeasurable before any gate below
           // could even run.
           //
@@ -7765,13 +7764,14 @@ export class FleetWatcher {
           const lc = sessionLifecycle(lifecycleInputFor(rec, false, now));
           if (!lifecycleIsDead(lc)) { gated(d, 'tmux-gone'); continue; }
           gated(d, 'session-dead');
-          // `deliveredAt === null` GATES THE PARK, and this guard is not
-          // belt-and-braces — `MAIL_MAX_ATTEMPTS`'s own docstring states the
+          // `deliveredAt === null` GATES THE PARK, and `decideSessionDead`'s
+          // guard (`coord/delivery.ts`) is not belt-and-braces —
+          // `MAIL_MAX_ATTEMPTS`'s own docstring (in `coord/delivery.ts`) states the
           // contract it keeps: the budget "applies ONLY while a delivery's own
           // `deliveredAt` is still null … The instant `deliveredAt` is set,
           // this budget stops applying: the row's own history already disproves
-          // 'undeliverable'". The send-failure park 160 lines below takes the
-          // same guard for the same reason, in the same words.
+          // 'undeliverable'". The send-failure park, `decideSendFailure` in the
+          // same file, takes the same guard for the same reason.
           //
           // Two things go wrong without it, both measured in review:
           //   (a) a message that DEMONSTRABLY reached the recipient is recorded

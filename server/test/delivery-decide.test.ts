@@ -3,8 +3,11 @@
 // so a swapped pair goes red (the recorded reorder mutants are in the PR body). `mail-delivery-characterization.test.ts`
 // holds the same choices through the real sweep, and `mail-sweep.test.ts` the behaviour around them.
 //
-// THE ACCEPTANCE PINS at the end: `watch.ts` carries no `MailRejectCode` literal and writes a rejection only through
-// the one executor, and every `DeliveryAction` kind is handled by an exhaustive switch.
+// THE ACCEPTANCE PINS at the end: `watch.ts` carries no delivery-family `MailRejectCode` literal (`undeliverable`; the
+// file still quotes `registry-unmeasurable` as a gate and `unauthenticated` in the PR sweep, neither a rejection) and
+// writes a rejection only through the one executor. That every `DeliveryAction` kind reaches an executor is held by the
+// compiler, not here: `actOnSendFailure`'s last arm hands the narrowed rest to `settleDelivery`, typed `SettleAction`,
+// so a new kind fails the typecheck.
 import { describe, it, expect } from 'vitest';
 import { MAIL_MAX_ATTEMPTS } from '../../shared/api.js';
 import { codeLines } from './growthCheck.js';
@@ -132,7 +135,7 @@ describe('the ceilings (ARCH-19)', () => {
 describe('the acceptance pins (ARCH-19)', () => {
   const WATCH = 'server/src/watch.ts';
 
-  it('watch.ts names no MailRejectCode literal: a rejection is written by the one executor, from a decider\'s action', () => {
+  it('watch.ts names no delivery-family MailRejectCode literal: a rejection is written by the one executor, from a decider\'s action', () => {
     const rejects = parsedFile(WATCH).calls.filter((c) => c.name === 'rejectDelivery');
     expect(rejects, 'rejectDelivery is called from settleDelivery alone').toHaveLength(1);
     const settle = symbolOf(WATCH, 'FleetWatcher.settleDelivery');
