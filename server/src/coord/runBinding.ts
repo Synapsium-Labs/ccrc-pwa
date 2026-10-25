@@ -89,7 +89,7 @@ export function bindsRun(incarnation: Incarnation, run: BindingRun): RunBinds {
 
 const binds = (incarnation: Incarnation, run: BindingRun): boolean => bindsRun(incarnation, run) === 'bound';
 
-const isOpen = (run: BindingRun): boolean => !(TERMINAL_RUN_STATES as readonly RunState[]).includes(run.state);
+export const isOpen = (run: BindingRun): boolean => !(TERMINAL_RUN_STATES as readonly RunState[]).includes(run.state);
 
 /** The two named queries over one incarnation: the newest bound run in any state, and the newest open one. */
 export interface SessionBinding {
@@ -110,6 +110,30 @@ export function bindingOf(runs: readonly BindingRun[], incarnation: Incarnation)
 /** The worker's parent: the claimant of its open binding, `null` when it has none or the open run is ownerless. */
 export const parentOf = (binding: SessionBinding): string | null => binding.open?.claimedBy ?? null;
 
+/** `parentOf`, or else the claimant of an UNDECIDED open run that `minter` also claims: a run planned before the worker's
+ *  birth and then bound to it (the openRun dup arm, a wave N >= 2 run) is a real binding `bindsRun` cannot prove, and its
+ *  claimant is the minting run's own, so it cannot be a ghost of another programme. Undecided runs of other claimants stay
+ *  excluded (#746, D6 of D-5920). */
+export function parentOrMinter(binding: SessionBinding, minter: string | null): string | null {
+  const proven = parentOf(binding);
+  if (proven !== null || minter === null) return proven;
+  return binding.undecided.find((r) => isOpen(r) && r.claimedBy === minter)?.claimedBy ?? null;
+}
+
+/** A child's parent, decided once for every caller (heldFor, the drift lane): the store's proven parent when it has one,
+ *  else `parentOrMinter` over the child's binding series, so a run planned before the birth and bound to it (wave N >= 2)
+ *  keeps the minting run's claimant while a ghost of another programme never becomes the parent. `series` is the
+ *  store's `bindingRunsOf` read; a failed read decides nothing (`null`). */
+export function childParentOf(
+  proven: string | null,
+  series: { readonly ok: true; readonly runs: readonly BindingRun[] } | { readonly ok: false },
+  minter: string | null,
+  incarnation: Incarnation,
+): string | null {
+  if (proven !== null || !series.ok) return proven;
+  return parentOrMinter(bindingOf(series.runs, incarnation), minter);
+}
+
 /** EVERY coordinator that currently has this incarnation working for it, newest open run first, each once. */
 export function claimantsOf(runs: readonly BindingRun[], incarnation: Incarnation): string[] {
   const seen = new Set<string>();
@@ -117,6 +141,12 @@ export function claimantsOf(runs: readonly BindingRun[], incarnation: Incarnatio
     if (r.claimedBy !== null) seen.add(r.claimedBy);
   }
   return [...seen];
+}
+
+/** Every run that binds `incarnation`, by id: in any state, or only the open ones. The readers that list a worker's runs
+ *  (`CoordStore.runsNamingSession`, `openRunsForSession`) project this; `bindingOf` answers the newest and the open one. */
+export function boundRunsOf(runs: readonly BindingRun[], incarnation: Incarnation, which: 'any' | 'open'): BindingRun[] {
+  return runs.filter((r) => binds(incarnation, r) && (which === 'any' || isOpen(r))).sort((a, b) => a.id - b.id);
 }
 
 /** The open runs `coordinatorId` claims whose worker is the incarnation they were opened for, in id order. A run that

@@ -23,6 +23,8 @@
  */
 import { ASK_OPERATOR_PRINCIPAL, type AskMintReleaseReason, type ChildMark } from '../../../shared/api.js';
 import type { SessionRecord } from '../registry.js';
+import { childBirthOf } from './childSpent.js';
+import { childParentOf, incarnationOf } from './runBinding.js';
 import { claimantMeasuredDead, measureClaimant, type ReclaimDeps } from './reclaim.js';
 
 export type HeldFor =
@@ -37,18 +39,25 @@ export async function heldFor(
   const notAChild = { kind: 'not-a-child' } as const;
   if (mark.kind !== 'child') return notAChild;
   const coord = deps.coord;
-  const parent = coord.parentOfSession(childId);
+  // The child's incarnation, from the birth the run the mark names recorded (ARCH-62, #797; D6 of D-5920): a reused
+  // workspace name never inherits a run opened for the occupant before it, so no ghost coordinator is the parent.
+  const minting = coord.run(mark.runId);
+  const incarnation = incarnationOf(childId, childBirthOf(minting, childId));
+  const proven = coord.parentOfSession(childId, incarnation);
+  // An unstamped run opened before the birth and then bound to it is undecidable, not a ghost: the minting run's own
+  // claimant keeps the hold (the dup arm, a wave N >= 2 run planned before wave 1 was dispatched).
+  const parent = proven !== null || !minting.ok || minting.run === null ? proven
+    : childParentOf(proven, coord.bindingRunsOf(childId), minting.run.claimedBy, incarnation);
   if (parent === childId) return notAChild;
   // D-5362: the binding is "the parent is the claimant of the run the mark names", not "the mark names the newest
   // open run": a wave N >= 2 run resumes the same workspace, whose `.child` still names wave 1.
-  const minting = coord.run(mark.runId);
   if (!minting.ok) throw new Error(`heldFor: ${minting.detail}`);
   if (minting.run === null) return notAChild;
   const runId = mark.runId;
   const nobody = (reason: AskMintReleaseReason): HeldFor => ({ kind: 'released', parent: ASK_OPERATOR_PRINCIPAL, runId, reason });
   if (parent === null) {
     // No claimant on the newest open run naming the child — or no open run at all, which is not a child (spec §4).
-    const sib = coord.openRunsForSession(childId);
+    const sib = coord.openRunsForSession(childId, undefined, incarnation);
     if (!sib.ok) throw new Error(`heldFor: ${sib.detail}`);
     if (sib.siblings.length === 0) return notAChild;
     return nobody('run-unclaimed');
