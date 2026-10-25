@@ -1,13 +1,14 @@
 // D-6624 (plan Task DR-12): the census lane's I/O. L4 delivery: it READS the tmp sweep's census through the fleet io and
 // QUEUES the system mail; every decision (the parse, which rows are receipts, which sessions are owed a notice, the
-// words) is `tmpSweep.ts`'s (L1). `watch.ts` owns the clock and the state and calls `runTmpSweepCensusLane` once per
-// pass; the lane's module-free shape is what keeps the watcher's growth to a call site.
+// words) is `tmpSweep.ts`'s (L1). `TmpCensusBeat` owns the clock, the state and the holders it last named (moved out of
+// `watch.ts` by the consolidation, GitHub #1279); the watcher owns one and calls `sweep()` from its tick.
 //
 // FAIL TOWARD KEEPING: a census that cannot be read or parsed mails nothing and names no holders; a mail that throws
 // latches nothing, so the next pass tries again; the coord store's own subject check (`hasMailWithSubject`, every
 // delivery state) is what makes a restart re-send nothing.
 import path from 'node:path';
 import type { DiskHolder } from '../../shared/disk.js';
+import type { Deps } from './deps.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import type { CoordStore } from './coord/store.js';
 import { queueSystemMail } from './coord/rundefsTx.js';
@@ -110,4 +111,29 @@ export async function runTmpSweepCensusLane(
     console.warn(`ccrc-server: tmp-sweep census: mail failed (${err instanceof Error ? err.message : String(err)}); the next pass retries`);
   }
   return { holders };
+}
+
+/** The census lane's clock (D-6624, spec §2.1): the census is read and its mail queued every 5 minutes. */
+export const TMP_SWEEP_CENSUS_MS = 5 * 60_000;
+
+/** The census lane's beat: its own wall clock (the first pass is at once), its memory, and the holders it last named. */
+export class TmpCensusBeat {
+  private last = 0;
+  private readonly state = newTmpSweepLaneState();
+  private named: DiskHolder[] = [];
+
+  constructor(private readonly deps: () => Pick<Deps, 'io' | 'cfg' | 'coord'>) {}
+
+  /** The five largest sessions as the last pass named them: `disk.holders`. Empty until a census reads. */
+  holders(): readonly DiskHolder[] { return this.named; }
+
+  /** One pass, throttled. `known` is the registry ids of the last good listing, `null` until one lands. PUBLIC through the
+   *  watcher for the reason `sweepReadiness` is: `tick()` dispatches it with `void`. */
+  async sweep(known: ReadonlySet<string> | null): Promise<void> {
+    const now = Date.now();
+    if (this.last !== 0 && now - this.last < TMP_SWEEP_CENSUS_MS) return;
+    this.last = now;
+    const { io, cfg, coord } = this.deps();
+    this.named = (await runTmpSweepCensusLane({ io, ccrcDir: cfg.ccrcDir, coord }, this.state, known)).holders;
+  }
 }
