@@ -89,6 +89,37 @@ describe('collectOffers: who one pass asks (spec §5.10)', () => {
   });
 });
 
+describe('collectOffers: the loose arm shares ONE lock, so a pass never offers two loose asks at once', () => {
+  // `ws-audit --loose-hex … --collect` and `ws-collect --loose-hex …` both take ccd's one loose lock without waiting; a
+  // second concurrent loose ask answers `in-progress`. Measured: 75 of the lane's own entries met its own lock.
+  const L = (hex: string) => `loose:${hex}`;
+  it('at most one loose id is offered to learn, and the witnessed ids still fill the cap', () => {
+    expect(collectOffers(input({ candidates: [c(L('61'), -Infinity), c(L('62'), -Infinity), c('demo-a', -Infinity)] })))
+      .toEqual({ learn: ['demo-a', L('61')], act: null });
+  });
+
+  it('a loose call or job not settled holds every other loose id back, learning and act', () => {
+    const r = collectOffers(input({ candidates: [c(L('62'), -Infinity), ripe(L('63'), NOW - 1), c('demo-a', -Infinity)],
+      busy: new Set([L('61')]) }));
+    expect(r).toEqual({ learn: ['demo-a'], act: null });
+  });
+
+  it('the loose act takes the lock first: no loose learning audit rides beside it', () => {
+    expect(collectOffers(input({ candidates: [ripe(L('61'), NOW - 1), c(L('62'), -Infinity), c('demo-a', -Infinity)] })))
+      .toEqual({ learn: ['demo-a'], act: L('61') });
+  });
+
+  it('a witnessed act is no loose act: it leaves one loose learning audit', () => {
+    expect(collectOffers(input({ candidates: [ripe('demo-a', NOW - 1), c(L('62'), -Infinity), c(L('63'), -Infinity)] })))
+      .toEqual({ learn: [L('62')], act: 'demo-a' });
+  });
+
+  it('a loose ripe id behind a busy loose call does not stop a witnessed id\'s act', () => {
+    expect(collectOffers(input({ candidates: [ripe(L('61'), NOW - 9), ripe('demo-a', NOW - 1)], busy: new Set([L('60')]) })).act)
+      .toBe('demo-a');
+  });
+});
+
 describe('collectCandidateOf: an id’s facts through Task 4’s rules', () => {
   const PASS = 60_000;
   const OBSERVE = 60_000;
