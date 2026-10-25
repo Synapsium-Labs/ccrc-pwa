@@ -1798,6 +1798,40 @@ export const MIGRATIONS: readonly string[] = [
     liftedAt  INTEGER
   );
   `,
+  // ── 31: user_version 30 -> 31 ─────────────────────────────────────────────
+  // D-5922 (coordinator-durability tail spec 2026-10-20 §4.3, plan Task DT2; #760): `drift_findings`, the reconciler's
+  // standing state: one row per thing found out of step, keyed by the subject so the same drift is the same row on
+  // every pass. `kind` is a DriftKind (read back through `isDriftKind`, never cast), `subject` the JSON of the ids it
+  // names, `detail` one redacted line. `factAt` is the fact's own time where it has one; `firstSeenAt`/`lastSeenAt`
+  // bracket the passes that found it; `clearedAt` is set ONLY by a later pass that measured the fact gone. `pushedAt`
+  // and `pushedVia` are the once-only authority for the operator push (`item`: its own push, `summary`: folded into the
+  // first-pass summary); `shadowAt` is the same once-only for the unarmed lane's record of what it would have pushed.
+  // Its writers are `CoordStore.recordDriftPass`, `markDriftPushed` and `markDriftShadowed`, nothing else.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 31` takes rule 3 (it warns, reads
+  // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE drift_findings (
+    key         TEXT    PRIMARY KEY,
+    kind        TEXT    NOT NULL,
+    subject     TEXT    NOT NULL,
+    detail      TEXT    NOT NULL,
+    factAt      INTEGER,
+    runId       INTEGER,
+    sessionId   TEXT,
+    firstSeenAt INTEGER NOT NULL,
+    lastSeenAt  INTEGER NOT NULL,
+    clearedAt   INTEGER,
+    pushedAt    INTEGER,
+    pushedVia   TEXT CHECK (pushedVia IN ('item', 'summary')),
+    shadowAt    INTEGER
+  );
+  CREATE INDEX drift_findings_pushed ON drift_findings(pushedAt);
+  CREATE INDEX drift_findings_open ON drift_findings(clearedAt, kind);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

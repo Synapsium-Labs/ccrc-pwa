@@ -19,7 +19,7 @@ import type { StallDeliveryRow, StallMailRow, StallReadFailure, StallRunRow, Sta
 // The drift decider's row shapes (D-5921) are declared by their consumer, the L1 `drift.ts`; the `drift*` reads below
 // implement them. `parseStallDetail` is the one reader of a stall observation's detail, so `driftOpenRuns` never
 // counts one as an act.
-import type { DriftAskRow, DriftDeliveryRow, DriftReviewRow, DriftRunRow } from './drift.js';
+import type { DriftAskRow, DriftDeliveryRow, DriftFindingRow, DriftReviewRow, DriftRunRow } from './drift.js';
 import { parseStallDetail } from './stall.js';
 // Stall watch settings (design 2026-10-05 §8, §11): the settings row's port and the notice-count row are declared by
 // their consumer, the L1 `stallsettings.ts`; the insert arm starts from its seed, and the no-op skip asks its compare.
@@ -125,7 +125,7 @@ import {
   type UpdateChannel,
   type BusyUpdateState, type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type RequestKind,
   type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
-  type AutoMode, type NotifyMode,
+  type AutoMode, type NotifyMode, type DriftFinding, isDriftKind,
   type WorkItemState,
 } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
@@ -4830,6 +4830,101 @@ export class CoordStore {
       return { ok: true, rows: rows.map((r) => ({
         id: driftInt(r.id, 'asks id'), at: driftInt(r.at, 'asks at'), childId: r.childId, state: r.state,
       })) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  // ── the drift reconciler's table (coordinator-durability tail spec §4.3, D-5922) ──────────────────────────
+  // Three writers, one module: `recordDriftPass`, `markDriftPushed` and `markDriftShadowed`. A finding clears ONLY
+  // because a later pass measured the fact gone. The reads are result unions, never an overloaded null.
+
+  /** One pass, one transaction: upsert every found key (`lastSeenAt = now`; `firstSeenAt`, `pushedAt` and `shadowAt`
+   *  kept; a key returning after a clear is re-opened and keeps its stamps), clear every open key not found, and prune
+   *  rows cleared more than 30 days ago. `detail` passes `redactCommand` here, the one door in. */
+  recordDriftPass(findings: readonly DriftFinding[], now: number): void {
+    tx(this.db, () => {
+      const up = this.db.prepare(
+        'INSERT INTO drift_findings (key, kind, subject, detail, factAt, runId, sessionId, firstSeenAt, lastSeenAt) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET kind = excluded.kind, ' +
+        'subject = excluded.subject, detail = excluded.detail, factAt = excluded.factAt, runId = excluded.runId, ' +
+        'sessionId = excluded.sessionId, lastSeenAt = excluded.lastSeenAt, clearedAt = NULL',
+      );
+      for (const f of findings) up.run(f.key, f.kind, f.subject, redactCommand(f.detail), f.factAt, f.runId, f.sessionId, now, now);
+      const seen = new Set(findings.map((f) => f.key));
+      const open = this.db.prepare('SELECT key FROM drift_findings WHERE clearedAt IS NULL').all() as { key: string }[];
+      const clear = this.db.prepare('UPDATE drift_findings SET clearedAt = ? WHERE key = ? AND clearedAt IS NULL');
+      for (const o of open) if (!seen.has(o.key)) clear.run(now, o.key);
+      this.db.prepare('DELETE FROM drift_findings WHERE clearedAt IS NOT NULL AND clearedAt < ?').run(now - 30 * 86_400_000);
+    });
+  }
+
+  /** Compare-and-set: stamps `pushedAt` and `pushedVia` only where `pushedAt` is NULL, and answers the keys it changed. */
+  markDriftPushed(keys: readonly string[], now: number, via: 'item' | 'summary'): string[] {
+    return tx(this.db, () => {
+      const set = this.db.prepare('UPDATE drift_findings SET pushedAt = ?, pushedVia = ? WHERE key = ? AND pushedAt IS NULL');
+      return keys.filter((k) => Number(set.run(now, via, k).changes) === 1);
+    });
+  }
+
+  /** The unarmed lane's once-only: stamps `shadowAt` where it is NULL, answers the keys it changed. */
+  markDriftShadowed(keys: readonly string[], now: number): string[] {
+    return tx(this.db, () => {
+      const set = this.db.prepare('UPDATE drift_findings SET shadowAt = ? WHERE key = ? AND shadowAt IS NULL');
+      return keys.filter((k) => Number(set.run(now, k).changes) === 1);
+    });
+  }
+
+  /** Every stored row, open or cleared (the lane's push choice reads the open ones, and an empty table is the first-pass
+   *  rule's trigger). `kind` is narrowed through `isDriftKind`; a row this build cannot name fails the read. */
+  driftFindingRows(): DriftReadResult<DriftFindingRow> {
+    try {
+      const rows = this.db.prepare(
+        'SELECT key, kind, subject, detail, factAt, runId, sessionId, firstSeenAt, lastSeenAt, clearedAt, pushedAt, ' +
+        'pushedVia, shadowAt FROM drift_findings ORDER BY firstSeenAt, key',
+      ).all() as { key: string; kind: string; subject: string; detail: string; factAt: unknown; runId: unknown;
+        sessionId: string | null; firstSeenAt: unknown; lastSeenAt: unknown; clearedAt: unknown; pushedAt: unknown;
+        pushedVia: string | null; shadowAt: unknown }[];
+      return { ok: true, rows: rows.map((r) => {
+        if (!isDriftKind(r.kind)) throw new Error('drift_findings kind is not a DriftKind');
+        return { key: r.key, kind: r.kind, subject: r.subject, detail: r.detail,
+          factAt: driftIntOrNull(r.factAt, 'drift_findings factAt'), runId: driftIntOrNull(r.runId, 'drift_findings runId'),
+          sessionId: r.sessionId, firstSeenAt: driftInt(r.firstSeenAt, 'drift_findings firstSeenAt'),
+          lastSeenAt: driftInt(r.lastSeenAt, 'drift_findings lastSeenAt'),
+          clearedAt: driftIntOrNull(r.clearedAt, 'drift_findings clearedAt'),
+          pushedAt: driftIntOrNull(r.pushedAt, 'drift_findings pushedAt'),
+          pushedVia: r.pushedVia === 'item' || r.pushedVia === 'summary' ? r.pushedVia : null,
+          shadowAt: driftIntOrNull(r.shadowAt, 'drift_findings shadowAt') };
+      }) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** How many findings were pushed as their own push since `dayStartMs` (the daily cap's count): `pushedVia = 'item'`
+   *  alone, so a first-pass summary spends nothing. Read from the table, so a restart keeps it. */
+  driftPushesSince(dayStartMs: number): number {
+    const r = this.db.prepare("SELECT COUNT(*) AS n FROM drift_findings WHERE pushedVia = 'item' AND pushedAt >= ?")
+      .get(dayStartMs) as { n: unknown };
+    return Number(r.n);
+  }
+
+  /** The runs and deliveries a stall OPERATOR rung already told the operator about, in mode `live` (a `shadow` row never
+   *  reached the operator): runs with a quiet-arm rung 3, deliveries with a mail-stuck rung (keyed on the delivery). */
+  driftStallToldRows(): DriftReadResult<{ readonly runId: number; readonly arm: string; readonly key: number }> {
+    try {
+      const rows = this.db.prepare(
+        "SELECT runId, CAST(detail AS TEXT) AS detail FROM run_events WHERE CAST(detail AS TEXT) LIKE 'stall%'",
+      ).all() as { runId: unknown; detail: string }[];
+      const out: { runId: number; arm: string; key: number }[] = [];
+      for (const r of rows) {
+        const p = parseStallDetail(r.detail);
+        if (p === null || p.mode !== 'live') continue;
+        if ((p.arm === 'quiet' && p.rung === 3) || p.arm === 'mail-stuck') {
+          out.push({ runId: driftInt(r.runId, 'run_events runId'), arm: p.arm, key: p.key });
+        }
+      }
+      return { ok: true, rows: out };
     } catch (err) {
       return { ok: false, detail: err instanceof Error ? err.message : String(err) };
     }

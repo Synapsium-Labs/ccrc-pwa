@@ -19,8 +19,8 @@ import { STOP_DONE_DISABLED_MARKER } from '../src/stopDone.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER } from '../src/turnidle.js';
 import { isMarkerState } from '../../shared/api.js';
 import {
-  ASKS_DISABLED_MARKER, COLLECT_LOOSE_LIVE_MARKER, NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER,
-  SWITCHES, markerSwitchNames, readSwitches,
+  ASKS_DISABLED_MARKER, COLLECT_LOOSE_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER, NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER,
+  ORPHAN_TREE_RESCUE_LIVE_MARKER, SWITCHES, markerSwitchNames, readSwitches,
 } from '../../shared/switches.js';
 
 /** Today's marker values, typed once here as the table the switchboard must equal. `asks-disabled` is `watch.ts`'s
@@ -69,7 +69,9 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(ASKS_DISABLED_MARKER).toBe('asks-disabled');
     // D-6627: the collector's loose arm joins as a row of its own, with no writer (single-definition pins that).
     expect(COLLECT_LOOSE_LIVE_MARKER).toBe('collect-loose-live');
-    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live'].sort());
+    // D-5922: the drift reconciler's push arm, a hand-armed row with no writer in the tree.
+    expect(DRIFT_PUSH_LIVE_MARKER).toBe('drift-push-live');
+    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live'].sort());
     expect([...markerSwitchNames].sort()).toEqual(markers.sort());
   });
 

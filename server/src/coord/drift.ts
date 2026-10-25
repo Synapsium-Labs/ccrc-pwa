@@ -65,6 +65,17 @@ export interface DriftInput {
   readonly approvals: readonly DriftApprovalRow[];
 }
 
+/** One stored `drift_findings` row (D-5922): the finding plus the passes that saw it and the push's once-only stamps.
+ *  `clearedAt` null: open. `pushedAt`/`pushedVia` are both null or both set; `shadowAt` is the unarmed lane's own. */
+export interface DriftFindingRow extends DriftFinding {
+  readonly firstSeenAt: number;
+  readonly lastSeenAt: number;
+  readonly clearedAt: number | null;
+  readonly pushedAt: number | null;
+  readonly pushedVia: 'item' | 'summary' | null;
+  readonly shadowAt: number | null;
+}
+
 // ── the decider ──────────────────────────────────────────────────────────────────────────────────────────────
 
 const ACTIVE: ReadonlySet<string> = new Set(ACTIVE_RUN_STATES);

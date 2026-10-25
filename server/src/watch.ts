@@ -131,7 +131,8 @@ import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/le
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
 import type { PushPayload } from './push.js';
-import { notify } from './notice.js';
+import { notify, noticeSink } from './notice.js';
+import { runDriftPass } from './coord/driftLane.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
@@ -2712,6 +2713,7 @@ export class FleetWatcher {
       // handful of io reads per PROJECT, on an hourly / 15-minute clock.
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepLedgerReconcile().catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepDrift(registryRead.listed ? registryRead.names : null).catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepReadiness().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the DELEGATION lane (wave 3, Task 13) is a sibling at the census's own cadence, on this tick's
       // `sessions` and registry rows. It reads spool buckets over the agent link, so awaiting it would put the dialog detector and the
@@ -7150,6 +7152,17 @@ export class FleetWatcher {
    */
   async sweepLedgerReconcile(): Promise<void> {
     await this.runLane('ledgerReconcile', () => this.ledgerReconcilePass());
+  }
+
+  /** D-5922: the drift reconciler's beat. It reads and records, and pushes only behind `drift-push-live`
+   *  (`coord/driftLane.ts`); the watcher binds its ports and decides nothing. */
+  async sweepDrift(names: readonly string[] | null): Promise<void> {
+    const store = this.deps.coord;
+    if (!store) return;
+    await this.runLane('drift', () => runDriftPass({
+      coord: store, names, childMarks: this.childMarks, notice: noticeSink(this.deps), warn: (l) => { console.warn(l); },
+      measure: (id, at) => measureClaimant({ coord: store, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux }, id, at),
+    }, Date.now()));
   }
 
   private async ledgerReconcilePass(): Promise<void> {
