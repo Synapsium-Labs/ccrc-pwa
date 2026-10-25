@@ -11,7 +11,7 @@ export function nestedWouldRescueCount(doc: Record<string, unknown>): number {
   return Array.isArray(would) ? would.filter((p) => typeof p === 'string' && p !== '').length : 0;
 }
 
-/** The paths themselves, for the durable shadow journal (D-TBD-shadow-journal): the same filter as the count. */
+/** The paths themselves, for the durable shadow journal (D-6861): the same filter as the count. */
 export function nestedWouldRescuePaths(doc: Record<string, unknown>): string[] {
   const n = doc.nestedRescue;
   if (typeof n !== 'object' || n === null) return [];

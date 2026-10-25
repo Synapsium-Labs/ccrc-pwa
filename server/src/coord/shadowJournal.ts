@@ -1,4 +1,4 @@
-// DISK RETENTION shadow journal (D-TBD-shadow-journal), the server's side. L1 holds the read route's query decider; the
+// DISK RETENTION shadow journal (D-6861), the server's side. L1 holds the read route's query decider; the
 // recorder is the ONE door a shadow lane writes a verdict through, so no lane spells the row, and it never throws: a
 // journal that cannot be written costs the row and never the lane's pass (the notice funnel's rule, `notice.ts`).
 // The store (`CoordStore.recordShadowVerdict`) owns the table, its once-only key and its retention.

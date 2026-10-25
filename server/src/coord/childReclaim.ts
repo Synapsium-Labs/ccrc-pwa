@@ -36,6 +36,7 @@ import {
 import { notRanSentence } from '../unmeasured.js';
 import { recordNestedRescueShadow } from './nestedRescueShadow.js';
 import { nestedWouldRescueCount, nestedWouldRescuePaths } from '../../../shared/nestedRescue.js';
+import { SHADOW_RUNG } from '../../../shared/shadowJournal.js';
 
 /**
  * CHILD-WORKSPACE RECLAMATION, the server half (spec 2026-09-22 §5.5–§5.7).
@@ -1263,7 +1264,7 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   }
   if (audit.kind === 'refused') {
     recordNestedRescueShadow(deps, { sessionId, runId, key: String(runId), who: `${sessionId}, child of run #${runId}`,
-      count: audit.wouldRescue ?? 0, paths: audit.wouldRescuePaths ?? [] });
+      count: audit.wouldRescue ?? 0, paths: audit.wouldRescuePaths ?? [], rung: SHADOW_RUNG.reclaimRescue });
     return childReclaimRefusal(req, audit.token, audit.detail);
   }
   if (audit.childOf !== runId) {

@@ -1833,7 +1833,7 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX drift_findings_open ON drift_findings(clearedAt, kind);
   `,
   // ── 32: user_version 31 -> 32 ─────────────────────────────────────────────
-  // D-TBD-shadow-journal (disk retention): `shadow_journal`, the durable record of what an UNARMED disk
+  // D-6861 (disk retention): `shadow_journal`, the durable record of what an UNARMED disk
   // lane (`expire-child`, `stale-archive`, `nested-rescue`) would have done, so a lane can be reviewed before it is armed
   // after the 2000-row feed archive has rolled over. `key` is the once-only key (lane, subject, path, epoch), so a verdict
   // asked again after a restart is the same row; `at` is the first write; `bytes`/`inodes` are NULL where the lane does
