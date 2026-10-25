@@ -9,7 +9,6 @@
 // to an absolute fixture path. Nothing here touches a real ccd or the real HOME.
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { copyFileSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,13 +41,12 @@ describe('the agent’s exec of ccd crosses the installed launcher', () => {
     const out = path.join(fixture.home, 'started-as');
     const tree = path.join(fixture.home, 'fixture-tree');
     mkdirSync(path.join(tree, 'ccd'), { recursive: true });
-    // The publisher places the library a body pins (D-6913) and refuses a body that pins another: the stub
-    // body carries the pin of the real library, which is planted beside it. The stub never loads it.
+    // The publisher places the library a body pins (D-6913) and renders its digest into the body's one pin
+    // placeholder line: the stub body carries that placeholder, the real library is planted beside it. The stub never loads it.
     mkdirSync(path.join(tree, 'ccd', 'lib'), { recursive: true });
     copyFileSync(path.join(REPO, 'ccd', 'lib', 'disk-retention.sh'), path.join(tree, 'ccd', 'lib', 'disk-retention.sh'));
-    const libPin = createHash('sha256').update(readFileSync(path.join(REPO, 'ccd', 'lib', 'disk-retention.sh'))).digest('hex');
     writeFileSync(path.join(tree, 'ccd', 'ccd'),
-      `#!/usr/bin/env bash\n__CCD_LIB_SHA256=${libPin}\n{ printf "%s\\0" "$-"; printf "%s\\0" "$@"; } > ${JSON.stringify(out)}\n`);
+      `#!/usr/bin/env bash\n__CCD_LIB_SHA256=stamp-at-install\n{ printf "%s\\0" "$-"; printf "%s\\0" "$@"; } > ${JSON.stringify(out)}\n`);
     copyFileSync(path.join(REPO, 'ccd', 'ccd-entry.py'), path.join(tree, 'ccd', 'ccd-entry.py'));
     copyFileSync(path.join(REPO, 'ccd', 'ccd-entry-install.py'), path.join(tree, 'ccd', 'ccd-entry-install.py'));
     const python = spawnSync('python3', ['-IS', '-c', 'import os,sys;sys.stdout.write(os.path.realpath(sys.executable))'],

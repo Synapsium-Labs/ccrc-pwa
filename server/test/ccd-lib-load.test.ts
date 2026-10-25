@@ -50,7 +50,7 @@ function sourced(ccd: string, extra: NodeJS.ProcessEnv = {}): { out: string; err
 
 describe('the library and the pin', () => {
   it('the committed ccd carries the pin placeholder, never a digest; the library ends in one newline and holds no NUL', () => {
-    // The pin gets the install-time treatment line 2 got (D-6927): a committed digest would change, and conflict, in every
+    // The pin gets the install-time treatment line 2 got (#1525): a committed digest would change, and conflict, in every
     // PR that touches the library. ccd-entry-install.py renders it into the installed body.
     const bytes = fs.readFileSync(LIB);
     const ccdText = fs.readFileSync(CCD, 'utf8');

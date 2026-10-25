@@ -6,12 +6,12 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, lstatSync, chmodSync, readdirSync, appendFileSync, renameSync, rmSync, symlinkSync, readlinkSync, utimesSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { itLinux } from './platformFixtures.js';
-import { markGenerated } from '../../shared/mark.mjs';
+import { installedCcdBody } from './ccdWsHelpers.js';
 import { installVersionedTree, keepDigest } from './installTreeFixture.js';
 import {
   REPO,
@@ -57,13 +57,10 @@ import {
   verKeptAnswer,
 } from './ccrc-updateFixture.js';
 
-/** The installed body for a tree's ccd source: ccd-entry-install.py swaps the source's line-2 placeholder, in place,
- *  for the marker `markGenerated` writes (install-time stamping; ccd-install-stamp.test.ts owns the rule). */
-const installedBodyOf = (src: string): string => {
-  const lines = readFileSync(src, 'utf8').split('\n');
-  if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
-  return markGenerated(lines.join('\n'));
-};
+/** The installed body for a tree's ccd source: ccd-entry-install.py renders the library pin from the tree's library,
+ *  then swaps the source's line-2 placeholder, in place, for the marker (ccd-install-stamp.test.ts owns the rule). */
+const installedBodyOf = (src: string): string =>
+  installedCcdBody(readFileSync(src, 'utf8'), readFileSync(join(dirname(src), 'lib', 'disk-retention.sh')));
 
 describe('ccrc update: restore arm 1 — a flip back to the kept previous version (W6 Task 4)', () => {
   const GATE_DENIED = 'gate: GET http://127.0.0.1:7788/health got no answer (curl exited 7)';

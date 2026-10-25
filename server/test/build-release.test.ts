@@ -418,7 +418,8 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
   // into a fixture HOME, reads ccrc-unmodified and the launcher accepts it.
   it('the extracted tarball\'s ccd installs a body that verifies as ccrc-unmodified', () => {
     const real = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
-    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py'] as const;
+    // With the library the body pins (D-6913): the installer renders its digest into the body, then stamps it.
+    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'ccd/lib/disk-retention.sh'] as const;
     const home = mkTmp('build-release-ccd-stamp-');
     const root = fixtureRepo(home, { tag: 'v1.2.3', files: Object.fromEntries(pair.map((rel) => [rel, real(rel)])) });
     const out = join(home, 'out');
@@ -432,7 +433,10 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     expect(r.status, r.stderr).toBe(0);
     const installed = readFileSync(join(box, '.local', 'libexec', 'ccrc', path.basename(pair[0])), 'utf8');
     expect(verifyMarker(installed)).toBe('ccrc-unmodified');
+    expect(installed, 'the installed body pins the library it shipped with').toContain(
+      `\n__CCD_LIB_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[3]))).digest('hex')}\n`);
     expect(verifyMarker(readFileSync(join(dest, pair[0]), 'utf8')), 'the release tree itself carries no stamp').toBe('foreign');
+    expect(readFileSync(join(dest, pair[0]), 'utf8'), 'nor a library digest').toContain('\n__CCD_LIB_SHA256=stamp-at-install\n');
   });
 
   // ── Stage 4, Task 6: the artifact carries its own identity ──────────────

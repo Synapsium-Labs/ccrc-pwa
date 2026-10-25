@@ -44216,9 +44216,14 @@ cmd_ws_title() {   # ccd ws-title --session <id> (--title <text> | --clear) — 
 
 # ── THE DISK-RETENTION LIBRARY (D-6913; GitHub #1279) ──
 # The fleet disk-retention verbs live in ccd/lib/disk-retention.sh, installed beside this body and loaded HERE, once every
-# function and variable they call exists. The digest below pins that file's bytes; `bash ccd/ccrc restamp ccd/ccd` rewrites it
-# (and the stamp on line 2) after the file changes. The load READS the file once, hashes what it read and evaluates what it
-# hashed, so no byte is checked and then swapped. A file that is absent, a link, unreadable or not these bytes refuses the
+# function and variable they call exists. The pin below names that file's SHA-256, and like the stamp on line 2 it is written AT
+# INSTALL TIME (D-6913, the ruling that gave the pin #1525's treatment): the committed line is the fixed placeholder
+# `stamp-at-install`, so no PR ever conflicts on it, and ccd/ccd-entry-install.py renders the digest of the library it publishes
+# into the installed body BEFORE it stamps that body, so the stamp (and the launcher's digest of the stamped bytes) covers the
+# pin. An INSTALLED body (line 2 a real stamp) is checked; a SOURCE CHECKOUT is the one body with BOTH placeholders still in
+# place, which no installed body can be, and it skips the digest check because nothing was installed; a body with a real
+# stamp and a placeholder pin is a broken install and refuses (lib-digest). The load READS the file once, hashes what it
+# read and evaluates what it hashed, so no byte is checked and then swapped. A file that is absent, a link, unreadable or not these bytes refuses the
 # start, whatever the verb: ccd is one program, and its other half is not what was shipped. That is the launcher's own
 # posture toward a body that is not the one it pins (`ccd/ccd-entry.py`), and the same trust surface: runtime PATH and the
 # hashing tool it selects are trusted prerequisites, and a same-user writer who replaces the library, this line and the
@@ -44227,7 +44232,7 @@ cmd_ws_title() {   # ccd ws-title --session <id> (--title <text> | --clear) — 
 # Where the load looks for a hashing tool when the one `_plat_sha256` selects is not on PATH, in order. Absolute, fixed, never
 # from the environment: these are the platforms' standard locations (GNU coreutils, perl's shasum, BSD/macOS sha256).
 __CCD_HASH_TOOLS=(/usr/bin/sha256sum /bin/sha256sum /usr/local/bin/sha256sum /usr/bin/shasum /bin/shasum /usr/local/bin/shasum /sbin/sha256 /usr/bin/sha256)
-__CCD_LIB_SHA256=31924116cdabd3691ebfe9c3d374e3ed95474a54297538227ba4680f8d0bc536
+__CCD_LIB_SHA256=stamp-at-install
 _ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's functions defined; else the refusal line on stderr and rc 1, nothing evaluated
   local self="${BASH_SOURCE[0]}" dir=. f src sum
   [[ "$self" == */* ]] && dir="${self%/*}"
@@ -44237,6 +44242,19 @@ _ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's functions defined; e
     return 1
   fi
   src=$(<"$f") || { printf 'ccd: refused (lib-unreadable): %s could not be read; nothing was run\n' "$f" >&2; return 1; }
+  # INSTALLED OR SOURCE CHECKOUT (D-6913). The installer renders the pin and stamps line 2 together, so a pin still at its
+  # placeholder is either a source checkout (line 2 still the placeholder too: nothing was installed, nothing to check against)
+  # or a broken install (line 2 really stamped): the second refuses. Line 2 is read from this file, as bash already read it.
+  if [[ "$__CCD_LIB_SHA256" == stamp-at-install ]]; then
+    local l1='' l2=''
+    { IFS= read -r l1 && IFS= read -r l2; } < "$self" 2>/dev/null || :
+    if [[ "$l2" == '# ccrc:stamp-at-install'* ]]; then
+      eval "$src"
+      return
+    fi
+    printf 'ccd: refused (lib-digest): this ccd is stamped as installed but its library pin was never rendered, so %s cannot be checked — a broken install (re-run: ccrc update); nothing was run\n' "$f" >&2
+    return 1
+  fi
   # THE HASHING TOOL FAILS CLOSED. The one `_plat_sha256` selects is used when it is on PATH; when it is not (a stripped PATH, as
   # `ccd version`'s python3-absent case runs under), the standard absolute locations are tried, so a PATH without the tool still
   # hashes and the verb still reaches the fault it really has. Only when no hashing tool exists anywhere does the load refuse

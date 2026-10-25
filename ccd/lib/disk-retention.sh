@@ -13,8 +13,9 @@
 # body pins THIS file's (`__CCD_LIB_SHA256`, near the foot of ccd/ccd), reads the file once into a variable, hashes that
 # variable, and evaluates that same variable, so the bytes checked are the bytes run. A missing, linked or changed file
 # refuses the start (`ccd: refused (lib-...)`, status 125) before any verb runs. The path is the body's own directory, taken
-# from `BASH_SOURCE`; no environment variable and no argument names it. After editing this file, `bash ccd/ccrc restamp
-# ccd/ccd` rewrites the pin and the generated stamp together. The file ends in exactly one newline and holds no NUL byte.
+# from `BASH_SOURCE`; no environment variable and no argument names it. The pin is written at install time, never committed
+# (ccd/ccd-entry-install.py renders this file's digest into the installed body, then stamps it), so editing this file needs
+# no restamp. The file ends in exactly one newline and holds no NUL byte.
 
 # @ccd-lib:orphan
 # ── orphan trees: the census, and the ONE ladder (DR-16, D-6628, fleet-disk-retention spec §2.3) ──

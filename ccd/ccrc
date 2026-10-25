@@ -27140,18 +27140,6 @@ cmd_restamp() {
       refused-*)   _ccrc_die "restamp: $f: hook helpers refused (${verdict#refused-})" ;;
     esac
   fi
-  # ccd pins its library's SHA-256 (D-6913): the pin is rewritten from the sibling file BEFORE the stamp, which covers it.
-  if [ -f "$dir/lib/disk-retention.sh" ] && grep -q '^__CCD_LIB_SHA256=' "$f" 2>/dev/null; then
-    # ccd hashes the library as bash reads it (NULs and every trailing newline dropped, one newline added back); this pin and
-    # ccd-entry-install.py hash the raw bytes. Only a file that ends in exactly one newline and has no NUL reads the same to all three.
-    local lsum ltail; ltail="$(tail -c 2 -- "$dir/lib/disk-retention.sh" | od -An -tx1 | tr -d ' \n')"
-    if [[ "$ltail" != *0a || "$ltail" == 0a0a ]] || ! tr -d '\000' < "$dir/lib/disk-retention.sh" | cmp -s - "$dir/lib/disk-retention.sh"; then
-      _ccrc_die "restamp: $dir/lib/disk-retention.sh must end in exactly one newline and contain no NUL byte (ccd hashes it as bash reads it, which drops both); fix the file, then restamp again. Nothing was written."
-    fi
-    lsum="$(_plat_sha256 < "$dir/lib/disk-retention.sh" | cut -d' ' -f1)"
-    [[ "$lsum" =~ ^[0-9a-f]{64}$ ]] || _ccrc_die "restamp: $dir/lib/disk-retention.sh could not be hashed"
-    sed "s/^__CCD_LIB_SHA256=.*/__CCD_LIB_SHA256=$lsum/" "$f" > "$f.restamp.$$" && cat "$f.restamp.$$" > "$f"; rm -f -- "$f.restamp.$$"
-  fi
   verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync } from "node:fs"; import { writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";

@@ -18,11 +18,19 @@ D-6634, D-6638).
   at a fixed standard location (`__CCD_HASH_TOOLS`: `/usr/bin/sha256sum`, `/usr/bin/shasum`, `/sbin/sha256`, …), so a
   stripped PATH still hashes and the verb still names what is really missing (`ccd version` names python3); only a
   system with no hashing tool anywhere refuses, with one quiet `lib-hash` line, and the library is never evaluated
-  unchecked. The body pins the library's SHA-256 (`__CCD_LIB_SHA256`), `ccrc restamp
-  ccd/ccd` rewrites that pin, and `ccd/ccd-entry-install.py` publishes the library first in both install lanes and
-  refuses a tree whose library its body does not pin. Restamp and the publisher refuse a library that does not end in
-  exactly one newline or that carries a NUL byte, because the body hashes the file as bash reads it and they hash the
-  raw bytes.
+  unchecked. The body pins the library's SHA-256 (`__CCD_LIB_SHA256`), and the pin gets the install-time treatment
+  #1525 gave line 2 (operator ruling, 2026-10-25): the committed `ccd/ccd` carries the fixed placeholder
+  `__CCD_LIB_SHA256=stamp-at-install`, never a digest, so no PR conflicts on it; `ccd/ccd-entry-install.py` computes the
+  sha256 of the library bytes it publishes, renders it into the installed body BEFORE it stamps the body (so the stamp,
+  and the launcher's digest of the stamped bytes, cover the pin), publishes the library first in both install lanes, and
+  refuses a tree whose rendered pin is not exactly one line naming that library. `ccrc restamp ccd/ccd` stays refused.
+  The publisher refuses a library that does not end in exactly one newline or that carries a NUL byte, because the body
+  hashes the file as bash reads it and the publisher hashes the raw bytes.
+- **Installed or source checkout.** An INSTALLED body (its line 2 a real stamp) whose pin does not match the library
+  refuses with `lib-digest`; one whose pin is still the placeholder is a broken install and refuses with `lib-digest`
+  too. A SOURCE CHECKOUT is the one body with BOTH the line-2 placeholder and the pin placeholder in place, which no
+  installed body can be; it skips the digest check, because nothing was installed, and still refuses a missing or
+  linked library (`lib-missing`).
 
 ## Ruled acceptable: the DR lines that stay inline in `ccd/ccd`
 

@@ -56,9 +56,16 @@
 #
 # THE LIBRARY (D-6913, GitHub #1279). The body loads one more file,
 # `lib/disk-retention.sh`, from the `lib/` directory beside it, and pins that
-# file's SHA-256 in its own text (`__CCD_LIB_SHA256`). `install` publishes it
-# FIRST, by the same stage-and-rename as the body, and refuses a tree whose
-# library is not the one its body pins BEFORE anything moves: a body published
+# file's SHA-256 in its own text (`__CCD_LIB_SHA256`). Like the body's stamp,
+# the pin is written HERE, at install time, never committed: the committed
+# line is the fixed placeholder `__CCD_LIB_SHA256=stamp-at-install`, and
+# `render_lib_pin` writes the digest of the library this run publishes into
+# the body BEFORE `stamp_body` stamps it, so the stamp (and the launcher's
+# digest of the stamped bytes) covers the pin. The body skips its check only
+# when BOTH placeholders still stand (a source checkout), which no body
+# installed here can be. `install` publishes the library FIRST, by the same
+# stage-and-rename as the body, and refuses a tree whose rendered pin is not
+# the library it publishes BEFORE anything moves: a body published
 # ahead of a library it cannot verify would refuse every ccd start. A body that
 # stands from before the library existed does not read it, so publishing it first
 # changes nothing for a ccd start until the new body lands. A standing body that
@@ -70,9 +77,9 @@
 #
 # The library must end in exactly one newline and carry no NUL byte. The body
 # hashes the file as bash reads it (`$(<file)` drops NULs and every trailing
-# newline; the body adds one back), while this publisher and `ccrc restamp` hash
-# the raw bytes: only such a file reads as the same bytes to all three, so any
-# other file is refused here before anything moves.
+# newline; the body adds one back), while this publisher hashes the raw bytes:
+# only such a file reads as the same bytes to both, so any other file is
+# refused here before anything moves.
 #
 # STANDARD LIBRARY ONLY. Nothing here trusts the environment: `-I` already
 # ignores every PYTHON* variable, and the paths it writes come from argv.
@@ -96,6 +103,7 @@ SHEBANG_MAX = 127
 SHEBANG_FLAGS = ' -IS'
 
 LIB_PIN = re.compile(rb'^__CCD_LIB_SHA256=([0-9a-f]{64})$', re.M)
+LIB_PIN_PLACEHOLDER = re.compile(rb'^__CCD_LIB_SHA256=stamp-at-install$', re.M)
 PLACEHOLDER_PYTHON = '@CCRC_' + 'PYTHON3@'
 PLACEHOLDER_DIGEST = '@CCRC_' + 'CCD_SHA256@'
 RESIDUE = re.compile(r'@CCRC_[A-Z0-9_]+@')
@@ -151,6 +159,12 @@ def stamp_body(data):
         del lines[idx]
     lines.insert(idx, MARKER_PREFIX + hashlib.sha256(b'\n'.join(lines)).hexdigest().encode('ascii'))
     return b'\n'.join(lines)
+
+
+def render_lib_pin(data, lib_digest):
+    """The body with every pin placeholder line replaced, in place, by the library's digest (THE LIBRARY, above).
+    `install` then requires exactly one pin, naming the library it publishes; this only renders."""
+    return LIB_PIN_PLACEHOLDER.sub(b'__CCD_LIB_SHA256=' + lib_digest.encode('ascii'), data)
 
 
 class Refused(Exception):
@@ -440,19 +454,23 @@ def sweep(directory, pattern, is_dir):
 
 def install(tree, home):
     python = check_interpreter()
-    body_data = stamp_body(read_regular(os.path.join(tree, *BODY_SOURCE.split('/'))))
-    template = read_regular(os.path.join(tree, *TEMPLATE_SOURCE.split('/'))).decode('utf-8')
-    digest = hashlib.sha256(body_data).hexdigest()
-    entry_data = render(template, python, digest)
     lib_data = read_regular(os.path.join(tree, *LIB_SOURCE.split('/')))
     if b'\0' in lib_data or not lib_data.endswith(b'\n') or lib_data.endswith(b'\n\n'):
         raise Refused('%s must end in exactly one newline and contain no NUL byte: the body hashes the file as bash reads it,'
-                      ' which drops NULs and trailing newlines, so any other file is one the body would refuse; fix the file,'
-                      ' then run `ccrc restamp ccd/ccd` in the source tree' % LIB_SOURCE)
-    pins = LIB_PIN.findall(body_data)
-    if len(pins) != 1 or pins[0].decode('ascii') != hashlib.sha256(lib_data).hexdigest():
-        raise Refused('%s is not the library %s pins (%d pin line(s)): a body published ahead of a library it cannot verify'
-                      ' would refuse every ccd start; run `ccrc restamp ccd/ccd` in the source tree' % (LIB_SOURCE, BODY_SOURCE, len(pins)))
+                      ' which drops NULs and trailing newlines, so any other file is one the body would refuse; fix the file'
+                      ' in the source tree' % LIB_SOURCE)
+    lib_digest = hashlib.sha256(lib_data).hexdigest()
+    # The pin first, then the stamp over it, then the launcher's digest over both (THE LIBRARY, above).
+    pinned = render_lib_pin(read_regular(os.path.join(tree, *BODY_SOURCE.split('/'))), lib_digest)
+    pins = LIB_PIN.findall(pinned)
+    if len(pins) != 1 or pins[0].decode('ascii') != lib_digest:
+        raise Refused('%s is not the library %s pins once rendered (%d pin line(s)): a body published ahead of a library it'
+                      ' cannot verify would refuse every ccd start; %s must carry exactly one `__CCD_LIB_SHA256=stamp-at-install`'
+                      ' line, which this install renders' % (LIB_SOURCE, BODY_SOURCE, len(pins), BODY_SOURCE))
+    body_data = stamp_body(pinned)
+    template = read_regular(os.path.join(tree, *TEMPLATE_SOURCE.split('/'))).decode('utf-8')
+    digest = hashlib.sha256(body_data).hexdigest()
+    entry_data = render(template, python, digest)
 
     entry_dest = os.path.join(home, *ENTRY_DEST.split('/'))
     body_dest = os.path.join(home, *BODY_DEST.split('/'))

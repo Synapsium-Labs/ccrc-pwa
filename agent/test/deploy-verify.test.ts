@@ -36,6 +36,7 @@
 // that as a second net.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -198,10 +199,13 @@ function sweepStubs(home: string, units: Array<{ unit: string; isActive: string[
   return bin;
 }
 
-/** What the pair installer publishes for the tree's ccd: its line-2 placeholder swapped, in place, for the
- *  marker `markGenerated` writes (install-time stamping; server/test/ccd-install-stamp.test.ts owns the rule). */
+/** What the pair installer publishes for the tree's ccd: its library pin placeholder rendered to the digest of the
+ *  tree's library (D-6913), then its line-2 placeholder swapped, in place, for the marker `markGenerated` writes
+ *  (install-time stamping; server/test/ccd-install-stamp.test.ts owns the rule). */
 const stampedCcd = (dir: string): Buffer => {
-  const lines = readFileSync(path.join(dir, 'ccd'), 'utf8').split('\n');
+  const libDigest = createHash('sha256').update(readFileSync(path.join(dir, 'lib', 'disk-retention.sh'))).digest('hex');
+  const lines = readFileSync(path.join(dir, 'ccd'), 'utf8')
+    .replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${libDigest}`).split('\n');
   if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
   return Buffer.from(markGenerated(lines.join('\n')));
 };
