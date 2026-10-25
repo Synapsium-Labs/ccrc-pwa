@@ -79,10 +79,37 @@ describe('D-6793: a lane whose settings.json defaults to Fable spawns Opus', () 
     seed(); settings({ model: 'fable' });
     expect(spawnLine()).toContain(' --model opus ');
   });
-  it('class default + the [1m] alias via ANTHROPIC_DEFAULT_<ALIAS>_MODEL: --model opus', () => {
+  it('class default + the best alias: --model opus', () => {
     seed(); h.sh(`_reg_set ${ID} class default`);
     settings({ model: 'best[1m]' });
     expect(spawnLine()).toContain(' --model opus ');
+  });
+  it('the alias remap rung: model=custom with env.ANTHROPIC_DEFAULT_CUSTOM_MODEL naming a -fable- id: --model opus', () => {
+    seed(); settings({ model: 'custom', env: { ANTHROPIC_DEFAULT_CUSTOM_MODEL: 'claude-fable-5-20260101' } });
+    expect(spawnLine()).toContain(' --model opus ');
+  });
+  it('the remap names a non-Fable id: no flag', () => {
+    seed(); settings({ model: 'custom', env: { ANTHROPIC_DEFAULT_CUSTOM_MODEL: 'claude-opus-5' } });
+    expect(spawnLine()).not.toContain('--model');
+  });
+  it('the env.ANTHROPIC_MODEL rung wins over model: Fable there is Opus, an Opus there beats a Fable model', () => {
+    seed(); settings({ model: 'opus', env: { ANTHROPIC_MODEL: 'fable' } });
+    expect(spawnLine()).toContain(' --model opus ');
+    h.sh('rm -f "$HOME/ccd-calls"');
+    settings({ model: 'fable', env: { ANTHROPIC_MODEL: 'opus' } });
+    expect(spawnLine()).not.toContain('--model');
+  });
+  it('the full-id rung: a -fable- model id: --model opus', () => {
+    seed(); settings({ model: 'claude-fable-5-20260101' });
+    expect(spawnLine()).toContain(' --model opus ');
+  });
+  it('a non-Anthropic lane whose settings default is fable composes no --model', () => {
+    seed(); h.sh(`_reg_set ${ID} wrapper gpt`);
+    const d = h.sh('_cfg_dir gpt').trim();
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'settings.json'), JSON.stringify({ model: 'fable' }));
+    expect(h.sh('_is_anthropic_backend gpt && echo yes || echo no').trim()).toBe('no');
+    expect(spawnLine()).not.toContain('--model');
   });
   it('a record naming a class is never overridden', () => {
     seed(); h.sh(`_reg_set ${ID} class sonnet`); settings({ model: 'fable' });
@@ -98,12 +125,22 @@ describe('D-6793: a lane whose settings.json defaults to Fable spawns Opus', () 
     settings('{ not json');
     expect(spawnLine()).not.toContain('--model');
   });
-  it('the resolver lines are the doctor check\'s (one ladder, two scripts)', () => {
-    const lines = (f: string, anchor: string): string[] => fs.readFileSync(path.join(__dirname, '..', '..', 'ccd', f), 'utf8')
-      .split('\n').map((l) => l.trim()).filter((l) => l.startsWith(anchor));
-    for (const a of ['if (set(env.ANTHROPIC_MODEL))', 'else if (set(j.model))', 'else if (set(env.ANTHROPIC_DEFAULT_MODEL))', 'const alias = v.trim()', 'const rk = "ANTHROPIC_DEFAULT_"']) {
-      expect(lines('ccd', a).length, a).toBeGreaterThan(0);
-      expect(lines('ccrc-doctor-checks', a).length, a).toBeGreaterThan(0);
-    }
+  it('the resolver is the doctor check\'s: the whole ladder, env check through the rk remap, line for line', () => {
+    const body = (f: string): string[] => {
+      const all = fs.readFileSync(path.join(__dirname, '..', '..', 'ccd', f), 'utf8').split('\n').map((l) => l.trim());
+      const from = all.findIndex((l) => l.startsWith('const env = j.env'));
+      const to = all.findIndex((l, i) => i > from && l.startsWith('const rk = "ANTHROPIC_DEFAULT_"'));
+      expect(from, `${f} start`).toBeGreaterThanOrEqual(0);
+      expect(to, `${f} end`).toBeGreaterThan(from);
+      // The scripts differ only in what they DO with a match (the doctor names the key and writes a message, ccd
+      // sets a flag): cut each branch line at that action, so every comparison, the alias line (its `[1m]` suffix
+      // regex included) and the rk remap are compared whole.
+      return all.slice(from, to + 3)
+        .map((l) => l.replace(/\)\s*(\{ key = |v = |said = ).*$/, ')'))
+        .filter((l) => /^(const env|const set|const alias|if \(|else if \(|const rk)/.test(l));
+    };
+    const ccd = body('ccd'); const doctor = body('ccrc-doctor-checks');
+    expect(ccd.length).toBeGreaterThan(5);
+    expect(ccd).toEqual(doctor);
   });
 });
