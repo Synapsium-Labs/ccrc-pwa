@@ -34,3 +34,29 @@ export function addedLines(diff: string): Map<string, Set<number>> {
   }
   return out;
 }
+
+/** Per file (repo-relative path on the BASE side), the 1-based line numbers a unified-0 `diff` removes. */
+export function removedLines(diff: string): Map<string, Set<number>> {
+  const out = new Map<string, Set<number>>();
+  let file = '';
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('--- ')) { file = line.startsWith('--- a/') ? line.slice(6) : ''; continue; }
+    const h = /^@@ -(\d+)(?:,(\d+))? \+/.exec(line);
+    if (!h || !file) continue;
+    const start = Number(h[1]); const count = h[2] === undefined ? 1 : Number(h[2]);
+    const set = out.get(file) ?? new Set<number>();
+    for (let n = start; n < start + count; n++) set.add(n);
+    out.set(file, set);
+  }
+  return out;
+}
+
+/** The text of `rel` (repo-relative) at the merge-base with `origin/main`, or null when it has none there. */
+export function mergeBaseText(cwd: string, rel: string): string | null {
+  try {
+    const base = execFileSync('git', ['merge-base', 'origin/main', 'HEAD'], { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+    return execFileSync('git', ['show', `${base}:${rel}`], { cwd, encoding: 'utf8', stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
+  } catch {
+    return null;
+  }
+}

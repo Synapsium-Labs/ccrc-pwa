@@ -13,7 +13,7 @@ import type { FastifyReply } from 'fastify';
 import { GENERIC_REFUSALS, REFUSAL_STATUS, ROUTE_REFUSALS, type RouteRefusal } from '../../shared/refusal.js';
 import { CLAIM_REFUSALS } from '../../shared/box-token.js';
 import { refuseRoute } from '../src/refuse.js';
-import { addedLines, mergeBaseDiff } from './mergeBase.js';
+import { addedLines, mergeBaseDiff, mergeBaseText, removedLines } from './mergeBase.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.resolve(here, '..', 'src');
@@ -308,15 +308,30 @@ function againstCeilings(counts: Record<string, number>, ceilings: Readonly<Reco
   return { over, lower };
 }
 
-/** Literal-status sends that start on a line `diff` adds, read from the current text of each file. */
-function addedInlineSends(diff: string, textOf: (rel: string) => string | null): string[] {
+/** An inline send that bypasses the typed helpers: literal status, or a computed one that is not the table. */
+const isInline = (s: Send): boolean => s.status !== null || !TABLE_STATUS.test(s.arg);
+/** A send's identity for cancelling: its status argument and its word, so a body edit still matches its old self. */
+const sendKey = (s: Send): string => `.code(${s.arg}) ${s.word ?? '?'}`;
+
+/** Inline refusal sends the diff NETS in: each send starting on an added line is cancelled against one
+ *  starting on a removed line with the same status and word (any file), so an edit, a re-indent, a
+ *  move between files or a wrap in a helper passes, and only a send with no removed twin is named. */
+function addedInlineSends(diff: string, textOf: (rel: string) => string | null, baseTextOf: (rel: string) => string | null): string[] {
+  const sendsOn = (text: string | null, lines: Set<number>): Send[] =>
+    text === null ? [] : refusalSends(text).filter((s) => isInline(s) && lines.has(s.line));
+  const inSrc = (f: string): boolean => f.startsWith('server/src/') && f.endsWith('.ts');
+  const removedPool = new Map<string, number>();
+  for (const [file, lines] of removedLines(diff)) {
+    if (!inSrc(file)) continue;
+    for (const s of sendsOn(baseTextOf(file), lines)) removedPool.set(sendKey(s), (removedPool.get(sendKey(s)) ?? 0) + 1);
+  }
   const out: string[] = [];
   for (const [file, lines] of addedLines(diff)) {
-    if (!file.startsWith('server/src/') || !file.endsWith('.ts')) continue;
-    const text = textOf(file.slice('server/src/'.length));
-    if (text === null) continue;
-    for (const s of refusalSends(text)) {
-      if (s.status !== null && lines.has(s.line)) out.push(`${file} line ${s.line}: .code(${s.arg})`);
+    if (!inSrc(file)) continue;
+    for (const s of sendsOn(textOf(file), lines)) {
+      const k = sendKey(s); const left = removedPool.get(k) ?? 0;
+      if (left > 0) { removedPool.set(k, left - 1); continue; }
+      out.push(`${file} line ${s.line}: .code(${s.arg})`);
     }
   }
   return out;
@@ -351,28 +366,49 @@ describe('the inline-send ratchet (D-5381) — ceilings, and none added', () => 
     expect(againstCeilings({ 'a.ts': 2 }, { 'a.ts': 2 })).toEqual({ over: [], lower: [] });
   });
 
-  it('a fixture diff that adds one literal-status refusal send fails the added-lines rule', () => {
-    const text = ['const a = 1;', "reply.code(409).send({ ok: false, error: 'gone' });", 'const b = 2;'].join('\n');
-    const diff = ['--- a/server/src/x.ts', '+++ b/server/src/x.ts', '@@ -1,0 +2 @@', "+reply.code(409).send({ ok: false, error: 'gone' });"].join('\n');
-    expect(addedInlineSends(diff, () => text)).toEqual(['server/src/x.ts line 2: .code(409)']);
+  it('the added-lines rule fails a net-new send, literal or computed, and passes an edit, a re-indent, a move or a wrap', () => {
+    const hdr = (f: string, g = f): string[] => [`--- a/${f}`, `+++ b/${g}`];
+    const lit = (w: string, extra = ''): string => `reply.code(409).send({ ok: false, error: '${w}'${extra} });`;
+    const none = (): null => null;
+    // One literal-status send added.
+    const text = ['const a = 1;', lit('gone'), 'const b = 2;'].join('\n');
+    const add = [...hdr('server/src/x.ts'), '@@ -1,0 +2 @@', `+${lit('gone')}`].join('\n');
+    expect(addedInlineSends(add, () => text, none)).toEqual(['server/src/x.ts line 2: .code(409)']);
     // The same send already on the base side (the diff touches another line) is slack, not an addition.
-    const other = ['--- a/server/src/x.ts', '+++ b/server/src/x.ts', '@@ -3 +3 @@', '+const b = 2;'].join('\n');
-    expect(addedInlineSends(other, () => text)).toEqual([]);
-    // A refuseRoute call and a computed-status table send are not literal-status sends.
+    const other = [...hdr('server/src/x.ts'), '@@ -3 +3 @@', '+const b = 2;'].join('\n');
+    expect(addedInlineSends(other, () => text, none)).toEqual([]);
+    // A computed status that is not the table is an addition too; a refuseRoute call and a table send are not.
+    const comp = "reply.code(x ? 409 : 404).send({ ok: false, error: 'gone' });";
+    const addComp = [...hdr('server/src/x.ts'), '@@ -0,0 +1 @@', `+${comp}`].join('\n');
+    expect(addedInlineSends(addComp, () => comp, none)).toEqual(['server/src/x.ts line 1: .code(x ? 409 : 404)']);
     const ok = ["refuseRoute(reply, 'gone');", 'reply.code(REFUSAL_STATUS[e]).send({ ok: false, error: e });'].join('\n');
-    const diff2 = ['+++ b/server/src/y.ts', '@@ -0,0 +1,2 @@'].join('\n');
-    expect(addedInlineSends(diff2, () => ok)).toEqual([]);
+    const diff2 = [...hdr('server/src/y.ts'), '@@ -0,0 +1,2 @@'].join('\n');
+    expect(addedInlineSends(diff2, () => ok, none)).toEqual([]);
+    // An edited send (a body field added), a re-indented one and a wrapped one cancel against their removed selves.
+    const before = ['function f() {', lit('gone'), '}'].join('\n');
+    const edited = ['function f() {', lit('gone', ', detail: 1'), '}'].join('\n');
+    const editDiff = [...hdr('server/src/x.ts'), '@@ -2 +2 @@', `-${lit('gone')}`, `+${lit('gone', ', detail: 1')}`].join('\n');
+    expect(addedInlineSends(editDiff, () => edited, () => before)).toEqual([]);
+    const wrapped = ['function f() {', '  if (c) {', '    ' + lit('gone'), '  }', '}'].join('\n');
+    const wrapDiff = [...hdr('server/src/x.ts'), '@@ -2 +2,3 @@', `-${lit('gone')}`, '+  if (c) {', `+    ${lit('gone')}`, '+  }'].join('\n');
+    expect(addedInlineSends(wrapDiff, () => wrapped, () => before)).toEqual([]);
+    // A send moved between files cancels; a second copy of it does not.
+    const moveDiff = [...hdr('server/src/a.ts'), '@@ -2 +1,0 @@', `-${lit('gone')}`, ...hdr('server/src/b.ts'), '@@ -0,0 +1 @@', `+${lit('gone')}`].join('\n');
+    expect(addedInlineSends(moveDiff, () => lit('gone'), () => before)).toEqual([]);
+    const copyDiff = [moveDiff, ...hdr('server/src/c.ts'), '@@ -0,0 +1 @@', `+${lit('gone')}`].join('\n');
+    expect(addedInlineSends(copyDiff, () => lit('gone'), () => before)).toEqual(['server/src/c.ts line 1: .code(409)']);
   });
 
-  it('the lines this branch adds hold no literal-status refusal send', (ctx) => {
-    const diff = mergeBaseDiff(path.resolve(SRC, '..', '..'), ['server/src']);
+  it('the lines this branch adds hold no net-new inline refusal send', (ctx) => {
+    const root = path.resolve(SRC, '..', '..');
+    const diff = mergeBaseDiff(root, ['server/src']);
     if (diff === null) {
       console.warn('refusal-status: skipped the added-lines rule, no origin/main or merge-base in this checkout');
       ctx.skip();
       return;
     }
-    const added = addedInlineSends(diff, (rel) => { try { return readFileSync(path.join(SRC, rel), 'utf8'); } catch { return null; } });
-    expect(added, 'a literal-status refusal send was added; answer it with refuseRoute (or the file\'s typed helper)').toEqual([]);
+    const added = addedInlineSends(diff, (f) => { try { return readFileSync(path.join(root, f), 'utf8'); } catch { return null; } }, (f) => mergeBaseText(root, f));
+    expect(added, 'an inline refusal send was added without a removed twin; answer it with refuseRoute (or the file\'s typed helper)').toEqual([]);
   });
 
   it('the predicate is live — it counts a send split across lines', () => {
