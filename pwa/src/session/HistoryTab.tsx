@@ -14,7 +14,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { LifecycleGap, LifecycleQueryResult, MirroredLifecycleEvent } from '../../../shared/api';
-import { lcRefusalWord } from '../../../shared/api';
+import { lcRefusalWord } from '../../../shared/api'; // @anchor history-refusal-import
 import { Sheet } from '@ccrc/ui';
 import { api, apiErrorText } from '../lib/api';
 import { CORROBORATION_WORD, actWord, eventCorroboration, outcomeGlyph, outcomeWord } from './journalWords';
@@ -58,6 +58,7 @@ function EventRow({ ev }: { ev: MirroredLifecycleEvent }): ReactNode {
         // Journal-only tokens get their sentence from LC_REFUSAL_WORD (L0);
         // a token from wsaudit's family has no L0 word here and renders as
         // itself — a maintainer's grep target, still better than silence.
+        // @anchor history-refusal-render
         <span className="history-refusal">{lcRefusalWord(ev.refusal) ?? ev.refusal}</span>
       )}
     </li>

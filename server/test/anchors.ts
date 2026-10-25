@@ -1,9 +1,10 @@
 // The resolver behind `anchors.test.ts` (D-TBD-named-anchors): pure functions over a map of
 // repo-relative path -> text, so the census and its own rows read the same code.
 
-/** A definition: a comment line that is only `@anchor name`. Line-anchored, so a string literal or
- *  prose that mentions the marker defines nothing. */
-const DEF = /^\s*(?:\/\/|#|\*|<!--)\s*@anchor\s+([A-Za-z0-9_-]+)\s*(?:-->)?\s*$/;
+/** A definition: a comment opener, `@anchor name`, and the end of the line, on a line of its own or
+ *  after code. Ending the line is what keeps a string literal or prose that mentions the marker
+ *  from defining anything. */
+const DEF = /(?:\/\/|#|\*|<!--)\s*@anchor\s+([A-Za-z0-9_-]+)\s*(?:-->)?\s*$/;
 /** A citation: a path with an extension (or the extensionless `ccd/…` executables), `#@`, a name. */
 const CITE = /((?:[A-Za-z0-9_.-]+\/)*(?:[A-Za-z0-9_-]+\.[A-Za-z0-9]+|ccd\/[A-Za-z0-9_-]+))#@([A-Za-z0-9_-]+)/g;
 

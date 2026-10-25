@@ -10,7 +10,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { CCD } from './ccdWsHelpers.js';
 import { tl, GRAPH, type GraphContent } from './compactCardFixtures.js';
 import { isScratchSlug } from './scratchSlugs.js';
-import { itLinux, IS_DARWIN } from './platformFixtures.js';
+import { itLinux, IS_DARWIN } from './platformFixtures.js'; import { anchorCites } from './anchors.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const realTool = (name: string): string => execFileSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).trim();
@@ -9074,15 +9074,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       'a README anchor stopped naming what its own sentence quotes').toEqual([]);
     // NON-VACUITY, and it is mandatory here for the same reason as everywhere
     // else: an equality with empty proves nothing if the document is not being
-    // read. The final current-main composition resolves and checks SEVEN README
-    // references. (`pwa/src/session/HistoryTab.tsx:17` and `:61` are NOT among
-    // them — `FILE_RE` admits no `.tsx`, so they resolve to no file and no pass
-    // in this describe reaches them. That grammar gap is recorded rather than
-    // widened, because doing so would be a rule change no finding authorised.)
-    const readmeOnly = audit([['readme', fs.readFileSync(path.join(REPO, 'README.md'), 'utf8')]]);
-    expect(readmeOnly.resolved, 'README references resolved to a tracked source file').toBe(7);
-    expect(readmeOnly.checked, 'and every one is CHECKED — the rule really applies to them').toBe(7);
-    expect(readmeOnly.failures, 'and none of them is stale').toEqual([]);
+    // read. D-TBD-named-anchors: the seven numeric README references this once
+    // counted (two of them `.tsx`, outside `FILE_RE`) are anchors now, which
+    // `anchors.test.ts` resolves over the whole tree, so no numeric reference
+    // is left here to check or to find stale. The last number is the
+    // non-vacuity that matters now: README names nine anchors, so the
+    // paragraph really is cited, not merely emptied. `FILE_RE` is unchanged.
+    const readmeText = fs.readFileSync(path.join(REPO, 'README.md'), 'utf8'); const readmeOnly = audit([['readme', readmeText]]);
+    expect([readmeOnly.resolved, readmeOnly.checked, readmeOnly.failures.length, anchorCites(readmeText).length],
+      'README: line references resolved, checked, stale; anchor citations').toEqual([0, 0, 0, 9]);
   });
 
   it('CONTROL: the **Files:** pass takes neither exemption, and looks only at **Files:** lists', () => {

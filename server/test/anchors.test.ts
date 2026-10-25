@@ -1,12 +1,12 @@
 // Named anchors for citations (root-cause fix 10 of the 2026-10-25 landing measurement; D-TBD-named-anchors).
 //
-// A citation by line (`shared/api.ts:8499-8501`) conflicts whenever any PR
+// A citation by line (a file name, a colon and a line range) conflicts whenever any PR
 // touches the lines above it, even though the cited code did not change, and
 // README alone had 36 conflicted absorptions on citation hunks. D-5893's
 // ratchet (`citations.test.ts`) only lets numeric citations get fewer; this is
 // the other half, the thing to cite INSTEAD for a span that has no symbol:
 //
-//   target:    `// @anchor name`   (or `# @anchor name`, `<!-- @anchor name -->`) on its own line
+//   target:    `// @anchor name`   (or `# @anchor name`, `<!-- @anchor name -->`), on its own line or ending a code line
 //   citation:  `path/to/file.ts#@name`
 //
 // An anchor names the code that follows its comment, so it moves with that
@@ -72,6 +72,9 @@ describe('anchor resolver', () => {
   it('the grammar: three comment forms define, prose and code do not', () => {
     expect(anchorDefs('// @anchor one\n# @anchor two\n<!-- @anchor three -->\n')).toEqual(['one', 'two', 'three']);
     expect(anchorDefs('const s = "// @anchor four";\nsee @anchor five in prose\n')).toEqual([]);
+    // The marker may END a code line, so adding it moves no line below it (a line-number
+    // citation elsewhere keeps resolving), and may follow another comment on the same line.
+    expect(anchorDefs('  j=$(jq -cn)  # @anchor six\n| \'a\'  // D-1: why // @anchor seven\n')).toEqual(['six', 'seven']);
     expect(anchorCites('`a/b.ts#@x-1` and ccd/ccd#@y_2, foo.ts#symbol, bar.ts#@')).toEqual([
       { file: 'a/b.ts', name: 'x-1' }, { file: 'ccd/ccd', name: 'y_2' }]);
   });
