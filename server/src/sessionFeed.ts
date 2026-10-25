@@ -266,7 +266,7 @@ export class SessionFeed {
     // The probe is scoped to the PARSED menu on screen, so it dies with it. A capture can miss a menu that is still
     // there: tmux returns null (held above, so the probe survives it until FAILED_CAPTURES_CLEAR), one stray
     // 'esc to interrupt' anywhere in the pane flips it to busy, or the grab lands mid-redraw and comes back
-    // `unparsed` (a menu footer with its option rows half-erased — dialog.ts:94). That last one is still a dialog,
+    // `unparsed` (a menu footer with its option rows half-erased — dialog.ts#unparsed). That last one is still a dialog,
     // so testing for null alone would keep the probe alive past the menu it was taken for. On the way back the ask
     // is unlatched but the transcript is untouched — the agent is blocked awaiting the answer — so a surviving probe
     // would decline the read the reappearance needs and the menu would come back bare and stay bare. Forgetting it
@@ -287,7 +287,7 @@ export class SessionFeed {
    * permission prompts, /model, trust-folder carry no AskUserQuestion, and they
    * sit on screen until a human answers. Reading is the expensive half —
    * `readPendingAsk` pulls up to 256 KB, over the agent RPC in remote-fleet mode
-   * (see transcript/tail.ts:6-11 for what reading whole transcripts once cost
+   * (see transcript/tail.ts#BACKLOG_TAIL_BYTES for what reading whole transcripts once cost
    * us) — while a stat is cheap and settles it: byte-identical bytes cannot have
    * started explaining a menu they did not explain last time. A file that grows
    * (the tool_use line finally flushed) or a different menu re-opens the read.
