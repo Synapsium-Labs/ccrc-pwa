@@ -147,6 +147,8 @@ describe('the coordinator skill: its contract', () => {
     expect(flat(skill)).toContain('never read by this session');
     expect(flat(refs('wave-lifecycle.md'))).not.toContain('Review the handoff commit the way you would review any commit.');
     expect(flat(refs('wave-lifecycle.md'))).not.toContain('your ordinary review');
+    // R5 amendment 2026-10-25: the loose `--admin` allowance is withdrawn; only the narrow licence remains.
+    expect(flat(refs('wave-lifecycle.md'))).not.toContain('where the repository ruleset requires it');
   });
 
   // ── the COUNT, which the verbatim pin above structurally cannot see ──────

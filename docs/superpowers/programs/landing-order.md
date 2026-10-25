@@ -10,7 +10,7 @@ Companion programme: `docs/superpowers/programs/session-continuity.md`
 **What this program is.** The fleet manufactures main churn — ritual syncs, `update-branch`, repeat absorptions —
 and lands in whatever order merges happen to arrive, testing no composition. This programme stops the churn,
 makes landing order a recorded fact, and lets the coordinator land a tested composition. **The coordinator
-merges, workers never do, and nothing merges unattended** (spec §3, R5). The operator's rulings are the spec's §3
+merges, workers never do, and an unattended landing is the goal when every safeguard holds** (spec §3, R5 as amended 2026-10-25). The operator's rulings are the spec's §3
 (R1–R10); every §11 decision was ruled on 2026-09-23.
 
 ## Waves
