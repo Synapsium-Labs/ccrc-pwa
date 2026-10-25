@@ -1062,6 +1062,92 @@ describe('the keys in the card are fenced after a send and re-enter only deliber
   });
 });
 
+// R102: no automatic focus in the card. `OwnWords` once focused its field on ANY false -> true change of `chosen`, which a
+// return to a question whose Other was kept (a sent ←, or a screen an outside move brought back) also makes. INLINE the
+// field now takes focus only on a deliberate open (`words.onOpen`: a click on the row, or its handled digit); the Sheet
+// keeps today's rule exactly.
+describe('the own-words field takes focus only on a deliberate open inside the card (R102)', () => {
+  /** Other chosen on question 1 by a click, its text typed and kept, focus then put on the body, and the pane moved to
+   *  question 2. `scope()` is the container under test (the card, or the phone's dialog). */
+  async function keptOtherAwayFromQuestion1(scope: () => HTMLElement) {
+    const m = mount();
+    await frame();
+    m.arrive(1);
+    fireEvent.click(opt(scope(), /^Other/));
+    const field = (): HTMLInputElement => within(scope()).getByRole('textbox') as HTMLInputElement;
+    fireEvent.change(field(), { target: { value: 'Memcached' } });
+    act(() => field().blur());
+    act(() => m.store.getState().apply({ type: 'dialog', dialog: nextScreen() }));
+    await frame();
+    expect(within(scope()).getByText(QUESTION_2), 'premise: question 2 is up').toBeInTheDocument();
+    return { ...m, field };
+  }
+
+  it('inline: a return to question 1 with Other and its text kept, by a frame, fires no focusin and leaves the field unfocused', async () => {
+    media(true);
+    const m = await keptOtherAwayFromQuestion1(card);
+    const watch = watchCardFocus();
+    act(() => m.store.getState().apply({ type: 'dialog', dialog: askFixture(1).dialog! }));
+    await frame();
+    expect(within(card()).getByText(QUESTION), 'premise: question 1 is back').toBeInTheDocument();
+    expect(m.field(), 'premise: the field is open with its kept text').toHaveValue('Memcached');
+    expect(watch.seen(), 'no focusin inside the card').toEqual([]);
+    expect(document.activeElement, 'the field is not focused').not.toBe(m.field());
+  });
+
+  it('inline guard: choosing Other by a click focuses the field (green before and after)', async () => {
+    media(true);
+    const { arrive } = mount();
+    await frame();
+    arrive(1);
+    fireEvent.click(opt(card(), /^Other/));
+    expect(document.activeElement).toBe(within(card()).getByRole('textbox'));
+  });
+
+  it('inline guard: choosing Other by its digit with the card engaged focuses the field (green before and after)', async () => {
+    media(true);
+    const { arrive } = mount();
+    await frame();
+    arrive(1);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    key(first, 'ArrowDown'); // engages the keyboard inside the card
+    key(document.activeElement!, '4');
+    expect(document.activeElement).toBe(within(card()).getByRole('textbox'));
+  });
+
+  it('phone guard: the same return to a kept Other DOES focus the field, as today (green before and after)', async () => {
+    media(false);
+    const m = await keptOtherAwayFromQuestion1(() => dialogs()[0]!);
+    act(() => m.store.getState().apply({ type: 'dialog', dialog: askFixture(1).dialog! }));
+    await frame();
+    expect(within(dialogs()[0]!).getByText(QUESTION), 'premise: question 1 is back').toBeInTheDocument();
+    expect(document.activeElement, 'the Sheet\'s field takes focus on the return').toBe(m.field());
+  });
+
+  it('the desk, then a crossing below 900, then a return: the field is focused under the sheet rule (green before and after)', async () => {
+    let desk = true;
+    const listeners = new Set<() => void>();
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      get matches(): boolean { return q.includes('min-width: 900px') ? desk : q.includes('pointer: fine') ? desk : false; },
+      media: q, onchange: null,
+      addEventListener(_t: string, l: () => void) { listeners.add(l); },
+      removeEventListener(_t: string, l: () => void) { listeners.delete(l); },
+      addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+    const m = await keptOtherAwayFromQuestion1(card);
+    desk = false;
+    act(() => { for (const l of [...listeners]) l(); });
+    expect(cards(), 'premise: the card is gone below 900').toHaveLength(0);
+    const field = (): HTMLInputElement => within(dialogs()[0]!).getByRole('textbox') as HTMLInputElement;
+    act(() => field().blur());
+    act(() => m.store.getState().apply({ type: 'dialog', dialog: askFixture(1).dialog! }));
+    await frame();
+    expect(within(dialogs()[0]!).getByText(QUESTION), 'premise: question 1 is back in the Sheet').toBeInTheDocument();
+    expect(document.activeElement, 'the Sheet\'s rule focuses the field').toBe(field());
+  });
+});
+
 // R64 (review of Task A): the phone's per-hook `engaged` is the phone's alone. `DialogSheet`'s own hook outlives a crossing
 // below 900 and an ask's end, so an INLINE key must leave it untouched, or a later review in the sheet is focused.
 describe('the phone path is its own after an inline engagement (R64)', () => {
