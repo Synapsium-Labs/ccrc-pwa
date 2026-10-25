@@ -1364,6 +1364,59 @@ describe('the other send paths are held while an inline ask is up (R89)', () => 
     });
   });
 
+  // R96: `Send it` (the rescue for a failure the server marked `submittable`) is a send too: one more Enter on the text the box
+  // holds. It is held with Retry while the card is up, and a press after the card leaves submits once, as before.
+  describe.each(['enter-ignored', 'verify-failed'] as const)('Send it on a submittable %s failure', (code) => {
+    const SUBMITTABLE = (): ApiError => new ApiError(409, { ok: false, error: code, draft: 'resend me', submittable: true });
+    const sendIt = (): HTMLButtonElement => document.querySelector<HTMLButtonElement>('.pending-send-it')!;
+
+    it('with fixture 7 up it is disabled before any press, a press submits nothing and keeps the pending, and after the clear one press submits once', async () => {
+      media(true);
+      const submit = vi.spyOn(api, 'submit').mockResolvedValue(undefined);
+      const { arrive, prompt, store } = mount();
+      await failedSend(prompt, 'resend me', SUBMITTABLE());
+      expect(sendIt(), 'premise: the failed bubble offers Send it').not.toBeNull();
+      expect(sendIt(), 'premise: Send it is enabled with no ask up').toBeEnabled();
+      arrive(7);
+      expect(store.getState().dialog, 'premise: the pane has no menu').toBeNull();
+      expect(store.getState().ask, 'premise: the hook\'s approval envelope is held').not.toBeNull();
+      card();
+      expect(sendIt(), 'Send it is disabled while the card is mounted').toBeDisabled();
+      expect(submit, 'no submit has been made').not.toHaveBeenCalled();
+      fireEvent.click(sendIt());
+      await tick();
+      expect(submit, 'a press on the disabled Send it submits nothing').not.toHaveBeenCalled();
+      expect(screen.getByText('resend me'), 'the failed bubble keeps its text').toBeInTheDocument();
+      expect(store.getState().pending.map((p) => [p.state, p.code, p.draft, p.submittable]),
+        'and its recovery state is untouched: failed, with its code, draft and flag').toEqual([['failed', code, 'resend me', true]]);
+
+      clearAsk(store);
+      expect(cards(), 'premise: the card is gone').toHaveLength(0);
+      await tick();
+      expect(submit, 'nothing was submitted on its own when the card left').not.toHaveBeenCalled();
+      expect(sendIt(), 'Send it is enabled once the card has gone').toBeEnabled();
+      fireEvent.click(sendIt());
+      await tick();
+      expect(submit, 'one press submits once').toHaveBeenCalledTimes(1);
+      expect(submit.mock.calls[0], 'with the expected text').toEqual([ID, 'resend me']);
+    });
+
+    it('the phone (a Sheet; askInline never reports) is unchanged: Send it is enabled and a press submits once', async () => {
+      media(false);
+      const submit = vi.spyOn(api, 'submit').mockResolvedValue(undefined);
+      const { arrive, prompt } = mount();
+      await failedSend(prompt, 'resend me', SUBMITTABLE());
+      arrive(7);
+      expect(cards(), 'premise: no inline card on the phone').toHaveLength(0);
+      expect(dialogs(), 'premise: the Sheet is up').toHaveLength(1);
+      expect(sendIt(), 'Send it is not disabled by the ask').toBeEnabled();
+      fireEvent.click(sendIt());
+      await tick();
+      expect(submit, 'the phone\'s Send it submits once, as before').toHaveBeenCalledTimes(1);
+      expect(submit.mock.calls[0]).toEqual([ID, 'resend me']);
+    });
+  });
+
   describe('the phone is unchanged (a Sheet never reports askInline)', () => {
     it('with fixture 7 in the Sheet, Retry is enabled and a click re-sends', async () => {
       media(false);
