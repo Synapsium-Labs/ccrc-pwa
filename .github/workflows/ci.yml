@@ -1159,9 +1159,12 @@ jobs:
     needs: [select, deps]
     if: ${{ !cancelled() && needs.select.outputs.trace != 'none' && needs.select.outputs.trace_count != '0' }}
     runs-on: ubuntu-latest
-    # Tracing costs 1.7-4.3x wall-clock (measured on the fleet box), and the
-    # shard planner packs trace shards to about 15 minutes at that cost; 60 is
-    # oss-metadata.test.ts's ceiling and the most any job here may take.
+    # Tracing costs 1.7-4.3x wall-clock (measured on the fleet box). A refresh
+    # is BOUNDED (planTraceBatch, .github/ci/shards.mjs): select plans at most
+    # 45 minutes of that cost per shard and defers the rest to the next
+    # refresh, so a shard cannot reach this timeout, which cancels it and
+    # leaves no map. 60 is oss-metadata.test.ts's ceiling and the most any job
+    # here may take.
     timeout-minutes: 60
     strategy:
       fail-fast: false
