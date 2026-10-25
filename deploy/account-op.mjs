@@ -245,9 +245,17 @@ function rosterAdmits(candidate, opening) {
  *  rule is three chances for the next one to be written without it. `drop`
  *  inherited D-2052's mode carry only because someone remembered; a fourth
  *  writer would inherit nothing, and `single-definition.test.ts` cannot see
- *  this file at all (it filters `/\.tsx?$/`, D-1860). One function, three
- *  callers, and `ccrc-account.test.ts` counts the `renameSync` calls in this
- *  file so a fourth copy reds rather than drifts.
+ *  this file at all (it filters `/\.tsx?$/`, D-1860). One function, four
+ *  callers since `codex-mode` (codex bridge Stage 2, Task 12), and
+ *  `ccrc-account.test.ts` counts the `renameSync` calls in this file so a
+ *  second copy reds rather than drifts.
+ *
+ *  EVERY CALLER RUNS UNDER ONE LOCK, AND THIS FUNCTION TAKES NONE. Each is a
+ *  read-modify-write of the whole file, so two at once lose one's change. The
+ *  bash side serialises them on `$REG/.account-placement.lock`: `add-entry`,
+ *  `declare-entry` and `drop` under `_acct_marker_lock`, and `codex-mode` under
+ *  `_codex_cmd_switch`'s step 0, which takes the same file (Task 12 fix round
+ *  1, review F1/M2). A new caller takes it too.
  *
  *  TMP + RENAME, `_inst_accounts_sh`'s discipline: the file is USER-OWNED and
  *  must never be observable half-written.
@@ -269,7 +277,7 @@ function rosterAdmits(candidate, opening) {
  *  `wx` turns a collision into a refusal instead of a lost roster.
  *
  *  IT REFUSES, IT DOES NOT THROW: the caller's `failed` clause says what the
- *  box is left holding, because these three callers reach this line with very
+ *  box is left holding, because these four callers reach this line with very
  *  different things already on disk. */
 function writeRoster(file, next, failed) {
   const tmp = `${file}.tmp.${process.pid}.${randomBytes(8).toString('hex')}`;

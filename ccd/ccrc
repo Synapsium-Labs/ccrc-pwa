@@ -14086,13 +14086,42 @@ _codex_cmd_stop() {   # <id>
 # `ccrc codex switch <id> litellm|direct` — MOVE A LANE BETWEEN ITS TWO MODES
 # (codex-bridge Stage 2, Task 12; spec 2026-10-15 §2.1: "a flip stops one set of
 # processes before starting the other, which is also the moment the
-# credential's ownership passes between them"). Under the lane lock from its
-# first read to its last start, in this order:
+# credential's ownership passes between them"). Under the roster writers' lock
+# and then the lane lock, from its first read to its last start, in this order:
+#   0. THE ROSTER WRITERS' LOCK (Task 12 review F1/M2): step 4 is a
+#      read-modify-write of the whole of ~/.ccrc/accounts.json, and every other
+#      writer of that file (the account verbs' add, declare and remove) writes
+#      it under `_acct_marker_lock`'s `$_SVC_REG/.account-placement.lock`. A
+#      switch that did not hold that file could write back a roster read before
+#      an add landed (the new account gone) or before a removal dropped its row
+#      (the row back). So the switch takes the same file, BEFORE `_codex_lock`:
+#      placement, then lane, the order account removal's codex arm takes them
+#      in, so neither waits on the other while holding what the other needs. It
+#      is taken here rather than through `_acct_marker_lock`, whose refusals are
+#      the account verb's envelope, and its wait is bounded as `_codex_lock`'s
+#      is. Where `flock` is missing nothing is held, as `_codex_lock`. It is
+#      RELEASED before step 5: a tier the start spawns would inherit the fd and
+#      hold every account verb off for its whole life (`_codex_lock`'s "THE FD
+#      MUST NOT REACH A TIER").
 #   1. The row, and lane.json made current (`_codex_lane_json_ensure`), whose
-#      mode is the lane's OLD mode. A move to `direct` on the `siwc` route is
-#      refused `upstream-unsupported` (Stage 3), with nothing stopped. A lane
-#      already in that mode whose mode tiers all answer as this lane (0) is
-#      `already`: rc 0, nothing touched.
+#      mode is the lane's OLD mode. The ensure comes first because the old mode
+#      is read from a current lane.json, so it may render lane.json (and the
+#      lane's other model files) from the roster; it never writes the roster. A
+#      move to `direct` on the `siwc` route is refused `upstream-unsupported`
+#      (Stage 3), with nothing stopped and the roster not written. A lane
+#      already in that mode has EVERY tier of that mode measured in this shell,
+#      none skipped (review M1): step 2's `_codex_stop_tier` reads a mate's
+#      answer from CX_TIER_SEEN through `_codex_tier_is_other_mode`, so the
+#      lane's own front tier must be on record before its other-mode mate is
+#      asked about. When all of them answer as this lane (0), the mode is
+#      recorded, lane.json rendered and the mode read back, and the answer is
+#      `already`, rc 0, nothing stopped (review I1): after a failure at step 4
+#      the roster can name the new mode while lane.json, and the tiers a
+#      launcher started from it, name the old, and the way back named there,
+#      `ccrc codex switch <id> <old mode>`, has to bring the roster back rather
+#      than leave the next render to split the lane under its running tiers. On
+#      a lane whose roster and lane.json agree, both writes put back the same
+#      bytes.
 #   2. The OUTGOING set (the other mode's tiers: to `direct`, shim then
 #      litellm; to `litellm`, bridge), front first, through `_codex_stop_tier`,
 #      each word CAPTURED (ruling PF-21): a `foreign` word or a stop that fails
@@ -14101,7 +14130,8 @@ _codex_cmd_stop() {   # <id>
 #   3. EVERY tier re-measured as not running (rc 1 of `_codex_tier_ours`).
 #      Anything else ends the switch with nothing written: a tier of this lane
 #      still running beside the incoming set is two refreshers on one
-#      credential (Review Focus 5), and the start would adopt it.
+#      credential (Review Focus 5), and the start would adopt it; a port or unit
+#      that something else holds is named as the start would name it.
 #   4. The mode recorded in the roster (`deploy/account-op.mjs codex-mode`, the
 #      default word deleted rather than written), lane.json re-rendered
 #      UNCONDITIONALLY (`_codex_lane_json_render`, not `_codex_lane_json_ensure`,
@@ -14111,19 +14141,29 @@ _codex_cmd_stop() {   # <id>
 #      because `_codex_cmd_start` exits. Its own `_codex_lock` is a no-op under
 #      the lock this shell holds (ONE LEVEL), and the subshell's exit closes
 #      only its copy of the fd, which is no release.
-#   6. A failure at 4 or 5 leaves the lane DOWN and named, with the way back,
-#      `ccrc codex switch <id> <the old mode>`: nothing is restarted behind the
-#      operator's back.
+#   6. A failure at 4 or 5 leaves the lane not serving and named, with the way
+#      back, `ccrc codex switch <id> <the old mode>`: nothing this switch
+#      stopped is restarted behind the operator's back.
 # Between 3 and 5 no refresher runs, so the credential changes hands without a
 # race. On success the start's own line is followed by one line naming the move
 # and the stop words.
 _codex_cmd_switch() {   # <id> <litellm|direct>
-  local id to="${2:-}" from up t w q rc said='' outgoing rev='' stopped='' down='' state
+  local id to="${2:-}" from up t w q rc said='' all=1 outgoing rev='' stopped='' down='' state pfd='' plock bound
   _codex_row "${1:-}" || exit $?
   id="$CX_ID"
-  if ! _codex_mode_tiers "$to" >/dev/null; then
-    _codex_say usage "ccrc codex switch needs the mode to move the lane to: ccrc codex switch $id litellm|direct."
-    exit 2
+  _codex_mode_tiers "$to" >/dev/null || exit 2   # `cmd_codex` checks the word and says why
+  # 0. THE ROSTER WRITERS' LOCK, then the lane's.
+  if command -v flock >/dev/null 2>&1; then
+    plock="$_SVC_REG/.account-placement.lock"
+    if ! mkdir -p -- "$_SVC_REG" 2>/dev/null || ! { exec {pfd}>>"$plock"; } 2>/dev/null; then
+      _codex_say lane-unwritable "$plock could not be opened, so this switch cannot be serialised against the account verbs that write ~/.ccrc/accounts.json. Fix $_SVC_REG, then re-run. Nothing was stopped or written."
+      exit 1
+    fi
+    bound=$(( $(_codex_ready_secs) + 30 ))
+    if ! flock -w "$bound" "$pfd"; then
+      _codex_say roster-busy "an account verb has held the roster writers' lock ($plock) for ${bound}s without finishing, and this switch writes the roster. Re-run once it has ended. Nothing was stopped or written."
+      exit 1
+    fi
   fi
   _codex_lock "$id" || exit 1
   _codex_lane_json_ensure "$id" || exit 1
@@ -14131,19 +14171,31 @@ _codex_cmd_switch() {   # <id> <litellm|direct>
   if [ "$to" = direct ]; then
     up="$(_codex_lane_upstream "$id")" || exit 1
     if [ "$up" != backend ]; then
-      _codex_say upstream-unsupported "$id's upstream is \"$up\", and the $up route arrives in Stage 3: this ccrc runs a direct lane on the backend route only. Set the lane's upstream to \"backend\" (or remove it) in ~/.ccrc/accounts.json, then re-run. Nothing was stopped or written."
+      _codex_say upstream-unsupported "$id's upstream is \"$up\", and the $up route arrives in Stage 3: this ccrc runs a direct lane on the backend route only. Set the lane's upstream to \"backend\" (or remove it) in ~/.ccrc/accounts.json, then re-run. Nothing was stopped, and the roster was not written."
       exit 1
     fi
   fi
-  # 1. ALREADY: this mode, and every tier of it answering as this lane.
+  # 1. ALREADY: this mode, every tier of it measured and answering as this
+  # lane, and the roster made to say so too.
   if [ "$from" = "$to" ]; then
     for t in $(_codex_mode_tiers "$to"); do
       _codex_tier_ours "$id" "$t"; q=$?
       [ "$q" -eq 3 ] && exit 1   # `_codex_tier_ours` has printed why
-      [ "$q" -eq 0 ] || { said=''; break; }
-      said="${said:+$said, }$t running"
+      if [ "$q" -eq 0 ]; then said="${said:+$said, }$t running"; else all=''; fi
     done
-    if [ -n "$said" ]; then
+    if [ -n "$all" ]; then
+      if ! node "$CCRC_HERE/../deploy/account-op.mjs" codex-mode --file "$(_models_roster_path)" --id "$id" --bridge "$to" >/dev/null; then
+        _codex_say switch-stopped "$id runs its $to tiers ($said), but its mode could not be recorded again in ~/.ccrc/accounts.json (said above). Nothing was stopped. Fix what is named above, then re-run 'ccrc codex switch $id $to'."
+        exit 1
+      fi
+      if ! _codex_lane_json_render; then
+        _codex_say switch-stopped "$id runs its $to tiers ($said) and its mode was recorded again, but lane.json could not be rendered (said above). Nothing was stopped. Fix what is named above, then re-run 'ccrc codex switch $id $to'."
+        exit 1
+      fi
+      if ! w="$(_codex_lane_mode "$id")" || [ "$w" != "$to" ]; then
+        _codex_say switch-stopped "$id runs its $to tiers ($said) and its mode was recorded again, but $(_codex_lane_dir "$id")/lane.json reads ${w:-no mode} after it was rendered. Nothing was stopped. 'ccrc doctor' names what renders it; re-run 'ccrc codex switch $id $to'."
+        exit 1
+      fi
       printf '%s codex: %s: already %s (%s)\n' "$PROG" "$id" "$to" "$said"
       exit 0
     fi
@@ -14170,19 +14222,28 @@ _codex_cmd_switch() {   # <id> <litellm|direct>
   for t in $CODEX_TIERS; do
     _codex_tier_ours "$id" "$t"; q=$?
     [ "$q" -eq 1 ] && continue
+    [ -n "$down" ] && down=" It is DOWN: this switch stopped its $down, and nothing restarts it."
+    if [ "$q" -eq 2 ]; then
+      # Held by something this lane cannot identify as its own: named as the
+      # start names it (`_codex_foreign_what`), with its remedy, never as a
+      # tier of this lane that `ccrc codex stop` would stop (review M3).
+      _codex_foreign_what "$id" "$t"
+      _codex_say tier-foreign "the switch of $id to $to stopped at its $t tier: $CX_FOREIGN_WHAT. Nothing was written: $id is still a $from lane.$down $CX_FOREIGN_FIX Once that clears, re-run 'ccrc codex switch $id $to'."
+      exit 1
+    fi
     case "$q" in
       0) state="running${CX_TIER_PID:+, pid $CX_TIER_PID}" ;;
       4) state="starting${CX_TIER_PID:+, pid $CX_TIER_PID}" ;;
-      2) state="its port or unit held by something that is not this lane's${CX_TIER_WHY:+: $CX_TIER_WHY}" ;;
       *) state="it could not be measured" ;;
     esac
-    [ -n "$down" ] && down=" It is DOWN: this switch stopped its $down, and nothing restarts it."
     _codex_say switch-stopped "the switch of $id to $to stopped: its $t tier still reads as this lane's ($state) after the stop of the outgoing tiers, and starting the $to tiers beside it would put two refreshers on one credential. Nothing was written: $id is still a $from lane.$down 'ccrc codex stop $id' stops every tier of the lane, in either mode; then re-run 'ccrc codex switch $id $to'."
     exit 1
   done
   # 4. RECORD, RENDER, READ BACK. From here a failure leaves the lane down.
+  # Every tier was measured down at step 3, so the lane is DOWN whatever this
+  # switch stopped; `$down` names what it did stop (review M3).
   if ! node "$CCRC_HERE/../deploy/account-op.mjs" codex-mode --file "$(_models_roster_path)" --id "$id" --bridge "$to" >/dev/null; then
-    _codex_say lane-down "$id is DOWN: the switch to $to stopped its $from tiers, but the mode could not be recorded in ~/.ccrc/accounts.json (said above), so nothing was written. Nothing was started. Bring it back with: ccrc codex switch $id $from"
+    _codex_say lane-down "$id is DOWN: ${down:+the switch to $to stopped its $down, and }the mode $to could not be recorded in ~/.ccrc/accounts.json (said above), so nothing was written. Nothing was started. Bring it back with: ccrc codex switch $id $from"
     exit 1
   fi
   if ! _codex_lane_json_render; then
@@ -14193,11 +14254,16 @@ _codex_cmd_switch() {   # <id> <litellm|direct>
     _codex_say lane-down "$id is DOWN: the switch to $to recorded the mode, but $(_codex_lane_dir "$id")/lane.json reads ${w:-no mode} after it was rendered. Nothing was started. 'ccrc doctor' names what renders it; re-run 'ccrc codex switch $id $to', or go back with: ccrc codex switch $id $from"
     exit 1
   fi
+  # The roster is written: its writers' lock is released before any tier is
+  # spawned (step 0). The lane lock stays held through the start.
+  [ -z "$pfd" ] || exec {pfd}>&-
   # 5. THE INCOMING SET, through the start verb in a subshell.
   ( _codex_cmd_start "$id" ); rc=$?
   if [ "$rc" -ne 0 ]; then
-    # 6. DOWN AND NAMED, never restarted behind the operator's back.
-    _codex_say lane-down "$id is DOWN: the switch to $to recorded the mode and rendered lane.json, but the start of its $to tiers failed (exit $rc, said above). Nothing was restarted. Fix what the start names and run 'ccrc codex start $id', or go back with: ccrc codex switch $id $from"
+    # 6. NAMED, never restarted behind the operator's back. The start can fail
+    # after it started a tier (its readiness wait), so the lane is called not
+    # serving rather than down, and the status verb says what runs (review M3).
+    _codex_say lane-down "$id is not serving: the switch to $to recorded the mode and rendered lane.json, but the start of its $to tiers failed (exit $rc, said above). Nothing this switch stopped was restarted, and whatever the start left is as it says: 'ccrc codex status $id' shows what runs. Fix what the start names and run 'ccrc codex start $id', or go back with: ccrc codex switch $id $from"
     exit "$rc"
   fi
   printf '%s codex: %s: switched from %s to %s (%s)\n' "$PROG" "$id" "$from" "$to" "$stopped"

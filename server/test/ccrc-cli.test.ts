@@ -273,12 +273,6 @@ describe('ccrc: dispatch and usage', () => {
     expect(r.stdout).toMatch(/enrolled passkeys keep working/);
   });
 
-  // ── install's ARGUMENT surface ──────────────────────────────────────────
-  // The two halves of the flag-ful-verb rule (`cmd_wrappers`' loop,
-  // ccd/ccrc:1144-1152), pinned here beside the other dispatch tests rather
-  // than in the install suite: neither of these reaches a step function, so
-  // neither needs — or may have — a shipped tree to converge from. What they
-  // are about is the DISPATCHER, which is this file's subject.
   // codex bridge Stage 2, Task 12: `switch` joins `ccrc codex`'s subcommand list, and its mode is checked before any
   // lane is read. `server/test/ccrc-codex.test.ts` owns what it does; this case owns that an operator can find it.
   it('ccrc codex names switch among its subcommands, and refuses a switch with no mode as usage', () => {
@@ -298,6 +292,12 @@ describe('ccrc: dispatch and usage', () => {
     }
   });
 
+  // ── install's ARGUMENT surface ──────────────────────────────────────────
+  // The two halves of the flag-ful-verb rule (`cmd_wrappers`' loop,
+  // ccd/ccrc:1144-1152), pinned here beside the other dispatch tests rather
+  // than in the install suite: neither of these reaches a step function, so
+  // neither needs — or may have — a shipped tree to converge from. What they
+  // are about is the DISPATCHER, which is this file's subject.
   it('install -h prints usage on STDOUT at exit 0 — a verb with flags explains them', () => {
     // `version` answers `--help` with a usage ERROR (exit 2) because it has no
     // flags to explain; `install` follows `wrappers` instead, and for the same
