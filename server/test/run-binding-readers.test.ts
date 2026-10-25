@@ -122,4 +122,23 @@ describe('the drift lane reads the worker\'s parent through its incarnation (ARC
     const found = s.driftFindingRows();
     expect(found.ok && found.rows.map((r) => r.key).filter((k) => k.includes('parent-mismatch'))).toEqual([]);
   });
+
+  it('a pre-planned wave 2 (wave 1 is the mark and closed; wave 2 unstamped, opened before the birth, same claimant) raises no parent-mismatch', async () => {
+    const s = store();
+    const w1 = open(s, 'prog-a', 'coord-1');
+    const w2 = open(s, 'prog-b', 'coord-1');
+    s.db.prepare('UPDATE runs SET openedAt = ? WHERE id IN (?, ?)').run(BORN - 1000, w1, w2);
+    s.setSession(w1, 'demo-w', BORN);
+    s.setSession(w2, 'demo-w');
+    s.db.prepare('UPDATE runs SET dispatchStartedAt = ?, coordProject = ? WHERE id = ?').run(BORN, 'p', w1);
+    finish(s, w1);
+    const deps: DriftLaneDeps = {
+      coord: s, names: ['demo-w'], childMarks: new Map([['demo-w', { kind: 'child', runId: w1 }]]) as never,
+      measure: () => Promise.resolve({ state: 'alive', why: 'pane live' }),
+      notice: () => ({ recorded: true, archived: 'none' }), warn: () => {},
+    };
+    await runDriftPass(deps, BORN + 5000);
+    const found = s.driftFindingRows();
+    expect(found.ok && found.rows.map((r) => r.key).filter((k) => k.includes('parent-mismatch'))).toEqual([]);
+  });
 });

@@ -24,7 +24,7 @@
 import { ASK_OPERATOR_PRINCIPAL, type AskMintReleaseReason, type ChildMark } from '../../../shared/api.js';
 import type { SessionRecord } from '../registry.js';
 import { childBirthOf } from './childSpent.js';
-import { bindingOf, incarnationOf, parentOrMinter } from './runBinding.js';
+import { childParentOf, incarnationOf } from './runBinding.js';
 import { claimantMeasuredDead, measureClaimant, type ReclaimDeps } from './reclaim.js';
 
 export type HeldFor =
@@ -43,13 +43,11 @@ export async function heldFor(
   // workspace name never inherits a run opened for the occupant before it, so no ghost coordinator is the parent.
   const minting = coord.run(mark.runId);
   const incarnation = incarnationOf(childId, childBirthOf(minting, childId));
-  let parent = coord.parentOfSession(childId, incarnation);
-  if (parent === null && minting.ok && minting.run !== null) {
-    // An unstamped run opened before the birth and then bound to it is undecidable, not a ghost: the minting run's own
-    // claimant keeps the hold (the dup arm, a wave N >= 2 run planned before wave 1 was dispatched).
-    const series = coord.bindingRunsOf(childId);
-    if (series.ok) parent = parentOrMinter(bindingOf(series.runs, incarnation), minting.run.claimedBy);
-  }
+  const proven = coord.parentOfSession(childId, incarnation);
+  // An unstamped run opened before the birth and then bound to it is undecidable, not a ghost: the minting run's own
+  // claimant keeps the hold (the dup arm, a wave N >= 2 run planned before wave 1 was dispatched).
+  const parent = proven !== null || !minting.ok || minting.run === null ? proven
+    : childParentOf(proven, coord.bindingRunsOf(childId), minting.run.claimedBy, incarnation);
   if (parent === childId) return notAChild;
   // D-5362: the binding is "the parent is the claimant of the run the mark names", not "the mark names the newest
   // open run": a wave N >= 2 run resumes the same workspace, whose `.child` still names wave 1.
