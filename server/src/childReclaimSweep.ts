@@ -1305,6 +1305,11 @@ export function childReclaimTierSeed(
  *  a terminal refusal. No other `failed` word does, even one the table classes terminal. */
 export const CHILD_RECLAIM_FAILED_TERMINAL_WORD = 'nested-rescue-too-large';
 
+/** The ONE retry word the executor answers as a FAILURE rather than a deferral: ccd's read of the tree errored
+ *  (`tree-unreadable`), which is transient until it keeps happening. A failure is what the sweep backs off from and
+ *  what the feed and the failing item report; a deferral is re-asked every pass, a terminal refusal never again. */
+export const CHILD_RECLAIM_TRANSIENT_WORD = 'tree-unreadable';
+
 /** THE reading of "this child stands under a TERMINAL refusal": its latest
  *  reclaim event is a refusal whose token wave 3 classes terminal. Shared by
  *  the attention list and the lane's terminal exclusion, so the two can never

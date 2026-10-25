@@ -18,7 +18,7 @@ import {
   CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_KEPT_MANY_OVER, CHILD_RECLAIM_PRE_LOCK_TOKEN,
   CHILD_RECLAIM_PRESENCE_DEFERS, CHILD_RECLAIM_SKIP,
   childReclaimAskOrder, childReclaimAttention, childReclaimAttentionWithKept,
-  childReclaimBackoffMs, childReclaimCoordinated, childReclaimDeferExpired, childReclaimDue,
+  childReclaimBackoffMs, childReclaimCoordinated, childReclaimDeferExpired, childReclaimDue, childReclaimFailureWaitMs,
   childReclaimFailingPastCeiling, childReclaimFailingSentence, childReclaimFailureLine, childReclaimFeedQuiet,
   childReclaimFirstSighting,
   childReclaimHoldRead, childReclaimJournalRow, childReclaimKeptItems, childReclaimKeptList,
@@ -550,6 +550,18 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
     const refused = childReclaimNextEntry(entry, { kind: 'refused', token: 'tree-unreadable' }, ask(NOW, false), at(NOW), PASS);
     expect(refused).toEqual({ ...entry, consecutiveFailures: 0, lastFailedAt: null,
       firstPresenceDeferredAt: null, refusedAt: NOW, lastAskedAt: NOW });
+  });
+
+  it('an unreadable tree (a FAILED outcome) backs off and doubles, then a clean reclaim forgets the child', () => {
+    const fail = (e: ChildReclaimSweepEntry, t: number) =>
+      childReclaimNextEntry(e, { kind: 'failed', token: 'tree-unreadable', stuck: false }, ask(t, false), at(t), PASS)!;
+    const one = fail(entry, NOW);
+    expect(childReclaimDue(one, NOW, PASS)).toBe(false);
+    expect(childReclaimDue(one, NOW + childReclaimBackoffMs(1, PASS), PASS)).toBe(true);
+    const two = fail(one, NOW + 1);
+    expect(childReclaimFailureWaitMs(two, PASS)).toBeGreaterThan(childReclaimFailureWaitMs(one, PASS));
+    expect(two.refusedAt).toBeNull();
+    expect(childReclaimNextEntry(two, { kind: 'reclaimed' }, ask(NOW + 9, false), at(NOW + 9), PASS)).toBeNull();
   });
 
   it('a refusal ends a run of failures and the presence episode alike', () => {

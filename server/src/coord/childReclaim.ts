@@ -11,7 +11,7 @@ import { readSessionRecord, type SessionRecord } from '../registry.js';
 import { refusalSentence } from '../wsaudit.js';
 import { CHILD_BIRTH_SKEW_MS, type ChildSpentVerdict } from './childSpent.js';
 import {
-  CHILD_RECLAIM_FAILED_TERMINAL_WORD, CHILD_RECLAIM_PRE_LOCK_TOKEN, CHILD_RECLAIM_SKIP, childReclaimTerminalRefusal, childReclaimCoordinated, childReclaimFailingPastCeiling,
+  CHILD_RECLAIM_FAILED_TERMINAL_WORD, CHILD_RECLAIM_PRE_LOCK_TOKEN, CHILD_RECLAIM_TRANSIENT_WORD, CHILD_RECLAIM_SKIP, childReclaimTerminalRefusal, childReclaimCoordinated, childReclaimFailingPastCeiling,
   childReclaimFailingSentence, childReclaimFailingWord, childReclaimFailureLine, childReclaimJournalRow,
   childReclaimSameGenerationKey, isChildReclaimKeptVerdict, type ChildReclaimFeedQuiet, type ChildReclaimKeptAttention,
   type ChildReclaimPreLockToken, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
@@ -94,13 +94,16 @@ export type ChildReclaimToken = WorkspaceRefusal<'reclaim'> | WorkspacePostActWo
  *     holds equal to this arm.
  *   - `retry`: the box found a condition that passes (a hold, a pause, a
  *     human at the pane, a git operation, a lock, a token that went stale).
- *     A deferral; wave 4's sweep tries again. */
+ *     A deferral; wave 4's sweep tries again. `tree-unreadable` is the one
+ *     retry word answered as a FAILURE instead (`childReclaimRefusal`): a read
+ *     that errored is not a tree proven unsafe, so it is paced by the failure
+ *     backoff and its feed row, never parked as a terminal refusal. */
 export const CHILD_RECLAIM_TOKEN_KIND: Readonly<Record<ChildReclaimToken, 'gone' | 'terminal' | 'retry'>> = {
   'no-such-session': 'gone',
   'not-a-workspace': 'terminal',
   'not-a-child': 'terminal',
   'branch-elsewhere': 'terminal',
-  'tree-unreadable': 'terminal',
+  'tree-unreadable': 'retry',
   'containment-unproven': 'terminal',
   'no-worktree-record': 'terminal',
   paused: 'retry',
@@ -1380,6 +1383,11 @@ function childReclaimCancelMail(deps: ChildReclaimDeps, sessionId: string, why: 
  *  defer vocabulary is held by `child-reclaim.test.ts`. */
 function childReclaimRefusal(req: ChildReclaimRequest, token: ChildReclaimToken, detail: string): ChildReclaimOutcome {
   const { sessionId, runId } = req;
+  // A read that failed is transient until it keeps failing: the failure arm paces it (backoff, one feed row per
+  // episode, the failing item past the ceiling) where a deferral would re-ask every pass and a refusal never again.
+  if (token === CHILD_RECLAIM_TRANSIENT_WORD) {
+    return { kind: 'failed', sessionId, runId, resume: 'not-resumable', token, detail };
+  }
   switch (CHILD_RECLAIM_TOKEN_KIND[token]) {
     case 'gone': return { kind: 'gone', sessionId };
     // The kind map and the defer vocabulary are held equal by

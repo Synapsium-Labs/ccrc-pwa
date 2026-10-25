@@ -20,7 +20,7 @@ import {
   type ChildReclaimDecisionInput, type ChildReclaimDeps, type ChildReclaimOutcome, type ChildReclaimReleaseRequest,
   type ChildReclaimRequest, type ChildReclaimToken,
 } from '../src/coord/childReclaim.js';
-import type { ChildReclaimFeedQuiet } from '../src/childReclaimSweep.js';
+import { CHILD_RECLAIM_TRANSIENT_WORD, type ChildReclaimFeedQuiet } from '../src/childReclaimSweep.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { readSessionRecord } from '../src/registry.js';
 import { readChildSiblings } from '../src/coord/siblingRead.js';
@@ -173,7 +173,8 @@ describe('the fifteen words', () => {
 
   it('every RETRY word is a defer reason, and no other word is', () => {
     for (const [token, kind] of Object.entries(CHILD_RECLAIM_TOKEN_KIND)) {
-      expect(isChildReclaimDeferWhy(token), token).toBe(kind === 'retry');
+      // the one retry word answered as a FAILURE, never a deferral
+      expect(isChildReclaimDeferWhy(token), token).toBe(kind === 'retry' && token !== CHILD_RECLAIM_TRANSIENT_WORD);
     }
   });
 
@@ -897,6 +898,52 @@ describe('reclaimChild — the one executor', () => {
       .map(([token]) => token).filter((t) => t !== 'tree-unreadable').sort();
     expect(terminal).toEqual(['branch-elsewhere', 'containment-unproven', 'nested-rescue-too-large', 'no-worktree-record',
       'not-a-child', 'not-a-workspace']);
+  });
+
+  // A read that failed is not a tree that was unsafe: one transient `find` error must not park a child forever. The
+  // word is a RETRY word the executor answers as a failure (the sweep's backoff paces it, the feed row says it once),
+  // never a terminal refusal the lane would exclude.
+  it('tree-unreadable is a RETRY word, not a terminal one', () => {
+    expect(CHILD_RECLAIM_TOKEN_KIND['tree-unreadable']).toBe('retry');
+  });
+
+  it('an AUDIT tree-unreadable is a FAILURE (retried, one feed row), and the verb is never called', async () => {
+    const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0,
+      stdout: auditDoc(runId, 'tree-unreadable', { detail: 'could not read the tree' }) } }) });
+    const out = await reclaimChild(s.deps, s.req());
+    expect(out).toMatchObject({ kind: 'failed', resume: 'not-resumable', token: 'tree-unreadable' });
+    expect(s.calls.map((c) => c[0])).toEqual(['ws-audit']);
+    expect(s.deliveryState().state).toBe('queued');
+    expect(s.feed()).toEqual(['child reclaim failed']);
+    expect(s.bodies()[0]).toContain('It is retried from the start.');
+  });
+
+  it('a VERB tree-unreadable (the tree went unreadable between audit and act) is a failure too', async () => {
+    const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { ran: true as const, code: 0, stdout: JSON.stringify({ refused: 'tree-unreadable', detail: 'find failed', paths: [] }) } }) });
+    expect(await reclaimChild(s.deps, s.req())).toMatchObject({ kind: 'failed', token: 'tree-unreadable' });
+    expect(s.deliveryState().state).toBe('queued');
+  });
+
+  it('a REPEATED tree-unreadable writes its feed row once: the first says it, the same word again stays quiet', async () => {
+    const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'tree-unreadable', { detail: 'd' }) } }) });
+    await reclaimChild(s.deps, s.req());
+    await reclaimChild(s.deps, s.req(false, null, { deferWhy: null, failureToken: 'tree-unreadable' }));
+    expect(s.feed()).toEqual(['child reclaim failed']);
+  });
+
+  it('a transient unreadable tree, then a clean read, reclaims the child', async () => {
+    let n = 0;
+    const s = await rig({ script: (runId) => ({
+      get audit() {
+        n += 1;
+        return { ran: true as const, code: 0, stdout: n === 1 ? auditDoc(runId, 'tree-unreadable', { detail: 'find failed' })
+          : auditDoc(runId, 'reclaimable', { token: TOK }) };
+      },
+      verb: { ran: true as const, code: 0, stdout: reclaimedDoc(runId) } }) });
+    expect((await reclaimChild(s.deps, s.req())).kind).toBe('failed');
+    expect((await reclaimChild(s.deps, s.req())).kind).toBe('reclaimed');
+    expect(s.calls.map((c) => c[0])).toEqual(['ws-audit', 'ws-audit', 'ws-reclaim']);
   });
 
   it('a token minted for ANOTHER run is not spent', async () => {
