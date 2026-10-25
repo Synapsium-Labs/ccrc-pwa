@@ -516,6 +516,18 @@ export const INTERRUPT_REFUSAL_TEXT: Readonly<Record<InterruptRefusal, string>> 
 };
 
 /**
+ * The background work a `background-only` refusal names (ARCH-13a, `backgroundOnlyRefusal`), as one clause with no
+ * framing: "2 background tasks (workflow) are still running", or "a background shell or monitor is still running" when
+ * the body carries no count. The session screen frames it with what Escape would not stop, the approval's Deny with
+ * "the request already resolved"; the count-and-kinds wording has this one owner.
+ */
+export function backgroundTasksClause(bg: { count: number | null; kinds: string[] }): string {
+  if (bg.count === null) return 'a background shell or monitor is still running';
+  return `${bg.count} background ${bg.count === 1 ? 'task' : 'tasks'}`
+    + `${bg.kinds.length > 0 ? ` (${bg.kinds.join(', ')})` : ''} ${bg.count === 1 ? 'is' : 'are'} still running`;
+}
+
+/**
  * The coordinator's route door (`RunRouteRefuseCode`) in words. No screen renders these yet: the table exists so the
  * first one that does cannot ship a bare slug, and a code added to the union without a sentence is a compile error.
  */
