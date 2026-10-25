@@ -760,11 +760,9 @@ export class SessionStream {
         // open transcript said the session was at rest when the truth was
         // that its `<pid>.json` could not be read at all.
         //
-        // MIRRORED RATHER THAN INVENTED HERE: these two surfaces are two
-        // renderings of one measurement, and a fleet card reading `busy`
-        // beside a chat header reading `idle` for the same session in the
-        // same second is worse than either answer on its own — the operator
-        // has no way to tell which one to believe.
+        // The two surfaces are two renderings of one measurement: a fleet card reading `busy` beside a chat header
+        // reading `idle` for the same session in the same second leaves the operator no way to tell which to believe.
+        // Each surface pins its half in its own tests (`fleet.test.ts`, `sessionws.test.ts`); the liveness half is the truth table.
         const read = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
         if (read.ok) {
           if (read.state.cwd) cwd = read.state.cwd;
