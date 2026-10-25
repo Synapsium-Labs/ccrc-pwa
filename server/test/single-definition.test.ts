@@ -9141,3 +9141,27 @@ describe('fleet disk retention: the stale-archive arm’s live switch has no wri
     expect(senders).toEqual(['server/src/coord/staleArchive.ts']);
   });
 });
+
+// ARCH-77 (#812). APPENDED, for the reason the blocks above state. Child reclaim's own off switch is the operator's to touch
+// BY HAND: its absence means armed, and no line of shell names it, so its one TypeScript spelling is its switchboard row, an L0
+// file that reaches no `node:` module and so cannot write it. The child-spent reader lands with that reason's own change.
+describe('ARCH-77: child reclaim’s off switch has no writer in the tree', () => {
+  const NAME = 'child-reclaim-disabled';
+  const DEFINER = 'shared/switches.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  it('the files that name its constant reach no write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('CHILD_RECLAIM_DISABLED_MARKER')).map(rel).sort();
+    expect(holders).toEqual([DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
