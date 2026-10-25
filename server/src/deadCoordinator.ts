@@ -1,7 +1,7 @@
 // THE DEAD-COORDINATOR LANE'S DECISIONS (workspace lifecycle spec 2026-09-24 §5.4, wave 4). L1: pure and clock-free
 // (the clock is an argument), `fs`-free and fastify-free — `archivedExpiry.ts`'s shape, beside it and sharing nothing
-// with it. It imports L0, and `sessionReading.ts` (L1, pure) for the one `DeadCause` list. `watch.ts`'s `sweepDeadCoordinators` (L4) GATHERS the evidence — the claimants of
-// non-terminal runs, the reclaim door's own verdict for each (`measureClaimant`, its dead arm now carrying `cause`), the
+// with it. It imports L0 alone (the one `DeadCause` list is L0's, shared with `sessionReading.ts`). `watch.ts`'s
+// `sweepDeadCoordinators` (L4) GATHERS the evidence — the claimants of non-terminal runs, the reclaim door's own verdict for each (`measureClaimant`, its dead arm now carrying `cause`), the
 // lifecycle mirror's rows, the durable first-dead anchors — and APPLIES these verdicts; `coord/endDeadCoordinator.ts`
 // (the one executor) ends a programme on the coordination serialiser. Nothing in this file reads a file, a row or a
 // clock.
@@ -10,10 +10,10 @@
 // `failed`, and its workers are then cleaned up. Only a crash counts: one the operator stopped, archived, reaped or
 // forgot is never "dead" here. EVERY UNCERTAIN ANSWER IS "NOT THIS PASS": the act ends a programme for good.
 import {
-  compareGenerations,
-  type DeadCoordinatorAttention, type LifecycleAct, type LifecycleDec, type LifecycleMeas, type LifecycleOutcome,
+  compareGenerations, DEAD_CAUSES,
+  type DeadCause, type DeadCoordinatorAttention, type LifecycleAct, type LifecycleDec, type LifecycleMeas,
+  type LifecycleOutcome,
 } from '../../shared/api.js';
-import { DEAD_CAUSES, type DeadCause } from './sessionReading.js';
 
 /** THE LANE'S LIVE SWITCH (the coordinator's safety ruling (B), the expiry lane's and the scope sweep's precedent).
  *  Until `$REG/<this>` exists the lane MEASURES, keeps its durable first-dead anchors, trips its breaker and RECORDS

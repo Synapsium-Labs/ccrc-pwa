@@ -141,7 +141,7 @@ export async function measureClaimant(
       return { state: 'unmeasurable',
         why: 'the claimant id is not a registry id, so it is never measured or composed' };
     case 'paneLive': return { state: 'alive', why: 'tmux reports the pane live' };
-    // The message IS the diagnosis, carried verbatim rather than summarised (`SessionVerdict`'s rule, exec.ts:75-84).
+    // The message IS the diagnosis, carried verbatim rather than summarised (`exec.ts`'s `SessionVerdict` rule).
     case 'paneUnknown': return { state: 'unmeasurable', why: sv !== null && sv.verdict === 'unknown' ? sv.detail : 'tmux was not asked' };
     case 'hibernated':
       return { state: 'alive', why: 'the pane is gone but the session is hibernated (asleep, woken by mail or ensure)' };

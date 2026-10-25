@@ -12149,3 +12149,13 @@ export interface DriftLine {
   readonly sessionId: string | null;
   readonly runId: number | null;
 }
+
+/** Which death: the registry never listed the id, or one of the lifecycle words `lifecycleIsDead` names. The ONE
+ *  definition (ARCH-47, #782), in L0 so `server/src/sessionReading.ts` and `server/src/deadCoordinator.ts` both import it
+ *  without either importing the other: `deadCoordinator.ts`'s `ClaimantDeadCause` and `CLAIMANT_DEAD_CAUSES` are these,
+ *  so a new word lands in both. `DEAD_LIFECYCLES` is its other half; it sits at the file's end rather than beside that
+ *  list so no line citation into this file moves. `coord-reclaim.test.ts` holds it equal to
+ *  `['absent', ...DEAD_LIFECYCLES]`. */
+export const DEAD_CAUSES = ['absent', 'stopped', 'orphan', 'never-started'] as const satisfies
+  readonly ('absent' | SessionLifecycle)[];
+export type DeadCause = typeof DEAD_CAUSES[number];

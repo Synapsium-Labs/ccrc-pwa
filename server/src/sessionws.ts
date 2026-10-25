@@ -684,7 +684,10 @@ export class SessionStream {
       // `unlistable` is the SAME whole-fleet collapse `RegistryRead`'s own
       // `listed: false` types elsewhere in this build — it proves nothing
       // about whether THIS id exists, only that this read could not say.
-      // Only a proven `absent` earns the terminal "unknown session".
+      // A proven `absent` earns the terminal "unknown session". So does
+      // `unmeasurable` (a listed row `buildRecord` could not assemble): it
+      // answered `absent` before `SingleRead` split it out (ARCH-47), and this
+      // door keeps that answer — the split is not meant to change it here.
       case 'unlistable': return { ok: false, reason: 'unmeasurable' };
       case 'absent': case 'unmeasurable': return { ok: false, reason: 'absent' };
       // An id `isRegistryId` refuses (spec §2.3) is terminal too: it never

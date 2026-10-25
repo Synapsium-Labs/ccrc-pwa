@@ -392,8 +392,9 @@ export interface SessionRecord {
    * gate) refuses, retryably. That is NOT the outcome for every ordering: if
    * the same purge also carries off `<id>.uuid` — a full teardown, not
    * merely the marker — the identity triple's own drop retires the WHOLE row
-   * first (`readSessionRecord` answers `kind:'absent'`
-   * without ever reaching this function), and `childBindGate`'s OWN second
+   * first (`readSessionRecord` answers `kind:'unmeasurable'` while `<id>.uuid`
+   * is still listed, `kind:'absent'` once it is not, without ever reaching
+   * this function), and `childBindGate`'s OWN second
    * listing decides from there: once that later listing no longer names
    * `<id>.child` either, the bind is permitted — correctly, because there is
    * no longer a workspace here to protect.
@@ -1344,11 +1345,12 @@ export type SingleRead =
  * subtraction over the rest of the fleet. Built from the SAME `buildRecord`
  * loop body `readRegistry` uses, so there remains exactly one parser.
  *
- * `kind: 'absent'` covers both of `readRegistry`'s old ways to answer
- * `undefined` for one id — no `.uuid` in the listing at all, and a dropped
- * (narrowed, see `buildRecord`'s own docstring) entry — collapsed into one
- * shape at the source instead of two. `kind: 'unlistable'` is the SEPARATE
- * whole-directory collapse, never conflated with a proven absence.
+ * `readRegistry`'s two ways to answer `undefined` for one id are TWO kinds
+ * here (ARCH-47, D-1145): `kind: 'absent'` is no `.uuid` in the listing at
+ * all, a proven absence; `kind: 'unmeasurable'` is a listed `.uuid` whose
+ * entry `buildRecord` dropped (narrowed, see its own docstring), a doubt.
+ * `kind: 'unlistable'` is the SEPARATE whole-directory collapse, never
+ * conflated with a proven absence.
  *
  * Carries the SAME hold-reconfirm discipline as `readRegistry` (see
  * `readRegistryMeasured`'s "ONE SECOND LISTING" comment): a hold that reads

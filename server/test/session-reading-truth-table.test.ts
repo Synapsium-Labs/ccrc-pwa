@@ -75,6 +75,13 @@ const ROWS: Row[] = [
   { name: 'gone + a stop stamp', seed: (h) => seedRow(h, ID, { stopped: `${SEC} ccd` }), tmux: GONE, state: 'dead', cause: 'stopped' , facts: { row: 'present', pane: 'gone', lifecycle: 'stopped', hibernatedAt: null, turn: null }, presence: 'dead' },
   { name: 'gone + a stop stamp + hibernated (asleep, not dead)', tmux: GONE, state: 'alive',
     seed: (h) => seedRow(h, ID, { stopped: `${SEC} ccd`, hibernated: `${SEC} 7` }) , facts: { row: 'present', pane: 'gone', lifecycle: 'stopped', hibernatedAt: NOW, turn: null }, presence: 'asleep' },
+  // DEAD ON PURPOSE (pinned, not fixed, ARCH-47): a `.hibernated` marker that will not parse carries no time, so the
+  // registry reads it as no marker (`parseHibernated` answers null) and a stop stamp beside it reads `stopped`. The old
+  // ladder answered the same; the dead-coordinator lane never acts on `stopped` (a deliberate act, not a crash), and
+  // carrying "listed but unreadable" as its own fact would move every reader of `hibernatedAt`, beyond this PR's intent.
+  { name: 'gone + a stop stamp + a hibernated marker that will not parse (stopped, on purpose)', tmux: GONE, state: 'dead',
+    cause: 'stopped', seed: (h) => seedRow(h, ID, { stopped: `${SEC} ccd`, hibernated: 'not-a-stamp' }),
+    facts: { row: 'present', pane: 'gone', lifecycle: 'stopped', hibernatedAt: null, turn: null }, presence: 'dead' },
   { name: 'gone + a long-gone heartbeat, stale hibernated stamp', tmux: GONE, state: 'dead', cause: 'orphan',
     seed: (h) => seedRow(h, ID, { supervised: String(SEC - 3600), hibernated: `${SEC - 7200} 7` }) , facts: { row: 'present', pane: 'gone', lifecycle: 'orphan', hibernatedAt: NOW - 7_200_000, turn: null }, presence: 'dead' },
   { name: 'gone + a row that never started', tmux: GONE, state: 'dead', cause: 'never-started',
@@ -208,6 +215,7 @@ describe.skipIf(process.platform !== 'linux')('ccd-tmp-sweep, driven on the tabl
     'tmux did not answer': { protectedDir: false, differs: 'the sweep asks processes, not tmux: no process publishing the uuid is an unprotected dir' },
     'gone + a stop stamp': { protectedDir: false },
     'gone + a stop stamp + hibernated (asleep, not dead)': { protectedDir: true },
+    'gone + a stop stamp + a hibernated marker that will not parse (stopped, on purpose)': { protectedDir: true, differs: 'the sweep protects any row with a .hibernated file, parsed or not; the table reads this one as dead (stopped)' },
     'gone + a long-gone heartbeat, stale hibernated stamp': { protectedDir: true, differs: 'the sweep protects every row with a .hibernated file, whatever its lifecycle; the table reads this one as dead (orphan)' },
     'gone + a row that never started': { protectedDir: false },
     'gone + a fresh supervisor heartbeat (restarting)': { protectedDir: false, differs: 'a restarting session has no process yet; the sweep does not look at heartbeats' },
