@@ -6,6 +6,7 @@ import type { Bus, Notice } from './bus.js';
 import { configDirFor, type CcrcConfig } from './config.js';
 import { measuredIdentity, readSessionRecord } from './registry.js';
 import { liveSessionStatus, readLiveStateMeasured } from './livestate.js';
+import { readSession } from './sessionReading.js';
 import {
   continuesInto, resumedPastMarker, rungRank, TranscriptResolver, type TranscriptResolution,
 } from './transcript/resolve.js';
@@ -679,26 +680,17 @@ export class SessionStream {
     // C0.3: one session's own row, not the whole registry — this stream only
     // ever asks about `this.id`, every 2 s, for as long as the socket is open.
     const read = await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
-    switch (read.kind) {
-      case 'found': break;
-      // `unlistable` is the SAME whole-fleet collapse `RegistryRead`'s own
-      // `listed: false` types elsewhere in this build — it proves nothing
-      // about whether THIS id exists, only that this read could not say.
-      // A proven `absent` earns the terminal "unknown session". So does
-      // `unmeasurable` (a listed row `buildRecord` could not assemble): it
-      // answered `absent` before `SingleRead` split it out (ARCH-47), and this
-      // door keeps that answer — the split is not meant to change it here.
-      case 'unlistable': return { ok: false, reason: 'unmeasurable' };
-      case 'absent': case 'unmeasurable': return { ok: false, reason: 'absent' };
-      // An id `isRegistryId` refuses (spec §2.3) is terminal too: it never
-      // heals by polling, so no poll is installed. It answers exactly as
-      // `absent` does, by design, so folding it there changes nothing
-      // observable; its pin is `readSessionRecord`'s zero-listing case.
-      case 'bad-id': return { ok: false, reason: 'absent' };
-      default: {
-        const _x: never = read;
-        return _x;
-      }
+    if (read.kind !== 'found') {
+      // The registry ladder is `readSession`'s row arm (ARCH-48, #783); this door keeps only its terminal answers.
+      // `unlistable` is the SAME whole-fleet collapse `RegistryRead`'s own `listed: false` types elsewhere in this
+      // build: it proves nothing about whether THIS id exists, only that this read could not say, so it heals by
+      // polling. Every other arm is terminal "unknown session": a proven absence, an id `isRegistryId` refuses
+      // (spec §2.3, which never heals by polling) and `unmeasurable`, a listed row `buildRecord` could not assemble,
+      // which answered `absent` before `SingleRead` split it out (ARCH-47) and keeps that answer here: the unassembled
+      // row is NOT given the terminal-absent-vs-doubt split `measureClaimant` makes, because this door's consumer
+      // is a socket whose only choices are "keep polling" and "close".
+      const row = readSession({ row: read.kind, pane: null, lifecycle: null, hibernatedAt: null, turn: null });
+      return { ok: false, reason: row.why === 'rowUnlistable' ? 'unmeasurable' : 'absent' };
     }
     // Display/connectivity — DEGRADE-AND-HEAL, not a refusal: a degraded
     // `uuid`/`workdir` would resolve `transcriptPath` against `''`, a path
@@ -736,7 +728,8 @@ export class SessionStream {
       return { ok: false, reason: 'absent' };
     }
     let cwd = identity.workdir;
-    let status: SessionStatus = 'dead';
+    // The turn fact `readSession` reads at the end: null while the pane is not live (that reads `dead` below).
+    let turn: 'busy' | 'idle' | null = null;
     let statusUpdatedAt: number | null = null;
     // D-5561: one `has-session`, as before — its verdict kept, because the
     // workflow reader must not read a substrate fault (`unknown`) as a process
@@ -747,14 +740,14 @@ export class SessionStream {
     // header shows 'dead' during a substrate fault — display-only, and the
     // same deferred product decision as assembleFleet's (see fleet.ts).
     if (verdict === 'live') {
-      status = 'idle';
+      turn = 'idle';
       const pid = await this.deps.tmux.panePid(this.id);
       if (pid === null) {
         // D-5275: mirror `assembleFleet` (D-5234). The pane is alive and its
         // pid read FAILED, which measured nothing about the session; the card
         // paints that `busy`, so the header does too — the D-115 mirror rule
         // below. `statusUpdatedAt` stays null and `cwd` at the registry's.
-        status = 'busy';
+        turn = 'busy';
       } else {
         // D-115, the chat half of the same fix `assembleFleet` takes (see its
         // block in fleet.ts for the full argument). The folded read answered
@@ -770,7 +763,7 @@ export class SessionStream {
         const read = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
         if (read.ok) {
           if (read.state.cwd) cwd = read.state.cwd;
-          status = liveSessionStatus(read.state.status);
+          turn = liveSessionStatus(read.state.status) === 'idle' ? 'idle' : 'busy';
           statusUpdatedAt = read.state.statusUpdatedAt;
           proc = { kind: 'live', startedAt: read.state.startedAt };
         } else if (read.reason === 'unmeasured') {
@@ -783,10 +776,14 @@ export class SessionStream {
           // since D-5234) still leaves this at `idle`,
           // which is the ordinary shape for a pane that has published
           // nothing yet.
-          status = 'busy';
+          turn = 'busy';
         }
       }
     }
+    // The header's word is the reading's turn: a pane that is not live has none, and reads `dead` (display-only, D-309).
+    const reading = readSession({ row: 'present', pane: verdict, lifecycle: null, hibernatedAt: null, turn });
+    const word = reading.turn.word;
+    const status: SessionStatus = word === 'busy' || word === 'idle' ? word : 'dead';
     const resolution = await this.transcripts.resolve({
       configDir: cfgDir,
       dir: cwd,

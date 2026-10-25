@@ -44,6 +44,10 @@ cluster K10), not standalone builds (decision D-5920).
 - **R2**, D6 and D8 feed W6 rather than racing it: the consolidation's K10 makes `RunBinding` the one
   coordinator↔worker link with four writers, and says W6 waits for this investigation. A standalone patch to
   `parentOfSession` or `openRun` first would be a second rule W6 must merge (D-5920).
+- **D6 folded into W6's first ticket (ARCH-60, #795).** `coord/runBinding.ts` derives the parent from the runs that bind
+  the worker's incarnation (its session id plus the birth the server stamped), so a reused workspace name no longer
+  inherits an earlier occupant's run. The readers `parentOfSession` and `openClaimantsOf` move onto it in ARCH-62; the
+  release-on-archive half of D6 stays with D7's `claimant-gone`.
 
 ## Carried constraints
 

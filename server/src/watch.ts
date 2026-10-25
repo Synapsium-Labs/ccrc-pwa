@@ -154,6 +154,7 @@ import {
   recordChildReclaimKeptFeed, recordChildReclaimLeafKeptFeed, releaseRetiredChildHold, type ChildReclaimOutcome, type ChildReclaimReleaseOutcome,
   type ChildReclaimReleaseRequest, type ChildReclaimRequest,
 } from './coord/childReclaim.js';
+import { childReclaimDisabledOf, childReclaimDisabledStops } from './coord/childReclaimDisabled.js';
 import {
   childReclaimAskOrder, childReclaimAttention, childReclaimAttentionWithKept, childReclaimDeferExpired, childReclaimDue,
   childReclaimFeedQuiet, childReclaimFirstSighting, childReclaimHoldRead, childReclaimJournalRow, childReclaimKeptItems,
@@ -4198,7 +4199,8 @@ export class FleetWatcher {
     // conjunct, so a child needs two FRESH passes once a switch is lowered
     // (or the box gains the missing capability).
     if (!ccdCan(this.deps.fleetState, 'wsReclaim') || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)
-        || readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set') {
+        || readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set'
+        || childReclaimDisabledStops({ coord, notifyLog: this.deps.notifyLog }, childReclaimDisabledOf(names))) {
       if (this.childReclaimJudged !== null) this.childReclaimJudged = childReclaimKeptVerdicts(this.childReclaimJudged);
       this.childReclaimPublishAttention(mirrorArms, live);
       this.childReclaimSweepState.clear();
@@ -7231,9 +7233,9 @@ export class FleetWatcher {
    *      least `MAIL_QUIET_MS` old (`COORD_QUIET_MS` for a coordinator): the
    *      SOLE turn-idle authority. A `shell` delivery also asks `sendPrompt`
    *      to refuse a pane showing `esc to interrupt` (`turn-running`), a
-   *      tripwire only. It never asks `liveStatus`,
-   *      because `liveStatus` answers `'idle'` for a missing pid, a missing
-   *      config dir and an unreadable file (`fleet.ts:118-131`) —
+   *      tripwire only. It never reads a folded word,
+   *      because a fold answers `'idle'` for a missing pid, a missing
+   *      config dir and an unreadable file (the deleted `liveStatus` did) —
    *      the deleted `archiveSafety`'s rule ("MUST NOT collapse `unknown` to
    *      idle") applies here for the same reason: this ends in a keystroke.
    *      That function is gone with the auto-archive it guarded (`sweepMerged`),
