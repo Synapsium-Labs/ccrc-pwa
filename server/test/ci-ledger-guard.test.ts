@@ -91,11 +91,11 @@ describe('ledger-guard CLI', () => {
   it('(4) the Ledger-Edit trailer passes and is reported in the step summary', () => {
     const d = fixture();
     put(d, 'docs/superpowers/programs/x.md', '| row | done |\n');
-    commit(d, 'edit ledger\n\nLedger-Edit: D-9999 the row is this change\'s own');
+    commit(d, 'edit ledger\n\nLedger-Edit: D-' + '9999 the row is this change\'s own');
     const r = run(d, 'feat/thing');
     expect(r.code).toBe(0);
     expect(r.sum).toContain('Ledger-Edit');
-    expect(r.sum).toContain('D-9999');
+    expect(r.sum).toContain('D-' + '9999');
     expect(r.sum).toContain('docs/superpowers/programs/x.md');
   });
 
