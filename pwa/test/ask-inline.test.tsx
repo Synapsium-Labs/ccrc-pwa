@@ -1038,6 +1038,40 @@ describe('the keys in the card are fenced after a send and re-enter only deliber
       expect(m.answer, 'a digit sends nothing: the click in the gap cleared nothing').toHaveBeenCalledTimes(1);
     });
 
+    it('Go to question made in the gap (not live, nothing in flight) after a send unlocks nothing; a NEW one after the reconnect does', async () => {
+      // A guard, green before and after: the raise's eligibility is captured in render, and `live` is part of it, so a raise made
+      // while the connection is down is spent even though no send is in flight, and nothing replays it on the reconnect. The
+      // transcript's button is not drawn in the gap (its card follows `askPending`), so the raise is the controller's own prop,
+      // the nonce that button bumps, set on a real `DialogSheet`.
+      media(true);
+      const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: agedQuestion2() });
+      const store = createSessionStore(ID, { makeSocket: fakeSocket });
+      for (const f of askFixture(2).frames) store.getState().apply(f);
+      const view = render(<DialogSheet id={ID} store={store} raise={0} />);
+      const first = opt(card(), /^Redis/);
+      act(() => first.focus());
+      await act(async () => { key(first, '1'); });
+      await frame();
+      expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
+      expect(document.activeElement, 'premise: focus stayed on the reused node').toBe(first);
+      act(() => store.setState({ conn: 'down', askFrameSeen: false, dialog: null }));
+      view.rerender(<DialogSheet id={ID} store={store} raise={1} />); // Go to question, made in the gap
+      act(() => store.setState({ conn: 'open' }));
+      act(() => {
+        store.getState().apply({ type: 'dialog', dialog: agedQuestion2() });
+        store.getState().apply({ type: 'ask_cleared' });
+      });
+      await frame();
+      expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: the card is back, live').toBeInTheDocument();
+      key(document.activeElement!, '2');
+      expect(answer, 'a digit sends nothing: the raise made in the gap unlocked nothing').toHaveBeenCalledTimes(1);
+      answer.mockReturnValue(new Promise(() => {}));
+      view.rerender(<DialogSheet id={ID} store={store} raise={2} />); // a NEW one, after the reconnect
+      expect(card().contains(document.activeElement), 'the new Go to question focused the card').toBe(true);
+      key(document.activeElement!, '2');
+      expect(answer, 'and a digit then answers once').toHaveBeenCalledTimes(2);
+    });
+
     // The coordinator's addition to R106: Go to question clicked while the answer is in flight, with the reply delivered as
     // tightly after the click as the harness honestly allows. Every timing must give the same public result: the section is
     // focused by the click (R69 F7), the keys stay fenced after the reply, no unlock follows, and a NEW eligible Go to
