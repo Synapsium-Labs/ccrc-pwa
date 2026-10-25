@@ -18,7 +18,6 @@ const SITES: Record<string, number> = {
   'server/src/coord/childSpent.ts': 2,
   'server/src/coord/claims.ts': 1,
   'server/src/coord/close.ts': 1,
-  'server/src/coord/closeDecide.ts': 1,
   'server/src/coord/delegation-correlation.ts': 4,
   'server/src/coord/delegation-ingest.ts': 2,
   'server/src/coord/delegation-model.ts': 1,
@@ -37,7 +36,7 @@ const SITES: Record<string, number> = {
   'server/src/turnmark.ts': 1,
   'server/src/watch.ts': 10,
 };
-const SITES_TOTAL = 64;
+const SITES_TOTAL = 63;
 
 /** The store's session-keyed binding readers at this commit, by name (the raw detector's count, writers and attribute
  *  reads named apart). */

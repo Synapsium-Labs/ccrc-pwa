@@ -84,6 +84,8 @@ export function equalitySites(root: string = REPO): EqualitySite[] {
 export interface NotBindingSite { readonly file: string; readonly text: string; readonly count?: number; readonly why: string }
 
 export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
+  { file: 'server/src/coord/closeDecide.ts', text: 'fresh.run.claimedBy === f.claimedBy',
+    why: 'the sweep\'s compare-and-set: the claimant of ONE re-read run must still be the one the sweep measured, whichever session works it' },
   { file: 'server/src/coord/childReclaim.ts', text: 'v.id !== sessionId', count: 2,
     why: 'a ccd verb\'s JSON answer must name the session the server asked about: validation of an adapter reply, no run is read' },
   { file: 'server/src/childReclaimSweep.ts', text: 'a.sessionId === sessionId',
