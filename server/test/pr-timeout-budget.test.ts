@@ -58,13 +58,15 @@ function verbTimeoutMs(verb: string): number {
   return Number(m![1].replace(/_/g, ''));
 }
 
+// ONE reserve for both describes, so the two budgets cannot drift apart.
+// 30% is not a round number for its own sake: `_pr_state_one` runs AFTER both
+// network calls, once per workspace of the project, and each pass shells out
+// roughly a dozen times (`_reg_get` x4, two `rev-parse`s, `rev-list --count`,
+// `_ws_wt_branch`, `_ws_common_dir`) plus one python3 start. On a project
+// with eight workspaces that is seconds, not milliseconds.
+const LOCAL_LOOP_RESERVE = 0.3;
+
 describe('pr-state fits inside the bound that kills it', () => {
-  // 30% is not a round number for its own sake: `_pr_state_one` runs AFTER both
-  // network calls, once per workspace of the project, and each pass shells out
-  // roughly a dozen times (`_reg_get` x4, two `rev-parse`s, `rev-list --count`,
-  // `_ws_wt_branch`, `_ws_common_dir`) plus one python3 start. On a project
-  // with eight workspaces that is seconds, not milliseconds.
-  const LOCAL_LOOP_RESERVE = 0.3;
 
   // THREE calls since landing-order wave 2: the merge-queue read
   // (`PR_GH_QUEUE_TIMEOUT`, `_gh_pr_queue`) runs after the local loop and adds
@@ -101,7 +103,6 @@ describe('pr-state fits inside the bound that kills it', () => {
 });
 
 describe('pr-landing fits inside the bound that kills it (D-6784)', () => {
-  const LOCAL_LOOP_RESERVE = 0.3;
   // `cmd_pr_landing` makes one GraphQL call and, at most, two REST reads (the base's rules and its protection) for
   // ONE uncached base: the loop over bases spends a single REST budget, and `ccd-pr-landing.test.ts` pins the cap with
   // a fixture call naming sessions on two uncached bases (at most 3 gh calls).
