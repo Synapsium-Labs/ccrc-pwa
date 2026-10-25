@@ -103,7 +103,8 @@ export interface OpenedApp {
   /** The harness's own order log (R104): every `/api` request's interception and fulfilment, and the meter's reads,
    *  in one monotonic sequence on the test side. Test code only; the page never sees it. */
   readonly events: readonly HarnessEvent[];
-  /** Call `listener` with each new event, synchronously as it is logged; returns the unsubscribe. */
+  /** Call `listener` with each new event, synchronously as it is logged; returns the unsubscribe. A listener runs
+   *  inside the `/api` handler, so it must not throw: a throw there leaves that request unanswered. */
   watch(listener: (event: HarnessEvent) => void): () => void;
   /** Log a meter read, with the number of `/api` fulfilments still in flight at that moment. */
   mark(kind: 'readA' | 'readB'): void;
@@ -396,10 +397,11 @@ const QUIET_TASK_MS = 1;
  *  The fixture's `/api` answers are deferred out of the windows (the operator's R104 contract): every request is
  *  parked from the start, and a DRAIN before each window (the idle one too) answers the parked ones, waits for their
  *  fulfilments (capped: `drain-inflight-timeout` fails the attempt), then waits for a quiet main thread (capped, and
- *  only recorded). So no fixture answer is FULFILLED by the harness inside a window. That is a mitigation, not an
- *  isolation: the page's parsing and rendering of an answer, and its timers, can still run into the next window, and
- *  the app's pollers keep their own times (a poll's `fetch` call itself lands in whichever window it falls in). The
- *  `finally` releases whatever is still parked and waits for nothing. */
+ *  only recorded). So no answer of this handler is FULFILLED inside a window (a route a test adds on the context
+ *  itself answers outside it; the frame-cost gates add none). That is a mitigation, not an isolation: the page's
+ *  parsing and rendering of an answer, and its timers, can still run into the next window, and the app's pollers keep
+ *  their own times (a poll's `fetch` call itself lands in whichever window it falls in). The `finally` releases
+ *  whatever is still parked and waits for nothing. */
 export async function frameCost(
   app: OpenedApp, path: string, frames: readonly unknown[], gapMs: number, options: FrameCostOptions = {},
 ): Promise<FrameCost> {

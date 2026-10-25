@@ -221,11 +221,14 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
     let release = (): void => undefined;
     try {
       app.answerAfter(stuck, new Promise<void>((done) => { release = done; }));
-      // A second request made while the drain waits on the stuck one is parked when the attempt fails.
-      let asked = false;
+      // A second request, asked for while the drain waits on the STUCK answer (armed by that answer's fulfil-start,
+      // so an app poll's earlier drain cannot trigger it), is parked when the attempt fails.
+      let armed = false;
+      let asked: HarnessEvent | null = null;
       const stop = app.watch((e) => {
-        if (asked || e.kind !== 'drainWait') return;
-        asked = true;
+        if (e.kind === 'fulfil-start' && e.path === stuck) { armed = true; return; }
+        if (!armed || asked !== null || e.kind !== 'drainWait') return;
+        asked = e;
         void app.page.evaluate((u) => { (window as unknown as Page$).parked = fetch(u).then((r) => r.json()); }, parked);
       });
       const attempt = frameCost(app, '/ws/fleet', changing().slice(0, 2), 500, {
@@ -234,13 +237,17 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
       });
       await expect(attempt).rejects.toThrow(/drain-inflight-timeout: \/api\/selftest-stuck/);
       stop();
-      // The parked request reached the harness before the attempt failed, and the finally's flush answered it.
+      // The parked request reached the harness while the drain waited, and the finally's release (the last flush, the
+      // only one after it) answered it.
+      const waited = asked as HarnessEvent | null;
+      expect(waited, 'the drain waited on the stuck answer').not.toBeNull();
       const [intercept] = ofPath(app, 'intercept', parked);
-      expect(intercept, 'the parked request was intercepted').toBeDefined();
-      const flush = app.events.find((e) => e.kind === 'flush' && e.seq > intercept!.seq);
+      expect(intercept !== undefined && intercept.seq > waited!.seq, 'the parked request was intercepted after that wait began').toBe(true);
+      const flushes = app.events.filter((e) => e.kind === 'flush' && e.seq > intercept!.seq);
       const start = ofPath(app, 'fulfil-start', parked)[0];
-      expect(flush !== undefined && start !== undefined && flush.seq < start.seq,
-        'the parked request was answered by a flush after it, not left parked').toBe(true);
+      expect(flushes.length === 1 && flushes[0] === app.events.filter((e) => e.kind === 'flush').at(-1)
+        && start !== undefined && flushes[0]!.seq < start.seq,
+        `the parked request was answered by the finally's release, the last flush (${JSON.stringify(flushes)})`).toBe(true);
       const answer = await app.page.evaluate(() =>
         Promise.race([(window as unknown as Page$).parked, new Promise((done) => { setTimeout(() => { done('stranded'); }, 2000); })]));
       expect(answer).toEqual({});
@@ -254,11 +261,13 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
 });
 
 // ---- the gate ------------------------------------------------------------------------------------------------------
-// Each window can now take a drain of up to INFLIGHT_CAP_MS + QUIET_CAP_MS before its GAP_MS, so the budgets are set
-// from that, not from the old 2 s windows: the ceiling case has 16 windows, the ratio case 21, plus the visit.
+// Each window can now take a drain of up to INFLIGHT_CAP_MS + QUIET_CAP_MS (and a little more: the quiet wait's last
+// step and the CDP reads) before its GAP_MS, so the budgets are set from that, not from the old 2 s windows, with
+// 30 s for the visit and that slack: the ceiling case has 16 windows, the ratio case 21, a measurement case 17.
 const WINDOW_MAX_MS = INFLIGHT_CAP_MS + QUIET_CAP_MS + GAP_MS;
 const CEILING_CASE_MS = 30_000 + (1 + FRAMES) * WINDOW_MAX_MS;
 const RATIO_CASE_MS = 30_000 + (1 + FRAMES + IDENTICAL_FRAMES) * WINDOW_MAX_MS;
+const MEASURE_CASE_MS = 30_000 + (1 + FRAMES + 1) * WINDOW_MAX_MS;
 
 /** Keep `cost`'s per-window figures on the case, where the JSON reporter writes them, whether it passes or fails. */
 function keep(task: { meta: object }, cost: FrameCost): void {
@@ -338,7 +347,7 @@ describe('measurement — C6 Step 0/4', () => {
           } finally {
             await app.ctx.close();
           }
-        }, 180_000);
+        }, MEASURE_CASE_MS);
       }
     }
   }
