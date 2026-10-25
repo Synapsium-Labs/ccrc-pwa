@@ -16,7 +16,7 @@ import type { FleetIO } from './io.js';
 import { openPoolReadDeadline } from './pools.js';
 import { INVENTORY_BUDGET_MS, readNodeFile } from './update/inventory.js';
 import {
-  TMP_SWEEP_CENSUS_CAP_BYTES, parseTmpSweepCensus, tmpSweepBudget, tmpSweepHolders, tmpSweepReceipts,
+  TMP_SWEEP_CENSUS_CAP_BYTES, parseTmpSweepCensus, tmpSweepBudget, tmpSweepHolders, tmpSweepInodeBudget, tmpSweepReceipts,
 } from './tmpSweep.js';
 
 export interface TmpSweepLaneDeps {
@@ -96,7 +96,7 @@ export async function runTmpSweepCensusLane(
       mailOnce(coord, m.toId, m.subject, m.body);
     }
     state.mailed = receipts.mailed;
-    for (const n of tmpSweepBudget(census, state.noticed)) {
+    for (const n of [...tmpSweepBudget(census, state.noticed), ...tmpSweepInodeBudget(census, state.noticed)]) {
       if (!known.has(n.sessionId)) {
         warnOnce(state, `unknown:${n.sessionId}`, `${n.sessionId} has no registry row; its budget notice is not mailed`);
         continue;

@@ -93,6 +93,10 @@
 #     pressure); then, oldest first, entries untouched for 48 hours (a floor pressure never lowers),
 #     unheld, with no git work on no remote, are taken until the total is under
 #     CCD_TMP_BUDGET_TARGET_GB (15). Both knobs can only be raised.
+# THE INODE BUDGET (#1411, D-TBD-inode-budget). The same walk counts distinct inodes (a hardlinked file once, across
+# the session's entries). A session over CCD_TMP_INODE_BUDGET_M million (1) is recorded in its census row's `inodeBudget`
+# (`overSince`, ended only by a finished count under 75% of it) and the server mails it once; an unfinished walk
+# reports `inodes: null` with `inodesAtLeast`, never a low count. It removes nothing for inodes.
 # Holders come from `ccd path-users --json` (the one probe); any doubt keeps the entry. A taken
 # entry is RENAMED into `<root>/.ccd-tmp-quarantine/<uuid>/<ns>.<name>` and deleted by a pass one
 # grace later (24 h; 1 h under pressure) after a fresh holder ask. The roots are today's, `/tmp/
@@ -979,7 +983,7 @@ if due:
         sessions[u] = {'id': cs[0]['id'], 'uuid': u, 'bytes': counted,
                        'inodes': exact, 'inodesAtLeast': at_least,
                        'inodeTop': [{'name': x['name'], 'inodes': x['inodes']} for x in sorted(live_cs, key=lambda x: (-x['inodes'], x['name']))[:INODE_TOP] if x['inodes'] > 0],
-                       'inodeBudget': {'state': 'over' if i_since is not None else ('ok' if exact is not None else 'unmeasured'), 'overSince': i_since},
+                       'inodeBudget': {'state': 'over' if i_since is not None else ('ok' if exact is not None else 'unmeasured'), 'overSince': i_since, 'limit': INODE_BUDGET},
                        'scratchBytes': sum(c['bytes'] for c in cs if c['sub'] == 'scratchpad' and not c.get('gone')),
                        'tasksBytes': sum(c['bytes'] for c in cs if c['sub'] == 'tasks' and not c.get('gone')),
                        'entries': sum(1 for c in cs if not c.get('gone')),
