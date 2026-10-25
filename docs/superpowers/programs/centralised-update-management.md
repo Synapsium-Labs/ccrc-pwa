@@ -6241,6 +6241,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   move; no anomaly.** The soak is untouched, and the orphan-tree lane wrote no record in the hour.
   `STATUS 2026-10-25T21:25:40Z fleet=v0.0.699 server=v0.0.699 health=v0.0.699 newest=v0.0.702 intent=*:dev/auto=off`
   `pin=None link=<versions>/v0.0.699 backups=fleet:165M/server:9270M disk=fleet:101G/work:355G/server:21G`
+- **2026-10-25 22:25 UTC — a ninth console move, to v0.0.702; v0.0.703 and v0.0.704 released; no anomaly.**
+  - **The move** was tapped from the console. The fleet box ran 21:27:42 to 21:29:25. The server started at 21:30:17,
+    restarted at 21:33:40 and settled `done` at 21:38:49.
+  - **The keep** held 5 timestamped backups, 3 with data. The new snapshot is 3132 MB, and the server has 21G free.
+  - **The fleet's sweep** read `down: 1`. That is the one supervisor unit that has been failed, at its start limit with
+    no registry row, since 2026-10-22. Every move since has named it, and the update neither caused it nor verifies it.
+    Clearing it is the operator's hand act.
+  - **The soak.** v0.0.703 and v0.0.704 are daily-only by the 9472 rule: their `watch.ts` hunks lie outside the
+    lane's spans, and the session hook is unchanged.
+  - **The orphan-tree lane's memory** cleared again at the 21:33:40 boot. The lane wrote no record in the hour.
+  `STATUS 2026-10-25T22:25:45Z fleet=v0.0.702 server=v0.0.702 health=v0.0.702 newest=v0.0.704 intent=*:dev/auto=off`
+  `pin=None link=<versions>/v0.0.702 backups=fleet:165M/server:9341M disk=fleet:98G/work:413G/server:21G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
