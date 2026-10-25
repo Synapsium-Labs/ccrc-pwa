@@ -35,6 +35,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mergeBaseDiff } from './mergeBase.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -87,19 +88,13 @@ describe('numeric line citations (D-5893)', () => {
   });
 
   it('the lines this branch adds hold no numeric line citation (D-5893, revised)', (ctx) => {
-    const git = (args: string[]): string =>
-      execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
-    let base: string;
-    try {
-      git(['rev-parse', '--verify', '--quiet', 'origin/main^{commit}']);
-      base = git(['merge-base', 'origin/main', 'HEAD']).trim();
-    } catch {
+    const diff = mergeBaseDiff(ROOT, ['.']);
+    if (diff === null) {
       console.warn('citations: skipped the added-lines rule, no origin/main or merge-base in this checkout');
       ctx.skip();
       return;
     }
     const files = new Set(corpus());
-    const diff = git(['diff', '--unified=0', '--no-color', base, '--', '.']);
     const added: string[] = [];
     let file = '';
     for (const line of diff.split('\n')) {

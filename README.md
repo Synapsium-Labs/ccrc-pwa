@@ -1212,7 +1212,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `models <id> <subcommand>`, `models refresh <id>\|--all`, `models litellm <id>` | a lane's model-class registry, and the provider catalogue it is classified against |
 | `codex start\|stop\|status\|login <id>`, `codex switch <id> litellm\|direct` | a Codex lane's tiers: its LiteLLM gateway and shim in `litellm` mode, its bridge alone in `direct` mode; `switch` moves the lane between the two ("A ChatGPT/Codex lane", below); refused on a server-role box |
 | `token sync\|probe` | the box token's fleet side: `sync --from agent` is ccrc-agent's token-sync op (a one-time code on stdin, trade for the new value, write `~/.cc-secrets/ccrc-mail.token`, prove it with one call); `probe --file <path> [--url <base>]` presents a file's value once and prints only the HTTP status and accepted, refused or unmeasured |
-| `restamp <file>` | re-stamp a file carrying a `ccrc:generated` marker after its body changed; for `ccd/session-hook.sh`, regenerate its generated helpers region from `ccd/ccd` |
+| `restamp <file>` | re-stamp a file carrying a `ccrc:generated` marker after its body changed; for `ccd/session-hook.sh`, regenerate its generated helpers region from `ccd/ccd`; `ccd/ccd` itself is refused (its stamp is written at install time) |
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same directory shape, pruned
 to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — never the backup it just made, a dir named
@@ -4541,8 +4541,8 @@ fourteen-rung ladder or mints a token, and `ccd ws-orphan --expect <token> --tre
 `git worktree remove`, never `--force`. A tree is removed only when it is clean, its HEAD is on a remote, no registry row
 names it or a path inside it, nothing holds it, and nothing in it has changed for 7 days. The server is the only
 composer of `ws-orphan`, and a child's deny list names the verb.
-The lane (`server/src/orphanTreeLane.ts`, `coord/collectOrphanTree.ts`, `orphanTreeSweep.ts`, the beat in
-`watch.ts`'s `sweepOrphanTrees`) takes a census every 6 hours (hourly in pressure mode), audits at most 2 trees per
+The lane (`server/src/orphanTreeLane.ts`, `coord/collectOrphanTree.ts`, `orphanTreeSweep.ts`, the wiring in
+`orphanTreeBeat.ts`, the cadence the `orphanTrees` row of `LANE_SCHEDULE`) takes a census every 6 hours (hourly in pressure mode), audits at most 2 trees per
 pass (4 under pressure) and acts at most once per pass fleet-wide, only on two audits of one unchanged token at least an
 hour apart. It needs `orphan-v1` from ccd and is stopped by `reclaim-paused`.
 
@@ -5057,10 +5057,10 @@ and left alone); or a `fix-round` mail from the coordinator names the PR ejected
 or next to land in a strict-protection repository. The first two license at most one absorption per
 PR. An absorption is `git merge` and nothing else — never a rebase, a force-push, or GitHub's branch
 update by any route (its button, `gh pr update-branch`, the API) — and a conflict in a
-`# ccrc:generated` stamp line (`ccd/ccd`'s line 2 is a digest of its own body) is never hand-resolved:
+`# ccrc:generated` stamp line (the session hook's generated region carries one; `ccd/ccd` does not) is never hand-resolved:
 take either side of that one line, resolve every other hunk as the source it is, then run
 `~/.local/bin/ccrc restamp <file>`. `ccrc restamp` re-stamps a stamped file and refuses, file
-untouched, one with no marker, a symlink, or a generator's own output (see Contributing). Coordinator
+untouched, one with no marker, a symlink, a generator's own output, or `ccd/ccd` (its stamp is written at install time; see Contributing). Coordinator
 clause 15 is the other half: the coordinator never calls `update-branch` by any route, never writes a
 repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`, sends a
 rebase-check only on a conflict it has measured, and commits programme-ledger documents on its own
@@ -5071,6 +5071,21 @@ only place a session that loads no ccrc skill sees it: a `Bash` call that merges
 `additionalContext` — advice, never a deny; the call runs either way, and the pattern's known misses
 are listed in the hook's own header (`server/test/session-hook-sync-advisory.test.ts`).
 `python3 deploy/measure-landing.py <subcommand>` is the programme's read-only instrument.
+
+**Ledger documents are edited on a ledger branch only (D-6926).** Shared files under
+`docs/superpowers/programs/` and `docs/superpowers/plans/` were the largest single cause of sync
+conflicts, so `.github/ci/ledger-guard.mjs` (its own `ledger guard` job, so an error there never skips the
+test jobs; tested in
+`server/test/ci-ledger-guard.test.ts`) fails a pull request that MODIFIES, DELETES or RENAMES AWAY an existing
+file there unless its head branch is `ledger/<programme>` (the name is this guard's own convention: no earlier
+ledger-branch name existed). A pull request ADDS a per-task note instead,
+`docs/superpowers/plans/<plan>/<task-or-pr>.md`, and the coordinator folds the notes into the ledger in one
+ledger pull request per wave. There is no `merge=union` driver: it silently corrupts a row edited in place. The
+escape is a `Ledger-Edit: <D-TBD reason>` trailer on the pull request's HEAD commit (only the head commit's
+trailers count, read with `git log -1 --format=%(trailers:key=Ledger-Edit,valueonly)`; a trailer on an earlier
+commit does not), which passes and is written to the step summary. The
+guard skips with a notice on a shallow checkout and on a merge-queue run. It runs warn-only
+(`LEDGER_GUARD_MODE: warn` in `ci.yml`) until the open pull requests that edit a ledger have landed.
 
 **The native merge queue (landing-order wave 2).** On a project whose `main` ruleset requires
 GitHub's merge queue — measured before each landing, never remembered — a producer lands before its
@@ -7235,23 +7250,30 @@ commands, the tools the suites need, and what CI runs. Run a single suite with
 `npx vitest` resolves a global copy with no jsdom and will falsely report that there are no
 tests.
 
-Three conventions carry more weight here than style:
+These conventions carry more weight here than style:
 
 - **A new guard ships with a test that goes red when the guard is deleted.** Measured before
   and after, not asserted in a comment. A comment is a request; a red suite is a mechanism.
 - **No overloaded null at a seam.** Two conditions a caller handles differently must not
   collapse to the same value — that is a defect, not a matter of taste.
-- **`ccd/ccd` carries a generated stamp.** Its line 2, `# ccrc:generated 1 sha256=…`, is a
-  digest of the rest of the file, and `server/test/ownership.test.ts` reds on a stale stamp or
-  a second marker line. After editing it, run `bash ccd/ccrc restamp ccd/ccd` (it needs
-  `node`). A merge in which both sides edited `ccd` conflicts on exactly that line: take
-  either side of it, resolve every other hunk as source, then restamp. `restamp` refuses a
-  file with no marker, a symlink, and any generator's output under `~/.local/bin` or
-  `~/.ccrc` — regenerate those with `ccrc wrappers` or `ccrc install`.
+- **`ccd/ccd` is stamped when it is installed, not in the repository.** Its line 2 is one fixed
+  placeholder, `# ccrc:stamp-at-install …`; `ccd/ccd-entry-install.py` swaps it, in place, for the
+  `# ccrc:generated 1 sha256=…` marker in the INSTALLED copy and renders the launcher with the
+  digest of those stamped bytes, so the chain is the one it was (the launcher refuses a body it
+  was not rendered for; the marker tells a hand edit from ccrc's own). Editing `ccd/ccd` needs no
+  restamp, and a merge in which both sides edited it has no stamp line to conflict on.
+  `server/test/ownership.test.ts` reds if the INSTALLED copy does not carry exactly one marker
+  that verifies; `ccrc restamp ccd/ccd` is refused. `restamp` also refuses a file with no
+  marker, a symlink, and any generator's output under `~/.local/bin` or `~/.ccrc` — regenerate
+  those with `ccrc wrappers` or `ccrc install`.
   `ccd/session-hook.sh` carries a generated helpers region (`shared/hook-helpers.mjs`);
   after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
-  `bash ccd/ccrc restamp ccd/session-hook.sh`. Restamping `ccd/ccd` says when the hook's
+  `bash ccd/ccrc restamp ccd/session-hook.sh`; `hook-helpers-generated.test.ts` reds when the
   region has gone stale.
+- **A feature pull request does not edit the shared ledgers.** An existing file under
+  `docs/superpowers/programs/` or `docs/superpowers/plans/` changes only on a `ledger/<programme>` branch;
+  add a new `docs/superpowers/plans/<plan>/<task-or-pr>.md` note instead, or put a `Ledger-Edit: <reason>`
+  trailer on the head commit. `.github/ci/ledger-guard.mjs` checks it (D-6926).
 
 Design records live in `docs/superpowers/specs/`; the architecture rules the code is held to
 are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`.

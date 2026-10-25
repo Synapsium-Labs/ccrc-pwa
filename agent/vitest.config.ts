@@ -13,12 +13,20 @@ import { defineConfig } from 'vitest/config';
 // cleanup the worker pool cannot skip. An exit handler inside the setup file
 // was tried first and measured insufficient: the default pool is `forks` and
 // tinypool destroys workers. See test/contain-path.globalsetup.ts.
+// That teardown never runs on a signal, though, and nothing reaped a killed
+// run's leftovers: a SIGINT or SIGTERM mid-suite left 30 fixture directories
+// loose in TMPDIR. So the server package's per-run temp parent comes first,
+// shared rather than copied (../server/test/run-tmp.globalsetup.mjs, #316): it
+// points TMPDIR at one `ccrc-testrun-*` directory before the contain-path root
+// and every fixture are made, removes it on SIGTERM/SIGINT/SIGHUP as well as at
+// teardown, and the next run collects one whose owner was SIGKILLed once quiet.
+// Pinned by test/run-tmp.test.ts.
 export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     // The server package's scrub of git's repository-redirecting variables, shared rather than copied: no agent test
     // spawns git today, so this keeps a future one from writing into the runner's checkout.
     setupFiles: ['../server/test/git-env.setup.mjs', 'test/contain-path.setup.ts'],
-    globalSetup: ['../server/test/git-env.setup.mjs', 'test/contain-path.globalsetup.ts'],
+    globalSetup: ['../server/test/git-env.setup.mjs', '../server/test/run-tmp.globalsetup.mjs', 'test/contain-path.globalsetup.ts'],
   },
 });

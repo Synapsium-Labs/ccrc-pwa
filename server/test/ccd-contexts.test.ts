@@ -8,30 +8,36 @@
 //   2. THE CALL GRAPH: a reference from one function's region to another defined name is an edge
 //      (`consolidationCensus.ts`'s `ccdCallGraph`, whose known width is written there). Edges whose ends sit in two
 //      contexts are listed by `ccdCrossContextCalls`; a call INTO K is not one (a kernel serves every context).
-//   3. THE RATCHET: the cross-context count may only shrink. When a change removes some, lower BASELINE to the new
-//      count in the same commit; it is never raised. A function that moves context changes the count: say why in
-//      the PR, and lower the baseline if it fell.
+//   3. THE RATCHET: the cross-context edges are a MANIFEST, `ccd/contexts-edges.tsv`: one sorted
+//      `caller -> callee` per line. The computed edge set must be a subset of it, so a NEW edge is red here and its
+//      line in the manifest is the diff a reviewer reads (a count would only say "one more"). A removed edge needs no
+//      edit: the test warns which manifest lines no longer exist, to be deleted when convenient, so two PRs that
+//      each remove an edge never race a number. A function that moves context changes the edges: say why in the PR.
 // No byte of `ccd/ccd` changes for any of this: the manifest is data beside it, and no installer reads it.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   CCD_CONTEXTS, bashCodeOf, ccdLauncherIn, ccdCallGraph, ccdContextRows, ccdCrossContextCalls, ccdFunctionDefinitions,
   ccdHeredocBraces,
 } from './consolidationCensus.js';
 
-/** The cross-context reference count on the day this ratchet landed. May only go DOWN, except a new destructive verb: ws-orphan (D-6629) adds the same eight lifecycle-journal calls into C1 that ws-collect makes; and ws-collect's loose arm (D-6625) adds six lifecycle-journal calls into C1's _lc_* helpers, the same journal the witnessed arm writes; and the read verb pr-landing (PL-1) adds the one `_reg_get` call into C1 that pr-state makes, to check a session's project and workspace.
- *  Raised 535 -> 537 by D-6642: `ws-archive --if-no-pane` reads the pane through `_session_probe` and the unit through `_svc_is_active`.
- *  And by an orchestrator ruling: D-6640 (ws-expire's `--child-of`) raised it 537 -> 540 for the three edges its new
- *  child-of read makes from the EXPIRE verb into the registry and child-run helpers, measured after its rebase.
- *  Lowered 540 -> 536 by ARCH-46: the registry-retire sequence is one `_reg_retire` helper with its own context row,
- *  so its callers make one edge each instead of the inlined calls, measured after its rebase.
- *  Raised 536 -> 537 by D-6638 (DR-26): the stale reclaim's one edge, the ladder's `_transcript_path` read, measured after its rebase.
- *  Raised 537 -> 538 by pr-landing's one `_reg_get` edge (above), measured after its rebase onto DR-26.
- *  Raised 538 -> 539 by D-6858: the loose arm's file rung `_ws_loose_rows_file` reads each registry row's workdir
- *  through `_reg_read`, the one edge a file needs because it cannot take the shared directory rung. */
-const BASELINE = 539;
+/** The allowed cross-context edges (D-6925): one `caller -> callee` per line, sorted. */
+const EDGES_FILE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'ccd', 'contexts-edges.tsv');
+const edgeOf = (siteText: string): string => {
+  const m = /^(\S+) \(\w+\) -> (\S+) \(\w+\)$/.exec(siteText)!;
+  return `${m[1]} -> ${m[2]}`;
+};
+/** The manifest's edges, from its text: blank lines and `#` comments are skipped. */
+const manifestEdges = (text: string): string[] =>
+  text.split('\n').filter((l) => l.trim() !== '' && !l.startsWith('#'));
+/** Computed edges the manifest does not allow, and manifest edges no longer computed. */
+const checkEdges = (computed: readonly string[], manifest: readonly string[]): { extra: string[]; stale: string[] } => {
+  const allowed = new Set(manifest); const have = new Set(computed);
+  return { extra: [...have].filter((e) => !allowed.has(e)).sort(), stale: [...allowed].filter((e) => !have.has(e)).sort() };
+};
 
 const nameOf = (text: string): string => /^([A-Za-z_][A-Za-z0-9_]*)\(/.exec(text)![1]!;
 
@@ -147,6 +153,12 @@ describe('ccd call graph: the extraction rules, on a fixture tree (D-6054)', () 
     expect(ccdCrossContextCalls(root).map((s) => `${s.line} ${s.text}`))
       .toEqual(['2 fk (K) -> fa (C1)', '7 fa (C1) -> fb (C2)', '11 fb (C2) -> fa (C1)']);
   });
+
+  it('a fixture whose ccd gains a cross-context call the manifest lacks is caught', () => {
+    // fa (C1) -> fb (C2) and fb (C2) -> fa (C1) are the fixture's cross-context edges; a manifest holding one fails the other.
+    const fixture = ccdCrossContextCalls(root).map((s) => edgeOf(s.text));
+    expect(checkEdges(fixture, ['fa -> fb']).extra).toEqual(['fb -> fa', 'fk -> fa']);
+  });
 });
 
 describe('ccd cross-context references: the ratchet (D-6054)', () => {
@@ -162,7 +174,7 @@ describe('ccd cross-context references: the ratchet (D-6054)', () => {
     ]);
   });
 
-  it(`the count is exactly ${BASELINE}: a rise is red, and a fall lowers BASELINE in the same commit`, () => {
+  it('every computed cross-context edge is in ccd/contexts-edges.tsv; edges gone from the code are listed to delete', () => {
     const sites = ccdCrossContextCalls();
     const pairs = new Map<string, number>();
     for (const s of sites) {
@@ -170,15 +182,23 @@ describe('ccd cross-context references: the ratchet (D-6054)', () => {
       pairs.set(`${a} -> ${b}`, (pairs.get(`${a} -> ${b}`) ?? 0) + 1);
     }
     const table = [...pairs].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])).map(([k, n]) => `  ${k}: ${n}`);
-    // Pinned exactly, not `<=`: a relabel between two non-K contexts can lower the count without removing a call,
-    // and an exact pin makes every fall a BASELINE line in the diff, where the reviewer reads why.
-    expect(sites.length,
-      sites.length > BASELINE
-        ? `ccd/ccd now has ${sites.length} cross-context references, above the ${BASELINE} it may not exceed. By `
-          + `context pair:\n${table.join('\n')}\nCall the owning context's function from inside its context, or move `
-          + 'the function whose row is wrong (and say why in the PR).'
-        : `ccd/ccd now has ${sites.length} cross-context references, below ${BASELINE}: lower BASELINE to `
-          + `${sites.length} in this commit (and, if a row moved, say why in the PR).`).toBe(BASELINE);
+    const { extra, stale } = checkEdges(sites.map((s) => edgeOf(s.text)), manifestEdges(readFileSync(EDGES_FILE, 'utf8')));
+    if (stale.length > 0) console.warn(`ccd-contexts: ${stale.length} manifest edges no longer exist; delete from ccd/contexts-edges.tsv:\n  ${stale.join('\n  ')}`);
+    expect(extra,
+      `ccd/ccd now makes cross-context calls the manifest does not allow. By context pair:\n${table.join('\n')}\n`
+      + "Call the owning context's function from inside its context, or move the function whose row is wrong; if the "
+      + 'edge is truly needed, add its `caller -> callee` line to ccd/contexts-edges.tsv (sorted) and say why in the PR.').toEqual([]);
+  });
+
+  it('the manifest is sorted and has no duplicate line, so a reviewer reads each edge once', () => {
+    const lines = manifestEdges(readFileSync(EDGES_FILE, 'utf8'));
+    expect(lines).toEqual([...new Set(lines)].sort());
+  });
+
+  it('the edge check fails an edge the manifest lacks and names a manifest edge the code no longer makes', () => {
+    expect(checkEdges(['a -> b', 'c -> d'], ['a -> b'])).toEqual({ extra: ['c -> d'], stale: [] });
+    expect(checkEdges(['a -> b'], ['a -> b', 'x -> y'])).toEqual({ extra: [], stale: ['x -> y'] });
+    expect(checkEdges(['a -> b'], ['a -> b'])).toEqual({ extra: [], stale: [] });
   });
 
   it('the listing covers every context pair it counts, and no edge into K', () => {

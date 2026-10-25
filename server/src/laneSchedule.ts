@@ -146,7 +146,7 @@ export type LaneName =
   | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'serverCaps'
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
-  | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator';
+  | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -232,6 +232,13 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   {
     name: 'deadCoordinator', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'mono', flight: 'join', warnKey: null,
     derivedFrom: { name: 'childReclaim', reason: 'a sibling of the child lane on the same tick, under the same switch' },
+  },
+  // The orphan-worktree lane (fleet disk retention, D-6631): the fifth of the same-tick siblings, its beat moved here from a
+  // `lastOrphanTreeSweep` field of the watcher (GitHub #1279) with the clock, cadence and flight it had: monotonic, one pass a
+  // cadence, passes may overlap (`OrphanTreeSweep` refuses its own second), and its failure reaches `tick`'s own catch.
+  {
+    name: 'orphanTrees', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'mono', flight: 'none', warnKey: null,
+    derivedFrom: { name: 'childReclaim', reason: 'a sibling of the child lane on the same tick, shadow until its own switch' },
   },
 ];
 
