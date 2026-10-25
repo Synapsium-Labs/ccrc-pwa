@@ -69,8 +69,11 @@ describe('the table', () => {
     expect(rows(coord)[0]!.pushedAt).toBe(T0 + H);
     db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(id);
     await runDriftPass(deps(LIVE), T0 + 2 * H);
-    db.prepare("UPDATE runs SET state = 'working' WHERE id = ?").run(id);
+    // Absent for a second pass, so the prune runs over the cleared row before it returns (pins the 30-day window).
     await runDriftPass(deps(LIVE), T0 + 3 * H);
+    expect(rows(coord)[0]).toMatchObject({ clearedAt: T0 + 2 * H, pushedAt: T0 + H });
+    db.prepare("UPDATE runs SET state = 'working' WHERE id = ?").run(id);
+    await runDriftPass(deps(LIVE), T0 + 4 * H);
     expect(rows(coord)[0]).toMatchObject({ clearedAt: null, pushedAt: T0 + H });
   });
   it('a row cleared more than 30 days ago is pruned', async () => {
@@ -79,8 +82,33 @@ describe('the table', () => {
     await runDriftPass(deps([]), T0);
     db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(id);
     await runDriftPass(deps([]), T0 + H);
+    await runDriftPass(deps([]), T0 + H + 30 * DAY);
+    expect(rows(coord).map((r) => r.clearedAt), 'cleared exactly 30 days ago: kept').toEqual([T0 + H]);
     await runDriftPass(deps([]), T0 + H + 30 * DAY + 1);
     expect(rows(coord)).toEqual([]);
+  });
+  it('a stored kind this build does not know is skipped and warned once; the pass still records, clears and pushes', async () => {
+    const { coord, deps, quietRun, db, warns, sent } = rig();
+    db.prepare('INSERT INTO drift_findings (key, kind, subject, detail, factAt, runId, sessionId, firstSeenAt, lastSeenAt) ' +
+      "VALUES ('future:1', 'kind-from-a-later-build', 'session', 'd', NULL, NULL, NULL, ?, ?)").run(T0 - H, T0 - H);
+    const id = quietRun(T0, 5 * DAY);
+    await runDriftPass(deps(LIVE), T0);
+    await runDriftPass(deps(LIVE), T0 + H);
+    expect(rows(coord).map((r) => r.key)).toEqual([`run-quiet:${id}`]);
+    expect(sent.filter((s) => s.mode !== 'record-only')).toHaveLength(1);
+    expect(warns.filter((w) => w.includes('kind-from-a-later-build'))).toHaveLength(1);
+    expect(warns.filter((w) => w.includes('nothing recorded') || w.includes('no push'))).toEqual([]);
+    const raw = () => db.prepare("SELECT clearedAt FROM drift_findings WHERE key = 'future:1'").all() as { clearedAt: unknown }[];
+    expect(raw().map((r) => Number(r.clearedAt)), 'the unknown row clears like any key the pass did not find').toEqual([T0]);
+    await runDriftPass(deps(LIVE), T0 + 30 * DAY + 1);
+    expect(raw(), 'and is pruned 30 days on').toEqual([]);
+  });
+  it("a finding's detail is stored through redactCommand", () => {
+    const { coord } = rig();
+    const f: DriftFinding = { key: 'run-quiet:1', kind: 'run-quiet', subject: 'run', detail: 'GH_TOKEN=ghx_neutral ls',
+      factAt: null, runId: 1, sessionId: null };
+    coord.recordDriftPass([f], T0);
+    expect(rows(coord)[0]!.detail).toBe('GH_TOKEN=[REDACTED] ls');
   });
   it('an unreadable registry listing records nothing and clears nothing', async () => {
     const { coord, deps, quietRun } = rig();
@@ -105,7 +133,7 @@ describe('the pushes', () => {
     const { coord, deps, quietRun, sent } = rig();
     for (let i = 0; i < 30; i += 1) quietRun(T0, 5 * DAY);
     await runDriftPass(deps(LIVE), T0);
-    expect(sent.filter((s) => s.mode === 'push')).toHaveLength(1);
+    expect(sent.filter((s) => s.mode !== 'record-only')).toHaveLength(1);
     expect(sent[0]!.event.body).toBe("30 items are out of step; see today's digest");
     expect(sent[0]!.opts?.url).toMatch(/^\/digest\?day=\d{4}-\d{2}-\d{2}$/);
     expect(rows(coord).every((r) => r.pushedVia === 'summary')).toBe(true);
@@ -121,9 +149,9 @@ describe('the pushes', () => {
     for (let i = 0; i < 4; i += 1) quietRun(T0, 5 * DAY);
     await runDriftPass(deps([]), T0 - H / 2); // unarmed: the table is no longer empty
     await runDriftPass(deps(LIVE), T0);
-    expect(sent.filter((s) => s.mode === 'push')).toHaveLength(1 + 3); // the summary, then 3 items
+    expect(sent.filter((s) => s.mode !== 'record-only')).toHaveLength(1 + 3); // the summary, then 3 items
     await runDriftPass(deps(LIVE), T0 + H);
-    expect(sent.filter((s) => s.mode === 'push')).toHaveLength(1 + 4);
+    expect(sent.filter((s) => s.mode !== 'record-only')).toHaveLength(1 + 4);
   });
   it('thirteen crossings in a day push 12, and a restart mid-day does not reset the count', async () => {
     const { coord, deps, quietRun, sent } = rig();
@@ -133,7 +161,7 @@ describe('the pushes', () => {
     for (let i = 0; i < 13; i += 1) quietRun(day, 5 * DAY);
     await runDriftPass(deps([]), day + H);
     for (let p = 0; p < 6; p += 1) await runDriftPass(deps(LIVE), day + 2 * H + p * 1000); // each call is a fresh lane: no memory
-    expect(sent.filter((s) => s.mode === 'push')).toHaveLength(1 + 12); // the summary, then 12 items
+    expect(sent.filter((s) => s.mode !== 'record-only')).toHaveLength(1 + 12); // the summary, then 12 items
     expect(coord.driftPushesOnDay(day)).toBe(12);
   });
   it('a restart re-finds a key and does not push it again', async () => {
@@ -143,7 +171,7 @@ describe('the pushes', () => {
     await runDriftPass(deps(LIVE), T0 + H);
     await runDriftPass(deps(LIVE), T0 + 2 * H);
     await runDriftPass(deps(LIVE), T0 + 3 * H);
-    expect(sent.filter((s) => s.mode === 'push')).toHaveLength(1);
+    expect(sent.filter((s) => s.mode !== 'record-only')).toHaveLength(1);
   });
   it('every push carries a url, and a run kind carries its runId', async () => {
     const { deps, quietRun, sent } = rig();
@@ -152,10 +180,12 @@ describe('the pushes', () => {
     const id = quietRun(T0, 5 * DAY);
     await runDriftPass(deps([]), T0);
     await runDriftPass(deps(LIVE), T0 + H);
-    const pushes = sent.filter((s) => s.mode === 'push').slice(1);
+    const pushes = sent.filter((s) => s.mode !== 'record-only').slice(1);
     expect(pushes).toHaveLength(1);
     expect(pushes[0]!.event.runId).toBe(id);
     expect(pushes[0]!.opts?.url).toBe('/runs');
+    expect(sent[0]!.mode, 'the summary').toBe('push');
+    expect(pushes[0]!.mode, 'an item records whatever the presence: its pushedAt is already stamped').toBe('record-always');
   });
   it('a live stall rung 3 on the run suppresses the push; a shadow one does not', async () => {
     const live = rig();
@@ -171,7 +201,7 @@ describe('the pushes', () => {
       .run(b, T0 - H, 'working', 'working', 'coordinator', stallDetail('shadow', 'quiet', 3, 1));
     await runDriftPass(shadow.deps([]), T0);
     await runDriftPass(shadow.deps(LIVE), T0 + H);
-    expect(shadow.sent.filter((s) => s.mode === 'push')).toHaveLength(1);
+    expect(shadow.sent.filter((s) => s.mode !== 'record-only')).toHaveLength(1);
   });
   it('claimant-gone pushes while the dead-coordinator lane is unarmed and not once it is armed', async () => {
     const un = rig();
@@ -212,7 +242,7 @@ describe('the lane wires its inputs into the push budget', () => {
     r.db.prepare('INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)')
       .run(runId, T0 - H, 'working', 'working', 'coordinator', stallDetail(mode, 'mail-stuck', 1, key));
   };
-  const itemPushes = (sent: Sent[]) => sent.filter((s) => s.mode === 'push');
+  const itemPushes = (sent: Sent[]) => sent.filter((s) => s.mode !== 'record-only');
 
   it('a parked delivery with parkEscalatedAt set is not pushed; without it, one push to the session', async () => {
     const esc = await seeded();
@@ -287,7 +317,7 @@ describe('the once-only stamps', () => {
     await runDriftPass(deps([]), T0);
     const lost = Object.assign(Object.create(coord) as CoordStore, { markDriftPushed: () => [] as string[] });
     await runDriftPass(deps(LIVE, { coord: lost }), T0 + H);
-    expect(sent.filter((s) => s.mode === 'push')).toEqual([]);
+    expect(sent.filter((s) => s.mode !== 'record-only')).toEqual([]);
   });
 });
 
@@ -297,7 +327,7 @@ describe('the shadow', () => {
     quietRun(T0, 5 * DAY);
     await runDriftPass(deps([]), T0);
     await runDriftPass(deps([]), T0 + H);
-    expect(sent.filter((s) => s.mode === 'push')).toHaveLength(0);
+    expect(sent.filter((s) => s.mode !== 'record-only')).toHaveLength(0);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ mode: 'record-only' });
     expect(sent[0]!.event.body).toContain('would have pushed 1 item');
@@ -309,13 +339,13 @@ describe('the shadow', () => {
     for (let i = 0; i < 30; i += 1) quietRun(T0, 5 * DAY);
     await runDriftPass(deps([]), T0);
     await runDriftPass(deps(LIVE), T0 + 7 * DAY);
-    const pushes = sent.filter((s) => s.mode === 'push');
+    const pushes = sent.filter((s) => s.mode !== 'record-only');
     expect(pushes).toHaveLength(1);
     expect(pushes[0]!.event.body).toBe("30 items are out of step; see today's digest");
     expect(rows(coord).every((r) => r.pushedVia === 'summary')).toBe(true);
     expect(coord.driftPushesOnDay(0)).toBe(0);
     await runDriftPass(deps(LIVE), T0 + 7 * DAY + H);
-    expect(sent.filter((s) => s.mode === 'push')).toHaveLength(1);
+    expect(sent.filter((s) => s.mode !== 'record-only')).toHaveLength(1);
   });
 });
 

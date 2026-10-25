@@ -34,6 +34,9 @@ export interface DriftLaneDeps {
 
 const DAY_MS = 86_400_000;
 
+/** The stored kinds this process already warned it cannot name: one warn per kind, not one per pass. */
+const warnedUnknownKinds = new Set<string>();
+
 /** One pass. Never throws: a bad read warns and the next pass retries. */
 export async function runDriftPass(d: DriftLaneDeps, now: number): Promise<void> {
   try {
@@ -55,6 +58,11 @@ async function pass(d: DriftLaneDeps, now: number): Promise<void> {
     if (!r.ok) { d.warn(`ccrc-server: sweepDrift could not read the coordination store (${r.detail}) — nothing recorded this pass`); return; }
   }
   if (!runs.ok || !deliveries.ok || !reviews.ok || !asks.ok || !before.ok || !told.ok) return;
+  for (const k of before.unknownKinds) {
+    if (warnedUnknownKinds.has(k)) continue;
+    warnedUnknownKinds.add(k);
+    d.warn(`ccrc-server: sweepDrift skips stored findings of kind '${k}', which this build does not know — they clear`);
+  }
 
   const claimants = new Map<string, ClaimantReading>();
   const ids = new Set<string>();
@@ -101,8 +109,10 @@ async function pass(d: DriftLaneDeps, now: number): Promise<void> {
   for (const r of plan.items) {
     if (d.coord.markDriftPushed([r.key], now, 'item').length === 0) continue;
     const url = r.runId !== null ? '/runs' : r.sessionId !== null ? `/s/${r.sessionId}` : `/digest?day=${day}`;
+    // 'record-always': `pushedAt` is already stamped, so a session kind chosen while the operator views that session
+    // must still leave its Inbox row (in 'push' the funnel would drop it, and the finding would never be told).
     d.notice({ kind: 'coord', sessionId: r.sessionId ?? '', runId: r.runId, title: 'Out of step', body: r.detail },
-      'push', { tag: `drift-${r.key}`, url });
+      'record-always', { tag: `drift-${r.key}`, url });
   }
   if (plan.shadow.length > 0) {
     const won = d.coord.markDriftShadowed(plan.shadow.map((r) => r.key), now);

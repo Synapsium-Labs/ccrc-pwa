@@ -63,7 +63,8 @@ export const LANDING_DISABLED_MARKER = 'landing-disabled';
 export const LANDING_CHECKS_LIVE_MARKER = 'landing-checks-live';
 
 /** `$REG/drift-push-live`: arms the drift reconciler's operator pushes. Absent, the lane records what is out of step and
- *  a single shadow notice per finding names what it would have pushed. No writer in the tree. */
+ *  a single shadow notice per finding names what it would have pushed. No writer in the tree. Arm it only after the
+ *  digest's drift section has landed: the summary push (and an item with no run or session) opens the day's digest. */
 export const DRIFT_PUSH_LIVE_MARKER = 'drift-push-live';
 
 /** The spec's bounded contexts (consolidation spec 2026-10-19 §2), the `owner` of a row. */
@@ -172,7 +173,8 @@ export const SWITCHES = {
   },
   [DRIFT_PUSH_LIVE_MARKER]: {
     storage: { marker: DRIFT_PUSH_LIVE_MARKER }, default: 'absent: shadow, the reconciler records what it would push',
-    owner: 'C5', meaning: 'The drift reconciler pushes the operator once about a finding that stands past 24 hours.',
+    owner: 'C5', meaning: 'The drift reconciler pushes the operator once about a finding that stands past 24 hours. ' +
+      "Arm it only once the digest lists drift findings: its summary push opens the day's digest.",
     writer: 'hand-only',
   },
   [IDLE_NUDGE_DISABLED_MARKER]: {

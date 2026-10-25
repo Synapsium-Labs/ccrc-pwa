@@ -959,6 +959,9 @@ const persistedInt = (text: string, column: string): PersistedInt => {
 
 /** The drift reads' answer (D-5921): the rows, or a read that failed, with its detail. */
 export type DriftReadResult<T> = { ok: true; rows: T[] } | { ok: false; detail: string };
+/** The findings table's read: `unknownKinds` names the stored kinds this build skipped (see `readDriftRows`). */
+export type DriftFindingsRead =
+  | { ok: true; rows: DriftFindingRow[]; unknownKinds: readonly string[] } | { ok: false; detail: string };
 
 /** A drift read's integer, proven: a non-negative safe integer, or the read fails naming the column (no value). */
 const driftInt = (v: unknown, column: string): number => {
@@ -4876,8 +4879,11 @@ export class CoordStore {
   }
 
   /** Every stored row, open or cleared (the lane's push choice reads the open ones, and an empty table is the first-pass
-   *  rule's trigger). `kind` is narrowed through `isDriftKind`; a row this build cannot name fails the read. */
-  private readDriftRows(where: string, params: number[]): DriftReadResult<DriftFindingRow> {
+   *  rule's trigger). `kind` is narrowed through `isDriftKind`. A row this build cannot name (a kind a later build
+   *  wrote, then rolled back) is SKIPPED and its kind named in `unknownKinds`, never a failed read: the pass still
+   *  records, so that row clears like any key the pass did not find and is pruned 30 days on (a rollback stays a
+   *  plain revert). */
+  private readDriftRows(where: string, params: number[]): DriftFindingsRead {
     try {
       const rows = this.db.prepare(
         'SELECT key, kind, subject, detail, factAt, runId, sessionId, firstSeenAt, lastSeenAt, clearedAt, pushedAt, ' +
@@ -4885,30 +4891,33 @@ export class CoordStore {
       ).all(...params) as { key: string; kind: string; subject: string; detail: string; factAt: unknown; runId: unknown;
         sessionId: string | null; firstSeenAt: unknown; lastSeenAt: unknown; clearedAt: unknown; pushedAt: unknown;
         pushedVia: string | null; shadowAt: unknown }[];
-      return { ok: true, rows: rows.map((r) => {
-        if (!isDriftKind(r.kind)) throw new Error('drift_findings kind is not a DriftKind');
-        return { key: r.key, kind: r.kind, subject: r.subject, detail: r.detail,
+      const unknownKinds = new Set<string>();
+      const out: DriftFindingRow[] = [];
+      for (const r of rows) {
+        if (!isDriftKind(r.kind)) { unknownKinds.add(String(r.kind)); continue; }
+        out.push({ key: r.key, kind: r.kind, subject: r.subject, detail: r.detail,
           factAt: driftIntOrNull(r.factAt, 'drift_findings factAt'), runId: driftIntOrNull(r.runId, 'drift_findings runId'),
           sessionId: r.sessionId, firstSeenAt: driftInt(r.firstSeenAt, 'drift_findings firstSeenAt'),
           lastSeenAt: driftInt(r.lastSeenAt, 'drift_findings lastSeenAt'),
           clearedAt: driftIntOrNull(r.clearedAt, 'drift_findings clearedAt'),
           pushedAt: driftIntOrNull(r.pushedAt, 'drift_findings pushedAt'),
           pushedVia: r.pushedVia === 'item' || r.pushedVia === 'summary' ? r.pushedVia : null,
-          shadowAt: driftIntOrNull(r.shadowAt, 'drift_findings shadowAt') };
-      }) };
+          shadowAt: driftIntOrNull(r.shadowAt, 'drift_findings shadowAt') });
+      }
+      return { ok: true, rows: out, unknownKinds: [...unknownKinds] };
     } catch (err) {
       return { ok: false, detail: err instanceof Error ? err.message : String(err) };
     }
   }
 
   /** Every stored row, open or cleared (an empty table is the first-pass rule's trigger). */
-  driftFindingRows(): DriftReadResult<DriftFindingRow> { return this.readDriftRows('', []); }
+  driftFindingRows(): DriftFindingsRead { return this.readDriftRows('', []); }
 
   /** The rows no pass has cleared. */
-  openDriftFindings(): DriftReadResult<DriftFindingRow> { return this.readDriftRows('WHERE clearedAt IS NULL', []); }
+  openDriftFindings(): DriftFindingsRead { return this.readDriftRows('WHERE clearedAt IS NULL', []); }
 
   /** The rows that stood open at `ms`: first seen before it and not cleared until at or after it (the digest's read). */
-  driftFindingsOpenAt(ms: number): DriftReadResult<DriftFindingRow> {
+  driftFindingsOpenAt(ms: number): DriftFindingsRead {
     return this.readDriftRows('WHERE firstSeenAt < ? AND (clearedAt IS NULL OR clearedAt >= ?)', [ms, ms]);
   }
 
