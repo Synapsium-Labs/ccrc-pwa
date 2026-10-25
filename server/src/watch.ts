@@ -7266,14 +7266,8 @@ export class FleetWatcher {
     return true;
   }
 
-  private async mailPass(store: CoordStore, fleet?: FleetReadModel): Promise<void> {
-    const now = Date.now();
-
-    // Fail-shut: a registry we cannot list is a kill-switch we cannot read. THIS listing stays fresh (D-5864): it is the
-    // last switch read before the pass delivers, so a switch raised after the tick's listing still holds the lane. Only
-    // the recipients below are selected from the tick's model.
-    const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
-    if (listing === null || readSwitches(listing)[MAIL_DISABLED_MARKER] === 'set') return;
+  /** The gate mode of this sweep and the busy clock it moves; the sweep's own kill-switch read stays at its call site. */
+  private applyMailMode(store: CoordStore, listing: string[], now: number): MailTurnMode {
     // The gate's mode comes from this SAME listing (worker stall watch §4.1,
     // `turnidle.ts`), through the one settings resolution the stall sweep also
     // calls (stall watch settings §9): a chosen level can set it, and strict
@@ -7288,6 +7282,178 @@ export class FleetWatcher {
     if (mode !== 'busy') this.busySince = null;
     else if (this.lastApplied !== null && this.lastApplied !== 'busy') this.busySince = now;
     this.lastApplied = mode;
+    return mode;
+  }
+
+  /** The bookkeeping maps keep only what is still outstanding (parked probes, the busy-shadow memory). */
+  private pruneMailMemory(store: CoordStore, parkedRows: readonly { id: number }[],
+                          outstanding: readonly { id: number }[]): void {
+    const parkedIds = new Set(parkedRows.map((p) => p.id));
+    for (const id of this.parkProbeAt.keys()) if (!parkedIds.has(id)) this.parkProbeAt.delete(id);
+    // The busy-shadow log's memory keeps only deliveries still outstanding.
+    // It is pruned BEFORE the empty-queue return, so an idle box empties it.
+    // Due or delivered this sweep is outstanding; a row in neither is looked up,
+    // because a queued row another lane backed off past this sweep is still
+    // outstanding and must not be said a second time when it returns.
+    const outstandingIds = new Set(outstanding.map((r) => r.id));
+    for (const loggedId of this.busyShadowLogged) {
+      if (outstandingIds.has(loggedId)) continue;
+      const row = store.delivery(loggedId);
+      if (row === null || (TERMINAL_DELIVERY_STATES as readonly string[]).includes(row.state)) this.busyShadowLogged.delete(loggedId);
+    }
+  }
+
+  /** The `UserPromptSubmit` edge sample over every delivered, unacked row (see `mailPass`'s docstring). */
+  private async sampleEdge(store: CoordStore, unacked: ReturnType<CoordStore['deliveredUnacked']>,
+                           hookStateFor: (toId: string) => Promise<HookState | null>): Promise<void> {
+    for (const row of unacked) {
+      if (row.deliveredAt === null) continue;   // defensive; markDelivered always sets it
+      if (row.ingestedAt !== null) continue;
+      const hs = await hookStateFor(row.toId);
+      if (hs !== null && hs.event === 'UserPromptSubmit' && hs.updatedAt > row.deliveredAt) {
+        this.landed(store.markIngested(row.id, hs.updatedAt), 'markIngested', row.id);
+      }
+    }
+  }
+
+  /** The parked rows' pass: the ceiling, the one escalation, and the per-recipient probe list. */
+  private passParked(store: CoordStore, parkedRows: ReturnType<CoordStore['parkedDeliveries']>, now: number,
+                     sessionProjects: ReadonlyMap<string, string>, projects: Set<string>) {
+    let ceilinged = false;
+    // D-5838 (verification round): the probe is grouped per RECIPIENT — one
+    // capture per box per sweep, its answer fanned out to every parked row for
+    // that box — and claims `mailInFlight` for that recipient while it waits, the
+    // same single-flight the due loop below keeps. A probe stuck behind another
+    // caller's `KeyedQueue` slot therefore holds only ITS recipient: the next
+    // sweep skips that box (here and in the due loop, `in-flight`) and still
+    // delivers to everyone else, exactly as an ordinary row's stuck send does.
+    const probeFor = new Map<string, (typeof parkedRows)[number][]>();
+    for (const p of parkedRows) {
+      const verdict = decideParked(p, now);
+      if (verdict.kind === 'reject') {
+        ceilinged = true;
+        this.settleDelivery(store, p.id, verdict, p);
+        continue;
+      }
+      if (verdict.escalate && store.markParkEscalated(p.id, now).changed) {
+        this.escalatePark(store, p, sessionProjects, projects);
+      }
+      if (!verdict.waiting || this.mailInFlight.has(p.toId)) continue;
+      if (now - (this.parkProbeAt.get(p.id) ?? 0) < MAIL_PARK_PROBE_MS) continue;
+      this.parkProbeAt.set(p.id, now);
+      const rows = probeFor.get(p.toId) ?? [];
+      rows.push(p);
+      probeFor.set(p.toId, rows);
+    }
+    return { ceilinged, probeFor };
+  }
+
+  /** One box capture per probed recipient; true when a parked row's box changed and it woke. */
+  private async probeParked(store: CoordStore, probeFor: ReadonlyMap<string, ReturnType<CoordStore['parkedDeliveries']>>,
+                            now: number): Promise<boolean> {
+    let woke = false;
+    for (const [toId, rows] of probeFor) {
+      if (this.mailInFlight.has(toId)) continue;
+      this.mailInFlight.add(toId);
+      let box: string | null;
+      try {
+        box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, toId).catch(() => null);
+      } finally {
+        this.mailInFlight.delete(toId);
+      }
+      if (box === null) continue;
+      for (const p of rows) {
+        const seen = parkBoxSeen(box, p.parkBox);
+        if (seen === 'baseline') this.landed(store.baselineParkBox(p.id, box), 'baselineParkBox', p.id);
+        else if (seen === 'changed' && store.wakeParked(p.id, now).changed) woke = true;
+      }
+    }
+
+    return woke;
+  }
+
+  /** The act on a failed nudge send, by `decideSendFailure`'s answer (guard order in `coord/delivery.ts`). */
+  private async actOnSendFailure(store: CoordStore, d: ReturnType<CoordStore['dueDeliveries']>[number], error: string, now: number,
+                                 gated: (d: ReturnType<CoordStore['dueDeliveries']>[number], gate: MailGate) => void,
+                                 sessionProjects: ReadonlyMap<string, string>, projects: Set<string>): Promise<void> {
+      /**
+       * TELL THE SENDER, ONCE (Task 409). Every operator-visible signal this
+       * lane had was recipient-side and arrived only AFTER the park — and
+       * coordinator<->worker mail is the only channel Build 7 has, so one
+       * dirty input box silences a whole wave with nothing anywhere saying
+       * why, on the screen of the session that actually needed to know.
+       *
+       * `recordAlways: true` for the same reason `pushNewMail` sets it: an
+       * undeliverable message is a fact that happened whether or not the
+       * operator is looking at the sender's pane. The PUSH stays
+       * presence-gated, exactly as it is for every kind.
+       *
+       * THE EXISTING `'mail'` KIND, deliberately. `KIND_WORD`/`KIND_GLYPH`
+       * in `MailScreen` are TOTAL maps, so a seventh kind means editing both
+       * plus `NOTIFY_KINDS`, and every older client renders `undefined`.
+       *
+       * AND A DURABLE FEED ROW, NOT A `run_events` ROW (operator-accepted
+       * deviation from §4.5). `advanceInner` is the only TRANSITION writer
+       * of `run_events`: every insert there is paired with a transition
+       * validated against `RUN_TRANSITIONS`, which has no self-transition
+       * for any state. The other writers (`recordRunEvent`, the stall
+       * watch's `insertStallObservation`) write `fromState === toState`
+       * observation rows, which `pushNewRuns` skips, so they push nothing.
+       * A park is not a run transition, so a transition row would lie about
+       * the run's state and an observation row would never reach the
+       * sender. `pushOne` mirrors into
+       * `CoordStore.recordFeedEvent` — the durable archive behind the feed —
+       * at exactly this point, which is the durability that was wanted.
+       */
+      const tellSender = (why: string, tag: string): void => {
+        this.pushSenderNotice(store, d.mailId, d.toId, why, tag, sessionProjects, projects);
+      };
+
+      // The guard order is `decideSendFailure`'s: the two holds, then the park (never for a delivered row), then the
+      // park ceiling, then the back-off. D-5912: the two stash refusals are the delivery's GATE as well as its
+      // `lastError`, so `mail-stuck`'s "Its last gate:" names them (its port carries no `lastError`, D-792).
+      const failure = decideSendFailure(d, error, now);
+      if (failure.gate === 'stash-failed') gated(d, 'stash-failed');
+      if (failure.gate === 'stash-occupied') gated(d, 'stash-occupied');
+      const act = failure.action;
+      if (act.kind === 'hold') {
+        // D-2369 / worker stall watch §4.1: told once per hold, and only for a blocked recipient, never a running turn.
+        if (act.tellSender) {
+          tellSender('the recipient is waiting out a usage limit on its own; the nudge is held until it resumes',
+            `mail-blocked-${d.id}`);
+        }
+        this.landed(store.backOff(d.id, act.why, act.until, false), 'backOff', d.id);
+      } else if (act.kind === 'park') {
+        // D-5838 (#754): PARK, never reject, a live recipient's mail. What the box holds NOW, for the probe to compare
+        // against, read once more. (D-5912: no refusal on this lane carries the box any more; the lane's sends stash a
+        // draft, so `draft-present` cannot reach here.)
+        const box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId);
+        if (!this.landed(store.parkDelivery(d.id, act.reason, box, now, act.retryAt), 'parkDelivery', d.id)) return;
+        this.parkProbeAt.set(d.id, now);
+        if (act.tellSender) this.tellParkedSender(store, d.mailId, d.toId, 'parked', act.reason);
+        // A park that followed `MAIL_MAX_ATTEMPTS` failures has already been stuck about `MAIL_PARK_ESCALATE_MS`:
+        // the operator hears it now.
+        if (act.escalate && store.markParkEscalated(d.id, now).changed) {
+          this.escalatePark(store, { id: d.id, mailId: d.mailId, toId: d.toId, parkReason: act.reason },
+            sessionProjects, projects);
+        }
+      } else {
+        // D-5997: told only once the write LANDED: an ack that beat it means the mail arrived. D-5912: no sender notice
+        // on a back-off; a long wait is the park's `mail-parked` push (spec §2.4).
+        this.settleDelivery(store, d.id, act, d);
+      }
+  }
+
+
+  private async mailPass(store: CoordStore, fleet?: FleetReadModel): Promise<void> {
+    const now = Date.now();
+
+    // Fail-shut: a registry we cannot list is a kill-switch we cannot read. THIS listing stays fresh (D-5864): it is the
+    // last switch read before the pass delivers, so a switch raised after the tick's listing still holds the lane. Only
+    // the recipients below are selected from the tick's model.
+    const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
+    if (listing === null || readSwitches(listing)[MAIL_DISABLED_MARKER] === 'set') return;
+    const mode = this.applyMailMode(store, listing, now);
 
     const unacked = store.deliveredUnacked();
     const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);
@@ -7298,19 +7464,7 @@ export class FleetWatcher {
     // and told at 10 (the brief pass below). A REJECTED brief is outstanding
     // nowhere else, so the empty-queue return counts these too.
     const briefs = store.unlandedBriefs(now - BRIEF_WATCH_HORIZON_MS);
-    const parkedIds = new Set(parkedRows.map((p) => p.id));
-    for (const id of this.parkProbeAt.keys()) if (!parkedIds.has(id)) this.parkProbeAt.delete(id);
-    // The busy-shadow log's memory keeps only deliveries still outstanding.
-    // It is pruned BEFORE the empty-queue return, so an idle box empties it.
-    // Due or delivered this sweep is outstanding; a row in neither is looked up,
-    // because a queued row another lane backed off past this sweep is still
-    // outstanding and must not be said a second time when it returns.
-    const outstandingIds = new Set([...unacked, ...dueBefore].map((r) => r.id));
-    for (const loggedId of this.busyShadowLogged) {
-      if (outstandingIds.has(loggedId)) continue;
-      const row = store.delivery(loggedId);
-      if (row === null || (TERMINAL_DELIVERY_STATES as readonly string[]).includes(row.state)) this.busyShadowLogged.delete(loggedId);
-    }
+    this.pruneMailMemory(store, parkedRows, [...unacked, ...dueBefore]);
     if (unacked.length === 0 && dueBefore.length === 0 && parkedRows.length === 0 && briefs.length === 0) return;
     // Fix — blocking review findings 1/5: `readRegistry`'s OLD signature
     // collapses a whole-fleet `io.readdir` failure to `[]` — the SAME shape
@@ -7374,14 +7528,7 @@ export class FleetWatcher {
     // fresh, later edge from an actual REPLAY still re-dates the clock — via
     // that replay's own `markDelivered`, not this loop — exactly as
     // `dueDeliveries`'s `MAX(...)` already expects (see its own docstring).
-    for (const row of unacked) {
-      if (row.deliveredAt === null) continue;   // defensive; markDelivered always sets it
-      if (row.ingestedAt !== null) continue;
-      const hs = await hookStateFor(row.toId);
-      if (hs !== null && hs.event === 'UserPromptSubmit' && hs.updatedAt > row.deliveredAt) {
-        this.landed(store.markIngested(row.id, hs.updatedAt), 'markIngested', row.id);
-      }
-    }
+    await this.sampleEdge(store, unacked, hookStateFor);
 
     // Re-read due-ness AFTER the edge sample above, not before: `markIngested`
     // can only ever push a row's replay clock LATER, so a `dueBefore` row
@@ -7392,48 +7539,8 @@ export class FleetWatcher {
     // D-5838: the PARKED rows. The 24 h ceiling, the one operator escalation, and
     // the box probe that wakes a row whose box changed since it parked.
     let woke = false;
-    let ceilinged = false;
-    // D-5838 (verification round): the probe is grouped per RECIPIENT — one
-    // capture per box per sweep, its answer fanned out to every parked row for
-    // that box — and claims `mailInFlight` for that recipient while it waits, the
-    // same single-flight the due loop below keeps. A probe stuck behind another
-    // caller's `KeyedQueue` slot therefore holds only ITS recipient: the next
-    // sweep skips that box (here and in the due loop, `in-flight`) and still
-    // delivers to everyone else, exactly as an ordinary row's stuck send does.
-    const probeFor = new Map<string, (typeof parkedRows)[number][]>();
-    for (const p of parkedRows) {
-      const verdict = decideParked(p, now);
-      if (verdict.kind === 'reject') {
-        ceilinged = true;
-        this.settleDelivery(store, p.id, verdict, p);
-        continue;
-      }
-      if (verdict.escalate && store.markParkEscalated(p.id, now).changed) {
-        this.escalatePark(store, p, sessionProjects, projects);
-      }
-      if (!verdict.waiting || this.mailInFlight.has(p.toId)) continue;
-      if (now - (this.parkProbeAt.get(p.id) ?? 0) < MAIL_PARK_PROBE_MS) continue;
-      this.parkProbeAt.set(p.id, now);
-      const rows = probeFor.get(p.toId) ?? [];
-      rows.push(p);
-      probeFor.set(p.toId, rows);
-    }
-    for (const [toId, rows] of probeFor) {
-      if (this.mailInFlight.has(toId)) continue;
-      this.mailInFlight.add(toId);
-      let box: string | null;
-      try {
-        box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, toId).catch(() => null);
-      } finally {
-        this.mailInFlight.delete(toId);
-      }
-      if (box === null) continue;
-      for (const p of rows) {
-        const seen = parkBoxSeen(box, p.parkBox);
-        if (seen === 'baseline') this.landed(store.baselineParkBox(p.id, box), 'baselineParkBox', p.id);
-        else if (seen === 'changed' && store.wakeParked(p.id, now).changed) woke = true;
-      }
-    }
+    const { ceilinged, probeFor } = this.passParked(store, parkedRows, now, sessionProjects, projects);
+    if (await this.probeParked(store, probeFor, now)) woke = true;
 
     // D-5841: the brief pass. It only writes the two run-event rows, the notice
     // mail and D1's `wakeParked`; the woken row goes through every gate below.
@@ -7882,72 +7989,7 @@ export class FleetWatcher {
           }
           continue;
         }
-        /**
-         * TELL THE SENDER, ONCE (Task 409). Every operator-visible signal this
-         * lane had was recipient-side and arrived only AFTER the park — and
-         * coordinator<->worker mail is the only channel Build 7 has, so one
-         * dirty input box silences a whole wave with nothing anywhere saying
-         * why, on the screen of the session that actually needed to know.
-         *
-         * `recordAlways: true` for the same reason `pushNewMail` sets it: an
-         * undeliverable message is a fact that happened whether or not the
-         * operator is looking at the sender's pane. The PUSH stays
-         * presence-gated, exactly as it is for every kind.
-         *
-         * THE EXISTING `'mail'` KIND, deliberately. `KIND_WORD`/`KIND_GLYPH`
-         * in `MailScreen` are TOTAL maps, so a seventh kind means editing both
-         * plus `NOTIFY_KINDS`, and every older client renders `undefined`.
-         *
-         * AND A DURABLE FEED ROW, NOT A `run_events` ROW (operator-accepted
-         * deviation from §4.5). `advanceInner` is the only TRANSITION writer
-         * of `run_events`: every insert there is paired with a transition
-         * validated against `RUN_TRANSITIONS`, which has no self-transition
-         * for any state. The other writers (`recordRunEvent`, the stall
-         * watch's `insertStallObservation`) write `fromState === toState`
-         * observation rows, which `pushNewRuns` skips, so they push nothing.
-         * A park is not a run transition, so a transition row would lie about
-         * the run's state and an observation row would never reach the
-         * sender. `pushOne` mirrors into
-         * `CoordStore.recordFeedEvent` — the durable archive behind the feed —
-         * at exactly this point, which is the durability that was wanted.
-         */
-        const tellSender = (why: string, tag: string): void => {
-          this.pushSenderNotice(store, d.mailId, d.toId, why, tag, sessionProjects, projects);
-        };
-
-        // The guard order is `decideSendFailure`'s: the two holds, then the park (never for a delivered row), then the
-        // park ceiling, then the back-off. D-5912: the two stash refusals are the delivery's GATE as well as its
-        // `lastError`, so `mail-stuck`'s "Its last gate:" names them (its port carries no `lastError`, D-792).
-        const failure = decideSendFailure(d, res.error, now);
-        if (failure.gate === 'stash-failed') gated(d, 'stash-failed');
-        if (failure.gate === 'stash-occupied') gated(d, 'stash-occupied');
-        const act = failure.action;
-        if (act.kind === 'hold') {
-          // D-2369 / worker stall watch §4.1: told once per hold, and only for a blocked recipient, never a running turn.
-          if (act.tellSender) {
-            tellSender('the recipient is waiting out a usage limit on its own; the nudge is held until it resumes',
-              `mail-blocked-${d.id}`);
-          }
-          this.landed(store.backOff(d.id, act.why, act.until, false), 'backOff', d.id);
-        } else if (act.kind === 'park') {
-          // D-5838 (#754): PARK, never reject, a live recipient's mail. What the box holds NOW, for the probe to compare
-          // against, read once more. (D-5912: no refusal on this lane carries the box any more; the lane's sends stash a
-          // draft, so `draft-present` cannot reach here.)
-          const box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId);
-          if (!this.landed(store.parkDelivery(d.id, act.reason, box, now, act.retryAt), 'parkDelivery', d.id)) continue;
-          this.parkProbeAt.set(d.id, now);
-          if (act.tellSender) this.tellParkedSender(store, d.mailId, d.toId, 'parked', act.reason);
-          // A park that followed `MAIL_MAX_ATTEMPTS` failures has already been stuck about `MAIL_PARK_ESCALATE_MS`:
-          // the operator hears it now.
-          if (act.escalate && store.markParkEscalated(d.id, now).changed) {
-            this.escalatePark(store, { id: d.id, mailId: d.mailId, toId: d.toId, parkReason: act.reason },
-              sessionProjects, projects);
-          }
-        } else {
-          // D-5997: told only once the write LANDED: an ack that beat it means the mail arrived. D-5912: no sender notice
-          // on a back-off; a long wait is the park's `mail-parked` push (spec §2.4).
-          this.settleDelivery(store, d.id, act, d);
-        }
+        await this.actOnSendFailure(store, d, res.error, now, gated, sessionProjects, projects);
       } finally {
         this.mailInFlight.delete(d.toId);
       }

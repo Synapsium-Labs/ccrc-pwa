@@ -7,8 +7,9 @@
 // the one executor, and every `DeliveryAction` kind is handled by an exhaustive switch.
 import { describe, it, expect } from 'vitest';
 import { MAIL_MAX_ATTEMPTS } from '../../shared/api.js';
+import { codeLines } from './growthCheck.js';
 import { stringPieces } from './scan/parse.js';
-import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
+import { callsIn, parsedFile, sourceOfSymbol, symbolOf } from './scan/symbols.js';
 import {
   decideParked, decideRecipientAbsent, decideReplayCeiling, decideSendFailure, decideSessionDead, decideTmuxUnknown,
   MAIL_ARMED_HOLD_MS, MAIL_BACKOFF_BASE_MS, MAIL_BACKOFF_MAX_MS, MAIL_PARK_CEILING_MS, MAIL_PARK_ESCALATE_MS,
@@ -143,8 +144,11 @@ describe('the acceptance pins (ARCH-19)', () => {
     expect(calls).toContain('backOff');
     expect(calls).toContain('rejectDelivery');
   });
-  it('mailPass reaches every policy choice through a decider', () => {
-    const names = callsIn(symbolOf(WATCH, 'FleetWatcher.mailPass')).map((c) => c.name);
+  it('mailPass is at most 150 code lines (#539 first acceptance criterion)', () => {
+    expect(codeLines('watch.ts', sourceOfSymbol(WATCH, 'FleetWatcher.mailPass'))).toBeLessThanOrEqual(150);
+  });
+  it('the mail lane reaches every policy choice through a decider', () => {
+    const names = ['mailPass', 'passParked', 'actOnSendFailure'].flatMap((m) => callsIn(symbolOf(WATCH, `FleetWatcher.${m}`)).map((c) => c.name));
     for (const d of ['decideRecipientAbsent', 'decideSessionDead', 'decideTmuxUnknown', 'decideSendFailure', 'decideParked',
       'decideReplayCeiling']) expect(names, d).toContain(d);
   });
