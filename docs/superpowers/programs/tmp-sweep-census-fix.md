@@ -15,7 +15,7 @@ programme carries the fix.
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | The reader accepts a session-less `test-run` row and parses its id and uuid as "no session"; receipts never mail one; the spec says what the writer writes; a contract row runs the real sweep's census through the reader. | — | **DISPATCHED** 2026-10-25 10:24 UTC as run 941 to a fresh child workspace. Brief: the plan's decision and task, the mutation rule, fixture HOMEs only, gates. |
+| 1 | The reader accepts a session-less `test-run` row and parses its id and uuid as "no session"; receipts never mail one; the spec says what the writer writes; a contract row runs the real sweep's census through the reader. | #1378 | **IN REVIEW** 2026-10-25 10:50 UTC: wave-done at `41bbe7ead` (tip, PR head and handoff re-measured equal; merge-tree clean), moved to awaiting review; review run 942 dispatched with the held-out panel and a writer-reader contract lens. Was: dispatched 10:24 UTC as run 941. |
 
 ## Decisions & deviations
 
