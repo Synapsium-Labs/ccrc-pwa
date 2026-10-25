@@ -1311,8 +1311,8 @@ describe('the other send paths are held while an inline ask is up (R89)', () => 
   });
 
   describe.each([
-    ['Replace draft', 'my message', (): string => 'my message'],
-    ['Append anyway', 'half-typed thought\nmy message', (): string => 'half-typed thought\nmy message'],
+    ['Replace draft', 'my message'],
+    ['Append anyway', 'half-typed thought\nmy message'],
   ] as const)('the draft-conflict sheet\'s %s', (label, sent) => {
     it('with fixture 7 up it is disabled before any click, a click leaves the sheet open and sends nothing, and after the clear it resolves once', async () => {
       media(true);
