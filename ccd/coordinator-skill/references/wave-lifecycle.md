@@ -998,15 +998,21 @@ unk=$(jq -c '[.[].type] - ["pull_request", "merge_queue", "required_status_check
 # exactly one value (`-s` slurps the answer: an empty body, or two or more values, is a stop here). The names
 # are one predicate, `classic_names`, which read 3b's projection of the same checks uses too: a missing or null
 # container or list is no entries, a present one is an object or an array, and every entry has a non-empty string name.
+# The call's exit status is kept apart from the text it printed (`rc3`, read on the line after the call): text that says
+# 200 is an answer only when the call exited 0, while a 404 and a 401 or 403 come, by design, from a call that exits
+# nonzero, so the status is not checked ahead of the status line. The 404's message is judged in jq on the JSON itself,
+# one value and exactly those words: `jq -r` and a command substitution would drop a trailing newline from it.
 names='def named: type == "string" and length > 0;
   def typed($k; f): (has($k) | not) or (.[$k] | f);
   def classic_names: . == null or (type == "object"
     and typed("checks"; . == null or (type == "array" and all(.[]; type == "object" and (.context | named))))
     and typed("contexts"; . == null or (type == "array" and all(.[]; named))));'
 r3=$(gh api -i "repos/{owner}/{repo}/branches/$base/protection" 2>/dev/null)
+rc3=$?
 c3=$(head -n1 <<<"$r3" | cut -d' ' -f2) b3=$(tr -d '\r' <<<"$r3" | sed '1,/^$/d') via=3
 case "$c3" in
-  200) prot=$(jq -sce "$names"'
+  200) [ "$rc3" = 0 ] || stop "unreadable: read 3"
+       prot=$(jq -sce "$names"'
          def cnt: type == "number" and . == floor and . >= 0 and . <= 9007199254740991;
          if length == 1 then .[0] else error("not exactly one value") end
          | if type == "object"
@@ -1014,7 +1020,8 @@ case "$c3" in
             and (.required_conversation_resolution | . == null or (type == "object" and typed("enabled"; type == "boolean")))
             and (.required_status_checks | classic_names)
          then . else error("not a usable object") end' <<<"$b3") || stop "unreadable: read 3" ;;
-  404) [ "$(jq -r .message <<<"$b3")" = "Branch not protected" ] || stop "unreadable: read 3 answered 404"
+  404) jq -se 'length == 1 and .[0].message == "Branch not protected"' <<<"$b3" >/dev/null \
+         || stop "unreadable: read 3 answered 404"
        prot='{}' ;;
   401|403) via=3b
        prot=$(gh api "repos/{owner}/{repo}/branches/$base" | jq -sc "$names"'

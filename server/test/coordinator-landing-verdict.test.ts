@@ -28,8 +28,11 @@ const OTHER_APP = { id: 999, slug: 'third-party-ci' };
 const CLASSIC = ['test (server)', 'test (agent)', 'test (pwa)', 'build-pwa'];
 
 /** One gh answer. `raw` is written as is; otherwise `body` is JSON. A code other than 200 makes gh exit 1, as gh does
- *  on any non-2xx, with GitHub's error body on stdout (measured: gh prints it there and its message on stderr). */
-type Answer = { code: number; body?: unknown; raw?: string };
+ *  on any non-2xx, with GitHub's error body on stdout (measured: gh prints it there and its message on stderr). `exit` is
+ *  gh's own exit status, a second dimension independent of the HTTP code: left out it is derived from the code as above
+ *  (200 exits 0, anything else 1), so every answer that does not name it is what it always was; given, it is written as it
+ *  is, so a case can say "HTTP 200 on stdout, and gh exited 1". */
+type Answer = { code: number; body?: unknown; raw?: string; exit?: number };
 type Key = 'pr' | 'reviews' | 'rules' | 'protection' | 'branch' | 'repo' | 'compare' | 'checkruns' | 'status' | 'ruleset';
 type Fixture = Partial<Record<Key, Answer | Answer[]>>;
 
@@ -152,7 +155,7 @@ function verdict(fx: Fixture, env: Record<string, string> = {}, homeFiles: Recor
   }
   const put = (stem: string, k: Key, a: Answer): void => {
     writeFileSync(`${stem}.out`, k === 'protection' ? included(a) : (a.raw ?? JSON.stringify(a.body ?? null)));
-    writeFileSync(`${stem}.rc`, a.code === 200 ? '0' : '1');
+    writeFileSync(`${stem}.rc`, String(a.exit ?? (a.code === 200 ? 0 : 1)));
     writeFileSync(`${stem}.code`, String(a.code));
   };
   for (const [k, v] of Object.entries(fx) as [Key, Answer | Answer[]][]) {
@@ -1166,6 +1169,57 @@ const READ1: Case[] = [
   ['order: a bad state is judged before the merge proof, whatever the head', read1({ state: 'MERGED\n', headRefOid: OTHER_HEAD }), UNREAD1],
 ];
 
+const NP = 'Branch not protected';
+const R3_404 = 'STOP unreadable: read 3 answered 404';
+const SPARSE_PROT = { enforce_admins: { enabled: true }, required_pull_request_reviews: null };
+/** gh's own exit status for the answer, whatever its HTTP code says. */
+const exiting = (a: Answer, exit: number): Answer => ({ ...a, exit });
+/** A 404 whose body is `body` as it is, after gh's `-i` status line and headers. */
+const prot404 = (body: string): Answer => ({ code: 404, raw: `HTTP/2.0 404 X\nX-Github-Request-Id: 0\r\n\r\n${body}` });
+const msg404 = (message: unknown): Answer => ({ code: 404, body: { message } });
+const on3 = (a: Answer): (() => Fixture) => with_(bareApproval(), { protection: a });
+/** The same usable HTTP 200 on stdout from gh exiting 0, 1 and 2: only the first is a success. */
+const exitCases = (what: string, build: (exit: number) => Fixture, good: string): Case[] => [
+  [`${what}: HTTP 200 on stdout and gh exits 0 routes as it always did`, () => build(0), good],
+  [`unreadable: read 3: ${what}: the same HTTP 200 on stdout, but gh exits 1`, () => build(1), R3],
+  [`unreadable: read 3: ${what}: the same HTTP 200 on stdout, but gh exits 2`, () => build(2), R3],
+];
+const READ3: Case[] = [
+  ...exitCases('an empty object', (x) => with_(bareApproval(), { protection: exiting(prot200('{}'), x) })(), LICENSED_U),
+  ...exitCases('a sparse valid object', (x) => with_(bareApproval(), { protection: exiting(prot200(JSON.stringify(SPARSE_PROT)), x) })(), LICENSED_U),
+  ...exitCases('this repository\'s full protection', (x) => with_(measured, { protection: exiting(measured().protection as Answer, x) })(), GOOD_Q),
+  ['control: the exact 404 is no protection, gh exiting 1 as it does', on3(exiting(fail(404, NP), 1)), LICENSED_U],
+  ['control: a 403 goes to read 3b, gh exiting 1 as it does',
+    with_(via3b, { protection: exiting(fail(403, 'Resource not accessible by integration'), 1) }), 'ROUTE U method=squash admin=never strict=unknown'],
+  ['control: a 401 goes to read 3b, gh exiting 1 as it does',
+    with_(via3b, { protection: exiting(fail(401, 'Bad credentials'), 1) }), 'ROUTE U method=squash admin=never strict=unknown'],
+  // The 404's message is the original JSON value, exactly one value, exactly the words.
+  ['control: a 404 whose message is exactly Branch not protected is no protection', on3(msg404(NP)), LICENSED_U],
+  ['control: that message in the body gh prints, with the status and the documentation link', on3(prot404(
+    JSON.stringify({ message: NP, documentation_url: 'https://example.test/d', status: '404' }))), LICENSED_U],
+  ['unreadable: read 3 answers 404 with the message and one trailing newline', on3(msg404(`${NP}\n`)), R3_404],
+  ['unreadable: read 3 answers 404 with the message and two trailing newlines', on3(msg404(`${NP}\n\n`)), R3_404],
+  ['unreadable: read 3 answers 404 with a leading newline before the message', on3(msg404(`\n${NP}`)), R3_404],
+  ['unreadable: read 3 answers 404 with the message and a trailing carriage return', on3(msg404(`${NP}\r`)), R3_404],
+  ['unreadable: read 3 answers 404 with another message', on3(msg404('Not Found')), R3_404],
+  ['unreadable: read 3 answers 404 with a message that is null', on3(msg404(null)), R3_404],
+  ['unreadable: read 3 answers 404 with a message that is an array holding the words', on3(msg404([NP])), R3_404],
+  ['unreadable: read 3 answers 404 with no message', on3(prot404('{}')), R3_404],
+  ['unreadable: read 3 answers 404 with two values, the last of them carrying the exact message',
+    on3(prot404(`{"message":"x"}{"message":"${NP}"}`)), R3_404],
+  ['unreadable: read 3 answers 404 with two values, the first of them carrying the exact message',
+    on3(prot404(`{"message":"${NP}"}{"message":"x"}`)), R3_404],
+  ['unreadable: read 3 answers 404 with two values that both carry the exact message, on separate lines',
+    on3(prot404(`{"message":"${NP}"}\n{"message":"${NP}"}`)), R3_404],
+  ['unreadable: read 3 answers 404 with two values that both carry the exact message, back to back',
+    on3(prot404(`{"message":"${NP}"}{"message":"${NP}"}`)), R3_404],
+  ['unreadable: read 3 answers 404 with a malformed body', on3(prot404('{')), R3_404],
+  ['unreadable: read 3 answers 404 with an empty body', on3(prot404('')), R3_404],
+  ['unreadable: read 3 answers 404 with a body that is null', on3(prot404('null')), R3_404],
+  ['unreadable: read 3 answers 404 with a body that is the words as a JSON string', on3(prot404(`"${NP}"`)), R3_404],
+  ['unreadable: read 3 answers 404 with a body that is an array holding the object', on3(prot404(`[{"message":"${NP}"}]`)), R3_404],
+];
+
 /** Every argv the block may send: its reads (read 1 with its reviews, and the compare under read 3b), as GETs. */
 const READ = /^(pr view 42 --json baseRefName,headRefOid,state,reviewDecision|api (--paginate |-i )?repos\/\{owner\}\/\{repo\}(\/[^\s]*)?)$/;
 /** The same reads as the block's TEXT spells them, from the word `gh` to the end of its quoted path, followed only by
@@ -1434,7 +1488,7 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
   });
 
   it.each([...ROUTES, ...CHECKS, ...STOPS, LICENSED_NEVER, ...REQUESTS, ...IGNORES, ...LICENCE, ...MALFORMED,
-  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES, ...ORDER, ...LOSS, ...READ1])('%s', (_name, fx, line, env) => {
+  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES, ...ORDER, ...LOSS, ...READ1, ...READ3])('%s', (_name, fx, line, env) => {
     expect(blocks).toHaveLength(1);
     const r = verdict(fx(), env);
     expect(r.out, `stderr: ${r.stderr}`).toBe(`${line}\n`);
