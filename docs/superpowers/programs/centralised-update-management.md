@@ -6149,6 +6149,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   the parts the broker's soak watches. The fleet box's work volume was enlarged, and now has 334G free.
   `STATUS 2026-10-25T11:27:19Z fleet=v0.0.677 server=v0.0.677 health=v0.0.677 newest=v0.0.678 intent=*:dev/auto=off`
   `backups=fleet:209M/server:11978M disk=fleet:103G/server:18G`
+- **2026-10-25 12:25 UTC — monitoring: v0.0.679 to v0.0.682 released; boxes stay on v0.0.677, no anomalies.** v0.0.681 carries
+  the tmp-sweep census reader fix (#1378). The session hook gains a roster card on compact, resume and clear, one bounded
+  server read in its start arm, which returns, never exits, and does not touch the tool-call path; so, like the rest, it goes
+  in the broker's daily mail only. `STATUS 2026-10-25T12:25:41Z fleet=v0.0.677 server=v0.0.677 health=v0.0.677`
+  `newest=v0.0.682 intent=*:dev/auto=off backups=fleet:209M/server:11978M disk=fleet:103G/server:18G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
