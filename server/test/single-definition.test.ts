@@ -5089,7 +5089,6 @@ describe('fleet disk retention DR-29: the expiry lane’s child switch has no wr
 describe('fleet disk retention DR-27: the stale arm’s live switch has no writer in the tree', () => {
   const NAME = 'child-stale-reclaim-live';
   const DEFINER = 'shared/switches.ts';
-  const READER = 'server/src/coord/childReclaimDisabled.ts';
 
   it('no shell line names it, and its one TS holder is its definer', () => {
     expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);

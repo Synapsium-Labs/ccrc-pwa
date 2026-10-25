@@ -25,6 +25,11 @@ export function childReclaimDisabledOf(names: readonly string[] | null): MarkerS
 export const childReclaimDisabledSentence = (when: string): string =>
   `${CHILD_RECLAIM_DISABLED_MARKER} is set${when}: child reclaim is switched off`;
 
+/** The executor's deferral detail when the listing did not measure (or threw): like `reclaim-paused`, a registry
+ *  that did not list cannot rule the switch out. */
+export const CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE =
+  `the registry did not list, so a set ${CHILD_RECLAIM_DISABLED_MARKER} cannot be ruled out`;
+
 export const CHILD_RECLAIM_DISABLED_FEED_TITLE = 'child reclaim switched off';
 export const CHILD_RECLAIM_DISABLED_FEED_BODY = `${CHILD_RECLAIM_DISABLED_MARKER} is set: no child workspace is reclaimed, `
   + 'by the sweep or at close, until it is removed. Expiry, collect and the dead-coordinator lane keep running.';

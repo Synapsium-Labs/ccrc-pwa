@@ -30,7 +30,9 @@ import {
   isChildReclaimKeptWord,
 } from '../../../shared/api.js';
 import { notify } from '../notice.js';
-import { childReclaimDisabledRead, childReclaimDisabledSentence } from './childReclaimDisabled.js';
+import {
+  CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledRead, childReclaimDisabledSentence,
+} from './childReclaimDisabled.js';
 import { notRanSentence } from '../unmeasured.js';
 import { recordNestedRescueShadow } from './nestedRescueShadow.js';
 import { nestedWouldRescueCount } from '../../../shared/nestedRescue.js';
@@ -1075,6 +1077,20 @@ export async function childReclaimGenerationRead(
   return REG_GENERATION_SHAPE.test(read.content) ? { kind: 'value', v: read.content } : { kind: 'unreadable' };
 }
 
+/** The executor's read of `child-reclaim-disabled` (steps 2b' and 6): the `paused-at-server` detail when the switch
+ *  is set, or when the listing did not measure or threw (a set switch cannot be ruled out); `null` when it is clear.
+ *  `when` is '' or ' at the act'. */
+async function childReclaimDisabledDetail(deps: ChildReclaimDeps, when: string): Promise<string | null> {
+  let state: MarkerState;
+  try {
+    state = await childReclaimDisabledRead(deps.io, deps.cfg.registryDir);
+  } catch (err) {
+    return `${CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE}${when} (${err instanceof Error ? err.message : String(err)})`;
+  }
+  if (state === 'set') return childReclaimDisabledSentence(when);
+  return state === 'clear' ? null : `${CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE}${when}`;
+}
+
 async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequest): Promise<ChildReclaimOutcome> {
   const { sessionId, runId } = req;
   const deferred = (why: ChildReclaimDeferWhy, detail: string): ChildReclaimOutcome =>
@@ -1181,16 +1197,9 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   }
   // 2b' — ARCH-77 (#812): child reclaim's OWN off switch, read here (decide) and again at the act (step 6). It defers
   // through the same word as the pause, so the row, the sweep's backoff and the PWA's chip need no new vocabulary.
-  const disabledDefer = async (when: string): Promise<ChildReclaimOutcome | null> => {
-    try {
-      if (await childReclaimDisabledRead(deps.io, deps.cfg.registryDir) === 'set') {
-        return deferred('paused-at-server', childReclaimDisabledSentence(when));
-      }
-    } catch { /* the pause read above answered this listing; an unreadable one here stops nothing the box still guards */ }
-    return null;
-  };
-  const disabledAtDecide = await disabledDefer('');
-  if (disabledAtDecide !== null) return disabledAtDecide;
+  // A listing that did not measure, or a throw, cannot rule the switch out and defers too — `reclaim-paused`'s rule.
+  const disabledAtDecide = await childReclaimDisabledDetail(deps, '');
+  if (disabledAtDecide !== null) return deferred('paused-at-server', disabledAtDecide);
   // 2c — THE GENERATION, RE-READ (spec §5.5). A sweep request was judged over ONE workspace
   // generation (`licenceGeneration`, the sweep's own byte-exact read of `<id>.generation`), and it may
   // have waited on the session's queue since. The same run can remove the slug and mint it again
@@ -1272,8 +1281,8 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
     }
   }
   // 6 — the act, after the switch is read once more: one set between decide (2b') and here still stops the act.
-  const disabledAtAct = await disabledDefer(' at the act');
-  if (disabledAtAct !== null) return disabledAtAct;
+  const disabledAtAct = await childReclaimDisabledDetail(deps, ' at the act');
+  if (disabledAtAct !== null) return deferred('paused-at-server', disabledAtAct);
   // ccd re-proves the token inside the reap lock.
   const act = await childReclaimAct(deps, req, audit.token);
   if (act === 'unsupported') return deferred('unsupported', `the fleet host does not advertise ${RECLAIM_CAP}`);
@@ -1478,7 +1487,8 @@ export function childReclaimReleaseActor(runId: number, program: string): string
  *      `KeyedQueue` before an operator raised `reclaim-paused` must not
  *      remove the hold the operator may have raised the switch to keep:
  *      `cmd_ws_release` does not read the marker itself. `set` answers
- *      `changed`; `unmeasurable` answers `failed`.
+ *      `changed`; `unmeasurable` answers `failed`. `child-reclaim-disabled`
+ *      (`childReclaimDisabledRead`) is read beside it with the same answers;
  *   7. the generation (`childReclaimGenerationRead`, the read the executor's
  *      own step 2c makes) — still the one both sightings were made under (spec
  *      §5.7). Read LAST, nearest the argv. It is defence in depth: the job is
@@ -1612,7 +1622,18 @@ export async function releaseRetiredChildHold(
   }
 
   // 6 — the reclaim switch: still down. Read just before the generation
-  // (step 7), like the executor's own step 2b.
+  // (step 7), like the executor's own step 2b. Child reclaim's own off switch
+  // (ARCH-77, #812) is read first, beside it, with the same answers.
+  let disabled: MarkerState;
+  try {
+    disabled = await childReclaimDisabledRead(deps.io, deps.cfg.registryDir);
+  } catch (err) {
+    console.warn(`ccrc-server: releaseRetiredChildHold: reading the child reclaim switch failed `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+    return 'failed';
+  }
+  if (disabled === 'set') return 'changed';
+  if (disabled !== 'clear') return 'failed';
   let pause: MarkerState;
   try {
     pause = await childReclaimPauseRead(deps.io, deps.cfg.registryDir);

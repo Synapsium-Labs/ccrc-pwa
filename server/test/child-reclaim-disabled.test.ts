@@ -90,6 +90,23 @@ describe('the executor with child-reclaim-disabled set', () => {
     expect(r.calls).toEqual(['ws-audit']);
   });
 
+  it.each<['null' | 'reject']>([['null'], ['reject']])(
+    'a registry that does not list at the act (%s) defers: a set switch cannot be ruled out', async (how) => {
+      let audited = false;
+      const r = await rig((verb) => { if (verb === 'ws-audit') audited = true; });
+      const real = r.deps.io;
+      const deps: ChildReclaimDeps = { ...r.deps, io: { ...real, readdir: async (p, t, s) => {
+        if (!audited || p !== r.reg) return real.readdir(p, t, s);
+        if (how === 'reject') throw new Error('EIO');
+        return null;
+      } } };
+      const out = await reclaimChild(deps, r.req());
+      expect(out).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
+      expect(out.kind === 'deferred' ? out.detail : '')
+        .toContain(`the registry did not list, so a set ${MARKER} cannot be ruled out`);
+      expect(r.calls).toEqual(['ws-audit']);
+    });
+
   it('lowered again, the next attempt reclaims', async () => {
     const r = await rig();
     r.set();
