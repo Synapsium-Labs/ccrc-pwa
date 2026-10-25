@@ -1,0 +1,112 @@
+// ARCH-62 (#797), slice 2: the W0 census of the consolidation wave (spec 2026-10-19 §5.9, §5.1 rule 3). It pins, by file
+// and with an EXACT count, every server run/session equality site (`runSessionCensus.ts` says what counts and what it
+// cannot see), and the store's binding readers by name. A pin is a ceiling that is also a floor: a slice that routes a
+// site through `bindingOf`/`childrenOf` LOWERS its file's number in the same commit; a new site, in a new file or an
+// old one, is red until it is justified here. The counted exit (spec §5.9): the sites all through `bindingOf`/`childrenOf`,
+// the store's binding readers <= 4, and the #746 fixture. This file is the measure, not the exit.
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+import {
+  ATTRIBUTE_READS, countsByFile, equalitySites, equalitySitesOf, REPO, storeBindingReaders,
+} from './runSessionCensus.js';
+import { BINDING_WRITER_VERBS } from '../src/coord/runBinding.js';
+
+/** The pinned count per file: the sites of the tree at this commit. Lower a number as its file's sites are routed. */
+const SITES: Record<string, number> = {
+  'server/src/archivedExpiry.ts': 2,
+  'server/src/childReclaimSweep.ts': 3,
+  'server/src/collectLane.ts': 2,
+  'server/src/coord/childReclaim.ts': 4,
+  'server/src/coord/childSpent.ts': 2,
+  'server/src/coord/claims.ts': 1,
+  'server/src/coord/close.ts': 1,
+  'server/src/coord/closeDecide.ts': 1,
+  'server/src/coord/delegation-correlation.ts': 4,
+  'server/src/coord/delegation-ingest.ts': 2,
+  'server/src/coord/delegation-model.ts': 1,
+  'server/src/coord/dispatchDecide.ts': 1,
+  'server/src/coord/fingerprint.ts': 1,
+  'server/src/coord/heldFor.ts': 1,
+  'server/src/coord/openRun.ts': 2,
+  'server/src/coord/routes.ts': 2,
+  'server/src/coord/runBinding.ts': 4,
+  'server/src/coord/stall.ts': 8,
+  'server/src/coord/store.ts': 14,
+  'server/src/hookstate.ts': 1,
+  'server/src/stopDoneSweep.ts': 1,
+  'server/src/tmpSweepLane.ts': 1,
+  'server/src/transcript/parse.ts': 1,
+  'server/src/turnmark.ts': 1,
+  'server/src/watch.ts': 10,
+};
+const SITES_TOTAL = 71;
+
+/** The store's binding readers at this commit, by name. */
+const READERS: readonly string[] = ['bindingRunsOf', 'lastRunBySession', 'openClaimantsOf', 'openRunsClaimedBy',
+  'openRunsForSession', 'parentOfSession', 'runsNamingSession', 'runsTouching'];
+/** Lowered to the counted exit's 4 by the fold commit. */
+const READERS_CEILING = 8;
+
+describe('the equality-site query (ARCH-62 census)', () => {
+  const sites = (src: string) => equalitySitesOf(src, 'fixture.ts');
+
+  it('counts a comparison of a session or claimant name, however the operand is spelt', () => {
+    const found = sites([
+      'if (a.sessionId === b) {}', 'if (x !== run.claimedBy) {}', 'if (c!.coordinatorId == d) {}',
+      'if (o["sessionId"] != e) {}', 'const ok = sessionId === claimedBy;',
+    ].join('\n'));
+    expect(found.map((s) => s.line)).toEqual([1, 2, 3, 4, 5]);
+    expect(found.every((s) => s.kind === 'comparison')).toBe(true);
+  });
+
+  it('passes over a null check, a comparison of other names, an includes test and a comment', () => {
+    expect(sites([
+      'if (run.sessionId === null) {}', 'if (run.claimedBy !== undefined) {}', 'if (a.id === b.id) {}',
+      'const has = ids.includes(run.sessionId);', '// run.sessionId === other', '/* x.claimedBy === y */',
+    ].join('\n'))).toEqual([]);
+  });
+
+  it('counts a store query that selects runs by session or claimant (the templated column included), and not one on another table', () => {
+    const found = sites([
+      "db.prepare('SELECT id FROM runs WHERE sessionId = ? ORDER BY id').all(a);",
+      "db.prepare('SELECT id FROM runs WHERE sessionId = ? OR claimedBy = ?').all(a, a);",
+      "db.prepare('SELECT 1 FROM runs r WHERE r.claimedBy IN (?, ?)').all(a, b);",
+      "db.prepare(`SELECT id FROM runs WHERE ${where} ORDER BY id`).all(a);",
+      "db.prepare('SELECT * FROM lifecycle_events WHERE sessionId = ?').all(a);",
+      "db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run(a, 1);",
+    ].join('\n'));
+    expect(found.map((s) => [s.line, s.kind])).toEqual([[1, 'query'], [2, 'query'], [3, 'query'], [4, 'query']]);
+  });
+});
+
+describe('the server run/session equality sites (ARCH-62 census)', () => {
+  const sites = equalitySites();
+  const counts = countsByFile(sites);
+
+  it('every file holds exactly its pinned number of sites', () => {
+    expect(counts).toEqual(SITES);
+  });
+
+  it('the total only goes down', () => {
+    expect(sites.length).toBe(SITES_TOTAL);
+    expect(Object.values(SITES).reduce((a, b) => a + b, 0)).toBe(SITES_TOTAL);
+  });
+});
+
+describe('the store binding readers (ARCH-62 census)', () => {
+  const found = storeBindingReaders(readFileSync(`${REPO}/server/src/coord/store.ts`, 'utf8'));
+
+  it('are exactly the pinned readers', () => {
+    expect(found).toEqual([...READERS].sort());
+  });
+
+  it('are at most the ceiling the counted exit names', () => {
+    expect(READERS.length).toBeLessThanOrEqual(READERS_CEILING);
+  });
+
+  it('a binding writer and an attribute read are named, not counted', () => {
+    expect(ATTRIBUTE_READS).toEqual(['sessionProject', 'strandedClear']);
+    expect(BINDING_WRITER_VERBS).toContain('openRun');
+    expect(found.filter((n) => ATTRIBUTE_READS.includes(n) || BINDING_WRITER_VERBS.includes(n))).toEqual([]);
+  });
+});
