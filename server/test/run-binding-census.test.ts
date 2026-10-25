@@ -1,6 +1,8 @@
-// ARCH-62 (#797), the counted exit: the store's session-keyed run readers are projections of ONE series read, decided
-// through `bindingOf`/`claimantsOf`/`boundRunsOf` (coord/runBinding.ts) by coord/bindingRows.ts. This is the pin: a new
-// reader of the run↔session link goes through `seriesRows`, or states why it is a different query here.
+// ARCH-62 (#797), slice 1 only: this is NOT the counted exit (the server equality-site census and the store's binding
+// readers cut to <= 4 are later slices). It pins what slice 1 did: the store's session-keyed run readers are
+// projections of ONE series read, decided through `bindingOf`/`claimantsOf`/`boundRunsOf` (coord/runBinding.ts) by
+// coord/bindingRows.ts. A new reader of the run↔session link goes through `seriesRows`, or states why it is a
+// different query here.
 // Keyed on symbols (scan/symbols.ts), not on text, so a method that moves keeps its pin.
 import { describe, expect, it } from 'vitest';
 import { callsIn, parsedFile, sqlStatementsIn, symbolOf } from './scan/symbols.js';

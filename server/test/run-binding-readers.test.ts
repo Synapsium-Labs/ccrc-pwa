@@ -109,7 +109,66 @@ describe('the readers take the worker\'s incarnation (ARCH-62)', () => {
   });
 });
 
+const laneDeps = (s: CoordStore, markRunId: number): DriftLaneDeps => ({
+  coord: s, names: ['demo-w'], childMarks: new Map([['demo-w', { kind: 'child', runId: markRunId }]]) as never,
+  measure: () => Promise.resolve({ state: 'alive', why: 'pane live' }),
+  notice: () => ({ recorded: true, archived: 'none' }), warn: () => {},
+});
+const mismatches = (s: CoordStore): string[] => {
+  const found = s.driftFindingRows();
+  return found.ok ? found.rows.map((r) => r.key).filter((k) => k.includes('parent-mismatch')) : ['unreadable'];
+};
+
 describe('the drift lane reads the worker\'s parent through its incarnation (ARCH-62)', () => {
+  // The positive arm: a real parent mismatch is still raised. A lane whose parent always read null (the `parentId =
+  // null` mutant) passes every negative test below; these go red under it.
+  it('a real mismatch is raised: the mark\'s run is claimed by coord-1, a newer open run of the same worker by coord-2', async () => {
+    const s = store();
+    const mark = open(s, 'prog-a', 'coord-1');
+    s.setSession(mark, 'demo-w');
+    const newer = open(s, 'prog-b', 'coord-2');
+    s.setSession(newer, 'demo-w');
+    await runDriftPass(laneDeps(s, mark), BORN + 5000);
+    expect(mismatches(s)).toEqual(['parent-mismatch:demo-w']);
+  });
+
+  it('a real mismatch is raised for a born incarnation: the newer run is stamped with the birth', async () => {
+    const s = store();
+    const mark = open(s, 'prog-a', 'coord-1');
+    s.setSession(mark, 'demo-w', BORN);
+    const newer = open(s, 'prog-b', 'coord-2');
+    s.setSession(newer, 'demo-w', BORN);
+    await runDriftPass(laneDeps(s, mark), BORN + 5000);
+    expect(mismatches(s)).toEqual(['parent-mismatch:demo-w']);
+  });
+
+  it('a real mismatch is raised for a born incarnation: the newer run is unstamped but opened after the birth', async () => {
+    const s = store();
+    const mark = open(s, 'prog-a', 'coord-1');
+    s.setSession(mark, 'demo-w', BORN);
+    const newer = open(s, 'prog-b', 'coord-2');
+    s.setSession(newer, 'demo-w');
+    s.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(BORN + 1000, newer);
+    await runDriftPass(laneDeps(s, mark), BORN + 5000);
+    expect(mismatches(s)).toEqual(['parent-mismatch:demo-w']);
+  });
+
+  // A deliberate fix, not a recycled-name case: before ARCH-62 the lane read the mark run's claimant from the OPEN
+  // runs only, so a plain wave N >= 2 resume (wave 1, the mark, closed; same claimant) raised a false parent-mismatch.
+  // Per the D-5362 rule the claimant of a closed mark is the minting run's own.
+  it('a stamped wave 2 opened after the birth, wave 1 (the mark) closed, same claimant: no parent-mismatch', async () => {
+    const s = store();
+    const w1 = open(s, 'prog-a', 'coord-1');
+    s.setSession(w1, 'demo-w', BORN);
+    s.db.prepare('UPDATE runs SET dispatchStartedAt = ?, coordProject = ? WHERE id = ?').run(BORN, 'p', w1);
+    finish(s, w1);
+    const w2 = open(s, 'prog-a', 'coord-1');
+    s.setSession(w2, 'demo-w', BORN);
+    s.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(BORN + 1000, w2);
+    await runDriftPass(laneDeps(s, w1), BORN + 5000);
+    expect(mismatches(s)).toEqual([]);
+  });
+
   it('a recycled name raises no parent-mismatch finding for the run of the earlier occupant', async () => {
     const s = store();
     const { fresh } = recycled(s, true);
