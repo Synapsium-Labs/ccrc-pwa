@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -88,5 +88,41 @@ describe('reach.mjs CLI', () => {
       env: { ...process.env, GITHUB_OUTPUT: out }, encoding: 'utf8',
     });
     expect(readFileSync(out, 'utf8')).toContain('skip=false');
+  });
+
+  describe('a moved file counts at BOTH paths (git diff --no-renames)', () => {
+    const git = (cwd: string, ...a: string[]): void => {
+      execFileSync('git', a, {
+        cwd, stdio: 'ignore',
+        env: { PATH: process.env.PATH ?? '', HOME: cwd, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+      });
+    };
+    const moved = (from: string, to: string, pkg: string): string => {
+      const repo = mkdtempSync(path.join(tmpdir(), 'ccrc-reach-git-'));
+      const out = path.join(repo, '..', `out-${path.basename(repo)}.txt`);
+      writeFileSync(out, '');
+      mkdirSync(path.join(repo, path.dirname(from)), { recursive: true });
+      writeFileSync(path.join(repo, from), 'export const x = 1;\n'.repeat(20));
+      git(repo, 'init', '-q', '-b', 'main');
+      git(repo, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'add', '-A');
+      git(repo, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'base');
+      git(repo, 'checkout', '-q', '-b', 'pr');
+      mkdirSync(path.join(repo, path.dirname(to)), { recursive: true });
+      git(repo, 'mv', from, to);
+      git(repo, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'move');
+      execFileSync('node', [REACH, '--pkg', pkg, '--event', 'pull_request', '--base', 'main'], {
+        cwd: repo, env: { ...process.env, GITHUB_OUTPUT: out }, encoding: 'utf8',
+      });
+      return /^skip=(.*)$/m.exec(readFileSync(out, 'utf8'))?.[1] ?? '';
+    };
+
+    it('shared/ moved into server/ still runs the pwa and browser tests', () => {
+      expect(moved('shared/x.ts', 'server/x.ts', 'pwa')).toBe('false');
+      expect(moved('shared/x.ts', 'server/x.ts', 'browser')).toBe('false');
+    });
+
+    it('shared/ moved into ui/ still runs the agent tests', () => {
+      expect(moved('shared/x.ts', 'ui/x.ts', 'agent')).toBe('false');
+    });
   });
 });

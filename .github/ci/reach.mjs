@@ -52,7 +52,7 @@ function parseArgs(argv) {
 function changedFiles(opt) {
   if (opt['changed-file']) return readFileSync(opt['changed-file'], 'utf8').split('\n');
   const mb = execFileSync('git', ['merge-base', opt.base, 'HEAD'], { encoding: 'utf8' }).trim();
-  return execFileSync('git', ['diff', '--name-only', mb, 'HEAD'], { encoding: 'utf8' }).split('\n');
+  return execFileSync('git', ['diff', '--name-only', '--no-renames', mb, 'HEAD'], { encoding: 'utf8' }).split('\n');
 }
 
 function main() {
