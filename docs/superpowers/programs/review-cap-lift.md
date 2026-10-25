@@ -13,7 +13,7 @@ cap's notice.
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | Every run row carries its review cap's state; a session-gated read of the ask; one confirm sheet; a "Waiting on you" band on the run board and a door on the cap's record in Mail. | — | **DISPATCHED** 2026-10-25 17:06 UTC as run 946, to its own child workspace. Was **PLANNED** 2026-10-25 17:05 UTC. |
+| 1 | Every run row carries its review cap's state; a session-gated read of the ask; one confirm sheet; a "Waiting on you" band on the run board and a door on the cap's record in Mail. | — | **MID-WAVE CORRECTIONS** 2026-10-25 17:58 UTC, mail 9657: the operator asked that the work follow the DDD/Clean/SOLID refactor in flight, and a verified four-lens check gave ten corrections. Among them: `refuseRoute` for the new GET (the inline-send ratchet); a `scan/parse.ts` census in place of a text grep (the single-definition ceilings); a total refusal-text table; a pure `capDoorRun` over the fleet store's live runs; C5 ring-context rows; the findings words beside the moved types; one round predicate; a typed lift answer; and the ring gates. The worker records them verbatim in the plan. Was **DISPATCHED** 2026-10-25 17:06 UTC as run 946, to its own child workspace. Was **PLANNED** 2026-10-25 17:05 UTC. |
 
 ## Decisions & deviations
 

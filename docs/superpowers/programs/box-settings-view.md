@@ -28,6 +28,15 @@ answered "yes please do that".
 - **The CLI stays the one reader** (spec D1). No TypeScript copy of the settings reader, and no agent op that runs the
   CLI.
 - **Read-only** (spec D5). Editing a setting from the console is a separate decision.
+- **In line with the DDD/Clean/SOLID refactor in flight** (the operator, 2026-10-25: "ensure this plan is in line with the
+  ddd/clean/solid refactor changes currently in progress too"). Four Opus lenses checked the spec and plan against the
+  rings, decide-in-L1, the shared kernels, refusal and wire totality, and the bash anti-corruption layer, each with an Opus
+  verifier: 40 findings, 39 kept, 1 refuted. Spec revision 3 and the plan carry the result:
+  - an L1 parse and view, and a ring-declared lane on the `inventory` row, with its state owned by FleetWatcher;
+  - shared vocabularies held set-equal to the bash writer;
+  - the one redactor and the one usage refusal;
+  - characterization-first carve-outs.
+  The spec's D10 (the carve-outs inside this PR, or their own PR first) waits on the operator with D2, D3 and D7.
 - **Routing:** a worker executing a spec'd plan, as one dependent chain (CLI, units, server, PWA) that fits one
   context. That is Opus at high effort, Sonnet high subagents, workflows off and compaction at 40 (the routing matrix's
   worker row). The review uses the held-out panel.
