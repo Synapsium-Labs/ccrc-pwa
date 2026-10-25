@@ -589,9 +589,10 @@ describe('the two seams a runtime case cannot see', () => {
     // `POST /workspace/reap` of the same workspace; the timing a runtime case
     // would need to show that is not deterministic, so the seam is pinned by
     // its text: the executor is reached through `deps.queue.run(sessionId, …)`
-    // and nowhere else in the file.
+    // and nowhere else in the file. ARCH-77 (#812): behind the child-reclaim-disabled gate, which queues nothing while set.
     const src = coordSrc('routes.ts');
-    expect(src).toContain('void deps.queue.run(req.sessionId, () => reclaimChild({');
+    expect(src).toContain('() => deps.queue.run(req.sessionId, () => reclaimChild({');
+    expect(src).toContain('void childReclaimUnlessDisabled({');
     expect(src.match(/reclaimChild\(/g) ?? []).toHaveLength(1);
   });
 });

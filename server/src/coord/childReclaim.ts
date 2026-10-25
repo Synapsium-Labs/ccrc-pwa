@@ -30,6 +30,7 @@ import {
   isChildReclaimKeptWord,
 } from '../../../shared/api.js';
 import { notify } from '../notice.js';
+import { childReclaimDisabledRead, childReclaimDisabledSentence } from './childReclaimDisabled.js';
 import { notRanSentence } from '../unmeasured.js';
 import { recordNestedRescueShadow } from './nestedRescueShadow.js';
 import { nestedWouldRescueCount } from '../../../shared/nestedRescue.js';
@@ -1178,6 +1179,18 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
       ? `${RECLAIM_PAUSE_MARKER} is raised: automatic reclamation is paused fleet-wide`
       : `the registry did not list, so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out`);
   }
+  // 2b' — ARCH-77 (#812): child reclaim's OWN off switch, read here (decide) and again at the act (step 6). It defers
+  // through the same word as the pause, so the row, the sweep's backoff and the PWA's chip need no new vocabulary.
+  const disabledDefer = async (when: string): Promise<ChildReclaimOutcome | null> => {
+    try {
+      if (await childReclaimDisabledRead(deps.io, deps.cfg.registryDir) === 'set') {
+        return deferred('paused-at-server', childReclaimDisabledSentence(when));
+      }
+    } catch { /* the pause read above answered this listing; an unreadable one here stops nothing the box still guards */ }
+    return null;
+  };
+  const disabledAtDecide = await disabledDefer('');
+  if (disabledAtDecide !== null) return disabledAtDecide;
   // 2c — THE GENERATION, RE-READ (spec §5.5). A sweep request was judged over ONE workspace
   // generation (`licenceGeneration`, the sweep's own byte-exact read of `<id>.generation`), and it may
   // have waited on the session's queue since. The same run can remove the slug and mint it again
@@ -1258,7 +1271,10 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
         + `and this request was judged under ${childReclaimGenerationWords(licence)}. ${CHILD_RECLAIM_GENERATION_CHANGED_SENTENCE}`);
     }
   }
-  // 6 — the act. ccd re-proves the token inside the reap lock.
+  // 6 — the act, after the switch is read once more: one set between decide (2b') and here still stops the act.
+  const disabledAtAct = await disabledDefer(' at the act');
+  if (disabledAtAct !== null) return disabledAtAct;
+  // ccd re-proves the token inside the reap lock.
   const act = await childReclaimAct(deps, req, audit.token);
   if (act === 'unsupported') return deferred('unsupported', `the fleet host does not advertise ${RECLAIM_CAP}`);
   if (act.kind === 'failed') {

@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import { childReclaimUnlessDisabled } from '../src/coord/childReclaimDisabled.js';
 import { CHILD_RECLAIM_FEED_QUIET_NONE, reclaimChild, type ChildReclaimDeps } from '../src/coord/childReclaim.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -68,5 +69,69 @@ describe('the executor with child-reclaim-disabled absent (characterization)', (
     const out = await reclaimChild(r.deps, r.req());
     expect(out).toMatchObject({ kind: 'reclaimed', sessionId: 'demo-a' });
     expect(r.calls).toEqual(['ws-audit', 'ws-reclaim']);
+  });
+});
+
+describe('the executor with child-reclaim-disabled set', () => {
+  it('defers paused-at-server before any argv, and writes its one feed row', async () => {
+    const r = await rig();
+    r.set();
+    const out = await reclaimChild(r.deps, r.req());
+    expect(out).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
+    expect(r.calls).toEqual([]);
+    expect(r.coord.feedEvents(20).filter((e) => e.sessionId === 'demo-a')).toHaveLength(1);
+  });
+
+  it('a switch set between decide and act still stops the act: the audit ran, ws-reclaim never does', async () => {
+    let r!: Awaited<ReturnType<typeof rig>>;
+    r = await rig((verb) => { if (verb === 'ws-audit') r.set(); });
+    const out = await reclaimChild(r.deps, r.req());
+    expect(out).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
+    expect(r.calls).toEqual(['ws-audit']);
+  });
+
+  it('lowered again, the next attempt reclaims', async () => {
+    const r = await rig();
+    r.set();
+    await reclaimChild(r.deps, r.req());
+    r.clear();
+    expect(await reclaimChild(r.deps, r.req())).toMatchObject({ kind: 'reclaimed' });
+  });
+});
+
+describe('the close hand-off with child-reclaim-disabled', () => {
+  const gate = async (r: Awaited<ReturnType<typeof rig>>) => {
+    let queued = 0;
+    await childReclaimUnlessDisabled({ io: r.deps.io, registryDir: r.deps.cfg.registryDir, coord: r.coord, notifyLog: r.deps.notifyLog },
+      async () => { queued += 1; });
+    return queued;
+  };
+  it('queues nothing while set, and says so on the feed once however often it is asked', async () => {
+    const r = await rig();
+    r.set();
+    expect([await gate(r), await gate(r), await gate(r)]).toEqual([0, 0, 0]);
+    const rows = r.coord.feedEvents(20).filter((e) => e.title === 'child reclaim switched off');
+    expect(rows).toHaveLength(1);
+  });
+  it('says so again after the switch was lowered and raised', async () => {
+    const r = await rig();
+    r.set(); await gate(r); r.clear(); await gate(r); r.set(); await gate(r);
+    expect(r.coord.feedEvents(20).filter((e) => e.title === 'child reclaim switched off')).toHaveLength(2);
+  });
+  it('queues when absent, and when the listing fails', async () => {
+    const r = await rig();
+    expect(await gate(r)).toBe(1);
+    let queued = 0;
+    await childReclaimUnlessDisabled({ io: { readdir: async () => { throw new Error('EIO'); } }, registryDir: '/x' }, async () => { queued += 1; });
+    expect(queued).toBe(1);
+  });
+});
+
+describe('the other cleanup lanes ignore child-reclaim-disabled', () => {
+  it('the temp-root collector\'s switches read it as nothing: not paused, and its own markers still count', async () => {
+    const { orphanSwitches } = await import('../src/coord/collectOrphanTree.js');
+    const io = (names: string[]) => ({ readdirMeasured: async () => ({ ok: true as const, entries: names }) });
+    expect(await orphanSwitches(io([MARKER]) as never, '/reg')).toMatchObject({ paused: false });
+    expect(await orphanSwitches(io([MARKER, 'reclaim-paused']) as never, '/reg')).toMatchObject({ paused: true });
   });
 });

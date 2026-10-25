@@ -30,6 +30,7 @@ import { boundSessionsOf, joinRunSpend } from './runSpend.js';
 import { pageInbox, renderEnvelope, renderInboxEntry } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { childReclaimGenerationRead } from './childReclaim.js';
+import { childReclaimUnlessDisabled } from './childReclaimDisabled.js';
 import { DelegationCheckpointError, type DelegationDurability } from './delegation-checkpoint.js';
 import { COORDINATOR_INTENT_ACTIONS, COORDINATOR_INTENT_REFUSALS, declareCoordinatorIntent, formatDelegationInstant } from './delegation-model.js';
 import { readParentGenerations, settleParentIncarnations } from './gitref.js';
@@ -345,10 +346,11 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
  */
 function childReclaimPort(deps: Deps, coord: CoordStore): (req: ChildReclaimRequest) => void {
   return (req) => {
-    void deps.queue.run(req.sessionId, () => reclaimChild({
-      coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState, viewers: deps.viewers, notifyLog: deps.notifyLog,
-    }, req)).catch((err: unknown) => {
+    void childReclaimUnlessDisabled({ io: deps.io, registryDir: deps.cfg.registryDir, coord, notifyLog: deps.notifyLog },
+      () => deps.queue.run(req.sessionId, () => reclaimChild({
+        coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
+        fleetState: deps.fleetState, viewers: deps.viewers, notifyLog: deps.notifyLog,
+      }, req))).catch((err: unknown) => {
       console.warn(`ccrc-server: the reclaim of ${req.sessionId} threw `
         + `(${err instanceof Error ? err.message : String(err)}) — left to the sweep`);
     });
