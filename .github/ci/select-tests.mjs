@@ -397,6 +397,26 @@ function liveTestsCli(args) {
   process.stdout.write(live.map((f) => `${f}\n`).join(''));
 }
 
+/** For each stamp older than the map's own sha, the changes from that commit to the map's sha: what a record traced
+ *  there has missed since. A stamp git cannot diff (not a commit here, or not an ancestor of the map's sha) gets no
+ *  entry, which `uncertainTests` reads as uncertain.
+ *  @param {string} repoDir @param {TestMap} map @returns {Map<string, import('./select-tests.mjs').Change[]>} */
+export function gitStaleChanges(repoDir, map) {
+  /** @type {Map<string, import('./select-tests.mjs').Change[]>} */
+  const out = new Map();
+  for (const rec of Object.values(map.tests)) {
+    const at = rec.tracedAt;
+    if (!at || at === map.sha || out.has(at)) continue;
+    try {
+      execFileSync('git', ['merge-base', '--is-ancestor', at, map.sha], { cwd: repoDir, stdio: 'pipe' });
+      out.set(at, readChanges(repoDir, at, map.sha));
+    } catch {
+      // no entry: uncertain
+    }
+  }
+  return out;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args[0] === 'live-tests') {
@@ -418,6 +438,7 @@ async function main() {
   const liveTests = liveTestFiles(repoDir, opt.to ?? 'HEAD');
   const selection = selectTests({
     map: mapResult.map, changes, liveTests, existsAt: gitExistsAt(repoDir),
+    staleChanges: gitStaleChanges(repoDir, mapResult.map),
   });
   console.log(JSON.stringify(selection));
 }

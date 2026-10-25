@@ -23,7 +23,7 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readMap } from './testmap.mjs';
-import { readChanges, liveTestFiles, unsafeTestPaths, gitExistsAt, selectTests, selectIgnoringUncertainty, uncertainTests, RULE_NAMES } from './select-tests.mjs';
+import { readChanges, liveTestFiles, unsafeTestPaths, gitExistsAt, selectTests, gitStaleChanges, selectIgnoringUncertainty, uncertainTests, RULE_NAMES } from './select-tests.mjs';
 import { planShards, planTraceBatch, toMatrix, PROFILES } from './shards.mjs';
 
 /** @typedef {import('./testmap.mjs').TestMap} TestMap */
@@ -162,7 +162,7 @@ function computeRealSelection(repoDir, mapFile, liveTests) {
     }
     const changes = readChanges(repoDir, map.sha, 'HEAD');
     const existsAt = gitExistsAt(repoDir);
-    const staleChanges = staleChangesOf(repoDir, map);
+    const staleChanges = gitStaleChanges(repoDir, map);
     const selection = selectTests({ map, changes, liveTests, existsAt, staleChanges });
     const retrace = {
       selection: selectIgnoringUncertainty({ map, changes, liveTests, existsAt }),
@@ -173,26 +173,6 @@ function computeRealSelection(repoDir, mapFile, liveTests) {
     const msg = e && e.message ? String(e.message) : String(e);
     return { selection: { mode: 'full', reason: `selector error: ${msg || 'unknown error'}` }, map: null };
   }
-}
-
-/** For each stamp older than the map's own sha, the changes from that commit to the map's sha: what a record traced
- *  there has missed since. A stamp git cannot diff (not a commit here, or not an ancestor of the map's sha) gets no
- *  entry, which `uncertainTests` reads as uncertain.
- *  @param {string} repoDir @param {TestMap} map @returns {Map<string, import('./select-tests.mjs').Change[]>} */
-function staleChangesOf(repoDir, map) {
-  /** @type {Map<string, import('./select-tests.mjs').Change[]>} */
-  const out = new Map();
-  for (const rec of Object.values(map.tests)) {
-    const at = rec.tracedAt;
-    if (!at || at === map.sha || out.has(at)) continue;
-    try {
-      execFileSync('git', ['merge-base', '--is-ancestor', at, map.sha], { cwd: repoDir, stdio: 'pipe' });
-      out.set(at, readChanges(repoDir, at, map.sha));
-    } catch {
-      // no entry: uncertain
-    }
-  }
-  return out;
 }
 
 /** The commit time of `sha` in ms, 0 when git does not know it (so an unknown stamp sorts as the oldest).
