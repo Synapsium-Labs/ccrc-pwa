@@ -18,7 +18,8 @@
 // the phone halves) pass today and keep passing.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { ReactNode } from 'react';
+import { useLayoutEffect, type ReactNode } from 'react';
+import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ChatEvent, Dialog, FleetSession } from '../../shared/api';
@@ -1171,6 +1172,57 @@ describe('every focus mover in the ask files is a reviewed one (R102)', () => {
   ] as const)('%s: the focus call sites are exactly the reviewed ones', (file, expected) => {
     expect(movers(file)).toEqual(expected);
     expect(stripped(file), `${file}: no autoFocus`).not.toMatch(/autoFocus/);
+  });
+});
+
+// R102: a LATER send's release wins over an EARLIER raise. A CONSTRUCTED ordering that the production click path is not known
+// to reach: Go to question is a click, a discrete event, and a discrete render's passive effects flush at the end of its commit,
+// so no send can be claimed between that raise's render and its effect. Here the raise is rendered outside `act` (a default-lane
+// render, whose passive effect React defers to the scheduler) while eligible, and a sibling's layout effect, which runs in
+// that same commit, dispatches a native digit keydown: the send is claimed after the raise's render and before its effect.
+// The effect then runs against a fence the release just raised, and must not lower it. Only public React and DOM APIs: a real
+// `createRoot`, a plain `dispatchEvent`, real timers; `IS_REACT_ACT_ENVIRONMENT` is restored in a `finally`.
+describe('a send claimed after an eligible raise renders and before its effect runs still releases (R102)', () => {
+  it('the second digit sends nothing: the later release won', async () => {
+    media(true);
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const before = env.IS_REACT_ACT_ENVIRONMENT;
+    const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: agedQuestion2() })
+      .mockReturnValue(new Promise(() => {}));
+    const store = createSessionStore(ID, { makeSocket: fakeSocket });
+    for (const f of askFixture(2).frames) store.getState().apply(f);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const press = (k: string): void => {
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+    };
+    // The sibling: its layout effect runs in the raise's commit, after the sheet's own, and before any passive effect.
+    function Presser({ n }: { n: number }): null {
+      useLayoutEffect(() => { if (n !== 0) press('1'); }, [n]);
+      return null;
+    }
+    const show = (raise: number): void => root.render(<><DialogSheet id={ID} store={store} raise={raise} /><Presser n={raise} /></>);
+    try {
+      env.IS_REACT_ACT_ENVIRONMENT = false;
+      show(0);
+      await sleep(150);
+      const first = within(host).getByRole('button', { name: /^Redis/ });
+      first.focus();
+      show(1); // an ELIGIBLE raise; its layout-phase sibling then claims a send
+      await sleep(400);
+      expect(answer, 'premise: the digit sent once').toHaveBeenCalledTimes(1);
+      expect(within(host).getByText(HOOK_QUESTIONS[1]!.question), 'premise: the reply brought question 2').toBeInTheDocument();
+      expect(document.activeElement, 'premise: question 2 reused the focused row node').toBe(first);
+      press('2');
+      await sleep(150);
+      expect(answer, 'the second digit sends nothing: the release stood').toHaveBeenCalledTimes(1);
+    } finally {
+      env.IS_REACT_ACT_ENVIRONMENT = before;
+      root.unmount();
+      host.remove();
+    }
   });
 });
 
