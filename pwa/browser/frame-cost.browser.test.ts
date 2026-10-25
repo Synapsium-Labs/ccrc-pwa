@@ -15,8 +15,10 @@
 //
 // Neutral names only (`project-a`, `lane-a`, `ws-<n>`); the fixture is deterministic (`fleetFixture`).
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/frame-cost.browser.test.ts )`.
-// Measure: the same with `CCRC_MEASURE=1 --silent=false --reporter=verbose -t measurement` (both flags, or a passing
-// test prints nothing); add `CCRC_RENDERS=<a directory outside the work tree>` for the screenshots.
+// Measure: the same with `CCRC_MEASURE=1` and `--reporter=verbose -t measurement`. Name a reporter explicitly: a passing
+// test's console lines print only then (measured with vitest 4.1.10 on runs-finished-fold's measurement case:
+// `--reporter=verbose` or `--reporter=default` prints them; `--silent=false` alone, or no flag, does not). Add
+// `CCRC_RENDERS=<a directory outside the work tree>` for the screenshots.
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
