@@ -3125,7 +3125,8 @@ menu) write one field each through `POST /api/sessions/:id/route`, which runs `c
 fleet `ccd` that does not advertise `route-apply-v1`); the chip wears `queued` until the pane reads the change
 back (on a session whose row carries no routing record yet, a toast says so after 60 s without a read-back). The
 new-session sheet seeds `class`, `effort` and `workflow` at creation. An operator spawn with nothing chosen gets
-the coordinator row, `class=opus effort=ultracode subagent=sonnet workflow=on`; a dispatched worker gets a record
+the coordinator row, `class=opus effort=high subagent=sonnet workflow=on` (workflows enabled for a short clause-19
+review, never standing `ultracode` orchestration, ruling 2026-10-25); a dispatched worker gets a record
 only when its run names one. **Fable runs only when the operator selects it** (D-6790, ruling 2026-10-24). Neither automatic ladder
 (`shared/routing-ladder.ts`) reaches it — both stop at `opus`, and a reversal of a demotion off `fable` answers `ceiling`
 rather than restoring it — and every box-token route write refuses it with `409 fable-operator-only`: a coordinator's

@@ -535,7 +535,7 @@ describe('the coordinator skill: clause 17, coordinator intent', () => {
     expect(allSkillText).not.toMatch(/without (?:a |the )?(?:coordinator )?intent[^.\n]{0,40}(?:refus|forbid|block)/i);
   });
 
-  it('the routing matrix\'s coordinator row carries clause 19: Opus high, workflows off, clause-19 agents at medium', () => {
+  it('the routing matrix\'s coordinator row carries clause 19: Opus high, workflows enabled for clause 19 only, clause-19 agents at medium', () => {
     // Clause 13 takes every route from the matrix, so a coordinator row still saying ultracode (xhigh plus
     // standing workflow orchestration) would hand the coordinator the very default clause 19 abolishes.
     const matrix = refs('routing-matrix.md');
@@ -543,8 +543,11 @@ describe('the coordinator skill: clause 17, coordinator intent', () => {
     expect(row, 'the coordinator row is gone from the matrix').toBeDefined();
     const cells = row!.split('|').slice(1, -1).map((c) => c.trim());
     expect(cells[1]).toMatch(/^Opus · high\b/);
-    expect(cells[3]).toMatch(/^Off\b/);
-    expect(cells[3]).toContain('clause-19 workflow only');
+    // `Workflow mode` is the `enableWorkflows` switch: Off would make even a clause-19 review impossible to launch,
+    // so the cell is enabled and says what may launch, never standing orchestration (verifier finding, this PR).
+    expect(cells[3]).toMatch(/^On \(enabled\), launched only under clause 19\b/);
+    expect(cells[3]).toContain('short, self-contained, time-capped');
+    expect(cells[3]).toContain('never standing orchestration');
     expect(cells[2]).toContain('· medium');
     expect(cells[2]).not.toMatch(/· (high|xhigh|max)\b/);
     expect(row).not.toMatch(/ultracode|On while orchestrating|while orchestrating/);
