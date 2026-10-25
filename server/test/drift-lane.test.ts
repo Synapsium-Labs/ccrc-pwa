@@ -192,6 +192,83 @@ describe('the pushes', () => {
   });
 });
 
+describe('the lane wires its inputs into the push budget', () => {
+  /** A rig past its first armed pass (the summary), so later findings go out as items. */
+  async function seeded() {
+    const r = rig();
+    const seed = r.quietRun(T0 - 2 * H, 5 * DAY);
+    await runDriftPass(r.deps(LIVE), T0 - 2 * H);
+    r.sent.length = 0;
+    return { ...r, seed };
+  }
+  /** A queued delivery; `o` sets its park and gate columns. Returns its id. */
+  const delivery = (db: ReturnType<typeof rig>['db'], o: { parkedAt?: number; parkEscalatedAt?: number; lastGate?: string; gateSince?: number }): number => {
+    const m = db.prepare("INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body) VALUES (1, 'coord-a', 'u', 'worker-1', NULL, 'status', 's', 'b')").run();
+    const d = db.prepare("INSERT INTO mail_deliveries (mailId, toId, state, envelope, parkedAt, parkEscalatedAt, lastGate, gateSince) VALUES (?, 'worker-1', 'queued', 'e', ?, ?, ?, ?)")
+      .run(m.lastInsertRowid, o.parkedAt ?? null, o.parkEscalatedAt ?? null, o.lastGate ?? null, o.gateSince ?? null);
+    return Number(d.lastInsertRowid);
+  };
+  const stallRow = (r: { db: ReturnType<typeof rig>['db'] }, runId: number, mode: 'live' | 'shadow', key: number): void => {
+    r.db.prepare('INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(runId, T0 - H, 'working', 'working', 'coordinator', stallDetail(mode, 'mail-stuck', 1, key));
+  };
+  const itemPushes = (sent: Sent[]) => sent.filter((s) => s.mode === 'push');
+
+  it('a parked delivery with parkEscalatedAt set is not pushed; without it, one push to the session', async () => {
+    const esc = await seeded();
+    delivery(esc.db, { parkedAt: T0 - 25 * H, parkEscalatedAt: T0 - 20 * H });
+    await runDriftPass(esc.deps([]), T0 - H);
+    await runDriftPass(esc.deps(LIVE), T0);
+    expect(itemPushes(esc.sent)).toEqual([]);
+    expect(rows(esc.coord).some((r) => r.kind === 'mail-parked')).toBe(true);
+
+    const plain = await seeded();
+    delivery(plain.db, { parkedAt: T0 - 25 * H });
+    await runDriftPass(plain.deps([]), T0 - H);
+    await runDriftPass(plain.deps(LIVE), T0);
+    const pushes = itemPushes(plain.sent);
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0]!.event.sessionId).toBe('worker-1');
+    expect(pushes[0]!.opts?.url).toBe('/s/worker-1');
+  });
+  it('a held delivery with a live mail-stuck row is not pushed; with a shadow one, it is', async () => {
+    const live = await seeded();
+    const a = delivery(live.db, { lastGate: 'busy', gateSince: T0 - 25 * H });
+    stallRow(live, live.seed, 'live', a);
+    await runDriftPass(live.deps([]), T0 - H);
+    await runDriftPass(live.deps(LIVE), T0);
+    expect(itemPushes(live.sent)).toEqual([]);
+    expect(rows(live.coord).some((r) => r.kind === 'mail-held')).toBe(true);
+
+    const shadow = await seeded();
+    const b = delivery(shadow.db, { lastGate: 'busy', gateSince: T0 - 25 * H });
+    stallRow(shadow, shadow.seed, 'shadow', b);
+    await runDriftPass(shadow.deps([]), T0 - H);
+    await runDriftPass(shadow.deps(LIVE), T0);
+    expect(itemPushes(shadow.sent)).toHaveLength(1);
+    expect(itemPushes(shadow.sent)[0]!.opts?.url).toBe('/s/worker-1');
+  });
+  it('a held ask past its margin is recorded and never pushed', async () => {
+    const r = await seeded();
+    r.db.prepare("INSERT INTO asks (at, childId, parentId, askKey, askAt, dialogId, question, options, state) VALUES (?, 'worker-1', 'coord-a', 'k', 1, 'd', 'q', '[]', 'held')")
+      .run(T0 - 3 * DAY);
+    await runDriftPass(r.deps([]), T0 - H);
+    await runDriftPass(r.deps(LIVE), T0);
+    expect(rows(r.coord).some((x) => x.kind === 'question-orphaned')).toBe(true);
+    expect(itemPushes(r.sent)).toEqual([]);
+  });
+  it('a run-kind push names the run and no session, the shape the Inbox resolves to the run board', async () => {
+    const r = await seeded();
+    const id = r.quietRun(T0, 5 * DAY);
+    await runDriftPass(r.deps([]), T0 - H / 2);
+    await runDriftPass(r.deps(LIVE), T0);
+    const p = itemPushes(r.sent);
+    expect(p).toHaveLength(1);
+    expect(p[0]!.event).toMatchObject({ kind: 'coord', sessionId: '', runId: id });
+    expect(p[0]!.opts?.url).toBe('/runs');
+  });
+});
+
 describe('the once-only stamps', () => {
   const found = (): DriftFinding => ({ key: 'run-quiet:1', kind: 'run-quiet', subject: '{}', detail: 'd', factAt: null, runId: 1, sessionId: null });
   it('markDriftPushed and markDriftShadowed are compare-and-set: the second caller changes nothing', () => {
