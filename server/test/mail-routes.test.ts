@@ -962,7 +962,7 @@ describe('the rejection table is total, in both directions', () => {
         // THE RUN SPEND READ (D-6799): `coord/runSpend.ts` names why a run's spend could not be measured as literals. A
         // reason rides the `spend` block of `GET /api/runs/:id`, never a `refused` or `reject.code`. Admitted through
         // `shared/api.ts`'s exported guard, derived from `RUN_SPEND_UNMEASURED_REASON_MAP`, never NOT_CODES.
-        || isRunSpendUnmeasuredReason(tok),
+        || isRunSpendUnmeasuredReason(tok)
         // THE STALE-ARCHIVE ARM (D-6643): the next union, checked together and never merged, on the standing rule
         // `enter-ignored` above states. `coord/staleArchive.ts` names its outcome kinds and defer reasons as literals. They ride
         // the feed and the log, never a `refused` or `reject.code`. Admitted through the exported guard, derived from
