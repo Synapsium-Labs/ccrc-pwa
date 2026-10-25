@@ -149,7 +149,7 @@ describe('selectTests queueRunsUnmapped (a pull request diffed from its merge ba
 
   it('leaves a live test the map has never seen, and the change does not touch, to the merge queue', () => {
     const sel = selectTests({ map, changes: [], liveTests: ['server/test/arrived-on-main.test.ts'], existsAt: () => true, queueRunsUnmapped: true });
-    expect(sel).toEqual({ mode: 'selected', tests: [] });
+    expect(sel).toEqual({ mode: 'selected', tests: [], queued: { unmapped: ['server/test/arrived-on-main.test.ts'], uncertain: [] } });
   });
 
   it('still selects an unmapped test the change adds or modifies', () => {
@@ -157,7 +157,64 @@ describe('selectTests queueRunsUnmapped (a pull request diffed from its merge ba
       map, changes: [{ status: 'A', path: 'server/test/mine.test.ts', symlink: false }],
       liveTests: ['server/test/mine.test.ts', 'server/test/other.test.ts'], existsAt: () => true, queueRunsUnmapped: true,
     });
-    expect(sel).toEqual({ mode: 'selected', tests: [{ file: 'server/test/mine.test.ts', rule: 1, path: 'server/test/mine.test.ts' }] });
+    expect(sel).toEqual({
+      mode: 'selected', tests: [{ file: 'server/test/mine.test.ts', rule: 1, path: 'server/test/mine.test.ts' }],
+      queued: { unmapped: ['server/test/other.test.ts'], uncertain: [] },
+    });
+  });
+
+  // staleChanges AND queueRunsUnmapped: a bounded refresh carried records with an older stamp, and the change since
+  // that stamp hit what they read. Without queueRunsUnmapped that is uncertain-means-full; on a pull request the
+  // uncertain tests are selected only when the PR's own change hits them, and the rest are left to the queue.
+  describe('with staleChanges: uncertain tests are selected when the pull request touches them, else queued', () => {
+    const SHA_OLD = 'b'.repeat(40);
+    const stamped: TestMap = {
+      format: 1, sha: SHA_A, baseline: emptyDep(),
+      tests: {
+        'server/test/fresh.test.ts': rec({ read: ['server/src/fresh.ts'], tracedAt: SHA_A }),
+        'server/test/carried-hit.test.ts': rec({ read: ['server/src/carried.ts'], tracedAt: SHA_OLD }),
+        'server/test/carried-quiet.test.ts': rec({ read: ['server/src/quiet.ts'], tracedAt: SHA_OLD }),
+      },
+    };
+    const staleChanges = new Map([[SHA_OLD, [
+      { status: 'M' as const, path: 'server/src/carried.ts', symlink: false },
+      { status: 'M' as const, path: 'server/src/quiet.ts', symlink: false },
+    ]]]);
+    const liveTests = [...Object.keys(stamped.tests), 'server/test/never-traced.test.ts'];
+    const changes = [{ status: 'M' as const, path: 'server/src/carried.ts', symlink: false }];
+
+    it('the same inputs without queueRunsUnmapped (the merge queue, a refresh) answer full: uncertain means full', () => {
+      const sel = selectTests({ map: stamped, changes, liveTests, existsAt: () => true, staleChanges });
+      expect(sel.mode).toBe('full');
+      expect((sel as { reason: string }).reason).toMatch(/^uncertain: 3 test\(s\)/);
+    });
+
+    it('a pull request selects the uncertain test its change hits and queues the rest, the never-traced one included', () => {
+      const sel = selectTests({ map: stamped, changes, liveTests, existsAt: () => true, staleChanges, queueRunsUnmapped: true });
+      expect(sel).toEqual({
+        mode: 'selected',
+        tests: [{ file: 'server/test/carried-hit.test.ts', rule: 3, path: 'server/src/carried.ts' }],
+        queued: { unmapped: ['server/test/never-traced.test.ts'], uncertain: ['server/test/carried-quiet.test.ts'] },
+      });
+    });
+
+    it('a pull request that touches the never-traced test file selects it (rule 1)', () => {
+      const sel = selectTests({
+        map: stamped, changes: [{ status: 'M', path: 'server/test/never-traced.test.ts', symlink: false }],
+        liveTests, existsAt: () => true, staleChanges, queueRunsUnmapped: true,
+      });
+      expect(sel.mode).toBe('selected');
+      expect((sel as { tests: Array<{ file: string }> }).tests.map((t) => t.file)).toEqual(['server/test/never-traced.test.ts']);
+      expect((sel as { queued: unknown }).queued).toEqual({ unmapped: [], uncertain: ['server/test/carried-hit.test.ts', 'server/test/carried-quiet.test.ts'] });
+    });
+
+    it('a full trigger still answers full on a pull request', () => {
+      const sel = selectTests({
+        map: stamped, changes: [{ status: 'M', path: 'server/package.json', symlink: false }],
+        liveTests, existsAt: () => true, staleChanges, queueRunsUnmapped: true,
+      });
+      expect(sel.mode).toBe('full');
+    });
   });
 });
 
