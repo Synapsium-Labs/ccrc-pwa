@@ -110,6 +110,15 @@ export interface OpenedApp {
   /** Hold `path`'s fulfilment until `gate` settles: it is in flight (logged `fulfil-start`) from the moment its turn
    *  comes until then. A self-test's controlled boundary, never a gate case's. */
   answerAfter(path: string, gate: Promise<void>): void;
+  /** Park every `/api` request intercepted from now on, unanswered, until a flush (R104: `frameCost`'s drains). */
+  holdApi(): void;
+  /** Answer every parked request, in arrival order, and keep parking new ones. Resolves once each released request
+   *  has logged its `fulfil-start`, so the in-flight count is current when it returns. */
+  flushApi(): Promise<void>;
+  /** Wait until no fulfilment is in flight, or throw `drain-inflight-timeout` (naming the paths) after `capMs`. */
+  settleApi(capMs: number): Promise<void>;
+  /** Stop parking and answer whatever is parked. Waits for nothing, so a failed attempt's cleanup cannot hang. */
+  releaseApi(): void;
 }
 
 /** One entry of `OpenedApp.events`. `fulfil-start` is logged when a request's answer is due (it then counts as in
@@ -142,21 +151,31 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
     events.push(event);
     for (const listener of listeners) listener(event);
   };
-  const inFlight = new Set<string>();
+  const inFlight = new Map<number, string>();
   const gates = new Map<string, Promise<void>>();
+  // `null` until `holdApi`: then each request waits here for its turn (a flush or the release).
+  let parked: { readonly turn: () => void; readonly started: Promise<void> }[] | null = null;
+  const settled = new Set<() => void>();
   await ctx.route('**/api/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname;
     log({ kind: 'intercept', path: pathname });
     const body = Object.hasOwn(fixture.api, pathname) ? fixture.api[pathname] : {};
-    const id = `${events.length}:${pathname}`;
-    inFlight.add(id);
+    let begun = (): void => undefined;
+    if (parked !== null) {
+      const started = new Promise<void>((done) => { begun = done; });
+      await new Promise<void>((turn) => { parked!.push({ turn, started }); });
+    }
+    const id = events.length;
+    inFlight.set(id, pathname);
     log({ kind: 'fulfil-start', path: pathname });
+    begun();
     try {
       await gates.get(pathname);
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
     } finally {
       inFlight.delete(id);
       log({ kind: 'fulfil-done', path: pathname });
+      for (const check of [...settled]) check();
     }
   });
   // Every routed socket, per pathname, in the order it opened: `send` talks to the newest one, and a socket that closed
@@ -183,6 +202,37 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
     watch: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     mark: (kind) => { log({ kind, inFlight: inFlight.size }); },
     answerAfter: (path, gate) => { gates.set(path, gate); },
+    holdApi: () => { parked ??= []; },
+    flushApi: async () => {
+      const due = parked?.splice(0) ?? [];
+      log({ kind: 'flush' });
+      for (const entry of due) entry.turn();
+      await Promise.all(due.map((entry) => entry.started));
+    },
+    settleApi: async (capMs) => {
+      if (inFlight.size === 0) return;
+      log({ kind: 'drainWait', inFlight: inFlight.size });
+      await new Promise<void>((done, fail) => {
+        const check = (): void => {
+          if (inFlight.size > 0) return;
+          clearTimeout(timer);
+          settled.delete(check);
+          done();
+        };
+        const timer = setTimeout(() => {
+          settled.delete(check);
+          fail(new Error(`drain-inflight-timeout: ${[...inFlight.values()].join(', ')} still in flight after ${capMs} ms`));
+        }, capMs);
+        settled.add(check);
+        check();
+      });
+    },
+    releaseApi: () => {
+      const due = parked ?? [];
+      parked = null;
+      if (due.length > 0) log({ kind: 'flush' });
+      for (const entry of due) entry.turn();
+    },
   };
 }
 
@@ -329,17 +379,34 @@ export function summarize(costs: readonly Cost[]): { readonly median: Cost; read
   };
 }
 
+/** The drain's caps (R104). An in-flight fulfilment past `INFLIGHT_CAP_MS` fails the attempt; a quiet wait past
+ *  `QUIET_CAP_MS` is only recorded (`FrameCost.drainQuiet`). */
+export const INFLIGHT_CAP_MS = 5000;
+export const QUIET_CAP_MS = 3000;
+const QUIET_STEP_MS = 100;
+const QUIET_STEPS = 3;
+const QUIET_TASK_MS = 1;
+
 /** Send each of `frames` to the newest socket on `path`, `gapMs` apart, and read Chrome's `TaskDuration` and
  *  `ScriptDuration` (`Performance.getMetrics`, seconds) before and after each window. One idle window of `gapMs` with
  *  no frame is measured first, on the page as it stands before `frames`: it is not matched to a page that has taken
  *  them (an identical frame re-sent after many changes is measured against this one idle window). Nothing runs in the
- *  page: the meter is a CDP session on the test side. */
+ *  page: the meter is a CDP session on the test side.
+ *
+ *  The fixture's `/api` answers are deferred out of the windows (the operator's R104 contract): every request is
+ *  parked from the start, and a DRAIN before each window (the idle one too) answers the parked ones, waits for their
+ *  fulfilments (capped: `drain-inflight-timeout` fails the attempt), then waits for a quiet main thread (capped, and
+ *  only recorded). So no fixture answer is FULFILLED by the harness inside a window. That is a mitigation, not an
+ *  isolation: the page's parsing and rendering of an answer, and its timers, can still run into the next window, and
+ *  the app's pollers keep their own times (a poll's `fetch` call itself lands in whichever window it falls in). The
+ *  `finally` releases whatever is still parked and waits for nothing. */
 export async function frameCost(
   app: OpenedApp, path: string, frames: readonly unknown[], gapMs: number, options: FrameCostOptions = {},
 ): Promise<FrameCost> {
   const cdp = await app.ctx.newCDPSession(app.page);
   const deferred: number[] = [];
   const drainQuiet: boolean[] = [];
+  app.holdApi();
   try {
     await cdp.send('Performance.enable');
     const read = async (): Promise<Cost> => {
@@ -347,8 +414,27 @@ export async function frameCost(
       const get = (name: string): number => metrics.find((m) => m.name === name)?.value ?? Number.NaN;
       return { taskMs: get('TaskDuration') * 1000, scriptMs: get('ScriptDuration') * 1000 };
     };
+    // The main thread is quiet when TaskDuration grows by less than QUIET_TASK_MS over QUIET_STEPS reads
+    // QUIET_STEP_MS apart; the wait gives up at QUIET_CAP_MS. A disclosure, not a proof that the page is done.
+    const quiet = async (): Promise<boolean> => {
+      const end = Date.now() + QUIET_CAP_MS;
+      let last = (await read()).taskMs;
+      for (let still = 0; Date.now() < end; ) {
+        await app.page.waitForTimeout(QUIET_STEP_MS);
+        const now = (await read()).taskMs;
+        still = now - last < QUIET_TASK_MS ? still + 1 : 0;
+        last = now;
+        if (still === QUIET_STEPS) return true;
+      }
+      return false;
+    };
+    const drain = async (): Promise<boolean> => {
+      await app.flushApi();
+      await app.settleApi(INFLIGHT_CAP_MS);
+      return options.quiet === false ? false : quiet();
+    };
     const window = async (frame: { readonly frame: unknown; readonly index: number } | null): Promise<Cost> => {
-      drainQuiet.push(false);
+      drainQuiet.push(await drain());
       const a = await read();
       app.mark('readA');
       const from = app.events.length;
@@ -367,6 +453,7 @@ export async function frameCost(
     for (const [index, frame] of frames.entries()) costs.push(await window({ frame, index }));
     return { idle, frames: costs, ...summarize(costs), deferred, drainQuiet };
   } finally {
+    app.releaseApi();
     await cdp.detach().catch(() => { /* the context closing first is fine */ });
   }
 }
