@@ -35875,7 +35875,7 @@ _ws_leaf_checkout_accepted() {   # admin back-link -> appends `<admin>=<back-lin
 }
 _ws_leaf_checkout_one() {   # leaf-physical .git-entry [alias accepted] -> 0 the leaf's own; 1 refused; 2 unmeasured (_WS_CHECKOUTS_WHY)
   # ONE `.git` entry, asked without following it (`_ws_leaf_checkouts` says why).
-  local lp="$1" f="$2" d="${2%/.git}" alias="${3-}" accepted="${4-}" buf gd rest adp rec rc pre
+  local lp="$1" f="$2" d="${2%/.git}" alias="${3-}" accepted="${4-}" buf gd rest lex adp rec rc pre
   if [[ -L "$f" ]]; then
     _WS_CHECKOUTS_WHY="$f is a symbolic link — git follows a .git link and ccd never does, so the tree at $d may be a checkout git records elsewhere"
     return 1
@@ -35901,9 +35901,14 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry [alias accepted] -> 0 the
   # after any other component — and any `..` in an absolute one — does not (a
   # link before it sends the kernel and a logical `cd` to two places), so it is
   # unmeasured rather than resolved one way and believed.
-  rest="$gd"
+  rest="$gd"; lex=''
   if [[ "$gd" != /* ]]; then
-    while [[ "$rest" == ../* || "$rest" == ./* ]]; do rest="${rest#*/}"; done
+    lex="$d"
+    while [[ "$rest" == ../* || "$rest" == ./* ]]; do
+      [[ "$rest" != ../* ]] || lex="${lex%/*}"   # d is physical, so each leading `..` is its parent, read the same logically
+      rest="${rest#*/}"
+    done
+    [[ "$rest" == .. || "$rest" == . ]] && lex='' || lex="$lex/$rest"
     [[ "$rest" != .. && "$rest" != . ]] || rest=''
     gd="$d/$gd"
   fi
@@ -35925,8 +35930,19 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry [alias accepted] -> 0 the
     (( rc != 1 )) || { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, in the leaf's pre-move spelling, where something stands again — not the leaf's own"; return 1; }
     gd="${lp%/}${gd#"${alias%/}"}"
   fi
+  [[ -n "$lex" || "$gd" != /* ]] || lex="$gd"   # an absolute spelling is its own (after the alias, the leaf's new place)
   _ws_reclaim_absent "$gd"; rc=$?
-  (( rc != 0 )) || { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, which no longer exists — git no longer records the tree at $d"; return 1; }
+  if (( rc == 0 )); then
+    # A git directory SPELLED inside the leaf (no `.`/`..` segment, so the spelling is the place) and absent
+    # is the leaf's own fixture worktree whose admin dir was pruned or removed: no repository outside the
+    # leaf records the tree, and the removal takes the leaf whole. Outside it, absent still refuses.
+    case "/$lex/" in
+      */../*|*/./*|//) ;;
+      *) [[ "$lex/" != "${lp%/}/"?* ]] || return 0 ;;
+    esac
+    _WS_CHECKOUTS_WHY="$f names $gd as its git directory, which no longer exists — git no longer records the tree at $d"
+    return 1
+  fi
   (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — where $f's git directory stands was never asked"; return 2; }
   _ws_dir_physical "$gd" \
     || { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, which cannot be resolved ($_WS_PHYS_WHY)"; return 2; }
@@ -36009,7 +36025,8 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
   # leaf's own); a regular file is read AS A FILE (never by running git inside
   # the leaf) and must be one `gitdir: <path>` line, else unmeasured; the
   # directory it names resolved physically — absent refuses (git no longer
-  # records the tree), unresolvable is unmeasured, inside the leaf passes;
+  # records the tree) unless it is SPELLED inside the leaf, where it passes (a
+  # fixture worktree whose admin dir was pruned: nothing outside records it), unresolvable is unmeasured, inside the leaf passes;
   # outside it passes only as a linked worktree whose admin `gitdir` names
   # this `.git` back (literally, or by its directory's physical path; a
   # back-link with a NUL inside the path it names is refused, since git never
