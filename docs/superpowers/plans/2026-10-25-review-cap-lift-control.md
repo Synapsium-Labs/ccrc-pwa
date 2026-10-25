@@ -451,3 +451,9 @@ only a fingerprint row catches; a first draft with a shaped key came back `[REDA
 F2's four anchors were re-anchored by content, with the README claim holder's consent for that one sentence. The debt
 map's `shared/api.ts` entry went from 5 back to its census of 1, so no number in the test changed, and the README census
 row's comment records the re-anchor. The rulings section above is word for word, except the claim holder's session name.
+
+Fix round 1's gates, one file at a time with `--pool=forks --maxWorkers=2`, at loads from 35 to 56: every server gate
+the brief, Task 5 and correction 10 name is green, and `session-hook` too. `secret-mask` was green except its "2 MB
+TUI pane history" timing test (red at load 47 in the batch). That test is red on a clean `origin/main` checkout at the
+same load as well, and it passed alone on both trees at load 35. The whole PWA suite passed, all 314 files, and
+`npm run build` is green.
