@@ -1169,9 +1169,16 @@ if [ "$route" != Q ] && [ "$need" = yes ]; then
   ids=$(jq -r '[.[] | select(.type == "required_status_checks") | .ruleset_id]
     | if all(.[]; type == "number") then unique | .[] else error("no ruleset id") end' <<<"$rules") \
     || stop "licence-fails: an approval is missing and a required_status_checks rule names no ruleset"
+  # The licence is the answer as GitHub sent it: exactly one value, whose current_user_can_bypass is exactly the string
+  # "never", compared in jq (`jq -r` and a command substitution would drop a trailing newline from "never" plus one).
+  # Anything else counts as able to bypass, a failed call or an unreadable answer included. The stop shows what was
+  # found: a plain word as it is and any other value in JSON notation, so a value that is not "never" never reads as it.
   for id in $ids; do
-    by=$(gh api "repos/{owner}/{repo}/rulesets/$id" | jq -r .current_user_can_bypass) || by=unreadable
-    [ "$by" = never ] || stop "licence-fails: an approval is missing and ruleset $id answers $by"
+    r6=$(gh api "repos/{owner}/{repo}/rulesets/$id") || r6=
+    jq -se 'length == 1 and .[0].current_user_can_bypass == "never"' <<<"$r6" >/dev/null && continue
+    by=$(jq -sr 'if length == 1 then .[0].current_user_can_bypass else error("not exactly one value") end
+      | if type == "string" and test("\\A[A-Za-z0-9_-]+\\z") then . else tojson end' <<<"$r6") || by=unreadable
+    stop "licence-fails: an approval is missing and ruleset $id answers $by"
   done
   admin=licensed
 fi

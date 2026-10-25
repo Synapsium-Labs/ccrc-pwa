@@ -1220,6 +1220,51 @@ const READ3: Case[] = [
   ['unreadable: read 3 answers 404 with a body that is an array holding the object', on3(prot404(`[{"message":"${NP}"}]`)), R3_404],
 ];
 
+// Read 6: the licence is the one value of the ruleset's answer, and its `current_user_can_bypass` is exactly "never". The
+// stop line shows what was found: a plain word as it is, every other value in JSON notation, so a value that is not exactly
+// `never` never reads as a bare `never`.
+const ruleset6 = (a: Answer | Answer[]): (() => Fixture) => with_(bareApproval(), (f) => ({ ...f,
+  ...rules(pull({ required_approving_review_count: 1 }), rsc([{ context: 'build-pwa', integration_id: 15368 }], 21)),
+  checkruns: runs(run('build-pwa')), ruleset: a }));
+const bypass = (v: unknown): Answer => ok({ id: 21, current_user_can_bypass: v });
+const answers = (shown: string, id = 21): string => `STOP licence-fails: an approval is missing and ruleset ${id} answers ${shown}`;
+const raw6 = (...vs: unknown[]): Answer => ({ code: 200, raw: vs.map((v) => JSON.stringify({ current_user_can_bypass: v })).join('\n') });
+const LICENSED_G = 'ROUTE G method=squash admin=licensed strict=no';
+const BYPASSES: [string, unknown, string][] = [
+  ['the string "always"', 'always', 'always'], ['the string "pull_requests_only"', 'pull_requests_only', 'pull_requests_only'],
+  ['the string "exempt"', 'exempt', 'exempt'], ['never with a trailing newline', 'never\n', '"never\\n"'],
+  ['never with two trailing newlines', 'never\n\n', '"never\\n\\n"'], ['never with a leading space', ' never', '" never"'],
+  ['never with a trailing space', 'never ', '"never "'], ['never in capitals', 'NEVER', 'NEVER'], ['an empty string', '', '""'],
+  ['null', null, 'null'], ['the number 7', 7, '7'], ['the boolean true', true, 'true'], ['an array holding never', ['never'], '["never"]'],
+  ['an empty object', {}, '{}'],
+];
+const READ6: Case[] = [
+  ['control: a ruleset answering exactly "never" licenses --admin', ruleset6(bypass('never')), LICENSED_G],
+  ['control: that answer from gh exiting 0 is the same', ruleset6(exiting(bypass('never'), 0)), LICENSED_G],
+  ...BYPASSES.map(([what, v, shown]): Case => [`the approval licence fails: read 6 answers ${what}`, ruleset6(bypass(v)), answers(shown)]),
+  ['the approval licence fails: read 6 answers with no current_user_can_bypass at all', ruleset6(ok({ id: 21 })), answers('null')],
+  ['the approval licence fails: read 6 answers null', ruleset6({ code: 200, raw: 'null' }), answers('null')],
+  ['the approval licence fails: read 6 answers two values, never and then always', ruleset6(raw6('never', 'always')), answers('unreadable')],
+  ['the approval licence fails: read 6 answers two values, always and then never', ruleset6(raw6('always', 'never')), answers('unreadable')],
+  ['the approval licence fails: read 6 answers two values that are both never', ruleset6(raw6('never', 'never')), answers('unreadable')],
+  ['the approval licence fails: read 6 answers two values back to back', ruleset6({ code: 200,
+    raw: '{"current_user_can_bypass":"never"}{"current_user_can_bypass":"never"}' }), answers('unreadable')],
+  ['the approval licence fails: read 6 answers with empty stdout and gh exits 0', ruleset6({ code: 200, raw: '' }), answers('unreadable')],
+  ['the approval licence fails: read 6 answers with a malformed body', ruleset6({ code: 200, raw: '{' }), answers('unreadable')],
+  ['the approval licence fails: read 6 answers with a body that is the word as a JSON string', ruleset6({ code: 200, raw: '"never"' }),
+    answers('unreadable')],
+  ['the approval licence fails: read 6 prints a never answer but gh exits 1', ruleset6(exiting(bypass('never'), 1)), answers('unreadable')],
+  ['the approval licence fails: read 6 fails', ruleset6(fail(404, 'Not Found')), answers('unreadable')],
+  ['the approval licence fails at the second ruleset: the first answers never, the second never with a newline',
+    with_(bareApproval(), (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }),
+      rsc([{ context: 'build-pwa', integration_id: 15368 }], 21), rsc([{ context: 'build-pwa', integration_id: 15368 }], 22)),
+      checkruns: runs(run('build-pwa')), ruleset: [bypass('never'), bypass('never\n')] })), answers('"never\\n"', 22)],
+  ['the approval licence holds when two rulesets both answer exactly "never"',
+    with_(bareApproval(), (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }),
+      rsc([{ context: 'build-pwa', integration_id: 15368 }], 21), rsc([{ context: 'build-pwa', integration_id: 15368 }], 22)),
+      checkruns: runs(run('build-pwa')), ruleset: [bypass('never'), bypass('never')] })), LICENSED_G],
+];
+
 /** Every argv the block may send: its reads (read 1 with its reviews, and the compare under read 3b), as GETs. */
 const READ = /^(pr view 42 --json baseRefName,headRefOid,state,reviewDecision|api (--paginate |-i )?repos\/\{owner\}\/\{repo\}(\/[^\s]*)?)$/;
 /** The same reads as the block's TEXT spells them, from the word `gh` to the end of its quoted path, followed only by
@@ -1488,7 +1533,7 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
   });
 
   it.each([...ROUTES, ...CHECKS, ...STOPS, LICENSED_NEVER, ...REQUESTS, ...IGNORES, ...LICENCE, ...MALFORMED,
-  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES, ...ORDER, ...LOSS, ...READ1, ...READ3])('%s', (_name, fx, line, env) => {
+  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES, ...ORDER, ...LOSS, ...READ1, ...READ3, ...READ6])('%s', (_name, fx, line, env) => {
     expect(blocks).toHaveLength(1);
     const r = verdict(fx(), env);
     expect(r.out, `stderr: ${r.stderr}`).toBe(`${line}\n`);
@@ -1522,6 +1567,12 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
   it('a read 1 whose base, state or head is unusable reads nothing else', () => {
     for (const patch of [{ baseRefName: null }, { state: 'OPEN\n' }, { headRefOid: `${HC}\n` }]) {
       expect(verdict(read1(patch)()).calls).toEqual(['pr view 42 --json baseRefName,headRefOid,state,reviewDecision']);
+    }
+  });
+
+  it('a read 6 that fails the licence is still one GET per ruleset: the stop line shows the answer already in hand', () => {
+    for (const a of [bypass('never\n'), raw6('never', 'always'), fail(404, 'Not Found')]) {
+      expect(verdict(ruleset6(a)()).calls.filter((c) => c.includes('/rulesets/'))).toEqual(['api repos/{owner}/{repo}/rulesets/21']);
     }
   });
 
