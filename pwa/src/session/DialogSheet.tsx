@@ -575,7 +575,25 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
     ? reviewKeys(source.rows.submit, source.rows.cancel, keyTabs(tabCount, null, true, picksHeld))
     : source.kind === 'menu' ? questionKeys(source.options.map((o) => o.index), null, null, null) : null;
   // ONE engagement for the ask, handed to this hook and, below, to the structured sheet's: not a fact per hook instance.
-  const engagement = useAskEngagement(askIdentity);
+  // R106: input is eligible on the screen showing when no send is in flight, the connection is live and the surface is not
+  // closing. The owner reads it at a pointer press in the card, so a press during a flight or in the gap re-enters nothing.
+  const eligibleNow = useRef(false);
+  useLayoutEffect(() => {
+    eligibleNow.current = !locked && live && !closed;
+  });
+  const engagement = useAskEngagement(askIdentity, () => eligibleNow.current && !sending.current);
+  // R106: Go to question (`raise`, which at the desk is only that button) re-enters ONLY if input was eligible when the raise
+  // was MADE, decided here in render from this render's own state (React's "state from the previous render", as
+  // `useAskKeys`' `mark` does), never when the effect runs. A raise made during a flight or in the gap is consumed as
+  // non-unlocking for good: nothing replays it once the reply lands, so the replacement screen is never pre-authorized.
+  // A nonce standing at mount is absorbed (not unlocking), as `AskSurface`'s `seen` absorbs it.
+  const [raiseMark, setRaiseMark] = useState<{ nonce: number; unlock: boolean }>({ nonce: raise ?? 0, unlock: false });
+  if (raiseMark.nonce !== (raise ?? 0)) {
+    setRaiseMark({ nonce: raise ?? 0, unlock: (raise ?? 0) !== 0 && desk && !locked && live && !closed });
+  }
+  useEffect(() => {
+    if (raiseMark.unlock) engagement.reengage();
+  }, [raiseMark, engagement]);
   const keys = useAskKeys({
     screenId: dialog?.id ?? null,
     screen: keyScreen,

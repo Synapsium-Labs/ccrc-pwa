@@ -76,6 +76,9 @@ export interface AskEngagement {
   readonly engage: () => void;
   /** R102: a send this client initiated at the desk (`DialogSheet`'s `claim()`): end the engagement now, in the same event. */
   readonly release: () => void;
+  /** R102, R105, R106: the operator re-entered deliberately (Go to question, `DialogSheet`'s raise effect, having been
+   *  eligible when the raise was made): lift the fence. A pointer press in the card does it inside the owner. */
+  readonly reengage: () => void;
 }
 
 /**
@@ -88,11 +91,19 @@ export interface AskEngagement {
  * It also lets go on deliberate movement out of the card. Focus that falls to the body because the focused row
  * unmounted fires neither event, so that case stays engaged: it is the one continuation.
  */
-export function useAskEngagement(identity: string | null): AskEngagement {
+export function useAskEngagement(identity: string | null, eligible: () => boolean = () => true): AskEngagement {
   const held = useRef<string | null>(null);
   const now = useRef<string | null>(identity);
-  // R102: raised by `release()` (the fence that stops the keys in the card is added with it, below).
+  // R102: raised by `release()` (a send this client initiated at the desk), lowered only by `reengage()` (Go to question) or
+  // by a pointer press inside the card made while `eligible()`. While it stands, the capture listeners below stop the keys
+  // inside the card, so even a row node the next screen reused, re-enabled and left focused cannot act.
   const fenced = useRef(false);
+  // R106: whether input is eligible on the screen showing (no send in flight, the connection live, the surface not closing),
+  // read AT the act. The latest getter, refreshed every render.
+  const canAct = useRef(eligible);
+  useLayoutEffect(() => {
+    canAct.current = eligible;
+  });
   // ONE release: whenever the identity is not the one engaged (a different ask, a replacement, a clear), the engagement is
   // gone for good, in the commit that shows the new identity and before any focus timer reads it. Comparing at read time
   // instead would let a replaced ask regain it when byte-identical content came back (A -> B -> A, no clear between).
@@ -103,13 +114,47 @@ export function useAskEngagement(identity: string | null): AskEngagement {
   useEffect(() => {
     const away = (e: Event): void => {
       const t = e.target instanceof Element ? e.target : null;
-      if (t === null || t.closest('[data-ask-surface="inline"]') === null) held.current = null;
+      if (t === null || t.closest('[data-ask-surface="inline"]') === null) {
+        held.current = null;
+        return;
+      }
+      // R105: a pointer press INSIDE the card is the operator's deliberate re-entry, counted only while input is eligible
+      // (R106: a press during the flight or in the gap pre-authorizes nothing). A `focusin` inside clears nothing: Tab, and
+      // any focus a script gives, move focus without unlocking.
+      if (e.type === 'pointerdown' && fenced.current && canAct.current()) fenced.current = false;
     };
     document.addEventListener('pointerdown', away, true);
     document.addEventListener('focusin', away, true);
+    // R102 THE FENCE, in the capture phase so `useAskKeys`' bubble listener, React's handlers and the browser's native
+    // activation of a focused button never see the event. Only targets inside the inline card are touched. Keydown: Tab and
+    // Shift+Tab pass (focus moves, nothing unlocks), so does a chord with Ctrl, Meta or Alt (the command layer's Ctrl+K) unless
+    // it is Enter or Space; everything else is stopped. Keyup and keypress: only Enter and Space, whatever key went down
+    // first, because their native activation is that event's default action and one armed before the release must not click
+    // a node the next screen reused.
+    const inCard = (e: Event): boolean => e.target instanceof Element && e.target.closest('[data-ask-surface="inline"]') !== null;
+    const stop = (e: Event): void => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const fenceDown = (e: KeyboardEvent): void => {
+      if (!fenced.current || !inCard(e)) return;
+      const chord = e.ctrlKey || e.metaKey || e.altKey;
+      if (e.key === 'Tab' && !chord) return;
+      if (chord && e.key !== 'Enter' && e.key !== ' ') return;
+      stop(e);
+    };
+    const fenceUp = (e: KeyboardEvent): void => {
+      if (fenced.current && inCard(e) && (e.key === 'Enter' || e.key === ' ')) stop(e);
+    };
+    document.addEventListener('keydown', fenceDown, true);
+    document.addEventListener('keyup', fenceUp, true);
+    document.addEventListener('keypress', fenceUp, true);
     return () => {
       document.removeEventListener('pointerdown', away, true);
       document.removeEventListener('focusin', away, true);
+      document.removeEventListener('keydown', fenceDown, true);
+      document.removeEventListener('keyup', fenceUp, true);
+      document.removeEventListener('keypress', fenceUp, true);
     };
   }, []);
   const [owner] = useState<AskEngagement>(() => ({
@@ -120,6 +165,9 @@ export function useAskEngagement(identity: string | null): AskEngagement {
     release: () => {
       held.current = null;
       fenced.current = true;
+    },
+    reengage: () => {
+      fenced.current = false;
     },
   }));
   return owner;
