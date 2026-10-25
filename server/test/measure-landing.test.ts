@@ -64,7 +64,7 @@ describe('measure-landing: it reads GitHub and never writes it', () => {
   it('runs gh from exactly one argv, and that argv is a GET', () => {
     const argv = [...src.matchAll(/subprocess\.run\(\[\s*'gh'[^\]]*\]/g)].map((m) => m[0]);
     expect(argv, 'gh is run from more or fewer than one place').toHaveLength(1);
-    expect(argv[0]).toBe("subprocess.run(['gh', 'api', '-X', 'GET', path]");
+    expect(argv[0]).toBe("subprocess.run(['gh', 'api', '-X', 'GET', '--allow-escape-sequences', path]");
     expect(src, 'a second method is spelled somewhere').not.toMatch(/'(POST|PUT|PATCH|DELETE)'|--method|--field|'-f'|'-F'/);
   });
 
@@ -110,8 +110,8 @@ describe('measure-landing: it reads GitHub and never writes it', () => {
     expect(r.status, r.stderr).toBe(0);
     expect(JSON.parse(r.stdout).required).toEqual(['build-pwa', 'test (server)']);
     expect(calls(h.home, 'gh-calls')).toEqual([
-      'api -X GET repos/o/r/rules/branches/main',
-      'api -X GET repos/o/r/branches/main/protection/required_status_checks',
+      'api -X GET --allow-escape-sequences repos/o/r/rules/branches/main',
+      'api -X GET --allow-escape-sequences repos/o/r/branches/main/protection/required_status_checks',
     ]);
   });
 
@@ -359,5 +359,67 @@ describe('measure-landing: the decisions every baseline is derived from', () => 
     expect(py('m.episode_class(a)', { conflict: true, edits: 0, agents: 0 })).toBe('conflict');
     expect(py('m.episode_class(a)', { conflict: false, edits: 0, agents: 0 })).toBe('ritual');
     expect(py('m.episode_class(a)', { conflict: false, edits: 2, agents: 0 })).toBe('mixed');
+  });
+});
+
+describe('measure-landing: queue-ejections — a merge_group run that failed, by cause', () => {
+  const cause = (lines: string[], steps: string[] = ['Test']): string => py('m.failure_cause(a[0], a[1])', [lines, steps]);
+
+  it('queue_pr: the PR number comes from the queue branch name, and from nothing else', () => {
+    expect(py('m.queue_pr(a)', 'gh-readonly-queue/main/pr-1379-b09311272c67a746ce9972ff3b0cdbdabc1ab1e1')).toBe(1379);
+    expect(py('m.queue_pr(a)', 'main')).toBeNull();
+    expect(py('m.queue_pr(a)', 'feature/pr-12-abcdef0')).toBeNull();
+  });
+
+  it('failure_cause: the vitest teardown race and a held port are flakes, named', () => {
+    expect(cause(['EnvironmentTeardownError: [vitest-worker]: Closing rpc while "onUserConsoleLog" was pending'])).toBe('flake:vitest-teardown');
+    expect(cause(['OSError: [Errno 98] Address already in use', 'FAIL test/ccrc-codex.test.ts'])).toBe('flake:port-in-use');
+    expect(cause(['FAIL codex: lane port held by another process'])).toBe('unclassified');
+    expect(cause(['Error: listen EADDRINUSE: address already in use 127.0.0.1:7788'])).toBe('flake:port-in-use');
+    expect(cause(['Error: write EPIPE'])).toBe('flake:broken-pipe');
+  });
+
+  it('failure_cause: a wall-clock or throughput assertion is a flake, a content assertion is real', () => {
+    expect(cause(['FAIL test/update-spawn.test.ts', 'AssertionError: expected 1883 to be greater than or equal to 1900'])).toBe('flake:timing');
+    expect(cause(['AssertionError: sent 0 bytes in 2081ms: expected 0 to be greater than 1500'])).toBe('flake:timing');
+    expect(cause(['curl: (28) Operation too slow. Less than 1024 bytes/sec transferred'])).toBe('flake:timing');
+    expect(cause(['FAIL test/rings/totality.test.ts', 'AssertionError: no row reaches these: add a file row'])).toBe('real:test');
+  });
+
+  it('failure_cause: a compile error is real, a failed setup step is infra, nothing readable is unclassified', () => {
+    expect(cause(['test/x.test.ts(35,53): error TS2345: Argument of type'], ['Test'])).toBe('real:typecheck');
+    expect(cause([], ['Run ./.github/actions/server-deps'])).toBe('infra:setup-step');
+    expect(cause([], ['Test'])).toBe('unclassified');
+  });
+
+  it('failure_cause: a teardown error beside a real failing test does not hide the failure', () => {
+    expect(cause(['FAIL test/a.test.ts', 'AssertionError: expected 1 to be 2', 'EnvironmentTeardownError: Closing rpc'])).toBe('real:test');
+  });
+
+  it('root_job: a "Refuse a prerequisite" job is a consequence, not a cause', () => {
+    expect(py('m.root_job(a)', ['Refuse a prerequisite that did not succeed (no script involved)'])).toBe(false);
+    expect(py('m.root_job(a)', ['Test'])).toBe(true);
+    expect(py('m.root_job(a)', [])).toBe(true);
+  });
+
+  it('read-only through a recording stub: counts, causes per run, and a PR that landed after its ejection', () => {
+    const run = (id: number, concl: string | null, pr: number) => JSON.stringify({ id, created_at: '2026-10-22T00:00:00Z', conclusion: concl,
+      head_branch: `gh-readonly-queue/main/pr-${pr}-aaaaaaa` });
+    const h = stubHome([
+      `  *actions/runs?event=merge_group*) echo '{"workflow_runs":[${run(1, 'failure', 7)},${run(2, 'success', 7)},${run(3, 'success', 8)},${run(4, 'cancelled', 9)}]}' ;;`,
+      '  *actions/runs/1/jobs*) echo \'{"jobs":[{"id":11,"name":"test (server)","conclusion":"failure","steps":[{"name":"Refuse a prerequisite that did not succeed (no script involved)","conclusion":"failure"}]},{"id":12,"name":"server 2/12","conclusion":"failure","steps":[{"name":"Test","conclusion":"failure"}]}]}\' ;;',
+      '  *actions/jobs/12/logs*) printf \'Vitest caught 1 unhandled error\\nEnvironmentTeardownError: Closing rpc\\n\' ;;',
+      '  *pulls?state=all*) echo \'[{"number":7,"created_at":"2026-10-21T00:00:00Z","updated_at":"2026-10-22T00:00:00Z","merged_at":"2026-10-22T01:00:00Z"}]\' ;;',
+    ]);
+    const r = tool(h, ['queue-ejections', 'o/r', '--since', '2026-10-21', '--until', '2026-10-25']);
+    expect(r.status, r.stderr).toBe(0);
+    const rep = JSON.parse(r.stdout);
+    expect(rep.runs).toEqual({ total: 4, success: 2, failure: 1, cancelled: 1, other: 0 });
+    expect(rep.ejections).toBe(1);
+    expect(rep.byCause).toEqual({ 'flake:vitest-teardown': 1 });
+    expect(rep.distinctPrsEjected).toBe(1);
+    expect(rep.ejectedThenMerged).toBe(1);
+    const gh = calls(h.home, 'gh-calls')!;
+    expect(gh.every((c) => c.startsWith('api -X GET --allow-escape-sequences '))).toBe(true);
   });
 });
