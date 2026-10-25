@@ -1813,6 +1813,24 @@ describe('the measured windows file — read, applied, reported, reaped (codex-b
     expect(r.body['contextWindow']).toEqual({ tokens: 200000, rule: 'default', unmeasured: [m2] });
   });
 
+  // The whole-wave fix round of codex bridge Stage 2 (L3): a window a refusal lowered carries `source` and
+  // `refusedTokensEstimate` in the windows file, and `show` reports them, each only when the entry holds it in its
+  // shape (additive: an entry without them reports as before).
+  it('show reports a lowered window\'s source and refusedTokensEstimate, and only when the entry carries them', () => {
+    const [m0, m1, m2] = CLASS_MODELS as [string, string, string];
+    plantWindows(ID, { windows: {
+      [m0]: { tokens: 342000, setAt: '2026-10-24T09:00:00.000Z', source: 'refusal', refusedTokensEstimate: 380000 },
+      [m1]: { tokens: 450000 },
+      [m2]: { tokens: 400000, setAt: '2026-10-15T12:00:00.000Z', source: 7, refusedTokensEstimate: 'many' },
+    } });
+    const r = show();
+    expect(r.code).toBe(0);
+    expect(r.body['windows']).toEqual({ state: 'ok', byModel: {
+      [m0]: { tokens: 342000, setAt: '2026-10-24T09:00:00.000Z', source: 'refusal', refusedTokensEstimate: 380000 },
+      [m1]: { tokens: 450000, setAt: null },
+      [m2]: { tokens: 400000, setAt: '2026-10-15T12:00:00.000Z' } } });
+  });
+
   it('show with every class model measured reports rule measured', () => {
     plantWindows(ID, all(400000));
     expect(show().body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });

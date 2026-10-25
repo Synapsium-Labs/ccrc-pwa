@@ -149,6 +149,10 @@ const sha256 = (p: string): string => createHash('sha256').update(fs.readFileSyn
  *  generation's stamp's bytes followed by the placed auth library's. */
 const litellmCode = (stamp: string, h: string): string =>
   createHash('sha256').update(fs.readFileSync(stamp)).update(fs.readFileSync(authLib(h))).digest('hex');
+/** The bridge's code identity (the whole-wave fix round of codex bridge Stage 2, L2): the litellm tier's shape, the
+ *  sha256 of the placed shim's bytes followed by the placed auth library's, which the bridge loads for its whole life. */
+const bridgeCode = (shim: string, h: string): string =>
+  createHash('sha256').update(fs.readFileSync(shim)).update(fs.readFileSync(authLib(h))).digest('hex');
 /** Where `_codex_auth_lib` names the library: `plantCodexBins` places it there. */
 const authLib = (h: string): string => join(h, '.local', 'bin', 'ccgpt-auth.py');
 
@@ -4084,7 +4088,7 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     expect(((await ok.json()) as { data: Array<{ id: string }> }).data.map((m) => m.id)).toEqual([...BRIDGE_MODELS]);
     const rec = JSON.parse(fs.readFileSync(join(laneDir(home, 'codex-a'), 'bridge.started'), 'utf8')) as Record<string, string>;
     expect(Object.keys(rec)).toEqual(['interpreter', 'code', 'bridge', 'mode']);
-    expect(rec).toMatchObject({ interpreter: cmd[0], code: sha256(shimFile), mode: 'direct' });
+    expect(rec).toMatchObject({ interpreter: cmd[0], code: bridgeCode(shimFile, home), mode: 'direct' });
     expect(rec['bridge']).toMatch(/^[0-9a-f]{64}$/);
     for (const f of ['litellm.started', 'shim.started', 'litellm.pid', 'shim.pid']) {
       expect(fs.existsSync(join(laneDir(home, 'codex-a'), f)), f).toBe(false);
@@ -4209,6 +4213,34 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     expect(stale()).toBe('rc=0\n');
   }, 120_000);
 
+  // The whole-wave fix round (L2): the bridge is a direct lane's credential refresher and loads the auth library once,
+  // for its whole life, so its record hashes the placed library as the litellm tier's does.
+  it('a changed auth library makes a running bridge stale', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    const stale = (): string => lib(home, '_codex_tier_stale codex-a bridge; echo "rc=$?"').stdout;
+    expect(stale()).toBe('rc=1\n');
+    fs.appendFileSync(authLib(home), '\n# fixture: the next release of the auth library\n');
+    expect(stale()).toBe('rc=0\n');
+  }, 120_000);
+
+  // The whole-wave fix round (L5): `_codex_python` resolves python3 on the caller's PATH, so the same healthy bridge
+  // can be recorded under another interpreter path than a later caller resolves. The record keeps it; the comparison
+  // leaves it out. Its code and its package are still compared (the CONTROL).
+  it('a bridge record that names another interpreter, with the same code and package, reads current', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    const now = lib(home, '_codex_started_json bridge');
+    expect(now.code, now.stderr).toBe(0);
+    const rec = JSON.parse(now.stdout) as Record<string, string>;
+    const file = join(laneDir(home, 'codex-a'), 'bridge.started');
+    const stale = (): string => lib(home, '_codex_tier_stale codex-a bridge; echo "rc=$?"').stdout;
+    fs.writeFileSync(file, `${JSON.stringify({ ...rec, interpreter: join(home, 'elsewhere', 'python3') })}\n`);
+    expect(stale()).toBe('rc=1\n');
+    fs.writeFileSync(file, `${JSON.stringify({ ...rec, interpreter: join(home, 'elsewhere', 'python3'), code: '0'.repeat(64) })}\n`);
+    expect(stale()).toBe('rc=0\n');
+  }, 60_000);
+
   itLinux('stop is mode-blind', async () => {
     const { home, proxyPort } = await bridgeBox({ userManager: false });
     const r = cx(home, ['start', 'codex-a']);
@@ -4229,6 +4261,20 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     expect(s2.stdout).toBe('ccrc codex: codex-a: litellm not running, shim not running, bridge stopped\n');
     await eventually(async () => !(await portAccepts(proxyPort)), 'the bridge to stop listening');
   }, 120_000);
+
+  // The whole-wave fix round (LB-2): `_codex_stop_lane` runs each stop in its own `$( … )`, so it asks the lane's own
+  // front tier again in its own shell, where the next stop's other-mode reading looks for it. A shim that answers as
+  // this lane while no unit or pidfile of the lane holds it cannot be stopped (stop-failed), and the bridge tier on the
+  // same port then reads not running, never a foreign listener ccrc left running.
+  it('a front tier the stop could not end leaves its mate on the shared port not running, never named foreign', async () => {
+    const { home, proxyPort } = await bridgeBox({ userManager: false, mode: 'litellm' });
+    await spawnListener(home, { answer: 'json', lane: 'codex-a', port: proxyPort });
+    const s = cx(home, ['stop', 'codex-a']);
+    expect(s.code, s.stderr).toBe(1);
+    expect(s.stdout).toBe('');
+    expect(s.stderr).toMatch(/^ccrc codex: stop-failed: codex-a's shim tier answers as this lane, but neither a unit nor a pidfile of this lane's holds it/m);
+    expect(s.stderr).not.toMatch(/bridge tier|left it running/);
+  }, 60_000);
 
   it('the nohup stop waits at least DRAIN_S plus the margin', () => {
     const home = box('ccrc-codex-bridge-wait-');
@@ -4446,7 +4492,9 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
 
   // Its fallback: an answer in the bridge's shape for this lane, from a process nothing proves (the bridge's pidfile
   // moved aside), is no retired tier ccrc can name. The mate measure reads it unproven, so the start words the port as
-  // `_codex_foreign_what` does, naming the mate through the mapping's one copy (`--mate`, review N2/Q2).
+  // `_codex_foreign_what` words `listener-unidentified` (the whole-wave fix round, R3-1): `port-foreign`, with its
+  // "stop whatever holds port" remedy. `retired-tier-running` and its `ccrc codex stop` remedy are a proven mate's
+  // only, because that stop is identity-gated and leaves an unproven listener running.
   itLinux('start on a litellm lane words an unproven bridge-shaped answer as a listener it cannot identify', async () => {
     const { home, proxyPort, litellmPort } = await bridgeBox({ userManager: false });
     const r = cx(home, ['start', 'codex-a']);
@@ -4460,7 +4508,8 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
       const o = cx(home, ['start', 'codex-a']);
       expect(o.code, o.stdout).toBe(1);
       expect(o.stdout).toBe('');
-      expect(o.stderr).toMatch(new RegExp(`^ccrc codex: retired-tier-running: port ${proxyPort} \\(codex-a's shim tier\\) answers as codex-a's bridge, the tier of the lane's other mode, so codex-a's shim tier is not what holds it\\. ccrc never adopts or stops what it cannot identify\\. .*Nothing was started\\.$`, 'm'));
+      expect(o.stderr).toMatch(new RegExp(`^ccrc codex: port-foreign: port ${proxyPort} \\(codex-a's shim tier\\) is held by a listener that is not this lane's: its identity check failed\\. ccrc never adopts or stops what it cannot identify\\. Stop whatever holds port ${proxyPort}, or give codex-a other ports in ~/\\.ccrc/accounts\\.json\\. Nothing was started\\.$`, 'm'));
+      expect(o.stderr).not.toMatch(/retired-tier-running|ccrc codex stop/);
       for (const f of ['litellm.pid', 'shim.pid']) {
         expect(fs.existsSync(join(laneDir(home, 'codex-a'), f)), `${f}: a tier was started beside it`).toBe(false);
       }
@@ -4671,6 +4720,52 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
       expect(r.code, r.stderr).toBe(0);
       expect(fs.statSync(join(laneDir(home, 'codex-a'), 'bridge.started')).mtimeMs)
         .toBeGreaterThanOrEqual(fs.statSync(join(home, 'released')).mtimeMs);
+    }, 120_000);
+
+    // The whole-wave fix round (LB-1): start reads the lane's mode under the lane lock. A holder of that lock stands in
+    // for a switch: while a start (the launcher's) waits on the lock, the holder's lane moves to `direct` (the roster
+    // row and lane.json, as the switch's step 4 leaves them) and the holder brings the bridge up through the start verb
+    // in a subshell, as the switch's step 5 does. Once it lets go, the start walks the mode the holder left and adopts
+    // that bridge, never calling it a retired tier. Every wait is bounded: the holder's own (60 s for its go file),
+    // the start's lock (`_codex_lock`: the readiness bound plus 30 s) and this case's `eventually`s.
+    itLinux('a start that waits on the lane lock acts on the mode its holder left, and adopts the bridge it brought up', async () => {
+      const { home, proxyPort, litellmPort } = await bridgeBox({ userManager: false, mode: 'litellm' });
+      const lock = join(laneDir(home, 'codex-a'), '.lock');
+      fs.writeFileSync(lock, '');
+      const lockReal = fs.realpathSync(lock);
+      /** A `flock` process with the lane's lock file open: a start blocked in `_codex_lock` (the holder's own
+       *  `flock` has exited once it took the lock). */
+      const waitingOnLock = (): boolean => fs.readdirSync('/proc').filter((p) => /^\d+$/.test(p)).some((p) => {
+        try {
+          if (fs.readFileSync(`/proc/${p}/comm`, 'utf8').trim() !== 'flock') return false;
+          return fs.readdirSync(`/proc/${p}/fd`).some((fd) => {
+            try { return fs.readlinkSync(`/proc/${p}/fd/${fd}`) === lockReal; } catch { return false; }
+          });
+        } catch { return false; }
+      });
+      const holder = spawn(BASH, ['-c', [
+        `. "${join(home, 'ccrc', 'ccd', 'ccrc')}"`,
+        '_codex_lock codex-a || exit 3',
+        ': > "$HOME/held"',
+        'for _ in $(seq 600); do [ -e "$HOME/go" ] && break; sleep 0.1; done',
+        '[ -e "$HOME/go" ] || exit 4',
+        '( _codex_cmd_start codex-a ) > "$HOME/holder-start.out" 2>&1',
+        'exit $?',
+      ].join('\n')], { env: env(home, { CCRC_CODEX_READY_S: '20' }), stdio: 'ignore' });
+      trackChild(home, holder);
+      const held = new Promise<number>((res) => { holder.once('close', (code) => res(code ?? -1)); });
+      await eventually(() => fs.existsSync(join(home, 'held')), 'the holder to take the lane lock');
+      const st = cxAsync(home, ['start', 'codex-a']);
+      await eventually(waitingOnLock, 'the start to wait on the lane lock');
+      switchMode(home, proxyPort, litellmPort, 'direct');
+      fs.writeFileSync(join(home, 'go'), '');
+      expect(await held, fs.existsSync(join(home, 'holder-start.out')) ? fs.readFileSync(join(home, 'holder-start.out'), 'utf8') : '').toBe(0);
+      const pid = Number(/^ccrc codex: codex-a: bridge started \(nohup (\d+)\)$/m.exec(fs.readFileSync(join(home, 'holder-start.out'), 'utf8'))?.[1]);
+      expect(alive(pid)).toBe(true);
+      const r = await st;
+      expect(r.stderr).not.toMatch(/retired-tier-running/);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toBe(`ccrc codex: codex-a: bridge adopted (nohup ${pid})\n`);
     }, 120_000);
 
     itLinux('switch refuses siwc', async () => {

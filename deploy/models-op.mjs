@@ -362,14 +362,23 @@ function readWindowsFile(id) {
 const windowsOf = (reading) => (reading.state === 'ok' ? reading.windows : null);
 
 /** `show`'s report of a reading: each measured window with its `setAt` (null
- *  when the entry carries none), or the reason the file could not be read. */
+ *  when the entry carries none), or the reason the file could not be read. A
+ *  window a refusal lowered (`lower-windows`) also carries its `source` and its
+ *  `refusedTokensEstimate`, each only when the entry holds it in that shape (a
+ *  string, a finite number), so an entry without them reports exactly as before
+ *  (the whole-wave fix round, L3: additive). */
 function windowsReport(reading) {
   if (reading.state === 'absent') return { state: 'absent' };
   if (reading.state === 'unreadable') return { state: 'unreadable', reason: reading.reason };
   const byModel = {};
   for (const id of Object.keys(reading.windows)) {
-    const setAt = reading.raw.windows[id].setAt;
+    const entry = reading.raw.windows[id];
+    const setAt = entry.setAt;
     byModel[id] = { tokens: reading.windows[id], setAt: typeof setAt === 'string' ? setAt : null };
+    if (typeof entry.source === 'string') byModel[id].source = entry.source;
+    if (typeof entry.refusedTokensEstimate === 'number' && Number.isFinite(entry.refusedTokensEstimate)) {
+      byModel[id].refusedTokensEstimate = entry.refusedTokensEstimate;
+    }
   }
   return { state: 'ok', byModel };
 }

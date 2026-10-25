@@ -939,7 +939,7 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     const roots = [join(home, '.ccrc', 'codex'), join(home, '.ccrc', 'models'), join(home, '.claude-codex-a')];
     const before = treeState(...roots);
     const r = runDoctor(home);
-    const re = /^FAIL codex: codex-a's lane\.json is stale against its class registry: /m;
+    const re = /^FAIL codex: codex-a's lane\.json disagrees with what its roster row and class registry render: /m;
     expect(r.stdout, r.stdout).toMatch(re);
     expect(remedyAfter(r.stdout, re)).toMatch(/re-render it: ccrc models codex-a set-subagent sonnet /);
     expect(treeState(...roots)).toEqual(before);
@@ -1492,11 +1492,32 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     expect(r.stdout).toMatch(/^rc=2,0$/m);
   });
 
-  // Fix round 2 (FR1-M1, D-TBD-usage-row-ts-is-measured): a row's ts is when it was measured (a direct lane's is the
-  // bridge's own stamp), so the WARN says "measured" and counts no polls. Fix round 3 (FR2-4): one second past the
-  // bound, the age is rounded UP, so the line never reads "60 min ago — more than 60 min".
-  it('a row measured longer ago than the bound: WARN naming its age and the publisher\'s log', () => {
-    const r = usageRows(usageBox('ccrc-doctor-usage-stale-', { ageS: 3601 }));
+  // THE BOUND BY MODE (the whole-wave fix round, FR3-1/FR3-2). A lane whose mode cannot be read (`usageBox` plants no
+  // lane.json) and a `litellm` lane keep three polls, 2700 s, and the WARNs they had before the bridge, byte for byte;
+  // a `direct` lane's row carries the bridge's own stamp, up to BRIDGE_FRESH_S older than its poll, so its bound is
+  // 3600 s.
+  /** `home`'s lane.json naming `mode`, the one key `_codex_lane_mode` reads; `home` back. */
+  const laneMode = (home: string, mode: 'litellm' | 'direct'): string => {
+    mkdirSync(join(home, '.ccrc', 'codex', 'codex-a'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'codex', 'codex-a', 'lane.json'), `${JSON.stringify({ bridge: mode, upstream: 'backend' })}\n`);
+    return home;
+  };
+  const MODES = [['whose mode cannot be read', null], ['in litellm mode', 'litellm']] as const;
+  it.each(MODES)('a row older than three polls on a lane %s: WARN naming its age and the publisher\'s log', (_what, mode) => {
+    const home = usageBox(`ccrc-doctor-usage-stale-${mode ?? 'unread'}-`, { ageS: 2701 });
+    const r = usageRows(mode === null ? home : laneMode(home, mode));
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: its usage row was last written 45 min ago — more than three of ccrc-codex-usage@codex-a\.timer's polls$/)]);
+    expect(r.stdout).toMatch(/^ {2}remedy: read what the publisher says: journalctl --user -u ccrc-codex-usage@codex-a\.service -n 50$/m);
+  });
+
+  // Fix round 2 (FR1-M1, D-TBD-usage-row-ts-is-measured): a direct lane's row ts is when it was measured (the bridge's
+  // own stamp), so its WARN says "measured" and counts no polls. Fix round 3 (FR2-4): one second past the bound, the
+  // age is rounded UP, so the line never reads "60 min ago — more than 60 min".
+  it('a direct lane\'s row measured more than an hour ago: WARN naming its age and the publisher\'s log; under the hour, none', () => {
+    const fresh = usageRows(laneMode(usageBox('ccrc-doctor-usage-stale-direct-fresh-', { ageS: 2701 }), 'direct'));
+    expect(warns(fresh.stdout), fresh.stdout).toEqual([]);
+    expect(fresh.stdout).toMatch(/^note=.*usage row 27\d\ds old$/m);
+    const r = usageRows(laneMode(usageBox('ccrc-doctor-usage-stale-direct-', { ageS: 3601 }), 'direct'));
     expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: its usage row was last measured 61 min ago — more than 60 min, so ccrc-codex-usage@codex-a\.timer's recent polls have published nothing$/)]);
     expect(r.stdout).toMatch(/^ {2}remedy: read what the publisher says: journalctl --user -u ccrc-codex-usage@codex-a\.service -n 50$/m);
   });
@@ -1507,8 +1528,17 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     expect(r.stdout).toMatch(/^note=.*no usage row yet \(enabled \d+s ago; the first poll runs five minutes after enable\)/m);
   });
 
-  it('no row, and the timer enabled longer than the staleness bound: WARN — this lane has never published', () => {
-    const r = usageRows(usageBox('ccrc-doctor-usage-norow-old-', { row: false, linkAgeS: 3601 }));
+  it.each(MODES)('no row, and the timer enabled longer than three polls ago, on a lane %s: WARN — this lane has never published', (_what, mode) => {
+    const home = usageBox(`ccrc-doctor-usage-norow-old-${mode ?? 'unread'}-`, { row: false, linkAgeS: 2701 });
+    const r = usageRows(mode === null ? home : laneMode(home, mode));
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: ccrc-codex-usage@codex-a\.timer has been enabled for longer than 45 min and this lane has never published a usage row \(.*\/\.cc-limits\/codex-a\.json\)$/)]);
+  });
+
+  it('a direct lane with no row and its timer enabled more than an hour ago: WARN — never published; under the hour, the note says why', () => {
+    const young = usageRows(laneMode(usageBox('ccrc-doctor-usage-norow-direct-young-', { row: false, linkAgeS: 2701 }), 'direct'));
+    expect(warns(young.stdout), young.stdout).toEqual([]);
+    expect(young.stdout).toMatch(/^note=.*no usage row yet \(enabled 27\d\ds ago; the first poll runs five minutes after enable\)/m);
+    const r = usageRows(laneMode(usageBox('ccrc-doctor-usage-norow-direct-old-', { row: false, linkAgeS: 3601 }), 'direct'));
     expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: ccrc-codex-usage@codex-a\.timer has been enabled for longer than 60 min and this lane has never published a usage row \(.*\/\.cc-limits\/codex-a\.json\)$/)]);
   });
 
@@ -1629,14 +1659,17 @@ describe('ccrc doctor: codex — the usage rows, on any host (Plan 3a Task 6)', 
   });
 
   // Fix round 3 (FR2-2): a direct lane's row carries the bridge's stamp, up to BRIDGE_FRESH_S older than its poll, so
-  // three cycles alone would read a direct lane's row stale after ONE missed poll.
-  it('the staleness threshold covers three of the shipped timer\'s cycles plus the bridge\'s freshness window', () => {
-    const r = spawnSync(BASH, ['-c', `. ${shq(CHECKS_SRC)}; printf '%s' "$_DR_CODEX_USAGE_STALE_S"`], { encoding: 'utf8' });
+  // three cycles alone would read a direct lane's row stale after ONE missed poll. The whole-wave fix round (FR3-1):
+  // that bound is a direct lane's alone, and a litellm lane (and one whose mode cannot be read) keeps three cycles.
+  it('the staleness thresholds: three of the shipped timer\'s cycles on a litellm lane, plus the bridge\'s freshness window on a direct one', () => {
+    const r = spawnSync(BASH, ['-c', `. ${shq(CHECKS_SRC)}; printf '%s %s' "$_DR_CODEX_USAGE_STALE_S" "$_DR_CODEX_USAGE_STALE_DIRECT_S"`], { encoding: 'utf8' });
+    const [litellm, direct] = r.stdout.split(' ').map(Number);
     const m = /^OnUnitActiveSec=(\d+)min$/m.exec(readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-codex-usage@.timer'), 'utf8'));
     expect(m, 'the usage timer\'s cadence is not spelled in minutes — this pin has gone stale').not.toBeNull();
     const fresh = /^BRIDGE_FRESH_S = (\d+)$/m.exec(readFileSync(join(REPO, 'ccd', 'ccgpt-usage.py'), 'utf8'));
     expect(fresh, 'ccgpt-usage.py no longer spells BRIDGE_FRESH_S as a bare integer — this pin has gone stale').not.toBeNull();
-    expect(Number(r.stdout), 'a row one missed poll old would read as stale').toBeGreaterThanOrEqual(3 * Number(m![1]) * 60 + Number(fresh![1]));
+    expect(litellm, 'a litellm lane\'s bound is three polls, as before the bridge').toBe(3 * Number(m![1]) * 60);
+    expect(direct, 'a direct row one missed poll old would read as stale').toBeGreaterThanOrEqual(3 * Number(m![1]) * 60 + Number(fresh![1]));
   });
 });
 
@@ -5082,7 +5115,9 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
   });
 
   // codex-b, a litellm lane beside it, runs a shim whose record is stale too: its WARN keeps the shim's own words.
-  itLinux('a running bridge whose start record is not current WARNs "not proven to run the installed bytes", the shim-stale WARN\'s twin, for each field of its record; the current record does not', async () => {
+  // The whole-wave fix round: the record's `code` hashes the placed shim and the auth library (L2), and its
+  // `interpreter` is kept but not compared (L5), so a record that differs in its interpreter alone reads current.
+  itLinux('a running bridge whose start record is not current WARNs "not proven to run the installed bytes", the shim-stale WARN\'s twin, for its code and its package; the current record, and one naming another interpreter alone, do not', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-direct-stale-', ['codex-a', 'codex-b']);
     plantDirectLane(home, 'codex-a');
     await plantRunningBridge(home, 'codex-a');
@@ -5091,8 +5126,10 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
     writeFileSync(join(laneDir(home, 'codex-b'), 'shim.started'), `${JSON.stringify({ ...JSON.parse(shimNow) as Record<string, string>, code: '0'.repeat(64) })}\n`);
     expect(runDoctor(home).stdout).not.toMatch(/^WARN codex: codex-a's bridge tier is running/m);
     const rec = join(laneDir(home, 'codex-a'), 'bridge.started');
-    const re = new RegExp(`^WARN codex: codex-a's bridge tier is running, and is not proven to run the installed bytes: its start record \\(${reEsc(rec)}\\) is absent, unreadable or unparseable, or it names another interpreter, another placed shim or another bridge package than a start would use now$`, 'm');
-    for (const field of ['interpreter', 'code', 'bridge'] as const) {
+    const re = new RegExp(`^WARN codex: codex-a's bridge tier is running, and is not proven to run the installed bytes: its start record \\(${reEsc(rec)}\\) is absent, unreadable or unparseable, or it names another placed shim, another auth library or another bridge package than a start would use now$`, 'm');
+    writeBridgeRecord(home, 'codex-a', 'interpreter');
+    expect(runDoctor(home).stdout).not.toMatch(/^WARN codex: codex-a's bridge tier is running/m);
+    for (const field of ['code', 'bridge'] as const) {
       writeBridgeRecord(home, 'codex-a', field);
       const r = runDoctor(home);
       expect(r.stdout, `${field}\n${r.stdout}`).toMatch(re);
@@ -5112,7 +5149,7 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
     writeFileSync(join(laneDir(home, 'codex-b'), 'shim.started'), `${startedJson(home, 'shim')}\n`);
     rmSync(join(home, 'ccrc', 'ccd', 'codexbridge'), { recursive: true, force: true });
     const r = runDoctor(home);
-    const re = /^WARN codex: codex-a's bridge tier is running, and whether it runs the installed bytes cannot be told \(no python3 3\.9 or later on PATH, or the placed shim or the bridge package cannot be hashed\) — unmeasured, not current$/m;
+    const re = /^WARN codex: codex-a's bridge tier is running, and whether it runs the installed bytes cannot be told \(no python3 3\.9 or later on PATH, or the placed shim, the auth library or the bridge package cannot be hashed\) — unmeasured, not current$/m;
     expect(r.stdout, r.stdout).toMatch(re);
     expect(remedyAfter(r.stdout, re)).toMatch(/^ {2}remedy: \S/);
     expect(r.stdout).not.toMatch(/codex-a's bridge tier is running, and is not proven/);
@@ -5277,9 +5314,37 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
     const r = runDoctor(home);
     const re = /^FAIL codex: codex-b is a direct lane whose upstream is "siwc", and the siwc route arrives in Stage 3: 'ccrc codex start codex-b' refuses it \(upstream-unsupported\), so the lane cannot serve$/m;
     expect(r.stdout, r.stdout).toMatch(re);
-    expect(remedyAfter(r.stdout, re)).toBe('  remedy: set the lane\'s upstream to "backend" (or remove it) in $HOME/.ccrc/accounts.json by hand, then: ccrc codex start codex-b — ccrc never edits a roster row for you');
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: set the lane\'s upstream back to "backend" (or remove it) in $HOME/.ccrc/accounts.json by hand, then run \'ccrc doctor --fix\' (it re-renders lane.json from the roster), then: ccrc codex start codex-b — ccrc never edits a roster row for you');
     expect(r.stdout).not.toMatch(/codex-a is a direct lane whose upstream/);
     noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // The whole-wave fix round (L1): the remedy cures the state. Start reads the upstream from lane.json, and a roster
+  // edit alone does not move lane.json (`_codex_lane_json_state` checks the word's presence, not its value), so the
+  // remedy names the one act that re-renders it from the roster: `ccrc doctor --fix`, which the siwc FAIL reaches.
+  it('the upstream-unsupported remedy followed end to end: the roster set back, ccrc doctor --fix, and start passes the upstream check', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-direct-siwc-cure-');
+    plantDirectLane(home, 'codex-a', { upstream: 'siwc' });
+    const upstreamOf = (): unknown => (JSON.parse(readFileSync(join(laneDir(home, 'codex-a'), 'lane.json'), 'utf8')) as Record<string, unknown>)['upstream'];
+    const refused = runDoctor(home, ['codex', 'start', 'codex-a']);
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toMatch(/^ccrc codex: upstream-unsupported: codex-a is a direct lane whose upstream is "siwc", .*Set the lane's upstream back to "backend" \(or remove it\) in ~\/\.ccrc\/accounts\.json, then run 'ccrc doctor --fix' \(it re-renders lane\.json from the roster\), then re-run\. Nothing was started\.$/m);
+    // The remedy's first step, by the operator's hand. lane.json still names siwc, so a start alone is refused again:
+    // the state the remedy has to cure.
+    editRosterRow(home, 'codex-a', (row) => { row['exec'].upstream = 'backend'; });
+    expect(runDoctor(home, ['codex', 'start', 'codex-a']).stderr).toMatch(/^ccrc codex: upstream-unsupported: /m);
+    expect(upstreamOf()).toBe('siwc');
+    const fix = runDoctor(home, ['doctor', '--fix']);
+    expect(fix.stdout, fix.stdout).toMatch(/^FIX codex: codex-a: lane\.json re-rendered from the roster and this lane's class registry$/m);
+    expect(upstreamOf()).toBe('backend');
+    // Start passes the upstream check: with the placed shim taken away, it refuses at a later check, the shim's, and
+    // starts nothing. The gateway key it mints between the two needs these four on the contained PATH.
+    for (const b of ['mktemp', 'chmod', 'mv', 'rm']) linkReal(home, b);
+    rmSync(join(home, '.local', 'bin', 'ccgpt-proxy.py'));
+    const started = runDoctor(home, ['codex', 'start', 'codex-a']);
+    expect(started.code).toBe(1);
+    expect(started.stderr).not.toMatch(/upstream-unsupported/);
+    expect(started.stderr).toMatch(/^ccrc codex: shim-absent: /m);
   });
 
   // `--fix` runs only behind a FAIL and restarts tiers only through the install step (`_inst_codex_tiers`), the one

@@ -1944,7 +1944,8 @@ counts, and only for a model a class names or the catalogue lists. Each refusal 
 it under `refusalsApplied`, whether it lowered the window or was skipped (a refusal entry the build cannot read, one
 that is not an object or has no positive integer `tokens`, no ISO `at`, or a key whose model part is not a model id, is
 skipped `refusal-invalid` and not recorded, so each pass reads it again). The entry it writes carries `source:
-"refusal"` and `refusedTokensEstimate`, the refused size; `show --json` lists its tokens and `setAt`, and the
+"refusal"` and `refusedTokensEstimate`, the refused size; `show --json` lists its tokens and `setAt`, and those two
+fields when the entry carries them, and the
 refresh's JSON row for the lane carries `lowered` (each `model`, `from`, `to`, `refused`), or `lowerFailed` with the
 reason when the pass could not run. To undo a lowering, `ccrc models <id> clear-window <model>`: the same refusal
 never lowers it again, because `refusalsApplied` survives the clear, though a later refusal can. A lowered window
@@ -2182,7 +2183,10 @@ file's `usageHeaders`, below): when they are at most 15 minutes old and carry th
 from them and published with no request and no credential read; otherwise the poll makes its one request, sending
 `originator: ccrc` (a `litellm` lane's sends `codex_cli_rs`, as before). Doctor's `codex`
 check WARNs when a lane's timer is not enabled, when another tool's is, and when the lane's row is missing or
-older than three polls. `ccrc account remove` disables the removed lane's instance and `ccrc uninstall` every
+stale: on a `litellm` lane (and on one whose mode cannot be read), older than three polls (45 minutes, the row's
+time being when its poll wrote it); on a `direct` lane, last measured more than an hour ago (three polls plus the
+bridge's 15-minute freshness window, because its row carries the time the bridge measured it). A timer enabled
+longer than that bound with no row published is a WARN too. `ccrc account remove` disables the removed lane's instance and `ccrc uninstall` every
 one, each found through systemd's own enablement links rather than the roster. Because the lane's `telemetry` is
 not `anthropic`, its sessions never get `--remote-control`, placement never sends it `fable`-class work, and
 the rescue never chain-waits it.
@@ -2193,7 +2197,7 @@ box's installed tree and speaks the ChatGPT backend's Responses route itself, wi
 prompt. It listens on the lane's `proxyPort`, takes the lane's gateway key (read in its own process, never put in its
 environment) and runs under the shim's unit name, so the launcher and Claude Code's settings do not change and the shim
 and the bridge can never both serve the lane's port (the LiteLLM tier has its own port and unit, so it can still run
-beside a bridge, for example one started by hand; `start` then refuses the lane `retired-tier-running` and doctor FAILs
+beside a bridge, for example a LiteLLM tier started by hand; `start` then refuses the lane `retired-tier-running` and doctor FAILs
 it, below).
 It runs on the system `python3`, 3.9 or later (below that `ccrc codex start` refuses `python-too-old`), and its tier
 needs no LiteLLM runtime. It sends `originator: ccrc` and a ccrc user agent, never presenting itself as Codex. Claude
@@ -2229,7 +2233,10 @@ the switch stopped is restarted behind your back. A hand edit of `exec.bridge` i
 it into `lane.json`, and `ccrc codex start` then refuses `retired-tier-running` while the other mode's tiers run, as it
 does whenever they run beside the lane's own (two refreshers on one credential); `ccrc codex stop <id>` stops every
 tier of the lane, in either mode. `exec.upstream` names the route: `backend`, the default, is the only one this build
-runs, and `siwc` is refused `upstream-unsupported` by `start` on a `direct` lane and by a switch to `direct`.
+runs, and `siwc` is refused `upstream-unsupported` by `start` on a `direct` lane and by a switch to `direct`. To cure
+it, set `exec.upstream` back to `backend` (or remove it) in `~/.ccrc/accounts.json`, then run `ccrc doctor --fix`
+(it re-renders `lane.json` from the roster: `start` reads the upstream from `lane.json`, which a roster edit alone
+does not change), then re-run.
 
 **What a `direct` lane writes.** Beside `lane.json`, whose `bridgeFiles` names them, the bridge keeps two files in the
 lane directory, each 0600: `bridge.stats.json`, its one non-secret output, and `reasoning.sqlite`, the reasoning store.

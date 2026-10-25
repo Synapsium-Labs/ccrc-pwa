@@ -226,7 +226,11 @@ describe('ccrc: dispatch and usage', () => {
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
     expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|coordination-snapshot\|logs\|passwd\|expose\|token\|restamp\|version\|watchdog\|history\}/);
-    expect(r.stdout).toMatch(/^ {2}codex {5}run a Codex lane's two tiers/m);
+    // codex bridge Stage 2's whole-wave addendum (U-1): the paragraph names each mode's tiers, and `switch`.
+    expect(r.stdout).toMatch(/^ {2}codex {5}run a Codex lane's tiers - in litellm mode its LiteLLM gateway$/m);
+    expect(r.stdout.replace(/\s+/g, ' ')).toContain('in direct mode its bridge alone');
+    expect(r.stdout.replace(/\s+/g, ' ')).toContain('waits until the mode\'s tiers answer');
+    expect(r.stdout.replace(/\s+/g, ' ')).toContain('"switch <id> litellm|direct" moves the lane between modes');
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
     expect(r.stdout).toMatch(/^ {2}models {4}the model-class registry/m);

@@ -2261,6 +2261,8 @@ describe('ccrc uninstall: the codex step, measured in isolation (_uninst_codex)'
     const src = ccrcFunction('_uninst_codex');
     expect(src, '_uninst_codex keeps a hand-kept tier list').not.toMatch(/local -a tiers=\([a-z]/);
     expect(src).toMatch(/read -r -a tiers <<<"\$\(_codex_stop_order "\$id"\)"/);
+    // The whole-wave fix round (LB-1): the order the stops walk is read under the lane lock, after it is taken.
+    expect(src.indexOf('read -r -a tiers <<<'), 'the stop order is read before the lane lock').toBeGreaterThan(src.indexOf('if ! _codex_lock "$id"'));
     const order = ccrcFunction('_codex_stop_order');
     const words = [...order.matchAll(/printf '([a-z ]+)\\n'/g)].map((m) => m[1]!.split(' '));
     expect(words.length, order).toBe(3);

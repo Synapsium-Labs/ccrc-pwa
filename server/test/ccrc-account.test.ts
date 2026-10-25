@@ -6154,6 +6154,59 @@ describe('ccrc account remove', () => {
     for (const f of state.laneOnly) expect(existsSync(f), `${f} was reaped past an unproven tier`).toBe(true);
   });
 
+  // The whole-wave addendum (LB-2 part a): the shim and the bridge share one port and one unit, so one fact there
+  // reads on both. The re-measure walks `_codex_stop_order` (a litellm lane: shim, litellm, bridge), reads the other
+  // mode's tier through `_codex_tier_is_other_mode`, and names a finding on that shared port or unit once.
+  /** The re-measure's answer for the two front tiers, which share one port and one unit; litellm reads not running. */
+  const frontAnswers = (rc: number, why: string): string =>
+    '_codex_tier_ours() { _codex_row "$1" >/dev/null 2>&1; CX_TIER_VIA=""; CX_TIER_PID=""; CX_TIER_WHY=""; '
+    + `case "$2" in shim|bridge) CX_TIER_WHY='${why}'; return ${rc} ;; esac; return 1; }`;
+  /** `plantLaneState`'s lane.json, given the mode word a litellm lane's render carries. */
+  const asLitellmLane = (home: string, id: string): void => {
+    const f = join(home, '.ccrc', 'codex', id, 'lane.json');
+    writeFileSync(f, `${JSON.stringify({ ...JSON.parse(readFileSync(f, 'utf8')) as Record<string, unknown>, bridge: 'litellm', upstream: 'backend' }, null, 2)}\n`, { mode: 0o600 });
+  };
+
+  it('C11b: a stranger on the shim port reads on both front tiers of that one port, and is named as one operator step, the shim\'s', async () => {
+    const home = box('ccrc-account-remove-codex-shared-port-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    plantLaneState(home, lane);
+    asLitellmLane(home, lane.id);
+    plantTmux(home, []);
+    const r = removeWithStubs(home, ['_codex_stop_lane() { return 0; }', frontAnswers(2, 'listener-unidentified')].join('\n'));
+    expect(r.code, r.stderr).toBe(0);
+    const steps = (oneObject(r)['operator-steps'] ?? []) as string[];
+    const onPort = steps.filter((s) => s.includes(`port ${lane.exec.proxyPort}`));
+    expect(onPort, JSON.stringify(steps)).toHaveLength(1);
+    expect(onPort[0]).toContain(`Codex lane ${lane.id}'s shim tier, port ${lane.exec.proxyPort}`);
+    expect(steps.join('\n')).not.toMatch(/bridge tier/);
+  });
+
+  it('C11c: a crash-looping shim unit on a litellm lane refuses the removal by its shim alone, and names no bridge', async () => {
+    const home = box('ccrc-account-remove-codex-shared-unit-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const state = plantLaneState(home, lane);
+    asLitellmLane(home, lane.id);
+    plantTmux(home, []);
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
+    const r = removeWithStubs(home, ['_codex_stop_lane() { return 0; }', frontAnswers(2, 'unit-unproven')].join('\n'));
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('codex-reap-failed');
+    expect(String(j['detail'])).toMatch(new RegExp(`codex lane ${lane.id}'s shim tier\\(s\\) still run`));
+    expect(r.stderr.split('\n').filter((l) => l.startsWith('ccrc codex: unit-foreign: '))).toHaveLength(1);
+    expect(r.stderr).not.toMatch(/bridge tier/);
+    expect(readFileSync(roster, 'utf8'), 'the roster was dropped past an unproven tier').toBe(rosterBefore);
+    for (const f of state.laneOnly) expect(existsSync(f), `${f} was reaped past an unproven tier`).toBe(true);
+  });
+
   itSystemd('C12: removing a codex account disables ccrc\'s own usage timer for it, reports the link removed, keeps its OAuth and logs, and never names another repository\'s (Plan 3a Task 7)', async () => {
     const home = box('ccrc-account-remove-codex-usage-');
     const lane = await codexLaneOnFreePorts();

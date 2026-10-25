@@ -507,9 +507,12 @@ describe('ccrc install: the codex tier restart step, measured in isolation (_ins
     expect(r.degraded).toEqual([]);
   });
 
-  it('a lane whose mode cannot be read is one NOT measured line, its tiers skipped and counted, before its lock is taken', () => {
+  // The whole-wave fix round (LB-1): the mode is read under the lane lock, so this lane's lock is taken, and released
+  // through `_codex_unlock` before the next lane's.
+  it('a lane whose mode cannot be read is one NOT measured line, its tiers skipped and counted, read under its lock and the lock released', () => {
     const r = runTiersStep({ lanes: ['codex-a', 'codex-b'], modes: { 'codex-a': null } });
-    expect(r.calls).toEqual([LOCK_B, B_L, B_S, UNLOCK_B]);
+    expect(r.calls).toEqual([LOCK_A, UNLOCK_A, LOCK_B, B_L, B_S, UNLOCK_B]);
+    expect(r.lockAfter).toBe('');
     expect(r.stderr).toMatch(/^install: codex tiers: codex-a: NOT measured — its lane\.json names no mode this ccrc can read/m);
     expect(r.stdout).toMatch(/^install: codex tiers: 2 codex lane\(s\) — 0 restarted, 0 left as they were, 3 not restarted$/m);
     expect(r.degraded).toEqual(['codex-tiers']);
