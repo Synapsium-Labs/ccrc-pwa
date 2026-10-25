@@ -918,6 +918,140 @@ carries it (spec §5.1, amended 2026-09-24).
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
+## Measurement — 2026-10-25
+
+Spec §10, run for the first time, nine days after its two-week check was due (stage 1 rolled out 2026-10-02; the
+native merge queue was switched on 2026-10-21). Read-only: `deploy/measure-landing.py` through `gh api -X GET`, plus
+`gh api` GETs for the queue metric it did not have. Repository `Synapsium-Labs/ccrc-pwa`, `main`. Required contexts
+(read by the tool from the ruleset and classic protection): `build-pwa`, `test (agent)`, `test (pwa)`, `test (server)`.
+The measuring tool gained a `queue-ejections` subcommand with this section (tests in
+`server/test/measure-landing.test.ts`; its one `gh` door now also passes `--allow-escape-sequences`, because a
+job log carries colour codes that `gh` refuses to print, and it still sends only a GET).
+
+**Windows.** Baseline 2026-09-08..09-22 (re-run, to check the tool against the frozen figures); stage 1 before the
+queue 2026-10-02..10-20; the queue era 2026-10-21..10-25 (the run ends 2026-10-25 midday); and 2026-10-22..10-25,
+the days after the last `update-branch` commit. The re-run of the baseline window reproduces the spec's frozen
+figures where the spec's definitions match: green-to-merge median 32.0 min (spec 33), 14 fleet-on-fleet
+inversions (spec 14). It reads 2 fleet `update-branch` commits where the spec says 8, and 9.0 h of required-only
+red where the spec says "prerequisite"; the spec's 8 is the archived scan's figure, and the committed tool is the
+baseline from here on (§10).
+
+### Against each §10 target
+
+| Metric | Baseline | Target | 10-02..10-20 | 10-21..10-25 | 10-22..10-25 | Verdict |
+|---|---|---|---|---|---|---|
+| fleet `update-branch` commits | 8 (tool: 2) | 0 | 10, all on 10-20 | 12, all on 10-21 | 0 | missed at the two-week check; 0 since 10-21 22:20 UTC |
+| repeat absorptions, per merge | 0.47 (16 of 34) | under 1/3 | 0.51 (270 of 527) | 0.33 (20 of 61) | 0.24 (7 of 29) | missed before the queue; met after it |
+| merges per PR (fleet local merges of `main`) | 1.9 | n/a | 2.05 (527 merges, 257 PRs) | 1.49 (61, 41) | 1.32 (29, 22) | context for the row above |
+| ritual syncs per week | about 76 (episodes) | halved | not computable here; proxy below | not computable here; proxy below | n/a | proxy only |
+| green-to-merge median | 33 min (tool: 32.0) | under 10 min | 1.0 min | 77.7 min (p90 310) | 99.6 min (p90 276) | missed, and the wrong way |
+| fleet-on-fleet inversions | 14 | 0 | 125 (153 all actors) | 54 (58) | 36 (36) | missed; the scan's meaning under a queue is doubtful (below) |
+| required-leg red hours on `main` | 9.0 h | halved | 47.5 h | 0 h | not run | see the note |
+| queue-group ejections (new) | n/a | none set | n/a | 47 of 241 completed runs (19.5%) | n/a | new; see below |
+
+Notes on the rows.
+- **update-branch.** Every one of the 22 commits since 10-02 is on 10-20 or 10-21, on PRs opened before the rollout
+  (#956, #960, #983, #984, #985, #987, #1069, #1075). There were none from 10-02 to 10-19 and none after 10-21 22:20 UTC. The
+  repository setting that removes the button (`allow_update_branch=false`) came with the queue on 10-21.
+- **Repeat absorptions.** Before the queue the share did not move off the baseline (0.51 against 0.47). The volume
+  fell with the queue: 527 fleet merges of `main` in 19 days (about 28 a day) against 29 in the last 4 days (about 7
+  a day). Clause 16 and the queue arrived together, so this run cannot say which earned the drop.
+- **Ritual syncs.** The metric is the transcript episode scan, which reads Claude Code transcripts on the fleet box.
+  This run was on the build machine, where `episodes --project ccrc-pwa` finds none, so the figure is not
+  measured here. Proxy by `remerge`: a merge of `main` whose `--remerge-diff` is empty needed no hand edit. Clean
+  merges per measured merge: 10-02..10-20, 301 of 489 (62%, about 111 a week); 10-21..10-25, 43 of 72 (60%);
+  10-22..10-25, 11 of 26 (42%, about 19 a week). The proxy halves from about 111 to about 19 a week after the
+  queue. The baseline window has too few of its commits in the local clone to compare (66 of 75 unmeasured).
+- **Green-to-merge** (a merged PR's final head going green on every required context, to its merge). Before the
+  queue the wait was one minute because a coordinator merged at once, with no test of the composition. In the
+  queue era it splits (10-21 12:00 onward, 174 merged PRs with a measurable green): green to the first queue entry
+  43.4 min median (p90 185), then the last successful entry to merge 17.3 min (p90 30), green to merge 90.3 min
+  (p90 262). The queue entry alone is the merge_group CI run: its median is 16.7 min (p90 29.8). **A median under
+  10 minutes cannot be reached while one successful entry takes 17.** The rest is the wait before enqueue and
+  the time lost to ejected entries (below).
+- **Inversions.** The scan dates a PR as ready from its first sync, and counts any PR open then that merged before
+  it. A queue lands in queue order by design, so a non-zero count no longer separates a landing-order fault from the
+  queue's own ordering. The figures are stated for completeness; the metric needs a redefinition before it can
+  gate anything.
+- **Required-leg red on `main`.** 0 h in the queue era is real: a queue merge is tested before it lands. The
+  10-02..10-20 figure (47.5 h in 6 intervals) is a floor: 198 of 455 pushes ran no test legs after CI test selection
+  (#183) and read as unmeasured, as the tool's docstring warns. It is not comparable with the baseline.
+
+### Queue-group ejections (added)
+
+The tool could not compute this, so `queue-ejections` does: every `merge_group` run in the window, a failed one read
+down to the failing job's log, the aggregator's "Refuse a prerequisite" job set aside as a consequence, and each
+ejected PR checked for a later merge. A cancelled run (2) is the queue dropping an entry behind an ejected one, and is
+not counted. 244 runs read (194 success, 47 failure, 2 cancelled, 1 still running). The live queue settings are
+build 2, merge 3, minimum 1, grouping ALLGREEN.
+
+| Cause (log signature) | Ejections |
+|---|---|
+| flake: timing or throughput assertion (`sent 0 bytes in`, `Operation too slow`, `expected N to be less than/greater than`) | 18 |
+| flake: vitest `EnvironmentTeardownError` on `onUserConsoleLog` (no failed test beside it) | 3 |
+| flake: port held (`EADDRINUSE`, `Address already in use`) | 1 |
+| flake: `EPIPE` | 1 |
+| real: a test assertion on content (totality, single-definition, growth-check, lane characterizations, others) | 20 |
+| real: test-tree typecheck (`error TS`) | 3 |
+| unclassified (the job died before a test ran) | 1 |
+
+23 flake, 23 real, 1 unclassified. The split is by signature, so the real count is an upper bound for what the
+PR itself broke: a content assertion can still be load-dependent. 35 distinct PRs were ejected at least once and 34
+of them merged afterwards: an ejection cost a retry, and no PR was lost. One PR (#1200) was ejected 5 times; 8 others
+were ejected twice.
+- **One test is 13 of the 47 ejections.** `ccrc-update.test.ts` (the curl-based fetch test, "sent 0 bytes in 2 s")
+  failed 13 queue runs on 10 PRs between 2026-10-23 21:06 and 10-24 03:28 UTC and not again in the window. It
+  accounts for most of the flake bucket's timing rows.
+- **By day** (flake / real / other): 10-21 2/1/0; 10-22 2/0/1; 10-23 5/3/0; 10-24 9/12/0; 10-25 5/7/0. The queue
+  grouping changed to build 2 / merge 3 on 10-24, the day the count peaks. The same day had the curl flake, and
+  this run cannot separate the two.
+- **A teardown error** names the test file that was running (`collect-*`, `child-reclaim-*`), not the cause; it is
+  vitest closing its worker while a console log is pending.
+
+### Kill-rule verdict (spec §10: a stage whose metric has not moved two weeks after rollout is retired or redesigned)
+
+- **Stage 1, prose parts (clauses 15 and 16, the sync advisory): the rule fires.** Two weeks after 2026-10-02 the
+  `update-branch` count was not 0 (10, all on the last day of the window) and the repeat share was flat (0.51 against
+  0.47). The ritual-sync rate cannot be judged on this machine. What moved the numbers was the queue on 10-21, and the
+  drop in fleet merges of `main` with it. This section does not retire the clauses: with `allow_update_branch` off
+  and the queue in place, clause 16's three triggers cover what remains. Whether to retire the advisory or keep
+  it is the operator's call.
+- **Stage 2 (the queue), due about 2026-11-04: not yet due, and heading the wrong way on green-to-merge.** The
+  median is 77.7 min against the target 10, from three measured parts: 43 min before enqueue, 17 min of CI in the
+  queue, and the cost of a 19.5% ejection rate. The target as written is not reachable with a 17-minute
+  merge_group run. Redesign candidates, measured here: shorten the queue entry's CI; remove the flakes behind 23 of
+  the 47 ejections (starting with the one test that made 13); re-define the target as "enqueue to merge" or as the
+  wait the queue adds over the PR's own CI, since the queue's job is the composition test that 10-02..10-20 never had.
+- **Stages 3 to 5** were not built, so they have nothing to measure.
+
+### Re-running this
+
+The tool writes a cache and one JSON report per subcommand under `--out`; read-only, no `gh` token scope beyond
+read. `<fleet-login>` is the fleet's gh login (its placeholder git identity, if still present in a window, is
+appended with a comma). Run from any directory; `<clone>` is a local clone of the repository.
+
+```
+T=deploy/measure-landing.py; R=Synapsium-Labs/ccrc-pwa
+python3 -I $T required $R --out out
+for W in "2026-09-08 2026-09-22" "2026-10-02 2026-10-20" "2026-10-21 2026-10-25" "2026-10-22 2026-10-25"; do
+  set -- $W
+  python3 -I $T absorptions    $R --fleet-login <fleet-login> --since $1 --until $2 --out out
+  python3 -I $T inversions     $R --fleet-login <fleet-login> --since $1 --until $2 --out out
+  python3 -I $T green-to-merge $R --since $1 --until $2 --out out
+  python3 -I $T main-red       $R --since $1 --until $2 --out out
+  python3 -I $T remerge        $R --clone <clone> --since $1 --until $2 --out out
+done
+python3 -I $T queue-ejections $R --since 2026-10-21 --until 2026-10-25 --out out
+# ritual syncs: on the fleet box, where the transcripts are
+python3 -I $T episodes --project ccrc-pwa --since 2026-10-02 --until 2026-10-25 --out out
+# the queue's entry-to-merge time and the live queue settings
+gh api -X GET "repos/$R/actions/runs?event=merge_group&per_page=100&created=2026-10-21..2026-10-25" --paginate
+gh api -X GET "repos/$R/rules/branches/main"
+```
+
+(Run the loop in bash: zsh does not split `$W` at the space.) The window 10-21..10-25 and the queue-era splits
+above were read on 2026-10-25 and end at that day's midday; a later run of the same commands will include more days.
+
 ## Carried constraints
 
 - **CI test selection landed first (#183, `814fc53d`).** Wave 2's re-plan derives its `ci.yml` edits against that shape
