@@ -1135,6 +1135,12 @@ const OTHER_HEAD = 'f'.repeat(40);
 const read1 = (patch: Record<string, unknown>): (() => Fixture) =>
   with_(bareApproval(), { pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'REVIEW_REQUIRED', ...patch }) });
 
+/** Read 1 as the text gh printed, exactly: several values, a value that is not an object, or nothing at all. */
+const read1Raw = (raw: string): (() => Fixture) => with_(bareApproval(), { pr: { code: 200, raw } });
+/** The reproduction's PR object, as one JSON value in the given state. */
+const prText = (state: string): string =>
+  JSON.stringify({ baseRefName: 'main', headRefOid: HC, state, reviewDecision: 'REVIEW_REQUIRED' });
+
 const BAD_BASES: [string, unknown][] = [
   ['absent', undefined], ['null', null], ['the number 123', 123], ['the boolean true', true], ['the boolean false', false],
   ['main with a trailing newline', 'main\n'], ['main with two trailing newlines', 'main\n\n'], ['main with a leading newline', '\nmain'],
@@ -1155,28 +1161,49 @@ const READ1: Case[] = [
   ['control: read 1 as the reproduction has it routes direct and licensed', read1({}), LICENSED_U],
   ...BAD_BASES.map(([what, v]): Case => [`unreadable: read 1: the base is ${what}`, read1({ baseRefName: v }), NO_BASE]),
   ...BAD_STATES.map(([what, v]): Case => [`unreadable: read 1: the state is ${what}`, read1({ state: v }), UNREAD1]),
-  ['control: the state MERGED on the exact head goes to the merge proof', read1({ state: 'MERGED' }), `MERGED head=${HC}`],
+  ['control: the state MERGED on the exact head prints the MERGED line with that head', read1({ state: 'MERGED' }), `MERGED head=${HC}`],
   ['control: the state CLOSED stops as the PR being closed', read1({ state: 'CLOSED' }), 'STOP not-at-head: the PR is CLOSED'],
-  ['control: the state MERGED on another valid head is still handed to the merge proof, which fails it',
+  ['control: the state MERGED on another valid head prints the MERGED line with that other head',
     read1({ state: 'MERGED', headRefOid: OTHER_HEAD }), `MERGED head=${OTHER_HEAD}`],
   ['control: the state OPEN on another valid head is not at the reviewed head', read1({ headRefOid: OTHER_HEAD }),
     `STOP not-at-head: the PR head is ${OTHER_HEAD}`],
   ...(['OPEN', 'MERGED', 'CLOSED'] as const).flatMap((state): Case[] => BAD_HEADS.map(([what, v]): Case =>
     [`unreadable: read 1: the head is ${what}, with the state ${state}`, read1({ state, headRefOid: v }), UNREAD1])),
-  // Judged in this order: the base, then the state, then the head, each before the merge proof, the closed stop and the head binding.
+  // Judged in this order: the base, then the state, then the head, each before the MERGED line, the closed stop and the head binding.
   ['order: a bad base is judged before a bad state', read1({ baseRefName: null, state: 'WEIRD' }), NO_BASE],
   ['order: a bad base is judged before a bad head', read1({ baseRefName: null, headRefOid: `${HC}\n` }), NO_BASE],
-  ['order: a bad state is judged before the merge proof, whatever the head', read1({ state: 'MERGED\n', headRefOid: OTHER_HEAD }), UNREAD1],
-  // An answer of more than one value. jq -e judges only the LAST of several values, so the three checks above pass the second
-  // value alone, whatever the first holds; what refuses such an answer is the base pattern kept below them, which jq -r's
-  // several lines fail. These two are characterization controls of that kept guard, not of a new one: they pass on the block
-  // as it stands, and go red when the kept pattern is gone (the kept state word check then refuses them, with another stop).
-  ['characterization: read 1 answers two values, the first unusable and the second a usable MERGED PR: the base pattern refuses it',
-    with_(bareApproval(), { pr: { code: 200, raw: `{"baseRefName":null,"headRefOid":null,"state":"X"}{"baseRefName":"main","headRefOid":"${HC}","state":"MERGED"}` } }),
-    NO_BASE],
-  ['characterization: read 1 answers the same valid PR object twice: the base pattern refuses the two lines',
-    with_(bareApproval(), { pr: { code: 200, raw: JSON.stringify({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'REVIEW_REQUIRED' }).repeat(2) } }),
-    NO_BASE],
+  ['order: a bad state is judged before the MERGED line, whatever the head', read1({ state: 'MERGED\n', headRefOid: OTHER_HEAD }), UNREAD1],
+];
+
+// Read 1's source: the answer is exactly one JSON value, and an object, before anything is extracted or branched on. jq's exit
+// status follows only the LAST of several values, and an earlier value it cannot index only prints an error and leaves the
+// status alone, so without that guard the base, state and head checks judged the last value by itself: a usable MERGED object
+// after a first value of `"x"`, `1`, `[]` or `true` printed the MERGED line, and a usable OPEN one went on to the reviews read.
+// Every case here is the text gh printed, as it was. A stop at read 1 is checked twice: the line, and the stub's argv log, which
+// must hold the `pr view` call and nothing after it (no reviews and no rules read), so the stop is the read 1 boundary and not some
+// later one. The three controls at the end are one usable object each, which keep their lines.
+const READ1_CALL = 'pr view 42 --json baseRefName,headRefOid,state,reviewDecision';
+const FIRST_VALUES = ['"x"', '1', '[]', 'true'] as const;
+const READ1_SOURCE: [name: string, raw: string, line: string, atRead1: boolean][] = [
+  ...FIRST_VALUES.flatMap((first) => (['OPEN', 'CLOSED', 'MERGED'] as const).map((state): [string, string, string, boolean] =>
+    [`read 1 source: ${first} and then a usable ${state} PR object`, first + prText(state), UNREAD1, true])),
+  ['read 1 source: nothing on stdout, and gh exits 0', '', UNREAD1, true],
+  ['read 1 source: two objects, the first unusable and the second usable and MERGED, adjacent',
+    `{"baseRefName":null,"headRefOid":null,"state":"X"}{"baseRefName":"main","headRefOid":"${HC}","state":"MERGED"}`, UNREAD1, true],
+  ['read 1 source: two usable objects, adjacent', prText('OPEN') + prText('OPEN'), UNREAD1, true],
+  ['read 1 source: two usable objects, separated by a newline', `${prText('OPEN')}\n${prText('OPEN')}`, UNREAD1, true],
+  ['read 1 source: a usable OPEN object and then "x"', `${prText('OPEN')}"x"`, UNREAD1, true],
+  ['read 1 source: a usable MERGED object and then "x"', `${prText('MERGED')}"x"`, UNREAD1, true],
+  ['read 1 source: a usable MERGED object and then malformed JSON', `${prText('MERGED')}{"baseRefName":`, UNREAD1, true],
+  ['read 1 source: malformed JSON alone', '{', UNREAD1, true],
+  ['read 1 source: one value, a string', '"main"', UNREAD1, true],
+  ['read 1 source: one value, a number', '7', UNREAD1, true],
+  ['read 1 source: one value, an array holding the usable object', `[${prText('OPEN')}]`, UNREAD1, true],
+  ['read 1 source: one value, true', 'true', UNREAD1, true],
+  ['read 1 source: one value, null', 'null', UNREAD1, true],
+  ['read 1 source: control: one usable OPEN object reaches the route', prText('OPEN'), LICENSED_U, false],
+  ['read 1 source: control: one usable CLOSED object stops as closed', prText('CLOSED'), 'STOP not-at-head: the PR is CLOSED', false],
+  ['read 1 source: control: one usable MERGED object prints the MERGED line with its head', prText('MERGED'), `MERGED head=${HC}`, false],
 ];
 
 const NP = 'Branch not protected';
@@ -1572,6 +1599,14 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
     expect(r.calls).toContain(`api --paginate repos/{owner}/{repo}/rules/branches/${name}`);
     expect(r.calls).toContain(`api -i repos/{owner}/{repo}/branches/${name}/protection`);
     expect(r.calls.filter((c) => c.includes('branches/main'))).toEqual([]);
+  });
+
+  it.each(READ1_SOURCE)('%s', (_name, raw, line, atRead1) => {
+    const r = verdict(read1Raw(raw)());
+    expect(r.out, `stderr: ${r.stderr}`).toBe(`${line}\n`);
+    if (atRead1) expect(r.calls, 'gh was called after read 1: the stop is not at the read 1 boundary').toEqual([READ1_CALL]);
+    if (!line.startsWith('STOP')) expect(r.stderr, 'a verdict that is not a stop wrote to stderr').toBe('');
+    for (const c of r.calls) expect(c, 'the block sent gh something other than a read').toMatch(READ);
   });
 
   it('a read 1 whose base, state or head is unusable reads nothing else', () => {
