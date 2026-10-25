@@ -27,13 +27,15 @@ import { readMap } from './testmap.mjs';
 /** @typedef {import('./select-tests.mjs').Change} Change */
 
 /**
- * @param {{ map: TestMap, changedFiles: string[], failingTestFiles: string[], existsAt: (ref: string, p: string) => boolean }} args
+ * @param {{ map: TestMap, changedFiles: string[], failingTestFiles: string[], existsAt: (ref: string, p: string) => boolean, staleChanges?: Map<string, Change[]> }} args
+ * `staleChanges`: what each older stamp in the map has missed since (select-tests.mjs `gitStaleChanges`); omitted, a record stamped
+ * older than the map's sha is uncertain and the case answers full.
  * `notProven`: the failing tests absent from the map. Rule 1 selects such a test for being unmapped, not for
  * any recorded dependency, so it proves nothing about the map — it is reported apart and kept out of recall,
  * never counted as caught.
  * @returns {{ selected: string[], missed: string[], notProven: string[], mode: 'selected' | 'full' }}
  */
-export function replayCase({ map, changedFiles, failingTestFiles, existsAt }) {
+export function replayCase({ map, changedFiles, failingTestFiles, existsAt, staleChanges }) {
   /** @type {Change[]} */
   const changes = changedFiles.map((p) => ({
     // The dataset records WHICH files changed, not their git status letter —
@@ -60,7 +62,7 @@ export function replayCase({ map, changedFiles, failingTestFiles, existsAt }) {
     if (p.startsWith('server/test/') && p.endsWith('.test.ts')) liveTests.add(p);
   }
 
-  const selection = selectTests({ map, changes, liveTests: [...liveTests], existsAt });
+  const selection = selectTests({ map, changes, liveTests: [...liveTests], existsAt, staleChanges });
   const notProven = failingTestFiles.filter((f) => !Object.prototype.hasOwnProperty.call(map.tests, f)).sort();
 
   if (selection.mode === 'full') {
@@ -155,14 +157,14 @@ export function summarizeReplay(outcomes) {
  * the last 100 merged PRs"): the durations of the files `selectTests` picks against today's map, over the
  * durations of every test in it. Historical per-commit durations do not exist, so today's table weighs every
  * change; a file with no duration gets the median of the known ones (spec §7.1). A full trigger is 1.
- * @param {{ map: TestMap, changedFiles: string[], existsAt: (ref: string, p: string) => boolean, durations: Record<string, number> }} args
+ * @param {{ map: TestMap, changedFiles: string[], existsAt: (ref: string, p: string) => boolean, durations: Record<string, number>, staleChanges?: Map<string, Change[]> }} args
  * @returns {number}
  */
-export function runtimeShare({ map, changedFiles, existsAt, durations }) {
+export function runtimeShare({ map, changedFiles, existsAt, durations, staleChanges }) {
   const live = Object.keys(map.tests).sort();
   /** @type {Change[]} */
   const changes = changedFiles.map((p) => ({ status: existsAt(map.sha, p) ? 'M' : 'A', path: p, symlink: false }));
-  const selection = selectTests({ map, changes, liveTests: live, existsAt });
+  const selection = selectTests({ map, changes, liveTests: live, existsAt, staleChanges });
   if (selection.mode === 'full') return 1;
   const known = Object.values(durations).sort((a, b) => a - b);
   const mid = known.length >> 1;
@@ -228,7 +230,7 @@ function formatPct(x) {
 
 async function main() {
   const opt = parseArgs(process.argv.slice(2));
-  const { gitExistsAt } = await import('./select-tests.mjs');
+  const { gitExistsAt, gitStaleChanges } = await import('./select-tests.mjs');
   const repoDir = opt.repo ?? process.cwd();
 
   const mapResult = readMap(opt.map);
@@ -252,6 +254,7 @@ async function main() {
   }
 
   const existsAt = gitExistsAt(repoDir);
+  const staleChanges = gitStaleChanges(repoDir, map);
 
   // The runtime-share report: --prs FILE (a JSON array of { number, files }, `files` paths or { path }, as
   // `gh pr list --json number,files` gives them) weighed by --times FILE (a durations table).
@@ -260,7 +263,7 @@ async function main() {
     const prs = JSON.parse(readFileSync(opt.prs, 'utf8'));
     const durations = JSON.parse(readFileSync(opt.times, 'utf8'));
     const shares = prs.map((pr) => runtimeShare({
-      map, existsAt, durations,
+      map, existsAt, durations, staleChanges,
       changedFiles: (pr.files ?? []).map((f) => (typeof f === 'string' ? f : f.path)),
     }));
     const s = summarizeShares(shares);
@@ -272,7 +275,7 @@ async function main() {
   /** @type {ReplayOutcome[]} */
   const outcomes = dataset.map((c) => {
     const { selected, missed, notProven, mode } = replayCase({
-      map, changedFiles: c.changedFiles, failingTestFiles: c.failingTestFiles, existsAt,
+      map, changedFiles: c.changedFiles, failingTestFiles: c.failingTestFiles, existsAt, staleChanges,
     });
     const liveCount = liveCountFor(map, selected);
     return {
