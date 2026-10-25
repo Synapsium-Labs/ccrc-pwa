@@ -4940,6 +4940,18 @@ only place a session that loads no ccrc skill sees it: a `Bash` call that merges
 are listed in the hook's own header (`server/test/session-hook-sync-advisory.test.ts`).
 `python3 deploy/measure-landing.py <subcommand>` is the programme's read-only instrument.
 
+**Ledger documents are edited on a ledger branch only (D-TBD-ledger-guard).** Shared files under
+`docs/superpowers/programs/` and `docs/superpowers/plans/` were the largest single cause of sync
+conflicts, so `.github/ci/ledger-guard.mjs` (a step of the `select` job, tested in
+`server/test/ci-ledger-guard.test.ts`) fails a pull request that MODIFIES, DELETES or RENAMES AWAY an existing
+file there unless its head branch is `ledger/<programme>` (the name is this guard's own convention: no earlier
+ledger-branch name existed). A pull request ADDS a per-task note instead,
+`docs/superpowers/plans/<plan>/<task-or-pr>.md`, and the coordinator folds the notes into the ledger in one
+ledger pull request per wave. There is no `merge=union` driver: it silently corrupts a row edited in place. The
+escape is a `Ledger-Edit: <D-TBD reason>` commit trailer, which passes and is written to the step summary. The
+guard skips with a notice on a shallow checkout and on a merge-queue run. It runs warn-only
+(`LEDGER_GUARD_MODE: warn` in `ci.yml`) until the open pull requests that edit a ledger have landed.
+
 **The native merge queue (landing-order wave 2).** On a project whose `main` ruleset requires
 GitHub's merge queue — measured before each landing, never remembered — a producer lands before its
 run closes. Once its review is clean, the coordinator advances the run to `merging`, waits for

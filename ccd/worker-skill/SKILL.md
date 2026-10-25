@@ -139,6 +139,16 @@ in your `wave-done` mail so the ledger gets it. A deviation you find is still
 never a number you invent (clause 11): report it, and the coordinator mints it
 against the programme's home project.
 
+**Task notes go in a new file, never in the ledger.** Do not edit or delete a file under
+`docs/superpowers/programs/` or an existing file under `docs/superpowers/plans/` in your pull
+request: every in-flight pull request of a wave edits the same rows, and each absorption conflicts
+there. Write what the ledger should learn (a deviation you found, a status, a measurement) into a
+NEW note, `docs/superpowers/plans/<plan>/<task-or-pr>.md`, and say so in your `wave-done` mail; the
+coordinator folds the notes into the ledger on its own `ledger/<programme>` pull request. A
+`ledger-guard` step fails a pull request that edits a ledger from any other branch. If the edit is
+genuinely your change's own, put a `Ledger-Edit: <D-TBD reason>` trailer on a commit; the guard
+passes it and reports it.
+
 A reply may arrive addressed to the ROLE `worker` rather than to your session id.
 Nothing changes on your side: the role resolves to whichever session this run names,
 which is you, the envelope's `to:` is still your own id, you ack the DELIVERY id as
