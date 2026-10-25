@@ -309,45 +309,64 @@ If any item contradicts what you have measured at your tip, stop and ask me befo
 
 ## As built (2026-10-25)
 
-Built on `origin/main` at `d12739bd6`. Five tasks, one commit each after the plan's copy.
+Built on `origin/main` at `d12739bd6`: the plan's five tasks, one commit each after the plan's copy, then one commit
+applying the coordinator's mid-wave corrections above, all ten. `origin/main` gained #1405 meanwhile; the branch merges
+with it cleanly, and none of #1430, #1406, #1398 or #1390 had landed when this was written.
 
 **What each deviation became.**
 
 - **D-6909, as planned.** `RunSummary.reviewCap` is filled in `hydrateRun` from `CoordStore.reviewCapStates`, two
-  statements per batch on `healthFor`'s `placeholders` idiom; `run()` and `hydrateRuns()` are its two callers. Making
-  the field required touched every `RunSummary` literal in the tests: 21 PWA fixture factories gained
-  `reviewCap: null` (one of them, `runs-finished-fold.test.tsx`, under another wave's claim, with its holder's written
-  consent for that one token), and `reconstruction-drill.test.ts` names `reviewCap` among what a coord.db loss forgets:
-  `review_cap` lives only in the database, so a lost lift is lifted again, the safe direction.
+  statements per batch on `healthFor`'s `placeholders` idiom; `run()` and `hydrateRuns()` are its two callers, and
+  `reviewRounds` now reads `reviewCapStates` too, so the round predicate is written once (correction 8; a run-routes row
+  holds the refusal's `by` equal to the row's `reviewCap.rounds`). An unknown kind and an unmeasured field both fold to
+  "no door", because no caller tells them apart. Making the field required touched every `RunSummary` literal in the
+  tests: 21 PWA fixture factories gained `reviewCap: null` (one of them, `runs-finished-fold.test.tsx`, under another
+  wave's claim, with its holder's written consent for that one token), and `reconstruction-drill.test.ts` names
+  `reviewCap` among what a coord.db loss forgets: `review_cap` lives only in the database, so a lost lift is lifted
+  again, the safe direction.
 - **D-6910, as planned.** `composeReviewCapAsk` in `coord/routes.ts` holds the refusal arm's three lines, and both the
-  arm and `GET /api/coord/review-cap/:id` call it. The GET reads the run through `coord.run()`, so its rounds and times
-  are the row's `reviewCap`; a run that is not a work run is 404 `not-found`, an unreadable one 503 `run-unreadable`.
-  The three types moved to `shared/api.ts`. That file cannot import `ReadFailure` (its type-only imports are pinned), so
-  the findings states derive from `REVIEW_FINDINGS_STATES`, `STALL_STORED_STATES`' idiom, and `review-cap.test.ts`
-  holds the failure pair equal to `ReadFailure` at compile time. The new route joined the canonical id census
-  (`routes.test.ts`, twenty-one seams) and the gate's route counts (`auth-gate.test.ts`, and `auth/gate.ts`'s docstring:
-  121 HTTP routes). The two "box token alone is refused" rows were green before the route existed, because the gate
-  refuses every path no EXEMPT entry names; they pin that neither cap route joins an EXEMPT table.
-- **D-6911, as planned, with one consolidation.** The plan had `findingsWords` repeat four sentences `reviewCapNotice`
-  already spelled. They are spelled once instead, as `REVIEW_FINDINGS_WORDS` in `shared/api.ts`, and both read it; the
-  notice's text is unchanged (its existing pins stay green). The cap-notice scan in `review-cap.test.ts` uses
-  `git grep` with one line of context rather than reading `coord/routes.ts` as text, because `single-definition`'s
-  ratchet refuses a new literal source pin over that file. The Mail door's match is `capRecordRun` in
-  `reviewCapWords.ts`, read through `eventRunId`. The band's ground is grouped with the sheet bodies' rule in
-  `fleet.css`: a rule of its own copied `.program-start-sheet`'s shape and `shape-census` refused it.
+  arm and `GET /api/coord/review-cap/:id` call it. The GET answers `notConfigured` first and every refusal through
+  `refuseRoute` (correction 1): 400 `bad-request`, 404 `not-found` for a run that is not a work run, 503
+  `run-unreadable`. The POST's literal is `satisfies ReviewCapLiftAnswer` (correction 9). The three ask types moved to
+  `shared/api.ts`. That file cannot import `ReadFailure` (its type-only imports are pinned), so the findings states
+  derive from `REVIEW_FINDINGS_STATES`, `STALL_STORED_STATES`' idiom, and `review-cap.test.ts` holds the failure pair
+  equal to `ReadFailure` at compile time. The findings words moved with the types (correction 7):
+  `REVIEW_FINDINGS_WORDS` over the three unread states and `REVIEW_FINDINGS_NONE_OPEN`. The notice reads three of them
+  and stays silent on `unnamed`, its text byte-identical, and a guard row pins both halves. The new route joined the
+  canonical id census (`routes.test.ts`, twenty-one seams) and the gate's route counts (`auth-gate.test.ts`, and
+  `auth/gate.ts`'s docstring: 121 HTTP routes). The two "box token alone is refused" rows were green before the route
+  existed, because the gate refuses every path no EXEMPT entry names; they pin that neither cap route joins one.
+- **D-6911, as planned, keyed on the measured cap state.** The Mail door is `capDoorRun(ev, live)` in
+  `reviewCapWords.ts` (correction 4): it opens only for a run that the fleet store's live runs frame holds and whose
+  ask is raised and not lifted, found through `eventRunId`. `kind: 'run'` and an empty session only narrow it, and M4
+  still mutates that clause. `MailScreen` passes the frame's runs once the frame has been seen and no runs before, never
+  its once-per-mount read, and its sheet has no `onDone` (correction 5): the watcher re-emits `runs` when a row
+  changes, so a lift takes the door away on the next frame, which a mail-screen row pins without a remount. The server
+  pin is a `scan/parse.ts` census (correction 2): every `notice`, `notify` or `notifyEach` call under `server/src`, read
+  with `rings/walkSrc.ts`, finds exactly one whose record literal says `kind: 'run'` and `sessionId: ''`, inside
+  `app.post('/api/runs', …)`. It tests every argument rather than only the first, so a `notify(deps, {…})` writer, whose
+  record is its second argument, is caught too; its CONTROL row plants both shapes. `single-definition`'s W1a and W1b
+  rows for `coord/routes.ts` stay at 38. The sheet words both calls' failures as
+  `refusalText(err, REVIEW_CAP_REFUSAL_TEXT) ?? apiErrorText(err)` (correction 3), one row per word, and keeps
+  `AbandonSheet`'s busy flag and superseded guard but none of its branches. The band's ground is grouped with the sheet
+  bodies' rule in `fleet.css`: a rule of its own copied `.program-start-sheet`'s shape, and `shape-census` refused it.
+  The three new PWA files have C5 rows in the 08-10 spec's ring-context map (correction 6).
 - **D-6912: spare, unused.**
 
-**Mutation table.** Each mutant ran on the tree with the original backed up to scratch, under
-`ulimit -u (threads + 1500)` and `timeout -k 10 600`, and each file was restored and checked byte-identical by `cmp`.
+**Mutation table.** Measured after the corrections. Each mutant ran on the tree with the original backed up to scratch,
+under `ulimit -u (threads + 1500)` and `timeout -k 10 600`; each file was restored and checked byte-identical by `cmp`.
 
-| Mutant | What red |
+| Mutant | What went red |
 |---|---|
 | M1 `hydrateRun` sets `reviewCap: null` | run-routes "carries the cap's state" |
-| M2 `capWaiting` drops `liftedAt === null` | words "lifted is lifted", band list row, Mail "no door once lifted" |
+| M2 `capWaiting` drops `liftedAt === null` | words "lifted is lifted", band list row, Mail "no door once lifted" and "takes the door away … without a remount" |
 | M3 `capWaiting` drops the closed-run test | words closed-run row, band list row and "renders nothing", Mail "no door on a closed run" |
 | M4 the Mail door drops `sessionId === ''` | Mail "no door on a run record that names a session" |
 | M5 the sheet posts on open | sheet "reads the ask once", "Lift cap posts once", "Cancel lifts nothing" |
 | M6 the GET composes its own ask, findings `unnamed` | run-routes "answers the refusal's own ask" |
 
 **Growth.** Net code lines against the merge-base, measured with `growthCheck.ts`'s `netGrowth`:
-`server/src/coord/store.ts` +21, `server/src/coord/routes.ts` +16, `pwa/src/lib/api.ts` +3.
+`server/src/coord/store.ts` +19, `server/src/coord/routes.ts` +16, `pwa/src/lib/api.ts` +3.
+
+**Suite.** The first full PWA run after Task 4 was red in one file, `shape-census` (the band's copied rule); grouping
+the rule made it green.
