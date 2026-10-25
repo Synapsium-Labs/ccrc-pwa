@@ -119,6 +119,26 @@ describe('routing-matrix.md — spec §3, pinned to the vocabularies the mechani
     expect(routeDefaultFor('unknown')).toBeNull();
   });
 
+  it('only the review session row runs workflows on, and no row names ultracode (coordinator and worker clause 19)', () => {
+    // A worker never launches a workflow and a coordinator launches only a short, time-capped one, so the
+    // one standing `On` left is the review run's held-out panel (the reviewer skill runs it, not a worker).
+    const on = rows.filter((r) => /^On\b/.test(r.split('|').slice(1, -1).map((c) => c.trim())[3]!));
+    expect(on.length, `rows with workflows on: ${on.map((r) => r.slice(0, 40)).join(' / ')}`).toBe(1);
+    expect(on[0]).toMatch(/^\| Review session main loop/);
+    for (const r of rows) expect(r, `a row still routes to ultracode: ${r.slice(0, 60)}`).not.toContain('ultracode');
+    const bulk = rows.find((r) => r.startsWith('| Bulk independent work'))!;
+    expect(bulk).toContain('more worker waves the coordinator dispatches');
+    const branch = rows.find((r) => r.startsWith('| Whole-branch review pass'))!;
+    expect(branch).toContain('a review run');
+  });
+
+  it('reaches a subagent effort below the main loop through more workers, never a worker\'s Workflow', () => {
+    const flat = matrix.replace(/\s+/g, ' ');
+    expect(flat).not.toContain('is reached through a Workflow call, or accepts the session\'s effort');
+    expect(flat).toContain('never through a worker\'s Workflow');
+    expect(flat).toContain('more workers dispatched at that effort');
+  });
+
   it('states the floors the mechanism relies on, in the spec\'s words', () => {
     expect(matrix).toContain('Fable is never a fan-out worker');
     expect(matrix).toContain('`max` is never a default');

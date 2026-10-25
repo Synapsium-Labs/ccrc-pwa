@@ -535,10 +535,20 @@ describe('the coordinator skill: clause 17, coordinator intent', () => {
     expect(allSkillText).not.toMatch(/without (?:a |the )?(?:coordinator )?intent[^.\n]{0,40}(?:refus|forbid|block)/i);
   });
 
-  it('leaves the routing matrix\'s workflow mode alone: a coordinator still orchestrates with workflows on', () => {
+  it('the routing matrix\'s coordinator row carries clause 19: Opus high, workflows off, clause-19 agents at medium', () => {
+    // Clause 13 takes every route from the matrix, so a coordinator row still saying ultracode (xhigh plus
+    // standing workflow orchestration) would hand the coordinator the very default clause 19 abolishes.
     const matrix = refs('routing-matrix.md');
-    expect(matrix).toContain('| On while orchestrating |');
-    expect(matrix).toContain('Opus · ultracode while orchestrating');
+    const row = matrix.split('\n').find((l) => l.startsWith('| Coordinator: '));
+    expect(row, 'the coordinator row is gone from the matrix').toBeDefined();
+    const cells = row!.split('|').slice(1, -1).map((c) => c.trim());
+    expect(cells[1]).toMatch(/^Opus · high\b/);
+    expect(cells[3]).toMatch(/^Off\b/);
+    expect(cells[3]).toContain('clause-19 workflow only');
+    expect(cells[2]).toContain('· medium');
+    expect(cells[2]).not.toMatch(/· (high|xhigh|max)\b/);
+    expect(row).not.toMatch(/ultracode|On while orchestrating|while orchestrating/);
+    expect(cells[4]).toContain('clause 19');
     // Clause 17 names neither the mode nor the effort, so it cannot contradict the row.
     expect(CLAUSE_17).not.toMatch(/workflow mode|ultracode|effort/i);
   });
