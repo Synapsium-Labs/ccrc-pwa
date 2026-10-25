@@ -310,6 +310,30 @@ describe('_ws_leaf_checkouts — unmeasured: rc 2, never "nothing there"', () =>
     expect(a.why).toContain('more than 64');
   }, 60_000);
 
+  it('CHARACTERIZATION: more than 64 `.git` FILE entries is unmeasured; 64 is examined', () => {
+    fs.mkdirSync(path.join(leafOf(), 'inner'), { recursive: true });
+    const leaf = fs.realpathSync(leafOf());
+    const plant = (i: number): void => {
+      fs.mkdirSync(path.join(leaf, `w${i}`), { recursive: true });
+      fs.writeFileSync(path.join(leaf, `w${i}`, '.git'), `gitdir: ${path.join(leaf, 'inner')}\n`);
+    };
+    for (let i = 0; i < 64; i++) plant(i);
+    expect(ask(leaf).rc, 'the CONTROL: 64 file entries, each examined').toBe('0');
+    plant(64);
+    const a = ask(leaf);
+    expect(a.rc, a.why).toBe('2');
+    expect(a.why).toContain('more than 64');
+  }, 60_000);
+
+  it('CHARACTERIZATION: a foreign `.git` file among a few clones is refused, by name', () => {
+    for (let i = 0; i < 10; i++) fs.mkdirSync(path.join(leafOf(), `c${i}`, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(leafOf(), 'wt'), { recursive: true });
+    fs.writeFileSync(path.join(leafOf(), 'wt', '.git'), `gitdir: ${path.join(h.home, 'gone', '.git', 'worktrees', 'wt')}\n`);
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('no longer exists');
+  }, 60_000);
+
   it('a walk that outruns a lowered REAP_SCAN_SECONDS is unmeasured — a real `find` that hangs, killed by the bound', () => {
     fs.mkdirSync(path.join(leafOf(), 'x'), { recursive: true });
     const realFind = execFileSync('sh', ['-c', 'command -v find'], { encoding: 'utf8', env: inheritedEnv() }).trim();
