@@ -37,9 +37,18 @@ const overBudget = (over: Partial<TmpSweepSession['budget']> = {}, top: TmpSweep
 const json = (c: unknown): string => JSON.stringify(c);
 
 describe('parseTmpSweepCensus — the one reader', () => {
+  // "The reader's own shape" is the writer's wire shape, not the parsed form: a test-run row parses its empty `id` and
+  // `uuid` to `null` (D-6854), and the reader refuses `null` there on input. Nothing re-serialises a parsed census.
   it('round-trips a census of the reader\'s own shape', () => {
     const c = census({ seq: 2, sessions: [overBudget()], moved: [moved(1), moved(2)] });
     expect(parseTmpSweepCensus(json(c))).toEqual(c);
+  });
+
+  it('a test-run row in the writer\'s own shape (both fields empty) parses as naming no session (D-6854)', () => {
+    const wire = { ...census(), moved: [{ ...moved(1), kind: 'test-run', id: '', uuid: '', quarantine: null }] };
+    const got = parseTmpSweepCensus(json(wire));
+    expect(got, 'the census reads as measured').not.toBeNull();
+    expect(got!.moved).toMatchObject([{ kind: 'test-run', id: null, uuid: null }]);
   });
 
   it('tolerates the writer\'s extra fields and a session row with no `top`', () => {
@@ -56,6 +65,11 @@ describe('parseTmpSweepCensus — the one reader', () => {
     ['a negative size', json({ ...census({ sessions: [session({ bytes: -1 })] }) })],
     ['a moved row with no seq', json({ ...census(), moved: [{ ...moved(1), seq: undefined }] })],
     ['a half-written file', json(census()).slice(0, 40)],
+    ['a scratch row with an empty id', json({ ...census(), moved: [moved(1, { id: '' })] })],
+    ['a test-run row with only its id empty', json({ ...census(), moved: [moved(1, { kind: 'test-run', id: '', quarantine: null })] })],
+    ['a test-run row with only its uuid empty', json({ ...census(), moved: [moved(1, { kind: 'test-run', uuid: '', quarantine: null })] })],
+    ...(['scratch', 'budget', 'output-capped'] as const).map((kind): [string, string] =>
+      [`${kind === 'output-capped' ? 'an' : 'a'} ${kind} row with both fields empty (only a test-run row may name no session)`, json({ ...census(), moved: [moved(1, { kind, id: '', uuid: '' })] })]),
   ])('%s is null (unmeasured), never an empty census', (_name, text) => {
     expect(parseTmpSweepCensus(text)).toBeNull();
   });
@@ -88,6 +102,12 @@ describe('tmpSweepReceipts — one mail per session per pass, never for shadow',
       ['project-a-quiet-basin', `tmp-sweep: moved 2 entries (seq 1-3, pass ${T0})`],
       ['project-b-calm-mesa', `tmp-sweep: moved 1 entries (seq 2-2, pass ${T0})`],
     ]);
+  });
+
+  it('a live test-run row (no session owns it, D-6854) is mailed to no one; the session beside it still is', () => {
+    const c = census({ seq: 2, moved: [moved(1), moved(2, { kind: 'test-run', id: null, uuid: null, quarantine: null })] });
+    const r = tmpSweepReceipts(c, 0);
+    expect(r.mails.map((m) => [m.toId, m.subject])).toEqual([['project-a-quiet-basin', `tmp-sweep: moved 1 entries (seq 1-1, pass ${T0})`]]);
   });
 
   it('a census whose seq fell below the high-water (a recreated file) is read from the start', () => {
