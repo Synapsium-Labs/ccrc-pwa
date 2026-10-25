@@ -6198,7 +6198,7 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   `pin=None link=<versions>/v0.0.695 backups=fleet:188M/server:9204M disk=fleet:103G/work:344G/server:21G`
 - **2026-10-25 18:25 UTC — the orphan-tree lane armed live on the fleet box; the update machinery is clean.** The probe's
   one anomaly is the soak's at-once trigger, not a fault in the update mechanism. The hand-only `orphan-tree-live`
-  marker stands, with an mtime of 18:00:17. No writer in the tree, and not this session, put it there. The rescue marker
+  marker stands, with an mtime of 18:00:17. The operator armed it (confirmed in chat at about 18:35). The rescue marker
   is absent. Since the 17:26:33 boot, the lane's feed holds 63 "left" records (17:27:47 to 17:57:47), every tree kept
   with its reason, and none after the marker. Nothing has been removed. The delegation broker's coordinator was told at
   18:27, and the next hour's window is read at the 19:25 probe.
