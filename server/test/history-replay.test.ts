@@ -10733,6 +10733,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       ['a pair missing and one extra', { text: `store ${STORE_A}\n${line(A_T1)}zz-extra ${gen(1)}\n` }, 'pairs-differ'],
       ['the same pairs after a comment', { text: `# written by hand\n${QUIZ_A}` }, 'bytes-differ'],
       ['the same pairs in another order', { text: `store ${STORE_A}\n${line(A_T2)}${line(A_T1)}` }, 'bytes-differ'],
+      ['the same pairs with one line repeated', { text: `${QUIZ_A}${line(A_T1)}` }, 'bytes-differ'],
       ['the same pairs without the final newline', { text: QUIZ_A.slice(0, -1) }, 'bytes-differ'],
     ] as Array<[string, Plant, string]>)('verify --section quiz reports %s as itself, never folded, and ok is false (W2-D84)', (_name, what, state) => {
       const home = home7(STORE_A);
