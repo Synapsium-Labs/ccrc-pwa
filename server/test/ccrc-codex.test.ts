@@ -4397,6 +4397,79 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     expect(alive(c.pid!), 'start stopped the retired tier').toBe(true);
   }, 120_000);
 
+  // Fix round 3 (review N1/Q1): the other mode's front tier RUNNING and ANSWERING on the shared port. The lane is
+  // started in one mode, its roster row is switched to the other, and it is started again: the own front tier reads
+  // `listener-other-mode`, its mate is measured on the spot (`--mate-now`), and start names it retired-tier-running,
+  // by pid, in the one retired-tier sentence. The tier ccrc did identify is never "what it cannot identify".
+  /** The lane's switch to `mode`, as the one writer would render it: the roster row, and the rendered lane.json's
+   *  `bridge` word (`_codex_lane_json_state` checks that word's presence, not its value, so start renders nothing
+   *  over it), plus the lane config a litellm lane reads. */
+  function switchMode(home: string, proxyPort: number, litellmPort: number, mode: 'litellm' | 'direct'): void {
+    codexRoster(home, [{ id: 'codex-a', proxyPort, litellmPort, ...(mode === 'direct' ? { bridge: 'direct' as const } : {}) }]);
+    const lj = join(laneDir(home, 'codex-a'), 'lane.json');
+    fs.writeFileSync(lj, JSON.stringify({ ...laneJson(home, 'codex-a'), bridge: mode }));
+    if (mode === 'litellm') plantLaneConfig(home, 'codex-a');
+  }
+  itLinux('start on a direct lane names a running shim on the shared port retired-tier-running', async () => {
+    const { home, proxyPort, litellmPort } = await bridgeBox({ userManager: false, mode: 'litellm' });
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    const shimPid = Number(/ shim started \(nohup (\d+)\)/.exec(r.stdout)?.[1]);
+    expect(alive(shimPid), r.stdout).toBe(true);
+    switchMode(home, proxyPort, litellmPort, 'direct');
+    const o = cx(home, ['start', 'codex-a']);
+    expect(o.code, o.stdout).toBe(1);
+    expect(o.stdout).toBe('');
+    expect(o.stderr).toMatch(new RegExp(`^ccrc codex: retired-tier-running: codex-a runs in direct mode, and its shim tier \\(the other mode's\\) is running \\(pid ${shimPid}\\): .*Nothing was started\\.$`, 'm'));
+    expect(o.stderr).not.toMatch(/cannot identify/);
+    expect(fs.existsSync(join(laneDir(home, 'codex-a'), 'bridge.pid')), 'a bridge was started beside it').toBe(false);
+    expect(alive(shimPid), 'start stopped the retired tier').toBe(true);
+  }, 120_000);
+
+  itLinux('start on a litellm lane names a running bridge on the shared port retired-tier-running', async () => {
+    const { home, proxyPort, litellmPort } = await bridgeBox({ userManager: false });
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    const pid = Number(/^ccrc codex: codex-a: bridge started \(nohup (\d+)\)$/m.exec(r.stdout)?.[1]);
+    expect(alive(pid), r.stdout).toBe(true);
+    switchMode(home, proxyPort, litellmPort, 'litellm');
+    const o = cx(home, ['start', 'codex-a']);
+    expect(o.code, o.stdout).toBe(1);
+    expect(o.stdout).toBe('');
+    expect(o.stderr).toMatch(new RegExp(`^ccrc codex: retired-tier-running: codex-a runs in litellm mode, and its bridge tier \\(the other mode's\\) is running \\(pid ${pid}\\): .*Nothing was started\\.$`, 'm'));
+    expect(o.stderr).not.toMatch(/cannot identify/);
+    for (const f of ['litellm.pid', 'shim.pid']) {
+      expect(fs.existsSync(join(laneDir(home, 'codex-a'), f)), `${f}: a tier was started beside it`).toBe(false);
+    }
+    expect(alive(pid), 'start stopped the retired tier').toBe(true);
+  }, 120_000);
+
+  // Its fallback: an answer in the bridge's shape for this lane, from a process nothing proves (the bridge's pidfile
+  // moved aside), is no retired tier ccrc can name. The mate measure reads it unproven, so the start words the port as
+  // `_codex_foreign_what` does, naming the mate through the mapping's one copy (`--mate`, review N2/Q2).
+  itLinux('start on a litellm lane words an unproven bridge-shaped answer as a listener it cannot identify', async () => {
+    const { home, proxyPort, litellmPort } = await bridgeBox({ userManager: false });
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    const pid = Number(/^ccrc codex: codex-a: bridge started \(nohup (\d+)\)$/m.exec(r.stdout)?.[1]);
+    expect(alive(pid), r.stdout).toBe(true);
+    switchMode(home, proxyPort, litellmPort, 'litellm');
+    const pf = join(laneDir(home, 'codex-a'), 'bridge.pid');
+    fs.renameSync(pf, `${pf}.aside`);
+    try {
+      const o = cx(home, ['start', 'codex-a']);
+      expect(o.code, o.stdout).toBe(1);
+      expect(o.stdout).toBe('');
+      expect(o.stderr).toMatch(new RegExp(`^ccrc codex: retired-tier-running: port ${proxyPort} \\(codex-a's shim tier\\) answers as codex-a's bridge, the tier of the lane's other mode, so codex-a's shim tier is not what holds it\\. ccrc never adopts or stops what it cannot identify\\. .*Nothing was started\\.$`, 'm'));
+      for (const f of ['litellm.pid', 'shim.pid']) {
+        expect(fs.existsSync(join(laneDir(home, 'codex-a'), f)), `${f}: a tier was started beside it`).toBe(false);
+      }
+      expect(alive(pid), 'start stopped the unproven holder').toBe(true);
+    } finally {
+      fs.renameSync(`${pf}.aside`, pf);   // the cleanup's stop reaps the bridge through its handle
+    }
+  }, 120_000);
+
   it('siwc is refused upstream-unsupported', async () => {
     const { home } = await bridgeBox({ userManager: false, upstream: 'siwc' });
     const r = cx(home, ['start', 'codex-a']);

@@ -12696,7 +12696,7 @@ _codex_pid_listens() {   # <pid> <port> -> 0 listens; 1 another holds it; 3 cann
 #       this lane (a box may still run the other repository's tiers under these unit
 #       names; none has run on the fleet box since the cutover). Never adopted,
 #       never stopped, never started over. ONE 2 CARRIES A PROVEN HANDLE:
-#       `listener-other-process`, this lane's own tier — LiteLLM or the shim — alive
+#       `listener-other-process`, this lane's own tier — LiteLLM, the shim or the bridge — alive
 #       by its command line while ANOTHER process holds its port. The holder is
 #       foreign; the proven process is still this lane's, so a stop stops it through
 #       that handle and leaves the holder running. `_codex_tier_is_our_handle` is
@@ -12713,7 +12713,7 @@ _codex_pid_listens() {   # <pid> <port> -> 0 listens; 1 another holds it; 3 cann
 #       the pid holds that port cannot be measured (`_codex_pid_listens` 3).
 #   4 = OURS, STARTING: a live handle whose command line PROVES this lane while
 #       the port does not answer yet, refused or unresponsive. That is a tier
-#       still importing litellm. It is never foreign: `start` waits for it, a
+#       still importing litellm, or a bridge not yet listening. It is never foreign: `start` waits for it, a
 #       stop stops it, the spine never restarts it, `status` prints `starting`.
 #
 # Identity (spec §7.4): the shim is whoever answers `/ccgpt/lane` as this lane
@@ -12918,19 +12918,28 @@ _codex_tier_is_our_handle() {   # <rc of the _codex_tier_ours call just made>
 #
 # `_codex_tier_is_other_mode --mate-now <id> <tier>` — THE ONE MEASURE of
 # <tier>'s MATE, the other front tier on the shared port and unit (`bridge`
-# for `shim`, `shim` for `bridge`; this function holds the only copy of that
-# mapping), asked now, in a command substitution, so none of that call's
-# CX_TIER_* globals reach the caller. rc 0 when the mate reads 0 or 4, with
-# `<mate> <pid>` on stdout (the pid empty when the mate has no proven
-# handle); rc 1 otherwise, or for a tier that has no mate. The mode-blind arm
-# above and `_codex_cmd_start`'s `unit-unproven` arm (fix round 1, F5) both
-# ask it, so a start in progress of the other mode's front tier is read the
-# same way by both.
-_codex_tier_is_other_mode() {   # <id> <tier> <rc of the _codex_tier_ours call just made>  |  --mate-now <id> <tier>
-  local id tier mode mine mate seen mq now=''
-  if [ "${1:-}" = --mate-now ]; then now=1; shift; fi
+# for `shim`, `shim` for `bridge`), asked now, in a command substitution, so
+# none of that call's CX_TIER_* globals reach the caller. rc 0 when the mate
+# reads 0 or 4, with `<mate> <pid>` on stdout (the pid empty when the mate has
+# no proven handle); rc 1 otherwise, or for a tier that has no mate. The
+# mode-blind arm above and `_codex_cmd_start`'s own-tier `2)` arm (fix round
+# 1, F5; fix round 3, for `listener-other-mode` as well as `unit-unproven`)
+# both ask it, so the other mode's front tier, running or starting, is read
+# the same way by both.
+#
+# `_codex_tier_is_other_mode --mate <tier>` — THE MAPPING alone, measuring
+# nothing: the mate's word on stdout, rc 1 for a tier that has no mate. The
+# `case` below is the only copy of that mapping; the two forms above and
+# `_codex_foreign_what`'s `listener-other-mode` sentence all read it from here.
+_codex_tier_is_other_mode() {   # <id> <tier> <rc of the _codex_tier_ours call just made>  |  --mate-now <id> <tier>  |  --mate <tier>
+  local id tier mode mine mate seen mq now='' only=''
+  case "${1:-}" in
+    --mate-now) now=1; shift ;;
+    --mate) only=1; set -- '' "${2:-}" ;;
+  esac
   id="${1:-}" tier="${2:-}"
   case "$tier" in shim) mate=bridge ;; bridge) mate=shim ;; *) return 1 ;; esac
+  if [ -n "$only" ]; then printf '%s\n' "$mate"; return 0; fi
   if [ -n "$now" ]; then
     mq="$( _codex_tier_ours "$id" "$mate" >/dev/null 2>&1; printf '%s %s' "$?" "${CX_TIER_PID:-}" )"
     case "${mq%% *}" in 0|4) printf '%s %s\n' "$mate" "${mq#* }"; return 0 ;; esac
@@ -13401,10 +13410,11 @@ _codex_foreign_what() {   # <id> <tier>
     listener-answers-other-lane)
       CX_FOREIGN_WHAT="port $port ($id's $tier tier) is held by a listener that is not this lane's: it answers as another lane" ;;
     listener-other-mode)
-      # The shared port answers as this lane's OTHER front tier (a bridge for
-      # the shim, a shim for the bridge): this lane's, in the other mode.
+      # The shared port answers as this lane's OTHER front tier, its mate
+      # (`_codex_tier_is_other_mode --mate`, the mapping's one copy): this
+      # lane's, in the other mode.
       CX_FOREIGN_CODE=retired-tier-running
-      CX_FOREIGN_WHAT="port $port ($id's $tier tier) answers as $id's $([ "$tier" = shim ] && printf bridge || printf shim), the tier of the lane's other mode, so $id's $tier tier is not what holds it"
+      CX_FOREIGN_WHAT="port $port ($id's $tier tier) answers as $id's $(_codex_tier_is_other_mode --mate "$tier"), the tier of the lane's other mode, so $id's $tier tier is not what holds it"
       CX_FOREIGN_FIX="'ccrc codex stop $id' stops every tier of the lane, in either mode; then start it again."
       return 0 ;;
     listener-unresponsive)
@@ -13872,28 +13882,31 @@ _codex_cmd_start() {   # <id>
   # that is this lane's (0 or 4), is a RETIRED TIER RUNNING: two refreshers on
   # one credential (Review Focus 5). It is refused by name, never adopted and
   # never stopped here: stopping it is the stop's (mode-blind) and the switch's.
-  # A STARTING OTHER-MODE FRONT TIER (fix round 1): the shared unit is live,
-  # its MainPID proves the OTHER mode's front tier, and the port is still
-  # silent, so the own front tier reads `unit-unproven`, which by itself would
-  # be `unit-foreign`. Its mate (shim for the bridge, bridge for the shim) is
-  # then measured on the spot by `_codex_tier_is_other_mode --mate-now`, the
-  # one measure its mode-blind arm asks too, and a 0 or 4 there is that
-  # retired tier, by name. (A `listener-other-mode` own tier keeps its own
-  # sentence, below, worded by `_codex_foreign_what`.)
+  # THE OTHER MODE'S FRONT TIER ON THE SHARED PORT AND UNIT reads rc 2 on the
+  # own front tier in two ways: `listener-other-mode` while it answers (a shim
+  # on a direct lane, a bridge on a litellm lane), and `unit-unproven` while it
+  # starts (fix round 1: the shared unit is live, its MainPID proves the other
+  # mode's front tier, and the port is still silent), which by itself would be
+  # `unit-foreign`. On either word the mate (shim for the bridge, bridge for
+  # the shim) is measured on the spot by `_codex_tier_is_other_mode
+  # --mate-now`, the one measure its mode-blind arm asks too, and a 0 or 4
+  # there is that retired tier, by name and pid, in the one retired-tier
+  # sentence below (fix round 3). A mate that does not prove itself is no
+  # retired tier ccrc can name: the port is then a listener ccrc cannot
+  # identify, worded by `_codex_foreign_what` like every other rc 2.
   for tier in $mine; do
     _codex_tier_ours "$id" "$tier"; q=$?
     case "$q" in
       0|1|4) ;;
       2)
-        if [ "${CX_TIER_WHY:-}" = unit-unproven ] && mq="$(_codex_tier_is_other_mode --mate-now "$id" "$tier")"; then
-          retired="${mq%% *}"; rpid="${mq#* }"; break
-        fi
+        case "${CX_TIER_WHY:-}" in
+          listener-other-mode|unit-unproven)
+            if mq="$(_codex_tier_is_other_mode --mate-now "$id" "$tier")"; then
+              retired="${mq%% *}"; rpid="${mq#* }"; break
+            fi ;;
+        esac
         _codex_foreign_what "$id" "$tier"
-        if [ "${CX_TIER_WHY:-}" = listener-other-mode ]; then
-          _codex_say retired-tier-running "$id runs in $mode mode, and $CX_FOREIGN_WHAT: the other mode's tier is running, and two refreshers on one credential is what ccrc never starts. ccrc neither adopts nor stops it here. $CX_FOREIGN_FIX Nothing was started."
-        else
-          _codex_say "$CX_FOREIGN_CODE" "$CX_FOREIGN_WHAT. ccrc never adopts or stops what it cannot identify. $CX_FOREIGN_FIX Nothing was started."
-        fi
+        _codex_say "$CX_FOREIGN_CODE" "$CX_FOREIGN_WHAT. ccrc never adopts or stops what it cannot identify. $CX_FOREIGN_FIX Nothing was started."
         exit 1 ;;
       *) exit 1 ;;   # 3: `_codex_tier_ours` has printed why
     esac
