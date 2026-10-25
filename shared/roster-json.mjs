@@ -215,7 +215,9 @@ const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 const EXEC_KINDS = new Set(['upstream', 'generated', 'external', 'codex']);
 // Mirror `shared/roster.ts`'s two codex word sets, IN ORDER: the first word is the default an absent key reads, and
 // `roster-exec-parity.test.ts` compares both declarations and both resolved defaults (codex-bridge spec D20).
-const CODEX_BRIDGE_MODES = ['litellm', 'direct'];
+// EXPORTED for `deploy/account-op.mjs`'s `codex-mode` op (codex-bridge Stage 2, Task 12), which writes the word and so
+// must know which one is the default an absent key reads: imported, never re-spelled.
+export const CODEX_BRIDGE_MODES = ['litellm', 'direct'];
 const CODEX_UPSTREAMS = ['backend', 'siwc'];
 // Mirrors `shared/roster.ts`'s `TELEMETRY_VALUES`; `roster-exec-parity.test.ts` compares the two declarations.
 // `openrouter` is D-5521's OpenRouter key lane (D-5753).

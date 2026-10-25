@@ -57,7 +57,7 @@ import { randomBytes } from 'node:crypto';
 // an arbitrary list re-typed — which is why the rule "enumerated once and
 // derived" needs the import to be the easy path rather than the remembered one.
 import {
-  API_KEY_PROVIDERS, HUES, LABEL_UNSAFE_RE, MODEL_ALIASES, MODEL_ID_RE,
+  API_KEY_PROVIDERS, CODEX_BRIDGE_MODES, HUES, LABEL_UNSAFE_RE, MODEL_ALIASES, MODEL_ID_RE,
   RosterInvalid, rosterFromJson,
 } from '../shared/roster-json.mjs';
 import { BASE_URL_OK } from '../shared/base-url.mjs';
@@ -711,6 +711,9 @@ const OPS = {
   'lane-state': {
     keys: ['id', 'mode', 'check-verdict', 'check-at', 'key-hash', 'retired-key-hash', 'clear'], repeat: [],
   },
+  // THE ROSTER HALF OF `ccrc codex switch` (codex-bridge Stage 2, Task 12; spec D20): a codex lane's mode, written
+  // through `writeRoster`, the one writer. Silent on success, like `drop`. Its arm says why the default is DELETED.
+  'codex-mode': { keys: ['file', 'id', 'bridge'], repeat: [] },
 };
 
 /** THE VERDICT TABLE, and the only copy of it in the tree. §8 puts the
@@ -2320,6 +2323,49 @@ function main(argv) {
       `removing "${a['id']}" would make ${a['file']} unparseable: `);
     if (admits !== 0) return admits;
     if (!writeRoster(a['file'], next, stands)) return 1;
+    return 0;
+  }
+
+  if (op === 'codex-mode') {
+    for (const k of ['file', 'id', 'bridge']) {
+      if (a[k] === undefined) { refuse('bad-argv', `codex-mode needs --${k}`); return 2; }
+    }
+    // THE WORD IS CHECKED BEFORE THE ROSTER IS READ, against the validators' own set (imported, never re-spelled):
+    // a mode this file would have to guess at is a usage error, and nothing is read or written for it.
+    if (!CODEX_BRIDGE_MODES.includes(a['bridge'])) {
+      refuse('unknown-mode',
+        `codex-mode needs --bridge ${CODEX_BRIDGE_MODES.join(' or ')}, and got ${JSON.stringify(a['bridge'])}; `
+        + `${a['file']} was unchanged`);
+      return 2;
+    }
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    const acct = json['accounts'].find((x) => x !== null && typeof x === 'object' && x['id'] === a['id']);
+    if (acct === undefined) {
+      refuse('unknown-id', `no account "${a['id']}" in ${a['file']}, so no lane mode was written; the roster was unchanged`);
+      return 1;
+    }
+    const exec = (acct['exec'] !== null && typeof acct['exec'] === 'object') ? acct['exec'] : {};
+    if (exec['kind'] !== 'codex') {
+      refuse('not-codex',
+        `account "${a['id']}" is exec.kind ${JSON.stringify(exec['kind'] ?? null)}, not "codex", and only a codex lane `
+        + 'has a mode; the roster was unchanged');
+      return 1;
+    }
+    // THE DEFAULT IS DELETED, NEVER WRITTEN (spec D20, additive): an absent key reads the first word of the set, so a
+    // lane switched back to it reads byte for byte as it did before the bridge existed, and an older ccrc reading
+    // this roster meets no key it does not know. Only another word is written.
+    const nextExec = { ...exec };
+    delete nextExec['bridge'];
+    if (a['bridge'] !== CODEX_BRIDGE_MODES[0]) nextExec['bridge'] = a['bridge'];
+    const next = {
+      ...json,
+      accounts: json['accounts'].map((x) => (x === acct ? { ...acct, exec: nextExec } : x)),
+    };
+    const admits = rosterAdmits(next,
+      `recording lane "${a['id']}"'s mode as ${a['bridge']} would make ${a['file']} unparseable: `);
+    if (admits !== 0) return admits;
+    if (!writeRoster(a['file'], next, 'the roster was unchanged')) return 1;
     return 0;
   }
 

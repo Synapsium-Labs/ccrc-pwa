@@ -279,6 +279,25 @@ describe('ccrc: dispatch and usage', () => {
   // than in the install suite: neither of these reaches a step function, so
   // neither needs — or may have — a shipped tree to converge from. What they
   // are about is the DISPATCHER, which is this file's subject.
+  // codex bridge Stage 2, Task 12: `switch` joins `ccrc codex`'s subcommand list, and its mode is checked before any
+  // lane is read. `server/test/ccrc-codex.test.ts` owns what it does; this case owns that an operator can find it.
+  it('ccrc codex names switch among its subcommands, and refuses a switch with no mode as usage', () => {
+    const home = mkTmp('ccrc-cli-codex-switch-');
+    const r = runCcrcRaw(home, ['codex']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc codex: usage: ccrc codex needs a subcommand: ccrc codex \{start\|stop\|status\|login\|switch\} <id>/m);
+    expect(r.stderr).toContain('ccrc codex switch <id> litellm|direct');
+    const other = runCcrcRaw(home, ['codex', 'flip', 'lane-a']);
+    expect(other.code).toBe(2);
+    expect(other.stderr).toContain('it implements start, stop, status, login and switch.');
+    for (const argv of [['codex', 'switch', 'lane-a'], ['codex', 'switch', 'lane-a', 'bridge'],
+      ['codex', 'switch', 'lane-a', 'direct', 'extra']]) {
+      const u = runCcrcRaw(home, argv);
+      expect(u.code, argv.join(' ')).toBe(2);
+      expect(u.stderr, argv.join(' ')).toMatch(/^ccrc codex: usage: .*ccrc codex switch <id> litellm\|direct/m);
+    }
+  });
+
   it('install -h prints usage on STDOUT at exit 0 — a verb with flags explains them', () => {
     // `version` answers `--help` with a usage ERROR (exit 2) because it has no
     // flags to explain; `install` follows `wrappers` instead, and for the same

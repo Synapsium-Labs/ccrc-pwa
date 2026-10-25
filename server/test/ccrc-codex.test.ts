@@ -4515,4 +4515,209 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
       { headers: { 'x-api-key': keyOf(home) }, signal: AbortSignal.timeout(5000) });
     expect(ok.status, 'the bridge serving is not the one started with the new key').not.toBe(401);
   }, 120_000);
+
+  // ── codex bridge Stage 2, Task 12: `ccrc codex switch <id> litellm|direct` ───────────────────────────────────────
+  // Under the lane lock from start to end: stop the outgoing set (to direct: shim, then litellm; to litellm: bridge),
+  // re-measure every tier down, record the mode (`account-op codex-mode`), re-render lane.json unconditionally and read
+  // the new mode back, then start the incoming set through the start verb in a subshell. A failure before the record
+  // writes nothing; a failure after it leaves the lane down, named, with the way back (plan 2026-10-22, Task 12).
+  describe('ccrc codex switch (codex bridge Stage 2, Task 12)', () => {
+    const rosterBytes = (home: string): string => fs.readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+    const laneBytes = (home: string): string => fs.readFileSync(join(laneDir(home, 'codex-a'), 'lane.json'), 'utf8');
+    const execOf = (home: string): Record<string, unknown> =>
+      (JSON.parse(rosterBytes(home)) as { accounts: Array<{ id: string; exec: Record<string, unknown> }> })
+        .accounts.find((a) => a.id === 'codex-a')!.exec;
+    const pidOf = (out: string, tier: string): number =>
+      Number(new RegExp(` ${tier} started \\(nohup (\\d+)\\)`).exec(out)?.[1]);
+    function cxAsync(home: string, args: string[]): Promise<Result> {
+      return new Promise((resolve) => {
+        const c = spawn(BASH, [join(home, 'ccrc', 'ccd', 'ccrc'), 'codex', ...args], {
+          env: env(home, { CCRC_CODEX_READY_S: '20' }), stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let stdout = '';
+        let stderr = '';
+        c.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+        c.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+        c.once('close', (code) => resolve({ code: code ?? -1, stdout, stderr }));
+      });
+    }
+    /** A `litellm` lane, started: both tiers running under `userManager`'s arm. */
+    async function litellmUp(o: { userManager?: boolean } = {}): Promise<BBox & { start: string }> {
+      const b = await bridgeBox({ userManager: o.userManager ?? false, mode: 'litellm' });
+      const r = cx(b.home, ['start', 'codex-a']);
+      expect(r.code, r.stderr).toBe(0);
+      return { ...b, start: r.stdout };
+    }
+
+    itLinux('switch to direct stops both tiers, records the mode and starts the bridge', async () => {
+      const { home, proxyPort, start } = await litellmUp();
+      const [lit, shim] = [pidOf(start, 'litellm'), pidOf(start, 'shim')];
+      expect(alive(lit) && alive(shim), start).toBe(true);
+      const r = cx(home, ['switch', 'codex-a', 'direct']);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toMatch(/^ccrc codex: codex-a: bridge started \(nohup \d+\)\nccrc codex: codex-a: switched from litellm to direct \(shim stopped, litellm stopped\)\n$/);
+      expect(r.stderr).toBe('');
+      await eventually(() => !alive(lit) && !alive(shim), 'the litellm-mode tiers to exit');
+      expect(execOf(home)['bridge']).toBe('direct');
+      expect(laneJson(home, 'codex-a')['bridge']).toBe('direct');
+      expect(JSON.parse((await laneAnswer(proxyPort))!.body)).toEqual({ lane: 'codex-a', mode: 'direct' });
+      const tiers = tiersOf(home);
+      expect(tiers['bridge']!.state).toBe('running');
+      expect([tiers['shim'], tiers['litellm']]).toEqual([STOPPED, STOPPED]);
+    }, 120_000);
+
+    itLinux('switch back deletes exec.bridge and starts both tiers', async () => {
+      const { home, proxyPort } = await litellmUp();
+      const before = rosterBytes(home);
+      const d = cx(home, ['switch', 'codex-a', 'direct']);
+      expect(d.code, d.stderr).toBe(0);
+      const bridge = pidOf(d.stdout, 'bridge');
+      expect(execOf(home)['bridge']).toBe('direct');
+      const r = cx(home, ['switch', 'codex-a', 'litellm']);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toMatch(/^ccrc codex: codex-a: litellm started \(nohup \d+\), shim started \(nohup \d+\)\nccrc codex: codex-a: switched from direct to litellm \(bridge stopped\)\n$/);
+      await eventually(() => !alive(bridge), 'the bridge to exit');
+      expect(Object.hasOwn(execOf(home), 'bridge'), 'the switch back wrote the key instead of deleting it').toBe(false);
+      expect(rosterBytes(home)).toBe(before);
+      expect(laneJson(home, 'codex-a')['bridge']).toBe('litellm');
+      expect(JSON.parse((await laneAnswer(proxyPort))!.body)).toEqual({ lane: 'codex-a' });
+      const tiers = tiersOf(home);
+      expect([tiers['litellm']!.state, tiers['shim']!.state]).toEqual(['running', 'running']);
+      expect(tiers['bridge']).toEqual(STOPPED);
+    }, 120_000);
+
+    it('a foreign listener stops the switch before anything is written', async () => {
+      const { home, proxyPort } = await bridgeBox({ userManager: false, mode: 'litellm' });
+      const listener = await spawnListener(home, { answer: 'json', lane: 'codex-b', port: proxyPort });
+      const [roster, lane] = [rosterBytes(home), laneBytes(home)];
+      const r = cx(home, ['switch', 'codex-a', 'direct']);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toMatch(new RegExp(`port ${proxyPort} .*ccrc left it running`));
+      expect(r.stderr).toMatch(/^ccrc codex: tier-foreign: the switch of codex-a to direct stopped at its shim tier, .*Nothing was written: codex-a is still a litellm lane\. .*$/m);
+      expect([rosterBytes(home), laneBytes(home)]).toEqual([roster, lane]);
+      expect(fs.existsSync(join(laneDir(home, 'codex-a'), 'bridge.pid')), 'a bridge was started').toBe(false);
+      expect(alive(listener.pid) && await portAccepts(proxyPort), 'the switch stopped the foreign listener').toBe(true);
+    }, 60_000);
+
+    it('a tier that will not stop leaves the lane down and named', async () => {
+      const { home, proxyPort, litellmPort } = await litellmUp({ userManager: true });
+      const units = laneJson(home, 'codex-a')['units'] as { litellm: string; shim: string };
+      const roster = rosterBytes(home);
+      failUnitStop(home, units.litellm, true);
+      try {
+        const r = cx(home, ['switch', 'codex-a', 'direct']);
+        expect(r.code).toBe(1);
+        expect(r.stdout).toBe('');
+        expect(r.stderr).toMatch(/^ccrc codex: stop-failed: codex-a's litellm tier is still running after the stop/m);
+        expect(r.stderr).toMatch(/^ccrc codex: switch-stopped: the switch of codex-a to direct stopped because its litellm tier would not stop \(said above\)\. Nothing was written: codex-a is still a litellm lane\. It is DOWN: this switch stopped its shim tier, and nothing restarts it\. .*'ccrc codex start codex-a'.*$/m);
+        expect(rosterBytes(home)).toBe(roster);
+        expect(laneJson(home, 'codex-a')['bridge']).toBe('litellm');
+        expect(await laneAnswer(proxyPort), 'the shim still answers').toBeNull();
+        expect(await portAccepts(litellmPort), 'the litellm unit the manager would not stop').toBe(true);
+        expect(systemdRunArgv(home).filter((a) => a.some((x) => x.includes('--ccrc-bridge'))), 'a bridge was started').toEqual([]);
+      } finally {
+        failUnitStop(home, units.litellm, false);
+      }
+    }, 120_000);
+
+    itLinux('a tier still running after the stop stops the switch before anything is written', async () => {
+      // Review Focus 5: a direct lane whose retired LiteLLM tier is running. The switch to litellm stops the outgoing
+      // bridge (not running), then re-measures every tier, and the litellm tier still reads this lane's: starting the
+      // incoming set would adopt it behind the operator's back, so nothing is written and nothing is started.
+      const { home } = await bridgeBox({ userManager: false });
+      expect(lib(home, '_codex_runtime_env_ensure codex-a').code).toBe(0);
+      const lit = await plantRetiredLitellm(home);
+      const [roster, lane] = [rosterBytes(home), laneBytes(home)];
+      const r = cx(home, ['switch', 'codex-a', 'litellm']);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toMatch(new RegExp(`^ccrc codex: switch-stopped: the switch of codex-a to litellm stopped: its litellm tier still reads as this lane's \\(starting, pid ${lit}\\) after the stop of the outgoing tiers, .*Nothing was written: codex-a is still a direct lane\\. .*'ccrc codex stop codex-a'.*$`, 'm'));
+      expect([rosterBytes(home), laneBytes(home)]).toEqual([roster, lane]);
+      expect(alive(lit), 'the switch stopped the retired tier').toBe(true);
+      expect(fs.existsSync(join(laneDir(home, 'codex-a'), 'shim.pid')), 'a shim was started').toBe(false);
+    }, 120_000);
+
+    itLinux('switch to the mode it is in is already', async () => {
+      const { home, start } = await litellmUp();
+      const [lit, shim] = [pidOf(start, 'litellm'), pidOf(start, 'shim')];
+      const d = laneDir(home, 'codex-a');
+      const before = [rosterBytes(home), laneBytes(home), fs.readFileSync(join(d, 'litellm.pid'), 'utf8'),
+        fs.readFileSync(join(d, 'shim.pid'), 'utf8')];
+      const r = cx(home, ['switch', 'codex-a', 'litellm']);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toBe('ccrc codex: codex-a: already litellm (litellm running, shim running)\n');
+      expect(r.stderr).toBe('');
+      expect([rosterBytes(home), laneBytes(home), fs.readFileSync(join(d, 'litellm.pid'), 'utf8'),
+        fs.readFileSync(join(d, 'shim.pid'), 'utf8')]).toEqual(before);
+      expect(alive(lit) && alive(shim), 'the switch touched a running tier').toBe(true);
+    }, 120_000);
+
+    itLinux('switch takes the lane lock', async () => {
+      const { home, start } = await litellmUp();
+      const shim = pidOf(start, 'shim');
+      // Another holder of the lane lock (`_codex_lock`'s file), for 4 s: the switch waits for it before it stops a tier.
+      const holder = spawn('flock', [join(laneDir(home, 'codex-a'), '.lock'), 'sh', '-c', 'touch "$0"; sleep 4; touch "$1"',
+        join(home, 'held'), join(home, 'released')], { stdio: 'ignore' });
+      trackChild(home, holder);
+      await eventually(() => fs.existsSync(join(home, 'held')), 'the holder to take the lane lock');
+      const sw = cxAsync(home, ['switch', 'codex-a', 'direct']);
+      await new Promise((res) => setTimeout(res, 2500));
+      expect(fs.existsSync(join(home, 'released'))).toBe(false);
+      expect(alive(shim), 'the switch stopped the shim while another process held the lane lock').toBe(true);
+      expect(laneJson(home, 'codex-a')['bridge']).toBe('litellm');
+      const r = await sw;
+      expect(r.code, r.stderr).toBe(0);
+      expect(fs.statSync(join(laneDir(home, 'codex-a'), 'bridge.started')).mtimeMs)
+        .toBeGreaterThanOrEqual(fs.statSync(join(home, 'released')).mtimeMs);
+    }, 120_000);
+
+    it('switch refuses siwc', async () => {
+      const { home } = await bridgeBox({ userManager: false, mode: 'litellm', upstream: 'siwc' });
+      const [roster, lane] = [rosterBytes(home), laneBytes(home)];
+      const r = cx(home, ['switch', 'codex-a', 'direct']);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toMatch(/^ccrc codex: upstream-unsupported: .*siwc.*Stage 3.*Nothing was stopped or written\.$/m);
+      expect([rosterBytes(home), laneBytes(home)]).toEqual([roster, lane]);
+      expect(fs.existsSync(join(laneDir(home, 'codex-a'), 'bridge.pid'))).toBe(false);
+    }, 60_000);
+
+    itLinux('a failed start leaves the lane down and names the way back', async () => {
+      const { home, start } = await litellmUp();
+      const [lit, shim] = [pidOf(start, 'litellm'), pidOf(start, 'shim')];
+      // The incoming tier refuses: a python3 that says 3.8 when asked its version (the real one for everything else).
+      fs.writeFileSync(join(home, '.local', 'bin', 'python3'),
+        `#!/bin/bash\ncase "$*" in *version_info*) echo 3.8; exit 0 ;; esac\nexec "${PY_ABS}" "$@"\n`, { mode: 0o755 });
+      const r = cx(home, ['switch', 'codex-a', 'direct']);
+      expect(r.code).not.toBe(0);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toMatch(/^ccrc codex: python-too-old: /m);
+      expect(r.stderr).toMatch(/^ccrc codex: lane-down: codex-a is DOWN: the switch to direct recorded the mode and rendered lane\.json, but the start of its direct tiers failed \(exit 1, said above\)\. Nothing was restarted\. .*ccrc codex switch codex-a litellm$/m);
+      await eventually(() => !alive(lit) && !alive(shim), 'the litellm-mode tiers to exit');
+      expect(execOf(home)['bridge']).toBe('direct');
+      expect(laneJson(home, 'codex-a')['bridge']).toBe('direct');
+      expect(fs.existsSync(join(laneDir(home, 'codex-a'), 'bridge.pid')), 'a bridge was started').toBe(false);
+    }, 120_000);
+
+    it('the switch re-renders lane.json and reads the new mode back', async () => {
+      const { home } = await bridgeBox({ userManager: false, mode: 'litellm' });
+      // lane.json is current (its bridge word present), so only an unconditional render can move it to the new mode.
+      expect(lib(home, '_codex_lane_json_state codex-a').stdout).toBe('current\n');
+      // A render that answers ok and writes nothing: the read-back names the mode lane.json still holds.
+      const r = lib(home, '_models_node_locked() { printf \'{"ok":true,"wrote":{"lane":"fixture"}}\\n\'; }\ncmd_codex switch codex-a direct');
+      expect(r.code).toBe(1);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toMatch(/^ccrc codex: lane-down: codex-a is DOWN: the switch to direct recorded the mode, but .*lane\.json reads litellm after it was rendered\. Nothing was started\. .*ccrc codex switch codex-a litellm$/m);
+      expect(execOf(home)['bridge']).toBe('direct');
+      expect(laneJson(home, 'codex-a')['bridge']).toBe('litellm');
+      expect(fs.existsSync(join(laneDir(home, 'codex-a'), 'bridge.pid')), 'a bridge was started').toBe(false);
+      // The real render: lane.json moves, the new mode is read back, and the bridge starts.
+      const ok = cx(home, ['switch', 'codex-a', 'direct']);
+      expect(ok.code, ok.stderr).toBe(0);
+      expect(laneJson(home, 'codex-a')['bridge']).toBe('direct');
+      expect(lib(home, '_codex_lane_mode codex-a').stdout).toBe('direct\n');
+      expect(ok.stdout).toMatch(/^ccrc codex: codex-a: bridge started \(nohup \d+\)\nccrc codex: codex-a: switched from litellm to direct \(shim not running, litellm not running\)\n$/);
+    }, 120_000);
+  });
 });
