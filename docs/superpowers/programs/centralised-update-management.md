@@ -6571,7 +6571,9 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   design, so that no machine lane lifts a cap on its own work. But no console control calls it: the console shows the cap's
   push notice and nothing to act on, and no `ccrc` verb exists either. On a box with the auth gate armed, the operator's only
   way is a hand-written request from a signed-in browser. When the operator authorized the lift for run 855, this session could
-  not carry it out, and must not. Give the notice, or the run's review card, a lift control.
+  not carry it out, and must not. Give the notice, or the run's review card, a lift control. Filed 2026-10-25 16:53 UTC as
+  #1410, at the operator's request: a read of the cap's state, a lift control on the notice and on the run card, an
+  optional operator-only CLI path that never takes the box token, and tests.
 - **R48 (wave 24's in-session review; the bootstrap installer).** `install.sh` has none of wave 24's release-host
   defences:
   - its two release curls have no `-g`;
