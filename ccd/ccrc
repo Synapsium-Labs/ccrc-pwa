@@ -10978,9 +10978,10 @@ _models_litellm_lane_held() {   # <codex accountId> -> prints exactly one JSON o
   # litellm.yaml current for a switch back to `litellm`, and never stops, restarts or starts a tier. A LiteLLM tier
   # running on a direct lane is a retired one, which `ccrc codex start` refuses and the doctor names; this render does
   # not touch it. On `litellm`, and on rc 1 (a mode this ccrc cannot read, its line dropped here: on the hourly refresh
-  # the materialise just before this render re-renders lane.json, while the hand verb `ccrc models litellm <id>` reaches
-  # this render with no materialise, and `ccrc codex start`'s ensure only after its own mode read answered `litellm`),
-  # the tier is asked exactly as before.
+  # the materialise just before this render re-renders lane.json; `ccrc doctor --fix` (`_fix_codex`) reaches this render
+  # after a materialise it runs only when lane.json is stale; the hand verb `ccrc models litellm <id>` reaches it with no
+  # materialise; and `ccrc codex start`'s ensure only after its own mode read answered `litellm`), the tier is asked
+  # exactly as before.
   mode="$(_codex_lane_mode "$1" 2>/dev/null)"; mrc=$?
   # THE TIER — asked only now, when the bytes differ.
   # A 2 is NAMED in the same subshell as the measurement (CX_TIER_WHY lives
