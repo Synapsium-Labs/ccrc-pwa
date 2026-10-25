@@ -1167,6 +1167,16 @@ const READ1: Case[] = [
   ['order: a bad base is judged before a bad state', read1({ baseRefName: null, state: 'WEIRD' }), NO_BASE],
   ['order: a bad base is judged before a bad head', read1({ baseRefName: null, headRefOid: `${HC}\n` }), NO_BASE],
   ['order: a bad state is judged before the merge proof, whatever the head', read1({ state: 'MERGED\n', headRefOid: OTHER_HEAD }), UNREAD1],
+  // An answer of more than one value. jq -e judges only the LAST of several values, so the three checks above pass the second
+  // value alone, whatever the first holds; what refuses such an answer is the base pattern kept below them, which jq -r's
+  // several lines fail. These two are characterization controls of that kept guard, not of a new one: they pass on the block
+  // as it stands, and go red when the kept pattern is gone (the kept state word check then refuses them, with another stop).
+  ['characterization: read 1 answers two values, the first unusable and the second a usable MERGED PR: the base pattern refuses it',
+    with_(bareApproval(), { pr: { code: 200, raw: `{"baseRefName":null,"headRefOid":null,"state":"X"}{"baseRefName":"main","headRefOid":"${HC}","state":"MERGED"}` } }),
+    NO_BASE],
+  ['characterization: read 1 answers the same valid PR object twice: the base pattern refuses the two lines',
+    with_(bareApproval(), { pr: { code: 200, raw: JSON.stringify({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'REVIEW_REQUIRED' }).repeat(2) } }),
+    NO_BASE],
 ];
 
 const NP = 'Branch not protected';

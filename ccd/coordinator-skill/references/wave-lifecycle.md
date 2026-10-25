@@ -921,11 +921,12 @@ say() { printf '%s\n' "$1"; exit 0; }
 stop() { say "STOP $1"; }
 
 # Read 1: the base, the head, the state and the review decision, from the PR itself. The base, the state and the head
-# are judged on the JSON as GitHub sent it, before any extraction: `jq -r` prints a missing, null, numeric or boolean
-# field as the text `null`, `123` or `true`, and a command substitution drops a trailing newline, so the text read out
-# below may be something the answer never held. The base is a non-empty string of the characters a branch path is read
-# with, the state is one of three words, and the head is a non-empty string with no newline. The base's anchors are `\A`
-# and `\z`: jq's `$` also matches before a final newline.
+# are judged on the JSON of the one answer as GitHub sent it, before any extraction: `jq -r` prints a missing, null, numeric
+# or boolean field as the text `null`, `123` or `true`, and a command substitution drops a trailing newline, so the text
+# read out below may be something the answer never held. The base is a non-empty string of the characters a branch path is
+# read with, the state is one of three words, and the head is a non-empty string with no newline. The base's anchors are `\A`
+# and `\z`: jq's `$` also matches before a final newline. jq judges the last of several values, so an answer of more than one
+# value is refused by the base pattern below, whose several lines fail it.
 r1=$(gh pr view "$PR" --json baseRefName,headRefOid,state,reviewDecision) || stop "unreadable: read 1"
 jq -e '(.baseRefName | type) == "string" and (.baseRefName | test("\\A[A-Za-z0-9._/-]+\\z"))' <<<"$r1" >/dev/null \
   || stop "unreadable: read 1 gave no usable base"
