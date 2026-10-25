@@ -9180,10 +9180,12 @@ describe('fleet disk retention: the stale-archive arm’s live switch has no wri
 
 // ARCH-77 (#812). APPENDED, for the reason the blocks above state. Child reclaim's own off switch is the operator's to touch
 // BY HAND: its absence means armed, and no line of shell names it, so its one TypeScript spelling is its switchboard row, an L0
-// file that reaches no `node:` module and so cannot write it. The child-spent reader lands with that reason's own change.
-describe('ARCH-77: child reclaim’s off switch has no writer in the tree', () => {
+// file that reaches no `node:` module and so cannot write it. Its ONE reader is `coord/childReclaimDisabled.ts`, landed ahead
+// of ARCH-44 by operator need; the other cleanup lanes never read it.
+describe('ARCH-77: child reclaim’s off switch has no writer in the tree, and one reader', () => {
   const NAME = 'child-reclaim-disabled';
   const DEFINER = 'shared/switches.ts';
+  const READER = 'server/src/coord/childReclaimDisabled.ts';
 
   it('no shell line names it, and its one TS holder is its definer', () => {
     expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
@@ -9197,8 +9199,18 @@ describe('ARCH-77: child reclaim’s off switch has no writer in the tree', () =
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
     const holders = ALL.filter((f) => stallCode(f).includes('CHILD_RECLAIM_DISABLED_MARKER')).map(rel).sort();
-    expect(holders).toEqual([DEFINER]);
+    expect(holders).toEqual([READER, DEFINER].sort());
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+
+  it('no other cleanup lane names it: expiry, collect, the dead-coordinator lane and stop-done are stopped by reclaim-paused alone', () => {
+    const LANES = ['server/src/archivedExpiry.ts', 'server/src/stopDoneSweep.ts', 'server/src/deadCoordinator.ts',
+      'server/src/coord/expireArchived.ts', 'server/src/coord/endDeadCoordinator.ts', 'server/src/coord/collectTempRoot.ts',
+      'server/src/coord/collectOrphanTree.ts', 'server/src/coord/staleArchive.ts'];
+    for (const f of LANES) {
+      const code = stallCode(path.join(ccrcRoot, f));
+      expect(code, `${f} names the child-reclaim switch`).not.toMatch(/CHILD_RECLAIM_DISABLED|childReclaimDisabled|child-reclaim-disabled/);
+    }
   });
 });
 

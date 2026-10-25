@@ -34,6 +34,7 @@ import {
   ARCHIVE_REFUSALS, archiveInterrupts, type ArchiveBody, type ArchiveRefusal, type FleetSession,
 } from '../../../shared/api.js';
 import type { MeasuredStat } from '../io.js';
+import { turnSays, turnWordOf } from '../sessionReading.js';
 import type { CloseOutcome } from './close.js';
 import type { OpenSibling, OpenSiblingsResult } from './store.js';
 
@@ -150,7 +151,7 @@ export function stopVerdict(r: StopReadings): TurnVerdict {
   if (r.pid === 'unread') return 'unmeasured';
   if (r.liveFile.read !== 'ok') return 'unmeasured';
   if (!STATUS_WORD.test(r.liveFile.status)) return 'unmeasured';
-  if (r.liveFile.status !== 'idle') return 'busy';
+  if (turnSays('keystroke', turnWordOf(r.liveFile.status)) !== 'rest') return 'busy';
   if (r.row === 'missing') return 'unmeasured';
   // D-5274: a row whose `busy` is only a failed read's display (`statusUnmeasured`, D-115 / D-5234) measured no turn,
   // so `interrupt` — consent to lose a MEASURED one — cannot cover it.

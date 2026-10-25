@@ -38,6 +38,7 @@ import { DEAD_COORDINATOR_JOURNAL_TRUSTED, DEAD_COORDINATOR_LANE_LIVE_MARKER } f
 import { COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { FleetIO } from '../src/io.js';
+import { CHILD_RECLAIM_DISABLED_MARKER } from '../../shared/switches.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
 import type { SessionRecord } from '../src/registry.js';
@@ -284,6 +285,15 @@ describe('childReclaim.ts — releaseRetiredChildHold step 6: the reclaim switch
     // Every listing before step 6 is clean; the marker stands from step 6 on.
     const s = scripted(f.base.io, f.reg, (n) => (n < f.step6 ? 'absent' : 'present'));
     expect(await releaseRetiredChildHold(f.deps(s.io), f.req)).toBe('changed');
+    expect(f.ccd).toEqual([]);
+  });
+});
+
+describe('childReclaim.ts — releaseRetiredChildHold step 6: child-reclaim-disabled, beside the reclaim switch', () => {
+  it('set answers changed and composes no ws-release', async () => {
+    const f = await releaseRig();
+    writeFileSync(path.join(f.reg, CHILD_RECLAIM_DISABLED_MARKER), '');
+    expect(await releaseRetiredChildHold(f.deps(f.base.io), f.req)).toBe('changed');
     expect(f.ccd).toEqual([]);
   });
 });

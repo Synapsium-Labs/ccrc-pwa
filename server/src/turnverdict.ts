@@ -90,7 +90,7 @@ async function readPane(d: TurnReadDeps, rec: SessionRecord): Promise<PaneReads>
 }
 
 /**
- * The session's RAW live word — the status its live file carries, never `liveStatus()`'s collapse — with the file's
+ * The session's RAW live word — the status its live file carries, never `liveSessionStatus()`'s collapse — with the file's
  * `statusUpdatedAt`. `no-pane` is a pane tmux proved gone; `no-config-dir` a wrapper this roster does not carry;
  * everything that could not be read (tmux unreachable, an unread pid, an absent, unreadable or malformed live file) is
  * `unmeasured`.

@@ -171,9 +171,9 @@ describe('readLiveState', () => {
 // Folding the fourth into the other three is what let `assembleFleet` and the
 // chat header paint `idle · 1m ago` over a session this box never managed to
 // look at — a card that says "at rest" on the strength of a permission bit.
-// `fleet.test.ts` pins both surfaces, and pins the ONE consumer that keeps
-// reading `idle` from this same failure on purpose (`liveStatus`, where
-// `idle` REFUSES an interrupt).
+// `fleet.test.ts` pins both surfaces. The interrupt route reads this same
+// failure as `idle` on purpose (`turnverdict.ts`'s `interruptVerdict`, where
+// an unread word REFUSES an interrupt).
 describe('readLiveStateMeasured — the distinction readLiveState folds', () => {
   it('a parseable file is the ok arm, carrying the state itself', async () => {
     const { configDir, pid } = seedLive(base);
@@ -278,11 +278,11 @@ describe('readLiveStateMeasured — the distinction readLiveState folds', () => 
     expect(reads()).toBe(1);
   });
 
-  it('readLiveState still folds all of them, so its three indifferent callers are untouched', async () => {
+  it('readLiveState still folds all of them, so its indifferent callers are untouched', async () => {
     // The derivation, measured rather than assumed: the three fixtures the
     // cases above tell apart read back as one `null` through the legacy form.
     // This is the pin that keeps this task a WIDENING and not a change —
-    // `liveStatus`, `commands.ts`'s cwd lookup and `watch.ts`'s mail gate
+    // `commands.ts`'s cwd lookup and `watch.ts`'s mail gate
     // (through `mailTurnIdle`) go on seeing exactly what they saw before.
     const absent = seedLive(base);
     expect(await readLiveState(localIO, absent.configDir, 9999)).toBeNull();

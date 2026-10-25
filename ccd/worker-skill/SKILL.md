@@ -154,6 +154,13 @@ subagent effort the coordinator expects for this wave; that governs. A Workflow 
 fleet passes `model:` and `effort:` on every `agent()` call, and its agents run on Opus or Sonnet
 (Haiku for scouts) — never on the class your own main loop runs on if that is above Opus.
 
+## Mutation testing
+
+Prove a new guard with `../ccrc-coordinator/references/mutation-run.py`, not hand-rolled
+mutant files: it builds mutants in memory, runs each in a temp directory it removes, and re-runs
+only what a change touched (`--help`). Never leave a per-run temp tree behind. A heavy round,
+hundreds of mutants or a slow suite, runs in a child workspace, not in a coordinator's scratch.
+
 ## How to call the API
 
 Your mail surface is `POST /api/mail` to send, and `GET /api/mail` /

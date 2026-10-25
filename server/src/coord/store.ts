@@ -13,6 +13,8 @@ import { decideAllocation } from './ledger.js';
 // nothing else, so the shape it returns is the policy's to define.
 import type { CoordPlacementStamp } from './placement.js';
 import type { LastRun } from './released.js';
+import type { BindingRun, Incarnation } from './runBinding.js';
+import { boundRows, claimantsFromRows, openRows, parentFromRows, type SeriesRow } from './bindingRows.js';
 // Stall watch wave 1: the stall lane's row shapes are declared by their CONSUMER,
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
 // reads below implement them.
@@ -797,6 +799,10 @@ export type RunReadResult =
 
 export type RunsReadResult =
   | { ok: true; runs: RunRow[] }
+  | { ok: false; kind: 'run-unreadable'; detail: string };
+
+export type BindingRunsResult =
+  | { ok: true; runs: BindingRun[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
 export type OpenSiblingsResult =
@@ -1939,6 +1945,40 @@ export class CoordStore {
     return this.db.prepare(
       'SELECT id, sessionId, claimedBy FROM runs WHERE sessionId = ? OR claimedBy = ? ORDER BY id',
     ).all(sessionId, sessionId) as { id: number; sessionId: string | null; claimedBy: string | null }[];
+  }
+
+  /**
+   * The series `coord/runBinding.ts` derives a binding from (ARCH-60, #795): every run `id` works on (`sessionId`) or
+   * claims (`claimedBy`), ANY state, by id, with the columns the binding reads and no more. The two roles are ONE read
+   * because the binding's queries ask both ("whose worker is this?", "whose children are these?") of the same series,
+   * and `runsTouching`'s reason for the OR holds. ALL-OR-FAILURE like every session-keyed read here (D-2545): an `id`
+   * this process cannot represent fails the whole read, so a partial series never reads as "nothing else is bound".
+   */
+  bindingRunsOf(id: string): BindingRunsResult {
+    const runs: BindingRun[] = [];
+    for (const r of this.seriesRows('either', id)) {
+      const n = persistedInt(r.idText, 'run id');
+      if (!n.ok) return { ok: false, kind: 'run-unreadable', detail: n.detail };
+      runs.push({ id: n.value, sessionId: r.sessionId, claimedBy: r.claimedBy,
+        state: isRunState(r.state) ? r.state : 'unknown', openedAt: r.openedAt,
+        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor });
+    }
+    return { ok: true, runs };
+  }
+
+  /**
+   * The ONE SQL reader of the run↔session link (ARCH-62, #797): the runs `id` works on (`'sessionId'`), claims
+   * (`'claimedBy'`) or either (`'either'`), ANY state, by id, with every column a binding decision or a reader's row
+   * needs, raw. Every session-keyed reader below projects this through `coord/bindingRows.ts`, so the rule for which run
+   * is a session's is written once, in `coord/runBinding.ts`. Synchronous, like every read on this store.
+   */
+  private seriesRows(column: 'sessionId' | 'claimedBy' | 'either', id: string): SeriesRow[] {
+    const where = column === 'either' ? 'sessionId = ? OR claimedBy = ?' : `${column} = ?`;
+    return this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state, sessionId, claimedBy, ' +
+      `openedAt, sessionBornAt, sessionBornFor FROM runs WHERE ${where} ORDER BY id`,
+    ).all(...(column === 'either' ? [id, id] : [id])) as unknown as SeriesRow[];
   }
 
   /**
@@ -3394,14 +3434,8 @@ export class CoordStore {
    * Synchronous, like every other read on this store.
    */
   openRunsClaimedBy(claimantId: string): OpenSiblingsResult {
-    const rows = this.db.prepare(
-      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
-      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText FROM runs ' +
-      `WHERE claimedBy = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
-    ).all(claimantId) as unknown as
-      { idText: string; program: string; waveText: string; waveOfText: string | null; reviewsText: string | null }[];
     const runs: OpenSibling[] = [];
-    for (const r of rows) {
+    for (const r of openRows(this.seriesRows('claimedBy', claimantId))) {
       const m = measureRunNumbers(r);
       if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
       runs.push({ id: m.nums.id, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf });
@@ -3436,24 +3470,15 @@ export class CoordStore {
    * `excludeRunId` defaults to `-1`, an id AUTOINCREMENT never mints, so the
    * "no exclusion" call and the excluding call are ONE query, not two.
    */
-  openRunsForSession(sessionId: string, excludeRunId?: number): OpenSiblingsResult {
-    // Four of the five columns are CAST to TEXT and proven, for
-    // `RUN_ROW_COLUMNS`'s reason (D-2545) — this read's three consumers are all
-    // DESTRUCTIVE decision points, so an unrepresentable row here must refuse
-    // in words rather than throw out of a sweep or a fleet act.
-    const rows = this.db.prepare(
-      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
-      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText FROM runs ' +
-      `WHERE sessionId = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} AND id != ? ORDER BY id`,
-    ).all(sessionId, excludeRunId ?? -1) as unknown as
-      { idText: string; program: string; waveText: string; waveOfText: string | null;
-        reviewsText: string | null }[];
+  openRunsForSession(sessionId: string, excludeRunId?: number, incarnation?: Incarnation): OpenSiblingsResult {
+    // The rows this returns are proven (D-2545), `RUN_ROW_COLUMNS`'s reason: its consumers are DESTRUCTIVE decision
+    // points, so an unrepresentable row refuses in words rather than throwing out of a sweep or a fleet act.
     const siblings: OpenSibling[] = [];
-    for (const r of rows) {
+    for (const r of boundRows(this.seriesRows('sessionId', sessionId), sessionId, 'open', incarnation)) {
+      if (r.idText === String(excludeRunId ?? -1)) continue;
       const m = measureRunNumbers(r);
-      // ALL-OR-FAILURE (`RunReadResult`'s own docstring): a partial sibling
-      // list is how "nothing else claims this workspace" gets asserted about a
-      // workspace something else claims.
+      // ALL-OR-FAILURE (`RunReadResult`'s own docstring): a partial sibling list is how "nothing else claims this
+      // workspace" gets asserted about a workspace something else claims.
       if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
       siblings.push({ id: m.nums.id, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf });
     }
@@ -3497,16 +3522,9 @@ export class CoordStore {
    *  each candidate's `state` itself. ALL-OR-FAILURE, `openRunsForSession`'s
    *  own rule: a partial candidate list is how a hold this build did write can
    *  read as one it never wrote. */
-  runsNamingSession(sessionId: string): RunsNamingSessionResult {
-    const rows = this.db.prepare(
-      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
-      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state FROM runs ' +
-      'WHERE sessionId = ? ORDER BY id',
-    ).all(sessionId) as unknown as
-      { idText: string; program: string; waveText: string; waveOfText: string | null;
-        reviewsText: string | null; state: string }[];
+  runsNamingSession(sessionId: string, incarnation?: Incarnation): RunsNamingSessionResult {
     const runs: ChildReclaimNamingRow[] = [];
-    for (const r of rows) {
+    for (const r of boundRows(this.seriesRows('sessionId', sessionId), sessionId, 'any', incarnation)) {
       const m = measureRunNumbers(r);
       if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
       runs.push({ id: m.nums.id, sessionId, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf,
@@ -7591,13 +7609,14 @@ export class CoordStore {
    *  N. The newest run's claimant is the right answer there, and
    *  `rundefs.ts`'s `survivorOf` documents the same protocol-not-DB-enforced
    *  caveat. Pinned by a two-wave/two-claimant test, verified red under
-   *  ASC (fix round 1, finding 2). */
-  parentOfSession(childId: string): string | null {
-    const row = this.db.prepare(
-      `SELECT claimedBy FROM runs WHERE sessionId = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ` +
-      'ORDER BY id DESC LIMIT 1',
-    ).get(childId) as { claimedBy: string | null } | undefined;
-    return row?.claimedBy ?? null;
+   *  ASC (fix round 1, finding 2).
+   *
+   *  ARCH-62 (#797): decided by `bindingOf` over `seriesRows`. `incarnation`, when the caller knows the worker's birth
+   *  (`heldFor`, the drift lane), makes a run opened for an EARLIER occupant of a reused name no parent (#746); without
+   *  one the rule is the id string, as before. `openClaimantsOf`, `openRunsForSession` and `runsNamingSession` take it
+   *  the same way. */
+  parentOfSession(childId: string, incarnation?: Incarnation): string | null {
+    return parentFromRows(this.seriesRows('sessionId', childId), childId, incarnation);
   }
 
   /** EVERY coordinator that currently has `sessionId` working for it: the
@@ -7629,18 +7648,8 @@ export class CoordStore {
    *  session-keyed read in this file uses (including the `'unknown'` token a
    *  newer build may have written, which is OPEN here). Synchronous, like
    *  every read on this store. */
-  openClaimantsOf(sessionId: string): string[] {
-    const rows = this.db.prepare(
-      // D-3054. `GROUP BY claimedBy` is what makes the answer DISTINCT — no `DISTINCT`
-      // keyword beside it, which would be a second spelling of the same fact —
-      // and `MAX(id)` is what "newest first" is ordered on: each claimant is
-      // placed by its most recent open run, so one claimant appearing on three
-      // waves is one entry at the newest of them.
-      'SELECT claimedBy, MAX(id) AS newest FROM runs ' +
-      `WHERE sessionId = ? AND claimedBy IS NOT NULL AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ` +
-      'GROUP BY claimedBy ORDER BY newest DESC',
-    ).all(sessionId) as { claimedBy: string }[];
-    return rows.map((r) => r.claimedBy);
+  openClaimantsOf(sessionId: string, incarnation?: Incarnation): string[] {
+    return claimantsFromRows(this.seriesRows('sessionId', sessionId), sessionId, incarnation);
   }
 
   /** D-2545, the ask half. `id` and `runId` — the two columns in the RUN-ID

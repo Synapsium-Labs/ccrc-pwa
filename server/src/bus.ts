@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import type { HookStateRawRead } from './hookstate.js';
 import type { CoordStatus, Dialog, Divergence, FleetSession, RunSummary, SessionStreamMsg, ProjectPoolsWire } from '../../shared/api.js';
 
 export interface Notice { message: string }
@@ -10,11 +11,24 @@ export type SessionEventName = `session:${string}`;
  *  `ask-answer-returns-next-screen`), for every open stream of that session: `answered:<id>`. */
 export type AnsweredEventName = `answered:${string}`;
 
+/** The watcher's look at one session's pane this tick, for the session's feed (ARCH-52, #787): `pane:<id>`. `at` is when
+ *  the capture began (what an answer handled since is judged against); `doneAt` is when it returned (what freshness is
+ *  judged against: a capture the remote tmux timeout ended took that long and is not stale for it). `pane` is null for
+ *  a pane tmux could not capture. */
+export type PaneEventName = `pane:${string}`;
+export interface PaneReading { readonly at: number; readonly doneAt: number; readonly pane: string | null }
+
+/** The watcher's raw read of one session's hookstate this tick, for the session's feed: `hook:<id>`. `at` is when the
+ *  read returned; `uuid` is the identity the read was gated on. */
+export type HookEventName = `hook:${string}`;
+export interface HookReading { readonly at: number; readonly uuid: string; readonly raw: HookStateRawRead }
+
 /**
  * Typed event bus shared between the watcher, routes, and websocket streams.
  * Events: 'fleet' (FleetSession[]), 'notice' ({message}), 'runs' (RunSummary[],
  * Build 7 — see `FleetWatcher.emitRuns`), 'coord' (CoordStatus, Build 4 — see
- * `FleetWatcher.emitCoord`), 'session:<id>' (SessionStreamMsg), 'answered:<id>' (Dialog | null).
+ * `FleetWatcher.emitCoord`), 'session:<id>' (SessionStreamMsg), 'answered:<id>' (Dialog | null),
+ * 'pane:<id>' / 'hook:<id>' (the watcher's per-tick readings, for a session's feed).
  */
 export class Bus extends EventEmitter {
   constructor() {
@@ -40,6 +54,8 @@ export class Bus extends EventEmitter {
   override emit(event: 'pools', pools: ProjectPoolsWire): boolean;
   override emit(event: SessionEventName, msg: SessionStreamMsg): boolean;
   override emit(event: AnsweredEventName, next: Dialog | null): boolean;
+  override emit(event: PaneEventName, reading: PaneReading): boolean;
+  override emit(event: HookEventName, reading: HookReading): boolean;
   override emit(event: string, ...args: unknown[]): boolean {
     return super.emit(event, ...args);
   }
@@ -52,6 +68,8 @@ export class Bus extends EventEmitter {
   override on(event: 'pools', listener: (pools: ProjectPoolsWire) => void): this;
   override on(event: SessionEventName, listener: (msg: SessionStreamMsg) => void): this;
   override on(event: AnsweredEventName, listener: (next: Dialog | null) => void): this;
+  override on(event: PaneEventName, listener: (reading: PaneReading) => void): this;
+  override on(event: HookEventName, listener: (reading: HookReading) => void): this;
   override on(event: string, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
@@ -64,6 +82,8 @@ export class Bus extends EventEmitter {
   override off(event: 'pools', listener: (pools: ProjectPoolsWire) => void): this;
   override off(event: SessionEventName, listener: (msg: SessionStreamMsg) => void): this;
   override off(event: AnsweredEventName, listener: (next: Dialog | null) => void): this;
+  override off(event: PaneEventName, listener: (reading: PaneReading) => void): this;
+  override off(event: HookEventName, listener: (reading: HookReading) => void): this;
   override off(event: string, listener: (...args: any[]) => void): this {
     return super.off(event, listener);
   }

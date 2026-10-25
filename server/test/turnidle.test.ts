@@ -426,9 +426,13 @@ describe('turnidle.ts is the pure module its docstring says it is', () => {
    *  imports nothing but a type and reaches no `node:` module). Anything else is still refused below. */
   const SWITCHBOARD = /^import \{ MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER \} from '\.\.\/\.\.\/shared\/switches\.js';$/m;
 
-  it('imports nothing but its markers from the switchboard: no other type, value, re-export or dynamic import', () => {
+  /** ARCH-50: and the one word reading with the named policies, from the L1 module that holds them. */
+  const READING = /^import \{ turnSays, turnWordOf \} from '\.\/sessionReading\.js';$/m;
+
+  it('imports nothing but its markers from the switchboard and the word reading from sessionReading: no other type, value, re-export or dynamic import', () => {
     expect(code(), 'turnidle.ts no longer takes its markers from the switchboard').toMatch(SWITCHBOARD);
-    const rest = code().replace(SWITCHBOARD, '');
+    expect(code(), 'turnidle.ts no longer takes the word reading from sessionReading').toMatch(READING);
+    const rest = code().replace(SWITCHBOARD, '').replace(READING, '');
     expect(rest, 'turnidle.ts has an import line').not.toMatch(/^\s*import\b/m);
     expect(rest, 'turnidle.ts re-exports from another module').not.toMatch(/\bfrom\s+['"`]/);
     expect(rest, 'turnidle.ts has a dynamic import or a require').not.toMatch(/\bimport\s*\(|\brequire\s*\(/);

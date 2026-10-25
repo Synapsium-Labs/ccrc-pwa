@@ -94,7 +94,7 @@ export type PaneState = 'busy' | 'prompt' | 'menu' | 'other';
  * needs that answer to be wrong — either outcome is a bug. Callers that must
  * not TYPE into a menu (`inject/send.ts`'s `sendPrompt`/`clearBox`) cannot
  * treat a false 'busy' as safe-to-type. Callers that must not MISS a menu
- * (`sessionws.ts`'s `checkDialog`, `watch.ts`'s `detectDialogs` — the display
+ * (`sessionFeed.ts`'s `readDialog`, `watch.ts`'s `detectDialogs` — the display
  * path) cannot treat it as safe-to-suppress. And `parseDialog` itself
  * (`:169` below) cannot let it veto a parse of a dialog that is genuinely on
  * screen, busy marker or not (D-102).

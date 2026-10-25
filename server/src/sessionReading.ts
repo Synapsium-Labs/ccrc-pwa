@@ -10,7 +10,7 @@
 // (it runs without the server); the table records, row by row, whether it protects the session's temp directory, and
 // names the rows where that differs from `presence` (it protects any row with a `.hibernated` file, whatever its
 // lifecycle, and it knows no heartbeat or tmux). The other readers of
-// the old ladders (`liveStatus`, the fleet frame, `liveRowFor`, `resolve`, `claimProbe`, the dead-coordinator
+// the old ladders (the deleted `liveStatus`, the fleet frame, `liveRowFor`, `resolve`, `claimProbe`, the dead-coordinator
 // predicate) are pinned on the same rows in `test/session-ladders-characterization.test.ts`.
 //
 // THE SHAPE IS THE SPEC'S (consolidation spec C1, SessionReading): five parts, not one word. `substrate` is whether the
@@ -26,7 +26,7 @@
 // `unmeasurable` with the pane gone is `unknown` too, `why: 'lifecycleDoubt'`. The destructive door answers that one
 // doubt `alive` (D-1140, in `measureClaimant`'s switch on `why`): fail-shut is that caller's policy, not the reading's,
 // so a display reader of `presence` sees the doubt as a doubt.
-import { DEAD_CAUSES, lifecycleIsDead, type DeadCause, type SessionLifecycle } from '../../shared/api.js';
+import { DEAD_CAUSES, lifecycleIsDead, type DeadCause, type Presence, type SessionLifecycle } from '../../shared/api.js';
 
 /** What the registry said about the one id: `SingleRead`'s kinds, with `found` spelled `present`. */
 export type RowFact = 'present' | 'absent' | 'unmeasurable' | 'unlistable' | 'bad-id';
@@ -49,7 +49,8 @@ export interface SessionFacts {
   readonly viewer?: ViewerWord;
 }
 
-export type Presence = 'alive' | 'asleep' | 'dead' | 'unknown';
+/** The wire word (`Presence` lives in L0 beside `FleetSession.presence`; re-exported for this module's readers). */
+export type { Presence };
 export type Turn = 'busy' | 'idle' | 'shell' | 'unknown';
 /** Which death (`DEAD_CAUSES` and `DeadCause` live in L0, `shared/api.ts`, beside `DEAD_LIFECYCLES`; re-exported here
  *  for this module's readers). */
@@ -71,6 +72,44 @@ export type Substrate = 'present' | 'absent' | 'unmeasurable';
 /** Why the turn reads `unknown` (or that it was measured): the arm of the ladder that decided it. */
 export type TurnWhy = 'measured' | 'unmeasured' | 'noRow' | 'noPane' | 'paneUnknown';
 export interface TurnReading { readonly word: Turn; readonly why: TurnWhy }
+
+/** Claude Code's status word as a `Turn`, the ONE place the raw word is read (ARCH-50, K4). An exact allowlist of the three
+ *  words the live file writes; every other word, and no word, is `unknown`. Each caller then applies its own policy
+ *  (`turnSays`), so a word added later is `unknown` to all of them until someone places it. */
+export function turnWordOf(raw: string | null): Turn {
+  return raw === 'idle' || raw === 'busy' || raw === 'shell' ? raw : 'unknown';
+}
+
+/** The four callers' policies over a `Turn`, named by what they do. They diverge on purpose, and the safe error is each
+ *  caller's own: mail held for a false busy is the cost the anchored TS read pays, a key typed into a turn is the cost
+ *  ccd's unanchored read refuses (consolidation spec K4; the ARCH-24 corpus holds every column). */
+export const TURN_POLICIES = ['mail-gate', 'keystroke', 'sleep', 'stall-watch'] as const;
+export type TurnPolicy = (typeof TURN_POLICIES)[number];
+/** `rest`: the act may go on. `work`: hold, a turn is or may be running. `doubt`: nothing was measured, and the caller
+ *  decides whether that persists into a signal. */
+export type TurnSays = 'rest' | 'work' | 'doubt';
+
+const POLICY: Readonly<Record<TurnPolicy, Readonly<Record<Turn, TurnSays>>>> = {
+  /** Hold unless idle. A `shell` is `idle` relabelled while a background task runs, so mail may go on it; the mail
+   *  mode (`turnidle.ts`) still decides whether it does. */
+  'mail-gate': { idle: 'rest', shell: 'rest', busy: 'work', unknown: 'work' },
+  /** Refuse unless idle, and treat `unknown` as busy: the act types a key or ends a turn. */
+  keystroke: { idle: 'rest', shell: 'work', busy: 'work', unknown: 'work' },
+  /** Require idle: a `shell` or an `unknown` word holds the sleep. */
+  sleep: { idle: 'rest', shell: 'work', busy: 'work', unknown: 'work' },
+  /** `idle` and `shell` are at rest; an `unknown` is doubt, which the stall lane holds as unmeasured. */
+  'stall-watch': { idle: 'rest', shell: 'rest', busy: 'work', unknown: 'doubt' },
+};
+
+export function turnSays(policy: TurnPolicy, word: Turn): TurnSays {
+  return POLICY[policy][word];
+}
+
+/** The stall lane's reading of a raw status word, by its own policy. A named helper so the lane (`coord/stall.ts`) spells
+ *  no policy name: `mail-routes.test.ts` scans `coord/` for quoted kebab words, and a policy name is not a code. */
+export function stallWatchSays(raw: string | null): TurnSays {
+  return turnSays('stall-watch', turnWordOf(raw));
+}
 
 export type SleepReading =
   | { readonly kind: 'awake' }

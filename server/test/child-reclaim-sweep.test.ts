@@ -2892,3 +2892,34 @@ describe('sweepChildReclaim — what each request says the feed already carries 
     expect(f.requests[0]!.feedQuiet.failureToken, 'a token-less failure item says nothing the executor could match').toBeNull();
   });
 });
+
+// ARCH-77 (#812). APPENDED. The sweep with `child-reclaim-disabled` ABSENT is today's sweep, whatever else the registry lists.
+describe('the sweep with child-reclaim-disabled absent (characterization)', () => {
+  it('queues the reclaim on the second pass, with the neighbouring switches that are not its own listed', async () => {
+    const f = fixture();
+    finishedChild(f);
+    for (const m of ['coordinator-paused', 'mail-disabled', 'stop-done-disabled']) writeFileSync(path.join(f.reg, m), '');
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a']);
+  });
+});
+
+describe('the sweep with child-reclaim-disabled set', () => {
+  it('queues nothing while set, says so on the feed once, and needs two FRESH passes once it is lowered', async () => {
+    const home = mkTmp('ccrc-cr-dis-nl-');
+    const notifyLog = new NotifyLog(path.join(home, 'notify.json'));
+    await notifyLog.load();
+    const f = fixture({ notifyLog });
+    finishedChild(f);
+    await f.pass();                                           // first sighting
+    writeFileSync(path.join(f.reg, 'child-reclaim-disabled'), '');
+    for (let i = 0; i < 3; i += 1) { f.next(); await f.pass(); }
+    expect(f.requests).toEqual([]);
+    expect(f.coord.feedEvents(20).filter((e) => e.title === 'child reclaim switched off')).toHaveLength(1);
+    rmSync(path.join(f.reg, 'child-reclaim-disabled'));
+    f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    f.next(); await f.pass();
+    expect(f.requests).toHaveLength(1);
+  });
+});
