@@ -6135,6 +6135,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   sweep's test-run rows carry an empty session id and uuid that the server's reader refuses. That lane fails toward
   keeping. `STATUS 2026-10-25T09:25:42Z fleet=v0.0.672 server=v0.0.672 health=v0.0.672 newest=v0.0.673`
   `intent=*:dev/auto=off backups=fleet:208M/server:11873M disk=fleet:103G/server:18G`
+- **2026-10-25 10:25 UTC — monitoring: v0.0.674 to v0.0.677 released; boxes stay on v0.0.672, no anomalies.** Refactors
+  and one read-only `ccd` verb; none touches the parts the broker's soak watches. `STATUS 2026-10-25T10:25:41Z fleet=v0.0.672`
+  `server=v0.0.672 health=v0.0.672 newest=v0.0.677 intent=*:dev/auto=off backups=fleet:208M/server:11873M`
+  `disk=fleet:103G/server:18G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
