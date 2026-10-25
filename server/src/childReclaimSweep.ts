@@ -1255,7 +1255,8 @@ export function childReclaimJournalRow(
  *  capability, a mirror fail-shut and every pass that does not find the child eligible. So every first sighting
  *  reads the tier back from ccd's own journal of the CURRENT generation:
  *  - it walks back over `reclaim` lines, reading past `intent`s and other acts;
- *  - it reads past a `refused` line whose word `kindOf` classes neither `terminal` nor `gone`: a box retry
+ *  - it reads past a `refused` line that is not a failure line (`childReclaimFailureLine`: the pre-lock tokens and
+ *    `tree-unreadable` are failures and counted below) and whose word `kindOf` classes neither `terminal` nor `gone`: a box retry
  *    refusal, which the executor answers as a deferral that KEEPS the tier, or a word this build cannot classify,
  *    which it answers as a failure naming no word (neutral). ccd journals every refusal, so without this a
  *    restart would read a shorter run than the memory held;
@@ -1284,7 +1285,7 @@ export function childReclaimTierSeed(
   for (let k = generation.length - 1; k >= 0; k -= 1) {
     const e = generation[k]!;
     if (e.act !== RECLAIM_ACT || e.outcome === INTENT) continue;
-    if (e.outcome === REFUSED && e.refusal !== null && !isChildReclaimPreLockToken(e.refusal)) {
+    if (e.outcome === REFUSED && e.refusal !== null && !childReclaimFailureLine(e)) {
       const kind = kindOf(e.refusal);
       // a box retry refusal (the executor's deferral, which keeps the tier) or a word this build cannot classify
       // (a word-less failure, neutral): the live memory's tier stands through both, so the walk reads past them
