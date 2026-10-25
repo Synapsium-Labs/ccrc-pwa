@@ -74,7 +74,12 @@ describe('the bind records the occupant\'s birth (ARCH-62 slice 4, #1407)', () =
     mint(s, a, 'demo-w', OLD);
     const b = open(s, 'prog-b', 'coord-1', OLD + 10);
     s.setSession(b, 'demo-w', null);
-    expect(s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(b)).toEqual({ sessionBornAt: null });
+    const cols = () => s.db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE id = ?').get(b);
+    expect(cols()).toEqual({ sessionBornAt: null, sessionBornFor: null });
+    // The dispatch that follows re-states the same session with no birth: it must not date the adopted run to the
+    // earlier occupant's birth (a placeable birth of this id exists on run a).
+    s.markDispatched(b, 'demo-w', 'demo-w', 'ws/w', false);
+    expect(cols()).toEqual({ sessionBornAt: null, sessionBornFor: null });
   });
 
   it('a stamp is write-once for the bound session: a re-statement of the same session leaves it, even after a newer occupant', () => {

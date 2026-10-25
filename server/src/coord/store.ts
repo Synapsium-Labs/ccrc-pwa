@@ -3041,7 +3041,9 @@ export class CoordStore {
     // The bound incarnation (ARCH-62, #1407): a bind that names no birth of its own (a later wave bound to a worker that
     // already exists) records the birth of the occupant it binds to, so `bindsRun` answers it exactly. No stamp, and
     // today's answers, where the session never had a placeable birth.
-    if (bornAt === undefined) this.stampOccupantBirth(runId, sessionId);
+    // Only when the bind changes the occupant: a same-session re-statement (markDispatched after an adopted bind's
+    // explicit null) must not date the run to an earlier occupant's birth.
+    if (bornAt === undefined && predecessor !== sessionId) this.stampOccupantBirth(runId, sessionId);
     // NULL is a FIRST bind, not a re-bind, and it re-issues nothing: there is no
     // predecessor to inherit from, and every wave-1 dispatch on the box lands
     // here. The same-session case is a re-statement, not a change of occupant.
