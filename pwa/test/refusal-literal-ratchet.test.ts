@@ -7,14 +7,22 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-/** The count on the day this landed, every spelling counted (`.error`/`.message`/`.code`, a bare `code`, `!==`, either quote,
- * a `case`). Lower it when a branch goes; raising it needs the operator's ruling. */
+/** The count on the day this landed, every spelling counted (`.error`/`.message`/`.code`, a bare `code`, `!==`, any quote,
+ * either operand order, a literal array's `.includes`, a `case`). Lower it when a branch goes; raising it needs the operator's ruling. */
 const LITERAL_BRANCHES_PINNED = 32;
 
 const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), '../src');
 const KEBAB = "[a-z][a-z0-9]*(?:-[a-z0-9]+)*";
-/** `.message`/`.error`/`.code` or a bare `code`, `===` or `!==` a kebab literal in either quote; or `case '<kebab>':`. */
-const BRANCH = new RegExp(`(?:\\.(?:message|error|code)|\\bcode)\\s*[!=]==\\s*(['"])${KEBAB}\\1`, 'g');
+/** A kebab literal in any quote: single, double, or a backtick with no `${`. */
+const LIT = `(?:'${KEBAB}'|"${KEBAB}"|\`${KEBAB}\`)`;
+/** A refusal-code name: `.message`/`.error`/`.code` (any receiver) or a bare `code`. */
+const CODE = `(?:[\\w$.?]*\\.(?:message|error|code)|\\bcode)(?![\\w$])`;
+/** `CODE === LIT` or `!==`, either way round; or a literal array's `.includes(CODE)` (one branch per array). Two shapes
+ * still go uncounted: an alias (`const m = err.message; if (m === 'x')`) and a `case` whose brace depth a `{`/`}` inside
+ * a string shifts. Both are documented by the self-test below; the AST walker is the follow-up that closes them. */
+const BRANCH = new RegExp(
+  `${CODE}\\s*[!=]==\\s*${LIT}|${LIT}\\s*[!=]==\\s*${CODE}|\\[\\s*${LIT}(?:\\s*,\\s*${LIT})*\\s*,?\\s*\\]\\s*\\.includes\\(\\s*${CODE}\\s*\\)`,
+  'g');
 /** A `case '<kebab>':` counts only inside a `switch` on one of those names. */
 const CASE = new RegExp(`^\\s*case\\s+(['"])${KEBAB}\\1\\s*:`);
 const SWITCH_ON_CODE = /\bswitch\s*\(\s*(?:[\w$.?]*\.(?:message|error|code)|code)\s*\)/;
@@ -68,6 +76,16 @@ describe('the literal refusal-branch ratchet (ARCH-13b)', () => {
     expect(branchesIn("// if (code === 'in-a-comment') return;")).toBe(0);
     expect(branchesIn("if (x.message === someConst) return;")).toBe(0);
     expect(branchesIn("if (x.message === 'Has Spaces') return;")).toBe(0);
+    expect(branchesIn("if (err.message === `back-tick`) return;")).toBe(1);
+    expect(branchesIn("if ('literal-first' === err.message) return;")).toBe(1);
+    expect(branchesIn("if ('literal-first' !== code) return;")).toBe(1);
+    expect(branchesIn("if (['one-x', \"two-y\"].includes(err.message)) return;")).toBe(1);
+    expect(branchesIn("if (x.messageText === 'not-a-code') return;")).toBe(0);
+    expect(branchesIn("if ('not-a-code' === x.messageText) return;")).toBe(0);
+    expect(branchesIn("if (err.message === `has-${slot}`) return;")).toBe(0);
+    expect(branchesIn("if ((KNOWN as readonly string[]).includes(code)) return;")).toBe(0);
+    // Known escape, kept visible: an alias of the code is not followed (the AST walker would close it).
+    expect(branchesOf(['const m = err.message;', "if (m === 'aliased-code') return;"])).toEqual([]);
   });
 
   it(`there are no more than ${LITERAL_BRANCHES_PINNED} of them, and the pin is the count`, () => {

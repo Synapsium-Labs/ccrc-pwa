@@ -187,7 +187,7 @@ describe('AbandonSheet — the copy and the refusals', () => {
   // Whole-branch review, M2: this sentence shipped as TWO byte-identical
   // literals in source — `ABANDON_COPY.unsupported` here and
   // `inlinePauseError`'s own 501 arm in `CoordBanner.tsx` — with
-  // `UNSUPPORTED_VERB_TEXT` (`lib/api.ts`) a third, DELIBERATELY different
+  // `UNSUPPORTED_VERB_TEXT` (`lib/refusalWords.ts`) a third, DELIBERATELY different
   // spelling for the lifecycle routes. The two coordination sites now read
   // one constant. This renders BOTH surfaces at 501 and compares what the
   // operator actually sees, so a re-inlined literal at either site is caught
@@ -211,7 +211,7 @@ describe('AbandonSheet — the copy and the refusals', () => {
     expect(fromSheet).toBe(fromBanner);
     expect(fromSheet).toBe(COORD_UNSUPPORTED_TEXT);
     // …and it stays DISTINCT from the lifecycle routes' own sentence: that
-    // third spelling is argued for by name in `lib/api.ts`'s own docstring,
+    // third spelling is argued for by name in `lib/refusalWords.ts`'s own docstring,
     // not drift, and collapsing the three into one is not what this pins.
     expect(fromSheet).not.toBe(UNSUPPORTED_VERB_TEXT);
   });

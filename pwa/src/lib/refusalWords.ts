@@ -1,6 +1,6 @@
 // The PWA's refusal words: every text table, and the one function that reads a code off a failed call against one.
 // Pure (L1): no fetch, no store, no component. `lib/api.ts` re-exports all of it, so each existing import and every
-// screen keeps its line (ARCH-13b, #557, D-6840's neighbour in the refusal vocabulary epic).
+// screen keeps its line (ARCH-13b, #557).
 import type {
   AskRefuseCode, InterruptRefusal, MoveSkipWhy, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateRouteError,
 } from '../../../shared/api';

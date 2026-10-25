@@ -32,7 +32,7 @@ import { YourSignInCard } from './YourSignInCard';
 
 // ── The box-token card (box-token lifecycle wave 1, Task B6; spec 4.7, D-4392) ──
 // A THIRD section, over the same one /api/updates poll: `view.boxToken`, read
-// through `readBoxTokenView` (lib/api.ts) and nothing else. Three rules it keeps,
+// through `readBoxTokenView` (lib/wireReaders.ts) and nothing else. Three rules it keeps,
 // each pinned in box-token-card.test.tsx:
 //   * THE SERVER'S WORDS ARE WHAT IS SHOWN. Phase, hold, owed reason, failure
 //     word and fleet word are the driver's; this block only puts them into
