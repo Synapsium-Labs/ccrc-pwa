@@ -84,6 +84,10 @@ export function equalitySites(root: string = REPO): EqualitySite[] {
 export interface NotBindingSite { readonly file: string; readonly text: string; readonly count?: number; readonly why: string }
 
 export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
+  { file: 'server/src/coord/openRun.ts', text: 'c.target!.claimedBy !== c.b.claimedBy',
+    why: 'a review run names the coordinator of the run it reviews: one run row\'s claimant against the request\'s, no session is asked about' },
+  { file: 'server/src/coord/openRun.ts', text: 'x !== c.b.claimedBy',
+    why: 'drops the opener itself from claimantsOfSession\'s answer (a self-claimed run is admitted, D-3012): the binding is decided in claimantsOf' },
   { file: 'server/src/coord/dispatchDecide.ts', text: 'r.id === f.sessionId',
     why: 'a lookup of a REGISTRY record by its id, to measure the wrapper and identity of the session: no run is read' },
   { file: 'server/src/coord/closeDecide.ts', text: 'fresh.run.claimedBy === f.claimedBy',
