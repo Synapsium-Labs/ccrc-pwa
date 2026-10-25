@@ -51,6 +51,8 @@ import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
 import { createStore } from '../../ccd/history/store.mjs';
 import { HEALTH_WORDS, deriveHealth } from '../../ccd/history/lib.mjs';
 import { swJs } from './swFixtures.js';
+import { spawn } from 'node:child_process';
+import { LISTENER_PY, trackChild, type Listener } from './codexLaneFixture.js';
 
 export const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1884,4 +1886,113 @@ export function installDoctorHooks(): void {
     try { compiledSecretJs(); } catch { /* the first case that plants an auth module builds it again and reports why it could not */ }
   }, 120_000);
   afterEach(async () => { for (const h of codexHomes.splice(0)) await killLaneProcesses(h); });
+}
+
+// ── codex bridge Stage 2, Task 13: a `direct` lane in this fixture ───────────────────────────────────────────────────
+/** `_codex_python`'s version question, read out of ccd/ccrc rather than re-typed, so `plantDirectLane`'s python3 arm
+ *  hands exactly that program to the real interpreter. */
+const PY_VERSION_PROG = ((): string => {
+  const m = /"\$py" -I -c '([^']*)'/.exec(readFileSync(CCRC_SRC, 'utf8'));
+  if (m === null) throw new Error('ccd/ccrc no longer asks python3 its version in the shape this fixture reads');
+  return m[1];
+})();
+
+/** Makes lane `id` of a `healthyCodexBox` a `direct` lane, as `ccrc codex switch` leaves one: the roster row's bridge
+ *  (and, when given, its upstream) by the operator's hand edit, lane.json and the lane's other files re-rendered by the
+ *  real writer, the bridge package COPIED into the fixture's shipped tree (`_codex_bridge_dir`, so a case may remove
+ *  it), and the python3 presence stub given one more arm: `_codex_python`'s version question goes to the real
+ *  interpreter, so a bridge's start record can be computed (`bridgeStartedJson`). */
+export function plantDirectLane(home: string, id: string, o: { upstream?: 'backend' | 'siwc' } = {}): void {
+  editRosterRow(home, id, (row) => {
+    row['exec'].bridge = 'direct';
+    if (o.upstream !== undefined) row['exec'].upstream = o.upstream;
+  });
+  renderLane(home, id);
+  // `_codex_bridge_digest` sorts the package's `<name> <sha256>` lines (`LC_ALL=C sort`), so a bridge's record needs
+  // `sort` on the contained PATH, as every box has it.
+  linkReal(home, 'sort');
+  const pkg = join(home, 'ccrc', 'ccd', 'codexbridge');
+  if (!existsSync(pkg)) {
+    cpSync(join(REPO, 'ccd', 'codexbridge'), pkg, { recursive: true, filter: (s) => !s.includes('__pycache__') });
+  }
+  const real = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
+  const arm = real === '' ? ''
+    : `if [ "$1" = "-I" ] && [ "$2" = "-c" ] && [ "$3" = '${PY_VERSION_PROG}' ]; then exec '${real}' "$@"; fi\n`;
+  stub(home, 'python3', `${BT_PY_ARM}${arm}exit 0`);
+}
+
+/** `_codex_started_json bridge` as the lane library computes it NOW in this fixture HOME (`startedJson`'s twin). */
+export function bridgeStartedJson(home: string): string {
+  const r = spawnSync(BASH, ['-c', `. ${shq(ccrcIn(home))}; _codex_started_json bridge`],
+    { env: doctorEnv(home), encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`_codex_started_json bridge: ${r.stderr}`);
+  return (r.stdout ?? '').trim();
+}
+
+/** `LISTENER_PY` with one more answer, `direct`: the bridge's `{"lane": <lane>, "mode": "direct"}`. */
+const BRIDGE_LISTENER_PY = ((): string => {
+  const at = '            if ANSWER == "json":\n';
+  if (!LISTENER_PY.includes(at)) throw new Error('LISTENER_PY no longer has the json arm this fixture extends');
+  return LISTENER_PY.replace(at,
+    '            if ANSWER == "direct":\n'
+    + '                return self._send(200, "application/json", json.dumps({"lane": LANE, "mode": "direct"}).encode())\n'
+    + at);
+})();
+
+/** A listener answering `/ccgpt/lane` in the bridge's shape for `lane` (`spawnListener`'s twin, tracked the same way,
+ *  so the file's after-hook ends it). `argv` is appended verbatim: `[<shim file>, '--ccrc-bridge=direct',
+ *  '--ccrc-lane=<id>']` gives it the bridge's command line. */
+export async function spawnBridgeListener(
+  home: string, o: { lane: string; port: number; argv?: readonly string[] },
+): Promise<Listener> {
+  const py = pythonOrSkip();
+  if (py === null) throw new Error('spawnBridgeListener needs python3 — gate the describe with describeCodex');
+  const dir = join(home, 'fake-procs');
+  mkdirSync(dir, { recursive: true });
+  const script = join(dir, 'bridge-listener.py');
+  if (!existsSync(script)) writeFileSync(script, BRIDGE_LISTENER_PY);
+  const child = spawn(py, [script, '--answer', 'direct', '--lane', o.lane, '--listen-port', String(o.port), ...(o.argv ?? [])], {
+    cwd: home,
+    env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home, PYTHONDONTWRITEBYTECODE: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  trackChild(home, child);
+  const port = await new Promise<number>((resolve, reject) => {
+    let out = '';
+    let err = '';
+    const timer = setTimeout(() => reject(new Error(`bridge listener reported no READY within 10s: ${err}`)), 10_000);
+    child.stdout?.on('data', (c: Buffer) => {
+      out += c.toString();
+      const m = /^READY (\d+)$/m.exec(out);
+      if (m) { clearTimeout(timer); resolve(Number(m[1])); }
+    });
+    child.stderr?.on('data', (c: Buffer) => { err += c.toString(); });
+    child.once('exit', (code, sig) => {
+      clearTimeout(timer);
+      reject(new Error(`bridge listener exited (${code ?? sig}) before READY: ${err}`));
+    });
+  });
+  if (child.pid === undefined) throw new Error('spawnBridgeListener: the child has no pid');
+  return { port, pid: child.pid, child };
+}
+
+/** This lane's own bridge, running, as `_codex_tier_ours <id> bridge` proves one: the bridge-shaped answer on the
+ *  shim's port, from a pid whose command line carries `<shim file> --ccrc-bridge=direct --ccrc-lane=<id>` and which
+ *  holds that port itself, named by `bridge.pid` (the nohup arm's handle). `record`: `current` writes `bridge.started`
+ *  as a start would now, `stale` the same with another code hash, `none` no record. */
+export async function plantRunningBridge(
+  home: string, id: string, o: { record?: 'current' | 'stale' | 'none' } = {},
+): Promise<Listener> {
+  const { proxyPort } = lanePorts(home, id);
+  const shim = join(home, '.local', 'bin', 'ccgpt-proxy.py');
+  const l = await spawnBridgeListener(home, { lane: id, port: proxyPort, argv: [shim, '--ccrc-bridge=direct', `--ccrc-lane=${id}`] });
+  const dir = join(home, '.ccrc', 'codex', id);
+  writeFileSync(join(dir, 'bridge.pid'), `${l.pid}\n`);
+  const rec = o.record ?? 'current';
+  if (rec !== 'none') {
+    const now = bridgeStartedJson(home);
+    writeFileSync(join(dir, 'bridge.started'), rec === 'current' ? `${now}\n`
+      : `${JSON.stringify({ ...JSON.parse(now) as Record<string, string>, code: '0'.repeat(64) })}\n`);
+  }
+  return l;
 }

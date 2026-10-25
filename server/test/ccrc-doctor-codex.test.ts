@@ -18,7 +18,7 @@ import { HEALTH_COUNTERS, HEALTH_META, HEALTH_WORDS, RECOVERY_STALL_TICKS, SCHEM
 import { PRELOADS, preloadOptions } from './historyHelpers.js';
 import { SW_DENYLIST_DEFAULT, swJs } from './swFixtures.js';
 import { SERVER_CAPS_LEASE_S } from '../../shared/api.js';
-import { installDoctorHooks, here, REPO, CCRC_SRC, CHECKS_SRC, BASH, realPath, Result, writeChecks, stubBin, stub, unstub, linkReal, stubNode, RosterEntry, UPSTREAM, writeRoster, writeRawRoster, entry, binDir, shq, writeCcrcEnv, stubLaunchctl, unitDirOf, unitFileOf, writeUnitFile, removeUnitFile, containedPath, doctorEnv, OOM_DROPIN, plantOomPolicy, DOCTOR_DEADLINE_BIN, runDoctorBounded, runDoctor, DH_INSTALLER, installerEvents, installerHook, plantHookRegistration, plantSpoolDir, BT_PY_ARM, healthy, PY, describeCodex, itCodex, writeLaneModels, renderLane, startedJson, lanePorts, editRosterRow, healthyCodexBox, broken, tableNames, lineFor, anyVerdictFor, HEALTHY_SKIPS, noRunnerBugLine, plantSession, checksDecl, FixCodexCase, AGED, laneFileText, SHARED_PORT_REFUSAL, FIX_TRIPWIRES, plantHistoryShim, historyBox } from './ccrc-doctorFixture.js';
+import { installDoctorHooks, here, REPO, CCRC_SRC, CHECKS_SRC, BASH, realPath, Result, writeChecks, stubBin, stub, unstub, linkReal, stubNode, RosterEntry, UPSTREAM, writeRoster, writeRawRoster, entry, binDir, shq, writeCcrcEnv, stubLaunchctl, unitDirOf, unitFileOf, writeUnitFile, removeUnitFile, containedPath, doctorEnv, OOM_DROPIN, plantOomPolicy, DOCTOR_DEADLINE_BIN, runDoctorBounded, runDoctor, DH_INSTALLER, installerEvents, installerHook, plantHookRegistration, plantSpoolDir, BT_PY_ARM, healthy, PY, describeCodex, itCodex, writeLaneModels, renderLane, startedJson, lanePorts, editRosterRow, healthyCodexBox, broken, tableNames, lineFor, anyVerdictFor, HEALTHY_SKIPS, noRunnerBugLine, plantSession, checksDecl, FixCodexCase, AGED, laneFileText, SHARED_PORT_REFUSAL, FIX_TRIPWIRES, plantHistoryShim, historyBox, plantDirectLane, plantRunningBridge, spawnBridgeListener } from './ccrc-doctorFixture.js';
 
 // Each case's homes go when the case ends, not in a file-wide end sweep (R100, review 518's S1): that sweep overran vitest's 20 s
 // hook timeout on the one file this family was split from. Registered before `installDoctorHooks()`'s root `afterEach` (the codex
@@ -5004,6 +5004,261 @@ describe('update-sweep: the last update\'s sweep, read from its report, WARN nev
       expect(r.stdout).toMatch(/^WARN update-sweep: the last update's supervisor sweep was REFUSED \(killmode\)/m);
       expect(r.code, r.stdout).toBe(0);
     });
+  });
+});
+
+
+// ── codex bridge Stage 2, Task 13: the doctor, mode by mode ──────────────────────────────────────────────────────
+// Every row inside the existing `codex` check, each case with a lane in each mode where the row means something in
+// both (`codex-a` litellm, `codex-b` direct). A `direct` lane runs the bridge tier alone, on the shim's port and
+// unit; its LiteLLM and shim tiers are a RETIRED REFRESHER when either reads this lane's (Review Focus 5).
+describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, Task 13)', () => {
+  const laneDir = (home: string, id: string): string => join(home, '.ccrc', 'codex', id);
+  const RETIRED = (id: string, tier: string): string =>
+    `FAIL codex: ${id} runs a retired refresher: its ${tier} tier is running in direct mode, so two processes refresh one credential`;
+  const RETIRED_FIX = (id: string): string =>
+    `  remedy: stop every tier of the lane, in either mode: ccrc codex stop ${id}, then ccrc codex start ${id} (a direct lane starts its bridge alone); to run the lane through LiteLLM again instead: ccrc codex switch ${id} litellm`;
+  /** `lane.json`'s `bridgeFiles`, read back: the names are `laneManifest`'s, never spelled here. */
+  const bridgeFile = (home: string, id: string, k: 'stats' | 'store'): string =>
+    join(laneDir(home, id), (JSON.parse(readFileSync(join(laneDir(home, id), 'lane.json'), 'utf8')) as
+      { bridgeFiles: Record<string, string> }).bridgeFiles[k]);
+  const liveSession = (home: string, sid: string, id: string): void => {
+    const reg = join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    writeFileSync(join(reg, `${sid}.wrapper`), `${id}\n`);
+    writeFileSync(join(home, `fixture-unit-claude-session@${sid}.service`), 'active\n');
+  };
+
+  itLinux('a healthy direct lane has no retired-refresher FAIL (a running bridge alone), and a litellm lane beside it reads as before', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-direct-healthy-', ['codex-a', 'codex-b']);
+    plantDirectLane(home, 'codex-b');
+    const b = await plantRunningBridge(home, 'codex-b');
+    const r = runDoctor(home);
+    expect(r.stdout).not.toMatch(/retired refresher/);
+    const line = lineFor(r.stdout, 'codex') ?? '';
+    expect(line, r.stdout).toMatch(/^PASS codex: /);
+    expect(line).toMatch(/codex-b \(ports \d+\/\d+, direct mode, /);
+    expect(line).toContain(`tiers: bridge running (nohup, pid ${b.pid})`);
+    expect(line).toMatch(/codex-a \(ports \d+\/\d+, [^;]*LiteLLM config current; tiers: none running \(a lane is lazy\)/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  itLinux('a direct lane whose LiteLLM tier runs FAILs as a retired refresher and is never half up; on a litellm lane the same tier is half up', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-direct-retired-litellm-', ['codex-a', 'codex-b']);
+    plantDirectLane(home, 'codex-b');
+    for (const id of ['codex-a', 'codex-b']) {
+      const l = await spawnListener(home, { answer: '404', port: lanePorts(home, id).litellmPort, argv: ['--config', join(laneDir(home, id), 'litellm.yaml')] });
+      writeFileSync(join(laneDir(home, id), 'litellm.pid'), `${l.pid}\n`);
+    }
+    const r = runDoctor(home);
+    const re = new RegExp(`^${reEsc(RETIRED('codex-b', 'litellm'))}$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe(RETIRED_FIX('codex-b'));
+    expect(r.stdout).not.toMatch(/^FAIL codex: codex-b is half up/m);
+    expect(r.stdout).toMatch(/^FAIL codex: codex-a is half up: its LiteLLM tier is running and its shim is not, /m);
+    expect(r.stdout).not.toMatch(/codex-a runs a retired refresher/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('a direct lane whose shim answers on the shared port FAILs as a retired refresher, once, and its bridge tier is not named foreign', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-direct-retired-shim-', ['codex-a', 'codex-b']);
+    plantDirectLane(home, 'codex-b');
+    for (const id of ['codex-a', 'codex-b']) await spawnListener(home, { answer: 'json', lane: id, port: lanePorts(home, id).proxyPort });
+    const r = runDoctor(home);
+    expect(r.stdout.split('\n').filter((l) => l === RETIRED('codex-b', 'shim')), r.stdout).toHaveLength(1);
+    expect(r.stdout).not.toMatch(/\(codex-b's bridge tier\)/);
+    expect(r.stdout).not.toMatch(/codex-a runs a retired refresher/);
+    expect(r.stdout).toMatch(/^FAIL codex: codex-a is half up: its shim is running and its LiteLLM tier is not, /m);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  itLinux('a running bridge whose start record is not current WARNs "not proven to run the installed bytes", the shim-stale WARN\'s twin; the current record does not', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-direct-stale-');
+    plantDirectLane(home, 'codex-a');
+    await plantRunningBridge(home, 'codex-a', { record: 'current' });
+    expect(runDoctor(home).stdout).not.toMatch(/^WARN codex: codex-a's bridge tier is running/m);
+    const rec = join(laneDir(home, 'codex-a'), 'bridge.started');
+    writeFileSync(rec, `${JSON.stringify({ ...JSON.parse(readFileSync(rec, 'utf8')) as Record<string, string>, bridge: '0'.repeat(64) })}\n`);
+    const r = runDoctor(home);
+    const re = new RegExp(`^WARN codex: codex-a's bridge tier is running, and is not proven to run the installed bytes: its start record \\(${reEsc(rec)}\\) is absent, unreadable or unparseable, or it names another interpreter, another placed shim or another bridge package than a start would use now$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toMatch(/'ccrc update' restarts a running, proven, stale ccrc tier/);
+    noRunnerBugLine(r.stdout, 'codex');
+  }, 90_000);   // two doctor runs, as the shim twin's
+
+  itLinux('a running bridge whose bytes cannot be told right now WARNs "unmeasured, not current" — never current, never stale', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-direct-stale-unknown-');
+    plantDirectLane(home, 'codex-a');
+    await plantRunningBridge(home, 'codex-a');
+    rmSync(join(home, 'ccrc', 'ccd', 'codexbridge'), { recursive: true, force: true });
+    const r = runDoctor(home);
+    const re = /^WARN codex: codex-a's bridge tier is running, and whether it runs the installed bytes cannot be told \(no python3 3\.9 or later on PATH, or the placed shim or the bridge package cannot be hashed\) — unmeasured, not current$/m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toMatch(/^ {2}remedy: \S/);
+    expect(r.stdout).not.toMatch(/codex-a's bridge tier is running, and is not proven/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('a bridge-shaped answer with no proven bridge pid FAILs as unidentified on a direct lane; on a litellm lane its shim tier names the other mode', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-direct-foreign-', ['codex-a', 'codex-b']);
+    plantDirectLane(home, 'codex-a');
+    const pa = lanePorts(home, 'codex-a').proxyPort;
+    const pb = lanePorts(home, 'codex-b').proxyPort;
+    await spawnBridgeListener(home, { lane: 'codex-a', port: pa });
+    await spawnBridgeListener(home, { lane: 'codex-b', port: pb });
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(new RegExp(`^FAIL codex: codex-a: port ${pa} \\(codex-a's bridge tier\\) is held by a listener that is not this lane's: its identity check failed — ccrc neither adopts nor stops what it cannot identify$`, 'm'));
+    expect(r.stdout).toMatch(new RegExp(`^FAIL codex: codex-b: port ${pb} \\(codex-b's shim tier\\) answers as codex-b's bridge, the tier of the lane's other mode`, 'm'));
+    expect(r.stdout).not.toMatch(/retired refresher/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  itLinux('a bridge whose identity cannot be measured WARNs "unmeasured" — never read as running or as stopped', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-direct-unmeasured-');
+    plantDirectLane(home, 'codex-a');
+    const b = await plantRunningBridge(home, 'codex-a');
+    rmSync(join(stubBin(home), 'readlink'), { force: true });
+    stub(home, 'readlink', `case "$1" in /proc/*/fd/*) exit 1 ;; esac\nexec ${shq(realPath('readlink'))} "$@"`);
+    const r = runDoctor(home);
+    const re = new RegExp(`^WARN codex: codex-a's bridge tier could not be measured \\(readlink read none of /proc/${b.pid}/fd's entries\\) — unmeasured, never read as running or as stopped$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(r.stdout).not.toMatch(/retired refresher/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('the LiteLLM-down WARN is a litellm lane\'s only: a live session on an idle direct lane raises none', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-direct-live-', ['codex-a', 'codex-b']);
+    plantDirectLane(home, 'codex-b');
+    liveSession(home, 'proj-a', 'codex-a');
+    liveSession(home, 'proj-b', 'codex-b');
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^WARN codex: codex-a's LiteLLM tier is not running while 1 live session\(s\) run on this lane/m);
+    expect(r.stdout).not.toMatch(/codex-b's LiteLLM tier is not running/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('the litellm.yaml row is skipped on a direct lane: a missing LiteLLM config FAILs the litellm lane only', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-direct-yaml-', ['codex-a', 'codex-b']);
+    plantDirectLane(home, 'codex-b');
+    for (const id of ['codex-a', 'codex-b']) rmSync(join(laneDir(home, id), 'litellm.yaml'), { force: true });
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^FAIL codex: codex-a has no rendered LiteLLM config \(/m);
+    expect(r.stdout).not.toMatch(/codex-b has no rendered LiteLLM config|codex-b's LiteLLM config/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('a bridge stats file or reasoning store that is not 0600, or not a regular file, FAILs, in either mode; an owner-only one does not', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-direct-files-', ['codex-a', 'codex-b']);
+    plantDirectLane(home, 'codex-b');
+    const aStats = bridgeFile(home, 'codex-a', 'stats');
+    const aStore = bridgeFile(home, 'codex-a', 'store');
+    const bStats = bridgeFile(home, 'codex-b', 'stats');
+    const bStore = bridgeFile(home, 'codex-b', 'store');
+    writeFileSync(aStats, '{}\n', { mode: 0o644 });
+    chmodSync(aStats, 0o644);
+    writeFileSync(aStore, 'fixture\n', { mode: 0o640 });
+    chmodSync(aStore, 0o640);
+    writeFileSync(bStats, '{}\n', { mode: 0o600 });
+    writeFileSync(join(home, 'elsewhere.sqlite'), 'fixture\n', { mode: 0o600 });
+    symlinkSync(join(home, 'elsewhere.sqlite'), bStore);
+    const r = runDoctor(home);
+    const statsRe = new RegExp(`^FAIL codex: codex-a's bridge stats file ${reEsc(aStats)} has mode 644, and the bridge keeps it owner-only \\(0600\\): it names the lane's upstream request ids and its usage$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(statsRe);
+    expect(remedyAfter(r.stdout, statsRe)).toBe(`  remedy: chmod 600 ${aStats}`);
+    expect(r.stdout).toMatch(new RegExp(`^FAIL codex: codex-a's bridge reasoning store ${reEsc(aStore)} has mode 640, and the bridge keeps it owner-only \\(0600\\): it holds the lane's encrypted reasoning$`, 'm'));
+    const linkRe = new RegExp(`^FAIL codex: codex-b's bridge reasoning store ${reEsc(bStore)} is not a regular file \\(a symlink, a directory or another kind of file\\), and the bridge keeps it owner-only \\(0600\\) only as a regular file it creates itself$`, 'm');
+    expect(r.stdout).toMatch(linkRe);
+    expect(remedyAfter(r.stdout, linkRe)).toBe(`  remedy: stop the lane (ccrc codex stop codex-b), move ${bStore} aside by hand, then start it again: the bridge creates a new one, mode 0600 — ccrc never removes it for you`);
+    expect(r.stdout).not.toMatch(/codex-b's bridge stats file/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('a direct lane on the siwc upstream FAILs upstream-unsupported; a litellm lane naming siwc does not', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-direct-siwc-', ['codex-a', 'codex-b']);
+    editRosterRow(home, 'codex-a', (row) => { row['exec'].upstream = 'siwc'; });
+    renderLane(home, 'codex-a');
+    plantDirectLane(home, 'codex-b', { upstream: 'siwc' });
+    const r = runDoctor(home);
+    const re = /^FAIL codex: codex-b is a direct lane whose upstream is "siwc", and the siwc route arrives in Stage 3: 'ccrc codex start codex-b' refuses it \(upstream-unsupported\), so the lane cannot serve$/m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: set the lane\'s upstream to "backend" (or remove it) in $HOME/.ccrc/accounts.json by hand, then: ccrc codex start codex-b — ccrc never edits a roster row for you');
+    expect(r.stdout).not.toMatch(/codex-a is a direct lane whose upstream/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // `--fix` runs only behind a FAIL and restarts tiers only through the install step (`_inst_codex_tiers`), the one
+  // that restarts a running, proven, stale tier and never starts a stopped one. Composed here with that REAL step on
+  // two direct lanes: a placed shim whose bytes drifted (a FAIL, and code a bridge runs) is restored, and then
+  // codex-a's running stale bridge is stopped and started, and codex-b's stopped bridge is left stopped.
+  it('--fix restoring a drifted shim restarts a direct lane\'s stale running bridge through _inst_codex_tiers, and never starts a stopped one', () => {
+    const home = mkTmp('ccrc-doctor-fix-codex-direct-');
+    const tree = join(home, 'ccrc', 'ccd');
+    const bin = join(home, '.local', 'bin');
+    mkdirSync(tree, { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    const RT = '#!/bin/sh\ncase "$1" in check) exit 0 ;; python) echo "$HOME/.ccrc/runtime/codex/gen-x/bin/python"; exit 0 ;; esac\nexit 64\n';
+    for (const n of GPT_LANE_BINS) {
+      const text = n === 'ccgpt-runtime' ? RT : `#!/bin/sh\n# fixture shipped ${n}\n`;
+      writeFileSync(join(tree, n), text, { mode: 0o755 });
+      writeFileSync(join(bin, n), n === 'ccgpt-proxy.py' ? '#!/bin/sh\n# drifted\n' : text, { mode: 0o755 });
+    }
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const harness = [
+      'set -uo pipefail',
+      ccrcLine(/^PROG=.*$/m, 'PROG='),
+      ccrcLine(/^_ccrc_die\(\) \{.*\}$/m, '_ccrc_die'),
+      ccrcFunction('_inst_atomic'),
+      ccrcFunction('_box_env_value'),
+      'BOX_TREE_DIR="$HOME/ccrc"',
+      'BOX_ENV_FILE="$HOME/.ccrc/ccrc.env"',
+      'CCRC_CODEX_READY_S=1',
+      'CX_LITELLM=45010', 'CX_PROXY=45011',
+      checksFunction('_dr_join'),
+      checksDecl('CODEX_LANE_BINS'),
+      ccrcLine(/^CODEX_TIERS=.*$/m, 'CODEX_TIERS='),
+      ccrcLine(/^_codex_shim_file\(\) .*$/m, '_codex_shim_file'),
+      ccrcLine(/^_codex_auth_lib\(\) .*$/m, '_codex_auth_lib'),
+      ccrcLine(/^_codex_runtime_cli\(\) \{.*\}$/m, '_codex_runtime_cli'),
+      ccrcFunction('_codex_mode_tiers'),
+      ccrcFunction('_codex_tier_is_other_mode'),
+      ccrcFunction('_codex_ready_secs'),
+      '_codex_lanes() { printf \'codex-a\\ncodex-b\\n\'; }',
+      '_codex_row() { CX_ID="$1"; return 0; }',
+      '_codex_lane_json_state() { echo current; }',
+      '_codex_lane_mode() { printf \'direct\\n\'; }',
+      '_codex_bus_defaults() { :; }',
+      '_models_roster_path() { printf \'%s\' "$HOME/.ccrc/accounts.json"; }',
+      '_models_node() { echo \'{"ok":true,"op":"materialise","check":true,"changed":{"lane":false,"classes":false,"effort":false}}\'; }',
+      '_models_node_locked() { shift; _models_node "$@"; }',
+      '_models_litellm_lane_held() { echo \'{"ok":true,"op":"litellm","changed":false}\'; }',
+      lockStub(),
+      // codex-a's bridge: running, stale, gone after its stop, back after its start; codex-b's: not running.
+      '_codex_tier_ours() {',
+      '  local k="$1-$2" n; n=$(( $(cat "$HOME/n-$k" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$HOME/n-$k"',
+      '  printf \'_codex_tier_ours %s %s\\n\' "$1" "$2" >> "$HOME/calls"',
+      '  CX_TIER_WHY=\'\'; CX_TIER_VIA=\'\'; CX_TIER_PID=\'\'',
+      '  case "$1 $2 $n" in "codex-a bridge 1"|"codex-a bridge 3") return 0 ;; esac',
+      '  return 1',
+      '}',
+      '_codex_tier_stale() { printf \'_codex_tier_stale %s %s\\n\' "$1" "$2" >> "$HOME/calls"; [ "$1 $2" = "codex-a bridge" ] && return 0; return 1; }',
+      '_codex_stop_tier() { printf \'_codex_stop_tier %s %s\\n\' "$1" "$2" >> "$HOME/calls"; echo stopped; }',
+      '_codex_start_tier() { printf \'_codex_start_tier %s %s\\n\' "$1" "$2" >> "$HOME/calls"; return 0; }',
+      ccrcFunction('_inst_codex_tiers'),
+      checksFunction('_fix_codex'),
+      '_fix_codex; exit $?',
+    ].join('\n');
+    const wall = isolationManagerStubs(home);
+    const env = { PATH: `${wall}:${process.env['PATH'] ?? ''}`, HOME: home, LC_ALL: 'C' };
+    assertIsolationWallFirst(env, home);
+    const p = spawnSync(BASH, ['-c', harness], { env, encoding: 'utf8' });
+    expect(strayManagerCalls(home)).toEqual([]);
+    expect(p.status, `${p.stdout}${p.stderr}`).toBe(0);
+    const calls = readFileSync(join(home, 'calls'), 'utf8').split('\n').filter(Boolean);
+    expect(calls.filter((l) => /^_codex_(stop|start)_tier /.test(l))).toEqual(['_codex_stop_tier codex-a bridge', '_codex_start_tier codex-a bridge']);
+    expect(calls.filter((l) => l.startsWith('_codex_tier_ours ') && !l.endsWith(' bridge'))).toEqual([]);
+    expect(p.stdout).toContain('FIX codex: restored $HOME/.local/bin/ccgpt-proxy.py from the shipped tree');
+    expect(p.stdout).toContain('install: codex tiers: codex-a bridge: restarted — it was running code this install replaced');
+    expect(p.stdout).toContain('install: codex tiers: 2 codex lane(s) — 1 restarted, 0 left as they were, 0 not restarted');
   });
 });
 
