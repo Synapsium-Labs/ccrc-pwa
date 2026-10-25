@@ -6455,12 +6455,6 @@ export interface ChildReclaimStatus {
   readonly at: number | null;
 }
 
-/** The answer of a successful `POST /api/runs/:id/advance`. `checksMail` is the capability token of PR landing in ccrc
- *  (stage 1, spec §3.7): present only on an advance to `merging` whose episode was decided `live`, so a coordinator that
- *  reads it knows the server will mail the checks and may end its turn. Its one reader is the coordinator, through the
- *  answer `ccrc-api runs advance` prints. */
-export interface AdvanceOk { ok: true; run: RunSummary; checksMail?: typeof CHECKS_MAIL_TOKEN }
-
 export interface RunSummary {
   id: number;
   program: string;              // slug
@@ -12168,3 +12162,9 @@ export interface DriftLine {
 export const DEAD_CAUSES = ['absent', 'stopped', 'orphan', 'never-started'] as const satisfies
   readonly ('absent' | SessionLifecycle)[];
 export type DeadCause = typeof DEAD_CAUSES[number];
+
+/** The answer of a successful `POST /api/runs/:id/advance`. `checksMail` is the capability token of PR landing in ccrc
+ *  (stage 1, spec §3.7): present only on an advance to `merging` whose episode was decided `live`, so a coordinator that
+ *  reads it knows the server will mail the checks and may end its turn. Its one reader is the coordinator, through the
+ *  answer `ccrc-api runs advance` prints. */
+export interface AdvanceOk { ok: true; run: RunSummary; checksMail?: typeof CHECKS_MAIL_TOKEN }
