@@ -6204,6 +6204,23 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   18:27, and the next hour's window is read at the 19:25 probe.
   `STATUS 2026-10-25T18:25:41Z fleet=v0.0.695 server=v0.0.695 health=v0.0.695 newest=v0.0.695 intent=*:dev/auto=off`
   `pin=None link=<versions>/v0.0.695 backups=fleet:188M/server:9204M disk=fleet:101G/work:341G/server:21G`
+- **2026-10-25 19:25 UTC — an eighth console move, to v0.0.699, under box-wide memory pressure on the fleet box; v0.0.700
+  released; every anomaly transient.**
+  - **The move.** The fleet box moved at about 19:16 to 19:18. The server started at 19:18:32, restarted at 19:21:40,
+    read `restarting` ("pruning and thinning") from 19:21:55, and settled `done` at 19:27:02. Its inventory row read
+    `pending` with a standing request at 19:25 and 19:27, and was clear by 19:29.
+  - **The keep** held 5 timestamped backups, 3 with data, and free disk returned to 21G.
+  - **A passing fault.** The probe at 19:29:52 read the fleet node's install state as `unknown`, while its `installed`
+    and `build.json` were regular files written by the move (19:16:53). The load average was 120, and four PR sweeps
+    timed out over the agent link between 19:22 and 19:29. So the inventory's agent reads ran past their budget, and
+    the 19:34:46 probe read it clean.
+  - **Context.** Box-wide memory pressure at about 19:19:43 made the history backfill the OOM victim, by design.
+  - **The soak.** v0.0.696 to v0.0.700 touch nothing the broker's soak watches, and the session hook is unchanged.
+  - **Verdict.** Nothing misbehaved.
+  - **The orphan-tree lane** wrote no record from 18:00 to 19:25 and removed nothing. Its learning restarts with the
+    19:21:40 boot.
+  `STATUS 2026-10-25T19:34:46Z fleet=v0.0.699 server=v0.0.699 health=v0.0.699 newest=v0.0.700 intent=*:dev/auto=off`
+  `pin=None link=<versions>/v0.0.699 backups=fleet:165M/server:9270M disk=fleet:101G/work:367G/server:21G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
