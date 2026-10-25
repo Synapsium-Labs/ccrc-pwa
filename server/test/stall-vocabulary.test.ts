@@ -59,10 +59,10 @@ describe('REVIEW_DONE_SUBJECT', () => {
 });
 
 describe('the arms, holds and markers are derived from their Records', () => {
-  it('waves 1 and 2 have twelve arms, wave 1 first', () => {
+  it('waves 1 and 2 have thirteen arms, wave 1 first', () => {
     expect(STALL_ARMS).toEqual([
       'quiet', 'limit-cap', 'dialog-cap', 'coord-ball',
-      'orphan-d', 'orphan-e', 'failed', 'frozen', 'dead', 'coord-deaf', 'mail-stuck', 'marker-unreadable',
+      'orphan-d', 'restarted', 'orphan-e', 'failed', 'frozen', 'dead', 'coord-deaf', 'mail-stuck', 'marker-unreadable',
     ]);
   });
   it('waves 1 and 2 have fifteen holds, wave 1 first', () => {
@@ -347,11 +347,11 @@ describe('the turn marker port: its state words, staleness and restart grace (wo
 // ── Wave 2's vocabulary (plan Task 10; design 2026-09-29 §5.1, §5.2, §10) ─────────────────────────────────────
 const W2_H = 3_600_000;
 const W2_MIN = 60_000;
-const WAVE2_ARMS: readonly StallArm[] = ['orphan-d', 'orphan-e', 'failed', 'frozen', 'dead', 'coord-deaf', 'mail-stuck', 'marker-unreadable'];
+const WAVE2_ARMS: readonly StallArm[] = ['orphan-d', 'restarted', 'orphan-e', 'failed', 'frozen', 'dead', 'coord-deaf', 'mail-stuck', 'marker-unreadable'];
 
 describe('wave 2: stallNotifyDelivery (planning departure w2-arms-ship-dark (D-3605))', () => {
   const FULL: StallArming = { disabled: false, live: true, escalate: true };
-  it('STALL_ARM_WAVE is total: fully armed without w2Live, exactly the eight wave-2 arms stay shadow', () => {
+  it('STALL_ARM_WAVE is total: fully armed without w2Live, exactly the nine wave-2 arms stay shadow', () => {
     expect(STALL_ARMS.filter((arm) => stallNotifyDelivery(arm, 'operator', FULL) === 'shadow')).toEqual(WAVE2_ARMS);
     expect(STALL_ARMS.filter((arm) => stallNotifyDelivery(arm, 'operator', { ...FULL, w2Live: true }) === 'shadow')).toEqual([]);
   });
@@ -380,7 +380,7 @@ describe('wave 2: rungRecipient is one total per-arm table (planning departure r
   const TABLE: Record<StallArm, readonly StallRecipient[]> = {
     quiet: ['worker', 'coordinator', 'operator'],
     'limit-cap': ['operator'], 'dialog-cap': ['operator'], 'coord-ball': ['operator'],
-    'orphan-d': ['worker', 'operator'], 'orphan-e': ['worker'], failed: ['worker', 'coordinator'],
+    'orphan-d': ['worker', 'operator'], restarted: ['worker', 'coordinator'], 'orphan-e': ['worker'], failed: ['worker', 'coordinator'],
     frozen: ['coordinator'], dead: ['coordinator'],
     'coord-deaf': ['operator'], 'mail-stuck': ['operator'], 'marker-unreadable': ['operator'],
   };

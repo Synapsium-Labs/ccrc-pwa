@@ -35,6 +35,9 @@ export const STALL_WAIT_PREFIX = 'wait:';
 export const STALL_ORPHANED_PREFIX = 'orphaned:';
 /** §5.2's failed notice, from the operator role to the session itself. Class `self-wake`. */
 export const STALL_FAILED_PREFIX = 'failed:';
+/** D5's restart notices (#759): to a run worker whose pane was respawned over background tasks that did not survive,
+ *  and the heads-up to its coordinator. Class `self-wake` too: recorded on the phone, never pushed. */
+export const STALL_RESTARTED_PREFIX = 'restarted:';
 /** The reply that says the worker is still working: r1's body names it, and I2's back-off (Task 17) counts it. */
 const STALL_REPLY_WORKING_PREFIX = `${STALL_REPLY_PREFIX} working`;
 /** The observation-detail heads: `stall:<arm>:<rung>:<key>` when sent, `stall-shadow:<arm>:<rung>:<key>` in shadow.
@@ -55,6 +58,7 @@ const STALL_ARM_MAP = {
   'dialog-cap': 'a dialog with no question behind it, past the quiet threshold: one operator push per dialog, keyed on its live stamp',
   'coord-ball': 'the coordinator has held the ball past its cap with no mail on the run: one operator push per episode',
   'orphan-d': 'a restart killed background tasks the session ran at its last turn end, and it sat idle past ORPHAN_D_IDLE_MS (any session): a mail to it, then an operator push',
+  restarted: 'a restart cut a run worker\'s background tasks short (D5, #759): a mail to the worker at once, then one heads-up to its coordinator, at most one per worker per RESTARTED_HEADS_UP_MS',
   'orphan-e': 'the session ended its turn over a wake-bearing background task and sat idle past ORPHAN_E_IDLE_MS with no turn: a mail to it',
   failed: 'the turn ended on a StopFailure and the session sat idle past FAILED_IDLE_MS: by its STOP_FAILURE_ERRORS class, a mail to it or to the coordinator',
   frozen: 'the marker reads working under a busy word and no hook event arrived for FROZEN_NO_EVENT_MS: the coordinator, or the operator',
@@ -73,7 +77,7 @@ function isStallArm(v: string): v is StallArm {
  *  error until it is placed. */
 const STALL_ARM_WAVE: Record<StallArm, 1 | 2> = {
   quiet: 1, 'limit-cap': 1, 'dialog-cap': 1, 'coord-ball': 1,
-  'orphan-d': 2, 'orphan-e': 2, failed: 2, frozen: 2, dead: 2, 'coord-deaf': 2, 'mail-stuck': 2, 'marker-unreadable': 2,
+  'orphan-d': 2, restarted: 2, 'orphan-e': 2, failed: 2, frozen: 2, dead: 2, 'coord-deaf': 2, 'mail-stuck': 2, 'marker-unreadable': 2,
 };
 
 /** Why a verdict holds (§4.2 holds 1 to 4, in §10's order). A hold defers a rung and never cancels it. */
@@ -237,7 +241,7 @@ const STALL_MAIL_CLASS_MAP = {
   check: 'r1: a stall-check subject from the operator role (recorded on the phone, never pushed)',
   reply: 'a bound reply to a stall check, from the run worker (recorded, never pushed)',
   report: 'a stall-report subject from the operator role: r2, and the frozen, dead and failed reports (pushed)',
-  'self-wake': 'an orphaned or failed notice from the operator role to the session itself (recorded, never pushed)',
+  'self-wake': 'an orphaned, failed or restarted notice from the operator role (to the session itself, or the restarted heads-up to its coordinator): recorded, never pushed',
 } as const;
 export type StallMailClass = keyof typeof STALL_MAIL_CLASS_MAP;
 export interface StallBind { readonly runSessionId: string | null; readonly runId: number | null; readonly firstCheckId: number | null }
@@ -261,7 +265,7 @@ export function stallMailClass(
   if (m.fromId === STALL_SENDER && m.subject.startsWith(STALL_CHECK_PREFIX)) return 'check';
   if (m.fromId === STALL_SENDER && m.subject.startsWith(STALL_REPORT_PREFIX)) return 'report';
   // No class prefix starts another (`stall-vocabulary.test.ts` pins it), so the order of these tests decides nothing.
-  if (m.fromId === STALL_SENDER && (m.subject.startsWith(STALL_ORPHANED_PREFIX) || m.subject.startsWith(STALL_FAILED_PREFIX))) return 'self-wake';
+  if (m.fromId === STALL_SENDER && (m.subject.startsWith(STALL_ORPHANED_PREFIX) || m.subject.startsWith(STALL_FAILED_PREFIX) || m.subject.startsWith(STALL_RESTARTED_PREFIX))) return 'self-wake';
   if (bind !== undefined && m.subject.startsWith(STALL_REPLY_PREFIX) && stallReplyBound(m, bind)) return 'reply';
   return null;
 }
@@ -340,6 +344,9 @@ export const MAIL_STUCK_MS = 72 * 60_000;
 export const ORPHAN_D_IDLE_MS = 15 * 60_000;
 /** orphan (E). *Chosen*. */
 export const ORPHAN_E_IDLE_MS = 10 * 60_000;
+/** restarted rung 2 (D5, #759): a worker's coordinator hears of at most one restart per this window. *Chosen*: the
+ *  ticket's number; a herd restart or a pane OOM loop is one cluster, not one mail each. */
+export const RESTARTED_HEADS_UP_MS = 10 * 60_000;
 /** failed. *Chosen*. */
 export const FAILED_IDLE_MS = 10 * 60_000;
 /** failed: a second retry-class StopFailure inside this window goes to the coordinator. *Chosen*. */
@@ -428,6 +435,15 @@ export function stallOrphanDSubject(m: Pick<TurnMark, 'lostBg' | 'lostKinds' | '
 export function stallOrphanESubject(m: Pick<TurnMark, 'bgKinds' | 'stopAt'>): string {
   const kind = m.bgKinds.find((k) => STALL_WAKE_KINDS.includes(k)) ?? 'task';
   return `${STALL_ORPHANED_PREFIX} your background ${stallSafe(kind)} ended at ${stallUtc(m.stopAt ?? Number.NaN)} without waking you`;
+}
+/** restarted rung 1 (D5, #759): the restart's minute. One subject per restart, so a later restart's notice never
+ *  reads as this one. */
+export function stallRestartedSubject(restartAt: number): string {
+  return `${STALL_RESTARTED_PREFIX} you were restarted at ${stallUtc(restartAt)}; background work from before did not survive`;
+}
+/** restarted rung 2: the run, the worker and the restart's minute. */
+function stallRestartedHeadsUpSubject(run: StallRunRow, restartAt: number): string {
+  return `${STALL_RESTARTED_PREFIX} run ${stallInt(run.id)} — worker ${stallSafe(run.sessionId)} restarted at ${stallUtc(restartAt)}`;
 }
 /** failed: the error token and the turn end's minute. */
 export function stallFailedSubject(err: string, stopAt: number): string {
@@ -585,6 +601,8 @@ export type StallNotify =
   | { readonly act: 'notify'; readonly arm: 'coord-deaf' | 'mail-stuck' | 'marker-unreadable'; readonly rung: 1; readonly key: number; readonly to: 'operator' }
   | { readonly act: 'notify'; readonly arm: 'orphan-d' | 'orphan-e'; readonly rung: 1; readonly key: number; readonly to: 'worker' }
   | { readonly act: 'notify'; readonly arm: 'orphan-d'; readonly rung: 2; readonly key: number; readonly to: 'operator' }
+  | { readonly act: 'notify'; readonly arm: 'restarted'; readonly rung: 1; readonly key: number; readonly to: 'worker' }
+  | { readonly act: 'notify'; readonly arm: 'restarted'; readonly rung: 2; readonly key: number; readonly to: 'coordinator'; readonly coordinatorId: string }
   | { readonly act: 'notify'; readonly arm: 'failed'; readonly rung: 1; readonly key: number; readonly to: 'worker'; readonly err: string }
   | { readonly act: 'notify'; readonly arm: 'failed'; readonly rung: 2; readonly key: number; readonly to: 'coordinator'; readonly coordinatorId: string; readonly err: string; readonly because: 'repeat' | 'request' }
   | { readonly act: 'notify'; readonly arm: 'failed'; readonly rung: 2; readonly key: number; readonly to: 'operator'; readonly err: string; readonly because: 'repeat' | 'request' };
@@ -787,6 +805,7 @@ const STALL_RUNG_RECIPIENTS: Record<StallArm, readonly StallRecipient[]> = {
   'limit-cap': ['operator'], 'dialog-cap': ['operator'], 'coord-ball': ['operator'],
   'coord-deaf': ['operator'], 'mail-stuck': ['operator'], 'marker-unreadable': ['operator'],
   'orphan-d': ['worker', 'operator'],
+  restarted: ['worker', 'coordinator'],
   'orphan-e': ['worker'],
   failed: ['worker', 'coordinator'],
   frozen: ['coordinator'], dead: ['coordinator'],
@@ -1711,6 +1730,34 @@ function stallOrphanDInner(input: StallSessionInput, now: number): StallVerdict 
   return now - (d.deliveredAt ?? sentMail.at) >= ORPHAN_PUSH_MS ? { act: 'notify', arm: 'orphan-d', rung: 2, key, to: 'operator' } : VERDICT_NONE;
 }
 
+/** Restarted (D5, #759), for a run worker only: the pane was respawned over background tasks that did not survive
+ *  (orphan D's candidate, read the moment the restart is on the marker rather than after ORPHAN_D_IDLE_MS of idle).
+ *  Rung 1 mails the worker. Rung 2 mails its claimant a heads-up, unless that claimant is absent or coordination is
+ *  paused (no operator rung: a heads-up is never a push), and unless an earlier restart's heads-up (live or shadow)
+ *  was keyed less than RESTARTED_HEADS_UP_MS before this one: the window runs on restart times, so it holds however
+ *  late this is judged. Key: `restartAt`. It causes no restart and reads nothing of accounts or swaps. Orphan D is left
+ *  as it was: a worker that acts on rung 1 takes a turn, which ends orphan D's candidate (the marker reads working),
+ *  and one that does not is still caught by orphan D's idle wait and its operator push. */
+function stallRestartedInner(input: StallSessionInput, now: number): StallVerdict {
+  if (!stallRunBound(input)) return VERDICT_NONE;
+  const held = stallSessionHold(input, now);
+  if (held !== null) return held;
+  const m = stallCurrentMark(input);
+  if (m === null || !stallOrphanDCandidate(m) || m.restartAt === null || now - m.restartAt > BACKLOG_HORIZON_MS) return VERDICT_NONE;
+  if (stallSessionLive(input) === null) return VERDICT_NONE;
+  const key = m.restartAt;
+  if (rungDoneAt(input, 'restarted', 1, key) === null) return { act: 'notify', arm: 'restarted', rung: 1, key, to: 'worker' };
+  if (stallRecordedDone(input, 'restarted', 2, key)) return VERDICT_NONE;
+  if (input.notices.some((n) => n.arm === 'restarted' && n.rung === 2 && n.key < key && key - n.key < RESTARTED_HEADS_UP_MS)) return VERDICT_NONE;
+  const r = input.run;
+  if (r === null || r.claimedBy === null || input.coordinationPaused) return VERDICT_NONE;
+  return { act: 'notify', arm: 'restarted', rung: 2, key, to: 'coordinator', coordinatorId: r.claimedBy };
+}
+
+export function stallRestartedVerdict(input: StallSessionInput, now: number): StallVerdict {
+  return stallMailDisabledHold(stallRestartedInner(input, now), input.arming);
+}
+
 export function stallOrphanDVerdict(input: StallSessionInput, now: number): StallVerdict {
   return stallMailDisabledHold(stallOrphanDInner(input, now), input.arming);
 }
@@ -1884,6 +1931,7 @@ const STALL_NO_COORDINATOR_LINE = 'The run has no coordinator, so no report went
 /** The self-mail heads' words, taken from their prefixes, so no second quoted copy exists. */
 const STALL_ORPHANED_WORD = STALL_ORPHANED_PREFIX.slice(0, -1);
 const STALL_FAILED_WORD = STALL_FAILED_PREFIX.slice(0, -1);
+const STALL_RESTARTED_WORD = STALL_RESTARTED_PREFIX.slice(0, -1);
 
 type OkTurnMark = Extract<TurnMarkRead, { readonly ok: true }>;
 
@@ -1926,6 +1974,39 @@ function stallOrphanDMail(input: StallSessionInput): StallNoticeText {
       `Your session restarted at ${stallUtcSec(m.restartAt ?? Number.NaN)}. At your last turn end before it (${stop}), ${stallInt(m.lostBg)} background task(s) were running (${stallKinds(m.lostKinds)}). They ran inside the process that restart replaced, and none of them survived it.`,
       stallTaskIds(m.lostIds),
       'Report what was lost to whoever you owe a report. Resume a workflow only when that is cheap: never relaunch an expensive or long-running workflow by default.',
+    ].join('\n'),
+  };
+}
+
+/** restarted rung 1, to the worker: when it restarted, what did not survive, and what to do about it. */
+function stallRestartedMail(input: StallSessionInput): StallNoticeText {
+  const m = stallReadMark(input, 'a restart notice');
+  const restartAt = m.restartAt ?? Number.NaN;
+  const stop = m.stopAt === null ? 'none recorded' : stallUtcSec(m.stopAt);
+  return {
+    subject: stallRestartedSubject(restartAt),
+    body: [
+      stallSelfHead(STALL_RESTARTED_WORD, input),
+      `You were restarted at ${stallUtcSec(restartAt)}. At your last turn end before it (${stop}), ${stallInt(m.lostBg)} background task(s) were running (${stallKinds(m.lostKinds)}). They ran inside the process that restart replaced, and none of them survived it.`,
+      stallTaskIds(m.lostIds),
+      'Re-check what you were waiting on and relaunch it where that is cheap: never relaunch an expensive or long-running workflow by default. Then carry on, and report what was lost to whoever you owe a report. This notice restarts nothing.',
+    ].join('\n'),
+  };
+}
+
+/** restarted rung 2, to the coordinator: a heads-up, not a report. It asks for no ack and changes nothing on the run. */
+function stallRestartedHeadsUpMail(input: StallSessionInput): StallNoticeText {
+  const m = stallReadMark(input, 'a restart heads-up');
+  const run = input.run;
+  if (run === null) throw new RangeError('stallSessionMail: a restart heads-up names its run, and this session is on none');
+  const restartAt = m.restartAt ?? Number.NaN;
+  return {
+    subject: stallRestartedHeadsUpSubject(run, restartAt),
+    body: [
+      `${STALL_RESTARTED_WORD} from the ccrc stall watch (server), ${stallRunLabel(run)}, state ${stallSafe(run.state)}.`,
+      `${stallWorkerRef(run)} was restarted at ${stallUtcSec(restartAt)}. ${stallInt(m.lostBg)} background task(s) (${stallKinds(m.lostKinds)}) it ran before the restart did not survive.`,
+      'The worker is sent its own notice to re-check and relaunch what it was waiting on. This notice restarts nothing and changes nothing on the run; it asks for no answer.',
+      `You are sent at most one of these per worker per ${stallSpan(RESTARTED_HEADS_UP_MS)}.`,
     ].join('\n'),
   };
 }
@@ -2005,8 +2086,10 @@ export function stallSessionMail(input: StallSessionInput, n: StallNotify, now: 
   if (n.to === 'worker') {
     if (n.arm === 'orphan-d') return stallOrphanDMail(input);
     if (n.arm === 'orphan-e') return stallOrphanEMail(input, now);
+    if (n.arm === 'restarted') return stallRestartedMail(input);
     if (n.arm === 'failed') return stallFailedMail(input, n.err, n.key);
   }
+  if (n.arm === 'restarted' && n.to === 'coordinator') return stallRestartedHeadsUpMail(input);
   if (n.arm === 'failed' && n.to === 'coordinator') return stallFailedReportMail(input, n.err, n.because, n.key);
   throw new RangeError(`stallSessionMail: ${n.arm} rung ${n.rung} to the ${n.to} is not a session notice`);
 }

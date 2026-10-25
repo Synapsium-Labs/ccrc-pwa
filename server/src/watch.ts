@@ -111,7 +111,7 @@ import { redactCommand } from './coord/redact.js';
 import {
   BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
-  stallFailedVerdict, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
+  stallFailedVerdict, stallRestartedVerdict, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
   stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
   stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
   stallReactivation, stallVerdict, stallW2ReportMail, turnMarkStale,
@@ -6512,7 +6512,7 @@ export class FleetWatcher {
       sessionId: id, role: 'worker', run: primary, worker, mark, liveStartedAt: lr?.startedAt ?? null,
       markUnreadableSince, mail: read.mail, deliveries: read.deliveries, notices, arming, coordinationPaused: paused,
     };
-    for (const sv of [stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallOrphanDVerdict(si, now)]) {
+    for (const sv of [stallRestartedVerdict(si, now), stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, primary.project, sv, now);
     }
   }
