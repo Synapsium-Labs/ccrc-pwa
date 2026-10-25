@@ -602,8 +602,9 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // non-unlocking for good: nothing replays it once the reply lands, so the replacement screen is never pre-authorized.
   // A nonce standing at mount is absorbed (not unlocking), as `AskSurface`'s `seen` absorbs it.
   const [raiseMark, setRaiseMark] = useState<{ nonce: number; unlock: boolean }>({ nonce: raise ?? 0, unlock: false });
+  // Review A1: `!sending.current` too, since `locked` can read false in the render that carries a send's completion while it is still marked sending.
   if (raiseMark.nonce !== (raise ?? 0)) {
-    setRaiseMark({ nonce: raise ?? 0, unlock: (raise ?? 0) !== 0 && desk && !locked && live && !closed });
+    setRaiseMark({ nonce: raise ?? 0, unlock: (raise ?? 0) !== 0 && desk && !locked && !sending.current && live && !closed });
   }
   useEffect(() => {
     // A send claimed between the raise's render and this effect has released, and the later release wins (R102).
