@@ -536,3 +536,181 @@ describe('Go to question with an answer in flight (R69 F7, D-6326)', () => {
     }
   }, 90_000);
 });
+
+// R77 F2: when the raise falls back to the card section itself (an answer in flight, R69 F7; or no enabled `.opt` row:
+// the terminal door of fixtures 3 and 5, and fixture 7's Allow and Deny, which are buttons but not `.opt`), a keyboard user
+// pressing Enter on "Go to question" must SEE where focus went. `.ask-inline { outline: none }` beat base.css's
+// `:focus-visible` ring, so nothing was drawn. The cells below open each fallback at the desk, activate Go to question from
+// the keyboard, and measure in Chrome that the section is the focused element, matches `:focus-visible`, draws an outline
+// of a real style and width, and that the ring's outer box (the section's rect grown by outline width plus offset) lies
+// inside the window and inside every ancestor that clips. Two controls pin the distinction: a mouse click on the same
+// button focuses the section with no `:focus-visible` and no outline (a `:focus` rule would draw one), and with an
+// enabled first option the keyboard raise still lands on that option and draws its own ring.
+describe('Go to question draws a keyboard focus indicator on the card section (R77 F2, D-6326)', () => {
+  /** Cells kept bounded: each skin at each width once, each palette once per skin. */
+  const RING_VIEWS: AppView[] = [
+    { skin: REFINED, theme: PHOSPHOR, width: 1280 },
+    { skin: REFINED, theme: 'light', width: 1920 },
+    { skin: INSTRUMENT, theme: PHOSPHOR, width: 1920 },
+    { skin: INSTRUMENT, theme: 'light', width: 1280 },
+  ];
+  interface Ring {
+    isSection: boolean; active: string; focusVisible: boolean; outlineStyle: string; outlineWidth: number; outlineOffset: number;
+    /** The ring's outer box, in px. */
+    box: { left: number; top: number; right: number; bottom: number };
+    viewport: { width: number; height: number };
+    /** Every ancestor that clips on some axis, nearest first, with the axes it clips and its padding box. */
+    clips: { cls: string; x: boolean; y: boolean; left: number; top: number; right: number; bottom: number }[];
+    enabled: number;
+  }
+  const MEASURE_RING = (card: string): Ring => {
+    const el = document.querySelector<HTMLElement>(card)!;
+    const a = document.activeElement as HTMLElement;
+    const cs = getComputedStyle(el);
+    const outlineWidth = parseFloat(cs.outlineWidth);
+    const outlineOffset = parseFloat(cs.outlineOffset);
+    const grow = (cs.outlineStyle === 'none' ? 0 : outlineWidth) + outlineOffset;
+    const r = el.getBoundingClientRect();
+    const clips: Ring['clips'] = [];
+    for (let p = el.parentElement; p !== null; p = p.parentElement) {
+      const pcs = getComputedStyle(p);
+      const x = pcs.overflowX !== 'visible';
+      const y = pcs.overflowY !== 'visible';
+      if (!x && !y) continue;
+      const pr = p.getBoundingClientRect();
+      clips.push({
+        cls: `${p.tagName.toLowerCase()}.${p.getAttribute('class') ?? ''}`, x, y,
+        left: pr.left + p.clientLeft, top: pr.top + p.clientTop, right: pr.left + p.clientLeft + p.clientWidth, bottom: pr.top + p.clientTop + p.clientHeight,
+      });
+    }
+    return {
+      isSection: a === el, active: `${a.tagName.toLowerCase()}.${a.getAttribute('class') ?? ''}`.slice(0, 80),
+      focusVisible: a.matches(':focus-visible'), outlineStyle: cs.outlineStyle, outlineWidth, outlineOffset,
+      box: { left: r.left - grow, top: r.top - grow, right: r.right + grow, bottom: r.bottom + grow },
+      viewport: { width: window.innerWidth, height: window.innerHeight }, clips,
+      enabled: [...el.querySelectorAll<HTMLButtonElement>('button.opt')].filter((o) => !o.disabled).length,
+    };
+  };
+
+  /** Frames of a cell: the fixture's own, with the transcript's live call so "Go to question" is offered. */
+  const framesOf = (n: number): object[] => (n === 1 ? FRAMES() : [BACKLOG, { type: 'status', status: 'busy', statusUpdatedAt: null }, ...askFixture(n).frames]);
+
+  /** Open fixture `n` at `view` (with an answer in flight when `inFlight`), focus Go to question and activate it with the
+   *  keyboard (`how` 'key') or a mouse click ('mouse'); measure the section and the counters. */
+  async function raise(n: number, view: AppView, o: { inFlight?: boolean; how: 'key' | 'mouse' }):
+    Promise<{ ring: Ring; answers: number; errors: string[] }> {
+    const opened = await openApp(browser!, view, FIXTURE);
+    try {
+      await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        for (const frame of WITH_CALL(framesOf(n))) ws.send(JSON.stringify(frame));
+      });
+      const answers: string[] = [];
+      if (o.inFlight === true) {
+        // A later page route wins over `openApp`'s context route: this one never fulfils, so the answer stays in flight.
+        await opened.page.route('**/api/sessions/*/dialog', (route) => { answers.push(route.request().postData() ?? ''); });
+      }
+      await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
+      await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
+      await opened.page.waitForTimeout(800);
+      if (o.inFlight === true) {
+        await opened.page.locator(`${CARD} button.opt`).nth(1).click();
+        await opened.page.waitForSelector(`${CARD} .opt-wait`, { timeout: 10_000 });
+      }
+      await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      const button = opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' });
+      expect(await button.count(), `premise: the transcript card offers Go to question (fixture ${n})`).toBe(1);
+      if (o.how === 'key') {
+        await button.focus();
+        await opened.page.keyboard.press('Enter');
+      } else {
+        await button.click();
+      }
+      await opened.page.waitForTimeout(300);
+      const ring = await opened.page.evaluate(MEASURE_RING, CARD);
+      return { ring, answers: answers.length, errors: opened.errors };
+    } finally {
+      await opened.ctx.close();
+    }
+  }
+
+  /** The ring's outer box lies inside `[0, viewport]` and inside every clipping ancestor on the axes it clips. */
+  function boxWithin(ring: Ring): string[] {
+    const { box, viewport, clips } = ring;
+    const out: string[] = [];
+    if (box.left < -0.5 || box.top < -0.5 || box.right > viewport.width + 0.5 || box.bottom > viewport.height + 0.5) {
+      out.push(`the window ${viewport.width}x${viewport.height}`);
+    }
+    for (const c of clips) {
+      if ((c.x && (box.left < c.left - 0.5 || box.right > c.right + 0.5)) || (c.y && (box.top < c.top - 0.5 || box.bottom > c.bottom + 0.5))) {
+        out.push(`the clip ${c.cls}`);
+      }
+    }
+    return out;
+  }
+
+  const CELLS: { n: number; what: string; inFlight?: boolean }[] = [
+    { n: 1, what: 'fixture 1 with an answer in flight', inFlight: true },
+    { n: 3, what: 'fixture 3 (the terminal door, unreadable menu)' },
+    { n: 5, what: 'fixture 5 (the terminal door, unparsed menu)' },
+    { n: 7, what: 'fixture 7 (the approval: Allow and Deny are not .opt rows)' },
+  ];
+
+  for (const cell of CELLS) {
+    for (const view of RING_VIEWS) {
+      it(`${cell.what}, ${named(view)}: Enter on Go to question focuses the section, which draws a focus ring inside the window and its clip`, async () => {
+        const { ring, answers, errors } = await raise(cell.n, view, { inFlight: cell.inFlight, how: 'key' });
+        expect(ring.isSection, `premise: focus is on the card section (it is on ${ring.active})`).toBe(true);
+        expect(ring.focusVisible, 'premise: the section matches :focus-visible (a keyboard raise)').toBe(true);
+        if (cell.inFlight === true) {
+          expect(ring.enabled, 'premise: no option is enabled while the answer is in flight').toBe(0);
+          expect(answers, 'premise: only the one answer request was made').toBe(1);
+        } else {
+          expect(ring.enabled, 'premise: no enabled .opt row exists, so the raise fell back to the section').toBe(0);
+        }
+        expect(ring.outlineStyle, `the section draws a focus indicator: outline-style is ${ring.outlineStyle}`).not.toBe('none');
+        expect(ring.outlineWidth, `the focus indicator has a real width (${ring.outlineWidth}px)`).toBeGreaterThanOrEqual(1);
+        expect(boxWithin(ring), `the ring's outer box ${JSON.stringify(ring.box)} (width ${ring.outlineWidth}px, offset ${ring.outlineOffset}px) lies inside the window and every clipping ancestor`).toEqual([]);
+        expect(errors).toEqual([]);
+      }, 90_000);
+    }
+  }
+
+  for (const n of [3, 7]) {
+    it(`pointer control, fixture ${n}: a mouse click on Go to question focuses the section with no :focus-visible and no outline`, async () => {
+      const { ring, errors } = await raise(n, { skin: REFINED, theme: PHOSPHOR, width: 1280 }, { how: 'mouse' });
+      expect(ring.isSection, `premise: focus is on the card section (it is on ${ring.active})`).toBe(true);
+      expect(ring.focusVisible, 'a pointer focus does not match :focus-visible').toBe(false);
+      expect(ring.outlineStyle, `a pointer focus draws no outline (outline-style is ${ring.outlineStyle})`).toBe('none');
+      expect(errors).toEqual([]);
+    }, 90_000);
+  }
+
+  it('first-option control, fixture 1 with nothing in flight: keyboard Go to question focuses the first enabled option, and its own ring is drawn', async () => {
+    const opened = await openApp(browser!, { skin: REFINED, theme: PHOSPHOR, width: 1280 }, FIXTURE);
+    try {
+      await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        for (const frame of WITH_CALL(FRAMES())) ws.send(JSON.stringify(frame));
+      });
+      await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
+      await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
+      await opened.page.waitForTimeout(800);
+      await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' }).focus();
+      await opened.page.keyboard.press('Enter');
+      await opened.page.waitForTimeout(300);
+      const got = await opened.page.evaluate((card) => {
+        const a = document.activeElement as HTMLElement;
+        const cs = getComputedStyle(a);
+        const first = document.querySelector<HTMLElement>(card)!.querySelector<HTMLElement>('button.opt:not([disabled])');
+        return { isFirst: a === first, focusVisible: a.matches(':focus-visible'), style: cs.outlineStyle, width: parseFloat(cs.outlineWidth) };
+      }, CARD);
+      expect(got.isFirst, 'focus is on the first enabled option').toBe(true);
+      expect(got.focusVisible, 'the option matches :focus-visible').toBe(true);
+      expect(got.style, 'the option\'s own ring is drawn').not.toBe('none');
+      expect(got.width, 'with a real width').toBeGreaterThanOrEqual(1);
+      expect(opened.errors).toEqual([]);
+    } finally {
+      await opened.ctx.close();
+    }
+  }, 90_000);
+});
