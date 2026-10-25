@@ -22,7 +22,6 @@ describe('the asks table', () => {
     expect(hasAsksMigration(['CREATE TABLE runs (id TEXT)', 'ALTER TABLE runs ADD COLUMN x TEXT'])).toBe(false);
   });
 
-
   it('the cross-repo columns added at schema version 10 are still present at the current version', () => {
     const home = mkTmp('ccrc-coord-');
     const db = openCoordDb(dbPathIn(home));

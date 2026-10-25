@@ -41,7 +41,7 @@ import {
   classMethodCount, methodCounts, growthSummary, appendJobSummary, METHOD_COUNT_CLASS, METHOD_COUNT_FILE,
   prNumberFromEnv, parseExemptions, exemptionsOnMain, matchExemptions, GROWTH_EXEMPTIONS_FILE,
   GROWTH_EXEMPTIONS_STAMP, GROWTH_MACHINERY, overLine, growthVerdicts, armedGrowth, gitRead, type GrowthRow, type GrowthExemption,
-  GROWTH_WAIVERS_DIR, parseWaiverFiles, waiversAdded, waiversAt, waiversInDiff, type GrowthWaiver,
+  GROWTH_WAIVERS_DIR, GROWTH_WAIVERS_LEGACY_FILE, parseWaiverFiles, waiversAdded, waiversAt, waiversInDiff, type GrowthWaiver,
 } from './growthCheck.js';
 import { EXEMPTION_SET_STAMPS } from './rings/exemption-age.data.js';
 import { parseFile } from './scan/parse.js';
@@ -721,6 +721,46 @@ describe('growthCheck: the reviewed waiver ledger (D-6223)', () => {
       const badBase = waiversInDiff(GROWTH_FILES, git('rev-parse', 'HEAD'), git('rev-parse', 'max-60'), dir, today);
       expect(badBase.added).toEqual([]);
       expect(badBase.problems.some((p) => p.startsWith('base: ')), JSON.stringify(badBase.problems)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it('a merge-base holding only the legacy single-file ledger reads its waivers array as the base (D-6925)', () => {
+    // SAFETY for the queue transition: a PR behind the migration measures against a merge-base with no directory.
+    // Delete with `parseLegacyWaivers` once the queue has drained.
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-waiver-legacy-'));
+    try {
+      const git = (...a: string[]): string => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+      const put = (rel: string, text: string): void => {
+        execFileSync('mkdir', ['-p', path.dirname(path.join(dir, rel))]);
+        writeFileSync(path.join(dir, rel), text);
+      };
+      git('init', '-q');
+      git('config', 'user.name', 'fixture');
+      git('config', 'user.email', 'fixture@example.invalid');
+      git('config', 'gc.auto', '0');
+      git('config', 'maintenance.auto', 'false');
+      const migrated = [waiver(), waiver({ d: 'D-6178', maxDelta: 41 })];
+      put(GROWTH_WAIVERS_LEGACY_FILE, JSON.stringify({ payer: 'consolidation W5 (ccd in place)', waivers: migrated }, null, 2));
+      git('add', '-A');
+      git('commit', '-q', '-m', 'legacy ledger');
+      const base = git('rev-parse', 'HEAD');
+      expect(waiversAt(GROWTH_FILES, base, dir, today)).toEqual({ entries: migrated, problems: [] });
+      // The migration: the single file goes, each waiver becomes its own file, and one new waiver is added beside them.
+      rmSync(path.join(dir, GROWTH_WAIVERS_LEGACY_FILE));
+      for (const it of ledger(...migrated, waiver({ d: 'D-6925', maxDelta: 50 }))) put(`${GROWTH_WAIVERS_DIR}/${it.name}`, it.text);
+      git('add', '-A');
+      git('commit', '-q', '-m', 'migrate');
+      const got = waiversInDiff(GROWTH_FILES, base, git('rev-parse', 'HEAD'), dir, today);
+      expect(got.problems).toEqual([]);
+      expect(got.added.map((e) => e.d), 'only the new waiver, never the migrated ones').toEqual(['D-6925']);
+      // A malformed legacy ledger is a problem, so nothing is added.
+      git('checkout', '-q', '-B', 'legacy-bad', base);
+      put(GROWTH_WAIVERS_LEGACY_FILE, '{"waivers": [');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'broken legacy');
+      expect(waiversAt(GROWTH_FILES, git('rev-parse', 'HEAD'), dir, today).problems[0]).toContain(`${GROWTH_WAIVERS_LEGACY_FILE}: not JSON`);
     } finally {
       rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }

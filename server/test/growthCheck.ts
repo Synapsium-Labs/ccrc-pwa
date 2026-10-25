@@ -393,7 +393,30 @@ export function waiversAdded(base: readonly GrowthWaiver[], head: readonly Growt
   return head.filter((h) => !base.some((b) => b.file === h.file && b.d === h.d));
 }
 
-/** The waiver directory's ledger at `sha`: absent there, it holds nothing; a file in it that is not a `.json` waiver
+/** The single-file ledger the directory replaced (D-6925): a merge-base from before the migration still holds it.
+ *  Delete this, `parseLegacyWaivers` and its fallback in `waiversAt` once the merge queue has drained. */
+export const GROWTH_WAIVERS_LEGACY_FILE = 'server/test/growth-waivers.json';
+
+/** The legacy `{payer, waivers: [...]}` ledger's `waivers` array as the base entries, so a PR whose merge-base predates
+ *  the directory does not count every migrated waiver as newly added. Delete once the queue has drained (D-6925). */
+export function parseLegacyWaivers(text: string, files: readonly string[], today: Date = new Date()):
+  { entries: GrowthWaiver[]; problems: string[] } {
+  const at = GROWTH_WAIVERS_LEGACY_FILE;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (e) {
+    return { entries: [], problems: [`${at}: not JSON: ${(e as Error).message}`] };
+  }
+  const list = (raw as { waivers?: unknown } | null)?.waivers;
+  if (!Array.isArray(list)) return { entries: [], problems: [`${at}: no \`waivers\` array`] };
+  const problems: string[] = [];
+  for (const [i, e] of list.entries()) checkWaiverEntry(e, `${at}#${i}`, files, today, problems);
+  return problems.length ? { entries: [], problems } : { entries: list as GrowthWaiver[], problems };
+}
+
+/** The waiver directory's ledger at `sha`: absent there, it is the legacy single file when that sha holds one, else
+ *  nothing; a file in it that is not a `.json` waiver
  *  is a problem, as is any malformed one (and then nothing is answered). */
 export function waiversAt(files: readonly string[], sha: string, cwd: string, today: Date = new Date()):
   { entries: GrowthWaiver[]; problems: string[] } {
@@ -402,6 +425,10 @@ export function waiversAt(files: readonly string[], sha: string, cwd: string, to
     listing = gitRead(['ls-tree', '--name-only', '-r', sha, '--', `${GROWTH_WAIVERS_DIR}/`], cwd);
   } catch { /* no such directory at this sha */ }
   const names = listing.split('\n').filter((l) => l !== '').map((l) => l.slice(GROWTH_WAIVERS_DIR.length + 1));
+  if (names.length === 0) {
+    const legacy = fileAt(GROWTH_WAIVERS_LEGACY_FILE, sha, cwd);
+    if (legacy !== null) return parseLegacyWaivers(legacy, files, today);
+  }
   const items = names.map((name) => ({ name, text: fileAt(`${GROWTH_WAIVERS_DIR}/${name}`, sha, cwd) ?? '' }));
   return parseWaiverFiles(items, files, today);
 }

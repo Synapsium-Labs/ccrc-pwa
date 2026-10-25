@@ -24,7 +24,7 @@ import {
   ccdHeredocBraces,
 } from './consolidationCensus.js';
 
-/** The allowed cross-context edges (D-TBD-derived-pins): one `caller -> callee` per line, sorted. */
+/** The allowed cross-context edges (D-6925): one `caller -> callee` per line, sorted. */
 const EDGES_FILE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'ccd', 'contexts-edges.tsv');
 const edgeOf = (siteText: string): string => {
   const m = /^(\S+) \(\w+\) -> (\S+) \(\w+\)$/.exec(siteText)!;
