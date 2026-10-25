@@ -28,13 +28,14 @@
 // For the per-width review: `CCRC_SHOTS=<a directory>` keeps one picture per view. Run: `( cd pwa &&
 // CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts
 // browser/ask-inline.browser.test.ts )`.
-import { mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { sendErrorText } from '../src/lib/api';
 import { fleetSession } from '../test/fleetFixture';
 import { ASKER_PROJECT, ASKER_SESSION, askFixture, longHookEnvelope } from '../test/askFixtures';
 
@@ -717,4 +718,350 @@ describe('Go to question draws a keyboard focus indicator on the card section (R
       await opened.ctx.close();
     }
   }, 90_000);
+});
+
+// R93: the dialog-open sentence shows ABOVE the field, inside the composer, while the desk's inline ask card is mounted, and
+// the textarea and Send do not move: before the card, while it is up, and after it leaves. The composer sits at the foot of
+// the pane, so a line added BELOW the field pushes the field up by the line's height (27.5 px measured: 19.5 plus the 8 px
+// margin), while a line added ABOVE it grows the composer upward and leaves the field where it was. jsdom lays nothing out, so
+// this is measured here in Chrome, through the production SessionScreen, one page load per grid point with the fixtures and
+// drafts iterated inside it:
+//   - the grid: a fine and a coarse pointer (`hasTouch`; a coarse pointer drops the key hints) x Refined and Instrument x
+//     dark and light x 900, 1280, 1600 (Refined's inspector rail) and 1920;
+//   - inside each point: fixtures 1 (the forty-line question, so its one card scroller is real), 3 (the terminal door) and 7
+//     (the approval), each with an EMPTY draft and a 3-line draft typed (a draft auto-grows the field, so the comparison is
+//     always against the same draft);
+//   - a wrap view (900, both skins, the sentence's font token scaled to 100 and 200 percent: the app's sizes are px tokens,
+//     so a root font-size scale moves nothing, measured) records the sentence's line count, and a
+//     busy turn with a draft puts the small Stop beside Send;
+//   - below 900 (360, 390 and 899, the boundary) the composer does not move and the sentence never shows: the Sheet path.
+// The named assertions: GEOMETRY (the textarea's and Send's `getBoundingClientRect().top` each stay within 0.5 px across the
+// three moments), PLACEMENT (the sentence's bottom is at or above the input bar's top), VISIBLE (exact text in a
+// `role="status"` element, `visibility: visible`, inside the window and every clipping ancestor, and gone after the card),
+// OVERLAP (zero intersection with the input bar, Send, Stop and the card), CARD AND TRANSCRIPT (the card inside the pane, the
+// transcript at least a third of it, one card scroller on fixture 1, and on 3 and 7 none unless the floor binds) and IDENTITY (the same textarea,
+// composer, Send and card nodes, and the draft kept).
+// `CCRC_R93_OUT=<a file>` appends the sentence's line count per wrap cell.
+const R93_IDLE = fleetSession({
+  id: 'lane-a-project-a', wrapper: 'lane-a', home: 'lane-a', project: ASKER_PROJECT, workdir: '/w/project-a',
+  workspace: ASKER_SESSION, status: 'idle', bucket: 'idle', hookState: 'waiting', started: true,
+});
+const R93_TEXT = sendErrorText('dialog-open');
+const R93_DRAFTS: { name: string; text: string }[] = [
+  { name: 'an empty draft', text: '' },
+  { name: 'a 3-line draft', text: 'first line of a draft\nsecond line\nthird line' },
+];
+const R93_FIXTURES = [1, 3, 7] as const;
+const R93_FRAMES = (n: number): object[] => askFixture(n).frames.map((f) => (n === 1 && f.type === 'ask' ? { ...f, ask: longHookEnvelope() } : f));
+
+interface R93Rect { left: number; top: number; right: number; bottom: number; width: number; height: number }
+interface R93Snap {
+  ta: number | null; send: number | null; composer: R93Rect | null; inputbar: R93Rect | null; stop: R93Rect | null; sendRect: R93Rect | null;
+  sentence: null | {
+    text: string; rect: R93Rect; visibility: string; display: string; inStatus: boolean; lines: number;
+    outside: string[]; fontSize: number;
+  };
+  card: R93Rect | null; chat: R93Rect | null; chatBody: number | null; scrollers: string[];
+  sameTa: boolean; sameComposer: boolean; sameSend: boolean; sameCard: boolean; value: string | null;
+}
+interface R93Cell {
+  fixture: number; draft: string; typed: string; pointer: string;
+  before: R93Snap; during: R93Snap; during2: R93Snap; after: R93Snap; lines: number | null;
+}
+type R93Phase = 'before' | 'tag' | 'during' | 'after';
+
+const R93_SNAP = (arg: { card: string; phase: R93Phase }): R93Snap => {
+  const q = (sel: string): HTMLElement | null => document.querySelector<HTMLElement>(sel);
+  const rect = (e: Element | null): R93Rect | null => {
+    if (e === null) return null;
+    const r = e.getBoundingClientRect();
+    return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
+  };
+  const w = window as unknown as { __r93?: { ta: Element | null; composer: Element | null; send: Element | null }; __r93card?: Element | null };
+  const ta = q('.composer-input') as HTMLTextAreaElement | null;
+  const composer = q('.composer');
+  const send = q('.composer .send-btn');
+  const stop = q('.composer .stop-slot');
+  const inputbar = q('.composer .inputbar');
+  const sentence = q('.composer-refusal');
+  const card = q(arg.card);
+  const chat = q('.chat');
+  if (arg.phase === 'before') w.__r93 = { ta, composer, send };
+  if (arg.phase === 'tag') w.__r93card = card;
+  let sentenceInfo: R93Snap['sentence'] = null;
+  if (sentence !== null) {
+    const r = sentence.getBoundingClientRect();
+    const cs = getComputedStyle(sentence);
+    const outside: string[] = [];
+    if (r.left < -0.5 || r.top < -0.5 || r.right > window.innerWidth + 0.5 || r.bottom > window.innerHeight + 0.5) outside.push('the window');
+    for (let p = sentence.parentElement; p !== null; p = p.parentElement) {
+      const pcs = getComputedStyle(p);
+      const x = pcs.overflowX !== 'visible';
+      const y = pcs.overflowY !== 'visible';
+      if (!x && !y) continue;
+      const pr = p.getBoundingClientRect();
+      const l = pr.left + p.clientLeft;
+      const t = pr.top + p.clientTop;
+      if ((x && (r.left < l - 0.5 || r.right > l + p.clientWidth + 0.5)) || (y && (r.top < t - 0.5 || r.bottom > t + p.clientHeight + 0.5))) {
+        outside.push(`${p.tagName.toLowerCase()}.${p.getAttribute('class') ?? ''}`);
+      }
+    }
+    const fontSize = parseFloat(cs.fontSize);
+    const lh = parseFloat(cs.lineHeight);
+    sentenceInfo = {
+      text: sentence.textContent ?? '', rect: rect(sentence)!, visibility: cs.visibility, display: cs.display,
+      inStatus: sentence.closest('[role="status"]') !== null, outside, fontSize,
+      lines: Math.round(r.height / (Number.isFinite(lh) ? lh : fontSize * 1.5)),
+    };
+  }
+  const scrollers = card === null ? [] : [card, ...card.querySelectorAll<HTMLElement>('*')].filter((e) => {
+    const oy = getComputedStyle(e).overflowY;
+    return (oy === 'auto' || oy === 'scroll') && e.scrollHeight > e.clientHeight + 1;
+  }).map((e) => `${e.getAttribute('class') ?? e.tagName} ${e.scrollHeight}/${e.clientHeight}`);
+  return {
+    ta: ta?.getBoundingClientRect().top ?? null, send: send?.getBoundingClientRect().top ?? null, composer: rect(composer),
+    inputbar: rect(inputbar), stop: rect(stop), sendRect: rect(send), sentence: sentenceInfo, card: rect(card), chat: rect(chat),
+    chatBody: q('.chat > .chat-body')?.getBoundingClientRect().height ?? null, scrollers,
+    sameTa: w.__r93?.ta === ta && ta !== null, sameComposer: w.__r93?.composer === composer && composer !== null,
+    sameSend: w.__r93?.send === send && send !== null, sameCard: card !== null && w.__r93card === card, value: ta?.value ?? null,
+  };
+};
+
+/** One opened desk or phone page for R93: the session socket's handle is kept so a case can send the ask and clear it. */
+async function openR93(view: AppView, o: { busy?: boolean } = {}) {
+  const busy = o.busy === true;
+  const opened = await openApp(browser!, view, { ...FIXTURE, fleetFrames: [{ type: 'fleet', sessions: [busy ? SESSION : R93_IDLE] }] });
+  let sock: { send(m: string): void } | undefined;
+  await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+    sock = ws;
+    for (const f of [BACKLOG, { type: 'status', status: busy ? 'busy' : 'idle', statusUpdatedAt: null }]) ws.send(JSON.stringify(f));
+  });
+  await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
+  await opened.page.waitForSelector('.composer-input', { timeout: 30_000 });
+  await opened.page.waitForTimeout(800);
+  const frames = (fs: object[]): void => { for (const f of fs) sock!.send(JSON.stringify(f)); };
+  return { ...opened, frames };
+}
+
+/** At one grid point: every fixture with every draft, measured before the card, twice while it is up, and after it leaves. */
+async function r93Cells(view: AppView, o: { busy?: boolean; fixtures?: readonly number[]; drafts?: typeof R93_DRAFTS; zoom?: number } = {}): Promise<R93Cell[]> {
+  const opened = await openR93(view, o);
+  try {
+    if (o.zoom !== undefined) {
+      await opened.page.evaluate((z) => {
+        const base = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fs-sm'));
+        document.documentElement.style.setProperty('--fs-sm', `${base * z / 100}px`);
+      }, o.zoom);
+      await opened.page.waitForTimeout(300);
+    }
+    const cells: R93Cell[] = [];
+    const snap = (phase: R93Phase) => opened.page.evaluate(R93_SNAP, { card: CARD, phase });
+    for (const draft of o.drafts ?? R93_DRAFTS) {
+      await opened.page.fill('.composer-input', draft.text);
+      await opened.page.waitForTimeout(150);
+      for (const n of o.fixtures ?? R93_FIXTURES) {
+        const before = await snap('before');
+        opened.frames(R93_FRAMES(n));
+        await opened.page.waitForSelector(CARD, { timeout: 30_000 });
+        await opened.page.waitForTimeout(250);
+        const during = await snap('tag');
+        await opened.page.waitForTimeout(150);
+        const during2 = await snap('during');
+        opened.frames([{ type: 'ask_cleared' }, { type: 'dialog_cleared' }]);
+        await opened.page.waitForSelector(CARD, { state: 'detached', timeout: 30_000 });
+        await opened.page.waitForTimeout(250);
+        const after = await snap('after');
+        cells.push({ fixture: n, draft: draft.name, typed: draft.text, pointer: view.touch === true ? 'coarse' : 'fine', before, during, during2, after, lines: during.sentence?.lines ?? null });
+      }
+    }
+    return cells;
+  } finally {
+    await opened.ctx.close();
+  }
+}
+
+const overlaps = (a: R93Rect, b: R93Rect | null): boolean => b !== null && Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.01 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.01;
+const cellName = (c: R93Cell): string => `fixture ${c.fixture}, ${c.draft}`;
+
+/** The six named assertions over `cells()`, registered in the enclosing describe. */
+function r93Tests(cells: () => R93Cell[], extra: { stop?: boolean } = {}): void {
+  const each = (f: (c: R93Cell) => string[]): string[] => cells().flatMap((c) => f(c).map((m) => `${cellName(c)}: ${m}`));
+  it('GEOMETRY: the textarea and Send tops stay within 0.5px before the card, while it is up, and after it leaves', () => {
+    expect(cells().length, 'premise: the cells were measured').toBeGreaterThan(0);
+    const fails = each((c) => {
+      const out: string[] = [];
+      for (const k of ['ta', 'send'] as const) {
+        const v = [c.before[k], c.during[k], c.during2[k], c.after[k]];
+        if (v.some((x) => x === null)) out.push(`${k} missing ${JSON.stringify(v)}`);
+        else if (Math.max(...(v as number[])) - Math.min(...(v as number[])) > 0.5) out.push(`${k} top moved ${JSON.stringify(v)}`);
+      }
+      return out;
+    });
+    expect(fails, 'the textarea and Send did not move').toEqual([]);
+  });
+
+  it('PLACEMENT: the sentence is above the field (its bottom is at or above the input bar\'s top)', () => {
+    const fails = each((c) => {
+      const s = c.during.sentence;
+      const bar = c.during.inputbar;
+      if (s === null || bar === null) return ['the sentence or the input bar is missing'];
+      return s.rect.bottom <= bar.top + 0.01 ? [] : [`sentence bottom ${s.rect.bottom} is below the input bar top ${bar.top}`];
+    });
+    expect(fails, 'the sentence sits above the field').toEqual([]);
+  });
+
+  it('VISIBLE: exact text in a status line, visible, inside the window and every clip; gone before and after the card', () => {
+    const fails = each((c) => {
+      const out: string[] = [];
+      for (const [moment, snap] of [['while up', c.during], ['while up, later', c.during2]] as const) {
+        const s = snap.sentence;
+        if (s === null) { out.push(`${moment}: no sentence`); continue; }
+        if (s.text !== R93_TEXT) out.push(`${moment}: text ${JSON.stringify(s.text)}`);
+        if (!s.inStatus) out.push(`${moment}: not in a role="status" element`);
+        if (s.visibility !== 'visible' || s.display === 'none') out.push(`${moment}: visibility ${s.visibility}, display ${s.display}`);
+        if (s.rect.height < 1) out.push(`${moment}: no height`);
+        if (s.outside.length > 0) out.push(`${moment}: outside ${s.outside.join(', ')}`);
+      }
+      if (c.before.sentence !== null) out.push('the sentence shows before the card');
+      if (c.after.sentence !== null) out.push('the sentence shows after the card left');
+      return out;
+    });
+    expect(fails, 'the sentence is fully visible while the card is up and only then').toEqual([]);
+  });
+
+  it('OVERLAP: the sentence intersects neither the input bar, Send, Stop nor the card', () => {
+    const fails = each((c) => {
+      const s = c.during.sentence;
+      if (s === null) return ['no sentence'];
+      const out: string[] = [];
+      if (overlaps(s.rect, c.during.inputbar)) out.push('overlaps the input bar');
+      if (overlaps(s.rect, c.during.sendRect)) out.push('overlaps Send');
+      if (overlaps(s.rect, c.during.stop)) out.push('overlaps Stop');
+      if (overlaps(s.rect, c.during.card)) out.push('overlaps the card');
+      if (extra.stop === true && c.during.stop === null) out.push('premise: Stop is beside Send');
+      return out;
+    });
+    expect(fails, 'the sentence overlaps nothing').toEqual([]);
+  });
+
+  it('CARD AND TRANSCRIPT: the card is inside the pane, the transcript keeps a third of it, and the card scrolls in one place: on fixture 1, and on 3 and 7 only where the floor binds', () => {
+    const fails = each((c) => {
+      const { card, chat, chatBody, scrollers } = c.during;
+      if (card === null || chat === null || chatBody === null) return ['the card, pane or transcript is missing'];
+      const out: string[] = [];
+      if (card.left < chat.left - 0.5 || card.right > chat.right + 0.5 || card.top < chat.top - 0.5 || card.bottom > chat.bottom + 0.5) out.push(`the card ${JSON.stringify(card)} leaves the pane ${JSON.stringify(chat)}`);
+      if (chatBody < chat.height / 3 - 1) out.push(`the transcript (${chatBody}px) is under a third of the pane (${chat.height}px)`);
+      // One scroller on fixture 1 (the forty-line question). On 3 and 7 the card has none, EXCEPT where the transcript's floor
+      // binds (a short window, a 3-line draft): the card yields to the floor, never the other way, and then its body is the
+      // one scroller. Never two.
+      const atFloor = chatBody <= chat.height / 3 + 1;
+      const want = c.fixture === 1 ? [1, 1] : atFloor ? [0, 1] : [0, 0];
+      if (scrollers.length < want[0]! || scrollers.length > want[1]!) out.push(`${scrollers.length} card scrollers (${scrollers.join('; ')}; scrollHeight/clientHeight), want ${want[0] === want[1] ? want[0] : `${want[0]} to ${want[1]}`}${atFloor ? ' (the floor binds)' : ''}`);
+      return out;
+    });
+    expect(fails, 'the card and the transcript hold').toEqual([]);
+  });
+
+  it('IDENTITY: the same textarea, composer, Send and card nodes across arrival and leave, and the draft is kept', () => {
+    const fails = each((c) => {
+      const out: string[] = [];
+      for (const [moment, snap] of [['while up', c.during2], ['after', c.after]] as const) {
+        if (!snap.sameTa) out.push(`${moment}: the textarea is a different node`);
+        if (!snap.sameComposer) out.push(`${moment}: the composer is a different node`);
+        if (!snap.sameSend) out.push(`${moment}: Send is a different node`);
+        if (snap.value !== c.typed) out.push(`${moment}: the draft is ${JSON.stringify(snap.value)}`);
+      }
+      if (!c.during2.sameCard) out.push('the card is a different node while it is up');
+      return out;
+    });
+    expect(fails, 'the nodes and the draft are kept').toEqual([]);
+  });
+}
+
+describe('R93: the sentence above the field, and the field does not move (D-6326)', () => {
+  const POINTS: { view: AppView; rail: string }[] = [];
+  for (const touch of [false, true]) for (const skin of [REFINED, INSTRUMENT]) for (const theme of [PHOSPHOR, 'light']) {
+    for (const width of [900, 1280, 1600, 1920]) POINTS.push({ view: { skin, theme, width, touch }, rail: width === 1600 ? ', Refined inspector rail' : '' });
+  }
+  for (const { view, rail } of POINTS) {
+    describe(`${view.touch === true ? 'coarse' : 'fine'} pointer, ${named(view)}${rail}`, () => {
+      let cells: R93Cell[] = [];
+      beforeAll(async () => { cells = await r93Cells(view); }, 240_000);
+      r93Tests(() => cells);
+    });
+  }
+
+  // A busy turn with a draft puts the small Stop beside Send; the sentence overlaps neither.
+  for (const skin of [REFINED, INSTRUMENT]) {
+    describe(`a busy turn with a draft (Stop beside Send), ${skin}, 1280px`, () => {
+      let cells: R93Cell[] = [];
+      beforeAll(async () => { cells = await r93Cells({ skin, theme: PHOSPHOR, width: 1280 }, { busy: true, fixtures: [7, 1], drafts: [R93_DRAFTS[1]!] }); }, 240_000);
+      r93Tests(() => cells, { stop: true });
+    });
+  }
+
+  // The sentence's wrap. 900 is the narrowest desk pane (Instrument adds its rail from 900 up). The sentence is one line at 100
+  // percent in both skins, so its font token (`--fs-sm`, px) is doubled to force it onto two lines (200 percent is text zoom's WCAG ceiling; at 300 percent the sentence takes two or three lines of 39px text and squeezes the card to a 19 to 61px body, which no placement of the sentence changes): scaling the root
+  // font size moves nothing here, because the app's sizes are px tokens. The line count is recorded, and the same assertions hold.
+  for (const skin of [REFINED, INSTRUMENT]) for (const zoom of [100, 200]) {
+    describe(`wrap: ${skin}, 900px, sentence text at ${zoom}%`, () => {
+      let cells: R93Cell[] = [];
+      beforeAll(async () => {
+        cells = await r93Cells({ skin, theme: PHOSPHOR, width: 900 }, { zoom, fixtures: [1, 7], drafts: [R93_DRAFTS[1]!] });
+        const out = process.env['CCRC_R93_OUT'];
+        if (out !== undefined && out !== '') {
+          for (const c of cells) appendFileSync(out, `${skin} 900 text ${zoom}% fixture ${c.fixture}: ${c.lines} line(s), font ${c.during.sentence?.fontSize}px, sentence ${c.during.sentence?.rect.width}x${c.during.sentence?.rect.height}\n`);
+        }
+      }, 240_000);
+      it('records a sentence of at least one line', () => {
+        expect(cells.every((c) => c.lines !== null && c.lines >= 1), 'every wrap cell measured a sentence').toBe(true);
+      });
+      r93Tests(() => cells);
+    });
+  }
+});
+
+// Below 900 the ask is the Sheet's, `askInline` is never true, so the composer is the one it always was: its top, its height
+// and its textarea's top are the same before the ask, while the Sheet is up and after it goes, and no sentence is drawn.
+describe('R93: the phone is unchanged (360, 390 and 899px)', () => {
+  for (const skin of [REFINED, INSTRUMENT]) for (const width of [360, 390, 899]) {
+    describe(`${skin}, ${width}px`, () => {
+      let rows: { fixture: number; before: R93Snap; during: R93Snap; after: R93Snap; sheet: boolean }[] = [];
+      beforeAll(async () => {
+        const opened = await openR93({ skin, theme: PHOSPHOR, width });
+        try {
+          const snap = (phase: R93Phase) => opened.page.evaluate(R93_SNAP, { card: CARD, phase });
+          for (const n of [1, 7]) {
+            const before = await snap('before');
+            opened.frames(R93_FRAMES(n));
+            await opened.page.waitForSelector('.sheet-panel', { timeout: 30_000 });
+            await opened.page.waitForTimeout(500);
+            const during = await snap('during');
+            const sheet = (await opened.page.locator(CARD).count()) === 0;
+            opened.frames([{ type: 'ask_cleared' }, { type: 'dialog_cleared' }]);
+            await opened.page.waitForSelector('.sheet-panel', { state: 'detached', timeout: 30_000 });
+            await opened.page.waitForTimeout(500);
+            rows.push({ fixture: n, before, during, after: await snap('after'), sheet });
+          }
+        } finally {
+          await opened.ctx.close();
+        }
+      }, 240_000);
+      it('the composer\'s top, height and textarea top are unchanged by the Sheet, and no sentence is drawn', () => {
+        expect(rows.length, 'premise: both fixtures were measured').toBe(2);
+        const fails = rows.flatMap((r) => {
+          const out: string[] = [];
+          if (!r.sheet) out.push('premise: the ask is in the Sheet, with no inline card');
+          for (const [k, get] of [['composer top', (x: R93Snap) => x.composer?.top], ['composer height', (x: R93Snap) => x.composer?.height], ['textarea top', (x: R93Snap) => x.ta]] as const) {
+            const v = [get(r.before), get(r.during), get(r.after)];
+            if (v.some((x) => x === undefined || x === null)) out.push(`${k} missing`);
+            else if (Math.max(...(v as number[])) - Math.min(...(v as number[])) > 0.5) out.push(`${k} changed ${JSON.stringify(v)}`);
+          }
+          if (r.before.sentence !== null || r.during.sentence !== null || r.after.sentence !== null) out.push('a sentence is drawn on the phone');
+          return out.map((m) => `fixture ${r.fixture}: ${m}`);
+        });
+        expect(fails, 'the phone composer is unchanged').toEqual([]);
+      });
+    });
+  }
 });
