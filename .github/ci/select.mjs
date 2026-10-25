@@ -40,11 +40,13 @@ import { planShards, toMatrix, PROFILES } from './shards.mjs';
  * misconfigured caller gets the SAFE answer, never a silent no-op.
  *
  * Order is significant, and matches the contract's own listing:
- *   1. `pull_request` or `merge_group`         -> selected / none — or full / none with `inputMode === 'full'`,
+ *   1. `merge_group`                             -> full / none, whatever the change: the queue is where the whole
+ *                                                 suite runs (operator ruling 2026-10-25, which replaced 2026-09-28's
+ *                                                 "a queue run runs what a pull request runs").
+ *   1b. `pull_request`                           -> selected / none — or full / none with `inputMode === 'full'`,
  *                                                 which ci.yml passes when the change touches `.github/` (a
  *                                                 plain-bash check, so a PR cannot talk its own selector out of a
- *                                                 full run). A merge-queue run runs what a pull request runs
- *                                                 (operator ruling 2026-09-28, landing-order wave 2).
+ *                                                 full run) or the PR carries the `full-ci` label.
  *   2. `inputMode === 'refresh'`                 -> none / refresh (ci.yml passes it on the hourly schedule, and a
  *                                                 manual dispatch can; D-6769)
  *   3. `schedule`                                -> fullGreen ? none/none/skip : full/rebuild
@@ -56,7 +58,8 @@ import { planShards, toMatrix, PROFILES } from './shards.mjs';
  * @returns {ModeDecision}
  */
 export function decideMode({ event, inputMode, fullGreen }) {
-  if (event === 'pull_request' || event === 'merge_group') {
+  if (event === 'merge_group') return { tests: 'full', trace: 'none', skip: false };
+  if (event === 'pull_request') {
     return inputMode === 'full'
       ? { tests: 'full', trace: 'none', skip: false }
       : { tests: 'selected', trace: 'none', skip: false };
@@ -80,7 +83,8 @@ export function decideMode({ event, inputMode, fullGreen }) {
 
 /**
  * What a trigger can never answer (ruling T2), checked on decideMode's answer before anything runs: a pull
- * request, and a merge-queue run (landing-order wave 2), always runs server tests (never `none`), and a
+ * request, and a merge-queue run (landing-order wave 2), always runs server tests (never `none`), a
+ * merge-queue run never a SELECTION (operator ruling 2026-10-25: the queue runs everything), and a
  * schedule, a refresh push or a rebuild never runs a
  * per-file SELECTION (they run everything or nothing). A violation is a bug in this module; the CLI refuses it.
  * @param {string} event @param {string | undefined} inputMode @param {'selected'|'full'|'none'} tests
@@ -88,6 +92,7 @@ export function decideMode({ event, inputMode, fullGreen }) {
  */
 export function modeInvariantViolation(event, inputMode, tests) {
   if ((event === 'pull_request' || event === 'merge_group') && tests === 'none') return `a ${event} answered tests: none`;
+  if (event === 'merge_group' && tests === 'selected') return 'a merge_group answered tests: selected';
   if (tests === 'selected' && (event === 'schedule' || (event === 'push' && !inputMode) || inputMode === 'refresh' || inputMode === 'rebuild')) {
     return `a ${inputMode === 'rebuild' || inputMode === 'refresh' ? inputMode : event} answered tests: selected`;
   }

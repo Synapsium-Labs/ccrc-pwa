@@ -938,7 +938,7 @@ describe('ci.yml: a pull request that changes the pipeline runs everything, deci
     expect(pipelineStep()).toMatch(/^ {10}BASE: \$\{\{ github\.event_name == 'merge_group' && github\.event\.merge_group\.base_sha \|\| format\('origin\/\{0\}', github\.base_ref\) \}\}$/m);
     const sel = step(job('select'), 'Select');
     expect(sel).toMatch(/^ {10}PIPELINE_CHANGED: \$\{\{ steps\.pipeline\.outputs\.changed \}\}$/m);
-    expect(runScript(sel)).toContain('elif [ "$PIPELINE_CHANGED" = true ]; then args+=(--input-mode full); fi');
+    expect(runScript(sel)).toContain('elif [ "$PIPELINE_CHANGED" = true ] || [ "$FULL_LABEL" = true ]; then args+=(--input-mode full); fi');
   });
 
   it('a change under .github/ -> changed=true; anything else -> false; a base it cannot diff against -> true', () => {
@@ -1325,13 +1325,14 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
 
   it('checks out, sets up Node 22, installs pwa with npm ci, and runs the browser config with the local vitest', () => {
     const s = steps(job('browser-pwa'));
-    expect(s, 'the browser leg has exactly five steps').toHaveLength(5);
+    expect(s, 'the browser leg has exactly six steps (the reach step is the sixth)').toHaveLength(6);
     // A version pin is a deliberate edit, so a future bump reds it again
     // (D-6739: the pins name the majors #364 moved to).
     expect(s[0]).toMatch(/^ {6}- uses: actions\/checkout@v7\n/);
-    expect(s[1]).toMatch(/^ {6}- uses: actions\/setup-node@v7\n/);
-    expect(s[1]).toMatch(/^ {10}node-version: '22'$/m);
-    expect(s[1]).toMatch(/^ {10}cache-dependency-path: pwa\/package-lock\.json$/m);
+    expect(s[1]).toMatch(/^ {6}- name: Can this change reach the browser tests\?\n/);
+    expect(s[2]).toMatch(/^ {6}- uses: actions\/setup-node@v7\n/);
+    expect(s[2]).toMatch(/^ {10}node-version: '22'$/m);
+    expect(s[2]).toMatch(/^ {10}cache-dependency-path: pwa\/package-lock\.json$/m);
     expect(step(job('browser-pwa'), 'Install')).toMatch(/^ {8}working-directory: pwa\n {8}run: npm ci\n/m);
     // pwa reads @ccrc/ui as SOURCE and the leg's imports reach it, so ui is installed too, before the Test step.
     expect(step(job('browser-pwa'), 'Install @ccrc/ui')).toMatch(/^ {8}working-directory: ui\n {8}run: npm ci\n/m);
@@ -1360,5 +1361,36 @@ describe('Review 439 F26: the browser leg cannot be softened by continue-on-erro
     expect(step(b, 'Test'), 'a shell override on the Test step').not.toMatch(/^ {8}shell:/m);
     expect(b, 'job-level defaults').not.toMatch(/^ {4}defaults:/m);
     expect(read(CI), 'workflow-level defaults').not.toMatch(/^defaults:/m);
+  });
+});
+
+// The light pull-request run (operator ruling 2026-10-25): .github/ci/reach.mjs decides, per package, whether a
+// pull request's change can reach the agent, pwa and browser TESTS. Pinned here: who asks, what the answer gates,
+// and what it must never gate (a typecheck, the build, a required check's existence).
+describe('ci.yml: the light pull-request rule for the agent, pwa and browser tests (ruling 2026-10-25)', () => {
+  const GATE = "if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'";
+
+  it('a label starts a run, and the full-ci label forces the full suite', () => {
+    expect(read(CI)).toMatch(/^ {2}pull_request:\n {4}types: \[opened, synchronize, reopened, labeled\]$/m);
+    expect(read(CI)).toContain("FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}");
+  });
+
+  it('each of the three legs asks reach.mjs on a pull request only, and gates only its install and test steps on the answer', () => {
+    for (const [id, pkg] of [['test', 'agent'], ['pwa-shard', 'pwa'], ['browser-pwa', 'browser']] as const) {
+      const b = job(id);
+      const ask = step(b, `Can this change reach the ${pkg} tests?`);
+      expect(ask, id).toContain("if: env.CCRC_LEG == 'run' && github.event_name == 'pull_request'");
+      expect(ask, id).toContain(`node .github/ci/reach.mjs --pkg ${pkg} --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"`);
+      expect(step(b, 'Test'), `${id}: the tests skip on the answer`).toContain(GATE);
+    }
+    // The agent's typecheck is NOT gated: a light run still typechecks every package.
+    expect(step(job('test'), 'Typecheck')).not.toContain('reach');
+    expect(step(job('test'), 'Typecheck')).toContain("if: env.CCRC_LEG == 'run'");
+  });
+
+  it('the pwa typecheck, the static checks and the build never consult the answer', () => {
+    for (const id of ['pwa-static', 'build-pwa', 'server-typecheck']) {
+      expect(job(id), id).not.toContain('steps.reach');
+    }
   });
 });
