@@ -2,10 +2,10 @@ import type { CcrcConfig } from './config.js';
 import { configDirFor } from './configDir.js'; // D-5896: the pure join, not the config reader
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
-import { readRegistryMeasured, readSessionRecord } from './registry.js';
+import { readRegistryMeasured } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readLimits } from './limits.js';
-import { liveSessionStatus, liveStatusCoversDelegation, readLiveState, readLiveStateMeasured } from './livestate.js';
+import { liveSessionStatus, liveStatusCoversDelegation, readLiveStateMeasured } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
 import type { FleetSession, HookAsk, LifecycleInput, PrState, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
@@ -371,70 +371,6 @@ export function idHomeWrapper(roster: Roster, id: string): string {
   return roster.upstreamId;
 }
 
-/**
- * Authoritative live status for one session — the same signal the fleet uses:
- * dead if no tmux session, else busy/idle from the live status file. No route reads it since D-5236
- * (the interrupt route takes the RAW word, `turnverdict.ts`'s `liveWordFor`); its D-115 pins stay.
- * Why the file: a --remote-control pane never renders the busy marker at all, and an RC-off pane
- * does render it, but the same pane can ALSO be showing a dialog painted right alongside it —
- * either way busy-ness has to come from the live status file, which also sees subagents the pane
- * never shows.
- */
-export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: string): Promise<SessionStatus> {
-  // C0.3: this only ever asks about ONE id — no uniqueness or subtraction
-  // over the rest of the fleet — so it reads just that id's row rather than
-  // the whole registry (a 24-session fleet's baseline is 745 agent-WS
-  // operations [registry-read-census:fleet] per `readRegistry` call, before
-  // conditional reconfirmation, for a question about one session).
-  const read = await readSessionRecord(io, cfg, id);
-  // A degraded row must never answer 'dead' — the interrupt route's own
-  // "not busy" refusal reads THIS, and reporting dead-by-drop on a session
-  // this read simply could not measure would let it refuse an interrupt on a
-  // plainly busy one. `absent` and `unlistable` (genuinely absent, or the
-  // whole directory unlistable) are still 'dead': there is no pane to ask
-  // about either way, the same answer this gave before the ladder existed.
-  // D-309 (was D-B8-13): `hasSession` here deliberately collapses `unknown` into 'dead' —
-  // which this route turns into a REFUSED interrupt, the safe direction this
-  // function's own comment above already argues for. Splitting the pair for
-  // the operator's view is the substrate-unreachable spec's job (a state word
-  // through shared/server/pwa), not a guard's.
-  switch (read.kind) {
-    case 'found': break;
-    case 'absent': case 'unmeasurable': case 'unlistable': return 'dead';
-    // Masked by `knownId` (spec §2.3): `POST /api/sessions/:id/interrupt`,
-    // this function's one consumer, refuses an id `isRegistryId` refuses
-    // before it calls here. 'dead' all the same: it refuses the interrupt.
-    case 'bad-id': return 'dead';
-    default: {
-      const _x: never = read;
-      return _x;
-    }
-  }
-  if (!(await tmux.hasSession(id))) return 'dead';
-  const rec = read.record;
-  const pid = await tmux.panePid(id);
-  // Unmeasured wrapper => 'idle', via the EXISTING `!cfgDir` fallback: a
-  // degraded `rec.wrapper` is `''`, which `configDirFor` (an unknown wrapper
-  // string) already answers `undefined` for — honest-but-blind, and it fails
-  // TOWARD refusing an interrupt rather than granting one on a guess.
-  const cfgDir = configDirFor(cfg, rec.wrapper);
-  if (!pid || !cfgDir) return 'idle';
-  // THE FOLDED READ, KEPT ON PURPOSE — do not "finish" D-115 here.
-  // `assembleFleet` below takes `readLiveStateMeasured` and paints an
-  // unreadable live file `busy`; this function must keep answering `'idle'`
-  // for it, and the two are not drift. A card DISPLAYS, so its reassuring
-  // word is the dangerous one; this function's consumer was the interrupt
-  // route's `… === 'busy'` check (D-5236 keeps the same answer in `interruptVerdict`),
-  // which REFUSES on anything else — so `'idle'` is what withholds the keystroke, and
-  // "fail toward busy" would GRANT an interrupt on a read that measured
-  // nothing, inverting D-115's own intent one line from its remedy. Same
-  // direction the `!cfgDir` fallback above already argues for, on the same
-  // grounds. `fleet.test.ts` pins this answer beside `assembleFleet`'s
-  // opposite one, on ONE fixture, so the asymmetry reads as a decision.
-  const live = await readLiveState(io, cfgDir, pid);
-  return live ? liveSessionStatus(live.status) : 'idle';
-}
-
 /** The PR state a session has WITHOUT a live sweep: whatever `ccd pr-state`
  *  last wrote into the registry. `unchecked` when it has never run. Null for a
  *  main checkout, which is the only session that gets no PR control at all.
@@ -669,14 +605,12 @@ export async function assembleFleet(
         } else if (read.reason === 'unmeasured') {
           // `busy` is this SURFACE's fail-shut direction, and only this
           // surface's: a card is read as permission to walk away, so the
-          // reassuring word is the dangerous one here. `liveStatus` two
-          // functions up answers `'idle'` on this identical failure ON
-          // PURPOSE, as the interrupt route's verdict does (D-5236): it
-          // REFUSES on an unread word, so "fail toward busy"
-          // there would GRANT interrupts on a read that measured nothing.
-          // Both are failing away from the act that cannot be taken back;
-          // `fleet.test.ts` pins the pair together on ONE fixture so the
-          // asymmetry cannot be mistaken for drift and quietly "fixed".
+          // reassuring word is the dangerous one here. The interrupt route's
+          // verdict answers an unread word the other way ON PURPOSE (D-5236):
+          // it REFUSES on one, so "fail toward busy" there would GRANT
+          // interrupts on a read that measured nothing. Both fail away from
+          // the act that cannot be taken back; `turnverdict.ts` holds that
+          // side, so the asymmetry cannot be mistaken for drift and "fixed".
           //
           // `status` ALONE moves. `name`, `statusUpdatedAt`, `version`,
           // `liveWaiting` and `liveWaitingFor` stay at their defaults,

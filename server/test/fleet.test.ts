@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { assembleFleet, hookAskSummary, idHomeWrapper, liveStatus } from '../src/fleet.js';
+import { assembleFleet, hookAskSummary, idHomeWrapper } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
@@ -174,62 +174,6 @@ describe('assembleFleet: the session role (D-5301)', () => {
   });
 });
 
-// Registry ladder (architecture doc, increment 1's second half): `liveStatus`
-// backs `POST /api/sessions/:id/interrupt`'s own busy check
-// (`server.ts:523`) — a degraded row reading 'dead' makes that route refuse
-// an interrupt on a session that is plainly mid-turn, fails-open in exactly
-// the direction spec's own THE PRINCIPLE forbids ("fails toward refusing an
-// interrupt"). Written FIRST and confirmed red against the pre-ladder code,
-// where `readSessionRecord`'s old `null`-on-any-unreadable-field answer made
-// `!rec` true for a row this fixture proves is genuinely busy.
-describe('liveStatus', () => {
-  it('answers busy for a session with an unmeasured (but IRRELEVANT to this question) workdir/uuid — ' +
-     'never dead, never blind to a live pane because of a read failure on a field it does not even use', async () => {
-    const home = mkTmp('ccrc-');
-    seedRoster(home);
-    seedSession(home, 'claude-quiet-mesa', 'claude');
-    const cfgDir = path.join(home, '.claude');
-    mkdirSync(path.join(cfgDir, 'sessions'), { recursive: true });
-    writeFileSync(path.join(cfgDir, 'sessions', '4242.json'), JSON.stringify({
-      pid: 4242, sessionId: '1'.repeat(36), cwd: '/data/projects/claude-quiet-mesa',
-      status: 'busy', statusUpdatedAt: 1784600000000,
-    }));
-    const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
-      return { ran: true, code: 0, stdout: '', stderr: '' };
-    };
-    // `workdir` (irrelevant to liveStatus: it never reads it) is the ONE
-    // unreadable field — `wrapper` (which liveStatus DOES need, to resolve
-    // cfgDir) reads clean.
-    const unreadableWorkdir = unreadableField('claude-quiet-mesa', 'workdir');
-    const status = await liveStatus(unreadableWorkdir, loadConfig({ CCRC_HOME: home }), new Tmux(run), 'claude-quiet-mesa');
-    expect(status).toBe('busy');
-  });
-
-  it('still answers dead for a session genuinely absent from the registry', async () => {
-    const home = mkTmp('ccrc-');
-    seedRoster(home);
-    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
-    const status = await liveStatus(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 'claude-nope');
-    expect(status).toBe('dead');
-  });
-
-  it('answers idle (never dead, never a throw) for an unmeasured WRAPPER — the existing !cfgDir fallback', async () => {
-    const home = mkTmp('ccrc-');
-    seedRoster(home);
-    seedSession(home, 'claude-quiet-mesa', 'claude');
-    const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
-      return { ran: true, code: 0, stdout: '', stderr: '' };
-    };
-    const unreadableWrapper = unreadableField('claude-quiet-mesa', 'wrapper');
-    const status = await liveStatus(unreadableWrapper, loadConfig({ CCRC_HOME: home }), new Tmux(run), 'claude-quiet-mesa');
-    expect(status).toBe('idle');
-  });
-});
-
 // D-115's third consumer, the display half. `readLiveState` folded "the file
 // is there and I could not read it" into the same `null` as "there is no file
 // yet", and `assembleFleet` reads that `null` as "leave `status` at the
@@ -303,17 +247,6 @@ describe('assembleFleet: an unmeasured live status file is not a session at rest
     expect(fleet.find((x) => x.id === ID)!.status).toBe('idle');
   });
 
-  it('liveStatus is NOT changed by this: the SAME unreadable file still answers idle, so the interrupt route still refuses', async () => {
-    // The deliberate asymmetry, on one fixture so the two answers cannot be
-    // read as a coincidence of two different setups. `liveStatus`'s `'idle'`
-    // is the PROTECTIVE answer — its only consumer refuses on it — and its
-    // three pins above are untouched by this task.
-    const { home, run } = setup();
-    const io = degradedReadIO((p) => p.endsWith(LIVE));
-    const status = await liveStatus(io, loadConfig({ CCRC_HOME: home }), new Tmux(run), ID);
-    expect(status).toBe('idle');
-  });
-
   // D-5234: the read one step earlier. `hasSession` says the pane is alive,
   // and `panePid` comes back null (`list-panes` failed: a loaded tmux server, a
   // dropped round trip). Nothing was measured about the session, so the card
@@ -335,11 +268,6 @@ describe('assembleFleet: an unmeasured live status file is not a session at rest
     expect(s.statusUnmeasured).toBe(true);
     expect(s.statusUpdatedAt).toBeNull();
     expect(s.version).toBeNull();
-  });
-
-  it('D-5234: … and liveStatus on the SAME failed panePid still answers idle, so the interrupt route still refuses', async () => {
-    const { home, run } = failedPid();
-    expect(await liveStatus(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), ID)).toBe('idle');
   });
 });
 
