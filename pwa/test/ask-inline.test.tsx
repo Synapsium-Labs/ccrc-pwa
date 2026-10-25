@@ -76,11 +76,11 @@ const ASK_CALL: ChatEvent = {
 
 /** The session screen over a store that holds no ask yet; `arrive(n)` then delivers fixture `n`'s frames, as the stream
  *  does after the connect. `prompt` is the store's own send: a case asserts it was never called. */
-function mount(o: { status?: 'idle' | 'busy'; events?: ChatEvent[] } = {}) {
+function mount(o: { status?: 'idle' | 'busy'; events?: ChatEvent[]; row?: FleetSession } = {}) {
   const status = o.status ?? 'idle';
   const prompt = vi.fn().mockResolvedValue(undefined);
   const store: SessionStore = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt } });
-  const row: FleetSession = fleetSession({ id: ID, wrapper: 'lane-a', home: 'lane-a', project: 'project-a', status });
+  const row: FleetSession = o.row ?? fleetSession({ id: ID, wrapper: 'lane-a', home: 'lane-a', project: 'project-a', status });
   const fleet = createFleetStore({ makeSocket: fakeSocket });
   act(() => fleet.setState({ sessions: [row], conn: 'open' }));
   act(() => store.setState({ uuid: 'u1', status, events: o.events ?? EVENTS }));
@@ -994,7 +994,7 @@ describe('the composer while a question is up', () => {
     expect(composer()).toHaveValue('half a thought');
   });
 
-  it('the refusal line leaves once the question is answered and the card is gone, and a Send then goes through', async () => {
+  it('the sentence leaves once the question is answered and the card is gone, a Send then goes through, and a later question shows it again', async () => {
     media(true);
     const { arrive, prompt, store } = mount();
     arrive(1);
@@ -1122,10 +1122,13 @@ describe('Send is disabled while an inline ask surface is mounted (R77 F1)', () 
     [5, 'a terminal-door surface (the unparsed menu)'],
     [4, 'a plain menu'],
     [8, 'the review screen'],
+    [9, 'a pick-several (multiSelect) menu'],
+    [6, 'a coordinator-held question'],
+    [11, 'a coordinator-held question on an idle row'],
   ] as const)('fixture %i, %s', (n, what) => {
     it('Send is disabled before any click, and Enter makes no request', async () => {
       media(true);
-      const { arrive, prompt } = mount();
+      const { arrive, prompt } = mount({ row: askFixture(n).session });
       arrive(n);
       card();
       fireEvent.change(composer(), { target: { value: 'half a thought' } });
@@ -1138,7 +1141,7 @@ describe('Send is disabled while an inline ask surface is mounted (R77 F1)', () 
 
     it('the sentence shows in a status line before any click', () => {
       media(true);
-      const { arrive } = mount();
+      const { arrive } = mount({ row: askFixture(n).session });
       arrive(n);
       card();
       fireEvent.change(composer(), { target: { value: 'half a thought' } });
@@ -1153,6 +1156,29 @@ describe('Send is disabled while an inline ask surface is mounted (R77 F1)', () 
     card();
     expect(composer(), 'premise: the field is empty').toHaveValue('');
     expect(sentence(), 'the sentence shows with the card mounted and nothing typed').not.toBeNull();
+  });
+
+  it('fixture 7 on a busy turn with a draft: Send is disabled and the small Stop beside it is enabled and interrupts once with keycap', async () => {
+    // A characterization (green on arrival): the draft returns the send slot to Send and keeps a quieter Stop beside it;
+    // the ask disables Send only, so Stop stays one tap away.
+    media(true);
+    const interrupt = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined);
+    const { arrive, prompt, store } = mount({ status: 'busy' });
+    arrive(7);
+    expect(store.getState().dialog, 'premise: the pane has no menu').toBeNull();
+    card();
+    fireEvent.change(composer(), { target: { value: 'half a thought' } });
+    const stops = document.querySelectorAll<HTMLButtonElement>('.composer .stop-slot');
+    expect(stops, 'premise: one Stop in the send slot, beside Send').toHaveLength(1);
+    expect(stops[0]!.getAttribute('aria-label'), 'premise: it is the small Stop').toBe('Stop');
+    expect(sendButton(), 'Send is disabled').toBeDisabled();
+    expect(stops[0]!, 'the small Stop beside Send is enabled').toBeEnabled();
+    fireEvent.click(stops[0]!);
+    await act(async () => { await Promise.resolve(); });
+    expect(interrupt, 'a click on it interrupts once').toHaveBeenCalledTimes(1);
+    expect(interrupt).toHaveBeenCalledWith(ID, 'keycap');
+    expect(prompt, 'and no prompt was made').not.toHaveBeenCalled();
+    expect(composer(), 'the draft is kept').toHaveValue('half a thought');
   });
 
   it('when the card goes the sentence is gone and Send is enabled again with the draft kept', async () => {
@@ -1261,6 +1287,8 @@ describe('the card and the composer are not remounted by the ask\'s own life (R6
     expect(card(), 'in the gap: the same card node').toBe(section);
     expect(composer(), 'in the gap: the same composer node').toBe(box);
     expect(composer(), 'in the gap: its text').toHaveValue('half a thought');
+    expect(screen.getByRole('button', { name: 'Send' }), 'in the gap: Send is disabled').toBeDisabled();
+    expect(screen.getByText(sendErrorText('dialog-open')).closest('[role="status"]'), 'in the gap: the sentence shows').not.toBeNull();
 
     reconnect();
     expect(sockets.length, 'premise: a second socket was made').toBe(2);
