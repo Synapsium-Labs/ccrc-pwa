@@ -4274,6 +4274,15 @@ export class CoordStore {
     return isPositiveDecimalSafeInteger(id) ? id : null;
   }
 
+  /** D-TBD-child-reclaim-review-superseded: the newest review of `reviewedId` that closed `done` and opened after
+   *  `afterRunId`, or null. A failed or abandoned round left no report, so it supersedes nothing. */
+  laterReviewClosedFor(reviewedId: number, afterRunId: number): number | null {
+    const row = this.db.prepare("SELECT CAST(id AS TEXT) AS idText FROM runs WHERE kind = 'review' AND reviews = ? AND id > ? AND state = 'done' ORDER BY id DESC LIMIT 1")
+      .get(reviewedId, afterRunId) as { idText: string } | undefined;
+    const id = row === undefined ? NaN : Number(row.idText);
+    return isPositiveDecimalSafeInteger(id) ? id : null;
+  }
+
   /** D-6795: how many review runs name this work run, in any state (a failed or abandoned round still spent one). */
   reviewRounds(workRunId: number): number {
     const row = this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE kind = 'review' AND reviews = ?")

@@ -4652,6 +4652,10 @@ and `/:id/close`, with `/:id/items` and `/:id/route` beside them — one run row
    `childReclaimWhy` — `review-report-live` for a REVIEW child, which is not
    finished while the run it reviewed is open; the reclaim sweep reaches it
    once that run is terminal (**The reclaim sweep, and how to stop it**, below).
+   The sweep also reaches an EARLIER review child while that run is still open, once a LATER review of the same
+   run has itself closed `done` (its report replaces the older one); the newest review child is never taken this
+   way. It ships shadowed: until `$REG/child-superseded-reclaim-live` exists the lane only records "review report
+   would be reclaimed (superseded)" once per pair.
 
 **The mail bus and its token.** Sessions send each other mail — `finding |
 question | answer | status | artifact` — through `POST /api/mail`, attributed

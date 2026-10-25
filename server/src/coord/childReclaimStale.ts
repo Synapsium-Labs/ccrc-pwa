@@ -16,22 +16,37 @@ import { notify } from '../notice.js';
 import type { NotifyLog } from '../notifylog.js';
 import type { FleetState } from '../fleetstate.js';
 import type { SessionRecord } from '../registry.js';
-import { isRegistryId } from '../../../shared/api.js';
+import { TERMINAL_RUN_STATES, isRegistryId, type RunState } from '../../../shared/api.js';
 import type { FleetIO } from '../io.js';
 import {
   CHILD_STALE_IDLE_MS, childReclaimDetailText, childReclaimStaleVerdict, childReclaimStaleWordOf,
-  type ChildReclaimSweepInput, type ChildReclaimSweepVerdict, type ChildStaleAsk, type ChildStaleIdleRead, type ChildStaleWord,
+  type ChildReclaimReviewedRunRead, type ChildReclaimSweepInput, type ChildReclaimSweepVerdict, type ChildStaleAsk, type ChildStaleIdleRead, type ChildStaleWord,
 } from '../childReclaimSweep.js';
-import { CHILD_STALE_RECLAIM_LIVE_MARKER, readSwitches } from '../../../shared/switches.js';
+import { CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, readSwitches } from '../../../shared/switches.js';
 import type { CoordStore } from './store.js';
 import { queueSystemMail } from './rundefsTx.js';
 import type { ChildReclaimDeps, ChildReclaimRequest } from './childReclaim.js';
+
+/** `review-report-superseded` (D-TBD-child-reclaim-review-superseded): what the sweep reads of the run a review child's
+ *  minting run reviewed. While that run is open, a LATER review of it that closed `done` supersedes this one; the marker
+ *  only decides whether the sweep acts on that (`live`), the fact is always read so the shadow can say it. A read that
+ *  throws reaches the pass's per-child catch, which keeps the child. */
+export function childReclaimReviewedRun(
+  coord: Pick<CoordStore, 'laterReviewClosedFor'>, reviewRunId: number, reviewedId: number, state: RunState, names: readonly string[],
+): ChildReclaimReviewedRunRead {
+  if ((TERMINAL_RUN_STATES as readonly RunState[]).includes(state)) return { kind: 'run', state };
+  const by = coord.laterReviewClosedFor(reviewedId, reviewRunId);
+  if (by === null) return { kind: 'run', state };
+  return { kind: 'run', state, superseded: { by, live: readSwitches(names)[CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER] === 'set' } };
+}
 
 /** A digest stand-in for the first, hold-free look at a held child (never sent anywhere). */
 const PENDING_DIGEST = 'pending';
 
 /** The title of the shadow row: what the arm would have done. */
 export const CHILD_STALE_WOULD_TITLE = 'child would be reclaimed (stale)';
+/** The title of the shadow row for the superseded-review release. */
+export const CHILD_SUPERSEDED_WOULD_TITLE = 'review report would be reclaimed (superseded)';
 /** The title of the row that stands in for the coordinator's mail when there is nobody to send it to. */
 export const CHILD_STALE_TOLD_TITLE = 'stale child reclaimed';
 
@@ -108,11 +123,13 @@ export interface ChildStaleJudgement {
 export class ChildStaleArm {
   private readonly shadowSaid = new Map<string, { runId: number; words: Set<ChildStaleWord> }>();
   private readonly terminalAsked = new Map<string, { runId: number; at: number }>();
+  private readonly supersededSaid = new Map<string, string>();
 
   /** The ask for this child this pass, or `null`: not stale, the box cannot take the flag, the arm is shadowed (the
    *  row is written once), or a terminal child was asked within the last seven days. */
   judge(j: ChildStaleJudgement): (ChildStaleAsk & { readonly runId: number }) | null {
     const id = j.record.id;
+    this.supersededShadow(j);
     const word = childReclaimStaleWordOf(j.verdict);
     if (word === null) { this.forget(id); return null; }
     // A box that does not prove the flag is not sent it, and is not told "would" either: it could not.
@@ -144,6 +161,24 @@ export class ChildStaleArm {
   /** A terminal child's ask went out: the next one waits seven idle days. */
   asked(id: string, runId: number, ask: ChildStaleAsk, nowMs: number): void {
     if (ask.word === 'terminal') this.terminalAsked.set(id, { runId, at: nowMs });
+  }
+
+  /** The superseded release ships SHADOWED: while its marker is absent and the child is kept only for the open reviewed
+   *  run, say once per (run, superseding review) what it would do. Armed, the verdict itself is eligible and nothing is said. */
+  private supersededShadow(j: ChildStaleJudgement): void {
+    const id = j.record.id;
+    const r = j.input.reviewedRun;
+    const sup = r.kind === 'run' ? r.superseded : undefined;
+    if (sup === undefined || sup.live || j.input.child.kind !== 'child' || j.verdict.eligible
+        || childReclaimStaleWordOf(j.verdict) !== 'review') { this.supersededSaid.delete(id); return; }
+    const runId = j.input.child.runId;
+    const key = `${runId}:${sup.by}`;
+    if (this.supersededSaid.get(id) === key) return;
+    this.supersededSaid.set(id, key);
+    notify({ notifyLog: j.notifyLog, coord: j.coord },
+      { kind: 'run', sessionId: id, runId, title: CHILD_SUPERSEDED_WOULD_TITLE,
+        body: `${id}, review child of run #${runId}: the review in run #${sup.by} of the same run has closed, so this report is replaced; with the superseded release switched on ccrc would reclaim it and pin its work to the attic.` },
+      'record-only', { degraded: 'review report would be reclaimed (superseded), feed archive degraded' });
   }
 
   private forget(id: string): void {

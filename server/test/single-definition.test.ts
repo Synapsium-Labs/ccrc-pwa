@@ -5109,6 +5109,27 @@ describe('fleet disk retention DR-27: the stale arm’s live switch has no write
   });
 });
 
+// D-TBD-child-reclaim-review-superseded. The superseded-review release SHIPS SHADOWED behind
+// `$REG/child-superseded-reclaim-live`, hand-touched on the fleet box like the stale arm's: no shell line names it, its one
+// TS definer is the L0 switch table, and the one file that reads a listing the lane already took holds the constant.
+describe('child reclaim: the superseded-review release’s live switch has no writer in the tree', () => {
+  const NAME = 'child-superseded-reclaim-live';
+  const DEFINER = 'shared/switches.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+  });
+
+  it('the files that name its constant are the definer and the arm, and none reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    const holders = ALL.filter((f) => stallCode(f).includes('CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/coord/childReclaimStale.ts', DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
+
 // THE THRESHOLD IS NEVER TYPED BY THE SERVER (the coordinator's ruling (C), wave 3b): ccd's `ws-audit --expire`
 // document carries `expiresAt` (`archivedAt + WS_EXPIRE_AFTER_S`), and the server reads it through ONE reader. Both
 // halves pinned: no seven-day literal in the server or the PWA beside the one that is not an expiry (`limits.ts`'s
