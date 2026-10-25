@@ -1097,8 +1097,9 @@ export function registerLaneCleanup(
  *  body at status 500; `text` is the OTHER repository's shim (`text/plain`, the
  *  bare id); `404` answers every path with a JSON 404, as a LiteLLM proxy
  *  would. One mode per clause of `_codex_lane_answer`'s shape, so deleting any
- *  one clause reds exactly one case. */
-export type ListenerAnswer = 'json' | 'json-extra' | 'json-as-text' | 'json-500' | 'text' | '404';
+ *  one clause reds exactly one case. `direct` is the bridge's shape
+ *  (`{"lane": <lane>, "mode": "direct"}`, codex bridge Stage 2, Task 13). */
+export type ListenerAnswer = 'json' | 'json-extra' | 'json-as-text' | 'json-500' | 'text' | '404' | 'direct';
 
 /** EXPORTED for ccrc-codex.test.ts' no-reverse-lookup pin. Its `Server` is
  *  `fakeLitellmSource`'s: no `socket.getfqdn` between bind and listen. */
@@ -1132,6 +1133,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, "application/json", json.dumps({"lane": LANE}).encode())
             if ANSWER == "text":
                 return self._send(200, "text/plain", LANE.encode())
+            if ANSWER == "direct":
+                return self._send(200, "application/json", json.dumps({"lane": LANE, "mode": "direct"}).encode())
         return self._send(404, "application/json", b'{"error": "not found"}')
 class Server(ThreadingHTTPServer):
     def server_bind(self):

@@ -45,14 +45,12 @@ import { ghContainedEnv, ghPoisonAt, seedAccountsSh } from './ccdWsHelpers.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine, compiledSecretJs } from './authFixtures.js';
 import { IS_DARWIN } from './platformFixtures.js';
 import { DOCS_INDEX_READY, docsIndexStubScript } from './docsIndexFixtures.js';
-import { codexRoster, freeLanes, GPT_LANE_BINS, killLaneProcesses, plantFakeRuntime, plantCodexUsage, plantLaneAuth, type LanePorts } from './codexLaneFixture.js';
+import { codexRoster, freeLanes, GPT_LANE_BINS, killLaneProcesses, plantFakeRuntime, plantCodexUsage, plantLaneAuth, spawnListener, type LanePorts, type Listener } from './codexLaneFixture.js';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
 import { createStore } from '../../ccd/history/store.mjs';
 import { HEALTH_WORDS, deriveHealth } from '../../ccd/history/lib.mjs';
 import { swJs } from './swFixtures.js';
-import { spawn } from 'node:child_process';
-import { LISTENER_PY, trackChild, type Listener } from './codexLaneFixture.js';
 
 export const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1929,70 +1927,32 @@ export function bridgeStartedJson(home: string): string {
   return (r.stdout ?? '').trim();
 }
 
-/** `LISTENER_PY` with one more answer, `direct`: the bridge's `{"lane": <lane>, "mode": "direct"}`. */
-const BRIDGE_LISTENER_PY = ((): string => {
-  const at = '            if ANSWER == "json":\n';
-  if (!LISTENER_PY.includes(at)) throw new Error('LISTENER_PY no longer has the json arm this fixture extends');
-  return LISTENER_PY.replace(at,
-    '            if ANSWER == "direct":\n'
-    + '                return self._send(200, "application/json", json.dumps({"lane": LANE, "mode": "direct"}).encode())\n'
-    + at);
-})();
+/** A bridge start record's fields that `plantRunningBridge` / `writeBridgeRecord` can make stale, one at a time:
+ *  `_codex_started_json bridge`'s interpreter, placed-shim hash and package digest. */
+export type BridgeRecordField = 'interpreter' | 'code' | 'bridge';
 
-/** A listener answering `/ccgpt/lane` in the bridge's shape for `lane` (`spawnListener`'s twin, tracked the same way,
- *  so the file's after-hook ends it). `argv` is appended verbatim: `[<shim file>, '--ccrc-bridge=direct',
- *  '--ccrc-lane=<id>']` gives it the bridge's command line. */
-export async function spawnBridgeListener(
-  home: string, o: { lane: string; port: number; argv?: readonly string[] },
-): Promise<Listener> {
-  const py = pythonOrSkip();
-  if (py === null) throw new Error('spawnBridgeListener needs python3 — gate the describe with describeCodex');
-  const dir = join(home, 'fake-procs');
-  mkdirSync(dir, { recursive: true });
-  const script = join(dir, 'bridge-listener.py');
-  if (!existsSync(script)) writeFileSync(script, BRIDGE_LISTENER_PY);
-  const child = spawn(py, [script, '--answer', 'direct', '--lane', o.lane, '--listen-port', String(o.port), ...(o.argv ?? [])], {
-    cwd: home,
-    env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home, PYTHONDONTWRITEBYTECODE: '1' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  trackChild(home, child);
-  const port = await new Promise<number>((resolve, reject) => {
-    let out = '';
-    let err = '';
-    const timer = setTimeout(() => reject(new Error(`bridge listener reported no READY within 10s: ${err}`)), 10_000);
-    child.stdout?.on('data', (c: Buffer) => {
-      out += c.toString();
-      const m = /^READY (\d+)$/m.exec(out);
-      if (m) { clearTimeout(timer); resolve(Number(m[1])); }
-    });
-    child.stderr?.on('data', (c: Buffer) => { err += c.toString(); });
-    child.once('exit', (code, sig) => {
-      clearTimeout(timer);
-      reject(new Error(`bridge listener exited (${code ?? sig}) before READY: ${err}`));
-    });
-  });
-  if (child.pid === undefined) throw new Error('spawnBridgeListener: the child has no pid');
-  return { port, pid: child.pid, child };
+/** Writes lane `id`'s `bridge.started`: `current` as a start would write it now, a field name the same record with that
+ *  one field changed (so `_codex_tier_stale` reads it stale), `none` removes it. */
+export function writeBridgeRecord(home: string, id: string, rec: 'current' | 'none' | BridgeRecordField): void {
+  const file = join(home, '.ccrc', 'codex', id, 'bridge.started');
+  if (rec === 'none') { rmSync(file, { force: true }); return; }
+  const now = bridgeStartedJson(home);
+  if (rec === 'current') { writeFileSync(file, `${now}\n`); return; }
+  const other = rec === 'interpreter' ? join(home, 'elsewhere', 'python3') : '0'.repeat(64);
+  writeFileSync(file, `${JSON.stringify({ ...JSON.parse(now) as Record<string, string>, [rec]: other })}\n`);
 }
 
-/** This lane's own bridge, running, as `_codex_tier_ours <id> bridge` proves one: the bridge-shaped answer on the
- *  shim's port, from a pid whose command line carries `<shim file> --ccrc-bridge=direct --ccrc-lane=<id>` and which
- *  holds that port itself, named by `bridge.pid` (the nohup arm's handle). `record`: `current` writes `bridge.started`
- *  as a start would now, `stale` the same with another code hash, `none` no record. */
+/** This lane's own bridge, running, as `_codex_tier_ours <id> bridge` proves one: the bridge-shaped answer
+ *  (`spawnListener`'s `direct`) on the shim's port, from a pid whose command line carries `<shim file>
+ *  --ccrc-bridge=direct --ccrc-lane=<id>` and which holds that port itself, named by `bridge.pid` (the nohup arm's
+ *  handle). `record` is `writeBridgeRecord`'s (default `current`). */
 export async function plantRunningBridge(
-  home: string, id: string, o: { record?: 'current' | 'stale' | 'none' } = {},
+  home: string, id: string, o: { record?: 'current' | 'none' | BridgeRecordField } = {},
 ): Promise<Listener> {
   const { proxyPort } = lanePorts(home, id);
   const shim = join(home, '.local', 'bin', 'ccgpt-proxy.py');
-  const l = await spawnBridgeListener(home, { lane: id, port: proxyPort, argv: [shim, '--ccrc-bridge=direct', `--ccrc-lane=${id}`] });
-  const dir = join(home, '.ccrc', 'codex', id);
-  writeFileSync(join(dir, 'bridge.pid'), `${l.pid}\n`);
-  const rec = o.record ?? 'current';
-  if (rec !== 'none') {
-    const now = bridgeStartedJson(home);
-    writeFileSync(join(dir, 'bridge.started'), rec === 'current' ? `${now}\n`
-      : `${JSON.stringify({ ...JSON.parse(now) as Record<string, string>, code: '0'.repeat(64) })}\n`);
-  }
+  const l = await spawnListener(home, { answer: 'direct', lane: id, port: proxyPort, argv: [shim, '--ccrc-bridge=direct', `--ccrc-lane=${id}`] });
+  writeFileSync(join(home, '.ccrc', 'codex', id, 'bridge.pid'), `${l.pid}\n`);
+  writeBridgeRecord(home, id, o.record ?? 'current');
   return l;
 }
