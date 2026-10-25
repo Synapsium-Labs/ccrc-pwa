@@ -529,6 +529,18 @@ describe('`reclaim-paused` — the one cleanup switch — stops the lane ENTIREL
   });
 });
 
+describe('`child-reclaim-disabled` (ARCH-77, #812) does NOT touch this lane', () => {
+  it('set, with `reclaim-paused` absent, the live lane still audits and asks ws-expire as it does without it', async () => {
+    const f = await fixture();
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.touch('child-reclaim-disabled');
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
+    expect(f.feed()).toContainEqual(['demo-a', 'archived workspace cleaned up']);
+  });
+});
+
 describe('the threshold is ccd’s — never typed by the server', () => {
   it('a YOUNG archive is audited once to learn its instant, and not again before it', async () => {
     const f = await fixture();

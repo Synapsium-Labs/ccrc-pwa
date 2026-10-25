@@ -304,6 +304,19 @@ describe('the lane SHIPS SHADOWED', () => {
   });
 });
 
+describe('`child-reclaim-disabled` (ARCH-77, #812) does NOT touch this lane', () => {
+  it('set, with `reclaim-paused` absent, the live lane still ends the programme after the hour', async () => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.touch('child-reclaim-disabled');
+    f.plant(A);
+    const r1 = f.working(A, 'alpha');
+    await f.pass(); await walk(f, HOUR - 60_000);
+    f.next(); await f.pass();
+    expect(f.stateOf(r1)).toBe('failed');
+  });
+});
+
 describe('the hour, made durable', () => {
   it('a single crashed pass is never enough, even an hour after a durable anchor — a restart needs two fresh passes', async () => {
     const f = await fixture();
