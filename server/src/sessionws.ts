@@ -179,11 +179,9 @@ export class SessionStream implements FeedSubscriber {
   /** Every frame's one way out, masked (see the constructor's `sendRaw`). */
   private readonly send: (m: SessionStreamMsg) => void;
   private readonly onNotice = (n: Notice): void => this.send({ type: 'notice', message: n.message });
-  // This stream detects dialogs itself (start + every tick), so it always
-  // delivers a dialog that is ALREADY pending when the client connects — the
-  // global watcher only emits on the appear/clear transition, which a
-  // late-joining client would miss. Ignore the watcher's dialog bus events here
-  // to avoid double-delivery; still forward its notices.
+  // This stream frames the dialog itself, from the session's feed (the watcher publishes the pane on `pane:<id>`, and
+  // the feed's opening reading delivers a dialog that is ALREADY pending when the client connects: a transition-only
+  // emit would be missed by a late-joining client). The watcher sends no dialog frames of its own any more.
   //
   // A second channel runs the same way, alongside it: `applyHook` reads
   // `~/.cc-sessions/<id>.hookstate.json` itself, on connect and every tick,
@@ -194,7 +192,6 @@ export class SessionStream implements FeedSubscriber {
   // both are sent exactly as read. The client prefers the envelope when both
   // are present; the server never guesses which one is right.
   private readonly onSessionMsg = (m: SessionStreamMsg): void => {
-    if (m.type === 'dialog' || m.type === 'dialog_cleared') return;
     this.send(m);
   };
 

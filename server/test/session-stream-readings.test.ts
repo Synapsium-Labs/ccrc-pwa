@@ -179,6 +179,43 @@ describe('a session stream\'s four readings (ARCH-52)', () => {
     } finally { s.stop(); }
   });
 
+  // The subscription (K13): the watcher already captures the pane and reads the hookstate for every session on its tick
+  // and publishes both; an open session's feed takes them, and a published pane IS the tick (the feed has no clock).
+  it('a pane and a hookstate the watcher published are the reading: no capture, no hookstate read, and every socket is told', async () => {
+    const bus = new Bus();
+    const fa: SessionStreamMsg[] = []; const fb: SessionStreamMsg[] = [];
+    const sa = await open(bus, fa);
+    const sb = await open(bus, fb);
+    try {
+      captures = 0; hookReads = 0; taskReads = 0;
+      const at = Date.now();
+      bus.emit(`hook:${ID}`, { at, uuid: UUID_A, raw: { ok: false, reason: 'absent' } });
+      bus.emit(`pane:${ID}`, { at, pane: MENU });
+      await new Promise((r) => setTimeout(r, 50));
+      expect({ captures, hookReads }).toEqual({ captures: 0, hookReads: 0 });
+      expect(taskReads).toBe(1);   // the plan is the feed's own read: the watcher holds its counts on a slower clock
+      for (const f of [fa, fb]) expect(f.filter((m) => m.type === 'dialog')).toHaveLength(1);
+      bus.emit(`pane:${ID}`, { at: Date.now(), pane: BUSY });
+      await new Promise((r) => setTimeout(r, 50));
+      for (const f of [fa, fb]) expect(f.filter((m) => m.type === 'dialog_cleared')).toHaveLength(1);
+      expect(captures).toBe(0);
+    } finally { sa.stop(); sb.stop(); }
+  });
+
+  it('a pane captured before the last answer is not the reading: the feed looks again', async () => {
+    const bus = new Bus();
+    const sa = await open(bus, []);
+    try {
+      const old = Date.now();
+      await new Promise((r) => setTimeout(r, 5));
+      bus.emit(`answered:${ID}`, null);
+      captures = 0;
+      bus.emit(`pane:${ID}`, { at: old, pane: MENU });
+      await new Promise((r) => setTimeout(r, 50));
+      expect(captures).toBe(1);
+    } finally { sa.stop(); }
+  });
+
   it('a socket that joins a menu already explained is handed the explained menu, and costs the session no new read of the transcript', async () => {
     current = MENU;
     writeFileSync(path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`),
@@ -200,7 +237,7 @@ describe('a session stream\'s four readings (ARCH-52)', () => {
     } finally { sa.stop(); }
   });
 
-  it('the last socket to leave takes the feed with it: no listener, no timer, and a new socket starts a new feed', async () => {
+  it('the last socket to leave takes the feed with it: no listener, and a new socket starts a new feed', async () => {
     const bus = new Bus();
     const sa = await open(bus, []);
     const sb = await open(bus, []);
@@ -208,6 +245,8 @@ describe('a session stream\'s four readings (ARCH-52)', () => {
     expect(bus.listenerCount(`answered:${ID}`)).toBeGreaterThan(0);
     sb.stop();
     expect(bus.listenerCount(`answered:${ID}`)).toBe(0);
+    expect(bus.listenerCount(`pane:${ID}`)).toBe(0);
+    expect(bus.listenerCount(`hook:${ID}`)).toBe(0);
     const frames: SessionStreamMsg[] = [];
     const sc = await open(bus, frames);
     try {

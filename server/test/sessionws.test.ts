@@ -3195,6 +3195,7 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
   let app: FastifyInstance | undefined;
   let port: number;
   let coord: CoordStore;
+  let bus: Bus;
 
   beforeEach(async () => {
     home = mkTmp('ccrc-sws-mail-');
@@ -3208,7 +3209,8 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), coord };
-    app = await buildServer(deps, new Bus());
+    bus = new Bus();
+    app = await buildServer(deps, bus);
     await app.listen({ host: '127.0.0.1', port: 0 });
     const addr = app.server.address();
     port = typeof addr === 'object' && addr !== null ? addr.port : 0;
@@ -3422,6 +3424,8 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     expect(initialMail?.mail).toEqual([]);
 
     queueTo(ID, 'fresh mail after connect');
+    // The tick is the watcher's (ARCH-52): a session's feed has no clock, a published pane is what wakes it.
+    bus.emit(`pane:${ID}`, { at: Date.now(), pane: 'idle\n❯ \n' });
     let mailFrame: { type: string; mail: { subject: string }[] } | undefined;
     for (let i = 0; i < 6 && !mailFrame; i++) {
       const m = await next(6000);

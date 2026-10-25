@@ -1,14 +1,21 @@
-// The one reader of a session's pane menu, task plan, hook ask and outstanding mail (ARCH-52, #787; consolidation spec
-// K13). Each open `SessionStream` used to read all four itself, every 2 s: two tabs on one session were two captures,
-// two hookstate reads, two plan reads and two mail reads per tick. Now one `SessionFeed` per open session takes the
-// reading on one clock and hands the same reading to every stream subscribed to it; a stream keeps what is its own
+// The one source of a session's pane menu, task plan, hook ask and outstanding mail for its open streams (ARCH-52, #787;
+// consolidation spec K13). Each open `SessionStream` used to read all four itself, every 2 s: two tabs on one session
+// were two captures, two hookstate reads, two plan reads and two mail reads per tick. Now one `SessionFeed` per open
+// session builds the reading and hands the same one to every stream subscribed to it; a stream keeps what is its own
 // (its change gates, its client's idea of what it has seen, the transcript tail) and decides its frames from the
 // reading, exactly as it decided them from its own read.
 //
-// L4: this owns the poll timer. It decides nothing about a frame: a stream does that from the reading, so a reading
-// is the raw outcome of each read, not a verdict (`held` is the one thing it states about a capture, because the
-// failed-capture count is a fact about consecutive reads of the pane, which only the reader of the pane has).
-import type { Bus } from './bus.js';
+// The feed has no clock. The watcher already captures every registered pane and reads every hookstate on its tick, so
+// the feed SUBSCRIBES to those two (`pane:<id>`, `hook:<id>` on the bus) and a published pane is what triggers a
+// reading. It reads for itself only what the watcher does not hold in the stream's shape: the transcript (the ask's
+// enrichment), the plan (the watcher keeps its counts, on a slower clock) and the mail; and it captures the pane or
+// reads the hookstate itself only for the opening reading, when nothing fresh has been published (a connect owes its
+// client the reading whatever the schedule).
+//
+// L4: it decides nothing about a frame: a stream does that from the reading, so a reading is the raw outcome of each
+// read, not a verdict (`held` is the one thing it states about a capture, because the failed-capture count is a fact
+// about consecutive looks at the pane, which only the reader of the pane has).
+import type { Bus, HookReading, PaneReading } from './bus.js';
 import type { Deps } from './server.js';
 import type { Dialog } from '../../shared/api.js';
 import { parseDialog } from './pane/dialog.js';
@@ -16,7 +23,9 @@ import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
 import { readHookStateRawMeasured, type HookStateRawRead } from './hookstate.js';
 
-const POLL_MS = 2000;
+/** How old a published pane or hookstate may be and still be the reading. The watcher publishes every tick (2 s); past
+ *  this the watcher is not publishing for this session (not registered yet, a stalled tick) and the feed looks itself. */
+const PUBLISHED_FRESH_MS = 10_000;
 /** Failed captures in a row after which the menu the client holds is cleared (decision `ask-failed-capture-holds`):
  *  three polls, at least 6 s of the pane unreadable. One or two are the blips a slow remote call produces. */
 export const FAILED_CAPTURES_CLEAR = 3;
@@ -77,7 +86,11 @@ export class SessionFeed {
   private readonly facts = new Map<FeedSubscriber, FeedFacts | null>();
   /** The subscribers the poll fans out to: those whose join has been delivered its first reading. */
   private readonly ready = new Set<FeedSubscriber>();
-  private timer: NodeJS.Timeout | null = null;
+  /** The watcher's latest look at the pane and read of the hookstate, as published. */
+  private pane: PaneReading | null = null;
+  private hookPub: HookReading | null = null;
+  /** When the last answer was handled: a pane captured before it is older than what the client was told. */
+  private answeredAt = 0;
   private inflight: Promise<FeedReading> | null = null;
   private polling = false;
   private gen = 0;
@@ -90,7 +103,15 @@ export class SessionFeed {
 
   /** Bumped on every `answered:<id>`: a pane look taken under an older value read the pane from before that answer
    *  (decision `ask-stale-poll-dropped`). */
-  private readonly onAnswered = (): void => { this.gen += 1; };
+  private readonly onAnswered = (): void => { this.gen += 1; this.answeredAt = Date.now(); };
+
+  /** The watcher published its look at the pane: that is the tick. Readings are taken only while a subscriber is
+   *  ready; one in flight is not doubled (`poll`). */
+  private readonly onPane = (p: PaneReading): void => {
+    this.pane = p;
+    if (this.ready.size > 0) void this.poll();
+  };
+  private readonly onHook = (h: HookReading): void => { this.hookPub = h; };
 
   constructor(
     private readonly deps: Deps,
@@ -99,21 +120,19 @@ export class SessionFeed {
     private readonly onEmpty: () => void,
   ) {
     this.bus.on(`answered:${id}`, this.onAnswered);
+    this.bus.on(`pane:${id}`, this.onPane);
+    this.bus.on(`hook:${id}`, this.onHook);
   }
 
   get answeredGen(): number { return this.gen; }
 
   /** Subscribe `sub` and hand it the reading it opens with (what a connecting client is owed whatever the schedule),
-   *  then keep it on the poll. `facts` null: the session did not resolve; only the pane is read for it. */
+   *  then keep it on the watcher's ticks. `facts` null: the session did not resolve; only the pane is read for it. */
   async join(sub: FeedSubscriber, facts: FeedFacts | null): Promise<void> {
     this.facts.set(sub, facts);
     await this.deliver(sub, await this.take());
     if (!this.facts.has(sub)) return;       // it left while its opening reading was in flight
     this.ready.add(sub);
-    if (this.timer === null) {
-      this.timer = setInterval(() => { void this.poll(); }, POLL_MS);
-      this.timer.unref();
-    }
   }
 
   /** The facts `sub` now holds. Read on the next reading. */
@@ -125,13 +144,13 @@ export class SessionFeed {
     this.facts.delete(sub);
     this.ready.delete(sub);
     if (this.facts.size > 0) return;
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
     this.bus.off(`answered:${this.id}`, this.onAnswered);
+    this.bus.off(`pane:${this.id}`, this.onPane);
+    this.bus.off(`hook:${this.id}`, this.onHook);
     this.onEmpty();
   }
 
-  /** One tick: take the reading and hand it to every subscriber. The timer calls this; so do the tests. */
+  /** One tick: take the reading and hand it to every subscriber. A published pane calls this; so do the tests. */
   async poll(): Promise<void> {
     if (this.polling) return;
     this.polling = true;
@@ -168,19 +187,33 @@ export class SessionFeed {
     const startedAt = Date.now();
     const facts = this.current();
     const gen = this.gen;
-    const dialog = await this.readDialog(facts?.file ?? null, gen);
-    const { io, cfg } = this.deps;
+    const dialog = await this.readDialog(facts?.file ?? null, gen, await this.paneLook(startedAt));
+    const { io } = this.deps;
     const tasks = facts === null ? null : await readTasks(io, facts.cfgDir, facts.uuid, { touchedAt: true });
-    const hook = facts === null ? null : await readHookStateRawMeasured(io, cfg.registryDir, this.id, facts.uuid);
+    const hook = facts === null ? null : await this.hookRead(facts.uuid, startedAt);
     const mail = facts === null || !this.deps.coord ? null : this.deps.coord.outstandingMailFor(this.id, MAIL_LIMIT);
     return { startedAt, gen, dialog, tasks, hook, mail };
   }
 
-  /** Capture the pane and read what menu it holds, enriched from the transcript `file` while the menu is still
-   *  unexplained. null `file` (unresolvable session): the menu still ships, unenriched. */
-  private async readDialog(file: string | null, gen: number): Promise<DialogReading> {
+  /** The pane as the watcher published it, when that is fresh and was captured after the last answer; otherwise a
+   *  capture of our own (the opening reading, or a watcher that is not publishing). */
+  private async paneLook(now: number): Promise<string | null> {
+    const p = this.pane;
+    if (p !== null && now - p.at <= PUBLISHED_FRESH_MS && p.at >= this.answeredAt) return p.pane;
+    return this.deps.tmux.capture(this.id);
+  }
+
+  /** The raw hookstate as the watcher published it for this identity, when fresh; otherwise our own read. */
+  private async hookRead(uuid: string, now: number): Promise<HookStateRawRead> {
+    const h = this.hookPub;
+    if (h !== null && h.uuid === uuid && now - h.at <= PUBLISHED_FRESH_MS) return h.raw;
+    return readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, this.id, uuid);
+  }
+
+  /** Read what menu `pane` (null: the capture failed) holds, enriched from the transcript `file` while the menu is
+   *  still unexplained. null `file` (unresolvable session): the menu still ships, unenriched. */
+  private async readDialog(file: string | null, gen: number, pane: string | null): Promise<DialogReading> {
     const stale = (): boolean => gen !== this.gen;
-    const pane = await this.deps.tmux.capture(this.id);
     if (stale()) return { kind: 'dropped' };
     // Decision `ask-failed-capture-holds`: a failed capture (tmux, or the remote call behind it, returned nothing) is
     // NO READING, not "no menu". Clearing on it is what put the 2026-10-16 sheet on "Open terminal to answer" with the

@@ -233,7 +233,7 @@ const seedSession = (home: string, id: string, wrapper: string) => {
 };
 
 describe('FleetWatcher dialog detection', () => {
-  it('emits dialog once, marks dialogPending, then clears', async () => {
+  it('publishes each tick\'s pane once for the session\'s feed, sends no dialog frame of its own, marks dialogPending, then clears', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'claude-a-project-f', 'claude-a');
@@ -249,25 +249,25 @@ describe('FleetWatcher dialog detection', () => {
     const bus = new Bus();
     const msgs: SessionStreamMsg[] = [];
     const fleets: FleetSession[][] = [];
+    const panes: Array<string | null> = [];
     bus.on('session:claude-a-project-f', (m) => msgs.push(m));
+    bus.on('pane:claude-a-project-f', (p) => panes.push(p.pane));
     bus.on('fleet', (s) => fleets.push(s));
     const watcher = new FleetWatcher(deps, bus);
 
     await watcher.tick();
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0]!.type).toBe('dialog');
-    const dialog = (msgs[0] as { type: 'dialog'; dialog: Dialog }).dialog;
-    expect(dialog.parsed).toBe(true);
-    expect(dialog.options).toHaveLength(4);
+    expect(panes).toEqual([pane]);
+    expect(parseDialog(pane)!.options).toHaveLength(4);
     expect(fleets.at(-1)![0]!.dialogPending).toBe(true);
 
-    await watcher.tick(); // same dialog still up -> not re-emitted
-    expect(msgs).toHaveLength(1);
+    await watcher.tick(); // same dialog still up -> still published (the feed frames it), nothing sent here
+    expect(panes).toHaveLength(2);
 
-    pane = 'done\n❯ \n'; // dialog gone -> cleared + dialogPending false
+    pane = 'done\n❯ \n'; // dialog gone -> dialogPending false
     await watcher.tick();
-    expect(msgs).toHaveLength(2);
-    expect(msgs[1]).toEqual({ type: 'dialog_cleared' });
+    expect(panes).toHaveLength(3);
+    expect(panes[2]).toBe('done\n❯ \n');
+    expect(msgs).toEqual([]);   // the watcher's own dialog / dialog_cleared frames are gone: every stream dropped them
     expect(fleets.at(-1)![0]!.dialogPending).toBe(false);
   });
 });
