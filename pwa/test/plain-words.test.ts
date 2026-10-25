@@ -15,7 +15,10 @@
 //   - sentence constants: a top-level `const` holding a string, a template, or an arrow that returns one (exported or
 //     not: a private constant is rendered all the same), and a top-level function's returned strings;
 //   - the sentence values of a `Record` table (a top-level const typed `Record<…>`);
-//   - the first argument of `toast(…)`, which is a sentence the operator reads.
+//   - the first argument of `toast(…)`, which is a sentence the operator reads;
+//   - `api.ts` only: the Error literal in the returned API object's `projects` method, which reports a malformed
+//     project-list response. The two `wrong-representation` Errors in the docs loaders are internal machine
+//     discriminants, so this position does not read them.
 // It never scans `className`, `data-*`, object keys, import specifiers, route literals or comments.
 //
 // WIDER THAN THE PLAN'S LIST, ON PURPOSE (D-6325, T1b; T3a and T3d extend this file and inherit the choice). The plan
@@ -30,15 +33,17 @@
 // WHOLE WORDS, case-insensitive, except the exact lowercase literal `claude is asking` (the sentence-case
 // `Claude is asking` is the new kicker and is right). A word leaves the list only by a change that says why.
 //
-// THE FILES: the five an ask surface's words live in, plus `lib/refusalWords.ts`'s two `dialog-open` sentences, which the
-// composer says when an ask is up (read, not edited: they already pass).
+// THE FILES: the five ask-surface word homes, `lib/refusalWords.ts`'s two `dialog-open` sentences which the composer
+// says when an ask is up, and `lib/api.ts`'s project-list Error. The docs loaders' internal machine discriminants stay out.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import ts from 'typescript';
 import { isSpecifier, parseTs } from './literalWalker';
 
 const SESSION = path.join(import.meta.dirname, '..', 'src', 'session');
-const API = path.join(import.meta.dirname, '..', 'src', 'lib', 'refusalWords.ts');
+const REFUSAL_WORDS = path.join(import.meta.dirname, '..', 'src', 'lib', 'refusalWords.ts');
+const API = path.join(import.meta.dirname, '..', 'src', 'lib', 'api.ts');
 
 /** The words an operator never reads, each with what is said instead and why. */
 const FORBIDDEN: readonly { readonly word: RegExp; readonly name: string; readonly say: string; readonly why: string }[] = [
@@ -119,7 +124,10 @@ export interface Visible {
 /** Every operator-visible string in `source`, by position (see the header). `only` limits the Record tables read to the
  *  named keys (refusalWords.ts's two `dialog-open` sentences). */
 export function visibleStrings(file: string, text?: string, only?: readonly string[]): Visible[] {
-  const src = parseTs(file, text);
+  // The shared walker parses TSX for the UI files; api.ts has generic calls that TSX grammar cannot read.
+  const src = path.basename(file) === 'api.ts'
+    ? ts.createSourceFile(file, text ?? readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+    : parseTs(file, text);
   const found: Visible[] = [];
   const seen = new Set<ts.Node>();
   const add = (n: ts.Node, position: string): void => {
@@ -170,6 +178,22 @@ export function visibleStrings(file: string, text?: string, only?: readonly stri
   // Top level only: constants, tables and functions. (A sentence assembled deep inside a component is a JSX position or
   // a toast, which the walk above reads; a bare local string is not copy.)
   if (only === undefined) visit(src);
+  if (only === undefined && path.basename(file) === 'api.ts') {
+    const projectErrors = (n: ts.Node): void => {
+      if (ts.isNewExpression(n) && n.expression.getText(src) === 'Error') {
+        for (const v of leaves(n.arguments?.[0])) add(v, 'an api.projects Error');
+      }
+      n.forEachChild(projectErrors);
+    };
+    const projectMethod = (n: ts.Node): void => {
+      if (ts.isPropertyAssignment(n) && n.name.getText(src) === 'projects'
+        && (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))) {
+        projectErrors(n.initializer.body);
+      }
+      n.forEachChild(projectMethod);
+    };
+    src.forEachChild(projectMethod);
+  }
   for (const st of src.statements) {
     if (only === undefined && ts.isFunctionDeclaration(st)) {
       for (const v of returned(st)) add(v, 'a returned sentence');
@@ -220,10 +244,21 @@ describe('the ask surfaces speak plainly (D-6325)', () => {
     },
   );
 
-  it("refusalWords.ts's two dialog-open sentences, which the composer says while an ask is up, pass too", () => {
-    const strings = visibleStrings(API, undefined, ['dialog-open']);
-    expect(strings.map((s) => s.text), 'both sentences are read').toHaveLength(2);
-    expect(offences(API, strings)).toEqual([]);
+  it("refusalWords.ts's dialog-open sentences and api.projects' error pass too", () => {
+    const refusalStrings = visibleStrings(REFUSAL_WORDS, undefined, ['dialog-open']);
+    const projectErrorStrings = visibleStrings(API).filter((s) => s.position === 'an api.projects Error');
+    const strings = [...refusalStrings, ...projectErrorStrings];
+    expect(strings.map((s) => s.text), 'all three sentences are read').toHaveLength(3);
+    expect(offences(REFUSAL_WORDS, refusalStrings)).toEqual([]);
+    expect(offences(API, projectErrorStrings)).toEqual([]);
+  });
+
+  it("reads api.projects' inline Error by position, so a forbidden replacement fails", () => {
+    const source = readFileSync(API, 'utf8');
+    const changed = source.replace("The server's project list could not be read.", 'The pane could not be read.');
+    expect(changed).not.toBe(source);
+    const errors = visibleStrings(API, changed).filter((s) => s.position === 'an api.projects Error');
+    expect(offences(API, errors)).toHaveLength(1);
   });
 
   it('reads sentences at all: every owned file has operator-visible strings', () => {
