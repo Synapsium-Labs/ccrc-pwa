@@ -941,7 +941,7 @@ baseline from here on (§10).
 | Metric | Baseline | Target | 10-02..10-20 | 10-21..10-25 | 10-22..10-25 | Verdict |
 |---|---|---|---|---|---|---|
 | fleet `update-branch` commits | 8 (tool: 2) | 0 | 10, all on 10-20 | 12, all on 10-21 | 0 | met at the two-week mark (0 on 10-02..10-16); the 10-20/10-21 burst was legacy PRs; 0 since 10-21 22:20 UTC |
-| repeat absorptions, per merge | 0.58 (41 of 71) | under 1/3 | 0.51 (270 of 527) | 0.33 (20 of 61) | 0.24 (7 of 29) | fell 0.58 to 0.51 before the queue, target still missed; met after it |
+| repeat absorptions, per merge | 0.58 (41 of 71) | under 1/3 | 0.51 (270 of 527) | 0.33 (20 of 61) | 0.24 (7 of 29) | over 10-02..10-16 it fell 0.58 to 0.45 (moved; rule does not fire), target still missed; met after the queue |
 | merges per PR (fleet local merges of `main`) | 2.4 (71, 30) | n/a | 2.05 (527 merges, 257 PRs) | 1.49 (61, 41) | 1.32 (29, 22) | context for the row above |
 | ritual syncs per week | about 76 (episodes) | halved | not computable here; proxy below | not computable here; proxy below | n/a | proxy only |
 | green-to-merge median | 33 min (tool: 32.0) | under 10 min | 1.0 min | 77.7 min (p90 310) | 99.6 min (p90 276) | missed, and the wrong way |
@@ -955,7 +955,7 @@ Notes on the rows.
   repository setting that removes the button (`allow_update_branch=false`) came with the queue on 10-21.
 - **Repeat absorptions.** The baseline is measured over the ruled two-identity fleet set (the gh login plus the
   placeholder identity that made 37 of the window's 75 merges of `main`): 41 repeats in 71 merges of 30 PRs, 0.58.
-  Before the queue the share fell to 0.51, a small fall that misses the one-third target. The volume
+  Over 10-02..10-16 (the two-week mark) the share fell to 0.45, which is movement but still misses the one-third target; over 10-02..10-20 it is 0.51, context only, as that window takes in the 10-20 legacy-PR burst. The volume
   fell with the queue: 527 fleet merges of `main` in 19 days (about 28 a day) against 29 in the last 4 days (about 7
   a day). Clause 16 and the queue arrived together, so this run cannot say which earned the drop.
 - **Ritual syncs.** The metric is the transcript episode scan, which reads Claude Code transcripts on the fleet box.
@@ -1021,14 +1021,16 @@ were ejected twice.
 
 ### Kill-rule verdict (spec §10: a stage whose metric has not moved two weeks after rollout is retired or redesigned)
 
-- **Stage 1, prose parts (clauses 15 and 16, the sync advisory): the rule fires, on the repeat share.** At the
-  two-week mark (10-16) the `update-branch` count was 0, so that metric met its target; the 22 commits on 10-20 and
-  10-21 were on PRs opened before the rollout. The repeat share fell from 0.58 to 0.51 over 10-02..10-20 (0.45 over
-  10-02..10-16) and stayed above one third, so that target was not met; the ritual-sync rate cannot be judged on
-  this machine. What moved the numbers was the queue on 10-21, and the
-  drop in fleet merges of `main` with it. This section does not retire the clauses: with `allow_update_branch` off
-  and the queue in place, clause 16's three triggers cover what remains. Whether to retire the advisory or keep
-  it is the operator's call.
+- **Stage 1, prose parts (clauses 15 and 16, the sync advisory): the rule does not fire at the two-week mark.** The
+  rule retires a stage only when its metric has not moved two weeks after rollout. Every figure below uses the same
+  window, 10-02..10-16. `update-branch` count was 0, so that target was met (the 22 commits on 10-20 and 10-21 were
+  on PRs opened before the rollout). The repeat share moved from 0.58 to 0.45, so it moved, though it is still above the
+  target of one third and that target was missed. The ritual-sync rate was not measured (it needs the fleet box's
+  transcripts). For context only, 10-02..10-20 gives a repeat share of 0.51, a window that takes in the 10-20
+  legacy-PR burst. The open question is the missed repeat-share target, not a failed rollout, and the queue
+  (10-21) confounds it: what moved the numbers after 10-21 was the queue, and the drop in fleet merges of `main`
+  with it. This section does not retire the clauses: with `allow_update_branch` off and the queue in place,
+  clause 16's three triggers cover what remains. Whether to retire the advisory or keep it is the operator's call.
 - **Stage 2 (the queue), due about 2026-11-04: not yet due, and heading the wrong way on green-to-merge.** The
   median is 77.7 min against the target 10, almost all of it inside the queue: PRs enqueue within a minute of green at the median, then spend 38 min
   from last entry to merge (one run is 17 min of CI; the rest is time behind other entries) and pay for a 19.5% ejection rate. The target as written is not reachable with a 17-minute
