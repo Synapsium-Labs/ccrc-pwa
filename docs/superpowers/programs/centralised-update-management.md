@@ -6177,6 +6177,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   anomalies.** v0.0.686 carries wave 24 (#1237). None of the three touches the parts the broker's soak watches.
   `STATUS 2026-10-25T14:25:48Z fleet=v0.0.683 server=v0.0.683 health=v0.0.683 newest=v0.0.687 intent=*:dev/auto=off`
   `backups=fleet:210M/server:12036M disk=fleet:103G/server:18G`
+- **2026-10-25 15:25 UTC — a sixth console move, to v0.0.691, the first with wave 24's reader; two anomalies, both the
+  move in flight.** The probe saw the server's inventory row `pending` with a standing request, while the box already answered
+  v0.0.691. Its report read `restarting`, "pruning and thinning", since the service restart at 15:22:19. It settled `done`
+  at 15:29:28, and the inventory cleared by 15:32. The keep held 5, with the extra pre-migration data set kept as R46 says, and
+  free disk went 15,031M to 18,037M. Nothing misbehaved. `STATUS 2026-10-25T15:32:04Z fleet=v0.0.691 server=v0.0.691`
+  `health=v0.0.691 newest=v0.0.691 intent=*:dev/auto=off backups=fleet:187M/server:12107M disk=fleet:103G/server:18G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
