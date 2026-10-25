@@ -1491,9 +1491,11 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     expect(r.stdout).toMatch(/^rc=2,0$/m);
   });
 
-  it('a row older than three polls: WARN naming its age and the publisher\'s log', () => {
+  // Fix round 2 (FR1-M1, D-TBD-usage-row-ts-is-measured): a row's ts is when it was measured (a direct lane's is the
+  // bridge's own stamp), so the WARN says "measured" and counts no polls.
+  it('a row measured longer ago than the bound: WARN naming its age and the publisher\'s log', () => {
     const r = usageRows(usageBox('ccrc-doctor-usage-stale-', { ageS: 2701 }));
-    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: its usage row was last written 45 min ago — more than three of ccrc-codex-usage@codex-a\.timer's polls$/)]);
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: its usage row was last measured 45 min ago — more than 45 min, so ccrc-codex-usage@codex-a\.timer's recent polls have published nothing$/)]);
     expect(r.stdout).toMatch(/^ {2}remedy: read what the publisher says: journalctl --user -u ccrc-codex-usage@codex-a\.service -n 50$/m);
   });
 

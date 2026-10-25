@@ -6543,6 +6543,13 @@ _check_docs() {
 # file.
 # THREE of the timer's 15-minute cycles: one missed poll is not a finding.
 # `ccrc-doctor.test.ts` ties this to the shipped timer's `OnUnitActiveSec=`.
+# A row's `ts` is when its figures were MEASURED, not when the poll wrote it:
+# a direct lane's poll publishes the bridge's own snapshot under the bridge's
+# stamp (`_bridge_headers` in ccgpt-usage.py), up to its BRIDGE_FRESH_S (900 s)
+# older than the poll. A healthy direct lane's row is so at most about 1800 s
+# old and the bound still holds, but there it is crossed after two failed
+# polls, not three — so the WARN says "measured" and counts no polls
+# (D-TBD-usage-row-ts-is-measured).
 _DR_CODEX_USAGE_STALE_S=2700
 
 _dr_codex_usage_box() {   # -> WARN findings, recorded; rc 2 if any, else 0; sets DR_CODEX_USAGE_PAIR and DR_CODEX_USAGE_BOX_NOTE
@@ -6634,7 +6641,7 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
       else
         age=$((now - ts))
         if [ "$age" -gt "$_DR_CODEX_USAGE_STALE_S" ]; then
-          _dr_cx_warn "$id: its usage row was last written $((age / 60)) min ago — more than three of $t's polls" \
+          _dr_cx_warn "$id: its usage row was last measured $((age / 60)) min ago — more than $((_DR_CODEX_USAGE_STALE_S / 60)) min, so $t's recent polls have published nothing" \
             "read what the publisher says: $(_dr_log_hint "ccrc-codex-usage@$id.service")"
           rc=2
         else

@@ -1662,6 +1662,41 @@ describe.skipIf(!PY)('ccgpt-usage.py: the direct arm (codex bridge Stage 2, Task
         writeFileSync(statsPath(home, id), JSON.stringify({ ...doc, usageHeaders: { ...doc.usageHeaders, values } }),
           { mode: 0o600 });
       },
+      // Fix round 2 (R1): each shape below is the one shape that goes red when its guard in `_bridge_headers` is
+      // removed, because without the guard the poll raises outside its try and publishes nothing.
+      // The `usageHeaders` dict check: the bridge's own document before its first upstream response, which writes
+      // `usageHeaders: null` (D-6821) — an idle lane's ordinary state.
+      'no-usage-yet': async (home, id) => {
+        const ops = [
+          { op: 'stats-open', path: statsPath(home, id), lane: id },
+          { op: 'stats-call', method: 'flush', args: [], kwargs: { force: true } },
+        ];
+        const r = await runBridgeDriver(home, { ops }, {}, { timeoutMs: 30_000 });
+        expect(r.timedOut, r.stderr).toBe(false);
+        expect(driverLines(r.stdout).map((l) => l['op']), `${r.stdout}\n${r.stderr}`).toEqual(ops.map((o) => o.op));
+        const doc = JSON.parse(readFileSync(statsPath(home, id), 'utf8')) as Record<string, unknown>;
+        expect(doc['lane']).toBe(id);
+        expect(doc['usageHeaders']).toBeNull();
+      },
+      // The document dict check: a JSON array, which has no `.get`.
+      'not-an-object': async (home, id) => { writeFileSync(statsPath(home, id), '[]', { mode: 0o600 }); },
+      // The `at` string check: a numeric stamp, which `strptime` refuses with a TypeError its except does not name.
+      'a-numeric-stamp': async (home, id) => {
+        await bridgeSaw(home, id, BRIDGE_VALUES, nowS() - 60);
+        const doc = JSON.parse(readFileSync(statsPath(home, id), 'utf8')) as { usageHeaders: Record<string, unknown> };
+        writeFileSync(statsPath(home, id), JSON.stringify({ ...doc, usageHeaders: { ...doc.usageHeaders, at: nowS() - 60 } }),
+          { mode: 0o600 });
+      },
+      // The `values` dict check: a fresh stamp over a list of values, which has no `.items`.
+      'values-not-an-object': async (home, id) => {
+        await bridgeSaw(home, id, BRIDGE_VALUES, nowS() - 60);
+        const doc = JSON.parse(readFileSync(statsPath(home, id), 'utf8')) as { usageHeaders: { values: object } };
+        const values = Object.entries(doc.usageHeaders.values);
+        writeFileSync(statsPath(home, id), JSON.stringify({ ...doc, usageHeaders: { ...doc.usageHeaders, values } }),
+          { mode: 0o600 });
+      },
+      // The `RecursionError` in the read's except: nesting deeper than the parser's recursion limit.
+      'deep-nesting': async (home, id) => { writeFileSync(statsPath(home, id), '['.repeat(100_000), { mode: 0o600 }); },
     };
     for (const [shape, plant] of Object.entries(shapes)) {
       const home = mkTmp(`ccgpt-usage-direct-${shape}-`);
