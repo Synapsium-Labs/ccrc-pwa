@@ -34,8 +34,11 @@ import '../fleet/fleet.css';
 // tick inside one 30 s step re-renders no finished row. A fleet frame re-renders a
 // finished row only when its own `session` or its `coordSession` changed: the fleet
 // store keeps the object of every row that did not change (`keepRows`, C6), so an
-// identical frame re-renders none, and a frame that changes one session re-renders
-// the rows holding it. A coordinator shared by many rows (`coordSession`) is one
+// identical frame after the first re-renders none, and a frame that changes one
+// session re-renders the rows holding it. The FIRST live frame re-renders every
+// mounted finished row even when it equals the hydrated snapshot: it flips
+// `fleetFrameSeen`, which reaches each row as `frameSeen` (measured 20 of 20, before
+// C6 and after it). A coordinator shared by many rows (`coordSession`) is one
 // such change: when its row changes, every finished row it claims re-renders. Before
 // C6 every frame brought new session objects and re-rendered every finished row with
 // a live session. The board mounts at most 20 finished rows until Show more
