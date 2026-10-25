@@ -10961,7 +10961,7 @@ _models_lane_verdict() {   # <captured text> -> sets CX_VERDICT_RC, CX_VERDICT_M
 }
 
 _models_litellm_lane_held() {   # <codex accountId> -> prints exactly one JSON object; the caller holds `_codex_lock <id>`
-  local file out check crc ours said held=0 w wrc stoperr wsay recheck rrc ans
+  local file out check crc ours said held=0 w wrc stoperr wsay recheck rrc ans mode mrc
   local CX_VERDICT_RC CX_VERDICT_MARKED CX_VERDICT_SAID
   file="$(_models_roster_path)"
   out="$(_models_litellm_path "$1")"
@@ -10973,6 +10973,13 @@ _models_litellm_lane_held() {   # <codex accountId> -> prints exactly one JSON o
     printf '%s\n' "$check"
     return 0
   fi
+  # THE LANE'S MODE (codex bridge Stage 2, Task 11b), captured first: a `direct` lane runs no LiteLLM tier (its bridge
+  # reads no model id from this file), so its render asks NO tier, leaves `held` at 0 and only writes, which keeps
+  # litellm.yaml current for a switch back to `litellm`, and never stops, restarts or starts a tier. A LiteLLM tier
+  # running on a direct lane is a retired one, which `ccrc codex start` refuses and the doctor names; this render does
+  # not touch it. On `litellm`, and on rc 1 (a mode this ccrc cannot read, its line dropped here: the materialise just
+  # before this render re-renders lane.json), the tier is asked exactly as before.
+  mode="$(_codex_lane_mode "$1" 2>/dev/null)"; mrc=$?
   # THE TIER — asked only now, when the bytes differ.
   # A 2 is NAMED in the same subshell as the measurement (CX_TIER_WHY lives
   # only there), through `_codex_foreign_what` (review A2), and that naming
@@ -10983,16 +10990,20 @@ _models_litellm_lane_held() {   # <codex accountId> -> prints exactly one JSON o
   # the substitution's last line, never its exit status
   # (`_models_lane_verdict`): a fault inside `_codex_tier_ours` leaves no
   # marker, and reads 3, cannot ask.
-  said="$(
-    _codex_tier_ours "$1" litellm 2>&1 >/dev/null; rc=$?
-    if [ "$rc" -eq 2 ]; then
-      ( _codex_foreign_what "$1" litellm >/dev/null 2>&1; printf '%s. %s' "$CX_FOREIGN_WHAT" "$CX_FOREIGN_FIX" )
-    fi
-    printf '\nCX-VERDICT rc=%s' "$rc"
-  )"
-  _models_lane_verdict "$said"
-  ours="$CX_VERDICT_RC"; said="$CX_VERDICT_SAID"
-  ans="answered $ours"; [ "$CX_VERDICT_MARKED" -eq 1 ] || ans="ended without an answer"
+  if [ "$mrc" -eq 0 ] && [ "$mode" = direct ]; then
+    ours=not-asked
+  else
+    said="$(
+      _codex_tier_ours "$1" litellm 2>&1 >/dev/null; rc=$?
+      if [ "$rc" -eq 2 ]; then
+        ( _codex_foreign_what "$1" litellm >/dev/null 2>&1; printf '%s. %s' "$CX_FOREIGN_WHAT" "$CX_FOREIGN_FIX" )
+      fi
+      printf '\nCX-VERDICT rc=%s' "$rc"
+    )"
+    _models_lane_verdict "$said"
+    ours="$CX_VERDICT_RC"; said="$CX_VERDICT_SAID"
+    ans="answered $ours"; [ "$CX_VERDICT_MARKED" -eq 1 ] || ans="ended without an answer"
+  fi
   case "$ours" in
     0|4) held=1
          # F4/F5: the stop's OWN stderr line, captured in a tmp file (never
@@ -11041,7 +11052,7 @@ _models_litellm_lane_held() {   # <codex accountId> -> prints exactly one JSON o
          elif [ "$rrc" -ne 1 ]; then
            _models_refuse tier-unmeasured 1 "whether lane $1's LiteLLM tier's port is free right before the restart it is owed could not be measured (the lane library $ans${recheck:+: $recheck}), so it was not started again; that tier is DOWN. Run 'ccrc codex start $1' to bring it back. Nothing was written."
          fi ;;
-    1) : ;;
+    1|not-asked) : ;;
     2) [ -n "$said" ] && said=": $said" || said='.'
        _models_refuse tier-foreign 1 "lane $1's LiteLLM tier is not provably this lane's$said ccrc cannot tell whether it is serving the previous rendering, and it never stops what it cannot identify, so it was left running. Run 'ccrc codex status $1' to see what holds it, then re-run this command. Nothing was written." ;;
     *) _models_refuse tier-unmeasured 1 "ccrc could not ask whether lane $1's LiteLLM tier is running (the lane library $ans${said:+: $said}), so whatever holds it was left running and nothing was stopped — ccrc never stops what it cannot identify. Fix what that names, then re-run this command. Nothing was written." ;;
@@ -11406,11 +11417,11 @@ _models_advance_child() {   # <soft secs> <phase> [args…] -> the child's stdou
 
 # A read phase of the step, admitted first (rc 3: no time for it, nothing run). plan, check and receipt end within
 # MODELS_NODE_BOUND_S (+ the grace); the canary within its own deadline + 15.
-_models_advance_read() {   # <plan|check|receipt|canary> <id> [args…] -> frames on stdout (rc 0); stdin is the child's
+_models_advance_read() {   # <plan|check|receipt|canary|mode> <id> [args…] -> frames on stdout (rc 0); stdin is the child's
   local phase="${1:-}" soft
   shift
   case "$phase" in
-    plan|check|receipt) soft="$MODELS_NODE_BOUND_S" ;;
+    plan|check|receipt|mode) soft="$MODELS_NODE_BOUND_S" ;;
     canary) soft=$(( $(_models_canary_secs) + 15 )) ;;
     *) return 2 ;;
   esac
@@ -11441,6 +11452,7 @@ _models_advance_read_body() {   # <phase> [args…]
     check)   _models_adv_body_check "$@" ;;
     receipt) _models_adv_body_receipt "$@" ;;
     canary)  _models_adv_body_canary "$@" ;;
+    mode)    _models_adv_body_mode "$@" ;;
     tier)    _codex_tier_read_body "$@" ;;
     *) return 2 ;;
   esac
@@ -11477,6 +11489,15 @@ _models_adv_body_check() {   # <id>
   ans="$(_models_node litellm --file "$(_models_roster_path)" --id "$id" --template "$(_models_litellm_template)" \
            --out "$(_models_litellm_path "$id")" 2>/dev/null)" || return 1
   printf '%s' "$ans" | jq -er 'if type == "object" and .ok == true and .changed == false then "CHECK\tunchanged", "END" else error("changed") end' 2>/dev/null
+}
+
+# mode: the lane's mode, read from its lane.json by the one bash reader (`_codex_lane_mode`, codex bridge Stage 2,
+# Task 11b): `MODE<TAB>litellm|direct` and `END`. A mode that reader refuses (no lane.json, no `bridge`, a word it does
+# not know) fails the read, and its refusal line is dropped: the step ends silently, as it does on an unmeasured tier.
+_models_adv_body_mode() {   # <id>
+  local m
+  m="$(_codex_lane_mode "${1:-}" 2>/dev/null)" || return 1
+  printf 'MODE\t%s\nEND\n' "$m"
 }
 
 # canary: the existing canary owner and ALL its decoding, framed: `CANARY<TAB><result>` and, for a failed one, `REASON<TAB>
@@ -11572,6 +11593,19 @@ _models_advance_check() {   # <id>
   return 1
 }
 
+# mode -> ADV_MODE (litellm|direct), in the caller's locals; rc 0 only for a whole answer naming one of the two words.
+_models_advance_mode() {   # <id>
+  local out
+  ADV_MODE=''
+  out="$(_models_advance_read mode "$1")" || return 1
+  _models_adv_whole "$out" || return 1
+  case "$out" in
+    "MODE"$'\t'"litellm"$'\n'END) ADV_MODE=litellm ;;
+    "MODE"$'\t'"direct"$'\n'END) ADV_MODE=direct ;;
+    *) return 1 ;;
+  esac
+}
+
 # canary -> ADV_CAN_RESULT (passed|failed|not-ready|unavailable) and ADV_CAN_REASON, in the caller's locals; rc 0 only for a
 # whole answer. A canary that did not finish (rc 124, 125, a crash) is no answer: the lane defers.
 _models_advance_canary() {   # <id> <model> <effort|none>
@@ -11633,10 +11667,10 @@ _models_advance_lane() {   # <id> <deadline-secs> -> prints ONE JSON array of ev
 # The body of `_models_advance_lane`: every early end is a plain `return 0`, and every event is appended to the CALLER's
 # `evs` (bash's dynamic scope, the way `_codex_tier_ours` reads CX_TIER_ASKER), which the caller prints once.
 _models_advance_steps() {   # <id> <deadline-secs> -> appends to the caller's `evs`; rc 0 always
-  local id="$1" file bf n k cls pin to ceff result reason body tier said R
+  local id="$1" file bf n k cls pin to ceff result reason body tier tiers said R
   local -a rarg=()
   local -a ADV_C_CLS=() ADV_C_PIN=() ADV_C_TO=() ADV_C_EFF=()
-  local ADV_PLAN_WHY='' ADV_CAN_RESULT='' ADV_CAN_REASON='' ADV_LANE_END=0
+  local ADV_PLAN_WHY='' ADV_CAN_RESULT='' ADV_CAN_REASON='' ADV_LANE_END=0 ADV_MODE=''
   local CX_VERDICT_RC CX_VERDICT_MARKED CX_VERDICT_SAID
   # The automatic context (see `_models_lock`): the step's own non-exported locals.
   local MODELS_AUTO_DEADLINE="$2" MODELS_AUTO_TAIL_S=0
@@ -11663,16 +11697,24 @@ _models_advance_steps() {   # <id> <deadline-secs> -> appends to the caller's `e
   [ "$ADV_PLAN_WHY" = none ] || return 0
   n="${#ADV_C_CLS[@]}"
   [ "$n" -gt 0 ] || return 0
-  # 3. Readiness, asked once (D22): the LiteLLM tier, then the shim, each measured by a bounded identity read. The verdict
-  #    is the marker the child prints LAST, read after the child ended normally; a question that did not finish, or whose
-  #    marker is missing or malformed, is unmeasured, never ours and never down.
-  for tier in litellm shim; do
+  # 3. Readiness, asked once (D22): the lane's own mode tiers (codex bridge Stage 2, Task 11b), the mode captured
+  #    first by a bounded read of lane.json (a mode it cannot read ends the step, silently, as an unmeasured tier does).
+  #    A `litellm` lane: the LiteLLM tier, then the shim, then the check-only `litellm` comparison, as before. A `direct`
+  #    lane: the bridge tier alone, answering as itself (its direct-shaped lane answer and the pid its argv proves), and
+  #    no LiteLLM check: the bridge reads no model id from litellm.yaml. Each tier is measured by a bounded identity
+  #    read. The verdict is the marker the child prints LAST, read after the child ended normally; a question that did
+  #    not finish, or whose marker is missing or malformed, is unmeasured, never ours and never down.
+  _models_advance_mode "$id" || return 0
+  tiers="$(_codex_mode_tiers "$ADV_MODE")" || return 0
+  for tier in $tiers; do
     _models_advance_admit "$MODELS_AUTO_DEADLINE" $(( R + MODELS_KILL_GRACE_MAX_S )) || return 0
     said="$(_codex_tier_ours --bounded-read "$R" "$id" "$tier")" || return 0
     _models_lane_verdict "$said"
     [ "$CX_VERDICT_MARKED" = 1 ] && [ "$CX_VERDICT_RC" = 0 ] || return 0
   done
-  _models_advance_check "$id" || return 0
+  if [ "$ADV_MODE" = litellm ]; then
+    _models_advance_check "$id" || return 0
+  fi
   # 4 and 5. Per candidate, in CLASSES order.
   for (( k = 0; k < n; k++ )); do
     cls="${ADV_C_CLS[k]}"; pin="${ADV_C_PIN[k]}"; to="${ADV_C_TO[k]}"; ceff="${ADV_C_EFF[k]}"

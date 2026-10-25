@@ -1995,7 +1995,9 @@ export const stateCallsNaming = (argv: readonly string[], unit: RegExp): string[
 // A python child like every listener in this file, bound to 127.0.0.1 on a
 // port the kernel chose. It answers the shim's lane probe, `GET /ccgpt/lane`,
 // as the lane it was started for (or as another lane, or 404, by a `lane` file
-// in its record directory), and `POST /v1/messages` the way the lane's shim and
+// in its record directory), in the shim's shape or, by a `lane-shape` file, the
+// bridge's direct shape (codex bridge Stage 2, Task 11b), and
+// `POST /v1/messages` the way the lane's shim and
 // LiteLLM can, by a MODE FILE there (`mode.<model>` first, then `mode`, default
 // `ok`). It records every POST (its path, its header NAMES and VALUES, its
 // Authorization VALUE once more on its own, and its body) to `req.<n>.json`,
@@ -2045,6 +2047,13 @@ def lane_answer():
             v = f.read().strip()
         return None if v == "-" else v
     return LANE
+def lane_shape(lane):
+    p = os.path.join(REC, "lane-shape")
+    if os.path.isfile(p):
+        with open(p) as f:
+            if f.read().strip() == "direct":
+                return {"lane": lane, "mode": "direct"}
+    return {"lane": lane}
 def lane_mode():
     p = os.path.join(REC, "lane-mode")
     if os.path.isfile(p):
@@ -2115,7 +2124,7 @@ class Handler(BaseHTTPRequestHandler):
         if lane is None:
             return self._json(404, {"error": "not found"})
         if mode == "pad":
-            return self._body(200, "application/json", b" " * 5000 + json.dumps({"lane": lane}).encode())
+            return self._body(200, "application/json", b" " * 5000 + json.dumps(lane_shape(lane)).encode())
         if mode == "hang":
             time.sleep(60)
             return
@@ -2130,7 +2139,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 return
-        return self._json(200, {"lane": lane})
+        return self._json(200, lane_shape(lane))
     def do_POST(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         try:
@@ -2258,9 +2267,14 @@ export function laneProxyMode(p: FakeLaneProxy, mode: LaneProxyMode, model?: str
   writeFileSync(join(p.rec, model === undefined ? 'mode' : `mode.${model}`), `${mode}\n`);
 }
 
-/** Which lane the fake's lane probe answers as from now on; null: a 404. */
-export function laneProxyAnswersAs(p: FakeLaneProxy, lane: string | null): void {
+/** Which lane the fake's lane probe answers as from now on; null: a 404. `shape` is the answer's shape: `shim`, today's
+ *  shim's `{"lane": <id>}` (the default), or `direct`, the bridge's `{"lane": <id>, "mode": "direct"}` (codex bridge
+ *  Stage 2, Task 11b). */
+export function laneProxyAnswersAs(p: FakeLaneProxy, lane: string | null, shape: 'shim' | 'direct' = 'shim'): void {
   writeFileSync(join(p.rec, 'lane'), `${lane ?? '-'}\n`);
+  const file = join(p.rec, 'lane-shape');
+  if (shape === 'shim') fs.rmSync(file, { force: true });
+  else writeFileSync(file, `${shape}\n`);
 }
 
 /** How the fake's lane probe answers: a stalled, padded or endless response. */
