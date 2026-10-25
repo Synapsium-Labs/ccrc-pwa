@@ -28,7 +28,7 @@ import { LC_CAP_TOKEN, childReclaimDoneHighWater } from '../src/coord/mirrorplan
 import { parseJournalLine } from '../src/coord/journalparse.js';
 import { childMarkLeftListing } from '../src/coord/childReclaim.js';
 import { genFile } from './lifecycleHelpers.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { codeOnly } from './sourceScan.js';
 import { LC_DIR_NAME, type ChildMark, type CoordStatus } from '../../shared/api.js';
@@ -91,9 +91,8 @@ const tickRig = () => {
   const bus = new Bus();
   const frames: CoordStatus[] = [];
   bus.on('coord', (c: CoordStatus) => { frames.push(c); });
-  const w = new FleetWatcher(
-    { ...deps, io, coord,
-      fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-rm', LC_CAP_TOKEN] } } as never,
+  const w = new FleetWatcher(withFakeClock({ ...deps, io, coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-rm', LC_CAP_TOKEN] } } as never),
     bus,
   );
   return { w, io, registryDir, frames, append: appendTo(dir) };

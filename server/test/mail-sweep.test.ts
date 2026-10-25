@@ -24,7 +24,7 @@ import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { PushPayload } from '../src/push.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
 import { MAIL_GATES, STALL_LEVEL_TEXT } from '../../shared/api.js';
@@ -293,7 +293,7 @@ const primedWatcher = async (
   h: Harness, coord: CoordStore, over: Partial<Deps> = {},
 ): Promise<{ w: FleetWatcher; deps: Deps }> => {
   const deps: Deps = { ...testDeps(h.home, h.run), coord, ...over };
-  const w = new FleetWatcher(deps, new Bus(), 2000);
+  const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
   await w.tick();
   return { w, deps };
 };
@@ -534,7 +534,7 @@ describe('sweepMail: the gate', () => {
     seedHookState(h.home, ID);
     seedLiveState(h.home);
     queueTestDelivery(coord, ID, ENVELOPE);
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run), coord }, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), coord }), new Bus(), 2000);
 
     await w.tick();
     expect(literalSends(h.calls)).toEqual([]);

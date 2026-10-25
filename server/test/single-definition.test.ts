@@ -8577,6 +8577,11 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
     ]);
   });
 
+  it('no throttle reads the wall clock: every row of LANE_SCHEDULE is monotonic (OA-C4, ruled (a) on #803), 0 wall rows', async () => {
+    const { LANE_SCHEDULE } = await import('../src/laneSchedule.js');
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now(): verdicts keep the wall clock, cadences do not').toEqual([]);
+  });
+
   it('no bare cadence literal is compared with a lane clock', async () => {
     const { cadenceLiterals } = await import('./consolidationCensus.js');
     expect(text(cadenceLiterals()), 'a cadence is a named row').toEqual([]);
