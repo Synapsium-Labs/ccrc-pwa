@@ -130,8 +130,8 @@ export interface SessionState {
    *  moment: the ask ended during the drop, OR the server flapped (a failed hook-state read, or an aged-envelope keep
    *  decision restarting). Either releases the keys, the safe direction. It is a lifecycle count, not a content
    *  identity and not an ask id: the keyboard's engagement (`DialogSheet`'s `askIdentity`) joins it to the envelope's
-   *  content, so a clear plus a byte-identical ask is a new ask. In memory only: no snapshot or stored state carries it,
-   *  and a new store starts at 0. */
+   *  content, so a clear plus a byte-identical ask is a new ask. Nothing persists it: no stored or offline state carries it,
+   *  though the in-memory `SessionSnapshot` the reducer works on does, and a new store starts at 0. */
   askEpoch: number;
   tasks: TaskItem[]; // the session's task list, as the TUI's widget shows it
   /** D-5372: the tasks frame's `touchedAt` (newest task file mtime, epoch ms);

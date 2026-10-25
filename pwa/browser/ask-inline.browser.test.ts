@@ -466,8 +466,9 @@ describe('Go to question reveals the focused option (R69 F3, D-6326)', () => {
       expect(after.chat, '.chat did not scroll across the click').toBe(before.chat);
       expect(after.chatBody, '.chat-body did not scroll across the click').toBe(before.chatBody);
       // R69 N2: the focus ring is drawn outside the option (outline width plus offset) and the scroller clips it, so the
-      // revealed option stops at least that far short of the scroller's bottom (`scroll-margin-block` on
-      // `.ask-inline .opt`), not flush with it. The bound is the focused option's own computed ring, not the margin's token.
+      // revealed option stops at least that far short of the scroller's bottom (`scroll-padding-block` on
+      // `.ask-inline-body`, the app's own scroller), not flush with it. The bound is the focused option's own computed
+      // ring, not the padding's token.
       expect(g.ringStyle, 'premise: the focused option draws a focus ring (an outline, so its width and offset are real)').not.toBe('none');
       expect(g.ring, 'premise: the focused option\'s outline width plus offset is read').toBeGreaterThan(0);
       expect(g.option[1], `ring room: the option's bottom ${g.option[1]} is at least ${g.ring}px (its outline width + offset) above the scroller's bottom ${g.scroller[1]}`)
