@@ -510,7 +510,8 @@ describe('Go to question with an answer in flight (R69 F7, D-6326)', () => {
       await opened.page.waitForSelector(`${CARD} .opt-wait`, { timeout: 10_000 });
       const flight = await opened.page.evaluate((card) => {
         const opts = [...document.querySelector<HTMLElement>(card)!.querySelectorAll<HTMLButtonElement>('button.opt')];
-        return { count: opts.length, enabled: opts.filter((o) => !o.disabled).length, stop: opts.filter((o) => o.tabIndex === 0 && o.disabled).length };
+        return { count: opts.length, // the production raise's own selector (`AskSurface`), so a row disabled by aria alone is not counted either
+          enabled: document.querySelector<HTMLElement>(card)!.querySelectorAll('.opt:not(:disabled):not([aria-disabled="true"])').length, stop: opts.filter((o) => o.tabIndex === 0 && o.disabled).length };
       }, CARD);
       expect(flight.count, 'premise: the card has option buttons').toBeGreaterThan(1);
       expect(flight.enabled, 'premise: every option is disabled while the answer is in flight').toBe(0);
@@ -525,7 +526,8 @@ describe('Go to question with an answer in flight (R69 F7, D-6326)', () => {
         const a = document.activeElement as HTMLElement;
         return {
           isCard: a === el, inCard: el.contains(a), active: `${a.tagName}${a.className ? '.' + String(a.className).split(' ')[0] : ''}`,
-          enabled: [...el.querySelectorAll<HTMLButtonElement>('button.opt')].filter((o) => !o.disabled).length,
+          // the production raise's own selector (`AskSurface`)
+          enabled: el.querySelectorAll('.opt:not(:disabled):not([aria-disabled="true"])').length,
         };
       }, CARD);
       expect(after.isCard, `focus is on the card section (it is on ${after.active})`).toBe(true);
@@ -589,7 +591,8 @@ describe('Go to question draws a keyboard focus indicator on the card section (R
       focusVisible: a.matches(':focus-visible'), outlineStyle: cs.outlineStyle, outlineWidth, outlineOffset,
       box: { left: r.left - grow, top: r.top - grow, right: r.right + grow, bottom: r.bottom + grow },
       viewport: { width: window.innerWidth, height: window.innerHeight }, clips,
-      enabled: [...el.querySelectorAll<HTMLButtonElement>('button.opt')].filter((o) => !o.disabled).length,
+      // the production raise's own selector (`AskSurface`)
+          enabled: el.querySelectorAll('.opt:not(:disabled):not([aria-disabled="true"])').length,
     };
   };
 
