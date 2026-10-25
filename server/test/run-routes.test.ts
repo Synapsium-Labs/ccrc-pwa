@@ -29,6 +29,7 @@ import {
   WORK_ITEM_MAX,
   WORK_ITEM_TITLE_MAX,
   isSkillState,
+  type RunSummary,
 } from '../../shared/api.js';
 import { okRun, okRuns } from './coordReadHelpers.js';
 import { KeyedQueue } from '../src/inject/queue.js';
@@ -4268,6 +4269,32 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
       expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: {} })).statusCode).toBe(400);
       expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: r1 } })).statusCode).toBe(404);
       expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: 9999 } })).statusCode).toBe(404);
+    });
+
+    // D-6909: every run row carries the cap's state, so the console can show it without a second read.
+    it("GET /api/runs carries the cap's state: rounds, the cap, and when its ask was raised and lifted", async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      const capOf = async (id: number) => {
+        // `closed=1`: the three rounds are failed, so only the archive half lists them.
+        const res = await app.inject({ method: 'GET', url: '/api/runs?closed=1', headers: tokenHeaders(TOKEN) });
+        expect(res.statusCode).toBe(200);
+        return ((res.json() as { runs: RunSummary[] }).runs.find((r) => r.id === id))!.reviewCap;
+      };
+      expect(await capOf(workId)).toEqual({ rounds: 3, cap: 3, askedAt: null, liftedAt: null });
+      for (const id of ids) expect(await capOf(id)).toBeNull();
+      expect((await postOpen(app, REVIEW(workId, { title: 'R4' }))).statusCode).toBe(409);
+      const asked = await capOf(workId);
+      expect(asked).toMatchObject({ rounds: 3, cap: 3, liftedAt: null });
+      expect(typeof asked!.askedAt).toBe('number');
+      expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: workId } })).statusCode).toBe(200);
+      const lifted = await capOf(workId);
+      expect(lifted!.askedAt).toBe(asked!.askedAt);
+      expect(typeof lifted!.liftedAt).toBe('number');
+      // `coord.runs()` is what the live `runs` frame ships, and `coord.run()` the advance echo: the same object.
+      expect(okRuns(w.coord.runs()).find((r) => r.id === workId)!.reviewCap).toEqual(lifted);
+      expect(okRun(w.coord.run(workId))!.reviewCap).toEqual(lifted);
     });
 
     it('counts every state: a failed or abandoned round still spent one', async () => {

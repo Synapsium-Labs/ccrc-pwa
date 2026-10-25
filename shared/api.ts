@@ -6455,6 +6455,13 @@ export interface ChildReclaimStatus {
   readonly at: number | null;
 }
 
+/**
+ * A work run's review-round cap (D-6909, building on D-6795): how many review runs name it, the cap, and when the
+ * cap's ask was raised (the refused fourth open) and lifted (the operator's `POST /api/coord/review-cap`). Both times
+ * are epoch ms on the server's clock, and null until that event. Only a work run carries one.
+ */
+export interface ReviewCapStatus { rounds: number; cap: number; askedAt: number | null; liftedAt: number | null }
+
 export interface RunSummary {
   id: number;
   program: string;              // slug
@@ -6609,6 +6616,17 @@ export interface RunSummary {
    * omits it and a `RunSummary` is cast, never revived.
    */
   childReclaim: ChildReclaimStatus | null;
+
+  /**
+   * D-6909: this run's review-round cap. A work run carries its `ReviewCapStatus`; a review run, or a run of unknown
+   * kind, carries `null`. Batch-read in `hydrateRun`, so every emitter carries it: `GET /api/runs`, the live
+   * `{type:'runs'}` frame and the advance echo.
+   *
+   * ADDITIVE; `FLEET_PROTO` is not bumped. REQUIRED here for `health`'s reason (`hydrateRun` returns a literal).
+   * OPTIONAL at the PWA's one reader, `reviewCapOf` (`pwa/src/fleet/reviewCapWords.ts`), because an older server
+   * omits it and a `RunSummary` is cast, never revived: absent reads as unmeasured, never as "not waiting".
+   */
+  reviewCap: ReviewCapStatus | null;
 }
 
 /** Speed and quality per run (routing spec 2026-09-14 §6), READ-ONLY, from the

@@ -1,4 +1,5 @@
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
+import type { ReviewCapStatus, RunKind } from '../../../shared/api.js';
 import { redactCommand } from './redact.js';
 
 /**
@@ -15,6 +16,13 @@ export const REVIEW_ROUND_CAP = 3;
 
 /** Whether opening one more review run is over the cap. A lifted run is never over it. */
 export const reviewCapRefuses = (rounds: number, lifted: boolean): boolean => !lifted && rounds >= REVIEW_ROUND_CAP;
+
+/** D-6909: the cap's state a run row carries. Only a work run has one; a review run, or a run of unknown kind, is null.
+ *  `row` is the run's `review_cap` row, absent until the ask is raised or the cap lifted. */
+export const reviewCapStatus = (kind: RunKind, rounds: number,
+  row: { askedAt: number | null; liftedAt: number | null } | undefined): ReviewCapStatus | null =>
+  kind !== 'work' ? null
+    : { rounds, cap: REVIEW_ROUND_CAP, askedAt: row?.askedAt ?? null, liftedAt: row?.liftedAt ?? null };
 
 /** The last review's report as the store reads it from its `review-done` mail; both fields are null when no review
  *  has reported. `summary` is the mail body after its fingerprint line. */

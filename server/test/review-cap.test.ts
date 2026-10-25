@@ -9,7 +9,7 @@
 //   delete the store's guard .................... both the refusal case and the lifted case (never refuses)
 //   `reviewCapLifted` always false .............. the lifted case (the 4th stays refused)
 import { describe, it, expect } from 'vitest';
-import { REVIEW_ROUND_CAP, extractOpenFindings, reviewCapAsk, reviewCapNotice, reviewCapRefuses, reviewFindingsOf } from '../src/coord/reviewcap.js';
+import { REVIEW_ROUND_CAP, extractOpenFindings, reviewCapAsk, reviewCapNotice, reviewCapRefuses, reviewCapStatus, reviewFindingsOf } from '../src/coord/reviewcap.js';
 
 describe('reviewCapRefuses', () => {
   it('the cap is 3', () => { expect(REVIEW_ROUND_CAP).toBe(3); });
@@ -50,5 +50,19 @@ describe('extractOpenFindings', () => {
     expect(reviewFindingsOf({ ok: false, reason: 'absent' })).toEqual({ state: 'absent' });
     expect(reviewFindingsOf({ ok: false, reason: 'unreadable' })).toEqual({ state: 'unreadable' });
     expect(reviewFindingsOf({ ok: true, content: '## Findings\n' })).toEqual({ state: 'read', lines: [] });
+  });
+});
+
+// D-6909: the cap's state on a run row. A work run carries it; a review run, or a run of unknown kind, carries null.
+describe('reviewCapStatus', () => {
+  it('a work run with no review_cap row reads rounds and the cap, nothing raised or lifted', () => {
+    expect(reviewCapStatus('work', 2, undefined)).toEqual({ rounds: 2, cap: 3, askedAt: null, liftedAt: null });
+  });
+  it('a work run carries its row\'s askedAt and liftedAt', () => {
+    expect(reviewCapStatus('work', 3, { askedAt: 10, liftedAt: 20 })).toEqual({ rounds: 3, cap: 3, askedAt: 10, liftedAt: 20 });
+  });
+  it('a review run, and a run of unknown kind, carry null', () => {
+    expect(reviewCapStatus('review', 0, undefined)).toBeNull();
+    expect(reviewCapStatus('unknown', 3, { askedAt: 1, liftedAt: null })).toBeNull();
   });
 });

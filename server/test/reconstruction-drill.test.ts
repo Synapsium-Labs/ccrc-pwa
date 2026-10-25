@@ -284,6 +284,10 @@ describe('the reconstruction drill', () => {
                                          // board can draw, which is the honest answer and not a gap to
                                          // close: the facts are about the coordination lane's own
                                          // history, and that history lives only here.
+      'reviewCap',                       // D-6909: the review cap's ask and lift times live in `review_cap`
+                                         // alone, and the rounds count review runs the drill does not
+                                         // rebuild. A DB loss forgets a lift, so the next fourth review is
+                                         // refused again and the operator lifts it again: the safe direction.
       'work item ids and their blockedBy DAG',
       'per-item doneFingerprint',
       'mail bodies and their delivery/ack state',
@@ -321,6 +325,7 @@ describe('the reconstruction drill', () => {
       closedAt: true, handoffCommit: true, items: true, unreadMail: true,
       health: true,
       childReclaim: true,
+      reviewCap: true,
     };
     // Bumped 22 -> 24: `kind`/`reviews` (design 2026-09-14 §5.1, task 3).
     // Bumped 24 -> 25: `childReclaim` (child-reclamation wave 5). It is NOT in
@@ -336,13 +341,14 @@ describe('the reconstruction drill', () => {
     // fleet switch). With no such marker it shows no chip. Either way it says
     // only what the registry and the sweep show now, never a mirror answer for
     // an instant nobody can place.
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(25);
+    // Bumped 25 -> 26: `reviewCap` (D-6909), named in UNRECOVERABLE above.
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(26);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {
       expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(17);
+    expect(UNRECOVERABLE.length).toBe(18);
   });
 
   it('refuses to invent a program when the ledger is missing', () => {

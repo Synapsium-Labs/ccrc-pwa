@@ -38,7 +38,7 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   handoffCommit: null, items: { done: 3, total: 3 }, unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, childReclaim: null, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, ...over,
 });
 
 /** `n` closed runs, ids 1..n, run `i` closed at `T0 + i * 60 s`, handed over in
