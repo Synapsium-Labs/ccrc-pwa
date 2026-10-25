@@ -91,8 +91,9 @@ export interface LandingRun { id: number }
  *  APART from its empty answer: `runs.ok === false` is not `run === null`. */
 export interface LandingFacts {
   runs?: { ok: true; run: LandingRun | null } | { ok: false; detail: string };
-  /** `coordinatorOfRun(run.id)`: asked only of a run. */
-  coordinator?: string | null;
+  /** `readCoordinatorOfRun(run.id)`: asked only of a run. `null` is a run with no coordinator; `{ok:false}` is a run row
+   *  that could not be read, which defers (never "nobody to tell", which latches a merge and records a dequeue). */
+  coordinator?: string | null | { readonly ok: false; readonly detail: string };
   /** The survivor run's own state, read for a merge only. `null` is a run row that is gone. */
   runState?: { ok: true; state: string | null } | { ok: false; detail: string };
   /** The durable "already told" answer: a mail through `hasMailWithSubject` when a coordinator is named, the feed
@@ -133,7 +134,9 @@ export function landingVerdict(a: LandingAsk, f: LandingFacts): LandingStep {
   if (!f.runs.ok) return { step: 'defer', detail: f.runs.detail };
   const run = f.runs.run;
   if (run !== null && f.coordinator === undefined) return { step: 'coordinator', runId: run.id };
-  const coordinator = run === null ? null : f.coordinator ?? null;
+  const c = run === null ? null : f.coordinator ?? null;
+  if (c !== null && typeof c === 'object') return { step: 'defer', detail: c.detail };
+  const coordinator: string | null = c;
   if (a.notice === 'merged') {
     // A MERGE: told only to a coordinator whose run waits at `merging`.
     if (run === null || coordinator === null) return LATCH;

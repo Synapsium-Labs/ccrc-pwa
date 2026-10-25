@@ -98,8 +98,10 @@ describe('the readers take the worker\'s incarnation (ARCH-62)', () => {
     s.setSession(g, 'demo-w');
     s.db.prepare('UPDATE runs SET openedAt = ? WHERE id IN (?, ?, ?)').run(BORN - 1000, w1, w2, g);
     s.setSession(w1, 'demo-w', BORN);
-    s.db.prepare('UPDATE runs SET dispatchStartedAt = ?, coordProject = ? WHERE id = ?').run(BORN, 'p', w1);
+    // Wave 2 is bound BEFORE wave 1's dispatch records the birth, so the bind has none to stamp: the undecided wave 2.
     s.setSession(w2, 'demo-w');
+    s.db.prepare('UPDATE runs SET dispatchStartedAt = ?, coordProject = ? WHERE id = ?').run(BORN, 'p', w1);
+    expect(s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(w2), 'wave 2 is not bound without a birth').toEqual({ sessionBornAt: null });
     finish(s, w1);
     const verdict = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: w1 } as never, [], BORN + 5000);
     expect(verdict).toMatchObject({ kind: 'released', runId: w1 });

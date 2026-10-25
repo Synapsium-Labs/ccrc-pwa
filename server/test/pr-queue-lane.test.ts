@@ -337,10 +337,10 @@ describe('the landing lane latches only what it told', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const f = await harness(mergedLine());
     const realRun = f.coord.run.bind(f.coord);
-    // The landing lane reads the run twice (the coordinator of the run, then its state; ARCH-62 slice 4 reads the first through
-    // `run(id)` too): the SECOND read is the one made unreadable, as the first was before the coordinator moved onto `run(id)`.
+    // The FIRST run read fails: since ARCH-62 slice 4 that is the coordinator's (`readCoordinatorOfRun`), and its failure
+    // defers exactly as the state read's does (the next case) — never "nobody to tell", which would latch the merge.
     let n = 0;
-    vi.spyOn(f.coord, 'run').mockImplementation((id) => (n++ === 1
+    vi.spyOn(f.coord, 'run').mockImplementation((id) => (n++ === 0
       ? { ok: false as const, kind: 'run-unreadable' as const, detail: 'fixture' } : realRun(id)));
     await f.sweep();
     expect(f.mail(), 'an unreadable run row was read as "not at merging"').toEqual([]);
@@ -361,6 +361,42 @@ describe('the landing lane latches only what it told', () => {
     expect(g.mail(), 'the thrown merged notice was never retried').toHaveLength(1);
     warn.mockRestore();
     g.stop();
+  });
+
+  it('a merge whose run STATE cannot be read (the coordinator read) defers too, and mails once it reads', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = await harness(mergedLine());
+    const realRun = f.coord.run.bind(f.coord);
+    // The second run read is the state read (`runState`), after the coordinator read answered.
+    let n = 0;
+    vi.spyOn(f.coord, 'run').mockImplementation((id) => (n++ === 1
+      ? { ok: false as const, kind: 'run-unreadable' as const, detail: 'fixture' } : realRun(id)));
+    await f.sweep();
+    expect(f.mail(), 'an unreadable run state was read as "not at merging"').toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('deferred (run rows unreadable: fixture)'));
+    await f.sweep();
+    expect(f.mail(), 'the deferred merged notice was never sent').toHaveLength(1);
+    warn.mockRestore();
+    f.stop();
+  });
+
+  it('a dequeue whose coordinator read fails defers: no "nobody to tell" record, and the coordinator is mailed once it reads', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }));
+    const realRun = f.coord.run.bind(f.coord);
+    let n = 0;
+    vi.spyOn(f.coord, 'run').mockImplementation((id) => (n++ === 0
+      ? { ok: false as const, kind: 'run-unreadable' as const, detail: 'fixture' } : realRun(id)));
+    await f.sweep();
+    expect(f.queueFeed(), 'an unreadable coordinator was recorded as "no open run names a coordinator"').toEqual([]);
+    expect(f.mail()).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('deferred (run rows unreadable: fixture)'));
+    await f.sweep();
+    expect(f.mail(), 'the deferred dequeue was never mailed').toHaveLength(1);
+    expect(f.queueFeed()).toHaveLength(1);
+    expect(f.queueFeed()[0]!.body).toContain(`Mailed coordinator ${COORDINATOR}`);
+    warn.mockRestore();
+    f.stop();
   });
 
   it('a restart re-mails no merge it already told — acked', async () => {

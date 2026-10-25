@@ -61,12 +61,24 @@ export function runsTouching(
   return { ok: true, runs: series.runs.map((r) => ({ id: r.id, sessionId: r.sessionId, claimedBy: r.claimedBy })) };
 }
 
-/** The coordinator `'coordinator'` resolves to for one run: that run's own claim, `null` when the run is absent, ownerless or
- *  cannot be read (`run(id)`'s `{ok:false}`: every caller already holds a run whose row a read proved). The run-keyed half
- *  of the store's old `resolveCoordinator`; the no-run arm is `CoordStore.soleActiveCoordinator`. */
-export const coordinatorOfRun = (port: Pick<BindingReadPort, 'run'>, runId: number): string | null => {
+/** The coordinator of one run, its failure kept APART from its empty answer: `{ok:true, id:null}` is a run that is absent or
+ *  ownerless; `{ok:false}` is `run(id)`'s own failure, a row this process cannot represent (an id past 2^53, or a wave,
+ *  waveOf or reviews value the hydrate refuses). A lane that latches or records "nobody to tell" on `null` reads THIS and
+ *  defers on `ok:false` (D-2545: an unreadable row is not an empty answer): the landing lane, whose prior read
+ *  (`openRunsForSession`/`survivorOf`, two columns, no hydrate) proves nothing of the row, the checks lane and the brief
+ *  lane. The run-keyed half of the store's old `resolveCoordinator`; the no-run arm is `CoordStore.soleActiveCoordinator`. */
+export type CoordinatorRead = { readonly ok: true; readonly id: string | null } | { readonly ok: false; readonly detail: string };
+export const readCoordinatorOfRun = (port: Pick<BindingReadPort, 'run'>, runId: number): CoordinatorRead => {
   const read = port.run(runId);
-  return read.ok ? read.run?.claimedBy ?? null : null;
+  return read.ok ? { ok: true, id: read.run?.claimedBy ?? null } : { ok: false, detail: read.detail };
+};
+
+/** `readCoordinatorOfRun` collapsed to the ADDRESSING answer: the claim, or `null` for absent, ownerless or unreadable. Only
+ *  for a caller whose `null` refuses or degrades the one act in hand (an addressed mail answers unresolved, a sender is not
+ *  tagged, a reclaim names nobody) and so repeats on its own next ask; never for one that latches or records on `null`. */
+export const coordinatorOfRun = (port: Pick<BindingReadPort, 'run'>, runId: number): string | null => {
+  const read = readCoordinatorOfRun(port, runId);
+  return read.ok ? read.id : null;
 };
 
 /** The session `'worker'` resolves to for one run: that run's own `sessionId`, `null` when the run is absent, undispatched or
