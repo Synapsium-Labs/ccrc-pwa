@@ -15,7 +15,7 @@ programme carries the fix.
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | The reader accepts a session-less `test-run` row and parses its id and uuid as "no session"; receipts never mail one; the spec says what the writer writes; a contract row runs the real sweep's census through the reader. | — | **OPENING** 2026-10-25 10:20 UTC |
+| 1 | The reader accepts a session-less `test-run` row and parses its id and uuid as "no session"; receipts never mail one; the spec says what the writer writes; a contract row runs the real sweep's census through the reader. | — | **DISPATCHED** 2026-10-25 10:24 UTC as run 941 to a fresh child workspace. Brief: the plan's decision and task, the mutation rule, fixture HOMEs only, gates. |
 
 ## Decisions & deviations
 
