@@ -192,7 +192,7 @@ const lane = (opts: LaneOpts = {}) => {
   const requests: ChildReclaimRequest[] = [];
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   const deps = {
-    ...testDeps(home, async () => ({ code: 1, stdout: '', stderr: '' })), cfg, coord, notifyLog,
+    ...testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), cfg, coord, notifyLog,
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: ['ws-audit', 'ws-reclaim', RECLAIM_CAP, RECLAIM_PAUSE_CAP, ACTOR_FLAGS_CAP,
         ...(opts.cap === false ? [] : [RECLAIM_STALE_CAP])] },
@@ -460,10 +460,10 @@ const rig = async (over: { fleetState?: FleetState; claimedBy?: string | null; p
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
-    if (args[0] === 'ws-audit') return { code: 0, stdout: JSON.stringify({ id: ID, mode: 'reclaim', childOf: runId, verdict: 'reclaimable', token: TOK, detail: '' }), stderr: '' };
-    if (args[0] === 'ws-reclaim') return { code: 0, stdout: JSON.stringify({ reclaimed: ID, childOf: runId, wip: null, attic: 1, residueBytes: null, secretsDropped: 0 }), stderr: '' };
-    if (args[0] === 'ws-attic') return { code: 0, stdout: `${REF} ${'c'.repeat(40)}\n`, stderr: '' };
-    return { code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
+    if (args[0] === 'ws-audit') return { ran: true, code: 0, stdout: JSON.stringify({ id: ID, mode: 'reclaim', childOf: runId, verdict: 'reclaimable', token: TOK, detail: '' }), stderr: '' };
+    if (args[0] === 'ws-reclaim') return { ran: true, code: 0, stdout: JSON.stringify({ reclaimed: ID, childOf: runId, wip: null, attic: 1, residueBytes: null, secretsDropped: 0 }), stderr: '' };
+    if (args[0] === 'ws-attic') return { ran: true, code: 0, stdout: `${REF} ${'c'.repeat(40)}\n`, stderr: '' };
+    return { ran: true, code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
   };
   const base = testDeps(home, run);
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
@@ -530,8 +530,8 @@ describe('reclaimChild on the stale arm (D-6639)', () => {
   it('the mail is not sent when the reclaim did not finish', async () => {
     const r = await rig();
     const run: Runner = async (_c, args) => (args[0] === 'ws-audit'
-      ? { code: 0, stdout: JSON.stringify({ id: ID, mode: 'reclaim', childOf: r.runId, verdict: 'not-idle', detail: 'worked yesterday' }), stderr: '' }
-      : { code: 1, stdout: '', stderr: '' });
+      ? { ran: true, code: 0, stdout: JSON.stringify({ id: ID, mode: 'reclaim', childOf: r.runId, verdict: 'not-idle', detail: 'worked yesterday' }), stderr: '' }
+      : { ran: true, code: 1, stdout: '', stderr: '' });
     const base = testDeps(mkTmp('ccrc-child-stale-exec2-'), run);
     const out = await reclaimChild({ ...r.deps, runCcd: base.runCcd }, r.req({ word: 'review', holdDigest: null, holdText: null }));
     expect(out).toMatchObject({ kind: 'deferred', why: 'not-idle' });

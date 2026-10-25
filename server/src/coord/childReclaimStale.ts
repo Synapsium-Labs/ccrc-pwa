@@ -209,7 +209,8 @@ export async function childReclaimStaleTold(
     let refs: string[] | null = null;
     if (ccdCan(deps.fleetState, 'wsAttic')) {
       const res = await deps.runCcd(CCD_ARGV.wsAttic(req.sessionId));
-      if (res.ok) refs = parseAtticRefs(req.sessionId, res.stdout);
+      // D-6840: a listing that never ran names no refs, as a failed one does; the mail still goes.
+      refs = res.ran === false || !res.ok ? null : parseAtticRefs(req.sessionId, res.stdout);
     }
     const { subject, body } = childStaleMail({ sessionId: req.sessionId, runId: req.runId, ask, refs });
     const coordinator = ask.word === 'run-absent' ? null : deps.coord.resolveCoordinator(req.runId);
