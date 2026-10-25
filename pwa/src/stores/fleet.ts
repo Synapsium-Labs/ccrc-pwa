@@ -315,7 +315,8 @@ export interface FleetStoreDeps {
 
 export type FleetStore = UseBoundStore<StoreApi<FleetState>>;
 
-/** The offline snapshot is written at most once in this window (C6, D-6438). */
+/** The snapshot throttle's window (C6, D-6438): frames write the offline snapshot at most once in it, and the
+ *  lifecycle flushes beside the throttle are the exceptions. */
 const SNAPSHOT_WINDOW_MS = 30_000;
 
 export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
@@ -324,10 +325,14 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
   let rosterTimer: ReturnType<typeof setInterval> | null = null;
   // The snapshot throttle (C6, D-6438): a scheduler, so it lives here in the store (L4), never in `lib/offline.ts`.
   // A frame is written at once when no 30 s window is open, and that write opens one; a frame inside an open window
-  // only replaces `pending`, and the window's end writes the newest and opens the next, so writes stay at most one
-  // per window. `pending` is also flushed when the page is hidden or going away and in `disconnect()`, so a closed
-  // or backgrounded page never loses the newest frame to the window. A frame the snapshot would refuse (an empty or
-  // degraded one, `snapshotRefused`) is never scheduled, so it neither opens a window nor displaces a pending frame.
+  // only replaces `pending`, and the window's end writes the newest and opens the next, so frames alone write at most
+  // once per window. The exceptions are three lifecycle flushes, which write `pending` whatever the window says: the
+  // page turning hidden (the `visibilitychange` to hidden), `pagehide` and `disconnect()`. So one window can hold
+  // more than one write. A frame that arrives while the page is ALREADY hidden only becomes `pending`: it is written
+  // when the window's timer fires (which a hidden tab may throttle and a discarded tab never runs) or at the next
+  // lifecycle flush, so a background page that is closed or discarded without one of those events can lose it. A
+  // frame the snapshot would refuse (an empty or degraded one, `snapshotRefused`) is never scheduled, so it neither
+  // opens a window nor displaces a pending frame.
   let pending: FleetSession[] | null = null;
   let snapshotTimer: ReturnType<typeof setTimeout> | null = null;
 
