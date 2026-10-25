@@ -24,13 +24,15 @@ What it does differently from writing mutant files:
   * one traced baseline run maps every test to the module lines it executes, and a
     mutant runs only the tests that execute its lines (none: `uncovered`);
   * with --previous and --diff, a mutant whose lines the diff did not touch keeps
-    its previous result (`carried`) and is not run.
+    its previous killed result (`carried`) and is not run; survivors and uncovered mutants
+    always re-run, and a diff touching the tests file re-runs everything.
 
 One line per mutant: `<id>\\t<status>\\t<detail>`, then a summary line. Statuses:
 killed, survived, uncovered, invalid, carried. Exit 0 when nothing survived or went
 uncovered, 1 otherwise, 2 when the baseline fails or the input is unusable.
 """
 import argparse
+import contextlib
 import importlib.util
 import json
 import os
@@ -79,15 +81,15 @@ def _alarm(signum, frame):
     raise _Timeout()
 
 
-def run_tests(entry, mod, names, root, timeout):
-    """Run the named tests (None: all) in a private temp dir; return the failing test name or None.
+@contextlib.contextmanager
+def sandbox(root):
+    """Private temp dir with cwd, tempfile.tempdir and TMPDIR/TEMP/TMP pointed at it.
 
-    The temp dir is removed in `finally`, so a failing test, a timeout, a KeyboardInterrupt
-    and a SIGTERM (turned into SystemExit by main) all clean up.
+    Everything is restored and the dir removed on exit, on failure and on interrupt alike,
+    so a test (or an import) that calls mkdtemp leaves nothing in the session's temp dir.
     """
     old_cwd, old_tmp = os.getcwd(), tempfile.tempdir
     old_env = {k: os.environ.get(k) for k in ("TMPDIR", "TEMP", "TMP")}
-    old_alarm = signal.signal(signal.SIGALRM, _alarm)
     try:
         with tempfile.TemporaryDirectory(prefix="mut-", dir=root) as tmp:
             try:
@@ -95,63 +97,79 @@ def run_tests(entry, mod, names, root, timeout):
                 tempfile.tempdir = tmp
                 for k in old_env:
                     os.environ[k] = tmp
-                tests = entry(mod)
-                for name, fn in tests.items():
-                    if names is not None and name not in names:
-                        continue
-                    signal.alarm(timeout)
-                    try:
-                        fn()
-                    except _Timeout:
-                        return name + " (timeout)"
-                    except Exception:  # noqa: BLE001 - any failure kills the mutant
-                        return name
-                    finally:
-                        signal.alarm(0)
-                return None
+                yield tmp
             finally:
                 os.chdir(old_cwd)
-                tempfile.tempdir = old_tmp
-                for k, v in old_env.items():
-                    if v is None:
-                        os.environ.pop(k, None)
-                    else:
-                        os.environ[k] = v
+    finally:
+        tempfile.tempdir = old_tmp
+        for k, v in old_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def run_tests(entry, mod, names, root, timeout):
+    """Run the named tests (None: all) in a sandbox; return the failing test name or None."""
+    old_alarm = signal.signal(signal.SIGALRM, _alarm)
+    try:
+        with sandbox(root):
+            tests = entry(mod)
+            for name, fn in tests.items():
+                if names is not None and name not in names:
+                    continue
+                signal.alarm(timeout)
+                try:
+                    fn()
+                except _Timeout:
+                    return name + " (timeout)"
+                except Exception:  # noqa: BLE001 - any failure kills the mutant
+                    return name
+                finally:
+                    signal.alarm(0)
+            return None
     finally:
         signal.signal(signal.SIGALRM, old_alarm)
 
 
-def trace_baseline(entry, mod, filename, root):
-    """One run of every test under settrace: {test name: set of executed lines of the module}."""
-    cov = {}
-    tests = entry(mod)
-    for name, fn in tests.items():
-        lines = set()
+def _traced(call, filename):
+    """Run call() under settrace; return (lines of `filename` executed, result or None)."""
+    lines = set()
 
-        def local(frame, event, arg, lines=lines):
-            if event == "line":
-                lines.add(frame.f_lineno)
+    def local(frame, event, arg):
+        if event == "line":
+            lines.add(frame.f_lineno)
+        return local
+
+    def glob(frame, event, arg):
+        if frame.f_code.co_filename == filename:
+            lines.add(frame.f_lineno)
             return local
+        return None
 
-        def glob(frame, event, arg):
-            if frame.f_code.co_filename == filename:
-                lines.add(frame.f_lineno)
-                return local
-            return None
+    sys.settrace(glob)
+    try:
+        return lines, call()
+    except Exception:  # noqa: BLE001 - a failing baseline test is reported by the caller
+        lines.add(-1)
+        return lines, None
+    finally:
+        sys.settrace(None)
 
-        with tempfile.TemporaryDirectory(prefix="mut-", dir=root) as tmp:
-            old_cwd = os.getcwd()
-            os.chdir(tmp)
-            sys.settrace(glob)
-            try:
-                fn()
-            except Exception:  # noqa: BLE001 - a failing baseline test is reported by the caller
-                lines.add(-1)
-            finally:
-                sys.settrace(None)
-                os.chdir(old_cwd)
-        cov[name] = lines
-    return cov
+
+def trace_baseline(entry, name, filename, source, root):
+    """One traced run: ({test name: executed lines of the module}, import-time lines).
+
+    The module is built under the trace too, so lines that run at import (constants,
+    tables, class bodies, decorators) are not misread as covered by no test.
+    """
+    with sandbox(root):
+        import_lines, mod = _traced(lambda: build_module(name, filename, source), filename)
+    cov = {}
+    for tname, fn in entry(mod).items():
+        with sandbox(root):
+            cov[tname], _ = _traced(fn, filename)
+    return cov, import_lines
 
 
 def span_of(source, old):
@@ -222,7 +240,7 @@ def main(argv=None):
         if failed:
             print("baseline fails: " + failed, file=sys.stderr)
             return 2
-        cov = None if a.no_coverage else trace_baseline(entry, base, filename, root)
+        cov, import_lines = (None, set()) if a.no_coverage else trace_baseline(entry, name, filename, source, root)
 
         previous = {}
         touched = None
@@ -230,7 +248,10 @@ def main(argv=None):
             with open(a.previous, encoding="utf-8") as f:
                 previous = {r["id"]: r for r in json.load(f)}
             with open(a.diff, encoding="utf-8") as f:
-                touched = changed_lines(f.read(), filename)
+                diff_text = f.read()
+            touched = changed_lines(diff_text, filename)
+            if changed_lines(diff_text, a.tests.rpartition(":")[0]):
+                touched = None  # the tests changed: every earlier result is stale
 
         results = []
         for m in mutations:
@@ -241,15 +262,17 @@ def main(argv=None):
                 continue
             lines = set(range(span[0], span[1] + 1))
             prev = previous.get(mid)
+            prev_outcome = prev and prev.get("outcome", prev["status"])
+            # survivors and uncovered mutants are few and cheap: always re-run them
             if touched is not None and prev and prev.get("old") == old and prev.get("new") == new \
-                    and not (lines & touched):
-                results.append({"id": mid, "status": "carried", "detail": prev["status"],
+                    and prev_outcome == "killed" and not (lines & touched):
+                results.append({"id": mid, "status": "carried", "outcome": prev_outcome, "detail": prev_outcome,
                                 "old": old, "new": new, "lines": [span[0], span[1]]})
                 continue
             names = None
             if cov is not None:
-                names = {t for t, ls in cov.items() if ls & lines}
-                if not names:
+                names = None if lines & import_lines else {t for t, ls in cov.items() if ls & lines}
+                if names is not None and not names:
                     results.append({"id": mid, "status": "uncovered", "detail": "no test executes these lines",
                                     "old": old, "new": new, "lines": [span[0], span[1]]})
                     continue
@@ -278,7 +301,7 @@ def main(argv=None):
     if a.out:
         with open(a.out, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=1)
-    bad = counts.get("survived", 0) + counts.get("uncovered", 0)
+    bad = sum(1 for r in results if r.get("outcome", r["status"]) in ("survived", "uncovered"))
     return 1 if bad else 0
 
 

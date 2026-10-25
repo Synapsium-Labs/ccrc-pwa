@@ -73,17 +73,19 @@ def suite(m):
             "t_other": t_other, "t_leaky": t_leaky}
 `;
 
-interface Fx { dir: string; root: string; log: string; ready: string; mutations: string; out: string }
+interface Fx { dir: string; root: string; systmp: string; log: string; ready: string; mutations: string; out: string }
 
 function fixture(mutations: Array<{ id: string; old: string; new: string }>): Fx {
   const dir = mkTmp('ccrc-mutrun-');
   const root = path.join(dir, 'ramroot');
   mkdirSync(root);
+  const systmp = path.join(dir, 'systmp');
+  mkdirSync(systmp);
   writeFileSync(path.join(dir, 'subject.py'), SUBJECT);
   writeFileSync(path.join(dir, 'tests.py'), TESTS);
   const mpath = path.join(dir, 'mut.json');
   writeFileSync(mpath, JSON.stringify(mutations));
-  return { dir, root, log: path.join(dir, 'calls.log'), ready: path.join(dir, 'ready'), mutations: mpath, out: path.join(dir, 'out.json') };
+  return { dir, root, systmp, log: path.join(dir, 'calls.log'), ready: path.join(dir, 'ready'), mutations: mpath, out: path.join(dir, 'out.json') };
 }
 
 function args(fx: Fx, extra: string[] = []): string[] {
@@ -93,7 +95,7 @@ function args(fx: Fx, extra: string[] = []): string[] {
 
 function run(fx: Fx, extra: string[] = []): { code: number | null; lines: string[] } {
   const r = spawnSync('python3', args(fx, extra), {
-    encoding: 'utf8', env: { ...process.env, CALLS_LOG: fx.log, READY: fx.ready },
+    encoding: 'utf8', env: { ...process.env, TMPDIR: fx.systmp, CALLS_LOG: fx.log, READY: fx.ready },
   });
   return { code: r.status, lines: r.stdout.trim().split('\n') };
 }
@@ -102,6 +104,41 @@ const calls = (fx: Fx, name: string): number =>
   (existsSync(fx.log) ? readFileSync(fx.log, 'utf8').split('\n') : []).filter((l) => l === name).length;
 
 describe('mutation-run helper', () => {
+  it('kills a mutated module-level constant with coverage on', () => {
+    const fx = fixture([{ id: 'const', old: 'MODE = 0', new: 'MODE = 1' }]);
+    const r = run(fx);
+    expect(r.lines[0]).toBe('const\tkilled\tt_leaky');
+    expect(readdirSync(fx.systmp)).toEqual([]);
+  });
+
+  it('keeps a survivor through three carry rounds and exits 1 each time', () => {
+    const fx = fixture([
+      { id: 'S', old: 'return 1\n', new: 'return 2\n' },
+      { id: 'K', old: 'return 42', new: 'return 43' },
+    ]);
+    const diff = path.join(fx.dir, 'c.diff');
+    const out2 = path.join(fx.dir, 'out2.json');
+    writeFileSync(diff, '--- a/subject.py\n+++ b/subject.py\n@@ -1,1 +1,1 @@\n-import os\n+import tempfile\n');
+    const r1 = run(fx, ['--no-coverage', '--out', fx.out]);
+    expect(r1.code).toBe(1);
+    expect(r1.lines[0]).toMatch(/^S\tsurvived/);
+    const r2 = run(fx, ['--no-coverage', '--previous', fx.out, '--diff', diff, '--out', out2]);
+    expect(r2.lines[1]).toBe('K\tcarried\tkilled');
+    expect(r2.code).toBe(1);
+    const r3 = run(fx, ['--no-coverage', '--previous', out2, '--diff', diff]);
+    expect(r3.lines[0]).toMatch(/^S\tsurvived/);
+    expect(r3.lines[1]).toBe('K\tcarried\tkilled');
+    expect(r3.code).toBe(1);
+  });
+
+  it('re-runs everything when the diff touches the tests file', () => {
+    const fx = fixture([{ id: 'K', old: 'return 42', new: 'return 43' }]);
+    run(fx, ['--out', fx.out]);
+    const diff = path.join(fx.dir, 'c.diff');
+    writeFileSync(diff, '--- a/tests.py\n+++ b/tests.py\n@@ -1,1 +1,1 @@\n-x\n+import os, time\n');
+    expect(run(fx, ['--previous', fx.out, '--diff', diff]).lines[0]).toMatch(/^K\tkilled/);
+  });
+
   it('leaves no temp tree behind, even though the tests themselves call mkdtemp', () => {
     const fx = fixture([
       { id: 'a', old: 'return "neg"', new: 'return "pos"' },
@@ -111,6 +148,7 @@ describe('mutation-run helper', () => {
     expect(r.lines[0]).toMatch(/^a\tkilled/);
     expect(r.lines[1]).toMatch(/^b\tkilled/);
     expect(readdirSync(fx.root)).toEqual([]);
+    expect(readdirSync(fx.systmp)).toEqual([]);
   });
 
   it('cleans up when a mutant makes a test raise', () => {
@@ -118,11 +156,12 @@ describe('mutation-run helper', () => {
     const r = run(fx);
     expect(r.lines[0]).toBe('boom\tkilled\tt_leaky');
     expect(readdirSync(fx.root)).toEqual([]);
+    expect(readdirSync(fx.systmp)).toEqual([]);
   });
 
   it('cleans up when the run is terminated mid-mutant', async () => {
     const fx = fixture([{ id: 'hang', old: 'return MODE', new: 'return 2' }]);
-    const child = spawn('python3', args(fx), { env: { ...process.env, CALLS_LOG: fx.log, READY: fx.ready } });
+    const child = spawn('python3', args(fx), { env: { ...process.env, TMPDIR: fx.systmp, CALLS_LOG: fx.log, READY: fx.ready } });
     const deadline = Date.now() + 20_000;
     while (!existsSync(fx.ready) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
     expect(existsSync(fx.ready)).toBe(true);
@@ -130,6 +169,7 @@ describe('mutation-run helper', () => {
     child.kill('SIGTERM');
     expect(await exited).toBe(143);
     expect(readdirSync(fx.root)).toEqual([]);
+    expect(readdirSync(fx.systmp)).toEqual([]);
   });
 
   it('runs only the tests that execute the mutated lines', () => {
@@ -178,5 +218,6 @@ describe('mutation-run helper', () => {
     expect(r.code).toBe(2);
     expect(r.lines.join('')).not.toMatch(/killed|survived/);
     expect(readdirSync(fx.root)).toEqual([]);
+    expect(readdirSync(fx.systmp)).toEqual([]);
   });
 });
