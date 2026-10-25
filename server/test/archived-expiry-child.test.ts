@@ -23,7 +23,7 @@ const WEEK = 604_800;
 const T0 = 1_790_000_000_000;
 const OLD = T0 / 1000 - 8 * 86_400;
 const tokOf = (id: string): string => (id.length.toString(16) + 'f'.repeat(64)).slice(0, 64);
-type Answer = { code: number; stdout: string; stderr: string };
+type Answer = { ran: true; code: number; stdout: string; stderr: string };
 
 interface Opts {
   cap?: boolean;
@@ -52,7 +52,7 @@ const fixture = async (opts: Opts = {}) => {
   const archivedOf = (id: string): number => Number(readdirSync(reg).includes(`${id}.archived`)
     ? readFileSync(path.join(reg, `${id}.archived`), 'utf8').trim() : 0);
   const run = async (cmd: string, args: string[]): Promise<Answer> => {
-    if (path.basename(cmd) === 'tmux') return { code: 1, stdout: '', stderr: '' };   // the tick's pane reads, not ccd
+    if (path.basename(cmd) === 'tmux') return { ran: true, code: 1, stdout: '', stderr: '' };   // the tick's pane reads, not ccd
     calls.push(args);
     const id = args[args.indexOf('--session') + 1] ?? '';
     if (args[0] === 'ws-audit') {
@@ -60,18 +60,18 @@ const fixture = async (opts: Opts = {}) => {
       const at = archivedOf(id);
       const doc = opts.audit?.(id, at) ?? { verdict: 'expirable', token: tokOf(id) };
       if (doc === 'old-ccd') {
-        return { code: 0, stdout: JSON.stringify({ session: id, mode: 'expire', archivedAt: at, alive: false, exists: true,
+        return { ran: true, code: 0, stdout: JSON.stringify({ session: id, mode: 'expire', archivedAt: at, alive: false, exists: true,
           reaping: null, sensitive: [], verdict: 'expirable', detail: '', token: tokOf(id) }), stderr: '' };
       }
-      return { code: 0, stdout: JSON.stringify({ session: id, mode: 'expire', archivedAt: at, expiresAt: at + WEEK,
+      return { ran: true, code: 0, stdout: JSON.stringify({ session: id, mode: 'expire', archivedAt: at, expiresAt: at + WEEK,
         alive: false, exists: true, reaping: null, sensitive: [], detail: '', ...doc }), stderr: '' };
     }
     if (args[0] === 'ws-expire') {
       if (hold !== undefined) { const h = hold; hold = undefined; await h; }
-      return opts.expire?.(id) ?? { code: 0, stdout: JSON.stringify({ expired: id, archivedAt: archivedOf(id), wip: null,
+      return opts.expire?.(id) ?? { ran: true, code: 0, stdout: JSON.stringify({ expired: id, archivedAt: archivedOf(id), wip: null,
         attic: 2, residueBytes: 0, secretsDropped: 0 }), stderr: '' };
     }
-    return { code: 1, stdout: '', stderr: '' };
+    return { ran: true, code: 1, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
@@ -231,7 +231,7 @@ describe('a child that coordinated is never taken (spec §4, what stays excluded
     const calls: string[][] = [];
     const home = mkTmp('ccrc-expiry-exec2-'); seedRoster(home);
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: home } as never);
-    const deps = { ...testDeps(home, async (_c: string, a: string[]) => { calls.push(a); return { code: 1, stdout: '', stderr: '' }; }),
+    const deps = { ...testDeps(home, async (_c: string, a: string[]) => { calls.push(a); return { ran: true, code: 1, stdout: '', stderr: '' }; }),
       cfg: { ...cfg, registryDir: f.reg }, coord: f.coord,
       fleetState: { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: ['ws-audit', 'ws-expire', EXPIRE_CAP, ACTOR_FLAGS_CAP, EXPIRE_CHILD_CAP] } };
     const result = await expireArchived(deps as never, { sessionId: 'demo-a', archivedAt: OLD, expiresAt: OLD + WEEK, childOf: 7, rowUuid: 'u-demo-a' });
@@ -249,7 +249,7 @@ describe('the executor re-asks both gates at the act (D-6641)', () => {
     const calls: string[][] = [];
     const run = async (_cmd: string, args: string[]): Promise<Answer> => {
       calls.push(args);
-      return { code: 0, stdout: JSON.stringify({ session: 'demo-a', mode: 'expire', archivedAt: OLD, expiresAt: OLD + WEEK,
+      return { ran: true, code: 0, stdout: JSON.stringify({ session: 'demo-a', mode: 'expire', archivedAt: OLD, expiresAt: OLD + WEEK,
         alive: false, exists: true, reaping: null, sensitive: [], detail: '', verdict: 'expirable', token: tokOf('demo-a') }), stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: home } as never);
