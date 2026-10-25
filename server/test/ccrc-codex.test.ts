@@ -4860,7 +4860,11 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
       const [lit, shim] = [pidOf(start, 'litellm'), pidOf(start, 'shim')];
       const lock = join(home, '.cc-sessions', '.account-placement.lock');
       fs.mkdirSync(path.dirname(lock), { recursive: true });
-      const holder = spawn('flock', [lock, 'sh', '-c', 'touch "$0"; sleep 60', join(home, 'held')], { stdio: 'ignore' });
+      // Fix round 3 (review M2/M3): flock(1) forks the `sh` (and its `sleep`), which inherit the lock fd, so the holder
+      // runs in a process group of its own and the finally kills that whole group; signalling the flock pid alone
+      // would leave the sh/sleep holding the fixture lock after the case.
+      const holder = spawn('flock', [lock, 'sh', '-c', 'touch "$0"; sleep 60', join(home, 'held')],
+        { stdio: 'ignore', detached: true });
       trackChild(home, holder);
       try {
         await eventually(() => fs.existsSync(join(home, 'held')), 'the holder to take the roster writers\' lock');
@@ -4875,7 +4879,7 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
         expect([rosterBytes(home), laneBytes(home)]).toEqual([roster, lane]);
         expect(alive(lit) && alive(shim), 'the switch stopped a tier without the roster writers\' lock').toBe(true);
       } finally {
-        holder.kill('SIGKILL');
+        try { process.kill(-holder.pid!, 'SIGKILL'); } catch { /* the group has already gone */ }
       }
     }, 120_000);
 
