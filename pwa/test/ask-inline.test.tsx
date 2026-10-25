@@ -1020,11 +1020,14 @@ describe('the composer while a question is up', () => {
     expect(prompt, 'a Send now reaches the store').toHaveBeenCalledTimes(1);
     expect(prompt.mock.calls[0]!.slice(0, 2), 'with the text').toEqual([ID, 'half a thought']);
 
-    // A later question starts clean: the old refusal does not come back with it.
+    // A later question shows the sentence again, because a surface is up (R77 F1): it is the surface's own sentence, not a
+    // refusal that outlived its ask, and Send is disabled with it.
     fireEvent.change(composer(), { target: { value: 'another thought' } });
     arrive(1);
     card();
-    expect(screen.queryByText(sendErrorText('dialog-open')), 'a new ask shows no stale refusal').toBeNull();
+    expect(screen.getByText(sendErrorText('dialog-open')).closest('[role="status"]'),
+      'a new ask shows the sentence, as its surface is up').not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Send' }), 'and Send is disabled for it').toBeDisabled();
   });
 
   it('fixture 7 (an approval, no pane menu) at the desk: Send is held locally, the draft is kept, no request is made and the dialog-open sentence shows', async () => {
