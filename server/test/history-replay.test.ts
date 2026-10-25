@@ -11454,6 +11454,9 @@ import { REPO as B1T2_REPO } from './historyHelpers.js';
 
 type B1t2Cut = { asof: string; tsCut: number; boundaryEntryId: number; summaryEntryId: number | null; keptUuids: readonly string[]; holdingFileId: number; boundaryLine: number };
 type B1t2Rs = { db: B1t2Db; storeId: string; idx: unknown; close(): void };
+type B1t2CountRow = { n: number };
+type B1t2FixtureBelt = { units: Uint8Array[]; texts: string[]; widths: Array<ReturnType<typeof t4Lib.makeBelt>['widths'][number]>; grams: number; overflow: number };
+type B1t2FixtureIndex = { belt: B1t2FixtureBelt; byLen: Map<number, Set<string>>; };
 type B1t2Discard = { state: 'discard'; why: string };
 type B1t2Card = { state: 'card'; line: string; leafId: string; parentId: string | null; parent: string };
 type B1t2Entry = { boundary_uuid: string; ccrc_id: string; fact: string; fact_raw: string; generation: string; kind: string; qid: string;
@@ -11481,6 +11484,9 @@ interface B1t2Api {
     { state: 'payloads'; plain: string; carded: string; card: B1t2Card; counts: Record<string, number> } | B1t2Discard;
   recheckQuestion(rs: B1t2Rs, entry: B1t2Entry, ctx: { configDirs: readonly string[] }): Promise<B1t2Verdict>;
   recheckBatch(rs: B1t2Rs, entries: B1t2Entry[], ctx: { configDirs: readonly string[] }): Promise<Map<string, Extract<B1t2Verdict, { ok: true }>>>;
+  MINE_COMMAND_CHARS: { min: number; max: number };
+  mineStoredBoundary(rs: B1t2Rs, b: { entry_id: number; uuid: string; ts_ms: number | null; transcript_pk: number }, family: { ccrc_id: string; generation: string }, configDirs: readonly string[]):
+    { state: 'mined'; mined: { candidates: Array<{ kind: string; fact: string; fact_raw: string; source_entry_uuid: string; repo_roots: string[] }> } } | B1t2Discard;
 }
 const B1T2 = b1t2Drv as unknown as B1t2Api;
 const b1t2Lib = b1t2LibMod as unknown as {
@@ -11495,7 +11501,11 @@ const b1t2Lib = b1t2LibMod as unknown as {
   sha256Hex(s: string): string;
   historyPaths(home: string): { dbFile: string };
   ftsPhrase(s: string): string;
-  makePairIndex(pairs: Array<{ len: number; sha256: string }>): unknown;
+  secretPairs(values: string[]): { pairs: Array<{ len: number; sha256: string }>; unsegmentable: number };
+  secretUnits(value: string): string[];
+  beltUnits(values: string[]): string[];
+  beltFold(width: number): number;
+  makePairIndex(pairs: Array<{ len: number; sha256: string }>, belt?: unknown | null): unknown;
   redactField(text: string, idx: unknown): string;
 };
 const b1t2Store = b1t2StoreMod as unknown as {
@@ -12253,6 +12263,19 @@ async function w5b4Arms(home: string, argv: string[], deps: W5b4R = {}): Promise
     o1.mockRestore();
   }
 }
+/** Runs a complete temporary driver variant; its own DriverRefusal class remains the classifier. */
+async function w5b4VariantArms(driver: W5b4R, home: string, argv: string[], deps: W5b4R = {}): Promise<W5b4Result> {
+  const err: string[] = [];
+  const spy = w5b4Vi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write);
+  try {
+    const { flags } = driver.parseArgs(argv) as { flags: W5b4R };
+    const code = await driver.armsCommand(flags, { HOME: home, TMUX_PANE: undefined, LANG: W5B4_LANG }, { ...W5B4_FAKE, ...deps });
+    return { code, stdout: '', stderr: err.join(''), refusal: null };
+  } catch (e) {
+    if (e instanceof driver.DriverRefusal) return { code: null, stdout: '', stderr: err.join(''), refusal: { word: (e as W5b4R).word, detail: (e as W5b4R).detail } };
+    throw e;
+  } finally { spy.mockRestore(); }
+}
 const w5b4Runs = (home: string): W5b4R[] => ((stubLog(home) ?? []) as unknown as W5b4R[]).filter((e) => e.argv.includes('-p'));
 const w5b4Versions = (home: string): number => ((stubLog(home) ?? []) as unknown as W5b4R[]).filter((e) => e.argv[0] === '--version').length;
 const w5b4Json = (p: string): W5b4R => JSON.parse(readFileSync(p, 'utf8')) as W5b4R;
@@ -12997,13 +13020,13 @@ function w5b5Files(root: string): string[] {
   return out.sort();
 }
 /** An in-process call, its stderr captured and its refusal, if any, answered as {word, detail}. */
-async function w5b5InProcess(fn: () => Promise<unknown>): Promise<{ code: unknown; stderr: string; refusal: { word: string; detail: string } | null }> {
+async function w5b5InProcess(fn: () => Promise<unknown>, driver: W5b4R = D4): Promise<{ code: unknown; stderr: string; refusal: { word: string; detail: string } | null }> {
   const lines: string[] = [];
   const spy = vi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { lines.push(String(s)); return true; }) as typeof process.stderr.write);
   try {
     return { code: await fn(), stderr: lines.join(''), refusal: null };
   } catch (e) {
-    if (e instanceof DriverRefusal) return { code: null, stderr: lines.join(''), refusal: { word: e.word, detail: e.detail } };
+    if (e instanceof driver.DriverRefusal) return { code: null, stderr: lines.join(''), refusal: { word: (e as W5b4R).word as string, detail: (e as W5b4R).detail as string } };
     throw e;
   } finally {
     spy.mockRestore();
@@ -13692,28 +13715,54 @@ describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 6: the arms-then-jud
 // excluded as run-failed). Both are cases of "a pair the store learned after the batch before it": the store is Task 2's
 // b1t2Plant, the re-check and the payloads are the real ones, and the pair is learned through a store writer from inside the
 // test (an injected payloads wrapper for D-6481, between two invocations for D-6482). No spawn reaches a model.
-type FwSetup = { home: string; storeId: string; entries: W5b4R[]; argv: string[]; out: string; draft: W5b4R };
-/** Two questions on Task 2's store (a command fact and a sha fact, both on boundary N), the pilot form's inputs and the
- *  arm stub; `batch_max` 2 makes each batch one question. */
-async function fwSetup(over: W5b4R = { limits: { batch_max: 2 } }, sourceFact: string | null = null): Promise<FwSetup> {
-  const fx = await b1t2Plant({ summaryText: sourceFact === null ? undefined : `Summary: ${sourceFact}` });
+type FwSetup = { home: string; storeId: string; entries: W5b4R[]; argv: string[]; out: string; draft: W5b4R;
+  originalSourceQuestion: string | null; sourceQid: string | null; frozen: W5b4Saved };
+type FwSourceFixture = {
+  declaredSourceValue: string | null;
+  storedSummary: string;
+  laterQuestion: string | null;
+  declareSourcePathWhenAbsent?: boolean;
+};
+/** Two questions on Task 2's store, serialized in qid order. `batch_max` 2 makes each real arm batch one question. */
+async function fwSetup(over: W5b4R = { limits: { batch_max: 2 } }, sourceFact: string | null = null, sourceInOriginal = false,
+  sourceFixture: FwSourceFixture | null = null): Promise<FwSetup> {
+  const declaredSourceValue = sourceFixture === null ? sourceFact : sourceFixture.declaredSourceValue;
+  const storedSummary = sourceFixture === null ? (sourceFact === null ? undefined : `Summary: ${sourceFact}`) : sourceFixture.storedSummary;
+  const laterQuestion = sourceFixture === null ? (sourceInOriginal ? `fixture original ${sourceFact}` : null) : sourceFixture.laterQuestion;
+  const fx = await b1t2Plant({ summaryText: storedSummary });
   const home = fx.home;
-  if (sourceFact !== null) {
+  const source = join(home, '.ccrc', 'fixture.token');
+  if (declaredSourceValue !== null) {
     mkdirSync(join(home, '.ccrc'), { recursive: true, mode: 0o700 });
-    writeFileSync(join(home, '.ccrc', 'fixture.token'), `${sourceFact}\n`, { mode: 0o600 });
+    writeFileSync(source, `${declaredSourceValue}\n`, { mode: 0o600 });
   }
   w5b4Node(home);
-  const rs0 = D4.openReplayStore(home) as W5b4R;
-  const storeId = rs0.storeId as string;
-  rs0.close();
+  const rs0 = D4.openReplayStore(home) as B1t2Rs;
+  let storeId: string;
+  try { storeId = rs0.storeId; }
+  finally { rs0.close(); }
+  if (declaredSourceValue !== null || sourceFixture?.declareSourcePathWhenAbsent === true) {
+    const writer = b1t2Store.openWriter(b1t2Lib.historyPaths(home).dbFile);
+    try { writer.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').run('redact_sources', JSON.stringify([source])); }
+    finally { b1t2Store.closeWriter(writer); }
+  }
   const fam: W5b4Ref = { store_id: storeId, ccrc_id: B1T2_FAM, generation: B1T2_GEN };
-  const made = [b1t2Entry(fx, storeId), b1t2Entry(fx, storeId, { kind: 'sha', fact: B1T2_SHA, fact_raw: B1T2_SHA })];
+  const normal = [b1t2Entry(fx, storeId), b1t2Entry(fx, storeId, { kind: 'sha', fact: B1T2_SHA, fact_raw: B1T2_SHA })];
+  const sourceQid = laterQuestion === null ? null : [...normal].map((e) => e.qid).sort().at(-1)!;
+  const originalSourceQuestion = sourceQid === null ? null : laterQuestion;
+  const made = normal.map((entry) => entry.qid === sourceQid ? { ...entry, question: originalSourceQuestion! } : entry);
   const fz = w5b4SaveText(D4.frozenListText('pilot', W5B4_HEAD, made) as string, 'pilot-frozen.json');
+  const entries = fz.value.entries as W5b4R[];
+  if (sourceQid !== null) {
+    const parsed = entries.findIndex((entry) => entry.qid === sourceQid);
+    if (parsed !== 1) throw new Error(`fixture: source qid persisted at ${parsed}`);
+    w5b4Expect(entries[parsed]!.question, 'the serialized and reloaded later entry carries the original source question').toBe(originalSourceQuestion);
+  }
   const draft = w5b4Draft(home, { stores: [storeId], pilotFamilies: [fam], pilotFrozenSha: fz.sha, over });
   const d = w5b4Save(draft, 'part1.json');
   w5b4Marker(home, storeId, [fam]);
   const out = w5b4Out();
-  return { home, storeId, entries: fz.value.entries as W5b4R[], out, draft,
+  return { home, storeId, entries, out, draft, frozen: fz, originalSourceQuestion, sourceQid,
     argv: ['arms', '--section', 'pilot', '--out', out, ...w5b4Inp('record', d), ...w5b4Inp('frozen', fz)] };
 }
 /** The value whose learned pair masks question `q`'s fact, and the pair itself (CONTROL: lib's redaction does mask the fact). */
@@ -13729,80 +13778,1770 @@ function fwLearn(home: string, value: string): void {
   b1t2Store.closeWriter(w);
 }
 
+type C04Prerequisite = { home: string; source: string; fx: B1t2Fx; entry: B1t2Entry; argv: string[]; out: string };
+/** C04's source is read through the store's real declared-source metadata, never a durable redact_hashes row. */
+async function c04Prerequisite(): Promise<C04Prerequisite> {
+  const value = ['zq', 'old6481', 'retained', 'command', 'only'].join('-');
+  const command = ['printf', '  ', value, '   fixture'].join('');
+  w5b4Expect(value.length, 'the real secret-source minimum is met').toBeGreaterThanOrEqual(20);
+  w5b4Expect(command.length).toBeGreaterThanOrEqual(B1T2.MINE_COMMAND_CHARS.min);
+  w5b4Expect(command.length).toBeLessThanOrEqual(B1T2.MINE_COMMAND_CHARS.max);
+  const fx = await b1t2Plant({ command });
+  const source = join(fx.home, '.ccrc', 'fixture.token');
+  mkdirSync(join(fx.home, '.ccrc'), { recursive: true, mode: 0o700 });
+  writeFileSync(source, `${value}\n`, { mode: 0o600 });
+  const writer = b1t2Store.openWriter(b1t2Lib.historyPaths(fx.home).dbFile);
+  try {
+    writer.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').run('redact_sources', JSON.stringify([source]));
+  } finally { b1t2Store.closeWriter(writer); }
+  w5b4Node(fx.home);
+  const rs = D4.openReplayStore(fx.home) as B1t2Rs;
+  try {
+    const row = rs.db.prepare(`SELECT b.entry_id AS entry_id, e.uuid AS uuid, e.ts_ms AS ts_ms, b.transcript_pk AS transcript_pk
+      FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id WHERE e.uuid = ?`).get(fx.uuid.bn!) as { entry_id: number; uuid: string; ts_ms: number | null; transcript_pk: number } | undefined;
+    if (row === undefined) throw new Error('fixture: boundary N absent');
+    const mined = B1T2.mineStoredBoundary(rs, row, { ccrc_id: B1T2_FAM, generation: B1T2_GEN }, B1T2_DIRS);
+    if (mined.state !== 'mined') throw new Error(`fixture: boundary N ${mined.why}`);
+    const candidate = mined.mined.candidates.filter((c) => c.kind === 'command' && c.fact_raw === command);
+    w5b4Expect(candidate, 'the stored raw command has exactly one real mined candidate').toHaveLength(1);
+    const [c] = candidate;
+    w5b4Expect(c!.fact, 'real mining normalizes the repeated-whitespace command').not.toBe(c!.fact_raw);
+    const base = { store_id: rs.storeId, ccrc_id: B1T2_FAM, generation: B1T2_GEN, boundary_uuid: fx.uuid.bn!, kind: c!.kind,
+      fact: c!.fact, fact_raw: c!.fact_raw, question: 'Which command ran the neutral fixture?', source_entry_uuid: c!.source_entry_uuid, repo_roots: c!.repo_roots };
+    const entry = { ...base, qid: D4.qidOf(base) as string } as B1t2Entry;
+    const fz = w5b4SaveText(D4.frozenListText('pilot', W5B4_HEAD, [entry]) as string, 'c04-pilot-frozen.json');
+    const parsed = fz.value.entries[0] as B1t2Entry;
+    const fam: W5b4Ref = { store_id: rs.storeId, ccrc_id: B1T2_FAM, generation: B1T2_GEN };
+    const draft = w5b4Draft(fx.home, { stores: [rs.storeId], pilotFamilies: [fam], pilotFrozenSha: fz.sha, over: { limits: { batch_max: 2 } } });
+    const record = w5b4Save(draft, 'c04-part1.json');
+    w5b4Marker(fx.home, rs.storeId, [fam]);
+    const out = w5b4Out();
+    return { home: fx.home, source, fx, entry: parsed, out,
+      argv: ['arms', '--section', 'pilot', '--out', out, ...w5b4Inp('record', record), ...w5b4Inp('frozen', fz)] };
+  } finally { rs.close(); }
+}
+
+w5b4It('C04 prerequisite: stored command mines and old/fresh rechecks differ', async () => {
+  const c = await c04Prerequisite();
+  let oldPayloads: { plain: string; carded: string };
+  const old = D4.openReplayStore(c.home) as B1t2Rs;
+  try {
+    w5b4Expect((old.db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as B1t2CountRow).n, 'no durable pair before source removal').toBe(0);
+    w5b4Expect(b1t2Lib.redactField(c.entry.fact, old.idx), 'the old index changes the real mined fact').not.toBe(c.entry.fact);
+    w5b4Expect(await B1T2.recheckQuestion(old, c.entry, { configDirs: B1T2_DIRS })).toEqual({ ok: false, clause: 'a', why: 'redact-fact' });
+    await w5b4Expect(B1T2.recheckBatch(old, [c.entry], { configDirs: B1T2_DIRS })).rejects.toMatchObject({
+      word: 'quiz-unanswerable', detail: `${c.entry.qid} clause (a) redact-fact`,
+    });
+    const cut = B1T2.armCut(old, c.entry.boundary_uuid);
+    if (!cut.ok) throw new Error(`fixture: old arm cut ${cut.reason}`);
+    const payloads = B1T2.armPayloads(old, c.fx.entry.bn!, c.entry.question, cut.cut);
+    if (payloads.state !== 'payloads') throw new Error(`fixture: old payloads ${payloads.why}`);
+    oldPayloads = { plain: payloads.plain, carded: payloads.carded };
+  } finally { old.close(); }
+  rmSync(c.source);
+  const fresh = D4.openReplayStore(c.home) as B1t2Rs;
+  try {
+    w5b4Expect((fresh.db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as B1t2CountRow).n, 'source removal never writes a durable pair').toBe(0);
+    const verdict = await B1T2.recheckQuestion(fresh, c.entry, { configDirs: B1T2_DIRS });
+    if (!verdict.ok) throw new Error(`fixture: fresh recheck ${verdict.clause} ${verdict.why}`);
+    const batch = await B1T2.recheckBatch(fresh, [c.entry], { configDirs: B1T2_DIRS });
+    w5b4Expect(batch.get(c.entry.qid)).toEqual(verdict);
+    const payloads = B1T2.armPayloads(fresh, verdict.boundaryEntryId, c.entry.question, verdict.cut);
+    if (payloads.state !== 'payloads') throw new Error(`fixture: fresh payloads ${payloads.why}`);
+    w5b4Expect({ plain: payloads.plain, carded: payloads.carded }, 'both original payload arms ignore the removed source').toEqual(oldPayloads!);
+  } finally { fresh.close(); }
+}, 180_000);
+
+/** The accepted concrete snapshot shape: backing storage is charged while visible content stays owner-generated. */
+function c14FixtureIndex(backing: number): B1t2FixtureIndex {
+  const belt = t4Lib.makeBelt([['synthetic', 'phasea', 'unit'].join('')]) as unknown as B1t2FixtureBelt;
+  const original = belt.units[0]!;
+  const unit = new Uint8Array(new ArrayBuffer(backing), 0, original.byteLength);
+  unit.set(original);
+  belt.units[0] = unit;
+  return t4Lib.makePairIndex([], belt) as B1t2FixtureIndex;
+}
+/** The variant's finally sets this only after a successful import has created and removed the temporary module. */
+let c04VariantCleaned = false;
+/** Imports a complete current driver variant whose imports and code-root point at the original tree. */
+async function c04Variant(options: { acquireRetainedSnapshots?: boolean; nodeOverride?: boolean; judgeObservers?: boolean; judgeComparisonObserver?: boolean; c14Observers?: boolean; n2ExcludedReader?: boolean; n2ManifestReader?: boolean } = {}): Promise<W5b4R> {
+  c04VariantCleaned = false;
+  const source = readFileSync(join(B1T2_REPO, 'deploy', 'history-replay.mjs'), 'utf8');
+  const originalUrl = pathToFileURL(join(B1T2_REPO, 'deploy', 'history-replay.mjs')).href;
+  const rebase = (spec: string): string => pathToFileURL(fileURLToPath(new URL(spec, originalUrl))).href;
+  let text = source.replace(/from '((?:\.\.\/|\.\/)[^']+)'/g, (_whole, spec: string) => `from '${rebase(spec)}'`);
+  const rootAnchor = 'path.resolve(path.dirname(fileURLToPath(import.meta.url)), \'..\')';
+  const rootReplacement = `path.resolve(path.dirname(fileURLToPath(${JSON.stringify(originalUrl)})), '..')`;
+  if (text.split(rootAnchor).length !== 2) throw new Error('fixture: C04 TREE_ROOT anchor is not unique');
+  text = text.replace(rootAnchor, rootReplacement);
+  const declaration = 'export async function armsCommand(flags, driverEnv, deps = { recheck: recheckBatch, payloads: armPayloads, now: () => Date.now() }) {';
+  const registration = "HANDLERS.set('arms', (flags, env) => armsCommand(flags, env));";
+  if (text.split(declaration).length !== 2 || text.split(registration).length !== 2) throw new Error('fixture: C04 arms region markers are not unique');
+  const start = text.indexOf(declaration);
+  const end = text.indexOf(registration, start);
+  if (start < 0 || end <= start) throw new Error('fixture: C04 arms region ordering');
+  const prefix = text.slice(0, start);
+  const region = text.slice(start, end);
+  const suffix = text.slice(end);
+  const callbackAnchor = '  try {\n    const storeId = rs.storeId;';
+  const callbackReplacement = '  try {\n    deps.afterOpen?.();\n    const storeId = rs.storeId;';
+  if (region.split(callbackAnchor).length !== 2) throw new Error('fixture: C04 afterOpen anchor is not unique in armsCommand');
+  let armsRegion = region.replace(callbackAnchor, callbackReplacement);
+  if (options.nodeOverride === true) {
+    const nodeAnchor = '    const node = armNodeOf(run, storeId);';
+    const nodeReplacement = '    const measuredNode = armNodeOf(run, storeId);\n    const node = deps.nodeOverride?.(measuredNode) ?? measuredNode;';
+    if (armsRegion.split(nodeAnchor).length !== 2) throw new Error('fixture: C11 node override anchor is not unique in armsCommand');
+    armsRegion = armsRegion.replace(nodeAnchor, nodeReplacement);
+  }
+  let rebuilt = `${prefix}${armsRegion}${suffix}`;
+  if (options.n2ExcludedReader === true) {
+    const excludedDeclaration = 'function excludedReasonOf(ctx, q, arm) {';
+    const excludedEnd = 'const answeredAttempt =';
+    const excludedStartAt = rebuilt.indexOf(excludedDeclaration); const excludedEndAt = rebuilt.indexOf(excludedEnd, excludedStartAt);
+    if (excludedStartAt < 0 || excludedEndAt <= excludedStartAt) throw new Error('fixture: N2 excluded reader bounds missing');
+    const excludedPrefix = rebuilt.slice(0, excludedStartAt); const excludedRegion = rebuilt.slice(excludedStartAt, excludedEndAt); const excludedSuffix = rebuilt.slice(excludedEndAt);
+    const readAnchor = '  const read = readPlain(path.join(ctx.out, rel), OUT_JSON_CAP);';
+    const readReplacement = '  const answerPath = path.join(ctx.out, rel);\n  const read = ctx.n2ReadPlain?.({ path: answerPath, cap: OUT_JSON_CAP, actual: readPlain }) ?? readPlain(answerPath, OUT_JSON_CAP);';
+    if (excludedRegion.split(readAnchor).length !== 2) throw new Error('fixture: N2 read seam is not unique');
+    rebuilt = `${excludedPrefix}${excludedRegion.replace('function excludedReasonOf(ctx, q, arm) {', 'export function excludedReasonOf(ctx, q, arm) {').replace(readAnchor, readReplacement)}${excludedSuffix}`;
+  }
+  if (options.n2ManifestReader === true) {
+    const manifestDeclaration = 'function armManifestShas(ctx) {';
+    const manifestEnd = 'function excludeOwedArms(ctx, s) {';
+    const manifestStartAt = rebuilt.indexOf(manifestDeclaration); const manifestEndAt = rebuilt.indexOf(manifestEnd, manifestStartAt);
+    if (manifestStartAt < 0 || manifestEndAt <= manifestStartAt) throw new Error('fixture: N2 manifest reader bounds missing');
+    const manifestPrefix = rebuilt.slice(0, manifestStartAt); const manifestRegion = rebuilt.slice(manifestStartAt, manifestEndAt); const manifestSuffix = rebuilt.slice(manifestEndAt);
+    const tryAnchor = '  let names;\n  try {';
+    const dirAnchor = 'readdirSync(path.join(ctx.out, rel))';
+    const readAnchor = '    const read = readPlain(path.join(ctx.out, rel, n), OUT_JSON_CAP);';
+    const readReplacement = '    const manifestPath = path.join(ctx.out, rel, n);\n    const read = ctx.n2ReadPlain?.({ path: manifestPath, cap: OUT_JSON_CAP, actual: readPlain }) ?? readPlain(manifestPath, OUT_JSON_CAP);';
+    if (manifestRegion.split(tryAnchor).length !== 2 || manifestRegion.split(dirAnchor).length !== 2 || manifestRegion.split(readAnchor).length !== 2) throw new Error('fixture: N2 manifest seams are not unique');
+    const withDir = manifestRegion.replace(tryAnchor, '  let names;\n  const batchPath = path.join(ctx.out, rel);\n  try {').replace(dirAnchor, '(ctx.n2ReadDir?.({ path: batchPath, actual: readdirSync }) ?? readdirSync(batchPath))');
+    rebuilt = `${manifestPrefix}${withDir.replace('function armManifestShas(ctx) {', 'export function armManifestShas(ctx) {').replace(readAnchor, readReplacement)}${manifestSuffix}`;
+  }
+  if (options.c14Observers === true) {
+    const refreshDeclaration = 'function refreshPairIndex(rs, home) {';
+    const refreshEnd = '/** @param {ReplayStore} rs @param {string} home */\nfunction maskingSnapshotsOf';
+    const refreshStartAt = rebuilt.indexOf(refreshDeclaration); const refreshEndAt = rebuilt.indexOf(refreshEnd, refreshStartAt);
+    if (refreshStartAt < 0 || refreshEndAt <= refreshStartAt) throw new Error('fixture: C14 refresh bounds missing');
+    const refreshPrefix = rebuilt.slice(0, refreshStartAt); const refreshRegion = rebuilt.slice(refreshStartAt, refreshEndAt); const refreshSuffix = rebuilt.slice(refreshEndAt);
+    const candidateAnchor = '    candidate = pairIndexOf(rs.db, home);';
+    const candidateReplacement = '    candidate = rs.candidateOverride?.({ db: rs.db, home, actual: pairIndexOf, material: maskingMaterialOf, checked: maskingIndexChecked, materialLimit: MASKING_SNAPSHOT_MATERIAL_MAX }) ?? pairIndexOf(rs.db, home);';
+    if (refreshRegion.split(candidateAnchor).length !== 2) throw new Error('fixture: C14 candidate seam is not unique');
+    rebuilt = `${refreshPrefix}${refreshRegion.replace(candidateAnchor, candidateReplacement)}${refreshSuffix}`;
+  }
+  if (options.judgeObservers === true) {
+    const judgeDeclaration = 'export async function judgeCommand(flags, driverEnv, deps = { loadArmRun, armNodeOf, readArmAnswers, now: () => Date.now() }) {';
+    const judgeRegistration = "HANDLERS.set('judge', (flags, env) => judgeCommand(flags, env));";
+    const judgeStart = rebuilt.indexOf(judgeDeclaration); const judgeEnd = rebuilt.indexOf(judgeRegistration, judgeStart);
+    if (judgeStart < 0 || judgeEnd <= judgeStart) throw new Error('fixture: C12 judgeCommand bounds missing');
+    const judgePrefix = rebuilt.slice(0, judgeStart); const judgeRegion = rebuilt.slice(judgeStart, judgeEnd); const judgeSuffix = rebuilt.slice(judgeEnd);
+    const pickedAnchor = "      const picked = judgeItemsOf({ entries: own, answers: deps.readArmAnswers(out, section), arms: RECALL_ARMS, shaMinPrefix: r.labeller.sha_min_prefix });";
+    const pickedReplacement = "      const answers = deps.readArmAnswers(out, section);\n      const picked = pick({ entries: own, answers, arms: RECALL_ARMS, shaMinPrefix: r.labeller.sha_min_prefix });";
+    const snapshotsAnchor = '      const snapshots = maskingSnapshotsOf(rs, home);';
+    const snapshotsPrefix = '      const snapshots = ';
+    if (judgeRegion.split(pickedAnchor).length !== 2) throw new Error('fixture: C12 pick anchor is not unique');
+    let selected = judgeRegion.replace(pickedAnchor, pickedReplacement);
+    if (options.c14Observers === true) {
+      if (selected.split(snapshotsPrefix).length !== 2) throw new Error('fixture: C14 snapshot assignment prefix is not unique');
+      selected = selected.replace(snapshotsPrefix, '      deps.acquireJudgeSnapshots?.({ rs, home, refresh: maskingSnapshotsOf });\n' + snapshotsPrefix);
+    } else {
+      if (selected.split(snapshotsAnchor).length !== 2) throw new Error('fixture: C12 snapshot anchor is not unique');
+      selected = selected.replace(snapshotsAnchor, '      deps.acquireJudgeSnapshots?.({ rs, home, refresh: maskingSnapshotsOf });\n' + snapshotsAnchor);
+    }
+    let routed = selected.replaceAll('judgeItemsOf(', 'pick(').replaceAll('judgeJobsOf(', 'build(');
+    if (options.c14Observers === true) routed = routed.replaceAll('maskingSnapshotsOf(', 'acquire(').replaceAll('openJudge(', 'open(');
+    if (options.judgeComparisonObserver === true) routed = routed.replaceAll('sameMaskingText(', 'same(');
+    const wrapperAnchor = '      const answers = deps.readArmAnswers(out, section);';
+    const wrapper = `      const pick = (args) => { const result = judgeItemsOf(args); deps.afterPick?.({ args, result }); return result; };\n      const build = (args) => { const built = judgeJobsOf(args); deps.afterBuild?.({ args, built }); return deps.transformJobs?.({ args, built }) ?? built; };\n${options.c14Observers === true ? '      const acquire = (rs, home) => { deps.afterAcquire?.({ phase: \'before\', rs, home }); const snapshots = maskingSnapshotsOf(rs, home); deps.afterAcquire?.({ phase: \'after\', rs, home, snapshots }); return snapshots; };\n      const open = async (args) => { deps.afterOpenJudge?.({ phase: \'before\' }); const judge = await openJudge(args); deps.afterOpenJudge?.({ phase: \'after\', judge }); return judge; };\n' : ''}${options.judgeComparisonObserver === true ? '      const same = (a, b) => { deps.afterComparison?.({ a, b }); return sameMaskingText(a, b); };\n' : ''}`;
+    if (routed.split(wrapperAnchor).length !== 2) throw new Error('fixture: C12 wrapper insertion anchor is not unique');
+    rebuilt = `${judgePrefix}${routed.replace(wrapperAnchor, wrapper + wrapperAnchor)}${judgeSuffix}`;
+  }
+  if (options.acquireRetainedSnapshots === true) {
+    const preflightDeclaration = 'async function armBatchPreflight(ctx, pending) {';
+    const preflightEnd = 'function armManifestShas(ctx) {';
+    const preflightStartAt = rebuilt.indexOf(preflightDeclaration);
+    const preflightEndAt = rebuilt.indexOf(preflightEnd, preflightStartAt);
+    if (preflightStartAt < 0 || preflightEndAt <= preflightStartAt) throw new Error('fixture: C09 armBatchPreflight bounds missing');
+    const preflightPrefix = rebuilt.slice(0, preflightStartAt);
+    const preflight = rebuilt.slice(preflightStartAt, preflightEndAt);
+    const preflightSuffix = rebuilt.slice(preflightEndAt);
+    const acquisitionAnchor = '  const snapshots = maskingSnapshotsOf(ctx.rs, ctx.home);';
+    const acquisitionReplacement = '  ctx.deps.acquireRetainedSnapshots?.({ rs: ctx.rs, home: ctx.home, refresh: maskingSnapshotsOf });\n  const snapshots = maskingSnapshotsOf(ctx.rs, ctx.home);';
+    if (preflight.split(acquisitionAnchor).length !== 2) throw new Error('fixture: C09 acquisition anchor is not unique in armBatchPreflight');
+    rebuilt = `${preflightPrefix}${preflight.replace(acquisitionAnchor, acquisitionReplacement)}${preflightSuffix}`;
+  }
+  text = rebuilt;
+  const variant = join(B1T2_REPO, '.superpowers', 'sdd', 'history-w2-5b1', 'c04-current-driver.mjs');
+  mkdirSync(join(B1T2_REPO, '.superpowers', 'sdd', 'history-w2-5b1'), { recursive: true, mode: 0o700 });
+  writeFileSync(variant, text, { mode: 0o600 });
+  try { return await import(`${pathToFileURL(variant).href}?v=${Date.now()}`) as W5b4R; }
+  finally { rmSync(variant); c04VariantCleaned = !existsSync(variant); }
+}
+
+w5b4It('C04 consumer: retained old recheck refuses before effects', async () => {
+  const c = await c04Prerequisite();
+  const variant = await c04Variant();
+  let callbacks = 0;
+  const r = await w5b4VariantArms(variant, c.home, c.argv, {
+    recheck: variant.recheckBatch, payloads: variant.armPayloads,
+    afterOpen: () => { callbacks += 1; rmSync(c.source); },
+  });
+  w5b4Expect(c04VariantCleaned, 'the imported variant was removed by its own finally').toBe(true);
+  w5b4Expect(callbacks, 'the sole post-open callback removes the fixture source once').toBe(1);
+  w5b4Expect(r.refusal).toEqual({ word: 'quiz-unanswerable', detail: `${c.entry.qid} clause (a) redact-fact` });
+  w5b4Expect(w5b4Manifests(c.out, 'pilot')).toEqual([]);
+  w5b4Expect(w5b4Versions(c.home)).toBe(0);
+  w5b4Expect(w5b4Runs(c.home)).toEqual([]);
+}, 180_000);
+
+w5b4It('C04 CONTROL: unrelated fact without source reaches effects', async () => {
+  const s = await fwSetup({ limits: { batch_max: 2 } });
+  const r = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+  w5b4Expect(r.refusal).toBeNull();
+  w5b4Expect(w5b4Manifests(s.out, 'pilot')).toHaveLength(2);
+  w5b4Expect(w5b4Versions(s.home)).toBe(2);
+  w5b4Expect(w5b4Runs(s.home)).toHaveLength(4);
+}, 180_000);
+
 w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4 fix wave: the pair index across arm batches', () => {
-  w5b4It('D-6481: a pair learned between batch 1 and batch 2 of one invocation refuses batch 2 quiz-unanswerable clause (a), because the pair index is refreshed per batch', async () => {
-    const run = async (learn: boolean): Promise<{ s: FwSetup; r: W5b4Result; second: W5b4R }> => {
-      const s = await fwSetup();
-      const second = s.entries[1]!;
-      const { value, pair } = fwPairFor(second);
-      w5b4Expect(b1t2Lib.redactField(second.fact_raw as string, b1t2Lib.makePairIndex([pair])), 'CONTROL: the learned pair masks the second question\'s fact').not.toContain(value);
-      let calls = 0;
-      const payloads = (rs: unknown, id: number, question: string, cut: W5b4R): W5b4R => {
-        const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
-        calls += 1;
-        if (learn && calls === 1) fwLearn(s.home, value);   // batch 1's only payload: the pair arrives after batch 1's preflight
-        return p;
-      };
-      return { s, second, r: await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads }) };
+  const learnedPairRun = async (learn: boolean): Promise<{ s: FwSetup; second: W5b4R; rechecks: string[][]; r: W5b4Result }> => {
+    const s = await fwSetup();
+    const reloaded = JSON.parse(readFileSync(s.frozen.path, 'utf8')) as { entries: W5b4R[] };
+    const second = s.entries[1]!;
+    w5b4Expect(reloaded.entries[1]!.qid, 'the selected later pending question is parsed frozen order').toBe(second.qid);
+    w5b4Expect(reloaded.entries[1]!.question, 'the observed recheck question is the reloaded question').toBe(second.question);
+    const { value, pair } = fwPairFor(second);
+    w5b4Expect(b1t2Lib.redactField(second.fact_raw as string, b1t2Lib.makePairIndex([pair])), 'CONTROL: the learned pair masks the selected later question fact').not.toContain(value);
+    const rechecks: string[][] = []; let calls = 0;
+    const recheck = async (rs: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => {
+      rechecks.push(entries.map((entry) => entry.qid as string));
+      w5b4Expect(entries[0]!.question, 'recheck receives the parsed pending question reference').toBe(s.entries.find((entry) => entry.qid === entries[0]!.qid)!.question);
+      return D4.recheckBatch(rs, entries, ctx);
     };
-    const learned = await run(true);
+    const payloads = (rs: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+      const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
+      if (p.state !== 'payloads') throw new Error(`fixture: C01 payload ${p.why}`);
+      calls += 1;
+      if (learn && calls === 1) fwLearn(s.home, value);   // q1 completed before q2's refresh
+      return p;
+    };
+    return { s, second, rechecks, r: await w5b4Arms(s.home, s.argv, { recheck, payloads }) };
+  };
+
+  w5b4It('D-6481: a pair learned between batch 1 and batch 2 of one invocation refuses batch 2 quiz-unanswerable clause (a), because the pair index is refreshed per batch', async () => {
+    const learned = await learnedPairRun(true);
     w5b4Expect(learned.r.refusal).toEqual({ word: 'quiz-unanswerable', detail: `${learned.second.qid as string} clause (a) redact-fact` });
+    w5b4Expect(learned.rechecks).toEqual([[learned.s.entries[0]!.qid], [learned.second.qid], [learned.second.qid]]);
+    const manifests = w5b4Manifests(learned.s.out, 'pilot');
+    w5b4Expect(manifests).toHaveLength(1);
+    w5b4Expect((manifests[0]!.runs as W5b4R[]).map((run) => run.qid)).toEqual([learned.s.entries[0]!.qid, learned.s.entries[0]!.qid]);
     w5b4Expect(w5b4Runs(learned.s.home), 'batch 1 ran both arms, batch 2 spawned nothing').toHaveLength(2);
     w5b4Expect(w5b4Versions(learned.s.home), 'batch 2 refused before its --version').toBe(1);
-    const clean = await run(false);
-    w5b4Expect(clean.r.refusal, 'CONTROL: no pair learned, batch 2 runs').toBeNull();
+  }, 180_000);
+
+  w5b4It('D-6481 CONTROL: without a learned durable pair, the later batch reaches its version and both arms', async () => {
+    const clean = await learnedPairRun(false);
+    w5b4Expect(clean.r.refusal).toBeNull();
+    w5b4Expect(clean.rechecks).toEqual([[clean.s.entries[0]!.qid], [clean.second.qid]]);
+    w5b4Expect(w5b4Manifests(clean.s.out, 'pilot')).toHaveLength(2);
+    w5b4Expect(w5b4Versions(clean.s.home)).toBe(2);
     w5b4Expect(w5b4Runs(clean.s.home)).toHaveLength(4);
   }, 180_000);
 
-  w5b4It('D-6481 CONTROL: a glob-discovered fixture token masks an original frozen question before arm construction', async () => {
-    const value = ['zq', 'source6481', 'transient', 'fixture'].join('-');
-    const s = await fwSetup({ limits: { batch_max: 2 } }, value);
-    const rs = D4.openReplayStore(s.home) as W5b4R;
+  w5b4It('C03: removing a source after the first build refuses before the later batch manifest, version, or runs', async () => {
+    const value = ['zq', 'source6481', 'original', 'question'].join('-');
+    const s = await fwSetup({ limits: { batch_max: 2 } }, value, true);
+    const source = join(s.home, '.ccrc', 'fixture.token');
+    const first = s.entries[0]!;
+    const sourceEntry = s.entries.find((entry) => entry.qid === s.sourceQid)!;
+    const reloaded = JSON.parse(readFileSync(s.frozen.path, 'utf8')) as { entries: W5b4R[] };
+    const opened = D4.openReplayStore(s.home) as B1t2Rs;
     try {
-      w5b4Expect(b1t2Lib.redactField(s.entries[1]!.fact_raw as string, rs.idx)).not.toContain(value);
+      w5b4Expect(s.entries.indexOf(sourceEntry), 'the source question is later in parsed frozen order').toBe(1);
+      w5b4Expect(sourceEntry.question, 'the original source question was built before serialization').toBe(s.originalSourceQuestion);
+      w5b4Expect((sourceEntry.question as string).includes(value), 'the actual parsed source question contains the runtime source').toBe(true);
+      w5b4Expect(reloaded.entries[1]!.qid).toBe(s.sourceQid);
+      w5b4Expect(reloaded.entries[1]!.question).toBe(s.originalSourceQuestion);
+      w5b4Expect(b1t2Lib.redactField(sourceEntry.question as string, opened.idx), 'the real owner masks that same parsed question field').not.toContain(value);
+      w5b4Expect((opened.db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as B1t2CountRow).n, 'the transient source is not a durable pair before removal').toBe(0);
+    } finally { opened.close(); }
+    const rechecks: string[][] = []; const built: Array<{ qid: string; question: string; plain: string; carded: string }> = []; let removed = false;
+    const recheck = async (rs: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => {
+      rechecks.push(entries.map((entry) => entry.qid as string));
+      return D4.recheckBatch(rs, entries, ctx);
+    };
+    const payloads = (rs: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+      const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
+      if (p.state !== 'payloads') throw new Error(`fixture: payload ${p.why}`);
+      const qid = s.entries.find((entry) => entry.question === question)!.qid as string;
+      built.push({ qid, question, plain: p.plain as string, carded: p.carded as string });
+      if (qid === first!.qid && !removed) { removed = true; rmSync(source); }
+      return p;
+    };
+    const r = await w5b4Arms(s.home, s.argv, { recheck, payloads });
+    w5b4Expect(r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    w5b4Expect(rechecks, 'one-question batches retain actual snapshot iteration order').toEqual([[first.qid], [sourceEntry.qid], [sourceEntry.qid]]);
+    w5b4Expect(built.map((call) => call.qid), 'first builds once, then the later source question builds old and fresh').toEqual([first.qid, sourceEntry.qid, sourceEntry.qid]);
+    w5b4Expect(built.slice(1).every((call) => call.question === sourceEntry.question), 'both retained reads build the actual parsed source question').toBe(true);
+    const [oldRead, freshRead] = built.slice(1);
+    w5b4Expect({ plain: oldRead!.plain, carded: oldRead!.carded }).not.toEqual({ plain: freshRead!.plain, carded: freshRead!.carded });
+    w5b4Expect([oldRead!.plain.includes(value), oldRead!.carded.includes(value)]).toEqual([false, false]);
+    w5b4Expect([freshRead!.plain.includes(value), freshRead!.carded.includes(value)]).toEqual([true, true]);
+    const manifests = w5b4Manifests(s.out, 'pilot');
+    w5b4Expect(manifests).toHaveLength(1);
+    w5b4Expect((manifests[0]!.runs as W5b4R[]).map((run) => run.qid)).toEqual([first.qid, first.qid]);
+    w5b4Expect(w5b4Versions(s.home)).toBe(1);
+    w5b4Expect(w5b4Runs(s.home)).toHaveLength(2);
+    const after = D4.openReplayStore(s.home) as B1t2Rs;
+    try { w5b4Expect((after.db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as B1t2CountRow).n, 'the source removal never writes a durable pair').toBe(0); }
+    finally { after.close(); }
+  }, 180_000);
+
+  w5b4It('C03 CONTROL: real owner baseline bytes match every persisted qid and arm', async () => {
+    const value = ['zq', 'source6481', 'original', 'control'].join('-');
+    const s = await fwSetup({ limits: { batch_max: 2 } }, value, true);
+    const baseline = new Map<string, Map<string, string>>();
+    const opened = D4.openReplayStore(s.home) as B1t2Rs;
+    try {
+      const verdicts = await D4.recheckBatch(opened, s.entries, { configDirs: B1T2_DIRS });
+      for (const entry of s.entries) {
+        const verdict = verdicts.get(entry.qid as string)!;
+        const p = D4.armPayloads(opened, verdict.boundaryEntryId, entry.question as string, verdict.cut) as W5b4R;
+        if (p.state !== 'payloads' || typeof p.plain !== 'string' || typeof p.carded !== 'string') throw new Error('fixture: owner baseline payloads');
+        baseline.set(entry.qid as string, new Map([[W5B4_CONTROL, p.plain], [W5B4_TREATMENT, p.carded]]));
+      }
+      w5b4Expect((opened.db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as B1t2CountRow).n, 'the unchanged source is not durable').toBe(0);
+    } finally { opened.close(); }
+    const r = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(r.refusal).toBeNull();
+    const manifests = w5b4Manifests(s.out, 'pilot'); const runs = w5b4Runs(s.home);
+    w5b4Expect(manifests).toHaveLength(2); w5b4Expect(w5b4Versions(s.home)).toBe(2); w5b4Expect(runs).toHaveLength(4);
+    const expectedPairs = new Set(s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`)));
+    const seen = new Set<string>();
+    for (const manifest of manifests) for (const run of manifest.runs as W5b4R[]) {
+      const pair = `${run.qid as string}:${run.arm as string}`;
+      w5b4Expect(expectedPairs.has(pair), `manifest pair ${pair}`).toBe(true); w5b4Expect(seen.has(pair), `duplicate manifest pair ${pair}`).toBe(false); seen.add(pair);
+      const expected = baseline.get(run.qid as string)!.get(run.arm as string)!;
+      w5b4Expect(run.stdin_sha256).toBe(sha256Hex(expected));
+      const persisted = w5b4Json(join(s.out, `${run.name as string}.run.json`));
+      const matching = runs.filter((item) => item.cwd === persisted.cwd);
+      w5b4Expect(matching, `one stub run for ${pair}`).toHaveLength(1);
+      w5b4Expect([matching[0]!.env.CCRC_RECALL_ARM, matching[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, s.entries.find((entry) => entry.qid === run.qid)!.boundary_uuid]);
+      w5b4Expect(matching[0]!.stdin).toBe(expected);
+    }
+    w5b4Expect(seen).toEqual(expectedPairs);
+    const after = D4.openReplayStore(s.home) as B1t2Rs;
+    try { w5b4Expect((after.db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as B1t2CountRow).n, 'the unchanged source remains non-durable').toBe(0); }
+    finally { after.close(); }
+  }, 180_000);
+
+  const C05_OLD = ['Qa7', 'Mb2', 'Lc9', 'Rd4', 'Xe6', 'Tf3', 'Hg8', 'Pk5'].join('');
+  const C05_NEW = ['Zu1', 'Yi2', 'Xo3', 'Wv4', 'Ns5', 'Kr6', 'Jq7', 'Ip8'].join('');
+  const C05_STABLE = ['neutral', 'stable', 'content'].join('-');
+  const c05Source = (s: FwSetup): string => join(s.home, '.ccrc', 'fixture.token');
+  const c05Replace = (s: FwSetup, value: string): void => writeFileSync(c05Source(s), `${value}\n`, { mode: 0o600 });
+  const c05Pairs = (rs: B1t2Rs, label: string, expectedCount = 0, member: string | null = null): void => {
+    w5b4Expect((rs.db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as B1t2CountRow).n, label).toBe(expectedCount);
+    if (member !== null) w5b4Expect((rs.db.prepare('SELECT count(*) AS n FROM redact_hashes WHERE len = ? AND sha256 = ?')
+      .get(member.length, Buffer.from(b1t2Lib.sha256Hex(member), 'hex')) as B1t2CountRow).n, `${label}: pair membership`).toBe(1);
+  };
+  type C05PayloadSet = { payloads: Map<string, Map<string, string>>; idx: W5b4R };
+  const c05Payloads = async (s: FwSetup, pairs: { count?: number; member?: string | null } = {}): Promise<C05PayloadSet> => {
+    const rs = D4.openReplayStore(s.home) as B1t2Rs;
+    try {
+      c05Pairs(rs, 'C05 declared source pair state', pairs.count ?? 0, pairs.member ?? null);
+      const verdicts = await D4.recheckBatch(rs, s.entries, { configDirs: B1T2_DIRS });
+      const payloads = new Map<string, Map<string, string>>();
+      for (const entry of s.entries) {
+        const verdict = verdicts.get(entry.qid as string)!;
+        const p = D4.armPayloads(rs, verdict.boundaryEntryId, entry.question as string, verdict.cut) as W5b4R;
+        if (p.state !== 'payloads' || typeof p.plain !== 'string' || typeof p.carded !== 'string') throw new Error('fixture: C05 owner payloads');
+        payloads.set(entry.qid as string, new Map([[W5B4_CONTROL, p.plain], [W5B4_TREATMENT, p.carded]]));
+      }
+      return { payloads, idx: rs.idx as W5b4R };
+    } finally { rs.close(); }
+  };
+  const c05ArmPrecondition = async (s: FwSetup, target: string | null): Promise<Map<string, Map<string, string>>> => {
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    const original = s.entries[1]!.question as string;
+    w5b4Expect(target === null || original.includes(target), 'C05 original target is present in the parsed later question').toBe(true);
+    const old = await c05Payloads(s);
+    c05Replace(s, C05_NEW);
+    const fresh = await c05Payloads(s);
+    c05Replace(s, C05_OLD);
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8') === frozen, 'C05 source rotation never changes frozen original bytes').toBe(true);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8') === `${C05_OLD}\n`, 'C05 precondition restores the initial declared source').toBe(true);
+    const oldMasked = target === null ? false : !b1t2Lib.redactField(original, old.idx).includes(target);
+    const freshMasked = target === null ? false : !b1t2Lib.redactField(original, fresh.idx).includes(target);
+    if (target === C05_OLD) w5b4Expect([oldMasked, freshMasked], 'C05 old-only target is masked only by the old loaded source').toEqual([true, false]);
+    else if (target === C05_NEW) w5b4Expect([oldMasked, freshMasked], 'C05 new-only target is masked only by the fresh loaded source').toEqual([false, true]);
+    else {
+      for (const entry of s.entries) {
+        const before = old.payloads.get(entry.qid as string)!;
+        const after = fresh.payloads.get(entry.qid as string)!;
+        for (const arm of W5B4_ARMS) w5b4Expect(before.get(arm), 'C05 unaffected whole arm input remains equal').toBe(after.get(arm));
+      }
+      return old.payloads;
+    }
+    const qid = s.entries[1]!.qid as string;
+    for (const arm of W5B4_ARMS) w5b4Expect(old.payloads.get(qid)!.get(arm), 'C05 affected real payload bytes differ across the loaded source rotation').not.toBe(fresh.payloads.get(qid)!.get(arm));
+    return old.payloads;
+  };
+  const c05ArmCase = async (target: string, control = false): Promise<{ s: FwSetup; baseline: Map<string, Map<string, string>>; r: W5b4Result }> => {
+    const fixture: FwSourceFixture = { declaredSourceValue: C05_OLD, storedSummary: C05_STABLE,
+      laterQuestion: control ? C05_STABLE : `fixture rotation ${target}` };
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, fixture);
+    const sourceEntry = s.entries[1]!;
+    const reloaded = JSON.parse(readFileSync(s.frozen.path, 'utf8')) as { entries: W5b4R[] };
+    w5b4Expect(reloaded.entries[1]!.qid, 'C05 parsed qid order retains the source-isolated later entry').toBe(sourceEntry.qid);
+    w5b4Expect(fixture.storedSummary === C05_STABLE, 'C05 stored summary is isolated from the declared source value').toBe(true);
+    w5b4Expect(reloaded.entries[1]!.question, 'C05 later parsed question is the original source-isolated field').toBe(fixture.laterQuestion);
+    const baseline = await c05ArmPrecondition(s, control ? null : target);
+    let calls = 0;
+    const recheck = (rs: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => D4.recheckBatch(rs, entries, ctx);
+    const payloads = (rs: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+      const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
+      if (p.state !== 'payloads') throw new Error(`fixture: C05 payload ${p.why}`);
+      calls += 1;
+      if (calls === 1) c05Replace(s, C05_NEW);
+      return p;
+    };
+    return { s, baseline, r: await w5b4Arms(s.home, s.argv, { recheck, payloads }) };
+  };
+
+  const c05ArmRefusalEffects = (c: { s: FwSetup; r: W5b4Result }): void => {
+    w5b4Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    const manifests = w5b4Manifests(c.s.out, 'pilot');
+    w5b4Expect(manifests).toHaveLength(1);
+    w5b4Expect((manifests[0]!.runs as W5b4R[]).map((run) => `${run.qid as string}:${run.arm as string}`).sort()).toEqual(W5B4_ARMS.map((arm) => `${c.s.entries[0]!.qid as string}:${arm}`).sort());
+    w5b4Expect(w5b4Versions(c.s.home)).toBe(1);
+    w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(2);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs;
+    try { c05Pairs(rs, 'C05 affected arms source rotation remains non-durable after the consumer'); }
+    finally { rs.close(); }
+  };
+
+  w5b4It('C05 arms old-only rotation refuses', async () => {
+    c05ArmRefusalEffects(await c05ArmCase(C05_OLD));
+  }, 180_000);
+
+  w5b4It('C05 arms new-only rotation refuses', async () => {
+    c05ArmRefusalEffects(await c05ArmCase(C05_NEW));
+  }, 180_000);
+
+  w5b4It('C05 arms rotation keeps unaffected inputs equal', async () => {
+    const c = await c05ArmCase(C05_STABLE, true);
+    w5b4Expect(c.r.refusal).toBeNull();
+    const manifests = w5b4Manifests(c.s.out, 'pilot');
+    w5b4Expect(manifests).toHaveLength(2); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4);
+    const expectedPairs = new Set(c.s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`)));
+    const seen = new Set<string>();
+    const stubs = w5b4Runs(c.s.home);
+    for (const manifest of manifests) for (const run of manifest.runs as W5b4R[]) {
+      const pair = `${run.qid as string}:${run.arm as string}`;
+      w5b4Expect(expectedPairs.has(pair), 'C05 control manifest has only expected qid/arm pairs').toBe(true);
+      w5b4Expect(seen.has(pair), 'C05 control manifest records each qid/arm once').toBe(false); seen.add(pair);
+      const expected = c.baseline.get(run.qid as string)!.get(run.arm as string)!;
+      w5b4Expect(run.stdin_sha256).toBe(sha256Hex(expected));
+      const persisted = w5b4Json(join(c.s.out, `${run.name as string}.run.json`));
+      const matches = stubs.filter((item) => item.cwd === persisted.cwd);
+      w5b4Expect(matches).toHaveLength(1);
+      w5b4Expect([matches[0]!.env.CCRC_RECALL_ARM, matches[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, c.s.entries.find((entry) => entry.qid === run.qid)!.boundary_uuid]);
+      w5b4Expect(matches[0]!.stdin).toBe(expected);
+    }
+    w5b4Expect(seen).toEqual(expectedPairs);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs;
+    try { c05Pairs(rs, 'C05 unchanged arms control remains non-durable after the consumer'); }
+    finally { rs.close(); }
+  }, 180_000);
+
+  const c05SeedAnswers = async (s: FwSetup, reply: string): Promise<void> => {
+    // Both frozen questions share the stored boundary, so the recording stub has one key per arm.
+    for (const arm of W5B4_ARMS) w5b4Act(s.home, s.entries[0]!, arm, '.jsonl', w5b4Stream({ text: reply }));
+    const armed = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(armed.refusal, 'C05 judge setup uses real settled arm records').toBeNull();
+    const actual = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[];
+    const expected = new Set(s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`)));
+    w5b4Expect(actual).toHaveLength(4);
+    w5b4Expect(new Set(actual.map((record) => `${record.qid}:${record.arm}`))).toEqual(expected);
+    w5b4Expect(actual.every((record) => record.outcome === 'answered' && record.reply === reply), 'C05 actual settled replies retain the selected raw source field').toBe(true);
+  };
+  const c05JudgePrecondition = (s: FwSetup, target: string | null): { map: W5b4R[]; old: W5b4R[] } => {
+    const records = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[];
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    const raw = records.map((record) => record.reply ?? '');
+    w5b4Expect(records).toHaveLength(4);
+    w5b4Expect(target === null || raw.every((reply) => reply.includes(target)), 'C05 actual settled replies contain the selected original target').toBe(true);
+    w5b4Expect(target !== null || raw.every((reply) => !reply.includes(C05_OLD) && !reply.includes(C05_NEW)), 'C05 stable actual replies contain neither rotation source').toBe(true);
+    const map = D4.judgeMapOf(W5B5_SEED, s.entries, W5B4_ARMS) as W5b4R[];
+    const jobs = (): { jobs: W5b4R[]; idx: W5b4R } => {
+      const rs = D4.openReplayStore(s.home) as B1t2Rs;
+      try {
+        c05Pairs(rs, 'C05 judge declared source does not write durable pairs');
+        const picked = D4.judgeItemsOf({ entries: s.entries, answers: records, arms: W5B4_ARMS, shaMinPrefix: 7 });
+        return { jobs: D4.judgeJobsOf({ items: picked.items, map, idx: rs.idx as W5b4R }) as W5b4R[], idx: rs.idx as W5b4R };
+      } finally { rs.close(); }
+    };
+    const old = jobs(); c05Replace(s, C05_NEW); const fresh = jobs(); c05Replace(s, C05_OLD);
+    w5b4Expect(old.jobs).toHaveLength(4); w5b4Expect(fresh.jobs).toHaveLength(4);
+    w5b4Expect(JSON.stringify(D4.readArmAnswers(s.out, 'pilot')) === JSON.stringify(records), 'C05 source rotation never changes settled raw answers').toBe(true);
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8') === frozen, 'C05 source rotation never changes frozen judge input').toBe(true);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8') === `${C05_OLD}\n`, 'C05 judge precondition restores seed source').toBe(true);
+    if (target === C05_OLD || target === C05_NEW) {
+      const oldMasked = old.jobs.every((job) => !String((job.input as W5b4R).reply).includes(target));
+      const freshMasked = fresh.jobs.every((job) => !String((job.input as W5b4R).reply).includes(target));
+      w5b4Expect([oldMasked, freshMasked], target === C05_OLD ? 'C05 old reply is masked only by old source' : 'C05 new reply is masked only by fresh source').toEqual(target === C05_OLD ? [true, false] : [false, true]);
+      w5b4Expect(JSON.stringify(old.jobs.map((job) => job.input)) !== JSON.stringify(fresh.jobs.map((job) => job.input)), 'C05 real old and fresh job bytes differ').toBe(true);
+    } else w5b4Expect(old.jobs.map((job) => job.input)).toEqual(fresh.jobs.map((job) => job.input));
+    return { map, old: old.jobs };
+  };
+  const c05JudgeCase = async (target: string, control = false): Promise<{ s: FwSetup; old: W5b4R[]; reads: number; judge: Awaited<ReturnType<typeof w5b5InProcess>> }> => {
+    const fixture: FwSourceFixture = { declaredSourceValue: C05_OLD, storedSummary: C05_STABLE, laterQuestion: C05_STABLE };
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, fixture);
+    const reply = control ? `ANSWER: UNKNOWN\n${C05_STABLE}` : `ANSWER: UNKNOWN\n${target}`;
+    await c05SeedAnswers(s, reply);
+    const pre = c05JudgePrecondition(s, control ? null : target);
+    let reads = 0;
+    const records = (): W5b5Answer[] => { reads += 1; const actual = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[]; c05Replace(s, C05_NEW); return actual; };
+    const judge = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(s.out, 'pilot'), W5B5_ENV(s.home),
+      { loadArmRun: () => w5b5Run(s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(s.home, { expected: D4.expectedForNode(s.draft, s.storeId).expected }), readArmAnswers: records, now: () => Date.now() }));
+    return { s, old: pre.old, reads, judge };
+  };
+
+  const c05JudgeRefusalEffects = (c: { s: FwSetup; reads: number; judge: Awaited<ReturnType<typeof w5b5InProcess>> }): void => {
+    w5b4Expect(c.judge.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree judge' });
+    w5b4Expect(c.reads, 'C05 command seam returns actual settled records once').toBe(1);
+    w5b4Expect(w5b4Versions(c.s.home)).toBe(2);
+    w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4);
+    w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judge'))).toBe(false);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs;
+    try { c05Pairs(rs, 'C05 affected judge source rotation remains non-durable after the consumer'); }
+    finally { rs.close(); }
+  };
+
+  w5b4It('C05 judge old-only rotation refuses', async () => {
+    c05JudgeRefusalEffects(await c05JudgeCase(C05_OLD));
+  }, 180_000);
+
+  w5b4It('C05 judge new-only rotation refuses', async () => {
+    c05JudgeRefusalEffects(await c05JudgeCase(C05_NEW));
+  }, 180_000);
+
+  w5b4It('C05 judge rotation keeps unaffected inputs equal', async () => {
+    const c = await c05JudgeCase(C05_STABLE, true);
+    w5b4Expect(c.judge.refusal).toBeNull();
+    w5b4Expect(c.reads, 'C05 control command seam returns actual settled records once').toBe(1);
+    const dir = join(c.s.out, 'pilot', 'judge');
+    const inputs = readdirSync(dir).filter((name) => name.endsWith('.input.json'));
+    w5b4Expect(c.old).toHaveLength(4); w5b4Expect(inputs).toHaveLength(4);
+    const armRuns = 4;
+    const allRuns = w5b4Runs(c.s.home);
+    const judgeRuns = allRuns.slice(armRuns);
+    w5b4Expect(w5b4Versions(c.s.home)).toBe(5);
+    w5b4Expect(judgeRuns).toHaveLength(8);
+    const expectedAttempts = new Set(c.old.flatMap((job) => [1, 2].map((attempt) => `${job.id as string}:${attempt}`)));
+    const seen = new Set<string>();
+    for (const job of c.old) {
+      const persisted = readFileSync(join(dir, `${job.id as string}.input.json`), 'utf8');
+      w5b4Expect(persisted).toBe(`${w5b4Lib.canonicalJson(job.input)}\n`);
+      for (const attempt of [1, 2]) {
+        const key = `${job.id as string}:${attempt}`;
+        const runRecord = w5b4Json(join(dir, `${job.id as string}-${attempt}.run.json`));
+        const matches = judgeRuns.filter((run) => run.cwd === runRecord.cwd);
+        w5b4Expect(matches).toHaveLength(1);
+        w5b4Expect(seen.has(key), 'C05 control judge attempt is unique').toBe(false); seen.add(key);
+        w5b4Expect(matches[0]!.stdin).toBe(W5B5.judgeStdin('v1', job.input));
+      }
+    }
+    w5b4Expect(seen).toEqual(expectedAttempts);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs;
+    try { c05Pairs(rs, 'C05 unchanged judge control remains non-durable after the consumer'); }
+    finally { rs.close(); }
+  }, 180_000);
+
+  // C06 derives four fixed belt-only forms from the owner suite's runtime construction; pair-only indexes stay direct controls.
+  const C06_BELT = ['QP', 'aB3cD4e', 'Fg5Hi6Jk', 'Lm7No8Pq', 'R9sT0uV'].join('');
+  const C06_PARTIAL = C06_BELT.slice(1);
+  const C06_BS = String.fromCharCode(0x5c);
+  const C06_ESC = String.fromCharCode(0x1b);
+  const C06_JSON = [...C06_PARTIAL].map((c, i) => i % 8 === 7 ? `${C06_BS}u00${c.charCodeAt(0).toString(16).padStart(2, '0')}` : c).join('');
+  const C06_ANSI = [C06_PARTIAL.slice(0, 10), `${C06_ESC}[1m`, C06_PARTIAL.slice(10, 20), `${C06_ESC}[0m`, C06_PARTIAL.slice(20)].join('');
+  const C06_GLUED = ['ab', C06_PARTIAL, 'cd'].join('');
+  const c06PairOnly = (): W5b4R => b1t2Lib.makePairIndex(b1t2Lib.secretPairs([C06_BELT]).pairs, null) as W5b4R;
+  const c06OwnerForms = (forms: ReadonlyArray<readonly [string, string]>, idx: W5b4R, pairOnly: W5b4R, label: string): void => {
+    for (const [name, form] of forms) {
+      w5b4Expect(b1t2Lib.redactField(form, pairOnly) === form, `${label}: pair-only leaves ${name}`).toBe(true);
+      w5b4Expect(b1t2Lib.redactField(form, idx) !== form, `${label}: source-loaded belt changes ${name}`).toBe(true);
+    }
+  };
+  const c06PayloadSet = async (s: FwSetup, sourcePresent: boolean): Promise<C05PayloadSet> => {
+    const built = await c05Payloads(s);
+    w5b4Expect((built.idx.belt as W5b4R).texts.includes(C06_BELT), 'C06 source-loader admission matches the declared source state').toBe(sourcePresent);
+    return built;
+  };
+  const c06Remove = (s: FwSetup): void => rmSync(c05Source(s));
+  const c06ArmCase = async (remove: boolean): Promise<{ s: FwSetup; baseline: Map<string, Map<string, string>>; r: W5b4Result }> => {
+    const forms = [['proper partial', C06_PARTIAL], ['JSON escaped partial', C06_JSON]] as const;
+    w5b4Expect([C06_BELT.length, C06_PARTIAL.length], 'C06 fixed source and proper partial lengths').toEqual([32, 31]);
+    const fixture: FwSourceFixture = { declaredSourceValue: C06_BELT, storedSummary: C05_STABLE, laterQuestion: ['fixture belt', ...forms.map(([, form]) => form)].join(' ') };
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, fixture);
+    const reloaded = JSON.parse(readFileSync(s.frozen.path, 'utf8')) as { entries: W5b4R[] };
+    w5b4Expect(reloaded.entries[1]!.qid, 'C06 arm source qid remains parsed later order').toBe(s.entries[1]!.qid);
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    w5b4Expect(forms.every(([, form]) => reloaded.entries[1]!.question.includes(form)), 'C06 arm original question holds partial and JSON forms before serialization').toBe(true);
+    const old = await c06PayloadSet(s, true);
+    c06OwnerForms(forms, old.idx, c06PairOnly(), 'C06 arms');
+    if (remove) c06Remove(s); else c05Replace(s, C06_BELT);
+    const fresh = await c06PayloadSet(s, !remove);
+    if (remove) {
+      for (const [, form] of forms) w5b4Expect(b1t2Lib.redactField(form, fresh.idx) === form, 'C06 arms fresh index leaves each original form unchanged').toBe(true);
+      c05Replace(s, C06_BELT);
+    }
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8') === frozen, 'C06 arm source state never changes frozen original bytes').toBe(true);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8') === `${C06_BELT}\n`, 'C06 arms precondition restores the declared source').toBe(true);
+    const qid = s.entries[1]!.qid as string;
+    if (remove) for (const arm of W5B4_ARMS) w5b4Expect(old.payloads.get(qid)!.get(arm), 'C06 old and fresh real arm bytes differ').not.toBe(fresh.payloads.get(qid)!.get(arm));
+    else for (const entry of s.entries) for (const arm of W5B4_ARMS) w5b4Expect(old.payloads.get(entry.qid as string)!.get(arm), 'C06 unchanged source preserves every arm byte').toBe(fresh.payloads.get(entry.qid as string)!.get(arm));
+    let calls = 0;
+    const recheck = (rs: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => D4.recheckBatch(rs, entries, ctx);
+    const payloads = (rs: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+      const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
+      if (p.state !== 'payloads') throw new Error(`fixture: C06 payload ${p.why}`);
+      calls += 1;
+      if (remove && calls === 1) c06Remove(s);
+      return p;
+    };
+    return { s, baseline: old.payloads, r: await w5b4Arms(s.home, s.argv, { recheck, payloads }) };
+  };
+
+  w5b4It('C06 arms belt partial and JSON escape refuse', async () => {
+    const c = await c06ArmCase(true);
+    w5b4Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    const manifests = w5b4Manifests(c.s.out, 'pilot');
+    w5b4Expect(manifests).toHaveLength(1);
+    w5b4Expect((manifests[0]!.runs as W5b4R[]).map((run) => `${run.qid as string}:${run.arm as string}`).sort()).toEqual(W5B4_ARMS.map((arm) => `${c.s.entries[0]!.qid as string}:${arm}`).sort());
+    w5b4Expect(w5b4Versions(c.s.home)).toBe(1); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(2);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C06 arms removal stays non-durable'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('C06 arms belt source unchanged succeeds', async () => {
+    const c = await c06ArmCase(false);
+    w5b4Expect(c.r.refusal).toBeNull();
+    const manifests = w5b4Manifests(c.s.out, 'pilot'); const stubs = w5b4Runs(c.s.home);
+    w5b4Expect(manifests).toHaveLength(2); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(stubs).toHaveLength(4);
+    const expectedPairs = new Set(c.s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`)));
+    const seen = new Set<string>();
+    for (const manifest of manifests) for (const run of manifest.runs as W5b4R[]) {
+      const pair = `${run.qid as string}:${run.arm as string}`;
+      w5b4Expect(expectedPairs.has(pair), 'C06 arms control only emits expected qid/arm keys').toBe(true);
+      w5b4Expect(seen.has(pair), 'C06 arms control emits each qid/arm once').toBe(false); seen.add(pair);
+      const expected = c.baseline.get(run.qid as string)!.get(run.arm as string)!;
+      w5b4Expect(run.stdin_sha256).toBe(sha256Hex(expected));
+      const persisted = w5b4Json(join(c.s.out, `${run.name as string}.run.json`));
+      const matches = stubs.filter((stub) => stub.cwd === persisted.cwd); w5b4Expect(matches).toHaveLength(1);
+      w5b4Expect([matches[0]!.env.CCRC_RECALL_ARM, matches[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, c.s.entries.find((entry) => entry.qid === run.qid)!.boundary_uuid]);
+      w5b4Expect(matches[0]!.stdin).toBe(expected);
+    }
+    w5b4Expect(seen).toEqual(expectedPairs);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C06 unchanged arms control remains non-durable'); } finally { rs.close(); }
+  }, 180_000);
+
+  // C09 uses the full declared command so source admission retains its 18-character workspace unit.
+  const C09_MIDDLE = B1T2_CMD;
+  type C09Call = { view: B1t2Rs; idx: unknown; entries: W5b4R[]; rootIdx: unknown };
+  const c09WithStore = async <T>(s: FwSetup, value: string, fn: (rs: B1t2Rs) => Promise<T>): Promise<T> => {
+    c05Replace(s, value);
+    const rs = D4.openReplayStore(s.home) as B1t2Rs;
+    try { c05Pairs(rs, 'C09 declared source remains non-durable'); return await fn(rs); }
+    finally { rs.close(); }
+  };
+  const c09Payloads = async (s: FwSetup, value: string): Promise<Map<string, Map<string, string>>> => {
+    c05Replace(s, value);
+    return (await c05Payloads(s)).payloads;
+  };
+  const c09Case = async (middle: string): Promise<{ s: FwSetup; baseline: Map<string, Map<string, string>>; calls: C09Call[]; snapshots: unknown[]; seed: unknown; rootIdx: unknown; cleaned: boolean; r: W5b4Result }> => {
+    const fixture: FwSourceFixture = { declaredSourceValue: C05_OLD, storedSummary: C05_STABLE, laterQuestion: null };
+    const s = await fwSetup({ limits: { batch_max: 4 } }, null, false, fixture);
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    const command = s.entries.find((entry) => entry.kind === 'command')!;
+    const sha = s.entries.find((entry) => entry.kind === 'sha')!;
+    w5b4Expect(s.entries).toHaveLength(2);
+    w5b4Expect(command.fact).toBe(B1T2_CMD); w5b4Expect(sha.fact).toBe(B1T2_SHA);
+    const baseline = await c09Payloads(s, C05_OLD);
+    if (middle === C09_MIDDLE) {
+      await c09WithStore(s, middle, async (rs) => {
+        w5b4Expect(C09_MIDDLE.length, 'C09 admits the full command source, never the short workspace unit alone').toBeGreaterThanOrEqual(20);
+        w5b4Expect(b1t2Lib.secretUnits(C09_MIDDLE)).toContain(B1T2_VALUE);
+        w5b4Expect(((rs.idx as W5b4R).belt as W5b4R).texts).toContain(B1T2_VALUE);
+        w5b4Expect(b1t2Lib.redactField(command.fact as string, rs.idx)).not.toContain(B1T2_VALUE);
+        await w5b4Expect(D4.recheckBatch(rs, s.entries, { configDirs: B1T2_DIRS })).rejects.toMatchObject({
+          word: 'quiz-unanswerable', detail: `${command.qid as string} clause (a) redact-fact`,
+        });
+      });
+    } else {
+      const controlMiddle = await c09Payloads(s, middle);
+      for (const entry of s.entries) for (const arm of W5B4_ARMS) w5b4Expect(controlMiddle.get(entry.qid as string)!.get(arm), 'C09 control middle owner payload baseline agrees').toBe(baseline.get(entry.qid as string)!.get(arm));
+    }
+    await c09WithStore(s, C05_OLD, async (rs) => { await w5b4Expect(D4.recheckBatch(rs, s.entries, { configDirs: B1T2_DIRS })).resolves.toBeInstanceOf(Map); });
+    const newPayloads = await c09Payloads(s, C05_NEW);
+    for (const entry of s.entries) for (const arm of W5B4_ARMS) w5b4Expect(newPayloads.get(entry.qid as string)!.get(arm), 'C09 new owner payload baseline agrees').toBe(baseline.get(entry.qid as string)!.get(arm));
+    c05Replace(s, C05_OLD);
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8'), 'C09 source rotations never mutate frozen bytes').toBe(frozen);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8'), 'C09 restores the declared old source before variant store open').toBe(`${C05_OLD}\n`);
+    const variant = await c04Variant({ acquireRetainedSnapshots: true });
+    const calls: C09Call[] = []; const snapshots: unknown[] = []; let seed: unknown = null; let root: B1t2Rs | null = null; let acquired = 0;
+    const recheck = async (view: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => {
+      const idx = view.idx; calls.push({ view, idx, entries, rootIdx: root!.idx });
+      await Promise.resolve();
+      w5b4Expect(view.idx, 'C09 isolated view index remains stable through recheck await').toBe(idx);
+      w5b4Expect(root!.idx, 'C09 root store stays on the final retained index during isolated builds').toBe(snapshots[2]);
+      return variant.recheckBatch(view, entries, ctx);
+    };
+    const acquireRetainedSnapshots = ({ rs, home, refresh }: W5b4R) => {
+      acquired += 1; w5b4Expect(acquired, 'C09 acquisition runs once in one arms command').toBe(1);
+      root = rs as B1t2Rs; seed = rs.idx;
+      const old = refresh(rs, home); const oldIdx = (old as W5b4R[])[0]!.idx;
+      c05Replace(s, middle);
+      const middleRead = refresh(rs, home); const middleIdx = (middleRead as W5b4R[])[1]!.idx;
+      c05Replace(s, C05_NEW);
+      const newest = refresh(rs, home); const newIdx = (newest as W5b4R[])[2]!.idx;
+      snapshots.push(oldIdx, middleIdx, newIdx);
+      w5b4Expect((newest as W5b4R[]).every((snapshot: W5b4R, i: number) => snapshot.idx === snapshots[i]), 'C09 descriptor order retains exact index identities').toBe(true);
+      w5b4Expect(new Set(snapshots).size, 'C09 retains three actual distinct indexes').toBe(3);
+      w5b4Expect(seed, 'C09 seed identity is retained snapshot zero').toBe(oldIdx);
+      w5b4Expect(rs.idx, 'C09 real root store advances to the final retained index').toBe(newIdx);
+    };
+    const r = await w5b4VariantArms(variant, s.home, s.argv, { recheck, payloads: variant.armPayloads, acquireRetainedSnapshots });
+    return { s, baseline, calls, snapshots, seed, rootIdx: root!.idx, cleaned: c04VariantCleaned, r };
+  };
+
+  w5b4It('C09 middle-recheck-veto', async () => {
+    const c = await c09Case(C09_MIDDLE);
+    const command = c.s.entries.find((entry) => entry.kind === 'command')!;
+    w5b4Expect(c.r.refusal).toEqual({ word: 'quiz-unanswerable', detail: `${command.qid as string} clause (a) redact-fact` });
+    w5b4Expect(c.cleaned, 'C09 complete variant is removed after expected refusal').toBe(true);
+    w5b4Expect(c.calls).toHaveLength(2);
+    const actual = c.calls[0]!.entries;
+    w5b4Expect(actual.map((entry) => [entry.qid, entry.question, entry.fact, entry.kind]), 'C09 first actual qs matches the parsed frozen content').toEqual(c.s.entries.map((entry) => [entry.qid, entry.question, entry.fact, entry.kind]));
+    w5b4Expect(c.calls.every((call) => call.entries === actual && call.entries.length === 2 && call.entries[0] === actual[0] && call.entries[1] === actual[1]), 'C09 reached views share one full reparsed qs array and objects').toBe(true);
+    w5b4Expect(c.calls.every((call, i) => call.idx === c.snapshots[i]), 'C09 reached views retain exact descriptor index identities').toBe(true);
+    w5b4Expect(new Set(c.calls.map((call) => call.view)).size, 'C09 reached views are distinct isolated objects').toBe(c.calls.length);
+    w5b4Expect(c.calls.every((call) => call.rootIdx === c.snapshots[2]), 'C09 root index never swaps into an isolated retained view').toBe(true);
+    w5b4Expect(c.seed).toBe(c.snapshots[0]); w5b4Expect(c.rootIdx).toBe(c.snapshots[2]);
+    w5b4Expect(w5b4Manifests(c.s.out, 'pilot')).toEqual([]); w5b4Expect(w5b4Versions(c.s.home)).toBe(0); w5b4Expect(w5b4Runs(c.s.home)).toEqual([]);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C09 affected consumer remains non-durable'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('C09 three-reading control', async () => {
+    const c = await c09Case(C06_BELT);
+    w5b4Expect(c.r.refusal).toBeNull(); w5b4Expect(c.r.code).toBe(0);
+    w5b4Expect(c.cleaned, 'C09 complete variant is removed after success').toBe(true);
+    w5b4Expect(c.calls).toHaveLength(3);
+    const actual = c.calls[0]!.entries;
+    w5b4Expect(actual.map((entry) => [entry.qid, entry.question, entry.fact, entry.kind]), 'C09 control first actual qs matches the parsed frozen content').toEqual(c.s.entries.map((entry) => [entry.qid, entry.question, entry.fact, entry.kind]));
+    w5b4Expect(c.calls.every((call) => call.entries === actual && call.entries.length === 2 && call.entries[0] === actual[0] && call.entries[1] === actual[1]), 'C09 control views share one full reparsed qs array and objects').toBe(true);
+    w5b4Expect(c.calls.every((call, i) => call.idx === c.snapshots[i]), 'C09 control views retain exact descriptor index identities').toBe(true); w5b4Expect(new Set(c.calls.map((call) => call.view)).size, 'C09 control views are distinct isolated objects').toBe(c.calls.length); w5b4Expect(c.calls.every((call) => call.rootIdx === c.snapshots[2])).toBe(true); w5b4Expect(c.seed).toBe(c.snapshots[0]); w5b4Expect(c.rootIdx).toBe(c.snapshots[2]);
+    const manifests = w5b4Manifests(c.s.out, 'pilot'); const stubs = w5b4Runs(c.s.home);
+    w5b4Expect(manifests).toHaveLength(1); w5b4Expect(w5b4Versions(c.s.home)).toBe(1); w5b4Expect(stubs).toHaveLength(4);
+    const seen = new Set<string>();
+    for (const run of manifests[0]!.runs as W5b4R[]) {
+      const key = `${run.qid as string}:${run.arm as string}`; w5b4Expect(seen.has(key), `C09 control duplicate ${key}`).toBe(false); seen.add(key);
+      const expected = c.baseline.get(run.qid as string)!.get(run.arm as string)!;
+      w5b4Expect(run.stdin_sha256).toBe(sha256Hex(expected));
+      const persisted = w5b4Json(join(c.s.out, `${run.name as string}.run.json`)); const matching = stubs.filter((stub) => stub.cwd === persisted.cwd);
+      w5b4Expect(matching).toHaveLength(1); w5b4Expect(matching[0]!.stdin).toBe(expected);
+      w5b4Expect([matching[0]!.env.CCRC_RECALL_ARM, matching[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, c.s.entries.find((entry) => entry.qid === run.qid)!.boundary_uuid]);
+    }
+    w5b4Expect(seen).toEqual(new Set(c.s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`))));
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C09 control remains non-durable'); } finally { rs.close(); }
+  }, 180_000);
+
+  const c06JudgeJobs = (s: FwSetup, records: W5b5Answer[], sourcePresent: boolean): { jobs: W5b4R[]; idx: W5b4R } => {
+    const rs = D4.openReplayStore(s.home) as B1t2Rs;
+    try {
+      c05Pairs(rs, 'C06 judge declared source remains non-durable');
+      w5b4Expect(((rs.idx as W5b4R).belt as W5b4R).texts.includes(C06_BELT), 'C06 judge source-loader admission matches the declared source state').toBe(sourcePresent);
+      const picked = D4.judgeItemsOf({ entries: s.entries, answers: records, arms: W5B4_ARMS, shaMinPrefix: 7 });
+      const map = D4.judgeMapOf(W5B5_SEED, s.entries, W5B4_ARMS);
+      return { jobs: D4.judgeJobsOf({ items: picked.items, map, idx: rs.idx as W5b4R }) as W5b4R[], idx: rs.idx as W5b4R };
+    } finally { rs.close(); }
+  };
+  const c06JudgeCase = async (remove: boolean): Promise<{ s: FwSetup; baseline: W5b4R[]; reads: number; judge: Awaited<ReturnType<typeof w5b5InProcess>> }> => {
+    const forms = [['ANSI escaped partial', C06_ANSI], ['letter-glued partial', C06_GLUED]] as const;
+    const fixture: FwSourceFixture = { declaredSourceValue: C06_BELT, storedSummary: C05_STABLE, laterQuestion: C05_STABLE };
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, fixture);
+    const reply = `ANSWER: UNKNOWN\n${forms.map(([, form]) => form).join(' ')}`;
+    await c05SeedAnswers(s, reply);
+    const records = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[];
+    w5b4Expect(records).toHaveLength(4);
+    w5b4Expect(records.every((record) => record.reply === reply), 'C06 actual shared-boundary records retain ANSI and glued originals').toBe(true);
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    const beforeRecords = JSON.stringify(records);
+    const old = c06JudgeJobs(s, records, true); c06OwnerForms(forms, old.idx, c06PairOnly(), 'C06 judge');
+    if (remove) c06Remove(s); else c05Replace(s, C06_BELT);
+    const fresh = c06JudgeJobs(s, records, !remove);
+    if (remove) {
+      for (const [, form] of forms) w5b4Expect(b1t2Lib.redactField(form, fresh.idx) === form, 'C06 judge fresh index leaves each original form unchanged').toBe(true);
+      c05Replace(s, C06_BELT);
+    }
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8') === frozen, 'C06 judge source state never changes frozen original bytes').toBe(true);
+    w5b4Expect(JSON.stringify(D4.readArmAnswers(s.out, 'pilot')) === beforeRecords, 'C06 judge precondition leaves actual settled records unchanged').toBe(true);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8') === `${C06_BELT}\n`, 'C06 judge precondition restores the declared source').toBe(true);
+    w5b4Expect(old.jobs).toHaveLength(4); w5b4Expect(fresh.jobs).toHaveLength(4);
+    if (remove) w5b4Expect(JSON.stringify(old.jobs.map((job) => job.input)) !== JSON.stringify(fresh.jobs.map((job) => job.input)), 'C06 real original ANSI and glued job bytes differ').toBe(true);
+    else w5b4Expect(old.jobs.map((job) => job.input)).toEqual(fresh.jobs.map((job) => job.input));
+    let reads = 0;
+    const actualRecords = (): W5b5Answer[] => { reads += 1; const actual = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[]; if (remove) c06Remove(s); return actual; };
+    const judge = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(s.out, 'pilot'), W5B5_ENV(s.home),
+      { loadArmRun: () => w5b5Run(s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(s.home, { expected: D4.expectedForNode(s.draft, s.storeId).expected }), readArmAnswers: actualRecords, now: () => Date.now() }));
+    return { s, baseline: old.jobs, reads, judge };
+  };
+
+  w5b4It('C06 judge belt ANSI and glued refuse', async () => {
+    const c = await c06JudgeCase(true);
+    w5b4Expect(c.judge.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree judge' });
+    w5b4Expect(c.reads).toBe(1); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4);
+    w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judge'))).toBe(false);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C06 judge removal stays non-durable'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('C06 judge belt source unchanged succeeds', async () => {
+    const c = await c06JudgeCase(false);
+    w5b4Expect(c.judge.refusal).toBeNull(); w5b4Expect(c.reads).toBe(1);
+    const dir = join(c.s.out, 'pilot', 'judge'); const judgeRuns = w5b4Runs(c.s.home).slice(4);
+    w5b4Expect(readdirSync(dir).filter((name) => name.endsWith('.input.json'))).toHaveLength(4);
+    w5b4Expect(c.baseline).toHaveLength(4); w5b4Expect(w5b4Versions(c.s.home)).toBe(5); w5b4Expect(judgeRuns).toHaveLength(8);
+    const expectedAttempts = new Set(c.baseline.flatMap((job) => [1, 2].map((attempt) => `${job.id as string}:${attempt}`)));
+    const seen = new Set<string>();
+    for (const job of c.baseline) {
+      w5b4Expect(readFileSync(join(dir, `${job.id as string}.input.json`), 'utf8')).toBe(`${w5b4Lib.canonicalJson(job.input)}\n`);
+      for (const attempt of [1, 2]) {
+        const key = `${job.id as string}:${attempt}`;
+        const runRecord = w5b4Json(join(dir, `${job.id as string}-${attempt}.run.json`));
+        const matches = judgeRuns.filter((run) => run.cwd === runRecord.cwd); w5b4Expect(matches).toHaveLength(1);
+        w5b4Expect(seen.has(key), 'C06 judge control maps every attempt once').toBe(false); seen.add(key);
+        w5b4Expect(matches[0]!.stdin).toBe(W5B5.judgeStdin('v1', job.input));
+      }
+    }
+    w5b4Expect(seen).toEqual(expectedAttempts);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C06 unchanged judge control remains non-durable'); } finally { rs.close(); }
+  }, 180_000);
+
+  // C07 keeps the real 12-character segment grammar and tests owner case folding without supplying a full pair occurrence.
+  const C07_UNIT_A = ['aB3cD4eF5gH', 'R'].join('');
+  const C07_UNIT_B = ['J6kL7mN8pQ9', 'S'].join('');
+  const C07_COMPOUND = [C07_UNIT_A, C07_UNIT_B].join('/');
+  const C07_OCCURRENCE = C07_UNIT_A.toUpperCase();
+  const c07PairOnly = (): W5b4R => b1t2Lib.makePairIndex(b1t2Lib.secretPairs([C07_COMPOUND]).pairs, null) as W5b4R;
+  const c07OwnerPrecondition = async (s: FwSetup, remove: boolean): Promise<Map<string, Map<string, string>>> => {
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    w5b4Expect([C07_UNIT_A.length, C07_UNIT_B.length, C07_COMPOUND.length], 'C07 fixed source unit lengths').toEqual([12, 12, 25]);
+    w5b4Expect(b1t2Lib.secretUnits(C07_COMPOUND)).toEqual([C07_UNIT_A, C07_UNIT_B]);
+    w5b4Expect(b1t2Lib.beltUnits([C07_COMPOUND])).toEqual([C07_UNIT_A, C07_UNIT_B]);
+    const old = await c05Payloads(s);
+    const at = (old.idx.belt as W5b4R).texts.indexOf(C07_UNIT_A);
+    w5b4Expect(at >= 0, 'C07 loaded belt retains the selected 12-character unit').toBe(true);
+    const unit = (old.idx.belt as W5b4R).units[at] as Uint8Array;
+    const folded = Uint8Array.from([...C07_OCCURRENCE].map((c) => b1t2Lib.beltFold(c.codePointAt(0)!)));
+    w5b4Expect(unit.byteLength, 'C07 retained owner unit has twelve bytes').toBe(12);
+    w5b4Expect([...unit].every((code, i) => code === folded[i]), 'C07 retained bytes equal owner folded occurrence codes').toBe(true);
+    w5b4Expect(b1t2Lib.redactField(C07_OCCURRENCE, c07PairOnly()) === C07_OCCURRENCE, 'C07 pair-only control leaves folded occurrence').toBe(true);
+    w5b4Expect(b1t2Lib.redactField(C07_OCCURRENCE, old.idx) !== C07_OCCURRENCE, 'C07 loaded belt changes folded occurrence').toBe(true);
+    if (remove) c06Remove(s); else c05Replace(s, C07_COMPOUND);
+    const fresh = await c05Payloads(s);
+    if (remove) {
+      w5b4Expect(b1t2Lib.redactField(C07_OCCURRENCE, fresh.idx) === C07_OCCURRENCE, 'C07 fresh source-free owner leaves occurrence').toBe(true);
+      c05Replace(s, C07_COMPOUND);
+    }
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8') === frozen, 'C07 source transition leaves frozen original bytes unchanged').toBe(true);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8') === `${C07_COMPOUND}\n`, 'C07 precondition restores declared compound source').toBe(true);
+    const qid = s.entries[1]!.qid as string;
+    if (remove) for (const arm of W5B4_ARMS) w5b4Expect(old.payloads.get(qid)!.get(arm), 'C07 old and fresh real payloads differ').not.toBe(fresh.payloads.get(qid)!.get(arm));
+    else for (const entry of s.entries) for (const arm of W5B4_ARMS) w5b4Expect(old.payloads.get(entry.qid as string)!.get(arm), 'C07 unchanged source preserves every arm payload').toBe(fresh.payloads.get(entry.qid as string)!.get(arm));
+    return old.payloads;
+  };
+  const c07ArmCase = async (remove: boolean): Promise<{ s: FwSetup; baseline: Map<string, Map<string, string>>; r: W5b4Result }> => {
+    const fixture: FwSourceFixture = { declaredSourceValue: C07_COMPOUND, storedSummary: C05_STABLE, laterQuestion: `fixture C07 ${C07_OCCURRENCE}` };
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, fixture);
+    const reloaded = JSON.parse(readFileSync(s.frozen.path, 'utf8')) as { entries: W5b4R[] };
+    w5b4Expect(reloaded.entries[1]!.qid, 'C07 selected qid remains parsed later order').toBe(s.entries[1]!.qid);
+    w5b4Expect(reloaded.entries[1]!.question.includes(C07_OCCURRENCE), 'C07 original folded occurrence is present before serialization').toBe(true);
+    const baseline = await c07OwnerPrecondition(s, remove);
+    let calls = 0;
+    const recheck = (rs: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => D4.recheckBatch(rs, entries, ctx);
+    const payloads = (rs: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+      const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
+      if (p.state !== 'payloads') throw new Error(`fixture: C07 payload ${p.why}`);
+      calls += 1; if (remove && calls === 1) c06Remove(s);
+      return p;
+    };
+    return { s, baseline, r: await w5b4Arms(s.home, s.argv, { recheck, payloads }) };
+  };
+
+  w5b4It('C07 arms retained twelve-character belt segment refuses', async () => {
+    const c = await c07ArmCase(true);
+    w5b4Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    const manifests = w5b4Manifests(c.s.out, 'pilot');
+    w5b4Expect(manifests).toHaveLength(1);
+    w5b4Expect((manifests[0]!.runs as W5b4R[]).map((run) => `${run.qid as string}:${run.arm as string}`).sort()).toEqual(W5B4_ARMS.map((arm) => `${c.s.entries[0]!.qid as string}:${arm}`).sort());
+    w5b4Expect(w5b4Versions(c.s.home)).toBe(1); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(2);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C07 removal remains non-durable after consumer'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('C07 arms retained twelve-character source unchanged succeeds', async () => {
+    const c = await c07ArmCase(false);
+    w5b4Expect(c.r.refusal).toBeNull();
+    const manifests = w5b4Manifests(c.s.out, 'pilot'); const stubs = w5b4Runs(c.s.home);
+    w5b4Expect(manifests).toHaveLength(2); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(stubs).toHaveLength(4);
+    const expectedPairs = new Set(c.s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`)));
+    const seen = new Set<string>();
+    for (const manifest of manifests) for (const run of manifest.runs as W5b4R[]) {
+      const pair = `${run.qid as string}:${run.arm as string}`;
+      w5b4Expect(expectedPairs.has(pair)).toBe(true); w5b4Expect(seen.has(pair)).toBe(false); seen.add(pair);
+      const expected = c.baseline.get(run.qid as string)!.get(run.arm as string)!;
+      w5b4Expect(run.stdin_sha256).toBe(sha256Hex(expected));
+      const persisted = w5b4Json(join(c.s.out, `${run.name as string}.run.json`));
+      const matches = stubs.filter((stub) => stub.cwd === persisted.cwd); w5b4Expect(matches).toHaveLength(1);
+      w5b4Expect([matches[0]!.env.CCRC_RECALL_ARM, matches[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, c.s.entries.find((entry) => entry.qid === run.qid)!.boundary_uuid]);
+      w5b4Expect(matches[0]!.stdin).toBe(expected);
+    }
+    w5b4Expect(seen).toEqual(expectedPairs);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C07 unchanged source remains non-durable after consumer'); } finally { rs.close(); }
+  }, 180_000);
+
+  // C08 keeps a declared-but-absent source path so the added identifier pair is the only changing input.
+  const C08_IDENTIFIER = ['fixture', 'service', 'api', 'key', 'anchor'].join('_');
+  const C08_VALUE = ['plain', 'response', 'field', 'alpha'].join('-');
+  const C08_ANCHOR = `${C08_IDENTIFIER}: ${C08_VALUE}`;
+  const c08Absent = (s: FwSetup): void => rmSync(c05Source(s), { force: true });
+  const c08Fixture = (summary: string, question: string): FwSourceFixture => ({
+    declaredSourceValue: null, declareSourcePathWhenAbsent: true, storedSummary: summary, laterQuestion: question,
+  });
+  const c08AbsentContext = (original: string, oldIdx: W5b4R, label: string): void => {
+    w5b4Expect(original.includes(C08_IDENTIFIER) && original.includes(C08_VALUE), `${label}: original anchor contains identifier and value`).toBe(true);
+    w5b4Expect((oldIdx.byLen as Map<number, Set<string>>).get(C08_IDENTIFIER.length) === undefined, `${label}: absent source has no identifier pair`).toBe(true);
+    const oldText = b1t2Lib.redactField(original, oldIdx);
+    w5b4Expect(!oldText.includes(C08_VALUE) && oldText.includes(C08_IDENTIFIER), `${label}: absent source context masks value and preserves identifier`).toBe(true);
+  };
+  const c08OwnerRelation = (original: string, oldIdx: W5b4R, freshIdx: W5b4R, label: string): void => {
+    c08AbsentContext(original, oldIdx, label);
+    const pair = b1t2Lib.sha256Hex(C08_IDENTIFIER);
+    w5b4Expect((freshIdx.byLen as Map<number, Set<string>>).get(C08_IDENTIFIER.length)?.has(pair) === true, `${label}: loaded identifier source admits its real hash pair`).toBe(true);
+    w5b4Expect((freshIdx.belt as W5b4R).texts.includes(C08_IDENTIFIER), `${label}: loaded identifier source admits its real belt text`).toBe(true);
+    const freshText = b1t2Lib.redactField(original, freshIdx);
+    w5b4Expect(freshText.includes(C08_VALUE) && !freshText.includes(C08_IDENTIFIER), `${label}: identifier pair erases anchor before context masks value`).toBe(true);
+  };
+  const c08ArmCase = async (add: boolean): Promise<{ s: FwSetup; baseline: Map<string, Map<string, string>>; r: W5b4Result }> => {
+    const fixture = c08Fixture(C08_ANCHOR, C08_ANCHOR);
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, fixture);
+    const reloaded = JSON.parse(readFileSync(s.frozen.path, 'utf8')) as { entries: W5b4R[] };
+    w5b4Expect(reloaded.entries[1]!.qid, 'C08 anchor question remains parsed later qid').toBe(s.entries[1]!.qid);
+    w5b4Expect(reloaded.entries[1]!.question, 'C08 original question is serialized before source addition').toBe(C08_ANCHOR);
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    w5b4Expect(!existsSync(c05Source(s)), 'C08 arms declared source starts absent').toBe(true);
+    const old = await c05Payloads(s);
+    if (add) c05Replace(s, C08_IDENTIFIER);
+    const fresh = await c05Payloads(s);
+    if (add) c08Absent(s);
+    if (add) {
+      c08OwnerRelation(C08_ANCHOR, old.idx, fresh.idx, 'C08 arms');
+      const qid = s.entries[1]!.qid as string;
+      for (const arm of W5B4_ARMS) w5b4Expect(old.payloads.get(qid)!.get(arm), 'C08 old and fresh real payloads differ').not.toBe(fresh.payloads.get(qid)!.get(arm));
+    } else {
+      c08AbsentContext(C08_ANCHOR, old.idx, 'C08 arms control');
+      const qid = s.entries[1]!.qid as string;
+      for (const arm of W5B4_ARMS) {
+        const baseline = old.payloads.get(qid)!.get(arm)!;
+        w5b4Expect(baseline.includes(C08_IDENTIFIER) && !baseline.includes(C08_VALUE), 'C08 arms control baseline remains context-masked').toBe(true);
+      }
+      for (const entry of s.entries) for (const arm of W5B4_ARMS) w5b4Expect(old.payloads.get(entry.qid as string)!.get(arm), 'C08 absent source preserves all arm payloads').toBe(fresh.payloads.get(entry.qid as string)!.get(arm));
+    }
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8') === frozen, 'C08 source addition leaves frozen originals unchanged').toBe(true);
+    w5b4Expect(!existsSync(c05Source(s)), 'C08 precondition restores declared source to absent').toBe(true);
+    let calls = 0;
+    const recheck = (rs: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => D4.recheckBatch(rs, entries, ctx);
+    const payloads = (rs: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+      const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
+      if (p.state !== 'payloads') throw new Error(`fixture: C08 payload ${p.why}`);
+      calls += 1; if (add && calls === 1) c05Replace(s, C08_IDENTIFIER);
+      return p;
+    };
+    return { s, baseline: old.payloads, r: await w5b4Arms(s.home, s.argv, { recheck, payloads }) };
+  };
+
+  w5b4It('C08 arms identifier-pair context-anchor refusal', async () => {
+    const c = await c08ArmCase(true);
+    w5b4Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    const manifests = w5b4Manifests(c.s.out, 'pilot');
+    w5b4Expect(manifests).toHaveLength(1);
+    w5b4Expect((manifests[0]!.runs as W5b4R[]).map((run) => `${run.qid as string}:${run.arm as string}`).sort()).toEqual(W5B4_ARMS.map((arm) => `${c.s.entries[0]!.qid as string}:${arm}`).sort());
+    w5b4Expect(w5b4Versions(c.s.home)).toBe(1); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(2);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C08 arms added-source remains non-durable after consumer'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('C08 arms no identifier pair remains context-masked', async () => {
+    const c = await c08ArmCase(false);
+    w5b4Expect(c.r.refusal).toBeNull();
+    const manifests = w5b4Manifests(c.s.out, 'pilot'); const stubs = w5b4Runs(c.s.home);
+    w5b4Expect(manifests).toHaveLength(2); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(stubs).toHaveLength(4);
+    const expectedPairs = new Set(c.s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`)));
+    const seen = new Set<string>();
+    for (const manifest of manifests) for (const run of manifest.runs as W5b4R[]) {
+      const pair = `${run.qid as string}:${run.arm as string}`;
+      w5b4Expect(expectedPairs.has(pair), 'C08 arms control emits only expected qid/arm keys').toBe(true);
+      w5b4Expect(seen.has(pair), 'C08 arms control emits each qid/arm once').toBe(false); seen.add(pair);
+      const expected = c.baseline.get(run.qid as string)!.get(run.arm as string)!;
+      w5b4Expect(run.stdin_sha256).toBe(sha256Hex(expected));
+      const persisted = w5b4Json(join(c.s.out, `${run.name as string}.run.json`));
+      const matches = stubs.filter((stub) => stub.cwd === persisted.cwd); w5b4Expect(matches).toHaveLength(1);
+      w5b4Expect([matches[0]!.env.CCRC_RECALL_ARM, matches[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, c.s.entries.find((entry) => entry.qid === run.qid)!.boundary_uuid]);
+      w5b4Expect(matches[0]!.stdin).toBe(expected);
+    }
+    w5b4Expect(seen).toEqual(expectedPairs);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C08 absent arms control remains non-durable after consumer'); } finally { rs.close(); }
+  }, 180_000);
+
+  const c08JudgeJobs = (s: FwSetup, records: W5b5Answer[]): { jobs: W5b4R[]; idx: W5b4R } => {
+    const rs = D4.openReplayStore(s.home) as B1t2Rs;
+    try {
+      c05Pairs(rs, 'C08 judge source-derived pair remains non-durable');
+      const picked = D4.judgeItemsOf({ entries: s.entries, answers: records, arms: W5B4_ARMS, shaMinPrefix: 7 });
+      const map = D4.judgeMapOf(W5B5_SEED, s.entries, W5B4_ARMS);
+      return { idx: rs.idx as W5b4R, jobs: D4.judgeJobsOf({ items: picked.items, map, idx: rs.idx as W5b4R }) as W5b4R[] };
+    } finally { rs.close(); }
+  };
+  const c08JudgeCase = async (add: boolean): Promise<{ s: FwSetup; baseline: W5b4R[]; reads: number; judge: Awaited<ReturnType<typeof w5b5InProcess>> }> => {
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, c08Fixture(C05_STABLE, C05_STABLE));
+    await c05SeedAnswers(s, C08_ANCHOR);
+    const records = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[];
+    w5b4Expect(records).toHaveLength(4); w5b4Expect(records.every((record) => record.reply === C08_ANCHOR), 'C08 actual settled records retain original context anchor').toBe(true);
+    const frozen = readFileSync(s.frozen.path, 'utf8'); const beforeRecords = JSON.stringify(records);
+    w5b4Expect(!existsSync(c05Source(s)), 'C08 judge declared source starts absent').toBe(true);
+    const old = c08JudgeJobs(s, records); if (add) c05Replace(s, C08_IDENTIFIER); const fresh = c08JudgeJobs(s, records); if (add) c08Absent(s);
+    if (add) c08OwnerRelation(C08_ANCHOR, old.idx, fresh.idx, 'C08 judge');
+    if (add) w5b4Expect(`${w5b4Lib.canonicalJson(old.jobs.map((job) => job.input))}\n` !== `${w5b4Lib.canonicalJson(fresh.jobs.map((job) => job.input))}\n`, 'C08 old and fresh canonical judge input bytes differ').toBe(true);
+    else {
+      c08AbsentContext(C08_ANCHOR, old.idx, 'C08 judge control');
+      w5b4Expect(old.jobs.every((job) => String((job.input as W5b4R).reply).includes(C08_IDENTIFIER) && !String((job.input as W5b4R).reply).includes(C08_VALUE)), 'C08 judge control baseline replies remain context-masked').toBe(true);
+      w5b4Expect(old.jobs.map((job) => job.input)).toEqual(fresh.jobs.map((job) => job.input));
+    }
+    w5b4Expect(old.jobs).toHaveLength(4); w5b4Expect(fresh.jobs).toHaveLength(4);
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8') === frozen, 'C08 judge source addition leaves frozen originals unchanged').toBe(true);
+    w5b4Expect(JSON.stringify(D4.readArmAnswers(s.out, 'pilot')) === beforeRecords, 'C08 judge precondition leaves settled records unchanged').toBe(true);
+    w5b4Expect(!existsSync(c05Source(s)), 'C08 judge precondition restores declared source to absent').toBe(true);
+    let reads = 0;
+    const actualRecords = (): W5b5Answer[] => { reads += 1; const actual = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[]; if (add) c05Replace(s, C08_IDENTIFIER); return actual; };
+    const judge = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(s.out, 'pilot'), W5B5_ENV(s.home),
+      { loadArmRun: () => w5b5Run(s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(s.home, { expected: D4.expectedForNode(s.draft, s.storeId).expected }), readArmAnswers: actualRecords, now: () => Date.now() }));
+    return { s, baseline: old.jobs, reads, judge };
+  };
+
+  w5b4It('C08 judge identifier-pair context-anchor refusal', async () => {
+    const c = await c08JudgeCase(true);
+    w5b4Expect(c.judge.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree judge' });
+    w5b4Expect(c.reads).toBe(1); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4);
+    w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judge'))).toBe(false);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C08 added-source judge remains non-durable after consumer'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('C08 judge no identifier pair remains context-masked', async () => {
+    const c = await c08JudgeCase(false);
+    w5b4Expect(c.judge.refusal).toBeNull(); w5b4Expect(c.reads).toBe(1);
+    const dir = join(c.s.out, 'pilot', 'judge'); const judgeRuns = w5b4Runs(c.s.home).slice(4);
+    w5b4Expect(readdirSync(dir).filter((name) => name.endsWith('.input.json'))).toHaveLength(4);
+    w5b4Expect(c.baseline).toHaveLength(4); w5b4Expect(w5b4Versions(c.s.home)).toBe(5); w5b4Expect(judgeRuns).toHaveLength(8);
+    const expectedAttempts = new Set(c.baseline.flatMap((job) => [1, 2].map((attempt) => `${job.id as string}:${attempt}`)));
+    const seen = new Set<string>();
+    for (const job of c.baseline) {
+      w5b4Expect(readFileSync(join(dir, `${job.id as string}.input.json`), 'utf8')).toBe(`${w5b4Lib.canonicalJson(job.input)}\n`);
+      for (const attempt of [1, 2]) {
+        const key = `${job.id as string}:${attempt}`;
+        const runRecord = w5b4Json(join(dir, `${job.id as string}-${attempt}.run.json`));
+        const matches = judgeRuns.filter((run) => run.cwd === runRecord.cwd); w5b4Expect(matches).toHaveLength(1);
+        w5b4Expect(seen.has(key), 'C08 judge control maps every attempt once').toBe(false); seen.add(key);
+        w5b4Expect(matches[0]!.stdin).toBe(W5B5.judgeStdin('v1', job.input));
+      }
+    }
+    w5b4Expect(seen).toEqual(expectedAttempts);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C08 absent judge control remains non-durable after consumer'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('D-6481: a durable pair learned while reading real settled arm records refuses judge before its version, input, or run', async () => {
+    const s = await fwSetup();
+    const reloaded = JSON.parse(readFileSync(s.frozen.path, 'utf8')) as { entries: W5b4R[] };
+    const selected = s.entries[0]!;
+    w5b4Expect(reloaded.entries.find((entry) => entry.qid === selected.qid)!.fact).toBe(selected.fact);
+    const learned = fwPairFor(selected);
+    const armed = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(armed.refusal).toBeNull();
+    const before = D4.openReplayStore(s.home) as B1t2Rs;
+    const beforeIdx = before.idx;
+    before.close();
+    let reads = 0; let inputChanged = false;
+    const records = (): unknown[] => {
+      reads += 1;
+      const actual = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[];
+      if (reads === 1) {
+        const picked = D4.judgeItemsOf({ entries: s.entries, answers: actual, arms: W5B4_ARMS, shaMinPrefix: 7 });
+        const map = D4.judgeMapOf((s.draft.bootstrap as W5b4R).seed as string, s.entries, W5B4_ARMS);
+        const oldJobs = D4.judgeJobsOf({ items: picked.items, map, idx: beforeIdx });
+        fwLearn(s.home, learned.value);
+        const after = D4.openReplayStore(s.home) as B1t2Rs;
+        try {
+          const freshJobs = D4.judgeJobsOf({ items: picked.items, map, idx: after.idx });
+          inputChanged = JSON.stringify(oldJobs.map((job: W5b4R) => job.input)) !== JSON.stringify(freshJobs.map((job: W5b4R) => job.input));
+        } finally { after.close(); }
+      }
+      return actual;
+    };
+    const judge = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(s.out, 'pilot'), W5B5_ENV(s.home),
+      { loadArmRun: () => w5b5Run(s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(s.home, { expected: D4.expectedForNode(s.draft, s.storeId).expected }), readArmAnswers: records, now: () => Date.now() }));
+    w5b4Expect(judge.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree judge' });
+    w5b4Expect(inputChanged, 'independent real judgeJobsOf calls over original settled records observe the learned fact').toBe(true);
+    w5b4Expect(reads, 'the injected seam returned the actual persisted records once').toBe(1);
+    w5b4Expect(w5b4Versions(s.home), 'only the two arm batches measured versions').toBe(2);
+    w5b4Expect(w5b4Runs(s.home), 'no judge run was spawned').toHaveLength(4);
+    w5b4Expect(existsSync(join(s.out, 'pilot', 'judge')), 'no judge input was persisted').toBe(false);
+  }, 180_000);
+
+  w5b4It('D-6481 CONTROL: real settled arm records without a learned pair reach judge preflight and input persistence', async () => {
+    const s = await fwSetup();
+    const armed = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(armed.refusal).toBeNull();
+    const judge = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(s.out, 'pilot'), W5B5_ENV(s.home),
+      { loadArmRun: () => w5b5Run(s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(s.home, { expected: D4.expectedForNode(s.draft, s.storeId).expected }),
+        readArmAnswers: () => D4.readArmAnswers(s.out, 'pilot'), now: () => Date.now() }));
+    w5b4Expect(judge.refusal).toBeNull();
+    w5b4Expect(w5b4Versions(s.home)).toBeGreaterThan(2);
+    const judgeDir = join(s.out, 'pilot', 'judge');
+    w5b4Expect(existsSync(judgeDir)).toBe(true);
+    w5b4Expect(readdirSync(judgeDir).some((name) => name.endsWith('.input.json')), 'the real judge persisted an input from the actual records').toBe(true);
+  }, 180_000);
+
+  const C12_COMPOUND_OLD = `${C06_BELT}/${C05_OLD}`;
+  const C12_COMPOUND_NEW = `${C06_BELT}/${C05_NEW}`;
+  const C12_REPLY = `${'a '.repeat(8187)}${C06_BELT} tail\nANSWER: ${B1T2_CMD}`;
+  const C12_SOURCE_MIDDLE = () => `${C06_BELT}/${C10_MID20}`;
+  const c12Source = async (): Promise<{ s: FwSetup; frozen: string; answerBytes: C10Bytes; records: W5b5Answer[]; baseline: W5b5Job[] }> => {
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, { declaredSourceValue: C12_COMPOUND_OLD, storedSummary: C05_STABLE, laterQuestion: C05_STABLE });
+    const prefix = 'a '.repeat(8187); const head = C06_BELT.slice(0, 10); const marker = t4Lib.REDACTED_MARK;
+    w5b4Expect(Buffer.byteLength(prefix)).toBe(16_374); w5b4Expect(Buffer.byteLength(C12_REPLY.slice(0, 16_374))).toBe(16_374); w5b4Expect(C06_BELT.length).toBe(32);
+    w5b4Expect(C12_REPLY.slice(16_374, 16_374 + C06_BELT.length)).toBe(C06_BELT); w5b4Expect(C12_REPLY.slice(0, W5B5.JUDGE_REPLY_MAX_BYTES)).toBe(`${prefix}${head}`);
+    w5b4Expect(C12_REPLY.indexOf(`ANSWER: ${B1T2_CMD}`)).toBeGreaterThan(W5B5.JUDGE_REPLY_MAX_BYTES); w5b4Expect(C12_REPLY.includes(marker)).toBe(false);
+    await c05SeedAnswers(s, C12_REPLY);
+    const frozen = readFileSync(s.frozen.path, 'utf8'); const answerBytes = c10Tree(join(s.out, 'pilot', 'answers'));
+    const records = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[];
+    w5b4Expect(records).toHaveLength(4); w5b4Expect(records.every((record) => record.outcome === 'answered' && record.reply === C12_REPLY)).toBe(true);
+    const picked = D4.judgeItemsOf({ entries: s.entries as W5b5Entry[], answers: records, arms: W5B4_ARMS, shaMinPrefix: 7 }) as W5b5Picked;
+    w5b4Expect([picked.excluded.correct, picked.items.length]).toEqual([2, 2]);
+    const builds: W5b5Job[][] = [];
+    for (const source of [C12_COMPOUND_OLD, C12_COMPOUND_NEW, C12_SOURCE_MIDDLE()]) {
+      c05Replace(s, source); const rs = D4.openReplayStore(s.home) as B1t2Rs;
+      try { c05Pairs(rs, 'C12 compound sources remain non-durable'); const texts = ((rs.idx as W5b4R).belt as W5b4R).texts as string[]; w5b4Expect(texts).toEqual(expect.arrayContaining([C06_BELT, ...source.split('/')])); builds.push(D4.judgeJobsOf({ items: picked.items, map: D4.judgeMapOf(W5B5_SEED, s.entries, W5B4_ARMS), idx: rs.idx as W5b4R }) as W5b5Job[]); }
+      finally { rs.close(); }
+    }
+    c05Replace(s, C12_COMPOUND_OLD);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8'), 'C12 restores first compound before command store open').toBe(`${C12_COMPOUND_OLD}\n`);
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8')).toBe(frozen); w5b4Expect(c10Tree(join(s.out, 'pilot', 'answers'))).toEqual(answerBytes);
+    w5b4Expect(builds[1]!.map((job) => `${job.id}\n${w5b4Lib.canonicalJson(job.input)}\n`)).toEqual(builds[0]!.map((job) => `${job.id}\n${w5b4Lib.canonicalJson(job.input)}\n`)); w5b4Expect(builds[2]!.map((job) => `${job.id}\n${w5b4Lib.canonicalJson(job.input)}\n`)).toEqual(builds[0]!.map((job) => `${job.id}\n${w5b4Lib.canonicalJson(job.input)}\n`));
+    return { s, frozen, answerBytes, records, baseline: builds[0]! };
+  };
+
+  const c12Case = async (): Promise<{ s: FwSetup; frozen: string; answerBytes: C10Bytes; records: W5b5Answer[]; actualReads: W5b5Answer[][]; baseline: W5b5Job[]; picks: W5b4R[]; builds: W5b4R[]; snapshots: unknown[]; retained: W5b4R[]; seed: unknown; rootIdx: unknown; selectedProjection: string | null; ownProjection: string | null; readProjection: string | null; cleaned: boolean; judge: Awaited<ReturnType<typeof w5b5InProcess>> }> => {
+    const c = await c12Source(); const variant = await c04Variant({ judgeObservers: true });
+    const picks: W5b4R[] = []; const builds: W5b4R[] = []; const snapshots: unknown[] = []; let retained: W5b4R[] = []; let seed: unknown = null; let root: B1t2Rs | null = null; const actualReads: W5b5Answer[][] = [];
+    let selectedProjection: string | null = null; let ownProjection: string | null = null; let readProjection: string | null = null;
+    const acquireJudgeSnapshots = ({ rs, home, refresh }: W5b4R) => {
+      if (snapshots.length > 0) return;
+      root = rs as B1t2Rs; seed = rs.idx; const old = refresh(rs, home); const oldIdx = (old as W5b4R[])[0]!.idx;
+      c05Replace(c.s, C12_COMPOUND_NEW); const fresh = refresh(rs, home); const freshIdx = (fresh as W5b4R[])[1]!.idx;
+      c05Replace(c.s, C12_SOURCE_MIDDLE()); const middle = refresh(rs, home); const middleIdx = (middle as W5b4R[])[2]!.idx;
+      snapshots.push(oldIdx, freshIdx, middleIdx); retained = middle as W5b4R[]; w5b4Expect(retained).toHaveLength(3); w5b4Expect(new Set(snapshots).size).toBe(3); w5b4Expect(retained.every((snapshot: W5b4R, i: number) => snapshot.idx === snapshots[i])).toBe(true); w5b4Expect(seed).toBe(snapshots[0]); w5b4Expect(rs.idx).toBe(snapshots[2]);
+    };
+    const readArmAnswers = (out: string, section: string) => { const read = D4.readArmAnswers(out, section) as W5b5Answer[]; actualReads.push(read); return read; };
+    const judge = await w5b5InProcess(() => variant.judgeCommand(w5b5Flags(c.s.out, 'pilot'), W5B5_ENV(c.s.home), {
+      loadArmRun: () => w5b5Run(c.s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(c.s.home, { expected: D4.expectedForNode(c.s.draft, c.s.storeId).expected }), readArmAnswers,
+      now: () => Date.now(), acquireJudgeSnapshots,
+      afterPick: (value: W5b4R) => {
+        picks.push(value);
+        selectedProjection = w5b4Lib.canonicalJson(value.result.items);
+        ownProjection = w5b4Lib.canonicalJson(value.args.entries);
+        readProjection = w5b4Lib.canonicalJson(value.args.answers);
+      },
+      afterBuild: (value: W5b4R) => builds.push(value),
+    }), variant);
+    return { ...c, actualReads, picks, builds, snapshots, retained, seed, rootIdx: root!.idx, selectedProjection, ownProjection, readProjection, cleaned: c04VariantCleaned, judge };
+  };
+  type C12CanonicalIoCase = Pick<Awaited<ReturnType<typeof c12Case>>, 's' | 'frozen' | 'answerBytes' | 'baseline' | 'judge' | 'cleaned'>;
+  const c12CanonicalIoAssertions = (c: C12CanonicalIoCase): void => {
+    w5b4Expect(c.judge.refusal).toBeNull(); w5b4Expect(c.judge.code).toBe(0); w5b4Expect(c.cleaned, 'the complete-current variant removed its temporary module').toBe(true); const dir = join(c.s.out, 'pilot', 'judge'); const allRuns = w5b4Runs(c.s.home); const runs = allRuns.slice(4);
+    const inputNames = readdirSync(dir).filter((name) => name.endsWith('.input.json')).sort(); const runNames = readdirSync(dir).filter((name) => name.endsWith('.run.json')).sort(); const map = w5b4Json(join(c.s.out, 'pilot', 'judge.map.json')) as W5b4R;
+    const selected = new Set(c.baseline.map((job: W5b5Job) => job.id)); const mapRows = map.items as W5b5MapRow[]; const mapped = new Set(mapRows.map((row) => row.id)); const expectedKeys = new Set(c.s.entries.flatMap((entry) => W5B5_ARMS.map((arm) => `${entry.qid}:${arm}`)));
+    w5b4Expect(c.baseline).toHaveLength(2); w5b4Expect(mapped.size).toBe(4); w5b4Expect(selected.size).toBe(2); w5b4Expect(mapRows.map((row) => `${row.qid}:${row.arm}`).sort()).toEqual([...expectedKeys].sort()); w5b4Expect(mapRows.filter((row) => selected.has(row.id)).map((row) => row.qid).every((qid: string) => c.s.entries.some((entry) => entry.qid === qid && entry.kind === 'sha'))).toBe(true); w5b4Expect(mapRows.filter((row) => !selected.has(row.id)).map((row) => row.qid).every((qid: string) => c.s.entries.some((entry) => entry.qid === qid && entry.kind === 'command'))).toBe(true);
+    w5b4Expect(inputNames).toEqual([...selected].sort().map((id) => `${id}.input.json`)); w5b4Expect(runNames).toEqual([...selected].flatMap((id) => [`${id}-1.run.json`, `${id}-2.run.json`]).sort()); w5b4Expect(w5b4Versions(c.s.home)).toBe(5); w5b4Expect(allRuns).toHaveLength(8); w5b4Expect(runs).toHaveLength(4);
+    const attempts = new Set<string>();
+    for (const job of c.baseline as W5b5Job[]) { w5b4Expect(readFileSync(join(dir, `${job.id}.input.json`), 'utf8')).toBe(`${w5b4Lib.canonicalJson(job.input)}\n`); for (const attempt of [1, 2]) { const key = `${job.id}:${attempt}`; w5b4Expect(attempts.has(key)).toBe(false); attempts.add(key); const record = w5b4Json(join(dir, `${job.id}-${attempt}.run.json`)); w5b4Expect(record).toMatchObject({ name: `pilot/judge/${job.id}-${attempt}`, mode: 'judge', model: W6_MODEL }); const matching = runs.filter((run) => run.cwd === record.cwd); w5b4Expect(matching).toHaveLength(1); w5b4Expect(matching[0]!.stdin).toBe(W5B5.judgeStdin('v1', job.input)); w5b4Expect(matching[0]!.env.CCRC_RECALL_ARM).toBeUndefined(); w5b4Expect(matching[0]!.env.CCRC_RECALL_ASOF).toBeUndefined(); } }
+    w5b4Expect(attempts).toEqual(new Set((c.baseline as W5b5Job[]).flatMap((job: W5b5Job) => [1, 2].map((attempt) => `${job.id}:${attempt}`)))); w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers'))).toEqual(c.answerBytes); const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'canonical IO remains non-durable'); } finally { rs.close(); }
+  };
+  w5b4It('C12 raw-selection-mask-before-cap', async () => {
+    const c = await c12Case();
+    w5b4Expect(c.picks).toHaveLength(1); w5b4Expect(c.judge.refusal).toBeNull(); w5b4Expect(c.judge.code).toBe(0); w5b4Expect(c.cleaned, 'the complete-current variant removed its temporary module').toBe(true);
+    w5b4Expect(c.actualReads).toHaveLength(1); w5b4Expect(c.picks[0]!.args.answers, 'C12 actual selector receives the one real read array').toBe(c.actualReads[0]); w5b4Expect(c.picks[0]!.result.excluded).toEqual({ correct: 2, run_failed_questions: 0 });
+    const selectedKeys = c.picks[0]!.result.items.map((item: W5b4R) => `${item.qid}:${item.arm}`).sort(); const shaQids = new Set(c.s.entries.filter((entry) => entry.kind === 'sha').map((entry) => entry.qid)); const commandQids = new Set(c.s.entries.filter((entry) => entry.kind === 'command').map((entry) => entry.qid));
+    w5b4Expect(selectedKeys).toEqual(c.records.filter((record) => record.correct === false).map((record) => `${record.qid}:${record.arm}`).sort()); w5b4Expect(selectedKeys).toHaveLength(2); w5b4Expect(selectedKeys.every((key: string) => shaQids.has(key.split(':')[0]!))).toBe(true);
+    w5b4Expect(c.records.filter((record) => record.correct === true).map((record) => `${record.qid}:${record.arm}`).sort()).toHaveLength(2); w5b4Expect(c.records.filter((record) => record.correct === true).every((record) => commandQids.has(record.qid))).toBe(true);
+    w5b4Expect(w5b4Lib.canonicalJson(c.picks[0]!.result.items)).toBe(c.selectedProjection); w5b4Expect(w5b4Lib.canonicalJson(c.picks[0]!.args.entries)).toBe(c.ownProjection); w5b4Expect(w5b4Lib.canonicalJson(c.picks[0]!.args.answers)).toBe(c.readProjection);
+    w5b4Expect(c.builds).toHaveLength(3); w5b4Expect(c.snapshots).toHaveLength(3); w5b4Expect(c.retained).toHaveLength(3); w5b4Expect(c.seed).toBe(c.snapshots[0]); w5b4Expect(c.rootIdx).toBe(c.snapshots[2]);
+    for (let i = 0; i < c.builds.length; i += 1) { const build = c.builds[i]!; w5b4Expect(build.args.items).toBe(c.picks[0]!.result.items); w5b4Expect(build.args.idx).toBe(c.snapshots[i]); w5b4Expect(build.built).toEqual(c.baseline); for (const item of build.args.items as W5b4R[]) { const entry = c.s.entries.find((candidate) => candidate.qid === item.qid)!; w5b4Expect(item.entry).toBe(entry); w5b4Expect(c.picks[0]!.args.entries.includes(entry)).toBe(true); w5b4Expect(item.reply).toBe(C12_REPLY); } }
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C12 raw selection remains non-durable'); } finally { rs.close(); }
+    w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers'))).toEqual(c.answerBytes);
+  }, 180_000);
+  w5b4It('C12 canonical-IO control', async () => {
+    c12CanonicalIoAssertions(await c12Case());
+  }, 180_000);
+  w5b4It('C12 cap-order owner control', async () => {
+    const c = await c12Source(); const rs = D4.openReplayStore(c.s.home) as B1t2Rs;
+    try {
+      const masked = W5B5.judgeInputOf(c.s.entries[0] as W5b5Entry, C12_REPLY, rs.idx); const capFirst = W5B5.capUtf8Bytes(C12_REPLY, W5B5.JUDGE_REPLY_MAX_BYTES); const wrong = W5B5.maskValue(capFirst, rs.idx); const whole = W5B5.maskValue(C12_REPLY, rs.idx); const head = C06_BELT.slice(0, 10); const marker = t4Lib.REDACTED_MARK;
+      w5b4Expect(Buffer.byteLength(C12_REPLY.slice(0, 16_374))).toBe(16_374); w5b4Expect(Buffer.byteLength(capFirst)).toBe(W5B5.JUDGE_REPLY_MAX_BYTES); w5b4Expect(capFirst.endsWith(head)).toBe(true); w5b4Expect(C12_REPLY.indexOf(head)).toBe(16_374); w5b4Expect(C12_REPLY.indexOf(`ANSWER: ${B1T2_CMD}`)).toBeGreaterThan(W5B5.JUDGE_REPLY_MAX_BYTES);
+      w5b4Expect(String(wrong)).toContain(head); w5b4Expect(String(wrong)).not.toContain(marker); w5b4Expect(String(whole)).toContain(marker); w5b4Expect(String(whole)).not.toContain(C06_BELT); w5b4Expect(String(whole)).not.toContain(head);
+      w5b4Expect(Buffer.byteLength(masked.reply)).toBeLessThanOrEqual(W5B5.JUDGE_REPLY_MAX_BYTES); w5b4Expect(masked.reply).toContain(marker); w5b4Expect(masked.reply).not.toContain(C06_BELT); w5b4Expect(masked.reply).not.toContain(head); w5b4Expect(masked.answer_field).toBe(B1T2_CMD);
     } finally { rs.close(); }
   }, 180_000);
 
-  w5b4It('D-6481: removing a source-backed original input before batch 2 exposes the replacement refresh regression', async () => {
-    const value = ['zq', 'source6481', 'transient', 'fixture'].join('-');
-    const s = await fwSetup({ limits: { batch_max: 2 } }, value);
-    const source = join(s.home, '.ccrc', 'fixture.token');
-    let calls = 0;
-    const payloads = (rs: unknown, id: number, question: string, cut: W5b4R): W5b4R => {
-      const p = D4.armPayloads(rs, id, question, cut) as W5b4R;
-      calls += 1;
-      if (calls === 1) rmSync(source);   // removal happens once after batch 1's original-input build
-      return p;
+  type C13Kind = 'longer' | 'ordered-id' | 'full-input' | 'control';
+  const c13Case = async (kind: C13Kind): Promise<W5b4R> => {
+    const c = await c12Source(); const variant = await c04Variant({ judgeObservers: true, judgeComparisonObserver: true });
+    const picks: W5b4R[] = []; const pickProjections: Array<{ selected: string; entries: string; answers: string }> = []; const builds: W5b4R[] = []; const buildProjections: string[] = []; const comparisons: W5b4R[] = []; const transformedOutputs: W5b5Job[][] = []; const actualReads: W5b5Answer[][] = []; let transformed = 0;
+    const snapshots: unknown[] = []; let retained: W5b4R[] = []; let seed: unknown = null; let root: B1t2Rs | null = null;
+    const acquireJudgeSnapshots = ({ rs, home, refresh }: W5b4R) => {
+      root = rs as B1t2Rs; seed = rs.idx; const old = refresh(rs, home) as W5b4R[]; const oldIdx = old[0]!.idx;
+      c05Replace(c.s, C12_COMPOUND_NEW); const fresh = refresh(rs, home) as W5b4R[]; const freshIdx = fresh[1]!.idx;
+      c05Replace(c.s, C12_SOURCE_MIDDLE()); retained = refresh(rs, home) as W5b4R[]; const middleIdx = retained[2]!.idx;
+      snapshots.push(oldIdx, freshIdx, middleIdx);
     };
-    const r = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads });
-    w5b4Expect(r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    const judge = await w5b5InProcess(() => variant.judgeCommand(w5b5Flags(c.s.out, 'pilot'), W5B5_ENV(c.s.home), {
+      loadArmRun: () => w5b5Run(c.s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(c.s.home, { expected: D4.expectedForNode(c.s.draft, c.s.storeId).expected }), readArmAnswers: (out: string, section: string) => { const read = D4.readArmAnswers(out, section) as W5b5Answer[]; actualReads.push(read); return read; },
+      now: () => Date.now(), acquireJudgeSnapshots, afterPick: (value: W5b4R) => { picks.push(value); pickProjections.push({ selected: w5b4Lib.canonicalJson(value.result.items), entries: w5b4Lib.canonicalJson(value.args.entries), answers: w5b4Lib.canonicalJson(value.args.answers) }); }, afterBuild: (value: W5b4R) => { builds.push(value); buildProjections.push(w5b4Lib.canonicalJson(value.built)); }, afterComparison: (value: W5b4R) => comparisons.push(value),
+      transformJobs: ({ built }: W5b4R) => {
+        transformed += 1;
+        const result = transformed !== 2 || kind === 'control' ? built
+          : kind === 'longer' ? [...built, { id: 'j9999', input: { ...built[0]!.input } }]
+            : kind === 'ordered-id' ? built.map((job: W5b5Job, i: number) => i === 0 ? { ...job, id: 'j9999' } : job)
+              : built.map((job: W5b5Job, i: number) => i === 0 ? { ...job, input: { ...job.input, reply: `${job.input.reply} neutral-field-delta` } } : job);
+        transformedOutputs.push(result as W5b5Job[]); return result;
+      },
+    }), variant);
+    return { c, picks, pickProjections, builds, buildProjections, comparisons, transformedOutputs, actualReads, snapshots, retained, seed, rootIdx: root!.idx, judge, transformed, cleaned: c04VariantCleaned };
+  };
+  for (const [kind, title] of [['longer', 'C13 longer-second-build refuses'], ['ordered-id', 'C13 ordered-id-second-build refuses'], ['full-input', 'C13 full-input-second-build refuses']] as const) {
+    w5b4It(title, async () => {
+      const r = await c13Case(kind); const c = r.c as Awaited<ReturnType<typeof c12Source>>;
+      w5b4Expect(r.judge.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree judge' });
+      w5b4Expect(r.actualReads).toHaveLength(1); w5b4Expect(r.picks).toHaveLength(1); w5b4Expect(r.picks[0]!.args.answers).toBe(r.actualReads[0]); w5b4Expect(r.pickProjections).toHaveLength(1); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.result.items)).toBe(r.pickProjections[0]!.selected); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.entries)).toBe(r.pickProjections[0]!.entries); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.answers)).toBe(r.pickProjections[0]!.answers); for (const item of r.picks[0]!.result.items as W5b4R[]) { w5b4Expect(item.reply).toBe(C12_REPLY); w5b4Expect(item.entry).toBe(c.s.entries.find((entry: W5b4R) => entry.qid === item.qid)); }
+      w5b4Expect(r.builds).toHaveLength(2); w5b4Expect(r.transformed).toBe(2); w5b4Expect(r.comparisons).toHaveLength(kind === 'full-input' ? 1 : 0); w5b4Expect(r.cleaned).toBe(true);
+      w5b4Expect(r.snapshots).toHaveLength(3); w5b4Expect(new Set(r.snapshots).size).toBe(3); w5b4Expect(r.retained).toHaveLength(3); w5b4Expect(r.seed).toBe(r.snapshots[0]); w5b4Expect(r.rootIdx).toBe(r.snapshots[2]); for (let i = 0; i < r.retained.length; i += 1) w5b4Expect(r.retained[i]!.idx).toBe(r.snapshots[i]); for (let i = 0; i < r.builds.length; i += 1) w5b4Expect(r.builds[i]!.args.idx).toBe(r.snapshots[i]);
+      const first = r.builds[0]!.built as W5b5Job[]; const second = r.builds[1]!.built as W5b5Job[]; const changed = r.transformedOutputs[1]!; w5b4Expect(first).not.toBe(second); w5b4Expect(w5b4Lib.canonicalJson(first)).toBe(r.buildProjections[0]); w5b4Expect(w5b4Lib.canonicalJson(second)).toBe(r.buildProjections[1]); w5b4Expect(first).toEqual(c.baseline); w5b4Expect(second).toEqual(c.baseline); w5b4Expect(r.builds.every((build: W5b4R) => build.args.items === r.picks[0]!.result.items)).toBe(true);
+      if (kind === 'longer') { w5b4Expect(changed).toHaveLength(3); w5b4Expect(changed.slice(0, 2)).toEqual(c.baseline); w5b4Expect(changed[2]!.id).toBe('j9999'); w5b4Expect(changed[2]!.input).toEqual(c.baseline[0]!.input); w5b4Expect((w5b4Json(join(c.s.out, 'pilot', 'judge.map.json')).items as W5b5MapRow[]).some((row) => row.id === 'j9999')).toBe(false); }
+      if (kind === 'ordered-id') { w5b4Expect(changed).toHaveLength(2); w5b4Expect(changed.map((job: W5b5Job) => job.id)).toEqual(['j9999', c.baseline[1]!.id]); w5b4Expect(changed[0]!.input).toBe(second[0]!.input); w5b4Expect(w5b4Lib.canonicalJson(changed[1]!)).toBe(w5b4Lib.canonicalJson(second[1]!)); w5b4Expect((w5b4Json(join(c.s.out, 'pilot', 'judge.map.json')).items as W5b5MapRow[]).some((row) => row.id === 'j9999')).toBe(false); }
+      if (kind === 'full-input') { w5b4Expect(changed.map((job: W5b5Job) => job.id)).toEqual(c.baseline.map((job: W5b5Job) => job.id)); w5b4Expect(changed[0]!.input.reply).toBe(`${second[0]!.input.reply} neutral-field-delta`); w5b4Expect({ ...changed[0]!.input, reply: second[0]!.input.reply }).toEqual(second[0]!.input); w5b4Expect(w5b4Lib.canonicalJson(changed[1]!)).toBe(w5b4Lib.canonicalJson(second[1]!)); }
+      w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4); w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judge'))).toBe(false);
+      w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers'))).toEqual(c.answerBytes); const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, `C13 ${kind} remains non-durable`); } finally { rs.close(); }
+    }, 180_000);
+  }
+  w5b4It('C13 canonical-newline and stdin control', async () => {
+    const r = await c13Case('control'); const c = r.c as Awaited<ReturnType<typeof c12Source>>; const comparisons = r.comparisons as Array<{ a: string; b: string }>;
+    w5b4Expect(r.judge.refusal).toBeNull(); w5b4Expect(r.judge.code).toBe(0); w5b4Expect(r.actualReads).toHaveLength(1); w5b4Expect(r.picks).toHaveLength(1); w5b4Expect(r.picks[0]!.args.answers).toBe(r.actualReads[0]); w5b4Expect(r.pickProjections).toHaveLength(1); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.result.items)).toBe(r.pickProjections[0]!.selected); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.entries)).toBe(r.pickProjections[0]!.entries); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.answers)).toBe(r.pickProjections[0]!.answers); for (const item of r.picks[0]!.result.items as W5b4R[]) { w5b4Expect(item.reply).toBe(C12_REPLY); w5b4Expect(item.entry).toBe(c.s.entries.find((entry: W5b4R) => entry.qid === item.qid)); }
+    w5b4Expect(r.builds).toHaveLength(3); w5b4Expect(r.transformed).toBe(3); w5b4Expect(comparisons).toHaveLength(4); w5b4Expect(r.cleaned).toBe(true);
+    w5b4Expect(r.snapshots).toHaveLength(3); w5b4Expect(r.retained).toHaveLength(3); w5b4Expect(new Set(r.snapshots).size).toBe(3); w5b4Expect(r.seed).toBe(r.snapshots[0]); w5b4Expect(r.rootIdx).toBe(r.snapshots[2]); for (let i = 0; i < r.retained.length; i += 1) w5b4Expect(r.retained[i]!.idx).toBe(r.snapshots[i]); for (let i = 0; i < r.builds.length; i += 1) { w5b4Expect(r.builds[i]!.args.idx).toBe(r.snapshots[i]); w5b4Expect(r.builds[i]!.args.items).toBe(r.picks[0]!.result.items); w5b4Expect(w5b4Lib.canonicalJson(r.builds[i]!.built)).toBe(r.buildProjections[i]); w5b4Expect(r.builds[i]!.built).toEqual(c.baseline); }
+    const expectedComparisons = (c.baseline as W5b5Job[]).map((job) => `${w5b4Lib.canonicalJson(job.input)}\n`);
+    for (let i = 0; i < comparisons.length; i += 1) { const expected = expectedComparisons[i % expectedComparisons.length]!; w5b4Expect(comparisons[i]!.a).toBe(expected); w5b4Expect(comparisons[i]!.b).toBe(expected); w5b4Expect(Buffer.byteLength(comparisons[i]!.a)).toBe(Buffer.byteLength(expected)); }
+    c12CanonicalIoAssertions({ ...c, judge: r.judge, cleaned: r.cleaned });
   }, 180_000);
 
-  w5b4It('D-6481: the judge builds its inputs from the pair index as of the build, so a pair learned after the store open masks the reply (CONTROL: no pair, the value reaches the judge)', async () => {
-    const value = ['zq', 'judge6481', 'widened02'].join('');
-    const run = async (learn: boolean): Promise<string[]> => {
-      const b = w5b5Home('ccrc-w2-5b1-d6481-');
-      writeFileSync(join(b.home, STUB_STREAM), W5B5_LABELLED);
-      const e1 = w5b5Entry(W6_CMD);
-      const answers = [w5b5Answer(e1.qid, W5B5_ARM0, 'answered', `I tried ${value} first.\nANSWER: ${value}`, false),
-        w5b5Answer(e1.qid, W5B5_ARM1, 'answered', 'ANSWER: UNKNOWN', false)];
-      // The wrapper runs after the store is open and before the inputs are built: the sweep's recordPairs, between two reads.
-      const readArmAnswers = (): unknown[] => { if (learn) fwLearn(b.home, value); return answers; };
-      const out = join(b.home, 'judge-out');
-      const r = await w5b5InProcess(() => W5B5.judgeCommand(w5b5Flags(out, 'quiz'), W5B5_ENV(b.home),
-        { ...w5b5Deps(w5b5Run([e1]), w5b5NodeOf(b.home), answers), readArmAnswers }));
-      if (learn) {
-        w5b4Expect(r.refusal, 'a newly learned mask must agree with the retained original build').toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree judge' });
-        return [];
-      }
-      w5b4Expect(r.refusal).toBeNull();
-      return w6Runs(b.home).map((x) => x.stdin as string);
+  type C14Kind = 'normal' | 'overflow' | 'material' | 'throw';
+  const c14Source = async (): Promise<{ s: FwSetup; frozen: string; answerBytes: C10Bytes; records: W5b5Answer[] }> => {
+    const s = await fwSetup({ limits: { batch_max: 2 } }, null, false, { declaredSourceValue: C12_COMPOUND_OLD, storedSummary: C05_STABLE, laterQuestion: C05_STABLE });
+    for (const [i, entry] of s.entries.entries()) for (const arm of W5B4_ARMS) w5b4Act(s.home, entry, arm, '.jsonl', w5b4Stream({ text: `ANSWER: ${entry.fact}` }), i + 1);
+    const armed = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(armed.refusal).toBeNull(); const frozen = readFileSync(s.frozen.path, 'utf8'); const answerBytes = c10Tree(join(s.out, 'pilot', 'answers')); const records = D4.readArmAnswers(s.out, 'pilot') as W5b5Answer[];
+    w5b4Expect(w5b4Versions(s.home)).toBe(2); w5b4Expect(w5b4Runs(s.home)).toHaveLength(4); w5b4Expect(records).toHaveLength(4); w5b4Expect(records.every((record) => record.outcome === 'answered' && record.correct === true && record.reply === `ANSWER: ${s.entries.find((entry) => entry.qid === record.qid)!.fact}`)).toBe(true); w5b4Expect(new Set(records.map((record) => `${record.qid}:${record.arm}`))).toEqual(new Set(s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid}:${arm}`))));
+    return { s, frozen, answerBytes, records };
+  };
+  const c14Case = async (kind: C14Kind): Promise<W5b4R> => {
+    type C14Root = B1t2Rs & { maskingSnapshots?: { snapshots: Array<{ idx: unknown; material: number }>; material: number }; candidateOverride?: (o: W5b4R) => unknown };
+    const c = await c14Source(); const variant = await c04Variant({ judgeObservers: true, c14Observers: true }); const reads: W5b5Answer[][] = []; let candidateCalls = 0; let delegatedCandidateCalls = 0; const picks: W5b4R[] = []; const pickProjections: W5b4R[] = []; const builds: W5b4R[] = []; const acquisitions: W5b4R[] = []; const opens: W5b4R[] = []; const events: W5b4R[] = []; const candidateFacts: W5b4R[] = []; let root: C14Root | null = null; let seed: unknown = null; let seedState: W5b4R | null = null;
+    const mark = (name: string) => events.push({ name, versions: w5b4Versions(c.s.home), runs: w5b4Runs(c.s.home).length });
+    const acquireJudgeSnapshots = ({ rs, home, refresh }: W5b4R) => {
+      root = rs as C14Root; seed = rs.idx;
+      if (kind === 'normal') { refresh(rs, home); c05Replace(c.s, C12_COMPOUND_NEW); refresh(rs, home); c05Replace(c.s, C12_SOURCE_MIDDLE()); refresh(rs, home); }
+      else root.candidateOverride = ({ db, home: candidateHome, actual, material, checked, materialLimit }: W5b4R) => {
+        candidateCalls += 1; const actualCandidate = actual(db, candidateHome); delegatedCandidateCalls += 1; const state = root!.maskingSnapshots!; seedState = { state, array: state.snapshots, material: state.material, descriptor: state.snapshots[0], root: root!.idx }; candidateFacts.push({ actualCandidate, seedMaterial: state.material });
+        if (kind === 'throw') throw new Error('fixture C14 refresh throw');
+        if (kind === 'overflow') { const overflow = c14FixtureIndex(64); const checkedIndex = checked(overflow); const unlimited = material(overflow, Number.MAX_SAFE_INTEGER); overflow.belt.overflow = 1; candidateFacts.push({ candidate: overflow, checkedIndex, overflow: overflow.belt.overflow, unlimited }); return overflow; }
+        const probe = c14FixtureIndex(64); const probeMaterial = material(probe, Number.MAX_SAFE_INTEGER); const base = probeMaterial - 64; const backing = materialLimit - base + 1; const over = c14FixtureIndex(backing); const checkedIndex = checked(over); const unlimited = material(over, Number.MAX_SAFE_INTEGER); candidateFacts.push({ probe, probeMaterial, base, backing, limit: materialLimit, candidate: over, checkedIndex, unlimited }); return over;
+      };
     };
-    const stdins = await run(true);
-    w5b4Expect(stdins, 'a disagreement persists no judge input').toHaveLength(0);
-    const control = await run(false);
-    w5b4Expect(control.some((t) => t.includes(value)), 'CONTROL: without the pair the value is in the stdin').toBe(true);
-  }, 120_000);
+    const judge = await w5b5InProcess(() => variant.judgeCommand(w5b5Flags(c.s.out, 'pilot'), W5B5_ENV(c.s.home), {
+      loadArmRun: () => w5b5Run(c.s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(c.s.home, { expected: D4.expectedForNode(c.s.draft, c.s.storeId).expected }), readArmAnswers: (out: string, section: string) => { const read = D4.readArmAnswers(out, section) as W5b5Answer[]; reads.push(read); return read; }, now: () => Date.now(), acquireJudgeSnapshots,
+      afterPick: (value: W5b4R) => { picks.push(value); pickProjections.push({ selected: w5b4Lib.canonicalJson(value.result.items), entries: w5b4Lib.canonicalJson(value.args.entries), answers: w5b4Lib.canonicalJson(value.args.answers) }); }, afterBuild: (value: W5b4R) => { builds.push(value); mark('build'); }, afterAcquire: (value: W5b4R) => { acquisitions.push(value); mark(`acquire-${value.phase}`); }, afterOpenJudge: (value: W5b4R) => { opens.push(value); mark(`open-${value.phase}`); },
+    }), variant);
+    return { c, reads, picks, pickProjections, builds, acquisitions, opens, events, candidateFacts, candidateCalls, delegatedCandidateCalls, seed, seedState, rootIdx: root!.idx, snapshotState: root!.maskingSnapshots, sourceText: readFileSync(c05Source(c.s), 'utf8'), judge, cleaned: c04VariantCleaned };
+  };
+  w5b4It('C14 zero-jobs refreshes and initial-preflights', async () => {
+    const r = await c14Case('normal'); const c = r.c as W5b4R;
+    w5b4Expect(r.judge.refusal).toBeNull(); w5b4Expect(r.judge.code).toBe(0); w5b4Expect(r.cleaned).toBe(true); w5b4Expect(r.acquisitions.filter((x: W5b4R) => x.phase === 'before')).toHaveLength(1); w5b4Expect(w5b4Versions(c.s.home)).toBe(3);
+    w5b4Expect(r.reads).toHaveLength(1); w5b4Expect(r.reads[0]).toEqual(c.records); w5b4Expect(r.picks).toHaveLength(1); w5b4Expect(r.picks[0]!.args.answers).toBe(r.reads[0]); w5b4Expect(r.pickProjections).toHaveLength(1); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.result.items)).toBe(r.pickProjections[0]!.selected); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.entries)).toBe(r.pickProjections[0]!.entries); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.answers)).toBe(r.pickProjections[0]!.answers); w5b4Expect(r.picks[0]!.result.items).toEqual([]); w5b4Expect(r.picks[0]!.result.excluded).toEqual({ correct: 4, run_failed_questions: 0 });
+    const retained = r.acquisitions.find((x: W5b4R) => x.phase === 'after')!.snapshots as W5b4R[]; w5b4Expect(retained).toHaveLength(3); const retainedIdx = retained.map((snapshot) => snapshot.idx); w5b4Expect(new Set(retainedIdx).size).toBe(3); w5b4Expect(r.seed).toBe(retainedIdx[0]); w5b4Expect(r.rootIdx).toBe(retainedIdx[2]); w5b4Expect(r.builds).toHaveLength(3); for (let i = 0; i < r.builds.length; i += 1) { w5b4Expect(r.builds[i]!.args.idx).toBe(retainedIdx[i]); w5b4Expect(r.builds[i]!.args.items).toBe(r.picks[0]!.result.items); w5b4Expect(r.builds[i]!.built).toEqual([]); }
+    w5b4Expect(r.opens.map((x: W5b4R) => x.phase)).toEqual(['before', 'after']); w5b4Expect(r.events.map((event: W5b4R) => event.name)).toEqual(['acquire-before', 'acquire-after', 'build', 'build', 'build', 'open-before', 'open-after']); w5b4Expect(r.events.slice(0, 6).every((event: W5b4R) => event.versions === 2 && event.runs === 4)).toBe(true); w5b4Expect(r.events[6]).toMatchObject({ versions: 3, runs: 4 }); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4);
+    const map = w5b4Json(join(c.s.out, 'pilot', 'judge.map.json')); const mapRows = map.items as W5b5MapRow[]; w5b4Expect(new Set(mapRows.map((row) => row.id)).size).toBe(4); w5b4Expect(new Set(mapRows.map((row) => `${row.qid}:${row.arm}`))).toEqual(new Set(c.s.entries.flatMap((entry: W5b4R) => W5B4_ARMS.map((arm) => `${entry.qid}:${arm}`)))); const judged = w5b4Json(join(c.s.out, 'pilot', 'judged.json')); w5b4Expect(judged).toMatchObject({ kind: W5B5.JUDGED_KIND, section: 'pilot', items: [], counts: { judged: 0, judge_failed: 0, uncertain: 0, fabricated: 0, excluded_correct: 4, excluded_run_failed_questions: 0 } }); w5b4Expect(readdirSync(join(c.s.out, 'pilot', 'judge'))).toEqual([]); w5b4Expect(r.sourceText).toBe(`${C12_SOURCE_MIDDLE()}\n`); w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers'))).toEqual(c.answerBytes); const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C14 normal remains non-durable'); } finally { rs.close(); }
+  }, 180_000);
+  for (const [kind, detail, title] of [['overflow', 'masking-snapshot-belt-overflow', 'C14 zero-jobs candidate-overflow refuses before version'], ['material', 'masking-snapshots-material-cap', 'C14 zero-jobs material-cap refuses before version'], ['throw', 'masking-snapshot-refresh-failed', 'C14 zero-jobs refresh-throw refuses before version']] as const) {
+    w5b4It(title, async () => {
+      const r = await c14Case(kind); const c = r.c as W5b4R;
+      w5b4Expect(r.judge.refusal).toEqual({ word: 'input-invalid', detail }); w5b4Expect(r.cleaned).toBe(true); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4); w5b4Expect(r.opens).toEqual([]); w5b4Expect(r.builds).toEqual([]); w5b4Expect(r.acquisitions.filter((x: W5b4R) => x.phase === 'before')).toHaveLength(1); w5b4Expect(r.reads).toHaveLength(1); w5b4Expect(r.reads[0]).toEqual(c.records); w5b4Expect(r.picks).toHaveLength(1); w5b4Expect(r.picks[0]!.args.answers).toBe(r.reads[0]); w5b4Expect(r.pickProjections).toHaveLength(1); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.result.items)).toBe(r.pickProjections[0]!.selected); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.entries)).toBe(r.pickProjections[0]!.entries); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.answers)).toBe(r.pickProjections[0]!.answers); w5b4Expect(r.picks[0]!.result.items).toEqual([]); w5b4Expect(r.picks[0]!.result.excluded).toEqual({ correct: 4, run_failed_questions: 0 });
+      const state = r.snapshotState as W5b4R; const before = r.seedState as W5b4R; w5b4Expect(r.rootIdx).toBe(r.seed); w5b4Expect(state).toBe(before.state); w5b4Expect(state.snapshots).toBe(before.array); w5b4Expect(state.material).toBe(before.material); w5b4Expect(state.snapshots).toHaveLength(1); w5b4Expect(state.snapshots[0]).toBe(before.descriptor); w5b4Expect(state.snapshots[0]!.idx).toBe(r.seed); w5b4Expect(r.candidateCalls).toBe(1); w5b4Expect(r.delegatedCandidateCalls).toBe(1); w5b4Expect(r.candidateFacts[0]).toMatchObject({ seedMaterial: before.material });
+      if (kind === 'overflow') { const fact = r.candidateFacts[1]!; w5b4Expect(fact).toMatchObject({ overflow: 1 }); w5b4Expect(fact.checkedIndex).toBe(fact.candidate); w5b4Expect(fact.unlimited).toBeGreaterThan(0); w5b4Expect((fact.candidate as ReturnType<typeof c14FixtureIndex>).belt.texts).toEqual(c14FixtureIndex(64).belt.texts); }
+      if (kind === 'material') { const fact = r.candidateFacts[1]!; w5b4Expect(fact.limit).toBe(16_777_216); w5b4Expect(fact.probeMaterial).toBe(fact.base + 64); w5b4Expect(fact.backing).toBe(fact.limit - fact.base + 1); w5b4Expect(fact.backing).toBeGreaterThan(0); w5b4Expect(fact.backing).toBeLessThanOrEqual(fact.limit); w5b4Expect((fact.candidate as ReturnType<typeof c14FixtureIndex>).belt.units[0]!.buffer.byteLength).toBe(fact.backing); w5b4Expect(fact.checkedIndex).toBe(fact.candidate); w5b4Expect(fact.unlimited).toBe(16_777_217); }
+      if (kind === 'throw') w5b4Expect(r.candidateFacts).toHaveLength(1);
+      w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judge'))).toBe(false); w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judged.json'))).toBe(false); w5b4Expect(r.sourceText).toBe(`${C12_COMPOUND_OLD}\n`); w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers'))).toEqual(c.answerBytes); const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, `C14 ${kind} remains non-durable`); } finally { rs.close(); }
+    }, 180_000);
+  }
+
+  type N2ExcludedCase = { out: string; q: { qid: string }; arm: string; rel: string };
+  const n2ExcludedFixture = (): N2ExcludedCase => { const out = join(mkTmp('ccrc-n2-excluded-'), 'out'); const q = { qid: 'n2fixtureqid0001' }; const arm = W5B4_CONTROL; return { out, q, arm, rel: D4.answerRel('pilot', q.qid, arm) }; };
+  const n2Excluded = async (write: (c: N2ExcludedCase) => void = () => {}, seam: W5b4R = {}): Promise<W5b4R> => {
+    const variant = await c04Variant({ n2ExcludedReader: true }); const fixture = n2ExcludedFixture(); const calls: W5b4R[] = []; write(fixture); let result: unknown = null; let caught: unknown = null;
+    try { result = variant.excludedReasonOf({ section: 'pilot', out: fixture.out, ...seam, n2ReadPlain: seam.n2ReadPlain === undefined ? undefined : (o: W5b4R) => { calls.push(o); return seam.n2ReadPlain(o); } }, fixture.q, fixture.arm); } catch (error) { caught = error; }
+    return { variant, fixture, calls, result, caught, cleaned: c04VariantCleaned };
+  };
+  const n2Answer = (kind: string, reason: string): string => w5b4Lib.canonicalJson({ kind, reason });
+  w5b4It('N201 excluded reader absent returns null', async () => {
+    const r = await n2Excluded(); w5b4Expect(r.caught).toBeNull(); w5b4Expect(r.result).toBeNull(); w5b4Expect(r.calls).toEqual([]); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N202 excluded reader directory refuses', async () => {
+    const r = await n2Excluded((c) => mkdirSync(join(c.out, c.rel), { recursive: true })); w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: `${r.fixture.rel} is not a regular file` }); w5b4Expect(r.calls).toEqual([]); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N203 excluded reader reached unreadable refuses', async () => {
+    const actualStates: W5b4R[] = []; let originalBytes = ''; let targetPath = ''; const r = await n2Excluded((c) => { mkdirSync(join(c.out, 'pilot', 'answers'), { recursive: true }); targetPath = join(c.out, c.rel); originalBytes = n2Answer(D4.ANSWER_KIND, 'ordinary'); writeFileSync(targetPath, originalBytes, { mode: 0o600 }); }, { n2ReadPlain: ({ path, cap, actual }: W5b4R) => { const actualState = actual(path, cap); actualStates.push(actualState); return path === targetPath ? { state: 'bad', why: 'unreadable', code: 'EACCES' } : actualState; } });
+    w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: `${r.fixture.rel} EACCES` }); w5b4Expect(r.calls).toHaveLength(1); w5b4Expect(r.calls[0]!.path).toBe(targetPath); w5b4Expect(actualStates).toHaveLength(1); w5b4Expect(actualStates[0]).toMatchObject({ state: 'bytes', bytes: expect.any(Buffer) }); w5b4Expect((actualStates[0]!.bytes as Buffer).toString('utf8')).toBe(originalBytes); w5b4Expect(r.calls[0]!.cap).toBeGreaterThan((actualStates[0]!.bytes as Buffer).length); w5b4Expect(readFileSync(targetPath, 'utf8')).toBe(originalBytes); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N204 excluded reader malformed JSON refuses', async () => {
+    const r = await n2Excluded((c) => { mkdirSync(join(c.out, 'pilot', 'answers'), { recursive: true }); writeFileSync(join(c.out, c.rel), '{bad', { mode: 0o600 }); }); w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: `${r.fixture.rel} is not JSON` }); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N205 excluded reader matching reason control', async () => {
+    const r = await n2Excluded((c) => { mkdirSync(join(c.out, 'pilot', 'answers'), { recursive: true }); writeFileSync(join(c.out, c.rel), n2Answer(D4.ANSWER_KIND, D4.ARM_PAYLOAD_CHANGED), { mode: 0o600 }); }); w5b4Expect(r.caught).toBeNull(); w5b4Expect(r.result).toBe(D4.ARM_PAYLOAD_CHANGED); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N205 excluded reader null returns null', async () => {
+    const r = await n2Excluded((c) => { mkdirSync(join(c.out, 'pilot', 'answers'), { recursive: true }); writeFileSync(join(c.out, c.rel), 'null', { mode: 0o600 }); }); w5b4Expect(r.caught).toBeNull(); w5b4Expect(r.result).toBeNull(); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N205 excluded reader wrong-kind returns null', async () => {
+    const r = await n2Excluded((c) => { mkdirSync(join(c.out, 'pilot', 'answers'), { recursive: true }); writeFileSync(join(c.out, c.rel), n2Answer('ordinary-kind', D4.ARM_PAYLOAD_CHANGED), { mode: 0o600 }); }); w5b4Expect(r.caught).toBeNull(); w5b4Expect(r.result).toBeNull(); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N205 excluded reader wrong-reason ordinary control', async () => {
+    const r = await n2Excluded((c) => { mkdirSync(join(c.out, 'pilot', 'answers'), { recursive: true }); writeFileSync(join(c.out, c.rel), n2Answer(D4.ANSWER_KIND, 'ordinary'), { mode: 0o600 }); }); w5b4Expect(r.caught).toBeNull(); w5b4Expect(r.result).toBeNull(); w5b4Expect(r.cleaned).toBe(true);
+  });
+
+  type N2ManifestCase = { out: string; rel: string };
+  const n2ManifestFixture = (): N2ManifestCase => { const out = join(mkTmp('ccrc-n2-manifest-'), 'out'); return { out, rel: 'pilot/arms/batches' }; };
+  const n2Manifest = async (write: (c: N2ManifestCase) => void = () => {}, seam: W5b4R = {}): Promise<W5b4R> => {
+    const variant = await c04Variant({ n2ManifestReader: true }); const fixture = n2ManifestFixture(); const dirCalls: W5b4R[] = []; const readCalls: W5b4R[] = []; write(fixture); let result: unknown = null; let caught: unknown = null;
+    try { result = variant.armManifestShas({ section: 'pilot', out: fixture.out, ...seam, n2ReadDir: seam.n2ReadDir === undefined ? undefined : (o: W5b4R) => { dirCalls.push(o); return seam.n2ReadDir(o); }, n2ReadPlain: seam.n2ReadPlain === undefined ? undefined : (o: W5b4R) => { readCalls.push(o); return seam.n2ReadPlain(o); } }); } catch (error) { caught = error; }
+    return { variant, fixture, dirCalls, readCalls, result, caught, cleaned: c04VariantCleaned };
+  };
+  const n2ManifestText = (runs: unknown, kind: string = D4.ARM_BATCH_KIND): string => w5b4Lib.canonicalJson({ kind, runs });
+  const n2ManifestWrite = (c: N2ManifestCase, name: string, runs: unknown, kind: string = D4.ARM_BATCH_KIND): string => { mkdirSync(join(c.out, c.rel), { recursive: true }); const target = join(c.out, c.rel, name); writeFileSync(target, n2ManifestText(runs, kind), { mode: 0o600 }); return target; };
+  w5b4It('N206 manifest reader absent returns empty map', async () => {
+    const r = await n2Manifest(); w5b4Expect(r.caught).toBeNull(); w5b4Expect(r.result).toEqual(new Map()); w5b4Expect(r.dirCalls).toEqual([]); w5b4Expect(r.readCalls).toEqual([]); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N207 manifest reader reached readdir errno refuses', async () => {
+    let batchPath = ''; const actualNames: string[][] = []; const r = await n2Manifest((c) => { mkdirSync(join(c.out, c.rel), { recursive: true }); batchPath = join(c.out, c.rel); }, { n2ReadDir: ({ path, actual }: W5b4R) => { const names = actual(path) as string[]; actualNames.push(names); if (path === batchPath) throw Object.assign(new Error('fixture N207'), { code: 'EACCES' }); return names; } });
+    w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: 'pilot/arms/batches unreadable EACCES' }); w5b4Expect(r.caught).toBeInstanceOf(r.variant.DriverRefusal); w5b4Expect(r.dirCalls).toHaveLength(1); w5b4Expect(r.dirCalls[0]!.path).toBe(batchPath); w5b4Expect(actualNames).toEqual([[]]); w5b4Expect(r.readCalls).toEqual([]); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N207 manifest reader sorted matching-files control', async () => {
+    let batchPath = ''; let actualNames: string[] = []; let suppliedNames: string[] = []; const r = await n2Manifest((c) => { n2ManifestWrite(c, '0002.json', [{ name: 'run-two', stdin_sha256: 'sha-two' }]); n2ManifestWrite(c, '0001.json', [{ name: 'run-one', stdin_sha256: 'sha-one' }]); batchPath = join(c.out, c.rel); writeFileSync(join(c.out, c.rel, 'notes.txt'), '{bad', { mode: 0o600 }); }, { n2ReadDir: ({ path, actual }: W5b4R) => { actualNames = actual(path) as string[]; suppliedNames = [...actualNames].sort().reverse(); return suppliedNames; }, n2ReadPlain: ({ path, cap, actual }: W5b4R) => actual(path, cap) });
+    w5b4Expect(r.caught).toBeNull(); w5b4Expect([...r.result as Map<string, string>].map((entry) => entry)).toEqual([['run-one', 'sha-one'], ['run-two', 'sha-two']]); w5b4Expect(r.dirCalls).toHaveLength(1); w5b4Expect(r.dirCalls[0]!.path).toBe(batchPath); w5b4Expect(actualNames).toEqual(expect.arrayContaining(['0001.json', '0002.json', 'notes.txt'])); w5b4Expect(suppliedNames).toEqual([...actualNames].sort().reverse()); w5b4Expect(r.readCalls.map((o: W5b4R) => o.path)).toEqual([join(batchPath, '0001.json'), join(batchPath, '0002.json')]); w5b4Expect(readFileSync(join(batchPath, '0001.json'), 'utf8')).toBe(n2ManifestText([{ name: 'run-one', stdin_sha256: 'sha-one' }])); w5b4Expect(readFileSync(join(batchPath, '0002.json'), 'utf8')).toBe(n2ManifestText([{ name: 'run-two', stdin_sha256: 'sha-two' }])); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N208 manifest reader nonbytes refuses', async () => {
+    let targetPath = ''; let originalBytes = ''; const actualStates: W5b4R[] = []; const r = await n2Manifest((c) => { targetPath = n2ManifestWrite(c, '0001.json', []); originalBytes = readFileSync(targetPath, 'utf8'); }, { n2ReadPlain: ({ path, cap, actual }: W5b4R) => { const state = actual(path, cap); actualStates.push(state); return path === targetPath ? { state: 'bad', why: 'unreadable', code: 'EACCES' } : state; } });
+    w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: 'pilot/arms/batches/0001.json EACCES' }); w5b4Expect(r.readCalls).toHaveLength(1); w5b4Expect(r.readCalls[0]!.path).toBe(targetPath); w5b4Expect(actualStates).toHaveLength(1); w5b4Expect(actualStates[0]).toMatchObject({ state: 'bytes', bytes: expect.any(Buffer) }); w5b4Expect((actualStates[0]!.bytes as Buffer).toString('utf8')).toBe(originalBytes); w5b4Expect(readFileSync(targetPath, 'utf8')).toBe(originalBytes); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N209 manifest reader malformed JSON refuses', async () => {
+    const r = await n2Manifest((c) => { mkdirSync(join(c.out, c.rel), { recursive: true }); writeFileSync(join(c.out, c.rel, '0001.json'), '{bad', { mode: 0o600 }); }); w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: 'pilot/arms/batches/0001.json is not JSON' }); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N210 manifest reader null refuses', async () => {
+    const r = await n2Manifest((c) => { mkdirSync(join(c.out, c.rel), { recursive: true }); writeFileSync(join(c.out, c.rel, '0001.json'), 'null', { mode: 0o600 }); }); w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: 'pilot/arms/batches/0001.json is not an arm batch manifest' }); w5b4Expect(r.caught).toBeInstanceOf(r.variant.DriverRefusal); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N210 manifest reader wrong-kind refuses', async () => {
+    const r = await n2Manifest((c) => { n2ManifestWrite(c, '0001.json', [], 'ordinary-kind'); }); w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: 'pilot/arms/batches/0001.json is not an arm batch manifest' }); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N210 manifest reader nonarray runs refuses', async () => {
+    const r = await n2Manifest((c) => { n2ManifestWrite(c, '0001.json', { not: 'an-array' }); }); w5b4Expect(r.caught).toMatchObject({ word: 'out-refused', detail: 'pilot/arms/batches/0001.json is not an arm batch manifest' }); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N211 manifest reader valid and malformed runs control', async () => {
+    const r = await n2Manifest((c) => { n2ManifestWrite(c, '0001.json', [null, { name: 1, stdin_sha256: 'bad-name' }, { name: 'bad-sha', stdin_sha256: 1 }, { name: 'valid-a', stdin_sha256: 'sha-a' }, { name: 'valid-b', stdin_sha256: 'not-validated' }]); }); w5b4Expect(r.caught).toBeNull(); w5b4Expect([...r.result as Map<string, string>].map((entry) => entry)).toEqual([['valid-a', 'sha-a'], ['valid-b', 'not-validated']]); w5b4Expect(r.cleaned).toBe(true);
+  });
+  w5b4It('N211 manifest reader later sorted manifest overrides', async () => {
+    const r = await n2Manifest((c) => { n2ManifestWrite(c, '0002.json', [{ name: 'same', stdin_sha256: 'new' }, { name: 'later', stdin_sha256: 'later-sha' }]); n2ManifestWrite(c, '0001.json', [{ name: 'same', stdin_sha256: 'old' }, { name: 'first', stdin_sha256: 'first-sha' }]); }); w5b4Expect(r.caught).toBeNull(); w5b4Expect([...r.result as Map<string, string>].map((entry) => entry)).toEqual([['same', 'new'], ['first', 'first-sha'], ['later', 'later-sha']]); w5b4Expect(r.cleaned).toBe(true);
+  });
+
+  type C15ArmKind = 'recheck' | 'payload' | 'control';
+  const c15Arms = async (kind: C15ArmKind): Promise<W5b4R> => {
+    const f = await c11Fixture(); const variant = await c04Variant({ acquireRetainedSnapshots: true }); const snapshots: unknown[] = []; const rechecks: W5b4R[] = []; const payloads: W5b4R[] = []; const qsProjections: string[] = []; const answerBefore = c10Tree(join(f.s.out, 'pilot', 'answers')); const manifestsBefore = c10Tree(join(f.s.out, 'pilot', 'arms', 'batches')); let root: B1t2Rs | null = null; let seed: unknown = null; const thrown = kind === 'recheck' ? new Error('fixture C15 recheck Error') : null; const payloadRefusal = kind === 'payload' ? new variant.DriverRefusal('quiz-unanswerable', 'fixture C15 payload refusal') : null;
+    const acquireRetainedSnapshots = ({ rs, home, refresh }: W5b4R) => {
+      root = rs as B1t2Rs; seed = rs.idx; const old = refresh(rs, home) as W5b4R[]; const oldIdx = old[0]!.idx;
+      c05Replace(f.s, C06_BELT); const middle = refresh(rs, home) as W5b4R[]; const middleIdx = middle[1]!.idx;
+      c05Replace(f.s, C05_NEW); const newest = refresh(rs, home) as W5b4R[]; const newIdx = newest[2]!.idx;
+      snapshots.push(oldIdx, middleIdx, newIdx); w5b4Expect(rs.idx).toBe(newIdx);
+    };
+    const recheck = async (view: B1t2Rs, qs: W5b4R[], ctx: W5b4R) => {
+      const beforeIdx = view.idx; const qsProjection = w5b4Lib.canonicalJson(qs); const verdicts = await variant.recheckBatch(view, qs, ctx); rechecks.push({ idx: beforeIdx, afterIdx: view.idx, qs, verdicts }); qsProjections.push(qsProjection);
+      if (kind === 'recheck' && beforeIdx === snapshots[1]) throw thrown;
+      return verdicts;
+    };
+    const payloadsOf = (view: B1t2Rs, boundaryEntryId: number, question: string, cut: W5b4R) => {
+      const payload = variant.armPayloads(view, boundaryEntryId, question, cut) as W5b4R; payloads.push({ idx: view.idx, boundaryEntryId, question, cut, payload });
+      if (kind === 'payload' && view.idx === snapshots[1] && payloads.filter((x) => x.idx === view.idx).length === 1) throw payloadRefusal;
+      return payload;
+    };
+    const oldBaseline = await c11Payloads(f.s, C05_OLD); const middleBaseline = await c11Payloads(f.s, C06_BELT); const newBaseline = await c11Payloads(f.s, C05_NEW); c05Replace(f.s, C05_OLD);
+    for (const entry of f.s.entries) for (const arm of W5B4_ARMS) { const expected = oldBaseline.payloads.get(entry.qid as string)!.get(arm); w5b4Expect(middleBaseline.payloads.get(entry.qid as string)!.get(arm)).toBe(expected); w5b4Expect(newBaseline.payloads.get(entry.qid as string)!.get(arm)).toBe(expected); }
+    let result: W5b4Result | null = null; let caught: unknown = null;
+    try { result = await w5b4VariantArms(variant, f.s.home, f.s.argv, { recheck, payloads: payloadsOf, acquireRetainedSnapshots }); } catch (error) { caught = error; }
+    return { f, snapshots, rechecks, payloads, baseline: oldBaseline.payloads, qsProjections, answerBefore, manifestsBefore, seed, rootIdx: root!.idx, result, caught, thrown, payloadRefusal, cleaned: c04VariantCleaned };
+  };
+  w5b4It('C15 recheck Error identity escapes', async () => {
+    const r = await c15Arms('recheck'); const f = r.f as Awaited<ReturnType<typeof c11Fixture>>;
+    w5b4Expect(r.caught).toBe(r.thrown);
+    w5b4Expect(r.rechecks).toHaveLength(2); w5b4Expect(new Set(r.snapshots).size).toBe(3); w5b4Expect(r.seed).toBe(r.snapshots[0]); w5b4Expect(r.rootIdx).toBe(r.snapshots[2]); w5b4Expect(r.rechecks[0]!.qs).toBe(r.rechecks[1]!.qs); w5b4Expect(r.qsProjections[0]).toBe(r.qsProjections[1]); w5b4Expect(r.rechecks[0]!.idx).toBe(r.snapshots[0]); w5b4Expect(r.rechecks[0]!.afterIdx).toBe(r.snapshots[0]); w5b4Expect(r.rechecks[1]!.idx).toBe(r.snapshots[1]); w5b4Expect(r.rechecks[1]!.afterIdx).toBe(r.snapshots[1]); w5b4Expect(r.payloads.filter((x: W5b4R) => x.idx === r.snapshots[0])).toHaveLength(2); w5b4Expect(r.payloads.filter((x: W5b4R) => x.idx === r.snapshots[1])).toHaveLength(0);
+    w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'answers'))).toEqual(r.answerBefore); w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'arms', 'batches'))).toEqual(r.manifestsBefore); w5b4Expect(w5b4Manifests(f.s.out, 'pilot')).toEqual([]); w5b4Expect(w5b4Versions(f.s.home)).toBe(0); w5b4Expect(w5b4Runs(f.s.home)).toEqual([]); w5b4Expect(readFileSync(f.s.frozen.path, 'utf8')).toBe(f.frozen); const rs = D4.openReplayStore(f.s.home) as B1t2Rs; try { c05Pairs(rs, 'C15 recheck remains non-durable'); } finally { rs.close(); } w5b4Expect(r.cleaned).toBe(true);
+  }, 180_000);
+  w5b4It('C15 payload DriverRefusal is preserved', async () => {
+    const r = await c15Arms('payload'); const f = r.f as Awaited<ReturnType<typeof c11Fixture>>;
+    w5b4Expect(r.result!.refusal).toEqual({ word: 'quiz-unanswerable', detail: 'fixture C15 payload refusal' });
+    w5b4Expect(r.rechecks).toHaveLength(2); w5b4Expect(r.payloads).toHaveLength(3); w5b4Expect(r.payloads[2]!.payload.state).toBe('payloads'); w5b4Expect(r.payloads[2]!.idx).toBe(r.snapshots[1]); w5b4Expect(w5b4Manifests(f.s.out, 'pilot')).toEqual([]); w5b4Expect(w5b4Versions(f.s.home)).toBe(0); w5b4Expect(w5b4Runs(f.s.home)).toEqual([]); const summary = w5b4Summary(f.s.out, 'pilot'); w5b4Expect(summary.stop).toMatchObject({ word: 'quiz-unanswerable', detail: 'fixture C15 payload refusal' }); w5b4Expect(readFileSync(f.s.frozen.path, 'utf8')).toBe(f.frozen); const rs = D4.openReplayStore(f.s.home) as B1t2Rs; try { c05Pairs(rs, 'C15 payload remains non-durable'); } finally { rs.close(); } w5b4Expect(r.cleaned).toBe(true);
+  }, 180_000);
+  w5b4It('C15 arms unchanged-boundaries control', async () => {
+    const r = await c15Arms('control'); const f = r.f as Awaited<ReturnType<typeof c11Fixture>>;
+    w5b4Expect(r.result!.refusal).toBeNull(); w5b4Expect(r.result!.code).toBe(0); w5b4Expect(r.rechecks).toHaveLength(3); w5b4Expect(r.payloads).toHaveLength(6); const manifests = w5b4Manifests(f.s.out, 'pilot'); const stubs = w5b4Runs(f.s.home); w5b4Expect(manifests).toHaveLength(1); w5b4Expect(w5b4Versions(f.s.home)).toBe(1); w5b4Expect(stubs).toHaveLength(4); const seen = new Set<string>(); for (const run of manifests[0]!.runs as W5b4R[]) { const pair = `${run.qid}:${run.arm}`; w5b4Expect(seen.has(pair)).toBe(false); seen.add(pair); const entry = f.s.entries.find((candidate) => candidate.qid === run.qid)!; const payload = r.baseline.get(run.qid)!.get(run.arm)!; w5b4Expect(run.stdin_sha256).toBe(sha256Hex(payload)); const record = w5b4Json(join(f.s.out, `${run.name}.run.json`)); const matching = stubs.filter((item) => item.cwd === record.cwd); w5b4Expect(matching).toHaveLength(1); w5b4Expect(matching[0]!.stdin).toBe(payload); w5b4Expect([matching[0]!.env.CCRC_RECALL_ARM, matching[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, entry.boundary_uuid]); seen.add(pair); }
+    w5b4Expect(seen).toEqual(new Set(f.s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid}:${arm}`)))); const rs = D4.openReplayStore(f.s.home) as B1t2Rs; try { c05Pairs(rs, 'C15 arms control remains non-durable'); } finally { rs.close(); } w5b4Expect(readFileSync(f.s.frozen.path, 'utf8')).toBe(f.frozen); w5b4Expect(r.cleaned).toBe(true);
+  }, 180_000);
+
+  type C15JudgeKind = 'jobs' | 'canonical' | 'control';
+  const c15Judge = async (kind: C15JudgeKind): Promise<W5b4R> => {
+    const c = await c12Source(); const variant = await c04Variant({ judgeObservers: true }); const picks: W5b4R[] = []; const pickProjections: W5b4R[] = []; const builds: W5b4R[] = []; const buildProjections: string[] = []; const reads: W5b5Answer[][] = []; let root: B1t2Rs | null = null; const snapshots: unknown[] = []; let questionEntry: W5b4R | null = null; let questionDescriptor: PropertyDescriptor | undefined; let replyDescriptor: PropertyDescriptor | undefined; let replyInput: W5b4R | null = null; let questionRestored: PropertyDescriptor | undefined; let replyRestored: PropertyDescriptor | undefined; let jobError: Error | null = null; let canonicalError: Error | null = null; let questionHits = 0; let replyHits = 0; let questionStack = ''; let replyStack = ''; let transformed = 0;
+    const acquireJudgeSnapshots = ({ rs, home, refresh }: W5b4R) => { root = rs as B1t2Rs; const old = refresh(rs, home) as W5b4R[]; c05Replace(c.s, C12_COMPOUND_NEW); const fresh = refresh(rs, home) as W5b4R[]; c05Replace(c.s, C12_SOURCE_MIDDLE()); const newest = refresh(rs, home) as W5b4R[]; snapshots.push(old[0]!.idx, fresh[1]!.idx, newest[2]!.idx); };
+    const readArmAnswers = (out: string, section: string) => { const records = D4.readArmAnswers(out, section) as W5b5Answer[]; reads.push(records); return records; };
+    let output: W5b4R | null = null;
+    try {
+      const call = () => variant.judgeCommand(w5b5Flags(c.s.out, 'pilot'), W5B5_ENV(c.s.home), {
+        loadArmRun: () => w5b5Run(c.s.entries as W5b5Entry[]), armNodeOf: () => w5b5NodeOf(c.s.home, { expected: D4.expectedForNode(c.s.draft, c.s.storeId).expected }), readArmAnswers, now: () => Date.now(), acquireJudgeSnapshots,
+        afterPick: (value: W5b4R) => { picks.push(value); pickProjections.push({ selected: w5b4Lib.canonicalJson(value.result.items), entries: w5b4Lib.canonicalJson(value.args.entries), answers: w5b4Lib.canonicalJson(value.args.answers) }); const entry = value.result.items[0]!.entry as W5b4R; questionEntry = entry; questionDescriptor = Object.getOwnPropertyDescriptor(entry, 'question'); Object.defineProperty(entry, 'question', { enumerable: true, configurable: true, get: () => { questionHits += 1; questionStack = new Error().stack ?? ''; if (kind === 'jobs') throw jobError!; return questionDescriptor!.value; } }); },
+        afterBuild: (value: W5b4R) => { builds.push(value); buildProjections.push(w5b4Lib.canonicalJson(value.built)); },
+        transformJobs: ({ built }: W5b4R) => { transformed += 1; if (transformed !== 2) return built; const jobs = built.map((job: W5b5Job, i: number) => i === 0 ? { ...job, input: { ...job.input } } : job); const input = jobs[0]!.input as W5b4R; replyInput = input; replyDescriptor = Object.getOwnPropertyDescriptor(input, 'reply'); Object.defineProperty(input, 'reply', { enumerable: true, configurable: true, get: () => { replyHits += 1; replyStack = new Error().stack ?? ''; if (kind === 'canonical') throw canonicalError!; return replyDescriptor!.value; } }); return jobs;
+        },
+      });
+      if (kind === 'jobs') { jobError = new Error('fixture C15 jobs Error'); output = { caught: await call().then(() => null, (error: unknown) => error) }; }
+      else if (kind === 'canonical') { canonicalError = new Error('fixture C15 canonical Error'); output = { caught: await call().then(() => null, (error: unknown) => error) }; }
+      else output = { judge: await w5b5InProcess(call, variant) };
+    } finally {
+      if (questionEntry !== null && questionDescriptor !== undefined) { Object.defineProperty(questionEntry, 'question', questionDescriptor); questionRestored = Object.getOwnPropertyDescriptor(questionEntry, 'question'); } if (replyInput !== null && replyDescriptor !== undefined) { Object.defineProperty(replyInput, 'reply', replyDescriptor); replyRestored = Object.getOwnPropertyDescriptor(replyInput, 'reply'); }
+    }
+    return { c, picks, pickProjections, builds, buildProjections, reads, snapshots, root, questionHits, replyHits, questionStack, replyStack, jobError, canonicalError, questionDescriptor, replyDescriptor, questionRestored, replyRestored, output, cleaned: c04VariantCleaned };
+  };
+  w5b4It('C15 real jobs Error identity escapes', async () => {
+    const r = await c15Judge('jobs'); const c = r.c as Awaited<ReturnType<typeof c12Source>>;
+    w5b4Expect(r.output!.caught).toBe(r.jobError); w5b4Expect(r.questionRestored).toEqual(r.questionDescriptor); w5b4Expect(r.reads).toEqual([c.records]); w5b4Expect(r.picks).toHaveLength(1); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.result.items)).toBe(r.pickProjections[0]!.selected); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.entries)).toBe(r.pickProjections[0]!.entries); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.answers)).toBe(r.pickProjections[0]!.answers); w5b4Expect(r.questionHits).toBe(1); w5b4Expect(r.questionStack).toContain('judgeInputOf'); w5b4Expect(r.questionStack).toContain('judgeJobsOf'); w5b4Expect(r.builds).toEqual([]); w5b4Expect(r.snapshots).toHaveLength(3); w5b4Expect(r.root!.idx).toBe(r.snapshots[2]); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4); w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judge'))).toBe(false); w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judged.json'))).toBe(false); w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers'))).toEqual(c.answerBytes); const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C15 jobs remains non-durable'); } finally { rs.close(); } w5b4Expect(c04VariantCleaned).toBe(true);
+  }, 180_000);
+  w5b4It('C15 canonical comparison Error identity escapes', async () => {
+    const r = await c15Judge('canonical'); const c = r.c as Awaited<ReturnType<typeof c12Source>>;
+    w5b4Expect(r.output!.caught).toBe(r.canonicalError); w5b4Expect(r.questionRestored).toEqual(r.questionDescriptor); w5b4Expect(r.replyRestored).toEqual(r.replyDescriptor); w5b4Expect(r.reads).toEqual([c.records]); w5b4Expect(r.picks).toHaveLength(1); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.result.items)).toBe(r.pickProjections[0]!.selected); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.entries)).toBe(r.pickProjections[0]!.entries); w5b4Expect(w5b4Lib.canonicalJson(r.picks[0]!.args.answers)).toBe(r.pickProjections[0]!.answers); w5b4Expect(r.builds).toHaveLength(2); for (let i = 0; i < r.builds.length; i += 1) w5b4Expect(w5b4Lib.canonicalJson(r.builds[i]!.built)).toBe(r.buildProjections[i]); w5b4Expect(r.replyHits).toBe(1); w5b4Expect(r.replyStack).toContain('canonicalJson'); w5b4Expect(r.replyStack).toContain('judgeCommand'); w5b4Expect(r.snapshots).toHaveLength(3); w5b4Expect(r.root!.idx).toBe(r.snapshots[2]); w5b4Expect(w5b4Versions(c.s.home)).toBe(2); w5b4Expect(w5b4Runs(c.s.home)).toHaveLength(4); w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judge'))).toBe(false); w5b4Expect(existsSync(join(c.s.out, 'pilot', 'judged.json'))).toBe(false); w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers'))).toEqual(c.answerBytes); const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c05Pairs(rs, 'C15 canonical remains non-durable'); } finally { rs.close(); } w5b4Expect(c04VariantCleaned).toBe(true);
+  }, 180_000);
+  w5b4It('C15 judge unchanged-boundaries control', async () => {
+    const r = await c15Judge('control'); const c = r.c as Awaited<ReturnType<typeof c12Source>>; const judge = r.output!.judge;
+    w5b4Expect(judge.refusal).toBeNull(); w5b4Expect(judge.code).toBe(0); w5b4Expect(r.questionRestored).toEqual(r.questionDescriptor); w5b4Expect(r.replyRestored).toEqual(r.replyDescriptor); w5b4Expect(r.questionHits).toBeGreaterThan(0); w5b4Expect(r.replyHits).toBeGreaterThan(0); c12CanonicalIoAssertions({ ...c, judge, cleaned: r.cleaned }); w5b4Expect(c04VariantCleaned).toBe(true);
+  }, 180_000);
+
+  const C10_MID20 = ['Mid9', 'Qa8', 'Wz7', 'Lp6', 'Rx5', 'Tc4', 'N'].join('');
+  type C10Bytes = Array<[string, string]>;
+  const c10Tree = (dir: string): C10Bytes => existsSync(dir) ? readdirSync(dir).sort().map((name) => [name, readFileSync(join(dir, name), 'utf8')]) : [];
+  const c10Pairs = (rs: B1t2Rs, label: string): void => c05Pairs(rs, label, 1, 'Summary');
+  const c10Payloads = async (s: FwSetup, value: string): Promise<C05PayloadSet> => {
+    c05Replace(s, value);
+    return c05Payloads(s, { count: 1, member: 'Summary' });
+  };
+  const c10Case = async (middle: string): Promise<{ s: FwSetup; q1: W5b4R; q2: W5b4R; baseline: Map<string, Map<string, string>>; frozen: string;
+    answersBefore: C10Bytes; manifestsBefore: C10Bytes; versionsBefore: number; runsBefore: W5b4R[]; r2: W5b4Result; snapshots: unknown[]; retained: W5b4R[]; seed: unknown; rootIdx: unknown; acquired: number; cleaned: boolean }> => {
+    w5b4Expect(C10_MID20.length, 'C10 fixed stored-summary unit length').toBe(20);
+    const fixture: FwSourceFixture = { declaredSourceValue: C05_OLD, storedSummary: `Summary: ${C10_MID20}`, laterQuestion: null };
+    const s = await fwSetup(undefined, null, false, fixture);
+    const [q1, q2] = s.entries as [W5b4R, W5b4R];
+    const frozen = readFileSync(s.frozen.path, 'utf8');
+    w5b4Expect(fixture.storedSummary, 'C10 fixed middle source was in stored content before frozen serialization').toBe(`Summary: ${C10_MID20}`);
+    w5b4Act(s.home, q1, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'x', result: false }), 1);
+    w5b4Act(s.home, q1, W5B4_CONTROL, '.exit', '1', 1);
+    w5b4Act(s.home, q1, W5B4_CONTROL, '.limits', w5b4LimitsRow(90), 1);
+    const first = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
+    w5b4Expect(first.refusal).toEqual({ word: 'limits-threshold', detail: 'five 90 seven 90 at or over 70' });
+    const firstManifest = w5b4Json(join(s.out, 'pilot', 'arms', 'batches', '0001.json')) as W5b4R;
+    const firstRuns = firstManifest.runs as W5b4R[];
+    w5b4Expect(firstRuns.map((run) => `${run.qid as string}:${run.arm as string}`)).toEqual(W5B4_ARMS.map((arm) => `${q1.qid as string}:${arm}`));
+    const firstInputs = firstRuns.map((run) => w5b4Runs(s.home).find((stub) => stub.cwd === w5b4Json(join(s.out, `${run.name as string}.run.json`)).cwd)!.stdin);
+    w5b4Expect(firstInputs.every((stdin) => stdin.includes(C10_MID20) && stdin.includes('Summary')), 'C10 original stored summary reaches every pre-learn first-run input').toBe(true);
+    const firstStubs = w5b4Runs(s.home); w5b4Expect(firstStubs).toHaveLength(2); w5b4Expect(w5b4Versions(s.home)).toBe(1);
+    for (const run of firstRuns) {
+      const record = w5b4Json(join(s.out, `${run.name as string}.run.json`));
+      const stream = readFileSync(join(s.out, `${run.name as string}.jsonl`), 'utf8');
+      const stub = firstStubs.filter((item) => item.cwd === record.cwd); w5b4Expect(stub).toHaveLength(1);
+      const klass = w5b1Gate.classifyRun(D4.streamEventsOf(stream), record.code, { spawned: true, stopped: false });
+      w5b4Expect([run.qid, run.arm, record.code, klass]).toEqual(run.arm === W5B4_CONTROL ? [q1.qid, W5B4_CONTROL, 1, 'infra-failed'] : [q1.qid, W5B4_TREATMENT, 0, 'answered']);
+    }
+    const answersBefore = c10Tree(join(s.out, 'pilot', 'answers'));
+    const manifestsBefore = c10Tree(join(s.out, 'pilot', 'arms', 'batches'));
+    const versionsBefore = w5b4Versions(s.home); const runsBefore = w5b4Runs(s.home);
+    w5b4Expect(answersBefore, 'C10 partial question has no settled answer records before invocation two').toEqual([]);
+    w5b4Expect(w5b4Summary(s.out, 'pilot').counts).toEqual({ questions: 2, answered: 0, run_failed: 0, rerun_owed: 1, not_run: 1 });
+    w5b4Expect(existsSync(join(s.out, 'pilot', 'arms', q1.qid as string, `${W5B4_CONTROL}.a2.run.json`))).toBe(false);
+    for (const arm of W5B4_ARMS) w5b4Expect(existsSync(join(s.out, 'pilot', 'arms', q2.qid as string, `${arm}.a1.run.json`))).toBe(false);
+    fwLearn(s.home, 'Summary'); w5b4Limits(s.home, 10);
+    const old = await c10Payloads(s, C05_OLD);
+    const middleRead = await c10Payloads(s, middle);
+    const newest = await c10Payloads(s, C05_NEW);
+    if (middle === C10_MID20) {
+      w5b4Expect(C10_MID20.length).toBe(20); w5b4Expect(b1t2Lib.secretUnits(C10_MID20)).toEqual([C10_MID20]);
+      w5b4Expect((middleRead.idx.belt as W5b4R).texts).toContain(C10_MID20);
+    }
+    for (const entry of s.entries) for (const arm of W5B4_ARMS) {
+      w5b4Expect(newest.payloads.get(entry.qid as string)!.get(arm), 'C10 old and new payloads agree after Summary learn').toBe(old.payloads.get(entry.qid as string)!.get(arm));
+    }
+    const middleDiffers = s.entries.some((entry) => W5B4_ARMS.some((arm) => middleRead.payloads.get(entry.qid as string)!.get(arm) !== old.payloads.get(entry.qid as string)!.get(arm)));
+    w5b4Expect(middleDiffers, 'C10 middle source changes real payload bytes').toBe(middle === C10_MID20);
+    if (middle !== C10_MID20) for (const entry of s.entries) for (const arm of W5B4_ARMS) w5b4Expect(middleRead.payloads.get(entry.qid as string)!.get(arm), 'C10 agreeing control middle equals old for every qid and arm').toBe(old.payloads.get(entry.qid as string)!.get(arm));
+    const treatment = (firstManifest.runs as W5b4R[]).find((run) => run.qid === q1.qid && run.arm === W5B4_TREATMENT)!;
+    w5b4Expect(sha256Hex(old.payloads.get(q1.qid as string)!.get(W5B4_TREATMENT)!)).not.toBe(treatment.stdin_sha256);
+    c05Replace(s, C05_OLD);
+    w5b4Expect(readFileSync(c05Source(s), 'utf8'), 'C10 restores old source before the second invocation').toBe(`${C05_OLD}\n`);
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8')).toBe(frozen);
+    const variant = await c04Variant({ acquireRetainedSnapshots: true });
+    const snapshots: unknown[] = []; let retained: W5b4R[] = []; let seed: unknown = null; let root: B1t2Rs | null = null; let acquired = 0;
+    const acquireRetainedSnapshots = ({ rs, home, refresh }: W5b4R) => {
+      acquired += 1;
+      if (acquired !== 1) return;
+      root = rs as B1t2Rs; seed = rs.idx;
+      const old = refresh(rs, home); const oldIdx = (old as W5b4R[])[0]!.idx;
+      c05Replace(s, middle); const mid = refresh(rs, home); const midIdx = (mid as W5b4R[])[1]!.idx;
+      c05Replace(s, C05_NEW); const newest = refresh(rs, home); const newIdx = (newest as W5b4R[])[2]!.idx;
+      snapshots.push(oldIdx, midIdx, newIdx); retained = newest as W5b4R[];
+      w5b4Expect(snapshots).toHaveLength(3); w5b4Expect(retained).toHaveLength(3); w5b4Expect(new Set(snapshots).size).toBe(3);
+      w5b4Expect(retained.every((snapshot: W5b4R, i: number) => snapshot.idx === snapshots[i])).toBe(true);
+      w5b4Expect(seed).toBe(oldIdx); w5b4Expect(rs.idx).toBe(newIdx);
+    };
+    const r2 = await w5b4VariantArms(variant, s.home, s.argv, { recheck: variant.recheckBatch, payloads: variant.armPayloads, acquireRetainedSnapshots });
+    return { s, q1, q2, baseline: old.payloads, frozen, answersBefore, manifestsBefore, versionsBefore, runsBefore, r2, snapshots, retained, seed, rootIdx: root!.idx, acquired, cleaned: c04VariantCleaned };
+  };
+
+  w5b4It('C10 middle-payload-before-exclusion', async () => {
+    const c = await c10Case(C10_MID20);
+    w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'answers')), 'C10 mismatch writes no exclusion answer before refusal').toEqual(c.answersBefore);
+    w5b4Expect(c10Tree(join(c.s.out, 'pilot', 'arms', 'batches')), 'C10 mismatch writes no manifest before refusal').toEqual(c.manifestsBefore);
+    w5b4Expect(c.r2.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    w5b4Expect(c.cleaned).toBe(true); w5b4Expect(c.acquired).toBe(1); w5b4Expect(c.snapshots).toHaveLength(3); w5b4Expect(c.retained).toHaveLength(3); w5b4Expect(c.seed).toBe(c.snapshots[0]); w5b4Expect(c.rootIdx).toBe(c.snapshots[2]);
+    w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen); w5b4Expect(w5b4Versions(c.s.home)).toBe(c.versionsBefore); w5b4Expect(w5b4Runs(c.s.home)).toEqual(c.runsBefore);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c10Pairs(rs, 'C10 mismatch preserves durable Summary pair'); } finally { rs.close(); }
+  }, 180_000);
+
+  w5b4It('C10 D-6482 agreeing control', async () => {
+    const c = await c10Case(C06_BELT);
+    w5b4Expect(c.r2.refusal).toBeNull(); w5b4Expect(c.r2.code).toBe(0); w5b4Expect(c.cleaned).toBe(true);
+    w5b4Expect(c.acquired).toBe(2); w5b4Expect(c.snapshots).toHaveLength(3); w5b4Expect(c.retained).toHaveLength(3); w5b4Expect(c.seed).toBe(c.snapshots[0]); w5b4Expect(c.rootIdx).toBe(c.snapshots[2]);
+    w5b4Expect(readFileSync(c.s.frozen.path, 'utf8')).toBe(c.frozen);
+    w5b4Expect(existsSync(join(c.s.out, 'pilot', 'arms', c.q1.qid as string, `${W5B4_CONTROL}.a2.run.json`))).toBe(false);
+    w5b4Expect(w5b4Answer(c.s.out, 'pilot', c.q1, W5B4_CONTROL)).toMatchObject({ question_state: 'run-failed', arm_state: 'run-failed', reason: 'arm-payload-changed' });
+    const sibling = w5b4Answer(c.s.out, 'pilot', c.q1, W5B4_TREATMENT);
+    w5b4Expect(sibling).toMatchObject({ question_state: 'run-failed', arm_state: 'answered' }); w5b4Expect(Object.hasOwn(sibling, 'reason')).toBe(false);
+    for (const arm of W5B4_ARMS) w5b4Expect(w5b4Answer(c.s.out, 'pilot', c.q2, arm)).toMatchObject({ question_state: 'answered', arm_state: 'answered' });
+    const manifests = c10Tree(join(c.s.out, 'pilot', 'arms', 'batches'));
+    w5b4Expect(manifests.slice(0, c.manifestsBefore.length)).toEqual(c.manifestsBefore); w5b4Expect(manifests).toHaveLength(2);
+    const newManifest = w5b4Json(join(c.s.out, 'pilot', 'arms', 'batches', '0002.json')) as W5b4R;
+    const expectedKeys = new Set(W5B4_ARMS.map((arm) => `${c.q2.qid as string}:${arm}`)); const seen = new Set<string>();
+    const stubs = w5b4Runs(c.s.home); w5b4Expect(w5b4Versions(c.s.home)).toBe(c.versionsBefore + 1); w5b4Expect(stubs).toHaveLength(c.runsBefore.length + 2);
+    for (const run of newManifest.runs as W5b4R[]) {
+      const key = `${run.qid as string}:${run.arm as string}`; w5b4Expect(expectedKeys.has(key)).toBe(true); w5b4Expect(seen.has(key)).toBe(false); seen.add(key);
+      const expected = c.baseline.get(c.q2.qid as string)!.get(run.arm as string)!;
+      w5b4Expect(run.stdin_sha256).toBe(sha256Hex(expected));
+      const record = w5b4Json(join(c.s.out, `${run.name as string}.run.json`)); const matching = stubs.filter((stub) => stub.cwd === record.cwd);
+      w5b4Expect(matching).toHaveLength(1); w5b4Expect(matching[0]!.stdin).toBe(expected);
+      w5b4Expect([matching[0]!.env.CCRC_RECALL_ARM, matching[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, c.q2.boundary_uuid]);
+    }
+    w5b4Expect(seen).toEqual(expectedKeys);
+    w5b4Expect((w5b4Answer(c.s.out, 'pilot', c.q1, W5B4_CONTROL).attempts as W5b4R[]).map((attempt) => [attempt.class, attempt.code])).toEqual([['infra-failed', 1]]);
+    const rs = D4.openReplayStore(c.s.home) as B1t2Rs; try { c10Pairs(rs, 'C10 control preserves durable Summary pair'); } finally { rs.close(); }
+  }, 180_000);
+
+  const C11_QUESTION = 'Which fixture revision was recorded?';
+  const C11_SUFFIX = ' fixture middle-only delta';
+  type C11Built = { idx: unknown; qid: string; arm: string; original: string; returned: string };
+  type C11Mode = 'carded' | 'last' | 'sibling' | null;
+  const c11Fixture = async (): Promise<{ s: FwSetup; q1: W5b4R; q2: W5b4R; frozen: string }> => {
+    const s = await fwSetup({ limits: { batch_max: 4 } }, null, false, { declaredSourceValue: C05_OLD, storedSummary: C05_STABLE, laterQuestion: C11_QUESTION });
+    const [q1, q2] = s.entries as [W5b4R, W5b4R]; const frozen = readFileSync(s.frozen.path, 'utf8');
+    w5b4Expect([q1.question, q2.question]).toEqual([B1T2_QUESTION, C11_QUESTION]);
+    w5b4Expect(new Set([q1.question, q2.question]).size, 'C11 maps callbacks through questions distinct before frozen serialization').toBe(2);
+    return { s, q1, q2, frozen };
+  };
+  const c11Payloads = async (s: FwSetup, value: string): Promise<C05PayloadSet> => { c05Replace(s, value); return c05Payloads(s); };
+  const c11Run = async (f: { s: FwSetup; q1: W5b4R; q2: W5b4R; frozen: string }, mode: C11Mode): Promise<{ r: W5b4Result; baseline: Map<string, Map<string, string>>; built: C11Built[]; snapshots: unknown[]; retained: W5b4R[]; qs: W5b4R[] | null; views: B1t2Rs[]; seed: unknown; rootIdx: unknown; cleaned: boolean }> => {
+    const old = await c11Payloads(f.s, C05_OLD); const middle = await c11Payloads(f.s, C06_BELT); const newest = await c11Payloads(f.s, C05_NEW);
+    for (const entry of f.s.entries) for (const arm of W5B4_ARMS) {
+      w5b4Expect(middle.payloads.get(entry.qid as string)!.get(arm), 'C11 real owner middle baseline equals old').toBe(old.payloads.get(entry.qid as string)!.get(arm));
+      w5b4Expect(newest.payloads.get(entry.qid as string)!.get(arm), 'C11 real owner new baseline equals old').toBe(old.payloads.get(entry.qid as string)!.get(arm));
+    }
+    c05Replace(f.s, C05_OLD); w5b4Expect(readFileSync(f.s.frozen.path, 'utf8')).toBe(f.frozen);
+    const variant = await c04Variant({ acquireRetainedSnapshots: true });
+    const snapshots: unknown[] = []; let retained: W5b4R[] = []; let qs: W5b4R[] | null = null; let middleIdx: unknown = null; let seed: unknown = null; let root: B1t2Rs | null = null;
+    const verdicts = new Map<unknown, Map<string, W5b4R>>(); const built: C11Built[] = []; const views: B1t2Rs[] = [];
+    const acquireRetainedSnapshots = ({ rs, home, refresh }: W5b4R) => {
+      if (snapshots.length > 0) return;
+      root = rs as B1t2Rs; seed = rs.idx;
+      const oldRead = refresh(rs, home); const oldIdx = (oldRead as W5b4R[])[0]!.idx;
+      c05Replace(f.s, C06_BELT); const midRead = refresh(rs, home); middleIdx = (midRead as W5b4R[])[1]!.idx;
+      c05Replace(f.s, C05_NEW); const newRead = refresh(rs, home); const newIdx = (newRead as W5b4R[])[2]!.idx;
+      snapshots.push(oldIdx, middleIdx, newIdx); retained = newRead as W5b4R[];
+      w5b4Expect(retained).toHaveLength(3); w5b4Expect(new Set(snapshots).size).toBe(3);
+      w5b4Expect(retained.every((snapshot: W5b4R, i: number) => snapshot.idx === snapshots[i])).toBe(true);
+      w5b4Expect(seed).toBe(snapshots[0]); w5b4Expect(rs.idx).toBe(snapshots[2]);
+    };
+    const recheck = async (view: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => {
+      if (qs === null) qs = entries; else w5b4Expect(entries, 'C11 retained views retain one full pending qs array').toBe(qs);
+      const idx = view.idx; views.push(view); await Promise.resolve();
+      w5b4Expect(view.idx, 'C11 isolated view stays stable through real recheck await').toBe(idx);
+      w5b4Expect(root!.idx, 'C11 root store remains on retained NEW through isolated recheck').toBe(snapshots[2]);
+      const got = await variant.recheckBatch(view, entries, ctx) as Map<string, W5b4R>; verdicts.set(view.idx, got); return got;
+    };
+    const payloads = (view: B1t2Rs, boundaryEntryId: number, question: string, cut: W5b4R): W5b4R => {
+      const p = variant.armPayloads(view, boundaryEntryId, question, cut) as W5b4R;
+      if (p.state !== 'payloads') throw new Error(`fixture: C11 payload ${p.why}`);
+      const matches = f.s.entries.filter((candidate) => candidate.question === question);
+      w5b4Expect(matches, 'C11 payload question maps to one parsed frozen entry').toHaveLength(1);
+      const entry = matches[0]!;
+      const verdict = verdicts.get(view.idx)!.get(entry.qid as string)!;
+      w5b4Expect(boundaryEntryId, 'C11 payload boundary id is its real recheck verdict identity').toBe(verdict.boundaryEntryId);
+      w5b4Expect(cut, 'C11 payload cut is its real recheck verdict identity').toBe(verdict.cut);
+      const originalPlain = p.plain as string; const originalCarded = p.carded as string;
+      let plain = originalPlain; let carded = originalCarded;
+      if (view.idx === middleIdx && ((mode === 'carded' && entry.qid === f.q1.qid) || (mode === 'last' && entry.qid === f.q2.qid) || (mode === 'sibling' && entry.qid === f.q1.qid))) {
+        if (mode === 'last') plain += C11_SUFFIX; else carded += C11_SUFFIX;
+      }
+      built.push({ idx: view.idx, qid: entry.qid as string, arm: W5B4_CONTROL, original: originalPlain, returned: plain }, { idx: view.idx, qid: entry.qid as string, arm: W5B4_TREATMENT, original: originalCarded, returned: carded });
+      return { ...p, plain, carded };
+    };
+    const r = await w5b4VariantArms(variant, f.s.home, f.s.argv, { recheck, payloads, acquireRetainedSnapshots });
+    return { r, baseline: old.payloads, built, snapshots, retained, qs, views, seed, rootIdx: root!.idx, cleaned: c04VariantCleaned };
+  };
+  const c11AssertBuilds = (c: Awaited<ReturnType<typeof c11Run>>, f: { q1: W5b4R; q2: W5b4R }, mode: C11Mode, reached: number): void => {
+    const expected = new Set([`${f.q1.qid}:${W5B4_CONTROL}`, `${f.q1.qid}:${W5B4_TREATMENT}`, `${f.q2.qid}:${W5B4_CONTROL}`, `${f.q2.qid}:${W5B4_TREATMENT}`]);
+    for (let i = 0; i < reached; i += 1) {
+      const rows = c.built.filter((x) => x.idx === c.snapshots[i]); const keys = new Set(rows.map((x) => `${x.qid}:${x.arm}`));
+      w5b4Expect(rows).toHaveLength(4); w5b4Expect(keys).toEqual(expected);
+      for (const row of rows) {
+        const original = c.baseline.get(row.qid)!.get(row.arm)!;
+        const target = i === 1 && ((mode === 'last' && row.qid === f.q2.qid && row.arm === W5B4_CONTROL) || ((mode === 'carded' || mode === 'sibling') && row.qid === f.q1.qid && row.arm === W5B4_TREATMENT));
+        w5b4Expect(row.original, 'C11 real payload builder returns independent owner baseline').toBe(original);
+        w5b4Expect(row.returned, 'C11 only the named middle result field is perturbed').toBe(target ? `${original}${C11_SUFFIX}` : original);
+      }
+    }
+    w5b4Expect(c.built.some((x) => x.idx === c.snapshots[2]), 'C11 new reading is admitted but not built after middle refusal').toBe(reached === 3);
+    w5b4Expect(c.qs!.map((entry) => entry.qid)).toEqual([f.q1.qid, f.q2.qid]);
+    w5b4Expect(new Set(c.views).size, 'C11 reached views are distinct isolated objects').toBe(reached);
+    w5b4Expect(c.views.every((view, i) => view.idx === c.snapshots[i]), 'C11 reached views retain descriptor identities').toBe(true);
+    w5b4Expect(c.seed).toBe(c.snapshots[0]); w5b4Expect(c.rootIdx).toBe(c.snapshots[2]);
+  };
+  const c11NoEffects = (s: FwSetup, frozen: string): void => {
+    w5b4Expect(readFileSync(s.frozen.path, 'utf8')).toBe(frozen); w5b4Expect(c10Tree(join(s.out, 'pilot', 'answers'))).toEqual([]);
+    w5b4Expect(w5b4Manifests(s.out, 'pilot')).toEqual([]); w5b4Expect(w5b4Versions(s.home)).toBe(0); w5b4Expect(w5b4Runs(s.home)).toEqual([]);
+    const rs = D4.openReplayStore(s.home) as B1t2Rs; try { c05Pairs(rs, 'C11 affected source remains non-durable'); } finally { rs.close(); }
+  };
+  w5b4It('C11 carded-only', async () => {
+    const f = await c11Fixture(); const c = await c11Run(f, 'carded');
+    w5b4Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    c11AssertBuilds(c, f, 'carded', 2); c11NoEffects(f.s, f.frozen); w5b4Expect(c.cleaned).toBe(true);
+  }, 180_000);
+  w5b4It('C11 last-pending-only', async () => {
+    const f = await c11Fixture(); const c = await c11Run(f, 'last');
+    w5b4Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    c11AssertBuilds(c, f, 'last', 2); w5b4Expect(c.qs!.at(-1)!.qid, 'C11 last pending qid is observed from actual full qs').toBe(f.q2.qid); c11NoEffects(f.s, f.frozen); w5b4Expect(c.cleaned).toBe(true);
+  }, 180_000);
+  w5b4It('C11 answered-sibling-side', async () => {
+    const f = await c11Fixture(); const firstVariant = await c04Variant({ nodeOverride: true });
+    w5b4Act(f.s.home, f.q1, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'x', result: false }), 1); w5b4Act(f.s.home, f.q1, W5B4_CONTROL, '.exit', '1', 1); w5b4Act(f.s.home, f.q1, W5B4_CONTROL, '.limits', w5b4LimitsRow(90), 1);
+    const first = await w5b4VariantArms(firstVariant, f.s.home, f.s.argv, { recheck: firstVariant.recheckBatch, payloads: firstVariant.armPayloads, nodeOverride: (measured: W5b4R) => ({ ...measured, limits: { ...(measured.limits as W5b4R), batch_max: 2 } }) });
+    w5b4Expect(first.refusal).toEqual({ word: 'limits-threshold', detail: 'five 90 seven 90 at or over 70' }); w5b4Expect(c04VariantCleaned, 'C11 first variant cleans after the expected stop').toBe(true);
+    const firstManifest = w5b4Manifests(f.s.out, 'pilot'); const firstRuns = firstManifest[0]!.runs as W5b4R[]; const firstStubs = w5b4Runs(f.s.home);
+    w5b4Expect(firstManifest).toHaveLength(1); w5b4Expect(firstRuns.map((run) => `${run.qid as string}:${run.arm as string}`)).toEqual(W5B4_ARMS.map((arm) => `${f.q1.qid as string}:${arm}`)); w5b4Expect(firstStubs).toHaveLength(2); w5b4Expect(w5b4Versions(f.s.home)).toBe(1);
+    for (const run of firstRuns) { const record = w5b4Json(join(f.s.out, `${run.name as string}.run.json`)); const stream = readFileSync(join(f.s.out, `${run.name as string}.jsonl`), 'utf8'); const klass = w5b1Gate.classifyRun(D4.streamEventsOf(stream), record.code, { spawned: true, stopped: false }); w5b4Expect([run.arm, record.code, klass]).toEqual(run.arm === W5B4_CONTROL ? [W5B4_CONTROL, 1, 'infra-failed'] : [W5B4_TREATMENT, 0, 'answered']); }
+    w5b4Expect(w5b4Summary(f.s.out, 'pilot').counts).toEqual({ questions: 2, answered: 0, run_failed: 0, rerun_owed: 1, not_run: 1 });
+    w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'answers'))).toEqual([]); w5b4Expect(existsSync(join(f.s.out, 'pilot', 'arms', f.q1.qid as string, `${W5B4_CONTROL}.a2.run.json`))).toBe(false); for (const arm of W5B4_ARMS) w5b4Expect(existsSync(join(f.s.out, 'pilot', 'arms', f.q2.qid as string, `${arm}.a1.run.json`))).toBe(false);
+    w5b4Limits(f.s.home, 10); const beforeAnswers = c10Tree(join(f.s.out, 'pilot', 'answers')); const beforeManifests = c10Tree(join(f.s.out, 'pilot', 'arms', 'batches')); const beforeVersions = w5b4Versions(f.s.home); const beforeRuns = w5b4Runs(f.s.home);
+    const c = await c11Run(f, 'sibling');
+    w5b4Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree arms' });
+    c11AssertBuilds(c, f, 'sibling', 2); w5b4Expect(c.cleaned).toBe(true); w5b4Expect(readFileSync(f.s.frozen.path, 'utf8')).toBe(f.frozen);
+    w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'answers'))).toEqual(beforeAnswers); w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'arms', 'batches'))).toEqual(beforeManifests); w5b4Expect(w5b4Versions(f.s.home)).toBe(beforeVersions); w5b4Expect(w5b4Runs(f.s.home)).toEqual(beforeRuns);
+    const rs = D4.openReplayStore(f.s.home) as B1t2Rs; try { c05Pairs(rs, 'C11 sibling remains non-durable'); } finally { rs.close(); }
+  }, 180_000);
+  w5b4It('C11 persisted-baseline control', async () => {
+    const f = await c11Fixture(); const c = await c11Run(f, null);
+    w5b4Expect(c.r.refusal).toBeNull(); w5b4Expect(c.r.code).toBe(0); c11AssertBuilds(c, f, null, 3); w5b4Expect(c.cleaned).toBe(true); w5b4Expect(readFileSync(f.s.frozen.path, 'utf8')).toBe(f.frozen);
+    const manifest = w5b4Manifests(f.s.out, 'pilot'); const stubs = w5b4Runs(f.s.home); w5b4Expect(manifest).toHaveLength(1); w5b4Expect(w5b4Versions(f.s.home)).toBe(1); w5b4Expect(stubs).toHaveLength(4);
+    const expected = new Set(f.s.entries.flatMap((entry) => W5B4_ARMS.map((arm) => `${entry.qid as string}:${arm}`))); const seen = new Set<string>();
+    for (const run of manifest[0]!.runs as W5b4R[]) { const key = `${run.qid as string}:${run.arm as string}`; w5b4Expect(expected.has(key)).toBe(true); w5b4Expect(seen.has(key)).toBe(false); seen.add(key); const stdin = c.baseline.get(run.qid as string)!.get(run.arm as string)!; w5b4Expect(run.stdin_sha256).toBe(sha256Hex(stdin)); const record = w5b4Json(join(f.s.out, `${run.name as string}.run.json`)); const matching = stubs.filter((stub) => stub.cwd === record.cwd); w5b4Expect(matching).toHaveLength(1); w5b4Expect(matching[0]!.stdin).toBe(stdin); w5b4Expect([matching[0]!.env.CCRC_RECALL_ARM, matching[0]!.env.CCRC_RECALL_ASOF]).toEqual([run.arm, f.s.entries.find((entry) => entry.qid === run.qid)!.boundary_uuid]); }
+    w5b4Expect(seen).toEqual(expected); const rs = D4.openReplayStore(f.s.home) as B1t2Rs; try { c05Pairs(rs, 'C11 control remains non-durable'); } finally { rs.close(); }
+  }, 180_000);
+
+  type N212Mode = 'absent' | 'missing-entry' | 'control';
+  type N212Fixture = { s: FwSetup; q1: W5b4R; q2: W5b4R; real: W5b4R; batch: string; originalManifest: string; won: W5b4R; control: W5b4R; beforeRuns: W5b4R[]; beforeVersions: number; beforeAnswers: unknown[]; beforeManifests: unknown[]; frozen: string };
+  const n212Fixture = async (mode: N212Mode): Promise<N212Fixture> => {
+    const s = await fwSetup(); const [q1, q2] = s.entries as [W5b4R, W5b4R];
+    w5b4Act(s.home, q1, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'x', result: false }), 1);
+    w5b4Act(s.home, q1, W5B4_CONTROL, '.exit', '1', 1);
+    w5b4Act(s.home, q1, W5B4_CONTROL, '.limits', w5b4LimitsRow(90), 1);
+    const real = { recheck: D4.recheckBatch, payloads: D4.armPayloads };
+    const first = await w5b4Arms(s.home, s.argv, real);
+    w5b4Expect(first.refusal).toEqual({ word: 'limits-threshold', detail: 'five 90 seven 90 at or over 70' });
+    const batch = join(s.out, 'pilot', 'arms', 'batches', '0001.json'); const originalManifest = readFileSync(batch, 'utf8'); const manifest = w5b4Json(batch); const runs = manifest.runs as W5b4R[];
+    const won = runs.find((run) => run.qid === q1.qid && run.arm === W5B4_TREATMENT)!; const control = runs.find((run) => run.qid === q1.qid && run.arm === W5B4_CONTROL)!;
+    w5b4Expect(runs.map((run) => run.name)).toEqual(w5b4Names('pilot', [q1])); w5b4Expect(w5b4Runs(s.home)).toHaveLength(2); w5b4Expect(w5b4Versions(s.home)).toBe(1);
+    for (const run of runs) { const record = w5b4Json(join(s.out, `${run.name as string}.run.json`)); const stream = readFileSync(join(s.out, `${run.name as string}.jsonl`), 'utf8'); const klass = w5b1Gate.classifyRun(D4.streamEventsOf(stream), record.code, { spawned: true, stopped: false }); w5b4Expect([run.arm, record.code, klass]).toEqual(run.arm === W5B4_CONTROL ? [W5B4_CONTROL, 1, 'infra-failed'] : [W5B4_TREATMENT, 0, 'answered']); }
+    w5b4Expect(w5b4Summary(s.out, 'pilot').counts).toEqual({ questions: 2, answered: 0, run_failed: 0, rerun_owed: 1, not_run: 1 }); w5b4Expect(c10Tree(join(s.out, 'pilot', 'answers'))).toEqual([]);
+    w5b4Expect(existsSync(join(s.out, `pilot/arms/${q1.qid as string}/${W5B4_CONTROL}.a2.run.json`))).toBe(false); for (const arm of W5B4_ARMS) w5b4Expect(existsSync(join(s.out, `pilot/arms/${q2.qid as string}/${arm}.a1.run.json`))).toBe(false);
+    w5b4Limits(s.home, 10);
+    if (mode === 'absent') rmSync(batch);
+    if (mode === 'missing-entry') writeFileSync(batch, w5b4Lib.canonicalJson({ ...manifest, runs: runs.filter((run) => run.name !== won.name) }) + '\n');
+    if (mode === 'missing-entry') { const rewritten = w5b4Json(batch); w5b4Expect(rewritten.kind).toBe(D4.ARM_BATCH_KIND); w5b4Expect((rewritten.runs as W5b4R[]).map((run) => run.name)).toEqual([control.name]); }
+    if (mode === 'control') w5b4Expect(readFileSync(batch, 'utf8')).toBe(originalManifest);
+    return { s, q1, q2, real, batch, originalManifest, won, control, beforeRuns: w5b4Runs(s.home), beforeVersions: w5b4Versions(s.home), beforeAnswers: c10Tree(join(s.out, 'pilot', 'answers')), beforeManifests: c10Tree(join(s.out, 'pilot', 'arms', 'batches')), frozen: readFileSync(s.frozen.path, 'utf8') };
+  };
+  const n212MissingUnchanged = (f: N212Fixture): void => {
+    w5b4Expect(w5b4Versions(f.s.home)).toBe(f.beforeVersions); w5b4Expect(w5b4Runs(f.s.home)).toEqual(f.beforeRuns); w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'arms', 'batches'))).toEqual(f.beforeManifests); w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'answers'))).toEqual(f.beforeAnswers); w5b4Expect(readFileSync(f.s.frozen.path, 'utf8')).toBe(f.frozen);
+    for (const arm of W5B4_ARMS) w5b4Expect(existsSync(join(f.s.out, 'pilot', 'answers', `${f.q1.qid as string}.${arm}.json`))).toBe(false);
+  };
+  w5b4It('N212 missing answered-sibling manifest refuses', async () => {
+    const f = await n212Fixture('absent'); const second = await w5b4Arms(f.s.home, f.s.argv, f.real);
+    w5b4Expect(second.refusal).toEqual({ word: 'out-refused', detail: `arm-manifest-missing ${f.won.name as string}` });
+    w5b4Expect(w5b4Summary(f.s.out, 'pilot').stop).toMatchObject({ word: 'out-refused', kind: 'stop', detail: `arm-manifest-missing ${f.won.name as string}` }); n212MissingUnchanged(f);
+  }, 180_000);
+  w5b4It('N212 present manifest missing answered-sibling entry refuses', async () => {
+    const f = await n212Fixture('missing-entry'); const second = await w5b4Arms(f.s.home, f.s.argv, f.real);
+    w5b4Expect(second.refusal).toEqual({ word: 'out-refused', detail: `arm-manifest-missing ${f.won.name as string}` });
+    w5b4Expect(w5b4Summary(f.s.out, 'pilot').stop).toMatchObject({ word: 'out-refused', kind: 'stop', detail: `arm-manifest-missing ${f.won.name as string}` }); n212MissingUnchanged(f);
+  }, 180_000);
+  w5b4It('N212 valid answered-sibling manifest control', async () => {
+    const f = await n212Fixture('control'); const second = await w5b4Arms(f.s.home, f.s.argv, f.real);
+    w5b4Expect(second.refusal).toBeNull(); w5b4Expect(second.code).toBe(0); w5b4Expect(w5b4Runs(f.s.home)).toHaveLength(5); w5b4Expect(w5b4Versions(f.s.home)).toBe(f.beforeVersions + 2);
+    const manifest = w5b4Manifests(f.s.out, 'pilot'); const owed = (manifest[1]!.runs as W5b4R[]).find((run) => run.qid === f.q1.qid && run.arm === W5B4_CONTROL)!; w5b4Expect(owed.stdin_sha256).toBe(f.control.stdin_sha256);
+    for (const q of [f.q1, f.q2]) for (const arm of W5B4_ARMS) w5b4Expect(w5b4Answer(f.s.out, 'pilot', q, arm).question_state).toBe('answered');
+    w5b4Expect(Object.hasOwn(w5b4Summary(f.s.out, 'pilot'), 'payload_changed')).toBe(false); w5b4Expect(readFileSync(f.batch, 'utf8')).toBe(f.originalManifest);
+  }, 180_000);
 
   w5b4It('D-6482: an owed arm whose answered sibling\'s payload changed is never spawned, it is excluded run-failed with the reason, and the invocation goes on to the next question', async () => {
     const WORD = 'Summary';   // a word of the stored summary, outside every fact: a pair for it changes the payload and fails no re-check clause
@@ -13871,4 +15610,755 @@ w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4 fix wave: the 
     w5b4Expect(w5b4Answer(control.s.out, 'pilot', control.q1, W5B4_CONTROL)).toMatchObject({ question_state: 'answered', arm_state: 'answered', run: `pilot/arms/${control.q1.qid as string}/${W5B4_CONTROL}.a2` });
     w5b4Expect(Object.hasOwn(w5b4Summary(control.s.out, 'pilot'), 'payload_changed'), 'CONTROL: nothing excluded').toBe(false);
   }, 240_000);
+});
+
+// ── W2-5b1 correction Phase A: bounded snapshot helper contract (D-6481) ─────────────────────────────────────────
+describe('W2-5b1 correction Phase A: bounded snapshot helper contract', () => {
+  const replaceOnce = (source: string, anchor: string, replacement: string) => {
+    if (source.split(anchor).length !== 2) throw new Error('snapshot helper seam is not unique');
+    return source.replace(anchor, replacement);
+  };
+  const helpers = (transform: (source: string) => string = (source) => source, probes: {
+    seed?: () => void; material?: (index: unknown) => void; same?: (a: unknown, b: unknown) => boolean | undefined;
+    decision?: (kind: string) => void;
+  } = {}) => {
+    const text = readFileSync(join(REPO, 'deploy', 'history-replay.mjs'), 'utf8');
+    const start = text.indexOf('const MASKING_SNAPSHOT_MAX = 8;');
+    const end = text.indexOf('/** A failed open', start);
+    if (start < 0 || end < 0) throw new Error('snapshot helper bounds missing');
+    let source = text.slice(start, end);
+    if (probes.seed) source = replaceOnce(source, 'const seed = rs.idx; const material = maskingMaterialOf(seed, MASKING_SNAPSHOT_MATERIAL_MAX);', 'seedProbe(); const seed = rs.idx; const material = maskingMaterialOf(seed, MASKING_SNAPSHOT_MATERIAL_MAX);');
+    if (probes.material) source = replaceOnce(source, 'function maskingMaterialOf(idx, limit) {', 'function maskingMaterialOf(idx, limit) { materialProbe(idx);');
+    if (probes.same) source = replaceOnce(source, 'function maskingIndexSame(a, b) {', 'function maskingIndexSame(a, b) { const probed = sameProbe(a, b); if (probed !== undefined) return probed;');
+    if (probes.decision) {
+      source = replaceOnce(source, 'state.snapshots.length >= MASKING_SNAPSHOT_MAX', "(decisionProbe('count'), state.snapshots.length >= MASKING_SNAPSHOT_MAX)");
+      source = replaceOnce(source, 'state.material > MASKING_SNAPSHOT_MATERIAL_TOTAL_MAX - material', "(decisionProbe('aggregate'), state.material > MASKING_SNAPSHOT_MATERIAL_TOTAL_MAX - material)");
+    }
+    const transformed = transform(source);
+    class Refusal extends Error { constructor(readonly word: string, readonly detail: string) { super(`${word}: ${detail}`); } }
+    let next: () => unknown = () => { throw new Error('pair index unset'); };
+    const out = new Function('pairIndexOf', 'refuse', 'DriverRefusal', 'seedProbe', 'materialProbe', 'sameProbe', 'decisionProbe', `${transformed}\nreturn { checked: maskingIndexChecked, material: maskingMaterialOf, same: maskingIndexSame, refresh: refreshPairIndex };`)(
+      () => next(), (word: string, detail: string) => { throw new Refusal(word, detail); }, Refusal, probes.seed, probes.material, probes.same, probes.decision,
+    ) as {
+      checked(index: unknown): unknown; material(index: unknown, limit: number): number; same(a: unknown, b: unknown): boolean;
+      refresh(rs: Record<string, unknown>, home: string): unknown;
+    };
+    return { ...out, setNext: (fn: () => unknown) => { next = fn; }, Refusal };
+  };
+  const emptyIndex = (): { belt: { units: Uint8Array[]; texts: string[]; widths: unknown[]; grams: number; overflow: number }; byLen: Map<number, Set<string>> } => ({
+    belt: { units: [], texts: [], widths: [], grams: 0, overflow: 0 }, byLen: new Map(),
+  });
+  const comparisonIndex = (): ReturnType<typeof emptyIndex> => {
+    const value = emptyIndex();
+    value.belt.texts.push('a'); value.belt.units.push(new Uint8Array([1]));
+    value.belt.widths.push({ w: 1, pw: 0, table: new Map([[7, [{ unit: 0, off: 0 }]]]) });
+    value.byLen.set(20, new Set(['0'.repeat(64)]));
+    return value;
+  };
+  const index = c14FixtureIndex;
+  const indexContent = (value: ReturnType<typeof emptyIndex>) => ({
+    belt: {
+      units: value.belt.units.map((unit) => ({ bytes: [...unit], byteLength: unit.byteLength, byteOffset: unit.byteOffset, backingBytes: unit.buffer.byteLength })),
+      texts: [...value.belt.texts], grams: value.belt.grams, overflow: value.belt.overflow,
+      widths: (value.belt.widths as Array<{ w: number; pw: number; table: Map<number, Array<{ unit: number; off: number }>> }>).map((width) => ({
+        w: width.w, pw: width.pw, table: [...width.table].map(([key, collisions]) => [key, collisions.map((collision) => ({ ...collision }))]),
+      })),
+    },
+    byLen: [...value.byLen].map(([length, hashes]) => [length, [...hashes]]),
+  });
+
+  it('charges each Uint8Array backing allocation and rejects attached backing or typed-array state before reading it', () => {
+    const { checked, material, same } = helpers();
+    const small = index(64); const large = index(8192);
+    expect(material(small, 16_777_216)).not.toBe(material(large, 16_777_216));
+    const attached = index(64);
+    Object.defineProperty(attached.belt.units[0]!.buffer, Symbol('extra'), { value: new Uint8Array(4096) });
+    expect(() => checked(attached)).toThrow();
+    const shadowed = index(64);
+    Object.defineProperty(shadowed.belt.units[0]!.buffer, 'byteLength', { value: 0 });
+    expect(() => checked(shadowed)).toThrow();
+    const accessor = index(64);
+    let reads = 0;
+    Object.defineProperty(accessor.belt.units[0]!, 'length', { get: () => { reads += 1; return 0; } });
+    expect(() => checked(accessor)).toThrow();
+    expect(reads).toBe(0);
+    const arrayAttached = index(64);
+    Object.defineProperty(arrayAttached.belt.units, Symbol('extra'), { value: 1 });
+    expect(() => checked(arrayAttached)).toThrow();
+    const mapAttached = index(64);
+    Object.defineProperty(mapAttached.byLen, Symbol('extra'), { value: 1 });
+    expect(() => checked(mapAttached)).toThrow();
+    const setAttached = index(64);
+    setAttached.byLen.set(20, new Set(['0'.repeat(64)]));
+    Object.defineProperty(setAttached.byLen.get(20)!, Symbol('extra'), { value: 1 });
+    expect(() => checked(setAttached)).toThrow();
+    expect(same(small, large)).toBe(false);
+  });
+
+  it('deduplicates twelve independently allocated unchanged refreshes to one retained representative', () => {
+    const h = helpers(); const seed = comparisonIndex(); const rs = { idx: seed, db: {} } as Record<string, unknown>;
+    h.setNext(() => comparisonIndex());
+    for (let i = 0; i < 12; i += 1) expect(h.refresh(rs, 'fixture')).toBe(seed);
+    const state = rs.maskingSnapshots as { snapshots: Array<{ idx: unknown; material: number }>; material: number };
+    expect(state.snapshots).toHaveLength(1); expect(state.snapshots[0]!.idx).toBe(seed); expect(state.material).toBe(h.material(seed, 16_777_216));
+  });
+
+  it('retains A-B-A as two immutable representatives and A-B-C as three despite output equivalence', () => {
+    const h = helpers();
+    const tagged = (n: number) => { const value = comparisonIndex(); value.byLen.set(20 + n, new Set([n.toString(16).padStart(64, '0')])); return value; };
+    const first = tagged(0); const rs = { idx: first, db: {} } as Record<string, unknown>;
+    h.setNext(() => tagged(1)); const second = h.refresh(rs, 'fixture');
+    h.setNext(() => tagged(0)); expect(h.refresh(rs, 'fixture')).toBe(first);
+    expect((rs.maskingSnapshots as { snapshots: unknown[] }).snapshots).toEqual([expect.objectContaining({ idx: first }), expect.objectContaining({ idx: second })]);
+    h.setNext(() => tagged(2)); h.refresh(rs, 'fixture');
+    expect((rs.maskingSnapshots as { snapshots: unknown[] }).snapshots).toHaveLength(3);
+  });
+
+  it('accepts separately allocated complete identical indexes', () => {
+    const h = helpers(); const a = comparisonIndex(); const same = comparisonIndex();
+    expect(() => h.checked(a)).not.toThrow(); expect(() => h.checked(same)).not.toThrow(); expect(h.same(a, same)).toBe(true);
+  });
+
+  it('preserves byLen and Set iteration order', () => {
+    const h = helpers(); const mapOrder = comparisonIndex(); mapOrder.byLen.set(21, new Set(['0'.repeat(64)]));
+    const reorderedMap = comparisonIndex(); reorderedMap.byLen.clear(); reorderedMap.byLen.set(21, new Set(['0'.repeat(64)])); reorderedMap.byLen.set(20, new Set(['0'.repeat(64)]));
+    expect(h.same(mapOrder, reorderedMap)).toBe(false);
+    const setOrder = comparisonIndex(); setOrder.byLen.set(20, new Set(['0'.repeat(64), '1'.repeat(64)]));
+    const reorderedSet = comparisonIndex(); reorderedSet.byLen.set(20, new Set(['1'.repeat(64), '0'.repeat(64)]));
+    expect(h.same(setOrder, reorderedSet)).toBe(false);
+  });
+
+  it('distinguishes same-size belt bytes and texts without normalizing visible content', () => {
+    const h = helpers(); const bytesA = comparisonIndex(); const bytesB = comparisonIndex();
+    bytesB.belt.units[0]![0] = 2;
+    expect(h.same(bytesA, bytesB)).toBe(false);
+    const textA = comparisonIndex(); const textB = comparisonIndex(); textB.belt.texts[0] = 'b';
+    expect(h.same(textA, textB)).toBe(false);
+  });
+
+  it('preserves width record order', () => {
+    const h = helpers(); const widthA = comparisonIndex(); const widthB = comparisonIndex();
+    widthA.belt.widths.push({ w: 2, pw: 0, table: new Map() }); widthB.belt.widths.unshift({ w: 2, pw: 0, table: new Map() });
+    expect(h.same(widthA, widthB)).toBe(false);
+  });
+
+  it('preserves equal-cardinality table entry order', () => {
+    type TableWidth = { table: Map<number, Array<{ unit: number; off: number }>> };
+    const h = helpers(); const tableA = comparisonIndex(); const tableB = comparisonIndex();
+    const a = tableA.belt.widths as unknown as TableWidth[]; const b = tableB.belt.widths as unknown as TableWidth[];
+    a[0]!.table.set(8, [{ unit: 0, off: 0 }]); b[0]!.table = new Map([[8, [{ unit: 0, off: 0 }]], [7, [{ unit: 0, off: 0 }]]]);
+    expect(h.same(tableA, tableB)).toBe(false);
+  });
+
+  it('preserves equal-cardinality collision-list order', () => {
+    type TableWidth = { table: Map<number, Array<{ unit: number; off: number }>> };
+    const h = helpers(); const collisionA = comparisonIndex(); const collisionB = comparisonIndex();
+    const ca = collisionA.belt.widths as unknown as TableWidth[]; const cb = collisionB.belt.widths as unknown as TableWidth[];
+    ca[0]!.table.set(7, [{ unit: 0, off: 0 }, { unit: 0, off: 1 }]); cb[0]!.table.set(7, [{ unit: 0, off: 1 }, { unit: 0, off: 0 }]);
+    expect(h.same(collisionA, collisionB)).toBe(false);
+  });
+
+  type ComparisonWidth = { pw: number; table: Map<number, Array<{ unit: number; off: number }>> };
+  it.each([
+    ['width pw', (value: ReturnType<typeof comparisonIndex>) => { (value.belt.widths[0] as { pw: number }).pw = 1; }],
+    ['grams', (value: ReturnType<typeof comparisonIndex>) => { value.belt.grams = 1; }],
+    ['overflow', (value: ReturnType<typeof comparisonIndex>) => { value.belt.overflow = 1; }],
+    ['byLen cardinality', (value: ReturnType<typeof comparisonIndex>) => { value.byLen.set(21, new Set(['1'.repeat(64)])); }],
+    ['Set cardinality', (value: ReturnType<typeof comparisonIndex>) => { value.byLen.get(20)!.add('1'.repeat(64)); }],
+    ['unit/text cardinality', (value: ReturnType<typeof comparisonIndex>) => { value.belt.units.push(new Uint8Array([2])); value.belt.texts.push('b'); }],
+    ['width cardinality', (value: ReturnType<typeof comparisonIndex>) => { value.belt.widths.push({ w: 2, pw: 0, table: new Map() }); }],
+    ['table cardinality', (value: ReturnType<typeof comparisonIndex>) => { (value.belt.widths[0] as { table: Map<number, unknown> }).table.set(8, []); }],
+    ['collision-list cardinality', (value: ReturnType<typeof comparisonIndex>) => { (value.belt.widths[0] as ComparisonWidth).table.set(7, [{ unit: 0, off: 0 }, { unit: 0, off: 1 }]); }],
+  ])('distinguishes direct equality %s fields and cardinalities', (_name, mutate) => {
+    const h = helpers(); const a = comparisonIndex(); const b = comparisonIndex(); mutate(b);
+    expect(() => h.checked(a)).not.toThrow(); expect(() => h.checked(b)).not.toThrow(); expect(h.same(a, b)).toBe(false);
+  });
+
+  it('distinguishes a valid collision unit from a different valid unit', () => {
+    const h = helpers(); const a = comparisonIndex(); const b = comparisonIndex();
+    for (const value of [a, b]) { value.belt.units.push(new Uint8Array([2])); value.belt.texts.push('b'); }
+    (b.belt.widths[0] as ComparisonWidth).table.set(7, [{ unit: 1, off: 0 }]);
+    expect(() => h.checked(a)).not.toThrow(); expect(() => h.checked(b)).not.toThrow(); expect(h.same(a, b)).toBe(false);
+  });
+
+  it('retains order-different equal-membership candidate as a distinct snapshot', () => {
+    const h = helpers(); const seed = comparisonIndex(); const reordered = comparisonIndex();
+    seed.byLen.set(21, new Set(['0'.repeat(64)])); reordered.byLen.clear(); reordered.byLen.set(21, new Set(['0'.repeat(64)])); reordered.byLen.set(20, new Set(['0'.repeat(64)]));
+    const rs = { idx: seed, db: {} } as Record<string, unknown>; h.setNext(() => reordered); const returned = h.refresh(rs, 'fixture');
+    expect(returned).toBe(reordered); expect((rs.maskingSnapshots as { snapshots: Array<{ idx: unknown }> }).snapshots).toEqual([expect.objectContaining({ idx: seed }), expect.objectContaining({ idx: reordered })]);
+  });
+
+  it('accepts exact material limits and refuses over-cap, overflow, invalid and refresh-failed readings', () => {
+    const h = helpers();
+    const base = h.material(index(64), 67_108_864) - 64;
+    const exactBacking = 16_777_216 - base;
+    const exact = index(exactBacking);
+    expect(h.material(exact, 67_108_864)).toBe(16_777_216);
+    expect(() => h.material(index(exactBacking + 1), 16_777_216)).toThrow();
+    const overflow = index(64); overflow.belt.overflow = 1;
+    h.setNext(() => index(64));
+    expect(() => h.refresh({ idx: overflow, db: {} }, 'fixture')).toThrow(/masking-snapshot-belt-overflow/);
+    h.setNext(() => overflow);
+    expect(() => h.refresh({ idx: index(64), db: {} }, 'fixture')).toThrow(/masking-snapshot-belt-overflow/);
+    const invalid = index(64); Object.defineProperty(invalid, Symbol('extra'), { value: 1 });
+    h.setNext(() => invalid);
+    expect(() => h.refresh({ idx: index(64), db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+    h.setNext(() => { throw new Error('fixture'); });
+    expect(() => h.refresh({ idx: index(64), db: {} }, 'fixture')).toThrow(/masking-snapshot-refresh-failed/);
+  });
+
+  it('rejects unsupported backing prototypes and compares actual backing allocations', () => {
+    const { checked, same } = helpers();
+    const small = index(64); const large = index(8192);
+    expect(same(small, large)).toBe(false);
+    const unsupported = index(64);
+    const prototype = Object.create(ArrayBuffer.prototype);
+    Object.defineProperty(prototype, 'byteLength', { value: 0 });
+    Object.setPrototypeOf(unsupported.belt.units[0]!.buffer, prototype);
+    expect(() => checked(unsupported)).toThrow();
+  });
+
+  it('accepts ordinary fixed owner backing', () => {
+    const { checked } = helpers();
+    expect(() => checked(index(64))).not.toThrow();
+  });
+
+  it('rejects resizable ArrayBuffer backing', () => {
+    const { checked } = helpers(); const value = index(64); const original = value.belt.units[0]!;
+    const buffer = new (ArrayBuffer as unknown as { new (length: number, options: { maxByteLength: number }): ArrayBuffer })(64, { maxByteLength: 128 });
+    const view = new Uint8Array(buffer, 0, original.length); view.set(original); value.belt.units[0] = view;
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects detached ArrayBuffer backing', () => {
+    const { checked } = helpers(); const value = index(64);
+    structuredClone(value.belt.units[0]!.buffer, { transfer: [value.belt.units[0]!.buffer] });
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects attached ArrayBuffer state and unsupported typed-array subtypes', () => {
+    const { checked } = helpers();
+    const attached = index(64); Object.defineProperty(attached.belt.units[0]!.buffer, Symbol('extra'), { value: 1 });
+    expect(() => checked(attached)).toThrow();
+    const subtype = index(64); subtype.belt.units[0] = new Uint8ClampedArray(subtype.belt.units[0]!) as unknown as Uint8Array;
+    expect(() => checked(subtype)).toThrow();
+  });
+
+  it('rejects detached zero-length backing before matching empty text/unit alignment', () => {
+    const { checked } = helpers(); const value = emptyIndex();
+    value.belt.units.push(new Uint8Array(0)); value.belt.texts.push('');
+    expect(() => checked(value), 'CONTROL: ordinary fixed empty backing').not.toThrow();
+    structuredClone(value.belt.units[0]!.buffer, { transfer: [value.belt.units[0]!.buffer] });
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('at zero material limit refuses before traversing an invalid nested hash', () => {
+    const { material } = helpers();
+    const late = index(64);
+    late.byLen.set(20, new Set(['invalid']));
+    expect(() => material(late, 0)).toThrow(/material/);
+  });
+
+  it('preserves signed owner width powers and gram-table keys while rejecting invalid structural fields', () => {
+    const { checked } = helpers();
+    const signed = index(64);
+    const widths = signed.belt.widths as unknown as Array<{ w: number; pw: number; table: Map<number, unknown[]> }>;
+    widths[0]!.pw = -1;
+    widths[0]!.table = new Map([[-7, []]]);
+    expect(() => checked(signed)).not.toThrow();
+    const invalid = index(64);
+    invalid.belt.grams = -1;
+    expect(() => checked(invalid)).toThrow();
+  });
+
+  it('accounts the empty concrete index base exactly and refuses one byte below it', () => {
+    const { material } = helpers(); const value = emptyIndex();
+    // 114 top record + 202 belt record properties + 16 scalar values + 3*64 arrays + 64 empty Map.
+    const expected = 588;
+    expect(material(value, expected)).toBe(expected);
+    expect(() => material(value, expected - 1)).toThrow(/material/);
+  });
+
+  it('accounts byLen Map/Set entries and repeated hash occurrences exactly', () => {
+    const { material } = helpers(); const value = emptyIndex();
+    const hash = '0'.repeat(64);
+    value.byLen.set(20, new Set([hash]));
+    // Empty base + Map entry 32 + length 8 + Set 64 + member 16 + string 128.
+    expect(material(value, 836)).toBe(836);
+    value.byLen.get(20)!.add('1'.repeat(64));
+    expect(material(value, 980)).toBe(980); // additional Set member plus second string occurrence.
+    value.byLen.set(21, new Set([hash]));
+    expect(material(value, 1228)).toBe(1228); // repeated identical hash is charged per occurrence.
+    expect(() => material(value, 1227)).toThrow(/material/);
+  });
+
+  it('accounts text/unit strings and backing storage per occurrence exactly', () => {
+    const { material } = helpers(); const value = emptyIndex();
+    const text = String.fromCharCode(0xe9);
+    const backing = new ArrayBuffer(4); const first = new Uint8Array(backing, 0, 1); const second = new Uint8Array(backing, 1, 1);
+    value.belt.texts.push(text); value.belt.units.push(first);
+    // Base + text array element/string (8+2) + unit element/view/backing (8+64+4).
+    expect(material(value, 674)).toBe(674);
+    value.belt.texts.push(text); value.belt.units.push(second);
+    expect(material(value, 760)).toBe(760); // shared backing and repeated text are each charged again.
+    const larger = new Uint8Array(new ArrayBuffer(8), 3, 1);
+    value.belt.texts.push(text); value.belt.units.push(larger);
+    expect(material(value, 850)).toBe(850); // same visible length, nonzero offset, but full larger backing.
+    expect(() => material(value, 849)).toThrow(/material/);
+  });
+
+  it('charges the same typed-array reference once per retained occurrence', () => {
+    const { material } = helpers(); const one = emptyIndex(); const shared = new Uint8Array(new ArrayBuffer(4), 0, 1);
+    one.belt.texts.push('a'); one.belt.units.push(shared);
+    expect(material(one, 674), 'CONTROL: one typed-array occurrence').toBe(674);
+    const twice = emptyIndex(); twice.belt.texts.push('a', 'a'); twice.belt.units.push(shared, shared);
+    expect(material(twice, 760)).toBe(760);
+    expect(() => material(twice, 759)).toThrow(/material/);
+  });
+
+  it('accounts width tables and each collision record exactly', () => {
+    const { material } = helpers(); const value = emptyIndex();
+    value.belt.texts.push('a'); value.belt.units.push(new Uint8Array(1));
+    const collisions = [{ unit: 0, off: 0 }];
+    value.belt.widths.push({ w: 1, pw: 0, table: new Map([[7, collisions]]) });
+    // Base 588 + text/unit 83 + width array/record/table 216 + entry/collision list/record 238.
+    expect(material(value, 1125)).toBe(1125);
+    collisions.push({ unit: 0, off: 0 });
+    expect(material(value, 1259)).toBe(1259); // array element + independent collision record.
+    expect(() => material(value, 1258)).toThrow(/material/);
+  });
+
+  it('accepts the unmodified owner PairIndex and its dense concrete containers', () => {
+    const { checked } = helpers();
+    expect(() => checked(index(64))).not.toThrow();
+  });
+
+  it.each([
+    ['top record symbol', (value: ReturnType<typeof index>) => Object.defineProperty(value, Symbol('extra'), { value: 1 })],
+    ['top record missing byLen', (value: ReturnType<typeof index>) => delete (value as Partial<ReturnType<typeof index>>).byLen],
+    ['belt record non-enumerable', (value: ReturnType<typeof index>) => Object.defineProperty(value.belt, 'hidden', { value: 1 })],
+    ['width record accessor', (value: ReturnType<typeof index>) => {
+      let reads = 0;
+      Object.defineProperty((value.belt.widths as Array<object>)[0]!, 'w', { get: () => { reads += 1; return 1; }, enumerable: true, configurable: true });
+      return () => expect(reads).toBe(0);
+    }],
+    ['collision record symbol', (value: ReturnType<typeof index>) => {
+      const widths = value.belt.widths as unknown as Array<{ w: number; pw: number; table: Map<number, Array<object>> }>;
+      const collision = { unit: 0, off: 0 };
+      widths[0]!.table = new Map([[7, [collision]]]);
+      Object.defineProperty(collision, Symbol('extra'), { value: 1 });
+    }],
+    ['texts array non-enumerable', (value: ReturnType<typeof index>) => Object.defineProperty(value.belt.texts, 'hidden', { value: 1 })],
+    ['widths array symbol', (value: ReturnType<typeof index>) => Object.defineProperty(value.belt.widths, Symbol('extra'), { value: 1 })],
+    ['byLen map symbol', (value: ReturnType<typeof index>) => Object.defineProperty(value.byLen, Symbol('extra'), { value: 1 })],
+  ] as Array<[string, (value: ReturnType<typeof index>) => void | (() => void)]>)('rejects malformed %s before consuming its value', (_name: string, mutate: (value: ReturnType<typeof index>) => void | (() => void)) => {
+    const { checked } = helpers();
+    const value = index(64);
+    const assertUnread = mutate(value);
+    expect(() => checked(value)).toThrow();
+    if (typeof assertUnread === 'function') assertUnread();
+  });
+
+  it('rejects an otherwise complete record with an unsupported prototype', () => {
+    const { checked } = helpers(); const value = index(64);
+    Object.setPrototypeOf(value.belt, null);
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('maps record accessor, missing-key and prototype failures to fixed invalid shape', () => {
+    const h = helpers();
+    const accessor = index(64);
+    Object.defineProperty((accessor.belt.widths as Array<object>)[0]!, 'w', { get: () => 1, set: () => undefined, enumerable: true, configurable: true });
+    expect(() => h.refresh({ idx: accessor, db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+    const missing = index(64); delete (missing as Partial<ReturnType<typeof index>>).byLen;
+    h.setNext(() => missing);
+    expect(() => h.refresh({ idx: index(64), db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+    const prototype = index(64); Object.setPrototypeOf(prototype.belt, null);
+    expect(() => h.refresh({ idx: prototype, db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+  });
+
+  it.each([
+    ['texts', (value: ReturnType<typeof index>) => value.belt.texts, (value: ReturnType<typeof index>) => value.belt.texts[0]!],
+    ['units', (value: ReturnType<typeof index>) => value.belt.units, (value: ReturnType<typeof index>) => value.belt.units[0]!],
+    ['widths', (value: ReturnType<typeof index>) => value.belt.widths, (value: ReturnType<typeof index>) => value.belt.widths[0]!],
+    ['collision list', (value: ReturnType<typeof index>) => {
+      const widths = value.belt.widths as unknown as Array<{ table: Map<number, Array<{ unit: number; off: number }>> }>;
+      widths[0]!.table.set(7, [{ unit: 0, off: 0 }]);
+      return widths[0]!.table.get(7)!;
+    }, (value: ReturnType<typeof index>) => {
+      const widths = value.belt.widths as unknown as Array<{ table: Map<number, Array<{ unit: number; off: number }>> }>;
+      return widths[0]!.table.get(7)![0]!;
+    }],
+  ])('rejects %s array index accessors before reading their otherwise valid values', (_name, arrayOf, elementOf) => {
+    const { checked } = helpers();
+    const value = index(64);
+    const array = arrayOf(value); const element = elementOf(value);
+    let reads = 0;
+    Object.defineProperty(array, '0', { get: () => { reads += 1; return element; }, enumerable: true, configurable: true });
+    expect(() => checked(value)).toThrow();
+    expect(reads).toBe(0);
+  });
+
+  it.each([
+    ['texts', (value: ReturnType<typeof index>) => value.belt.texts],
+    ['units', (value: ReturnType<typeof index>) => value.belt.units],
+    ['widths', (value: ReturnType<typeof index>) => value.belt.widths],
+  ])('rejects a %s hole despite its otherwise valid Array shape', (_name, arrayOf) => {
+    const { checked } = helpers();
+    const value = index(64);
+    const array = arrayOf(value);
+    array.length = Math.max(array.length, 2);
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects unexpected Array material through the array-shape predicate', () => {
+    const { checked } = helpers();
+    const attached = index(64);
+    Object.defineProperty(attached.belt.texts, Symbol('extra'), { value: 1 });
+    expect(() => checked(attached)).toThrow();
+    const wrongPrototype = index(64);
+    Object.setPrototypeOf(wrongPrototype.belt.units, null);
+    expect(() => checked(wrongPrototype)).toThrow();
+    const equalOwnKeyCount = index(64);
+    delete equalOwnKeyCount.belt.texts[0];
+    Object.defineProperty(equalOwnKeyCount.belt.texts, 'extra', { value: 1, enumerable: true, configurable: true, writable: true });
+    expect(Reflect.ownKeys(equalOwnKeyCount.belt.texts)).toHaveLength(equalOwnKeyCount.belt.texts.length + 1);
+    expect(() => checked(equalOwnKeyCount)).toThrow();
+  });
+
+  it('rejects a dense Array with an unsupported prototype before its elements are read', () => {
+    const { checked } = helpers();
+    const value = index(64);
+    Object.setPrototypeOf(value.belt.units, null);
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('maps Map prototype shells and membership wrappers to fixed invalid shape at seed and candidate', () => {
+    const h = helpers();
+    const mapShell = index(64); mapShell.byLen = Object.create(Map.prototype) as Map<number, Set<string>>;
+    expect(() => h.refresh({ idx: mapShell, db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+    const membershipWrapper = index(64); membershipWrapper.byLen = { has: () => true } as unknown as Map<number, Set<string>>;
+    expect(() => h.refresh({ idx: membershipWrapper, db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+    h.setNext(() => membershipWrapper);
+    expect(() => h.refresh({ idx: index(64), db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+  });
+
+  it('maps Set prototype shells to fixed invalid shape at seed and candidate', () => {
+    const h = helpers();
+    const setShell = index(64); setShell.byLen.set(20, Object.create(Set.prototype) as Set<string>);
+    expect(() => h.refresh({ idx: setShell, db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+    h.setNext(() => setShell);
+    expect(() => h.refresh({ idx: index(64), db: {} }, 'fixture')).toThrow(/masking-snapshot-invalid/);
+  });
+
+  it('rejects attached Map state independently of native Map branding', () => {
+    const { checked } = helpers();
+    const value = index(64);
+    Object.defineProperty(value.byLen, Symbol('extra'), { value: 1 });
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects attached Set state independently of native Set branding', () => {
+    const { checked } = helpers();
+    const value = index(64);
+    value.byLen.set(20, new Set(['0'.repeat(64)]));
+    Object.defineProperty(value.byLen.get(20)!, 'hidden', { value: 1 });
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('accepts owner-created native Map and Set controls', () => {
+    const { checked } = helpers();
+    const value = index(64);
+    value.byLen.set(20, new Set(['0'.repeat(64)]));
+    expect(() => checked(value)).not.toThrow();
+  });
+
+  it.each([
+    ['texts contains itself', (value: ReturnType<typeof index>) => { value.belt.texts.push(value.belt.texts as unknown as string); value.belt.units.push(new Uint8Array(0)); }],
+    ['width table stores itself as a collision list', (value: ReturnType<typeof index>) => {
+      const widths = value.belt.widths as unknown as Array<{ table: Map<number, unknown> }>;
+      widths[0]!.table.set(7, widths[0]!.table);
+    }],
+    ['membership set stores itself as a hash', (value: ReturnType<typeof index>) => {
+      const hashes = new Set<unknown>(); hashes.add(hashes); value.byLen.set(20, hashes as Set<string>);
+    }],
+  ])('rejects cyclic supported %s at its required scalar position', (_name, mutate) => {
+    const { checked } = helpers();
+    const value = index(64);
+    mutate(value);
+    expect(() => checked(value)).toThrow();
+  });
+
+  it.each([0, -1])('rejects width.w %d while preserving signed pw and table-key compatibility', (w) => {
+    const { checked } = helpers();
+    const value = index(64);
+    const widths = value.belt.widths as unknown as Array<{ w: number }>;
+    widths[0]!.w = w;
+    expect(() => checked(value)).toThrow();
+  });
+
+  it.each([
+    ['grams', (value: ReturnType<typeof index>) => { value.belt.grams = -1; }],
+    ['overflow', (value: ReturnType<typeof index>) => { value.belt.overflow = -1; }],
+    ['collision offset', (value: ReturnType<typeof index>) => {
+      const widths = value.belt.widths as unknown as Array<{ table: Map<number, Array<{ unit: number; off: number }>> }>;
+      widths[0]!.table.set(7, [{ unit: 0, off: -1 }]);
+    }],
+    ['collision unit', (value: ReturnType<typeof index>) => {
+      const widths = value.belt.widths as unknown as Array<{ table: Map<number, Array<{ unit: number; off: number }>> }>;
+      widths[0]!.table.set(7, [{ unit: -1, off: 0 }]);
+    }],
+  ])('rejects nonnegative %s scalar slots', (_name, mutate) => {
+    const { checked } = helpers(); const value = index(64); mutate(value); expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects a nonpositive byLen key', () => {
+    const { checked } = helpers(); const value = index(64);
+    value.byLen.set(0, new Set(['0'.repeat(64)])); expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects a malformed hash member', () => {
+    const { checked } = helpers(); const value = index(64);
+    value.byLen.set(20, new Set(['not-a-hash'])); expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects text and unit length disagreements after both elements are otherwise valid', () => {
+    const { checked } = helpers(); const value = index(64); value.belt.texts[0] = 'short'; expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects a non-string text that otherwise has the matching concrete length', () => {
+    const { checked } = helpers(); const value = index(64);
+    value.belt.texts[0] = new String(value.belt.texts[0]!) as unknown as string;
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('rejects a non-safe width power and gram-table key', () => {
+    const { checked } = helpers();
+    const power = index(64); const pw = power.belt.widths as unknown as Array<{ pw: number }>; pw[0]!.pw = 1.5;
+    expect(() => checked(power)).toThrow();
+    const key = index(64); const table = key.belt.widths as unknown as Array<{ table: Map<number, unknown[]> }>;
+    table[0]!.table = new Map([[1.5, []]]); expect(() => checked(key)).toThrow();
+  });
+
+  it('rejects a collision unit outside the concrete units array', () => {
+    const { checked } = helpers(); const value = index(64);
+    const widths = value.belt.widths as unknown as Array<{ table: Map<number, Array<{ unit: number; off: number }>> }>;
+    widths[0]!.table.set(7, [{ unit: 1, off: 0 }]);
+    expect(() => checked(value)).toThrow();
+  });
+
+  it('admits exact-16MiB seed before acquisition and refuses seed+1 without calling acquisition', () => {
+    const h = helpers(); const base = h.material(index(64), 67_108_864) - 64; const exactBacking = 16_777_216 - base;
+    let calls = 0; const exact = index(exactBacking); h.setNext(() => { calls += 1; return exact; });
+    const exactRs = { idx: exact, db: {} } as Record<string, unknown>; expect(h.refresh(exactRs, 'fixture')).toBe(exact); expect(calls).toBe(1);
+    const over = index(exactBacking + 1); const overRs = { idx: over, db: {} } as Record<string, unknown>;
+    let refusal: unknown; try { h.refresh(overRs, 'fixture'); } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshots-material-cap' }); expect((refusal as Error).message).toBe('input-invalid: masking-snapshots-material-cap'); expect(calls).toBe(1); expect(overRs.maskingSnapshots).toBeUndefined(); expect(overRs.idx).toBe(over);
+  });
+
+  it('admits an exact per-index candidate and refuses one byte over without exposure', () => {
+    const h = helpers(); const base = h.material(index(64), 67_108_864) - 64; const exactBacking = 16_777_216 - base;
+    const seed = index(64); const exact = index(exactBacking); h.setNext(() => exact);
+    const exactRs = { idx: seed, db: {} } as Record<string, unknown>; expect(h.refresh(exactRs, 'fixture')).toBe(exact);
+    const failedRs = { idx: seed, db: {} } as Record<string, unknown>; h.setNext(() => seed); expect(h.refresh(failedRs, 'fixture')).toBe(seed);
+    const state = failedRs.maskingSnapshots as { snapshots: Array<{ idx: ReturnType<typeof emptyIndex>; material: number }>; material: number };
+    const beforeState = state; const beforeArray = state.snapshots; const beforeSnapshots = [...state.snapshots]; const beforeRepresentatives = state.snapshots.map((snapshot) => snapshot.idx);
+    const beforeContents = state.snapshots.map((snapshot) => ({ material: snapshot.material, content: indexContent(snapshot.idx) }));
+    const beforeIndex = failedRs.idx; const beforeMaterial = state.material; const candidate = index(exactBacking + 1); h.setNext(() => candidate);
+    let refusal: unknown; try { h.refresh(failedRs, 'fixture'); } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshots-material-cap' }); expect((refusal as Error).message).toBe('input-invalid: masking-snapshots-material-cap');
+    expect(failedRs.maskingSnapshots).toBe(beforeState); expect(failedRs.idx).toBe(beforeIndex); expect(state.material).toBe(beforeMaterial); expect(state.snapshots).toBe(beforeArray); expect(state.snapshots).toEqual(beforeSnapshots);
+    expect(state.snapshots.map((snapshot) => snapshot.idx)).toEqual(beforeRepresentatives); for (let i = 0; i < state.snapshots.length; i += 1) { expect(state.snapshots[i]).toBe(beforeSnapshots[i]); expect({ material: state.snapshots[i]!.material, content: indexContent(state.snapshots[i]!.idx) }).toEqual(beforeContents[i]); }
+    expect(state.snapshots.some((snapshot) => snapshot.idx === candidate)).toBe(false); expect(failedRs.idx).not.toBe(candidate);
+  });
+
+  it('refuses an invalid seed before candidate acquisition with fixed mapping', () => {
+    const h = helpers(); let calls = 0; h.setNext(() => { calls += 1; return comparisonIndex(); });
+    const invalid = comparisonIndex(); Object.defineProperty(invalid, Symbol('extra'), { value: 1 }); const rs = { idx: invalid, db: {} } as Record<string, unknown>;
+    let refusal: unknown; try { h.refresh(rs, 'fixture'); } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshot-invalid' }); expect((refusal as Error).message).toBe('input-invalid: masking-snapshot-invalid'); expect(calls).toBe(0); expect(rs.maskingSnapshots).toBeUndefined(); expect(rs.idx).toBe(invalid);
+  });
+
+  it('refuses an overflowing seed before candidate acquisition with fixed mapping', () => {
+    const h = helpers(); let calls = 0; h.setNext(() => { calls += 1; return comparisonIndex(); });
+    const overflow = comparisonIndex(); overflow.belt.overflow = 1; const rs = { idx: overflow, db: {} } as Record<string, unknown>;
+    let refusal: unknown; try { h.refresh(rs, 'fixture'); } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshot-belt-overflow' }); expect((refusal as Error).message).toBe('input-invalid: masking-snapshot-belt-overflow'); expect(calls).toBe(0); expect(rs.maskingSnapshots).toBeUndefined(); expect(rs.idx).toBe(overflow);
+  });
+
+  it.each([
+    ['malformed', (value: ReturnType<typeof comparisonIndex>) => Object.defineProperty(value, Symbol('extra'), { value: 1 }), 'masking-snapshot-invalid'],
+    ['overflowing', (value: ReturnType<typeof comparisonIndex>) => { value.belt.overflow = 1; }, 'masking-snapshot-belt-overflow'],
+  ])('maps %s candidate before exposure', (_name, mutate, detail) => {
+    const h = helpers(); const seed = comparisonIndex(); const candidate = comparisonIndex(); mutate(candidate); h.setNext(() => candidate);
+    const rs = { idx: seed, db: {} } as Record<string, unknown>; const returned = h.refresh.bind(null, rs, 'fixture');
+    let refusal: unknown; try { returned(); } catch (error) { refusal = error; }
+    const state = rs.maskingSnapshots as { snapshots: Array<{ idx: unknown }>; material: number };
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail }); expect((refusal as Error).message).toBe(`input-invalid: ${detail}`); expect(rs.idx).toBe(seed); expect(state.snapshots).toEqual([expect.objectContaining({ idx: seed })]); expect(state.snapshots.some((snapshot) => snapshot.idx === candidate)).toBe(false);
+  });
+
+  it('maps candidate acquisition failure without source detail', () => {
+    const h = helpers(); const seed = comparisonIndex(); const rs = { idx: seed, db: {} } as Record<string, unknown>;
+    const original = new Error('fixture acquisition detail must not escape'); h.setNext(() => { throw original; });
+    let failure: unknown; try { h.refresh(rs, 'fixture'); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(h.Refusal); expect(failure).not.toBe(original);
+    expect(failure).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshot-refresh-failed' }); expect((failure as Error).message).toBe('input-invalid: masking-snapshot-refresh-failed'); expect((failure as Error).message).not.toContain(original.message);
+    expect(rs.idx).toBe(seed); expect((rs.maskingSnapshots as { snapshots: unknown[] }).snapshots).toEqual([expect.objectContaining({ idx: seed })]);
+  });
+
+  it('maps candidate equality failure without source detail', () => {
+    const original = new Error('fixture equality detail must not escape');
+    const h = helpers(undefined, { same: () => { throw original; } });
+    const seed = comparisonIndex(); const rs = { idx: seed, db: {} } as Record<string, unknown>; h.setNext(() => comparisonIndex());
+    let failure: unknown; try { h.refresh(rs, 'fixture'); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(h.Refusal); expect(failure).not.toBe(original);
+    expect(failure).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshot-refresh-failed' }); expect((failure as Error).message).toBe('input-invalid: masking-snapshot-refresh-failed'); expect((failure as Error).message).not.toContain(original.message);
+    expect(rs.idx).toBe(seed); expect((rs.maskingSnapshots as { snapshots: unknown[] }).snapshots).toEqual([expect.objectContaining({ idx: seed })]);
+  });
+
+  it('passes candidate DriverRefusal through unchanged', () => {
+    const h = helpers(); const seed = comparisonIndex(); const expected = new h.Refusal('input-invalid', 'fixture-candidate-passthrough'); h.setNext(() => { throw expected; });
+    let failure: unknown; try { h.refresh({ idx: seed, db: {} }, 'fixture'); } catch (error) { failure = error; }
+    expect(failure).toBe(expected); expect(failure).toMatchObject({ word: 'input-invalid', detail: 'fixture-candidate-passthrough' }); expect((failure as Error).message).toBe('input-invalid: fixture-candidate-passthrough');
+  });
+
+  it('rethrows the same unexpected seed validation defect', () => {
+    const expected = new Error('fixture seed validation defect');
+    const h = helpers(undefined, { seed: () => { throw expected; } });
+    let failure: unknown; try { h.refresh({ idx: comparisonIndex(), db: {} }, 'fixture'); } catch (error) { failure = error; }
+    expect(failure).toBe(expected);
+  });
+
+  it('H4 passes the exact seed DriverRefusal object through unchanged', () => {
+    let expected: Error;
+    const h = helpers(undefined, { seed: () => { throw expected; } });
+    expected = new h.Refusal('input-invalid', 'fixture-seed-passthrough');
+    let failure: unknown; try { h.refresh({ idx: comparisonIndex(), db: {} }, 'fixture'); } catch (error) { failure = error; }
+    expect(failure).toBe(expected); expect(failure).toBeInstanceOf(h.Refusal);
+    expect(failure).toMatchObject({ word: 'input-invalid', detail: 'fixture-seed-passthrough' }); expect((failure as Error).message).toBe('input-invalid: fixture-seed-passthrough');
+  });
+
+  it('H4 independently initializes a valid seed', () => {
+    const h = helpers(); const seed = comparisonIndex(); const candidate = comparisonIndex(); let calls = 0;
+    h.setNext(() => { calls += 1; return candidate; }); const rs = { idx: seed, db: {} } as Record<string, unknown>;
+    expect(candidate).not.toBe(seed); expect(h.refresh(rs, 'fixture')).toBe(seed); expect(calls).toBe(1);
+    expect(rs.maskingSnapshots).toEqual({ snapshots: [{ idx: seed, material: h.material(seed, 16_777_216) }], material: h.material(seed, 16_777_216) });
+  });
+
+  const countSetup = () => {
+    const h = helpers();
+    const tagged = (n: number) => { const value = comparisonIndex(); value.byLen.set(30 + n, new Set([n.toString(16).padStart(64, '0')])); return value; };
+    const seed = tagged(0); const rs = { idx: seed, db: {} } as Record<string, unknown>;
+    let n = 1; h.setNext(() => tagged(n++)); for (let i = 0; i < 7; i += 1) h.refresh(rs, 'fixture');
+    return { h, seed, rs, tagged };
+  };
+  const aggregateSetup = () => {
+    const h = helpers(); const tagged = (n: number, target: number) => {
+      const probe = index(64); probe.byLen.set(40 + n, new Set([n.toString(16).padStart(64, '0')]));
+      const value = index(target - (h.material(probe, 67_108_864) - 64)); value.byLen.set(40 + n, new Set([n.toString(16).padStart(64, '0')])); return value;
+    };
+    const seed = tagged(0, 16_777_216); const rs = { idx: seed, db: {} } as Record<string, unknown>; let n = 1;
+    h.setNext(() => tagged(n++, 16_777_216)); for (let i = 0; i < 2; i += 1) h.refresh(rs, 'fixture');
+    h.setNext(() => tagged(n++, 16_777_216 - 588)); h.refresh(rs, 'fixture'); h.setNext(() => emptyIndex()); h.refresh(rs, 'fixture');
+    expect((rs.maskingSnapshots as { material: number }).material).toBe(67_108_864);
+    return { h, seed, rs, tagged };
+  };
+  const unchangedAfter = (rs: Record<string, unknown>) => {
+    const state = rs.maskingSnapshots as { snapshots: Array<{ idx: ReturnType<typeof emptyIndex>; material: number }>; material: number };
+    const array = state.snapshots; const snapshots = [...array]; const representatives = snapshots.map((snapshot) => snapshot.idx); const material = state.material; const current = rs.idx;
+    const contents = snapshots.map((snapshot) => ({ material: snapshot.material, content: indexContent(snapshot.idx) }));
+    return () => {
+      expect(rs.maskingSnapshots).toBe(state); expect(rs.idx).toBe(current); expect(state.snapshots).toBe(array); expect(state.material).toBe(material); expect(array).toHaveLength(snapshots.length);
+      for (let i = 0; i < snapshots.length; i += 1) {
+        expect(array[i]).toBe(snapshots[i]); expect(array[i]!.idx).toBe(representatives[i]);
+        expect({ material: array[i]!.material, content: indexContent(array[i]!.idx) }).toEqual(contents[i]);
+      }
+    };
+  };
+
+  it('H2 independently deduplicates unchanged at count capacity', () => {
+    const { h, seed, rs, tagged } = countSetup(); h.setNext(() => tagged(0)); expect(h.refresh(rs, 'fixture')).toBe(seed);
+    const candidate = tagged(0); const unchanged = unchangedAfter(rs);
+    expect(candidate).not.toBe(seed); h.setNext(() => candidate);
+    expect(h.refresh(rs, 'fixture')).toBe(seed); unchanged(); expect((rs.maskingSnapshots as { snapshots: unknown[] }).snapshots).toHaveLength(8);
+    expect(seed).not.toBe(candidate);
+  });
+
+  it.each(['invalid-count', 'material-aggregate', 'overflow-aggregate'] as const)('H2 %s candidate before decisions', (kind) => {
+    const setup = kind === 'invalid-count' ? countSetup() : aggregateSetup();
+    const candidate = kind === 'material-aggregate' ? index(16_777_216 - (setup.h.material(index(64), 67_108_864) - 64) + 1) : comparisonIndex();
+    if (kind === 'invalid-count') Object.defineProperty(candidate, Symbol('extra'), { value: 1 });
+    else { if (kind === 'overflow-aggregate') candidate.belt.overflow = 1; expect(() => setup.h.checked(candidate)).not.toThrow(); }
+    const detail = kind === 'invalid-count' ? 'masking-snapshot-invalid' : kind === 'material-aggregate' ? 'masking-snapshots-material-cap' : 'masking-snapshot-belt-overflow';
+    let calls = 0; let meters = 0; let equality = 0; const decisions: string[] = [];
+    // The forced match exposes early dedup; these rejected candidates are not claimed structurally equal.
+    const h = helpers(undefined, {
+      material: (value) => { if (value === candidate) meters += 1; },
+      same: (_a, value) => { if (value === candidate) { equality += 1; return true; } return undefined; },
+      decision: (value) => { decisions.push(value); },
+    });
+    const unchanged = unchangedAfter(setup.rs); h.setNext(() => { calls += 1; return candidate; });
+    let refusal: unknown; try { h.refresh(setup.rs, 'fixture'); } catch (error) { refusal = error; }
+    expect(calls).toBe(1); expect(equality, 'candidate equality must not precede rejection').toBe(0);
+    expect(decisions, 'capacity conditions must not precede candidate rejection').toEqual([]); expect(meters).toBe(1);
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail }); expect((refusal as Error).message).toBe(`input-invalid: ${detail}`); unchanged();
+  });
+
+  it('admits eight distinct snapshots, reuses unchanged at capacity, and refuses a ninth without exposure', () => {
+    const h = helpers(); const tagged = (n: number) => { const value = comparisonIndex(); value.byLen.set(30 + n, new Set([n.toString(16).padStart(64, '0')])); return value; };
+    const seed = tagged(0); const rs = { idx: seed, db: {} } as Record<string, unknown>;
+    let n = 1; h.setNext(() => tagged(n++)); for (let i = 0; i < 7; i += 1) h.refresh(rs, 'fixture');
+    const state = rs.maskingSnapshots as { snapshots: Array<{ idx: unknown }>; material: number }; const beforeMaterial = state.material;
+    expect(state.snapshots).toHaveLength(8);
+    h.setNext(() => tagged(0)); expect(h.refresh(rs, 'fixture')).toBe(seed); expect(state.snapshots).toHaveLength(8);
+    const beforeIndex = rs.idx;
+    const unchanged = unchangedAfter(rs); h.setNext(() => tagged(8)); let refusal: unknown; try { h.refresh(rs, 'fixture'); } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshots-count-cap' }); expect((refusal as Error).message).toBe('input-invalid: masking-snapshots-count-cap'); unchanged();
+    expect(rs.idx).toBe(beforeIndex); expect(state.snapshots).toHaveLength(8); expect(state.material).toBe(beforeMaterial);
+  });
+
+  it('admits exact aggregate material and refuses one charged byte over before exposure', () => {
+    const h = helpers();
+    const tagged = (n: number, target: number) => {
+      const probe = index(64); probe.byLen.set(40 + n, new Set([n.toString(16).padStart(64, '0')]));
+      const backing = target - (h.material(probe, 67_108_864) - 64);
+      const value = index(backing); value.byLen.set(40 + n, new Set([n.toString(16).padStart(64, '0')])); return value;
+    };
+    const seed = tagged(0, 16_777_216); const rs = { idx: seed, db: {} } as Record<string, unknown>;
+    let n = 1; h.setNext(() => tagged(n++, 16_777_216)); for (let i = 0; i < 2; i += 1) h.refresh(rs, 'fixture');
+    h.setNext(() => tagged(n++, 16_777_216 - 588)); h.refresh(rs, 'fixture');
+    h.setNext(() => emptyIndex()); h.refresh(rs, 'fixture');
+    const state = rs.maskingSnapshots as { snapshots: unknown[]; material: number }; const beforeIndex = rs.idx;
+    expect(state.material).toBe(67_108_864); expect(state.snapshots).toHaveLength(5);
+    const oneOverRs = { idx: seed, db: {} } as Record<string, unknown>;
+    let overN = 1; h.setNext(() => tagged(overN++, 16_777_216)); for (let i = 0; i < 2; i += 1) h.refresh(oneOverRs, 'fixture');
+    h.setNext(() => tagged(overN++, 16_777_216 - 587)); h.refresh(oneOverRs, 'fixture'); h.setNext(() => emptyIndex());
+    const oneOverState = oneOverRs.maskingSnapshots as { snapshots: Array<{ idx: ReturnType<typeof emptyIndex>; material: number }>; material: number };
+    const oneOverStateObject = oneOverState; const oneOverArray = oneOverState.snapshots; const oneOverSnapshots = [...oneOverState.snapshots]; const oneOverRepresentatives = oneOverState.snapshots.map((snapshot) => snapshot.idx);
+    const oneOverContents = oneOverState.snapshots.map((snapshot) => ({ material: snapshot.material, content: indexContent(snapshot.idx) }));
+    const oneOverIndex = oneOverRs.idx; const oneOverMaterial = oneOverState.material;
+    let refusal: unknown; try { h.refresh(oneOverRs, 'fixture'); } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshots-material-cap' }); expect((refusal as Error).message).toBe('input-invalid: masking-snapshots-material-cap');
+    expect(oneOverRs.maskingSnapshots).toBe(oneOverStateObject); expect(oneOverRs.idx).toBe(oneOverIndex); expect(oneOverState.material).toBe(oneOverMaterial); expect(oneOverState.snapshots).toBe(oneOverArray); expect(oneOverState.snapshots).toEqual(oneOverSnapshots);
+    expect(oneOverState.snapshots.map((snapshot) => snapshot.idx)).toEqual(oneOverRepresentatives); for (let i = 0; i < oneOverState.snapshots.length; i += 1) { expect(oneOverState.snapshots[i]).toBe(oneOverSnapshots[i]); expect({ material: oneOverState.snapshots[i]!.material, content: indexContent(oneOverState.snapshots[i]!.idx) }).toEqual(oneOverContents[i]); }
+    expect(oneOverState.snapshots).toHaveLength(4); expect(state.material).toBe(67_108_864); expect(rs.idx).toBe(beforeIndex);
+  });
+
+  it('deduplicates an independently allocated candidate at full aggregate without charge', () => {
+    const h = helpers(); const tagged = (n: number, target: number) => {
+      const probe = index(64); probe.byLen.set(40 + n, new Set([n.toString(16).padStart(64, '0')])); const backing = target - (h.material(probe, 67_108_864) - 64);
+      const value = index(backing); value.byLen.set(40 + n, new Set([n.toString(16).padStart(64, '0')])); return value;
+    };
+    const seed = tagged(0, 16_777_216); const rs = { idx: seed, db: {} } as Record<string, unknown>; let n = 1;
+    h.setNext(() => tagged(n++, 16_777_216)); for (let i = 0; i < 2; i += 1) h.refresh(rs, 'fixture'); h.setNext(() => tagged(n++, 16_777_216 - 588)); h.refresh(rs, 'fixture'); h.setNext(() => emptyIndex()); h.refresh(rs, 'fixture');
+    const state = rs.maskingSnapshots as { snapshots: unknown[]; material: number }; const beforeArray = state.snapshots; const beforeSnapshots = [...state.snapshots]; const beforeMaterial = state.material;
+    const equal = tagged(0, 16_777_216); expect(equal).not.toBe(seed); h.setNext(() => equal); expect(h.refresh(rs, 'fixture')).toBe(seed); expect(rs.idx).toBe(seed); expect(state.snapshots).toBe(beforeArray); expect(state.snapshots).toEqual(beforeSnapshots); expect(state.material).toBe(beforeMaterial);
+
+  });
+  it('H1 distinct small candidate refuses at full aggregate', () => {
+    const { h, rs } = aggregateSetup(); const unchanged = unchangedAfter(rs); h.setNext(() => comparisonIndex());
+    let refusal: unknown; try { h.refresh(rs, 'fixture'); } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshots-material-cap' }); expect((refusal as Error).message).toBe('input-invalid: masking-snapshots-material-cap'); unchanged();
+  });
+
 });

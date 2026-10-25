@@ -2837,69 +2837,130 @@ class MaskingSnapshotError extends Error {
 }
 const maskingInvalid = () => { throw new MaskingSnapshotError('invalid'); };
 const maskingMaterial = () => { throw new MaskingSnapshotError('material'); };
-/** Data-only exact record shape; getters and unrecognised fields are never admitted to a retained snapshot. */
+const MASKING_TYPED_ARRAY = Object.getPrototypeOf(Uint8Array.prototype);
+const MASKING_TYPED_ARRAY_LENGTH = Object.getOwnPropertyDescriptor(MASKING_TYPED_ARRAY, 'length').get;
+const MASKING_TYPED_ARRAY_BUFFER = Object.getOwnPropertyDescriptor(MASKING_TYPED_ARRAY, 'buffer').get;
+const MASKING_ARRAY_BUFFER_BYTES = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength').get;
+const MASKING_ARRAY_BUFFER_RESIZABLE = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'resizable').get;
+const MASKING_ARRAY_BUFFER_DETACHED = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'detached').get;
+const MASKING_MAP_ENTRIES = Map.prototype.entries;
+const MASKING_SET_VALUES = Set.prototype.values;
+/** Complete data-only shape checks reject attached or accessor state before reading admitted values. */
 function maskingRecord(value, keys) {
   if (value === null || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) maskingInvalid();
-  const own = Object.keys(value).sort();
-  if (own.length !== keys.length || own.some((key, i) => key !== keys[i])) maskingInvalid();
-  for (const key of keys) if (Object.getOwnPropertyDescriptor(value, key)?.get !== undefined || Object.getOwnPropertyDescriptor(value, key)?.set !== undefined) maskingInvalid();
+  const own = Reflect.ownKeys(value);
+  if (own.length !== keys.length) maskingInvalid();
+  for (const key of keys) {
+    if (!own.includes(key)) maskingInvalid();
+    const d = Object.getOwnPropertyDescriptor(value, key);
+    if (d === undefined || !Object.hasOwn(d, 'value') || d.enumerable !== true || d.configurable !== true || d.writable !== true) maskingInvalid();
+  }
   return value;
 }
-/** A concrete PairIndex is deliberately stricter than its public membership-only interface. */
-function maskingIndexChecked(idx) {
+function maskingArray(value) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) maskingInvalid();
+  const length = Object.getOwnPropertyDescriptor(value, 'length');
+  if (length === undefined || !Object.hasOwn(length, 'value') || length.enumerable !== false || length.configurable !== false || length.writable !== true) maskingInvalid();
+  if (Reflect.ownKeys(value).length !== length.value + 1) maskingInvalid();
+  return { value, length: length.value };
+}
+function maskingArrayValue(array, i) {
+  const d = Object.getOwnPropertyDescriptor(array.value, String(i));
+  if (d === undefined || !Object.hasOwn(d, 'value') || d.enumerable !== true || d.configurable !== true || d.writable !== true) maskingInvalid();
+  return d.value;
+}
+function maskingMap(value) {
+  if (!(value instanceof Map) || Object.getPrototypeOf(value) !== Map.prototype || Reflect.ownKeys(value).length !== 0) maskingInvalid();
+  try { MASKING_MAP_ENTRIES.call(value); } catch { maskingInvalid(); }
+  return value;
+}
+function maskingSet(value) {
+  if (!(value instanceof Set) || Object.getPrototypeOf(value) !== Set.prototype || Reflect.ownKeys(value).length !== 0) maskingInvalid();
+  try { MASKING_SET_VALUES.call(value); } catch { maskingInvalid(); }
+  return value;
+}
+function maskingBytes(value) {
+  if (!(value instanceof Uint8Array) || Object.getPrototypeOf(value) !== Uint8Array.prototype) maskingInvalid();
+  let length; let buffer;
+  try { length = MASKING_TYPED_ARRAY_LENGTH.call(value); buffer = MASKING_TYPED_ARRAY_BUFFER.call(value); } catch { maskingInvalid(); }
+  if (Reflect.ownKeys(value).length !== length) maskingInvalid();
+  if (Object.getPrototypeOf(buffer) !== ArrayBuffer.prototype || Reflect.ownKeys(buffer).length !== 0) maskingInvalid();
+  let backingBytes; let resizable; let detached;
+  try {
+    resizable = MASKING_ARRAY_BUFFER_RESIZABLE.call(buffer);
+    detached = MASKING_ARRAY_BUFFER_DETACHED.call(buffer);
+  } catch { maskingInvalid(); }
+  if (resizable !== false) maskingInvalid();
+  if (detached !== false) maskingInvalid();
+  try { backingBytes = MASKING_ARRAY_BUFFER_BYTES.call(buffer); } catch { maskingInvalid(); }
+  if (!Number.isSafeInteger(backingBytes) || backingBytes < length) maskingInvalid();
+  return { value, length, backingBytes };
+}
+function maskingByteElements(bytes) {
+  for (let i = 0; i < bytes.length; i += 1) {
+    const d = Object.getOwnPropertyDescriptor(bytes.value, String(i));
+    if (d === undefined || !Object.hasOwn(d, 'value') || d.enumerable !== true || d.configurable !== true || d.writable !== true) maskingInvalid();
+  }
+}
+/** Validate and charge one concrete index in the same fixed-depth traversal. */
+function maskingMaterialOf(idx, limit) {
+  let total = 0;
+  const add = (n) => { if (!Number.isSafeInteger(n) || n < 0 || total > limit - n) maskingMaterial(); total += n; };
+  const string = (value) => { if (typeof value !== 'string') maskingInvalid(); add(value.length * 2); };
+  const number = (value) => { if (!Number.isSafeInteger(value)) maskingInvalid(); add(8); };
+  const nonnegative = (value) => { if (!Number.isSafeInteger(value) || value < 0) maskingInvalid(); add(8); };
+  const positive = (value) => { if (!Number.isSafeInteger(value) || value < 1) maskingInvalid(); add(8); };
+  const record = (keys) => { add(64); for (const key of keys) { add(16); add(key.length * 2); } };
   const index = maskingRecord(idx, ['belt', 'byLen']);
-  if (!(index.byLen instanceof Map) || index.belt === null || index.belt === undefined) maskingInvalid();
-  for (const [len, hashes] of index.byLen) {
-    if (!Number.isSafeInteger(len) || len < 1 || !(hashes instanceof Set)) maskingInvalid();
-    for (const hash of hashes) if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash)) maskingInvalid();
-  }
+  record(['belt', 'byLen']);
   const belt = maskingRecord(index.belt, ['grams', 'overflow', 'texts', 'units', 'widths']);
-  if (!Array.isArray(belt.units) || !Array.isArray(belt.texts) || !Array.isArray(belt.widths)
-    || !Number.isSafeInteger(belt.grams) || belt.grams < 0 || !Number.isSafeInteger(belt.overflow) || belt.overflow < 0
-    || belt.units.length !== belt.texts.length) maskingInvalid();
-  for (let i = 0; i < belt.units.length; i += 1) {
-    if (!(belt.units[i] instanceof Uint8Array) || typeof belt.texts[i] !== 'string') maskingInvalid();
+  record(['grams', 'overflow', 'texts', 'units', 'widths']);
+  nonnegative(belt.grams); nonnegative(belt.overflow);
+  const texts = maskingArray(belt.texts); const units = maskingArray(belt.units); const widths = maskingArray(belt.widths);
+  if (units.length !== texts.length) maskingInvalid();
+  add(64);
+  for (let i = 0; i < texts.length; i += 1) { add(8); string(maskingArrayValue(texts, i)); }
+  add(64);
+  for (let i = 0; i < units.length; i += 1) {
+    add(8);
+    const bytes = maskingBytes(maskingArrayValue(units, i));
+    add(64 + bytes.backingBytes);
+    maskingByteElements(bytes);
+    if (bytes.length !== String(maskingArrayValue(texts, i)).length) maskingInvalid();
   }
-  for (const width of belt.widths) {
-    const w = maskingRecord(width, ['pw', 'table', 'w']);
-    if (!Number.isSafeInteger(w.w) || w.w < 1 || !Number.isSafeInteger(w.pw) || !(w.table instanceof Map)) maskingInvalid();
-    for (const [key, collisions] of w.table) {
-      if (!Number.isSafeInteger(key) || !Array.isArray(collisions)) maskingInvalid();
-      for (const collision of collisions) {
-        const c = maskingRecord(collision, ['off', 'unit']);
-        if (!Number.isSafeInteger(c.unit) || c.unit < 0 || c.unit >= belt.units.length || !Number.isSafeInteger(c.off) || c.off < 0) maskingInvalid();
+  add(64);
+  for (let i = 0; i < widths.length; i += 1) {
+    add(8);
+    const width = maskingRecord(maskingArrayValue(widths, i), ['pw', 'table', 'w']);
+    record(['pw', 'table', 'w']); number(width.pw); positive(width.w);
+    const table = maskingMap(width.table);
+    add(64);
+    for (const [key, collisionsValue] of MASKING_MAP_ENTRIES.call(table)) {
+      add(32); number(key);
+      const collisions = maskingArray(collisionsValue);
+      add(64);
+      for (let j = 0; j < collisions.length; j += 1) {
+        add(8);
+        const collision = maskingRecord(maskingArrayValue(collisions, j), ['off', 'unit']);
+        record(['off', 'unit']); nonnegative(collision.off); nonnegative(collision.unit);
+        if (collision.unit >= units.length) maskingInvalid();
       }
     }
   }
-  return index;
-}
-/** Charge every material occurrence without serialising sensitive values. */
-function maskingMaterialOf(idx, limit) {
-  const add = (n) => { if (!Number.isSafeInteger(n) || n < 0 || total > limit - n) maskingMaterial(); total += n; };
-  const string = (value) => { add(value.length * 2); };
-  const number = () => { add(8); };
-  const record = (keys, values) => { add(64); for (let i = 0; i < keys.length; i += 1) { add(16); string(keys[i]); values[i](); } };
-  const array = (values) => { add(64); for (const value of values) { add(8); value(); } };
-  const map = (entries) => { add(64); for (const [key, value] of entries) { add(32); key(); value(); } };
-  const set = (values) => { add(64); for (const value of values) { add(16); value(); } };
-  let total = 0;
-  const index = maskingIndexChecked(idx);
-  const belt = index.belt;
-  const meterBelt = () => record(['grams', 'overflow', 'texts', 'units', 'widths'], [
-    number, number,
-    () => array(belt.texts.map((text) => () => string(text))),
-    () => array(belt.units.map((unit) => () => add(64 + unit.byteLength))),
-    () => array(belt.widths.map((width) => () => record(['pw', 'table', 'w'], [
-      number,
-      () => map([...width.table].map(([key, collisions]) => [() => number(), () => array(collisions.map((c) => () => record(['off', 'unit'], [number, number]))) ])),
-      number,
-    ]))),
-  ]);
-  record(['belt', 'byLen'], [meterBelt, () => map([...index.byLen].map(([len, hashes]) => [() => number(), () => set([...hashes].map((hash) => () => string(hash)))]))]);
+  const byLen = maskingMap(index.byLen);
+  add(64);
+  for (const [len, hashesValue] of MASKING_MAP_ENTRIES.call(byLen)) {
+    add(32); number(len);
+    if (len < 1) maskingInvalid();
+    const hashes = maskingSet(hashesValue);
+    add(64);
+    for (const hash of MASKING_SET_VALUES.call(hashes)) { add(16); if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash)) maskingInvalid(); add(hash.length * 2); }
+  }
   return total;
 }
+function maskingIndexChecked(idx) { maskingMaterialOf(idx, Number.MAX_SAFE_INTEGER); return idx; }
 function maskingIndexSame(a, b) {
-  const aa = maskingIndexChecked(a); const bb = maskingIndexChecked(b);
+  const aa = a; const bb = b;
   if (aa.byLen.size !== bb.byLen.size) return false;
   const ai = aa.byLen.entries(); const bi = bb.byLen.entries();
   for (;;) { const x = ai.next(); const y = bi.next(); if (x.done || y.done) { if (x.done !== y.done) return false; break; }
@@ -2908,7 +2969,10 @@ function maskingIndexSame(a, b) {
   }
   const ab = aa.belt; const bbelt = bb.belt;
   if (ab.grams !== bbelt.grams || ab.overflow !== bbelt.overflow || ab.units.length !== bbelt.units.length || ab.texts.length !== bbelt.texts.length || ab.widths.length !== bbelt.widths.length) return false;
-  for (let i = 0; i < ab.units.length; i += 1) if (!Buffer.from(ab.units[i]).equals(Buffer.from(bbelt.units[i])) || ab.texts[i] !== bbelt.texts[i]) return false;
+  for (let i = 0; i < ab.units.length; i += 1) {
+    if (ab.units[i].buffer.byteLength !== bbelt.units[i].buffer.byteLength || ab.units[i].length !== bbelt.units[i].length || ab.texts[i] !== bbelt.texts[i]) return false;
+    for (let j = 0; j < ab.units[i].length; j += 1) if (ab.units[i][j] !== bbelt.units[i][j]) return false;
+  }
   for (let i = 0; i < ab.widths.length; i += 1) {
     const x = ab.widths[i]; const y = bbelt.widths[i]; if (x.w !== y.w || x.pw !== y.pw || x.table.size !== y.table.size) return false;
     const xi = x.table.entries(); const yi = y.table.entries(); for (;;) { const p = xi.next(); const q = yi.next(); if (p.done || q.done) { if (p.done !== q.done) return false; break; }
@@ -2927,7 +2991,7 @@ function refreshPairIndex(rs, home) {
   let state = rs.maskingSnapshots;
   if (state === undefined) {
     try {
-      const seed = maskingIndexChecked(rs.idx); const material = maskingMaterialOf(seed, MASKING_SNAPSHOT_MATERIAL_MAX);
+      const seed = rs.idx; const material = maskingMaterialOf(seed, MASKING_SNAPSHOT_MATERIAL_MAX);
       if (seed.belt.overflow > 0) refuse('input-invalid', 'masking-snapshot-belt-overflow');
       state = { snapshots: [{ idx: seed, material }], material };
       rs.maskingSnapshots = state;
@@ -2939,7 +3003,7 @@ function refreshPairIndex(rs, home) {
   }
   let candidate; let material;
   try {
-    candidate = maskingIndexChecked(pairIndexOf(rs.db, home));
+    candidate = pairIndexOf(rs.db, home);
     material = maskingMaterialOf(candidate, MASKING_SNAPSHOT_MATERIAL_MAX);
     if (candidate.belt.overflow > 0) refuse('input-invalid', 'masking-snapshot-belt-overflow');
     const retained = state.snapshots.find((snapshot) => maskingIndexSame(snapshot.idx, candidate));
