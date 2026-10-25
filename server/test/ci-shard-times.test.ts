@@ -1,4 +1,4 @@
-// Shard planner true durations (ARCH rank 2 of the 2026-10-25 landing measurement). The planner was fed
+// Shard planner true durations (rank 2 of the 2026-10-25 landing root-cause measurement). The planner was fed
 // `endTime - startTime` of vitest's JSON report, which drops `beforeAll` and collection time, so a file that
 // spends 400 s in its hooks was planned at 0.5 s. This file pins (1) what the planner did before, as a
 // characterization, then (2) the whole-file wall time a reporter now records, and (3) the longest-first order
@@ -109,15 +109,22 @@ describe('file-times reporter (real vitest run)', () => {
 
 describe('vitest.select.config.ts sequencer', () => {
   const serverRootTsx = path.join(serverRoot, 'node_modules', '.bin', 'tsx');
-  function sortedBy(env: Record<string, string>, moduleIds: string[]): string[] {
+  // `sharded` stands in for a `--shard=i/n` run; `sizes` (keyed `:<server-relative path>`, as BaseSequencer
+  // keys its cache) are the file sizes BaseSequencer's default order falls back to with no past results.
+  function sortedBy(env: Record<string, string>, moduleIds: string[],
+    { sharded = false, sizes = {} }: { sharded?: boolean, sizes?: Record<string, number> } = {}): string[] {
     const dir = mkTmp('ci-shard-times-seq-');
     const target = path.join(serverRoot, 'vitest.select.config.ts').replace(/\\/g, '/');
     const script = path.join(dir, 'run.mts');
     writeFileSync(script, [
       `import cfg from '${target}';`,
       'const Seq = (cfg as any).test.sequence.sequencer;',
-      `const files = ${JSON.stringify(moduleIds)}.map((moduleId) => ({ moduleId }));`,
-      'const out = await new Seq({}).sort(files);',
+      "const project = { name: '', config: { sequence: { groupOrder: 0 }, isolate: true } };",
+      `const files = ${JSON.stringify(moduleIds)}.map((moduleId) => ({ moduleId, project }));`,
+      `const sizes: Record<string, number> = ${JSON.stringify(sizes)};`,
+      `const ctx = { config: { root: ${JSON.stringify(serverRoot)}, ${sharded ? 'shard: { index: 1, count: 2 }' : ''} },`,
+      '  cache: { getFileTestResults: () => undefined, getFileStats: (k: string) => (k in sizes ? { size: sizes[k] } : undefined) } };',
+      'const out = await new Seq(ctx).sort(files);',
       'process.stdout.write(JSON.stringify(out.map((f: any) => f.moduleId)));',
     ].join('\n'), 'utf8');
     const e: NodeJS.ProcessEnv = { ...process.env };
@@ -144,5 +151,23 @@ describe('vitest.select.config.ts sequencer', () => {
     writeFileSync(list, 'test/c.test.ts\ntest/a.test.ts\ntest/b.test.ts\n');
     expect(sortedBy({ CCRC_TEST_LIST: list }, [id('a'), id('b'), id('c')]))
       .toEqual([id('c'), id('a'), id('b')]);
+  });
+
+  it('keeps every specification when two share a moduleId (one file in two projects)', () => {
+    const dir = mkTmp('ci-shard-times-seq-d-');
+    const list = path.join(dir, 'tests.txt');
+    writeFileSync(list, 'test/b.test.ts\ntest/a.test.ts\n');
+    expect(sortedBy({ CCRC_TEST_LIST: list }, [id('a'), id('b'), id('a')]))
+      .toEqual([id('b'), id('a'), id('a')]);
+  });
+
+  it('under --shard with no recorded times, keeps BaseSequencer\'s default order (not the list order)', () => {
+    const dir = mkTmp('ci-shard-times-seq-s-');
+    const list = path.join(dir, 'tests.txt');
+    writeFileSync(list, 'test/a.test.ts\ntest/b.test.ts\ntest/c.test.ts\n');
+    // BaseSequencer with no past results runs larger files first.
+    const sizes = { ':test/a.test.ts': 1, ':test/b.test.ts': 3, ':test/c.test.ts': 2 };
+    expect(sortedBy({ CCRC_TEST_LIST: list }, [id('a'), id('b'), id('c')], { sharded: true, sizes }))
+      .toEqual([id('b'), id('c'), id('a')]);
   });
 });
