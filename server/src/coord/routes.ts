@@ -346,8 +346,9 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
  */
 function childReclaimPort(deps: Deps, coord: CoordStore): (req: ChildReclaimRequest) => void {
   return (req) => {
-    void childReclaimUnlessDisabled({ io: deps.io, registryDir: deps.cfg.registryDir, coord, notifyLog: deps.notifyLog },
-      () => deps.queue.run(req.sessionId, () => reclaimChild({
+    void deps.queue.run(req.sessionId, () => childReclaimUnlessDisabled(
+      { io: deps.io, registryDir: deps.cfg.registryDir, coord, notifyLog: deps.notifyLog },
+      () => reclaimChild({
         coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
         fleetState: deps.fleetState, viewers: deps.viewers, notifyLog: deps.notifyLog,
       }, req))).catch((err: unknown) => {
