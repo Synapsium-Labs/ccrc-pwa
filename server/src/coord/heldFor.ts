@@ -24,7 +24,7 @@
 import { ASK_OPERATOR_PRINCIPAL, type AskMintReleaseReason, type ChildMark } from '../../../shared/api.js';
 import type { SessionRecord } from '../registry.js';
 import { childBirthOf } from './childSpent.js';
-import { childParentOf, incarnationOf } from './runBinding.js';
+import { bindingOf, childParentOf, hasOwnerlessUndecidedOpen, incarnationOf } from './runBinding.js';
 import { claimantMeasuredDead, measureClaimant, type ReclaimDeps } from './reclaim.js';
 
 export type HeldFor =
@@ -59,7 +59,13 @@ export async function heldFor(
     // No claimant on the newest open run naming the child — or no open run at all, which is not a child (spec §4).
     const sib = coord.openRunsForSession(childId, undefined, incarnation);
     if (!sib.ok) throw new Error(`heldFor: ${sib.detail}`);
-    if (sib.siblings.length === 0) return notAChild;
+    if (sib.siblings.length === 0) {
+      // An ownerless open run the binding cannot place (a wave N >= 2 planned before the birth, bound without a stamp)
+      // still counts as a sibling: the ruling on ARCH-62 slice 1 keeps today's `run-unclaimed` for it.
+      const series = coord.bindingRunsOf(childId);
+      if (!series.ok) throw new Error(`heldFor: ${series.detail}`);
+      if (!hasOwnerlessUndecidedOpen(bindingOf(series.runs, incarnation))) return notAChild;
+    }
     return nobody('run-unclaimed');
   }
   if (minting.run.claimedBy === null) return nobody('run-unclaimed');

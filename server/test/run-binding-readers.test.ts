@@ -107,6 +107,24 @@ describe('the readers take the worker\'s incarnation (ARCH-62)', () => {
     const after = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: w1 } as never, [], BORN + 5000);
     expect(after).toEqual({ kind: 'not-a-child' });
   });
+
+  it('heldFor: an ownerless undecided open run still counts as a sibling, so the answer is released / run-unclaimed (ruling on slice 1)', async () => {
+    // An unstamped wave 2 opened before the birth (undecidable), and an ownerless closed wave 1 (the mark).
+    const s = store();
+    const w1 = open(s, 'prog-a', 'coord-1');
+    const w2 = open(s, 'prog-b', 'coord-1');
+    s.db.prepare('UPDATE runs SET openedAt = ?, claimedBy = NULL WHERE id IN (?, ?)').run(BORN - 1000, w1, w2);
+    s.setSession(w1, 'demo-w', BORN);
+    s.setSession(w2, 'demo-w');
+    s.db.prepare('UPDATE runs SET dispatchStartedAt = ? WHERE id = ?').run(BORN, w1);
+    finish(s, w1);
+    const verdict = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: w1 } as never, [], BORN + 5000);
+    expect(verdict).toMatchObject({ kind: 'released', runId: w1, reason: 'run-unclaimed' });
+    // Once that run closes too, nothing is open any more: not a child.
+    finish(s, w2);
+    const after = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: w1 } as never, [], BORN + 5000);
+    expect(after).toEqual({ kind: 'not-a-child' });
+  });
 });
 
 const laneDeps = (s: CoordStore, markRunId: number): DriftLaneDeps => ({
