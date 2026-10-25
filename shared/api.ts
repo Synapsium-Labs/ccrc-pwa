@@ -17,6 +17,11 @@ import type { CHECKS_MAIL_TOKEN } from './landing.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
+/** Whether a session is there (ARCH-48, #783): the wire word `readSession` derives (`server/src/sessionReading.ts`). The
+ *  ONE definition, in L0, so the frame's field and the reading's part cannot name different words. */
+export const PRESENCES = ['alive', 'asleep', 'dead', 'unknown'] as const;
+export type Presence = typeof PRESENCES[number];
+
 /** Which attention bucket a session belongs to. THE authority: the fleet
  *  screen's sections, its counts and the row's own state word all read this one
  *  field, so they cannot disagree. Computed by `sessionBucket` below — which
@@ -305,6 +310,18 @@ export interface FleetSession {
    *  malformed marker. ADDITIVE: the row's lifecycle reads `stopped` and its bucket `dead` as for any deliberate stop
    *  (no new `SessionBucket` member), and this field alone tells a sleeping session from one that is gone. */
   hibernatedAt: number | null;
+  /** ARCH-48 (#783): whether this session is there, computed ONCE by the server's `readSession` (`sessionReading.ts`) and
+   *  only rendered by a reader: `alive`, `asleep` (hibernated, woken by mail or ensure), `dead` (the pane is gone and the
+   *  lifecycle is one `lifecycleIsDead` names) or `unknown` (a doubt: tmux did not answer, the lifecycle could not be
+   *  read; doubt is never `dead`). ADDITIVE: no `FLEET_PROTO` bump, and an older server omits it, so a reader treats an
+   *  absent key as "not said" (a cached row revives without it). */
+  presence?: Presence;
+  /** ARCH-48 (#783): when a `dead` presence began, epoch MS, from the stop stamp. THE NARROW READING: set ONLY for a
+   *  `stopped` death (the stop stamp is the death's own instant), and null for every other row. A dead `orphan` gets null
+   *  even though its last supervisor heartbeat has a time: that time is when supervision was last seen, not when the
+   *  session died, and dating an orphan from it is a later decision. `never-started` has nothing to date. ADDITIVE like
+   *  `presence`. */
+  deadSince?: number | null;
   /** How many graph READS this session has made — `hookstate.ts`'s
    *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
    *  bump, and an older peer that omits it revives as `null` below.

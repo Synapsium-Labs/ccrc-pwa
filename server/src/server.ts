@@ -2663,10 +2663,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/interrupt', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    // D-5236: what Escape would interrupt, from the RAW live word (never `liveStatus()`'s collapse, which reads `shell`
+    // D-5236: what Escape would interrupt, from the RAW live word (never `liveSessionStatus()`'s collapse, which reads `shell`
     // and `waiting` busy) and the frame's row with its hook stamp — the turn reads' one home, `turnverdict.ts`.
     // `interruptVerdict` holds the rule. A row that cannot be found, or a word that cannot be read, is `not-busy`, as
-    // `liveStatus()` answered it (D-115); with an unmeasured identity no row is read, so any non-idle word sends Escape.
+    // the old interrupt reader answered it (D-115); with an unmeasured identity no row is read, so any non-idle word sends Escape.
     const res = await interrupt(sendDeps, id, async (): Promise<InterruptVerdict> => {
       const read = await readSessionRecord(deps.io, deps.cfg, id);
       // `bad-id` is masked here (spec §2.3): `knownId` above refuses a non-registry id before this read. Were it ever
