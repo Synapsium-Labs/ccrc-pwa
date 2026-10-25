@@ -2192,8 +2192,9 @@ the rescue never chain-waits it.
 box's installed tree and speaks the ChatGPT backend's Responses route itself, with no LiteLLM gateway and no LiteLLM
 prompt. It listens on the lane's `proxyPort`, takes the lane's gateway key (read in its own process, never put in its
 environment) and runs under the shim's unit name, so the launcher and Claude Code's settings do not change and the shim
-and the bridge can never both serve the lane's port (the LiteLLM tier has its own port and unit, so it can run beside
-a bridge, a tier started by hand say; `start` then refuses the lane `retired-tier-running` and doctor FAILs it, below).
+and the bridge can never both serve the lane's port (the LiteLLM tier has its own port and unit, so it can still run
+beside a bridge, for example one started by hand; `start` then refuses the lane `retired-tier-running` and doctor FAILs
+it, below).
 It runs on the system `python3`, 3.9 or later (below that `ccrc codex start` refuses `python-too-old`), and its tier
 needs no LiteLLM runtime. It sends `originator: ccrc` and a ccrc user agent, never presenting itself as Codex. Claude
 Code's top-level system prompt travels as the first developer message, with no `instructions` field and no prompt of the

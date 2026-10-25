@@ -1496,8 +1496,8 @@ const timeOf = (v) => (typeof v === 'string' && Number.isFinite(Date.parse(v)) ?
  *   6. Writes `{tokens: to, setAt: now, source: "refusal", refusedTokensEstimate: tokens}` over the entry.
  *  Every refusal decided at steps 1 to 6, lowered or skipped, is recorded in `refusalsApplied` in the pass's one
  *  write, so each is read once. A refusal entry this build cannot read (not an object, no positive integer
- *  `tokens`, no ISO `at`, or a key whose model part is not a model id) is skipped `refusal-invalid` and NOT recorded:
- *  there is no `at` to record. The windows file keeps every key it does not know (`writeWindows` writes the edited
+ *  `tokens`, no ISO `at`, or a key whose model part is not a model id) is skipped `refusal-invalid` and NOT recorded,
+ *  so each pass reads it again. The windows file keeps every key it does not know (`writeWindows` writes the edited
  *  clone); one re-materialise follows when anything was lowered. An absent stats file answers `stats: "absent"` and
  *  writes nothing; an unreadable windows file is refused, as the two window verbs refuse it. */
 function lowerWindowsOp(a, account, registry, catalogue, reading) {

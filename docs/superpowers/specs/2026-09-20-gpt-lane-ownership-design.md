@@ -1587,7 +1587,7 @@ section moved:** every hunk above this heading is a same-line pointer. D18 and D
   Stage 2 reads a running bridge as a listener it cannot identify and refuses it rather than adopting it as its shim.
   The rest of §6.4 does not hold in `direct` mode, because nothing is relayed: replies are rebuilt from the backend's
   events, `count_tokens` and `/v1/models` are answered locally, and every other path is 404 to a keyed request (an
-  unkeyed one is 401, as on every route but `/ccgpt/lane`).
+  unkeyed one is 401, as is every request but `GET /ccgpt/lane`).
 - **Where the rest is written.** What a `direct` lane runs, refreshes and records, the doctor's rows by mode, D25's
   window lowering and the rollback rule ("switch a `direct` lane back before a rollback to a build from before this
   one") are in the README's "A ChatGPT/Codex lane" and `ccrc models` sections, and in the codex-bridge spec and its
