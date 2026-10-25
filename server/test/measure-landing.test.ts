@@ -386,6 +386,32 @@ describe('measure-landing: queue-ejections — a merge_group run that failed, by
     expect(cause(['FAIL test/rings/totality.test.ts', 'AssertionError: no row reaches these: add a file row'])).toBe('real:test');
   });
 
+  it('failure_cause: KNOWN LIMIT — a bare count comparison has no unit, so it reads as timing (the ledger states it)', () => {
+    // pinned so a change to TIMING is deliberate: the ledger's caveat on the flake/real split names this form
+    expect(cause(['FAIL test/rows.test.ts', 'AssertionError: expected 0 to be greater than 0'])).toBe('flake:timing');
+    expect(py('m.TIMING.pattern', null)).toContain('expected \\d+(\\.\\d+)? to be (less than|greater than)');
+  });
+
+  it('collapse_failures: overlapping build-2 runs that fail seconds apart on a shared test are one event', () => {
+    const row = (at: string, pr: number, cause: string, tests: string[]) => ({ run: pr, at, pr, cause, tests });
+    const groups = (rows: object[]): number[][] =>
+      py('[[r["pr"] for r in g] for g in m.collapse_failures(a)]', rows);
+    // same test, 2 s apart: one event, oldest first
+    expect(groups([row('2026-10-24T09:11:29Z', 1195, 'real:test', ['t/a.test.ts', 't/b.test.ts']),
+      row('2026-10-24T09:11:27Z', 1200, 'real:test', ['t/a.test.ts'])])).toEqual([[1200, 1195]]);
+    // 1 s apart but no shared test: two events
+    expect(groups([row('2026-10-25T10:41:53Z', 1357, 'flake:vitest-teardown', []),
+      row('2026-10-25T10:41:54Z', 1367, 'real:test', ['t/c.test.ts'])])).toEqual([[1357], [1367]]);
+    // shared test, but minutes apart: two events
+    expect(groups([row('2026-10-24T08:51:50Z', 1200, 'real:test', ['t/a.test.ts']),
+      row('2026-10-24T09:11:27Z', 1195, 'real:test', ['t/a.test.ts'])])).toEqual([[1200], [1195]]);
+    // no test on either side: the same cause joins, a different one does not
+    expect(groups([row('2026-10-25T10:00:00Z', 1, 'flake:broken-pipe', []), row('2026-10-25T10:00:03Z', 2, 'flake:broken-pipe', [])]))
+      .toEqual([[1, 2]]);
+    expect(groups([row('2026-10-25T10:00:00Z', 1, 'flake:broken-pipe', []), row('2026-10-25T10:00:03Z', 2, 'unclassified', [])]))
+      .toEqual([[1], [2]]);
+  });
+
   it('failure_cause: a compile error is real, a failed setup step is infra, nothing readable is unclassified', () => {
     expect(cause(['test/x.test.ts(35,53): error TS2345: Argument of type'], ['Test'])).toBe('real:typecheck');
     expect(cause([], ['Run ./.github/actions/server-deps'])).toBe('infra:setup-step');
@@ -406,19 +432,23 @@ describe('measure-landing: queue-ejections — a merge_group run that failed, by
     const run = (id: number, concl: string | null, pr: number) => JSON.stringify({ id, created_at: '2026-10-22T00:00:00Z', conclusion: concl,
       head_branch: `gh-readonly-queue/main/pr-${pr}-aaaaaaa` });
     const h = stubHome([
-      `  *actions/runs?event=merge_group*) echo '{"workflow_runs":[${run(1, 'failure', 7)},${run(2, 'success', 7)},${run(3, 'success', 8)},${run(4, 'cancelled', 9)}]}' ;;`,
+      `  *actions/runs?event=merge_group*) echo '{"workflow_runs":[${run(1, 'failure', 7)},${run(2, 'success', 7)},${run(3, 'success', 8)},${run(4, 'cancelled', 9)},${run(5, 'failure', 8)}]}' ;;`,
       '  *actions/runs/1/jobs*) echo \'{"jobs":[{"id":11,"name":"test (server)","conclusion":"failure","steps":[{"name":"Refuse a prerequisite that did not succeed (no script involved)","conclusion":"failure"}]},{"id":12,"name":"server 2/12","conclusion":"failure","steps":[{"name":"Test","conclusion":"failure"}]}]}\' ;;',
+      // run 5 is the same group's second run, failing at the same second on the same job log: one event, two rows
+      '  *actions/runs/5/jobs*) echo \'{"jobs":[{"id":12,"name":"server 2/12","conclusion":"failure","steps":[{"name":"Test","conclusion":"failure"}]}]}\' ;;',
       '  *actions/jobs/12/logs*) printf \'Vitest caught 1 unhandled error\\nEnvironmentTeardownError: Closing rpc\\n\' ;;',
       '  *pulls?state=all*) echo \'[{"number":7,"created_at":"2026-10-21T00:00:00Z","updated_at":"2026-10-22T00:00:00Z","merged_at":"2026-10-22T01:00:00Z"}]\' ;;',
     ]);
     const r = tool(h, ['queue-ejections', 'o/r', '--since', '2026-10-21', '--until', '2026-10-25']);
     expect(r.status, r.stderr).toBe(0);
     const rep = JSON.parse(r.stdout);
-    expect(rep.runs).toEqual({ total: 4, success: 2, failure: 1, cancelled: 1, other: 0 });
-    expect(rep.ejections).toBe(1);
-    expect(rep.byCause).toEqual({ 'flake:vitest-teardown': 1 });
-    expect(rep.distinctPrsEjected).toBe(1);
-    expect(rep.ejectedThenMerged).toBe(1);
+    expect(rep.runs).toEqual({ total: 5, success: 2, failure: 2, cancelled: 1, other: 0 });
+    expect(rep.ejections).toBe(2);
+    expect(rep.byCause).toEqual({ 'flake:vitest-teardown': 2 });
+    expect(rep.distinctPrsEjected).toBe(2);
+    expect(rep.ejectedThenMerged).toBe(1); // #7 merged; #8 did not in the stub
+    expect(rep.failureEvents).toBe(1);
+    expect(rep.failureEventsByCause).toEqual({ 'flake:vitest-teardown': 1 });
     const gh = calls(h.home, 'gh-calls')!;
     expect(gh.every((c) => c.startsWith('api -X GET --allow-escape-sequences '))).toBe(true);
   });

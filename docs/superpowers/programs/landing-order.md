@@ -938,16 +938,16 @@ baseline from here on (§10).
 
 ### Against each §10 target
 
-| Metric | Baseline | Target | 10-02..10-20 | 10-21..10-25 | 10-22..10-25 | Verdict |
-|---|---|---|---|---|---|---|
-| fleet `update-branch` commits | 8 (tool: 2) | 0 | 10, all on 10-20 | 12, all on 10-21 | 0 | met at the two-week mark (0 on 10-02..10-16); the 10-20/10-21 burst was legacy PRs; 0 since 10-21 22:20 UTC |
-| repeat absorptions, per merge | 0.58 (41 of 71) | under 1/3 | 0.51 (270 of 527) | 0.33 (20 of 61) | 0.24 (7 of 29) | over 10-02..10-16 it fell 0.58 to 0.45 (moved; rule does not fire), target still missed; met after the queue |
-| merges per PR (fleet local merges of `main`) | 2.4 (71, 30) | n/a | 2.05 (527 merges, 257 PRs) | 1.49 (61, 41) | 1.32 (29, 22) | context for the row above |
-| ritual syncs per week | about 76 (episodes) | halved | not computable here; proxy below | not computable here; proxy below | n/a | proxy only |
-| green-to-merge median | 33 min (tool: 32.0) | under 10 min | 1.0 min | 77.7 min (p90 310) | 99.6 min (p90 276) | missed, and the wrong way |
-| fleet-on-fleet inversions | 14 | 0 | 125 (153 all actors) | 54 (58) | 36 (36) | missed; the scan's meaning under a queue is doubtful (below) |
-| required-leg red hours on `main` | 9.0 h | halved | 47.5 h | 0 h | not run | see the note |
-| queue-group ejections (new) | n/a | none set | n/a | 47 of 241 completed runs (19.5%) | n/a | new; see below |
+| Metric | Baseline | Target | 10-02..10-16 (two-week mark) | 10-02..10-20 | 10-21..10-25 | 10-22..10-25 | Verdict |
+|---|---|---|---|---|---|---|---|
+| fleet `update-branch` commits | 8 (tool: 2) | 0 | 0 | 10, all on 10-20 | 12, all on 10-21 | 0 | met at the two-week mark (0 on 10-02..10-16); the 10-20/10-21 burst was legacy PRs; 0 since 10-21 22:20 UTC |
+| repeat absorptions, per merge | 0.58 (41 of 71) | under 1/3 | 0.45 (70 of 157) | 0.51 (270 of 527) | 0.33 (20 of 61) | 0.24 (7 of 29) | over 10-02..10-16 it fell 0.58 to 0.45 (moved; rule does not fire), target still missed; met after the queue |
+| merges per PR (fleet local merges of `main`) | 2.4 (71, 30) | n/a | 1.80 (157 merges, 87 PRs) | 2.05 (527 merges, 257 PRs) | 1.49 (61, 41) | 1.32 (29, 22) | context for the row above |
+| ritual syncs per week | about 76 (episodes) | halved | not computable here | not computable here; proxy below | not computable here; proxy below | n/a | proxy only |
+| green-to-merge median | 33 min (tool: 32.0) | under 10 min | not read | 1.0 min | 77.7 min (p90 310) | 99.6 min (p90 276) | missed, and the wrong way |
+| fleet-on-fleet inversions | 14 | 0 | not read | 125 (153 all actors) | 54 (58) | 36 (36) | missed; the scan's meaning under a queue is doubtful (below) |
+| required-leg red hours on `main` | 9.0 h | halved | not read | 47.5 h | 0 h | not run | see the note |
+| queue-group ejections (new) | n/a | none set | n/a | n/a | 47 failed runs of 241 completed (19.5%); 45 failure events | n/a | new; see below |
 
 Notes on the rows.
 - **update-branch.** Every one of the 22 commits since 10-02 is on 10-20 or 10-21, on PRs opened before the rollout
@@ -993,8 +993,16 @@ Notes on the rows.
 The tool could not compute this, so `queue-ejections` does: every `merge_group` run in the window, a failed one read
 down to the failing job's log, the aggregator's "Refuse a prerequisite" job set aside as a consequence, and each
 ejected PR checked for a later merge. A cancelled run (2) is the queue dropping an entry behind an ejected one, and is
-not counted. 244 runs read (194 success, 47 failure, 2 cancelled, 1 still running). The live queue settings are
-build 2, merge 3, minimum 1, grouping ALLGREEN.
+not counted. 244 runs read (194 success, 47 failure, 2 cancelled, 1 still running); a re-run later the same day read
+248 (199 success) and the same 47 failures. The live queue settings are build 2, merge 3, minimum 1, grouping ALLGREEN.
+
+**What a row counts.** A row is one failed merge_group run, named for the PR in its queue branch. Under build-2
+grouping the runs of one group overlap, so one breaking change can fail two runs seconds apart, and a failed run is
+not always the named PR's own ejection: that PR may only have ridden behind the culprit. The tool therefore also
+reports `failureEvents`, which collapses failed runs created within 10 s of each other that share a failing test
+(or name no test and the same cause): 45 events, two pairs collapsed (10-24 09:11:27/29, `lane-beats`; 10-25
+00:26:37/38, `single-definition`), both real. The pair at 10-25 10:41:53/54 has different causes and stays two. The
+per-PR count from the timelines is `queue-waits`' re-queued figure: 54 PRs were added again after a removal.
 
 | Cause (log signature) | Ejections |
 |---|---|
@@ -1006,13 +1014,21 @@ build 2, merge 3, minimum 1, grouping ALLGREEN.
 | real: test-tree typecheck (`error TS`) | 3 |
 | unclassified (the job died before a test ran) | 1 |
 
-23 flake, 23 real, 1 unclassified. The split is by signature, so the real count is an upper bound for what the
-PR itself broke: a content assertion can still be load-dependent. 35 distinct PRs were ejected at least once and 34
+23 flake, 23 real, 1 unclassified by run (by event: 23 flake, 21 real, 1 unclassified). The split is by signature,
+so the real count is an upper bound for what the PR itself broke: a content assertion can still be load-dependent.
+The timing signature has one known limit the other way: its bare `expected N to be less than/greater than M` form
+carries no unit, so a content assertion on a count (`expected 0 to be greater than 0`) would land in the flake
+bucket too; this run's 8 timing rows that match only that form were read by hand, and each is a latency, clock, peak-RSS or
+slice-size bound, not a count. 35 distinct PRs were ejected at least once and 34
 of them merged afterwards: an ejection cost a retry, and no PR was lost. One PR (#1200) was ejected 5 times; 8 others
 were ejected twice.
 - **One test is 13 of the 47 ejections.** `ccrc-update.test.ts` (the curl-based fetch test, "sent 0 bytes in 2 s")
-  failed 13 queue runs on 10 PRs between 2026-10-23 21:06 and 10-24 03:28 UTC and not again in the window. It
-  accounts for most of the flake bucket's timing rows.
+  failed 13 queue runs on 11 PRs between 2026-10-23 21:06 and 10-24 03:28 UTC and not again in the window. 11 of
+  the 13 are in the timing-flake bucket (11 of its 18 rows); the other 2 (#1197, #1203) are classed `real:test`,
+  because another test failed beside it.
+- **The flakes being fixed.** The vitest teardown race (lane tests leaving a lane running) is fixed by #1379, merged
+  2026-10-25; the held port in the codex tests is fixed by #1382 (open when this was written). Together they are 4
+  of the 23 flake rows, and all of 10-25's flakes but one; the curl flake above stopped recurring on its own.
 - **By day** (flake / real / other): 10-21 2/1/0; 10-22 2/0/1; 10-23 5/3/0; 10-24 9/12/0; 10-25 5/7/0. The queue
   grouping changed to build 2 / merge 3 on 10-24, the day the count peaks. The same day had the curl flake, and
   this run cannot separate the two.
@@ -1043,12 +1059,12 @@ were ejected twice.
 
 The tool writes a cache and one JSON report per subcommand under `--out`; read-only, no `gh` token scope beyond
 read. `<fleet-login>` is the fleet's gh login. For a window before 2026-09-23 append the placeholder git identity with a
-comma (the baseline needs it; the `absorptions` census lists the actors to choose from); later windows have none. Run from any directory; `<clone>` is a local clone of the repository.
+comma (the baseline needs it; the `absorptions` census lists the actors to choose from); later windows have none. Run from the repository root (`T` is a path relative to it); `<clone>` is a local clone of the repository.
 
 ```
 T=deploy/measure-landing.py; R=Synapsium-Labs/ccrc-pwa
 python3 -I $T required $R --out out
-for W in "2026-09-08 2026-09-22" "2026-10-02 2026-10-20" "2026-10-21 2026-10-25" "2026-10-22 2026-10-25"; do
+for W in "2026-09-08 2026-09-22" "2026-10-02 2026-10-16" "2026-10-02 2026-10-20" "2026-10-21 2026-10-25" "2026-10-22 2026-10-25"; do
   set -- $W
   python3 -I $T absorptions    $R --fleet-login <fleet-login> --since $1 --until $2 --out out
   python3 -I $T inversions     $R --fleet-login <fleet-login> --since $1 --until $2 --out out

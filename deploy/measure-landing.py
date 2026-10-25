@@ -452,6 +452,9 @@ ANSI = re.compile(r'\x1b\[[0-9;]*m')
 # The log lines a cause is read from; the cache keeps only these, never a whole log.
 LOG_SIGNAL = re.compile(r'FAIL +\S+\.test\.ts|##\[error\]|EnvironmentTeardownError|EADDRINUSE|Address already in use|EPIPE|'
                         r'AssertionError|error TS\d+|Operation too slow')
+# KNOWN LIMIT: the bare `expected N to be less than/greater than M` alternative carries no unit,
+# so a content assertion on a count (`expected 0 to be greater than 0` for rows found) is read as
+# timing too; the ledger states this caveat beside the flake/real split (measure-landing.test.ts pins it).
 TIMING = re.compile(r'expected \d+(\.\d+)? to be (less than|greater than)|sent \d+ bytes in \d+ms|Operation too slow')
 
 
@@ -566,6 +569,27 @@ def cmd_queue_waits(repo, required, win, cache):
             'greenToMergeMin': summary(total)}
 
 
+def collapse_failures(rows, secs=10):
+    """Failed merge_group runs that are one cause, not two. With a build size above 1 the
+    runs of one group overlap, so one breaking change fails each of them seconds apart,
+    and a run's queue branch names the PR it tested, which may only have ridden behind
+    the culprit. A row joins the previous row's group when it was created within `secs`
+    of that row and shares a failing test with it (or both name no test and the same
+    cause). Returns the groups as lists of rows, oldest first."""
+    groups = []
+    for r in sorted(rows, key=lambda x: x['at']):
+        if groups:
+            prev = groups[-1][-1]
+            near = (P(r['at']) - P(prev['at'])).total_seconds() <= secs
+            same = (set(r['tests']) & set(prev['tests'])) if (r['tests'] or prev['tests']) \
+                else r['cause'] == prev['cause']
+            if near and same:
+                groups[-1].append(r)
+                continue
+        groups.append([r])
+    return groups
+
+
 def cmd_queue_ejections(repo, win, cache):
     """ADDED for the 2026-10-25 re-measurement (the spec's §10 has no queue metric,
     because the queue came after it): every merge_group run in the window, the failed
@@ -601,12 +625,18 @@ def cmd_queue_ejections(repo, win, cache):
                      'tests': sorted(set(tests))})
     prs = {x['pr'] for x in rows if x['pr']}
     done = counts['success'] + counts['failure']
+    groups = collapse_failures(rows)
+    group_causes = collections.Counter(next((x['cause'] for x in g if x['cause'].startswith('real:')), g[0]['cause'])
+                                       for g in groups)
     return {
         'repo': repo, 'window': win,
         'runs': {k: counts[k] for k in ('total', 'success', 'failure', 'cancelled', 'other')},
         'ejections': len(rows), 'ejectionRate': round(len(rows) / done, 3) if done else None,
         'byCause': dict(by_cause.most_common()), 'failingTests': dict(by_test.most_common(15)),
         'distinctPrsEjected': len(prs), 'ejectedThenMerged': len(prs & merged),
+        # one failed run per cause: overlapping build-2 runs that failed together are one event,
+        # and a run's named PR is not always the PR that broke it
+        'failureEvents': len(groups), 'failureEventsByCause': dict(group_causes.most_common()),
         'rows': rows,
     }
 
