@@ -67,6 +67,25 @@ describe('the reach list follows what the tests read across trees', () => {
     });
   }
 
+  // The agent suite is all-or-nothing and skips when every change is under pwa/ or ui/, so an agent test that reads
+  // either tree from disk by a ROOT-relative path (no `..` segment, so the scan above cannot see it) must go red here.
+  // The server suite needs no such census: it is selected from a strace of each test (openat, stat, getdents64), so
+  // a server test that reads pwa/src from disk carries those paths in its map record.
+  it('agent: no fs path names pwa/ or ui/ from the repository root', () => {
+    const offenders: string[] = [];
+    for (const dir of ['agent/src', 'agent/test']) {
+      for (const file of walk(path.join(ROOT, dir))) {
+        const text = readFileSync(file, 'utf8');
+        for (const m of text.matchAll(/path\.(?:join|resolve)\(([^;]*?)\)/gs)) {
+          const segs = [...m[1].matchAll(/'([^'\n]*)'|"([^"\n]*)"/g)].map((x) => x[1] ?? x[2]);
+          if (segs.some((g) => g === 'pwa' || g === 'ui' || /^(?:pwa|ui)\//.test(g))) offenders.push(`${path.relative(ROOT, file)}: ${m[0].slice(0, 80)}`);
+        }
+        for (const m of text.matchAll(/['"`](?:pwa|ui)\/(?:src|test|browser|public)\b[^'"`\n]*['"`]/g)) offenders.push(`${path.relative(ROOT, file)}: ${m[0]}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it('sees the two reads that motivated the list (a pane fixture and laneSchedule.ts)', () => {
     const all = TREES.filter((t) => t.dir.startsWith('pwa/')).flatMap((t) => walk(path.join(ROOT, t.dir))).flatMap(targetsOf);
     expect(all.some((t) => t.startsWith('server/test/fixtures/panes'))).toBe(true);
