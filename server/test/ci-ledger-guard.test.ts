@@ -1,8 +1,8 @@
-// D-TBD-ledger-guard (a root-cause fix from the landing measurement): a pull request that is not a ledger pull request
+// D-6926 (a root-cause fix from the landing measurement): a pull request that is not a ledger pull request
 // may not modify or delete an existing file under docs/superpowers/programs/ or docs/superpowers/plans/.
 // It may ADD a per-task note under docs/superpowers/plans/<plan>/<task-or-pr>.md; the coordinator folds
-// the notes into the ledger in one ledger pull request per wave. A `Ledger-Edit: <reason>` trailer on any
-// commit of the change is the escape hatch, and the guard reports it. Fixture repositories only: every git
+// the notes into the ledger in one ledger pull request per wave. A `Ledger-Edit: <reason>` trailer on the HEAD
+// commit of the change is the escape hatch (only the head commit's trailers count), and the guard reports it. Fixture repositories only: every git
 // child runs with the repository-redirecting variables removed, so a test can never write into the real repo.
 import { describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -35,6 +35,7 @@ function fixture(): string {
   git(dir, 'init', '-q', '-b', 'main');
   put(dir, 'docs/superpowers/programs/x.md', '| row | open |\n');
   put(dir, 'docs/superpowers/plans/2026-01-01-p.md', '# plan\n');
+  put(dir, 'docs/superpowers/plans/p/t0.md', 'note\n');
   put(dir, 'src/a.txt', 'a\n');
   git(dir, 'add', '-A'); git(dir, 'commit', '-q', '-m', 'base');
   git(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
@@ -71,6 +72,11 @@ describe('ledger-guard CLI', () => {
     git(d, 'reset', '-q', '--hard', 'origin/main');
     git(d, 'mv', 'docs/superpowers/plans/2026-01-01-p.md', 'docs/elsewhere.md'); commit(d, 'rename plan away');
     expect(run(d, 'feat/thing').code).toBe(1);
+    git(d, 'reset', '-q', '--hard', 'origin/main');
+    put(d, 'docs/superpowers/plans/p/t0.md', 'note 2\n'); commit(d, 'edit an existing plan note');
+    const n = run(d, 'feat/thing');
+    expect(n.code).toBe(1);
+    expect(n.out).toContain('docs/superpowers/plans/p/t0.md');
   });
 
   it('(2) a feature branch adding a per-task note, a new plan or a new programme file passes', () => {
@@ -97,6 +103,14 @@ describe('ledger-guard CLI', () => {
     expect(r.sum).toContain('Ledger-Edit');
     expect(r.sum).toContain('D-' + '9999');
     expect(r.sum).toContain('docs/superpowers/programs/x.md');
+  });
+
+  it('(4a) a trailer on an earlier commit, not the head commit, does not count', () => {
+    const d = fixture();
+    put(d, 'docs/superpowers/programs/x.md', '| row | done |\n');
+    commit(d, 'edit ledger\n\nLedger-Edit: D-' + '9999 the row is this change\'s own');
+    put(d, 'src/a.txt', 'later\n'); commit(d, 'a later commit with no trailer');
+    expect(run(d, 'feat/thing').code).toBe(1);
   });
 
   it('(4b) a trailer with no reason does not count', () => {
@@ -167,3 +181,5 @@ describe('classifyChange', () => {
 //  m5 do not skip on a shallow clone                   -> row (5) red
 //  m6 warn mode still exits 1                          -> warn row red
 //  m7 forget rename sources                            -> row (1b) rename step red
+//  m8 read trailers from every commit, not the head    -> row (4a) red
+//  m9 exempt files nested under a plan directory       -> row (1b) plan-note step red

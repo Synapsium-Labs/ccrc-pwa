@@ -74,7 +74,8 @@ density of the file you are editing.
 **Do not edit the shared ledgers in a feature pull request.** Existing files under
 `docs/superpowers/programs/` and `docs/superpowers/plans/` belong to the coordinator's `ledger/<programme>`
 pull request. Add a new note, `docs/superpowers/plans/<plan>/<task-or-pr>.md`, and the coordinator folds it in.
-`.github/ci/ledger-guard.mjs` checks it; a `Ledger-Edit: <D-TBD reason>` commit trailer is the escape.
+`.github/ci/ledger-guard.mjs` checks it; a `Ledger-Edit: <D-TBD reason>` trailer on the head commit is the escape
+(a trailer on an earlier commit does not count).
 
 **`D-N` markers in comments are the deviation ledger** — a global, monotonic record of
 decisions and the measurements behind them. Read them as history; don't delete them. If

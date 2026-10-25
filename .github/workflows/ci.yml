@@ -119,6 +119,36 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # D-6926: a pull request that is not a ledger pull request (head branch `ledger/<programme>`) may not
+  # modify or delete an existing file under docs/superpowers/programs/ or docs/superpowers/plans/; it adds
+  # a per-task note instead, and a `Ledger-Edit: <reason>` trailer on the HEAD commit is the escape, written
+  # to the step summary. Its OWN job, so an internal error or a violation fails only this check and never
+  # skips the test jobs that `needs: select`. WARN-ONLY first (LEDGER_GUARD_MODE=warn: it reports and exits
+  # 0, and `continue-on-error` holds while the mode is warn) while the open pull requests that already edit
+  # a ledger land or move their edit; flip the value to `enforce` to arm it. It checks out the PR's head
+  # commit, not the merge commit, because only the head commit's trailers count. A pull request that edits
+  # this script runs the PR's own copy, so a change to the rule is judged by the rule it changes only in
+  # warn mode; arming is a separate, reviewed one-line change.
+  ledger-guard:
+    name: ledger guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      LEDGER_GUARD_MODE: warn
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      # Step-level: a job-level continue-on-error cannot read `env`.
+      - name: Ledger documents are edited on a ledger branch only
+        continue-on-error: ${{ env.LEDGER_GUARD_MODE == 'warn' }}
+        run: node .github/ci/ledger-guard.mjs --repo "$GITHUB_WORKSPACE" --base "origin/${{ github.base_ref }}"
+
   # What this run runs (design 2026-09-23 §4.1, §6). Dependency-free Node, so
   # it runs before any `npm ci`. Every uncertainty — no map, an unreadable one,
   # a change under .github/ or to a lockfile, any internal error — answers
@@ -157,19 +187,6 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      # D-TBD-ledger-guard: a pull request that is not a ledger pull request (head branch
-      # `ledger/<programme>`) may not modify or delete an existing file under
-      # docs/superpowers/programs/ or docs/superpowers/plans/; it adds a per-task note instead, and a
-      # `Ledger-Edit: <reason>` commit trailer is the escape, written to the step summary. WARN-ONLY
-      # first (LEDGER_GUARD_MODE=warn: it reports and exits 0) while the open pull requests that already
-      # edit a ledger land or move their edit; flip the value to `enforce` to arm it. A pull request that
-      # edits this script runs the PR's own copy, so a change to the rule is judged by the rule it changes
-      # only in warn mode; arming is a separate, reviewed one-line change.
-      - name: Ledger documents are edited on a ledger branch only
-        if: github.event_name == 'pull_request'
-        env:
-          LEDGER_GUARD_MODE: warn
-        run: node .github/ci/ledger-guard.mjs --repo "$GITHUB_WORKSPACE" --base "origin/${{ github.base_ref }}"
       # A pull request that changes the pipeline runs the full suite — decided
       # HERE, in plain bash, not by the selector the pull request may be
       # changing (select-tests.mjs's own `.github/` trigger is a second line).

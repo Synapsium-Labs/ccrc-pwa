@@ -146,8 +146,8 @@ there. Write what the ledger should learn (a deviation you found, a status, a me
 NEW note, `docs/superpowers/plans/<plan>/<task-or-pr>.md`, and say so in your `wave-done` mail; the
 coordinator folds the notes into the ledger on its own `ledger/<programme>` pull request. A
 `ledger-guard` step fails a pull request that edits a ledger from any other branch. If the edit is
-genuinely your change's own, put a `Ledger-Edit: <D-TBD reason>` trailer on a commit; the guard
-passes it and reports it.
+genuinely your change's own, put a `Ledger-Edit: <D-TBD reason>` trailer on your pull request's head
+commit (a trailer on an earlier commit does not count); the guard passes it and reports it.
 
 A reply may arrive addressed to the ROLE `worker` rather than to your session id.
 Nothing changes on your side: the role resolves to whichever session this run names,

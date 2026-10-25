@@ -1,4 +1,4 @@
-// D-TBD-ledger-guard: a feature pull request does not edit the shared programme and plan ledgers.
+// D-6926: a feature pull request does not edit the shared programme and plan ledgers.
 //
 // Shared ledger documents under docs/superpowers/programs/ and docs/superpowers/plans/ were the largest
 // single cause of sync conflicts: every in-flight pull request of a wave edited the same rows, so each
@@ -11,8 +11,11 @@
 // into the ledger in one ledger pull request per wave. There is deliberately no `merge=union` driver: it
 // silently corrupts a row edited in place.
 //
-// ESCAPE: a `Ledger-Edit: <reason>` trailer on any commit of the change passes the guard and is written to the
-// step summary with the files it covers. Without an escape a guard that is required would block work.
+// ESCAPE: a `Ledger-Edit: <reason>` trailer on the HEAD commit of the change passes the guard and is written to the
+// step summary with the files it covers. Only the head commit's trailers count (read with git's own trailer
+// parser, `git log -1 --format=%(trailers:key=Ledger-Edit,valueonly)`), so the trailer goes in the last
+// paragraph of the newest commit's message and a later push without it re-arms the guard. Without an escape a
+// guard that is required would block work.
 //
 // SKIPS (with a notice, never silently): a shallow checkout (no merge-base to measure), a merge-queue run (its
 // head branch is the queue's, and the pull-request run already judged the change), no base ref.
@@ -29,7 +32,6 @@ process.exitCode = 1;
 
 const PROTECTED = [/^docs\/superpowers\/programs\//, /^docs\/superpowers\/plans\//];
 const LEDGER_BRANCH = /^ledger\/[^/\s]/;
-const TRAILER = /^Ledger-Edit:[ \t]*(\S.*)$/;
 
 const isProtected = (p) => PROTECTED.some((re) => re.test(p));
 
@@ -50,14 +52,9 @@ export function classifyChange(lines) {
   return out;
 }
 
-/** The reasons of every `Ledger-Edit:` trailer line in the given commit messages. */
-export function ledgerEditReasons(messages) {
-  const reasons = [];
-  for (const m of messages) for (const l of m.split('\n')) {
-    const hit = TRAILER.exec(l.trim());
-    if (hit) reasons.push(hit[1].trim());
-  }
-  return reasons;
+/** The non-empty reasons in `git log -1 --format=%(trailers:key=Ledger-Edit,valueonly)` output. */
+export function ledgerEditReasons(valueOnlyOutput) {
+  return valueOnlyOutput.split('\n').map((l) => l.trim()).filter(Boolean);
 }
 
 export const isLedgerBranch = (branch) => LEDGER_BRANCH.test(branch);
@@ -109,7 +106,7 @@ function main() {
     summary('ledger-guard: ok, no existing programme or plan file is edited');
     process.exitCode = 0; return;
   }
-  const reasons = ledgerEditReasons(git('log', '--format=%B%x00', `${base}..HEAD`).split('\0'));
+  const reasons = ledgerEditReasons(git('log', '-1', '--format=%(trailers:key=Ledger-Edit,valueonly)', 'HEAD'));
   const list = violations.map((v) => `  - ${v}`).join('\n');
   if (reasons.length > 0) {
     summary(`ledger-guard: PASSED BY Ledger-Edit trailer (${reasons.map((r) => `"${r}"`).join('; ')}). Files covered:\n${list}`);
@@ -119,7 +116,7 @@ function main() {
     `ledger-guard: ${violations.length} shared ledger file(s) edited outside a ledger branch:\n${list}\n`
     + 'Put the change in a per-task note, docs/superpowers/plans/<plan>/<task-or-pr>.md (a new file), and let the '
     + 'coordinator fold it into the ledger on its ledger pull request. If this edit is genuinely this change\'s own, '
-    + 'add a `Ledger-Edit: <D-TBD reason>` trailer to a commit.');
+    + 'add a `Ledger-Edit: <D-TBD reason>` trailer to the head commit.');
   if (mode === 'warn') { console.log('ledger-guard: warn mode, not failing'); process.exitCode = 0; return; }
   process.exitCode = 1;
 }

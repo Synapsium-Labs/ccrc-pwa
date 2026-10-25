@@ -4940,15 +4940,18 @@ only place a session that loads no ccrc skill sees it: a `Bash` call that merges
 are listed in the hook's own header (`server/test/session-hook-sync-advisory.test.ts`).
 `python3 deploy/measure-landing.py <subcommand>` is the programme's read-only instrument.
 
-**Ledger documents are edited on a ledger branch only (D-TBD-ledger-guard).** Shared files under
+**Ledger documents are edited on a ledger branch only (D-6926).** Shared files under
 `docs/superpowers/programs/` and `docs/superpowers/plans/` were the largest single cause of sync
-conflicts, so `.github/ci/ledger-guard.mjs` (a step of the `select` job, tested in
+conflicts, so `.github/ci/ledger-guard.mjs` (its own `ledger guard` job, so an error there never skips the
+test jobs; tested in
 `server/test/ci-ledger-guard.test.ts`) fails a pull request that MODIFIES, DELETES or RENAMES AWAY an existing
 file there unless its head branch is `ledger/<programme>` (the name is this guard's own convention: no earlier
 ledger-branch name existed). A pull request ADDS a per-task note instead,
 `docs/superpowers/plans/<plan>/<task-or-pr>.md`, and the coordinator folds the notes into the ledger in one
 ledger pull request per wave. There is no `merge=union` driver: it silently corrupts a row edited in place. The
-escape is a `Ledger-Edit: <D-TBD reason>` commit trailer, which passes and is written to the step summary. The
+escape is a `Ledger-Edit: <D-TBD reason>` trailer on the pull request's HEAD commit (only the head commit's
+trailers count, read with `git log -1 --format=%(trailers:key=Ledger-Edit,valueonly)`; a trailer on an earlier
+commit does not), which passes and is written to the step summary. The
 guard skips with a notice on a shallow checkout and on a merge-queue run. It runs warn-only
 (`LEDGER_GUARD_MODE: warn` in `ci.yml`) until the open pull requests that edit a ledger have landed.
 
@@ -7115,7 +7118,7 @@ commands, the tools the suites need, and what CI runs. Run a single suite with
 `npx vitest` resolves a global copy with no jsdom and will falsely report that there are no
 tests.
 
-Three conventions carry more weight here than style:
+These conventions carry more weight here than style:
 
 - **A new guard ships with a test that goes red when the guard is deleted.** Measured before
   and after, not asserted in a comment. A comment is a request; a red suite is a mechanism.
@@ -7132,6 +7135,10 @@ Three conventions carry more weight here than style:
   after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
   `bash ccd/ccrc restamp ccd/session-hook.sh`. Restamping `ccd/ccd` says when the hook's
   region has gone stale.
+- **A feature pull request does not edit the shared ledgers.** An existing file under
+  `docs/superpowers/programs/` or `docs/superpowers/plans/` changes only on a `ledger/<programme>` branch;
+  add a new `docs/superpowers/plans/<plan>/<task-or-pr>.md` note instead, or put a `Ledger-Edit: <reason>`
+  trailer on the head commit. `.github/ci/ledger-guard.mjs` checks it (D-6926).
 
 Design records live in `docs/superpowers/specs/`; the architecture rules the code is held to
 are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`.
