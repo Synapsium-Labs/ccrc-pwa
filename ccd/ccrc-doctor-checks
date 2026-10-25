@@ -7664,12 +7664,15 @@ _dr_cx_bridge_files() {   # <id>
     # A mode that cannot be measured, no `stat` on PATH included, is this
     # FAIL's `unreadable`, never a pass: a false FAIL costs a sentence, a
     # false pass the file's owner-only protection. Its remedy is its own:
-    # `chmod` cannot cure a mode nobody could read.
+    # `chmod` cannot cure a mode nobody could read. It names both causes, a
+    # `stat` missing from PATH and one that runs but fails on the file, and
+    # both platforms: `_plat_mode`'s darwin arm runs the base system's BSD
+    # `stat`, not coreutils.
     mode="$(_plat_mode -- "$p" 2>/dev/null)" || mode=''
     [ "$mode" = 600 ] && continue
     if [ -z "$mode" ]; then
       _dr_cx_fail "$id's bridge $what $p has mode unreadable, and the bridge keeps it owner-only (0600): $why" \
-        "make stat (coreutils) available on PATH, then re-run doctor; the file must be a regular file of mode 0600"
+        "check that stat runs on PATH (coreutils on a GNU box, the base system on macOS) and can read $p (the file still in place, its directory searchable), then re-run doctor; the file must be a regular file of mode 0600"
     else
       _dr_cx_fail "$id's bridge $what $p has mode $mode, and the bridge keeps it owner-only (0600): $why" \
         "chmod 600 $p"

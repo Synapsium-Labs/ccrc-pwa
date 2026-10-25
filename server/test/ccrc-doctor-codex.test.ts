@@ -5256,7 +5256,7 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
     for (const [id, f] of Object.entries(stats)) {
       const re = new RegExp(`^FAIL codex: ${id}'s bridge stats file ${reEsc(f)} has mode unreadable, and the bridge keeps it owner-only \\(0600\\): it names the lane's upstream request ids and its usage$`, 'm');
       expect(r.stdout, r.stdout).toMatch(re);
-      expect(remedyAfter(r.stdout, re)).toBe('  remedy: make stat (coreutils) available on PATH, then re-run doctor; the file must be a regular file of mode 0600');
+      expect(remedyAfter(r.stdout, re)).toBe(`  remedy: check that stat runs on PATH (coreutils on a GNU box, the base system on macOS) and can read ${f} (the file still in place, its directory searchable), then re-run doctor; the file must be a regular file of mode 0600`);
     }
     noRunnerBugLine(r.stdout, 'codex');
   });
