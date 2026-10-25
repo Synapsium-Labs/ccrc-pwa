@@ -6882,12 +6882,13 @@ describe('one tryHold decides every ask hold (D-5290)', () => {
     expect(rest).not.toMatch(/\bthis\.hold\(/);
     // D-5530 (plan Task 16): the claimant decision moved, whole, into `coord/heldFor.ts`, which the approvals mint
     // reads too: `tryHold` calls it, and the watcher reads the child's run series (`bindingRunsOf`, which replaced
-    // `parentOfSession`: ARCH-62 slice 2) nowhere else.
+    // `parentOfSession`: ARCH-62 slice 2) nowhere else. heldFor reads it through `childParentRead` (bindingReads.ts),
+    // the one parent read it shares with the drift lane.
     expect(body).toMatch(/\bheldFor\(/);
     expect(rest).not.toMatch(/\.bindingRunsOf\(/);
     expect(rest.match(/\bthis\.tryHold\(/g) ?? []).toHaveLength(3);
     const heldForSrc = stallCode(path.join(ccrcRoot, 'server/src/coord/heldFor.ts'));
-    expect(heldForSrc).toMatch(/\.bindingRunsOf\(/);
+    expect(heldForSrc).toMatch(/\bchildParentRead\(/);
     expect(heldForSrc).toMatch(/\bclaimantMeasuredDead\(/);
   });
 

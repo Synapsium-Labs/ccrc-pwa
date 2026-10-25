@@ -818,9 +818,6 @@ export type OpenSiblingsResult =
 export interface ChildReclaimNamingRow {
   readonly id: number; readonly sessionId: string; readonly program: string;
   readonly wave: number; readonly waveOf: number | null; readonly state: RunState;
-  /** The run's claimant (ARCH-62, #797): `claimantsOfSession` and `heldFor`'s fallback read the worker's coordinators
-   *  from these rows, so a run the session merely CLAIMS never enters (or fails) that answer. */
-  readonly claimedBy: string | null;
 }
 
 export type RunsNamingSessionResult =
@@ -1938,11 +1935,16 @@ export class CoordStore {
    * because the binding's queries ask both ("whose worker is this?", "whose children are these?") of the same series,
    * and `runsTouching`'s reason for the OR holds. ALL-OR-FAILURE like every session-keyed read here (D-2545): an `id`
    * this process cannot represent fails the whole read, so a partial series never reads as "nothing else is bound".
+   *
+   * `ids: 'ordinal'` answers the same series with each `id` the row's ORDINAL in it (1, 2, ...; the series is by id, so
+   * the order is the id order exactly) and proves no integer, so it never fails on one: the projection `parentOfSession`
+   * and `openClaimantsOf` made before the fold (`bindingRows.ts`'s reason). For a caller whose answer is a claimant, never
+   * a run id (`claimantsOfSession`, a child's parent when the proven series fails). An ordinal is not a run id.
    */
-  bindingRunsOf(id: string): BindingRunsResult {
+  bindingRunsOf(id: string, ids: 'proven' | 'ordinal' = 'proven'): BindingRunsResult {
     const runs: BindingRun[] = [];
-    for (const r of this.seriesRows('either', id)) {
-      const n = persistedInt(r.idText, 'run id');
+    for (const [i, r] of this.seriesRows('either', id).entries()) {
+      const n = ids === 'ordinal' ? { ok: true as const, value: i + 1 } : persistedInt(r.idText, 'run id');
       if (!n.ok) return { ok: false, kind: 'run-unreadable', detail: n.detail };
       runs.push({ id: n.value, sessionId: r.sessionId, claimedBy: r.claimedBy,
         state: isRunState(r.state) ? r.state : 'unknown', openedAt: r.openedAt,
@@ -3502,7 +3504,7 @@ export class CoordStore {
       const m = measureRunNumbers(r);
       if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
       runs.push({ id: m.nums.id, sessionId, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf,
-        state: isRunState(r.state) ? r.state : 'unknown', claimedBy: r.claimedBy });
+        state: isRunState(r.state) ? r.state : 'unknown' });
     }
     return { ok: true, runs };
   }

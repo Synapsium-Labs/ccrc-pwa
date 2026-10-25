@@ -246,6 +246,28 @@ describe('POST /api/runs/:id/reclaim — the union→status map', () => {
     expect(res.json()).toEqual({ ok: false, refused: 'heir-is-a-worker', by: 'demo-other-coordinator' });
   });
 
+  // ARCH-62 slice 2, ruling (a), the worker half: `openClaimantsOf` proved no integers, so a WORKER run of the heir beyond
+  // 2^53 is outside the answer when it is terminal and in it when it is open, never a 500. Red on b05c06373 (500 from
+  // claimantsOfSession, which measured every worker row).
+  it.each([
+    ['done', 'demo-other-coordinator'],
+    ['planned', 'demo-third'],
+  ] as const)('409 heir-is-a-worker when the heir is the worker of a %s run this process cannot represent', async (state, by) => {
+    const home = mkTmp('ccrc-reclaim-');
+    const { run } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const id = openWave(w.coord, 1);
+    seed(home, DEAD); seed(home, HEIR);
+    const other = w.coord.openRun({ program: 'other', title: 'w', project: PROJECT, wave: 1, waveOf: 1, claimedBy: 'demo-other-coordinator' }) as { id: number };
+    w.coord.bindSession(other.id, HEIR);
+    const third = w.coord.openRun({ program: 'third', title: 't', project: PROJECT, wave: 1, waveOf: 1, claimedBy: 'demo-third' }) as { id: number };
+    w.coord.bindSession(third.id, HEIR);
+    w.coord.db.prepare('UPDATE runs SET id = ?, state = ? WHERE id = ?').run(2n ** 53n + 1n, state, third.id);
+    const res = await post(app, id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'heir-is-a-worker', by });
+  });
+
   it('501 not-configured on a box that does no coordination at all', async () => {
     // The FIRST arm, and `auth-gate.test.ts`'s three-probe sweep leans on it:
     // that harness wires no `coord`, so dark and authenticated both land here.

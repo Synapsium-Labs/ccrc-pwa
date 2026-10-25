@@ -438,6 +438,23 @@ describe('POST /api/runs', () => {
     expect(res.statusCode).toBe(200);
   });
 
+  // ARCH-62 slice 2, ruling (a): the gate reads the worker rows as `openClaimantsOf` did, proving no integers, so a done
+  // worker run beyond 2^53 is no reason to answer 500 there. Red on b05c06373 (500 from claimantsOfSession). Past the
+  // gate, minting an id after that row is refused on its own terms, which is not this pin's business.
+  it('a coordinator that is the worker of a done run beyond 2^53 gets past the worker gate, never a 500', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' });
+    tx(w.coord.db, () => {
+      w.coord.db.prepare("UPDATE runs SET state = 'done', id = ? WHERE id = ?").run(2n ** 53n + 1n, first.json().id);
+    });
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Later', claimedBy: 'demo-existing' });
+    expect(res.statusCode).not.toBe(500);
+    expect(JSON.stringify(res.json())).not.toContain('claimantsOfSession');
+  });
+
   it('admits a SELF-claimed run\'s session — it is its own worker, not somebody\'s', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-self');

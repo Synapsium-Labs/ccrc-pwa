@@ -157,9 +157,23 @@ describe('the folded readers, asked through bindingReads (ARCH-62 slice 2)', () 
     expect(runsTouching(bad, 'x')).toEqual({ ok: false, detail: 'runsTouching: id out of range' });
   });
 
-  it('claimantsOfSession throws on a worker row it cannot prove, never reads as an empty list', () => {
-    const bad = { runsNamingSession: () => ({ ok: false as const, kind: 'run-unreadable' as const, detail: 'id out of range' }) };
-    expect(() => claimantsOfSession(bad, 'x')).toThrow('id out of range');
+  it('claimantsOfSession throws when the series itself cannot be read, never reads as an empty list', () => {
+    const bad = { bindingRunsOf: () => ({ ok: false as const, kind: 'run-unreadable' as const, detail: 'id out of range' }) };
+    expect(() => claimantsOfSession(bad, 'x')).toThrow('claimantsOfSession: id out of range');
+  });
+
+  // Ruling (a), the worker half: `openClaimantsOf` proved no integers, so a WORKER row beyond 2^53 neither failed it nor,
+  // when terminal, entered it. Red on b05c06373 (claimantsOfSession measured every worker row and threw).
+  it('claimantsOfSession proves no integers: a done worker run beyond 2^53 is outside the answer, an open one is in it', () => {
+    const s = store();
+    const a = open(s, 'prog-a', 'coord-x');
+    s.setSession(a, 'demo-w');
+    const big = open(s, 'prog-big', 'coord-3');
+    s.setSession(big, 'demo-w');
+    s.db.prepare("UPDATE runs SET id = ?, state = 'done' WHERE id = ?").run(2n ** 53n + 1n, big);
+    expect(claimantsOfSession(s, 'demo-w')).toEqual(['coord-x']);
+    s.db.prepare("UPDATE runs SET state = 'planned' WHERE claimedBy = 'coord-3'").run();
+    expect(claimantsOfSession(s, 'demo-w')).toEqual(['coord-3', 'coord-x']);
   });
 
   // Ruling (a): `openClaimantsOf`'s scope exactly. The session's WORKER rows decide it; a run it CLAIMS (here one whose id
@@ -192,14 +206,31 @@ describe('the folded readers, asked through bindingReads (ARCH-62 slice 2)', () 
     expect(verdict).toEqual({ kind: 'released', parent: 'coord-1', runId: a, reason: 'parent-not-live' });
   });
 
-  it('heldFor still fails when the series read fails and no parent is proven', async () => {
+  // As on main: with no parent proven the parent is null and heldFor goes on to the sibling check, which finds no open run
+  // naming the child. Red on b05c06373 (it threw `heldFor: run id is not a positive safe integer`).
+  it('heldFor answers not-a-child when the series read fails and no open run names the child', async () => {
     const s = store();
     const a = open(s, 'prog-a', 'coord-1');
     s.setSession(a, 'demo-w');
     finish(s, a);
     const own = open(s, 'prog-own', 'demo-w');
     s.db.prepare('UPDATE runs SET id = ? WHERE id = ?').run(2n ** 53n + 1n, own);
-    await expect(heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: a } as never, [], BORN)).rejects.toThrow(/^heldFor: /);
+    expect(await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: a } as never, [], BORN)).toEqual({ kind: 'not-a-child' });
+  });
+
+  // A DONE worker run beyond 2^53 fails the series; the open parent run still holds the prompt for its claimant, as
+  // `parentOfSession` let it on main. Red on b05c06373 (the fallback measured that terminal row and threw).
+  it('heldFor keeps the open parent when a done worker run beyond 2^53 fails the series', async () => {
+    const s = store();
+    const a = open(s, 'prog-a', 'coord-1');
+    s.setSession(a, 'demo-w');
+    s.db.prepare('UPDATE runs SET coordProject = ? WHERE id = ?').run('p', a);
+    const big = open(s, 'prog-big', 'coord-z');
+    s.setSession(big, 'demo-w');
+    s.db.prepare("UPDATE runs SET id = ?, state = 'done' WHERE id = ?").run(2n ** 53n + 1n, big);
+    expect(s.bindingRunsOf('demo-w').ok).toBe(false);
+    const verdict = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: a } as never, [], BORN);
+    expect(verdict).toEqual({ kind: 'released', parent: 'coord-1', runId: a, reason: 'parent-not-live' });
   });
 });
 
@@ -242,6 +273,22 @@ describe('the drift lane reads the worker\'s parent through its incarnation (ARC
     s.setSession(mark, 'demo-w');
     const newer = open(s, 'prog-b', 'coord-2');
     s.setSession(newer, 'demo-w');
+    await runDriftPass(laneDeps(s, mark), BORN + 5000);
+    expect(mismatches(s)).toEqual(['parent-mismatch:demo-w']);
+  });
+
+  // The drift lane's parent is heldFor's: a done worker run beyond 2^53 fails the series, and the open binding the worker
+  // rows prove still is the parent (main's `parentOfSession`). Red on b05c06373 (the lane read no parent, so no finding).
+  it('a real mismatch is still raised when a done worker run beyond 2^53 fails the series', async () => {
+    const s = store();
+    const mark = open(s, 'prog-a', 'coord-1');
+    s.setSession(mark, 'demo-w');
+    const newer = open(s, 'prog-b', 'coord-2');
+    s.setSession(newer, 'demo-w');
+    const big = open(s, 'prog-big', 'coord-z');
+    s.setSession(big, 'demo-w');
+    s.db.prepare("UPDATE runs SET id = ?, state = 'done' WHERE id = ?").run(2n ** 53n + 1n, big);
+    expect(s.bindingRunsOf('demo-w').ok).toBe(false);
     await runDriftPass(laneDeps(s, mark), BORN + 5000);
     expect(mismatches(s)).toEqual(['parent-mismatch:demo-w']);
   });
