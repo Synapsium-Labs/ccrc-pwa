@@ -68,8 +68,10 @@ fi
 # is the whole failure this guard exists for. What keeps it honest is
 # `wrapper-roster-fixture.test.ts`'s I8 row, which compares it against the real
 # directory in both directions; a fifth entry landed here in
-# program-leverage wave 1 only because that row went red first.
-REQUIRED_REFS=(ledger-template.md mail-envelope.md peer-protocol.md resume.md review-brief.md review-panel.md routing-matrix.md wave-lifecycle.md)
+# program-leverage wave 1 only because that row went red first. The row
+# covers every file there, not only the .md ones, so the mutation-run.py
+# helper is guarded like the prose.
+REQUIRED_REFS=(ledger-template.md mail-envelope.md mutation-run.py peer-protocol.md resume.md review-brief.md review-panel.md routing-matrix.md wave-lifecycle.md)
 [[ -f "$SRC/SKILL.md" ]] || { echo "install-coordinator-skill: no SKILL.md under $SRC — refusing" >&2; exit 1; }
 for ref in "${REQUIRED_REFS[@]}"; do
   [[ -f "$SRC/references/$ref" ]] \

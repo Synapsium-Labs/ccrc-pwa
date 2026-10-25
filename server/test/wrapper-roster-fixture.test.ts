@@ -387,7 +387,7 @@ describe('accounts.sh round-trip: the generated bash agrees with the server Type
 // PROJECTION of something real that a future change can silently drift away
 // from, and "a comment asking a future author to keep them in sync" is not a
 // mechanism. Here the real thing is not the roster but the filesystem itself:
-// `REQUIRED_REFS` names the `references/*.md` files a partial rsync (the
+// `REQUIRED_REFS` names the `references/` files a partial rsync (the
 // specific hazard its own script comment names — SKILL.md sorts before
 // `references/`, so an interrupted `rsync -az --delete` can land SKILL.md
 // with an incomplete or absent `references/`) must NOT be allowed to ship
@@ -396,14 +396,16 @@ describe('accounts.sh round-trip: the generated bash agrees with the server Type
 // it — exactly the half-installed shape the guard exists to refuse — and
 // nothing before this test would have noticed.
 describe('install-coordinator-skill.sh REQUIRED_REFS agrees with the real references/ directory (I8)', () => {
-  it('names exactly the .md files that live under ccd/coordinator-skill/references/ today', () => {
+  it('names exactly the files that live under ccd/coordinator-skill/references/ today', () => {
     const src = readFileSync(path.join(ccrcRoot, 'ccd', 'install-coordinator-skill.sh'), 'utf8');
     const m = /REQUIRED_REFS=\(([^)]*)\)/.exec(src);
     expect(m, "install-coordinator-skill.sh's REQUIRED_REFS=(...) line").not.toBeNull();
     const declared = sortedSet((m as RegExpExecArray)[1].trim().split(/\s+/).filter(Boolean));
     const actual = sortedSet(
-      readdirSync(path.join(ccrcRoot, 'ccd', 'coordinator-skill', 'references'))
-        .filter((n) => n.endsWith('.md')),
+      // every file, not just the .md ones: a helper script shipped beside them
+      // (mutation-run.py) is as much a part of the unit as the prose
+      readdirSync(path.join(ccrcRoot, 'ccd', 'coordinator-skill', 'references'), { withFileTypes: true })
+        .filter((d) => d.isFile()).map((d) => d.name),
     );
     expect(actual.length).toBeGreaterThan(0); // the parse itself must find something, or this vacuously passes
     expect(declared).toEqual(actual);

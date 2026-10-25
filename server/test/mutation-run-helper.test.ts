@@ -116,11 +116,25 @@ function args(fx: Fx, extra: string[] = []): string[] {
     '--mutations', fx.mutations, '--tmp-root', fx.root, ...extra];
 }
 
-function run(fx: Fx, extra: string[] = []): { code: number | null; lines: string[] } {
-  const r = spawnSync('python3', args(fx, extra), {
+function run(fx: Fx, extra: string[] = [], argv?: string[]): { code: number | null; lines: string[]; err: string[] } {
+  const r = spawnSync('python3', argv ?? args(fx, extra), {
     encoding: 'utf8', env: { ...process.env, TMPDIR: fx.systmp, CALLS_LOG: fx.log, READY: fx.ready },
   });
-  return { code: r.status, lines: r.stdout.trim().split('\n') };
+  return { code: r.status, lines: r.stdout.trim().split('\n'), err: r.stderr.trim().split('\n').filter(Boolean) };
+}
+
+// Start the helper on a run whose last mutant hangs in t_leaky, wait for the hang, send `sig`.
+async function interrupt(fx: Fx, sig: NodeJS.Signals): Promise<{ code: number | null; stdout: string }> {
+  const child = spawn('python3', args(fx, ['--out', fx.out]), { env: { ...process.env, TMPDIR: fx.systmp, CALLS_LOG: fx.log, READY: fx.ready } });
+  let stdout = '';
+  child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+  const exited = new Promise<number | null>((res) => child.on('exit', (c) => res(c)));
+  const deadline = Date.now() + 20_000;
+  while (!existsSync(fx.ready) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  expect(existsSync(fx.ready)).toBe(true);
+  child.kill(sig);
+  const code = await exited;
+  return { code, stdout };
 }
 
 const calls = (fx: Fx, name: string): number =>
@@ -217,6 +231,17 @@ describe('mutation-run helper', () => {
     expect(run(fx).lines[0]).toMatch(/^dup\tinvalid/);
   });
 
+  it('exits 2 when any mutation is invalid, even beside a killed one', () => {
+    const fx = fixture([
+      { id: 'dup', old: 'return', new: 'pass' },
+      { id: 'K', old: 'return 42', new: 'return 43' },
+    ]);
+    const r = run(fx);
+    expect(r.lines[0]).toMatch(/^dup\tinvalid/);
+    expect(r.lines[1]).toBe('K\tkilled\tt_other');
+    expect(r.code).toBe(2);
+  });
+
   it('re-runs only mutants on lines a diff changed, carrying the rest', () => {
     const fx = fixture([
       { id: 'A', old: 'return "neg"', new: 'return "pos"' },
@@ -274,5 +299,69 @@ describe('mutation-run helper', () => {
     run(fx, ['--no-coverage']);
     expect(readdirSync(fx.systmp)).toEqual([]);
     expect(readdirSync(fx.root)).toEqual([]);
+  });
+});
+
+describe('mutation-run helper: interrupts, unusable input and diff parsing', () => {
+  it('does not count SIGINT as a kill: exits 130 with no killed line, no --out, nothing left behind', async () => {
+    const fx = fixture([{ id: 'hang', old: 'return MODE', new: 'return 2' }]);
+    const r = await interrupt(fx, 'SIGINT');
+    expect(r.code).toBe(130);
+    expect(r.stdout).not.toMatch(/\tkilled/);
+    expect(existsSync(fx.out)).toBe(false);
+    expect(readdirSync(fx.root)).toEqual([]);
+    expect(readdirSync(fx.systmp)).toEqual([]);
+  });
+
+  it('prints each result as produced and writes the results so far, marked partial, on SIGTERM', async () => {
+    const fx = fixture([
+      { id: 'K', old: 'return 42', new: 'return 43' },
+      { id: 'hang', old: 'return MODE', new: 'return 2' },
+    ]);
+    const r = await interrupt(fx, 'SIGTERM');
+    expect(r.code).toBe(143);
+    expect(r.stdout.split('\n')[0]).toBe('K\tkilled\tt_other');
+    const out = JSON.parse(readFileSync(fx.out, 'utf8')) as { partial: boolean; results: Array<{ id: string; status: string }> };
+    expect(out.partial).toBe(true);
+    expect(out.results.map((x) => [x.id, x.status])).toEqual([['K', 'killed']]);
+    expect(readdirSync(fx.root)).toEqual([]);
+    expect(readdirSync(fx.systmp)).toEqual([]);
+  });
+
+  it('prints one line and exits 2 on unusable input', () => {
+    const fx = fixture([{ id: 'K', old: 'return 42', new: 'return 43' }]);
+    const cases: Array<string | null> = ['{not json', JSON.stringify([{ id: 'x', old: 'return 42' }]),
+      JSON.stringify([{ old: 'a', new: 'b' }]), JSON.stringify([{ id: 'x', old: 7, new: 'b' }]), JSON.stringify({ id: 'x' })];
+    for (const body of cases) {
+      writeFileSync(fx.mutations, body as string);
+      const r = run(fx);
+      expect(r.code, body as string).toBe(2);
+      expect(r.err, body as string).toHaveLength(1);
+      expect(r.lines.join(''), body as string).not.toMatch(/killed|survived|summary/);
+    }
+    writeFileSync(fx.mutations, JSON.stringify([{ id: 'K', old: 'return 42', new: 'return 43' }]));
+    const full = args(fx);
+    const without = (flag: string): string[] => { const i = full.indexOf(flag); return [...full.slice(0, i), ...full.slice(i + 2)]; };
+    for (const flag of ['--module', '--tests']) {
+      const r = run(fx, [], without(flag));
+      expect(r.code, flag).toBe(2);
+      expect(r.err, flag).toHaveLength(1);
+    }
+  });
+
+  it('reads an empty line inside a hunk as context, and header-like lines inside a hunk as content', () => {
+    const fx = fixture([{ id: 'B', old: 'return 42', new: 'return 43' }]);
+    expect(run(fx, ['--out', fx.out]).lines[0]).toBe('B\tkilled\tt_other');
+    const L = SUBJECT.split('\n').findIndex((l) => l.includes('return 42')) + 1;
+    const diff = path.join(fx.dir, 'c.diff');
+    // the blank line before `def other():` arrives as an empty line (trailing whitespace stripped)
+    writeFileSync(diff, `--- a/subject.py\n+++ b/subject.py\n@@ -${L - 2},3 +${L - 2},3 @@\n\n def other():\n-    return 41\n+    return 42\n`);
+    expect(run(fx, ['--previous', fx.out, '--diff', diff]).lines[0]).toBe('B\tkilled\tt_other');
+    // a deleted line whose text starts `-- ` reads `--- ...` inside the hunk; it still touches line L
+    writeFileSync(diff, `--- a/subject.py\n+++ b/subject.py\n@@ -${L},2 +${L},1 @@\n--- old note\n     return 42\n`);
+    expect(run(fx, ['--previous', fx.out, '--diff', diff]).lines[0]).toBe('B\tkilled\tt_other');
+    // an added line reading `+++ b/tests.py` inside a module hunk is content, not a tests-file header
+    writeFileSync(diff, `--- a/subject.py\n+++ b/subject.py\n@@ -1,1 +1,2 @@\n+++ b/tests.py\n import sys\n`);
+    expect(run(fx, ['--previous', fx.out, '--diff', diff]).lines[0]).toBe('B\tcarried\tkilled');
   });
 });

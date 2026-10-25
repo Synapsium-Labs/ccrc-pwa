@@ -14,7 +14,8 @@ raises has failed. The same function is called once for the unmutated module (th
 baseline, which must pass) and once per mutant.
 
 --mutations is a JSON list of {"id": str, "old": str, "new": str}. `old` must occur
-exactly once in the module source, else the mutant is reported `invalid`.
+exactly once in the module source, else the mutant is reported `invalid` (and the run
+exits 2: an invalid mutation is unusable input, not a pass).
 
 What it does differently from writing mutant files:
   * a mutant is compiled in memory and executed into a fresh module object, no file;
@@ -27,9 +28,14 @@ What it does differently from writing mutant files:
     its previous killed result (`carried`) and is not run; survivors and uncovered mutants
     always re-run, and a diff touching the tests file re-runs everything.
 
-One line per mutant: `<id>\\t<status>\\t<detail>`, then a summary line. Statuses:
-killed, survived, uncovered, invalid, carried. Exit 0 when nothing survived or went
-uncovered, 1 otherwise, 2 when the baseline fails or the input is unusable.
+One line per mutant, printed as it is produced: `<id>\\t<status>\\t<detail>`, then a
+summary line. Statuses: killed, survived, uncovered, invalid, carried. Exit 0 when nothing
+survived or went uncovered, 1 otherwise, 2 when the baseline fails or the input is
+unusable (unreadable or malformed --mutations, an entry without string id/old/new, a
+missing --module/--tests, or any `invalid` mutation), with one line on stderr for the
+input errors. SIGTERM exits 143 and writes the results so far to --out as
+{"partial": true, "results": [...]}; SIGINT exits 130 and writes no --out. Neither
+interrupt is ever counted as a mutant's kill.
 """
 import argparse
 import contextlib
@@ -53,14 +59,43 @@ def pick_root(override=None):
     return tempfile.gettempdir()
 
 
+class _Unusable(Exception):
+    """Input the helper cannot run from; reported as one line, exit 2."""
+
+
 def load_entry(spec):
     path, _, func = spec.rpartition(":")
     if not path or not func:
-        raise SystemExit("--tests must be FILE.py:FUNC")
+        raise _Unusable("--tests must be FILE.py:FUNC")
+    if not os.path.isfile(path):
+        raise _Unusable("--tests file not found: " + path)
     s = importlib.util.spec_from_file_location("_mutation_tests", path)
+    if s is None or s.loader is None:
+        raise _Unusable("--tests file is not loadable Python: " + path)
     mod = importlib.util.module_from_spec(s)
-    s.loader.exec_module(mod)
-    return getattr(mod, func)
+    try:
+        s.loader.exec_module(mod)
+    except Exception as e:
+        raise _Unusable("--tests file failed to load: %s: %s" % (type(e).__name__, e))
+    fn = getattr(mod, func, None)
+    if not callable(fn):
+        raise _Unusable("--tests names no function %s in %s" % (func, path))
+    return fn
+
+
+def load_mutations(path):
+    """The --mutations list, validated: every entry needs string id, old and new."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        raise _Unusable("--mutations unreadable: %s" % e)
+    if not isinstance(data, list):
+        raise _Unusable("--mutations must be a JSON list")
+    for i, m in enumerate(data):
+        if not isinstance(m, dict) or not all(isinstance(m.get(k), str) for k in ("id", "old", "new")):
+            raise _Unusable("--mutations entry %d needs string id, old and new" % i)
+    return data
 
 
 def build_module(name, filename, source):
@@ -110,10 +145,16 @@ def sandbox(root):
 
 
 class _Terminated(BaseException):
-    """The helper itself was asked to stop (SIGTERM); never mistaken for a mutant's exit."""
+    """The helper itself was asked to stop (SIGTERM or SIGINT); never mistaken for a mutant's exit."""
+
+    def __init__(self, signum):
+        super().__init__(signum)
+        self.signum = signum
 
 
-_KILLS = (Exception, SystemExit, KeyboardInterrupt)  # whatever a mutant does, it is not the helper's end
+# whatever a mutant does, it is not the helper's end. KeyboardInterrupt is not here: SIGINT
+# is the operator stopping the run, raised as _Terminated, and must never read as a kill.
+_KILLS = (Exception, SystemExit)
 
 
 def run_tests(entry, build, names, root, timeout):
@@ -212,33 +253,60 @@ def span_of(source, old):
     return first, first + old.count("\n")
 
 
+_HUNK = re.compile(r"@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
 def changed_lines(diff_text, module_path):
-    """New-file line numbers a unified diff touches in the file whose path ends like module_path."""
+    """New-file line numbers a unified diff touches in the file whose path ends like module_path.
+
+    Inside a hunk its @@ counts decide what each line is, so an empty line (a context line
+    whose trailing space was stripped) is context and a line reading `--- ` or `+++ ` is
+    content; file headers are only read between hunks.
+    """
     want = os.path.basename(module_path)
     out, current = set(), False
-    new_line = 0
+    new_line = old_left = new_left = 0
     for line in diff_text.splitlines():
+        if old_left > 0 or new_left > 0:
+            if line.startswith("+"):
+                if current:
+                    out.add(new_line)
+                new_line += 1
+                new_left -= 1
+            elif line.startswith("-"):
+                if current:
+                    out.add(new_line)  # a deletion touches the line now at that spot
+                old_left -= 1
+            elif line.startswith("\\"):
+                pass  # "\ No newline at end of file"
+            else:  # " text" or an empty line: context on both sides
+                new_line += 1
+                old_left -= 1
+                new_left -= 1
+            continue
         if line.startswith("+++ "):
             current = os.path.basename(line[4:].split("\t")[0].strip()) == want
             continue
-        m = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+        m = _HUNK.match(line)
         if m:
-            new_line = int(m.group(1))
-            continue
-        if not current or line.startswith("---"):
-            continue
-        if line.startswith("+"):
-            out.add(new_line)
-            new_line += 1
-        elif line.startswith("-"):
-            out.add(new_line)  # a deletion touches the line now at that spot
-        elif line.startswith(" "):
-            new_line += 1
+            old_left = int(m.group(1)) if m.group(1) is not None else 1
+            new_line = int(m.group(2))
+            new_left = int(m.group(3)) if m.group(3) is not None else 1
     return out
 
 
+class _Parser(argparse.ArgumentParser):
+    def error(self, message):
+        print("mutation-run: " + message, file=sys.stderr)
+        raise SystemExit(2)
+
+
+def _emit(r):
+    print("%s\t%s\t%s" % (r["id"], r["status"], r["detail"]), flush=True)
+
+
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap = _Parser(description=__doc__.split("\n")[0])
     ap.add_argument("--module", required=True)
     ap.add_argument("--tests", required=True)
     ap.add_argument("--mutations", required=True)
@@ -251,20 +319,30 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     def _term(signum, frame):
-        raise _Terminated()
+        raise _Terminated(signum)
 
     signal.signal(signal.SIGTERM, _term)
+    signal.signal(signal.SIGINT, _term)
 
     filename = os.path.abspath(a.module)
-    with open(filename, encoding="utf-8") as f:
-        source = f.read()
-    with open(a.mutations, encoding="utf-8") as f:
-        mutations = json.load(f)
-    entry = load_entry(a.tests)
+    try:
+        try:
+            with open(filename, encoding="utf-8") as f:
+                source = f.read()
+        except OSError as e:
+            raise _Unusable("--module unreadable: %s" % e)
+        mutations = load_mutations(a.mutations)
+        entry = load_entry(a.tests)
+    except _Unusable as e:
+        print("mutation-run: %s" % e, file=sys.stderr)
+        return 2
+    except _Terminated as t:  # stopped while loading: no results exist yet
+        return 130 if t.signum == signal.SIGINT else 143
     root = pick_root(a.tmp_root)
     name = os.path.splitext(os.path.basename(filename))[0]
 
     saved = sys.modules.get(name)
+    results = []
     try:
         failed = run_tests(entry, lambda: build_module(name, filename, source), None, root, a.timeout)
         if failed:
@@ -276,19 +354,22 @@ def main(argv=None):
         touched = None
         if a.previous and a.diff:
             with open(a.previous, encoding="utf-8") as f:
-                previous = {r["id"]: r for r in json.load(f)}
+                prev_data = json.load(f)
+            if isinstance(prev_data, dict):  # a partial run's {"partial": true, "results": [...]}
+                prev_data = prev_data.get("results", [])
+            previous = {r["id"]: r for r in prev_data}
             with open(a.diff, encoding="utf-8") as f:
                 diff_text = f.read()
             touched = changed_lines(diff_text, filename)
             if changed_lines(diff_text, a.tests.rpartition(":")[0]):
                 touched = None  # the tests changed: every earlier result is stale
 
-        results = []
         for m in mutations:
             mid, old, new = m["id"], m["old"], m["new"]
             span = span_of(source, old)
             if span is None:
                 results.append({"id": mid, "status": "invalid", "detail": "old text must occur exactly once"})
+                _emit(results[-1])
                 continue
             lines = set(range(span[0], span[1] + 1))
             prev = previous.get(mid)
@@ -298,6 +379,7 @@ def main(argv=None):
                     and prev_outcome == "killed" and not (lines & touched):
                 results.append({"id": mid, "status": "carried", "outcome": prev_outcome, "detail": prev_outcome,
                                 "old": old, "new": new, "lines": [span[0], span[1]]})
+                _emit(results[-1])
                 continue
             names = None
             if cov is not None:
@@ -305,12 +387,19 @@ def main(argv=None):
                 if names is not None and not names:
                     results.append({"id": mid, "status": "uncovered", "detail": "no test executes these lines",
                                     "old": old, "new": new, "lines": [span[0], span[1]]})
+                    _emit(results[-1])
                     continue
             mutant_src = source.replace(old, new, 1)
             failed = run_tests(entry, lambda src=mutant_src: build_module(name, filename, src), names, root, a.timeout)
             results.append({"id": mid, "status": "killed" if failed else "survived",
                             "detail": failed or "", "old": old, "new": new, "lines": [span[0], span[1]]})
-    except _Terminated:
+            _emit(results[-1])
+    except _Terminated as t:
+        if t.signum == signal.SIGINT:
+            return 130  # the operator stopped it: nothing here is a result to keep
+        if a.out:
+            with open(a.out, "w", encoding="utf-8") as f:
+                json.dump({"partial": True, "results": results}, f, indent=1)
         return 143
     finally:
         if saved is not None:
@@ -318,8 +407,6 @@ def main(argv=None):
         else:
             sys.modules.pop(name, None)
 
-    for r in results:
-        print("%s\t%s\t%s" % (r["id"], r["status"], r["detail"]))
     counts = {}
     for r in results:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
@@ -327,6 +414,8 @@ def main(argv=None):
     if a.out:
         with open(a.out, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=1)
+    if any(r["status"] == "invalid" for r in results):
+        return 2
     bad = sum(1 for r in results if r.get("outcome", r["status"]) in ("survived", "uncovered"))
     return 1 if bad else 0
 
