@@ -450,13 +450,15 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
     // Premises: engaged on fixture 1's envelope; the hook sends envelopes on a change of JSON only, so fixture 7's approval
     // replaces it with no `ask_cleared` between (the identity never goes null); focus is on the body; fixture 1 returns.
     media(true);
-    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(1);
     const first = opt(card(), /^Redis/);
     act(() => first.focus());
-    key(first, '1');
+    // R102: a digit would send, and a send releases the engagement itself (`claim()`), which would end it before the
+    // identity change under test could. A non-answer key engages without sending, so the release proved here is the
+    // identity's (`useAskEngagement`'s layout effect).
+    key(first, 'ArrowDown');
     arrive(7);
     await frame();
     expect(cards(), 'premise: the approval is up in the card').toHaveLength(1);
@@ -491,13 +493,13 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
   it('a clear then a later ask with the same content in another batch takes no focus from the page body', async () => {
     // Premises: engaged on fixture 1's envelope; the ask clears (the card leaves); the SAME envelope comes again later.
     media(true);
-    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(1);
     const first = opt(card(), /^Redis/);
     act(() => first.focus());
-    key(first, '1');
+    // R102: engaged by a non-answer key, so the identity's release (not a send's) is what this case proves (see above).
+    key(first, 'ArrowDown');
     act(() => {
       store.getState().apply({ type: 'ask_cleared' });
       store.getState().apply({ type: 'dialog_cleared' });
