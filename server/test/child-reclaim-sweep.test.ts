@@ -2892,3 +2892,14 @@ describe('sweepChildReclaim — what each request says the feed already carries 
     expect(f.requests[0]!.feedQuiet.failureToken, 'a token-less failure item says nothing the executor could match').toBeNull();
   });
 });
+
+// ARCH-77 (#812). APPENDED. The sweep with `child-reclaim-disabled` ABSENT is today's sweep, whatever else the registry lists.
+describe('the sweep with child-reclaim-disabled absent (characterization)', () => {
+  it('queues the reclaim on the second pass, with the neighbouring switches that are not its own listed', async () => {
+    const f = fixture();
+    finishedChild(f);
+    for (const m of ['coordinator-paused', 'mail-disabled', 'stop-done-disabled']) writeFileSync(path.join(f.reg, m), '');
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a']);
+  });
+});
