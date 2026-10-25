@@ -5161,7 +5161,7 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
     noRunnerBugLine(r.stdout, 'codex');
   });
 
-  it('a bridge-shaped answer with no proven bridge pid FAILs as unidentified on a direct lane; on a litellm lane its shim tier names the other mode', async () => {
+  it('a bridge-shaped answer with no proven bridge pid FAILs as unidentified on a direct lane; on a litellm lane its shim tier reads it unidentified too', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-direct-foreign-', ['codex-a', 'codex-b']);
     plantDirectLane(home, 'codex-a');
     const pa = lanePorts(home, 'codex-a').proxyPort;
@@ -5170,10 +5170,36 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
     await spawnListener(home, { answer: 'direct', lane: 'codex-b', port: pb });
     const r = runDoctor(home);
     expect(r.stdout, r.stdout).toMatch(new RegExp(`^FAIL codex: codex-a: port ${pa} \\(codex-a's bridge tier\\) is held by a listener that is not this lane's: its identity check failed — ccrc neither adopts nor stops what it cannot identify$`, 'm'));
-    expect(r.stdout).toMatch(new RegExp(`^FAIL codex: codex-b: port ${pb} \\(codex-b's shim tier\\) answers as codex-b's bridge, the tier of the lane's other mode`, 'm'));
-    expect(r.stdout).not.toMatch(/retired refresher/);
+    // The closing round, C1: no bridge proves itself behind codex-b's answer, so it is no retired tier either.
+    expect(r.stdout).toMatch(new RegExp(`^FAIL codex: codex-b: port ${pb} \\(codex-b's shim tier\\) is held by a listener that is not this lane's: its identity check failed — ccrc neither adopts nor stops what it cannot identify$`, 'm'));
+    expect(r.stdout).not.toMatch(/retired refresher|the tier of the lane's other mode/);
     noRunnerBugLine(r.stdout, 'codex');
   });
+
+  // The closing round, C1: `_codex_foreign_what` measures the mate itself (`--mate-now`), so the doctor words the
+  // state as start does. A litellm lane's shim port answered in the bridge's shape for this lane, by a process this
+  // lane's bridge by its command line and named by `bridge.pid`, is the other mode's tier, `retired-tier-running`'s
+  // sentence with its `ccrc codex stop` remedy. With `bridge.pid` moved aside the mate is unproven, and the port is a
+  // listener ccrc cannot identify, `port-foreign`'s sentence with its "stop whatever holds port" remedy.
+  itLinux('a litellm lane\'s shim port answered by its bridge FAILs as the other mode\'s tier only while that bridge proves itself; unproven, as a listener ccrc cannot identify', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-litellm-mate-', ['codex-a']);
+    const p = lanePorts(home, 'codex-a').proxyPort;
+    const shim = join(home, '.local', 'bin', 'ccgpt-proxy.py');
+    const b = await spawnListener(home, { answer: 'direct', lane: 'codex-a', port: p, argv: [shim, '--ccrc-bridge=direct', '--ccrc-lane=codex-a'] });
+    const pf = join(laneDir(home, 'codex-a'), 'bridge.pid');
+    writeFileSync(pf, `${b.pid}\n`);
+    const mode = new RegExp(`^FAIL codex: codex-a: port ${p} \\(codex-a's shim tier\\) answers as codex-a's bridge, the tier of the lane's other mode, so codex-a's shim tier is not what holds it — ccrc neither adopts nor stops what it cannot identify$`, 'm');
+    const proven = runDoctor(home);
+    expect(proven.stdout, proven.stdout).toMatch(mode);
+    expect(remedyAfter(proven.stdout, mode)).toBe("  remedy: 'ccrc codex stop codex-a' stops every tier of the lane, in either mode; then start it again.");
+    renameSync(pf, `${pf}.aside`);
+    const r = runDoctor(home);
+    const foreign = new RegExp(`^FAIL codex: codex-a: port ${p} \\(codex-a's shim tier\\) is held by a listener that is not this lane's: its identity check failed — ccrc neither adopts nor stops what it cannot identify$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(foreign);
+    expect(remedyAfter(r.stdout, foreign)).toBe(`  remedy: Stop whatever holds port ${p}, or give codex-a other ports in ~/.ccrc/accounts.json.`);
+    expect(r.stdout).not.toMatch(/the tier of the lane's other mode|stops every tier of the lane/);
+    noRunnerBugLine(r.stdout, 'codex');
+  }, 120_000);
 
   itLinux('a bridge whose identity cannot be measured WARNs "unmeasured" — never read as running or as stopped', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-direct-unmeasured-', ['codex-a', 'codex-b']);

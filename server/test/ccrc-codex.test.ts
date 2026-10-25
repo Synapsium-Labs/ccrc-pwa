@@ -5034,4 +5034,32 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
       expect(alive(lit) && alive(shim), 'the refusal touched a running tier').toBe(true);
     }, 120_000);
   });
+
+  // The closing round, C1: status words the state of start's fallback above as start does, because
+  // `_codex_foreign_what` now measures the mate itself (`--mate-now`) for every consumer. A bridge-shaped answer for
+  // this lane from a bridge that proves itself is the other mode's tier, with the `ccrc codex stop` remedy; with its
+  // pidfile moved aside the mate is unproven, and the shim tier reads `port-foreign`'s listener ccrc cannot identify,
+  // with the "stop whatever holds port" remedy.
+  itLinux('status on a litellm lane words a bridge-shaped answer as the other mode\'s tier only while the bridge proves itself', async () => {
+    const { home, proxyPort, litellmPort } = await bridgeBox({ userManager: false });
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    const pid = Number(/^ccrc codex: codex-a: bridge started \(nohup (\d+)\)$/m.exec(r.stdout)?.[1]);
+    expect(alive(pid), r.stdout).toBe(true);
+    switchMode(home, proxyPort, litellmPort, 'litellm');
+    const proven = cx(home, ['status', 'codex-a']);
+    expect(proven.code, proven.stderr).toBe(0);
+    expect(proven.stdout).toMatch(new RegExp(`^ccrc codex: codex-a: shim FOREIGN — port ${proxyPort} \\(codex-a's shim tier\\) answers as codex-a's bridge, the tier of the lane's other mode, .*'ccrc codex stop codex-a' stops every tier of the lane`, 'm'));
+    const pf = join(laneDir(home, 'codex-a'), 'bridge.pid');
+    fs.renameSync(pf, `${pf}.aside`);
+    try {
+      const o = cx(home, ['status', 'codex-a']);
+      expect(o.code, o.stderr).toBe(0);
+      expect(o.stdout).toMatch(new RegExp(`^ccrc codex: codex-a: shim FOREIGN — port ${proxyPort} \\(codex-a's shim tier\\) is held by a listener that is not this lane's: its identity check failed\\. Stop whatever holds port ${proxyPort}, or give codex-a other ports in ~/\\.ccrc/accounts\\.json\\. ccrc will neither adopt nor stop it\\.$`, 'm'));
+      expect(o.stdout).not.toMatch(/the tier of the lane's other mode|ccrc codex stop/);
+      expect(alive(pid), 'status stopped the unproven holder').toBe(true);
+    } finally {
+      fs.renameSync(`${pf}.aside`, pf);   // the cleanup's stop reaps the bridge through its handle
+    }
+  }, 120_000);
 });

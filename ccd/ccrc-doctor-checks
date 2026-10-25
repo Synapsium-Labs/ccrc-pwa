@@ -7298,7 +7298,7 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> â€
       _dr_cx_fail "$id has no lane.json ($(_codex_lane_dir "$id")/lane.json), which the launcher, the shim and the usage publisher all read" \
         "render it: ccrc codex start $id renders lane.json from the roster before it starts the lane (every session launch runs the same start)" ;;
     stale)
-      _dr_cx_fail "$id's lane.json disagrees with its roster row (its id, configDir, authDir, a port, its unit names, or its mode, upstream or bridge file names), so the shim and the usage publisher read the lane's old shape" \
+      _dr_cx_fail "$id's lane.json disagrees with its roster row (its id, configDir, authDir, a port, its unit names, or no mode, upstream or bridge file names at all), so the shim and the usage publisher read the lane's old shape" \
         "re-render it: ccrc codex start $id renders lane.json from the roster before it starts the lane" ;;
     *)
       _dr_cx_fail "whether $id's lane.json matches its roster row could not be measured" \

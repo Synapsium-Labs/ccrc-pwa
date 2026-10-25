@@ -1204,7 +1204,7 @@ lane with no `lane.json` is left for its first start, D-6872), under the lane-fi
 the update's doctor stays clean (without it every lane's `lane.json` would read stale, the doctor would FAIL each one,
 and `ccrc update` would exit 3). The re-render also rewrites each lane's settings env block, TSV and effort file from
 unchanged inputs. Nothing else changes until an operator runs `ccrc codex switch <id> direct`: every lane's
-`exec.bridge` is absent, which reads `litellm`, and the doctor's rows for a `litellm` lane are today's.
+`exec.bridge` is absent, which reads `litellm`. A `litellm` lane's usage rows are today's, word for word; two `lane.json` FAIL sentences, the `stale` one and the class-registry one, are reworded (the whole-wave fix round, Y7); and the bridge files' 0600 row is asked in either mode (D-6887).
 
 ### Task 10: `exec.bridge` and `exec.upstream`, and `lane.json`
 
@@ -2735,7 +2735,10 @@ report.
   mode its holder left, and adopts the bridge it brought up' (`server/test/ccrc-codex.test.ts:4731`) is red without it.
 - **Cost if wrong:** On a refused lock, install's failed count and uninstall's not-stopped list still read the mode
   without the lock (:18028, :26259), only to say which tiers were not handled, so a switch in flight can make that line
-  name the other mode's tiers.
+  name the other mode's tiers. In start, the credential refusals (`not-logged-in`, `credential-unusable`, `needs-signin`
+  and `auth-status-unreadable`, :13991-14011) now come before the mode and upstream refusals (`lane-mode-unreadable`,
+  `lane-upstream-unreadable` and `upstream-unsupported`, :14024-14033), so a direct `siwc` lane with no credential is
+  first told to sign in, and only then refused `upstream-unsupported`.
 
 ### D-6874 — the bridge's start record hashes the auth library
 
@@ -2891,9 +2894,12 @@ report.
   be opened and `roster-busy` on the timeout, and it closes the fd before step 5 (:14408).
 - **Why:** The account verbs write the roster under that lock, and the switch writes the roster too. `_acct_marker_lock`
   itself is outside this wave's cleared region, and its refusals are the account verbs' JSON envelope.
-- **Cost if wrong:** The lock path is spelled twice in `ccd/ccrc`'s code (:8034 and :14306), and nothing pins the two to
-  each other, so a move of one makes the switch silently stop serialising. Switches of different lanes serialise on this
-  one box-wide file.
+- **Cost if wrong:** The lock path is spelled twice in `ccd/ccrc`'s code (:8034 and :14306). Each spelling is pinned to
+  the same literal path by its own cases: the switch's by 'switch takes the roster writers' lock before it stops a tier,
+  and lets go of it before it starts one' (`server/test/ccrc-codex.test.ts:4831`, with the roster-unwritable and
+  roster-busy cases at :4943 and :4958), and `_acct_marker_lock`'s by `server/test/ccrc-account.test.ts:7101` and
+  :7612-7613. So moving either one alone reds a suite, but no single assertion ties the two together. Switches of
+  different lanes serialise on this one box-wide file.
 
 ### D-6886 — `codex-mode` writes nothing when the row already resolves to the mode
 
@@ -3142,8 +3148,8 @@ report.
   no growth for `ccd/ccrc`.
 - **What changed:** Measured by `server/test/growth-check.test.ts` (`GROWTH_CHECK=1`) against the merge-base
   `282e7c595`, `ccd/ccrc` grows from 11641 to 12181 code lines, +540, and every other listed file by 0. One entry is
-  appended to `server/test/growth-waivers.json` (:81-87): `ccd/ccrc`, `maxDelta` 550 (the delta rounded up to the next
-  10), `D-6907`, added 2026-10-25; no other entry is touched.
+  appended to `server/test/growth-waivers.json` (:81-87): `ccd/ccrc`, `maxDelta` 550 (the measured delta plus 10 of
+  headroom), `D-6907`, added 2026-10-25; no other entry is touched.
 - **Why:** Wave 2's lane work is bash that lives beside the codex library in `ccd/ccrc`: the lane.json mode and upstream
   readers, the bridge tier in start, stop and status, `ccrc codex switch`, the install and uninstall walks over a mode's
   tiers, the advance step's bounded mode read and the hourly refresh's lowering pass. None of it has another home in
