@@ -13,6 +13,7 @@ import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
 import { accountHue, accountLabel } from '../lib/accounts';
 import { api, ApiError, failedTo, INTERRUPT_REFUSAL_TEXT, refusalText } from '../lib/api';
+import { backgroundTasksClause } from '../lib/refusalWords';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
 import { ack } from '../lib/seen';
@@ -398,11 +399,8 @@ export function SessionScreen({
     } catch (err) {
       const bg = err instanceof ApiError && err.status === 409 ? backgroundOnlyRefusal(err.body) : null;
       if (bg !== null) {
-        toast(bg.count === null
-          ? 'The main turn has finished; a background shell or monitor is still running. Escape would not stop it.'
-          : `The main turn has finished; ${bg.count} background ${bg.count === 1 ? 'task' : 'tasks'}`
-            + `${bg.kinds.length > 0 ? ` (${bg.kinds.join(', ')})` : ''} ${bg.count === 1 ? 'is' : 'are'} still running.`
-            + ` Escape would not stop ${bg.count === 1 ? 'it' : 'them'}.`);
+        toast(`The main turn has finished; ${backgroundTasksClause(bg)}.`
+          + ` Escape would not stop ${bg.count === 1 || bg.count === null ? 'it' : 'them'}.`);
       } else if (err instanceof ApiError && err.status === 409) {
         toast(refusalText(err, INTERRUPT_REFUSAL_TEXT) ?? INTERRUPT_REFUSAL_TEXT['not-busy']);
       } else {
