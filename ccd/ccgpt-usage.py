@@ -583,6 +583,9 @@ def _fetch_headers(model: str, token: str, account_id=None, originator: str = _O
         "content-type": "application/json",
         "accept": "text/event-stream",
         "originator": originator,
+        # The same on both modes: a direct lane's poll pairs `originator: ccrc` with this user-agent, not the
+        # bridge's ccrc one (`ccd/codexbridge/backend.py`'s `user_agent`, which needs a version this file does not
+        # know); `server/test/ccgpt-usage.test.ts` pins the pair, so a first live check of D27 measures it too.
         "user-agent": "codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown",
         "session_id": "00000000-0000-0000-0000-000000000000",
     }
@@ -615,19 +618,20 @@ def _lane_mode(lane: dict) -> str:
 
 def _bridge_headers(lane: dict):
     """The `x-codex-` values the lane's bridge last saw, as a dict of lower-cased
-    header names to their string values, when its stats file holds a usable
-    snapshot at most `BRIDGE_FRESH_S` old; else None, and the caller asks upstream.
+    header names to their string values, with the epoch second the bridge saw
+    them, as `(values, stamp)`, when its stats file holds a usable snapshot at
+    most `BRIDGE_FRESH_S` old; else None, and the caller asks upstream.
 
     The file is `lane.json`'s `bridgeFiles.stats`, a plain file name in the lane
     directory (never a path, as the bridge checks it). It is read without
-    following a symlink, only when it is a regular file, and at most
-    `_STATS_READ_MAX` bytes. A usable snapshot is the bridge's version-1
-    document for THIS lane whose `usageHeaders` has a stamp in `_STATS_STAMP`'s
-    form that is not in the future and a `values` object of string values that
-    carries the primary figure (`_measured`): as `_fetch_headers` refuses a
-    response without it, a snapshot without it is no measurement, and
-    `_build_row` would publish a `seven` of 0 nobody measured. Never raises: every
-    other file is None.
+    following a symlink, without blocking on a FIFO, only when it is a regular
+    file, and at most `_STATS_READ_MAX` bytes. A usable snapshot is the
+    bridge's version-1 document for THIS lane whose `usageHeaders` has a stamp
+    in `_STATS_STAMP`'s form that is not in the future and a `values` object of
+    string values that carries the primary figure (`_measured`): as
+    `_fetch_headers` refuses a response without it, a snapshot without it is no
+    measurement, and `_build_row` would publish a `seven` of 0 nobody measured.
+    Never raises: every other file is None.
     """
     files = lane.get("bridgeFiles")
     name = files.get("stats") if isinstance(files, dict) else None
@@ -669,11 +673,15 @@ def _bridge_headers(lane: dict):
         return None
     if not _measured(values):
         return None
-    return values
+    return values, int(stamp)
 
 
-def _build_row(headers) -> dict:
+def _build_row(headers, ts=None) -> dict:
     """Turn the probe's response headers into the row this file publishes.
+
+    `ts` is when the headers were measured: now for a response (the default),
+    and the bridge's own stamp for its snapshot, so a row from a snapshot is
+    never younger than its measurement.
 
     `seven` is always the primary (weekly, 10080min) figure. `five` mirrors
     the secondary figure only when the secondary window is genuinely active
@@ -720,7 +728,7 @@ def _build_row(headers) -> dict:
     out = {
         "five": five,
         "seven": seven,
-        "ts": int(time.time()),
+        "ts": int(time.time()) if ts is None else ts,
         "fiveResetAt": five_reset,
         "sevenResetAt": seven_reset,
     }
@@ -768,7 +776,8 @@ def main() -> None:
         # credential read, when it is fresh.
         seen = _bridge_headers(lane)
         if seen is not None:
-            out = _build_row(seen)
+            values, stamp = seen
+            out = _build_row(values, ts=stamp)
             _publish(out)
             print(f"ccgpt-usage: {ACCOUNT_ID} {out['five']}%/5h {out['seven']}%/7d (from the bridge's headers)")
             return
