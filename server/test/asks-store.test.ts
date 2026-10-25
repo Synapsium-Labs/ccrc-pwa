@@ -3,7 +3,8 @@
 // Reading/writing it is task 5's job.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { COORD_SCHEMA_VERSION, openCoordDb } from '../src/coord/db.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { MIGRATIONS } from '../src/coord/schema.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okAsk, okAsksByChild } from './coordReadHelpers.js';
@@ -11,7 +12,17 @@ import { ASK_STATES, isAskState, RUN_HOLD_NUMBER_MAX } from '../../shared/api.js
 
 const dbPathIn = (home: string): string => path.join(home, '.ccrc', 'coord.db');
 
+/** True when some migration in `list` creates the asks table. */
+const hasAsksMigration = (list: readonly string[]): boolean =>
+  list.some((ddl) => /CREATE TABLE asks \(/.test(ddl));
+
 describe('the asks table', () => {
+  it('the asks-migration check finds the DDL in a list and fails on a stub list without it', () => {
+    expect(hasAsksMigration(['CREATE TABLE runs (id TEXT)', 'CREATE TABLE asks (id TEXT)'])).toBe(true);
+    expect(hasAsksMigration(['CREATE TABLE runs (id TEXT)', 'ALTER TABLE runs ADD COLUMN x TEXT'])).toBe(false);
+  });
+
+
   it('the cross-repo columns added at schema version 10 are still present at the current version', () => {
     const home = mkTmp('ccrc-coord-');
     const db = openCoordDb(dbPathIn(home));
@@ -37,10 +48,12 @@ describe('the asks table', () => {
     // columns, D-5838), MIGRATIONS[27] (`secret_fingerprints`, D-5513,
     // accounts plan Task A10) and MIGRATIONS[28] (`feed_events.dedupe_key`,
     // D-5860). Only MIGRATIONS[20] and MIGRATIONS[24]
-    // touch the asks table. This pin only needs the CURRENT total — it
-    // asserts "no migration after the one this test knows about has changed
-    // the asks table's columns", not anything about any of the twelve.
-    expect(COORD_SCHEMA_VERSION).toBe(31);
+    // touch the asks table. This test asserts "no migration after the one it
+    // knows about has changed the asks table's columns", not anything about
+    // any of the twelve. The total is not pinned: the asks migration is found
+    // by its DDL (slot order is coord-db.test.ts's), so a new migration
+    // elsewhere never forces a re-pin here.
+    expect(hasAsksMigration(MIGRATIONS)).toBe(true);
     const cols = (db.prepare("SELECT name FROM pragma_table_info('asks')").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(cols).toEqual([
