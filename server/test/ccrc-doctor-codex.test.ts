@@ -70,7 +70,7 @@ const expectNoCodexWarn = (out: string): void => {
   expect(out.split('\n').filter((l) => /^WARN codex: /.test(l)), out).toEqual([]);
 };
 
-/** A real status file, written by the library's own refresher against a fake token endpoint (ccrc-codex.test.ts's
+/** A real status file, written by the library's own refresher against a fake token endpoint (ccrcCodexFixture.ts's
  *  `refusedRefresh`): the lane's credential is planted expired, one `ensure_fresh` runs, and `word` is the state it
  *  recorded. The only spawn here that names a live fake; the doctor itself runs under CLOSED_AUTH_BASE. */
 async function refreshRefusedAs(home: string, id: string, answer: AuthAnswer, word: string): Promise<void> {

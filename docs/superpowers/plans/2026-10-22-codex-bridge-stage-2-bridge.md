@@ -2651,7 +2651,7 @@ report.
   `litellm <w>, shim <w>, bridge <w>`.
 - **What changed:** The stop walks `_codex_stop_order` (`ccd/ccrc:12129-12139`, bridge first on a direct lane), but its
   line is always `litellm <w>, shim <w>, bridge <w>` (:13939-13950). The tests assert that order
-  (`server/test/ccrc-codex.test.ts:4129`, :4252).
+  (`server/test/ccrc-codex-bridge.test.ts:169`, :292).
 - **Why:** The plan contradicts itself, and the code follows the Interfaces. A litellm lane's line keeps its old prefix,
   with `, bridge <w>` appended.
 - **Cost if wrong:** The printed order no longer shows the stop order. Mutation row L12 still reds a wrong stop order,
@@ -2680,8 +2680,8 @@ report.
   not say how a foreign listener or unit there is reported.
 - **What changed:** `_codex_tier_port` maps `shim` and `bridge` to the same `CX_PROXY` (`ccd/ccrc:12299`), and the
   bridge runs under `units.shim`, so a foreign holder reads foreign on both tiers: status shows two FOREIGN lines, and
-  stop says `shim foreign, bridge foreign` (`server/test/ccrc-codex.test.ts:2569`, :3515). Since the whole-wave fix
-  round, account removal's re-measure names a finding on that port or unit once, not again for its mate
+  stop says `shim foreign, bridge foreign` (`server/test/ccrc-codex-lifecycle.test.ts:987`, :1933). Since the
+  whole-wave fix round, account removal's re-measure names a finding on that port or unit once, not again for its mate
   (`ccd/ccrc:9214-9218`).
 - **Why:** Each tier is measured on its own terms against one port and one unit.
 - **Cost if wrong:** Status and stop name one stranger twice. Nothing is stopped or adopted.
@@ -2732,7 +2732,8 @@ report.
 - **Why:** A `ccrc codex switch` moves lane.json to the other mode and starts that mode's tiers while it holds the lane
   lock, so a mode read before the lock can be the one the switch replaced, and the walk would call the tier the switch
   brought up retired or foreign (whole-wave finding LB-1). The case 'a start that waits on the lane lock acts on the
-  mode its holder left, and adopts the bridge it brought up' (`server/test/ccrc-codex.test.ts:4731`) is red without it.
+  mode its holder left, and adopts the bridge it brought up' (`server/test/ccrc-codex-bridge.test.ts:771`) is red
+  without it.
 - **Cost if wrong:** On a refused lock, install's failed count and uninstall's not-stopped list still read the mode
   without the lock (:18028, :26259), only to say which tiers were not handled, so a switch in flight can make that line
   name the other mode's tiers. In start, the credential refusals (`not-logged-in`, `credential-unusable`, `needs-signin`
@@ -2751,7 +2752,7 @@ report.
 - **Why:** The bridge is a direct lane's refresher and loads the library once for its whole life, so a changed library
   must read as stale and `_inst_codex_tiers` restart the running bridge onto it, as the litellm tier's record already
   does (whole-wave finding L2). The case 'a changed auth library makes a running bridge stale'
-  (`server/test/ccrc-codex.test.ts:4218`) is red without it.
+  (`server/test/ccrc-codex-bridge.test.ts:258`) is red without it.
 - **Cost if wrong:** Every update that changes the library restarts a running bridge, which cuts a stream longer than
   `DRAIN_S` (Review Focus 3). No live box runs a bridge yet.
 
@@ -2764,7 +2765,7 @@ report.
   rest (`ccd/ccrc:13191-13194`, its reason at :13175-13181); the record still stores it. The doctor's bridge-record case
   reads a record that differs in its interpreter alone as current (`server/test/ccrc-doctor-codex.test.ts:5119-5130`),
   as does 'a bridge record that names another interpreter, with the same code and package, reads current'
-  (`server/test/ccrc-codex.test.ts:4231`).
+  (`server/test/ccrc-codex-bridge.test.ts:271`).
 - **Why:** `_codex_python` resolves `python3` on the caller's PATH, so a launcher's start, an ssh `ccrc update` and an
   interactive `ccrc doctor` can each name another path for the same healthy bridge, which would read stale in one of
   them and be restarted on every update (whole-wave finding L5).
@@ -2776,8 +2777,8 @@ report.
 - **Departs from:** Task 11's Step 1 (plan :1381-1383): the case "reads `_codex_stop_wait_s bridge` and the package's
   two constants through the driver".
 - **What changed:** The case reads `server.DRAIN_S + server.STOP_MARGIN_S` with a `python3 -I -c` import of
-  `codexbridge.server`, with `sys.dont_write_bytecode = True` (`server/test/ccrc-codex.test.ts:4279-4289`), and compares
-  the sum with `_codex_stop_wait_s` (`ccd/ccrc:13815-13817`).
+  `codexbridge.server`, with `sys.dont_write_bytecode = True` (`server/test/ccrc-codex-bridge.test.ts:319-329`),
+  and compares the sum with `_codex_stop_wait_s` (`ccd/ccrc:13815-13817`).
 - **Why:** The driver has no op that prints those constants, and the driver file is not in Task 11's files.
 - **Cost if wrong:** None: the comparison reads the shipped constants either way.
 
@@ -2805,9 +2806,17 @@ report.
   and the cases to `server/test/ccrc-install-codex.test.ts:490`, :501, :512 (retitled by the whole-wave fix round) and
   :982-989. Because #1293 split the doctor suite, Task 13's cases are in `server/test/ccrc-doctor-codex.test.ts:5057`
   and its helpers in `server/test/ccrc-doctorFixture.ts:1905`, imported on their own line
-  (`ccrc-doctor-codex.test.ts:19`).
+  (`ccrc-doctor-codex.test.ts:19`). After the second merge of main, Tasks 11 and 12's bridge-tier describe moved
+  unchanged to `server/test/ccrc-codex-bridge.test.ts:30`, and the helpers the split files share moved, exported, to
+  `server/test/ccrcCodexFixture.ts`. Plan 2b-2's lifecycle and login describes, with the fixture-contract describe
+  before them, moved unchanged to `server/test/ccrc-codex-lifecycle.test.ts:108` and :2039, so `ccrc-codex.test.ts`
+  keeps the library's describes.
 - **Why:** The files the plan names no longer exist on `main`. Apart from exporting `modeStub`, the ported text is
-  unchanged.
+  unchanged. The bridge-tier and lifecycle cases live in files of their own because D-6856's allocator issues at most
+  500 ports to one test file, and the merged `ccrc-codex.test.ts` needed 623 (measured: 350 for the library's
+  describes, 175 for the lifecycle and login, 98 for the bridge tier); the fixture contract moved with the lifecycle
+  because a file that ends on its last case fails the run's leftover-process check, its fake unit's supervisor
+  lingering 3 s.
 - **Cost if wrong:** None at run time. CI's selection must list the split files for a PR to run these cases, and a later
   task that cites the plan's file names (Task 17's doctor rows) must use the split ones.
 
@@ -2855,8 +2864,8 @@ report.
 - **What changed:** A lane in the target mode that is not fully up runs steps 2-5, and step 3 (`ccd/ccrc:14370-14390`)
   refuses it `switch-stopped`, naming the running tier; the `already` loop measures every mode tier, with no `break`
   (:14330-14334). Two cases are added: 'a tier still running after the stop stops the switch before anything is written'
-  (`server/test/ccrc-codex.test.ts:4674`, row W2) and 'a half-up lane switched to its own mode is refused as running,
-  never as foreign' (:4905).
+  (`server/test/ccrc-codex-bridge.test.ts:714`, row W2) and 'a half-up lane switched to its own mode is refused as
+  running, never as foreign' (:945).
 - **Why:** Step 3 is literal (every tier not running), and that same path lets the step-6 remedy re-record and restart
   after a step-4 failure.
 - **Cost if wrong:** A half-up lane is not healed by `switch` to its own mode. The refusal names `ccrc codex stop <id>`.
@@ -2896,8 +2905,8 @@ report.
   itself is outside this wave's cleared region, and its refusals are the account verbs' JSON envelope.
 - **Cost if wrong:** The lock path is spelled twice in `ccd/ccrc`'s code (:8034 and :14306). Each spelling is pinned to
   the same literal path by its own cases: the switch's by 'switch takes the roster writers' lock before it stops a tier,
-  and lets go of it before it starts one' (`server/test/ccrc-codex.test.ts:4831`, with the roster-unwritable and
-  roster-busy cases at :4943 and :4958), and `_acct_marker_lock`'s by `server/test/ccrc-account.test.ts:7101` and
+  and lets go of it before it starts one' (`server/test/ccrc-codex-bridge.test.ts:871`, with the roster-unwritable and
+  roster-busy cases at :983 and :998), and `_acct_marker_lock`'s by `server/test/ccrc-account.test.ts:7101` and
   :7612-7613. So moving either one alone reds a suite, but no single assertion ties the two together. Switches of
   different lanes serialise on this one box-wide file.
 

@@ -1892,7 +1892,8 @@ describe('ccrc uninstall: the codex step, in order and contained (Plan 2b-2 Task
   });
 
   it('Darwin-reachable fixture cleanup keeps current-run handle authority', () => {
-    const codex = readFileSync(join(here, 'ccrc-codex.test.ts'), 'utf8');
+    const codex = ['ccrc-codex.test.ts', 'ccrc-codex-lifecycle.test.ts', 'ccrc-codex-bridge.test.ts', 'ccrcCodexFixture.ts']
+      .map((f) => readFileSync(join(here, f), 'utf8')).join('\n');
     // Direct tiers and supervised reparented tiers both retain current-run
     // ChildProcess authority on every supported platform. L35's holder is
     // likewise a tracked helper; it has no numeric-PID teardown path.
