@@ -2420,7 +2420,7 @@ export function registerCoordRoutes(
   app.get('/api/coord/shadow-journal', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     const q = decideShadowJournalQuery(req.query as Record<string, unknown>);
-    if (!q.ok) return reply.code(400).send({ ok: false, error: 'bad-request', detail: q.detail });
+    if (!q.ok) return refuseRoute(reply, 'bad-request', { detail: q.detail });
     // A path and a detail came off a session's workspace: masked before they leave (D-5995).
     return reply.code(200).send({ ok: true, rows: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(deps.coord.shadowVerdicts(q, Date.now())) });
   });
