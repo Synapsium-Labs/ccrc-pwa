@@ -563,9 +563,59 @@ describe('select.mjs CLI — pull_request', () => {
 
     it('with --base main only the PR\'s own change is selected: nothing reads src/bar.ts, so no server test runs', () => {
       const { repo, mapFile } = staleMapFixture();
-      const { outputs } = runSelect(repo, { event: 'pull_request', mapFile, base: 'main' });
+      const { outputs, summary } = runSelect(repo, { event: 'pull_request', mapFile, base: 'main' });
       expect(outputs.tests).toBe('selected');
       expect(outputs.count).toBe('0');
+      // a reads src/foo.ts, which main changed after the map: its record is not trusted, so it is left to the queue
+      // and counted, never dropped without a word.
+      expect(outputs.queued_count).toBe('1');
+      expect(summary).toContain('`server/test/a.test.ts` (main changed src/foo.ts since the map)');
+    });
+
+    it('a test main edited after the map is listed as uncertain when the PR touches an unrelated file', () => {
+      const repo = initRepo();
+      writeFile(repo, 'src/other.ts', 'export const other = 1;\n');
+      writeFile(repo, 'server/test/t.test.ts', "it('t', () => {});\n");
+      const mapSha = commitAll(repo, 'map');
+      const mapFile = writeMapFile(repo, {
+        format: 1, sha: mapSha, baseline: depRecord(),
+        tests: { 'server/test/t.test.ts': { ...testRecord({ read: ['src/a.ts'] }), tracedAt: mapSha } },
+      });
+      writeFile(repo, 'server/test/t.test.ts', "it('t', () => { expect(1).toBe(1); });\n");
+      commitAll(repo, 'main edits the test after the map');
+      git(repo, ['checkout', '-q', '-b', 'pr']);
+      writeFile(repo, 'src/other.ts', 'export const other = 2;\n');
+      commitAll(repo, 'the PR change');
+      const { status, outputs, summary } = runSelect(repo, { event: 'pull_request', mapFile, base: 'main' });
+      expect(status).toBe(0);
+      expect(outputs.tests).toBe('selected');
+      expect(outputs.count).toBe('0');
+      expect(outputs.queued_count).toBe('1');
+      expect(summary).toContain('1 uncertain test(s)');
+      expect(summary).toContain('`server/test/t.test.ts` (main changed server/test/t.test.ts since the map)');
+    });
+
+    it('a map that is not in the merge base\'s history leaves every mapped test the PR does not hit to the queue', () => {
+      const repo = initRepo();
+      writeFile(repo, 'src/other.ts', 'export const other = 1;\n');
+      writeFile(repo, 'server/test/t.test.ts', "it('t', () => {});\n");
+      commitAll(repo, 'base');
+      git(repo, ['checkout', '-q', '-b', 'pr']);
+      writeFile(repo, 'src/other.ts', 'export const other = 2;\n');
+      commitAll(repo, 'the PR change');
+      git(repo, ['checkout', '-q', 'main']);
+      writeFile(repo, 'main.txt', 'y\n');
+      const mapSha = commitAll(repo, 'main moves on; the map is built here');
+      git(repo, ['checkout', '-q', 'pr']);
+      const mapFile = writeMapFile(repo, {
+        format: 1, sha: mapSha, baseline: depRecord(),
+        tests: { 'server/test/t.test.ts': { ...testRecord({ read: ['src/a.ts'] }), tracedAt: mapSha } },
+      });
+      const { status, outputs } = runSelect(repo, { event: 'pull_request', mapFile, base: 'main' });
+      expect(status).toBe(0);
+      expect(outputs.tests).toBe('selected');
+      expect(outputs.count).toBe('0');
+      expect(outputs.queued_count).toBe('1');
     });
 
     // A bounded refresh carried a's record from an older commit (tracedAt) and src/foo.ts, which a reads, changed

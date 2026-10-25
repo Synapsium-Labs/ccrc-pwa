@@ -139,8 +139,11 @@ function liveTestsOrRefuse(repoDir) {
  * @param {string | undefined} baseRef a pull request's base (`origin/main`):
  *   the change is then what the PR itself changed since its merge base, not
  *   everything since the map's commit, so a day-old map no longer selects the
- *   whole suite. The merge queue (no baseRef) still diffs from `map.sha`, and
- *   it is the run that covers what main moved since the map.
+ *   whole suite. What main changed between the map's commit and the merge base
+ *   (the drift) is passed to `selectTests` too: a record it touched is
+ *   uncertain, selected when the PR's own change hits it and otherwise listed in
+ *   `queued`. The merge queue (no baseRef) still diffs from `map.sha`, and its
+ *   full run is what tests everything left to it.
  * @returns {{ selection: Selection, map: TestMap | null, retrace?: { selection: Selection, uncertain: ReturnType<typeof uncertainTests> } }}
  *   `retrace` is what a REFRESH traces from: the selection without its uncertain-means-full answer, and the uncertain
  *   records themselves.
@@ -164,8 +167,19 @@ function computeRealSelection(repoDir, mapFile, liveTests, baseRef) {
     // anything else — an unknown commit — throws and falls back below). A pull request diffs from its merge
     // base, so the map's age is not a question there: it only has to be a map.
     let from = map.sha;
+    /** @type {import('./select-tests.mjs').Change[] | null | undefined} */
+    let drift;
     if (baseRef) {
       from = execFileSync('git', ['merge-base', baseRef, 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).trim();
+      // main's own changes from the map to the merge base; null when the map is not in the merge base's history,
+      // so nothing says what main changed (selectTests then counts every mapped record as uncertain).
+      try {
+        execFileSync('git', ['merge-base', '--is-ancestor', map.sha, from], { cwd: repoDir, stdio: 'pipe' });
+        drift = readChanges(repoDir, map.sha, from);
+      } catch (e) {
+        if (e && /** @type {{ status?: number }} */ (e).status === 1) drift = null;
+        else throw e;
+      }
     } else {
       try {
         execFileSync('git', ['merge-base', '--is-ancestor', map.sha, 'HEAD'], { cwd: repoDir, stdio: 'pipe' });
@@ -179,7 +193,7 @@ function computeRealSelection(repoDir, mapFile, liveTests, baseRef) {
     const changes = readChanges(repoDir, from, 'HEAD');
     const existsAt = gitExistsAt(repoDir);
     const staleChanges = gitStaleChanges(repoDir, map);
-    const selection = selectTests({ map, changes, liveTests, existsAt, staleChanges, queueRunsUnmapped: !!baseRef });
+    const selection = selectTests({ map, changes, liveTests, existsAt, staleChanges, queueRunsUnmapped: !!baseRef, drift });
     const retrace = {
       selection: selectIgnoringUncertainty({ map, changes, liveTests, existsAt }),
       uncertain: uncertainTests({ map, liveTests, staleChanges, existsAt }),
@@ -471,7 +485,17 @@ function main() {
     }
   }
   if (queued) {
-    notes.push(`left to the merge queue: ${queued.unmapped.length} unmapped test(s) (no map entry, not touched by this change) and ${queued.uncertain.length} uncertain test(s) (record older than a change to what it read, not hit by this change)`);
+    notes.push(`left to the merge queue: ${queued.unmapped.length} unmapped test(s) (no map entry, not touched by this change) and ${queued.uncertain.length} uncertain test(s) (a change to what its record read — after it was traced, or on main since the map — not hit by this change)`);
+    // Named one by one, up to a cap, so a reviewer can see what the light run did not test.
+    const QUEUED_LISTED = 100;
+    const listed = [
+      ...queued.uncertain.map((f) => `queued: \`${f}\` (${queued.why[f]})`),
+      ...queued.unmapped.map((f) => `queued: \`${f}\` (no map entry)`),
+    ];
+    notes.push(...listed.slice(0, QUEUED_LISTED));
+    if (listed.length > QUEUED_LISTED) notes.push(`queued: ${listed.length - QUEUED_LISTED} more not listed`);
+    const total = queued.unmapped.length + queued.uncertain.length;
+    if (total > 0) process.stdout.write(`::notice::this light run left ${total} server test(s) to the merge queue's full run (${queued.unmapped.length} unmapped, ${queued.uncertain.length} uncertain); the step summary lists them\n`);
   }
   const nowMs = opt.now ? Date.parse(opt.now) : Date.now();
   const mapAge = realSel?.map ? staleMapWarning(realSel.map, nowMs, commitTimeMs(repoDir, realSel.map.sha)) : null;

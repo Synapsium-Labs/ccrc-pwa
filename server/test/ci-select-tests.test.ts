@@ -149,7 +149,7 @@ describe('selectTests queueRunsUnmapped (a pull request diffed from its merge ba
 
   it('leaves a live test the map has never seen, and the change does not touch, to the merge queue', () => {
     const sel = selectTests({ map, changes: [], liveTests: ['server/test/arrived-on-main.test.ts'], existsAt: () => true, queueRunsUnmapped: true });
-    expect(sel).toEqual({ mode: 'selected', tests: [], queued: { unmapped: ['server/test/arrived-on-main.test.ts'], uncertain: [] } });
+    expect(sel).toEqual({ mode: 'selected', tests: [], queued: { unmapped: ['server/test/arrived-on-main.test.ts'], uncertain: [], why: {} } });
   });
 
   it('still selects an unmapped test the change adds or modifies', () => {
@@ -159,7 +159,7 @@ describe('selectTests queueRunsUnmapped (a pull request diffed from its merge ba
     });
     expect(sel).toEqual({
       mode: 'selected', tests: [{ file: 'server/test/mine.test.ts', rule: 1, path: 'server/test/mine.test.ts' }],
-      queued: { unmapped: ['server/test/other.test.ts'], uncertain: [] },
+      queued: { unmapped: ['server/test/other.test.ts'], uncertain: [], why: {} },
     });
   });
 
@@ -194,7 +194,10 @@ describe('selectTests queueRunsUnmapped (a pull request diffed from its merge ba
       expect(sel).toEqual({
         mode: 'selected',
         tests: [{ file: 'server/test/carried-hit.test.ts', rule: 3, path: 'server/src/carried.ts' }],
-        queued: { unmapped: ['server/test/never-traced.test.ts'], uncertain: ['server/test/carried-quiet.test.ts'] },
+        queued: {
+          unmapped: ['server/test/never-traced.test.ts'], uncertain: ['server/test/carried-quiet.test.ts'],
+          why: { 'server/test/carried-quiet.test.ts': 'READ server/src/quiet.ts, after it was traced' },
+        },
       });
     });
 
@@ -205,9 +208,89 @@ describe('selectTests queueRunsUnmapped (a pull request diffed from its merge ba
       });
       expect(sel.mode).toBe('selected');
       expect((sel as { tests: Array<{ file: string }> }).tests.map((t) => t.file)).toEqual(['server/test/never-traced.test.ts']);
-      expect((sel as { queued: unknown }).queued).toEqual({ unmapped: [], uncertain: ['server/test/carried-hit.test.ts', 'server/test/carried-quiet.test.ts'] });
+      expect((sel as { queued: { unmapped: string[], uncertain: string[] } }).queued).toMatchObject({ unmapped: [], uncertain: ['server/test/carried-hit.test.ts', 'server/test/carried-quiet.test.ts'] });
     });
 
+  });
+
+  // `drift`: what main changed between the map's sha and the pull request's merge base. The PR's diff starts at
+  // its merge base, so main's own changes are not in `changes`; a record traced at the map's sha that main has
+  // since changed is as uncertain as one with an older stamp — selected when the PR's change hits it, else queued.
+  describe('with drift (main moved between the map and the merge base)', () => {
+    const drifted: TestMap = {
+      format: 1, sha: SHA_A, baseline: emptyDep(),
+      tests: {
+        'server/test/t.test.ts': rec({ read: ['server/src/a.ts'], tracedAt: SHA_A }),
+        'server/test/reads-moved.test.ts': rec({ read: ['server/src/moved.ts'], tracedAt: SHA_A }),
+        'server/test/quiet.test.ts': rec({ read: ['server/src/quiet.ts'], tracedAt: SHA_A }),
+        'server/test/always.test.ts': rec({ unknown: true, why: 'timeout', tracedAt: SHA_A }),
+      },
+    };
+    const liveTests = Object.keys(drifted.tests);
+    const drift = [
+      { status: 'M' as const, path: 'server/test/t.test.ts', symlink: false },
+      { status: 'M' as const, path: 'server/src/moved.ts', symlink: false },
+    ];
+
+    it('a test main edited, and a test whose read file main changed, are queued as uncertain with the reason', () => {
+      const sel = selectTests({
+        map: drifted, changes: [{ status: 'M', path: 'server/src/b.ts', symlink: false }],
+        liveTests, existsAt: () => true, drift, queueRunsUnmapped: true,
+      });
+      expect(sel.mode).toBe('selected');
+      const s = sel as { tests: Array<{ file: string }>, queued: { unmapped: string[], uncertain: string[], why: Record<string, string> } };
+      expect(s.tests.map((t) => t.file)).toEqual(['server/test/always.test.ts']);
+      expect(s.queued.unmapped).toEqual([]);
+      expect(s.queued.uncertain).toEqual(['server/test/reads-moved.test.ts', 'server/test/t.test.ts']);
+      expect(s.queued.why['server/test/t.test.ts']).toBe('main changed server/test/t.test.ts since the map');
+      expect(s.queued.why['server/test/reads-moved.test.ts']).toBe('main changed server/src/moved.ts since the map');
+    });
+
+    it('a drifted test the PR change hits through its record is selected, not queued', () => {
+      const sel = selectTests({
+        map: drifted, changes: [{ status: 'M', path: 'server/src/a.ts', symlink: false }],
+        liveTests, existsAt: () => true, drift, queueRunsUnmapped: true,
+      });
+      const s = sel as { tests: Array<{ file: string }>, queued: { uncertain: string[] } };
+      expect(s.tests.map((t) => t.file)).toEqual(['server/test/always.test.ts', 'server/test/t.test.ts']);
+      expect(s.queued.uncertain).toEqual(['server/test/reads-moved.test.ts']);
+    });
+
+    it('a full trigger in the drift makes every mapped test the PR change does not hit uncertain', () => {
+      const sel = selectTests({
+        map: drifted, changes: [{ status: 'M', path: 'server/src/quiet.ts', symlink: false }],
+        liveTests, existsAt: () => true, drift: [{ status: 'M', path: 'server/package.json', symlink: false }], queueRunsUnmapped: true,
+      });
+      const s = sel as { tests: Array<{ file: string }>, queued: { uncertain: string[], why: Record<string, string> } };
+      expect(s.tests.map((t) => t.file)).toEqual(['server/test/always.test.ts', 'server/test/quiet.test.ts']);
+      expect(s.queued.uncertain).toEqual(['server/test/reads-moved.test.ts', 'server/test/t.test.ts']);
+      expect(s.queued.why['server/test/t.test.ts']).toMatch(/^main changed .*server\/package\.json.* since the map$/);
+    });
+
+    it('drift null (the map is not in the merge base\'s history) makes every mapped test uncertain', () => {
+      const sel = selectTests({
+        map: drifted, changes: [], liveTests, existsAt: () => true, drift: null, queueRunsUnmapped: true,
+      });
+      const s = sel as { queued: { uncertain: string[] } };
+      expect(s.queued.uncertain).toEqual(['server/test/quiet.test.ts', 'server/test/reads-moved.test.ts', 'server/test/t.test.ts']);
+    });
+
+    it('without queueRunsUnmapped the drift is ignored (the merge queue diffs from the map itself)', () => {
+      const sel = selectTests({
+        map: drifted, changes: [{ status: 'M', path: 'server/src/b.ts', symlink: false }], liveTests, existsAt: () => true, drift,
+      });
+      expect(sel).toEqual({ mode: 'selected', tests: [{ file: 'server/test/always.test.ts', rule: 2, path: 'server/test/always.test.ts' }] });
+    });
+  });
+
+  describe('a full trigger with stale stamps', () => {
+    const SHA_OLD = 'b'.repeat(40);
+    const stamped: TestMap = {
+      format: 1, sha: SHA_A, baseline: emptyDep(),
+      tests: { 'server/test/carried.test.ts': rec({ read: ['server/src/carried.ts'], tracedAt: SHA_OLD }) },
+    };
+    const staleChanges = new Map([[SHA_OLD, [{ status: 'M' as const, path: 'server/src/carried.ts', symlink: false }]]]);
+    const liveTests = Object.keys(stamped.tests);
     it('a full trigger still answers full on a pull request', () => {
       const sel = selectTests({
         map: stamped, changes: [{ status: 'M', path: 'server/package.json', symlink: false }],
