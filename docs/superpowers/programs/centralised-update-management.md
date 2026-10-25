@@ -6196,6 +6196,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   broker's soak watches, and the session hook is unchanged. Nothing misbehaved.
   `STATUS 2026-10-25T17:32:43Z fleet=v0.0.695 server=v0.0.695 health=v0.0.695 newest=v0.0.695 intent=*:dev/auto=off`
   `pin=None link=<versions>/v0.0.695 backups=fleet:188M/server:9204M disk=fleet:103G/work:344G/server:21G`
+- **2026-10-25 18:25 UTC — the orphan-tree lane armed live on the fleet box; the update machinery is clean.** The probe's
+  one anomaly is the soak's at-once trigger, not a fault in the update mechanism. The hand-only `orphan-tree-live`
+  marker stands, with an mtime of 18:00:17. No writer in the tree, and not this session, put it there. The rescue marker
+  is absent. Since the 17:26:33 boot, the lane's feed holds 63 "left" records (17:27:47 to 17:57:47), every tree kept
+  with its reason, and none after the marker. Nothing has been removed. The delegation broker's coordinator was told at
+  18:27, and the next hour's window is read at the 19:25 probe.
+  `STATUS 2026-10-25T18:25:41Z fleet=v0.0.695 server=v0.0.695 health=v0.0.695 newest=v0.0.695 intent=*:dev/auto=off`
+  `pin=None link=<versions>/v0.0.695 backups=fleet:188M/server:9204M disk=fleet:101G/work:341G/server:21G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
