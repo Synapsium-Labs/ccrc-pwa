@@ -11976,6 +11976,14 @@ b1t2describe('W2-5b1 Task 2: the as-of pieces', () => {
       });
     });
 
+    b1t2it('F5: a higher-id source stays answerable when a lower matching blob exists, so the FTS rowid bind must remain an INTEGER', async () => {
+      const fx = await b1t2Plant();
+      await b1t2With(fx, async (rs) => {
+        b1t2expect(fx.blob.p1, 'CONTROL: p1 is the higher-id source').toBeGreaterThan(fx.blob.a1!);
+        b1t2expect(await checkSource(rs.db, rs.idx, src(fx, 'p1'), B1T2_CMD, B1T2_T)).toMatchObject({ ok: true });
+      });
+    });
+
     b1t2it('the source\'s index row is gone while another blob holds the phrase: no-match, clause 3, unanswerable (never the other blob\'s row)', async () => {
       const fx = await b1t2Plant({ unindex: ['a1'] });
       await b1t2With(fx, async (rs) => {
