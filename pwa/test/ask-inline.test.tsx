@@ -1175,6 +1175,68 @@ describe('every focus mover in the ask files is a reviewed one (R102)', () => {
   });
 });
 
+// R102: the fence is the desk's alone. It is raised only by a release at the desk (`useDesk()` at the seam) and stops only keys
+// whose target is inside the inline card, which the phone's Sheet never carries; so a crossing in either direction carries
+// nothing across. Both cases are guards, green before and after.
+describe('a crossing between the phone and the desk carries no fence (R102)', () => {
+  /** A matchMedia that follows `desk` (width and fine pointer together) and tells its listeners when it flips. */
+  function crossing() {
+    const state = { desk: false };
+    const listeners = new Set<() => void>();
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      get matches(): boolean { return q.includes('min-width: 900px') || q.includes('pointer: fine') ? state.desk : false; },
+      media: q, onchange: null,
+      addEventListener(_t: string, l: () => void) { listeners.add(l); },
+      removeEventListener(_t: string, l: () => void) { listeners.delete(l); },
+      addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+    return { cross: (desk: boolean): void => { state.desk = desk; act(() => { for (const l of [...listeners]) l(); }); } };
+  }
+
+  it('(a) a phone key answer, then a crossing to the desk: a card row focused by script answers once on a digit', async () => {
+    const w = crossing();
+    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: nextScreen() });
+    const { arrive } = mount();
+    await frame();
+    arrive(1);
+    const first = opt(dialogs()[0]!, /^Redis/);
+    act(() => first.focus());
+    await act(async () => { key(first, '1'); });
+    await frame();
+    expect(answer, 'premise: the phone answer was sent').toHaveBeenCalledTimes(1);
+    answer.mockReturnValue(new Promise(() => {}));
+    w.cross(true);
+    expect(within(card()).getByText(QUESTION_2), 'premise: question 2 is in the card').toBeInTheDocument();
+    const row = opt(card(), /^Yes/);
+    act(() => row.focus());
+    expect(fireEvent.keyDown(row, { key: '2' }), 'the digit keydown is prevented (handled or fenced: the request count below tells which)').toBe(false);
+    expect(answer, 'a digit answers once').toHaveBeenCalledTimes(2);
+    expect(answer).toHaveBeenLastCalledWith(ID, 'dlg-a2', 2);
+  });
+
+  it('(b) a desk key answer, then a crossing below 900: a digit in the Sheet answers', async () => {
+    const w = crossing();
+    w.cross(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: nextScreen() });
+    const { arrive } = mount();
+    await frame();
+    arrive(1);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    await act(async () => { key(first, '1'); });
+    await frame();
+    expect(answer, 'premise: the desk answer was sent').toHaveBeenCalledTimes(1);
+    answer.mockReturnValue(new Promise(() => {}));
+    w.cross(false);
+    expect(cards(), 'premise: no card below 900').toHaveLength(0);
+    const row = opt(dialogs()[0]!, /^Yes/);
+    act(() => row.focus());
+    expect(fireEvent.keyDown(row, { key: '2' }), 'the digit keydown is prevented (handled or fenced: the request count below tells which)').toBe(false);
+    expect(answer, 'a digit answers').toHaveBeenCalledTimes(2);
+    expect(answer).toHaveBeenLastCalledWith(ID, 'dlg-a2', 2);
+  });
+});
+
 // R102: a LATER send's release wins over an EARLIER raise. A CONSTRUCTED ordering that the production click path is not known
 // to reach: Go to question is a click, a discrete event, and a discrete render's passive effects flush at the end of its commit,
 // so no send can be claimed between that raise's render and its effect. Here the raise is rendered outside `act` (a default-lane
