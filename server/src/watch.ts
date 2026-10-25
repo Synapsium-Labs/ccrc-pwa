@@ -10,7 +10,7 @@ import {
   readProjectPools,
 } from './pools.js';
 import type { CcdResult } from './coord/ports.js';
-import { hasMenu, parseDialog } from './pane/dialog.js';
+import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
@@ -231,8 +231,6 @@ import {
 import { OrphanTreeSweep } from './orphanTreeSweep.js';
 import { orphanCoordinatorSet } from './orphanTreeLane.js';
 import type { DiskOrphanTrees } from '../../shared/disk.js';
-
-const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
 
 /** The disk alarm's clock (D-6615, spec §2.5): one `statfs` pass a minute. */
 const DISK_SWEEP_MS = 60_000;
@@ -8586,16 +8584,8 @@ export class FleetWatcher {
           if (prev) this.statuslines.set(r.id, { ...prev, ctxPct: undefined, boxCols: sl.boxCols, workflowActive: sl.workflowActive ?? prev.workflowActive, retained: true });
         }
       }
-      // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the
-      // WHOLE pane, and an RC-off pane renders the busy marker WHILE a dialog is
-      // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
-      // 'busy' here and this sweep would suppress the parse forever. hasMenu is
-      // deliberately independent of the busy check for exactly that reason
-      // (pane/dialog.ts:42-54); it's the same idiom send.ts:320 uses to decide
-      // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
-      // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
-      // captureAnsi().
-      const dialog = pane !== null && hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
+      // parseDialog opens with the hasMenu gate (not paneState), so a busy marker painted beside a menu does not veto the parse (D-102).
+      const dialog = pane !== null ? parseDialog(pane) : null;
       // D-5925: a child the boot found holding a question or a prompt is decided from the rows first. Re-seeded, or
       // still in doubt, nothing below may hold or raise it on this tick: the hold already exists in `coord.db`.
       const reseed = this.reseedFromRows(r, pane, dialog);
