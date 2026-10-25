@@ -418,6 +418,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
         // interrupt's `not-busy` can mean EITHER "the agent already finished
         // on its own" or "someone else already answered this same request" —
         // the response can't tell them apart, so the copy doesn't pretend to.
+        // background-only reaches here only from a stale Deny after the approval
+        // resolved elsewhere (D-6116), so that branch says it resolved and names the work.
         const bg = backgroundOnlyRefusal(err.body);
         toast(bg !== null
           ? `The request already resolved; ${backgroundTasksClause(bg)}.`
