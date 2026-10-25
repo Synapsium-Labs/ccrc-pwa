@@ -4511,6 +4511,8 @@ describe('lower-windows: a refusal lowers the window (codex-bridge D25, Stage 2 
   it.each([
     ['tokens that are not an integer', { tokens: 'x', window: 400000, at: AT, estimated: true }],
     ['no at', { tokens: 380000, window: 400000, estimated: true }],
+    ['tokens of 0', { tokens: 0, window: 400000, at: AT, estimated: true }],
+    ['tokens of -5', { tokens: -5, window: 400000, at: AT, estimated: true }],
   ])('a refusal with %s is skipped refusal-invalid, and nothing is recorded', (_label, ref) => {
     plantWindows(ID, { windows: { [OPUS]: entry(400000, '2026-10-01T00:00:00Z') } });
     const before = fs.readFileSync(winPath(ID), 'utf8');
@@ -4518,6 +4520,19 @@ describe('lower-windows: a refusal lowers the window (codex-bridge D25, Stage 2 
     const r = lower();
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(r.body).toMatchObject({ lowered: [], skipped: [{ model: OPUS, why: 'refusal-invalid' }] });
+    expect(fs.readFileSync(winPath(ID), 'utf8')).toBe(before);
+  });
+
+  it.each([
+    ['a space', 'a b'],
+    ['nothing', ''],
+  ])('a refusal keyed by a model part with %s is skipped refusal-invalid, and nothing is recorded', (_label, model) => {
+    plantWindows(ID, { windows: { [OPUS]: entry(400000, '2026-10-01T00:00:00Z') } });
+    const before = fs.readFileSync(winPath(ID), 'utf8');
+    plantStats({ [`backend/${model}`]: refusal(380000) });
+    const r = lower();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ lowered: [], skipped: [{ model, why: 'refusal-invalid' }] });
     expect(fs.readFileSync(winPath(ID), 'utf8')).toBe(before);
   });
 
