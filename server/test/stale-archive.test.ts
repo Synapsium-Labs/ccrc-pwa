@@ -98,7 +98,7 @@ const harness = (o: {
     },
     presence: { isVisible: () => o.viewer === true },
     notice: (e) => { feed.push({ title: e.title, body: e.body }); },
-    runCcd: async (argv) => { ccd.push([...argv]); return { ok: ccdAnswer.ok, stdout: '', stderr: ccdAnswer.stderr, killed: false, signal: null } as never; },
+    runCcd: async (argv) => { ccd.push([...argv]); return { ran: true, ok: ccdAnswer.ok, stdout: '', stderr: ccdAnswer.stderr, killed: false, signal: null } as never; },
     fleetState: { ccdVerbs: o.caps ?? ['ws-archive', ARCHIVE_IF_NO_PANE_CAP, ACTOR_FLAGS_CAP] } as never,
     pane: async () => pane,
     transcriptMtimeMs: async () => (o.evidence === undefined ? NOW - 15 * DAY : o.evidence === null ? 'none' : o.evidence),
@@ -254,6 +254,19 @@ describe('staleArchivePass (L3)', () => {
     expect(h.mem.sightings.has('a')).toBe(false);
   });
 
+  it('an archive call that never ran is unmeasured, not a refusal: no box word is read off its stderr (D-6034)', async () => {
+    const h = harness();
+    (h.deps as { runCcd: StaleArchiveDeps['runCcd'] }).runCcd = async (argv: Parameters<StaleArchiveDeps['runCcd']>[0]) => (
+      h.ccd.push([...argv]),
+      { ran: false, reason: 'transport', detail: 'link dropped', ok: false, stdout: '', stderr: 'ccd: live\n', killed: false, signal: null } as never);
+    const out = await twoPasses(h, [rec('a')], LIVE);
+    expect(h.ccd).toHaveLength(1);
+    expect(out.map((o) => o.kind)).toEqual(['failed']);
+    expect(out[0]).toMatchObject({ detail: expect.stringContaining('unmeasured') });
+    expect(h.feed).toEqual([]);
+    expect(h.mem.sightings.has('a')).toBe(true);
+  });
+
   it('someone who opens the session between the verdict and the act defers it', async () => {
     const h = harness();
     let calls = 0;
@@ -267,7 +280,7 @@ describe('staleArchivePass (L3)', () => {
     const h = harness();
     const run = h.deps.runCcd;
     (h.deps as { runCcd: StaleArchiveDeps['runCcd'] }).runCcd = async (argv: Parameters<StaleArchiveDeps['runCcd']>[0]) => (argv.includes('a')
-      ? (h.ccd.push([...argv]), { ok: false, stdout: '', stderr: 'ccd: worktree is gone\n', killed: false, signal: null } as never)
+      ? (h.ccd.push([...argv]), { ran: true, ok: false, stdout: '', stderr: 'ccd: worktree is gone\n', killed: false, signal: null } as never)
       : run(argv));
     const recs = [rec('a'), rec('b')];
     const first = await twoPasses(h, recs, LIVE);

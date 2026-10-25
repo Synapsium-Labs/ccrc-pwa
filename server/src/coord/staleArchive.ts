@@ -11,6 +11,7 @@ import { configDirFor } from '../config.js';
 import { ARCHIVE_IF_NO_PANE_CAP, CCD_ARGV, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { childReclaimEverClaimedIds } from './childReclaim.js';
+import { notRanSentence } from '../unmeasured.js';
 import { readSwitches } from '../../../shared/switches.js';
 import {
   STALE_ARCHIVE_LIVE_MARKER, staleArchiveVerdict, type StaleArchiveFacts, type StaleArchiveSkip,
@@ -264,12 +265,15 @@ async function act(
     if (claimed.has(id)) return { kind: 'deferred', id, why: 'claimant' };
     // The capability, asked again nearest the argv (the pass asked it at the top).
     if (!ccdCan(deps.fleetState, 'wsArchive') || !capSupported(deps.fleetState, ARCHIVE_IF_NO_PANE_CAP)) return { kind: 'deferred', id, why: 'cap' };
+    const argv = CCD_ARGV.wsArchive(id, { ...dec, reason: 'stale' }, { ifNoPane: true });
     let res: Awaited<ReturnType<RunCcd>>;
     try {
-      res = await deps.runCcd(CCD_ARGV.wsArchive(id, { ...dec, reason: 'stale' }, { ifNoPane: true }));
+      res = await deps.runCcd(argv);
     } catch (err) {
       return { kind: 'failed', id, detail: errText(err) };
     }
+    // A call that never ran (or may not have) is unmeasured, never a refusal: no box word is read off it (D-6034).
+    if (res.ran === false) return { kind: 'failed', id, detail: notRanSentence(argv[0] ?? 'ccd', res) };
     if (res.ok) {
       mem.sightings.delete(id);
       mem.would.delete(id);
