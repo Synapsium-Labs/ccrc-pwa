@@ -179,7 +179,7 @@ function computeRealSelection(repoDir, mapFile, liveTests, baseRef) {
     const changes = readChanges(repoDir, from, 'HEAD');
     const existsAt = gitExistsAt(repoDir);
     const staleChanges = gitStaleChanges(repoDir, map);
-    const selection = selectTests({ map, changes, liveTests, existsAt, staleChanges });
+    const selection = selectTests({ map, changes, liveTests, existsAt, staleChanges, queueRunsUnmapped: !!baseRef });
     const retrace = {
       selection: selectIgnoringUncertainty({ map, changes, liveTests, existsAt }),
       uncertain: uncertainTests({ map, liveTests, staleChanges, existsAt }),
