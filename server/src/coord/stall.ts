@@ -1162,7 +1162,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
   // (10) the worker's ball. Without the w2 marker, or without a current marker: wave 1's ladder, unchanged.
   if (!w2Live || w2 === undefined || okMark === null || view === null) return stallWaveOneLadder(input, f, live.word, live.since, key, now);
   if (view.state === 'working') return holdVerdict('busy');
-  if (live.word !== 'busy' && !isIdleWord(live.word)) return holdVerdict('unmeasured');
+  if (stallWatchSays(live.word) === 'doubt') return holdVerdict('unmeasured');
   if (quietStart === null) return stallWaveOneLadder(input, f, live.word, live.since, key, now);
   const r1At = rungDoneAt(input, 'quiet', 1, key);
   if (r1At === null) return now - quietStart >= stallBackoff(input).quietMs ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;

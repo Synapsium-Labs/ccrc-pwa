@@ -14,7 +14,7 @@ describe('turnWordOf: an exact allowlist over Claude Code\'s three words', () =>
 });
 
 describe('the four named policies', () => {
-  it('are mail-gate, keystroke, sleep and stall', () => {
+  it('are mail-gate, keystroke, sleep and stall-watch', () => {
     expect([...TURN_POLICIES]).toEqual(['mail-gate', 'keystroke', 'sleep', 'stall-watch']);
   });
 
