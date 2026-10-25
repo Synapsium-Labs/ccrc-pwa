@@ -116,8 +116,54 @@ by its function name before editing.
   | M2: drop the test-run carve-out (`sessionless = false`) | clean | the contract row (`tmp-sweep-test-runs`, 1 of 17); `tmp-sweep-mail` stays green |
   | M3: allow an empty `id` on any kind | clean | the `scratch` row and the test-run row with only `id` empty (2 of 57) |
   | M4: allow one-sided emptiness on a test-run row | clean | both one-sided test-run rows (2 of 57) |
+  | M5 (fix round 1, review 942's F1): drop the kind clause (`sessionless = id === '' && uuid === ''`) | clean | the three both-empty rows on `scratch`, `budget` and `output-capped` (3 of 61) |
+  | M2 again (fix round 1, A1), against `tmp-sweep-mail` alone | clean | the hermetic writer's-shape parse row (1 of 61) |
 
-  M1 is held twice: by the type, because a `null` id cannot reach a mail's `toId`, and by the receipts row. M2 is held
-  only by the contract row, which runs on Linux alone, like its whole file.
+  M1 is held twice: by the type, because a `null` id cannot reach a mail's `toId`, and by the receipts row. In the first
+  round M2 was held only by the contract row, which runs on Linux alone, like its whole file. Fix round 1 added a
+  hermetic parse of a literal row in the writer's shape to `tmp-sweep-mail`, so M2 now fails on any platform. M5 shows
+  the kind clause was unpinned until the same round, and it went red, measured the same way as M1 to M4.
+- **Gates, first round (at 41bbe7ead, from `server/`, one file at a time, `--pool=forks --maxWorkers=2`).** Passing:
+  `tmp-sweep-mail` 57/57, `tmp-sweep-test-runs` 17/17, `tmp-sweep-live` 62/62, `tmp-sweep-output-cap` 8/8,
+  `fleet-health` 50/50, `single-definition` 891/891, `docs-parity` 54/54, `citations` 4/4, `topology-clean` 60/60,
+  `private-names` 47/47, `dtbd` 1/1, `typecheck-tests` 12/12 (once the `ui`, `pwa` and `agent` modules were
+  installed; before that it collected no tests) and `deviation-refs` 31/31 after `git fetch origin main`.
+  `tmp-sweep` was 18/19: `FAILS CLOSED: claude is running and no sessions dir is readable` failed with
+  `expected +0 to be 1`, twice on the branch and once on a clean export of `origin/main` 6a5d181a3, at load average
+  about 63. The PR's CI ran all 19 tests in that file, and they passed. Ruled a load flake, not a main-red (ruling 6
+  below).
+- **Gates, fix round 1 (same way).** Passing: `tmp-sweep-mail` 61/61, `tmp-sweep-test-runs` 17/17,
+  `typecheck-tests` 12/12, `single-definition` 891/891, `private-names` 47/47, `dtbd` 1/1, and `deviation-refs` 31/31
+  after `git fetch origin main`.
 - **The writer's row matched the plan.** The contract row read `kind: 'test-run'`, `id: ''` and `uuid: ''` from the
   real sweep. So D-6855 was not needed.
+
+## Coordinator rulings on review 942 (2026-10-25)
+
+Run 941, wave 1: fix round 1, ruled on review 942 at 41bbe7ead. Record everything from this line on verbatim in the plan, as "Coordinator rulings on review 942 (2026-10-25)". Leave out the report path above it, because it names a session. Run 941 is back at working.
+
+Review 942 ran the held-out panel and a writer-reader contract lens: 30 agents, none died. Findings: 1 important (F1) and 10 advisories. These all hold:
+- the type and the parse;
+- the receipts skip, with no other reader of `moved`;
+- the contract row, red first;
+- M1 to M4, reproduced;
+- the spec sentence;
+- D-6855 left spare;
+- the five-file scope;
+- CI clean.
+All nine writer shapes run through the reader are accepted, so no row the writer can emit still nulls the census.
+
+1. **F1, important: pin the kind clause.** No test holds `kind === 'test-run'` in the carve-out. The panel's mutant M5 drops it (`sessionless = id === '' && uuid === ''`), and 74/74 stay green.
+   - Add a malformed row with both fields empty on a kind other than `test-run`, to the `it.each` at about `tmp-sweep-mail.test.ts:52-64`: `scratch`, and also `budget` and `output-capped`, since the writer emits all three.
+   - Measure M5 red on a scratch copy restored by cmp, and add M5 to the plan's mutation table.
+2. **A1: hold M2 off Linux too.** Add a hermetic positive parse to `tmp-sweep-mail.test.ts`: a literal `{kind: 'test-run', id: '', uuid: ''}` row, the writer's own shape, parses to `id: null, uuid: null`. Measure M2 red on it. The Linux-only contract row stays as it is.
+3. **A3: record the gates.** The plan's As built records each gate file and its result. That includes tmp-sweep.test.ts's one row, ruled below.
+4. **A2: say it, don't change it.** The parsed census does not round-trip for a test-run row: the reader refuses `id: null` on input, and nothing re-serialises a parsed census. Add one sentence to the comment at `tmp-sweep-mail.test.ts:40`, or to the type's comment, saying that the reader's own shape is the writer's wire shape, not the parsed form. Change no code for it.
+5. **Not this wave** (I carry these to the programme's constraints): A4 (README), A6 (an output-capped receipt's wording), A7 (a duplicate receipt after a failed journal unlink), A8 (contract rows for the other writer shapes), A9 (the spec's `task-output` kind and its missing `top`/`keptMore`) and A10 (CLAUDE.md's test-macos sentence).
+6. **Question (2), the tmp-sweep FAILS CLOSED row:** a load flake, not a main issue. CI ran all 19 tests in tmp-sweep.test.ts on this PR and they passed, and CI is the arbiter for a file it ran. It failed locally at load 44 to 63, on the tip and on main alike. I record it in the programme's constraints as load-sensitive. File nothing.
+
+**Gates:** in your worktree, one file at a time, in the foreground, with `--pool=forks --maxWorkers=2`:
+- tmp-sweep-mail, tmp-sweep-test-runs, typecheck-tests, single-definition, private-names, dtbd;
+- deviation-refs, after `git fetch origin main`.
+
+No new deviation number: this round is tests and prose under D-6854. Push once, with the wave-done in the same turn. Keep claim 2494.
