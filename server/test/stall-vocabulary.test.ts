@@ -59,10 +59,11 @@ describe('REVIEW_DONE_SUBJECT', () => {
 });
 
 describe('the arms, holds and markers are derived from their Records', () => {
-  it('waves 1 and 2 have thirteen arms, wave 1 first', () => {
+  it('waves 1 and 2 have fourteen arms, in the Record\'s order (coord-blocked, a wave-1 arm, last)', () => {
     expect(STALL_ARMS).toEqual([
       'quiet', 'limit-cap', 'dialog-cap', 'coord-ball',
       'orphan-d', 'restarted', 'orphan-e', 'failed', 'frozen', 'dead', 'coord-deaf', 'mail-stuck', 'marker-unreadable',
+      'coord-blocked',
     ]);
   });
   it('waves 1 and 2 have fifteen holds, wave 1 first', () => {
@@ -387,6 +388,7 @@ describe('wave 2: rungRecipient is one total per-arm table (planning departure r
     'orphan-d': ['worker', 'operator'], restarted: ['worker', 'coordinator'], 'orphan-e': ['worker'], failed: ['worker', 'coordinator'],
     frozen: ['coordinator'], dead: ['coordinator'],
     'coord-deaf': ['operator'], 'mail-stuck': ['operator'], 'marker-unreadable': ['operator'],
+    'coord-blocked': ['operator'],
   };
   it.each(STALL_ARMS)('%s: each rung it has goes to its recipient, and a rung it lacks throws', (arm) => {
     for (const rung of [1, 2, 3] as const) {
@@ -565,6 +567,7 @@ describe('wave 2: every new kebab word is declared through isStallKebab', () => 
   it.each([
     'orphan-d', 'orphan-e', 'coord-deaf', 'mail-stuck', 'marker-unreadable', 'restart-grace', 'lifecycle-stopped',
     'mail-disabled', 'failed-account', 'failed-unknown', 'stall-watch-w2-live', 'self-wake', 'registry-unmeasurable',
+    'coord-blocked',
   ])('isStallKebab(%j)', (w) => {
     expect(isStallKebab(w)).toBe(true);
   });

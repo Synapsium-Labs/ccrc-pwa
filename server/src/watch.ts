@@ -116,7 +116,7 @@ import { redactCommand } from './coord/redact.js';
 import {
   BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
-  stallFailedVerdict, stallRestartedVerdicts, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
+  stallCoordBlockedPushText, stallCoordBlockedVerdict, stallFailedVerdict, stallRestartedVerdicts, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
   stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
   stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
   stallReactivation, stallVerdict, stallW2ReportMail, turnMarkStale,
@@ -6444,6 +6444,11 @@ export class FleetWatcher {
     for (const sv of [stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, project, sv, now);
     }
+    // coord-blocked (D-TBD-coord-blocked-stall): the same session facts, with the claimant's child marker from this
+    // tick's rows (`unlisted` when none) and the active runs it claims. L1 decides; this only applies, run-less.
+    const rec = tick.records.find((x) => x.id === id);
+    const blocked = { session: si, child: rec === undefined ? { kind: 'unlisted' as const } : rec.child, runs: c.runs };
+    this.applyStallSession(store, si, project, stallCoordBlockedVerdict(blocked, now), now, (n) => stallCoordBlockedPushText(blocked, n, now));
   }
 
   /** A registry row that is no run's worker or coordinator: orphan D only (spec §5.2, "Candidates are the registry
@@ -6698,7 +6703,10 @@ export class FleetWatcher {
    *    memory (`stallLatch`, slug `run-less-push-latches-are-in-memory` (D-3751)), so a restart re-pushes it, a coordinator's
    *    failed rung 2 included, and a marker-unreadable push re-keys on each side of a clock drop. L1's
    *    `stallPushRoute` names the push's kind and tag, which is also the latch key. */
-  private applyStallSession(store: CoordStore, si: StallSessionInput, project: string, v: StallVerdict, now: number): void {
+  /** `pushText` words an operator push whose arm reads more than the session's facts (coord-blocked's claimed runs);
+   *  absent, `stallSessionPushText` does. */
+  private applyStallSession(store: CoordStore, si: StallSessionInput, project: string, v: StallVerdict, now: number,
+    pushText: (n: StallNotify) => { readonly title: string; readonly body: string } = (n) => stallSessionPushText(si, n, now)): void {
     const id = si.sessionId;
     if (v.act === 'hold' && v.why === 'failed-unknown') {
       const stopAt = si.mark.ok ? si.mark.stopAt : null;
@@ -6732,7 +6740,7 @@ export class FleetWatcher {
     if (run !== null) {
       const obs = store.recordStallObservation(run.id, detail, now);
       if (!obs.recorded) return;
-      const text = stallSessionPushText(si, v, now);
+      const text = pushText(v);
       this.pushOne({
         kind: route.kind, sessionId: id, project, title: text.title, body: text.body,
         runId: run.id, tag: route.tag, recordAlways: true,
@@ -6741,7 +6749,7 @@ export class FleetWatcher {
     }
     if (this.stallLatch.has(route.tag)) return;
     this.stallLatch.set(route.tag, id);
-    const text = stallSessionPushText(si, v, now);
+    const text = pushText(v);
     this.pushOne({
       kind: route.kind, sessionId: id, project, title: text.title, body: text.body,
       tag: route.tag, recordAlways: true,
