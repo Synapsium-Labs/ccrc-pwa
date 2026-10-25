@@ -3061,9 +3061,9 @@ export class FleetWatcher {
    *   and newer than the first check on it. The bind is read from the store only for a `re stall-check:`
    *   subject. Any other mail wearing that prefix is pushed as ordinary mail, so no box-token holder can use
    *   the prefix to keep a mail off the phone.
-   * - A `self-wake` (wave 2: an `orphaned:` or `failed:` notice the watch mails a session about its own turn) is
-   *   recorded, never pushed. The session is the one to act on it, and orphan D's rung 2 pushes the operator from
-   *   the lane itself (`⚠ orphaned`) when that mail sits unacknowledged.
+   * - A `self-wake` (wave 2: an `orphaned:`, `failed:` or `restarted:` notice to a session about its own turn, or the
+   *   `restarted:` heads-up to the run's coordinator) is recorded, never pushed. The session is the one to act on it,
+   *   and orphan D's rung 2 pushes the operator from the lane itself (`⚠ orphaned`) when that mail sits unacknowledged.
    * - A `report` (the watch's mail to the coordinator: wave 1's r2, and wave 2's frozen, dead and failed rung) is
    *   pushed under a title by its kind, read back from its own subject (`stallReportKind`, `stallReportTitle`):
    *   `⚠ stall`, `⚠ frozen`, `⚠ dead` or `⚠ failed` › <run workspace>. The lane never pushes a report itself, so

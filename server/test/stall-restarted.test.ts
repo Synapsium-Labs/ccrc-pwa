@@ -1,6 +1,6 @@
-// D-TBD-d5-restart-reattach (coordinator-durability D5, #759): the `restarted` arm. A run worker whose pane was respawned
+// D-6853 (coordinator-durability D5, #759): the `restarted` arm. A run worker whose pane was respawned
 // over background tasks that did not survive is told at once (rung 1, to the worker), and its coordinator hears a
-// heads-up (rung 2), at most one per worker per RESTARTED_HEADS_UP_MS. Wave 2: shadow until `stall-watch-w2-live`.
+// heads-up (rung 2), at most one per worker on its run per RESTARTED_HEADS_UP_MS. Wave 2: shadow until `stall-watch-w2-live`.
 // Every clock is an argument; every expected subject is computed by the builders, never a literal, except the
 // prefix, which is spelled once here to pin it.
 import { describe, it, expect } from 'vitest';
@@ -204,6 +204,8 @@ describe('restarted: the mails', () => {
     expect(text.body).toContain('demo-ws');
     expect(text.body).toContain('2 background task(s)');
     expect(text.body).toMatch(/restart nothing|restarts nothing|did not restart/);
+    // The window reads the worker's primary run's rows only, so the body says it is per worker on its run.
+    expect(text.body).toContain('at most one of these per worker on its run per 0h 10m');
     expect(stallMailClass({ fromId: 'operator', runId: 67, subject: text.subject, mailId: 2 })).toBe('self-wake');
   });
   it('the two subjects differ, so neither reads as the other', () => {

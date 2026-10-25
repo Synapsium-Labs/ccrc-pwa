@@ -515,7 +515,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   notice (a coordinator's, a registry row's) is keyed on its mail subject instead — so a restart never re-sends mail, and
   it never closes, reclaims or re-dispatches. Its wave-2 arms (dead, frozen, orphaned, failed, coordinator deaf, mail
   stuck, marker unreadable, and D5's `restarted`: a run worker respawned over lost background tasks is mailed a re-check
-  notice at once and its coordinator one heads-up, at most one per worker per 10 minutes, with no restart and no push)
+  notice at once and its coordinator one heads-up, at most one per worker on its run per 10 minutes, with no restart and no push)
   record shadow only until `stall-watch-w2-live` exists, and while `mail-disabled` stands every
   rung that would send mail holds. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
   `stall-watch-w2-live`, `mail-gate-busy-shadow` and `mail-gate-busy` arm them (no `stall-watch-live`: shadow only) and,

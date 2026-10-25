@@ -58,7 +58,7 @@ const STALL_ARM_MAP = {
   'dialog-cap': 'a dialog with no question behind it, past the quiet threshold: one operator push per dialog, keyed on its live stamp',
   'coord-ball': 'the coordinator has held the ball past its cap with no mail on the run: one operator push per episode',
   'orphan-d': 'a restart killed background tasks the session ran at its last turn end, and it sat idle past ORPHAN_D_IDLE_MS (any session): a mail to it, then an operator push',
-  restarted: 'a restart cut a run worker\'s background tasks short (D5, #759): a mail to the worker at once, then one heads-up to its coordinator, at most one per worker per RESTARTED_HEADS_UP_MS',
+  restarted: 'a restart cut a run worker\'s background tasks short (D5, #759): a mail to the worker at once, then one heads-up to its coordinator, at most one per worker on its run per RESTARTED_HEADS_UP_MS',
   'orphan-e': 'the session ended its turn over a wake-bearing background task and sat idle past ORPHAN_E_IDLE_MS with no turn: a mail to it',
   failed: 'the turn ended on a StopFailure and the session sat idle past FAILED_IDLE_MS: by its STOP_FAILURE_ERRORS class, a mail to it or to the coordinator',
   frozen: 'the marker reads working under a busy word and no hook event arrived for FROZEN_NO_EVENT_MS: the coordinator, or the operator',
@@ -256,7 +256,8 @@ function stallReplyBound(m: { readonly fromId: string; readonly runId: number | 
 }
 
 /** 'check': a stall-check subject from the operator role. 'report': a stall-report subject from the operator role.
- *  'self-wake': an orphaned or failed subject from the operator role (wave 2's notices to the session itself).
+ *  'self-wake': an orphaned, failed or restarted subject from the operator role (wave 2's notices to the session
+ *  itself, plus D5's restarted heads-up, which goes to the run's coordinator instead).
  *  'reply': a reply subject that is bound (above). Anything else: null, which means ordinary mail. */
 export function stallMailClass(
   m: { readonly fromId: string; readonly runId: number | null; readonly subject: string; readonly mailId: number },
@@ -1735,7 +1736,8 @@ function stallOrphanDInner(input: StallSessionInput, now: number): StallVerdict 
  *  Rung 1 mails the worker. Rung 2 mails its claimant a heads-up, unless that claimant is absent or coordination is
  *  paused (no operator rung: a heads-up is never a push), and unless an earlier restart's heads-up (live or shadow)
  *  was keyed less than RESTARTED_HEADS_UP_MS before this one: the window runs on restart times, so it holds however
- *  late this is judged. Key: `restartAt`. It causes no restart and reads nothing of accounts or swaps. Orphan D is left
+ *  late this is judged. The earlier heads-ups are read from `input.notices`, the worker's primary run's rows, so the
+ *  window is per worker on its run: a worker moved to a new run inside the window can earn a second heads-up. Key: `restartAt`. It causes no restart and reads nothing of accounts or swaps. Orphan D is left
  *  as it was: a worker that acts on rung 1 takes a turn, which ends orphan D's candidate (the marker reads working),
  *  and one that does not is still caught by orphan D's idle wait and its operator push. */
 function stallRestartedInner(input: StallSessionInput, now: number): StallVerdict {
@@ -1765,6 +1767,8 @@ function stallRestartedRungs(input: StallSessionInput, now: number): StallVerdic
   return out;
 }
 
+/** The first restarted verdict of this sweep only (rung 1 while it is unrecorded, else rung 2). The lane calls
+ *  `stallRestartedVerdicts`; this single-verdict form exists for the unit tests, beside the other arms' `*Verdict`. */
 export function stallRestartedVerdict(input: StallSessionInput, now: number): StallVerdict {
   return stallMailDisabledHold(stallRestartedInner(input, now), input.arming);
 }
@@ -2022,7 +2026,7 @@ function stallRestartedHeadsUpMail(input: StallSessionInput): StallNoticeText {
       `${STALL_RESTARTED_WORD} from the ccrc stall watch (server), ${stallRunLabel(run)}, state ${stallSafe(run.state)}.`,
       `${stallWorkerRef(run)} was restarted at ${stallUtcSec(restartAt)}. ${stallInt(m.lostBg)} background task(s) (${stallKinds(m.lostKinds)}) it ran before the restart did not survive.`,
       'The worker is sent its own notice to re-check and relaunch what it was waiting on. This notice restarts nothing and changes nothing on the run; it asks for no answer.',
-      `You are sent at most one of these per worker per ${stallSpan(RESTARTED_HEADS_UP_MS)}.`,
+      `You are sent at most one of these per worker on its run per ${stallSpan(RESTARTED_HEADS_UP_MS)}.`,
     ].join('\n'),
   };
 }
