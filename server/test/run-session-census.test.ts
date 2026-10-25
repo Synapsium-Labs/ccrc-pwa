@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  ATTRIBUTE_READS, RUN_KEYED_READS, countsByFile, equalitySites, equalitySitesOf, REPO, storeBindingReaders,
+  ATTRIBUTE_READS, NOT_BINDING_SITES, RUN_KEYED_READS, countsByFile, equalitySites, equalitySitesOf, REPO, storeBindingReaders, unroutedSites,
 } from './runSessionCensus.js';
 import { BINDING_WRITER_VERBS } from '../src/coord/runBinding.js';
 
@@ -84,17 +84,39 @@ describe('the equality-site query (ARCH-62 census)', () => {
   });
 });
 
+describe('unroutedSites (ARCH-62 census)', () => {
+  const site = (file: string, text: string) => ({ file, line: 1, kind: 'comparison' as const, text });
+  const sites = [site('a.ts', 'x === a.sessionId'), site('a.ts', 'x === a.sessionId'), site('a.ts', 'y !== b.claimedBy'), site('b.ts', 'x === a.sessionId')];
+
+  it('takes out the named sites by file, text and count, and no other', () => {
+    const left = unroutedSites(sites, [{ file: 'a.ts', text: 'x === a.sessionId', count: 2, why: 'w' }]);
+    expect(left.map((s) => `${s.file}:${s.text}`)).toEqual(['a.ts:y !== b.claimedBy', 'b.ts:x === a.sessionId']);
+  });
+
+  it('an entry covers only its count: a third site with the same text stays counted', () => {
+    expect(unroutedSites(sites, [{ file: 'a.ts', text: 'x === a.sessionId', why: 'w' }])).toHaveLength(3);
+  });
+});
+
 describe('the server run/session equality sites (ARCH-62 census)', () => {
   const sites = equalitySites();
-  const counts = countsByFile(sites);
+  const unrouted = unroutedSites(sites);
+  const counts = countsByFile(unrouted);
 
-  it('every file holds exactly its pinned number of sites', () => {
+  it('every file holds exactly its pinned number of sites that still decide a binding by hand', () => {
     expect(counts).toEqual(SITES);
   });
 
   it('the total only goes down', () => {
-    expect(sites.length).toBe(SITES_TOTAL);
+    expect(unrouted.length).toBe(SITES_TOTAL);
     expect(Object.values(SITES).reduce((a, b) => a + b, 0)).toBe(SITES_TOTAL);
+  });
+
+  it('every site named as no binding is live, says why, and is no more than the file holds', () => {
+    for (const n of NOT_BINDING_SITES) {
+      expect(n.why.length, `${n.file}: ${n.text}`).toBeGreaterThan(30);
+      expect(sites.filter((s) => s.file === n.file && s.text === n.text).length, `${n.file}: ${n.text}`).toBe(n.count ?? 1);
+    }
   });
 });
 

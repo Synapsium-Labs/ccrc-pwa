@@ -76,6 +76,27 @@ export function equalitySites(root: string = REPO): EqualitySite[] {
   return out;
 }
 
+/** A site the census sees that is NOT a decision about which run a session works: named with the reason, so a new one is a
+ *  deliberate entry and a stale one is red. `text` is the site's own text (`EqualitySite.text`); `count` the number of sites
+ *  with that text in `file` (default 1). ARCH-62 slice 3: the exit's "all through `bindingOf`/`childrenOf`" is about the
+ *  sites that ask which run is a session's; a comparison of a registry row's id, a verb's reported id, the claimant of one
+ *  run row (a compare-and-set or a reviewed run's own coordinator) or a checkpoint row asks something else. */
+export interface NotBindingSite { readonly file: string; readonly text: string; readonly count?: number; readonly why: string }
+
+export const NOT_BINDING_SITES: readonly NotBindingSite[] = [];
+
+/** The sites that still decide a binding by hand: every site but the `NOT_BINDING_SITES` ones. */
+export function unroutedSites(sites: readonly EqualitySite[], notBinding: readonly NotBindingSite[] = NOT_BINDING_SITES): EqualitySite[] {
+  const budget = new Map(notBinding.map((n) => [`${n.file}\u0000${n.text}`, n.count ?? 1]));
+  return sites.filter((s) => {
+    const k = `${s.file}\u0000${s.text}`;
+    const left = budget.get(k) ?? 0;
+    if (left === 0) return true;
+    budget.set(k, left - 1);
+    return false;
+  });
+}
+
 /** The count per file, files with no site left out. */
 export function countsByFile(sites: readonly EqualitySite[]): Record<string, number> {
   const out: Record<string, number> = {};
