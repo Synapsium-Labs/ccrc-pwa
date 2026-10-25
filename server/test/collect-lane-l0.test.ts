@@ -54,13 +54,14 @@ const DECLARATIONS: readonly string[] = [
   '^export interface CollectLaneConfirmRequired\\b',
 ];
 
-/** `peers-claims-l0.test.ts`'s nine lines. The block adds none. */
+/** `peers-claims-l0.test.ts`'s ten lines. The block adds none. */
 const IMPORTS = [
   "import type { Hue, RosterKindWire } from './roster.js';",
   "import type { AccountPoolWire } from './poolrule.js';",
   "import type { BuildInfo } from './buildinfo.js';",
   "import type { BoxTokenView } from './box-token.js';",
   "import type { WorkflowView } from './workflows.js';",
+  "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
   "import type { NodeRole } from './node-role.js';",
   "import type { AccountStateAnswer, LaneState } from './accounts.js';",
   "import type { DiskHealth } from './disk.js';",
