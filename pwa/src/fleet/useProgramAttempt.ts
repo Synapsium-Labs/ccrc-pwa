@@ -207,7 +207,7 @@ export function useProgramAttempt(
   // D-291: the reactive half of the bounded wait. Since C6 (D-6438) the fleet
   // store keeps the array of an identical frame and the object of an unchanged
   // row (`stores/fleet.ts`), so `sessions` changes only on a frame that
-  // changes, adds or removes a row, and this fires on each of those while a
+  // changes, adds, removes or reorders rows, and this fires on each of those while a
   // wait is outstanding — which includes the moment the new session's row
   // appears, when `checkForMatch` finds it.
   useEffect(() => {
