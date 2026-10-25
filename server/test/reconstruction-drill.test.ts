@@ -285,9 +285,11 @@ describe('the reconstruction drill', () => {
                                          // close: the facts are about the coordination lane's own
                                          // history, and that history lives only here.
       'reviewCap',                       // D-6909: the review cap's ask and lift times live in `review_cap`
-                                         // alone, and the rounds count review runs the drill does not
-                                         // rebuild. A DB loss forgets a lift, so the next fourth review is
-                                         // refused again and the operator lifts it again: the safe direction.
+                                         // alone, and the rounds count review runs, which the drill does
+                                         // not rebuild. So a DB loss resets the rounds to 0 and three more
+                                         // reviews open before the cap refuses again: the PERMISSIVE
+                                         // direction, not a safe one (review 951 F3). Not rebuilt because
+                                         // its inputs are not rebuilt, never because losing it is safe.
       'work item ids and their blockedBy DAG',
       'per-item doneFingerprint',
       'mail bodies and their delivery/ack state',

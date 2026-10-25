@@ -8985,6 +8985,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // to `origin/main` here, so the same +44 rots an anchor of theirs into the
     // census above instead. That asymmetry is the whole reason README gets an
     // equality with empty and they get a debt.
+    //
+    // AND THE REVIEW-CAP LIFT PROVED IT A THIRD TIME (review 951 F2): that wave
+    // added a net +61 lines to `shared/api.ts` above the same sentence (the
+    // review cap's types and words, one hunk at `:6472`), and all four of its
+    // anchors stopped resolving. Re-anchored BY CONTENT the same way, each base
+    // block found byte-identically and uniquely in the merged file:
+    // `:8526-8528` -> `:8587-8589`, `:8578` -> `:8639`, `:8586` -> `:8647`,
+    // `:8599` -> `:8660`. The debt map above counted the same four while they
+    // were stale (`shared/api.ts` 1 -> 5) and is back at its census with them.
     expect(CORPUS.map(([label]) => label),
       'README is in the corpus, and dropping it would make the line below vacuous')
       .toEqual(['spec', 'plan', 'readme']);

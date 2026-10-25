@@ -80,6 +80,13 @@ describe('LiftCapSheet', () => {
     expect(await screen.findByText(/the ask could not be read/i)).toHaveTextContent(REVIEW_CAP_REFUSAL_TEXT['not-found']);
   });
 
+  it('a 503 run-unreadable from the read of the ask says its table word, and still offers the lift (D-6912)', async () => {
+    const loadAsk = vi.fn().mockRejectedValue(new ApiError(503, { ok: false, error: 'run-unreadable' }));
+    render(<LiftCapSheet run={work()} onClose={() => {}} onDone={() => {}} loadAsk={loadAsk} lift={vi.fn()} />);
+    expect(await screen.findByText(/the ask could not be read/i)).toHaveTextContent(REVIEW_CAP_REFUSAL_TEXT['run-unreadable']);
+    expect(screen.getByRole('button', { name: /^lift cap$/i })).toBeEnabled();
+  });
+
   it('a failed read of the ask says so, and still offers the lift: the lift does not need the ask', async () => {
     const lift = vi.fn().mockResolvedValue(lifted());
     const onClose = vi.fn();

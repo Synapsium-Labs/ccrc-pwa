@@ -529,13 +529,16 @@ export function backgroundTasksClause(bg: { count: number | null; kinds: string[
 }
 
 /**
- * The review cap's two routes (D-6910, D-6911) in words: `GET /api/coord/review-cap/:id` and
- * `POST /api/coord/review-cap` refuse with these three, and `LiftCapSheet` reads both calls' failures through this table
- * and then `apiErrorText`. Keyed from the server's own refusal union, so a word it stops sending is a compile error.
+ * The review cap's two routes (D-6910, D-6911) in words. `GET /api/coord/review-cap/:id` refuses with all four, its
+ * `run-unreadable` when the store read fails (D-6912); `POST /api/coord/review-cap` with the other three. `LiftCapSheet`
+ * reads both calls' failures through this table and then `apiErrorText`. Keyed by `Extract` from the server's refusal
+ * union, so a word that leaves the union is a compile error; a word a route stops sending is not, and the route rows in
+ * `run-routes.test.ts` pin what each one sends.
  */
-export const REVIEW_CAP_REFUSAL_TEXT: Readonly<Record<Extract<RouteRefusal, 'bad-request' | 'not-found' | 'not-configured'>, string>> = {
+export const REVIEW_CAP_REFUSAL_TEXT: Readonly<Record<Extract<RouteRefusal, 'bad-request' | 'not-found' | 'run-unreadable' | 'not-configured'>, string>> = {
   'bad-request': 'The server refused the run id.',
   'not-found': 'That run is not a work run, so it has no review cap to lift.',
+  'run-unreadable': 'The server could not read that run just now.',
   'not-configured': 'This box has no coordination database, so there is no review cap here.',
 };
 

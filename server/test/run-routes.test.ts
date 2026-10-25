@@ -4083,6 +4083,20 @@ describe('the run routes refuse an unreadable run rather than acting on it (D-25
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable' });
   });
+
+  // D-6912: the review cap's read says a failed store read as 503, never the 404 that would say "not a work run".
+  it('GET /api/coord/review-cap/:id answers 503, and the absent run still answers 404', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const id = plantWideWave(w.coord, 13);
+    const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${id}` });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable' });
+    const absent = await app.inject({ method: 'GET', url: '/api/coord/review-cap/4242' });
+    expect(absent.statusCode).toBe(404);
+    expect(absent.json()).toMatchObject({ ok: false, error: 'not-found' });
+  });
 });
 
 describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
@@ -4340,6 +4354,18 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
       expect(res.json()).toEqual({ ok: true, askedAt: null, liftedAt: null, ask: {
         run: workId, rounds: 0, cap: 3,
         lastReview: { reviewRunId: null, summary: null, report: null, findings: { state: 'unnamed' } } } });
+    });
+
+    it('GET /api/coord/review-cap/:id says unnamed for a review that reported with no report artifact on its mail', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const r1 = await round(w, workId, 1);
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: r1,
+        kind: 'status', subject: 'review-done', body: '{"reviewedTip":"x"}\nno findings', artifacts: [] });
+      const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${workId}` });
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as { ask: unknown }).ask).toEqual({ run: workId, rounds: 1, cap: 3,
+        lastReview: { reviewRunId: r1, summary: 'no findings', report: null, findings: { state: 'unnamed' } } });
     });
 
     it('GET /api/coord/review-cap/:id answers 404 for a review run or no run, and 400 for a bad id', async () => {

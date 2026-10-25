@@ -919,7 +919,9 @@ describe('with the gate ARMED and no cookie', () => {
     });
 
   // D-6910: the box token never reaches either review-cap route. A gated route ignores the header, so the token alone
-  // is refused exactly as no credential is: no machine lane reads or lifts a cap on its own work.
+  // is refused exactly as no credential is: no machine lane composes the ask or lifts a cap. The cap's counts and times
+  // do reach a token holder, as `reviewCap` on `GET /api/runs` and `GET /api/runs/:id`; they hold no secret, so this
+  // gate is posture, not confidentiality.
   it.each([['GET', '/api/coord/review-cap/7'], ['POST', '/api/coord/review-cap']] as const)(
     '%s %s refuses the box token alone', async (method, url) => {
       const w = await openApp(); app = w.app;

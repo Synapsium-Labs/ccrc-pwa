@@ -6499,7 +6499,7 @@ export type ReviewFindings =
  *  (D-6910, D-6911): spelled once, beside the type it words, and read by `reviewCapNotice`
  *  (`server/src/coord/reviewcap.ts`) and `findingsWords` (`pwa/src/fleet/reviewCapWords.ts`), so the sheet says what the
  *  notice said. Total over the states that are not `read`, so a new state is a compile error here. The notice stays
- *  silent on `unnamed`, where it has already said no review reported. */
+ *  silent on `unnamed` (no report path; a review may still have reported), so only the sheet says that word. */
 export const REVIEW_FINDINGS_WORDS: Readonly<Record<Exclude<ReviewFindingsState, 'read'>, string>> = {
   unnamed: 'No report is on file.',
   absent: 'The report file is gone.',

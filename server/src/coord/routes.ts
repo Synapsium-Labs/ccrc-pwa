@@ -336,15 +336,6 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
   }
 }
 
-/**
- * The close path's hand-off to THE ONE child-reclaim executor (spec 2026-09-22
- * §5.7): on the session's OWN queue — the same `KeyedQueue` `POST
- * /workspace/reap` and the naming sweep join, so a reclaim never races either
- * on one workspace — and NEVER awaited, so the close answers before the act
- * runs. Its `ChildReclaimDeps` are read from `deps` WHEN THE JOB RUNS, not
- * when it was queued, so `fleetState` is the box's current answer. A
- * rejection is a bug, logged; the sweep reaches the child either way.
- */
 /** D-6910: the review cap's ask, composed ONCE for both of its readers: the `cap-review-rounds` refusal and
  *  `GET /api/coord/review-cap/:id`. The operator rules with the open findings in front of them, so the last review's
  *  report is read here (L4, the agent's read allowlist covers its folder); absent and unreadable stay two values and
@@ -355,6 +346,15 @@ async function composeReviewCapAsk(coord: CoordStore, io: Deps['io'], work: numb
   return reviewCapAsk(work, rounds, last, reviewFindingsOf(read));
 }
 
+/**
+ * The close path's hand-off to THE ONE child-reclaim executor (spec 2026-09-22
+ * §5.7): on the session's OWN queue — the same `KeyedQueue` `POST
+ * /workspace/reap` and the naming sweep join, so a reclaim never races either
+ * on one workspace — and NEVER awaited, so the close answers before the act
+ * runs. Its `ChildReclaimDeps` are read from `deps` WHEN THE JOB RUNS, not
+ * when it was queued, so `fleetState` is the box's current answer. A
+ * rejection is a bug, logged; the sweep reaches the child either way.
+ */
 function childReclaimPort(deps: Deps, coord: CoordStore): (req: ChildReclaimRequest) => void {
   return (req) => {
     void deps.queue.run(req.sessionId, () => childReclaimUnlessDisabled(
