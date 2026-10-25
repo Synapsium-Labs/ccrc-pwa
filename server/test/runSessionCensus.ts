@@ -13,7 +13,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import ts from 'typescript-api';
+import { parseSource } from './scan/parse.js';
 import { BINDING_WRITER_VERBS } from '../src/coord/runBinding.js';
 
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -21,10 +21,6 @@ export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 export interface EqualitySite { readonly file: string; readonly line: number; readonly kind: 'comparison' | 'query'; readonly text: string }
 
 const WORDS = new Set(['sessionId', 'claimedBy', 'coordinatorId']);
-const EQ_OPS = new Set([
-  ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken,
-  ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken,
-]);
 
 /** Every `.ts` file under `dir` (relative to `root`), sorted; declaration files and `__`-prefixed mutants skipped. */
 function tsFiles(root: string, dir: string): string[] {
@@ -42,19 +38,6 @@ function tsFiles(root: string, dir: string): string[] {
   return out;
 }
 
-/** The last name of an operand: `a.b.sessionId` and `a!.sessionId` and `sessionId` all read `sessionId`. */
-function leafName(e: ts.Expression): string | null {
-  let n: ts.Expression = e;
-  for (;;) {
-    if (ts.isParenthesizedExpression(n) || ts.isNonNullExpression(n) || ts.isAsExpression(n)) { n = n.expression; continue; }
-    break;
-  }
-  if (ts.isIdentifier(n)) return n.text;
-  if (ts.isPropertyAccessExpression(n)) return n.name.text;
-  if (ts.isElementAccessExpression(n) && ts.isStringLiteralLike(n.argumentExpression)) return n.argumentExpression.text;
-  return null;
-}
-
 const QUERY_COLUMN = /\b(?:r\.)?(?:sessionId|claimedBy)\s*(?:=|IN)\s*[?(]/;
 
 /** A `prepare(...)` argument that selects `runs` rows by the session or claimant column. The one query whose column rides
@@ -62,31 +45,20 @@ const QUERY_COLUMN = /\b(?:r\.)?(?:sessionId|claimedBy)\s*(?:=|IN)\s*[?(]/;
 const isRunsQuery = (arg: string, templated = false): boolean =>
   /\bruns\b/.test(arg) && /\bSELECT\b/.test(arg) && (QUERY_COLUMN.test(arg) || (templated && /WHERE \$\{where\}/.test(arg)));
 
-/** `null`, `undefined` and `void 0`: a comparison with one of them asks whether a field is set, not which session it is. */
-const isAbsent = (e: ts.Expression): boolean =>
-  e.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(e) && e.text === 'undefined') || ts.isVoidExpression(e);
-
 /** The equality sites of one source text, `file` being the label they carry. */
 export function equalitySitesOf(text: string, file: string): EqualitySite[] {
-  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const parsed = parseSource(text, file);
   const out: EqualitySite[] = [];
-  const at = (n: ts.Node, kind: EqualitySite['kind']): void => {
-    out.push({ file, line: sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1, kind, text: n.getText(sf).replace(/\s+/g, ' ').slice(0, 120) });
-  };
-  const visit = (n: ts.Node): void => {
-    if (ts.isBinaryExpression(n) && EQ_OPS.has(n.operatorToken.kind)) {
-      const l = leafName(n.left);
-      const r = leafName(n.right);
-      const named = (l !== null && WORDS.has(l)) || (r !== null && WORDS.has(r));
-      if (named && !isAbsent(n.left) && !isAbsent(n.right)) at(n, 'comparison');
-    } else if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === 'prepare'
-      && n.arguments.length > 0 && isRunsQuery(n.arguments[0]!.getText(sf), true)) {
-      at(n, 'query');
+  for (const c of parsed.comparisons) {
+    const named = (c.leftLeaf !== null && WORDS.has(c.leftLeaf)) || (c.rightLeaf !== null && WORDS.has(c.rightLeaf));
+    if (named && !c.absent) out.push({ file, line: c.line, kind: 'comparison', text: c.text.slice(0, 120) });
+  }
+  for (const c of parsed.calls) {
+    if (c.name === 'prepare' && c.args.length > 0 && isRunsQuery(c.args[0]!.text, true)) {
+      out.push({ file, line: c.line, kind: 'query', text: c.args[0]!.text.slice(0, 120) });
     }
-    ts.forEachChild(n, visit);
-  };
-  visit(sf);
-  return out;
+  }
+  return out.sort((a, b) => a.line - b.line);
 }
 
 /** Every equality site under `server/src` of `root`, by file then line. */
@@ -114,29 +86,20 @@ export function countsByFile(sites: readonly EqualitySite[]): Record<string, num
  * (a project, a boolean), named in `ATTRIBUTE_READS`: it decides nothing about which run is a session's.
  */
 export function storeBindingReaders(text: string, file = 'server/src/coord/store.ts'): string[] {
-  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const names: string[] = [];
-  const visit = (n: ts.Node): void => {
-    if (ts.isClassDeclaration(n) && n.name?.text === 'CoordStore') {
-      for (const m of n.members) {
-        if (!ts.isMethodDeclaration(m) || !ts.isIdentifier(m.name) || m.body === undefined) continue;
-        const priv = m.modifiers?.some((x) => x.kind === ts.SyntaxKind.PrivateKeyword || x.kind === ts.SyntaxKind.ProtectedKeyword);
-        if (priv === true) continue;
-        const body = m.body.getText(sf);
-        let hit = /\bseriesRows\b/.test(body);
-        const walk = (c: ts.Node): void => {
-          if (ts.isCallExpression(c) && ts.isPropertyAccessExpression(c.expression) && c.expression.name.text === 'prepare'
-            && c.arguments.length > 0 && isRunsQuery(c.arguments[0]!.getText(sf))) hit = true;
-          ts.forEachChild(c, walk);
-        };
-        walk(m.body);
-        if (hit && !ATTRIBUTE_READS.includes(m.name.text) && !BINDING_WRITER_VERBS.includes(m.name.text)) names.push(m.name.text);
-      }
-    }
-    ts.forEachChild(n, visit);
-  };
-  visit(sf);
-  return names.sort();
+  const parsed = parseSource(text, file);
+  const methods = parsed.symbols.filter((s) => s.kind === 'method' && s.name.startsWith('CoordStore.'));
+  const hits = new Set<string>();
+  const inside = (pos: number) => methods.filter((m) => m.start <= pos && pos < m.end);
+  for (const m of methods) {
+    if (!text.slice(m.start, m.end).startsWith('private') && /\bseriesRows\b/.test(text.slice(m.start, m.end))) hits.add(m.name);
+  }
+  for (const c of parsed.calls) {
+    if (c.name !== 'prepare' || c.args.length === 0 || !isRunsQuery(c.args[0]!.text)) continue;
+    const m = inside(c.start).sort((a, b) => (b.start - a.start))[0];
+    if (m !== undefined && !text.slice(m.start, m.end).startsWith('private')) hits.add(m.name);
+  }
+  return [...hits].map((n) => n.slice('CoordStore.'.length))
+    .filter((n) => !ATTRIBUTE_READS.includes(n) && !BINDING_WRITER_VERBS.includes(n)).sort();
 }
 
 /** The store methods that read the runs by session or claimant for an ATTRIBUTE, not for a run (see above). Named, so a

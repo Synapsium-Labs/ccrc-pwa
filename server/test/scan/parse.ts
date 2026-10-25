@@ -98,6 +98,19 @@ export interface Binding {
   scopeEnd: number;
 }
 
+/** An equality comparison (`===`, `!==`, `==`, `!=`), in source order. `leftLeaf`/`rightLeaf` are each operand's last name
+ *  (`a.b.sessionId`, `a!.sessionId`, `o['sessionId']` and `sessionId` all read `sessionId`; `null` for any other shape);
+ *  `absent` is true when an operand is `null`, `undefined` or `void …`, so a presence check is told from a comparison
+ *  of two values. `text` is the comparison's source with line breaks and their indentation removed. */
+export interface Comparison {
+  leftLeaf: string | null;
+  rightLeaf: string | null;
+  absent: boolean;
+  text: string;
+  start: number;
+  line: number;
+}
+
 export interface ParsedFile {
   path: string;
   text: string;
@@ -106,6 +119,7 @@ export interface ParsedFile {
   symbols: SymbolSpan[];
   calls: CallSite[];
   bindings: Binding[];
+  comparisons: Comparison[];
 }
 
 const scriptKindOf = (file: string): ts.ScriptKind =>
@@ -118,6 +132,19 @@ const scriptKindOf = (file: string): ts.ScriptKind =>
 const nameText = (n: ts.PropertyName | ts.BindingName | undefined): string | null =>
   n && (ts.isIdentifier(n) || ts.isPrivateIdentifier(n) || ts.isStringLiteral(n) || ts.isNumericLiteral(n))
     ? n.text : null;
+
+/** The last name of an operand, through parentheses, `!` and `as`; `null` when it has none. */
+const leafNameOf = (e: ts.Expression): string | null => {
+  let n: ts.Expression = e;
+  while (ts.isParenthesizedExpression(n) || ts.isNonNullExpression(n) || ts.isAsExpression(n)) n = n.expression;
+  if (ts.isIdentifier(n)) return n.text;
+  if (ts.isPropertyAccessExpression(n)) return n.name.text;
+  if (ts.isElementAccessExpression(n) && ts.isStringLiteralLike(n.argumentExpression)) return n.argumentExpression.text;
+  return null;
+};
+
+const isAbsentValue = (e: ts.Expression): boolean =>
+  e.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(e) && e.text === 'undefined') || ts.isVoidExpression(e);
 
 const isFunctionValue = (e: ts.Expression | undefined): e is ts.ArrowFunction | ts.FunctionExpression =>
   !!e && (ts.isArrowFunction(e) || ts.isFunctionExpression(e));
@@ -279,6 +306,7 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
   const symbols: SymbolSpan[] = [];
   const calls: CallSite[] = [];
   const bindings: Binding[] = [];
+  const comparisons: Comparison[] = [];
   const flat = (n: ts.Node): string => n.getText(sf).replace(/\r?\n[ \t]*/g, '');
 
   const addCall = (node: ts.CallExpression): void => {
@@ -352,6 +380,14 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
 
   const visit = (node: ts.Node, scope: readonly string[]): void => {
     const q = (n: string): string => [...scope, n].join('.');
+    if (ts.isBinaryExpression(node) && (node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+      || node.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken
+      || node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsToken
+      || node.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsToken)) {
+      const start = node.getStart(sf);
+      comparisons.push({ leftLeaf: leafNameOf(node.left), rightLeaf: leafNameOf(node.right),
+        absent: isAbsentValue(node.left) || isAbsentValue(node.right), text: flat(node), start, line: lineOf(start) });
+    }
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
       const a = node.arguments[0];
       if (a && ts.isStringLiteralLike(a)) {
@@ -418,8 +454,9 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
   imports.sort((a, b) => a.line - b.line);
   calls.sort((a, b) => a.start - b.start);
   bindings.sort((a, b) => a.start - b.start);
+  comparisons.sort((a, b) => a.start - b.start);
 
-  return { path: fileName, text, imports, exportedTypeAliases, symbols, calls, bindings };
+  return { path: fileName, text, imports, exportedTypeAliases, symbols, calls, bindings, comparisons };
 }
 
 /** Read and parse one file. */
