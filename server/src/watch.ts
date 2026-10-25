@@ -2161,7 +2161,8 @@ export class FleetWatcher {
   private async rowAtAct(rec: SessionRecord): Promise<{ ok: true; row: FleetSession } | { ok: false }> {
     const reads = turnReadDeps(this.deps, this);
     const again = await readSessionRecord(this.deps.io, this.deps.cfg, rec.id);
-    // Every arm but `found` (`absent`, `unlistable`, and the id gate's `bad-id`, path-identity spec §2.3) acts on nothing.
+    // Every arm but `found` (`absent`, `unmeasurable`, `unlistable`, and the id gate's `bad-id`, path-identity
+    // spec §2.3) acts on nothing.
     if (again.kind !== 'found') return { ok: false };
     const row = await liveRowFor(reads, again.record, again.record.uuid);
     return row === null ? { ok: false } : { ok: true, row };

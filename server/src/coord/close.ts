@@ -587,7 +587,7 @@ export async function childGateAtClose(
     case 'unlistable':
       mark = { kind: 'unreadable' };
       break;
-    case 'absent': {
+    case 'absent': case 'unmeasurable': {
       // A6/P5: `absent` is re-listed once, folding ONLY `.child` (never
       // `.uuid`) — the close's own question, distinct from the executor's.
       const listing = await childReclaimRowListing(deps, sessionId);

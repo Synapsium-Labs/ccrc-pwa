@@ -1332,9 +1332,10 @@ export function registerCoordRoutes(
     // left to rule 3's child gate like `unlistable`. The open gate's `sessionId`
     // check already refuses such an id before this read.
     if (read.kind === 'unlistable' || read.kind === 'bad-id') return { kind: 'deferred' };
-    // `absent` is two populations (`readSessionRecord`'s docstring): no
-    // `.uuid` listed, and a listed row that could not be built. Only the first
-    // is row-less; a listed `.child` is the child gate's `spent-unmeasured`.
+    // `absent` (no `.uuid` listed, or a twice-observed retirement) and
+    // `unmeasurable` (a listed row that could not be built, D-1145) both reach
+    // this re-listing, which still splits them by hand: only the first is
+    // row-less; a listed `.child` is the child gate's `spent-unmeasured`.
     const names = await deps.io.readdir(deps.cfg.registryDir);
     if (names === null || names.includes(`${sessionId}.child`)) return { kind: 'deferred' };
     return names.includes(`${sessionId}.uuid`) ? { kind: 'unbuilt' } : { kind: 'absent' };
