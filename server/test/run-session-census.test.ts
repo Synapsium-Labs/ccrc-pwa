@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  ATTRIBUTE_READS, NOT_BINDING_SITES, RUN_KEYED_READS, countsByFile, equalitySites, equalitySitesOf, REPO, storeBindingReaders, unroutedSites,
+  ATTRIBUTE_READS, NOT_BINDING_SITES, RUN_KEYED_READS, RUN_NAMES_SESSION_CALLERS, runNamesSessionCallers, runNamesSessionCallsOf, countsByFile, equalitySites, equalitySitesOf, REPO, storeBindingReaders, unroutedSites,
 } from './runSessionCensus.js';
 import { BINDING_WRITER_VERBS } from '../src/coord/runBinding.js';
 
@@ -111,6 +111,19 @@ describe('the server run/session equality sites (ARCH-62 census)', () => {
       expect(n.why.length, `${n.file}: ${n.text}`).toBeGreaterThan(30);
       expect(sites.filter((s) => s.file === n.file && s.text === n.text).length, `${n.file}: ${n.text}`).toBe(n.count ?? 1);
     }
+  });
+});
+
+describe('the callers of runNamesSession (an id-string decision behind a name; ARCH-62 census)', () => {
+  it('are exactly the pinned callers, each with its count and a reason', () => {
+    expect(runNamesSessionCallers()).toEqual(Object.fromEntries(
+      [...RUN_NAMES_SESSION_CALLERS].sort((a, b) => a.file.localeCompare(b.file)).map((c) => [c.file, c.count])));
+    for (const c of RUN_NAMES_SESSION_CALLERS) expect(c.why.length, c.file).toBeGreaterThan(30);
+  });
+
+  it('counts a call, not an import', () => {
+    const src = "import { runNamesSession } from './runBinding.js';\nif (runNamesSession(r, id)) {}\n";
+    expect(runNamesSessionCallsOf(src, 'x.ts')).toBe(1);
   });
 });
 

@@ -156,3 +156,33 @@ export const ATTRIBUTE_READS: readonly string[] = ['sessionProject', 'strandedCl
  *  COUNT among the store's binding readers (orchestrator ruling on ARCH-62 slice 2); slice 4 folds them onto `run(id)`.
  *  Named here so the census number is honest until then: the session-keyed readers plus these. */
 export const RUN_KEYED_READS: readonly string[] = ['resolveCoordinator', 'resolveWorker'];
+
+/** A caller of `runNamesSession` outside `runBinding.ts`. The helper is `run.sessionId === id` behind a name, which the
+ *  equality detector cannot see, so wrapping a site in it must not lower the census silently: each caller is pinned here with
+ *  its exact count and a reason. These are id-string decisions by name, NOT routing through `bindingOf`/`childrenOf`; the
+ *  exit measurement of the final routing slice accounts for them. */
+export interface NamesSessionCaller { readonly file: string; readonly count: number; readonly why: string }
+
+export const RUN_NAMES_SESSION_CALLERS: readonly NamesSessionCaller[] = [
+  { file: 'server/src/coord/childReclaim.ts', count: 1,
+    why: 'the minting run of a child marker is ONE run with no series in hand: it names the session or it does not (not-a-child)' },
+  { file: 'server/src/childReclaimSweep.ts', count: 2,
+    why: 'a hold candidate and a minting run are single runs with no series in hand: the sweep asks only whether the run names the session' },
+];
+
+/** The calls of `runNamesSession` in one source text (an import is not a call). */
+export function runNamesSessionCallsOf(text: string, file: string): number {
+  return parseSource(text, file).calls.filter((c) => c.name === 'runNamesSession').length;
+}
+
+/** The callers of `runNamesSession` under `server/src` outside `runBinding.ts`: file -> count. */
+export function runNamesSessionCallers(root: string = REPO): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const f of tsFiles(root, 'server/src')) {
+    const file = path.relative(root, f).split(path.sep).join('/');
+    if (file === 'server/src/coord/runBinding.ts') continue;
+    const n = runNamesSessionCallsOf(readFileSync(f, 'utf8'), file);
+    if (n > 0) out[file] = n;
+  }
+  return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)));
+}
