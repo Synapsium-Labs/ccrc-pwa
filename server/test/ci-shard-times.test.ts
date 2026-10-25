@@ -6,10 +6,15 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { durationsFromVitestJson, planShards, PROFILES } from '../../.github/ci/shards.mjs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
+import { durationsFromVitestJson, orderLongestFirst, planShards, PROFILES } from '../../.github/ci/shards.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
+const serverRoot = path.join(repoRoot, 'server');
 const abs = (rel: string) => path.join(repoRoot, rel);
 
 describe('characterization: planner on a fixed fixture', () => {
@@ -38,5 +43,106 @@ describe('characterization: planner on a fixed fixture', () => {
     expect(plan.map((s) => s.files)).toEqual([
       ['server/test/mid.test.ts', 'server/test/small1.test.ts', 'server/test/small2.test.ts', 'server/test/heavy.test.ts'],
     ]);
+  });
+});
+
+describe('durationsFromVitestJson: whole-file wall time', () => {
+  it('a file whose time is all in beforeAll is recorded at its full time, not ~0', () => {
+    // The reporter's `wallMs` covers environment setup, collection, hooks and tests; the JSON report's
+    // start/end span only the tests (1 ms here).
+    const report = {
+      testResults: [{ name: abs('server/test/heavy.test.ts'), startTime: 0, endTime: 1, wallMs: 400_000 }],
+    };
+    expect(durationsFromVitestJson(report, repoRoot)).toEqual({ 'server/test/heavy.test.ts': 400_000 });
+  });
+
+  it('an older artifact without wallMs still reads as endTime - startTime + 500', () => {
+    const report = { testResults: [{ name: abs('server/test/old.test.ts'), startTime: 5, endTime: 105 }] };
+    expect(durationsFromVitestJson(report, repoRoot)).toEqual({ 'server/test/old.test.ts': 600 });
+  });
+});
+
+describe('orderLongestFirst', () => {
+  it('orders by recorded time, longest first', () => {
+    expect(orderLongestFirst(['b', 'c', 'a'], { a: 400, b: 10, c: 200 })).toEqual(['a', 'c', 'b']);
+  });
+
+  it('a file missing from the times sorts at the median position', () => {
+    // known {a:400,b:10,c:200} -> median 200; "m" ties with c (200) and, ties going by path, follows it.
+    expect(orderLongestFirst(['m', 'a', 'b', 'c'], { a: 400, b: 10, c: 200 })).toEqual(['a', 'c', 'm', 'b']);
+  });
+
+  it('keeps every file exactly once and does not mutate its input', () => {
+    const input = ['x', 'y'];
+    expect(orderLongestFirst(input, {})).toEqual(['x', 'y']);
+    expect(input).toEqual(['x', 'y']);
+  });
+});
+
+describe('file-times reporter (real vitest run)', () => {
+  it('records the time spent in beforeAll that the JSON report drops', () => {
+    const dir = mkTmp('ci-shard-times-reporter-');
+    mkdirSync(path.join(dir, 'test'));
+    writeFileSync(path.join(dir, 'test', 'slow-hook.test.ts'),
+      "import { beforeAll, it, expect } from 'vitest';\n"
+      + 'beforeAll(async () => { await new Promise((r) => setTimeout(r, 600)); });\n'
+      + "it('is instant', () => { expect(1).toBe(1); });\n");
+    const out = path.join(dir, 'times.json');
+    const json = path.join(dir, 'report.json');
+    const reporter = path.join(repoRoot, '.github', 'ci', 'file-times-reporter.mjs');
+    const r = spawnSyncGroup(process.execPath, [
+      path.join(serverRoot, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--root', dir,
+      `--reporter=${reporter}`, '--reporter=json', `--outputFile.json=${json}`,
+    ], { cwd: dir, encoding: 'utf8', timeout: 60_000, env: { ...process.env, CCRC_FILE_TIMES_OUT: out } });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    const report = JSON.parse(readFileSync(out, 'utf8'));
+    expect(report.testResults).toHaveLength(1);
+    const [entry] = report.testResults;
+    expect(entry.name).toBe(path.join(dir, 'test', 'slow-hook.test.ts'));
+    expect(entry.wallMs).toBeGreaterThanOrEqual(600);
+    // the stock JSON report is what the old calculation read: the 600 ms hook is not in its span
+    const stock = JSON.parse(readFileSync(json, 'utf8')).testResults[0];
+    expect(stock.endTime - stock.startTime).toBeLessThan(300);
+    expect(durationsFromVitestJson(report, dir)[path.relative(dir, entry.name)]).toBeGreaterThanOrEqual(600);
+  });
+});
+
+describe('vitest.select.config.ts sequencer', () => {
+  const serverRootTsx = path.join(serverRoot, 'node_modules', '.bin', 'tsx');
+  function sortedBy(env: Record<string, string>, moduleIds: string[]): string[] {
+    const dir = mkTmp('ci-shard-times-seq-');
+    const target = path.join(serverRoot, 'vitest.select.config.ts').replace(/\\/g, '/');
+    const script = path.join(dir, 'run.mts');
+    writeFileSync(script, [
+      `import cfg from '${target}';`,
+      'const Seq = (cfg as any).test.sequence.sequencer;',
+      `const files = ${JSON.stringify(moduleIds)}.map((moduleId) => ({ moduleId }));`,
+      'const out = await new Seq({}).sort(files);',
+      'process.stdout.write(JSON.stringify(out.map((f: any) => f.moduleId)));',
+    ].join('\n'), 'utf8');
+    const e: NodeJS.ProcessEnv = { ...process.env };
+    delete e.CCRC_TEST_TIMES;
+    delete e.CCRC_TEST_LIST;
+    Object.assign(e, env);
+    return JSON.parse(execFileSync(serverRootTsx, [script], { cwd: serverRoot, env: e, encoding: 'utf8' }));
+  }
+  const id = (n: string) => path.join(serverRoot, 'test', `${n}.test.ts`);
+
+  it('runs the files of CCRC_TEST_TIMES longest first', () => {
+    const dir = mkTmp('ci-shard-times-seq-t-');
+    const list = path.join(dir, 'tests.txt');
+    const times = path.join(dir, 'testtimes.json');
+    writeFileSync(list, 'test/a.test.ts\ntest/b.test.ts\ntest/c.test.ts\n');
+    writeFileSync(times, JSON.stringify({ 'server/test/a.test.ts': 400, 'server/test/b.test.ts': 10, 'server/test/c.test.ts': 200 }));
+    expect(sortedBy({ CCRC_TEST_LIST: list, CCRC_TEST_TIMES: times }, [id('b'), id('c'), id('a')]))
+      .toEqual([id('a'), id('c'), id('b')]);
+  });
+
+  it('without times, keeps the order of CCRC_TEST_LIST (the planner lists a shard longest first)', () => {
+    const dir = mkTmp('ci-shard-times-seq-l-');
+    const list = path.join(dir, 'tests.txt');
+    writeFileSync(list, 'test/c.test.ts\ntest/a.test.ts\ntest/b.test.ts\n');
+    expect(sortedBy({ CCRC_TEST_LIST: list }, [id('a'), id('b'), id('c')]))
+      .toEqual([id('c'), id('a'), id('b')]);
   });
 });

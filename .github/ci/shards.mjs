@@ -31,7 +31,12 @@ import { pathToFileURL } from 'node:url';
  * vitest's own collection overhead (spec §7.1's planner budget), added
  * once here so every caller of the resulting map already carries it.
  *
- * @param {{ testResults: Array<{ name: string, startTime: number, endTime: number }> }} report
+ * A report written by `file-times-reporter.mjs` carries `wallMs` per file: the whole time the file held a worker
+ * (environment, collection, hooks and tests). It is preferred as is, with no extra 500ms. `endTime - startTime`
+ * spans only the first test's start to the last test's end, so it drops `beforeAll` and collection time (a file
+ * whose cost is all in its hooks came out at ~0); it stays as the fallback for an artifact an older run left.
+ *
+ * @param {{ testResults: Array<{ name: string, startTime: number, endTime: number, wallMs?: number }> }} report
  * @param {string} repoRoot
  * @returns {Record<string, number>}
  */
@@ -40,7 +45,7 @@ export function durationsFromVitestJson(report, repoRoot) {
   const out = {};
   for (const result of report.testResults ?? []) {
     const rel = path.relative(repoRoot, result.name).split(path.sep).join('/');
-    out[rel] = (result.endTime - result.startTime) + 500;
+    out[rel] = typeof result.wallMs === 'number' ? result.wallMs : (result.endTime - result.startTime) + 500;
   }
   return out;
 }
@@ -52,6 +57,33 @@ export const PROFILES = {
   macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 2, defaultMs: 5000, scale: 1.5 },
   trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6 },
 };
+
+/** The median of the known durations; `defaultMs` when none are known. */
+function medianMs(durations, defaultMs) {
+  const known = durations != null ? Object.values(durations).sort((a, b) => a - b) : [];
+  const mid = known.length >> 1;
+  return known.length === 0 ? defaultMs : known.length % 2 === 1 ? known[mid] : (known[mid - 1] + known[mid]) / 2;
+}
+
+/**
+ * `files` longest recorded duration first (ties by path ascending); a file with no recorded duration takes the
+ * median of the known ones, so it lands mid-order. Returns a new array. Used by the vitest sequencer
+ * (`server/vitest.select.config.ts`) to start a shard's longest file first.
+ *
+ * @param {string[]} files
+ * @param {Record<string, number>} durations
+ * @returns {string[]}
+ */
+export function orderLongestFirst(files, durations) {
+  const fallback = medianMs(durations, 0);
+  const durationOf = (f) => durations[f] ?? fallback;
+  return [...files].sort((a, b) => {
+    const da = durationOf(a);
+    const db = durationOf(b);
+    if (db !== da) return db - da;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+}
 
 function clamp(n, lo, hi) {
   return Math.min(Math.max(n, lo), hi);
@@ -79,9 +111,7 @@ export function planShards(files, durations, { targetMs, min, max, workers, defa
 
   // A file with no duration is given the MEDIAN of the known ones (spec §7.1); `defaultMs` only when none are
   // known — an empty table, or none at all.
-  const known = durations != null ? Object.values(durations).sort((a, b) => a - b) : [];
-  const mid = known.length >> 1;
-  const fallback = known.length === 0 ? defaultMs : known.length % 2 === 1 ? known[mid] : (known[mid - 1] + known[mid]) / 2;
+  const fallback = medianMs(durations, defaultMs);
   const durationOf = (f) => (durations != null ? (durations[f] ?? fallback) : defaultMs);
   const total = files.reduce((sum, f) => sum + durationOf(f), 0) * scale;
   const raw = Math.ceil(total / workers / targetMs);

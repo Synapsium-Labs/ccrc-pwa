@@ -22,7 +22,11 @@
 // reassigned explicitly, after the merge, to avoid exactly that.
 import { defineConfig, mergeConfig } from 'vitest/config';
 import type { ViteUserConfig as UserConfig } from 'vitest/config';
+import { BaseSequencer } from 'vitest/node';
+import type { TestSpecification } from 'vitest/node';
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { orderLongestFirst } from '../.github/ci/shards.mjs';
 import base from './vitest.config.js';
 
 /** Reads `CCRC_TEST_LIST`: one server-relative test path per line, blank lines ignored. Throws a clear error
@@ -45,12 +49,41 @@ export function readTestList(file: string): string[] {
   return lines;
 }
 
+/** Starts a shard's longest file first, so a 400 s file cannot start last and stretch the shard. Vitest runs
+ *  files in an arbitrary order by default (its own cache of past durations, which a fresh CI runner lacks).
+ *  The order is the recorded durations in `CCRC_TEST_TIMES` (the `testtimes.json` artifact; repo-relative keys)
+ *  when that names a file, else the order of `CCRC_TEST_LIST`, which the shard planner emits longest first. A
+ *  file in neither sorts at the median. `shard()` is vitest's own, so WHICH files run is unchanged. */
+class LongestFirstSequencer extends BaseSequencer {
+  override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
+    const durations = loadDurations();
+    if (durations === null) return files;
+    const serverDir = path.dirname(new URL(import.meta.url).pathname);
+    const key = (f: TestSpecification) => 'server/' + path.relative(serverDir, f.moduleId).split(path.sep).join('/');
+    const byKey = new Map(files.map((f) => [key(f), f]));
+    return orderLongestFirst([...byKey.keys()], durations).map((k) => byKey.get(k)!);
+  }
+}
+
+function loadDurations(): Record<string, number> | null {
+  const timesFile = process.env.CCRC_TEST_TIMES;
+  if (timesFile) return JSON.parse(readFileSync(timesFile, 'utf8')) as Record<string, number>;
+  const list = process.env.CCRC_TEST_LIST;
+  if (!list) return null;
+  const lines = readTestList(list);
+  return Object.fromEntries(lines.map((line, i) => ['server/' + line, lines.length - i]));
+}
+
 const listFile = process.env.CCRC_TEST_LIST;
 
 const merged: UserConfig = mergeConfig(base, defineConfig({}));
 
 if (listFile) {
-  merged.test = { ...merged.test, include: readTestList(listFile) };
+  merged.test = {
+    ...merged.test,
+    include: readTestList(listFile),
+    sequence: { ...merged.test?.sequence, sequencer: LongestFirstSequencer },
+  };
 }
 
 export default merged;
