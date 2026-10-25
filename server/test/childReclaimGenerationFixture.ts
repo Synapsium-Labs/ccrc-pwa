@@ -20,6 +20,7 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'nod
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher, CHILD_RECLAIM_SWEEP_MS } from '../src/watch.js';
+import { guardQuietAtTestEnd } from './laneQuiet.js';
 import { readRegistry } from '../src/registry.js';
 import { loadConfig } from '../src/config.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -164,6 +165,7 @@ export const laneFixture = (opts: LaneOpts = {}) => {
     },
   };
   const watcher = new FleetWatcher(deps as never, new Bus(), 10_000);
+  guardQuietAtTestEnd(watcher);
   /** A registry row as ws-add writes it, with its `create` journalled. `extra` lands as `<id>.<field>`
    *  files: `child`, `hold`, `generation`. */
   const plant = (id: string, extra: Record<string, string> = {}): void => {

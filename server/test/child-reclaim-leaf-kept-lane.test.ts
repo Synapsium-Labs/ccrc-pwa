@@ -16,6 +16,7 @@ import {
 } from '../src/coord/childReclaim.js';
 import { G1, laneFixture } from './childReclaimGenerationFixture.js';
 import { mkTmp } from './tmpHelpers.js';
+import { drainTick } from './laneQuiet.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -42,7 +43,7 @@ const fixture = async (o: { cap?: boolean; coord?: CoordStore; home?: string; no
   const reclaimedKeepingTmp = (): void => f.journal(GONE, 'reclaim', 'done',
     { verb: 'ws-reclaim', meas: { childOf: '41', tmpRootKept: 'in-use' }, detail: CCD_LINE });
   /** The frame at the clock the last pass stamped, so `tick()`'s own sweep dispatch is throttled. */
-  const attention = async () => { await f.watcher.tick(); return f.watcher.currentCoord()?.childReclaimAttention; };
+  const attention = async () => { await drainTick(f.watcher); return f.watcher.currentCoord()?.childReclaimAttention; };
   const fed = () => f.coord.feedEvents(50).filter((e) => e.title === CHILD_RECLAIM_LEAF_KEPT_FEED_TITLE);
   return { ...f, home, notifyLog, reclaimedKeepingTmp, attention, fed };
 };
