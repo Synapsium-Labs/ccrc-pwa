@@ -1110,7 +1110,7 @@ export const OPACITY_REGISTRY = {
   },
   '.bell:disabled 0.35': { noText: 'WCAG 1.4.3 exempts inactive controls' },
   '.pending-actions .pending-send-it:disabled 0.6': {
-    noText: 'WCAG 1.4.3 exempts inactive controls; the button is only disabled for the moment its own Enter is in flight',
+    noText: 'WCAG 1.4.3 exempts inactive controls; the button is disabled while its own Enter is in flight, and while the desk\'s inline ask card holds sends (D-6326, R96)',
   },
   ".attach-chip[data-state='uploading'] .attach-thumb 0.55": {
     noText: 'an <img> upload preview; the uploading state is also carried by the ::before ring',
