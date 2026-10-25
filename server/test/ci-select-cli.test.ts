@@ -142,7 +142,7 @@ function parseGithubOutput(text: string): Record<string, string> {
   return out;
 }
 
-type RunOpts = { event: string; inputMode?: string; selection?: 'shadow' | 'enforce'; fullGreen?: 'true' | 'false'; mapFile?: string; timesFile?: string; traceList?: string; floorList?: string; floorStatic?: string };
+type RunOpts = { event: string; inputMode?: string; selection?: 'shadow' | 'enforce'; fullGreen?: 'true' | 'false'; mapFile?: string; base?: string; timesFile?: string; traceList?: string; floorList?: string; floorStatic?: string };
 
 function runSelect(repo: string, opts: RunOpts) {
   const io = mkTmp('ccrc-ci-select-io-');
@@ -160,6 +160,7 @@ function runSelect(repo: string, opts: RunOpts) {
   ];
   if (opts.inputMode) args.push('--input-mode', opts.inputMode);
   if (opts.mapFile) args.push('--map', opts.mapFile);
+  if (opts.base) args.push('--base', opts.base);
   if (opts.timesFile) args.push('--times', opts.timesFile);
   if (opts.traceList) args.push('--trace-list', opts.traceList);
   if (opts.floorList) args.push('--floor-list', opts.floorList);
@@ -530,6 +531,49 @@ describe('select.mjs CLI — pull_request', () => {
     expect(status).toBe(0);
     expect(outputs.tests).toBe('full');
     expect(outputs.fallback).toBe(`map: ${sideSha} is not an ancestor of HEAD`);
+  });
+
+  describe('a pull request run with --base diffs from its merge base, not from the map commit', () => {
+    // main moves on after the map (it changes src/foo.ts, which test a reads); the PR then changes only src/bar.ts.
+    const staleMapFixture = () => {
+      const repo = initRepo();
+      writeFile(repo, 'src/foo.ts', 'export const foo = 1;\n');
+      writeFile(repo, 'src/bar.ts', 'export const bar = 1;\n');
+      writeFile(repo, 'server/test/a.test.ts', "it('a', () => {});\n");
+      writeFile(repo, 'server/test/b.test.ts', "it('b', () => {});\n");
+      const baseSha = commitAll(repo, 'base');
+      const mapFile = writeMapFile(repo, {
+        format: 1, sha: baseSha, baseline: depRecord(),
+        tests: { 'server/test/a.test.ts': testRecord({ read: ['src/foo.ts'] }), 'server/test/b.test.ts': testRecord({ read: ['src/other.ts'] }) },
+      });
+      writeFile(repo, 'src/foo.ts', 'export const foo = 2;\n');
+      commitAll(repo, 'main moves past the map');
+      git(repo, ['checkout', '-q', '-b', 'pr']);
+      writeFile(repo, 'src/bar.ts', 'export const bar = 2;\n');
+      commitAll(repo, 'the PR change');
+      return { repo, mapFile };
+    };
+
+    it('without --base (the trusted modes) the diff runs from the map commit and a is selected', () => {
+      const { repo, mapFile } = staleMapFixture();
+      const { outputs } = runSelect(repo, { event: 'pull_request', mapFile });
+      expect(outputs.tests).toBe('selected');
+      expect(outputs.count).toBe('1');
+    });
+
+    it('with --base main only the PR\'s own change is selected: nothing reads src/bar.ts, so no server test runs', () => {
+      const { repo, mapFile } = staleMapFixture();
+      const { outputs } = runSelect(repo, { event: 'pull_request', mapFile, base: 'main' });
+      expect(outputs.tests).toBe('selected');
+      expect(outputs.count).toBe('0');
+    });
+
+    it('--base is ignored off a pull_request: a merge_group still runs the full suite', () => {
+      const { repo, mapFile } = staleMapFixture();
+      const { outputs } = runSelect(repo, { event: 'merge_group', mapFile, base: 'main' });
+      expect(outputs.tests).toBe('full');
+      expect(outputs.count).toBe('2');
+    });
   });
 
   it('macOS budget follows the EVENT: a pull request that fell back to full still gets at most 2 macOS shards', () => {

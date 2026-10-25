@@ -136,9 +136,14 @@ function liveTestsOrRefuse(repoDir) {
  * @param {string | undefined} mapFile
  * @param {string[]} liveTests every live server test file (already computed
  *   by the caller, so this never re-reads it)
+ * @param {string | undefined} baseRef a pull request's base (`origin/main`):
+ *   the change is then what the PR itself changed since its merge base, not
+ *   everything since the map's commit, so a day-old map no longer selects the
+ *   whole suite. The merge queue (no baseRef) still diffs from `map.sha`, and
+ *   it is the run that covers what main moved since the map.
  * @returns {{ selection: Selection, map: TestMap | null }}
  */
-function computeRealSelection(repoDir, mapFile, liveTests) {
+function computeRealSelection(repoDir, mapFile, liveTests, baseRef) {
   try {
     // No map is the ordinary first-run state (no trusted main artifact yet),
     // not a read error: say so, and say where it looked.
@@ -154,16 +159,22 @@ function computeRealSelection(repoDir, mapFile, liveTests) {
     }
     const map = mapResult.map;
     // Only a map from this tree's own history: its commit must be an ancestor of HEAD (exit 1 = it is not;
-    // anything else — an unknown commit — throws and falls back below).
-    try {
-      execFileSync('git', ['merge-base', '--is-ancestor', map.sha, 'HEAD'], { cwd: repoDir, stdio: 'pipe' });
-    } catch (e) {
-      if (e && /** @type {{ status?: number }} */ (e).status === 1) {
-        return { selection: { mode: 'full', reason: `map: ${map.sha} is not an ancestor of HEAD` }, map: null };
+    // anything else — an unknown commit — throws and falls back below). A pull request diffs from its merge
+    // base, so the map's age is not a question there: it only has to be a map.
+    let from = map.sha;
+    if (baseRef) {
+      from = execFileSync('git', ['merge-base', baseRef, 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).trim();
+    } else {
+      try {
+        execFileSync('git', ['merge-base', '--is-ancestor', map.sha, 'HEAD'], { cwd: repoDir, stdio: 'pipe' });
+      } catch (e) {
+        if (e && /** @type {{ status?: number }} */ (e).status === 1) {
+          return { selection: { mode: 'full', reason: `map: ${map.sha} is not an ancestor of HEAD` }, map: null };
+        }
+        throw e;
       }
-      throw e;
     }
-    const changes = readChanges(repoDir, map.sha, 'HEAD');
+    const changes = readChanges(repoDir, from, 'HEAD');
     const existsAt = gitExistsAt(repoDir);
     const selection = selectTests({ map, changes, liveTests, existsAt });
     return { selection, map };
@@ -287,7 +298,7 @@ function main() {
   const liveTestsAll = liveTestsOrRefuse(repoDir);
 
   const needsRealSelection = decide.tests === 'selected' || decide.trace === 'refresh';
-  const realSel = needsRealSelection ? computeRealSelection(repoDir, mapFile, liveTestsAll) : null;
+  const realSel = needsRealSelection ? computeRealSelection(repoDir, mapFile, liveTestsAll, event === 'pull_request' ? opt.base : undefined) : null;
 
   let testsOut = decide.tests;
   let fallback = '';

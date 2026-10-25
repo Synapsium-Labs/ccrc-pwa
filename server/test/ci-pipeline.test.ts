@@ -580,7 +580,7 @@ describe('ci.yml: the map\'s inputs and outputs (design 2026-09-23 §5.3-§5.5)'
     expect(build).toContain('--traced "$RUNNER_TEMP/select-inputs/traced.txt"');
     // --map always names the fetch path, so select.mjs can say "no map restored at <path>" when none was fetched.
     // Outside the checkout (final review FR-4): a pull request can commit `.ci-cache/testmap.json` into the tree.
-    expect(runScript(step(job('select'), 'Select'))).toContain('args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")\n');
+    expect(runScript(step(job('select'), 'Select'))).toContain('args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --base "$BASE" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")\n');
     expect(runScript(step(job('select'), 'Select'))).toContain('if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi\n');
     expect(step(job('select'), 'Hand the map to map-build')).toMatch(/^ {10}path: \|\n {12}\$\{\{ runner\.temp \}\}\/ci-cache\/testmap\.json\n {12}\$\{\{ runner\.temp \}\}\/ci-cache\/traced\.txt\n {12}\$\{\{ runner\.temp \}\}\/ci-cache\/testmap\.artifact$/m);
     // Handed over whenever anything is traced: a build needs the fetched map too, to tell news from old failures.
@@ -1035,7 +1035,8 @@ describe('ci.yml: test (pwa) is a summary over the pwa shards (D-6768)', () => {
     expect(total, 'the shard matrix names no total').toBeDefined();
     expect(list!.split(',').map((x) => Number(x.trim())), 'the shards are not exactly 1..total')
       .toEqual(Array.from({ length: Number(total) }, (_, i) => i + 1));
-    expect(shard).toMatch(/^ {8}run: \.\/node_modules\/\.bin\/vitest run --shard=\$\{\{ matrix\.shard \}\}\/\$\{\{ matrix\.total \}\}$/m);
+    // the full run (the else branch) is the exact shard command; a `changed` scope adds --changed to it
+    expect(shard).toMatch(/^ {12}\.\/node_modules\/\.bin\/vitest run --shard=\$\{\{ matrix\.shard \}\}\/\$\{\{ matrix\.total \}\}$/m);
     const tsc = [...jobs(read(CI))].filter(([, bl]) => /working-directory: pwa\n\s+run: \.\/node_modules\/\.bin\/tsc --noEmit/.test(bl)).map(([id]) => id);
     expect(tsc, 'the pwa typecheck must run in exactly one job').toEqual(['pwa-static']);
   });
