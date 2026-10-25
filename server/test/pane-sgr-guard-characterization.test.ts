@@ -8,7 +8,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
-import { hasMenu, parseDialog } from '../src/pane/dialog.js';
+import { hasMenu, parseDialog, stripSgr } from '../src/pane/dialog.js';
 import { draftOfMeasured } from '../src/inject/send.js';
 import { parseTranscriptLine } from '../src/transcript/parse.js';
 
@@ -41,5 +41,27 @@ describe('SGR is stripped identically at the other sites', () => {
   it('a command stdout row loses its SGR and keeps non-SGR escapes out of the strip', () => {
     const rec = (c: string) => JSON.stringify({ type: 'user', uuid: 'u', timestamp: '2026-01-01T00:00:00Z', message: { role: 'user', content: c } });
     expect(parseTranscriptLine(rec('<local-command-stdout>\x1b[2mDone\x1b[22m\x1b[2K</local-command-stdout>'))).toMatchSnapshot();
+  });
+});
+
+describe('ARCH-63: one SGR stripper, no guard copy', () => {
+  it('stripSgr removes every SGR run and nothing else', () => {
+    expect(stripSgr('\x1b[1;36mA\x1b[0m b \x1b[2mc\x1b[22m')).toBe('A b c');
+    expect(stripSgr('x\x1b[2Ky\x1b[?25l')).toBe('x\x1b[2Ky\x1b[?25l');
+    expect(stripSgr('')).toBe('');
+    expect(stripSgr('a\x1b[0mb')).toBe(stripSgr(stripSgr('a\x1b[0mb'))); // repeated calls: the /g regex keeps no lastIndex
+  });
+  const SRC = path.resolve(__dirname, '../src');
+  const code = (rel: string) => readFileSync(path.join(SRC, rel), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  it('only pane/dialog.ts declares the SGR regex', () => {
+    for (const rel of ['inject/send.ts', 'sessionws.ts', 'watch.ts', 'transcript/parse.ts']) {
+      expect(code(rel), rel).not.toMatch(/\\x1b\\\[\[0-9;\]\*m\//);
+      expect(code(rel), rel).not.toMatch(/\bSGR\b/);
+    }
+  });
+  it('no site spells hasMenu(strip) ? parseDialog(...) : null', () => {
+    for (const rel of ['inject/send.ts', 'sessionws.ts', 'watch.ts']) {
+      expect(code(rel), rel).not.toMatch(/hasMenu\([^)]*\)\)?\s*\?\s*parseDialog/);
+    }
   });
 });

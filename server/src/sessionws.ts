@@ -10,7 +10,7 @@ import {
   continuesInto, resumedPastMarker, rungRank, TranscriptResolver, type TranscriptResolution,
 } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
-import { hasMenu, parseDialog } from './pane/dialog.js';
+import { parseDialog } from './pane/dialog.js';
 import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
 import { SessionWorkflows, sessionDirOf } from './workflows/read.js';
@@ -25,7 +25,6 @@ const POLL_MS = 2000;
  *  three polls, at least 6 s of the pane unreadable. One or two are the blips a slow remote call produces. */
 const FAILED_CAPTURES_CLEAR = 3;
 const BACKLOG_N = 50;
-const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see checkDialog's own comment
 
 interface Resolved {
   uuid: string;
@@ -407,7 +406,7 @@ export class SessionStream {
     // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
     // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
     // captureAnsi().
-    let dialog = hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
+    let dialog = parseDialog(pane);
     // Read the transcript only while this menu is still unexplained. Once its ask
     // is latched, re-reading costs a 256 KB tail every 2 s and can buy nothing:
     // nextDialogFrame would suppress the frame anyway. Menus that never latch are

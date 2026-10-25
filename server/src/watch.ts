@@ -10,7 +10,7 @@ import {
   readProjectPools,
 } from './pools.js';
 import type { CcdResult } from './coord/ports.js';
-import { hasMenu, parseDialog } from './pane/dialog.js';
+import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
@@ -230,8 +230,6 @@ import {
 import { OrphanTreeSweep } from './orphanTreeSweep.js';
 import { orphanCoordinatorSet } from './orphanTreeLane.js';
 import type { DiskOrphanTrees } from '../../shared/disk.js';
-
-const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
 
 /** The disk alarm's clock (D-6615, spec §2.5): one `statfs` pass a minute. */
 const DISK_SWEEP_MS = 60_000;
@@ -8749,7 +8747,7 @@ export class FleetWatcher {
       // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
       // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
       // captureAnsi().
-      const dialog = pane !== null && hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
+      const dialog = pane !== null ? parseDialog(pane) : null;
       // D-5925: a child the boot found holding a question or a prompt is decided from the rows first. Re-seeded, or
       // still in doubt, nothing below may hold or raise it on this tick: the hold already exists in `coord.db`.
       const reseed = this.reseedFromRows(r, pane, dialog);

@@ -53,7 +53,10 @@ export function turnRunning(pane: string): boolean { return BUSY_RE.test(pane); 
  *  caller strips escapes first. */
 export function startsWithPromptGlyph(row: string): boolean { return row.startsWith('❯'); }
 const MENU_RE = /Enter to (confirm|select)/;
-const SGR = /\x1b\[[0-9;]*m/g; // any ANSI colour/attr code — same idiom as inject/send.ts:80
+const SGR = /\x1b\[[0-9;]*m/g;
+/** The ONE SGR (colour/attribute) stripper (ARCH-63): every reader of pane or terminal text that wants the escapes off
+ *  goes through it. Only `ESC [ … m` comes off; any other control sequence stays. */
+export function stripSgr(text: string): string { return text.replace(SGR, ''); }
 const MULTISELECT_RE = /Space to select/;
 /** A numbered menu option line, optionally carrying the ❯ selection marker.
  *  A list taller than its window marks its edge rows with a scroll arrow where
@@ -317,7 +320,7 @@ export function parseDialog(pane: string): Dialog | null {
   // mirrors that idiom too — every current caller already captures pane text
   // without escape codes (tmux.capture, never captureAnsi), so this is
   // defensive idiom-consistency, not a behavior change today.
-  if (!hasMenu(pane.replace(SGR, ''))) return null;
+  if (!hasMenu(stripSgr(pane))) return null;
 
   const lines = pane.split('\n');
   const best = paneOptionRows(pane);
