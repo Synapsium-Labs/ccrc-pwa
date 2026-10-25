@@ -16,7 +16,6 @@ const SITES: Record<string, number> = {
   'server/src/archivedExpiry.ts': 2,
   'server/src/childReclaimSweep.ts': 3,
   'server/src/collectLane.ts': 2,
-  'server/src/coord/childReclaim.ts': 4,
   'server/src/coord/childSpent.ts': 2,
   'server/src/coord/claims.ts': 1,
   'server/src/coord/close.ts': 1,
@@ -39,7 +38,7 @@ const SITES: Record<string, number> = {
   'server/src/turnmark.ts': 1,
   'server/src/watch.ts': 10,
 };
-const SITES_TOTAL = 71;
+const SITES_TOTAL = 67;
 
 /** The store's session-keyed binding readers at this commit, by name (the raw detector's count, writers and attribute
  *  reads named apart). */

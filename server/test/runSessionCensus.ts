@@ -83,7 +83,12 @@ export function equalitySites(root: string = REPO): EqualitySite[] {
  *  run row (a compare-and-set or a reviewed run's own coordinator) or a checkpoint row asks something else. */
 export interface NotBindingSite { readonly file: string; readonly text: string; readonly count?: number; readonly why: string }
 
-export const NOT_BINDING_SITES: readonly NotBindingSite[] = [];
+export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
+  { file: 'server/src/coord/childReclaim.ts', text: 'v.id !== sessionId', count: 2,
+    why: 'a ccd verb\'s JSON answer must name the session the server asked about: validation of an adapter reply, no run is read' },
+  { file: 'server/src/coord/childReclaim.ts', text: 'v.reclaimed !== sessionId',
+    why: 'the reclaim verb\'s JSON answer must name the session the server asked it to reclaim: validation of an adapter reply, no run is read' },
+];
 
 /** The sites that still decide a binding by hand: every site but the `NOT_BINDING_SITES` ones. */
 export function unroutedSites(sites: readonly EqualitySite[], notBinding: readonly NotBindingSite[] = NOT_BINDING_SITES): EqualitySite[] {
