@@ -6110,6 +6110,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   start until it did. That is not this mechanism's, and it went to the operator. `STATUS 2026-10-25T06:26:22Z fleet=v0.0.646`
   `server=v0.0.646 health=v0.0.646 newest=v0.0.668 intent=*:dev/auto=off backups=fleet:206M/server:11419M`
   `disk=fleet:103G/server:19G`
+- **2026-10-25 06:50 UTC — the broker's soak coordinator ruled on v0.0.668: the soak clock is unchanged.** When v0.0.668 or a
+  later build is tapped, the move hour and the hour after it are measured for unmeasured rows and census lines, as after
+  v0.0.646, and the probe says so until that is done.
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
