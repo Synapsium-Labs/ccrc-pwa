@@ -8456,7 +8456,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // emitter call was re-pointed by content before this map was measured. Every other hook edit is in
       // place or in the tail. Both corpus documents are byte-identical to `origin/main`. S6-R11, no D-number.
       // 147 -> 151 at model-class auto-advance W2 (Codex arm), S6-R11: the note above the map names the movers.
-      'ccd/ccd': 151,
+      // 151 -> 149 at disk retention DR-26 (D-6638): two of the spec anchors re-pointed by content there now hold what they quote. S6-R11.
+      'ccd/ccd': 149,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8893,7 +8894,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // 200 -> 204 at model-class auto-advance W2 (Codex arm), S6-R11, the census's own arithmetic: `ccd/ccd`
     // 147 -> 151 and nothing else moved (the note above the map names the four movers and their one cause).
     // Measured from the same dump as the map, never retyped. No D-number.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(204);
+    // 204 -> 202 at disk retention DR-26 (D-6638): the census's own arithmetic, ccd/ccd 151 -> 149 and nothing else moved. S6-R11.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(202);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -9823,11 +9825,13 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // 57 -> 58, dumped from the rebased tree: ONE ENTERS (the range that left above, spelled in two parts below) and
         // none leaves; the branch's `cmd_ws_archive` lines slide a line under it that no longer carries its row's token.
         // The site-level set below has no mirror for it. Neither corpus document changed. S6-R11, no D-number.
+        // LOWERED at disk retention DR-26 (D-6638), 58 -> 53: its ccd/ccd lines near the top shifted this row set, so the spec's
+        // drifted anchors were RE-POINTED by content (the dead-reg intent x2, the purge loop, the generation-read link, the
+        // slug-residue body, the add refusal and its comment) and five entries left as genuine fixes; none entered. S6-R11.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
         'server/test/ccd-ws-reap.test.ts:344',
-        'ccd/ccd:13573-13575',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'ccd/ccd' + ':3038',
         'ccd/ccd:5797',
@@ -9876,11 +9880,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
-        // RE-MEASURED at the merge of main's `ws-gc --fast` (#123) into named workspaces: each side moved the second
-        // site of this anchor out of the set on its own, and together their `ccd/ccd` growth slides a line back under
-        // it that no longer carries its row's token, so it fails again. Measured data, not a prose citation: it is
-        // spelled in two parts so the citations ratchet, which polices added prose, does not count a census row.
-        'ccd/ccd' + ':13573-13575',
         'ccd/ccd:11665-11670',
         'ccd/ccd' + ':13601-13666',
         'ccd/session-hook.sh:795',
@@ -9891,7 +9890,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd' + ':3070',
         'ccd/ccd' + ':3070',
         'ccd/ccd:2455',
-        'ccd/ccd:2793',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'ccd/ccd' + ':3070',
         'ccd/session-hook.sh:802',
@@ -9899,9 +9897,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'ccd/ccd' + ':5385-5388',
         'ccd/ccd:4642-4653',
-        // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
-        'ccd/ccd' + ':5353-5362',
-        'ccd/ccd:5828-5830',
         // LEFT here at model-class auto-advance W2 (S6-R11): `:5819-5823` (the note above this assertion).
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
@@ -10093,9 +10088,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // the row-pass set above: stated 35, base 35, tree 35, nothing entered or left. S6-R11, no D-number.
       // RE-MEASURED for `ws-archive --if-no-pane` (D-6642) after its rebase onto `ws-orphan` (D-6629), 38 -> 38,
       // FROM THE SAME RUN as the row-pass set above: nothing entered or left. S6-R11, no D-number.
+      // LOWERED at disk retention DR-26 (D-6638), 38 -> 36, FROM THE SAME RUN as the row-pass set above: both
+      // dead-reg intent sites (spec 2123 and 2210) were re-pointed by content and left; none entered. S6-R11.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
-        'spec:2123 ccd/ccd:13573-13575',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'spec:2124 ccd/ccd' + ':3038',
         'spec:2125 ccd/ccd:5797',
@@ -10128,9 +10124,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
-        // RE-MEASURED at the merge of main's `ws-gc --fast` (#123) into named workspaces, from the same run as the
-        // `|`-row set above: the spec-2210 site returns for the reason given there, spelled in two parts for the same one.
-        'spec:2210 ccd/ccd' + ':13573-13575',
         // RE-MEASURED for `ccd ws-gc --fast` (D-5886, #123), 35 -> 34: the same second site leaves
         // as in the row-level set above, from the same run. S6-R11, no D-number.
         // LEFT here at model-class auto-advance W2 (S6-R11): `spec:2220 :2874` x2 (the note above this assertion).

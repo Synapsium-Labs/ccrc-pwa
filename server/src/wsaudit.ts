@@ -257,6 +257,7 @@ export const SENTENCES: Record<string, string> = {
   // lacks are over the bound; it is reported, never retried), the second retries (a fetch or a re-prove failed).
   'nested-rescue-too-large': 'A repository nested in this workspace holds more history than the rescue will carry into the attic, so nothing was removed. It is reported, and not tried again.',
   'nested-rescue-failed': 'Rescuing a repository nested in this workspace into the attic did not complete, so nothing was removed. The cleanup tries again later.',
+  'not-idle': 'This child worked within the last seven days (its transcript, its session records or its pane), so a stale reclaim left it alone. It is asked again once it has been idle for seven days.',
   'expire-in-progress': 'An interrupted seven-day cleanup of this workspace is waiting to finish, and ws-reap never finishes another verb’s work. Nothing was removed.',
 };
 
