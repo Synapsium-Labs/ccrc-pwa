@@ -8620,6 +8620,52 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
   });
 });
 
+// D-5864 (plan docs/superpowers/plans/2026-10-20-consolidation-w1b-schedule-listing-redactor.md, Task C1j, Step 4;
+// ARCH-51 (#786); spec K13's listing half). The one-listing ratchet, placed after the lane-schedule ratchet above and ahead
+// of the next appended block. A steady tick lists the registry once to choose rows (`FleetWatcher.tick`, which builds the
+// `FleetReadModel`); every lane that chooses its rows takes that model. What stays fresh is named: the mail lane's switch
+// read and the divergence census's listing (`ACT_LISTING_METHODS`), the tick's snapshot re-confirmation, and each lane's
+// own read when called with no model, reached by tests alone (`TESTS_ONLY_LISTING_METHODS`). Named by `consolidationCensus.ts`'s
+// `registryListingSites`, a parse-based query. The count of selection sites outside the tick may only shrink, and it is 0.
+// The census is loaded inside the rows, so this block adds no import line.
+describe('one registry listing per tick (ARCH-51): the tick\'s FleetReadModel (D-5864)', () => {
+  const where = (xs: ReadonlyArray<{ line: number; method: string; text: string }>): string[] => xs.map((x) => `${x.method}:${x.line} ${x.text.trim()}`);
+
+  it('no lane selects its rows from a registry listing of its own: a selection site stands only in tick', async () => {
+    const { registryListingSites, SELECTION_LISTING_METHOD } = await import('./consolidationCensus.js');
+    const lanes = registryListingSites().filter((x) => x.tag === 'selection' && x.method !== SELECTION_LISTING_METHOD);
+    expect(where(lanes), 'take the tick\'s FleetReadModel (fleetFor) instead of listing the registry').toEqual([]);
+  });
+
+  it('the tick lists once to select, and the act-time reads stand where they are named', async () => {
+    const { registryListingSites, SELECTION_LISTING_METHOD, ACT_LISTING_METHODS } = await import('./consolidationCensus.js');
+    const sites = registryListingSites();
+    expect(where(sites.filter((x) => x.tag === 'selection')), 'exactly one selection listing, the tick\'s').toHaveLength(1);
+    expect(sites.filter((x) => x.tag === 'selection').every((x) => x.method === SELECTION_LISTING_METHOD)).toBe(true);
+    expect([...new Set(sites.filter((x) => x.tag === 'act' && x.method !== SELECTION_LISTING_METHOD).map((x) => x.method))].sort())
+      .toEqual([...ACT_LISTING_METHODS].sort());
+  });
+
+  it('CONTROL: the census sees a lane that lists for itself', async () => {
+    const { registryListingSites } = await import('./consolidationCensus.js');
+    const { mkdtempSync: mk, mkdirSync: md, writeFileSync: wf, rmSync: rm } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const tree = mk(path.join(tmpdir(), 'listing-ratchet-'));
+    try {
+      md(path.join(tree, 'server/src'), { recursive: true });
+      wf(path.join(tree, 'server/src/watch.ts'), [
+        'class FleetWatcher {',
+        '  async tick(): Promise<void> { await readRegistryMeasured(io, cfg); }',
+        '  private async fooPass(): Promise<void> { await readRegistry(io, cfg); }',
+        '}',
+      ].join('\n'));
+      expect(registryListingSites(tree).filter((x) => x.tag === 'selection' && x.method !== 'FleetWatcher.tick')).toHaveLength(1);
+    } finally {
+      rm(tree, { recursive: true, force: true });
+    }
+  });
+});
+
 // D-5841 (D3, #755; plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Durability). APPENDED. The
 // brief watch has ONE home: its two timers, its decider and the wave brief's subject are defined in
 // `server/src/coord/briefwatch.ts` alone, and the subject is spelled on no other source code line, so `dispatchRun`'s

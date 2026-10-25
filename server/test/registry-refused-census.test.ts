@@ -140,10 +140,7 @@ const EXPECTED_SITES: readonly string[] = [
   'registry.ts | readRegistry | readRegistryMeasured | wrapper',
   'watch.ts | detectDialogs | readRegistry | tests-only',
   'watch.ts | sweepHookStates | readRegistryMeasured | tests-only',
-  'watch.ts | mailPass | readRegistryMeasured | holds',
-  'watch.ts | namesPass | readRegistry | omits',
-  'watch.ts | prPass | readRegistry | omits',
-  'watch.ts | tasksPass | readRegistryMeasured | omits',
+  'watch.ts | fleetFor | readRegistryMeasured | tests-only',
   'watch.ts | tick | readRegistryMeasured | omits',
 ];
 
@@ -197,8 +194,8 @@ describe('every registry reader call is classified for refused rows (spec §2.3)
       .toEqual([]);
   });
 
-  it('the classified set is exactly these 23 sites', () => {
-    expect(EXPECTED_SITES).toHaveLength(23);
+  it('the classified set is exactly these 20 sites', () => {
+    expect(EXPECTED_SITES).toHaveLength(20);
     expect(allSites().map(key).sort()).toEqual([...EXPECTED_SITES].sort());
   });
 
@@ -258,6 +255,38 @@ describe('tick hands its records to the lanes that would otherwise read the regi
     const body = tickBodyOf(tickCode(tickSource()), TICK_HEAD);
     expect(body, 'tick no longer hands detectDialogs its records: that lane would read the registry itself')
       .toMatch(/\bthis\.detectDialogs\([^)]*\brecords\s*\)/);
+  });
+});
+
+// D-5864 (ARCH-51 #786): the lanes that choose their rows from the registry are handed the tick's one model, and each
+// lane's own read (`fleetFor`, tagged `tests-only`) is reached by tests alone ONLY while `tick()` hands it over. A tick
+// that dropped the argument would turn that read into a second production listing without the census above noticing.
+describe('tick hands its model to the lanes that would otherwise list the registry again (D-5864)', () => {
+  const body = (): string => tickBodyOf(tickCode(tickSource()), TICK_HEAD);
+
+  it('tick() passes registryRead to sweepTasks(', () => {
+    expect(body(), 'tick no longer hands the task lane its model: that lane would list the registry itself')
+      .toMatch(/\bthis\.sweepTasks\(\s*registryRead\s*\)/);
+  });
+
+  it('tick() passes registryRead to sweepMail(', () => {
+    expect(body(), 'tick no longer hands the mail lane its model: that lane would list its recipients itself')
+      .toMatch(/\bthis\.sweepMail\(\s*registryRead\s*\)/);
+  });
+
+  it('tick() passes registryRead to sweepAsks(', () => {
+    expect(body(), 'tick no longer hands the ask lane its model: that lane would list the registry itself')
+      .toMatch(/\bthis\.sweepAsks\(\s*registryRead\s*\)/);
+  });
+
+  it('tick() passes registryRead to sweepPr(', () => {
+    expect(body(), 'tick no longer hands the PR lane its model: that lane would list the registry itself')
+      .toMatch(/\bthis\.sweepPr\(\s*registryRead\s*\)/);
+  });
+
+  it('tick() passes registryRead to sweepNames(', () => {
+    expect(body(), 'tick no longer hands the name lane its model: that lane would list the registry itself')
+      .toMatch(/\bthis\.sweepNames\(\s*registryRead\s*\)/);
   });
 });
 
@@ -376,7 +405,7 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
     expect(sitesOf('coord/routes.ts', 'readRegistry'), 'the two approval routes, placed refuses').toHaveLength(2);
     const count = (reader: 'readRegistry' | 'readRegistryMeasured'): number =>
       allSites().filter((s) => s.reader === reader).length;
-    expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(5);
-    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(18);
+    expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(3);
+    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(17);
   });
 });

@@ -392,8 +392,8 @@ const CLOSE_DECIDED = /\bdecideClose\(\{ step: 'request'[\s\S]*?if \(req\.kind !
 
 const KNOWN_ID = /\bknownId\(\s*id\s*\)/;
 
-/** `sweepNames` walks `readRegistry`'s own output, which never carries a refused row. */
-const SWEEP_NAMES_LISTING = /\bconst records = await readRegistry\(this\.deps\.io, this\.deps\.cfg\);\s*for \(const r of records\) \{/;
+/** `sweepNames` walks the listing's own rows (the tick's model, D-5864), which never carry a refused row. */
+const SWEEP_NAMES_LISTING = /\bconst records = read\.listed \? read\.records : \[\];\s*for \(const r of records\) \{/;
 
 /** The stop-done pass's population: fleet rows whose record the listing built (`byId`), so never a refused name. */
 const STOP_DONE_POPULATION = /\bconst byId = new Map\(records\.map\(\(r\) => \[r\.id, r\] as const\)\);[\s\S]*?byId\.has\(s\.id\)/;
@@ -470,7 +470,7 @@ const CENSUS: readonly CensusRow[] = [
   // watch.ts: the mail lane wakes a hibernated recipient only through a record the listing built (D-5242).
   { file: 'watch.ts', scope: 'mailPass', builder: 'ensure', id: 'd.toId', origin: ['stored', 'registry'], gate: ['registry-refused'], entry: /\bconst rec = records\.find\(\(r\) => r\.id === d\.toId\);[\s\S]*?if \(rec === undefined \|\| identity === null\) \{/ },
   // watch.ts: the naming sweep's rows come from the listing, which never builds a refused name; the `entry` ties the
-  // loop's `r` to `readRegistry`'s output.
+  // loop's `r` to the listing's rows.
   { file: 'watch.ts', scope: 'namesPass', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
 ];
 

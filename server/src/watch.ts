@@ -4,6 +4,7 @@ import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
 import { answeredByBody, approvalRuledBody, askPushBody, withCoordinatorBody } from './askbody.js';
 import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
+import { buildFleetReadModel, type FleetReadModel } from './fleetReadModel.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools,
@@ -2372,7 +2373,9 @@ export class FleetWatcher {
       // it as one are handed `registryRead.refused` and hold the id, or leave it out (`tick-lanes-hold-a-refused-id`):
       // the stall watch on `StallTick`, the claim lease lanes and the divergence census.
       // [registry-refused:omits] a refused id is in no `records`: no state and no field read here, and the lanes handed `refused` hold it, never read it as absent.
-      const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
+      // The tick's ONE selection listing, as the model (D-5864): the lanes that choose their rows from the registry are
+      // handed it below, so they do not list again.
+      const registryRead = buildFleetReadModel(await readRegistryMeasured(this.deps.io, this.deps.cfg));
       // BEFORE the fail-shut return below, and on BOTH arms (D-283 (was D-B4-10)). An
       // unlistable registry is not "nothing is set": it is the exact state
       // `dispatchRun` FAILS SHUT on (`dispatch.ts:106-109`), so it must reach
@@ -2449,11 +2452,11 @@ export class FleetWatcher {
       await this.sweepHookStates(records);
       await this.sweepUsage(records);
       const pending = await this.detectDialogs(this.primed, registryRead.names, records);
-      await this.sweepTasks();
+      await this.sweepTasks(registryRead);
       // NEVER awaited: it shells out over the network and `gh` has no
       // --timeout, so awaiting it would stall the dialog detector and the
       // busy->idle push behind GitHub's reachability.
-      void this.sweepPr().catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepPr(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       const refreshCaps = this.deps.refreshCaps;
       if (refreshCaps) {
         // NEVER awaited: same reasoning as sweepPr immediately above — caps()
@@ -2469,7 +2472,7 @@ export class FleetWatcher {
       // busy->idle push behind a reap. Overlapping sweeps are harmless — the
       // attempted-set is written BEFORE the call, so a second sweep's condition 4
       // refuses the pair the first is still running.
-      void this.sweepNames().catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepNames(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepNames` above. Own clock: this reads
       // git's admin directory per project, which is not a per-tick cost.
       //
@@ -2518,11 +2521,11 @@ export class FleetWatcher {
       // is ~4.3 s of sleeps per message plus one round trip per line
       // (`inject/send.ts:30-40,115,126`). Awaiting it would put the dialog
       // detector and the busy->idle push behind a mail delivery.
-      void this.sweepMail().catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepMail(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepMail` immediately above — the
       // release CAS and its own registry listing must not sit in front of the
       // dialog detector either. Own clock (`ASK_SWEEP_MS`).
-      void this.sweepAsks().catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepAsks(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5298 (plan Task 16): the approvals lane's lapse, ceiling and retention, never awaited for the same reason.
       void this.sweepApprovals().catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5300 (plan Task 17): the daily digest's beat. Synchronous, guarded inside, and throttled to once a minute.
@@ -3460,15 +3463,21 @@ export class FleetWatcher {
    * map is rebuilt from the registry each sweep, so a de-registered session's
    * progress can't linger.
    */
-  private async sweepTasks(): Promise<void> {
-    await this.runLane('tasks', () => this.tasksPass());
+  private async sweepTasks(fleet?: FleetReadModel): Promise<void> {
+    await this.runLane('tasks', () => this.tasksPass(fleet));
   }
 
-  private async tasksPass(): Promise<void> {
+  /** The model a lane selects its rows from: the tick's, else, for a test that calls a lane with none, one read of
+   *  its own. `tick` hands every lane its model (`registry-refused-census.test.ts` pins the hand-off), so this read
+   *  is reached by tests alone and decides nothing a user sees. */
+  private async fleetFor(fleet?: FleetReadModel): Promise<FleetReadModel> {
+    // [registry-refused:tests-only] `tick()` hands each lane its model; the census pins the hand-off.
+    return fleet ?? buildFleetReadModel(await readRegistryMeasured(this.deps.io, this.deps.cfg));
+  }
+
+  private async tasksPass(fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
-    // Own read, on its own slower clock — never shared with `tick()`'s
-    // (`sweepHookStates` above takes `tick()`'s `records` as a parameter;
-    // this method does not). `readRegistryMeasured`, fail shut on
+    // The tick's listing (D-5864), taken when the lane is due. Fail shut on
     // `{listed:false}` (blocking review findings 1/3): the old `readRegistry`
     // `[]`-on-unlistable answer made a single dropped `io.readdir` here wipe
     // `this.taskProgress` for the WHOLE fleet — the same harm the
@@ -3481,8 +3490,8 @@ export class FleetWatcher {
     // failed listing still consumes this sweep's slot rather than retrying
     // every 2 s tick, the same throttle discipline every other sweep here
     // keeps.
-    // [registry-refused:omits] a refused id is in no `records`: no `taskProgress` entry and no read.
-    const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
+    // A refused id is in no `records`: no `taskProgress` entry and no read (it omits).
+    const registryRead = await this.fleetFor(fleet);
     if (!registryRead.listed) return;
     const records = registryRead.records;
     const next = new Map<string, TaskProgress>();
@@ -3628,18 +3637,18 @@ export class FleetWatcher {
    * would pass while it was still running. `tick()` is already public for the
    * same class of reason.
    */
-  async sweepNames(): Promise<void> {
-    await this.runLane('names', () => this.namesPass());
+  async sweepNames(fleet?: FleetReadModel): Promise<void> {
+    await this.runLane('names', () => this.namesPass(fleet));
   }
 
-  private async namesPass(): Promise<void> {
+  private async namesPass(fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
     // The REGISTRY's branch, never the assembled `FleetSession.branch`: that one
     // is the pane's branch, else the worktree HEAD's, else this (fleet.ts), so it
     // lags a rename by however long Claude Code takes to re-render its pane.
-    // Same reason sweepTasks and sweepPr read the registry themselves.
-    // [registry-refused:omits] a refused row is never in `records`, so it is never renamed.
-    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    // A refused row is never in `records`, so it is never renamed (it omits); an unlistable registry has no rows to rename.
+    const read = await this.fleetFor(fleet);
+    const records = read.listed ? read.records : [];
     for (const r of records) {
       // SKIP a degraded row before anything else: an unmeasured `uuid`
       // computes an `incarnation` key (`${r.id}#${identity.uuid}`, below)
@@ -7340,19 +7349,21 @@ export class FleetWatcher {
    * sweep — every negative assertion about it would pass while it was still
    * running. PUBLIC for the same reason `sweepNames` is.
    */
-  async sweepMail(): Promise<void> {
+  async sweepMail(fleet?: FleetReadModel): Promise<void> {
     if (!this.primed) return;
     const store = this.deps.coord;
     if (!store) return;
-    await this.runLane('mail', () => this.mailPass(store));
+    await this.runLane('mail', () => this.mailPass(store, fleet));
   }
 
-  private async mailPass(store: CoordStore): Promise<void> {
+  private async mailPass(store: CoordStore, fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
 
-    // Fail-shut: a registry we cannot list is a kill-switch we cannot read.
+    // Fail-shut: a registry we cannot list is a kill-switch we cannot read. THIS listing stays fresh (D-5864): it is the
+    // last switch read before the pass delivers, so a switch raised after the tick's listing still holds the lane. Only
+    // the recipients below are selected from the tick's model.
     const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
-    if (listing === null || listing.includes(MAIL_DISABLED_MARKER)) return;
+    if (listing === null || readSwitches(listing)[MAIL_DISABLED_MARKER] === 'set') return;
     // The gate's mode comes from this SAME listing (worker stall watch §4.1,
     // `turnidle.ts`), through the one settings resolution the stall sweep also
     // calls (stall watch settings §9): a chosen level can set it, and strict
@@ -7407,8 +7418,8 @@ export class FleetWatcher {
     // own unreadable listing already does three lines up, rather than
     // silently emptying `records` and letting every row downstream mistake
     // "we could not read the fleet this pass" for "this recipient is gone".
-    // [registry-refused:holds] a refused recipient is held `registry-unmeasurable` below, never parked.
-    const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
+    // A refused recipient is held `registry-unmeasurable` below, never parked (it holds).
+    const registryRead = await this.fleetFor(fleet);
     if (!registryRead.listed) return;
     const records = registryRead.records;
     const uuidByToId = new Map(records.map((r) => [r.id, r.uuid] as const));
@@ -8160,7 +8171,7 @@ export class FleetWatcher {
    * opposite: no latch at all, and a retry every sweep. It is gone (operator
    * ruling, 2026-09-10 — see `sweepMerged`).
    */
-  private async sweepPr(): Promise<void> {
+  private async sweepPr(fleet?: FleetReadModel): Promise<void> {
     // The same guard tick() already applies before saveSnapshot: with the
     // agent down there is nothing to read and every state keeps its checkedAt.
     if (this.deps.cfg.fleetMode === 'remote' && !this.deps.fleetState?.connected) return;
@@ -8168,13 +8179,14 @@ export class FleetWatcher {
     // Single-flight, but never permanently: the `pr` row's `skip` flight abandons a sweep still running after
     // `PR_SWEEP_STUCK_MS` (not cancelled, there is nothing to cancel; it is simply no longer allowed to hold the lane
     // shut), and only the run that was started last may clear the flight.
-    await this.runLane('pr', () => this.prPass(), anyPending);
+    await this.runLane('pr', () => this.prPass(fleet), anyPending);
   }
 
-  private async prPass(): Promise<void> {
+  private async prPass(fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
-    // [registry-refused:omits] a refused row is never in `records`: no pr-state, no prStates key.
-    const records = await readRegistry(this.deps.io, this.deps.cfg);
+    // A refused row is never in `records`: no pr-state, no prStates key (it omits).
+    const read = await this.fleetFor(fleet);
+    const records = read.listed ? read.records : [];
     const projects = [...new Set(records.filter((r) => r.workspace !== null).map((r) => r.project))];
     for (const project of projects) {
       const back = this.prBackoff.get(project);
@@ -9139,22 +9151,22 @@ export class FleetWatcher {
    *  `tick()` void-dispatches this (it can sit behind whatever `sweepMail`
    *  and every other lane are doing), so a test that only awaits `tick()` has
    *  NOT awaited this sweep. */
-  async sweepAsks(): Promise<void> {
+  async sweepAsks(fleet?: FleetReadModel): Promise<void> {
     if (!this.primed) return;
     const store = this.deps.coord;
     if (!store) return;
-    await this.runLane('asks', () => this.askPass(store));
+    await this.runLane('asks', () => this.askPass(store, fleet));
   }
 
-  private async askPass(store: CoordStore): Promise<void> {
+  private async askPass(store: CoordStore, fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
 
     // Fail-shut, same discipline as `sweepMail`'s own `MAIL_DISABLED_MARKER`
     // read a few hundred lines up: a registry we cannot list is a kill-switch
-    // we cannot read, so `listing === null` ("can't tell") reads as disabled
-    // rather than as license to keep holding new asks.
-    const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
-    this.asksDisabled = listing === null || listing.includes(ASKS_DISABLED_MARKER);
+    // we cannot read, so an `unmeasurable` switch ("can't tell") reads as disabled
+    // rather than as license to keep holding new asks. The switch comes from the tick's listing (D-5864): it gates
+    // the hold on later ticks, so nothing here acts on it at once.
+    this.asksDisabled = (await this.fleetFor(fleet)).switches[ASKS_DISABLED_MARKER] !== 'clear';
 
     if (this.heldAsks.size === 0) return;
     for (const [id, held] of [...this.heldAsks]) {
