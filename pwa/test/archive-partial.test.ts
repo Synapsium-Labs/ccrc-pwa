@@ -34,6 +34,6 @@ describe('archivePartial', () => {
     const READ = /^(?!\s*(?:\/\/|\/?\*)).*\.archived\b(?!\s*\.)/m;
     const readers = (readdirSync(src, { recursive: true }) as string[])
       .filter((f) => /\.tsx?$/.test(f) && READ.test(readFileSync(path.join(src, f), 'utf8')));
-    expect(readers).toEqual([path.join('lib', 'api.ts')]);
+    expect(readers).toEqual([path.join('lib', 'wireReaders.ts')]);
   });
 });
