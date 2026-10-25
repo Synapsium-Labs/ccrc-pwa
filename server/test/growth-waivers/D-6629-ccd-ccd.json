@@ -1,0 +1,7 @@
+{
+  "file": "ccd/ccd",
+  "maxDelta": 110,
+  "d": "D-6629",
+  "reason": "fleet disk retention DR-17: the ws-orphan verb (lock, recompute, rescue pin, holder re-ask, remove) in ccd/ccd, built on the DR-16 ladder (measured about +100 net code lines against the DR-16 tip)",
+  "added": "2026-10-23"
+}

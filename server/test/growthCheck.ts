@@ -27,16 +27,18 @@
 // `armedGrowth` is the armed rows' whole read and decision, and `growthVerdicts`
 // the pure decision inside it.
 //
-// D-6223: a fourth waiver, the reviewed ledger. `growth-waivers.json` holds
-// `{payer, waivers}`, each waiver `{file, maxDelta, d, reason, added}`. A PR
-// that must grow a listed file past the limit adds one entry for that file in
-// its own diff, where review sees it; the entry waives that file while the
+// D-6223: a fourth waiver, the reviewed ledger. `growth-waivers/` holds one JSON
+// file per waiver, `<D-number>-<slug>.json`, each `{file, maxDelta, d, reason,
+// added}` (so two PRs that each add one touch two files, never the same lines).
+// A PR that must grow a listed file past the limit adds one file for it in its
+// own diff, where review sees it; the entry waives that file while the
 // measured delta stays at or below `maxDelta`. The ledger is read at the
 // merge-base and at HEAD, and only an entry whose file and D-number the
-// merge-base does not hold counts (`waiversAdded`): an entry on main waives
+// merge-base does not hold counts (`waiversAdded`: a file added in this diff): an entry on main waives
 // nothing for a later PR, and raising one waives nothing. A malformed ledger
-// at either sha waives nothing. The entries are debt the payer, consolidation
-// W5, pays down; none is ever edited.
+// at either sha waives nothing. The entries are debt that consolidation W5
+// (ccd in place) pays down, every entry; none is ever edited, only added by the PR
+// that needs it or removed once paid.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { parseSource } from './scan/parse.js';
@@ -327,9 +329,6 @@ export const GROWTH_MACHINERY: readonly string[] = [
   'server/test/scan/parse.ts',
 ];
 
-/** The waiver ledger, repo-relative (D-6223). */
-export const GROWTH_WAIVERS_FILE = 'server/test/growth-waivers.json';
-
 /** One ledger entry: `file` may grow by up to `maxDelta` net code lines in the PR whose diff adds it. */
 export interface GrowthWaiver { file: string; maxDelta: number; d: string; reason: string; added: string }
 
@@ -353,37 +352,6 @@ function checkWaiverEntry(e: unknown, at: string, files: readonly string[], toda
     problems.push(...malformedEntries({ [at]: { reason: o['reason'], since: o['added'] } }, today));
   }
   return o;
-}
-
-/** `text` as the ledger. Any problem (not JSON, a wrong shape, a payer that does
- *  not name consolidation W5, a key missing or unknown, a value out of range, a
- *  second entry for one file and D-number) is named, and then no entry is
- *  answered: a malformed ledger waives nothing. */
-export function parseWaivers(text: string, files: readonly string[], today: Date = new Date()):
-  { payer: string; entries: GrowthWaiver[]; problems: string[] } {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch (e) {
-    return { payer: '', entries: [], problems: [`not JSON: ${(e as Error).message}`] };
-  }
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw) || Object.keys(raw).sort().join() !== 'payer,waivers'
-    || !Array.isArray((raw as { waivers: unknown }).waivers)) {
-    return { payer: '', entries: [], problems: ['the ledger must be an object with two keys, `payer` and `waivers` (an array)'] };
-  }
-  const { payer, waivers: list } = raw as { payer: unknown; waivers: unknown[] };
-  const problems: string[] = [];
-  if (!isLine(payer) || !/\bconsolidation W5\b/.test(payer as string)) problems.push('the payer must name consolidation W5, on one line');
-  const seen = new Set<string>();
-  list.forEach((e, i) => {
-    const at = `#${i}`;
-    const o = checkWaiverEntry(e, at, files, today, problems);
-    if (o === null) return;
-    const key = `${String(o['file'])} and ${String(o['d'])}`;
-    if (seen.has(key)) problems.push(`${at}: a second entry for ${key}`);
-    seen.add(key);
-  });
-  return problems.length ? { payer: '', entries: [], problems } : { payer: payer as string, entries: list as GrowthWaiver[], problems };
 }
 
 /** The waiver directory, repo-relative: one JSON file per waiver, `<D-number>-<slug>.json`, so two PRs that each add a
@@ -425,17 +393,25 @@ export function waiversAdded(base: readonly GrowthWaiver[], head: readonly Growt
   return head.filter((h) => !base.some((b) => b.file === h.file && b.d === h.d));
 }
 
-/** The ledger entries the diff `baseSha..headSha` adds. Absent at a sha, the
- *  ledger holds nothing there; malformed at either, nothing is added and the
- *  problems say which side. */
+/** The waiver directory's ledger at `sha`: absent there, it holds nothing; a file in it that is not a `.json` waiver
+ *  is a problem, as is any malformed one (and then nothing is answered). */
+export function waiversAt(files: readonly string[], sha: string, cwd: string, today: Date = new Date()):
+  { entries: GrowthWaiver[]; problems: string[] } {
+  let listing = '';
+  try {
+    listing = gitRead(['ls-tree', '--name-only', '-r', sha, '--', `${GROWTH_WAIVERS_DIR}/`], cwd);
+  } catch { /* no such directory at this sha */ }
+  const names = listing.split('\n').filter((l) => l !== '').map((l) => l.slice(GROWTH_WAIVERS_DIR.length + 1));
+  const items = names.map((name) => ({ name, text: fileAt(`${GROWTH_WAIVERS_DIR}/${name}`, sha, cwd) ?? '' }));
+  return parseWaiverFiles(items, files, today);
+}
+
+/** The ledger entries the diff `baseSha..headSha` adds: the waiver files the diff adds. Absent at a sha, the
+ *  ledger holds nothing there; malformed at either, nothing is added and the problems say which side. */
 export function waiversInDiff(files: readonly string[], baseSha: string, headSha: string, cwd: string,
   today: Date = new Date()): { added: GrowthWaiver[]; problems: string[] } {
-  const read = (sha: string) => {
-    const text = fileAt(GROWTH_WAIVERS_FILE, sha, cwd);
-    return text === null ? { entries: [], problems: [] } : parseWaivers(text, files, today);
-  };
-  const base = read(baseSha);
-  const head = read(headSha);
+  const base = waiversAt(files, baseSha, cwd, today);
+  const head = waiversAt(files, headSha, cwd, today);
   const problems = [...base.problems.map((p) => `base: ${p}`), ...head.problems.map((p) => `head: ${p}`)];
   return { added: problems.length ? [] : waiversAdded(base.entries, head.entries), problems };
 }

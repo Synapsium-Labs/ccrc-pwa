@@ -1,0 +1,7 @@
+{
+  "file": "ccd/ccd",
+  "maxDelta": 70,
+  "d": "D-6619",
+  "reason": "fleet disk retention DR-7: the read-only path-users verb and its one-walk holder probe in ccd/ccd (measured +65 net code lines against the merge-base)",
+  "added": "2026-10-23"
+}

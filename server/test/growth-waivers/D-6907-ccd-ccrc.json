@@ -1,0 +1,7 @@
+{
+  "file": "ccd/ccrc",
+  "maxDelta": 550,
+  "d": "D-6907",
+  "reason": "codex bridge Stage 2 wave 2: ccd/ccrc's codex lanes gain a bridge mode (the lane.json mode and upstream readers, the bridge tier in start, stop and status, ccrc codex switch, the install and uninstall walks over a mode's tiers, the auto-advance's bounded mode read, and the hourly refresh's window-lowering pass), measured +540 net code lines against the merge-base",
+  "added": "2026-10-25"
+}
