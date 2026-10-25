@@ -32,10 +32,10 @@
 // classes call sites pass are not tones: `mail-card-body`, `opt-preview`,
 // `draft-well` and `tool-ask-well` each adjust this surface for the box it sits
 // in — a max-height here, a margin there. Naming such one-off adjustments as
-// if they were a vocabulary would invent a word per call site
-// and put the design system in charge of five layouts it cannot see. The well
-// has ONE appearance, which is the point of it: wherever the terminal peeks
-// through, it looks the same.
+// if they were a vocabulary would invent a word per call site and put the
+// design system in charge of layouts it cannot see. The well has ONE
+// appearance, which is the point of it: wherever the terminal peeks through, it
+// looks the same.
 import type { HTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';

@@ -24,9 +24,9 @@ const toolCard = readFileSync(path.join(UI, 'tool-card.css'), 'utf8');
 
 // A mono box wraps its text in whole pixels: 13px x 1.55 = 20.15px makes a tall box's scroll range fractional, and at
 // some page offsets Chrome then latches the first wheel at the box's end to the box, which cannot move (the browser leg
-// sweeps eight offsets per box). R68 permits a local whole-pixel fix only in this derived form, so the pin is exact: the
-// round() over the two tokens, in whatever spacing. A blanket `20px` (or any other integer) would drift from the tokens
-// and is refused.
+// sweeps eight offsets per box). R68 permits a local whole-pixel fix only in this derived form, so the pin is exact:
+// the round() over the two tokens, in whatever spacing. A blanket `20px` (or any other integer) would drift from the
+// tokens and is refused.
 const WHOLE_PIXEL = 'round(down,calc(var(--fs-sm)*var(--lh-mono)),1px)';
 
 /** A rule's declaration names in source order, comments stripped, so a declaration can be placed AFTER another. */
@@ -58,7 +58,10 @@ describe('a wheel over a transcript box chains to the transcript (D-6437)', () =
   });
 });
 
-describe('a mono box in the transcript declares a whole-pixel line height (D-6852, whole-pixel-mono-line, under D-6437)', () => {
+const LINE_TITLE = 'a mono box in the transcript declares a whole-pixel line height '
+  + '(D-6852, whole-pixel-mono-line, under D-6437)';
+
+describe(LINE_TITLE, () => {
   it('.msg-assist pre declares a whole-pixel line height', () => {
     // Declared AFTER the `font` shorthand, which resets it, and exactly the round() form over the tokens.
     const pre = ruleIn(prose, '.msg-assist pre');

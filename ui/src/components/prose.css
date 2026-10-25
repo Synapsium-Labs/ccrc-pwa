@@ -263,8 +263,9 @@
        The rule depends on CSS round() and is emitted verbatim in the built
        CSS. An engine without round() finds the var()-bearing declaration
        invalid at computed-value time, so the line height then inherits from
-       .msg-assist (its prose line height, still fractional): the behaviour
-       before this rule, not a new defect. */
+       .msg-assist (--lh-prose, 1.6, about 20.8px): still fractional, and
+       about 20.8px rather than 20.15px. That is the same defect as before
+       this rule, not a new one. */
     line-height: round(down, calc(var(--fs-sm) * var(--lh-mono)), 1px);
     overflow-x: auto;
     max-height: var(--well-max);
