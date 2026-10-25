@@ -350,7 +350,7 @@ that function's skip `case` does not name it. They are declared in §5.1's three
 
 Claude Code sends system instructions two ways, and Codex refuses both: the top-level Anthropic `system` field, and `role: "system"` entries inside `messages` under the `mid-conversation-system-2026-04-07` beta. LiteLLM's Anthropic adapter forwards an in-sequence system entry unchanged by design, and its Responses translation folds one into `instructions` **only when the content is a plain string** — a content-block one becomes a `{"role":"system"}` input item, which Codex answers with `400 {"detail":"System messages are not allowed"}`. It is sticky rather than flaky: the entry is replayed with the history, so one injection fails every later turn. (amended: §22.1, D-4858)
 
-The migrated shim folds both, on every request, in this order (amended: §22.1, D-4858):
+The migrated shim folds both, on every request, in this order (amended: §22.1, D-4858) (amended: §25):
 
 1. every `messages[*].role === "system"` becomes `"user"`, **in place** — the beta exists because the position carries meaning, so hoisting would change what was said;
 2. then the top-level `system` folds into the leading user turn, so a top-level instruction still lands above a converted first turn. (amended: §22.1, D-4858)
@@ -374,7 +374,7 @@ The hazard in both is the **silent** arm, not the encoding. An encoding the shim
 
 ### 6.4 What does not change
 
-Streaming SSE relay, tool definitions and tool results, the `/ccgpt/lane` identity endpoint, byte-identical forwarding of non-`/messages` paths, and the hop-by-hop header set.
+Streaming SSE relay, tool definitions and tool results, the `/ccgpt/lane` identity endpoint, byte-identical forwarding of non-`/messages` paths, and the hop-by-hop header set. (amended: §25)
 
 ### Pins
 
@@ -1555,3 +1555,34 @@ holder red, as that task measured it.
 | §22.3: the probe's stream gates, against a real LiteLLM | 6 | `ccgpt-runtime.test.ts`: "M7: a patch with no stream part FAILS stream-tool-args-kept — stock LiteLLM drops a no-delta stream's arguments", re-titled from "M7: no patch at all FAILS …": the patch has two parts now, and an empty patch would FAIL the auth scenario first, so the case switches off the stream part alone. M6, M8 and M9 are unchanged |
 | §23.5: Plan 4: no probe code opens an `auth.json` or carries the lane-kind marker (D-3161 closed) | 7 | `models-probe.test.ts`: "the probe's code reads no auth.json and has no token-directory default or lane-kind marker (Plan 4)", unchanged in title, whose count of the probe's code lines naming `auth.json` is now 0; and "sends ChatGPT-Account-Id from the library's reading, and only the library opens auth.json", re-seated from "sends ChatGPT-Account-Id from Authenticator().get_account_id(), and its own program never opens auth.json (D-3161 closed)": every recorded open of the credential is the library's, and there is at least one. Measured red with the probe opening the credential itself, through the path `paths_for` names (1 failed) |
 | §23.5: Plan 4: `_models_run_probe` scrubs an inherited `CHATGPT_TOKEN_DIR` on both of its branches | 7 | Unchanged, and green after Task 7: `ccrc-models.test.ts`'s two Plan 4 cases. `_models_probe_codex_env` now also hands a codex row the library's path, `CCRC_MODELS_AUTH_LIB`, and unsets it for every other row, and the scrub's comment says the codex arm reads through the library |
+
+## 25. Amendments (codex-bridge Stage 2)
+
+Codex-bridge Stage 2 (`docs/superpowers/plans/2026-10-22-codex-bridge-stage-2-bridge.md`, from
+`docs/superpowers/specs/2026-10-15-codex-bridge-design.md` §2.1 to §2.8) gives the shim a second mode, in which it is
+the lane's whole path to the ChatGPT backend. The rules of §19 to §24 hold here: a sentence above that the tree now
+contradicts carries a same-line pointer, `(amended: §25)`, and the item below says what is true. **No line above this
+section moved:** every hunk above this heading is a same-line pointer. D18 and D19 are the codex-bridge spec's decisions
+(its decision table); every D-number of that plan is defined in its Deviations found. *(Added 2026-10-25.)*
+
+### 25.1 The shim gains `direct` mode (§6, D18, D19)
+
+- **Two modes, one roster field.** A codex row's optional `exec.bridge` is `litellm` or `direct`; absent reads
+  `litellm`, and `ccrc codex switch <id> litellm|direct` is the one verb that moves a lane between them (it stops one
+  set of tiers before it starts the other, which is the moment the credential's refresher changes hands). A switch back
+  to `litellm` deletes the key, so the row reads as it did before.
+- **`litellm` mode is §6 exactly** (D18). With `CCGPT_BRIDGE` unset, `ccd/ccgpt-proxy.py` runs the code §6 and §22
+  describe; the only edit to the file is its `__main__` branch and the `_run_direct` function that branch calls.
+- **`direct` mode is a new package beside the shim** (D18). The shim's direct entry imports `ccd/codexbridge/`, a
+  standard-library package, from the box's installed tree, and that one process answers Claude Code as an Anthropic
+  endpoint and speaks the backend's Responses route itself: no LiteLLM tier runs. It keeps the shim's port, gateway key
+  and unit name (D19), so `ccrc-codex` and `ANTHROPIC_BASE_URL` do not change and the two modes can never run at once.
+  Of §6, it keeps §6.2's effort precedence (the shim's own hook) and reads the body through the shim's own decoding
+  (§6.3). §6.1's fold does not apply: the top-level `system` text becomes the first developer message, with no
+  `instructions` field, and each mid-conversation `role: "system"` entry becomes a developer message in its place.
+  §6.4's `/ccgpt/lane` answers `{"lane": <id>, "mode": "direct"}`, never `{"lane": <id>}`, so a build from before
+  Stage 2 reads a running bridge as a listener it cannot identify and refuses it rather than adopting it as its shim.
+- **Where the rest is written.** What a `direct` lane runs, refreshes and records, the doctor's rows by mode, D25's
+  window lowering and the rollback rule ("switch a `direct` lane back before a rollback to a build from before this
+  one") are in the README's "A ChatGPT/Codex lane" and `ccrc models` sections, and in the codex-bridge spec and its
+  Stage 2 plan.
