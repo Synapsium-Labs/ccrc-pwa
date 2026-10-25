@@ -588,6 +588,12 @@ d="$HOME/fake-systemd"
 up() { [ -f "$d/user-manager" ] && [ "$(<"$d/user-manager")" = up ]; }
 # A spawned unit's state is written by its retained Python supervisor. This
 # reader has no PID-liveness or signal path: pid files are observations only.
+# Test-only knob: CCRC_FIXTURE_WRITE_GAP_MS widens the window between two
+# writes so a reader that races them reds deterministically.
+gap() {
+  [ "\${CCRC_FIXTURE_WRITE_GAP_MS:-0}" -gt 0 ] 2>/dev/null || return 0
+  sleep "$(awk -v ms="$CCRC_FIXTURE_WRITE_GAP_MS" 'BEGIN { print ms / 1000 }')"
+}
 valid_unit() {
   [[ "\${1:-}" =~ ^[A-Za-z0-9@._:-]+$ ]] && [ "$1" != . ] && [ "$1" != .. ]
 }
@@ -644,6 +650,7 @@ case "\${1:-}" in
         # A seeded fakeUnit has no exact-child supervisor. It becomes inactive
         # without treating its observed PID as signal authority.
         printf 'inactive\\n' > "$unit/state"
+        gap
         printf '0\\n' > "$unit/pid"
       fi
     done
@@ -992,7 +999,8 @@ export async function spawnFakeLitellm(
   const log = path.join(fakeProcs(home), `litellm-${o.port}.log`);
   const argv = ['-B', script, '-m', 'litellm.proxy.proxy_cli', '--config', o.config,
     '--host', '127.0.0.1', '--port', String(o.port)];
-  const env = { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home, PYTHONDONTWRITEBYTECODE: '1' };
+  const env: NodeJS.ProcessEnv = { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home, PYTHONDONTWRITEBYTECODE: '1' };
+  if (process.env['CCRC_FIXTURE_WRITE_GAP_MS'] !== undefined) env['CCRC_FIXTURE_WRITE_GAP_MS'] = process.env['CCRC_FIXTURE_WRITE_GAP_MS'];
   let pid: number;
   let owner: ChildProcess;
   if (o.reparent === true) {
@@ -1035,6 +1043,7 @@ export async function spawnFakeLitellm(
       'with open(log, "ab", buffering=0) as stream:',
       '    proc = subprocess.Popen(argv, cwd=os.getcwd(), env=os.environ.copy(), stdin=subprocess.DEVNULL, stdout=stream, stderr=stream)',
       '    with open(pidfile, "w") as out:',
+      '        time.sleep(float(os.environ.get("CCRC_FIXTURE_WRITE_GAP_MS", "0")) / 1000)',
       '        out.write(str(proc.pid) + "\\n")',
       '    while proc.poll() is None:',
       '        time.sleep(0.05)',
