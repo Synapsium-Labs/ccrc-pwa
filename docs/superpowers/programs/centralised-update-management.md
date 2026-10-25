@@ -6091,6 +6091,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   changes `watch.ts` (#1205, the expiry lane's child arm, in shadow; no delegation line), and the broker's soak was told before
   any tap. `STATUS 2026-10-25T02:25:40Z fleet=v0.0.646 server=v0.0.646 health=v0.0.646 newest=v0.0.659 intent=*:dev/auto=off`
   `backups=fleet:206M/server:11419M disk=fleet:101G/server:19G`
+- **2026-10-25 03:25 UTC — monitoring: v0.0.660 released; boxes stay on v0.0.646, no anomalies.** v0.0.660 adds an hourly
+  shadow lane to `watch.ts` (#1198, the stale-archive arm); no changed line falls in the parts the broker's soak watches, so
+  under that soak's standing rule it goes in the daily mail only. `STATUS 2026-10-25T03:25:41Z fleet=v0.0.646 server=v0.0.646`
+  `health=v0.0.646 newest=v0.0.660 intent=*:dev/auto=off backups=fleet:206M/server:11419M disk=fleet:101G/server:19G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
