@@ -1923,7 +1923,8 @@ models. A windows file that cannot be read counts as no measured windows: refres
 carry on under the default rule (a measured key left in `settings.json` shows as drift until the next materialise
 replaces or removes it), `show` names the reason, and both verbs refuse until the file is fixed or deleted.
 `show` reports each measured window, the effective window, the rule that chose it and the models still unmeasured;
-`rm` reaps the file with the rest. A running session keeps its window until it restarts or swaps.
+`rm` reaps the file with the rest. A new window reaches sessions started after it; whether a session already running
+re-reads `settings.json` has not been measured.
 A rollback to a ccrc from before measured windows is safe on a lane whose catalogue is fresh: its next successful
 refresh materialises and writes the default. With a stale or absent catalogue a measured key stays until the next
 successful probe, so before rolling back across this change on a lane with windows set, run
@@ -1940,12 +1941,13 @@ its `setAt` and only to a smaller number, so a `set-window` made after a refusal
 size is an estimate, the new window is never below the largest prompt the model accepted on the lane, rounded up to
 1,000; a refusal that would set less than 1,000 is skipped. Only a refusal on the lane's own route (`exec.upstream`)
 counts, and only for a model a class names or the catalogue lists. Each refusal is read once: the windows file records
-it under `refusalsApplied`, whether it lowered the window or was skipped. The entry it writes carries `source:
+it under `refusalsApplied`, whether it lowered the window or was skipped (a refusal entry the build cannot read is
+skipped `refusal-invalid` and not recorded, because it has no time to record). The entry it writes carries `source:
 "refusal"` and `refusedTokensEstimate`, the refused size; `show --json` lists its tokens and `setAt`, and the
 refresh's JSON row for the lane carries `lowered` (each `model`, `from`, `to`, `refused`), or `lowerFailed` with the
 reason when the pass could not run. To undo a lowering, `ccrc models <id> clear-window <model>`: the same refusal
 never lowers it again, because `refusalsApplied` survives the clear, though a later refusal can. A lowered window
-reaches sessions started after it; whether a session already running re-reads `settings.json` has not been measured.
+reaches sessions started after it, like any new window (above).
 
 **Holds, revert and the advance file.** Each lane may carry `~/.ccrc/models/<id>.advance.json`, a sibling of the
 registry and never a key in it, so an older ccrc keeps reading the registry after a rollback. Per class it records
@@ -2129,11 +2131,11 @@ The wrapper `ccrc wrappers` writes for a `codex` row execs `ccrc-codex`, which r
 a lane whose `settings.json` names no model, and then execs the roster's upstream Claude Code against the shim.
 `start` is idempotent: it adopts a tier already answering as this lane, starts what is missing as a transient
 user service (under `nohup` on a box with no user manager), refuses a port or unit it cannot identify, and
-waits until both tiers answer; `stop` stops only what it proves is this lane's and names anything else it
-leaves running. The runtime is an isolated LiteLLM venv under `~/.ccrc/runtime/codex/`, built by
-`ccrc install` when the roster has a `codex` lane (`ccgpt-runtime build`, which needs `python3` with `venv`;
-pip installs the `litellm[proxy]` range `ccgpt-runtime` pins, which can take minutes) and made current only
-after a behaviour probe passes; a failed build keeps the previous generation. Each generation also carries
+waits until the lane's tiers answer (both in `litellm` mode, the bridge in `direct` mode); `stop` stops only what it
+proves is this lane's and names anything else it leaves running. The runtime is an isolated LiteLLM venv under
+`~/.ccrc/runtime/codex/`, built by `ccrc install` when the roster has a `codex` lane (`ccgpt-runtime build`, which needs
+`python3` with `venv`; pip installs the `litellm[proxy]` range `ccgpt-runtime` pins, which can take minutes) and made
+current only after a behaviour probe passes; a failed build keeps the previous generation. Each generation also carries
 ccrc's one patch to LiteLLM (`ccgpt-runtime patch-source` prints it): when Codex streams no delta events for a
 tool call or a reply, it hands the finished arguments or text on, so parallel tool calls keep their input. The
 probe is its acceptance test, and `ccgpt-runtime check` reads `mutated` for a generation that has lost it.
@@ -2188,24 +2190,27 @@ the rescue never chain-waits it.
 `ccgpt-proxy.py` started in its direct mode, which imports ccrc's standard-library package `ccd/codexbridge/` from the
 box's installed tree and speaks the ChatGPT backend's Responses route itself, with no LiteLLM gateway and no LiteLLM
 prompt. It listens on the lane's `proxyPort`, takes the lane's gateway key (read in its own process, never put in its
-environment) and runs under the shim's unit name, so the launcher and Claude Code's settings do not change and the two
-modes can never run at once. It runs on the system `python3`, 3.9 or later (below that `ccrc codex start` refuses
-`python-too-old`), and its tier needs no LiteLLM runtime. It sends `originator: ccrc` and a ccrc user agent, never
-presenting itself as Codex. Claude Code's top-level system prompt travels as the first developer message, with no
-`instructions` field and no prompt of the bridge's own; a lane directory holding the marker file `bridge-instructions`
-(no ccrc code writes it) sends it as `instructions` instead. A mid-conversation `role: "system"` entry becomes a
-developer message in its place, and effort follows the shim's own rule (above). Each reply is built from the
-upstream's finished items only, and streams zero usage in `message_start` and the real figures in `message_delta`,
-where the three input fields Claude Code adds up sum to the upstream's `input_tokens`: so Claude Code's own proactive
-compaction fires at the lane's window less 33,000 tokens (the window less `min(max_tokens, 20000)` less 13,000,
-measured on Claude Code 2.1.308). A silent upstream gets a `ping` every 15 seconds, and the upstream idle bound is 300
-seconds, as in Codex. A context overflow is answered as Claude Code's own `prompt is too long: N tokens > M maximum`,
-so it compacts; N is the bridge's estimate, because the backend's overflow message carries no counts. A usage limit is
-a 429 `billing_error` and a policy refusal a 400 `policy_blocked`, each with `x-should-retry: false`. Retries are
-Claude Code's: the bridge never retries an upstream request, except once after it refreshed a token the upstream
-answered 401 (a reply the upstream marks unfinished is continued inside the same message, at most three times).
-`count_tokens` is answered locally, from an estimate seeded at 3.5 bytes per token and calibrated on the lane's own
-replies, and a request for a model the lane's catalogue does not list is answered 404 there and never sent upstream.
+environment) and runs under the shim's unit name, so the launcher and Claude Code's settings do not change and the shim
+and the bridge can never both serve the lane's port (the LiteLLM tier has its own, and what keeps it from running
+beside a bridge is `start`'s `retired-tier-running` refusal and doctor's FAIL, below). It runs on the system `python3`,
+3.9 or later (below that `ccrc codex start` refuses `python-too-old`), and its tier needs no LiteLLM runtime. It sends
+`originator: ccrc` and a ccrc user agent, never presenting itself as Codex. Claude Code's top-level system prompt
+travels as the first developer message, with no `instructions` field and no prompt of the bridge's own; a lane directory
+holding the marker file `bridge-instructions` (no ccrc code writes it) sends it as `instructions` instead. A
+mid-conversation `role: "system"` entry becomes a developer message in its place, and effort follows the shim's own rule
+(above). Each reply's blocks are built from the upstream's finished items, except that a message's first text part
+streams live as it arrives (so a long compaction summary shows as it is written), and each reply streams zero usage in
+`message_start` and the real figures in `message_delta`, where the three input fields Claude Code adds up sum to the
+upstream's `input_tokens`: so Claude Code's own proactive compaction fires at the lane's window less 33,000 tokens (the
+window less `min(max_tokens, 20000)` less 13,000, measured on Claude Code 2.1.308). A silent upstream gets a `ping`
+every 15 seconds, and the upstream idle bound is 300 seconds, as in Codex. A context overflow is answered as Claude
+Code's own `prompt is too long: N tokens > M maximum`, so it compacts; N is the bridge's estimate, because the backend's
+overflow message carries no counts. A usage limit is a 429 `billing_error` and a policy refusal a 400 `policy_blocked`,
+each with `x-should-retry: false`. Retries are Claude Code's: the bridge never retries an upstream request, except once
+after it refreshed a token the upstream answered 401 (a reply the upstream marks unfinished is continued inside the same
+message, at most three times). `count_tokens` is answered locally, from an estimate seeded at 3.5 bytes per token and
+calibrated on the lane's own replies, for any model. A `/v1/messages` request for a model the lane's catalogue does not
+list is answered 404 locally and never sent upstream.
 The credential's refresher is the bridge: it checks every minute and refreshes at about half the token's lifetime,
 through the library's lock.
 
@@ -2221,7 +2226,7 @@ the switch stopped is restarted behind your back. A hand edit of `exec.bridge` i
 it into `lane.json`, and `ccrc codex start` then refuses `retired-tier-running` while the other mode's tiers run, as it
 does whenever they run beside the lane's own (two refreshers on one credential); `ccrc codex stop <id>` stops every
 tier of the lane, in either mode. `exec.upstream` names the route: `backend`, the default, is the only one this build
-runs, and `siwc` is refused `upstream-unsupported` by `start` and by a switch to `direct`.
+runs, and `siwc` is refused `upstream-unsupported` by `start` on a `direct` lane and by a switch to `direct`.
 
 **What a `direct` lane writes.** Beside `lane.json`, whose `bridgeFiles` names them, the bridge keeps two files in the
 lane directory, each 0600: `bridge.stats.json`, its one non-secret output, and `reasoning.sqlite`, the reasoning store.
@@ -2229,15 +2234,18 @@ The stats file holds counts, sizes, names and request ids: requests and the larg
 model, each context refusal with the size it estimated and when, outcome counters, the protocol names it met (bounded,
 else `unrecognised`) and those it does not know, the upstream request id of its last error, and the `x-codex-` usage
 values of the last reply, kept only in the numeric shape the usage poll reads. It never holds a request or reply body,
-a token, any message content, or any other header value. The store holds the upstream's encrypted reasoning items under
+a token, any message content, or any other header value (the reply's media type is counted as a name,
+`content-type:<type>`). The store holds the upstream's encrypted reasoning items under
 hashed keys, nothing else, for 14 days and at most 256 MB, the oldest evicted first. `ccrc codex status <id> --json`
 adds `mode`, `upstream`, `tiers.bridge` and `bridge` (the stats file's time, last upstream request id, refusals,
 outcomes and unknown names; `null` when there is none). Doctor's `codex` check reads the lane by its mode: on a
-`direct` lane the bridge tier's running, stale (a WARN; `ccrc doctor --fix` restarts a stale running bridge and never
-starts a stopped one), foreign and unmeasured rows; a FAIL, `runs a retired refresher`, when the lane's LiteLLM tier or
-shim runs beside it; a FAIL for the `siwc` route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a
-stats file or store that is not a regular file of mode 0600 is a FAIL. Removing the lane reaps both files, the
-recordings directory and the marker files with the rest of its state.
+`direct` lane the bridge tier's running, stale (a WARN, cured by `ccrc update`, which restarts a running, proven, stale
+bridge, or by `ccrc codex stop` then `start`; `ccrc doctor --fix` restarts it only when the same run re-placed the
+shim, the runtime or the auth library for another finding, and neither starts a stopped one), foreign and unmeasured
+rows; a FAIL, `runs a retired refresher`, when the lane's LiteLLM tier or shim runs beside it; a FAIL for the `siwc`
+route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a stats file or store that is not a regular
+file of mode 0600 is a FAIL. Removing the lane reaps both files, the recordings directory and the marker files with the
+rest of its state.
 
 **A restart cuts long streams.** The bridge runs under the shim's unit, so a restart (a rollout's install restarts a
 running bridge whose bytes are stale; a switch stops it) is a stop, then a start. On the stop the bridge closes its
@@ -2245,8 +2253,8 @@ listener, a stream that finishes within 5 seconds (`DRAIN_S`) ends normally, and
 `api_error` event, so Claude Code sends it again. ccrc's stop waits 10 seconds before a KILL under `nohup`, and the
 user manager's stop timeout under systemd (90 seconds by systemd's default; a box that sets it below 10 cuts the drain
 short). Between the close and the new process's bind nothing listens: Claude Code retries a lane's request twice, at
-about 0.6 and 1.1 seconds, so a request, or a cut stream's re-send, that lands more than about 1.7 seconds before the
-new bind fails its turn.
+about 0.6 and 1.1 seconds (measured on a 429; a refused connection is assumed to follow the same schedule), so a
+request, or a cut stream's re-send, that lands more than about 1.7 seconds before the new bind fails its turn.
 
 **Switch a `direct` lane back before a rollback** to a build from before the bridge: `ccrc codex switch <id> litellm`
 for every `direct` lane first. An older build reads the bridge's lane answer, `{"lane": <id>, "mode": "direct"}`, as a

@@ -1576,12 +1576,17 @@ section moved:** every hunk above this heading is a same-line pointer. D18 and D
 - **`direct` mode is a new package beside the shim** (D18). The shim's direct entry imports `ccd/codexbridge/`, a
   standard-library package, from the box's installed tree, and that one process answers Claude Code as an Anthropic
   endpoint and speaks the backend's Responses route itself: no LiteLLM tier runs. It keeps the shim's port, gateway key
-  and unit name (D19), so `ccrc-codex` and `ANTHROPIC_BASE_URL` do not change and the two modes can never run at once.
+  and unit name (D19), so `ccrc-codex` and `ANTHROPIC_BASE_URL` do not change and the shim and the bridge can never
+  both serve the lane's port. The LiteLLM tier has a port and unit of its own, so it can run beside a bridge (a tier
+  started by hand, say): `ccrc codex start` refuses that lane `retired-tier-running` and doctor FAILs it, because two
+  refreshers on one credential is what ccrc never starts.
   Of §6, it keeps §6.2's effort precedence (the shim's own hook) and reads the body through the shim's own decoding
   (§6.3). §6.1's fold does not apply: the top-level `system` text becomes the first developer message, with no
   `instructions` field, and each mid-conversation `role: "system"` entry becomes a developer message in its place.
   §6.4's `/ccgpt/lane` answers `{"lane": <id>, "mode": "direct"}`, never `{"lane": <id>}`, so a build from before
   Stage 2 reads a running bridge as a listener it cannot identify and refuses it rather than adopting it as its shim.
+  The rest of §6.4 does not hold in `direct` mode, because nothing is relayed: replies are rebuilt from the backend's
+  events, `count_tokens` and `/v1/models` are answered locally, and every other path is 404.
 - **Where the rest is written.** What a `direct` lane runs, refreshes and records, the doctor's rows by mode, D25's
   window lowering and the rollback rule ("switch a `direct` lane back before a rollback to a build from before this
   one") are in the README's "A ChatGPT/Codex lane" and `ccrc models` sections, and in the codex-bridge spec and its
