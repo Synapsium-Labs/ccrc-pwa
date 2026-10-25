@@ -6221,6 +6221,22 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     19:21:40 boot.
   `STATUS 2026-10-25T19:34:46Z fleet=v0.0.699 server=v0.0.699 health=v0.0.699 newest=v0.0.700 intent=*:dev/auto=off`
   `pin=None link=<versions>/v0.0.699 backups=fleet:165M/server:9270M disk=fleet:101G/work:367G/server:21G`
+- **2026-10-25 20:25 UTC — v0.0.701 released; the armed orphan-tree lane has been doing nothing since the 19:21:40 boot.**
+  - **The release.** v0.0.701 is #1429, the tmp sweep's inode budget. It touches nothing the broker's soak watches, and
+    the session hook is unchanged. No box has moved to it.
+  - **The lane.** It wrote 40 "left" records from 17:36 to 17:57, after the 17:26:33 boot, and none since. The 19:21:40
+    boot cleared its memory, which is held in memory only. A read-only run of the census verb at 20:31 took 59.7 s and
+    answered `truncated: true` after 88 rows, all of which parse. The census stops at 60 s
+    (`WS_ORPHAN_CENSUS_S`). A truncated census adds nothing to the lane, and the lane then waits the full 6 h before
+    asking again (`orphanTreeSweep.ts`, the `truncated` return). It says nothing when this happens: no feed row, no log
+    line, and its health stays null. The server also passes `pressure: () => false`, so the hourly cadence for a box
+    under pressure never runs. The spec says a truncated census "audits nothing new that pass" and that every truncated
+    answer "says why". So the code waits 6 h where the spec waits one pass, and it stays silent.
+  - **Verdict.** The update mechanism did not misbehave. The orphan lane fails safe, keeping every tree, but it is
+    inert on a loaded box. No removal can come before the next census at about 01:2x, and that census needs to finish
+    within 60 s. The fix belongs in a wave; it is reported to the operator.
+  `STATUS 2026-10-25T20:25:43Z fleet=v0.0.699 server=v0.0.699 health=v0.0.699 newest=v0.0.701 intent=*:dev/auto=off`
+  `pin=None link=<versions>/v0.0.699 backups=fleet:165M/server:9270M disk=fleet:101G/work:351G/server:21G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
