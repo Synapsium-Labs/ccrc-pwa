@@ -572,7 +572,7 @@ built by `.join` from L0 (`TERMINAL_DELIVERY_STATES` and its derived complement 
 `watch.ts`'s `sweepMail` consumes each answer: a refused write is logged and the step that assumed it skipped.
 Pinned by `mail-hardening.test.ts`'s one-writer census, `mail-deliveries-writer.test.ts`, and two scans in
 `single-definition/*.test.ts`. STILL OPEN, and do not assume otherwise: an out-of-vocabulary `state` token (the
-column is `schema.ts:138-139`; the deploy-rollback that can reach it is argued at `schema.ts:41-45`) is LIVE to every negative-form guard and to `markAcked`,
+column is described at `server/src/coord/schema.ts#@mailDeliveriesStateVocabulary`; the deploy-rollback that can reach it is argued at `server/src/coord/schema.ts#@deployRollbackOlderServer`) is LIVE to every negative-form guard and to `markAcked`,
 while `dueDeliveries` and the positive-form writers treat it as not-outstanding — an asymmetry nothing has
 ruled on. D-114's measured read is **LANDED, not open** — corrected 2026-09-04 (D-1441), because the paragraph
 this replaces was falsified by wave 8's own commits and still read as live guidance. What is true now:

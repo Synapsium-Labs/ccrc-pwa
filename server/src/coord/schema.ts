@@ -10,6 +10,7 @@
  * newer build lands somewhere honest instead of being switched on and
  * rendered as nothing — `PrPhase`'s `'unchecked'` is the precedent
  * (`server/src/registry.ts:135-142`). Deviation D-8 found that this plan's
+ * @anchor mailDeliveriesStateVocabulary
  * own draft left two of the five — `programs.state` and
  * `mail_deliveries.state` — uncovered on the wire (`programs()` returning a
  * raw `string`; `MailSummary.state` a closed union with no `unknown` arm).
@@ -38,6 +39,7 @@
  * server itself already typed", and likened that to `mail_rejections.code`
  * below; both halves were wrong, the second more so, since that column's own
  * docstring in `store.ts` states the OPPOSITE stance in so many words). The
+ * @anchor deployRollbackOlderServer
  * exemption's premise fails on a rollback: `deploy.sh` keeps per-timestamp
  * backups, and `shared/api.ts`'s own rollback paragraph (`:567-571`) is
  * exactly the "older, same, or newer" span that makes "this server itself
