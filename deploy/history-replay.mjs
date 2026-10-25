@@ -314,10 +314,10 @@ async function yieldToSignals() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
-/** Refuse `interrupted` while the stopping flag is set. Seven call sites: each runBatch lane iteration (after a yield and the
+/** Refuse `interrupted` while the stopping flag is set. Eight call sites: each runBatch lane iteration (after a yield and the
  *  re-read), runBatch's last act (after its lanes), launchRun before runChild, launchRun's post-close branch,
- *  measureClaudeVersion (after a yield), step 0a right after its `--version` returns, and an arms batch after every
- *  pending question was excluded. So no spawn starts after the handler has run, and after the handler has run no
+ *  measureClaudeVersion (after a yield), preflightSpawn after measureClaudeVersion, step 0a right after its `--version`
+ *  returns, and an arms batch after every pending question was excluded. So no spawn starts after the handler has run, and after the handler has run no
  *  run.json, step0a.json or probe.json is written. A run whose post-close stretch is under way when a signal arrives is
  *  recorded (its run.json is written), and the subcommand then refuses at its next check. A signal that arrives after
  *  runBatch's last check is not answered (the post-last-check window, named in the header above). A run stopped in
