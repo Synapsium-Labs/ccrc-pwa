@@ -20,7 +20,13 @@ import {
   type ChildReclaimDecisionInput, type ChildReclaimDeps, type ChildReclaimOutcome, type ChildReclaimReleaseRequest,
   type ChildReclaimRequest, type ChildReclaimToken,
 } from '../src/coord/childReclaim.js';
-import { CHILD_RECLAIM_TRANSIENT_WORD, type ChildReclaimFeedQuiet } from '../src/childReclaimSweep.js';
+import {
+  CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_TRANSIENT_WORD, childReclaimAttention, childReclaimFeedQuiet,
+  childReclaimJournalRow, type ChildReclaimFeedQuiet, type ChildReclaimSweepEntry,
+} from '../src/childReclaimSweep.js';
+import { childReclaimTokenKind, isChildReclaimStuckToken } from '../src/coord/childReclaim.js';
+import { refusalSentence as sentenceOf } from '../src/wsaudit.js';
+import type { MirroredLifecycleEvent } from '../../shared/api.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { readSessionRecord } from '../src/registry.js';
 import { readChildSiblings } from '../src/coord/siblingRead.js';
@@ -168,7 +174,9 @@ describe('the fifteen words', () => {
     const terminal = Object.entries(CHILD_RECLAIM_TOKEN_KIND)
       .filter(([token, kind]) => kind === 'terminal' && !NESTED_RESCUE_WORDS.includes(token)).map(([token]) => token).sort();
     expect(terminal.length, 'guards the guard: an empty arm would equal an empty list').toBeGreaterThan(0);
-    expect(matches[0]![1]!.split('|').sort()).toEqual(terminal);
+    // The transient word is journaled on the audit path too (a refusal line, read as a FAILURE: `childReclaimFailureLine`),
+    // so the failing item and the once-per-episode feed row can be derived; it is not terminal.
+    expect(matches[0]![1]!.split('|').sort()).toEqual([...terminal, CHILD_RECLAIM_TRANSIENT_WORD].sort());
   });
 
   it('every RETRY word is a defer reason, and no other word is', () => {
@@ -929,6 +937,29 @@ describe('reclaimChild — the one executor', () => {
     const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, 'tree-unreadable', { detail: 'd' }) } }) });
     await reclaimChild(s.deps, s.req());
     await reclaimChild(s.deps, s.req(false, null, { deferWhy: null, failureToken: 'tree-unreadable' }));
+    expect(s.feed()).toEqual(['child reclaim failed']);
+  });
+
+  // The lane derives everything from the journal: ccd's `refused tree-unreadable` lines (the audit path and the verb path
+  // both journal them) must read as a FAILURE run, list a `failing` item past the ceiling and quiet the feed. Nothing is
+  // injected: journal rows -> childReclaimJournalRow -> childReclaimAttention -> childReclaimFeedQuiet -> reclaimChild.
+  it('a persistent tree-unreadable, read from its own journal lines, lists failing and writes ONE feed row', async () => {
+    const T0 = 1_758_500_000_000;
+    const line = (n: number): MirroredLifecycleEvent => ({ id: CHILD_ID, act: 'reclaim', outcome: 'refused',
+      refusal: CHILD_RECLAIM_TRANSIENT_WORD, at: T0 + n * CHILD_RECLAIM_DEFER_CEILING_MS, detail: 'could not read the tree' }) as unknown as MirroredLifecycleEvent;
+    const gen = [line(0), line(1), line(2), line(3)];
+    const row = childReclaimJournalRow(gen, gen[3]!);
+    expect(row).toMatchObject({ failingSince: T0 });
+    const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0,
+      stdout: auditDoc(runId, 'tree-unreadable', { detail: 'd' }) } }) });
+    const listed = childReclaimAttention({ latest: [row!], live: new Map([[CHILD_ID, s.runId]]), kindOf: childReclaimTokenKind,
+      stuckOf: isChildReclaimStuckToken, sentenceFor: sentenceOf, nowMs: T0 + 3 * CHILD_RECLAIM_DEFER_CEILING_MS });
+    expect(listed.map((a) => a.kind)).toEqual(['failing']);
+    const quiet = childReclaimFeedQuiet({ lastDeferWhy: null } as ChildReclaimSweepEntry, listed, CHILD_ID);
+    expect(quiet.failureToken).toBe(CHILD_RECLAIM_TRANSIENT_WORD);
+    await reclaimChild(s.deps, s.req());
+    await reclaimChild(s.deps, s.req(false, null, quiet));
+    await reclaimChild(s.deps, s.req(false, null, quiet));
     expect(s.feed()).toEqual(['child reclaim failed']);
   });
 

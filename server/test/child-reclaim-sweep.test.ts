@@ -955,7 +955,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     const f = fixture({ cap: false });
     finishedChild(f);
     finishedChild(f, 'demo-b');
-    f.journal('demo-b', 'refused', 'tree-unreadable');
+    f.journal('demo-b', 'refused', 'branch-elsewhere');
     await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
     expect(f.requests).toEqual([]);
     await f.watcher.tick();
@@ -966,7 +966,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     const f = fixture({ pauseCap: false });
     finishedChild(f);
     finishedChild(f, 'demo-b');
-    f.journal('demo-b', 'refused', 'tree-unreadable');
+    f.journal('demo-b', 'refused', 'branch-elsewhere');
     await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
     expect(f.requests).toEqual([]);
     await f.watcher.tick();
@@ -1117,7 +1117,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
 
   it('two passes after a terminal refusal make no second request', async () => {
     const f = fixture({ outcome: (req) => ({ kind: 'refused', sessionId: req.sessionId, runId: req.runId,
-      token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), detail: '' }) });
+      token: 'branch-elsewhere', sentence: refusalSentence('branch-elsewhere'), detail: '' }) });
     finishedChild(f);
     await f.pass(); f.next(); await f.pass();
     expect(f.requests).toHaveLength(1);
@@ -1132,8 +1132,8 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     // later pass reads (once the terminal-refusal wait has itself elapsed)
     // starts a fresh episode.
     const f = fixture({ outcome: (req) => (req.deferExpired
-      ? { kind: 'refused', sessionId: req.sessionId, runId: req.runId, token: 'tree-unreadable',
-          sentence: refusalSentence('tree-unreadable'), detail: '' }
+      ? { kind: 'refused', sessionId: req.sessionId, runId: req.runId, token: 'branch-elsewhere',
+          sentence: refusalSentence('branch-elsewhere'), detail: '' }
       : deferredAs('presence', req)) });
     finishedChild(f);
     await f.pass(); f.next(); await f.pass();                 // request 1 → presence
@@ -1281,7 +1281,7 @@ describe('fail-shut on the pass-level reads — a throw stops the WHOLE pass, no
     // tell "kept its last value" apart from "stayed empty either way",
     // because its only planted child had nothing to report yet.
     const termRunId = finishedChild(f, 'demo-term');
-    f.journal('demo-term', 'refused', 'tree-unreadable');
+    f.journal('demo-term', 'refused', 'branch-elsewhere');
     // A RETRYABLE reclaim row (not terminal) on the child under test, so
     // `childReclaimSessionIds()` includes it and the mirror read the try
     // wraps is genuinely exercised for it: a TERMINAL refusal on THIS child
@@ -1298,7 +1298,7 @@ describe('fail-shut on the pass-level reads — a throw stops the WHOLE pass, no
     await f.watcher.tick();
     const before = f.watcher.currentCoord()?.childReclaimAttention;
     expect(before).toEqual([{
-      kind: 'terminal', sessionId: 'demo-term', runId: termRunId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at: T0,
+      kind: 'terminal', sessionId: 'demo-term', runId: termRunId, token: 'branch-elsewhere', sentence: refusalSentence('branch-elsewhere'), at: T0,
     }]);
     f.next();
     // Sighted once already — the next ordinary pass would dispatch.
@@ -1322,30 +1322,30 @@ describe('the attention list — derived from the mirror, carried on the coord f
   it('reports a terminal refusal with the server sentence, and never retries that child', async () => {
     const f = fixture();
     const runId = finishedChild(f);
-    f.journal('demo-a', 'refused', 'tree-unreadable');
+    f.journal('demo-a', 'refused', 'branch-elsewhere');
     await f.pass(); f.next(); await f.pass();
     expect(f.requests).toEqual([]);
     await f.watcher.tick();
     expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([{
-      kind: 'terminal', sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at: T0,
+      kind: 'terminal', sessionId: 'demo-a', runId, token: 'branch-elsewhere', sentence: refusalSentence('branch-elsewhere'), at: T0,
     }]);
   });
 
   it('an AUDIT-TIME terminal refusal reaches the mirror through ws-audit\'s own line — listed, never retried, kept across a restart', async () => {
     const f = fixture({ outcome: (req) => ({ kind: 'refused', sessionId: req.sessionId, runId: req.runId,
-      token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), detail: 'audit: tree-unreadable' }) });
+      token: 'branch-elsewhere', sentence: refusalSentence('branch-elsewhere'), detail: 'audit: branch-elsewhere' }) });
     const runId = finishedChild(f);
     await f.pass(); f.next(); await f.pass();                 // request 1 → refused, terminally, at the audit
     expect(f.requests).toHaveLength(1);
     await f.watcher.tick();
     expect(f.watcher.currentCoord()?.childReclaimAttention, 'an executor answer fed the frame').toEqual([]);
-    f.journal('demo-a', 'refused', 'tree-unreadable', 'reclaim', 'ws-audit');
+    f.journal('demo-a', 'refused', 'branch-elsewhere', 'reclaim', 'ws-audit');
     const refusedAt = f.now();
-    expect(f.latestOf('demo-a')).toMatchObject({ sessionId: 'demo-a', outcome: 'refused', refusal: 'tree-unreadable' });
+    expect(f.latestOf('demo-a')).toMatchObject({ sessionId: 'demo-a', outcome: 'refused', refusal: 'branch-elsewhere' });
     for (let i = 0; i < 4; i += 1) { f.next(); await f.pass(); }
     expect(f.requests, 'retried a terminal refusal').toHaveLength(1);
     await f.watcher.tick();
-    const item = { kind: 'terminal', sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at: refusedAt };
+    const item = { kind: 'terminal', sessionId: 'demo-a', runId, token: 'branch-elsewhere', sentence: refusalSentence('branch-elsewhere'), at: refusedAt };
     expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([item]);
     const g = fixture({ coord: f.coord, home: f.home });
     await g.pass(); g.next(); await g.pass(); g.next(); await g.pass();
@@ -1358,7 +1358,7 @@ describe('the attention list — derived from the mirror, carried on the coord f
     const f = fixture({ outcome: (req) => ({ kind: 'refused', sessionId: req.sessionId, runId: req.runId,
       token: 'containment-unproven', sentence: refusalSentence('containment-unproven'), detail: 'nested repo' }) });
     f.journal('demo-a', 'done', null, 'create');              // the OLD workspace
-    f.journal('demo-a', 'refused', 'tree-unreadable');
+    f.journal('demo-a', 'refused', 'branch-elsewhere');
     const runId = finishedChild(f);                           // the NEW one — `plant` journals its create
     expect(f.latestOf('demo-a')).toBeNull();
     await f.pass(); f.next(); await f.pass();
@@ -1403,7 +1403,7 @@ describe('the attention list — derived from the mirror, carried on the coord f
   it('drops the child once its registry row is gone', async () => {
     const f = fixture();
     finishedChild(f);
-    f.journal('demo-a', 'refused', 'tree-unreadable');
+    f.journal('demo-a', 'refused', 'branch-elsewhere');
     await f.pass();
     for (const n of readdirSync(f.reg)) if (n.startsWith('demo-a.')) rmSync(path.join(f.reg, n));
     f.next(); await f.pass();
@@ -1414,7 +1414,7 @@ describe('the attention list — derived from the mirror, carried on the coord f
   it('survives a restart: a new watcher over the same database rebuilds it on its first pass', async () => {
     const f = fixture();
     finishedChild(f);
-    f.journal('demo-a', 'refused', 'tree-unreadable');
+    f.journal('demo-a', 'refused', 'branch-elsewhere');
     const g = fixture({ coord: f.coord, home: f.home });
     await g.pass();
     await g.watcher.tick();
@@ -1543,12 +1543,12 @@ describe('the attention list — derived from the mirror, carried on the coord f
     const f = fixture();
     const runId = finishedChild(f);
     for (let i = 0; i < 505; i += 1) f.journal('demo-a', 'refused', 'attached');
-    f.journal('demo-a', 'refused', 'tree-unreadable');
+    f.journal('demo-a', 'refused', 'branch-elsewhere');
     const at = f.now();
     await f.pass();
     await f.watcher.tick();
     expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([{
-      kind: 'terminal', sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at,
+      kind: 'terminal', sessionId: 'demo-a', runId, token: 'branch-elsewhere', sentence: refusalSentence('branch-elsewhere'), at,
     }]);
   });
 });
@@ -2433,7 +2433,7 @@ describe('the attention list\'s kept arm — the sweep\'s kept verdicts, listed 
     const f = fixture({ home, notifyLog, cap: false });
     coordinatingChild(f);
     finishedChild(f, 'demo-b');
-    f.journal('demo-b', 'refused', 'tree-unreadable');
+    f.journal('demo-b', 'refused', 'branch-elsewhere');
     await f.pass();
     await f.watcher.tick();
     expect(attentionLabels(f)).toEqual(['terminal:demo-b']);
@@ -2568,14 +2568,14 @@ describe('the attention list\'s kept arm — the sweep\'s kept verdicts, listed 
     await f.watcher.tick();
     expect(attention(f)).toEqual([keptItem('demo-a', runId)]);
     writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
-    f.journal('demo-a', 'refused', 'tree-unreadable');
+    f.journal('demo-a', 'refused', 'branch-elsewhere');
     const at = f.now();
     f.next(); await f.pass();
     await f.watcher.tick();
     expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a'), 'the kept verdict was retained')
       .toEqual({ eligible: false, why: 'coordinating', runId });
     expect(attention(f)).toEqual([{
-      kind: 'terminal', sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at,
+      kind: 'terminal', sessionId: 'demo-a', runId, token: 'branch-elsewhere', sentence: refusalSentence('branch-elsewhere'), at,
     }]);
     expect(keptRows(f)).toHaveLength(1);
   });

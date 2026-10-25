@@ -1189,10 +1189,10 @@ describe('childReclaimJournalRow — one generation\'s latest reclaim event, as 
   });
 
   it('carries a refusal as it is, with no failure run', () => {
-    const gen = [ev('create', 'done'), ev('reclaim', 'refused', { refusal: 'tree-unreadable' })];
+    const gen = [ev('create', 'done'), ev('reclaim', 'refused', { refusal: 'branch-elsewhere' })];
     // `toEqual`, so the row's WHOLE shape is pinned: it carries no `ingestedAt`.
     expect(childReclaimJournalRow(gen, gen[1]!)).toEqual({ sessionId: 'demo-a', outcome: 'refused',
-      refusal: 'tree-unreadable', at: NOW, failingSince: null, detail: null });
+      refusal: 'branch-elsewhere', at: NOW, failingSince: null, detail: null });
   });
 
   it('carries an INTENT when the intent is the latest — the latest event decides, whatever its outcome', () => {

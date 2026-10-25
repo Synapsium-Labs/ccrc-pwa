@@ -1213,14 +1213,14 @@ export function isChildReclaimPreLockToken(v: unknown): v is ChildReclaimPreLock
   return typeof v === 'string' && CHILD_RECLAIM_PRE_LOCK_TOKENS.includes(v);
 }
 /** A `reclaim` line that is part of a run of FAILURES (spec §5.9): `failed`, or `refused` with one
- *  of the pre-lock tokens. ccd journals those pre-lock dies through `_lc_refuse`; the
+ *  of the pre-lock tokens, or the one transient word (`CHILD_RECLAIM_TRANSIENT_WORD`). ccd journals those pre-lock dies through `_lc_refuse`; the
  *  executor reads the same call as a `pre-lock-die` failure and the sweep retries it, so the
  *  report reads it as the failure it is, never as a settled refusal. ONLY these, by name: a
  *  token ccd starts journaling under `reclaim` later is classified when it is added, in this
  *  table or in `CHILD_RECLAIM_TOKEN_KIND`, and is never inherited. NOT read by
  *  `childReclaimTerminalRefusal`: no pre-lock token is terminal. */
 export const childReclaimFailureLine = (e: { readonly outcome: string; readonly refusal: string | null }): boolean =>
-  e.outcome === FAILED || (e.outcome === REFUSED && isChildReclaimPreLockToken(e.refusal));
+  e.outcome === FAILED || (e.outcome === REFUSED && (isChildReclaimPreLockToken(e.refusal) || e.refusal === CHILD_RECLAIM_TRANSIENT_WORD));
 
 /** ONE session's attention input row. `generation` is
  *  `childReclaimGeneration(events, at)`'s answer and `latest` is
