@@ -32,7 +32,7 @@ import type { ChildBirth } from './childSpent.js';
  *     `CoordStore.bindSession` records the occupant's birth on a later wave it binds (`stampOccupantBirth`), so a run
  *     bound to the live worker is `bound` and a run bound to an earlier occupant is `unbound`, whatever its `openedAt`;
  *     the undecidable arm is left for rows bound before the stamp. An `unborn` session that reuses a name keeps the
- *     id-string rule (the rest of #1407's gap 1).
+ *     id-string rule (gap 1 of #1407, tracked in #1532).
  *
  * TWO QUERIES, NAMED. `newest` is the newest run that binds the incarnation in ANY state (the card's `session.run`);
  * `open` is the newest that is not terminal (`session.openRun`). A state this build cannot name counts as open, as
