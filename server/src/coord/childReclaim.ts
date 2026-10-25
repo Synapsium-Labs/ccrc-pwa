@@ -739,14 +739,19 @@ export function childReclaimDecision(input: ChildReclaimDecisionInput): ChildRec
  *  own `isChildReclaimResume` guard, not a second hand-kept list here: the
  *  same reason every other member of this function is a guard call, never an
  *  inline set. The stuck words and `purge-incomplete` are admitted through
- *  their one spelling each (spec §5.6). Deliberately NOT named
+ *  their one spelling each (spec §5.6). The sweep's skip words
+ *  (`ChildReclaimSweepSkip`, e.g. `hold-retired`, which the superseded-review
+ *  shadow in `childReclaimStale.ts` compares a counterfactual verdict to,
+ *  D-6922) are admitted through `CHILD_RECLAIM_SKIP`'s keys, the table every
+ *  surface reads, never a second list. Deliberately NOT named
  *  `isChildReclaimWord`: wave 5 owns that name, in `shared/api.ts`, as the type
  *  guard of the run chip's `ChildReclaimWord` vocabulary (spec §5.9) — a
  *  different set with a different meaning. */
 export function isChildReclaimKebab(v: unknown): boolean {
   return isChildReclaimToken(v) || isChildReclaimDeferWhy(v) || isChildReclaimResume(v)
     || isChildReclaimPreCrumbFailed(v) || isChildReclaimStuckToken(v) || v === CHILD_RECLAIM_PURGE_INCOMPLETE
-    || (typeof v === 'string' && (Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_NOT_WHY, v) || v === 'not-queued'));
+    || (typeof v === 'string' && (Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_NOT_WHY, v) || v === 'not-queued'
+      || Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_SKIP, v)));
 }
 
 // ── the two ccd documents ────────────────────────────────────────────────────
