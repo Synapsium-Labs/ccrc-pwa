@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 48 id-taking calls across 13 files.
+// THE CLAIM: 47 id-taking calls across 13 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -472,7 +472,6 @@ const CENSUS: readonly CensusRow[] = [
   // watch.ts: the naming sweep's rows come from the listing, which never builds a refused name; the `entry` ties the
   // loop's `r` to `readRegistry`'s output.
   { file: 'watch.ts', scope: 'namesPass', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
-  { file: 'watch.ts', scope: 'namesPass', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
 ];
 
 /** The files whose gates ask the predicate themselves. */
@@ -522,7 +521,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     }
   });
 
-  it('the header claim, "48 id-taking calls across 13 files", matches the scan', () => {
+  it('the header claim, "47 id-taking calls across 13 files", matches the scan', () => {
     const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
     const claim = /^\/\/ THE CLAIM: (\d+) id-taking calls across (\d+) files\b/m.exec(self);
     expect(claim, 'the census claim was removed or reworded without its guard').not.toBeNull();

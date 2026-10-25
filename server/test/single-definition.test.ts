@@ -8467,23 +8467,17 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 // ARCH-71 (#806); spec §5.1 rule 3). The capability ratchet, placed directly after the ARCH-40 tail block and ahead of
 // the next appended block, so no cited line above it moves. Every verb question goes through `ccdCan(state, row)`:
 // a `verbSupported(` or a verb-tagged `capSupported(` (`consolidationCensus.ts`'s `capabilityChoiceSites`, tagged
-// from `CCD_CAN`) may stand only in W4's two files, which W1b never edits (three `verbSupported(` there), and in
-// `watch.ts`, whose commit waits its turn in the one `watch.ts` queue behind C1f (named in the C1k PR body as the
-// follow-up `c1k-watch-after-c1f`). Both sets may only shrink. Flag and verb-precondition sites are reported, never
-// ratcheted. The census is loaded inside the rows, so this block adds no import line.
+// from `CCD_CAN`) may stand only in W4's two files, which W1b never edits (three `verbSupported(` there). `watch.ts`'s
+// seven deferred calls moved in the follow-up `c1k-watch-after-c1f`, so nothing else is exempt. The W4 set may only
+// shrink. Flag and verb-precondition sites are reported, never ratcheted. The census is loaded inside the rows, so
+// this block adds no import line.
 describe('one verb question (ARCH-71): ccdCan(state, row) (D-5866)', () => {
-  /** `watch.ts`'s legacy verb calls at C1k's tip: the name sweep's probe, child reclaim's and the collector's gates
-   *  (each with its pause beside it), the expiry selection and the project PR read. */
-  const WATCH_DEFERRED = 7;
-
-  it('no verb question outside ccdCan, except W4\'s three (and watch.ts\'s deferred commit)', async () => {
+  it('no verb question outside ccdCan, except W4\'s three', async () => {
     const { capabilityChoiceSites, W4_HELD_FILES } = await import('./consolidationCensus.js');
     const sites = await capabilityChoiceSites();
     const legacy = sites.filter((x) => x.tag === 'verb' && x.form !== 'ccdCan');
     const show = (xs: typeof sites): string[] => xs.map((x) => `${x.file}:${x.line} ${x.text.trim()}`);
-    expect(show(legacy.filter((x) => x.file !== 'server/src/watch.ts')), 'ask ccdCan(state, row) instead').toEqual([]);
-    expect(legacy.filter((x) => x.file === 'server/src/watch.ts').length, 'watch.ts may only shrink')
-      .toBeLessThanOrEqual(WATCH_DEFERRED);
+    expect(show(legacy), 'ask ccdCan(state, row) instead').toEqual([]);
     const w4 = sites.filter((x) => x.tag === 'w4-held');
     expect(w4.filter((x) => x.form === 'verbSupported').length, 'W4\'s three verb sites may only shrink')
       .toBeLessThanOrEqual(3);

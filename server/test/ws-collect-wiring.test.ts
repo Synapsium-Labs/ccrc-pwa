@@ -66,9 +66,10 @@ describe('ONE LANE — the collector’s lane is the only server source that com
   });
 
   it('the builders and the token are named only where declared and by the lane’s files; the verb and its mode flag stand where they were', () => {
-    expect(holders(/\bwsCollect(?:Audit)?\b/), 'a reference to either builder: the declaration, and the lane’s executor').toEqual(['ccdargv.ts', 'coord/collectTempRoot.ts']);
+    expect(holders(/(?<!['"`])\bwsCollect(?:Audit)?\b/), 'a reference to either builder: the declaration, and the lane’s executor').toEqual(['ccdargv.ts', 'coord/collectTempRoot.ts']);
+    expect(holders(/\bccdCan\([^)]*['"`]wsCollect['"`]\)/), 'the executor and the pass ask the row by name, composing nothing (D-5866)').toEqual(['coord/collectTempRoot.ts', 'watch.ts']);
     expect(holders(/['"`]ws-collect['"`]/), 'the verb as a literal: the builder, and the budget row').toEqual(['ccdargv.ts', 'remote/runner.ts']);
     expect(holders(/['"`]--collect['"`]/), 'the audit mode flag').toEqual(['ccdargv.ts']);
-    expect(holders(/\bCOLLECT_CAP\b|['"`]collect-v1['"`]/), 'the capability token: declared, and asked by the executor and by the pass').toEqual(['ccdargv.ts', 'coord/collectTempRoot.ts', 'watch.ts']);
+    expect(holders(/\bCOLLECT_CAP\b|['"`]collect-v1['"`]/), 'the capability token: declared, and asked by the executor (the pass asks `ccdCan`’s row, above)').toEqual(['ccdargv.ts', 'coord/collectTempRoot.ts']);
   });
 });

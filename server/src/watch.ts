@@ -13,7 +13,7 @@ import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
-import { CCD_ARGV, EXPIRE_CAP, EXPIRE_CHILD_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, capSupported, verbSupported, sweepDec } from './ccdargv.js';
+import { CCD_ARGV, EXPIRE_CHILD_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
 import {
   isFullLine, parsePrLines, phaseFor, queueFor, repoCellFor, sweepFailureReason, type CcdPrFailure, type PrQueueRead,
 } from './prstate.js';
@@ -197,7 +197,6 @@ import { LaneRunner } from './laneRunner.js';
 import { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, DIVERGENCE_SWEEP_MS, IDLE_NUDGE_SWEEP_MS, LC_SWEEP_MS, STALL_SWEEP_MS, PR_BACKOFF_MAX_MS, PR_SWEEP_MS, READINESS_SWEEP_MS, type LaneName } from './laneSchedule.js';
 // THE TEMP-ROOT COLLECTOR'S LANE (child reclamation wave 9, spec §5.10). A block of its own, so no import line above
 // changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
-import { COLLECT_CAP } from './ccdargv.js';
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
 import { stopDonePass, type StopDoneMemory } from './stopDoneSweep.js';
@@ -3717,7 +3716,7 @@ export class FleetWatcher {
       // uuid rotation (`nameSweepRetired`'s docstring) computes a different
       // incarnation for the same session id, which was never added here.
       if (this.nameSweepRetired.has(incarnation)) continue;
-      // A PROBE argv: it is never sent. `verbSupported` reads argv[0] only, and
+      // A ROW question, no argv: `ccdCan` asks the `wsRename` row by name, and
       // asking here — before `claimTitleRead` writes anything — is what makes
       // "an unsupported verb records no attempt" true of the stat gate as well
       // as of the attempted set. Skips silently, same self-healing caveat as
@@ -3726,8 +3725,7 @@ export class FleetWatcher {
       // timer (`CAPS_REFRESH_MS`) — not the agent's, which has none —
       // requires a server restart in local mode (`localcaps.ts`, one probe
       // at boot, no timer).
-      if (!verbSupported(this.deps.fleetState,
-                         CCD_ARGV.wsRename(r.id, born, sweepDec(this.deps.fleetState, 'sweep:names')))) continue;
+      if (!ccdCan(this.deps.fleetState, 'wsRename')) continue;
       const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
       if (!cfgDir) continue;
       // NO `foreign`: a derived branch name is written into the row with no
@@ -4263,7 +4261,7 @@ export class FleetWatcher {
     // Either way the memory is dropped: "the switches read clear" is itself an eligibility
     // conjunct, so a child needs two FRESH passes once a switch is lowered
     // (or the box gains the missing capability).
-    if (!capSupported(this.deps.fleetState, RECLAIM_CAP) || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)
+    if (!ccdCan(this.deps.fleetState, 'wsReclaim') || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)
         || readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set') {
       if (this.childReclaimJudged !== null) this.childReclaimJudged = childReclaimKeptVerdicts(this.childReclaimJudged);
       this.childReclaimPublishAttention(mirrorArms, live);
@@ -4925,7 +4923,7 @@ export class FleetWatcher {
     }
     // ONE — the capabilities (spec §5.10): both, or the lane never runs — never an automatic destructive lane on a box the
     // phone cannot pause. A missing one clears every pair, so each id needs two FRESH observations once it returns.
-    if (!capSupported(this.deps.fleetState, COLLECT_CAP) || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)) {
+    if (!ccdCan(this.deps.fleetState, 'wsCollect') || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)) {
       this.collectClearPairs();
       return;
     }
@@ -5471,7 +5469,7 @@ export class FleetWatcher {
     // FRESH passes once the switch is lowered or the box proves the verb. What was learned and reported stands.
     // The ranked held bytes are still composed (D-6027): they need neither the store nor the capability, and the
     // operator needs them exactly while the lane is not acting — a block left from the last acting pass would freeze.
-    if (readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set' || !capSupported(this.deps.fleetState, EXPIRE_CAP)) {
+    if (readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set' || !ccdCan(this.deps.fleetState, 'wsExpire')) {
       forgetSightings();
       this.archivedHeldBlock = rankArchivedHeld(archived, this.archivedExpiryState);
       return;
@@ -8182,7 +8180,7 @@ export class FleetWatcher {
       const back = this.prBackoff.get(project);
       if (back && now < back.until) continue;
       const argv = CCD_ARGV.prStateProject(project);
-      if (!verbSupported(this.deps.fleetState, argv)) {
+      if (!ccdCan(this.deps.fleetState, 'prStateProject')) {
         for (const r of records.filter((x) => x.project === project && x.workspace !== null)) {
           // retryAt: null — an unsupported verb is not a scheduled retry, and a
           // stale `until` from an earlier backoff must not survive as a promise.
