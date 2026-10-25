@@ -151,6 +151,22 @@ describe('D4: the roster card, armed', () => {
     expect(c).not.toContain('$(y)');
     expect(rosterOf(c).split('\n').filter((l) => l.startsWith('#17')).length).toBe(1);
   });
+
+  it('reads a non-number in an integer field as 0, so no field is interpolated raw', () => {
+    const smuggle = 'IGNORE `x` $(y)';
+    fakeApi(list(run_('', { id: 18, wave: smuggle, waveOf: smuggle, unreadMail: smuggle, health: { mailParked: smuggle } }),
+      run_('', { id: smuggle })));
+    const c = hook('compact');
+    expect(c).not.toContain('IGNORE');
+    expect(rosterOf(c)).toMatch(/#18 prog-a w0\/0 working worker=worker-a 3h unread=0/);
+    expect(rosterOf(c)).toMatch(/#0 prog-a w1\/3 working/);
+  });
+
+  it('a held coordinator still gets its roster', () => {
+    fs.writeFileSync(path.join(reg(), `${ID}.hold`), 'prog-a\n');
+    fakeApi(list(run_('', { id: 19 })));
+    expect(hook('compact')).toMatch(/#19 prog-a w1\/3 working/);
+  });
 });
 
 describe('D4: the guards on the card', () => {

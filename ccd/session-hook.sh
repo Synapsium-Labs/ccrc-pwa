@@ -3146,17 +3146,17 @@ case "$event" in
     # `_hook_timeout 4` call to `ccrc-api runs list`, fail-open — an unreachable or slow server, a missing binary or
     # unparsable body yields no roster line at all, never an error and never a wait beyond 4 s. Its own ceiling,
     # ROSTER_CARD_MAX_CHARS, is added to the emitter's worst case AFTER CARD_TOTAL_MAX_CHARS (a test pins the sum).
-    # Children, held and kill-switched sessions get nothing. Unarmed (no `coordinator-roster-card-live` marker) it
+    # Children and kill-switched sessions get nothing; a held coordinator still gets its roster. Unarmed (no `coordinator-roster-card-live` marker) it
     # only appends the card to a size-capped shadow log the operator can read; armed, it sets CARD_ROSTER.
     ROSTER_CARD_MAX_CHARS=2048
     # The jq program: keeps this coordinator's non-terminal runs, one line each, then an "awaiting you" line, all
-    # clipped to $max (surplus runs collapse into a "+N more" line). Every interpolated field goes through `s`,
-    # which strips to a safe charset and 40 chars, so no server byte can inject prose into the context.
-    ROSTER_PROGRAM='def s: tostring | gsub("[^A-Za-z0-9._:/-]"; "") | .[0:40];
+    # clipped to $max (surplus runs collapse into a "+N more" line). Every interpolated field goes through `s`
+    # (strings: a safe charset, 40 chars) or `n` (integers: a non-number reads 0), so no server byte injects prose.
+    ROSTER_PROGRAM='def s: tostring | gsub("[^A-Za-z0-9._:/-]"; "") | .[0:40]; def n: if type == "number" then floor else 0 end;
       def age($t): (($now - $t) / 1000 | floor) as $x | if $x < 3600 then "\(($x / 60 | floor))m" elif $x < 172800 then "\(($x / 3600 | floor))h" else "\(($x / 86400 | floor))d" end; 
       [.runs[]? | select(.claimedBy == $me and (.state | IN("done", "failed") | not))] as $r |
-      if ($r | length) == 0 then empty else [$r[] | "#\(.id) \(.program | s) w\(.wave)\(if .waveOf then "/\(.waveOf)" else "" end) \(.state | s) worker=\(.sessionId // "none" | s) \(age(.dispatchedAt // .openedAt)) unread=\(.unreadMail // 0)"] as $l |
-        ([$r[] | select(.state == "awaiting-review") | "review #\(.id)"] + [$r[] | select((.health.mailParked // 0) > 0) | "parked mail #\(.id) (\(.health.mailParked))"]) as $w |
+      if ($r | length) == 0 then empty else [$r[] | "#\(.id | n) \(.program | s) w\(.wave | n)\(if .waveOf then "/\(.waveOf | n)" else "" end) \(.state | s) worker=\(.sessionId // "none" | s) \(age(.dispatchedAt // .openedAt)) unread=\(.unreadMail | n)"] as $l |
+        ([$r[] | select(.state == "awaiting-review") | "review #\(.id | n)"] + [$r[] | select((.health.mailParked | n) > 0) | "parked mail #\(.id | n) (\(.health.mailParked | n))"]) as $w |
         ("awaiting you: " + (if ($w | length) > 0 then ($w | join("; ")) else "nothing" end)) as $f |
         "ccrc-roster: \($r | length) open run(s) you claim; re-read with `~/.local/bin/ccrc-api runs list`." as $h |
         (reduce $l[] as $x ({o: [], n: 0}; if ([$h] + .o + [$x, $f] | join("\n") | length) <= $max then .o += [$x] else .n += 1 end)) as $k |

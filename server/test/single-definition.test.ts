@@ -7981,6 +7981,14 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(writersOf(name)).toEqual([]);
   });
 
+  // D4 (#757): the roster card's arming marker is hand-only too. Nothing in the tree writes it; the operator arms the
+  // card by hand after reading the shadow log.
+  it('coordinator-roster-card-live: hand-only, no writer in the tree', () => {
+    expect(SWITCHES['coordinator-roster-card-live'].writer).toBe('hand-only');
+    expect(constsOf('coordinator-roster-card-live'), 'CONTROL: the switchboard defines it').toHaveLength(1);
+    expect(writersOf('coordinator-roster-card-live')).toEqual([]);
+  });
+
   // D-5855 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1a; ARCH-70 (#805)).
   // The switchboard's exit: `mail-disabled` is defined once (2 -> 1 on C1a's tip; the count may only shrink), and so
   // is every other marker row; and every marker literal a `const *_MARKER` defines under `server/src` or `shared/` is

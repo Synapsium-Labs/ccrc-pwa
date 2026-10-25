@@ -21265,8 +21265,8 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
 }
 
 _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a session whose own context has
-  # grown past ITS threshold (the record's `compact` field, else COMPACT_THRESHOLD) so it stays lean. Non-destructive: the SessionStart(compact) hook
-  # restores git/plan/handoff context (Anthropic + gpt lanes). Kill-switch: AUTOCOMPACT_DISABLE_FILE.
+  # grown past ITS threshold (the record's `compact` field, else COMPACT_THRESHOLD) so it stays lean. The SessionStart(compact) hook restores git/plan/handoff
+  # context and, armed, a coordinator's runs, yet a compaction is NOT lossless on either lane (D4, #757). Kill-switch: AUTOCOMPACT_DISABLE_FILE.
   #
   # D-2013 — WHICH REFUSALS ARE NOTED, AND WHICH ARE NOT. Two of the three gates above the pane
   # read (kill-switch, lastcompact cooldown) say nothing, and so does the below-threshold return:
