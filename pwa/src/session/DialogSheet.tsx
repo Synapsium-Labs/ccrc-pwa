@@ -391,6 +391,14 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   //    reads carry no per-ask id, and the pane dialog's id (`sha1(options + title)`) changes on EVERY screen, so the
   //    generation alone is the ask.
   //  - A plain menu or the terminal door adds its pane dialog's id: each such screen is its own ask, as it always was.
+  // R102, R105, R106 (AT THE DESK; the phone's Sheet is unchanged): the identity above ends an engagement when the ASK changes.
+  // Two more acts end or lift it, both owned by `useAskEngagement`. A send this client initiates calls `engagement.release()`
+  // in `claim()`, in the same event: the engagement ends, the next screen takes no automatic focus, and a fence stops the keys
+  // inside the card (a row node the next screen reuses can keep focus with no event). Only a pointer press in the card, or
+  // Go to question (`raise`), lifts the fence, and only if input was eligible at the act: the press reads `eligibleNow` at the
+  // event, and the raise's eligibility is captured in render (`raiseMark`), so one made during a flight or in the gap is spent
+  // and nothing replays it after the reply. Tab moves focus and never unlocks. RESIDUALS, unchanged and unwaived: an identical
+  // replacement driven externally, a request already issued (landing on an identical replacement), and acting on what is shown.
   // KNOWN GAP, kept plain: two DIFFERENT aged asks back to back with no clear between them cannot be told from two screens
   // of one aged ask, so they share an identity and the engagement continues into the second. The transcript's events do hold
   // the AskUserQuestion call's `toolId`, which would tell them apart; this controller deliberately does not read it (the

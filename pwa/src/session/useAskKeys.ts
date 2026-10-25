@@ -25,7 +25,8 @@
 //   good: the ask that comes back later with equal content starts unengaged), and on a deliberate move out of the
 //   card (a pointerdown or a focusin outside it: the composer, the transcript, the fleet column, the body). With it
 //   not engaged (an ask arriving beside the composer, a successor ask, a skin switch) focus moves not at all, and
-//   enters the card only through `raise` (`AskSurface`), a Tab or a click. A reconnect does not disengage by itself:
+//   enters the card only through `raise` (`AskSurface`) or a click (R105: a Tab moves focus and never re-enters). A reconnect
+//   does not disengage by itself:
 //   the held gap keeps the same `askIdentity`, and the new connection's first frames keep it too, except when the
 //   store holds an envelope that the new connection's first `ask_cleared` clears: the server then stated no envelope
 //   at that moment (the ask ended during the drop, or the server flapped: a failed hook-state read, or an
@@ -43,6 +44,30 @@
 //   the second (the transcript's events hold the AskUserQuestion call's `toolId`, which this controller deliberately
 //   does not read: the transcript lags and rotates, and it would add a coupling and a parser); it only ever takes
 //   focus that the engaged control's replacement dropped to the body, never focus that is outside the card.
+// - R102, R105, R106 (D-6326; the operator's ruling after review 944) AT THE DESK, a send THIS client initiates ends the
+//   engagement for good, and the card is then dead to the keyboard until the operator re-enters on purpose:
+//     RELEASE. `DialogSheet`'s `claim()`, the one gate every send passes (an option, own words, a multiSelect commit, a tab
+//     move, Deny), calls `release()` in the same event, before any await: `held` goes null and the FENCE goes up. A refused
+//     claim (the gap, a closing surface, a send already in flight) and a multiSelect toggle release nothing. The next screen,
+//     the review, the question after a sent ←, takes NO automatic focus; the 16 ms timer below finds `engaged()` false.
+//     THE FENCE. Rows are keyed by position for an aged copy, so the next question can REUSE the row node that holds focus and
+//     re-enable it: focus stays on it with no `focusin`, so the release alone would leave that row's keys live. While the
+//     fence stands, capture listeners on the document (keydown, keyup, keypress) stop every key whose target is inside the
+//     inline card, before `useAskKeys`' bubble listener, React or the browser's native activation sees it. Keydown passes for
+//     Tab and Shift+Tab (focus moves, nothing unlocks) and for a Ctrl/Meta/Alt chord other than Enter and Space (the command
+//     layer's Ctrl+K); keyup and keypress are stopped for Enter and Space only, which cancels an activation armed before the
+//     release (Space is activated at its keyup). Keys outside the card are never touched, and the Sheet carries no
+//     `data-ask-surface`, so the phone is never fenced.
+//     RE-ENTRY. Only a pointer press inside the card, or Go to question (`DialogSheet`'s raise), lowers the fence, and each
+//     counts only if input was ELIGIBLE at the act (no send in flight, the connection live, the surface not closing): the
+//     press reads a getter at the event, the raise's eligibility is captured when the raise is made. So a press or a Go to
+//     question during the flight pre-authorizes nothing, and a NEW one is needed after the reply. Tab and a `focusin` (script
+//     focus, the own-words field) clear nothing: no code in the ask assigns focus after the release (a census test pins the
+//     list of focus movers), and the own-words field takes focus only on a deliberate open (`OwnWords`).
+//     RESIDUALS, unchanged and not waived: an externally driven, byte-identical replacement with no observed clear (the
+//     known gap above) still continues an engagement made by non-answer keys; a request already issued can still land on a
+//     byte-identical replacement (the desktop route compares content-derived ids); and a deliberate re-entry acts on
+//     whatever the card then shows.
 // - A held-down digit or arrow across tabs is no key at all (`askKeyAction` reads `repeat`), and a send the sheet
 //   already has in flight refuses another at the ONE gate every send passes, its `claim` (a box's toggle reads the
 //   same `sending`), so this hook keeps no second gate of its own.
