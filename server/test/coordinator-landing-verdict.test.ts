@@ -1116,6 +1116,56 @@ const LOSS: Case[] = [
   ['read 3b answers with one sparse enabled=true projection: still readable (control)', b3b(undefined), 'ROUTE U method=squash admin=never strict=unknown'],
 ];
 
+// ---- Fix round 4: read 1, read 3 and read 6 judge the value GitHub sent, not the text a shell makes of it ----
+// A command substitution drops the trailing newlines of what it captures, and `jq -r` prints a missing, null, numeric or
+// boolean field as the text `null`, `123` or `true`. So a base, a state, a head, a 404 message or a bypass answer that was
+// never the value the contract names could pass for it, and a direct route (even a licensed `--admin` one) was chosen over a
+// source that was unusable; and read 3's exit status was thrown away, so HTTP 200 text from a gh that failed was believed.
+// Each is now judged on the JSON as gh sent it, and the exit status as gh gave it. The reproduction is the bare repository
+// with an approval missing and REVIEW_REQUIRED, which a coerced or normalised value turns into `admin=licensed`.
+const LICENSED_U = 'ROUTE U method=squash admin=licensed strict=no';
+const NO_BASE = 'STOP unreadable: read 1 gave no usable base';
+const UNREAD1 = 'STOP unreadable: read 1';
+const OTHER_HEAD = 'f'.repeat(40);
+/** Read 1 as gh sent it: the reproduction's four fields with `patch` over them (a value of `undefined` leaves the field out of
+ *  the JSON altogether). */
+const read1 = (patch: Record<string, unknown>): (() => Fixture) =>
+  with_(bareApproval(), { pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'REVIEW_REQUIRED', ...patch }) });
+
+const BAD_BASES: [string, unknown][] = [
+  ['absent', undefined], ['null', null], ['the number 123', 123], ['the boolean true', true], ['the boolean false', false],
+  ['main with a trailing newline', 'main\n'], ['main with two trailing newlines', 'main\n\n'], ['main with a leading newline', '\nmain'],
+  ['a name with a newline inside it', 'ma\nin'], ['an empty string', ''], ['an array holding main', ['main']], ['an empty object', {}],
+];
+const BAD_STATES: [string, unknown][] = [
+  ['OPEN with a trailing newline', 'OPEN\n'], ['MERGED with a trailing newline', 'MERGED\n'], ['CLOSED with a trailing newline', 'CLOSED\n'],
+  ['OPEN with two trailing newlines', 'OPEN\n\n'], ['MERGED with two trailing newlines', 'MERGED\n\n'], ['OPEN with a leading newline', '\nOPEN'],
+  ['the number 1', 1], ['an array holding OPEN', ['OPEN']],
+];
+const BAD_HEADS: [string, unknown][] = [
+  ['absent', undefined], ['null', null], ['the number 123', 123], ['the boolean true', true], ['the boolean false', false],
+  ['an empty string', ''], ['handoffCommit with a trailing newline', `${HC}\n`], ['handoffCommit with two trailing newlines', `${HC}\n\n`],
+  ['handoffCommit with a leading newline', `\n${HC}`], ['a hash with a newline inside it', `${HC.slice(0, 20)}\n${HC.slice(20)}`],
+  ['an array holding handoffCommit', [HC]], ['an empty object', {}],
+];
+const READ1: Case[] = [
+  ['control: read 1 as the reproduction has it routes direct and licensed', read1({}), LICENSED_U],
+  ...BAD_BASES.map(([what, v]): Case => [`unreadable: read 1: the base is ${what}`, read1({ baseRefName: v }), NO_BASE]),
+  ...BAD_STATES.map(([what, v]): Case => [`unreadable: read 1: the state is ${what}`, read1({ state: v }), UNREAD1]),
+  ['control: the state MERGED on the exact head goes to the merge proof', read1({ state: 'MERGED' }), `MERGED head=${HC}`],
+  ['control: the state CLOSED stops as the PR being closed', read1({ state: 'CLOSED' }), 'STOP not-at-head: the PR is CLOSED'],
+  ['control: the state MERGED on another valid head is still handed to the merge proof, which fails it',
+    read1({ state: 'MERGED', headRefOid: OTHER_HEAD }), `MERGED head=${OTHER_HEAD}`],
+  ['control: the state OPEN on another valid head is not at the reviewed head', read1({ headRefOid: OTHER_HEAD }),
+    `STOP not-at-head: the PR head is ${OTHER_HEAD}`],
+  ...(['OPEN', 'MERGED', 'CLOSED'] as const).flatMap((state): Case[] => BAD_HEADS.map(([what, v]): Case =>
+    [`unreadable: read 1: the head is ${what}, with the state ${state}`, read1({ state, headRefOid: v }), UNREAD1])),
+  // Judged in this order: the base, then the state, then the head, each before the merge proof, the closed stop and the head binding.
+  ['order: a bad base is judged before a bad state', read1({ baseRefName: null, state: 'WEIRD' }), NO_BASE],
+  ['order: a bad base is judged before a bad head', read1({ baseRefName: null, headRefOid: `${HC}\n` }), NO_BASE],
+  ['order: a bad state is judged before the merge proof, whatever the head', read1({ state: 'MERGED\n', headRefOid: OTHER_HEAD }), UNREAD1],
+];
+
 /** Every argv the block may send: its reads (read 1 with its reviews, and the compare under read 3b), as GETs. */
 const READ = /^(pr view 42 --json baseRefName,headRefOid,state,reviewDecision|api (--paginate |-i )?repos\/\{owner\}\/\{repo\}(\/[^\s]*)?)$/;
 /** The same reads as the block's TEXT spells them, from the word `gh` to the end of its quoted path, followed only by
@@ -1384,7 +1434,7 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
   });
 
   it.each([...ROUTES, ...CHECKS, ...STOPS, LICENSED_NEVER, ...REQUESTS, ...IGNORES, ...LICENCE, ...MALFORMED,
-  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES, ...ORDER, ...LOSS])('%s', (_name, fx, line, env) => {
+  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES, ...ORDER, ...LOSS, ...READ1])('%s', (_name, fx, line, env) => {
     expect(blocks).toHaveLength(1);
     const r = verdict(fx(), env);
     expect(r.out, `stderr: ${r.stderr}`).toBe(`${line}\n`);
@@ -1402,6 +1452,23 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
     expect(r.calls).toContain('api --paginate repos/{owner}/{repo}/rules/branches/release/2');
     expect(r.calls).toContain('api -i repos/{owner}/{repo}/branches/release/2/protection');
     expect(r.calls.filter((c) => c.includes('branches/main'))).toEqual([]);
+  });
+
+  it.each(['null', '123'])('a base that is the STRING "%s" is a legitimate branch name: it routes as main does, and the reads ask about it', (name) => {
+    const control = verdict(read1({})());
+    expect(control.out).toBe(`${LICENSED_U}\n`);
+    const r = verdict(read1({ baseRefName: name })());
+    expect(r.out, `stderr: ${r.stderr}`).toBe(control.out);
+    expect(r.stderr).toBe('');
+    expect(r.calls).toContain(`api --paginate repos/{owner}/{repo}/rules/branches/${name}`);
+    expect(r.calls).toContain(`api -i repos/{owner}/{repo}/branches/${name}/protection`);
+    expect(r.calls.filter((c) => c.includes('branches/main'))).toEqual([]);
+  });
+
+  it('a read 1 whose base, state or head is unusable reads nothing else', () => {
+    for (const patch of [{ baseRefName: null }, { state: 'OPEN\n' }, { headRefOid: `${HC}\n` }]) {
+      expect(verdict(read1(patch)()).calls).toEqual(['pr view 42 --json baseRefName,headRefOid,state,reviewDecision']);
+    }
   });
 
   it('reads the head\'s checks only once read 1 has shown the head is handoffCommit', () => {
