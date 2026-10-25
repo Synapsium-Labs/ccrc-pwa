@@ -1237,6 +1237,58 @@ describe('a crossing between the phone and the desk carries no fence (R102)', ()
   });
 });
 
+// R102, R106 (review A1): the raise's eligibility is read in render, and `locked` (render state) can already read false while
+// the send is still marked `sending` (the ref `claim` sets and the next render's layout effect clears). A send whose own
+// continuation clears its busy flag (here Deny: `setDenying(false)` in its `finally`, touching no store) and a raise can render
+// in ONE batch when both are default-lane updates, and the raise then reads `locked` false with the send still marked sending.
+// A CONSTRUCTED ordering, labelled as such: the production raise is a click, a discrete (sync-lane) event that renders before a
+// default-lane continuation can join it (an `act` that clicks and resolves the reply was tried: the click renders alone, with
+// the flag still set). Here a real `createRoot` renders the raise as a default-lane root update right after the continuation
+// has queued `setDenying(false)`, so the two render together. The case pins the conservative direction: a raise that shares
+// its render with a send's completion unlocks nothing, observed as the fence still stopping a key. Public React and DOM APIs only; the flag is restored in a `finally`.
+describe('a raise rendered in one batch with a Deny\'s completion unlocks nothing (R106 A1)', () => {
+  it('the fence the Deny raised still stops a key in the card afterwards', async () => {
+    media(true);
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const before = env.IS_REACT_ACT_ENVIRONMENT;
+    const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+    let reply: () => void = () => {};
+    const interrupt = vi.spyOn(api, 'interrupt').mockReturnValueOnce(new Promise<void>((r) => { reply = r; }));
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const store = createSessionStore(ID, { makeSocket: fakeSocket });
+    for (const f of askFixture(7).frames) store.getState().apply(f);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    // An approval has no keyed rows, so the fence is observed directly: a keydown inside the card that nothing else handles
+    // comes back prevented while the fence stands (the dispatch returns false), and unprevented once it is lifted.
+    const free = (k: string): boolean =>
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+    const show = (raise: number): void => root.render(<DialogSheet id={ID} store={store} raise={raise} />);
+    try {
+      env.IS_REACT_ACT_ENVIRONMENT = false;
+      show(0);
+      await sleep(150);
+      within(host).getByRole('button', { name: /^Deny/ }).click(); // Deny: held pending
+      await sleep(100);
+      expect(interrupt, 'premise: the Deny was sent and is pending').toHaveBeenCalledTimes(1);
+      // The reply: the `finally`'s `setDenying(false)` runs in these microtasks and queues a default-lane update; the raise
+      // is then rendered as a root update of the same lane, before the scheduler renders either.
+      reply();
+      for (let i = 0; i < 12; i++) await Promise.resolve();
+      show(1);
+      await sleep(400);
+      expect(host.contains(document.activeElement) && document.activeElement !== host, 'premise: the raise focused inside the card').toBe(true);
+      expect(free('x'), 'the keydown is stopped: the raise unlocked nothing').toBe(false);
+      expect(answer).not.toHaveBeenCalled();
+    } finally {
+      env.IS_REACT_ACT_ENVIRONMENT = before;
+      root.unmount();
+      host.remove();
+    }
+  });
+});
+
 // R102: a LATER send's release wins over an EARLIER raise. A CONSTRUCTED ordering that the production click path is not known
 // to reach: Go to question is a click, a discrete event, and a discrete render's passive effects flush at the end of its commit,
 // so no send can be claimed between that raise's render and its effect. Here the raise is rendered outside `act` (a default-lane
