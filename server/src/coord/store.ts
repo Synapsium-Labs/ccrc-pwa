@@ -1,8 +1,5 @@
 import { createHash } from 'node:crypto';
-import {
-  CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, readChecksRowDetail, readMergingAtDetail,
-  type ChecksMode, type ChecksRowRead,
-} from '../../../shared/landing.js';
+import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
@@ -838,9 +835,7 @@ export type StallObservation =
 /** The state predicate of the observation writer: a closed union of exactly two members. `active` is the stall lane's
  *  (a run not idle and not terminal); `episode` is the checks lane's (a run waiting at `merging` whose current episode
  *  is `episode`, PR landing in ccrc stage 1). */
-export type ObservationPredicate =
-  | { readonly kind: 'active' }
-  | { readonly kind: 'episode'; readonly episode: number };
+export type ObservationPredicate = { readonly kind: 'active' } | { readonly kind: 'episode'; readonly episode: number };
 
 export type CoordPlacementStampsResult =
   | { ok: true; stamps: CoordPlacementStamp[] }

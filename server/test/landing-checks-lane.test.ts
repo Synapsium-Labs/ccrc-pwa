@@ -55,14 +55,14 @@ function setup(first: Record<string, unknown> = {}) {
   const records: SessionRecord[] = [];
   const runner: Runner = async (cmd, args) => {
     if (cmd !== 'tmux' && args[0] !== undefined) verbs.push(args[0]);
-    if (args[0] !== 'pr-landing') return { code: 0, stdout: '', stderr: '' };
+    if (args[0] !== 'pr-landing') return { ran: true, code: 0, stdout: '', stderr: '' };
     calls.push(args);
     if (ctl.hang) return new Promise(() => { /* never settles */ });
     const project = args[args.indexOf('--project') + 1]!;
     if (ctl.throwFor === project) throw new Error('boom');
-    if (ctl.fail) return { code: 1, stdout: '', stderr: 'x' };
+    if (ctl.fail) return { ran: true, code: 1, stdout: '', stderr: 'x' };
     const ids = args[args.indexOf('--sessions') + 1]!.split(',').map((p) => p.split(':')[0]!);
-    return { code: 0, stdout: ids.map((id) => JSON.stringify(answers.get(id) ?? line(id, 'pending'))).join('\n') + '\n', stderr: '' };
+    return { ran: true, code: 0, stdout: ids.map((id) => JSON.stringify(answers.get(id) ?? line(id, 'pending'))).join('\n') + '\n', stderr: '' };
   };
   const deps = { ...testDeps(home, runner), coord, fleetState: { ccdVerbs: ['pr-landing-v1'] } as never };
   let w = new FleetWatcher(deps, new Bus(), 10_000);
@@ -712,7 +712,9 @@ describe('the checks lane: read-only and isolated', () => {
 
   it('one project\'s thrown read does not cost the next project', async () => {
     const h = setup();
-    // A session id the argv builder refuses throws before any call is made: that project's pass fails, the next one runs.
+    // A session id the argv builder refuses throws before any call is made. The per-chunk try around the read is the only
+    // guard (the sweep has no per-project try): it folds alpha's member as unmeasured, and beta still runs. Rethrow from
+    // that catch and the throw ends the whole pass, so beta's green never mails.
     h.episode('live', { sid: 'demo/ws-a', project: 'alpha' });
     const b = h.episode('live', { sid: 'demo-ws-b', project: 'beta' });
     h.answers.set(b.sid, line(b.sid, 'green'));

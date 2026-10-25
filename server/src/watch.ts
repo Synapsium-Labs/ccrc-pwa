@@ -8596,56 +8596,55 @@ export class FleetWatcher {
         console.warn(`ccrc-server: landing checks run ${run.id} failed (${err instanceof Error ? err.message : String(err)})`);
       }
     }
+    // No per-project try: every call that can throw (the argv builder, the ccd call, a member's fold) sits in its own
+    // try below, so one project's failure folds that project's members and the next project still runs.
     for (const [project, members] of byProject) {
-      try {
-        // No read: the bound alone, for a live episode only.
-        if (unlistable || disabled || !capable) {
-          for (const m of members) {
-            if (!m.live) continue;
-            this.checksStuckOnly(coord, m, disabled ? 'disabled' : 'unmeasured', nowMs, mailHeld);
-          }
-          continue;
-        }
-        const workspaces = new Set(records.filter((r) => r.workspace !== null && r.project === project).map((r) => r.id));
-        const readable: Owed[] = [];
-        const seenIds = new Set<string>();
+      // No read: the bound alone, for a live episode only.
+      if (unlistable || disabled || !capable) {
         for (const m of members) {
-          if (workspaces.has(m.run.sessionId) && !seenIds.has(m.run.sessionId)) { seenIds.add(m.run.sessionId); readable.push(m); }
-          else this.checksStuckOnly(coord, m, 'unmeasured', nowMs, mailHeld);
+          if (!m.live) continue;
+          this.checksStuckOnly(coord, m, disabled ? 'disabled' : 'unmeasured', nowMs, mailHeld);
         }
-        if (readable.length === 0) continue;
-        if (nowMs < (this.checksNextRead.get(project) ?? 0)) continue;
-        const lines = new Map<string, PrLandingLine>();
-        for (let i = 0; i < readable.length; i += CHECKS_CALL_MAX) {
-          const chunk = readable.slice(i, i + CHECKS_CALL_MAX);
-          try {
-            const res = await this.deps.runCcd(CCD_ARGV.prLanding(project, chunk.map((m) => ({ id: m.run.sessionId, pr: m.ep.pr }))));
-            if (!res.ok) continue;
-            for (const raw of res.stdout.split('\n')) {
-              const text = raw.trim();
-              if (text === '') continue;
-              try {
-                const line = readPrLandingLine(JSON.parse(text));
-                if (line !== null) lines.set(line.id, line);
-              } catch { /* a truncated line is skipped, never thrown */ }
-            }
-          } catch (err) {
-            console.warn(`ccrc-server: landing checks read of ${project} failed (${err instanceof Error ? err.message : String(err)})`);
-          }
-        }
-        let fast = false;
-        for (const m of readable) {
-          try {
-            if (this.checksOne(coord, m, lines.get(m.run.sessionId) ?? null, nowMs, mailHeld)) fast = true;
-          } catch (err) {
-            console.warn(`ccrc-server: landing checks run ${m.run.id} failed (${err instanceof Error ? err.message : String(err)})`);
-            fast = true;
-          }
-        }
-        this.checksNextRead.set(project, nowMs + (fast ? CHECKS_FAST_MS : CHECKS_SLOW_MS));
-      } catch (err) {
-        console.warn(`ccrc-server: landing checks project ${project} failed (${err instanceof Error ? err.message : String(err)})`);
+        continue;
       }
+      const workspaces = new Set(records.filter((r) => r.workspace !== null && r.project === project).map((r) => r.id));
+      const readable: Owed[] = [];
+      const seenIds = new Set<string>();
+      for (const m of members) {
+        if (workspaces.has(m.run.sessionId) && !seenIds.has(m.run.sessionId)) { seenIds.add(m.run.sessionId); readable.push(m); }
+        else this.checksStuckOnly(coord, m, 'unmeasured', nowMs, mailHeld);
+      }
+      if (readable.length === 0) continue;
+      if (nowMs < (this.checksNextRead.get(project) ?? 0)) continue;
+      const lines = new Map<string, PrLandingLine>();
+      for (let i = 0; i < readable.length; i += CHECKS_CALL_MAX) {
+        const chunk = readable.slice(i, i + CHECKS_CALL_MAX);
+        try {
+          const res = await this.deps.runCcd(CCD_ARGV.prLanding(project, chunk.map((m) => ({ id: m.run.sessionId, pr: m.ep.pr }))));
+          // A ccd that never ran (or may not have) is no reading: the chunk's members fold unmeasured, never a verdict.
+          if (res.ran === false || !res.ok) continue;
+          for (const raw of res.stdout.split('\n')) {
+            const text = raw.trim();
+            if (text === '') continue;
+            try {
+              const line = readPrLandingLine(JSON.parse(text));
+              if (line !== null) lines.set(line.id, line);
+            } catch { /* a truncated line is skipped, never thrown */ }
+          }
+        } catch (err) {
+          console.warn(`ccrc-server: landing checks read of ${project} failed (${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
+      let fast = false;
+      for (const m of readable) {
+        try {
+          if (this.checksOne(coord, m, lines.get(m.run.sessionId) ?? null, nowMs, mailHeld)) fast = true;
+        } catch (err) {
+          console.warn(`ccrc-server: landing checks run ${m.run.id} failed (${err instanceof Error ? err.message : String(err)})`);
+          fast = true;
+        }
+      }
+      this.checksNextRead.set(project, nowMs + (fast ? CHECKS_FAST_MS : CHECKS_SLOW_MS));
     }
     this.pruneChecks(present);
   }
