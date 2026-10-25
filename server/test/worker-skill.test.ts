@@ -345,9 +345,9 @@ describe('the worker skill: the facts it states about the wire', () => {
   });
 
   /**
-   * The OTHER ceiling, harvested from `watch.ts`'s source text rather than
-   * imported: `MAIL_REPLAY_MAX_ATTEMPTS` is module-private there, and
-   * re-exporting it so a test could read it conveniently is the hole
+   * The OTHER ceiling, harvested from `coord/delivery.ts`'s source text rather
+   * than imported (ARCH-19 moved it there from `watch.ts`): importing it only so
+   * a test could read it conveniently is the hole
    * `PR_PHASES`' own docstring warns about at length. Harvest-and-compare is
    * this repo's established idiom for exactly that shape (`wsaudit.test.ts`,
    * and the coordinator suite's route/refusal scans). A rename or a deletion
@@ -355,9 +355,9 @@ describe('the worker skill: the facts it states about the wire', () => {
    */
   const REPLAY_CONST = 'MAIL_REPLAY_MAX_ATTEMPTS';
   const replayCeiling = ((): number => {
-    const src = readFileSync(path.join(root, 'server/src/watch.ts'), 'utf8');
-    const m = new RegExp(`^const ${REPLAY_CONST} = (\\d+);$`, 'm').exec(src);
-    if (!m) throw new Error(`watch.ts declares no ${REPLAY_CONST} — this harvest is ` +
+    const src = readFileSync(path.join(root, 'server/src/coord/delivery.ts'), 'utf8');
+    const m = new RegExp(`^export const ${REPLAY_CONST} = (\\d+);$`, 'm').exec(src);
+    if (!m) throw new Error(`coord/delivery.ts declares no ${REPLAY_CONST} — this harvest is ` +
       'looking at the wrong file, or the constant was renamed and the skill now cites a ghost');
     return Number(m[1]);
   })();
@@ -369,9 +369,9 @@ describe('the worker skill: the facts it states about the wire', () => {
     // The two lanes are deliberately separate in the delivery code, and
     // `MAIL_MAX_ATTEMPTS`'s own docstring is emphatic about it: that budget
     // "applies ONLY while a delivery's own `deliveredAt` is still null"
-    // (`watch.ts:170-186`), the park is gated on `d.deliveredAt === null`
-    // (`:2042`), and a delivered row that is merely never acked parks on
-    // `MAIL_REPLAY_MAX_ATTEMPTS` instead (`:207`, park at `:1981-1983`).
+    // (`coord/delivery.ts`), the park is gated on `d.deliveredAt === null`
+    // (`decideSendFailure`), and a delivered row that is merely never acked
+    // parks on `MAIL_REPLAY_MAX_ATTEMPTS` instead (`decideReplayCeiling`).
     //
     // D-105: clause 3's plan-locked content named the 6 for both, which
     // under-states a worker's real ack window by more than 3x AND calls a mail

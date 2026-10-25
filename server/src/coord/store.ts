@@ -70,6 +70,7 @@ import {
 } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
+import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
 import {
   DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
@@ -1267,13 +1268,10 @@ const placeholders = (n: number): string => new Array(n).fill('?').join(',');
  *  positionally through `placeholders`, never interpolated. */
 const LIFECYCLE_WINDOW_ACTS = ['swap', 'hold', 'release'] as const;
 
-/** The replay-ceiling park's own `lastError`, written by exactly one call
- *  site (`watch.ts`'s `sweepMail`, `store.rejectDelivery(d.id, 'undeliverable',
- *  MAIL_REPLAY_CEILING_ERROR)`) and read back by exactly one other
- *  (`markAcked` below, deviation D-67-b / orchestrator ruling I2): a shared
- *  constant rather than the same string literal typed twice, so the two can
- *  never drift apart and silently stop recognising each other's writes. */
-export const MAIL_REPLAY_CEILING_ERROR = 'replayed without ack past the replay ceiling';
+/** The replay-ceiling park's own `lastError`: defined in `coord/delivery.ts`, beside `decideReplayCeiling`, its one
+ *  writer (ARCH-19), and read back by exactly one other (`markAcked` below, deviation D-67-b / orchestrator ruling I2).
+ *  Re-exported for the readers that import it from this module. */
+export { MAIL_REPLAY_CEILING_ERROR };
 
 /** `cancelOutstandingDeliveries`'s own park sentence, promoted to a constant on
  *  `MAIL_REPLAY_CEILING_ERROR`'s exact argument (D-1143). It was already typed
@@ -1377,7 +1375,7 @@ const ABANDONED_PARK_SQL =
  * The READ-side "still needs a human's attention" predicate (fix, review
  * finding 2) — `OUTSTANDING_STATES_SQL` above, unioned with a `rejected`
  * delivery THIS BUILD gave up retrying before anyone ever acted on it: the
- * replay-ceiling park (`watch.ts`'s `MAIL_REPLAY_MAX_ATTEMPTS`), a delivery
+ * replay-ceiling park (`coord/delivery.ts`'s `MAIL_REPLAY_MAX_ATTEMPTS`), a delivery
  * that never sent at all past `MAIL_MAX_ATTEMPTS`, or a recipient the
  * registry no longer lists. `renderEnvelope`'s own ack line promises
  * replay "until you ack" — true only up to that ceiling, never past it —
