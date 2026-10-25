@@ -186,6 +186,16 @@ describe('Stop — two sentences, because 409 is not a failure', () => {
     expect(said.closest('[role="status"]')).not.toBeNull();
   });
 
+  it('a 409 background-only with one task agrees in number', async () => {
+    vi.spyOn(apiModule.api, 'interrupt').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'background-only', count: 1, kinds: [] }));
+    renderScreen();
+    act(() => { stores.store.setState({ status: 'busy' }); });
+    fireEvent.click(await headerStop());
+    await screen.findByText(
+      'The main turn has finished; 1 background task is still running. Escape would not stop it.');
+  });
+
   it('a 409 background-only with no count says a background shell or monitor runs', async () => {
     vi.spyOn(apiModule.api, 'interrupt').mockRejectedValue(
       new ApiError(409, { ok: false, error: 'background-only', count: null, kinds: [] }));
