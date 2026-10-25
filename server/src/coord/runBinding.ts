@@ -129,7 +129,7 @@ export function childrenOf(
 }
 
 /** The store verbs that write the binding: bind or move a run's worker, clear it, and move the claimant. */
-export const BINDING_WRITER_VERBS: readonly string[] = ['setSession', 'clearSession', 'markDispatched', 'reclaimProgram'];
+export const BINDING_WRITER_VERBS: readonly string[] = ['openRun', 'bindSession', 'setSession', 'clearSession', 'markDispatched', 'reclaimProgram'];
 
 /** The only files that may call them: the store itself, the open route, `dispatchRun` and the reclaim door. */
 export const BINDING_WRITER_FILES: readonly string[] = [

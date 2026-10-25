@@ -205,12 +205,18 @@ describe('RunBinding has one writer', () => {
     const allowed = new Set(BINDING_WRITER_FILES);
     const offenders = bindingWriterCalls(files()).filter((h) => !allowed.has(h.file));
     expect(offenders).toEqual([]);
-    expect([...BINDING_WRITER_VERBS].sort()).toEqual(['clearSession', 'markDispatched', 'reclaimProgram', 'setSession']);
+    expect([...BINDING_WRITER_VERBS].sort()).toEqual(['bindSession', 'clearSession', 'markDispatched', 'openRun', 'reclaimProgram', 'setSession']);
   });
 
   it('a planted call from a fourth file is named', () => {
     const planted = [...files(), { file: 'server/src/planted.ts', text: 'coord.setSession(1, "x");' }];
     expect(bindingWriterCalls(planted).filter((h) => !new Set(BINDING_WRITER_FILES).has(h.file)))
       .toEqual([{ file: 'server/src/planted.ts', verb: 'setSession' }]);
+  });
+
+  it('a planted bindSession or openRun call from a fourth file is named', () => {
+    const planted = [...files(), { file: 'server/src/planted.ts', text: 'c.bindSession(1, "x");\nc.openRun({});' }];
+    expect(bindingWriterCalls(planted).filter((h) => !new Set(BINDING_WRITER_FILES).has(h.file)))
+      .toEqual([{ file: 'server/src/planted.ts', verb: 'openRun' }, { file: 'server/src/planted.ts', verb: 'bindSession' }]);
   });
 });
