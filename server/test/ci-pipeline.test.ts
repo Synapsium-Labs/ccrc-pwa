@@ -1372,9 +1372,20 @@ describe('Review 439 F26: the browser leg cannot be softened by continue-on-erro
 describe('ci.yml: the light pull-request rule for the agent, pwa and browser tests (ruling 2026-10-25)', () => {
   const GATE = "if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'";
 
-  it('a label starts a run, and the full-ci label forces the full suite', () => {
-    expect(read(CI)).toMatch(/^ {2}pull_request:\n {4}types: \[opened, synchronize, reopened, labeled\]$/m);
+  // A label starts NO run: a labeled run would cancel the run in progress (this PR's concurrency group) and its check
+  // runs would supersede the earlier ones, so ending it early, or skipping its required jobs, would report green over
+  // a red run. The full-ci label is read when the next push (or a reopen) starts a run.
+  it('a label starts no run (default activity types), and the full-ci label forces the full suite of the next run', () => {
+    expect(read(CI)).toMatch(/^ {2}pull_request:\n {2}# THE MERGE QUEUE/m);
+    expect(read(CI)).not.toMatch(/^ {4}types: .*labeled/m);
     expect(read(CI)).toContain("FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}");
+  });
+
+  it('a `changed` pwa run also runs, sharded, every test reach.mjs says reads the tree from disk', () => {
+    const t = step(job('pwa-shard'), 'Test');
+    expect(t).toContain('ALWAYS: ${{ steps.reach.outputs.always }}');
+    expect(t).toContain('./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }} --passWithNoTests $ALWAYS');
+    expect(t, 'no hand-kept glob of the always-run suites').not.toContain('-census.test.ts');
   });
 
   it('each of the three legs asks reach.mjs on a pull request only, and gates only its install and test steps on the answer', () => {
