@@ -558,7 +558,7 @@ describe('reclaimChild on the stale arm (D-6639)', () => {
   });
 });
 
-describe('sweepChildReclaim: the superseded review release (D-TBD-child-reclaim-review-superseded)', () => {
+describe('sweepChildReclaim: the superseded review release (D-6922)', () => {
   const SUPERSEDED_FEED = 'review report would be reclaimed (superseded)';
   /** Two closed reviews of one open work run, each with a child workspace: `demo-a` the earlier, `demo-b` the newest. */
   const twoReviews = (f: ReturnType<typeof lane>): void => {
@@ -591,6 +591,16 @@ describe('sweepChildReclaim: the superseded review release (D-TBD-child-reclaim-
     f.plant('demo-a', { child: String(f.closedReview(work)), hold: HAND });
     f.plant('demo-b', { child: String(f.closedReview(work)) });
     await f.passes(4);
+    expect(f.feedTitles()).not.toContain(SUPERSEDED_FEED);
+  });
+
+  it('shadowed: a superseded review child with a sibling run open is not recorded (armed, it would still be kept)', async () => {
+    const f = lane();
+    twoReviews(f);
+    const sibling = f.openRun();
+    f.coord.markDispatched(sibling.id, 'demo-a', 'demo-a', 'ws/demo-a', false);
+    await f.passes(4);
+    expect(f.requests).toEqual([]);
     expect(f.feedTitles()).not.toContain(SUPERSEDED_FEED);
   });
 

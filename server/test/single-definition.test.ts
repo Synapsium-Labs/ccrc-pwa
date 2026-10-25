@@ -5109,7 +5109,7 @@ describe('fleet disk retention DR-27: the stale arm’s live switch has no write
   });
 });
 
-// D-TBD-child-reclaim-review-superseded. The superseded-review release SHIPS SHADOWED behind
+// D-6922. The superseded-review release SHIPS SHADOWED behind
 // `$REG/child-superseded-reclaim-live`, hand-touched on the fleet box like the stale arm's: no shell line names it, its one
 // TS definer is the L0 switch table, and the one file that reads a listing the lane already took holds the constant.
 describe('child reclaim: the superseded-review release’s live switch has no writer in the tree', () => {

@@ -16,10 +16,10 @@ import { notify } from '../notice.js';
 import type { NotifyLog } from '../notifylog.js';
 import type { FleetState } from '../fleetstate.js';
 import type { SessionRecord } from '../registry.js';
-import { TERMINAL_RUN_STATES, isRegistryId, type RunState } from '../../../shared/api.js';
+import { isRegistryId, type RunState } from '../../../shared/api.js';
 import type { FleetIO } from '../io.js';
 import {
-  CHILD_STALE_IDLE_MS, childReclaimDetailText, childReclaimStaleVerdict, childReclaimStaleWordOf,
+  CHILD_STALE_IDLE_MS, childReclaimDetailText, childReclaimStaleVerdict, childReclaimStaleWordOf, childReclaimSweepVerdict, isTerminalRunState,
   type ChildReclaimReviewedRunRead, type ChildReclaimSweepInput, type ChildReclaimSweepVerdict, type ChildStaleAsk, type ChildStaleIdleRead, type ChildStaleWord,
 } from '../childReclaimSweep.js';
 import { CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, readSwitches } from '../../../shared/switches.js';
@@ -27,14 +27,14 @@ import type { CoordStore } from './store.js';
 import { queueSystemMail } from './rundefsTx.js';
 import type { ChildReclaimDeps, ChildReclaimRequest } from './childReclaim.js';
 
-/** `review-report-superseded` (D-TBD-child-reclaim-review-superseded): what the sweep reads of the run a review child's
+/** `review-report-superseded` (D-6922): what the sweep reads of the run a review child's
  *  minting run reviewed. While that run is open, a LATER review of it that closed `done` supersedes this one; the marker
  *  only decides whether the sweep acts on that (`live`), the fact is always read so the shadow can say it. A read that
  *  throws reaches the pass's per-child catch, which keeps the child. */
 export function childReclaimReviewedRun(
   coord: Pick<CoordStore, 'laterReviewClosedFor'>, reviewRunId: number, reviewedId: number, state: RunState, names: readonly string[],
 ): ChildReclaimReviewedRunRead {
-  if ((TERMINAL_RUN_STATES as readonly RunState[]).includes(state)) return { kind: 'run', state };
+  if (isTerminalRunState(state)) return { kind: 'run', state };
   const by = coord.laterReviewClosedFor(reviewedId, reviewRunId);
   if (by === null) return { kind: 'run', state };
   return { kind: 'run', state, superseded: { by, live: readSwitches(names)[CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER] === 'set' } };
@@ -171,6 +171,11 @@ export class ChildStaleArm {
     const sup = r.kind === 'run' ? r.superseded : undefined;
     if (sup === undefined || sup.live || j.input.child.kind !== 'child' || j.verdict.eligible
         || childReclaimStaleWordOf(j.verdict) !== 'review') { this.supersededSaid.delete(id); return; }
+    // Only a release the arm would actually make is said: the counterfactual verdict, with the marker standing, must
+    // answer eligible (or hold-retired). A child kept for any other reason (a sibling run open, say) is not "would".
+    const armedRun = r.kind === 'run' ? { ...r, superseded: { ...sup, live: true } } : r;
+    const armed = childReclaimSweepVerdict({ ...j.input, reviewedRun: armedRun });
+    if (!armed.eligible && armed.why !== 'hold-retired') { this.supersededSaid.delete(id); return; }
     const runId = j.input.child.runId;
     const key = `${runId}:${sup.by}`;
     if (this.supersededSaid.get(id) === key) return;

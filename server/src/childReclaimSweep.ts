@@ -308,7 +308,7 @@ export type ChildReclaimReviewedRunRead =
   | { readonly kind: 'absent' }
   | { readonly kind: 'unreadable'; readonly detail: string };
 
-/** `review-report-superseded` (D-TBD-child-reclaim-review-superseded): a LATER review of the same reviewed run has
+/** `review-report-superseded` (D-6922): a LATER review of the same reviewed run has
  *  itself closed (`by`, its run id), so this earlier review's report is replaced and the coordinator cites the newer
  *  one. `live` is whether `$REG/child-superseded-reclaim-live` stands: only then does it release the child. */
 export interface ChildReclaimSuperseded { readonly by: number; readonly live: boolean }
@@ -370,7 +370,7 @@ export type ChildReclaimHoldRead =
   | { readonly kind: 'program'; readonly reason: string; readonly program: string; readonly accountedRunId: number;
       readonly open: ChildReclaimHoldOpenRead };
 
-const isTerminalRunState = (state: RunState): boolean => (TERMINAL_RUN_STATES as readonly RunState[]).includes(state);
+export const isTerminalRunState = (state: RunState): boolean => (TERMINAL_RUN_STATES as readonly RunState[]).includes(state);
 
 /** Reads the hold (spec §5.7's "no hold" conjunct, its accounting narrowed to
  *  a PROVEN match rather than a guess at shape). `raw === null`: no hold,
