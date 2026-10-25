@@ -13151,14 +13151,34 @@ describe('W2-5b1 Task 5: the judge input, W2-D79 and W2-D54', () => {
     expect(t4Lib.redactField(W5B5.capUtf8Bytes(reply, 16384), W6_IDX)).toContain(W6_SECRET.slice(0, 10));
   });
 
-  it('a key-shaped value in the question, the reply or its ANSWER line reaches the input redacted', () => {
+  it('a key-shaped value in the question, expected fact, reply or its ANSWER line reaches the input redacted', () => {
     const key = w6Akia('JUDGEKY');
-    const e = { ...w5b5Entry(W6_CMD), question: `Which command ran after the key ${key} was exported?` };
+    const e = { ...w5b5Entry(key), question: `Which command ran after the key ${key} was exported?` };
     const input = W5B5.judgeInputOf(e, `It read the key from ${key} first.\nANSWER: ${key}`, W6_IDX);
     expect(w5b5Lib.canonicalJson(input)).not.toContain(key);
     expect(input.question).toContain(t4Lib.REDACTED_MARK);
+    expect(input.expected).toContain(t4Lib.REDACTED_MARK);
     expect(input.reply).toContain(t4Lib.REDACTED_MARK);
     expect(input.answer_field).toContain(t4Lib.REDACTED_MARK);
+  });
+
+  it('an ANSWER line swallowed by a PEM mask carries the same mark as the complete reply', () => {
+    const body = ['QyNTUxOQ', 'AAACDx3B', 'q9yC2mT0', 'm4w5'].join('');
+    const pem = [
+      [['-----', 'BEGIN'].join(''), ['OPEN', 'SSH', 'PRIVATE', 'KEY-----'].join(' ')].join(' '),
+      body,
+      `ANSWER: ${body}`,
+      [['-----', 'END'].join(''), ['OPEN', 'SSH', 'PRIVATE', 'KEY-----'].join(' ')].join(' '),
+    ].join('\n');
+    const input = W5B5.judgeInputOf(w5b5Entry(W6_CMD), pem, W6_IDX);
+    expect(input.reply).toBe(t4Lib.REDACTED_MARK);
+    expect(input.answer_field).toBe(t4Lib.REDACTED_MARK);
+    expect(w5b5Lib.canonicalJson(input)).not.toContain(body);
+    const long = W5B5.judgeInputOf(w5b5Entry(W6_CMD), `${'plain prefix '.repeat(2_000)}${pem}`, W6_IDX);
+    expect(Buffer.byteLength(long.answer_field!), 'a swallowed answer field remains bounded').toBeLessThanOrEqual(W5B5.JUDGE_REPLY_MAX_BYTES);
+    expect(long.answer_field, 'a swallowed answer field still carries the mask mark').toBe(t4Lib.REDACTED_MARK);
+    const plain = W5B5.judgeInputOf(w5b5Entry(W6_CMD), `ANSWER: ${W6_CMD2}`, W6_IDX);
+    expect(plain).toMatchObject({ answer_field: W6_CMD2, reply: `ANSWER: ${W6_CMD2}` });
   });
 
   it('a reply of null is judged as the empty string, with no answer_field', () => {
@@ -13231,12 +13251,14 @@ describe('W2-5b1 Task 5: who reaches the judge, and the judge order', () => {
     expect(err, 'CONTROL: a missing record still refuses, a run-failed arm beside it or not').toMatchObject({ word: 'input-invalid' });
   });
 
-  it('an answer record that disagrees with its own reply, names an unknown question or arm, or is recorded twice refuses out-refused', () => {
+  it('an answer record that disagrees with its own reply, names an unknown question or arm, is non-string, or is recorded twice refuses out-refused', () => {
     const e = w5b5Entry(W6_CMD);
     const wrong = w5b5Answer(e.qid, W5B5_ARM1, 'answered', `ANSWER: ${W6_ERR}`, false);
+    const numeric = { ...w5b5Answer(e.qid, W5B5_ARM0, 'answered', `ANSWER: ${W6_ERR}`, false), reply: 7 } as unknown as W5b5Answer;
     const cases: Array<[string, W5b5Answer[], RegExp]> = [
       ['a correct reply flagged wrong', [w5b5Answer(e.qid, W5B5_ARM0, 'answered', `ANSWER: ${W6_CMD}`, false), wrong], /^answer-record-mismatch [0-9a-f]{16}$/],
       ['a wrong reply flagged correct', [w5b5Answer(e.qid, W5B5_ARM0, 'answered', `ANSWER: ${W6_ERR}`, true), wrong], /^answer-record-mismatch [0-9a-f]{16}$/],
+      ['a numeric reply', [numeric, wrong], /^answer-record-invalid [0-9a-f]{16}$/],
       ['an unknown question', [w5b5Answer('0'.repeat(16), W5B5_ARM0, 'answered', 'x', false), wrong], /^answer-record-unknown /],
       ['an unknown arm', [w5b5Answer(e.qid, 'fixture-arm', 'answered', 'x', false), wrong], /^answer-record-unknown /],
       ['a pair recorded twice', [wrong, wrong], /^answer-record-duplicate [0-9a-f]{16}$/],

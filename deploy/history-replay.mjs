@@ -36,7 +36,7 @@ import path, { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { CONTROL_FILE_MAX, EXIT, HEADLESS_LIST_MAX_BYTES, RECALL_ARMS, RECALL_OFF_META, SCHEMA_ADDED, SEARCHABLE_PROVENANCE, UUID_RE, asOfBinds, asOfHiddenNodesSql, asOfVisibleEntriesSql, backendOf, blobOverDecodeCap, canonicalJson, cardLine, displayPrefixes, entryIndexText, formatHeadlessList, ftsPhrase, ftsTextOf, historyPaths, idOk, isHistoryCommand, isSyntheticModel, parseHeadlessList, producerOf, producerOfCopy, recallOffPath, recallOffStatusOf, redactField, redactFinalJson, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
+import { CONTROL_FILE_MAX, EXIT, HEADLESS_LIST_MAX_BYTES, RECALL_ARMS, RECALL_OFF_META, REDACTED_MARK, SCHEMA_ADDED, SEARCHABLE_PROVENANCE, UUID_RE, asOfBinds, asOfHiddenNodesSql, asOfVisibleEntriesSql, backendOf, blobOverDecodeCap, canonicalJson, cardLine, displayPrefixes, entryIndexText, formatHeadlessList, ftsPhrase, ftsTextOf, historyPaths, idOk, isHistoryCommand, isSyntheticModel, parseHeadlessList, producerOf, producerOfCopy, recallOffPath, recallOffStatusOf, redactField, redactFinalJson, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
 import { StoreError, openReader, readBounded, userVersion } from '../ccd/history/store.mjs';
 import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/history/derive.mjs';
 import { asOfCutOf, expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf } from '../ccd/history/recall.mjs';
@@ -7321,21 +7321,24 @@ const JUDGE_PAIR_SEP = String.fromCharCode(0);
 const judgePairKey = (qid, arm) => `${qid}${JUDGE_PAIR_SEP}${arm}`;
 
 /** The judge's input for one answer (W2-D79), every string masked as a value (W2-D54, D-6308) and only then the reply cut
- *  to JUDGE_REPLY_MAX_BYTES; answer_field is read from the RAW reply (the field labelCorrect scored), masked whole, then cut
- *  at the same cap, so the judge's stdin is bounded (D-6470). Pure.
+ *  to JUDGE_REPLY_MAX_BYTES. answer_field is parsed from that complete masked reply, so it is never less masked than the reply
+ *  (a whole-block mask that swallows ANSWER carries its mark); both fields are cut at the same cap (D-6470). Pure.
  *  @param {{ kind: string, question: string, fact: string }} entry  @param {string|null} reply
  *  @param {import('../ccd/history/lib.mjs').PairIndex} idx  @returns {JudgeInput} */
 export function judgeInputOf(entry, reply, idx) {
   if (!FACT_KINDS.includes(entry?.kind)) throw new TypeError(`judgeInputOf: kind ${JSON.stringify(entry?.kind)} is not one of ${FACT_KINDS.join(', ')}`);
   if (reply !== null && typeof reply !== 'string') throw new TypeError('judgeInputOf: reply is a string or null');
-  const text = reply ?? '';
+  const raw = reply ?? '';
+  const text = /** @type {string} */ (maskValue(raw, idx));
   const field = answerFieldOf(parseAnswerField(text));
+  // A whole-block mask can erase the ANSWER line; retain the owner's mark, never the raw value.
+  const swallowed = field === null && answerFieldOf(parseAnswerField(raw)) !== null && text.includes(REDACTED_MARK) ? REDACTED_MARK : null;
   return {
     v: 1, kind: entry.kind,
     question: /** @type {string} */ (maskValue(entry.question, idx)),
     expected: /** @type {string} */ (maskValue(entry.fact, idx)),
-    answer_field: field === null ? null : capUtf8Bytes(/** @type {string} */ (maskValue(field, idx)), JUDGE_REPLY_MAX_BYTES),   // D-6470
-    reply: capUtf8Bytes(/** @type {string} */ (maskValue(text, idx)), JUDGE_REPLY_MAX_BYTES),
+    answer_field: swallowed === null ? (field === null ? null : capUtf8Bytes(field, JUDGE_REPLY_MAX_BYTES)) : capUtf8Bytes(swallowed, JUDGE_REPLY_MAX_BYTES),   // D-6470
+    reply: capUtf8Bytes(text, JUDGE_REPLY_MAX_BYTES),
   };
 }
 
