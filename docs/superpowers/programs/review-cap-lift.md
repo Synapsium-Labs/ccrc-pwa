@@ -13,7 +13,7 @@ cap's notice.
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | Every run row carries its review cap's state; a session-gated read of the ask; one confirm sheet; a "Waiting on you" band on the run board and a door on the cap's record in Mail. | — | **PLANNED** 2026-10-25 17:05 UTC. |
+| 1 | Every run row carries its review cap's state; a session-gated read of the ask; one confirm sheet; a "Waiting on you" band on the run board and a door on the cap's record in Mail. | — | **DISPATCHED** 2026-10-25 17:06 UTC as run 946, to its own child workspace. Was **PLANNED** 2026-10-25 17:05 UTC. |
 
 ## Decisions & deviations
 
