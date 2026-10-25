@@ -98,6 +98,21 @@ export const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'] as const sa
  *  (`server/test/source-bytes.test.ts:5-15`). */
 export const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
 
+/** A codex lane's two additive words (codex-bridge spec D20, Stage 2 Task 10).
+ *  `exec.bridge` is the lane's MODE: `litellm`, today's shim in front of a
+ *  LiteLLM tier, or `direct`, one ccrc process answering Claude Code itself.
+ *  `exec.upstream` is the ROUTE that process speaks: the ChatGPT `backend`, or
+ *  `siwc` (Stage 3). Each set is the ONE spelling of its words in TypeScript,
+ *  mirrored once in `shared/roster-json.mjs` and pinned equal IN ORDER by
+ *  `server/test/roster-exec-parity.test.ts`, because the FIRST entry is the
+ *  default an absent key reads: a roster written before the bridge keeps
+ *  meaning a LiteLLM lane on the backend route. A present value outside the
+ *  set is refused, never read as the default. */
+export const CODEX_BRIDGE_MODES = ['litellm', 'direct'] as const;
+export const CODEX_UPSTREAMS = ['backend', 'siwc'] as const;
+export type CodexBridgeMode = (typeof CODEX_BRIDGE_MODES)[number];
+export type CodexUpstream = (typeof CODEX_UPSTREAMS)[number];
+
 /**
  * How ccrc reaches an account's binary. The disk forced this shape (design
  * spec §1, from reading a live box): `claude` itself is 304,282,632 bytes of
@@ -154,6 +169,10 @@ export type ExecSpec =
   | {
     kind: 'codex'; secretsFile?: string; provider: 'openai';
     proxyPort: number; litellmPort: number; authDir: string;
+    /** RESOLVED by `parseExec`: absent in the roster reads the first word of
+     *  `CODEX_BRIDGE_MODES` / `CODEX_UPSTREAMS`, so a reader never meets an
+     *  absent mode. */
+    bridge: CodexBridgeMode; upstream: CodexUpstream;
   };
 
 /** One account, as validated by `parseRoster`. */
@@ -496,9 +515,10 @@ const EXEC_KEYS_GENERATED: ReadonlySet<string> =
 /** NOT in the containment chain above. A codex lane takes neither `baseUrl`
  *  (its upstream is its own LiteLLM, on `litellmPort` — a second spelling is a
  *  second thing to disagree) nor `models` (the class registry owns model
- *  policy), and it takes three fields no other kind has. */
+ *  policy), and it takes five fields no other kind has: the three topology
+ *  fields and the two words `bridge` and `upstream` (codex-bridge spec D20). */
 const EXEC_KEYS_CODEX: ReadonlySet<string> =
-  new Set([...EXEC_KEYS_UPSTREAM, 'provider', 'proxyPort', 'litellmPort', 'authDir']);
+  new Set([...EXEC_KEYS_UPSTREAM, 'provider', 'proxyPort', 'litellmPort', 'authDir', 'bridge', 'upstream']);
 /** Keyed so the call site is a lookup rather than a chain of ternaries, and so
  *  a fourth `ExecSpec` kind would be a compile error here before it was a
  *  silent fall-through to the wrong set. */
@@ -642,6 +662,31 @@ function parseLanePort(raw: unknown, id: string, field: 'proxyPort' | 'litellmPo
   return raw;
 }
 
+/** `exec.bridge` / `exec.upstream` on a codex lane: absent reads the set's
+ *  FIRST word, the one place that default is decided in TypeScript; anything
+ *  present must be one of the set's words, compared by strict equality, so a
+ *  written `null`, a number or a name `Object.prototype` carries is refused like
+ *  a typo. Refused rather than defaulted because a misspelt `direct` that
+ *  quietly ran the lane on LiteLLM would be a mode the operator asked for and
+ *  never got. Choosing the field's VALUE is the roster's; moving a running lane
+ *  between the two modes is not a roster edit — the next materialise only
+ *  renders the word into `lane.json`. */
+function parseCodexWord<W extends string>(
+  raw: unknown, id: string, field: 'bridge' | 'upstream', words: readonly W[],
+): W {
+  if (raw === undefined) return words[0]!;
+  const said = words.map((w) => JSON.stringify(w)).join(' or ');
+  const hit = words.find((w) => w === raw);
+  if (hit === undefined) {
+    throw new RosterError(
+      `account "${id}" has an invalid exec.${field} ${JSON.stringify(raw)}: it must be ${said}.`,
+      `Set exec.${field} for account "${id}" in ${ROSTER_PATH} to ${said}, or remove it — absent reads ` +
+        `${JSON.stringify(words[0])}.`,
+    );
+  }
+  return hit;
+}
+
 /** `exec.authDir` — the directory holding a codex lane's OAuth. Gated exactly
  *  as `exec.secretsFile` is (same charset, same four path refusals), plus one
  *  rule of its own: it may not sit under `~/.ccrc`. `_uninst_purge` empties
@@ -771,6 +816,8 @@ function parseExec(raw: unknown, id: string, assumedProvider: string[]): ExecSpe
       proxyPort,
       litellmPort,
       authDir: parseAuthDir(raw['authDir'], id),
+      bridge: parseCodexWord(raw['bridge'], id, 'bridge', CODEX_BRIDGE_MODES),
+      upstream: parseCodexWord(raw['upstream'], id, 'upstream', CODEX_UPSTREAMS),
       ...withSecrets,
     };
   }

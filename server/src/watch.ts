@@ -170,7 +170,7 @@ import {
   childReclaimAttentionWithLeaves, childReclaimLeafKept, childReclaimLeafKeptSince, type ChildReclaimLeafKept,
   CHILD_RECLAIM_SWEEP_REJECTED, childReclaimTierSeed, type ChildReclaimSweepInput, type ChildStaleAsk,
 } from './childReclaimSweep.js';
-import { ChildStaleArm, readStaleHoldAt, readStaleHoldBytes, staleHoldWanted, type StaleHoldRead } from './coord/childReclaimStale.js';
+import { ChildStaleArm, childReclaimReviewedRun, readStaleHoldAt, readStaleHoldBytes, staleHoldWanted, type StaleHoldRead } from './coord/childReclaimStale.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
   CHILD_SHADOW_OUTCOME, EXPIRE_AUDITS_PER_PASS, EXPIRE_CHILD_LIVE_MARKER, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
@@ -4305,7 +4305,7 @@ export class FleetWatcher {
               const reviewed = coord.run(reviewedId);
               reviewedRun = !reviewed.ok ? { kind: 'unreadable', detail: reviewed.detail }
                 : reviewed.run === null ? { kind: 'absent' }
-                : { kind: 'run', state: reviewed.run.state };
+                : childReclaimReviewedRun(coord, mintingRunFull.id, reviewedId, reviewed.run.state, names);
             }
           }
           const sib = coord.openRunsForSession(r.id);

@@ -304,9 +304,14 @@ export type ChildReclaimMintingRunRead =
  *  `unreadable` are the two answers that are not a run, never folded. */
 export type ChildReclaimReviewedRunRead =
   | { readonly kind: 'not-a-review' }
-  | { readonly kind: 'run'; readonly state: RunState }
+  | { readonly kind: 'run'; readonly state: RunState; readonly superseded?: ChildReclaimSuperseded }
   | { readonly kind: 'absent' }
   | { readonly kind: 'unreadable'; readonly detail: string };
+
+/** `review-report-superseded` (D-6922): a LATER review of the same reviewed run has
+ *  itself closed (`by`, its run id), so this earlier review's report is replaced and the coordinator cites the newer
+ *  one. `live` is whether `$REG/child-superseded-reclaim-live` stands: only then does it release the child. */
+export interface ChildReclaimSuperseded { readonly by: number; readonly live: boolean }
 
 /** The open runs naming this child, counted — or unreadable. */
 export type ChildReclaimSiblingsRead =
@@ -365,7 +370,7 @@ export type ChildReclaimHoldRead =
   | { readonly kind: 'program'; readonly reason: string; readonly program: string; readonly accountedRunId: number;
       readonly open: ChildReclaimHoldOpenRead };
 
-const isTerminalRunState = (state: RunState): boolean => (TERMINAL_RUN_STATES as readonly RunState[]).includes(state);
+export const isTerminalRunState = (state: RunState): boolean => (TERMINAL_RUN_STATES as readonly RunState[]).includes(state);
 
 /** Reads the hold (spec §5.7's "no hold" conjunct, its accounting narrowed to
  *  a PROVEN match rather than a guess at shape). `raw === null`: no hold,
@@ -683,13 +688,15 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
   // above included. `review-report-live` is wave 3's `childReclaimDecision`
   // word for the same condition. An unreadable reviewed run is doubt, and
   // doubt waits. An absent one is kept: nothing proves that a run the
-  // database does not hold has closed.
+  // database does not hold has closed. One exception: a LATER review of the same run has itself closed, so the
+  // coordinator cites that report, not this one (`superseded`, armed by its own marker).
   switch (i.reviewedRun.kind) {
     case 'not-a-review': break;
     case 'absent': return { eligible: false, why: 'reviewed-run-absent', runId: i.child.runId };
     case 'unreadable': return { eligible: false, why: 'reviewed-run-unreadable' };
     case 'run':
       if (!isTerminalRunState(i.reviewedRun.state)) {
+        if (i.reviewedRun.superseded?.live === true) break;   // a later review closed: this report is replaced
         // D-5942: past the ceiling the same keep is said on the banner. A run with no close is never stale.
         if (run.closedAt !== null && i.nowMs - run.closedAt > REVIEW_CHILD_CEILING_MS) {
           return { eligible: false, why: 'review-report-stale', runId: i.child.runId };

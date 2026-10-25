@@ -4276,6 +4276,15 @@ export class CoordStore {
     return isPositiveDecimalSafeInteger(id) ? id : null;
   }
 
+  /** D-6922: the newest review of `reviewedId` that closed `done` and opened after
+   *  `afterRunId`, or null. A failed or abandoned round left no report, so it supersedes nothing. */
+  laterReviewClosedFor(reviewedId: number, afterRunId: number): number | null {
+    const row = this.db.prepare("SELECT CAST(id AS TEXT) AS idText FROM runs WHERE kind = 'review' AND reviews = ? AND id > ? AND state = 'done' ORDER BY id DESC LIMIT 1")
+      .get(reviewedId, afterRunId) as { idText: string } | undefined;
+    const id = row === undefined ? NaN : Number(row.idText);
+    return isPositiveDecimalSafeInteger(id) ? id : null;
+  }
+
   /** D-6795: how many review runs name this work run, in any state (a failed or abandoned round still spent one).
    *  Read through `reviewCapStates`, so the round predicate is written once (D-6909). */
   reviewRounds(workRunId: number): number {

@@ -213,6 +213,12 @@ export const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'];
 const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 const EXEC_KINDS = new Set(['upstream', 'generated', 'external', 'codex']);
+// Mirror `shared/roster.ts`'s two codex word sets, IN ORDER: the first word is the default an absent key reads, and
+// `roster-exec-parity.test.ts` compares both declarations and both resolved defaults (codex-bridge spec D20).
+// EXPORTED for `deploy/account-op.mjs`'s `codex-mode` op (codex-bridge Stage 2, Task 12), which writes the word and so
+// must know which one is the default an absent key reads: imported, never re-spelled.
+export const CODEX_BRIDGE_MODES = ['litellm', 'direct'];
+const CODEX_UPSTREAMS = ['backend', 'siwc'];
 // Mirrors `shared/roster.ts`'s `TELEMETRY_VALUES`; `roster-exec-parity.test.ts` compares the two declarations.
 // `openrouter` is D-5521's OpenRouter key lane (D-5753).
 const TELEMETRY_VALUES = Object.freeze({ anthropic: true, codex: true, none: true, openrouter: true });
@@ -358,6 +364,15 @@ function checkAccount(raw, index) {
     if (dir === '.ccrc' || dir.startsWith('.ccrc/')) {
       bad(`account "${id}" has an exec.authDir under $HOME/.ccrc (${JSON.stringify(dir)}).`,
         `Move account "${id}"'s OAuth directory outside $HOME/.ccrc - 'ccrc uninstall --purge' empties that tree.`);
+    }
+    // `parseRoster`'s `parseCodexWord`, rule for rule: absent is the default, a present value must be one of the
+    // set's words by strict equality (so a written null, a number or an inherited name is refused like a typo).
+    for (const [field, words] of [['bridge', CODEX_BRIDGE_MODES], ['upstream', CODEX_UPSTREAMS]]) {
+      if (exec[field] !== undefined && !words.includes(exec[field])) {
+        const said = words.map((w) => JSON.stringify(w)).join(' or ');
+        bad(`account "${id}" has an invalid exec.${field} ${JSON.stringify(exec[field])}: it must be ${said}.`,
+          `Set exec.${field} for account "${id}" to ${said}, or remove it.`);
+      }
     }
   }
 
@@ -520,11 +535,15 @@ function checkAccount(raw, index) {
   // generated from it — which is the whole reason the field is emitted at all:
   // a roster field that never reaches `accounts.sh` is a field whose cross-box
   // drift nobody can see.
+  // `bridge` and `upstream` come back RESOLVED (codex-bridge spec D20): this is the bare-Node layer's one reader of
+  // the two fields, so `deploy/models-op.mjs`'s `laneManifest` copies these values and never the raw row's.
   const codexTopology = exec['kind'] === 'codex'
     ? {
       proxyPort: exec['proxyPort'],
       litellmPort: exec['litellmPort'],
       authDir: exec['authDir'],
+      bridge: exec['bridge'] === undefined ? CODEX_BRIDGE_MODES[0] : exec['bridge'],
+      upstream: exec['upstream'] === undefined ? CODEX_UPSTREAMS[0] : exec['upstream'],
     }
     : {};
   return {

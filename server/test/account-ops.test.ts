@@ -12,7 +12,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 import vm from 'node:vm';
 import { ACCOUNT_SUBS } from '../../shared/api.js';
@@ -21,6 +23,7 @@ import { AgentOpError, LinkNotSentError, type FleetClient } from '../src/remote/
 import { ACCOUNT_OP_DRAIN_MS, accountOpRequestTimeoutMs } from '../../shared/agent-protocol.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { codexRoster } from './codexLaneFixture.js';
 
 const SECRET_VARS = ['CCRC_AGENT_TOKEN', 'CCRC_HETZNER_TOKEN', 'CCRC_VAPID_PRIVATE'] as const;
 
@@ -331,5 +334,115 @@ describe('the local arm (D-5513: the account spawn\'s environment is explicit)',
   it('output past the cap is cut and answered too-large', async () => {
     const { home } = fixtureHome('head -c 4096 /dev/zero');
     expect(await localAccountOps({ home, maxOutputBytes: 1024 }).run('roster', null, {})).toEqual({ kind: 'too-large' });
+  });
+});
+
+// ── codex bridge Stage 2, Task 12: `account-op codex-mode`, the roster half of `ccrc codex switch` ──────────────────
+// A read-modify-write through the one roster writer (`writeRoster`): the mode is written as the roster's `bridge` key
+// only for `direct`, and the key is DELETED when a `direct` row is switched to `litellm`, so a lane switched back reads
+// byte for byte as it did before the bridge existed. A row that already resolves to the requested mode is not written
+// at all (fix round 2), so a hand-written explicit `"bridge": "litellm"` is KEPT on `--bridge litellm` (fix round 3,
+// D-6886). Refused: a non-codex row, an unknown mode, an unreadable roster, an id the
+// roster lacks.
+describe('account-op codex-mode (codex bridge Stage 2, Task 12)', () => {
+  const ACCOUNT_OP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'deploy', 'account-op.mjs');
+  const op = (args: string[]): { code: number; stdout: string; stderr: string } => {
+    const r = spawnSync(process.execPath, [ACCOUNT_OP, 'codex-mode', ...args], { encoding: 'utf8', timeout: 15_000 });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const lane = (): { home: string; file: string } => {
+    const home = mkTmp('ccrc-account-ops-codex-mode-');
+    codexRoster(home, [{ id: 'lane-a', proxyPort: 45101, litellmPort: 45102 }], [], { accountsSh: false });
+    return { home, file: path.join(home, '.ccrc', 'accounts.json') };
+  };
+  const execOf = (file: string): Record<string, unknown> =>
+    (JSON.parse(readFileSync(file, 'utf8')) as { accounts: Array<{ id: string; exec: Record<string, unknown> }> })
+      .accounts.find((a) => a.id === 'lane-a')!.exec;
+
+  it('writes the bridge key for direct and deletes it for litellm, so a lane switched back is byte for byte the old roster', () => {
+    const { file } = lane();
+    const before = readFileSync(file, 'utf8');
+    expect(Object.hasOwn(execOf(file), 'bridge')).toBe(false);
+    const d = op(['--file', file, '--id', 'lane-a', '--bridge', 'direct']);
+    expect(d, d.stderr).toEqual({ code: 0, stdout: '', stderr: '' });
+    expect(execOf(file)['bridge']).toBe('direct');
+    const l = op(['--file', file, '--id', 'lane-a', '--bridge', 'litellm']);
+    expect(l, l.stderr).toEqual({ code: 0, stdout: '', stderr: '' });
+    expect(Object.hasOwn(execOf(file), 'bridge'), 'litellm wrote the key instead of deleting it').toBe(false);
+    expect(readFileSync(file, 'utf8')).toBe(before);
+    // litellm on a row that never had the key is a no-op on the bytes, too.
+    expect(op(['--file', file, '--id', 'lane-a', '--bridge', 'litellm']).code).toBe(0);
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  // Fix round 2 (review R1/R3): the mode the row already records is not written again, so a hand-edited roster keeps
+  // its own spelling (indentation, key order) when `ccrc codex switch` answers `already`.
+  it('writes nothing when the row already records the mode, so a hand-edited roster keeps its bytes', () => {
+    const { file } = lane();
+    const json = JSON.parse(readFileSync(file, 'utf8')) as { accounts: Array<{ id: string; exec: Record<string, unknown> }> };
+    const row = json.accounts.find((a) => a.id === 'lane-a')!;
+    // `bridge` first in exec, and the whole file on one line: neither is this file's writer's spelling.
+    row.exec = { bridge: 'direct', ...row.exec };
+    const direct = `${JSON.stringify(json)}\n`;
+    writeFileSync(file, direct);
+    const d = op(['--file', file, '--id', 'lane-a', '--bridge', 'direct']);
+    expect(d, d.stderr).toEqual({ code: 0, stdout: '', stderr: '' });
+    expect(readFileSync(file, 'utf8')).toBe(direct);
+    delete row.exec['bridge'];
+    const litellm = `${JSON.stringify(json, null, 4)}\n`;
+    writeFileSync(file, litellm);
+    const l = op(['--file', file, '--id', 'lane-a', '--bridge', 'litellm']);
+    expect(l, l.stderr).toEqual({ code: 0, stdout: '', stderr: '' });
+    expect(readFileSync(file, 'utf8')).toBe(litellm);
+    // Fix round 3 (review M1/M2): an explicit `"bridge": "litellm"` written by hand resolves to litellm already, so
+    // `--bridge litellm` keeps the key and the bytes; the delete runs only on a change of mode.
+    row.exec['bridge'] = 'litellm';
+    const explicit = `${JSON.stringify(json, null, 4)}\n`;
+    writeFileSync(file, explicit);
+    const e = op(['--file', file, '--id', 'lane-a', '--bridge', 'litellm']);
+    expect(e, e.stderr).toEqual({ code: 0, stdout: '', stderr: '' });
+    expect(readFileSync(file, 'utf8'), 'an explicit litellm key was rewritten or deleted').toBe(explicit);
+    // A different mode is still written.
+    expect(op(['--file', file, '--id', 'lane-a', '--bridge', 'direct']).code).toBe(0);
+    expect(execOf(file)['bridge']).toBe('direct');
+  });
+
+  it('refuses a non-codex row, an unknown mode and an id the roster lacks, and writes nothing', () => {
+    const { file } = lane();
+    const before = readFileSync(file, 'utf8');
+    const up = op(['--file', file, '--id', 'claude', '--bridge', 'direct']);
+    expect(up.code).toBe(1);
+    expect(JSON.parse(up.stdout)).toMatchObject({ ok: false, error: 'not-codex' });
+    const bad = op(['--file', file, '--id', 'lane-a', '--bridge', 'bridge']);
+    expect(bad.code).toBe(2);
+    expect(JSON.parse(bad.stdout)).toMatchObject({ ok: false, error: 'unknown-mode' });
+    const none = op(['--file', file, '--id', 'lane-b', '--bridge', 'direct']);
+    expect(none.code).toBe(1);
+    expect(JSON.parse(none.stdout)).toMatchObject({ ok: false, error: 'unknown-id' });
+    for (const k of ['--file', '--id', '--bridge']) {
+      const args = ['--file', file, '--id', 'lane-a', '--bridge', 'direct'];
+      args.splice(args.indexOf(k), 2);
+      expect(op(args).code, `without ${k}`).toBe(2);
+    }
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  it('refuses an absent, an unreadable and an invalid roster', () => {
+    const { home, file } = lane();
+    const absent = op(['--file', path.join(home, 'nope.json'), '--id', 'lane-a', '--bridge', 'direct']);
+    expect(absent.code).toBe(1);
+    expect(JSON.parse(absent.stdout)).toMatchObject({ ok: false, error: 'roster-absent' });
+    writeFileSync(file, '{ not json');
+    const invalid = op(['--file', file, '--id', 'lane-a', '--bridge', 'direct']);
+    expect(invalid.code).toBe(1);
+    expect(JSON.parse(invalid.stdout)).toMatchObject({ ok: false, error: 'roster-invalid' });
+    expect(readFileSync(file, 'utf8')).toBe('{ not json');
+    if (process.getuid?.() !== 0) {
+      chmodSync(file, 0o000);
+      const unreadable = op(['--file', file, '--id', 'lane-a', '--bridge', 'direct']);
+      chmodSync(file, 0o600);
+      expect(unreadable.code).toBe(1);
+      expect(JSON.parse(unreadable.stdout)).toMatchObject({ ok: false, error: 'roster-unreadable' });
+    }
   });
 });

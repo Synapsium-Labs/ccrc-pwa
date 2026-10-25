@@ -6898,6 +6898,149 @@ describe('the compaction card — mechanism absence, the serve and settle arms (
   });
 });
 
+/** `strace -f` splits a call that blocks (or races another process) into a START line
+ *  ending `<unfinished ...>` and, later, `PID <... NAME resumed>TAIL` — other PIDs'
+ *  lines between them. The census regexes match a COMPLETE line only, so before
+ *  matching, each START is joined with the next resumed line of the SAME pid and
+ *  SYSCALL, keeping the START's place in trace order (the order the fork happened
+ *  in). A resumed line with no START, or a START that never resumes, is returned
+ *  in `unparsed`, never silently dropped. */
+const rejoinStrace = (raw: string): { lines: string[]; unparsed: string[] } => {
+  const lines = raw.split('\n');
+  const open = new Map<string, Array<{ at: number; name: string }>>();
+  const dropped = new Set<number>();
+  const unparsed: string[] = [];
+  lines.forEach((ln, i) => {
+    const u = /^(\d+)\s+(.*?)\s*<unfinished \.\.\.>$/.exec(ln);
+    if (u) {
+      const name = /^(\w+)\(/.exec(u[2]!)?.[1] ?? '';
+      lines[i] = `${u[1]} ${u[2]}`;
+      const q = open.get(u[1]!) ?? [];
+      q.push({ at: i, name });
+      open.set(u[1]!, q);
+      return;
+    }
+    const r = /^(\d+)\s+<\.\.\. (\w+) resumed>(.*)$/.exec(ln);
+    if (!r) return;
+    dropped.add(i);
+    const q = open.get(r[1]!) ?? [];
+    const k = q.findIndex((o) => o.name === r[2]);
+    if (k === -1) { unparsed.push(ln); return; }
+    const [start] = q.splice(k, 1);
+    lines[start!.at] += r[3]!;
+  });
+  for (const q of open.values()) for (const o of q) unparsed.push(`${lines[o.at]} <unfinished ...>`);
+  return { lines: lines.filter((_, i) => !dropped.has(i)), unparsed };
+};
+
+/** The children the hook's own shell took inside the first held section, named by
+ *  the first command each one's subtree execs (`(subshell)` for none). */
+const forkCensus = (raw: string): { forks: string[]; unparsed: string[] } => {
+  const { lines, unparsed } = rejoinStrace(raw);
+
+  // PARSE. Two shapes matter: a `clone` that returns a child pid, and a
+  // SUCCESSFUL `execve`. An `execve` returning -1 is the PATH walk, not a
+  // command that ran.
+  const parent = new Map<string, string>();
+  const firstExec = new Map<string, string>();
+  const events: Array<{ i: number; kind: 'clone' | 'exec'; pid: string; child?: string; name?: string }> = [];
+  lines.forEach((ln, i) => {
+    const c = /^(\d+)\s+(?:clone3?|v?fork)\(.*\)\s*=\s*(\d+)$/.exec(ln);
+    if (c) {
+      parent.set(c[2]!, c[1]!);
+      events.push({ i, kind: 'clone', pid: c[1]!, child: c[2]! });
+      return;
+    }
+    const e = /^(\d+)\s+execve\("([^"]+)".*\)\s*=\s*0$/.exec(ln);
+    if (e) {
+      const name = e[2]!.split('/').pop()!;
+      if (!firstExec.has(e[1]!)) firstExec.set(e[1]!, name);
+      events.push({ i, kind: 'exec', pid: e[1]!, name });
+    }
+  });
+  expect(events.length, 'strace produced a trace — a silent empty one proves nothing').toBeGreaterThan(5);
+  const root = events[0]!.pid;
+
+  /** The first command executed anywhere under `pid`, in trace order. */
+  const under = (pid: string): string | null => {
+    for (const ev of events) {
+      if (ev.kind !== 'exec') continue;
+      let p: string | undefined = ev.pid;
+      for (let hop = 0; p !== undefined && hop < 8; hop++) {
+        if (p === pid) return ev.name!;
+        p = parent.get(p);
+      }
+    }
+    return null;
+  };
+
+  // THE WINDOW. The acquire's LAST child is its `flock`, so the section opens
+  // straight after the first one; it closes at the helper fork (the first
+  // child after the release) or, on an arm that releases and returns, at the
+  // end of the trace. `_hook_compact_pre` is the last statement in the file,
+  // so "end of trace" really is "end of the arm".
+  const flockAt = events.findIndex((e) => e.kind === 'exec' && e.name === 'flock');
+  expect(flockAt, 'the arm took the row mutex').toBeGreaterThan(-1);
+  // THE END IS THE CLONE, NOT ITS EXEC. `timeout`'s `execve` happens in the
+  // child, i.e. AFTER the parent's `clone` line, so a window ending at the
+  // exec swallows the helper fork itself — measured, that was this pin's
+  // first draft and it reported a seventh member.
+  const ENDERS = ['timeout', 'gtimeout', 'node', 'flock'];
+  const endAt = events.findIndex((e, k) => k > flockAt && e.kind === 'clone' && e.pid === root
+    && ENDERS.includes(under(e.child!) ?? ''));
+  const last = endAt === -1 ? events.length : endAt;
+
+  const forks = events.slice(flockAt + 1, last)
+    .filter((e) => e.kind === 'clone' && e.pid === root)
+    .map((e) => under(e.child!) ?? '(subshell)');
+  return { forks, unparsed };
+};
+
+describe('the strace fork census — split lines are rejoined (runs on every platform: it parses a canned trace)', () => {
+  const trace = (...l: string[]): string => l.join('\n') + '\n';
+  const ARGS = '["rm", "-f", "x"], 0x7ffd /* 40 vars */';
+  // Six events at least, the first of them the root; `flock` opens the window.
+  const head = [
+    '100 execve("/bin/bash", ["bash"], 0x1) = 0',
+    '100 clone(child_stack=NULL, flags=SIGCHLD) = 101',
+    '101 execve("/usr/bin/flock", ["flock"], 0x1) = 0',
+    '100 clone(child_stack=NULL, flags=SIGCHLD) = 102',
+    '102 execve("/usr/bin/find", ["find"], 0x1) = 0',
+  ];
+
+  it('an execve split around another pid\'s line is named by its command, not "(subshell)"', () => {
+    const raw = trace(...head,
+      '100 clone(child_stack=NULL, flags=SIGCHLD <unfinished ...>',
+      '555 execve("/bin/other", ["other"], 0x1) = 0',
+      '1234 execve("/bin/rm", ' + ARGS + ' <unfinished ...>',
+      '100 <... clone resumed>, child_tidptr=0x7f) = 1234',
+      '1234 <... execve resumed>) = 0');
+    const { forks, unparsed } = forkCensus(raw);
+    expect(unparsed).toEqual([]);
+    expect(forks, 'the split clone and the split execve are one fork named rm, after the find').toEqual(['find', 'rm']);
+  });
+
+  it('a resumed line with no start, and a start that never resumes, are reported unparsed', () => {
+    const { unparsed } = rejoinStrace(trace(
+      '7 <... execve resumed>) = 0',
+      '8 execve("/bin/rm", ["rm"], 0x1 <unfinished ...>'));
+    expect(unparsed).toHaveLength(2);
+  });
+
+  it('a resumed line joins only a start of the SAME syscall: a clone resume never closes an open execve', () => {
+    const { lines, unparsed } = rejoinStrace(trace(
+      '9 execve("/bin/rm", ["rm"], 0x1 <unfinished ...>',
+      '9 <... clone resumed>) = 10'));
+    expect(unparsed, 'the clone resume found no clone start').toContain('9 <... clone resumed>) = 10');
+    expect(lines[0], 'the execve start took no tail').toBe('9 execve("/bin/rm", ["rm"], 0x1');
+  });
+
+  it('keeps the start line\'s position in trace order', () => {
+    const { lines } = rejoinStrace(trace('1 a(1 <unfinished ...>', '2 b() = 0', '1 <... a resumed>) = 0'));
+    expect(lines.slice(0, 2)).toEqual(['1 a(1) = 0', '2 b() = 0']);
+  });
+});
+
 // LINUX-ONLY BY ITS INSTRUMENT: `strace` does not exist on Darwin, so the describe skips there (the macOS leg reds otherwise).
 // The companion to this file's two source-order pins, and the one of the three
 // that no reading of the source can supply: `find` counted by grep cannot see a
@@ -6930,63 +7073,8 @@ describe.skipIf(process.platform === 'darwin')('the compaction card — the firs
     });
     expect(r.status, `the hook exits 0 under strace. stderr: ${r.stderr}`).toBe(0);
     const raw = fs.readFileSync(trace, 'utf8');
-    const lines = raw.split('\n');
-
-    // PARSE. Two shapes matter: a `clone` that returns a child pid, and a
-    // SUCCESSFUL `execve`. An `execve` returning -1 is the PATH walk, not a
-    // command that ran.
-    const parent = new Map<string, string>();
-    const firstExec = new Map<string, string>();
-    const events: Array<{ i: number; kind: 'clone' | 'exec'; pid: string; child?: string; name?: string }> = [];
-    lines.forEach((ln, i) => {
-      const c = /^(\d+)\s+(?:clone3?|v?fork)\(.*\)\s*=\s*(\d+)$/.exec(ln);
-      if (c) {
-        parent.set(c[2]!, c[1]!);
-        events.push({ i, kind: 'clone', pid: c[1]!, child: c[2]! });
-        return;
-      }
-      const e = /^(\d+)\s+execve\("([^"]+)".*\)\s*=\s*0$/.exec(ln);
-      if (e) {
-        const name = e[2]!.split('/').pop()!;
-        if (!firstExec.has(e[1]!)) firstExec.set(e[1]!, name);
-        events.push({ i, kind: 'exec', pid: e[1]!, name });
-      }
-    });
-    expect(events.length, 'strace produced a trace — a silent empty one proves nothing').toBeGreaterThan(5);
-    const root = events[0]!.pid;
-
-    /** The first command executed anywhere under `pid`, in trace order. */
-    const under = (pid: string): string | null => {
-      for (const ev of events) {
-        if (ev.kind !== 'exec') continue;
-        let p: string | undefined = ev.pid;
-        for (let hop = 0; p !== undefined && hop < 8; hop++) {
-          if (p === pid) return ev.name!;
-          p = parent.get(p);
-        }
-      }
-      return null;
-    };
-
-    // THE WINDOW. The acquire's LAST child is its `flock`, so the section opens
-    // straight after the first one; it closes at the helper fork (the first
-    // child after the release) or, on an arm that releases and returns, at the
-    // end of the trace. `_hook_compact_pre` is the last statement in the file,
-    // so "end of trace" really is "end of the arm".
-    const flockAt = events.findIndex((e) => e.kind === 'exec' && e.name === 'flock');
-    expect(flockAt, 'the arm took the row mutex').toBeGreaterThan(-1);
-    // THE END IS THE CLONE, NOT ITS EXEC. `timeout`'s `execve` happens in the
-    // child, i.e. AFTER the parent's `clone` line, so a window ending at the
-    // exec swallows the helper fork itself — measured, that was this pin's
-    // first draft and it reported a seventh member.
-    const ENDERS = ['timeout', 'gtimeout', 'node', 'flock'];
-    const endAt = events.findIndex((e, k) => k > flockAt && e.kind === 'clone' && e.pid === root
-      && ENDERS.includes(under(e.child!) ?? ''));
-    const last = endAt === -1 ? events.length : endAt;
-
-    const forks = events.slice(flockAt + 1, last)
-      .filter((e) => e.kind === 'clone' && e.pid === root)
-      .map((e) => under(e.child!) ?? '(subshell)');
+    const { forks, unparsed } = forkCensus(raw);
+    expect(unparsed, 'every split strace line was rejoined to its other half').toEqual([]);
     return { forks, raw };
   };
 
@@ -7075,22 +7163,15 @@ describe.skipIf(process.platform === 'darwin')('the compaction card — the firs
         at(`.demo-quiet-basin.compactset.99${k}.compact-1-99${k}-1-2.stage`));
       for (const f of residue) { fs.writeFileSync(f, 'x'); fs.utimesSync(f, old, old); }
       const { forks, raw } = straceRun(preCompact(tree, transcript));
-      // THE DIAGNOSTIC BELONGS IN THE FAILURE, not in a later bisect. A busy
-      // box makes `strace -f` interleave, and an `execve` split across
-      // `<unfinished ...>` / `<... execve resumed>` matches NEITHER half of
-      // this parser's pair of regexes, so the child loses its name and reads
-      // as `(subshell)` — a mis-ATTRIBUTION that looks exactly like a changed
-      // arm. Measured on this box 2026-09-17 under four concurrent agents:
-      // `find` 2 -> 1 with `(subshell)` 1 -> 2, the same six forks throughout.
-      // So the message says which of the two a reader is looking at.
-      const split = raw.split('\n').filter((l) => l.includes('<unfinished ...>')
-        || l.includes('resumed>')).length;
+      // THE DIAGNOSTIC BELONGS IN THE FAILURE. A busy box makes `strace -f`
+      // split an `execve` into `<unfinished ...>` / `<... execve resumed>`;
+      // `forkCensus` rejoins the halves before matching (measured 2026-09-17: the
+      // unrejoined halves read as `(subshell)`, `find` 2 -> 1), and `straceRun`
+      // asserts that none was left unparsed. `split` is only how many were seen.
+      const split = raw.split('\n').filter((l) => l.includes('<unfinished ...>')).length;
       // The ORDINARY multiset, plus exactly one `rm` per planted candidate.
-      expect(tally(forks), split === 0
-        ? 'the first held section\'s forks, with the sweep loop\'s removals'
-        : `${split} interleaved strace lines in this trace: a child may have lost `
-          + `its exec and be counted as "(subshell)". Re-run in isolation before `
-          + `reading this as a changed arm.`).toEqual(
+      expect(tally(forks), `the first held section's forks, with the sweep loop's removals (${split} split lines rejoined)`)
+        .toEqual(
         { '(subshell)': 1, find: 2, jq: 1, link: 1, mv: 1, rm: 1 + planted });
       // AND THE SWEEP REALLY SWEPT: a green multiset over residue that was
       // never removed would be measuring a fork this arm did not take.

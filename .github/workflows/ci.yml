@@ -422,8 +422,9 @@ jobs:
       # with no jsdom and falsely reports "no tests" alongside 39 errors.
       # Positional file arguments are SUBSTRING filters (`a.test.ts` also runs
       # `xa.test.ts`), so the shard's list goes through vitest.select.config.ts,
-      # whose include is exactly the listed paths. The JSON report is the
-      # per-file durations the daily run publishes for the next plan.
+      # whose include is exactly the listed paths. The file-times reporter
+      # (whole-file wall time, hooks and collection included) is the per-file
+      # durations the daily run publishes for the next plan.
       - name: Test
         working-directory: server
         env:
@@ -432,7 +433,7 @@ jobs:
           WORKERS: ${{ matrix.workers }}
         run: |
           echo "$FILES" | tr ' ' '\n' > "$RUNNER_TEMP/tests.txt"
-          CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --maxWorkers="$WORKERS" --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/times.json"
+          CCRC_FILE_TIMES_OUT="$RUNNER_TEMP/times.json" CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --maxWorkers="$WORKERS" --reporter=default --reporter=../.github/ci/file-times-reporter.mjs
 
       - name: Keep the durations
         if: always() && needs.select.outputs.tests == 'full'

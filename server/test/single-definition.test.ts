@@ -5109,6 +5109,27 @@ describe('fleet disk retention DR-27: the stale arm’s live switch has no write
   });
 });
 
+// D-6922. The superseded-review release SHIPS SHADOWED behind
+// `$REG/child-superseded-reclaim-live`, hand-touched on the fleet box like the stale arm's: no shell line names it, its one
+// TS definer is the L0 switch table, and the one file that reads a listing the lane already took holds the constant.
+describe('child reclaim: the superseded-review release’s live switch has no writer in the tree', () => {
+  const NAME = 'child-superseded-reclaim-live';
+  const DEFINER = 'shared/switches.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+  });
+
+  it('the files that name its constant are the definer and the arm, and none reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    const holders = ALL.filter((f) => stallCode(f).includes('CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/coord/childReclaimStale.ts', DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
+
 // THE THRESHOLD IS NEVER TYPED BY THE SERVER (the coordinator's ruling (C), wave 3b): ccd's `ws-audit --expire`
 // document carries `expiresAt` (`archivedAt + WS_EXPIRE_AFTER_S`), and the server reads it through ONE reader. Both
 // halves pinned: no seven-day literal in the server or the PWA beside the one that is not an expiry (`limits.ts`'s
@@ -9211,5 +9232,54 @@ describe('ARCH-77: child reclaim’s off switch has no writer in the tree, and o
       const code = stallCode(path.join(ccrcRoot, f));
       expect(code, `${f} names the child-reclaim switch`).not.toMatch(/CHILD_RECLAIM_DISABLED|childReclaimDisabled|child-reclaim-disabled/);
     }
+  });
+});
+
+// CODEX BRIDGE STAGE 2, TASK 10 (spec D20): the bridge's three file names are spelled once, in `laneManifest`
+// (`deploy/models-op.mjs`), copied into `lane.json` as `bridgeFiles` and read from there by bash and Python; and the
+// roster's two new exec fields reach bash only through that rendered file, never through a second `jq` over the
+// roster. APPENDED, for the reason the block above states (session-hook.test.ts's citation audit cites this file by
+// line). The file-name scan reads QUOTED literals only, over shipped code: a docstring that names a file in backticks
+// is prose, and the test tree's fixtures plant the names on purpose.
+describe('codex bridge Stage 2 Task 10: the bridge file names and the lane mode have one source each', () => {
+  const BRIDGE_FILE_NAMES = ['bridge.stats.json', 'reasoning.sqlite', 'recordings'] as const;
+  const shipped = (): string[] => {
+    const r = spawnSync('git', ['-C', ccrcRoot, 'ls-files', '--', 'ccd', 'shared', 'deploy', 'server/src',
+      'agent/src', 'pwa/src'], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    return r.stdout.split('\n').filter(Boolean).filter((f) => existsSync(path.join(ccrcRoot, f)));
+  };
+
+  it('the bridge file names are spelled once, in laneManifest', () => {
+    const files = shipped();
+    expect(files, 'CONTROL: the corpus holds the writer').toContain('deploy/models-op.mjs');
+    for (const name of BRIDGE_FILE_NAMES) {
+      const escaped = name.replace(/[.*+?^$()|[\]\\{}]/g, (c) => `\\${c}`);
+      const quoted = new RegExp(`['"]${escaped}['"]`);
+      const holders = files.filter((f) => quoted.test(readFileSync(path.join(ccrcRoot, f), 'utf8'))).sort();
+      expect(holders, name).toEqual(['deploy/models-op.mjs']);
+    }
+    // ...and inside that file, in laneManifest's own body, exactly once each.
+    const src = readFileSync(path.join(ccrcRoot, 'deploy', 'models-op.mjs'), 'utf8');
+    const start = src.indexOf('function laneManifest(');
+    expect(start, 'laneManifest must be findable').toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf('\n}\n', start));
+    for (const name of BRIDGE_FILE_NAMES) {
+      const escaped = name.replace(/[.*+?^$()|[\]\\{}]/g, (c) => `\\${c}`);
+      const quoted = new RegExp(`['"]${escaped}['"]`, 'g');
+      expect((body.match(quoted) ?? []).length, `${name} in laneManifest`).toBe(1);
+      expect((src.match(quoted) ?? []).length, `${name} in models-op.mjs`).toBe(1);
+    }
+  });
+
+  it('no ccd file reads exec.bridge from the roster', () => {
+    // A bare `.bridge` or `.upstream` is lane.json's (`_codex_lane_mode`, `_codex_lane_upstream`) and is not scanned.
+    const ccd = shipped().filter((f) => f.startsWith('ccd/'));
+    expect(ccd, 'CONTROL: the corpus holds ccd/ccrc').toContain('ccd/ccrc');
+    const holders = ccd.filter((f) => /\bexec\.(bridge|upstream)\b/.test(readFileSync(path.join(ccrcRoot, f), 'utf8')));
+    expect(holders).toEqual([]);
+    // CONTROL: the one bash reader of the mode reads lane.json's key, so the scan above is not vacuously empty of
+    // a reader.
+    expect(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8')).toMatch(/^_codex_lane_mode\(\)\s+\{/m);
   });
 });

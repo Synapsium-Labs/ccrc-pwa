@@ -1072,8 +1072,9 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
     // `continue-on-error: true` on the step (all three measured).
     const list = 'echo "$FILES" | tr \' \' \'\\n\' > "$RUNNER_TEMP/tests.txt"\n';
     const run = 'CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --maxWorkers="$WORKERS"';
+    // The shard also records each file's whole wall time (hooks and collection included) for the next plan.
     expect(runScript(step(job('server-shard'), 'Test'))).toBe(
-      `${list}${run} --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/times.json"\n`);
+      `${list}CCRC_FILE_TIMES_OUT="$RUNNER_TEMP/times.json" ${run} --reporter=default --reporter=../.github/ci/file-times-reporter.mjs\n`);
     expect(runScript(step(job('test-macos'), 'Test'))).toBe(`${list}${run}\n`);
     for (const id of ['server-shard', 'test-macos']) {
       const st = step(job(id), 'Test');
