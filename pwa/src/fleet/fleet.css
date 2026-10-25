@@ -2796,9 +2796,12 @@ button.proj-card-pool::before {
    grounded rule and one copy that drifts. */
 /* `.update-move-sheet` is the third body with these six (programme wave 5's
    move sheet), grouped here for the reason the first two already were. */
+/* `.lift-cap-sheet` is the fourth (D-6911, the review cap's lift), and renders
+   the same measured `.abandon-error` descendant for a refused lift. */
 .abandon-sheet,
 .archive-conflict-sheet,
-.update-move-sheet {
+.update-move-sheet,
+.lift-cap-sheet {
   display: grid;
   gap: var(--sp-3);
   color: var(--ink-primary);
@@ -2811,10 +2814,25 @@ button.proj-card-pool::before {
    tokens.css's own comment), reused rather than a third rule re-deriving
    the same ratio. */
 .abandon-sheet .abandon-error,
-.archive-conflict-sheet .abandon-error {
+.archive-conflict-sheet .abandon-error,
+.lift-cap-sheet .abandon-error {
   margin: 0;
   font-size: var(--fs-sm);
   color: var(--status-dead-text);
+}
+/* The ask's lines take the sheet's own ground and ink: no colour of their own. */
+.lift-cap-sheet .lift-cap-note,
+.lift-cap-sheet .lift-cap-findings {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.lift-cap-sheet .lift-cap-findings {
+  padding-left: var(--sp-4);
+  display: grid;
+  gap: var(--sp-1);
+}
+.lift-cap-sheet .lift-cap-report {
+  overflow-wrap: anywhere;
 }
 
 /* ------------------------------------------------------------------ *

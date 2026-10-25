@@ -6478,6 +6478,17 @@ export type ReviewFindings =
   | { state: 'read'; lines: string[] }
   | { state: Exclude<ReviewFindingsState, 'read'> };
 
+/** What the cap's notice and the console's lift sheet say about the last review's report when it gives no finding
+ *  lines (D-6911): spelled once, read by `reviewCapNotice` (`server/src/coord/reviewcap.ts`) and `findingsWords`
+ *  (`pwa/src/fleet/reviewCapWords.ts`), so the sheet says what the notice said. `none` is a read report that lists
+ *  none. The notice says nothing for `unnamed`, where it has already said no review reported. */
+export const REVIEW_FINDINGS_WORDS: Readonly<Record<Exclude<ReviewFindingsState, 'read'> | 'none', string>> = {
+  none: 'The report lists no open findings.',
+  unnamed: 'No report is on file.',
+  absent: 'The report file is gone.',
+  unreadable: 'The report file could not be read.',
+};
+
 /** The structured ask the `cap-review-rounds` refusal answers with, the notice words, and
  *  `GET /api/coord/review-cap/:id` reads back (D-6910). */
 export interface ReviewCapAsk {

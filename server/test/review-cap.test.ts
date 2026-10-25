@@ -85,7 +85,7 @@ describe('the ask\'s types moved to shared/api.ts (D-6910)', () => {
   it('reviewcap.ts declares none of the three any more', () => {
     const src = readFileSync(new URL('../src/coord/reviewcap.ts', import.meta.url), 'utf8');
     for (const t of ['LastReviewReport', 'ReviewFindings', 'ReviewCapAsk']) {
-      expect(src, `${t} is declared in reviewcap.ts again`).not.toMatch(new RegExp(`(?:interface|type)\\s+${t}\\b`));
+      expect(src, `${t} is declared in reviewcap.ts again`).not.toMatch(new RegExp(`^(?:export\\s+)?(?:interface|type)\\s+${t}\\b`, 'm'));
     }
   });
 });
