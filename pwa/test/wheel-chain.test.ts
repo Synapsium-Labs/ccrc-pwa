@@ -1,4 +1,6 @@
-// A wheel over a code block or a tool well must reach the transcript (D-6437, desktop polish Task C5).
+// A wheel over a code block or a tool well must reach the transcript (D-6437, desktop polish Task C5). The whole-pixel
+// line height that keeps a tall box's first wheel at its end chaining is D-6852 (`whole-pixel-mono-line`, R68), under
+// D-6437.
 //
 // A code block is a scroll container (`max-height: var(--well-max)`, `overflow: auto`). An `overscroll-behavior:
 // contain` on it stops scroll chaining on BOTH axes even when it has nothing to scroll, so a wheel over any block
@@ -22,8 +24,10 @@ const toolCard = readFileSync(path.join(UI, 'tool-card.css'), 'utf8');
 
 // A mono box wraps its text in whole pixels: 13px x 1.55 = 20.15px makes a tall box's scroll range fractional, and at
 // some page offsets Chrome then latches the first wheel at the box's end to the box, which cannot move (the browser leg
-// sweeps eight offsets per box). Either the round() form over the two tokens or an integer px, in whatever spacing.
-const WHOLE_PIXEL = /^(round\(down,calc\(var\(--fs-sm\)\*var\(--lh-mono\)\),1px\)|\d+px)$/;
+// sweeps eight offsets per box). R68 permits a local whole-pixel fix only in this derived form, so the pin is exact: the
+// round() over the two tokens, in whatever spacing. A blanket `20px` (or any other integer) would drift from the tokens
+// and is refused.
+const WHOLE_PIXEL = 'round(down,calc(var(--fs-sm)*var(--lh-mono)),1px)';
 
 /** A rule's declaration names in source order, comments stripped, so a declaration can be placed AFTER another. */
 const declNames = (rule: string): string[] =>
@@ -54,9 +58,9 @@ describe('a wheel over a transcript box chains to the transcript (D-6437)', () =
   });
 });
 
-describe('a mono box in the transcript declares a whole-pixel line height (D-6437, R68)', () => {
+describe('a mono box in the transcript declares a whole-pixel line height (D-6852, whole-pixel-mono-line, under D-6437)', () => {
   it('.msg-assist pre declares a whole-pixel line height', () => {
-    // Declared AFTER the `font` shorthand, which resets it. Either the round() form over the tokens or an integer px.
+    // Declared AFTER the `font` shorthand, which resets it, and exactly the round() form over the tokens.
     const pre = ruleIn(prose, '.msg-assist pre');
     const names = declNames(pre);
     const fontAt = names.lastIndexOf('font');
@@ -64,12 +68,13 @@ describe('a mono box in the transcript declares a whole-pixel line height (D-643
     expect(fontAt, 'the block sets its font through the shorthand').toBeGreaterThanOrEqual(0);
     expect(lineAt, 'the block declares a line-height after the font shorthand').toBeGreaterThan(fontAt);
     const line = (declValue(pre, 'line-height') ?? '').replace(/\s+/g, '');
-    expect(line, 'a whole-pixel line height').toMatch(WHOLE_PIXEL);
+    expect(line, 'a whole-pixel line height, derived from the tokens').toBe(WHOLE_PIXEL);
   });
 
   it('WELL declares a whole-pixel line height', () => {
     // Tailwind spells it as one arbitrary-value `leading` class (spaces as underscores), or as an arbitrary
-    // `line-height` property class. `leading-mono` is the token's unitless 1.55, which is the defect.
+    // `line-height` property class; either must read as the derived form. `leading-mono` is the token's unitless 1.55,
+    // which is the defect.
     const lineTokens = WELL.split(/\s+/).filter((t) => /^leading-|^\[line-height:/.test(t));
     expect(lineTokens, 'WELL carries exactly one line-height class').toHaveLength(1);
     const m = /^(?:leading-\[(.*)\]|\[line-height:(.*)\])$/.exec(lineTokens[0]!);
@@ -79,7 +84,7 @@ describe('a mono box in the transcript declares a whole-pixel line height (D-643
       + 'not the unitless token',
     ).not.toBeNull();
     const value = (m![1] ?? m![2] ?? '').replace(/_/g, '').replace(/\s+/g, '');
-    expect(value, 'a whole-pixel line height').toMatch(WHOLE_PIXEL);
+    expect(value, 'a whole-pixel line height, derived from the tokens').toBe(WHOLE_PIXEL);
   });
 
   it('.tool-ask-a declares a whole-pixel line height', () => {
@@ -91,6 +96,6 @@ describe('a mono box in the transcript declares a whole-pixel line height (D-643
     expect(fontAt, 'the chip sets its font through the shorthand').toBeGreaterThanOrEqual(0);
     expect(lineAt, 'the chip declares a line-height after the font shorthand').toBeGreaterThan(fontAt);
     const line = (declValue(chip, 'line-height') ?? '').replace(/\s+/g, '');
-    expect(line, 'a whole-pixel line height').toMatch(WHOLE_PIXEL);
+    expect(line, 'a whole-pixel line height, derived from the tokens').toBe(WHOLE_PIXEL);
   });
 });
