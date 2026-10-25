@@ -905,7 +905,9 @@ function r93Tests(cells: () => R93Cell[], extra: { stop?: boolean } = {}): void 
       const s = c.during.sentence;
       const bar = c.during.inputbar;
       if (s === null || bar === null) return ['the sentence or the input bar is missing'];
-      return s.rect.bottom <= bar.top + 0.01 ? [] : [`sentence bottom ${s.rect.bottom} is below the input bar top ${bar.top}`];
+      if (s.rect.bottom > bar.top + 0.01) return [`sentence bottom ${s.rect.bottom} is below the input bar top ${bar.top}`];
+      // The sentence keeps its 8px gap above the field (`margin: 0 0 var(--sp-2)`), so it does not touch it.
+      return bar.top - s.rect.bottom >= 7.5 ? [] : [`the gap above the field is ${bar.top - s.rect.bottom}px, under 7.5`];
     });
     expect(fails, 'the sentence sits above the field').toEqual([]);
   });
@@ -956,6 +958,8 @@ function r93Tests(cells: () => R93Cell[], extra: { stop?: boolean } = {}): void 
       // one scroller. Never two.
       const atFloor = chatBody <= chat.height / 3 + 1;
       const want = c.fixture === 1 ? [1, 1] : atFloor ? [0, 1] : [0, 0];
+      // And the one scroller is the card's own body, whichever fixture.
+      for (const sc of scrollers) if (!sc.startsWith('ask-inline-body ')) out.push(`the scroller is ${sc}, not .ask-inline-body`);
       if (scrollers.length < want[0]! || scrollers.length > want[1]!) out.push(`${scrollers.length} card scrollers (${scrollers.join('; ')}; scrollHeight/clientHeight), want ${want[0] === want[1] ? want[0] : `${want[0]} to ${want[1]}`}${atFloor ? ' (the floor binds)' : ''}`);
       return out;
     });
@@ -1014,7 +1018,9 @@ describe('R93: the sentence above the field, and the field does not move (D-6326
         }
       }, 240_000);
       it('records a sentence of at least one line', () => {
-        expect(cells.every((c) => c.lines !== null && c.lines >= 1), 'every wrap cell measured a sentence').toBe(true);
+        // 200 percent text wraps the sentence onto at least two lines at 900px; 100 percent is one line.
+        const least = zoom >= 200 ? 2 : 1;
+        expect(cells.every((c) => c.lines !== null && c.lines >= least), `every wrap cell measured a sentence of at least ${least} line(s)`).toBe(true);
       });
       r93Tests(() => cells);
     });
