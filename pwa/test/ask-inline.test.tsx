@@ -20,7 +20,7 @@ import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ChatEvent, Dialog, FleetSession } from '../../shared/api';
-import { api, sendErrorText } from '../src/lib/api';
+import { api, ApiError, sendErrorText } from '../src/lib/api';
 import { ChatListInner } from '../src/session/ChatList';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { SessionScreen } from '../src/screens/SessionScreen';
@@ -1218,6 +1218,163 @@ describe('Send is disabled while an inline ask surface is mounted (R77 F1)', () 
       fireEvent.click(send);
       await act(async () => { await Promise.resolve(); });
       expect(prompt, 'the phone\'s Send is unchanged: it reaches the store').toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+// R89: the DESK local send hold covers the other send paths too. While the inline ask surface is mounted (`askInline`, the one
+// fact `Composer`'s `askUp` already reads), a failed bubble's Retry and the draft-conflict sheet's Replace draft and Append
+// anyway are DISABLED, and their handlers are guarded behind that. Nothing is cleared, nothing is sent, and nothing is queued
+// to go when the card leaves: the failed bubble and the open sheet stay as they were, and after the card goes the same buttons
+// work as before. Cancel and Discard are not sends and stay enabled. The failed bubble and the conflict come through the real
+// composer and the store's own `dispatch` (a rejecting `api.prompt`), never a hand-built `pending`.
+describe('the other send paths are held while an inline ask is up (R89)', () => {
+  const OFFLINE = new Error('offline');
+  const CONFLICT = (): ApiError => new ApiError(409, { ok: false, error: 'draft-present', draft: 'half-typed thought' });
+  const retryBtn = (): HTMLButtonElement => document.querySelector<HTMLButtonElement>('.pending-retry')!;
+  const byText = (name: string): HTMLButtonElement | undefined =>
+    [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === name);
+  const tick = async (): Promise<void> => { await act(async () => { await Promise.resolve(); await Promise.resolve(); }); };
+  const clearAsk = (store: SessionStore): void => {
+    act(() => {
+      store.getState().apply({ type: 'dialog_cleared' });
+      store.getState().apply({ type: 'ask_cleared' });
+    });
+  };
+
+  /** A send that fails through the real composer and the store: `reject` is the one rejection of `api.prompt`. */
+  async function failedSend(prompt: ReturnType<typeof vi.fn>, text: string, reject: Error): Promise<void> {
+    prompt.mockRejectedValueOnce(reject);
+    fireEvent.change(composer(), { target: { value: text } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await tick();
+    expect(prompt, 'premise: the send was made and refused').toHaveBeenCalledTimes(1);
+  }
+
+  it('Retry on a failed bubble: with fixture 7 up it is disabled before any click, a click sends nothing and keeps the bubble, and after the clear one click sends the original text once', async () => {
+    media(true);
+    const { arrive, prompt, store } = mount();
+    await failedSend(prompt, 'resend me', OFFLINE);
+    expect(retryBtn(), 'premise: the failed bubble offers Retry').not.toBeNull();
+    expect(retryBtn(), 'premise: Retry is enabled with no ask up').toBeEnabled();
+    arrive(7);
+    expect(store.getState().dialog, 'premise: the pane has no menu').toBeNull();
+    expect(store.getState().ask, 'premise: the hook\'s approval envelope is held').not.toBeNull();
+    card();
+    expect(retryBtn(), 'Retry is disabled while the card is mounted').toBeDisabled();
+    expect(prompt, 'no request has been made').toHaveBeenCalledTimes(1);
+    fireEvent.click(retryBtn());
+    await tick();
+    expect(prompt, 'a click on the disabled Retry makes no request').toHaveBeenCalledTimes(1);
+    expect(screen.getByText('resend me'), 'the failed bubble keeps its text').toBeInTheDocument();
+    expect(store.getState().pending.map((p) => p.state), 'and stays failed: no optimistic duplicate, nothing queued').toEqual(['failed']);
+
+    clearAsk(store);
+    expect(cards(), 'premise: the card is gone').toHaveLength(0);
+    await tick();
+    expect(prompt, 'nothing was sent on its own when the card left').toHaveBeenCalledTimes(1);
+    expect(retryBtn(), 'Retry is enabled once the card has gone').toBeEnabled();
+    fireEvent.click(retryBtn());
+    await tick();
+    expect(prompt, 'one click makes exactly one request').toHaveBeenCalledTimes(2);
+    expect(prompt.mock.calls[1]!.slice(0, 2), 'with the original text').toEqual([ID, 'resend me']);
+  });
+
+  it.each([
+    [9, 'a pick-several (multiSelect) menu'],
+    [6, 'a coordinator-held question'],
+  ] as const)('Retry is disabled with fixture %i up (%s), and sends nothing', async (n, _what) => {
+    media(true);
+    const { arrive, prompt } = mount({ row: askFixture(n).session });
+    await failedSend(prompt, 'resend me', OFFLINE);
+    arrive(n);
+    card();
+    expect(retryBtn(), 'Retry is disabled while the card is mounted').toBeDisabled();
+    fireEvent.click(retryBtn());
+    await tick();
+    expect(prompt, 'no request is made').toHaveBeenCalledTimes(1);
+  });
+
+  it('Retry stays disabled through the reconnect gap, while the held card is up', async () => {
+    media(true);
+    const { speak, drop, prompt, store } = mountLive();
+    await failedSend(prompt, 'resend me', OFFLINE);
+    speak(1);
+    card();
+    drop();
+    expect(store.getState().conn, 'premise: the store left open').not.toBe('open');
+    card();
+    expect(retryBtn(), 'in the gap: Retry is disabled').toBeDisabled();
+    fireEvent.click(retryBtn());
+    await tick();
+    expect(prompt, 'in the gap: no request is made').toHaveBeenCalledTimes(1);
+  });
+
+  describe.each([
+    ['Replace draft', 'my message', (): string => 'my message'],
+    ['Append anyway', 'half-typed thought\nmy message', (): string => 'half-typed thought\nmy message'],
+  ] as const)('the draft-conflict sheet\'s %s', (label, sent) => {
+    it('with fixture 7 up it is disabled before any click, a click leaves the sheet open and sends nothing, and after the clear it resolves once', async () => {
+      media(true);
+      const { arrive, prompt, store } = mount();
+      await failedSend(prompt, 'my message', CONFLICT());
+      expect(screen.getByText(/already a draft in this session/), 'premise: the conflict sheet is open').toBeInTheDocument();
+      expect(byText(label), `premise: ${label} is enabled with no ask up`).toBeEnabled();
+      arrive(7);
+      expect(store.getState().dialog, 'premise: the pane has no menu').toBeNull();
+      expect(store.getState().ask, 'premise: the hook\'s approval envelope is held').not.toBeNull();
+      card();
+      expect(byText(label), `${label} is disabled while the card is mounted`).toBeDisabled();
+      expect(prompt, 'no request has been made').toHaveBeenCalledTimes(1);
+      fireEvent.click(byText(label)!);
+      await tick();
+      expect(prompt, `a click on the disabled ${label} makes no request`).toHaveBeenCalledTimes(1);
+      expect(screen.getByText(/already a draft in this session/), 'the sheet is still open').toBeInTheDocument();
+      expect(screen.getByTestId('draft-well').textContent, 'with the draft it showed').toBe('half-typed thought');
+      expect(store.getState().pending.map((p) => [p.state, p.text]), 'the pending is untouched: failed, with its text')
+        .toEqual([['failed', 'my message']]);
+      expect(byText('Cancel'), 'Cancel is not a send and stays enabled').toBeEnabled();
+
+      clearAsk(store);
+      expect(cards(), 'premise: the card is gone').toHaveLength(0);
+      await tick();
+      expect(prompt, 'nothing resolved on its own when the card left').toHaveBeenCalledTimes(1);
+      expect(byText(label), `${label} is enabled once the card has gone`).toBeEnabled();
+      fireEvent.click(byText(label)!);
+      await tick();
+      expect(prompt, `${label} resolves once`).toHaveBeenCalledTimes(2);
+      expect(prompt.mock.calls[1]!.slice(0, 2), 'with the right text').toEqual([ID, sent]);
+      expect(prompt.mock.calls[1]![2], 'and replaceDraft').toMatchObject({ replaceDraft: true });
+    });
+  });
+
+  describe('the phone is unchanged (a Sheet never reports askInline)', () => {
+    it('with fixture 7 in the Sheet, Retry is enabled and a click re-sends', async () => {
+      media(false);
+      const { arrive, prompt } = mount();
+      await failedSend(prompt, 'resend me', OFFLINE);
+      arrive(7);
+      expect(cards(), 'premise: no inline card on the phone').toHaveLength(0);
+      expect(dialogs(), 'premise: the Sheet is up').toHaveLength(1);
+      expect(retryBtn(), 'Retry is not disabled by the ask').toBeEnabled();
+      fireEvent.click(retryBtn());
+      await tick();
+      expect(prompt, 'the phone\'s Retry is the store\'s as before').toHaveBeenCalledTimes(2);
+      expect(prompt.mock.calls[1]!.slice(0, 2)).toEqual([ID, 'resend me']);
+    });
+
+    it('with fixture 7 in the Sheet, Replace draft and Append anyway are enabled and act', async () => {
+      media(false);
+      const { arrive, prompt } = mount();
+      await failedSend(prompt, 'my message', CONFLICT());
+      arrive(7);
+      expect(cards(), 'premise: no inline card on the phone').toHaveLength(0);
+      expect(byText('Replace draft'), 'Replace draft is not disabled by the ask').toBeEnabled();
+      expect(byText('Append anyway'), 'Append anyway is not disabled by the ask').toBeEnabled();
+      fireEvent.click(byText('Replace draft')!);
+      await tick();
+      expect(prompt, 'Replace draft resolves').toHaveBeenCalledTimes(2);
+      expect(prompt.mock.calls[1]!.slice(0, 2)).toEqual([ID, 'my message']);
     });
   });
 });
