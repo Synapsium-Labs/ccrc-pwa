@@ -3152,7 +3152,7 @@ case "$event" in
     # The jq program: keeps this coordinator's non-terminal runs, one line each, then an "awaiting you" line, all
     # clipped to $max (surplus runs collapse into a "+N more" line). Every interpolated field goes through `s`
     # (strings: a safe charset, 40 chars) or `n` (integers: a non-number reads 0), so no server byte injects prose.
-    ROSTER_PROGRAM='def s: tostring | gsub("[^A-Za-z0-9._:/-]"; "") | .[0:40]; def n: if type == "number" then floor else 0 end;
+ROSTER_PROGRAM='def s: tostring | gsub("[^A-Za-z0-9._:/-]"; "") | .[0:40]; def n: if type == "number" then floor else 0 end;
       def age($t): (($now - $t) / 1000 | floor) as $x | if $x < 3600 then "\(($x / 60 | floor))m" elif $x < 172800 then "\(($x / 3600 | floor))h" else "\(($x / 86400 | floor))d" end; 
       [.runs[]? | select(.claimedBy == $me and (.state | IN("done", "failed") | not))] as $r |
       if ($r | length) == 0 then empty else [$r[] | "#\(.id | n) \(.program | s) w\(.wave | n)\(if .waveOf then "/\(.waveOf | n)" else "" end) \(.state | s) worker=\(.sessionId // "none" | s) \(age(.dispatchedAt // .openedAt)) unread=\(.unreadMail | n)"] as $l |
