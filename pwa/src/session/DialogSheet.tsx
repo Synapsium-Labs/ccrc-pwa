@@ -277,6 +277,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // D-6325, R5: the question whose `Other` row the operator chose, so its field is open. The text and call above keep it
   // open too (`OwnWords`); this is the choice itself, before anything is typed. Ended with the send that landed.
   const [otherFor, setOtherFor] = useState<string | null>(null);
+  // R102: counts the deliberate opens of the Other field, so the inline card focuses it on one and on nothing else (`OwnWords`).
+  const [focusNonce, setFocusNonce] = useState(0);
   // D-5091: a multiSelect question's set and its commit, one value for the same reason (see `PickCall`).
   const [pick, setPick] = useState(NO_PICK);
   // Decision `ask-dialog-tab-route`: a tab move (the arrow keys, or a tab-strip chip) is under way. It is a send like
@@ -503,7 +505,11 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
     text: own.text,
     call: own.call,
     otherFor,
-    onOpen: setOtherFor,
+    onOpen: (q) => {
+      setOtherFor(q);
+      setFocusNonce((n) => n + 1);
+    },
+    focusNonce,
     onText: (text) => setOwn((o) => ({ ...o, text })),
     onSend: (row) => void sendWords(row),
   };

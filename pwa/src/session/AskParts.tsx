@@ -26,11 +26,12 @@
 // the review is one render for every source of copy (`AskReview`, fixed words over the structured headers), the tab
 // strip's chips carry the structured headers (`AskTabs`), and the option preview (`OptionPreview`) lives here beside the
 // rows it opens under.
-import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useContext, useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import type { Dialog, DialogMulti } from '../../../shared/api';
 import { Button, Chip, EYEBROW, FOCUS_RING, OptionRow, RESET_LIST, Well } from '@ccrc/ui';
 import type { ReviewRows } from '../../../shared/ask-menu';
 import { rowKey } from './askKeys';
+import { AskContainer } from './AskSurface';
 import type { AskKeys } from './useAskKeys';
 import {
   SUBMIT_ANSWERS, commitWord, optionCopy, paneTicks, slotHolds, slotHoldsPart, wantedTicks, type AskSource,
@@ -305,6 +306,9 @@ export interface Words {
   readonly otherFor: string | null;
   /** Choose the `Other` row of the question whose text is given: opens the field, sends nothing. */
   readonly onOpen: (question: string) => void;
+  /** R102: a count of the deliberate opens (`onOpen` bumps it). INLINE the field takes focus when it changes, never on a
+   *  change of `chosen` alone (a return to a question whose Other was kept). Absent: never changed. */
+  readonly focusNonce?: number;
   readonly onText: (text: string) => void;
   /** Send the text into the free-text row printed `row`. */
   readonly onSend: (row: number) => void;
@@ -411,12 +415,23 @@ export function OwnWords({
   const open = row !== null && (chosen || busy || text !== '' || slot.kind === 'held');
   // The cursor goes into the field when the operator chooses the row (a transition of `chosen`), and only then: a field
   // that opens because the terminal's row filled up must not take the focus from wherever it is.
+  //
+  // R102: INLINE (the desk's card) no code assigns focus on its own, so the rule above is narrower there: the field takes
+  // focus only on a deliberate open, `words.focusNonce` changing (a click on the row, or its handled digit, both `onOpen`),
+  // and never because `chosen` turned true again on a return to a question whose Other was kept (a sent ←, or a screen an
+  // outside move brought back). The nonce standing at mount is absorbed, so a remount never focuses, and only an OPEN field
+  // takes it. In the Sheet (the default container, so also any use outside `AskSurface`) the rule is exactly as it was.
+  const inline = useContext(AskContainer) === 'inline';
   const field = useRef<HTMLInputElement | null>(null);
   const wasChosen = useRef(chosen);
+  const seenNonce = useRef(words.focusNonce);
   useEffect(() => {
-    if (chosen && !wasChosen.current) field.current?.focus();
+    const deliberate = seenNonce.current !== words.focusNonce;
+    seenNonce.current = words.focusNonce;
+    if (inline ? deliberate && open : chosen && !wasChosen.current) field.current?.focus();
     wasChosen.current = chosen;
-  }, [chosen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chosen, words.focusNonce]);
   if (row === null) {
     if (slot.kind === 'held') return <OwnWordsLine>{ROW_HOLDS_OTHER}</OwnWordsLine>;
     return chat ? <OwnWordsLine>{NO_OTHER}</OwnWordsLine> : null;
