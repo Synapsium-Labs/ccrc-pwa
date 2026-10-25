@@ -7,6 +7,7 @@ import {
   sendErrorText, submitErrorText, updateErrorText, uploadErrorText, ARCHIVE_REFUSAL_TEXT, SWAP_REFUSAL_TEXT,
   COORD_UNSUPPORTED_TEXT, HOLD_EMPTY_REASON_TEXT, UNKNOWN_RUN_TEXT, UNSUPPORTED_VERB_TEXT,
 } from '../src/lib/api';
+import { INTERRUPT_REFUSAL_TEXT } from '../src/lib/refusalWords';
 
 /** Every code any of the tables might know, plus words none owns: each table is asked about all of them. */
 const WORDS = [
@@ -724,7 +725,7 @@ describe('the PWA refusal copy, pinned (ARCH-13b)', () => {
   it('the exported sentences and keyed tables are byte for byte', () => {
     expect({
       ARCHIVE_REFUSAL_TEXT, SWAP_REFUSAL_TEXT, COORD_UNSUPPORTED_TEXT, HOLD_EMPTY_REASON_TEXT, UNKNOWN_RUN_TEXT,
-      UNSUPPORTED_VERB_TEXT,
+      UNSUPPORTED_VERB_TEXT, INTERRUPT_REFUSAL_TEXT,
     }).toMatchInlineSnapshot(`
       {
         "ARCHIVE_REFUSAL_TEXT": {
@@ -738,6 +739,11 @@ describe('the PWA refusal copy, pinned (ARCH-13b)', () => {
         },
         "COORD_UNSUPPORTED_TEXT": "the fleet host needs the newer ccd",
         "HOLD_EMPTY_REASON_TEXT": "empty reason — say which program holds this",
+        "INTERRUPT_REFUSAL_TEXT": {
+          "background-only": "Claude isn't working right now — nothing to stop",
+          "not-alive": "Claude isn't working right now — nothing to stop",
+          "not-busy": "Claude isn't working right now — nothing to stop",
+        },
         "SWAP_REFUSAL_TEXT": {
           "hibernated": "It is asleep, so there is nothing running to move. Wake it, then move it.",
           "session-busy": "It is working — moving it now would lose the turn in progress and its background tasks.",
