@@ -531,6 +531,26 @@ describe.skipIf(!LINUX)('containment-unproven: TERMINAL — a checkout git recor
     expect(collectOf(a)['unmeasured']).toBe('checkouts');
   }, 60_000);
 
+  it('a leaf of many fixture clones (more `.git` directories than the cap) is collectable, not stuck on `checkouts`', () => {
+    const { leaf } = makeOrphan(h);
+    for (let i = 0; i < 70; i++) fs.mkdirSync(path.join(leaf, `repo-${i}`, '.git'), { recursive: true });
+    const a = collectAudit(h, { pre: `${AGED} WS_LEAF_CHECKOUTS_CAP=64;` });   // 70 directories against a cap of 64
+    expect(a.code, a.stderr).toBe(0);
+    expect(verdictOf(a)).toBe('collectable');
+  }, 60_000);
+
+  it('more `.git` FILES than the cap (lowered to 64 here, so the case stays fast): unmeasured `checkouts-cap`, a word apart from a load failure', () => {
+    const { leaf } = makeOrphan(h);
+    fs.mkdirSync(path.join(leaf, 'inner'));
+    for (let i = 0; i < 65; i++) {
+      fs.mkdirSync(path.join(leaf, `w${i}`));
+      fs.writeFileSync(path.join(leaf, `w${i}`, '.git'), `gitdir: ${path.join(leaf, 'inner')}\n`);
+    }
+    const a = collectAudit(h, { pre: `${AGED} WS_LEAF_CHECKOUTS_CAP=64;` });
+    expect(a.code).toBe(1);
+    expect(collectOf(a)['unmeasured']).toBe('checkouts-cap');
+  }, 60_000);
+
   it('a row rule that cannot answer: unmeasured `rows`', () => {
     makeOrphan(h);
     const a = collectAudit(h, { pre: `${AGED} _ws_collect_rows_clear() { _WS_COLLECT_ROWS_WHY='stub: unplaceable'; return 2; };` });

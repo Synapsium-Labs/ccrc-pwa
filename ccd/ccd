@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a281a5f7a0dfe2eba99ab300703f802aed0258f0e940e8437aa3343769f5b1d5
+# ccrc:generated 1 sha256=02c20fc33f9ae1440414d4840034d98b2828e74994e56d4a7ccf213d3a695191
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -35816,7 +35816,11 @@ _ws_leaf_uid() {   # path -> the uid that owns the path ITSELF (`ls -dn`: numeri
   printf '%s' "$u"
 }
 # ── does a leaf hold a checkout git records ELSEWHERE (child reclamation wave 6, spec §5.5, §5.6) ──
-WS_LEAF_CHECKOUTS_CAP=64   # the most `.git` entries one leaf's scan examines; more is unmeasured
+WS_LEAF_CHECKOUTS_CAP=1024   # the most `.git` entries one leaf's scan examines (a directory is not one: it needs no examination); more is
+#                                unmeasured. Measured (D-6860): ~20 ms an entry on the worst path (an outside admin directory with its
+#                                back-link), so 1024 is ~21 s; the examination is bounded by REAP_SCAN_SECONDS as well, so a slower box
+#                                stops unmeasured rather than overrunning it
+_WS_CHECKOUTS_CAPPED=''     # '1' when `_ws_leaf_checkouts` answered 2 because of that cap (a fixed fact of the leaf), else ''
 _WS_SMALL=''; _WS_SMALL_NUL=''
 _ws_leaf_read_small() {   # file -> 0 with _WS_SMALL = its bytes, each NUL read as a newline, and _WS_SMALL_NUL
   #                            = `inner` (a NUL stands before a byte that is not NUL, CR or LF), `trailing` (every
@@ -35996,7 +36000,10 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
   # not read hides what is under it) is unmeasured. Not pruned at a `.git`
   # directory: a tree can be parked inside a clone's `.git` as anywhere else,
   # and the removal takes it too; the bound, not a prune, caps the walk.
-  # At most `WS_LEAF_CHECKOUTS_CAP` entries are examined: more is unmeasured.
+  # At most `WS_LEAF_CHECKOUTS_CAP` entries are examined: more is unmeasured, and says
+  # so (`_WS_CHECKOUTS_CAPPED`, a fixed fact of the leaf). The examination itself is
+  # bounded by `REAP_SCAN_SECONDS` too: one that does not finish in time is unmeasured,
+  # a fact of the box's load, not of the leaf, so the cap flag stays unset.
   # EACH `.git`, by `-L`, `-d`, `-f`, never followed: a link refuses (git
   # would follow it, ccd never does); a directory passes (a full clone, the
   # leaf's own); a regular file is read AS A FILE (never by running git inside
@@ -36017,9 +36024,9 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
   # absolutely inside the pre-move leaf is read at the leaf's new place while
   # nothing stands at that spelling. Every other caller passes neither, and
   # nothing it is answered changes.
-  local lp outf errf err rc f why='' n=0 alias="${2-}" accepted="${3-}"
+  local lp outf errf err rc f why='' n=0 deadline alias="${2-}" accepted="${3-}"
   local -a gits=()
-  _WS_CHECKOUTS_WHY=''; _WS_CHECKOUTS_ACCEPTED=''
+  _WS_CHECKOUTS_WHY=''; _WS_CHECKOUTS_ACCEPTED=''; _WS_CHECKOUTS_CAPPED=''
   if [[ -n "$alias" ]]; then
     [[ "$alias" == /* && "$alias" != *$'\n'* ]] \
       || { _WS_CHECKOUTS_WHY="the leaf's pre-move spelling '$alias' is not an absolute path, so no back-link is compared with it"; return 2; }
@@ -36044,13 +36051,17 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
     return 2
   fi
   while IFS= read -r -d '' f; do
+    [[ -d "$f" && ! -L "$f" ]] && continue   # a full clone passes unread (`_ws_leaf_checkout_one`'s rule), so a fixture-heavy leaf is not capped
     gits+=("$f"); n=$(( n + 1 ))
     (( n <= WS_LEAF_CHECKOUTS_CAP )) || break
   done < "$outf"
   rm -f "$outf"
   (( n <= WS_LEAF_CHECKOUTS_CAP )) \
-    || { _WS_CHECKOUTS_WHY="$lp holds more than $WS_LEAF_CHECKOUTS_CAP entries named .git, so not every checkout in it was examined"; return 2; }
+    || { _WS_CHECKOUTS_CAPPED=1; _WS_CHECKOUTS_WHY="$lp holds more than $WS_LEAF_CHECKOUTS_CAP entries named .git that are not directories, so not every checkout in it was examined"; return 2; }
+  deadline=$(( SECONDS + REAP_SCAN_SECONDS ))
   for f in ${gits[@]+"${gits[@]}"}; do
+    (( SECONDS < deadline )) \
+      || { _WS_CHECKOUTS_WHY="the examination of the .git entries in $lp did not finish within ${REAP_SCAN_SECONDS}s, so not every checkout in it was examined"; return 2; }
     _ws_leaf_checkout_one "$lp" "$f" "$alias" "$accepted"; rc=$?
     (( rc != 1 )) || return 1
     (( rc == 0 )) || [[ -n "$why" ]] || why="$_WS_CHECKOUTS_WHY"
@@ -39391,7 +39402,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   (( rc != 2 )) || { _ws_collect_unmeasured in-use "${_WS_PATH_USERS_WHY-}"; return 1; }
   (( rc != 1 )) || { _ws_collect_refuse in-use "a process of this uid still uses $leaf (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
   _ws_leaf_checkouts "$leaf"; rc=$?
-  (( rc != 2 )) || { _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
+  (( rc != 2 )) || { [[ -z "${_WS_CHECKOUTS_CAPPED-}" ]] || { _ws_collect_unmeasured checkouts-cap "${_WS_CHECKOUTS_WHY-}"; return 1; }; _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
   (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_CHECKOUTS_WHY-}"; return 1; }
   _ws_collect_rows_clear "$id" "$leaf"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured rows "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
@@ -41032,7 +41043,7 @@ _ws_loose_eval() {   # name hex -> the FRESH rungs: REAP_VERDICT `collectable` (
   _WS_CHECKOUTS_ACCEPTED=''
   if [[ "$_WS_LOOSE_TYPE" == d ]]; then
     _ws_leaf_checkouts "$path"; rc=$?
-    (( rc != 2 )) || { _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
+    (( rc != 2 )) || { [[ -z "${_WS_CHECKOUTS_CAPPED-}" ]] || { _ws_collect_unmeasured checkouts-cap "${_WS_CHECKOUTS_WHY-}"; return 1; }; _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
     (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_CHECKOUTS_WHY-}"; return 1; }
   fi
   _WS_LOOSE_ACCEPTED="${_WS_CHECKOUTS_ACCEPTED-}"
