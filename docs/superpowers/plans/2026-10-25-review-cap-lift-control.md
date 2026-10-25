@@ -64,6 +64,7 @@ its symbol before editing.
   - **This departs from #1410's "on the run card".** `RunRow.tsx` is held by another wave, and the band sits on the same
     board as the card. A later wave may move the door onto the card.
 - **D-6912: spare.** Spend it only on a departure found while executing. If unused, its entry says "spare, unused".
+  Spent in fix round 1 on the GET's 503 `run-unreadable` (review 951 F4; see Deviations found).
 - **Not built: the optional CLI path from #1410.** A `ccrc` verb on a box holds no operator session, and it must never
   use the box token (D-6795's rule that no machine lane lifts its own cap). It stays on #1410 as a follow-up.
 
@@ -147,7 +148,10 @@ its symbol before editing.
   - a work run answers 200 with a `ReviewCapView`;
   - a run that is not a work run, or no run at all, answers 404 `not-found`;
   - a bad id answers 400 `bad-request`, read with the file's one canonical id parser (`routes.test.ts`'s id census);
-  - with auth armed and no session, it answers 401.
+  - a run the store cannot read answers 503 `run-unreadable` (D-6912, found while executing; review 951 F4);
+  - with auth armed and no session, it answers 401;
+  - its answer carries session-derived text, so it is masked by the one answer hook (`MASKED_GET_ROUTES` in
+    `server/src/server.ts`, D-5995; review 951 F1).
 - Produces a helper in `routes.ts`, for example `composeReviewCapAsk(coord, io, work): Promise<ReviewCapAsk>`. It holds
   the four lines the refusal arm has today, and the arm calls it.
 
@@ -158,15 +162,17 @@ its symbol before editing.
   - The findings states. With a fixture report under the fixture HOME, `findings.state` is `'read'` and lists its
     `## Findings` bullets. With the report deleted it is `'absent'`. With no report artifact on the mail it is
     `'unnamed'`.
-  - The refusals. A review run's id and `999999` answer 404. `0`, `01` and `abc` answer 400.
+  - The refusals. A review run's id and `999999` answer 404. `0`, `01` and `abc` answer 400. A run the store cannot
+    read answers 503 (D-6912).
   - The gate. With `authEnabled`, no cookie answers 401, and the box token alone also answers 401.
   - "the cap notice is the one `kind: 'run'` record with no session". A text scan of `server/src` finds exactly one
     `kind: 'run', sessionId: ''` writer, and it is in the refusal arm. The PWA's Mail door relies on that match.
 - [ ] **Step 2: Run them and see them fail.**
 - [ ] **Step 3: Implement it.** Move the types, extract the helper, then add the route beside the POST. Update
   `auth-gate.test.ts`'s counted lists for one more gated route. Each count's comment names this route and D-6910.
-- [ ] **Step 4: Run them and see them pass,** then `single-definition`, `coord-pause-route`, `box-token-census`, `rings`
-  (if present) and `typecheck-tests`.
+- [ ] **Step 4: Run them and see them pass,** then `single-definition`, `coord-pause-route`, `box-token-census`,
+  `refusal-status`, `rings/outward-edges`, `rings/pwa-rings`, `rings/totality`, `rings/wire-totality` (correction 10),
+  `secret-mask` (review 951 F1) and `typecheck-tests`.
 - [ ] **Step 5: Commit.** `feat(server): the operator reads a review cap's ask before lifting it (D-6910)`
 
 ### Task 3: the PWA reader, the calls and the sheet (D-6911)
@@ -266,10 +272,11 @@ its symbol before editing.
 - [ ] **Step 2: Gates.** From `server/`, one file at a time, in the foreground, with `--pool=forks --maxWorkers=2`:
   `review-cap`, `run-routes`, `auth-gate`, `coord-pause-route`, `box-token-census`, `coordinator-skill`,
   `single-definition`, `growth-check`, `docs-parity`, `citations`, `topology-clean`, `private-names`, `dtbd`,
-  `typecheck-tests`, and `deviation-refs` after `git fetch origin main`. From `pwa/`: the whole suite, then
+  `refusal-status`, `rings/outward-edges`, `rings/pwa-rings`, `rings/totality`, `rings/wire-totality` (correction 10),
+  `secret-mask` and `session-hook` (review 951), `typecheck-tests`, and `deviation-refs` after `git fetch origin main`. From `pwa/`: the whole suite, then
   `npm run build`.
 - [ ] **Step 3: The plan's As built note,** at the end of this file. Record what each deviation became, the mutation
-  table's endings, the measured growth of the three growth-checked files, and D-6912's state.
+  table's endings, the measured growth of the growth-checked files, and D-6912's state.
 - [ ] **Step 4: The PR,** from the workspace branch:
   - its body names #1410 and #1331, and links this plan by its GitHub blob URL;
   - it names no host, path or session;
@@ -286,7 +293,11 @@ its symbol before editing.
   not on the run card, which #1410 asked for, because `RunRow.tsx` is under another wave's claim. One `LiftCapSheet`
   serves both doors and posts only on confirm. The Mail record matches on `kind: 'run'`, `sessionId: ''` and a waiting
   ask. A server scan pins that the cap's notice is that shape's one writer.
-- **D-6912.** Spare, for a departure found while executing. If unused, it says "spare, unused".
+- **D-6912.** `GET /api/coord/review-cap/:id` answers 503 `run-unreadable` when the store's read of the run fails, a
+  third refusal Task 2's interface did not name (it named 404 and 400). Kept, because folding a failed read into the 404
+  would say "not a work run" of a run the server could not read: two conditions a caller handles differently, one
+  value. The GET's docstring names it, a run-routes row reaches it, and `REVIEW_CAP_REFUSAL_TEXT` words it, with a
+  lift-cap-sheet row (review 951 F4).
 
 ## Coordinator corrections, mid-wave (2026-10-25)
 
@@ -307,6 +318,50 @@ Sequencing: if #1430 or #1406 lands before you push, merge main, then re-measure
 
 If any item contradicts what you have measured at your tip, stop and ask me before choosing.
 
+## Coordinator rulings on review 951 (2026-10-25)
+
+Recorded verbatim from the fix-round mail, with one substitution: the README claim holder's session name is written
+`[the README's claim holder]`, because this repository names no session.
+
+Run 946, wave 1: fix round 1, ruled on review 951 at d796ba10d. Record everything from this line on verbatim in the plan, as "Coordinator rulings on review 951 (2026-10-25)". Leave out the report path above it, because it names a session. Run 946 is back at working.
+
+Review 951 ran the held-out panel and a door-auth lens: 26 agents, none died. The findings are four (F1-F4), plus ten advisories. These hold: D-6909, D-6910, the notice census, D-6911, the C5 rows, all ten corrections recorded word for word, M2 and M4 reproduced, growth with no waiver, and the auth of both cap routes. Your four red reports were load. Two CI legs are red on this wave's own lines, so PR #1524 is blocked.
+
+First, merge origin/main. It is 6 commits ahead and merges clean. Then:
+
+1. **F1, important: mask the GET.** Add `/api/coord/review-cap/:id` to `MASKED_GET_ROUTES` in `server/src/server.ts`. Its answer carries session-derived text, the review-done summary and the report path, and D-5995 masks every such egress unless an exemption argues otherwise. Nothing argues one here.
+   - Add a row: a summary with a planted secret-shaped token comes back masked from the GET, and the sheet's own words are intact.
+   - `secret-mask.test.ts` must be green. Its "2 MB TUI pane history" timing row was red for the reviewer under load and green in CI. Re-run it alone before calling it real.
+2. **F2, important: re-ground the README anchors.** The 61 lines added to `shared/api.ts` moved four README citations, and `session-hook.test.ts` reds on two rows: the citation debt, and README's own census entry.
+   - After the merge, point each anchor at the lines its sentence quotes. Re-measure the debt and lower it, never the rule.
+   - README.md is under [the README's claim holder]'s claim 2523. Ask it for consent for those anchor lines only, as you did for 9701. If it refuses or does not answer, ask me.
+   - `session-hook`, `citations` and `docs-parity` must be green.
+3. **F3: fix the wording, with no code change.** In `reconstruction-drill.test.ts` (about :287-290) and the plan's As built, a coord.db loss resets the rounds to 0. That is the permissive direction, not the safe one. Keep the assertion that `reviewCap` is not rebuilt, and give its true reason: the rounds come from review runs that the drill does not rebuild. A wrong safety claim is fixed in this round.
+4. **F4: ledger the third refusal as D-6912.** The spare is for exactly this. The GET's `run-unreadable` (503) when the store read fails is a departure from Task 2's interface. Write D-6912's entry in the plan as that departure.
+   - Add a run-routes row that reaches the 503.
+   - Name it in the GET's docstring.
+   - Add a `run-unreadable` word to `REVIEW_CAP_REFUSAL_TEXT`, with a lift-cap-sheet row.
+   - Fix that table's docstring, which is A4. refusal-literal-ratchet stays at 32, since a table entry is not a branch.
+
+**Fix these advisories in this round:**
+- A1: move `composeReviewCapAsk` and its JSDoc above `childReclaimPort`'s docblock.
+- A3: correct the `REVIEW_FINDINGS_WORDS` comment on `unnamed`.
+- A6: bring the plan's steps in line with correction 10 and with D-6912's new use.
+- A7: add the planned `unnamed` row, a review that reported with no report artifact.
+- A8: record M1's reds as the lens measured them.
+- A9: reword the auth-gate comment. `reviewCap` rides `GET /api/runs`, which a box-token holder reads, and only the composed ask is session-only.
+
+**Carried to a later wave, recorded in the ledger:**
+- A2: "no review reported" keyed on `summary`, in the sheet and the notice alike.
+- A5: the census's quote-style regex.
+- A10: the coord-pause-route scan string.
+
+**Gates.** Re-measure growth against the new merge-base; `server.ts` is growth-checked too. Run every gate in the brief, Task 5 and correction 10, plus `secret-mask`, `session-hook`, `citations` and `docs-parity`, one file at a time with `--pool=forks --maxWorkers=2`. A file that times out is re-run alone, and you say so.
+
+**Claims.** Take claims on `server/src/server.ts`, `server/test/secret-mask.test.ts` and `server/test/session-hook.test.ts`. Your claims 2505 and 2507 reach hard expiry at about 01:08Z and 01:17Z, so re-take them before then if the round runs long.
+
+If any item contradicts what you measure at your tip, stop and ask me before choosing. Then send a fresh wave-done.
+
 ## As built (2026-10-25)
 
 Built on `origin/main` at `d12739bd6`: the plan's five tasks, one commit each after the plan's copy, then one commit
@@ -323,8 +378,10 @@ merge-base, and the server gates re-run on the merged tree. #1430, #1398 and #13
   "no door", because no caller tells them apart. Making the field required touched every `RunSummary` literal in the
   tests: 21 PWA fixture factories gained `reviewCap: null` (one of them, `runs-finished-fold.test.tsx`, under another
   wave's claim, with its holder's written consent for that one token), and `reconstruction-drill.test.ts` names
-  `reviewCap` among what a coord.db loss forgets: `review_cap` lives only in the database, so a lost lift is lifted
-  again, the safe direction.
+  `reviewCap` among what a coord.db loss forgets. It is not rebuilt because its inputs are not: `review_cap` lives only
+  in the database, and the rounds count review runs, which the drill does not rebuild. So a loss resets the rounds to 0
+  and three more reviews open before the cap refuses again, the permissive direction (corrected in fix round 1, review
+  951 F3; this note first called it the safe one).
 - **D-6910, as planned.** `composeReviewCapAsk` in `coord/routes.ts` holds the refusal arm's three lines, and both the
   arm and `GET /api/coord/review-cap/:id` call it. The GET answers `notConfigured` first and every refusal through
   `refuseRoute` (correction 1): 400 `bad-request`, 404 `not-found` for a run that is not a work run, 503
