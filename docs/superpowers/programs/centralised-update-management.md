@@ -6128,6 +6128,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   R46's case. Neither release changes the parts the broker's soak watches. Wave 24's branch still merges clean with main.
   `STATUS 2026-10-25T08:25:42Z fleet=v0.0.670 server=v0.0.670 health=v0.0.670 newest=v0.0.671 intent=*:dev/auto=off`
   `backups=fleet:188M/server:11729M disk=fleet:103G/server:19G`
+- **2026-10-25 09:25 UTC — a third console move, to v0.0.672; v0.0.673 released; no anomalies.** Fleet box 09:09:24 to
+  09:10:36, server box 09:10:50 to 09:21:35, both `done`, `from: pwa`, as before. The server kept 5. The broker's census
+  check over the moves is complete: every hour from 06:00 to 09:00 reads 40 measured and none unmeasured. One finding
+  outside this programme went to the operator: since 07:07 the tmp sweep's census is read as malformed, because the
+  sweep's test-run rows carry an empty session id and uuid that the server's reader refuses. That lane fails toward
+  keeping. `STATUS 2026-10-25T09:25:42Z fleet=v0.0.672 server=v0.0.672 health=v0.0.672 newest=v0.0.673`
+  `intent=*:dev/auto=off backups=fleet:208M/server:11873M disk=fleet:103G/server:18G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
