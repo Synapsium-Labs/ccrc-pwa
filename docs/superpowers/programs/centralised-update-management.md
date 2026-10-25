@@ -6103,6 +6103,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   changes the parts the broker's soak watches (#1234 rewords `watch.ts`'s capability questions; #1264 is `ccd`'s orphan
   rescue), so both go in the daily mail only. `STATUS 2026-10-25T05:25:41Z fleet=v0.0.646 server=v0.0.646 health=v0.0.646`
   `newest=v0.0.666 intent=*:dev/auto=off backups=fleet:206M/server:11419M disk=fleet:103G/server:19G`
+- **2026-10-25 06:25 UTC — monitoring: v0.0.667 and v0.0.668 released; boxes stay on v0.0.646, no anomalies.** #1312 moves
+  every lane throttle, the divergences row's included, onto the monotonic clock. That row is one of the parts the broker's
+  soak protects, so its coordinator was told before any tap and rules on it. The row still starts due at a boot. The fleet
+  box's work volume ran out of space at about this hour and recovered within minutes; the probe's commands could not
+  start until it did. That is not this mechanism's, and it went to the operator. `STATUS 2026-10-25T06:26:22Z fleet=v0.0.646`
+  `server=v0.0.646 health=v0.0.646 newest=v0.0.668 intent=*:dev/auto=off backups=fleet:206M/server:11419M`
+  `disk=fleet:103G/server:19G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
