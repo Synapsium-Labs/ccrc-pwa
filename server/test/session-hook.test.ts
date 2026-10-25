@@ -6972,27 +6972,27 @@ const forkCensus = (raw: string): { forks: string[]; unparsed: string[] } => {
       }
     }
     return null;
-};
+  };
 
-// THE WINDOW. The acquire's LAST child is its `flock`, so the section opens
-// straight after the first one; it closes at the helper fork (the first
-// child after the release) or, on an arm that releases and returns, at the
-// end of the trace. `_hook_compact_pre` is the last statement in the file,
-// so "end of trace" really is "end of the arm".
-const flockAt = events.findIndex((e) => e.kind === 'exec' && e.name === 'flock');
-expect(flockAt, 'the arm took the row mutex').toBeGreaterThan(-1);
-// THE END IS THE CLONE, NOT ITS EXEC. `timeout`'s `execve` happens in the
-// child, i.e. AFTER the parent's `clone` line, so a window ending at the
-// exec swallows the helper fork itself — measured, that was this pin's
-// first draft and it reported a seventh member.
-const ENDERS = ['timeout', 'gtimeout', 'node', 'flock'];
-const endAt = events.findIndex((e, k) => k > flockAt && e.kind === 'clone' && e.pid === root
-  && ENDERS.includes(under(e.child!) ?? ''));
-const last = endAt === -1 ? events.length : endAt;
+  // THE WINDOW. The acquire's LAST child is its `flock`, so the section opens
+  // straight after the first one; it closes at the helper fork (the first
+  // child after the release) or, on an arm that releases and returns, at the
+  // end of the trace. `_hook_compact_pre` is the last statement in the file,
+  // so "end of trace" really is "end of the arm".
+  const flockAt = events.findIndex((e) => e.kind === 'exec' && e.name === 'flock');
+  expect(flockAt, 'the arm took the row mutex').toBeGreaterThan(-1);
+  // THE END IS THE CLONE, NOT ITS EXEC. `timeout`'s `execve` happens in the
+  // child, i.e. AFTER the parent's `clone` line, so a window ending at the
+  // exec swallows the helper fork itself — measured, that was this pin's
+  // first draft and it reported a seventh member.
+  const ENDERS = ['timeout', 'gtimeout', 'node', 'flock'];
+  const endAt = events.findIndex((e, k) => k > flockAt && e.kind === 'clone' && e.pid === root
+    && ENDERS.includes(under(e.child!) ?? ''));
+  const last = endAt === -1 ? events.length : endAt;
 
-const forks = events.slice(flockAt + 1, last)
-  .filter((e) => e.kind === 'clone' && e.pid === root)
-  .map((e) => under(e.child!) ?? '(subshell)');
+  const forks = events.slice(flockAt + 1, last)
+    .filter((e) => e.kind === 'clone' && e.pid === root)
+    .map((e) => under(e.child!) ?? '(subshell)');
   return { forks, unparsed };
 };
 
@@ -7025,6 +7025,14 @@ describe('the strace fork census — split lines are rejoined (runs on every pla
       '7 <... execve resumed>) = 0',
       '8 execve("/bin/rm", ["rm"], 0x1 <unfinished ...>'));
     expect(unparsed).toHaveLength(2);
+  });
+
+  it('a resumed line joins only a start of the SAME syscall: a clone resume never closes an open execve', () => {
+    const { lines, unparsed } = rejoinStrace(trace(
+      '9 execve("/bin/rm", ["rm"], 0x1 <unfinished ...>',
+      '9 <... clone resumed>) = 10'));
+    expect(unparsed, 'the clone resume found no clone start').toContain('9 <... clone resumed>) = 10');
+    expect(lines[0], 'the execve start took no tail').toBe('9 execve("/bin/rm", ["rm"], 0x1');
   });
 
   it('keeps the start line\'s position in trace order', () => {
