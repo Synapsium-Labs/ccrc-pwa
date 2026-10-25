@@ -61,17 +61,15 @@ export interface ReclaimDeps {
  *  THE CENSUS, because the guard IS which input lands where (corrected by D-1144 — the `dead` arm
  *  used to be written as "a registry that LISTED and carried no row", which is what `SingleRead`
  *  SAYS and not what it MEANS):
- *    `dead`         — a registry that listed and did not name `<id>.uuid` AT ALL, re-confirmed by a
- *                     second listing; or a listed row whose pane tmux calls gone and whose lifecycle
+ *    `dead`         — a registry that listed and did not name `<id>.uuid` AT ALL; or a listed row whose pane tmux calls gone and whose lifecycle
  *                     is one of the three words `lifecycleIsDead` names (`stopped`, `orphan`,
  *                     `never-started`).
  *    `alive`        — tmux says the pane is live; or the pane is gone and the lifecycle reads
  *                     `running`, `unsupervised`, `unclaimed`, `restarting` or `unmeasurable`.
  *                     `restarting` is the arm this file exists to keep.
  *    `unmeasurable` — the registry directory did not list at all; or it listed `<id>.uuid` while the
- *                     row behind it could not be ASSEMBLED (D-1144, the arm below); or the
- *                     re-listing that tells those two apart failed; or tmux did not answer; or the
- *                     id is not a registry id (`bad-id`, answered before any listing).
+ *                     row behind it could not be ASSEMBLED (D-1144, the arm below); or tmux did
+ *                     not answer; or the id is not a registry id (`bad-id`, answered before any listing).
  *                     Doubt is not evidence, in either direction: the identical line
  *                     `LIFECYCLE_DEAD` draws for its own `unmeasurable` key (shared/api.ts:2108-2110),
  *                     drawn again for the whole ladder. */
@@ -110,10 +108,9 @@ const isDeadLifecycle = (lc: SessionLifecycle): lc is Exclude<ClaimantDeadCause,
  * already had to close on its own post-spawn registry read (`dispatch.ts`, blocking
  * review finding 7). `readSessionRecord` answers `unlistable`, `absent` and
  * `bad-id` separately (`SingleRead`, one `kind` each), and nothing below
- * re-collapses them — but `absent` is ITSELF a fold, of three conditions that do
- * not all mean the claimant is gone, so rung 1 re-splits it at the consumer
- * rather than trusting the word. The argument is D-1144 in the body; the debt
- * that split leaves unpaid is D-1145 beside it.
+ * re-collapses them. `unmeasurable` is the listed-but-unassembled row (D-1144):
+ * a live coordinator mid-write, which `SingleRead` names itself since ARCH-47
+ * paid D-1145, so no consumer re-splits `absent` by hand.
  *
  * `nowMs` IS MILLISECONDS, and the parameter name is the guard (fleet.ts:288-298).
  * Every registry stamp is epoch seconds, `lifecycleInputFor` owns the one x1000,
@@ -129,8 +126,18 @@ export async function measureClaimant(
   const read = await readSessionRecord(deps.io, deps.cfg, id);
   switch (read.kind) {
     case 'found': break;
-    // Rung 1, below the switch: `absent` is re-split before any verdict.
-    case 'absent': break;
+    // D-1144: a row the listing NAMED and `buildRecord` could not assemble is a live coordinator caught between two
+    // `_reg_set` writes, so it is doubt, never a death — and `dead` PROCEEDS, so this is the arm that may not be wrong.
+    // `SingleRead` carries that fact itself since ARCH-47 (D-1145 paid), so the consumer no longer re-lists to tell it
+    // from a proven absence. It sits AHEAD of the tmux consultation: a pane's absence must not speak about a row the
+    // registry itself is still writing.
+    case 'unmeasurable':
+      return { state: 'unmeasurable',
+        why: `the registry lists ${id}.uuid but the row behind it could not be assembled — a session `
+          + 'mid-write or mid-teardown, transient, not a fact about the claimant' };
+    // A proven absence: the listing succeeded and does not name `<id>.uuid` at all.
+    case 'absent':
+      return { state: 'dead', cause: 'absent', why: 'no registry row in a directory that listed cleanly' };
     case 'unlistable':
       return { state: 'unmeasurable',
         why: 'the registry directory could not be listed — transient, not a fact about the claimant' };
@@ -146,62 +153,6 @@ export async function measureClaimant(
       const _x: never = read;
       return _x;
     }
-  }
-  if (read.kind !== 'found') {
-    // D-1144 — RUNG 1 ANSWERS THREE WAYS, AND THE THIRD IS THE ONE THAT MATTERS.
-    // `SingleRead`'s `absent` is THREE conditions wearing one shape
-    // (`readSessionRecord`, three `kind: 'absent'` returns): the listing did not
-    // name `<id>.uuid` at all — a PROVEN absence; `buildRecord` came back null
-    // for a row the listing DID name — its own docstring's "a session mid-write
-    // or mid-teardown", a triple member that is empty or not yet written; and
-    // the identity reconfirm's twice-observed absence. The first and third are
-    // deaths. THE SECOND IS A LIVE COORDINATOR caught between two `_reg_set`
-    // writes, and answering `dead` for it hands its program away under the
-    // sentence "no registry row in a directory that listed cleanly" — which is
-    // FALSE about that input, and false in the one direction this door may not
-    // be wrong in, because `dead` PROCEEDS.
-    //
-    // The split is one `readdir` at the consumer — the same evidence, in the
-    // same direction, that the mail ingress already draws for the same fold
-    // (`coord/routes.ts`'s mail ingress: `names.includes(<toId>.uuid)` -> 502
-    // `registry-unmeasurable`, otherwise 404 `unknown-recipient`). It sits AHEAD
-    // of the tmux consultation deliberately: a pane's absence must not get to
-    // speak about a row the registry itself is still writing, and the rung that
-    // guards a destructive act is the rung that pays an extra round trip.
-    //
-    // A re-listing that FAILS answers `unmeasurable` too, and that arm is not a
-    // formality. The first listing knew which of the three conditions fired and
-    // `SingleRead` dropped that fact, so a failed second listing leaves the
-    // question genuinely unanswered — fail-shut is the only safe direction for a
-    // destructive re-pointing, and the whole cost of being wrong here is one
-    // operator retry against a cost that is not recoverable.
-    //
-    // D-1145 — THE DEBT THIS DOES NOT PAY. `SingleRead` still folds the three
-    // conditions AT THE SOURCE, and this is the SECOND consumer to re-split them
-    // by hand; the mail ingress cited above was the first. Widening the type was
-    // considered for this fix and declined on scope, not on merit: `SingleRead`
-    // had 14 direct consumers (path identity spec §2.3 lists them), each of
-    // which needed a deliberate direction rather than a mechanical one, and the
-    // ruling that produced this arm is scoped to the one rung that stands in
-    // front of a destructive act. Path identity W1a then gave it a `kind` per
-    // answer and a fourth answer, `bad-id`, placed in every consumer by an
-    // exhaustive switch. `absent` still folds the three conditions above, so
-    // this rung's re-split, and the debt it names, both stand.
-    // THE THIRD CONSUMER THAT NEEDS THE DISTINCTION MUST WIDEN THE TYPE INSTEAD:
-    // three hand-copies of a split the source could carry is "no overloaded null
-    // at a seam" losing by attrition instead of by argument.
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) {
-      return { state: 'unmeasurable',
-        why: 'the registry stopped listing while the claimant was being measured, so a proven absence '
-          + 'could not be told from a half-written row — transient, not a fact about the claimant' };
-    }
-    if (names.includes(`${id}.uuid`)) {
-      return { state: 'unmeasurable',
-        why: `the registry lists ${id}.uuid but the row behind it could not be assembled — a session `
-          + 'mid-write or mid-teardown, transient, not a fact about the claimant' };
-    }
-    return { state: 'dead', cause: 'absent', why: 'no registry row in a directory that listed cleanly' };
   }
   const sv = await deps.tmux.sessionVerdict(id);
   if (sv.verdict === 'live') return { state: 'alive', why: 'tmux reports the pane live' };
@@ -393,7 +344,7 @@ export async function reclaimRun(
     case 'unlistable':
       return { ok: false, kind: 'registry-unmeasurable',
         detail: 'the registry directory could not be listed, so the incoming coordinator could not be checked' };
-    case 'absent': return { ok: false, kind: 'unknown-session' };
+    case 'absent': case 'unmeasurable': return { ok: false, kind: 'unknown-session' };
     // Path identity (spec §2.3): the heir is gated HERE, by the read's own
     // `bad-id`, before any listing. The route head has no copy that would
     // mask this one. Nothing is re-pointed.

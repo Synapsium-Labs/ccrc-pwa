@@ -1079,7 +1079,7 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
   switch (read.kind) {
     case 'found': break;
-    case 'absent': {
+    case 'absent': case 'unmeasurable': {
       // `absent` is read the way wave 2's `childBindGate` reads it: re-listed ONCE.
       // Absent twice is `gone`; a second listing that still names this id's
       // `.child` (or `.uuid`) — a row that exists and could not be built — is
@@ -1506,7 +1506,7 @@ export async function releaseRetiredChildHold(
   switch (read.kind) {
     case 'found': break;
     case 'unlistable': return 'failed';
-    case 'absent': return 'changed';
+    case 'absent': case 'unmeasurable': return 'changed';
     // An id `isRegistryId` refuses (spec §2.3) answers `changed`, as `absent`
     // does, by design. The row this job relied on cannot be measured, and the
     // id never heals, so a `failed` would retry and warn on every pass.

@@ -1795,7 +1795,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const read = await readSessionRecord(deps.io, deps.cfg, id);
       switch (read.kind) {
         case 'found': break;
-        case 'absent': case 'unlistable': return null;
+        case 'absent': case 'unmeasurable': case 'unlistable': return null;
         // Masked on both of its paths (spec §2.3): `knownId` refuses a
         // non-registry id on `POST /api/sessions/:id/ask`, and on
         // `POST /api/asks/:id/answer` `freshAskAt`'s own `bad-id` answers
@@ -2362,7 +2362,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     switch (read.kind) {
       case 'found': break;
       case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
-      case 'absent': return refuseRoute(reply, 'unknown-session');
+      case 'absent': case 'unmeasurable': return refuseRoute(reply, 'unknown-session');
       // An id `isRegistryId` refuses (spec §2.3) is a malformed request, never an unknown session: 400 in
       // this file's request-shape word, the one `isSafeSessionId` above answers.
       case 'bad-id': return refuseRoute(reply, 'bad-session-id');
@@ -3456,7 +3456,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // route that answered 404 for both would be reopening the exact
       // overloaded-null this 502 gate exists to close, one branch over.
       case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
-      case 'absent': return refuseRoute(reply, 'unknown-session');
+      case 'absent': case 'unmeasurable': return refuseRoute(reply, 'unknown-session');
       // This read is the ONLY gate in front of `stopArgvFor` (spec §2.3), so an id `isRegistryId` refuses
       // is refused here, before any argv: 400, this file's request-shape word, never a proven absence's 404.
       case 'bad-id': return refuseRoute(reply, 'bad-session-id');
@@ -3619,7 +3619,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     switch (read.kind) {
       case 'found': break;
       case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
-      case 'absent': return refuseRoute(reply, 'unknown-session');
+      case 'absent': case 'unmeasurable': return refuseRoute(reply, 'unknown-session');
       // The ordinary arm's id gate (spec §2.3): an id `isRegistryId` refuses is a malformed request.
       case 'bad-id': return refuseRoute(reply, 'bad-session-id');
       default: {

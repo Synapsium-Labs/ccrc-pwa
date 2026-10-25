@@ -686,7 +686,7 @@ export class SessionStream {
       // about whether THIS id exists, only that this read could not say.
       // Only a proven `absent` earns the terminal "unknown session".
       case 'unlistable': return { ok: false, reason: 'unmeasurable' };
-      case 'absent': return { ok: false, reason: 'absent' };
+      case 'absent': case 'unmeasurable': return { ok: false, reason: 'absent' };
       // An id `isRegistryId` refuses (spec §2.3) is terminal too: it never
       // heals by polling, so no poll is installed. It answers exactly as
       // `absent` does, by design, so folding it there changes nothing
