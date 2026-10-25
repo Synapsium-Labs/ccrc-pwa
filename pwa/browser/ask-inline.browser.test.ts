@@ -1065,3 +1065,59 @@ describe('R93: the phone is unchanged (360, 390 and 899px)', () => {
     });
   }
 });
+
+// R89 S1: a held Retry must LOOK held. R89 disables a failed bubble's Retry while the desk's inline ask card is mounted, but
+// `.pending-actions .pending-retry` carried no `:disabled` look, so the held button kept the accent colour, the accent
+// border and the pointer cursor of an enabled one. Through the production SessionScreen in real Chrome: a send that the
+// server refuses (the page's `/prompt` route answers 500) leaves a failed bubble; the enabled Retry's look is read, fixture 7
+// goes up, and the held Retry's computed `cursor` is not `pointer` and its `color` is the disabled ink, read from the page's
+// own disabled Send button (a `.send-btn:disabled` while the card is up), not a token named here. After the clear the Retry
+// has the look it had before. Two views, one per skin and palette.
+describe('R89 S1: a held Retry looks disabled (D-6326)', () => {
+  for (const view of [{ skin: REFINED, theme: PHOSPHOR, width: 1280 }, { skin: INSTRUMENT, theme: 'light', width: 1280 }] as AppView[]) {
+    it(`${named(view)}: with fixture 7 up the disabled Retry is not a pointer and wears the disabled ink; enabled, it keeps its look`, async () => {
+      const opened = await openR93(view);
+      try {
+        await opened.page.route('**/api/sessions/*/prompt', (route) => route.fulfill({
+          status: 500, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'offline' }),
+        }));
+        const look = () => opened.page.evaluate(() => {
+          const retry = document.querySelector<HTMLButtonElement>('.pending-actions .pending-retry')!;
+          const send = document.querySelector<HTMLButtonElement>('.composer .send-btn')!;
+          const rs = getComputedStyle(retry);
+          return {
+            disabled: retry.disabled, cursor: rs.cursor, color: rs.color, border: rs.borderTopColor,
+            sendDisabled: send.disabled, sendColor: getComputedStyle(send).color,
+          };
+        });
+        await opened.page.fill('.composer-input', 'resend me');
+        await opened.page.click('.composer .send-btn');
+        await opened.page.waitForSelector('.pending-actions .pending-retry', { timeout: 30_000 });
+        await opened.page.waitForTimeout(300);
+        const enabled = await look();
+        expect(enabled.disabled, 'premise: Retry is enabled with no card up').toBe(false);
+        expect(enabled.cursor, 'control: an enabled Retry is a pointer').toBe('pointer');
+
+        opened.frames(R93_FRAMES(7));
+        await opened.page.waitForSelector(CARD, { timeout: 30_000 });
+        await opened.page.waitForTimeout(300);
+        const held = await look();
+        expect(held.disabled, 'premise: Retry is disabled while the card is up').toBe(true);
+        expect(held.sendDisabled, 'premise: the page\'s own disabled Send is the ink reference').toBe(true);
+        expect(held.cursor, 'a held Retry is not a pointer').not.toBe('pointer');
+        expect(held.color, `a held Retry wears the disabled ink of the disabled Send (${held.sendColor}), not ${enabled.color}`).toBe(held.sendColor);
+        expect(enabled.color, 'control: an enabled Retry is not in the disabled ink').not.toBe(held.sendColor);
+
+        opened.frames([{ type: 'ask_cleared' }, { type: 'dialog_cleared' }]);
+        await opened.page.waitForSelector(CARD, { state: 'detached', timeout: 30_000 });
+        await opened.page.waitForTimeout(300);
+        const after = await look();
+        expect(after.disabled, 'premise: Retry is enabled again once the card has gone').toBe(false);
+        expect([after.cursor, after.color, after.border], 'control: it has the look it had before').toEqual([enabled.cursor, enabled.color, enabled.border]);
+        expect(opened.errors).toEqual([]);
+      } finally {
+        await opened.ctx.close();
+      }
+    }, 90_000);
+  }
+});
