@@ -4608,7 +4608,7 @@ describe('the compaction card — the sentences D-2605 falsifies (spec §3.4)', 
     expect(src).toContain('bashRoots');
     // AND THE MEASUREMENT THE SENTENCE NOW RESTS ON, re-derived here rather
     // than quoted: the bash corpus really does carry both files by name.
-    const sd = fs.readFileSync(path.resolve(__dirname, 'single-definition.test.ts'), 'utf8');
+    const sd = ['helpers.ts', ...fs.readdirSync(path.resolve(__dirname, 'single-definition')).filter((f) => f.endsWith('.test.ts'))].map((f) => fs.readFileSync(path.resolve(__dirname, 'single-definition', f), 'utf8')).join('\n');
     expect(sd).toContain('bashRoots');
     expect(sd).toContain('ccd/session-hook.sh');
     expect(sd).toContain('ccd/ccd');
@@ -7727,7 +7727,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // (an empty walk gives 0, and `resolved`'s own 400 keeps the population
     // honest).
     expect(anchored, 'and references some quotation of theirs actually anchors')
-      .toBeGreaterThanOrEqual(100);
+      .toBeGreaterThanOrEqual(90); // 100 -> 90: four references into server/test/single-definition.test.ts left the walk when that file split by area (D-TBD-named-anchors)
     // FACT ONE — the docstring's "the whole of what this floor lets through".
     // `toks` is already `usable`-filtered, so this set cannot contain a token
     // the floor refuses; what it CAN contain, and what this asserts it does
@@ -8780,7 +8780,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // edits in that file shift the frozen `plan:3236 :1319-1323` and
       // `spec:1347 :1319-1323` sites back onto lines that carry their quote:
       // two coincidental passes gained, not repairs; Task 11 still owns them.
-      'server/test/single-definition.test.ts': 11,
+      // single-definition.test.ts: 11 -> gone, the file was split into single-definition/<area>.test.ts (D-TBD-named-anchors)
       // RE-MEASURED on the session-workflows view (D-5560; base = origin/main,
       // tip = this branch merged onto it): `shared/api.ts` 0 -> 1, nothing
       // else moved. This branch adds 11 lines to the cited file (one type
@@ -8980,7 +8980,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // Measured from the same dump as the map, never retyped. No D-number.
     // 204 -> 202 at disk retention DR-26 (D-6638): the census's own arithmetic, ccd/ccd 151 -> 149 and nothing else moved. S6-R11.
     // 202 -> 199 at the hook-helpers refactor (ARCH-74): the census's own arithmetic, ccd/ccd 149 -> 146 and nothing else moved. S6-R11.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(199);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(188); // 199 -> 188: the 11 references into the split single-definition.test.ts left the census (D-TBD-named-anchors)
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -9228,7 +9228,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/session-hook.sh:1175-1177',
         // ENTERS at the design-system wave, on this branch's one added import
         // line in the cited file — see the note above this assertion.
-        'server/test/single-definition.test.ts:32-37',
+        // single-definition.test.ts:32-37 left the census: the file was split by area (D-TBD-named-anchors)
         'deploy/deploy.sh:560',
         // LEFT at box-token-lifecycle wave 2 B7 (removed `ship_secret` from deploy.sh): `deploy/deploy.sh:629` now holds
         // a comment naming `install_atomic`, which its clause quotes. Coincidence, not repair; see D2849_INVISIBLE_SINCE_PR136.
@@ -9914,8 +9914,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // drifted anchors were RE-POINTED by content (the dead-reg intent x2, the purge loop, the generation-read link, the
         // slug-residue body, the add refusal and its comment) and five entries left as genuine fixes; none entered. S6-R11.
         'ccd/ccd:203',
-        'server/test/single-definition.test.ts:1274',
-        'server/test/single-definition.test.ts:1319-1320',
+        // single-definition.test.ts:1274 left the census: the file was split by area (D-TBD-named-anchors)
+        // single-definition.test.ts:1319-1320 left the census: the file was split by area (D-TBD-named-anchors)
         'server/test/ccd-ws-reap.test.ts:344',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'ccd/ccd' + ':3038',
@@ -10175,8 +10175,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // FROM THE SAME RUN as the row-pass set above: nothing entered or left. S6-R11, no D-number.
       // LOWERED at disk retention DR-26 (D-6638), 38 -> 36, FROM THE SAME RUN as the row-pass set above: both
       // dead-reg intent sites (spec 2123 and 2210) were re-pointed by content and left; none entered. S6-R11.
-        'spec:308 server/test/single-definition.test.ts:1274',
-        'spec:308 server/test/single-definition.test.ts:1319-1320',
+        // spec:308 server/test/single-definition.test.ts:1274 left the census: the file was split by area (D-TBD-named-anchors)
+        // spec:308 server/test/single-definition.test.ts:1319-1320 left the census: the file was split by area (D-TBD-named-anchors)
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'spec:2124 ccd/ccd' + ':3038',
         'spec:2125 ccd/ccd:5797',
