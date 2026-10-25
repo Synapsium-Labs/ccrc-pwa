@@ -1027,7 +1027,7 @@ describe('resolving the \'coordinator\' role (fix-round finding 4/6)', () => {
     const home = mkTmp('ccrc-mail-');
     seed(home, 'demo-quiet-mesa');
     const w = await withMail(home); app = w.app;
-    // No program opened at all: resolveCoordinator(null) sees zero active
+    // No program opened at all: soleActiveCoordinator() sees zero active
     // programs — absent, not ambiguous, but the same refusal either way.
     const res = await send(app, GOOD);   // toId: 'coordinator', no runId
     expect(res.statusCode).toBe(404);
@@ -1043,7 +1043,7 @@ describe('resolving the \'coordinator\' role (fix-round finding 4/6)', () => {
     const w = await withMail(home); app = w.app;
     w.coord.openRun({ program: 'pA', title: 'A', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-coord-a' });
     w.coord.openRun({ program: 'pB', title: 'B', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-coord-b' });
-    const res = await send(app, GOOD);   // toId: 'coordinator', no runId -> resolveCoordinator(null)
+    const res = await send(app, GOOD);   // toId: 'coordinator', no runId -> soleActiveCoordinator()
     expect(res.statusCode).toBe(404);
     expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
     expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);

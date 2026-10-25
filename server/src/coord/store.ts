@@ -1817,7 +1817,7 @@ export class CoordStore {
         // minted a SECOND `planned` row pointing at the same claim — two
         // dispatchable runs for one piece of work, and (finding 32)
         // `programOpenRunCount` counting the orphan forever, wedging
-        // `resolveCoordinator(null)`'s "exactly one active program" guard the
+        // `soleActiveCoordinator()`'s "exactly one active program" guard the
         // same way D-26/D-51 were filed to prevent. Scoped to `state =
         // 'planned'`: a run that has already dispatched, closed, or failed is
         // never a stand-in for a fresh open call naming the same wave.
@@ -1983,7 +1983,7 @@ export class CoordStore {
    *
    * EVERY RUN OF THE PROGRAM IS REWRITTEN, TERMINAL ONES INCLUDED (operator
    * ruling R1, D-1123). Both readers of this column — `openRun`'s
-   * one-coordinator guard (:381-383) and `resolveCoordinator(null)`
+   * one-coordinator guard (:381-383) and `soleActiveCoordinator()`
    * (:1282-1284) — run the identical
    * `SELECT claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL
    * ORDER BY id LIMIT 1`, with NO state predicate and lowest id first. On a
@@ -2251,9 +2251,9 @@ export class CoordStore {
    * `THE FOLD (D-1132)` and the plan's ledger) and for the same shape of reason.
    * A mail addressed to the ROLE with no run named IS reachable: `POST /api/mail`
    * accepts `{toId:'coordinator', runId:null}` and resolves it through
-   * `resolveCoordinator(null)`, the single-active-program arm. Once queued,
+   * `soleActiveCoordinator()`, the single-active-program arm. Once queued,
    * nothing about that row records WHICH program the sender meant — the
-   * resolution is spent, `mail.runId` is NULL, and `resolveCoordinator(null)`'s
+   * resolution is spent, `mail.runId` is NULL, and `soleActiveCoordinator()`'s
    * own answer is a function of the fleet's state at the moment it ran, not a
    * fact stored anywhere. Measured: no column, no join and no read in this store
    * can recover it. So repointing such a row would be this method GUESSING that a
@@ -4205,7 +4205,7 @@ export class CoordStore {
    * the two `INSERT … ON CONFLICT(slug) DO UPDATE` sites (`openRun`,
    * `reconstruct`) both only ever touch `title` in their conflict arm, so a
    * program could never be retired. That silently disarmed
-   * `resolveCoordinator(null)` the moment a SECOND program existed — its
+   * `soleActiveCoordinator()` the moment a SECOND program existed — its
    * "single active program" guard reads `ambiguous` (`active.length !== 1`)
    * forever once a prior program's runs finish and nothing ever moves it out
    * of `active`, which is this build's ordinary steady state, not an edge
@@ -5358,24 +5358,15 @@ export class CoordStore {
   }
 
   /**
-   * `'coordinator'` is a ROLE, not a session id (Task 7's own docstring on the
-   * ingress route). With a `runId`, it is that run's own claim; with none, it
-   * is the claim of the ONE active program — ambiguous (more than one active
-   * program) or absent (no program is both active and claimed) both answer
-   * `null`, which the caller turns into `unknown-recipient`: "no guessing" —
-   * an agent-to-agent message delivered to the wrong session is worse than
-   * one refused with a reason.
-   *
-   * Mirrors `openRun`'s own one-coordinator guard query (`claimedBy IS NOT
-   * NULL ORDER BY id LIMIT 1`) rather than re-deriving a different rule for
-   * the same fact.
+   * `'coordinator'` with NO `runId` (Task 7's ingress): the claim of the ONE active program, a program-keyed read and no
+   * session's binding. Ambiguous (more than one active program) or absent (no program is both active and claimed) both
+   * answer `null`, which the caller turns into `unknown-recipient`: "no guessing", since an agent-to-agent message
+   * delivered to the wrong session is worse than one refused with a reason. With a `runId` the role is that run's own
+   * claim, read through `run(id)` (`coordinatorOfRun`, `coord/bindingReads.ts`; ARCH-62 slice 4, #797). Mirrors `openRun`'s
+   * own one-coordinator guard query (`claimedBy IS NOT NULL ORDER BY id LIMIT 1`) rather than re-deriving a different
+   * rule for the same fact.
    */
-  resolveCoordinator(runId: number | null): string | null {
-    if (runId !== null) {
-      const row = this.db.prepare('SELECT claimedBy FROM runs WHERE id = ?')
-        .get(runId) as { claimedBy: string | null } | undefined;
-      return row?.claimedBy ?? null;
-    }
+  soleActiveCoordinator(): string | null {
     const active = this.db.prepare("SELECT slug FROM programs WHERE state = 'active'")
       .all() as { slug: string }[];
     if (active.length !== 1) return null;   // no single active program: ambiguous or absent
@@ -5383,26 +5374,6 @@ export class CoordStore {
       'SELECT claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id LIMIT 1',
     ).get(active[0]!.slug) as { claimedBy: string | null } | undefined;
     return row?.claimedBy ?? null;
-  }
-
-  /**
-   * `'worker'` is the second ROLE recipient (design 2026-09-08 §4), and it is
-   * simpler than `'coordinator'` in exactly one way that matters: it is ALWAYS
-   * per run. A worker is the session a run dispatched into — `runs.sessionId` —
-   * so there is no single-active-programme arm here and there must not be one.
-   * `resolveCoordinator(null)` can fall back because a coordinator owns a
-   * PROGRAMME; nothing owns "the worker" of a fleet.
-   *
-   * NULL FOR TWO CONDITIONS THAT ARE ONE FACT AT THIS SEAM: the run does not
-   * exist, or it has not been dispatched yet. The caller refuses both with
-   * `unknown-recipient` and could not act differently on them — and the route
-   * has already refused a runId naming no run at all (check 8) before it gets
-   * here, so the reachable condition is the second alone.
-   */
-  resolveWorker(runId: number): string | null {
-    const row = this.db.prepare('SELECT sessionId FROM runs WHERE id = ?')
-      .get(runId) as { sessionId: string | null } | undefined;
-    return row?.sessionId ?? null;
   }
 
   /** One delivery row by id, for the ack route: it must know who a delivery

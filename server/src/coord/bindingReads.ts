@@ -1,5 +1,5 @@
 import { bindingOf, childParentOf, claimantsOf, parentOf, unbornIncarnation, type BindingRun, type Incarnation } from './runBinding.js';
-import type { OpenSiblingsResult, RunsNamingSessionResult } from './store.js';
+import type { OpenSiblingsResult, RunReadResult, RunsNamingSessionResult } from './store.js';
 
 /**
  * The store's binding readers, asked in the shapes the callers outside the binding use (ARCH-62, GitHub #797; consolidation
@@ -16,6 +16,7 @@ export interface BindingReadPort {
   bindingRunsOf(id: string, ids?: 'proven' | 'ordinal'): SeriesRead;
   openRunsForSession(sessionId: string, excludeRunId?: number, incarnation?: undefined, role?: 'worker' | 'claimant'): OpenSiblingsResult;
   runsNamingSession(sessionId: string, incarnation?: Incarnation): RunsNamingSessionResult;
+  run(id: number): RunReadResult;
 }
 
 /** EVERY coordinator that currently has `sessionId` working for it (the id-string rule: a coordinator or a manual workspace
@@ -59,3 +60,18 @@ export function runsTouching(
   if (!series.ok) return { ok: false, detail: `runsTouching: ${series.detail}` };
   return { ok: true, runs: series.runs.map((r) => ({ id: r.id, sessionId: r.sessionId, claimedBy: r.claimedBy })) };
 }
+
+/** The coordinator `'coordinator'` resolves to for one run: that run's own claim, `null` when the run is absent, ownerless or
+ *  cannot be read (`run(id)`'s `{ok:false}`: every caller already holds a run whose row a read proved). The run-keyed half
+ *  of the store's old `resolveCoordinator`; the no-run arm is `CoordStore.soleActiveCoordinator`. */
+export const coordinatorOfRun = (port: Pick<BindingReadPort, 'run'>, runId: number): string | null => {
+  const read = port.run(runId);
+  return read.ok ? read.run?.claimedBy ?? null : null;
+};
+
+/** The session `'worker'` resolves to for one run: that run's own `sessionId`, `null` when the run is absent, undispatched or
+ *  cannot be read. The store's old `resolveWorker`. */
+export const workerOfRun = (port: Pick<BindingReadPort, 'run'>, runId: number): string | null => {
+  const read = port.run(runId);
+  return read.ok ? read.run?.sessionId ?? null : null;
+};

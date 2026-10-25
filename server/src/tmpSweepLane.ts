@@ -13,6 +13,7 @@ import { NODE_FILES } from '../../shared/agent-protocol.js';
 import type { CoordStore } from './coord/store.js';
 import { queueSystemMail } from './coord/rundefsTx.js';
 import { survivorOf } from './coord/rundefs.js';
+import { coordinatorOfRun } from './coord/bindingReads.js';
 import type { FleetIO } from './io.js';
 import { openPoolReadDeadline } from './pools.js';
 import { INVENTORY_BUDGET_MS, readNodeFile } from './update/inventory.js';
@@ -57,7 +58,7 @@ function coordinatorOf(coord: CoordStore, sessionId: string): string | null {
   if (!open.ok) return null;
   const run = survivorOf(open.siblings);
   if (run === null) return null;
-  const claimant = coord.resolveCoordinator(run.id);
+  const claimant = coordinatorOfRun(coord, run.id);
   return claimant !== null && claimant !== sessionId ? claimant : null;
 }
 

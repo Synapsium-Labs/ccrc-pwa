@@ -25,6 +25,7 @@ import {
 import { CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, readSwitches } from '../../../shared/switches.js';
 import type { CoordStore } from './store.js';
 import { queueSystemMail } from './rundefsTx.js';
+import { coordinatorOfRun } from './bindingReads.js';
 import type { ChildReclaimDeps, ChildReclaimRequest } from './childReclaim.js';
 
 /** `review-report-superseded` (D-6922): what the sweep reads of the run a review child's
@@ -253,7 +254,7 @@ export async function childReclaimStaleTold(
       refs = res.ran === false || !res.ok ? null : parseAtticRefs(req.sessionId, res.stdout);
     }
     const { subject, body } = childStaleMail({ sessionId: req.sessionId, runId: req.runId, ask, refs });
-    const coordinator = ask.word === 'run-absent' ? null : deps.coord.resolveCoordinator(req.runId);
+    const coordinator = ask.word === 'run-absent' ? null : coordinatorOfRun(deps.coord, req.runId);
     if (coordinator !== null) {
       queueSystemMail(deps.coord, null, { fromId: 'operator', toId: coordinator, runId: null, kind: 'status', subject, body });
       return;

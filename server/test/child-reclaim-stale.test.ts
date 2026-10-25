@@ -530,8 +530,8 @@ describe('reclaimChild on the stale arm (D-6639)', () => {
 
   it('a run-absent child has no coordinator: a coord feed row, and no mail', async () => {
     const r = await rig();
-    // the run the marker names is gone from the database; resolveCoordinator has nobody to answer
-    const spy = vi.spyOn(r.coord, 'resolveCoordinator').mockReturnValue(null);
+    // the run the marker names is gone from the database; the coordinator read has nobody to answer
+    const spy = vi.spyOn(r.coord, 'run').mockReturnValue({ ok: true, run: null });
     const out = await reclaimChild(r.deps, r.req({ word: 'run-absent', holdDigest: null, holdText: null }));
     expect(out.kind).toBe('reclaimed');
     expect(spy).not.toHaveBeenCalledWith(r.runId);

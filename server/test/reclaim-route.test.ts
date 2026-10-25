@@ -117,7 +117,7 @@ describe('POST /api/runs/:id/reclaim — the union→status map', () => {
     expect([...body.runIds].sort((a, b) => a - b)).toEqual([w1, w2]);
     // RULING R1, as a mechanism: ALL of the program's runs, not just the one
     // named in the path. `openRun`'s guard (`store.ts:369-371`) and
-    // `resolveCoordinator(null)` (`store.ts:1188-1191`) both read the LOWEST-id
+    // `soleActiveCoordinator()` (`store.ts:1188-1191`) both read the LOWEST-id
     // claimed row with no state predicate, so a rewrite that spared wave 1
     // would leave both readers answering the corpse and the wedge intact.
     expect(okRun(w.coord.run(w1))!.claimedBy).toBe(HEIR);

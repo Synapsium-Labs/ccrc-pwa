@@ -84,7 +84,7 @@ const walk = (coord: CoordStore, id: number, to: RunState): void => {
 };
 
 /** `run`: whose workspace the ONE open programme's run names — this one
- *  (`mine`), or ANOTHER (`other`), so `resolveCoordinator(null)` would answer
+ *  (`mine`), or ANOTHER (`other`), so `soleActiveCoordinator()` would answer
  *  a real session and the lane must not take that guess. `state`: where the
  *  run waits (default `merging` — the coordinator is landing). `second`: a
  *  SECOND open run naming this workspace (wave N+1 on the same workspace).
@@ -337,8 +337,10 @@ describe('the landing lane latches only what it told', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const f = await harness(mergedLine());
     const realRun = f.coord.run.bind(f.coord);
+    // The landing lane reads the run twice (the coordinator of the run, then its state; ARCH-62 slice 4 reads the first through
+    // `run(id)` too): the SECOND read is the one made unreadable, as the first was before the coordinator moved onto `run(id)`.
     let n = 0;
-    vi.spyOn(f.coord, 'run').mockImplementation((id) => (n++ === 0
+    vi.spyOn(f.coord, 'run').mockImplementation((id) => (n++ === 1
       ? { ok: false as const, kind: 'run-unreadable' as const, detail: 'fixture' } : realRun(id)));
     await f.sweep();
     expect(f.mail(), 'an unreadable run row was read as "not at merging"').toEqual([]);
