@@ -77,13 +77,41 @@ describe('the bind records the occupant\'s birth (ARCH-62 slice 4, #1407)', () =
     expect(s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(b)).toEqual({ sessionBornAt: null });
   });
 
-  it('a stamp is write-once for the bound session: a re-statement of the same session leaves it', () => {
+  it('a stamp is write-once for the bound session: a re-statement of the same session leaves it, even after a newer occupant', () => {
     const s = store();
     const a = open(s, 'prog-a', 'coord-1', OLD);
     mint(s, a, 'demo-w', OLD);
     const b = open(s, 'prog-b', 'coord-1', OLD + 10);
     s.setSession(b, 'demo-w');
     s.setSession(b, 'demo-w');
-    expect(s.db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE id = ?').get(b)).toEqual({ sessionBornAt: OLD, sessionBornFor: 'demo-w' });
+    const born = () => s.db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE id = ?').get(b);
+    expect(born()).toEqual({ sessionBornAt: OLD, sessionBornFor: 'demo-w' });
+    // The name is reused and a newer occupant is minted; run b still belongs to the occupant it was bound to.
+    const fresh = open(s, 'prog-new', 'coord-live', BORN + 1000);
+    mint(s, fresh, 'demo-w', BORN);
+    s.setSession(b, 'demo-w');
+    expect(born()).toEqual({ sessionBornAt: OLD, sessionBornFor: 'demo-w' });
+  });
+
+  it('the stamp is the NEWEST placeable birth of the session, not the first one it ever had', () => {
+    const s = store();
+    const a = open(s, 'prog-a', 'coord-1', OLD);
+    mint(s, a, 'demo-w', OLD);
+    const fresh = open(s, 'prog-new', 'coord-live', BORN + 1000);
+    mint(s, fresh, 'demo-w', BORN);
+    const c = open(s, 'prog-c', 'coord-live', BORN + 2000);
+    s.setSession(c, 'demo-w');
+    expect(s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(c)).toEqual({ sessionBornAt: BORN });
+  });
+
+  it('a birth the minting run cannot place (it differs from the run\'s dispatchStartedAt) is not stamped', () => {
+    const s = store();
+    const a = open(s, 'prog-a', 'coord-1', OLD);
+    mint(s, a, 'demo-w', OLD);
+    const adopted = open(s, 'prog-x', 'coord-1', OLD + 1);
+    s.setSession(adopted, 'demo-w', BORN);   // dispatchStartedAt is NULL: childBirthOf calls this birth unplaceable
+    const c = open(s, 'prog-c', 'coord-1', BORN + 2000);
+    s.setSession(c, 'demo-w');
+    expect(s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(c)).toEqual({ sessionBornAt: OLD });
   });
 });
