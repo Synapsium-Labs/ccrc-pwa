@@ -1941,8 +1941,9 @@ its `setAt` and only to a smaller number, so a `set-window` made after a refusal
 size is an estimate, the new window is never below the largest prompt the model accepted on the lane, rounded up to
 1,000; a refusal that would set less than 1,000 is skipped. Only a refusal on the lane's own route (`exec.upstream`)
 counts, and only for a model a class names or the catalogue lists. Each refusal is read once: the windows file records
-it under `refusalsApplied`, whether it lowered the window or was skipped (a refusal entry the build cannot read is
-skipped `refusal-invalid` and not recorded, because it has no time to record). The entry it writes carries `source:
+it under `refusalsApplied`, whether it lowered the window or was skipped (a refusal entry the build cannot read, one
+that is not an object or has no positive integer `tokens`, no ISO `at`, or a key whose model part is not a model id, is
+skipped `refusal-invalid` and not recorded, so each pass reads it again). The entry it writes carries `source:
 "refusal"` and `refusedTokensEstimate`, the refused size; `show --json` lists its tokens and `setAt`, and the
 refresh's JSON row for the lane carries `lowered` (each `model`, `from`, `to`, `refused`), or `lowerFailed` with the
 reason when the pass could not run. To undo a lowering, `ccrc models <id> clear-window <model>`: the same refusal
@@ -2191,12 +2192,13 @@ the rescue never chain-waits it.
 box's installed tree and speaks the ChatGPT backend's Responses route itself, with no LiteLLM gateway and no LiteLLM
 prompt. It listens on the lane's `proxyPort`, takes the lane's gateway key (read in its own process, never put in its
 environment) and runs under the shim's unit name, so the launcher and Claude Code's settings do not change and the shim
-and the bridge can never both serve the lane's port (the LiteLLM tier has its own, and what keeps it from running
-beside a bridge is `start`'s `retired-tier-running` refusal and doctor's FAIL, below). It runs on the system `python3`,
-3.9 or later (below that `ccrc codex start` refuses `python-too-old`), and its tier needs no LiteLLM runtime. It sends
-`originator: ccrc` and a ccrc user agent, never presenting itself as Codex. Claude Code's top-level system prompt
-travels as the first developer message, with no `instructions` field and no prompt of the bridge's own; a lane directory
-holding the marker file `bridge-instructions` (no ccrc code writes it) sends it as `instructions` instead. A
+and the bridge can never both serve the lane's port (the LiteLLM tier has its own port and unit, so it can run beside
+a bridge, a tier started by hand say; `start` then refuses the lane `retired-tier-running` and doctor FAILs it, below).
+It runs on the system `python3`, 3.9 or later (below that `ccrc codex start` refuses `python-too-old`), and its tier
+needs no LiteLLM runtime. It sends `originator: ccrc` and a ccrc user agent, never presenting itself as Codex. Claude
+Code's top-level system prompt travels as the first developer message, with no `instructions` field and no prompt of the
+bridge's own; a lane directory holding the marker file `bridge-instructions` (no ccrc code writes it) sends it as
+`instructions` instead. A
 mid-conversation `role: "system"` entry becomes a developer message in its place, and effort follows the shim's own rule
 (above). Each reply's blocks are built from the upstream's finished items, except that a message's first text part
 streams live as it arrives (so a long compaction summary shows as it is written), and each reply streams zero usage in
@@ -2239,9 +2241,10 @@ a token, any message content, or any other header value (the reply's media type 
 hashed keys, nothing else, for 14 days and at most 256 MB, the oldest evicted first. `ccrc codex status <id> --json`
 adds `mode`, `upstream`, `tiers.bridge` and `bridge` (the stats file's time, last upstream request id, refusals,
 outcomes and unknown names; `null` when there is none). Doctor's `codex` check reads the lane by its mode: on a
-`direct` lane the bridge tier's running, stale (a WARN, cured by `ccrc update`, which restarts a running, proven, stale
-bridge, or by `ccrc codex stop` then `start`; `ccrc doctor --fix` restarts it only when the same run re-placed the
-shim, the runtime or the auth library for another finding, and neither starts a stopped one), foreign and unmeasured
+`direct` lane the bridge tier's running, stale (a WARN, cured by `ccrc update` (`--force` on a box already converged),
+which restarts a running, proven, stale bridge, or by `ccrc codex stop` then `start`; `ccrc doctor --fix` restarts it
+only when the same run re-placed the shim, the runtime or the auth library for another finding, and neither starts a
+stopped one), foreign and unmeasured
 rows; a FAIL, `runs a retired refresher`, when the lane's LiteLLM tier or shim runs beside it; a FAIL for the `siwc`
 route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a stats file or store that is not a regular
 file of mode 0600 is a FAIL. Removing the lane reaps both files, the recordings directory and the marker files with the
