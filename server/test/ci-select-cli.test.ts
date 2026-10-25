@@ -568,6 +568,50 @@ describe('select.mjs CLI — pull_request', () => {
       expect(outputs.count).toBe('0');
     });
 
+    // A bounded refresh carried a's record from an older commit (tracedAt) and src/foo.ts, which a reads, changed
+    // after it; c arrived without a record. The PR changes only src/bar.ts.
+    const stampedFixture = () => {
+      const repo = initRepo();
+      writeFile(repo, 'src/foo.ts', 'export const foo = 1;\n');
+      writeFile(repo, 'src/bar.ts', 'export const bar = 1;\n');
+      writeFile(repo, 'server/test/a.test.ts', "it('a', () => {});\n");
+      writeFile(repo, 'server/test/b.test.ts', "it('b', () => {});\n");
+      const oldSha = commitAll(repo, 'old');
+      writeFile(repo, 'src/foo.ts', 'export const foo = 2;\n');
+      writeFile(repo, 'server/test/c.test.ts', "it('c', () => {});\n");
+      const mapSha = commitAll(repo, 'map');
+      const mapFile = writeMapFile(repo, {
+        format: 1, sha: mapSha, baseline: depRecord(),
+        tests: {
+          'server/test/a.test.ts': { ...testRecord({ read: ['src/foo.ts'] }), tracedAt: oldSha },
+          'server/test/b.test.ts': { ...testRecord({ read: ['src/other.ts'] }), tracedAt: mapSha },
+        },
+      });
+      git(repo, ['checkout', '-q', '-b', 'pr']);
+      writeFile(repo, 'src/bar.ts', 'export const bar = 2;\n');
+      commitAll(repo, 'the PR change');
+      return { repo, mapFile };
+    };
+
+    it('stale stamps + a pull request: the uncertain and unmapped tests the PR does not touch are left to the queue, and the summary counts them', () => {
+      const { repo, mapFile } = stampedFixture();
+      const { status, outputs, summary } = runSelect(repo, { event: 'pull_request', mapFile, base: 'main' });
+      expect(status).toBe(0);
+      expect(outputs.tests).toBe('selected');
+      expect(outputs.count).toBe('0');
+      expect(outputs.queued_count).toBe('2');
+      expect(summary).toContain('left to the merge queue: 1 unmapped test(s)');
+      expect(summary).toContain('and 1 uncertain test(s)');
+    });
+
+    it('the same stale stamps without --base (no pull request base) answer full: uncertain means full', () => {
+      const { repo, mapFile } = stampedFixture();
+      const { outputs } = runSelect(repo, { event: 'pull_request', mapFile });
+      expect(outputs.tests).toBe('full');
+      expect(outputs.fallback).toMatch(/^uncertain:/);
+      expect(outputs.queued_count).toBe('0');
+    });
+
     it('--base is ignored off a pull_request: a merge_group still runs the full suite', () => {
       const { repo, mapFile } = staleMapFixture();
       const { outputs } = runSelect(repo, { event: 'merge_group', mapFile, base: 'main' });

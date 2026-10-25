@@ -442,6 +442,9 @@ function main() {
   const floor = floorStatic !== 'false' || !floorListFile || testsOut === 'full'
     || floorListHit(floorListFile, selectionResult);
 
+  // A pull request leaves what the map cannot vouch for to the merge queue's full run (selectTests'
+  // queueRunsUnmapped): say how many, so a light run that skipped them says so.
+  const queued = selectionResult && selectionResult.mode === 'selected' ? selectionResult.queued : undefined;
   writeOutputs({
     floor: String(floor),
     tests: testsOut,
@@ -455,6 +458,7 @@ function main() {
     trace_count: String(traceList.length),
     map_sha: mapSha,
     fallback,
+    queued_count: String(queued ? queued.unmapped.length + queued.uncertain.length : 0),
   });
 
   /** @type {string[]} */
@@ -465,6 +469,9 @@ function main() {
     if (traceList.length === 0 && deferred.length > 0) {
       process.stdout.write(`::warning::no test fits one trace shard's ${PROFILES.trace.budgetMs / 60_000} min budget; ${deferred.length} deferred, nothing traced\n`);
     }
+  }
+  if (queued) {
+    notes.push(`left to the merge queue: ${queued.unmapped.length} unmapped test(s) (no map entry, not touched by this change) and ${queued.uncertain.length} uncertain test(s) (record older than a change to what it read, not hit by this change)`);
   }
   const nowMs = opt.now ? Date.parse(opt.now) : Date.now();
   const mapAge = realSel?.map ? staleMapWarning(realSel.map, nowMs, commitTimeMs(repoDir, realSel.map.sha)) : null;
