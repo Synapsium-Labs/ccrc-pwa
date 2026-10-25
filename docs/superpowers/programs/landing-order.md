@@ -915,6 +915,7 @@ carries it (spec §5.1, amended 2026-09-24).
   - **Review.** Three Opus lenses (spec fidelity, executability, safety) with a Sonnet refute pass per finding:
     18 findings confirmed and folded, 2 refuted. Every mutation count in the plan is the prototype's, and the
     worker re-measures each one.
+- **2026-10-25 — R5 overturned: unattended landing is the goal (D-TBD-r5-unattended).** The operator ruled "WE WANT UNATTENDED MERGES ... maximise autonomy with safeguards". A lane, a timer or the operator's keeper may land a PR unattended when the native queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and there is no `--admin` and no `update-branch`. Orchestrator call, open to overturn: a worker never merges its own PR. The coordinator skill (clause 15 and the wave lifecycle) and the worker skill (clause 16) match; the wave lifecycle's allowance of `--admin` where the ruleset requires it is withdrawn. Stages 3 to 5 are not touched here.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
