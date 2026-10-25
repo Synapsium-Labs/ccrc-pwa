@@ -225,12 +225,17 @@ describe('_ws_leaf_checkouts — passes: rc 0, the leaf’s own scratch', () => 
     expect(a.rc, a.why).toBe('0');
   }, 60_000);
 
-  it('a RELATIVE gitdir that stays inside the leaf and names nothing passes', () => {
-    const wt = path.join(leafOf(), 'scratchpad', 'gitx', 'wt');
+  it('a RELATIVE gitdir naming an absent dir refuses: a --relative-paths worktree of an outside repo moved into the leaf is not the leaf\'s', () => {
+    const main = h.makeRepo('demo2');
+    const wt = path.join(leafOf(), 'x', 'side');
     fs.mkdirSync(wt, { recursive: true });
-    fs.writeFileSync(path.join(wt, '.git'), 'gitdir: ../gone/.git/worktrees/wt\n');
+    // what `git worktree add --relative-paths` writes for a sibling of the repo, spelled from where the tree was
+    fs.mkdirSync(path.join(main, '.git', 'worktrees', 'side'), { recursive: true });
+    fs.writeFileSync(path.join(wt, '.git'), 'gitdir: ../demo2/.git/worktrees/side\n');
+    fs.writeFileSync(path.join(wt, 'precious.txt'), 'uncommitted');
     const a = ask(leafOf());
-    expect(a.rc, a.why).toBe('0');
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('no longer exists');
   }, 60_000);
 
   it('an empty leaf, and a leaf with no `.git` anywhere', () => {

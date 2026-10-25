@@ -35901,14 +35901,12 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry [alias accepted] -> 0 the
   # after any other component — and any `..` in an absolute one — does not (a
   # link before it sends the kernel and a logical `cd` to two places), so it is
   # unmeasured rather than resolved one way and believed.
-  rest="$gd"; lex=''
+  rest="$gd"; lex=''; spelled_rel=0
   if [[ "$gd" != /* ]]; then
-    lex="$d"
+    spelled_rel=1
     while [[ "$rest" == ../* || "$rest" == ./* ]]; do
-      [[ "$rest" != ../* ]] || lex="${lex%/*}"   # d is physical, so each leading `..` is its parent, read the same logically
       rest="${rest#*/}"
     done
-    [[ "$rest" == .. || "$rest" == . ]] && lex='' || lex="$lex/$rest"
     [[ "$rest" != .. && "$rest" != . ]] || rest=''
     gd="$d/$gd"
   fi
@@ -35930,7 +35928,9 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry [alias accepted] -> 0 the
     (( rc != 1 )) || { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, in the leaf's pre-move spelling, where something stands again — not the leaf's own"; return 1; }
     gd="${lp%/}${gd#"${alias%/}"}"
   fi
-  [[ -n "$lex" || "$gd" != /* ]] || lex="$gd"   # an absolute spelling is its own (after the alias, the leaf's new place)
+  # Only an ABSOLUTE spelling (git's default) names a place the leaf can claim when its directory is absent; a
+  # relative one (--relative-paths) may be another session's tree moved in, so an absent one still refuses.
+  (( spelled_rel )) || lex="$gd"   # after the alias, the leaf's new place
   _ws_reclaim_absent "$gd"; rc=$?
   if (( rc == 0 )); then
     # A git directory SPELLED inside the leaf (no `.`/`..` segment, so the spelling is the place) and absent
