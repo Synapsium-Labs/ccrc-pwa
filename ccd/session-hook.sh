@@ -3,20 +3,20 @@
 #
 # Runs on the HOT PATH of every tool call in every fleet session, so the
 # contract is absolute: exit 0 on every path, write atomically or not at
-# all, no network — and on the HOT PATH, no locks and no waiting. TWO declared
-# exceptions, both OFF the hot path and both in the compaction arms alone:
-# the helper's one hookstate-first, COMPACT_HELPER_TIMEOUT-bounded,
+# all, no network — and on the HOT PATH, no locks and no waiting. THREE declared exceptions, all OFF the hot path:
+# the first two in the compaction arms alone, the helper's one hookstate-first, COMPACT_HELPER_TIMEOUT-bounded,
 # locally resolved `timeout`/`gtimeout` deadline; and, since D-2605, the row's
 # permanent stable lock, taken with a bounded `flock -w` of COMPACT_LOCK_WAIT
 # (COMPACT_LOCK_WAIT_SERVE on compact SessionStart, the one acquisition a human
 # is waiting on) and never held across a fork the arm does not reap. A miss
-# publishes nothing; there is no unlocked fallback. Every OTHER event — every
+# publishes nothing; there is no unlocked fallback. The THIRD (D4, #757): the SessionStart arm's roster card, one
+# `_hook_timeout 4` server read (`ccrc-api runs list`) on compact, resume and clear of a non-child session, fail-open
+# (no roster line on any failure), made even when unarmed (shadow). Every OTHER event — every
 # PreToolUse, PostToolUse and Stop, which is where the hot path actually is —
 # still takes no lock and waits on nothing. A hook that can slow or break a
 # session is worse than no hook. Consumed read-only by the ccrc server via the agent
-# (whitelist: .cc-sessions is readable; nothing here needs a grant). Non-fleet
-# sessions (no tmux, foreign session name) exit silently.
-set -uo pipefail; ROSTER_CARD_MAX_CHARS=2048; ROSTER_PROGRAM='def s: tostring | gsub("[^A-Za-z0-9._:/-]"; "") | .[0:40]; def age($t): (($now - $t) / 1000 | floor) as $x | if $x < 3600 then "\(($x / 60 | floor))m" elif $x < 172800 then "\(($x / 3600 | floor))h" else "\(($x / 86400 | floor))d" end; [.runs[]? | select(.claimedBy == $me and (.state | IN("done", "failed") | not))] as $r | if ($r | length) == 0 then empty else [$r[] | "#\(.id) \(.program | s) w\(.wave)\(if .waveOf then "/\(.waveOf)" else "" end) \(.state | s) worker=\(.sessionId // "none" | s) \(age(.dispatchedAt // .openedAt)) unread=\(.unreadMail // 0)"] as $l | ([$r[] | select(.state == "awaiting-review") | "review #\(.id)"] + [$r[] | select((.health.mailParked // 0) > 0) | "parked mail #\(.id) (\(.health.mailParked))"]) as $w | ("awaiting you: " + (if ($w | length) > 0 then ($w | join("; ")) else "nothing" end)) as $f | "ccrc-roster: \($r | length) open run(s) you claim; re-read with `~/.local/bin/ccrc-api runs list`." as $h | (reduce $l[] as $x ({o: [], n: 0}; if ([$h] + .o + [$x, $f] | join("\n") | length) <= $max then .o += [$x] else .n += 1 end)) as $k | ([$h] + $k.o + (if $k.n > 0 then ["+\($k.n) more open runs: ccrc-api runs list"] else [] end) + [$f]) | join("\n") end'; _hook_roster_card() { local body="" card="" log="$HOME/.ccrc/roster-card-shadow.log"; CARD_ROSTER=""; [[ -z "$paid" && ( "$src" == compact || "$src" == resume || "$src" == clear ) ]] || return 0; [ -e "$CCRC_CARD_OFF" ] || [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ] && return 0; body=$(_hook_timeout 4 "$HOME/.local/bin/ccrc-api" runs list 2>/dev/null) || return 0; card=$(jq -r --arg me "$id" --argjson now "$(_hook_epoch_ms)" --argjson max $(( ROSTER_CARD_MAX_CHARS - 64 )) "$ROSTER_PROGRAM" <<<"$body" 2>/dev/null) || return 0; [ -n "$card" ] || return 0; if [ -e "$REG/coordinator-roster-card-live" ]; then CARD_ROSTER="$card"; elif [ -z "$(find "$log" -size +256k 2>/dev/null)" ]; then mkdir -p "${log%/*}" 2>/dev/null; printf '%s %s %s\n%s\n' "$(_hook_epoch_ms)" "$id" "$src" "$card" >> "$log" 2>/dev/null; fi; return 0; }
+# (whitelist: .cc-sessions is readable; nothing here needs a grant). Non-fleet sessions (no tmux, foreign session name) exit silently.
+set -uo pipefail
 
 # ── epoch milliseconds, on two userlands ────────────────────────────────
 # `date +%s%3N` is GNU. BSD's date has no `%N`: it prints the literal letter,
@@ -75,10 +75,10 @@ _hook_timeout() {
 # the file, after the hookstate rename lands (D-1689) — at most one line per
 # event, never both. Every failure path in any of them prints NOTHING; this
 # file's standing contract (exit 0 on every path, no network, and on the hot
-# path no locks and no waiting) is unchanged except the two declared
-# compaction-arm exceptions the header states — the hookstate-first bounded
-# helper wait, and D-2605's bounded stable-lock acquisition. Every read below
-# is a local file or a git ref.
+# path no locks and no waiting) is unchanged except the declared exceptions
+# the header states — the hookstate-first bounded helper wait, D-2605's bounded
+# stable-lock acquisition, and the roster card's one bounded server read. Every
+# other read below is a local file or a git ref.
 _hook_emit_context() {   # <standing> [<compact>] [<roster>, D4 #757, after both clips under ROSTER_CARD_MAX_CHARS] -> one JSON line on stdout, or nothing at all
   local j="" text=""
   # THE STANDING CLIP LIVES HERE, at the ONE site every subject passes through.
@@ -2462,9 +2462,9 @@ CARD_MAX_CHARS=2400
 COMPACT_CARD_OFF="$HOME/.ccrc/compact-card-off"
 COMPACT_HELPER="$HOME/.cc-sessions/compact-card.mjs"
 COMPACT_CARD_MAX_CHARS=4000
-# DERIVED, NEVER A THIRD BUDGET. `CARD_MAX_CHARS` above stays the FIRST clip
-# and the standing subjects' whole ceiling — it is the only defence for the
-# ungated `GM_NODES` (D-1899) and must not move. The compact subject is
+# DERIVED, NEVER A THIRD BUDGET — save the D4 roster card, appended after this total under its own ROSTER_CARD_MAX_CHARS
+# (in the SessionStart arm); `session-hook.test.ts` pins all three summed under the spill. `CARD_MAX_CHARS` above stays the FIRST clip
+# and the standing subjects' whole ceiling — it is the only defence for the ungated `GM_NODES` (D-1899) and must not move. The compact subject is
 # appended AFTER that clip, under its own ceiling, and this is a pin on the SUM
 # the emitter may print: it cannot cut what the two clips admitted, and
 # `session-hook.test.ts` holds it under the harness's 10,000-char spill
@@ -3138,6 +3138,44 @@ case "$event" in
       { [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ]; } && return 0
       [ -e "$REG/$id.hold" ] && return 0
       CARD_ROLE="ccrc-role: You are a coordinator for this project. For work worth splitting, run the \`ccrc-coordinator\` skill and dispatch; your children's questions and permission prompts come to you first; your own go to the operator."
+      return 0
+    }
+    # THE ROSTER CARD (D4, #757): a coordinator's open runs, re-read from the server and put back into its context on
+    # compact, resume and clear. DEFINED HERE, in the arm (D-5358 precedent): nothing new goes above the tail line
+    # (D-3615). The ONE server read in this file off the compaction arms (the header declares it): a single
+    # `_hook_timeout 4` call to `ccrc-api runs list`, fail-open — an unreachable or slow server, a missing binary or
+    # unparsable body yields no roster line at all, never an error and never a wait beyond 4 s. Its own ceiling,
+    # ROSTER_CARD_MAX_CHARS, is added to the emitter's worst case AFTER CARD_TOTAL_MAX_CHARS (a test pins the sum).
+    # Children, held and kill-switched sessions get nothing. Unarmed (no `coordinator-roster-card-live` marker) it
+    # only appends the card to a size-capped shadow log the operator can read; armed, it sets CARD_ROSTER.
+    ROSTER_CARD_MAX_CHARS=2048
+    # The jq program: keeps this coordinator's non-terminal runs, one line each, then an "awaiting you" line, all
+    # clipped to $max (surplus runs collapse into a "+N more" line). Every interpolated field goes through `s`,
+    # which strips to a safe charset and 40 chars, so no server byte can inject prose into the context.
+    ROSTER_PROGRAM='def s: tostring | gsub("[^A-Za-z0-9._:/-]"; "") | .[0:40];
+      def age($t): (($now - $t) / 1000 | floor) as $x | if $x < 3600 then "\(($x / 60 | floor))m" elif $x < 172800 then "\(($x / 3600 | floor))h" else "\(($x / 86400 | floor))d" end; 
+      [.runs[]? | select(.claimedBy == $me and (.state | IN("done", "failed") | not))] as $r |
+      if ($r | length) == 0 then empty else [$r[] | "#\(.id) \(.program | s) w\(.wave)\(if .waveOf then "/\(.waveOf)" else "" end) \(.state | s) worker=\(.sessionId // "none" | s) \(age(.dispatchedAt // .openedAt)) unread=\(.unreadMail // 0)"] as $l |
+        ([$r[] | select(.state == "awaiting-review") | "review #\(.id)"] + [$r[] | select((.health.mailParked // 0) > 0) | "parked mail #\(.id) (\(.health.mailParked))"]) as $w |
+        ("awaiting you: " + (if ($w | length) > 0 then ($w | join("; ")) else "nothing" end)) as $f |
+        "ccrc-roster: \($r | length) open run(s) you claim; re-read with `~/.local/bin/ccrc-api runs list`." as $h |
+        (reduce $l[] as $x ({o: [], n: 0}; if ([$h] + .o + [$x, $f] | join("\n") | length) <= $max then .o += [$x] else .n += 1 end)) as $k |
+        ([$h] + $k.o + (if $k.n > 0 then ["+\($k.n) more open runs: ccrc-api runs list"] else [] end) + [$f]) | join("\n") end'
+    _hook_roster_card() {
+      local body="" card="" log="$HOME/.ccrc/roster-card-shadow.log"
+      CARD_ROSTER=""
+      [[ -z "$paid" && ( "$src" == compact || "$src" == resume || "$src" == clear ) ]] || return 0
+      [ -e "$CCRC_CARD_OFF" ] || [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ] && return 0
+      body=$(_hook_timeout 4 "$HOME/.local/bin/ccrc-api" runs list 2>/dev/null) || return 0
+      card=$(jq -r --arg me "$id" --argjson now "$(_hook_epoch_ms)" \
+        --argjson max $(( ROSTER_CARD_MAX_CHARS - 64 )) "$ROSTER_PROGRAM" <<<"$body" 2>/dev/null) || return 0
+      [ -n "$card" ] || return 0
+      if [ -e "$REG/coordinator-roster-card-live" ]; then
+        CARD_ROSTER="$card"
+      elif [ -z "$(find "$log" -size +256k 2>/dev/null)" ]; then
+        mkdir -p "${log%/*}" 2>/dev/null
+        printf '%s %s %s\n%s\n' "$(_hook_epoch_ms)" "$id" "$src" "$card" >> "$log" 2>/dev/null
+      fi
       return 0
     }
     CARD_ROLE=""
