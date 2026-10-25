@@ -1966,6 +1966,16 @@ button.metachip:active {
   color: var(--ink-primary);
   outline: none;
 }
+/* The raise's fallback focuses the card itself (`tabindex="-1"`) when no option row can take focus: an answer in flight, or a
+   surface with no enabled `.opt` row (the terminal door, an approval's Allow and Deny). `outline: none` above still
+   suppresses a non-keyboard focus, so this draws the ring for a KEYBOARD focus only, as base.css's `:focus-visible` rule
+   does: a pointer focus on the section draws none. The offset is base.css's own 2px outset: measured in Chrome at every
+   fallback cell of `ask-inline.browser.test.ts`, the ring's outer box lies inside the window and inside each clipping
+   ancestor (`.chat` and the shell), so no inset is needed. */
+.ask-inline:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 /* The transcript keeps at least a third of the pane while a card is up: the card yields to it, never the other way. */
 .chat[data-ask-inline] > .chat-body {
   min-height: calc(100% / 3);
