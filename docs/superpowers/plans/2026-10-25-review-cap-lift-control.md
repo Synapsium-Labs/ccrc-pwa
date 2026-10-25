@@ -385,7 +385,9 @@ merge-base, and the server gates re-run on the merged tree. #1430, #1398 and #13
 - **D-6910, as planned.** `composeReviewCapAsk` in `coord/routes.ts` holds the refusal arm's three lines, and both the
   arm and `GET /api/coord/review-cap/:id` call it. The GET answers `notConfigured` first and every refusal through
   `refuseRoute` (correction 1): 400 `bad-request`, 404 `not-found` for a run that is not a work run, 503
-  `run-unreadable`. The POST's literal is `satisfies ReviewCapLiftAnswer` (correction 9). The three ask types moved to
+  `run-unreadable` (D-6912, ledgered in fix round 1). Its answer is masked by the one answer hook: the route is in
+  `MASKED_GET_ROUTES` since fix round 1 (review 951 F1), because the ask carries the review-done summary and the report
+  path. The POST's literal is `satisfies ReviewCapLiftAnswer` (correction 9). The three ask types moved to
   `shared/api.ts`. That file cannot import `ReadFailure` (its type-only imports are pinned), so the findings states
   derive from `REVIEW_FINDINGS_STATES`, `STALL_STORED_STATES`' idiom, and `review-cap.test.ts` holds the failure pair
   equal to `ReadFailure` at compile time. The findings words moved with the types (correction 7):
@@ -412,25 +414,40 @@ merge-base, and the server gates re-run on the merged tree. #1430, #1398 and #13
   `AbandonSheet`'s busy flag and superseded guard but none of its branches. The band's ground is grouped with the sheet
   bodies' rule in `fleet.css`: a rule of its own copied `.program-start-sheet`'s shape, and `shape-census` refused it.
   The three new PWA files have C5 rows in the 08-10 spec's ring-context map (correction 6).
-- **D-6912: spare, unused.**
+- **D-6912, spent in fix round 1 (review 951 F4).** The GET's 503 `run-unreadable` when the store read fails, a refusal
+  Task 2's interface did not name. Its docstring names it, a run-routes row reaches it beside the other unreadable-run
+  refusals (and holds the absent run at 404), and `REVIEW_CAP_REFUSAL_TEXT` words it, with a lift-cap-sheet row.
+  `refusal-literal-ratchet` stays at 32: a table entry is not a branch.
 
 **Mutation table.** Measured after the corrections. Each mutant ran on the tree with the original backed up to scratch,
 under `ulimit -u (threads + 1500)` and `timeout -k 10 600`; each file was restored and checked byte-identical by `cmp`.
 
 | Mutant | What went red |
 |---|---|
-| M1 `hydrateRun` sets `reviewCap: null` | run-routes "carries the cap's state" |
+| M1 `hydrateRun` sets `reviewCap: null` | First recorded as run-routes "carries the cap's state" alone. Review 951's does-it-reproduce lens measured three reds: that row and two GET rows that read `reviewCap` and answer 404, one of them M6's deep-equal row, plus a fourth row timed out under load (A8). Re-measured in fix round 1 over the cap's describes and secret-mask's row: five reds, "carries the cap's state", "answers the refusal's own ask", both "says unnamed" rows and secret-mask's masked-summary row |
 | M2 `capWaiting` drops `liftedAt === null` | words "lifted is lifted", band list row, Mail "no door once lifted" and "takes the door away … without a remount" |
 | M3 `capWaiting` drops the closed-run test | words closed-run row, band list row and "renders nothing", Mail "no door on a closed run" |
 | M4 the Mail door drops `sessionId === ''` | Mail "no door on a run record that names a session" |
 | M5 the sheet posts on open | sheet "reads the ask once", "Lift cap posts once", "Cancel lifts nothing" |
 | M6 the GET composes its own ask, findings `unnamed` | run-routes "answers the refusal's own ask" |
+| M7 (fix round 1) the GET leaves `MASKED_GET_ROUTES` | secret-mask's masked-summary row, and its egress inventory row ("is neither masked nor exempt") |
 
 **Growth.** Net code lines against the merge-base, measured with `growthCheck.ts`'s `netGrowth` after the merge:
-`server/src/coord/store.ts` +19, `server/src/coord/routes.ts` +16, `pwa/src/lib/api.ts` +3.
+`server/src/coord/store.ts` +19, `server/src/coord/routes.ts` +16, `pwa/src/lib/api.ts` +3. Re-measured in fix round 1
+against the new merge-base `82a68c15d`: the same three, and `server/src/server.ts` +0 (one entry added to an existing
+line).
 
 **Suite.** The first full PWA run after Task 4 was red in one file, `shape-census` (the band's copied rule); grouping
 the rule made it green. The second full run, after the corrections, was red in one file, `contrast.test.ts`, on a
 per-case `Test timed out in 5000ms` at a load near 35. Re-run alone it timed out on other cases twice, passed all 295
 with a 30 s case budget, then passed all 295 alone at the default. On the merged tree, `typecheck-tests` timed out on
 three cases in the gate batch and passed all 12 re-run alone.
+
+**Fix round 1 (review 951, 2026-10-25).** `origin/main` was merged first, at `82a68c15d`, with no conflicts, as the
+rulings order. Then F1 to F4 and A1, A3, A4 and A6 to A9 as ruled; A2, A5 and A10 are carried to a later wave. F1's row
+sits in `secret-mask.test.ts`, not run-routes: `lastReviewReport` shape-redacts the summary where it reads it, so a
+shaped key never reaches the answer hook. The row plants a compatible key with dots in it, which the redactor keeps and
+only a fingerprint row catches; a first draft with a shaped key came back `[REDACTED]` and proved nothing about the hook.
+F2's four anchors were re-anchored by content, with the README claim holder's consent for that one sentence. The debt
+map's `shared/api.ts` entry went from 5 back to its census of 1, so no number in the test changed, and the README census
+row's comment records the re-anchor. The rulings section above is word for word, except the claim holder's session name.
