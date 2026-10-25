@@ -16,7 +16,7 @@
 # session is worse than no hook. Consumed read-only by the ccrc server via the agent
 # (whitelist: .cc-sessions is readable; nothing here needs a grant). Non-fleet
 # sessions (no tmux, foreign session name) exit silently.
-set -uo pipefail
+set -uo pipefail; ROSTER_CARD_MAX_CHARS=2048; ROSTER_PROGRAM='def s: tostring | gsub("[^A-Za-z0-9._:/-]"; "") | .[0:40]; def age($t): (($now - $t) / 1000 | floor) as $x | if $x < 3600 then "\(($x / 60 | floor))m" elif $x < 172800 then "\(($x / 3600 | floor))h" else "\(($x / 86400 | floor))d" end; [.runs[]? | select(.claimedBy == $me and (.state | IN("done", "failed") | not))] as $r | if ($r | length) == 0 then empty else [$r[] | "#\(.id) \(.program | s) w\(.wave)\(if .waveOf then "/\(.waveOf)" else "" end) \(.state | s) worker=\(.sessionId // "none" | s) \(age(.dispatchedAt // .openedAt)) unread=\(.unreadMail // 0)"] as $l | ([$r[] | select(.state == "awaiting-review") | "review #\(.id)"] + [$r[] | select((.unreadMail // 0) > 0) | "unread mail #\(.id) (\(.unreadMail))"] + [$r[] | select((.health.mailParked // 0) > 0) | "parked mail #\(.id) (\(.health.mailParked))"]) as $w | ("awaiting you: " + (if ($w | length) > 0 then ($w | join("; ")) else "nothing" end)) as $f | "ccrc-roster: \($r | length) open run(s) you claim; re-read with `~/.local/bin/ccrc-api runs list`." as $h | (reduce $l[] as $x ({o: [], n: 0}; if ([$h] + .o + [$x, $f] | join("\n") | length) <= $max then .o += [$x] else .n += 1 end)) as $k | ([$h] + $k.o + (if $k.n > 0 then ["+\($k.n) more open runs: ccrc-api runs list"] else [] end) + [$f]) | join("\n") end'; _hook_roster_card() { local body="" card="" log="$HOME/.ccrc/roster-card-shadow.log"; CARD_ROSTER=""; [[ -z "$paid" && ( "$src" == compact || "$src" == resume || "$src" == clear ) ]] || return 0; [ -e "$CCRC_CARD_OFF" ] || [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ] && return 0; body=$(_hook_timeout 4 "$HOME/.local/bin/ccrc-api" runs list 2>/dev/null) || return 0; card=$(jq -r --arg me "$id" --argjson now "$(_hook_epoch_ms)" --argjson max $(( ROSTER_CARD_MAX_CHARS - 64 )) "$ROSTER_PROGRAM" <<<"$body" 2>/dev/null) || return 0; [ -n "$card" ] || return 0; if [ -e "$REG/coordinator-roster-card-live" ]; then CARD_ROSTER="$card"; elif [ -z "$(find "$log" -size +256k 2>/dev/null)" ]; then mkdir -p "${log%/*}" 2>/dev/null; printf '%s %s %s\n%s\n' "$(_hook_epoch_ms)" "$id" "$src" "$card" >> "$log" 2>/dev/null; fi; return 0; }
 
 # ── epoch milliseconds, on two userlands ────────────────────────────────
 # `date +%s%3N` is GNU. BSD's date has no `%N`: it prints the literal letter,
@@ -79,7 +79,7 @@ _hook_timeout() {
 # compaction-arm exceptions the header states — the hookstate-first bounded
 # helper wait, and D-2605's bounded stable-lock acquisition. Every read below
 # is a local file or a git ref.
-_hook_emit_context() {   # <standing> [<compact>] -> one JSON line on stdout, or nothing at all
+_hook_emit_context() {   # <standing> [<compact>] [<roster>, D4 #757, after both clips under ROSTER_CARD_MAX_CHARS] -> one JSON line on stdout, or nothing at all
   local j="" text=""
   # THE STANDING CLIP LIVES HERE, at the ONE site every subject passes through.
   # A per-subject clip is one each new subject can forget; this one cannot be.
@@ -96,7 +96,7 @@ _hook_emit_context() {   # <standing> [<compact>] -> one JSON line on stdout, or
   if [ -n "${2:-}" ]; then
     text="${text:+$text }${2:0:$COMPACT_CARD_MAX_CHARS}"
     text="${text:0:$CARD_TOTAL_MAX_CHARS}"
-  fi
+  fi; [ -z "${3:-}" ] || text="${text:+$text }${3:0:$ROSTER_CARD_MAX_CHARS}"
   # RETURNS 1 when the envelope could not be built — nothing was printed, and
   # the SessionStart arm must not stamp `served` for a card that never went
   # out. Every existing caller ignores the code, so nothing else changes.
@@ -3116,7 +3116,7 @@ case "$event" in
     # is `set -u`. An initialiser that lived only on the compact path would
     # make every other SessionStart die on an unbound variable — the worst
     # shape this file can fail in, since the server reads the state it writes.
-    CARD_GRAPH=""; CARD_HOLD=""; CARD_CCRC=""; CARD_COMPACT=""; CARD=""
+    CARD_GRAPH=""; CARD_HOLD=""; CARD_CCRC=""; CARD_COMPACT=""; CARD_ROSTER=""; CARD=""
     COMPACT_SERVE_FD=""; COMPACT_SERVE_NONCE=""
     # THE ROLE SUBJECT (manual-sessions-are-coordinators, D-5301; spec 2026-10-17 §8). Every session that is
     # not a dispatched child is its project's coordinator. THE ROLE IS DERIVED, NEVER MARKED: `.child` is
@@ -3144,7 +3144,7 @@ case "$event" in
     _hook_graph_card || true
     _hook_hold_card  || true
     _hook_role_card  || true
-    _hook_ccrc_card  || true
+    _hook_ccrc_card  || true; _hook_roster_card || true
     # THE FOURTH SUBJECT, compact only (compaction-card spec §3.3): a card
     # describes the compacted context and nothing else, so startup, resume
     # and clear never read the file. It is passed to the emitter SEPARATELY —
@@ -3156,8 +3156,8 @@ case "$event" in
     [ -z "$CARD_CCRC" ] || CARD="${CARD:+$CARD }$CARD_CCRC"
     # The stamp follows the PRINT, never the intent: only an emitter that
     # returned 0 with a compact subject in hand records `served`.
-    if [ -n "$CARD$CARD_COMPACT" ]; then
-      if _hook_emit_context "$CARD" "$CARD_COMPACT" && [ -n "$CARD_COMPACT" ]; then _hook_compact_mark_served || true; fi
+    if [ -n "$CARD$CARD_COMPACT$CARD_ROSTER" ]; then
+      if _hook_emit_context "$CARD" "$CARD_COMPACT" "$CARD_ROSTER" && [ -n "$CARD_COMPACT" ]; then _hook_compact_mark_served || true; fi
     fi
     # THE RETAINED SERVE LOCK ENDS HERE, on every path through this arm — the
     # marker, when one was published, was the last act inside it.

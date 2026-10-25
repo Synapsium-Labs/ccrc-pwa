@@ -1579,8 +1579,8 @@ READER_MIN_COLS=120
 STALE_RESUME_GRACE=30            # D-2443 — seconds after a fresh $REG/<id>.stalepress stamp during which _session_hard_blocked's transcript arm stands down, so the same-tick rescue (_auto_swap_check, _tick_strand_undecidable) cannot swap out the continuation the stale-press Enter just submitted before Claude Code has appended the resumed turn's row
 TRANSCRIPT_ARM_INTERVAL=30       # D-2444 — seconds a session's positive or negative transcript verdict is reused; the final review measured an uncached arm at ~36 ms, ~14x the pane classifier and mostly in _transcript_path, so this bounds the full scan to once per interval while each positive still rechecks the draft
 # Proactive auto-/compact: when an IDLE session's context passes ITS threshold, send /compact
-# so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context, so this is
-# non-destructive on both the Anthropic and gpt lanes). Only at a clean turn boundary; kill-switch
+# so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context and, armed, a coordinator's runs,
+# yet a compaction is NOT lossless on either lane, D4 #757). Only at a clean turn boundary; kill-switch
 # via AUTOCOMPACT_DISABLE_FILE.
 COMPACT_THRESHOLD=50            # own context % at/above which an idle session auto-compacts, for a
                                 # session whose routing record hands `_route_get` no `compact` value —
