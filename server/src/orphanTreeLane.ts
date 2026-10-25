@@ -229,10 +229,12 @@ export function orphanPopulate(
 }
 
 /** The workspaces that are coordinators (G4): every id any run was ever claimed by, in any state or generation (open,
- *  closed, unplaced, displaced) plus the open ones. A throw from either read is null, which keeps the tree. */
-export function orphanCoordinatorSet(coord: { childReclaimCoordinatorClaims(): ReadonlyMap<string, unknown>; openCoordinatorIds(): Iterable<string> }): ReadonlySet<string> | null {
+ *  closed, unplaced, displaced) plus the open ones. `everClaimedIds` is the store read's one home
+ *  (`childReclaimEverClaimedIds`, spec §1 rule 4), handed in by the caller so this pure file reads no store itself.
+ *  A throw from either read is null, which keeps the tree. */
+export function orphanCoordinatorSet(coord: { everClaimedIds(): Iterable<string>; openCoordinatorIds(): Iterable<string> }): ReadonlySet<string> | null {
   try {
-    return new Set([...coord.childReclaimCoordinatorClaims().keys(), ...coord.openCoordinatorIds()]);
+    return new Set([...coord.everClaimedIds(), ...coord.openCoordinatorIds()]);
   } catch { return null; }
 }
 

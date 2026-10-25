@@ -398,7 +398,7 @@ describe('DR-23: trees nested inside a workspace', () => {
 
   it('a coordinator whose runs are all terminal is still a candidate, and the act goes ahead', async () => {
     const claims = new Map<string, unknown>([['lane-a', 7]]);
-    const set = orphanCoordinatorSet({ childReclaimCoordinatorClaims: () => claims, openCoordinatorIds: () => [] });
+    const set = orphanCoordinatorSet({ everClaimedIds: () => claims.keys(), openCoordinatorIds: () => [] });
     expect(set?.has('lane-a')).toBe(true);
     const r = rig(); armed(r); for (const id of set!) r.coordinators.add(id);
     r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'lane-a');
@@ -408,7 +408,7 @@ describe('DR-23: trees nested inside a workspace', () => {
 
   it('a displacement-only claimant is a candidate; one that never claimed anything is reported only', () => {
     const claims = new Map<string, unknown>([['displaced', 'unplaced'], ['open-one', 'open']]);
-    const set = orphanCoordinatorSet({ childReclaimCoordinatorClaims: () => claims, openCoordinatorIds: () => ['open-one'] });
+    const set = orphanCoordinatorSet({ everClaimedIds: () => claims.keys(), openCoordinatorIds: () => ['open-one'] });
     expect(orphanInsideVerdict('displaced', set, () => true)).toBe('candidate');
     expect(orphanInsideVerdict('open-one', set, () => true)).toBe('candidate');
     expect(orphanInsideVerdict('worker-w', set, () => true)).toBe('goes-with-workspace');
@@ -416,8 +416,8 @@ describe('DR-23: trees nested inside a workspace', () => {
 
   it('either claim read throwing is null, which keeps the tree', () => {
     const boom = (): never => { throw new Error('x'); };
-    expect(orphanCoordinatorSet({ childReclaimCoordinatorClaims: boom, openCoordinatorIds: () => [] })).toBeNull();
-    expect(orphanCoordinatorSet({ childReclaimCoordinatorClaims: () => new Map(), openCoordinatorIds: boom })).toBeNull();
+    expect(orphanCoordinatorSet({ everClaimedIds: boom, openCoordinatorIds: () => [] })).toBeNull();
+    expect(orphanCoordinatorSet({ everClaimedIds: () => [], openCoordinatorIds: boom })).toBeNull();
     expect(orphanInsideVerdict('lane-a', null, () => true)).toBe('unmeasured');
     expect(orphanInsideVerdict('plain', null, () => false)).toBe('candidate');
     expect(orphanInsideVerdict('plain', new Set(), () => null)).toBe('unmeasured');
