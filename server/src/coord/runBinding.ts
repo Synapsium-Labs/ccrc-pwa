@@ -31,7 +31,8 @@ import type { ChildBirth } from './childSpent.js';
  *     it). Deviation from #758: the rule is not "a run opened before the birth cannot bind". An undecidable run is
  *     never a parent, a claimant or a child (no ghost coordinator), and is never dropped: `bindingOf` lists it in
  *     `undecided`, so a reader says "unknown" and not "coordinator gone". The exact answer needs the bind to record
- *     the incarnation it bound (a bound-birth column written by `bindSession`); that migration is a follow-up.
+ *     the incarnation it bound (a bound-birth column written by `bindSession`); that migration is #1407, which also
+ *     closes the `unborn` gap above (an unborn session that reuses a name keeps the id-string rule).
  *
  * TWO QUERIES, NAMED. `newest` is the newest run that binds the incarnation in ANY state (the card's `session.run`);
  * `open` is the newest that is not terminal (`session.openRun`). A state this build cannot name counts as open, as

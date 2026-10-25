@@ -106,6 +106,12 @@ const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-binding-'), '.ccrc', 'coord.db')));
 const open = (s: CoordStore, program: string, claimedBy: string): number =>
   (s.openRun({ program, title: program, project: 'p', wave: 1, waveOf: null, claimedBy }) as { id: number }).id;
+// The minting run opens BEFORE the worker it dispatches is born, as in real use. A fixture that opened it after the
+// birth would let it bind through the opened-after-birth rule alone, and the store's read of the birth columns
+// (sessionBornAt/sessionBornFor) would go unpinned.
+const backdate = (s: CoordStore, runId: number, ms: number): void => {
+  s.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(ms, runId);
+};
 const readSeries = (s: CoordStore, id: string): BindingRun[] => {
   const r = s.bindingRunsOf(id);
   if (!r.ok) throw new Error(r.detail);
@@ -119,13 +125,15 @@ describe('the #746 fixture, through a store', () => {
     s.setSession(stale, 'demo-w');
     s.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(BORN - 1000, stale);
     const fresh = open(s, 'prog-new', 'coord-live');
+    backdate(s, fresh, BORN - 10);
     s.setSession(fresh, 'demo-w', BORN);
     const series = readSeries(s, 'demo-w');
     const inc = bornIncarnation('demo-w', BORN);
     expect(series.map((r) => r.id)).toEqual([stale, fresh]);
     expect(parentOf(bindingOf(series, inc))).toBe('coord-live');
     expect(claimantsOf(series, inc)).toEqual(['coord-live']);
-    // The stale run is still the old reader's answer; ARCH-62 moves the sites, this commit adds the owner.
+    // In this shape the old reader agrees: the fresh run is the newest open one. The next case is where it
+    // inherits the ghost. ARCH-62 moves the sites; this commit adds the owner.
     expect(s.parentOfSession('demo-w')).toBe('coord-live');
   });
 
@@ -135,6 +143,7 @@ describe('the #746 fixture, through a store', () => {
     s.setSession(stale, 'demo-w');
     s.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(BORN - 1000, stale);
     const fresh = open(s, 'prog-new', 'coord-live');
+    backdate(s, fresh, BORN - 10);
     s.setSession(fresh, 'demo-w', BORN);
     for (const to of ['dispatched', 'closing', 'done'] as const) s.advance(fresh, to, 'coordinator');
     const series = readSeries(s, 'demo-w');
@@ -161,6 +170,7 @@ describe('the #746 fixture, through a store', () => {
     const wave2 = (s.openRun(input) as { id: number }).id;
     s.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(BORN - 1000, wave2);
     const wave1 = open(s, 'prog-one', 'coord-1');
+    backdate(s, wave1, BORN - 10);
     s.setSession(wave1, 'demo-w', BORN);
     const again = (s.openRun(input) as { id: number }).id;
     expect(again).toBe(wave2);
