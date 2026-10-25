@@ -325,3 +325,172 @@ describe('reachable only as the server’s act', () => {
     expect(readJournal(h.home).filter((e) => JSON.stringify(e).includes('ws-orphan'))).toEqual([]);
   }, 60_000);
 });
+
+// DR-22 (D-6634, spec §2.7.1): under `$REG/nested-rescue-live` a tree whose only blocker is a nested checkout carries a RESCUE
+// token. The verb pins or rescues each nested checkout under refs/ccrc/attic/orphan/<sha16>/nested/<pathhex>/, re-proves it,
+// asks the holder once more, removes each nested directory itself, and only then runs git's own (never forced) removal.
+describe('the nested-checkout rescue (DR-22)', () => {
+  const MARKER = (): string => path.join(h.home, '.cc-sessions', 'nested-rescue-live');
+  const arm = (): void => { fs.writeFileSync(MARKER(), ''); fs.appendFileSync(path.join(main(), '.git', 'info', 'exclude'), 'nested/\ninner-wt/\n'); };
+  const base = (t: string, rel: string): string => `refs/ccrc/attic/orphan/${sha16(t)}/nested/${hex(rel)}`;
+  /** A repository of another project inside `t`: one commit on no remote and an untracked file. */
+  const foreign = (t: string): string => {
+    const d = path.join(t, 'nested');
+    fs.mkdirSync(d); h.git(d, 'init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(d, 'a.txt'), 'a\n'); h.git(d, 'add', 'a.txt'); h.git(d, 'commit', '-q', '-m', 'a');
+    fs.writeFileSync(path.join(d, 'loose.txt'), 'loose\n');
+    return d;
+  };
+  /** A linked worktree of the tree's OWN repository inside `t`, with a commit on no remote and an untracked file. */
+  const sameRepo = (t: string): string => {
+    const d = path.join(t, 'inner-wt');
+    h.git(main(), 'worktree', 'add', '-b', 'inner/x', d);
+    fs.writeFileSync(path.join(d, 'inner.txt'), 'i\n'); h.git(d, 'add', 'inner.txt'); h.git(d, 'commit', '-q', '-m', 'inner');
+    fs.writeFileSync(path.join(d, 'loose.txt'), 'loose\n');
+    return real(d);
+  };
+  /** A fake process table: the verb's own shell only, until `FP_ADD` puts a process that maps a file under `under` into it. */
+  const FP_BASE = 'rm -rf "$HOME/fp"; FU="$(id -u)"; _fpp() { mkdir -p "$HOME/fp/$1/fd";'
+    + ' printf "Name:\\tx\\nPPid:\\t%s\\nUid:\\t%s\\t%s\\t%s\\t%s\\n" "$2" "$3" "$3" "$3" "$3" > "$HOME/fp/$1/status"; : > "$HOME/fp/$1/environ"; ln -sfn / "$HOME/fp/$1/cwd"; mkdir -p "$HOME/fp/$1/map_files"; };'
+    + ' _fpp $$ 1 "$FU"; _ws_path_users_proc_root() { printf %s "$HOME/fp"; };'
+    + ' eval "$(declare -f _ws_path_users_many | sed \'1s/_ws_path_users_many/_pum_orig/\')"; _ws_path_users_many() { local CCD_OS=linux; _fpp "$BASHPID" 1 "$FU"; _pum_orig "$@"; };';
+  const FP_ADD = (under: string): string => `_fpp 4242 1 "$FU"; mkdir -p "$HOME/fp/4242/map_files"; ln -sfn "${under}/lib.so" "$HOME/fp/4242/map_files/7f00-7f10";`;
+
+  it('a foreign nested repository is rescued under the attic, its directory removed, the tree removed, and git saw no --force', () => {
+    const t = claudeTree(); arm(); const n = foreign(t);
+    const nhead = h.git(n, 'rev-parse', 'HEAD');
+    const tok = rescueOf(t);
+    const log = path.join(h.home, 'git-argv');
+    const r = orphan(t, tok, '--rescue', `${STUBS} git() { printf '%s\\n' "$*" >> "${log}"; command git "$@"; };`);
+    expect(r.code, JSON.stringify(r.doc)).toBe(0);
+    expect(r.doc).toMatchObject({ removed: true });
+    expect(fs.existsSync(t)).toBe(false);
+    const b = base(t, 'nested');
+    expect(h.git(main(), 'rev-parse', `${b}/head`)).toBe(nhead);
+    const wip = h.git(main(), 'rev-parse', `${b}/wip`);
+    expect(h.git(main(), 'ls-tree', '-r', '--name-only', wip).split('\n')).toContain('loose.txt');
+    expect(fs.readFileSync(log, 'utf8')).not.toMatch(/--force|\s-f(\s|$)/);
+  }, 90_000);
+
+  it('a same-repository nested checkout is pinned (HEAD, the uncommitted work, the reflog) and removed with the tree', () => {
+    const t = claudeTree(); arm(); const d = sameRepo(t);
+    const dhead = h.git(d, 'rev-parse', 'HEAD');
+    const r = orphan(t, rescueOf(t), '--rescue');
+    expect(r.code, JSON.stringify(r.doc)).toBe(0);
+    expect(fs.existsSync(t)).toBe(false);
+    const b = base(t, 'inner-wt');
+    expect(h.git(main(), 'rev-parse', `${b}/heads/${dhead}`)).toBe(dhead);
+    const wips = h.git(main(), 'for-each-ref', '--format=%(objectname)', `${b}/wips/`).split('\n').filter(Boolean);
+    expect(wips).toHaveLength(1);
+    expect(h.git(main(), 'ls-tree', '-r', '--name-only', wips[0]!).split('\n')).toContain('loose.txt');
+    expect(h.git(main(), 'rev-parse', `${b}/reflog/${dhead}`)).toBe(dhead);
+  }, 90_000);
+
+  it('a second rescue at the same path keeps the first one\'s uncommitted work reachable (the pin is append-only)', () => {
+    const t = claudeTree(); arm(); const d = sameRepo(t);
+    const r1 = orphan(t, rescueOf(t), '--rescue');
+    expect(r1.code, JSON.stringify(r1.doc)).toBe(0);
+    const b = base(t, 'inner-wt');
+    const wip1 = h.git(main(), 'for-each-ref', '--format=%(objectname)', `${b}/wips/`);
+    expect(wip1).toMatch(/^[0-9a-f]{40}$/);
+    h.git(main(), 'worktree', 'prune'); h.git(main(), 'branch', '-D', 'claude/agent-a', 'inner/x');
+    const t2 = claudeTree(); expect(t2).toBe(t);
+    const d2 = sameRepo(t2); expect(d2).toBe(d);
+    fs.writeFileSync(path.join(d2, 'loose.txt'), 'second\n');
+    const r2 = orphan(t2, rescueOf(t2), '--rescue');
+    expect(r2.code, JSON.stringify(r2.doc)).toBe(0);
+    expect(h.git(main(), 'for-each-ref', '--contains', wip1, 'refs/ccrc')).not.toBe('');
+    expect(h.git(main(), 'for-each-ref', '--format=%(objectname)', `${b}/wips/`).split('\n')).toHaveLength(2);
+  }, 120_000);
+
+  it('a nested checkout the outer tree tracks as a gitlink gets no rescue token', () => {
+    const t = claudeTree(); arm(); const n = foreign(t);
+    fs.rmSync(path.join(n, 'loose.txt'));
+    h.git(t, 'add', '-f', 'nested'); h.git(t, 'commit', '-q', '-m', 'embed'); h.git(t, 'push', '-q', 'origin', 'HEAD:refs/heads/elsewhere');
+    const a = audit(t);
+    expect(a.refusal).toBe('nested-checkout');
+    expect(a.rescueToken, a.detail).toBeNull();
+    expect(fs.existsSync(n)).toBe(true);
+  }, 90_000);
+
+  it('an initialised submodule (a .git file with no back-link) gets no rescue token', () => {
+    const t = claudeTree(); arm(); const n = foreign(t);
+    h.git(t, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-f', n, 'sub'); h.git(t, 'commit', '-q', '-m', 'sub'); h.git(t, 'push', '-q', 'origin', 'HEAD:refs/heads/elsewhere');
+    const a = audit(t);
+    expect(a.refusal).toBe('nested-checkout');
+    expect(a.rescueToken, a.detail).toBeNull();
+  }, 90_000);
+
+  it('the read-only audit runs no program of a foreign nested repository (its core.fsmonitor is contained)', () => {
+    const t = claudeTree(); arm(); const n = foreign(t);
+    const touched = path.join(h.home, 'fsmonitor-ran');
+    const hook = path.join(h.home, 'fsmon.sh');
+    fs.writeFileSync(hook, `#!/bin/sh\necho x >> "${touched}"\n`, { mode: 0o755 });
+    h.git(n, 'config', 'core.fsmonitor', hook);
+    audit(t);
+    expect(fs.existsSync(touched)).toBe(false);
+  }, 60_000);
+
+  it('a nested same-repository worktree that git has locked gets no rescue token, and the verb removes nothing', () => {
+    const t = claudeTree(); arm(); const d = sameRepo(t);
+    h.git(main(), 'worktree', 'lock', '--reason', 'keep me', d);
+    const a = audit(t);
+    expect(a.rescueToken).toBeNull();
+    expect(a.refusal).toBe('nested-checkout');
+    const r = orphan(t, 'f'.repeat(64), '--rescue');
+    expect(r.doc['removed']).toBeUndefined();
+    expect(fs.existsSync(d)).toBe(true);
+  }, 90_000);
+
+  it('the rescue token without --rescue refuses nested-checkout, and nothing is pinned or removed', () => {
+    const t = claudeTree(); arm(); const n = foreign(t);
+    const r = orphan(t, rescueOf(t));
+    expect(r.doc['refused']).toBe('nested-checkout');
+    expect(fs.existsSync(n)).toBe(true);
+    expect(h.git(main(), 'for-each-ref', `refs/ccrc/attic/orphan/${sha16(t)}/`)).toBe('');
+  }, 60_000);
+
+  it('a commit made in the nested repository after the audit answers state-changed (the token binds it)', () => {
+    const t = claudeTree(); arm(); const n = foreign(t);
+    // the tree's own ignored-set digest is held constant, so only the nested binding can see the commit
+    const constIgnored = '_ws_gc_reclaimable() { REAP_SENSITIVE=(); REAP_IGNORED=(); REAP_IGNDIGEST=$(printf "" | _plat_sha256 | cut -d" " -f1); return 0; };';
+    const pre = `${STUBS} ${constIgnored}`;
+    const a = audit(t, pre); expect(a.rescueToken, a.detail).toBeTruthy();
+    fs.writeFileSync(path.join(n, 'b.txt'), 'b\n'); h.git(n, 'add', 'b.txt'); h.git(n, 'commit', '-q', '-m', 'b');
+    const r = orphan(t, a.rescueToken!, '--rescue', pre);
+    expect(r.doc['refused']).toBe('state-changed');
+    expect(fs.existsSync(t)).toBe(true);
+  }, 60_000);
+
+  it('a holder in the nested directory stops the act, with the tree and the nested directory whole', () => {
+    const t = claudeTree(); arm(); const n = foreign(t);
+    const tok = rescueOf(t);
+    const quiet = STUBS.replace(/ _ws_path_users_many\(\) \{.*?return 0; \};/s, '');
+    const gap = `_ws_orphan_gap() { if [[ "$1" == pinned ]]; then ${FP_ADD(n)} fi; };`;
+    const r = orphan(t, tok, '--rescue', `${quiet} ${FP_BASE} ${gap}`);
+    expect(r.doc['refused'], JSON.stringify(r.doc)).toBe('in-use');
+    expect(fs.existsSync(t)).toBe(true);
+    expect(fs.existsSync(path.join(n, 'loose.txt'))).toBe(true);
+  }, 90_000);
+
+  it('a rescue whose fetch fails removes nothing (pin-failed)', () => {
+    const t = claudeTree(); arm(); const n = foreign(t);
+    const tok = rescueOf(t);
+    const r = orphan(t, tok, '--rescue', `${STUBS} git() { if [[ "$*" == *fetch* ]]; then return 1; fi; command git "$@"; };`);
+    expect(r.code).toBe(1);
+    expect(r.doc['failed']).toBe('pin-failed');
+    expect(fs.existsSync(t)).toBe(true);
+    expect(fs.existsSync(path.join(n, 'loose.txt'))).toBe(true);
+  }, 90_000);
+
+  it('the nested directory is removed by the collector’s removal before git’s, and git is asked only after it', () => {
+    const t = claudeTree(); arm(); foreign(t);
+    const tok = rescueOf(t);
+    const log = path.join(h.home, 'order');
+    const shim = `_ws_leaf_remove_real="$(declare -f _ws_leaf_remove)"; eval "\${_ws_leaf_remove_real/_ws_leaf_remove/_ws_leaf_remove_orig}";`
+      + ` _ws_leaf_remove() { echo leaf >> "${log}"; _ws_leaf_remove_orig "$@"; }; git() { case "$*" in *"worktree remove"*) echo remove >> "${log}";; esac; command git "$@"; };`;
+    const r = orphan(t, tok, '--rescue', `${STUBS} ${shim}`);
+    expect(r.code, JSON.stringify(r.doc)).toBe(0);
+    expect(fs.readFileSync(log, 'utf8').trim().split('\n')).toEqual(['leaf', 'remove']);
+  }, 90_000);
+});

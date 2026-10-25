@@ -113,6 +113,7 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'ccd-tick-diet-seams.test.ts': ['__memo_scope'],
   'ccd-ws-collect-loose.test.ts': ['_fpp'],
   'ccd-ws-expire-ladder.test.ts': ['_fp'],
+  'ccd-ws-orphan-verb.test.ts': ['_fpp'],
   // The tick diet's runner and row builders, which the two per-locale files share.
   'ccdTickDietRunner.ts': ['__diet_caller', '__diet_side', '__hm2', '__lfc', '__lfx', '__lj6', '__rg4', '__rt', '__rt_snap',
     '__seq'],
