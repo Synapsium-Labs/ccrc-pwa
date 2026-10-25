@@ -95,6 +95,8 @@ export class SessionFeed {
   private polling = false;
   private gen = 0;
   private failedCaptures = 0;
+  /** The `at` of the published pane whose failure was already counted: a joiner re-reading it is not a second failure. */
+  private countedPaneAt = -1;
   /** The transcript state that already failed to explain the menu on screen: see `claimAskRead`. */
   private askProbe: { file: string; id: string; size: number; mtimeMs: number } | null = null;
   /** The menu last read and the ask it carried: what the read-skip below is judged against, the way a stream's gate
@@ -187,7 +189,8 @@ export class SessionFeed {
     const startedAt = Date.now();
     const facts = this.current();
     const gen = this.gen;
-    const dialog = await this.readDialog(facts?.file ?? null, gen, await this.paneLook(startedAt));
+    const look = await this.paneLook(startedAt);
+    const dialog = await this.readDialog(facts?.file ?? null, gen, look.pane, look.counted);
     const { io } = this.deps;
     const tasks = facts === null ? null : await readTasks(io, facts.cfgDir, facts.uuid, { touchedAt: true });
     const hook = facts === null ? null : await this.hookRead(facts.uuid, startedAt);
@@ -197,10 +200,15 @@ export class SessionFeed {
 
   /** The pane as the watcher published it, when that is fresh and was captured after the last answer; otherwise a
    *  capture of our own (the opening reading, or a watcher that is not publishing). */
-  private async paneLook(now: number): Promise<string | null> {
+  private async paneLook(now: number): Promise<{ pane: string | null; counted: boolean }> {
     const p = this.pane;
-    if (p !== null && now - p.at <= PUBLISHED_FRESH_MS && p.at >= this.answeredAt) return p.pane;
-    return this.deps.tmux.capture(this.id);
+    if (p !== null && now - p.at <= PUBLISHED_FRESH_MS && p.at >= this.answeredAt) {
+      // Failures count per look, not per read: a published look already counted is not a new failure.
+      const counted = p.pane === null && p.at === this.countedPaneAt;
+      if (p.pane === null) this.countedPaneAt = p.at;
+      return { pane: p.pane, counted };
+    }
+    return { pane: await this.deps.tmux.capture(this.id), counted: false };
   }
 
   /** The raw hookstate as the watcher published it for this identity, when fresh; otherwise our own read. */
@@ -212,7 +220,7 @@ export class SessionFeed {
 
   /** Read what menu `pane` (null: the capture failed) holds, enriched from the transcript `file` while the menu is
    *  still unexplained. null `file` (unresolvable session): the menu still ships, unenriched. */
-  private async readDialog(file: string | null, gen: number, pane: string | null): Promise<DialogReading> {
+  private async readDialog(file: string | null, gen: number, pane: string | null, counted = false): Promise<DialogReading> {
     const stale = (): boolean => gen !== this.gen;
     if (stale()) return { kind: 'dropped' };
     // Decision `ask-failed-capture-holds`: a failed capture (tmux, or the remote call behind it, returned nothing) is
@@ -220,6 +228,7 @@ export class SessionFeed {
     // review still on the pane. Only FAILED_CAPTURES_CLEAR failures in a row clear it: a pane tmux can no longer read
     // at all is not offering a menu (an answer to it is refused `not-alive`), and the sheet must not hold one forever.
     if (pane === null) {
+      if (counted) return this.failedCaptures < FAILED_CAPTURES_CLEAR ? { kind: 'held' } : { kind: 'read', dialog: null };
       this.failedCaptures += 1;
       if (this.failedCaptures < FAILED_CAPTURES_CLEAR) return { kind: 'held' };
       this.askProbe = null;

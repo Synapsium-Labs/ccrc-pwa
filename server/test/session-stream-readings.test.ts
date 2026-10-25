@@ -202,6 +202,27 @@ describe('a session stream\'s four readings (ARCH-52)', () => {
     } finally { sa.stop(); sb.stop(); }
   });
 
+  // Decision `ask-failed-capture-holds`: failures count per look at the pane, not per read of it. A socket joining
+  // during an outage re-reads the look already counted and must not push the feed toward the clear.
+  it('a socket joining during a pane outage does not count the published failed look a second time', async () => {
+    const bus = new Bus();
+    const fa: SessionStreamMsg[] = []; const fb: SessionStreamMsg[] = [];
+    const sa = await open(bus, fa);
+    let sb: SessionStream | undefined;
+    try {
+      bus.emit(`pane:${ID}`, { at: Date.now(), pane: MENU });
+      await new Promise((r) => setTimeout(r, 50));
+      expect(fa.filter((m) => m.type === 'dialog')).toHaveLength(1);
+      const nullAt = Date.now() + 1;
+      bus.emit(`pane:${ID}`, { at: nullAt, pane: null });     // failure 1
+      await new Promise((r) => setTimeout(r, 50));
+      sb = await open(bus, fb);                                // its opening read sees the same look
+      bus.emit(`pane:${ID}`, { at: nullAt + 1, pane: null }); // failure 2
+      await new Promise((r) => setTimeout(r, 50));
+      expect(fa.filter((m) => m.type === 'dialog_cleared')).toHaveLength(0);
+    } finally { sa.stop(); sb?.stop(); }
+  });
+
   it('a pane captured before the last answer is not the reading: the feed looks again', async () => {
     const bus = new Bus();
     const sa = await open(bus, []);
