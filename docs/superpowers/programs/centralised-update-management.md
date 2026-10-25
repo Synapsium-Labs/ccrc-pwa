@@ -6099,6 +6099,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   four more lanes onto the shared lane runner; the divergences row and the parts the broker's soak watches are unchanged, so
   it goes in the daily mail only. `STATUS 2026-10-25T04:25:40Z fleet=v0.0.646 server=v0.0.646 health=v0.0.646`
   `newest=v0.0.664 intent=*:dev/auto=off backups=fleet:206M/server:11419M disk=fleet:103G/server:19G`
+- **2026-10-25 05:25 UTC — monitoring: v0.0.665 and v0.0.666 released; boxes stay on v0.0.646, no anomalies.** Neither
+  changes the parts the broker's soak watches (#1234 rewords `watch.ts`'s capability questions; #1264 is `ccd`'s orphan
+  rescue), so both go in the daily mail only. `STATUS 2026-10-25T05:25:41Z fleet=v0.0.646 server=v0.0.646 health=v0.0.646`
+  `newest=v0.0.666 intent=*:dev/auto=off backups=fleet:206M/server:11419M disk=fleet:103G/server:19G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
