@@ -6183,6 +6183,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   at 15:29:28, and the inventory cleared by 15:32. The keep held 5, with the extra pre-migration data set kept as R46 says, and
   free disk went 15,031M to 18,037M. Nothing misbehaved. `STATUS 2026-10-25T15:32:04Z fleet=v0.0.691 server=v0.0.691`
   `health=v0.0.691 newest=v0.0.691 intent=*:dev/auto=off backups=fleet:187M/server:12107M disk=fleet:103G/server:18G`
+- **2026-10-25 16:25 UTC — monitoring: v0.0.692 released; the boxes stay on v0.0.691, no anomalies.** v0.0.692 is the
+  collector's checkout cap (#1394), and it touches nothing the broker's soak watches. The probe now also reads where the
+  server's backup keep comes from: still the environment (5), with no `ccrc.env` line yet.
+  `STATUS 2026-10-25T16:25:39Z fleet=v0.0.691 server=v0.0.691 health=v0.0.691 newest=v0.0.692 intent=*:dev/auto=off`
+  `pin=None link=<versions>/v0.0.691 backups=fleet:187M/server:12107M disk=fleet:103G/work:348G/server:18G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
