@@ -595,6 +595,8 @@ export const GROUNDS = {
 export const SELF_GROUNDED_EXEMPT = {
   '.chat-head .keycap:disabled': 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is documented sub-AA in tokens.css',
   '.send-btn:disabled': 'WCAG 1.4.3 exempts inactive controls',
+  // R89 S1: a failed bubble's Retry while the desk's inline ask card is held; --ink-disabled on the message column's page ground.
+  '.pending-actions .pending-retry:disabled': 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is documented sub-AA in tokens.css',
   // Measured, not assumed: --ink-disabled on the ghost button's sheet ground is
   // 2.85 dark / 2.63 light. It is the same --ink-disabled the three entries
   // above are exempt for; this one only became visible when variants that

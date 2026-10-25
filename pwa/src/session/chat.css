@@ -634,6 +634,13 @@ button.metachip:active {
   border-color: color-mix(in srgb, var(--accent) 50%, var(--edge-strong));
   color: var(--accent);
 }
+/* Held while the desk's inline ask card is mounted (R89): the disabled look of `.send-btn:disabled`, so the held Retry is not a
+   pointer and does not wear the accent of a live one. */
+.pending-actions .pending-retry:disabled {
+  border-color: var(--edge-subtle);
+  color: var(--ink-disabled);
+  cursor: default;
+}
 /* `Send it` outranks Retry, and only appears beside it — so it is the FILLED
  * one, reusing the primary button's accent-on-accent pair rather than a third
  * treatment. The hierarchy is the message: on an `enter-ignored` the text is
