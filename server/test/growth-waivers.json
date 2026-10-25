@@ -79,6 +79,13 @@
       "added": "2026-10-24"
     },
     {
+      "file": "server/src/watch.ts",
+      "maxDelta": 225,
+      "d": "D-6786",
+      "reason": "PR-landing stage 1 PL-4: the checks lane (sweepLandingChecks, its per-episode fold, latch, stuck bound and end rows) is a LANE_SCHEDULE row dispatched by tick(), so it lives in the watcher beside the PR lane it must stay outside of (measured +222 net code lines against the merge-base)",
+      "added": "2026-10-25"
+    },
+    {
       "file": "ccd/ccrc",
       "maxDelta": 550,
       "d": "D-6907",

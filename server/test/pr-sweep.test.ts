@@ -455,6 +455,35 @@ describe('the single-flight and due-interval guards hold their line, not just th
     await vi.waitFor(() => expect(activeCalls.filter((c) => c[0] === 'pr-state')).toHaveLength(1));
     wActive.stop();
   });
+
+  it('an open PR whose check is IN_PROGRESS with an empty conclusion selects the 30 s cadence', async () => {
+    // `gh` writes a running CheckRun as `conclusion: ""`. Swept end to end, that
+    // row must read pending, so the next tick 40 s later sweeps again (the
+    // active cadence) instead of waiting out the 120 s idle one.
+    const elapsed = 40_000;   // > PR_SWEEP_ACTIVE_MS (30s), < PR_SWEEP_MS (120s)
+    const id = 'demo-quiet-basin';
+    const openLine = JSON.stringify({
+      id, project: 'demo', repo: 'o/r', branch: 'ws/' + id, base: 'origin/main', baseShort: 'main',
+      tip: 'f'.repeat(40), ahead: 1, dirty: 0, commits: [], template: null,
+      rows: [{ number: 7, state: 'OPEN', headRefName: 'ws/' + id, headRefOid: 'deadbee',
+        baseRefName: 'main', isCrossRepository: false, mergedAt: null, mergeCommit: null,
+        url: 'u', title: 't', isDraft: false, ours: true,
+        statusCheckRollup: [{ __typename: 'CheckRun', name: 'build', status: 'IN_PROGRESS', conclusion: '' }] }],
+      phase: 'open', number: 7, checkedAt: 1785300000000, reason: null,
+    });
+    const home = seed([id]);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor(openLine, calls))), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentPrStates().get(id)?.checks).toBe('pending'));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
+    stampPrAt(w, Date.now() - elapsed);
+    await w.tick();
+    await vi.waitFor(() => expect(calls.filter((c) => c[0] === 'pr-state'),
+      'a running check is pending — the sweep repeats at the 30 s cadence').toHaveLength(2));
+    w.stop();
+  });
 });
 
 describe('backoffPr — a failed read never overwrites a good phase, and unauthenticated skips the doubling', () => {

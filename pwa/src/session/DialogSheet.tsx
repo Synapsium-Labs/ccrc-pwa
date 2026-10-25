@@ -151,7 +151,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { Dialog, DialogTabTarget, HookAsk } from '../../../shared/api';
+import { backgroundOnlyRefusal, type Dialog, type DialogTabTarget, type HookAsk } from '../../../shared/api';
 import { parseAskTabs } from '../../../shared/ask-menu';
 import { OptionRow, toast } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
@@ -166,6 +166,7 @@ import { keyTabs, questionKeys, reviewKeys, rowKey, type KeyScreen } from './ask
 import { dialogMultiRefusal, dialogRefusal, dialogTabRefusal, dialogTextRefusal } from './askWords';
 import { useAskKeys } from './useAskKeys';
 import { api, ApiError, failedTo } from '../lib/api';
+import { backgroundTasksClause } from '../lib/refusalWords';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
 
@@ -417,7 +418,12 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null }: 
         // interrupt's `not-busy` can mean EITHER "the agent already finished
         // on its own" or "someone else already answered this same request" —
         // the response can't tell them apart, so the copy doesn't pretend to.
-        toast("Couldn't stop — the session may be idle or the request already resolved");
+        // background-only reaches here only from a stale Deny after the approval
+        // resolved elsewhere (D-6116), so that branch says it resolved and names the work.
+        const bg = backgroundOnlyRefusal(err.body);
+        toast(bg !== null
+          ? `The request already resolved; ${backgroundTasksClause(bg)}.`
+          : "Couldn't stop — the session may be idle or the request already resolved");
       } else {
         toast(failedTo('decline', err), 'error');
       }

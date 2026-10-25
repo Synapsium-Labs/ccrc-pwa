@@ -771,9 +771,11 @@ whole time, which is the only prevention this ordering rule buys.
    read, the exact SHA is the producer run's own verified `handoffCommit`:
    prove the merge with `gh pr view <pr> --json state,headRefOid`, answering
    MERGED with `headRefOid` equal to it — the coordinator merges with
-   `gh pr merge <pr> --squash --match-head-commit <handoffCommit>` (plus
-   `--admin` where the repository's ruleset requires it) for exactly this
-   reason — and on a native-queue project it lands with the same binding, as
+   `gh pr merge <pr> --squash --match-head-commit <handoffCommit>` for
+   exactly this reason (`--admin` and GitHub API merge or enqueue calls are
+   governed by the repository's external policy authority; until that
+   authority answers (wave 2b), a coordinator never uses them) — and on a
+   native-queue project it lands with the same binding, as
    "Landing on a native-queue project" below says. An UNMARKED producer —
    every workspace minted without a marker: by a box whose ccd did not yet
    mark children, or by a dispatch that journaled `child-omitted` (§2) — is
@@ -810,7 +812,11 @@ whole time, which is the only prevention this ordering rule buys.
    this PR's own, one `gh run rerun <run id> --failed` and the same wait.
    Then, from your own session, enqueue its PR with
    `gh pr merge <pr> --match-head-commit <handoffCommit>`: no `--squash`,
-   because the queue's merge method applies, and never `--admin`. Prove it
+   because the queue's merge method applies, and never `--admin`. The same
+   enqueue is what an unattended lander does (ruling R5 as amended
+   2026-10-25: the queue re-tests the combined code, the required checks gate
+   the enqueue, the head is bound): it needs no human present, and a worker
+   still never enqueues its own PR. Prove it
    is IN the queue before you rely on the server:
    `gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr> -f query='query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }'`
    gives one of four answers. A queued PR answers a non-null

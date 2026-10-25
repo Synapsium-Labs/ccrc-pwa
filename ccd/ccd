@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=29a649b82ac4af1037b14957600d7f2d348b92f2684f81eea04712c017a21f4e
+# ccrc:generated 1 sha256=02c20fc33f9ae1440414d4840034d98b2828e74994e56d4a7ccf213d3a695191
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -34967,7 +34967,7 @@ _WS_PHYS=''
 _WS_PHYS_WHY=''
 _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_PHYS_WHY (and _WS_PHYS '')
   #                         when it cannot be entered, its read lacks the sentinel, or the path holds a newline
-  # THE ONE PHYSICAL RESOLUTION its thirteen callers share: a directory a removal
+  # THE ONE PHYSICAL RESOLUTION its fourteen callers share: a directory a removal
   # or an in-use probe acts under, or a leaf a placement or a checkout question
   # is asked of. The three newline sites: `_ws_leaf_remove`'s root,
   # `_ws_path_users`' parent and `_ws_expire_cwd_users`' parent. The four
@@ -34990,10 +34990,13 @@ _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_
   # directory it is asked is resolved here, a fourth newline site (path-identity spec §4.6).
   # The thirteenth is the tail's re-ask, `_ws_reclaim_reask`, which resolves the child's own
   # tree afresh for the second proof of a nested checkout's path (review 790 F7).
+  # The fourteenth is the loose arm's file rung, `_ws_loose_rows_file`: the root a loose
+  # regular file stands in is resolved here, so a row spelled under that root's physical
+  # path is compared with the file's own (D-6858).
   # A bare `$(cd -- "$d" && pwd -P)` dropped EVERY
   # trailing newline: a root resolving to `<vol>\n` read as `<vol>`, so the
   # removal took `<vol>/<id>` and both probes answered "nobody". This speaks
-  # for its thirteen callers only. Bare captures stand elsewhere, and the ones
+  # for its fourteen callers only. Bare captures stand elsewhere, and the ones
   # named here are examples, not a census. Some fail closed: the tail's
   # `wdreal` and `_ws_reclaim_nested_proven`'s `real` (a truncated root makes
   # the containment proof refuse), and `_ws_leaf_remove`'s `lreal` (it must
@@ -35813,7 +35816,11 @@ _ws_leaf_uid() {   # path -> the uid that owns the path ITSELF (`ls -dn`: numeri
   printf '%s' "$u"
 }
 # ── does a leaf hold a checkout git records ELSEWHERE (child reclamation wave 6, spec §5.5, §5.6) ──
-WS_LEAF_CHECKOUTS_CAP=64   # the most `.git` entries one leaf's scan examines; more is unmeasured
+WS_LEAF_CHECKOUTS_CAP=1024   # the most `.git` entries one leaf's scan examines (a directory is not one: it needs no examination); more is
+#                                unmeasured. Measured (D-6860): ~20 ms an entry on the worst path (an outside admin directory with its
+#                                back-link), so 1024 is ~21 s; the examination is bounded by REAP_SCAN_SECONDS as well, so a slower box
+#                                stops unmeasured rather than overrunning it
+_WS_CHECKOUTS_CAPPED=''     # '1' when `_ws_leaf_checkouts` answered 2 because of that cap (a fixed fact of the leaf), else ''
 _WS_SMALL=''; _WS_SMALL_NUL=''
 _ws_leaf_read_small() {   # file -> 0 with _WS_SMALL = its bytes, each NUL read as a newline, and _WS_SMALL_NUL
   #                            = `inner` (a NUL stands before a byte that is not NUL, CR or LF), `trailing` (every
@@ -35993,7 +36000,10 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
   # not read hides what is under it) is unmeasured. Not pruned at a `.git`
   # directory: a tree can be parked inside a clone's `.git` as anywhere else,
   # and the removal takes it too; the bound, not a prune, caps the walk.
-  # At most `WS_LEAF_CHECKOUTS_CAP` entries are examined: more is unmeasured.
+  # At most `WS_LEAF_CHECKOUTS_CAP` entries are examined: more is unmeasured, and says
+  # so (`_WS_CHECKOUTS_CAPPED`, a fixed fact of the leaf). The examination itself is
+  # bounded by `REAP_SCAN_SECONDS` too: one that does not finish in time is unmeasured,
+  # a fact of the box's load, not of the leaf, so the cap flag stays unset.
   # EACH `.git`, by `-L`, `-d`, `-f`, never followed: a link refuses (git
   # would follow it, ccd never does); a directory passes (a full clone, the
   # leaf's own); a regular file is read AS A FILE (never by running git inside
@@ -36014,9 +36024,9 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
   # absolutely inside the pre-move leaf is read at the leaf's new place while
   # nothing stands at that spelling. Every other caller passes neither, and
   # nothing it is answered changes.
-  local lp outf errf err rc f why='' n=0 alias="${2-}" accepted="${3-}"
+  local lp outf errf err rc f why='' n=0 deadline alias="${2-}" accepted="${3-}"
   local -a gits=()
-  _WS_CHECKOUTS_WHY=''; _WS_CHECKOUTS_ACCEPTED=''
+  _WS_CHECKOUTS_WHY=''; _WS_CHECKOUTS_ACCEPTED=''; _WS_CHECKOUTS_CAPPED=''
   if [[ -n "$alias" ]]; then
     [[ "$alias" == /* && "$alias" != *$'\n'* ]] \
       || { _WS_CHECKOUTS_WHY="the leaf's pre-move spelling '$alias' is not an absolute path, so no back-link is compared with it"; return 2; }
@@ -36041,13 +36051,17 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
     return 2
   fi
   while IFS= read -r -d '' f; do
+    [[ -d "$f" && ! -L "$f" ]] && continue   # a full clone passes unread (`_ws_leaf_checkout_one`'s rule), so a fixture-heavy leaf is not capped
     gits+=("$f"); n=$(( n + 1 ))
     (( n <= WS_LEAF_CHECKOUTS_CAP )) || break
   done < "$outf"
   rm -f "$outf"
   (( n <= WS_LEAF_CHECKOUTS_CAP )) \
-    || { _WS_CHECKOUTS_WHY="$lp holds more than $WS_LEAF_CHECKOUTS_CAP entries named .git, so not every checkout in it was examined"; return 2; }
+    || { _WS_CHECKOUTS_CAPPED=1; _WS_CHECKOUTS_WHY="$lp holds more than $WS_LEAF_CHECKOUTS_CAP entries named .git that are not directories, so not every checkout in it was examined"; return 2; }
+  deadline=$(( SECONDS + REAP_SCAN_SECONDS ))
   for f in ${gits[@]+"${gits[@]}"}; do
+    (( SECONDS < deadline )) \
+      || { _WS_CHECKOUTS_WHY="the examination of the .git entries in $lp did not finish within ${REAP_SCAN_SECONDS}s, so not every checkout in it was examined"; return 2; }
     _ws_leaf_checkout_one "$lp" "$f" "$alias" "$accepted"; rc=$?
     (( rc != 1 )) || return 1
     (( rc == 0 )) || [[ -n "$why" ]] || why="$_WS_CHECKOUTS_WHY"
@@ -39388,7 +39402,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   (( rc != 2 )) || { _ws_collect_unmeasured in-use "${_WS_PATH_USERS_WHY-}"; return 1; }
   (( rc != 1 )) || { _ws_collect_refuse in-use "a process of this uid still uses $leaf (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
   _ws_leaf_checkouts "$leaf"; rc=$?
-  (( rc != 2 )) || { _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
+  (( rc != 2 )) || { [[ -z "${_WS_CHECKOUTS_CAPPED-}" ]] || { _ws_collect_unmeasured checkouts-cap "${_WS_CHECKOUTS_WHY-}"; return 1; }; _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
   (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_CHECKOUTS_WHY-}"; return 1; }
   _ws_collect_rows_clear "$id" "$leaf"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured rows "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
@@ -40891,9 +40905,30 @@ _ws_loose_slug_held() {   # name -> 0 free (or not slug-shaped); 1 a registry fi
   _ws_slug_free "${n%-*}" "${n##*-}" || { _WS_LOOSE_WHY="a registry file of the id $n stands — the entry is no longer loose"; return 1; }
 }
 
+_ws_loose_rows_file() {   # file -> 0 no registry row names it or a path below it; 1 one does; 2 unmeasured (_WS_LOOSE_WHY)
+  #                            A standing regular file cannot be a session's workdir or hold one, so each row's spelling is
+  #                            read against the file's own, as written and under the root's physical path; nothing is resolved.
+  #                            (D-6858)
+  local p="${1-}" root phys='' f o w rc held='' unread=''
+  root="${p%/*}"; _ws_dir_physical "$root" && phys="${_WS_PHYS%/}/${p##*/}"
+  [[ -n "$phys" ]] || { _WS_LOOSE_WHY="${_WS_PHYS_WHY:-the root of the entry could not be resolved}, so a row spelled by its physical path was never compared"; return 2; }
+  f=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) || { _WS_LOOSE_WHY="could not list $REG"; return 2; }
+  while IFS= read -r o; do
+    [[ -n "$o" ]] || continue
+    o="${o##*/}"; o="${o%.workdir}"
+    w=$(_reg_read "$o" workdir); rc=$?
+    (( rc == 1 )) && continue   # gone between the listing and the read
+    (( rc == 0 )) || { unread+="${unread:+, }$o"; continue; }
+    [[ "$w" == "$p" || "$w" == "$p"/* || "$w" == "$phys" || "$w" == "$phys"/* ]] && held+="${held:+, }$o"
+  done <<< "$f"
+  [[ -z "$held" ]] || { _WS_LOOSE_WHY="registry row(s) lie at or through the entry — $held"; return 1; }
+  [[ -z "$unread" ]] || { _WS_LOOSE_WHY="registry row(s) $unread could not be read, so whether one names the entry was never asked"; return 2; }
+  return 0
+}
 _ws_loose_rows() {   # name path -> 0 no registry row lies at, inside or through path; 1 one does; 2 unmeasured (_WS_LOOSE_WHY)
   local n="${1-}" p="${2-}" rc
   _WS_LOOSE_WHY=''
+  [[ ! -f "$p" || -L "$p" ]] || { _ws_loose_rows_file "$p"; return; }   # a file is no workdir: the shared rung resolves its path as one
   _ws_reclaim_workdir_shared "$n" "$p" keep-own; rc=$?   # a row named for the entry itself is not skipped as its own
   if (( rc == 0 )); then
     [[ -z "$_WS_SHARED_ROWS$_WS_NESTED_ROWS$_WS_THROUGH_ROWS" ]] && return 0
@@ -41008,7 +41043,7 @@ _ws_loose_eval() {   # name hex -> the FRESH rungs: REAP_VERDICT `collectable` (
   _WS_CHECKOUTS_ACCEPTED=''
   if [[ "$_WS_LOOSE_TYPE" == d ]]; then
     _ws_leaf_checkouts "$path"; rc=$?
-    (( rc != 2 )) || { _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
+    (( rc != 2 )) || { [[ -z "${_WS_CHECKOUTS_CAPPED-}" ]] || { _ws_collect_unmeasured checkouts-cap "${_WS_CHECKOUTS_WHY-}"; return 1; }; _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
     (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_CHECKOUTS_WHY-}"; return 1; }
   fi
   _WS_LOOSE_ACCEPTED="${_WS_CHECKOUTS_ACCEPTED-}"

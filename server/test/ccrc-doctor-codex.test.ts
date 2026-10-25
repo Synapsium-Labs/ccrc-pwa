@@ -19,7 +19,7 @@ import { PRELOADS, preloadOptions } from './historyHelpers.js';
 import { plantDirectLane, plantRunningBridge, writeBridgeRecord } from './ccrc-doctorFixture.js';
 import { SW_DENYLIST_DEFAULT, swJs } from './swFixtures.js';
 import { SERVER_CAPS_LEASE_S } from '../../shared/api.js';
-import { installDoctorHooks, here, REPO, CCRC_SRC, CHECKS_SRC, BASH, realPath, Result, writeChecks, stubBin, stub, unstub, linkReal, stubNode, RosterEntry, UPSTREAM, writeRoster, writeRawRoster, entry, binDir, shq, writeCcrcEnv, stubLaunchctl, unitDirOf, unitFileOf, writeUnitFile, removeUnitFile, containedPath, doctorEnv, OOM_DROPIN, plantOomPolicy, DOCTOR_DEADLINE_BIN, runDoctorBounded, runDoctor, DH_INSTALLER, installerEvents, installerHook, plantHookRegistration, plantSpoolDir, BT_PY_ARM, healthy, PY, describeCodex, itCodex, writeLaneModels, renderLane, startedJson, lanePorts, editRosterRow, healthyCodexBox, broken, tableNames, lineFor, anyVerdictFor, HEALTHY_SKIPS, noRunnerBugLine, plantSession, checksDecl, FixCodexCase, AGED, laneFileText, SHARED_PORT_REFUSAL, FIX_TRIPWIRES, plantHistoryShim, historyBox } from './ccrc-doctorFixture.js';
+import { installDoctorHooks, here, REPO, CCRC_SRC, CHECKS_SRC, BASH, realPath, Result, installCcrc, writeChecks, stubBin, stub, unstub, linkReal, stubNode, RosterEntry, UPSTREAM, writeRoster, writeRawRoster, entry, binDir, shq, writeCcrcEnv, stubLaunchctl, unitDirOf, unitFileOf, writeUnitFile, removeUnitFile, containedPath, doctorEnv, OOM_DROPIN, plantOomPolicy, DOCTOR_DEADLINE_BIN, runDoctorBounded, runDoctor, DH_INSTALLER, installerEvents, installerHook, plantHookRegistration, plantSpoolDir, BT_PY_ARM, healthy, PY, describeCodex, itCodex, writeLaneModels, renderLane, startedJson, lanePorts, editRosterRow, healthyCodexBox, broken, tableNames, lineFor, anyVerdictFor, HEALTHY_SKIPS, noRunnerBugLine, plantSession, checksDecl, FixCodexCase, AGED, laneFileText, SHARED_PORT_REFUSAL, FIX_TRIPWIRES, plantHistoryShim, historyBox } from './ccrc-doctorFixture.js';
 
 // Each case's homes go when the case ends, not in a file-wide end sweep (R100, review 518's S1): that sweep overran vitest's 20 s
 // hook timeout on the one file this family was split from. Registered before `installDoctorHooks()`'s root `afterEach` (the codex
@@ -5712,5 +5712,188 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
     expect(lineFor(r.stdout, 'filevault')).toBe('PASS filevault: FileVault is On (fdesetup status)');
     expect(lineFor(r.stdout, 'secrets-backup-excluded')).toBe('PASS secrets-backup-excluded: ~/.cc-secrets excluded from Time Machine (tmutil isexcluded)');
     expect(r.code, r.stdout).toBe(0);
+  });
+});
+
+// ── box-settings (wave 24, D-6599) ─────────────────────────────────────────
+
+describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-6599)', () => {
+  /** ccrc's tree and a ccrc.env holding `lines` after a role line, on a contained PATH with the real `awk` linked in,
+   *  since ccrc's one reader scans with it and, with no `awk` to scan with, WARNs that the file could not be scanned. */
+  const settingsBox = (prefix: string, lines: string[]): string => {
+    const home = mkTmp(prefix);
+    installCcrc(home);
+    containedPath(home);
+    linkReal(home, 'awk');
+    writeCcrcEnv(home, ['CCRC_ROLE=server', ...lines, ''].join('\n'));
+    return home;
+  };
+  /** `_check_box-settings` alone, as `cmd_doctor` runs it (the update-sweep describe's `runUs` shape). */
+  const runBs = (home: string, extraEnv: NodeJS.ProcessEnv = {}): Result => {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _check_box-settings`],
+    { env: { ...doctorEnv(home), ...extraEnv }, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const out = (r: Result): string[] => r.stdout.split('\n').filter((l) => l !== '');
+  const verdict = (r: Result): string => out(r).find((l) => /^(PASS|WARN|FAIL|SKIP) box-settings: /.test(l)) ?? '';
+
+  it('W24-S1: nothing set', () => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-none-', ['CCRC_FLEET=local']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets none of ccrc's settings\b/m);
+    expect(verdict(r)).toMatch(/; not set there, so the default applies unless the environment sets it: CCRC_BACKUP_KEEP, /);
+    expect(out(r)).toHaveLength(1);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+  });
+
+  it('W24-S2: a set line, and the environment does not change it', () => {
+    const home = settingsBox('ccrc-doctor-bs-set-', ['CCRC_BACKUP_KEEP=5', 'CCRC_AGENT_TOKEN=fixture-token-never-printed']);
+    const r = runBs(home, { CCRC_BACKUP_KEEP: '7' });
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets CCRC_BACKUP_KEEP=5; not set there/);
+    expect(verdict(r)).toMatch(/CCRC_BACKUP_KEEP=5/);
+    expect(verdict(r)).not.toMatch(/=7/);
+    expect(verdict(r), 'the unset list names the other six, never the one the file sets').not.toMatch(/environment sets it:.*CCRC_BACKUP_KEEP\b/);
+    expect(r.stdout, 'no other line of ccrc.env prints (ruling 7)').not.toMatch(/fixture-token-never-printed|CCRC_AGENT_TOKEN|CCRC_ROLE/);
+    expect(r.code).toBe(0);
+  });
+
+  it('W24-S3: a line the reader refuses WARNs, even beside a set environment', () => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-export-', ['export CCRC_BACKUP_KEEP=5']), { CCRC_BACKUP_KEEP: '7' });
+    expect(r.stdout).toMatch(/^WARN box-settings: CCRC_BACKUP_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take/m);
+    expect(out(r)[1]).toMatch(/^ {2}remedy: rewrite each named line in the box's ccrc\.env as a plain KEY=value line/);
+    expect(out(r)).toHaveLength(2);
+    expect(r.stdout).not.toMatch(/^PASS box-settings/m);
+    expect(r.code).toBe(2);
+  });
+
+  it('W24-S4: a mirror\'s credentials never print', () => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-url-', ['CCRC_RELEASE_BASE_URL=https://u:hunter2@mirror.example/releases']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets CCRC_RELEASE_BASE_URL=https:\/\/mirror\.example\/releases;/);
+    expect(r.stdout).not.toContain('hunter2');
+    expect(r.code).toBe(0);
+  });
+
+  it('W24-S5: a named-empty line is reported as such', () => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-empty-', ['CCRC_UPDATE_DEADLINE_MS=']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: /);
+    expect(verdict(r)).toMatch(/CCRC_UPDATE_DEADLINE_MS= \(empty: the default\)/);
+    expect(verdict(r), 'a named-empty line is not listed as unset').not.toMatch(/environment sets it:.*CCRC_UPDATE_DEADLINE_MS\b/);
+    expect(r.code).toBe(0);
+  });
+
+  it('W24-S6: a scheme-less mirror base\'s credentials never print either (curl reads it as http)', () => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-url-bare-', ['CCRC_RELEASE_BASE_URL=u:hunter2@mirror.example/r']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets CCRC_RELEASE_BASE_URL=mirror\.example\/r;/);
+    expect(r.stdout).toContain('mirror.example');
+    expect(r.stdout).not.toContain('hunter2');
+    expect(r.code).toBe(0);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('W24-S7: a ccrc.env that is there but cannot be read WARNs, naming the file\'s own remedy', () => {
+    const home = settingsBox('ccrc-doctor-bs-unreadable-', ['CCRC_BACKUP_KEEP=5']);
+    chmodSync(join(home, '.ccrc', 'ccrc.env'), 0o000);
+    const r = runBs(home);
+    expect(r.stdout, r.stderr).toMatch(/^WARN box-settings: CCRC_BACKUP_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env is there but cannot be read/m);
+    expect(out(r)[1]).toMatch(/^ {2}remedy: .*make the file itself readable when it cannot be read or scanned/);
+    expect(out(r)).toHaveLength(2);
+    expect(r.stdout).not.toMatch(/^PASS box-settings/m);
+    expect(r.code).toBe(2);
+  });
+
+  // Fix round 1, F15: a cause on ANOTHER key's line that leaves the model of the file (`_box_unit_env`) unable to decide it
+  // refuses every setting the file names, each on a plain line, so the remedy is the model's own (its BUE_FIX), given once.
+  /** `_check_box-settings` with `CCD_OS` set AFTER sourcing (ccrc recomputes it from the host at source time), so the
+   *  Darwin model runs on any host. */
+  const runBsOs = (home: string, os: 'linux' | 'darwin'): Result => {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; CCD_OS=${os}; _check_box-settings`],
+    { env: doctorEnv(home), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const PLAIN_REMEDY = "rewrite each named line in the box's ccrc.env as a plain KEY=value line (deploy/ccrc.env.example shows each), "
+    + 'or make the file itself readable when it cannot be read or scanned';
+  const remedyOf = (r: Result): string => out(r)[1] ?? '';
+  const count = (hay: string, needle: string): number => hay.split(needle).length - 1;
+
+  it.each(['linux', 'darwin'] as const)('W24-S8 (%s): an unrelated non-ASCII line gives the model\'s own remedy, once, not the plain-line one', (os) => {
+    const home = settingsBox(`ccrc-doctor-bs-utf8-${os}-`, ['CCRC_BACKUP_KEEP=5', 'CCRC_VERSIONS_KEEP=3', 'NOTE=café']);
+    const r = runBsOs(home, os);
+    expect(r.stdout, r.stderr).toMatch(/^WARN box-settings: CCRC_BACKUP_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env line 4 .*; CCRC_VERSIONS_KEEP cannot be measured: /m);
+    const fix = os === 'linux'
+      ? 'keep every NAME=value line of ~/.ccrc/ccrc.env to ASCII (a non-ASCII host goes in as its punycode xn-- form;'
+      : 'rewrite line 4 of ~/.ccrc/ccrc.env as NAME=value,';
+    expect(remedyOf(r), 'the model\'s own fix').toMatch(new RegExp(`^ {2}remedy: ${fix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    expect(count(remedyOf(r), fix), 'given once for the two settings it refused').toBe(1);
+    expect(remedyOf(r), 'not only the plain-line rewrite: both lines are already plain').not.toContain(PLAIN_REMEDY);
+    expect(remedyOf(r)).toMatch(/; until then the act that reads it refuses, or falls back as its line says$/);
+    expect(r.stdout, 'never a value or another byte of the file').not.toMatch(/caf|NOTE|=5|=3/);
+    expect(r.stdout, '$HOME prints as ~').not.toContain(home);
+    expect(out(r)).toHaveLength(2);
+    expect(r.code).toBe(2);
+  });
+
+  it.each(['linux', 'darwin'] as const)('W24-S9 (%s): an unrelated line with an inner CR gives the model\'s CR fix', (os) => {
+    const home = settingsBox(`ccrc-doctor-bs-cr-${os}-`, ['CCRC_BACKUP_KEEP=5', 'NOTE=a\rb']);
+    const r = runBsOs(home, os);
+    expect(r.stdout, r.stderr).toMatch(/^WARN box-settings: CCRC_BACKUP_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env line 3 /m);
+    expect(remedyOf(r)).toMatch(os === 'linux'
+      ? /^ {2}remedy: save ~\/\.ccrc\/ccrc\.env with one line ending per line \(LF, or CRLF\) and no bare carriage return inside a line /
+      : /^ {2}remedy: save ~\/\.ccrc\/ccrc\.env without carriage returns /);
+    expect(remedyOf(r)).not.toContain(PLAIN_REMEDY);
+    expect(r.stdout).not.toMatch(/NOTE|=5/);
+    expect(r.code).toBe(2);
+  });
+
+  it.each(['linux', 'darwin'] as const)('W24-S10 (%s): a refusal for the setting\'s own line alone keeps the plain-line remedy', (os) => {
+    const r = runBsOs(settingsBox(`ccrc-doctor-bs-shape-${os}-`, ['export CCRC_BACKUP_KEEP=5']), os);
+    expect(r.stdout, r.stderr).toMatch(/^WARN box-settings: CCRC_BACKUP_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take/m);
+    expect(remedyOf(r)).toBe(`  remedy: ${PLAIN_REMEDY}; until then the act that reads it refuses, or falls back as its line says`);
+    expect(r.code).toBe(2);
+  });
+
+  it.each(['linux', 'darwin'] as const)('W24-S12 (%s): a quote the setting\'s own line leaves open — the Linux model refuses that line alone, macOS the whole file', (os) => {
+    // On Linux the model's per-line shape arm sets a BUE_FIX too, but its cause is the setting's own line, so the plain-line
+    // remedy stands; on macOS the model refuses the whole file for any line, so its fix (naming the line) is carried.
+    const r = runBsOs(settingsBox(`ccrc-doctor-bs-openq-${os}-`, ['CCRC_BACKUP_KEEP="5']), os);
+    expect(r.stdout, r.stderr).toMatch(/^WARN box-settings: CCRC_BACKUP_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env /m);
+    if (os === 'linux') expect(remedyOf(r)).toBe(`  remedy: ${PLAIN_REMEDY}; until then the act that reads it refuses, or falls back as its line says`);
+    else expect(remedyOf(r)).toMatch(/^ {2}remedy: rewrite line 2 of ~\/\.ccrc\/ccrc\.env as NAME=value,.*; until then the act that reads it refuses, or falls back as its line says$/);
+    expect(r.code).toBe(2);
+  });
+
+  it.each(['linux', 'darwin'] as const)('W24-S11 (%s): causes mixed — the model\'s fix, then the plain-line clause for the other refusal', (os) => {
+    // The model-wide refusal comes FIRST in CCRC_SETTINGS' order, so a cause the check failed to clear per setting would
+    // be pinned on the later, scan-refused one and drop the plain-line clause.
+    const home = settingsBox(`ccrc-doctor-bs-mixed-${os}-`, ['CCRC_BACKUP_KEEP=5', 'export CCRC_VERSIONS_KEEP=3', 'NOTE=café']);
+    const r = runBsOs(home, os);
+    expect(r.stdout, r.stderr).toMatch(/; CCRC_VERSIONS_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take/m);
+    expect(remedyOf(r)).toMatch(os === 'linux' ? /^ {2}remedy: keep every NAME=value line of ~\/\.ccrc\/ccrc\.env to ASCII / : /^ {2}remedy: rewrite line 4 of ~\/\.ccrc\/ccrc\.env as NAME=value,/);
+    expect(remedyOf(r)).toContain(`; for each other refusal, ${PLAIN_REMEDY}; until then the act that reads it refuses, or falls back as its line says`);
+    expect(r.stdout).not.toMatch(/caf|NOTE/);
+    expect(r.code).toBe(2);
+  });
+
+  // Fix round 4, F1: `http:/` and `https:///` (curl authenticates with both) lose their userinfo, the slashes kept as written.
+  // Each row reads the check twice: as `cmd_doctor` runs it, and with `_upd_redact` made an identity after sourcing, so the
+  // check's OWN mask (which runs first) is measured by itself and not hidden behind `_upd_redact`'s.
+  const runBsOwnMask = (home: string): Result => {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _upd_redact() { printf '%s' "$1"; }; _check_box-settings`],
+    { env: doctorEnv(home), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+
+  it.each([['W24-S13', 'one slash', 'http:/'], ['W24-S14', 'three slashes', 'https:///']] as const)('%s: a mirror base whose scheme has %s (`%s`, which curl authenticates with) prints no credential (D-6748, fix round 4)', (id, _what, scheme) => {
+    const home = settingsBox(`ccrc-doctor-bs-url-${id === 'W24-S13' ? 1 : 3}slash-`, [`CCRC_RELEASE_BASE_URL=${scheme}u:hunter2@mirror.example/r`]);
+    const want = `PASS box-settings: the box's ccrc.env sets CCRC_RELEASE_BASE_URL=${scheme}mirror.example/r; `;
+    for (const [how, r] of [['as doctor runs it', runBs(home)], ['the check\'s own mask alone', runBsOwnMask(home)]] as const) {
+      expect(verdict(r).startsWith(want), `${how}: ${r.stdout}${r.stderr}`).toBe(true);
+      expect(r.stdout, how).not.toContain('hunter2');
+      expect(r.code, how).toBe(0);
+    }
   });
 });

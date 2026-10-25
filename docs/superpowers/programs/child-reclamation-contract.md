@@ -3068,9 +3068,11 @@ composes when a gate forbids it, and 9 more items (three silent-wedge paths amon
     - **`unmeasured`, BOX-WIDE (`platform`, `mv`, `flock`, `witness`, `floor`, `clock`, `eval`, `quarantine`):** a
       deferral. ONE box-wide line (R88), never one per id. `platform`, `mv`, `floor` and a `quarantine` of the wrong
       owner or mode never heal by themselves.
-    - **`unmeasured`, PER-LEAF and DETERMINISTIC (`idle:cap`, `idle:unreadable`, `mode`, `device`):** the failing run,
-      entered at once, with attention at once. R68 names these "so that wave 9 raises attention rather than retrying
-      silently". `device` is never read as transient (R89).
+    - **`unmeasured`, PER-LEAF and DETERMINISTIC (`idle:cap`, `idle:unreadable`, `mode`, `device`, `aside`,
+      `checkouts-cap`):** the failing run, entered at once, with attention at once. R68 names these "so that wave 9
+      raises attention rather than retrying silently". `device` is never read as transient (R89). `aside` is TR6's
+      word (`aside-probe-word`). `checkouts-cap` (D-6860) is a leaf holding more `.git` entries that are not
+      directories than the checkout scan examines; a scan that did not finish in time stays `checkouts`.
     - **`unmeasured`, LOAD-SENSITIVE** (`idle:timeout`, `idle:walk-failed`, `in-use`, `checkouts`, `rows`, `registry`,
       `identity`, `leaf`, `slot`, `records`, `token`, `lock`, and any unknown probe word): the failing run.
       - `lock` is per id: a non-file at `$REG/.reap-<id>.lock`, or an id too long for that name, answers it for one id

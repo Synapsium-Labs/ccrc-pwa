@@ -143,7 +143,7 @@ function installTree(h: string, roster: unknown, o: TreeOpts = {}): void {
 function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const inherited: NodeJS.ProcessEnv = { ...process.env };
   for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S', 'CCGPT_CONFIG', 'CCRC_MODELS_CANARY_S',
-    'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_MODELS_LOCK_S', 'CCRC_MODELS_NOW', 'CCRC_MODELS_PROBE_FIXTURE',
+    'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_UPDATE_HEALTH_S', 'CCRC_UPDATE_DEADLINE_MS', 'CCRC_RELEASE_BASE_URL', 'CCRC_MODELS_LOCK_S', 'CCRC_MODELS_NOW', 'CCRC_MODELS_PROBE_FIXTURE',
     'CCD_TIMEOUT_KILL_AFTER', 'MODELS_AUTO_DEADLINE', 'MODELS_AUTO_TAIL_S', 'CCD_TIMEOUT_CAPABILITY',
     '_CCD_TIMEOUT_PROVED_PATH', 'OP_HANG', 'OP_GARBAGE', 'OP_REFUSE', 'OP_PLAN_RAW', 'OP_PLAN_EXTRA', 'OP_PLAN_PREPEND', 'OP_PLAN_WHY', 'OP_FAIL_ADVANCE_WRITE', 'BASH_ENV', 'ENV',
     'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'NODE_USE_ENV_PROXY']) {
@@ -571,6 +571,34 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the advance step in the hourly refre
     expect(laneProxyRequests(proxy)).toEqual([]);
     expect(notifyCalls()).toEqual([]);
     expect(r.stderr.split('\n').filter((l) => l.includes('CCRC_MODELS_ADVANCE_BUDGET_S'))).toEqual([BUDGET_OFF_LINE]);
+  }, T);
+
+  it('W24-M1: the advance budget from ccrc.env turns the step off; the environment wins', async () => {
+    // D-6595: the budget is a setting, read through `_ccrc_knob`, so the models timer, which runs with no shell, honours the box's file.
+    await setup();
+    tier(0);
+    fs.rmSync(models('lane-a.advance.json'));
+    fs.writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_MODELS_ADVANCE_BUDGET_S=0\n');
+    let r = refresh({}, spy('_models_advance_lane', 'adv-calls', '"$2"'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(lines('adv-calls'), 'a lane was entered with the file\'s budget of 0').toEqual([]);
+    expect(r.stderr).not.toContain('CCRC_MODELS_ADVANCE_BUDGET_S');
+    r = refresh({ CCRC_MODELS_ADVANCE_BUDGET_S: '250' }, spy('_models_advance_lane', 'adv-calls', '"$2"'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(lines('adv-calls'), 'the environment\'s 250 enters the lane, as the default does').toHaveLength(1);
+  }, T);
+
+  it('W24-M2: a budget line ccrc cannot read turns the step off and says why', async () => {
+    await setup();
+    tier(0);
+    fs.rmSync(models('lane-a.advance.json'));
+    fs.writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'export CCRC_MODELS_ADVANCE_BUDGET_S=250\n');
+    const r = refresh({}, spy('_models_advance_lane', 'adv-calls', '"$2"'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(lines('adv-calls'), 'a lane was entered with the budget unread').toEqual([]);
+    expect(r.stderr.split('\n').filter((l) => l.includes('CCRC_MODELS_ADVANCE_BUDGET_S'))).toEqual(['ccrc: CCRC_MODELS_ADVANCE_BUDGET_S cannot be '
+      + 'measured: ~/.ccrc/ccrc.env names it on a line this reader does not take (it reads only a plain KEY=value line), so the advance '
+      + 'step is off for this run']);
   }, T);
 
   it("the advance step runs after every lane's refresh, so a canary never delays another lane's LiteLLM render", async () => {

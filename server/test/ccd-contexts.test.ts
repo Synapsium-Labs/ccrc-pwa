@@ -28,8 +28,10 @@ import {
  *  Lowered 540 -> 536 by ARCH-46: the registry-retire sequence is one `_reg_retire` helper with its own context row,
  *  so its callers make one edge each instead of the inlined calls, measured after its rebase.
  *  Raised 536 -> 537 by D-6638 (DR-26): the stale reclaim's one edge, the ladder's `_transcript_path` read, measured after its rebase.
- *  Raised 537 -> 538 by pr-landing's one `_reg_get` edge (above), measured after its rebase onto DR-26. */
-const BASELINE = 538;
+ *  Raised 537 -> 538 by pr-landing's one `_reg_get` edge (above), measured after its rebase onto DR-26.
+ *  Raised 538 -> 539 by D-6858: the loose arm's file rung `_ws_loose_rows_file` reads each registry row's workdir
+ *  through `_reg_read`, the one edge a file needs because it cannot take the shared directory rung. */
+const BASELINE = 539;
 
 const nameOf = (text: string): string => /^([A-Za-z_][A-Za-z0-9_]*)\(/.exec(text)![1]!;
 

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../src/lib/apiError';
 import {
-  ASK_REFUSE_TEXT, INTERRUPT_REFUSAL_TEXT, RUN_ROUTE_REFUSAL_TEXT, SET_ACCOUNT_POOLS_REFUSAL_TEXT, refusalText,
+  ASK_REFUSE_TEXT, INTERRUPT_REFUSAL_TEXT, RUN_ROUTE_REFUSAL_TEXT, SET_ACCOUNT_POOLS_REFUSAL_TEXT, backgroundTasksClause, refusalText,
 } from '../src/lib/refusalWords';
 import * as api from '../src/lib/api';
 import * as words from '../src/lib/refusalWords';
@@ -68,5 +68,14 @@ describe('where the copy lives', () => {
     const src = readFileSync(path.join(here, '../src/lib/api.ts'), 'utf8');
     expect(src.match(/^(?:export )?const [A-Z_]+_TEXT\b/gm) ?? []).toEqual([]);
     expect(src).not.toMatch(/^(?:export )?function \w*Text\(/m);
+  });
+});
+
+describe('backgroundTasksClause (ARCH-13a)', () => {
+  it('counts, names kinds, and agrees in number', () => {
+    expect(backgroundTasksClause({ count: 1, kinds: [] })).toBe('1 background task is still running');
+    expect(backgroundTasksClause({ count: 3, kinds: ['workflow', 'agent'] }))
+      .toBe('3 background tasks (workflow, agent) are still running');
+    expect(backgroundTasksClause({ count: null, kinds: [] })).toBe('a background shell or monitor is still running');
   });
 });

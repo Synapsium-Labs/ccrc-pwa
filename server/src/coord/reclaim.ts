@@ -4,7 +4,8 @@ import { lifecycleInputFor } from '../fleet.js';
 import type { FleetIO } from '../io.js';
 import { fieldMeasured, readSessionRecord } from '../registry.js';
 import type { CoordStore } from './store.js';
-import { isRegistryId, lifecycleIsDead, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
+import { isRegistryId, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
+import { readSession, type SessionFacts } from '../sessionReading.js';
 import type { ClaimantDeadCause } from '../deadCoordinator.js';
 
 /**
@@ -61,32 +62,25 @@ export interface ReclaimDeps {
  *  THE CENSUS, because the guard IS which input lands where (corrected by D-1144 — the `dead` arm
  *  used to be written as "a registry that LISTED and carried no row", which is what `SingleRead`
  *  SAYS and not what it MEANS):
- *    `dead`         — a registry that listed and did not name `<id>.uuid` AT ALL, re-confirmed by a
- *                     second listing; or a listed row whose pane tmux calls gone and whose lifecycle
+ *    `dead`         — a registry that listed and did not name `<id>.uuid` AT ALL; or a listed row whose pane tmux calls gone and whose lifecycle
  *                     is one of the three words `lifecycleIsDead` names (`stopped`, `orphan`,
  *                     `never-started`).
  *    `alive`        — tmux says the pane is live; or the pane is gone and the lifecycle reads
  *                     `running`, `unsupervised`, `unclaimed`, `restarting` or `unmeasurable`.
  *                     `restarting` is the arm this file exists to keep.
  *    `unmeasurable` — the registry directory did not list at all; or it listed `<id>.uuid` while the
- *                     row behind it could not be ASSEMBLED (D-1144, the arm below); or the
- *                     re-listing that tells those two apart failed; or tmux did not answer; or the
- *                     id is not a registry id (`bad-id`, answered before any listing).
+ *                     row behind it could not be ASSEMBLED (D-1144, the arm below); or tmux did
+ *                     not answer; or the id is not a registry id (`bad-id`, answered before any listing).
  *                     Doubt is not evidence, in either direction: the identical line
  *                     `LIFECYCLE_DEAD` draws for its own `unmeasurable` key (shared/api.ts:2108-2110),
  *                     drawn again for the whole ladder. */
 export type ClaimantVerdict =
+  // `cause` (spec 2026-09-24 §5.4, "widened, not re-derived", D-1145): which death, set by `readSession` and read by the
+  // dead-coordinator lane (`orphan`, `never-started`, `absent`; never `stopped`). The reclaim door and the stall watch read
+  // `state` alone.
   | { state: 'dead'; cause: ClaimantDeadCause; why: string }
   | { state: 'alive'; why: string }
   | { state: 'unmeasurable'; why: string };
-
-/** The dead arm's `cause` (workspace lifecycle spec 2026-09-24 §5.4, "The verdict is widened, not re-derived"): D-1145
- *  below says the THIRD consumer that needs WHICH death must widen the type rather than re-split the prose `why` by
- *  hand, and the dead-coordinator lane is that consumer — it acts on `orphan`, `never-started` and `absent`, never on
- *  `stopped`. Set HERE, in this ladder, and nowhere else: rung 1's proven absence is `absent`, and a dead lifecycle is
- *  its own word (`ClaimantDeadCause`, the lane's L1 file, which `coord-reclaim.test.ts` holds equal to `['absent',
- *  ...DEAD_LIFECYCLES]`). The reclaim door and the stall watch read `state` alone and ignore it. */
-const isDeadLifecycle = (lc: SessionLifecycle): lc is Exclude<ClaimantDeadCause, 'absent'> => lifecycleIsDead(lc);
 
 /**
  * Is the session that owns this program still there?
@@ -110,10 +104,9 @@ const isDeadLifecycle = (lc: SessionLifecycle): lc is Exclude<ClaimantDeadCause,
  * already had to close on its own post-spawn registry read (`dispatch.ts`, blocking
  * review finding 7). `readSessionRecord` answers `unlistable`, `absent` and
  * `bad-id` separately (`SingleRead`, one `kind` each), and nothing below
- * re-collapses them — but `absent` is ITSELF a fold, of three conditions that do
- * not all mean the claimant is gone, so rung 1 re-splits it at the consumer
- * rather than trusting the word. The argument is D-1144 in the body; the debt
- * that split leaves unpaid is D-1145 beside it.
+ * re-collapses them. `unmeasurable` is the listed-but-unassembled row (D-1144):
+ * a live coordinator mid-write, which `SingleRead` names itself since ARCH-47
+ * paid D-1145, so this door never re-splits `absent` by hand.
  *
  * `nowMs` IS MILLISECONDS, and the parameter name is the guard (fleet.ts:288-298).
  * Every registry stamp is epoch seconds, `lifecycleInputFor` owns the one x1000,
@@ -126,110 +119,70 @@ const isDeadLifecycle = (lc: SessionLifecycle): lc is Exclude<ClaimantDeadCause,
 export async function measureClaimant(
   deps: ReclaimDeps, id: string, nowMs: number,
 ): Promise<ClaimantVerdict> {
-  const read = await readSessionRecord(deps.io, deps.cfg, id);
-  switch (read.kind) {
-    case 'found': break;
-    // Rung 1, below the switch: `absent` is re-split before any verdict.
-    case 'absent': break;
-    case 'unlistable':
-      return { state: 'unmeasurable',
-        why: 'the registry directory could not be listed — transient, not a fact about the claimant' };
-    // Path identity (spec §2.3): UNMEASURABLE, never dead. `readSessionRecord`
-    // answers `bad-id` before any listing, so it proves nothing about the
-    // claimant. Read as `absent`, an id nothing lists would reach rung 1's
-    // `dead`, and `dead` PROCEEDS: a reclaim, or the dead-coordinator lane's
-    // abandon. That lane reaches this arm unmasked.
-    case 'bad-id':
-      return { state: 'unmeasurable',
-        why: 'the claimant id is not a registry id, so it is never measured or composed' };
-    default: {
-      const _x: never = read;
-      return _x;
-    }
-  }
-  if (read.kind !== 'found') {
-    // D-1144 — RUNG 1 ANSWERS THREE WAYS, AND THE THIRD IS THE ONE THAT MATTERS.
-    // `SingleRead`'s `absent` is THREE conditions wearing one shape
-    // (`readSessionRecord`, three `kind: 'absent'` returns): the listing did not
-    // name `<id>.uuid` at all — a PROVEN absence; `buildRecord` came back null
-    // for a row the listing DID name — its own docstring's "a session mid-write
-    // or mid-teardown", a triple member that is empty or not yet written; and
-    // the identity reconfirm's twice-observed absence. The first and third are
-    // deaths. THE SECOND IS A LIVE COORDINATOR caught between two `_reg_set`
-    // writes, and answering `dead` for it hands its program away under the
-    // sentence "no registry row in a directory that listed cleanly" — which is
-    // FALSE about that input, and false in the one direction this door may not
-    // be wrong in, because `dead` PROCEEDS.
-    //
-    // The split is one `readdir` at the consumer — the same evidence, in the
-    // same direction, that the mail ingress already draws for the same fold
-    // (`coord/routes.ts`'s mail ingress: `names.includes(<toId>.uuid)` -> 502
-    // `registry-unmeasurable`, otherwise 404 `unknown-recipient`). It sits AHEAD
-    // of the tmux consultation deliberately: a pane's absence must not get to
-    // speak about a row the registry itself is still writing, and the rung that
-    // guards a destructive act is the rung that pays an extra round trip.
-    //
-    // A re-listing that FAILS answers `unmeasurable` too, and that arm is not a
-    // formality. The first listing knew which of the three conditions fired and
-    // `SingleRead` dropped that fact, so a failed second listing leaves the
-    // question genuinely unanswered — fail-shut is the only safe direction for a
-    // destructive re-pointing, and the whole cost of being wrong here is one
-    // operator retry against a cost that is not recoverable.
-    //
-    // D-1145 — THE DEBT THIS DOES NOT PAY. `SingleRead` still folds the three
-    // conditions AT THE SOURCE, and this is the SECOND consumer to re-split them
-    // by hand; the mail ingress cited above was the first. Widening the type was
-    // considered for this fix and declined on scope, not on merit: `SingleRead`
-    // had 14 direct consumers (path identity spec §2.3 lists them), each of
-    // which needed a deliberate direction rather than a mechanical one, and the
-    // ruling that produced this arm is scoped to the one rung that stands in
-    // front of a destructive act. Path identity W1a then gave it a `kind` per
-    // answer and a fourth answer, `bad-id`, placed in every consumer by an
-    // exhaustive switch. `absent` still folds the three conditions above, so
-    // this rung's re-split, and the debt it names, both stand.
-    // THE THIRD CONSUMER THAT NEEDS THE DISTINCTION MUST WIDEN THE TYPE INSTEAD:
-    // three hand-copies of a split the source could carry is "no overloaded null
-    // at a seam" losing by attrition instead of by argument.
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) {
-      return { state: 'unmeasurable',
-        why: 'the registry stopped listing while the claimant was being measured, so a proven absence '
-          + 'could not be told from a half-written row — transient, not a fact about the claimant' };
-    }
-    if (names.includes(`${id}.uuid`)) {
+  // The ladder is `readSession`'s (ARCH-47); this door keeps only its FAIL-SHUT POLICY over a fresh one-row read at the
+  // act (D-1144): `dead` proceeds, so doubt is never `dead`, and a hibernated claimant is alive as any live one (D-5242).
+  const { facts, sv } = await claimantFacts(deps, id, nowMs);
+  const lc = facts.lifecycle;
+  const r = readSession(facts);
+  switch (r.why) {
+    // D-1144: a row the listing NAMED and `buildRecord` could not assemble is a live coordinator caught between two
+    // `_reg_set` writes, so it is doubt, never a death.
+    case 'rowUnassembled':
       return { state: 'unmeasurable',
         why: `the registry lists ${id}.uuid but the row behind it could not be assembled — a session `
           + 'mid-write or mid-teardown, transient, not a fact about the claimant' };
+    case 'rowAbsent':
+      return { state: 'dead', cause: 'absent', why: 'no registry row in a directory that listed cleanly' };
+    case 'rowUnlistable':
+      return { state: 'unmeasurable',
+        why: 'the registry directory could not be listed — transient, not a fact about the claimant' };
+    // Path identity (spec §2.3): UNMEASURABLE, never dead (`bad-id` is answered before any listing).
+    case 'badId':
+      return { state: 'unmeasurable',
+        why: 'the claimant id is not a registry id, so it is never measured or composed' };
+    case 'paneLive': return { state: 'alive', why: 'tmux reports the pane live' };
+    // The message IS the diagnosis, carried verbatim rather than summarised (`exec.ts`'s `SessionVerdict` rule).
+    case 'paneUnknown': return { state: 'unmeasurable', why: sv !== null && sv.verdict === 'unknown' ? sv.detail : 'tmux was not asked' };
+    case 'hibernated':
+      return { state: 'alive', why: 'the pane is gone but the session is hibernated (asleep, woken by mail or ensure)' };
+    case 'lifecycleDead':
+      if (r.deadCause === null) throw new Error('readSession: a dead reading carries its cause');
+      return { state: 'dead', cause: r.deadCause, why: `the pane is gone and the lifecycle reads ${lc}` };
+    // D-1140: the `otherwise` is total and its name narrower than its contents: `running`/`unsupervised`/`unclaimed`,
+    // `restarting` (the arm this whole file exists to keep) and `unmeasurable` (a doubt answered alive on purpose, since
+    // fail-shut is the only safe direction for a destructive re-pointing). `why` names which of them produced it.
+    case 'lifecycleAlive': case 'lifecycleDoubt':
+      return { state: 'alive', why: `the pane is gone but the lifecycle reads ${lc}` };
+    default: {
+      const _x: never = r.why;
+      return _x;
     }
-    return { state: 'dead', cause: 'absent', why: 'no registry row in a directory that listed cleanly' };
   }
-  const sv = await deps.tmux.sessionVerdict(id);
-  if (sv.verdict === 'live') return { state: 'alive', why: 'tmux reports the pane live' };
-  // The message IS the diagnosis, carried verbatim rather than summarised
-  // (`SessionVerdict`'s own rule, exec.ts:75-84: `detail` exists only here).
-  if (sv.verdict === 'unknown') return { state: 'unmeasurable', why: sv.detail };
-  const lc = sessionLifecycle(lifecycleInputFor(read.record, false, nowMs));
-  // D-5242: ASLEEP, NOT DEAD. `ccd hibernate` stamps `.stopped` beside `.hibernated`; the lifecycle alone reads that as
-  // `stopped`, which this ladder would call dead and the reclaim door would act on, handing a programme away from a
-  // coordinator that its next mail wakes. The dead-coordinator lane and the ask hold read this same verdict, so a
-  // sleeping claimant is alive to all three.
-  if (lc === 'stopped' && read.record.hibernatedAt !== null) {
-    return { state: 'alive', why: 'the pane is gone but the session is hibernated (asleep, woken by mail or ensure)' };
+}
+
+/** The door's adapter: the facts `measureClaimant` hands `readSession`, from a fresh one-row read at the act. tmux is
+ *  asked only for a row that is present, never for one the registry itself is still writing. Exported so the truth
+ *  table derives each row's facts from this read, not from a hand-typed copy. */
+export async function claimantFacts(
+  deps: Pick<ReclaimDeps, 'io' | 'cfg' | 'tmux'>, id: string, nowMs: number,
+): Promise<{ facts: SessionFacts; sv: SessionVerdict | null }> {
+  const read = await readSessionRecord(deps.io, deps.cfg, id);
+  let sv: SessionVerdict | null = null;
+  let lc: SessionLifecycle | null = null;
+  if (read.kind === 'found') {
+    sv = await deps.tmux.sessionVerdict(id);
+    lc = sessionLifecycle(lifecycleInputFor(read.record, false, nowMs));
   }
-  // D-1140 — THE `otherwise` IS TOTAL, AND ITS NAME IS NARROWER THAN ITS
-  // CONTENTS. Three inputs reach it, not two: `running`/`unsupervised`/
-  // `unclaimed` (a pane tmux lost track of but the registry still calls
-  // working), `restarting` (the arm this whole file exists to keep), and
-  // `unmeasurable` — a listed row whose `.started`/`.stopped`/`.supervised`
-  // could not be READ. The third is a doubt, not an aliveness, and it is
-  // answered `alive` on purpose: fail-shut is the only safe direction for a
-  // destructive re-pointing, so the door refuses. Only the WORD is wrong, and
-  // splitting a fourth arm off would buy nothing — every caller branches on
-  // these identically. `why` names which of the three produced it, because the
-  // sheet renders `detail` and not the code alone.
-  return isDeadLifecycle(lc)
-    ? { state: 'dead', cause: lc, why: `the pane is gone and the lifecycle reads ${lc}` }
-    : { state: 'alive', why: `the pane is gone but the lifecycle reads ${lc}` };
+  return {
+    facts: {
+      row: read.kind === 'found' ? 'present' : read.kind,
+      pane: sv === null ? null : sv.verdict,
+      lifecycle: lc,
+      hibernatedAt: read.kind === 'found' ? read.record.hibernatedAt : null,
+      turn: null,
+    },
+    sv,
+  };
 }
 
 /** THE DEAD PREDICATE, one function (D-5290): the dead-coordinator sweep's
@@ -393,7 +346,7 @@ export async function reclaimRun(
     case 'unlistable':
       return { ok: false, kind: 'registry-unmeasurable',
         detail: 'the registry directory could not be listed, so the incoming coordinator could not be checked' };
-    case 'absent': return { ok: false, kind: 'unknown-session' };
+    case 'absent': case 'unmeasurable': return { ok: false, kind: 'unknown-session' };
     // Path identity (spec §2.3): the heir is gated HERE, by the read's own
     // `bad-id`, before any listing. The route head has no copy that would
     // mask this one. Nothing is re-pointed.

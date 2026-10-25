@@ -48,12 +48,12 @@ export { COLLECT_LANE_LIVE_MARKER };
  *  A word this table does not know is `load-sensitive`. */
 export type CollectProbeClass = 'box-wide' | 'per-leaf' | 'load-sensitive';
 
-/** ccd's probe words, each spelled once as a key: the twenty-one first arguments of `_ws_collect_unmeasured`, and the
+/** ccd's probe words, each spelled once as a key: the twenty-two first arguments of `_ws_collect_unmeasured`, and the
  *  four walk words `_ws_collect_eval` admits. `collect-readers.test.ts` holds the keys equal to ccd's text, both ways. */
 const COLLECT_PROBE_CLASS_TABLE = {
   platform: 'box-wide', mv: 'box-wide', flock: 'box-wide', witness: 'box-wide', floor: 'box-wide', clock: 'box-wide',
   eval: 'box-wide', quarantine: 'box-wide',
-  aside: 'per-leaf', 'idle:cap': 'per-leaf', 'idle:unreadable': 'per-leaf', mode: 'per-leaf', device: 'per-leaf',
+  aside: 'per-leaf', 'checkouts-cap': 'per-leaf', 'idle:cap': 'per-leaf', 'idle:unreadable': 'per-leaf', mode: 'per-leaf', device: 'per-leaf',
   'idle:timeout': 'load-sensitive', 'idle:walk-failed': 'load-sensitive', 'in-use': 'load-sensitive',
   checkouts: 'load-sensitive', rows: 'load-sensitive', registry: 'load-sensitive', identity: 'load-sensitive',
   leaf: 'load-sensitive', slot: 'load-sensitive', records: 'load-sensitive', token: 'load-sensitive',
@@ -1770,17 +1770,28 @@ export interface CollectOffers { readonly learn: readonly string[]; readonly act
 export function collectOffers(i: CollectOfferInput): CollectOffers {
   const byId = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
   const byInstant = (a: number, b: number): number => (a < b ? -1 : a > b ? 1 : 0);
+  // THE LOOSE ARM'S ONE LOCK: ccd's loose audit and its loose act both take `.collect-loose.lock` without waiting, and a
+  // second concurrent loose ask answers `in-progress` (measured: 75 of the lane's own entries met its own lock). So a pass
+  // offers loose ids only while none is in flight, and at most one across the act and the learning audits together
+  // (D-6859).
+  let looseOpen = ![...i.busy].some(collectIsLoose);
   const free = i.candidates.filter((c) => !i.busy.has(c.id));
   const due = (c: CollectCandidate): boolean => c.nextAskMono <= i.nowMono;
   const open = i.act.slotFree && !i.act.flockLatched && i.nowMono - i.act.startMono >= i.act.holdOffMs;
-  const ripe = free.flatMap((c) => (c.ripe && c.ripeningMono !== null ? [{ id: c.id, at: c.ripeningMono }] : []))
+  const ripe = free.flatMap((c) => (c.ripe && c.ripeningMono !== null && (looseOpen || !collectIsLoose(c.id))
+    ? [{ id: c.id, at: c.ripeningMono }] : []))
     .sort((a, b) => byInstant(a.at, b.at) || byId(a.id, b.id));
-  return {
-    act: open ? (ripe[0]?.id ?? null) : null,
-    learn: free.filter((c) => c.ripeningMono === null && due(c))
-      .sort((a, b) => byInstant(a.nextAskMono, b.nextAskMono) || byId(a.id, b.id))
-      .slice(0, i.auditsMax).map((c) => c.id),
-  };
+  const act = open ? (ripe[0]?.id ?? null) : null;
+  if (act !== null && collectIsLoose(act)) looseOpen = false;
+  const learn: string[] = [];
+  const asks = free.filter((c) => c.ripeningMono === null && due(c))
+    .sort((a, b) => byInstant(a.nextAskMono, b.nextAskMono) || byId(a.id, b.id));
+  for (const c of asks) {
+    if (learn.length >= i.auditsMax) break;
+    if (collectIsLoose(c.id)) { if (!looseOpen) continue; looseOpen = false; }
+    learn.push(c.id);
+  }
+  return { act, learn };
 }
 
 /** A settled act job as the LANE folds it (spec §5.10): the executor's outcome, by its kind, or a job that THREW — a

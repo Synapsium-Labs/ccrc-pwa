@@ -13,6 +13,7 @@ import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
 import type { WorkflowView } from './workflows.js';
+import type { CHECKS_MAIL_TOKEN } from './landing.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -12151,3 +12152,19 @@ export interface DriftLine {
   readonly sessionId: string | null;
   readonly runId: number | null;
 }
+
+/** Which death: the registry never listed the id, or one of the lifecycle words `lifecycleIsDead` names. The ONE
+ *  definition (ARCH-47, #782), in L0 so `server/src/sessionReading.ts` and `server/src/deadCoordinator.ts` both import it
+ *  without either importing the other: `deadCoordinator.ts`'s `ClaimantDeadCause` and `CLAIMANT_DEAD_CAUSES` are these,
+ *  so a new word lands in both. `DEAD_LIFECYCLES` is its other half; it sits at the file's end rather than beside that
+ *  list so no line citation into this file moves. `coord-reclaim.test.ts` holds it equal to
+ *  `['absent', ...DEAD_LIFECYCLES]`. */
+export const DEAD_CAUSES = ['absent', 'stopped', 'orphan', 'never-started'] as const satisfies
+  readonly ('absent' | SessionLifecycle)[];
+export type DeadCause = typeof DEAD_CAUSES[number];
+
+/** The answer of a successful `POST /api/runs/:id/advance`. `checksMail` is the capability token of PR landing in ccrc
+ *  (stage 1, spec §3.7): present only on an advance to `merging` whose episode was decided `live`, so a coordinator that
+ *  reads it knows the server will mail the checks and may end its turn. Its one reader is the coordinator, through the
+ *  answer `ccrc-api runs advance` prints. */
+export interface AdvanceOk { ok: true; run: RunSummary; checksMail?: typeof CHECKS_MAIL_TOKEN }

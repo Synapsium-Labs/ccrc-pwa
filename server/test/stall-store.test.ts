@@ -388,6 +388,29 @@ describe('insertStallObservation / recordStallObservation: the durable, deduped 
   });
 });
 
+describe('recordObservation / insertObservation: the generalised writer (PR landing in ccrc, stage 1)', () => {
+  it('the `active` predicate is the stall writer exactly: same rows, same dedupe, same run-gone, same transaction rule', () => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    const detail = stallDetail('live', 'quiet', 1, S4_STATUS_AT);
+    const r = s.recordObservation(run, detail, S4_R1_AT, { kind: 'active' });
+    if (!r.recorded) throw new Error(`not recorded: ${r.why}`);
+    expect(stallRows(s, run)).toEqual([{ id: r.eventId, at: S4_R1_AT, fromState: 'working', toState: 'working', causedBy: 'operator', detail }]);
+    expect(s.recordStallObservation(run, detail, S4_R1_AT)).toEqual({ recorded: false, why: 'duplicate' });
+    expect(s.recordObservation(424_242, detail, S4_R1_AT, { kind: 'active' })).toEqual({ recorded: false, why: 'run-gone' });
+    expect(tx(s.db, () => s.insertObservation(run, stallDetail('live', 'quiet', 2, S4_STATUS_AT), S4_R1_AT, { kind: 'active' })).recorded).toBe(true);
+    expect(() => tx(s.db, () => s.recordObservation(run, stallDetail('live', 'quiet', 3, S4_STATUS_AT), S4_R1_AT, { kind: 'active' })))
+      .toThrow(/transaction/i);
+  });
+
+  it('a run at `awaiting-review` (an idle state) still records nothing under `active`', () => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'awaiting-review', at: DISPATCHED_AT });
+    expect(s.recordObservation(run, stallDetail('live', 'quiet', 1, S4_STATUS_AT), S4_R1_AT, { kind: 'active' }))
+      .toEqual({ recorded: false, why: 'run-gone' });
+  });
+});
+
 describe('insertSystemMailTx: queueSystemMail\'s body, extracted with no transaction of its own', () => {
   const RUN_FIELDS = { program: 'demo-program', wave: 7, waveOf: 9 };
 

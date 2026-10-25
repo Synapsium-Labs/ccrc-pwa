@@ -677,9 +677,14 @@ one write before the question: it sets the owner bits of the leaf itself, never 
 tree moved in AS the leaf has its root's owner bits set (555 reads 755 afterwards) even when it is then refused.
 - **The scan.** It walks the leaf's physical path without following a link or crossing a file system, from depth 1
   (so a tree moved AS the leaf is seen), and it is bounded by the same scan limit the ladder's own scans use. A
-  timeout, any error from the walk (an unreadable directory hides what is under it) and more than 64 entries named
-  `.git` read unmeasured. It does not prune at a `.git` directory: a foreign tree can be parked inside a clone's
-  `.git` as easily as anywhere else, so the time bound caps the walk.
+  timeout, any error from the walk (an unreadable directory hides what is under it) and more than 1024 entries named
+  `.git` that are not directories read unmeasured; the examination of those entries is bounded by the same scan limit,
+  and one that does not finish reads unmeasured too. A `.git` directory is a full clone and passes unread, so it is not
+  counted: a leaf of any number of fixture clones is not capped. The collector's audit says the cap in its own word,
+  `checkouts-cap` (per-leaf, listed at once), apart from `checkouts`, any other unmeasured scan: a walk or an
+  examination that did not finish, or an entry that could not be read or resolved. It does not prune at a `.git`
+  directory: a foreign tree can be parked inside a clone's `.git` as easily as anywhere else, so the time bound caps
+  the walk.
 - **Each `.git`** is asked without being followed, and git is never run inside a leaf. A link is refused. A
   directory, a full clone, passes. A file must be exactly one `gitdir: <path>` line of at most 4096 bytes, else it
   reads unmeasured. The admin directory it names is resolved physically, a relative path against the `.git` file's
@@ -2051,7 +2056,7 @@ both new verbs have a lawful grantable form.
   `[[ -z "$resumed" ]]`, and the comment at `:14183-14185` states the safety argument explicitly: it is safe
   only because `cmd_ws_archive` writes the marker *after* both. Nothing writes that marker for a child.
 
-**Presence.** `PRESENCE_REFRESH_MS = 15_000`, `PRESENCE_TTL_MS = 45_000` (`shared/api.ts:4609-4610`). Claims
+**Presence.** `PRESENCE_REFRESH_MS = 15_000`, `PRESENCE_TTL_MS = 45_000` (`shared/api.ts:4610-4611`). Claims
 are per-connection, client-re-stated, TTL-swept and never persisted.
 
 **PR sweep cadence.** `PR_SWEEP_MS = 120_000`; `PR_SWEEP_ACTIVE_MS = 30_000`, the latter only while some

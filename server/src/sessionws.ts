@@ -684,9 +684,12 @@ export class SessionStream {
       // `unlistable` is the SAME whole-fleet collapse `RegistryRead`'s own
       // `listed: false` types elsewhere in this build — it proves nothing
       // about whether THIS id exists, only that this read could not say.
-      // Only a proven `absent` earns the terminal "unknown session".
+      // A proven `absent` earns the terminal "unknown session". So does
+      // `unmeasurable` (a listed row `buildRecord` could not assemble): it
+      // answered `absent` before `SingleRead` split it out (ARCH-47), and this
+      // door keeps that answer — the split is not meant to change it here.
       case 'unlistable': return { ok: false, reason: 'unmeasurable' };
-      case 'absent': return { ok: false, reason: 'absent' };
+      case 'absent': case 'unmeasurable': return { ok: false, reason: 'absent' };
       // An id `isRegistryId` refuses (spec §2.3) is terminal too: it never
       // heals by polling, so no poll is installed. It answers exactly as
       // `absent` does, by design, so folding it there changes nothing
@@ -760,11 +763,10 @@ export class SessionStream {
         // open transcript said the session was at rest when the truth was
         // that its `<pid>.json` could not be read at all.
         //
-        // MIRRORED RATHER THAN INVENTED HERE: these two surfaces are two
-        // renderings of one measurement, and a fleet card reading `busy`
-        // beside a chat header reading `idle` for the same session in the
-        // same second is worse than either answer on its own — the operator
-        // has no way to tell which one to believe.
+        // The two surfaces are two renderings of one measurement: a fleet card reading `busy` beside a chat header
+        // reading `idle` for the same session in the same second leaves the operator no way to tell which to believe.
+        // Each surface pins its half in its own tests (`fleet.test.ts`, `sessionws.test.ts`); the card/header pair is held to one
+        // word, row by row, in `session-ladders-characterization.test.ts`, and the liveness half is the truth table.
         const read = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
         if (read.ok) {
           if (read.state.cwd) cwd = read.state.cwd;

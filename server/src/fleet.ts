@@ -399,7 +399,7 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   // through shared/server/pwa), not a guard's.
   switch (read.kind) {
     case 'found': break;
-    case 'absent': case 'unlistable': return 'dead';
+    case 'absent': case 'unmeasurable': case 'unlistable': return 'dead';
     // Masked by `knownId` (spec §2.3): `POST /api/sessions/:id/interrupt`,
     // this function's one consumer, refuses an id `isRegistryId` refuses
     // before it calls here. 'dead' all the same: it refuses the interrupt.
