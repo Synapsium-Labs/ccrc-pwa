@@ -45,6 +45,9 @@ export interface CommandPaletteOption {
   group?: string;
   /** The key hint, one entry per key pressed in turn: `['g', 'r']`, `[']']`. */
   keys?: readonly string[];
+  /** The option's accessible name (`aria-label`), when its title and group would not say it. Absent, the option is
+   *  named by its content. */
+  label?: string;
 }
 
 export interface CommandPaletteProps {
@@ -229,6 +232,7 @@ export function CommandPalette({
                 key={o.id}
                 id={optionId(i)}
                 role="option"
+                aria-label={o.label}
                 tabIndex={-1}
                 aria-selected={i === at}
                 onMouseDown={(e) => { e.preventDefault(); }}

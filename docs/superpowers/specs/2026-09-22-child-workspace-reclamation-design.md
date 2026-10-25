@@ -397,7 +397,7 @@ nothing is destroyed.
 | 6 | no in-progress git operation in the tree | `tree-busy` | retryable, bounded |
 | 7 | the branch is checked out in no other worktree | `branch-elsewhere` | terminal |
 | 8 | the tree reads, after a permission normalisation pass | `tree-unreadable` | **terminal** |
-| 9 | no nested checkout of a **different repository** is dirty or holds commits unreachable from its own upstream | `containment-unproven` | **terminal** |
+| 9 | no nested checkout of a **different repository** is dirty or holds commits unreachable from its own upstream; under `$REG/nested-rescue-live` such a checkout is **rescued** into the attic and the rung proceeds (disk-retention spec §2.7.1) | `containment-unproven` (`nested-rescue-too-large`, `nested-rescue-failed` at the pin) | **terminal** without the marker |
 | 10 | the recomputed fingerprint equals `--expect` | `state-changed` | retryable |
 | — | the workdir exists but git records no worktree there | `no-worktree-record` | **terminal** |
 
@@ -488,7 +488,10 @@ does not authorise proceeding over work nobody could see: a tree ccd cannot read
 hold uncommitted work that a WIP commit would silently commit nothing over (ccd has measured a mode-000
 directory answering rc 0 with empty status output — clean-looking and not clean), and a nested *foreign*
 repository's unpushed commits cannot be pinned into this repository's attic at all. Proceeding there is not
-"pin everything, then reap"; it is "reap, and note". Both surface through §5.9's attention item, which is
+"pin everything, then reap"; it is "reap, and note". (**Amended by the disk-retention spec §2.7.1, D-6632:** for a nested
+repository only, and only behind `$REG/nested-rescue-live`, the pin now rescues it. It WIP-commits the repository, fetches
+its refs, HEAD, reflog-only tips and the WIP under `refs/ccrc/attic/<id>/nested/<pathhex>/`, bounds the bytes it adds at
+`WS_NESTED_RESCUE_MAX_MB`, and re-proves each landed. Without the marker rung 9 is as written here.) Both surface through §5.9's attention item, which is
 the one exception §7 records against rule 4 — and it asks nothing of anyone.
 
 Rung 7 keeps `ws-reap`'s answer rather than the earlier proposal's "remove the worktree, keep the branch":
@@ -1018,7 +1021,7 @@ that pace buys repeated attempts and journal lines and nothing else. So a child 
   that answer on. A lost memory therefore costs a tier child one extra ask, never a fresh four-hour wait, and never a fall
   back to the ordinary ramp unless the seed cannot read it (no placed birth, a reclaim done/unknown line, or a slice
   windowed short).
-- **A held stuck child.** A child under a hold is never asked, and its memory is dropped. When the hold lifts it is sighted
+- **A held stuck child.** A child under a hold is never asked (D-6639 amends this: once it has been idle for seven days the stale arm asks it, with the hold's digest), and its memory is dropped. When the hold lifts it is sighted
   afresh and seeded like a restart's, so the sweep sights it on the first pass after the hold lifts and asks it once on the
   next, before the tier's pace resumes from that answer.
 - **What the pace costs, stated.** A cure that is not the child's own, a fleet update for one, is noticed only at the tier's
@@ -2048,7 +2051,7 @@ both new verbs have a lawful grantable form.
   `[[ -z "$resumed" ]]`, and the comment at `:14183-14185` states the safety argument explicitly: it is safe
   only because `cmd_ws_archive` writes the marker *after* both. Nothing writes that marker for a child.
 
-**Presence.** `PRESENCE_REFRESH_MS = 15_000`, `PRESENCE_TTL_MS = 45_000` (`shared/api.ts:4607-4608`). Claims
+**Presence.** `PRESENCE_REFRESH_MS = 15_000`, `PRESENCE_TTL_MS = 45_000` (`shared/api.ts:4609-4610`). Claims
 are per-connection, client-re-stated, TTL-swept and never persisted.
 
 **PR sweep cadence.** `PR_SWEEP_MS = 120_000`; `PR_SWEEP_ACTIVE_MS = 30_000`, the latter only while some

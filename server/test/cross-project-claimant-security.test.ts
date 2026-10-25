@@ -46,7 +46,7 @@ const seedFleet = (home: string): void => {
 const noPrLine = (id: string): string =>
   JSON.stringify({ id, rows: [], baseShort: 'main', branch: `ws/${id}`, ahead: 1, tip: 'f'.repeat(40), checkedAt: 1 });
 const runner: Runner = async (_cmd, args) =>
-  (args[0] === 'pr-state' ? { code: 0, stdout: [CHILD, B_CHILD, WORKER_B].map(noPrLine).join('\n') + '\n', stderr: '' } : { code: 0, stdout: '', stderr: '' });
+  (args[0] === 'pr-state' ? { ran: true, code: 0, stdout: [CHILD, B_CHILD, WORKER_B].map(noPrLine).join('\n') + '\n', stderr: '' } : { ran: true, code: 0, stdout: '', stderr: '' });
 
 const openApp = async (home: string) => {
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });

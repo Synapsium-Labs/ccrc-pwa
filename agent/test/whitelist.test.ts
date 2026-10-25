@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { canonicalize, checkPath, isExecAllowed } from '../src/whitelist.js';
+import { canonicalize, checkPath, FORBIDDEN_COMMANDS, isExecAllowed } from '../src/whitelist.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, LC_GEN_PREFIX, LC_GEN_SUFFIX } from '../../shared/api.js';
 import { NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
 // critic2, gates 3 related sub-item: the three `rmSync` calls this replaces sat
@@ -145,13 +145,13 @@ describe('whitelist.checkPath', () => {
     expect(await checkPath(proj, cfg, 'write')).toBeNull();
   });
 
-  // ── design 2026-09-20 §8: the nine ~/.ccrc node files (the ninth is box-token lifecycle wave 1's) ──
+  // ── design 2026-09-20 §8: the ten ~/.ccrc node files (the ninth is box-token lifecycle wave 1's, the tenth the tmp sweep census's) ──
   // D-3176 — the spec put these in whitelist-structural.test.ts,
   // which pins only the EXEC whitelist (tsc-spawned compile errors, no checkPath
   // case at all); every other checkPath case is in this describe, so these are.
   describe('the ~/.ccrc node files — exact basenames, READ mode only', () => {
     const NINE = ['box-token-generation', 'build.json', 'ccrc-caps', 'floor', 'installed', 'node-id', 'previous',
-      'update-intent', 'update.json'];
+      'tmp-sweep.json', 'update-intent', 'update.json'];
     // Every other name ccd/ccrc writes (or could) beside them — the secrets first.
     const REFUSED = ['agent.env', 'auth.scrypt', 'coord.db', 'deploy.env', 'ccrc.env', 'exposure.env',
       'mail.token', 'accounts.json', 'accounts.sh', 'build.json.bak', '.build.json.tmp', path.join('logs', 'x'),
@@ -166,7 +166,7 @@ describe('whitelist.checkPath', () => {
       return ccrc;
     }
 
-    it('the set is exactly the nine names (§8 plus box-token-generation) — a tenth is a design change, not an edit', () => {
+    it('the set is exactly the ten names (§8, box-token-generation, and the tmp sweep census) — an eleventh is a design change, not an edit', () => {
       // The grant DERIVES from NODE_FILE_BASENAMES, so a name added to
       // NODE_FILES is a read grant; this is the line that makes that visible.
       expect([...NODE_FILE_BASENAMES].sort()).toEqual(NINE);
@@ -284,6 +284,11 @@ describe('whitelist.isExecAllowed', () => {
   it('allows the PR and archive verbs at their pinned prefixes', () => {
     expect(isExecAllowed('ccd', ['pr-state', '--session', 'demo-quiet-basin'])).toBe(true);
     expect(isExecAllowed('ccd', ['pr-state', '--project', 'demo'])).toBe(true);
+    expect(isExecAllowed('ccd', ['pr-landing', '--project', 'demo', '--sessions', 'a:41,b:42'])).toBe(true);
+    expect(isExecAllowed('ccd', ['pr-landing', '--sessions', 'a:41'])).toBe(false);
+    expect(isExecAllowed('ccd', ['pr-landing'])).toBe(false);
+    // the verb shells out to gh itself; the agent is still never granted gh
+    expect((FORBIDDEN_COMMANDS as readonly string[]).includes('gh')).toBe(true);
     expect(isExecAllowed('ccd', ['pr-open', '--session', 'x', '--title', 't', '--body-b64', 'Yg==', '--draft', 'false'])).toBe(true);
     expect(isExecAllowed('ccd', ['ws-archive', '--session', 'x'])).toBe(true);
     expect(isExecAllowed('ccd', ['ws-restore', '--session', 'x'])).toBe(true);

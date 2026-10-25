@@ -38,6 +38,8 @@ const makeStore = (): FleetStore => createFleetStore({
 });
 
 const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
+/** A held spend read: the board's default would send GET /api/runs/:id through the global fetch. */
+const NO_SPEND = (): Promise<import('../../shared/api').RunSpend> => new Promise(() => {});
 // ── end of copied fixtures ──
 
 const T = 1_758_500_000_000;
@@ -57,7 +59,7 @@ const board = async (rows: RunSummary[],
   act(() => { store.setState({ runs: [], runsFrameSeen: true, sessions: opts.sessions ?? [], fleetFrameSeen: true,
     coord: opts.coordSeen === false ? null : coordWith(opts.doneAt), coordFrameSeen: opts.coordSeen !== false }); });
   const loadRuns = vi.fn(async (): Promise<{ runs: RunSummary[] }> => ({ runs: rows }));
-  render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
+  render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
   await screen.findByRole('group', { name: /finished/i });
   expect(loadRuns).toHaveBeenCalledTimes(1);
   return { store, loadRuns };
@@ -161,7 +163,7 @@ describe('the board re-reads the archive when the newest reclaim end changes (wa
     const loadRuns = vi.fn<() => Promise<{ runs: RunSummary[] }>>()
       .mockResolvedValueOnce({ runs: [finished(7, 'pending')] })
       .mockResolvedValue({ runs: [finished(7, null)] });
-    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
+    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     await screen.findByRole('group', { name: /finished/i });
     act(() => { store.setState({ sessions: [] }); });           // wave 5's trigger: it reads, and races
     await waitFor(() => expect(loadRuns).toHaveBeenCalledTimes(2));

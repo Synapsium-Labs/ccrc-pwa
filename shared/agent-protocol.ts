@@ -166,15 +166,21 @@ export const POOL_EPOCH_FILE_NAME = 'pool-epoch';
  * reason it may join this object. The server's token driver reads it on its
  * own tick (D-4389), so the inventory sweep's `MEASURED_FILE_KEYS` leaves it
  * out, as it leaves out `projection`.
+ *
+ * `tmpSweep` (`tmp-sweep.json`, fleet disk retention DR-12, D-6624) is the tenth: the tmp sweep's census, which
+ * `ccd/ccd-tmp-sweep` replaces whole each pass. The server's census lane reads it on its own tick
+ * (`server/src/tmpSweep.ts` parses it), so the inventory sweep's `MEASURED_FILE_KEYS` leaves it out too: it has its own
+ * reader, and its size (a thousand `moved` rows) is past the inventory's 64 KiB file cap.
  */
 export const CCRC_DIR_NAME = '.ccrc';
 export const NODE_FILES = {
   stamp: 'build.json', installed: 'installed', caps: 'ccrc-caps', floor: 'floor', previous: 'previous',
   nodeId: 'node-id', report: 'update.json', projection: 'update-intent',
   tokenGeneration: 'box-token-generation',
+  tmpSweep: 'tmp-sweep.json',
 } as const;
 export type NodeFileKey = keyof typeof NODE_FILES;
-/** The nine names as one list, DERIVED — the agent's admission set and every
+/** The ten names as one list, DERIVED — the agent's admission set and every
  *  scan over it read this, never a restatement. */
 export const NODE_FILE_BASENAMES: readonly string[] = Object.values(NODE_FILES);
 

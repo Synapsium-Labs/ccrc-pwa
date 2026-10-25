@@ -629,6 +629,10 @@ describe('the coordinator skill: linkage', () => {
       // first half of the invitation.
       'GET /api/coord/collect-lane',
       'POST /api/coord/collect-lane',
+      // BUILD-SPEND CONTROLS (D-6795) — the operator-dial shape a fifth time. A coordinator told about this door
+      // would be told how to lift the review-round cap on its own run, which is the cap's own defeat. The
+      // forbid-mention case below is what turns this permission-to-omit into a prohibition.
+      'POST /api/coord/review-cap',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -1725,6 +1729,12 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     expect(named(`${allSkillText}\nPOST /api/coord/collect-lane\n`), 'CONTROL: a mention planted in a scratch copy is seen')
       .toEqual(['/api/coord/collect-lane', 'POST /api/coord/collect-lane', 'collect-lane']);
     expect(named(allSkillText)).toEqual([]);
+  });
+
+  it('never names the review-cap door — a door that would tell a coordinator how to lift the cap on its own review rounds', () => {
+    // D-6795, the caps dial's accounting: EXEMPT above only PERMITS the omission; this FORBIDS the mention.
+    expect(allSkillText).not.toContain('/api/coord/review-cap');
+    expect(allSkillText).not.toContain('review-cap');
   });
 
   it('never names the break door — a door the claimant is not the one to walk through', () => {
@@ -2879,5 +2889,15 @@ describe('the stall clause quotes what the stall watch sends and reads (stall wa
       expect(reliedOn.has(q),
         `the clause quotes \`${q}\`, which is outside the constants it relies on: add the constant here, or unquote it`).toBe(true);
     }
+  });
+});
+
+describe('wave-lifecycle route default (D-6794)', () => {
+  it('says an omitted route fills the run kind default, not a bare argv', () => {
+    const text = refs('wave-lifecycle.md').replace(/\s+/g, ' ');
+    expect(text).toContain('Omitting `route` on a fresh spawn fills the run kind\'s default row');
+    expect(text).toContain('`route-defaulted:<kind>`');
+    expect(text).toContain('an empty `{}` is a passed route and is sent bare');
+    expect(text).not.toContain('sends the identical bare argv it always has');
   });
 });

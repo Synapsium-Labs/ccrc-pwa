@@ -33,6 +33,8 @@ const makeStore = (): FleetStore => createFleetStore({
 });
 
 const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
+/** A held spend read: the board's default would send GET /api/runs/:id through the global fetch. */
+const NO_SPEND = (): Promise<import('../../shared/api').RunSpend> => new Promise(() => {});
 
 /** The board with `active` from the live frame and `finished` from the cold read. */
 async function board(active: RunSummary[], finished: RunSummary[] = [], sessions: FleetSession[] = []): Promise<HTMLElement> {
@@ -41,7 +43,7 @@ async function board(active: RunSummary[], finished: RunSummary[] = [], sessions
     store.setState({ runs: active, runsFrameSeen: true, fleetFrameSeen: true, conn: 'open', sessions });
   });
   const load = vi.fn().mockResolvedValue({ runs: finished });
-  const { container } = render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={load} />);
+  const { container } = render(<RunsScreen loadCaps={NO_CAPS} loadSpend={NO_SPEND} store={store} loadRuns={load} />);
   await act(async () => { await Promise.resolve(); });
   return container;
 }

@@ -3,6 +3,7 @@ import {
   type ChatEvent,
 } from '../../../shared/api.js';
 import { SHAPE_ONLY_MASKER } from '../accounts/mask.js';
+import { stripSgr } from '../pane/dialog.js';
 
 const TOOL_RESULT_MAX = 20_000;
 const TOOL_INPUT_MAX = 4_000;
@@ -51,18 +52,6 @@ function flattenContent(content: unknown): string {
   }
   return '';
 }
-
-/** Any ANSI colour/attr code. The FIFTH module-private copy of this line in
- *  `server/src` — `inject/send.ts`, `pane/dialog.ts`, `sessionws.ts` and
- *  `watch.ts` each hold their own, three of them saying so in a comment — and
- *  copied rather than exported for a reason that is not laziness: those four
- *  normalise a tmux PANE CAPTURE, this one normalises a transcript record.
- *  Two bounded contexts that share a regex and nothing else. One shared helper
- *  would be worth having; reaching it means editing four files in the
- *  pane-capture cluster that this fix has no business touching, and
- *  `single-definition.test.ts` scans named vocabularies, not regex literals, so
- *  nothing pins the agreement either way. Named here rather than hidden. */
-const SGR = /\x1b\[[0-9;]*m/g;
 
 /** A slash command's own stdout, ANCHORED TO THE WHOLE RECORD and greedy.
  *  Measured over this box's 18 session transcripts: all 64 such records are the
@@ -261,7 +250,7 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
       // no erase, no OSC, no CR, and no ESC survives the strip.
       const stdout = COMMAND_STDOUT_RE.exec(content);
       if (stdout !== null) {
-        out.push({ kind: 'system', uuid, ts, text: stdout[1].replace(SGR, '').trim() });
+        out.push({ kind: 'system', uuid, ts, text: stripSgr(stdout[1]).trim() });
         return out;
       }
       if (content.trim() === '') return out;

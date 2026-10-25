@@ -95,9 +95,9 @@ describe('assembleFleet', () => {
     writeFileSync(path.join(home, '.cc-limits', 'claude-a.json'), JSON.stringify({ five: 55, seven: 70, ts: now - 60 }));
 
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
 
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), now);
@@ -131,7 +131,7 @@ describe('assembleFleet: the session role (D-5301)', () => {
     // Dispatched children: a marker naming the minting run, and one that does not parse.
     seedSession(home, 'lane-a-project-a-quiet-basin', 'lane-a', { workspace: 'quiet-basin', child: '7' });
     seedSession(home, 'lane-a-project-a-still-cove', 'lane-a', { workspace: 'still-cove', child: 'not-a-run' });
-    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
     const role = (id: string) => fleet.find((s) => s.id === id)!.role;
     expect(role('lane-a-project-a-calm-mesa')).toBe('coordinator');
@@ -151,7 +151,7 @@ describe('assembleFleet: the session role (D-5301)', () => {
       const home = mkTmp('ccrc-');
       seedRoster(home);
       seedSession(home, 'lane-a-project-a', 'lane-a');
-      const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+      const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
       const [row] = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
       return JSON.parse(JSON.stringify(row)) as Record<string, unknown>;
     };
@@ -195,9 +195,9 @@ describe('liveStatus', () => {
       status: 'busy', statusUpdatedAt: 1784600000000,
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     // `workdir` (irrelevant to liveStatus: it never reads it) is the ONE
     // unreadable field — `wrapper` (which liveStatus DOES need, to resolve
@@ -210,7 +210,7 @@ describe('liveStatus', () => {
   it('still answers dead for a session genuinely absent from the registry', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const status = await liveStatus(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 'claude-nope');
     expect(status).toBe('dead');
   });
@@ -220,9 +220,9 @@ describe('liveStatus', () => {
     seedRoster(home);
     seedSession(home, 'claude-quiet-mesa', 'claude');
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const unreadableWrapper = unreadableField('claude-quiet-mesa', 'wrapper');
     const status = await liveStatus(unreadableWrapper, loadConfig({ CCRC_HOME: home }), new Tmux(run), 'claude-quiet-mesa');
@@ -269,9 +269,9 @@ describe('assembleFleet: an unmeasured live status file is not a session at rest
       }));
     }
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     return { home, run };
   };
@@ -322,7 +322,7 @@ describe('assembleFleet: an unmeasured live status file is not a session at rest
   const failedPid = (): { home: string; run: Runner } => {
     const { home, run: healthy } = setup();
     const run: Runner = async (cmd, args) => (args[0] === 'list-panes'
-      ? { code: 1, stdout: '', stderr: 'server exited unexpectedly' }
+      ? { ran: true, code: 1, stdout: '', stderr: 'server exited unexpectedly' }
       : healthy(cmd, args));
     return { home, run };
   };
@@ -353,9 +353,9 @@ describe('branch precedence', () => {
     // Alive, but with no live-state file — so no statusline can have been
     // derived yet. This is a workspace in the seconds after ws-add.
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     return { home, run };
   };
@@ -445,7 +445,7 @@ describe('branch precedence', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
-    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
     expect(fleet.find((s) => s.id === 'claude-demo')!.branch).toBeNull();
   });
@@ -462,9 +462,9 @@ describe('ctxPct on the wire (D-2011)', () => {
       project: 'demo', workspace: 'quiet-mesa', branch: 'ws/quiet-mesa',
     });
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     return { home, run };
   };
@@ -527,9 +527,9 @@ describe('a running Workflow reads busy over an idle pid.json', () => {
       JSON.stringify({ pid: 40613, sessionId: '1'.repeat(36), cwd: '/d', status: 'idle', ...live }),
     );
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const sl = new Map<string, Statusline>([
       ['claude-a-project-f', { model: 'Opus 5.5', ultracode: false, workflowActive }],
@@ -588,9 +588,9 @@ describe('derived session handles', () => {
       JSON.stringify({ pid: 40613, sessionId: '1'.repeat(36), cwd: '/d', status: 'idle', ...live }),
     );
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run));
     return fleet.find((s) => s.id === 'claude-a-project-f')!;
@@ -629,7 +629,7 @@ describe('PR state on the wire', () => {
       workspace: 'quiet-basin', branch: 'ws/quiet-basin',
       prphase: 'merged', prnumber: '42', prcheckedat: '1785300000000',
     });
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })));
     const s = fleet.find((x) => x.id === 'demo-quiet-basin')!;
     expect(s.pr).toEqual({
       phase: 'merged', number: 42, url: null, title: null, checks: null, checkNames: null,
@@ -642,7 +642,7 @@ describe('PR state on the wire', () => {
     seedRoster(home);
     seedSession(home, 'demo-still-cove', 'claude');
     seedPr(home, 'demo-still-cove', { workspace: 'still-cove' });
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })));
     expect(fleet.find((x) => x.id === 'demo-still-cove')!.pr!.phase).toBe('unchecked');
   });
 
@@ -650,7 +650,7 @@ describe('PR state on the wire', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })));
     expect(fleet.find((x) => x.id === 'claude-demo')!.pr).toBeNull();
   });
 
@@ -672,7 +672,7 @@ describe('PR state on the wire', () => {
       ahead: 3, reason: null, checkedAt: 5, mergedAt: 4, retryAt: null,
     }]]);
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })),
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })),
       undefined, undefined, undefined, undefined, live);
     expect(fleet.find((x) => x.id === 'demo-quiet-basin')!.pr!.phase).toBe('merged');
   });
@@ -682,7 +682,7 @@ describe('PR state on the wire', () => {
     seedRoster(home);
     seedSession(home, 'demo-quiet-basin', 'claude');
     seedPr(home, 'demo-quiet-basin', { workspace: 'quiet-basin', archived: '1785300123' });
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })));
     expect(fleet.find((x) => x.id === 'demo-quiet-basin')!.archivedAt).toBe(1785300123);
   });
 
@@ -701,7 +701,7 @@ describe('PR state on the wire', () => {
       workspace: 'quiet-basin', hold: 'program:prog-j wave:2/4',
     });
     seedSession(home, 'demo-still-lake', 'claude', { workspace: 'still-lake' });
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })));
     expect(fleet.find((x) => x.id === 'demo-quiet-basin')!.held).toBe('program:prog-j wave:2/4');
     // Absence IS release — the verb unlinks — so no `.hold` file must reach
     // the wire as null, not as an empty string a chip would render blank.
@@ -718,7 +718,7 @@ describe('PR state on the wire', () => {
     seedSession(home, 'demo-quiet-basin', 'claude', { workspace: 'quiet-basin', title: 'ENG-1234 - Fix the login flow' });
     seedSession(home, 'demo-still-lake', 'claude', { workspace: 'still-lake' });
     seedSession(home, 'demo-calm-mesa', 'claude', { workspace: 'calm-mesa', title: '' });
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })));
     expect(fleet.find((x) => x.id === 'demo-quiet-basin')!.title).toBe('ENG-1234 - Fix the login flow');
     expect(fleet.find((x) => x.id === 'demo-still-lake')!.title).toBeNull();
     expect(fleet.find((x) => x.id === 'demo-calm-mesa')!.title).toBeNull();
@@ -735,7 +735,7 @@ describe('archived size on the wire', () => {
     writeFileSync(path.join(reg, 'demo-quiet-basin.archived'), '1785300123');
     writeFileSync(path.join(reg, 'demo-quiet-basin.archivemanifest'),
       JSON.stringify({ branch: 'ws/quiet-basin', worktreeBytes: 1_200_000_000 }));
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })));
     expect(fleet.find((s) => s.id === 'demo-quiet-basin')!.archivedBytes).toBe(1_200_000_000);
   });
 
@@ -755,7 +755,7 @@ describe('archived size on the wire', () => {
     writeFileSync(path.join(reg, 'demo-lone-creek.archived'), '1785300123');
     writeFileSync(path.join(reg, 'demo-lone-creek.archivemanifest'),
       JSON.stringify({ branch: 'ws/lone-creek', worktreeBytes: null }));
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })));
     expect(fleet.find((s) => s.id === 'demo-lone-creek')!.archivedBytes).toBeNull();
   });
 
@@ -769,7 +769,7 @@ describe('archived size on the wire', () => {
     writeFileSync(path.join(reg, 'demo-still-cove.workspace'), 'still-cove');
     writeFileSync(path.join(reg, 'demo-still-cove.archived'), '1785300123');
     writeFileSync(path.join(reg, 'demo-still-cove.archivemanifest'), 'half-writ');
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })));
     expect(fleet.find((s) => s.id === 'demo-still-cove')!.archivedBytes).toBeNull();
   });
 
@@ -788,7 +788,7 @@ describe('archived size on the wire', () => {
     writeFileSync(path.join(reg, 'demo-far-hollow.workspace'), 'far-hollow');
     writeFileSync(path.join(reg, 'demo-far-hollow.archived'), '1785300123');
     // No .archivemanifest file written at all.
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })));
     expect(fleet.find((s) => s.id === 'demo-far-hollow')!.archivedBytes).toBeNull();
   });
 
@@ -806,7 +806,7 @@ describe('archived size on the wire', () => {
     writeFileSync(path.join(reg, 'demo-thin-reach.archived'), '1785300123');
     writeFileSync(path.join(reg, 'demo-thin-reach.archivemanifest'),
       JSON.stringify({ branch: 'ws/thin-reach' }));
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })));
     expect(fleet.find((s) => s.id === 'demo-thin-reach')!.archivedBytes).toBeNull();
   });
 
@@ -823,7 +823,7 @@ describe('archived size on the wire', () => {
     writeFileSync(path.join(reg, 'demo-far-shore.archived'), '1785300123');
     writeFileSync(path.join(reg, 'demo-far-shore.archivemanifest'),
       '{"branch":"ws/far-shore","worktreeBytes":1e400}');
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })));
     expect(fleet.find((s) => s.id === 'demo-far-shore')!.archivedBytes).toBeNull();
   });
 });
@@ -843,7 +843,7 @@ describe('hook state on the wire', () => {
       })],
     ]);
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), 1784600000,
       undefined, undefined, undefined, undefined, hookStates,
     );
     const s = fleet.find((x) => x.id === 'claude-demo')!;
@@ -878,7 +878,7 @@ describe('hook state on the wire', () => {
       ['claude-demo', mkHookState({ state: 'working', graphQueries: 0 })],
     ]);
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), 1784600000,
       undefined, undefined, undefined, undefined, hookStates,
     );
     const s = fleet.find((x) => x.id === 'claude-demo')!;
@@ -897,7 +897,7 @@ describe('hook state on the wire', () => {
       ['claude-demo', mkHookState({ state: 'working', graphGateDenials: 0 })],
     ]);
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), 1784600000,
       undefined, undefined, undefined, undefined, hookStates,
     );
     const s = fleet.find((x) => x.id === 'claude-demo')!;
@@ -916,7 +916,7 @@ describe('hook state on the wire', () => {
       ['claude-demo', mkHookState({ state: 'working', graphQueries: 4, graphGateDenials: null })],
     ]);
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), 1784600000,
       undefined, undefined, undefined, undefined, hookStates,
     );
     const s = fleet.find((x) => x.id === 'claude-demo')!;
@@ -931,7 +931,7 @@ describe('hook state on the wire', () => {
     // No `hookStates` map at all — the shape every existing caller had before
     // this task, and still the shape a cold `/api/fleet` REST call can be.
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), 1784600000,
     );
     const s = fleet.find((x) => x.id === 'claude-demo')!;
     expect(s.hookState).toBeNull();
@@ -947,7 +947,7 @@ describe('hook state on the wire', () => {
     seedSession(home, 'claude-demo', 'claude');
     const pending = new Set(['claude-demo']);
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000, pending,
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), 1784600000, pending,
     );
     expect(fleet.find((x) => x.id === 'claude-demo')!.dialogPending).toBe(true);
   });
@@ -958,7 +958,7 @@ describe('hook state on the wire', () => {
     seedSession(home, 'claude-demo', 'claude');
     const hookStates = new Map<string, HookState>([['claude-demo', mkHookState({ state: 'waiting' })]]);
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), 1784600000,
       undefined, undefined, undefined, undefined, hookStates,
     );
     const s = fleet.find((x) => x.id === 'claude-demo')!;
@@ -974,7 +974,7 @@ describe('hook state on the wire', () => {
     seedSession(home, 'claude-demo', 'claude');
     const hookStates = new Map<string, HookState>([['claude-demo', mkHookState({ state: 'working' })]]);
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), 1784600000,
       undefined, undefined, undefined, undefined, hookStates,
     );
     expect(fleet.find((x) => x.id === 'claude-demo')!.dialogPending).toBe(false);
@@ -990,9 +990,9 @@ describe('hook state on the wire', () => {
       name: 'project-f-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
 
@@ -1033,7 +1033,7 @@ describe('the ask chip (Task 19)', () => {
   const mkCoord = (): CoordStore =>
     new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
 
-  const dead = new Tmux(async () => ({ code: 1, stdout: '', stderr: '' }));
+  const dead = new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' }));
 
   // THE UNITS, ONCE. `assembleFleet`'s `now` is SECONDS; every stamp on an
   // `asks` row — `at`, `answeredAt` — is MILLISECONDS (`insertAsk`/`settleAsk`'s
@@ -1378,7 +1378,7 @@ describe('the ask chip (Task 19)', () => {
 describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
   const mkCoord = (): CoordStore =>
     new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
-  const dead = new Tmux(async () => ({ code: 1, stdout: '', stderr: '' }));
+  const dead = new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' }));
   const NOW_S = 1784600000;
 
   it('a stamped, held session boards on its COORDINATOR project, not its own — kills `stamped` forced to a constant', async () => {
@@ -1777,15 +1777,15 @@ describe('hookAskSummary', () => {
 describe('assembleFleet hands back the pane pids it read (worker stall watch wave 2, M6)', () => {
   // `tick()` passes this map on to the stall lane as `StallTick.panePids`, so the lane never reads a pid a second
   // time. One harness: an alive row and a dead one, `fleet.test.ts`'s first case's shape.
-  const pidsFor = async (listPanes: { code: number; stdout: string }): Promise<Map<string, number | null>> => {
+  const pidsFor = async (listPanes: { ran: true, code: number; stdout: string }): Promise<Map<string, number | null>> => {
     const home = mkTmp('ccrc-fleet-pids-');
     seedRoster(home);
     seedSession(home, 'claude-a-project-f', 'claude-a');
     seedSession(home, 'claude-dead-proj', 'claude');
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: listPanes.code, stdout: listPanes.stdout, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: listPanes.code, stdout: listPanes.stdout, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const pids = new Map<string, number | null>();
     await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000,
@@ -1794,11 +1794,11 @@ describe('assembleFleet hands back the pane pids it read (worker stall watch wav
   };
 
   it('fills the map with the pid of every ALIVE row, and gives a row whose pane is not alive no entry', async () => {
-    expect([...await pidsFor({ code: 0, stdout: '40613\n' })]).toEqual([['claude-a-project-f', 40613]]);
+    expect([...await pidsFor({ ran: true, code: 0, stdout: '40613\n' })]).toEqual([['claude-a-project-f', 40613]]);
   });
 
   it('records null for an alive row whose pid tmux did not answer, never dropping the row', async () => {
-    expect([...await pidsFor({ code: 1, stdout: '' })]).toEqual([['claude-a-project-f', null]]);
+    expect([...await pidsFor({ ran: true, code: 1, stdout: '' })]).toEqual([['claude-a-project-f', null]]);
   });
 });
 
@@ -1829,9 +1829,9 @@ describe('FleetSession.background (D-5231)', () => {
       status: 'busy', statusUpdatedAt: HOOK_AT - 60_000, version,
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), HOOK_AT / 1000,
       undefined, undefined, undefined, undefined, new Map([[ID, hs]]));
@@ -1896,8 +1896,8 @@ describe('FleetSession.lastEnd (D-5237)', () => {
     if (lastend !== null) fields['lastend'] = lastend;
     for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1_784_600_000);
     return fleet.find((x) => x.id === ID)!;
@@ -1927,7 +1927,7 @@ describe('FleetSession.hibernatedAt (D-5242)', () => {
     const fields: Record<string, string> = { wrapper: 'lane-a', project: 'project-a', workdir: '/data/projects/project-a', uuid: UUID, started: '1', stopped: '1784599820 agent' };
     if (hibernated !== null) fields['hibernated'] = hibernated;
     for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
-    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1_784_600_000);
     return fleet.find((x) => x.id === ID);
   };
@@ -1994,9 +1994,9 @@ describe('a compaction keeps bucketSince (D-5239)', () => {
       status: 'idle', statusUpdatedAt: T0 - 60_000, version: '2.1.296',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), Math.floor(Date.now() / 1000),
       undefined, undefined, undefined, undefined, new Map([[ID, raw.state]]));
@@ -2014,10 +2014,10 @@ describe('a compaction keeps bucketSince (D-5239)', () => {
 describe('the quiet "with coordinator" state (D-5296)', () => {
   const mkCoord = (): CoordStore =>
     new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
-  const dead = new Tmux(async () => ({ code: 1, stdout: '', stderr: '' }));
+  const dead = new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' }));
   const live = new Tmux(async (_cmd, args) => {
-    if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   });
   const NOW_S = 1784600000;
   const NOW_MS = NOW_S * 1000;

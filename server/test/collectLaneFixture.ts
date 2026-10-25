@@ -24,8 +24,10 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { collectLaneJournalAt, defaultCollectLaneJournalPath } from '../src/coord/collectLaneJournal.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
-import { COLLECT_FEED_TITLE, COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
+import { COLLECT_FEED_TITLE, COLLECT_LANE_LIVE_MARKER, collectLooseId } from '../src/collectLane.js';
+import { COLLECT_LOOSE_LIVE_MARKER } from '../../shared/switches.js';
 import { NotifyLog } from '../src/notifylog.js';
+import { drainTick, guardQuietAtTestEnd } from './laneQuiet.js';
 import type { FleetIO } from '../src/io.js';
 import type { Runner } from '../src/exec.js';
 import type { PushPayload } from '../src/push.js';
@@ -110,7 +112,34 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
     flockUnavailable: (): CcdAnswer => ({ code: 1, stdout: '',
       stderr: 'ccd: flock (util-linux) is unavailable — refusing to run the destructive verb unserialised\n' }),
   };
+  // ── the loose arm's model (D-6627): the census and `--loose-hex` audit and verb, by the documents ccd prints ──
+  const hexOf = (name: string): string => Buffer.from(name, 'utf8').toString('hex');
+  const looseEntries = new Map<string, string>();    // hex -> census class
+  const looseRecords = new Set<string>();            // hex of an entry a loose quarantine record names
+  let censusTruncated = false;
+  let censusAnswer: CcdAnswer | null = null;
+  let censusCalls = 0;
+  const looseToken = (hex: string): string => createHash('sha256').update(`collect-loose ${hex}`).digest('hex');
+  const censusDoc = (): CcdAnswer => censusAnswer ?? { code: 0, stdout: JSON.stringify({
+    mode: 'collect-census', truncated: censusTruncated, max: 1024, counts: {},
+    entries: [...looseEntries].map(([hex, cls]) => ({ hex, class: cls })),
+    records: [...looseRecords].map((hex) => ({ hex, record: `${hex.slice(0, 16)}.1.1` })), recordsUnmeasured: 0 }) };
+  const looseAudit = (hex: string): CcdAnswer => ({ code: 0, stdout: JSON.stringify({
+    mode: 'collect-loose', name: hex,
+    collect: { class: 'loose', type: 'd', uid: 1000, records: [], newestCtimeNs: '1789990000000000000', entries: 3,
+      floorS: 172800, pressure: false, idleAt: 1_789_990_000 + 172_800, unmeasured: null },
+    verdict: 'collectable', detail: '', token: looseToken(hex) }) });
+  const looseModel = (verb: CollectVerb, hex: string, args: readonly string[]): CcdAnswer => {
+    if (verb === 'audit') return looseAudit(hex);
+    if (args[args.indexOf('--expect') + 1] !== looseToken(hex)) {
+      return { code: 0, stdout: JSON.stringify({ refused: 'state-changed', detail: 'the token no longer binds it', paths: [] }) };
+    }
+    looseEntries.delete(hex); looseRecords.delete(hex);
+    return { code: 0, stdout: JSON.stringify({ collected: hex, record: `${hex.slice(0, 16)}.1790000000000000000.4242`,
+      resumed: false, loose: true }) };
+  };
   const model = (verb: CollectVerb, id: string, args: readonly string[]): CcdAnswer => {
+    if (id.startsWith('loose:')) return looseModel(verb, id.slice('loose:'.length), args);
     if (verb === 'audit') return collectable(id);
     if (args[args.indexOf('--expect') + 1] !== tokenOf(id)) {
       return { code: 0, stdout: JSON.stringify({ refused: 'state-changed', detail: 'the token no longer binds it', paths: [] }) };
@@ -131,11 +160,17 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
   const onCall: ((c: CollectCall) => void)[] = [];
   const calls: CollectCall[] = [];
   const run: Runner = async (cmd, args) => {
-    if (path.basename(cmd) === 'tmux') return { code: 1, stdout: '', stderr: '' };   // the tick's pane reads, not ccd
+    if (path.basename(cmd) === 'tmux') return { ran: true, code: 1, stdout: '', stderr: '' };   // the tick's pane reads, not ccd
+    if (args[0] === 'ws-audit' && args[1] === '--collect-census') {
+      censusCalls += 1;
+      const c = censusDoc();
+      return { ran: true, code: c.code, stdout: c.stdout, stderr: c.stderr ?? '' };
+    }
     const verb: CollectVerb | null = args[0] === 'ws-audit' && args.includes('--collect') ? 'audit'
       : args[0] === 'ws-collect' ? 'collect' : null;
-    if (verb === null) return { code: 1, stdout: '', stderr: `unscripted ${args[0] ?? ''}` };
-    const id = args[args.indexOf('--session') + 1] ?? '';
+    if (verb === null) return { ran: true, code: 1, stdout: '', stderr: `unscripted ${args[0] ?? ''}` };
+    const hexAt = args.indexOf('--loose-hex');
+    const id = hexAt >= 0 ? collectLooseId(args[hexAt + 1] ?? '') : (args[args.indexOf('--session') + 1] ?? '');
     const call: CollectCall = { verb, id, token: verb === 'collect' ? (args[args.indexOf('--expect') + 1] ?? null) : null, mono };
     calls.push(call);
     for (const f of onCall) f(call);
@@ -146,7 +181,7 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
       try { await h.promise; } finally { park(id, -1); }
     }
     const a = scripts.get(id)?.(verb, args) ?? model(verb, id, args);
-    return { code: a.code, stdout: a.stdout, stderr: a.stderr ?? '' };
+    return { ran: true, code: a.code, stdout: a.stdout, stderr: a.stderr ?? '' };
   };
 
   // ── the io: the real one, with three switches a case throws ──
@@ -194,10 +229,11 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
   const identity = new FleetIdentityCell();
   const deps = { ...base, fleetIdentity: identity, cfg, io, coord, notifyLog, fleetState,
     ...(opts.push !== undefined ? { push: opts.push } : {}),
-    presence: { isVisible: (id: string) => visible(id) },
+    viewers: { isVisible: (id: string) => visible(id) },
     monotonicMs: () => mono, collectLane: { journal, bootNonce: 'test' } };
   if (opts.armed === true) writeFileSync(path.join(reg, COLLECT_LANE_LIVE_MARKER), '');
   const watcher = new FleetWatcher(deps as never, new Bus(), 10_000);
+  guardQuietAtTestEnd(watcher);
   const startMono = mono;
 
   // ── helpers ──
@@ -288,7 +324,7 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
    *  both lanes is throttled. */
   const attention = async (): Promise<readonly ChildReclaimAttention[]> => {
     await watcher.sweepChildReclaim([], names());
-    await watcher.tick();
+    await drainTick(watcher);                               // tick() fires writers it never awaits: none may outlive the case
     return watcher.currentCoord()?.childReclaimAttention ?? [];
   };
   /** The box-wide collector items: a `collect` item whose `sessionId` is one of the fixed labels, never an id. */
@@ -299,6 +335,21 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
     now: (): number => clock, mono: (): number => mono, names, witness, unwitness, touch, remove, pass, settled, next, advance,
     pastHoldOff, passesUntil, hold, holdGather, holdListing, occupy, goLive, audits, collects, feed, wouldCollects, attention,
     boxWide,
+    /** The loose arm's scripted ccd (D-6627): the entries under the fleet temp directory the census lists, the loose
+     *  quarantine records, and the marker that arms the arm. A loose entry's lane id is `loose:<hex>`. */
+    loose: {
+      hexOf, idOf: (name: string): string => collectLooseId(hexOf(name)),
+      add: (name: string, cls = 'loose'): string => { looseEntries.set(hexOf(name), cls); return collectLooseId(hexOf(name)); },
+      addRecord: (name: string): string => { looseRecords.add(hexOf(name)); return collectLooseId(hexOf(name)); },
+      remove: (name: string): void => { looseEntries.delete(hexOf(name)); looseRecords.delete(hexOf(name)); },
+      has: (name: string): boolean => looseEntries.has(hexOf(name)),
+      truncate: (v: boolean): void => { censusTruncated = v; },
+      answerCensus: (a: CcdAnswer | null): void => { censusAnswer = a; },
+      censusCalls: (): number => censusCalls,
+      arm: (): void => touch(COLLECT_LOOSE_LIVE_MARKER),
+      disarm: (): void => remove(COLLECT_LOOSE_LIVE_MARKER),
+      token: looseToken,
+    },
     /** The connection-bound fleet identity the watcher reads (path-identity spec 2026-10-12 §5.2): epoch 0 and
      *  unmeasured until a case measures a node or reconnects. A TICK's inventory sweep publishes this box's own node into
      *  it (local mode), so a case that measures a node never ticks. */

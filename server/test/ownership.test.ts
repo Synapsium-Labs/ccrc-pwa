@@ -177,8 +177,9 @@ describe('the committed ccd carries a marker that matches its own bytes', () => 
   // this round is otherwise spent removing.) It needs a generated file that is
   // COMMITTED. `grep -rn
   // '^# ccrc:generated' .`, outside `node_modules/`, `graphify-out/` and the
-  // two `docs/` lines that quote the format, returns line 2 of `ccd/ccd` and
-  // nothing else. `~/.ccrc/accounts.sh` and the wrappers are generated at
+  // two `docs/` lines that quote the format, returns line 2 of `ccd/ccd` and,
+  // since ARCH-74, the stamp inside the session hook's generated helpers region
+  // (`hook-helpers-generated.test.ts` owns that one). `~/.ccrc/accounts.sh` and the wrappers are generated at
   // deploy time from bodies that never contain the prefix and are never
   // merged, so they cannot take this shape and are not scanned here.
   it('carries exactly ONE line claiming provenance — a second one is hashed in and verifies clean', () => {

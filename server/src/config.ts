@@ -235,7 +235,8 @@ export interface CcrcConfig {
    * and the Origin check are config-driven by design. Turning proxy trust on
    * would buy nothing today and would create a spoof surface for whatever
    * reads `req.ip` NEXT — a consumer that arrives armed by a setting nobody
-   * re-audits. `auth-routes.test.ts` pins the settlement: the string
+   * re-audits. The `@fastify/rate-limit` registration in `server.ts` is constant-keyed
+   * and reads no `req.ip` either: one global bucket, by design. `auth-routes.test.ts` pins the settlement: the string
    * `trustProxy` appears nowhere in `server/src` outside this docstring.
    *
    * The positive test is inverted relative to `authEnabled` — anything that is

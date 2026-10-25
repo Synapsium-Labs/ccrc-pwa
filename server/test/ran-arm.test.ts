@@ -74,14 +74,24 @@ describe('the remote runner says ran:false, and why, where the command never ran
     expect(res).toMatchObject({ code: 1, stdout: '', stderr: 'forbidden', ran: false, reason: 'spawn', detail: 'forbidden' });
   });
 
-  it('a command that ran carries no ran key: byte-identical to before', async () => {
+  it('a command that ran carries ran:true and no reason (D-6840)', async () => {
     fixture = makeFixture();
     agent = await bootAgent(fixture);
     fleet = connectToAgent(agent.port);
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     const res = await fleet.runner('tmux', ['has-session', '-t', 'cc-nope']);
-    expect(res).not.toHaveProperty('ran');
+    expect(res).toMatchObject({ ran: true });
     expect(res).not.toHaveProperty('reason');
+  });
+
+  it('an agent whose exec never started (ccd absent on its box) answers ran:false, carried as spawn (D-6840)', async () => {
+    fixture = makeFixture();
+    agent = await bootAgent(fixture);
+    fleet = connectToAgent(agent.port);
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    const res = await fleet.runner('ccd', [...CCD_ARGV.prStateSession('demo-quiet-basin')]);
+    expect(res).toMatchObject({ code: 1, stdout: '', ran: false, reason: 'spawn' });
+    expect(res.ran === false && res.detail).toContain('ENOENT');
   });
 
   it.each<[string, () => Error, string]>([
@@ -112,15 +122,15 @@ describe('the local runner says ran:false only for a spawn error', () => {
     expect(res.ran === false && res.detail).toContain('ENOENT');
   });
 
-  it('a command that ran and exited 1 carries no ran key', async () => {
+  it('a command that ran and exited 1 carries ran:true', async () => {
     const res = await realRunner('sh', ['-c', 'exit 1']);
-    expect(res).toEqual({ code: 1, stdout: '', stderr: '', killed: false, signal: null });
+    expect(res).toEqual({ ran: true, code: 1, stdout: '', stderr: '', killed: false, signal: null });
   });
 
-  it('a child that ran and overflowed maxBuffer (a string code, not a spawn syscall) carries no ran key', async () => {
+  it('a child that ran and overflowed maxBuffer (a string code, not a spawn syscall) carries ran:true', async () => {
     const res = await realRunner(process.execPath, ['-e', "process.stdout.write('x'.repeat(9 * 1024 * 1024))"]);
     expect(res.code).toBe(1);
-    expect('ran' in res).toBe(false);
+    expect(res.ran).toBe(true);
   });
 });
 
@@ -151,10 +161,11 @@ describe('ccd() carries the arm, and nothing else moves', () => {
   it.each<[string, ExecResult]>([
     ['ranOk', ranOk('{}')],
     ['ranExit', ranExit(1, '', 'ccd: refused')],
-    ['a bare literal', { code: 1, stdout: '', stderr: 'ccd: refused' }],
-  ])('a ran answer (%s) reaches CcdResult with no new key', async (_what, r) => {
+    ['a bare literal', { ran: true, code: 1, stdout: '', stderr: 'ccd: refused' }],
+  ])('a ran answer (%s) reaches CcdResult as ran:true and nothing else new', async (_what, r) => {
     const res = await via(r);
-    expect(Object.keys(res).sort()).toEqual(['killed', 'ok', 'signal', 'stderr', 'stdout']);
+    expect(Object.keys(res).sort()).toEqual(['killed', 'ok', 'ran', 'signal', 'stderr', 'stdout']);
+    expect(res.ran).toBe(true);
   });
 });
 
@@ -184,7 +195,7 @@ const expiryRig = async (answer: { audit: () => ExecResult; verb: () => ExecResu
   await notifyLog.load();
   const deps: ExpireArchivedDeps = {
     coord: new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db'))), cfg: base.cfg, io: base.io,
-    runCcd: base.runCcd, fleetState: CAPS, presence: { isVisible: () => false }, notifyLog,
+    runCcd: base.runCcd, fleetState: CAPS, viewers: { isVisible: () => false }, notifyLog,
   };
   return { deps, calls, req: { sessionId: EXP_ID, archivedAt: ARCH, expiresAt: DUE } };
 };

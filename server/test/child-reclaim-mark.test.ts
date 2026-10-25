@@ -171,7 +171,7 @@ describe('reviveFleetSession — child (ADDITIVE, absence-permits)', () => {
 });
 
 describe('assembleFleet — child rides the fleet frame', () => {
-  const noopRun: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+  const noopRun: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
   const fleet = (io: FleetIO = localIO) => assembleFleet(io, cfg(), new Tmux(noopRun), 1784600000);
 
   it('carries a marker naming a run', async () => {

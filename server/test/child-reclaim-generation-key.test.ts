@@ -78,7 +78,7 @@ describe('an unreadable generation makes the rowâ€™s identity unmeasured (spec Â
     mintingRun: { ok: true, run: { state: 'done', sessionId: 'demo-a', dispatchStartedAt: NOW - 3_600_000,
       openedAt: NOW - 3_600_000, closedAt: null } },
     reviewedRun: { kind: 'not-a-review' }, siblings: { ok: true, open: 0 }, coordinatorClaim: undefined,
-    childBornAt: NOW - 3_600_000, skewMs: 120_000, nowMs: NOW, ...over,
+    childBornAt: NOW - 3_600_000, skewMs: 120_000, nowMs: NOW, idle: 'unmeasured', holdDigest: null, ...over,
   });
 
   it('a value and absent judge as before', () => {

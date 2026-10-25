@@ -36,13 +36,19 @@ const bodyOf = (name: string): string => {
   return ccd.slice(from, ccd.indexOf('\n}\n', from));
 };
 
+// D-6633: the two words the pin prints on a failed document; the audit journal list, which only a refusal reaches, has neither.
+const NESTED_RESCUE_WORDS = ['nested-rescue-failed', 'nested-rescue-too-large'];
+
 describe('the nineteen words', () => {
   it('are exactly what ccd’s EXPIRE region and the shared ladder refuse with — harvested, both directions', () => {
     const begin = ccd.indexOf('EXPIRE-BEGIN');
     const end = ccd.indexOf('EXPIRE-END');
     expect(begin, 'the EXPIRE region is missing its BEGIN marker').toBeGreaterThan(0);
     expect(end).toBeGreaterThan(begin);
-    const harvested = new Set([...words(nonComment(ccd.slice(begin, end))), ...words(nonComment(bodyOf('_ws_reclaim_ladder')))]);
+    const pinWords = [...new Set([...nonComment(ccd).matchAll(/RECLAIM_PIN_WORD=(nested-rescue-[a-z-]+)/g)].map((m) => m[1]!))].sort();
+    expect(pinWords, 'guards the guard: the pin names both rescue words, which ride the act failed document (D-6633)')
+      .toEqual(NESTED_RESCUE_WORDS);
+    const harvested = new Set([...words(nonComment(ccd.slice(begin, end))), ...words(nonComment(bodyOf('_ws_reclaim_ladder'))), ...pinWords]);
     expect(harvested.size, 'guards the guard: an empty harvest would equal an empty map').toBeGreaterThan(10);
     expect([...harvested].sort()).toEqual(Object.keys(EXPIRE_TOKEN_KIND).sort());
   });
@@ -52,7 +58,7 @@ describe('the nineteen words', () => {
       /case "\$REAP_VERDICT" in\n\s+([a-z|-]+)\)\n\s+_lc_emit expire refused "\$id" "" verb ws-audit/g,
     )];
     expect(matches, 'the expiry audit no longer journals a terminal refusal, or a second site appeared').toHaveLength(1);
-    const terminal = Object.entries(EXPIRE_TOKEN_KIND).filter(([, k]) => k === 'terminal').map(([t]) => t).sort();
+    const terminal = Object.entries(EXPIRE_TOKEN_KIND).filter(([t, k]) => k === 'terminal' && !NESTED_RESCUE_WORDS.includes(t)).map(([t]) => t).sort();
     expect(terminal.length).toBeGreaterThan(0);
     expect(matches[0]![1]!.split('|').sort()).toEqual(terminal);
   });
@@ -1145,6 +1151,6 @@ describe('L1', () => {
     const froms = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
     // D-5855: the live switch is re-exported from its row in the L0 switchboard.
     // ARCH-14 (#560): the machine token's reader is L0 too (`shared/ccd-refusal.ts`).
-    expect(froms).toEqual(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js']);
+    expect(froms).toEqual(['../../shared/nestedRescue.js', '../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js']);
   });
 });

@@ -1,4 +1,5 @@
 import { MAIL_ENVELOPE_FENCE, type MailKind } from '../../../shared/api.js';
+import { MAIL_INBOX_FENCE_INFO, parseMailEnvelope } from '../../../shared/api.js';
 
 export interface EnvelopeInput {
   /** The DELIVERY id (`mail_deliveries.id`), not the mail id (`mail.id`) —
@@ -94,6 +95,49 @@ export function renderEnvelope(m: EnvelopeInput): string {
   // with, so `parse(render(x)) === x` is a property of the system rather than
   // of two files happening to spell the same nine characters.
   return `${fence}${MAIL_ENVELOPE_FENCE}\n${head}\n${m.body}\n${fence}`;
+}
+
+/**
+ * D-6778 (mail inbox, spec §3.4): one inbox entry, rendered from the STORED envelope, parsed back with
+ * `parseMailEnvelope`, so it shows what was queued and keeps "rendered once, never re-rendered" for every field.
+ * Only the `ack:` instruction is left out (the inbox acks for the reader), and the id shown is the DELIVERY id,
+ * never the mail row's. An envelope that does not parse is printed verbatim, never dropped. Pure.
+ *
+ * The fence is `fenceFor`'s (longer than any backtick run inside), and its info string is `ccrc-inbox`, not
+ * `MAIL_ENVELOPE_FENCE`, so `parseFetchedMailEnvelope` never mistakes an inbox print for one fetched envelope.
+ */
+export function renderInboxEntry(deliveryId: number, storedEnvelope: string): string {
+  const p = parseMailEnvelope(storedEnvelope);
+  if (!p.ok) return storedEnvelope;
+  const e = p.envelope;
+  const lines: string[] = [`delivery: ${deliveryId}`, `from: ${e.fromId}`, `to: ${e.toId}`, `kind: ${e.kind}`,
+                           `subject: ${e.subject}`];
+  if (e.runId !== null) {
+    const wave = e.wave === null ? '' : ` wave ${e.wave}${e.waveOf === null ? '' : `/${e.waveOf}`}`;
+    lines.push(`run: ${e.runId}${e.program === null ? '' : ` (program:${e.program}${wave})`}`);
+  }
+  if (e.artifacts.length > 0) {
+    lines.push('artifacts:');
+    for (const a of e.artifacts) lines.push(`  ${a}`);
+  }
+  lines.push('--');
+  const head = lines.join('\n');
+  const fence = fenceFor(`${head}\n${e.body}`);
+  return `${fence}${MAIL_INBOX_FENCE_INFO}\n${head}\n${e.body}\n${fence}`;
+}
+
+/** D-6778 (spec §3.3 step 4): take entries in order while the running byte total fits `budget`, and always at
+ *  least one, so one oversized entry still goes out. `remaining` is how many the budget left out. Pure. */
+export function pageInbox<T extends { text: string }>(entries: readonly T[], budget: number): { page: T[]; remaining: number } {
+  const page: T[] = [];
+  let used = 0;
+  for (const e of entries) {
+    const n = Buffer.byteLength(e.text, 'utf8');
+    if (page.length > 0 && used + n > budget) break;
+    page.push(e);
+    used += n;
+  }
+  return { page, remaining: entries.length - page.length };
 }
 
 /** The single-line reference the delivery lane types instead of the body.

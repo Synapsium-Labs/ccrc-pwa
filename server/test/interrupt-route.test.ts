@@ -91,10 +91,10 @@ const box = async (b: Box) => {
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
-    if (verb === 'has-session') return { code: b.gone ? 1 : 0, stdout: '', stderr: '' };
-    if (verb === 'list-panes') return b.gone ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: `${PANE}\n`, stderr: '' };
-    if (verb === 'capture-pane') return b.gone ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: 'scrollback\n❯ \n', stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (verb === 'has-session') return { ran: true, code: b.gone ? 1 : 0, stdout: '', stderr: '' };
+    if (verb === 'list-panes') return b.gone ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: `${PANE}\n`, stderr: '' };
+    if (verb === 'capture-pane') return b.gone ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: 'scrollback\n❯ \n', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const guarded = guardRunner(run);
   const cfg = loadConfig({ CCRC_HOME: home });

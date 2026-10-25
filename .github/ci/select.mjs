@@ -237,6 +237,23 @@ function parseArgs(argv) {
   return out;
 }
 
+/** True when the selection holds a test the node floor runs. `floorListFile` lists them server-relative
+ *  (`test/x.test.ts`), one per line; selection files carry the `server/` prefix. An unreadable list, or no
+ *  selection to read, answers true.
+ *  @param {string} floorListFile @param {Selection | null} selection */
+function floorListHit(floorListFile, selection) {
+  if (!selection) return true;
+  let listed;
+  try {
+    listed = readFileSync(floorListFile, 'utf8').split('\n').map((l) => l.trim()).filter(Boolean);
+  } catch {
+    return true;
+  }
+  if (listed.length === 0) return true;
+  const chosen = new Set(selection.tests.map((t) => t.file));
+  return listed.some((f) => chosen.has(`server/${f}`) || chosen.has(f));
+}
+
 function main() {
   const opt = parseArgs(process.argv.slice(2));
   const repoDir = opt.repo ?? process.cwd();
@@ -247,6 +264,8 @@ function main() {
   const mapFile = opt.map;
   const timesFile = opt.times;
   const traceListFile = opt['trace-list'];
+  const floorListFile = opt['floor-list'];
+  const floorStatic = opt['floor-static'] ?? 'true';
 
   let durations = null;
   if (timesFile) {
@@ -333,7 +352,15 @@ function main() {
     writeFileSync(traceListFile, traceList.map((f) => `${f}\n`).join(''));
   }
 
+  // D-6771: does the `node floor` leg need to run? Yes when the static inputs moved (ci.yml's pathspec, passed in),
+  // when everything runs, or when the REAL selection (never the shadow list, which is every file) holds a file the
+  // floor runs — the map records every file each test reads, so a change to a module a floor test imports selects
+  // that test. No list given: the safe answer.
+  const floor = floorStatic !== 'false' || !floorListFile || testsOut === 'full'
+    || floorListHit(floorListFile, selectionResult);
+
   writeOutputs({
+    floor: String(floor),
     tests: testsOut,
     trace: decide.trace,
     shadow: String(shadowFlag),

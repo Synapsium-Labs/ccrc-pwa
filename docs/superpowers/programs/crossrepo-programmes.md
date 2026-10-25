@@ -188,6 +188,10 @@ trail-reader. The 2026-09-14 measurement above is unaffected by this correction 
 that route and was genuinely taken by operator act against `~/.ccrc/coord.db` directly, from
 nowhere else.
 
+**Addendum, 2026-10-24** (D-6799): `GET /api/runs/:id` also calls `coord.runEvents(id)`, to find the
+sessions a run was bound to (current and predecessors) so it can report their spend. It reads the trail
+for that one join and for nothing else; the 2026-09-14 measurement is unaffected.
+
 The single counted event **at the time of this read** is run 43 (programme `account-pools`, wave 5/6),
 `causedBy=coordinator`, at `2026-09-11T12:02:33.805Z` — the only `legacy-home-project` event this read
 counted (count = 1, first = last, at read time), so this read projected the rolling window clearing

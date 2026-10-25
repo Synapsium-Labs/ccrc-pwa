@@ -449,7 +449,10 @@ describe("index.html's pre-paint stamp", () => {
     // The literal MIRRORS the flag, so a commit that changes Instrument's
     // `preview` reds here until it changes this literal too: the one commit
     // moves the desktop default in both halves at once, and the first frame
-    // never disagrees with the boot (S18 set both, D-5096).
+    // agrees with the boot (S18 set both, D-5096) for every value this build
+    // knows. A stored value it does not know is the one exception: on a desk
+    // the snippet paints Refined (`:root`) for one frame, before the boot
+    // resolves it to Instrument (D-6721, index.html).
     const literal = [...bare(skinSnippet()).matchAll(AUTO_DESK)];
     expect(literal, 'AUTO_DESK is not one literal').toHaveLength(1);
     const preview = SKINS.find((s) => s.id === INSTRUMENT)?.preview;

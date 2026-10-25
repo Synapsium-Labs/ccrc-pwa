@@ -55,12 +55,12 @@ const argsOf = (argv: CcdArgv): string =>
   argv.slice(1).map((t) => `'${t.replace(/'/g, `'\\''`)}'`).join(' ');
 
 /** Captures the exit status and stderr of a refusal, which `h.sh` would throw on. */
-const run = (snippet: string): { code: number; stdout: string; stderr: string } => {
+const run = (snippet: string): { ran: true, code: number; stdout: string; stderr: string } => {
   const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 15000,
     env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }),
   });
-  return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  return { ran: true, code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };
 
 describe('stop sends --surface before the id (spec §2.3, §2.4)', () => {
@@ -171,8 +171,8 @@ const gonePane = (): { runner: Runner; calls: string[][] } => {
   const calls: string[][] = [];
   const runner: Runner = async (_cmd, args) => {
     calls.push([...args]);
-    if (args[0] === 'has-session') return { code: 1, stdout: '', stderr: `can't find session: ${args[2] ?? ''}` };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 1, stdout: '', stderr: `can't find session: ${args[2] ?? ''}` };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { runner, calls };
 };

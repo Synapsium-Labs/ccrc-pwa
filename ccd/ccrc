@@ -409,7 +409,8 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
 # adversarial pass then measured the floor itself: 4.2/4.3 die on ccd's
 # empty-array set -u expansions regardless, so the declared floor is 4.4.)
 # `ccd/session-hook.sh`'s `_hook_epoch_ms` is a deliberate local copy of
-# this body (the hook sources nothing); a test pins the two identical.
+# this body (the hook sources nothing), GENERATED from it by
+# `shared/hook-helpers.mjs` (ARCH-74); a test fails when the two drift.
 #
 # THE SEPARATOR IS NOT ASSUMED TO BE A DOT: `EPOCHREALTIME` is formatted with
 # the LOCALE's decimal point, and a box running a comma locale would otherwise
@@ -1305,6 +1306,35 @@ _svc_run_supervised() {   # <unit> <log> <envfile|-> [NAME=value ...] -- <cmd> [
   printf 'nohup %s\n' "$!"
   return 0
 }
+# THE LAUNCHD CLASS the server (or agent) job carries (macOS): the
+# first word of ~/.ccrc/launchd-class. `Background` — the default, and what
+# every box ran before this file — is launchd's lowest CPU and I/O class. On a
+# box saturated by other work it starves rather than slows: measured on a busy
+# fleet box, the server's own job took minutes to reach `listen` while a
+# hand-started copy answered /health in seconds, so every update's health gate
+# failed and restored, and the sessions (same class) ran behind everything
+# else. `Standard`, `Adaptive` or `Interactive` in the file changes it. A FILE,
+# not an env var and not ccrc.env, for `_rc_enabled`'s reasons: HOME is ccd's
+# only isolation boundary, ccrc.env carries tokens and a fleet box may have
+# none. OPERATOR-OWNED: nothing writes it. Absent or empty is Background; any
+# other word is named on stderr and reads as Background — each arm prints its
+# own literal, so nothing from the file can reach a plist. The server job and
+# the session plist writer (`_svc_write_session_plist`) read it. It is in this
+# block, so ccd and ccrc carry it byte for byte (ARCH-74); the writers still
+# call it behind `declare -F`.
+_launchd_class() {
+  local f="$HOME/.ccrc/launchd-class" v=""
+  if [ -r "$f" ]; then { IFS= read -r v || true; } < "$f"; fi
+  v="${v%$'\r'}"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%%[[:space:]]*}"
+  case "$v" in
+    ''|Background) printf 'Background' ;;
+    Standard)      printf 'Standard' ;;
+    Adaptive)      printf 'Adaptive' ;;
+    Interactive)   printf 'Interactive' ;;
+    *) printf "ccrc: %s names '%s', not Background, Standard, Adaptive or Interactive — using Background\n" "$f" "$v" >&2
+       printf 'Background' ;;
+  esac
+}
 # ── END PLATFORM LAYER — the byte-identical region ends HERE ────────────
 # Add a new `_plat_*`/`_svc_*` helper ABOVE this line, in BOTH files, or the
 # pin test (`macos-platform.test.ts`) cannot see it: the compared region is
@@ -1738,7 +1768,7 @@ BOX_TOKEN_SYNC_REPORT="$HOME/.ccrc/token-sync.json"
 #   box-token lifecycle wave 1 — token-sync (`cmd_token` and the
 #        `ccd/ccrc-token-sync` it runs: the verb ccrc-agent's `token-sync` op
 #        spawns). Every os: the op runs it in the foreground, never --detach.
-# ccrc-install.test.ts pins every word to the machinery it names, so a word
+# ccrc-install-*.test.ts pins every word to the machinery it names, so a word
 # cannot ship ahead of its code.
 CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback versions token-sync)
 
@@ -1965,7 +1995,7 @@ BOX_TREE_DIR="$HOME/ccrc"
 # `${BOX_UNIT_DIR:-…}` fallback IS the second spelling with an extra branch in
 # front of it. `_check_path` records the same trade for `WRAPPER_BIN_DIR` and
 # the same remedy: keep the mechanism instead of the promise —
-# `ccrc-install.test.ts` compares the two literals and goes red on a drift.
+# `ccrc-install-*.test.ts` compares the two literals and goes red on a drift.
 # (D-92.)
 # WHERE THIS BOX'S SERVICE MANAGER READS ITS JOB FILES. The comment above
 # explains why this is one literal and not two; the platform arm below does
@@ -2044,7 +2074,7 @@ BOX_MIGRATION_FILE="$HOME/.ccrc/migrating-to"
 # DELIBERATE cross-file second spelling of D-92's class: `install.sh
 # --release` runs before any ccrc exists on the box, so it cannot read this
 # pair, and this file runs on boxes install.sh has long left. The two are
-# held equal by `server/test/ccrc-update.test.ts` (the pin IS the mechanism;
+# held equal by `server/test/ccrc-update-kept.test.ts` (the pin IS the mechanism;
 # a comment would be the promise). `CCRC_RELEASE_BASE_URL` overrides the
 # derived `…/releases` prefix — the same test seam and mirror escape hatch
 # install.sh documents. Stage 5 de-brands the pair in both files at once.
@@ -2743,7 +2773,7 @@ _upd_redact() {
 # own refusal sentences, which deliberately name absolute paths
 # (`ccrc-expose.test.ts`'s "shadow refusal" cases), must print byte-for-byte
 # what they always did. ONE LINE ON PURPOSE —
-# `ccrc-install.test.ts` and `ccrc-update.test.ts` extract this definition
+# `ccrc-install-*.test.ts` and the `ccrc-update-*.test.ts` files extract this definition
 # by `^_ccrc_die\(\) \{.*\}$` and run it alone under `set -u` (hence
 # `${UPD_FAIL_PREFIX:-}` and `${UPD_REDACT_ACTIVE:-0}` both defaulting) —
 # each harness that actually triggers a die also picks `_upd_redact`'s
@@ -7136,7 +7166,7 @@ _acct_add_parse() {
 #     converged" (:5569) or "… generated from $HOME/.ccrc/accounts.json"
 #     (:5575); `cmd_wrappers` prints a line per written account and a
 #     `summary: …` line (:2904). Read that off the SOURCE, not off a suite:
-#     `ccrc-install.test.ts:2687-2688` pins only `cmd_wrappers`' summary onto
+#     `ccrc-install-*.test.ts` pins only `cmd_wrappers`' summary onto
 #     `install`'s stdout, and nothing in server/test/ pins the accounts.sh
 #     lines at all. For `install` that transcript IS the answer. Here it is
 #     the REMEDY, and this verb's stdout is one JSON object — so it goes to
@@ -7315,7 +7345,7 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   # install-coordinator-skill.sh:36, install-worker-skill.sh:36,
   # install-reviewer-skill.sh:31, install-graphify-skill.sh:77). So the
   # scripts are called directly,
-  # `ccrc-install.test.ts:1812-1893`'s 23-entry `_inst_*` spine is untouched, and no
+  # `ccrc-install-*.test.ts`'s 23-entry `_inst_*` spine is untouched, and no
   # agent restart is needed — every one of them is idempotent per home.
   local dir="$1" burl="$2" models="$3" n step stands=""
   # THIS RUN'S ARRAY, NOT THE SHELL'S (D-2127). It becomes `provisioned:[…]` on stdout
@@ -8082,7 +8112,7 @@ _acct_disable() {   # [--id X]
 # `_inst_accounts_sh` PRINTS ("install: accounts.sh: …") and refuses through
 # `_ccrc_die`, which writes nothing to stdout. Both are wrong for a verb whose
 # entire stdout is one JSON object, and neither can be fixed in that function —
-# it is `cmd_install`'s own step and `ccrc-install.test.ts` pins the spine that
+# it is `cmd_install`'s own step and `ccrc-install-*.test.ts` pins the spine that
 # calls it. So: stdout to /dev/null, and the call in a SUBSHELL so `_ccrc_die`'s
 # `exit 1` ends the subshell rather than this verb, leaving the `||` to phrase
 # the refusal as JSON. stderr is NOT redirected — the generator's own
@@ -14654,7 +14684,7 @@ cmd_models() {
 # array to know which steps precede `_inst_tree`. One list: a step added here
 # runs on install and on update, and is classified, without anyone
 # remembering a second copy. One name per line and nothing else inside the
-# parentheses — `ccrc-install.test.ts`'s order pin, the graphify step census
+# parentheses — `ccrc-install-*.test.ts`'s order pin, the graphify step census
 # and `runbook-holds.test.ts` read it line by line.
 CCRC_INST_SPINE=(
   _inst_banner
@@ -15192,7 +15222,7 @@ _inst_rc() {   # seed-once, the third file on the user-owned side of the rule
   # EOF-before-delimiter: `printf 'off'` with no newline reads as OFF for the
   # wrong reason, and `printf 'on'` with no newline reads as OFF outright.
   # `server/test/ccd-rc-flag.test.ts` pins that measurement and
-  # `ccrc-install.test.ts` asserts these bytes WHOLE, newline included.
+  # `ccrc-install-*.test.ts` asserts these bytes WHOLE, newline included.
   #
   # THE PATH IS A LOCAL, not a fourth entry in the top-level block at :91-107.
   # That block exists because `version`, `status` and `doctor` all READ the
@@ -16251,7 +16281,7 @@ _inst_keep_aside() {   # <src> <dest> — copy a PERSONAL file aside before repl
 
 # ── _inst_shim — the launcher `ccrc` on PATH ─────────────────────────────
 # THE BYTES BELOW ARE `deploy/deploy.sh`'s `install_ccrc_shim` HEREDOC, EXACTLY,
-# and `server/test/ccrc-install.test.ts` extracts both and compares them. Two
+# and `server/test/ccrc-install-*.test.ts` extracts both and compares them. Two
 # generators of one artifact is a drift waiting to happen — a box whose
 # launcher came from the older of them fails in a way neither generator's own
 # tests can see — so the agreement is a pin rather than a convention. It also
@@ -16563,6 +16593,10 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   # hook's guard for it is silent, so only this order makes a half-finished
   # converge fail in the harmless direction.
   _inst_atomic "$tree/ccd/compact-card.mjs" "$HOME/.cc-sessions/compact-card.mjs" 644
+  # The one transcript reader ccd and the doctor load with `jq -L` (ARCH-65), 0644:
+  # data for jq, never executed. Without it every transcript read answers NOT MEASURED.
+  mkdir -p "$HOME/.cc-sessions/lib" || _ccrc_die "cannot create \$HOME/.cc-sessions/lib"
+  _inst_atomic "$tree/ccd/lib/transcript.jq" "$HOME/.cc-sessions/lib/transcript.jq" 644
   # The approval wait's ruling verifier (coordinator-first routing, plan Task 14, D-5297), 0644 for the same reason:
   # a script `node` runs, never executed directly. The hook sends no request without it, so either order is safe.
   _inst_atomic "$tree/ccd/approval-verify.mjs" "$HOME/.cc-sessions/approval-verify.mjs" 644
@@ -22627,6 +22661,7 @@ _upd_backup_set() {
   _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
   _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
   _upd_backup_copy "$HOME/.cc-sessions/compact-card.mjs" compact-card.mjs
+  _upd_backup_copy "$HOME/.cc-sessions/lib/transcript.jq" transcript.jq
   _upd_backup_copy "$HOME/.cc-sessions/approval-verify.mjs" approval-verify.mjs
   _upd_backup_copy "$HOME/.cc-sessions/notify.sh"  notify.sh
   # R34 (final whole-branch review): since `ccrc memory --apply`,
@@ -22647,7 +22682,7 @@ _upd_backup_set() {
   # (launchd has none — `ccd` mints a plist per session) and the names are
   # labels, so the loop below would have copied nothing and the backup would
   # have been silently short of the very files a rollback needs. Measured by
-  # `ccrc-update.test.ts`'s "the backup is COMPLETE before the install step
+  # `ccrc-update-fetch.test.ts`'s "the backup is COMPLETE before the install step
   # runs".
   #
   # The per-SESSION plists are deliberately not swept: an update does not
@@ -23817,7 +23852,7 @@ _upd_sweep() {
     fi
   done
   # fix round 1 item 7 (review 196 F8): the argv-order pin is
-  # `ccrc-update.test.ts`'s "with KillMode=process resolving per unit, the
+  # `ccrc-update-fetch.test.ts`'s "with KillMode=process resolving per unit, the
   # sweep runs: preflight, try-restart, the failed warn query, the active
   # verify query — in that argv order" case — cited by title, since its line
   # range moves.
@@ -26346,12 +26381,13 @@ _uninst_cc_sessions() {
   # ONE remover (D-5392): `install-session-hooks.sh --remove` runs per account and leaves it.
   # `account-deny.settings.json` (D-6202) is every session's account deny file, removed with it.
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
-    "$reg/compact-card.mjs" "$reg/approval-verify.mjs" \
+    "$reg/compact-card.mjs" "$reg/approval-verify.mjs" "$reg/lib/transcript.jq" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
     "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" \
     "$reg/install-graphify-skill.sh" "$reg/child-deny.settings.json" \
     "$reg/account-deny.settings.json" \
     || _ccrc_die "removing ccrc's files under $reg failed"
+  rmdir -- "$reg/lib" 2>/dev/null || true   # the transcript reader's directory, empty once its file is gone
   rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" \
     || _ccrc_die "removing the skill trees under $reg failed"
   echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's and accounts' deny files, the four skill trees); the registry rows and operator switches stay"
@@ -26778,6 +26814,18 @@ _uninst_purge() {
   fi
 }
 
+# ARCH-74 (#809): the hook's generated region is rewritten by shared/hook-helpers.mjs --restamp.
+# Prints regenerated | current | refused-missing (BEGIN present, region damaged) | nothere.
+_restamp_hook_region() { node --no-warnings "$1" --restamp "$2" "$3" 2>/dev/null; }
+
+# After restamping ccd/ccd, say whether the sibling hook's region has gone stale.
+_restamp_hook_note() {
+  local hook="${1%/*}/session-hook.sh" hooks="${1%/*}/../shared/hook-helpers.mjs" out
+  { [ "${1##*/}" = ccd ] && [ -f "$hook" ] && [ -f "$hooks" ]; } || return 0
+  out="$(node --no-warnings "$hooks" --check "$hook" "$1" 2>/dev/null)" && return 0
+  echo "restamp: $hook: ${out:-hook helpers unreadable}; run \`$PROG restamp $hook\` to regenerate"
+}
+
 # ── restamp — the regenerator for a `# ccrc:generated` stamp ───────────────
 # Landing-order spec 2026-09-23 §5.1. Worker clause 16 says a generated stamp
 # is never hand-resolved: on a conflict in the stamp line, take either side of
@@ -26813,7 +26861,7 @@ _uninst_purge() {
 cmd_restamp() {
   case "${1:-}" in -h|--help) echo "usage: $PROG restamp <file>"; return 0 ;; esac
   [ $# -eq 1 ] || { echo "usage: $PROG restamp <file>" >&2; exit 2; }
-  local f="$1" mark="$CCRC_HERE/../shared/mark.mjs" verdict dir real d
+  local f="$1" mark="$CCRC_HERE/../shared/mark.mjs" verdict dir real d hooks ccdsrc
   { [ -f "$f" ] && [ ! -L "$f" ]; } || _ccrc_die "restamp: $f is not a regular file"
   # CDPATH= : `cd` consults an exported CDPATH for a relative operand, so the
   # directory resolved here could be a decoy while the write lands on $f itself.
@@ -26826,6 +26874,21 @@ cmd_restamp() {
     esac
   done
   [ -f "$mark" ] || _ccrc_die "restamp: the marker module is missing ($mark)"
+  # A hook carrying the generated-helpers region (ARCH-74, #809) is regenerated
+  # from the TARGET'S OWN tree: its shared/hook-helpers.mjs and its sibling ccd,
+  # never this script's tree (the installed ccrc would otherwise regenerate a
+  # worktree's hook against the installed constants). Missing either is refused.
+  if grep -qF -- '# ── BEGIN GENERATED HOOK HELPERS' "$f" 2>/dev/null; then
+    hooks="$dir/../shared/hook-helpers.mjs"; ccdsrc="$dir/ccd"
+    { [ -f "$hooks" ] && [ -f "$ccdsrc" ]; } \
+      || _ccrc_die "restamp: $f carries generated hook helpers, but its own tree lacks $hooks or $ccdsrc; restamp it from a full checkout (the tree holding both ccd/ and shared/). Nothing was written."
+    verdict="$(_restamp_hook_region "$hooks" "$f" "$ccdsrc")" || _ccrc_die "restamp: $f could not be read or written; restore it from git (git checkout -- $f), re-apply your edit, restamp again"
+    case "$verdict" in
+      regenerated) echo "restamp: $f: hook helpers regenerated"; return 0 ;;
+      current)     echo "restamp: $f: hook helpers already current"; return 0 ;;
+      refused-*)   _ccrc_die "restamp: $f: hook helpers refused (${verdict#refused-})" ;;
+    esac
+  fi
   verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync } from "node:fs"; import { writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -26838,41 +26901,10 @@ await writeFile(filePath, markGenerated(text));
 console.log("restamped");
 ' "$mark" "$f" 2>/dev/null)" || _ccrc_die "restamp: $f could not be read or written; it may be partly written — restore it from git (git checkout -- $f), re-apply your edit, restamp again"
   case "$verdict" in
-    restamped)       echo "restamp: $f: restamped" ;;
-    ccrc-unmodified) echo "restamp: $f: already current" ;;
+    restamped)       echo "restamp: $f: restamped"; _restamp_hook_note "$real" ;;
+    ccrc-unmodified) echo "restamp: $f: already current"; _restamp_hook_note "$real" ;;
     foreign)         _ccrc_die "restamp: $f carries no ccrc:generated marker — restamp re-stamps a generated file, it never adopts one" ;;
     *)               _ccrc_die "restamp: $f: unexpected verdict '$verdict'" ;;
-  esac
-}
-
-# THE LAUNCHD CLASS the server (or agent) job carries (macOS): the
-# first word of ~/.ccrc/launchd-class. `Background` — the default, and what
-# every box ran before this file — is launchd's lowest CPU and I/O class. On a
-# box saturated by other work it starves rather than slows: measured on a busy
-# fleet box, the server's own job took minutes to reach `listen` while a
-# hand-started copy answered /health in seconds, so every update's health gate
-# failed and restored, and the sessions (same class) ran behind everything
-# else. `Standard`, `Adaptive` or `Interactive` in the file changes it. A FILE,
-# not an env var and not ccrc.env, for `_rc_enabled`'s reasons: HOME is ccd's
-# only isolation boundary, ccrc.env carries tokens and a fleet box may have
-# none. OPERATOR-OWNED: nothing writes it. Absent or empty is Background; any
-# other word is named on stderr and reads as Background — each arm prints its
-# own literal, so nothing from the file can reach a plist. The server job and
-# the session plist writer (`_svc_write_session_plist`, inside the platform
-# block, in ccd and here) read it; ccd carries the same helper, byte for byte.
-# Deliberately OUTSIDE the platform block (no _svc_/_plat_ prefix) so the
-# block's line citations stay put; the writers call it behind `declare -F`.
-_launchd_class() {
-  local f="$HOME/.ccrc/launchd-class" v=""
-  if [ -r "$f" ]; then { IFS= read -r v || true; } < "$f"; fi
-  v="${v%$'\r'}"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%%[[:space:]]*}"
-  case "$v" in
-    ''|Background) printf 'Background' ;;
-    Standard)      printf 'Standard' ;;
-    Adaptive)      printf 'Adaptive' ;;
-    Interactive)   printf 'Interactive' ;;
-    *) printf "ccrc: %s names '%s', not Background, Standard, Adaptive or Interactive — using Background\n" "$f" "$v" >&2
-       printf 'Background' ;;
   esac
 }
 

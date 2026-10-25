@@ -19,7 +19,7 @@ const seedSession = (home: string, id: string, extra: Record<string, string> = {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
 };
 const mkCoord = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
-const dead = new Tmux(async () => ({ code: 1, stdout: '', stderr: '' }));
+const dead = new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' }));
 const NOW_S = 1784600000;
 
 /** One closed run naming `sessionId` as its worker. */

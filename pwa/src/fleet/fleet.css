@@ -2524,6 +2524,27 @@ button.proj-card-pool::before {
    is `--status-attention-text`, already declared and already priced by
    contrast-check.mjs — the amber warn register `.pr-warn` and
    `.program-start-warn` use, not a new pair. */
+/* D-6799: the run's spend, ONE line on its own wrapped row at every width. The
+   short half (dollars, output) always shows; the long half (input, cache) only
+   from 480px, where the row has the room - a 320px phone keeps a single line. */
+.run-row .run-spend {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding-bottom: var(--sp-1);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-secondary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+@media (max-width: 479px) {
+  .run-row .run-spend-long { display: none; }
+}
 .run-row .run-warn {
   flex: 1 0 100%;
   display: flex;

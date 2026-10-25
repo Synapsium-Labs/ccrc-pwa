@@ -16,7 +16,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { loadConfig } from '../src/config.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
-import { seedRoster, testDeps } from './helpers.js';
+import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { parseJournalLine } from '../src/coord/journalparse.js';
 import { ACTOR_CLASSES, corroboration, LC_ACT_UNKNOWN, LIFECYCLE_ACTS } from '../../shared/api.js';
@@ -78,7 +78,7 @@ const watcherFixture = async (cfg: FixtureCfg = {}) => {
 
   const calls: string[][] = [];
   const run = async (_cmd: string, args: string[]) => {
-    calls.push(args); return { code: 0, stdout: '', stderr: '' };
+    calls.push(args); return { ran: true as const, code: 0, stdout: '', stderr: '' };
   };
 
   /** Every `readdir` this sweep takes, in order — the evidence for the ordering
@@ -120,7 +120,7 @@ const watcherFixture = async (cfg: FixtureCfg = {}) => {
     : new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const bus = new Bus();
   const deps = { ...testDeps(home, run), cfg: cfgObj, io, ...(coord === undefined ? {} : { coord }) };
-  const watcher = new FleetWatcher(deps as never, bus, 10_000);
+  const watcher = new FleetWatcher(withFakeClock(deps as never), bus, 10_000);
 
   return {
     home, bus, watcher, coord, projectsRoot, hooks, cfgObj, deps: deps as never as ServerDeps,
@@ -1197,7 +1197,7 @@ describe('sweepDivergences feeds the build-9 arms from what it has already read'
     // to its own closing brace, never the next member's, so it cannot silently widen.
     // D-6114: keyed on the method's symbol (scan/symbols.ts), so the slice follows `sweepDivergences` wherever it
     // moves; a renamed or missing method throws by name.
-    const body = sourceOfSymbol(path.join(ccrcRoot, 'server/src/watch.ts'), 'FleetWatcher.sweepDivergences');
+    const body = sourceOfSymbol(path.join(ccrcRoot, 'server/src/watch.ts'), 'FleetWatcher.divergencesPass');
     expect(body.length, 'the slice collapsed — this assertion would pass vacuously')
       .toBeGreaterThan(2000);
     // D-1157 REWROTE THIS ASSERTION. It used to read

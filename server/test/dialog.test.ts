@@ -239,10 +239,10 @@ describe('FleetWatcher dialog detection', () => {
     seedSession(home, 'claude-a-project-f', 'claude-a');
     let pane = fixture('ask-user-question.txt');
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: pane, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: pane, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
@@ -287,12 +287,12 @@ describe('FleetWatcher hookstate wiring', () => {
     const uuid = '1'.repeat(36);
     seedSession(home, 'claude-a-project-f', 'claude-a'); // writes this same uuid
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
       // A plain prompt, never a menu — dialogPending below is earned SOLELY
       // by the hookstate file, not by the pane detector.
-      if (args[0] === 'capture-pane') return { code: 0, stdout: 'done\n❯ \n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: 'done\n❯ \n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     writeFileSync(path.join(cfg.registryDir, 'claude-a-project-f.hookstate.json'), JSON.stringify({
@@ -340,9 +340,9 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
     let degrade = false;
     const io = degradedReadIO((p) => degrade && p.endsWith(`${id}.uuid`));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
@@ -385,14 +385,14 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
 
     let degrade = false;
     const io = degradedReadIO((p) => degrade && p.endsWith(`${id}.wrapper`));
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
     const watcher = new FleetWatcher(deps, new Bus());
     // `sweepTasks` throttles itself to once per TASK_SWEEP_MS — reset the
     // clock before each call so this test can force a real re-sweep on its
     // own schedule rather than fake timers or a 10 s sleep.
     const forceSweep = async (): Promise<void> => {
-      (watcher as unknown as { lastTaskSweep: number }).lastTaskSweep = 0;
+      watcher.kick('tasks');
       await (watcher as unknown as { sweepTasks: () => Promise<void> }).sweepTasks();
     };
 
@@ -446,11 +446,11 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
       ...localIO,
       readdir: async (p) => (blind && p === dir ? null : localIO.readdir(p)),
     };
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
     const watcher = new FleetWatcher(deps, new Bus());
     const forceSweep = async (): Promise<void> => {
-      (watcher as unknown as { lastTaskSweep: number }).lastTaskSweep = 0;
+      watcher.kick('tasks');
       await (watcher as unknown as { sweepTasks: () => Promise<void> }).sweepTasks();
     };
 
@@ -504,9 +504,9 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
     let listable = true;
     const io: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
@@ -557,9 +557,9 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
     let listable = true;
     const io: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
@@ -598,14 +598,14 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
 
     let listable = true;
     const io: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
     const watcher = new FleetWatcher(deps, new Bus());
     // `sweepTasks` throttles itself to once per TASK_SWEEP_MS — reset the
     // clock before each call so this test can force a real re-sweep on its
     // own schedule (same idiom as the retain-don't-erase test above).
     const forceSweep = async (): Promise<void> => {
-      (watcher as unknown as { lastTaskSweep: number }).lastTaskSweep = 0;
+      watcher.kick('tasks');
       await (watcher as unknown as { sweepTasks: () => Promise<void> }).sweepTasks();
     };
 

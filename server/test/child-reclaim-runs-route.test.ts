@@ -51,7 +51,7 @@ const harness = async (): Promise<{ coord: CoordStore; watcher: FleetWatcher; ap
 const probedHarness = async () => {
   const home = mkTmp('ccrc-cr-route-');
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const exec = vi.fn<Runner>(async () => ({ code: 1, stdout: '', stderr: '' }));
+  const exec = vi.fn<Runner>(async () => ({ ran: true, code: 1, stdout: '', stderr: '' }));
   const base = testDeps(home, exec);
   const io = { ...localIO };
   const door = io as unknown as Record<string, (...a: unknown[]) => unknown>;

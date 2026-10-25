@@ -35,6 +35,11 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // up to two reads per close) — so every other coordination write can queue
   // behind one slow read for up to this long.
   'pr-state': 25_000,
+  // `pr-landing --project` makes at most THREE gh calls on its worst path: one GraphQL read (`PR_LANDING_GQL_TIMEOUT`)
+  // and two REST reads (`PR_LANDING_REST_TIMEOUT` each), the base's rules and protection, for ONE uncached base. Any
+  // further uncached base answers rules-unread that pass, so the count does not grow with the number of bases.
+  // `pr-timeout-budget.test.ts` sums them.
+  'pr-landing': 25_000,
   // Same reach as pr-state: it shells out to `git ls-remote` against origin
   // before it will rename. Without an entry it silently inherits the flat
   // 90 s, which is nine naming lanes' worth. It makes ONE network call, so it
@@ -178,8 +183,14 @@ function timeoutMsFor(cmd: string, args: string[]): number {
  *  ("measured: no signal") is a different fact from the key being missing ("an
  *  older agent, which measured nothing"), and only the spread keeps them apart. */
 function asExecResult(res: unknown): ExecResult {
-  const r = res as { code?: unknown; stdout?: unknown; stderr?: unknown; signal?: unknown };
+  const r = res as { code?: unknown; stdout?: unknown; stderr?: unknown; signal?: unknown; ran?: unknown; detail?: unknown };
+  // D-6840: an agent that says the exec never started (`ran: false`, a spawn error) is carried as the
+  // `spawn` arm; an agent that says nothing (older than the arm) ran it, as it always answered.
+  const base = r.ran === false
+    ? { ran: false as const, reason: 'spawn' as const, detail: typeof r.detail === 'string' ? r.detail : 'the exec never started' }
+    : { ran: true as const };
   return {
+    ...base,
     code: typeof r.code === 'number' ? r.code : 1,
     stdout: typeof r.stdout === 'string' ? r.stdout : '',
     stderr: typeof r.stderr === 'string' ? r.stderr : '',

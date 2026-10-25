@@ -33,10 +33,11 @@ export class LaneRunner {
       this.rows.set(r.name, r);
       // A lane starts due. A wall-clock lane has always started its stamp at 0; a monotonic clock reads small at
       // boot, so its stamp starts below any reading.
-      this.state.set(r.name, { stamp: r.clock === 'wall' ? 0 : Number.NEGATIVE_INFINITY, flight: null, again: null });
+      this.state.set(r.name, { stamp: this.neverRun(r), flight: null, again: null });
     }
   }
 
+  private neverRun(row: LaneRow): number { return row.clock === 'wall' && row.startsDue !== true ? 0 : Number.NEGATIVE_INFINITY; }
   private at(clock: LaneClock): number { return clock === 'mono' ? this.clocks.mono() : this.clocks.wall(); }
   private rowOf(name: string): LaneRow {
     const row = this.rows.get(name);
@@ -45,21 +46,28 @@ export class LaneRunner {
   }
   private stateOf(name: string): LaneSlot { this.rowOf(name); return this.state.get(name)!; }
 
-  /** Whether the lane's cadence has elapsed on its own clock (pure: it stamps and starts nothing). */
-  due(name: string): boolean {
+  /** Whether the lane's cadence has elapsed on its own clock (pure: it stamps and starts nothing). `active` picks the
+   *  row's second cadence where it has one (the PR sweep, while a check is pending); a row without one ignores it. */
+  due(name: string, active = false): boolean {
     const row = this.rowOf(name);
-    return this.at(row.clock) - this.stateOf(name).stamp >= row.cadenceMs;
+    const cadence = active && row.activeCadenceMs !== undefined ? row.activeCadenceMs : row.cadenceMs;
+    return this.at(row.clock) - this.stateOf(name).stamp >= cadence;
   }
 
   /** An on-demand run's stamp (`inventoryNow`, `serverCapsNow`): the next beat counts from here. */
   stamp(name: string): void { this.stateOf(name).stamp = this.at(this.rowOf(name).clock); }
 
   /** The next `run` is due, whatever the clock says (`childMarkLeftListing` for the lifecycle lane). */
-  kick(name: string): void { this.stateOf(name).stamp = this.rowOf(name).clock === 'wall' ? 0 : Number.NEGATIVE_INFINITY; }
+  kick(name: string): void { this.stateOf(name).stamp = this.neverRun(this.rowOf(name)); }
 
   /** The post-gather re-stamp on the decision clock: a gather slower than the cadence throttles the next beat from
-   *  the decision, not from the start. The lane's own pass counter stays the lane's. */
-  restamp(name: string): void { this.stamp(name); }
+   *  the decision, not from the start. The lane's own pass counter stays the lane's. `at` is the lane's own reading of
+   *  the row's clock, taken once for its decisions (child reclaim and the collector hand theirs in), so the stamp is
+   *  the very reading the pass decided on; without it the runner reads the clock again. */
+  restamp(name: string, at?: number): void {
+    if (at === undefined) this.stamp(name);
+    else this.stateOf(name).stamp = at;
+  }
 
   /** The run in flight, or null (the dead-coordinator seal reads it where it read a guard and a promise). */
   inFlight(name: string): Promise<unknown> | null { return this.stateOf(name).flight?.promise ?? null; }
@@ -74,9 +82,22 @@ export class LaneRunner {
 
   /** The beat: runs the lane when its cadence has elapsed, else answers null. A run in flight is joined, refused or
    *  overlapped as the row says. */
-  run<T>(name: string, fn: () => Promise<T> | T): Promise<T | undefined> | null {
-    if (!this.due(name)) return null;
+  run<T>(name: string, fn: () => Promise<T> | T, active = false): Promise<T | undefined> | null {
+    if (!this.due(name, active)) return null;
     return this.start(name, fn, false);
+  }
+
+  /** The beat of a lane that is synchronous and whose caller may hand in the clock reading (`sweepDigest(now)`, the
+   *  claim pair, the daily prune): when the cadence has elapsed at `now` (default: the row's clock), stamps at `now` and
+   *  runs `fn` to its end, returning true; else false. A throw leaves the slot spent and reaches the caller. */
+  runSync(name: string, fn: () => void, now?: number): boolean {
+    const row = this.rowOf(name);
+    const st = this.stateOf(name);
+    const at = now ?? this.at(row.clock);
+    if (!(at - st.stamp >= row.cadenceMs)) return false;
+    st.stamp = at;
+    fn();
+    return true;
   }
 
   /** An on-demand run (no cadence check): joins a run in flight on a `join` or `join-rerun` row, else starts one.
@@ -93,7 +114,7 @@ export class LaneRunner {
     const st = this.stateOf(name);
     const cur = st.flight;
     if (cur !== null) {
-      const stuck = row.flight === 'skip' && row.staleAfterMs !== undefined && this.at(row.clock) - cur.startedAt > row.staleAfterMs;
+      const stuck = row.flight === 'skip' && row.staleAfterMs !== undefined && this.at(row.clock) - cur.startedAt >= row.staleAfterMs;
       if (row.flight === 'join' || row.flight === 'join-rerun') return cur.promise as Promise<T>;
       if (row.flight === 'skip' && !stuck) return null;
     }

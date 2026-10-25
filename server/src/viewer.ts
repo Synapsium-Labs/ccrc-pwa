@@ -41,7 +41,7 @@ import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS } from '../../shared/api.js';
  * `isOpen` holds its own act for `PRESENCE_OPEN_TTL_MS` after the server
  * starts.
  */
-export class Presence {
+export class Viewers {
   private byToken = new Map<symbol, { id: string; at: number }>();
   /** The open claims (D-5242), one per connection token, beside the visible ones and never mixed with them. */
   private openByToken = new Map<symbol, { id: string; at: number }>();

@@ -17,7 +17,7 @@
 // nothing more: the rule reads the primary input, never the window (O1, O2), so a desktop narrowed to 390 stays
 // Instrument.
 //
-// Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/skin-default.browser.test.ts )`.
+// Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/skin-default.browser.test.ts )`.
 //
 // Chrome comes from `resolveChrome()` in `beforeAll`, which THROWS when neither `CCRC_CHROME` nor
 // `/usr/bin/google-chrome` is an executable file: a box without Chrome gives a red leg, never a skipped one.

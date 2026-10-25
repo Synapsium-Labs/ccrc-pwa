@@ -29,9 +29,11 @@ describe('the agent grant — ws-collect on its confirmation token, the audit on
   });
 
   it('ws-audit --collect needs NO grant of its own: it rides the existing --session prefix', () => {
-    // The orphan lane (D-6630) adds `--orphans` and `--orphan-hex`; the collector adds none — `--collect` rides `--session`.
+    // The orphan lane (D-6630) adds `--orphans` and `--orphan-hex`; the loose collect's two read-only audit modes
+    // (D-6626) are separate grants by name; the collector adds none — `--collect` rides `--session`.
     expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-audit')).toEqual([
       ['ws-audit', '--session'], ['ws-audit', '--orphans'], ['ws-audit', '--orphan-hex'],
+      ['ws-audit', '--collect-census'], ['ws-audit', '--loose-hex'],
     ]);
     expect(EXEC_WHITELIST.ccd.some((p) => p[0] === 'ws-audit' && (p as readonly string[]).includes('--collect'))).toBe(false);
     expect(isExecAllowed('ccd', [...CCD_ARGV.wsCollectAudit(ID)])).toBe(true);
@@ -64,9 +66,10 @@ describe('ONE LANE — the collector’s lane is the only server source that com
   });
 
   it('the builders and the token are named only where declared and by the lane’s files; the verb and its mode flag stand where they were', () => {
-    expect(holders(/\bwsCollect(?:Audit)?\b/), 'a reference to either builder: the declaration, and the lane’s executor').toEqual(['ccdargv.ts', 'coord/collectTempRoot.ts']);
+    expect(holders(/(?<!['"`])\bwsCollect(?:Audit)?\b/), 'a reference to either builder: the declaration, and the lane’s executor').toEqual(['ccdargv.ts', 'coord/collectTempRoot.ts']);
+    expect(holders(/\bccdCan\([^)]*['"`]wsCollect['"`]\)/), 'the executor and the pass ask the row by name, composing nothing (D-5866)').toEqual(['coord/collectTempRoot.ts', 'watch.ts']);
     expect(holders(/['"`]ws-collect['"`]/), 'the verb as a literal: the builder, and the budget row').toEqual(['ccdargv.ts', 'remote/runner.ts']);
     expect(holders(/['"`]--collect['"`]/), 'the audit mode flag').toEqual(['ccdargv.ts']);
-    expect(holders(/\bCOLLECT_CAP\b|['"`]collect-v1['"`]/), 'the capability token: declared, and asked by the executor and by the pass').toEqual(['ccdargv.ts', 'coord/collectTempRoot.ts', 'watch.ts']);
+    expect(holders(/\bCOLLECT_CAP\b|['"`]collect-v1['"`]/), 'the capability token: declared, and asked by the executor (the pass asks `ccdCan`’s row, above)').toEqual(['ccdargv.ts', 'coord/collectTempRoot.ts']);
   });
 });

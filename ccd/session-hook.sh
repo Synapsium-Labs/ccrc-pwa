@@ -3,19 +3,19 @@
 #
 # Runs on the HOT PATH of every tool call in every fleet session, so the
 # contract is absolute: exit 0 on every path, write atomically or not at
-# all, no network — and on the HOT PATH, no locks and no waiting. TWO declared
-# exceptions, both OFF the hot path and both in the compaction arms alone:
-# the helper's one hookstate-first, COMPACT_HELPER_TIMEOUT-bounded,
+# all, no network — and on the HOT PATH, no locks and no waiting. THREE declared exceptions, all OFF the hot path:
+# the first two in the compaction arms alone, the helper's one hookstate-first, COMPACT_HELPER_TIMEOUT-bounded,
 # locally resolved `timeout`/`gtimeout` deadline; and, since D-2605, the row's
 # permanent stable lock, taken with a bounded `flock -w` of COMPACT_LOCK_WAIT
 # (COMPACT_LOCK_WAIT_SERVE on compact SessionStart, the one acquisition a human
 # is waiting on) and never held across a fork the arm does not reap. A miss
-# publishes nothing; there is no unlocked fallback. Every OTHER event — every
+# publishes nothing; there is no unlocked fallback. The THIRD (D4, #757): the SessionStart arm's roster card, one
+# `_hook_timeout 4` server read (`ccrc-api runs list`) on compact, resume and clear of a non-child session, fail-open
+# (no roster line on any failure), made even when unarmed (shadow). Every OTHER event — every
 # PreToolUse, PostToolUse and Stop, which is where the hot path actually is —
 # still takes no lock and waits on nothing. A hook that can slow or break a
 # session is worse than no hook. Consumed read-only by the ccrc server via the agent
-# (whitelist: .cc-sessions is readable; nothing here needs a grant). Non-fleet
-# sessions (no tmux, foreign session name) exit silently.
+# (whitelist: .cc-sessions is readable; nothing here needs a grant). Non-fleet sessions (no tmux, foreign session name) exit silently.
 set -uo pipefail
 
 # ── epoch milliseconds, on two userlands ────────────────────────────────
@@ -26,18 +26,14 @@ set -uo pipefail
 # server reads a session's state from this file, so every session on the box
 # would read as unsupervised while looking perfectly healthy from the inside.
 #
-# `EPOCHREALTIME` is a bash builtin — no fork, no coreutils, same answer on
-# both platforms (measured against `date +%s%3N` on Linux, to the
-# millisecond). The separator is taken as either `.` or `,` because that field
-# is formatted with the locale's decimal point. BUT the builtin is bash 5.0+
-# and the declared floor is 4.4 — a 4.4 box takes the fallback, and on
-# BSD the bare fallback answers the exact non-number described above. So the
-# fallback VALIDATES, and degrades to whole seconds ×1000: millisecond
-# precision lost, THE WRITE KEPT — the one trade this file's contract allows.
-#
-# This is a LOCAL copy of ccd's `_plat_epoch_ms`, and deliberately so: this
-# file is installed on its own into ~/.cc-sessions and runs as Claude Code's
-# hook, with no ccd around to source. A test pins the two bodies identical.
+# This is a LOCAL copy of ccd's `_plat_epoch_ms`, GENERATED from it (ARCH-74) with
+# the three CCRC_* bounds below: this file is installed alone, with no ccd to
+# source, and ccd's comment says why the fallback validates and the write is kept.
+# Regenerate with `bash ccd/ccrc restamp ccd/session-hook.sh`;
+# hook-helpers-generated.test.ts fails on drift. Never edit between
+# the BEGIN and END lines by hand.
+# ── BEGIN GENERATED HOOK HELPERS (shared/hook-helpers.mjs; edit that, then regenerate) ──
+# ccrc:generated 1 sha256=0e823de72b94ef597ae7178f9be26de55df7d1080b03790c6b53dfa5056a0d51
 _hook_epoch_ms() {
   if [ -n "${EPOCHREALTIME:-}" ]; then
     local s="${EPOCHREALTIME%%[.,]*}" f="${EPOCHREALTIME#*[.,]}"
@@ -47,6 +43,10 @@ _hook_epoch_ms() {
   local t; t=$(date +%s%3N 2>/dev/null)
   if [[ "$t" =~ ^[0-9]{13,}$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
 }
+CCRC_PROJ_CLASS='A-Za-z0-9._-'
+CCRC_PROJ_MAX=64
+CCRC_ID_MAX=128
+# ── END GENERATED HOOK HELPERS ──
 
 _hook_timeout() {
   local bin
@@ -75,11 +75,11 @@ _hook_timeout() {
 # the file, after the hookstate rename lands (D-1689) — at most one line per
 # event, never both. Every failure path in any of them prints NOTHING; this
 # file's standing contract (exit 0 on every path, no network, and on the hot
-# path no locks and no waiting) is unchanged except the two declared
-# compaction-arm exceptions the header states — the hookstate-first bounded
-# helper wait, and D-2605's bounded stable-lock acquisition. Every read below
-# is a local file or a git ref.
-_hook_emit_context() {   # <standing> [<compact>] -> one JSON line on stdout, or nothing at all
+# path no locks and no waiting) is unchanged except the declared exceptions
+# the header states — the hookstate-first bounded helper wait, D-2605's bounded
+# stable-lock acquisition, and the roster card's one bounded server read. Every
+# other read below is a local file or a git ref.
+_hook_emit_context() {   # <standing> [<compact>] [<roster>, D4 #757, after both clips under ROSTER_CARD_MAX_CHARS] -> one JSON line on stdout, or nothing at all
   local j="" text=""
   # THE STANDING CLIP LIVES HERE, at the ONE site every subject passes through.
   # A per-subject clip is one each new subject can forget; this one cannot be.
@@ -96,7 +96,7 @@ _hook_emit_context() {   # <standing> [<compact>] -> one JSON line on stdout, or
   if [ -n "${2:-}" ]; then
     text="${text:+$text }${2:0:$COMPACT_CARD_MAX_CHARS}"
     text="${text:0:$CARD_TOTAL_MAX_CHARS}"
-  fi
+  fi; [ -z "${3:-}" ] || text="${text:+$text }${3:0:$ROSTER_CARD_MAX_CHARS}"
   # RETURNS 1 when the envelope could not be built — nothing was printed, and
   # the SessionStart arm must not stamp `served` for a card that never went
   # out. Every existing caller ignores the code, so nothing else changes.
@@ -2462,9 +2462,9 @@ CARD_MAX_CHARS=2400
 COMPACT_CARD_OFF="$HOME/.ccrc/compact-card-off"
 COMPACT_HELPER="$HOME/.cc-sessions/compact-card.mjs"
 COMPACT_CARD_MAX_CHARS=4000
-# DERIVED, NEVER A THIRD BUDGET. `CARD_MAX_CHARS` above stays the FIRST clip
-# and the standing subjects' whole ceiling — it is the only defence for the
-# ungated `GM_NODES` (D-1899) and must not move. The compact subject is
+# DERIVED, NEVER A THIRD BUDGET — save the D4 roster card, appended after this total under its own ROSTER_CARD_MAX_CHARS
+# (in the SessionStart arm); `session-hook.test.ts` pins all three summed under the spill. `CARD_MAX_CHARS` above stays the FIRST clip
+# and the standing subjects' whole ceiling — it is the only defence for the ungated `GM_NODES` (D-1899) and must not move. The compact subject is
 # appended AFTER that clip, under its own ceiling, and this is a pin on the SUM
 # the emitter may print: it cannot cut what the two clips admitted, and
 # `session-hook.test.ts` holds it under the harness's 10,000-char spill
@@ -2670,11 +2670,11 @@ COMPACT_SHAPE_PRED='(type=="object" and (.chars|type)=="number" and (.fences|typ
 # measurably false against the shipped test and told the next reader no
 # mechanism existed where one does.) Keeping the three `CCRC_PROJ_CLASS`
 # spellings in step is therefore a reading discipline only because nobody has
-# written that rule — not because no mechanism could express it; if you widen
-# one, widen the other two by hand.
-CCRC_PROJ_CLASS='A-Za-z0-9._-'
-CCRC_PROJ_MAX=64
-CCRC_ID_MAX=128
+# written that rule — not because no mechanism could express it. The constant
+# itself (with `CCRC_PROJ_MAX` and `CCRC_ID_MAX`) is GENERATED into the region
+# near the top of this file from `shared/hook-helpers.mjs` (ARCH-74); the other
+# two spellings are patterns it cannot expand into, so they stay by hand.
+# (The region also holds `_hook_epoch_ms`; see its BEGIN line near the top.)
 # `SUPERVISED_FRESH_MS` (`shared/api.ts`) in seconds — the same 120 s window
 # `_session_state`'s bash twin uses, tolerating 4 missed 30 s beats.
 CCRC_FRESH_S=120
@@ -3116,7 +3116,7 @@ case "$event" in
     # is `set -u`. An initialiser that lived only on the compact path would
     # make every other SessionStart die on an unbound variable — the worst
     # shape this file can fail in, since the server reads the state it writes.
-    CARD_GRAPH=""; CARD_HOLD=""; CARD_CCRC=""; CARD_COMPACT=""; CARD=""
+    CARD_GRAPH=""; CARD_HOLD=""; CARD_CCRC=""; CARD_COMPACT=""; CARD_ROSTER=""; CARD=""
     COMPACT_SERVE_FD=""; COMPACT_SERVE_NONCE=""
     # THE ROLE SUBJECT (manual-sessions-are-coordinators, D-5301; spec 2026-10-17 §8). Every session that is
     # not a dispatched child is its project's coordinator. THE ROLE IS DERIVED, NEVER MARKED: `.child` is
@@ -3140,11 +3140,49 @@ case "$event" in
       CARD_ROLE="ccrc-role: You are a coordinator for this project. For work worth splitting, run the \`ccrc-coordinator\` skill and dispatch; your children's questions and permission prompts come to you first; your own go to the operator."
       return 0
     }
+    # THE ROSTER CARD (D4, #757): a coordinator's open runs, re-read from the server and put back into its context on
+    # compact, resume and clear. DEFINED HERE, in the arm (D-5358 precedent): nothing new goes above the tail line
+    # (D-3615). The ONE server read in this file off the compaction arms (the header declares it): a single
+    # `_hook_timeout 4` call to `ccrc-api runs list`, fail-open — an unreachable or slow server, a missing binary or
+    # unparsable body yields no roster line at all, never an error and never a wait beyond 4 s. Its own ceiling,
+    # ROSTER_CARD_MAX_CHARS, is added to the emitter's worst case AFTER CARD_TOTAL_MAX_CHARS (a test pins the sum).
+    # Children and kill-switched sessions get nothing; a held coordinator still gets its roster. Unarmed (no `coordinator-roster-card-live` marker) it
+    # only appends the card to a size-capped shadow log the operator can read; armed, it sets CARD_ROSTER.
+    ROSTER_CARD_MAX_CHARS=2048
+    # The jq program: keeps this coordinator's non-terminal runs, one line each, then an "awaiting you" line, all
+    # clipped to $max (surplus runs collapse into a "+N more" line). Every interpolated field goes through `s`
+    # (strings: a safe charset, 40 chars) or `n` (integers: a non-number reads 0), so no server byte injects prose.
+ROSTER_PROGRAM='def s: tostring | gsub("[^A-Za-z0-9._:/-]"; "") | .[0:40]; def n: if type == "number" then floor else 0 end;
+      def age($t): (($now - $t) / 1000 | floor) as $x | if $x < 3600 then "\(($x / 60 | floor))m" elif $x < 172800 then "\(($x / 3600 | floor))h" else "\(($x / 86400 | floor))d" end; 
+      [.runs[]? | select(.claimedBy == $me and (.state | IN("done", "failed") | not))] as $r |
+      if ($r | length) == 0 then empty else [$r[] | "#\(.id | n) \(.program | s) w\(.wave | n)\(if .waveOf then "/\(.waveOf | n)" else "" end) \(.state | s) worker=\(.sessionId // "none" | s) \(age(.dispatchedAt // .openedAt)) unread=\(.unreadMail | n)"] as $l |
+        ([$r[] | select(.state == "awaiting-review") | "review #\(.id | n)"] + [$r[] | select((.health.mailParked | n) > 0) | "parked mail #\(.id | n) (\(.health.mailParked | n))"]) as $w |
+        ("awaiting you: " + (if ($w | length) > 0 then ($w | join("; ")) else "nothing" end)) as $f |
+        "ccrc-roster: \($r | length) open run(s) you claim; re-read with `~/.local/bin/ccrc-api runs list`." as $h |
+        (reduce $l[] as $x ({o: [], n: 0}; if ([$h] + .o + [$x, $f] | join("\n") | length) <= $max then .o += [$x] else .n += 1 end)) as $k |
+        ([$h] + $k.o + (if $k.n > 0 then ["+\($k.n) more open runs: ccrc-api runs list"] else [] end) + [$f]) | join("\n") end'
+    _hook_roster_card() {
+      local body="" card="" log="$HOME/.ccrc/roster-card-shadow.log"
+      CARD_ROSTER=""
+      [[ -z "$paid" && ( "$src" == compact || "$src" == resume || "$src" == clear ) ]] || return 0
+      [ -e "$CCRC_CARD_OFF" ] || [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ] && return 0
+      body=$(_hook_timeout 4 "$HOME/.local/bin/ccrc-api" runs list 2>/dev/null) || return 0
+      card=$(jq -r --arg me "$id" --argjson now "$(_hook_epoch_ms)" \
+        --argjson max $(( ROSTER_CARD_MAX_CHARS - 64 )) "$ROSTER_PROGRAM" <<<"$body" 2>/dev/null) || return 0
+      [ -n "$card" ] || return 0
+      if [ -e "$REG/coordinator-roster-card-live" ]; then
+        CARD_ROSTER="$card"
+      elif [ -z "$(find "$log" -size +256k 2>/dev/null)" ]; then
+        mkdir -p "${log%/*}" 2>/dev/null
+        printf '%s %s %s\n%s\n' "$(_hook_epoch_ms)" "$id" "$src" "$card" >> "$log" 2>/dev/null
+      fi
+      return 0
+    }
     CARD_ROLE=""
     _hook_graph_card || true
     _hook_hold_card  || true
     _hook_role_card  || true
-    _hook_ccrc_card  || true
+    _hook_ccrc_card  || true; _hook_roster_card || true
     # THE FOURTH SUBJECT, compact only (compaction-card spec §3.3): a card
     # describes the compacted context and nothing else, so startup, resume
     # and clear never read the file. It is passed to the emitter SEPARATELY —
@@ -3156,8 +3194,8 @@ case "$event" in
     [ -z "$CARD_CCRC" ] || CARD="${CARD:+$CARD }$CARD_CCRC"
     # The stamp follows the PRINT, never the intent: only an emitter that
     # returned 0 with a compact subject in hand records `served`.
-    if [ -n "$CARD$CARD_COMPACT" ]; then
-      if _hook_emit_context "$CARD" "$CARD_COMPACT" && [ -n "$CARD_COMPACT" ]; then _hook_compact_mark_served || true; fi
+    if [ -n "$CARD$CARD_COMPACT$CARD_ROSTER" ]; then
+      if _hook_emit_context "$CARD" "$CARD_COMPACT" "$CARD_ROSTER" && [ -n "$CARD_COMPACT" ]; then _hook_compact_mark_served || true; fi
     fi
     # THE RETAINED SERVE LOCK ENDS HERE, on every path through this arm — the
     # marker, when one was published, was the last act inside it.
@@ -4480,7 +4518,7 @@ def hbt($sep; $head; $tail): any(split($sep; null)[];
   ([match("^[\\s\\S]*(?=" + $tail + ")")] | if length == 0 then -1 else .[0].length end) as $last
   | $last >= 0 and (.[0:$last] | test($head)));
 def fmatch:
-  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "roll", "claude") as $v
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "roll", "claude") as $v
      | select(test(CCD + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; CCD + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "tmux(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\ttmux"),
@@ -4499,7 +4537,7 @@ def norm: gsub("\\\\\n"; "") | gsub("\\$(?=[" + $q + "\"])"; "") | gsub("\\\\(?<
 def EXP: "(?:\\$\\{[^}]*\\}|\\$\\([^)]*\\)|\\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`)";
 def EXPV: WB + EXP + SP + "+" + FLAGS;
 def xmatch:
-  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "roll", "claude") as $v
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "roll", "claude") as $v
      | select(test(EXPV + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
@@ -4731,6 +4769,111 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
   if [[ "$fbl" == y ]]; then
     freason="ccrc: this ${tool} call names a Fable model. Fable runs only when the operator selects it (operator ruling 2026-10-24; D-6792): a coordinator, a worker, an agent or a script never picks it. Use opus, sonnet or haiku for the agent's model instead, and leave the choice of Fable to the operator."
     if fjson=$(_hook_deny_json "$freason"); then pre_json=$fjson; fi
+  fi
+fi
+
+# A FAN-OUT NAMES ITS MODEL, AND A WORKFLOW AGENT ITS EFFORT TOO (D-6798; operator ruling 2026-10-24): on every session, an
+# Agent or Task call whose `tool_input` names no `model`, and a Workflow call whose script has an `agent(...)` call
+# naming no `model` or no `effort`, is denied, with a reason that sends the agent to the routing matrix. A call that names
+# nothing runs at the lane default, which is the spend this arm bounds. An accident guard, and it fails open like the arm
+# above: a payload jq cannot parse, an envelope that cannot be built, or a script it cannot read says nothing. Only an
+# Agent, Task or Workflow call forks a jq, so every other tool pays nothing.
+# A script is read as code: strings, template literals, regex literals and comments are skipped (an unbalanced quote means
+# unknown, and allows), so an `agent(` quoted in a prompt is no
+# call and the word `model` in a prompt is no option. An `agent(` call is denied only when its options are visible: no
+# second argument at all, or an inline `{...}` object (the first argument, or the one after the first top-level comma)
+# with no `model:` or no `effort:` key (shorthand `{ model, effort }` counts). Options held in a shared object or an
+# expression, or an inline object that spreads one, are unknown and allow. The script is `script`, else the file at
+# `scriptPath` (regular file, at most 256 KiB; missing, unreadable or larger allows). A saved workflow run by `name` is
+# not read.
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
+      && ( "${tool:-}" == Agent || "${tool:-}" == Task || "${tool:-}" == Workflow ) ]]; then
+  fosrc=""
+  if [[ "${tool:-}" == Workflow ]]; then
+    fopath=$(jq -r '.tool_input | if (.script | type) == "string" then "" elif (.scriptPath | type) == "string" then .scriptPath else "" end' <<<"$payload" 2>/dev/null) || fopath=""
+    if [[ -n "$fopath" && -f "$fopath" && -r "$fopath" && ! -L "$fopath" ]]; then
+      fosize=$(wc -c <"$fopath" 2>/dev/null) || fosize=""
+      fosize=${fosize//[[:space:]]/}
+      [[ "$fosize" =~ ^[0-9]+$ ]] && (( fosize <= 262144 )) && fosrc=$(cat -- "$fopath" 2>/dev/null) || fosrc=""
+    fi
+  fi
+  fo=""
+  # A Workflow call pays the character walk only when the word `agent` appears at all (a cheap test before the fork).
+  if [[ "${tool:-}" != Workflow || "$payload$fosrc" == *agent* ]]; then
+  fo=$(jq -r --arg file "$fosrc" '
+    def quote: . == "\"" or . == "\u0027" or . == "`";
+    def skipc($c; $i):
+      if $c[$i] == "/" and $c[$i + 1] == "/" then (first(range($i; $c | length) | select($c[.] == "\n")) // ($c | length))
+      elif $c[$i] == "/" and $c[$i + 1] == "*" then ((first(range($i + 2; ($c | length) - 1) | select($c[.] == "*" and $c[. + 1] == "/")) // ($c | length)) + 2)
+      elif $c[$i] == "/" and ((first(range($i - 1; -1; -1) | select(($c[.] | test("[[:space:]]")) | not)) // null) as $p | $p == null or ($c[$p] | test("[(,=:!&|?{;\\[]"))) then
+        (($c | length) as $n | {j: ($i + 1), k: false}
+         | until(.j >= $n or (.k | not) and $c[.j] == "/"; if $c[.j] == "\\" then .j += 2 elif $c[.j] == "[" then .k = true | .j += 1 elif $c[.j] == "]" then .k = false | .j += 1 else .j += 1 end)
+         | .j + 1)
+      else null end;
+    # Walk from $from; "comma" stops at the first top-level comma, "bal" at the close of the bracket opened at $from.
+    # The result is that index, or -1 when the enclosing bracket closes first or the text ends.
+    def scan($c; $from; $mode):
+      {i: $from, d: 0, q: null, r: null}
+      | until(.r != null or .i >= ($c | length);
+          $c[.i] as $ch
+          | if .q != null then
+              (if $ch == "\\" then .i += 2 elif $ch == .q then .q = null | .i += 1 else .i += 1 end)
+            elif skipc($c; .i) != null then .i = skipc($c; .i)
+            elif ($ch | quote) then .q = $ch | .i += 1
+            elif $ch == "(" or $ch == "[" or $ch == "{" then .d += 1 | .i += 1
+            elif $ch == ")" or $ch == "]" or $ch == "}" then
+              (if .d == 0 then .r = -1 else .d -= 1 | (if $mode == "bal" and .d == 0 then .r = .i else . end) | .i += 1 end)
+            elif $ch == "," and .d == 0 and $mode == "comma" then .r = .i
+            else .i += 1 end)
+      | .r // -9;
+    def isid: . != null and test("[A-Za-z0-9_.$]");
+    # The index just after the "(" of every agent( call outside a string or comment.
+    def calls($c):
+      {i: 0, q: null, h: []}
+      | until(.i >= ($c | length);
+          $c[.i] as $ch
+          | if .q != null then
+              (if $ch == "\\" then .i += 2 elif $ch == .q then .q = null | .i += 1 else .i += 1 end)
+            elif skipc($c; .i) != null then .i = skipc($c; .i)
+            elif ($ch | quote) then .q = $ch | .i += 1
+            elif $ch == "a" and ($c[.i:.i + 5] | join("")) == "agent" and ((.i > 0 and ($c[.i - 1] | isid)) | not) then
+              (first(range(.i + 5; $c | length) | select(($c[.] | test("[[:space:]]")) | not)) // null) as $j
+              | if $j != null and $c[$j] == "(" then .h += [$j + 1] | .i = $j + 1 else .i += 5 end
+            else .i += 1 end)
+      | if .q != null then [] else .h end;
+    def ws($c; $i): (first(range($i; $c | length) | select(($c[.] | test("[[:space:]]")) | not)) // ($c | length));
+    # "bad" when this call surely names no model or no effort, else "ok" (including every case that cannot be seen).
+    def judge($c; $h):
+      ws($c; $h) as $a
+      | (if $c[$a] == "{" then $a
+         else (scan($c; $h; "comma")) as $k
+           | if $k == -9 then -3 elif $k < 0 then (if $c[$a] == "." and $c[$a + 1] == "." then -3 else -2 end) else ws($c; $k + 1) as $b | (if $c[$b] == "{" then $b elif $c[$b] == ")" then -2 else -3 end) end
+         end) as $o
+      | if $o == -2 then "bad"
+        elif $o == -3 then "ok"
+        else scan($c; $o; "bal") as $e
+          | if $e < 0 then "ok"
+            else ($c[$o:$e + 1] | join("")) as $t
+              | if ($t | test("\\.\\.\\.")) then "ok"
+                elif ($t | test("(^|[^A-Za-z0-9_$])[\"\u0027`]?model[\"\u0027`]?[[:space:]]*[:,}]")) and (($t | test("(^|[^A-Za-z0-9_$])[\"\u0027`]?effort[\"\u0027`]?[[:space:]]*[:,}]")) or ($t | test("(^|[^A-Za-z0-9_$])[\"\u0027`]?model[\"\u0027`]?[[:space:]]*:[[:space:]]*[\"\u0027`](claude-)?haiku"))) then "ok"
+                else "bad" end
+            end
+        end;
+    .tool_input as $i
+    | if .tool_name == "Agent" or .tool_name == "Task" then
+        (if ($i | type) == "object" and (($i.model | type) != "string" or $i.model == "") then "agent" else "" end)
+      elif .tool_name == "Workflow" and ($i | type) == "object" then
+        (if ($i.script | type) == "string" then $i.script elif $file != "" then $file else null end) as $s
+        | if $s == null then ""
+          else ($s | split("")) as $c
+            | if any(calls($c)[]; judge($c; .) == "bad") then "workflow" else "" end
+          end
+      else "" end' <<<"$payload" 2>/dev/null) || fo=""
+  fi
+  if [[ "$fo" == agent || "$fo" == workflow ]]; then
+    if [[ "$fo" == agent ]]; then foname="names no model"; else foname="has an agent() call that names no model or no effort (a haiku call needs no effort)"; fi
+    foreason="ccrc: this ${tool} call ${foname}, so it would run at the lane default (operator ruling 2026-10-24; D-6798). Name them from the routing matrix: pass model (opus, sonnet or haiku) on an Agent or Task call, and model on every agent() call in a Workflow script, and effort too unless the model is haiku (haiku takes no effort level). Take the row for the work: a mechanical task is haiku or sonnet, judgement is opus."
+    if fojson=$(_hook_deny_json "$foreason"); then pre_json=$fojson; fi
   fi
 fi
 

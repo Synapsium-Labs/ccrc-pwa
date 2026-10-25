@@ -24,16 +24,16 @@ import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import {
   BACKLOG_HORIZON_MS, DEAD_GRACE_MS, FAILED_IDLE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS,
   FROZEN_NO_EVENT_MS, ORPHAN_PUSH_MS, STALL_FAILED_PREFIX, stallFailedSubject,
-  STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_ORPHANED_PREFIX, STALL_QUIET_MS, STALL_REPORT_PREFIX,
+  STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_ORPHANED_PREFIX, STALL_RESTARTED_PREFIX, STALL_QUIET_MS, STALL_REPORT_PREFIX,
   parseStallDetail, stallArmingOf, stallDetail, COORD_DEAF_MS, STALL_MARKERS, type StallArming,
 } from '../src/coord/stall.js';
 import { parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock, type StallBoxArming, type StallSettingsPatch } from '../src/coord/stallsettings.js';
 import type { PushPayload } from '../src/push.js';
 import { MAIL_REPLAY_MS, STALL_LEVELS, WAVE_DONE_SUBJECT, type FleetSession } from '../../shared/api.js';
 import { tmuxTarget } from '../../shared/tmux-target.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { callsIn, inlinedSourceOf, symbolOf } from './scan/symbols.js';
+import { callsIn, inlinedSourceOf, parsedFile, symbolOf } from './scan/symbols.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER, mailTurnModeOf } from '../src/turnidle.js';
 
@@ -168,27 +168,27 @@ const countingIO = (sink: string[]): FleetIO => ({
 });
 
 /** `panes` is the scripted `list-panes` answer, mutable so a case can take the pane pid away and give it back. */
-interface Harness { home: string; calls: string[][]; run: Runner; panes: { code: number; stdout: string } }
+interface Harness { home: string; calls: string[][]; run: Runner; panes: { ran: true, code: number; stdout: string } }
 
 const harness = (): Harness => {
   const home = mkTmp('ccrc-stall-sweep-');
   // Empty but LISTABLE before priming, or `tick()` fails shut and never sets `primed` (mail-sweep.test.ts).
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   const calls: string[][] = [];
-  const panes = { code: 0, stdout: `${PID}\n` };
+  const panes = { ran: true as const, code: 0, stdout: `${PID}\n` };
   const run: Runner = async (_cmd, args) => {
     calls.push([...args]);
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: panes.code, stdout: panes.stdout, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: '❯ \n', stderr: '' };
-    return { code: 1, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true as const, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true as const, code: panes.code, stdout: panes.stdout, stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true as const, code: 0, stdout: '❯ \n', stderr: '' };
+    return { ran: true as const, code: 1, stdout: '', stderr: '' };
   };
   return { home, calls, run, panes };
 };
 
 const primedWatcher = async (h: Harness, coord: CoordStore, over: Partial<Deps> = {}): Promise<FleetWatcher> => {
   const deps: Deps = { ...testDeps(h.home, h.run), coord, ...over };
-  const w = new FleetWatcher(deps, new Bus(), 2000, path.join(h.home, 'state-cache.json'));
+  const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000, path.join(h.home, 'state-cache.json'));
   await w.tick();
   return w;
 };
@@ -272,7 +272,7 @@ describe('sweepStalls: gating', () => {
   it('does nothing before the watcher is primed, and judges once it is', async () => {
     const h = harness();
     const coord = store(h.home);
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run), coord }, new Bus(), 2000, path.join(h.home, 'state-cache.json'));
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), coord }), new Bus(), 2000, path.join(h.home, 'state-cache.json'));
     seedRegistry(h.home, WORKER);
     seedLiveState(h.home);
     const runId = seedRun(coord, { program: 'demo-program' });
@@ -326,7 +326,7 @@ describe('sweepStalls: gating', () => {
   it('does nothing, and warns nothing, without a coordination store', async () => {
     const h = harness();
     const reads: string[] = [];
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run), io: countingIO(reads) }, new Bus(), 2000, path.join(h.home, 'state-cache.json'));
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), io: countingIO(reads) }), new Bus(), 2000, path.join(h.home, 'state-cache.json'));
     await w.tick();
     seedRegistry(h.home, WORKER);
     seedLiveState(h.home);
@@ -939,7 +939,7 @@ describe('sweepStalls: wiring', () => {
     expect(lane).toBeGreaterThan(claims);
     expect(primed).toBeGreaterThan(lane);
     expect(src.match(/setInterval\(/g)).toHaveLength(2); expect(callsIn(symbolOf('server/src/watch.ts', 'createDelegationStallSampler')).filter((c) => c.callee === 'LANE_TIMERS.setInterval'), 'the lane sampler, by name').toHaveLength(1);   // D-5832: the tick's, and the delegation lane's stall sampler by name (unref'd; only tests call the lane's close(), so in production it lives for the process)
-    expect(src).toContain('export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;');
+    expect(parsedFile('server/src/laneSchedule.ts').bindings.filter((b) => b.name === 'STALL_SWEEP_MS').map((b) => b.init), 'the cadence now lives in the lane table, by reference (D-5862)').toEqual(['CLAIM_SWEEP_MS']);
   });
 });
 
@@ -1399,9 +1399,69 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     at(D_AT + ORPHAN_PUSH_MS + STALL_SWEEP_MS);
     await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
     expect(sent.map((p) => p.tag)).toEqual([`orphaned-${WORKER}-${RESTART_AT}`]);
+    // D5 (#759): the restarted arm told the worker and its coordinator at the first sweep (both rungs together), before orphan D's idle wait ran out.
     expect(stallRows(coord, runId)).toEqual([
+      stallDetail('live', 'restarted', 1, RESTART_AT), stallDetail('live', 'restarted', 2, RESTART_AT),
       stallDetail('live', 'orphan-d', 1, RESTART_AT), stallDetail('live', 'orphan-d', 2, RESTART_AT),
     ]);
+  });
+
+  const restartedTo = (coord: CoordStore, id: string): MailRow[] =>
+    operatorMail(coord).filter((m) => m.toId === id && m.subject.startsWith(STALL_RESTARTED_PREFIX));
+
+  it('D5: a run worker restarted over lost background tasks is told at once, and its coordinator hears once (restarted, armed)', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    const runId = seedRun(coord, { program: 'demo-program' });
+    seedCaseD(h.home, WORKER, UUID);
+    at(RESTART_AT + 2 * 60_000);                      // two minutes after the restart: far short of ORPHAN_D_IDLE_MS
+    for (let i = 0; i < 3; i++) {
+      await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+      at(RESTART_AT + 2 * 60_000 + (i + 1) * STALL_SWEEP_MS);
+    }
+    expect(restartedTo(coord, WORKER)).toHaveLength(1);
+    expect(restartedTo(coord, COORD)).toHaveLength(1);
+    expect(orphanedTo(coord, WORKER), 'orphan D is still waiting out its idle time').toEqual([]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'restarted', 1, RESTART_AT), stallDetail('live', 'restarted', 2, RESTART_AT)]);
+  });
+
+  it('D5: the coordinator still hears once when the worker takes a turn on its notice before the next sweep', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    seedRun(coord, { program: 'demo-program' });
+    seedCaseD(h.home, WORKER, UUID);
+    at(RESTART_AT + 2 * 60_000);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    // The mail lane types the notice in; the worker's turn starts (marker working), then ends (done, stop after the restart).
+    seedTurnMark(h.home, WORKER, {
+      sessionId: UUID, event: 'UserPromptSubmit', at: RESTART_AT + 3 * 60_000, turnAt: RESTART_AT + 3 * 60_000,
+      stopAt: RESTART_AT - 600_000, restartAt: RESTART_AT, lostBg: 0, lostKinds: '', lostIds: '',
+    });
+    at(RESTART_AT + 2 * 60_000 + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    seedTurnMark(h.home, WORKER, {
+      sessionId: UUID, event: 'Stop', at: RESTART_AT + 5 * 60_000, turnAt: RESTART_AT + 3 * 60_000,
+      stopAt: RESTART_AT + 5 * 60_000, restartAt: RESTART_AT, lostBg: 0, lostKinds: '', lostIds: '',
+    });
+    at(RESTART_AT + 2 * 60_000 + 2 * STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    expect(restartedTo(coord, WORKER)).toHaveLength(1);
+    expect(restartedTo(coord, COORD)).toHaveLength(1);
+  });
+
+  it('D5: dark, the restarted arm records shadow rows for the operator to read and sends no mail', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    const runId = seedRun(coord, { program: 'demo-program' });
+    seedCaseD(h.home, WORKER, UUID);
+    at(RESTART_AT + 2 * 60_000);
+    for (let i = 0; i < 3; i++) {
+      await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
+      at(RESTART_AT + 2 * 60_000 + (i + 1) * STALL_SWEEP_MS);
+    }
+    expect(restartedTo(coord, WORKER)).toEqual([]);
+    expect(restartedTo(coord, COORD)).toEqual([]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('shadow', 'restarted', 1, RESTART_AT), stallDetail('shadow', 'restarted', 2, RESTART_AT)]);
   });
 
   it('a coordinator\'s repeated failure stays a repeat after its prior failed: mail leaves the 24 h read (failed-arm-bounded-by-the-mail-horizon (D-3752))', async () => {

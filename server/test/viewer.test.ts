@@ -7,7 +7,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
-import { Presence } from '../src/presence.js';
+import { Viewers } from '../src/viewer.js';
 import { buildServer, type Deps } from '../src/server.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
@@ -26,7 +26,7 @@ const MIN = 60 * SEC;
 
 const clocked = () => {
   const c = { t: T0 };
-  return { c, p: new Presence(() => c.t) };
+  return { c, p: new Viewers(() => c.t) };
 };
 
 describe('PRESENCE_OPEN_TTL_MS', () => {
@@ -172,17 +172,17 @@ describe('/ws/session/:id keeps the open claim', () => {
   let app: FastifyInstance | undefined;
   let port: number;
   const clock = { t: T0 };
-  let presence: Presence;
+  let viewers: Viewers;
 
   beforeEach(async () => {
     home = mkTmp('ccrc-presence-');
     seedRoster(home);
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
-    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     clock.t = T0;
-    presence = new Presence(() => clock.t);
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), presence };
+    viewers = new Viewers(() => clock.t);
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), viewers };
     app = await buildServer(deps, new Bus());
     await app.listen({ host: '127.0.0.1', port: 0 });
     const addr = app.server.address();
@@ -211,8 +211,8 @@ describe('/ws/session/:id keeps the open claim', () => {
   it('connecting opens the claim, with no frame sent', async () => {
     const ws = await open();
     try {
-      await until(() => presence.isOpen(ID), 'the open claim at connect');
-      expect(presence.isVisible(ID)).toBe(false);
+      await until(() => viewers.isOpen(ID), 'the open claim at connect');
+      expect(viewers.isVisible(ID)).toBe(false);
     } finally {
       ws.close();
     }
@@ -221,14 +221,14 @@ describe('/ws/session/:id keeps the open claim', () => {
   it('a hidden frame re-stamps the open claim and sets no visible one', async () => {
     const ws = await open();
     try {
-      await until(() => presence.isOpen(ID), 'the open claim at connect');
+      await until(() => viewers.isOpen(ID), 'the open claim at connect');
       clock.t = T0 + 9 * MIN;
       ws.send(JSON.stringify({ type: 'visible', visible: false }));
       // Let the frame land, then move past the connect stamp's TTL: only the frame's stamp can keep it open.
       await new Promise((r) => setTimeout(r, 100));
       clock.t = T0 + 18 * MIN;
-      expect(presence.isOpen(ID)).toBe(true);
-      expect(presence.isVisible(ID)).toBe(false);
+      expect(viewers.isOpen(ID)).toBe(true);
+      expect(viewers.isVisible(ID)).toBe(false);
     } finally {
       ws.close();
     }
@@ -237,12 +237,12 @@ describe('/ws/session/:id keeps the open claim', () => {
   it('a frame that fails to parse still re-stamps the open claim: it proves the socket alive', async () => {
     const ws = await open();
     try {
-      await until(() => presence.isOpen(ID), 'the open claim at connect');
+      await until(() => viewers.isOpen(ID), 'the open claim at connect');
       clock.t = T0 + 9 * MIN;
       ws.send('not json');
       await new Promise((r) => setTimeout(r, 100));
       clock.t = T0 + 18 * MIN;
-      expect(presence.isOpen(ID)).toBe(true);
+      expect(viewers.isOpen(ID)).toBe(true);
     } finally {
       ws.close();
     }
@@ -251,9 +251,9 @@ describe('/ws/session/:id keeps the open claim', () => {
   it('closing the socket drops both claims at once', async () => {
     const ws = await open();
     ws.send(JSON.stringify({ type: 'visible', visible: true }));
-    await until(() => presence.isVisible(ID), 'the visible claim');
-    expect(presence.isOpen(ID)).toBe(true);
+    await until(() => viewers.isVisible(ID), 'the visible claim');
+    expect(viewers.isOpen(ID)).toBe(true);
     ws.close();
-    await until(() => !presence.isOpen(ID) && !presence.isVisible(ID), 'both claims dropped at close');
+    await until(() => !viewers.isOpen(ID) && !viewers.isVisible(ID), 'both claims dropped at close');
   });
 });

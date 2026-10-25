@@ -1865,7 +1865,7 @@ describe('ccrc doctor: transcripts', () => {
   });
 
   it('finds the transcript through the RAW spelling when the workdir is reached through a symlink and the resolved munge has nothing (cross-task hazard, Task 6 review)', () => {
-    // `_transcript_path` and `_ci_transcript_path` (ccd/ccd) both try the
+    // `_transcript_path` and `_ci_addrs`/`_ci_extant` (ccd/ccd) both try the
     // REALPATH-resolved munge FIRST and the raw munge SECOND, because Claude
     // Code munges its own physical cwd while the registry keeps the path ccd
     // wrote. A doctor that only tried the raw spelling — or only the resolved

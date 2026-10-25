@@ -3,6 +3,7 @@ import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import { redactCommand } from './redact.js';
+import { REVIEW_CAP_SUMMARY_MAX, reviewCapRefuses, type LastReviewReport } from './reviewcap.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { decideAllocation } from './ledger.js';
@@ -18,7 +19,7 @@ import type { StallDeliveryRow, StallMailRow, StallReadFailure, StallRunRow, Sta
 // The drift decider's row shapes (D-5921) are declared by their consumer, the L1 `drift.ts`; the `drift*` reads below
 // implement them. `parseStallDetail` is the one reader of a stall observation's detail, so `driftOpenRuns` never
 // counts one as an act.
-import type { DriftAskRow, DriftDeliveryRow, DriftReviewRow, DriftRunRow } from './drift.js';
+import type { DriftAskRow, DriftDeliveryRow, DriftFindingRow, DriftReviewRow, DriftRunRow } from './drift.js';
 import { parseStallDetail } from './stall.js';
 // Stall watch settings (design 2026-10-05 §8, §11): the settings row's port and the notice-count row are declared by
 // their consumer, the L1 `stallsettings.ts`; the insert arm starts from its seed, and the no-op skip asks its compare.
@@ -69,12 +70,13 @@ import {
 } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
+import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
 import {
   DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
 } from '../deadCoordinator.js';
 import {
-  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
+  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES, REVIEW_DONE_SUBJECT,
   isAskReleaseReason, isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
   isLifecycleOutcome,
   isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunKind, isRunState,
@@ -124,7 +126,7 @@ import {
   type UpdateChannel,
   type BusyUpdateState, type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type RequestKind,
   type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
-  type AutoMode, type NotifyMode,
+  type AutoMode, type NotifyMode, type DriftFinding, isDriftKind,
   type WorkItemState,
 } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
@@ -217,7 +219,7 @@ type HoldReasonRefusal = Extract<HoldReasonVerdict, { ok: false }>;
 
 export type OpenRunResult =
   | { id: number; program: string; state: RunState; holdReason: string }
-  | { refused: 'claimed-by-another' | 'review-in-flight'; by: string }
+  | { refused: 'claimed-by-another' | 'review-in-flight' | 'cap-review-rounds'; by: string }
   | HoldReasonRefusal;
 
 /** A fresh run's exact id is known only after its INSERT. Throwing this private
@@ -958,6 +960,9 @@ const persistedInt = (text: string, column: string): PersistedInt => {
 
 /** The drift reads' answer (D-5921): the rows, or a read that failed, with its detail. */
 export type DriftReadResult<T> = { ok: true; rows: T[] } | { ok: false; detail: string };
+/** The findings table's read: `unknownKinds` names the stored kinds this build skipped (see `readDriftRows`). */
+export type DriftFindingsRead =
+  | { ok: true; rows: DriftFindingRow[]; unknownKinds: readonly string[] } | { ok: false; detail: string };
 
 /** A drift read's integer, proven: a non-negative safe integer, or the read fails naming the column (no value). */
 const driftInt = (v: unknown, column: string): number => {
@@ -1080,6 +1085,20 @@ interface MeasuredRunRow { row: RunRowDb; nums: RunNumbers }
  * `TERMINAL_DELIVERY_SQL` below cannot disagree about a state either names.
  */
 const OUTSTANDING_STATES_SQL = `('${OUTSTANDING_DELIVERY_STATES.join("','")}')`;
+
+/** D-6777: THE ACK DOOR'S GUARD, spelled once. A delivery is ackable when its
+ *  state is not terminal, or when it is exactly the replay-ceiling park
+ *  (orchestrator ruling I2(b)): `state = 'rejected'`, `rejectCode =
+ *  'undeliverable'` and `lastError` equal to `MAIL_REPLAY_CEILING_ERROR`. The
+ *  write (`writeDeliveries`' `'ack'` arm) has no table alias and the inbox read
+ *  has `d`, so this is one builder: `prefix` is `''` for the write and `'d.'`
+ *  for the read. The guard reads no run, so it admits a replay-ceiling park
+ *  whatever its run's state; `inboxFor` ANDs the read predicate to hide the
+ *  closed-run ones. Returns the SQL and its one bound argument. */
+const ackableDeliverySql = (prefix: string): { sql: string; args: readonly string[] } => ({
+  sql: `(${prefix}state NOT IN ${TERMINAL_DELIVERY_SQL} OR (${prefix}state = 'rejected' AND ${prefix}rejectCode = 'undeliverable' AND ${prefix}lastError = ?))`,
+  args: [MAIL_REPLAY_CEILING_ERROR],
+});
 
 /** The WRITE-side complement of `OUTSTANDING_STATES_SQL` above, built from L0's
  *  `TERMINAL_DELIVERY_STATES` by the same `.join` interpolation
@@ -1249,13 +1268,10 @@ const placeholders = (n: number): string => new Array(n).fill('?').join(',');
  *  positionally through `placeholders`, never interpolated. */
 const LIFECYCLE_WINDOW_ACTS = ['swap', 'hold', 'release'] as const;
 
-/** The replay-ceiling park's own `lastError`, written by exactly one call
- *  site (`watch.ts`'s `sweepMail`, `store.rejectDelivery(d.id, 'undeliverable',
- *  MAIL_REPLAY_CEILING_ERROR)`) and read back by exactly one other
- *  (`markAcked` below, deviation D-67-b / orchestrator ruling I2): a shared
- *  constant rather than the same string literal typed twice, so the two can
- *  never drift apart and silently stop recognising each other's writes. */
-export const MAIL_REPLAY_CEILING_ERROR = 'replayed without ack past the replay ceiling';
+/** The replay-ceiling park's own `lastError`: defined in `coord/delivery.ts`, beside `decideReplayCeiling`, its one
+ *  writer (ARCH-19), and read back by exactly one other (`markAcked` below, deviation D-67-b / orchestrator ruling I2).
+ *  Re-exported for the readers that import it from this module. */
+export { MAIL_REPLAY_CEILING_ERROR };
 
 /** `cancelOutstandingDeliveries`'s own park sentence, promoted to a constant on
  *  `MAIL_REPLAY_CEILING_ERROR`'s exact argument (D-1143). It was already typed
@@ -1359,7 +1375,7 @@ const ABANDONED_PARK_SQL =
  * The READ-side "still needs a human's attention" predicate (fix, review
  * finding 2) — `OUTSTANDING_STATES_SQL` above, unioned with a `rejected`
  * delivery THIS BUILD gave up retrying before anyone ever acted on it: the
- * replay-ceiling park (`watch.ts`'s `MAIL_REPLAY_MAX_ATTEMPTS`), a delivery
+ * replay-ceiling park (`coord/delivery.ts`'s `MAIL_REPLAY_MAX_ATTEMPTS`), a delivery
  * that never sent at all past `MAIL_MAX_ATTEMPTS`, or a recipient the
  * registry no longer lists. `renderEnvelope`'s own ack line promises
  * replay "until you ack" — true only up to that ceiling, never past it —
@@ -1822,6 +1838,11 @@ export class CoordStore {
         if (input.kind === 'review') {
           const inflight = this.reviewInFlightFor(input.reviews ?? -1);
           if (inflight !== null) return { refused: 'review-in-flight' as const, by: String(inflight) };
+          // D-6795: the Nth+1 round is refused unless the operator lifted the cap for this work run. `by` is the count.
+          const rounds = this.reviewRounds(input.reviews ?? -1);
+          if (reviewCapRefuses(rounds, this.reviewCapLifted(input.reviews ?? -1))) {
+            return { refused: 'cap-review-rounds' as const, by: String(rounds) };
+          }
         }
         const now = Date.now();
         this.db.prepare(
@@ -2288,7 +2309,7 @@ export class CoordStore {
    * the narrow side (`dueDeliveries`) that does not use the constant at all, and
    * omitted `runHealth`, which is the single reader whose OUTPUT this arm moves.
    *
-   * On the composed `OUTSTANDING_OR_ABANDONED_SQL` — four readers:
+   * On the composed `OUTSTANDING_OR_ABANDONED_SQL` — four readers, plus the mail inbox's two (D-6777):
    *   `outstandingMailFor(<heir>)` — the point. Reached from `GET /api/mail?to=`
    *     and from `sessionws.ts`'s `checkMail`, so the heir's live socket shows
    *     it with no wire change.
@@ -2307,6 +2328,10 @@ export class CoordStore {
    *     `OUTSTANDING_OR_ABANDONED_SQL`'s `COALESCE(rr.state, '')` reads a
    *     non-NULL state on every row it can select. It is `GET
    *     /api/mail?program=`'s default, non-`all`, arm.
+   *   `inboxFor(<id>)` and `abandonedCount(<id>)` (mail inbox, D-6777) — read-only
+   *     and keyed on the CALLER's own id, never an heir's: they join `runs rr`
+   *     LEFT exactly as `outstandingMailFor` does and move no row, so the re-queue
+   *     cannot reach them any way it cannot reach `outstandingMailFor`.
    *
    * On the narrower `OUTSTANDING_STATES_SQL` — the holders below, in file order
    * (the count is the scan's, not this list's):
@@ -3374,6 +3399,31 @@ export class CoordStore {
     return { ok: true, siblings };
   }
 
+  /** D-6639: the newest activity the SERVER holds of a child, for the stale arm's idle test. `runAt` is the newest
+   *  `run_events.at` of the minting run or of any run naming the session; `mailAt` the newest mail to or from the
+   *  session and the newest delivery or ack to it. `null`: that kind never happened. Any read that fails answers
+   *  `ok: false`, never a `null` (an unread table is not an idle one). */
+  childStaleActivity(sessionId: string, mintingRunId: number):
+    { readonly ok: true; readonly runAt: number | null; readonly mailAt: number | null }
+    | { readonly ok: false; readonly detail: string } {
+    try {
+      const t = (sql: string, ...args: (string | number)[]): number | null => {
+        const row = this.db.prepare(sql).get(...args) as Record<string, unknown> | undefined;
+        const v = Object.values(row ?? {}).filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
+        return v.length === 0 ? null : Math.max(...v);
+      };
+      const runAt = t('SELECT MAX(at) AS t FROM run_events WHERE runId = ? OR runId IN (SELECT id FROM runs WHERE sessionId = ?)',
+        mintingRunId, sessionId);
+      const mails = [
+        t('SELECT MAX(at) AS t FROM mail WHERE fromId = ? OR toId = ?', sessionId, sessionId),
+        t('SELECT MAX(deliveredAt) AS d, MAX(ackedAt) AS a FROM mail_deliveries WHERE toId = ?', sessionId),
+      ].filter((x): x is number => x !== null);
+      return { ok: true, runAt, mailAt: mails.length === 0 ? null : Math.max(...mails) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   /** `openRunsForSession`'s shape, with its `state NOT IN …` filter REMOVED
    *  (child-reclamation wave 4, spec §5.7's "no hold" conjunct): every run
    *  naming `sessionId`, in ANY state, TERMINAL included. `openRunsForSession`
@@ -4145,6 +4195,61 @@ export class CoordStore {
     return isPositiveDecimalSafeInteger(id) ? id : null;
   }
 
+  /** D-6795: how many review runs name this work run, in any state (a failed or abandoned round still spent one). */
+  reviewRounds(workRunId: number): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE kind = 'review' AND reviews = ?")
+      .get(workRunId) as { n: number };
+    return Number(row.n);
+  }
+
+  /** D-6795: whether the operator lifted the review-round cap for this work run. */
+  reviewCapLifted(workRunId: number): boolean {
+    const row = this.db.prepare('SELECT liftedAt FROM review_cap WHERE workRunId = ?')
+      .get(workRunId) as { liftedAt: number | null } | undefined;
+    return row !== undefined && row.liftedAt !== null;
+  }
+
+  /** D-6795: record that the cap's ask is raised. True exactly once per work run: the insert that creates the row is
+   *  the raise, so a second refusal (or a restart) finds the row and raises nothing. */
+  raiseReviewCapAsk(workRunId: number, now: number): boolean {
+    const res = this.db.prepare('INSERT OR IGNORE INTO review_cap (workRunId, askedAt, liftedAt) VALUES (?, ?, NULL)')
+      .run(workRunId, now);
+    return Number(res.changes) === 1;
+  }
+
+  /** D-6795: the operator's lift, per work run. Idempotent; false when the run is not a work run on file. */
+  liftReviewCap(workRunId: number, now: number): boolean {
+    const run = this.db.prepare("SELECT 1 AS x FROM runs WHERE id = ? AND kind = 'work'").get(workRunId);
+    if (run === undefined) return false;
+    this.db.prepare(
+      'INSERT INTO review_cap (workRunId, askedAt, liftedAt) VALUES (?, NULL, ?) '
+      + 'ON CONFLICT(workRunId) DO UPDATE SET liftedAt = COALESCE(liftedAt, excluded.liftedAt)',
+    ).run(workRunId, now);
+    return true;
+  }
+
+  /** D-6795: the newest `review-done` mail of a review run naming this work run: its run, the paragraph after the
+   *  fingerprint line, and the first artifact (the report's path). Nulls when no review has reported. */
+  lastReviewReport(workRunId: number): LastReviewReport {
+    const row = this.db.prepare(
+      "SELECT m.runId AS runId, m.body AS body, m.artifacts AS artifacts FROM mail m JOIN runs r ON r.id = m.runId "
+      + "WHERE r.kind = 'review' AND r.reviews = ? AND m.subject = ? ORDER BY m.id DESC LIMIT 1",
+    ).get(workRunId, REVIEW_DONE_SUBJECT) as { runId: number; body: string; artifacts: string } | undefined;
+    if (row === undefined) return { reviewRunId: null, summary: null, report: null };
+    const nl = row.body.indexOf('\n');
+    const text = (nl < 0 ? '' : row.body.slice(nl + 1)).trim();
+    let report: string | null = null;
+    try {
+      const a: unknown = JSON.parse(row.artifacts);
+      if (Array.isArray(a) && typeof a[0] === 'string') report = a[0];
+    } catch { /* an unreadable list names no report */ }
+    return {
+      reviewRunId: Number(row.runId),
+      summary: text === '' ? null : redactCommand(text).slice(0, REVIEW_CAP_SUMMARY_MAX),
+      report,
+    };
+  }
+
   programs(): { slug: string; title: string; state: ProgramState }[] {
     const rows = this.db.prepare('SELECT slug, title, state FROM programs ORDER BY slug')
       .all() as { slug: string; title: string; state: string }[];
@@ -4756,6 +4861,118 @@ export class CoordStore {
     }
   }
 
+  // ── the drift reconciler's table (coordinator-durability tail spec §4.3, D-5922) ──────────────────────────
+  // Three writers, one module: `recordDriftPass`, `markDriftPushed` and `markDriftShadowed`. A finding clears ONLY
+  // because a later pass measured the fact gone. The reads are result unions, never an overloaded null.
+
+  /** One pass, one transaction: upsert every found key (`lastSeenAt = now`; `firstSeenAt`, `pushedAt` and `shadowAt`
+   *  kept; a key returning after a clear is re-opened and keeps its stamps), clear every open key not found, and prune
+   *  rows cleared more than 30 days ago. `detail` passes `redactCommand` here, the one door in. */
+  recordDriftPass(findings: readonly DriftFinding[], now: number): void {
+    tx(this.db, () => {
+      const up = this.db.prepare(
+        'INSERT INTO drift_findings (key, kind, subject, detail, factAt, runId, sessionId, firstSeenAt, lastSeenAt) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET kind = excluded.kind, ' +
+        'subject = excluded.subject, detail = excluded.detail, factAt = excluded.factAt, runId = excluded.runId, ' +
+        'sessionId = excluded.sessionId, lastSeenAt = excluded.lastSeenAt, clearedAt = NULL',
+      );
+      for (const f of findings) up.run(f.key, f.kind, f.subject, redactCommand(f.detail), f.factAt, f.runId, f.sessionId, now, now);
+      const seen = new Set(findings.map((f) => f.key));
+      const open = this.db.prepare('SELECT key FROM drift_findings WHERE clearedAt IS NULL').all() as { key: string }[];
+      const clear = this.db.prepare('UPDATE drift_findings SET clearedAt = ? WHERE key = ? AND clearedAt IS NULL');
+      for (const o of open) if (!seen.has(o.key)) clear.run(now, o.key);
+      this.db.prepare('DELETE FROM drift_findings WHERE clearedAt IS NOT NULL AND clearedAt < ?').run(now - 30 * 86_400_000);
+    });
+  }
+
+  /** Compare-and-set: stamps `pushedAt` and `pushedVia` only where `pushedAt` is NULL, and answers the keys it changed. */
+  markDriftPushed(keys: readonly string[], now: number, via: 'item' | 'summary'): string[] {
+    return tx(this.db, () => {
+      const set = this.db.prepare('UPDATE drift_findings SET pushedAt = ?, pushedVia = ? WHERE key = ? AND pushedAt IS NULL');
+      return keys.filter((k) => Number(set.run(now, via, k).changes) === 1);
+    });
+  }
+
+  /** The unarmed lane's once-only: stamps `shadowAt` where it is NULL, answers the keys it changed. */
+  markDriftShadowed(keys: readonly string[], now: number): string[] {
+    return tx(this.db, () => {
+      const set = this.db.prepare('UPDATE drift_findings SET shadowAt = ? WHERE key = ? AND shadowAt IS NULL');
+      return keys.filter((k) => Number(set.run(now, k).changes) === 1);
+    });
+  }
+
+  /** Every stored row, open or cleared (the lane's push choice reads the open ones, and an empty table is the first-pass
+   *  rule's trigger). `kind` is narrowed through `isDriftKind`. A row this build cannot name (a kind a later build
+   *  wrote, then rolled back) is SKIPPED and its kind named in `unknownKinds`, never a failed read: the pass still
+   *  records, so that row clears like any key the pass did not find and is pruned 30 days on (a rollback stays a
+   *  plain revert). */
+  private readDriftRows(where: string, params: number[]): DriftFindingsRead {
+    try {
+      const rows = this.db.prepare(
+        'SELECT key, kind, subject, detail, factAt, runId, sessionId, firstSeenAt, lastSeenAt, clearedAt, pushedAt, ' +
+        `pushedVia, shadowAt FROM drift_findings ${where} ORDER BY firstSeenAt, key`,
+      ).all(...params) as { key: string; kind: string; subject: string; detail: string; factAt: unknown; runId: unknown;
+        sessionId: string | null; firstSeenAt: unknown; lastSeenAt: unknown; clearedAt: unknown; pushedAt: unknown;
+        pushedVia: string | null; shadowAt: unknown }[];
+      const unknownKinds = new Set<string>();
+      const out: DriftFindingRow[] = [];
+      for (const r of rows) {
+        if (!isDriftKind(r.kind)) { unknownKinds.add(String(r.kind)); continue; }
+        out.push({ key: r.key, kind: r.kind, subject: r.subject, detail: r.detail,
+          factAt: driftIntOrNull(r.factAt, 'drift_findings factAt'), runId: driftIntOrNull(r.runId, 'drift_findings runId'),
+          sessionId: r.sessionId, firstSeenAt: driftInt(r.firstSeenAt, 'drift_findings firstSeenAt'),
+          lastSeenAt: driftInt(r.lastSeenAt, 'drift_findings lastSeenAt'),
+          clearedAt: driftIntOrNull(r.clearedAt, 'drift_findings clearedAt'),
+          pushedAt: driftIntOrNull(r.pushedAt, 'drift_findings pushedAt'),
+          pushedVia: r.pushedVia === 'item' || r.pushedVia === 'summary' ? r.pushedVia : null,
+          shadowAt: driftIntOrNull(r.shadowAt, 'drift_findings shadowAt') });
+      }
+      return { ok: true, rows: out, unknownKinds: [...unknownKinds] };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Every stored row, open or cleared (an empty table is the first-pass rule's trigger). */
+  driftFindingRows(): DriftFindingsRead { return this.readDriftRows('', []); }
+
+  /** The rows no pass has cleared. */
+  openDriftFindings(): DriftFindingsRead { return this.readDriftRows('WHERE clearedAt IS NULL', []); }
+
+  /** The rows that stood open at `ms`: first seen before it and not cleared until at or after it (the digest's read). */
+  driftFindingsOpenAt(ms: number): DriftFindingsRead {
+    return this.readDriftRows('WHERE firstSeenAt < ? AND (clearedAt IS NULL OR clearedAt >= ?)', [ms, ms]);
+  }
+
+  /** How many findings were pushed as their own push since `dayStartMs` (the daily cap's count): `pushedVia = 'item'`
+   *  alone, so a first-pass summary spends nothing. Read from the table, so a restart keeps it. */
+  driftPushesOnDay(dayStartMs: number): number {
+    const r = this.db.prepare("SELECT COUNT(*) AS n FROM drift_findings WHERE pushedVia = 'item' AND pushedAt >= ?")
+      .get(dayStartMs) as { n: unknown };
+    return Number(r.n);
+  }
+
+  /** The runs and deliveries a stall OPERATOR rung already told the operator about, in mode `live` (a `shadow` row never
+   *  reached the operator): runs with a quiet-arm rung 3, deliveries with a mail-stuck rung (keyed on the delivery). */
+  driftStallToldRows(): DriftReadResult<{ readonly runId: number; readonly arm: string; readonly key: number }> {
+    try {
+      const rows = this.db.prepare(
+        "SELECT runId, CAST(detail AS TEXT) AS detail FROM run_events WHERE CAST(detail AS TEXT) LIKE 'stall%'",
+      ).all() as { runId: unknown; detail: string }[];
+      const out: { runId: number; arm: string; key: number }[] = [];
+      for (const r of rows) {
+        const p = parseStallDetail(r.detail);
+        if (p === null || p.mode !== 'live') continue;
+        if ((p.arm === 'quiet' && p.rung === 3) || p.arm === 'mail-stuck') {
+          out.push({ runId: driftInt(r.runId, 'run_events runId'), arm: p.arm, key: p.key });
+        }
+      }
+      return { ok: true, rows: out };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   /** The notice-count read (§11): every `run_events` row at or after `since`, unordered (the counts are order-free,
    *  and an `ORDER BY id` would invite a rowid scan on a database that never sees ANALYZE). It plans a SEARCH on
    *  `run_events_by_at`, which `stall-settings-store.test.ts` pins. It spells no detail head: L1's
@@ -5160,6 +5377,46 @@ export class CoordStore {
   }
 
   /**
+   * D-6777 (mail inbox, spec §3.3 step 3): the caller's INBOX SET, oldest first
+   * — the deliveries a session can print AND ack, still shown by its mailbox.
+   * It is the ack door's guard (`ackableDeliverySql`, the same fragment
+   * `writeDeliveries` uses) AND `OUTSTANDING_OR_ABANDONED_SQL`, over
+   * `outstandingMailFor`'s own join (`LEFT JOIN runs rr`), so `ABANDONED_PARK_SQL`
+   * reads the same run.
+   *
+   * Neither predicate alone is the rule. The ack guard alone reads no run, so it
+   * would print a closed run's replay-ceiling park as live (ruling I2(a) hides
+   * that row from the mailbox, while ruling I2(b) still lets it be acked). The
+   * read predicate alone would print a park-ceiling rejection that the ack door
+   * refuses, forever. Pure read: no row changes.
+   */
+  inboxFor(toId: string): { deliveryId: number; envelope: string }[] {
+    const ack = ackableDeliverySql('d.');
+    return this.db.prepare(
+      'SELECT d.id AS deliveryId, d.envelope FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+      'LEFT JOIN runs rr ON rr.id = m.runId ' +
+      `WHERE d.toId = ? AND ${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL} ORDER BY d.id ASC`,
+    ).all(toId, ...ack.args) as unknown as { deliveryId: number; envelope: string }[];
+  }
+
+  /** D-6777: how many deliveries `outstandingMailFor`'s predicate admits that
+   *  `inboxFor` does not (the park-ceiling rejection and its kin). `inboxFor` is
+   *  a subset of that predicate by construction, so this is a plain difference. */
+  abandonedCount(toId: string): number {
+    const ack = ackableDeliverySql('d.');
+    const base = this.db.prepare(
+      'SELECT COUNT(*) AS n FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+      `LEFT JOIN runs rr ON rr.id = m.runId WHERE d.toId = ? AND ${OUTSTANDING_OR_ABANDONED_SQL}`,
+    ).get(toId) as { n: number };
+    const inbox = this.db.prepare(
+      'SELECT COUNT(*) AS n FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+      'LEFT JOIN runs rr ON rr.id = m.runId ' +
+      `WHERE d.toId = ? AND ${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL}`,
+    ).get(toId, ...ack.args) as { n: number };
+    return base.n - inbox.n;
+  }
+
+  /**
    * Every delivery of a mail belonging to THIS PROGRAMME (design §4), newest
    * first — the read side of `GET /api/mail?program=<slug>`.
    *
@@ -5370,10 +5627,11 @@ export class CoordStore {
    * `{changed, state}` for a one-row write.
    */
   private writeDeliveries(set: string, setArgs: readonly SqlArg[], guard: DeliveryGuard, where: string, whereArgs: readonly SqlArg[]): number {
+    const ack = ackableDeliverySql('');
     const guardSql = guard === 'outstanding' ? `state IN ${OUTSTANDING_STATES_SQL}`
       : guard === 'non-terminal' ? `state NOT IN ${TERMINAL_DELIVERY_SQL}`
-      : `(state NOT IN ${TERMINAL_DELIVERY_SQL} OR (state = 'rejected' AND rejectCode = 'undeliverable' AND lastError = ?))`;
-    const guardArgs = guard === 'ack' ? [MAIL_REPLAY_CEILING_ERROR] : [];
+      : ack.sql;
+    const guardArgs = guard === 'ack' ? ack.args : [];
     return Number(this.db.prepare(`UPDATE mail_deliveries SET ${set} WHERE ${guardSql} AND (${where})`)
       .run(...setArgs, ...guardArgs, ...whereArgs).changes);
   }

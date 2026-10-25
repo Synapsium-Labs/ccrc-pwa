@@ -7,7 +7,7 @@ import { connectFleet, type ConnectedFleet } from '../src/remote/client.js';
 import { bootAgent, connectToAgent, makeFixture, TOKEN, type RemoteFixture } from './remoteHelpers.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 
 /** Writes the ccd the agent execs (`~/.local/bin/ccd`) as a SELF-CONTAINED
  *  entry. The agent's caps cache is keyed on BOTH halves of the installed pair
@@ -105,7 +105,7 @@ describe('the caps lane', () => {
     // never reach the `refreshCaps` call below. Same fix as
     // `mail-sweep.test.ts`'s `harness()`.
     mkdirSync(deps.cfg.registryDir, { recursive: true });
-    const w = new FleetWatcher(deps, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
 
     vi.useFakeTimers();
     await w.tick(); await w.tick(); await w.tick();
@@ -125,7 +125,7 @@ describe('the caps lane', () => {
   });
 
   it('local mode has nothing to refresh and does not throw', async () => {
-    const w = new FleetWatcher(testDeps(), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps()), new Bus(), 2000);
     await expect(w.tick()).resolves.not.toThrow();
   });
 
@@ -134,7 +134,7 @@ describe('the caps lane', () => {
     const deps = { ...testDeps(), refreshCaps: async () => { calls += 1; } };
     // Empty, but LISTABLE — see the identical comment in the test above.
     mkdirSync(deps.cfg.registryDir, { recursive: true });
-    const w = new FleetWatcher(deps, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
 
     vi.useFakeTimers();
     await w.tick();

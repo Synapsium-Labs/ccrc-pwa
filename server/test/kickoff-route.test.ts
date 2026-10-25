@@ -71,9 +71,9 @@ function makeRunner(panes: string[] = PING_PANES): { run: Runner; execs: string[
     if (args[0] === 'capture-pane') {
       const p = panes[Math.min(capIdx, panes.length - 1)]!;
       capIdx++;
-      return { code: 0, stdout: p, stderr: '' };
+      return { ran: true, code: 0, stdout: p, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, execs };
 }

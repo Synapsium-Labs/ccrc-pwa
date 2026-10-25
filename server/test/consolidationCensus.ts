@@ -13,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD } from './ccdWsHelpers.js';
 import { parsedFile } from './scan/symbols.js';
+import { scheduleFacts, type ScheduleFacts } from './scan/parse.js';
 
 /** The repository root: every query's default tree. A fixture tree passes its own root in its place. */
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -238,34 +239,117 @@ export function filesNaming(needles: readonly string[], root: string = REPO): st
 /** How many code lines after a `runCcd(` call `runCcdOldFoldSites` reads for the call's `ran` narrowing. */
 export const RAN_NARROW_WINDOW = 12;
 
-/** D-6034 (ARCH-10, #543): `runCcd(` call expressions under `server/src` still on the OLD fold, which reads `ok` or a
- *  runner's forged code without first asking whether the command ran. A site is on the new fold when the variable it
- *  assigns (`res = await deps.runCcd(…)`, with or without `const`/`let`) is read as `<name>.ran === false` within the
- *  next `RAN_NARROW_WINDOW` code lines, and before a line that opens with `}` at column 0 (the end of the top-level
- *  declaration the call sits in). A line that RETURNS the call's bare result (`return await …runCcd(`, a pass-through
- *  wrapper) folds nothing, and is not a site. Step 2 drives this to 0, and its may-only-shrink pin lands then (spec
- *  §5.1 rule 3). KNOWN WIDTH: a narrowing further down, or in a function the result is handed to, is not seen, and the
- *  site is counted; so is a call whose result is not assigned to a name. */
-export function runCcdOldFoldSites(root: string = REPO): CensusSite[] {
-  const out: CensusSite[] = [];
+/** The readers a `runCcd(` result may be handed to whole, each of which reads `ran` FIRST (D-6034, D-6840). */
+export const RAN_CARRY_READERS: readonly string[] = [
+  'cutShort', 'sweepFailureReason', 'failureDetail', 'classifyAddFailure', 'classifyTitleFailure', 'archiveOutcome',
+];
+
+/** `classify` is a generic name: it counts as a carry reader only in the file that defines the one that reads `ran` first. */
+export const RAN_CARRY_READERS_BY_FILE: Readonly<Record<string, readonly string[]>> = {
+  'server/src/docs/ccdsource.ts': ['classify'],
+};
+
+/** How a `runCcd(` site answers the not-ran arm (ARCH-10, #543; the PR lists each site's chosen arm):
+ *  - `explicit`: the site reads `ran === false` itself, before any reader of the runner's words;
+ *  - `carried`: the site hands the whole result to a reader in `RAN_CARRY_READERS`, which reads `ran` first;
+ *  - `ok-only`: the site reads only `ok` (and the stdout of an ok answer, or the runner's `stderr` as a plain failure
+ *    sentence). The not-ran arm carries `ok: false`, so `tsc` narrows the ran arm by `ok` itself and the site's failure
+ *    path is the one the arm always took: no refusal, box word, die or composition error is read off it. Pinned by
+ *    `RAN_TABLE`, never by this file's regexes. */
+export type RanArm = 'explicit' | 'carried' | 'ok-only';
+
+/** A `runCcd(` site the census cannot classify by reading the code around it, pinned by its file, its trimmed text and
+ *  which of the identical lines in that file it is (`nth`, from 1), so a moved line keeps its row. */
+export interface RanTableRow { readonly file: string; readonly text: string; readonly nth: number; readonly arm: RanArm }
+
+/** The reviewed arm of every `runCcd(` site the code around it does not show: an unassigned result, a result handed
+ *  to a `queue.run` callback, and every site that reads `ok` only. A site that appears in no row, and shows no narrowing
+ *  or carry in the next `RAN_NARROW_WINDOW` code lines, is unaccounted, and the census test fails. */
+export const RAN_TABLE: readonly RanTableRow[] = [
+  { file: 'server/src/archiveAct.ts', text: 'const res = await ports.runCcd(ports.stopArgv());', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/archiveAct.ts', text: 'const archived = await ports.runCcd(archiveArgv);', nth: 1, arm: 'carried' },
+  { file: 'server/src/archiveAct.ts', text: 'const res = await ports.runCcd(ports.stopArgv());', nth: 2, arm: 'ok-only' },
+  { file: 'server/src/coord/childReclaim.ts', text: 'const res = await deps.runCcd(argv);', nth: 3, arm: 'ok-only' },
+  { file: 'server/src/coord/childSpent.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/close.ts', text: "const done = decideClose({ step: 'fleet', res: await deps.runCcd(verb.argv) });", nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/close.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/collectOrphanTree.ts', text: 'try { return parseOrphanCensus((await deps.runCcd(CCD_ARGV.wsOrphanCensus())).stdout); } catch { return { kind: \'unreadable\' }; }', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/collectOrphanTree.ts', text: 'try { return parseOrphanAudit((await deps.runCcd(CCD_ARGV.wsOrphanAudit(hex))).stdout, hex); }', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/collectOrphanTree.ts', text: 'const r = await deps.runCcd(CCD_ARGV.wsOrphan(spend.token, hex, spend.rescue, sweepDec(deps.fleetState, \'orphan-tree sweep\')));', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/dispatch.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/dispatch.ts', text: 'const res = await deps.runCcd(CCD_ARGV.ensure(sessionId));', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/dispatch.ts', text: 'const holdRes = await deps.runCcd(holdArgv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/dispatch.ts', text: 'const routeRes = await deps.runCcd(', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/fingerprint.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
+  { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 3, arm: 'ok-only' },
+  { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(CCD_ARGV.reclaimPause(body.state));', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'return { ok: true, res: await deps.runCcd(CCD_ARGV.docsIndex()) };', nth: 1, arm: 'carried' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(CCD_ARGV.docsTree(call.project, call.ref === null ? null : docsRefText(call.ref))),', nth: 1, arm: 'carried' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(call.pin.kind === \'committed\'', nth: 1, arm: 'carried' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'return { ok: true, res: await deps.runCcd(CCD_ARGV.docsFetch(project, branch)) };', nth: 1, arm: 'carried' },
+  { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
+  { file: 'server/src/server.ts', text: 'return late !== null ? { refused: late } : { ran: await deps.runCcd(argv) };', nth: 1, arm: 'explicit' },
+  { file: 'server/src/server.ts', text: 'const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/server.ts', text: 'const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 2, arm: 'ok-only' },
+  { file: 'server/src/server.ts', text: 'const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 1, arm: 'carried' },
+  { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 4, arm: 'ok-only' },
+  { file: 'server/src/server.ts', text: 'const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 2, arm: 'explicit' },
+  { file: 'server/src/watch.ts', text: 'const res = await this.deps.queue.run(r.id, () => this.deps.runCcd(', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/watch.ts', text: 'const res = await this.deps.runCcd(CCD_ARGV.ensure(d.toId));', nth: 1, arm: 'ok-only' },
+];
+
+/** One `runCcd(` site and how it answers the not-ran arm; `null` when nothing accounts for it. */
+export interface RanSite extends CensusSite { readonly arm: RanArm | null }
+
+/** D-6034, D-6840 (ARCH-10, #543): every `runCcd(` call expression under `server/src`, with how it answers
+ *  the not-ran arm. A site is `explicit` when the variable it assigns (`res = await deps.runCcd(...)`, with or without
+ *  `const`/`let`) is read as `<name>.ran === false` within the next `RAN_NARROW_WINDOW` code lines, and before a line
+ *  that opens with `}` at column 0 (the end of the declaration the call sits in); `carried` when that name is an
+ *  argument of a `RAN_CARRY_READERS` call in the same window; otherwise the site's row in `RAN_TABLE`, else `null`.
+ *  A line that RETURNS the call's bare result (`return await ...runCcd(`, a pass-through wrapper) folds nothing and is
+ *  not a site, nor is a method signature (`runCcd(argv: CcdArgv): ...`). */
+export function runCcdSiteArms(root: string = REPO, table: readonly RanTableRow[] = RAN_TABLE): RanSite[] {
+  const out: RanSite[] = [];
   for (const f of sourceFiles(root, 'server/src')) {
     const file = path.relative(root, f).split(path.sep).join('/');
     const lines = readFileSync(f, 'utf8').split('\n');
+    const seen = new Map<string, number>();
     lines.forEach((text, i) => {
       const code = codeOf(text);
       if (!/\brunCcd\s*\(/.test(code) || /^\s*return\s+(?:await\s+)?[\w.]*\brunCcd\s*\(/.test(code)) return;
+      if (/\brunCcd\s*\(\s*\w+\s*:/.test(code)) return;
+      const key = text.trim();
+      const nth = (seen.get(key) ?? 0) + 1;
+      seen.set(key, nth);
       const name = /(?:^|[^\w$.])([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*await\s+[\w.]*\brunCcd\s*\(/.exec(code)?.[1];
+      let arm: RanArm | null = null;
       if (name !== undefined) {
         const narrow = new RegExp(`\\b${name}\\.ran\\s*===\\s*false\\b`);
+        const carry = new RegExp(`\\b(?:${[...RAN_CARRY_READERS, ...(RAN_CARRY_READERS_BY_FILE[file] ?? [])].join('|')})\\(\\s*${name}\\b`);
+        const stderrRead = new RegExp(`\\b${name}\\.stderr\\b`);
+        let readStderr = false;
         for (const l of lines.slice(i + 1, i + 1 + RAN_NARROW_WINDOW)) {
           if (/^\}/.test(l)) break;
-          if (narrow.test(codeOf(l))) return;
+          const c = codeOf(l);
+          // The narrowing must come BEFORE the first read of the runner's words: a `ran === false` after a `.stderr` read is late.
+          if (narrow.test(c)) { if (!readStderr) arm = 'explicit'; break; }
+          if (stderrRead.test(c)) readStderr = true;
+          if (carry.test(c)) { arm = 'carried'; break; }
         }
       }
-      out.push({ file, line: i + 1, text });
+      arm ??= table.find((r) => r.file === file && r.text === key && r.nth === nth)?.arm ?? null;
+      out.push({ file, line: i + 1, text, arm });
     });
   }
   return out;
+}
+
+/** The sites nothing accounts for. Step 2 drove this to 0, and `consolidation-census.test.ts` pins it there. */
+export function runCcdOldFoldSites(root: string = REPO, table: readonly RanTableRow[] = RAN_TABLE): CensusSite[] {
+  return runCcdSiteArms(root, table).filter((s) => s.arm === null).map(({ file, line, text }) => ({ file, line, text }));
 }
 
 /** D-5866 (Task C1k; ARCH-71 #806): the W4 files W1b never edits. Their capability sites are reported, tagged
@@ -429,4 +513,145 @@ export function redactRuleTables(root: string = REPO): string[] {
     }
   }
   return out.sort();
+}
+
+/**
+ * D-5862 (Task C1h; ARCH-68 #803; spec K11, §2.3's clock row): the watcher's lane schedule, four queries over
+ * `server/src/watch.ts`, read from its syntax tree (`scan/parse.ts`'s `scheduleFacts`, the one parser importer), never from a
+ * count typed by hand. Exit targets (C1h): `laneClockFields` and `laneClockShapes` list only W4's two clocks (and
+ * `DelegationLane#lastSweepAt`, reported, while another series holds that class); `singleFlightGuards` lists only
+ * `ticking`, `dispatchRun` and `dispatchAgain`, and W4's two; `cadenceLiterals` is empty.
+ * KNOWN WIDTH: a clock or guard reached through a computed name, a field of another class and a literal assembled from
+ * pieces (`60 * 1000`, which is read, but `MINUTE * 5` is not a literal) are other shapes; a cadence compared through
+ * a local alias (`const gap = now - this.lastX; if (gap < 5000)`) is not seen.
+ */
+
+/** The fields that were a lane's throttle clock on `a8a5b9f56`, by name: 25 in `FleetWatcher` (23 on `Date.now()`, 2 on
+ *  the monotonic clock) and W4's two, which a later series moves. */
+export const LANE_CLOCK_NAMES: readonly string[] = [
+  'lastCapsAt', 'lastCatalogueAt', 'lastInventoryAt', 'lastServerCapsAt',
+  'lastTaskSweep', 'lastUsageSweep', 'lastPrSweep', 'lastNameSweep', 'lastDivergenceSweep', 'lastLifecycleSweep',
+  'lastReadinessSweep', 'lastLedgerReconcile', 'lastLedgerFloor',
+  'lastClaimRenew', 'lastClaimLapse', 'lastStallSweep', 'lastIdleNudgeAt', 'lastMailSweep', 'lastAskSweep',
+  'lastApprovalPrune', 'lastDigestBeat',
+  'lastChildReclaimSweep', 'lastCollectSweep', 'lastArchivedExpirySweep', 'lastDeadCoordinatorSweep',
+  'lastStopDoneSweep', 'lastHibernateSweep',
+];
+
+/** The fields that were a lane's single-flight guard on `a8a5b9f56` (the stuck-run stamp, the booleans, the promises and
+ *  the one queued rerun), by name. */
+export const SINGLE_FLIGHT_NAMES: readonly string[] = [
+  'ticking', 'collectSweeping', 'stallSweepRunning', 'idleNudgeRunning', 'archivedExpirySweeping', 'stopDoneSweeping',
+  'hibernateSweeping', 'deadCoordinatorSweeping', 'serverCapsRun', 'deadCoordinatorPassRun', 'inventoryRun',
+  'inventoryRerunPending', 'dispatchRun', 'dispatchAgain', 'prSweepStartedAt',
+];
+
+/** The facts of `server/src/watch.ts` (or a fixture's), with the file's lines; `null` when the tree has none. */
+function watcherFacts(root: string, rel = 'server/src/watch.ts'): { facts: ScheduleFacts; lines: string[]; file: string } | null {
+  const abs = path.join(root, rel);
+  if (!existsSync(abs)) return null;
+  const parsed = parsedFile(abs);
+  return { facts: scheduleFacts(parsed), lines: parsed.text.split('\n'), file: rel };
+}
+
+const siteAt = (w: { lines: string[]; file: string }, line: number): CensusSite => ({ file: w.file, line, text: w.lines[line - 1] ?? '' });
+
+/** The named lane clocks (`LANE_CLOCK_NAMES`) still declared as fields of `FleetWatcher`. */
+export function laneClockFields(root: string = REPO): CensusSite[] {
+  const w = watcherFacts(root);
+  return w === null ? [] : w.facts.fields.filter((f) => f.cls === 'FleetWatcher' && LANE_CLOCK_NAMES.includes(f.name)).map((f) => siteAt(w, f.line));
+}
+
+/** `DelegationLane#lastSweepAt`, a cadence clock in a class another series holds: reported by name, never ratcheted. */
+export function laneClockReported(root: string = REPO): CensusSite[] {
+  const w = watcherFacts(root);
+  return w === null ? [] : w.facts.fields.filter((f) => f.cls === 'DelegationLane' && f.name === 'lastSweepAt').map((f) => siteAt(w, f.line));
+}
+
+/** Numeric fields of `FleetWatcher` that are compared with a constant and are NOT a lane's throttle: `lastStallJudgedAt` is
+ *  the stall watch's gap rule (slug `stall-clocks-drop-on-an-unobserved-gap`, D-3750), a state test on how long the watch
+ *  went unobserved, which decides whether to drop its clocks and does not decide whether a lane runs. */
+export const LANE_CLOCK_SHAPE_EXEMPT: readonly string[] = ['lastStallJudgedAt'];
+
+/** The structural query: a numeric field of `FleetWatcher` (bar `LANE_CLOCK_SHAPE_EXEMPT`) compared as
+ *  `<now> - this.X <op> CONST` (`<`, `<=`, `>`, `>=`), CONST an UPPER_CASE name, a numeric literal or a product of those. So a
+ *  new, unnamed clock is caught. */
+export function laneClockShapes(root: string = REPO): CensusSite[] {
+  const w = watcherFacts(root);
+  if (w === null) return [];
+  const numeric = new Set(w.facts.fields.filter((f) => f.cls === 'FleetWatcher' && f.numeric && !LANE_CLOCK_SHAPE_EXEMPT.includes(f.name)).map((f) => f.name));
+  return w.facts.comparisons.filter((c) => c.cls === 'FleetWatcher' && numeric.has(c.field) && c.other !== 'other').map((c) => siteAt(w, c.line));
+}
+
+/** The single-flight guards (`SINGLE_FLIGHT_NAMES`) still declared as fields of `FleetWatcher`. */
+export function singleFlightGuards(root: string = REPO): CensusSite[] {
+  const w = watcherFacts(root);
+  return w === null ? [] : w.facts.fields.filter((f) => f.cls === 'FleetWatcher' && SINGLE_FLIGHT_NAMES.includes(f.name)).map((f) => siteAt(w, f.line));
+}
+
+/** A bare millisecond literal (a numeric literal of 1000 or more, `60_000`, or a product with one, `60 * 1000`) compared
+ *  against a `last…` clock: `<now> - this.last… <op> LITERAL`. A cadence is a row of `LANE_SCHEDULE`. */
+export function cadenceLiterals(root: string = REPO): CensusSite[] {
+  const w = watcherFacts(root);
+  return w === null ? [] : w.facts.comparisons.filter((c) => c.field.startsWith('last') && c.literalMs).map((c) => siteAt(w, c.line));
+}
+
+/** The three cadences the spec declares as derivations, each `export const NAME = OTHER;` where it lives (`laneSchedule.ts`
+ *  or `watch.ts`): `reference` is true when the declaration's initializer is a bare name, false when it is a literal or an
+ *  expression, and `file` is null when no declaration is found. A derivation is a reference, never a second literal. */
+export const DECLARED_DERIVATIONS: readonly string[] = ['COLLECT_OBSERVE_INTERVAL_MS', 'STALL_SWEEP_MS', 'DELEGATION_SWEEP_MS'];
+
+export function declaredDerivations(root: string = REPO): Array<{ name: string; file: string | null; reference: boolean }> {
+  const found = new Map<string, { file: string; reference: boolean }>();
+  for (const rel of ['server/src/laneSchedule.ts', 'server/src/watch.ts']) {
+    const w = watcherFacts(root, rel);
+    if (w === null) continue;
+    for (const c of w.facts.constants) if (DECLARED_DERIVATIONS.includes(c.name)) found.set(c.name, { file: rel, reference: c.reference });
+  }
+  return DECLARED_DERIVATIONS.map((name) => ({ name, file: found.get(name)?.file ?? null, reference: found.get(name)?.reference ?? false }));
+}
+
+/**
+ * D-5864 (Task C1j; ARCH-51 #786; spec K13's listing half): every place `server/src/watch.ts` lists the registry, from its
+ * syntax tree (`scan/symbols.ts`, over `scan/parse.ts`), never from a count typed by hand. A site is a call of `readRegistry(`
+ * or `readRegistryMeasured(`, or of a `readdir(` whose first argument names `registryDir`, inside a method of the class.
+ * Each is tagged by the method it sits in:
+ * - `selection`: it chooses rows for a lane. Exit target (C1j): exactly one, in `FleetWatcher.tick`; the lanes take the
+ *   tick's `FleetReadModel`.
+ * - `act`: it is read at the act and stays fresh, by name (`ACT_LISTING_METHODS`): the mail lane's last switch read
+ *   before it delivers, and the divergence census's listing, taken after git's records on purpose; and the tick's own bare
+ *   `readdir`, the snapshot write's re-confirmation when the fleet shrank.
+ * - `tests-only`: a lane's own read when called with no model, reached by tests alone (`TESTS_ONLY_LISTING_METHODS`);
+ *   the registry-refused census pins that `tick()` hands each lane its model.
+ * A method not named in either list is `selection`, so a new lane that lists for itself is counted as one.
+ * KNOWN WIDTH: `assembleFleet`'s marker listing inside `readLimits` (`limits.ts`) is another file's, reported in the PR body
+ * and left to the request-time readers' work (ARCH-52, W2); a listing reached through an alias, a helper or a `readdir`
+ * whose argument is a local that holds `registryDir` is not seen.
+ */
+export const ACT_LISTING_METHODS: readonly string[] = ['FleetWatcher.mailPass', 'FleetWatcher.divergencesPass'];
+export const TESTS_ONLY_LISTING_METHODS: readonly string[] = ['FleetWatcher.fleetFor', 'FleetWatcher.sweepHookStates', 'FleetWatcher.detectDialogs'];
+export const SELECTION_LISTING_METHOD = 'FleetWatcher.tick';
+
+export type ListingTag = 'selection' | 'act' | 'tests-only';
+export interface RegistryListingSite extends CensusSite { readonly method: string; readonly tag: ListingTag }
+
+export function registryListingSites(root: string = REPO): RegistryListingSite[] {
+  const file = path.join(root, 'server/src/watch.ts');
+  if (!existsSync(file)) return [];
+  const parsed = parsedFile(file);
+  const lines = parsed.text.split('\n');
+  const out: RegistryListingSite[] = [];
+  for (const c of parsed.calls) {
+    const isReader = c.name === 'readRegistry' || c.name === 'readRegistryMeasured';
+    const isListing = c.name === 'readdir' && (c.args[0]?.text ?? '').includes('registryDir');
+    if (!isReader && !isListing) continue;
+    const inner = parsed.symbols.filter((s) => s.kind === 'method' && s.name.startsWith('FleetWatcher.') && s.start <= c.start && c.end <= s.end)
+      .sort((a, b) => b.start - a.start)[0];
+    if (inner === undefined) continue;
+    // The tick's own bare `readdir(registryDir)` is the snapshot write's shrink re-confirmation, taken only when the fleet shrank.
+    const tag: ListingTag = ACT_LISTING_METHODS.includes(inner.name) || (inner.name === SELECTION_LISTING_METHOD && isListing) ? 'act'
+      : TESTS_ONLY_LISTING_METHODS.includes(inner.name) ? 'tests-only' : 'selection';
+    out.push({ file: 'server/src/watch.ts', line: c.line, text: lines[c.line - 1]!, method: inner.name, tag });
+  }
+  return out;
 }

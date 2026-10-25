@@ -663,7 +663,9 @@ function envOf(s: Src, open: number, close: number, bs: Binding[]): Shape | null
 // `bashPath` is `ccrc-token-sync.test.ts`'s `command -v bash`, read before PATH is narrowed (D-5256 made its joined
 // command line a script spawn).
 const RUNNERS = new Set(["'bash'", 'BASH', 'DEADLINE_BIN', 'DOCTOR_DEADLINE_BIN', 'bashPath']);
-const READERS = new Set(["'git'"]); // `git show <rev>:<path>` and `git ls-files <path>` name the script as a path
+// `git show <rev>:<path>` and `git ls-files <path>` name the script as a path; `'node'` is
+// `hook-helpers-generated.test.ts`'s `node shared/hook-helpers.mjs --check <hook> <ccd>`, which only reads ccd's text.
+const READERS = new Set(["'git'", "'node'"]);
 interface Spawn {
   file: string; line: number; kind: 'script' | 'sliced' | null; prog: string; placed: boolean;
   shape: Shape | null; argText: string;
@@ -852,25 +854,25 @@ describe('every spawn of the real ccd or ccrc script gets a contained env (wave 
   });
 
   it('decides the function-extraction spawn R14(b) named by rule: contained (ccrcContainedEnv), and it runs sliced text, not the script (wave 17, D-5322)', () => {
-    // `ccrc-install.test.ts`'s `_inst_installed` harness: `bash -c <harness>`, the harness text sliced out of the
+    // `ccrc-install-*.test.ts`'s `_inst_installed` harness: `bash -c <harness>`, the harness text sliced out of the
     // script, under `ccrcContainedEnv`. Not an ALLOWED hit by the EXECUTES rule, and since wave 17 not a
     // SLICED_ALLOWED one either: a contained slice is no hit (D-5251, D-5322). A change that made it spawn the script
     // itself would turn it into an ALLOWED hit here, and one that dropped its env would put it back in `slicedHits`.
-    const src = SOURCES.find((s) => s.rel === 'server/test/ccrc-install.test.ts')!.raw.split('\n');
-    const inst = c.spawns.filter((x) => x.file === 'server/test/ccrc-install.test.ts' && /\['-c', harness\]/.test(x.argText)
+    const src = SOURCES.find((s) => s.rel === 'server/test/ccrc-install-role.test.ts')!.raw.split('\n');
+    const inst = c.spawns.filter((x) => x.file === 'server/test/ccrc-install-role.test.ts' && /\['-c', harness\]/.test(x.argText)
       && src.slice(x.line - 30, x.line).some((l) => l.includes('/^_inst_installed\\(\\) \\{')));
     expect(inst.length, 'the _inst_installed harness spawn').toBe(1);
     expect(inst[0]!.shape, 'it is contained: a builder env, so not bare').toBeNull();
     // `shape === null` also holds for a literal env such as `env: { HOME: home }`, which is no builder (review 589 F3):
     // so the env the spawn names must resolve, through the census's own binding reader, to a `ccrcContainedEnv(` call.
-    const ownSrc = SOURCES.find((s) => s.rel === 'server/test/ccrc-install.test.ts')!;
+    const ownSrc = SOURCES.find((s) => s.rel === 'server/test/ccrc-install-role.test.ts')!;
     const spawnEnd = ownSrc.raw.split('\n').slice(0, inst[0]!.line).join('\n').length;
     const inline = /\benv\s*:\s*([\s\S]*)\}\s*\)$/.exec(inst[0]!.argText);
     const shorthand = /[{,]\s*env\s*[,}]/.test(inst[0]!.argText) ? nearest(bindingsOf(ownSrc), 'env', spawnEnd) : undefined;
     const envExpr = shorthand ? ownSrc.text.slice(shorthand.init[0], shorthand.init[1]).trim() : (inline?.[1] ?? '').trim();
     expect(envExpr, 'the spawn\'s env resolves to a ccrcContainedEnv( call, not a literal').toMatch(/^ccrcContainedEnv\(/);
     expect(inst[0]!.kind, 'it runs text sliced from the script').toBe('sliced');
-    expect(c.slicedHits.filter((x) => x.file === 'server/test/ccrc-install.test.ts' && x.line === inst[0]!.line),
+    expect(c.slicedHits.filter((x) => x.file === 'server/test/ccrc-install-role.test.ts' && x.line === inst[0]!.line),
       'it is no sliced hit').toEqual([]);
   });
 

@@ -38,9 +38,9 @@ const writeUsage = (home: string, id: string, over: Record<string, unknown> = {}
  *  `ctxPct` describe block uses, so this fixture exercises only the sweep
  *  lanes, never the dialog/pane-capture ones. */
 const idleRun: Runner = async (_cmd, args) => {
-  if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-  if (args[0] === 'list-panes') return { code: 0, stdout: '', stderr: '' };
-  return { code: 0, stdout: '', stderr: '' };
+  if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+  if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '', stderr: '' };
+  return { ran: true, code: 0, stdout: '', stderr: '' };
 };
 
 const makeWatcher = (home: string, io: FleetIO): FleetWatcher => {
@@ -121,7 +121,7 @@ describe('FleetWatcher usage sweep lane (routing slice 0)', () => {
     // the same private-field poke `dialog.test.ts` avoids needing by calling
     // `sweepHookStates()` directly, not available to us here since the
     // throttle itself is what this test is exercising.
-    (watcher as unknown as { lastUsageSweep: number }).lastUsageSweep = 0;
+    watcher.kick('usage');
     degrade = true;
     await watcher.tick();
 
@@ -153,7 +153,7 @@ describe('FleetWatcher usage sweep lane (routing slice 0)', () => {
     (watcher as unknown as { usage: Map<string, typeof prev> }).usage.set('demo-usage-d', prev);
 
     degrade = true;
-    (watcher as unknown as { lastUsageSweep: number }).lastUsageSweep = 0;
+    watcher.kick('usage');
     await watcher.tick();
 
     const carried = watcher.currentUsage().get('demo-usage-d');

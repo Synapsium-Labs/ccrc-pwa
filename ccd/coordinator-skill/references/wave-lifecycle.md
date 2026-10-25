@@ -228,8 +228,17 @@ take it is never blocked on: the server journals the omission instead and
 moves on, as `route-omitted:no-route-argv-cap` (wave 1's argv path) or
 `route-omitted:no-route-v1-cap` (wave N ≥ 2's verb path) — two DIFFERENT
 run events because the two are different parse paths that can ship one
-without the other. Omitting `route` sends the identical bare argv it
-always has. The brief still names the routing in prose (clause 13) — this
+without the other. Omitting `route` on a fresh spawn fills the run
+kind's default row from `shared/route-defaults.ts` (the matrix's spec'd-worker
+row for `work`, the review-session row for `review`) and journals
+`route-defaulted:<kind>`. The default's class is a PREFERENCE, never a
+requirement: the server sends it with `--route-default`, so ccd places by it
+like the coordinator row's own default, and a project whose in-pool lanes are all
+at the seven-day ceiling still places a defaulted dispatch (a class YOU pass is
+strict and is refused at the ceiling, `no account available for placement`). A
+ccd without `route-default-v1` gets no default route at all and the server
+journals `route-omitted:no-route-default-cap`; a resumed wave with no `route` keeps its session's
+record; an empty `{}` is a passed route and is sent bare. The brief still names the routing in prose (clause 13) — this
 object is what carries that placement to the fleet, never a replacement
 for saying so.
 
@@ -479,6 +488,12 @@ For each outstanding row, with `:id` below filled in from its `deliveryId`
    indefinitely.
 3. Then act.
 
+The server also answers `GET /api/mail/inbox?fromId=<your id>&fromUuid=<your uuid>`:
+every delivery you can still ack, oldest first, each rendered and masked under its
+delivery id, in pages of at most 20 KiB (`remaining` counts what the page left out).
+It writes nothing and acks nothing. Until your `ccrc-api` carries `mail inbox`, steps
+1 and 2 above stay the way to read and act.
+
 **Sending mail of your own** — a rejection (§4), a question, a status
 update — is `POST /api/mail`, body:
 
@@ -603,6 +618,7 @@ same, and shows as `absent`.
 | `not-dispatched` | this run has no worker session to re-measure against |
 | `bad-transition` | `to` is not reachable from the run's current state |
 | `review-in-flight` | a non-terminal review run already names this work run — on an OPEN, a second reviewer for one wave; on an ADVANCE to `working`, a send-back while its review is still open. Close the review run first (body `{"state":"failed"}` if it died — no fingerprint needed), then retry. |
+| `cap-review-rounds` | on an OPEN of a review run: the work run already has three review runs, in any state. The server raised one ask to the operator carrying the run, its round count and the last review's open findings (the refusal body carries the same under `ask`). Do not retry the open and do not look for another way to start a review: the operator lifts the cap per run, and a further open then succeeds. Meanwhile rule on the findings you already hold. |
 | `stale-review` | the reviewed branch's live tip is not the `reviewedTip` the report describes — the worker pushed after wave-done, or the report is about an older tip. Do not rule on it: close the review run with body `{"state":"failed"}` (no fingerprint needed), mail the worker the code and detail verbatim, and open a fresh review run against the live tip once its re-measured wave-done arrives. (A malformed `reviewedTip` reaching the verifier directly also answers this code, but the close route refuses that shape as `bad-request` first.) |
 | `report-unreadable` | the report path the reviewer named cannot be opened — absent or unreadable. Close the review run with body `{"state":"failed"}` (no fingerprint needed) and open a new one; the reviewer's clause 7 says the report is written by temp-then-rename, so a half-written file is never the cause. |
 
@@ -704,7 +720,8 @@ Partial success on a ledger write is how tallies drift.
 
 **The handoff review is a REVIEW RUN, and the held-out panel is its shape** (clause 14,
 `references/review-panel.md`): three Opus lenses over the wave's commit range, three Sonnet
-refuters per finding, majority deciding, model and effort literal in the script. The REVIEWER
+refuters per critical or important finding (one per minor, returned as advisory), at most 8 findings per lens,
+majority deciding, model and effort literal in the script. The REVIEWER
 runs it — this session dispatches the review run and rules on the report it returns (step 1
 below, clause 12); a lens that returned nothing is a review not yet done, never an approval.
 
@@ -965,6 +982,11 @@ was destroyed. When the first two disagree the census raises it as a divergence;
 winner. A `null` in `meas` means it was not measured, never that it was empty.
 
 ## The run's own signals — a measurement, never a dial
+
+`GET /api/runs/:id` — one run, plus its spend: the tokens its bound sessions have used and their proxy
+cost, read from the usage sweep (`spend` is `{measured:true, tokens, proxyUsd, measuredAt}`, or
+`{measured:false, reason}` when nothing could be added up, never a zero). It takes a session cookie or the box
+token. It measures only; no route refuses on it.
 
 `GET /api/runs/:id/signals` — speed and quality signals re-measured off this run's own rows: the
 worker's paired holds, a swap COUNT (swap TIME is unpairable in today's journal, and the wire says

@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLASSES } from '../../shared/models.mjs';
+import { ROUTE_DEFAULT_BY_KIND, routeDefaultFor } from '../../shared/route-defaults.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(removeTmpFixtures);
@@ -89,6 +90,35 @@ describe('routing-matrix.md — spec §3, pinned to the vocabularies the mechani
     expect(worker).toContain('`compact 40`');
   });
 
+  it('the worker row puts the per-task reviewer on Sonnet high, not Opus (D-6797)', () => {
+    // The held-out panel is the gate, so the per-task reviewer inside a wave
+    // is the cheaper rung; the panel's judgement lenses stay on Opus high.
+    const worker = rows.find((r) => r.startsWith("| Worker executing a spec'd plan"))!;
+    expect(worker).toContain('Sonnet · high per-task reviewer');
+    expect(worker).not.toContain('Opus · high per-task reviewer');
+    expect(matrix).toContain('Opus · high review lenses');
+  });
+
+  it('the table the server fills an unrouted dispatch from IS the matrix\'s two rows (D-6794)', () => {
+    // One table, two homes: `shared/route-defaults.ts` is what the server writes, the matrix is what the
+    // coordinator reads. Each row is parsed back into the route words and compared whole, so a one-sided edit
+    // (a class, an effort, the subagent class, the workflow mode or the compaction threshold) reds here.
+    const rowFields = (start: string): Record<string, string> => {
+      const row = rows.find((r) => r.startsWith(start));
+      expect(row, `the matrix lost its row: ${start}`).toBeDefined();
+      const cells = row!.split('|').slice(1, -1).map((c) => c.trim());
+      const main = /^([A-Z][a-z]+) · (\w+)/.exec(cells[1]!)!;
+      const sub = /^([A-Z][a-z]+) · /.exec(cells[2]!)!;
+      return {
+        class: main[1]!.toLowerCase(), effort: main[2]!, subagent: sub[1]!.toLowerCase(),
+        workflow: /^On\b/.test(cells[3]!) ? 'on' : 'off', compact: /`compact (\d+)`/.exec(cells[4]!)![1]!,
+      };
+    };
+    expect(ROUTE_DEFAULT_BY_KIND.work).toEqual(rowFields("| Worker executing a spec'd plan"));
+    expect(ROUTE_DEFAULT_BY_KIND.review).toEqual(rowFields('| Review session main loop'));
+    expect(routeDefaultFor('unknown')).toBeNull();
+  });
+
   it('states the floors the mechanism relies on, in the spec\'s words', () => {
     expect(matrix).toContain('Fable is never a fan-out worker');
     expect(matrix).toContain('`max` is never a default');
@@ -139,6 +169,53 @@ describe('review-panel.md — the held-out panel, model and effort LITERAL on ev
     // never a computed model — the mutation that would route the panel through the fields
     expect(script).not.toMatch(/model: (?!')/);
     expect(script).not.toMatch(/effort: (?!')/);
+  });
+
+  it('caps each lens at its 8 most severe findings, in the schema and in the prompt (D-6796)', () => {
+    const script = blocks[0]!;
+    expect(script).toMatch(/findings: \{ type: 'array', maxItems: 8,/);
+    // every lens prompt carries the cap, not just one of them
+    expect(script.match(/8 most severe/g)?.length).toBe(3);
+    expect(panel).toContain('8 most severe');
+  });
+
+  it('keeps 3 refuters for critical and important, gives a minor 1, and returns a minor as advisory (D-6796)', () => {
+    const script = blocks[0]!;
+    expect(script).toMatch(/f\.severity === 'minor' \? 1 : 3/);
+    expect(script).toMatch(/return \{ confirmed, advisory, refuted, unexamined, unverifiedLenses \}/);
+    // the advisory bucket is the minor survivors; confirmed never holds a minor
+    expect(script).toMatch(/const advisory = [^\n]*'minor'/);
+    expect(script).toMatch(/const confirmed = [^\n]*!== 'minor'/);
+    expect(panel).toContain('advisory');
+    expect(panel.replace(/\s+/g, ' ')).toContain('never fails a wave alone');
+  });
+
+  it('keeps the 2-of-3 kill rule for critical and important, and kills a minor on one refutation (D-6796)', async () => {
+    const run = async (severity: string, votes: Array<{ refuted: boolean } | null>) => {
+      const body = blocks[0]!.replace(/^export const meta/m, 'const meta');
+      const fn = new Function('args', 'agent', 'pipeline', 'parallel', 'log', 'phase',
+        `return (async () => {\n${body}\n})()`);
+      let v = 0;
+      const agent = async (_p: string, o: { phase: string }) =>
+        o.phase === 'Lenses' ? { findings: [{ file: 'a.ts', claim: 'c', severity }] } : (votes[v++] ?? null);
+      const pipeline = async (items: unknown[], s1: (x: unknown) => Promise<unknown>, s2: (r: unknown, x: unknown) => Promise<unknown>) =>
+        Promise.all(items.map(async (x) => s2(await s1(x), x)));
+      const parallel = (fs: Array<() => Promise<unknown>>) => Promise.all(fs.map((f) => f()));
+      return fn({ repo: 'r', base: 'b', tip: 't', plan: 'p', spec: 's', wave: 1 }, agent, pipeline, parallel, () => {}, () => {}) as Promise<
+        { confirmed: unknown[]; advisory: unknown[]; refuted: unknown[] }>;
+    };
+    // two refuters die, the one left votes refuted: stays confirmed (the main rule: refuted < 2)
+    const one = await run('critical', [null, null, { refuted: true }]);
+    expect(one.confirmed.length).toBe(1);
+    expect(one.refuted.length).toBe(0);
+    // two of three refute: dropped
+    const two = await run('important', [{ refuted: true }, { refuted: true }, { refuted: false }]);
+    expect(two.refuted.length).toBe(1);
+    // a minor with its single refuter refuting is dropped; surviving it is advisory only
+    expect((await run('minor', [{ refuted: true }])).refuted.length).toBe(1);
+    const adv = await run('minor', [{ refuted: false }]);
+    expect(adv.advisory.length).toBe(1);
+    expect(adv.confirmed.length).toBe(0);
   });
 
   it('never names Fable, and never inherits: the prose says so and the script obeys', () => {

@@ -53,10 +53,10 @@ const fixture = () => {
     calls.push(args);
     if (args[0] === 'ws-release') {
       const id = args[args.indexOf('--session') + 1] ?? '';
-      try { rmSync(path.join(reg, `${id}.hold`)); return { code: 0, stdout: `released ${id}\n`, stderr: '' }; }
-      catch { return { code: 0, stdout: `not held ${id}\n`, stderr: '' }; }
+      try { rmSync(path.join(reg, `${id}.hold`)); return { ran: true as const, code: 0, stdout: `released ${id}\n`, stderr: '' }; }
+      catch { return { ran: true as const, code: 0, stdout: `not held ${id}\n`, stderr: '' }; }
     }
-    return { code: 1, stdout: '', stderr: '' };
+    return { ran: true as const, code: 1, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const requests: ChildReclaimRequest[] = [];
@@ -89,7 +89,7 @@ const fixture = () => {
     ...testDeps(home, run), cfg, coord, io,
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: ['ws-audit', 'ws-reclaim', RECLAIM_CAP, RECLAIM_PAUSE_CAP, 'ws-release', ACTOR_FLAGS_CAP] },
-    presence: { isVisible: () => false },
+    viewers: { isVisible: () => false },
     childReclaimExec: async (req: ChildReclaimRequest): Promise<ChildReclaimOutcome> => {
       requests.push(req);
       return { kind: 'reclaimed', sessionId: req.sessionId, runId: req.runId, wip: { kind: 'none' }, secretsDropped: 0 };
@@ -252,17 +252,21 @@ describe('the reads are gathered before the loop, so the loop stays synchronous 
   });
 
   it('the pass awaits twice: the gather, after the throttle and before the decision clock and every loop, and the acts at its end', () => {
-    // D-6114: keyed on the method's symbol (scan/symbols.ts), so the slice follows `sweepChildReclaim` wherever it moves.
-    const body = codeOnly(sourceOfSymbol(path.join(srcDir, 'watch.ts'), 'FleetWatcher.sweepChildReclaim'));
-    const throttle = body.indexOf('this.lastChildReclaimSweep = gate;');
-    const gather = body.indexOf('await this.childReclaimGatherGenerations(records)');
+    // D-6114: keyed on the method's symbol (scan/symbols.ts), so the slice follows each method wherever it moves. The throttle is
+    // the lane's row (D-5862): the entry hands the pass to `runLane('childReclaim')`, which stamps before the pass is awaited.
+    const entry = codeOnly(sourceOfSymbol(path.join(srcDir, 'watch.ts'), 'FleetWatcher.sweepChildReclaim'));
+    expect(entry).toContain("await this.runLane('childReclaim', () => this.childReclaimPass(coord, records, names));");
+    expect([...entry.matchAll(/\bawait\b/g)], 'the entry awaits the lane alone').toHaveLength(1);
+    const body = codeOnly(sourceOfSymbol(path.join(srcDir, 'watch.ts'), 'FleetWatcher.childReclaimPass'));
+    const gather = body.indexOf('await Promise.all([\n      this.childReclaimGatherGenerations(records)');
     const decisionClock = body.indexOf('const asked = this.childReclaimLaneNow();');
+    const restamp = body.indexOf("this.restamp('childReclaim', mono);");
     const loop = body.indexOf('for (const r of records) {');
     const acts = body.indexOf('await Promise.all(acts);');
-    expect([throttle, gather, decisionClock, loop, acts].every((i) => i > -1), 'an anchor is gone').toBe(true);
+    expect([gather, decisionClock, restamp, loop, acts].every((i) => i > -1), 'an anchor is gone').toBe(true);
     expect([...body.matchAll(/\bawait\b/g)].map((m) => m.index)).toEqual([gather, acts]);
-    expect(throttle).toBeLessThan(gather);
     expect(gather, 'the decision clock is read after the gather').toBeLessThan(decisionClock);
+    expect(decisionClock, 'the throttle is re-stamped with the decision clock').toBeLessThan(restamp);
     expect(gather).toBeLessThan(loop);
   });
 

@@ -1722,7 +1722,7 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
    *  poisons), then one directory of links to the first copy of every other
    *  executable on that PATH. The list is DERIVED, because the whole verb runs
    *  under this PATH and a hand-kept list would be a second census of what it
-   *  calls. `ccrc-install.test.ts`' `pathWithout` keeps one, and its comments
+   *  calls. `ccrc-installFixture.ts`' `pathWithout` keeps one, and its comments
    *  count what that has cost. */
   function pathWithout(home: string, tool: string): string {
     const head = join(home, '.local', 'bin');

@@ -1212,7 +1212,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `models <id> <subcommand>`, `models refresh <id>\|--all`, `models litellm <id>` | a lane's model-class registry, and the provider catalogue it is classified against |
 | `codex start\|stop\|status\|login <id>`, `codex switch <id> litellm\|direct` | a Codex lane's tiers: its LiteLLM gateway and shim in `litellm` mode, its bridge alone in `direct` mode; `switch` moves the lane between the two ("A ChatGPT/Codex lane", below); refused on a server-role box |
 | `token sync\|probe` | the box token's fleet side: `sync --from agent` is ccrc-agent's token-sync op (a one-time code on stdin, trade for the new value, write `~/.cc-secrets/ccrc-mail.token`, prove it with one call); `probe --file <path> [--url <base>]` presents a file's value once and prints only the HTTP status and accepted, refused or unmeasured |
-| `restamp <file>` | re-stamp a file carrying a `ccrc:generated` marker after its body changed |
+| `restamp <file>` | re-stamp a file carrying a `ccrc:generated` marker after its body changed; for `ccd/session-hook.sh`, regenerate its generated helpers region from `ccd/ccd` |
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same directory shape, pruned
 to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — never the backup it just made, a dir named
@@ -1350,13 +1350,13 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the thirty-four machine lanes the
-fleet host reaches (thirty-one box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the thirty-six machine lanes the
+fleet host reaches (thirty-three box-token-consulting coordination routes plus
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
-`/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
+`/api/runs/:id`, `/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
 `/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`) take a live session
 cookie **or** the token, which is how a coordinator reads its own wave ledger from
 the fleet host), `POST /api/token/claim` (the box token's claim door, which
@@ -3096,10 +3096,12 @@ fleet `ccd` that does not advertise `route-apply-v1`); the chip wears `queued` u
 back (on a session whose row carries no routing record yet, a toast says so after 60 s without a read-back). The
 new-session sheet seeds `class`, `effort` and `workflow` at creation. An operator spawn with nothing chosen gets
 the coordinator row, `class=opus effort=ultracode subagent=sonnet workflow=on`; a dispatched worker gets a record
-only when its run names one. **Fable is never reached by a default or an escalation** — both automatic ladders
-(`shared/routing-ladder.ts`) stop at `opus` — only by an explicit class choice: the picker's Fable row,
-`ccd route --set class=fable`, `--route class=fable` at creation, a coordinator's manual `field`/`value` write
-through `POST /api/runs/:id/route`, or the operator's own `/model fable` typed in the session, which the next
+only when its run names one. **Fable runs only when the operator selects it** (D-6790, ruling 2026-10-24). Neither automatic ladder
+(`shared/routing-ladder.ts`) reaches it — both stop at `opus`, and a reversal of a demotion off `fable` answers `ceiling`
+rather than restoring it — and every box-token route write refuses it with `409 fable-operator-only`: a coordinator's
+manual `field`/`value` write or ladder result through `POST /api/runs/:id/route`, and the `route` a dispatch sends. Only
+the operator's own paths remain: the picker's Fable row, the new-session sheet's class and a new workspace's route (all
+behind the cookie session), or the operator's own `/model fable` typed in the session, which the next
 stop or spawn keeps in the record (`[actor=operator-session]`, stage 7 above).
 
 **Placement and swaps route by class.** A lane serves `fable` only on an Anthropic backend whose **Fable share** —
@@ -3581,9 +3583,10 @@ general remote-shell:
   and checks it's still under an allowed canonical prefix — closing the
   classic symlink-escape hole. Reads: `$HOME/.cc-sessions/`,
   `$HOME/.cc-limits/`, `$HOME/.cc-clips/`, `$HOME/.claude*/` (glob), the
-  fleet's projects root, and exactly the nine `$HOME/.ccrc` node files by
+  fleet's projects root, and exactly the ten `$HOME/.ccrc` node files by
   name (`NODE_FILES`, `shared/agent-protocol.ts`; the ninth,
-  `box-token-generation`, holds a generation id, never a token) — a live symlink inside
+  `box-token-generation`, holds a generation id, never a token; the tenth, `tmp-sweep.json`, is the tmp sweep's
+  census, which the server's census lane reads and mails from, D-6624) — a live symlink inside
   `$HOME/.ccrc` carrying one is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the update inventory refuses to read as that file; never `$HOME/.ccrc` itself. Writes: `$HOME/.cc-clips/` only. **This
   list did not widen for the transcript resolver or the supervisor
   heartbeat**: the resolver's uuid search (rungs 5 and 6 of its ladder)
@@ -4419,6 +4422,22 @@ cleanup row, and an answer that stands for the whole box is listed once.
 - you know that any process of this uid can touch `$REG/collect-lane-live`, as it can `expire-lane-live`, and that the
   lane reports a change only when an act job next reads the file, so a missing "now live" or "now shadowed" row means not
   yet seen, never unchanged.
+
+**The loose arm (fleet disk retention, spec 2026-10-23 §2.4, D-6627; reverses D-5888).** The lane also takes an entry
+directly under `~/.cc-tmp` that no witness and no registry row names. Each pass asks `ccd ws-audit --collect-census` once, a
+read-only listing of those entries, classed and bounded at 1,024, every name travelling as hex. Only the `loose` class (a
+regular file or a directory of this uid) joins the population, as an id `loose:<hex>` that the temp-root id predicate refuses,
+so no witnessed argv can be built from it; a census that is unreadable or cut at its bound adds no entry, and says why. An
+entry a killed verb left in the quarantine joins by its record. The lane's licence, pacing and gates are the witnessed arm's,
+with two changes: the open-run hold's "a fresh collection whose witness names no run" does not apply (a loose entry has no run
+to wait for), and the verb is composed only while `$REG/collect-loose-live` stands **and** the lane itself is effectively
+live. The marker is read from the act job's last registry listing, after the lane's own switch, so a pause, a withdrawn
+capability or a shadowed lane stops a loose act too, and the marker alone arms nothing. Without both, the lane records
+"temp entry would be collected" once per entry and token. Nothing in the tree writes the marker; it is the operator's to
+touch by hand, as `collect-lane-live` is. It needs `collect-loose-v1` in `ccd caps`: without it the census is never asked.
+Its rows read "temp entry collected" and "temp entry would be collected", name the entry (decoded, made one safe line), and
+list no attention item, because a loose entry is no session. When the census is cut, unmeasured, past the population cap, or has quarantine records it could not read, the arm considers
+nothing it cannot vouch for and one box line ("collector / loose temp entries") says why.
 
 **The switch in Settings (child reclamation wave 10).** The lane now has two arms, then one. It is live when either
 holds:
@@ -5325,7 +5344,7 @@ removal** (below), which takes back what D-1243 wrote into each rostered home's 
 `~/.ccrc/graph-noise/_default.list`; **excludes**, `graphify-out/` and `.graphifyignore` converged
 into each tree's common-dir `info/exclude`; and **legacy hooks off** — the old per-repo graphify git
 hooks are removed if wholly graphify-generated, left in place and reported if they chain other
-content. (`server/test/ccrc-install.test.ts` pins that sequence, and
+content. (`server/test/ccrc-install-*.test.ts` pins that sequence, and
 `ccrc-install-graphify.test.ts` pins this paragraph's count against it — the enumeration went stale
 for two deviations before that guard existed.)
 
@@ -5694,15 +5713,15 @@ things at that moment: it builds a SECOND card — the files this context was wo
 community and dependents read out of the same graph — and it MEASURES the compaction, writing one line to a
 per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them opens a new output
 channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
-arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3160`), which appends the second
+arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3198`), which appends the second
 subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`:97`) before the single `jq -cn` print (`:103-105`) — and `PreCompact` and
 `PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
 working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8501-8503`), each with an operator sentence of its own at `:8553`,
-`:8561` and `:8574`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8508-8510`), each with an operator sentence of its own at `:8560`,
+`:8568` and `:8581`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5901,6 +5920,12 @@ and any doubt (the probe failing, a walk running out of time) keeps the entry.
 
 A taken entry is renamed into `<root>/.ccd-tmp-quarantine/<uuid>/<ns>.<name>`; a pass 24 hours later (1 hour
 under pressure) asks the holder probe again and deletes it, so the session has a working day to move it back.
+**Finished task output is capped, not moved.** A `tasks/*.output` regular file over 1 GiB, unheld, with no mtime or
+ctime in the last hour, is rewritten as its first 64 MiB, one marker line (`[ccd-tmp-sweep: <n> bytes cut at <ts>]`)
+and its last 64 MiB. The new file is written beside it and renamed over, so a failed write leaves the original
+byte-identical, and the holder probe is asked last, just before the rename. The census records it as a `moved` row
+of kind `output-capped` (counted `capped`, or `wouldCap` in shadow).
+
 **It ships in shadow:** without `~/.ccrc/tmp-sweep-live-arm` it records what it would take and touches
 nothing (no code in the tree creates that file; arming is the operator's). Pressure is the sweep's own
 measure of its filesystem (92% of bytes or inodes used, the same figure `shared/disk.ts` holds; `disk-twins.test.ts`
@@ -5908,6 +5933,17 @@ pins them equal) and also shortens the dead arm to 2 days. The live arm scans at
 pass under pressure. Its census, `~/.ccrc/tmp-sweep.json` (`v`, `at`, `liveAt`, `pressure`, `arm`, `seq`,
 `roots`, `sessions` with each one's `budget`, `moved` rows kept 7 days or 1,000, `counts`), is replaced whole
 by a rename at the end of every pass, shadow or live. The sweep is its only writer.
+
+**The test-run arm** (D-6622) rides the same switch and rows. A server test run keeps its fixtures in one
+`ccrc-testrun-XXXXXX` directory under its `TMPDIR`; a later run under the same `TMPDIR` collects one whose
+owner died, but a root no later run visits (a child workspace's own `TMPDIR`, a box nobody tests on any more)
+stays. In the box's `TMPDIR` and in each witnessed child leaf that still has a registry row, the sweep takes a
+top-level directory named exactly `ccrc-testrun-` and six letters or digits (or that name with `.dead`) when no
+socket is bound at its `live.sock` in the kernel's table (the run's own liveness test), nothing under it has
+changed (ctime, not mtime) for 6 hours (1 under pressure), and the holder probe answers nobody. It renames the
+root to its `.dead` twin and then removes it, as the run's own cleanup does, so there is no quarantine and
+the census row (kind `test-run`) carries none. A leaf whose row is gone is not this arm's: `ws-collect` takes
+the whole leaf. Any doubt (a walk that cannot finish, an unreadable socket table, a failing probe) keeps the root.
 
 ### Pane-scope sweep (ccd-scope-sweep)
 
@@ -7167,6 +7203,10 @@ Three conventions carry more weight here than style:
   either side of it, resolve every other hunk as source, then restamp. `restamp` refuses a
   file with no marker, a symlink, and any generator's output under `~/.local/bin` or
   `~/.ccrc` — regenerate those with `ccrc wrappers` or `ccrc install`.
+  `ccd/session-hook.sh` carries a generated helpers region (`shared/hook-helpers.mjs`);
+  after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
+  `bash ccd/ccrc restamp ccd/session-hook.sh`. Restamping `ccd/ccd` says when the hook's
+  region has gone stale.
 
 Design records live in `docs/superpowers/specs/`; the architecture rules the code is held to
 are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`.

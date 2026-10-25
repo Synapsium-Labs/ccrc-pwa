@@ -1017,7 +1017,7 @@ function sourceCall(home: string, script: string, stdin = ''): Result {
  *  reason `ccrc-passwd.test.ts:100` states — without a terminal the refusing
  *  branch is the ONLY one a test can reach — and each pins the deletion of its
  *  guard as a mutation (`ccrc-passwd.test.ts:484`, `ccrc-expose.test.ts:262`,
- *  `ccrc-install.test.ts:3222`). This gate INVERTS: it refuses the terminal. It
+ *  `ccrc-install-*.test.ts`). This gate INVERTS: it refuses the terminal. It
  *  is pinned the same way anyway, because the inversion does not change the
  *  fact that a pipe-only test can never reach the branch, and a guard no test
  *  can reach is a guard nothing measures. Task 22's plan carried no test for
@@ -1042,7 +1042,7 @@ function sourceCallTty(home: string, script: string): Promise<Result> {
       clearTimeout(timer);
       resolve({ code, stdout: out, stderr: '' });   // a pty merges the two streams
     };
-    // 19s, NOT 20s — `ccrc-install.test.ts:3247`'s number and its reason.
+    // 19s, NOT 20s — `ccrc-install-*.test.ts`'s number and its reason.
     // `server/vitest.config.ts:87` sets `testTimeout: 20_000` on linux, so a
     // 20s timer here TIES with the runner and loses: measured at review round
     // 1, vitest won at 20012ms, `p.kill()` never ran and the pty `bash` was
@@ -2316,7 +2316,7 @@ describe('ccrc account add: the ordered write', () => {
     // The half `oneObject` alone cannot prove: that the two convergers' lines
     // were REDIRECTED and not discarded. `_inst_accounts_sh` (ccd/ccrc:5575)
     // and `cmd_wrappers` (:2904) both write these on stdout for `ccrc install`.
-    // Only the second is pinned there (ccrc-install.test.ts:2687-2688, the
+    // Only the second is pinned there (ccrc-install-*.test.ts, the
     // `summary:` regex; :2820 is `_inst_wrappers`' own line, ccd/ccrc:7148, and
     // nothing in server/test/ mentions `install: accounts.sh` at all) — so this
     // assertion is also the first one in the tree to measure the accounts.sh

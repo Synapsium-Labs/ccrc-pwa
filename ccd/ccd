@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=60242abc3ec5e8f469348dd8db684afd68d94db7b218183267f8c46b65c075b8
+# ccrc:generated 1 sha256=29a649b82ac4af1037b14957600d7f2d348b92f2684f81eea04712c017a21f4e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24,9 +24,17 @@ set -uo pipefail
 # inherited `nocasematch` folds here starts PROTECTED, `-p` drops that option, and
 # this guard and the dispatcher compare exactly again. SOURCE MODE never runs this;
 # the launcher classifies a superset of these shapes; the dispatcher owns every tail.
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan ]] \
-     || { [[ $# -eq 4 || $# -eq 5 ]] && [[ "${1-}" == ws-audit && "${2-}" == --session && ( "${4-}" == --reclaim || ( $# -eq 4 && ( "${4-}" == --expire || "${4-}" == --collect ) ) ) ]] \
-          && [[ $# -eq 4 || "${5-}" == --defer-expired ]]; } || [[ $# -eq 4 && "${1-}" == ws-audit && "${2-}" == --loose-hex && "${4-}" == --collect ]]; }; then   # + the loose arm's audit (D-6625)
+__ccd_stale=0   # DR-26: `ws-audit --session <id> --reclaim` with a tail drawn from [--defer-expired] [--stale <w>] [--hold-digest <d>], any order
+if [[ $# -ge 5 && "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --reclaim ]]; then
+  __ccd_stale=1
+  for ((__ccd_i = 5; __ccd_i <= $#; __ccd_i++)); do
+    case "${!__ccd_i}" in --defer-expired) ;; --stale|--hold-digest) __ccd_i=$((__ccd_i + 1)) ;; *) __ccd_stale=0; break ;; esac
+  done
+fi
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue ]] \
+     || (( __ccd_stale )) \
+     || { [[ $# -ge 4 && $# -le 6 && "${1-}" == ws-audit && "${2-}" == --session ]] \
+          && [[ ( "${4-}" == --reclaim && ( $# -eq 4 || ( $# -eq 5 && "${5-}" == --defer-expired ) ) ) || ( "${4-}" == --expire && ( $# -eq 4 || ( $# -eq 6 && "${5-}" == --child-of ) ) ) || ( $# -eq 4 && "${4-}" == --collect ) ]]; } || [[ $# -eq 4 && "${1-}" == ws-audit && "${2-}" == --loose-hex && "${4-}" == --collect ]]; }; then   # + the loose arm's audit (D-6625)
   if ! (( BASH_VERSINFO[0] > 4 || ( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4 ) )) || [[ $- != *p* ]]; then
     printf 'ccd: refused (entry-unprivileged): %s reaches ccd only through its installed direct entry, under Bash >= 4.4 in privileged mode (-p); this is Bash %s with flags %s — nothing was run\n' \
       "$1" "${BASH_VERSION-unknown}" "$-" >&2
@@ -37,6 +45,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" 
     exit 125
   fi
 fi
+unset __ccd_stale __ccd_i
 
 # ── THE PLATFORM LAYER — one file, two userlands ────────────────────────
 # ccd was written against GNU/Linux and says so out loud: `_reg_set`'s header
@@ -373,7 +382,8 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
 # adversarial pass then measured the floor itself: 4.2/4.3 die on ccd's
 # empty-array set -u expansions regardless, so the declared floor is 4.4.)
 # `ccd/session-hook.sh`'s `_hook_epoch_ms` is a deliberate local copy of
-# this body (the hook sources nothing); a test pins the two identical.
+# this body (the hook sources nothing), GENERATED from it by
+# `shared/hook-helpers.mjs` (ARCH-74); a test fails when the two drift.
 #
 # THE SEPARATOR IS NOT ASSUMED TO BE A DOT: `EPOCHREALTIME` is formatted with
 # the LOCALE's decimal point, and a box running a comma locale would otherwise
@@ -1269,6 +1279,35 @@ _svc_run_supervised() {   # <unit> <log> <envfile|-> [NAME=value ...] -- <cmd> [
   printf 'nohup %s\n' "$!"
   return 0
 }
+# THE LAUNCHD CLASS the server (or agent) job carries (macOS): the
+# first word of ~/.ccrc/launchd-class. `Background` — the default, and what
+# every box ran before this file — is launchd's lowest CPU and I/O class. On a
+# box saturated by other work it starves rather than slows: measured on a busy
+# fleet box, the server's own job took minutes to reach `listen` while a
+# hand-started copy answered /health in seconds, so every update's health gate
+# failed and restored, and the sessions (same class) ran behind everything
+# else. `Standard`, `Adaptive` or `Interactive` in the file changes it. A FILE,
+# not an env var and not ccrc.env, for `_rc_enabled`'s reasons: HOME is ccd's
+# only isolation boundary, ccrc.env carries tokens and a fleet box may have
+# none. OPERATOR-OWNED: nothing writes it. Absent or empty is Background; any
+# other word is named on stderr and reads as Background — each arm prints its
+# own literal, so nothing from the file can reach a plist. The server job and
+# the session plist writer (`_svc_write_session_plist`) read it. It is in this
+# block, so ccd and ccrc carry it byte for byte (ARCH-74); the writers still
+# call it behind `declare -F`.
+_launchd_class() {
+  local f="$HOME/.ccrc/launchd-class" v=""
+  if [ -r "$f" ]; then { IFS= read -r v || true; } < "$f"; fi
+  v="${v%$'\r'}"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%%[[:space:]]*}"
+  case "$v" in
+    ''|Background) printf 'Background' ;;
+    Standard)      printf 'Standard' ;;
+    Adaptive)      printf 'Adaptive' ;;
+    Interactive)   printf 'Interactive' ;;
+    *) printf "ccrc: %s names '%s', not Background, Standard, Adaptive or Interactive — using Background\n" "$f" "$v" >&2
+       printf 'Background' ;;
+  esac
+}
 # ── END PLATFORM LAYER — the byte-identical region ends HERE ────────────
 # Add a new `_plat_*`/`_svc_*` helper ABOVE this line, in BOTH files, or the
 # pin test (`macos-platform.test.ts`) cannot see it: the compared region is
@@ -1540,8 +1579,8 @@ READER_MIN_COLS=120
 STALE_RESUME_GRACE=30            # D-2443 — seconds after a fresh $REG/<id>.stalepress stamp during which _session_hard_blocked's transcript arm stands down, so the same-tick rescue (_auto_swap_check, _tick_strand_undecidable) cannot swap out the continuation the stale-press Enter just submitted before Claude Code has appended the resumed turn's row
 TRANSCRIPT_ARM_INTERVAL=30       # D-2444 — seconds a session's positive or negative transcript verdict is reused; the final review measured an uncached arm at ~36 ms, ~14x the pane classifier and mostly in _transcript_path, so this bounds the full scan to once per interval while each positive still rechecks the draft
 # Proactive auto-/compact: when an IDLE session's context passes ITS threshold, send /compact
-# so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context, so this is
-# non-destructive on both the Anthropic and gpt lanes). Only at a clean turn boundary; kill-switch
+# so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context and, armed, a coordinator's runs,
+# yet a compaction is NOT lossless on either lane, D4 #757). Only at a clean turn boundary; kill-switch
 # via AUTOCOMPACT_DISABLE_FILE.
 COMPACT_THRESHOLD=50            # own context % at/above which an idle session auto-compacts, for a
                                 # session whose routing record hands `_route_get` no `compact` value —
@@ -3185,10 +3224,10 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 205
-# invocations across 174 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 208
+# invocations across 177 non-comment lines.
 #
-# THE LAST MOVE WAS the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
+# THE LAST MOVE WAS `cmd_pr_landing`'s two reads (a session's `workspace` and `project`), the +2 calls on two lines; before it ws-expire's `--child-of` marker read (`_ws_expire_not_child`, D-6640), the +1 call on its own line; before it the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
 # then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (#166 wave 3, Task 5), `_child_tmpdir`'s and #127's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -3711,7 +3750,7 @@ _compact_lock_why_short() {   # -> the SHORT clause the `ws-gc --prune` sweep's
                               # COMPACT_LOCK_WHY (r8 R8-M3).
                               #
                               # THE SWEEP REPORT AND THE DURABLE RECORD DID NOT
-                              # AGREE. One line after `_pr_why` renders the
+                              # AGREE. One line after `_reg_retire` renders the
                               # token-specific remedy into the journal, the
                               # status-1 arm told the human reading the report
                               # "the compaction lock was unavailable" — the
@@ -5475,6 +5514,11 @@ PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository
 # reader, which is what `single-definition` exists to forbid.
 PR_CHECK_FIELD=statusCheckRollup
 
+# pr-landing's two timeouts (spec 3.3): one GraphQL read always, two plain REST GETs on a rules-cache miss. The worst
+# case is 6 + 4 + 4 = 14 s inside the runner's 25 s `CCD_VERB_TIMEOUT_MS['pr-landing']` (PL-2 pins it), a 44 % reserve.
+PR_LANDING_GQL_TIMEOUT=6
+PR_LANDING_REST_TIMEOUT=4
+
 _gh_repo_slug() {   # main-checkout path -> OWNER/NAME, or non-zero
   # The first two guards are subsumed by what follows them, and the mutation
   # sweep says so: with no origin `git config --get` exits 1 AND prints nothing,
@@ -6442,6 +6486,27 @@ elif mode == 'pick':
             str((chosen.get('mergeCommit') or {}).get('oid') or ''),
             str(chosen.get('headRefOid') or ''),
         ]) + '\n')
+
+elif mode == 'bind':
+    # `pr-landing`'s binding (spec 3.3): `annotate` then `pick` over the ONE row a GraphQL alias answered, in a
+    # `gh pr list` row's shape, through the same `bound()` `state` uses. It WRITES NOTHING: no `put`, no
+    # `.prstate-<id>.lock`, no `.prhistory`. stdin is the list of alias rows (null where GitHub answered no object).
+    # Prints `unreadable-alias` for an alias with no object, nothing for a row that does not bind, and otherwise one JSON
+    # object of the five facts the lane reads.
+    (main, branch, base_short, tip, idx) = sys.argv[2:7]
+    tip = tip or None
+    rows = rows_in()
+    row = rows[int(idx)] if rows is not None and 0 <= int(idx) < len(rows) else None
+    if not isinstance(row, dict):
+        sys.stdout.write('unreadable-alias\n')
+    else:
+        chosen = pick(annotate([row], main, tip, branch, base_short), branch, base_short)
+        if chosen is not None:
+            sys.stdout.write(json.dumps({
+                'number': chosen.get('number'), 'headRefOid': chosen.get('headRefOid'),
+                'baseRefName': chosen.get('baseRefName'), 'state': chosen.get('state'),
+                'isDraft': chosen.get('isDraft'),
+            }) + '\n')
 PY
 }
 
@@ -7173,7 +7238,7 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # `--actor` (`run:<id> dispatch`). Same ruling as `cmd_ws_hold`'s at
   # ccd:4801-4807, for the same reason — never put a second string on a verb
   # with nothing to say which one a reader is looking at.
-  local norc=0 lc_child='' lc_gc=0 lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=() lc_route=()
+  local norc=0 lc_rdef=0 lc_child='' lc_gc=0 lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=() lc_route=()
   # TWO FLAGS FOR A NAMED WORKSPACE (design 2026-10-20 §4.1), each parsed the way `--actor` is — at most once,
   # non-blank, no control character, `_lc_dec_ok` — and for the same reasons. `lc_gt`/`lc_gw` are GIVENNESS, as
   # `lc_gs`/`lc_ga` are: `--title ''` is a declared blank, and refusing it is not the same act as never being asked.
@@ -7214,6 +7279,10 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
       --route)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_route+=("$2"); shift 2 ;;
       --route=*)   lc_route+=("${1#--route=}"); shift ;;
+      # D-6794: the --route pairs on this argv are the SERVER'S DEFAULT row for the run kind, not a class anybody
+      # typed. Placement treats the class as a preference (strict=0, like the coordinator row), so a lane at the
+      # seven-day ceiling still places; the pairs are recorded all the same.
+      --route-default) lc_rdef=1; shift ;;
       # The minting run (spec §5.1) — what makes this workspace a CHILD; see `_child_runid_valid`.
       --child)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_gc=1; lc_child="$2"; shift 2 ;;
@@ -7313,6 +7382,9 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   if [[ -z "$cls" ]] && (( ! norc )); then
     cls="${ROUTE_COORDINATOR_ROW%% *}"; cls="${cls#class=}"; strict=0
   fi
+  # D-6794: `--route-default` marks the class as the server's table row, nobody's typed word: it places as a
+  # preference, never a refusal (the same rule as the coordinator row above). Only meaningful beside a class.
+  (( lc_rdef )) && [[ -n "$cls" ]] && strict=0
   # THE OPERATOR'S ACCOUNT (`--wrapper`, design 2026-10-20 §4.1) SKIPS PLACEMENT AND IS CHECKED INSTEAD, by
   # `_ws_wrapper_why`, which asks the lane the questions placement asks every lane and refuses with the same per-lane
   # words (`_ws_lane_why`). It never falls back to another account: the operator named this one, and placing the
@@ -8188,15 +8260,15 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # `rm -f` would not take is still on disk — a message telling that operator
   # to wait for a compaction to settle prescribes a wait for a compaction that
   # is not running and promises state that no longer exists.
-  local _rm_prc=0
-  _reg_purge "$id" || _rm_prc=$?                                           # finding F3
-  if (( _rm_prc == 3 )); then
+  # `_reg_retire` keeps `_reg_purge`'s VALUE in REG_RETIRE_RC, and REG_RETIRE_WHY below.
+  _reg_retire "$id" ws-rm                                                  # finding F3
+  if (( REG_RETIRE_RC == 3 )); then
     _lc_fail destroy "$id" "$lctx" purge-incomplete \
       "the workspace was torn down and the registry row WAS purged — this journal's own purge fact is the record of it — but $REG_PURGE_UNREMOVED could not be removed and still stands; re-running \`ccd ws-rm $id\` will not take it, remove it by hand" \
       verb ws-rm dec.reason "$reason" meas.unremoved "$REG_PURGE_UNREMOVED"
     echo "ccd: $id: torn down and purged, but $REG_PURGE_UNREMOVED could not be removed — see the lifecycle journal" >&2
     return 1
-  elif (( _rm_prc == 2 )); then
+  elif (( REG_RETIRE_RC == 2 )); then
     # STATUS 2 IS NOT STATUS 1 (r3 A-I3). `_reg_purge` has answered the two
     # apart since D-2782 and every caller collapsed them, so a flock-less box
     # was told its lock "was unavailable" and to "re-run once the compaction
@@ -8211,7 +8283,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
       verb ws-rm dec.reason "$reason"
     echo "ccd: $id: torn down, registry NOT purged — the compaction lock mechanism is absent; see the lifecycle journal" >&2
     return 1
-  elif (( _rm_prc != 0 )); then
+  elif (( REG_RETIRE_RC != 0 )); then
     # STATUS 1 FOLDS SEVERAL CONDITIONS, AND COMPACT_LOCK_WHY NAMES ONLY THE
     # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
     # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
@@ -8235,9 +8307,9 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # acquire sites, one level up; this is it one level down, where the
     # record is DURABLE — and it is the ONE renderer all five durable callers
     # consult, so this caller's text cannot drift from theirs.
-    local _rm_why; _rm_why=$(_compact_lock_why_remedy "$id" ws-rm)
+    # REG_RETIRE_WHY is that remedy, rendered by `_reg_retire` before anything can clobber COMPACT_LOCK_WHY.
     _lc_fail destroy "$id" "$lctx" purge-refused \
-      "the workspace was torn down, but the registry row could not be purged: $_rm_why" \
+      "the workspace was torn down, but the registry row could not be purged: $REG_RETIRE_WHY" \
       verb ws-rm dec.reason "$reason"
     echo "ccd: $id: torn down, registry NOT purged — see the lifecycle journal" >&2
     return 1
@@ -8712,6 +8784,7 @@ forget
 list
 menu
 pick
+pr-landing
 pr-open
 pr-state
 prefer
@@ -8851,6 +8924,11 @@ EOF
   # this token may compose routing fields onto a dispatch argv; one that does
   # not passes none and journals that it could not.
   echo route-argv-v1
+  # route-default-v1 — `ws-add --route-default`: the `--route` pairs beside it are the server's default row for the
+  # run kind, so their class places as a preference (strict=0) and never refuses a dispatch at the weekly ceiling.
+  # A server that does not see this token sends no default route at all (an old ccd would bind the flag as the
+  # project).
+  echo route-default-v1
   # route-apply-v1 — this ccd takes `--apply` on `route`, and its supervise tick
   # re-applies a pending routing record with the SESSION-ONLY keystrokes
   # (`/effort` slider + `s`, `/model` picker + `s`), reading the acknowledgement
@@ -8883,7 +8961,9 @@ EOF
   echo child-argv-v1
   # child reclamation (wave 3): see "RECLAIM-V1" in the RECLAIM region
   echo reclaim-v1
-  echo reclaim-pause-v1; echo expire-v1; echo ws-expire; echo collect-v1; echo ws-collect; echo collect-loose-v1; echo orphan-v1; echo ws-orphan   # the verbs ride here, not in the list above, which sits above the frozen corpus; see "EXPIRE-V1" and "COLLECT-V1"
+  echo reclaim-stale-v1   # `ws-reclaim`/`ws-audit --reclaim` take `--stale <word> [--hold-digest <sha256>]` (DR-26, D-6638); sent only behind this word
+  echo nested-rescue-v1; echo scratch-rescue   # D-6632: rung 9's rescue and the box-local `scratch-rescue` entry, one inode; see NESTED-RESCUE-V1
+  echo reclaim-pause-v1; echo expire-v1; echo expire-child-v1; echo ws-expire; echo collect-v1; echo ws-collect; echo collect-loose-v1; echo orphan-v1; echo ws-orphan; echo archive-if-no-pane-v1   # the verbs ride here, not in the list above, which sits above the frozen corpus; see "EXPIRE-V1" and "COLLECT-V1"
   echo docs-tree
   echo docs-show
   echo docs-fetch
@@ -8895,6 +8975,7 @@ EOF
   # word, and PLACES IT BEFORE THE PROJECT. An older ccd binds an unknown `--` token as a positional (D-6164): leading,
   # it lands in the project or slug slot and is refused there; trailing, it would be dropped unread and the workspace
   # created on the least-loaded lane with exit 0 — so the caps gate is the control and the leading position the defence.
+  echo pr-landing-v1   # `ccd pr-landing`: the checks lane's read-only PR read; sent only behind this word
   echo ws-title-v1; echo ws-wrapper-v1; echo ws-title   # the verb itself (S9), which the server offers Rename on; it rides here, not in the list above
   echo refusal-v1   # #560: `_lc_refuse` prints `ccd-refusal: <act> <word>` on stderr before its die; the server reads it first and keeps its prose matchers as the fallback
   echo swap-busy-v1; echo hibernate  # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word; `hibernate` (D-5242) is a verb, sent only behind `verbSupported`
@@ -9521,6 +9602,7 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
       2) die "route: this box's roster projection carries no subagent class list — re-run ccrc install" ;;
       *) die "bad value for $f ($(_route_bytes "$v") bytes) — not in its vocabulary" ;;
     esac
+    _route_fable_shell "$f" "$v" && die "fable-operator-only: a Claude Code session may not select class fable"
   done
   # Haiku takes no effort level: the PAIR is refused whether it arrives in one
   # call or across two (the record on disk is half of the pair).
@@ -10024,9 +10106,10 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # which is `ccd:676-689`'s `${2-ccd}` vs `${2:-ccd}` distinction broken in a new
   # place. Same for `--actor ''` and `--reason ''`, which are REFUSED rather
   # than silently read as absent — one policy, everywhere (AUDIT B5).
-  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 nopane=0 lc_args=()
   while (( $# )); do
     case "$1" in
+      --if-no-pane) nopane=1; shift ;;   # the stale-archive arm's guard (`archive-if-no-pane-v1`): refuse `live` below, before anything is written
       --session)   if (( $# >= 2 )); then lc_args+=("$1" "$2"); shift 2; else lc_args+=("$1"); shift; fi ;;
       # An explicit arity check, not a bare `shift 2`: ccd runs `set -uo pipefail`
       # with NO `-e`, so a shift past the end of argv fails, shifts nothing, and this
@@ -10077,6 +10160,17 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # `exit` here would terminate an in-process batch caller at its first
   # already-archived workspace and skip the rest with a success code.
   [[ -f "$REG/$id.archived" ]] && { echo "already archived $id"; return 0; }
+
+  # `--if-no-pane` (the server's stale-archive arm): the archive below kills the pane, so a pane that came back since the
+  # server looked must stop it. FAIL TOWARD KEEPING: only a tmux answer of `gone` AND a unit that says `inactive` or `failed`
+  # pass; a live session, an unanswered probe, an active or activating unit and an EMPTY unit answer (no systemd, or the
+  # manager did not answer) all refuse `live`, before the manifest and before any marker.
+  if (( nopane )); then
+    _session_probe "$id"
+    local npu; npu=$(_svc_is_active "claude-session@$id")
+    [[ "$PROBE_VERDICT" == gone && ( "$npu" == inactive || "$npu" == failed ) ]] \
+      || die "live"
+  fi
 
   local workdir; workdir=$(_reg_get "$id" workdir)
   [[ -n "$workdir" ]] || die "incomplete registry for '$id'"
@@ -10173,6 +10267,7 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   if [[ "$phase" == merged && "$pr" =~ ^[0-9]+$ ]]; then reason="merged:#$pr"
   elif [[ "$ahead" == 0 ]]; then reason="empty"
   else reason="manual"; fi
+  (( lc_gr )) && [[ "$lc_reason" == stale ]] && reason="stale"   # `--reason stale` is also the archive's WHY (`.archivedreason`); any other --reason word stays a trail word
   _reg_set "$id" archived "$(date +%s)"
   _reg_set "$id" archivedreason "$reason"; rm -f -- "$REG/$id.hibernated"   # an archive ENDS a hibernation (D-5242): the mail lane never wakes an archived row
   # AFTER both markers, so `reason` is the value that actually landed. It is one
@@ -10829,35 +10924,17 @@ cmd_ws_attic() {   # ccd ws-attic --session <id>   |   ccd ws-attic --drop <id>
   esac
 }
 
-_pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> one JSON line
-  # `$5` is WHEN gh ANSWERED `$4`, in milliseconds, and it belongs to the answer
-  # rather than to this session: `cmd_pr_state` takes it once, at the read, and
-  # hands the same value to every session of a `--project` sweep. That is what
-  # makes `_pr_py`'s compare-and-set rank ANSWERS. It is optional and `""` is the
-  # honest default for a caller that has none — `_pr_py` then falls back to its
-  # own clock, which is the pre-fix behaviour and not a refusal.
+_pr_bind_facts() {   # id main [rows-head-branch] -> 0, the binding's shell-side facts set in the CALLER's locals; 1 with BIND_REFUSAL set
+  # THE ONE PLACE A SESSION'S BINDING FACTS ARE READ, extracted from `_pr_state_one` so that `pr-state` and `pr-landing`
+  # cannot disagree on whether a workspace owns a PR. It PERSISTS NOTHING and prints nothing but the drift rung's stderr
+  # line; each caller turns a refusal into its own answer shape (`pr-state`: `{id, phase: "unknown", reason}`;
+  # `pr-landing`: `{id, unmeasured: [reason]}`).
   #
-  # `$6` is WHICH BRANCH gh was asked about for `$4`, and it is here for the
-  # same reason `$5` is: it is a property of the ANSWER, not of this session, so
-  # it travels with the rows rather than being re-derived beside them. Since the
-  # `--session` path started sending `--head`, the branch is read once — to
-  # build the question — and the binding below must use THAT string and not a
-  # second read of the field, because the two reads are now separated by a
-  # network call `PR_GH_TIMEOUT` bounds at twelve seconds. A `ws-rename` or a
-  # hand-edited registry landing in that window would otherwise have this
-  # function bind branch B's rows against branch C: `bound()` cannot match, the
-  # phase collapses to `none`, and `none` is the answer that CLEARS the
-  # persisted `prnumber` and appends the outgoing PR to the append-only
-  # `.prhistory` — a local fact erasing GitHub's answer about a PR, which is
-  # exactly what the drift rung below refuses to do. Answering about the branch
-  # gh was asked about is coherent and at most one sweep stale; the next sweep
-  # asks about the new name.
-  #
-  # `""` — every `--project` caller, and the four-argument calls the pr-state
-  # tests make — means "these rows are the whole repository's, not one
-  # branch's", and the registry is then the only source there is.
-  local id="$1" main="$2" repo="$3" rows="$4" answeredAt="${5:-}" rowsHead="${6:-}"
-  local project branch base baseShort tip ahead workdir dirty tmpl
+  # DYNAMIC SCOPE, on purpose: bash has no out-parameters worth the name, so the CALLER declares `project branch base
+  # baseShort tip ahead workdir wthead registered BIND_REFUSAL` as locals and this function assigns them. `main` is the
+  # caller's checkout, passed in because `pr-state`'s tests hand `_pr_state_one` a main of their own choosing.
+  local id="$1" main="$2" rowsHead="${3:-}"
+  BIND_REFUSAL=""
   project=$(_reg_get "$id" project)
   branch="$rowsHead"; [[ -n "$branch" ]] || branch=$(_reg_get "$id" branch)
   base=$(_reg_get "$id" base);       workdir=$(_reg_get "$id" workdir)
@@ -10870,7 +10947,7 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
   # registry-incomplete workspace mark its seven siblings `unknown` and
   # silence the whole project's lane. §6's "Partial sweep" row promises
   # per-session honesty; this is where that is kept.
-  [[ -n "$branch" ]] || { printf '{"id":%s,"phase":"unknown","reason":"error"}\n' "$(_json_str "$id")"; return 0; }
+  [[ -n "$branch" ]] || { BIND_REFUSAL=error; return 1; }
   [[ -n "$base" ]] || base="origin/HEAD"
   baseShort="${base#origin/}"
   # `--quiet` turns git's own two answers into two exit codes, and the same
@@ -10892,7 +10969,7 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
   case "$rc" in
     0) : ;;
     1) tip="" ;;
-    *) printf '{"id":%s,"phase":"unknown","reason":"error"}\n' "$(_json_str "$id")"; return 0 ;;
+    *) BIND_REFUSAL=error; return 1 ;;
   esac
   # "" is UNMEASURED, not zero. `ahead=0` is the claim "this branch is level with
   # base", which is what `no-commits` is built from, and a ref that does not
@@ -10914,44 +10991,6 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
     # rest of this function now says, and `0` would say "level with base".
     [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=""
   fi
-  # THE ONE READ IN THIS VERB THAT IS ABOUT A DIRECTORY. ccrc asks $main;
-  # $workdir is otherwise only ever a path git is asked ABOUT — but "what is
-  # uncommitted here" is a question about that directory's contents, so it is
-  # `-C "$workdir"` and therefore has to be ENTITLED first: git's own record AND
-  # the directory itself must both say $main, the pair `cmd_ws_rm` requires
-  # before it touches anything and `_ws_archive_manifest` walks for the identical
-  # read. Neither rung alone is enough — the record outlives the directory, so a
-  # hand-deletion plus a stray `git init` still answers $branch while its tree
-  # belongs to a stranger. Measured: without the common-dir rung the squatter's
-  # two untracked files were counted and reported as this workspace's.
-  #
-  # UNENTITLED OR UNREADABLE IS `null`, NOT A REFUSAL AND NEVER 0. `dirty` is an
-  # advisory — the PR state is entirely knowable when gh answered and the
-  # worktree did not — and this verb answers for every workspace of a project
-  # from one gh call, so refusing here would cost the siblings their state too.
-  # `ws-archive` refuses on these same facts because it writes a record that
-  # authorises deletions; this one only reports. What is NOT allowed is `0`: the
-  # shipped one-liner piped into `grep -c` and threw git's status away, so a
-  # deleted worktree answered `"dirty": 0` — an affirmative "nothing is
-  # uncommitted here" about a directory that is not there. That is deviation 6's
-  # silent-empty-stream defect, one task later in the same file. `registered` and
-  # the status are read from `$?` on their own lines: `local x=$(cmd)` returns
-  # local's status, not the command's.
-  #
-  # Two of the three rungs survive mutation and are kept rather than pinned,
-  # because each is redundant only GIVEN the others and the rule names all three:
-  #   - `registered != 0` — a path whose common dir equals `$main`'s is inside
-  #     `$main`'s repository, and `git status` from anywhere in a worktree
-  #     reports that worktree, so the count is the same with or without this
-  #     rung today. It is the rung the plan's rule names FIRST, and it is the one
-  #     that stops answering if `_ws_common_dir` is ever loosened.
-  #   - `-z "$main_common"` — an unreadable `$main` makes both sides empty and
-  #     therefore equal, which is the fail-OPEN this guard exists to stop; it is
-  #     unreachable only because the tip read above already returned on rc 128.
-  # The `wd_common != main_common` rung is the one that catches the squatter, and
-  # it is pinned.
-  local wthead registered wd_common main_common porcelain prc
-  dirty=""
   wthead=$(_ws_wt_branch "$main" "$workdir"); registered=$?
   # ── DRIFT IS NOT A PHASE, AND THIS VERB MAY NOT INVENT ONE ────────
   # The defect: `swift-delta`'s `.prphase` read `no-commits` while its worktree
@@ -10992,9 +11031,83 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
   # the four pinned cases of that shape keep their behaviour untouched.
   if (( registered == 0 )) && [[ -n "$wthead" && -n "$tip" && "$wthead" != "$branch" ]]; then
     echo "pr-state: the registry says $branch, git's worktree record for $workdir says $wthead — PR state not measured for $id (reconcile with: ccd ws-rename --session $id --branch $wthead)" >&2
-    printf '{"id":%s,"phase":"unknown","reason":"branch-drift"}\n' "$(_json_str "$id")"
-    return 0
+    BIND_REFUSAL=branch-drift
+    return 1
   fi
+  return 0
+}
+
+_pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> one JSON line
+  # `$5` is WHEN gh ANSWERED `$4`, in milliseconds, and it belongs to the answer
+  # rather than to this session: `cmd_pr_state` takes it once, at the read, and
+  # hands the same value to every session of a `--project` sweep. That is what
+  # makes `_pr_py`'s compare-and-set rank ANSWERS. It is optional and `""` is the
+  # honest default for a caller that has none — `_pr_py` then falls back to its
+  # own clock, which is the pre-fix behaviour and not a refusal.
+  #
+  # `$6` is WHICH BRANCH gh was asked about for `$4`, and it is here for the
+  # same reason `$5` is: it is a property of the ANSWER, not of this session, so
+  # it travels with the rows rather than being re-derived beside them. Since the
+  # `--session` path started sending `--head`, the branch is read once — to
+  # build the question — and the binding below must use THAT string and not a
+  # second read of the field, because the two reads are now separated by a
+  # network call `PR_GH_TIMEOUT` bounds at twelve seconds. A `ws-rename` or a
+  # hand-edited registry landing in that window would otherwise have this
+  # function bind branch B's rows against branch C: `bound()` cannot match, the
+  # phase collapses to `none`, and `none` is the answer that CLEARS the
+  # persisted `prnumber` and appends the outgoing PR to the append-only
+  # `.prhistory` — a local fact erasing GitHub's answer about a PR, which is
+  # exactly what the drift rung below refuses to do. Answering about the branch
+  # gh was asked about is coherent and at most one sweep stale; the next sweep
+  # asks about the new name.
+  #
+  # `""` — every `--project` caller, and the four-argument calls the pr-state
+  # tests make — means "these rows are the whole repository's, not one
+  # branch's", and the registry is then the only source there is.
+  local id="$1" main="$2" repo="$3" rows="$4" answeredAt="${5:-}" rowsHead="${6:-}"
+  local project branch base baseShort tip ahead workdir dirty tmpl wthead registered BIND_REFUSAL
+  # The binding facts and the refusals that come before any persist live in `_pr_bind_facts`, shared with `pr-landing`.
+  # A refusal CARRIES THE ID (a per-session failure is not a whole-repo failure; see there).
+  _pr_bind_facts "$id" "$main" "$rowsHead" || {
+    printf '{"id":%s,"phase":"unknown","reason":"%s"}\n' "$(_json_str "$id")" "$BIND_REFUSAL"; return 0; }
+  # THE ONE READ IN THIS VERB THAT IS ABOUT A DIRECTORY. ccrc asks $main;
+  # $workdir is otherwise only ever a path git is asked ABOUT — but "what is
+  # uncommitted here" is a question about that directory's contents, so it is
+  # `-C "$workdir"` and therefore has to be ENTITLED first: git's own record AND
+  # the directory itself must both say $main, the pair `cmd_ws_rm` requires
+  # before it touches anything and `_ws_archive_manifest` walks for the identical
+  # read. Neither rung alone is enough — the record outlives the directory, so a
+  # hand-deletion plus a stray `git init` still answers $branch while its tree
+  # belongs to a stranger. Measured: without the common-dir rung the squatter's
+  # two untracked files were counted and reported as this workspace's.
+  #
+  # UNENTITLED OR UNREADABLE IS `null`, NOT A REFUSAL AND NEVER 0. `dirty` is an
+  # advisory — the PR state is entirely knowable when gh answered and the
+  # worktree did not — and this verb answers for every workspace of a project
+  # from one gh call, so refusing here would cost the siblings their state too.
+  # `ws-archive` refuses on these same facts because it writes a record that
+  # authorises deletions; this one only reports. What is NOT allowed is `0`: the
+  # shipped one-liner piped into `grep -c` and threw git's status away, so a
+  # deleted worktree answered `"dirty": 0` — an affirmative "nothing is
+  # uncommitted here" about a directory that is not there. That is deviation 6's
+  # silent-empty-stream defect, one task later in the same file. `registered` and
+  # the status are read from `$?` on their own lines: `local x=$(cmd)` returns
+  # local's status, not the command's.
+  #
+  # Two of the three rungs survive mutation and are kept rather than pinned,
+  # because each is redundant only GIVEN the others and the rule names all three:
+  #   - `registered != 0` — a path whose common dir equals `$main`'s is inside
+  #     `$main`'s repository, and `git status` from anywhere in a worktree
+  #     reports that worktree, so the count is the same with or without this
+  #     rung today. It is the rung the plan's rule names FIRST, and it is the one
+  #     that stops answering if `_ws_common_dir` is ever loosened.
+  #   - `-z "$main_common"` — an unreadable `$main` makes both sides empty and
+  #     therefore equal, which is the fail-OPEN this guard exists to stop; it is
+  #     unreachable only because the tip read above already returned on rc 128.
+  # The `wd_common != main_common` rung is the one that catches the squatter, and
+  # it is pinned.
+  local wd_common main_common porcelain prc
+  dirty=""
   wd_common=$(_ws_common_dir "$workdir"); main_common=$(_ws_common_dir "$main")
   if (( registered != 0 )) || [[ -z "$main_common" || "$wd_common" != "$main_common" ]]; then
     echo "pr-state: $workdir is not a corroborated worktree of $main — dirty unknown for $id" >&2
@@ -11221,6 +11334,364 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   # rows are the whole repository's, which is what makes the same loop right for
   # both forms.
   { for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows" "$answeredAt" "$head"; done; } | _pr_queue_stamp "$mode" "$repo"
+}
+
+# ── pr-landing: the checks lane's read (PR-landing stage 1, spec 3.3) ───────────────────────────
+# READ-ONLY, of gh and of $REG. One `gh api graphql` query (a `query`, never a mutation) reads every named PR by
+# NUMBER, so a landing PR older than `gh pr list`'s newest-100 window still binds; two `gh api` GETs read the base's
+# required-check names, cached under `$REG/pr-landing/` (the only registry path this verb writes). The binding is
+# `_pr_bind_facts` and `_pr_py bind`, the same code `pr-state` binds with, and nothing is persisted: `pr-state` stays
+# the one writer of `prphase`, `prnumber` and `prcheckedat`.
+#
+# THE DOCUMENT IS BUILT, NOT INTERPOLATED. `_gh_pr_landing_query K` repeats one fixed per-alias fragment K times, K the
+# integer count of sessions (1 to 16), declaring exactly `$n0` to `$n<K-1>` as `Int!`. A constant 16-alias document
+# would leave the unnamed `Int!` variables unset when fewer sessions are named, and nullable variables are refused by
+# `pullRequest(number:)`: either way every real call would fail. No datum from a session, a PR or GitHub enters the
+# text. The owner and name travel as `$o` and `$r`, the numbers as `-F n<i>=<int>`.
+PR_LANDING_RULES_TTL=600
+PR_LANDING_ALIAS='    p@I@: pullRequest(number: $n@I@) { number state isDraft isCrossRepository headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion databaseId checkSuite { app { databaseId } workflowRun { databaseId } } isRequired(pullRequestNumber: $n@I@) } ... on StatusContext { context state isRequired(pullRequestNumber: $n@I@) } } } } } } } }'
+
+_gh_pr_landing_query() {   # K -> the GraphQL document for K aliased pull requests, on stdout
+  local k="$1" i decl='$o: String!, $r: String!' body=""
+  [[ "$k" =~ ^([1-9]|1[0-6])$ ]] || return 1
+  for (( i = 0; i < k; i++ )); do
+    decl+=", \$n$i: Int!"
+    body+="${PR_LANDING_ALIAS//@I@/$i}"$'\n'
+  done
+  printf 'query(%s) {\n  repository(owner: $o, name: $r) {\n%s  }\n}\n' "$decl" "$body"
+}
+
+_pr_landing_py() {   # mode [args…]; the program on fd 3, GitHub's documents on fd 4, 5 and 6, never in an argv
+  python3 /dev/fd/3 "$@" 3<<'PY'
+import json, os, sys, tempfile, time
+
+mode = sys.argv[1]
+NAME_MAX, LIST_MAX = 120, 32
+
+def doc(fd):
+    try:
+        with open('/dev/fd/%d' % fd) as f:
+            raw = f.read().strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+def is_int(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+def bound_name(s):
+    """A GitHub-sourced name, cut to NAME_MAX bytes on a character boundary. Untrusted: it is only ever JSON-encoded."""
+    if not isinstance(s, str) or s == '':
+        return None
+    return s.encode('utf-8')[:NAME_MAX].decode('utf-8', 'ignore') or None
+
+def cut_list(items, pins=()):
+    # items: names; pins: names the source pinned to a GitHub App (integration_id / app_id), kept within the cut list.
+    seen, out = set(), []
+    for n in items:
+        if n is not None and n not in seen:
+            seen.add(n)
+            out.append(n)
+    kept = out[:LIST_MAX]
+    return {'names': kept, 'cut': len(out) > LIST_MAX, 'pinned': [n for n in kept if n in set(pins)]}
+
+def pinned_of(v):
+    # An older cached document carries no `pinned`: that reads as none.
+    return [n for n in v.get('pinned', []) if isinstance(n, str)] if isinstance(v, dict) and isinstance(v.get('pinned'), list) else []
+
+def rules_doc(rules, protection, base):
+    return {'base': base, 'at': int(time.time()), 'rules': rules, 'protection': protection}
+
+def names_ok(v):
+    return (isinstance(v, dict) and isinstance(v.get('cut'), bool) and isinstance(v.get('names'), list)
+            and all(isinstance(n, str) for n in v['names']))
+
+if mode == 'rows':
+    # The K alias rows, null where GitHub answered no object. Exit 3: the answer is not the shape the query asks for.
+    k = int(sys.argv[2])
+    a = doc(4)
+    repo = a.get('data', {}).get('repository') if isinstance(a, dict) and isinstance(a.get('data'), dict) else None
+    if not isinstance(repo, dict):
+        sys.exit(3)
+    sys.stdout.write(json.dumps([repo.get('p%d' % i) if isinstance(repo.get('p%d' % i), dict) else None
+                                 for i in range(k)]) + '\n')
+
+elif mode == 'names-rules':
+    d = doc(4)
+    if not isinstance(d, list):
+        sys.exit(1)
+    names, pins = [], []
+    for r in d:
+        if isinstance(r, dict) and r.get('type') == 'required_status_checks':
+            p = r.get('parameters')
+            rs = p.get('required_status_checks') if isinstance(p, dict) else None
+            for c in rs if isinstance(rs, list) else []:
+                if isinstance(c, dict):
+                    names.append(bound_name(c.get('context')))
+                    if is_int(c.get('integration_id')):
+                        pins.append(bound_name(c.get('context')))
+    sys.stdout.write(json.dumps(cut_list(names, pins)) + '\n')
+
+elif mode == 'names-protection':
+    d = doc(4)
+    if not isinstance(d, dict):
+        sys.exit(1)
+    prot = d.get('protection')
+    sc = prot.get('required_status_checks') if isinstance(prot, dict) else None
+    names, pins = [], []
+    if isinstance(sc, dict):
+        for n in sc.get('contexts') if isinstance(sc.get('contexts'), list) else []:
+            names.append(bound_name(n))
+        for c in sc.get('checks') if isinstance(sc.get('checks'), list) else []:
+            if isinstance(c, dict):
+                names.append(bound_name(c.get('context')))
+                if is_int(c.get('app_id')) and c.get('app_id') > 0:
+                    pins.append(bound_name(c.get('context')))
+    sys.stdout.write(json.dumps(cut_list(names, pins)) + '\n')
+
+elif mode == 'cache-get':
+    (path, base, ttl) = sys.argv[2:5]
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        age = time.time() - d['at']
+        ok = (isinstance(d, dict) and d.get('base') == base and is_int(d.get('at'))
+              and 0 <= age <= int(ttl) and names_ok(d.get('rules')) and names_ok(d.get('protection')))
+    except Exception:
+        ok = False
+    if not ok:
+        sys.exit(1)
+    sys.stdout.write(json.dumps(d) + '\n')
+
+elif mode == 'cache-put':
+    # fd 4 and fd 5 are the two names documents (empty when that read failed). The cache is written only when BOTH
+    # answered, atomically, and a failed write is a miss next time: it never fails the read.
+    (path, base) = sys.argv[2:4]
+    r, p = doc(4), doc(5)
+    d = rules_doc(r if names_ok(r) else None, p if names_ok(p) else None, base)
+    if d['rules'] is not None and d['protection'] is not None:
+        tmp = None
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix='.rules-')
+            with os.fdopen(fd, 'w') as f:
+                json.dump(d, f)
+            os.replace(tmp, path)
+        except Exception:
+            if tmp is not None:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+    sys.stdout.write(json.dumps(d) + '\n')
+
+elif mode == 'final':
+    # fd 4 the GraphQL answer (maybe empty), fd 5 one facts line per session, fd 6 the rules documents, one line per base (maybe empty).
+    k = int(sys.argv[2])
+    a = doc(4)
+    repo = a.get('data', {}).get('repository') if isinstance(a, dict) and isinstance(a.get('data'), dict) else None
+    try:
+        with open('/dev/fd/5') as f:
+            facts = [json.loads(l) for l in f.read().split('\n') if l.strip()]
+    except Exception:
+        facts = []
+    rds = {}   # fd 6: one rules document per line, one per distinct base
+    try:
+        with open('/dev/fd/6') as f:
+            for l in f.read().split('\n'):
+                if l.strip():
+                    d = json.loads(l)
+                    if isinstance(d, dict) and isinstance(d.get('base'), str):
+                        rds[d['base']] = d
+    except Exception:
+        pass
+
+    def contexts_of(row):
+        try:
+            nodes = row['commits']['nodes'][0]['commit']['statusCheckRollup']['contexts']['nodes']
+        except Exception:
+            return []
+        return [n for n in nodes if isinstance(n, dict)] if isinstance(nodes, list) else []
+
+    def required_of(row, pinned=frozenset()):
+        # A CheckRun is carried only when GitHub marks it required for this PR: a same-named run from another App is
+        # not the pinned one, and carrying it would read green while GitHub still blocks. A StatusContext is carried
+        # when GitHub marks it required, or when its name is one the rules or the branch protection pin to an App (a
+        # status posted under a pinned name is not marked required, but it is the answer; PL-3 flags it unverifiable).
+        out = []
+        for c in contexts_of(row):
+            if c.get('__typename') == 'CheckRun':
+                if c.get('isRequired') is not True:
+                    continue
+            elif c.get('__typename') == 'StatusContext':
+                if c.get('isRequired') is not True and bound_name(c.get('context')) not in pinned:
+                    continue
+            if c.get('__typename') == 'CheckRun':
+                name = bound_name(c.get('name'))
+                suite = c.get('checkSuite') if isinstance(c.get('checkSuite'), dict) else {}
+                app = suite.get('app') if isinstance(suite.get('app'), dict) else {}
+                run = suite.get('workflowRun') if isinstance(suite.get('workflowRun'), dict) else {}
+                state = c.get('conclusion') or c.get('status')
+                entry = {'name': name, 'appId': app.get('databaseId') if is_int(app.get('databaseId')) else None,
+                         'state': state if isinstance(state, str) else None,
+                         'checkId': c.get('databaseId') if is_int(c.get('databaseId')) else None,
+                         'runId': run.get('databaseId') if isinstance(run, dict) and is_int(run.get('databaseId')) else None}
+            elif c.get('__typename') == 'StatusContext':
+                name = bound_name(c.get('context'))
+                entry = {'name': name, 'appId': None, 'state': c.get('state') if isinstance(c.get('state'), str) else None,
+                         'checkId': None, 'runId': None}
+            else:
+                continue
+            if entry['name'] is not None:
+                out.append(entry)
+        return out
+
+    for i, f in enumerate(facts):
+        line = {'id': f.get('id')}
+        if 'refusal' in f:
+            line['unmeasured'] = [f['refusal']]
+        elif f.get('gql'):
+            line['unmeasured'] = ['graphql']
+        elif f.get('unreadable'):
+            line['unmeasured'] = ['pr-unreadable']
+        elif not isinstance(f.get('bind'), dict):
+            line['bound'] = False
+        else:
+            b = f['bind']
+            row = repo.get('p%d' % i) if isinstance(repo, dict) else None
+            unm = []
+            rules = prot = None
+            rd = rds.get(f.get('base'))
+            if isinstance(rd, dict):
+                rules, prot = rd.get('rules'), rd.get('protection')
+            if not names_ok(rules):
+                rules = None
+                unm.append('rules')
+            if not names_ok(prot):
+                prot = None
+                unm.append('protection')
+            pins = sorted(set(pinned_of(rules)) | set(pinned_of(prot)))
+            req = required_of(row, frozenset(pins)) if isinstance(row, dict) else []
+            cut = len(req) > LIST_MAX
+            cut = cut or bool(rules and rules['cut']) or bool(prot and prot['cut'])
+            try:   # a required context past the 100th is not read: say the list is cut
+                cut = cut or row['commits']['nodes'][0]['commit']['statusCheckRollup']['contexts']['pageInfo']['hasNextPage'] is True
+            except Exception:
+                pass
+            line.update({'bound': True, 'number': b.get('number'), 'state': b.get('state'),
+                         'isDraft': b.get('isDraft') is True, 'base': b.get('baseRefName'), 'head': b.get('headRefOid'),
+                         'required': req[:LIST_MAX], 'requiredCut': cut,
+                         'rulesNamed': rules['names'] if rules else [],
+                         'protectionNamed': prot['names'] if prot else [],
+                         'pinnedNames': pins, 'unmeasured': unm})
+        sys.stdout.write(json.dumps(line) + '\n')
+PY
+}
+
+_pr_landing_rules() {   # project repo base [rest] -> the rules document, ONE JSON line, always
+  # Cache hit: no gh call. Miss: the rules read (`rules/branches/<base>`) and the public branch view
+  # (`branches/<base>`), each under its own timeout, both plain GETs. A read failure is a miss and is never cached.
+  # A fourth argument of `0` forbids the REST reads: a miss then answers rules-unread (nothing cached), so the caller
+  # can keep one call's worst path at 6 + 4 + 4 s whatever number of bases are bound.
+  local project="$1" repo="$2" base="$3" rest="${4:-1}" cache got r="" p="" enc="_"
+  # One cache file per project and base (the base's slashes encoded, so the name stays one path component); a base
+  # outside the allowed spelling makes no REST call, writes nothing, and shares the `_` name only as a miss.
+  [[ "$base" =~ ^[A-Za-z0-9._/-]+$ && "$base" != -* ]] && enc="${base//\//%2F}"
+  cache="$REG/pr-landing/$project.rules.$enc.json"
+  if got=$(_pr_landing_py cache-get "$cache" "$base" "$PR_LANDING_RULES_TTL" 2>/dev/null) && [[ -n "$got" ]]; then
+    printf '%s\n' "$got"; return 0
+  fi
+  if [[ "$rest" == 1 && "$base" =~ ^[A-Za-z0-9._/-]+$ && "$base" != -* ]]; then
+    r=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/rules/branches/$enc" 2>/dev/null) || r=""
+    p=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/branches/$enc" 2>/dev/null) || p=""
+    r=$(_pr_landing_py names-rules 4<<<"$r" 2>/dev/null) || r=""
+    p=$(_pr_landing_py names-protection 4<<<"$p" 2>/dev/null) || p=""
+  fi
+  _pr_landing_py cache-put "$cache" "$base" 4<<<"$r" 5<<<"$p"
+}
+
+cmd_pr_landing() {   # ccd pr-landing --project <p> --sessions <id>:<pr>[,<id>:<pr>…]
+  # Fixed arity, no getopt loop, no "$@" passthrough. One JSON line per named session, in order, always rc 0 once the
+  # arguments are valid: a read that did not answer is `unmeasured`, never a missing line. A refusal here (rc 1, empty
+  # stdout) is a server bug: only the server's own argv builder writes this shape.
+  [[ $# -eq 4 && $1 == --project && $3 == --sessions ]] \
+    || die "usage: ccd pr-landing --project <project> --sessions <id>:<pr>[,<id>:<pr>…]"
+  local project=$2 spec=$4 pair id pr k=0 main repo
+  [[ $project =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project"
+  local -a ids=() prs=()
+  [[ $spec != ,* && $spec != *, && $spec != *,,* ]] || die "bad session pair"
+  local -a pairs=()
+  IFS=',' read -ra pairs <<< "$spec"
+  for pair in "${pairs[@]}"; do
+    [[ $pair =~ ^([A-Za-z0-9._-]+):([1-9][0-9]{0,8})$ ]] || die "bad session pair"
+    id="${BASH_REMATCH[1]}"; pr="${BASH_REMATCH[2]}"
+    ids+=("$id"); prs+=("$pr")
+  done
+  k=${#ids[@]}
+  (( k >= 1 && k <= 16 )) || die "between 1 and 16 sessions"
+  local i j
+  for (( i = 0; i < k; i++ )); do
+    for (( j = 0; j < i; j++ )); do [[ "${ids[$i]}" != "${ids[$j]}" ]] || die "duplicate session"; done
+    [[ -f "$REG/${ids[$i]}.uuid" ]] || die "no such session: ${ids[$i]}"
+    [[ -n "$(_reg_get "${ids[$i]}" workspace)" ]] || die "not a workspace: ${ids[$i]}"
+    [[ "$(_reg_get "${ids[$i]}" project)" == "$project" ]] || die "session ${ids[$i]} is not of project $project"
+  done
+  main="$PROJECTS_ROOT/$project"
+  repo=$(_gh_repo_slug "$main") || die "no origin remote for $project"
+
+  # THE ONE GRAPHQL CALL. The numbers are -F integers, validated twice (above, and by the server's builder).
+  local doc answer="" rows="[]" gqlok=0
+  doc=$(_gh_pr_landing_query "$k") || die "bad session count"
+  local -a gargs=(-f "query=$doc" -f "o=${repo%%/*}" -f "r=${repo#*/}")
+  for (( i = 0; i < k; i++ )); do gargs+=(-F "n$i=${prs[$i]}"); done
+  # gh exits 1 for a GraphQL error and still prints the body (`data` with the failed alias null, plus `errors`): that
+  # body is kept when rc is 0, or rc is 1 and `rows` parses data.repository from it. A timeout (124/137) or any other rc drops it.
+  local grc=0
+  answer=$(_plat_timeout "$PR_LANDING_GQL_TIMEOUT" gh api graphql "${gargs[@]}" 2>/dev/null) || grc=$?
+  (( grc == 0 || grc == 1 )) || answer=""
+  if [[ -n "$answer" ]] && rows=$(_pr_landing_py rows "$k" 4<<<"$answer" 2>/dev/null) && [[ -n "$rows" ]]; then gqlok=1; else rows="[]"; fi
+
+  # THE BINDING, per session, through the code `pr-state` binds with and persisting nothing.
+  local branch base baseShort tip ahead workdir wthead registered BIND_REFUSAL facts="" bind bases=$'\n'
+  for (( i = 0; i < k; i++ )); do
+    id="${ids[$i]}"
+    if ! _pr_bind_facts "$id" "$main" ""; then
+      facts+="$(printf '{"id":"%s","refusal":"%s"}' "$id" "$BIND_REFUSAL")"$'\n'
+    elif (( gqlok == 0 )); then
+      facts+="$(printf '{"id":"%s","gql":true}' "$id")"$'\n'
+    else
+      bind=$(printf '%s' "$rows" | _pr_py bind "$main" "$branch" "$baseShort" "$tip" "$i" 2>/dev/null) || bind="unreadable-alias"
+      case "$bind" in
+        unreadable-alias) facts+="$(printf '{"id":"%s","unreadable":true}' "$id")"$'\n' ;;
+        '')            facts+="$(printf '{"id":"%s","bind":null}' "$id")"$'\n' ;;
+        *)             facts+="$(printf '{"id":"%s","bind":%s,"base":%s}' "$id" "$bind" "$(_json_str "$baseShort")")"$'\n'
+                       [[ "$bases" == *$'\n'"$baseShort"$'\n'* ]] || bases+="$baseShort"$'\n' ;;
+      esac
+    fi
+  done
+
+  # THE RULES, only when someone bound (a GraphQL failure or an all-unbound call makes no REST call).
+  # once per DISTINCT base among the bound sessions (stacked work binds to other bases), one document per line.
+  # REST reads go to at most ONE uncached base per call (worst path 6 + 4 + 4 s, inside the runner's bound); any
+  # further uncached base answers rules-unread, so its sessions read unmeasured this pass and the next pass finds the
+  # cache filled for the base read here.
+  local rules="" rb rest=1 doc1 hit enc
+  while IFS= read -r rb; do
+    [[ -n "$rb" ]] || continue
+    # a miss that is allowed to read spends the one REST budget (cache hits never do); decided BEFORE the read, since
+    # the read itself fills the cache
+    enc="_"; [[ "$rb" =~ ^[A-Za-z0-9._/-]+$ && "$rb" != -* ]] && enc="${rb//\//%2F}"
+    hit=0; [[ -n "$(_pr_landing_py cache-get "$REG/pr-landing/$project.rules.$enc.json" "$rb" "$PR_LANDING_RULES_TTL" 2>/dev/null)" ]] && hit=1
+    doc1=$(_pr_landing_rules "$project" "$repo" "$rb" "$rest")
+    rules+="$doc1"$'\n'
+    (( hit == 1 )) || rest=0
+  done <<< "$bases"
+  _pr_landing_py final "$k" 4<<<"$answer" 5<<<"$facts" 6<<<"$rules"
 }
 
 cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --draft <true|false>
@@ -13168,15 +13639,14 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   # unfetched ref, and a symref read from clone-time memory proved containment
   # against a default the remote had deleted (measured, git 2.43).
   # `--reclaim` is the one exception to that: see "WS-AUDIT --RECLAIM" in the RECLAIM region.
-  local mode=reap defer=0
+  local mode=reap defer=0 _WS_STALE_WORD="" _WS_STALE_DIGEST=""
   case "${1-}" in --orphans) shift; _ws_orphan_census "$@"; return ;; --orphan-hex) shift; _ws_orphan_audit "$@"; return ;; esac   # DR-16 (D-6628): the orphan census and ladder, read-only
-  [[ ( $# -eq 2 || $# -eq 3 || $# -eq 4 ) && $1 == --session ]] \
+  [[ ( $# -ge 2 && $# -le 8 ) && $1 == --session ]] \
     || { _ws_loose_route "$@"; _WS_LR=$?; (( _WS_LR == 99 )) || return "$_WS_LR"; die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire | --collect]"; }   # the loose arm's two forms ride this line
-  if (( $# >= 3 )); then [[ $3 != --expire || $# -ne 3 ]] || { _ws_expire_audit "$2"; return; }; [[ $3 != --collect || $# -ne 3 ]] || { _ws_collect_audit "$2"; return; }   # "WS-AUDIT --EXPIRE" and "WS-AUDIT --COLLECT", in their regions
-    [[ $3 == --reclaim && ( $# -eq 3 || $4 == --defer-expired ) ]] \
+  if (( $# >= 3 )); then [[ $3 != --expire || ( $# -ne 3 && ( $# -ne 5 || $4 != --child-of ) ) ]] || { local EXPIRE_CHILDOF=''; (( $# == 3 )) || { _child_runid_valid "$5" || die "bad run id"; EXPIRE_CHILDOF=$5; }; _ws_expire_audit "$2"; return; }; [[ $3 != --collect || $# -ne 3 ]] || { _ws_collect_audit "$2"; return; }   # "WS-AUDIT --EXPIRE" and "WS-AUDIT --COLLECT", in their regions
+    [[ $3 == --reclaim ]] && _ws_stale_argv "${@:4}" \
       || die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire | --collect]"
     [[ $_WS_AUDIT_INNER == 1 ]] || { _ws_reclaim_audit_contained "$@"; return; }; mode=reclaim   # see "THE AUDIT READS THE LIVE CHILD CONTAINED" (RECLAIM region)
-    (( $# == 4 )) && defer=1
   fi
   local id=$2
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] && { [[ $mode != reclaim ]] || _ws_tmproot_id_ok "$id"; } || die "bad session id"
@@ -13521,6 +13991,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   if [[ $mode == reclaim ]]; then
     printf '"mode":"reclaim","childOf":%s,"generation":%s,"legacyRows":%s,"pendingRows":%s,' \
       "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)" "$( _reg_generation_valid "$RECLAIM_GENERATION" && printf '"%s"' "$RECLAIM_GENERATION" || echo null)" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}"
+    _ws_rescue_doc
     [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
     if [[ "$REAP_VERDICT" == reclaimable ]]; then
       # never the literal `"verdict":"…"` shape — see "RECLAIMABLE, SPELLED THROUGH _JSON_STR" in the RECLAIM region
@@ -14679,6 +15150,16 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
   _ws_reap_tail "$id" ""
 }
 
+# ARCH-46: the registry-retire sequence every durable caller spelled by hand. Runs `_reg_purge` and
+# keeps its VALUE in REG_RETIRE_RC (0 purged, 2 lock mechanism absent, 3 purged with residue, else 1),
+# and for the one status that carries a remedy renders `_compact_lock_why_remedy` at once, before
+# anything can clobber COMPACT_LOCK_WHY, into REG_RETIRE_WHY. It decides nothing: each caller words
+# its own failure. Always returns 0 (ccd has no `set -e`), so a caller reads the globals.
+_reg_retire() {   # id verb
+  REG_RETIRE_RC=0; REG_RETIRE_WHY=""
+  _reg_purge "$1" || REG_RETIRE_RC=$?
+  case "$REG_RETIRE_RC" in 0|2|3) ;; *) REG_RETIRE_WHY=$(_compact_lock_why_remedy "$1" "$2") ;; esac
+}
 _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   local id="$1" resumed="$2" project workdir branch regbranch main attic clips tomb bytes
   project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
@@ -15275,15 +15756,14 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # THE VALUE, not the boolean (D-2605): 3 is a purge that RAN and left
   # residue, and it is the opposite of the 1 this branch used to assume. See
   # `cmd_ws_rm`'s note for the argument; the disposition is the same here.
-  local _rt_prc=0
-  _reg_purge "$id" || _rt_prc=$?                                           # (i) LAST, finding F3
-  if (( _rt_prc == 3 )); then
+  _reg_retire "$id" ws-reap                                                # (i) LAST, finding F3
+  if (( REG_RETIRE_RC == 3 )); then
     _lc_fail reap "$id" "$lctx" purge-incomplete \
       "the reap completed — worktree, branch and clips are gone — and the registry row WAS purged, this journal's own purge fact being the record of it, but $REG_PURGE_UNREMOVED could not be removed and still stands; re-running will not take it, remove it by hand" \
       verb ws-reap meas.branch "$branch" meas.unremoved "$REG_PURGE_UNREMOVED"
     echo "ccd: $id: reaped and purged, but $REG_PURGE_UNREMOVED could not be removed — see the lifecycle journal" >&2
     return 1
-  elif (( _rt_prc == 2 )); then
+  elif (( REG_RETIRE_RC == 2 )); then
     # STATUS 2 IS NOT STATUS 1 — see `cmd_ws_rm`'s note (r3 A-I3), and the
     # header above for why this arm is reachable here at all.
     _lc_fail reap "$id" "$lctx" purge-mechanism-absent \
@@ -15291,7 +15771,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
       verb ws-reap meas.branch "$branch"
     echo "ccd: $id: reaped, registry NOT purged — the compaction lock mechanism is absent; see the lifecycle journal" >&2
     return 1
-  elif (( _rt_prc != 0 )); then
+  elif (( REG_RETIRE_RC != 0 )); then
     # STATUS 1 FOLDS SEVERAL CONDITIONS, AND COMPACT_LOCK_WHY NAMES ONLY THE
     # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
     # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
@@ -15315,9 +15795,8 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     # acquire sites, one level up; this is it one level down, where the
     # record is DURABLE — and it is the ONE renderer all five durable callers
     # consult, so this caller's text cannot drift from theirs.
-    local _rt_why; _rt_why=$(_compact_lock_why_remedy "$id" ws-reap)
     _lc_fail reap "$id" "$lctx" purge-refused \
-      "the reap completed — worktree, branch and clips are gone — but the registry row could not be purged: $_rt_why" \
+      "the reap completed — worktree, branch and clips are gone — but the registry row could not be purged: $REG_RETIRE_WHY" \
       verb ws-reap meas.branch "$branch"
     echo "ccd: $id: reaped, registry NOT purged — see the lifecycle journal" >&2
     return 1
@@ -15884,15 +16363,14 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       # tree: one un-removable field under a HELD lock produced exactly that
       # record. A status-3 row therefore gets `_lc_fail destroy`, the word for
       # an act that started and broke.
-      local _pr_prc=0
-      _reg_purge "$project-$slug" || _pr_prc=$?                            # finding F3
-      if (( _pr_prc == 3 )); then
+      _reg_retire "$project-$slug" 'ws-gc --prune'                         # finding F3
+      if (( REG_RETIRE_RC == 3 )); then
         _lc_fail destroy "$project-$slug" "$lctx" purge-incomplete \
           "the registry row WAS purged — this journal's own purge fact is the record of it — but $REG_PURGE_UNREMOVED could not be removed and still stands" \
           verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg \
           meas.unremoved "$REG_PURGE_UNREMOVED"
         _gc_incomplete "dead registry entry $project-$slug — the row is gone, but $REG_PURGE_UNREMOVED could not be removed and needs a hand"
-      elif (( _pr_prc == 2 )); then
+      elif (( REG_RETIRE_RC == 2 )); then
         # STATUS 2 IS NOT STATUS 1 — see `cmd_ws_rm`'s note (r3 A-I3). The
         # DISPOSITION is unchanged and deliberately so: this caller reaches
         # `_reg_purge` before anything irreversible, so it still DECLINES with
@@ -15902,7 +16380,7 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
           "the compaction lock's MECHANISM is absent on this box — flock, mktemp or link could not be resolved on the PATH ccd ran with, so $REG/.$project-$slug.compactions.lock was never consulted and may not exist — while $REG/$project-$slug.generation is present; the registry row is untouched, and waiting changes nothing" \
           verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg
         _gc_declined "dead registry entry $project-$slug — this box cannot take the compaction lock at all (flock, mktemp or link is off the PATH); nothing was removed"
-      elif (( _pr_prc != 0 )); then
+      elif (( REG_RETIRE_RC != 0 )); then
         # STATUS 1 FOLDS SEVERAL CONDITIONS, AND COMPACT_LOCK_WHY NAMES ONLY THE
         # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
         # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
@@ -15932,13 +16410,12 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         # surviving-state clause: this arm DECLINES before anything
         # irreversible, so "the registry row is untouched" is the true
         # residue, not "$REG/$id.* … still stand".
-        local _pr_why; _pr_why=$(_compact_lock_why_remedy "$project-$slug" 'ws-gc --prune')
         _lc_refuse_return destroy "$project-$slug" "$lctx" purge-refused \
-          "$_pr_why" \
+          "$REG_RETIRE_WHY" \
           verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg
         # AND THE SWEEP'S OWN REPORT ROW SAYS THE SAME THING THE JOURNAL DOES
         # (r8 R8-M3). This line said "the compaction lock was unavailable"
-        # unconditionally — the contention story — one line after `_pr_why`
+        # unconditionally — the contention story — one line after `_reg_retire`
         # rendered a durable remedy that, for four of the five tokens,
         # explicitly refuses to call the condition contention. The short form
         # is a SECOND RENDERER keyed on the same tokens rather than a second
@@ -16158,12 +16635,26 @@ _ws_orphan_stanzas() {   # main -> one line per worktree git lists: path<TAB>hea
   done < <(git -C "$1" worktree list --porcelain 2>/dev/null; echo)
 }
 
-_ws_orphan_class() {   # tree mainreal wsroot project -> echoes ccd-root | claude | superpowers | other (LOCATION only)
-  local t="$1" m="$2" w="$3" pj="$4" rel
+_ws_orphan_class() {   # tree mainreal wsroot project [checkouts] -> echoes ccd-root | claude | superpowers | other (LOCATION only)
+  #   `checkouts` (DR-22, G4): every checkout of the repository, one per line; a `.claude`/`.superpowers` directory of ANY of them counts
+  local t="$1" m="$2" w="$3" pj="$4" rel k x
   rel="${t#$w/$pj/}";            [[ "$t" == "$w/$pj/"* && -n "$rel" && "$rel" != */* ]] && { echo ccd-root; return 0; }
-  rel="${t#$m/.claude/worktrees/}";      [[ "$t" == "$m/.claude/worktrees/"* && -n "$rel" && "$rel" != */* ]] && { echo claude; return 0; }
-  rel="${t#$m/.superpowers/worktrees/}"; [[ "$t" == "$m/.superpowers/worktrees/"* && -n "$rel" && "$rel" != */* ]] && { echo superpowers; return 0; }
+  for k in claude superpowers; do
+    [[ "$t" == */."$k"/worktrees/* && "${t##*/."$k"/worktrees/}" != */* && -n "${t##*/."$k"/worktrees/}" ]] || continue
+    x="${t%/."$k"/worktrees/*}"
+    [[ "$x" == "$m" || $'\n'"${5-}"$'\n' == *$'\n'"$x"$'\n'* ]] && { echo "$k"; return 0; }
+  done
   echo other
+}
+_ws_orphan_inside() {   # tree -> the id of the registry row whose workdir CONTAINS the tree (the nearest), '' when none (DR-22, G4)
+  local f id wd q best='' bl=0
+  for f in "$REG"/*.workdir; do
+    [[ -f "$f" && ! -L "$f" && -r "$f" ]] || continue
+    id=$(basename "$f" .workdir); wd=$(<"$f"); [[ -n "$wd" ]] || continue
+    q="$wd"; [[ -d "$wd" ]] && _ws_dir_physical "$wd" && q="$_WS_PHYS"
+    if [[ "$1" == "$wd"/* || "$1" == "$q"/* ]] && (( ${#q} > bl )); then best="$id"; bl=${#q}; fi
+  done
+  printf '%s' "$best"
 }
 
 _ws_orphan_rung() {   # dirty|head|secrets|nested path -> 0 passes; 1 refuses (_WS_ORPHAN_WORD, _WS_ORPHAN_WHY); 2 unmeasured
@@ -16185,7 +16676,7 @@ _ws_orphan_rung() {   # dirty|head|secrets|nested path -> 0 passes; 1 refuses (_
       if ! n=$(_ws_nested_checkouts "$p"); then
         _WS_ORPHAN_WORD=unmeasured; _WS_ORPHAN_WHY="$p could not be scanned for nested checkouts${_WS_NESTED_WHY:+ ($_WS_NESTED_WHY)}"; return 2
       fi
-      if [[ -n "$n" ]]; then _WS_ORPHAN_WORD=nested-checkout; _WS_ORPHAN_WHY="$p holds nested checkouts"; return 1; fi ;;
+      if [[ -n "$n" ]]; then _WS_ORPHAN_WORD=nested-checkout; _WS_ORPHAN_WHY="$p holds nested checkouts"; _WS_ORPHAN_NESTED="$n"; return 1; fi ;;
   esac
   return 0
 }
@@ -16242,10 +16733,35 @@ _ws_orphan_holders() {   # tree sp -> rung 12: 0 nobody holds it; 1 with _ws_orp
   return 0
 }
 
+_ws_orphan_nested_ok() {   # tree -> 0 when the marker is live and EVERY nested checkout can be pinned or rescued whole; sets
+  #   _WS_ORPHAN_NLIST (kind<TAB>path per line, kind same|foreign) and _WS_ORPHAN_NBIND (the token's nestedRescue= inputs); 1 keeps the tree
+  local pr mr c cc rel kind b nl=''
+  _WS_ORPHAN_NLIST=''; _WS_ORPHAN_NBIND=()
+  _ws_nested_rescue_live || return 1
+  pr=$(cd "$1" >/dev/null 2>&1 && pwd -P) && mr=$(_ws_common_dir "$1") || return 1
+  while IFS= read -r c; do
+    [[ -n "$c" ]] || continue
+    [[ "$c" == "$pr"/* && "${c##*/}" =~ ^[A-Za-z0-9._-]+$ ]] || return 1   # _ws_leaf_remove takes one id-shaped leaf name; any other keeps the tree
+    rel="${c#"$pr"/}"; cc=$(_ws_common_dir "$c") || return 1
+    [[ -z "$(git -C "$1" ls-files -s -- "$rel" 2>/dev/null)" ]] || return 1   # the outer tree tracks this path (a gitlink): git worktree remove would refuse once it is gone
+    _ws_leaf_checkouts "$c" || return 1   # the removal's own predicate (a submodule's .git file with no back-link), so the audit and the act agree
+    REAP_SENSITIVE=(); RECLAIM_SECRETS=(); _ws_nested_secrets "$c" "$rel"; (( ${#REAP_SENSITIVE[@]} == 0 )) || return 1   # a secret-shaped file is never carried, so the checkout stays
+    if [[ "$cc" == "$mr" ]]; then
+      kind=same
+      _ws_reclaim_gitdir_own "$c" "$mr" && [[ ! -e "$_WS_GITDIR_DIR/locked" ]] && git -C "$c" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 && ! _ws_nested_busy "$c" || return 1
+    else kind=foreign; _ws_nested_rescue_shape "$c" || return 1; fi
+    b=$(_ws_nested_bind "$c" "$rel") || return 1
+    nl+="$kind"$'\t'"$c"$'\n'; _WS_ORPHAN_NBIND+=("$b")
+  done <<< "$_WS_ORPHAN_NESTED"
+  _WS_ORPHAN_NLIST="$nl"
+}
+
 _ws_orphan_tail() {   # tree sp -> rungs 10 to 14, in order; 0 all pass, else _ws_orphan_refuse's word and rc 1
   local p="$1" sp="$2" now secs floor="$WS_ORPHAN_FLOOR_S"
   _ws_orphan_rung secrets "$p" || { _ws_orphan_refuse "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 1; }
-  _ws_orphan_rung nested "$p"  || { _ws_orphan_refuse "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 1; }
+  _ws_orphan_rung nested "$p"  || {   # DR-22 (contained: a foreign repo's fsmonitor and hooks never run in the audit): under the marker a rescuable nested checkout is a RESCUE arm (like rung 9), not a stop
+    if [[ "$_WS_ORPHAN_WORD" == nested-checkout ]] && _ws_reclaim_contained _ws_orphan_nested_ok "$p"; then _WS_ORPHAN_R11=1; _WS_ORPHAN_R11WHY="$_WS_ORPHAN_WHY"
+    else _ws_orphan_refuse "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 1; fi; }
   _ws_orphan_holders "$p" "$sp" || return 1   # rung 12: the holder probe, one definition the verb asks again nearest the act
   # rung 13: the newest ctime of every entry, the `.git` file included
   if declare -F _disk_pressure >/dev/null 2>&1 && _disk_pressure "$sp"; then floor="$WS_ORPHAN_FLOOR_PRESSURE_S"; fi
@@ -16266,6 +16782,7 @@ _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDIC
   _WS_ORPHAN_WORD=''; _WS_ORPHAN_WHY=''; _WS_ORPHAN_VERDICT=''; _WS_ORPHAN_TOKEN=''; _WS_ORPHAN_RESCUE=''
   _WS_ORPHAN_CLASS=''; _WS_ORPHAN_MAIN=''; _WS_ORPHAN_BRANCH=''; _WS_ORPHAN_HEAD=''
   _WS_ORPHAN_NEWEST=''; _WS_ORPHAN_ENTRIES=''; _WS_ORPHAN_FLOOR=''
+  _WS_ORPHAN_R11=0; _WS_ORPHAN_R11WHY=''; _WS_ORPHAN_NESTED=''; _WS_ORPHAN_NLIST=''; _WS_ORPHAN_NBIND=(); _WS_ORPHAN_INSIDE=''
   wsroot=$(cd "$WORKTREES_ROOT" >/dev/null 2>&1 && pwd -P) || wsroot="$WORKTREES_ROOT"
   # 1: a linked worktree of a main checkout under PROJECTS_ROOT, by identity (its stanza -ef the path)
   _ws_reclaim_plain_path "$p" && [[ -d "$p" && ! -L "$p" ]] \
@@ -16281,7 +16798,7 @@ _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDIC
   [[ -n "$sp" ]] || { _ws_orphan_refuse not-a-worktree "no worktree list of a project names $p"; return 1; }
   slug=$(basename "$sp"); _WS_ORPHAN_TREE="$sp"
   # 2: scope
-  cls=$(_ws_orphan_class "$sp" "$_WS_ORPHAN_MAIN" "$wsroot" "$pj"); _WS_ORPHAN_CLASS="$cls"
+  cls=$(_ws_orphan_class "$sp" "$_WS_ORPHAN_MAIN" "$wsroot" "$pj" "$(_ws_orphan_stanzas "$_WS_ORPHAN_MAIN" | cut -f1)"); _WS_ORPHAN_CLASS="$cls"
   [[ "$cls" != other ]] || { _ws_orphan_refuse out-of-scope "$sp is neither under the ccd worktree root nor a claude or superpowers worktree"; return 1; }
   # 3: not the main checkout under any spelling
   if [[ "$smain" == 1 ]]; then _ws_orphan_refuse not-a-workspace "$sp is a main checkout"; return 1; fi
@@ -16292,6 +16809,7 @@ _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDIC
   # 4: no registry row names it
   _ws_orphan_registered "$p" "$sp" "$cls" "$pj" "$slug"; rc=$?
   (( rc == 0 )) || { if (( rc == 1 )); then _ws_orphan_refuse registered "$_WS_ORPHAN_WHY"; else _ws_orphan_refuse unmeasured "$_WS_ORPHAN_WHY"; fi; return 1; }
+  _WS_ORPHAN_INSIDE=$(_ws_orphan_inside "$sp")   # a row whose workdir CONTAINS the tree passes rung 4 and is named (G4)
   # 5: not locked in git
   [[ "$sl" != 1 ]] || { _ws_orphan_refuse locked "$sp is locked in git"; return 1; }
   # 6: clean and readable
@@ -16320,6 +16838,8 @@ _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDIC
     (( tail_rc == 0 )) || return 1
   elif (( tail_rc != 0 )); then
     return 1
+  elif (( _WS_ORPHAN_R11 )); then
+    _ws_orphan_refuse nested-checkout "$_WS_ORPHAN_R11WHY; only --rescue with a rescue token may take it"
   fi
   # the token: every input named, the tree's and its main checkout's and its admin directory's identities, the content digests
   _ws_path_ident "$sp" && tid="$_WS_IDENT" || { _ws_orphan_refuse unmeasured "${_WS_IDENT_WHY:-the identity of $sp was never read}"; return 1; }
@@ -16329,8 +16849,8 @@ _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDIC
   local -a inp=("pathhex=$(printf '%s' "$p" | _ws_orphan_hex)" "tree=$tid" "main=$mid" "admin=$aid" "head=$_WS_ORPHAN_HEAD"
                 "branch=$_WS_ORPHAN_BRANCH" "status=$stat_sha" "ignored=$ign" "newestctimens=$_WS_ORPHAN_NEWEST"
                 "entries=$_WS_ORPHAN_ENTRIES" "floor=$_WS_ORPHAN_FLOOR")
-  if (( r9 )); then
-    _WS_ORPHAN_RESCUE=$(_ws_reclaim_fingerprint mode=orphan-rescue "${inp[@]}")
+  if (( r9 || _WS_ORPHAN_R11 )); then
+    _WS_ORPHAN_RESCUE=$(_ws_reclaim_fingerprint mode=orphan-rescue "${inp[@]}" ${_WS_ORPHAN_NBIND[@]+"${_WS_ORPHAN_NBIND[@]}"})
     return 1   # _ws_orphan_refuse above already named head-not-on-remote
   fi
   _WS_ORPHAN_TOKEN=$(_ws_reclaim_fingerprint mode=orphan "${inp[@]}"); _WS_ORPHAN_VERDICT=token
@@ -16339,35 +16859,37 @@ _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDIC
 
 _ws_orphan_census() {   # ccd ws-audit --orphans -> ONE JSON document: every linked worktree by location class
   _json_str probe >/dev/null 2>&1 || die "python3 unavailable — cannot quote the census safely"
-  local wsroot m mr pj line sh sb sl spr smain cls slug rows=0 trunc=false first=1 t0=$SECONDS d age ph out='['
-  local -a seen
+  local wsroot m mr pj line sh sb sl spr smain cls slug rows=0 trunc=false first=1 t0=$SECONDS d age ph out='[' chk ins
+  local -a seen scan
   wsroot=$(cd "$WORKTREES_ROOT" >/dev/null 2>&1 && pwd -P) || wsroot="$WORKTREES_ROOT"
   for m in "$PROJECTS_ROOT"/*; do
     [[ -e "$m/.git" ]] || continue
     mr=$(cd "$m" >/dev/null 2>&1 && pwd -P) || continue
-    pj=$(basename "$m"); seen=()
+    pj=$(basename "$m"); seen=(); chk=$(_ws_orphan_stanzas "$m" | cut -f1)
     while IFS=$'\t' read -r line sh sb sl spr smain; do
       seen+=("$line")
       [[ "$smain" != 1 ]] || continue
-      cls=$(_ws_orphan_class "$line" "$mr" "$wsroot" "$pj"); slug=$(basename "$line")
+      cls=$(_ws_orphan_class "$line" "$mr" "$wsroot" "$pj" "$chk"); slug=$(basename "$line")
       [[ "$cls" == ccd-root && -f "$REG/$pj-$slug.uuid" ]] && continue   # a registered workspace is not an orphan
       if (( rows >= WS_ORPHAN_CENSUS_ROWS || SECONDS - t0 >= WS_ORPHAN_CENSUS_S )); then trunc=true; break 2; fi
       age=$(_ws_gc_age "$line"); [[ "$age" == - ]] && age=null
-      ph=$(printf '%s' "$line" | _ws_orphan_hex)
+      ph=$(printf '%s' "$line" | _ws_orphan_hex); ins=$(_ws_orphan_inside "$line")
       (( first )) || out+=','; first=0; rows=$(( rows + 1 ))
-      out+=$(printf '{"pathHex":"%s","class":"%s","project":%s,"main":%s,"branch":%s,"head":%s,"locked":%s,"prunable":%s,"ageDays":%s}' \
+      out+=$(printf '{"pathHex":"%s","class":"%s","project":%s,"main":%s,"branch":%s,"head":%s,"locked":%s,"prunable":%s,"ageDays":%s,"inside":%s}' \
         "$ph" "$cls" "$(_json_str "$pj")" "$(_json_str "$mr")" "$( [[ "$sb" == detached ]] && echo null || _json_str "$sb")" \
-        "$(_json_str "$sh")" "$( (( sl )) && echo true || echo false)" "$( (( spr )) && echo true || echo false)" "$age")
+        "$(_json_str "$sh")" "$( (( sl )) && echo true || echo false)" "$( (( spr )) && echo true || echo false)" "$age" "$( [[ -n "$ins" ]] && _json_str "$ins" || echo null)")
     done < <(_ws_orphan_stanzas "$m")
     # a directory under a scanned root that no list names is not a worktree, and is the operator's
-    for d in "$wsroot/$pj"/* "$mr/.claude/worktrees"/* "$mr/.superpowers/worktrees"/*; do
+    scan=("$wsroot/$pj"/*)
+    while IFS= read -r d; do [[ -n "$d" ]] && scan+=("$d/.claude/worktrees"/* "$d/.superpowers/worktrees"/*); done <<< "${chk:-$mr}"
+    for d in "${scan[@]}"; do
       [[ -d "$d" && ! -L "$d" ]] || continue
       line=0; for ph in ${seen[@]+"${seen[@]}"}; do [[ "$ph" == "$d" || "$ph" -ef "$d" ]] && { line=1; break; }; done
       (( ! line )) || continue
       [[ "$d" != "$wsroot/$pj/"* || ! -f "$REG/$pj-$(basename "$d").uuid" ]] || continue
       if (( rows >= WS_ORPHAN_CENSUS_ROWS || SECONDS - t0 >= WS_ORPHAN_CENSUS_S )); then trunc=true; break 2; fi
       (( first )) || out+=','; first=0; rows=$(( rows + 1 ))
-      out+=$(printf '{"pathHex":"%s","class":"not-a-worktree","project":%s,"main":%s,"branch":null,"head":"","locked":false,"prunable":false,"ageDays":null}' \
+      out+=$(printf '{"pathHex":"%s","class":"not-a-worktree","project":%s,"main":%s,"branch":null,"head":"","locked":false,"prunable":false,"ageDays":null,"inside":null}' \
         "$(printf '%s' "$d" | _ws_orphan_hex)" "$(_json_str "$pj")" "$(_json_str "$mr")")
     done
   done
@@ -16380,14 +16902,14 @@ _ws_orphan_audit() {   # ccd ws-audit --orphan-hex <hex> -> ONE JSON document; e
   _json_str probe >/dev/null 2>&1 || die "python3 unavailable — cannot quote the audit record safely"
   p=$(_ws_orphan_unhex "$hex") || die "bad path hex"
   _ws_orphan_ladder "$p" || rc=$?
-  printf '{"mode":"orphan","pathHex":%s,"class":%s,"main":%s,"branch":%s,"head":%s,"verdict":%s,"refusal":%s,"detail":%s,"token":%s,"rescueToken":%s,"newestCtimeNs":%s,"entries":%s,"floorS":%s}\n' \
+  printf '{"mode":"orphan","pathHex":%s,"class":%s,"main":%s,"branch":%s,"head":%s,"verdict":%s,"refusal":%s,"detail":%s,"token":%s,"rescueToken":%s,"newestCtimeNs":%s,"entries":%s,"floorS":%s,"inside":%s}\n' \
     "$(_json_str "$hex")" "$(_json_str "$_WS_ORPHAN_CLASS")" "$(_json_str "$_WS_ORPHAN_MAIN")" "$(_json_str "$_WS_ORPHAN_BRANCH")" \
     "$(_json_str "$_WS_ORPHAN_HEAD")" "$(_json_str "$_WS_ORPHAN_VERDICT")" \
     "$( [[ -n "$_WS_ORPHAN_WORD" ]] && _json_str "$_WS_ORPHAN_WORD" || echo null)" "$(_json_str "$_WS_ORPHAN_WHY")" \
     "$( [[ -n "$_WS_ORPHAN_TOKEN" ]] && _json_str "$_WS_ORPHAN_TOKEN" || echo null)" \
     "$( [[ -n "$_WS_ORPHAN_RESCUE" ]] && _json_str "$_WS_ORPHAN_RESCUE" || echo null)" \
     "$( [[ -n "$_WS_ORPHAN_NEWEST" ]] && _json_str "$_WS_ORPHAN_NEWEST" || echo null)" \
-    "${_WS_ORPHAN_ENTRIES:-null}" "${_WS_ORPHAN_FLOOR:-null}"
+    "${_WS_ORPHAN_ENTRIES:-null}" "${_WS_ORPHAN_FLOOR:-null}" "$( [[ -n "$_WS_ORPHAN_INSIDE" ]] && _json_str "$_WS_ORPHAN_INSIDE" || echo null)"
   if [[ "$_WS_ORPHAN_VERDICT" == unmeasured ]]; then
     echo "ccd: ws-audit --orphan-hex measured nothing: $_WS_ORPHAN_WHY — retry" >&2
     return 1
@@ -16415,7 +16937,7 @@ _ws_orphan_failed() {   # id tx word detail -> the post-start failure, journaled
 }
 
 _ws_orphan_locked() {   # token rescue -> everything the lock serialises (id, s16, p and the decision words are cmd_ws_orphan's)
-  local tok="$1" rescue="$2" want sp m cls br head tx n=0 err bres=left want_n sha
+  local tok="$1" rescue="$2" want sp m cls br head tx n=0 err bres=left want_n sha nk np
   _ws_orphan_ladder "$p" || :
   [[ "$_WS_ORPHAN_VERDICT" != unmeasured ]] || { _ws_orphan_failed "$id" "" probe-unmeasured "nothing was removed: $_WS_ORPHAN_WHY"; return 1; }
   want="$_WS_ORPHAN_TOKEN"
@@ -16424,7 +16946,7 @@ _ws_orphan_locked() {   # token rescue -> everything the lock serialises (id, s1
     elif [[ -n "$_WS_ORPHAN_TOKEN" ]]; then _ws_orphan_refused "$id" "" no-rescue-token "--rescue was given for a tree that needs no rescue; nothing was pinned or removed"; return 0
     fi
   elif [[ -n "$_WS_ORPHAN_RESCUE" ]]; then
-    _ws_orphan_refused "$id" "" head-not-on-remote "$_WS_ORPHAN_WHY; only --rescue with a rescue token may take it"; return 0
+    _ws_orphan_refused "$id" "" "$_WS_ORPHAN_WORD" "$_WS_ORPHAN_WHY"; return 0
   fi
   if [[ -z "$want" ]]; then
     case "$_WS_ORPHAN_WORD" in
@@ -16445,10 +16967,19 @@ _ws_orphan_locked() {   # token rescue -> everything the lock serialises (id, s1
     { [[ "$n" =~ ^[1-9][0-9]*$ && "$n" == "$want_n" ]] && git -C "$m" rev-parse --verify --quiet "refs/ccrc/attic/orphan/$s16/$head" >/dev/null 2>&1; } \
       || { _ws_orphan_failed "$id" "$tx" pin-failed "nothing was removed: HEAD of $p could not be pinned under refs/ccrc/attic/orphan/$s16/"; return 1; }
   fi
+  if (( rescue && _WS_ORPHAN_R11 )); then   # DR-22 (D-6634): each nested checkout is pinned or rescued whole, and re-proved, before anything goes
+    _ws_orphan_nested_pin "$m" "$p" "$s16" || { _ws_orphan_failed "$id" "$tx" pin-failed "nothing was removed: $RECLAIM_PIN_WHY"; return 1; }
+  fi
   _ws_orphan_gap pinned
   if ! _ws_orphan_holders "$p" "$sp"; then   # the holder, asked once more nearest the act
     if [[ "$_WS_ORPHAN_VERDICT" == unmeasured ]]; then _ws_orphan_failed "$id" "$tx" probe-unmeasured "nothing was removed: $_WS_ORPHAN_WHY"; return 1; fi
     _ws_orphan_refused "$id" "$tx" "$_WS_ORPHAN_WORD" "nothing was removed: $_WS_ORPHAN_WHY"; return 0
+  fi
+  if (( rescue && _WS_ORPHAN_R11 )); then   # the rescued directories go first, by the collector's own removal; then git's, never forced
+    while IFS=$'\t' read -r nk np; do
+      [[ -n "$np" ]] || continue
+      _ws_leaf_remove "${np%/*}" "${np##*/}" || { _ws_orphan_failed "$id" "$tx" nested-remove-failed "$np was not removed ($_WS_LEAF_WHY); the tree is left as it stands"; return 1; }
+    done < <(printf '%s' "$_WS_ORPHAN_NLIST" | LC_ALL=C sort -t $'\t' -k2,2 -r)
   fi
   err=$(git -C "$m" worktree remove -- "$p" 2>&1) && [[ ! -e "$p" ]] \
     || { _ws_orphan_failed "$id" "$tx" worktree-remove-failed "git did not remove $p, and it is left as it stands: ${err:-the directory still stands}"; return 1; }
@@ -16457,6 +16988,25 @@ _ws_orphan_locked() {   # token rescue -> everything the lock serialises (id, s1
   fi
   _lc_done destroy "$id" "$tx" verb ws-orphan meas.mode "$cls" meas.branch "$bres" meas.attic "$( ((rescue)) && echo "$n")" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
   printf '{"removed":true,"pathHex":%s,"class":%s,"branch":%s,"pinned":%s}\n' "$(_json_str "$(printf '%s' "$p" | _ws_orphan_hex)")" "$(_json_str "$cls")" "$(_json_str "$bres")" "$n"
+}
+
+_ws_orphan_nested_pin() {   # main tree s16 -> 0 when each nested checkout is pinned (same repository) or rescued (foreign) under
+  #   refs/ccrc/attic/orphan/<s16>/nested/<pathhex>/ and every pin re-proved; 1 with RECLAIM_PIN_WHY. Run under `_ws_reclaim_contained`.
+  local m="$1" pr b kind c rel wip sha got
+  RECLAIM_PIN_WHY=''; RECLAIM_SECRETS=()
+  pr=$(cd "$2" >/dev/null 2>&1 && pwd -P) || { RECLAIM_PIN_WHY="could not resolve $2"; return 1; }
+  while IFS=$'\t' read -r kind c; do
+    [[ -n "$c" ]] || continue
+    rel="${c#"$pr"/}"; b="refs/ccrc/attic/orphan/$3/nested/$(_ws_hex "$rel")"
+    if [[ "$kind" == foreign ]]; then _ws_nested_rescue "$m" "$c" "$b" "orphan-$3" orphan "$rel/" || return 1; continue; fi
+    _ws_wip_commit "$c" "orphan-$3" orphan "$rel/" || { RECLAIM_PIN_WHY="$RECLAIM_WIP_WHY"; return 1; }
+    wip="$RECLAIM_WIP_SHA"
+    { git -C "$c" reflog show HEAD --format=%H 2>/dev/null | LC_ALL=C sort -u | sed "s#.*#& reflog/&#"; git -C "$c" rev-parse --verify --quiet "HEAD^{commit}" | sed 's#.*#& heads/&#'
+      [[ -z "$wip" ]] || echo "$wip wips/$wip"; } | while read -r sha got; do
+      [[ "$sha" =~ ^[0-9a-f]{40,64}$ ]] && git -C "$m" update-ref "$b/$got" "$sha" 2>/dev/null && [[ "$(git -C "$m" rev-parse --verify --quiet "$b/$got")" == "$sha" ]] || exit 1
+    done
+    [[ "${PIPESTATUS[1]}" == 0 && -n "$(git -C "$m" for-each-ref --count=1 "$b/heads/")" ]] || { RECLAIM_PIN_WHY="the nested checkout at $c could not be pinned under $b/"; return 1; }
+  done <<< "$_WS_ORPHAN_NLIST"
 }
 
 cmd_ws_orphan() {   # ccd ws-orphan --expect <token> --tree-hex <hex> [--rescue] [--surface <word>] [--actor <text>] [--reason <text>]
@@ -16618,133 +17168,22 @@ _cfg_dir() { _ccrc_cfg_dir "$1"; }   # wrapper -> the CLAUDE_CONFIG_DIR that wra
 # three disagree about what the last line even is.
 CONTINUED_IN_TAIL_BYTES=8192
 
-# WHAT COUNTS AS A MARKER — ONE RULE, THREE READERS (D-4940). This jq program
-# is the rule both bash readers run (`_continued_in_of` below, and
-# `_dr_continued_in` in ccd/ccrc-doctor-checks, which carries this exact text
-# because it cannot source this file); `tailRecordOf`/`continuationInTail`
-# (`server/src/transcript/parse.ts`) is the same rule in TypeScript, where the
-# rule is written out in full. `server/test/continued-in-parity.test.ts` holds
-# the two bash spellings byte-equal and runs all three readers over one table
-# of transcripts. In short: the window's lines are read NEWEST FIRST; a
-# top-level `continued-in` record decides (a successor, or none when it is not
-# this file's valid marker), a top-level user/assistant record that Claude
-# Code's own reader calls a finished turn decides "none", and every other
-# line — re-stamped metadata, an interruption notice, a tool result, a
-# streamed record with no `stop_reason` yet, a line that does not parse, the
-# window's cut first line — is stepped over.
+# WHAT COUNTS AS A MARKER — ONE RULE, THREE READERS (D-4940), the jq half of it
+# in ONE FILE (ARCH-65): `ccd/lib/transcript.jq` holds the program, with the
+# reasons it is jq and not a bash pattern, and both bash readers (this file's
+# `_continued_in_of`, `_dr_continued_in` in ccd/ccrc-doctor-checks) load it with
+# `jq -L`. `continuationInTail` (`server/src/transcript/parse.ts`) is the same
+# rule in TypeScript. `server/test/continued-in-parity.test.ts` runs all three
+# over one table. A box with no jq follows nothing, and `ccrc doctor`'s jq
+# check FAILs that box.
 #
-# JQ, NOT A BASH PATTERN, AND WHY (review finding F1). The old reader matched
-# substrings anywhere on the last line, so a tool call whose INPUT held a
-# marker-shaped object, with the record's own top-level `sessionId` late on the
-# line, read as a marker: ccd wrote the registry to a session the operator was
-# not in while the server, which parses, refused it. Deciding the MARKER exactly
-# in bash is possible (it is a flat object); deciding that a nested line's own
-# top-level `type` is user or assistant is not, short of a JSON parser. Cost:
-# one `jq` beside the one `tail`, and both run only once per quiescence (the
-# read budget below), never per tick. A box with no jq follows nothing — no
-# output is "no successor" — and `ccrc doctor`'s jq check FAILs that box.
-#
-# A FINISHED TURN, AS CLAUDE CODE TELLS ONE (`complete`, `prompt`). Its own
-# reader (2.1.296) steps over every user/assistant record that is not one: an
-# assistant record whose `stop_reason` is not a string or that is an API
-# error, and a user record that is meta, a compact summary, a tool result, or
-# whose every text is empty, a slash command's echo, a leading tag
-# (`<local-command-stdout>`, `<system-reminder>`, …) or an interruption
-# notice. Stopping at those as well declined a follow Claude Code makes, and
-# those are the records most likely to land after a busy session is forked.
-# `jstrim`/`jsws` are JavaScript's `trim()` and `\s`, code point for code
-# point, and `tagled`/`cmdname` are its two patterns, so the test is the same
-# on the same string. Claude Code turns every newline into a space before
-# testing; here that step is folded into the tests instead (both treat a
-# newline exactly as a space: whitespace to `jstrim` and `tagled`, and NOT a
-# place `cmdname`'s `.` stops — it stops at `\r`, U+2028 and U+2029 only).
-# The one place this rule stops where Claude Code might step over is a text
-# holding a `<pasted_content id="` literal, which Claude Code unwraps first
-# and this program does not.
-#
-# NO `first`, `limit`, `any`, `all`, `isempty` OR `label` (review of D-4940,
-# measured): on jq 1.6 a `try` swallows the `break` those are built on when it
-# sits between the label and the break, so `first(… try fromjson …)` emitted
-# EVERY deciding line, and the older marker behind a user turn won. Two
-# guards now, either of which alone holds on jq 1.6 (both measured): every
-# decision is collected into an array and the newest taken from it, so there
-# is no break to swallow; and each parse's `try` sits inside its own array
-# constructor, so no break could cross it. The parity test pins the first by
-# spelling, and runs the table on every jq it finds.
-#
-# The uuid test is `explode`d character classes, not `test()`: jq's `$` also
-# matches before a trailing newline (a successor `"<uuid>\n"` would pass
-# `^…$`), and a jq built without Oniguruma has no `test()` at all.
-#
-# jq and `JSON.parse` agree on every line a JSON serializer writes but two,
-# measured on jq 1.6, 1.7.1 and 1.8.2. A LONE SURROGATE ESCAPE (`"\ud83d"`,
-# what `JSON.stringify` writes for a string cut mid-emoji) is refused by every
-# jq; `unsurrogate` rewrites each surrogate escape into a plain one and parses
-# again, which changes no decision this program makes (none reads a character
-# that is not ASCII or whitespace). NESTING DEEPER THAN 256 is refused by jq
-# before 1.8, and is left as it is: such a line is skipped here while the
-# server reads it, so a finished turn nested that deep after a marker is one
-# this reader steps over and the server stops at — recorded, not pinned,
-# because which jq refuses it is the variable. The surrogate row is in the
-# parity table. jq also accepts inputs no serializer writes (`nan`, `NaN`, `Infinity`;
-# on 1.6 a leading `+`), where the server skips the line. Duplicate keys: jq,
-# `JSON.parse` and Claude Code all keep the LAST.
-CONTINUED_IN_JQ='def jsws: . == 9 or . == 10 or . == 11 or . == 12 or . == 13 or . == 32 or . == 160 or . == 5760
-  or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239 or . == 8287 or . == 12288 or . == 65279;
-def jstrim: explode as $c
-  | [range(0; $c | length) | select($c[.] | jsws | not)] as $k
-  | if $k == [] then "" else $c[$k[0]:$k[-1] + 1] | implode end;
-def tagled: explode as $c
-  | ($c | length) > 2 and $c[0] == 60 and $c[1] >= 97 and $c[1] <= 122
-  and ([range(2; $c | length) | select($c[.] as $x
-         | ($x >= 48 and $x <= 57) or ($x >= 65 and $x <= 90) or ($x >= 97 and $x <= 122) or $x == 95 or $x == 45 | not)] as $k
-       | $k != [] and ($c[$k[0]] as $x | $x == 62 or ($x | jsws)));
-def cmdname: split("<command-name>") as $s
-  | [range(1; $s | length) | $s[.:] | join("<command-name>")
-     | split("\r")[0] | split("\u2028")[0] | split("\u2029")[0] | select(contains("</command-name>"))] != [];
-def prompttext:
-  if contains("<pasted_content id=\"") then true
-  else jstrim as $n
-  | if $n == "" then false
-    elif ($n | cmdname) then false
-    elif ($n | split("<bash-input>") | length > 1 and (.[1:] | join("<bash-input>") | contains("</bash-input>"))) then true
-    elif ($n | startswith("[Request interrupted by user")) and ($n | ltrimstr("[Request interrupted by user") | contains("]")) then false
-    elif ($n | tagled) then false
-    else true end
-  end;
-def prompt: .isMeta != true and .isCompactSummary != true and (.message | type) == "object"
-  and (.message.content as $x
-       | if ($x | type) == "string" then ($x | prompttext)
-         elif ($x | type) == "array" then
-           [$x[] | select(type == "object" and .type == "tool_result")] == []
-           and [$x[] | select(type == "object" and .type == "text" and (.text | type) == "string") | select(.text | prompttext)] != []
-         else false end);
-def complete: ((has("isApiErrorMessage") | not) or .isApiErrorMessage == false)
-  and (.message | type) == "object" and (.message.stop_reason | type) == "string";
-def unsurrogate: reduce ("d", "D") as $d (.; reduce ("8", "9", "a", "b", "c", "d", "e", "f", "A", "B", "C", "D", "E", "F") as $h
-  (.; split("\\u" + $d + $h) | join("\\uff")));
-def tailrec($l):
-  ($l | contains("\"type\":\"continued-in\"")) as $m
-  | ($l | (contains("\"type\":\"user\"") or contains("\"type\":\"assistant\""))) as $t
-  | if ($m or $t) | not then "skip"
-    else [$l | try fromjson catch ($l | unsurrogate | try fromjson catch empty)]
-    | if . == [] or (.[0] | type) != "object" then "skip"
-      else .[0]
-      | if $m and .type == "continued-in" and (.continuedInSessionId | type) == "string" then
-          .continuedInSessionId as $to
-          | if ((has("sessionId") | not) or .sessionId == $u)
-               and ($to | length) == 36
-               and ([$to | explode[] | select((. == 45 or (. >= 48 and . <= 57) or (. >= 97 and . <= 102)) | not)] == [])
-               and $to != $u
-            then "+" + $to else "stop" end
-        elif $t and .type == "assistant" then (if complete then "stop" else "skip" end)
-        elif $t and .type == "user" then (if prompt then "stop" else "skip" end)
-        else "skip" end
-      end
-    end;
-[(split("\n") | reverse[]) as $l | tailrec($l) | select(. != "skip")] | (.[0] // "stop")
-| select(startswith("+")) | .[1:]
-'
+# WHERE THE FILE IS. Beside this script when run from a tree (`<tree>/ccd/lib`:
+# tests, `ccrc install`), else where the installers put it
+# (`$HOME/.cc-sessions/lib`, beside the hook helpers). A missing file is a jq
+# that fails to load, which every reader already answers as "NOT MEASURED".
+TRANSCRIPT_JQ_LIB="${BASH_SOURCE[0]%/*}/lib"
+[[ -f "$TRANSCRIPT_JQ_LIB/transcript.jq" ]] || TRANSCRIPT_JQ_LIB="$HOME/.cc-sessions/lib"
+CONTINUED_IN_JQ='include "transcript"; continued_in($u)'
 
 # Memos, per session id, for the read budget below. `ccd supervise` is one
 # long-lived process per session, so these are already per-session state and
@@ -16977,16 +17416,6 @@ _ci_extant() {   # addresses (one per line, on $1) -> rc 0 and _CI_F set to the 
   return 1
 }
 
-_ci_transcript_path() {   # id cfg uuid -> the live transcript for uuid, tried both spellings, or nothing
-  # The PRINTING form, for the callers that are not on a per-tick path (the
-  # resume walk, `_ci_chain_end`) and that are already inside a `$( )` of
-  # their own.
-  local addrs
-  addrs=$(_ci_addrs "$1" "$2" "$3") || return 1
-  _ci_extant "$addrs" || return 1
-  printf '%s' "$_CI_F"
-}
-
 _continued_in_of() {   # file uuid -> the successor uuid the file's tail window names, or nothing; rc 2 = NOT MEASURED
   # Claude Code's own statement about itself, read by the rule all three
   # readers share (`CONTINUED_IN_JQ` above, D-4940): newest line first, the
@@ -17018,7 +17447,7 @@ _continued_in_of() {   # file uuid -> the successor uuid the file's tail window 
   # that failed feeds jq an empty window, which jq answers 0.
   local f="$1" uuid="$2" ps
   tail -c "$CONTINUED_IN_TAIL_BYTES" -- "$f" 2>/dev/null \
-    | jq -rRs --arg u "$uuid" "$CONTINUED_IN_JQ" 2>/dev/null
+    | jq -L "$TRANSCRIPT_JQ_LIB" -rRs --arg u "$uuid" "$CONTINUED_IN_JQ" 2>/dev/null
   ps="${PIPESTATUS[0]}:${PIPESTATUS[1]}"
   [[ "$ps" == 0:0 ]] || return 2
   return 0
@@ -17108,7 +17537,7 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
     _ci_walk_has "$id" "$next" && return 0                # already on this walk — a shorter local cycle, stop
     # Both spellings, same as the current file. The ADDRESSES are what the
     # decline below remembers, so they are resolved here rather than inside
-    # `_ci_transcript_path`, which would throw them away.
+    # `_ci_addrs`/`_ci_extant`, which would throw them away.
     pend=$(_ci_addrs "$id" "$cfg" "$next") || return 0
     if ! _ci_extant "$pend" || [[ ! -s "$_CI_F" ]]; then
       # ANNOUNCED BUT NOT YET WRITTEN — A DECLINE, NOT A VERDICT (D-4942).
@@ -17575,11 +18004,12 @@ _ci_chain_end() {   # id cfg -> rc 0, _CI_END* set: where the registry uuid's ch
   uuid=$(_reg_get "$id" uuid); [[ -n "$uuid" && -n "$cfg" ]] || return 1
   seen=" $uuid "
   while (( n < _CI_WALK_CAP )); do
-    f=$(_ci_transcript_path "$id" "$cfg" "$uuid") || break
+    _ci_extant "$(_ci_addrs "$id" "$cfg" "$uuid")" || break
+    f="$_CI_F"
     next=$(_continued_in_of "$f" "$uuid"); rc=$?
     if (( rc == 2 )); then _CI_END_UNREAD=1; break; fi
     [[ -n "$next" && "$seen" != *" $next "* ]] || break
-    sf=$(_ci_transcript_path "$id" "$cfg" "$next")
+    sf=""; _ci_extant "$(_ci_addrs "$id" "$cfg" "$next")" && sf="$_CI_F"
     if [[ -z "$sf" || ! -s "$sf" ]]; then
       if _ci_bg_scan "$cfg" "$next" "${next:0:8}"; then
         _CI_END_HELD="${_CI_BGJ:-pid $_CI_BGP}" _CI_END_HID="$next" _CI_END_HPID="$_CI_BGP"
@@ -20298,6 +20728,40 @@ _route_valid() {   # field value — THREE answers, because two of them are two 
     *)        return 1 ;;
   esac
 }
+_route_fable_shell() {   # field value — 0 iff a Claude Code session's shell (CLAUDECODE set) is asking for class=fable. D-6791
+  # A WRITE-SITE check, not part of `_route_valid`: that function also reads stored values (`_route_get`), and a
+  # class the operator saved through the PWA must stay readable from any shell, this one included.
+  [[ "$1" == class && "$2" == fable && -n "${CLAUDECODE:-}" ]]
+}
+_lane_default_is_fable() {   # wrapper — 0 iff its settings.json default model resolves to Fable. D-6793
+  # The resolution ladder is `ccrc-doctor-checks`' `_check_model-default` (`ccd-fable-default.test.ts` pins that the
+  # two scripts carry the same lines): env.ANTHROPIC_MODEL, then model, then env.ANTHROPIC_DEFAULT_MODEL, an alias
+  # through ANTHROPIC_DEFAULT_<ALIAS>_MODEL. Anything unreadable answers no: this only ever picks Opus over Fable.
+  local d; d=$(_ccrc_cfg_dir "$1") || return 1
+  [[ -n "$d" && -r "$d/settings.json" ]] || return 1
+  command -v node >/dev/null 2>&1 || return 1
+  CCRC_DOCTOR_SETTINGS="$d/settings.json" node -e '
+    let j; try { j = JSON.parse(require("fs").readFileSync(process.env.CCRC_DOCTOR_SETTINGS, "utf8")); } catch (e) { process.exit(3); }
+    if (!j || typeof j !== "object" || Array.isArray(j)) process.exit(4);
+    const env = j.env && typeof j.env === "object" && !Array.isArray(j.env) ? j.env : {};
+    const set = (x) => typeof x === "string" && x !== "";
+    let v;
+    if (set(env.ANTHROPIC_MODEL)) v = env.ANTHROPIC_MODEL;
+    else if (set(j.model)) v = j.model;
+    else if (set(env.ANTHROPIC_DEFAULT_MODEL)) v = env.ANTHROPIC_DEFAULT_MODEL;
+    else process.exit(0);
+    const alias = v.trim().toLowerCase().replace(/(\[1m\])+$/, "").trim();
+    let said = null;
+    if (alias === "fable" || v.includes("-fable-")) said = 1;
+    else if (alias === "best") said = 1;
+    else if (/^[a-z]+$/.test(alias)) {
+      const rk = "ANTHROPIC_DEFAULT_" + alias.toUpperCase() + "_MODEL";
+      if (set(env[rk]) && env[rk].includes("-fable-")) said = 1;
+    }
+    process.exit(said === null ? 0 : 7);
+  ' 2>/dev/null
+  [[ $? -eq 7 ]]
+}
 _route_note_floored() {   # id marker — 0 iff a note under this marker was written inside the floor
   local id="$1" m="$2" now nts
   now=$(date +%s)
@@ -20385,6 +20849,7 @@ _route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the 
       2) die "route: this box's roster projection carries no subagent class list — re-run ccrc install" ;;
       *) die "bad value for $f ($(_route_bytes "$v") bytes) — not in its vocabulary; nothing was touched" ;;
     esac
+    _route_fable_shell "$f" "$v" && die "fable-operator-only: a Claude Code session may not select class fable"
     [[ "$f" == class ]] && cls="$v"
     [[ "$f" == effort ]] && eff="$v"
   done
@@ -20800,8 +21265,8 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
 }
 
 _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a session whose own context has
-  # grown past ITS threshold (the record's `compact` field, else COMPACT_THRESHOLD) so it stays lean. Non-destructive: the SessionStart(compact) hook
-  # restores git/plan/handoff context (Anthropic + gpt lanes). Kill-switch: AUTOCOMPACT_DISABLE_FILE.
+  # grown past ITS threshold (the record's `compact` field, else COMPACT_THRESHOLD) so it stays lean. The SessionStart(compact) hook restores git/plan/handoff
+  # context and, armed, a coordinator's runs, yet a compaction is NOT lossless on either lane (D4, #757). Kill-switch: AUTOCOMPACT_DISABLE_FILE.
   #
   # D-2013 — WHICH REFUSALS ARE NOTED, AND WHICH ARE NOT. Two of the three gates above the pane
   # read (kill-switch, lastcompact cooldown) say nothing, and so does the below-threshold return:
@@ -21761,6 +22226,18 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
   done
   rows=$(_route_picker_rows "$picker")
   if [[ "$cls" == default || -z "$cls" ]]; then want="Default"; else want="${cls^}"; fi
+  # D-6793: the picker's Default row follows the lane's saved default, so a Default row that NAMES Fable (its own
+  # words: `Use the default model (currently Fable 5)`, or `Fable 5 · …` on a subscription lane) would switch the live
+  # pane to Fable. Operator-only: type the Opus row instead. Read off the picker itself, so a Fable default that does
+  # not come from settings.json is caught too, and no other context's function is called. A named class (the
+  # operator's own fable included) is never touched. The journal then says what is typed (`model opus`), or the
+  # acknowledgement `Set model to Opus 5` would be promoted as the operator's choice (session-continuity §5.7).
+  if [[ "$want" == Default ]] && _is_anthropic_backend "$w"; then
+    while IFS=$'\t' read -r n cur label desc; do
+      [[ "${label%% *}" == Default && "${desc%% · *}" =~ (^|[^[:alnum:]])Fable([^[:alnum:]]|$) ]] || continue
+      want="Opus"; _typed_note "$id" model opus; break
+    done <<< "$rows"
+  fi
   while IFS=$'\t' read -r n cur label desc; do
     [[ -n "$n" ]] || continue
     [[ "$cur" == 1 ]] && curs="$n"
@@ -22101,9 +22578,9 @@ _operator_choice_promote() {   # id [reason] [incoming-sid incoming-cfg] — the
   # is logged once. ONE READER: the same
   # `_operator_choice_read` over the same journal. An incoming transcript that is
   # absent (the ordinary case right after a `/clear`), not a readable regular file
-  # (`_ci_transcript_path` answers only a regular file), or that the reader fails
+  # (`_ci_extant` answers only a regular file), or that the reader fails
   # on contributes no lines; the outgoing ones stand alone, as the keep's always do.
-  if [[ -n "$sid" && -n "$icfg" ]] && fin=$(_ci_transcript_path "$id" "$icfg" "$sid") && [[ -r "$fin" ]]; then
+  if [[ -n "$sid" && -n "$icfg" ]] && _ci_extant "$(_ci_addrs "$id" "$icfg" "$sid")" && fin="$_CI_F" && [[ -r "$fin" ]]; then
     inc=$(_operator_choice_read "$fin" "$typed") || inc=""
   fi
   if [[ -z "$inc" ]]; then
@@ -22151,7 +22628,8 @@ _operator_choice_promote() {   # id [reason] [incoming-sid incoming-cfg] — the
     sets+=(--set "$field=$want"); kinds+=("$kind:$want")   # collected: the pair is checked ONCE, in one call below
   done <<<"$merged"
   if (( ${#kinds[@]} )); then   # ONE call for the pair: `cmd_route` checks class against effort on the merged sets, so a haiku record that takes /model opus AND /effort high keeps both (a call per field refused the effort first)
-    if ( cmd_route --session "$id" "${sets[@]}" --actor operator-session --reason "its own /${kinds[0]%%:*}${kinds[1]:+ and /${kinds[1]%%:*}}, $reason" ) >/dev/null 2>&1; then
+    # D-6791: the value is an acknowledged /model the operator typed, not the session shell asking, so the fable check (CLAUDECODE) does not apply.
+    if ( unset CLAUDECODE; cmd_route --session "$id" "${sets[@]}" --actor operator-session --reason "its own /${kinds[0]%%:*}${kinds[1]:+ and /${kinds[1]%%:*}}, $reason" ) >/dev/null 2>&1; then
       # A LIVE PROMOTION TYPES NOTHING IT WROTE (D-4319, kept under D-4321). The
       # supervise tick runs the applier right after `_sync_uuid`, and a promoted
       # field pending against `routeapplied` was typed back into the live pane —
@@ -24231,6 +24709,8 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     rm -f -- "$REG/$id.routeapplied"
     _route_tries_clear "$id"
   fi
+  # D-6793: no class named (or `default`) on a lane whose settings.json defaults to Fable runs Opus; a named class is never overridden.
+  [[ -z "${rclass:-}" || "$rclass" == default ]] && _is_anthropic_backend "$wrapper" && _lane_default_is_fable "$wrapper" && routeflags="--model opus${routeflags:+ $routeflags}"
   # THE CHILD'S TEMP ROOT (spec §5.2), composed ONCE, here, into the one `env`
   # string BOTH spawn lines below splice — for `$rcflag`'s reason: the resume
   # retry may not spawn a differently-contained pane than the attempt it
@@ -24824,49 +25304,16 @@ _transcript_last_turn_ts() {   # transcript-path -> 0 + the newest REAL turn's e
   # THE TIMESTAMP IS PARSED, NOT TRUSTED. Claude Code writes RFC3339 in UTC with
   # a literal `Z`; anything this cannot read is skipped as if the row carried no
   # timestamp at all, so a malformed row can only make the answer OLDER (fail
-  # open at the caller), never newer.
-  local f="$1" rows rc
+  # open at the caller), never newer. The reading itself is `last_turn_ts` in
+  # `ccd/lib/transcript.jq` (ARCH-65; it was an inline python program).
+  local f="$1" out
   [[ -f "$f" && -r "$f" ]] || return 2
-  rows=$(tail -n "$COMPACT_TURN_TAIL_LINES" "$f" 2>/dev/null) || return 2
-  command -v python3 >/dev/null 2>&1 || return 2
-  printf '%s\n' "$rows" | LC_ALL=C.UTF-8 python3 -c '
-import calendar, json, sys, time
-
-newest = None
-for raw in sys.stdin:
-    try:
-        row = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        continue
-    if not isinstance(row, dict):
-        continue
-    if row.get("type") not in ("user", "assistant"):
-        continue
-    if row.get("isCompactSummary") is True or row.get("isMeta") is True:
-        continue
-    message = row.get("message")
-    content = message.get("content") if isinstance(message, dict) else None
-    if row.get("type") == "user" and isinstance(content, str) and content.startswith(
-        ("<local-command-caveat>", "<command-name>", "<local-command-stdout>")
-    ):
-        continue
-    stamp = row.get("timestamp")
-    if not isinstance(stamp, str) or len(stamp) < 19:
-        continue
-    try:
-        epoch = calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
-    except ValueError:
-        continue
-    if newest is None or epoch > newest:
-        newest = epoch
-
-if newest is None:
-    raise SystemExit(1)
-print(newest)
-' 2>/dev/null
-  rc=$?
-  [[ "$rc" -le 1 ]] && return "$rc"
-  return 2
+  command -v jq >/dev/null 2>&1 || return 2
+  out=$(set -o pipefail
+        tail -n "$COMPACT_TURN_TAIL_LINES" -- "$f" 2>/dev/null \
+          | jq -L "$TRANSCRIPT_JQ_LIB" -rRs 'include "transcript"; last_turn_ts' 2>/dev/null) || return 2
+  [[ -n "$out" ]] || return 1
+  printf '%s\n' "$out"
 }
 
 COMPACT_TURN_DETAIL=""
@@ -24887,7 +25334,7 @@ _compact_no_turns() {   # id -> 0 iff the transcript PROVES no real turn since `
   # FAIL OPEN, AND THAT IS THE WHOLE SHAPE OF THIS GUARD. It answers 0 only on a
   # POSITIVE measurement that nothing happened; every other condition — no
   # `lastcompact` to be unchanged since, a transcript this box cannot name or
-  # read, a tail window holding no real turn, python absent — answers 1 and the
+  # read, a tail window holding no real turn, jq absent — answers 1 and the
   # compactor behaves exactly as it did before D-3103. A new guard that silences
   # the compactor on an unreadable transcript would trade a wasteful compaction
   # for a session that never compacts at all, which is the #67 R1 shape
@@ -24909,7 +25356,7 @@ _compact_no_turns() {   # id -> 0 iff the transcript PROVES no real turn since `
   ts=$(_transcript_last_turn_ts "$f") || return 1
   # THE DIGIT TESTS ARE FIRST AND INSIDE THE SAME `[[ ]]` as the arithmetic —
   # D-299's shape, and BOTH operands need one: `last` is a registry field (torn
-  # or hand-edited is the threat model) and `ts` is this box's own python
+  # or hand-edited is the threat model) and `ts` is this box's own jq
   # stdout, which is a pipeline that can answer anything at all if it is ever
   # replaced. `ccd-arith-containment.test.ts`'s SITES table pins this line.
   [[ "$last" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ && "$ts" -le "$last" ]] || return 1
@@ -29699,15 +30146,14 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
   # would say nothing was touched, which is false. The message names WHAT
   # COMPLETED and that the registry row and its generation still stand.
   # THE VALUE, not the boolean (D-2605) — see `cmd_ws_rm`'s note.
-  local _fg_prc=0
-  _reg_purge "$id" || _fg_prc=$?
-  if (( _fg_prc == 3 )); then
+  _reg_retire "$id" forget
+  if (( REG_RETIRE_RC == 3 )); then
     _lc_fail forget "$id" "$lctx" purge-incomplete \
       "the session was unsupervised, its pane killed and the registry row purged — this journal's own purge fact is the record of it — but $REG_PURGE_UNREMOVED could not be removed and still stands; re-running \`ccd forget $id\` will not take it, remove it by hand" \
       verb forget dec.reason "$reason" meas.unremoved "$REG_PURGE_UNREMOVED"
     echo "ccd: $id: unsupervised, killed and purged, but $REG_PURGE_UNREMOVED could not be removed — see the lifecycle journal" >&2
     return 1
-  elif (( _fg_prc == 2 )); then
+  elif (( REG_RETIRE_RC == 2 )); then
     # STATUS 2 IS NOT STATUS 1 — see `cmd_ws_rm`'s note (r3 A-I3). The REMEDY
     # differs from ws-rm's, which is why it is written out rather than shared:
     # `forget`'s own liveness precondition is `_session_verdict`, whose
@@ -29718,7 +30164,7 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
       verb forget dec.reason "$reason"
     echo "ccd: $id: unsupervised and killed, registry NOT purged — the compaction lock mechanism is absent; see the lifecycle journal" >&2
     return 1
-  elif (( _fg_prc != 0 )); then
+  elif (( REG_RETIRE_RC != 0 )); then
     # STATUS 1 FOLDS SEVERAL CONDITIONS, AND COMPACT_LOCK_WHY NAMES ONLY THE
     # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
     # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
@@ -29742,9 +30188,8 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
     # acquire sites, one level up; this is it one level down, where the
     # record is DURABLE — and it is the ONE renderer all five durable callers
     # consult, so this caller's text cannot drift from theirs.
-    local _fg_why; _fg_why=$(_compact_lock_why_remedy "$id" forget)
     _lc_fail forget "$id" "$lctx" purge-refused \
-      "the session was unsupervised and its pane killed, but the registry row could not be purged: $_fg_why" \
+      "the session was unsupervised and its pane killed, but the registry row could not be purged: $REG_RETIRE_WHY" \
       verb forget dec.reason "$reason"
     echo "ccd: $id: unsupervised and killed, registry NOT purged — see the lifecycle journal" >&2
     return 1
@@ -30005,6 +30450,8 @@ _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the re
   RECLAIM_STAGE=()          # the one tree last classified: its non-secret untracked paths
   RECLAIM_NESTED=""         # same-repository nested checkouts: one resolved path per line
   RECLAIM_FOREIGN=""        # different-repository nested checkouts PROVEN clean and pushed
+  RECLAIM_RESCUE=""; RECLAIM_RESCUEBIND=""; RECLAIM_RESCUE_WOULD=""   # nested-rescue-v1: rescuable paths, their token bindings, the path rung 9 would rescue
+  RECLAIM_RESCUED=""; RECLAIM_RESCUE_ENTRY=""; RECLAIM_PIN_WORD=""   # ... the pin's rescued entries (JSON, comma-joined); the pin's refusal word
   RECLAIM_STASHES=""        # stash commits attributed to the branch, one sha per line
   RECLAIM_OPHEADS=""        # `<NAME>=<sha>` per in-progress operation head present
   RECLAIM_WIP=""            # the child's own WIP commit, or '' when there was nothing to commit
@@ -32014,6 +32461,179 @@ _ws_reclaim_foreign_clean() {   # path -> 0 when the checkout of ANOTHER reposit
   return 0
 }
 
+# NESTED-RESCUE-V1 (D-6632, disk-retention spec §2.7.1). Under `$REG/nested-rescue-live`, a nested checkout of ANOTHER
+# repository that `_ws_reclaim_foreign_clean` refuses for work (dirty, a hidden-flag edit, a commit on no remote) is
+# RESCUED instead of refusing rung 9: the pin WIP-commits it, fetches its refs, its HEAD and the WIP into the project's
+# attic, and re-proves each landed. Without the marker rung 9 is unchanged and only names what it would rescue.
+WS_NESTED_RESCUE_MAX_MB=512   # bytes the rescue may add to the project's store; the kill rule raises it, nothing lowers it
+_ws_nested_rescue_live() { [[ -e "$REG/nested-rescue-live" ]]; }
+# Rescuable = the marker AND a HEAD that resolves: `_ws_wip_commit` needs HEAD^{tree}, so an unborn repository (only untracked
+# files) can never be pinned, and a token over it would only buy a retry loop. It stays containment-unproven, as without the marker.
+# A SHALLOW or PARTIAL clone is not rescuable either: a fetch from a shallow source into a full repository rejects every ref
+# (rc 0, nothing lands), so its token would answer nested-rescue-failed on every pass; it stays containment-unproven.
+# A LINKED WORKTREE of the nested repository (its detached HEAD names a commit no ref does, and the worktree lives outside the tree
+# being removed) and LFS or annex content (in `.git/lfs` or `.git/annex`, which a fetch never moves) hold work the rescue cannot
+# carry, so a repository with either stays containment-unproven. Only the repository's OWN config is read (a global or system
+# `filter.lfs.*` is on every box with git-lfs). A repository mid-operation (rebase, am, merge, an index.lock) keeps state no ref or
+# reflog reaches (the autostash commit, unapplied patches), so it stays containment-unproven too. So does any `.git/<dir>` beyond
+# the standard ones (git-crypt keys, submodule stores, ...): state a fetch of refs never carries.
+_ws_nested_rescue_shape() {   # what arming WOULD rescue: marker-independent, so the shadow list never names what the arm refuses
+  local c
+  c=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [[ -n "$c" ]] \
+    && git -C "$1" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 \
+    && [[ "$(git -C "$1" rev-parse --is-shallow-repository 2>/dev/null)" == false ]] \
+    && [[ -z "$(git -C "$1" config --local --get-regexp '^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter)|filter\.lfs\..*)$' 2>/dev/null)" ]] \
+    && [[ "$(git -C "$1" worktree list --porcelain 2>/dev/null | grep -c '^worktree ')" == 1 ]] \
+    && [[ ! -e "$c/lfs/objects" && ! -e "$c/annex" ]] \
+    && [[ -z "$(find "$c" -mindepth 1 -maxdepth 1 -type d ! \( -name branches -o -name hooks -o -name info -o -name logs -o -name objects -o -name refs -o -name rr-cache \) 2>/dev/null)" ]] \
+    && ! _ws_nested_busy "$1"
+}
+_ws_nested_busy() {   # nested dir -> 0 when an operation is in progress or unprobeable (state no ref or reflog reaches)
+  local f
+  [[ -z "$(_ws_child_op "$1" 2>/dev/null || echo unprobeable)" ]] || return 0
+  for f in MERGE_AUTOSTASH index.lock; do [[ ! -e "$(git -C "$1" rev-parse --path-format=absolute --git-path "$f" 2>/dev/null)" ]] || return 0; done
+  return 1
+}
+_ws_nested_rescuable() { _ws_nested_rescue_live && _ws_nested_rescue_shape "$1"; }
+_ws_nested_secrets() {   # nested rel -> its secret-shaped paths (untracked, IGNORED, or modified tracked) join REAP_SENSITIVE and RECLAIM_SECRETS
+  local e p skip
+  while IFS= read -r -d '' e; do
+    case "$e" in [RC]?' '*|?[RC]' '*) IFS= read -r -d '' skip || :; p="${e:3}" ;; ??' '*) p="${e:3}" ;; *) continue ;; esac
+    _ws_reclaim_secret_path "$p" && { REAP_SENSITIVE+=("$2/$p"); RECLAIM_SECRETS+=("$2/$p"); }
+  done < <(git -C "$1" -c core.quotePath=false status --porcelain=v1 -z --untracked-files=all --ignored 2>/dev/null)
+  return 0
+}
+_ws_hex() { printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n'; }
+_ws_lines_json() {   # lines -> a JSON array of strings
+  local out="[" first=1 l; while IFS= read -r l; do [[ -n "$l" ]] || continue; (( first )) || out+=","; first=0; out+="$(_json_str "$l")"; done <<< "$1"; printf '%s]' "$out"
+}
+_ws_rescue_doc() {   # the audit document's `nestedRescue` key (with its comma), only when a rescue is or would be in play
+  [[ -n "$RECLAIM_RESCUE$RECLAIM_RESCUE_WOULD" ]] || return 0
+  printf '"nestedRescue":{"wouldRescue":%s,"rescue":%s},' "$(_ws_lines_json "$RECLAIM_RESCUE_WOULD")" "$(_ws_lines_json "$RECLAIM_RESCUE")"
+}
+_ws_nested_bind() {   # nested rel -> `nestedRescue=<pathhex>:<HEAD or ->:<status digest>`, the token's binding of a rescue
+  local h st d
+  h=$(git -C "$1" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) || h=-
+  st=$(git -C "$1" status --porcelain --untracked-files=all 2>/dev/null) || return 1
+  d=$(printf '%s' "$st" | _plat_sha256 | cut -d' ' -f1)
+  printf 'nestedRescue=%s:%s:%s' "$(_ws_hex "$2")" "$h" "$d"
+}
+_ws_store_kb() { git -C "$1" count-objects -v 2>/dev/null | awk -F': ' '$1 == "size" || $1 == "size-pack" { s += $2 } END { print s + 0 }'; }
+_ws_nested_same() {   # main nested base wip -> 0 when `$base/` already holds THIS rescue: same HEAD, same WIP tree, no ref of it moved
+  local w
+  [[ "$(git -C "$1" rev-parse --verify --quiet "$3/head" 2>/dev/null)" == "$(git -C "$2" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null)" ]] || return 1
+  if [[ -n "$4" ]]; then w=$(git -C "$1" rev-parse --verify --quiet "$3/wip^{tree}" 2>/dev/null); [[ -n "$w" && "$w" == "$(git -C "$2" rev-parse "$4^{tree}" 2>/dev/null)" ]] || return 1
+  else ! git -C "$1" rev-parse --verify --quiet "$3/wip" >/dev/null 2>&1 || return 1; fi
+  ! git -C "$1" for-each-ref --format='%(objectname) %(refname)' "$3/refs/" | sed "s# $3/# #" | grep -vxFf <(git -C "$2" for-each-ref --format='%(objectname) %(refname)') | grep -q .
+}
+_ws_nested_unland() { git -C "$1" for-each-ref --format='%(refname)' "$2/" | { grep -v "^$2/again-" || true; } | sed 's/^/delete /' | git -C "$1" update-ref --stdin 2>/dev/null; return 0; }   # a fresh base this pass claimed, its re-prove failed: leave no claim or partial refs for a retry to outgrow
+_ws_nested_rescue() {   # main nested base id childof prefix -> 0 with RECLAIM_RESCUE_ENTRY (one JSON object); 1 with
+  #                         RECLAIM_PIN_WORD (nested-rescue-too-large | nested-rescue-failed) and RECLAIM_PIN_WHY.
+  # Run under `_ws_reclaim_contained`. Moves no ref in the nested repository; adds refs only under `$base`.
+  local main="$1" n="$2" base="$3" id="$4" childof="$5" prefix="$6" wip b a q ref want got specs=() errf orph tips base0 reuse=0 blob tries=0 wantl gotl c
+  RECLAIM_PIN_WORD=nested-rescue-failed; RECLAIM_RESCUE_ENTRY=""
+  ! _ws_nested_busy "$n" || { RECLAIM_PIN_WHY="the nested repository at $n has an operation in progress — its autostash and patch state is on no ref, so it stays"; return 1; }
+  _ws_nested_rescue_shape "$n" || { RECLAIM_PIN_WHY="the nested repository at $n has a shape a fetch cannot carry (LFS or annex content, a linked worktree, a partial or shallow clone) — it stays"; return 1; }
+  _ws_wip_commit "$n" "$id" "$childof" "$prefix" || { RECLAIM_PIN_WHY="could not capture the uncommitted work of the nested repository at $n: $RECLAIM_WIP_WHY"; return 1; }
+  wip="$RECLAIM_WIP_SHA"
+  # A global clean filter can write content into `.git/lfs` while the WIP is staged and commit only a pointer: look again.
+  c=$(git -C "$n" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [[ -n "$c" && ! -e "$c/lfs/objects" && ! -e "$c/annex" ]] \
+    || { RECLAIM_PIN_WHY="staging the uncommitted work of the nested repository at $n wrote LFS or annex content a fetch never moves — it stays"; return 1; }
+  git -C "$n" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 \
+    || { RECLAIM_PIN_WHY="the nested repository at $n has no commit at HEAD — there is nothing to pin it by, so it stays"; return 1; }
+  errf=$(_plat_mktemp) || { RECLAIM_PIN_WHY="could not make a scratch file to rescue $n"; return 1; }
+  base0="$base"   # the base is chosen (and claimed) only at landing, below
+  specs=("+refs/*:$base/refs/*")
+  # A commit only a reflog names (a stash below the newest, a reset-away tip) is in no ref: it is fetched by sha too.
+  orph=$(git -C "$n" rev-list --reflog --not --all 2>/dev/null) \
+    || { RECLAIM_PIN_WHY="could not list the commits only the reflogs of the nested repository at $n name"; return 1; }
+  tips=$(git -C "$n" reflog show --all --format=%H 2>/dev/null | LC_ALL=C sort -u | { grep -Fxf <(printf '%s\n' "$orph") || true; })
+  (( $(printf '%s' "$tips" | grep -c .) <= 500 )) || { RECLAIM_PIN_WHY="the nested repository at $n has over 500 reflog-only commits — it stays"; return 1; }
+  for want in $tips; do specs+=("+$want:$base/reflog/$want"); done
+  git -C "$n" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 && specs+=("+HEAD:$base/head")
+  [[ -z "$wip" ]] || specs+=("+$wip:$base/wip" "+$wip:$base/wips/$wip")
+  # THE BOUND IS MEASURED BEFORE ANYTHING LANDS, in a throwaway repository that borrows the project's store as an alternate, so the
+  # answer is the same on every attempt: a refused rescue must not leave its objects in the store for the next one to find already paid.
+  # An ordinary PACKED fetch (`unpackLimit=1`) keeps delta compression, so `size-pack` is a compressed upper bound on what would land
+  # (it may count objects no ref reaches, which only errs toward keeping). The landing fetch below carries the same `unpackLimit=1`,
+  # because git's default would write a rescue of fewer than 100 objects as loose, undeltified objects, many times the measured size. A repository whose own store is far over the bound is
+  # refused before any fetch, so a huge clone never writes its objects to temp on a box that is short of disk.
+  a=$(_ws_store_kb "$n")
+  if (( a > 4 * WS_NESTED_RESCUE_MAX_MB * 1024 )); then
+    rm -f "$errf"; RECLAIM_PIN_WORD=nested-rescue-too-large
+    RECLAIM_PIN_WHY="the nested repository at $n holds $(( a / 1024 )) MiB, far over the $WS_NESTED_RESCUE_MAX_MB MiB bound — nothing was taken"; return 1
+  fi
+  q=$(_plat_mktemp_d) && { _WS_NQ=$q; [[ -n "$(trap -p EXIT)" ]] || trap 'rm -rf "${_WS_NQ:-}"' EXIT; } && git init -q --bare "$q" 2>/dev/null \
+    && git -C "$main" rev-parse --path-format=absolute --git-path objects >"$q/objects/info/alternates" 2>/dev/null \
+    || { rm -rf "$q"; rm -f "$errf"; RECLAIM_PIN_WHY="could not make a scratch repository to measure the rescue of $n"; return 1; }
+  git -C "$q" -c gc.auto=0 -c transfer.unpackLimit=1 -c uploadpack.allowAnySHA1InWant=true fetch -q --no-tags --no-write-fetch-head "$n" "${specs[@]}" >/dev/null 2>"$errf" \
+    || { RECLAIM_PIN_WHY="could not fetch the nested repository at $n to measure it: $(head -1 "$errf")"; rm -rf "$q"; rm -f "$errf"; return 1; }
+  a=$(_ws_store_kb "$q"); rm -rf "$q"; _WS_NQ=""; b=0
+  if (( a > WS_NESTED_RESCUE_MAX_MB * 1024 )); then
+    rm -f "$errf"; RECLAIM_PIN_WORD=nested-rescue-too-large
+    RECLAIM_PIN_WHY="rescuing the nested repository at $n would add $(( a / 1024 )) MiB to the project, over the $WS_NESTED_RESCUE_MAX_MB MiB bound — nothing was taken"; return 1
+  fi
+  # APPEND-ONLY: a name the attic already holds is never force-moved (a second same-named repository would orphan the first's tips),
+  # except by the rescue of the SAME tree (the settle re-pin), which lands in place. A base is CLAIMED by a create-only `update-ref`,
+  # so two rescues choosing at once cannot both take one name; the loser takes the next.
+  if [[ -n "$(git -C "$main" for-each-ref --count=1 "$base/" 2>/dev/null)" ]]; then
+    if _ws_nested_same "$main" "$n" "$base" "$wip"; then reuse=1; else base="$base0/again-$(date +%s)-$$-$RANDOM"; fi
+  fi
+  if (( ! reuse )); then
+    blob=$(git -C "$main" hash-object -w --stdin </dev/null 2>/dev/null) || { rm -f "$errf"; RECLAIM_PIN_WHY="could not claim a place in the attic for the nested repository at $n"; return 1; }
+    until git -C "$main" update-ref "$base/claim" "$blob" "" 2>/dev/null; do
+      (( ++tries < 8 )) || { rm -f "$errf"; RECLAIM_PIN_WHY="could not claim a place in the attic for the nested repository at $n"; return 1; }
+      base="$base0/again-$(date +%s)-$$-$RANDOM"
+    done
+  fi
+  specs=("${specs[@]//$base0/$base}")
+  git -C "$main" -c gc.auto=0 -c transfer.unpackLimit=1 -c fetch.unpackLimit=1 -c uploadpack.allowAnySHA1InWant=true fetch -q --no-tags --no-write-fetch-head "$n" "${specs[@]}" >/dev/null 2>"$errf" \
+    || { RECLAIM_PIN_WHY="could not fetch the nested repository at $n into the attic: $(head -1 "$errf")"; rm -f "$errf"; (( reuse )) || git -C "$main" update-ref -d "$base/claim" 2>/dev/null; return 1; }
+  rm -f "$errf"
+  # RE-PROVE (spec §2.7.1 step 3): every ref tip, HEAD, the WIP and each reflog-only tip resolve under the attic.
+  while read -r want ref; do
+    [[ -n "$want" ]] || continue
+    got=$(git -C "$main" rev-parse --verify --quiet "$base/$ref" 2>/dev/null)
+    [[ "$got" == "$want" ]] || { RECLAIM_PIN_WHY="$ref of the nested repository at $n did not land under $base/"; (( reuse )) || _ws_nested_unland "$main" "$base"; return 1; }
+  done < <({ git -C "$n" for-each-ref --format='%(objectname) %(refname)'; git -C "$n" rev-parse --verify --quiet "HEAD^{commit}" | sed 's/$/ head/'; [[ -z "$wip" ]] || echo "$wip wip"; for want in $tips; do echo "$want reflog/$want"; done; } 2>/dev/null)
+  # ... and the re-prove is TOTAL, not list-based: every commit any ref, any worktree HEAD or any reflog of the nested repository
+  # reaches must be reachable from what landed, so a commit no listing above names (a linked worktree's detached HEAD) fails here.
+  wantl=$(git -C "$n" rev-list --all --reflog 2>/dev/null | LC_ALL=C sort -u; exit "${PIPESTATUS[0]}") \
+    && gotl=$(git -C "$main" for-each-ref --format='%(objectname)' "$base/refs/" "$base/head" "$base/wips/" "$base/reflog/" 2>/dev/null | git -C "$main" rev-list --stdin 2>/dev/null | LC_ALL=C sort -u) \
+    && [[ -z "$(comm -23 <(printf '%s\n' "$wantl") <(printf '%s\n' "$gotl") | grep .)" ]] \
+    || { RECLAIM_PIN_WHY="the nested repository at $n holds commits that did not all land under $base/ — it stays"; (( reuse )) || _ws_nested_unland "$main" "$base"; return 1; }
+  RECLAIM_PIN_WORD=""
+  RECLAIM_RESCUE_ENTRY=$(printf '{"path":%s,"refs":%s,"wip":%s,"bytes":%s}' "$(_json_str "${prefix%/}")" "$(_json_str "$base/")" \
+    "$( [[ -n "$wip" ]] && _json_str "$wip" || echo null)" "$(( (a - b) * 1024 ))")
+}
+
+_ws_scratch_rescue_run() {   # id main path -> `_ws_nested_rescue`'s answer for a session's scratch repository, as a document
+  local id="$1" main="$2" d="$3" mainreal dcommon top name
+  RECLAIM_SECRETS=(); RECLAIM_PIN_WHY=""; RECLAIM_PIN_WORD=nested-rescue-failed
+  mainreal=$(_ws_common_dir "$main") && dcommon=$(_ws_common_dir "$d") && top=$(cd -- "$d" 2>/dev/null && git rev-parse --path-format=absolute --show-toplevel 2>/dev/null) \
+    && [[ "$dcommon" != "$mainreal" && "$top" == "$(cd -P -- "$d" && pwd -P)" ]] \
+    || { printf '{"failed":%s,"detail":%s}\n' '"nested-rescue-failed"' "$(_json_str "$d is not the root of a repository other than $main's own")"; return 1; }
+  name="${d##*/}"
+  if _ws_nested_rescue "$main" "$d" "refs/ccrc/attic/$id/scratch/$(_ws_hex "$name")" "$id" scratch "$name/"; then
+    printf '{"rescued":%s}\n' "$RECLAIM_RESCUE_ENTRY"
+  else
+    printf '{"failed":%s,"detail":%s}\n' "$(_json_str "$RECLAIM_PIN_WORD")" "$(_json_str "$RECLAIM_PIN_WHY")"; return 1
+  fi
+}
+cmd_scratch_rescue() {   # ccd scratch-rescue --session <id> <path> — keep a session's scratch repository in its project's attic
+  # The size budget's rescue (spec §2.1.1, ruling 3): called ONLY by `ccd-tmp-sweep`, behind the direct entry like `ws-collect`, and
+  # forbidden to sessions. It deletes nothing; it adds refs under `refs/ccrc/attic/<id>/scratch/<namehex>/` and prints one document.
+  local project LC_ALL=C
+  [[ $# -eq 3 && "$1" == --session ]] || die "usage: ccd scratch-rescue --session <id> <path>"
+  # The id check and the project read are inline (the id grammar of `_reg_id_ok`, the read of `_reg_get`) so this verb adds no
+  # edge into the registry context and no `_reg_get` call to the census; a missing or unreadable field is refused below.
+  [[ "$2" =~ ^[A-Za-z0-9._-]+$ && "$2" != -* ]] || die "bad session id"
+  [[ -f "$REG/$2.uuid" ]] || die "no such session: $2"
+  project=""; [[ -f "$REG/$2.project" && ! -L "$REG/$2.project" ]] && _file_read_to project "$REG/$2.project"
+  [[ -n "$project" && "$3" == /* && -d "$3" && ! -L "${3%/}" ]] || die "$3 is not one plain absolute directory"
+  _ws_reclaim_contained _ws_scratch_rescue_run "$2" "$PROJECTS_ROOT/$project" "$3"
+}
+
 _WS_LOGSREAD_WHY=''
 _ws_reclaim_logs_readable() {   # checkout -> 0 when every entry under the `logs/` of its git directory and
   #                                 of its common directory reads (a directory searchable too), absent
@@ -32095,6 +32715,56 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   _ws_reclaim_ladder "$id" "$defer"
 }
 
+# THE STALE ARM (DR-26, D-6638; spec §2.7.3). A kept child is reclaimed after seven idle days, and the server names
+# WHY it was kept: `--stale held|run-absent|review|terminal`. Only `held` moves a rung (rung 4, by the hold's digest);
+# the others change nothing but the token, which binds the word, the digest and the box's idle instant. The words
+# are the CALLER's (`_ws_stale_argv`, from the verb's or the audit's flags), set as locals there, so an exported
+# environment never arms the arm; the expiry ladder, which shares `_ws_reclaim_ladder`, never sets them.
+WS_STALE_IDLE_S=604800   # seven days, spec §2.7.3. The box's half of "idle"; raise-only, nothing lowers it.
+_WS_STALE_WORD=""; _WS_STALE_DIGEST=""
+_ws_stale_argv() {   # [--defer-expired] [--stale <word>] [--hold-digest <sha256>] ... -> sets the caller's `defer`, `_WS_STALE_WORD` and `_WS_STALE_DIGEST`; rc 1 on anything else
+  while (( $# )); do
+    case "$1" in
+      --defer-expired) defer=1; shift ;;
+      --stale)         [[ $# -ge 2 && -z $_WS_STALE_WORD ]] || return 1; _WS_STALE_WORD=$2; shift 2 ;;
+      --hold-digest)   [[ $# -ge 2 && -z $_WS_STALE_DIGEST ]] || return 1; _WS_STALE_DIGEST=$2; shift 2 ;;
+      *)               return 1 ;;
+    esac
+  done
+  case "$_WS_STALE_WORD" in
+    held)                         [[ $_WS_STALE_DIGEST =~ ^[0-9a-f]{64}$ ]] ;;
+    run-absent|review|terminal|'') [[ -z $_WS_STALE_DIGEST ]] ;;
+    *)                            return 1 ;;
+  esac
+}
+_ws_reclaim_hold_released() {   # id -> 0 when `--stale held` was given and the hold's bytes hash to the digest it carries; else 1 (the hold stands)
+  [[ $_WS_STALE_WORD == held && "${_WS_LADDER_BIND[0]-}" != mode=expire && -f "$REG/$1.hold" && -r "$REG/$1.hold" ]] || return 1
+  [[ "$(_plat_sha256 < "$REG/$1.hold" 2>/dev/null | cut -d' ' -f1)" == "$_WS_STALE_DIGEST" ]]
+}
+_ws_reclaim_stale_idle() {   # id transcript probe-verdict pane-activity -> 0 (the token bound to the idle instant), or REAP_VERDICT=not-idle|unmeasured
+  # The ladder asks tmux and `_transcript_path` (it already holds the probe and the pane's name) and hands the answers
+  # here; this decides. The newest of the transcript, `.lastend`, `.spawn`, `.woke`, `.supervised` and a live pane's
+  # `#{window_activity}` must be older than WS_STALE_IDLE_S. Nothing recorded, or anything unreadable: unmeasured.
+  local id="$1" tp="$2" verdict="$3" act="$4" p m newest=0 seen=0
+  for p in "$tp" "$REG/$id.lastend" "$REG/$id.spawn" "$REG/$id.woke" "$REG/$id.supervised"; do
+    [[ -n $p && ( -e $p || -L $p ) ]] || continue
+    m=$(_plat_mtime "$p" 2>/dev/null) && [[ $m =~ ^[0-9]+$ ]] \
+      || { _ws_reclaim_unmeasured "when $p was last written could not be read — $id's idle time is unmeasured"; return 1; }
+    seen=1; (( m > newest )) && newest=$m
+  done
+  case "$verdict" in
+    gone) : ;;
+    live) [[ $act =~ ^[0-9]+$ ]] \
+            || { _ws_reclaim_unmeasured "$id's tmux session is up and would not say when it was last active — its idle time is unmeasured"; return 1; }
+          seen=1; (( act > newest )) && newest=$act ;;
+    *)    _ws_reclaim_unmeasured "whether $id's tmux session is up could not be asked — its idle time is unmeasured"; return 1 ;;
+  esac
+  (( seen )) || { _ws_reclaim_unmeasured "nothing records when $id last worked (no transcript, .lastend, .spawn, .woke, .supervised or pane)"; return 1; }
+  (( $(date +%s) - newest > WS_STALE_IDLE_S )) \
+    || { _reap_refuse not-idle "$id worked at epoch $newest, less than $WS_STALE_IDLE_S seconds ago — a stale reclaim waits for seven idle days"; return 1; }
+  _WS_LADDER_BIND+=("stale=$_WS_STALE_WORD" "holdDigest=$_WS_STALE_DIGEST" "idleAt=$newest")
+}
+
 _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` and `_ws_expire_eval` (the
   #                         EXPIRE region): each asks its own rungs 1-2 first and sets `_WS_LADDER_BIND`, the
   #                         token's leading inputs. 0 with REAP_VERDICT=reclaimable and REAP_TOKEN; else
@@ -32105,7 +32775,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   # run the programs of a tree nothing has proved nobody is in — a caller outside it is a defect.
   local id="$1" defer="$2"
   local project workdir regbranch branch wthead main mainreal common
-  local op clients elsewhere elsrc nested p pcommon ptop rc h hs clipsjson hp wdreal
+  local op clients elsewhere elsrc nested p pcommon ptop rc h hs clipsjson hp wdreal pane_at wouldwhy=""
   # NO BINDING, NO TOKEN: a ladder entered without its caller's rungs 1-2 would
   # mint a token that names no verb and no population. A defect, measured as
   # nothing — unmeasured, never a refusal word and never a token.
@@ -32115,9 +32785,15 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   # not -f, and -L: a directory, an unreadable file or a DANGLING link pauses.
   [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
     || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
-  # 4 — held. -e for the same reason: an unreadable hold is still a hold.
-  if [[ -e "$REG/$id.hold" ]]; then
+  # 4 — held. -e for the same reason: an unreadable hold is still a hold. `--stale held` passes ONE hold: the
+  # one whose bytes hash to the digest it was given (`_ws_reclaim_hold_released`, DR-26).
+  if [[ -e "$REG/$id.hold" ]] && ! _ws_reclaim_hold_released "$id"; then
     _reap_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1
+  fi
+  if [[ -n $_WS_STALE_WORD && "${_WS_LADDER_BIND[0]-}" == mode=reclaim ]]; then   # the stale arm's rung after rung 4 (DR-26)
+    _session_probe "$id" anchored; pane_at=''
+    [[ $PROBE_VERDICT != live ]] || pane_at=$(tmux display-message -p -t "$(_tmux_t "$id")" '#{window_activity}' 2>/dev/null)
+    _ws_reclaim_stale_idle "$id" "$(_transcript_path "$id")" "$PROBE_VERDICT" "$pane_at" || return 1
   fi
   project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir); regbranch=$(_reg_get "$id" branch)
   # A ROW THAT DOES NOT SAY WHAT THE CHILD IS IS UNMEASURED, NOT UNREADABLE:
@@ -32348,6 +33024,15 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     || { _ws_reclaim_unmeasured "could not resolve $workdir"; return 1; }
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
+    if [[ -n "$wouldwhy" ]]; then   # shadow tail: the answer is fixed (containment-unproven); this only fills wouldRescue
+      pcommon=$(_ws_common_dir "$p") || continue
+      [[ "$pcommon" != "$mainreal" ]] || continue
+      _ws_reclaim_foreign_clean "$p"; rc=$?
+      (( rc == 0 )) || { (( rc == 1 )) && _ws_nested_rescue_shape "$p"; } \
+        || { RECLAIM_RESCUE_WOULD=""; _reap_refuse containment-unproven "$wouldwhy"; return 1; }
+      (( rc == 0 )) || RECLAIM_RESCUE_WOULD+="$p"$'\n'
+      continue
+    fi
     # A READ THAT FAILED MEASURED NOTHING (spec §5.5, rung 8's rule, carried
     # here): unmeasured, retried. `containment-unproven` is kept for what the
     # reads PROVE — a checkout that is not a worktree root, a dirty one, or a
@@ -32390,9 +33075,21 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     fi
     _ws_reclaim_foreign_clean "$p"; rc=$?
     (( rc == 2 )) && { _ws_reclaim_unmeasured "$_WS_FOREIGN_WHY"; return 1; }
-    (( rc == 0 )) || { _reap_refuse containment-unproven "$_WS_FOREIGN_WHY"; return 1; }
+    if (( rc == 1 )) && _ws_nested_rescuable "$p"; then   # D-6632: rescuable, not refused; the token binds it
+      hp=$(_ws_nested_bind "$p" "${p#"$wdreal"/}") || { _ws_reclaim_unmeasured "could not read the nested repository at $p"; return 1; }
+      _ws_nested_secrets "$p" "${p#"$wdreal"/}"
+      RECLAIM_RESCUE+="$p"$'\n'; RECLAIM_RESCUEBIND+="$hp"$'\n'; continue
+    fi
+    if (( rc != 0 )); then
+      # Without the marker, keep walking: the list names only what arming would clear, so every refusing repository must be rescuable.
+      if (( rc == 1 )) && ! _ws_nested_rescue_live && _ws_nested_rescue_shape "$p"; then
+        RECLAIM_RESCUE_WOULD+="$p"$'\n'; [[ -n "$wouldwhy" ]] || wouldwhy="$_WS_FOREIGN_WHY"; continue
+      fi
+      RECLAIM_RESCUE_WOULD=""; _reap_refuse containment-unproven "$_WS_FOREIGN_WHY"; return 1
+    fi
     RECLAIM_FOREIGN+="$p"$'\n'
   done <<< "$nested"$'\n'
+  [[ -z "$wouldwhy" ]] || { _reap_refuse containment-unproven "$wouldwhy"; return 1; }
   # NOR IS ANY CHECKOUT INSIDE IT A GONE ROW'S MOVED TREE (spec §5.5):
   # asked after the scan, over its answer — `_ws_reclaim_moved_check` says why.
   _ws_reclaim_moved_check "$nested"; rc=$?
@@ -32416,7 +33113,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   REAP_CLIPDIGEST=$(printf '%s\n' "$clipsjson" | _plat_sha256 | cut -d' ' -f1)
   REAP_SENSDIGEST=$(printf '%s\n' ${RECLAIM_SECRETS[@]+"${RECLAIM_SECRETS[@]}"} | LC_ALL=C sort | _plat_sha256 | cut -d' ' -f1)
   RECLAIM_HIDDENDIGEST=$(printf '%s\n' ${RECLAIM_HIDDEN[@]+"${RECLAIM_HIDDEN[@]}"} | LC_ALL=C sort | _plat_sha256 | cut -d' ' -f1)
-  REAP_CHILDDIGEST=$(printf '%s%s' "$RECLAIM_NESTED" "$RECLAIM_FOREIGN" | _plat_sha256 | cut -d' ' -f1)
+  REAP_CHILDDIGEST=$(printf '%s%s%s' "$RECLAIM_NESTED" "$RECLAIM_FOREIGN" "$RECLAIM_RESCUEBIND" | _plat_sha256 | cut -d' ' -f1)
   # 10 is the VERB's: it recomputes this inside the reap lock and compares.
   RECLAIM_WORKTREE=present
   # `branchState` is an INPUT of its own (spec §5.5): `tip=` is empty for a
@@ -32538,7 +33235,7 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
     || { _ws_reclaim_unmeasured "$REG/$id.generation could not be read as this row's generation ($RECLAIM_GENERATION_WHY) — an interrupted reclaim does not finish on a row it cannot identify"; return 1; }
   [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
     || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
-  if [[ -e "$REG/$id.hold" ]]; then
+  if [[ -e "$REG/$id.hold" ]] && ! _ws_reclaim_hold_released "$id"; then
     _reap_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1
   fi
   tomb="$REG/.reaped/$id.json"
@@ -32552,7 +33249,8 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
   REAP_BRANCH="$tombbranch"; REAP_TIP="$tombtip"
   REAP_TOKEN=$(_ws_reclaim_fingerprint "mode=reclaim-resume" "id=$id" "childOf=$mark" \
     "generation=$RECLAIM_GENERATION" \
-    "deferExpired=$defer" "phase=$phase" "branch=$tombbranch" "tip=$tombtip")
+    "deferExpired=$defer" "phase=$phase" "branch=$tombbranch" "tip=$tombtip" \
+    ${_WS_STALE_WORD:+"stale=$_WS_STALE_WORD" "holdDigest=$_WS_STALE_DIGEST"})
   REAP_VERDICT=reclaimable
   return 0
 }
@@ -33608,7 +34306,8 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
   local id="$1" workdir="$2" main="$3" branch="$4" childof="$5"
   local oph headsha headref rc nested cpath cpcommon cbr chead mainreal wdreal sha stashes
   local extras=() same=()
-  RECLAIM_PIN_WHY=""; RECLAIM_WIP=""; RECLAIM_SECRETS=(); REAP_CHILDLINES=""; RECLAIM_KEPT=(); _WS_LOGS=()
+  local resc=() rp
+  RECLAIM_PIN_WHY=""; RECLAIM_PIN_WORD=""; RECLAIM_RESCUED=""; RECLAIM_WIP=""; RECLAIM_SECRETS=(); REAP_CHILDLINES=""; RECLAIM_KEPT=(); _WS_LOGS=()
   # THE LEAF IS NEVER FOLLOWED, here as at the ladder (spec §5.5): the settle
   # re-pin runs with no ladder in front of it, so this guard stands alone. A
   # link at the workdir reaches a tree ccd cannot prove is this child's, and
@@ -33676,7 +34375,9 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
     cpcommon=$(_ws_common_dir "$cpath") \
       || { RECLAIM_PIN_WHY="could not resolve the repository of the checkout at $cpath"; return 1; }
     if [[ "$cpcommon" != "$mainreal" ]]; then
-      _ws_reclaim_foreign_clean "$cpath" \
+      _ws_reclaim_foreign_clean "$cpath"; rc=$?
+      if (( rc == 1 )) && _ws_nested_rescuable "$cpath"; then resc+=("$cpath"); continue; fi   # D-6632: rescued below, once every checkout is proven
+      (( rc == 0 )) \
         || { RECLAIM_PIN_WHY="$_WS_FOREIGN_WHY — it would be removed with the tree, and nothing of it can be pinned here"; return 1; }
       continue
     fi
@@ -33686,6 +34387,11 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
       || { RECLAIM_PIN_WHY="the checkout at $cpath has no commit at HEAD — there is nothing the tail could remove it at"; return 1; }
     same+=("$cpath")
   done <<< "$nested"
+  for cpath in ${resc[@]+"${resc[@]}"}; do
+    rp="${cpath#"$wdreal"/}"
+    _ws_nested_rescue "$main" "$cpath" "refs/ccrc/attic/$id/nested/$(_ws_hex "$rp")" "$id" "$childof" "$rp/" || return 1
+    RECLAIM_RESCUED+="${RECLAIM_RESCUED:+,}$RECLAIM_RESCUE_ENTRY"
+  done
   # (1b) Same-repository nested checkouts, innermost first: their operation
   # heads and their HEAD, exactly as for the child's own tree below, then
   # classify, commit (moving nothing), remember the head — and name its HEAD
@@ -33772,9 +34478,9 @@ _ws_reclaim_tomb_fields() {   # childof [worktree: present|absent] -> the reclai
   # the key is written only when there is one, as the tail's own patch does.
   (( ${#RECLAIM_KEPT[@]} )) && kept="\"keptBranches\":$(_ws_reclaim_kept_json),"
   local bindkey=childOf; [[ "$_WS_RCL_ACT" != expire ]] || bindkey=archivedAt
-  printf '"mode":%s,"%s":%s,"worktree":%s,"wip":%s,"secretsDropped":%s,%s"containment":{"sameRepository":%s,"foreignProven":%s},"residueBytes":null,' \
+  printf '"mode":%s,"%s":%s,"worktree":%s,"wip":%s,"secretsDropped":%s,%s"containment":{"sameRepository":%s,"foreignProven":%s%s},"residueBytes":null,' \
     "$(_json_str "$_WS_RCL_ACT")" "$bindkey" "$childof" "$(_json_str "$worktree")" "$( [[ -n "$RECLAIM_WIP" ]] && _json_str "$RECLAIM_WIP" || echo null)" \
-    "$(_ws_reclaim_secrets_json)" "$kept" "$same" "$foreign"
+    "$(_ws_reclaim_secrets_json)" "$kept" "$same" "$foreign" "${RECLAIM_RESCUED:+,\"rescued\":[$RECLAIM_RESCUED]}"
 }
 
 _ws_reclaim_kept_json() {   # -> RECLAIM_KEPT as a JSON array of strings, on stdout
@@ -36072,7 +36778,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # workdir fails here, in the pin's own leaf test, before any commit.
   if [[ ( "$phase" == children || "$phase" == worktree ) && -d "$workdir" ]]; then
     if ! _ws_reclaim_pin "$id" "$workdir" "$main" "$branch" "$childof"; then
-      _ws_reclaim_fail "$id" "$lctx" pin-failed "$RECLAIM_PIN_WHY"; return 1
+      _ws_reclaim_fail "$id" "$lctx" "${RECLAIM_PIN_WORD:-pin-failed}" "$RECLAIM_PIN_WHY"; return 1
     fi
     # A BRANCH THE RECORD SAYS WAS ABSENT IS NEVER ADOPTED (spec §5.5): the
     # pin proved no branch and recorded no tip, so one that stands now was made
@@ -36580,22 +37286,20 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   attic=$(git -C "$main" for-each-ref --format='%(refname)' "refs/ccrc/attic/$id/" 2>/dev/null | grep -c . || true)
   # (8) The registry row LAST — the same three failure arms `_ws_reap_tail` (i)
   # carries, because they are `_reg_purge`'s answers, not reap's.
-  local _rcl_prc=0
-  _reg_purge "$id" || _rcl_prc=$?
-  if (( _rcl_prc == 3 )); then
+  _reg_retire "$id" "ws-$_WS_RCL_ACT"
+  if (( REG_RETIRE_RC == 3 )); then
     _ws_reclaim_fail "$id" "$lctx" purge-incomplete \
       "the $noun completed — $gone — and the registry row WAS purged, but $REG_PURGE_UNREMOVED could not be removed and still stands" \
       meas.branch "$branch" meas.unremoved "$REG_PURGE_UNREMOVED" meas.clipsKept "$clipskept" meas.tmpRootKept "$tmpkept"
     return 1
-  elif (( _rcl_prc == 2 )); then
+  elif (( REG_RETIRE_RC == 2 )); then
     _ws_reclaim_fail "$id" "$lctx" purge-mechanism-absent \
       "the $noun completed — $gone — but the registry row could not be purged: the compaction lock's mechanism is absent on this box while $REG/$id.generation is present" \
       meas.branch "$branch" meas.clipsKept "$clipskept" meas.tmpRootKept "$tmpkept"
     return 1
-  elif (( _rcl_prc != 0 )); then
-    local _rcl_why; _rcl_why=$(_compact_lock_why_remedy "$id" "ws-$_WS_RCL_ACT")
+  elif (( REG_RETIRE_RC != 0 )); then
     _ws_reclaim_fail "$id" "$lctx" purge-refused \
-      "the $noun completed — $gone — but the registry row could not be purged: $_rcl_why" \
+      "the $noun completed — $gone — but the registry row could not be purged: $REG_RETIRE_WHY" \
       meas.branch "$branch" meas.clipsKept "$clipskept" meas.tmpRootKept "$tmpkept"
     return 1
   fi
@@ -36628,7 +37332,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     "$(case "$tmpkept" in ('') echo null ;; (refused|unmeasured|in-use) echo "\"$tmpkept\"" ;; (*) echo '"unmeasured"' ;; esac)"
 }
 
-cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --session <id> [--defer-expired] [--surface <word>] [--actor <text>] [--reason <text>]
+cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --session <id> [--defer-expired] [--surface <word>] [--actor <text>] [--reason <text>] [--stale held|run-absent|review|terminal [--hold-digest <sha256>]] (DR-26)
   # THE DESTRUCTIVE VERB FOR A CHILD, composed by the server and by nothing else
   # (CLAUDE.md SAFETY: forbidden to every session). Two authorities must agree —
   # the box's `.child` marker and this `--child-of` — AND the token `ws-audit
@@ -36636,7 +37340,7 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
   # at the instant of deletion (spec §5.1, §5.5). stdout is ONE JSON line:
   # `{"reclaimed":…}`, a refusal document at exit 0 (an answer, not an error), or
   # `{"failed":…}` at exit 1 (the act started and broke; the breadcrumb resumes it).
-  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 defer=0 args=()
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 defer=0 args=() sargs=() _WS_STALE_WORD="" _WS_STALE_DIGEST=""
   while (( $# )); do
     case "$1" in
       # THE IDENTITY PAIRS ARE TAKEN WHOLE (path-identity spec §2.4). A key and its value go to `args` together, so a
@@ -36644,6 +37348,7 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
       # word to bind as the id. A key with no value goes alone, and the exact-arity rule below refuses it, as it did.
       --expect|--child-of|--session) if (( $# >= 2 )); then args+=("$1" "$2"); shift 2; else args+=("$1"); shift; fi ;;
       --defer-expired) defer=1; shift ;;
+      --stale|--hold-digest) sargs+=("$1"); if (( $# >= 2 )); then sargs+=("$2"); shift 2; else shift; fi ;;
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> [--defer-expired] [--surface <word>] [--actor <text>] [--reason <text>]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -36666,7 +37371,7 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
     _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"
   fi
   set -- ${args[@]+"${args[@]}"}
-  [[ $# -eq 6 && $1 == --expect && $3 == --child-of && $5 == --session ]] \
+  [[ $# -eq 6 && $1 == --expect && $3 == --child-of && $5 == --session ]] && _ws_stale_argv ${sargs[@]+"${sargs[@]}"} \
     || die "usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> [--defer-expired] [--surface <word>] [--actor <text>] [--reason <text>]"
   local token=$2 childof=$4 id=$6
   # THE SESSION ID IS VALIDATED FIRST (spec §5.9). The two checks after it
@@ -36824,7 +37529,7 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
       _ws_reclaim_pin "$id" "$workdir" "$main" "$REAP_BRANCH" "$RECLAIM_CHILDOF" && pinned=1
     fi
     if (( ! pinned )); then
-      _ws_reclaim_fail "$id" "$lctx" pin-failed "$RECLAIM_PIN_WHY"
+      _ws_reclaim_fail "$id" "$lctx" "${RECLAIM_PIN_WORD:-pin-failed}" "$RECLAIM_PIN_WHY"
       return 1
     fi
     # THE CONSENT BINDS THE BRANCH IN BOTH DIRECTIONS (spec §5.5). The token
@@ -37043,7 +37748,14 @@ _ws_expire_not_child() {   # id -> 0 when NO `.child` marker stands; else rc 1 r
   # is the RECLAIM lane's (spec §5.3, #166 R29's direction: an unreadable
   # marker defers). Presence is the test (`-e`, and `-L` for a dangling link),
   # never the grammar: a marker this box cannot parse is still not "none".
-  local id="$1"
+  local id="$1" mark
+  # `--child-of <run>` (spec §2.7.4, `expire-child-v1`) is the one way past: the marker must PARSE as a run id equal to
+  # it. A mismatch, an unreadable or linked marker and a missing one all still refuse `child`; without the flag, as ever.
+  if [[ -n "${EXPIRE_CHILDOF-}" ]]; then
+    mark=$(_reg_get "$id" child)
+    _child_runid_valid "$mark" && [[ "$mark" == "$EXPIRE_CHILDOF" ]] && return 0
+    _reap_refuse child "$id does not carry a child marker that reads as run $EXPIRE_CHILDOF ($REG/$id.child) — only a child of that run is expired on its word"; return 1
+  fi
   [[ ! -e "$REG/$id.child" && ! -L "$REG/$id.child" ]] \
     || { _reap_refuse child "$id carries a child marker ($REG/$id.child) — a child is reclaimed by ws-reclaim when its run closes, never expired"; return 1; }
 }
@@ -37175,7 +37887,7 @@ _ws_expire_eval() {   # id -> 0 when the expiry ladder passes (REAP_VERDICT=expi
   [[ -n "$ws" ]] || { _reap_refuse not-a-workspace "$id is a main checkout — a main checkout is never expired"; return 1; }
   _ws_expire_archived "$id" || return 1
   _ws_expire_not_child "$id" || return 1
-  _WS_LADDER_BIND=("mode=expire" "id=$id" "archivedAt=$EXPIRE_ARCHIVED_AT")
+  _WS_LADDER_BIND=("mode=expire" "id=$id" "archivedAt=$EXPIRE_ARCHIVED_AT" ${EXPIRE_CHILDOF:+"childOf=$EXPIRE_CHILDOF"})   # `childOf` only when asked: a plain expiry's token is unchanged
   _ws_reclaim_ladder "$id" 0 || return 1
   REAP_VERDICT=expirable
 }
@@ -37278,7 +37990,7 @@ _ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token,
     || { _ws_reclaim_unmeasured "the tombstone at $tomb cannot be read, so which steps of the interrupted expiry already ran is unknown"; return 1; }
   REAP_BRANCH="$tombbranch"; REAP_TIP="$tombtip"
   REAP_TOKEN=$(_ws_reclaim_fingerprint "mode=expire-resume" "id=$id" "archivedAt=$tombarch" \
-    "phase=$phase" "branch=$tombbranch" "tip=$tombtip")
+    "phase=$phase" "branch=$tombbranch" "tip=$tombtip" ${EXPIRE_CHILDOF:+"childOf=$EXPIRE_CHILDOF"})
   REAP_VERDICT=expirable
 }
 
@@ -37319,12 +38031,14 @@ cmd_ws_expire() {   # ccd ws-expire --expect <token> --session <id> [--surface <
   # recomputed here, inside the reap lock, at the instant of deletion; it binds
   # the archive's epoch. stdout is ONE JSON line: `{"expired":…}`, a refusal
   # document at exit 0, or `{"failed":…}` at exit 1 (the breadcrumb resumes it).
-  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 args=()
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_gc=0 args=() EXPIRE_CHILDOF=''
   while (( $# )); do
     case "$1" in
       # THE IDENTITY PAIRS ARE TAKEN WHOLE, as in ws-reclaim's loop (path-identity spec §2.4): a key and its value go
       # to `args` together, and a key with no value goes alone, for the exact-arity rule below to refuse.
       --expect|--session) if (( $# >= 2 )); then args+=("$1" "$2"); shift 2; else args+=("$1"); shift; fi ;;
+      --child-of)  (( $# >= 2 && ! lc_gc )) && _child_runid_valid "$2" || die "usage: ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"   # once, and a legal run id
+                   lc_gc=1; EXPIRE_CHILDOF="$2"; shift 2 ;;
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -37430,7 +38144,7 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
       _ws_reclaim_pin "$id" "$workdir" "$main" "$REAP_BRANCH" "$EXPIRE_ARCHIVED_AT" && pinned=1
     fi
     if (( ! pinned )); then
-      _ws_reclaim_fail "$id" "$lctx" pin-failed "$RECLAIM_PIN_WHY"
+      _ws_reclaim_fail "$id" "$lctx" "${RECLAIM_PIN_WORD:-pin-failed}" "$RECLAIM_PIN_WHY"
       return 1
     fi
     # THE CONSENT BINDS THE BRANCH, as a reclaim's does (#166 spec §5.5;
@@ -37510,6 +38224,7 @@ _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_rec
   printf '{"session":%s,"mode":"expire","archivedAt":%s,"expiresAt":%s,"alive":%s,"exists":%s,"reaping":%s,"sensitive":%s,"legacyRows":%s,"pendingRows":%s,' \
     "$(_json_str "$id")" "$stamp" "$expires" \
     "$aliveflag" "$exists" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)" "$sens" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}"
+  _ws_rescue_doc
   [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
   # WHO IS IN IT (an `in-use` refusal only): pid, command and cwd, at most five.
   if [[ "$REAP_VERDICT" == in-use && ${#EXPIRE_IN_USE[@]} -gt 0 ]]; then
@@ -44565,26 +45280,6 @@ if __name__ == '__main__':
 DOCS_PY
 }
 
-# The launchd class (`ProcessType`) of a session job on macOS: the first word of
-# ~/.ccrc/launchd-class (Background, Standard, Adaptive or Interactive), Background
-# when the file is absent, empty or names anything else. Background starves a
-# session on a busy box. The same helper as ccrc's, byte for byte (that file says
-# why it is a file); outside the platform block, so `_svc_write_session_plist`
-# calls it behind `declare -F`.
-_launchd_class() {
-  local f="$HOME/.ccrc/launchd-class" v=""
-  if [ -r "$f" ]; then { IFS= read -r v || true; } < "$f"; fi
-  v="${v%$'\r'}"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%%[[:space:]]*}"
-  case "$v" in
-    ''|Background) printf 'Background' ;;
-    Standard)      printf 'Standard' ;;
-    Adaptive)      printf 'Adaptive' ;;
-    Interactive)   printf 'Interactive' ;;
-    *) printf "ccrc: %s names '%s', not Background, Standard, Adaptive or Interactive — using Background\n" "$f" "$v" >&2
-       printf 'Background' ;;
-  esac
-}
-
 # ── THE OPERATOR TITLE, ONE SANITISER AND ONE WRITER (named workspaces S1 + S9) ───────────────────────────────
 # A workspace's display title and the marker that a PERSON chose it are written by two verbs: `ws-add --title` at birth
 # and `ws-title` afterwards. A second copy of either rule is the drift this file keeps naming, so each lives here once
@@ -44711,6 +45406,7 @@ case "${1:-}" in
   ws-expire) shift; cmd_ws_expire "$@" ;;
   ws-collect) shift; cmd_ws_collect "$@" ;;
   ws-orphan)  shift; cmd_ws_orphan "$@" ;;
+  scratch-rescue) shift; cmd_scratch_rescue "$@" ;;
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   ws-title)   shift; cmd_ws_title "$@" ;;
@@ -44722,11 +45418,12 @@ case "${1:-}" in
   route)     shift; cmd_route "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
+  pr-landing) shift; cmd_pr_landing "$@" ;;
   docs-index) shift; cmd_docs_index "$@" ;;
   docs-tree)  shift; cmd_docs_tree "$@" ;;
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

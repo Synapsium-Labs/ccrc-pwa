@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { collectOrphanTree } from '../src/coord/collectOrphanTree.js';
 import { OrphanTreeSweep, type OrphanSweepDeps } from '../src/orphanTreeSweep.js';
-import { ORPHAN_LICENCE_MS, ORPHAN_CENSUS_MS, orphanLicence, parseOrphanAudit, parseOrphanCensus } from '../src/orphanTreeLane.js';
+import { ORPHAN_LICENCE_MS, ORPHAN_CENSUS_MS, orphanInsideVerdict, orphanLicence, orphanCoordinatorSet, parseOrphanAudit, parseOrphanCensus } from '../src/orphanTreeLane.js';
 import { readDiskHealth } from '../../shared/disk.js';
 import { ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, RECLAIM_PAUSE_MARKER } from '../../shared/switches.js';
 import type { CcdResult } from '../src/lifecycle.js';
@@ -14,9 +14,10 @@ const HOUR = ORPHAN_LICENCE_MS;
 const hexOf = (p: string): string => Buffer.from(p).toString('hex');
 const tok = (c: string): string => c.repeat(64);
 
-interface Tree { cls: string; audit: Record<string, unknown> }
+interface Tree { cls: string; audit: Record<string, unknown>; inside?: string | null }
 const clean = (c: string): Record<string, unknown> => ({ verdict: 'token', refusal: null, detail: '', token: tok(c), rescueToken: null });
 const refused = (word: string, detail = ''): Record<string, unknown> => ({ verdict: 'refused', refusal: word, detail, token: null, rescueToken: null });
+const rung11 = (c: string): Record<string, unknown> => ({ verdict: 'refused', refusal: 'nested-checkout', detail: 'a loose fixture repository', token: null, rescueToken: tok(c) });
 const rung9 = (c: string): Record<string, unknown> => ({ verdict: 'refused', refusal: 'head-not-on-remote', detail: 'two commits on no remote', token: null, rescueToken: tok(c) });
 
 function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-flags-v1']) {
@@ -26,7 +27,11 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
   const feed: Array<{ title: string; body: string }> = [];
   let mono = 1_000_000;
   let truncated = false;
-  const ok = (stdout: string): CcdResult => ({ ok: true, stdout, stderr: '', killed: false, signal: null });
+  const coordinators = new Set<string>();
+  let coordsReadable = true;
+  // Registry rows by id: true = workspace (the default), false = plain session / main checkout, null = unreadable, 'throw' = the read throws.
+  const wsKinds = new Map<string, boolean | null | 'throw'>();
+  const ok = (stdout: string): CcdResult => ({ ran: true, ok: true, stdout, stderr: '', killed: false, signal: null });
   const deps: OrphanSweepDeps = {
     io: { readdirMeasured: async () => ({ ok: true, entries: [...markers] }) } as unknown as OrphanSweepDeps['io'],
     registryDir: '/reg',
@@ -34,7 +39,7 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
       const a = [...argv];
       calls.push(a);
       if (a[0] === 'ws-audit' && a[1] === '--orphans') {
-        return ok(JSON.stringify({ mode: 'orphans', truncated, rows: [...trees].map(([hex, t]) => ({ pathHex: hex, class: t.cls })) }));
+        return ok(JSON.stringify({ mode: 'orphans', truncated, rows: [...trees].map(([hex, t]) => ({ pathHex: hex, class: t.cls, ...(t.inside === undefined ? {} : { inside: t.inside }) })) }));
       }
       if (a[0] === 'ws-audit' && a[1] === '--orphan-hex') {
         const t = trees.get(a[2]!)!;
@@ -53,6 +58,8 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
     epochNow: () => 1,
     pressure: () => false,
     record: (title, body) => { feed.push({ title, body }); },
+    isWorkspace: async (id) => { const k = wsKinds.has(id) ? wsKinds.get(id)! : true; if (k === 'throw') throw new Error('row unreadable'); return k; },
+    coordinators: () => { if (!coordsReadable) throw new Error('store unreadable'); return coordinators; },
   };
   const sweep = new OrphanTreeSweep(deps);
   const acts = (): string[][] => calls.filter((c) => c[0] === 'ws-orphan');
@@ -61,6 +68,8 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
     add: (p: string, cls: string, audit: Record<string, unknown>): string => { const h = hexOf(p); trees.set(h, { cls, audit }); return h; },
     advance: (ms: number): void => { mono += ms; },
     truncate: (v: boolean): void => { truncated = v; },
+    coordinators, wsKinds, unreadable: (v: boolean): void => { coordsReadable = !v; },
+    addInside: (p: string, cls: string, audit: Record<string, unknown>, inside: string): string => { const h = hexOf(p); trees.set(h, { cls, audit, inside }); return h; },
   };
 }
 
@@ -272,7 +281,7 @@ describe('the executor stops on its own, whatever the pass did', () => {
       registryDir: '/reg', epochNow: () => 1, fleetState: { ccdVerbs: ['orphan-v1'] },
       runCcd: async (argv: readonly string[]) => {
         calls.push([...argv]);
-        return { ok: true, stdout: JSON.stringify({ mode: 'orphan', pathHex: hex, verdict: 'token', token: tok('a') }), stderr: '', killed: false, signal: null };
+        return { ran: true, ok: true, stdout: JSON.stringify({ mode: 'orphan', pathHex: hex, verdict: 'token', token: tok('a') }), stderr: '', killed: false, signal: null };
       },
     };
     return collectOrphanTree(deps as never, hex, { token: tok('a'), rescue: false, atMono: 0 }, () => 2 * HOUR, 1);
@@ -305,9 +314,161 @@ describe('the executor stops on its own, whatever the pass did', () => {
     const deps = {
       io: { readdirMeasured: async () => ({ ok: true, entries: [ORPHAN_TREE_LIVE_MARKER] }) } as never, registryDir: '/reg', epochNow: () => 2,
       fleetState: { ccdVerbs: ['orphan-v1'] },
-      runCcd: async (a: readonly string[]) => { calls.push([...a]); return { ok: true, stdout: JSON.stringify({ mode: 'orphan', pathHex: hex, verdict: 'token', token: tok('a') }), stderr: '', killed: false, signal: null }; },
+      runCcd: async (a: readonly string[]) => { calls.push([...a]); return { ran: true, ok: true, stdout: JSON.stringify({ mode: 'orphan', pathHex: hex, verdict: 'token', token: tok('a') }), stderr: '', killed: false, signal: null }; },
     };
     expect(await collectOrphanTree(deps as never, hex, { token: tok('a'), rescue: false, atMono: 0 }, () => 2 * HOUR, 1)).toEqual({ kind: 'stopped', why: 'epoch' });
     expect(calls.some((c) => c[0] === 'ws-orphan')).toBe(false);
+  });
+});
+
+describe('DR-23: trees nested inside a workspace', () => {
+  const armed = (r: ReturnType<typeof rig>): void => { r.markers.add(ORPHAN_TREE_LIVE_MARKER); };
+  const audits = (r: ReturnType<typeof rig>): string[][] => r.calls.filter((c) => c[1] === '--orphan-hex');
+
+  it('inside a coordinator: a candidate, audited, licensed and removed like any other', async () => {
+    const r = rig(); armed(r); r.coordinators.add('lane-a');
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'lane-a');
+    await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts()).toHaveLength(1);
+  });
+
+  it('a <main>/.claude/worktrees tree inside a row that is no workspace (plain session, main checkout) is a candidate', async () => {
+    const r = rig(); armed(r); r.wsKinds.set('demo-main', false);
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'demo-main');
+    await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts()).toHaveLength(1);
+    expect(r.feed.filter((f) => f.body.includes('goes with its workspace'))).toHaveLength(0);
+  });
+
+  it('a containing row that cannot be read (null or a throw) keeps the tree: no audit, no act', async () => {
+    for (const k of [null, 'throw'] as const) {
+      const r = rig(); armed(r); r.wsKinds.set('demo-main', k);
+      r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'demo-main');
+      await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
+      expect(audits(r)).toEqual([]);
+      expect(r.acts()).toEqual([]);
+    }
+  });
+
+  it('inside a worker: reported once as going with its workspace, never audited or removed', async () => {
+    const r = rig(); armed(r);
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'worker-a');
+    await r.sweep.pass(); r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass(); r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(audits(r)).toEqual([]);
+    expect(r.acts()).toEqual([]);
+    expect(r.feed.filter((f) => f.body.includes('goes with its workspace'))).toHaveLength(1);
+  });
+
+  it('the claim read unreadable: not a candidate, and nothing is audited', async () => {
+    const r = rig(); armed(r); r.coordinators.add('lane-a'); r.unreadable(true);
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'lane-a');
+    await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
+    expect(audits(r)).toEqual([]);
+    expect(r.acts()).toEqual([]);
+  });
+
+  it('a claim read that fails between the audits holds the act and the second audit; once readable the act proceeds', async () => {
+    const r = rig(); armed(r); r.coordinators.add('lane-a');
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'lane-a');
+    await r.sweep.pass();
+    expect(audits(r)).toHaveLength(1);
+    r.unreadable(true); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts()).toEqual([]);
+    expect(audits(r), 'no new audit while the coordinator list is unreadable').toHaveLength(1);
+    r.unreadable(false); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts()).toHaveLength(1);
+  });
+
+  it('a census whose claim read fails says so once per episode', async () => {
+    const r = rig(); armed(r); r.unreadable(true);
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'lane-a');
+    await r.sweep.pass(); r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass(); r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(r.feed.filter((f) => f.body.includes('coordinator list could not be read'))).toHaveLength(1);
+  });
+
+  it('a worker tree that leaves the census is forgotten, so it is reported again if it returns', async () => {
+    const r = rig(); armed(r);
+    const h = r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'worker-a');
+    await r.sweep.pass();
+    r.trees.delete(h); r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'worker-a');
+    r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(r.feed.filter((f) => f.body.includes('goes with its workspace'))).toHaveLength(2);
+  });
+
+  it('a coordinator whose runs are all terminal is still a candidate, and the act goes ahead', async () => {
+    const claims = new Map<string, unknown>([['lane-a', 7]]);
+    const set = orphanCoordinatorSet({ everClaimedIds: () => claims.keys(), openCoordinatorIds: () => [] });
+    expect(set?.has('lane-a')).toBe(true);
+    const r = rig(); armed(r); for (const id of set!) r.coordinators.add(id);
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', clean('a'), 'lane-a');
+    await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts()).toHaveLength(1);
+  });
+
+  it('a displacement-only claimant is a candidate; one that never claimed anything is reported only', () => {
+    const claims = new Map<string, unknown>([['displaced', 'unplaced'], ['open-one', 'open']]);
+    const set = orphanCoordinatorSet({ everClaimedIds: () => claims.keys(), openCoordinatorIds: () => ['open-one'] });
+    expect(orphanInsideVerdict('displaced', set, () => true)).toBe('candidate');
+    expect(orphanInsideVerdict('open-one', set, () => true)).toBe('candidate');
+    expect(orphanInsideVerdict('worker-w', set, () => true)).toBe('goes-with-workspace');
+  });
+
+  it('either claim read throwing is null, which keeps the tree', () => {
+    const boom = (): never => { throw new Error('x'); };
+    expect(orphanCoordinatorSet({ everClaimedIds: boom, openCoordinatorIds: () => [] })).toBeNull();
+    expect(orphanCoordinatorSet({ everClaimedIds: () => [], openCoordinatorIds: boom })).toBeNull();
+    expect(orphanInsideVerdict('lane-a', null, () => true)).toBe('unmeasured');
+    expect(orphanInsideVerdict('plain', null, () => false)).toBe('candidate');
+    expect(orphanInsideVerdict('plain', new Set(), () => null)).toBe('unmeasured');
+  });
+
+  it('a tree inside nothing is unaffected, and a census row with a malformed inside is unreadable', () => {
+    const row = (inside: unknown): string => JSON.stringify({ mode: 'orphans', truncated: false, rows: [{ pathHex: '61', class: 'claude', inside }] });
+    expect(parseOrphanCensus(row(null))).toMatchObject({ kind: 'census', rows: [{ inside: null }] });
+    expect(parseOrphanCensus(row('lane-a'))).toMatchObject({ kind: 'census', rows: [{ inside: 'lane-a' }] });
+    expect(parseOrphanCensus(row('../x'))).toEqual({ kind: 'unreadable' });
+    expect(parseOrphanCensus(row('a'.repeat(200)))).toMatchObject({ kind: 'census', rows: [{ inside: 'a'.repeat(200) }] });
+    expect(parseOrphanCensus(row('-x'))).toEqual({ kind: 'unreadable' });
+    expect(parseOrphanCensus(row(7))).toEqual({ kind: 'unreadable' });
+  });
+
+  it('the rescue token stays behind its own marker for a nested tree', async () => {
+    const r = rig(); armed(r); r.coordinators.add('lane-a');
+    r.addInside('/p/.claude/worktrees/ghost', 'claude', rung9('a'), 'lane-a');
+    await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts()).toEqual([]);
+  });
+
+  it('a rung-11-only rescue token is left under orphan-tree-live alone, and spent with --rescue under both markers', async () => {
+    const r = rig(); r.markers.add(ORPHAN_TREE_LIVE_MARKER); r.coordinators.add('lane-a');
+    const h = r.addInside('/p/.claude/worktrees/wf_x', 'claude', rung11('b'), 'lane-a');
+    await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts(), 'no rescue marker: left').toEqual([]);
+    expect(r.feed[0]!.body).toContain('rescue arm is not armed');
+    r.markers.add(ORPHAN_TREE_RESCUE_LIVE_MARKER);
+    r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass(); r.advance(HOUR); await r.sweep.pass();
+    expect(r.acts()).toHaveLength(1);
+    expect(r.acts()[0]!.slice(0, 6)).toEqual(['ws-orphan', '--expect', tok('b'), '--tree-hex', h, '--rescue']);
+  });
+});
+
+describe('an unreadable containing row is reported once per tree', () => {
+  it('says why the tree is kept, once across censuses, and again after the tree is gone and returns', async () => {
+    const r = rig();
+    r.wsKinds.set('demo-main', null);
+    const h = r.addInside('/p/.claude/worktrees/a', 'claude', clean('a'), 'demo-main');
+    await r.sweep.pass();
+    const said = (): string[] => r.feed.filter((f) => f.body.includes('its containing row could not be read')).map((f) => f.body);
+    expect(said()).toHaveLength(1);
+    expect(said()[0]).toContain('/p/.claude/worktrees/a');
+    r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(said(), 'a repeat says nothing').toHaveLength(1);
+    expect(r.acts()).toEqual([]);
+    r.trees.delete(h);
+    r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    r.addInside('/p/.claude/worktrees/a', 'claude', clean('a'), 'demo-main');
+    r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(said()).toHaveLength(2);
   });
 });
