@@ -34,6 +34,7 @@ import {
   ARCHIVE_REFUSALS, archiveInterrupts, type ArchiveBody, type ArchiveRefusal, type FleetSession,
 } from '../../../shared/api.js';
 import type { MeasuredStat } from '../io.js';
+import { turnSays, turnWordOf } from '../sessionReading.js';
 import type { CloseOutcome } from './close.js';
 import type { OpenSibling, OpenSiblingsResult } from './store.js';
 
@@ -150,7 +151,7 @@ export function stopVerdict(r: StopReadings): TurnVerdict {
   if (r.pid === 'unread') return 'unmeasured';
   if (r.liveFile.read !== 'ok') return 'unmeasured';
   if (!STATUS_WORD.test(r.liveFile.status)) return 'unmeasured';
-  if (r.liveFile.status !== 'idle') return 'busy';
+  if (turnSays('keystroke', turnWordOf(r.liveFile.status)) !== 'rest') return 'busy';
   if (r.row === 'missing') return 'unmeasured';
   // D-5274: a row whose `busy` is only a failed read's display (`statusUnmeasured`, D-115 / D-5234) measured no turn,
   // so `interrupt` — consent to lose a MEASURED one — cannot cover it.
@@ -341,10 +342,11 @@ export function ccdArchiveRefusal(stderr: string): ArchiveRefusal | null {
  * `ended` rides every answer once a programme was ended, so the operator is never told only half of what happened.
  */
 export function archiveOutcome(
-  stopped: boolean, ended: readonly OpenSibling[], res: { ok: boolean; stderr: string },
+  stopped: boolean, ended: readonly OpenSibling[], res: { ok: boolean; stderr: string; ran?: boolean },
 ): ArchiveReply {
   if (res.ok) return { status: 200, body: { ok: true, archived: true, stopped, ended } };
-  const refusal = ccdArchiveRefusal(res.stderr);
+  // D-6840: a call that never ran has no refusal word to read, only the runner's own words.
+  const refusal = res.ran === false ? null : ccdArchiveRefusal(res.stderr);
   const detail = res.stderr.trim();
   if (stopped) return { status: 200, body: { ok: true, archived: false, stopped: true, ended, refusal, detail } };
   const endedSpread = ended.length > 0 ? { ended } : {};

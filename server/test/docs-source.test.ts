@@ -41,7 +41,7 @@ function recorder(answer: CcdResult): { run: CcdRunner; calls: string[][] } {
 /** A measured, clean exit unless a case says otherwise. */
 // D-6034: the five fields every arm shares; `Partial` of the whole union would distribute over the `ran` arm.
 const res = (over: Partial<Pick<CcdResult, 'ok' | 'stdout' | 'stderr' | 'killed' | 'signal'>>): CcdResult =>
-  ({ ok: true, stdout: '', stderr: '', killed: false, signal: null, ...over });
+  ({ ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null, ...over });
 const state = (ccdVerbs: string[] | null): { ccdVerbs: string[] | null } => ({ ccdVerbs });
 const READY = state(['caps', DOCS_CAP]);
 /** One answer line as ccd writes it: one JSON text and one LF. */
@@ -146,17 +146,19 @@ function clientTimeoutWord(): string {
 }
 
 describe('check 1: the transport catch, both halves unmeasured (row 46, R14)', () => {
-  const transport = (stderr: string): CcdResult => ({ ok: false, stdout: '', stderr, killed: U, signal: U });
+  // D-6840: the transport catch as the remote runner answers it, the not-ran arm (`remote/runner.ts`).
+  const transport = (detail: string, reason: 'transport' | 'spawn' | 'timeout' = 'transport'): CcdResult =>
+    ({ ran: false, reason, detail, ok: false, stdout: '', stderr: detail, killed: U, signal: U });
 
   it("the agent's own refusal word is not-granted, after exactly one exec (section 7.1, C3)", async () => {
-    const rec = recorder(transport(agentRefusalWord()));
+    const rec = recorder(transport(agentRefusalWord(), 'spawn'));
     expect(await ccdDocsReader({ runCcd: rec.run, fleetState: READY }).tree(SRC, null))
       .toEqual({ ok: false, failure: 'not-granted' });
     expect(rec.calls).toHaveLength(1);
   });
 
   it("the client's own wait word is link-timeout", async () => {
-    expect(await treeWith(transport(clientTimeoutWord()))).toEqual({ ok: false, failure: 'link-timeout' });
+    expect(await treeWith(transport(clientTimeoutWord(), 'timeout'))).toEqual({ ok: false, failure: 'link-timeout' });
   });
 
   it('any other transport message is link-failed, carrying it as cause', async () => {
@@ -173,14 +175,19 @@ describe('check 1: the transport catch, both halves unmeasured (row 46, R14)', (
   });
 
   it('an OK answer whose halves are unmeasured (an older agent) is parsed, not read as a transport failure', async () => {
-    expect(await treeWith({ ok: true, stdout: line(TREE_OK), stderr: '', killed: U, signal: U }))
+    expect(await treeWith({ ran: true, ok: true, stdout: line(TREE_OK), stderr: '', killed: U, signal: U }))
       .toEqual({ ok: true, answer: TREE_OK });
-    expect(await treeWith({ ok: true, stdout: '', stderr: '', killed: U, signal: U }))
+    expect(await treeWith({ ran: true, ok: true, stdout: '', stderr: '', killed: U, signal: U }))
       .toEqual({ ok: false, failure: 'malformed-answer', why: 'parse' });
   });
 
+  it('a ran, NOT-ok answer with empty stdout and unmeasured halves (a pre-1.4 agent) is a ccd-fault, no longer read as link-failed (ARCH-10)', async () => {
+    const out = (await treeWith({ ran: true, ok: false, stdout: '', stderr: 'usage: ccd docs-tree', killed: U, signal: U })) as DocsFailureBody;
+    expect(out).toMatchObject({ ok: false, failure: 'ccd-fault' });
+  });
+
   it('a NOT-ok answer with stdout and unmeasured halves is a cut answer, not a transport failure', async () => {
-    expect(await treeWith({ ok: false, stdout: 'partial', stderr: '', killed: U, signal: U }))
+    expect(await treeWith({ ran: true, ok: false, stdout: 'partial', stderr: '', killed: U, signal: U }))
       .toEqual({ ok: false, failure: 'answer-overflow' });
   });
 });
@@ -911,7 +918,7 @@ describe('refinement (g): killed and signal have one reader, ccdEnding', () => {
   });
 
   it('CONTROL: a third read planted inside ccd() reds the ccd() pin', () => {
-    const files = withPlanted('src/lifecycle.ts', '  const answer: CcdResult = {\n    ok: r.code === 0', '  const k = r.killed;');
+    const files = withPlanted('src/lifecycle.ts', '  const answer: CcdResult = {\n    ran: true, ok: r.code === 0', '  const k = r.killed;');
     expect(oneReaderProblems(files)).toEqual(['pin: ccd() reads [r.killed, r.killed, r.killed, r.signal, r.signal] off its ExecResult, wanted exactly [r.killed, r.killed, r.signal, r.signal]']);
   });
 

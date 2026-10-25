@@ -96,13 +96,14 @@ real values: `deploy/reference-fleet.md` (gitignored).
   (one dispatch minted for a run, marked `$REG/<id>.child` and held by the server as that run's), composed
   after that run closes or binds a different session, with a token re-proved on the box — never a session's verb, and never run against
   the live host from a shell or a test. **`ws-expire` is forbidden to every session too**: it is the SERVER's act on an
-  ARCHIVED workspace only, seven days after its archive (never a main checkout, never a child), with a token that binds
-  that archive and is re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
+  ARCHIVED workspace only, seven days after its archive (never a main checkout; a child only through `--child-of` naming
+  the run its marker reads as), with a token that binds that archive and is re-proved on the box (for a child it binds the run too) — never a session's verb, and never run against the live host from a shell or a test.
   **`ws-collect` is forbidden to every session too**: it is the SERVER's act on an ORPHANED, WITNESSED temp root only,
   behind a token re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
   **`ws-orphan` is forbidden to every session too** (D-6629): it is the SERVER's act on an ORPHANED worktree only (a linked
   worktree no registry row names, under the ccd worktree root or a `.claude`/`.superpowers` worktrees directory), behind a
   token re-proved on the box, never `--force` — never a session's verb, and never run against the live host from a shell or a test.
+  **`scratch-rescue` is forbidden to every session too** (D-6632): the temp sweep's act, which only adds attic refs for a session's scratch repository (`ccd scratch-rescue --session <id> <path>`), behind the installed direct entry — never a session's verb, and never run against the live host from a shell or a test.
 - **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
   `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
   or onto the launcher (`~/.local/bin/claude`) are forbidden on a session's prompt (`FORBIDDEN_CCD_VERBS` and
@@ -513,7 +514,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   coordinator a `stall:`, then pushes the operator; each rung is a `run_events` observation row first — a run-less
   notice (a coordinator's, a registry row's) is keyed on its mail subject instead — so a restart never re-sends mail, and
   it never closes, reclaims or re-dispatches. Its wave-2 arms (dead, frozen, orphaned, failed, coordinator deaf, mail
-  stuck, marker unreadable) record shadow only until `stall-watch-w2-live` exists, and while `mail-disabled` stands every
+  stuck, marker unreadable, and D5's `restarted`: a run worker respawned over lost background tasks is mailed a re-check
+  notice at once and its coordinator one heads-up, at most one per worker on its run per 10 minutes, with no restart and no push)
+  record shadow only until `stall-watch-w2-live` exists, and while `mail-disabled` stands every
   rung that would send mail holds. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
   `stall-watch-w2-live`, `mail-gate-busy-shadow` and `mail-gate-busy` arm them (no `stall-watch-live`: shadow only) and,
   like `mail-gate-strict`, have **no writer in the tree** — `single-definition.test.ts` pins that. A level chosen in

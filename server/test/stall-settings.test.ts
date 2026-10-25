@@ -738,6 +738,7 @@ describe('M17 and M17b: stallNoticeCounts tallies by role, live and shadow apart
     'limit-cap': ['pushes'], 'dialog-cap': ['pushes'], 'coord-ball': ['pushes'],
     'coord-deaf': ['pushes'], 'mail-stuck': ['pushes'], 'marker-unreadable': ['pushes'],
     'orphan-d': ['wakes', 'pushes'],
+    restarted: ['wakes', 'reports'],
     'orphan-e': ['wakes'],
     failed: ['wakes', 'reports'],
     frozen: ['reports'], dead: ['reports'],

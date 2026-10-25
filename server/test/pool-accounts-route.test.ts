@@ -52,7 +52,7 @@ const ROSTER = {
   }],
 };
 
-const failingRunner: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+const failingRunner: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
 
 let home: string;
 let app: FastifyInstance | undefined;

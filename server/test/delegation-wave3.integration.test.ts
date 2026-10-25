@@ -107,7 +107,7 @@ function world(opts: WorldOptions = {}): World {
   const faults: Faults = { range: new Set() };
   const calls = { listings: [] as string[], ranges: [] as string[] };
   const writes: string[] = [];
-  const run = vi.fn(async () => ({ code: 1, stdout: '', stderr: '' }));
+  const run = vi.fn(async () => ({ ran: true as const, code: 1, stdout: '', stderr: '' }));
   const spoolOwner = (p: string): string | null => (p.includes('/delegation/spool/') ? path.basename(p.endsWith('.spool') ? path.dirname(p) : p) : null);
   const bytes = opts.bytes ?? localIO.readFileFromBytesMeasured.bind(localIO);
   const io: FleetIO = {

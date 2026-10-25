@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
@@ -12,6 +13,8 @@ import { decideAllocation } from './ledger.js';
 // nothing else, so the shape it returns is the policy's to define.
 import type { CoordPlacementStamp } from './placement.js';
 import type { LastRun } from './released.js';
+import type { BindingRun, Incarnation } from './runBinding.js';
+import { boundRows, claimantsFromRows, openRows, parentFromRows, type SeriesRow } from './bindingRows.js';
 // Stall watch wave 1: the stall lane's row shapes are declared by their CONSUMER,
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
 // reads below implement them.
@@ -19,7 +22,7 @@ import type { StallDeliveryRow, StallMailRow, StallReadFailure, StallRunRow, Sta
 // The drift decider's row shapes (D-5921) are declared by their consumer, the L1 `drift.ts`; the `drift*` reads below
 // implement them. `parseStallDetail` is the one reader of a stall observation's detail, so `driftOpenRuns` never
 // counts one as an act.
-import type { DriftAskRow, DriftDeliveryRow, DriftReviewRow, DriftRunRow } from './drift.js';
+import type { DriftAskRow, DriftDeliveryRow, DriftFindingRow, DriftReviewRow, DriftRunRow } from './drift.js';
 import { parseStallDetail } from './stall.js';
 // Stall watch settings (design 2026-10-05 §8, §11): the settings row's port and the notice-count row are declared by
 // their consumer, the L1 `stallsettings.ts`; the insert arm starts from its seed, and the no-op skip asks its compare.
@@ -70,6 +73,7 @@ import {
 } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
+import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
 import {
   DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
@@ -125,7 +129,7 @@ import {
   type UpdateChannel,
   type BusyUpdateState, type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type RequestKind,
   type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
-  type AutoMode, type NotifyMode,
+  type AutoMode, type NotifyMode, type DriftFinding, isDriftKind,
   type WorkItemState,
 } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
@@ -797,6 +801,10 @@ export type RunsReadResult =
   | { ok: true; runs: RunRow[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
+export type BindingRunsResult =
+  | { ok: true; runs: BindingRun[] }
+  | { ok: false; kind: 'run-unreadable'; detail: string };
+
 export type OpenSiblingsResult =
   | { ok: true; siblings: OpenSibling[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
@@ -829,6 +837,11 @@ export type RunsNamingSessionResult =
 export type StallObservation =
   | { recorded: true; eventId: number }
   | { recorded: false; why: StallWriteMiss };
+
+/** The state predicate of the observation writer: a closed union of exactly two members. `active` is the stall lane's
+ *  (a run not idle and not terminal); `episode` is the checks lane's (a run waiting at `merging` whose current episode
+ *  is `episode`, PR landing in ccrc stage 1). */
+export type ObservationPredicate = { readonly kind: 'active' } | { readonly kind: 'episode'; readonly episode: number };
 
 export type CoordPlacementStampsResult =
   | { ok: true; stamps: CoordPlacementStamp[] }
@@ -959,6 +972,9 @@ const persistedInt = (text: string, column: string): PersistedInt => {
 
 /** The drift reads' answer (D-5921): the rows, or a read that failed, with its detail. */
 export type DriftReadResult<T> = { ok: true; rows: T[] } | { ok: false; detail: string };
+/** The findings table's read: `unknownKinds` names the stored kinds this build skipped (see `readDriftRows`). */
+export type DriftFindingsRead =
+  | { ok: true; rows: DriftFindingRow[]; unknownKinds: readonly string[] } | { ok: false; detail: string };
 
 /** A drift read's integer, proven: a non-negative safe integer, or the read fails naming the column (no value). */
 const driftInt = (v: unknown, column: string): number => {
@@ -1264,13 +1280,10 @@ const placeholders = (n: number): string => new Array(n).fill('?').join(',');
  *  positionally through `placeholders`, never interpolated. */
 const LIFECYCLE_WINDOW_ACTS = ['swap', 'hold', 'release'] as const;
 
-/** The replay-ceiling park's own `lastError`, written by exactly one call
- *  site (`watch.ts`'s `sweepMail`, `store.rejectDelivery(d.id, 'undeliverable',
- *  MAIL_REPLAY_CEILING_ERROR)`) and read back by exactly one other
- *  (`markAcked` below, deviation D-67-b / orchestrator ruling I2): a shared
- *  constant rather than the same string literal typed twice, so the two can
- *  never drift apart and silently stop recognising each other's writes. */
-export const MAIL_REPLAY_CEILING_ERROR = 'replayed without ack past the replay ceiling';
+/** The replay-ceiling park's own `lastError`: defined in `coord/delivery.ts`, beside `decideReplayCeiling`, its one
+ *  writer (ARCH-19), and read back by exactly one other (`markAcked` below, deviation D-67-b / orchestrator ruling I2).
+ *  Re-exported for the readers that import it from this module. */
+export { MAIL_REPLAY_CEILING_ERROR };
 
 /** `cancelOutstandingDeliveries`'s own park sentence, promoted to a constant on
  *  `MAIL_REPLAY_CEILING_ERROR`'s exact argument (D-1143). It was already typed
@@ -1374,7 +1387,7 @@ const ABANDONED_PARK_SQL =
  * The READ-side "still needs a human's attention" predicate (fix, review
  * finding 2) — `OUTSTANDING_STATES_SQL` above, unioned with a `rejected`
  * delivery THIS BUILD gave up retrying before anyone ever acted on it: the
- * replay-ceiling park (`watch.ts`'s `MAIL_REPLAY_MAX_ATTEMPTS`), a delivery
+ * replay-ceiling park (`coord/delivery.ts`'s `MAIL_REPLAY_MAX_ATTEMPTS`), a delivery
  * that never sent at all past `MAIL_MAX_ATTEMPTS`, or a recipient the
  * registry no longer lists. `renderEnvelope`'s own ack line promises
  * replay "until you ack" — true only up to that ceiling, never past it —
@@ -1932,6 +1945,40 @@ export class CoordStore {
     return this.db.prepare(
       'SELECT id, sessionId, claimedBy FROM runs WHERE sessionId = ? OR claimedBy = ? ORDER BY id',
     ).all(sessionId, sessionId) as { id: number; sessionId: string | null; claimedBy: string | null }[];
+  }
+
+  /**
+   * The series `coord/runBinding.ts` derives a binding from (ARCH-60, #795): every run `id` works on (`sessionId`) or
+   * claims (`claimedBy`), ANY state, by id, with the columns the binding reads and no more. The two roles are ONE read
+   * because the binding's queries ask both ("whose worker is this?", "whose children are these?") of the same series,
+   * and `runsTouching`'s reason for the OR holds. ALL-OR-FAILURE like every session-keyed read here (D-2545): an `id`
+   * this process cannot represent fails the whole read, so a partial series never reads as "nothing else is bound".
+   */
+  bindingRunsOf(id: string): BindingRunsResult {
+    const runs: BindingRun[] = [];
+    for (const r of this.seriesRows('either', id)) {
+      const n = persistedInt(r.idText, 'run id');
+      if (!n.ok) return { ok: false, kind: 'run-unreadable', detail: n.detail };
+      runs.push({ id: n.value, sessionId: r.sessionId, claimedBy: r.claimedBy,
+        state: isRunState(r.state) ? r.state : 'unknown', openedAt: r.openedAt,
+        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor });
+    }
+    return { ok: true, runs };
+  }
+
+  /**
+   * The ONE SQL reader of the run↔session link (ARCH-62, #797): the runs `id` works on (`'sessionId'`), claims
+   * (`'claimedBy'`) or either (`'either'`), ANY state, by id, with every column a binding decision or a reader's row
+   * needs, raw. Every session-keyed reader below projects this through `coord/bindingRows.ts`, so the rule for which run
+   * is a session's is written once, in `coord/runBinding.ts`. Synchronous, like every read on this store.
+   */
+  private seriesRows(column: 'sessionId' | 'claimedBy' | 'either', id: string): SeriesRow[] {
+    const where = column === 'either' ? 'sessionId = ? OR claimedBy = ?' : `${column} = ?`;
+    return this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state, sessionId, claimedBy, ' +
+      `openedAt, sessionBornAt, sessionBornFor FROM runs WHERE ${where} ORDER BY id`,
+    ).all(...(column === 'either' ? [id, id] : [id])) as unknown as SeriesRow[];
   }
 
   /**
@@ -2670,6 +2717,16 @@ export class CoordStore {
    * the insert are never split by another writer.
    */
   insertStallObservation(runId: number, detail: string, at: number): StallObservation {
+    return this.insertObservation(runId, detail, at, { kind: 'active' });
+  }
+
+  /** The observation writer, generalised (PR landing in ccrc, stage 1): `insertStallObservation`'s body with the state
+   *  predicate a parameter. `{kind: 'active'}` is the stall lane's, exactly as before (D-3584: `state NOT IN
+   *  INACTIVE_RUN_STATES_SQL`, so an absent or no-longer-active run is `run-gone`). `{kind: 'episode', episode}` is the
+   *  checks lane's: the run waits at `merging` AND its newest transition row into `merging` is `episode`, so a run that
+   *  left `merging`, or re-entered it as a new episode, between the lane's read and this write is `run-gone` too. The
+   *  `(runId, detail)` dedupe is the same for both. OPENS NO TRANSACTION (`insertStallObservation`'s rule). */
+  insertObservation(runId: number, detail: string, at: number, when: ObservationPredicate): StallObservation {
     // D-3584 run-gone-includes-inactive: "gone" is absent OR no longer active. The
     // lane awaits between `stallCandidates` and this write (the pane pid, the live
     // file, `measureClaimant`), so a close can land in that window, and a stall mail
@@ -2677,9 +2734,14 @@ export class CoordStore {
     // closed run (`dueDeliveries` does not filter on run state). The fragment is
     // `stallCandidates`' own, so the candidate and the write cannot disagree about
     // which states are live, and `unknown` still counts as active.
-    const run = this.db.prepare(
-      `SELECT state FROM runs WHERE id = ? AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
-    ).get(runId) as { state: string } | undefined;
+    const run = when.kind === 'active'
+      ? this.db.prepare(
+        `SELECT state FROM runs WHERE id = ? AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
+      ).get(runId) as { state: string } | undefined
+      : this.db.prepare(
+        "SELECT state FROM runs WHERE id = ? AND state = 'merging' AND " +
+        "(SELECT MAX(id) FROM run_events WHERE runId = ? AND toState = 'merging' AND fromState <> 'merging') = ?",
+      ).get(runId, runId, when.episode) as { state: string } | undefined;
     if (run === undefined) return { recorded: false, why: 'run-gone' };
     const seen = this.db.prepare('SELECT 1 AS x FROM run_events WHERE runId = ? AND detail = ? LIMIT 1').get(runId, detail);
     if (seen !== undefined) return { recorded: false, why: 'duplicate' };
@@ -2693,7 +2755,47 @@ export class CoordStore {
    *  rows and its push-only rungs (r3 and the three caps), each recorded BEFORE
    *  it is pushed. */
   recordStallObservation(runId: number, detail: string, at: number): StallObservation {
-    return tx(this.db, () => this.insertStallObservation(runId, detail, at));
+    return this.recordObservation(runId, detail, at, { kind: 'active' });
+  }
+
+  /** `insertObservation` in exactly one transaction, for a caller with none of its own. */
+  recordObservation(runId: number, detail: string, at: number, when: ObservationPredicate): StallObservation {
+    return tx(this.db, () => this.insertObservation(runId, detail, at, when));
+  }
+
+  /** The checks lane's owed-set source (PR landing in ccrc, stage 1; spec §3.2): every run waiting at `merging` that
+   *  names a worker session. Open by construction (`merging` is neither idle nor terminal). */
+  mergingRuns(): { id: number; sessionId: string; project: string; program: string; wave: number; waveOf: number | null }[] {
+    return this.db.prepare(
+      "SELECT id, sessionId, project, program, wave, waveOf FROM runs WHERE state = 'merging' AND sessionId IS NOT NULL ORDER BY id",
+    ).all() as unknown as { id: number; sessionId: string; project: string; program: string; wave: number; waveOf: number | null }[];
+  }
+
+  /** The run's current episode (PR landing in ccrc, stage 1; spec §3.1): its newest transition row into `merging`
+   *  (`fromState <> 'merging'`; observation rows have `fromState = toState` and are never one), read through
+   *  `readMergingAtDetail`. Null when the run has no such row or the row carries no `merging-at:` detail. */
+  currentEpisode(runId: number): { e: number; at: number; head: string; pr: number | null; mode: ChecksMode } | null {
+    const row = this.db.prepare(
+      "SELECT id, at, detail FROM run_events WHERE runId = ? AND toState = 'merging' AND fromState <> 'merging' " +
+      'ORDER BY id DESC LIMIT 1',
+    ).get(runId) as { id: number; at: number; detail: string | null } | undefined;
+    if (row === undefined || row.detail === null) return null;
+    const m = readMergingAtDetail(row.detail);
+    return m === null ? null : { e: row.id, at: row.at, head: m.head, pr: m.pr, mode: m.mode };
+  }
+
+  /** The episode's checks rows (`landing:checks:<e>:` and `landing-shadow:checks:<e>:`), through the one reader, in
+   *  write order. A detail the reader does not know is not a row. */
+  checksRows(runId: number, e: number): { id: number; at: number; row: ChecksRowRead }[] {
+    const out: { id: number; at: number; row: ChecksRowRead }[] = [];
+    const rows = this.db.prepare(
+      'SELECT id, at, detail FROM run_events WHERE runId = ? AND (detail LIKE ? OR detail LIKE ?) ORDER BY id',
+    ).all(runId, `${CHECKS_ROW_PREFIX}${e}:%`, `${CHECKS_SHADOW_ROW_PREFIX}${e}:%`) as { id: number; at: number; detail: string }[];
+    for (const r of rows) {
+      const row = readChecksRowDetail(r.detail);
+      if (row !== null && row.e === e) out.push({ id: r.id, at: r.at, row });
+    }
+    return out;
   }
 
   /**
@@ -3332,14 +3434,8 @@ export class CoordStore {
    * Synchronous, like every other read on this store.
    */
   openRunsClaimedBy(claimantId: string): OpenSiblingsResult {
-    const rows = this.db.prepare(
-      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
-      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText FROM runs ' +
-      `WHERE claimedBy = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
-    ).all(claimantId) as unknown as
-      { idText: string; program: string; waveText: string; waveOfText: string | null; reviewsText: string | null }[];
     const runs: OpenSibling[] = [];
-    for (const r of rows) {
+    for (const r of openRows(this.seriesRows('claimedBy', claimantId))) {
       const m = measureRunNumbers(r);
       if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
       runs.push({ id: m.nums.id, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf });
@@ -3374,28 +3470,44 @@ export class CoordStore {
    * `excludeRunId` defaults to `-1`, an id AUTOINCREMENT never mints, so the
    * "no exclusion" call and the excluding call are ONE query, not two.
    */
-  openRunsForSession(sessionId: string, excludeRunId?: number): OpenSiblingsResult {
-    // Four of the five columns are CAST to TEXT and proven, for
-    // `RUN_ROW_COLUMNS`'s reason (D-2545) — this read's three consumers are all
-    // DESTRUCTIVE decision points, so an unrepresentable row here must refuse
-    // in words rather than throw out of a sweep or a fleet act.
-    const rows = this.db.prepare(
-      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
-      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText FROM runs ' +
-      `WHERE sessionId = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} AND id != ? ORDER BY id`,
-    ).all(sessionId, excludeRunId ?? -1) as unknown as
-      { idText: string; program: string; waveText: string; waveOfText: string | null;
-        reviewsText: string | null }[];
+  openRunsForSession(sessionId: string, excludeRunId?: number, incarnation?: Incarnation): OpenSiblingsResult {
+    // The rows this returns are proven (D-2545), `RUN_ROW_COLUMNS`'s reason: its consumers are DESTRUCTIVE decision
+    // points, so an unrepresentable row refuses in words rather than throwing out of a sweep or a fleet act.
     const siblings: OpenSibling[] = [];
-    for (const r of rows) {
+    for (const r of boundRows(this.seriesRows('sessionId', sessionId), sessionId, 'open', incarnation)) {
+      if (r.idText === String(excludeRunId ?? -1)) continue;
       const m = measureRunNumbers(r);
-      // ALL-OR-FAILURE (`RunReadResult`'s own docstring): a partial sibling
-      // list is how "nothing else claims this workspace" gets asserted about a
-      // workspace something else claims.
+      // ALL-OR-FAILURE (`RunReadResult`'s own docstring): a partial sibling list is how "nothing else claims this
+      // workspace" gets asserted about a workspace something else claims.
       if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
       siblings.push({ id: m.nums.id, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf });
     }
     return { ok: true, siblings };
+  }
+
+  /** D-6639: the newest activity the SERVER holds of a child, for the stale arm's idle test. `runAt` is the newest
+   *  `run_events.at` of the minting run or of any run naming the session; `mailAt` the newest mail to or from the
+   *  session and the newest delivery or ack to it. `null`: that kind never happened. Any read that fails answers
+   *  `ok: false`, never a `null` (an unread table is not an idle one). */
+  childStaleActivity(sessionId: string, mintingRunId: number):
+    { readonly ok: true; readonly runAt: number | null; readonly mailAt: number | null }
+    | { readonly ok: false; readonly detail: string } {
+    try {
+      const t = (sql: string, ...args: (string | number)[]): number | null => {
+        const row = this.db.prepare(sql).get(...args) as Record<string, unknown> | undefined;
+        const v = Object.values(row ?? {}).filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
+        return v.length === 0 ? null : Math.max(...v);
+      };
+      const runAt = t('SELECT MAX(at) AS t FROM run_events WHERE runId = ? OR runId IN (SELECT id FROM runs WHERE sessionId = ?)',
+        mintingRunId, sessionId);
+      const mails = [
+        t('SELECT MAX(at) AS t FROM mail WHERE fromId = ? OR toId = ?', sessionId, sessionId),
+        t('SELECT MAX(deliveredAt) AS d, MAX(ackedAt) AS a FROM mail_deliveries WHERE toId = ?', sessionId),
+      ].filter((x): x is number => x !== null);
+      return { ok: true, runAt, mailAt: mails.length === 0 ? null : Math.max(...mails) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   /** `openRunsForSession`'s shape, with its `state NOT IN …` filter REMOVED
@@ -3410,16 +3522,9 @@ export class CoordStore {
    *  each candidate's `state` itself. ALL-OR-FAILURE, `openRunsForSession`'s
    *  own rule: a partial candidate list is how a hold this build did write can
    *  read as one it never wrote. */
-  runsNamingSession(sessionId: string): RunsNamingSessionResult {
-    const rows = this.db.prepare(
-      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
-      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state FROM runs ' +
-      'WHERE sessionId = ? ORDER BY id',
-    ).all(sessionId) as unknown as
-      { idText: string; program: string; waveText: string; waveOfText: string | null;
-        reviewsText: string | null; state: string }[];
+  runsNamingSession(sessionId: string, incarnation?: Incarnation): RunsNamingSessionResult {
     const runs: ChildReclaimNamingRow[] = [];
-    for (const r of rows) {
+    for (const r of boundRows(this.seriesRows('sessionId', sessionId), sessionId, 'any', incarnation)) {
       const m = measureRunNumbers(r);
       if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
       runs.push({ id: m.nums.id, sessionId, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf,
@@ -4830,6 +4935,118 @@ export class CoordStore {
       return { ok: true, rows: rows.map((r) => ({
         id: driftInt(r.id, 'asks id'), at: driftInt(r.at, 'asks at'), childId: r.childId, state: r.state,
       })) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  // ── the drift reconciler's table (coordinator-durability tail spec §4.3, D-5922) ──────────────────────────
+  // Three writers, one module: `recordDriftPass`, `markDriftPushed` and `markDriftShadowed`. A finding clears ONLY
+  // because a later pass measured the fact gone. The reads are result unions, never an overloaded null.
+
+  /** One pass, one transaction: upsert every found key (`lastSeenAt = now`; `firstSeenAt`, `pushedAt` and `shadowAt`
+   *  kept; a key returning after a clear is re-opened and keeps its stamps), clear every open key not found, and prune
+   *  rows cleared more than 30 days ago. `detail` passes `redactCommand` here, the one door in. */
+  recordDriftPass(findings: readonly DriftFinding[], now: number): void {
+    tx(this.db, () => {
+      const up = this.db.prepare(
+        'INSERT INTO drift_findings (key, kind, subject, detail, factAt, runId, sessionId, firstSeenAt, lastSeenAt) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET kind = excluded.kind, ' +
+        'subject = excluded.subject, detail = excluded.detail, factAt = excluded.factAt, runId = excluded.runId, ' +
+        'sessionId = excluded.sessionId, lastSeenAt = excluded.lastSeenAt, clearedAt = NULL',
+      );
+      for (const f of findings) up.run(f.key, f.kind, f.subject, redactCommand(f.detail), f.factAt, f.runId, f.sessionId, now, now);
+      const seen = new Set(findings.map((f) => f.key));
+      const open = this.db.prepare('SELECT key FROM drift_findings WHERE clearedAt IS NULL').all() as { key: string }[];
+      const clear = this.db.prepare('UPDATE drift_findings SET clearedAt = ? WHERE key = ? AND clearedAt IS NULL');
+      for (const o of open) if (!seen.has(o.key)) clear.run(now, o.key);
+      this.db.prepare('DELETE FROM drift_findings WHERE clearedAt IS NOT NULL AND clearedAt < ?').run(now - 30 * 86_400_000);
+    });
+  }
+
+  /** Compare-and-set: stamps `pushedAt` and `pushedVia` only where `pushedAt` is NULL, and answers the keys it changed. */
+  markDriftPushed(keys: readonly string[], now: number, via: 'item' | 'summary'): string[] {
+    return tx(this.db, () => {
+      const set = this.db.prepare('UPDATE drift_findings SET pushedAt = ?, pushedVia = ? WHERE key = ? AND pushedAt IS NULL');
+      return keys.filter((k) => Number(set.run(now, via, k).changes) === 1);
+    });
+  }
+
+  /** The unarmed lane's once-only: stamps `shadowAt` where it is NULL, answers the keys it changed. */
+  markDriftShadowed(keys: readonly string[], now: number): string[] {
+    return tx(this.db, () => {
+      const set = this.db.prepare('UPDATE drift_findings SET shadowAt = ? WHERE key = ? AND shadowAt IS NULL');
+      return keys.filter((k) => Number(set.run(now, k).changes) === 1);
+    });
+  }
+
+  /** Every stored row, open or cleared (the lane's push choice reads the open ones, and an empty table is the first-pass
+   *  rule's trigger). `kind` is narrowed through `isDriftKind`. A row this build cannot name (a kind a later build
+   *  wrote, then rolled back) is SKIPPED and its kind named in `unknownKinds`, never a failed read: the pass still
+   *  records, so that row clears like any key the pass did not find and is pruned 30 days on (a rollback stays a
+   *  plain revert). */
+  private readDriftRows(where: string, params: number[]): DriftFindingsRead {
+    try {
+      const rows = this.db.prepare(
+        'SELECT key, kind, subject, detail, factAt, runId, sessionId, firstSeenAt, lastSeenAt, clearedAt, pushedAt, ' +
+        `pushedVia, shadowAt FROM drift_findings ${where} ORDER BY firstSeenAt, key`,
+      ).all(...params) as { key: string; kind: string; subject: string; detail: string; factAt: unknown; runId: unknown;
+        sessionId: string | null; firstSeenAt: unknown; lastSeenAt: unknown; clearedAt: unknown; pushedAt: unknown;
+        pushedVia: string | null; shadowAt: unknown }[];
+      const unknownKinds = new Set<string>();
+      const out: DriftFindingRow[] = [];
+      for (const r of rows) {
+        if (!isDriftKind(r.kind)) { unknownKinds.add(String(r.kind)); continue; }
+        out.push({ key: r.key, kind: r.kind, subject: r.subject, detail: r.detail,
+          factAt: driftIntOrNull(r.factAt, 'drift_findings factAt'), runId: driftIntOrNull(r.runId, 'drift_findings runId'),
+          sessionId: r.sessionId, firstSeenAt: driftInt(r.firstSeenAt, 'drift_findings firstSeenAt'),
+          lastSeenAt: driftInt(r.lastSeenAt, 'drift_findings lastSeenAt'),
+          clearedAt: driftIntOrNull(r.clearedAt, 'drift_findings clearedAt'),
+          pushedAt: driftIntOrNull(r.pushedAt, 'drift_findings pushedAt'),
+          pushedVia: r.pushedVia === 'item' || r.pushedVia === 'summary' ? r.pushedVia : null,
+          shadowAt: driftIntOrNull(r.shadowAt, 'drift_findings shadowAt') });
+      }
+      return { ok: true, rows: out, unknownKinds: [...unknownKinds] };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Every stored row, open or cleared (an empty table is the first-pass rule's trigger). */
+  driftFindingRows(): DriftFindingsRead { return this.readDriftRows('', []); }
+
+  /** The rows no pass has cleared. */
+  openDriftFindings(): DriftFindingsRead { return this.readDriftRows('WHERE clearedAt IS NULL', []); }
+
+  /** The rows that stood open at `ms`: first seen before it and not cleared until at or after it (the digest's read). */
+  driftFindingsOpenAt(ms: number): DriftFindingsRead {
+    return this.readDriftRows('WHERE firstSeenAt < ? AND (clearedAt IS NULL OR clearedAt >= ?)', [ms, ms]);
+  }
+
+  /** How many findings were pushed as their own push since `dayStartMs` (the daily cap's count): `pushedVia = 'item'`
+   *  alone, so a first-pass summary spends nothing. Read from the table, so a restart keeps it. */
+  driftPushesOnDay(dayStartMs: number): number {
+    const r = this.db.prepare("SELECT COUNT(*) AS n FROM drift_findings WHERE pushedVia = 'item' AND pushedAt >= ?")
+      .get(dayStartMs) as { n: unknown };
+    return Number(r.n);
+  }
+
+  /** The runs and deliveries a stall OPERATOR rung already told the operator about, in mode `live` (a `shadow` row never
+   *  reached the operator): runs with a quiet-arm rung 3, deliveries with a mail-stuck rung (keyed on the delivery). */
+  driftStallToldRows(): DriftReadResult<{ readonly runId: number; readonly arm: string; readonly key: number }> {
+    try {
+      const rows = this.db.prepare(
+        "SELECT runId, CAST(detail AS TEXT) AS detail FROM run_events WHERE CAST(detail AS TEXT) LIKE 'stall%'",
+      ).all() as { runId: unknown; detail: string }[];
+      const out: { runId: number; arm: string; key: number }[] = [];
+      for (const r of rows) {
+        const p = parseStallDetail(r.detail);
+        if (p === null || p.mode !== 'live') continue;
+        if ((p.arm === 'quiet' && p.rung === 3) || p.arm === 'mail-stuck') {
+          out.push({ runId: driftInt(r.runId, 'run_events runId'), arm: p.arm, key: p.key });
+        }
+      }
+      return { ok: true, rows: out };
     } catch (err) {
       return { ok: false, detail: err instanceof Error ? err.message : String(err) };
     }
@@ -7392,13 +7609,14 @@ export class CoordStore {
    *  N. The newest run's claimant is the right answer there, and
    *  `rundefs.ts`'s `survivorOf` documents the same protocol-not-DB-enforced
    *  caveat. Pinned by a two-wave/two-claimant test, verified red under
-   *  ASC (fix round 1, finding 2). */
-  parentOfSession(childId: string): string | null {
-    const row = this.db.prepare(
-      `SELECT claimedBy FROM runs WHERE sessionId = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ` +
-      'ORDER BY id DESC LIMIT 1',
-    ).get(childId) as { claimedBy: string | null } | undefined;
-    return row?.claimedBy ?? null;
+   *  ASC (fix round 1, finding 2).
+   *
+   *  ARCH-62 (#797): decided by `bindingOf` over `seriesRows`. `incarnation`, when the caller knows the worker's birth
+   *  (`heldFor`, the drift lane), makes a run opened for an EARLIER occupant of a reused name no parent (#746); without
+   *  one the rule is the id string, as before. `openClaimantsOf`, `openRunsForSession` and `runsNamingSession` take it
+   *  the same way. */
+  parentOfSession(childId: string, incarnation?: Incarnation): string | null {
+    return parentFromRows(this.seriesRows('sessionId', childId), childId, incarnation);
   }
 
   /** EVERY coordinator that currently has `sessionId` working for it: the
@@ -7430,18 +7648,8 @@ export class CoordStore {
    *  session-keyed read in this file uses (including the `'unknown'` token a
    *  newer build may have written, which is OPEN here). Synchronous, like
    *  every read on this store. */
-  openClaimantsOf(sessionId: string): string[] {
-    const rows = this.db.prepare(
-      // D-3054. `GROUP BY claimedBy` is what makes the answer DISTINCT — no `DISTINCT`
-      // keyword beside it, which would be a second spelling of the same fact —
-      // and `MAX(id)` is what "newest first" is ordered on: each claimant is
-      // placed by its most recent open run, so one claimant appearing on three
-      // waves is one entry at the newest of them.
-      'SELECT claimedBy, MAX(id) AS newest FROM runs ' +
-      `WHERE sessionId = ? AND claimedBy IS NOT NULL AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ` +
-      'GROUP BY claimedBy ORDER BY newest DESC',
-    ).all(sessionId) as { claimedBy: string }[];
-    return rows.map((r) => r.claimedBy);
+  openClaimantsOf(sessionId: string, incarnation?: Incarnation): string[] {
+    return claimantsFromRows(this.seriesRows('sessionId', sessionId), sessionId, incarnation);
   }
 
   /** D-2545, the ask half. `id` and `runId` — the two columns in the RUN-ID

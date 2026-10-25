@@ -233,6 +233,16 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', [...CCD_ARGV.wsTitle('demo-quiet-basin', { clear: true })])).toBe(true);
   });
 
+  // D-6784: the checks lane's read is granted on `--project` alone, the shape the docs verbs take. A bare
+  // `['pr-landing']` grant would let `ccd pr-landing --sessions <pairs>` through with no project bound first.
+  it('pr-landing is grantable ONLY with --project', () => {
+    const pl = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'pr-landing');
+    expect(pl, 'exactly one pr-landing grant').toEqual([['pr-landing', '--project']]);
+    expect(isExecAllowed('ccd', ['pr-landing'])).toBe(false);
+    expect(isExecAllowed('ccd', ['pr-landing', '--sessions', 'a:1'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.prLanding('project-a', [{ id: 'a', pr: 1 }])])).toBe(true);
+  });
+
   // Enrolled in REQUIRED_VERB_FLAG for its ARGUMENT SURFACE rather than for a
   // confirmation token — `ws-rename`, `coord-pause`, `project-pool` and
   // `route`'s reason — and reached from a door as open as any of theirs, with
@@ -487,6 +497,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsAddWorker: ['ws-add', '--no-rc', '--child', '7', 'demo', '--surface', 'agent', '--actor', 'run:7 dispatch'],
     prStateSession: ['pr-state', '--session', 'demo-quiet-basin'],
     prStateProject: ['pr-state', '--project', 'demo'],
+    prLanding: ['pr-landing', '--project', 'demo', '--sessions', 'demo-quiet-basin:41'],
     // SAMPLES.prOpen's fourth element is the STRING 'false' (SAMPLES is typed
     // unknown[] since wave 6, and the call site casts through `unknown[]`), which
     // is truthy at runtime — so this sample actually exercises the `draft: true` arm.

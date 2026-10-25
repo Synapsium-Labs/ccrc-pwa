@@ -20,6 +20,9 @@ export const refuseRoute = (
   extra: Readonly<Record<string, unknown>> & { ok?: never; error?: never } = {},
 ): FastifyReply => reply.code(REFUSAL_STATUS[error]).send({ ok: false, error, ...extra });
 
+/** The rate limiter's 429 answer, kept outside `coord/` so the inline-send ratchet and the kebab-code scan stay put. */
+export const refuseRateLimited = (reply: FastifyReply): FastifyReply => refuseRoute(reply, 'rate-limited');
+
 /**
  * `refuseRoute`'s sibling for the open route's `refused` words (D-5384, audit
  * ticket ARCH-21): `{ ok: false, refused, ...extra }` at the one status

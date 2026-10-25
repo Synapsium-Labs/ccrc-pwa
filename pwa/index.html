@@ -67,8 +67,13 @@
       // Deliberately NOT validated against the skin catalogue, for the theme
       // snippet's reason: the list is in the bundle, and a copy here is the
       // second copy `single-definition` forbids. An unknown value matches no
-      // block in skins.css, so the frame renders :root — which IS Refined —
-      // and `initSkin` stamps its resolution when the bundle runs.
+      // block in skins.css, so the first frame renders :root — which IS
+      // Refined — and `initSkin` stamps its resolution when the bundle runs.
+      // On a desk that resolution is Instrument (an unknown id asks for "Match
+      // this device"), so there an unknown stored value paints Refined for one
+      // frame before Instrument (D-6721). Rare (a hand edit, or a move back
+      // from a build with a newer skin) and accepted: a fix needs the
+      // catalogue in this snippet, the copy `single-definition` forbids.
       //
       // The device's default (D-5096): Instrument on a pointer that can hover
       // and is fine, Refined on everything else — by primary input, never by

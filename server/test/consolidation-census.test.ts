@@ -12,10 +12,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   feedRecordCallSites, reclaimPauseParseSites, markerDefinitions, markerLiteralFiles, filesNaming,
-  runCcdOldFoldSites, RAN_NARROW_WINDOW, type CensusSite,
+  REPO, runCcdOldFoldSites, runCcdSiteArms, RAN_NARROW_WINDOW, RAN_TABLE, type CensusSite, type RanTableRow,
 } from './consolidationCensus.js';
 import { capabilityChoiceSites, W4_HELD_FILES } from './consolidationCensus.js';
 import { changeLatchSites, changeLatchReported } from './consolidationCensus.js';
+import { registryListingSites } from './consolidationCensus.js';
+import { cadenceLiterals, declaredDerivations, laneClockFields, laneClockReported, laneClockShapes, singleFlightGuards } from './consolidationCensus.js';
 
 const show = (name: string, sites: readonly CensusSite[]): void => {
   console.log(`census ${name}: ${sites.length}\n${sites.map((s) => `  ${s.file}:${s.line}  ${s.text.trim()}`).join('\n')}`);
@@ -184,14 +186,55 @@ describe('runCcdOldFoldSites: runCcd( call sites under server/src not yet narrow
       .toEqual([['server/src/coord/lane.ts', 3], ['server/src/coord/lane.ts', 17]]);
   });
 
-  it('REAL: the four sites step 1 migrated are off the old fold, and the rest still on it are listed for step 2', () => {
-    const sites = runCcdOldFoldSites();
-    show('runCcdOldFoldSites', sites);
-    const migrated = ['server/src/coord/expireArchived.ts', 'server/src/coord/collectTempRoot.ts'];
-    for (const f of migrated) expect(files(sites), `${f} is still on the old fold`).not.toContain(f);
-    // A query that silently matched nothing would read as "step 2 is done": the swap route is a known old-fold site.
-    expect(sites.some((s) => s.file === 'server/src/server.ts'), 'no server.ts site found').toBe(true);
-    for (const s of sites) expect(s.text, `${s.file}:${s.line}`).toMatch(/\brunCcd\s*\(/);
+  it('FIXTURE: a result handed to a carry reader is carried; a table row accounts for a site by file, text and nth', () => {
+    const t2 = mkdtempSync(path.join(tmpdir(), 'ran-fold-census2-'));
+    try {
+      mkdirSync(path.join(t2, 'server/src'), { recursive: true });
+      writeFileSync(path.join(t2, 'server/src/lane.ts'), [
+        'export async function a(deps: Deps) {',
+        '  const res = await deps.runCcd(argv);',                         // 2: carried
+        '  return cutShort(res);',
+        '}',
+        'export async function b(deps: Deps) {',
+        '  const r = await queue.run(id, () => deps.runCcd(argv));',      // 6: nth 1
+        '  return r.ok;',
+        '}',
+        'export async function c(deps: Deps) {',
+        '  const r = await queue.run(id, () => deps.runCcd(argv));',      // 10: nth 2
+        '  return r.ok;',
+        '}',
+        'export interface P { runCcd(argv: CcdArgv): Promise<CcdResult>; }', // 13: a signature
+      ].join('\n'));
+      const row = (nth: number): RanTableRow => ({ file: 'server/src/lane.ts', text: 'const r = await queue.run(id, () => deps.runCcd(argv));', nth, arm: 'ok-only' });
+      expect(runCcdSiteArms(t2, []).map((x) => [x.line, x.arm])).toEqual([[2, 'carried'], [6, null], [10, null]]);
+      expect(runCcdSiteArms(t2, [row(2)]).map((x) => [x.line, x.arm])).toEqual([[2, 'carried'], [6, null], [10, 'ok-only']]);
+    } finally { rmSync(t2, { recursive: true, force: true }); }
+  });
+
+  it('REAL: every runCcd( site answers the not-ran arm, and the count stays at 0 (D-6840; ARCH-10, #543)', () => {
+    const sites = runCcdSiteArms();
+    show('runCcdSiteArms', sites);
+    // A query that silently matched nothing would read as "every site is accounted": the swap route is a known site.
+    expect(sites.some((x) => x.file === 'server/src/server.ts'), 'no server.ts site found').toBe(true);
+    for (const x of sites) expect(x.text, `${x.file}:${x.line}`).toMatch(/\brunCcd\s*\(/);
+    // This is the may-only-shrink pin at its floor: a new `runCcd(` site must narrow on `ran === false`, hand its
+    // result to a `RAN_CARRY_READERS` reader, or add a reviewed row to `RAN_TABLE`.
+    expect(runCcdOldFoldSites().map((x) => `${x.file}:${x.line}`)).toEqual([]);
+  });
+
+  it('REAL: every RAN_TABLE row names a site that exists and that nothing else already accounts for', () => {
+    const bare = runCcdSiteArms(REPO, []);
+    const keyed = (r: RanTableRow): boolean => {
+      const seen = new Map<string, number>();
+      for (const x of bare) {
+        const k = `${x.file}\n${x.text.trim()}`;
+        const n = (seen.get(k) ?? 0) + 1;
+        seen.set(k, n);
+        if (x.file === r.file && x.text.trim() === r.text && n === r.nth) return x.arm === null;
+      }
+      return false;
+    };
+    expect(RAN_TABLE.filter((r) => !keyed(r)).map((r) => `${r.file}: ${r.text}`)).toEqual([]);
   });
 });
 
@@ -350,5 +393,122 @@ describe('redactRuleTables: modules that spell redaction rule patterns of their 
     expect(tables).toContain('shared/redact.mjs');
     expect(tables).toContain('ccd/history/lib.mjs');
     expect(tables.filter((t) => /\.tsx?$/.test(t))).toEqual([]);
+  });
+});
+
+// D-5862 (Task C1h; ARCH-68 #803). The lane-schedule census: the named clocks and guards a lane keeps as fields of the
+// watcher, the structural query for a clock nobody named, the bare cadence literal, and the three derivations.
+describe('the lane schedule census (D-5862)', () => {
+  let tree = '';
+  beforeAll(() => {
+    tree = mkdtempSync(path.join(tmpdir(), 'consolidation-census-lanes-'));
+    const p = path.join(tree, 'server/src/watch.ts');
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(p, [
+      'export class FleetWatcher {',
+      '  private lastTaskSweep = 0;',                                              // 2: a named clock
+      '  private lastNewSweep = 0;',                                               // 3: an unnamed clock
+      '  private lastQuiet: number | null = null;',                                // 4: an unnamed nullable clock
+      '  private lastJson: string | null = null;',                                 // 5: not numeric
+      '  private lastStallJudgedAt: number | null = null;',                         // 6: exempt gap rule
+      '  private collectSweeping = false;',                                        // 7: a named guard
+      '  private ticking = false;',                                                 // 8: a named guard
+      '  a(now: number): void {',
+      '    if (now - this.lastNewSweep < SWEEP_MS) return;',                       // 10: a shape
+      '    if (this.lastQuiet !== null && Date.now() - this.lastQuiet >= 5000) return;', // 11: a shape and a literal
+      '    if (now - this.lastTaskSweep >= 86_400_000) return;',                   // 12: a shape and a literal
+      '    if (now - this.lastQuiet > 60 * 1000) return;',                         // 13: a shape and a product literal
+      '    if (now - this.lastStallJudgedAt > GAP_MS) return;',                    // 14: exempt
+      '    if (now - this.lastQuiet < 500) return;',                               // 15: a shape, under 1000: not a cadence literal
+      '    if (SWEEP_MS > now - this.lastNewSweep) return;',                       // 16: a shape, written the other way round
+      '    if (now - other.lastQuiet < SWEEP_MS) return;',                         // 17: another object: not seen
+      '  }',
+      '}',
+      'class DelegationLane {',
+      '  private lastSweepAt = 0;',                                                 // 21: reported, not counted
+      '  m(now: number): void { if (now - this.lastSweepAt < SWEEP_MS) return; }',
+      '}',
+      'export const DELEGATION_SWEEP_MS = DIVERGENCE_SWEEP_MS;',
+    ].join('\n'));
+    writeFileSync(path.join(tree, 'server/src/laneSchedule.ts'), [
+      'export const STALL_SWEEP_MS = 60_000;',
+      'export const COLLECT_OBSERVE_INTERVAL_MS = CHILD_RECLAIM_SWEEP_MS;',
+    ].join('\n'));
+  });
+  afterAll(() => { if (tree) rmSync(tree, { recursive: true, force: true }); });
+
+  it('FIXTURE: a named clock and a named guard are found by name', async () => {
+    expect(laneClockFields(tree).map((x) => x.line)).toEqual([2]);
+    expect(singleFlightGuards(tree).map((x) => x.line)).toEqual([7, 8]);
+    expect(laneClockReported(tree).map((x) => x.line)).toEqual([21]);
+  });
+
+  it('FIXTURE: the structural query finds an unnamed clock compared with a constant, the exempt gap rule and another object aside', async () => {
+    expect(laneClockShapes(tree).map((x) => x.line)).toEqual([10, 11, 12, 13, 15, 16]);
+  });
+
+  it('FIXTURE: a bare millisecond literal (1000 or more, a product of literals too) against a last* clock; a constant, a small number and a second object are not', async () => {
+    expect(cadenceLiterals(tree).map((x) => x.line)).toEqual([11, 12, 13]);
+  });
+
+  it('FIXTURE: a derivation is a reference only when its initializer is a bare name', async () => {
+    expect(declaredDerivations(tree)).toEqual([
+      { name: 'COLLECT_OBSERVE_INTERVAL_MS', file: 'server/src/laneSchedule.ts', reference: true },
+      { name: 'STALL_SWEEP_MS', file: 'server/src/laneSchedule.ts', reference: false },
+      { name: 'DELEGATION_SWEEP_MS', file: 'server/src/watch.ts', reference: true },
+    ]);
+  });
+
+  it('REAL: the census runs on the tree, and W4\'s two clocks and the delegation lane\'s are the ones left', async () => {
+    const fields = laneClockFields();
+    show('laneClockFields', fields);
+    expect(fields.map((x) => x.text).join('\n')).toContain('lastStopDoneSweep');
+    expect(laneClockReported().map((x) => x.text).join('\n')).toContain('lastSweepAt');
+    expect(declaredDerivations()).toHaveLength(3);
+  });
+});
+
+describe('registryListingSites: where watch.ts lists the registry, tagged selection, act or tests-only (D-5864)', () => {
+  const fixture = [
+    'class FleetWatcher {',
+    '  async tick(): Promise<void> {',
+    '    // readRegistryMeasured( named in a comment is not a call',
+    '    const a = await readRegistryMeasured(this.deps.io, this.deps.cfg);',
+    '    const again = await this.deps.io.readdir(this.deps.cfg.registryDir);',
+    '  }',
+    '  private async lanePass(): Promise<void> {',
+    '    const r = await readRegistry(this.deps.io, this.deps.cfg);',
+    '  }',
+    '  private async divergencesPass(): Promise<void> {',
+    '    const n = await this.deps.io.readdir(this.deps.cfg.registryDir);',
+    '    const other = await this.deps.io.readdir(this.deps.cfg.projectsRoot);',
+    '  }',
+    '  private async fleetFor(): Promise<void> {',
+    '    const f = await readRegistryMeasured(this.deps.io, this.deps.cfg);',
+    '  }',
+    '}',
+  ].join('\n');
+
+  it('FIXTURE: a call in tick or in a lane is selection, a bare readdir in tick and a named act read are act, a named fallback is tests-only, a comment and another directory are nothing', () => {
+    const tree = mkdtempSync(path.join(tmpdir(), 'listing-census-'));
+    try {
+      mkdirSync(path.join(tree, 'server/src'), { recursive: true });
+      writeFileSync(path.join(tree, 'server/src/watch.ts'), fixture);
+      expect(registryListingSites(tree).map((s) => `${s.line} ${s.method} ${s.tag}`)).toEqual([
+        '4 FleetWatcher.tick selection',
+        '5 FleetWatcher.tick act',
+        '8 FleetWatcher.lanePass selection',
+        '11 FleetWatcher.divergencesPass act',
+        '15 FleetWatcher.fleetFor tests-only',
+      ]);
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+    }
+  });
+
+  it('REAL TREE: finds the tick\'s listing, and prints the list for the PR body', () => {
+    const sites = registryListingSites();
+    console.log(`census registryListingSites: ${sites.length}\n${sites.map((s) => `  ${s.line} ${s.method} ${s.tag}  ${s.text.trim()}`).join('\n')}`);
+    expect(sites.filter((s) => s.method === 'FleetWatcher.tick').length, 'the tick lists the registry').toBeGreaterThan(0);
   });
 });

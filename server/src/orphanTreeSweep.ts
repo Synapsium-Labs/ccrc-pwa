@@ -14,7 +14,7 @@ import {
 } from './coord/collectOrphanTree.js';
 import {
   ORPHAN_AUDITS_PER_PASS, ORPHAN_AUDITS_PER_PASS_PRESSURE, ORPHAN_CENSUS_MS, ORPHAN_CENSUS_PRESSURE_MS, ORPHAN_QUEUE_KEY,
-  ORPHAN_RETRY_MS, orphanCensusDue, orphanFeedRow, orphanFoldAudit, orphanFoldJob, orphanOffers, orphanPopulate,
+  ORPHAN_RETRY_MS, isAuditedClass, orphanPathOfHex, orphanCensusDue, orphanGoesWithRow, orphanHeldBack, orphanInsideVerdict, orphanFeedRow, orphanFoldAudit, orphanFoldJob, orphanOffers, orphanPopulate,
   orphanRemember, orphanRescueArmed, orphanTreesHealth,
   type OrphanFold, type OrphanMemory, type OrphanRow, type OrphanTreeMemory,
 } from './orphanTreeLane.js';
@@ -33,6 +33,10 @@ export interface OrphanSweepDeps {
   readonly pressure: () => boolean;
   /** One feed row, `kind:'coord'`, record-only. Never throws. */
   readonly record: (title: string, body: string) => void;
+  /** Every id any run was ever claimed by, in any state or generation (orphanCoordinatorSet). Throws when the store cannot be read, which keeps every nested tree. */
+  readonly coordinators: () => ReadonlySet<string>;
+  /** Whether the registry row `id` is a workspace (`workspace !== null`): false for a plain session or main checkout, null when the row cannot be read. */
+  readonly isWorkspace: (id: string) => Promise<boolean | null>;
 }
 
 export class OrphanTreeSweep {
@@ -42,12 +46,35 @@ export class OrphanTreeSweep {
   private sweeping = false;
   private removed = 0;
   private measured = false;
+  private reported = new Set<string>();
+  private rowUnreadableSaid = new Set<string>();
+  private wsKinds = new Map<string, boolean | null>();
+  private unreadableSaid = false;
 
   constructor(private readonly deps: OrphanSweepDeps) {}
 
   /** The `disk` block's `orphanTrees`: null until a census has been read. */
   health(): DiskOrphanTrees | null {
     return this.measured ? orphanTreesHealth(this.rows, this.memory, this.removed) : null;
+  }
+
+  /** The coordinators now, or null when the store cannot be read. */
+  private coordinators(): ReadonlySet<string> | null {
+    try { return this.deps.coordinators(); } catch { return null; }
+  }
+
+  private readonly isWs = (id: string): boolean | null => this.wsKinds.get(id) ?? null;
+
+  /** Read each distinct containing row once per census; a throw is null (unmeasured). */
+  private async readWsKinds(rows: readonly OrphanRow[]): Promise<void> {
+    const next = new Map<string, boolean | null>();
+    for (const r of rows) {
+      if (r.inside === null || !isAuditedClass(r.cls) || next.has(r.inside)) continue;
+      let k: boolean | null = null;
+      try { k = await this.deps.isWorkspace(r.inside); } catch { k = null; }
+      next.set(r.inside, k);
+    }
+    this.wsKinds = next;
   }
 
   private ccd(): CollectOrphanDeps {
@@ -97,10 +124,37 @@ export class OrphanTreeSweep {
       this.lastCensus = now;
       if (c.truncated) return;
       this.rows = c.rows;
-      this.memory = orphanPopulate(this.memory, c, now);
+      const coords = this.coordinators();
+      await this.readWsKinds(c.rows);
+      this.memory = orphanPopulate(this.memory, c, now, coords, this.isWs);
+      // An unmeasured answer keeps the candidate and names why: one row per episode, not one per pass.
+      if (coords === null) {
+        if (!this.unreadableSaid && c.rows.some((r) => isAuditedClass(r.cls) && r.inside !== null)) {
+          this.unreadableSaid = true;
+          d.record('orphan worktree left', 'a nested worktree was left: the coordinator list could not be read');
+        }
+      } else this.unreadableSaid = false;
+      // Forget the reports of trees the whole census no longer lists.
+      const listed = new Set(c.rows.map((r) => r.hex));
+      this.reported = new Set([...this.reported].filter((h) => listed.has(h)));
+      this.rowUnreadableSaid = new Set([...this.rowUnreadableSaid].filter((h) => listed.has(h)));
+      // A containing row that cannot be read keeps its trees silently otherwise: one row per tree per episode.
+      for (const r of c.rows) {
+        if (r.inside === null || !isAuditedClass(r.cls) || this.isWs(r.inside) !== null) { this.rowUnreadableSaid.delete(r.hex); continue; }
+        if (this.rowUnreadableSaid.has(r.hex)) continue;
+        this.rowUnreadableSaid.add(r.hex);
+        d.record('orphan worktree left', `${orphanPathOfHex(r.hex)} (${r.cls}): a nested worktree was left: its containing row could not be read`);
+      }
+      for (const r of c.rows) {
+        if (!isAuditedClass(r.cls) || orphanInsideVerdict(r.inside, coords, this.isWs) !== 'goes-with-workspace' || this.reported.has(r.hex)) continue;
+        this.reported.add(r.hex);
+        const row = orphanGoesWithRow(r.hex, r.cls);
+        d.record(row.title, row.body);
+      }
       this.measured = true;
     }
-    const offers = orphanOffers(this.memory, d.mono(), pressure ? ORPHAN_AUDITS_PER_PASS_PRESSURE : ORPHAN_AUDITS_PER_PASS, new Set());
+    const held = orphanHeldBack(this.memory, this.coordinators(), this.isWs);
+    const offers = orphanOffers(this.memory, d.mono(), pressure ? ORPHAN_AUDITS_PER_PASS_PRESSURE : ORPHAN_AUDITS_PER_PASS, held);
     if (offers.act !== null) await this.actOn(offers.act, rescueArmed, censusMs);
     for (const hex of offers.learn) if (!(await this.learnOn(hex, rescueArmed, censusMs))) return;
   }

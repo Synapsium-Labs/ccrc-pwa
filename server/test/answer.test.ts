@@ -18,9 +18,9 @@ function fakeTmux(panes: (string | null)[]) {
     if (args[0] === 'capture-pane') {
       const pane = panes[Math.min(capIdx, panes.length - 1)] ?? null;
       capIdx++;
-      return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { tmux: new Tmux(run), calls };
 }
@@ -368,11 +368,11 @@ describe('answerDialog returns the screen it moved to', () => {
     let caps = 0;
     const panes = [q2, q2];
     const run: Runner = async (_cmd, args) => {
-      if (args[0] !== 'capture-pane') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] !== 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
       const pane = panes[Math.min(caps, panes.length - 1)]!;
       if (caps >= 2) t += 400; // every settle capture takes 400 ms
       caps++;
-      return { code: 0, stdout: pane, stderr: '' };
+      return { ran: true, code: 0, stdout: pane, stderr: '' };
     };
     const d: SendDeps = { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: async (ms) => { t += ms; }, now: () => t };
     expect(await answerDialog(d, 'x', q2Id, 1)).toEqual({ ok: true });
@@ -386,11 +386,11 @@ describe('answerDialog returns the screen it moved to', () => {
     // check, landing, then settle captures of 400 ms each: Q2 (ends 500), the review (1000), the review (1500).
     const panes = [q2, q2, q2, review, review];
     const run: Runner = async (_cmd, args) => {
-      if (args[0] !== 'capture-pane') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] !== 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
       const pane = panes[Math.min(caps, panes.length - 1)]!;
       if (caps >= 2) t += 400;
       caps++;
-      return { code: 0, stdout: pane, stderr: '' };
+      return { ran: true, code: 0, stdout: pane, stderr: '' };
     };
     const d: SendDeps = { tmux: new Tmux(run), queue: new KeyedQueue(), sleep: async (ms) => { t += ms; }, now: () => t };
     expect(await answerDialog(d, 'x', q2Id, 1)).toEqual({ ok: true });
@@ -401,9 +401,9 @@ describe('answerDialog returns the screen it moved to', () => {
     try {
       let caps = 0;
       const run: Runner = (_cmd, args) => {
-        if (args[0] !== 'capture-pane') return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+        if (args[0] !== 'capture-pane') return Promise.resolve({ ran: true, code: 0, stdout: '', stderr: '' });
         caps++;
-        return caps <= 2 ? Promise.resolve({ code: 0, stdout: q2, stderr: '' }) : new Promise(() => {});
+        return caps <= 2 ? Promise.resolve({ ran: true, code: 0, stdout: q2, stderr: '' }) : new Promise(() => {});
       };
       const queue = new KeyedQueue();
       const d: SendDeps = { tmux: new Tmux(run), queue, sleep: async () => {}, now: () => Date.now() };

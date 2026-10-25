@@ -129,8 +129,9 @@ describe('one implementation each', () => {
 
   // K8 — ONE coordination fence, ONE store read, ONE birth placement (spec §1
   // rule 4; spec §5.6: slugs recycle). The close, the executor's step 2a and
-  // the hold-release job's step 5 decide through `childReclaimHasCoordinated`;
-  // the sweep reaches the same `childReclaimCoordinated` through its verdict.
+  // the hold-release job's step 5 decide through `childReclaimHasCoordinated`,
+  // and so does the expiry lane's child arm (an archived child that ever
+  // coordinated is never expired); the sweep reaches the same `childReclaimCoordinated` through its verdict.
   // A consumer that read the store's claims itself, or placed the birth with
   // its own spelling, would be a second reader that can disagree.
   it('K8: the coordination fence, its store read and its birth placement each have ONE home', () => {
@@ -154,8 +155,9 @@ describe('one implementation each', () => {
       .toEqual(['server/src/coord/childReclaim.ts', 'server/src/watch.ts']);
     const hasCoordinated = 'childReclaimHasCoordinated(';
     expect(src.map(([f, t]) => [f, count(t, hasCoordinated)] as const).filter(([, n]) => n > 0),
-      'its definition, step 2a and step 5; and the close').toEqual([
+      'its definition, step 2a and step 5; the close; and the expiry lane\'s child arm').toEqual([
       ['server/src/coord/childReclaim.ts', 3], ['server/src/coord/close.ts', 1],
+      ['server/src/coord/expireArchived.ts', 1],
     ]);
     // The birth's ONE placement (spec §5.7) works as follows. `childReclaimBornAt` alone reads the birth
     // rows. The create-only read keeps its one other caller, the attention list. Each of the four consumers

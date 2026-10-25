@@ -36,13 +36,15 @@ const makeStore = (): FleetStore => createFleetStore({
                        close(): void {} }) as unknown as WebSocket,
 });
 const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
+/** A held spend read: the board's default would send GET /api/runs/:id through the global fetch. */
+const NO_SPEND = (): Promise<import('../../shared/api').RunSpend> => new Promise(() => {});
 
 /** Mounts the board with one run on the live frame, at a frozen clock. */
 const board = (over: Partial<RunSummary>): void => {
   vi.useFakeTimers({ now: FROZEN });
   const store = makeStore();
   act(() => { store.setState({ runs: [r(over)], runsFrameSeen: true }); });
-  render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+  render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
 };
 afterEach(() => { vi.useRealTimers(); });
 
@@ -65,7 +67,7 @@ describe('the warn row says nothing it was not told', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [noHealth as RunSummary], runsFrameSeen: true }); });
     expect(() => render(
-      <RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />))
+      <RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />))
       .not.toThrow();
     expect(warn(), 'an older server was made to assert a health claim').toBeNull();
   });
@@ -95,7 +97,7 @@ describe('the warn row says nothing it was not told', () => {
       act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
       const closed = r({ state, closedAt: Date.now() - 10_000, dispatchedAt: null, ...wedged() });
       render(<RunsScreen store={store} loadRuns={async () => ({ runs: [closed] })}
-                         loadCaps={NO_CAPS} />);
+                         loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
       await waitFor(() => expect(document.querySelector('.run-row')).not.toBeNull());
       expect(document.querySelector('[aria-label^="finished"]'),
         `the ${state} fixture did not reach the Finished group`).not.toBeNull();

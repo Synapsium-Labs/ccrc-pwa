@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
+import fastifyRateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import { pwaStaticOptions } from './pwaStatic.js';
 import { configDirFor } from './config.js';
@@ -59,7 +60,7 @@ import { CLIP_MIME, CLIP_NAME_RE, clipPath, clipStem, isSafeSessionId, stageUplo
 import type { SpawnPty } from './pty.js';
 import { SHAPE_ONLY_MASKER, type SecretMasker } from './accounts/mask.js';
 import { maskBody, maskedError, maskFleetFrame } from './accounts/egress.js';
-import { Presence } from './presence.js';
+import { Viewers } from './viewer.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { registerUpdateRoutes } from './update/routes.js';
@@ -203,7 +204,7 @@ export const WRITE_ANSWER_EXEMPT = /^\/api\/(?:auth\/|token\/|sessions\/:id\/upl
  *  in `secret-mask.test.ts`'s egress inventory. */
 export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/fleet', '/api/digest', '/api/sessions/:id/pr', '/api/sessions/:id/workspace/audit', '/api/coord/stall-watch',
-  '/api/runs', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/asks',
+  '/api/runs', '/api/runs/:id', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/asks',
   '/api/approvals/:id',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
@@ -325,20 +326,30 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const app = Fastify({ logger: false });
   await app.register(fastifyWebsocket);
   await app.register(fastifyMultipart, { limits: { fileSize: 25 * 1024 * 1024 } });
+  // `global: false`: only a route that opts in with `config.rateLimit` is limited (coord/routes.ts).
+  // The limiter is GLOBAL: a constant key, so it never reads `req.ip` (no proxy trust, spec 3b D5), and it
+  // runs on `preHandler` so a route's own auth `onRequest` hook refuses before any budget is spent.
+  await app.register(fastifyRateLimit, {
+    global: false,
+    hook: 'preHandler',
+    keyGenerator: () => 'GET /api/runs/:id',
+    // Thrown into Fastify's error path; the route's own `errorHandler` (coord/routes.ts) writes ccrc's refusal shape.
+    errorResponseBuilder: () => Object.assign(new Error('rate-limited'), { statusCode: 429 }),
+  });
   // D-5857: the one notice sink this server's writers outside `watch.ts` raise their feed rows through (`notice.ts`).
   const notice = noticeSink(deps);
 
-  // Presence is cheap and needs no config, unlike `push` — a caller that
+  // Viewers is cheap and needs no config, unlike `push` — a caller that
   // didn't wire one into Deps (an older test, a one-off script) still gets
   // working suppression. Written BACK onto `deps`, not just held locally:
-  // `FleetWatcher.pushOne` reads `this.deps.presence` on every push, and a
+  // `FleetWatcher.pushOne` reads `this.deps.viewers` on every push, and a
   // presence instance only this route can see would be write-only — the
   // route marks visibility nobody ever reads, so nothing is actually
   // suppressed. `deps` is a shared reference (the same object `FleetWatcher`
   // was constructed with, or will be), so this makes both sides see the
   // SAME instance regardless of construction order.
-  deps.presence ??= new Presence();
-  const presence = deps.presence;
+  deps.viewers ??= new Viewers();
+  const viewers = deps.viewers;
 
   // ── The session gate (Stage 3a) ───────────────────────────────────────
   //
@@ -1784,7 +1795,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const read = await readSessionRecord(deps.io, deps.cfg, id);
       switch (read.kind) {
         case 'found': break;
-        case 'absent': case 'unlistable': return null;
+        case 'absent': case 'unmeasurable': case 'unlistable': return null;
         // Masked on both of its paths (spec §2.3): `knownId` refuses a
         // non-registry id on `POST /api/sessions/:id/ask`, and on
         // `POST /api/asks/:id/answer` `freshAskAt`'s own `bad-id` answers
@@ -1900,21 +1911,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // get un-notified by the first one's disconnect. It is the TTL, not this
     // key, that handles a socket dying WITHOUT a close frame — every frame
     // below re-stamps the claim, and the client sends one every
-    // PRESENCE_REFRESH_MS for exactly that reason (see Presence's own doc).
+    // PRESENCE_REFRESH_MS for exactly that reason (see the Viewers class's own doc).
     const token = Symbol('viewer');
     // D-5242's presence contract: the OPEN claim, stamped at connect and re-stamped by EVERY frame — before the frame
     // is parsed, so even one that fails to parse proves the socket alive. A hidden tab beats too, and holds its session
     // awake for `PRESENCE_OPEN_TTL_MS` after its last frame; `drop` at close removes both claims.
-    presence.markOpen(token, id);
+    viewers.markOpen(token, id);
     socket.on('message', (raw) => {
-      presence.touch(token);
+      viewers.touch(token);
       try {
         const m = asSessionClientMsg(JSON.parse(String(raw)));
-        if (m !== null) presence.setVisible(token, m.visible ? id : null);
-      } catch { /* a client that sends garbage simply isn't reporting presence */ }
+        if (m !== null) viewers.setVisible(token, m.visible ? id : null);
+      } catch { /* a client that sends garbage simply isn't reporting visibility */ }
     });
     socket.on('close', () => {
-      presence.drop(token);
+      viewers.drop(token);
       stream.stop();
     });
   });
@@ -2243,7 +2254,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const day = q.day === undefined ? digestDayFor(Date.now(), hourUtc) : parseDigestDay(q.day);
     if (day === null) return refuseRoute(reply, 'bad-request');
     const { fromMs, toMs } = digestWindow(day, hourUtc);
-    const built = buildDigest(deps.coord, fromMs, toMs);
+    // A `?day=` whose window has not closed yet: a drift line's age stops at now, never past it.
+    const built = buildDigest(deps.coord, fromMs, toMs, Math.min(toMs, Date.now()));
     if (!built.ok) return refuseRoute(reply, 'digest-unreadable', { detail: built.detail });
     const mark = deps.coord.digestDay(day);
     const answer: DigestAnswer = {
@@ -2350,7 +2362,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     switch (read.kind) {
       case 'found': break;
       case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
-      case 'absent': return refuseRoute(reply, 'unknown-session');
+      case 'absent': case 'unmeasurable': return refuseRoute(reply, 'unknown-session');
       // An id `isRegistryId` refuses (spec §2.3) is a malformed request, never an unknown session: 400 in
       // this file's request-shape word, the one `isSafeSessionId` above answers.
       case 'bad-id': return refuseRoute(reply, 'bad-session-id');
@@ -3444,7 +3456,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // route that answered 404 for both would be reopening the exact
       // overloaded-null this 502 gate exists to close, one branch over.
       case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
-      case 'absent': return refuseRoute(reply, 'unknown-session');
+      case 'absent': case 'unmeasurable': return refuseRoute(reply, 'unknown-session');
       // This read is the ONLY gate in front of `stopArgvFor` (spec §2.3), so an id `isRegistryId` refuses
       // is refused here, before any argv: 400, this file's request-shape word, never a proven absence's 404.
       case 'bad-id': return refuseRoute(reply, 'bad-session-id');
@@ -3607,7 +3619,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     switch (read.kind) {
       case 'found': break;
       case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
-      case 'absent': return refuseRoute(reply, 'unknown-session');
+      case 'absent': case 'unmeasurable': return refuseRoute(reply, 'unknown-session');
       // The ordinary arm's id gate (spec §2.3): an id `isRegistryId` refuses is a malformed request.
       case 'bad-id': return refuseRoute(reply, 'bad-session-id');
       default: {
@@ -3699,7 +3711,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // ccd's own two refusals (D-5240: `cmd_swap`'s manual gate, after both reads above) are the same two 409s, so a
     // turn that began between the in-queue read and ccd's act reaches the operator as `session-busy` with its "swap
     // anyway". Every other ccd failure keeps the generic 502 with ccd's sentence.
-    const ccdRefused = ccdSwapRefusal(res.ran.stderr);
+    // D-6840: a call that never ran has no refusal word to read, only the runner's own words (the 502).
+    const ccdRefused = res.ran.ran === false ? null : ccdSwapRefusal(res.ran.stderr);
     if (ccdRefused !== null) return refuseRoute(reply, ccdRefused);   // `ccd: hibernated:` too (D-5242)
     return reply.code(502).send({ ok: false, stderr: res.ran.stderr });
   });
@@ -4057,6 +4070,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));
+    // D-6840: the reap is destructive, so a call that never ran, or may have, is `indeterminate` (the
+    // empty-handed `parseReap`), never a refusal built from the runner's forged stderr.
+    if (res.ran === false) return parseReap('', 1, '');
     return parseReap(res.stdout, res.ok ? 0 : 1, res.stderr);
   });
 

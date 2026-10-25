@@ -138,9 +138,9 @@ describe('the token-sync op words (spec §4.4)', () => {
 });
 
 describe('the ninth node file (spec 4.5, §8 "No secret in the agent\'s read grant")', () => {
-  it('NODE_FILES.tokenGeneration is box-token-generation, and the derived list carries nine names', () => {
+  it('NODE_FILES.tokenGeneration is box-token-generation, and the derived list carries ten names (the tenth is the tmp sweep census, D-6624)', () => {
     expect(NODE_FILES.tokenGeneration).toBe('box-token-generation');
-    expect(NODE_FILE_BASENAMES).toHaveLength(9);
+    expect(NODE_FILE_BASENAMES).toHaveLength(10);
     expect(NODE_FILE_BASENAMES).toContain('box-token-generation');
   });
 
@@ -155,6 +155,7 @@ describe('the ninth node file (spec 4.5, §8 "No secret in the agent\'s read gra
     };
     const reads = await readNodeFiles(recording, ccrcDir, 5_000);
     expect(Object.keys(reads)).not.toContain('tokenGeneration');
+    expect(Object.keys(reads), 'nor the tmp sweep census, which has its own reader (D-6624)').not.toContain('tmpSweep');
     expect(asked.length, 'the sweep read nothing at all').toBeGreaterThan(0);
     expect(asked).not.toContain('box-token-generation');
   });
@@ -381,16 +382,18 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(HOLDERS_MESSAGE, 'a missing holder').toMatch(/missing[^]*(moved|changed value)/);
   });
 
-  it('the holders across shared, server/src, pwa/src and agent/src are exactly the six separate seven-day quantities', () => {
-    // A weekly interval anywhere else must import the one in shared/box-token.ts. These six are separate
+  it('the holders across shared, server/src, pwa/src and agent/src are exactly the seven separate seven-day quantities', () => {
+    // A weekly interval anywhere else must import the one in shared/box-token.ts. These seven are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
     // The delegation health window, spec §5.3's seven-day observation window, is a separate quantity ruled in by delegation wave 3
     // (R81), and it does not import the token interval. The review-child ceiling (D-5942) is the separate quantity
     // spec 2026-10-20-workspace-disk-and-registry-truth §2.6 chose: seven days, matching expiry's horizon. The
     // accounts word's signed-in window (D-6058 (3), (6)) is the accounts spec's own 7 d since the last good check (§4.1),
-    // a separate quantity that does not import the token interval.
+    // a separate quantity that does not import the token interval. The stale arm's idle span (D-6639) is the separate quantity
+    // spec 2026-10-23-fleet-disk-retention-design §2.7.3 (rulings G2) chose: seven days, the expiry horizon, which ccd's WS_STALE_IDLE_S measures on the box.
     expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
+      'server/src/childReclaimSweep.ts:CHILD_STALE_IDLE_MS',
       'server/src/childReclaimSweep.ts:REVIEW_CHILD_CEILING_MS',
       'server/src/coord/delegation-model.ts:DELEGATION_HEALTH_WINDOW_MS',
       'shared/accounts.ts:SIGNED_IN_WITHIN_MS',

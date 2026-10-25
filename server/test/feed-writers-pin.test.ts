@@ -91,12 +91,12 @@ const pushRig = async (o: { coord?: false; notifyLog?: false } = {}) => {
     if (args[0] === 'list-panes') {
       const id = /^=cc-(.*):$/.exec(args[2] ?? '')?.[1] ?? '';
       const pid = pids.get(id);
-      return { code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
+      return { ran: true, code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
     }
-    if (args[0] === 'capture-pane') return { code: 0, stdout: 'ready\n❯ \n', stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: 'ready\n❯ \n', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
-  const deps = { ...testDeps(home, run), push: rec.push, presence: rec.presence,
+  const deps = { ...testDeps(home, run), push: rec.push, viewers: rec.viewers,
     ...(o.notifyLog === false ? {} : { notifyLog: rec.notifyLog }), ...(o.coord === false ? {} : { coord: rec.coord }) };
   const w = new FleetWatcher(deps as never, new Bus(), 10_000, path.join(home, 'state-cache.json'));
   await w.tick();                                          // priming: no push, no record
@@ -253,18 +253,18 @@ const nudgeRig = async (o: { notifyLog?: boolean } = {}) => {
   const sends: string[][] = [];
   let box = '';
   const run: Runner = async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${NUDGE_PID}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: `❯ ${box}\n`, stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${NUDGE_PID}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: `❯ ${box}\n`, stderr: '' };
     if (args[0] === 'send-keys') {
       sends.push([...args]);
       box = args[3] === '-l' ? box + args[5]! : '';
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     }
-    return { code: 1, stdout: '', stderr: '' };
+    return { ran: true, code: 1, stdout: '', stderr: '' };
   };
   const base = testDeps(home, run);
-  const deps = { ...base, coord: rec.coord, presence: rec.presence, ...(o.notifyLog === false ? {} : { notifyLog: rec.notifyLog }) };
+  const deps = { ...base, coord: rec.coord, viewers: rec.viewers, ...(o.notifyLog === false ? {} : { notifyLog: rec.notifyLog }) };
   const w = new FleetWatcher(deps as unknown as Deps, new Bus(), 2000, path.join(home, 'state-cache.json'));
   vi.setSystemTime(T_STOP - 7_200_000);
   await w.tick();
@@ -463,11 +463,11 @@ describe("server.ts's operator-answer pair (POST /api/sessions/:id/ask): recorde
       updatedAt: now, ask: { questions: [QUESTION] }, subagents: [],
     }));
     const run: Runner = async (_cmd, args) => (args[0] === 'capture-pane'
-      ? { code: 0, stdout: ASK_PANE, stderr: '' } : { code: 0, stdout: '', stderr: '' });
+      ? { ran: true, code: 0, stdout: ASK_PANE, stderr: '' } : { ran: true, code: 0, stdout: '', stderr: '' });
     const rec = await feedRecorder(home);
     rec.setVisible(visible ? [B] : []);                      // the record gate does not read presence
     const app = await buildServer({ ...testDeps(home, run), coord: rec.coord, notifyLog: rec.notifyLog,
-      push: rec.push as never, presence: rec.presence as never });
+      push: rec.push as never, viewers: rec.viewers as never });
     try {
       const id = rec.coord.insertAsk({ childId: B, parentId: PARENT, runId: null, askKey: ASK_KEY, askAt: now,
         dialogId: 'dlg-1', question: QUESTION.question, options: QUESTION.options.map((o) => o.label), now });
@@ -541,7 +541,7 @@ const SESSION_OK = (): GateDecision => ({ allow: true, verdict: 'ok', reason: 's
 const coordRoutesApp = (home: string, rec: FeedRecorder, over: Partial<Deps> = {}): FastifyInstance => {
   const base = testDeps(home);
   const deps: Deps = { ...base, cfg: { ...base.cfg, authEnabled: false }, coord: rec.coord, notifyLog: rec.notifyLog,
-    push: rec.push as never, presence: rec.presence as never, ...over };
+    push: rec.push as never, viewers: rec.viewers as never, ...over };
   const app = Fastify();
   registerCoordRoutes(app, deps, new Bus(), SESSION_OK, { tmux: deps.tmux, queue: deps.queue, readAsk: async () => null });
   return app;
@@ -726,11 +726,11 @@ describe("coord/routes.ts POST /api/asks/:id/answer (the parent's answer): recor
       updatedAt: now, ask: { questions: [QUESTION] }, subagents: [],
     }));
     const run: Runner = async (_cmd, args) => (args[0] === 'capture-pane'
-      ? { code: 0, stdout: ASK_PANE, stderr: '' } : { code: 0, stdout: '', stderr: '' });
+      ? { ran: true, code: 0, stdout: ASK_PANE, stderr: '' } : { ran: true, code: 0, stdout: '', stderr: '' });
     const rec = await feedRecorder(home);
     rec.setVisible([B]);                                     // the record gate does not read presence
     const app = await buildServer({ ...testDeps(home, run), mailToken: TOKEN, coord: rec.coord, notifyLog: rec.notifyLog,
-      push: rec.push as never, presence: rec.presence as never });
+      push: rec.push as never, viewers: rec.viewers as never });
     try {
       const id = rec.coord.insertAsk({ childId: B, parentId: PARENT, runId: null, askKey: ASK_KEY, askAt: now,
         dialogId: 'dlg-1', question: QUESTION.question, options: QUESTION.options.map((o) => o.label), now });
@@ -780,13 +780,13 @@ describe("coord/routes.ts POST /api/approvals/:id/rule (the ruling's journal row
     afterEach(async () => { if (fx) await fx.close(); fx = undefined; });
 
     // The ruling route reads the harness's own Presence and pushes through the harness's own sink (`f.sent`), not the
-    // recorder's: each row sets the child visible (or not) on `f.presence` and asserts `f.sent` gained nothing, so a
+    // recorder's: each row sets the child visible (or not) on `f.viewers` and asserts `f.sent` gained nothing, so a
     // push added to the writer, or a record gated on presence, is seen.
     const ruled = async (fail: boolean, verdict: 'allow' | 'deny', visible: boolean) => {
       const f = await standardFixture();
       fx = f;
       const rec = await feedRecorder(f.home, { coord: f.coord, notifyLog: f.log });
-      if (visible) f.presence.setVisible(Symbol('pin'), CHILD);
+      if (visible) f.viewers.setVisible(Symbol('pin'), CHILD);
       const minted = await f.request(requestBody(hookInput({ command: 'rm -rf build' })));
       expect(minted.statusCode, 'the premise: the request is held').toBe(201);
       const id = (minted.json() as { id: number }).id;
@@ -856,7 +856,7 @@ const CLAIM_RUN = 7;
 const reclaimRig = async (visible: boolean) => {
   const home = mkTmp('ccrc-feed-pin-reclaim-');
   const argv: string[][] = [];
-  const base = testDeps(home, async (_cmd, args) => { argv.push(args); return { code: 1, stdout: '', stderr: '' }; });
+  const base = testDeps(home, async (_cmd, args) => { argv.push(args); return { ran: true, code: 1, stdout: '', stderr: '' }; });
   const reg = base.cfg.registryDir;
   mkdirSync(reg, { recursive: true });
   const rec = await feedRecorder(home);
@@ -876,7 +876,7 @@ const reclaimRig = async (visible: boolean) => {
     coord: rec.coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: ['ws-audit', 'ws-reclaim', RECLAIM_CAP, ACTOR_FLAGS_CAP] },
-    presence: rec.presence, notifyLog: rec.notifyLog, push: rec.push,
+    viewers: rec.viewers, notifyLog: rec.notifyLog, push: rec.push,
   };
   const reclaim = () => reclaimChild(deps as ChildReclaimDeps, {
     sessionId: A, runId: opened.id, trigger: 'close', deferExpired: false, deferredSinceMs: null,
@@ -920,7 +920,7 @@ const keptDeps = async (fail: boolean) => {
   const rec = await feedRecorder(mkTmp('ccrc-feed-pin-kept-'));
   rec.setVisible([A]);
   if (fail) rec.archiveThrowsOn('every');
-  const deps = { coord: rec.coord, notifyLog: rec.notifyLog, presence: rec.presence, push: rec.push };
+  const deps = { coord: rec.coord, notifyLog: rec.notifyLog, viewers: rec.viewers, push: rec.push };
   return { rec, deps };
 };
 const KEPT: ChildReclaimKeptAttention = { kind: 'kept', sessionId: A, runId: CLAIM_RUN, word: 'coordinating',
@@ -983,13 +983,13 @@ describe("coord/expireArchived.ts's row (recordExpireFeed): recorded always, nev
   const expired = async (fail: boolean) => {
     const home = mkTmp('ccrc-feed-pin-expire-');
     const argv: string[][] = [];
-    const base = testDeps(home, async (_cmd, args) => { argv.push(args); return { code: 1, stdout: '', stderr: '' }; });
+    const base = testDeps(home, async (_cmd, args) => { argv.push(args); return { ran: true, code: 1, stdout: '', stderr: '' }; });
     mkdirSync(base.cfg.registryDir, { recursive: true });
     const rec = await feedRecorder(home);
     rec.setVisible([ID]);                                    // the record gate does not read presence
     const deps: ExpireArchivedDeps = { coord: rec.coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
       fleetState: { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: [] },
-      presence: rec.presence, notifyLog: rec.notifyLog };
+      viewers: rec.viewers, notifyLog: rec.notifyLog };
     const out = await expireArchived(deps, { sessionId: ID, archivedAt: 1_789_000_000, expiresAt: 1_789_604_800 });
     expect(out, 'the premise').toMatchObject({ kind: 'deferred', why: 'unsupported' });
     expect(argv, 'SAFETY: no ccd verb was composed').toEqual([]);
@@ -1086,9 +1086,9 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
         recordFeedEvent: (epoch, ev) => rec.coord.recordFeedEvent(epoch, ev),
         run: () => ({ ok: true as const, run: { state: 'working', reviews: null } }) as never,
       },
-      runCcd: async (a) => { argv.push([...a]); return { ok: true, stdout: '', stderr: '', killed: false, signal: null }; },
+      runCcd: async (a) => { argv.push([...a]); return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null }; },
       fleetState: { ccdVerbs: ['hibernate', ACTOR_FLAGS_CAP] } as unknown as FleetState,
-      presence: { isOpen: () => false },
+      viewers: { isOpen: () => false },
       notifyLog: rec.notifyLog,
       liveWord: async () => ({ ok: true, word: 'idle', since: null }),
       turnVerdict: async () => 'idle',
@@ -1144,15 +1144,15 @@ describe('the executors\' writers, handed a push sink: recorded whatever the pre
     const home = mkTmp('ccrc-feed-pin-c1e-');
     const rec = await feedRecorder(home);
     rec.setVisible(visible ? [A, EXPIRE_ID, CLAIMANT] : []);
-    return { home, rec, deps: { coord: rec.coord, notifyLog: rec.notifyLog, presence: rec.presence, push: rec.push } };
+    return { home, rec, deps: { coord: rec.coord, notifyLog: rec.notifyLog, viewers: rec.viewers, push: rec.push } };
   };
   /** The expiry writer's input, from the executor itself (no expire capability: `deferred` before any argv). */
   const expiryOutcome = async (home: string, rec: FeedRecorder) => {
-    const base = testDeps(home, async () => ({ code: 1, stdout: '', stderr: '' }));
+    const base = testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' }));
     mkdirSync(base.cfg.registryDir, { recursive: true });
     const deps: ExpireArchivedDeps = { coord: rec.coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
       fleetState: { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: [] },
-      presence: rec.presence, notifyLog: rec.notifyLog };
+      viewers: rec.viewers, notifyLog: rec.notifyLog };
     return { deps, out: await expireArchived(deps, { sessionId: EXPIRE_ID, archivedAt: 1_789_000_000, expiresAt: 1_789_604_800 }) };
   };
 

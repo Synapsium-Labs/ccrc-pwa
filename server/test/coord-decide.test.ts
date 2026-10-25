@@ -65,12 +65,12 @@ function makeRunner(home: string, cfg: { wsAddCreates?: string[]; fail?: Readonl
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
-    if (cfg.fail?.has(verb)) return { code: 1, stdout: '', stderr: `${verb} failed` };
+    if (cfg.fail?.has(verb)) return { ran: true, code: 1, stdout: '', stderr: `${verb} failed` };
     if (verb === 'ws-add') {
       for (const id of cfg.wsAddCreates ?? [`${PROJECT}-fresh`]) seed(home, id);
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 }
@@ -115,8 +115,9 @@ describe('dispatchRun, called directly with no CoordMutex in the loop (D-46, at 
     // preflight every successful dispatch records (wave 2, F2), plus the
     // `child-omitted:no-child-argv-cap` row a fresh spawn journals on a box
     // with no `child-argv-v1` (`fleetState: undefined` is no evidence, so
-    // `capSupported` refuses — child-workspace reclamation wave 1).
-    expect(coord.runEvents(opened.id).length).toBe(3);
+    // `capSupported` refuses — child-workspace reclamation wave 1), plus the `route-defaulted` row (D-6794) and the
+    // `route-omitted` row the same missing evidence earns it.
+    expect(coord.runEvents(opened.id).length).toBe(5);
   });
 });
 
@@ -133,7 +134,7 @@ function makeCountingRunner(home: string): { run: Runner; calls: string[][] } {
       n += 1;
       seed(home, `demo-race${n}`);
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 }

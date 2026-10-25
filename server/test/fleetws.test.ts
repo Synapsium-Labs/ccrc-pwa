@@ -177,7 +177,7 @@ describe('fleet REST + WS', () => {
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const deps = { ...testDeps(home, async () => {
       if (hold) { held++; await gate; }
-      return { code: 1, stdout: '', stderr: '' };
+      return { ran: true, code: 1, stdout: '', stderr: '' };
     }), coord };
     const bus = new Bus();
     app = await buildServer(deps, bus);
@@ -246,10 +246,10 @@ describe('fleet REST + WS', () => {
       'Enter to select · ↑/↓ to navigate · Esc to cancel',
     ].join('\n');
     const run: Runner = async (_cmd, args) => {
-      if (args.includes('has-session')) return { code: 0, stdout: '', stderr: '' };
-      if (args.includes('list-panes')) return { code: 0, stdout: '4242\n', stderr: '' };
-      if (args.includes('capture-pane')) return { code: 0, stdout: menuPane, stderr: '' };
-      return { code: 1, stdout: '', stderr: '' };
+      if (args.includes('has-session')) return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args.includes('list-panes')) return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      if (args.includes('capture-pane')) return { ran: true, code: 0, stdout: menuPane, stderr: '' };
+      return { ran: true, code: 1, stdout: '', stderr: '' };
     };
     const deps = testDeps(home, run);
     const bus = new Bus();

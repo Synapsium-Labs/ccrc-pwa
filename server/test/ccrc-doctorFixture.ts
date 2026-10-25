@@ -89,6 +89,8 @@ export function installCcrc(home: string): void {
   symlinkSync(CCRC_SRC, join(ccd, 'ccrc'));
   symlinkSync(CHECKS_SRC, join(ccd, 'ccrc-doctor-checks'));
   symlinkSync(LIB_SRC, join(ccd, 'ccrc-wrapper-shape'));
+  // The jq module the transcripts check loads (ARCH-65), beside the checks file as in a shipped tree.
+  symlinkSync(join(REPO, 'ccd', 'lib'), join(ccd, 'lib'));
   // The four shipped skill trees (release/rollout design §6): `_check_skills`
   // compares every home's installed copy against THESE, the tree the stamp
   // names — not against the `.cc-sessions` placed copy, which was stale too
@@ -1210,6 +1212,7 @@ export function healthy(prefix: string): string {
   // equally satisfied by the real thing, and `statusBox` below already made
   // this exact swap for the same reader.
   linkReal(home, 'jq');
+  linkReal(home, 'awk');
   // A pane scope with nothing parked: `_check_scopes` PASSes, and returns
   // WITHOUT settling, so the healthy fixture costs no extra second.
   plantScope(home, { procs: [4101, 4102] });
@@ -1435,7 +1438,7 @@ export function installModelsOp(home: string): void {
 }
 
 /** The five GPT-lane executables, `GPT_LANE_BINS` — the constant
- *  ccrc-install.test.ts pins to `_inst_bins`' gate: SYMLINKED into the
+ *  ccrc-install-*.test.ts pins to `_inst_bins`' gate: SYMLINKED into the
  *  fixture's shipped tree (`<home>/ccrc/ccd`, `$BOX_TREE_DIR/ccd`, what the
  *  check compares against) and COPIED into `<home>/.local/bin`, as
  *  `_inst_atomic` places them — so a case can edit the placed copy and never

@@ -44,7 +44,7 @@ const seedSession = (home: string, id: string, wrapper: string, extra: Record<st
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
 };
 
-const noopRun: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+const noopRun: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
 
 describe('reviveFleetSession — route (routing slice 6, Task 4)', () => {
   it('an older snapshot, predating this task, revives route: null — ADDITIVE, absence-permits', () => {

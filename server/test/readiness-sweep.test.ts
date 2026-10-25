@@ -17,7 +17,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO, type MeasuredRead } from '../src/io.js';
 import { isSafeProjectSegment } from '../src/coord/ledgerseed.js';
-import { seedRoster, testDeps } from './helpers.js';
+import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const NOW = 1_785_300_000_000;
@@ -61,8 +61,7 @@ const fixture = (over: { coord?: unknown } = {}): Fixture => {
   const coord = 'coord' in over
     ? over.coord
     : new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const watcher = new FleetWatcher(
-    { ...testDeps(home), cfg, io, coord } as never, new Bus(), 10_000);
+  const watcher = new FleetWatcher(withFakeClock({ ...testDeps(home), cfg, io, coord } as never), new Bus(), 10_000);
   return { watcher, reads, home, fail: () => { failing = true; } };
 };
 
@@ -223,8 +222,7 @@ describe('the sweep measures the box token on the SERVER box', () => {
       },
     };
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-    const watcher = new FleetWatcher(
-      { ...testDeps(home), cfg, io, coord } as never, new Bus(), 10_000);
+    const watcher = new FleetWatcher(withFakeClock({ ...testDeps(home), cfg, io, coord } as never), new Bus(), 10_000);
     return { watcher, refused, home };
   };
 

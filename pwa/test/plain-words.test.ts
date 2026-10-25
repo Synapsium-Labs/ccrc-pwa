@@ -30,7 +30,7 @@
 // WHOLE WORDS, case-insensitive, except the exact lowercase literal `claude is asking` (the sentence-case
 // `Claude is asking` is the new kicker and is right). A word leaves the list only by a change that says why.
 //
-// THE FILES: the five an ask surface's words live in, plus `lib/api.ts`'s two `dialog-open` sentences, which the
+// THE FILES: the five an ask surface's words live in, plus `lib/refusalWords.ts`'s two `dialog-open` sentences, which the
 // composer says when an ask is up (read, not edited: they already pass).
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
@@ -38,7 +38,7 @@ import ts from 'typescript';
 import { isSpecifier, parseTs } from './literalWalker';
 
 const SESSION = path.join(import.meta.dirname, '..', 'src', 'session');
-const API = path.join(import.meta.dirname, '..', 'src', 'lib', 'api.ts');
+const API = path.join(import.meta.dirname, '..', 'src', 'lib', 'refusalWords.ts');
 
 /** The words an operator never reads, each with what is said instead and why. */
 const FORBIDDEN: readonly { readonly word: RegExp; readonly name: string; readonly say: string; readonly why: string }[] = [
@@ -117,7 +117,7 @@ export interface Visible {
 }
 
 /** Every operator-visible string in `source`, by position (see the header). `only` limits the Record tables read to the
- *  named keys (api.ts's two `dialog-open` sentences). */
+ *  named keys (refusalWords.ts's two `dialog-open` sentences). */
 export function visibleStrings(file: string, text?: string, only?: readonly string[]): Visible[] {
   const src = parseTs(file, text);
   const found: Visible[] = [];
@@ -203,13 +203,24 @@ export function offences(file: string, strings: readonly Visible[]): string[] {
 }
 
 const OWNED = ['AskParts.tsx', 'askWords.ts', 'EnvelopeSheet.tsx', 'DialogSheet.tsx', 'askLive.ts'].map((f) => path.join(SESSION, f));
+const PALETTE = ['registry.ts', 'sessionEntries.ts'].map((f) => path.join(import.meta.dirname, '..', 'src', 'command', f));
 
 describe('the ask surfaces speak plainly (D-6325)', () => {
   it.each(OWNED.map((f) => [path.basename(f), f] as const))('%s says none of the forbidden words where an operator reads', (_name, file) => {
     expect(offences(file, visibleStrings(file)), 'rewrite the sentence; the table above says what to say').toEqual([]);
   });
 
-  it("api.ts's two dialog-open sentences, which the composer says while an ask is up, pass too", () => {
+  // The top search's words (D-6714, T5a): the palette's word home and the session entries' labels and groups.
+  it.each(PALETTE.map((f) => [path.relative(path.join(import.meta.dirname, '..', 'src'), f), f] as const))(
+    '%s (the top search) says none of the forbidden words where an operator reads',
+    (_name, file) => {
+      const strings = visibleStrings(file);
+      expect(strings.length, 'the scan reads its sentences').toBeGreaterThan(0);
+      expect(offences(file, strings), 'rewrite the sentence; the table above says what to say').toEqual([]);
+    },
+  );
+
+  it("refusalWords.ts's two dialog-open sentences, which the composer says while an ask is up, pass too", () => {
     const strings = visibleStrings(API, undefined, ['dialog-open']);
     expect(strings.map((s) => s.text), 'both sentences are read').toHaveLength(2);
     expect(offences(API, strings)).toEqual([]);

@@ -15,7 +15,7 @@ import { mkTmp } from './tmpHelpers.js';
 const SELECT_MJS = path.resolve(__dirname, '../../.github/ci/select.mjs');
 
 // Same fixture-git-identity idiom as build-release.test.ts / release-main.test.ts
-// / ccrc-install.test.ts (grep 'GIT_AUTHOR_EMAIL' server/test/*.ts): an
+// / ccrc-install-*.test.ts (grep 'GIT_AUTHOR_EMAIL' server/test/*.ts): an
 // `@example.invalid` address, never a real one — topology-clean forbids a real
 // `user@host` token in committed text, and this file's own literals are read by
 // that guard too.

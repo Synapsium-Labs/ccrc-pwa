@@ -60,7 +60,7 @@ const OTHER_ID = '1f1e1d1c-1b1a-4918-9716-151413121110';
  *  `row.supersededBy` while every named suite stayed green. */
 const MISSING_ID = '2f2e2d2c-2b2a-4928-9726-252423222120';
 
-const failingRunner: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+const failingRunner: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
 
 const measured = (over: Partial<NodeMeasurement> = {}): NodeMeasurement => ({
   nodeId: FLEET_ID, role: 'fleet', label: FLEET_LABEL,
@@ -1130,7 +1130,7 @@ describe('POST /api/updates/intent dispatches in the same request (update-manage
     const calls: [string, string[]][] = [];
     const refusing: Runner = async (cmd, args) => {
       calls.push([cmd, [...args]]);
-      return { code: 1, stdout: '', stderr: 'update: fixture refusal\n' };
+      return { ran: true, code: 1, stdout: '', stderr: 'update: fixture refusal\n' };
     };
     // The spawn's `home` only builds the launcher path (`updateLauncherPath`), which `refusing` never
     // executes — the argv itself is pinned by `update-apply-routes.test.ts`, not here.

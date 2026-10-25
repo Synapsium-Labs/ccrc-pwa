@@ -55,7 +55,7 @@ describe('childReclaimPauseRead — three answers off one listing', () => {
 const fixture = async (over: { visible?: boolean } = {}) => {
   const home = mkTmp('ccrc-child-reclaim-paused-');
   const calls: string[][] = [];
-  const base = testDeps(home, async (_cmd, args) => { calls.push(args); return { code: 1, stdout: '', stderr: '' }; });
+  const base = testDeps(home, async (_cmd, args) => { calls.push(args); return { ran: true, code: 1, stdout: '', stderr: '' }; });
   const reg = base.cfg.registryDir;
   mkdirSync(reg, { recursive: true });
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
@@ -80,7 +80,7 @@ const fixture = async (over: { visible?: boolean } = {}) => {
     coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: ['ws-audit', 'ws-reclaim', RECLAIM_CAP, ACTOR_FLAGS_CAP] },
-    presence: { isVisible: (id: string) => over.visible === true && id === 'demo-a' },
+    viewers: { isVisible: (id: string) => over.visible === true && id === 'demo-a' },
     notifyLog,
   };
   const ccdCalls = (): string[][] => calls.filter((c) => c[0] === 'ws-audit' || c[0] === 'ws-reclaim');
@@ -118,7 +118,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
     expect(f.ccdCalls()).toEqual([]);
   });
 
-  it('is read BEFORE presence: a watched child under a raised switch says paused-at-server, not presence', async () => {
+  it('is read BEFORE viewers: a watched child under a raised switch says paused-at-server, not presence', async () => {
     // The reason that outlasts the watcher, and the one no ceiling reaches past.
     const f = await fixture({ visible: true });
     f.raise();

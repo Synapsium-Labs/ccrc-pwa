@@ -527,7 +527,7 @@ function concreteUrl(key: string): string {
 
 /** A measured runner exit (`ExecResult`), so the adapter's check 1 reads both halves as measured. */
 function m54Exit(code: number, stdout: string): ExecResult {
-  return { code, stdout, stderr: code === 0 ? '' : 'boom', killed: false, signal: null };
+  return { ran: true, code, stdout, stderr: code === 0 ? '' : 'boom', killed: false, signal: null };
 }
 
 /**

@@ -59,12 +59,8 @@ const depsFor = (home: string, coord: CoordStore, verdict: SessionVerdict,
 
 const blindIO = (): FleetIO => ({ ...localIO, readdir: async () => null });
 
-/** Lists ONCE, then goes blind. The shape D-1144's third arm needs and no other
- *  fixture in this file can state: `readSessionRecord` opens with a listing that
- *  SUCCEEDS (so the read is `absent`, not `unlistable`), and the consumer's
- *  re-listing — the one that tells a proven absence from a half-written row —
- *  then fails. `blindIO` above cannot reach it: it fails the FIRST listing, so
- *  the ladder never leaves the `unlistable` rung. */
+/** Lists ONCE, then goes blind: the first listing SUCCEEDS (so the read is `absent`, not
+ *  `unlistable`) and any later one fails. `blindIO` above fails the FIRST listing. */
 const listsOnceThenBlindIO = (): FleetIO => {
   let listings = 0;
   return { ...localIO, readdir: async (dir: string) => (listings++ === 0 ? localIO.readdir(dir) : null) };
@@ -74,7 +70,7 @@ const listsOnceThenBlindIO = (): FleetIO => {
  *  words for it are "a session mid-write or mid-teardown" (registry.ts:488-505).
  *  `<id>.uuid` is on disk, so `readSessionRecord`'s first rung passes it through;
  *  the identity triple is incomplete, so `buildRecord` drops the row and the read
- *  comes back `absent` — the SAME word a session that was never listed gets. This
+ *  comes back `unmeasurable`, not the `absent` a session that was never listed gets. This
  *  is the input D-1144 exists for: on a live fleet it is a coordinator between two
  *  `_reg_set` writes, and rung 1 used to call it dead. */
 const seedHalfWritten = (home: string, id: string): void => {
@@ -105,7 +101,7 @@ const seedEmptyIdentity = (home: string, id: string): void => {
 const expectListedButUnassembled = async (home: string, id: string): Promise<void> => {
   expect(readdirSync(path.join(home, '.cc-sessions'))).toContain(`${id}.uuid`);
   expect(await readSessionRecord(localIO, testDeps(home).cfg, id))
-    .toEqual({ kind: 'absent' });
+    .toEqual({ kind: 'unmeasurable' });
 };
 
 describe('measureClaimant — three answers, and the inputs that collapse into each', () => {
@@ -178,19 +174,15 @@ describe('measureClaimant — three answers, and the inputs that collapse into e
     expect(asked).toBe(0);
   });
 
-  it('a re-listing that FAILS is UNMEASURABLE — doubt in front of a destructive act refuses', async () => {
-    // The fixture is the DEAD-answering one above, id for id: DEAD is genuinely
-    // not in the first listing. What changes is that the evidence separating a
-    // proven absence from a half-written row is no longer obtainable, because
-    // `SingleRead` threw away the first listing's own answer and the second
-    // listing failed. `dead` here would be a guess, and the guess proceeds.
+  it('a proven absence is DEAD on the one listing — no second listing is paid or needed (D-1145)', async () => {
+    // `SingleRead` names the listed-but-unassembled row itself now, so the consumer's old re-listing (whose failure
+    // answered `unmeasurable`) is gone: a listing that succeeded and does not name the id is the whole proof.
     const home = mkTmp('ccrc-reclaim-');
     seedRow(home, LIVE);
     const v = await measureClaimant(
       depsFor(home, store(home), GONE, listsOnceThenBlindIO()), DEAD, NOW);
-    expect(v.state).toBe('unmeasurable');
-    expect(v.why).toContain('stopped listing');
-    expect(v.why).not.toContain('listed cleanly');   // and it does not borrow the dead sentence
+    expect(v).toMatchObject({ state: 'dead', cause: 'absent' });
+    expect(v.why).toContain('listed cleanly');
   });
 
   it('a live pane is ALIVE, and the lifecycle is never consulted', async () => {

@@ -8,7 +8,7 @@ import type { TurnVerdict } from './archiveDoor.js';
 import { fieldMeasured, readRegistryMeasured } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
 import {
-  CCD_ARGV, CHILD_ARGV_CAP, ROUTE_ARGV_CAP, capSupported, ccdCan, sweepDec, type ActorFlags,
+  CCD_ARGV, CHILD_ARGV_CAP, ROUTE_ARGV_CAP, ROUTE_DEFAULT_CAP, capSupported, ccdCan, sweepDec, type ActorFlags,
 } from '../ccdargv.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
 import {
@@ -381,6 +381,8 @@ interface Bound {
   /** D-5238: what the resume gate measured, read again at the act. `null` on a fresh spawn. */
   liveGate: SpawnPollTarget | null;
   adopted: boolean; adoptedSpawn: SpawnVerdict | null;
+  /** D-6794: the default route was withheld (no `route-default-v1`), so `route-defaulted` is not journaled. */
+  defaultOmitted: boolean;
 }
 
 /**
@@ -390,13 +392,25 @@ interface Bound {
  * `decideDispatch`'s `bind` step; this function only reads, spawns and writes.
  */
 async function spawnFresh(
-  deps: DispatchRunDeps, run: DispatchRun, routeFields: RouteFields | null, childSlug: string | null,
-  dispatchDec: ActorFlags | null,
+  deps: DispatchRunDeps, run: DispatchRun, routeFieldsIn: RouteFields | null, childSlug: string | null,
+  dispatchDec: ActorFlags | null, routeDefaulted = false,
 ): Promise<Bound | DispatchHalt> {
   const coord = deps.coord;
   // [registry-refused:refuses] an unlistable registry refuses before anything is spawned.
   const before = decideDispatch({ step: 'before', read: await readRegistryMeasured(deps.io, deps.cfg) });
   if (before.kind !== 'go') return stopped(coord, run.id, before);
+  // D-6794: the table's default row rides `--route-default`, so ccd places by its class as a PREFERENCE and a lane at
+  // the seven-day ceiling still places (an explicit class is strict and would refuse). A box without
+  // `route-default-v1` would bind that flag as the project, and sending the pairs without it would make the class
+  // strict, so such a box gets NO default route at all, journalled: the argv that shipped before D-6794.
+  let routeFields = routeFieldsIn;
+  // A box without `route-argv-v1` drops every `--route` already (journalled below as `route-omitted:no-route-argv-cap`),
+  // so the default-specific withholding applies only where the pairs would otherwise have been sent.
+  const defaultOk = routeDefaulted && routeFields !== null && capSupported(deps.fleetState, ROUTE_DEFAULT_CAP);
+  if (routeDefaulted && routeFields !== null && !defaultOk && capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
+    coord.recordRunEvent(run.id, 'coordinator', 'route-omitted:no-route-default-cap');
+    routeFields = null;
+  }
   // ROUTING (routing spec §5.3, slice 4, Task 3): gated on `ROUTE_ARGV_CAP`, the ARGV-PARSING capability: a
   // DIFFERENT token from the `ROUTE_CAP` the wave N>=2 arm gates the `ccd route` VERB on. `routeFields === null`
   // sends the identical bare argv regardless of the cap, so an absent token never fires the omission event for a
@@ -412,7 +426,7 @@ async function spawnFresh(
   // declares `--no-rc` at creation (the 2026-08-13 ruling) and WHO (D-410's remedy): the same `dispatchDec` the hold
   // spends, so the journal's `create` row and the `hold` row that follows read as one act by one lane. `null` (an
   // older ccd, no `actor-flags-v1`) composes the bare argv that shipped before.
-  const argv = CCD_ARGV.wsAddWorker(run.project, dispatchDec, capSupported(deps.fleetState, ROUTE_ARGV_CAP) ? routeFields : null, child, childSlug);
+  const argv = CCD_ARGV.wsAddWorker(run.project, dispatchDec, capSupported(deps.fleetState, ROUTE_ARGV_CAP) ? routeFields : null, child, childSlug, defaultOk);
   // BEFORE the call, never after: the only moment the run can say "a dispatch is in flight" (the id does not exist
   // yet). ONE MEASUREMENT, SPENT TWICE (child-reclamation spec §5.1): this instant is this attempt's
   // `dispatchStartedAt` AND, only for a clean spawn, this session's `sessionBornAt`.
@@ -435,7 +449,7 @@ async function spawnFresh(
   if (routeFields !== null && capSupported(deps.fleetState, ROUTE_ARGV_CAP)) coord.recordRunEvent(run.id, 'coordinator', armEventDetail(routeFields));
   // `winner.wrapper` is MEASURED: the bind step refuses any same-project record whose identity is not.
   return { sessionId: winner.id, workspace: winner.workspace, branch: winner.branch, wrapper: winner.wrapper,
-    resumed: false, liveGate: null, adopted, adoptedSpawn };
+    resumed: false, liveGate: null, adopted, adoptedSpawn, defaultOmitted: routeDefaulted && routeFields === null && routeFieldsIn !== null };
 }
 
 /**
@@ -473,7 +487,7 @@ async function resumeBound(
     hookState: (uuid) => readHookStateMeasured(deps.io, deps.cfg.registryDir, sessionId, uuid, Date.now()),
     turnVerdict: deps.turnVerdict });
   if (d.kind !== 'go') return stopped(deps.coord, run.id, d);
-  return { sessionId, ...d.plan, resumed: true, adopted: false, adoptedSpawn: null };
+  return { sessionId, ...d.plan, resumed: true, adopted: false, adoptedSpawn: null, defaultOmitted: false };
 }
 
 export async function dispatchRun(
@@ -487,7 +501,7 @@ export async function dispatchRun(
   const req = decideDispatch({ step: 'request', read: coord.run(id), brief, items, route, slug,
     prefixes: { work: WORKER_KICKOFF_PREFIX, review: REVIEWER_KICKOFF_PREFIX } });
   if (req.kind !== 'go') return stopped(coord, id, req);
-  const { run, body, itemTitles, routeFields, childSlug, hold } = req.plan;
+  const { run, body, itemTitles, routeFields, routeDefaulted, childSlug, hold } = req.plan;
   // PAUSE / KILL-SWITCH FIRST, then the caps, before anything is counted or spawned.
   const admit = decideDispatch({ step: 'admit', names: await deps.io.readdir(deps.cfg.registryDir),
     caps: () => capsMeasured(coord) });
@@ -534,9 +548,12 @@ export async function dispatchRun(
   const dispatchDec = sweepDec(deps.fleetState, `run:${run.id} dispatch`);
 
   const bound = run.sessionId === null
-    ? await spawnFresh(deps, run, routeFields, childSlug, dispatchDec)
+    ? await spawnFresh(deps, run, routeFields, childSlug, dispatchDec, routeDefaulted)
     : await resumeBound(deps, run, run.sessionId, dispatchDec);
   if ('ok' in bound) return bound;
+  // D-6794: the journal says the route was the table's row, not the coordinator's. It records the decision; a box
+  // without `route-argv-v1` drops `--route` and journals `route-omitted` beside it. Written after the spawn's refusals.
+  if (routeDefaulted && !bound.defaultOmitted) coord.recordRunEvent(id, 'coordinator', `route-defaulted:${run.kind}`);
   const { sessionId, resumed, liveGate, adopted, adoptedSpawn } = bound;
 
   // The hold: claimed AS SOON AS the session id exists, and on a resume BEFORE the injected `/clear` (R7: the `/clear`

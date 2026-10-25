@@ -94,9 +94,9 @@ const tmuxRunner = (panes: (string | null)[]): { run: Runner; calls: string[][] 
     if (args[0] === 'capture-pane') {
       const pane = panes[Math.min(i, panes.length - 1)] ?? null;
       i++;
-      return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 };

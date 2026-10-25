@@ -54,7 +54,7 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const CCD_UPDATE_SYNC = path.join(REPO, 'ccd', 'ccd-update-sync');
 const TOKEN = 'f'.repeat(64);
 const FLEET_ID = '0123abcd-0000-4000-8000-000000000001';
-const failingRunner: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+const failingRunner: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
 
 // W2's own fixture shapes (update-projection.test.ts), so the store is fed
 // exactly what W2's tests feed it.
@@ -174,11 +174,11 @@ function fleetNode(): string {
 }
 
 /** One run of the REAL puller against `body`. */
-function pull(home: string, body: string, health?: string): { code: number; stderr: string } {
+function pull(home: string, body: string, health?: string): { ran: true, code: number; stderr: string } {
   writeFileSync(path.join(home, 'fixture-intent-body'), body);
   if (health !== undefined) writeFileSync(path.join(home, 'fixture-health-body'), health);
   const r = spawnSync('bash', [CCD_UPDATE_SYNC], { env: nodeEnv(home), encoding: 'utf8' });
-  return { code: r.status ?? -1, stderr: r.stderr };
+  return { ran: true, code: r.status ?? -1, stderr: r.stderr };
 }
 
 const intentFile = (home: string): string => path.join(home, '.ccrc', 'update-intent');

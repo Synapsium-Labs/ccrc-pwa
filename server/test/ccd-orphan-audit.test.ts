@@ -35,7 +35,7 @@ const stubs = (o: Stubs = {}): string => {
 interface Doc {
   mode: string; pathHex: string; class: string; main: string; branch: string; head: string; verdict: string;
   refusal: string | null; detail: string; token: string | null; rescueToken: string | null;
-  newestCtimeNs: string | null; entries: number | null; floorS: number | null;
+  newestCtimeNs: string | null; entries: number | null; floorS: number | null; inside: string | null;
 }
 const audit = (p: string, pre: string = stubs()): Doc =>
   JSON.parse(h.sh(`${pre} _ws_orphan_audit ${hex(p)} || true`).trim().split('\n').pop()!) as Doc;
@@ -287,7 +287,7 @@ describe('the ladder: one case per rung, each red when its rung is deleted', () 
   }, 60_000);
 });
 
-interface Row { pathHex: string; class: string; project: string; branch: string | null; head: string; locked: boolean; prunable: boolean }
+interface Row { pathHex: string; class: string; inside: string | null; project: string; branch: string | null; head: string; locked: boolean; prunable: boolean }
 const census = (pre = ''): { truncated: boolean; rows: Row[] } =>
   JSON.parse(h.sh(`${pre} _ws_orphan_census`).trim()) as { truncated: boolean; rows: Row[] };
 
@@ -326,4 +326,106 @@ describe('the census', () => {
     audit(claudeTree('b1'));
     expect(fs.readdirSync(path.join(h.home, '.cc-sessions')).sort()).toEqual(before);
   }, 60_000);
+});
+
+// DR-22 (D-6634, spec §2.7.1 and §2.7.5): rung 11 under `$REG/nested-rescue-live` gets a rescue token, and the census
+// reaches trees nested inside ANY checkout of the repository (G4) and names the registry row that contains one.
+const MARKER = (): string => path.join(h.home, '.cc-sessions', 'nested-rescue-live');
+const exclude = (pat: string): void => { fs.appendFileSync(path.join(h.home, 'projects', 'demo', '.git', 'info', 'exclude'), `${pat}\n`); };
+/** A repository of another project inside `t`: a commit on no remote and an untracked file. */
+const foreignNested = (t: string, rel = 'nested'): string => {
+  const d = path.join(t, rel);
+  fs.mkdirSync(d, { recursive: true });
+  h.git(d, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(d, 'a.txt'), 'a\n'); h.git(d, 'add', 'a.txt'); h.git(d, 'commit', '-q', '-m', 'a');
+  fs.writeFileSync(path.join(d, 'loose.txt'), 'loose\n');
+  return d;
+};
+const reg = (id: string, wd: string): void => {
+  fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.uuid`), 'u\n');
+  fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.workdir`), wd);
+};
+/** A linked workspace of `demo` (a ccd-root tree) and a `.claude` worktree inside it. */
+const innerTree = (): { ws: string; inner: string } => {
+  const ws = ccdRoot('quiet-mesa');
+  const inner = tree(path.join(ws, '.claude', 'worktrees', 'agent-z'), 'claude/agent-z');
+  return { ws, inner };
+};
+
+describe('DR-22: rung 11 rescues a nested checkout under the marker', () => {
+  it('without the marker a nested foreign repository is nested-checkout with no rescue token', () => {
+    const t = claudeTree(); exclude('nested/'); foreignNested(t);
+    const d = audit(t);
+    expect(d.refusal, d.detail).toBe('nested-checkout');
+    expect(d.token).toBeNull(); expect(d.rescueToken).toBeNull();
+  }, 60_000);
+
+  it('with the marker the same tree still refuses nested-checkout, and carries a rescue token and no token', () => {
+    const t = claudeTree(); exclude('nested/'); foreignNested(t); fs.writeFileSync(MARKER(), '');
+    const d = audit(t);
+    expect(d.refusal, d.detail).toBe('nested-checkout');
+    expect(d.token).toBeNull();
+    expect(d.rescueToken).toMatch(/^[0-9a-f]{64}$/);
+  }, 60_000);
+
+  it('the rescue token binds the nested repository: a commit inside it mints another (the tree’s own digests held constant)', () => {
+    const t = claudeTree(); exclude('nested/'); const n = foreignNested(t); fs.writeFileSync(MARKER(), '');
+    const constIgnored = '_ws_gc_reclaimable() { REAP_SENSITIVE=(); REAP_IGNORED=(); REAP_IGNDIGEST=$(printf "" | _plat_sha256 | cut -d" " -f1); return 0; };';
+    const pre = `${stubs()} ${constIgnored}`;
+    const a = audit(t, pre); expect(a.rescueToken, a.detail).toBeTruthy();
+    expect(audit(t, pre).rescueToken).toBe(a.rescueToken);
+    fs.writeFileSync(path.join(n, 'b.txt'), 'b\n'); h.git(n, 'add', 'b.txt'); h.git(n, 'commit', '-q', '-m', 'b');
+    const b = audit(t, pre);
+    expect(b.rescueToken).toBeTruthy(); expect(b.rescueToken).not.toBe(a.rescueToken);
+  }, 60_000);
+
+  it('a nested repository the rescue cannot carry (LFS filters in its own config) stays nested-checkout with no rescue token', () => {
+    const t = claudeTree(); exclude('nested/'); const n = foreignNested(t); fs.writeFileSync(MARKER(), '');
+    h.git(n, 'config', 'filter.lfs.clean', 'git-lfs clean -- %f');
+    const d = audit(t);
+    expect(d.refusal, d.detail).toBe('nested-checkout'); expect(d.rescueToken).toBeNull();
+  }, 60_000);
+
+  it('another refusal behind rung 11 (a holder) is the answer, and no rescue token rides it', () => {
+    const t = claudeTree(); exclude('nested/'); foreignNested(t); fs.writeFileSync(MARKER(), '');
+    const d = audit(t, stubs({ cwd: '_ws_cwd_users() { _WS_CWD_USERS_WHY="process 9 holds it"; return 1; };' }));
+    expect(d.refusal, d.detail).toBe('in-use'); expect(d.rescueToken).toBeNull();
+  }, 60_000);
+});
+
+describe('DR-22: the census sees trees nested inside any checkout (G4)', () => {
+  it('a tree inside a registered workspace is classed claude with inside, and the audit names the same row', () => {
+    const { ws, inner } = innerTree(); reg('sess-x', ws);
+    const row = census().rows.find((r) => r.pathHex === hex(inner));
+    expect(row).toMatchObject({ class: 'claude', inside: 'sess-x' });
+    const d = audit(inner);
+    expect(d.verdict, d.detail).toBe('token'); expect(d.inside).toBe('sess-x');
+  }, 90_000);
+
+  it('a superpowers tree inside a linked checkout is classed superpowers; a tree in the main checkout has inside null', () => {
+    const ws = ccdRoot('quiet-mesa');
+    const sp = tree(path.join(ws, '.superpowers', 'worktrees', 'plan-z'), 'sp/plan-z');
+    const top = claudeTree();
+    const rows = census().rows;
+    expect(rows.find((r) => r.pathHex === hex(sp))).toMatchObject({ class: 'superpowers', inside: null });
+    expect(rows.find((r) => r.pathHex === hex(top))).toMatchObject({ class: 'claude', inside: null });
+  }, 90_000);
+
+  it('a tree in a directory that is no checkout of the repository stays other', () => {
+    const o = tree(path.join(h.home, 'elsewhere', '.claude', 'worktrees', 'x'), 'claude/x');
+    expect(census().rows.find((r) => r.pathHex === hex(o))!.class).toBe('other');
+  }, 90_000);
+
+  it('a row whose workdir is the tree, or lies inside it, still refuses registered (only a CONTAINING row passes)', () => {
+    const { ws, inner } = innerTree(); reg('sess-x', ws);
+    reg('sess-y', inner);
+    const at = audit(inner); expect(at.refusal, at.detail).toBe('registered');
+    reg('sess-y', path.join(inner, 'sub')); fs.mkdirSync(path.join(inner, 'sub'));
+    const inside = audit(inner); expect(inside.refusal, inside.detail).toBe('registered');
+  }, 90_000);
+
+  it('the nearest containing row is the one named', () => {
+    const { ws, inner } = innerTree(); reg('sess-far', path.dirname(ws)); reg('sess-near', ws);
+    expect(audit(inner).inside).toBe('sess-near');
+  }, 90_000);
 });

@@ -123,7 +123,7 @@ const CONTRACT = [
   "The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.",
   // Landing-order wave 1 (spec 2026-09-23 §5.1). Written with no apostrophe at
   // all, so neither the straight nor the curly spelling can drift.
-  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`.',
+  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing uses `--admin` or an update of the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.',
   // Worker stall watch, wave 3 (spec 2026-09-29 §6.1), amended by wave 7 (D-3805). Typographic apostrophes
   // and quotes, as clauses 3–12 are typed; no straight apostrophe at all.
   'A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well, whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.',
@@ -147,6 +147,14 @@ describe('the coordinator skill: its contract', () => {
     expect(flat(skill)).toContain('never read by this session');
     expect(flat(refs('wave-lifecycle.md'))).not.toContain('Review the handoff commit the way you would review any commit.');
     expect(flat(refs('wave-lifecycle.md'))).not.toContain('your ordinary review');
+  });
+
+  it('withdraws the loose --admin allowance (R5 as amended 2026-10-25, ruling 5)', () => {
+    const lifecycle = flat(refs('wave-lifecycle.md'));
+    expect(lifecycle).not.toMatch(/where the repository(\u2019|')?s? ruleset requires it/);
+    expect(lifecycle).not.toContain('narrow approval licence');
+    expect(lifecycle).toContain("`--admin` and GitHub API merge or enqueue calls are governed by the repository's "
+      + 'external policy authority; until that authority answers (wave 2b), a coordinator never uses them');
   });
 
   // ── the COUNT, which the verbatim pin above structurally cannot see ──────
@@ -2889,5 +2897,15 @@ describe('the stall clause quotes what the stall watch sends and reads (stall wa
       expect(reliedOn.has(q),
         `the clause quotes \`${q}\`, which is outside the constants it relies on: add the constant here, or unquote it`).toBe(true);
     }
+  });
+});
+
+describe('wave-lifecycle route default (D-6794)', () => {
+  it('says an omitted route fills the run kind default, not a bare argv', () => {
+    const text = refs('wave-lifecycle.md').replace(/\s+/g, ' ');
+    expect(text).toContain('Omitting `route` on a fresh spawn fills the run kind\'s default row');
+    expect(text).toContain('`route-defaulted:<kind>`');
+    expect(text).toContain('an empty `{}` is a passed route and is sent bare');
+    expect(text).not.toContain('sends the identical bare argv it always has');
   });
 });

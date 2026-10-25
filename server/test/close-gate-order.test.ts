@@ -32,7 +32,7 @@ function fixture(opts: { failCcd?: boolean; verbs?: string[] } = {}) {
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
-    return opts.failCcd ? { code: 1, stdout: '', stderr: 'boom' } : { code: 0, stdout: '', stderr: '' };
+    return opts.failCcd ? { ran: true, code: 1, stdout: '', stderr: 'boom' } : { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const base = testDeps(home, run);
   const deps: CloseRunDeps = {

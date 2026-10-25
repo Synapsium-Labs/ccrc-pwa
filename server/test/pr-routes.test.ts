@@ -37,8 +37,8 @@ async function app(stdout = '', code = 0, stderr = '', ccdVerbs?: string[] | nul
   // archive door refuses `status-unknown` (D-5274) ahead of the verbs these tests are about.
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
-    if (args[0] === 'list-panes' && code === 0) return { code: 0, stdout: '4242\n', stderr: '' };
-    return { code, stdout, stderr };
+    if (args[0] === 'list-panes' && code === 0) return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+    return { ran: true, code, stdout, stderr };
   };
   const deps = testDeps(seedWorkspace(), run);
   return {
@@ -130,8 +130,8 @@ describe('GET /api/sessions/:id/pr', () => {
     const calls: string[][] = [];
     const run: Runner = async (_cmd, args) => {
       calls.push(args);
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      return { code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      return { ran: true, code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
     };
     const a = await buildServer(testDeps(seedWorkspace(), run));
     const res = await a.inject({ method: 'GET', url: '/api/sessions/demo-quiet-basin/pr' });
@@ -186,7 +186,7 @@ describe('GET /api/sessions/:id/pr', () => {
       description: '', status: 'in_progress',
     }));
 
-    const run: Runner = async () => ({ code: 0, stdout: LINE, stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: LINE, stderr: '' });
     const deps = testDeps(home, run);
     const a = await buildServer(deps);
     const res = await a.inject({ method: 'GET', url: '/api/sessions/demo-quiet-basin/pr' });
@@ -224,7 +224,7 @@ describe('GET /api/sessions/:id/pr reads one registry row (D-6434)', () => {
       id: '1', subject: 'Wire the route', activeForm: 'Wiring the route', description: '', status: 'in_progress',
     }));
     const c = countingIO();
-    const run: Runner = async () => ({ code: 0, stdout: LINE, stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: LINE, stderr: '' });
     const a = await buildServer({ ...testDeps(home, run), io: c.io });
     c.reset();
     const res = await a.inject({ method: 'GET', url: `/api/sessions/${id}/pr` });
@@ -271,8 +271,8 @@ describe('GET /api/sessions/:id/pr reads its tasks beside pr-state (D-6434)', ()
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'pr-state') { await gate; return { code: 0, stdout: LINE, stderr: '' }; }
-      return { code: 1, stdout: '', stderr: '' };
+      if (args[0] === 'pr-state') { await gate; return { ran: true, code: 0, stdout: LINE, stderr: '' }; }
+      return { ran: true, code: 1, stdout: '', stderr: '' };
     };
     const a = await buildServer({ ...testDeps(home, run), io });
     try {
@@ -297,8 +297,8 @@ describe('GET /api/sessions/:id/pr reads its tasks beside pr-state (D-6434)', ()
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'pr-state') { await gate; return { code: 1, stdout: '', stderr: 'boom' }; }
-      return { code: 1, stdout: '', stderr: '' };
+      if (args[0] === 'pr-state') { await gate; return { ran: true, code: 1, stdout: '', stderr: 'boom' }; }
+      return { ran: true, code: 1, stdout: '', stderr: '' };
     };
     const a = await buildServer({ ...testDeps(home, run), io });
     try {
@@ -501,6 +501,21 @@ describe('audit and reap', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().indeterminate).toBe(true);
     expect(res.json().sentence).toMatch(/lost contact/i);
+    await a.close();
+  });
+
+  it('a reap that never ran (a dropped link, with its words on stderr) is INDETERMINATE, never a refusal (D-6840)', async () => {
+    // The agent link failing forges `code: 1` and puts the error's words on stderr, so the empty-stderr rule above
+    // never saw it: it read as `refused: 'error'`, a claim about the filesystem nobody could make.
+    const run: Runner = async (_cmd, args) => (args[0] === 'list-panes'
+      ? { ran: true, code: 0, stdout: '4242\n', stderr: '' }
+      : { code: 1, stdout: '', stderr: 'disconnected', ran: false, reason: 'transport', detail: 'disconnected' });
+    const a = await buildServer(testDeps(seedWorkspace(), run));
+    const res = await a.inject({ method: 'POST', url: '/api/sessions/demo-quiet-basin/workspace/reap',
+      payload: { expect: 'a'.repeat(64) } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().indeterminate).toBe(true);
+    expect(res.json().refused).toBeUndefined();
     await a.close();
   });
 

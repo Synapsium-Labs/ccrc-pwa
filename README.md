@@ -418,7 +418,7 @@ through your own server. What does leave the box, all of it on your behalf:
   request for each class it would move to a new model, and again on each run while that request is refused: a user
   turn that reads "Reply with the single word OK." (at most 512 tokens, streamed, at the lowest effort level the model
   lists), with no session data (see "Turning the step off" in
-  [Model classes per lane](#model-classes-per-lane-ccrc-models) for where `CCRC_MODELS_ADVANCE_BUDGET_S=0` must be set).
+  [Model classes per lane](#model-classes-per-lane-ccrc-models) for where to set `CCRC_MODELS_ADVANCE_BUDGET_S=0` (a `~/.ccrc/ccrc.env` line)).
 - **Only if you set them up** — DuckDNS and an ACME CA, as `ccrc expose` uses them (DuckDNS
   for its `duckdns` arm, the CA for `duckdns` and `byo`, neither for `ip`); your browser's
   push service once VAPID keys are set (each notification is encrypted to the
@@ -864,9 +864,9 @@ the first that fails; macOS runs the same window and re-check in-process, with n
 session stopped on purpose while the sweep walks (its unit settled `inactive` with ccd's
 `~/.cc-sessions/<id>.stopped` stamp present or its registry row purged; a stop with neither still fails) passes on a
 line of its own, as it does in `deploy.sh agent`'s sweep (a serial loop with no re-check); then the from→to report, and, after a passed gate and a
-finished sweep, the `~/ccrc-backups` prune (`CCRC_BACKUP_KEEP` from the process environment, default 10) and the coordination
-data set thinned out of every backup past the newest `CCRC_BACKUP_DATA_KEEP` (default 3, at least 2; the environment, else
-`~/.ccrc/ccrc.env`) that carry one, by an update or `ccrc backup`, never a rollback by flip (a rollback by re-install
+finished sweep, the `~/ccrc-backups` prune (`CCRC_BACKUP_KEEP`, default 10) and the coordination
+data set thinned out of every backup past the newest `CCRC_BACKUP_DATA_KEEP` (default 3, at least 2)
+that carry one, by an update or `ccrc backup`, never a rollback by flip (a rollback by re-install
 thins as the update it runs).
 Rolling back is `ccrc rollback` (below), which, like any move below the floor, prints the coord.db restore commands rather than
 auto-restoring. **Across a two-box fleet, `ccrc rollout [--to] [--server-first] [--check] [--force]`** (with `--channel`,
@@ -1190,7 +1190,7 @@ bytes are no longer the kept ones, and `unmeasured` one `ccrc` cannot show to be
 `ccd/ccrc` or its role's build missing, or its kept stamp missing, unparseable or naming another tag; neither changes a prune verdict). After an install or update whose
 gate passes, and by `ccrc versions --prune`, the trees nothing needs are removed, each by a rename to a dot-name first: never the one `~/ccrc` points at, `previous`, a
 tag this node's projection names, or a version a running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_KEEP` (default 3) complete trees
-stay. An input that cannot be read prunes nothing (a `CCRC_VERSIONS_KEEP` that is not a whole number from 0 to 9999 is one), a dead process's `.pruning-`/`.incoming.` leftover is swept once per prune, and only `--prune` removes an incomplete tree. `deploy.sh` still
+stay. An input that cannot be read prunes nothing (a `CCRC_VERSIONS_KEEP` that is not a whole number from 0 to 9999, or that `ccrc.env` names on a line the reader cannot take, is one), a dead process's `.pruning-`/`.incoming.` leftover is swept once per prune, and only `--prune` removes an incomplete tree. `deploy.sh` still
 pushes its tree through `~/ccrc`, into whichever version directory that points at.
 
 **The `ccrc` verbs at a glance** (`ccrc --help` has each one's full text; exit 0 is success, 1 the tool ran
@@ -1212,30 +1212,31 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `models <id> <subcommand>`, `models refresh <id>\|--all`, `models litellm <id>` | a lane's model-class registry, and the provider catalogue it is classified against |
 | `codex start\|stop\|status\|login <id>` | a Codex lane's LiteLLM gateway and shim; refused on a server-role box |
 | `token sync\|probe` | the box token's fleet side: `sync --from agent` is ccrc-agent's token-sync op (a one-time code on stdin, trade for the new value, write `~/.cc-secrets/ccrc-mail.token`, prove it with one call); `probe --file <path> [--url <base>]` presents a file's value once and prints only the HTTP status and accepted, refused or unmeasured |
-| `restamp <file>` | re-stamp a file carrying a `ccrc:generated` marker after its body changed |
+| `restamp <file>` | re-stamp a file carrying a `ccrc:generated` marker after its body changed; for `ccd/session-hook.sh`, regenerate its generated helpers region from `ccd/ccd` |
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same directory shape, pruned
 to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — never the backup it just made, a dir named
 at or after the second it began, or the newest earlier tree backup, the newest earlier valid coordination snapshot and the
 newest earlier one that holds data (each chosen on its own, so a newer snapshot of an empty box never evicts the last one
 with data; `deploy/coordination-snapshot.mjs` decides what is valid, and a classifier that cannot run or answers out of
-its table prunes nothing and says why), and nothing at all, exit 0, while another ccrc run holds `~/.ccrc/update.lock`, `flock` is missing or
+its table prunes nothing and says why), and nothing at all, exit 0 (1 after a setting refusal, D-6590), while another ccrc run holds `~/.ccrc/update.lock`, `flock` is missing or
 the lock cannot be measured; hand-made siblings are never touched), as update and rollback do after a passed gate.
 After its prune, and only an update or `ccrc backup` (never a rollback by flip, which takes no backup; a rollback by re-install thins as the update it runs), the run thins the coordination
 data set (D-6346): of the backups that carry one, the newest `CCRC_BACKUP_DATA_KEEP` keep it, counting this run's own first, and
 every older one loses its `coord.db`, delegation journal, checkpoint and manifest and keeps the rest (its code, `memory/`, the
-units). The knob is a whole number from 2 to 9999, default 3, read from the process environment and else from
-`~/.ccrc/ccrc.env` alone, never `~/.ccrc/exposure.env`, which no process that thins receives on Linux; `0` and `1` are refused and an
-invalid value stops the prune and the thinning alike. So does a `ccrc.env` that is
-there but cannot be read, or that names the knob on a line the reader does not take. Read as bytes, after its leading spaces and
+units). The knob is a whole number from 2 to 9999, default 3, read as every ccrc setting is (below); `0` and `1` are
+refused, and an invalid value, or a line naming the knob that the reader does not take, stops the thinning only, while the
+count prune still runs (D-6590). A `ccrc.env` that is there but cannot be read at all stops each keep it is read for
+(a keep set in the environment is never read from the file), and each says so. Read as bytes, after its leading spaces and
 tabs, a line is skipped when it is a comment (`#` or `;`) or another key's `[export ]NAME=`, read when it begins
 `CCRC_BACKUP_DATA_KEEP=`, its value taken as systemd's `EnvironmentFile=` takes it (spaces and tabs around it trimmed), and
 refused when it names the knob as a whole word any other way, `export CCRC_BACKUP_DATA_KEEP=` included; a line holding a CR
-past its lead is never skipped, a file holding a NUL byte cannot be scanned, and a file that names the knob anywhere, a comment
-included, but that the box's model of systemd cannot decide (a value a quote or a backslash carries across lines, a CR that leads
-a line or sits inside one, a non-ASCII byte in an assignment) refuses too: unmeasured is not unset (D-6365). On Linux a `ccrc.env`
-that never names the knob reads as the default, whatever else it holds but a NUL byte, since systemd cannot set it from that file; on macOS,
-whose launchd job sources the file with bash, one the model cannot decide still refuses. A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
+past its lead is never skipped, a file holding a NUL byte cannot be scanned, and a file that names the knob on a line that could
+assign it (a comment line counts only when a CR sits inside it, D-6604), but that the box's model of systemd cannot decide (a value a quote or a backslash carries across lines, a CR that leads
+a line or sits inside one, a non-ASCII byte in an assignment, the last two on any line of the file, not only the knob's own) refuses too: unmeasured is not unset (D-6365). On Linux a `ccrc.env`
+that names the knob only on comment lines with no CR inside them, or not at all, reads as the default, whatever else it holds
+but a NUL byte, since systemd cannot set it from that file; on macOS,
+whose launchd job sources the file with bash, one the model cannot decide still refuses (this knob alone; every other setting reads the Linux rule there). A data set that reads as damaged is never thinned, and its bytes stay as evidence (D-6364); past the count
 a dir is read on presence and size (a `coord.db` with no manifest is also opened for its header and tables), so damage of the
 same length there is not seen (D-6350, D-6364). On an update, `thin` also works to a time budget inside the console's deadline:
 it starts no full verification that could not finish in time, leaves the rest for the next update and exits 0 unless a dir was refused (D-6464). The newest data set from
@@ -1277,6 +1278,27 @@ tier it can prove is that lane's own. It leaves, for you to remove by hand, the 
 the `ccrc-ddns` units `ccrc expose duckdns` installed, whose timer keeps re-pointing the DNS record (after
 `--purge` removes `~/.ccrc/exposure.env` it fails every five minutes instead —
 `systemctl --user disable --now ccrc-ddns.timer` first).
+
+**ccrc's own settings.** Seven values decide what ccrc keeps or removes, how long it waits before judging an update, where
+it fetches a release from, and whether a step runs at all: `CCRC_BACKUP_KEEP`, `CCRC_BACKUP_DATA_KEEP`,
+`CCRC_VERSIONS_KEEP`, `CCRC_UPDATE_HEALTH_S`, `CCRC_UPDATE_DEADLINE_MS`, `CCRC_RELEASE_BASE_URL` and
+`CCRC_MODELS_ADVANCE_BUDGET_S`. `deploy/ccrc.env.example` documents each, with its default and range. ccrc takes each
+from its process environment, else from `~/.ccrc/ccrc.env`, read by name as systemd's `EnvironmentFile=` reads a line and
+never sourced, else the default. A console-driven update, the update watchdog and the models timer run with no shell of
+yours, so the file is where a lasting setting goes. A line ccrc cannot read stops only the act that reads it: the backup
+keep stops the count prune and the data keep the thinning (D-6590), the deadline lets no verification start this run past
+the keep-set's first (D-6591, D-6592), the health gate waits its default 90 seconds (D-6593), the release base stops the
+update before anything on the box changes (D-6594), the models budget turns the advance step off for that run (D-6595),
+and the versions keep stops the versions prune while `ccrc versions` still lists (D-6596). When `ccrc.env` cannot be
+read at all (unreadable, or holding a NUL byte), every act that reads a setting from it refuses, or falls back as its
+own text says (the health gate waits its 90 seconds; the watchdog uses the largest reading it could decide), and each
+says so. Two causes are model-wide too: a non-ASCII (UTF-8) `NAME=value` line, and a line with an inner CR. Each refuses
+every setting the file names on an assignment-capable line, whichever line the fault sits on, while a setting the file
+does not name may still read its default. The thinning's time bound takes the smallest reading of
+`CCRC_UPDATE_DEADLINE_MS` the server may hold (the environment, `ccrc.env`, and `~/.ccrc/exposure.env`, which the server
+reads too), and the watchdog the largest (D-6591, D-6602). On macOS a file the box's model of systemd cannot decide
+refuses only the settings it names, and `CCRC_BACKUP_DATA_KEEP` always (D-6587). `ccrc doctor`'s `box-settings` check
+reads `ccrc.env` alone and names a line the reader refuses (D-6599).
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
@@ -1350,13 +1372,13 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the thirty-four machine lanes the
-fleet host reaches (thirty-one box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the thirty-six machine lanes the
+fleet host reaches (thirty-three box-token-consulting coordination routes plus
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
-`/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
+`/api/runs/:id`, `/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
 `/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`) take a live session
 cookie **or** the token, which is how a coordinator reads its own wave ledger from
 the fleet host), `POST /api/token/claim` (the box token's claim door, which
@@ -1979,13 +2001,14 @@ possibly none.
 
 **Turning the step off.** `CCRC_MODELS_ADVANCE_BUDGET_S=0` turns it off. So does any value that is not a whole number
 (`off`, `false`, `-1`, `1.5`, a space): the step is off for that run, and the refresh says so in one line on standard
-error, which names the variable but not its value. Unset or empty, the budget is the default, 250; a whole number is read
-in base 10 (`0250` is 250), and one over 3600 is read as 3600. Set it in the environment of each run you mean to switch
-off. The hourly unit gets it from a drop-in of two lines (`systemctl --user edit ccrc-models.service`, then `[Service]` and
-`Environment=CCRC_MODELS_ADVANCE_BUDGET_S=0`; without the `[Service]` line systemd ignores the assignment). A hand
-`ccrc models refresh`, including the one `ccrc doctor`'s remedies name, does not read the drop-in: it reads its own
-environment, so it runs the step unless its command line sets the variable too. `~/.ccrc/ccrc.env` does not set it: the
-unit reads no environment file, and `ccrc` never sources that one. To keep one class still under every run, hold it. The
+error, which names the variable but not its value. The budget is read from the environment, else `~/.ccrc/ccrc.env`,
+else the default, 250 (an empty value is the default too); a whole number is read in base 10 (`0250` is 250), and one over
+3600 is read as 3600. The lasting place is a `CCRC_MODELS_ADVANCE_BUDGET_S=0` line in `~/.ccrc/ccrc.env`: the hourly
+timer and a hand `ccrc models refresh` (the one `ccrc doctor`'s remedies name included) both honour it. A drop-in
+(`systemctl --user edit ccrc-models.service`, then `[Service]` and `Environment=CCRC_MODELS_ADVANCE_BUDGET_S=0`; without
+the `[Service]` line systemd ignores the assignment) still works as an override for that one unit, because a set
+environment wins. A `ccrc.env` line ccrc cannot read turns the step off for that run and says why on standard error. To
+keep one class still under every run, hold it. The
 step also does nothing where there is no `flock`, where the lock directory is absent and `mkdir` is not to be had, or
 where `timeout` cannot escalate to KILL.
 
@@ -3462,9 +3485,10 @@ general remote-shell:
   and checks it's still under an allowed canonical prefix — closing the
   classic symlink-escape hole. Reads: `$HOME/.cc-sessions/`,
   `$HOME/.cc-limits/`, `$HOME/.cc-clips/`, `$HOME/.claude*/` (glob), the
-  fleet's projects root, and exactly the nine `$HOME/.ccrc` node files by
+  fleet's projects root, and exactly the ten `$HOME/.ccrc` node files by
   name (`NODE_FILES`, `shared/agent-protocol.ts`; the ninth,
-  `box-token-generation`, holds a generation id, never a token) — a live symlink inside
+  `box-token-generation`, holds a generation id, never a token; the tenth, `tmp-sweep.json`, is the tmp sweep's
+  census, which the server's census lane reads and mails from, D-6624) — a live symlink inside
   `$HOME/.ccrc` carrying one is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the update inventory refuses to read as that file; never `$HOME/.ccrc` itself. Writes: `$HOME/.cc-clips/` only. **This
   list did not widen for the transcript resolver or the supervisor
   heartbeat**: the resolver's uuid search (rungs 5 and 6 of its ladder)
@@ -4301,6 +4325,22 @@ cleanup row, and an answer that stands for the whole box is listed once.
   lane reports a change only when an act job next reads the file, so a missing "now live" or "now shadowed" row means not
   yet seen, never unchanged.
 
+**The loose arm (fleet disk retention, spec 2026-10-23 §2.4, D-6627; reverses D-5888).** The lane also takes an entry
+directly under `~/.cc-tmp` that no witness and no registry row names. Each pass asks `ccd ws-audit --collect-census` once, a
+read-only listing of those entries, classed and bounded at 1,024, every name travelling as hex. Only the `loose` class (a
+regular file or a directory of this uid) joins the population, as an id `loose:<hex>` that the temp-root id predicate refuses,
+so no witnessed argv can be built from it; a census that is unreadable or cut at its bound adds no entry, and says why. An
+entry a killed verb left in the quarantine joins by its record. The lane's licence, pacing and gates are the witnessed arm's,
+with two changes: the open-run hold's "a fresh collection whose witness names no run" does not apply (a loose entry has no run
+to wait for), and the verb is composed only while `$REG/collect-loose-live` stands **and** the lane itself is effectively
+live. The marker is read from the act job's last registry listing, after the lane's own switch, so a pause, a withdrawn
+capability or a shadowed lane stops a loose act too, and the marker alone arms nothing. Without both, the lane records
+"temp entry would be collected" once per entry and token. Nothing in the tree writes the marker; it is the operator's to
+touch by hand, as `collect-lane-live` is. It needs `collect-loose-v1` in `ccd caps`: without it the census is never asked.
+Its rows read "temp entry collected" and "temp entry would be collected", name the entry (decoded, made one safe line), and
+list no attention item, because a loose entry is no session. When the census is cut, unmeasured, past the population cap, or has quarantine records it could not read, the arm considers
+nothing it cannot vouch for and one box line ("collector / loose temp entries") says why.
+
 **The switch in Settings (child reclamation wave 10).** The lane now has two arms, then one. It is live when either
 holds:
 - the legacy file `$REG/collect-lane-live` stands and its retirement has not been recorded;
@@ -4922,7 +4962,18 @@ the PR merges while its run waits at `merging`, asking for the merge proof befor
 naming the queue's own `merge_group` CI run as the place to read why, plus a `⤺ dequeued` feed
 record. Each notice goes out once; a restart repeats neither, and since wave 3d it does not repeat
 the merged lane's `✓ merged` feed record either while that record is still in the archive (one written
-before wave 3d whose run has closed since is repeated once, at the deploy). `ci.yml` answers
+before wave 3d whose run has closed since is repeated once, at the deploy). Beside it runs the checks
+lane, `sweepLandingChecks` (stage 1 of PR landing in ccrc; its own beat, never inside the PR sweep, and every
+decision in `server/src/coord/landing.ts`): for each run at `merging` whose advance recorded an episode
+(`merging-at:<head>:<pr>:<mode>`), it reads the PR's required checks with `ccd pr-landing` (one read-only call
+per project, at most 16 sessions each, every 30 s while a check is unsettled or red and every 120 s
+otherwise) and, in `live` mode, mails the coordinator `checks:#<pr>:<episode>.<generation>:<word>@<head7>`
+once per edge — `green`, `red`, `stuck` (still unsettled, or red with nothing after it, 45 minutes on),
+`moved` (the PR head changed) or `left` (closed, draft or no longer bound) — each a `run_events` row written
+with its mail in one transaction, so a restart repeats none. In `shadow` mode, the default until an operator
+creates `landing-checks-live`, it writes the same rows as `landing-shadow:` and mails nothing;
+`landing-disabled` stops every read and edge, and only a live episode's stuck bound still goes. The lane
+merges nothing, writes no branch and touches no merge queue. `ci.yml` answers
 `merge_group` and runs
 what a pull request runs. **Workers never merge**: the session hook denies `gh pr merge` — `--auto`,
 `--squash` and `--admin` included — at any command head it can parse, after stripping quoted text,
@@ -5206,7 +5257,7 @@ removal** (below), which takes back what D-1243 wrote into each rostered home's 
 `~/.ccrc/graph-noise/_default.list`; **excludes**, `graphify-out/` and `.graphifyignore` converged
 into each tree's common-dir `info/exclude`; and **legacy hooks off** — the old per-repo graphify git
 hooks are removed if wholly graphify-generated, left in place and reported if they chain other
-content. (`server/test/ccrc-install.test.ts` pins that sequence, and
+content. (`server/test/ccrc-install-*.test.ts` pins that sequence, and
 `ccrc-install-graphify.test.ts` pins this paragraph's count against it — the enumeration went stale
 for two deviations before that guard existed.)
 
@@ -5575,15 +5626,15 @@ things at that moment: it builds a SECOND card — the files this context was wo
 community and dependents read out of the same graph — and it MEASURES the compaction, writing one line to a
 per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them opens a new output
 channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
-arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3160`), which appends the second
+arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3198`), which appends the second
 subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`:97`) before the single `jq -cn` print (`:103-105`) — and `PreCompact` and
 `PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
 working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8506-8508`), each with an operator sentence of its own at `:8558`,
-`:8566` and `:8579`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8509-8511`), each with an operator sentence of its own at `:8561`,
+`:8569` and `:8582`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5782,6 +5833,12 @@ and any doubt (the probe failing, a walk running out of time) keeps the entry.
 
 A taken entry is renamed into `<root>/.ccd-tmp-quarantine/<uuid>/<ns>.<name>`; a pass 24 hours later (1 hour
 under pressure) asks the holder probe again and deletes it, so the session has a working day to move it back.
+**Finished task output is capped, not moved.** A `tasks/*.output` regular file over 1 GiB, unheld, with no mtime or
+ctime in the last hour, is rewritten as its first 64 MiB, one marker line (`[ccd-tmp-sweep: <n> bytes cut at <ts>]`)
+and its last 64 MiB. The new file is written beside it and renamed over, so a failed write leaves the original
+byte-identical, and the holder probe is asked last, just before the rename. The census records it as a `moved` row
+of kind `output-capped` (counted `capped`, or `wouldCap` in shadow).
+
 **It ships in shadow:** without `~/.ccrc/tmp-sweep-live-arm` it records what it would take and touches
 nothing (no code in the tree creates that file; arming is the operator's). Pressure is the sweep's own
 measure of its filesystem (92% of bytes or inodes used, the same figure `shared/disk.ts` holds; `disk-twins.test.ts`
@@ -7059,6 +7116,10 @@ Three conventions carry more weight here than style:
   either side of it, resolve every other hunk as source, then restamp. `restamp` refuses a
   file with no marker, a symlink, and any generator's output under `~/.local/bin` or
   `~/.ccrc` — regenerate those with `ccrc wrappers` or `ccrc install`.
+  `ccd/session-hook.sh` carries a generated helpers region (`shared/hook-helpers.mjs`);
+  after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
+  `bash ccd/ccrc restamp ccd/session-hook.sh`. Restamping `ccd/ccd` says when the hook's
+  region has gone stale.
 
 Design records live in `docs/superpowers/specs/`; the architecture rules the code is held to
 are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`.

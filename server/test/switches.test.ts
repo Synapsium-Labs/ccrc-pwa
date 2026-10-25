@@ -11,14 +11,17 @@ import {
   COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, RECLAIM_PAUSE_MARKER,
 } from '../src/coord/rundefs.js';
 import { HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER } from '../src/coord/hibernate.js';
-import { EXPIRE_LANE_LIVE_MARKER } from '../src/archivedExpiry.js';
+import { EXPIRE_CHILD_LIVE_MARKER, EXPIRE_LANE_LIVE_MARKER, STALE_ARCHIVE_LIVE_MARKER } from '../src/archivedExpiry.js';
 import { COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
 import { DEAD_COORDINATOR_LANE_LIVE_MARKER } from '../src/deadCoordinator.js';
 import { IDLE_NUDGE_DISABLED_MARKER } from '../src/idlenudge.js';
 import { STOP_DONE_DISABLED_MARKER } from '../src/stopDone.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER } from '../src/turnidle.js';
 import { isMarkerState } from '../../shared/api.js';
-import { ASKS_DISABLED_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, SWITCHES, markerSwitchNames, readSwitches } from '../../shared/switches.js';
+import {
+  ASKS_DISABLED_MARKER, CHILD_RECLAIM_DISABLED_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER, COLLECT_LOOSE_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER,
+  NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, SWITCHES, markerSwitchNames, readSwitches,
+} from '../../shared/switches.js';
 
 /** Today's marker values, typed once here as the table the switchboard must equal. `asks-disabled` is `watch.ts`'s
  *  private constant on the base, so it has no export to read; the switchboard rows below hold it. */
@@ -30,10 +33,14 @@ const TODAY: Record<string, string> = {
   HIBERNATE_DISABLED_MARKER: 'hibernate-disabled',
   HIBERNATE_LIVE_MARKER: 'hibernate-live',
   EXPIRE_LANE_LIVE_MARKER: 'expire-lane-live',
+  EXPIRE_CHILD_LIVE_MARKER: 'expire-child-live',
+  STALE_ARCHIVE_LIVE_MARKER: 'stale-archive-live',
   COLLECT_LANE_LIVE_MARKER: 'collect-lane-live',
   DEAD_COORDINATOR_LANE_LIVE_MARKER: 'dead-coordinator-lane-live',
   ORPHAN_TREE_LIVE_MARKER: 'orphan-tree-live',
   ORPHAN_TREE_RESCUE_LIVE_MARKER: 'orphan-tree-rescue-live',
+  NESTED_RESCUE_LIVE_MARKER: 'nested-rescue-live',
+  CHILD_STALE_RECLAIM_LIVE_MARKER: 'child-stale-reclaim-live',
   IDLE_NUDGE_DISABLED_MARKER: 'idle-compact-nudge-disabled',
   MAIL_GATE_STRICT_MARKER: 'mail-gate-strict',
   MAIL_GATE_BUSY_MARKER: 'mail-gate-busy',
@@ -43,8 +50,9 @@ const TODAY: Record<string, string> = {
 describe('characterization: every exported marker constant keeps its value (D-5855)', () => {
   const EXPORTED: Record<string, string> = {
     MAIL_DISABLED_MARKER, COORDINATOR_PAUSE_MARKER, RECLAIM_PAUSE_MARKER, STOP_DONE_DISABLED_MARKER,
-    HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER, EXPIRE_LANE_LIVE_MARKER, COLLECT_LANE_LIVE_MARKER,
-    DEAD_COORDINATOR_LANE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, IDLE_NUDGE_DISABLED_MARKER, MAIL_GATE_STRICT_MARKER, MAIL_GATE_BUSY_MARKER,
+    HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER, EXPIRE_LANE_LIVE_MARKER, EXPIRE_CHILD_LIVE_MARKER, STALE_ARCHIVE_LIVE_MARKER, COLLECT_LANE_LIVE_MARKER,
+    DEAD_COORDINATOR_LANE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, NESTED_RESCUE_LIVE_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER,
+    IDLE_NUDGE_DISABLED_MARKER, MAIL_GATE_STRICT_MARKER, MAIL_GATE_BUSY_MARKER,
     MAIL_GATE_BUSY_SHADOW_MARKER,
   };
 
@@ -61,8 +69,31 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
   it('every exported marker constant is a marker row, keyed by its own name', () => {
     const markers = markerRows.map(([k, r]) => { expect('marker' in r.storage && r.storage.marker, k).toBe(k); return k; });
     expect(ASKS_DISABLED_MARKER).toBe('asks-disabled');
-    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live'].sort());
+    // D-6627: the collector's loose arm joins as a row of its own, with no writer (single-definition pins that).
+    expect(COLLECT_LOOSE_LIVE_MARKER).toBe('collect-loose-live');
+    // D-5922: the drift reconciler's push arm, a hand-armed row with no writer in the tree.
+    expect(DRIFT_PUSH_LIVE_MARKER).toBe('drift-push-live');
+    // ARCH-77 (#812): child reclaim's own off switch, a hand-touched row with no writer in the tree.
+    expect(CHILD_RECLAIM_DISABLED_MARKER).toBe('child-reclaim-disabled');
+    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live'].sort());
     expect([...markerSwitchNames].sort()).toEqual(markers.sort());
+  });
+
+  it('ARCH-77: child reclaim has its own off switch, hand-only, whose absence means armed (#812)', () => {
+    const row = SWITCHES[CHILD_RECLAIM_DISABLED_MARKER];
+    expect(row.writer).toBe('hand-only');
+    expect(row.owner).toBe('C4');
+    expect(row.default).toMatch(/^absent: /);
+    // No reader yet (the child-spent reader lands with ARCH-44): the operator sentence must not claim the switch acts today.
+    expect(row.meaning).toMatch(/Nothing reads it yet/);
+    // Absence changes nothing: a listing without the marker reads 'clear' for it and leaves every other row as it was.
+    const without = readSwitches(['mail-disabled']);
+    const withIt = readSwitches(['mail-disabled', CHILD_RECLAIM_DISABLED_MARKER]);
+    expect(without[CHILD_RECLAIM_DISABLED_MARKER]).toBe('clear');
+    expect(withIt[CHILD_RECLAIM_DISABLED_MARKER]).toBe('set');
+    expect(readSwitches(['reclaim-paused'])[CHILD_RECLAIM_DISABLED_MARKER]).toBe('clear');
+    expect({ ...withIt, [CHILD_RECLAIM_DISABLED_MARKER]: 'clear' }).toEqual(without);
+    expect(readSwitches(null)[CHILD_RECLAIM_DISABLED_MARKER]).toBe('unmeasurable');
   });
 
   it('the settings switches are rows that name their table and column', () => {

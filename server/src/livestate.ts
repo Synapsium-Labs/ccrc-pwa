@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FleetIO } from './io.js';
 import type { SessionStatus } from '../../shared/api.js';
+import { turnSays, turnWordOf } from './sessionReading.js';
 import { CLAUDE_MIN_BUILD, compareClaudeVersions, isClaudeVersion } from '../../shared/claudeVersion.js';
 
 export interface LiveState {
@@ -61,7 +62,11 @@ export interface LiveState {
  * A status we don't recognise is far likelier to be new work than new rest.
  */
 export function liveSessionStatus(status: string): SessionStatus {
-  return status === 'idle' ? 'idle' : 'busy';
+  // `keystroke` ON PURPOSE, not a display policy of its own: `SessionStatus` is not only the badge, it still gates
+  // acts (the mail delivery gate and the per-session socket, `livestate.test.ts`), and its direction is keystroke's,
+  // only `idle` is rest. `livestate.test.ts` pins every word's answer here directly, so an edit to the keystroke
+  // policy that moved this collapse reds there instead of changing the fleet badge silently.
+  return turnSays('keystroke', turnWordOf(status)) === 'rest' ? 'idle' : 'busy';
 }
 
 /**

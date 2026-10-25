@@ -69,9 +69,9 @@ const mergedLine = (extra: Record<string, unknown> = {}, number = 42): string =>
 });
 
 const runnerFor = (out: () => string): Runner => async (_cmd, args) => {
-  if (args[0] === 'pr-state') return { code: 0, stdout: out(), stderr: '' };
-  if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-  return { code: 0, stdout: '', stderr: '' };
+  if (args[0] === 'pr-state') return { ran: true, code: 0, stdout: out(), stderr: '' };
+  if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+  return { ran: true, code: 0, stdout: '', stderr: '' };
 };
 
 /** Walk a run through the ONE path `RUN_TRANSITIONS` allows to `to`. */
@@ -113,7 +113,7 @@ async function harness(first: string, opts: { run?: 'mine' | 'other'; state?: Ru
   let out = first;
   const deps = { ...testDeps(home, runnerFor(() => out)), coord, notifyLog: log,
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
-    presence: { isVisible: () => opts.visible === true } as never };
+    viewers: { isVisible: () => opts.visible === true } as never };
   let w = new FleetWatcher(deps, new Bus(), 10_000);
   const sweep = async (next?: string): Promise<void> => {
     if (next !== undefined) out = next;

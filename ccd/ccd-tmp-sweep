@@ -103,6 +103,11 @@
 # nothing under it has changed (ctime) for 6 hours (1 under pressure), and `ccd path-users` answers nobody.
 # It is renamed to the `.dead` twin, then removed with `rm -rf --one-file-system`, as the run's own `condemn` does.
 # Any doubt (a walk that cannot finish, an unreadable socket table, a probe that fails) keeps it.
+# THE OUTPUT CAP (DR-9, D-6621). A finished `tasks/*.output` regular file over 1 GiB, unheld and with no mtime or
+# ctime in the last hour, is rewritten as its first 64 MiB, one marker line (`[ccd-tmp-sweep: <n> bytes cut at <ts>]`)
+# and its last 64 MiB: written to a temp file beside it, then renamed over, so a failure anywhere leaves the original
+# byte-identical. The holder ask is the last look before the rename; a file that changed since it was measured stays.
+# The census lists it as kind `output-capped` (`wouldCap` in shadow).
 # SHADOW unless `~/.ccrc/tmp-sweep-live-arm` exists: it then lists what it would take and touches
 # nothing. No code in the tree creates that file (single-definition.test.ts pins it). The census
 # `~/.ccrc/tmp-sweep.json` is replaced whole at the end of every pass, shadow or live.
@@ -472,6 +477,10 @@ GRACE_Q = pair('TS_GRACE_QUARANTINE')
 GRACE_B = pair('TS_GRACE_BUDGET')
 CADENCE = pair('TS_CADENCE')
 BUDGET = int(E['TS_BUDGET_BYTES'])
+# the output cap (spec 2.1): a finished tasks/*.output over one "GiB" keeps its first and last 1/16 of one (64 MiB each)
+OUT_CAP = int(E['TS_UNIT_BYTES'])
+OUT_KEEP = OUT_CAP // 16
+OUT_QUIET = 3600
 TARGET = int(E['TS_TARGET_BYTES'])
 REG = E['TS_REG']
 CENSUS = E['TS_CENSUS']
@@ -513,6 +522,7 @@ try:
 except OSError:
     pass
 # path -> [start, end] of the sweep's own git probe: atimes inside it are the probe's reads, not a touch
+KEPT_MAX = 50   # a session's census row names this many kept entries and counts the rest, so the file stays readable
 pprobed = prev.get('probed') if isinstance(prev.get('probed'), dict) else {}
 probed = {}
 
@@ -833,6 +843,70 @@ if due:
             act(c, 'scratch')
         elif c['ok'] and c['age'] >= c['au']:
             bump('held' if held_of(c) == 'held' else 'holdersUnmeasured')
+
+    def same_file(p, st):
+        n = os.lstat(p)
+        return (n.st_ino, n.st_dev, n.st_size, n.st_mtime_ns) == (st.st_ino, st.st_dev, st.st_size, st.st_mtime_ns)
+
+    def cap_output(c):
+        """A finished tasks/*.output over the cap becomes its head, one marker line and its tail: written beside it,
+        then renamed over, so a failure anywhere leaves the original as it was. The holder ask is the last look
+        before the rename; a file that changed since it was measured is kept."""
+        global seq
+        p = c['path']
+        tmp = os.path.join(os.path.dirname(p), '.ccd-tmp-cap.%d.tmp' % os.getpid())
+        try:
+            st = os.lstat(p)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size <= OUT_CAP: return
+            if NOW - max(st.st_mtime, st.st_ctime) < OUT_QUIET: return
+            if ARMED and time.time() - WALL0 > LIVE_BUDGET_S:
+                bump('timeBudget'); return
+            cut = st.st_size - 2 * OUT_KEEP
+            if ARMED:
+                fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW)
+                with os.fdopen(fd, 'rb') as src, open(tmp, 'xb') as dst:
+                    if not same_file(p, st): raise OSError('changed')
+                    dst.write(src.read(OUT_KEEP))
+                    dst.write(('\n[ccd-tmp-sweep: %d bytes cut at %s]\n' % (cut, time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(NOW)))).encode())
+                    src.seek(st.st_size - OUT_KEEP)
+                    dst.write(src.read(OUT_KEEP))
+                    dst.flush(); os.fsync(dst.fileno())
+                os.chmod(tmp, stat.S_IMODE(st.st_mode))
+                os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
+            v = ccd_users(spellings(c))
+            if any(x == 'held' for x in v.values()):
+                bump('held'); raise LookupError
+            if any(x != 'nobody' for x in v.values()):
+                bump('holdersUnmeasured'); raise LookupError
+            if ARMED:
+                if not same_file(p, st): raise OSError('changed')
+                os.rename(tmp, p)
+        except LookupError:
+            try: os.unlink(tmp)
+            except OSError: pass
+            return
+        except OSError:
+            try: os.unlink(tmp)
+            except OSError: pass
+            bump('failed'); return
+        seq += 1
+        row = {'seq': seq, 'id': c['id'], 'uuid': c['uuid'], 'name': c['name'], 'kind': 'output-capped', 'bytes': cut,
+               'at': now_ms, 'shadow': not ARMED, 'quarantine': None,
+               'from': c['unit'] + '/' + c['sub'] + '/' + c['name'], 'root': c['root']['path']}
+        newrows.append(row)
+        if ARMED:
+            try:
+                with open(JOURNAL, 'a') as jf:
+                    jf.write(json.dumps(row) + '\n'); jf.flush(); os.fsync(jf.fileno())
+            except OSError: pass
+            try: c['bytes'] = os.lstat(p).st_blocks * 512
+            except OSError: pass
+        bump('capped' if ARMED else 'wouldCap')
+
+    # finished task output is capped before the budget counts, so the budget sees what is left
+    for c in cands:
+        if c['sub'] == 'tasks' and c['name'].endswith('.output') and not c.get('gone') and not c.get('wouldGo'):
+            cap_output(c)
     by = {}
     for c in cands: by.setdefault(c['uuid'], []).append(c)
     pb = {s.get('uuid'): s.get('budget') for s in prev.get('sessions', []) if isinstance(s, dict) and isinstance(s.get('budget'), dict)}
@@ -874,8 +948,9 @@ if due:
                        'scratchBytes': sum(c['bytes'] for c in cs if c['sub'] == 'scratchpad' and not c.get('gone')),
                        'tasksBytes': sum(c['bytes'] for c in cs if c['sub'] == 'tasks' and not c.get('gone')),
                        'entries': sum(1 for c in cs if not c.get('gone')),
+                       'top': [{'name': c['name'], 'bytes': c['bytes']} for c in sorted((x for x in cs if not x.get('gone')), key=lambda x: (-x['bytes'], x['name']))[:5]],
                        'budget': {'state': state, 'overSince': over_since, 'enforceAt': enforce_at,
-                                  'removedBytes': removed, 'kept': kept}}
+                                  'removedBytes': removed, 'kept': kept[:KEPT_MAX], 'keptMore': max(0, len(kept) - KEPT_MAX)}}
     bump('candidates', len(cands))
 else:
     for s in prev.get('sessions', []):
@@ -1026,7 +1101,7 @@ if [ -z "$aborted" ] && [ -n "$LIVE_ROOTS" ]; then
       TS_GRACE_QUARANTINE="$TS_AGES_QUARANTINE_GRACE" TS_GRACE_BUDGET="$TS_AGES_BUDGET_GRACE" \
       TS_CADENCE="$TS_AGES_LIVE_CADENCE" TS_BUDGET_BYTES=$((CCD_TMP_BUDGET_GB * CCD_TMP_BUDGET_UNIT_BYTES)) \
       TS_TARGET_BYTES=$((CCD_TMP_BUDGET_TARGET_GB * CCD_TMP_BUDGET_UNIT_BYTES)) TS_REG="$HOME/.cc-sessions" \
-      TS_CENSUS="$CENSUS" TS_CCD="${CCD_TMP_SWEEP_CCD:-$HOME/.local/bin/ccd}" python3 -I -c "$LIVE_PY" 9>&-)" \
+      TS_CENSUS="$CENSUS" TS_UNIT_BYTES="$CCD_TMP_BUDGET_UNIT_BYTES" TS_CCD="${CCD_TMP_SWEEP_CCD:-$HOME/.local/bin/ccd}" python3 -I -c "$LIVE_PY" 9>&-)" \
       || echo "tmp-sweep: live arm failed; the dead pass stands" >&2
     [ -n "$out" ] && live_line="${out##*$'\n'}"
     [ -n "$out" ] && [[ "$out" == *$'\n'* ]] && printf '%s\n' "${out%$'\n'*}"

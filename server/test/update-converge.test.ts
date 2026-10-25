@@ -123,7 +123,7 @@ function harness(o: {
   };
   let accepted = 0;
   const send: SendUpdateOp = o.send ?? (async () => ACCEPTED);
-  const run: Runner = o.run ?? (async (): Promise<ExecResult> => ({ code: 0, stdout: '', stderr: '' }));
+  const run: Runner = o.run ?? (async (): Promise<ExecResult> => ({ ran: true, code: 0, stdout: '', stderr: '' }));
   const recording: Runner = (cmd, args) => { spawned.push({ cmd, args }); return run(cmd, args); };
   const records: MoveFeedRecord[] = [];
   const deps: ConvergeDeps = {
@@ -349,7 +349,7 @@ describe('runDispatch — the answer decides only what happens to the lease (§1
 
   it('a server-role spawn that exits 1 on the LOCK → busy: released idle, the request standing, carrying the parent\'s FIRST stderr line, and the next run asks again (D-3411, review F1)', async () => {
     const lock = 'ccrc: update: another update holds ~/.ccrc/update.lock (pid 7, target v0.0.8)';
-    const h = harness({ run: async () => ({ code: 1, stdout: '', stderr: `${lock}\nsecond line` }) });
+    const h = harness({ run: async () => ({ ran: true, code: 1, stdout: '', stderr: `${lock}\nsecond line` }) });
     seedServer(h);
     const r = ran(await runDispatch(h.deps, T0 + 1000));
     // The lock line, then the ack advice (Step 0.1): a holder that hangs writes no report, so the row names the way out.
@@ -368,7 +368,7 @@ describe('runDispatch — the answer decides only what happens to the lease (§1
     ["an unmeasured lock (the probe's last arm)", 'ccrc: update: ~/.ccrc/update.lock could not be measured (probe rc 3) — refusing to detach a run past a lock this box cannot see; nothing on this box was changed'],
     ['a lock sentence that is NOT the first line', 'ccrc: something else\nccrc: update: another update holds ~/.ccrc/update.lock (pid 7)'],
   ])('every OTHER refusal keeps its halting spawn-failed — %s (D-3411)', async (_what, stderr) => {
-    const h = harness({ run: async () => ({ code: 1, stdout: '', stderr }) });
+    const h = harness({ run: async () => ({ ran: true, code: 1, stdout: '', stderr }) });
     seedServer(h);
     const r = ran(await runDispatch(h.deps, T0 + 1000));
     expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'released', to: 'failed' });
@@ -377,7 +377,7 @@ describe('runDispatch — the answer decides only what happens to the lease (§1
   });
 
   it('a server-role spawn that exits non-zero with NO stderr names its exit, not the generic "no message" a missing launcher would share with a silent failure (Task 5 review finding 3)', async () => {
-    const h = harness({ run: async () => ({ code: 1, stdout: '', stderr: '' }) });
+    const h = harness({ run: async () => ({ ran: true, code: 1, stdout: '', stderr: '' }) });
     seedServer(h);
     const r = ran(await runDispatch(h.deps, T0 + 1000));
     expect(r.outcome).toEqual({
@@ -545,7 +545,7 @@ describe('runDispatch — the server-role spawn (§18 "the spawn argv is absolut
     expect(() => spawn('reinstall' as RequestKind, 'v0.0.9')).toThrow(RangeError);
     // The double keeps the same contract: it throws before its runner is called.
     const calls: string[][] = [];
-    const doubled = spawnFromRunner(async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; }, '/h');
+    const doubled = spawnFromRunner(async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true, code: 0, stdout: '', stderr: '' }; }, '/h');
     expect(() => doubled('update', '; rm -rf ~')).toThrow(RangeError);
     expect(calls).toEqual([]);
   });
@@ -612,7 +612,7 @@ describe('runDispatch — the server-role spawn (§18 "the spawn argv is absolut
       boundMs: UPDATE_SPAWN_TIMEOUT_MS,
       run: () => {
         calls += 1;
-        return calls === 1 ? new Promise<ExecResult>(() => {}) : Promise.resolve({ code: 0, stdout: '', stderr: '' });
+        return calls === 1 ? new Promise<ExecResult>(() => {}) : Promise.resolve({ ran: true, code: 0, stdout: '', stderr: '' });
       },
     });
     seedServer(h);
@@ -649,7 +649,7 @@ describe('runDispatch — the server-role spawn (§18 "the spawn argv is absolut
         calls += 1;
         return calls === 1
           ? new Promise<ExecResult>((resolve) => { parked.finish = resolve; })
-          : Promise.resolve({ code: 0, stdout: '', stderr: '' });
+          : Promise.resolve({ ran: true, code: 0, stdout: '', stderr: '' });
       },
     });
     seedServer(h);
@@ -664,7 +664,7 @@ describe('runDispatch — the server-role spawn (§18 "the spawn argv is absolut
       nodeId: SERVER_ID, result: 'released', to: 'idle', detail: `busy — ${LOCAL_SPAWNING_DETAIL}`,
     });
     expect(LOCAL_SPAWNING_DETAIL).toBe('an update op is already spawning on this server');
-    parked.finish!({ code: 0, stdout: '', stderr: '' });
+    parked.finish!({ ran: true, code: 0, stdout: '', stderr: '' });
     await first;
     const r3 = ran(await runDispatch(h.deps, T0 + 3000));
     expect(h.spawned).toHaveLength(2);
@@ -884,7 +884,7 @@ describe('a move the node took leaves one feed record naming its source (wave 8 
   });
 
   it('(f) a spawn-failed release: the body names it released failed', async () => {
-    const h = harness({ run: async () => ({ code: 1, stdout: '', stderr: '' }) });
+    const h = harness({ run: async () => ({ ran: true, code: 1, stdout: '', stderr: '' }) });
     seedServer(h);
     const r = ran(await runDispatch(h.deps, T0 + 1000));
     expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'released', to: 'failed' });
@@ -948,7 +948,7 @@ describe('a move the node took leaves one feed record naming its source (wave 8 
   });
 
   it('(j) a release refused is never worded "released"', async () => {
-    const h = harness({ run: async () => ({ code: 1, stdout: '', stderr: 'boom' }) });
+    const h = harness({ run: async () => ({ ran: true, code: 1, stdout: '', stderr: 'boom' }) });
     seedServer(h);
     h.deps.store = releaseRefusedStore(h.store);
     const r = ran(await runDispatch(h.deps, T0 + 1000));
@@ -1011,7 +1011,7 @@ describe('FleetWatcher — the dispatcher runs single-flight, at the end of ever
     const deps: Deps = {
       ...base, cfg: { ...base.cfg, role: o.role ?? 'server' }, coord, fleetState,
       sendUpdateOp: (tag, kind) => { sent.push({ tag, kind }); return (o.send ?? (async () => ACCEPTED))(tag, kind); },
-      updateRunner: spawnFromRunner(async () => ({ code: 0, stdout: '', stderr: '' }), home),
+      updateRunner: spawnFromRunner(async () => ({ ran: true, code: 0, stdout: '', stderr: '' }), home),
     };
     const watcher = new FleetWatcher(deps, new Bus());
     const once = vi.spyOn(watcher as unknown as { dispatchOnce(): Promise<DispatchRunResult> }, 'dispatchOnce');

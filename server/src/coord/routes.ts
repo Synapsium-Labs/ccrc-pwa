@@ -25,7 +25,9 @@ import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
-import { renderEnvelope } from './envelope.js';
+import { readSessionSpendMeasured } from '../shares.js';
+import { boundSessionsOf, joinRunSpend } from './runSpend.js';
+import { pageInbox, renderEnvelope, renderInboxEntry } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { childReclaimGenerationRead } from './childReclaim.js';
 import { DelegationCheckpointError, type DelegationDurability } from './delegation-checkpoint.js';
@@ -64,15 +66,18 @@ import {
   isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
   parseCanonicalPositiveSafeInteger,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
-  MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
+  MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES, MAIL_INBOX_PAGE_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
   isRegistryId, isSessionIdShape, routeEventDetail,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult,
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
-  type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
+  type AdvanceOk, type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal } from '../../../shared/refusal.js';
-import { refuseAdvance, refuseRoute, refuseRun } from '../refuse.js';
+import { CHECKS_MAIL_TOKEN, mergingAtDetail, type ChecksMode } from '../../../shared/landing.js';
+import { readSwitches } from '../../../shared/switches.js';
+import { checksModeAt } from './landing.js';
+import { refuseAdvance, refuseRateLimited, refuseRoute, refuseRun } from '../refuse.js';
 import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { SessionRecord } from '../registry.js';
@@ -342,7 +347,7 @@ function childReclaimPort(deps: Deps, coord: CoordStore): (req: ChildReclaimRequ
   return (req) => {
     void deps.queue.run(req.sessionId, () => reclaimChild({
       coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState, presence: deps.presence, notifyLog: deps.notifyLog,
+      fleetState: deps.fleetState, viewers: deps.viewers, notifyLog: deps.notifyLog,
     }, req)).catch((err: unknown) => {
       console.warn(`ccrc-server: the reclaim of ${req.sessionId} threw `
         + `(${err instanceof Error ? err.message : String(err)}) — left to the sweep`);
@@ -481,6 +486,12 @@ export interface CoordRoutesHandle {
  * (architecture doc increment 4); this file keeps the token gate, the
  * `CoordMutex` and the union->status maps.
  */
+/** Global budget for `GET /api/runs/:id`: far above a board open (every open run plus a
+ *  fold of finished ones), far below a loop. ONE constant-keyed bucket for every caller (the
+ *  limiter reads no `req.ip`, like `auth/ratelimit.ts`); it runs on `preHandler`, after the
+ *  route's own auth `onRequest` hook, so an unauthenticated call never spends it. */
+export const RUN_SPEND_RATE_LIMIT = { max: 600, timeWindow: '1 minute' } as const;
+
 export function registerCoordRoutes(
   app: FastifyInstance, deps: Deps,
   // Unused by the mail routes below; kept in the signature because Task 9's
@@ -1214,6 +1225,40 @@ export function registerCoordRoutes(
   });
 
   /**
+   * `GET /api/mail/inbox?fromId=<id>&fromUuid=<uuid>` (mail inbox, spec §3.3; D-6778) — the caller's own unacked
+   * mail, rendered, oldest first, one page. The client prints each entry and acks it by `POST /api/mail/:id/ack`;
+   * this route acks nothing and writes nothing (no state, no attempt count, no stamp).
+   *
+   * Gates: the box token, then `requireAttribution` (the check `approvals show` and `asks list` use), so the
+   * pair is re-measured against the registry and nobody reads another session's mail.
+   *
+   * REFUSALS ARE NOT RECORDED (D-6779). Every refusal here goes through `requireMailToken`, `requireAttribution`
+   * or `refuseRoute`, never the ingress's recording `refuse`: `mail_rejections` is the record of mail that was
+   * refused, and a refused read refuses no mail. A stale uuid is also what a session sees for a few seconds after
+   * every `/clear`, so recording it would add a row per nudge and say nothing.
+   *
+   * Registered BEFORE `GET /api/mail/:id`; Fastify matches a static segment before a parameter either way.
+   */
+  app.get('/api/mail/inbox', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'GET /api/mail/inbox')) return;
+    const coord = deps.coord;
+
+    const q = req.query as { fromId?: unknown; fromUuid?: unknown };
+    if (typeof q.fromId !== 'string' || typeof q.fromUuid !== 'string') {
+      return refuseRoute(reply, 'bad-kind', { detail: 'fromId and fromUuid are required strings' });
+    }
+    const fromId = q.fromId;
+    if (!(await requireAttribution(reply, fromId, q.fromUuid, 'fromUuid'))) return;
+
+    const rows = coord.inboxFor(fromId);
+    const masker = deps.masker ?? SHAPE_ONLY_MASKER;
+    const entries = rows.map((r) => ({ deliveryId: r.deliveryId, text: masker.maskDeep(renderInboxEntry(r.deliveryId, r.envelope)) }));
+    const { page, remaining } = pageInbox(entries, MAIL_INBOX_PAGE_MAX_BYTES);
+    return reply.code(200).send({ ok: true, deliveries: page, remaining, abandoned: coord.abandonedCount(fromId) });
+  });
+
+  /**
    * `GET /api/mail/:id` (robust-mail-delivery spec §1.2) — the body channel
    * the reference nudge (`coord/envelope.ts`'s `renderMailNudge`) points a
    * worker at instead of typing the envelope into its pane. Serves the
@@ -1290,9 +1335,10 @@ export function registerCoordRoutes(
     // left to rule 3's child gate like `unlistable`. The open gate's `sessionId`
     // check already refuses such an id before this read.
     if (read.kind === 'unlistable' || read.kind === 'bad-id') return { kind: 'deferred' };
-    // `absent` is two populations (`readSessionRecord`'s docstring): no
-    // `.uuid` listed, and a listed row that could not be built. Only the first
-    // is row-less; a listed `.child` is the child gate's `spent-unmeasured`.
+    // `absent` (no `.uuid` listed, or a twice-observed retirement) and
+    // `unmeasurable` (a listed row that could not be built, D-1145) both reach
+    // this re-listing, which still splits them by hand: only the first is
+    // row-less; a listed `.child` is the child gate's `spent-unmeasured`.
     const names = await deps.io.readdir(deps.cfg.registryDir);
     if (names === null || names.includes(`${sessionId}.child`)) return { kind: 'deferred' };
     return names.includes(`${sessionId}.uuid`) ? { kind: 'unbuilt' } : { kind: 'absent' };
@@ -1767,21 +1813,33 @@ export function registerCoordRoutes(
     coord: CoordStore, reply: FastifyReply, run: RunRow & { sessionId: string }, id: number, to: RunState, claim: DoneClaim,
   ): Promise<FastifyReply> => {
     // Forward motion toward a review claim re-measures; retreating to `working` does not — see the route's docstring.
+    let verdict: Extract<Awaited<ReturnType<typeof verifyDone>>, { ok: true }> | null = null;
     if (to === 'awaiting-review' || to === 'merging') {
-      const verdict = await verifyDone(
+      const measured = await verifyDone(
         { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
         { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
         claim,
       );
-      if (!verdict.ok) {
-        coord.recordRejection({ code: verdict.code, runId: id, toId: run.sessionId, detail: verdict.detail });
+      if (!measured.ok) {
+        coord.recordRejection({ code: measured.code, runId: id, toId: run.sessionId, detail: measured.detail });
         queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: id,
-          kind: 'status', subject: 'wave-advance-rejected', body: `${verdict.code}: ${verdict.detail}` });
-        return reply.code(409).send({ ok: false, reject: { code: verdict.code, detail: verdict.detail } });
+          kind: 'status', subject: 'wave-advance-rejected', body: `${measured.code}: ${measured.detail}` });
+        return reply.code(409).send({ ok: false, reject: { code: measured.code, detail: measured.detail } });
       }
+      verdict = measured;
     }
 
-    const adv = coord.advance(id, to, 'coordinator');
+    // PR landing in ccrc (stage 1, spec §3.1 and §3.7): the transition row into `merging` IS the episode, so its detail
+    // is decided here, once, from the verified head and the measured PR, in the one `advance` call. Every other target
+    // keeps its exact call.
+    let episodeMode: ChecksMode | null = null;
+    let detail: string | undefined;
+    if (to === 'merging' && verdict !== null) {
+      const listing = await deps.io.readdir(deps.cfg.registryDir);
+      episodeMode = checksModeAt(readSwitches(listing), ccdCan(deps.fleetState, 'prLanding'), verdict.measured);
+      detail = mergingAtDetail(claim.handoffCommit, verdict.measured.prNumber ?? null, episodeMode);
+    }
+    const adv = detail === undefined ? coord.advance(id, to, 'coordinator') : coord.advance(id, to, 'coordinator', detail);
     if (!adv.ok) return reply.code(409).send({ ok: false, reject: adv });
     // Re-read after the advance for the fresh row. `!` is gone with the type (D-2545): an advance that succeeded and
     // then read back absent or unreadable is a real condition, and answering it honestly is cheaper than a
@@ -1789,7 +1847,9 @@ export function registerCoordRoutes(
     const after = coord.run(id);
     if (!after.ok) return refuseRoute(reply, 'run-unreadable', { detail: after.detail });
     if (after.run === null) return refuseAdvance(reply, { reject: { code: 'unknown-run' } });
-    return reply.code(200).send({ ok: true, run: toRunSummary(after.run) });
+    return reply.code(200).send(episodeMode === 'live'
+      ? { ok: true, run: toRunSummary(after.run), checksMail: CHECKS_MAIL_TOKEN } satisfies AdvanceOk
+      : { ok: true, run: toRunSummary(after.run) } satisfies AdvanceOk);
   };
 
   /**
@@ -2704,6 +2764,48 @@ export function registerCoordRoutes(
     const signals = deps.coord.runSignals(id);
     if (signals === null) return reply.code(404).send({ ok: false, error: 'unknown-run' });
     return { ok: true, signals };
+  });
+
+  /** D-6799 — ONE run, plus what its bound sessions have spent (the usage sweep's
+   *  `perCcdSession` block joined through the run's current and predecessor
+   *  sessions). ADDITIVE and MEASURING ONLY: `run` is the row `GET /api/runs`
+   *  lists, `spend` is the only new thing, and no route refuses on it. Gated like
+   *  its siblings (a session cookie OR the box token). */
+  // Rate-limited (CodeQL js/missing-rate-limiting): the one run route that fans out to the agent
+  // link per call carries its own budget. `global: false` keeps the limiter off every other route.
+  app.get('/api/runs/:id', {
+    config: { rateLimit: RUN_SPEND_RATE_LIMIT },
+    // Auth first (onRequest), then the limiter (preHandler): a refused call spends no budget.
+    errorHandler: (err, _req, reply) => {
+      if ((err as { statusCode?: number }).statusCode === 429) return refuseRateLimited(reply);
+      return reply.send(err);
+    },
+    onRequest: async (req, reply) => {
+      if (deps.cfg.authEnabled) {
+        const session = sessionAuth(req);
+        if (session.reason !== 'session') {
+          const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id');
+          if (token !== 'ok') {
+            return refuseRoute(reply, 'unauthenticated', {
+              verdict: session.verdict,
+              detail: 'GET /api/runs/:id takes a session cookie OR the box token ' +
+                `(${MAIL_TOKEN_HEADER}); the coordinator skill reads it cookieless from the fleet host`,
+            });
+          }
+        }
+      }
+    },
+  }, async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const { id: idParam } = req.params as { id: string };
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return refuseRoute(reply, 'bad-request');
+    const read = deps.coord.run(id);
+    if (!read.ok) return refuseRoute(reply, 'run-unreadable', { detail: read.detail });
+    if (read.run === null) return refuseRoute(reply, 'unknown-run');
+    const bound = boundSessionsOf(read.run.sessionId, deps.coord.runEvents(id));
+    const spend = joinRunSpend(bound, bound.length === 0 ? { kind: 'absent' } : await readSessionSpendMeasured(deps.io, deps.cfg.registryDir));
+    return { ok: true, run: toRunSummary(read.run), spend };
   });
 
   /**

@@ -69,7 +69,7 @@ const seedFleet = (home: string): void => {
 const noPrLine = (id: string): string =>
   JSON.stringify({ id, rows: [], baseShort: 'main', branch: `ws/${id}`, ahead: 1, tip: 'f'.repeat(40), checkedAt: 1 });
 const runner: Runner = async (_cmd, args) =>
-  (args[0] === 'pr-state' ? { code: 0, stdout: `${noPrLine(CHILD)}\n`, stderr: '' } : { code: 0, stdout: '', stderr: '' });
+  (args[0] === 'pr-state' ? { ran: true, code: 0, stdout: `${noPrLine(CHILD)}\n`, stderr: '' } : { ran: true, code: 0, stdout: '', stderr: '' });
 const stamp = (sha: string, version?: string): BuildInfo => ({
   sha, ref: 'main', builtAt: '2026-10-18T00:00:00Z', dirty: false, ...(version !== undefined ? { version } : {}),
 });

@@ -5,10 +5,10 @@
 // file that imports it.
 //
 // CONTAINMENT, stated once for everything below:
-//  - Every listener binds 127.0.0.1 on a port the KERNEL chose (`freePort`, or
-//    a listener told port 0). No constant port appears in this file: the fleet
-//    box's live Codex lanes hold fixed ports, and a fixture that bound one would
-//    answer as a live lane.
+//  - Every listener binds 127.0.0.1 on a port the KERNEL chose (a listener told
+//    port 0) or one `freePort` probed free below the ephemeral range. This file
+//    binds no fixed port: the fleet box's live Codex lanes hold fixed
+//    ports, and a fixture that bound one would answer as a live lane.
 //  - Direct children are tracked by the fixture HOME they serve, and
 //    `killLaneProcesses` ends them through their current-run ChildProcess
 //    handles — never by name or pattern. Node reaps a child only after it exits,
@@ -46,27 +46,87 @@ const REPO = path.resolve(here, '..', '..');
 
 // ── ports ────────────────────────────────────────────────────────────────
 
-/** A port nothing was listening on a moment ago: listen on 0, read, close. A
- *  window remains between the close and whoever binds it next; a caller that
- *  needs the port HELD passes 0 to {@link spawnListener} instead. */
-export function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
+// A port the fixture hands out is bound LATER — by a listener a case spawns, or by
+// a tier ccrc starts — so between the probe and that bind any other process on the
+// machine can take it (D-6856). Three kinds of taker, three rules:
+//  - other tests binding port 0: the kernel serves those from its ephemeral range
+//    (Linux starts at 32768, macOS higher), so every port here is BELOW it;
+//  - the one fixed-port suite in the tree: `shutdown-seal.test.ts` binds
+//    `26000 + pid % 3000`, so 26000-28999 is left out;
+//  - a parallel vitest worker running this same allocator: each worker draws from
+//    its OWN slice, keyed by `VITEST_POOL_ID` (unique among the workers alive at
+//    once), so two workers can never issue one port. Within a slice the walk
+//    starts at a random point, for two vitest runs on one machine.
+const PORT_FLOOR = 12_000;
+const PORT_CEILING = 32_000; // exclusive; under the lowest ephemeral port of any supported kernel
+/** `shutdown-seal.test.ts`'s fixed `26000 + pid % 3000`, [start, end). */
+export const SEAL_PORTS = [26_000, 29_000] as const;
+export const PORT_SLICE = 500;
+/** Every slice, in order: whole PORT_SLICE-wide runs of [PORT_FLOOR, PORT_CEILING)
+ *  that never touch SEAL_PORTS. */
+export const PORT_SLICES: readonly (readonly [number, number])[] = (() => {
+  const out: [number, number][] = [];
+  for (let lo = PORT_FLOOR; lo + PORT_SLICE <= PORT_CEILING; lo += PORT_SLICE) {
+    const hi = lo + PORT_SLICE;
+    if (hi > SEAL_PORTS[0] && lo < SEAL_PORTS[1]) continue;
+    out.push([lo, hi]);
+  }
+  return out;
+})();
+
+function probeFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
     const srv = createServer();
-    srv.once('error', reject);
-    srv.listen(0, '127.0.0.1', () => {
-      const addr = srv.address();
-      if (addr === null || typeof addr === 'string') {
-        srv.close();
-        reject(new Error('freePort: the listener reported no port'));
-        return;
-      }
-      srv.close(() => resolve(addr.port));
-    });
+    srv.once('error', () => resolve(false));
+    srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(true)));
   });
 }
 
-/** `n` DISTINCT free ports — the roster refuses two lanes sharing one, and two
- *  sequential `freePort()` calls may legitimately return the same number. */
+/** The worker's slot: `VITEST_POOL_ID` (1-based), else `VITEST_WORKER_ID`, else 0.
+ *  More live workers than slices wraps, sharing a slice (each still starts at its
+ *  own random point) — at `maxWorkers: '40%'` that takes a box over 80 cores. */
+export function poolSlot(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.VITEST_POOL_ID ?? env.VITEST_WORKER_ID;
+  const n = raw === undefined ? NaN : Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? (n - 1) % PORT_SLICES.length : 0;
+}
+
+/** One allocator over one slot's slice. `probe` and `random` exist for the
+ *  allocator's own suite; the fixture's instance uses the real ones. */
+export function portAllocator(opts: {
+  slot: number;
+  probe?: (port: number) => Promise<boolean>;
+  random?: () => number;
+}): () => Promise<number> {
+  const [lo, hi] = PORT_SLICES[opts.slot % PORT_SLICES.length]!;
+  const probe = opts.probe ?? probeFree;
+  const issued = new Set<number>();
+  let cursor = lo + Math.floor((opts.random ?? Math.random)() * (hi - lo));
+  return async () => {
+    for (let tries = 0; tries < hi - lo; tries++) {
+      const port = cursor;
+      cursor = cursor + 1 >= hi ? lo : cursor + 1;
+      if (issued.has(port)) continue;
+      if (await probe(port)) { issued.add(port); return port; }
+    }
+    throw new Error(`freePort: no free port left in ${lo}-${hi - 1}`);
+  };
+}
+
+const allocate = portAllocator({ slot: poolSlot() });
+
+/** A port nothing was listening on a moment ago, from this worker's slice — below
+ *  the kernel's ephemeral range, outside the fixed-port suite's band, disjoint
+ *  from every other live worker's, and never handed out twice by this process. A
+ *  window remains between the probe and whoever binds it next, but no other
+ *  taker named above can land in it; a caller that needs the port HELD passes 0
+ *  to {@link spawnListener} instead. */
+export function freePort(): Promise<number> {
+  return allocate();
+}
+
+/** `n` DISTINCT free ports — the roster refuses two lanes sharing one. `freePort`
+ *  never repeats within a process, so the set is belt and braces. */
 export async function freePorts(n: number): Promise<number[]> {
   const out = new Set<number>();
   while (out.size < n) out.add(await freePort());
@@ -136,7 +196,7 @@ export function codexRoster(
  *  `ccd/ccrc`). ONE test-side spelling for the install and uninstall suites,
  *  which typed this list about ten times (final review F4); the product's own
  *  census is `install-census.test.ts`, which reads the gate itself.
- *  `ccrc-install.test.ts` pins this constant against that literal, so a
+ *  `ccrc-install-*.test.ts` pins this constant against that literal, so a
  *  sixth name, or a new order, reds there before any copy can drift. The auth
  *  library `ccgpt-auth.py` is first (codex bridge Stage 1, Task 5): the files
  *  after it will read their credential through it. */
@@ -1263,7 +1323,7 @@ export async function killLaneProcesses(home: string): Promise<void> {
 //
 // WHY A JOIN AND NOT `plantSystemd` ITSELF. `plantSystemd` above plants
 // `systemctl` and `systemd-run` into `<home>/.local/bin` for the codex suites.
-// The three spine harnesses — `ccrcEnv` (ccrc-install.test.ts), `updateEnv`
+// The three spine harnesses — `ccrcEnv` (ccrc-installFixture.ts), `updateEnv`
 // (ccrc-updateFixture.ts), `verbEnv` (ccrc-uninstall.test.ts) — write their
 // OWN `systemctl` over that path on EVERY run, because theirs answer the
 // spine's verbs and plantSystemd's answers the codex tiers'. And none of them
@@ -1368,7 +1428,7 @@ function spineSystemctlBaseline(): string {
  *
  *  `opts.expectAbsent` names any of `systemd-run`/`systemctl` a SPECIFIC
  *  runner call legitimately runs with no spine for at all (round 2, item 1's
- *  "must reach no manager" case — e.g. `ccrc-install.test.ts`'s "a box with
+ *  "must reach no manager" case — e.g. `ccrc-install-*.test.ts`'s "a box with
  *  no systemd" refusal test, whose PATH is built to exclude `systemctl`
  *  everywhere, fixture bin included). For a named tool this REQUIRES
  *  resolution to be EMPTY — nothing on PATH at all — and still THROWS if it
@@ -1573,7 +1633,7 @@ export const strayManagerCalls = (home: string): string[] => recordedLines(join(
 const CCRC_SRC = fileURLToPath(new URL('../../ccd/ccrc', import.meta.url));
 
 /** One function out of ccd/ccrc, column-0 signature to column-0 `}` — the
- *  `_inst_installed` extraction idiom in ccrc-install.test.ts. */
+ *  `_inst_installed` extraction idiom in ccrc-installFixture.ts. */
 export function ccrcFunction(name: string): string {
   const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}`, 'm').exec(readFileSync(CCRC_SRC, 'utf8'));
   if (m === null) throw new Error(`ccd/ccrc has no ${name}() { … } at column 0`);
@@ -1896,7 +1956,7 @@ export function probeRuntime(home: string, catalogueFile: string): ProbeRuntime 
 }
 
 // ── Plan 3a Task 10 — the flip's fixtures (begin) ────────────────────────
-// What the flip cases in `ccrc-install.test.ts` plant, in fixture vocabulary
+// What the flip cases in `ccrc-install-*.test.ts` plant, in fixture vocabulary
 // (ruling R13: by shape only): an `external` row in the shape the GPT lanes
 // had before their flip and the launcher such a row owes, and the class
 // registry and catalogue a flipped lane's `init codex` and refresh leave.

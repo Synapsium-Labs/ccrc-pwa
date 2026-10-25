@@ -14,7 +14,7 @@ import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import type { Runner } from '../src/exec.js';
 import type { PushPayload } from '../src/push.js';
-import type { Presence } from '../src/presence.js';
+import type { Viewers } from '../src/viewer.js';
 import type { SecretMasker } from '../src/accounts/mask.js';
 import type { DatabaseSync } from 'node:sqlite';
 import { testDeps } from './helpers.js';
@@ -69,8 +69,8 @@ export function requestBody(input: Record<string, unknown>, id = CHILD): Request
 export interface Approvals {
   home: string; coord: CoordStore; app: FastifyInstance; watcher: FleetWatcher; log: NotifyLog;
   sent: PushPayload[]; panes: Map<string, string>; gone: Set<string>; unmeasured: Set<string>;
-  /** The Presence the routes read (`buildServer` sets it on the shared deps; a restart keeps it). */
-  presence: Presence;
+  /** The Viewers the routes read (`buildServer` sets it on the shared deps; a restart keeps it). */
+  viewers: Viewers;
   /** A registry row: wrapper `claude`, the project, a workdir, a uuid, and a live state file naming `version`. */
   seed(id: string, project: string, version?: string | null): void;
   /** Make `id` a dispatched child of `runId`, spawned with Task 15's two fields (the managed deny digest and bash). */
@@ -109,15 +109,15 @@ export async function approvalsFixture(over: ApprovalsFixtureOpts = {}): Promise
     const target = args[2] ?? '';
     const id = /^=cc-(.*):$/.exec(target)?.[1] ?? '';
     if (args[0] === 'has-session') {
-      if (unmeasured.has(id)) return { code: 1, stdout: '', stderr: 'server exited unexpectedly' };
-      return gone.has(id) ? { code: 1, stdout: '', stderr: `can't find session: cc-${id}` } : { code: 0, stdout: '', stderr: '' };
+      if (unmeasured.has(id)) return { ran: true, code: 1, stdout: '', stderr: 'server exited unexpectedly' };
+      return gone.has(id) ? { ran: true, code: 1, stdout: '', stderr: `can't find session: cc-${id}` } : { ran: true, code: 0, stdout: '', stderr: '' };
     }
     if (args[0] === 'list-panes') {
       const pid = pids.get(id);
-      return pid === undefined ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: `${pid}\n`, stderr: '' };
+      return pid === undefined ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: `${pid}\n`, stderr: '' };
     }
-    if (args[0] === 'capture-pane') return { code: 0, stdout: panes.get(id) ?? 'ready\n❯ \n', stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: panes.get(id) ?? 'ready\n❯ \n', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const log = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
@@ -128,6 +128,8 @@ export async function approvalsFixture(over: ApprovalsFixtureOpts = {}): Promise
     // A two-box server is `server` over CCRC_FLEET=remote; `both` is the single box, CCRC_FLEET=local.
     ...base, cfg: { ...base.cfg, role: over.role ?? 'server', fleetMode: (over.role ?? 'server') === 'both' ? 'local' as const : 'remote' as const },
     mailToken: TOKEN, coord, notifyLog: log,
+    // The suites move time with `vi.setSystemTime`; every lane throttles on the monotonic clock (OA-C4, #803), so it moves too.
+    monotonicMs: () => Date.now(),
     ...(over.masker ? { masker: over.masker(coord.db) } : {}),
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
   };
@@ -136,7 +138,7 @@ export async function approvalsFixture(over: ApprovalsFixtureOpts = {}): Promise
   const put = (id: string, field: string, v: string): void => writeFileSync(path.join(reg, `${id}.${field}`), v);
   const f: Approvals = {
     home, coord, app, watcher, log, sent, panes, gone, unmeasured,
-    presence: (deps as { presence?: Presence }).presence as Presence,
+    viewers: (deps as { viewers?: Viewers }).viewers as Viewers,
     seed(id, project, version = VERIFIED) {
       for (const [k, v] of Object.entries({ wrapper: 'claude', project, workdir: workdirOf(id), uuid: uuidOf(id), started: '1' })) put(id, k, v);
       nextPid += 1;

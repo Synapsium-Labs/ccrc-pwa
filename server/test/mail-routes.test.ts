@@ -32,11 +32,13 @@ import { isDelegationCheckpointKebab } from '../src/coord/delegation-checkpoint.
 import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
 import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
-import { isDriftKind } from '../../shared/api.js';
+import { isDriftKind, isRunSpendUnmeasuredReason } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isCollectLaneKebab } from '../src/collectLane.js';
 import { isNoticeMode } from '../src/notice.js';
 import { isArchiveGateKebab } from '../src/coord/archiveAdmission.js';
+import { isStaleArchiveKebab } from '../src/coord/staleArchive.js';
+import { isDriftLaneTag } from '../src/coord/driftLane.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -771,6 +773,15 @@ describe('the rejection table is total, in both directions', () => {
                                   // field ever carries it. Each caller maps it to
                                   // a word of its own (`bad-session`,
                                   // `spent-unmeasured`, `marker-unreadable`).
+      // ARCH-19 (#539): `coord/delivery.ts` decides what the sweep does with a refused send, so it now names the
+      // send's own refusal words (`inject/send.ts`'s `SendPromptResult` errors). They are the SEND's vocabulary, set on
+      // a delivery's `lastError` and `lastGate` as free text; none is a `MailRejectCode`, and none reaches the wire as
+      // a refusal.
+      'auto-continue-armed',
+      'turn-running',
+      'stash-failed',
+      'stash-occupied',
+      'enter-ignored',
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
@@ -957,8 +968,21 @@ describe('the rejection table is total, in both directions', () => {
         // THE ARCHIVE ADMISSION (ARCH-36): `coord/archiveAdmission.ts` names its gates as literals. A gate names which
         // precondition refused, never a `refused` or `reject.code` (the route answers the gate's word). Admitted through
         // the exported guard, derived from `ARCHIVE_GATES`, never NOT_CODES.
-        || isArchiveGateKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode or archive gate`).toBe(true);
+        || isArchiveGateKebab(tok)
+        // THE RUN SPEND READ (D-6799): `coord/runSpend.ts` names why a run's spend could not be measured as literals. A
+        // reason rides the `spend` block of `GET /api/runs/:id`, never a `refused` or `reject.code`. Admitted through
+        // `shared/api.ts`'s exported guard, derived from `RUN_SPEND_UNMEASURED_REASON_MAP`, never NOT_CODES.
+        || isRunSpendUnmeasuredReason(tok)
+        // THE STALE-ARCHIVE ARM (D-6643): the next union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/staleArchive.ts` names its outcome kinds and defer reasons as literals. They ride
+        // the feed and the log, never a `refused` or `reject.code`. Admitted through the exported guard, derived from
+        // `STALE_ARCHIVE_OUTCOME_KINDS` and `STALE_ARCHIVE_DEFER_WHYS`, never NOT_CODES.
+        || isStaleArchiveKebab(tok)
+        // THE DRIFT RECONCILER'S LANE (D-5922): `coord/driftLane.ts` tags its summary push and its shadow notice with two
+        // fixed literals. A tag names a ring row, never a `refused` or `reject.code`. Admitted through the exported guard,
+        // derived from `DRIFT_LANE_TAGS`, never NOT_CODES.
+        || isDriftLaneTag(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome or drift lane tag`).toBe(true);
     }
   });
 });

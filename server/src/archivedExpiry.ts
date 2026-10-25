@@ -4,14 +4,15 @@
 // these verdicts; `coord/expireArchived.ts` (the one executor) reads the box's two documents through the parsers
 // here. Nothing in this file reads a file, a row or a clock.
 //
-// THE POPULATION is an ARCHIVED WORKSPACE nobody claims, seven days after its archive — never a child (#166's lane
-// owns those) and never a main checkout (nothing archives one). THE THRESHOLD IS NEVER TYPED HERE: ccd's
+// THE POPULATION is an ARCHIVED WORKSPACE nobody claims, seven days after its archive — a child only under the child
+// arm's own marker (D-6641; #166's lane owns a child that closes first) — and never a main checkout (nothing archives one). THE THRESHOLD IS NEVER TYPED HERE: ccd's
 // `ws-audit --expire` document carries `expiresAt` (`archivedAt + WS_EXPIRE_AFTER_S`, from the one ccd definition),
 // and `expireAuditExpiresAt` is the ONE reader of that key. A document without it — an older ccd — is NO EVIDENCE,
 // and the lane composes nothing for that row.
 //
 // EVERY UNCERTAIN ANSWER IS "NOT THIS PASS". The path these verdicts feed asks for a deletion with no human in it;
 // the executor re-reads, and ccd re-proves inside its lock at the instant of deletion. This file narrows the window.
+import { nestedWouldRescueCount } from '../../shared/nestedRescue.js';
 import {
   TERMINAL_RUN_STATES, leafKeptWord, type ArchivedHeld, type ArchivedHeldRow, type ChildMark, type ExpiryAttention,
   type LcRefusalToken, type LeafKeptWord, type RunState,
@@ -23,7 +24,10 @@ import { CCD_LOCK_UNOPENABLE, readCcdRefusal, withoutCcdRefusal } from '../../sh
  *  `ws-expire`. It has NO WRITER in the tree: the operator touches it by hand on the fleet box, and
  *  `single-definition.test.ts` pins that, beside `stall-watch-live`. Spelled once, in its `shared/switches.ts` row
  *  (D-5855), and re-exported here. */
-export { EXPIRE_LANE_LIVE_MARKER } from '../../shared/switches.js';
+export { EXPIRE_LANE_LIVE_MARKER, EXPIRE_CHILD_LIVE_MARKER, STALE_ARCHIVE_LIVE_MARKER } from '../../shared/switches.js';
+
+/** The `lastOutcome` key of a marked child the lane has recorded as "would be cleaned up (child)": one row per archive. */
+export const CHILD_SHADOW_OUTCOME = 'would-expire-child';
 
 /** Every word `ws-expire` and `ws-audit --expire` refuse with — and NO other. `archived-expiry-policy.test.ts` holds
  *  this set equal to what ccd's EXPIRE region and the shared ladder (`_ws_reclaim_ladder`) emit, in both directions,
@@ -31,7 +35,8 @@ export { EXPIRE_LANE_LIVE_MARKER } from '../../shared/switches.js';
 export type ExpireToken =
   | 'no-such-session' | 'not-archived' | 'not-a-workspace' | 'branch-elsewhere' | 'tree-unreadable'
   | 'containment-unproven' | 'no-worktree-record' | 'not-expired' | 'child' | 'paused' | 'held' | 'attached'
-  | 'live' | 'in-use' | 'tree-busy' | 'state-changed' | 'in-progress' | 'reap-in-progress' | 'reclaim-in-progress';
+  | 'live' | 'in-use' | 'tree-busy' | 'state-changed' | 'in-progress' | 'reap-in-progress' | 'reclaim-in-progress'
+  | 'nested-rescue-too-large' | 'nested-rescue-failed';
 
 /** What each word means to the lane, spelled ONCE (wave 3's plan, "Wave 3b inherits", the words by kind):
  *   - `gone`: the row left the population — returned, re-archived from scratch, or removed. Drop it, no report.
@@ -59,6 +64,8 @@ export const EXPIRE_TOKEN_KIND: Readonly<Record<ExpireToken, 'gone' | 'terminal'
   'in-progress': 'retry',
   'reap-in-progress': 'retry',
   'reclaim-in-progress': 'retry',
+  'nested-rescue-too-large': 'terminal',
+  'nested-rescue-failed': 'retry',
 };
 
 /** `EXPIRE_TOKEN_KIND` read TOTALLY: the word's kind, or null for one this build was never compiled to know. */
@@ -148,6 +155,8 @@ export type ExpireAuditRead =
   | { readonly kind: 'unreadable'; readonly detail: string }
   | { readonly kind: 'document'; readonly archivedAt: number | null; readonly expiresAt: ExpiresAtRead;
       readonly sensitive: number; readonly inUse: readonly ExpireInUse[];
+      /** How many nested repositories the audit says the rescue arm would rescue (D-6633); absent when none. */
+      readonly nestedWouldRescue?: number;
       readonly verdict:
         | { readonly kind: 'expirable'; readonly token: string }
         | { readonly kind: 'refused'; readonly token: ExpireToken; readonly detail: string } };
@@ -169,8 +178,9 @@ export function parseExpireAudit(sessionId: string, ok: boolean, stdout: string)
   const inUse = Array.isArray(v.inUse) ? v.inUse.flatMap((u): ExpireInUse[] => (isRecord(u)
     && typeof u.pid === 'number' && Number.isSafeInteger(u.pid) && typeof u.comm === 'string' && typeof u.cwd === 'string'
     ? [{ pid: u.pid, comm: u.comm, cwd: u.cwd }] : [])) : [];
+  const wouldRescue = nestedWouldRescueCount(v);
   const base = { kind: 'document' as const, archivedAt: epochOrNull(v.archivedAt), expiresAt: expireAuditExpiresAt(v),
-    sensitive, inUse };
+    sensitive, inUse, ...(wouldRescue > 0 ? { nestedWouldRescue: wouldRescue } : {}) };
   if (v.verdict === 'expirable') {
     if (typeof v.token !== 'string' || !TOKEN_SHAPE.test(v.token)) {
       return { kind: 'unreadable', detail: 'ws-audit --expire said expirable with no 64-hex token' };
@@ -273,6 +283,9 @@ export const isExpirePreCrumbFailed = (word: string): boolean => (EXPIRE_PRE_CRU
  *  L0, never listed again. (The reclaim side's set lives in `coord/childReclaim.ts`, which an L1 file may not import.) */
 export const EXPIRE_STUCK_WORD: Extract<LcRefusalToken, 'containment-refuted'> = 'containment-refuted';
 
+/** The one terminal word ccd prints on a `failed` document, with `crumb:false` (D-6633). */
+export const EXPIRE_FAILED_TERMINAL_WORD = 'nested-rescue-too-large';
+
 /** `ccd ws-expire …`'s answer (wave 3's plan, "Wave 3b inherits", the verb). Three documents — `expired` and
  *  `refused` at exit 0, `failed` at exit 1 (the breadcrumb is kept and the next attempt resumes it) — and three
  *  conditions that are no document: the two BOX words, and a COMPOSITION error. Anything else with an empty stdout is
@@ -317,6 +330,11 @@ export function parseExpireResult(sessionId: string, stdout: string, stderr: str
       const said = detail === '' ? v.failed : `${v.failed}: ${detail}`;
       // The WORD first (R76's order): the stuck word is stuck whatever `crumb` says (wave 6, ruling B).
       if (v.failed === EXPIRE_STUCK_WORD) return { kind: 'stuck', detail: said };
+      // The nested rescue's too-large word is printed on `failed` before any breadcrumb (D-6633): nothing started and
+      // waiting changes nothing, so it is the terminal refusal it is classed as, not a `restart` that would drop it.
+      if (v.failed === EXPIRE_FAILED_TERMINAL_WORD && v.crumb === false) {
+        return { kind: 'refused', token: v.failed, detail };
+      }
       // `crumb` (#166 spec §5.6; its R76 order, workspace lifecycle wave 6, question (k)): `false` — printed before this
       // attempt's breadcrumb, so nothing it started stands — audits afresh, whatever the word; `true` — printed past a
       // breadcrumb, the resumed arm's `probe-unmeasured` among them — is resumed. Only the two booleans are read: an
@@ -351,7 +369,10 @@ export function parseExpireResult(sessionId: string, stdout: string, stderr: str
  *  the row). `ok:false` is a store this pass could not read: every row is ineligible. */
 export type ExpiryStoreRead =
   | { readonly ok: false; readonly detail: string }
-  | { readonly ok: true; readonly openWorker: boolean; readonly openClaimant: boolean; readonly reviewing: boolean };
+  | { readonly ok: true; readonly openWorker: boolean; readonly openClaimant: boolean; readonly reviewing: boolean;
+      /** A readable-marked CHILD only (spec §4 "What stays excluded"): has it EVER coordinated, over terminal runs too
+       *  (`childReclaimHasCoordinated`)? `null` is a read that threw — doubt keeps. Absent: not asked (not a child). */
+      readonly coordinated?: boolean | null };
 
 export interface ArchivedExpiryInput {
   readonly sessionId: string;
@@ -365,11 +386,16 @@ export interface ArchivedExpiryInput {
   /** What the lane has LEARNED from this archive's audit: the instant (seconds), `null` before any audit read one. */
   readonly expiresAt: number | null;
   readonly nowMs: number;
+  /** The child arm (D-6641): `cap` is `expire-child-v1` on the box, `live` is `$REG/expire-child-live`. Absent reads as
+   *  neither, so a marked child skips `child`, as it did before the arm existed. */
+  readonly childArm?: { readonly cap: boolean; readonly live: boolean };
 }
 
 export type ArchivedExpirySkip =
   | 'not-a-workspace' | 'not-archived' | 'child' | 'identity-unmeasured' | 'store-unreadable' | 'open-run'
-  | 'coordinating' | 'review-open' | 'expiry-unknown' | 'not-yet' | 'held';
+  | 'coordinating' | 'review-open' | 'expiry-unknown' | 'not-yet' | 'held'
+  /** A marked child, otherwise eligible, while `expire-child-live` is absent: the lane only records it (spec 2.7.4). */
+  | 'child-shadow';
 
 export type ArchivedExpiryVerdict =
   | { readonly eligible: true }
@@ -379,7 +405,8 @@ export type ArchivedExpiryVerdict =
  * IS THIS ROW AN ARCHIVED WORKSPACE THE SERVER MAY ASK TO EXPIRE NOW (spec §5.3, "A row is eligible when")? Every
  * conjunct in the spec's order, every doubt ineligible:
  *  - a workspace (a main checkout is never expired) with an archive;
- *  - no child marker — `child` or `unreadable` is #166's lane's, never this one's;
+ *  - no child marker — `unreadable` is never this lane's, and a readable `child` mark only under `expire-child-v1` and
+ *    `$REG/expire-child-live` (D-6641); without the marker the verdict is `child-shadow`, which the lane records;
  *  - identity measured;
  *  - the store read; no non-terminal run names it as `sessionId` or as `claimedBy`; it is not the `sessionId` of a
  *    review run whose reviewed run is not terminal (#166 R16, applied to unmarked reviewers: the report lives in
@@ -392,13 +419,15 @@ export function archivedExpiryVerdict(i: ArchivedExpiryInput): ArchivedExpiryVer
   const skip = (why: ArchivedExpirySkip): ArchivedExpiryVerdict => ({ eligible: false, why });
   if (i.workspace === null) return skip('not-a-workspace');
   if (i.archivedAt === null) return skip('not-archived');
-  if (i.child.kind !== 'none') return skip('child');
+  // A readable mark passes only on a box that proves `expire-child-v1`; an unreadable one never does.
+  if (i.child.kind === 'unreadable' || (i.child.kind === 'child' && i.childArm?.cap !== true)) return skip('child');
   if (!i.identityMeasured) return skip('identity-unmeasured');
   const kept = archivedExpiryStoreSkip(i.store);
   if (kept !== null) return skip(kept);
   if (i.expiresAt === null) return skip('expiry-unknown');
   if (i.nowMs < i.expiresAt * 1000) return skip('not-yet');
   if (i.held !== null) return skip('held');
+  if (i.child.kind === 'child' && i.childArm?.live !== true) return skip('child-shadow');
   return { eligible: true };
 }
 
@@ -410,6 +439,7 @@ export function archivedExpiryStoreSkip(store: ExpiryStoreRead): ArchivedExpiryS
   if (!store.ok) return 'store-unreadable';
   if (store.openWorker) return 'open-run';
   if (store.openClaimant) return 'coordinating';
+  if (store.coordinated === true || store.coordinated === null) return 'coordinating';
   if (store.reviewing) return 'review-open';
   return null;
 }
@@ -418,6 +448,70 @@ export function archivedExpiryStoreSkip(store: ExpiryStoreRead): ArchivedExpiryS
  *  A reviewed run this pass could not read, or that is absent, is doubt — and doubt keeps. */
 export const reviewKeeps = (reviewed: { readonly kind: 'run'; readonly state: RunState } | { readonly kind: 'absent' } | { readonly kind: 'unreadable' }): boolean =>
   reviewed.kind !== 'run' || !(TERMINAL_RUN_STATES as readonly RunState[]).includes(reviewed.state);
+
+// ── the stale-archive arm's verdict (D-6643, fleet disk retention spec §2.7.5) ──────────────────────────────────────
+
+/** A workspace nobody has run for this long is archived: archive is the step before expiry, and it starts expiry's own
+ *  clock. The arm's one age, typed here and nowhere else; the evidence it measures is the newest sign of a run. */
+export const STALE_ARCHIVE_AFTER_MS = 14 * 24 * 60 * 60_000;
+/** Two pane-absent sightings must stand at least this far apart: a pane that is mid-restart, or a tmux that answered
+ *  once wrongly, is not two observations. */
+export const STALE_ARCHIVE_SIGHTING_GAP_MS = 60 * 60_000;
+
+export interface StaleArchiveRow {
+  readonly workspace: string | null;
+  /** The registry's archive epoch (seconds), `null` when the row is not archived. */
+  readonly archivedAt: number | null;
+  readonly child: ChildMark;
+  readonly identityMeasured: boolean;
+  readonly held: string | null;
+}
+
+/** What the arm gathered for one row. Every field that could not be read says so, and says keep. */
+export interface StaleArchiveFacts {
+  /** `ever`: the id has been any run's `claimedBy`, in any state or generation. `unreadable`: the store did not answer. */
+  readonly claims: 'never' | 'ever' | 'unreadable';
+  readonly pane: 'absent' | 'present' | 'unmeasured';
+  /** The first and the latest of the unbroken run of pane-absent passes (ms), or `null` when the latest pass did not
+   *  see the pane absent. */
+  readonly sightings: { readonly firstAt: number; readonly lastAt: number } | null;
+  readonly viewer: boolean;
+  /** The newest sign this workspace ran (ms): the latest of its `spawn`, `start` and `supervise` acts in the journal,
+   *  `.supervised`, `.spawn`, `.woke` and its transcript's mtime. `null` is no evidence at all, and is never read as old. */
+  readonly evidenceAtMs: number | null;
+}
+
+export type StaleArchiveSkip =
+  | 'not-a-workspace' | 'archived' | 'child' | 'identity-unmeasured' | 'held' | 'claimant' | 'claims-unreadable'
+  | 'pane' | 'one-sighting' | 'viewer' | 'no-evidence' | 'recent';
+
+export type StaleArchiveVerdict =
+  | { readonly eligible: true }
+  | { readonly eligible: false; readonly why: StaleArchiveSkip };
+
+/**
+ * IS THIS WORKSPACE ONE THE SERVER MAY ASK CCD TO ARCHIVE NOW (spec §2.7.5, "A row is archived when all of these hold")?
+ * Every conjunct, every doubt a keep: a workspace that is not archived, not held and carries no child mark in any
+ * reading (an `unreadable` one is a child until proven otherwise); it has never been a run's `claimedBy`; its pane was
+ * seen absent on two passes an hour apart; the newest sign of a run is at least `STALE_ARCHIVE_AFTER_MS` old, and
+ * no sign at all is no answer; and nobody is viewing it. The switch, the cap and the one act a pass are the arm's.
+ */
+export function staleArchiveVerdict(row: StaleArchiveRow, f: StaleArchiveFacts, nowMs: number): StaleArchiveVerdict {
+  const skip = (why: StaleArchiveSkip): StaleArchiveVerdict => ({ eligible: false, why });
+  if (row.workspace === null) return skip('not-a-workspace');
+  if (row.archivedAt !== null) return skip('archived');
+  if (row.child.kind !== 'none') return skip('child');
+  if (!row.identityMeasured) return skip('identity-unmeasured');
+  if (row.held !== null) return skip('held');
+  if (f.claims === 'unreadable') return skip('claims-unreadable');
+  if (f.claims === 'ever') return skip('claimant');
+  if (f.pane !== 'absent') return skip('pane');
+  if (f.sightings === null || f.sightings.lastAt - f.sightings.firstAt < STALE_ARCHIVE_SIGHTING_GAP_MS) return skip('one-sighting');
+  if (f.evidenceAtMs === null) return skip('no-evidence');
+  if (nowMs - f.evidenceAtMs < STALE_ARCHIVE_AFTER_MS) return skip('recent');
+  if (f.viewer) return skip('viewer');
+  return { eligible: true };
+}
 
 // ── the lane's memory of one row ─────────────────────────────────────────────
 

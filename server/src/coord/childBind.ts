@@ -67,7 +67,7 @@ export async function childBindGate(
     case 'found': break;
     case 'unlistable':
       return { ok: false, code: 'spent-unmeasured', detail: 'the registry could not be listed' };
-    case 'absent': {
+    case 'absent': case 'unmeasurable': {
       const names = await deps.io.readdir(deps.cfg.registryDir);
       if (names === null) return { ok: false, code: 'spent-unmeasured', detail: 'the registry could not be listed' };
       if (names.includes(`${sessionId}.child`)) {

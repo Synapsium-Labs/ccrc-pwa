@@ -3,16 +3,19 @@ import type { FleetIO, MeasuredDirectoryRead, MeasuredPathKind, MeasuredStat, Re
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { RunCcd } from './ports.js';
-import type { Presence } from '../presence.js';
+import type { Viewers } from '../viewer.js';
 import type { CcdResult } from '../lifecycle.js';
-import { CCD_ARGV, COLLECT_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
+import {
+  CCD_ARGV, COLLECT_CAP, COLLECT_LOOSE_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec,
+} from '../ccdargv.js';
 import type { CoordStore } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
-import { readSwitches } from '../../../shared/switches.js';
+import { COLLECT_LOOSE_LIVE_MARKER, readSwitches } from '../../../shared/switches.js';
 import { CHILD_BIRTH_SKEW_MS } from './childSpent.js';
 import {
-  COLLECT_LANE_LIVE_MARKER, collectLicence, collectLicenceStands, parseCollectAudit, parseCollectResult,
-  type CollectAudit, type CollectCapture, type CollectHoldWhy, type CollectListing, type CollectObservation,
+  COLLECT_LANE_LIVE_MARKER, collectLicence, collectLicenceStands, collectIsLoose, collectLooseHexOf, parseCollectAudit,
+  parseCollectCensus, parseCollectLooseAudit, parseCollectLooseResult, parseCollectResult,
+  type CollectAudit, type CollectLooseCensus, type CollectCapture, type CollectHoldWhy, type CollectListing, type CollectObservation,
   COLLECT_HOLD_WHYS, type CollectResult,
   collectLaneControl, collectLaneEffective, collectLaneLive, collectLatchDue, collectLatchFeedBody, measureCollectLaneRow,
   type CollectCurrentNode, type CollectEpochPair, type CollectLaneCaps, type CollectLaneControl, type CollectLaneEffective,
@@ -153,7 +156,7 @@ export interface CollectTempRootDeps {
   cfg: Pick<CcrcConfig, 'registryDir'>;
   runCcd: RunCcd;
   fleetState?: FleetState;
-  presence?: Pick<Presence, 'isVisible'>;
+  viewers?: Pick<Viewers, 'isVisible'>;
   lane: CollectLanePort;
   observeIntervalMs: number;
   control: CollectControlDeps;
@@ -350,6 +353,21 @@ async function readCollectListing(
   return { kind: 'unmeasured', why: `${leaf}/ did not list (${listed.reason})` };
 }
 
+/** THE LOOSE CENSUS (fleet disk retention spec 2026-10-23 section 2.4, D-6627), asked ONCE per pass inside the gather.
+ *  Read-only on the box. A ccd without `collect-loose-v1` is `unavailable` and nothing is asked. A call that never ran, or
+ *  rejects, or answers in a shape the reader cannot vouch for, is `unmeasured`, never an empty census. */
+export async function readLooseCensus(deps: Pick<CollectTempRootDeps, 'runCcd' | 'fleetState'>): Promise<CollectLooseCensus> {
+  if (!ccdCan(deps.fleetState, 'wsCollectCensus')) return { kind: 'unavailable' };
+  let res: CcdResult;
+  try {
+    res = await deps.runCcd(CCD_ARGV.wsCollectCensus());
+  } catch (err) {
+    return { kind: 'unmeasured', why: said(err) };
+  }
+  if (res.ran === false) return { kind: 'unmeasured', why: res.stderr };
+  return parseCollectCensus(res.ok, res.stdout, res.stderr);
+}
+
 // ── the switches ─────────────────────────────────────────────────────────────
 
 /** The two switches as one listing read them: L1's `CollectLaneSwitches`, aliased, never re-declared (path-identity
@@ -376,7 +394,10 @@ export async function collectSwitches(io: Pick<FleetIO, 'readdirMeasured'>, regi
   if (!listed.ok) return { paused: true, why: 'unlistable', reason: listed.reason };
   const names = listed.entries;
   const marker = names.includes(COLLECT_LANE_LIVE_MARKER);
-  return readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set' ? { paused: true, why: 'raised', marker } : { paused: false, marker };
+  // D-6627: the loose arm's own marker rides the SAME listing, and only when it stands: absence reads as shadow.
+  const loose = names.includes(COLLECT_LOOSE_LIVE_MARKER) ? { looseMarker: true as const } : {};
+  return readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set'
+    ? { paused: true, why: 'raised', marker, ...loose } : { paused: false, marker, ...loose };
 }
 
 // ── the switch's control state and the marker's latch (path-identity spec 2026-10-12 §5.2, §5.4) ──────────────
@@ -456,7 +477,10 @@ async function collectAudit(
   deps: Pick<CollectTempRootDeps, 'runCcd' | 'fleetState' | 'lane'>, id: string,
 ): Promise<CollectAnswer<CollectAudit> | CollectAuditRefused> {
   if (!ccdCan(deps.fleetState, 'wsCollect')) return { notAsked: 'capability' };
-  const argv = CCD_ARGV.wsCollectAudit(id);
+  // D-6627: a loose id is audited by its hex, behind its own capability; everything after the argv is shared.
+  const hex = collectLooseHexOf(id);
+  if (hex !== null && !ccdCan(deps.fleetState, 'wsCollectLooseAudit')) return { notAsked: 'capability' };
+  const argv = hex === null ? CCD_ARGV.wsCollectAudit(id) : CCD_ARGV.wsCollectLooseAudit(hex);
   if (!ccdCan(deps.fleetState, 'wsCollectAudit')) return { notAsked: 'verb' };
   const composed = deps.lane.generations(id);
   let res: CcdResult;
@@ -469,7 +493,8 @@ async function collectAudit(
   const arrived = deps.lane.clock();
   // D-6034: a call that never ran is read FIRST, as the rejection above is: an audit with no document, never a probe.
   if (res.ran === false) return { value: { kind: 'no-document', stderr: res.stderr }, composed, arrived };
-  return { value: parseCollectAudit(id, res.ok, res.stdout, res.stderr), composed, arrived };
+  return { value: hex === null ? parseCollectAudit(id, res.ok, res.stdout, res.stderr)
+    : parseCollectLooseAudit(hex, res.ok, res.stdout, res.stderr), composed, arrived };
 }
 
 /** The lane's LEARNING audit (spec §5.10). It is read-only on the box: the audit journals a terminal refusal and
@@ -480,7 +505,7 @@ async function collectAudit(
 export async function learnCollect(
   deps: Pick<CollectTempRootDeps, 'runCcd' | 'fleetState' | 'lane'>, id: string,
 ): Promise<CollectLearnAnswer> {
-  if (!isTmpRootId(id)) return { kind: 'id-refused' };
+  if (!isTmpRootId(id) && collectLooseHexOf(id) === null) return { kind: 'id-refused' };
   const audit = await collectAudit(deps, id);
   return 'notAsked' in audit ? { kind: 'not-asked', why: 'caps' } : { kind: 'answered', audit };
 }
@@ -497,7 +522,14 @@ export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob
     return { kind: 'not-asked', step: 1, why: 'caps',
       detail: `the fleet host does not advertise both ${COLLECT_CAP} and ${RECLAIM_PAUSE_CAP}` };
   }
-  if (!isTmpRootId(job.id)) return { kind: 'not-asked', step: 1, why: 'id-refused', detail: COLLECT_ID_REFUSED };
+  // D-6627: a loose entry rides its own pair of capabilities and its own id grammar (`loose:<hex>`, a string the temp-root
+  // predicate refuses). Both are asked here and again at the audit site; the verb's is asked nearest its argv.
+  const looseHex = collectLooseHexOf(job.id);
+  if (looseHex !== null && !(ccdCan(deps.fleetState, 'wsCollectLoose') && ccdCan(deps.fleetState, 'wsCollectLooseAudit'))) {
+    deps.lane.cleared('caps');
+    return { kind: 'not-asked', step: 1, why: 'caps', detail: `the fleet host does not advertise ${COLLECT_LOOSE_CAP}` };
+  }
+  if (looseHex === null && !isTmpRootId(job.id)) return { kind: 'not-asked', step: 1, why: 'id-refused', detail: COLLECT_ID_REFUSED };
   // THE EPOCH THIS JOB WAS QUEUED UNDER (path-identity spec 2026-10-12 §5.5). The lane read it outside the queue
   // callback, so the pair the switch is resolved under starts here. A reconnect anywhere between the queueing and the
   // job's last listing, observation 2 included, composes nothing.
@@ -509,7 +541,7 @@ export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob
     return { kind: 'not-asked', step: 2, why: 'paused', detail: COLLECT_PAUSED[first.why] };
   }
   // 3 — a person at the session. No ceiling, and no licence past it.
-  if (deps.presence?.isVisible(job.id) === true) return { kind: 'not-asked', step: 3, why: 'presence', detail: COLLECT_SEEN };
+  if (deps.viewers?.isVisible(job.id) === true) return { kind: 'not-asked', step: 3, why: 'presence', detail: COLLECT_SEEN };
   // 4 — OBSERVATION 2, through the one audit site. It is stale if a clear landed while it was in flight. Then the
   // licence against observation 1, read from the lane's memory and never carried. Then the open-run hold, judged on
   // THIS document, licensed or not.
@@ -573,14 +605,21 @@ export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob
   if (!collectLicenceStands(obs1, audit.composed, deps.lane.generations(job.id), deps.lane.observation(job.id))) {
     return answered(6, 'pair-cleared', COLLECT_PAIR_CLEARED);
   }
-  if (deps.presence?.isVisible(job.id) === true) return answered(6, 'presence', COLLECT_SEEN);
+  if (deps.viewers?.isVisible(job.id) === true) return answered(6, 'presence', COLLECT_SEEN);
   const holdAtAct = collectOpenRunHold(deps.coord, job.id, obs2);
   if (holdAtAct.kind === 'held') return { kind: 'held', step: 6, hold: holdAtAct, audit: observed };
   if (!collectLaneLive(lane)) return { kind: 'would-collect', audit: observed };
+  // D-6627: the loose arm's own marker, from the SAME final listing the lane was resolved under. Absent, or the capability
+  // withdrawn since step 1: shadow. Both arms must stand; the lane's switch above is never bypassed.
+  if (looseHex !== null && (last.looseMarker !== true || !ccdCan(deps.fleetState, 'wsCollectLoose'))) {
+    return { kind: 'would-collect', audit: observed };
+  }
   const now = deps.lane.clock();
   let act: CcdResult;
   try {
-    act = await deps.runCcd(CCD_ARGV.wsCollect(obs2.token, job.id, sweepDec(deps.fleetState, COLLECT_ACTOR)));
+    act = await deps.runCcd(looseHex === null
+      ? CCD_ARGV.wsCollect(obs2.token, job.id, sweepDec(deps.fleetState, COLLECT_ACTOR))
+      : CCD_ARGV.wsCollectLoose(obs2.token, looseHex, sweepDec(deps.fleetState, COLLECT_ACTOR)));
   } catch (err) {
     const arrived = deps.lane.clock();
     return { kind: 'acted', audit: observed, composedMono: now.mono, result: { kind: 'no-document', stderr: said(err) }, arrived };
@@ -593,7 +632,8 @@ export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob
     return { kind: 'acted', audit: observed, composedMono: now.mono, result: { kind: 'no-document', stderr: act.stderr }, arrived };
   }
   return { kind: 'acted', audit: observed, composedMono: now.mono,
-    result: parseCollectResult(job.id, act.ok, act.stdout, act.stderr), arrived };
+    result: looseHex === null ? parseCollectResult(job.id, act.ok, act.stdout, act.stderr)
+      : parseCollectLooseResult(looseHex, act.ok, act.stdout, act.stderr), arrived };
 }
 
 // ── the open-run hold ────────────────────────────────────────────────────────
@@ -621,7 +661,8 @@ export function collectOpenRunHold(
 ): CollectHoldRead {
   const held = (why: CollectHoldWhy, detail: string): CollectHeld => ({ kind: 'held', why, detail });
   try {
-    if (doc.resume === null && doc.witnessRun === null) {
+    // (e) is a WITNESSED leaf's rule: a loose entry has no witness and so no run to wait for, and would be held forever.
+    if (doc.resume === null && doc.witnessRun === null && !collectIsLoose(id)) {
       return held('no-witness-run', `ws-audit offered a fresh collection of ${id} whose witness names no run, so no run `
         + 'can be asked whether it still needs the temp root');
     }

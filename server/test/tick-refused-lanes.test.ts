@@ -24,7 +24,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { DEAD_GRACE_MS, MARKER_UNREADABLE_MS, parseStallDetail } from '../src/coord/stall.js';
 import type { PushPayload } from '../src/push.js';
 import { CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, type Divergence, type FleetSession } from '../../shared/api.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { storedRun } from './idGateFixture.js';
 
@@ -91,14 +91,14 @@ const rig = async (): Promise<Rig> => {
     lstatMeasured: async (p) => { touched.push(p); return localIO.lstatMeasured(p); },
   };
   const calls: string[][] = [];
-  const run: Runner = async (_cmd, args) => { calls.push([...args]); return { code: 1, stdout: '', stderr: '' }; };
+  const run: Runner = async (_cmd, args) => { calls.push([...args]); return { ran: true, code: 1, stdout: '', stderr: '' }; };
   const sent: PushPayload[] = [];
   const deps: Deps = {
     ...testDeps(home, run), io, coord, stateCachePath: path.join(home, 'state-cache.json'),
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
   };
   const bus = new Bus();
-  const w = new FleetWatcher(deps, bus, 2000);
+  const w = new FleetWatcher(withFakeClock(deps), bus, 2000);
   await w.tick();
   return { home, reg, coord, w, deps, bus, touched, calls, sent };
 };

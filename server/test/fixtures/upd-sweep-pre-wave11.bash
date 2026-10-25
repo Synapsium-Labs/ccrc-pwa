@@ -210,3 +210,73 @@ _upd_phase() {
   echo "update: WARN: could not write ~/.ccrc/update.json (phase $phase) — the console will not see this phase; the update continues"
   return 0
 }
+
+# FROZEN (wave 24, D-6748) — `_upd_redact` exactly as v0.0.84 ships it: the frozen `_upd_phase` above and the
+# frozen sweep's die (`_ccrc_die`) reach it, and wave 24 taught the tree's copy to mask a scheme-less userinfo too. X0c
+# pins this copy.
+_upd_redact() {
+  local s="${1:-}" had_extglob=0
+  shopt -q extglob && had_extglob=1
+  shopt -s extglob
+  # The userinfo strip is bounded to characters a URL authority actually
+  # allows before an '@' — never '/' or whitespace — so an UNRELATED '@'
+  # past the authority (a query string's `?email=a@example.com`) is left alone:
+  # reaching it would need crossing a '/' the pattern refuses to match.
+  # Review fix round 1, N2: `?` and `#` also end the authority (a query
+  # string or a fragment can start right after the host, with no '/' at
+  # all) — measured, `https://h?a@b` and `https://h#a@b` both collapsed the
+  # HOST into the class, giving `https://b`. Excluded here so the class
+  # stops at the first of '/', '?' or '#', exactly where a URL authority
+  # itself ends. (A raw '@' inside a password, `user:pa@ss@host`, still
+  # takes the LAST '@' before the boundary — curl itself refuses that shape
+  # as a bad hostname, so it can never have worked; recorded, not fixed.)
+  s="${s//:\/\/+([^\/@?#[:space:]])@/:\/\/}"
+  [ "$had_extglob" -eq 1 ] || shopt -u extglob
+  # Review fix round 1, M6: the OLD blind substring replace was not anchored
+  # to a path boundary — HOME=`/home/u` turned `/home/user2/f` into
+  # `~ser2/f` (a PREFIX match with no boundary check at all), and a
+  # trailing-slash HOME (`/home/u/`) turned `/home/u/.ccrc` into `~.ccrc`
+  # (the separating `/` consumed along with HOME, never put back). Fixed:
+  # strip ONE trailing slash from HOME first, so a trailing-slash HOME and a
+  # bare one are handled the same way; HOME of `/` (or empty) then strips to
+  # empty and is skipped — never replaced at all, so `https://h/p` is not
+  # turned into `https:~~h~p`. What remains is replaced ONLY where it is
+  # followed by `/` (put back as `~/`, never dropped) or ends a TOKEN —
+  # whitespace, a quote, `:`, `)`, or the end of the string — enumerated
+  # one boundary character at a time because a bash glob substitution has
+  # no lookahead to keep an unknown trailing character while still matching
+  # on it.
+  local home="${HOME:-}"
+  home="${home%/}"
+  if [ -n "$home" ]; then
+    # W6 Task 8A, review 167's F5: the boundary BEFORE home is anchored too.
+    # A HOME of `/home/u` is a real match only where the character before it
+    # is no part of a longer path — the start of the string, whitespace, a
+    # quote or backtick, or one of `= : ( [ { , ; < > |`, or the `//` that
+    # ends a `file://` scheme — never a path character, so `/srv/home/u/x`
+    # is left whole instead of becoming `/srv~/x`. A bash glob has no
+    # lookbehind either, so each occurrence is walked in turn and the
+    # character before it read from the text already passed.
+    local seen="" out="" pre="" post="" before="" after="" left=0 right=0
+    while [[ "$s" == *"$home"* ]]; do
+      pre="${s%%"$home"*}"
+      post="${s#*"$home"}"
+      seen+="$pre"
+      before="${seen: -1}"
+      after="${post:0:1}"
+      left=0; right=0
+      case "$before" in
+        ''|' '|$'\t'|$'\n'|'"'|"'"|'`'|'='|':'|'('|'['|'{'|','|';'|'<'|'>'|'|') left=1 ;;
+        '/') case "$seen" in *://) left=1 ;; esac ;;
+      esac
+      case "$after" in
+        ''|'/'|' '|$'\t'|$'\n'|'"'|"'"|':'|')') right=1 ;;
+      esac
+      if [ "$left" -eq 1 ] && [ "$right" -eq 1 ]; then out+="${pre}~"; else out+="${pre}${home}"; fi
+      seen+="$home"
+      s="$post"
+    done
+    s="${out}${s}"
+  fi
+  printf '%s' "$s"
+}

@@ -34,7 +34,7 @@
 // what PR I actually shipped, not the plan's historical sample.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { type CoordCapsView, type RunSummary } from '../../../shared/api';
+import { type CoordCapsView, type RunSpend, type RunSummary } from '../../../shared/api';
 import {
   FINISHED_FOLD, anyDispatchPending, finishedClock, finishedMoreLabel, isRunClosed, programWave, programsWithOpenRun, runClosedAt,
   programmeTitle, runsByProgram, waveLabel,
@@ -76,6 +76,8 @@ const loadRunsDefault = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
  *  render, so the control's own effect does not re-fire on every parent
  *  re-render. */
 const loadCapsDefault = (): Promise<CoordCapsView> => api.coordCaps();
+/** D-6799: one run's spend. Module-level so its identity is stable across renders. */
+const loadSpendDefault = (id: number): Promise<RunSpend> => api.run(id).then((r) => r.spend);
 
 import { RunRow } from './RunRow';
 import { useColdRuns } from './useColdRuns';
@@ -85,6 +87,7 @@ export function RunsScreen({
   store = useFleetStore,
   loadRuns = loadRunsDefault,
   loadCaps = loadCapsDefault,
+  loadSpend = loadSpendDefault,
 }: {
   store?: FleetStore;
   loadRuns?: () => Promise<{ runs: RunSummary[] }>;
@@ -96,6 +99,8 @@ export function RunsScreen({
    *  resume-door test's `expect(fetchImpl).not.toHaveBeenCalled()`, which is a
    *  guard worth keeping exactly as strict as it was. */
   loadCaps?: () => Promise<CoordCapsView>;
+  /** Each row's spend read (D-6799), injected like `loadCaps`. */
+  loadSpend?: (id: number) => Promise<RunSpend>;
 }): ReactNode {
   const live = store((s) => s.runs);
   const runsFrameSeen = store((s) => s.runsFrameSeen);
@@ -281,6 +286,7 @@ export function RunsScreen({
       programHasOpenRun={programsOpen.has(run.program)}
       onAbandon={setAbandonTarget}
       onResume={setResumeTarget}
+      loadSpend={loadSpend}
     />
   );
 

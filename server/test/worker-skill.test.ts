@@ -76,7 +76,7 @@ const CONTRACT = [
   // AND for an unresolvable ref (`not something we can merge`, stdout empty),
   // so the clause names both halves of the conflict answer and says what every
   // other answer licenses: nothing.
-  "Absorb `origin/main` into this branch only on one of three triggers, each read after one `git fetch origin`: your own probe `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its first line (the branch conflicts; exit 0 is clean, and any other answer is unmeasured and licenses nothing); a required check on your PR is red while main passes the same tests, measured by re-running its failing test files on a clean checkout of `origin/HEAD` in scratch; or a `fix-round` mail from the coordinator names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository. The first two license at most one absorption per PR — a second occurrence before the first absorption lands is not a second license — and the third arrives on the `merging → working` edge, after which you absorb, re-gate and send a fresh `wave-done`. Absorb with `git merge` only: never a rebase, a force-push or `update-branch` by any route, including `gh api -X PUT`. Never write any repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`. Never hand-resolve a generated stamp: on a conflict in a `# ccrc:generated` line such as `ccd/ccd`'s line 2, take either side of that line only, resolve every other hunk of the file as the source it is, then run `~/.local/bin/ccrc restamp <file>`. A red that main also shows is reported once as `main-red` and left alone. Keep no local `main`: read `origin/HEAD`, fetched once.",
+  "Absorb `origin/main` into this branch only on one of three triggers, each read after one `git fetch origin`: your own probe `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its first line (the branch conflicts; exit 0 is clean, and any other answer is unmeasured and licenses nothing); a required check on your PR is red while main passes the same tests, measured by re-running its failing test files on a clean checkout of `origin/HEAD` in scratch; or a `fix-round` mail from the coordinator names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository. The first two license at most one absorption per PR — a second occurrence before the first absorption lands is not a second license — and the third arrives on the `merging → working` edge, after which you absorb, re-gate and send a fresh `wave-done`. Absorb with `git merge` only: never a rebase, a force-push or `update-branch` by any route, including `gh api -X PUT`. Never write any repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`. Never hand-resolve a generated stamp: on a conflict in a `# ccrc:generated` line such as `ccd/ccd`'s line 2, take either side of that line only, resolve every other hunk of the file as the source it is, then run `~/.local/bin/ccrc restamp <file>`. A red that main also shows is reported once as `main-red` and left alone. Keep no local `main`: read `origin/HEAD`, fetched once. The operator's keeper is the operator's own tool and may rebase or force-push a PR branch on its own authority; this clause binds your own absorbs only, so a fixer the keeper spawns is not caught between the two. If the keeper rewrote your branch, take its tip (`git fetch origin`, then `git reset --hard origin/<branch>`) before you commit; never rebase or force-push it yourself. You never merge your own PR.",
   // Worker stall watch, wave 3 (spec 2026-09-29 §6.2): ASCII only, no apostrophe.
   "End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent or workflow you launched from your main thread yourself that has not yet reported, or a structured ask. A background shell or Monitor is never that wake: it has no deadline and may never report. A task a subagent started reports to that subagent, so an agent whose completion says it may resume on its own has reported, and is not that wake either. A restart kills every background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn ends.",
   // Fleet disk retention, DR-25 (spec 2026-10-23 §2.7.2, §10): ASCII only, no apostrophe, no double quote.
@@ -345,9 +345,9 @@ describe('the worker skill: the facts it states about the wire', () => {
   });
 
   /**
-   * The OTHER ceiling, harvested from `watch.ts`'s source text rather than
-   * imported: `MAIL_REPLAY_MAX_ATTEMPTS` is module-private there, and
-   * re-exporting it so a test could read it conveniently is the hole
+   * The OTHER ceiling, harvested from `coord/delivery.ts`'s source text rather
+   * than imported (ARCH-19 moved it there from `watch.ts`): importing it only so
+   * a test could read it conveniently is the hole
    * `PR_PHASES`' own docstring warns about at length. Harvest-and-compare is
    * this repo's established idiom for exactly that shape (`wsaudit.test.ts`,
    * and the coordinator suite's route/refusal scans). A rename or a deletion
@@ -355,9 +355,9 @@ describe('the worker skill: the facts it states about the wire', () => {
    */
   const REPLAY_CONST = 'MAIL_REPLAY_MAX_ATTEMPTS';
   const replayCeiling = ((): number => {
-    const src = readFileSync(path.join(root, 'server/src/watch.ts'), 'utf8');
-    const m = new RegExp(`^const ${REPLAY_CONST} = (\\d+);$`, 'm').exec(src);
-    if (!m) throw new Error(`watch.ts declares no ${REPLAY_CONST} — this harvest is ` +
+    const src = readFileSync(path.join(root, 'server/src/coord/delivery.ts'), 'utf8');
+    const m = new RegExp(`^export const ${REPLAY_CONST} = (\\d+);$`, 'm').exec(src);
+    if (!m) throw new Error(`coord/delivery.ts declares no ${REPLAY_CONST} — this harvest is ` +
       'looking at the wrong file, or the constant was renamed and the skill now cites a ghost');
     return Number(m[1]);
   })();
@@ -369,9 +369,9 @@ describe('the worker skill: the facts it states about the wire', () => {
     // The two lanes are deliberately separate in the delivery code, and
     // `MAIL_MAX_ATTEMPTS`'s own docstring is emphatic about it: that budget
     // "applies ONLY while a delivery's own `deliveredAt` is still null"
-    // (`watch.ts:170-186`), the park is gated on `d.deliveredAt === null`
-    // (`:2042`), and a delivered row that is merely never acked parks on
-    // `MAIL_REPLAY_MAX_ATTEMPTS` instead (`:207`, park at `:1981-1983`).
+    // (`coord/delivery.ts`), the park is gated on `d.deliveredAt === null`
+    // (`decideSendFailure`), and a delivered row that is merely never acked
+    // parks on `MAIL_REPLAY_MAX_ATTEMPTS` instead (`decideReplayCeiling`).
     //
     // D-105: clause 3's plan-locked content named the 6 for both, which
     // under-states a worker's real ack window by more than 3x AND calls a mail

@@ -195,7 +195,7 @@ CCRC_DOCTOR_CHECKS=(
   caddyfile
   cert
   name
-  disk
+  disk box-settings   # one line, as `flock timeout`: _check_box-settings is at the END of this file
   wrappers
   skills
   accounts
@@ -4009,7 +4009,7 @@ _check_pool-sync() {
     # `ccrc install --role fleet` end at exit 1 on every box, always: the
     # timer converges on its own (`OnUnitActiveSec=60s`,
     # deploy/systemd/ccd-pool-sync.timer) and a box that just landed the unit
-    # has not had one tick yet. Measured: server/test/ccrc-install.test.ts,
+    # has not had one tick yet. Measured: server/test/ccrc-install-*.test.ts,
     # 3 failures, all in the fleet-role describe, all from this arm. The
     # FAIL text itself is false on the box that trips it — "placement into
     # every tagged project... refuses" — a fresh box tags nothing yet.
@@ -4126,82 +4126,18 @@ CONTINUED_IN_TAIL_BYTES=8192   # held equal to CONTINUATION_TAIL_BYTES
 # (server/src/transcript/parse.ts) and ccd/ccd's own CONTINUED_IN_TAIL_BYTES
 # by server/test/continued-in-parity.test.ts — three readers, one window.
 
-# THE RULE, NOT A COPY OF ITS LITERALS (D-4940). This is the jq program
-# ccd/ccd's `_continued_in_of` runs, byte for byte — `continued-in-parity.test.ts`
-# holds the two spellings equal and runs this reader, ccd's and the server's
-# over one table of transcripts — and the TypeScript twin (`tailRecordOf`,
-# server/src/transcript/parse.ts) is where the rule is written out in full:
-# the window's lines are read NEWEST FIRST; a top-level `continued-in` record
-# decides (a successor, or none when it is not this file's valid marker), a
-# top-level user/assistant record that Claude Code's own reader calls a
-# finished turn decides "none", and every other line — metadata Claude Code
-# re-stamps after the marker, an interruption notice, a tool result, a line
-# that does not parse, the window's cut first line — is stepped over. The old
-# reader here matched substrings anywhere on the LAST line, so a tool call
-# whose input held a marker-shaped object read as superseded while the server
-# refused it, and a real marker with a `last-prompt` line after it read as live
-# (review findings F1 and ccd-last-line-only-marker). Why the program is
-# spelled the way it is — no `first`/`any`/`all` (jq 1.6), JavaScript's
-# whitespace in code points, the surrogate rewrite — is said once, above the
-# same text in ccd/ccd. jq is already this file's JSON reader (the `build`
-# check reads the stamp with it), and `_check_jq` FAILs a box without one — on
-# which ccd's chain follow reads nothing either.
-CONTINUED_IN_JQ='def jsws: . == 9 or . == 10 or . == 11 or . == 12 or . == 13 or . == 32 or . == 160 or . == 5760
-  or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239 or . == 8287 or . == 12288 or . == 65279;
-def jstrim: explode as $c
-  | [range(0; $c | length) | select($c[.] | jsws | not)] as $k
-  | if $k == [] then "" else $c[$k[0]:$k[-1] + 1] | implode end;
-def tagled: explode as $c
-  | ($c | length) > 2 and $c[0] == 60 and $c[1] >= 97 and $c[1] <= 122
-  and ([range(2; $c | length) | select($c[.] as $x
-         | ($x >= 48 and $x <= 57) or ($x >= 65 and $x <= 90) or ($x >= 97 and $x <= 122) or $x == 95 or $x == 45 | not)] as $k
-       | $k != [] and ($c[$k[0]] as $x | $x == 62 or ($x | jsws)));
-def cmdname: split("<command-name>") as $s
-  | [range(1; $s | length) | $s[.:] | join("<command-name>")
-     | split("\r")[0] | split("\u2028")[0] | split("\u2029")[0] | select(contains("</command-name>"))] != [];
-def prompttext:
-  if contains("<pasted_content id=\"") then true
-  else jstrim as $n
-  | if $n == "" then false
-    elif ($n | cmdname) then false
-    elif ($n | split("<bash-input>") | length > 1 and (.[1:] | join("<bash-input>") | contains("</bash-input>"))) then true
-    elif ($n | startswith("[Request interrupted by user")) and ($n | ltrimstr("[Request interrupted by user") | contains("]")) then false
-    elif ($n | tagled) then false
-    else true end
-  end;
-def prompt: .isMeta != true and .isCompactSummary != true and (.message | type) == "object"
-  and (.message.content as $x
-       | if ($x | type) == "string" then ($x | prompttext)
-         elif ($x | type) == "array" then
-           [$x[] | select(type == "object" and .type == "tool_result")] == []
-           and [$x[] | select(type == "object" and .type == "text" and (.text | type) == "string") | select(.text | prompttext)] != []
-         else false end);
-def complete: ((has("isApiErrorMessage") | not) or .isApiErrorMessage == false)
-  and (.message | type) == "object" and (.message.stop_reason | type) == "string";
-def unsurrogate: reduce ("d", "D") as $d (.; reduce ("8", "9", "a", "b", "c", "d", "e", "f", "A", "B", "C", "D", "E", "F") as $h
-  (.; split("\\u" + $d + $h) | join("\\uff")));
-def tailrec($l):
-  ($l | contains("\"type\":\"continued-in\"")) as $m
-  | ($l | (contains("\"type\":\"user\"") or contains("\"type\":\"assistant\""))) as $t
-  | if ($m or $t) | not then "skip"
-    else [$l | try fromjson catch ($l | unsurrogate | try fromjson catch empty)]
-    | if . == [] or (.[0] | type) != "object" then "skip"
-      else .[0]
-      | if $m and .type == "continued-in" and (.continuedInSessionId | type) == "string" then
-          .continuedInSessionId as $to
-          | if ((has("sessionId") | not) or .sessionId == $u)
-               and ($to | length) == 36
-               and ([$to | explode[] | select((. == 45 or (. >= 48 and . <= 57) or (. >= 97 and . <= 102)) | not)] == [])
-               and $to != $u
-            then "+" + $to else "stop" end
-        elif $t and .type == "assistant" then (if complete then "stop" else "skip" end)
-        elif $t and .type == "user" then (if prompt then "stop" else "skip" end)
-        else "skip" end
-      end
-    end;
-[(split("\n") | reverse[]) as $l | tailrec($l) | select(. != "skip")] | (.[0] // "stop")
-| select(startswith("+")) | .[1:]
-'
+# THE RULE, NOT A COPY OF ITS LITERALS (D-4940; ARCH-65). The jq program is
+# `ccd/lib/transcript.jq`, the one file ccd/ccd's `_continued_in_of` loads too
+# (this file cannot source ccd, so both load the module with `jq -L`);
+# `continued-in-parity.test.ts` runs this reader, ccd's and the server's over
+# one table of transcripts, and the TypeScript twin (`tailRecordOf`,
+# server/src/transcript/parse.ts) is where the rule is written out in full.
+# The file sits beside this script in a tree, else under
+# `$HOME/.cc-sessions/lib` where the installers put it; a missing file is a jq
+# that fails to load, which `_dr_continued_in` answers as NOT MEASURED (rc 2).
+TRANSCRIPT_JQ_LIB="${BASH_SOURCE[0]%/*}/lib"
+[ -f "$TRANSCRIPT_JQ_LIB/transcript.jq" ] || TRANSCRIPT_JQ_LIB="$HOME/.cc-sessions"/lib   # the bare directory on a code line: pool-name-parity.test.ts pins `.cc-sessions/<name>` literals
+CONTINUED_IN_JQ='include "transcript"; continued_in($u)'
 
 _DR_CI_NEXT=""   # `_dr_continued_in`'s out-parameter: the successor, on rc 0
 
@@ -4227,7 +4163,7 @@ _dr_continued_in() {   # file uuid -> 0 superseded (successor in _DR_CI_NEXT), 1
   _DR_CI_NEXT=""
   out=$(set -o pipefail
         tail -c "$CONTINUED_IN_TAIL_BYTES" -- "$f" 2>/dev/null \
-          | jq -rRs --arg u "$uuid" "$CONTINUED_IN_JQ" 2>/dev/null) || return 2
+          | jq -L "$TRANSCRIPT_JQ_LIB" -rRs --arg u "$uuid" "$CONTINUED_IN_JQ" 2>/dev/null) || return 2
   [ -n "$out" ] || return 1
   _DR_CI_NEXT="$out"
   return 0
@@ -4379,7 +4315,7 @@ _check_transcripts() {
     cfg=$(_ccrc_cfg_dir "$wrapper" 2>/dev/null) || cfg=""
     [ -n "$cfg" ] || { rowbad=$((rowbad + 1)); continue; }
     # BOTH SPELLINGS, RESOLVED FIRST — a cross-task hazard Task 6's own review
-    # caught: `ccd`'s readers (`_transcript_path`, `_ci_transcript_path`) try
+    # caught: `ccd`'s readers (`_transcript_path`, `_ci_addrs`/`_ci_extant`) try
     # the REALPATH-resolved munge before the raw one, because Claude Code
     # munges its PHYSICAL cwd (node's `process.cwd()` resolves symlinks)
     # while the registry keeps the path `ccd` wrote — and on a box where
@@ -4759,7 +4695,7 @@ _check_graphify() {
   # the brief's own prose said WARN — `ccrc install` lays the timer down but
   # `OnBootSec=5min` means no fresh box has a census for several minutes at
   # minimum, so a literal WARN here fired on EVERY install, always,
-  # everywhere (measured: `ccrc-install.test.ts`'s "ends with doctor, and a
+  # everywhere (measured: `ccrc-install-*.test.ts`'s "ends with doctor, and a
   # box that passes every check exits 0" — the operator ruling behind that
   # test, D-139, is "A FRESH INSTALL ENDS GREEN": a warning that cannot be
   # made to go away by fixing anything is exactly the desensitising yellow
@@ -5553,7 +5489,7 @@ _check_fleet() {
 # ALSO sourced standalone, under `set -u`, by callers that are not `ccrc`
 # (this suite's own test harness does exactly that to read
 # `CCRC_DOCTOR_CHECKS`), and D-92 (ccd/ccrc:971-981, pinned by
-# ccrc-install.test.ts:2416-2425) is this repo's standing ruling that
+# ccrc-install-*.test.ts) is this repo's standing ruling that
 # ccrc-doctor-checks must hold its own second spelling of anything it needs,
 # rather than lean on a scope accident. Don't "fix" this duplication by
 # reaching across a boundary that does not reliably exist.
@@ -7150,7 +7086,7 @@ _dr_cx_report() {   # <PASS detail>
 # `cmp` where that check uses `diff`. `CODEX_LANE_BINS` is `_inst_bins`'
 # GPT-lane gate, in its order, declared ONCE at file level so `_fix_codex`
 # (Task 8) restores exactly what this compares. ccrc-doctor.test.ts pins this
-# one line to `GPT_LANE_BINS`, which ccrc-install.test.ts pins to the gate
+# one line to `GPT_LANE_BINS`, which ccrc-install-*.test.ts pins to the gate
 # itself, so a sixth executable or a rename reds there before this list can drift.
 CODEX_LANE_BINS=(ccgpt-auth.py ccgpt-proxy.py ccgpt-usage.py ccgpt-runtime ccrc-codex)
 _dr_cx_bins() {
@@ -7942,7 +7878,7 @@ _check_scope-sweep() {
 #  3. the rest is status's. Within two sweep periods of the shim's mtime,
 #     with no tick yet, it answers PASS `first-tick-pending`
 #     (D-4168: a fresh install ends green, the ruling
-#     `ccrc-install.test.ts` pins), and the states in which no fresh tick is
+#     `ccrc-install-*.test.ts` pins), and the states in which no fresh tick is
 #     expected answer as WARNs ahead of any freshness FAIL
 #     (D-4251).
 #
@@ -9910,4 +9846,47 @@ _check_snapshot-posture() {
   fi
   seen="$(_dr_trim "$seen")"
   _dr_pass snapshot-posture "stated: ${seen// /, }; every such image taken while a lane secret existed holds it, and the compromise steps apply to a leaked or restored one"
+}
+
+# `box-settings` (wave 24, D-6599): what the box's ccrc.env ALONE says of each of ccrc's settings (`CCRC_SETTINGS`), read
+# through ccrc's one reader in `file` mode (`_ccrc_knob <KEY> "" file`), so a line the environment hides today is seen
+# before the environment goes: once it does, the file is what every run reads. It reports what the reader reads, never
+# whether a value is valid (each act validates its own). It prints values for those names only, never another line of
+# the file, and through `_upd_redact`; a mirror base's userinfo is masked first, with a scheme or without one (curl
+# reads `user:password@host/...` as http; `_upd_redact` now masks it either way too, D-6748, and this check's own mask
+# runs first), so it never prints. A line
+# the reader refuses, or a file it cannot read at all, WARNs with each reason; until it is rewritten, the act that reads
+# that setting refuses or falls back, as its own line says. No role skip: every role reads its own settings.
+# A refusal whose cause is MODEL-WIDE (F15) — a line the model of the file (`_box_unit_env`, which the reader asks in this
+# shell) cannot decide, so every setting it is asked for refuses, the setting's own line plain: on Linux the rc-3 arms
+# that set BEW_CAUSE (a CR inside a line, a non-ASCII NAME=value line), on macOS every arm, since there the model refuses
+# the whole file — gives the model's own remedy, BUE_FIX (the file and line numbers, never its bytes), once however many
+# settings it refused; the plain-line clause stays for any other refusal. Both are reset per setting: the reader sets
+# them only when it asks the model, so a stale one would pin a cause on a setting it never reached.
+_check_box-settings() {
+  local k v pre set="" unset="" why="" fix="" other=0 none="none of ccrc's settings"   # a `'` inside "${set:-…}" would open a quote in bash
+  local plain="rewrite each named line in the box's ccrc.env as a plain KEY=value line (deploy/ccrc.env.example shows each), or make the file itself readable when it cannot be read or scanned"
+  for k in "${CCRC_SETTINGS[@]}"; do
+    BUE_FIX=""; BEW_CAUSE=""
+    if ! _ccrc_knob "$k" "" file; then why+="${why:+; }$KNOB_WHY"
+      if [ -n "$BUE_FIX" ] && { [ "${CCD_OS:-linux}" = darwin ] || [ -n "$BEW_CAUSE" ]; }; then
+        case "$fix" in *"$BUE_FIX"*) ;; *) fix+="${fix:+; }$BUE_FIX" ;; esac
+      else other=1; fi
+    elif [ "$KNOB_FROM" = file ]; then
+      v="$KNOB"
+      if [ "$k" = CCRC_RELEASE_BASE_URL ]; then   # each `[^/@[:space:]]*@` before the authority's first `/` goes
+        pre=""; [[ ! "$v" =~ ^[A-Za-z][A-Za-z0-9+.-]*:/+ ]] || pre="${BASH_REMATCH[0]}"
+        v="${v#"$pre"}"; [[ ! "$v" =~ ^([^/@[:space:]]*@)+ ]] || v="${v#"${BASH_REMATCH[0]}"}"; v="$pre$v"
+      fi
+      set+="${set:+, }$k=$v"
+    elif [ "$KNOB_FROM" = empty ]; then set+="${set:+, }$k= (empty: the default)"
+    else unset+="${unset:+,} $k"
+    fi
+  done
+  if [ -n "$why" ]; then
+    if [ -n "$fix" ] && [ "$other" -eq 0 ]; then plain="$fix"; elif [ -n "$fix" ]; then plain="$fix; for each other refusal, $plain"; fi
+    _dr_warn box-settings "$(_upd_redact "$why")" "$(_upd_redact "$plain; until then the act that reads it refuses, or falls back as its line says")"
+    return 2
+  fi
+  _dr_pass box-settings "$(_upd_redact "the box's ccrc.env sets ${set:-$none}${unset:+; not set there, so the default applies unless the environment sets it:$unset}")"
 }

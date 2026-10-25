@@ -55,7 +55,7 @@ const post = (app: FastifyInstance, id: string, payload: unknown) =>
 describe('POST /api/sessions/:id/route (routing spec §5.3, live change from the PWA)', () => {
   it('404 for an unknown session, before any parse', async () => {
     const home = seededHome();
-    const { app, calls } = await open(home, async () => ({ code: 0, stdout: '', stderr: '' }), BOTH_CAPS);
+    const { app, calls } = await open(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }), BOTH_CAPS);
     const res = await post(app, 'nope-nothing', { field: 'effort', value: 'high' });
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ ok: false, error: 'unknown-session' });
@@ -65,7 +65,7 @@ describe('POST /api/sessions/:id/route (routing spec §5.3, live change from the
 
   it('400 for a missing field, an unknown field, a control character, and an attempt to name two fields at once — never a ccd call', async () => {
     const home = seededHome();
-    const { app, calls } = await open(home, async () => ({ code: 0, stdout: '', stderr: '' }), BOTH_CAPS);
+    const { app, calls } = await open(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }), BOTH_CAPS);
     const bad = [
       {}, // missing field entirely
       { field: 'effort' }, // value missing — not a string
@@ -89,7 +89,7 @@ describe('POST /api/sessions/:id/route (routing spec §5.3, live change from the
 
   it('501 unsupported when the box does not advertise route-apply-v1 — never a silent drop', async () => {
     const home = seededHome();
-    const { app, calls } = await open(home, async () => ({ code: 0, stdout: '', stderr: '' }), NEITHER_CAP);
+    const { app, calls } = await open(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }), NEITHER_CAP);
     const res = await post(app, ID, { field: 'effort', value: 'high' });
     expect(res.statusCode).toBe(501);
     expect(res.json()).toEqual({ ok: false, error: 'unsupported' });
@@ -102,7 +102,7 @@ describe('POST /api/sessions/:id/route (routing spec §5.3, live change from the
     // docstring measures it against the real binary), so `routeApply` sends
     // `actorReasonFlags`, not the five workspace verbs' `decFlags`.
     const home = seededHome();
-    const { app, calls } = await open(home, async () => ({ code: 0, stdout: '', stderr: '' }), BOTH_CAPS);
+    const { app, calls } = await open(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }), BOTH_CAPS);
     const res = await post(app, ID, { field: 'effort', value: 'high' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
@@ -118,7 +118,7 @@ describe('POST /api/sessions/:id/route (routing spec §5.3, live change from the
 
   it('omits the actor flags when actor-flags-v1 is absent, keeps --apply', async () => {
     const home = seededHome();
-    const { app, calls } = await open(home, async () => ({ code: 0, stdout: '', stderr: '' }), APPLY_ONLY);
+    const { app, calls } = await open(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }), APPLY_ONLY);
     const res = await post(app, ID, { field: 'class', value: 'opus' });
     expect(res.statusCode).toBe(200);
     expect(calls).toEqual([
@@ -130,7 +130,7 @@ describe('POST /api/sessions/:id/route (routing spec §5.3, live change from the
   it('a ccd refusal is a 502 carrying stderr', async () => {
     const home = seededHome();
     const { app, calls } = await open(
-      home, async () => ({ code: 1, stdout: '', stderr: 'ccd: route refused on the box' }), BOTH_CAPS,
+      home, async () => ({ ran: true, code: 1, stdout: '', stderr: 'ccd: route refused on the box' }), BOTH_CAPS,
     );
     const res = await post(app, ID, { field: 'effort', value: 'high' });
     expect(res.statusCode).toBe(502);
