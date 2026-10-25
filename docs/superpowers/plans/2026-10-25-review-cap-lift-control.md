@@ -335,7 +335,10 @@ with it cleanly, and none of #1430, #1406, #1398 or #1390 had landed when this w
   and stays silent on `unnamed`, its text byte-identical, and a guard row pins both halves. The new route joined the
   canonical id census (`routes.test.ts`, twenty-one seams) and the gate's route counts (`auth-gate.test.ts`, and
   `auth/gate.ts`'s docstring: 121 HTTP routes). The two "box token alone is refused" rows were green before the route
-  existed, because the gate refuses every path no EXEMPT entry names; they pin that neither cap route joins one.
+  existed, because the gate refuses every path no EXEMPT entry names; they pin that neither cap route joins one. The
+  GET joined `coordinator-skill.test.ts`'s set of coord routes no skill names, beside the POST, for the caps reason (the
+  read is the first half of the invitation); its forbid-mention case already covers it. That file was under another
+  wave's claim, and its holder consented to that one entry.
 - **D-6911, as planned, keyed on the measured cap state.** The Mail door is `capDoorRun(ev, live)` in
   `reviewCapWords.ts` (correction 4): it opens only for a run that the fleet store's live runs frame holds and whose
   ask is raised and not lifted, found through `eventRunId`. `kind: 'run'` and an empty session only narrow it, and M4
