@@ -3245,6 +3245,8 @@ describe('the hourly refresh lowers a refused window on a direct lane (codex-bri
     expect(rows[0]).toMatchObject({ id: ID, ok: false,
       lowered: [{ model: OPUS, from: 400000, to: 342000, refused: 380000 }] });
     expect(tokensOf(OPUS)).toBe(342000);
+    // No probe succeeded, so no refresh materialise ran: the op's own re-materialise is what carried it (fix round 1).
+    expect(eighthKey()).toBe('342000');
   });
 
   it('the new window reaches settings.json in the same run', async () => {
@@ -3267,6 +3269,21 @@ describe('the hourly refresh lowers a refused window on a direct lane (codex-bri
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ id: ID, probe: 'codex', ok: true, count: 9, litellm: 'rendered' });
     expect(String(rows[0]!['lowerFailed'])).toMatch(/is not valid JSON/);
+    expect(tokensOf(OPUS)).toBe(400000);
+  });
+
+  it.each(['../x', '..', '.'])('a lane.json whose bridgeFiles.stats is %j is not asked to lower', async (name) => {
+    await seatLane('direct');
+    const laneDir = join(home, '.ccrc', 'codex', ID);
+    const lanePath = join(laneDir, 'lane.json');
+    const lane = JSON.parse(fs.readFileSync(lanePath, 'utf8'));
+    // A valid stats file beside the lane's directory, where '../x' would reach: read, it would lower.
+    fs.copyFileSync(join(laneDir, lane.bridgeFiles.stats), join(laneDir, '..', 'x'));
+    lane.bridgeFiles.stats = name;
+    fs.writeFileSync(lanePath, `${JSON.stringify(lane, null, 2)}\n`);
+    const r = refreshFaked(ID);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)['refreshed']).toEqual([{ id: ID, probe: 'codex', ok: true, count: 9, litellm: 'rendered' }]);
     expect(tokensOf(OPUS)).toBe(400000);
   });
 
