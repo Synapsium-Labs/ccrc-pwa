@@ -1,4 +1,4 @@
-import type { AccountDef, Hue, ExecSpec } from './roster.js';
+import type { AccountDef, Hue, ExecSpec, CodexBridgeMode, CodexUpstream } from './roster.js';
 
 /**
  * One account as validated by `rosterFromJson` — the flattened shape Task
@@ -37,6 +37,11 @@ export interface RosterJsonAccount {
   proxyPort?: number;
   litellmPort?: number;
   authDir?: string;
+  /** Present only when `execKind === 'codex'`, RESOLVED: an absent roster key
+   *  reads the first word of `shared/roster.ts`'s `CODEX_BRIDGE_MODES` /
+   *  `CODEX_UPSTREAMS` (codex-bridge spec D20). */
+  bridge?: CodexBridgeMode;
+  upstream?: CodexUpstream;
 }
 
 /**
