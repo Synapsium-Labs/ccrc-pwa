@@ -41,7 +41,7 @@ import {
   classMethodCount, methodCounts, growthSummary, appendJobSummary, METHOD_COUNT_CLASS, METHOD_COUNT_FILE,
   prNumberFromEnv, parseExemptions, exemptionsOnMain, matchExemptions, GROWTH_EXEMPTIONS_FILE,
   GROWTH_EXEMPTIONS_STAMP, GROWTH_MACHINERY, overLine, growthVerdicts, armedGrowth, gitRead, type GrowthRow, type GrowthExemption,
-  GROWTH_WAIVERS_FILE, parseWaivers, waiversAdded, waiversInDiff, type GrowthWaiver,
+  GROWTH_WAIVERS_FILE, parseWaivers, parseWaiverFiles, waiversAdded, waiversInDiff, type GrowthWaiver,
 } from './growthCheck.js';
 import { EXEMPTION_SET_STAMPS } from './rings/exemption-age.data.js';
 import { parseFile } from './scan/parse.js';
@@ -566,6 +566,18 @@ describe('growthCheck: the reviewed waiver ledger (D-6223)', () => {
     const two = parseWaivers(ledger(waiver(), waiver({ d: 'D-6178', maxDelta: 41 })), GROWTH_FILES, today);
     expect(two.problems).toEqual([]);
     expect(two.entries.map((e) => `${e.file} ${e.d} ${e.maxDelta}`)).toEqual(['ccd/ccd D-6223 60', 'ccd/ccd D-6178 41']);
+  });
+
+  it('a directory with two waiver files parses to both, and equals the old array it was cut from', () => {
+    const old = [waiver(), waiver({ d: 'D-6178', maxDelta: 41 })];
+    const fromArray = parseWaivers(ledger(...old), GROWTH_FILES, today).entries;
+    const items = old.map((w) => ({ name: `${String(w['d'])}-ccd-ccd.json`, text: JSON.stringify(w, null, 2) }));
+    const fromDir = parseWaiverFiles(items, GROWTH_FILES, today);
+    expect(fromDir.problems).toEqual([]);
+    // A set, not a sequence: the directory is read by file name, the array in the order it was written.
+    const byKey = (a: { d: string; file: string }, b: { d: string; file: string }): number => (a.d + a.file).localeCompare(b.d + b.file);
+    expect([...fromDir.entries].sort(byKey)).toEqual([...fromArray].sort(byKey));
+    expect(fromDir.entries).toHaveLength(2);
   });
 
   it('every malformed shape is a problem, and a ledger with one waives nothing', () => {

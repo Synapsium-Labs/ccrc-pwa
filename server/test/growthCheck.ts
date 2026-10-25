@@ -335,6 +335,26 @@ export interface GrowthWaiver { file: string; maxDelta: number; d: string; reaso
 
 const WAIVER_KEYS: readonly (keyof GrowthWaiver)[] = ['file', 'maxDelta', 'd', 'reason', 'added'];
 
+/** Every problem in one waiver object, pushed onto `problems` under `at`; the object when it is one, else null. */
+function checkWaiverEntry(e: unknown, at: string, files: readonly string[], today: Date, problems: string[]):
+  Record<string, unknown> | null {
+  if (typeof e !== 'object' || e === null || Array.isArray(e)) { problems.push(`${at}: not an object`); return null; }
+  const o = e as Record<string, unknown>;
+  for (const k of Object.keys(o)) if (!(WAIVER_KEYS as readonly string[]).includes(k)) problems.push(`${at}: unknown key \`${k}\``);
+  for (const k of WAIVER_KEYS) if (!(k in o)) problems.push(`${at}: missing \`${k}\``);
+  if (typeof o['file'] !== 'string' || !files.includes(o['file'])) problems.push(`${at}: file must be one of the listed files`);
+  if (!Number.isInteger(o['maxDelta']) || (o['maxDelta'] as number) <= GROWTH_LIMIT) {
+    problems.push(`${at}: maxDelta must be an integer above ${GROWTH_LIMIT}`);
+  }
+  if (typeof o['d'] !== 'string' || !/^D-[1-9]\d*$/.test(o['d'])) problems.push(`${at}: d must be a D-number, D-<n>`);
+  if (typeof o['reason'] !== 'string' || typeof o['added'] !== 'string') {
+    problems.push(`${at}: reason and added must be strings`);
+  } else {
+    problems.push(...malformedEntries({ [at]: { reason: o['reason'], since: o['added'] } }, today));
+  }
+  return o;
+}
+
 /** `text` as the ledger. Any problem (not JSON, a wrong shape, a payer that does
  *  not name consolidation W5, a key missing or unknown, a value out of range, a
  *  second entry for one file and D-number) is named, and then no entry is
@@ -357,25 +377,46 @@ export function parseWaivers(text: string, files: readonly string[], today: Date
   const seen = new Set<string>();
   list.forEach((e, i) => {
     const at = `#${i}`;
-    if (typeof e !== 'object' || e === null || Array.isArray(e)) { problems.push(`${at}: not an object`); return; }
-    const o = e as Record<string, unknown>;
-    for (const k of Object.keys(o)) if (!(WAIVER_KEYS as readonly string[]).includes(k)) problems.push(`${at}: unknown key \`${k}\``);
-    for (const k of WAIVER_KEYS) if (!(k in o)) problems.push(`${at}: missing \`${k}\``);
-    if (typeof o['file'] !== 'string' || !files.includes(o['file'])) problems.push(`${at}: file must be one of the listed files`);
-    if (!Number.isInteger(o['maxDelta']) || (o['maxDelta'] as number) <= GROWTH_LIMIT) {
-      problems.push(`${at}: maxDelta must be an integer above ${GROWTH_LIMIT}`);
-    }
-    if (typeof o['d'] !== 'string' || !/^D-[1-9]\d*$/.test(o['d'])) problems.push(`${at}: d must be a D-number, D-<n>`);
-    if (typeof o['reason'] !== 'string' || typeof o['added'] !== 'string') {
-      problems.push(`${at}: reason and added must be strings`);
-    } else {
-      problems.push(...malformedEntries({ [at]: { reason: o['reason'], since: o['added'] } }, today));
-    }
+    const o = checkWaiverEntry(e, at, files, today, problems);
+    if (o === null) return;
     const key = `${String(o['file'])} and ${String(o['d'])}`;
     if (seen.has(key)) problems.push(`${at}: a second entry for ${key}`);
     seen.add(key);
   });
   return problems.length ? { payer: '', entries: [], problems } : { payer: payer as string, entries: list as GrowthWaiver[], problems };
+}
+
+/** The waiver directory, repo-relative: one JSON file per waiver, `<D-number>-<slug>.json`, so two PRs that each add a
+ *  waiver touch two files and never the same lines. */
+export const GROWTH_WAIVERS_DIR = 'server/test/growth-waivers';
+
+/** The waiver directory's files as the ledger: each file holds ONE waiver object (the keys of `GrowthWaiver`), named
+ *  `<its D-number>-<slug>.json`. Any problem in any file (the name, the JSON, a wrong shape, a second waiver for one
+ *  file and D-number) is named with the file, and then no entry is answered: a malformed ledger waives nothing. */
+export function parseWaiverFiles(items: readonly { name: string; text: string }[], files: readonly string[],
+  today: Date = new Date()): { entries: GrowthWaiver[]; problems: string[] } {
+  const problems: string[] = [];
+  const entries: GrowthWaiver[] = [];
+  const seen = new Set<string>();
+  for (const { name, text } of [...items].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+    const at = name;
+    if (!/^D-[1-9]\d*-[a-z0-9][a-z0-9-]*\.json$/.test(name)) { problems.push(`${at}: the name must be <D-number>-<slug>.json`); continue; }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch (e) {
+      problems.push(`${at}: not JSON: ${(e as Error).message}`);
+      continue;
+    }
+    const o = checkWaiverEntry(raw, at, files, today, problems);
+    if (o === null) continue;
+    if (typeof o['d'] === 'string' && !name.startsWith(`${o['d']}-`)) problems.push(`${at}: the name must start with its d, ${o['d']}`);
+    const key = `${String(o['file'])} and ${String(o['d'])}`;
+    if (seen.has(key)) problems.push(`${at}: a second waiver for ${key}`);
+    seen.add(key);
+    entries.push(raw as GrowthWaiver);
+  }
+  return problems.length ? { entries: [], problems } : { entries, problems };
 }
 
 /** The entries of `head` whose file and D-number `base` does not hold: the ones
