@@ -89,7 +89,7 @@ export function bindsRun(incarnation: Incarnation, run: BindingRun): RunBinds {
 
 const binds = (incarnation: Incarnation, run: BindingRun): boolean => bindsRun(incarnation, run) === 'bound';
 
-const isOpen = (run: BindingRun): boolean => !(TERMINAL_RUN_STATES as readonly RunState[]).includes(run.state);
+export const isOpen = (run: BindingRun): boolean => !(TERMINAL_RUN_STATES as readonly RunState[]).includes(run.state);
 
 /** The two named queries over one incarnation: the newest bound run in any state, and the newest open one. */
 export interface SessionBinding {
@@ -117,6 +117,12 @@ export function claimantsOf(runs: readonly BindingRun[], incarnation: Incarnatio
     if (r.claimedBy !== null) seen.add(r.claimedBy);
   }
   return [...seen];
+}
+
+/** Every run that binds `incarnation`, by id: in any state, or only the open ones. The readers that list a worker's runs
+ *  (`CoordStore.runsNamingSession`, `openRunsForSession`) project this; `bindingOf` answers the newest and the open one. */
+export function boundRunsOf(runs: readonly BindingRun[], incarnation: Incarnation, which: 'any' | 'open'): BindingRun[] {
+  return runs.filter((r) => binds(incarnation, r) && (which === 'any' || isOpen(r))).sort((a, b) => a.id - b.id);
 }
 
 /** The open runs `coordinatorId` claims whose worker is the incarnation they were opened for, in id order. A run that

@@ -9,6 +9,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { bornIncarnation, unbornIncarnation } from '../src/coord/runBinding.js';
 import { heldFor } from '../src/coord/heldFor.js';
+import { runDriftPass, type DriftLaneDeps } from '../src/coord/driftLane.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okSiblings } from './coordReadHelpers.js';
 
@@ -84,5 +85,20 @@ describe('the readers take the worker\'s incarnation (ARCH-62)', () => {
     s.db.prepare('UPDATE runs SET dispatchStartedAt = ?, coordProject = ? WHERE id = ?').run(BORN, 'p', a);
     const verdict = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: a } as never, [], BORN + 5000);
     expect(verdict).toMatchObject({ kind: 'released', runId: a });
+  });
+});
+
+describe('the drift lane reads the worker\'s parent through its incarnation (ARCH-62)', () => {
+  it('a recycled name raises no parent-mismatch finding for the run of the earlier occupant', async () => {
+    const s = store();
+    const { fresh } = recycled(s, true);
+    const sent: unknown[] = [];
+    const deps = (marks: ReadonlyMap<string, { kind: 'child'; runId: number }>): DriftLaneDeps => ({
+      coord: s, names: ['demo-w'], childMarks: marks as never, measure: () => Promise.resolve({ state: 'alive', why: 'pane live' }),
+      notice: (e) => { sent.push(e); return { recorded: true, archived: 'none' }; }, warn: () => {},
+    });
+    await runDriftPass(deps(new Map([['demo-w', { kind: 'child', runId: fresh }]])), BORN + 5000);
+    const found = s.driftFindingRows();
+    expect(found.ok && found.rows.map((r) => r.key).filter((k) => k.includes('parent-mismatch'))).toEqual([]);
   });
 });
