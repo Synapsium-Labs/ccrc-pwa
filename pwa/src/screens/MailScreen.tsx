@@ -22,7 +22,7 @@ import { ack, acksSnapshot, FEED_ACK_KEY, isUnseenAt, subscribeAcks } from '../l
 import { Button, EmptyState, MAIL_GLYPH, PageScaffold, SETTINGS_GLYPH, useNow } from '@ccrc/ui';
 import { formatAge } from '../fleet/formatReset';
 import { LiftCapSheet } from '../fleet/LiftCapSheet';
-import { capRecordRun } from '../fleet/reviewCapWords';
+import { capDoorRun } from '../fleet/reviewCapWords';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 
@@ -47,6 +47,9 @@ const loadFeedDefault = (): Promise<{ events: NotifyEvent[] }> => api.feed(100);
  *  `loadFeedDefault`'s own reason (a default parameter expression is re-minted
  *  on every render, and an effect keyed on that identity never stops firing). */
 const loadRunsDefault = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
+
+/** No live runs: before the runs frame has been seen, no record offers the review cap's door (D-6911). */
+const NO_RUNS: readonly RunSummary[] = [];
 
 /** The feed's own small vocabulary. Deliberately NOT NotifyEvent['kind']
  *  rendered raw: `merged` is a git word, `run` is a noun the board owns, and
@@ -122,8 +125,6 @@ export function MailScreen({
   const [runsById, setRunsById] = useState<ReadonlyMap<number, RunSummary>>(new Map());
   const loadRunsRef = useRef(loadRuns);
   loadRunsRef.current = loadRuns;
-  // `runsRead` bumps to re-read after a lift (D-6911), so the cap's record loses its door once the run is lifted.
-  const [runsRead, setRunsRead] = useState(0);
   useEffect(() => {
     let live = true;
     void loadRunsRef.current()
@@ -133,8 +134,13 @@ export function MailScreen({
       })
       .catch(() => { /* the headers degrade; the feed does not */ });
     return () => { live = false; };
-  }, [store, runsRead]);
-  // D-6911: the screen's one lift sheet, opened from the cap's record.
+  }, [store]);
+  // D-6911: the cap's record carries its Lift cap door from the fleet store's live runs frame, never from the
+  // once-per-mount read above, so a lift (here or anywhere) takes the door away on the watcher's next frame. No frame
+  // yet is no door. The screen's one lift sheet opens from it.
+  const liveRuns = store((s) => s.runs);
+  const runsFrameSeen = store((s) => s.runsFrameSeen);
+  const doorRuns = runsFrameSeen ? liveRuns : NO_RUNS;
   const [liftTarget, setLiftTarget] = useState<RunSummary | null>(null);
 
   // Opening the screen is the ack. Floored to the newest record's own instant
@@ -255,7 +261,7 @@ export function MailScreen({
                   // `source=… outcome=…` line — the title already says both. A body off its grammar has no title
                   // standing in for it, so it still prints. `raisesUnread` keeps the row from ever reading unseen.
                   const line = interruptLine(ev);
-                  const capRun = capRecordRun(ev, (id) => runsById.get(id));
+                  const capRun = capDoorRun(ev, doorRuns);
                   return (
                     <li
                       key={recordKey(ev)}
@@ -283,7 +289,7 @@ export function MailScreen({
           ))}
         </>
       )}
-      <LiftCapSheet run={liftTarget} onClose={() => setLiftTarget(null)} onDone={() => setRunsRead((n) => n + 1)} />
+      <LiftCapSheet run={liftTarget} onClose={() => setLiftTarget(null)} />
     </PageScaffold>
   );
 }

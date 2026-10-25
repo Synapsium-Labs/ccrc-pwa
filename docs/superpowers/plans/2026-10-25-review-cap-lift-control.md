@@ -288,6 +288,25 @@ its symbol before editing.
   ask. A server scan pins that the cap's notice is that shape's one writer.
 - **D-6912.** Spare, for a departure found while executing. If unused, it says "spare, unused".
 
+## Coordinator corrections, mid-wave (2026-10-25)
+
+1. The GET's refusals go through `refuseRoute(reply, 'bad-request' | 'not-found', { detail })` after `notConfigured`, as the sibling POST does. No inline `reply.code(4xx).send`: refusal-status pins `coord/routes.ts`'s inline sends at 119, and that count may only shrink.
+2. The "one `kind: 'run'` notice with no session" pin is a `scan/parse.ts` census, never a text grep or a `readFileSync` of `routes.ts`. It walks `server/src` with `rings/walkSrc.ts` and takes `parseFile(f).calls` named notice, notify or notifyEach whose first argument has `kind: 'run'` and `sessionId: ''`. It expects exactly one, in `coord/routes.ts`, inside the `app.post('/api/runs', …)` span. A CONTROL row through `parseSource` uses a reformatted literal. single-definition holds `routes.ts` at exactly 38 in the W1a and W1b ceilings.
+3. LiftCapSheet words both calls' failures through a new `REVIEW_CAP_REFUSAL_TEXT` in `pwa/src/lib/refusalWords.ts`, beside `RUN_ROUTE_REFUSAL_TEXT`, keyed on `bad-request`, `not-found` and `not-configured`, and read as `refusalText(err, REVIEW_CAP_REFUSAL_TEXT) ?? apiErrorText(err)`. Keep AbandonSheet's busy flag and superseded guard, but none of its `code === …` branches: refusal-literal-ratchet pins 32 literal branches, and only an operator ruling may raise that. 401 stays the api funnel's login screen. Add one lift-cap-sheet row per word.
+4. The Mail door's match is one pure `capDoorRun(ev: NotifyEvent, live: readonly RunSummary[]): RunSummary | null` in `reviewCapWords.ts`. It keys on `ev.kind === 'run'`, the run found through `eventRunId(ev)` (never `ev.runId`), and `capWaiting(run) === 'waiting'`. `sessionId === ''` stays as a narrowing clause, so M4 still mutates it. Say in D-6911's As built note that the measured cap state is the key.
+5. MailScreen gives `capDoorRun` the fleet store's live runs (`store((s) => s.runs)` once the runs frame has been seen, otherwise no door), never its once-per-mount `runsById`, and its onDone re-reads nothing. RunsScreen's band takes the board's existing active list, and its onDone may reload the cold runs. Add a mail-screen row: when the runs frame turns `liftedAt` non-null, the door goes away without a remount.
+6. Add C5 file rows for `fleet/reviewCapWords.ts`, `fleet/LiftCapSheet.tsx` and `fleet/ReviewCapBand.tsx` to the ring-context map in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`, beside AbandonSheet's. Run `rings/totality` and `docs-parity`.
+7. The findings words move with the types. `REVIEW_FINDINGS_WORDS: Record<'absent' | 'unreadable' | 'unnamed', string>` and `REVIEW_FINDINGS_NONE_OPEN` go in `shared/api.ts`, and `findingsWords` reads them. `reviewCapNotice` reads the absent, unreadable and none-open entries and stays silent on `unnamed`, so its text stays byte-identical. Add a guard row: for those three, the notice body contains the table entry, and for `unnamed` it contains none of them.
+8. The round predicate is written once. `reviewRounds(id)` becomes `this.reviewCapStates([id]).get(id)?.rounds ?? 0`, or both share one private SQL fragment. Add a row: openRun's refusal `by` equals `reviewCap.rounds` for the same run.
+9. Add `ReviewCapLiftAnswer { ok: true; run: number; rounds: number; cap: number; lifted: true }` to `shared/api.ts`. The POST's literal gains `satisfies ReviewCapLiftAnswer`, with no byte change on the wire, and `api.liftReviewCap` returns `Promise<ReviewCapLiftAnswer>`.
+10. Add `refusal-status`, `rings/outward-edges`, `rings/pwa-rings`, `rings/totality` and `rings/wire-totality` to Task 2 Step 4 and Task 5's server gates, and drop "rings (if present)".
+
+Not this wave: a `cause` field on NotifyEvent, a separate move-only commit for the helper (optional, and your call), and the door on the run card.
+
+Sequencing: if #1430 or #1406 lands before you push, merge main, then re-measure `store.ts` and `routes.ts` growth against the merge-base and re-run run-routes and single-definition. Whichever of #1398 and #1390 lands first, your C5 rows rebase over its edits to the 08-10 spec.
+
+If any item contradicts what you have measured at your tip, stop and ask me before choosing.
+
 ## As built (2026-10-25)
 
 Built on `origin/main` at `d12739bd6`. Five tasks, one commit each after the plan's copy.

@@ -6478,16 +6478,18 @@ export type ReviewFindings =
   | { state: 'read'; lines: string[] }
   | { state: Exclude<ReviewFindingsState, 'read'> };
 
-/** What the cap's notice and the console's lift sheet say about the last review's report when it gives no finding
- *  lines (D-6911): spelled once, read by `reviewCapNotice` (`server/src/coord/reviewcap.ts`) and `findingsWords`
- *  (`pwa/src/fleet/reviewCapWords.ts`), so the sheet says what the notice said. `none` is a read report that lists
- *  none. The notice says nothing for `unnamed`, where it has already said no review reported. */
-export const REVIEW_FINDINGS_WORDS: Readonly<Record<Exclude<ReviewFindingsState, 'read'> | 'none', string>> = {
-  none: 'The report lists no open findings.',
+/** What the cap's notice and the console's lift sheet say about the last review's report when it was not read
+ *  (D-6910, D-6911): spelled once, beside the type it words, and read by `reviewCapNotice`
+ *  (`server/src/coord/reviewcap.ts`) and `findingsWords` (`pwa/src/fleet/reviewCapWords.ts`), so the sheet says what the
+ *  notice said. Total over the states that are not `read`, so a new state is a compile error here. The notice stays
+ *  silent on `unnamed`, where it has already said no review reported. */
+export const REVIEW_FINDINGS_WORDS: Readonly<Record<Exclude<ReviewFindingsState, 'read'>, string>> = {
   unnamed: 'No report is on file.',
   absent: 'The report file is gone.',
   unreadable: 'The report file could not be read.',
 };
+/** A report that was read and lists no open findings. */
+export const REVIEW_FINDINGS_NONE_OPEN = 'The report lists no open findings.';
 
 /** The structured ask the `cap-review-rounds` refusal answers with, the notice words, and
  *  `GET /api/coord/review-cap/:id` reads back (D-6910). */
@@ -6499,6 +6501,9 @@ export interface ReviewCapAsk {
 /** `GET /api/coord/review-cap/:id`'s answer (D-6910): the ask, composed by the same helper as the refusal's, and when
  *  it was raised and lifted (`ReviewCapStatus`'s two times). */
 export interface ReviewCapView { ok: true; ask: ReviewCapAsk; askedAt: number | null; liftedAt: number | null }
+
+/** `POST /api/coord/review-cap`'s answer (D-6795), typed once for the route's literal and the PWA's call. */
+export interface ReviewCapLiftAnswer { ok: true; run: number; rounds: number; cap: number; lifted: true }
 
 export interface RunSummary {
   id: number;

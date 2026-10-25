@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { ReviewCapView } from '../../shared/api';
 import { LiftCapSheet } from '../src/fleet/LiftCapSheet';
-import { ApiError } from '../src/lib/api';
+import { ApiError, REVIEW_CAP_REFUSAL_TEXT } from '../src/lib/api';
 import { run } from './rollupFixture';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -60,9 +60,10 @@ describe('LiftCapSheet', () => {
   });
 
   it.each([
-    [404, { ok: false, error: 'not-found' }, /not a work run/i],
-    [400, { ok: false, error: 'bad-request' }, /refused the run id/i],
-  ])('a %i from the lift is said in words, and the sheet stays open', async (status, body, words) => {
+    [404, { ok: false, error: 'not-found' }, REVIEW_CAP_REFUSAL_TEXT['not-found']],
+    [400, { ok: false, error: 'bad-request' }, REVIEW_CAP_REFUSAL_TEXT['bad-request']],
+    [501, { ok: false, error: 'not-configured' }, REVIEW_CAP_REFUSAL_TEXT['not-configured']],
+  ])('a %i from the lift is said in its table word, and the sheet stays open', async (status, body, words) => {
     const lift = vi.fn().mockRejectedValue(new ApiError(status, body));
     const onClose = vi.fn(); const onDone = vi.fn();
     render(<LiftCapSheet run={work()} onClose={onClose} onDone={onDone} loadAsk={vi.fn().mockResolvedValue(view())} lift={lift} />);
@@ -71,6 +72,12 @@ describe('LiftCapSheet', () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(onDone).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: /^lift cap$/i })).toBeEnabled();
+  });
+
+  it('a refused read of the ask says the refusal\'s table word', async () => {
+    const loadAsk = vi.fn().mockRejectedValue(new ApiError(404, { ok: false, error: 'not-found' }));
+    render(<LiftCapSheet run={work()} onClose={() => {}} onDone={() => {}} loadAsk={loadAsk} lift={vi.fn()} />);
+    expect(await screen.findByText(/the ask could not be read/i)).toHaveTextContent(REVIEW_CAP_REFUSAL_TEXT['not-found']);
   });
 
   it('a failed read of the ask says so, and still offers the lift: the lift does not need the ask', async () => {

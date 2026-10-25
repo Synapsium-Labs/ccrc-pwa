@@ -72,7 +72,7 @@ import {
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult,
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type AdvanceOk, type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
-  type ReviewCapAsk, type ReviewCapView,
+  type ReviewCapAsk, type ReviewCapLiftAnswer, type ReviewCapView,
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal } from '../../../shared/refusal.js';
 import { CHECKS_MAIL_TOKEN, mergingAtDetail, type ChecksMode } from '../../../shared/landing.js';
@@ -2184,7 +2184,7 @@ export function registerCoordRoutes(
     if (!lifted) return refuseRoute(reply, 'not-found', { detail: `run ${run} is not a work run` });
     notice({ kind: 'coord', sessionId: '', title: 'review cap lifted', body: `run ${run}`, runId: run },
       'record-only', { degraded: 'cap lifted, feed archive degraded' });
-    return reply.code(200).send({ ok: true, run, rounds: coord.reviewRounds(run), cap: REVIEW_ROUND_CAP, lifted: true });
+    return reply.code(200).send({ ok: true, run, rounds: coord.reviewRounds(run), cap: REVIEW_ROUND_CAP, lifted: true } satisfies ReviewCapLiftAnswer);
   });
 
   /**

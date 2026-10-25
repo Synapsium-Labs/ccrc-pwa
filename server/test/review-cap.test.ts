@@ -10,9 +10,13 @@
 //   `reviewCapLifted` always false .............. the lifted case (the 4th stays refused)
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import path from 'node:path';
 import type { ReadFailure } from '../../shared/agent-protocol.js';
-import { REVIEW_FINDINGS_STATES, type ReviewFindingsState } from '../../shared/api.js';
+import {
+  REVIEW_FINDINGS_NONE_OPEN, REVIEW_FINDINGS_STATES, REVIEW_FINDINGS_WORDS, type ReviewFindings, type ReviewFindingsState,
+} from '../../shared/api.js';
+import { parseFile, parseSource, type CallSite, type ParsedFile } from './scan/parse.js';
+import { REPO, walkSrc } from './rings/walkSrc.js';
 import { REVIEW_ROUND_CAP, extractOpenFindings, reviewCapAsk, reviewCapNotice, reviewCapRefuses, reviewCapStatus, reviewFindingsOf } from '../src/coord/reviewcap.js';
 
 describe('reviewCapRefuses', () => {
@@ -90,18 +94,49 @@ describe('the ask\'s types moved to shared/api.ts (D-6910)', () => {
   });
 });
 
-// D-6911 relies on this: the PWA's Mail door matches the cap's record by `kind: 'run'` and an empty session, so the cap
-// notice must stay the one writer of that literal shape in the server's source.
+// D-6911 narrows on this: the PWA's Mail door asks for `kind: 'run'` with an empty session, so the cap notice should
+// stay that shape's one literal writer in the server's source. A census over `scan/parse.ts`'s call facts, not text
+// (`single-definition`'s ratchet holds `coord/routes.ts`'s literal source pins): every `notice`, `notify` or
+// `notifyEach` call under `server/src` with an argument whose object literal says both. The door's real key is the
+// measured cap state, a raised and unlifted ask on the named run, so a writer whose session is empty only at runtime
+// can never open the door for a run that does not wait.
+const NOTICE_CALLS = new Set(['notice', 'notify', 'notifyEach']);
+const capShaped = (p: ParsedFile): CallSite[] => p.calls.filter((c) => c.name !== null && NOTICE_CALLS.has(c.name)
+  && c.args.some((a) => /\bkind:\s*'run'/.test(a.text) && /\bsessionId:\s*''/.test(a.text)));
+
 describe('the cap notice is the one kind run record with no session (D-6911)', () => {
-  it('a scan of server/src finds exactly one such writer, and it is the cap notice', () => {
-    const root = new URL('../..', import.meta.url).pathname;
-    const grep = (args: string[]): string[] =>
-      execFileSync('git', ['grep', '-n', ...args, "kind: 'run', sessionId: ''", '--', 'server/src'], { cwd: root, encoding: 'utf8' })
-        .trim().split('\n');
-    const hits = grep([]);
-    expect(hits).toHaveLength(1);
-    expect(hits[0]).toMatch(/^server\/src\/coord\/routes\.ts:\d+:.*title: n\.title/);
-    // The line after it carries the cap notice's own tag: this writer is the review cap's, not another run notice's.
-    expect(grep(['-A1'])[1]).toContain('tag: `review-cap-${work}`');
+  it('CONTROL: the census sees a reformatted literal, and a notify whose record is its second argument', () => {
+    const fixture = "notice({\n  kind:   'run',\n  sessionId:\n    '',\n  title: t,\n});\n"
+      + "notify(deps, { kind: 'run', sessionId: '', runId: 1 });\n"
+      + "notify(deps, { kind: 'run', sessionId: id, runId: 1 });\n";
+    expect(capShaped(parseSource(fixture)).map((c) => c.name)).toEqual(['notice', 'notify']);
+  });
+
+  it('finds exactly one such writer under server/src, inside POST /api/runs', () => {
+    const files = walkSrc({ roots: ['server/src'], min: 150 });
+    const hits = files.flatMap((f) => capShaped(parseFile(path.join(REPO, f))).map((c) => ({ f, c })));
+    expect(hits.map(({ f, c }) => `${f}:${c.line}`)).toHaveLength(1);
+    expect(hits[0]!.f).toBe('server/src/coord/routes.ts');
+    const routes = parseFile(path.join(REPO, 'server/src/coord/routes.ts'));
+    const open = routes.calls.filter((c) => c.name === 'post' && c.args[0]?.kind === 'string' && c.args[0].text === '/api/runs');
+    expect(open).toHaveLength(1);
+    expect(hits[0]!.c.start).toBeGreaterThan(open[0]!.start);
+    expect(hits[0]!.c.end).toBeLessThan(open[0]!.end);
+  });
+});
+
+// D-6910: the findings words are one table, read by the notice and the sheet. For the three states the notice speaks,
+// its body carries that table entry; for `unnamed` it carries none of them.
+describe('reviewCapNotice reads the shared findings words', () => {
+  const last = { reviewRunId: 15, summary: 's', report: '/r.md' };
+  const body = (f: ReviewFindings): string => reviewCapNotice(reviewCapAsk(12, 3, last, f)).body;
+  it('says the none-open, absent and unreadable entries', () => {
+    expect(body({ state: 'read', lines: [] })).toContain(REVIEW_FINDINGS_NONE_OPEN);
+    expect(body({ state: 'absent' })).toContain(REVIEW_FINDINGS_WORDS.absent);
+    expect(body({ state: 'unreadable' })).toContain(REVIEW_FINDINGS_WORDS.unreadable);
+  });
+  it('stays silent on unnamed', () => {
+    const b = body({ state: 'unnamed' });
+    for (const w of [REVIEW_FINDINGS_NONE_OPEN, ...Object.values(REVIEW_FINDINGS_WORDS)]) expect(b).not.toContain(w);
   });
 });

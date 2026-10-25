@@ -671,12 +671,12 @@ describe('the review cap door on the cap\'s record', () => {
   });
   const notice = (over: Partial<NotifyEvent> = {}): NotifyEvent =>
     e({ seq: 9, kind: 'run', sessionId: '', runId: 12, title: 'Review cap reached on run 12', body: 'Lift the cap…', ...over });
-  const mount = async (ev: NotifyEvent, runs: RunSummary[]) => {
+  const mount = async (ev: NotifyEvent, runs: RunSummary[], frameSeen = true) => {
     const store = makeStore();
-    render(<MailScreen store={store} loadFeed={async () => ({ events: [ev] })} loadRuns={async () => ({ runs })} />);
+    act(() => { store.setState({ runs, runsFrameSeen: frameSeen }); });
+    render(<MailScreen store={store} loadFeed={async () => ({ events: [ev] })} loadRuns={async () => ({ runs: [] })} />);
     await screen.findByText(ev.title);
-    // The runs read lands after the feed: wait for its programme header.
-    await screen.findAllByText(runs[0]?.programTitle ?? 'never');
+    return store;
   };
   const door = () => screen.queryByRole('button', { name: /lift cap/i });
 
@@ -700,6 +700,18 @@ describe('the review cap door on the cap\'s record', () => {
 
   it('shows no door on a closed run', async () => {
     await mount(notice(), [capRun({ state: 'done' })]);
+    expect(door()).toBeNull();
+  });
+
+  it('shows no door before the runs frame has been seen, whatever the runs read', async () => {
+    await mount(notice(), [capRun()], false);
+    expect(door()).toBeNull();
+  });
+
+  it('takes the door away when the runs frame turns liftedAt non-null, without a remount', async () => {
+    const store = await mount(notice(), [capRun()]);
+    expect(door()).toBeInTheDocument();
+    act(() => { store.setState({ runs: [capRun({ reviewCap: { rounds: 3, cap: 3, askedAt: 5, liftedAt: 6 } })] }); });
     expect(door()).toBeNull();
   });
 

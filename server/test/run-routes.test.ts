@@ -4284,7 +4284,10 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
       };
       expect(await capOf(workId)).toEqual({ rounds: 3, cap: 3, askedAt: null, liftedAt: null });
       for (const id of ids) expect(await capOf(id)).toBeNull();
-      expect((await postOpen(app, REVIEW(workId, { title: 'R4' }))).statusCode).toBe(409);
+      const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
+      expect(refused.statusCode).toBe(409);
+      // One round predicate (D-6909): the refusal's `by` is the row's `reviewCap.rounds` for the same run.
+      expect((refused.json() as { by: string }).by).toBe(String((await capOf(workId))!.rounds));
       const asked = await capOf(workId);
       expect(asked).toMatchObject({ rounds: 3, cap: 3, liftedAt: null });
       expect(typeof asked!.askedAt).toBe('number');

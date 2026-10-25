@@ -4258,11 +4258,10 @@ export class CoordStore {
     return isPositiveDecimalSafeInteger(id) ? id : null;
   }
 
-  /** D-6795: how many review runs name this work run, in any state (a failed or abandoned round still spent one). */
+  /** D-6795: how many review runs name this work run, in any state (a failed or abandoned round still spent one).
+   *  Read through `reviewCapStates`, so the round predicate is written once (D-6909). */
   reviewRounds(workRunId: number): number {
-    const row = this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE kind = 'review' AND reviews = ?")
-      .get(workRunId) as { n: number };
-    return Number(row.n);
+    return this.reviewCapStates([workRunId]).get(workRunId)?.rounds ?? 0;
   }
 
   /** D-6909: the review-cap state of a batch of runs, in two statements whatever its size (`healthFor`'s rule,

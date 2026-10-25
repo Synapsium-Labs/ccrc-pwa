@@ -6,6 +6,7 @@ import type {
 } from '../../../shared/api';
 import { ARCHIVE_REFUSALS, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
+import type { RouteRefusal } from '../../../shared/refusal';
 import { ApiError } from './apiError';
 
 /** The send and submit tables share this sentence: a resumed Retry (D-6367) and `/submit` both answer `nothing-to-submit`. */
@@ -526,6 +527,17 @@ export function backgroundTasksClause(bg: { count: number | null; kinds: string[
   return `${bg.count} background ${bg.count === 1 ? 'task' : 'tasks'}`
     + `${bg.kinds.length > 0 ? ` (${bg.kinds.join(', ')})` : ''} ${bg.count === 1 ? 'is' : 'are'} still running`;
 }
+
+/**
+ * The review cap's two routes (D-6910, D-6911) in words: `GET /api/coord/review-cap/:id` and
+ * `POST /api/coord/review-cap` refuse with these three, and `LiftCapSheet` reads both calls' failures through this table
+ * and then `apiErrorText`. Keyed from the server's own refusal union, so a word it stops sending is a compile error.
+ */
+export const REVIEW_CAP_REFUSAL_TEXT: Readonly<Record<Extract<RouteRefusal, 'bad-request' | 'not-found' | 'not-configured'>, string>> = {
+  'bad-request': 'The server refused the run id.',
+  'not-found': 'That run is not a work run, so it has no review cap to lift.',
+  'not-configured': 'This box has no coordination database, so there is no review cap here.',
+};
 
 /**
  * The coordinator's route door (`RunRouteRefuseCode`) in words. No screen renders these yet: the table exists so the

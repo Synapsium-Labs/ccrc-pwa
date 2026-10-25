@@ -7,31 +7,27 @@
 //
 // The lift does not need the ask: a failed read says so and still offers the lift, so an unreadable report never
 // stands between the operator and the door the notice told them about. The route is idempotent, so a second tab that
-// lifted first is a 200 here and the sheet closes as for its own lift.
+// lifted first is a 200 here and the sheet closes as for its own lift. It keeps `AbandonSheet`'s busy flag and
+// superseded-answer guard, but not its status and code branches: both calls' failures read `REVIEW_CAP_REFUSAL_TEXT`.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ReviewCapView, RunSummary } from '../../../shared/api';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet } from '@ccrc/ui';
-import { ApiError, COORD_UNSUPPORTED_TEXT, api } from '../lib/api';
+import { REVIEW_CAP_REFUSAL_TEXT, api, apiErrorText, refusalText } from '../lib/api';
 import { findingsWords, reviewCapOf } from './reviewCapWords';
 import './fleet.css';
 
-/** A refused lift, in words. 404 and 400 are the route's own two refusals; 501 is a box with no coordination. */
-export function liftErrorText(err: unknown, run: number): string {
-  if (err instanceof ApiError) {
-    if (err.status === 404) return `Run ${run} is not a work run, so it has no review cap to lift.`;
-    if (err.status === 400) return 'The server refused the run id.';
-    if (err.status === 501) return COORD_UNSUPPORTED_TEXT;
-  }
-  return 'The lift did not go through. Try again.';
-}
+/** A failed call, in words: the review cap's own refusals first, then the api funnel's general sentence. No status or
+ *  code branches of its own (`refusal-literal-ratchet`); a 401 is the funnel's login screen, never this sheet's. */
+const failureText = (err: unknown): string => refusalText(err, REVIEW_CAP_REFUSAL_TEXT) ?? apiErrorText(err);
 
-type AskRead = { kind: 'loading' } | { kind: 'read'; view: ReviewCapView } | { kind: 'failed' };
+type AskRead = { kind: 'loading' } | { kind: 'read'; view: ReviewCapView } | { kind: 'failed'; why: string };
 
 export interface LiftCapSheetProps {
   run: RunSummary | null;
   onClose: () => void;
-  onDone: () => void;
+  /** After a lift landed. Mail passes none: its door reads the live runs frame, which carries the lift. */
+  onDone?: () => void;
   /** Injectable for tests; the real calls' URL, method and body are pinned in `api.test.ts`. */
   loadAsk?: (run: number) => Promise<ReviewCapView>;
   lift?: (run: number) => Promise<unknown>;
@@ -57,7 +53,7 @@ export function LiftCapSheet({
       const mine = gen.current;
       loadAsk(targetId).then(
         (view) => { if (gen.current === mine) setAsk({ kind: 'read', view }); },
-        () => { if (gen.current === mine) setAsk({ kind: 'failed' }); },
+        (err: unknown) => { if (gen.current === mine) setAsk({ kind: 'failed', why: failureText(err) }); },
       );
     }
     return () => { gen.current += 1; };
@@ -75,13 +71,13 @@ export function LiftCapSheet({
       () => {
         if (gen.current !== mine) return;
         setBusy(false);
-        onDone();
+        onDone?.();
         onClose();
       },
       (err: unknown) => {
         if (gen.current !== mine) return;
         setBusy(false);
-        setError(liftErrorText(err, run.id));
+        setError(failureText(err));
       },
     );
   };
@@ -114,7 +110,9 @@ export function LiftCapSheet({
           {' '}Lifting the cap lets this run open more review rounds.
         </p>
         {ask.kind === 'loading' && <p className="lift-cap-note">Reading the ask…</p>}
-        {ask.kind === 'failed' && <p className="lift-cap-note">The ask could not be read. You can still lift the cap.</p>}
+        {ask.kind === 'failed' && (
+          <p className="lift-cap-note">The ask could not be read: {ask.why} You can still lift the cap.</p>
+        )}
         {ask.kind === 'read' && <AskBody view={ask.view} />}
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>

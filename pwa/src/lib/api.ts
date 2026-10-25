@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapView, RollbackUpdateBody, RouteField, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WsAudit } from '../../../shared/api';
 import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource } from '../../../shared/api';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { RotateAnswer } from '../../../shared/box-token';
@@ -728,7 +728,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  a second lift answers 200. `postJson`, so a refusal (404 not a work run, 400 a bad id) rejects with `ApiError`,
      *  which the sheet says in words. Session-gated when armed; no box token. */
     liftReviewCap: (run: number) =>
-      postJson<{ ok: true; run: number; rounds: number; cap: number; lifted: true }>('/api/coord/review-cap', { run }),
+      postJson<ReviewCapLiftAnswer>('/api/coord/review-cap', { run }),
     /** `GET /api/coord/stall-watch` (stall watch settings, design 2026-10-05 §10, §13): the Settings page's Stall
      *  watch section reads it through `useStallWatchView`, whose `asStallWatchView` is the wire guard, so the type here
      *  is what the server promises, not what arrived. 501 `not-configured` on a box with no coordination database, and

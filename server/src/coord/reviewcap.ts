@@ -1,5 +1,5 @@
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
-import { REVIEW_FINDINGS_WORDS, type LastReviewReport, type ReviewCapAsk, type ReviewCapStatus, type ReviewFindings, type RunKind } from '../../../shared/api.js';
+import { REVIEW_FINDINGS_NONE_OPEN, REVIEW_FINDINGS_WORDS, type LastReviewReport, type ReviewCapAsk, type ReviewCapStatus, type ReviewFindings, type RunKind } from '../../../shared/api.js';
 import { redactCommand } from './redact.js';
 
 /**
@@ -67,7 +67,7 @@ export function reviewCapNotice(a: ReviewCapAsk): { title: string; body: string 
   const f = a.lastReview.findings;
   const findings = f.state === 'read' && f.lines.length > 0
     ? ` Open findings: ${f.lines.join(' | ')}`
-    : f.state === 'read' ? ` ${REVIEW_FINDINGS_WORDS.none}`
+    : f.state === 'read' ? ` ${REVIEW_FINDINGS_NONE_OPEN}`
       : f.state === 'unnamed' ? '' : ` ${REVIEW_FINDINGS_WORDS[f.state]}`;
   return {
     title: `Review cap reached on run ${a.run}`,
