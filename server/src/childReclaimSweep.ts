@@ -450,6 +450,12 @@ export interface ChildReclaimSweepInput {
    *  L1 file imports no L2/L3 constant. */
   readonly skewMs: number;
   readonly nowMs: number;
+  /** D-6639 (spec 2026-10-23 §2.7.3): what the SERVER knows of the child's activity, for the stale step alone. The
+   *  sweep verdict above reads neither field. `'unmeasured'`: any one read failed, so the child is not stale. */
+  readonly idle: ChildStaleIdleRead;
+  /** The sha256 of the child's hold file as the registry read it, or `null` when those bytes are not known (an
+   *  unreadable or empty file reads as a stand-in sentence, never as the bytes). Only `--stale held` spends it. */
+  readonly holdDigest: string | null;
 }
 
 /** How long a REVIEW child's own run may stay closed while the run it reviewed is open before the sweep
@@ -546,7 +552,7 @@ export const CHILD_RECLAIM_SKIP = {
   'minting-run-absent': { class: 'kept', sentence:
     'The run this workspace’s child marker names is not in the coordination database, so nothing proves the workspace is finished; after a lost or rebuilt database every child reads this way. '
     + 'After a rebuild, workers may still be running in these. '
-    + 'ccrc never reclaims it on its own; a person removes it once nothing still needs it.' },
+    + 'ccrc reclaims it on its own only once nothing has touched it for seven days and stale reclaim is switched on; until then a person removes it once nothing still needs it.' },
   'minting-run-postdates-child': { class: 'kept', sentence:
     'The run this workspace’s child marker names opened after the workspace was created, so it cannot be the run that made it: either the coordination database was rebuilt, and then every child of the old database reads this way, or the fleet box’s clock reads behind the server’s. '
     + 'After a rebuild, workers may still be running in these. '
@@ -558,7 +564,7 @@ export const CHILD_RECLAIM_SKIP = {
   // common phrase. It names the reviewed run by its relation, the way every table sentence speaks (D-6024).
   'review-report-stale': { class: 'kept', sentence:
     'This review’s workspace holds a report the coordinator may still cite: the run it reviewed is still open, though this review’s own run closed more than seven days ago. '
-    + 'ccrc never reclaims it while the run it reviewed stays open; closing or abandoning that run releases this workspace, and the sweep can reclaim it then.' },
+    + 'ccrc does not reclaim it while the run it reviewed stays open, unless nothing has touched the workspace for seven days and stale reclaim is switched on; closing or abandoning that run releases this workspace, and the sweep can reclaim it then.' },
   // The one kept sentence that does not end with the common phrase: that phrase would tell a person
   // to remove a main checkout, so this one tells them to remove the marker, never the checkout.
   'not-a-workspace': { class: 'kept', sentence:
@@ -583,7 +589,7 @@ export const CHILD_RECLAIM_SKIP = {
     'Whether another run still uses this workspace could not be read. The sweep reads it again on its next pass.' },
   // held
   held: { class: 'held', sentence:
-    'This workspace carries a hold, so the sweep leaves it alone: a person’s hold stands until they release it, and a programme’s until that programme has no open run.' },
+    'This workspace carries a hold, so the sweep leaves it alone: a person’s hold stands until they release it, and a programme’s until that programme has no open run. Either lapses once nothing has touched the workspace for seven days and stale reclaim is switched on.' },
   // ordinary
   'not-a-child': { class: 'ordinary' },
   'hold-retired': { class: 'ordinary' },
@@ -708,6 +714,89 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
       release: { reason: i.held.reason, program: i.held.program, accountedRunId: i.held.accountedRunId } };
   }
   return { eligible: true, runId: i.child.runId };
+}
+
+// ── the stale arm (D-6639; spec 2026-10-23 §2.7.3, rulings G2) ────────────────────────────────────────────────────
+
+/** How long a kept child must have been idle before the stale arm may take it, and how often a terminal child is
+ *  asked again: seven days, the expiry horizon. ccd's `WS_STALE_IDLE_S` is the same span, measured on the box. */
+export const CHILD_STALE_IDLE_MS = 7 * 24 * 3_600_000;
+
+/** The word ccd's `--stale` takes; each stands for the kept verdicts it lapses. */
+export type ChildStaleWord = 'held' | 'run-absent' | 'review' | 'terminal';
+
+/** The newest instant the server holds of each kind of activity, epoch ms; `null` when that kind never happened. */
+export interface ChildStaleIdleInstants {
+  /** The newest `run_events.at` of the minting run, or of any run naming the session. */
+  readonly runAt: number | null;
+  /** The newest mail to or from the session. */
+  readonly mailAt: number | null;
+  /** The newest stamp of the session's own status clock the registry row holds. */
+  readonly statusAt: number | null;
+  /** The write time of the hold file (`$REG/<id>.hold`), for the `held` word only: writing or renewing a hold is activity,
+   *  so a child a person has just held is never reclaimed until seven days after. `null` when there is no hold to date
+   *  (every other word). A hold whose time cannot be read never reaches this field: the lane keeps the child. */
+  readonly holdAt?: number | null;
+}
+export type ChildStaleIdleRead = ChildStaleIdleInstants | 'unmeasured';
+
+/** What the stale arm asks of the executor: the word, and for `held` the hold it saw (digest for ccd, text for the
+ *  coordinator's mail). */
+export interface ChildStaleAsk {
+  readonly word: ChildStaleWord;
+  readonly holdDigest: string | null;
+  readonly holdText: string | null;
+}
+
+/** The stale step's answer. A second answer BESIDE the sweep verdict, never in place of it: the kept word keeps
+ *  listing on the banner until the child is gone. */
+export type ChildReclaimStaleVerdict =
+  | ({ readonly stale: true; readonly runId: number } & ChildStaleAsk)
+  | { readonly stale: false };
+
+/** The ccd word for a sweep verdict the stale arm lapses, or `null` for every other verdict (a doubt word, `coordinating`,
+ *  `not-a-workspace`, `reviewed-run-absent`, an eligible child). */
+export function childReclaimStaleWordOf(v: ChildReclaimSweepVerdict): ChildStaleWord | null {
+  if (v.eligible) return null;
+  switch (v.why) {
+    case 'held': return 'held';
+    case 'minting-run-absent': return 'run-absent';
+    case 'review-report-live': case 'review-report-stale': return 'review';
+    case 'terminal-refusal': return 'terminal';
+    default: return null;
+  }
+}
+
+/** The newest instant of the four, or `null` when this read cannot say how long the child has been idle: any
+ *  non-finite stamp, or no stamp at all (no evidence is not idleness). */
+function childStaleNewest(idle: ChildStaleIdleRead): number | null {
+  if (idle === 'unmeasured') return null;
+  const at = [idle.runAt, idle.mailAt, idle.statusAt, idle.holdAt ?? null];
+  if (at.some((x) => x !== null && !Number.isFinite(x))) return null;
+  const known = at.filter((x): x is number => x !== null);
+  return known.length === 0 ? null : Math.max(...known);
+}
+
+/** Is this child past the stale arm's idle ceiling on the server's evidence, and not one the arm never takes?
+ *  `v` is the sweep verdict for `i`. Fail toward keeping on every doubt: an unmeasured idle, an open sibling run, an
+ *  unplaced birth, a child that has coordinated, a hold whose bytes are not known. Written `!(age > ceiling)`, so a
+ *  stamp from the future or a NaN is activity. */
+export function childReclaimStaleVerdict(
+  i: ChildReclaimSweepInput, v: ChildReclaimSweepVerdict = childReclaimSweepVerdict(i),
+): ChildReclaimStaleVerdict {
+  const no: ChildReclaimStaleVerdict = { stale: false };
+  const word = childReclaimStaleWordOf(v);
+  if (word === null || i.child.kind !== 'child') return no;
+  const newest = childStaleNewest(i.idle);
+  if (newest === null || !(i.nowMs - newest > CHILD_STALE_IDLE_MS)) return no;
+  if (!i.siblings.ok || i.siblings.open > 0) return no;
+  if (i.childBornAt === null) return no;
+  // `coordinating` never reaches the arm (rule 4, R37, R40), and a `held` or terminal verdict answers BEFORE the
+  // verdict's own coordination check, so the arm asks it again here.
+  if (childReclaimCoordinated(i.coordinatorClaim, () => i.childBornAt, i.skewMs)) return no;
+  if (word !== 'held') return { stale: true, runId: i.child.runId, word, holdDigest: null, holdText: null };
+  if ((i.held.kind !== 'held' && i.held.kind !== 'program') || i.holdDigest === null) return no;
+  return { stale: true, runId: i.child.runId, word, holdDigest: i.holdDigest, holdText: i.held.reason };
 }
 
 /** The verdicts a pass that judged nothing keeps (spec §5.9): the KEPT words only. Each is read from

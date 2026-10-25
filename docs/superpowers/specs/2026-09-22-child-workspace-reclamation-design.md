@@ -1021,7 +1021,7 @@ that pace buys repeated attempts and journal lines and nothing else. So a child 
   that answer on. A lost memory therefore costs a tier child one extra ask, never a fresh four-hour wait, and never a fall
   back to the ordinary ramp unless the seed cannot read it (no placed birth, a reclaim done/unknown line, or a slice
   windowed short).
-- **A held stuck child.** A child under a hold is never asked, and its memory is dropped. When the hold lifts it is sighted
+- **A held stuck child.** A child under a hold is never asked (D-6639 amends this: once it has been idle for seven days the stale arm asks it, with the hold's digest), and its memory is dropped. When the hold lifts it is sighted
   afresh and seeded like a restart's, so the sweep sights it on the first pass after the hold lifts and asks it once on the
   next, before the tier's pace resumes from that answer.
 - **What the pace costs, stated.** A cure that is not the child's own, a fleet update for one, is noticed only at the tier's
@@ -2051,7 +2051,7 @@ both new verbs have a lawful grantable form.
   `[[ -z "$resumed" ]]`, and the comment at `:14183-14185` states the safety argument explicitly: it is safe
   only because `cmd_ws_archive` writes the marker *after* both. Nothing writes that marker for a child.
 
-**Presence.** `PRESENCE_REFRESH_MS = 15_000`, `PRESENCE_TTL_MS = 45_000` (`shared/api.ts:4607-4608`). Claims
+**Presence.** `PRESENCE_REFRESH_MS = 15_000`, `PRESENCE_TTL_MS = 45_000` (`shared/api.ts:4609-4610`). Claims
 are per-connection, client-re-stated, TTL-swept and never persisted.
 
 **PR sweep cadence.** `PR_SWEEP_MS = 120_000`; `PR_SWEEP_ACTIVE_MS = 30_000`, the latter only while some
