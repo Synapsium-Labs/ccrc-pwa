@@ -10,20 +10,15 @@ import {
   continuesInto, resumedPastMarker, rungRank, TranscriptResolver, type TranscriptResolution,
 } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
-import { parseDialog } from './pane/dialog.js';
-import { alignAsk, readPendingAsk } from './transcript/ask.js';
-import { readTasks } from './tasks/read.js';
+import { feedFor, type FeedFacts, type FeedMail, type FeedReading, type FeedSubscriber, type FeedTasks, type SessionFeed } from './sessionFeed.js';
 import { SessionWorkflows, sessionDirOf } from './workflows/read.js';
 import { workflowsFrame, type Proc } from './workflows/model.js';
-import { foldHookStateRead, readHookStateRawMeasured } from './hookstate.js';
+import { foldHookStateRead, type HookStateRawRead } from './hookstate.js';
 import { askKey, nextAgedKeep, NO_AGED_KEEP, type AgedKeep } from './askkey.js';
 import type { Dialog, DialogAsk, DialogMulti, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
 import { reviewQuestions, reviewRows } from '../../shared/ask-menu.js';
 
 const POLL_MS = 2000;
-/** Failed captures in a row after which the menu the client holds is cleared (decision `ask-failed-capture-holds`):
- *  three polls, at least 6 s of the pane unreadable. One or two are the blips a slow remote call produces. */
-const FAILED_CAPTURES_CLEAR = 3;
 const BACKLOG_N = 50;
 
 interface Resolved {
@@ -70,29 +65,26 @@ type Resolution =
  * rotation (clear/compact/swap), reports status flips, and forwards bus
  * notices plus targeted `session:<id>` messages.
  */
-export class SessionStream {
+export class SessionStream implements FeedSubscriber {
   private tailer: TranscriptTailer | null = null;
   private poll: NodeJS.Timeout | null = null;
   private stopped = false;
   private ticking = false;
-  /** When the running poll started (`tick`), for the frame log's `tick=`; null between polls. */
-  private tickStartedAt: number | null = null;
   private uuid: string | null = null;
   private status: SessionStatus | null = null;
   /** What the client last saw of the pane menu — see nextDialogFrame. */
   private seenDialog: DialogSeen = { id: null, ask: null, raw: null };
-  /** `checkHookAsk`'s keep decision for an aged envelope (D-6324). */
+  /** `applyHook`'s keep decision for an aged envelope (D-6324). */
   private agedKeep: AgedKeep = NO_AGED_KEEP;
-  /** Failed captures in a row since the last reading of the pane (decision `ask-failed-capture-holds`). */
-  private failedCaptures = 0;
-  /** This tick's capture failed and `checkDialog` held the menu (under FAILED_CAPTURES_CLEAR): no reading (D-6324). */
+  /** The feed's last look at the pane failed and held the menu (under FAILED_CAPTURES_CLEAR): no reading (D-6324). */
   private captureHeld = false;
-  /** Bumped on every `answered:<id>` this stream handles; a poll reading taken under an older value read the pane
-   *  from before that answer and is dropped (decision `ask-stale-poll-dropped`). */
-  private answeredGen = 0;
-  /** The transcript state that already failed to explain the menu on screen —
-   *  see claimAskRead. */
-  private askProbe: { file: string; id: string; size: number; mtimeMs: number } | null = null;
+  /** The session's one reader of the pane, the plan, the hookstate and the mail (ARCH-52); null until `start()`. */
+  private feed: SessionFeed | null = null;
+  /** Whether this stream's last resolve measured its session. A tick that could not stops the readings from reaching
+   *  it, as it stopped the stream's own reads, until one does. */
+  private readable = true;
+  /** Where the last measured resolve found the transcript, for the workflow reader a reading drives. */
+  private resolvedFor: { file: string; proc: Proc } | null = null;
   /** Serialized last-sent task list — the change gate for the `tasks` frame. */
   private lastTasksJson: string | null = null;
   /** D-5560: the workflow reader for the session dir now being tailed (a new
@@ -114,7 +106,7 @@ export class SessionStream {
   /** Whether this connection has sent a `workflows` frame yet (see above). */
   private sentWorkflows = false;
   /** The hook's last fresh Stop listed a `workflow` among its background kinds
-   *  (D-5231's pair, read by `checkHookAsk`). The one witness that a workflow
+   *  (D-5231's pair, read by `applyHook`). The one witness that a workflow
    *  exists when its directory does not — see `checkWorkflows`. */
   private hookWorkflowBackground = false;
   /** Serialized last-sent outstanding-mail list — the change gate for the
@@ -128,7 +120,7 @@ export class SessionStream {
    *  the socket drops, the session acks that delivery while the client is
    *  away, then a fresh `SessionStream` connects and its own first read is
    *  ALREADY `[]` — with the old `null` sentinel and its first-read-empty
-   *  swallow (mirroring `checkTasks`'s own swallow), `null === null` never
+   *  swallow (mirroring `applyTasks`'s own swallow), `null === null` never
    *  held (the JSON is `'[]'`, not `null`), but the SWALLOW clause itself
    *  (`lastMailJson === null && outstanding.length === 0`) matched and ate
    *  the send — the reconnecting client's stale one-item list was never
@@ -139,7 +131,7 @@ export class SessionStream {
    *  nothing outstanding. */
   private lastMailJson: string | null | undefined = undefined;
   /** Serialized last-sent hook ask envelope — the change gate for `ask` /
-   *  `ask_cleared`. See `checkHookAsk`. `undefined` (not `null`) until the
+   *  `ask_cleared`. See `applyHook`. `undefined` (not `null`) until the
    *  first read: this instance is per CONNECTION, and a client can arrive
    *  already holding a stale `ask` from before the drop (an automatic
    *  ReconnectingSocket reconnect never runs the PWA's own disconnect(),
@@ -193,7 +185,7 @@ export class SessionStream {
   // late-joining client would miss. Ignore the watcher's dialog bus events here
   // to avoid double-delivery; still forward its notices.
   //
-  // A second channel runs the same way, alongside it: `checkHookAsk` reads
+  // A second channel runs the same way, alongside it: `applyHook` reads
   // `~/.cc-sessions/<id>.hookstate.json` itself, on connect and every tick,
   // and sends `ask` / `ask_cleared` on its own change gate (`lastAskJson`) —
   // the hook-sourced envelope, entirely independent of the pane scrape above.
@@ -212,16 +204,15 @@ export class SessionStream {
    *  second tab moves with the one that answered. */
   private readonly onAnswered = (next: Dialog | null): void => {
     if (this.stopped) return;
-    this.answeredGen += 1;
     this.frame(next, 'answer');
   };
 
   /** Send what `dialog` (a reading of the pane, or null for no menu) changes for the client, if anything, and log it. */
-  private frame(dialog: Dialog | null, from: 'poll' | 'answer'): void {
+  private frame(dialog: Dialog | null, from: 'poll' | 'answer', startedAt: number | null = null): void {
     const { seen, msg } = nextDialogFrame(this.seenDialog, dialog);
     this.seenDialog = seen;
     if (!msg) return;
-    console.log(dialogFrameLine(this.id, msg, from, this.tickStartedAt === null ? null : Date.now() - this.tickStartedAt));
+    console.log(dialogFrameLine(this.id, msg, from, startedAt === null ? null : Date.now() - startedAt));
     this.send(msg);
   }
 
@@ -341,15 +332,12 @@ export class SessionStream {
       this.send({ type: 'notice', message: `unknown session ${this.id}` });
     }
     if (this.stopped) return;
-    await this.checkDialog(r.ok ? r.data.file : null); // deliver an already-pending dialog on connect
-    if (this.stopped) return;
-    if (r.ok) await this.checkTasks(r.data.cfgDir, r.data.uuid); // and the plan as it stands
-    if (this.stopped) return;
-    if (r.ok) await this.checkHookAsk(r.data.uuid); // and any hook ask already waiting
-    if (this.stopped) return;
-    if (r.ok) await this.checkWorkflows(r.data.file, r.data.proc); // and the workflows running now
-    if (this.stopped) return;
-    if (r.ok) await this.checkMail(); // and any outstanding mail addressed to this session
+    // The feed's opening reading is what a connecting client is owed whatever the schedule: an already-pending dialog,
+    // the plan as it stands, any hook ask already waiting, the workflows running now, and any outstanding mail
+    // addressed to this session, in that order (`onReading`).
+    this.feed = feedFor(this.deps, this.bus, this.id);
+    if (r.ok) this.resolvedFor = { file: r.data.file, proc: r.data.proc };
+    await this.feed.join(this, r.ok ? factsOf(r.data) : null);
     if (this.stopped) return;
     // `absent` is terminal for this connection: a proven-gone session id
     // does not un-absent itself by polling, and installing the retry timer
@@ -361,104 +349,37 @@ export class SessionStream {
     if (r.ok || r.reason === 'unmeasurable') {
       this.poll = setInterval(() => { void this.tick(); }, POLL_MS);
       this.poll.unref();
+    } else {
+      this.feed.leave(this);          // nothing will ever be asked of it again
     }
   }
 
-  /** Capture the pane; send `dialog` when a menu appears/changes or first comes
-   *  back enriched, and `dialog_cleared` when it vanishes — tracked per stream
-   *  so a client that joins after the menu appeared still receives it.
-   *
-   *  `file` is the transcript being tailed, and WHICH file matters: after an
-   *  account swap the same `<uuid>.jsonl` exists under several wrapper config
-   *  dirs, and the ask has to come from the one this session is writing.
-   *  null (unresolvable session) → the menu still ships, unenriched. */
-  private async checkDialog(file: string | null): Promise<void> {
+  /** One reading from the session's feed (ARCH-52): the four things this stream used to read itself every tick, in the
+   *  order it read them, with the workflows between the hook ask and the mail as they always were. Each applies its
+   *  reading through this stream's own change gate, so a client is told exactly what it has not seen. */
+  async onReading(reading: FeedReading): Promise<void> {
+    if (this.stopped || !this.readable) return;
+    this.applyDialog(reading);
+    if (reading.tasks !== null) this.applyTasks(reading.tasks);
+    if (reading.hook !== null) this.applyHook(reading.hook);
     if (this.stopped) return;
-    // Decision `ask-stale-poll-dropped`: the generation this capture started under. An answer handled while it (or the
-    // transcript read below) was in flight already told the client where the pane went, from a later look than this
-    // one; framing this reading would send the answered screen back over it.
-    const gen = this.answeredGen;
-    const pane = await this.deps.tmux.capture(this.id);
-    if (this.stopped || gen !== this.answeredGen) return;
-    // Decision `ask-failed-capture-holds`: a failed capture (tmux, or the remote call behind it, returned nothing) is
-    // NO READING, not "no menu". Clearing on it is what put the 2026-10-16 sheet on "Open terminal to answer" with the
-    // review still on the pane. Nothing is framed and `seenDialog` is kept, so the menu the client holds stays and a
-    // later reading of the same menu sends nothing. Only FAILED_CAPTURES_CLEAR failures in a row clear it: a pane tmux
-    // can no longer read at all is not offering a menu (an answer to it is refused `not-alive`), and the sheet must not
-    // hold one forever. A session the registry reports gone never reaches here (`tick` returns early).
-    if (pane === null) {
-      this.failedCaptures += 1;
-      this.captureHeld = this.failedCaptures < FAILED_CAPTURES_CLEAR;
-      if (!this.captureHeld) {
-        this.askProbe = null;
-        this.frame(null, 'poll');
-      }
-      return;
-    }
-    this.failedCaptures = 0;
-    this.captureHeld = false;
-    // parseDialog opens with the hasMenu gate (not paneState), so a busy marker painted beside a menu does not veto the parse (D-102).
-    let dialog = parseDialog(pane);
-    // Read the transcript only while this menu is still unexplained. Once its ask
-    // is latched, re-reading costs a 256 KB tail every 2 s and can buy nothing:
-    // nextDialogFrame would suppress the frame anyway. Menus that never latch are
-    // held off by claimAskRead instead — they are the majority.
-    const latched = dialog !== null && this.seenDialog.id === dialog.id && this.seenDialog.ask !== null;
-    if (dialog?.parsed && file !== null && !latched) {
-      const st = await this.deps.io.stat(file);
-      if (this.stopped || gen !== this.answeredGen) return;
-      if (this.claimAskRead(file, dialog.id, st)) {
-        const questions = await readPendingAsk(this.deps.io, file);
-        if (this.stopped || gen !== this.answeredGen) return;
-        const ask = questions === null ? null : alignAsk(dialog.options, questions);
-        // Enrichment rides ALONGSIDE the scraped options — it never rewrites them.
-        // `id` stays a hash of the pane alone (answerDialog re-parses the pane to
-        // check staleness) and the keystrokes an answer sends stay positional.
-        if (ask !== null) dialog = { ...dialog, ask };
-      }
-    }
-    // The probe is scoped to the PARSED menu on screen, so it dies with it. A
-    // capture can miss a menu that is still there: tmux returns null (held above,
-    // so the probe survives it until FAILED_CAPTURES_CLEAR), one stray
-    // 'esc to interrupt' anywhere in the pane flips it to busy, or the grab lands
-    // mid-redraw and comes back `unparsed` (a menu footer with its option rows
-    // half-erased — dialog.ts:94). That last one is still a dialog, so testing
-    // for null alone would keep the probe alive past the menu it was taken for.
-    // On the way back the ask is unlatched but the transcript is untouched — the
-    // agent is blocked awaiting the answer — so a surviving probe would decline
-    // the read the reappearance needs and the menu would come back bare and stay
-    // bare. Forgetting it costs nothing: the read above is gated on
-    // `dialog?.parsed`, so an unparsed menu never spends one.
-    if (dialog === null || !dialog.parsed) this.askProbe = null;
-    this.frame(dialog, 'poll');
+    const at = this.resolvedFor;
+    if (reading.tasks !== null && at !== null) await this.checkWorkflows(at.file, at.proc);
+    if (this.stopped) return;
+    if (reading.mail !== null) this.applyMail(reading.mail);
   }
 
-  /**
-   * May we spend a transcript tail read on this menu? Records the state we read
-   * at, so the next poll can tell whether anything could have changed.
-   *
-   * The ask latch above only closes on SUCCESS, and most menus never succeed:
-   * permission prompts, /model, trust-folder carry no AskUserQuestion, and they
-   * sit on screen until a human answers. Reading is the expensive half —
-   * `readPendingAsk` pulls up to 256 KB, over the agent RPC in remote-fleet mode
-   * (see transcript/tail.ts:6-11 for what reading whole transcripts once cost
-   * us) — while a stat is cheap and settles it: byte-identical bytes cannot have
-   * started explaining a menu they did not explain last time. A file that grows
-   * (the tool_use line finally flushed) or a different menu re-opens the read.
-   *
-   * The cost: a read that failed for an IO reason rather than an absent ask is
-   * indistinguishable here, so that menu stays unenriched until the transcript
-   * next changes. It still ships, and it is still answerable from the raw sheet.
-   */
-  private claimAskRead(file: string, id: string, st: { size: number; mtimeMs: number } | null): boolean {
-    if (st === null) {              // no transcript yet — nothing to read, nothing to remember
-      this.askProbe = null;
-      return false;
-    }
-    const p = this.askProbe;
-    if (p !== null && p.file === file && p.id === id && p.size === st.size && p.mtimeMs === st.mtimeMs) return false;
-    this.askProbe = { file, id, size: st.size, mtimeMs: st.mtimeMs };
-    return true;
+  /** Send `dialog` when a menu appears/changes or first comes back enriched, and `dialog_cleared` when it vanishes —
+   *  tracked per stream so a client that joins after the menu appeared still receives it. The feed took the reading
+   *  (the pane, and the transcript's ask while the menu is unexplained); a failed capture is no reading and the menu
+   *  the client holds stays (`held`, decision `ask-failed-capture-holds`), and one an answer overtook is dropped
+   *  (decision `ask-stale-poll-dropped`). */
+  private applyDialog(reading: FeedReading): void {
+    const d = reading.dialog;
+    if (d.kind === 'dropped' || reading.gen !== this.feed?.answeredGen) return;
+    this.captureHeld = d.kind === 'held';
+    if (d.kind === 'held') return;
+    this.frame(d.dialog, 'poll', reading.startedAt);
   }
 
   /** The io-bound half of §5.3's rule: the ONE fact `shouldRepoint` cannot
@@ -547,12 +468,10 @@ export class SessionStream {
    *  a new field is allowed, not that an unrendered one earns its place: the
    *  one field added since, `touchedAt` (D-5372), is rendered — it is how the
    *  strip tells a live plan from one left open days ago. */
-  private async checkTasks(cfgDir: string, uuid: string): Promise<void> {
-    if (this.stopped) return;
+  private applyTasks(read: FeedTasks): void {
+    const { tasks, touchedAt } = read;
     // D-5372: `touchedAt` rides the frame (optional) and joins the dedupe key,
     // so a rewrite that leaves the rows equal still refreshes the strip's age.
-    const { tasks, touchedAt } = await readTasks(this.deps.io, cfgDir, uuid, { touchedAt: true });
-    if (this.stopped) return;
     const json = JSON.stringify([tasks, touchedAt ?? null]);
     if (json === this.lastTasksJson) return;
     if (this.lastTasksJson === null && tasks.length === 0) {
@@ -634,9 +553,7 @@ export class SessionStream {
    * (store.ts) — the most this call could ever widen to, so this is "as
    * wide as the store allows," not an arbitrary bigger number.
    */
-  private async checkMail(): Promise<void> {
-    if (this.stopped || !this.deps.coord) return;
-    const outstanding = this.deps.coord.outstandingMailFor(this.id, 500);
+  private applyMail(outstanding: FeedMail): void {
     const json = JSON.stringify(outstanding);
     if (json === this.lastMailJson) return;
     this.lastMailJson = json;
@@ -646,11 +563,8 @@ export class SessionStream {
   /** Read this session's hookstate once and send `ask` / `ask_cleared` when the hook-sourced envelope appears,
    *  changes (JSON-compare), or goes away. The envelope is the fresh, current-session one (`foldHookStateRead`: a
    *  missing, foreign or malformed file reads as none), or, past the 30-minute cut, the aged one while this tick's
-   *  menu (`seenDialog`, set by `checkDialog` just before) is that envelope's call (`nextAgedKeep`, D-6324). */
-  private async checkHookAsk(uuid: string): Promise<void> {
-    if (this.stopped) return;
-    const raw = await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, this.id, uuid);
-    if (this.stopped) return;
+   *  menu (`seenDialog`, set by the feed's pane reading just before) is that envelope's call (`nextAgedKeep`, D-6324). */
+  private applyHook(raw: HookStateRawRead): void {
     const read = foldHookStateRead(raw, Date.now());
     const hs = read.ok ? read.state : null;
     this.hookWorkflowBackground = hs?.background?.kinds.includes('workflow') === true;
@@ -670,6 +584,8 @@ export class SessionStream {
     this.bus.off(`answered:${this.id}`, this.onAnswered);
     if (this.poll) clearInterval(this.poll);
     this.poll = null;
+    this.feed?.leave(this);
+    this.feed = null;
     this.tailer?.stop();
     this.tailer = null;
   }
@@ -913,7 +829,6 @@ export class SessionStream {
   private async tick(): Promise<void> {
     if (this.stopped || this.ticking) return;
     this.ticking = true;
-    this.tickStartedAt = Date.now();
     try {
       const r = await this.resolve();
       // Registry ladder, Task 2: `unmeasurable` returns EARLY, touching
@@ -930,8 +845,12 @@ export class SessionStream {
       // remembered uuid paired with whatever this pass DID manage to read is
       // not proven to be the same incarnation, and is a guess wearing a real
       // address (see `resolve()`'s own comment).
-      if (this.stopped || !r.ok) return;
+      if (this.stopped) return;
+      this.readable = r.ok;
+      if (!r.ok) return;
       const data = r.data;
+      this.resolvedFor = { file: data.file, proc: data.proc };
+      this.feed?.setFacts(this, factsOf(data));
       if (data.uuid !== this.uuid) {
         const appeared = this.uuid === null; // record was unknown/unmeasurable at start
         // THE REGISTRY CATCHING UP IS NOT A RESET (whole-branch review, F2).
@@ -1048,21 +967,16 @@ export class SessionStream {
         this.send({ type: 'status', status: data.status, statusUpdatedAt: data.statusUpdatedAt });
       }
       if (this.stopped) return;
-      await this.checkDialog(data.file);
-      if (this.stopped) return;
-      await this.checkTasks(data.cfgDir, data.uuid);
-      if (this.stopped) return;
-      await this.checkHookAsk(data.uuid);
-      if (this.stopped) return;
-      await this.checkWorkflows(data.file, data.proc);
-      if (this.stopped) return;
-      await this.checkMail();
+      // The pane, the plan, the hook ask, the workflows and the mail are not read here any more: the session's feed
+      // reads them on its own clock and `onReading` applies them. This tick states what it measured about the session.
     } finally {
       this.ticking = false;
-      this.tickStartedAt = null;
     }
   }
 }
+
+/** The facts the session's feed reads with, off one measured resolve. */
+const factsOf = (r: Resolved): FeedFacts => ({ file: r.file, cfgDir: r.cfgDir, uuid: r.uuid });
 
 /**
  * The journal line for one `dialog`/`dialog_cleared` frame a session stream sends (decision `dialog-frame-log`). Until

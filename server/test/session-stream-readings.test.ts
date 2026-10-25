@@ -157,16 +157,61 @@ describe('a session stream\'s four readings (ARCH-52)', () => {
     } finally { s.stop(); }
   });
 
-  // The counted exit's cost row. Today every open socket reads the pane, the plan, the hookstate and the mail itself,
-  // every tick: two sockets on one session, two of each. The feed makes it one.
-  it('today every open socket reads the pane, the hookstate and the plan itself: two sockets, two of each per tick', async () => {
+  // The counted exit's cost row. Before ARCH-52 every open socket read the pane, the plan, the hookstate and the mail
+  // itself, every tick: two sockets on one session, two of each. The session's feed reads once for all of them.
+  it('one tick costs one capture, one hookstate read and one plan read for the session, however many sockets watch it', async () => {
     const bus = new Bus();
     const sa = await open(bus, []);
     const sb = await open(bus, []);
     try {
       captures = 0; hookReads = 0; taskReads = 0;
       await pollOnce(sa, sb);
-      expect({ captures, hookReads, taskReads }).toEqual({ captures: 2, hookReads: 2, taskReads: 2 });
+      expect({ captures, hookReads, taskReads }).toEqual({ captures: 1, hookReads: 1, taskReads: 1 });
     } finally { sa.stop(); sb.stop(); }
+  });
+
+  it('a stream\'s own tick reads none of the four: polls 4 -> 0', async () => {
+    const s = await open(new Bus(), []);
+    try {
+      captures = 0; hookReads = 0; taskReads = 0;
+      await (s as unknown as { tick: () => Promise<void> }).tick();
+      expect({ captures, hookReads, taskReads }).toEqual({ captures: 0, hookReads: 0, taskReads: 0 });
+    } finally { s.stop(); }
+  });
+
+  it('a socket that joins a menu already explained is handed the explained menu, and costs the session no new read of the transcript', async () => {
+    current = MENU;
+    writeFileSync(path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`),
+      readFileSync(path.join(here, 'fixtures', 'transcript-ask-2col.jsonl'), 'utf8'));
+    const bus = new Bus();
+    const a: SessionStreamMsg[] = [];
+    const sa = await open(bus, a);
+    const b: SessionStreamMsg[] = [];
+    try {
+      const first = a.find((f) => f.type === 'dialog') as { dialog: { ask?: unknown } } | undefined;
+      expect(first?.dialog.ask).toBeDefined();
+      const sb = await open(bus, b);
+      try {
+        const joined = b.find((f) => f.type === 'dialog') as { dialog: { ask?: unknown } } | undefined;
+        expect(joined?.dialog.ask).toEqual(first?.dialog.ask);
+        expect(b.filter((f) => f.type === 'dialog')).toHaveLength(1);
+        expect(a.filter((f) => f.type === 'dialog')).toHaveLength(1);
+      } finally { sb.stop(); }
+    } finally { sa.stop(); }
+  });
+
+  it('the last socket to leave takes the feed with it: no listener, no timer, and a new socket starts a new feed', async () => {
+    const bus = new Bus();
+    const sa = await open(bus, []);
+    const sb = await open(bus, []);
+    sa.stop();
+    expect(bus.listenerCount(`answered:${ID}`)).toBeGreaterThan(0);
+    sb.stop();
+    expect(bus.listenerCount(`answered:${ID}`)).toBe(0);
+    const frames: SessionStreamMsg[] = [];
+    const sc = await open(bus, frames);
+    try {
+      expect(frames.map((f) => f.type)).toContain('ask_cleared');
+    } finally { sc.stop(); }
   });
 });

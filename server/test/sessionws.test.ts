@@ -407,8 +407,10 @@ const fixture = (name: string): string =>
 /** One poll of a live stream. `tick` is private only to keep it off the class's
  *  public surface; the harness wants exactly what the 2 s interval does, awaited,
  *  so these tests never sleep. */
-const pollOnce = (s: SessionStream): Promise<void> =>
-  (s as unknown as { tick: () => Promise<void> }).tick();
+const pollOnce = async (s: SessionStream): Promise<void> => {
+  await (s as unknown as { tick: () => Promise<void> }).tick();
+  await (s as unknown as { feed: { poll(): Promise<void> } | null }).feed?.poll();   // the session feed's own tick (ARCH-52)
+};
 
 /**
  * Run a SessionStream against a scripted sequence of pane captures and transcript
@@ -3697,7 +3699,7 @@ describe('the tasks frame carries touchedAt (D-5372)', () => {
       await stream.start();
       const later = new Date('2026-10-17T18:00:00Z');
       utimesSync(path.join(home, '.claude-a', 'tasks', UUID_A, '1.json'), later, later);
-      await (stream as unknown as { checkTasks(c: string, u: string): Promise<void> }).checkTasks(path.join(home, '.claude-a'), UUID_A);
+      await (stream as unknown as { feed: { poll(): Promise<void> } }).feed.poll();   // the next reading of the plan
     } finally {
       stream.stop();
     }
