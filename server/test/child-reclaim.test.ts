@@ -892,6 +892,13 @@ describe('reclaimChild — the one executor', () => {
     expect(s.deliveryState().state).toBe('queued');
   });
 
+  it('the genuine refusals stay TERMINAL: every other terminal word is refused, never retried (characterization)', () => {
+    const terminal = Object.entries(CHILD_RECLAIM_TOKEN_KIND).filter(([, kind]) => kind === 'terminal')
+      .map(([token]) => token).filter((t) => t !== 'tree-unreadable').sort();
+    expect(terminal).toEqual(['branch-elsewhere', 'containment-unproven', 'nested-rescue-too-large', 'no-worktree-record',
+      'not-a-child', 'not-a-workspace']);
+  });
+
   it('a token minted for ANOTHER run is not spent', async () => {
     const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId + 1, 'reclaimable', { token: TOK }) } }) });
     expect(await reclaimChild(s.deps, s.req())).toMatchObject({ kind: 'deferred', why: 'marker-mismatch' });
