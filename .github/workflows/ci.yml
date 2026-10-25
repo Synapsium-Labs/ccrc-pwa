@@ -6,13 +6,19 @@
 # ONE pipeline, several MODES (design 2026-09-23 §3). The trigger decides the
 # mode, the `select` job computes what that mode runs, and every other job
 # reads select's outputs:
-#   pull_request        selected — the server tests the change can affect
-#                       (a measured dependency map, .github/ci/select-tests.mjs),
-#                       sharded; agent, pwa, build-pwa, probe-macos in full (no macOS tests).
-#   merge_group         selected — a merge-queue run runs what a pull request
-#                       runs (operator ruling 2026-09-28), the pipeline check
-#                       included, in a concurrency group of its own; no macOS
-#                       leg and no full-suite.
+#   pull_request        selected — the LIGHT run (operator ruling 2026-10-25):
+#                       the server tests the change can affect (a measured
+#                       dependency map, .github/ci/select-tests.mjs), sharded;
+#                       the agent, pwa and browser TESTS only when the change
+#                       can reach them (.github/ci/reach.mjs); every typecheck,
+#                       the build and the static checks always. The `full-ci`
+#                       label (read when a run starts: a label starts none),
+#                       or a change under .github/, makes it a full run.
+#   merge_group         full     — the queue is where the whole suite runs
+#                       (operator ruling 2026-10-25, replacing 2026-09-28's
+#                       "what a pull request runs"): every server shard, the
+#                       agent, pwa and browser tests, in a concurrency group
+#                       of its own; no macOS leg and no full-suite.
 #   schedule (hourly)   refresh  — re-trace the tests every merge since the
 #                       last refresh affected and update the map. No test legs.
 #                       Not a push trigger: a refresh per merge held 8-15 runner
@@ -46,13 +52,21 @@ permissions:
   contents: read
 
 on:
+  # The default activity types only (opened, synchronize, reopened): NOT
+  # `labeled`. A run started by any label gets this PR's concurrency group, so
+  # it cancels the run in progress, and its check runs supersede the earlier
+  # ones on the same head commit. Ending such a run early would report the
+  # required checks green over a red or cancelled run, and a job-level `if:`
+  # would too (a skipped required job reads as success); so a label starts no
+  # run at all. The `full-ci` label is read when the next run starts: add it,
+  # then push (or close and reopen the pull request).
   pull_request:
   # THE MERGE QUEUE (landing-order stage 2, spec §5.2). A queue runs the
   # REQUIRED checks on the group it built before it merges, and a workflow that
   # does not listen for `merge_group` never reports them — the entry waits out
   # the queue's timeout and is removed. This trigger is on `main` BEFORE the
   # operator turns the queue on (the spec's rollout step 1). A queue run runs
-  # what a pull request runs (the mode table above). There is no `push`
+  # the full suite (the mode table above). There is no `push`
   # trigger, so the queue's own `gh-readonly-queue/main/*` branches start no
   # second run.
   merge_group:
@@ -306,13 +320,16 @@ jobs:
         id: select
         env:
           EVENT: ${{ github.event_name }}
+          # The `full-ci` label asks a pull request for the full suite, as a change under .github/ does.
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
           INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 * * * *' && 'refresh') || '' }}
           FULL_GREEN: ${{ steps.green.outputs.full_green || 'false' }}
           PIPELINE_CHANGED: ${{ steps.pipeline.outputs.changed }}
           FLOOR: ${{ steps.floor.outputs.run }}
+          BASE: ${{ format('origin/{0}', github.base_ref) }}
         run: |
-          args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")
-          if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); elif [ "$PIPELINE_CHANGED" = true ]; then args+=(--input-mode full); fi
+          args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --base "$BASE" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")
+          if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); elif [ "$PIPELINE_CHANGED" = true ] || [ "$FULL_LABEL" = true ]; then args+=(--input-mode full); fi
           if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi
           # D-6771: the files the node floor runs, read from its own job so the list has one source; select.mjs
           # answers `floor` true when its selection holds one of them, or when FLOOR (the static inputs) is true.
@@ -573,8 +590,20 @@ jobs:
 
       # Local binary, never npx: `npx vitest` resolves to a global cache copy
       # with no jsdom and falsely reports "no tests" alongside 39 errors.
+      # The light pull-request rule (operator ruling 2026-10-25): the agent's
+      # tests skip when the change cannot reach them. The Install and the
+      # Typecheck below run either way, and so does this job, so
+      # `test (agent)` reports on every run. Only a pull request ever skips.
+      - name: Can this change reach the agent tests?
+        id: reach
+        if: env.CCRC_LEG == 'run' && github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: node .github/ci/reach.mjs --pkg agent --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"
+
       - name: Test
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: ${{ matrix.package }}
         run: ./node_modules/.bin/vitest run
 
@@ -615,10 +644,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The light pull-request rule (operator ruling 2026-10-25), see the agent leg:
+      # only a pull request asks, and only the three shards' tests skip.
+      - name: Can this change reach the pwa tests?
+        id: reach
+        if: env.CCRC_LEG == 'run' && github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: node .github/ci/reach.mjs --pkg pwa --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"
+
       # '22', as `deps` and the server shards: the trees' cache key names the
       # node version setup-node resolves, so another string would always miss.
       - uses: actions/setup-node@v7
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         with:
           node-version: '22'
           cache: npm
@@ -639,16 +678,32 @@ jobs:
       # directory already exists; this ordering is the only thing that proves
       # it on a clean checkout.
       - uses: ./.github/actions/server-deps
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         with:
           platform: linux
 
       # Local binary, never npx: `npx vitest` resolves to a global cache copy
       # with no jsdom and falsely reports "no tests" alongside 39 errors.
       - name: Test
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: pwa
-        run: ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }}
+        env:
+          SCOPE: ${{ steps.reach.outputs.scope }}
+          ALWAYS: ${{ steps.reach.outputs.always }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$SCOPE" = changed ]; then
+            # The light pull-request run: the tests vitest relates to this change (its imports, from the merge base),
+            # sharded; then, sharded too, every test that reads the tree from disk (reach.mjs's alwaysRunPwaTests:
+            # the CSS, boundary, census and guard suites import none of what they read), whatever changed.
+            mb=$(git merge-base "origin/$BASE_REF" HEAD)
+            ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }} --changed "$mb" --passWithNoTests
+            # Word-split on purpose: one pwa-relative path per word (ci-reach.test.ts pins the shape).
+            # shellcheck disable=SC2086
+            ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }} --passWithNoTests $ALWAYS
+          else
+            ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }}
+          fi
 
   # The pwa checks that are not tests, once (D-6768): the typecheck of pwa runs
   # here and nowhere else. @ccrc/ui rides this job rather than the shards: the
@@ -1075,26 +1130,38 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
+        with:
+          fetch-depth: 0
+      # The light pull-request rule (operator ruling 2026-10-25), see the agent leg:
+      # only a pull request asks, and only the browser leg's tests skip.
+      - name: Can this change reach the browser tests?
+        id: reach
+        if: env.CCRC_LEG == 'run' && github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: node .github/ci/reach.mjs --pkg browser --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"
+
       - uses: actions/setup-node@v7
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: pwa/package-lock.json
       - name: Install
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: pwa
         run: npm ci
       # BEFORE the browser config runs, for the test matrix's reason above: pwa
       # reads @ccrc/ui as SOURCE, and the leg's imports reach it (lib/router.ts,
       # through DocImage), which resolves only from ui's own node_modules.
       - name: Install @ccrc/ui
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: ui
         run: npm ci
       # Local binary, never npx (see the test matrix above).
       - name: Test
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: pwa
         run: ./node_modules/.bin/vitest run --config vitest.browser.config.ts
 
