@@ -105,3 +105,9 @@ export function storeBindingReaders(text: string, file = 'server/src/coord/store
 /** The store methods that read the runs by session or claimant for an ATTRIBUTE, not for a run (see above). Named, so a
  *  new one is a deliberate entry. */
 export const ATTRIBUTE_READS: readonly string[] = ['sessionProject', 'strandedClear'];
+
+/** The store methods the spec's reader list names that select by a RUN id, not by a session or claimant: they read one run's
+ *  own `claimedBy` / `sessionId` column (the run is already chosen), so they decide nothing about which run is a session's.
+ *  The raw detector never sees them (no session-keyed query); named here so a final slice measuring "readers <= 4" cannot
+ *  mistake them for folded. Legitimately different, pending an orchestrator ruling. */
+export const RUN_KEYED_READS: readonly string[] = ['resolveCoordinator', 'resolveWorker'];

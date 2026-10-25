@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  ATTRIBUTE_READS, countsByFile, equalitySites, equalitySitesOf, REPO, storeBindingReaders,
+  ATTRIBUTE_READS, RUN_KEYED_READS, countsByFile, equalitySites, equalitySitesOf, REPO, storeBindingReaders,
 } from './runSessionCensus.js';
 import { BINDING_WRITER_VERBS } from '../src/coord/runBinding.js';
 
@@ -107,5 +107,18 @@ describe('the store binding readers (ARCH-62 census)', () => {
     expect(ATTRIBUTE_READS).toEqual(['sessionProject', 'strandedClear']);
     expect(BINDING_WRITER_VERBS).toContain('openRun');
     expect(found.filter((n) => ATTRIBUTE_READS.includes(n) || BINDING_WRITER_VERBS.includes(n))).toEqual([]);
+  });
+});
+
+describe('the run-keyed reads the spec names (ARCH-62 census)', () => {
+  const text = readFileSync(`${REPO}/server/src/coord/store.ts`, 'utf8');
+
+  it('are exactly resolveCoordinator and resolveWorker, still on the store, each read by run id', () => {
+    expect(RUN_KEYED_READS).toEqual(['resolveCoordinator', 'resolveWorker']);
+    for (const n of RUN_KEYED_READS) expect(text).toMatch(new RegExp(`^  ${n}\\(runId: `, 'm'));
+  });
+
+  it('are not session-keyed readers: the raw detector does not count them', () => {
+    expect(storeBindingReaders(text).filter((n) => RUN_KEYED_READS.includes(n))).toEqual([]);
   });
 });
