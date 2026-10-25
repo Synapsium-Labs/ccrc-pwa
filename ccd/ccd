@@ -5214,6 +5214,24 @@ _lc_dec_ok() {   # text -> 0 iff it fits _LC_DEC_MAX *BYTES*. Prints nothing.
   (( ${#1} <= _LC_DEC_MAX ))
 }
 # ── end lifecycle journal ────────────────────────────────────────── LC-END ──
+_turn_reading() {   # config-dir pid -> TR_WHY ok|absent|not-regular|no-status, TR_WORD, TR_RAW, TR_SF; 0 iff why=ok
+  # ARCH-50 (K4): the ONE read of a session's status file, `<cfg>/sessions/<pid>.json`, for `_ws_status` and
+  # `_idle_for_keystroke`. It answers the same four words as the server's `turnWordOf` (`idle`, `busy`, `shell`, else
+  # `unknown`) and keeps the word as read in TR_RAW. Each caller keeps its own policy line over the result and its
+  # own failure vocabulary over TR_WHY. `_swap_idle_gate` is NOT a caller (D-5240, D-5349): it keeps its own verdict.
+  # `-e` paired with `-L` for D-1848's reason: a dangling symlink is not absence. `-f` before the grep for D-2379:
+  # `grep FILE` opens by name, and a FIFO with no writer would block for ever.
+  local sf="$1/sessions/$2.json" st
+  TR_SF="$sf"; TR_RAW=""; TR_WORD=unknown
+  if [[ ! -e "$sf" && ! -L "$sf" ]]; then TR_WHY=absent; return 1
+  elif [[ ! -f "$sf" ]]; then TR_WHY=not-regular; return 1
+  fi
+  st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
+  [[ -n "$st" ]] || { TR_WHY=no-status; return 1; }
+  TR_WHY=ok; TR_RAW="$st"
+  case "$st" in idle|busy|shell) TR_WORD="$st" ;; esac
+  return 0
+}
 _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   # Fails closed twice over, and both halves are load-bearing.
   #
@@ -5234,7 +5252,7 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   # unrelated prose; `_pr_py`'s own comment states the reason: a line number
   # goes stale the moment anything above it grows), which is likewise
   # `[[ "$st" == "idle" ]]` and stops on anything else.
-  local id="$1" wrapper cfg pid sf st
+  local id="$1" wrapper cfg pid
   wrapper=$(_reg_get "$id" wrapper); [[ -n "$wrapper" ]] || return 1
   cfg=$(_cfg_dir "$wrapper");        [[ -n "$cfg" ]]     || return 1
   # `idle` here is a claim about a session this function LOOKED AT. When the
@@ -5249,7 +5267,6 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   esac
   pid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  sf="$cfg/sessions/$pid.json"
   # D-2379: the one unguarded reader of this path family — `_sync_uuid`
   # (`-f`), `_auto_swap_check` (`-f`) and `_auto_compact_check` (a three-rung
   # ladder) each type-test `$sf` before opening it; this one did not, and
@@ -5262,10 +5279,8 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   # every unreadable/unrecognised shape to the same non-zero `[[ -n "$st" ]]
   # || return 1` lands on, so a mode-000 `$sf` is unaffected either way —
   # measured, not assumed.
-  [[ -f "$sf" ]] || return 1
-  st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
-  [[ -n "$st" ]] || return 1
-  [[ "$st" == idle ]] || { echo busy; return 0; }
+  _turn_reading "$cfg" "$pid" || return 1
+  [[ "$TR_WORD" == idle ]] || { echo busy; return 0; }
   echo idle
 }
 
@@ -21206,7 +21221,7 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # those means GO LOOK AT THE BOX; `status=busy` means WAIT. So each gets its own slug, and the
   # detail carries the path/status that says which flavour it is.
   [[ -n "$spid" ]] || { KS_WHY=no-pane-pid; KS_DETAIL="tmux list-panes named no pane pid${ctxnote:+, $ctxnote}"; return 1; }
-  _cfg_dir_to sf "$wrapper"; sf="$sf/sessions/$spid.json"   # tick-diet spec §6.2: memoised per wrapper — an exact memo, no D-number (Task 5)
+  _cfg_dir_to sf "$wrapper"   # tick-diet spec §6.2: memoised per wrapper — an exact memo, no D-number (Task 5); `sf` holds the config dir until `_turn_reading` names the file
   # `-f` BEFORE THE GREP — same rung and same reason as `_auto_swap_check`'s
   # copy above, but NOT the same arm, and the difference is the whole point.
   # That lane has two answers here (idle / not) and folds every failure into a
@@ -21238,14 +21253,17 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # `-e` PAIRED WITH `-L` IN ONE STATEMENT, for D-1848's reason one lane over: a
   # DANGLING SYMLINK is not absence, and reporting it as "no status in" would
   # send the operator looking for a file that is not the problem.
-  if [[ ! -e "$sf" && ! -L "$sf" ]]; then
-    KS_WHY=status-unreadable; KS_DETAIL="no status in $sf${ctxnote:+, $ctxnote}"; return 1
-  elif [[ ! -f "$sf" ]]; then
-    KS_WHY=status-unreadable; KS_DETAIL="not a regular file: $sf${ctxnote:+, $ctxnote}"; return 1
+  # ARCH-50: the file is read once, by `_turn_reading`; the two failure sentences and this lane's policy line stay here.
+  if ! _turn_reading "$sf" "$spid"; then
+    if [[ "$TR_WHY" == not-regular ]]; then
+      KS_WHY=status-unreadable; KS_DETAIL="not a regular file: $TR_SF${ctxnote:+, $ctxnote}"
+    else
+      KS_WHY=status-unreadable; KS_DETAIL="no status in $TR_SF${ctxnote:+, $ctxnote}"
+    fi
+    return 1
   fi
-  st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
-  [[ -n "$st" ]] || { KS_WHY=status-unreadable; KS_DETAIL="no status in $sf${ctxnote:+, $ctxnote}"; return 1; }
-  [[ "$st" == "idle" ]] || { KS_WHY=not-idle; KS_DETAIL="status=$st${ctxnote:+ $ctxnote}"; return 1; }
+  sf="$TR_SF"; st="$TR_RAW"
+  [[ "$TR_WORD" == idle ]] || { KS_WHY=not-idle; KS_DETAIL="status=$st${ctxnote:+ $ctxnote}"; return 1; }
   # Quiet gate: only compact a session idle a beat — not the instant it goes idle, nor one just
   # touched from any surface (statusUpdatedAt ms ticks on every busy<->idle transition). Same
   # split for the same reason: a MISSING `statusUpdatedAt` is not "someone just touched it", and
