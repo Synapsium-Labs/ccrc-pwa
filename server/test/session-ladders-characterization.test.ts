@@ -43,7 +43,7 @@ const OTHER = 'demo-brisk-fen';
 const PID = 40613;
 
 type Pane = 'live' | 'gone' | 'unknown';
-type LiveFile = 'idle' | 'busy' | 'absent' | 'unreadable';
+type LiveFile = 'idle' | 'busy' | 'waiting' | 'absent' | 'unreadable';
 
 const seedRow = (home: string, id: string, extra: Record<string, string> = {}): void => {
   const reg = path.join(home, '.cc-sessions');
@@ -55,7 +55,7 @@ const seedRow = (home: string, id: string, extra: Record<string, string> = {}): 
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
 };
 
-const seedLive = (home: string, status: 'idle' | 'busy'): void => {
+const seedLive = (home: string, status: 'idle' | 'busy' | 'waiting'): void => {
   const dir = path.join(home, '.claude', 'sessions');
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, `${PID}.json`), JSON.stringify({
@@ -90,6 +90,7 @@ const ROWS: Row[] = [
   }),
   row('a live pane, live file idle', 'live', stamp({}), { live: 'idle' }),
   row('a live pane, live file busy', 'live', stamp({}), { live: 'busy' }),
+  row('a live pane, live file waiting (collapsed to busy)', 'live', stamp({}), { live: 'waiting' }),
   row('a live pane, no live file yet (the seconds after ws-add)', 'live', stamp({}), { live: 'absent' }),
   row('a live pane, live file unreadable', 'live', stamp({}), { live: 'unreadable' }),
   row('a live pane, the pane pid read failed', 'live', stamp({}), { live: 'idle', pidFails: true }),
@@ -114,7 +115,7 @@ const world = (r: Row): World => {
   const home = mkTmp('ccrc-ladders-');
   seedRoster(home);
   r.seed(home);
-  if (r.live === 'idle' || r.live === 'busy') seedLive(home, r.live);
+  if (r.live === 'idle' || r.live === 'busy' || r.live === 'waiting') seedLive(home, r.live);
   if (r.live === 'unreadable') seedLive(home, 'idle');
   const run: Runner = async (_cmd, args) => {
     if (args[0] === 'has-session') {
@@ -190,6 +191,7 @@ const EXPECTED: Record<string, Observed> = {
   "listed but unassembled (a coordinator mid-write, D-1144)": { liveStatus: 'dead', frame: 'absent', liveRow: 'no-record', resolve: 'no:absent', claimProbe: 'gone', measuredDead: false, crash: 'unmeasurable' },
   "a live pane, live file idle": { liveStatus: 'idle', frame: 'idle/unsupervised', liveRow: 'idle/unsupervised', resolve: 'ok:idle', claimProbe: 'running', measuredDead: false, crash: 'alive' },
   "a live pane, live file busy": { liveStatus: 'busy', frame: 'busy/unsupervised', liveRow: 'busy/unsupervised', resolve: 'ok:busy', claimProbe: 'running', measuredDead: false, crash: 'alive' },
+  "a live pane, live file waiting (collapsed to busy)": { liveStatus: 'busy', frame: 'busy/unsupervised', liveRow: 'busy/unsupervised', resolve: 'ok:busy', claimProbe: 'running', measuredDead: false, crash: 'alive' },
   "a live pane, no live file yet (the seconds after ws-add)": { liveStatus: 'idle', frame: 'idle/unsupervised', liveRow: 'idle/unsupervised', resolve: 'ok:idle', claimProbe: 'running', measuredDead: false, crash: 'alive' },
   "a live pane, live file unreadable": { liveStatus: 'idle', frame: 'busy+unmeasured/unsupervised', liveRow: 'busy+unmeasured/unsupervised', resolve: 'ok:busy', claimProbe: 'running', measuredDead: false, crash: 'alive' },
   "a live pane, the pane pid read failed": { liveStatus: 'idle', frame: 'busy+unmeasured/unsupervised', liveRow: 'busy+unmeasured/unsupervised', resolve: 'ok:busy', claimProbe: 'running', measuredDead: false, crash: 'alive' },
