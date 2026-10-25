@@ -322,7 +322,9 @@ function readRegistry(id, catalogue) {
  *   - `{ state: 'ok', windows, raw }`: `windows` is `parseWindows`' frozen map;
  *     `raw` is the parsed JSON as it was on disk, unknown keys and all, which
  *     `set-window`/`clear-window` edit and write back, so a key this build does
- *     not know survives (spec §2.7: the file is forward-compatible).
+ *     not know survives (spec §2.7: the file is forward-compatible). The one
+ *     exception: `set-window` leaves out a refusal's `source: "refusal"` and
+ *     `refusedTokensEstimate` on the entry it writes (D-6905).
  *   - `{ state: 'unreadable', reason }`: a file that exists and cannot be read,
  *     is not JSON, or is not a windows file. `materialise`, the hourly refresh
  *     (which runs `materialise`) and the drift check treat it as NO windows,
@@ -1404,6 +1406,9 @@ function windowOp(opName, a, account, registry, catalogue, reading) {
     const previous = reading.state === 'ok' && Object.prototype.hasOwnProperty.call(reading.windows, a.model)
       ? reading.windows[a.model] : null;
     const prev = isObj(raw.windows[a.model]) ? raw.windows[a.model] : {};
+    // D-6905: a hand-set window drops a refusal's `refusedTokensEstimate` and `source: "refusal"` (from the clone).
+    delete prev.refusedTokensEstimate;
+    if (prev.source === 'refusal') delete prev.source;
     raw.windows[a.model] = { ...prev, tokens, setAt: new Date().toISOString() };
     extra = { model: a.model, tokens, previous };
   } else {

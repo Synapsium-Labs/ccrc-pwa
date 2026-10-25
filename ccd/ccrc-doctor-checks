@@ -6489,7 +6489,7 @@ _check_docs() {
 #     (`_bridge_headers` in ccgpt-usage.py), up to its BRIDGE_FRESH_S (900 s)
 #     older than the poll, so three cycles alone (2700 s) would WARN there
 #     after ONE failed poll. At 3600 s it WARNs after two, and its WARN says
-#     "measured" and counts no polls (D-TBD-usage-row-ts-is-measured).
+#     "measured" and counts no polls (D-6898).
 # `ccrc-doctor-codex.test.ts` ties both to the shipped timer's
 # `OnUnitActiveSec=`, and the direct one to ccgpt-usage.py's BRIDGE_FRESH_S.
 _DR_CODEX_USAGE_STALE_S=2700
@@ -7444,7 +7444,7 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> â€
 # the bridge's record). Then the other mode's tiers, `_codex_other_tiers`, are
 # asked: one that reads this lane's (0 or 4, as `ccrc codex start` counts them,
 # and ALSO the 2 `_codex_tier_is_our_handle` reads as this lane's own process,
-# which start's other-tiers loop does not yet count, D-TBD-retired-own-process)
+# which start's other-tiers loop does not yet count, D-6892)
 # is a RETIRED REFRESHER, a FAIL, because the litellm mode's tiers on a direct
 # lane mean two processes refresh one credential (Review Focus 5; resolves
 # Stage 1's D-6380). The shim is this lane's only by its `shim`-shaped answer
@@ -7524,7 +7524,7 @@ _dr_cx_tiers() {   # <id> â€” sets DRX_TIER_WORDS
   # counts the one 2 that is this lane's own process, `listener-other-process`
   # (`_codex_tier_is_our_handle`, asked directly after the question, as its
   # contract says), which start's other-tiers loop does not yet count
-  # (D-TBD-retired-own-process): a tier of this lane's alive by its command
+  # (D-6892): a tier of this lane's alive by its command
   # line while another process holds its port is still running, and
   # `ccrc codex stop` ends it through that handle. A 1 is the healthy answer,
   # and every other 2 (the bridge's `listener-other-mode` on the shim, or a

@@ -2365,7 +2365,7 @@ function main(argv) {
     // order, escapes) for no change. The row's mode is resolved as every reader resolves it, an absent key reading the
     // first word of the set, and when it is the requested word nothing is written and the answer is ok. So a
     // hand-written explicit default (`"bridge": "litellm"`) is KEPT on `--bridge litellm`: the delete below runs only
-    // on a change of mode (Task 12 fix round 3, review M1/M2, D-TBD-codex-mode-noop-on-resolved-mode).
+    // on a change of mode (Task 12 fix round 3, review M1/M2, D-6886).
     if ((exec['bridge'] ?? CODEX_BRIDGE_MODES[0]) === a['bridge']) return 0;
     // THE DEFAULT IS DELETED, NEVER WRITTEN (spec D20, additive): an absent key reads the first word of the set, so a
     // lane switched back to it reads byte for byte as it did before the bridge existed, and an older ccrc reading

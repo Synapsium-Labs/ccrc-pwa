@@ -1929,12 +1929,14 @@ export function bridgeStartedJson(home: string): string {
   return (r.stdout ?? '').trim();
 }
 
-/** A bridge start record's fields that `plantRunningBridge` / `writeBridgeRecord` can make stale, one at a time:
- *  `_codex_started_json bridge`'s interpreter, placed-shim hash and package digest. */
+/** A bridge start record's fields that `plantRunningBridge` / `writeBridgeRecord` can change, one at a time:
+ *  `_codex_started_json bridge`'s interpreter, code hash (the placed shim, then the auth library) and package digest.
+ *  `code` and `bridge` make the record stale; `interpreter` is recorded but not compared (D-6875). */
 export type BridgeRecordField = 'interpreter' | 'code' | 'bridge';
 
 /** Writes lane `id`'s `bridge.started`: `current` as a start would write it now, a field name the same record with that
- *  one field changed (so `_codex_tier_stale` reads it stale). */
+ *  one field changed (so `_codex_tier_stale` reads it stale for `code` or `bridge`, and current for `interpreter`,
+ *  which is recorded but not compared, D-6875). */
 export function writeBridgeRecord(home: string, id: string, rec: 'current' | BridgeRecordField): void {
   const file = join(home, '.ccrc', 'codex', id, 'bridge.started');
   const now = bridgeStartedJson(home);

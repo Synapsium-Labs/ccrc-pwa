@@ -1510,7 +1510,7 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     expect(r.stdout).toMatch(/^ {2}remedy: read what the publisher says: journalctl --user -u ccrc-codex-usage@codex-a\.service -n 50$/m);
   });
 
-  // Fix round 2 (FR1-M1, D-TBD-usage-row-ts-is-measured): a direct lane's row ts is when it was measured (the bridge's
+  // Fix round 2 (FR1-M1, D-6898): a direct lane's row ts is when it was measured (the bridge's
   // own stamp), so its WARN says "measured" and counts no polls. Fix round 3 (FR2-4): one second past the bound, the
   // age is rounded UP, so the line never reads "60 min ago — more than 60 min".
   it('a direct lane\'s row measured more than an hour ago: WARN naming its age and the publisher\'s log; under the hour, none', () => {

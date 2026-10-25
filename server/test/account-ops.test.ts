@@ -342,7 +342,7 @@ describe('the local arm (D-5513: the account spawn\'s environment is explicit)',
 // only for `direct`, and the key is DELETED when a `direct` row is switched to `litellm`, so a lane switched back reads
 // byte for byte as it did before the bridge existed. A row that already resolves to the requested mode is not written
 // at all (fix round 2), so a hand-written explicit `"bridge": "litellm"` is KEPT on `--bridge litellm` (fix round 3,
-// D-TBD-codex-mode-noop-on-resolved-mode). Refused: a non-codex row, an unknown mode, an unreadable roster, an id the
+// D-6886). Refused: a non-codex row, an unknown mode, an unreadable roster, an id the
 // roster lacks.
 describe('account-op codex-mode (codex bridge Stage 2, Task 12)', () => {
   const ACCOUNT_OP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'deploy', 'account-op.mjs');

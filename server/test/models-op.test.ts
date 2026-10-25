@@ -4612,4 +4612,23 @@ describe('lower-windows: a refusal lowers the window (codex-bridge D25, Stage 2 
     expect(r.body['error']).toBe('unroutable-lane');
     expect(fs.readFileSync(winPath(ID), 'utf8')).toBe(before);
   });
+
+  // D-6905: a window set by hand is not a refusal's, so `set-window` over a lowered entry leaves out its
+  // `source: "refusal"` and `refusedTokensEstimate`; any other `source` is kept ('PRESERVES keys this build …').
+  it('a set-window over a lowered entry drops source and refusedTokensEstimate, and keeps any other key', () => {
+    plantWindows(ID, { windows: { [OPUS]: { tokens: 400000, setAt: '2026-10-01T00:00:00Z', note: 'kept' } } });
+    plantStats({ [`backend/${OPUS}`]: refusal(380000) });
+    expect(lower().code).toBe(0);
+    expect(windowsFile().windows[OPUS]).toEqual({ tokens: 342000, setAt: NOW, source: 'refusal',
+      refusedTokensEstimate: 380000, note: 'kept' });
+    const s = op('set-window', '--file', rosterPath(), '--id', ID, '--model', OPUS, '--tokens', '450000');
+    expect(s.code, s.stdout + s.stderr).toBe(0);
+    const written = windowsFile().windows[OPUS]!;
+    expect(written).toEqual({ tokens: 450000, setAt: expect.any(String), note: 'kept' });
+    expect(Object.keys(written).sort()).toEqual(['note', 'setAt', 'tokens']);
+    const r = op('show', '--file', rosterPath(), '--id', ID);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect((r.body['windows'] as { byModel: Record<string, unknown> }).byModel[OPUS])
+      .toEqual({ tokens: 450000, setAt: written['setAt'] });
+  });
 });

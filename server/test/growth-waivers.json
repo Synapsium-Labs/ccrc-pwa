@@ -77,6 +77,13 @@
       "d": "D-6773",
       "reason": "PR-landing stage 1 PL-1: the read-only pr-landing verb (the per-alias GraphQL builder, the python reader with its rules cache per base, and the _pr_bind_facts extraction) in ccd/ccd (measured +332 net code lines against the merge-base after its rebase onto ARCH-74 and DR-26)",
       "added": "2026-10-24"
+    },
+    {
+      "file": "ccd/ccrc",
+      "maxDelta": 550,
+      "d": "D-6907",
+      "reason": "codex bridge Stage 2 wave 2: ccd/ccrc's codex lanes gain a bridge mode (the lane.json mode and upstream readers, the bridge tier in start, stop and status, ccrc codex switch, the install and uninstall walks over a mode's tiers, the auto-advance's bounded mode read, and the hourly refresh's window-lowering pass), measured +540 net code lines against the merge-base",
+      "added": "2026-10-25"
     }
   ]
 }

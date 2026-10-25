@@ -1455,7 +1455,7 @@ describe.skipIf(!PY)('ccgpt-usage.py: the direct arm (codex bridge Stage 2, Task
       expect(requests.length).toBe(1);
       expect(requests[0].headers['originator']).toBe('ccrc');
       expect(requests[0].headers['chatgpt-account-id']).toBe(`acct-${id}`);
-      // D-TBD-usage-direct-arm-keeps-codex-ua (fix round 1, T14-SPEC-4): the fallback request keeps the one
+      // D-6897 (fix round 1, T14-SPEC-4): the fallback request keeps the one
       // user-agent this file sends on both modes, so a direct lane's poll pairs `originator: ccrc` with it, not
       // with the bridge's ccrc user-agent. Pinned, so the pair a first live check measures is the pair it ships.
       expect(requests[0].headers['user-agent']).toBe('codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown');
@@ -1484,7 +1484,7 @@ describe.skipIf(!PY)('ccgpt-usage.py: the direct arm (codex bridge Stage 2, Task
     }
   });
 
-  // Fix round 1, M4: D-TBD-usage-direct-arm-reads-no-credential, pinned. A fresh snapshot is published before the
+  // Fix round 1, M4: D-6894, pinned. A fresh snapshot is published before the
   // poll reads `probeModel` or the credential, so a lane.json with neither and no credential still publishes.
   it('a direct lane with fresh headers publishes without a probe model or a credential', async () => {
     const home = mkTmp('ccgpt-usage-direct-no-cred-');
@@ -1507,7 +1507,7 @@ describe.skipIf(!PY)('ccgpt-usage.py: the direct arm (codex bridge Stage 2, Task
     }
   });
 
-  // Fix round 1, T14-SPEC-2: D-TBD-usage-mode-word-default, pinned. Only the exact word `direct` reads the stats file.
+  // Fix round 1, T14-SPEC-2: D-6896, pinned. Only the exact word `direct` reads the stats file.
   it('a mode word this build does not know polls as litellm', async () => {
     const home = mkTmp('ccgpt-usage-unknown-mode-');
     const id = mintId();
