@@ -102,6 +102,34 @@ ENTRY_DEST = '.local/bin/ccd'
 BODY_DEST = '.local/libexec/ccrc/ccd'
 
 
+# THE BODY'S PROVENANCE STAMP IS WRITTEN HERE, AT INSTALL TIME, NEVER COMMITTED.
+# `shared/mark.mjs` defines the marker (`# ccrc:generated 1 sha256=<hex>`: line 2
+# after a shebang, the sha256 of the text WITHOUT that line). ccd/ccd used to
+# carry it committed, and since every edit to the file changes it, line 2
+# conflicted in 85 of the 98 conflicted absorptions measured in 30 days. The
+# committed file now holds one fixed placeholder line there; `stamp_body` swaps
+# the marker in for it, in place, so the installed copy has the committed copy's
+# line numbers. The launcher's digest is taken over the STAMPED bytes, so the
+# integrity chain is the same one as before: the digest rendered into the
+# launcher covers the marker too, and the marker covers the rest. A body with no
+# placeholder (a fixture) or a legacy stamp is handled by the same rule:
+# whatever sits at the marker position that is a placeholder or a marker is
+# replaced, else the marker is inserted - byte for byte what markGenerated writes.
+# server/test/ccd-install-stamp.test.ts pins this against shared/mark.mjs.
+MARKER_PREFIX = b'# ccrc:generated 1 sha256='
+MARKER_LINE = re.compile(rb'# ccrc:generated 1 sha256=[0-9a-f]{64}')
+STAMP_PLACEHOLDER = '# ccrc:stamp-at-install \u2014 written into the installed copy by ccd/ccd-entry-install.py; never committed'.encode('utf-8')
+
+
+def stamp_body(data):
+    lines = data.split(b'\n')
+    idx = 1 if lines[0].startswith(b'#!') else 0
+    if idx < len(lines) and (lines[idx] == STAMP_PLACEHOLDER or MARKER_LINE.fullmatch(lines[idx])):
+        del lines[idx]
+    lines.insert(idx, MARKER_PREFIX + hashlib.sha256(b'\n'.join(lines)).hexdigest().encode('ascii'))
+    return b'\n'.join(lines)
+
+
 class Refused(Exception):
     pass
 
@@ -389,7 +417,7 @@ def sweep(directory, pattern, is_dir):
 
 def install(tree, home):
     python = check_interpreter()
-    body_data = read_regular(os.path.join(tree, *BODY_SOURCE.split('/')))
+    body_data = stamp_body(read_regular(os.path.join(tree, *BODY_SOURCE.split('/'))))
     template = read_regular(os.path.join(tree, *TEMPLATE_SOURCE.split('/'))).decode('utf-8')
     digest = hashlib.sha256(body_data).hexdigest()
     entry_data = render(template, python, digest)

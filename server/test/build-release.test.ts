@@ -429,9 +429,9 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     const r = spawnSync(py, ['-IS', join(dest, 'ccd', 'ccd-entry-install.py'), 'install', dest, box],
       { encoding: 'utf8', env: { HOME: box, PATH: process.env['PATH'] ?? '/usr/bin:/bin' } });
     expect(r.status, r.stderr).toBe(0);
-    const installed = readFileSync(join(box, '.local', 'libexec', 'ccrc', 'ccd'), 'utf8');
+    const installed = readFileSync(join(box, '.local', 'libexec', 'ccrc', path.basename(pair[0])), 'utf8');
     expect(verifyMarker(installed)).toBe('ccrc-unmodified');
-    expect(verifyMarker(readFileSync(join(dest, 'ccd', 'ccd'), 'utf8')), 'the release tree itself carries no stamp').toBe('foreign');
+    expect(verifyMarker(readFileSync(join(dest, pair[0]), 'utf8')), 'the release tree itself carries no stamp').toBe('foreign');
   });
 
   // ── Stage 4, Task 6: the artifact carries its own identity ──────────────
