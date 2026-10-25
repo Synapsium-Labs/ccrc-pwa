@@ -1,8 +1,8 @@
 // D-6913 (GitHub #1279): ccd/ccd loads the fleet disk-retention code from ccd/lib/disk-retention.sh.
 //
 // The file is shell that ccd EVALUATES, so the load is a trust boundary. These tests pin what it promises:
-//   1. the digest ccd pins is the file's digest, and the file is in the one shape the load hashes (one trailing
-//      newline, no NUL);
+//   1. the committed ccd carries only the pin's fixed placeholder (the installer renders the digest, as it stamps line 2),
+//      and the file is in the one shape the load hashes (one trailing newline, no NUL);
 //   2. a faithful copy loads, and the moved verbs and helpers exist once it has; ccd/ccd itself no longer defines them;
 //   3. a changed, missing or linked file refuses the start (`ccd: refused (lib-…)`, status 125) and NOTHING of it runs,
 //      sourced or executed, and through the installed direct entry;
@@ -13,7 +13,8 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, installDirectEntry, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, CCD_LIB_PIN_PLACEHOLDER, ghContainedEnv, installDirectEntry, installedCcdBody, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { markGenerated } from '../../shared/mark.mjs';
 
 const REPO = path.resolve(__dirname, '..', '..');
 const LIB = path.join(REPO, 'ccd', 'lib', 'disk-retention.sh');
@@ -26,11 +27,14 @@ beforeEach(() => { h = makeCcdHarness('ccrc-lib-load-'); dir = path.join(h.home,
 afterEach(() => { h.cleanup(); });
 
 /** A copy of ccd and its library at `<home>/tree/{ccd,lib/disk-retention.sh}`, the library through `mutate`
- *  (`null` leaves it out). */
-function plant(mutate: ((t: string) => string | null) = (t) => t): string {
+ *  (`null` leaves it out). The body is the INSTALLED form by default (its pin rendered to the shipped library, then stamped,
+ *  as ccd-entry-install.py publishes it), so `mutate` is a library changed after install; `body: 'source'` plants the
+ *  committed file as it stands, both placeholders in place, and a function plants what it returns. */
+function plant(mutate: ((t: string) => string | null) = (t) => t, body: 'installed' | 'source' | ((src: string) => string) = 'installed'): string {
   fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
   const ccd = path.join(dir, 'ccd');
-  fs.copyFileSync(CCD, ccd);
+  const src = fs.readFileSync(CCD, 'utf8');
+  fs.writeFileSync(ccd, body === 'source' ? src : body === 'installed' ? installedCcdBody(src, fs.readFileSync(LIB)) : body(src), { mode: 0o755 });
   const lib = mutate(fs.readFileSync(LIB, 'utf8'));
   if (lib !== null) fs.writeFileSync(path.join(dir, 'lib', 'disk-retention.sh'), lib);
   return ccd;
@@ -45,12 +49,14 @@ function sourced(ccd: string, extra: NodeJS.ProcessEnv = {}): { out: string; err
 }
 
 describe('the library and the pin', () => {
-  it('ccd pins the SHA-256 of the library, which ends in exactly one newline and holds no NUL', () => {
+  it('the committed ccd carries the pin placeholder, never a digest; the library ends in one newline and holds no NUL', () => {
+    // The pin gets the install-time treatment line 2 got (D-6927): a committed digest would change, and conflict, in every
+    // PR that touches the library. ccd-entry-install.py renders it into the installed body.
     const bytes = fs.readFileSync(LIB);
-    const pin = /^__CCD_LIB_SHA256=([0-9a-f]{64})$/m.exec(fs.readFileSync(CCD, 'utf8'))?.[1];
-    expect(pin, 'ccd/ccd carries one `__CCD_LIB_SHA256=<64 hex>` line').toBeDefined();
-    expect(fs.readFileSync(CCD, 'utf8').match(/^__CCD_LIB_SHA256=/gm)?.length).toBe(1);
-    expect(createHash('sha256').update(bytes).digest('hex'), 'run: bash ccd/ccrc restamp ccd/ccd').toBe(pin);
+    const ccdText = fs.readFileSync(CCD, 'utf8');
+    expect(ccdText.match(/^__CCD_LIB_SHA256=.*$/gm), 'ccd/ccd carries exactly one pin line, the placeholder').toEqual([CCD_LIB_PIN_PLACEHOLDER]);
+    expect(/[0-9a-f]{64}/.test(ccdText.match(/^__CCD_LIB_SHA256=.*$/m)?.[0] ?? ''), 'no committed digest').toBe(false);
+    expect(createHash('sha256').update(bytes).digest('hex')).toMatch(/^[0-9a-f]{64}$/);
     const text = bytes.toString('utf8');
     expect(text.endsWith('\n') && !text.endsWith('\n\n'), 'exactly one trailing newline').toBe(true);
     expect(bytes.includes(0), 'no NUL byte: `$(<file)` would drop it and the digest would disagree').toBe(false);
@@ -72,7 +78,7 @@ describe('the library and the pin', () => {
 describe('a test that scans ccd reads all of it', () => {
   // `ccdSource()` puts the moved regions back where they sat; a bare read of `CCD` as text sees ccd without them, and a scanner
   // built on it passes over less than it did. These files read the FILE, not the program, on purpose.
-  const FILE_READERS = new Set(['ccd-lib-load.test.ts', 'ccd-entry-install.test.ts', 'ownership.test.ts', 'ccrc-restamp.test.ts', 'ccdWsHelpers.ts']);
+  const FILE_READERS = new Set(['ccd-lib-load.test.ts', 'ccd-entry-install.test.ts', 'ownership.test.ts', 'ccrc-restamp.test.ts', 'ccd-install-stamp.test.ts', 'ccdWsHelpers.ts']);
 
   it('no test file reads CCD as text outside the ones about the file itself', () => {
     const dir = path.join(REPO, 'server', 'test');
@@ -88,6 +94,50 @@ describe('a faithful copy loads', () => {
     expect(r.err).toBe('');
     expect(r.out).toContain('rc=0');
     for (const f of MOVED) expect(r.out, f).toContain(`has ${f}`);
+  });
+});
+
+describe('installed or source checkout: only a body with BOTH placeholders skips the check', () => {
+  it('a source checkout (line 2 and the pin both placeholders) loads a changed library without a check: nothing was installed', () => {
+    const r = sourced(plant((t) => t + RAN, 'source'));
+    expect(r.err).toBe('');
+    expect(r.out).toContain('rc=0');
+    for (const f of MOVED) expect(r.out, f).toContain(`has ${f}`);
+    expect(fs.existsSync(MARK()), 'the library was evaluated').toBe(true);
+  });
+
+  it('a source checkout still refuses a missing library (lib-missing)', () => {
+    const r = sourced(plant(() => null, 'source'));
+    expect(r.err).toContain('ccd: refused (lib-missing)');
+    expect(r.out).toContain('rc=125');
+  });
+
+  it('a real stamp on line 2 with the pin still a placeholder is a broken install: it refuses with lib-digest, nothing evaluated', () => {
+    const stampedOnly = (src: string): string => {
+      const lines = src.split('\n');
+      lines.splice(1, 1);
+      return markGenerated(lines.join('\n'));
+    };
+    const ccd = plant((t) => t, stampedOnly);
+    expect(fs.readFileSync(ccd, 'utf8')).toMatch(/^# ccrc:generated 1 sha256=[0-9a-f]{64}$/m);
+    expect(fs.readFileSync(ccd, 'utf8')).toContain(`\n${CCD_LIB_PIN_PLACEHOLDER}\n`);
+    const r = sourced(ccd);
+    expect(r.err).toContain('ccd: refused (lib-digest)');
+    expect(r.out).toContain('rc=125');
+    expect(r.out).not.toContain('has ');
+    const x = spawnSync('bash', [ccd, 'version'], { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, h.env(), { systemd: true, tmux: true, net: true }) });
+    expect(x.status).toBe(125);
+    expect(x.stderr).toContain('ccd: refused (lib-digest)');
+  });
+
+  it('a real pin with line 2 still the placeholder is not a source checkout: the digest is checked', () => {
+    const pinnedOnly = (src: string): string =>
+      src.replace(CCD_LIB_PIN_PLACEHOLDER, `__CCD_LIB_SHA256=${createHash('sha256').update(fs.readFileSync(LIB)).digest('hex')}`);
+    expect(sourced(plant((t) => t, pinnedOnly)).out).toContain('rc=0');
+    const r = sourced(plant((t) => t + RAN, pinnedOnly));
+    expect(r.err).toContain('ccd: refused (lib-digest)');
+    expect(r.out).toContain('rc=125');
+    expect(fs.existsSync(MARK())).toBe(false);
   });
 });
 

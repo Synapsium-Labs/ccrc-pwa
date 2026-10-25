@@ -18,9 +18,9 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD, CCD_LIB, canonicalPython3, ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, canonicalPython3, ghContainedEnv, installedCcdBody } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
-import { markGenerated } from '../../shared/mark.mjs';
+import { verifyMarker } from '../../shared/mark.mjs';
 
 const REPO = path.resolve(__dirname, '..', '..');
 const PYTHON = canonicalPython3();
@@ -40,13 +40,11 @@ afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 const tree = (): string => path.join(home, 'ccrc');
 const entry = (): string => path.join(home, '.local', 'bin', 'ccd');
 const body = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
-/** What the installer publishes for the tree's ccd source: the source with its line-2 placeholder swapped, in place,
- *  for the marker `markGenerated` writes (install-time stamping; ccd-install-stamp.test.ts owns the rule itself). */
-const stampedTreeBody = (): Buffer => {
-  const lines = fs.readFileSync(path.join(tree(), 'ccd/ccd'), 'utf8').split('\n');
-  if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
-  return Buffer.from(markGenerated(lines.join('\n')));
-};
+/** What the installer publishes for the tree's ccd source: its library pin placeholder rendered to the digest of the
+ *  tree's library, THEN its line-2 placeholder swapped, in place, for the marker `markGenerated` writes, so the stamp covers
+ *  the pin (install-time stamping; ccd-install-stamp.test.ts owns the stamp rule, this file the pin). */
+const stampedTreeBody = (): Buffer =>
+  Buffer.from(installedCcdBody(fs.readFileSync(path.join(tree(), 'ccd/ccd'), 'utf8'), fs.readFileSync(path.join(tree(), 'ccd/lib/disk-retention.sh'))));
 /** The library the body pins and loads (D-6913), where the publisher puts it: `lib/` beside the body. */
 const lib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'disk-retention.sh');
 const sha = (p: string): string => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
@@ -77,15 +75,15 @@ const HOOK = [
 /** A shipped-tree copy at `<home>/ccrc`: the body, the template and the helper.
  *  `template` rewrites the template's text (a hook, a broken self-test); `ccd`
  *  appends to the body; `installer` rewrites the helper's text (a fixture
- *  failure at a step no hook can reach); `lib` rewrites the library, and the body's pin is rewritten to match unless
- *  `unpinned` says the tree is one whose library is not the one its body pins. */
-function plantTree(o: { template?: (t: string) => string; ccd?: string; installer?: (t: string) => string; lib?: (t: string) => string; unpinned?: boolean } = {}): void {
+ *  failure at a step no hook can reach); `lib` rewrites the library; `pin` rewrites the body's pin line (the committed one is
+ *  the placeholder the installer renders, D-6913). */
+function plantTree(o: { template?: (t: string) => string; ccd?: string; installer?: (t: string) => string; lib?: (t: string) => string; pin?: (line: string) => string } = {}): void {
   const dir = path.join(tree(), 'ccd');
   fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
   const libText = o.lib ? o.lib(fs.readFileSync(CCD_LIB, 'utf8')) : fs.readFileSync(CCD_LIB, 'utf8');
   fs.writeFileSync(path.join(dir, 'lib', 'disk-retention.sh'), libText);
   let bodyText = fs.readFileSync(CCD, 'utf8') + (o.ccd ?? '');
-  if (o.lib && !o.unpinned) bodyText = bodyText.replace(/^__CCD_LIB_SHA256=.*$/m, `__CCD_LIB_SHA256=${createHash('sha256').update(libText).digest('hex')}`);
+  if (o.pin) bodyText = bodyText.replace(/^__CCD_LIB_SHA256=.*$/m, o.pin);
   fs.writeFileSync(path.join(dir, 'ccd'), bodyText, { mode: 0o755 });
   const tpl = fs.readFileSync(path.join(REPO, 'ccd', 'ccd-entry.py'), 'utf8');
   fs.writeFileSync(path.join(dir, 'ccd-entry.py'), o.template ? o.template(tpl) : tpl);
@@ -238,9 +236,45 @@ describe('the pair, through both lanes: fresh, converged, and re-run after drift
     assertPair();
   }, 60_000);
 
+  it('the installer renders the library\'s digest into the body\'s pin BEFORE it stamps it, so the stamp covers the pin', () => {
+    plantTree();
+    expect(fs.readFileSync(path.join(tree(), 'ccd/ccd'), 'utf8')).toContain(`\n${CCD_LIB_PIN_PLACEHOLDER}\n`);
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    const installed = fs.readFileSync(body(), 'utf8');
+    expect(installed.match(/^__CCD_LIB_SHA256=.*$/gm), 'one pin line, the digest of the library it published').toEqual([`__CCD_LIB_SHA256=${sha(lib())}`]);
+    expect(installed).not.toContain(CCD_LIB_PIN_PLACEHOLDER);
+    expect(verifyMarker(installed), 'the stamp verifies over the rendered pin').toBe('ccrc-unmodified');
+    expect(verifyMarker(installed.replace(/^__CCD_LIB_SHA256=.*$/m, CCD_LIB_PIN_PLACEHOLDER)), 'the stamp covers the pin').toBe('ccrc-edited');
+    expect(installed.split('\n').length, 'rendered in place: the line numbers are the source\'s').toBe(fs.readFileSync(path.join(tree(), 'ccd/ccd'), 'utf8').split('\n').length);
+    assertPair();
+  }, 60_000);
+
+  it('a changed library in the tree is rendered into the body it publishes, no source edit needed', () => {
+    plantTree({ lib: (l) => `${l}# a library edit\n` });
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(/^__CCD_LIB_SHA256=([0-9a-f]{64})$/m.exec(fs.readFileSync(body(), 'utf8'))?.[1]).toBe(sha(lib()));
+    assertPair();
+  }, 60_000);
+
+  for (const [what, pin] of [
+    ['no pin line at all', (): string => '# no pin'],
+    ['two pin placeholders', (): string => `${CCD_LIB_PIN_PLACEHOLDER}\n${CCD_LIB_PIN_PLACEHOLDER}`],
+  ] as const) {
+    it(`a body with ${what} is refused before anything is created`, () => {
+      plantTree({ pin });
+      const r = helper(['install', tree(), home]);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/is not the library .* pins/);
+      expect([fs.existsSync(path.join(home, '.local', 'libexec')), fs.existsSync(entry())]).toEqual([false, false]);
+    }, 60_000);
+  }
+
   for (const [lane, run] of Object.entries(LANES)) {
-    it(`${lane}: a tree whose library is not the one its body pins is refused before anything is created`, () => {
-      plantTree({ lib: (l) => `${l}\n# not what the body pins\n`, unpinned: true });
+    it(`${lane}: a tree whose rendered pin does not match the library it publishes is refused before anything is created`, () => {
+      // A body that carries a literal digest (of the library as it was), beside a library that has since changed.
+      plantTree({ lib: (l) => `${l}# not what the body pins\n`, pin: () => `__CCD_LIB_SHA256=${createHash('sha256').update(fs.readFileSync(CCD_LIB)).digest('hex')}` });
       const r = run();
       expect(r.code, r.stderr).toBe(1);
       expect(r.stderr).toMatch(/is not the library .* pins/);
