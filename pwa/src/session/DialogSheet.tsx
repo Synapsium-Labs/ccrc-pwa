@@ -606,7 +606,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
     setRaiseMark({ nonce: raise ?? 0, unlock: (raise ?? 0) !== 0 && desk && !locked && live && !closed });
   }
   useEffect(() => {
-    if (raiseMark.unlock) engagement.reengage();
+    // A send claimed between the raise's render and this effect has released, and the later release wins (R102).
+    if (raiseMark.unlock && !sending.current) engagement.reengage();
   }, [raiseMark, engagement]);
   const keys = useAskKeys({
     screenId: dialog?.id ?? null,
