@@ -13,9 +13,11 @@ import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 afterEach(removeTmpFixtures);
 const HELPER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../ccd/coordinator-skill/references/mutation-run.py');
 
-const SUBJECT = `import tempfile
+const SUBJECT = `import sys
+import tempfile
 
 MODE = 0
+CACHE = tempfile.mkdtemp()
 
 
 def classify(n):
@@ -28,6 +30,16 @@ def other():
     return 42
 
 
+def table():
+    return {"k": 7}
+
+
+def bail(n):
+    if n < 0:
+        sys.exit(3)
+    return n
+
+
 def never():
     return 1
 
@@ -37,7 +49,7 @@ def leaky():
     return MODE
 `;
 
-const TESTS = `import os, time
+const TESTS = `import os, tempfile, time
 
 
 def _log(name):
@@ -60,6 +72,17 @@ def suite(m):
         _log("t_other")
         assert m.other() == 42
 
+    tbl = m.table()
+    tmp = tempfile.mkdtemp()
+
+    def t_table():
+        _log("t_table")
+        assert tbl["k"] == 7
+
+    def t_bail():
+        _log("t_bail")
+        assert m.bail(1) == 1
+
     def t_leaky():
         _log("t_leaky")
         r = m.leaky()
@@ -70,7 +93,7 @@ def suite(m):
             time.sleep(60)
 
     return {"t_classify_neg": t_classify_neg, "t_classify_pos": t_classify_pos,
-            "t_other": t_other, "t_leaky": t_leaky}
+            "t_other": t_other, "t_table": t_table, "t_bail": t_bail, "t_leaky": t_leaky}
 `;
 
 interface Fx { dir: string; root: string; systmp: string; log: string; ready: string; mutations: string; out: string }
@@ -219,5 +242,37 @@ describe('mutation-run helper', () => {
     expect(r.lines.join('')).not.toMatch(/killed|survived/);
     expect(readdirSync(fx.root)).toEqual([]);
     expect(readdirSync(fx.systmp)).toEqual([]);
+  });
+
+  it('reports a mutant that calls sys.exit as killed and still runs the later mutants', () => {
+    const fx = fixture([
+      { id: 'ex', old: 'if n < 0:\n        sys.exit(3)', new: 'if n > 0:\n        sys.exit(3)' },
+      { id: 'o', old: 'return 42', new: 'return 43' },
+    ]);
+    const r = run(fx);
+    expect(r.lines[0]).toMatch(/^ex\tkilled/);
+    expect(r.lines[1]).toBe('o\tkilled\tt_other');
+    expect(r.lines[2]).toMatch(/^summary:/);
+    expect(readdirSync(fx.systmp)).toEqual([]);
+  });
+
+  it('kills a mutant on a line only the suite setup runs, with coverage on', () => {
+    const fx = fixture([{ id: 'tbl', old: 'return {"k": 7}', new: 'return {"k": 8}' }]);
+    const r = run(fx);
+    expect(r.lines[0]).toBe('tbl\tkilled\tt_table');
+    expect(r.code).toBe(0);
+  });
+
+  it('leaves the session temp dir empty when the suite setup and the module import call mkdtemp', () => {
+    const fx = fixture([
+      { id: 'a', old: 'return 42', new: 'return 43' },
+      { id: 'b', old: 'return "neg"', new: 'return "pos"' },
+    ]);
+    run(fx);
+    expect(readdirSync(fx.systmp)).toEqual([]);
+    expect(readdirSync(fx.root)).toEqual([]);
+    run(fx, ['--no-coverage']);
+    expect(readdirSync(fx.systmp)).toEqual([]);
+    expect(readdirSync(fx.root)).toEqual([]);
   });
 });

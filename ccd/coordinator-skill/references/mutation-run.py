@@ -109,12 +109,35 @@ def sandbox(root):
                 os.environ[k] = v
 
 
-def run_tests(entry, mod, names, root, timeout):
-    """Run the named tests (None: all) in a sandbox; return the failing test name or None."""
+class _Terminated(BaseException):
+    """The helper itself was asked to stop (SIGTERM); never mistaken for a mutant's exit."""
+
+
+_KILLS = (Exception, SystemExit, KeyboardInterrupt)  # whatever a mutant does, it is not the helper's end
+
+
+def run_tests(entry, build, names, root, timeout):
+    """Build the module and run the named tests (None: all) in one sandbox.
+
+    `build()` returns the module. Import, fixture setup and tests all run under the sandbox
+    and the per-call alarm. Returns the failing test name (or a `load:` / `(exit)` /
+    `(timeout)` note) or None when everything passed.
+    """
     old_alarm = signal.signal(signal.SIGALRM, _alarm)
     try:
         with sandbox(root):
-            tests = entry(mod)
+            signal.alarm(timeout)
+            try:
+                mod = build()
+                tests = entry(mod)
+            except _Timeout:
+                return "load (timeout)"
+            except _Terminated:
+                raise
+            except _KILLS as e:
+                return "load: " + type(e).__name__
+            finally:
+                signal.alarm(0)
             for name, fn in tests.items():
                 if names is not None and name not in names:
                     continue
@@ -123,7 +146,11 @@ def run_tests(entry, mod, names, root, timeout):
                     fn()
                 except _Timeout:
                     return name + " (timeout)"
-                except Exception:  # noqa: BLE001 - any failure kills the mutant
+                except _Terminated:
+                    raise
+                except SystemExit:
+                    return name + " (exit)"
+                except _KILLS:  # any failure kills the mutant
                     return name
                 finally:
                     signal.alarm(0)
@@ -150,7 +177,9 @@ def _traced(call, filename):
     sys.settrace(glob)
     try:
         return lines, call()
-    except Exception:  # noqa: BLE001 - a failing baseline test is reported by the caller
+    except _Terminated:
+        raise
+    except _KILLS:  # a failing baseline test is reported by the caller
         lines.add(-1)
         return lines, None
     finally:
@@ -158,18 +187,20 @@ def _traced(call, filename):
 
 
 def trace_baseline(entry, name, filename, source, root):
-    """One traced run: ({test name: executed lines of the module}, import-time lines).
+    """One traced run: ({test name: executed lines of the module}, lines no single test owns).
 
-    The module is built under the trace too, so lines that run at import (constants,
-    tables, class bodies, decorators) are not misread as covered by no test.
+    The module build and the entry function's fixture setup are traced too, inside the same
+    sandbox as the tests, so lines that run at import or setup (constants, tables, class
+    bodies, `load_table()` before the dict is returned) are not misread as covered by no test.
     """
-    with sandbox(root):
-        import_lines, mod = _traced(lambda: build_module(name, filename, source), filename)
     cov = {}
-    for tname, fn in entry(mod).items():
-        with sandbox(root):
+    with sandbox(root):
+        shared, mod = _traced(lambda: build_module(name, filename, source), filename)
+        lines, tests = _traced(lambda: entry(mod), filename)
+        shared |= lines
+        for tname, fn in (tests or {}).items():
             cov[tname], _ = _traced(fn, filename)
-    return cov, import_lines
+    return cov, shared
 
 
 def span_of(source, old):
@@ -220,7 +251,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     def _term(signum, frame):
-        raise SystemExit(143)
+        raise _Terminated()
 
     signal.signal(signal.SIGTERM, _term)
 
@@ -235,8 +266,7 @@ def main(argv=None):
 
     saved = sys.modules.get(name)
     try:
-        base = build_module(name, filename, source)
-        failed = run_tests(entry, base, None, root, a.timeout)
+        failed = run_tests(entry, lambda: build_module(name, filename, source), None, root, a.timeout)
         if failed:
             print("baseline fails: " + failed, file=sys.stderr)
             return 2
@@ -277,15 +307,11 @@ def main(argv=None):
                                     "old": old, "new": new, "lines": [span[0], span[1]]})
                     continue
             mutant_src = source.replace(old, new, 1)
-            try:
-                mod = build_module(name, filename, mutant_src)
-            except Exception as e:  # noqa: BLE001 - a mutant that will not even load is dead
-                results.append({"id": mid, "status": "killed", "detail": "load: " + type(e).__name__,
-                                "old": old, "new": new, "lines": [span[0], span[1]]})
-                continue
-            failed = run_tests(entry, mod, names, root, a.timeout)
+            failed = run_tests(entry, lambda src=mutant_src: build_module(name, filename, src), names, root, a.timeout)
             results.append({"id": mid, "status": "killed" if failed else "survived",
                             "detail": failed or "", "old": old, "new": new, "lines": [span[0], span[1]]})
+    except _Terminated:
+        return 143
     finally:
         if saved is not None:
             sys.modules[name] = saved
