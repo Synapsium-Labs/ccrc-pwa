@@ -1932,10 +1932,9 @@ export function bridgeStartedJson(home: string): string {
 export type BridgeRecordField = 'interpreter' | 'code' | 'bridge';
 
 /** Writes lane `id`'s `bridge.started`: `current` as a start would write it now, a field name the same record with that
- *  one field changed (so `_codex_tier_stale` reads it stale), `none` removes it. */
-export function writeBridgeRecord(home: string, id: string, rec: 'current' | 'none' | BridgeRecordField): void {
+ *  one field changed (so `_codex_tier_stale` reads it stale). */
+export function writeBridgeRecord(home: string, id: string, rec: 'current' | BridgeRecordField): void {
   const file = join(home, '.ccrc', 'codex', id, 'bridge.started');
-  if (rec === 'none') { rmSync(file, { force: true }); return; }
   const now = bridgeStartedJson(home);
   if (rec === 'current') { writeFileSync(file, `${now}\n`); return; }
   const other = rec === 'interpreter' ? join(home, 'elsewhere', 'python3') : '0'.repeat(64);
@@ -1945,14 +1944,12 @@ export function writeBridgeRecord(home: string, id: string, rec: 'current' | 'no
 /** This lane's own bridge, running, as `_codex_tier_ours <id> bridge` proves one: the bridge-shaped answer
  *  (`spawnListener`'s `direct`) on the shim's port, from a pid whose command line carries `<shim file>
  *  --ccrc-bridge=direct --ccrc-lane=<id>` and which holds that port itself, named by `bridge.pid` (the nohup arm's
- *  handle). `record` is `writeBridgeRecord`'s (default `current`). */
-export async function plantRunningBridge(
-  home: string, id: string, o: { record?: 'current' | 'none' | BridgeRecordField } = {},
-): Promise<Listener> {
+ *  handle), with its start record `current` (`writeBridgeRecord`). */
+export async function plantRunningBridge(home: string, id: string): Promise<Listener> {
   const { proxyPort } = lanePorts(home, id);
   const shim = join(home, '.local', 'bin', 'ccgpt-proxy.py');
   const l = await spawnListener(home, { answer: 'direct', lane: id, port: proxyPort, argv: [shim, '--ccrc-bridge=direct', `--ccrc-lane=${id}`] });
   writeFileSync(join(home, '.ccrc', 'codex', id, 'bridge.pid'), `${l.pid}\n`);
-  writeBridgeRecord(home, id, o.record ?? 'current');
+  writeBridgeRecord(home, id, 'current');
   return l;
 }

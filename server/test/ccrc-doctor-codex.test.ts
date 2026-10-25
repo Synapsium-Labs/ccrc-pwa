@@ -5077,7 +5077,7 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
   itLinux('a running bridge whose start record is not current WARNs "not proven to run the installed bytes", the shim-stale WARN\'s twin, for each field of its record; the current record does not', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-direct-stale-', ['codex-a', 'codex-b']);
     plantDirectLane(home, 'codex-a');
-    await plantRunningBridge(home, 'codex-a', { record: 'current' });
+    await plantRunningBridge(home, 'codex-a');
     await spawnListener(home, { answer: 'json', lane: 'codex-b', port: lanePorts(home, 'codex-b').proxyPort });
     const shimNow = startedJson(home, 'shim');
     writeFileSync(join(laneDir(home, 'codex-b'), 'shim.started'), `${JSON.stringify({ ...JSON.parse(shimNow) as Record<string, string>, code: '0'.repeat(64) })}\n`);
@@ -5099,13 +5099,19 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
     const home = await healthyCodexBox('ccrc-doctor-codex-direct-stale-unknown-', ['codex-a', 'codex-b']);
     plantDirectLane(home, 'codex-a');
     await plantRunningBridge(home, 'codex-a');
+    // codex-b, a litellm lane, runs its front tier (the shim, record current) on its own port.
+    await spawnListener(home, { answer: 'json', lane: 'codex-b', port: lanePorts(home, 'codex-b').proxyPort });
+    writeFileSync(join(laneDir(home, 'codex-b'), 'shim.started'), `${startedJson(home, 'shim')}\n`);
     rmSync(join(home, 'ccrc', 'ccd', 'codexbridge'), { recursive: true, force: true });
     const r = runDoctor(home);
     const re = /^WARN codex: codex-a's bridge tier is running, and whether it runs the installed bytes cannot be told \(no python3 3\.9 or later on PATH, or the placed shim or the bridge package cannot be hashed\) — unmeasured, not current$/m;
     expect(r.stdout, r.stdout).toMatch(re);
     expect(remedyAfter(r.stdout, re)).toMatch(/^ {2}remedy: \S/);
     expect(r.stdout).not.toMatch(/codex-a's bridge tier is running, and is not proven/);
-    // codex-b, a litellm lane, runs no bridge: a missing bridge package is no row of its.
+    // codex-b, a litellm lane, is walked in its own mode: its shim reads running (so it is half up, its LiteLLM
+    // tier not running), never a retired refresher, and a missing bridge package is no row of its.
+    expect(r.stdout).toMatch(/^FAIL codex: codex-b is half up: its shim is running and its LiteLLM tier is not, /m);
+    expect(r.stdout).not.toMatch(/codex-b runs a retired refresher/);
     expect(r.stdout).not.toMatch(/codex-b's (bridge|shim|litellm) tier/);
     noRunnerBugLine(r.stdout, 'codex');
   });
@@ -5128,13 +5134,18 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
     const home = await healthyCodexBox('ccrc-doctor-codex-direct-unmeasured-', ['codex-a', 'codex-b']);
     plantDirectLane(home, 'codex-a');
     const b = await plantRunningBridge(home, 'codex-a');
+    // codex-b, a litellm lane, runs its front tier (the shim, record current): the shim is this lane's by its answer.
+    await spawnListener(home, { answer: 'json', lane: 'codex-b', port: lanePorts(home, 'codex-b').proxyPort });
+    writeFileSync(join(laneDir(home, 'codex-b'), 'shim.started'), `${startedJson(home, 'shim')}\n`);
     rmSync(join(stubBin(home), 'readlink'), { force: true });
     stub(home, 'readlink', `case "$1" in /proc/*/fd/*) exit 1 ;; esac\nexec ${shq(realPath('readlink'))} "$@"`);
     const r = runDoctor(home);
     const re = new RegExp(`^WARN codex: codex-a's bridge tier could not be measured \\(readlink read none of /proc/${b.pid}/fd's entries\\) — unmeasured, never read as running or as stopped$`, 'm');
     expect(r.stdout, r.stdout).toMatch(re);
     expect(r.stdout).not.toMatch(/retired refresher/);
-    // codex-b, a litellm lane with nothing running, asks no bridge and has nothing to measure.
+    // codex-b, a litellm lane, is walked in its own mode: its shim reads running (so it is half up), it asks no
+    // bridge, and its shim's identity needs no readlink.
+    expect(r.stdout).toMatch(/^FAIL codex: codex-b is half up: its shim is running and its LiteLLM tier is not, /m);
     expect(r.stdout).not.toMatch(/codex-b's (bridge|shim|litellm) tier/);
     noRunnerBugLine(r.stdout, 'codex');
   });
@@ -5229,6 +5240,24 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
     expect(r.stdout).toMatch(linkRe);
     expect(remedyAfter(r.stdout, linkRe)).toBe(`  remedy: stop the lane (ccrc codex stop codex-b), move ${bStore} aside by hand, then start it again: the bridge creates a new one, mode 0600 — ccrc never removes it for you`);
     expect(r.stdout).not.toMatch(/codex-b's bridge stats file/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // A mode `_plat_mode` cannot measure (here `stat` fails on the bridge files alone) is the FAIL's `unreadable`, never a
+  // pass, and its remedy is not `chmod`, which cannot cure a mode nobody could read.
+  it('a bridge stats file whose mode cannot be measured FAILs "mode unreadable", in either mode, with a remedy that is not chmod', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-direct-files-unmeasured-', ['codex-a', 'codex-b']);
+    plantDirectLane(home, 'codex-b');
+    const stats = { 'codex-a': bridgeFile(home, 'codex-a', 'stats'), 'codex-b': bridgeFile(home, 'codex-b', 'stats') };
+    for (const f of Object.values(stats)) writeFileSync(f, '{}\n', { mode: 0o600 });
+    rmSync(join(stubBin(home), 'stat'), { force: true });
+    stub(home, 'stat', `for a in "$@"; do case "$a" in ${shq(stats['codex-a'])}|${shq(stats['codex-b'])}) exit 1 ;; esac; done\nexec ${shq(realPath('stat'))} "$@"`);
+    const r = runDoctor(home);
+    for (const [id, f] of Object.entries(stats)) {
+      const re = new RegExp(`^FAIL codex: ${id}'s bridge stats file ${reEsc(f)} has mode unreadable, and the bridge keeps it owner-only \\(0600\\): it names the lane's upstream request ids and its usage$`, 'm');
+      expect(r.stdout, r.stdout).toMatch(re);
+      expect(remedyAfter(r.stdout, re)).toBe('  remedy: make stat (coreutils) available on PATH, then re-run doctor; the file must be a regular file of mode 0600');
+    }
     noRunnerBugLine(r.stdout, 'codex');
   });
 

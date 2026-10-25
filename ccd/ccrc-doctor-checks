@@ -7481,9 +7481,10 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
 # is the bridge alone, and its running / stale / foreign / unmeasured rows are
 # the generic ones above (stale a WARN, the shim-stale WARN's twin, worded for
 # the bridge's record). Then the other mode's tiers, `_codex_other_tiers`, are
-# asked as `ccrc codex start` asks them: one that reads this lane's (0 or 4, or
-# the 2 `_codex_tier_is_our_handle` reads as this lane's own process) is
-# a RETIRED REFRESHER, a FAIL, because the litellm mode's tiers on a direct
+# asked: one that reads this lane's (0 or 4, as `ccrc codex start` counts them,
+# and ALSO the 2 `_codex_tier_is_our_handle` reads as this lane's own process,
+# which start's other-tiers loop does not yet count, D-TBD-retired-own-process)
+# is a RETIRED REFRESHER, a FAIL, because the litellm mode's tiers on a direct
 # lane mean two processes refresh one credential (Review Focus 5; resolves
 # Stage 1's D-6380). The shim is this lane's only by its `shim`-shaped answer
 # (`_codex_tier_ours`' per-tier identity): a healthy bridge on the shared port
@@ -7551,23 +7552,23 @@ _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
         fi ;;
       *)
         words+=("$tier unmeasured")
-        _dr_cx_warn "$id's $tier tier could not be measured${CX_LISTEN_WHY:+ ($CX_LISTEN_WHY)} — unmeasured, never read as running or as stopped" \
-          "run: ccrc codex status $id — it asks the same question and says what it could see" ;;
+        _dr_cx_tier_unmeasured "$id" "$tier" ;;
     esac
     case "$tier" in litellm) lq="$q" ;; shim) sq="$q" ;; esac
   done
-  # THE RETIRED REFRESHER, a direct lane's (Task 13): the other mode's tiers,
-  # each asked as start asks it. This lane's own (0 or 4) is the finding, and
-  # so is the one 2 that is this lane's own process, `listener-other-process`
+  # THE RETIRED REFRESHER, a direct lane's (Task 13): the other mode's tiers.
+  # This lane's own (0 or 4) is the finding, as it is start's. The doctor ALSO
+  # counts the one 2 that is this lane's own process, `listener-other-process`
   # (`_codex_tier_is_our_handle`, asked directly after the question, as its
-  # contract says): a tier of this lane's alive by its command line while
-  # another process holds its port is still running, and `ccrc codex stop`
-  # ends it through that handle. A 1 is the healthy answer, and every other 2
-  # (the bridge's `listener-other-mode` on the shim, or a stranger on a port
-  # this mode does not use) is not this mode's business, as it is not
-  # start's. A 3 is the walk's unmeasured row, asked here too, so the retired
-  # check never reads a tier it could not measure as not running (start
-  # refuses on it).
+  # contract says), which start's other-tiers loop does not yet count
+  # (D-TBD-retired-own-process): a tier of this lane's alive by its command
+  # line while another process holds its port is still running, and
+  # `ccrc codex stop` ends it through that handle. A 1 is the healthy answer,
+  # and every other 2 (the bridge's `listener-other-mode` on the shim, or a
+  # stranger on a port this mode does not use) is not this mode's business,
+  # as it is not start's. A 3 is the walk's unmeasured row, asked here too, so
+  # the retired check never reads a tier it could not measure as not running
+  # (start refuses on it).
   if [ "$mode" = direct ]; then
     for tier in $(_codex_other_tiers "$mode"); do
       CX_LISTEN_WHY=''
@@ -7577,8 +7578,7 @@ _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
         3)
           up=1
           words+=("$tier unmeasured")
-          _dr_cx_warn "$id's $tier tier could not be measured${CX_LISTEN_WHY:+ ($CX_LISTEN_WHY)} — unmeasured, never read as running or as stopped" \
-            "run: ccrc codex status $id — it asks the same question and says what it could see" ;;
+          _dr_cx_tier_unmeasured "$id" "$tier" ;;
         *) if [ "$own" -eq 0 ]; then _dr_cx_member "$tier" ${retired[@]+"${retired[@]}"} || retired+=("$tier"); fi ;;
       esac
     done
@@ -7620,6 +7620,14 @@ _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
   fi
 }
 
+# `_dr_cx_tiers`' one unmeasured row, asked by the walk and by the retired
+# pass alike, so the sentence and its remedy are spelled once. CX_LISTEN_WHY
+# is the question's own, read here as `_codex_tier_ours` left it.
+_dr_cx_tier_unmeasured() {   # <id> <tier>
+  _dr_cx_warn "$1's $2 tier could not be measured${CX_LISTEN_WHY:+ ($CX_LISTEN_WHY)} — unmeasured, never read as running or as stopped" \
+    "run: ccrc codex status $1 — it asks the same question and says what it could see"
+}
+
 # A lane's two bridge files (codex-bridge Stage 2, Task 13), named by
 # lane.json's `bridgeFiles` (whose one spelling is `laneManifest`'s, read here
 # as `_codex_reap_files` reads it, a bare file name only): the stats file,
@@ -7655,11 +7663,17 @@ _dr_cx_bridge_files() {   # <id>
     fi
     # A mode that cannot be measured, no `stat` on PATH included, is this
     # FAIL's `unreadable`, never a pass: a false FAIL costs a sentence, a
-    # false pass the file's owner-only protection.
+    # false pass the file's owner-only protection. Its remedy is its own:
+    # `chmod` cannot cure a mode nobody could read.
     mode="$(_plat_mode -- "$p" 2>/dev/null)" || mode=''
     [ "$mode" = 600 ] && continue
-    _dr_cx_fail "$id's bridge $what $p has mode ${mode:-unreadable}, and the bridge keeps it owner-only (0600): $why" \
-      "chmod 600 $p"
+    if [ -z "$mode" ]; then
+      _dr_cx_fail "$id's bridge $what $p has mode unreadable, and the bridge keeps it owner-only (0600): $why" \
+        "make stat (coreutils) available on PATH, then re-run doctor; the file must be a regular file of mode 0600"
+    else
+      _dr_cx_fail "$id's bridge $what $p has mode $mode, and the bridge keeps it owner-only (0600): $why" \
+        "chmod 600 $p"
+    fi
   done
   return 0
 }
