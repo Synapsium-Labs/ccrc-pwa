@@ -986,7 +986,8 @@ describe('the composer while a question is up', () => {
     expect(prompt, 'no request was made').not.toHaveBeenCalled();
     expect(composer()).toHaveValue('half a thought');
     expect(screen.getByText(sendErrorText('dialog-open')).closest('[role="status"]'), 'in a status line').not.toBeNull();
-    // The Send button is the same door.
+    // The Send button is the same door, and it is disabled before any click (R77 F1).
+    expect(screen.getByRole('button', { name: 'Send' }), 'Send is disabled while the card is mounted').toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await act(async () => { await Promise.resolve(); });
     expect(prompt).not.toHaveBeenCalled();
@@ -1078,6 +1079,117 @@ describe('the composer while a question is up', () => {
     await act(async () => { await Promise.resolve(); });
     expect(interrupt).toHaveBeenCalledTimes(1);
     expect(interrupt).toHaveBeenCalledWith(ID, 'keycap');
+  });
+});
+
+// R77 F1: Send is DISABLED while the inline ask surface is mounted (the plan's Shape: while ANY ask surface is mounted, Send
+// is locally deferred; the composer keeps the text, disables Send, makes no request and shows the question-first sentence).
+// The disabling is BEFORE any click, and the sentence shows the whole time the surface is up, with no draft-only condition.
+// `send()`'s own guard stays as defence, because Enter in the field calls it directly.
+describe('Send is disabled while an inline ask surface is mounted (R77 F1)', () => {
+  const sendButton = (): HTMLButtonElement => screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
+  const sentence = (): HTMLElement | null => {
+    const found = screen.queryByText(sendErrorText('dialog-open'));
+    return found === null ? null : found.closest<HTMLElement>('[role="status"]');
+  };
+
+  it('fixture 7 (an approval, no pane menu): with a draft typed and BEFORE any click or Enter, Send is disabled, the sentence shows, the draft is kept and no request was made; a click and Enter then change nothing', async () => {
+    media(true);
+    const { arrive, prompt, store } = mount();
+    arrive(7);
+    expect(store.getState().dialog, 'premise: the pane has no menu').toBeNull();
+    expect(store.getState().ask, 'premise: the hook\'s approval envelope is held').not.toBeNull();
+    card();
+    fireEvent.change(composer(), { target: { value: 'half a thought' } });
+    expect(sendButton(), 'Send is disabled before any click').toBeDisabled();
+    expect(sentence(), 'the dialog-open sentence shows in a status line before any attempt').not.toBeNull();
+    expect(composer(), 'the draft is kept').toHaveValue('half a thought');
+    expect(prompt, 'no request has been made').not.toHaveBeenCalled();
+
+    fireEvent.click(sendButton());
+    fireEvent.keyDown(composer(), { key: 'Enter' });
+    await act(async () => { await Promise.resolve(); });
+    expect(prompt, 'a click on the disabled Send and an Enter make no request').not.toHaveBeenCalled();
+    expect(composer(), 'and the draft is kept').toHaveValue('half a thought');
+  });
+
+  describe.each([
+    [1, 'a structured question'],
+    [3, 'a terminal-door surface (the unreadable menu)'],
+    [5, 'a terminal-door surface (the unparsed menu)'],
+    [4, 'a plain menu'],
+    [8, 'the review screen'],
+  ] as const)('fixture %i, %s', (n, what) => {
+    it('Send is disabled before any click, and Enter makes no request', async () => {
+      media(true);
+      const { arrive, prompt } = mount();
+      arrive(n);
+      card();
+      fireEvent.change(composer(), { target: { value: 'half a thought' } });
+      expect(sendButton(), `Send is disabled while ${what} is mounted`).toBeDisabled();
+      fireEvent.keyDown(composer(), { key: 'Enter' });
+      await act(async () => { await Promise.resolve(); });
+      expect(prompt, 'Enter makes no request').not.toHaveBeenCalled();
+      expect(composer(), 'the draft is kept').toHaveValue('half a thought');
+    });
+
+    it('the sentence shows in a status line before any click', () => {
+      media(true);
+      const { arrive } = mount();
+      arrive(n);
+      card();
+      fireEvent.change(composer(), { target: { value: 'half a thought' } });
+      expect(sentence(), `the sentence shows while ${what} is mounted`).not.toBeNull();
+    });
+  });
+
+  it.each([1, 7])('fixture %i: with the field EMPTY the sentence still shows, with no draft-only condition', (n) => {
+    media(true);
+    const { arrive } = mount();
+    arrive(n);
+    card();
+    expect(composer(), 'premise: the field is empty').toHaveValue('');
+    expect(sentence(), 'the sentence shows with the card mounted and nothing typed').not.toBeNull();
+  });
+
+  it('when the card goes the sentence is gone and Send is enabled again with the draft kept', async () => {
+    media(true);
+    const { arrive, prompt, store } = mount();
+    arrive(1);
+    card();
+    fireEvent.change(composer(), { target: { value: 'half a thought' } });
+    expect(sendButton(), 'premise: Send is disabled while the card is up').toBeDisabled();
+    act(() => {
+      store.getState().apply({ type: 'dialog_cleared' });
+      store.getState().apply({ type: 'ask_cleared' });
+    });
+    expect(cards(), 'premise: the card is gone').toHaveLength(0);
+    expect(sentence(), 'the sentence is gone').toBeNull();
+    expect(sendButton(), 'Send is enabled again').toBeEnabled();
+    fireEvent.click(sendButton());
+    await act(async () => { await Promise.resolve(); });
+    expect(prompt, 'a Send now reaches the store').toHaveBeenCalledTimes(1);
+  });
+
+  describe.each([[1, 'a structured question'], [7, 'an approval']] as const)('the phone with fixture %i, %s', (n, what) => {
+    // The phone shows the ask in a Sheet, which `SessionScreen` never reports as `askInline`, so `askUp` stays false there:
+    // Send is not disabled by the ask, no sentence shows from it, and a Send reaches the store exactly as it did before.
+    it('Send is not disabled by the ask, no sentence shows, and a Send is the store\'s as before', async () => {
+      media(false);
+      const { arrive, prompt } = mount();
+      arrive(n);
+      expect(cards(), `premise: ${what} is in the Sheet, no inline card`).toHaveLength(0);
+      expect(dialogs(), 'premise: the Sheet is up').toHaveLength(1);
+      // The open Sheet hides the composer from the accessibility tree, so the field and the button are found by class.
+      fireEvent.change(document.querySelector<HTMLTextAreaElement>('.composer .composer-input')!, { target: { value: 'half a thought' } });
+      const send = document.querySelector<HTMLButtonElement>('.composer .send-btn')!;
+      expect(send, 'premise: the Send button is in the composer').not.toBeNull();
+      expect(send, 'the ask does not disable Send on the phone').toBeEnabled();
+      expect(screen.queryByText(sendErrorText('dialog-open')), 'no sentence shows from the ask on the phone').toBeNull();
+      fireEvent.click(send);
+      await act(async () => { await Promise.resolve(); });
+      expect(prompt, 'the phone\'s Send is unchanged: it reaches the store').toHaveBeenCalledTimes(1);
+    });
   });
 });
 
