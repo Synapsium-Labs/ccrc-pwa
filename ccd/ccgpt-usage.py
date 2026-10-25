@@ -664,12 +664,12 @@ def _bridge_headers(lane: dict):
         return None
     try:
         stamp = datetime.datetime.strptime(at, _STATS_STAMP).replace(tzinfo=datetime.timezone.utc).timestamp()
-    except (ValueError, OverflowError, OSError):
+    except ValueError:  # `_STATS_STAMP` bounds the year to 1-9999, so an aware `.timestamp()` cannot overflow
         return None
     age = time.time() - stamp
     if not 0 <= age <= BRIDGE_FRESH_S:
         return None
-    if not all(isinstance(k, str) and isinstance(v, str) for k, v in values.items()):
+    if not all(isinstance(v, str) for v in values.values()):  # a JSON object's keys are always strings
         return None
     if not _measured(values):
         return None

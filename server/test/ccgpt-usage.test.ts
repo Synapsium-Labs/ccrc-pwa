@@ -1697,6 +1697,23 @@ describe.skipIf(!PY)('ccgpt-usage.py: the direct arm (codex bridge Stage 2, Task
       },
       // The `RecursionError` in the read's except: nesting deeper than the parser's recursion limit.
       'deep-nesting': async (home, id) => { writeFileSync(statsPath(home, id), '['.repeat(100_000), { mode: 0o600 }); },
+      // Fix round 3 (FR2-1): the two lane.json guards, each with a valid, fresh document of this lane at the stats
+      // name, so only the guard stands between the poll and a traceback.
+      // The `bridgeFiles` dict check: a direct lane.json with no `bridgeFiles`, whose absent value has no `.get`.
+      'no-bridge-files': async (home, id) => {
+        await bridgeSaw(home, id, BRIDGE_VALUES, nowS() - 60);
+        const lane = join(home, '.ccrc', 'codex', id, 'lane.json');
+        const doc = JSON.parse(readFileSync(lane, 'utf8')) as Record<string, unknown>;
+        delete doc['bridgeFiles'];
+        writeFileSync(lane, JSON.stringify(doc));
+      },
+      // The `name` string check: a numeric stats name, which `_FILE_NAME_RE.fullmatch` refuses with a TypeError.
+      'a-numeric-stats-name': async (home, id) => {
+        await bridgeSaw(home, id, BRIDGE_VALUES, nowS() - 60);
+        const lane = join(home, '.ccrc', 'codex', id, 'lane.json');
+        const doc = JSON.parse(readFileSync(lane, 'utf8')) as Record<string, unknown>;
+        writeFileSync(lane, JSON.stringify({ ...doc, bridgeFiles: { ...BRIDGE_FILES, stats: 7 } }));
+      },
     };
     for (const [shape, plant] of Object.entries(shapes)) {
       const home = mkTmp(`ccgpt-usage-direct-${shape}-`);

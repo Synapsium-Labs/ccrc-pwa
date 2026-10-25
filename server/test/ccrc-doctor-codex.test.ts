@@ -1492,10 +1492,11 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
   });
 
   // Fix round 2 (FR1-M1, D-TBD-usage-row-ts-is-measured): a row's ts is when it was measured (a direct lane's is the
-  // bridge's own stamp), so the WARN says "measured" and counts no polls.
+  // bridge's own stamp), so the WARN says "measured" and counts no polls. Fix round 3 (FR2-4): one second past the
+  // bound, the age is rounded UP, so the line never reads "60 min ago — more than 60 min".
   it('a row measured longer ago than the bound: WARN naming its age and the publisher\'s log', () => {
-    const r = usageRows(usageBox('ccrc-doctor-usage-stale-', { ageS: 2701 }));
-    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: its usage row was last measured 45 min ago — more than 45 min, so ccrc-codex-usage@codex-a\.timer's recent polls have published nothing$/)]);
+    const r = usageRows(usageBox('ccrc-doctor-usage-stale-', { ageS: 3601 }));
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: its usage row was last measured 61 min ago — more than 60 min, so ccrc-codex-usage@codex-a\.timer's recent polls have published nothing$/)]);
     expect(r.stdout).toMatch(/^ {2}remedy: read what the publisher says: journalctl --user -u ccrc-codex-usage@codex-a\.service -n 50$/m);
   });
 
@@ -1505,9 +1506,9 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     expect(r.stdout).toMatch(/^note=.*no usage row yet \(enabled \d+s ago; the first poll runs five minutes after enable\)/m);
   });
 
-  it('no row, and the timer enabled longer than three polls ago: WARN — this lane has never published', () => {
-    const r = usageRows(usageBox('ccrc-doctor-usage-norow-old-', { row: false, linkAgeS: 2701 }));
-    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: ccrc-codex-usage@codex-a\.timer has been enabled for longer than 45 min and this lane has never published a usage row \(.*\/\.cc-limits\/codex-a\.json\)$/)]);
+  it('no row, and the timer enabled longer than the staleness bound: WARN — this lane has never published', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-norow-old-', { row: false, linkAgeS: 3601 }));
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: ccrc-codex-usage@codex-a\.timer has been enabled for longer than 60 min and this lane has never published a usage row \(.*\/\.cc-limits\/codex-a\.json\)$/)]);
   });
 
   // Under W6's mutation the row's `jq` blocks on this FIFO, and `usageRows`'
@@ -1626,11 +1627,15 @@ describe('ccrc doctor: codex — the usage rows, on any host (Plan 3a Task 6)', 
     expect(r.stdout).toMatch(/^rc=1$/m);
   });
 
-  it('the staleness threshold covers three of the shipped timer\'s cycles', () => {
+  // Fix round 3 (FR2-2): a direct lane's row carries the bridge's stamp, up to BRIDGE_FRESH_S older than its poll, so
+  // three cycles alone would read a direct lane's row stale after ONE missed poll.
+  it('the staleness threshold covers three of the shipped timer\'s cycles plus the bridge\'s freshness window', () => {
     const r = spawnSync(BASH, ['-c', `. ${shq(CHECKS_SRC)}; printf '%s' "$_DR_CODEX_USAGE_STALE_S"`], { encoding: 'utf8' });
     const m = /^OnUnitActiveSec=(\d+)min$/m.exec(readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-codex-usage@.timer'), 'utf8'));
     expect(m, 'the usage timer\'s cadence is not spelled in minutes — this pin has gone stale').not.toBeNull();
-    expect(Number(r.stdout), 'a row one missed poll old would read as stale').toBeGreaterThanOrEqual(3 * Number(m![1]) * 60);
+    const fresh = /^BRIDGE_FRESH_S = (\d+)$/m.exec(readFileSync(join(REPO, 'ccd', 'ccgpt-usage.py'), 'utf8'));
+    expect(fresh, 'ccgpt-usage.py no longer spells BRIDGE_FRESH_S as a bare integer — this pin has gone stale').not.toBeNull();
+    expect(Number(r.stdout), 'a row one missed poll old would read as stale').toBeGreaterThanOrEqual(3 * Number(m![1]) * 60 + Number(fresh![1]));
   });
 });
 
