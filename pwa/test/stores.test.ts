@@ -1939,8 +1939,8 @@ describe('fleet store', () => {
     });
 
     it('is NOT persisted, and a fresh store starts null even with a snapshot on disk', () => {
-      // The offline snapshot is written on the first `fleet` frame at once, then at
-      // most once per 30 s window (C6). Nothing pooled
+      // The offline snapshot is written on the first `fleet` frame at once; frames then write it at
+      // most once per 30 s window, plus the hidden/pagehide/disconnect flushes (C6). Nothing pooled
       // may ride it: `FleetSnapshot` has no field for it, and this asserts
       // that in the two directions that matter — the bytes on disk, and what a
       // cold store reads back.
@@ -2127,7 +2127,8 @@ describe('fleet store', () => {
   });
 
   // C6 (D-6438): a `fleet` frame arrives as fresh objects, so the store keeps the rows (and the array) that did not
-  // change, and the offline snapshot is written at most once per 30 s window — a scheduler in the store (L4).
+  // change, and frames write the offline snapshot at most once per 30 s window (the hidden, pagehide and disconnect
+  // flushes write as well) — a scheduler in the store (L4).
   describe('the row keeper and the snapshot throttle (C6)', () => {
     const SNAPSHOT_KEY = 'ccrc.fleet-snapshot.v1';
     // Neutral stubs so no case reaches the network: the roster poll, the catch-up and the durable feed read.
