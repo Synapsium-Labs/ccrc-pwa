@@ -15,7 +15,7 @@ programme carries the fix.
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | The reader accepts a session-less `test-run` row and parses its id and uuid as "no session"; receipts never mail one; the spec says what the writer writes; a contract row runs the real sweep's census through the reader. | #1378 | **IN REVIEW** 2026-10-25 10:50 UTC: wave-done at `41bbe7ead` (tip, PR head and handoff re-measured equal; merge-tree clean), moved to awaiting review; review run 942 dispatched with the held-out panel and a writer-reader contract lens. Was: dispatched 10:24 UTC as run 941. |
+| 1 | The reader accepts a session-less `test-run` row and parses its id and uuid as "no session"; receipts never mail one; the spec says what the writer writes; a contract row runs the real sweep's census through the reader. | #1378 | **FIX ROUND 1** 2026-10-25 11:20 UTC, ruled on review 942 at `41bbe7ead`: one important test gap (the carve-out's kind clause was held by no test) and a hermetic positive parse, with the gates recorded; run 941 back at working. Was **IN REVIEW** 2026-10-25 10:50 UTC: wave-done at `41bbe7ead` (tip, PR head and handoff re-measured equal; merge-tree clean), moved to awaiting review; review run 942 dispatched with the held-out panel and a writer-reader contract lens. Was: dispatched 10:24 UTC as run 941. |
 
 ## Decisions & deviations
 
@@ -30,6 +30,16 @@ programme carries the fix.
   the held-out panel.
 
 ## Carried constraints
+
+- From review 942, not this wave's (minor, all pre-existing or documentation):
+  - README's test-run arm text does not say that its rows name no session.
+  - A live output-capped row is mailed under the "moved into quarantine" heading, although nothing was quarantined.
+  - A failed journal unlink after the census rename can fold the same rows twice and send a second receipt.
+  - Only two of the writer's shapes have a contract row that runs the real sweep.
+  - The spec's census paragraph names a `task-output` kind no writer emits, and omits `top` and `keptMore`.
+  - CLAUDE.md says `test-macos` runs the selection on a pull request, which it skips.
+- `tmp-sweep.test.ts`'s "FAILS CLOSED" row is load-sensitive. It failed locally at load averages of 44 to 63, on main
+  as well, and passed in CI, which ran the whole file. It is a flake, not a main issue.
 
 - The live census on the fleet box is never copied into the repo: it names sessions and paths. Every fixture is
   synthetic or written by the real sweep under a fixture HOME.
