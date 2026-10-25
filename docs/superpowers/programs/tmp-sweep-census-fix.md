@@ -15,7 +15,7 @@ programme carries the fix.
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | The reader accepts a session-less `test-run` row and parses its id and uuid as "no session"; receipts never mail one; the spec says what the writer writes; a contract row runs the real sweep's census through the reader. | #1378 | **IN REVIEW, ROUND 2** 2026-10-25 11:22 UTC: fix round 1's wave-done at `d9a939af8` (tip, PR head and handoff re-measured equal; two files, tests and the plan; merge-tree clean), moved to awaiting review; review run 945 dispatched on the delta. Was **FIX ROUND 1** 2026-10-25 11:08 UTC, ruled on review 942 at `41bbe7ead`: one important test gap (the carve-out's kind clause was held by no test) and a hermetic positive parse, with the gates recorded; run 941 back at working. Was **IN REVIEW** 2026-10-25 10:38 UTC: wave-done at `41bbe7ead` (tip, PR head and handoff re-measured equal; merge-tree clean), moved to awaiting review; review run 942 dispatched with the held-out panel and a writer-reader contract lens. Was: dispatched 10:12 UTC as run 941. |
+| 1 | The reader accepts a session-less `test-run` row and parses its id and uuid as "no session"; receipts never mail one; the spec says what the writer writes; a contract row runs the real sweep's census through the reader. | #1378 | **IN THE MERGE QUEUE** 2026-10-25 11:55 UTC: review 945 on fix round 1 found no critical and no important finding (two minor advisories, carried); the rulings are recorded verbatim; run 941 at merging, `d9a939af8` queued at position 2. Was **IN REVIEW, ROUND 2** 2026-10-25 11:22 UTC: fix round 1's wave-done at `d9a939af8` (tip, PR head and handoff re-measured equal; two files, tests and the plan; merge-tree clean), moved to awaiting review; review run 945 dispatched on the delta. Was **FIX ROUND 1** 2026-10-25 11:08 UTC, ruled on review 942 at `41bbe7ead`: one important test gap (the carve-out's kind clause was held by no test) and a hermetic positive parse, with the gates recorded; run 941 back at working. Was **IN REVIEW** 2026-10-25 10:38 UTC: wave-done at `41bbe7ead` (tip, PR head and handoff re-measured equal; merge-tree clean), moved to awaiting review; review run 942 dispatched with the held-out panel and a writer-reader contract lens. Was: dispatched 10:12 UTC as run 941. |
 
 ## Decisions & deviations
 
@@ -38,6 +38,8 @@ programme carries the fix.
   - Only two of the writer's shapes have a contract row that runs the real sweep.
   - The spec's census paragraph names a `task-output` kind no writer emits, and omits `top` and `keptMore`.
   - CLAUDE.md says `test-macos` runs the selection on a pull request, which it skips.
+- From review 945 (minor): the A2 comment is two sentences where the ruling asked for one, and the plan's line for fix
+  round 1's gates names no commit. Every count re-measured equal at the tip.
 - `tmp-sweep.test.ts`'s "FAILS CLOSED" row is load-sensitive. It failed locally at load averages of 44 to 63, on main
   as well, and passed in CI, which ran the whole file. It is a flake, not a main issue.
 
