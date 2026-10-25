@@ -1772,7 +1772,8 @@ export function collectOffers(i: CollectOfferInput): CollectOffers {
   const byInstant = (a: number, b: number): number => (a < b ? -1 : a > b ? 1 : 0);
   // THE LOOSE ARM'S ONE LOCK: ccd's loose audit and its loose act both take `.collect-loose.lock` without waiting, and a
   // second concurrent loose ask answers `in-progress` (measured: 75 of the lane's own entries met its own lock). So a pass
-  // offers loose ids only while none is in flight, and at most one across the act and the learning audits together.
+  // offers loose ids only while none is in flight, and at most one across the act and the learning audits together
+  // (D-6859).
   let looseOpen = ![...i.busy].some(collectIsLoose);
   const free = i.candidates.filter((c) => !i.busy.has(c.id));
   const due = (c: CollectCandidate): boolean => c.nextAskMono <= i.nowMono;

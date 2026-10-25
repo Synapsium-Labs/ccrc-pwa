@@ -729,6 +729,7 @@ _ws_loose_idle	C4
 _ws_loose_floor	C4
 _ws_loose_registered	C4
 _ws_loose_slug_held	C4
+_ws_loose_rows_file	C4
 _ws_loose_rows	C4
 _ws_loose_rec_dir	C4
 _ws_loose_records_of	C4

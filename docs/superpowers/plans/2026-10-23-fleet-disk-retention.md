@@ -797,6 +797,8 @@ One contiguous block of thirty-one, D-6613 to D-6643, issued by the allocator (`
 - **D-6642** (DR-30): `ws-archive --if-no-pane` refuses `live`; the reason word `stale`.
 - **D-6643** (DR-31): a workspace that is not a child and was never a claimant, with no pane for 14 days, is archived, one per pass, shadow until `stale-archive-live`.
 - **D-6766** — (DR-12; allocated by the orchestrator) the census session row carries `top`, the session's five largest entries as `[{name, bytes}]`, written by `ccd-tmp-sweep` and read by DR-12's notice; optional on the wire, absent reads `[]`. `kept` is bounded to the first fifty with a `keptMore` count.
+- **D-6858** — (DR-13; allocated by the orchestrator) the loose arm's rows rung reads a standing regular file against the registry by spelling: a row at or through the file, as written or under the root's physical path, holds it; an unreadable row is `unmeasured`. A file is no workdir, so the shared directory rung is not asked of it (#1393).
+- **D-6859** — (DR-15; allocated by the orchestrator) the collect lane offers loose ids only while none is in flight, and at most one across the act and the learning audits, because ccd's loose audit and act share one non-waiting lock; witnessed ids still fill the learning cap (#1393).
 
 ### Decisions recorded while planning
 

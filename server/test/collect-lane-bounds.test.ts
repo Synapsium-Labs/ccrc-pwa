@@ -94,8 +94,9 @@ describe('collectOffers: the loose arm shares ONE lock, so a pass never offers t
   // second concurrent loose ask answers `in-progress`. Measured: 75 of the lane's own entries met its own lock.
   const L = (hex: string) => `loose:${hex}`;
   it('at most one loose id is offered to learn, and the witnessed ids still fill the cap', () => {
-    expect(collectOffers(input({ candidates: [c(L('61'), -Infinity), c(L('62'), -Infinity), c('demo-a', -Infinity)] })))
-      .toEqual({ learn: ['demo-a', L('61')], act: null });
+    // Both loose ids are due BEFORE the witnessed one, so the old next-ask order alone would offer the two loose ids.
+    expect(collectOffers(input({ candidates: [c(L('61'), NOW - 20), c(L('62'), NOW - 10), c('demo-a', NOW - 1)] })))
+      .toEqual({ learn: [L('61'), 'demo-a'], act: null });
   });
 
   it('a loose call or job not settled holds every other loose id back, learning and act', () => {
