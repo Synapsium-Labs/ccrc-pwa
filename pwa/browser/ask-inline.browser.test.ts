@@ -37,7 +37,8 @@ import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 import { sendErrorText } from '../src/lib/api';
 import { fleetSession } from '../test/fleetFixture';
-import { ASKER_PROJECT, ASKER_SESSION, askFixture, longHookEnvelope } from '../test/askFixtures';
+import { ASKER_PROJECT, ASKER_SESSION, HOOK_QUESTIONS, askFixture, longHookEnvelope } from '../test/askFixtures';
+import type { Dialog } from '../../shared/api';
 
 const VIEWS: AppView[] = [REFINED, INSTRUMENT].flatMap((skin) => [PHOSPHOR, 'light'].flatMap((theme) =>
   [1280, 1920].map((width) => ({ skin, theme, width }))));
@@ -1126,4 +1127,392 @@ describe('R89 S1: a held Retry looks disabled (D-6326)', () => {
       }
     }, 90_000);
   }
+});
+
+// ---- R102, R105, R106: after a send this client initiates the keys in the card are fenced, in a real Chrome ---------------
+//
+// At the desk a send ends the keyboard's engagement at that moment and raises a FENCE: capture listeners that stop every key
+// whose target is inside the inline card (Tab, Shift+Tab and Ctrl/Meta/Alt chords other than Enter and Space excepted; keyup
+// and keypress of Enter and Space too) until the operator re-enters deliberately: a pointer press in the card or Go to
+// question, made while input is eligible. jsdom cannot Tab, hold a key down, or arm a button's native activation, so the
+// cases below hold what Chrome does. They use AGED fixture 2 (no envelope), whose rows are keyed by position: aged question 2
+// REUSES the very row node that held focus, so focus stays on a re-enabled button with no `focusin`, which is the shape the
+// fence exists for.
+//
+// The answer's request is a page-side `fetch` the page controls (an init script wraps `window.fetch` for the session's
+// `/dialog` POST only): it records the bodies, can be held, and is answered with `{ok: true, next: aged question 2}` by
+// `__reply()`. That lets a case deliver the reply in the same task as a click, on the next microtask, or after one frame,
+// which a route fulfilled from the test process cannot. The page also logs every click and every `focusin` inside the card.
+//
+// WHAT CHROME DOES WITH A DISABLED FOCUSED BUTTON decides the shape of the "reused node" cases. While an answer is in flight the
+// row is disabled, and Chrome's focus fix-up (once per frame) drops focus from it to the body, so an answer that stays in
+// flight across a frame leaves nothing focused on the reused node. Only a reply that lands before that frame (a fast server:
+// here the held request is off, so the page's `fetch` answers in the same task) leaves a re-enabled node still holding focus,
+// which is what the cases that need that shape (`answered()`) use. The cases about a request in flight use the held one.
+type Probe = {
+  __posts: string[]; __pending: Array<() => void>; __hold: boolean; __next: unknown; __reply: () => boolean;
+  __clicks: string[]; __focusins: string[]; __row: Element | null;
+};
+const AGED_Q2 = (): Dialog => {
+  const q2 = HOOK_QUESTIONS[1]!;
+  return {
+    ...askFixture(2).dialog!, id: 'dlg-a2-q2', selectedIndex: 1,
+    options: [...q2.options.map((o, i) => ({ index: i + 1, label: o.label, description: o.description })),
+      { index: q2.options.length + 1, label: 'Type something.' }, { index: q2.options.length + 2, label: 'Chat about this' }],
+    ask: { question: q2.question, header: q2.header, multiSelect: false, options: q2.options.map((o) => ({ ...o })) },
+  };
+};
+const AGED_FRAMES = (): object[] => [
+  { ...BACKLOG, events: [...BACKLOG.events, CALL] },
+  { type: 'status', status: 'busy', statusUpdatedAt: null },
+  ...askFixture(2).frames,
+];
+const DESK_VIEW: AppView = { skin: REFINED, theme: PHOSPHOR, width: 1280 };
+const GTQ = '.tool-ask .ask-state button';
+const Q2_TEXT = HOOK_QUESTIONS[1]!.question;
+
+/** An opened desk page over aged fixture 2, with the page-side request control and logs installed. */
+async function openAged() {
+  const opened = await openApp(browser!, DESK_VIEW, FIXTURE);
+  await opened.ctx.addInitScript((next: unknown) => {
+    const w = window as unknown as Probe;
+    const real = window.fetch.bind(window);
+    w.__posts = []; w.__pending = []; w.__hold = false; w.__next = next; w.__clicks = []; w.__focusins = []; w.__row = null;
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (init?.method === 'POST' && /\/api\/sessions\/[^/]+\/dialog$/.test(new URL(url, location.href).pathname)) {
+        w.__posts.push(String(init.body));
+        return new Promise<Response>((resolve) => {
+          const done = (): void => resolve(new Response(JSON.stringify({ ok: true, next: w.__next }),
+            { status: 200, headers: { 'content-type': 'application/json' } }));
+          if (w.__hold) w.__pending.push(done);
+          else done();
+        });
+      }
+      return real(input, init);
+    };
+    w.__reply = () => {
+      const done = w.__pending.shift();
+      if (done === undefined) return false;
+      done();
+      return true;
+    };
+    const inCard = (e: Event): boolean => e.target instanceof Element && e.target.closest('[data-ask-surface="inline"]') !== null;
+    document.addEventListener('click', (e) => { if (inCard(e)) w.__clicks.push((e.target as Element).tagName); }, true);
+    document.addEventListener('focusin', (e) => { if (inCard(e)) w.__focusins.push((e.target as Element).tagName); }, true);
+  }, AGED_Q2());
+  let sock: { send(m: string): void; close(): void } | undefined;
+  const sockets: number[] = [];
+  await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+    sock = ws;
+    sockets.push(sockets.length);
+    for (const f of AGED_FRAMES()) ws.send(JSON.stringify(f));
+  });
+  await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
+  await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
+  await opened.page.waitForTimeout(800);
+  const page = opened.page;
+  const first = page.locator(`${CARD} button.opt`).first();
+  const api = {
+    ...opened, page, first, sockets,
+    send: (fs: object[]): void => { for (const f of fs) sock!.send(JSON.stringify(f)); },
+    drop: (): void => sock!.close(),
+    /** Option 1 focused and remembered as `__row`; the next request is held when `hold`. */
+    focusFirst: async (hold: boolean): Promise<void> => {
+      await first.focus();
+      await page.evaluate((h) => {
+        const w = window as unknown as Probe;
+        w.__row = document.activeElement;
+        w.__hold = h;
+      }, hold);
+    },
+    reply: async (): Promise<void> => { await page.evaluate(() => (window as unknown as Probe).__reply()); },
+    /** A fast reply: option 1 answered by its digit, the reply landing in the same task, question 2 shown in the card on the
+     *  reused node, which is still focused and enabled (Chrome's per-frame focus fix-up never saw it disabled). */
+    answered: async (): Promise<void> => {
+      await api.focusFirst(false);
+      await page.keyboard.press('1');
+      await expect.poll(() => api.posts(), { timeout: 10_000 }).toBe(1);
+      await page.getByText(Q2_TEXT).first().waitFor({ timeout: 10_000 });
+      await page.waitForTimeout(300);
+      const s = await api.snap();
+      expect(s.rowConnected && s.activeIsRow, 'premise: question 2 reused the row node and it holds focus').toBe(true);
+      expect(s.rowDisabled, 'premise: and it is enabled again').toBe(false);
+    },
+    posts: (): Promise<number> => page.evaluate(() => (window as unknown as Probe).__posts.length),
+    snap: () => page.evaluate((card) => {
+      const w = window as unknown as Probe;
+      const a = document.activeElement as HTMLElement | null;
+      const c = document.querySelector<HTMLElement>(card);
+      return {
+        posts: w.__posts.length, clicks: w.__clicks.length, focusins: [...w.__focusins],
+        activeIsRow: a !== null && a === w.__row, rowConnected: w.__row?.isConnected === true,
+        rowDisabled: (w.__row as HTMLButtonElement | null)?.disabled === true,
+        inCard: a !== null && c !== null && c.contains(a), activeTag: a?.tagName ?? null,
+        ring: a !== null && a.matches(':focus-visible'),
+      };
+    }, CARD),
+    mark: (): Promise<void> => page.evaluate(() => { const w = window as unknown as Probe; w.__clicks.length = 0; w.__focusins.length = 0; }),
+  };
+  return api;
+}
+type Aged = Awaited<ReturnType<typeof openAged>>;
+const withAged = async (run: (a: Aged) => Promise<void>): Promise<void> => {
+  const a = await openAged();
+  try {
+    await run(a);
+    expect(a.errors).toEqual([]);
+  } finally {
+    await a.ctx.close();
+  }
+};
+
+describe('after a send the keys in the card are fenced in real Chrome (R102)', () => {
+  it('Space held: Space down on option 1, a digit answers, the reply re-enables the reused node, Space up: one request, no click', async () => {
+    await withAged(async (a) => {
+      await a.focusFirst(false);
+      await a.page.keyboard.down('Space');
+      await a.page.keyboard.press('2'); // the digit's request is answered at once: the reply re-enables the reused node
+      await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(1);
+      await a.page.getByText(Q2_TEXT).first().waitFor({ timeout: 10_000 });
+      await a.page.waitForTimeout(300);
+      const s = await a.snap();
+      expect(s.rowConnected && s.activeIsRow && !s.rowDisabled, 'premise: question 2 reused option 1\'s node, enabled, focused').toBe(true);
+      await a.mark();
+      await a.page.keyboard.up('Space');
+      await a.page.waitForTimeout(400);
+      const end = await a.snap();
+      expect(end.posts, 'exactly one request: the digit\'s').toBe(1);
+      expect(end.clicks, 'zero clicks on the reused node').toBe(0);
+    });
+  }, 90_000);
+
+  it('Enter held: Enter down on option 1 answers it once; a digit, the reply and the auto-repeat then send nothing', async () => {
+    await withAged(async (a) => {
+      await a.focusFirst(false);
+      await a.page.evaluate(() => {
+        const w = window as unknown as { __repeats: number };
+        w.__repeats = 0;
+        document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.repeat) w.__repeats += 1; }, true);
+      });
+      await a.page.keyboard.down('Enter'); // Chrome activates a button at the keydown; the reply re-enables the reused node
+      await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(1);
+      await a.page.getByText(Q2_TEXT).first().waitFor({ timeout: 10_000 });
+      await a.page.waitForTimeout(300);
+      await a.page.keyboard.press('2'); // a digit on the fenced, reused node
+      await a.page.keyboard.down('Enter'); // Playwright sends a held key's repeat
+      await a.page.keyboard.down('Enter');
+      await a.page.keyboard.up('Enter');
+      await a.page.waitForTimeout(400);
+      const end = await a.snap();
+      const repeats = await a.page.evaluate(() => (window as unknown as { __repeats: number }).__repeats);
+      // Not observable, never credited: input that generates no auto-repeat proves nothing about the repeat arm.
+      expect(repeats, 'the harness generated auto-repeat Enter keydowns (else this arm is NOT OBSERVABLE)').toBeGreaterThan(0);
+      expect(end.clicks, 'exactly one click, for option 1, at the first keydown').toBe(1);
+      expect(end.posts, 'exactly one request').toBe(1);
+    });
+  }, 90_000);
+
+  // The card holds ONE tab stop (the roving row), so Tab from the card section reaches the row, Tab from the row leaves the
+  // card, and Shift+Tab from the row leaves it the other way. None of those is stopped by the fence, none unlocks.
+  it('Tab moves focus: from the card section to its row, out of the card from the row, and Shift+Tab from the first tabbable leaves it; a digit inside sends nothing', async () => {
+    await withAged(async (a) => {
+      await a.answered();
+      await a.page.evaluate((c) => document.querySelector<HTMLElement>(c)!.focus(), CARD);
+      await a.page.keyboard.press('Tab');
+      const into = await a.snap();
+      expect(into.inCard && into.activeTag === 'BUTTON', `Tab moved focus from the card section to a control inside it (${into.activeTag})`).toBe(true);
+      await a.page.keyboard.press('2');
+      await a.page.waitForTimeout(300);
+      expect((await a.snap()).posts, 'a digit inside the card sends nothing: Tab unlocked nothing').toBe(1);
+      await a.page.keyboard.press('Tab');
+      expect((await a.snap()).inCard, 'Tab from the card\'s last tabbable moved focus out of the card').toBe(false);
+      await a.first.focus();
+      await a.page.keyboard.press('Shift+Tab');
+      expect((await a.snap()).inCard, 'Shift+Tab from the card\'s first tabbable moved focus OUTSIDE the card').toBe(false);
+    });
+  }, 90_000);
+
+  it.each([
+    'Shift+Enter', 'Control+Enter', 'Alt+Enter', 'Meta+Enter', 'Shift+Space', 'Control+Space',
+  ])('the named chord %s on a fenced, reused button gives no request and no click', async (chord) => {
+    await withAged(async (a) => {
+      await a.answered();
+      await a.mark();
+      await a.page.keyboard.press(chord);
+      await a.page.waitForTimeout(300);
+      const s = await a.snap();
+      expect(s.posts, `${chord}: no request`).toBe(1);
+      expect(s.clicks, `${chord}: no click`).toBe(0);
+    });
+  }, 90_000);
+
+  it('Ctrl+K pressed inside the fenced card still reaches the command layer', async () => {
+    await withAged(async (a) => {
+      await a.answered();
+      expect(await a.page.locator('[role="dialog"]').count(), 'premise: no dialog is up').toBe(0);
+      await a.page.keyboard.press('Control+k');
+      await expect.poll(() => a.page.locator('[role="dialog"]').count(), { timeout: 5_000 }).toBeGreaterThan(0);
+    });
+  }, 90_000);
+});
+
+describe('re-entry in real Chrome (R105, R106)', () => {
+  it('a pointer click in the card unlocks: a digit then answers once', async () => {
+    await withAged(async (a) => {
+      await a.answered();
+      await a.page.locator(`${CARD} .ask-inline-title`).click();
+      await a.page.keyboard.press('2');
+      await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(2);
+    });
+  }, 90_000);
+
+  it('Go to question with nothing in flight unlocks, draws the focus ring, and a digit then answers once', async () => {
+    await withAged(async (a) => {
+      await a.answered();
+      await a.page.focus(GTQ);
+      await a.page.keyboard.press('Enter'); // the keyboard activation, so the ring is a :focus-visible one
+      await a.page.waitForTimeout(300);
+      const s = await a.snap();
+      expect(s.inCard && s.ring, 'focus is in the card and draws the keyboard ring').toBe(true);
+      await a.page.keyboard.press('2');
+      await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(2);
+    });
+  }, 90_000);
+
+  it('a click in the card while the request is in flight gives no later unlock; a new click after the reply does', async () => {
+    await withAged(async (a) => {
+      await a.focusFirst(true);
+      await a.page.keyboard.press('1');
+      await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(1);
+      await a.page.locator(`${CARD} .ask-inline-title`).click();
+      await a.reply();
+      await a.page.getByText(Q2_TEXT).first().waitFor({ timeout: 10_000 });
+      await a.page.waitForTimeout(300);
+      await a.page.keyboard.press('2');
+      await a.page.waitForTimeout(300);
+      expect(await a.posts(), 'nothing sent: the click pre-authorized nothing').toBe(1);
+      await a.page.locator(`${CARD} .ask-inline-title`).click();
+      await a.page.keyboard.press('2');
+      await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(2);
+    });
+  }, 90_000);
+
+  // The reply is delivered as tightly after the click as a page can: in the same task, on the next microtask, and after one
+  // frame. Each time the keys stay fenced and no focus follows the reply, and a NEW Go to question then unlocks.
+  it.each(['same task', 'next microtask', 'one frame'] as const)(
+    'Go to question while the answer is in flight, the reply %s: still fenced, no focus from an unlock, and a NEW Go to question unlocks', async (when) => {
+      await withAged(async (a) => {
+        await a.focusFirst(true);
+        await a.page.keyboard.press('1');
+        await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(1);
+        await a.mark();
+        await a.page.evaluate(async (w) => {
+          const probe = window as unknown as Probe;
+          const b = [...document.querySelectorAll<HTMLButtonElement>('.tool-ask .ask-state button')].find((x) => x.textContent === 'Go to question')!;
+          b.click();
+          if (w === 'next microtask') await Promise.resolve();
+          if (w === 'one frame') await new Promise((r) => requestAnimationFrame(() => r(null)));
+          probe.__reply();
+        }, when);
+        await a.page.getByText(Q2_TEXT).first().waitFor({ timeout: 10_000 });
+        await a.page.waitForTimeout(400);
+        const s = await a.snap();
+        expect(s.focusins.filter((t) => t !== 'SECTION'), 'no focus but the click\'s own (the card section) followed').toEqual([]);
+        await a.page.keyboard.press('2');
+        await a.page.waitForTimeout(300);
+        expect(await a.posts(), 'a digit sends nothing').toBe(1);
+        await a.page.locator(GTQ, { hasText: 'Go to question' }).click();
+        await a.page.waitForTimeout(300);
+        await a.page.keyboard.press('2');
+        await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(2);
+      });
+    }, 90_000);
+
+  // In the gap every row that sends is disabled, so Chrome's own focus fix-up may drop focus to the body: what is held across
+  // the gap is the card and row NODES and the fence, not necessarily focus. The row is focused again by script (which unlocks
+  // nothing) to prove the fence stood.
+  it('a reconnect gap keeps the card node and the row node and the fence: the new connection\'s frames unlock nothing', async () => {
+    await withAged(async (a) => {
+      await a.answered();
+      await a.page.evaluate((c) => { (window as unknown as { __card: Element | null }).__card = document.querySelector(c); }, CARD);
+      await a.mark();
+      a.drop();
+      await a.page.waitForTimeout(300);
+      // Online nudges the reconnect past its backoff (the store tests' own lever).
+      await a.page.evaluate(() => window.dispatchEvent(new Event('online')));
+      await expect.poll(() => a.sockets.length, { timeout: 30_000 }).toBeGreaterThan(1);
+      // The new connection speaks: the pane's current screen (aged question 2) and, as for an ask with no envelope, `ask_cleared`.
+      a.send([{ type: 'dialog', dialog: AGED_Q2() }, { type: 'ask_cleared' }]);
+      await a.page.waitForTimeout(500);
+      const same = await a.page.evaluate((c) => (window as unknown as { __card: Element | null }).__card === document.querySelector(c), CARD);
+      const s = await a.snap();
+      expect(same, 'the card is the same node').toBe(true);
+      expect(s.rowConnected, 'the reused row node is the same node').toBe(true);
+      expect(s.focusins, 'no focus was assigned across the gap').toEqual([]);
+      await a.first.focus();
+      expect((await a.snap()).activeIsRow, 'premise: the row holds focus again').toBe(true);
+      await a.page.keyboard.press('2');
+      await a.page.waitForTimeout(300);
+      expect(await a.posts(), 'and a digit sends nothing: the gap unlocked nothing').toBe(1);
+    });
+  }, 120_000);
+});
+
+// R102: inside the card the Other field takes focus only on a deliberate open. A return to a question whose Other was kept
+// (here, by the pane's frame) assigns no focus at the desk, while the phone's Sheet keeps focusing it.
+describe('the kept Other on a return to its question, desk and phone (R102)', () => {
+  const Q2_DIALOG = (): Dialog => ({
+    ...askFixture(1).dialog!, id: 'dlg-a2', selectedIndex: 1,
+    options: [{ index: 1, label: 'Yes' }, { index: 2, label: 'No' }, { index: 3, label: 'Type something.' }, { index: 4, label: 'Chat about this' }],
+    raw: ['╭ pane chrome ╮', '←  ☒ Cache  ☐ Tracing  ☐ Regions  ✔ Submit  →', '  1. Yes', '  2. No', '  3. Type something.', '  4. Chat about this'].join('\n'),
+  });
+  const run = async (view: AppView, scope: string): Promise<{ focusins: string[]; fieldFocused: boolean }> => {
+    const opened = await openApp(browser!, view, FIXTURE);
+    try {
+      let sock: { send(m: string): void } | undefined;
+      await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        sock = ws;
+        for (const f of [BACKLOG, { type: 'status', status: 'busy', statusUpdatedAt: null }, ...askFixture(1).frames]) ws.send(JSON.stringify(f));
+      });
+      const page = opened.page;
+      await page.goto(`${server!.origin}/s/${SESSION.id}`);
+      await page.waitForSelector(`${scope} button.opt`, { timeout: 30_000 });
+      await page.waitForTimeout(800);
+      await page.locator(`${scope} button.opt`, { hasText: 'Other' }).click();
+      await page.locator(`${scope} input.dlg-reply-input`).fill('Memcached');
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      sock!.send(JSON.stringify({ type: 'dialog', dialog: Q2_DIALOG() }));
+      await page.getByText(HOOK_QUESTIONS[1]!.question).first().waitFor({ timeout: 10_000 });
+      await page.waitForTimeout(300);
+      await page.evaluate((sc) => {
+        const w = window as unknown as { __fi: string[] };
+        w.__fi = [];
+        document.addEventListener('focusin', (e) => { if (e.target instanceof Element && e.target.closest(sc) !== null) w.__fi.push(e.target.tagName); }, true);
+      }, scope);
+      sock!.send(JSON.stringify({ type: 'dialog', dialog: askFixture(1).dialog! }));
+      await page.getByText(HOOK_QUESTIONS[0]!.question).first().waitFor({ timeout: 10_000 });
+      await page.waitForTimeout(500);
+      const out = await page.evaluate((sc) => {
+        const f = document.querySelector<HTMLInputElement>(`${sc} input.dlg-reply-input`);
+        return { focusins: (window as unknown as { __fi: string[] }).__fi, fieldFocused: f !== null && f === document.activeElement, value: f?.value };
+      }, scope);
+      expect(out.value, 'premise: the kept text is in the field').toBe('Memcached');
+      expect(opened.errors).toEqual([]);
+      return out;
+    } finally {
+      await opened.ctx.close();
+    }
+  };
+
+  it('desk: no focus, no focusin, the field is not focused', async () => {
+    const r = await run(DESK_VIEW, CARD);
+    expect(r.focusins).toEqual([]);
+    expect(r.fieldFocused).toBe(false);
+  }, 90_000);
+
+  it('phone (390px, the Sheet): the same return DOES focus the field, as before', async () => {
+    const r = await run({ skin: REFINED, theme: PHOSPHOR, width: 390 }, '.sheet-panel');
+    expect(r.fieldFocused).toBe(true);
+  }, 90_000);
 });
