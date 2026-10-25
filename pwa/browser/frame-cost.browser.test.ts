@@ -2,6 +2,10 @@
 // polish Task C6). The fleet socket sends the WHOLE session list on every change, and the app re-renders from it, so a
 // fleet of 80 rows with about nine changing per frame is the load this file puts on it, and `frameCost`
 // (`browser/app.ts`) reads Chrome's `TaskDuration` over the 2 s after each frame (CDP `Performance.getMetrics`).
+// Since the operator's R104 contract, `frameCost` defers the fixture's `/api` answers into an unmeasured drain before
+// each window, so the gates measure a window in which the harness fulfils no fixture answer. That changed what the
+// gates measure; it does not isolate the frame: the page's handling of an answer delivered in a drain, and its
+// timers, can still run into a window. The two self-test cases pin the deferral by the order of the harness's log.
 //
 // - Two gated cases, each in Refined and in Instrument at 1920 on `/`: the median cost of 15 changing frames stays under
 //   `FRAME_CEILING_MS` (a ceiling only), and the median script time of 5 identical frames sent after them stays under
@@ -15,10 +19,13 @@
 //
 // Neutral names only (`project-a`, `lane-a`, `ws-<n>`); the fixture is deterministic (`fleetFixture`).
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/frame-cost.browser.test.ts )`.
-// Measure: the same with `CCRC_MEASURE=1` and `--reporter=verbose -t measurement`. Name a reporter explicitly: a passing
-// test's console lines print only then (measured with vitest 4.1.10 on runs-finished-fold's measurement case:
-// `--reporter=verbose` or `--reporter=default` prints them; `--silent=false` alone, or no flag, does not). Add
-// `CCRC_RENDERS=<a directory outside the work tree>` for the screenshots.
+// Measure: the same with `CCRC_MEASURE=1` and `--reporter=verbose -t measurement`. Name a reporter explicitly: with
+// none, vitest 4.1.10 picks its `agent` reporter when `CLAUDECODE`, `CLAUDE_CODE` or `AI_AGENT` is set, which drops a
+// passing test's console lines, and its `default` one otherwise, which prints them (`--silent=false` alone does not
+// change that). `--reporter=verbose` or `--reporter=default` prints them in both. Add
+// `CCRC_RENDERS=<a directory outside the work tree>` for the screenshots. Each gate case also writes its per-window
+// figures (script, task, deferred requests, whether the drain went quiet) into its `task.meta.frameCost`, which the
+// JSON reporter keeps.
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -26,28 +33,37 @@ import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import {
-  backlogFrame, buildDist, fleetApi, fleetFixture, fleetFrame, fleetFrameAt, FIXTURE_NOW_MS, frameCost, longTranscript, openApp,
-  removeDist, serveDist, summarize, type AppFixture, type AppView, type DistServer, type HarnessEvent, type OpenedApp,
+  backlogFrame, buildDist, fleetApi, fleetFixture, fleetFrame, fleetFrameAt, FIXTURE_NOW_MS, frameCost, INFLIGHT_CAP_MS, longTranscript,
+  openApp, QUIET_CAP_MS, removeDist, serveDist, summarize, type AppFixture, type AppView, type DistServer, type FrameCost,
+  type HarnessEvent, type OpenedApp,
 } from './app';
 
 /** A CEILING only: it catches a gross regression of a CHANGING frame on `/`, and it is not below the before-measurement.
  *  C6 does not change what a changing frame costs there: the list's own rows re-render, and memoising the list is a
  *  later task (C9), so no mutant row claims this value. Measured on this box under a load average of 15 to 28, not on
- *  CI's runner, 80 rows, 15 changing frames 2 s apart (median TaskDuration per frame): before C6 (`pwa/src` at main)
- *  Refined 101.3 ms and Instrument 93.9 ms at 1920; after C6 108.9 and 92.4. The ceiling is about twice the after
- *  medians. It does not check that the frames were applied: a page that dropped every frame would pass it (the ratio
- *  case below requires its changing-frame median script above 1 ms). What C6 does change, an identical frame, is
- *  gated below by `IDENTICAL_SCRIPT_RATIO`. */
+ *  CI's runner, 80 rows, 15 changing frames 2 s apart (median TaskDuration per frame), with the fixture's answers still
+ *  inside the windows (before R104): before C6 (`pwa/src` at main) Refined 101.3 ms and Instrument 93.9 ms at 1920;
+ *  after C6 108.9 and 92.4. Review 944 later measured after-C6 medians of 122 to 158 ms at load 25 to 38. It does not
+ *  check that the frames were applied: a page that dropped every frame would pass it (the ratio case below requires
+ *  its changing-frame median script above 1 ms). What C6 does change, an identical frame, is gated below by
+ *  `IDENTICAL_SCRIPT_RATIO`. Under R104 it is measured on the deferring meter like the ratio, with the same value. */
 const FRAME_CEILING_MS = 220;
 
 /** The most an IDENTICAL frame's script time may be, as a share of the same page's changing-frame median script time.
  *  A ratio, not a number of milliseconds: both figures come from one page in one run, so the gate is meant not to
  *  depend on the runner's speed. That is argued, not measured: CI's runner logs no ratio, and the revert has run only
- *  on this box. Measured on this box (load 12 to 28), after C6: 0.08 to 0.19 over three runs (Refined 2.2 / 17.0,
- *  1.8 / 17.1 and 1.5 / 20.1 ms at 1920; Instrument 1.5 / 10.7, 1.8 / 9.5 and 1.4 / 9.0); before C6 (`pwa/src` at main):
- *  0.49 to 0.94 over two runs (Refined 8.8 / 17.9 and 7.0 / 13.8; Instrument 10.0 / 10.6 and 8.9 / 12.7),
- *  so a revert of C6's src reds the case. After C6 an identical frame makes the store keep the array it holds and set
- *  nothing, so no subscriber renders; before it, every subscriber of `sessions` rendered again. */
+ *  on this box. After C6 an identical frame makes the store keep the array it holds and set nothing, so no subscriber
+ *  renders; before it, every subscriber of `sessions` rendered again.
+ *
+ *  Its history, all on this box, every run with the fixture's answers still inside the windows (before R104): after
+ *  C6, 0.08 to 0.19 over three runs (Refined 2.2 / 17.0, 1.8 / 17.1 and 1.5 / 20.1 ms at 1920; Instrument 1.5 / 10.7,
+ *  1.8 / 9.5 and 1.4 / 9.0); before C6 (`pwa/src` at main), 0.49 to 0.94 over two. At the fix-round head the case RED
+ *  the unmutated tree once: Refined 12.0 / 29.6 = 0.41 (load 48 to 54; its cause was never measured). Its other
+ *  attempts there: after C6, green in 4 (0.076 to 0.276); before C6, red in all 3, in both skins (0.452 to 1.136).
+ *  Review 944 found how the old meter could red it: a window that caught one of the app's own polls cost 10 to 20 ms
+ *  of script with no frame difference, and three such windows of five move the median. So the operator's R104 contract
+ *  moved the fixture's answers out of the windows (see `frameCost`), with this value and the frame counts unchanged.
+ *  That lowers the exposure; it does not remove it, and it explains nothing about the red above. */
 const IDENTICAL_SCRIPT_RATIO = 0.35;
 const IDENTICAL_FRAMES = 5;
 
@@ -238,27 +254,38 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
 });
 
 // ---- the gate ------------------------------------------------------------------------------------------------------
+// Each window can now take a drain of up to INFLIGHT_CAP_MS + QUIET_CAP_MS before its GAP_MS, so the budgets are set
+// from that, not from the old 2 s windows: the ceiling case has 16 windows, the ratio case 21, plus the visit.
+const WINDOW_MAX_MS = INFLIGHT_CAP_MS + QUIET_CAP_MS + GAP_MS;
+const CEILING_CASE_MS = 30_000 + (1 + FRAMES) * WINDOW_MAX_MS;
+const RATIO_CASE_MS = 30_000 + (1 + FRAMES + IDENTICAL_FRAMES) * WINDOW_MAX_MS;
+
+/** Keep `cost`'s per-window figures on the case, where the JSON reporter writes them, whether it passes or fails. */
+function keep(task: { meta: object }, cost: FrameCost): void {
+  Object.assign(task.meta, { frameCost: { idle: cost.idle, frames: cost.frames, deferred: cost.deferred, drainQuiet: cost.drainQuiet } });
+}
 
 describe('frame cost (D-6438)', () => {
   for (const skin of [REFINED, INSTRUMENT]) {
-    it(`a fleet frame of ${ROWS} rows on / costs under the ceiling (${skin}, 1920)`, async () => {
+    it(`a fleet frame of ${ROWS} rows on / costs under the ceiling (${skin}, 1920)`, async ({ task }) => {
       const { app } = await boot({ skin, theme: PHOSPHOR, width: 1920 }, '/');
       try {
         expect(app.errors).toEqual([]);
         expect(await sideScroll(app.page)).toBeLessThanOrEqual(0);
         const cost = await frameCost(app, '/ws/fleet', changing(), GAP_MS);
+        keep(task, cost);
         expect(cost.frames).toHaveLength(FRAMES);
         expect(app.errors).toEqual([]);
         expect(cost.median.taskMs, `median TaskDuration per frame, ${skin}: ${cost.median.taskMs.toFixed(1)} ms`).toBeLessThan(FRAME_CEILING_MS);
       } finally {
         await app.ctx.close();
       }
-    }, 90_000);
+    }, CEILING_CASE_MS);
 
     // Its own page visit, not shared with the ceiling case: each case then reads on its own, and a failure of one does
     // not hide the other. The changing frames come first, as in the ceiling case, so the identical ones follow a page
     // that has just rendered a changed list.
-    it(`an identical fleet frame's script stays below 35% of a changing frame's (${skin}, 1920)`, async () => {
+    it(`an identical fleet frame's script stays below 35% of a changing frame's (${skin}, 1920)`, async ({ task }) => {
       const { app } = await boot({ skin, theme: PHOSPHOR, width: 1920 }, '/');
       try {
         expect(app.errors).toEqual([]);
@@ -266,6 +293,7 @@ describe('frame cost (D-6438)', () => {
         const frames = changing();
         const last = frames.at(-1)!;
         const cost = await frameCost(app, '/ws/fleet', [...frames, ...Array.from({ length: IDENTICAL_FRAMES }, () => last)], GAP_MS);
+        keep(task, cost);
         expect(cost.frames).toHaveLength(FRAMES + IDENTICAL_FRAMES);
         expect(app.errors).toEqual([]);
         const changed = summarize(cost.frames.slice(0, FRAMES)).median.scriptMs;
@@ -273,12 +301,13 @@ describe('frame cost (D-6438)', () => {
         // Non-vacuous: a page whose changing frames cost no script has nothing to be a share of.
         expect(changed, `median script per changing frame, ${skin}: ${changed.toFixed(1)} ms`).toBeGreaterThan(1);
         const ratio = identical / changed;
-        expect(ratio, `median script per identical frame ${identical.toFixed(1)} ms / per changing frame ${changed.toFixed(1)} ms = ${ratio.toFixed(2)}, ${skin}`)
+        expect(ratio, `median script per identical frame ${identical.toFixed(1)} ms / per changing frame ${changed.toFixed(1)} ms = ${ratio.toFixed(2)}, ${skin}; `
+          + `identical scripts ${cost.frames.slice(FRAMES).map((c) => c.scriptMs.toFixed(1)).join(', ')}; deferred ${cost.deferred.join(' ')}`)
           .toBeLessThan(IDENTICAL_SCRIPT_RATIO);
       } finally {
         await app.ctx.close();
       }
-    }, 120_000);
+    }, RATIO_CASE_MS);
   }
 });
 
@@ -303,7 +332,8 @@ describe('measurement — C6 Step 0/4', () => {
             const { median, mean } = summarize(changed);
             console.log(`[C6 frame cost] ${pg.name} ${skin} ${width}px rows-drawn=${rows} | idle task ${ms(cost.idle.taskMs)} script ${ms(cost.idle.scriptMs)}`
               + ` | frame median task ${ms(median.taskMs)} script ${ms(median.scriptMs)} (mean task ${ms(mean.taskMs)} script ${ms(mean.scriptMs)})`
-              + ` | identical task ${ms(same.taskMs)} script ${ms(same.scriptMs)} | errors ${app.errors.length}`);
+              + ` | identical task ${ms(same.taskMs)} script ${ms(same.scriptMs)} | errors ${app.errors.length}`
+              + ` | deferred ${cost.deferred.join(' ')} | quiet ${cost.drainQuiet.filter(Boolean).length}/${cost.drainQuiet.length}`);
             expect(app.errors).toEqual([]);
           } finally {
             await app.ctx.close();
