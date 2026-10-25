@@ -10,6 +10,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { bornIncarnation, unbornIncarnation } from '../src/coord/runBinding.js';
 import { heldFor } from '../src/coord/heldFor.js';
 import { runDriftPass, type DriftLaneDeps } from '../src/coord/driftLane.js';
+import { claimantsOfSession, openRunsClaimedBy, runsTouching } from '../src/coord/bindingReads.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okSiblings, openClaimantsOf, parentOfSession } from './coordReadHelpers.js';
 
@@ -124,6 +125,37 @@ describe('the readers take the worker\'s incarnation (ARCH-62)', () => {
     finish(s, w2);
     const after = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: w1 } as never, [], BORN + 5000);
     expect(after).toEqual({ kind: 'not-a-child' });
+  });
+});
+
+describe('the folded readers, asked through bindingReads (ARCH-62 slice 2)', () => {
+  it('claimantsOfSession lists every claimant, newest open run first, and openRunsClaimedBy the open runs a coordinator holds', () => {
+    const s = store();
+    const a = open(s, 'prog-a', 'coord-1');
+    s.setSession(a, 'demo-w');
+    const b = open(s, 'prog-b', 'coord-2');
+    s.setSession(b, 'demo-w');
+    const planned = open(s, 'prog-c', 'coord-1');
+    expect(claimantsOfSession(s, 'demo-w')).toEqual(['coord-2', 'coord-1']);
+    expect(okSiblings(openRunsClaimedBy(s, 'coord-1')).map((r) => r.id)).toEqual([a, planned]);
+    finish(s, a);
+    expect(claimantsOfSession(s, 'demo-w')).toEqual(['coord-2']);
+  });
+
+  it('runsTouching walks the runs a session works on or claims, any state, by id', () => {
+    const s = store();
+    const a = open(s, 'prog-a', 'coord-1');
+    s.setSession(a, 'demo-w');
+    const b = open(s, 'prog-b', 'demo-w');
+    finish(s, a);
+    expect(runsTouching(s, 'demo-w').map((r) => r.id)).toEqual([a, b]);
+    expect(runsTouching(s, 'nobody')).toEqual([]);
+  });
+
+  it('a series the process cannot represent throws, never reads as an empty list', () => {
+    const bad = { bindingRunsOf: () => ({ ok: false as const, detail: 'id out of range' }) };
+    expect(() => claimantsOfSession(bad, 'x')).toThrow('id out of range');
+    expect(() => runsTouching(bad, 'x')).toThrow('id out of range');
   });
 });
 
