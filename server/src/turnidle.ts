@@ -1,7 +1,8 @@
 /**
  * THE MAIL GATE'S TURN-IDLE DECISION, AND ITS MODE (worker stall watch, wave 1 spec §4.1, wave 2 spec §5.1).
  *
- * L1, pure. This module imports NOTHING: not a type, not a builtin, not `shared/api.ts`. It declares its inputs as
+ * L1, pure. This module imports its markers from the L0 switchboard and the word reading and policies from
+ * `sessionReading.ts` (ARCH-50: L1, itself importing L0 alone), and nothing else: not a type, not a builtin, not `shared/api.ts`. It declares its inputs as
  * structural shapes of its own (`TurnLive`, `TurnMarkFact`), so `watch.ts` hands it `readLiveState`'s answer and
  * `readTurnMarkMeasured`'s, and this file never names `LiveState` or `TurnMarkRead`. Those live beside `FleetIO` and
  * in `coord/stall.ts`; `turnidle.test.ts` pins that `TurnMarkRead` stays assignable to `TurnMarkFact`
@@ -56,6 +57,7 @@
  * check on an `idle` that needs none.
  */
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER } from '../../shared/switches.js';
+import { turnSays, turnWordOf } from './sessionReading.js';
 
 /** The gate's mode. `shell` is the default. `strict` restores the pre-wave-1 rule, under which only `idle`
  *  delivers. `busy-shadow` and `busy` also read `busy` through the turn marker. */
@@ -115,8 +117,11 @@ function quietRule(moment: number | null, now: number, quietMs: number, via: 'id
  *  `mark` at all (shell-mode-ignores-the-marker (D-3674)). Both sites below ask that one rule. */
 export function mailTurnIdle(live: TurnLive | null, mark: TurnMarkFact | null, now: number, quietMs: number, mode: MailTurnMode): MailTurnVerdict {
   if (live === null) return { deliver: false, gate: 'not-idle' };
-  if (live.status === 'idle') return quietRule(live.statusUpdatedAt, now, quietMs, 'idle');
-  if (live.status === 'shell') {
+  const word = turnWordOf(live.status);
+  // The `mail-gate` policy (`sessionReading.ts`): `idle` and `shell` are at rest and may deliver, `busy` waits on the
+  // marker, and every other word, `waiting` included, reads `unknown` and is refused.
+  if (turnSays('mail-gate', word) === 'rest') {
+    if (word === 'idle') return quietRule(live.statusUpdatedAt, now, quietMs, 'idle');
     if (mode !== 'shell' && mode !== 'busy-shadow' && mode !== 'busy') return { deliver: false, gate: 'not-idle' };
     const readsMark = mailTurnReadsMark(mode);
     if (readsMark && mark !== null && mark.ok && mark.state === 'working' && live.statusUpdatedAt !== null && mark.at >= live.statusUpdatedAt) {
@@ -124,7 +129,7 @@ export function mailTurnIdle(live: TurnLive | null, mark: TurnMarkFact | null, n
     }
     return quietRule(live.statusUpdatedAt, now, quietMs, 'shell');
   }
-  if (live.status !== 'busy' || !mailTurnReadsMark(mode)) return { deliver: false, gate: 'not-idle' };
+  if (word !== 'busy' || !mailTurnReadsMark(mode)) return { deliver: false, gate: 'not-idle' };
   if (mark === null || (!mark.ok && (mark.reason === 'unmeasured' || mark.reason === 'malformed'))) {
     return { deliver: false, gate: mode === 'busy' ? 'turn-mark-unreadable' : 'not-idle' };
   }

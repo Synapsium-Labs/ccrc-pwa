@@ -755,6 +755,7 @@ _ws_loose_collect	C4
 _ws_reap_leaf_ok	C4
 _ws_reclaim_mirror	C4
 _ws_reap_crumb_unread	C4
+_turn_reading	C3
 _ws_child_ignored_count	C4
 _authdead_cred_src	C1
 _authdead_cred_changed	C1

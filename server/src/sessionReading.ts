@@ -72,6 +72,44 @@ export type Substrate = 'present' | 'absent' | 'unmeasurable';
 export type TurnWhy = 'measured' | 'unmeasured' | 'noRow' | 'noPane' | 'paneUnknown';
 export interface TurnReading { readonly word: Turn; readonly why: TurnWhy }
 
+/** Claude Code's status word as a `Turn`, the ONE place the raw word is read (ARCH-50, K4). An exact allowlist of the three
+ *  words the live file writes; every other word, and no word, is `unknown`. Each caller then applies its own policy
+ *  (`turnSays`), so a word added later is `unknown` to all of them until someone places it. */
+export function turnWordOf(raw: string | null): Turn {
+  return raw === 'idle' || raw === 'busy' || raw === 'shell' ? raw : 'unknown';
+}
+
+/** The four callers' policies over a `Turn`, named by what they do. They diverge on purpose, and the safe error is each
+ *  caller's own: mail held for a false busy is the cost the anchored TS read pays, a key typed into a turn is the cost
+ *  ccd's unanchored read refuses (consolidation spec K4; the ARCH-24 corpus holds every column). */
+export const TURN_POLICIES = ['mail-gate', 'keystroke', 'sleep', 'stall-watch'] as const;
+export type TurnPolicy = (typeof TURN_POLICIES)[number];
+/** `rest`: the act may go on. `work`: hold, a turn is or may be running. `doubt`: nothing was measured, and the caller
+ *  decides whether that persists into a signal. */
+export type TurnSays = 'rest' | 'work' | 'doubt';
+
+const POLICY: Readonly<Record<TurnPolicy, Readonly<Record<Turn, TurnSays>>>> = {
+  /** Hold unless idle. A `shell` is `idle` relabelled while a background task runs, so mail may go on it; the mail
+   *  mode (`turnidle.ts`) still decides whether it does. */
+  'mail-gate': { idle: 'rest', shell: 'rest', busy: 'work', unknown: 'work' },
+  /** Refuse unless idle, and treat `unknown` as busy: the act types a key or ends a turn. */
+  keystroke: { idle: 'rest', shell: 'work', busy: 'work', unknown: 'work' },
+  /** Require idle: a `shell` or an `unknown` word holds the sleep. */
+  sleep: { idle: 'rest', shell: 'work', busy: 'work', unknown: 'work' },
+  /** `idle` and `shell` are at rest; an `unknown` is doubt, which the stall lane holds as unmeasured. */
+  'stall-watch': { idle: 'rest', shell: 'rest', busy: 'work', unknown: 'doubt' },
+};
+
+export function turnSays(policy: TurnPolicy, word: Turn): TurnSays {
+  return POLICY[policy][word];
+}
+
+/** The stall lane's reading of a raw status word, by its own policy. A named helper so the lane (`coord/stall.ts`) spells
+ *  no policy name: `mail-routes.test.ts` scans `coord/` for quoted kebab words, and a policy name is not a code. */
+export function stallWatchSays(raw: string | null): TurnSays {
+  return turnSays('stall-watch', turnWordOf(raw));
+}
+
 export type SleepReading =
   | { readonly kind: 'awake' }
   /** `since` is the marker's epoch ms. A marker whose stamp cannot be read parses to `null` upstream and is no marker. */

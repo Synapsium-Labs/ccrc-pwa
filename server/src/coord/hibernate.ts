@@ -1,5 +1,6 @@
 import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../../shared/api.js';
 import { HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER } from '../../../shared/switches.js';
+import { turnSays, turnWordOf } from '../sessionReading.js';
 
 /**
  * HIBERNATE LONG-IDLE SESSIONS (D-5242, `hibernate-long-idle-sessions`, spec §5.11): the server's pure verdict.
@@ -209,7 +210,7 @@ export function hibernateVerdict(i: HibernateInput, now: number, afterMs: number
   if (i.live.kind === 'unread') return { act: 'measure' };
   const w = i.live.word;
   if (!w.ok) return hold(w.reason === 'unmeasured' ? 'unmeasured' : 'pane');
-  if (w.word !== 'idle') return hold('live-word');
+  if (turnSays('sleep', turnWordOf(w.word)) !== 'rest') return hold('live-word');
   const m = i.live.mark;
   if (!m.ok || m.state !== 'done') return hold('marker');
   if (m.bg !== 0) return hold('marker-background');
