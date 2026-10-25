@@ -5865,7 +5865,7 @@ These are actual earlier worker helper measurements on the accepted driver, not 
 
 ### Historical structural and accounting guard measurements
 
-These earlier worker rows come from the accepted shape, logical-material and equality measurement summaries. The title column is the recorded selected title fragment, not a reconstructed exact historical full title. Their original raw output, exact old test snapshots or complete old restore commands are unavailable where the retained summary says so; no new run or stronger provenance is claimed. Each listed mutation was recorded RED with literal `cmp` 0; invalid fixtures later corrected, zero selections and redundant GREEN trials are not credited. The owner-shaped valid index and exact-boundary rows are the controls. Fixed-depth wrong-slot cycles reuse the listed scalar/container guards rather than adding a generic walker.
+These earlier worker rows come from the accepted shape, logical-material and equality measurement summaries. The title column is the recorded selected title fragment, not a reconstructed exact historical full title. Their original raw output, exact old test snapshots or complete old restore commands are unavailable where the retained summary says so; no stronger historical provenance is claimed. The Hash grammar row is the one exception: it was re-measured on 2026-10-25 with the actual selected title, replacing the earlier fragment that selected no test. Each listed mutation was recorded RED with literal `cmp` 0; invalid fixtures later corrected, zero selections and redundant GREEN trials are not credited. The owner-shaped valid index and exact-boundary rows are the controls. Fixed-depth wrong-slot cycles reuse the listed scalar/container guards rather than adding a generic walker.
 
 | Guard | Recorded measured edit | Recorded selected title fragment | Recorded RED / restoration |
 |---|---|---|---|
@@ -5878,7 +5878,7 @@ These earlier worker rows come from the accepted shape, logical-material and equ
 | Uint8Array own state | Weaken typed-array own-key equality | `charges each Uint8Array` | Returning accessor escaped; cmp 0 |
 | Positive width | Remove width < 1 | `rejects width.w` | Two invalid widths escaped; cmp 0 |
 | Nonnegative scalar | Remove shared < 0 predicate | `nonnegative` | Four invalid scalars escaped; cmp 0 |
-| Hash grammar | Remove 64-lowercase-hex predicate | `byLen keys` | Malformed hash escaped; cmp 0 |
+| Hash grammar (re-measured 2026-10-25) | Remove only 64-lowercase-hex predicate, retain string check | `rejects a malformed hash member` (actual selected title) | 1 RED: `expected [Function] to throw an error`; literal restoration `cmp` 0; selected restored GREEN |
 | Record prototype | Remove Object.prototype equality | `otherwise complete record` | Unsupported prototype escaped; cmp 0 |
 | Array prototype | Remove exact Array prototype check | `dense Array with an unsupported prototype` | Unsupported prototype escaped; cmp 0 |
 | Map attached state | Remove ownKeys length check | `attached Map state` | Attached state escaped; cmp 0 |
