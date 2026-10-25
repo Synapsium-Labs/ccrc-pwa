@@ -211,10 +211,15 @@ function affectedSet(change, existsAt, mapSha) {
 }
 
 /**
- * @param {{ map: TestMap, changes: Change[], liveTests: string[], existsAt: (ref: string, p: string) => boolean }} args
+ * `queueRunsUnmapped` (a pull request diffed from its merge base): a live test
+ * the map has no entry for, and the change does not touch, is left to the merge
+ * queue's full run instead of being selected. Such a test arrived on main after
+ * the map was built; selecting every one of them made a day-old map run most of
+ * the suite on every pull request.
+ * @param {{ map: TestMap, changes: Change[], liveTests: string[], existsAt: (ref: string, p: string) => boolean, queueRunsUnmapped?: boolean }} args
  * @returns {Selection}
  */
-export function selectTests({ map, changes, liveTests, existsAt }) {
+export function selectTests({ map, changes, liveTests, existsAt, queueRunsUnmapped = false }) {
   const full = fullTrigger(changes, map.baseline);
   if (full) return { mode: 'full', reason: full };
 
@@ -236,6 +241,7 @@ export function selectTests({ map, changes, liveTests, existsAt }) {
 
     // Rule 1 — NEW: the test file itself is new/modified, or the map has no
     // entry for it at all (never traced, so nothing else here is safe to trust).
+    if (!inMap && queueRunsUnmapped && !changedHere) continue;
     if (!inMap || (changedHere && (changedHere.status === 'A' || changedHere.status === 'M'))) {
       selected.push({ file, rule: 1, path: file });
       continue;

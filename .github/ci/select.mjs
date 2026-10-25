@@ -176,7 +176,7 @@ function computeRealSelection(repoDir, mapFile, liveTests, baseRef) {
     }
     const changes = readChanges(repoDir, from, 'HEAD');
     const existsAt = gitExistsAt(repoDir);
-    const selection = selectTests({ map, changes, liveTests, existsAt });
+    const selection = selectTests({ map, changes, liveTests, existsAt, queueRunsUnmapped: !!baseRef });
     return { selection, map };
   } catch (e) {
     const msg = e && e.message ? String(e.message) : String(e);

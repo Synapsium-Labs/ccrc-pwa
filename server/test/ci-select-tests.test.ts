@@ -144,6 +144,23 @@ describe('selectTests rule 1 (NEW)', () => {
   });
 });
 
+describe('selectTests queueRunsUnmapped (a pull request diffed from its merge base)', () => {
+  const map: TestMap = { format: 1, sha: SHA_A, baseline: emptyDep(), tests: {} };
+
+  it('leaves a live test the map has never seen, and the change does not touch, to the merge queue', () => {
+    const sel = selectTests({ map, changes: [], liveTests: ['server/test/arrived-on-main.test.ts'], existsAt: () => true, queueRunsUnmapped: true });
+    expect(sel).toEqual({ mode: 'selected', tests: [] });
+  });
+
+  it('still selects an unmapped test the change adds or modifies', () => {
+    const sel = selectTests({
+      map, changes: [{ status: 'A', path: 'server/test/mine.test.ts', symlink: false }],
+      liveTests: ['server/test/mine.test.ts', 'server/test/other.test.ts'], existsAt: () => true, queueRunsUnmapped: true,
+    });
+    expect(sel).toEqual({ mode: 'selected', tests: [{ file: 'server/test/mine.test.ts', rule: 1, path: 'server/test/mine.test.ts' }] });
+  });
+});
+
 describe('selectTests rule 2 (ALWAYS: unknown or git)', () => {
   it('selects an unknown-trace test on an unrelated change', () => {
     const map: TestMap = {
