@@ -109,6 +109,9 @@ export const ASK_SWEEP_MS = 10_000;
  *  (`sweepApprovals`: lapse, ceiling, deferred pushes) has NO throttle and runs on every tick; only this block is a row. */
 export const APPROVAL_PRUNE_MS = 86_400_000;
 
+/** The drift reconciler's beat (D-5922, spec §4.1): fifteen minutes, the ledger reconcile's own, a read-and-record pass. */
+export const DRIFT_SWEEP_MS = 900_000;
+
 /** The daily digest's beat (D-5300): once a minute at most it looks for a settled day. */
 export const DIGEST_BEAT_MS = 60_000;
 
@@ -138,7 +141,7 @@ export type LaneFlight = 'skip' | 'join' | 'join-rerun' | 'none';
 
 export type LaneName =
   | 'caps' | 'catalogue' | 'inventory' | 'serverCaps'
-  | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor'
+  | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator';
 
@@ -186,6 +189,7 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   { name: 'lifecycle', cadenceMs: LC_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   { name: 'readiness', cadenceMs: READINESS_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   { name: 'ledgerReconcile', cadenceMs: LEDGER_RECONCILE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  { name: 'drift', cadenceMs: DRIFT_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
   { name: 'ledgerFloor', cadenceMs: LEDGER_FLOOR_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   { name: 'claimRenew', cadenceMs: CLAIM_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   { name: 'claimLapse', cadenceMs: CLAIM_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
