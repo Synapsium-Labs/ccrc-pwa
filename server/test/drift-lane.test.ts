@@ -109,29 +109,32 @@ describe('the pushes', () => {
     expect(sent[0]!.event.body).toBe("30 items are out of step; see today's digest");
     expect(sent[0]!.opts?.url).toMatch(/^\/digest\?day=\d{4}-\d{2}-\d{2}$/);
     expect(rows(coord).every((r) => r.pushedVia === 'summary')).toBe(true);
-    expect(coord.driftPushesSince(0)).toBe(0);
+    expect(coord.driftPushesOnDay(0)).toBe(0);
     quietRun(T0 + H, 5 * DAY);
     await runDriftPass(deps(LIVE), T0 + H);
-    expect(coord.driftPushesSince(0)).toBe(1);
+    expect(coord.driftPushesOnDay(0)).toBe(1);
   });
   it('four crossings in one pass push 3, the 4th next pass', async () => {
     const { deps, quietRun, sent } = rig();
-    await runDriftPass(deps(LIVE), T0 - H); // a row exists after this only if something is found
+    quietRun(T0 - H, 5 * DAY);
+    await runDriftPass(deps(LIVE), T0 - H); // the first armed pass: its one finding goes out as the summary
     for (let i = 0; i < 4; i += 1) quietRun(T0, 5 * DAY);
     await runDriftPass(deps([]), T0 - H / 2); // unarmed: the table is no longer empty
     await runDriftPass(deps(LIVE), T0);
-    expect(sent.filter((s) => s.mode === 'push')).toHaveLength(3);
+    expect(sent.filter((s) => s.mode === 'push')).toHaveLength(1 + 3); // the summary, then 3 items
     await runDriftPass(deps(LIVE), T0 + H);
-    expect(sent.filter((s) => s.mode === 'push')).toHaveLength(4);
+    expect(sent.filter((s) => s.mode === 'push')).toHaveLength(1 + 4);
   });
   it('thirteen crossings in a day push 12, and a restart mid-day does not reset the count', async () => {
     const { coord, deps, quietRun, sent } = rig();
     const day = T0 - (T0 % DAY);
+    quietRun(day, 5 * DAY);
+    await runDriftPass(deps(LIVE), day + H / 2); // the first armed pass: a summary, spending no per-item budget
     for (let i = 0; i < 13; i += 1) quietRun(day, 5 * DAY);
     await runDriftPass(deps([]), day + H);
     for (let p = 0; p < 6; p += 1) await runDriftPass(deps(LIVE), day + 2 * H + p * 1000); // each call is a fresh lane: no memory
-    expect(sent.filter((s) => s.mode === 'push')).toHaveLength(12);
-    expect(coord.driftPushesSince(day)).toBe(12);
+    expect(sent.filter((s) => s.mode === 'push')).toHaveLength(1 + 12); // the summary, then 12 items
+    expect(coord.driftPushesOnDay(day)).toBe(12);
   });
   it('a restart re-finds a key and does not push it again', async () => {
     const { deps, quietRun, sent } = rig();
@@ -144,10 +147,12 @@ describe('the pushes', () => {
   });
   it('every push carries a url, and a run kind carries its runId', async () => {
     const { deps, quietRun, sent } = rig();
+    quietRun(T0 - H, 5 * DAY);
+    await runDriftPass(deps(LIVE), T0 - H); // the first armed pass: a summary
     const id = quietRun(T0, 5 * DAY);
     await runDriftPass(deps([]), T0);
     await runDriftPass(deps(LIVE), T0 + H);
-    const pushes = sent.filter((s) => s.mode === 'push');
+    const pushes = sent.filter((s) => s.mode === 'push').slice(1);
     expect(pushes).toHaveLength(1);
     expect(pushes[0]!.event.runId).toBe(id);
     expect(pushes[0]!.opts?.url).toBe('/runs');
@@ -222,11 +227,17 @@ describe('the shadow', () => {
     expect(rows(coord)[0]!.shadowAt).not.toBeNull();
     expect(rows(coord)[0]!.pushedAt).toBeNull();
   });
-  it('arming later still pushes a finding the shadow recorded', async () => {
-    const { deps, quietRun, sent } = rig();
-    quietRun(T0, 5 * DAY);
+  it('N findings shadowed, then armed: one summary push, no item push, today\'s budget still 12', async () => {
+    const { coord, deps, quietRun, sent } = rig();
+    for (let i = 0; i < 30; i += 1) quietRun(T0, 5 * DAY);
     await runDriftPass(deps([]), T0);
-    await runDriftPass(deps(LIVE), T0 + H);
+    await runDriftPass(deps(LIVE), T0 + 7 * DAY);
+    const pushes = sent.filter((s) => s.mode === 'push');
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0]!.event.body).toBe("30 items are out of step; see today's digest");
+    expect(rows(coord).every((r) => r.pushedVia === 'summary')).toBe(true);
+    expect(coord.driftPushesOnDay(0)).toBe(0);
+    await runDriftPass(deps(LIVE), T0 + 7 * DAY + H);
     expect(sent.filter((s) => s.mode === 'push')).toHaveLength(1);
   });
 });
@@ -241,5 +252,32 @@ describe('the reconciler never acts', () => {
     const writers = calls.filter((c) => /^(record|mark|insert|set|advance|close|abandon|reclaim|queue|send|open|write|update|delete|end)/i.test(c));
     expect([...new Set(writers)].sort()).toEqual(['markDriftPushed', 'markDriftShadowed', 'recordDriftPass']);
     expect((db.prepare('SELECT COUNT(*) AS n FROM mail').get() as { n: number }).n).toBe(mailBefore);
+  });
+});
+
+describe('the drift reads', () => {
+  it('openDriftFindings answers the uncleared rows only', async () => {
+    const { coord, deps, quietRun, db } = rig();
+    const a = quietRun(T0, 5 * DAY);
+    quietRun(T0, 5 * DAY);
+    await runDriftPass(deps([]), T0);
+    db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(a);
+    await runDriftPass(deps([]), T0 + H);
+    const r = coord.openDriftFindings();
+    expect(r.ok && r.rows.map((x) => x.clearedAt)).toEqual([null]);
+    expect(r.ok && r.rows[0]!.kind).toBe('run-quiet');
+  });
+  it('driftFindingsOpenAt answers the rows open at that instant, first seen before it and not cleared until it', async () => {
+    const { coord, deps, quietRun, db } = rig();
+    const a = quietRun(T0, 5 * DAY);
+    await runDriftPass(deps([]), T0);
+    quietRun(T0 + 2 * H, 5 * DAY);
+    db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(a);
+    await runDriftPass(deps([]), T0 + 2 * H); // a cleared, b first seen
+    const at = (ms: number): string[] => { const r = coord.driftFindingsOpenAt(ms); if (!r.ok) throw new Error(r.detail); return r.rows.map((x) => x.key); };
+    expect(at(T0)).toEqual([]); // first seen AT T0 is not yet open before it
+    expect(at(T0 + H)).toEqual([`run-quiet:${a}`]);
+    expect(at(T0 + 2 * H)).toHaveLength(1); // a cleared exactly then still counts; b first seen then does not
+    expect(at(T0 + 3 * H)).toHaveLength(1);
   });
 });

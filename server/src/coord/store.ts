@@ -4877,12 +4877,12 @@ export class CoordStore {
 
   /** Every stored row, open or cleared (the lane's push choice reads the open ones, and an empty table is the first-pass
    *  rule's trigger). `kind` is narrowed through `isDriftKind`; a row this build cannot name fails the read. */
-  driftFindingRows(): DriftReadResult<DriftFindingRow> {
+  private readDriftRows(where: string, params: number[]): DriftReadResult<DriftFindingRow> {
     try {
       const rows = this.db.prepare(
         'SELECT key, kind, subject, detail, factAt, runId, sessionId, firstSeenAt, lastSeenAt, clearedAt, pushedAt, ' +
-        'pushedVia, shadowAt FROM drift_findings ORDER BY firstSeenAt, key',
-      ).all() as { key: string; kind: string; subject: string; detail: string; factAt: unknown; runId: unknown;
+        `pushedVia, shadowAt FROM drift_findings ${where} ORDER BY firstSeenAt, key`,
+      ).all(...params) as { key: string; kind: string; subject: string; detail: string; factAt: unknown; runId: unknown;
         sessionId: string | null; firstSeenAt: unknown; lastSeenAt: unknown; clearedAt: unknown; pushedAt: unknown;
         pushedVia: string | null; shadowAt: unknown }[];
       return { ok: true, rows: rows.map((r) => {
@@ -4901,9 +4901,20 @@ export class CoordStore {
     }
   }
 
+  /** Every stored row, open or cleared (an empty table is the first-pass rule's trigger). */
+  driftFindingRows(): DriftReadResult<DriftFindingRow> { return this.readDriftRows('', []); }
+
+  /** The rows no pass has cleared. */
+  openDriftFindings(): DriftReadResult<DriftFindingRow> { return this.readDriftRows('WHERE clearedAt IS NULL', []); }
+
+  /** The rows that stood open at `ms`: first seen before it and not cleared until at or after it (the digest's read). */
+  driftFindingsOpenAt(ms: number): DriftReadResult<DriftFindingRow> {
+    return this.readDriftRows('WHERE firstSeenAt < ? AND (clearedAt IS NULL OR clearedAt >= ?)', [ms, ms]);
+  }
+
   /** How many findings were pushed as their own push since `dayStartMs` (the daily cap's count): `pushedVia = 'item'`
    *  alone, so a first-pass summary spends nothing. Read from the table, so a restart keeps it. */
-  driftPushesSince(dayStartMs: number): number {
+  driftPushesOnDay(dayStartMs: number): number {
     const r = this.db.prepare("SELECT COUNT(*) AS n FROM drift_findings WHERE pushedVia = 'item' AND pushedAt >= ?")
       .get(dayStartMs) as { n: unknown };
     return Number(r.n);

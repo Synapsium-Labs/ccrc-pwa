@@ -50,6 +50,15 @@ describe('chooseDriftPushes', () => {
     expect(plan.summary).toHaveLength(5);
     expect(plan.items).toHaveLength(0);
   });
+  it('the first armed pass after shadowing, with nothing pushed yet, folds every due finding into one summary', () => {
+    const rows = [1, 2, 3, 4, 5].map((n) => row(n, { shadowAt: NOW - 7 * 24 * H }));
+    const plan = chooseDriftPushes(input(rows));
+    expect(plan.summary).toHaveLength(5);
+    expect(plan.items).toHaveLength(0);
+    const later = chooseDriftPushes(input([...rows, row(6, { pushedAt: NOW - H, pushedVia: 'summary' })]));
+    expect(later.summary).toHaveLength(0);
+    expect(later.items).toHaveLength(DRIFT_PASS_CAP);
+  });
   it('a live stall rung on the run, or on the delivery, suppresses the push; the finding stays listed', () => {
     const quiet = row(1);
     const held = row(7, { key: 'mail-held:7', kind: 'mail-held', runId: null, sessionId: 'w' });

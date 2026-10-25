@@ -20,7 +20,7 @@ import type { CoordStore } from './store.js';
 
 export interface DriftLaneDeps {
   readonly coord: Pick<CoordStore, 'driftOpenRuns' | 'driftOutstandingDeliveries' | 'driftAwaitingReview'
-    | 'driftHeldQuestions' | 'driftFindingRows' | 'driftStallToldRows' | 'driftPushesSince' | 'parentOfSession'
+    | 'driftHeldQuestions' | 'driftFindingRows' | 'driftStallToldRows' | 'driftPushesOnDay' | 'parentOfSession'
     | 'recordDriftPass' | 'markDriftPushed' | 'markDriftShadowed'>;
   /** The reclaim ladder's verdict for one claimant (`measureClaimant`, bound by the watcher): no second vocabulary. */
   readonly measure: (id: string, at: number) => Promise<ClaimantReading>;
@@ -85,7 +85,7 @@ async function pass(d: DriftLaneDeps, now: number): Promise<void> {
       stuckDeliveries: new Set(told.rows.filter((t) => t.arm === 'mail-stuck').map((t) => t.key)),
     },
     escalatedDeliveries: new Set(deliveries.rows.filter((x) => x.parkEscalatedAt !== null).map((x) => x.id)),
-    pushedToday: d.coord.driftPushesSince(now - (now % DAY_MS)), now,
+    pushedToday: d.coord.driftPushesOnDay(now - (now % DAY_MS)), now,
   });
   const day = new Date(now).toISOString().slice(0, 10);
 

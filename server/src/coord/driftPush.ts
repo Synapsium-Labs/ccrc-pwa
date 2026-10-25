@@ -3,8 +3,8 @@
 // stamps `pushedAt` first and calls the funnel after. Nothing here acts, and the reconciler as a whole never does.
 //
 // The rule: one push per finding, the first time its age passes 24 h, never again for that key (`pushedAt`, read by
-// the caller). Two bounds, because a first deploy meets weeks of standing drift: the pass that finds the table empty
-// folds every due finding into ONE summary, and otherwise at most `DRIFT_PASS_CAP` per pass and `DRIFT_DAY_CAP` per
+// the caller). Two bounds, because a first deploy meets weeks of standing drift: the pass that finds the table empty, and the
+// first armed pass after a shadow period (nothing pushed yet), fold every due finding into ONE summary, and otherwise at most `DRIFT_PASS_CAP` per pass and `DRIFT_DAY_CAP` per
 // UTC day (the day's count is read from the table, so a restart keeps it). While the lane is UNARMED nothing is
 // pushed: the same due findings are chosen for a shadow record instead, once per key (`shadowAt`).
 import type { DriftKind } from '../../../shared/api.js';
@@ -41,7 +41,7 @@ export interface DriftPushInput {
 }
 
 export interface DriftPushPlan {
-  /** Armed, empty table: every due finding, folded into one summary push. */
+  /** Armed, empty table or first armed pass after shadowing: every due finding, folded into one summary push. */
   readonly summary: readonly DriftFindingRow[];
   /** Armed: the per-item pushes, oldest fact first. */
   readonly items: readonly DriftFindingRow[];
@@ -73,7 +73,12 @@ export function chooseDriftPushes(i: DriftPushInput): DriftPushPlan {
       && i.now - (r.factAt ?? r.firstSeenAt) > DRIFT_PUSH_AGE_MS && !listedNotPushed(r, i))
     .sort((a, b) => (a.factAt ?? a.firstSeenAt) - (b.factAt ?? b.firstSeenAt) || (a.key < b.key ? -1 : 1));
   if (!i.armed) return { summary: [], items: [], shadow: due.filter((r) => r.shadowAt === null) };
-  if (i.tableWasEmpty) return { summary: due, items: [], shadow: [] };
+  // The first armed pass is a first pass: nothing was ever pushed, and either the table was empty or the unarmed lane
+  // had been shadowing the same standing drift. Folding it into one summary keeps the arming from being a push storm.
+  const nothingPushedYet = i.rows.every((r) => r.pushedAt === null);
+  if (i.tableWasEmpty || (nothingPushedYet && due.some((r) => r.shadowAt !== null))) {
+    return { summary: due, items: [], shadow: [] };
+  }
   const room = Math.max(0, Math.min(DRIFT_PASS_CAP, DRIFT_DAY_CAP - i.pushedToday));
   return { summary: [], items: due.slice(0, room), shadow: [] };
 }
