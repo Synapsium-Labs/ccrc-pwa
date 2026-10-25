@@ -13,7 +13,7 @@
 // That cost is the whole argument for moving it. `ToolCard` and `MailCard` are
 // @ccrc/ui components whose primary surface does not render in @ccrc/ui's own
 // Storybook — a design system that cannot show its own component is not
-// documenting it. And the objection does not survive the move: the app's three
+// documenting it. And the objection does not survive the move: the app's
 // consumers do not reach into a base CLASS, they render a COMPONENT, which is
 // the ordinary direction. There is still exactly one definition.
 //
@@ -29,10 +29,10 @@
 // in whichever screen grew such an ancestor first.
 //
 // AND NO VARIANT AXIS, measured when a design-system audit proposed one. The
-// five classes call sites pass are not tones: `mail-card-body`, `dlg-raw`,
-// `opt-preview`, `draft-well` and `tool-ask-well` each adjust this surface for
-// the box it sits in — a max-height here, a margin there. Naming five one-off
-// adjustments as if they were a vocabulary would invent a word per call site
+// classes call sites pass are not tones: `mail-card-body`, `opt-preview`,
+// `draft-well` and `tool-ask-well` each adjust this surface for the box it sits
+// in — a max-height here, a margin there. Naming such one-off adjustments as
+// if they were a vocabulary would invent a word per call site
 // and put the design system in charge of five layouts it cannot see. The well
 // has ONE appearance, which is the point of it: wherever the terminal peeks
 // through, it looks the same.
@@ -41,17 +41,21 @@ import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
 
 /** Token for token as `chat.css .well` declared it, less its overscroll
- *  containment and with a whole-pixel line height (both D-6437). This wraps
- *  and never scrolls sideways, and a y-axis containment would stop a wheel it
- *  has nothing left to scroll from reaching the transcript. Its two users
- *  outside the transcript, the ask sheet's `opt-preview` and the unsent-draft
- *  sheet's `draft-well`, chain to their sheet body's own containment.
+ *  containment (D-6437) and with a whole-pixel line height (D-6852,
+ *  whole-pixel-mono-line, under D-6437). The well itself wraps (`pre-wrap`),
+ *  and a y-axis containment would stop a wheel it has nothing left to scroll
+ *  from reaching the transcript. Of its users outside the transcript, the ask
+ *  sheet's `opt-preview` and the unsent-draft sheet's `draft-well` chain to
+ *  their sheet body's own containment; `opt-preview` is given
+ *  `white-space: pre`, `overflow: auto` and its own font shorthand by
+ *  `chat.css`, so unlike the well proper it may scroll sideways.
  *
  *  The line height is `--fs-sm` x `--lh-mono` rounded DOWN to a whole pixel
  *  (20px, not 20.15px): a fractional line box makes a tall well's scroll range
  *  fractional, and at some page offsets Chrome then latches the first wheel at
  *  the well's end to the well, which cannot move, so it never reaches the
- *  transcript. `.msg-assist pre` and `.tool-ask-a` declare the same value.
+ *  transcript. `.msg-assist pre` and `.tool-ask-a` declare the same value (the
+ *  `round()` dependency is noted on `.msg-assist pre` in prose.css).
  *
  *  `py-[10px]` is a literal because the rule was: 10px sits between `--sp-2`
  *  (8px) and `--sp-3` (12px), and the horizontal padding IS `--sp-3`. The
@@ -70,7 +74,7 @@ export interface WellProps extends HTMLAttributes<HTMLPreElement> {
   className?: string;
 }
 
-/** Always a `<pre>`: all seven call sites were, and the surface exists to show
+/** Always a `<pre>`: every call site was, and the surface exists to show
  *  bytes exactly as they arrived — `whitespace-pre-wrap` is load-bearing, not
  *  decoration. A site needing another element takes `WELL` directly.
  *

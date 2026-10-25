@@ -13,7 +13,8 @@
 //     resting offset can pass by luck (a mono box therefore needs a whole-pixel line height: 13px x 1.55 = 20.15px is
 //     not one). The FIRST wheel must move the transcript at every offset, and a failure names its offset;
 //   - a block with a 300-character line: a sideways wheel moves the block's `scrollLeft` and not the transcript's
-//     `scrollTop` (a regression pin: the x-axis containment is kept);
+//     `scrollTop`. This pins that the block itself scrolls sideways (making it `overflow-x: hidden` reds it); the
+//     x-only containment is masked by `.chat-scroller`'s own containment, so its guard is the static test alone;
 //   - control: a wheel over prose moves the transcript, which proves this harness can see a chain at all.
 // Every wheel is measured from a settled position: the scroller (virtuoso, anchored to the bottom, following output)
 // and the box are read until several consecutive reads agree, so settling never counts as a wheel's effect. The box's

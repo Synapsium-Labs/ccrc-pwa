@@ -161,10 +161,13 @@
     background: var(--accent-tint);
     color: var(--ink-primary);
     font: var(--weight-regular) var(--fs-sm) / var(--lh-mono) var(--family-mono);
-    /* A whole-pixel line (D-6437): 13px x 1.55 = 20.15px makes a tall chip's
-       scroll range fractional, and at some page offsets Chrome then latches
-       the first wheel at its end to the chip, which cannot move. After the
-       `font` shorthand, which resets it; WELL and `.msg-assist pre` agree. */
+    /* A whole-pixel line (line height: D-6852, whole-pixel-mono-line;
+       containment: D-6437): 13px x 1.55 = 20.15px makes a tall chip's scroll
+       range fractional, and at some page offsets Chrome then latches the
+       first wheel at its end to the chip, which cannot move. After the
+       `font` shorthand, which resets it. Declares the same value as
+       `.msg-assist pre` in prose.css, which also notes the round()
+       dependency. */
     line-height: round(down, calc(var(--fs-sm) * var(--lh-mono)), 1px);
     overflow-wrap: anywhere;
     /* Only the reader's own words land here now (the longest real one is 480

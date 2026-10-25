@@ -251,14 +251,20 @@
     border-radius: var(--r-md);
     padding: 10px var(--sp-3);
     font: var(--weight-regular) var(--fs-sm) / var(--lh-mono) var(--family-mono);
-    /* A WHOLE-PIXEL line: the tokens give 20.15px (13px x 1.55), rounded
+    /* A WHOLE-PIXEL line (line height: D-6852, whole-pixel-mono-line;
+       containment: D-6437): the tokens give 20.15px (13px x 1.55), rounded
        down to 20px. A fractional line box makes the block's scroll range
        fractional (60 lines = 1228.44px, max scrollTop 988), and at some page
        offsets Chrome latches the first wheel at the block's end to the
-       block, which cannot move, so the wheel never reaches the transcript
-       (D-6437). Declared after the shorthand, which resets line-height.
+       block, which cannot move, so the wheel never reaches the transcript.
+       Declared after the shorthand, which resets line-height.
        Tracks --fs-sm and --lh-mono (each defined once, in tokens.css, for
-       every skin and width). WELL and .tool-ask-a declare the same value. */
+       every skin and width). WELL and .tool-ask-a declare the same value.
+       The rule depends on CSS round() and is emitted verbatim in the built
+       CSS. An engine without round() finds the var()-bearing declaration
+       invalid at computed-value time, so the line height then inherits from
+       .msg-assist (its prose line height, still fractional): the behaviour
+       before this rule, not a new defect. */
     line-height: round(down, calc(var(--fs-sm) * var(--lh-mono)), 1px);
     overflow-x: auto;
     max-height: var(--well-max);
