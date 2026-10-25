@@ -3254,7 +3254,7 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     expect(cardMax + compactMax).toBeLessThan(HARNESS_CONTEXT_SPILL_CHARS);
   });
 
-  it('costs no more than 4x the cheap PostToolUse arm with a card present, on a 200-row registry — its OWN ratio', () => {
+  it.runIf(process.env['CCRC_PERF'] === '1')('costs no more than 4x the cheap PostToolUse arm with a card present, on a 200-row registry — its OWN ratio (perf job only, D-6929)', () => {
     // D-1898's method (see the startup-arm test above for why an absolute ms
     // number is the wrong shape): the compact arm interleaved with the cheap
     // arm in ONE run, its own array, its own p95 — SUPERSEDED to median below
@@ -13397,7 +13397,7 @@ describe('history card reserve: the compact card renders HISTORY_CARD_MAX + 1 ch
 
 // ── The cheap PostToolUse arm's fork count: a load-independent cost pin (D-6929) ──
 // APPENDED, with NO new import line: the citation census cites this file by line.
-// The wall-clock budgets (150 ms, 4.2x, 1.5x) run in the `perf` CI job only (`CCRC_PERF=1`); this is what the required
+// The wall-clock budgets (150 ms, 4.2x, 4x, 1.5x) run in the `perf` CI job only (`CCRC_PERF=1`); this is what the required
 // suite keeps of the hook's cost: how many children the arm forks, counted under strace, which a loaded runner cannot move.
 // MEASURED on main at ece3dfbee (linux, bash 5.2, strace -f -e trace=clone,clone3,fork,vfork,execve, a fixture HOME with
 // the stub tmux, the p95 row's payload `{PostToolUse, Bash}`): the whole-run census came to EXPECTED_FORKS below (measured in a linux container, vitest on this file; the
@@ -13423,9 +13423,9 @@ describe('the cheap PostToolUse arm forks exactly this (D-6929)', () => {
   itLinux('a copy of the hook with one more `$(true)` on that arm adds exactly one (subshell), so the pin above goes red on it', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     const copy = path.join(home, 'session-hook-mutant.sh');
-    const marker = '\n[[ -n "$event" ]] || exit 0\n';
-    expect(src.includes(marker), 'the anchor the mutant is spliced at exists').toBe(true);
-    fs.writeFileSync(copy, src.replace(marker, '\n_pin_probe=$(true)' + marker));
+    const marker = '\n  PostToolUse)\n    state="working"\n';   // the PostToolUse case arm itself, after its state=working line
+    expect(src.split(marker).length, 'the anchor the mutant is spliced at exists, once').toBe(2);
+    fs.writeFileSync(copy, src.replace(marker, marker + '    _pin_probe=$(true)\n'));
     process.env['CCRC_HOOK_UNDER_PIN'] = copy;
     try { expect(forksOf()).toEqual({ ...EXPECTED_FORKS, '(subshell)': EXPECTED_FORKS['(subshell)']! + 1 }); } finally { delete process.env['CCRC_HOOK_UNDER_PIN']; }
   }, 60_000);
