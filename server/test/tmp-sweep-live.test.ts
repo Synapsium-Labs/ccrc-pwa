@@ -368,6 +368,17 @@ describe('the live arm, in shadow and armed', () => {
     expect(census().moved.map((m) => m.name)).toEqual(['four-days']);
   }, 120_000);
 
+  it('inodes alone at 93% are pressure (bytes at 10%): the sweep reads the inode table too', () => {
+    liveSession();
+    mk('four-days', { ageS: 4 * DAY });
+    sweep({ plusS: 7 * HOUR, env: { FAKE_DF_IPCT: '91' } });
+    expect(census().pressure, 'inodes at 91%').toBe(false);
+    expect(census().moved).toEqual([]);
+    sweep({ plusS: 7 * HOUR, env: { FAKE_DF_IPCT: '93' } });
+    expect(census().pressure, 'inodes at 93%, bytes at 10%').toBe(true);
+    expect(census().moved.map((m) => m.name)).toEqual(['four-days']);
+  }, 120_000);
+
   it('pressure is read from the filesystem, not assumed: 91% is not pressure, and an unreadable df is not either', () => {
     liveSession();
     mk('four-days', { ageS: 4 * DAY });
