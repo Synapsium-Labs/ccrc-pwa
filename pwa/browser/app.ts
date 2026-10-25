@@ -278,7 +278,9 @@ export function summarize(costs: readonly Cost[]): { readonly median: Cost; read
 
 /** Send each of `frames` to the newest socket on `path`, `gapMs` apart, and read Chrome's `TaskDuration` and
  *  `ScriptDuration` (`Performance.getMetrics`, seconds) before and after each window. One idle window of `gapMs` with
- *  no frame is measured first. Nothing runs in the page: the meter is a CDP session on the test side. */
+ *  no frame is measured first, on the page as it stands before `frames`: it is not matched to a page that has taken
+ *  them (an identical frame re-sent after many changes is measured against this one idle window). Nothing runs in the
+ *  page: the meter is a CDP session on the test side. */
 export async function frameCost(app: OpenedApp, path: string, frames: readonly unknown[], gapMs: number): Promise<FrameCost> {
   const cdp = await app.ctx.newCDPSession(app.page);
   try {

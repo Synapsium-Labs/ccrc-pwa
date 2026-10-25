@@ -35,12 +35,15 @@ import {
  *  later task (C9), so no mutant row claims this value. Measured on this box under a load average of 15 to 28, not on
  *  CI's runner, 80 rows, 15 changing frames 2 s apart (median TaskDuration per frame): before C6 (`pwa/src` at main)
  *  Refined 101.3 ms and Instrument 93.9 ms at 1920; after C6 108.9 and 92.4. The ceiling is about twice the after
- *  medians. What C6 does change, an identical frame, is gated below by `IDENTICAL_SCRIPT_RATIO`. */
+ *  medians. It does not check that the frames were applied: a page that dropped every frame would pass it (the ratio
+ *  case below requires its changing-frame median script above 1 ms). What C6 does change, an identical frame, is
+ *  gated below by `IDENTICAL_SCRIPT_RATIO`. */
 const FRAME_CEILING_MS = 220;
 
 /** The most an IDENTICAL frame's script time may be, as a share of the same page's changing-frame median script time.
- *  A ratio, not a number of milliseconds: both figures come from one page in one run, so the gate does not depend on
- *  the runner's speed. Measured on this box (load 12 to 28), after C6: 0.08 to 0.19 over three runs (Refined 2.2 / 17.0,
+ *  A ratio, not a number of milliseconds: both figures come from one page in one run, so the gate is meant not to
+ *  depend on the runner's speed. That is argued, not measured: CI's runner logs no ratio, and the revert has run only
+ *  on this box. Measured on this box (load 12 to 28), after C6: 0.08 to 0.19 over three runs (Refined 2.2 / 17.0,
  *  1.8 / 17.1 and 1.5 / 20.1 ms at 1920; Instrument 1.5 / 10.7, 1.8 / 9.5 and 1.4 / 9.0); before C6 (`pwa/src` at main):
  *  0.49 to 0.94 over two runs (Refined 8.8 / 17.9 and 7.0 / 13.8; Instrument 10.0 / 10.6 and 8.9 / 12.7),
  *  so a revert of C6's src reds the case. After C6 an identical frame makes the store keep the array it holds and set
