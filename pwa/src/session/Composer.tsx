@@ -36,12 +36,14 @@ export interface ComposerProps {
   /** Stop in the send slot. It reports `keycap`, the word the server already records for the on-screen control:
    *  W2 changes no wire (D-5471), so the type admits no new source. */
   onInterrupt?: (source: 'keycap') => void;
-  /** D-6326: an inline ask card is mounted, so Send (and Enter) is deferred LOCALLY: it keeps the text, makes no request
-   *  and shows the `dialog-open` sentence under the field until the question is answered. This is the client's own rule,
-   *  not the server's predicate: the server refuses with `dialog-open` only while the pane has a menu, so an approval
-   *  with no pane menu (fixture 7) would not be refused there, yet the card still holds the send while it is mounted.
-   *  It also holds through the reconnect gap, while `DialogSheet`'s held, read-only card is up (`askInline`
-   *  stays true then), so Send is held and Escape does not interrupt until the new connection decides. Stop is unaffected. */
+  /** D-6326: an inline ask card is mounted, so Send is deferred LOCALLY for as long as it is: the button is DISABLED
+   *  before any click, the `dialog-open` sentence shows under the field the whole time (with a draft or without one), and
+   *  the text stays in the field. `send()`'s own guard is defence behind that, because Enter in the field calls it
+   *  directly: it makes no request either. This is the client's own rule, not the server's predicate: the server refuses
+   *  with `dialog-open` only while the pane has a menu, so an approval with no pane menu (fixture 7) would not be refused
+   *  there, yet the card still holds the send while it is mounted. It also holds through the reconnect gap, while
+   *  `DialogSheet`'s held, read-only card is up (`askInline` stays true then), so Send is held and Escape does not
+   *  interrupt until the new connection decides. Stop is unaffected: it stays enabled beside a disabled Send. */
   askUp?: boolean;
 }
 
@@ -165,20 +167,13 @@ export function Composer({
     onInterrupt?.('keycap');
   };
 
-  // D-6326: the refusal's line shows once a send was tried with a question up, and ends with the question.
-  const [refused, setRefused] = useState(false);
-  useEffect(() => {
-    if (!askUp) setRefused(false);
-  }, [askUp]);
-
   const send = (): void => {
     if (!canSend) return;
     // A local deferral while the inline card is mounted, whatever the server would say about the pane: no request is made
-    // and the text stays in the field. The sentence reuses the server's `dialog-open` wording for the local line.
-    if (askUp) {
-      setRefused(true);
-      return;
-    }
+    // and the text stays in the field. The Send button is disabled for the same reason (R77 F1), so this guard is the
+    // defence for Enter, which calls `send()` directly. The sentence under the field is the surface's own and shows
+    // while the card is up, not after a try.
+    if (askUp) return;
     const text = value.trim();
     // An explicit `undefined` second argument still counts as a 2-arg call to
     // a caller matching on arity — only pass opts when there is one.
@@ -364,7 +359,7 @@ export function Composer({
               type="button"
               className="send-btn"
               aria-label="Send"
-              disabled={!canSend}
+              disabled={!canSend || askUp}
               onClick={send}
             >
               <span aria-hidden="true">↑</span>
@@ -373,7 +368,7 @@ export function Composer({
         )}
       </div>
 
-      {askUp && refused && (
+      {askUp && (
         <p className="composer-refusal" role="status">{sendErrorText('dialog-open')}</p>
       )}
 
