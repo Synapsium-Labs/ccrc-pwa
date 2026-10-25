@@ -34,6 +34,8 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { canonicalPython3 } from './ccdWsHelpers.js';
+import { verifyMarker } from '../../shared/mark.mjs';
 import { parse } from 'yaml';
 import { onBlock } from './workflowTrigger.js';
 import { workflowJobs, type WorkflowJob, type WorkflowStep } from './workflowJobs.js';
@@ -408,6 +410,28 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
       expect(line!.slice(0, 64), `${rel}: MANIFEST digest vs the extracted bytes`).toBe(sha256(join(dest, rel)));
       expect(sha256(join(dest, rel)), `${rel}: shipped bytes vs this checkout's`).toBe(sha256(join(REPO, rel)));
     }
+  });
+
+  // The stamp is written at INSTALL time (ccd-entry-install.py), so what a release proves is that the tree
+  // it carries INSTALLS a body that verifies: the extracted tarball's ccd, run through the shipped installer
+  // into a fixture HOME, reads ccrc-unmodified and the launcher accepts it.
+  it('the extracted tarball\'s ccd installs a body that verifies as ccrc-unmodified', () => {
+    const real = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
+    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py'] as const;
+    const home = mkTmp('build-release-ccd-stamp-');
+    const root = fixtureRepo(home, { tag: 'v1.2.3', files: Object.fromEntries(pair.map((rel) => [rel, real(rel)])) });
+    const out = join(home, 'out');
+    expect(runRelease(root, home, ['--out', out]).code).toBe(0);
+    const dest = join(home, 'extracted-stamp-install');
+    extract(join(out, 'ccrc-v1.2.3.tar.gz'), dest);
+    const box = mkTmp('build-release-ccd-stamp-box-');
+    const py = canonicalPython3();
+    const r = spawnSync(py, ['-IS', join(dest, 'ccd', 'ccd-entry-install.py'), 'install', dest, box],
+      { encoding: 'utf8', env: { HOME: box, PATH: process.env['PATH'] ?? '/usr/bin:/bin' } });
+    expect(r.status, r.stderr).toBe(0);
+    const installed = readFileSync(join(box, '.local', 'libexec', 'ccrc', 'ccd'), 'utf8');
+    expect(verifyMarker(installed)).toBe('ccrc-unmodified');
+    expect(verifyMarker(readFileSync(join(dest, 'ccd', 'ccd'), 'utf8')), 'the release tree itself carries no stamp').toBe('foreign');
   });
 
   // ── Stage 4, Task 6: the artifact carries its own identity ──────────────

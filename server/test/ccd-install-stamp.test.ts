@@ -72,3 +72,54 @@ describe('the installed ccd body (characterization: unchanged by the move)', () 
     expect(fs.readFileSync(entry(), 'utf8')).toContain(`BODY_SHA256 = '${sha(fs.readFileSync(body(), 'utf8'))}'`);
   });
 });
+
+describe('the committed ccd/ccd carries no generated stamp (install-time stamping)', () => {
+  const committed = fs.readFileSync(CCD, 'utf8');
+
+  it('has no line claiming provenance and no literal digest on line 2', () => {
+    expect(committed.split('\n').filter((l) => l.startsWith('# ccrc:generated'))).toEqual([]);
+    expect(verifyMarker(committed)).toBe('foreign');
+    expect(committed.split('\n')[0]).toBe('#!/usr/bin/env bash');
+  });
+
+  it('keeps line 2 as one fixed placeholder, so the installed copy has the committed copy\'s line numbers', () => {
+    expect(committed.split('\n')[1]).toBe('# ccrc:stamp-at-install — written into the installed copy by ccd/ccd-entry-install.py; never committed');
+  });
+
+  it('install output carries a FRESH marker: the digest of the installed body minus its own marker line', () => {
+    plantTree();
+    expect(install().code).toBe(0);
+    const text = fs.readFileSync(body(), 'utf8');
+    const lines = text.split('\n');
+    expect(lines[0]).toBe('#!/usr/bin/env bash');
+    expect(lines[1]).toMatch(/^# ccrc:generated 1 sha256=[0-9a-f]{64}$/);
+    expect(lines.length, 'the marker replaced the placeholder in place').toBe(committed.split('\n').length);
+    expect(text).toBe(markGenerated(committed.split('\n').filter((_l, i) => i !== 1).join('\n')));
+    expect(verifyMarker(text)).toBe('ccrc-unmodified');
+  });
+
+  it('a body edit changes the installed marker with no committed digest to restamp', () => {
+    plantTree();
+    expect(install().code).toBe(0);
+    const before = fs.readFileSync(body(), 'utf8').split('\n')[1];
+    plantTree(`${fs.readFileSync(CCD, 'utf8')}# one more line\n`);
+    expect(install().code).toBe(0);
+    const after = fs.readFileSync(body(), 'utf8');
+    expect(after.split('\n')[1]).not.toBe(before);
+    expect(verifyMarker(after)).toBe('ccrc-unmodified');
+  });
+
+  it('stamps a body with no placeholder by inserting after the shebang, exactly as markGenerated does', () => {
+    const plain = '#!/usr/bin/env bash\necho fixture\n';
+    plantTree(plain);
+    expect(install().code).toBe(0);
+    expect(fs.readFileSync(body(), 'utf8')).toBe(markGenerated(plain));
+  });
+
+  it('re-stamps a body that still carries a legacy marker, hashing the body without it', () => {
+    const legacy = markGenerated('#!/usr/bin/env bash\necho fixture\n').replace(/sha256=[0-9a-f]{64}/, `sha256=${'0'.repeat(64)}`);
+    plantTree(legacy);
+    expect(install().code).toBe(0);
+    expect(fs.readFileSync(body(), 'utf8')).toBe(markGenerated('#!/usr/bin/env bash\necho fixture\n'));
+  });
+});
