@@ -310,8 +310,9 @@ If any item contradicts what you have measured at your tip, stop and ask me befo
 ## As built (2026-10-25)
 
 Built on `origin/main` at `d12739bd6`: the plan's five tasks, one commit each after the plan's copy, then one commit
-applying the coordinator's mid-wave corrections above, all ten. `origin/main` gained #1405 meanwhile; the branch merges
-with it cleanly, and none of #1430, #1406, #1398 or #1390 had landed when this was written.
+applying the coordinator's mid-wave corrections above, all ten. #1406 landed before the push, so, as the corrections'
+sequencing line says, `origin/main` was merged in at `eacd79233` (no conflicts), growth re-measured against the new
+merge-base, and the server gates re-run on the merged tree. #1430, #1398 and #1390 had not landed.
 
 **What each deviation became.**
 
@@ -368,8 +369,11 @@ under `ulimit -u (threads + 1500)` and `timeout -k 10 600`; each file was restor
 | M5 the sheet posts on open | sheet "reads the ask once", "Lift cap posts once", "Cancel lifts nothing" |
 | M6 the GET composes its own ask, findings `unnamed` | run-routes "answers the refusal's own ask" |
 
-**Growth.** Net code lines against the merge-base, measured with `growthCheck.ts`'s `netGrowth`:
+**Growth.** Net code lines against the merge-base, measured with `growthCheck.ts`'s `netGrowth` after the merge:
 `server/src/coord/store.ts` +19, `server/src/coord/routes.ts` +16, `pwa/src/lib/api.ts` +3.
 
 **Suite.** The first full PWA run after Task 4 was red in one file, `shape-census` (the band's copied rule); grouping
-the rule made it green.
+the rule made it green. The second full run, after the corrections, was red in one file, `contrast.test.ts`, on a
+per-case `Test timed out in 5000ms` at a load near 35. Re-run alone it timed out on other cases twice, passed all 295
+with a 30 s case budget, then passed all 295 alone at the default. On the merged tree, `typecheck-tests` timed out on
+three cases in the gate batch and passed all 12 re-run alone.
