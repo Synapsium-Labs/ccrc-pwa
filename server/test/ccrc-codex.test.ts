@@ -1,7 +1,7 @@
 // `ccd/ccrc`'s Codex lane library (Plan 2b-2) — what every `ccrc codex` verb,
 // the `ccrc-codex` launcher and the install spine read a lane THROUGH. This
 // file owns what the library ANSWERS; the verbs that act on those answers are
-// the lifecycle describes below the library's (Task 5 appends them).
+// in ccrc-codex-lifecycle.test.ts and ccrc-codex-bridge.test.ts (D-6878).
 //
 // ── HOW IT IS CONTAINED ───────────────────────────────────────────────────
 //  1. HOME is a `mkTmp` directory. ccrc is SOURCED from `<home>/ccrc/ccd/ccrc`
