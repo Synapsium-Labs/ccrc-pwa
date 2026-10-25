@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { eventsOf, readJournal, refusalsOf } from './lifecycleHelpers.js';
 import { holdCwd } from './wsExpireFixture.js';
 import { LC_REFUSAL_WORD, isLcRefusalToken } from '../../shared/api.js';
@@ -316,7 +316,7 @@ describe('the two TERMINAL words are declared, each with a sentence true under a
 });
 
 describe('the source: three terminal words journaled, and no line in a harvested shape', () => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   const b = src.indexOf('WS-AUDIT-COLLECT ──');
   const e = src.indexOf('WS-AUDIT-COLLECT-CLOSE ──');
   const block = b > -1 && e > b ? src.slice(b, e) : '';

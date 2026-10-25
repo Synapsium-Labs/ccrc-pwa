@@ -23,7 +23,7 @@ import {
   ACT_NO_DOCUMENT, COLLECTED, DAY, DIE, MIN, NO_DOCUMENT, OBSERVE, PASS, T1, T2, UNREADABLE, WALL0, collectable,
   failedAct, refusedAct, step, unmeasured, verdict,
 } from './collectAnswers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { codeOnly } from './sourceScan.js';
 
 const C = CHILD_RECLAIM_DEFER_CEILING_MS;
@@ -58,7 +58,7 @@ const TERMINAL_WORDS = COLLECT_VERDICT_WORDS.filter((w) => COLLECT_VERDICT_TABLE
 
 describe('the verdict table is ccd\'s collector refusal words, and agrees with the refusal table', () => {
   it('holds exactly the words ccd\'s `_ws_collect_refuse` is called with, in both directions', () => {
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const words = [...new Set([...src.matchAll(/\b_ws_collect_refuse ([a-z-]+) /g)].map((m) => m[1]!))].sort();
     expect(words.length, 'a floor: the scan reads something').toBeGreaterThanOrEqual(9);
     expect([...COLLECT_VERDICT_WORDS].sort()).toEqual(words);

@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { tl, GRAPH, type GraphContent } from './compactCardFixtures.js';
 import { isScratchSlug } from './scratchSlugs.js';
 import { hasCommit, isAncestorOfHead, isShallow, readAtSha } from './frozenSource.js';
@@ -2024,7 +2024,7 @@ describe('the co-tenant subject', () => {
   // and can source nothing.
   it('the hook, ccd and shared agree on the supervised-freshness window', () => {
     const hook = fs.readFileSync(path.resolve(__dirname, '../../ccd/session-hook.sh'), 'utf8');
-    const ccd = fs.readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const api = fs.readFileSync(path.resolve(__dirname, '../../shared/api.ts'), 'utf8');
     const h = /CCRC_FRESH_S=(\d+)/.exec(hook);
     const c = /now - sup >= 0 && now - sup < (\d+)/.exec(ccd);
@@ -4294,7 +4294,7 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     // allows exactly one file in the test tree to name the ccd script, and it
     // is `ccdWsHelpers.ts`. (Measured — this line spelled it directly for one
     // commit and reds that rule in chunk 03.)
-    const ccdSrc = fs.readFileSync(CCD, 'utf8');
+    const ccdSrc = ccdSource();
     const specSrc = fs.readFileSync(path.resolve(__dirname,
       '../../docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md'), 'utf8');
     // CALL SITES, not the definition: the trailing quote is what separates
@@ -4539,7 +4539,7 @@ describe('the compaction card — PreCompact source order (spec §3.1)', () => {
 // are asserted rather than merely edited.
 describe('the compaction card — the sentences D-2605 falsifies (spec §3.4)', () => {
   const hook = (): string => fs.readFileSync(HOOK, 'utf8');
-  const ccd = (): string => fs.readFileSync(CCD, 'utf8');
+  const ccd = (): string => ccdSource();
 
   /** Every comment BLOCK (a run of consecutive `#` lines) that carries
    *  `needle` and is NOT marked as a retraction.
@@ -4911,11 +4911,15 @@ describe('the compaction card — the two documents say what the code does (spec
   // record this project keeps rather than deletes.
   const SHELL_CORPUS = (): Array<[string, string]> => {
     const dir = path.resolve(__dirname, '../../ccd');
-    return fs.readdirSync(dir, { withFileTypes: true })
+    // ccd's library, loaded at ccd's foot (D-6913), is ccd's code: its definitions resolve the references
+    // the moved comments and the comments left behind make, and its own comments are held to the same rule.
+    const libs = fs.readdirSync(path.join(dir, 'lib')).filter((n) => n.endsWith('.sh'))
+      .map((n) => [`lib/${n}`, fs.readFileSync(path.join(dir, 'lib', n), 'utf8')] as [string, string]);
+    return [...fs.readdirSync(dir, { withFileTypes: true })
       .filter((e) => e.isFile())
-      .map((e) => [e.name, fs.readFileSync(path.join(dir, e.name), 'utf8')] as [string, string]);
+      .map((e) => [e.name, fs.readFileSync(path.join(dir, e.name), 'utf8')] as [string, string]), ...libs];
   };
-  const SCANNED = ['session-hook.sh', 'ccd'];
+  const SCANNED = ['session-hook.sh', 'ccd', 'lib/disk-retention.sh'];
   /** NOT FUNCTIONS, and each is here for a stated reason rather than because it
    *  was in the way. All three are declared by the GENERATED roster projection
    *  (`~/.ccrc/accounts.sh`, `shared/generate.mjs`), which this repo builds but
@@ -6640,7 +6644,7 @@ describe('the compaction card — every canonical write is on the list (spec §5
   ];
 
   const bashCorpus = (): Array<readonly [string, string]> =>
-    [['hook', fs.readFileSync(HOOK, 'utf8')], ['ccd', fs.readFileSync(CCD, 'utf8')]] as const;
+    [['hook', fs.readFileSync(HOOK, 'utf8')], ['ccd', ccdSource()]] as const;
 
   const entryOf = (s: Site): number[] =>
     ALLOW.filter((e) => e.file === s.file && e.fn === s.fn && e.cmd === s.cmd && s.text.includes(e.needle)).map((e) => e.id);

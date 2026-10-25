@@ -30,7 +30,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs, { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-tmuxsrv-'); });
@@ -258,7 +258,7 @@ EOS
     // ccd's three other flock sites pass `-n` on purpose. This one must not:
     // a refused loser proceeds immediately, which is precisely how 15 losers
     // raced ahead of the scope winner at boot.
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const line = src.split('\n').filter((l) => l.includes('flock -w') && l.includes('TMUX_SERVER_LOCK_WAIT'));
     expect(line, 'the tmux-server lock must be a BOUNDED BLOCKING acquire').toHaveLength(1);
     expect(line[0], 'a `-n` acquire here reproduces the boot race the lock exists to close')
@@ -299,7 +299,7 @@ describe('the old shape is gone from the CODE, and stays named in the comments',
   // two red runs while it was being written. Full-line `#` is enough here:
   // both greps below are checked against the real file, where every surviving
   // mention sits on its own comment line.
-  const codeLines = readFileSync(CCD, 'utf8').split('\n')
+  const codeLines = ccdSource().split('\n')
     .filter((l) => !l.trim().startsWith('#'));
 
   it('`_tmux_server_ensure` is not called or defined anywhere in ccd', () => {

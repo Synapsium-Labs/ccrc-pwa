@@ -17,6 +17,7 @@
 // file's stamp; it never adopts, and it never launders a generator's output.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,6 +54,41 @@ describe('ccrc restamp <file>', () => {
     expect(after).toBe(markGenerated(staleStamped()));
     expect(after.split('\n')[0], 'the shebang stays physically first').toBe('#!/usr/bin/env bash');
     expect(statSync(f).mode & 0o777, 'the mode survives').toBe(0o755);
+  });
+
+  it('rewrites the pin on ccd\'s library from the sibling lib/ file before it stamps (D-6913)', () => {
+    const dir = mkTmp('ccrc-restamp-');
+    mkdirSync(join(dir, 'lib'));
+    const lib = '# the library\necho one\n';
+    const pin = (text: string): string => createHash('sha256').update(text).digest('hex');
+    const f = join(dir, 'ccd');
+    writeFileSync(f, markGenerated(`${BODY}__CCD_LIB_SHA256=${pin(lib)}\n`), { mode: 0o755 });
+    writeFileSync(join(dir, 'lib', 'disk-retention.sh'), lib.replace('one', 'two'));   // the library moved on; the pin did not
+    expect(verifyMarker(readFileSync(f, 'utf8'))).toBe('ccrc-unmodified');
+    const r = run([f]);
+    expect(r.code, r.stderr).toBe(0);
+    const after = readFileSync(f, 'utf8');
+    expect(/^__CCD_LIB_SHA256=([0-9a-f]{64})$/m.exec(after)?.[1], 'the pin names the library as it stands').toBe(pin(lib.replace('one', 'two')));
+    expect(verifyMarker(after), 'and the stamp covers the new pin').toBe('ccrc-unmodified');
+    // Run again: nothing moves.
+    expect(run([f]).stdout).toContain('already current');
+  });
+
+  it('REFUSES a library that does not end in exactly one newline or carries a NUL, and writes nothing (D-6913)', () => {
+    // ccd hashes the library as bash reads it (NULs and trailing newlines dropped, one newline added back), the pin and the
+    // publisher hash the raw bytes: only a file ending in exactly one newline with no NUL hashes the same to all three.
+    for (const lib of ['# the library\necho one', '# the library\necho one\n\n', '# the library\necho\0 one\n']) {
+      const dir = mkTmp('ccrc-restamp-');
+      mkdirSync(join(dir, 'lib'));
+      const f = join(dir, 'ccd');
+      const body = markGenerated(`${BODY}__CCD_LIB_SHA256=${'0'.repeat(64)}\n`);
+      writeFileSync(f, body, { mode: 0o755 });
+      writeFileSync(join(dir, 'lib', 'disk-retention.sh'), lib);
+      const r = run([f]);
+      expect(r.code, JSON.stringify(lib)).not.toBe(0);
+      expect(r.stderr).toContain('must end in exactly one newline and contain no NUL byte');
+      expect(readFileSync(f, 'utf8'), 'nothing was written').toBe(body);
+    }
   });
 
   it('leaves a current stamp byte-identical and says so', () => {

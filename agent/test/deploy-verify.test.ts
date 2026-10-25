@@ -1735,7 +1735,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(body, 'no scp: neither active inode is overwritten in place').not.toContain('SCP');
     // BOTH halves are backed up before the rsync --delete and the publication.
     const rsyncAt = deploySh.indexOf('agent shared deploy ccd "$BOX":ccrc/');
-    for (const backup of ['cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd;', 'cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body;']) {
+    for (const backup of ['cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd;', 'cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body;',
+      'cp -a ~/.local/libexec/ccrc/lib/disk-retention.sh ~/ccrc-backups/$TS/ccd-lib-disk-retention.sh;']) {
       expect(deploySh.indexOf(backup), `not backed up: ${backup}`).toBeGreaterThan(-1);
       expect(deploySh.indexOf(backup), `backed up only after the rsync: ${backup}`).toBeLessThan(rsyncAt);
     }
@@ -1753,6 +1754,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       const home = mkTmp('ccrc-agent-ccdpair-');
       mkdirSync(path.join(home, 'ccrc', 'ccd'), { recursive: true });
       for (const f of ['ccd', 'ccd-entry.py', 'ccd-entry-install.py']) cpSync(path.join(repoCcd, f), path.join(home, 'ccrc', 'ccd', f));
+      // The library the body pins and the publisher places first (D-6913).
+      mkdirSync(path.join(home, 'ccrc', 'ccd', 'lib'), { recursive: true });
+      cpSync(path.join(repoCcd, 'lib', 'disk-retention.sh'), path.join(home, 'ccrc', 'ccd', 'lib', 'disk-retention.sh'));
       return home;
     };
 
@@ -1762,7 +1766,11 @@ describe('the verification is actually wired into the deploy, and can observe a 
       expect(r.status, String(r.stderr)).toBe(0);
       const out = String(r.stdout);
       expect(out.indexOf('body published'), 'the body is published').toBeGreaterThan(-1);
-      expect(out.indexOf('body published'), 'body FIRST, launcher LAST').toBeLessThan(out.indexOf('launcher published'));
+      expect(out.indexOf('library published'), 'the body\'s library is published before the body that pins it').toBeGreaterThan(-1);
+      expect(out.indexOf('library published')).toBeLessThan(out.indexOf('body published'));
+      expect(out.indexOf('body published'), 'body before the launcher, launcher LAST').toBeLessThan(out.indexOf('launcher published'));
+      expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'disk-retention.sh')).equals(readFileSync(path.join(repoCcd, 'lib', 'disk-retention.sh'))),
+        'the library is the tree\'s').toBe(true);
       const entry = path.join(home, '.local', 'bin', 'ccd');
       const bodyPath = path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
       const shebang = readFileSync(entry, 'utf8').split('\n')[0]!;

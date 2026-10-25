@@ -12,7 +12,7 @@ import {
   COLLECT_ASIDE_NAME_RE, COLLECT_POPULATION_MAX, collectForgets, collectPopulation, parseCollectAsideName,
   type CollectListing, type CollectPopulation,
 } from '../src/collectLane.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const listed = (...names: string[]): CollectListing => ({ kind: 'listed', names });
 const ABSENT: CollectListing = { kind: 'absent' };
@@ -24,7 +24,7 @@ const asideNames = (n: number): string[] => Array.from({ length: n }, (_, k) => 
 /** The ONE `re='…'` inside ccd's `_ws_collect_aside_id`, as written there (`collect-population.test.ts`'s
  *  `ccdRecordGrammar`, read for this function). */
 const ccdAsideGrammar = (): string => {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   const at = src.indexOf('\n_ws_collect_aside_id() {');
   if (at < 0) throw new Error('_ws_collect_aside_id not found in ccd/ccd');
   const end = src.indexOf('\n}\n', at);

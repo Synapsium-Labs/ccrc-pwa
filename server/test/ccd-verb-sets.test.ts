@@ -14,7 +14,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
-import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, CCD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
 import { CCD_ARGV_SAMPLES } from './ccdArgvSamples.js';
 import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
@@ -127,7 +127,7 @@ describe('ccd\'s four verb lists are one set (D-6051, ARCH-23)', () => {
 
   beforeAll(() => {
     h = makeCcdHarness('ccrc-ccd-verb-sets-');
-    block = dispatcherBlock(fs.readFileSync(CCD, 'utf8'));
+    block = dispatcherBlock(ccdSource());
     labels = armLabels(block);
     caps = h.sh('cmd_caps').split('\n').filter(Boolean);
     usage = usageVerbs(h);

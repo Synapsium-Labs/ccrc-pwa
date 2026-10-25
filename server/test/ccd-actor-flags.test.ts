@@ -57,7 +57,7 @@
 // `_lc_obs`.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, mkdirSync } from 'node:fs';
-import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { readJournal } from './lifecycleHelpers.js';
 import { stubFn } from './ccdStub.js';
 
@@ -193,7 +193,7 @@ describe('the closed set is spelled exactly twice in ccd', () => {
     // the drift shape `wsaudit.test.ts` exists to catch, one language over: a
     // fifth surface word added to `_ws_unsupervise` and to four of the five
     // verbs is green everywhere and wrong on one verb forever.
-    const hits = readFileSync(CCD, 'utf8').split('\n')
+    const hits = ccdSource().split('\n')
       .filter((l) => l.includes('cli|pwa|agent|ccd'));
     expect(hits, `the closed set is spelled ${hits.length} times:\n${hits.join('\n')}`)
       .toHaveLength(2);
@@ -352,7 +352,7 @@ describe('ws-restore takes the same three flags, and refuses through _lc_refuse'
     // `_lc_refuse`, so that a destroyed-or-refused act leaves a record. This
     // assertion is the local half, so the failure names THIS task's block
     // rather than arriving as a scanner red four files away.
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('\ncmd_ws_restore() {');
     const to = src.indexOf('\ncmd_ws_attic() {', from);
     expect(from, 'cmd_ws_restore was not found').toBeGreaterThan(-1);
@@ -646,7 +646,7 @@ describe('ws-rename answers flag refusals the way it answers every other refusal
     // reusing `bad-args` needs nothing. ccd's own note above the verb
     // (`THE TOKENS ARE INLINE LITERALS`) records the same rule for the
     // helper-vs-literal question.
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const tokens = new Set<string>();
     for (const m of src.matchAll(/_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) tokens.add(m[1]!);
     for (const m of src.matchAll(/"refused":"([a-zA-Z0-9-]+)"/g)) tokens.add(m[1]!);

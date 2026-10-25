@@ -389,7 +389,8 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     // The third member is the program that renders and publishes the pair on
     // the box (`ccrc install`/`update` and `deploy.sh` both run it from the
     // tree), so a release without it installs nothing at all.
-    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py'] as const;
+    // The fourth is the library the body pins and loads (D-6913): a release without it installs a ccd that refuses every start.
+    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'ccd/lib/disk-retention.sh'] as const;
     const home = mkTmp('build-release-ccd-pair-');
     const root = fixtureRepo(home, {
       tag: 'v1.2.3', files: Object.fromEntries(pair.map((rel) => [rel, real(rel)])),

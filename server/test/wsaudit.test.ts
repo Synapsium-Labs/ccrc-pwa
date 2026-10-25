@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { parseAudit, parseReap, refusalSentence, SENTENCES } from '../src/wsaudit.js';
 import { reviveWsAudit } from '../../shared/api.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 
 /**
  * The refusal-token <-> copy linkage, required by Task 13. `ccd` answers
@@ -51,7 +51,7 @@ import { CCD } from './ccdWsHelpers.js';
  * reason `wsaudit.ts` never sees them.
  */
 describe('refusal-token <-> sentence linkage (ccd source <-> wsaudit.ts SENTENCES)', () => {
-  const ccdSrc = readFileSync(CCD, 'utf8');
+  const ccdSrc = ccdSource();
 
   const tokens = new Set<string>();
   for (const m of ccdSrc.matchAll(/_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) tokens.add(m[1]!);

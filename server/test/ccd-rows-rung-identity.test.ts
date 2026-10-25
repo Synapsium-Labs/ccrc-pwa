@@ -18,7 +18,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 import {
   CHILD_BRANCH, CHILD_ID, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, type Child, type LadderAnswer,
 } from './childReclaimFixture.js';
@@ -669,7 +669,7 @@ describe('the mount table has exactly two readers, both through its one seam (R1
   it('one literal: /proc/self/mountinfo stands in ccd’s code only in the seam and in `_carry_py`’s own CCD_MOUNTINFO reader', () => {
     const holders = new Set<string>();
     let fn = '';
-    for (const l of fs.readFileSync(CCD, 'utf8').split('\n')) {
+    for (const l of ccdSource().split('\n')) {
       const m = CCD_FUNCTION_DEF.exec(l);
       if (m) fn = m[1]!;
       if (bashCodeOf(l).includes('/proc/self/mountinfo')) holders.add(fn);

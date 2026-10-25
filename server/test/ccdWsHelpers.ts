@@ -25,6 +25,27 @@ const HOME_ABLE_WRAPPERS: readonly string[] =
 
 export const CCD = path.resolve(__dirname, '../../ccd/ccd');
 
+/** The library `CCD` loads at its foot (D-6913): the fleet disk-retention code, a separate file in
+ *  `ccd/lib/` that the body finds beside itself, in the repository and in the installed layout alike. */
+export const CCD_LIB = path.resolve(__dirname, '../../ccd/lib/disk-retention.sh');
+
+let ccdSourceMemo: string | undefined;
+/** ccd's whole shell source as ONE text (D-6913): `ccd/ccd` with each `# @ccd-lib:<id>` pointer line replaced
+ *  by that region of the library, back where the code sat before it moved. Every test that SCANS ccd's text reads it through
+ *  here, so a moved region stays under the same scanner, the same marker pair and the same ordering; a bare
+ *  `readFileSync(CCD, 'utf8')` would read ccd without the moved code, and a scan would pass over less than it did.
+ *  `ccd-lib-load.test.ts` holds that no test reads it bare. Tests about the FILES (the stamp, the digest, the install)
+ *  read the real bytes of `CCD` and `CCD_LIB` themselves. Only the pointer lines differ from the pre-move text. */
+export function ccdSource(): string {
+  if (ccdSourceMemo !== undefined) return ccdSourceMemo;
+  const main = fs.readFileSync(CCD, 'utf8');
+  if (!fs.existsSync(CCD_LIB)) return (ccdSourceMemo = main);
+  const parts = fs.readFileSync(CCD_LIB, 'utf8').split(/^# @ccd-lib:(\w+)\n/m);
+  const regions = new Map<string, string>();
+  for (let i = 1; i + 1 < parts.length; i += 2) regions.set(parts[i]!, parts[i + 1]!.replace(/\n+$/, ''));
+  return (ccdSourceMemo = main.replace(/^# @ccd-lib:(\w+)\b.*$/gm, (line, id: string) => regions.get(id) ?? line));
+}
+
 /** The coordination client, beside `ccd` and installed the same way. Spelled
  *  here rather than joined at each call site for the reason
  *  `single-definition.test.ts` exists — its scan is TEXTUAL, so a second
@@ -98,6 +119,11 @@ export function installDirectEntry(home: string, opts: { body?: string | Buffer 
   fs.rmSync(body, { force: true });
   fs.writeFileSync(body, bodyBytes, { mode: 0o644 });
   fs.chmodSync(body, 0o644);
+  // The library the body loads (D-6913), where the installer puts it: `lib/` beside the body.
+  if (fs.existsSync(CCD_LIB)) {
+    fs.mkdirSync(path.join(libexec, 'lib'), { recursive: true });
+    fs.copyFileSync(CCD_LIB, path.join(libexec, 'lib', 'disk-retention.sh'));
+  }
   fs.rmSync(entry, { force: true });
   if (!fs.existsSync(CCD_ENTRY)) {
     fs.writeFileSync(entry, bodyBytes, { mode: 0o755 });

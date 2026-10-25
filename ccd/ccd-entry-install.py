@@ -54,6 +54,26 @@
 # buffered for a stdout whose reader has gone cannot fail Python's shutdown
 # flush a second time — which would replace the status with 120.
 #
+# THE LIBRARY (D-6913, GitHub #1279). The body loads one more file,
+# `lib/disk-retention.sh`, from the `lib/` directory beside it, and pins that
+# file's SHA-256 in its own text (`__CCD_LIB_SHA256`). `install` publishes it
+# FIRST, by the same stage-and-rename as the body, and refuses a tree whose
+# library is not the one its body pins BEFORE anything moves: a body published
+# ahead of a library it cannot verify would refuse every ccd start. A body that
+# stands from before the library existed does not read it, so publishing it first
+# changes nothing for a ccd start until the new body lands. A standing body that
+# already loads a library pins ITS digest: once a different library is renamed in,
+# that body refuses every start (lib-digest) until the new body lands, so a run
+# that stops between the two leaves ccd refusing until a re-run converges the pair
+# or the previous library is restored (ccrc update's backup carries it as
+# ccd-lib-disk-retention.sh).
+#
+# The library must end in exactly one newline and carry no NUL byte. The body
+# hashes the file as bash reads it (`$(<file)` drops NULs and every trailing
+# newline; the body adds one back), while this publisher and `ccrc restamp` hash
+# the raw bytes: only such a file reads as the same bytes to all three, so any
+# other file is refused here before anything moves.
+#
 # STANDARD LIBRARY ONLY. Nothing here trusts the environment: `-I` already
 # ignores every PYTHON* variable, and the paths it writes come from argv.
 import sys
@@ -75,6 +95,7 @@ import tempfile  # noqa: E402
 SHEBANG_MAX = 127
 SHEBANG_FLAGS = ' -IS'
 
+LIB_PIN = re.compile(rb'^__CCD_LIB_SHA256=([0-9a-f]{64})$', re.M)
 PLACEHOLDER_PYTHON = '@CCRC_' + 'PYTHON3@'
 PLACEHOLDER_DIGEST = '@CCRC_' + 'CCD_SHA256@'
 RESIDUE = re.compile(r'@CCRC_[A-Z0-9_]+@')
@@ -100,6 +121,8 @@ BODY_SOURCE = 'ccd/ccd'
 TEMPLATE_SOURCE = 'ccd/ccd-entry.py'
 ENTRY_DEST = '.local/bin/ccd'
 BODY_DEST = '.local/libexec/ccrc/ccd'
+LIB_SOURCE = 'ccd/lib/disk-retention.sh'
+LIB_DEST = '.local/libexec/ccrc/lib/disk-retention.sh'
 
 
 # THE BODY'S PROVENANCE STAMP IS WRITTEN HERE, AT INSTALL TIME, NEVER COMMITTED.
@@ -421,11 +444,22 @@ def install(tree, home):
     template = read_regular(os.path.join(tree, *TEMPLATE_SOURCE.split('/'))).decode('utf-8')
     digest = hashlib.sha256(body_data).hexdigest()
     entry_data = render(template, python, digest)
+    lib_data = read_regular(os.path.join(tree, *LIB_SOURCE.split('/')))
+    if b'\0' in lib_data or not lib_data.endswith(b'\n') or lib_data.endswith(b'\n\n'):
+        raise Refused('%s must end in exactly one newline and contain no NUL byte: the body hashes the file as bash reads it,'
+                      ' which drops NULs and trailing newlines, so any other file is one the body would refuse; fix the file,'
+                      ' then run `ccrc restamp ccd/ccd` in the source tree' % LIB_SOURCE)
+    pins = LIB_PIN.findall(body_data)
+    if len(pins) != 1 or pins[0].decode('ascii') != hashlib.sha256(lib_data).hexdigest():
+        raise Refused('%s is not the library %s pins (%d pin line(s)): a body published ahead of a library it cannot verify'
+                      ' would refuse every ccd start; run `ccrc restamp ccd/ccd` in the source tree' % (LIB_SOURCE, BODY_SOURCE, len(pins)))
 
     entry_dest = os.path.join(home, *ENTRY_DEST.split('/'))
     body_dest = os.path.join(home, *BODY_DEST.split('/'))
+    lib_dest = os.path.join(home, *LIB_DEST.split('/'))
     bindir = os.path.dirname(entry_dest)
     libexec = os.path.dirname(body_dest)
+    libdir = os.path.dirname(lib_dest)
     # EVERY REFUSAL FIRST, before anything is created, repaired, staged or
     # moved (review 216, F4). THE LAUNCHER MUST FIND THIS BODY (D-3699): asked
     # exactly as the launcher will ask it, started by its installed path —
@@ -436,18 +470,20 @@ def install(tree, home):
     if derived is None or os.path.realpath(derived) != os.path.realpath(body_dest):
         raise Refused('%s resolves to %s, whose launcher would look for its body at %s, not at %s — this'
                       ' ~/.local layout cannot host the direct entry' % (entry_dest, os.path.realpath(entry_dest), derived, body_dest))
-    for dest in (body_dest, entry_dest):
+    for dest in (lib_dest, body_dest, entry_dest):
         destination_kind(dest)
-    for d in (bindir, libexec):
+    for d in (bindir, libexec, libdir):
         os.makedirs(d, mode=0o755, exist_ok=True)
     sweep(bindir, STAGE_RE, False)
     sweep(libexec, STAGE_RE, False)
+    sweep(libdir, STAGE_RE, False)
     sweep(os.path.join(home, '.local'), SELFTEST_RE, True)
 
+    lib_state = converged(lib_dest, lib_data, BODY_MODE)
     body_state = converged(body_dest, body_data, BODY_MODE)
     entry_state = converged(entry_dest, entry_data, ENTRY_MODE)
 
-    staged_body = staged_entry = None
+    staged_lib = staged_body = staged_entry = None
     moved = []
     # What this run has PROVED stands at each destination, so a failure after
     # a half moved names the state it left. The body is proved once its rename
@@ -457,6 +493,7 @@ def install(tree, home):
     body_proved = False
     entry_proved = entry_state == 'same'
     try:
+        staged_lib = stage(libdir, lib_data, BODY_MODE) if lib_state == 'differ' else None
         staged_body = stage(libexec, body_data, BODY_MODE) if body_state == 'differ' else None
         staged_entry = stage(bindir, entry_data, ENTRY_MODE) if entry_state == 'differ' else None
         # The pair the self-test runs is the pair that will be live: each half
@@ -465,9 +502,21 @@ def install(tree, home):
         # the kernel has started its launcher (review 216, F4).
         self_test(home, staged_entry or entry_dest, staged_body or body_dest,
                   live=tuple(d for d, s in ((entry_dest, staged_entry), (body_dest, staged_body)) if s is None))
-        if staged_body is None and staged_entry is None and body_state == entry_state == 'same':
-            say('converged — the launcher and the body already carry these bytes')
+        if staged_lib is None and staged_body is None and staged_entry is None and lib_state == body_state == entry_state == 'same':
+            say('converged — the launcher, the body and the library already carry these bytes')
             return 0
+        # The library goes FIRST: the body that lands next pins it. A standing body from before the library does not read it;
+        # one that loads a library pins the old one and refuses starts until the new body lands (see THE LIBRARY above).
+        if lib_state == 'mode':
+            repair_mode(lib_dest, BODY_MODE)
+            say_repaired(lib_dest, BODY_MODE)
+        if staged_lib is not None:
+            kind = destination_kind(lib_dest)
+            os.replace(staged_lib, lib_dest)
+            staged_lib = None
+            moved.append('library')
+            postcondition(lib_dest, lib_data, BODY_MODE, 'library')
+            say('library published at %s (replaced: %s)' % (lib_dest, kind))
         if body_state == 'mode':
             repair_mode(body_dest, BODY_MODE)
             say_repaired(body_dest, BODY_MODE)
@@ -495,7 +544,13 @@ def install(tree, home):
     except (OSError, Refused) as e:
         if not moved:
             raise
-        if 'launcher' in moved and entry_proved:
+        if moved == ['library']:
+            state = ('the library was renamed into place (re-measured or not: a re-run says); the body and the launcher did not'
+                     ' move. A body that stands from before the library does not read it, and one that pins this very library'
+                     ' starts as it did; but a standing body that pins a DIFFERENT library now refuses every ccd start'
+                     ' (lib-digest) until the new body lands. Re-run this install to converge the pair, or restore the'
+                     ' previous library (ccrc update\'s backup carries it as ccd-lib-disk-retention.sh)')
+        elif 'launcher' in moved and entry_proved:
             state = ('the launcher was renamed into place and re-measured as the file just staged, so what stands'
                      ' at %s is the launcher this run self-tested and the pair stands as staged; only the run\'s'
                      ' report failed after that, and a re-run converges without moving anything' % entry_dest)
@@ -520,7 +575,7 @@ def install(tree, home):
         quiet_stdout()
         return 2
     finally:
-        for p in (staged_body, staged_entry):
+        for p in (staged_lib, staged_body, staged_entry):
             if p is not None:
                 try:
                     os.unlink(p)
