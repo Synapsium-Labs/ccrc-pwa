@@ -5,7 +5,7 @@
 // prefix, which is spelled once here to pin it.
 import { describe, it, expect } from 'vitest';
 import {
-  stallRestartedVerdict, stallOrphanDVerdict, stallSessionMail, stallMailClass, stallNotifyDelivery, rungRecipient,
+  stallRestartedVerdict, stallRestartedVerdicts, stallOrphanDVerdict, stallSessionMail, stallMailClass, stallNotifyDelivery, rungRecipient,
   stallArmHasRung, stallDetail, parseStallDetail, stallRestartedSubject,
   RESTARTED_HEADS_UP_MS, STALL_RESTARTED_PREFIX, ORPHAN_D_IDLE_MS, BACKLOG_HORIZON_MS,
 } from '../src/coord/stall.js';
@@ -165,6 +165,20 @@ describe('orphan D is left as it was: the safety net behind rung 1', () => {
     const working = input(R, { mark: mark(R, { state: 'working' }), notices: [notice('live', 'restarted', 1, R, R + MIN)] });
     expect(stallOrphanDVerdict(working, NOW)).toEqual(NONE);
     expect(stallRestartedVerdict(working, NOW)).toEqual(NONE);
+  });
+});
+
+describe('restarted: both rungs of one sweep come from one marker read', () => {
+  it('returns rung 1 and rung 2 together while rung 1 is not yet recorded', () => {
+    expect(stallRestartedVerdicts(input(), NOW)).toEqual([r1(), r2()]);
+  });
+  it('returns rung 2 alone once rung 1 is recorded', () => {
+    expect(stallRestartedVerdicts(input(R, { notices: [notice('live', 'restarted', 1, R, R + MIN)] }), NOW)).toEqual([r2()]);
+  });
+  it('returns rung 1 alone when the run has no claimant, and holds like the single verdict', () => {
+    const noClaim = input(R, { coordinationPaused: true });
+    expect(stallRestartedVerdicts(noClaim, NOW)).toEqual([r1()]);
+    expect(stallRestartedVerdicts(input(R, { worker: { present: false } }), NOW)).toEqual([{ act: 'hold', why: 'absent' }]);
   });
 });
 

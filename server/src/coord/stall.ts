@@ -1739,23 +1739,39 @@ function stallOrphanDInner(input: StallSessionInput, now: number): StallVerdict 
  *  as it was: a worker that acts on rung 1 takes a turn, which ends orphan D's candidate (the marker reads working),
  *  and one that does not is still caught by orphan D's idle wait and its operator push. */
 function stallRestartedInner(input: StallSessionInput, now: number): StallVerdict {
-  if (!stallRunBound(input)) return VERDICT_NONE;
+  return stallRestartedRungs(input, now)[0] ?? VERDICT_NONE;
+}
+
+/** The restarted arm's verdicts of one sweep, in rung order. While rung 1 is not yet recorded this returns rung 1
+ *  AND rung 2 together, both from this one marker read: the worker takes a turn on its notice within a mail sweep,
+ *  which ends the candidate, so a rung 2 left to the next stall sweep would almost never be judged and the heads-up
+ *  text (it names what the worker was told was lost) would no longer be readable. Once rung 1 is recorded, rung 2
+ *  alone is judged, for as long as the marker still reads as the candidate. */
+function stallRestartedRungs(input: StallSessionInput, now: number): StallVerdict[] {
+  if (!stallRunBound(input)) return [VERDICT_NONE];
   const held = stallSessionHold(input, now);
-  if (held !== null) return held;
+  if (held !== null) return [held];
   const m = stallCurrentMark(input);
-  if (m === null || !stallOrphanDCandidate(m) || m.restartAt === null || now - m.restartAt > BACKLOG_HORIZON_MS) return VERDICT_NONE;
-  if (stallSessionLive(input) === null) return VERDICT_NONE;
+  if (m === null || !stallOrphanDCandidate(m) || m.restartAt === null || now - m.restartAt > BACKLOG_HORIZON_MS) return [VERDICT_NONE];
+  if (stallSessionLive(input) === null) return [VERDICT_NONE];
   const key = m.restartAt;
-  if (rungDoneAt(input, 'restarted', 1, key) === null) return { act: 'notify', arm: 'restarted', rung: 1, key, to: 'worker' };
-  if (stallRecordedDone(input, 'restarted', 2, key)) return VERDICT_NONE;
-  if (input.notices.some((n) => n.arm === 'restarted' && n.rung === 2 && n.key < key && key - n.key < RESTARTED_HEADS_UP_MS)) return VERDICT_NONE;
+  const rung1Pending = rungDoneAt(input, 'restarted', 1, key) === null;
+  const out: StallVerdict[] = rung1Pending ? [{ act: 'notify', arm: 'restarted', rung: 1, key, to: 'worker' }] : [];
+  if (stallRecordedDone(input, 'restarted', 2, key)) return out.length > 0 ? out : [VERDICT_NONE];
+  if (input.notices.some((n) => n.arm === 'restarted' && n.rung === 2 && n.key < key && key - n.key < RESTARTED_HEADS_UP_MS)) return out.length > 0 ? out : [VERDICT_NONE];
   const r = input.run;
-  if (r === null || r.claimedBy === null || input.coordinationPaused) return VERDICT_NONE;
-  return { act: 'notify', arm: 'restarted', rung: 2, key, to: 'coordinator', coordinatorId: r.claimedBy };
+  if (r === null || r.claimedBy === null || input.coordinationPaused) return out.length > 0 ? out : [VERDICT_NONE];
+  out.push({ act: 'notify', arm: 'restarted', rung: 2, key, to: 'coordinator', coordinatorId: r.claimedBy });
+  return out;
 }
 
 export function stallRestartedVerdict(input: StallSessionInput, now: number): StallVerdict {
   return stallMailDisabledHold(stallRestartedInner(input, now), input.arming);
+}
+
+/** Every restarted verdict of this sweep (rung 1 and, with it, rung 2): see `stallRestartedRungs`. */
+export function stallRestartedVerdicts(input: StallSessionInput, now: number): StallVerdict[] {
+  return stallRestartedRungs(input, now).map((v) => stallMailDisabledHold(v, input.arming));
 }
 
 export function stallOrphanDVerdict(input: StallSessionInput, now: number): StallVerdict {
