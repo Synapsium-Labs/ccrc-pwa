@@ -6935,7 +6935,7 @@ const rejoinStrace = (raw: string): { lines: string[]; unparsed: string[] } => {
 
 /** The children the hook's own shell took inside the first held section, named by
  *  the first command each one's subtree execs (`(subshell)` for none). */
-const forkCensus = (raw: string): { forks: string[]; unparsed: string[] } => {
+const forkCensus = (raw: string, whole = false): { forks: string[]; unparsed: string[] } => {
   const { lines, unparsed } = rejoinStrace(raw);
 
   // PARSE. Two shapes matter: a `clone` that returns a child pid, and a
@@ -6979,14 +6979,14 @@ const forkCensus = (raw: string): { forks: string[]; unparsed: string[] } => {
   // child after the release) or, on an arm that releases and returns, at the
   // end of the trace. `_hook_compact_pre` is the last statement in the file,
   // so "end of trace" really is "end of the arm".
-  const flockAt = events.findIndex((e) => e.kind === 'exec' && e.name === 'flock');
+  const flockAt = whole ? 0 : events.findIndex((e) => e.kind === 'exec' && e.name === 'flock');   // `whole`: every child of the run, no window
   expect(flockAt, 'the arm took the row mutex').toBeGreaterThan(-1);
   // THE END IS THE CLONE, NOT ITS EXEC. `timeout`'s `execve` happens in the
   // child, i.e. AFTER the parent's `clone` line, so a window ending at the
   // exec swallows the helper fork itself — measured, that was this pin's
   // first draft and it reported a seventh member.
   const ENDERS = ['timeout', 'gtimeout', 'node', 'flock'];
-  const endAt = events.findIndex((e, k) => k > flockAt && e.kind === 'clone' && e.pid === root
+  const endAt = whole ? -1 : events.findIndex((e, k) => k > flockAt && e.kind === 'clone' && e.pid === root
     && ENDERS.includes(under(e.child!) ?? ''));
   const last = endAt === -1 ? events.length : endAt;
 
@@ -13393,4 +13393,40 @@ describe('history card reserve: the compact card renders HISTORY_CARD_MAX + 1 ch
     expect(set, 'no PreCompact-gated set').toBeGreaterThan(reset);
     expect(set, 'the reserve must be set before the card renders').toBeLessThan(src.indexOf('\nunset CS_SCOPE\n'));
   });
+});
+
+// ── The cheap PostToolUse arm's fork count: a load-independent cost pin (D-6929) ──
+// APPENDED, with NO new import line: the citation census cites this file by line.
+// The wall-clock budgets (150 ms, 4.2x, 1.5x) run in the `perf` CI job only (`CCRC_PERF=1`); this is what the required
+// suite keeps of the hook's cost: how many children the arm forks, counted under strace, which a loaded runner cannot move.
+// MEASURED on main at ece3dfbee (linux, bash 5.2, strace -f -e trace=clone,clone3,fork,vfork,execve, a fixture HOME with
+// the stub tmux, the p95 row's payload `{PostToolUse, Bash}`): the whole-run census came to EXPECTED_FORKS below (measured in a linux container, vitest on this file; the
+// first run, against an empty expectation, was the red: it printed this table).
+describe('the cheap PostToolUse arm forks exactly this (D-6929)', () => {
+  const HOOK_PATH = (): string => process.env['CCRC_HOOK_UNDER_PIN'] ?? HOOK;
+  const forksOf = (): Record<string, number> => {
+    const trace = path.join(home, 'cheap-trace.txt');
+    const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=clone,clone3,fork,vfork,execve', 'bash', HOOK_PATH()], {
+      input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash' }), encoding: 'utf8', env: hookEnv(),
+    });
+    expect(r.status, `the hook exits 0 under strace. stderr: ${r.stderr}`).toBe(0);
+    const { forks, unparsed } = forkCensus(fs.readFileSync(trace, 'utf8'), true);
+    expect(unparsed, 'every split strace line was rejoined to its other half').toEqual([]);
+    const out: Record<string, number> = {};
+    for (const f of forks.slice().sort()) out[f] = (out[f] ?? 0) + 1;
+    return out;
+  };
+  const EXPECTED_FORKS: Record<string, number> = { '(subshell)': 1, cat: 1, jq: 4, mv: 2, timeout: 1 };
+  itLinux('the real hook forks the measured children and no more', () => {
+    expect(forksOf()).toEqual(EXPECTED_FORKS);
+  }, 60_000);
+  itLinux('a copy of the hook with one more `$(true)` on that arm adds exactly one (subshell), so the pin above goes red on it', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const copy = path.join(home, 'session-hook-mutant.sh');
+    const marker = '\n[[ -n "$event" ]] || exit 0\n';
+    expect(src.includes(marker), 'the anchor the mutant is spliced at exists').toBe(true);
+    fs.writeFileSync(copy, src.replace(marker, '\n_pin_probe=$(true)' + marker));
+    process.env['CCRC_HOOK_UNDER_PIN'] = copy;
+    try { expect(forksOf()).toEqual({ ...EXPECTED_FORKS, '(subshell)': EXPECTED_FORKS['(subshell)']! + 1 }); } finally { delete process.env['CCRC_HOOK_UNDER_PIN']; }
+  }, 60_000);
 });
