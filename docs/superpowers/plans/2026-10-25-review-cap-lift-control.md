@@ -287,3 +287,48 @@ its symbol before editing.
   serves both doors and posts only on confirm. The Mail record matches on `kind: 'run'`, `sessionId: ''` and a waiting
   ask. A server scan pins that the cap's notice is that shape's one writer.
 - **D-6912.** Spare, for a departure found while executing. If unused, it says "spare, unused".
+
+## As built (2026-10-25)
+
+Built on `origin/main` at `d12739bd6`. Five tasks, one commit each after the plan's copy.
+
+**What each deviation became.**
+
+- **D-6909, as planned.** `RunSummary.reviewCap` is filled in `hydrateRun` from `CoordStore.reviewCapStates`, two
+  statements per batch on `healthFor`'s `placeholders` idiom; `run()` and `hydrateRuns()` are its two callers. Making
+  the field required touched every `RunSummary` literal in the tests: 21 PWA fixture factories gained
+  `reviewCap: null` (one of them, `runs-finished-fold.test.tsx`, under another wave's claim, with its holder's written
+  consent for that one token), and `reconstruction-drill.test.ts` names `reviewCap` among what a coord.db loss forgets:
+  `review_cap` lives only in the database, so a lost lift is lifted again, the safe direction.
+- **D-6910, as planned.** `composeReviewCapAsk` in `coord/routes.ts` holds the refusal arm's three lines, and both the
+  arm and `GET /api/coord/review-cap/:id` call it. The GET reads the run through `coord.run()`, so its rounds and times
+  are the row's `reviewCap`; a run that is not a work run is 404 `not-found`, an unreadable one 503 `run-unreadable`.
+  The three types moved to `shared/api.ts`. That file cannot import `ReadFailure` (its type-only imports are pinned), so
+  the findings states derive from `REVIEW_FINDINGS_STATES`, `STALL_STORED_STATES`' idiom, and `review-cap.test.ts`
+  holds the failure pair equal to `ReadFailure` at compile time. The new route joined the canonical id census
+  (`routes.test.ts`, twenty-one seams) and the gate's route counts (`auth-gate.test.ts`, and `auth/gate.ts`'s docstring:
+  121 HTTP routes). The two "box token alone is refused" rows were green before the route existed, because the gate
+  refuses every path no EXEMPT entry names; they pin that neither cap route joins an EXEMPT table.
+- **D-6911, as planned, with one consolidation.** The plan had `findingsWords` repeat four sentences `reviewCapNotice`
+  already spelled. They are spelled once instead, as `REVIEW_FINDINGS_WORDS` in `shared/api.ts`, and both read it; the
+  notice's text is unchanged (its existing pins stay green). The cap-notice scan in `review-cap.test.ts` uses
+  `git grep` with one line of context rather than reading `coord/routes.ts` as text, because `single-definition`'s
+  ratchet refuses a new literal source pin over that file. The Mail door's match is `capRecordRun` in
+  `reviewCapWords.ts`, read through `eventRunId`. The band's ground is grouped with the sheet bodies' rule in
+  `fleet.css`: a rule of its own copied `.program-start-sheet`'s shape and `shape-census` refused it.
+- **D-6912: spare, unused.**
+
+**Mutation table.** Each mutant ran on the tree with the original backed up to scratch, under
+`ulimit -u (threads + 1500)` and `timeout -k 10 600`, and each file was restored and checked byte-identical by `cmp`.
+
+| Mutant | What red |
+|---|---|
+| M1 `hydrateRun` sets `reviewCap: null` | run-routes "carries the cap's state" |
+| M2 `capWaiting` drops `liftedAt === null` | words "lifted is lifted", band list row, Mail "no door once lifted" |
+| M3 `capWaiting` drops the closed-run test | words closed-run row, band list row and "renders nothing", Mail "no door on a closed run" |
+| M4 the Mail door drops `sessionId === ''` | Mail "no door on a run record that names a session" |
+| M5 the sheet posts on open | sheet "reads the ask once", "Lift cap posts once", "Cancel lifts nothing" |
+| M6 the GET composes its own ask, findings `unnamed` | run-routes "answers the refusal's own ask" |
+
+**Growth.** Net code lines against the merge-base, measured with `growthCheck.ts`'s `netGrowth`:
+`server/src/coord/store.ts` +21, `server/src/coord/routes.ts` +16, `pwa/src/lib/api.ts` +3.
