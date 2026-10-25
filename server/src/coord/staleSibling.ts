@@ -1,7 +1,7 @@
 import type { RunState } from '../../../shared/api.js';
 
 /**
- * The stale sibling (D-TBD-kept-reason-visible; ARCH-76 child reclamation observability). L1: pure, no store, no
+ * The stale sibling (D-TBD-kept-reason-visible). L1: pure, no store, no
  * registry, no clock.
  *
  * A child's workspace is kept while another open run names its session (`siblings-open`). A run that opened for an

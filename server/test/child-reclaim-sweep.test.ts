@@ -2924,7 +2924,7 @@ describe('the sweep with child-reclaim-disabled set', () => {
   });
 });
 
-// The kept reason and the stale sibling (D-TBD-kept-reason-visible; ARCH-76). `review-report-live` and `siblings-open`
+// The kept reason and the stale sibling (D-TBD-kept-reason-visible). `review-report-live` and `siblings-open`
 // are `ordinary` skip words, so no surface named the run that kept a child; the feed now does, once per child per day.
 // And a sibling run that is provably abandoned (planned, never dispatched, fourteen days old, its coordinator archived
 // or gone) no longer keeps the child: it is reported as a stale sibling, and never closed.

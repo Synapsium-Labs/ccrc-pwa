@@ -1,7 +1,7 @@
 import type { ChildReclaimSweepInput, ChildReclaimSweepVerdict } from '../childReclaimSweep.js';
 
 /**
- * The kept reason (D-TBD-kept-reason-visible; ARCH-76). L1: pure.
+ * The kept reason (D-TBD-kept-reason-visible). L1: pure.
  *
  * `review-report-live` and `siblings-open` are `ordinary` skip words: the chip's own rows are meant to say them, and
  * the banner and the feed do not. So a child kept by a stuck reviewed run, or by a stale sibling run, had no row

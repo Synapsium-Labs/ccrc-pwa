@@ -1837,7 +1837,7 @@ export function recordChildReclaimKeptFeed(
 }
 
 /**
- * The kept reason's feed row (D-TBD-kept-reason-visible; ARCH-76): names the reviewed run behind `review-report-live`
+ * The kept reason's feed row (D-TBD-kept-reason-visible): names the reviewed run behind `review-report-live`
  * or the sibling runs behind `siblings-open`, and any stale sibling the sweep ignored, so a stuck run shows in the feed
  * without a manual join. `limiter` paces it to one row per child, kind and run per day. Written from a judging pass
  * alone, in `recordChildReclaimKeptFeed`'s idiom: `kind: 'run'`, recorded and never pushed.
