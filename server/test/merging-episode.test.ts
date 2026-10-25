@@ -57,9 +57,9 @@ async function scenario(o: Opts = {}) {
   // advance is admitted and only the mode's own listing is lost.
   let lost = false;
   const run: Runner = async (_c, args) => {
-    if (args[0] !== 'pr-state') return { code: 0, stdout: '', stderr: '' };
+    if (args[0] !== 'pr-state') return { ran: true, code: 0, stdout: '', stderr: '' };
     if (o.unlistable) lost = true;
-    return { code: 0, stdout: `${prLine(pr, TIP)}\n`, stderr: '' };
+    return { ran: true, code: 0, stdout: `${prLine(pr, TIP)}\n`, stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const base = testDeps(home, run);
