@@ -3038,12 +3038,28 @@ export class CoordStore {
     } else if (predecessor !== sessionId) {
       this.db.prepare('UPDATE runs SET sessionBornAt = NULL, sessionBornFor = NULL WHERE id = ?').run(runId);
     }
+    // The bound incarnation (ARCH-62, #1407): a bind that names no birth of its own (a later wave bound to a worker that
+    // already exists) records the birth of the occupant it binds to, so `bindsRun` answers it exactly. No stamp, and
+    // today's answers, where the session never had a placeable birth.
+    if (bornAt === undefined) this.stampOccupantBirth(runId, sessionId);
     // NULL is a FIRST bind, not a re-bind, and it re-issues nothing: there is no
     // predecessor to inherit from, and every wave-1 dispatch on the box lands
     // here. The same-session case is a re-statement, not a change of occupant.
     if (predecessor === null || predecessor === sessionId) return { rebound: false, reissued: 0 };
     const reissued = this.requeueAbandonedMail({ role: 'worker', runId }, sessionId, [predecessor]);
     return { rebound: true, reissued };
+  }
+
+  /** Stamp run `runId` (just bound to `sessionId`, with no birth of its own) with the birth of `sessionId`'s newest
+   *  placeable occupant: the newest run recording a birth FOR this session that `childBirthOf` places (the birth equals
+   *  the run's `dispatchStartedAt`). Write-once: a run that carries a birth keeps it. A session with no such run is a
+   *  coordinator, a manual workspace or an adopted one: it stays unstamped and keeps the id-string rule. */
+  private stampOccupantBirth(runId: number, sessionId: string): void {
+    this.db.prepare(
+      'UPDATE runs SET sessionBornAt = b.at, sessionBornFor = ? FROM ' +
+      '(SELECT sessionBornAt AS at FROM runs WHERE sessionBornFor = ? AND sessionBornAt = dispatchStartedAt ' +
+      'ORDER BY sessionBornAt DESC LIMIT 1) AS b WHERE runs.id = ? AND runs.sessionBornAt IS NULL',
+    ).run(sessionId, sessionId, runId);
   }
 
   /**

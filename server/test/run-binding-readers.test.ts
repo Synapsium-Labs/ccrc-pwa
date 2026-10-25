@@ -92,18 +92,19 @@ describe('the readers take the worker\'s incarnation (ARCH-62)', () => {
     const s = store();
     const w1 = open(s, 'prog-a', 'coord-1');
     const w2 = open(s, 'prog-b', 'coord-1');
-    s.db.prepare('UPDATE runs SET openedAt = ? WHERE id IN (?, ?)').run(BORN - 1000, w1, w2);
+    // The run of ANOTHER claimant, bound to an EARLIER occupant of the name: it is bound before the birth exists, so the
+    // bind (which records the occupant's birth, #1407) has none to record, and the run stays undecided.
+    const g = open(s, 'prog-g', 'coord-ghost');
+    s.setSession(g, 'demo-w');
+    s.db.prepare('UPDATE runs SET openedAt = ? WHERE id IN (?, ?, ?)').run(BORN - 1000, w1, w2, g);
     s.setSession(w1, 'demo-w', BORN);
-    s.setSession(w2, 'demo-w');
     s.db.prepare('UPDATE runs SET dispatchStartedAt = ?, coordProject = ? WHERE id = ?').run(BORN, 'p', w1);
+    s.setSession(w2, 'demo-w');
     finish(s, w1);
     const verdict = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: w1 } as never, [], BORN + 5000);
     expect(verdict).toMatchObject({ kind: 'released', runId: w1 });
     expect(verdict).not.toEqual({ kind: 'not-a-child' });
     // The undecided run of ANOTHER claimant stays no parent.
-    const g = open(s, 'prog-g', 'coord-ghost');
-    s.setSession(g, 'demo-w');
-    s.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(BORN - 1000, g);
     finish(s, w2);
     const after = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: w1 } as never, [], BORN + 5000);
     expect(after).toEqual({ kind: 'not-a-child' });
