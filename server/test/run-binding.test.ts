@@ -173,7 +173,7 @@ describe('RunBinding has one writer', () => {
 
   it('CONTROL: the scan names a call and ignores a comment or a definition', () => {
     const hits = bindingWriterCalls([
-      { file: 'server/src/a.ts', text: 'x.setSession(1, "a");\n// c.bindSession(1)\n  clearSession(runId: number) {}\n' },
+      { file: 'server/src/a.ts', text: 'x.setSession(1, "a");\n// c.reclaimProgram(1)\n  clearSession(runId: number) {}\n' },
     ]);
     expect(hits).toEqual([{ file: 'server/src/a.ts', verb: 'setSession' }]);
   });

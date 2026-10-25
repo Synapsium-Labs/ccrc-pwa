@@ -13,6 +13,7 @@ import { decideAllocation } from './ledger.js';
 // nothing else, so the shape it returns is the policy's to define.
 import type { CoordPlacementStamp } from './placement.js';
 import type { LastRun } from './released.js';
+import type { BindingRun } from './runBinding.js';
 // Stall watch wave 1: the stall lane's row shapes are declared by their CONSUMER,
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
 // reads below implement them.
@@ -797,6 +798,10 @@ export type RunReadResult =
 
 export type RunsReadResult =
   | { ok: true; runs: RunRow[] }
+  | { ok: false; kind: 'run-unreadable'; detail: string };
+
+export type BindingRunsResult =
+  | { ok: true; runs: BindingRun[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
 export type OpenSiblingsResult =
@@ -1939,6 +1944,31 @@ export class CoordStore {
     return this.db.prepare(
       'SELECT id, sessionId, claimedBy FROM runs WHERE sessionId = ? OR claimedBy = ? ORDER BY id',
     ).all(sessionId, sessionId) as { id: number; sessionId: string | null; claimedBy: string | null }[];
+  }
+
+  /**
+   * The series `coord/runBinding.ts` derives a binding from (ARCH-60, #795): every run `id` works on (`sessionId`) or
+   * claims (`claimedBy`), ANY state, by id, with the columns the binding reads and no more. The two roles are ONE read
+   * because the binding's queries ask both ("whose worker is this?", "whose children are these?") of the same series,
+   * and `runsTouching`'s reason for the OR holds. ALL-OR-FAILURE like every session-keyed read here (D-2545): an `id`
+   * this process cannot represent fails the whole read, so a partial series never reads as "nothing else is bound".
+   */
+  bindingRunsOf(id: string): BindingRunsResult {
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, sessionId, claimedBy, state, openedAt, sessionBornAt, sessionBornFor ' +
+      'FROM runs WHERE sessionId = ? OR claimedBy = ? ORDER BY id',
+    ).all(id, id) as unknown as {
+      idText: string; sessionId: string | null; claimedBy: string | null; state: string; openedAt: number;
+      sessionBornAt: number | null; sessionBornFor: string | null }[];
+    const runs: BindingRun[] = [];
+    for (const r of rows) {
+      const n = persistedInt(r.idText, 'run id');
+      if (!n.ok) return { ok: false, kind: 'run-unreadable', detail: n.detail };
+      runs.push({ id: n.value, sessionId: r.sessionId, claimedBy: r.claimedBy,
+        state: isRunState(r.state) ? r.state : 'unknown', openedAt: r.openedAt,
+        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor });
+    }
+    return { ok: true, runs };
   }
 
   /**
