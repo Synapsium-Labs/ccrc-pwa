@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
 import { isCount, isRecord } from './wire';
@@ -1299,6 +1299,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  one. */
     runs: (closed = false) =>
       getJson<{ runs: RunSummary[] }>(closed ? '/api/runs?closed=1' : '/api/runs'),
+    /** `GET /api/runs/:id` (D-6799) - one run plus the `spend` its bound sessions
+     *  have accrued per the usage sweep; `spend` is unmeasured, with a reason, when
+     *  the sweep cannot say. */
+    run: (id: number) => getJson<{ ok: true; run: RunSummary; spend: RunSpend }>(`/api/runs/${id}`),
     /** `POST /api/runs/:id/abandon` (spec §4.3, Task 12) — the operator's
      *  release valve for a wedged run, from the phone. The route (`server/src
      *  /coord/routes.ts:844`) reads NO body at all — `{intent:'abandon'}` is

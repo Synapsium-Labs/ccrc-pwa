@@ -145,6 +145,8 @@ const mailItem = (over: Partial<MailSummary> = {}): MailSummary => ({
  *  assertions here are about which routes the board calls. `never` keeps the
  *  control unrendered, which is what these tests want it to be. */
 const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
+/** A held spend read: the board's default would send GET /api/runs/:id through the global fetch. */
+const NO_SPEND = (): Promise<import('../../shared/api').RunSpend> => new Promise(() => {});
 
 describe('the tap-target token', () => {
   it('is the 44px acceptance criterion, so every rule below inherits it from one place', () => {
@@ -504,7 +506,7 @@ describe('.runs-back — the run board’s own back control', () => {
     expect(backButton).toContain('min-h-tap');   // the same component .mail-back is
   });
   it('is the class the rendered control actually carries', () => {
-    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('runs-back');
   });
 });
@@ -523,7 +525,7 @@ describe('.run-row and .run-open — every row on the run board', () => {
     // this is what makes the row trustworthy enough to render immediately
     // rather than the "no answer yet" loading state (review finding 19).
     act(() => { store.setState({ runs: [run()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     expect(screen.getByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i })).toHaveClass('run-open');
   });
 });
@@ -570,7 +572,7 @@ describe('.run-abandon — the wedge release, a sibling of .run-open', () => {
   it('is the class the rendered row control actually carries', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [run()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     expect(screen.getByRole('button', { name: /abandon run 3/i })).toHaveClass('run-abandon');
   });
   // D-287's own reason for existing: an inert row (no session, so no
@@ -578,7 +580,7 @@ describe('.run-abandon — the wedge release, a sibling of .run-open', () => {
   it('is present on an inert row too, where .run-open is absent', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [run({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     expect(screen.getByRole('button', { name: /abandon run 3/i })).toHaveClass('run-abandon');
   });
 });
@@ -592,7 +594,7 @@ describe('.program-start-door — the only door onto a new program', () => {
   });
   it('is the class the rendered footer control actually carries', () => {
     const store = makeStore();
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     expect(screen.getByRole('button', { name: /start a program/i })).toHaveClass('program-start-door');
   });
 });

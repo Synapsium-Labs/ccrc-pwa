@@ -32,7 +32,7 @@ import { isDelegationCheckpointKebab } from '../src/coord/delegation-checkpoint.
 import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
 import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
-import { isDriftKind } from '../../shared/api.js';
+import { isDriftKind, isRunSpendUnmeasuredReason } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isCollectLaneKebab } from '../src/collectLane.js';
 import { isNoticeMode } from '../src/notice.js';
@@ -957,7 +957,11 @@ describe('the rejection table is total, in both directions', () => {
         // THE ARCHIVE ADMISSION (ARCH-36): `coord/archiveAdmission.ts` names its gates as literals. A gate names which
         // precondition refused, never a `refused` or `reject.code` (the route answers the gate's word). Admitted through
         // the exported guard, derived from `ARCHIVE_GATES`, never NOT_CODES.
-        || isArchiveGateKebab(tok),
+        || isArchiveGateKebab(tok)
+        // THE RUN SPEND READ (D-6799): `coord/runSpend.ts` names why a run's spend could not be measured as literals. A
+        // reason rides the `spend` block of `GET /api/runs/:id`, never a `refused` or `reject.code`. Admitted through
+        // `shared/api.ts`'s exported guard, derived from `RUN_SPEND_UNMEASURED_REASON_MAP`, never NOT_CODES.
+        || isRunSpendUnmeasuredReason(tok),
         `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode or archive gate`).toBe(true);
     }
   });

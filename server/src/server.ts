@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
+import fastifyRateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import { pwaStaticOptions } from './pwaStatic.js';
 import { configDirFor } from './config.js';
@@ -203,7 +204,7 @@ export const WRITE_ANSWER_EXEMPT = /^\/api\/(?:auth\/|token\/|sessions\/:id\/upl
  *  in `secret-mask.test.ts`'s egress inventory. */
 export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/fleet', '/api/digest', '/api/sessions/:id/pr', '/api/sessions/:id/workspace/audit', '/api/coord/stall-watch',
-  '/api/runs', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/asks',
+  '/api/runs', '/api/runs/:id', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/asks',
   '/api/approvals/:id',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
@@ -325,6 +326,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const app = Fastify({ logger: false });
   await app.register(fastifyWebsocket);
   await app.register(fastifyMultipart, { limits: { fileSize: 25 * 1024 * 1024 } });
+  // `global: false`: only a route that opts in with `config.rateLimit` is limited (coord/routes.ts).
+  // The limiter is GLOBAL: a constant key, so it never reads `req.ip` (no proxy trust, spec 3b D5), and it
+  // runs on `preHandler` so a route's own auth `onRequest` hook refuses before any budget is spent.
+  await app.register(fastifyRateLimit, {
+    global: false,
+    hook: 'preHandler',
+    keyGenerator: () => 'GET /api/runs/:id',
+    // Thrown into Fastify's error path; the route's own `errorHandler` (coord/routes.ts) writes ccrc's refusal shape.
+    errorResponseBuilder: () => Object.assign(new Error('rate-limited'), { statusCode: 429 }),
+  });
   // D-5857: the one notice sink this server's writers outside `watch.ts` raise their feed rows through (`notice.ts`).
   const notice = noticeSink(deps);
 

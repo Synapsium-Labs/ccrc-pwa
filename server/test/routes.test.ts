@@ -208,7 +208,7 @@ describe('canonical positive-safe decimal parser', () => {
 });
 
 describe('canonical coordination id route census', () => {
-  it('keeps all nineteen textual resource-id seams on the shared parser', () => {
+  it('keeps all twenty textual resource-id seams on the shared parser', () => {
     expect(canonicalCoordIdRoutes()).toEqual([
       { method: 'POST', routePath: '/api/mail/:id/ack' },
       { method: 'GET', routePath: '/api/mail/:id' },
@@ -222,6 +222,8 @@ describe('canonical coordination id route census', () => {
       { method: 'POST', routePath: '/api/runs/:id/route' },
       { method: 'POST', routePath: '/api/runs/:id/items' },
       { method: 'GET', routePath: '/api/runs/:id/signals' },
+      // D-6799: the run plus its spend.
+      { method: 'GET', routePath: '/api/runs/:id' },
       { method: 'GET', routePath: '/api/runs/:id/items' },
       { method: 'POST', routePath: '/api/claims/:id/release' },
       { method: 'POST', routePath: '/api/claims/:id/break' },

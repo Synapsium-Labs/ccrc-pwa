@@ -974,6 +974,11 @@ winner. A `null` in `meas` means it was not measured, never that it was empty.
 
 ## The run's own signals — a measurement, never a dial
 
+`GET /api/runs/:id` — one run, plus its spend: the tokens its bound sessions have used and their proxy
+cost, read from the usage sweep (`spend` is `{measured:true, tokens, proxyUsd, measuredAt}`, or
+`{measured:false, reason}` when nothing could be added up, never a zero). It takes a session cookie or the box
+token. It measures only; no route refuses on it.
+
 `GET /api/runs/:id/signals` — speed and quality signals re-measured off this run's own rows: the
 worker's paired holds, a swap COUNT (swap TIME is unpairable in today's journal, and the wire says
 so rather than guessing), and the closes this run was REFUSED. It takes a session cookie or the box
