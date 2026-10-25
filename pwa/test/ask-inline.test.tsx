@@ -866,6 +866,202 @@ describe('a send this client initiates releases the keyboard (R102)', () => {
   });
 });
 
+// R102, R105, R106: after a send this client initiated, no key in the card acts (the FENCE), even on a row node the next
+// screen REUSED and re-enabled with focus still on it, until the operator re-enters deliberately: a pointer press in the card,
+// or Go to question; Tab moves focus and never unlocks. The act counts only while input is eligible on the screen showing
+// (no send in flight, the connection live, the surface not closing), so a click or a Go to question made during the flight
+// pre-authorizes nothing: after the reply a NEW one is required. The cases use AGED fixture 2, whose rows are keyed by
+// position, so question 2 reuses the node that holds focus (jsdom keeps focus on it with no event, as Chrome can).
+describe('the keys in the card are fenced after a send and re-enter only deliberately (R102, R105, R106)', () => {
+  const goTo = (): HTMLButtonElement =>
+    [...document.querySelectorAll<HTMLButtonElement>('.tool-ask .ask-state button')].find((b) => b.textContent === 'Go to question')!;
+
+  /** Aged fixture 2 up; a digit answers it and the request is PENDING (`reply` resolves it with aged question 2). */
+  async function pendingAged() {
+    media(true);
+    let reply: (v: { ok: true; next: Dialog | null }) => void = () => {};
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValueOnce(new Promise((r) => { reply = r as typeof reply; }));
+    const m = mount({ events: [...EVENTS, ASK_CALL] });
+    await frame();
+    m.arrive(2);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    act(() => { key(first, '1'); });
+    expect(answer, 'premise: the digit sent').toHaveBeenCalledTimes(1);
+    const deliver = async (): Promise<void> => { await act(async () => { reply({ ok: true, next: agedQuestion2() }); }); };
+    return { ...m, answer, first, deliver };
+  }
+
+  /** The same, with the reply delivered and a frame passed: the card is fenced, on a reused, re-enabled row. */
+  async function answeredAged() {
+    const m = await pendingAged();
+    await m.deliver();
+    await frame();
+    expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
+    expect(m.first.isConnected, 'premise: question 2 REUSED the row node').toBe(true);
+    expect(document.activeElement, 'premise: focus stayed on the reused node').toBe(m.first);
+    expect(m.first, 'premise: and the node is enabled again').toBeEnabled();
+    return m;
+  }
+
+  it('a digit on a reused, re-enabled row node after the reply sends nothing', async () => {
+    const m = await answeredAged();
+    key(document.activeElement!, '2');
+    expect(m.answer, 'no second request').toHaveBeenCalledTimes(1);
+  });
+
+  it('a Space toggle on a multiSelect box releases nothing: the keys stay (a guard, green before and after)', async () => {
+    // A toggle is a local tick, not a send (`claim()` is never reached), so it must neither release nor fence. The native
+    // Space activation is the click jsdom does not synthesize, so the case presses the key and clicks the box.
+    media(true);
+    const multi = askFixture(9).dialog!;
+    const { store } = mount();
+    act(() => {
+      store.getState().apply({ type: 'dialog', dialog: multi });
+      store.getState().apply({ type: 'ask', key: null, ask: { questions: [{
+        question: 'Which regions should it deploy to?', header: 'Regions', multiSelect: true,
+        options: HOOK_QUESTIONS[2]!.options.map((o) => ({ ...o })),
+      }] } });
+    });
+    const boxes = within(card()).getAllByRole('checkbox');
+    expect(boxes, 'premise: three boxes').toHaveLength(3);
+    act(() => boxes[0]!.focus());
+    key(boxes[0]!, 'ArrowDown'); // engages the keyboard
+    act(() => boxes[0]!.focus());
+    expect(fireEvent.keyDown(boxes[0]!, { key: ' ' }), 'Space is not prevented: the native toggle stands').toBe(true);
+    fireEvent.click(boxes[0]!);
+    expect(boxes[0], 'the click ticked it').toHaveAttribute('aria-checked', 'true');
+    key(boxes[0]!, 'ArrowDown');
+    expect(document.activeElement, 'ArrowDown still moves the highlight after the toggle').toBe(boxes[1]);
+    key(boxes[1]!, '3');
+    expect(boxes[2], 'and a digit still ticks its box').toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('a key in the composer, the page body or the transcript is untouched while fenced (a guard, green before and after)', async () => {
+    const m = await answeredAged();
+    act(() => composer().focus());
+    expect(fireEvent.keyDown(composer(), { key: 'a' }), 'a letter in the composer').toBe(true);
+    expect(fireEvent.keyDown(composer(), { key: 'ArrowDown' }), 'ArrowDown in the composer').toBe(true);
+    expect(fireEvent.keyUp(composer(), { key: 'Enter' }), 'Enter keyup in the composer').toBe(true);
+    expect(fireEvent.keyPress(composer(), { key: ' ', charCode: 32 }), 'Space keypress in the composer').toBe(true);
+    expect(fireEvent.keyDown(document.body, { key: '2' }), 'a digit on the page body').toBe(true);
+    expect(fireEvent.keyUp(screen.getByText('Running them now.'), { key: ' ' }), 'Space keyup on a transcript row').toBe(true);
+    expect(m.answer).toHaveBeenCalledTimes(1);
+  });
+
+  describe('R105: re-entry is a pointer press in the card, or Go to question; Tab never unlocks', () => {
+    it('a pointer press and click in the card, then a digit, answers once', async () => {
+      const m = await answeredAged();
+      m.answer.mockReturnValue(new Promise(() => {}));
+      const title = card().querySelector('h2')!;
+      fireEvent.pointerDown(title);
+      act(() => card().focus()); // a press on card text focuses the card section (`tabIndex={-1}`)
+      fireEvent.click(title);
+      expect(m.answer, 'the press itself sends nothing').toHaveBeenCalledTimes(1);
+      key(document.activeElement!, '2');
+      expect(m.answer, 'a digit answers').toHaveBeenCalledTimes(2);
+      expect(m.answer).toHaveBeenLastCalledWith(ID, 'dlg-a2-q2', 2);
+    });
+
+    it('a pointer press on a reused row node itself, then a digit on it, answers once', async () => {
+      const m = await answeredAged();
+      m.answer.mockReturnValue(new Promise(() => {}));
+      fireEvent.pointerDown(m.first);
+      key(m.first, '2');
+      expect(m.answer).toHaveBeenCalledTimes(2);
+    });
+
+    it('Tab moves focus into the card but never unlocks: a digit then sends nothing', async () => {
+      const m = await answeredAged();
+      // jsdom cannot Tab: the Tab keydown is not prevented (the browser would move focus), and focus is moved as it would.
+      expect(fireEvent.keyDown(document.activeElement!, { key: 'Tab' }), 'Tab is not prevented').toBe(true);
+      act(() => opt(card(), /^No/).focus());
+      expect(card().contains(document.activeElement), 'premise: focus is on another row in the card').toBe(true);
+      key(document.activeElement!, '2');
+      expect(m.answer, 'a digit sends nothing').toHaveBeenCalledTimes(1);
+    });
+
+    it('Go to question with nothing in flight, then a digit, answers once', async () => {
+      const m = await answeredAged();
+      m.answer.mockReturnValue(new Promise(() => {}));
+      fireEvent.click(goTo());
+      key(document.activeElement!, '2');
+      expect(m.answer, 'a digit answers').toHaveBeenCalledTimes(2);
+      expect(m.answer).toHaveBeenLastCalledWith(ID, 'dlg-a2-q2', 2);
+    });
+  });
+
+  describe('R106: re-entry counts only while input is eligible; nothing pre-authorizes the next screen', () => {
+    it('a click on the card while the request is pending, then the reply, then a digit: nothing is sent', async () => {
+      const m = await pendingAged();
+      const title = card().querySelector('h2')!;
+      fireEvent.pointerDown(title);
+      act(() => card().focus());
+      fireEvent.click(title);
+      await m.deliver();
+      await frame();
+      expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
+      key(document.activeElement!, '2');
+      expect(m.answer, 'nothing sent').toHaveBeenCalledTimes(1);
+      // And a NEW press then unlocks.
+      m.answer.mockReturnValue(new Promise(() => {}));
+      fireEvent.pointerDown(title);
+      act(() => card().focus());
+      key(document.activeElement!, '2');
+      expect(m.answer, 'a new press unlocks').toHaveBeenCalledTimes(2);
+    });
+
+    it('a click in the gap (the connection is not live) clears nothing', async () => {
+      const m = await answeredAged();
+      act(() => m.store.setState({ conn: 'down', askFrameSeen: false, dialog: null }));
+      const title = card().querySelector('h2')!;
+      fireEvent.pointerDown(title);
+      act(() => m.store.setState({ conn: 'open' }));
+      act(() => {
+        m.store.getState().apply({ type: 'dialog', dialog: agedQuestion2() });
+        m.store.getState().apply({ type: 'ask_cleared' });
+      });
+      await frame();
+      key(document.activeElement ?? document.body, '2');
+      expect(m.answer, 'a digit sends nothing: the click in the gap cleared nothing').toHaveBeenCalledTimes(1);
+    });
+
+    // The coordinator's addition to R106: Go to question clicked while the answer is in flight, with the reply delivered as
+    // tightly after the click as the harness honestly allows. Every timing must give the same public result: the section is
+    // focused by the click (R69 F7), the keys stay fenced after the reply, no unlock follows, and a NEW eligible Go to
+    // question then unlocks.
+    it.each([
+      ['in the same task right after the click', async (deliver: () => Promise<void>): Promise<void> => { await deliver(); }],
+      ['on the next microtask', async (deliver: () => Promise<void>): Promise<void> => {
+        await Promise.resolve();
+        await deliver();
+      }],
+      ['after one frame', async (deliver: () => Promise<void>): Promise<void> => {
+        await frame();
+        await deliver();
+      }],
+    ])('Go to question while the answer is in flight, the reply %s: still fenced, and a NEW Go to question unlocks', async (_when, run) => {
+      const m = await pendingAged();
+      const watch = watchCardFocus();
+      fireEvent.click(goTo());
+      expect(document.activeElement, 'the click focused the card section (R69 F7)').toBe(card());
+      watch.seen().length = 0; // the section's own focus is the click's; only focus AFTER the reply would be an unlock's
+      await run(m.deliver);
+      await frame();
+      expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
+      expect(watch.seen(), 'no focusin from an unlock after the reply').toEqual([]);
+      key(document.activeElement ?? document.body, '2');
+      expect(m.answer, 'a digit sends nothing').toHaveBeenCalledTimes(1);
+      m.answer.mockReturnValue(new Promise(() => {}));
+      fireEvent.click(goTo());
+      expect(card().contains(document.activeElement), 'the NEW Go to question focused the card').toBe(true);
+      key(document.activeElement!, '2');
+      expect(m.answer, 'and a digit then answers once').toHaveBeenCalledTimes(2);
+      expect(m.answer).toHaveBeenLastCalledWith(ID, 'dlg-a2-q2', 2);
+    });
+  });
+});
+
 // R64 (review of Task A): the phone's per-hook `engaged` is the phone's alone. `DialogSheet`'s own hook outlives a crossing
 // below 900 and an ask's end, so an INLINE key must leave it untouched, or a later review in the sheet is focused.
 describe('the phone path is its own after an inline engagement (R64)', () => {
