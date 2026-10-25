@@ -9,8 +9,9 @@ import path from 'node:path';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { measureClaimant, type ReclaimDeps } from '../src/coord/reclaim.js';
-import { readSession, type Presence, type SessionFacts } from '../src/sessionReading.js';
+import { claimantFacts, measureClaimant, type ReclaimDeps } from '../src/coord/reclaim.js';
+import { deadCauseOf, DEAD_CAUSES, readSession, type Presence, type SessionFacts } from '../src/sessionReading.js';
+import { DEAD_LIFECYCLES } from '../../shared/api.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
@@ -20,6 +21,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import type { SessionVerdict } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { degradedReadIO } from './ioDoubles.js';
 
 const NOW = 1_000_000_000_000;
 const SEC = Math.floor(NOW / 1000);
@@ -49,6 +51,8 @@ interface Row {
   /** The destructive callers' state word. */
   state: 'dead' | 'alive' | 'unmeasurable';
   cause?: string;
+  /** A word the door's `why` must name, where the row's state alone does not say which arm answered. */
+  whyNames?: string;
   /** The same row as `readSession`'s facts, and the reading it must give. */
   facts: SessionFacts;
   presence: Presence;
@@ -67,15 +71,20 @@ const ROWS: Row[] = [
       writeFileSync(path.join(reg, `${ID}.started`), '1');
     } , facts: { row: 'unmeasurable', pane: null, lifecycle: null, hibernatedAt: null, turn: null }, presence: 'unknown' },
   { name: 'a live pane outranks a stop stamp', seed: (h) => seedRow(h, ID, { stopped: `${SEC} ccd` }), tmux: LIVE, state: 'alive' , facts: { row: 'present', pane: 'live', lifecycle: 'stopped', hibernatedAt: null, turn: null }, presence: 'alive' },
-  { name: 'tmux did not answer', seed: (h) => seedRow(h, ID), tmux: { verdict: 'unknown', detail: 'no server running' }, state: 'unmeasurable' , facts: { row: 'present', pane: 'unknown', lifecycle: 'unmeasurable', hibernatedAt: null, turn: null }, presence: 'unknown' },
+  { name: 'tmux did not answer', seed: (h) => seedRow(h, ID), tmux: { verdict: 'unknown', detail: 'no server running' }, state: 'unmeasurable' , facts: { row: 'present', pane: 'unknown', lifecycle: 'orphan', hibernatedAt: null, turn: null }, presence: 'unknown' },
   { name: 'gone + a stop stamp', seed: (h) => seedRow(h, ID, { stopped: `${SEC} ccd` }), tmux: GONE, state: 'dead', cause: 'stopped' , facts: { row: 'present', pane: 'gone', lifecycle: 'stopped', hibernatedAt: null, turn: null }, presence: 'dead' },
   { name: 'gone + a stop stamp + hibernated (asleep, not dead)', tmux: GONE, state: 'alive',
     seed: (h) => seedRow(h, ID, { stopped: `${SEC} ccd`, hibernated: `${SEC} 7` }) , facts: { row: 'present', pane: 'gone', lifecycle: 'stopped', hibernatedAt: NOW, turn: null }, presence: 'asleep' },
   { name: 'gone + a long-gone heartbeat, stale hibernated stamp', tmux: GONE, state: 'dead', cause: 'orphan',
-    seed: (h) => seedRow(h, ID, { supervised: String(SEC - 3600), hibernated: `${SEC - 7200} 7` }) , facts: { row: 'present', pane: 'gone', lifecycle: 'orphan', hibernatedAt: NOW, turn: null }, presence: 'dead' },
+    seed: (h) => seedRow(h, ID, { supervised: String(SEC - 3600), hibernated: `${SEC - 7200} 7` }) , facts: { row: 'present', pane: 'gone', lifecycle: 'orphan', hibernatedAt: NOW - 7_200_000, turn: null }, presence: 'dead' },
   { name: 'gone + a row that never started', tmux: GONE, state: 'dead', cause: 'never-started',
     seed: (h) => { seedRow(h, ID); rmSync(path.join(h, '.cc-sessions', `${ID}.started`)); } , facts: { row: 'present', pane: 'gone', lifecycle: 'never-started', hibernatedAt: null, turn: null }, presence: 'dead' },
   { name: 'gone + a fresh supervisor heartbeat (restarting)', seed: (h) => seedRow(h, ID, { supervised: String(SEC) }), tmux: GONE, state: 'alive' , facts: { row: 'present', pane: 'gone', lifecycle: 'restarting', hibernatedAt: null, turn: null }, presence: 'alive' },
+  // D-1140: the one doubt the destructive door answers `alive`, driven through the real door (a dead answer here would
+  // let a reclaim or an abandon proceed while the claimant's lifecycle could not be read).
+  { name: 'gone + a lifecycle stamp that cannot be read (D-1140)', seed: (h) => seedRow(h, ID), tmux: GONE,
+    io: degradedReadIO((p) => p.endsWith(`${ID}.started`)), state: 'alive', whyNames: 'unmeasurable',
+    facts: { row: 'present', pane: 'gone', lifecycle: 'unmeasurable', hibernatedAt: null, turn: null }, presence: 'unknown' },
 ];
 
 describe('the liveness truth table, through measureClaimant (today\'s fail-shut ladder)', () => {
@@ -88,9 +97,12 @@ describe('the liveness truth table, through measureClaimant (today\'s fail-shut 
         io: row.io ?? localIO, cfg: testDeps(home).cfg,
         tmux: { sessionVerdict: async () => row.tmux },
       };
+      // The row's facts are what the door's own adapter reads from this fixture, not a hand-typed guess.
+      expect((await claimantFacts(deps, row.id ?? ID, NOW)).facts).toEqual(row.facts);
       const v = await measureClaimant(deps, row.id ?? ID, NOW);
       expect(v.state).toBe(row.state);
       if (row.cause !== undefined) expect(v).toMatchObject({ cause: row.cause });
+      if (row.whyNames !== undefined) expect(v.why).toContain(row.whyNames);
     });
   }
 });
@@ -118,6 +130,13 @@ describe('the same rows through readSession (the pure function over facts)', () 
     });
   }
 
+  it('a dead lifecycle names itself as the cause, checked against the one DeadCause list rather than cast', () => {
+    expect([...DEAD_CAUSES].sort()).toEqual(['absent', ...DEAD_LIFECYCLES].sort());
+    for (const lc of DEAD_LIFECYCLES) expect(deadCauseOf(lc)).toBe(lc);
+    // A lifecycle the list does not name is a drift between the two lists: it throws instead of carrying a cause.
+    expect(() => deadCauseOf('running')).toThrow(/not a DeadCause/);
+  });
+
   it('a listed-but-unassembled row never reads dead, whatever tmux says (D-1144)', () => {
     for (const pane of ['live', 'gone', 'unknown', null] as const) {
       const r = readSession({ row: 'unmeasurable', pane, lifecycle: 'orphan', hibernatedAt: null, turn: null });
@@ -128,7 +147,8 @@ describe('the same rows through readSession (the pure function over facts)', () 
   it('a gone pane over a lifecycle that could not be measured reads unknown, and the door treats it as alive (D-1140)', () => {
     for (const lifecycle of ['unmeasurable', null] as const) {
       const r = readSession({ row: 'present', pane: 'gone', lifecycle, hibernatedAt: null, turn: null });
-      // The reading is a doubt, not an answer: display readers get `unknown`; the destructive door maps it to alive.
+      // The reading is a doubt, not an answer: display readers get `unknown`; the destructive door maps it to alive
+      // (pinned through the real door by the table's 'gone + a lifecycle stamp that cannot be read' row).
       expect(r).toMatchObject({ presence: 'unknown', why: 'lifecycleDoubt', deadCause: null });
     }
   });
@@ -191,6 +211,7 @@ describe.skipIf(process.platform !== 'linux')('ccd-tmp-sweep, driven on the tabl
     'gone + a long-gone heartbeat, stale hibernated stamp': { protectedDir: true, differs: 'the sweep protects every row with a .hibernated file, whatever its lifecycle; the table reads this one as dead (orphan)' },
     'gone + a row that never started': { protectedDir: false },
     'gone + a fresh supervisor heartbeat (restarting)': { protectedDir: false, differs: 'a restarting session has no process yet; the sweep does not look at heartbeats' },
+    'gone + a lifecycle stamp that cannot be read (D-1140)': null,
   };
 
   const age = (p: string): void => {

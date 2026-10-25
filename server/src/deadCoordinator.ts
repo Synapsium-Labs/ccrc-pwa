@@ -1,6 +1,6 @@
 // THE DEAD-COORDINATOR LANE'S DECISIONS (workspace lifecycle spec 2026-09-24 §5.4, wave 4). L1: pure and clock-free
 // (the clock is an argument), `fs`-free and fastify-free — `archivedExpiry.ts`'s shape, beside it and sharing nothing
-// with it. It imports L0 alone. `watch.ts`'s `sweepDeadCoordinators` (L4) GATHERS the evidence — the claimants of
+// with it. It imports L0, and `sessionReading.ts` (L1, pure) for the one `DeadCause` list. `watch.ts`'s `sweepDeadCoordinators` (L4) GATHERS the evidence — the claimants of
 // non-terminal runs, the reclaim door's own verdict for each (`measureClaimant`, its dead arm now carrying `cause`), the
 // lifecycle mirror's rows, the durable first-dead anchors — and APPLIES these verdicts; `coord/endDeadCoordinator.ts`
 // (the one executor) ends a programme on the coordination serialiser. Nothing in this file reads a file, a row or a
@@ -12,8 +12,8 @@
 import {
   compareGenerations,
   type DeadCoordinatorAttention, type LifecycleAct, type LifecycleDec, type LifecycleMeas, type LifecycleOutcome,
-  type SessionLifecycle,
 } from '../../shared/api.js';
+import { DEAD_CAUSES, type DeadCause } from './sessionReading.js';
 
 /** THE LANE'S LIVE SWITCH (the coordinator's safety ruling (B), the expiry lane's and the scope sweep's precedent).
  *  Until `$REG/<this>` exists the lane MEASURES, keeps its durable first-dead anchors, trips its breaker and RECORDS
@@ -47,8 +47,9 @@ export const DEAD_COORDINATOR_BACKOFF_CEILING_MS = 60 * 60_000;
  *  its rung 1, a proven absence; the other three are L0's dead lifecycles. `ClaimantVerdict`'s dead arm
  *  (`coord/reclaim.ts`) carries one, set in that ladder and nowhere else; `coord-reclaim.test.ts` holds this list equal
  *  to `['absent', ...DEAD_LIFECYCLES]`, so a fourth dead word is a red, never a silent cast. */
-export type ClaimantDeadCause = 'absent' | Extract<SessionLifecycle, 'stopped' | 'orphan' | 'never-started'>;
-export const CLAIMANT_DEAD_CAUSES: readonly ClaimantDeadCause[] = ['absent', 'stopped', 'orphan', 'never-started'];
+export type ClaimantDeadCause = DeadCause;
+/** `sessionReading.ts`'s list, not a copy (ARCH-47): `readSession` names the cause, this lane reads it. */
+export const CLAIMANT_DEAD_CAUSES: readonly ClaimantDeadCause[] = DEAD_CAUSES;
 
 /** `ClaimantVerdict` as this file reads it — structurally, so L1 imports L0 alone. */
 export type ClaimantReading =

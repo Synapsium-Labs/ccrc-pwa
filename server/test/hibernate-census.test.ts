@@ -60,7 +60,7 @@ const CENSUS: readonly Row[] = [
       + 'dead word is asked, so `measureClaimant` answers `alive` and the reclaim door, the dead-coordinator lane and the '
       + 'ask hold read the same verdict' },
   { source: 'stopped-compare', file: 'server/src/sessionReading.ts', hits: 1, stances: ['consults'],
-    why: 'that same rung: `lc === \'stopped\' && f.hibernated` reads asleep' },
+    why: 'that same rung: `lc === \'stopped\' && f.hibernatedAt !== null` reads asleep' },
   { source: 'tmux-verdict', file: 'server/src/sessionReading.ts', hits: 1, stances: ['consults'],
     why: '`PaneFact` mirrors the verdict\'s words; `gone` falls to the hibernated rung' },
   { source: 'tmux-verdict', file: 'server/src/coord/reclaim.ts', hits: 1, stances: ['consults'],
@@ -155,8 +155,10 @@ const NAMED: readonly { name: string; stances: readonly Stance[]; file: string; 
     holds: (s) => /function presenceOf[\s\S]*?lc === 'stopped' && f\.hibernatedAt !== null/.test(s),
     why: 'reads a sleeping row `asleep`, never dead' },
   { name: 'measureClaimant', stances: ['consults'], file: 'server/src/coord/reclaim.ts',
-    holds: (s) => /export async function measureClaimant[\s\S]*?hibernatedAt: read\.kind === 'found' \? read\.record\.hibernatedAt : null[\s\S]*?case 'hibernated'/.test(s),
-    why: 'hands the `.hibernated` stamp to `readSession` and answers a sleeping claimant `alive`, why hibernated' },
+    holds: (s) => /export async function measureClaimant[\s\S]*?await claimantFacts\([\s\S]*?case 'hibernated'/.test(s)
+      && /export async function claimantFacts[\s\S]*?hibernatedAt: read\.kind === 'found' \? read\.record\.hibernatedAt : null/.test(s),
+    why: 'hands the `.hibernated` stamp to `readSession` (its adapter, `claimantFacts`) and answers a sleeping claimant '
+      + '`alive`, why hibernated' },
   { name: 'ccd cmd_forget', stances: ['consults'], file: 'ccd/ccd', holds: (s) => /hibernated/.test(bashFn(s, 'cmd_forget')),
     why: 'refuses a hibernated row (`_lc_refuse hibernated`): wake it or stop it first' },
   { name: 'ccd cmd_stop', stances: ['consults'], file: 'ccd/ccd', holds: (s) => /hibernat/.test(bashFn(s, 'cmd_stop')),

@@ -5,7 +5,7 @@ import type { FleetIO } from '../io.js';
 import { fieldMeasured, readSessionRecord } from '../registry.js';
 import type { CoordStore } from './store.js';
 import { isRegistryId, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
-import { readSession } from '../sessionReading.js';
+import { readSession, type SessionFacts } from '../sessionReading.js';
 import type { ClaimantDeadCause } from '../deadCoordinator.js';
 
 /**
@@ -106,7 +106,7 @@ export type ClaimantVerdict =
  * `bad-id` separately (`SingleRead`, one `kind` each), and nothing below
  * re-collapses them. `unmeasurable` is the listed-but-unassembled row (D-1144):
  * a live coordinator mid-write, which `SingleRead` names itself since ARCH-47
- * paid D-1145, so no consumer re-splits `absent` by hand.
+ * paid D-1145, so this door never re-splits `absent` by hand.
  *
  * `nowMs` IS MILLISECONDS, and the parameter name is the guard (fleet.ts:288-298).
  * Every registry stamp is epoch seconds, `lifecycleInputFor` owns the one x1000,
@@ -119,23 +119,11 @@ export type ClaimantVerdict =
 export async function measureClaimant(
   deps: ReclaimDeps, id: string, nowMs: number,
 ): Promise<ClaimantVerdict> {
-  const read = await readSessionRecord(deps.io, deps.cfg, id);
   // The ladder is `readSession`'s (ARCH-47); this door keeps only its FAIL-SHUT POLICY over a fresh one-row read at the
   // act (D-1144): `dead` proceeds, so doubt is never `dead`, and a hibernated claimant is alive as any live one (D-5242).
-  // tmux is asked only for a row that is present, never for one the registry itself is still writing.
-  let sv: SessionVerdict | null = null;
-  let lc: SessionLifecycle | null = null;
-  if (read.kind === 'found') {
-    sv = await deps.tmux.sessionVerdict(id);
-    lc = sessionLifecycle(lifecycleInputFor(read.record, false, nowMs));
-  }
-  const r = readSession({
-    row: read.kind === 'found' ? 'present' : read.kind,
-    pane: sv === null ? null : sv.verdict,
-    lifecycle: lc,
-    hibernatedAt: read.kind === 'found' ? read.record.hibernatedAt : null,
-    turn: null,
-  });
+  const { facts, sv } = await claimantFacts(deps, id, nowMs);
+  const lc = facts.lifecycle;
+  const r = readSession(facts);
   switch (r.why) {
     // D-1144: a row the listing NAMED and `buildRecord` could not assemble is a live coordinator caught between two
     // `_reg_set` writes, so it is doubt, never a death.
@@ -170,6 +158,31 @@ export async function measureClaimant(
       return _x;
     }
   }
+}
+
+/** The door's adapter: the facts `measureClaimant` hands `readSession`, from a fresh one-row read at the act. tmux is
+ *  asked only for a row that is present, never for one the registry itself is still writing. Exported so the truth
+ *  table derives each row's facts from this read, not from a hand-typed copy. */
+export async function claimantFacts(
+  deps: Pick<ReclaimDeps, 'io' | 'cfg' | 'tmux'>, id: string, nowMs: number,
+): Promise<{ facts: SessionFacts; sv: SessionVerdict | null }> {
+  const read = await readSessionRecord(deps.io, deps.cfg, id);
+  let sv: SessionVerdict | null = null;
+  let lc: SessionLifecycle | null = null;
+  if (read.kind === 'found') {
+    sv = await deps.tmux.sessionVerdict(id);
+    lc = sessionLifecycle(lifecycleInputFor(read.record, false, nowMs));
+  }
+  return {
+    facts: {
+      row: read.kind === 'found' ? 'present' : read.kind,
+      pane: sv === null ? null : sv.verdict,
+      lifecycle: lc,
+      hibernatedAt: read.kind === 'found' ? read.record.hibernatedAt : null,
+      turn: null,
+    },
+    sv,
+  };
 }
 
 /** THE DEAD PREDICATE, one function (D-5290): the dead-coordinator sweep's

@@ -51,8 +51,20 @@ export interface SessionFacts {
 
 export type Presence = 'alive' | 'asleep' | 'dead' | 'unknown';
 export type Turn = 'busy' | 'idle' | 'shell' | 'unknown';
-/** Which death: the registry never listed the id, or one of the lifecycle words `lifecycleIsDead` names. */
-export type DeadCause = 'absent' | Extract<SessionLifecycle, 'stopped' | 'orphan' | 'never-started'>;
+/** Which death: the registry never listed the id, or one of the lifecycle words `lifecycleIsDead` names. The ONE
+ *  definition: `deadCoordinator.ts`'s `ClaimantDeadCause` and `CLAIMANT_DEAD_CAUSES` are these, so a new word lands in
+ *  both; `coord-reclaim.test.ts` holds the list equal to `['absent', ...DEAD_LIFECYCLES]`. */
+export const DEAD_CAUSES = ['absent', 'stopped', 'orphan', 'never-started'] as const satisfies
+  readonly ('absent' | SessionLifecycle)[];
+export type DeadCause = typeof DEAD_CAUSES[number];
+
+/** A dead lifecycle as its cause, checked rather than cast: a lifecycle `lifecycleIsDead` names that `DEAD_CAUSES` does
+ *  not is a drift between the two lists, and it throws instead of carrying a cause no reader words. */
+export function deadCauseOf(lc: SessionLifecycle): DeadCause {
+  const cause = DEAD_CAUSES.find((c) => c === lc);
+  if (cause === undefined) throw new Error(`readSession: the dead lifecycle ${lc} is not a DeadCause`);
+  return cause;
+}
 
 /** Whether the session's process is there. `absent` is a proven absence (no row, or a pane tmux says is gone);
  *  `unmeasurable` is every doubt: an unlistable registry, a bad id, a row that could not be assembled, a tmux that did
@@ -117,7 +129,7 @@ function presenceOf(f: SessionFacts): Verdict {
   const lc = f.lifecycle;
   if (lc === 'stopped' && f.hibernatedAt !== null) return { presence: 'asleep', why: 'hibernated', substrate: 'absent', asleep: true };
   if (lc === null || lc === 'unmeasurable') return { presence: 'unknown', why: 'lifecycleDoubt', substrate: 'absent' };
-  if (lifecycleIsDead(lc)) return { presence: 'dead', why: 'lifecycleDead', substrate: 'absent', deadCause: lc as DeadCause };
+  if (lifecycleIsDead(lc)) return { presence: 'dead', why: 'lifecycleDead', substrate: 'absent', deadCause: deadCauseOf(lc) };
   return { presence: 'alive', why: 'lifecycleAlive', substrate: 'absent' };
 }
 
