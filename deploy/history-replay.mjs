@@ -314,13 +314,14 @@ async function yieldToSignals() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
-/** Refuse `interrupted` while the stopping flag is set. Six call sites: each runBatch lane iteration (after a yield and the
+/** Refuse `interrupted` while the stopping flag is set. Seven call sites: each runBatch lane iteration (after a yield and the
  *  re-read), runBatch's last act (after its lanes), launchRun before runChild, launchRun's post-close branch,
- *  measureClaudeVersion (after a yield), and step 0a right after its `--version` returns. So no spawn starts after the
- *  handler has run, and after the handler has run no run.json, step0a.json or probe.json is written. A run whose
- *  post-close stretch is under way when a signal arrives is recorded (its run.json is written), and the subcommand then
- *  refuses at its next check. A signal that arrives after runBatch's last check is not answered (the post-last-check
- *  window, named in the header above). A run stopped in flight is still charged once, by its spend line. */
+ *  measureClaudeVersion (after a yield), step 0a right after its `--version` returns, and an arms batch after every
+ *  pending question was excluded. So no spawn starts after the handler has run, and after the handler has run no
+ *  run.json, step0a.json or probe.json is written. A run whose post-close stretch is under way when a signal arrives is
+ *  recorded (its run.json is written), and the subcommand then refuses at its next check. A signal that arrives after
+ *  runBatch's last check is not answered (the post-last-check window, named in the header above). A run stopped in
+ *  flight is still charged once, by its spend line. */
 function refuseIfStopping() {
   if (stopping !== null) refuse('interrupted', `${stopping} received; no spawn starts after this, and no run.json, step0a.json or probe.json is written`);
 }
@@ -2688,8 +2689,8 @@ export async function step0bMechanics({ launch, out, model, settingsMode, lang, 
 // ── W2-5a Task 1: reconstruction reads the store through W2-1's exports (W2-D74, W2-D75, W2-D33, W2-D68 (2), W2-D54) ──
 // Boundary N's payload (spec §10.2 "Reconstruction", items 1 to 3) is built on the node that holds the store, and this
 // file decodes nothing itself (W2-D74):
-//   - the store opens through store.mjs's openReader (read-only, query_only; W2-D51), and the run's pair index is
-//     cli.mjs's pairIndexOf, built once per open (W2-D54, W2-D67);
+//   - the store opens through store.mjs's openReader (read-only, query_only; W2-D51), and its seed pair index is
+//     cli.mjs's pairIndexOf; arm and judge preflights retain and recheck later readings before exclusions (W2-D54, W2-D67, D-6481);
 //   - N's holding copy is derive.mjs's holdingCopyOf (lib's pickHoldingCopy), and N's summary row is lib's
 //     summaryRowFor over that copy's rows, as derivation picks it: a harness user row (an echo) is never the pick;
 //   - kept(N) is the string members of the blob boundaries.kept_blob_id names, read through derive.mjs's bodyOf over
@@ -2804,8 +2805,9 @@ function replayStmts(db) {
 
 /** This node's store, open for the run (W2-D51, W2-D33, W2-D54): a read-only, query_only handle, this node's store id
  *  (meta.store_id, read through the same handle), its user_version and SCHEMA_ADDED (the `rc` expandEntryBody reads
- *  columns by, DM44), the two blob reads bodyOf needs, this section's statements, and the run's pair index, built once
- *  here through cli.mjs's pairIndexOf. Every subcommand opens the store once, here, and passes it down (R3). A store
+ *  columns by, DM44), the two blob reads bodyOf needs, this section's statements, and the seed pair index through
+ *  cli.mjs's pairIndexOf. Later arm and judge preflights retain and recheck fresh readings before exclusions. Every
+ *  subcommand opens the store once, here, and passes it down (R3). A store
  *  openReader refuses (missing, zero-byte, unmeasured), one with no UUID store id, or one whose first reads fail in
  *  SQLite, refuses store-unreadable.
  *  @param {string} home  @returns {ReplayStore} */
@@ -2958,6 +2960,7 @@ function maskingMaterialOf(idx, limit) {
   }
   return total;
 }
+// Test-only complete-module variants use this private validator to construct owner-shaped candidate readings.
 function maskingIndexChecked(idx) { maskingMaterialOf(idx, Number.MAX_SAFE_INTEGER); return idx; }
 function maskingIndexSame(a, b) {
   const aa = a; const bb = b;
@@ -6928,8 +6931,8 @@ function questionArmsOf(ctx, q) {
 }
 
 /** W2-D78 and W2-D56 before one arm batch, composed once. Read-only first:
- *  (0) the store's pair index refreshed (D-6481, refreshPairIndex), so the re-check and the payloads below read the pairs the
- *      store holds now, both arms of every question from one index;
+ *  (0) retained masking snapshots, including the seed and every admitted fresh reading, are refreshed (D-6481,
+ *      refreshPairIndex); every retained reading must recheck and build both payloads before exclusions;
  *  (i) every batch family listed in headless-on for this store (Task 3's requireListed: family-unlisted);
  *  (ii) no batch family with a recall-off entry (W2-4's refuseRecallOff: family-recall-off);
  *  (iii) the batch's questions re-checked (Task 2's recheckBatch: quiz-unanswerable naming each failing qid and clause,
@@ -7220,7 +7223,11 @@ export async function armsCommand(flags, driverEnv, deps = { recheck: recheckBat
           const pending = states.filter((s) => s.next.length > 0).slice(0, perBatch);
           if (pending.length === 0) break;
           const pre = await armBatchPreflight(ctx, pending);
-          if (pre.pending.length === 0) continue;   // D-6482: every question of the batch was excluded; the next pass reads them as run-failed
+          if (pre.pending.length === 0) {
+            // D-6482 can exclude the whole batch while an async recheck yields; do not write answers or a success summary after a stop.
+            refuseIfStopping();
+            continue;
+          }
           const planned = pre.pending.flatMap((s) => s.next.map(({ arm, attempt }) => ({ qid: s.q.qid, arm, attempt,
             job: armJob(ctx, s.q, arm, attempt, pre.stdins.get(`${s.q.qid} ${arm}`)) })));
           writeArmManifest(ctx, pre.version, planned);

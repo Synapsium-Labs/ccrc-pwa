@@ -13850,7 +13850,7 @@ async function c04Prerequisite(): Promise<C04Prerequisite> {
   } finally { rs.close(); }
 }
 
-w5b4It('C04 prerequisite: stored command mines and old/fresh rechecks differ', async () => {
+w5b4It('W2-5b1 Task 4: C04 prerequisite, stored command mines and old/fresh rechecks differ', async () => {
   const c = await c04Prerequisite();
   let oldPayloads: { plain: string; carded: string };
   const old = D4.openReplayStore(c.home) as B1t2Rs;
@@ -14001,14 +14001,13 @@ async function c04Variant(options: { acquireRetainedSnapshots?: boolean; nodeOve
     rebuilt = `${preflightPrefix}${preflight.replace(acquisitionAnchor, acquisitionReplacement)}${preflightSuffix}`;
   }
   text = rebuilt;
-  const variant = join(B1T2_REPO, '.superpowers', 'sdd', 'history-w2-5b1', 'c04-current-driver.mjs');
-  mkdirSync(join(B1T2_REPO, '.superpowers', 'sdd', 'history-w2-5b1'), { recursive: true, mode: 0o700 });
+  const variant = join(mkTmp('ccrc-w2-5b1-t4-c04-'), 'c04-current-driver.mjs');
   writeFileSync(variant, text, { mode: 0o600 });
   try { return await import(`${pathToFileURL(variant).href}?v=${Date.now()}`) as W5b4R; }
   finally { rmSync(variant); c04VariantCleaned = !existsSync(variant); }
 }
 
-w5b4It('C04 consumer: retained old recheck refuses before effects', async () => {
+w5b4It('W2-5b1 Task 4: C04 consumer, retained old recheck refuses before effects', async () => {
   const c = await c04Prerequisite();
   const variant = await c04Variant();
   let callbacks = 0;
@@ -14024,7 +14023,7 @@ w5b4It('C04 consumer: retained old recheck refuses before effects', async () => 
   w5b4Expect(w5b4Runs(c.home)).toEqual([]);
 }, 180_000);
 
-w5b4It('C04 CONTROL: unrelated fact without source reaches effects', async () => {
+w5b4It.skipIf(process.platform === 'darwin')('W2-5b1 Task 4: C04 CONTROL, unrelated fact without source reaches effects', async () => {
   const s = await fwSetup({ limits: { batch_max: 2 } });
   const r = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads: D4.armPayloads });
   w5b4Expect(r.refusal).toBeNull();
@@ -14033,7 +14032,49 @@ w5b4It('C04 CONTROL: unrelated fact without source reaches effects', async () =>
   w5b4Expect(w5b4Runs(s.home)).toHaveLength(4);
 }, 180_000);
 
-w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4 fix wave: the pair index across arm batches', () => {
+w5b4It.skipIf(process.platform === 'darwin')('W2-5b1 Task 4: F2 consumer, a failed refresh refuses before the next batch effects', async () => {
+  const s = await fwSetup({ limits: { batch_max: 2 } });
+  let broken = false;
+  const payloads = (view: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+    const payload = D4.armPayloads(view, id, question, cut) as W5b4R;
+    if (!broken && question === String(s.entries[0]!.question)) {
+      const writer = b1t2Store.openWriter(b1t2Lib.historyPaths(s.home).dbFile);
+      try { writer.exec('DROP TABLE meta'); broken = true; }
+      finally { b1t2Store.closeWriter(writer); }
+    }
+    return payload;
+  };
+  const r = await w5b4Arms(s.home, s.argv, { recheck: D4.recheckBatch, payloads });
+  w5b4Expect(r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshot-refresh-failed' });
+  w5b4Expect(broken, 'the first batch reached the real payload builder before the next refresh failed').toBe(true);
+  w5b4Expect(w5b4Manifests(s.out, 'pilot')).toHaveLength(1);
+  w5b4Expect(w5b4Versions(s.home)).toBe(1);
+  w5b4Expect(w5b4Runs(s.home)).toHaveLength(2);
+  for (const arm of W5B4_ARMS) w5b4Expect(existsSync(join(s.out, 'pilot', 'answers', `${s.entries[1]!.qid as string}.${arm}.json`))).toBe(false);
+}, 180_000);
+
+w5b4It.skipIf(process.platform === 'darwin')('W2-5b1 Task 4: F2 consumer, nine distinct readings refuse the ninth batch at the count cap', async () => {
+  const home = w5b4Home();
+  const fx = w5b4Pilot(home, { n: 9, over: { limits: { batch_max: 2 } } });
+  const values = Array.from({ length: 8 }, (_, i) => `f2 distinct snapshot fixture value ${String(i + 1).padStart(2, '0')}`);
+  let batchBuilds = 0;
+  const payloads = (_view: B1t2Rs, _id: number, _question: string, cut: W5b4R): W5b4R => {
+    if (batchBuilds < fx.entries.length && String(cut.qid) === String(fx.entries[batchBuilds]!.qid)) {
+      batchBuilds += 1;
+      if (batchBuilds <= values.length) fwLearn(home, values[batchBuilds - 1]!);
+    }
+    return { state: 'payloads', plain: `f2 plain ${String(cut.qid)}\n`, carded: `f2 carded ${String(cut.qid)}\n` };
+  };
+  const r = await w5b4Arms(home, fx.argv, { recheck: W5B4_FAKE.recheck, payloads });
+  w5b4Expect(r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-count-cap' });
+  w5b4Expect(batchBuilds, 'eight distinct batches built before the refused ninth was selected').toBe(8);
+  w5b4Expect(w5b4Manifests(fx.out, 'pilot')).toHaveLength(8);
+  w5b4Expect(w5b4Versions(home)).toBe(8);
+  w5b4Expect(w5b4Runs(home)).toHaveLength(16);
+  for (const arm of W5B4_ARMS) w5b4Expect(existsSync(join(fx.out, 'pilot', 'answers', `${fx.entries[8]!.qid as string}.${arm}.json`))).toBe(false);
+}, 240_000);
+
+w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4: fix wave, the pair index across arm batches', () => {
   const learnedPairRun = async (learn: boolean): Promise<{ s: FwSetup; second: W5b4R; rechecks: string[][]; r: W5b4Result }> => {
     const s = await fwSetup();
     const reloaded = JSON.parse(readFileSync(s.frozen.path, 'utf8')) as { entries: W5b4R[] };
@@ -15572,6 +15613,92 @@ w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4 fix wave: the 
     w5b4Expect(Object.hasOwn(w5b4Summary(f.s.out, 'pilot'), 'payload_changed')).toBe(false); w5b4Expect(readFileSync(f.batch, 'utf8')).toBe(f.originalManifest);
   }, 180_000);
 
+  w5b4It('W2-5b1 Task 4: F3 existing ordinary owed record refuses without overwrite', async () => {
+    const f = await n212Fixture('control');
+    fwLearn(f.s.home, 'Summary');
+    const rel = `pilot/answers/${f.q1.qid as string}.${W5B4_CONTROL}.json`;
+    const recordPath = join(f.s.out, rel);
+    const original = `${w5b4Lib.canonicalJson({ kind: D4.ANSWER_KIND, ordinary: true })}\n`;
+    let planted = false;
+    const payloads = (view: B1t2Rs, id: number, question: string, cut: W5b4R): W5b4R => {
+      const payload = D4.armPayloads(view, id, question, cut) as W5b4R;
+      if (!planted) {
+        planted = true;
+        mkdirSync(path.dirname(recordPath), { recursive: true, mode: 0o700 });
+        writeFileSync(recordPath, original, { mode: 0o600 });
+      }
+      return payload;
+    };
+    const result = await w5b4Arms(f.s.home, f.s.argv, { recheck: D4.recheckBatch, payloads });
+    w5b4Expect(result.refusal).toEqual({ word: 'out-refused', detail: `${rel} already exists` });
+    w5b4Expect(planted, 'the real payload operation runs before the ordinary record is planted').toBe(true);
+    w5b4Expect(readFileSync(recordPath, 'utf8')).toBe(original);
+    w5b4Expect(w5b4Versions(f.s.home)).toBe(f.beforeVersions);
+    w5b4Expect(w5b4Runs(f.s.home)).toEqual(f.beforeRuns);
+    w5b4Expect(c10Tree(join(f.s.out, 'pilot', 'arms', 'batches'))).toEqual(f.beforeManifests);
+  }, 180_000);
+
+  w5b4It('W2-5b1 Task 4: F3 CONTROL excludes the owed arm and runs the independent question', async () => {
+    const f = await n212Fixture('control');
+    fwLearn(f.s.home, 'Summary');
+    const result = await w5b4Arms(f.s.home, f.s.argv, f.real);
+    w5b4Expect(result.refusal).toBeNull();
+    w5b4Expect(w5b4Answer(f.s.out, 'pilot', f.q1, W5B4_CONTROL)).toMatchObject({ reason: D4.ARM_PAYLOAD_CHANGED, arm_state: 'run-failed' });
+    w5b4Expect(w5b4Runs(f.s.home)).toHaveLength(f.beforeRuns.length + 2);
+    w5b4Expect(w5b4Versions(f.s.home)).toBe(f.beforeVersions + 1);
+  }, 180_000);
+
+  const task4StopReset = async (): Promise<void> => {
+    D4.HANDLERS.set('task4-reset', async () => 0);
+    try { await D4.main(['task4-reset'], {}); } finally { D4.HANDLERS.delete('task4-reset'); }
+  };
+  const task4AllExcluded = async (signalDuringRecheck: boolean): Promise<{ f: N212Fixture; code: number; stderr: string; rechecks: number }> => {
+    const f = await n212Fixture('control');
+    fwLearn(f.s.home, 'Summary');
+    const narrowed = { ...f.s, entries: [f.q1] } as FwSetup;
+    const fz = w5b4SaveText(D4.frozenListText('pilot', W5B4_HEAD, narrowed.entries) as string, 'task4-sigint-frozen.json');
+    const draft = w5b4Draft(f.s.home, { stores: [f.s.storeId], pilotFamilies: [W5B4_PILOT], pilotFrozenSha: fz.sha, over: { limits: { batch_max: 2 } } });
+    const record = w5b4Save(draft, 'task4-sigint-part1.json');
+    const argv = ['arms', '--section', 'pilot', '--out', f.s.out, ...w5b4Inp('record', record), ...w5b4Inp('frozen', fz)];
+    let rechecks = 0;
+    let stderr = '';
+    const quiet = w5b4Vi.spyOn(process.stderr, 'write').mockImplementation(((line: string | Uint8Array) => { stderr += String(line); return true; }) as typeof process.stderr.write);
+    D4.HANDLERS.set('task4-interrupt', async () => {
+      const flags = D4.parseArgs(argv).flags;
+      return D4.armsCommand(flags, { HOME: f.s.home, TMUX_PANE: undefined, LANG: W5B4_LANG }, {
+        ...W5B4_FAKE,
+        recheck: async (view: B1t2Rs, entries: W5b4R[], ctx: { configDirs: readonly string[] }) => {
+          rechecks += 1;
+          const result = await D4.recheckBatch(view, entries, ctx);
+          if (signalDuringRecheck) (process.listeners('SIGINT').at(-1) as () => void)();
+          return result;
+        },
+        payloads: D4.armPayloads,
+      });
+    });
+    let code: number;
+    try { code = await D4.main(['task4-interrupt'], { HOME: f.s.home, TMUX_PANE: undefined, LANG: W5B4_LANG }); }
+    finally { D4.HANDLERS.delete('task4-interrupt'); quiet.mockRestore(); await task4StopReset(); }
+    return { f, code, stderr, rechecks };
+  };
+  w5b4It('W2-5b1 Task 4: SIGINT during async recheck after every pending arm is excluded refuses before a success summary', async () => {
+    const r = await task4AllExcluded(true);
+    w5b4Expect(r.rechecks, 'the signal follows the real async recheck decode').toBe(1);
+    w5b4Expect(r.code).toBe(EXIT.REFUSED);
+    w5b4Expect(r.stderr).toContain('ccrc history-replay: interrupted: SIGINT received;');
+    w5b4Expect(w5b4Summary(r.f.s.out, 'pilot').stop, 'the interrupted pass cannot overwrite the earlier stop with a success summary').not.toBeNull();
+    w5b4Expect(w5b4Answer(r.f.s.out, 'pilot', r.f.q1, W5B4_CONTROL)).toMatchObject({ reason: D4.ARM_PAYLOAD_CHANGED, arm_state: 'run-failed' });
+    w5b4Expect(w5b4Runs(r.f.s.home)).toEqual(r.f.beforeRuns);
+    w5b4Expect(w5b4Versions(r.f.s.home)).toBe(r.f.beforeVersions);
+  }, 180_000);
+
+  w5b4It('W2-5b1 Task 4: SIGINT CONTROL after every pending arm is excluded writes the success summary', async () => {
+    const r = await task4AllExcluded(false);
+    w5b4Expect(r.rechecks).toBe(1);
+    w5b4Expect(r.code).toBe(EXIT.OK);
+    w5b4Expect(w5b4Summary(r.f.s.out, 'pilot').counts.run_failed).toBe(1);
+  }, 180_000);
+
   w5b4It('D-6482: an owed arm whose answered sibling\'s payload changed is never spawned, it is excluded run-failed with the reason, and the invocation goes on to the next question', async () => {
     const WORD = 'Summary';   // a word of the stored summary, outside every fact: a pair for it changes the payload and fails no re-check clause
     const run = async (learn: boolean, damage: null | 'missing-manifest' | 'bad-manifest' | 'wrong-kind' = null): Promise<{ s: FwSetup; r1: W5b4Result; r2: W5b4Result; q1: W5b4R; q2: W5b4R }> => {
@@ -15641,8 +15768,8 @@ w5b4Describe.skipIf(process.platform === 'darwin')('W2-5b1 Task 4 fix wave: the 
   }, 240_000);
 });
 
-// ── W2-5b1 correction Phase A: bounded snapshot helper contract (D-6481) ─────────────────────────────────────────
-describe('W2-5b1 correction Phase A: bounded snapshot helper contract', () => {
+// ── W2-5b1 Task 4: correction Phase A, bounded snapshot helper contract (D-6481) ─────────────────────────────────
+describe('W2-5b1 Task 4: correction Phase A, bounded snapshot helper contract', () => {
   const replaceOnce = (source: string, anchor: string, replacement: string) => {
     if (source.split(anchor).length !== 2) throw new Error('snapshot helper seam is not unique');
     return source.replace(anchor, replacement);
