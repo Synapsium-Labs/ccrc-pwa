@@ -397,15 +397,7 @@ export class SessionStream {
     }
     this.failedCaptures = 0;
     this.captureHeld = false;
-    // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the
-    // WHOLE pane, and an RC-off pane renders the busy marker WHILE a dialog is
-    // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
-    // 'busy' here and this call site would suppress the parse forever. hasMenu
-    // is deliberately independent of the busy check for exactly that reason
-    // (pane/dialog.ts:42-54); it's the same idiom send.ts:320 uses to decide
-    // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
-    // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
-    // captureAnsi().
+    // parseDialog opens with the hasMenu gate (not paneState), so a busy marker painted beside a menu does not veto the parse (D-102).
     let dialog = parseDialog(pane);
     // Read the transcript only while this menu is still unexplained. Once its ask
     // is latched, re-reading costs a 256 KB tail every 2 s and can buy nothing:
