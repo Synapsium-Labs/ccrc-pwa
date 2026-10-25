@@ -2080,7 +2080,7 @@ export class FleetWatcher {
     try {
       const reads = turnReadDeps(this.deps, this);
       await stopDonePass({
-        coord, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, presence: this.deps.presence,
+        coord, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, viewers: this.deps.viewers,
         notifyLog: this.deps.notifyLog,
         liveWord: (rec) => liveWordFor(reads, rec), turnVerdict: (rec, uuid) => turnVerdictFor(reads, rec, uuid),
         mark: (rec) => turnMarkFor(reads, rec),
@@ -2111,7 +2111,7 @@ export class FleetWatcher {
     try {
       const reads = turnReadDeps(this.deps, this);
       await hibernatePass({
-        coord: this.deps.coord, presence: this.deps.presence,
+        coord: this.deps.coord, viewers: this.deps.viewers,
         liveWord: (rec) => liveWordFor(reads, rec), mark: (rec) => turnMarkFor(reads, rec),
         readAfterHours: () => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${HIBERNATE_AFTER_HOURS_FILE}`),
         log: (line) => console.warn(line),
@@ -2139,7 +2139,7 @@ export class FleetWatcher {
       const reads = turnReadDeps(this.deps, this);
       const { io, cfg, coord, notifyLog } = this.deps;
       await staleArchivePass({
-        coord, presence: this.deps.presence, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
+        coord, viewers: this.deps.viewers, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
         notice: (e) => { notify({ notifyLog, coord }, e, 'record-only', { degraded: 'stale archive, feed archive degraded' }); },
         pane: async (rec) => paneFromLiveWord(await liveWordFor(reads, rec)),
         transcriptMtimeMs: (rec) => transcriptMtimeVia(io, cfg, rec, (a) => this.transcripts.resolve(a)),
@@ -4722,9 +4722,9 @@ export class FleetWatcher {
 
   /** The ONE executor, as both triggers reach it: `reclaimChild` on the
    *  session's own `KeyedQueue`, with the deps the close route composes — so
-   *  presence, the ceiling and the feed row behave identically however a
+   *  the viewer claim, the ceiling and the feed row behave identically however a
    *  reclaim was started (spec §5.7). Composes EXACTLY the close port's seven
-   *  members (`coord, io, cfg, runCcd, fleetState, presence, notifyLog`),
+   *  members (`coord, io, cfg, runCcd, fleetState, viewers, notifyLog`),
    *  `now` unset — built HERE, inside the queue callback, as the close port
    *  does. `Deps.childReclaimExec` replaces the whole call in a test, and
    *  nowhere else. */
@@ -4737,7 +4737,7 @@ export class FleetWatcher {
     // the sweep queued it.
     return this.deps.queue.run(req.sessionId, () => reclaimChild({
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
-      fleetState: this.deps.fleetState, presence: this.deps.presence, notifyLog: this.deps.notifyLog,
+      fleetState: this.deps.fleetState, viewers: this.deps.viewers, notifyLog: this.deps.notifyLog,
     }, req));
   }
 
@@ -4950,7 +4950,7 @@ export class FleetWatcher {
     const epoch = this.collectSeenEpoch;
     void this.deps.queue.run(id, () => collectTempRoot({
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.collectRunCcd(id), fleetState: this.deps.fleetState,
-      presence: this.deps.presence, lane: this.collectPortFor(coord, id), observeIntervalMs: COLLECT_OBSERVE_INTERVAL_MS,
+      viewers: this.deps.viewers, lane: this.collectPortFor(coord, id), observeIntervalMs: COLLECT_OBSERVE_INTERVAL_MS,
       control: this.collectControlDeps(coord), link: this.deps.fleetIdentity ?? NO_FLEET_IDENTITY,
     }, { id, epoch }))
       .then((outcome) => { this.collectSettleJob(coord, id, pass, outcome); }, (err: unknown) => {
@@ -5445,7 +5445,7 @@ export class FleetWatcher {
       try {
         const result = await this.deps.queue.run(id, () => expireArchived({
           coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
-          presence: this.deps.presence, notifyLog: this.deps.notifyLog,
+          viewers: this.deps.viewers, notifyLog: this.deps.notifyLog,
         }, { sessionId: id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt!, childOf: childOfOf.get(id), rowUuid: rowUuidOf.get(id) ?? null }));
         if (result.kind === 'box' && result.word === 'flock-unavailable') this.archivedExpiryBoxRefused = result.detail;
         // Whether the row's entry STANDS rides the feed row, so a shadow row over it never says nothing was deleted (wave 6).
@@ -5992,7 +5992,7 @@ export class FleetWatcher {
   ): Promise<ChildReclaimReleaseOutcome> {
     return this.deps.queue.run(req.sessionId, () => releaseRetiredChildHold({
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
-      fleetState: this.deps.fleetState, presence: this.deps.presence, notifyLog: this.deps.notifyLog,
+      fleetState: this.deps.fleetState, viewers: this.deps.viewers, notifyLog: this.deps.notifyLog,
     }, req));
   }
 

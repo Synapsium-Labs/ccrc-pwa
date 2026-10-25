@@ -14,7 +14,7 @@ import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import type { Runner } from '../src/exec.js';
 import type { PushPayload } from '../src/push.js';
-import type { Presence } from '../src/presence.js';
+import type { Viewers } from '../src/viewer.js';
 import type { SecretMasker } from '../src/accounts/mask.js';
 import type { DatabaseSync } from 'node:sqlite';
 import { testDeps } from './helpers.js';
@@ -69,8 +69,8 @@ export function requestBody(input: Record<string, unknown>, id = CHILD): Request
 export interface Approvals {
   home: string; coord: CoordStore; app: FastifyInstance; watcher: FleetWatcher; log: NotifyLog;
   sent: PushPayload[]; panes: Map<string, string>; gone: Set<string>; unmeasured: Set<string>;
-  /** The Presence the routes read (`buildServer` sets it on the shared deps; a restart keeps it). */
-  presence: Presence;
+  /** The Viewers the routes read (`buildServer` sets it on the shared deps; a restart keeps it). */
+  viewers: Viewers;
   /** A registry row: wrapper `claude`, the project, a workdir, a uuid, and a live state file naming `version`. */
   seed(id: string, project: string, version?: string | null): void;
   /** Make `id` a dispatched child of `runId`, spawned with Task 15's two fields (the managed deny digest and bash). */
@@ -138,7 +138,7 @@ export async function approvalsFixture(over: ApprovalsFixtureOpts = {}): Promise
   const put = (id: string, field: string, v: string): void => writeFileSync(path.join(reg, `${id}.${field}`), v);
   const f: Approvals = {
     home, coord, app, watcher, log, sent, panes, gone, unmeasured,
-    presence: (deps as { presence?: Presence }).presence as Presence,
+    viewers: (deps as { viewers?: Viewers }).viewers as Viewers,
     seed(id, project, version = VERIFIED) {
       for (const [k, v] of Object.entries({ wrapper: 'claude', project, workdir: workdirOf(id), uuid: uuidOf(id), started: '1' })) put(id, k, v);
       nextPid += 1;

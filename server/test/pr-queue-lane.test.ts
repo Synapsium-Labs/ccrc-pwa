@@ -113,7 +113,7 @@ async function harness(first: string, opts: { run?: 'mine' | 'other'; state?: Ru
   let out = first;
   const deps = { ...testDeps(home, runnerFor(() => out)), coord, notifyLog: log,
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
-    presence: { isVisible: () => opts.visible === true } as never };
+    viewers: { isVisible: () => opts.visible === true } as never };
   let w = new FleetWatcher(deps, new Bus(), 10_000);
   const sweep = async (next?: string): Promise<void> => {
     if (next !== undefined) out = next;

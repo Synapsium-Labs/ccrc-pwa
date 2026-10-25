@@ -219,7 +219,7 @@ describe('ws-reclaim and its audit (D-5866, Step 1)', () => {
     const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
     await notifyLog.load();
     const deps: ChildReclaimDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd, fleetState: stateOf(v),
-      presence: { isVisible: () => false }, notifyLog };
+      viewers: { isVisible: () => false }, notifyLog };
     const o = await reclaimChild(deps, { sessionId: ID, runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
       feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'none' } });
     return { o, sent };

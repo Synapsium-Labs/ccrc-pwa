@@ -3,7 +3,7 @@ import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { RunCcd } from './ports.js';
-import type { Presence } from '../presence.js';
+import type { Viewers } from '../viewer.js';
 import type { NotifyLog } from '../notifylog.js';
 import { CCD_ARGV, RECLAIM_CAP, ccdCan, sweepDec } from '../ccdargv.js';
 import { readSessionRecord, type SessionRecord } from '../registry.js';
@@ -523,7 +523,7 @@ export const CHILD_RECLAIM_FEED_QUIET_NONE: ChildReclaimFeedQuiet = { deferWhy: 
 export interface ChildReclaimDeps {
   coord: CoordStore;
   io: FleetIO; cfg: CcrcConfig; runCcd: RunCcd; fleetState?: FleetState;
-  presence?: Pick<Presence, 'isVisible'>;
+  viewers?: Pick<Viewers, 'isVisible'>;
   notifyLog?: NotifyLog;
   /** The wall clock, epoch ms. Absent: `Date.now`. It renders the feed row's wait (spec §5.7), and
    *  it feeds two DECISIONS: it is the `nowMs` of the coordination fence (`childReclaimHasCoordinated`,
@@ -1205,7 +1205,7 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
     }
   }
   // 3 — a human looking at it, unless the defer's ceiling was reached.
-  if (!req.deferExpired && deps.presence?.isVisible(sessionId) === true) {
+  if (!req.deferExpired && deps.viewers?.isVisible(sessionId) === true) {
     return deferred('presence', 'someone is viewing this session');
   }
   // 4 — the box must PROVE it has the verb: `ccdCan(state, 'wsReclaim')` refuses on no

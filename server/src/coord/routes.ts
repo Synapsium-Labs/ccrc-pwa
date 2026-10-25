@@ -344,7 +344,7 @@ function childReclaimPort(deps: Deps, coord: CoordStore): (req: ChildReclaimRequ
   return (req) => {
     void deps.queue.run(req.sessionId, () => reclaimChild({
       coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState, presence: deps.presence, notifyLog: deps.notifyLog,
+      fleetState: deps.fleetState, viewers: deps.viewers, notifyLog: deps.notifyLog,
     }, req)).catch((err: unknown) => {
       console.warn(`ccrc-server: the reclaim of ${req.sessionId} threw `
         + `(${err instanceof Error ? err.message : String(err)}) — left to the sweep`);

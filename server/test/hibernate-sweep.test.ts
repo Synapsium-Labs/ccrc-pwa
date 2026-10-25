@@ -17,7 +17,7 @@ import { PRESENCE_OPEN_TTL_MS, RUN_STATES, TERMINAL_RUN_STATES, type FleetSessio
 import type { SessionRecord } from '../src/registry.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
-import { Presence } from '../src/presence.js';
+import { Viewers } from '../src/viewer.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
@@ -59,13 +59,13 @@ const port = (s: CoordStore, o: Partial<NonNullable<HibernateSweepDeps['coord']>
 });
 
 interface Fake { deps: HibernateSweepDeps; lines: string[]; coord: CoordStore; clock: { now: number } }
-function fake(o: { ageMs?: number; afterHours?: string | null; presence?: Pick<Presence, 'isOpen'> } = {}): Fake {
+function fake(o: { ageMs?: number; afterHours?: string | null; viewers?: Pick<Viewers, 'isOpen'> } = {}): Fake {
   const coord = store();
   const lines: string[] = [];
   const clock = { now: NOW };
   const deps: HibernateSweepDeps = {
     coord: port(coord),
-    presence: o.presence ?? { isOpen: () => false },
+    viewers: o.viewers ?? { isOpen: () => false },
     liveWord: async () => ({ ok: true, word: 'idle', since: null }),
     mark: async () => mark((o.ageMs ?? 7 * HOUR) + (clock.now - NOW)),
     readAfterHours: async () => o.afterHours ?? null,
@@ -250,15 +250,15 @@ describe('hibernatePass: the store reads, on a real store', () => {
   });
 });
 
-describe('hibernatePass: the viewer is Presence.isOpen', () => {
+describe('hibernatePass: the viewer is Viewers.isOpen', () => {
   it('a connection that reported visible:false still holds its session (an open screen in a hidden tab)', async () => {
     let t = NOW;
-    const presence = new Presence(() => t);
+    const viewers = new Viewers(() => t);
     const token = Symbol('fixture');
-    presence.markOpen(token, ID);
-    presence.setVisible(token, null);
-    expect(presence.isVisible(ID)).toBe(false);
-    const f = fake({ presence });
+    viewers.markOpen(token, ID);
+    viewers.setVisible(token, null);
+    expect(viewers.isVisible(ID)).toBe(false);
+    const f = fake({ viewers });
     expect((await pass(f))[0]!.verdict).toEqual({ act: 'hold', reason: 'viewer' });
     t = NOW + PRESENCE_OPEN_TTL_MS + 1;
     f.clock.now = t;
@@ -303,7 +303,7 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     // `runCcd` UNGUARDED (not `testDeps`'s whitelist-guarded one): a guarded runner throws on an argv outside the
     // agent's whitelist before it is recorded, and the sweep's catch would swallow that — so any ccd call at all,
     // granted or not, lands in `calls` here.
-    const deps = { ...testDeps(home, run), runCcd: ccdRunner(run, cfg), cfg, coord, presence: new Presence() };
+    const deps = { ...testDeps(home, run), runCcd: ccdRunner(run, cfg), cfg, coord, viewers: new Viewers() };
     const w = new FleetWatcher(deps as never, new Bus(), 10_000);
     (w as unknown as { hibernateStartedAt: number }).hibernateStartedAt = startedAt;
     const tick = async () => {
@@ -385,7 +385,7 @@ describe('hibernatePass: the store and presence are read again after the live re
   // what holds AFTER them: Task 17b's act-time re-measure reuses this order, so a pass that read them once is red.
   it('a viewer who opens the session while the live reads run holds viewer', async () => {
     let calls = 0;
-    const f = fake({ presence: { isOpen: () => { calls += 1; return calls > 1; } } });
+    const f = fake({ viewers: { isOpen: () => { calls += 1; return calls > 1; } } });
     const out = await pass(f);
     expect(out).toEqual([{ id: ID, verdict: { act: 'hold', reason: 'viewer' } }]);
     expect(f.lines).toEqual([]);
@@ -411,7 +411,7 @@ describe('hibernatePass: the store and presence are read again after the live re
 describe('hibernatePass: no presence port at all', () => {
   it('holds viewer (fail closed): an unmeasured screen is never an empty one', async () => {
     const f = fake();
-    const out = await pass({ ...f, deps: { ...f.deps, presence: undefined } });
+    const out = await pass({ ...f, deps: { ...f.deps, viewers: undefined } });
     expect(out).toEqual([{ id: ID, verdict: { act: 'hold', reason: 'viewer' } }]);
     expect(f.lines).toEqual([]);
   });
@@ -426,8 +426,8 @@ describe('hibernatePass: the live act', () => {
   interface Live { f: Fake; argvs: string[][]; order: string[]; port: HibernateActPort }
   const live = (o: { answer?: (argv: readonly string[]) => CcdResult; serial?: HibernateActPort['serial'] | 'none';
     fleetState?: { ccdVerbs: string[] | null }; rowAtAct?: HibernateActPort['rowAtAct']; ageMs?: number;
-    presence?: Pick<Presence, 'isOpen'> } = {}): Live => {
-    const f = fake({ ageMs: o.ageMs, presence: o.presence });
+    viewers?: Pick<Viewers, 'isOpen'> } = {}): Live => {
+    const f = fake({ ageMs: o.ageMs, viewers: o.viewers });
     const argvs: string[][] = [];
     const order: string[] = [];
     const port: HibernateActPort = {
@@ -518,7 +518,7 @@ describe('hibernatePass: the live act', () => {
 
   it('AT THE ACT, again: a screen opened inside the serialiser holds viewer and composes nothing', async () => {
     let open = false;
-    const l = live({ presence: { isOpen: () => open } });
+    const l = live({ viewers: { isOpen: () => open } });
     const port: HibernateActPort = { ...l.port, serial: async (fn) => { open = true; return fn(); } };
     const out = await pass({ ...l.f, deps: { ...l.f.deps, act: port } }, mem(), [HIBERNATE_LIVE_MARKER]);
     expect(out[0]!.act).toEqual({ kind: 'held-at-act', verdict: { act: 'hold', reason: 'viewer' } });

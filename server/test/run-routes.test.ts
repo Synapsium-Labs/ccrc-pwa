@@ -2254,15 +2254,15 @@ describe('POST /api/runs/:id/close', () => {
   });
 
   it('the reclaim port wires every port reclaimChild declares — presence included (Task 8 review)', async () => {
-    // A route-level proof, not merely a type check: `ChildReclaimDeps.presence`
+    // A route-level proof, not merely a type check: `ChildReclaimDeps.viewers`
     // is OPTIONAL, so an omission at the route's wiring is not a compile
-    // error. If `childReclaimPort` (`routes.ts`) failed to pass `presence`
+    // error. If `childReclaimPort` (`routes.ts`) failed to pass `viewers`
     // through, `isVisible` below would never be called and the executor would
     // run straight past step 3 to `unsupported` — this proves it does not.
     const sessionId = `${PROJECT}-child7`;
     const seen: string[] = [];
-    const presence = { isVisible: (id: string): boolean => { seen.push(id); return id === sessionId; } };
-    const c = await dispatchedChild(sessionId, PR_OPEN(sessionId), { presence: presence as Deps['presence'] });
+    const viewers = { isVisible: (id: string): boolean => { seen.push(id); return id === sessionId; } };
+    const c = await dispatchedChild(sessionId, PR_OPEN(sessionId), { viewers: viewers as Deps['viewers'] });
     c.calls.length = 0;
     const res = await postClose(app!, c.id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.json()).toEqual({ ok: true, id: c.id, state: 'done', released: true, childReclaim: 'queued' });

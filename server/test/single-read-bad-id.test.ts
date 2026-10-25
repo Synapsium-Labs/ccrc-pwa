@@ -149,7 +149,7 @@ describe('every absence-acting caller holds on bad-id (spec §2.3)', () => {
     const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
     await notifyLog.load();
     const base = testDeps(home, run);
-    const deps = { ...base, monotonicMs: () => clock, cfg, coord, notifyLog, tmux: new Tmux(run), presence: { isVisible: () => false } };
+    const deps = { ...base, monotonicMs: () => clock, cfg, coord, notifyLog, tmux: new Tmux(run), viewers: { isVisible: () => false } };
     const watcher = new FleetWatcher(deps as never, new Bus(), 10_000);
     watcher.useCoordSerialiser({ withSweepAbandon: (c, fn) => fn((runId, crashedId, stillCrashed) =>
       closeRun({ coord: c, io: deps.io, cfg, runCcd: deps.runCcd }, runId, { intent: 'abandon' }, 'sweep',

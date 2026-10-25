@@ -137,7 +137,7 @@ const rig = async (o: { fixed?: string; notifyLog?: boolean; coord?: CoordStore;
   // `presence` is the visibility half alone (archived-expiry-lane.test.ts's idiom): the lane reads nothing else of it.
   const deps = {
     ...testDeps(h.home, h.run), coord, ...(o.notifyLog === false ? {} : { notifyLog: log }),
-    presence: { isVisible: () => false },
+    viewers: { isVisible: () => false },
   } as unknown as Deps;
   const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000, path.join(h.home, 'state-cache.json'));
   at(PRIME_AT);

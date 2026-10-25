@@ -8,7 +8,7 @@
 // - `CoordStore.recordFeedEvent`, on a REAL `CoordStore` (or one a rig already built), wrapped the same way; it can be
 //   told to throw on its n-th call, as `node:sqlite` throws synchronously on a full disk or a held write lock;
 // - `PushService.notify`, a fake that records the payload;
-// - a presence fake: `isVisible(id)` per session.
+// - a viewers fake: `isVisible(id)` per session.
 // `console.warn` is spied (and silenced), so each writer's degrade sentence can be asserted byte for byte. The events
 // `record` returned are kept as the objects it returned, so a row can compare `JSON.stringify` of what reaches catch-up.
 // It drives nothing itself: each row reaches a writer through that writer's own lane or route.
@@ -41,7 +41,7 @@ export interface FeedRecorder {
   readonly notifyLog: NotifyLog;
   readonly coord: CoordStore;
   readonly push: { notify: (p: PushPayload) => Promise<void> };
-  readonly presence: { isVisible: (id: string) => boolean };
+  readonly viewers: { isVisible: (id: string) => boolean };
   readonly warn: MockInstance<typeof console.warn>;
   /** The `recordFeedEvent` call numbered `n` (1-based, counted from the recorder's creation) throws `ARCHIVE_FAILURE`.
    *  `'every'` makes every later call throw. */
@@ -98,10 +98,10 @@ export const feedRecorder = async (
     },
   };
   let visible: ReadonlySet<string> = new Set();
-  const presence = { isVisible: (id: string): boolean => visible.has(id) };
+  const viewers = { isVisible: (id: string): boolean => visible.has(id) };
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   return {
-    calls, ring, archived, pushes, notifyLog, coord, push, presence, warn,
+    calls, ring, archived, pushes, notifyLog, coord, push, viewers, warn,
     archiveThrowsOn: (n) => { throwOn = n; },
     setVisible: (ids) => { visible = new Set(ids); },
     mark: () => calls.length,

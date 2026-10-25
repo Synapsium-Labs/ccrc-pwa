@@ -97,7 +97,7 @@ const fixture = async (opts: {
   await notifyLog.load();
   const base = testDeps(home, run);
   // The lane's cadence reads the monotonic clock (D-5862): the fixture's one fake clock stands for both.
-  const deps = { ...base, monotonicMs: () => clock, cfg, coord, notifyLog, tmux: new Tmux(run), presence: { isVisible: () => false },
+  const deps = { ...base, monotonicMs: () => clock, cfg, coord, notifyLog, tmux: new Tmux(run), viewers: { isVisible: () => false },
     ...(opts.ccdVerbs === undefined ? {} : { fleetState: { ccdVerbs: opts.ccdVerbs } }) };
   let acts = 0;
   const newWatcher = (): FleetWatcher => {

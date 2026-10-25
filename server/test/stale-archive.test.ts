@@ -96,7 +96,7 @@ const harness = (o: {
       openCoordinatorIds: () => o.open ?? [],
       lifecycleFor: () => (o.acts ?? []) as never,
     },
-    presence: { isVisible: () => o.viewer === true },
+    viewers: { isVisible: () => o.viewer === true },
     notice: (e) => { feed.push({ title: e.title, body: e.body }); },
     runCcd: async (argv) => { ccd.push([...argv]); return { ran: true, ok: ccdAnswer.ok, stdout: '', stderr: ccdAnswer.stderr, killed: false, signal: null } as never; },
     fleetState: { ccdVerbs: o.caps ?? ['ws-archive', ARCHIVE_IF_NO_PANE_CAP, ACTOR_FLAGS_CAP] } as never,
@@ -270,7 +270,7 @@ describe('staleArchivePass (L3)', () => {
   it('someone who opens the session between the verdict and the act defers it', async () => {
     const h = harness();
     let calls = 0;
-    (h.deps as { presence: unknown }).presence = { isVisible: () => ++calls > 2 };
+    (h.deps as { viewers: unknown }).viewers = { isVisible: () => ++calls > 2 };
     const out = await twoPasses(h, [rec('a')], LIVE);
     expect(h.ccd).toEqual([]);
     expect(out.map((o) => o.kind)).toEqual(['deferred']);

@@ -89,7 +89,7 @@ const rig = async (verb: { ran: true, code: number; stdout: string }) => {
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
   const deps: ChildReclaimDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd, fleetState: CAPS,
-    presence: { isVisible: () => false }, notifyLog };
+    viewers: { isVisible: () => false }, notifyLog };
   const req: ChildReclaimRequest = { sessionId: ID, runId, trigger: 'close' as const, deferExpired: false,
     deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'none' } };
   const bodies = () => coord.feedEvents(50).filter((e) => e.sessionId === ID).map((e) => e.body);

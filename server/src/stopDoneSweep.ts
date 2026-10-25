@@ -1,6 +1,6 @@
 import type { FleetState } from './fleetstate.js';
 import type { Deps } from './server.js';
-import type { Presence } from './presence.js';
+import type { Viewers } from './viewer.js';
 import type { NotifyLog } from './notifylog.js';
 import type { SessionRecord } from './registry.js';
 import type { CoordStore } from './coord/store.js';
@@ -69,7 +69,7 @@ export interface StopDoneSweepDeps {
   readonly fleetState: FleetState | undefined;
   /** D-5242's presence contract: `isOpen`, an open screen visible or hidden — a hidden but open tab holds a finished
    *  worker as it holds a sleeping session. */
-  readonly presence: Pick<Presence, 'isOpen'> | undefined;
+  readonly viewers: Pick<Viewers, 'isOpen'> | undefined;
   readonly notifyLog: NotifyLog | undefined;
   /** `turnverdict.ts`'s `liveWordFor` and `turnVerdictFor`, over the watcher's thunks. */
   readonly liveWord: (rec: SessionRecord) => Promise<
@@ -237,9 +237,9 @@ export async function stopDonePass(
   const verb = verbSupported(deps.fleetState, CCD_ARGV.hibernate(pop[0]!.id, null));
   const holdOkVerb = capSupported(deps.fleetState, HIBERNATE_HOLD_OK_CAP);
   const inputFor = (row: StopDoneRow, store: StopDoneStoreRead, live: StopDoneLive, at: number): StopDoneInput => ({
-    row, heldKind: heldKindOf(row.held, deps.coord), holdOkVerb, store, viewer: deps.presence?.isOpen(row.id) ?? true,
+    row, heldKind: heldKindOf(row.held, deps.coord), holdOkVerb, store, viewer: deps.viewers?.isOpen(row.id) ?? true,
     sinceStartMs: at - deps.startedAt,
-    presenceTtlMs: PRESENCE_OPEN_TTL_MS, verb, optedOut: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`),
+    viewerOpenTtlMs: PRESENCE_OPEN_TTL_MS, verb, optedOut: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`),
     live, now: at, graceMs: STOP_DONE_GRACE_MS,
   });
   // The excluded row's count, over the whole population (pure: the verdict asked twice, no live read).

@@ -60,7 +60,7 @@ import { CLIP_MIME, CLIP_NAME_RE, clipPath, clipStem, isSafeSessionId, stageUplo
 import type { SpawnPty } from './pty.js';
 import { SHAPE_ONLY_MASKER, type SecretMasker } from './accounts/mask.js';
 import { maskBody, maskedError, maskFleetFrame } from './accounts/egress.js';
-import { Presence } from './presence.js';
+import { Viewers } from './viewer.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { registerUpdateRoutes } from './update/routes.js';
@@ -339,17 +339,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // D-5857: the one notice sink this server's writers outside `watch.ts` raise their feed rows through (`notice.ts`).
   const notice = noticeSink(deps);
 
-  // Presence is cheap and needs no config, unlike `push` — a caller that
+  // Viewers is cheap and needs no config, unlike `push` — a caller that
   // didn't wire one into Deps (an older test, a one-off script) still gets
   // working suppression. Written BACK onto `deps`, not just held locally:
-  // `FleetWatcher.pushOne` reads `this.deps.presence` on every push, and a
+  // `FleetWatcher.pushOne` reads `this.deps.viewers` on every push, and a
   // presence instance only this route can see would be write-only — the
   // route marks visibility nobody ever reads, so nothing is actually
   // suppressed. `deps` is a shared reference (the same object `FleetWatcher`
   // was constructed with, or will be), so this makes both sides see the
   // SAME instance regardless of construction order.
-  deps.presence ??= new Presence();
-  const presence = deps.presence;
+  deps.viewers ??= new Viewers();
+  const viewers = deps.viewers;
 
   // ── The session gate (Stage 3a) ───────────────────────────────────────
   //
@@ -1911,21 +1911,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // get un-notified by the first one's disconnect. It is the TTL, not this
     // key, that handles a socket dying WITHOUT a close frame — every frame
     // below re-stamps the claim, and the client sends one every
-    // PRESENCE_REFRESH_MS for exactly that reason (see Presence's own doc).
+    // PRESENCE_REFRESH_MS for exactly that reason (see the Viewers class's own doc).
     const token = Symbol('viewer');
     // D-5242's presence contract: the OPEN claim, stamped at connect and re-stamped by EVERY frame — before the frame
     // is parsed, so even one that fails to parse proves the socket alive. A hidden tab beats too, and holds its session
     // awake for `PRESENCE_OPEN_TTL_MS` after its last frame; `drop` at close removes both claims.
-    presence.markOpen(token, id);
+    viewers.markOpen(token, id);
     socket.on('message', (raw) => {
-      presence.touch(token);
+      viewers.touch(token);
       try {
         const m = asSessionClientMsg(JSON.parse(String(raw)));
-        if (m !== null) presence.setVisible(token, m.visible ? id : null);
-      } catch { /* a client that sends garbage simply isn't reporting presence */ }
+        if (m !== null) viewers.setVisible(token, m.visible ? id : null);
+      } catch { /* a client that sends garbage simply isn't reporting visibility */ }
     });
     socket.on('close', () => {
-      presence.drop(token);
+      viewers.drop(token);
       stream.stop();
     });
   });

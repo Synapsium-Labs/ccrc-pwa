@@ -105,7 +105,7 @@ const rig = async (over: RigOpts = {}) => {
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
   const deps: ChildReclaimDeps = { coord, io: over.io?.(counted) ?? counted, cfg: base.cfg, runCcd: base.runCcd,
-    fleetState: CAPS, presence: { isVisible: (id: string) => over.visible === true && id === ID }, notifyLog };
+    fleetState: CAPS, viewers: { isVisible: (id: string) => over.visible === true && id === ID }, notifyLog };
   /** A sweep request judged under `licence`, or close's request when it is `none`; licensed or not. */
   const req = (licence: ChildReclaimGenerationKey | typeof NONE,
     o: { readonly licensed?: boolean; readonly feedQuiet?: ChildReclaimFeedQuiet } = {}): ChildReclaimRequest => ({
@@ -194,7 +194,7 @@ describe('where step 2c sits: after the switch, before presence', () => {
     expect(s.generationReads()).toBe(0);
   });
 
-  it('a re-minted workspace someone is viewing answers generation-changed, never presence: the generation is re-read BEFORE presence is asked (spec §5.5), so a re-mint that has landed by that re-read has no presence answer credited to the old one’s episode', async () => {
+  it('a re-minted workspace someone is viewing answers generation-changed, never viewers: the generation is re-read BEFORE presence is asked (spec §5.5), so a re-mint that has landed by that re-read has no presence answer credited to the old one’s episode', async () => {
     const s = await rig({ generation: G2, visible: true });
     expect(await reclaimChild(s.deps, s.req(value(G1)))).toMatchObject({ kind: 'deferred', why: 'generation-changed' });
     const c = await rig({ generation: G1, visible: true });

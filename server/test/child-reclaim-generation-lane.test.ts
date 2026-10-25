@@ -89,7 +89,7 @@ const fixture = () => {
     ...testDeps(home, run), cfg, coord, io,
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: ['ws-audit', 'ws-reclaim', RECLAIM_CAP, RECLAIM_PAUSE_CAP, 'ws-release', ACTOR_FLAGS_CAP] },
-    presence: { isVisible: () => false },
+    viewers: { isVisible: () => false },
     childReclaimExec: async (req: ChildReclaimRequest): Promise<ChildReclaimOutcome> => {
       requests.push(req);
       return { kind: 'reclaimed', sessionId: req.sessionId, runId: req.runId, wip: { kind: 'none' }, secretsDropped: 0 };

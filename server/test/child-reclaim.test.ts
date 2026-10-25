@@ -99,7 +99,7 @@ const rig = async (over: { mark?: string | null; markSymlink?: 'dangling' | 'liv
   const deps: ChildReclaimDeps = {
     coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
     fleetState: over.fleetState ?? CAPS,
-    presence: { isVisible: (id: string) => over.visible === true && id === ID },
+    viewers: { isVisible: (id: string) => over.visible === true && id === ID },
     notifyLog,
     ...(over.now === undefined ? {} : { now: () => over.now! }),
   };
