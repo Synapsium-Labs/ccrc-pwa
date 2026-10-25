@@ -25,9 +25,15 @@
 #     server-composed teardown of an archived workspace, ws-reclaim's sibling)
 #   ws-collect <any tail>                         — likewise (child reclamation wave 7: the
 #     collector of a witnessed child temp root whose workspace is gone)
-#   ws-audit --session <value> --reclaim [--defer-expired] — the token skeleton;
+#   ws-orphan <any tail>                          — likewise (fleet disk retention: the server's removal of an
+#     orphaned worktree, behind a token the box re-proves)
+#   scratch-rescue <any tail>                     — likewise (disk retention: keeps a session's scratch
+#     repository in its project's attic; called only by the temp sweep)
+#   ws-audit --session <value> --reclaim [--defer-expired] [--stale <word>] [--hold-digest <digest>] — the token skeleton;
 #   ws-audit --session <value> --expire           — the expiry's token skeleton;
+#   ws-audit --session <value> --expire --child-of <value> — the same, for an archived child (expire-child-v1);
 #   ws-audit --session <value> --collect          — the collector's token skeleton;
+#   ws-audit --loose-hex <value> --collect        — the loose arm's token skeleton (D-6625);
 #     <value> is any string here, and the body still validates it as a session id
 # Each of those tokens is matched WITHOUT CASE, a deliberate superset: an inherited
 # `nocasematch` folds the body's own entry guard and dispatcher (in a UTF-8 locale
@@ -145,13 +151,31 @@ def folds_to(token, word):
 
 def is_protected(argv):
     # CASE-INSENSITIVE, A SUPERSET ON PURPOSE — see WHAT IS PROTECTED above.
-    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect')):
+    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue')):
         return True
     if len(argv) == 4 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session') \
             and (folds_to(argv[3], '--expire') or folds_to(argv[3], '--collect')):
         return True
-    return (len(argv) in (4, 5) and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session')
-            and folds_to(argv[3], '--reclaim') and (len(argv) == 4 or folds_to(argv[4], '--defer-expired')))
+    # the loose arm's audit (D-6625): `ws-audit --loose-hex <value> --collect` mints the token the loose `ws-collect` trusts
+    if len(argv) == 4 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--loose-hex') and folds_to(argv[3], '--collect'):
+        return True
+    if len(argv) == 6 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session') \
+            and folds_to(argv[3], '--expire') and folds_to(argv[4], '--child-of'):
+        return True
+    if not (len(argv) >= 4 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session')
+            and folds_to(argv[3], '--reclaim')):
+        return False
+    # the tail of the reclaim audit: [--defer-expired] [--stale <word>] [--hold-digest <digest>], any order (DR-26).
+    # Same walk as the body's guard: a flag that wants a value skips one token, even past the end.
+    i = 4
+    while i < len(argv):
+        if folds_to(argv[i], '--defer-expired'):
+            i += 1
+        elif folds_to(argv[i], '--stale') or folds_to(argv[i], '--hold-digest'):
+            i += 2
+        else:
+            return False
+    return True
 
 
 def body_path():

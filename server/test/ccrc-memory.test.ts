@@ -61,7 +61,7 @@ describe('ccrc memory — the census', () => {
   // source — identity residue CLAUDE.md bans — and it was provably dead code
   // (the very next `[ -d "${d}projects" ]` line already excludes a real
   // docserver home, which has no `projects/`). The doctor side of this is
-  // pinned by an INVERTED test (`ccrc-doctor.test.ts`, "no longer
+  // pinned by an INVERTED test (the `ccrc-doctor-*` test files, "no longer
   // special-cases .claude-docs-preview"); this is the matching census-side pin
   // — a `.claude-docs-preview` home with a real `projects/` dir must be
   // reported like any other home, not silently skipped.
@@ -315,7 +315,7 @@ describe('ccrc memory --apply — the union', () => {
   // `LC_ALL=C`, `.claude-acme` sorts BEFORE `.claude` (`-` 0x2D < nothing —
   // the shorter string is a prefix under byte-order too, but `C` and
   // `en_US.UTF-8` do not always agree on multi-byte/punctuation ordering in
-  // general, and this suite's own `ccrc-doctor.test.ts` already runs its
+  // general, and this suite's own the `ccrc-doctor-*` test files already runs its
   // `doctorEnv` under `LC_ALL: 'C'`). Measured: the original version of this
   // test — asserting `n.includes('claude-acme')` on the suffixed name — went
   // RED under `LC_ALL=C ./node_modules/.bin/vitest run test/ccrc-memory.test.ts

@@ -8,8 +8,19 @@
 # THE TAG AT HEAD IS THE WHOLE INPUT. `stable` is fast-forward-only (its
 # ruleset refuses force pushes and deletion — not merge commits: main's own
 # history carries them, D-3130), so what lands here is a commit that was on
-# main; a merge commit carries no release tag and is refused here (exit 2) —
-# "promote a tree nobody built" is unexpressible. THIS script is that guard.
+# main; a HEAD with no release tag (a merge commit, or a `main` merge that
+# changed nothing that ships, which release-main.sh cuts no release for) is
+# refused here (exit 2), and the refusal names the newest release HEAD
+# contains and says why there is none (D-6398): when HEAD's own merge changed
+# only docs/ or the root's Markdown, no release-main run started for it (the
+# trigger's paths-ignore); otherwise it points at release-main's run for
+# HEAD's sha, which says whether its build came out unchanged, or was
+# cancelled before it started because a later merge's run replaced it (the
+# workflow's concurrency group), and then that later run's line covers this
+# merge; and when HEAD's changed paths cannot be read (no parent, a failed
+# diff) it points at the run and says so — "promote a tree nobody built" is
+# unexpressible. THIS script is that guard.
+# It never promotes a release HEAD only contains.
 # D-3129: HEAD may carry MORE THAN ONE release-shaped tag (e.g. an
 # auto-tagged patch sitting on the same commit as a hand-cut minor) — a
 # `head -n1` over `git tag --points-at HEAD` would silently promote
@@ -59,8 +70,57 @@ read_latest() { gh api 'repos/{owner}/{repo}/releases/latest' --jq .tag_name; }
 SHAPE='^v[0-9]+\.[0-9]+\.[0-9]+$'
 mapfile -t TAGS < <(git -C "$ROOT" tag --points-at HEAD | grep -E "$SHAPE" || true)
 if [ "${#TAGS[@]}" -eq 0 ]; then
-  echo "release-stable.sh: stable must fast-forward to a commit released from main; a merge commit has no release to promote (HEAD $(git -C "$ROOT" rev-parse --short HEAD) carries no vX.Y.Z tag)" >&2
-  exit 2
+  SHORT="$(git -C "$ROOT" rev-parse --short HEAD)"
+  # The one refusal, spelled once: the prefix, the way forward and the tail
+  # are the same whatever the reason. $1 closes the HEAD parenthesis, $2 says
+  # where stable stands now, $3 is "first" or "next". No contained release is
+  # ever named as something to push, and no push, rewind or force command is
+  # printed. It measures no build and runs none. $WHY says why there is no
+  # release for this HEAD (see why_untagged).
+  refuse_untagged() {
+    echo "release-stable.sh: stable must fast-forward to a commit released from main; a merge commit has no release to promote (HEAD $SHORT carries no vX.Y.Z tag$1). $WHY $2 and cannot move back (fast-forward only); the $3 release cut from a descendant of $SHORT is the next commit it can promote. Nothing was changed" >&2
+    exit 2
+  }
+  # Whether a release-main run exists for HEAD depends on HEAD's own merge
+  # (HEAD^ to HEAD), not on the range since the last release: that workflow's
+  # trigger ignores a push whose every path is under docs/ or is a root *.md
+  # (no slash). Every path matching says no run started; any other path points
+  # at the run for HEAD's sha; no parent, or a failed diff, does the same and
+  # says the paths could not be read. Two cases a match would get wrong are
+  # turned into the pointer form, the safe direction: a path git quotes (a
+  # tab, a quote, a backslash) fails the match, and --no-renames lists a
+  # rename by both its names, so a shipped file moved under docs/ still names
+  # its shipped source. These arms are a second copy of the trigger's
+  # paths-ignore list; W25-T8 reads that list from release-main.yml and ties
+  # each pattern to an arm here (D-6512).
+  why_untagged() {
+    local pointer="A main merge whose build came out unchanged cuts no release either: the release-main run for $FULL printed \"built unchanged\" or what differed, or was cancelled before it started because a later merge's run replaced it, and then that later run's line covers this merge"
+    local paths p n=0
+    if ! paths="$(git -C "$ROOT" diff --no-renames --name-only HEAD^ HEAD 2>/dev/null)"; then
+      WHY="$pointer (HEAD's changed paths could not be read)."
+      return
+    fi
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      n=$((n + 1))
+      case "$p" in
+        docs/*) ;;
+        */*) WHY="$pointer."; return ;;
+        *.md) ;;
+        *) WHY="$pointer."; return ;;
+      esac
+    done <<< "$paths"
+    if [ "$n" -gt 0 ]; then
+      WHY="HEAD's merge changed only docs/ or the root's Markdown, so no release-main run started for it."
+    else
+      WHY="$pointer."
+    fi
+  }
+  FULL="$(git -C "$ROOT" rev-parse HEAD)"
+  why_untagged
+  NEWEST="$(git -C "$ROOT" tag --merged HEAD | grep -E "$SHAPE" | sort -V | tail -n1)" || NEWEST=""
+  [ -n "$NEWEST" ] || refuse_untagged ", and it contains no release tag" "stable now points at $SHORT" first
+  refuse_untagged "; the newest release it contains is $NEWEST" "stable now sits past $NEWEST" next
 fi
 if [ "${#TAGS[@]}" -gt 1 ]; then
   echo "release-stable.sh: HEAD carries more than one release tag (${TAGS[*]}) — a promotion names one release; delete the tag that is not the release (git push origin --delete <tag>) and re-push stable. Nothing was changed" >&2

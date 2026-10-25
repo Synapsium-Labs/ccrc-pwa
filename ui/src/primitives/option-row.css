@@ -126,18 +126,22 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: var(--sp-1);
   }
+  /* Label over description (D-6325): the label is the row's name, at medium weight, and the description under it is
+     body copy in secondary ink with a clear gap (the body's `gap` and the description's own margin, 8px together,
+     where it was 3px and 2px). Every OptionRow wears it: the ask sheets' rows, and PickSheet's model and effort pickers. */
   .opt-label {
     min-width: 0;
     overflow-wrap: anywhere;
+    font-weight: var(--weight-medium);
   }
   /* The option's sub-text — the fix for choosing options blind. Reads as body
      copy, not as meta: when Dialog.ask lands this is the transcript's own
      description, the sentence the 3-line TUI box had to throw away. */
   .opt-desc {
     display: block;
-    margin-top: 2px;
+    margin-top: var(--sp-1);
     color: var(--ink-secondary);
     font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
     white-space: pre-wrap;

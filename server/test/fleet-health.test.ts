@@ -17,6 +17,7 @@ import type { FleetHealth, FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
+import { readDiskHealth } from '../../shared/disk.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
@@ -32,7 +33,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const deadRunner: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+const deadRunner: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
 
 /** Deps in remote mode against a throwaway fixture home. */
 function remoteDeps(
@@ -679,7 +680,7 @@ describe('/api/fleet/health: the archived-held block (D-5943)', () => {
       try {
         await watcher.sweepArchivedExpiry(ARCHIVED as never, []);
         expect(((await health())['archivedHeld'] as { rows: unknown[] }).rows).toHaveLength(2);
-        (watcher as unknown as { lastArchivedExpirySweep: number }).lastArchivedExpirySweep = 0;
+        watcher.kick('archivedExpiry');
         (watcher as unknown as { deps: { fleetState: { ccdVerbs: readonly string[] } } }).deps.fleetState.ccdVerbs = [...verbs];
         await watcher.sweepArchivedExpiry([ARCHIVED[1]] as never, [...names]);
         expect((await health())['archivedHeld']).toEqual({ totalBytes: 0, unmeasured: 1, rows: [
@@ -715,5 +716,182 @@ describe('/api/fleet/health: the archived-held block (D-5943)', () => {
       const { archivedHeld: _b, ...without } = body;
       expect(older(body)).toEqual(older(without));
     } finally { await app.close(); }
+  });
+});
+
+// D-6615 (fleet disk retention spec §2.5): the optional `disk` block. Absent before the first sweep, never `null`; a
+// present block round-trips through its single reader; nothing else on the route moves.
+describe('/api/fleet/health: the disk block (D-6615)', () => {
+  async function lane(env: Record<string, string> = {}, census: string | null = null) {
+    const home = mkTmp('ccrc-fh-dk-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home, ...env });
+    const io = {
+      ...localIO,
+      // The tmp sweep census (D-6624) is read through the same io: absent unless a test hands one in.
+      lstatMeasured: async () => (census === null ? { ok: false as const, reason: 'absent' as const } : { ok: true as const, kind: 'regular' as const }),
+      statMeasured: async () => (census === null ? { ok: false as const, reason: 'absent' as const } : { ok: true as const, size: census.length }),
+      readFileMeasured: async () => (census === null ? { ok: false as const, reason: 'absent' as const } : { ok: true as const, content: census }),
+      statfsMeasured: async () => ({
+        ok: true as const,
+        measured: {
+          filesystems: [{
+            dev: '1', mount: '/work', fsType: 'ext4', roots: ['home'], sizeBytes: 100, availBytes: 50, freeBytes: 50,
+            files: 100, filesFree: 90, readOnly: false,
+          }],
+          expectedMounts: [], missing: [],
+        },
+      }),
+    };
+    const full = {
+      cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io, queue: new KeyedQueue(),
+      fleetState: { connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null },
+    } as never as Deps;
+    const bus = new Bus();
+    const watcher = new FleetWatcher(full, bus);
+    const app = await buildServer(full, bus, watcher);
+    const health = async (): Promise<Record<string, unknown>> =>
+      (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+    return { app, watcher, health };
+  }
+
+  for (const [name, env] of [['local', {}], ['remote', { CCRC_FLEET: 'remote' }]] as const) {
+    it(`${name} mode: no \`disk\` key before the first sweep (not null), then the block — and nothing else moves`, async () => {
+      const { app, watcher, health } = await lane(env);
+      try {
+        const before = await health();
+        expect('disk' in before, 'absent, never `null`: absence is UNKNOWN').toBe(false);
+        await watcher.sweepDisk();
+        const after = await health();
+        expect(readDiskHealth(after)?.level).toBe('ok');
+        expect(readDiskHealth(after)?.holders).toEqual([]);
+        const { disk: _block, ...rest } = after;
+        expect(rest).toEqual(before);
+      } finally { await app.close(); }
+    });
+  }
+
+  // D-6624 (plan Task DR-12): `holders` is the census's five largest sessions; a census that cannot be read names none.
+  const GIB = 1024 ** 3;
+  const row = (id: string, g: number): Record<string, unknown> => ({
+    id, uuid: id.padEnd(36, 'x'), bytes: g * GIB,
+    budget: { state: 'ok', overSince: null, enforceAt: null, removedBytes: 0, kept: [] },
+  });
+  const censusText = (g: number[]): string => JSON.stringify({
+    v: 1, at: 1, pressure: false, arm: 'shadow', seq: 0, moved: [], sessions: g.map((x, i) => row(`project-a-s${i}`, x)),
+  });
+
+  it('holders carry the tmp sweep census\'s five largest sessions, largest first', async () => {
+    const { app, watcher, health } = await lane({}, censusText([1, 9, 4, 7, 2, 8, 3]));
+    try {
+      await watcher.sweepDisk();
+      await watcher.sweepTmpSweepCensus();
+      expect(readDiskHealth(await health())?.holders).toEqual([
+        { label: 'project-a-s1', bytes: 9 * GIB }, { label: 'project-a-s5', bytes: 8 * GIB }, { label: 'project-a-s3', bytes: 7 * GIB },
+        { label: 'project-a-s2', bytes: 4 * GIB }, { label: 'project-a-s6', bytes: 3 * GIB },
+      ]);
+    } finally { await app.close(); }
+  });
+
+  it('a malformed census is unmeasured and the holders are empty', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { app, watcher, health } = await lane({}, '{"v":1,"sessions":[');
+    try {
+      await watcher.sweepDisk();
+      await watcher.sweepTmpSweepCensus();
+      expect(readDiskHealth(await health())?.holders).toEqual([]);
+    } finally { await app.close(); warn.mockRestore(); }
+  });
+});
+
+// D-6631 (fleet disk retention DR-19): the orphan-worktree lane's counts, which the `disk` block carries as `orphanTrees`
+// once the block lands (DR-3 spreads it in the route). The watcher is the accessor: null before the lane's first census,
+// then counts by class and outcome.
+describe('the orphan lane\'s counts in the watcher', () => {
+  const HEX = Buffer.from('/p/.claude/worktrees/a').toString('hex');
+  const ok = (stdout: string) => ({ ok: true, stdout, stderr: '', killed: false, signal: null });
+
+  it('is null before the first census, then counts the audited trees by class and outcome', async () => {
+    const home = mkTmp('ccrc-fh-orphan-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    mkdirSync(cfg.registryDir, { recursive: true });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const runCcd = async (argv: readonly string[]) => {
+      if (argv[1] === '--orphans') return ok(JSON.stringify({ mode: 'orphans', truncated: false, rows: [{ pathHex: HEX, class: 'claude' }, { pathHex: '2f78', class: 'other' }] }));
+      return ok(JSON.stringify({ mode: 'orphan', pathHex: HEX, verdict: 'refused', refusal: 'dirty', detail: '1 file' }));
+    };
+    const full = {
+      cfg, runCcd, tmux: new Tmux(deadRunner), io: localIO, queue: new KeyedQueue(), coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['orphan-v1'], rosterFp: null, build: null },
+    } as never as Deps;
+    const bus = new Bus();
+    const watcher = new FleetWatcher(full, bus);
+    try {
+      expect(watcher.orphanTreesHealth()).toBeNull();
+      await watcher.sweepOrphanTrees();
+      expect(watcher.orphanTreesHealth()).toEqual({
+        byClass: { 'ccd-root': 0, claude: 1, superpowers: 0, other: 1, 'not-a-worktree': 0 },
+        byOutcome: { pending: 0, would: 0, left: 1, removed: 0 },
+      });
+    } finally { /* nothing was built that needs closing */ }
+  });
+
+  /** A watcher over a fixture home whose one tree sits inside registry row `lane-a`, seeded by `seed`. */
+  const nested = async (seed: (reg: string) => void, claims: Map<string, string>, io: Deps['io'] = localIO) => {
+    const home = mkTmp('ccrc-fh-orphan-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    mkdirSync(cfg.registryDir, { recursive: true });
+    seed(cfg.registryDir);
+    const real = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const coord = Object.assign(Object.create(real), {
+      childReclaimCoordinatorClaims: () => claims, openCoordinatorIds: () => [],
+    }) as CoordStore;
+    const calls: string[][] = [];
+    const runCcd = async (argv: readonly string[]) => {
+      calls.push([...argv]);
+      if (argv[1] === '--orphans') return ok(JSON.stringify({ mode: 'orphans', truncated: false, rows: [{ pathHex: HEX, class: 'claude', inside: 'lane-a' }] }));
+      return ok(JSON.stringify({ mode: 'orphan', pathHex: HEX, verdict: 'refused', refusal: 'dirty', detail: '1 file' }));
+    };
+    const full = {
+      cfg, runCcd, tmux: new Tmux(deadRunner), io, queue: new KeyedQueue(), coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['orphan-v1'], rosterFp: null, build: null },
+    } as never as Deps;
+    const watcher = new FleetWatcher(full, new Bus());
+    await watcher.sweepOrphanTrees();
+    return { watcher, audited: calls.some((c) => c[1] === '--orphan-hex') };
+  };
+  const row = (reg: string, workspace: string | null) => {
+    for (const [k, v] of Object.entries({ uuid: 'u-1', wrapper: 'claude', workdir: '/p', project: 'p' })) writeFileSync(path.join(reg, `lane-a.${k}`), `${v}\n`);
+    if (workspace !== null) writeFileSync(path.join(reg, 'lane-a.workspace'), `${workspace}\n`);
+  };
+  const unreadableWorkspace: Deps['io'] = {
+    ...localIO,
+    readFileMeasured: async (p, ...rest) => (p.endsWith('lane-a.workspace') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p, ...rest)),
+  };
+
+  it('wires the coordinator set from every claim, so a nested tree of a terminal-run claimant is audited', async () => {
+    const { watcher, audited } = await nested((reg) => row(reg, 'ws-1'), new Map([['lane-a', 'closed']]));
+    expect(audited).toBe(true);
+    expect(watcher.orphanTreesHealth()?.byOutcome.left).toBe(1);
+  });
+
+  it('audits a tree inside a plain row (no .workspace): a main checkout is no nesting', async () => {
+    expect((await nested((reg) => row(reg, null), new Map())).audited).toBe(true);
+  });
+
+  it('does not audit a tree inside a non-coordinator workspace row: it goes with its workspace', async () => {
+    const { watcher, audited } = await nested((reg) => row(reg, 'ws-1'), new Map());
+    expect(audited).toBe(false);
+    expect(watcher.orphanTreesHealth()?.byOutcome.left).toBe(0);
+  });
+
+  it('keeps a tree inside an absent row: no audit', async () => {
+    expect((await nested(() => undefined, new Map())).audited).toBe(false);
+  });
+
+  it('keeps a tree whose containing row\'s .workspace is unreadable: no audit', async () => {
+    expect((await nested((reg) => row(reg, 'ws-1'), new Map(), unreadableWorkspace)).audited).toBe(false);
   });
 });

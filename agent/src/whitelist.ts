@@ -56,9 +56,9 @@ function underClaudeGlob(canonicalHome: string, canonicalTarget: string): boolea
 export type PathMode = 'read' | 'write';
 
 /**
- * The nine `~/.ccrc` NODE FILES (design 2026-09-20 §8; the ninth,
+ * The ten `~/.ccrc` NODE FILES (design 2026-09-20 §8; the ninth,
  * `box-token-generation`, is box-token lifecycle wave 1's and holds an id,
- * never a value) — the one read grant
+ * never a value; the tenth, `tmp-sweep.json`, is the tmp sweep's census, D-6624) — the one read grant
  * in this file that is not a prefix. `~/.ccrc` also holds `agent.env` (this
  * agent's own bearer), `auth.scrypt`, `coord.db`, `deploy.env` and every other
  * secret-bearing file `ccd/ccrc` writes, so an `isUnder(…/.ccrc)` arm would
@@ -355,6 +355,7 @@ export const REQUIRED_VERB_FLAG = {
   'reclaim-pause': '--state', 'ws-expire': '--expect',
   'docs-index': '--all', 'docs-tree': '--project', 'docs-show': '--project', 'docs-fetch': '--project',
   'ws-collect': '--expect',
+  'ws-orphan': '--expect',
   'ws-title': '--session',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
@@ -621,6 +622,20 @@ export const EXEC_WHITELIST = {
     // confirmation token for ws-reclaim's reason, ENROLLED in `REQUIRED_VERB_FLAG` above (g20), and its audit rides
     // `['ws-audit','--session']`. ccd recomputes the token and compares it inside the reap lock before anything moves.
     ['ws-collect', '--expect'],
+    // THE ORPHAN LANE (fleet disk retention spec 2026-10-23 §2.3, D-6630). `ws-audit --orphans` is the read-only census of
+    // linked worktrees no registry row names; `ws-audit --orphan-hex` answers one tree's ladder and mints the token the act
+    // re-proves. Neither destroys anything, and neither is gated in `REQUIRED_VERB_FLAG` (`ws-audit` is not). `ws-orphan`
+    // IS destructive, so it is ENROLLED there on `--expect` (its confirmation token leads); `--rescue` and the dec trail.
+    // `ws-orphan` is not in `UNGRANTABLE_VERBS`: its only lawful form is the token-led one.
+    ['ws-audit', '--orphans'],
+    ['ws-audit', '--orphan-hex'],
+    ['ws-orphan', '--expect'],
+    // THE COLLECTOR'S LOOSE ARM (fleet disk retention spec 2026-10-23 §2.4, D-6626). Two read-only `ws-audit` modes: the
+    // census of the entries directly under the scratch root (names as hex) and one such entry's audit, which mints the
+    // token. Neither destroys anything, and neither is gated in `REQUIRED_VERB_FLAG` (`ws-audit` is not). The loose VERB
+    // rides `['ws-collect','--expect']` above (its token leads), so it takes no prefix of its own.
+    ['ws-audit', '--collect-census'],
+    ['ws-audit', '--loose-hex'],
     // RENAME AN EXISTING WORKSPACE (named workspaces S9, design 2026-10-20 §6): `ws-title --session <id> (--title <text>
     // | --clear)` writes a workspace's operator title and its `named` marker, or removes both, and nothing else — no
     // worktree, branch, transcript or session is touched. Granted on `--session` and ENROLLED in `REQUIRED_VERB_FLAG`

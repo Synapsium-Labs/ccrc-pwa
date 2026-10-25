@@ -158,3 +158,37 @@ export function reviewRows(dialog: ReviewScreen | null): ReviewRows | null {
   if (strict) return rows;
   return dialog.raw.split('\n').some((l) => REVIEW_READY_RE.test(l.trim())) ? rows : null;
 }
+
+/** One question the review lists: ` ● <question>`, or ` │ ● <question>` when the box draws a left rule. */
+const REVIEW_LISTED_RE = /^(?:│\s*)?●\s+(.+)$/;
+
+/**
+ * The question texts a review screen lists (D-6324; the departure `review-arm-matches-the-listed-questions`, D-6478),
+ * in screen order, or null when the pane menu is not a review screen (`reviewRows` decides that, called here and never
+ * copied). Each listed question is a line ` ● <question>` followed by `   → <answer>` lines. A long question wraps and
+ * its continuation lines carry no `●`, so a listed text is the FIRST line of its question, a prefix when wrapped. A
+ * review lists only the questions that were answered (a skipped one is absent, `cc300-ask-review-skipped`), so a caller
+ * matches every listed question, never all of the asked ones. Measured on 2.1.296 and 2.1.300
+ * (`cc300-ask-review-1q-multiselect`, `cc296-ask-2q-long-review`, `cc300-ask-review-4q-long`).
+ *
+ * The capture's scrollback above the box can hold other `●` lines (Claude Code's own message bullets) and `·` summary
+ * lines, so only the lines between the review's upper boundary and the LAST ready line count. The boundary is the last
+ * tab row (`parseAskTabs` reads it) or the `Review your answers` heading, whichever is lower. Neither in the capture
+ * (a tall review loses its heading, and its tab row when the climb is cut) means no listed line can be trusted: `[]`.
+ * Read from `raw` and not from the parsed body, because the body of a tall review starts below the lines it lost.
+ */
+export function reviewQuestions(dialog: ReviewScreen | null): string[] | null {
+  if (dialog === null || reviewRows(dialog) === null) return null;
+  const lines = dialog.raw.split('\n').map((l) => l.trim());
+  let ready = -1;
+  for (let i = 0; i < lines.length; i++) if (REVIEW_READY_RE.test(lines[i]!)) ready = i;
+  let start = -1;
+  for (let i = 0; i < ready; i++) if (REVIEW_HEADING_RE.test(lines[i]!) || parseAskTabs(lines[i]!) !== null) start = i;
+  if (start === -1) return [];
+  const listed: string[] = [];
+  for (const line of lines.slice(start + 1, ready)) {
+    const m = REVIEW_LISTED_RE.exec(line);
+    if (m !== null) listed.push(m[1]!.trim());
+  }
+  return listed;
+}

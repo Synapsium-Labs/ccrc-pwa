@@ -1,3 +1,4 @@
+import { withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 import { reviveWsAudit, type ReapResult, type WsAudit } from '../../shared/api.js';
 
 /**
@@ -119,7 +120,7 @@ export const SENTENCES: Record<string, string> = {
   'reap-interrupted': 'A previous cleanup of this workspace stopped part-way and its worktree is already gone. Finish it from ccd — there is nothing left here to confirm.',
   'state-changed': 'This workspace changed since the list you were shown — nothing was removed.',
   'in-progress': 'Another cleanup of this workspace is already running.',
-  'worktree-remove-failed': 'ccrc stopped: git refused to remove a worktree, or ccrc could not prove that the tree at this workspace’s path — or a checkout inside it — is its own. The session is stopped and nothing further was deleted.',
+  'worktree-remove-failed': 'ccrc stopped: git refused to remove a worktree, or ccrc could not prove that the tree at this workspace’s path — or a checkout inside it — is its own, or a process still works inside it. The session is stopped and nothing further was deleted.',
   // Whole-branch review, finding I6: the teardown loop's merge-base
   // pre-probe (`git -C $main merge-base --is-ancestor`) never calls
   // `worktree remove` at all — it is checking, ahead of time, whether
@@ -251,6 +252,12 @@ export const SENTENCES: Record<string, string> = {
   'child': 'This workspace was created for a run, so it is cleaned up when that run closes, never by the seven-day expiry. Nothing was removed.',
   'live': 'This archived workspace has a session running — a pane, or a service that would start one — so nothing was removed. The cleanup tries again later.',
   'in-use': 'A process on this box has its working directory inside this archived workspace — a shell someone opened there, say — so nothing was removed. The cleanup tries again later.',
+  // ── nested-rescue-v1 (disk retention §2.7.1, D-6633). ccd's pin prints these two on a `failed` document, after a rescuable
+  // nested repository was found and the rescue was tried: the first is terminal (the repository's objects the main store
+  // lacks are over the bound; it is reported, never retried), the second retries (a fetch or a re-prove failed).
+  'nested-rescue-too-large': 'A repository nested in this workspace holds more history than the rescue will carry into the attic, so nothing was removed. It is reported, and not tried again.',
+  'nested-rescue-failed': 'Rescuing a repository nested in this workspace into the attic did not complete, so nothing was removed. The cleanup tries again later.',
+  'not-idle': 'This child worked within the last seven days (its transcript, its session records or its pane), so a stale reclaim left it alone. It is asked again once it has been idle for seven days.',
   'expire-in-progress': 'An interrupted seven-day cleanup of this workspace is waiting to finish, and ws-reap never finishes another verb’s work. Nothing was removed.',
 };
 
@@ -298,7 +305,8 @@ export function parseAudit(stdout: string): WsAudit | null {
  * disk that ccrc is not entitled to make; the next `ws-audit` reports the
  * breadcrumb and the reap resumes from it.
  */
-export function parseReap(stdout: string, code: number, stderr: string): ReapResult {
+export function parseReap(stdout: string, code: number, rawStderr: string): ReapResult {
+  const stderr = withoutCcdRefusal(rawStderr);
   const text = stdout.trim();
   if (text !== '') {
     try {

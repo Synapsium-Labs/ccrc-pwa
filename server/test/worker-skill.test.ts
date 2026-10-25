@@ -36,7 +36,7 @@ const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
  *  first. */
 const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 
-// The seventeen clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
+// The eighteen clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
 // quotes `toId:'coordinator'` — the one genuinely single-quoted literal left,
 // since clause 1 stopped quoting `'#S'` — and clause 9 carries the apostrophe in
 // `done-claim's` (its eight enum words are BACKTICKED, not single-quoted).
@@ -68,7 +68,7 @@ const CONTRACT = [
   "Claim before you edit: `POST /api/claims` with every path this wave touches, all-or-nothing. A 409 is an answer, not an obstacle — it names the holder, and the holder IS the address: mail them through the response's own `mailHint` instead of editing anyway. Discovery is `GET /api/peers?of=<your id>`, history is `GET /api/lifecycle`, and each row's own lifecycle is what to read — never its archive stamp, which is silently false on some live rows. Peer mail is human-timescale: a busy peer answers when it next idles, so send once and work what is uncontested. Never invent a deviation number — the coordinator allocated this program's block at run-open, and a number you cannot get is `D-TBD-<slug>` plus a report, never a guess.",
   "When your workspace carries `graphify-out/graph.json`, a question about the codebase goes to `graphify query` before `grep` or a file read, and to `graphify path` / `graphify explain` for relationships and concepts — but weigh that answer by your SessionStart card: only `fresh` licenses taking it as read, while `N commits behind HEAD`, `not an ancestor of HEAD` (the graph was built on a tree yours cannot reach, so it describes code you do not have), `freshness unmeasured`, or no freshness clause at all makes every query answer a LEAD to verify by opening the file it names. Never run `graphify update` or any graphify build in the workspace: the sweep owns the write side, and a session-side build holds you at `working` for minutes and wedges the next dispatch as `worker-busy`.",
   "When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session's pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child's reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator's; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.",
-  "Route your own subagents by the shape of their task, from `../ccrc-coordinator/references/routing-matrix.md`, and never let one inherit your model: name the class on every Agent or Workflow call and the effort on every Workflow `agent()` call (an Agent-tool subagent runs at your own effort) — implementation from a spec'd plan on Sonnet at high, review with judgement and adversarial verification on Opus at high, scouts and transcription-grade edits on Haiku, and Fable never as a fan-out worker. A subagent effort the brief names governs over that default.",
+  "Route your own subagents by the shape of their task, from `../ccrc-coordinator/references/routing-matrix.md`, and never let one inherit your model: name the class on every Agent or Workflow call and the effort on every Workflow `agent()` call (an Agent-tool subagent runs at your own effort) — implementation from a spec'd plan on Sonnet at high, the per-task reviewer of a spec'd task on Sonnet at high (the held-out panel is the gate), review with judgement and adversarial verification on Opus at high, scouts and transcription-grade edits on Haiku, and Fable never as a fan-out worker. A subagent effort the brief names governs over that default.",
   "Your wave-done body opens with two signal lines the server parses, before any prose and before the fingerprint: `suite: green|red|unrun` says whether the whole suite passed on its FIRST full run after this wave's implementation was complete (red stays red however many fix rounds followed; unrun when no full run happened), and, only when a check failed, `failure: shallow|ceiling|unclear` names the kind — shallow for tests missed or a plan half-followed, ceiling for an ambiguity you could not resolve, a design flaw or a debug that survived two attempts, unclear otherwise. The suite line is never omitted.",
   // Landing-order wave 1 (spec 2026-09-23 §5.1). The probe's exit code alone
   // is NOT the conflict verdict: measured on git 2.43, `git merge-tree
@@ -79,6 +79,8 @@ const CONTRACT = [
   "Absorb `origin/main` into this branch only on one of three triggers, each read after one `git fetch origin`: your own probe `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its first line (the branch conflicts; exit 0 is clean, and any other answer is unmeasured and licenses nothing); a required check on your PR is red while main passes the same tests, measured by re-running its failing test files on a clean checkout of `origin/HEAD` in scratch; or a `fix-round` mail from the coordinator names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository. The first two license at most one absorption per PR — a second occurrence before the first absorption lands is not a second license — and the third arrives on the `merging → working` edge, after which you absorb, re-gate and send a fresh `wave-done`. Absorb with `git merge` only: never a rebase, a force-push or `update-branch` by any route, including `gh api -X PUT`. Never write any repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`. Never hand-resolve a generated stamp: on a conflict in a `# ccrc:generated` line such as `ccd/ccd`'s line 2, take either side of that line only, resolve every other hunk of the file as the source it is, then run `~/.local/bin/ccrc restamp <file>`. A red that main also shows is reported once as `main-red` and left alone. Keep no local `main`: read `origin/HEAD`, fetched once.",
   // Worker stall watch, wave 3 (spec 2026-09-29 §6.2): ASCII only, no apostrophe.
   "End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent or workflow you launched from your main thread yourself that has not yet reported, or a structured ask. A background shell or Monitor is never that wake: it has no deadline and may never report. A task a subagent started reports to that subagent, so an agent whose completion says it may resume on its own has reported, and is not that wake either. A restart kills every background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn ends.",
+  // Fleet disk retention, DR-25 (spec 2026-10-23 §2.7.2, §10): ASCII only, no apostrophe, no double quote.
+  "A workflow script, a subagent brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree.",
 ];
 
 /** The absorb clause, by its own index — the one clause licensed to name
@@ -90,7 +92,17 @@ const ABSORB = CONTRACT[15]!;
 const FORBIDS = CONTRACT[7]!;
 
 describe('the worker skill: its contract', () => {
-  it('carries all seventeen clauses verbatim', () => {
+  // DR-25 (D-6637): the temp clause is its own pin beside the verbatim one, so a softened half reds by name.
+  it('clause 18 keeps scratch out of a work tree and sends long output to a file or tail (D-6637)', () => {
+    const line = skill.split('\n').find((l) => l.startsWith('18. '));
+    expect(line, 'SKILL.md has no clause 18').toBeTruthy();
+    expect(line).toContain('never sets `TMPDIR` to a path inside a work tree');
+    expect(line).toContain('never writes scratch inside one');
+    expect(line).toContain('`CCRC_SESSION_TMPDIR`');
+    expect(line).toContain('Long command output goes to a file there, or through `tail`');
+  });
+
+  it('carries all eighteen clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -333,9 +345,9 @@ describe('the worker skill: the facts it states about the wire', () => {
   });
 
   /**
-   * The OTHER ceiling, harvested from `watch.ts`'s source text rather than
-   * imported: `MAIL_REPLAY_MAX_ATTEMPTS` is module-private there, and
-   * re-exporting it so a test could read it conveniently is the hole
+   * The OTHER ceiling, harvested from `coord/delivery.ts`'s source text rather
+   * than imported (ARCH-19 moved it there from `watch.ts`): importing it only so
+   * a test could read it conveniently is the hole
    * `PR_PHASES`' own docstring warns about at length. Harvest-and-compare is
    * this repo's established idiom for exactly that shape (`wsaudit.test.ts`,
    * and the coordinator suite's route/refusal scans). A rename or a deletion
@@ -343,9 +355,9 @@ describe('the worker skill: the facts it states about the wire', () => {
    */
   const REPLAY_CONST = 'MAIL_REPLAY_MAX_ATTEMPTS';
   const replayCeiling = ((): number => {
-    const src = readFileSync(path.join(root, 'server/src/watch.ts'), 'utf8');
-    const m = new RegExp(`^const ${REPLAY_CONST} = (\\d+);$`, 'm').exec(src);
-    if (!m) throw new Error(`watch.ts declares no ${REPLAY_CONST} — this harvest is ` +
+    const src = readFileSync(path.join(root, 'server/src/coord/delivery.ts'), 'utf8');
+    const m = new RegExp(`^export const ${REPLAY_CONST} = (\\d+);$`, 'm').exec(src);
+    if (!m) throw new Error(`coord/delivery.ts declares no ${REPLAY_CONST} — this harvest is ` +
       'looking at the wrong file, or the constant was renamed and the skill now cites a ghost');
     return Number(m[1]);
   })();
@@ -357,9 +369,9 @@ describe('the worker skill: the facts it states about the wire', () => {
     // The two lanes are deliberately separate in the delivery code, and
     // `MAIL_MAX_ATTEMPTS`'s own docstring is emphatic about it: that budget
     // "applies ONLY while a delivery's own `deliveredAt` is still null"
-    // (`watch.ts:170-186`), the park is gated on `d.deliveredAt === null`
-    // (`:2042`), and a delivered row that is merely never acked parks on
-    // `MAIL_REPLAY_MAX_ATTEMPTS` instead (`:207`, park at `:1981-1983`).
+    // (`coord/delivery.ts`), the park is gated on `d.deliveredAt === null`
+    // (`decideSendFailure`), and a delivered row that is merely never acked
+    // parks on `MAIL_REPLAY_MAX_ATTEMPTS` instead (`decideReplayCeiling`).
     //
     // D-105: clause 3's plan-locked content named the 6 for both, which
     // under-states a worker's real ack window by more than 3x AND calls a mail

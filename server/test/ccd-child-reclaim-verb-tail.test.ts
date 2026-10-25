@@ -460,7 +460,7 @@ describe('the tail proves the tree is the child’s own at removal time, on EVER
   }, 90_000);
 });
 
-describe('an OTHER row whose workdir is not absolute, or opens with or resolves to `//`, stops the verb, fresh or resumed — it cannot be placed against the child (spec §5.5, rung 9)', () => {
+describe('an OTHER row whose workdir is not absolute, or opens with or resolves to `//`, stops the verb, fresh or resumed — its strings cannot place it against the child (spec §5.5, rung 9)', () => {
   // The review's measured shape, end to end: a row `quiet-basin/server` (what
   // an older `ccd start … quiet-basin/server` stored when typed in
   // `~/worktrees/demo`), read by a reclaim whose cwd is `$HOME`. It resolved
@@ -476,25 +476,30 @@ describe('an OTHER row whose workdir is not absolute, or opens with or resolves 
   // with `//` — bash's `pwd -P`, which `_ws_realpath` answers with, keeps a
   // leading `//`, so `//<child>/server` resolved to no prefix of the child's
   // and the verb removed `live.txt` (review fr171-B C1, measured).
-  const SPELLINGS: ReadonlyArray<[string, (c: Child) => string]> = [
-    ['a relative row `quiet-basin/server`', () => 'quiet-basin/server'],
-    ['a row `//<child>/server`', (c) => `/${c.wt}/server`],
+  // Each row's third field, `placed`: whether the rows rung places it inside
+  // the child after all, so the verb REFUSES it, on every platform.
+  const SPELLINGS: ReadonlyArray<[string, (c: Child) => string, boolean]> = [
+    ['a relative row `quiet-basin/server`', () => 'quiet-basin/server', false],
+    ['a row `//<child>/server`', (c) => `/${c.wt}/server`, false],
     // A plain absolute row that RESOLVES to `//<child>/server` through a link
     // whose target opens with `//` (rereview fr171-B-r1 N1): the verb removed
     // `live.txt` through it too. Where `pwd -P` keeps that `//` (bash on
-    // Linux, measured; the ladder suite reads it per platform) it is unplaced.
+    // Linux, measured; the ladder suite reads it per platform) its strings
+    // cannot place it, but the identity walk stats where it reads now and
+    // finds the child among its ancestors by device and inode (path-identity
+    // spec §4.5), so it is placed inside the child on every platform.
     ['a row through a link whose target opens with `//`', (c) => {
       fs.mkdirSync(path.join(h.home, 'elsewhere'), { recursive: true });
       fs.symlinkSync(`/${c.wt}`, path.join(h.home, 'elsewhere', 'dslink'));
       return path.join(h.home, 'elsewhere', 'dslink', 'server');
-    }],
+    }, true],
   ];
   const plantRow = (value: string): void => {
     fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-nested.uuid'), 'u-nested');
     fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-nested.workdir'), value);
   };
 
-  /** Whether the reader cannot place this value ON THIS PLATFORM — read, not
+  /** Whether the strings cannot place this value ON THIS PLATFORM — read, not
    *  assumed: a link target's leading `//` survives bash's `pwd -P` on Linux
    *  (measured), and every spelling here must be unplaceable there. Where a
    *  platform collapsed it, the row would place inside the child and be
@@ -505,8 +510,8 @@ describe('an OTHER row whose workdir is not absolute, or opens with or resolves 
     return u;
   };
 
-  for (const [label, spell] of SPELLINGS) {
-    it(`${label}: the fresh arm answers \`probe-unmeasured\` at exit 1, and \`<child>/server\` stands with its files`, () => {
+  for (const [label, spell, placed] of SPELLINGS) {
+    it(`${label}: the fresh arm ${placed ? 'refuses `containment-unproven` at exit 0' : 'answers `probe-unmeasured` at exit 1'}, and \`<child>/server\` stands with its files`, () => {
       const c = makeChild(h);
       const sub = plantNested(c);
       const tok = evalOf(h).token;
@@ -518,18 +523,18 @@ describe('an OTHER row whose workdir is not absolute, or opens with or resolves 
       // What is on disk FIRST: a reclaim that went ahead shows here.
       expect(treeOf(c.wt), 'the child’s tree, and the other session’s inside it, survive byte for byte').toEqual(before);
       expect(fs.readFileSync(path.join(sub, 'live.txt'), 'utf8')).toContain('uncommitted');
-      if (!unplaceable(value)) { expect(refusedWith(r)).toBe('containment-unproven'); intact(c); return; }
+      expect(atticShas(c), 'nothing was pinned').toEqual([]);
+      expect(h.reg(CHILD_ID, 'reaping'), 'nothing started: no breadcrumb').toBeNull();
+      if (!unplaceable(value) || placed) { expect(refusedWith(r)).toBe('containment-unproven'); intact(c); return; }
       expect(r.code, r.stdout + r.stderr).toBe(1);
       const o = JSON.parse(r.stdout) as Record<string, unknown>;
       expect(o['failed']).toBe('probe-unmeasured');
       expect(o['refused'], 'not a refusal: the fault is another row’s').toBeUndefined();
       expect(String(o['detail'])).toContain('registry row(s) demo-nested name no plain absolute workdir');
-      expect(atticShas(c), 'nothing was pinned').toEqual([]);
-      expect(h.reg(CHILD_ID, 'reaping'), 'nothing started: no breadcrumb').toBeNull();
       intact(c);
     }, 90_000);
 
-    it(`${label}: the same row stops a RESUMED tail with \`worktree-remove-failed\` or \`containment-refuted\` — the tree byte-identical, the breadcrumb kept`, () => {
+    it(`${label}: the same row stops a RESUMED tail with ${placed ? '`containment-refuted`' : '`worktree-remove-failed` or `containment-refuted`'} — the tree byte-identical, the breadcrumb kept`, () => {
       const c = makeChild(h);
       plantNested(c);
       interrupted(c, 'worktree');
@@ -542,8 +547,8 @@ describe('an OTHER row whose workdir is not absolute, or opens with or resolves 
       expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the child’s branch survives').toContain(CHILD_BRANCH);
       expect(r.code, r.stdout + r.stderr).toBe(1);
       const o = JSON.parse(r.stdout) as { failed: string; detail: string };
-      expect(o.failed).toBe(unplaceable(value) ? 'worktree-remove-failed' : 'containment-refuted');
-      expect(o.detail).toContain(unplaceable(value)
+      expect(o.failed).toBe(unplaceable(value) && !placed ? 'worktree-remove-failed' : 'containment-refuted');
+      expect(o.detail).toContain(unplaceable(value) && !placed
         ? 'registry row(s) demo-nested name no plain absolute workdir' : 'registry row(s) demo-nested rooted inside');
       expect(o.detail, 'the row’s value is never printed').not.toContain(value);
       expect(h.calls(), 'it stops AFTER the kill: the child’s pane is down, nothing deleted').toContain(KILL);
@@ -565,10 +570,10 @@ describe('an OTHER row whose workdir is not absolute, or opens with or resolves 
     return { real: path.join(h.home, 'wtreal', 'demo', 'quiet-basin', 'server'), kept };
   };
 
-  it('a CHILD whose own workdir resolves through a `//` link: the fresh arm answers `probe-unmeasured`, and the other session’s files stand', () => {
+  it('a CHILD whose own workdir resolves through a `//` link: the fresh arm refuses `containment-unproven`, and the other session’s files stand', () => {
     const c = makeChild(h);
     plantNested(c);
-    const { real, kept } = relinkChild(c);
+    const { real } = relinkChild(c);
     const tok = evalOf(h).token;
     expect(tok, 'with no other row the audit mints a token').toMatch(/^[0-9a-f]{64}$/);
     plantRow(real);
@@ -576,30 +581,29 @@ describe('an OTHER row whose workdir is not absolute, or opens with or resolves 
     const r = childReclaimVerb(h, tok);
     expect(treeOf(c.wt), 'the child’s tree, and the other session’s inside it, survive byte for byte').toEqual(before);
     expect(fs.readFileSync(path.join(real, 'live.txt'), 'utf8')).toContain('uncommitted');
-    if (!kept) { expect(refusedWith(r)).toBe('containment-unproven'); intact(c); return; }
-    expect(r.code, r.stdout + r.stderr).toBe(1);
+    // On every platform the row lies inside the child: where `pwd -P` keeps the
+    // `//` the identity walk places it by device and inode (path-identity spec §4.5).
+    expect(refusedWith(r)).toBe('containment-unproven');
     const o = JSON.parse(r.stdout) as Record<string, unknown>;
-    expect(o['failed']).toBe('probe-unmeasured');
-    expect(String(o['detail'])).toContain(`registry row(s) demo-nested cannot be placed against this child: ${CHILD_ID}'s own workdir resolves to a path opening with //`);
     expect(String(o['detail']), 'the row’s value is never printed').not.toContain(real);
     expect(h.reg(CHILD_ID, 'reaping'), 'nothing started: no breadcrumb').toBeNull();
     intact(c);
   }, 90_000);
 
-  it('the same child stops a RESUMED tail with `worktree-remove-failed` or `containment-refuted` — the tree byte-identical, the breadcrumb kept', () => {
+  it('the same child stops a RESUMED tail with `containment-refuted` — the tree byte-identical, the breadcrumb kept', () => {
     const c = makeChild(h);
     plantNested(c);
     interrupted(c, 'worktree');
     const tok = resumeToken('worktree');
-    const { real, kept } = relinkChild(c);
+    const { real } = relinkChild(c);
     plantRow(real);
     const before = treeOf(c.wt);
     const r = childReclaimVerb(h, tok);
     expect(treeOf(c.wt), 'the child’s tree, and the other session’s inside it, survive byte for byte').toEqual(before);
     expect(r.code, r.stdout + r.stderr).toBe(1);
     const o = JSON.parse(r.stdout) as { failed: string; detail: string };
-    expect(o.failed).toBe(kept ? 'worktree-remove-failed' : 'containment-refuted');
-    if (kept) expect(o.detail).toContain(`${CHILD_ID}'s own workdir resolves to a path opening with //`);
+    expect(o.failed).toBe('containment-refuted');
+    expect(o.detail).toContain('registry row(s) demo-nested rooted inside');
     expect(h.calls(), 'it stops AFTER the kill: the child’s pane is down, nothing deleted').toContain(KILL);
     failedPairAgrees(r);
     expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:worktree');

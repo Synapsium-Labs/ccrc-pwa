@@ -24,7 +24,14 @@
 #      the source is a residual race bash cannot close without a subprocess)
 #      and defines _ccrc_cfg_dir: each account's home and its declared secrets file. An
 #      unreadable roster is passed on as --roster-unreadable with no homes —
-#      counted by the sweep, never read as an empty roster (FE4).
+#      counted by the sweep, never read as an empty roster (FE4). For each codex
+#      lane (_ccrc_auth_dir, codex-bridge Stage 1, Task 10) the TREE's auth
+#      library names the files under its authDir that hold a secret (its
+#      credential and checkpoint, `secret-files`), and each is a secrets file.
+#      When the library cannot answer (no file, no python3, a non-zero rc) the
+#      lane's authDir is passed as --unanswered, one stderr line naming it, so
+#      the sweep lists it unreadable (the doctor's redact-source-unreadable) and
+#      never registers nothing in silence.
 #   5. exec node on the placed tree's sweep.mjs, the lock's fd 9 inherited.
 #
 # Every carrier must kill a pass that outlives CARRIER_KILL_S (lib.mjs); on
@@ -50,7 +57,9 @@ flock -n 9 || { [ -n "$op" ] && exit 75; echo "history-sweep: another pass holds
 
 homes=()
 secrets=()
+unanswered=()
 rflag=""
+AUTH_LIB="$HOME/ccrc/ccd/ccgpt-auth.py"
 # shellcheck source=/dev/null
 if [ -f "$ACCOUNTS_SH" ] && [ -r "$ACCOUNTS_SH" ] && . "$ACCOUNTS_SH" 2>/dev/null && declare -F _ccrc_cfg_dir >/dev/null 2>&1; then
   for a in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do
@@ -62,10 +71,30 @@ if [ -f "$ACCOUNTS_SH" ] && [ -r "$ACCOUNTS_SH" ] && . "$ACCOUNTS_SH" 2>/dev/nul
       sf="$(_ccrc_secrets_file "$a")"
       [ -n "$sf" ] && secrets+=("$HOME/$sf")
     fi
+    # _ccrc_auth_dir is the version probe too: an older accounts.sh names no authDir.
+    if declare -F _ccrc_auth_dir >/dev/null 2>&1; then
+      ad="$(_ccrc_auth_dir "$a")"
+      if [ -n "$ad" ]; then
+        why=""
+        if [ ! -f "$AUTH_LIB" ]; then
+          why="the auth library is not at \$HOME/ccrc/ccd/ccgpt-auth.py"
+        elif ! command -v python3 >/dev/null 2>&1; then
+          why="python3 is not on PATH"
+        elif ! files="$(python3 -IS "$AUTH_LIB" secret-files --auth-dir "$HOME/$ad" 2>/dev/null)"; then
+          why="the auth library's secret-files failed"
+        fi
+        if [ -n "$why" ]; then
+          echo "history-sweep: $a: $why, so $HOME/$ad is an unreadable redaction source" >&2
+          unanswered+=(--unanswered "$HOME/$ad")
+        else
+          while IFS= read -r f; do [ -n "$f" ] && secrets+=("$f"); done <<<"$files"
+        fi
+      fi
+    fi
   done
 else
   rflag=--roster-unreadable
 fi
 
 exec node --no-warnings "$HOME/ccrc/ccd/history/sweep.mjs" "$@" ${rflag:+"$rflag"} \
-  --secrets ${secrets[@]+"${secrets[@]}"} -- ${homes[@]+"${homes[@]}"}
+  ${unanswered[@]+"${unanswered[@]}"} --secrets ${secrets[@]+"${secrets[@]}"} -- ${homes[@]+"${homes[@]}"}

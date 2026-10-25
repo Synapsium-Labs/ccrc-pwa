@@ -3204,7 +3204,7 @@ describe('SettingsScreen — the words, the notes and the result lines (settings
     expect(AUTO_LABELS).toEqual({ off: 'Off', stable: 'On the Stable channel only', channel: 'On any channel' });
     expect(NOTIFY_LABELS).toEqual({ channel: "Every release on the fleet's channel", stable: 'Stable releases only', off: 'None' });
     expect(CHANNEL_SENTENCES).toEqual({ stable: 'Stable', dev: 'Dev' });
-    expect(CHANNEL_NOTES).toEqual({ stable: 'Releases promoted only after they have baked.', dev: 'Every merge, minutes after it lands.' });
+    expect(CHANNEL_NOTES).toEqual({ stable: 'Releases promoted only after they have baked.', dev: 'Every merge that changes the build, minutes after it lands.' });
     expect(AUTO_NOTES).toEqual({
       off: 'Nothing installs until you press Install or Update.',
       stable: 'Installs each new stable release by itself. While the channel is Dev, nothing installs by itself.',
@@ -3245,7 +3245,7 @@ describe('SettingsScreen — the words, the notes and the result lines (settings
   });
 
   it("the catalogue line's interval is the server's own CATALOGUE_POLL_INTERVAL_MS", () => {
-    const src = readFileSync(path.join(import.meta.dirname, '..', '..', 'server', 'src', 'update', 'catalogue.ts'), 'utf8');
+    const src = readFileSync(path.join(import.meta.dirname, '..', '..', 'server', 'src', 'laneSchedule.ts'), 'utf8');
     const m = /export const CATALOGUE_POLL_INTERVAL_MS = (\d+) \* 60_000;/.exec(src);
     expect(m, 'the server still spells the interval in minutes').not.toBeNull();
     expect(CATALOGUE_CHECK_MINUTES).toBe(Number(m![1]));

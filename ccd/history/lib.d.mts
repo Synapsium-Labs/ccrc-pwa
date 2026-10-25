@@ -95,7 +95,7 @@ export const DECLARED_BY: readonly DeclaredBy[];
 export const ERROR_CODES: readonly string[];
 export const CARD_PREFIX: 'History: ';
 export const COVERAGE: readonly ['this-box'];
-export const SCOPE_SOURCES: readonly ['tmux'];
+export const SCOPE_SOURCES: readonly ['tmux', 'env'];
 export const VARIANT_CAUSES: readonly ['ccd-sanitize', 'unknown'];
 export type Backend = 'anthropic' | 'other' | 'unknown';
 export const BACKENDS: readonly Backend[];
@@ -518,8 +518,55 @@ export interface ScopeRefusal<R extends string> { ok: false; rc: 2; reason: R }
 export interface TmuxRead { settled: boolean; status: number | null; stdout: string }
 export function decideIdentity(i: { pane: string | null; tmux: TmuxRead | null }):
   { ok: true; id: string } | ScopeRefusal<'no-identity' | 'bad-id'>;
-export interface GenerationChoice { value: string | null; via: 'env' | 'registry' | 'newest' }
+/** The headless seam's three values as the CLI read them (§8.2; W2-D39, W2-D45): null when the variable is undefined. */
+export interface RecallSeamValues { session: string | null; arm: string | null; asof: string | null }
+export function recallSeamEngaged(recall: RecallSeamValues): boolean;
+export function decideSeamInPane(i: { pane: string | null; recall: RecallSeamValues }): { ok: true } | ScopeRefusal<'headless-in-pane'>;
+// --- W2-2b Task 1: the headless seam's vocabulary and its marker (W2-D42, W2-D44, W2-D48)
+/** The W2 replay's two arms (W2-D42), frozen: the only values the seam's arm may take. */
+export const RECALL_ARMS: readonly ['control', 'treatment'];
+/** headless-on's bounds (W2-D44, chosen): bytes, and pair lines with duplicates counted. */
+export const HEADLESS_LIST_MAX_BYTES: 65536;
+export const HEADLESS_LIST_MAX_PAIRS: 1000;
+/** One listed family: its ccrc_id and its generation, '' for a legacy family (the marker spells it `-`). */
+export interface HeadlessPair { readonly ccrcId: string; readonly generation: string }
+/** A well-formed marker, frozen: its store line's store_id and its pairs in file order, duplicates kept. */
+export interface HeadlessList { readonly ok: true; readonly storeId: string; readonly pairs: readonly HeadlessPair[] }
+export function parseHeadlessList(text: string): HeadlessList | ScopeRefusal<'headless-malformed'>;
+export function formatHeadlessList(list: { storeId: string; pairs: readonly HeadlessPair[] }): string;
+/** store.mjs readBounded's answer (store.d.mts's BoundedRead), restated so this file imports nothing. */
+export type HeadlessMarkerRead = { state: 'absent' } | { state: 'unreadable' } | { state: 'over-cap' } | { state: 'value'; value: string };
+export function headlessMarkerOf(read: HeadlessMarkerRead): HeadlessList | ScopeRefusal<'headless-unarmed' | 'headless-malformed'>;
+// --- W2-2b Task 2: the headless seam's rows before the store (W2-D45, W2-D46 step 1)
+export function decideHeadless(i: {
+  recall: RecallSeamValues; paneSet: boolean; marker: HeadlessList | ScopeRefusal<'headless-unarmed' | 'headless-malformed'> | null;
+}):
+  | { ok: true; path: 'tmux' }
+  | { ok: true; path: 'headless'; session: string; arm: string; asof: string; list: { storeId: string; pairs: readonly HeadlessPair[] } }
+  | ScopeRefusal<'headless-in-pane' | 'headless-unarmed' | 'headless-malformed' | 'no-identity' | 'bad-id' | 'headless-unlisted'
+    | 'headless-arm-unknown' | 'asof-invalid'>;
+export interface GenerationChoice { value: string | null; via: 'env' | 'registry' | 'newest' | 'asof' }
 export function resolveGeneration(i: { envGen: string | null; regGen: Presence<string> }): GenerationChoice;
+// --- W2-2b Task 2: the env path's family, from CCRC_RECALL_ASOF (W2-D40, W2-D44, W2-D46 step 4)
+/** The marker's store line against this store's meta store_id, before any ASOF row is read (R3). */
+export function decideHeadlessStore(i: { list: { storeId: string; pairs: readonly HeadlessPair[] }; storeId: string | null }):
+  { ok: true } | ScopeRefusal<'headless-unlisted'>;
+/** One row of asOfFamilySql's answer: the ASOF entry, its boundary's transcript, one confirmed epoch with its family,
+ *  and the family that one merged into (one hop). */
+export interface AsOfFamilyRow {
+  readonly uuid: string; readonly entry_id: number | bigint; readonly boundary_entry_id: number | bigint | null;
+  readonly agent_id: string | null; readonly cwd: string | null; readonly cwd_real: string | null;
+  readonly session_pk: number | bigint | null; readonly ccrc_id: string | null; readonly generation: string | null;
+  readonly project: string | null; readonly merged_into: number | bigint | null;
+  readonly into_session_pk: number | bigint | null; readonly into_ccrc_id: string | null; readonly into_generation: string | null;
+  readonly into_project: string | null; readonly into_merged_into: number | bigint | null;
+}
+export function asOfFamilySql(): string;
+export function decideAsOfFamily(i: {
+  session: string; asof: string; rows: readonly AsOfFamilyRow[]; list: { storeId: string; pairs: readonly HeadlessPair[] };
+  storeId: string | null;
+}): { ok: true; via: 'asof'; generation: string; family: { ccrcId: string; project: string }; anchor: string | null }
+  | ScopeRefusal<'headless-unlisted' | 'asof-invalid'>;
 export function decideHarness(p: Presence<string>):
   { ok: true; harness: string } | ScopeRefusal<'harness-unsupported' | 'harness-unreadable'>;
 export interface ScopeInputs {
@@ -533,11 +580,51 @@ export type ScopeVerdict =
   | ScopeRefusal<'no-identity' | 'bad-args' | 'bad-id' | 'cross-project' | 'project-unreadable' | 'workspace-unreadable'>
   | { ok: true; kind: ScopeKind; source: string; id: string; generation: string | null; project: string | null; workdir: string | null };
 export function decideScope(i: ScopeInputs): ScopeVerdict;
+// --- W2-2b Task 3: the headless path's own two decisions (W2-D41, W2-D46)
+export function decideEnvProject(i: { verdict: Extract<ScopeVerdict, { ok: true }>; storedProject: string }): { ok: true } | ScopeRefusal<'cross-project'>;
+export function decideHeadlessRead(i: { recallOff: 'off' | 'stale' | 'none'; arm: string }): { ok: true } | { ok: false; rc: 8; why: 'recall-off' | 'arm' };
 export function displayPrefixes(ids: readonly string[]): Map<string, string>;
 export type ScopedId =
   | { kind: 'ok'; id: string } | { kind: 'out-of-scope' } | { kind: 'not-found' }
   | { kind: 'ambiguous'; candidates: string[] } | { kind: 'bad' };
 export function resolveScopedId(i: { wanted: string; inScope: readonly string[]; outOfScope: readonly string[] }): ScopedId;
+// --- W2-2a Task 1: the as-of cut, lib's one definition (W2-D34, W2-D38, W2-D39)
+/** One row of N's holding copy, in file order, in derive.mjs's copyRows column names. */
+export interface AsOfCopyRow {
+  readonly entry_id: number | bigint; readonly uuid: string; readonly line: number | bigint; readonly ts_ms: number | bigint | null;
+  readonly type: string; readonly provenance: string; readonly is_compact_summary: number | bigint;
+}
+/** The cut at boundary N (W2-D38). Plain data: it rides on `rc.scope.cut`. */
+export interface AsOfCut {
+  readonly asof: string; readonly tsCut: number; readonly boundaryEntryId: number; readonly summaryEntryId: number | null;
+  readonly keptUuids: readonly string[]; readonly holdingFileId: number; readonly boundaryLine: number;
+}
+export function asOfCut(i: {
+  asof: string;
+  boundary: { entryId: number; uuid: string; main: boolean; anchorUuid: string | null } | null;
+  copy: { fileId: number; rows: readonly AsOfCopyRow[] } | null;
+  kept: Iterable<unknown>;
+}): { ok: true; cut: AsOfCut } | ScopeRefusal<'asof-invalid'>;
+/** The cut's one SQL predicate over an entries alias: one parenthesised boolean term, named `asof_` parameters only. For a
+ *  hidden row it is never true (NULL or false): use it only as a filter; negate it only through coalesce((…), 0). */
+export function asOfEntrySql(alias: string): string;
+/** asOfEntrySql's named parameters for a cut, by bare name: exactly the names it uses; kept(N) as JSON text. */
+export function asOfBinds(cut: AsOfCut): {
+  asof_ts: number; asof_file: number; asof_line: number; asof_boundary: number; asof_summary: number | null; asof_kept: string;
+};
+// --- W2-2a Task 3: the as-of cut's node, epoch and entry statements (W2-D35, W2-D36, W2-D38). Each binds asOfBinds' names plus one JSON array.
+/** Of the node ids at :asof_nodes, those the cut hides (column node_id). A leaf other than N's is hidden when its boundary entry is,
+ *  or when it has a summary row (summaryRowFor's pick over its holding copy) and that row is (D-6282), or when its stored
+ *  summary_blob_id is not NULL and the pick is NULL or names another blob (D-6284); a node is hidden when a leaf
+ *  under it is, and when a condensed node at or below it has no leaf below it, however deep (R4 at every depth, D-6283). */
+export function asOfHiddenNodesSql(): string;
+/** Of the node ids at :asof_nodes, each non-condensed node's summary row as the store gives it (columns node_id, entry_id; entry_id NULL
+ *  for no pick): the pick asOfHiddenNodesSql judges a leaf's summary row by, held to pickHoldingCopy plus summaryRowFor by a test. D-6282. */
+export function asOfSummaryPickSql(): string;
+/** Of the epoch session uuids at :asof_epochs, those one of whose transcripts holds a row the cut shows (column cc_session_uuid). */
+export function asOfVisibleEpochsSql(): string;
+/** Of the entry ids at :asof_entries, those the cut shows (column entry_id). */
+export function asOfVisibleEntriesSql(): string;
 export function extractNodeId(raw: string): { ok: true; id: string } | { ok: false; error: string; hint?: string };
 export function recallOffPath(home: string, id: string): string;
 export function decideRecallOff(i: { file: Presence<string>; generation: string }): 'off' | 'stale' | 'none';
@@ -903,6 +990,7 @@ export function expandArgsOf(parsed: { positional: readonly string[]; opts: Read
   { ok: true; args: ExpandArgs } | { ok: false; reason: 'bad-args' };
 export function expandResumeOf(cursor: Readonly<Record<string, unknown>> | null):
   { target: string | null; around: string | null; before: number; after: number } | null;
+export function expandCursorKey(key: string, asof: string | null): string;
 export function entryScopeVerdict(i: { found: boolean; inScope: boolean }): 'ok' | 'out-of-scope' | 'not-found';
 export function expandCuts(i: { whole: boolean; kind: 'entry' | 'sidecar'; provenance: string | null }): boolean;
 export function decideExpandCursor(i: { cursor: Readonly<Record<string, unknown>> | null; key: string; total: number }):

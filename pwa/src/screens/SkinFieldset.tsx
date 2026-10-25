@@ -2,9 +2,9 @@
 // line that names the fonts and their licence (D-5095).
 //
 // THREE CHOICES (spec §7): Match this device, then the catalogue in its own
-// order, a preview marked as one — the same three the palette's "Switch
-// layout" offers (command/commands.ts). The catalogue is @ccrc/ui's; this file
-// never names a skin.
+// order, a preview (none today) marked as one — the same three the palette's
+// "Switch layout" offers (command/commands.ts). The catalogue is @ccrc/ui's;
+// this file never names a skin.
 //
 // IT SHOWS THE CHOICE, NOT THE SKIN. AUTO is a stored choice that resolves to
 // a skin; the picker shows the choice (`useSkinChoice()`), so a desk on AUTO
@@ -35,9 +35,10 @@ import { AUTO, INSTRUMENT, SKINS } from '@ccrc/ui';
 import { setSkin, useSkinChoice } from '../lib/skin';
 import { AppearanceFieldset, AppearanceRow } from './AppearanceRow';
 
-/** "Match this device", in words true to THIS build: while Instrument is a
- *  preview the device rule gives Refined everywhere (D-5096), and the note
- *  says so rather than promising a desk layout nobody gets yet. */
+/** "Match this device", in words true to THIS build: Instrument at a desk with
+ *  a mouse, Refined on a phone or a tablet (D-5096). Were Instrument a preview
+ *  again, the device rule would give Refined everywhere, and the note says so
+ *  rather than promising a desk layout nobody gets. */
 function matchDeviceNote(): string {
   const instrument = SKINS.find((s) => s.id === INSTRUMENT);
   return instrument !== undefined && !instrument.preview

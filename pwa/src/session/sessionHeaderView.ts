@@ -103,6 +103,20 @@ export function headerTickMs(status: SessionStatus | null, session: FleetSession
   return headerBucket(liveStatus(status, session), session) === 'working' ? 1_000 : 30_000;
 }
 
+/**
+ * The words of the quiet state, gated (D-5296, D-6325): `withCoordinatorWords` for a row whose parent holds its
+ * question, and only while the row's bucket reads `working`. THE ONE DERIVATION: the header's chip and the ask
+ * surface's "held" line both read it, so a `dead` or `idle` row that keeps a stale `withCoordinator` shows neither.
+ * `status` is the live stream's, as the header receives it (`liveStatus` and `headerBucket` give the bucket).
+ */
+export function heldCoordinatorWords(
+  session: FleetSession | null, status: SessionStatus | null,
+): ReturnType<typeof withCoordinatorWords> | null {
+  const bucket = headerBucket(liveStatus(status, session), session);
+  const wc = bucket === 'working' && session != null ? sessionWithCoordinator(session) : null;
+  return wc === null || session == null ? null : withCoordinatorWords(wc, session.project);
+}
+
 export function sessionHeaderView({
   session, status, statusUpdatedAt, queuedField = null, fallback, roster = [], repo = null, coordination = null,
   facts = null, now, finePointer,
@@ -127,8 +141,7 @@ export function sessionHeaderView({
   const bgWords = bg === null ? null : backgroundWords(bg);
   // D-5296: a `working` row whose parent holds its question reads `with coordinator · <parent>`, in the calm (idle)
   // tint, as the card does. The dialog stays answerable from this screen: nothing here gates it.
-  const wc = bucket === 'working' && session != null ? sessionWithCoordinator(session) : null;
-  const wcWords = wc === null || session == null ? null : withCoordinatorWords(wc, session.project);
+  const wcWords = heldCoordinatorWords(session, status);
   // D-5237: "restarted · out of memory · 3m ago" for an hour after a process end.
   const restart = session != null ? restartWords(session, now) : null;
   // D-5545 (verifier round 1): the word is the MODEL's (`headerStatusWord`), from the bucket this strip paints — it

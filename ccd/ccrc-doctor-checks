@@ -2276,70 +2276,210 @@ _check_name() {
   _dr_pass name "$domain resolves (${resolved[0]}); this box's own public address is not discoverable from inside (NAT, or no global address on an interface), so where the record points was not compared"
 }
 
-# ── room on the filesystem $HOME is on ────────────────────────────────────
-# Spec §5's "disk headroom (including the backup dir)". THREE things this
-# project writes land on one filesystem and all three fail unhelpfully when it
-# is full: a ccd workspace is a full clone per session, every deploy leaves
-# another `~/ccrc-backups/<ts>/` (each deploy.sh arm's `mkdir -p ~/ccrc-backups/$TS`), and `~/.ccrc/coord.db` is a
-# WAL database that `server/src/coord/db.ts:144-145` says outright has NO backup
-# to fall back on — a truncated write there is not recoverable from that
-# directory.
+# ── room on every filesystem the fleet's work lives on ────────────────────
+# Spec §5's "disk headroom (including the backup dir)", widened by D-6618 (spec
+# 2026-10-23 §2.5.2): a ccd workspace is a full clone per session, every deploy
+# leaves another `~/ccrc-backups/<ts>/` (each deploy.sh arm's `mkdir -p ~/ccrc-backups/$TS`), and `~/.ccrc/coord.db` is a WAL
+# database that `server/src/coord/db.ts#openCoordDb` says outright has NO backup to
+# fall back on. On a box whose work volume is a second filesystem, `$HOME`'s
+# free space says nothing about the one that fills, so this resolves the SAME
+# roots the server and the agent measure and prints one line per filesystem.
 #
+# THE TWINS. These four constants are the bash spelling of `shared/disk.ts`'s
+# `DISK_WARN_PCT`, `DISK_CRITICAL_PCT` and `DISK_WORK_ROOTS` (one
+# `label|template|template` string per row). `server/test/disk-twins.test.ts`
+# READS this text and requires each equal to L0's, so edit them together.
+_DR_DISK_WARN_PCT=85
+_DR_DISK_CRITICAL_PCT=92
+_DR_DISK_WORK_ROOTS=(
+  'home|${HOME}'
+  'projects|${HOME}/projects'
+  'worktrees|${HOME}/worktrees'
+  'cc-tmp|${HOME}/.cc-tmp'
+  'claude-tmp|${TMPDIR:-/tmp}|/tmp'
+  'config-dirs|${CONFIG_DIR}'
+  'ccrc|${HOME}/.ccrc'
+  'registry|${HOME}/.cc-sessions'
+)
+
 # TWO FLOORS BECAUSE THERE ARE TWO SITUATIONS: under 2 GiB the next spawn or
 # deploy fails, which is a defect to fix now; under 10 GiB it is a morning's
-# warning that it will. Above both, the PASS names the room it found, so
-# "PASS disk" cannot be a check that measured nothing.
+# warning that it will. The percents are the server's: 92 FAIL, 85 WARN, of
+# bytes OR inodes (a million small files fills a volume that has bytes to
+# spare). Above all of them, the PASS names the room it found, so "PASS disk"
+# cannot be a check that measured nothing.
 #
 # PARSED WITH `read`, NOT `awk`/`cut`: nothing in this file resolves an external
 # binary that is not the subject it is measuring (`_dr_pkg_candidates`'s reason,
 # and `ccrc-wrapper-shape:49-57`'s), because doctor has to answer on a box whose
 # PATH is the broken thing. `df` itself is the measured subject here, and its
 # absence is its own verdict.
+#
+# A root that does not exist holds no bytes and is skipped. A root `df` cannot
+# stat (a stale mount) is UNKNOWN, not fine: one WARN line names every such
+# root, and never a PASS. The percent is computed the way `df` does it, used
+# over used-plus-available, in integers and without rounding up, so 91.2% does
+# not read as the FAIL line.
+# Known absent: some ancestor is a readable, searchable directory whose readdir
+# listing (no stat of the name) lacks the next component. A plain file counts
+# as absent too (it holds no filesystem to measure). Anything else is unknown.
+_dr_root_absent() {
+  local p="$1" parent name e
+  [ "$p" = "/" ] && return 1
+  parent="${p%/*}"; [ -n "$parent" ] || parent="/"
+  name="${p##*/}"
+  if [ -d "$parent" ]; then
+    [ -r "$parent" ] && [ -x "$parent" ] || return 1
+    ( shopt -s dotglob nullglob
+      for e in "$parent"/*; do [ "${e##*/}" = "$name" ] && exit 1; done
+      exit 0 ) && return 0
+    # Listed, yet not a directory: a plain file is absent; a failed stat is not.
+    [ -e "$p" ] && return 0
+    return 1
+  fi
+  [ -e "$parent" ] && return 0
+  _dr_root_absent "$parent"
+}
+
 _check_disk() {
   if ! command -v df >/dev/null 2>&1; then
-    _dr_warn disk "df is not on PATH, so this check cannot measure free space on \$HOME's filesystem" \
+    _dr_warn disk "df is not on PATH, so this check cannot measure free space on the work filesystems" \
       "install it (coreutils on a GNU box, util-linux on some minimal images) — until then nothing here can tell you a full disk from an empty one"
     return 2
   fi
 
-  # `-P` because POSIX output keeps every mount on ONE line: the default format
-  # wraps a long device name onto its own line, and this reads the LAST line.
-  # `-k` because both floors below are in KiB — `df -h` would answer "41G" and
-  # the arithmetic would be nonsense.
-  local out line last="" avail=""
-  out="$(df -Pk "$HOME" 2>/dev/null)"
-  while IFS= read -r line; do
-    [ -z "$line" ] || last="$line"
-  done <<< "$out"
-  # shellcheck disable=SC2034  # the three leading fields are read to be dropped
-  [ -z "$last" ] || read -r _dr_df_fs _dr_df_size _dr_df_used avail _dr_df_rest <<< "$last"
+  # The roster's config dirs: the one input that is runtime data. Sourced in a
+  # subshell so the roster's functions and variables stay out of this shell.
+  # A projection that is there but cannot be read (unreadable, fails to source,
+  # no `_ccrc_cfg_dir`) leaves the config-dirs root UNMEASURED, said out loud
+  # below; one that is absent only means no account has been projected yet.
+  local cfgdirs="" a cfg_unreadable=0
+  if [ -e "$HOME/.ccrc/accounts.sh" ]; then
+    if [ -r "$HOME/.ccrc/accounts.sh" ]; then
+      cfgdirs="$( . "$HOME/.ccrc/accounts.sh" 2>/dev/null \
+        && declare -F _ccrc_cfg_dir >/dev/null 2>&1 \
+        && for a in "${CCRC_ACCOUNTS[@]}"; do _ccrc_cfg_dir "$a" 2>/dev/null || :; done )" || cfgdirs=""
+      ( . "$HOME/.ccrc/accounts.sh" 2>/dev/null && declare -F _ccrc_cfg_dir >/dev/null 2>&1 ) || cfg_unreadable=1
+    else
+      cfg_unreadable=1
+    fi
+  fi
 
-  case "$avail" in
-    ''|*[!0-9]*)
-      # A df that could not stat the filesystem (a stale mount, a dead
-      # automount) exits nonzero having printed nothing, and an empty field in
-      # `$(( ))` is a bash arithmetic error rather than a number. Neither may
-      # become "0 GiB free", which is a FAIL about a measurement nobody made.
-      _dr_warn disk "df printed nothing this check could read where the available blocks belong, so free space was never measured" \
-        "check by hand: df -Pk \$HOME — a filesystem df cannot stat answers exactly this way"
-      return 2 ;;
-  esac
+  # Resolve every template to (label, path) pairs, in table order.
+  local row label tmpl path tmpdir="${TMPDIR:-/tmp}"
+  local -a pairs=()
+  local -a fields
+  for row in "${_DR_DISK_WORK_ROOTS[@]}"; do
+    IFS='|' read -r -a fields <<< "$row"
+    label="${fields[0]}"
+    for tmpl in "${fields[@]:1}"; do
+      if [ "$tmpl" = '${CONFIG_DIR}' ]; then
+        while IFS= read -r path; do
+          [ -z "$path" ] || pairs+=("$label|$path")
+        done <<< "$cfgdirs"
+        continue
+      fi
+      path="${tmpl//'${TMPDIR:-/tmp}'/$tmpdir}"
+      path="${path//'${HOME}'/$HOME}"
+      pairs+=("$label|$path")
+    done
+  done
+
+  # One df pair per root, grouped by mount point. A mount point is the sixth
+  # field onward (it may hold spaces); the figures are the second to fourth.
+  local -a mounts=() unmeasured=()
+  [ "$cfg_unreadable" -eq 0 ] || unmeasured+=("config-dirs (roster projection unreadable)")
+  local -A m_labels=() m_size=() m_avail=() m_bpct=() m_ipct=() m_seen=() m_root=()
+  local pair out line last f1 size used avail f5 mnt i1 ino iused ifree i5 imnt
+  local total ipct
+  for pair in "${pairs[@]}"; do
+    label="${pair%%|*}"; path="${pair#*|}"
+    if [ ! -d "$path" ]; then
+      # Skipped only when KNOWN absent; a root that exists but cannot be
+      # stat'd (stale mount, unsearchable parent) is UNKNOWN, never skipped.
+      if _dr_root_absent "$path"; then continue; fi
+      unmeasured+=("$label ($path)"); continue
+    fi
+    if [ -n "${m_root[$path]:-}" ]; then continue; fi
+    m_root[$path]=1
+    out="$(df -Pk "$path" 2>/dev/null)"; last=""
+    while IFS= read -r line; do [ -z "$line" ] || last="$line"; done <<< "$out"
+    size=""; used=""; avail=""; mnt=""
+    # shellcheck disable=SC2034  # the leading and trailing fields are read to be dropped
+    [ -z "$last" ] || read -r f1 size used avail f5 mnt <<< "$last"
+    case "$size$used$avail" in ''|*[!0-9]*) unmeasured+=("$label ($path)"); continue ;; esac
+    [ -n "$mnt" ] || { unmeasured+=("$label ($path)"); continue; }
+
+    # Inodes: a filesystem that keeps none (`-`, or a zero total) has no inode
+    # pressure to report, which is different from df failing to answer.
+    out="$(df -Pi "$path" 2>/dev/null)"; last=""
+    while IFS= read -r line; do [ -z "$line" ] || last="$line"; done <<< "$out"
+    ino=""; iused=""; ifree=""
+    # shellcheck disable=SC2034
+    [ -z "$last" ] || read -r i1 ino iused ifree i5 imnt <<< "$last"
+    ipct=-1
+    case "$ino$iused$ifree" in
+      ''|*[!0-9-]*) unmeasured+=("$label ($path)"); continue ;;
+    esac
+    if [ "$ino" != "-" ] && [ "$ino" -gt 0 ] 2>/dev/null; then
+      ipct=$(( iused * 100 / ino ))
+    fi
+
+    total=$(( used + avail ))
+    local bpct=0
+    if [ "$total" -gt 0 ]; then
+      bpct=$(( used * 100 / total ))
+    fi
+
+    if [ -z "${m_seen[$mnt]:-}" ]; then
+      m_seen[$mnt]=1; mounts+=("$mnt")
+      m_labels[$mnt]="$label"; m_size[$mnt]="$size"; m_avail[$mnt]="$avail"
+      m_bpct[$mnt]="$bpct"; m_ipct[$mnt]="$ipct"
+    else
+      case ",${m_labels[$mnt]}," in *",$label,"*) ;; *) m_labels[$mnt]+=",$label" ;; esac
+    fi
+  done
+
+  local rc=0 r
+  # An unreadable df answer is UNKNOWN: one WARN names every root it covers.
+  if [ "${#unmeasured[@]}" -gt 0 ]; then
+    local list="" u
+    for u in "${unmeasured[@]}"; do list+="${list:+, }$u"; done
+    _dr_warn disk "df printed nothing this check could read for $list, so free space was never measured there" \
+      "check by hand: df -Pk <path> and df -Pi <path> — a filesystem df cannot stat answers exactly this way" || r=$?
+    [ "$rc" -eq 1 ] || rc=$r
+  fi
 
   local floor=$((2 * 1024 * 1024)) tight=$((10 * 1024 * 1024))
-  local gib=$((avail / 1024 / 1024)) mib=$((avail / 1024))
-  if [ "$avail" -lt "$floor" ]; then
-    # MiB below the floor, because "1 GiB" and "0 GiB" are the whole range there
-    # and an operator deciding what to delete needs the real number.
-    _dr_fail disk "only $mib MiB free on \$HOME's filesystem — under the 2 GiB floor" \
-      "free space on \$HOME's filesystem before running sessions — under 2 GiB a ccd spawn (a full clone per workspace) and the next deploy's ~/ccrc-backups/<ts>/ copy start failing, and ~/.ccrc/coord.db has no backup to fall back on"
-    return 1
-  fi
-  if [ "$avail" -lt "$tight" ]; then
-    _dr_warn disk "$gib GiB free on \$HOME's filesystem — getting tight (a ccd workspace is a full clone, and every deploy leaves another ~/ccrc-backups/<ts>/)" \
-      "clear room while it is still cheap: the oldest ~/ccrc-backups/<timestamp>/ directories first, then workspaces whose PRs have merged"
+  local gib mib names
+  for mnt in "${mounts[@]}"; do
+    avail="${m_avail[$mnt]}"; bpct="${m_bpct[$mnt]}"; ipct="${m_ipct[$mnt]}"
+    gib=$((avail / 1024 / 1024)); mib=$((avail / 1024))
+    names="${m_labels[$mnt]//,/, }"
+    local ifig="no inode limit"; [ "$ipct" -lt 0 ] || ifig="${ipct}% of inodes"
+    local fig="${bpct}% of bytes and ${ifig} used"
+    r=0
+    if [ "$avail" -lt "$floor" ] || [ "$bpct" -ge "$_DR_DISK_CRITICAL_PCT" ] || [ "$ipct" -ge "$_DR_DISK_CRITICAL_PCT" ]; then
+      # MiB below the floor, because "1 GiB" and "0 GiB" are the whole range there
+      # and an operator deciding what to delete needs the real number.
+      _dr_fail disk "$mib MiB free on $mnt ($names), $fig — past the FAIL line (under 2 GiB free, or $_DR_DISK_CRITICAL_PCT% of bytes or inodes used)" \
+        "free space on $mnt before running sessions — a ccd spawn (a full clone per workspace) and the next deploy's ~/ccrc-backups/<ts>/ copy start failing at the floor, and ~/.ccrc/coord.db has no backup to fall back on" || r=$?
+    elif [ "$avail" -lt "$tight" ] || [ "$bpct" -ge "$_DR_DISK_WARN_PCT" ] || [ "$ipct" -ge "$_DR_DISK_WARN_PCT" ]; then
+      _dr_warn disk "$gib GiB free on $mnt ($names), $fig — getting tight (a ccd workspace is a full clone, and every deploy leaves another ~/ccrc-backups/<ts>/)" \
+        "clear room while it is still cheap: the oldest ~/ccrc-backups/<timestamp>/ directories first, then workspaces whose PRs have merged" || r=$?
+    else
+      _dr_pass disk "$gib GiB free on $mnt ($names), $fig" || r=$?
+    fi
+    if [ "$r" -eq 1 ]; then rc=1; elif [ "$r" -eq 2 ] && [ "$rc" -ne 1 ]; then rc=2; fi
+  done
+
+  # Nothing measured at all and nothing said: not a PASS.
+  if [ "${#mounts[@]}" -eq 0 ] && [ "${#unmeasured[@]}" -eq 0 ]; then
+    _dr_warn disk "no work root exists on this box to measure, so free space was never measured" \
+      "check by hand: df -Pk \$HOME"
     return 2
   fi
-  _dr_pass disk "$gib GiB free on \$HOME's filesystem"
+  return "$rc"
 }
 
 # ── the roster against the wrappers on disk ───────────────────────────────
@@ -3869,7 +4009,7 @@ _check_pool-sync() {
     # `ccrc install --role fleet` end at exit 1 on every box, always: the
     # timer converges on its own (`OnUnitActiveSec=60s`,
     # deploy/systemd/ccd-pool-sync.timer) and a box that just landed the unit
-    # has not had one tick yet. Measured: server/test/ccrc-install.test.ts,
+    # has not had one tick yet. Measured: server/test/ccrc-install-*.test.ts,
     # 3 failures, all in the fleet-role describe, all from this arm. The
     # FAIL text itself is false on the box that trips it — "placement into
     # every tagged project... refuses" — a fresh box tags nothing yet.
@@ -3986,82 +4126,18 @@ CONTINUED_IN_TAIL_BYTES=8192   # held equal to CONTINUATION_TAIL_BYTES
 # (server/src/transcript/parse.ts) and ccd/ccd's own CONTINUED_IN_TAIL_BYTES
 # by server/test/continued-in-parity.test.ts — three readers, one window.
 
-# THE RULE, NOT A COPY OF ITS LITERALS (D-4940). This is the jq program
-# ccd/ccd's `_continued_in_of` runs, byte for byte — `continued-in-parity.test.ts`
-# holds the two spellings equal and runs this reader, ccd's and the server's
-# over one table of transcripts — and the TypeScript twin (`tailRecordOf`,
-# server/src/transcript/parse.ts) is where the rule is written out in full:
-# the window's lines are read NEWEST FIRST; a top-level `continued-in` record
-# decides (a successor, or none when it is not this file's valid marker), a
-# top-level user/assistant record that Claude Code's own reader calls a
-# finished turn decides "none", and every other line — metadata Claude Code
-# re-stamps after the marker, an interruption notice, a tool result, a line
-# that does not parse, the window's cut first line — is stepped over. The old
-# reader here matched substrings anywhere on the LAST line, so a tool call
-# whose input held a marker-shaped object read as superseded while the server
-# refused it, and a real marker with a `last-prompt` line after it read as live
-# (review findings F1 and ccd-last-line-only-marker). Why the program is
-# spelled the way it is — no `first`/`any`/`all` (jq 1.6), JavaScript's
-# whitespace in code points, the surrogate rewrite — is said once, above the
-# same text in ccd/ccd. jq is already this file's JSON reader (the `build`
-# check reads the stamp with it), and `_check_jq` FAILs a box without one — on
-# which ccd's chain follow reads nothing either.
-CONTINUED_IN_JQ='def jsws: . == 9 or . == 10 or . == 11 or . == 12 or . == 13 or . == 32 or . == 160 or . == 5760
-  or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239 or . == 8287 or . == 12288 or . == 65279;
-def jstrim: explode as $c
-  | [range(0; $c | length) | select($c[.] | jsws | not)] as $k
-  | if $k == [] then "" else $c[$k[0]:$k[-1] + 1] | implode end;
-def tagled: explode as $c
-  | ($c | length) > 2 and $c[0] == 60 and $c[1] >= 97 and $c[1] <= 122
-  and ([range(2; $c | length) | select($c[.] as $x
-         | ($x >= 48 and $x <= 57) or ($x >= 65 and $x <= 90) or ($x >= 97 and $x <= 122) or $x == 95 or $x == 45 | not)] as $k
-       | $k != [] and ($c[$k[0]] as $x | $x == 62 or ($x | jsws)));
-def cmdname: split("<command-name>") as $s
-  | [range(1; $s | length) | $s[.:] | join("<command-name>")
-     | split("\r")[0] | split("\u2028")[0] | split("\u2029")[0] | select(contains("</command-name>"))] != [];
-def prompttext:
-  if contains("<pasted_content id=\"") then true
-  else jstrim as $n
-  | if $n == "" then false
-    elif ($n | cmdname) then false
-    elif ($n | split("<bash-input>") | length > 1 and (.[1:] | join("<bash-input>") | contains("</bash-input>"))) then true
-    elif ($n | startswith("[Request interrupted by user")) and ($n | ltrimstr("[Request interrupted by user") | contains("]")) then false
-    elif ($n | tagled) then false
-    else true end
-  end;
-def prompt: .isMeta != true and .isCompactSummary != true and (.message | type) == "object"
-  and (.message.content as $x
-       | if ($x | type) == "string" then ($x | prompttext)
-         elif ($x | type) == "array" then
-           [$x[] | select(type == "object" and .type == "tool_result")] == []
-           and [$x[] | select(type == "object" and .type == "text" and (.text | type) == "string") | select(.text | prompttext)] != []
-         else false end);
-def complete: ((has("isApiErrorMessage") | not) or .isApiErrorMessage == false)
-  and (.message | type) == "object" and (.message.stop_reason | type) == "string";
-def unsurrogate: reduce ("d", "D") as $d (.; reduce ("8", "9", "a", "b", "c", "d", "e", "f", "A", "B", "C", "D", "E", "F") as $h
-  (.; split("\\u" + $d + $h) | join("\\uff")));
-def tailrec($l):
-  ($l | contains("\"type\":\"continued-in\"")) as $m
-  | ($l | (contains("\"type\":\"user\"") or contains("\"type\":\"assistant\""))) as $t
-  | if ($m or $t) | not then "skip"
-    else [$l | try fromjson catch ($l | unsurrogate | try fromjson catch empty)]
-    | if . == [] or (.[0] | type) != "object" then "skip"
-      else .[0]
-      | if $m and .type == "continued-in" and (.continuedInSessionId | type) == "string" then
-          .continuedInSessionId as $to
-          | if ((has("sessionId") | not) or .sessionId == $u)
-               and ($to | length) == 36
-               and ([$to | explode[] | select((. == 45 or (. >= 48 and . <= 57) or (. >= 97 and . <= 102)) | not)] == [])
-               and $to != $u
-            then "+" + $to else "stop" end
-        elif $t and .type == "assistant" then (if complete then "stop" else "skip" end)
-        elif $t and .type == "user" then (if prompt then "stop" else "skip" end)
-        else "skip" end
-      end
-    end;
-[(split("\n") | reverse[]) as $l | tailrec($l) | select(. != "skip")] | (.[0] // "stop")
-| select(startswith("+")) | .[1:]
-'
+# THE RULE, NOT A COPY OF ITS LITERALS (D-4940; ARCH-65). The jq program is
+# `ccd/lib/transcript.jq`, the one file ccd/ccd's `_continued_in_of` loads too
+# (this file cannot source ccd, so both load the module with `jq -L`);
+# `continued-in-parity.test.ts` runs this reader, ccd's and the server's over
+# one table of transcripts, and the TypeScript twin (`tailRecordOf`,
+# server/src/transcript/parse.ts) is where the rule is written out in full.
+# The file sits beside this script in a tree, else under
+# `$HOME/.cc-sessions/lib` where the installers put it; a missing file is a jq
+# that fails to load, which `_dr_continued_in` answers as NOT MEASURED (rc 2).
+TRANSCRIPT_JQ_LIB="${BASH_SOURCE[0]%/*}/lib"
+[ -f "$TRANSCRIPT_JQ_LIB/transcript.jq" ] || TRANSCRIPT_JQ_LIB="$HOME/.cc-sessions"/lib   # the bare directory on a code line: pool-name-parity.test.ts pins `.cc-sessions/<name>` literals
+CONTINUED_IN_JQ='include "transcript"; continued_in($u)'
 
 _DR_CI_NEXT=""   # `_dr_continued_in`'s out-parameter: the successor, on rc 0
 
@@ -4087,7 +4163,7 @@ _dr_continued_in() {   # file uuid -> 0 superseded (successor in _DR_CI_NEXT), 1
   _DR_CI_NEXT=""
   out=$(set -o pipefail
         tail -c "$CONTINUED_IN_TAIL_BYTES" -- "$f" 2>/dev/null \
-          | jq -rRs --arg u "$uuid" "$CONTINUED_IN_JQ" 2>/dev/null) || return 2
+          | jq -L "$TRANSCRIPT_JQ_LIB" -rRs --arg u "$uuid" "$CONTINUED_IN_JQ" 2>/dev/null) || return 2
   [ -n "$out" ] || return 1
   _DR_CI_NEXT="$out"
   return 0
@@ -4239,7 +4315,7 @@ _check_transcripts() {
     cfg=$(_ccrc_cfg_dir "$wrapper" 2>/dev/null) || cfg=""
     [ -n "$cfg" ] || { rowbad=$((rowbad + 1)); continue; }
     # BOTH SPELLINGS, RESOLVED FIRST — a cross-task hazard Task 6's own review
-    # caught: `ccd`'s readers (`_transcript_path`, `_ci_transcript_path`) try
+    # caught: `ccd`'s readers (`_transcript_path`, `_ci_addrs`/`_ci_extant`) try
     # the REALPATH-resolved munge before the raw one, because Claude Code
     # munges its PHYSICAL cwd (node's `process.cwd()` resolves symlinks)
     # while the registry keeps the path `ccd` wrote — and on a box where
@@ -4619,7 +4695,7 @@ _check_graphify() {
   # the brief's own prose said WARN — `ccrc install` lays the timer down but
   # `OnBootSec=5min` means no fresh box has a census for several minutes at
   # minimum, so a literal WARN here fired on EVERY install, always,
-  # everywhere (measured: `ccrc-install.test.ts`'s "ends with doctor, and a
+  # everywhere (measured: `ccrc-install-*.test.ts`'s "ends with doctor, and a
   # box that passes every check exits 0" — the operator ruling behind that
   # test, D-139, is "A FRESH INSTALL ENDS GREEN": a warning that cannot be
   # made to go away by fixing anything is exactly the desensitising yellow
@@ -5413,7 +5489,7 @@ _check_fleet() {
 # ALSO sourced standalone, under `set -u`, by callers that are not `ccrc`
 # (this suite's own test harness does exactly that to read
 # `CCRC_DOCTOR_CHECKS`), and D-92 (ccd/ccrc:971-981, pinned by
-# ccrc-install.test.ts:2416-2425) is this repo's standing ruling that
+# ccrc-install-*.test.ts) is this repo's standing ruling that
 # ccrc-doctor-checks must hold its own second spelling of anything it needs,
 # rather than lean on a scope accident. Don't "fix" this duplication by
 # reaching across a boundary that does not reliably exist.
@@ -6451,11 +6527,11 @@ _dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if a
   # leaves both, and "ccrc withholds its own" would be false over a link
   # that says otherwise.
   if _codex_usage_enabled "$f" && _codex_usage_enabled "$t"; then
-    _dr_cx_warn "$id: another repository's $f is enabled, and ccrc's own $t is enabled too, so two publishers race this lane's ~/.cc-limits row and two token refreshes its OAuth directory" \
+    _dr_cx_warn "$id: another repository's $f is enabled, and ccrc's own $t is enabled too, so two publishers race this lane's ~/.cc-limits row, and $f refreshes the credential outside the auth library's lock, so it can race the tier's refresh (ccrc's own poll only reads it)" \
       "systemctl --user disable --now $t (ccrc's own unit; no ccrc fixer withdraws it), or leave it to the next update, whose converge withdraws $t while $f stands and re-measures the link. Once this lane's cutover no longer needs $f, disable it yourself: systemctl --user disable --now $f — ccrc never disables another tool's unit"
     rc=2
   elif _codex_usage_enabled "$f"; then
-    _dr_cx_warn "$id: another repository's $f is enabled, so two publishers would race this lane's ~/.cc-limits row and two token refreshes its OAuth directory — ccrc withholds its own $t while it stands" \
+    _dr_cx_warn "$id: another repository's $f is enabled, so two publishers would race this lane's ~/.cc-limits row, and $f refreshes the credential outside the auth library's lock, so it can race the tier's refresh — ccrc withholds its own $t while it stands" \
       "once this lane's cutover no longer needs it, disable it yourself: systemctl --user disable --now $f, then run: ccrc install — ccrc never disables another tool's unit"
     rc=2
   elif _codex_usage_enabled "$t"; then
@@ -6583,8 +6659,11 @@ _dr_codex_usage_surplus_rows() {   # <_dr_codex_usage_surplus's rc> -> WARN find
 # --check true` and `litellm` without `--commit` — so this file never names
 # the class registry's file (single-definition.test.ts pins that count at the
 # lines `_check_models` has), and no row here writes, renders, mkdirs,
-# starts or stops anything. `exec.authDir` is asked for existence and mode
-# ONLY: nothing under it is ever opened (spec §9).
+# starts or stops anything. `exec.authDir` is asked for existence and search
+# permission by `[ ]` tests, and its credential through the auth library's
+# non-secret `status` (codex-bridge Stage 1, Task 9): its state and the file's
+# mode and owner. The library is the one ccrc code that opens a credential, so
+# no row here reads the secret, and none writes under an authDir.
 #
 # THE RUNTIME ROW TRUSTS THE STAMP (ruling R-C5,
 # D-3711). `ccgpt-runtime check` compares the
@@ -6614,6 +6693,7 @@ _check_codex() {
   for fn in _box_env_value _codex_lanes _codex_row _codex_lane_json_state _codex_lane_dir \
             _codex_litellm_yaml _codex_runtime_cli _models_node _models_roster_path _models_litellm_template \
             _codex_tier_ours _codex_tier_stale _codex_foreign_what _codex_tier_is_our_handle \
+            _codex_auth_status _codex_auth \
             _svc_is_active _svc_status_hint \
             _codex_usage_enabled _codex_usage_enabled_ids _codex_usage_timer _codex_usage_foreign _codex_usage_wants _codex_usage_flat_foreign \
             _plat_mtime; do
@@ -6747,7 +6827,7 @@ _check_codex() {
       "make it a directory this user can list again (ccrc creates it with mode 0700: chmod 700 $root), or move aside by hand whatever sits there, then re-run doctor; ccrc never changes or removes it for you"
   fi
   _dr_codex_usage_surplus_rows "$surplus_rc"
-  _dr_cx_report "${#lanes[@]} Codex lane(s): $(_dr_cx_join ', ' ${DRX_OK[@]+"${DRX_OK[@]}"}); runtime ${DRX_RUNTIME:-unmeasured}; the four GPT-lane executables match the shipped tree${DR_CODEX_USAGE_BOX_NOTE:+; $DR_CODEX_USAGE_BOX_NOTE}"
+  _dr_cx_report "${#lanes[@]} Codex lane(s): $(_dr_cx_join ', ' ${DRX_OK[@]+"${DRX_OK[@]}"}); runtime ${DRX_RUNTIME:-unmeasured}; the five GPT-lane executables match the shipped tree${DR_CODEX_USAGE_BOX_NOTE:+; $DR_CODEX_USAGE_BOX_NOTE}"
 }
 
 # ── _fix_codex — the cure `ccrc doctor --fix` runs for `codex` ────────────
@@ -6782,10 +6862,12 @@ _check_codex() {
 #      no-op and whose gate stops and starts only a tier it proves this
 #      lane's (the identity gate every stop path shares);
 #   4. only when step 1 replaced the BYTES (measured by `cmp`, never a
-#      mode-only fix or a compare that could not run) of one of the two
+#      mode-only fix or a compare that could not run) of one of the three
 #      files a running tier's identity is computed from — the shim
-#      (`_codex_shim_file`) or the runtime CLI (`_codex_runtime_cli`), per
-#      `_codex_started_json` — or step 2 rebuilt the runtime:
+#      (`_codex_shim_file`), the runtime CLI (`_codex_runtime_cli`) or the
+#      auth library the litellm tier loads (`_codex_auth_lib`, codex-bridge
+#      Stage 1, Task 6), per `_codex_started_json` — or step 2 rebuilt the
+#      runtime:
 #      `_inst_codex_tiers`, the install step `ccrc install` and `ccrc update`
 #      run. ccgpt-usage.py and ccrc-codex are code no tier runs, so they
 #      never ask it. That step restarts a tier only when it is ccrc's own,
@@ -6795,7 +6877,9 @@ _check_codex() {
 #      residue D-3721's entry names; ruled, not cured).
 # WHAT IT NEVER DOES: edit the roster or choose a port (a row that does not
 # validate is named and left); run OAuth (`ccrc codex login <id>` is the
-# remedy the check prints); open anything under an authDir; signal a process
+# remedy the check prints); write anything under an authDir (the check reads
+# a credential only through the auth library's non-secret `status` and the
+# file's mode, and this fixer reads none); signal a process
 # it cannot prove is a lane's (every stop is behind `_codex_tier_ours`,
 # inside steps 3 and 4); enable or disable any unit; overwrite a launcher;
 # delete anything.
@@ -6814,7 +6898,7 @@ _fix_codex() {
     local role="" lanes lrc=0 n src dst rt id replaced=0 cmp_ok=1 bytes
     local -a ids=() missing=()
     for n in _codex_lanes _codex_row _codex_lane_json_state _codex_lock _codex_unlock \
-             _codex_shim_file _codex_runtime_cli _models_node _models_roster_path _models_litellm_lane_held \
+             _codex_shim_file _codex_auth_lib _codex_runtime_cli _models_node _models_roster_path _models_litellm_lane_held \
              _inst_atomic _inst_codex_tiers _box_env_value _models_node_locked; do
       declare -F "$n" >/dev/null 2>&1 || missing+=("$n")
     done
@@ -6874,10 +6958,12 @@ _fix_codex() {
         case "$bytes" in
           1)
             echo "FIX codex: restored \$HOME/.local/bin/$n from the shipped tree"
-            # The two files a running tier's identity is computed from
-            # (`_codex_started_json`): the shim a shim tier runs, and the
-            # runtime CLI that names every tier's generation.
-            if [ "$dst" = "$(_codex_shim_file)" ] || [ "$dst" = "$(_codex_runtime_cli)" ]; then
+            # The three files a running tier's identity is computed from
+            # (`_codex_started_json`): the shim a shim tier runs, the
+            # runtime CLI that names every tier's generation, and the auth
+            # library a litellm tier loads.
+            if [ "$dst" = "$(_codex_shim_file)" ] || [ "$dst" = "$(_codex_runtime_cli)" ] \
+                || [ "$dst" = "$(_codex_auth_lib)" ]; then
               replaced=1
             fi ;;
           0)
@@ -6951,13 +7037,14 @@ _fix_codex() {
       )
     done
 
-    # 4. The tiers — only when this run replaced the bytes of the shim or the
-    # runtime CLI, or rebuilt the runtime (step 1's `replaced`, step 2's).
+    # 4. The tiers — only when this run replaced the bytes of the shim, the
+    # runtime CLI or the auth library, or rebuilt the runtime (step 1's
+    # `replaced`, step 2's).
     if [ "$replaced" -eq 1 ]; then
       if ( INST_ROLE="${role:-both}"; INST_DEGRADED=(); _inst_codex_tiers; [ "${#INST_DEGRADED[@]}" -eq 0 ] ); then
-        echo "FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, which restarts every running ccrc-owned tier that measures stale, on any lane (its lines above)"
+        echo "FIX codex: tiers: this fix replaced code a running tier runs (the shim, the runtime or the auth library), so it re-ran the install step 'ccrc update' runs, which restarts every running ccrc-owned tier that measures stale, on any lane (its lines above)"
       else
-        echo "FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, and that step could not restart every stale tier (its lines above say which)"
+        echo "FIX codex: tiers: this fix replaced code a running tier runs (the shim, the runtime or the auth library), so it re-ran the install step 'ccrc update' runs, and that step could not restart every stale tier (its lines above say which)"
       fi
     fi
     echo "FIX codex: done for ${#ids[@]} codex lane(s) — no port, roster row, OAuth, credential, unidentified listener or unit enablement was touched; the re-measurement below is the verdict"
@@ -6994,14 +7081,14 @@ _dr_cx_report() {   # <PASS detail>
   return "$worst"
 }
 
-# The four GPT-lane executables against the SHIPPED TREE, byte for byte —
+# The five GPT-lane executables against the SHIPPED TREE, byte for byte —
 # `_check_skills`' rule (the tree the stamp names, `$BOX_TREE_DIR/ccd`), with
 # `cmp` where that check uses `diff`. `CODEX_LANE_BINS` is `_inst_bins`'
 # GPT-lane gate, in its order, declared ONCE at file level so `_fix_codex`
 # (Task 8) restores exactly what this compares. ccrc-doctor.test.ts pins this
-# one line to `GPT_LANE_BINS`, which ccrc-install.test.ts pins to the gate
-# itself, so a fifth executable or a rename reds there before this list can drift.
-CODEX_LANE_BINS=(ccgpt-proxy.py ccgpt-usage.py ccgpt-runtime ccrc-codex)
+# one line to `GPT_LANE_BINS`, which ccrc-install-*.test.ts pins to the gate
+# itself, so a sixth executable or a rename reds there before this list can drift.
+CODEX_LANE_BINS=(ccgpt-auth.py ccgpt-proxy.py ccgpt-usage.py ccgpt-runtime ccrc-codex)
 _dr_cx_bins() {
   local tree="$BOX_TREE_DIR/ccd" bin="$HOME/.local/bin" name have_cmp=1
   local -a notree=() missing=() drift=() uncompared=()
@@ -7020,7 +7107,7 @@ _dr_cx_bins() {
   done
   [ "${#notree[@]}" -eq 0 ] || _dr_cx_fail "the shipped tree ($tree) has no $(_dr_cx_join ', ' "${notree[@]}"), so nothing on this box says what the GPT-lane executables should be" \
     "run 'ccrc update' (or 'ccrc install' from a checkout) to place the shipped tree"
-  [ "${#missing[@]}" -eq 0 ] || _dr_cx_fail "$(_dr_cx_join ', ' "${missing[@]}") missing from \$HOME/.local/bin, or not executable — every Codex lane needs all four" \
+  [ "${#missing[@]}" -eq 0 ] || _dr_cx_fail "$(_dr_cx_join ', ' "${missing[@]}") missing from \$HOME/.local/bin, or not executable — every Codex lane needs all five" \
     "run 'ccrc update' (or 'ccrc install' from a checkout): it places them from the shipped tree on every role but server"
   [ "${#drift[@]}" -eq 0 ] || _dr_cx_fail "$(_dr_cx_join ', ' "${drift[@]}") in \$HOME/.local/bin differ from the shipped tree's copies in $tree, so a lane would run bytes this build did not ship" \
     "run 'ccrc update' (or 'ccrc install' from a checkout): it re-places them from the shipped tree"
@@ -7058,6 +7145,93 @@ _dr_cx_runtime() {
   return 0
 }
 
+# The lane's credential, through the auth library (codex-bridge Stage 1,
+# Task 9): `_codex_auth_status` (ccd/ccrc) reads its `status`, which never
+# writes and never touches the network. Each finding is one FAIL inside this
+# `codex` check (no WARN, no new check name: a soak gate allow-lists WARNs by
+# name), with its own remedy:
+#   - library or python3 missing (rc 3): auth-library-absent, `ccrc update`;
+#   - no answer it can read (rc 1): auth-status-unreadable, `ccrc update`;
+#   - `ownerOk` false: the owner, then the mode. It is tested FIRST: a
+#     non-owner cannot run a bare `chmod` (EPERM), and its remedy already ends
+#     in the `chmod 600`, so a credential both foreign-owned and the wrong mode
+#     gets this one line;
+#   - `modeOk` false: `chmod 600 <the path `paths` answers>`, the only credential
+#     line unless `ownerOk` is false too (the owner line above then stands alone):
+#     a 0000 file also reads `unreadable` (the library's open is refused) and "move
+#     it aside" would discard a credential a chmod cures. `modeOk`/`ownerOk` null
+#     is NOT false (D-6559): nothing is there, or the path is not a regular file (a
+#     symlink, a FIFO, a directory), whose lstat mode is not the credential's, so
+#     it takes the `unreadable` arm below and never a chmod, which would follow a symlink;
+#   - `absent`/`incomplete`: not signed in, `ccrc codex login <id>` (start's
+#     own words for its not-logged-in refusal);
+#   - `unreadable`/`foreign-family`: move it aside, then sign in again;
+#   - a present credential whose status reads `needs-signin` or
+#     `config-error`: start's two refusals, with start's remedies;
+#   - anything else present: PASS, `signed in`, whether or not the access
+#     token expired (in litellm mode the tier refreshes it on its next request).
+_dr_cx_auth() {   # <id> <authDir> — records at most one credential finding, or adds "signed in" to DRX_LANE_WORDS
+  local id="$1" dir="$2" rc=0 mok ook mode cred
+  _codex_auth_status "$id" 2>/dev/null || rc=$?
+  if [ "$rc" -eq 3 ]; then
+    _dr_cx_fail "the auth library or python3 is missing (auth-library-absent), so whether $id is signed in cannot be told" \
+      "run 'ccrc update', which places the library, then re-run doctor"
+    return 0
+  elif [ "$rc" -ne 0 ]; then
+    _dr_cx_fail "the auth library answered no status ccrc can read for $id (auth-status-unreadable), so whether it is signed in cannot be told" \
+      "run 'ccrc update', which places the library again, then re-run doctor"
+    return 0
+  fi
+  # `null` stays the word null: only a JSON `false` is a mode or owner finding.
+  read -r mok ook mode < <(printf '%s\n' "$CX_AUTH_JSON" | jq -r '"\(.modeOk) \(.ownerOk) \(.mode)"' 2>/dev/null) || :
+  cred=''
+  if [ "${mok:-}" = false ] || [ "${ook:-}" = false ] || [ "$CX_AUTH_CRED" = unreadable ] || [ "$CX_AUTH_CRED" = foreign-family ]; then
+    cred="$(_codex_auth paths --auth-dir "$dir" 2>/dev/null | jq -er '.credential | select(type == "string" and length > 0)' 2>/dev/null)" || cred=''
+    if [ -z "$cred" ]; then
+      _dr_cx_fail "the auth library named no credential path for $id (auth-status-unreadable), so what to do with its credential cannot be told" \
+        "run 'ccrc update', which places the library again, then re-run doctor"
+      return 0
+    fi
+  fi
+  if [ "${ook:-}" = false ]; then
+    _dr_cx_fail "$id's credential $cred is not owned by this user, so another user can replace what the lane signs in with" \
+      "make this user its owner (chown, as root), then chmod 600 $cred"
+    return 0
+  fi
+  if [ "${mok:-}" = false ]; then
+    _dr_cx_fail "$id's credential $cred has mode $mode, and a lane's credential is readable and writable by its owner alone: one that others can read leaks the lane's tokens, and one its owner cannot read stops the lane" \
+      "chmod 600 $cred"
+    return 0
+  fi
+  case "$CX_AUTH_CRED" in
+    absent|incomplete)
+      _dr_cx_fail "$id is not signed in: the auth library reads its credential in ~/$CX_AUTH as $CX_AUTH_CRED, so 'ccrc codex start $id' refuses" \
+        "sign the lane in: ccrc codex login $id"
+      return 0 ;;
+    unreadable|foreign-family)
+      _dr_cx_fail "the auth library reads $id's credential $cred as $CX_AUTH_CRED, so 'ccrc codex start $id' refuses it and ccrc never writes over it" \
+        "move it aside, then ccrc codex login $id"
+      return 0 ;;
+    present) ;;
+    *)
+      _dr_cx_fail "the auth library reads $id's credential as \"$CX_AUTH_CRED\", a word this ccrc does not know (auth-status-unreadable)" \
+        "run 'ccrc update', which places a library and a ccrc that agree, then re-run doctor"
+      return 0 ;;
+  esac
+  case "$CX_AUTH_STATE" in
+    needs-signin)
+      _dr_cx_fail "the token endpoint refused $id's refresh token (the auth library's status reads needs-signin), so 'ccrc codex start $id' refuses and its tier can serve no request" \
+        "sign the lane in again: ccrc codex login $id"
+      return 0 ;;
+    config-error)
+      _dr_cx_fail "the token endpoint refused the client this ccrc signs $id in with (the auth library's status reads config-error), so 'ccrc codex start $id' refuses" \
+        "run 'ccrc update' first, then 'ccrc codex login $id' if the lane is still refused"
+      return 0 ;;
+  esac
+  DRX_LANE_WORDS+=", signed in"
+  return 0
+}
+
 # One lane's static rows. Its row already read in `_check_codex`'s row pass;
 # it is read again HERE so this shell's CX_* are this lane's.
 _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> — sets DRX_LANE_WORDS
@@ -7066,21 +7240,19 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
   DRX_LANE_WORDS=''
   _codex_row "$id" 2>/dev/null || return 0
   DRX_LANE_WORDS="ports $CX_PROXY/$CX_LITELLM"
-  # authDir: EXISTENCE AND MODE ONLY (spec §9, §12). `[ -f ]` needs search
-  # permission on the directory and nothing on the file, so a 0000 auth.json
-  # passes: its contents are never this check's business.
+  # authDir: the directory by `[ ]` tests, then the credential through the
+  # auth library's non-secret status (codex-bridge Stage 1, Task 9). The
+  # library is the one ccrc code that opens a credential; this row reads its
+  # `status` answer and never the secret, and writes nothing under an authDir.
   auth="$HOME/$CX_AUTH"
   if [ ! -e "$auth" ] && [ ! -L "$auth" ]; then
     _dr_cx_fail "$id's authDir ~/$CX_AUTH does not exist, so the lane has nothing to sign in to" \
-      "sign the lane in: ccrc codex login $id (the runtime's own login creates it, owner-only) — ccrc never performs OAuth for you"
+      "sign the lane in: ccrc codex login $id (the auth library's sign-in creates it, owner-only) — ccrc never performs OAuth for you"
   elif [ ! -d "$auth" ] || [ ! -r "$auth" ] || [ ! -x "$auth" ]; then
     _dr_cx_fail "$id's authDir ~/$CX_AUTH is not a directory this user can list and search, so whether the lane is signed in cannot be told" \
-      "make it a directory you own and can search (chmod u+rx ~/$CX_AUTH); ccrc never reads what is inside it"
-  elif [ ! -f "$auth/auth.json" ]; then
-    _dr_cx_fail "$id has no OAuth login: ~/$CX_AUTH holds no auth.json (existence is all ccrc checks; it never reads one), so 'ccrc codex start $id' refuses" \
-      "sign the lane in: ccrc codex login $id"
+      "make it a directory you own and can search (chmod u+rx ~/$CX_AUTH); ccrc reads what is inside it only through its auth library"
   else
-    DRX_LANE_WORDS+=", signed in"
+    _dr_cx_auth "$id" "$auth"
   fi
   # lane.json against the ROSTER row: id, configDir, authDir, both ports, unit names present.
   st="$(_codex_lane_json_state "$id" 2>/dev/null)" || st=''
@@ -7706,7 +7878,7 @@ _check_scope-sweep() {
 #  3. the rest is status's. Within two sweep periods of the shim's mtime,
 #     with no tick yet, it answers PASS `first-tick-pending`
 #     (D-4168: a fresh install ends green, the ruling
-#     `ccrc-install.test.ts` pins), and the states in which no fresh tick is
+#     `ccrc-install-*.test.ts` pins), and the states in which no fresh tick is
 #     expected answer as WARNs ahead of any freshness FAIL
 #     (D-4251).
 #

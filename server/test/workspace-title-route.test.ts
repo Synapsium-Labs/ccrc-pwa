@@ -31,7 +31,7 @@ interface Booted { app: FastifyInstance; calls: string[][]; fetched: { n: number
 
 async function boot(o: Opts = {}): Promise<Booted> {
   const calls: string[][] = [];
-  const run: Runner = o.run ?? (async () => ({ code: 0, stdout: '', stderr: '' }));
+  const run: Runner = o.run ?? (async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
   const deps = testDeps(undefined, async (cmd, args) => { calls.push(args); return run(cmd, args); });
   const fetched = { n: 0 };
   const f = o.fetch;
@@ -229,7 +229,7 @@ describe('a box that does not list the verb ws-title (M7)', () => {
 });
 
 describe("ccd's refusals", () => {
-  const failing = (stderr: string, extra: object = {}): Runner => async () => ({ code: 1, stdout: '', stderr, ...extra });
+  const failing = (stderr: string, extra: object = {}): Runner => async () => ({ ran: true, code: 1, stdout: '', stderr, ...extra });
 
   it('a main checkout is 409 not-a-workspace, with no residue text', async () => {
     const { app } = await boot({ run: failing(`ccd: ${ID} is not a workspace — a main checkout's name is its project, so there is no workspace title to set or clear`) });
@@ -299,11 +299,11 @@ describe('the board shows the new title on the next fleet read', () => {
     const wrote: { reg: string } = { reg: '' };
     // A stand-in for ccd's `ws-title`: it writes the two registry fields the verb writes, into the fixture registry.
     const run: Runner = async (_cmd, args) => {
-      if (args[0] !== 'ws-title') return { code: 1, stdout: '', stderr: '' };
+      if (args[0] !== 'ws-title') return { ran: true, code: 1, stdout: '', stderr: '' };
       const title = args[3] === '--title' ? args[4]! : null;
       const f = (k: string): string => path.join(wrote.reg, `${ID}.${k}`);
       if (title !== null) { writeFileSync(f('title'), title); writeFileSync(f('named'), '1'); }
-      return { code: 0, stdout: `titled ${ID}: ${title}`, stderr: '' };
+      return { ran: true, code: 0, stdout: `titled ${ID}: ${title}`, stderr: '' };
     };
     const { app, registryDir } = await boot({ run });
     wrote.reg = registryDir;

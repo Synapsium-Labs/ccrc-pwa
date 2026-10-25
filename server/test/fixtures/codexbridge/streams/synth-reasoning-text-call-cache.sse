@@ -1,0 +1,30 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_fx1","object":"response","status":"in_progress","output":[]},"sequence_number":0}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_fx0","summary":[],"encrypted_content":"ENC-0"},"sequence_number":1}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_fx0","summary":[],"encrypted_content":"ENC-0"},"sequence_number":2}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"msg_fx1","role":"assistant","status":"in_progress","content":[]},"sequence_number":3}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_fx1","output_index":1,"content_index":0,"delta":"Looking","sequence_number":4}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_fx1","output_index":1,"content_index":0,"delta":" now.","sequence_number":5}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_fx1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Looking now.","annotations":[]}]},"sequence_number":6}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","id":"fc_fx2","call_id":"call_fx2","name":"read_file","arguments":"","status":"in_progress"},"sequence_number":7}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":2,"item":{"type":"function_call","id":"fc_fx2","call_id":"call_fx2","name":"read_file","arguments":"{\"path\": \"a.txt\"}","status":"completed"},"sequence_number":8}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_fx1","object":"response","status":"completed","output":[{"type":"reasoning","id":"rs_fx0","summary":[],"encrypted_content":"ENC-0"},{"type":"message","id":"msg_fx1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Looking now.","annotations":[]}]},{"type":"function_call","id":"fc_fx2","call_id":"call_fx2","name":"read_file","arguments":"{\"path\": \"a.txt\"}","status":"completed"}],"usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120,"input_tokens_details":{"cached_tokens":60}}},"sequence_number":9}
+

@@ -1,10 +1,16 @@
 // The command registry (D-5103): pure ranking, and the base commands' own
 // invariants. `command-layer.test.tsx` drives the palette and the keys.
+import { readdirSync } from 'node:fs';
+import path from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
-import { available, rankCommands, type Command, type CommandContext } from '../src/command/registry';
+import {
+  available, COMMAND_FIELD_WORDS, rankCommands, SEARCH_EMPTY, SEARCH_MIN, type Command, type CommandContext,
+} from '../src/command/registry';
 import { baseCommands, fleetOrder, GO_TO, SESSION_COMMANDS } from '../src/command/commands';
 import { matchRoute, ROUTES } from '../src/lib/routes';
 import { fleetSession } from './fleetFixture';
+import { parseTs } from './literalWalker';
 
 const cmd = (id: string, title: string): Command => ({ id, title, group: 'Test', run: () => {} });
 
@@ -85,7 +91,7 @@ describe("the ids are W2's door table's", () => {
 
 describe('the session commands (W2 Task S2d)', () => {
   const ctx = (session: CommandContext['session']): CommandContext => ({
-    path: '/s/project-a-one', sessions: [], navigate: () => {}, setSkin: () => {}, setTheme: () => {},
+    path: '/s/project-a-one', sessions: [], runs: [], navigate: () => {}, setSkin: () => {}, setTheme: () => {},
     openShortcuts: () => {}, openNewSession: () => {}, openPalette: () => {}, paletteOpen: false, session,
   });
 
@@ -102,5 +108,114 @@ describe('the session commands (W2 Task S2d)', () => {
     const c = ctx({ offers: () => true, run: (id) => { ran.push(id); } });
     for (const cmd of baseCommands().filter((x) => x.id.startsWith('session-') || x.id === 'open-history')) cmd.run(c);
     expect(ran).toEqual(SESSION_COMMANDS.map((x) => x.id).filter((id) => id !== 'open-terminal'));
+  });
+});
+
+// THE TOP SEARCH (D-6714, plan 2026-10-22-desktop-polish Task T5a): a term is scored by the one `score`, a search-only
+// entry ranks after every other entry, needs SEARCH_MIN characters and a contiguous match, and a lower tier ranks first
+// among equal scores. The base commands carry none of the new fields, so their ranking is today's (the regression pin).
+describe('the top search: terms, tier and search-only (D-6714)', () => {
+  const entry = (id: string, title: string, over: Partial<Command> = {}): Command => ({ ...cmd(id, title), ...over });
+
+  it('a term is scored by the same score as a title', () => {
+    const subTerm = entry('alpha', 'Alpha', { terms: ['xfoo'] }); // a substring: 2
+    const wordTerm = entry('beta', 'Beta', { terms: ['x-foo'] }); // a word start: 3
+    expect(rankCommands('foo', [subTerm, wordTerm]).map((c) => c.id)).toEqual(['beta', 'alpha']);
+    const prefixTerm = entry('gamma', 'Gamma', { terms: ['foo-x'] }); // a prefix: 4
+    const titleWord = entry('go-foo', 'Go foo'); // a title word start: 3
+    expect(rankCommands('foo', [titleWord, prefixTerm]).map((c) => c.id)).toEqual(['gamma', 'go-foo']);
+  });
+
+  it('a search-only entry ranks after every other entry, even on a better score', () => {
+    const list = [entry('go-runs', 'Go to Runs'), entry('s', 'first', { terms: ['runs-fold'], searchOnly: true })];
+    expect(rankCommands('runs', list).map((c) => c.id)).toEqual(['go-runs', 's']);
+    expect(rankCommands('runs', [...list].reverse()).map((c) => c.id), 'whatever the list order').toEqual(['go-runs', 's']);
+  });
+
+  it('among search-only entries of equal score a lower tier ranks first', () => {
+    const list = [2, 3, 1].map((tier) => entry(`t${tier}`, `s${tier}`, { terms: ['project-a'], tier, searchOnly: true }));
+    expect(rankCommands('project-a', list).map((c) => c.id)).toEqual(['t1', 't2', 't3']);
+  });
+
+  it('a search-only entry is never in the empty list', () => {
+    const list = [entry('a', 'Go to Fleet'), entry('s', 'first', { terms: ['project-a'], searchOnly: true })];
+    expect(rankCommands('', list).map((c) => c.id)).toEqual(['a']);
+    expect(rankCommands('   ', list).map((c) => c.id)).toEqual(['a']);
+  });
+
+  it('a search-only entry needs a trimmed query of SEARCH_MIN characters', () => {
+    expect(SEARCH_MIN).toBe(2);
+    const list = [entry('s', 'first', { terms: ['project-a'], searchOnly: true })];
+    expect(rankCommands('p', list)).toEqual([]);
+    expect(rankCommands(' p ', list)).toEqual([]);
+    expect(rankCommands('pr', list).map((c) => c.id)).toEqual(['s']);
+  });
+
+  it('a search-only entry is found by a contiguous run, never a scattered subsequence', () => {
+    const list = [entry('plain', 'alpha-beta'), entry('s', 'alpha-beta', { searchOnly: true })];
+    expect(rankCommands('ab', list).map((c) => c.id)).toEqual(['plain']);
+    expect(rankCommands('ha-b', list).map((c) => c.id), 'a contiguous run finds both').toEqual(['plain', 's']);
+  });
+
+  it('entries with no terms, tier or searchOnly rank exactly as before', () => {
+    // Measured on the base (4910f4cff) before T5a: the base commands' ids per query.
+    const BEFORE: readonly [string, readonly string[]][] = [
+  ['', ['go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs', 'go-archive', 'go-settings', 'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation', 'go-settings-security', 'new-session', 'open-session', 'next-session', 'prev-session', 'session-model', 'session-effort', 'open-history', 'session-docs', 'session-swap', 'session-archive', 'session-restore', 'open-terminal', 'session-pr', 'switch-layout', 'switch-theme', 'open-palette', 'show-shortcuts']],
+  ['runs', ['go-runs']],
+  ['go', ['go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs', 'go-archive', 'go-settings', 'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation', 'go-settings-security', 'session-model', 'session-effort']],
+  ['settings', ['go-settings', 'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation', 'go-settings-security']],
+  ['sess', ['new-session', 'open-session', 'next-session', 'prev-session', 'session-docs', 'session-archive', 'session-restore', 'go-settings-updates', 'go-settings-notifications', 'go-settings-security']],
+  ['theme', ['switch-theme', 'open-palette']],
+  ['gta', ['go-accounts', 'go-archive', 'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation']],
+  ['s', ['open-history', 'switch-layout', 'switch-theme', 'show-shortcuts', 'go-settings', 'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation', 'go-settings-security', 'new-session', 'open-session', 'next-session', 'prev-session', 'session-docs', 'session-archive', 'session-restore', 'go-runs', 'go-accounts', 'go-docs', 'session-pr']],
+  ['se', ['go-settings', 'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation', 'go-settings-security', 'new-session', 'open-session', 'next-session', 'prev-session', 'session-docs', 'session-archive', 'session-restore', 'switch-theme']],
+  ['open', ['open-session', 'session-docs', 'open-terminal', 'session-pr', 'open-palette', 'go-settings-appearance']],
+  ['zz', []],
+  [' Go to ', ['go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs', 'go-archive', 'go-settings', 'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation', 'go-settings-security']],
+  ['layout', ['switch-layout']],
+  ['h', ['open-history', 'go-archive', 'session-model', 'session-effort', 'session-docs', 'session-swap', 'session-archive', 'session-restore', 'open-terminal', 'session-pr', 'switch-layout', 'switch-theme', 'open-palette', 'show-shortcuts']],
+    ];
+    for (const [q, ids] of BEFORE) expect(rankCommands(q, baseCommands()).map((c) => c.id), JSON.stringify(q)).toEqual(ids);
+  });
+});
+
+describe("the palette's words and the session builder each have one home (D-6714)", () => {
+  const SRC = path.join(import.meta.dirname, '..', 'src');
+  const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
+    d.isDirectory() ? files(path.join(dir, d.name)) : /\.tsx?$/.test(d.name) ? [path.join(dir, d.name)] : []);
+  /** Every string a file's CODE holds (never a comment): string literals, each template's literal parts, and JSX text. */
+  const strings = (file: string): string[] => {
+    const out: string[] = [];
+    const walk = (n: ts.Node): void => {
+      if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isJsxText(n)) out.push(n.text);
+      else if (ts.isTemplateExpression(n)) out.push(n.head.text, ...n.templateSpans.map((s) => s.literal.text));
+      ts.forEachChild(n, walk);
+    };
+    walk(parseTs(file));
+    return out;
+  };
+  /** The module `name` is imported from in `file`, or null. */
+  const importedFrom = (file: string, name: string): string | null => {
+    for (const st of parseTs(file).statements) {
+      if (!ts.isImportDeclaration(st) || st.importClause?.namedBindings === undefined) continue;
+      const b = st.importClause.namedBindings;
+      if (ts.isNamedImports(b) && b.elements.some((e) => e.name.text === name)) return (st.moduleSpecifier as ts.StringLiteral).text;
+    }
+    return null;
+  };
+  const rel = (f: string): string => path.relative(SRC, f);
+
+  it("the palette's words have one home", () => {
+    expect(importedFrom(path.join(SRC, 'skins/instrument/TopBar.tsx'), 'COMMAND_FIELD_WORDS')).toBe('../../command/registry');
+    expect(importedFrom(path.join(SRC, 'command/CommandLayer.tsx'), 'COMMAND_FIELD_WORDS')).toBe('./registry');
+    for (const words of [COMMAND_FIELD_WORDS, SEARCH_EMPTY]) {
+      const holders = files(SRC).filter((f) => strings(f).some((s) => s.includes(words))).map(rel);
+      expect(holders, words).toEqual(['command/registry.ts']);
+    }
+  });
+
+  it('one session builder', () => {
+    const holders = files(SRC).filter((f) => strings(f).some((s) => s.startsWith('open-session-'))).map(rel);
+    expect(holders).toEqual(['command/sessionEntries.ts']);
   });
 });

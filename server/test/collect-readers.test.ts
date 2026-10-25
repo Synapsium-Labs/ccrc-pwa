@@ -46,7 +46,8 @@ const uniq = (xs: readonly string[]): string[] => [...new Set(xs)].sort();
 const probesFromCcd = (): string[] => {
   const code = bashCode(ccdSrc);
   const literal = [...code.matchAll(/_ws_collect_unmeasured ([a-z][a-z-]*)\b/g)].map((m) => m[1]!);
-  expect([...code.matchAll(/_ws_collect_unmeasured "idle:\$why"/g)], 'the walk probe is composed once').toHaveLength(1);
+  // Composed once per region: the witnessed collector's, and the loose arm's own (D-6625), which admits the same walk words.
+  expect([...code.matchAll(/_ws_collect_unmeasured "idle:\$why"/g)], 'the walk probe is composed once per region').toHaveLength(2);
   const ev = between('\n_ws_collect_eval() {', '\n_ws_collect_resume_eval() {');
   const cased = /case "\$\{_WS_IDLE_WHY-\}" in ([a-z|-]+)\)/.exec(ev);
   const dflt = /\blocal [^\n]*\bwhy=([a-z-]+)/.exec(ev);
@@ -437,7 +438,8 @@ describe('the collect readers are their own (spec §5.10)', () => {
     // refuses only a third specifier, so it stays green at Task 4's commit (no commit is red).
     expect(specs).toContain('../../shared/api.js');
     // `shared/switches.js` is L0 too: the lane's live marker is spelled once there (D-5855).
-    const ALLOWED = new Set(['../../shared/api.js', '../../shared/switches.js', './childReclaimSweep.js']);
+    // ARCH-14 (#560): `shared/ccd-refusal.js` is L0 as well: the machine token's reader and the one spelling of the lock word.
+    const ALLOWED = new Set(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js', './childReclaimSweep.js']);
     expect(specs.filter((s) => !ALLOWED.has(s)), 'a specifier outside that pair')
       .toEqual([]);
     expect(code).not.toMatch(/\bimport\s*\(|\brequire\s*\(/);

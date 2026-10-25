@@ -82,6 +82,36 @@
 # exits 0, because a single unremovable file must not turn every hourly run
 # into a failed unit.
 #
+# THE LIVE ARM (fleet disk retention, DR-8, D-6620; spec 2026-10-23 sections 2.1 and 2.1.1). After
+# the dead pass, under the same lock and pause file, it reaches into the units that pass called LIVE
+# (a running or hibernated session) and takes two kinds of top-level entry out of their `scratchpad/`
+# and `tasks/` (never those two directories, never the unit):
+#   - an entry untouched for 14 days (3 under pressure): every entry under it has mtime and ctime
+#     older than that, and every regular file an atime too unless its mount is `noatime`;
+#   - the SIZE BUDGET's: a session whose scratch, summed over every root and unit of its uuid, is
+#     over CCD_TMP_BUDGET_GB (20) gets its overSince recorded and 24 hours of grace (none under
+#     pressure); then, oldest first, entries untouched for 48 hours (a floor pressure never lowers),
+#     unheld, with no git work on no remote, are taken until the total is under
+#     CCD_TMP_BUDGET_TARGET_GB (15). Both knobs can only be raised.
+# Holders come from `ccd path-users --json` (the one probe); any doubt keeps the entry. A taken
+# entry is RENAMED into `<root>/.ccd-tmp-quarantine/<uuid>/<ns>.<name>` and deleted by a pass one
+# grace later (24 h; 1 h under pressure) after a fresh holder ask. The roots are today's, `/tmp/
+# claude-<uid>` when it differs, and each witnessed child leaf's `claude-<uid>`.
+# THE TEST-RUN ARM (DR-10, D-6622; spec 2.2) rides the same switch and rows. In the box's TMPDIR and in each
+# witnessed child leaf that still has a registry row, a top-level `ccrc-testrun-XXXXXX` (or its `.dead` twin) is
+# removed when no socket is bound at its `live.sock` in /proc/net/unix (the liveness the run itself uses, D-4499),
+# nothing under it has changed (ctime) for 6 hours (1 under pressure), and `ccd path-users` answers nobody.
+# It is renamed to the `.dead` twin, then removed with `rm -rf --one-file-system`, as the run's own `condemn` does.
+# Any doubt (a walk that cannot finish, an unreadable socket table, a probe that fails) keeps it.
+# THE OUTPUT CAP (DR-9, D-6621). A finished `tasks/*.output` regular file over 1 GiB, unheld and with no mtime or
+# ctime in the last hour, is rewritten as its first 64 MiB, one marker line (`[ccd-tmp-sweep: <n> bytes cut at <ts>]`)
+# and its last 64 MiB: written to a temp file beside it, then renamed over, so a failure anywhere leaves the original
+# byte-identical. The holder ask is the last look before the rename; a file that changed since it was measured stays.
+# The census lists it as kind `output-capped` (`wouldCap` in shadow).
+# SHADOW unless `~/.ccrc/tmp-sweep-live-arm` exists: it then lists what it would take and touches
+# nothing. No code in the tree creates that file (single-definition.test.ts pins it). The census
+# `~/.ccrc/tmp-sweep.json` is replaced whole at the end of every pass, shadow or live.
+#
 # PORTABILITY. Linux-only by product shape — its only runner is a systemd
 # timer, which `_inst_units`' Darwin arm never installs, and it reads /proc —
 # the same carve-out ccd-graph-sweep has. It is written to pass
@@ -100,8 +130,28 @@ ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 # claude and never be confused by a real one on the box running the suite.
 : "${CCD_TMP_SWEEP_CLAUDE_RE:=(^|/)claude\$|/claude/versions/[^/]+\$}"
 ROOT="${CCD_TMP_SWEEP_ROOT:-${TMPDIR:-/tmp}/claude-$(id -u)}"
+ROOT_LIT="$ROOT"
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 UUID_ANY='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+
+# Pressure mode (spec 2.5.1): a sweep measures its OWN filesystem and, at 92% of bytes or inodes
+# used, uses the shorter ages below. `shared/disk.ts` holds the same numbers (DISK_CRITICAL_PCT,
+# DISK_PRESSURE_AGES); disk-twins.test.ts reads these lines and requires them equal. Seconds:
+# "normal pressure".
+TS_PRESSURE_PCT=92
+TS_AGES_DEAD_UNITS="604800 172800"
+TS_AGES_LIVE_UNTOUCHED="1209600 259200"
+TS_AGES_QUARANTINE_GRACE="86400 3600"
+TS_AGES_BUDGET_GRACE="86400 0"
+TS_AGES_BUDGET_UNTOUCHED_FLOOR="172800 172800"
+TS_AGES_LIVE_CADENCE="21600 0"
+TS_AGES_TEST_RUN_QUIET="21600 3600"
+# The size budget, in GiB, raise-only. TEST SEAM: CCD_TMP_BUDGET_UNIT_BYTES is what one "GiB" is.
+: "${CCD_TMP_BUDGET_GB:=20}"
+: "${CCD_TMP_BUDGET_TARGET_GB:=15}"
+: "${CCD_TMP_BUDGET_UNIT_BYTES:=1073741824}"
+LIVE_ARM="$HOME/.ccrc/tmp-sweep-live-arm"
+CENSUS="$HOME/.ccrc/tmp-sweep.json"
 
 DRY=0
 case "${1:-}" in
@@ -115,6 +165,19 @@ _ts_die() { echo "tmp-sweep: $*" >&2; exit 1; }
 [[ "$CCD_TMP_SWEEP_MAX_AGE_DAYS" =~ ^[1-9][0-9]{0,4}$ ]] \
   || _ts_die "invalid-max-age: CCD_TMP_SWEEP_MAX_AGE_DAYS='$CCD_TMP_SWEEP_MAX_AGE_DAYS' is not a positive integer of days — refusing to guess a horizon"
 MAX_MIN=$((CCD_TMP_SWEEP_MAX_AGE_DAYS * 1440))
+# Bounded so GiB x unit stays inside signed 64-bit arithmetic: a wrapped product is negative and would turn
+# "raise the budget" into "every session is over it".
+for _k in CCD_TMP_BUDGET_GB CCD_TMP_BUDGET_TARGET_GB CCD_TMP_BUDGET_UNIT_BYTES; do
+  _re='^[1-9][0-9]{0,5}$'; [ "$_k" = CCD_TMP_BUDGET_UNIT_BYTES ] && _re='^[1-9][0-9]{0,9}$'
+  [[ "${!_k}" =~ $_re ]] || _ts_die "invalid-budget: $_k='${!_k}' is not a positive integer — refusing to guess a budget"
+done
+# Raise-only: a knob below its default is the default, and the target never passes the budget.
+[ "$CCD_TMP_BUDGET_GB" -ge 20 ] || CCD_TMP_BUDGET_GB=20
+[ "$CCD_TMP_BUDGET_TARGET_GB" -ge 15 ] || CCD_TMP_BUDGET_TARGET_GB=15
+[ "$CCD_TMP_BUDGET_TARGET_GB" -le "$CCD_TMP_BUDGET_GB" ] || CCD_TMP_BUDGET_TARGET_GB="$CCD_TMP_BUDGET_GB"
+
+[ $((CCD_TMP_BUDGET_GB * CCD_TMP_BUDGET_UNIT_BYTES)) -gt 0 ] && [ $((CCD_TMP_BUDGET_TARGET_GB * CCD_TMP_BUDGET_UNIT_BYTES)) -gt 0 ] \
+  || _ts_die "invalid-budget: the budget does not multiply out to a positive byte count"
 
 [ -e "$PAUSE" ] && { echo "tmp-sweep: paused ($PAUSE exists)"; exit 0; }
 
@@ -151,6 +214,59 @@ flock -n 9 || { echo "tmp-sweep: another pass holds $LOCK"; exit 0; }
 
 cd -- "$ROOT" || _ts_die "root-unenterable: cannot cd into $ROOT"
 shopt -s nullglob dotglob
+
+# ── pressure, and the live arm's roots ───────────────────────────────────────
+# Twin of the server's decider (spec 2.5.1): 92% or more of bytes or inodes used on a filesystem
+# the sweep works on. `df` is a seam for the harness. Unreadable output is NOT pressure: pressure
+# only shortens ages, so doubt keeps the longer one.
+_ts_pressure() {   # path -> 0 under pressure, 1 not
+  local flag line u a
+  for flag in -Pk -Pi; do
+    line="$(${CCD_TMP_SWEEP_DF:-df} "$flag" -- "$1" 2>/dev/null | awk 'NR==2 {print $3, $4}')" || continue
+    read -r u a <<<"$line"
+    [[ "$u" =~ ^[0-9]+$ && "$a" =~ ^[0-9]+$ ]] && [ $((u + a)) -gt 0 ] || continue
+    [ $((u * 100)) -ge $((TS_PRESSURE_PCT * (u + a))) ] && return 0
+  done
+  return 1
+}
+_ts_age_s() {      # TS_AGES_<NAME> [flag] -> the seconds in force now (flag defaults to the primary root's)
+  local v="TS_AGES_$1" n p; read -r n p <<<"${!v}"
+  if [ "${2:-$PRESSURE}" -eq 1 ]; then echo "$p"; else echo "$n"; fi
+}
+# The roots the live arm walks (spec 2.1): each must be a real directory this uid owns whose
+# physical path is where it should be. A line is `arm<TAB>physical<TAB>literal`.
+LIVE_ROOTS=""
+_ts_add_root() {   # arm literal physical
+  [ -d "$2" ] && [ ! -L "$2" ] && [ -O "$2" ] || return 0
+  [ "$(realpath -e -- "$2" 2>/dev/null)" = "$3" ] || return 0
+  case "$LIVE_ROOTS" in *$'\t'"$3"$'\t'*) return 0 ;; esac
+  LIVE_ROOTS+="$1"$'\t'"$3"$'\t'"$2"$'\n'
+}
+_ts_add_root primary "$ROOT_LIT" "$ROOT"
+_ts_tmp="${CCD_TMP_SWEEP_TMP_BASE:-/tmp}/claude-$(id -u)"   # the base is a seam for the harness
+_ts_add_root tmp "$_ts_tmp" "$(realpath -e -- "$_ts_tmp" 2>/dev/null)"
+_ts_cctmp="$(realpath -e -- "$HOME/.cc-tmp" 2>/dev/null)"
+if [ -n "$_ts_cctmp" ]; then
+  for _w in "$HOME/.cc-sessions/tmproots"/*; do
+    _id="${_w##*/}"; [[ "$_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && [ -f "$_w" ] && [ ! -L "$_w" ] || continue
+    _ts_add_root child "$HOME/.cc-tmp/$_id/claude-$(id -u)" "$_ts_cctmp/$_id/claude-$(id -u)"
+  done
+fi
+# Each root answers for its own filesystem: its line gains a fourth field, 1 under pressure. The dead
+# pass shortens only on the primary root's own answer; the live arm picks ages per root.
+PRESSURE=0
+_ts_rootsp=""
+while IFS=$'\t' read -r _a _p _l; do
+  [ -n "$_p" ] || continue
+  _f=0; _ts_pressure "$_p" && _f=1
+  [ "$_a" = primary ] && PRESSURE="$_f"
+  _ts_rootsp+="$_a"$'\t'"$_p"$'\t'"$_l"$'\t'"$_f"$'\n'
+done <<<"$LIVE_ROOTS"
+LIVE_ROOTS="$_ts_rootsp"
+if [ "$PRESSURE" -eq 1 ]; then
+  _dead_p=$(( $(_ts_age_s DEAD_UNITS) / 60 ))
+  [ "$_dead_p" -lt "$MAX_MIN" ] && MAX_MIN="$_dead_p"
+fi
 
 # ── (a) live sessions ───────────────────────────────────────────────────────
 # The roster's config dirs, read ONCE: sourcing the projection is the same act
@@ -263,6 +379,7 @@ _ts_collect_live || _ts_die "$REFUSE"
 UNITS=(); KINDS=(); PROJECTS=()
 for e in ./*; do
   name="${e#./}"
+  [ "$name" = .ccd-tmp-quarantine ] && continue   # the live arm's own (its deletion is its alone)
   is_proj=0
   if [ -d "$e" ] && [ ! -L "$e" ]; then
     for c in "$e"/*; do
@@ -332,8 +449,667 @@ if [ "$DRY" -eq 0 ]; then
   done
 fi
 
+
+# ── the live arm (see the header) ───────────────────────────────────────────
+# The python is embedded so the sweep stays one installed file. It runs only when the dead pass
+# finished (a refused or aborted pass leaves the live set unknown) and python3 exists; either way
+# the dead pass's result stands.
+read -r -d '' LIVE_PY <<'PYEOF'
+# The live arm (spec 2.1, 2.1.1): one pass over the units today's pass called live. Everything it
+# needs arrives in the environment; it reads the registry's *.uuid files and the previous census,
+# and it is the census's only writer. A walk that cannot finish, a holder probe that cannot answer
+# and a git question that cannot be asked all KEEP the candidate. NOW can be moved by a test.
+import json, os, re, stat, subprocess, sys, time
+
+E = os.environ
+HOME = E['HOME']
+WALL0 = time.time()
+NOW = float(E.get('CCD_TMP_SWEEP_NOW') or WALL0)
+DRY = E['TS_DRY'] == '1'
+ARMED = E['TS_ARM'] == '1' and not DRY
+def pair(k):
+    """TS_* "normal pressure" seconds; each root picks by its own filesystem (spec 2.5.1)"""
+    n, p = E[k].split()
+    return (int(n), int(p))
+AGE_UNTOUCHED = pair('TS_AGE_UNTOUCHED')
+AGE_FLOOR = pair('TS_AGE_FLOOR')
+GRACE_Q = pair('TS_GRACE_QUARANTINE')
+GRACE_B = pair('TS_GRACE_BUDGET')
+CADENCE = pair('TS_CADENCE')
+BUDGET = int(E['TS_BUDGET_BYTES'])
+# the output cap (spec 2.1): a finished tasks/*.output over one "GiB" keeps its first and last 1/16 of one (64 MiB each)
+OUT_CAP = int(E['TS_UNIT_BYTES'])
+OUT_KEEP = OUT_CAP // 16
+OUT_QUIET = 3600
+TARGET = int(E['TS_TARGET_BYTES'])
+REG = E['TS_REG']
+CENSUS = E['TS_CENSUS']
+CCD = E['TS_CCD']
+MOUNTINFO = E.get('CCD_TMP_SWEEP_MOUNTINFO') or '/proc/self/mountinfo'
+LIVE = set(x for x in E.get('TS_LIVE', '').split('\n') if x)
+UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+QDIR = '.ccd-tmp-quarantine'
+WALK_S = 30
+WALK_ENTRIES = int(E.get('CCD_TMP_SWEEP_WALK_ENTRIES') or 2000000)
+REPO_CAP = 50
+MOVED_KEEP = 1000
+MOVED_DAYS = 7
+now_ms = int(NOW * 1000)
+counts = {}
+def bump(k, n=1): counts[k] = counts.get(k, 0) + n
+
+def load_prev():
+    try:
+        with open(CENSUS) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) and d.get('v') == 1 else {}
+    except (OSError, ValueError):
+        return {}
+
+JOURNAL = CENSUS + '.journal'
+LIVE_BUDGET_S = 1800
+prev = load_prev()
+seq = prev.get('seq') if isinstance(prev.get('seq'), int) else 0
+moved = [r for r in prev.get('moved', []) if isinstance(r, dict)]
+# rows of a pass that moved entries but died before writing its census: fold them in, never lose a receipt
+try:
+    with open(JOURNAL) as f:
+        for ln in f:
+            try: jr = json.loads(ln)
+            except ValueError: continue
+            if isinstance(jr, dict) and isinstance(jr.get('seq'), int):
+                moved.append(jr); seq = max(seq, jr['seq'])
+except OSError:
+    pass
+# path -> [start, end] of the sweep's own git probe: atimes inside it are the probe's reads, not a touch
+KEPT_MAX = 50   # a session's census row names this many kept entries and counts the rest, so the file stays readable
+pprobed = prev.get('probed') if isinstance(prev.get('probed'), dict) else {}
+probed = {}
+
+def mount_noatime(path):
+    best, opts = '', ''
+    try:
+        with open(MOUNTINFO) as f:
+            for ln in f:
+                p = ln.split(' ')
+                if len(p) < 6: continue
+                mp = re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), p[4])
+                if (path == mp or path.startswith(mp.rstrip('/') + '/')) and len(mp) >= len(best):
+                    best, opts = mp, p[5]
+    except OSError:
+        return False
+    return 'noatime' in opts.split(',')
+
+def ccd_users(paths):
+    """path -> nobody | held | unmeasured, from `ccd path-users --json`; a failure keeps everything."""
+    out = {p: 'unmeasured' for p in paths}
+    for i in range(0, len(paths), 400):
+        chunk = paths[i:i + 400]
+        try:
+            r = subprocess.run([CCD, 'path-users', '--json'] + chunk, capture_output=True, text=True, timeout=180)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if r.returncode != 0: continue
+        for ln in r.stdout.splitlines():
+            try:
+                o = json.loads(ln)
+            except ValueError:
+                continue
+            if isinstance(o, dict) and o.get('path') in out and o.get('verdict') in ('nobody', 'held', 'unmeasured'):
+                out[o['path']] = o['verdict']
+    return out
+
+ENTRIES = [0]
+def walk(path, noatime, ctr=None):
+    """newest touch, apparent disk bytes, entry count and any repositories under path; ok=False keeps it.
+    ctr is the entry counter the walk is charged to: the scan shares one per pass, each pre-move re-walk has its own."""
+    ctr = ENTRIES if ctr is None else ctr
+    win = pprobed.get(path)
+    win = win if isinstance(win, list) and len(win) == 2 else None
+    r = {'ok': True, 'why': '', 'newest': 0.0, 'bytes': 0, 'entries': 0, 'repos': [], 'reposTruncated': False}
+    try:
+        top = os.lstat(path)
+    except OSError:
+        r['ok'], r['why'] = False, 'gone'
+        return r
+    dev = top.st_dev
+    t0 = time.monotonic()
+    stack = [(path, top)]
+    while stack:
+        p, st = stack.pop()
+        ctr[0] += 1
+        r['entries'] += 1
+        if time.monotonic() - t0 > WALK_S or ctr[0] > WALK_ENTRIES:
+            r['ok'], r['why'] = False, 'bound'
+            return r
+        r['newest'] = max(r['newest'], st.st_mtime, st.st_ctime)
+        if stat.S_ISREG(st.st_mode) and not noatime and not (win and win[0] <= st.st_atime <= win[1]):
+            r['newest'] = max(r['newest'], st.st_atime)
+        r['bytes'] += st.st_blocks * 512
+        if not stat.S_ISDIR(st.st_mode) or st.st_dev != dev:
+            continue
+        try:
+            with os.scandir(p) as it:
+                kids = list(it)
+        except OSError:
+            r['ok'], r['why'] = False, 'unreadable'
+            return r
+        # a repository is a `.git` child or a bare git dir (HEAD, objects/, refs/); a bare one can hold the only copy
+        names = {k.name for k in kids}
+        bare = os.path.basename(p) != '.git' and {'HEAD', 'objects', 'refs'} <= names
+        for k in kids:
+            if k.name == '.git' or (bare and k.name == 'HEAD'):
+                if len(r['repos']) < REPO_CAP: r['repos'].append(p)
+                else: r['reposTruncated'] = True
+            try:
+                stack.append((k.path, os.lstat(k.path)))
+            except OSError:
+                r['ok'], r['why'] = False, 'unreadable'
+                return r
+    return r
+
+def local_remote(rp, urls):
+    """True when a remote URL of rp is a local path inside a swept root: that copy goes with the sweep, so it is no remote."""
+    rts = [os.path.realpath(x) for r in roots for x in (r['path'], r['literal'])]
+    for u in urls:
+        u = u.strip()
+        if u.startswith('file://'): u = u[7:]
+        elif re.match(r'^[A-Za-z][A-Za-z0-9+.-]*://', u) or re.match(r'^[^/]*@?[^/:]+:', u): continue
+        full = os.path.realpath(u if os.path.isabs(u) else os.path.join(rp, u))
+        if any(full == t or full.startswith(t.rstrip('/') + '/') for t in rts): return True
+    return False
+
+def logs_unread(base, env):
+    """True when an entry under the logs/ of the git dir or the common dir is a link or unreadable (or that cannot be
+    told): git does not follow a linked logs, so `rev-list --reflog` then reads empty and a reflog-only commit hides.
+    The twin of ccd's `_ws_reclaim_logs_readable`."""
+    dirs = []
+    for arg in (['rev-parse', '--absolute-git-dir'], ['rev-parse', '--path-format=absolute', '--git-common-dir']):
+        r = subprocess.run(base + arg, capture_output=True, text=True, timeout=30, env=env)
+        if r.returncode != 0 or not r.stdout.strip(): return True
+        d = os.path.join(r.stdout.strip(), 'logs')
+        if d not in dirs: dirs.append(d)
+    for d in dirs:
+        if not os.path.lexists(d): continue
+        if os.path.islink(d): return True
+        errs = []
+        for dp, dn, fn in os.walk(d, onerror=errs.append):
+            if errs: return True
+            if not (os.access(dp, os.R_OK) and os.access(dp, os.X_OK)): return True
+            for e in dn + fn:
+                full = os.path.join(dp, e)
+                if os.path.islink(full): return True
+                if not os.access(full, os.R_OK): return True
+        if errs: return True
+    return False
+
+def hidden_flags(base, env):
+    """True when `ls-files -v` tags any path assume-unchanged (lowercase) or skip-worktree (S), or git cannot say:
+    `status` shows neither edit. The twin of ccd's `_ws_reclaim_hidden`."""
+    r = subprocess.run(base + ['ls-files', '-v'], capture_output=True, text=True, timeout=60, env=env)
+    if r.returncode != 0 or r.stderr.strip(): return True
+    return any(ln[:1].islower() or ln[:1] == 'S' for ln in r.stdout.splitlines())
+
+def unpushed(repos):
+    """True when any repository holds work on no remote, or when that cannot be told. Like ccd's reclaim rule a
+    commit only a reflog names counts, and a git that complains is an unmeasured answer, so it keeps."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+    for rp in repos:
+        try:
+            base = ['git', '--no-optional-locks', '-C', rp, '-c', 'core.fsmonitor=', '-c', 'safe.directory=*']
+            bare = subprocess.run(base + ['rev-parse', '--is-bare-repository'], capture_output=True, text=True, timeout=30, env=env)
+            if bare.returncode != 0: return True
+            s = None
+            if logs_unread(base, env): return True
+            if bare.stdout.strip() != 'true':
+                if hidden_flags(base, env): return True
+                s = subprocess.run(base + ['status', '--porcelain', '--untracked-files=all'], capture_output=True, text=True, timeout=30, env=env)
+            u = subprocess.run(base + ['config', '--get-regexp', r'^remote\..*\.(pushurl|url)$'], capture_output=True, text=True, timeout=30, env=env)
+            c = subprocess.run(base + ['rev-list', '-n1', '--all', '--reflog', '--not', '--remotes'], capture_output=True, text=True, timeout=30, env=env)
+        except (OSError, subprocess.SubprocessError):
+            return True
+        if s is not None and (s.returncode != 0 or s.stderr.strip() or s.stdout.strip()): return True
+        if u.returncode not in (0, 1) or c.returncode != 0 or c.stderr.strip() or c.stdout.strip(): return True
+        if local_remote(rp, [ln.split(None, 1)[1] for ln in u.stdout.splitlines() if ' ' in ln]): return True
+    return False
+
+def physical(rootphys, rel):
+    return os.path.join(rootphys, rel)
+
+# ── the quarantine's second half: deletion, a grace after the move and a fresh holder ask ──
+roots = []
+for ln in E.get('TS_ROOTS', '').split('\n'):
+    f = ln.split('\t')
+    if len(f) == 4: roots.append({'arm': f[0], 'path': f[1], 'literal': f[2], 'p': f[3] == '1'})
+PRESSURE = any(r['p'] for r in roots)
+def by_p(pr, p):
+    return pr[1] if p else pr[0]
+for r in roots:
+    r['noatime'] = mount_noatime(r['path'])
+
+def delete_quarantined():
+    due = []
+    for r in roots:
+        q = os.path.join(r['path'], QDIR)
+        if os.path.islink(q) or not os.path.isdir(q): continue
+        try: qus = sorted(os.listdir(q))
+        except OSError: continue
+        for u in qus:
+            ud = os.path.join(q, u)
+            if os.path.islink(ud) or not os.path.isdir(ud): continue
+            try: qes = sorted(os.listdir(ud))
+            except OSError: continue
+            for e in qes:
+                m = re.match(r'^([0-9]+)\.', e)
+                if not m: continue
+                if NOW - int(m.group(1)) / 1e9 < by_p(GRACE_Q, r['p']): continue
+                due.append(os.path.join(ud, e))
+    if not due: return
+    v = ccd_users(due)
+    for p in due:
+        if v.get(p) == 'held': bump('quarantineHeld'); continue
+        if v.get(p) != 'nobody': bump('quarantineUnmeasured'); continue
+        if subprocess.run(['rm', '-rf', '--one-file-system', '--', p], stderr=subprocess.DEVNULL).returncode == 0:
+            bump('quarantineDeleted')
+        else:
+            bump('failed')
+        try: os.rmdir(os.path.dirname(p))
+        except OSError: pass
+
+if ARMED: delete_quarantined()
+
+# ── the scan: only the units today's pass called live ──
+idof = {}
+try:
+    for n in os.listdir(REG):
+        if n.endswith('.uuid') and not n.startswith('.'):
+            try:
+                with open(os.path.join(REG, n)) as f: u = f.read().strip()
+            except OSError: continue
+            if UUID_RE.match(u): idof[u] = n[:-5]
+except OSError:
+    pass
+
+due = bool(PRESSURE) or prev.get('liveAt') is None or (NOW - prev['liveAt'] / 1000.0) >= by_p(CADENCE, PRESSURE)
+sessions = {}
+newrows = []
+live_at = prev.get('liveAt') if not due else now_ms
+if due:
+    cands = []
+    for r in roots:
+        try: projs = sorted(os.listdir(r['path']))
+        except OSError: continue
+        for pj in projs:
+            pd = os.path.join(r['path'], pj)
+            if pj == QDIR or os.path.islink(pd) or not os.path.isdir(pd): continue
+            try: pus = sorted(os.listdir(pd))
+            except OSError: bump('unreadable'); continue
+            for u in pus:
+                ud = os.path.join(pd, u)
+                if not UUID_RE.match(u) or u not in LIVE or os.path.islink(ud) or not os.path.isdir(ud): continue
+                if u not in idof:
+                    bump('liveUnmapped'); continue
+                for sub in ('scratchpad', 'tasks'):
+                    sd = os.path.join(ud, sub)
+                    if os.path.islink(sd) or not os.path.isdir(sd): continue
+                    try: names = sorted(os.listdir(sd))
+                    except OSError: bump('unreadable'); continue
+                    for nm in names:
+                        cands.append({'root': r, 'uuid': u, 'id': idof[u], 'unit': pj + '/' + u, 'sub': sub, 'name': nm,
+                                      'path': os.path.join(sd, nm)})
+    for c in cands:
+        w = walk(c['path'], c['root']['noatime'])
+        c.update(w)
+        if not w['ok']: bump('unmeasured')
+        c['age'] = NOW - w['newest'] if w['ok'] else 0
+        c['au'] = by_p(AGE_UNTOUCHED, c['root']['p'])
+        c['af'] = by_p(AGE_FLOOR, c['root']['p'])
+    # one holder walk for every candidate old enough for either rule (the budget's floor is the lower of the two)
+    def spellings(c):
+        ph = os.path.join(os.path.realpath(os.path.dirname(c['path'])), c['name'])
+        lit = os.path.join(c['root']['literal'], c['unit'], c['sub'], c['name'])
+        return list(dict.fromkeys([ph, lit]))
+    ask = [p for c in cands if c['ok'] and c['age'] >= min(c['af'], c['au']) for p in spellings(c)]
+    verdict = ccd_users(list(dict.fromkeys(ask))) if ask else {}
+    def held_of(c):
+        vs = [verdict.get(p, 'unmeasured') for p in spellings(c)]
+        return 'held' if 'held' in vs else 'unmeasured' if 'unmeasured' in vs else 'nobody'
+
+    def quarantine(c):
+        r = c['root']
+        q = os.path.join(r['path'], QDIR)
+        if os.path.islink(q): return None
+        os.makedirs(q, mode=0o700, exist_ok=True)
+        if not os.path.isdir(q) or os.path.islink(q) or os.stat(q).st_uid != os.getuid(): return None
+        ud = os.path.join(q, c['uuid'])
+        os.makedirs(ud, mode=0o700, exist_ok=True)
+        ns = int(NOW * 1e9)
+        while True:
+            dst = os.path.join(ud, '%d.%s' % (ns, c['name']))
+            if not os.path.lexists(dst): break
+            ns += 1
+        os.rename(c['path'], dst)
+        return dst
+
+    def act(c, kind):
+        """Move c (or record that it would move). The last look is taken here, as late as it can be."""
+        global seq
+        shadow = not ARMED
+        dst = None
+        if ARMED and time.time() - WALL0 > LIVE_BUDGET_S:
+            bump('timeBudget'); return False
+        if ARMED:
+            w = walk(c['path'], c['root']['noatime'], [0])
+            need = c['au'] if kind == 'scratch' else c['af']
+            if not w['ok']:
+                bump('unmeasured'); c['fail'] = 'unmeasured'; return False
+            if NOW - w['newest'] < need:
+                bump('recent'); return False
+            if any(v != 'nobody' for v in ccd_users(spellings(c)).values()):
+                bump('held'); return False
+        if kind == 'budget':
+            # the git question goes last, after every look that reads the tree, because asking it reads files too
+            # the window is the probe's own wall-clock span on the sweep's clock, not the pass's start
+            t0 = time.time()
+            bad = c.get('reposTruncated') or unpushed(c['repos'])
+            probed[c['path']] = [NOW + (t0 - WALL0) - 1, NOW + (time.time() - WALL0) + 1]
+            if bad:
+                bump('gitKept'); c['fail'] = 'git-work-unrescued'; return False
+        if ARMED:
+            try:
+                dst = quarantine(c)
+            except OSError:
+                dst = None
+            if dst is None:
+                bump('failed'); return False
+        seq += 1
+        row = {'seq': seq, 'id': c['id'], 'uuid': c['uuid'], 'name': c['name'], 'kind': kind, 'bytes': c['bytes'],
+               'at': now_ms, 'shadow': shadow, 'quarantine': dst,
+               'from': c['unit'] + '/' + c['sub'] + '/' + c['name'], 'root': c['root']['path']}
+        newrows.append(row)
+        if ARMED and not DRY:
+            try:
+                with open(JOURNAL, 'a') as jf:
+                    jf.write(json.dumps(row) + '\n'); jf.flush(); os.fsync(jf.fileno())
+            except OSError: pass
+        # shadow: the entry stays on disk and in every measure; wouldGo only feeds the simulation
+        c['gone' if ARMED else 'wouldGo'] = True
+        bump('moved' if ARMED else 'wouldMove')
+        return True
+
+    # the age rule goes first, so the budget counts what it left
+    for c in cands:
+        if c['ok'] and c['age'] >= c['au'] and held_of(c) == 'nobody':
+            act(c, 'scratch')
+        elif c['ok'] and c['age'] >= c['au']:
+            bump('held' if held_of(c) == 'held' else 'holdersUnmeasured')
+
+    def same_file(p, st):
+        n = os.lstat(p)
+        return (n.st_ino, n.st_dev, n.st_size, n.st_mtime_ns) == (st.st_ino, st.st_dev, st.st_size, st.st_mtime_ns)
+
+    def cap_output(c):
+        """A finished tasks/*.output over the cap becomes its head, one marker line and its tail: written beside it,
+        then renamed over, so a failure anywhere leaves the original as it was. The holder ask is the last look
+        before the rename; a file that changed since it was measured is kept."""
+        global seq
+        p = c['path']
+        tmp = os.path.join(os.path.dirname(p), '.ccd-tmp-cap.%d.tmp' % os.getpid())
+        try:
+            st = os.lstat(p)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size <= OUT_CAP: return
+            if NOW - max(st.st_mtime, st.st_ctime) < OUT_QUIET: return
+            if ARMED and time.time() - WALL0 > LIVE_BUDGET_S:
+                bump('timeBudget'); return
+            cut = st.st_size - 2 * OUT_KEEP
+            if ARMED:
+                fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW)
+                with os.fdopen(fd, 'rb') as src, open(tmp, 'xb') as dst:
+                    if not same_file(p, st): raise OSError('changed')
+                    dst.write(src.read(OUT_KEEP))
+                    dst.write(('\n[ccd-tmp-sweep: %d bytes cut at %s]\n' % (cut, time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(NOW)))).encode())
+                    src.seek(st.st_size - OUT_KEEP)
+                    dst.write(src.read(OUT_KEEP))
+                    dst.flush(); os.fsync(dst.fileno())
+                os.chmod(tmp, stat.S_IMODE(st.st_mode))
+                os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
+            v = ccd_users(spellings(c))
+            if any(x == 'held' for x in v.values()):
+                bump('held'); raise LookupError
+            if any(x != 'nobody' for x in v.values()):
+                bump('holdersUnmeasured'); raise LookupError
+            if ARMED:
+                if not same_file(p, st): raise OSError('changed')
+                os.rename(tmp, p)
+        except LookupError:
+            try: os.unlink(tmp)
+            except OSError: pass
+            return
+        except OSError:
+            try: os.unlink(tmp)
+            except OSError: pass
+            bump('failed'); return
+        seq += 1
+        row = {'seq': seq, 'id': c['id'], 'uuid': c['uuid'], 'name': c['name'], 'kind': 'output-capped', 'bytes': cut,
+               'at': now_ms, 'shadow': not ARMED, 'quarantine': None,
+               'from': c['unit'] + '/' + c['sub'] + '/' + c['name'], 'root': c['root']['path']}
+        newrows.append(row)
+        if ARMED:
+            try:
+                with open(JOURNAL, 'a') as jf:
+                    jf.write(json.dumps(row) + '\n'); jf.flush(); os.fsync(jf.fileno())
+            except OSError: pass
+            try: c['bytes'] = os.lstat(p).st_blocks * 512
+            except OSError: pass
+        bump('capped' if ARMED else 'wouldCap')
+
+    # finished task output is capped before the budget counts, so the budget sees what is left
+    for c in cands:
+        if c['sub'] == 'tasks' and c['name'].endswith('.output') and not c.get('gone') and not c.get('wouldGo'):
+            cap_output(c)
+    by = {}
+    for c in cands: by.setdefault(c['uuid'], []).append(c)
+    pb = {s.get('uuid'): s.get('budget') for s in prev.get('sessions', []) if isinstance(s, dict) and isinstance(s.get('budget'), dict)}
+    for u, cs in by.items():
+        counted = sum(c['bytes'] for c in cs if not c.get('gone'))
+        sp = any(c['root']['p'] for c in cs)
+        # shadow only: the would-remove simulation runs on its own counter; what is measured is what is on disk
+        sim = counted - sum(c['bytes'] for c in cs if c.get('wouldGo') and not c.get('gone'))
+        b = dict(pb.get(u) or {})
+        over_since = b.get('overSince'); enforce_at = b.get('enforceAt'); removed = b.get('removedBytes', 0) or 0
+        kept = []
+        state = 'ok'
+        if over_since is not None and counted < TARGET:
+            over_since = enforce_at = None
+        elif over_since is None and counted > BUDGET:
+            over_since = now_ms
+            enforce_at = now_ms if sp else now_ms + by_p(GRACE_B, False) * 1000
+            removed = 0
+        elif over_since is not None and sp:
+            enforce_at = min(enforce_at, now_ms)
+        if over_since is not None:
+            state = 'over'
+            if now_ms >= enforce_at and counted > BUDGET:
+                for c in sorted((x for x in cs if not x.get('gone') and not x.get('wouldGo')), key=lambda x: (x['newest'], x['name'])):
+                    if (counted if ARMED else sim) <= TARGET: break
+                    why = None
+                    if not c['ok']: why = 'unmeasured'
+                    elif c['age'] < c['af']: why = 'touched-within-48h'
+                    elif held_of(c) != 'nobody': why = 'held' if held_of(c) == 'held' else 'holder-unmeasured'
+                    if why:
+                        kept.append({'name': c['name'], 'why': why}); continue
+                    if act(c, 'budget'):
+                        if ARMED: counted -= c['bytes']; removed += c['bytes']
+                        else: sim -= c['bytes']
+                    else:
+                        kept.append({'name': c['name'], 'why': c.get('fail') or 'move-failed'})
+                state = ('over-unremovable' if counted > TARGET and kept else 'enforced') if ARMED else 'over'
+        sessions[u] = {'id': cs[0]['id'], 'uuid': u, 'bytes': counted,
+                       'scratchBytes': sum(c['bytes'] for c in cs if c['sub'] == 'scratchpad' and not c.get('gone')),
+                       'tasksBytes': sum(c['bytes'] for c in cs if c['sub'] == 'tasks' and not c.get('gone')),
+                       'entries': sum(1 for c in cs if not c.get('gone')),
+                       'top': [{'name': c['name'], 'bytes': c['bytes']} for c in sorted((x for x in cs if not x.get('gone')), key=lambda x: (-x['bytes'], x['name']))[:5]],
+                       'budget': {'state': state, 'overSince': over_since, 'enforceAt': enforce_at,
+                                  'removedBytes': removed, 'kept': kept[:KEPT_MAX], 'keptMore': max(0, len(kept) - KEPT_MAX)}}
+    bump('candidates', len(cands))
+else:
+    for s in prev.get('sessions', []):
+        if isinstance(s, dict) and s.get('uuid'): sessions[s['uuid']] = s
+
+# ── the test-run arm (DR-10, D-6622): dead `ccrc-testrun-*` roots no later run revisits ──
+TR_RE = re.compile(r'^ccrc-testrun-[A-Za-z0-9]{6}(\.dead)?$')
+QUIET = pair('TS_QUIET')
+UNIX = E.get('CCD_TMP_SWEEP_UNIX') or '/proc/net/unix'
+def bound_paths():
+    """the paths with a socket bound in the kernel's table, or None when it cannot be read (then nothing is dead)"""
+    try:
+        with open(UNIX) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    return set(ln.split(None, 7)[7] for ln in lines[1:] if len(ln.split(None, 7)) == 8 and not ln.split(None, 7)[7].startswith('@'))
+def newest_ctime(path, ctr):
+    """newest ctime and bytes under path (links not followed, no other filesystem); None when the walk cannot finish"""
+    try: top = os.lstat(path)
+    except OSError: return None
+    newest, nbytes, t0, stack = 0.0, 0, time.monotonic(), [(path, top)]
+    while stack:
+        p, st = stack.pop()
+        ctr[0] += 1
+        if time.monotonic() - t0 > WALK_S or ctr[0] > WALK_ENTRIES: return None
+        newest = max(newest, st.st_ctime); nbytes += st.st_blocks * 512
+        if not stat.S_ISDIR(st.st_mode) or st.st_dev != top.st_dev: continue
+        try:
+            with os.scandir(p) as it:
+                for k in it: stack.append((k.path, os.lstat(k.path)))
+        except OSError: return None
+    return newest, nbytes
+
+def test_run_arm():
+    global seq
+    bases = [(ln.split('\t')[0], ln.split('\t')[1] == '1') for ln in E.get('TS_TRBASES', '').split('\n') if '\t' in ln]
+    def spellings(base, nm):
+        return list(dict.fromkeys([os.path.join(base, nm), os.path.join(os.path.realpath(base), nm)]))
+    def cheap(base, pr, nm):
+        """None with the run's bytes when no socket is bound at its live.sock and nothing under it changed for the quiet
+        window; else why not. The holder ask is separate (one batch)."""
+        bound = bound_paths()
+        if bound is None: return 'unmeasured', 0
+        if any(os.path.join(x, 'live.sock') in bound for x in spellings(base, nm)): return 'listening', 0
+        w = newest_ctime(os.path.join(base, nm), [0])
+        if w is None: return 'unmeasured', 0
+        if NOW - w[0] < by_p(QUIET, pr): return 'recent', 0
+        return None, w[1]
+    cands = []
+    for base, pr in bases:
+        try: names = sorted(os.listdir(base))
+        except OSError: continue
+        for nm in names:
+            if not TR_RE.fullmatch(nm): continue
+            try: st = os.lstat(os.path.join(base, nm))
+            except OSError: continue
+            if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid(): continue
+            bump('testRunCandidates')
+            why, nbytes = cheap(base, pr, nm)
+            if why: bump('testRun' + why.capitalize()); continue
+            cands.append((base, pr, nm, nbytes))
+    if not cands: return
+    held = ccd_users([x for c in cands for x in spellings(c[0], c[2])])
+    for base, pr, nm, nbytes in cands:
+        v = [held.get(x, 'unmeasured') for x in spellings(base, nm)]
+        if 'held' in v: bump('testRunHeld'); continue
+        if any(x != 'nobody' for x in v): bump('testRunUnmeasured'); continue
+        d = os.path.join(base, nm)
+        if ARMED:
+            if time.time() - WALL0 > LIVE_BUDGET_S: bump('timeBudget'); continue
+            # the last look, as late as it can be: socket, quiet window, then the holders
+            why, nbytes = cheap(base, pr, nm)
+            if not why:
+                v = ccd_users(spellings(base, nm)).values()
+                why = 'held' if 'held' in v else 'unmeasured' if any(x != 'nobody' for x in v) else None
+            if why: bump('testRun' + why.capitalize()); continue
+            dead = d if d.endswith('.dead') else d + '.dead'
+            try:
+                if dead != d: os.rename(d, dead)
+            except OSError:
+                bump('failed'); continue
+            if subprocess.run(['rm', '-rf', '--one-file-system', '--', dead], stderr=subprocess.DEVNULL).returncode != 0:
+                bump('failed'); continue
+        seq += 1
+        row = {'seq': seq, 'id': '', 'uuid': '', 'name': nm, 'kind': 'test-run', 'bytes': nbytes, 'at': now_ms,
+               'shadow': not ARMED, 'quarantine': None, 'from': nm, 'root': base}
+        newrows.append(row)
+        if ARMED:
+            try:
+                with open(JOURNAL, 'a') as jf:
+                    jf.write(json.dumps(row) + '\n'); jf.flush(); os.fsync(jf.fileno())
+            except OSError: pass
+        bump('testRunRemoved' if ARMED else 'testRunWouldRemove')
+
+test_run_arm()
+
+moved = [r for r in moved + newrows if now_ms - r.get('at', 0) <= MOVED_DAYS * 86400 * 1000][-MOVED_KEEP:]
+for k, v in pprobed.items():
+    if k not in probed and isinstance(v, list) and os.path.lexists(k): probed[k] = v
+out = {'v': 1, 'at': now_ms, 'liveAt': live_at, 'pressure': PRESSURE, 'arm': 'live' if ARMED else 'shadow', 'seq': seq,
+       'roots': [{'arm': r['arm'], 'path': r['path'], 'noatime': r['noatime']} for r in roots],
+       'probed': probed, 'sessions': sorted(sessions.values(), key=lambda s: -s['bytes']), 'moved': moved, 'counts': counts}
+if not DRY:
+    tmp = '%s.%d.tmp' % (CENSUS, os.getpid())
+    try:
+        with open(tmp, 'w') as f: json.dump(out, f)
+        os.rename(tmp, CENSUS)
+        try: os.unlink(JOURNAL)
+        except OSError: pass
+    except OSError as e:
+        print('tmp-sweep: census not written: %s' % e, file=sys.stderr)
+        try: os.unlink(tmp)
+        except OSError: pass
+for r in newrows:
+    print('%s %s ./%s %dK' % ('would-move' if r['shadow'] else 'moved', r['kind'], r['from'], r['bytes'] // 1024))
+print('live arm (%s): %s' % (out['arm'], ', '.join('%s %d' % (k, v) for k, v in sorted(counts.items())) or 'nothing to do'))
+PYEOF
+# The test-run arm's TMPDIRs (spec 2.2): the box's own and each witnessed child leaf that still has a registry
+# row (a leaf with none is ws-collect's whole). A line is `physical<TAB>1 under pressure`, each on its own filesystem.
+TR_BASES=""
+_ts_add_trbase() {   # dir
+  local p f=0; p="$(realpath -e -- "$1" 2>/dev/null)" || return 0
+  [ -d "$p" ] && [ "$p" != / ] || return 0
+  case $'\n'"$TR_BASES" in *$'\n'"$p"$'\t'*) return 0 ;; esac
+  _ts_pressure "$p" && f=1
+  TR_BASES+="$p"$'\t'"$f"$'\n'
+}
+_ts_add_trbase "${TMPDIR:-/tmp}"
+if [ -n "$_ts_cctmp" ]; then
+  for _w in "$HOME/.cc-sessions/tmproots"/*; do
+    _id="${_w##*/}"; [[ "$_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && [ -f "$_w" ] && [ ! -L "$_w" ] || continue
+    [ -e "$HOME/.cc-sessions/$_id.child" ] || [ -e "$HOME/.cc-sessions/$_id.uuid" ] || continue
+    [ -L "$HOME/.cc-tmp/$_id" ] || _ts_add_trbase "$_ts_cctmp/$_id"
+  done
+fi
+live_line=""
+if [ -z "$aborted" ] && [ -n "$LIVE_ROOTS" ]; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "tmp-sweep: live arm skipped: python3 is not installed" >&2
+  elif ! _ts_collect_live; then
+    echo "tmp-sweep: live arm skipped: $REFUSE" >&2
+  else
+    live_uuids=""; for _u in "${!LIVE[@]}"; do [[ "$_u" =~ ^$UUID_ANY$ ]] && live_uuids+="$_u"$'\n'; done
+    arm=0; [ -e "$LIVE_ARM" ] && arm=1
+    out="$(TS_ROOTS="${LIVE_ROOTS%$'\n'}" TS_TRBASES="${TR_BASES%$'\n'}" TS_QUIET="$TS_AGES_TEST_RUN_QUIET" TS_LIVE="$live_uuids" TS_DRY="$DRY" TS_ARM="$arm" \
+      TS_AGE_UNTOUCHED="$TS_AGES_LIVE_UNTOUCHED" TS_AGE_FLOOR="$TS_AGES_BUDGET_UNTOUCHED_FLOOR" \
+      TS_GRACE_QUARANTINE="$TS_AGES_QUARANTINE_GRACE" TS_GRACE_BUDGET="$TS_AGES_BUDGET_GRACE" \
+      TS_CADENCE="$TS_AGES_LIVE_CADENCE" TS_BUDGET_BYTES=$((CCD_TMP_BUDGET_GB * CCD_TMP_BUDGET_UNIT_BYTES)) \
+      TS_TARGET_BYTES=$((CCD_TMP_BUDGET_TARGET_GB * CCD_TMP_BUDGET_UNIT_BYTES)) TS_REG="$HOME/.cc-sessions" \
+      TS_CENSUS="$CENSUS" TS_UNIT_BYTES="$CCD_TMP_BUDGET_UNIT_BYTES" TS_CCD="${CCD_TMP_SWEEP_CCD:-$HOME/.local/bin/ccd}" python3 -I -c "$LIVE_PY" 9>&-)" \
+      || echo "tmp-sweep: live arm failed; the dead pass stands" >&2
+    [ -n "$out" ] && live_line="${out##*$'\n'}"
+    [ -n "$out" ] && [[ "$out" == *$'\n'* ]] && printf '%s\n' "${out%$'\n'*}"
+  fi
+fi
+
 verb="removed"; [ "$DRY" -eq 1 ] && verb="dry run: would remove"
-echo "tmp-sweep: $verb $removed unit(s) ($rm_sessions session dir(s), $rm_loose loose), freed $((freed_kb / 1024)) MB; skipped $sk_live live, $sk_inuse in-use, $sk_recent recent, $sk_unreadable unreadable; $rmdirs empty project dir(s) removed; $failed failed; max age ${CCD_TMP_SWEEP_MAX_AGE_DAYS}d; root $ROOT"
+echo "tmp-sweep: $verb $removed unit(s) ($rm_sessions session dir(s), $rm_loose loose), freed $((freed_kb / 1024)) MB; skipped $sk_live live, $sk_inuse in-use, $sk_recent recent, $sk_unreadable unreadable; $rmdirs empty project dir(s) removed; $failed failed; max age ${CCD_TMP_SWEEP_MAX_AGE_DAYS}d; root $ROOT${live_line:+; $live_line}"
 if [ -n "$aborted" ]; then
   _ts_die "pass aborted mid-way — $aborted"
 fi

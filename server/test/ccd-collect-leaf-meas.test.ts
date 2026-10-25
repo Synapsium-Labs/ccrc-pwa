@@ -123,7 +123,7 @@ describe('the leaf words ccd writes are L0s, both directions (path-identity spec
   it('case 7: every meas.leaf word in ccd is in COLLECT_LEAF_END_WORDS, and every one of them is written', () => {
     const src = fs.readFileSync(CCD, 'utf8');
     const written = [...src.matchAll(/\bmeas\.leaf\s+([a-z-]+)/g)].map((m) => m[1]!);
-    expect(written, 'the two `_lc_done collect` lines, each naming one word').toHaveLength(2);
+    expect(written, 'the two `_lc_done collect` lines of the witnessed arm and the loose arm\'s done line').toHaveLength(3);
     expect(COLLECT_LEAF_END_WORDS, 'the CONTROL: L0 declares two words').toHaveLength(2);
     expect([...new Set(written)].sort()).toEqual([...COLLECT_LEAF_END_WORDS].sort());
     for (const w of written) expect(isCollectLeafEndWord(w), w).toBe(true);

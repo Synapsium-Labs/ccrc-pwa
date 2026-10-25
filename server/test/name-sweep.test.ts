@@ -14,7 +14,7 @@ import { localIO } from '../src/io.js';
 import { FleetWatcher } from '../src/watch.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { absentField, unreadableField } from './ioDoubles.js';
 import { makeCcdHarness, ghContainedEnv, CCD } from './ccdWsHelpers.js';
@@ -71,11 +71,11 @@ const harness = (stdout = `{"renamed":"${ID}","old":"ws/quiet-mesa","new":"ws/x"
   const home = mkTmp('ccrc-name-');
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
-    if (args[0] === 'capture-pane') return { code: 0, stdout: pane(statusBranch), stderr: '' };
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: '4061\n', stderr: '' };
-    if (args[0] === 'ws-rename') { calls.push([...args]); return { code: 0, stdout, stderr }; }
-    return { code: 1, stdout: '', stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: pane(statusBranch), stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4061\n', stderr: '' };
+    if (args[0] === 'ws-rename') { calls.push([...args]); return { ran: true, code: 0, stdout, stderr }; }
+    return { ran: true, code: 1, stdout: '', stderr: '' };
   };
   return { home, calls, run };
 };
@@ -101,7 +101,7 @@ describe('the naming sweep', () => {
     const h = harness();
     seed(h.home);
     transcript(h.home, [USER('go'), TITLE('Brainstorm Helix and slide notes integration')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(h.calls[0]).toEqual(
@@ -124,7 +124,7 @@ describe('the naming sweep', () => {
     seed(h.home);
     transcript(h.home, [USER('go'), TITLE('Brainstorm Helix and slide notes integration')]);
     const unreadableWrapper = unreadableField(ID, 'wrapper');
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run), io: unreadableWrapper }, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), io: unreadableWrapper }), new Bus(), 2000);
 
     await w.sweepNames();
     expect(h.calls).toEqual([]);
@@ -157,7 +157,7 @@ describe('the naming sweep', () => {
     mkdirSync(trapDir, { recursive: true });
     writeFileSync(path.join(trapDir, `${UUID}.jsonl`),
       TITLE('Brainstorm Helix and slide notes integration') + '\n');
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run), io: unreadableWorkdir }, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), io: unreadableWorkdir }), new Bus(), 2000);
 
     await w.sweepNames();
     expect(h.calls).toEqual([]);
@@ -172,7 +172,7 @@ describe('the naming sweep', () => {
       `{"renamed":"${ID}","old":"ws/quiet-mesa","new":"ws/brainstorm-helix-and-slide-notes"}`);
     seed(h.home);
     transcript(h.home, [TITLE('Brainstorm Helix and slide notes integration')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(logSpy).toHaveBeenCalledTimes(1);
@@ -193,7 +193,7 @@ describe('the naming sweep', () => {
       "warn: could not reach origin to check for 'ws/quiet-mesa' — renaming anyway");
     seed(h.home);
     transcript(h.home, [TITLE('Fix the PR sheet')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(h.calls).toHaveLength(1);
@@ -205,7 +205,7 @@ describe('the naming sweep', () => {
     const h = harness();
     seed(h.home, { branch: 'ws/brainstorm-helix-and-slide-notes' });
     transcript(h.home, [TITLE('Brainstorm Helix and slide notes integration')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     await again(w);
@@ -226,7 +226,7 @@ describe('the naming sweep', () => {
     const h = harness(undefined, 'ws/quiet-mesa');     // the pane still says the born name
     seed(h.home, { branch: 'ws/already-renamed' });    // ...the registry does not
     transcript(h.home, [TITLE('Already renamed')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.tick();
     expect(w.currentStatuslines().get(ID)?.branch,
@@ -240,7 +240,7 @@ describe('the naming sweep', () => {
     const h = harness();
     seed(h.home);
     transcript(h.home, [USER('go')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(h.calls).toEqual([]);
@@ -272,7 +272,7 @@ describe('the naming sweep', () => {
     mkdirSync(foreignDir, { recursive: true });
     writeFileSync(path.join(foreignDir, `${UUID}.jsonl`),
       TITLE('Brainstorm Helix and slide notes integration') + '\n');
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(h.calls).toEqual([]);
@@ -282,7 +282,7 @@ describe('the naming sweep', () => {
     const h = harness();
     seed(h.home, { workspace: null, branch: 'main' });
     transcript(h.home, [TITLE('Fix the thing')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(h.calls).toEqual([]);
@@ -298,7 +298,7 @@ describe('the naming sweep', () => {
     const h = harness();
     seed(h.home, { archived: '1785300123' });
     transcript(h.home, [TITLE('Brainstorm Helix and slide notes integration')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(h.calls).toEqual([]);
@@ -308,7 +308,7 @@ describe('the naming sweep', () => {
     const h = harness();
     seed(h.home);
     transcript(h.home, [TITLE('quiet mesa')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(h.calls).toEqual([]);
@@ -319,7 +319,7 @@ describe('the naming sweep', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     seed(h.home);
     transcript(h.home, [TITLE('Fix the PR sheet')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(h.calls).toHaveLength(1);
@@ -352,7 +352,7 @@ describe('the naming sweep', () => {
       // D-4946; counted too, so the "+1 (Task 2)" below still pins it.
       readFileFromMeasured: (p, off) => { if (p === f) reads += 1; return localIO.readFileFromMeasured(p, off); },
     };
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), io }), new Bus(), 2000);
 
     await w.sweepNames();
     expect(h.calls).toHaveLength(1);
@@ -384,7 +384,7 @@ describe('the naming sweep', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     seed(h.home);                                    // uuid = UUID, "incarnation A"
     transcript(h.home, [TITLE('Fix the PR sheet')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(h.calls).toHaveLength(1);                 // A is retired on has-upstream
@@ -410,7 +410,7 @@ describe('the naming sweep', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     seed(h.home);
     transcript(h.home, [TITLE('Same Title Both Times')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual(['ws/same-title-both-times']);
@@ -436,7 +436,7 @@ describe('the naming sweep', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     seed(h.home);
     transcript(h.home, [TITLE('First guess at the work')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual(['ws/first-guess-at-the-work']);
@@ -456,7 +456,7 @@ describe('the naming sweep', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     seed(h.home);
     transcript(h.home, [TITLE('First guess at the work')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual(['ws/first-guess-at-the-work']);
@@ -477,7 +477,7 @@ describe('the naming sweep', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     seed(h.home);
     transcript(h.home, [TITLE('First guess at the work')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual(['ws/first-guess-at-the-work']);
@@ -499,7 +499,7 @@ describe('the naming sweep', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     seed(h.home);
     transcript(h.home, [TITLE('First guess at the work')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual(['ws/first-guess-at-the-work']);
@@ -519,7 +519,7 @@ describe('the naming sweep', () => {
     seed(h.home);
     transcript(h.home, [TITLE('Fix the PR sheet')]);
     const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['start', 'ws-reap'], rosterFp: null, build: null };
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run), fleetState: state }, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), fleetState: state }), new Bus(), 2000);
 
     await w.sweepNames();
     expect(h.calls).toEqual([]);
@@ -541,7 +541,7 @@ describe('the naming sweep', () => {
     let release!: () => void;
     // Stands in for POST /workspace/reap (server.ts:727), which holds the same key.
     void deps.queue.run(ID, () => new Promise<void>((r) => { release = r; }));
-    const w = new FleetWatcher(deps, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
 
     const sweep = w.sweepNames();
     await new Promise((r) => setTimeout(r, 20));
@@ -564,7 +564,7 @@ describe('the naming sweep', () => {
     const h = harness();
     seed(h.home, { hold: 'program:prog-j wave:1/4' });
     transcript(h.home, [TITLE('Fix the PR sheet')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls), 'a claimed workspace is not renamed').toEqual([]);
@@ -582,7 +582,7 @@ describe('the naming sweep', () => {
     const h = harness();
     seed(h.home, { hold: '' });
     transcript(h.home, [TITLE('Fix the PR sheet')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual([]);
@@ -603,7 +603,7 @@ describe('the naming sweep', () => {
       wave: 1, waveOf: 4, claimedBy: 'demo-coordinator',
     }) as { id: number };
     coord.setSession(opened.id, ID);
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run), coord }, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), coord }), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual([]);
@@ -625,7 +625,7 @@ describe('the naming sweep', () => {
     coord.setSession(opened.id, ID);
     coord.db.prepare('UPDATE runs SET wave = ? WHERE id = ?')
       .run(BigInt(Number.MAX_SAFE_INTEGER) + 1n, opened.id);
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run), coord }, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), coord }), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual([]);
@@ -645,7 +645,7 @@ describe('the naming sweep', () => {
     }) as { id: number };
     coord.setSession(opened.id, ID);
     coord.advance(opened.id, 'failed', 'coordinator');   // terminal: no longer an open sibling
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run), coord }, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), coord }), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual(['ws/fix-the-pr-sheet']);
@@ -663,7 +663,7 @@ describe('the naming sweep', () => {
     const deps = testDeps(h.home, h.run);
     expect(deps.coord, 'testDeps must keep supplying no store, or this test proves nothing')
       .toBeUndefined();
-    const w = new FleetWatcher(deps, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual(['ws/fix-the-pr-sheet']);
@@ -678,7 +678,7 @@ describe('the naming sweep', () => {
     const h = harness('{"refused":"held","detail":"program:prog-j wave:1/4","paths":[]}');
     seed(h.home);                                   // unheld at read time; ccd refuses at call time
     transcript(h.home, [TITLE('Fix the PR sheet')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual(['ws/fix-the-pr-sheet']);
@@ -703,7 +703,7 @@ describe('the naming sweep', () => {
       // D-4946; counted too, so the "+1 (Task 2)" below still pins it.
       readFileFromMeasured: (p, off) => { if (p === f) reads += 1; return localIO.readFileFromMeasured(p, off); },
     };
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), io }), new Bus(), 2000);
 
     await w.sweepNames();
     // +1 (Task 2): `resolveTranscript`'s own one-time continuation check on
@@ -738,7 +738,7 @@ describe('the naming sweep', () => {
       // D-4946; counted too, so the "+1 (Task 2)" below still pins it.
       readFileFromMeasured: (p, off) => { if (p === f) reads += 1; return localIO.readFileFromMeasured(p, off); },
     };
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), io }), new Bus(), 2000);
 
     await w.sweepNames();
     // +1 (Task 2): `resolveTranscript`'s own one-time continuation check on
@@ -767,7 +767,7 @@ describe('the naming sweep', () => {
       // D-4946; counted too, so the "+1 (Task 2)" below still pins it.
       readFileFromMeasured: (p, off) => { if (p === f) reads += 1; return localIO.readFileFromMeasured(p, off); },
     };
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), io }), new Bus(), 2000);
 
     await w.sweepNames();
     // +1 (Task 2): `resolveTranscript`'s own one-time continuation check on
@@ -793,7 +793,7 @@ describe('the naming lane', () => {
       ...localIO,
       stat: (p) => { if (p.endsWith('.jsonl')) stats += 1; return localIO.stat(p); },
     };
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), io }), new Bus(), 2000);
 
     await w.sweepNames(); await w.sweepNames(); await w.sweepNames();
     const afterFirst = stats;
@@ -819,7 +819,7 @@ describe('the naming lane', () => {
     const deps = testDeps(h.home, h.run);
     let release!: () => void;
     void deps.queue.run(ID, () => new Promise<void>((r) => { release = r; }));
-    const w = new FleetWatcher(deps, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
 
     // The tick returns while the sweep is still parked on the queue — awaiting
     // it would put the dialog detector behind a reap that can run for minutes.
@@ -867,7 +867,7 @@ describe('the naming sweep leaves a human-named workspace alone (D-6163)', () =>
     seed(h.home, { named: '1', title: 'ENG-1234 - Fix the login flow' });
     transcript(h.home, [USER('go'), TITLE('Some model title')]);
     seedAuto(h.home);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
 
@@ -884,8 +884,7 @@ describe('the naming sweep leaves a human-named workspace alone (D-6163)', () =>
     seed(h.home, { named: '1' });
     transcript(h.home, [USER('go'), TITLE('Some model title')]);
     seedAuto(h.home);
-    const w = new FleetWatcher(
-      { ...testDeps(h.home, h.run), io: unreadableField(ID, 'named') }, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), io: unreadableField(ID, 'named') }), new Bus(), 2000);
 
     await w.sweepNames();
     expect(sessionsRenamed(h.calls)).toEqual([ID2]);
@@ -900,7 +899,7 @@ describe('the naming sweep leaves a human-named workspace alone (D-6163)', () =>
     seed(h.home, { named: '' });
     transcript(h.home, [USER('go'), TITLE('Some model title')]);
     seedAuto(h.home);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(sessionsRenamed(h.calls)).toEqual([ID2]);
@@ -913,8 +912,7 @@ describe('the naming sweep leaves a human-named workspace alone (D-6163)', () =>
     const h = harness();
     seed(h.home, { named: '1' });
     transcript(h.home, [USER('go'), TITLE('Brainstorm Helix and slide notes integration')]);
-    const w = new FleetWatcher(
-      { ...testDeps(h.home, h.run), io: absentField(ID, 'named') }, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), io: absentField(ID, 'named') }), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual(['ws/brainstorm-helix-and-slide-notes']);
@@ -924,7 +922,7 @@ describe('the naming sweep leaves a human-named workspace alone (D-6163)', () =>
     const h = harness();
     seed(h.home, { title: 'only a title, no marker' });
     transcript(h.home, [USER('go'), TITLE('Brainstorm Helix and slide notes integration')]);
-    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual(['ws/brainstorm-helix-and-slide-notes']);
@@ -943,7 +941,7 @@ describe('the naming sweep renames a row again once its name is cleared (S9)', (
       const h = { ...harness(), home: ccdH.home };
       seed(h.home, { named: '1', title: 'ENG-1234 - Fix the login flow' });
       transcript(h.home, [USER('go'), TITLE('Brainstorm Helix and slide notes integration')]);
-      const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+      const w = new FleetWatcher(withFakeClock(testDeps(h.home, h.run)), new Bus(), 2000);
 
       await w.sweepNames();
       expect(h.calls, 'a named row is left alone').toEqual([]);

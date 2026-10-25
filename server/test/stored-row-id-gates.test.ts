@@ -17,6 +17,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { abandonRefusal, closeRun, type CloseRunDeps } from '../src/coord/close.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import { registerCoordRoutes } from '../src/coord/routes.js';
 import { decideArchive, type ArchiveMeasure } from '../src/coord/archiveDoor.js';
 import type { Runner } from '../src/exec.js';
@@ -72,7 +73,7 @@ const direct = (home: string, run: Runner) => {
   };
   const closeDeps: CloseRunDeps = { coord, io, cfg: base.cfg, runCcd: base.runCcd };
   const dispatchDeps: DispatchRunDeps = {
-    coord, io, cfg: base.cfg, runCcd: base.runCcd, tmux: base.tmux, queue: base.queue,
+    coord, io, cfg: base.cfg, runCcd: base.runCcd, sendClear: clearSender(base),
     configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
   };
   return { base, coord, closeDeps, dispatchDeps, listings: (): number => listings };
@@ -92,7 +93,7 @@ const answeringPrState = (stdout: string): { run: Runner; calls: string[][] } =>
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
-    return args[0] === 'pr-state' ? { code: 0, stdout, stderr: '' } : { code: 0, stdout: '', stderr: '' };
+    return args[0] === 'pr-state' ? { ran: true, code: 0, stdout, stderr: '' } : { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 };

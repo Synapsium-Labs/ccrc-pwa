@@ -13,8 +13,10 @@
 #                       runs (operator ruling 2026-09-28), the pipeline check
 #                       included, in a concurrency group of its own; no macOS
 #                       leg and no full-suite.
-#   push to main        refresh  — re-trace the tests the merge affected and
-#                       update the map. No test legs.
+#   schedule (hourly)   refresh  — re-trace the tests every merge since the
+#                       last refresh affected and update the map. No test legs.
+#                       Not a push trigger: a refresh per merge held 8-15 runner
+#                       slots for 25-60 minutes and gated nothing (D-6769).
 #   schedule (daily)    full     — every leg, macOS included, plus a traced
 #                       rebuild of the map. Skipped when main's head already
 #                       carries a green `full-suite`.
@@ -44,20 +46,23 @@ permissions:
   contents: read
 
 on:
-  push:
-    branches: [main]
   pull_request:
   # THE MERGE QUEUE (landing-order stage 2, spec §5.2). A queue runs the
   # REQUIRED checks on the group it built before it merges, and a workflow that
   # does not listen for `merge_group` never reports them — the entry waits out
   # the queue's timeout and is removed. This trigger is on `main` BEFORE the
   # operator turns the queue on (the spec's rollout step 1). A queue run runs
-  # what a pull request runs (the mode table above). `push` stays
-  # `branches: [main]`, so the queue's own `gh-readonly-queue/main/*` branches
-  # start no second run.
+  # what a pull request runs (the mode table above). There is no `push`
+  # trigger, so the queue's own `gh-readonly-queue/main/*` branches start no
+  # second run.
   merge_group:
+  # Two schedules. The daily one is the full run; the hourly one is the map
+  # refresh (D-6769). A refresh run is told apart by `github.event.schedule`
+  # being exactly the hourly cron, in every predicate below, so the string
+  # appears in each of them and server/test/ci-pipeline.test.ts pins that.
   schedule:
     - cron: '17 3 * * *'
+    - cron: '23 * * * *'
   # Manual re-run for the day the webhooks don't come: during the 2026-08-06
   # Actions incident GitHub processed ~15% of webhooks, so pushes and PR
   # events silently created NO run. `gh workflow run ci.yml --ref <branch>`
@@ -71,9 +76,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'full: every leg, a verdict (no trace). rebuild: trace every server test and rebuild the map.'
+        description: 'full: every leg, a verdict (no trace). rebuild: trace every server test and rebuild the map. refresh: re-trace what changed since the map and update it.'
         type: choice
-        options: [full, rebuild]
+        options: [full, rebuild, refresh]
         default: full
   workflow_call:
     inputs:
@@ -94,8 +99,11 @@ env:
   CCRC_SELECTION: enforce
 
 # Pull requests: one group per PR, and a newer push cancels the older run.
-# Everything else never cancels, and each mode has its own group, so a merge's
-# refresh can never cancel the daily run. `ci-` first because when
+# Everything else never cancels, and each mode has its own group, so an hourly
+# refresh can never cancel the daily run. The `refresh` group COALESCES: a
+# running refresh is never cancelled, and GitHub keeps at most one pending run
+# per group, replacing an older pending one with the newer, so the one that
+# starts next covers every merge since the last (D-6769). `ci-` first because when
 # release-stable.yml CALLS this file the group is evaluated in the caller's
 # context, where `github.workflow` is `release-stable` — without the prefix the
 # called run would wait on the caller's own group.
@@ -107,7 +115,7 @@ env:
 # could lose its checks, and the queue would remove the entry. Nothing cancels
 # one either — `cancel-in-progress` stays the pull_request event alone.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('queue-{0}', github.run_id) || (github.event_name == 'push' && !inputs.mode) && 'refresh' || format('{0}-{1}-{2}', inputs.mode || 'full', github.event_name, github.ref_name) }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('queue-{0}', github.run_id) || (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh') && 'refresh' || format('{0}-{1}-{2}', inputs.mode || 'full', github.event_name, github.ref_name) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -139,13 +147,14 @@ jobs:
       trace_count: ${{ steps.select.outputs.trace_count }}
       map_sha: ${{ steps.select.outputs.map_sha }}
       fallback: ${{ steps.select.outputs.fallback }}
+      floor: ${{ steps.select.outputs.floor }}
     steps:
       # Full depth: the changed set is `git diff <map-sha> HEAD`, and the map's
       # commit must be present to be diffed against.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       # A pull request that changes the pipeline runs the full suite — decided
@@ -172,6 +181,42 @@ jobs:
           else
             echo "::warning::could not diff this change against $BASE; treating its pipeline as changed"
             echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      # D-6771: does this pull request change what `node floor` runs or runs
+      # on, other than through a file a test reads? Answered here, where the
+      # diff is: the manifests and lockfiles, the Node version files, the
+      # history library and the workflow, the floor's own tests and the
+      # vitest config with its setup files. The Select step adds the other
+      # half: the floor's tests the dependency map selects, which covers
+      # every module and helper they import. Read by that job's leg switch —
+      # a path filter on the trigger would skip a required check; this skips
+      # only the one job that is not required. Every event but a pull request
+      # answers true (a merge-queue group and the daily run check every merge
+      # against the floor), and so does a base it cannot diff.
+      - name: Does this pull request touch the node floor's inputs?
+        id: floor
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ format('origin/{0}', github.base_ref) }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif mb=$(git merge-base "$BASE" HEAD) && changed=$(git diff --name-only "$mb" HEAD -- \
+              ':(glob)**/package.json' ':(glob)**/package-lock.json' ':(glob)**/.nvmrc' \
+              ':(glob)ccd/history/**' ':(glob).github/**' \
+              server/test/node-floor.test.ts ':(glob)server/test/history-*.test.ts' server/test/measure-history.test.ts \
+              server/vitest.config.ts server/vitest.select.config.ts \
+              ':(glob)server/test/*.setup.mjs' ':(glob)server/test/*.globalsetup.mjs'); then
+            if [ -n "$changed" ]; then
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              printf 'the node floor runs; its inputs changed:\n%s\n' "$changed"
+            else
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              echo "the node floor is skipped; none of its inputs changed"
+            fi
+          else
+            echo "::warning::could not diff this change against $BASE; running the node floor"
+            echo "run=true" >> "$GITHUB_OUTPUT"
           fi
       # The newest map and duration table come ONLY from artifacts of trusted
       # ci.yml runs on main (main-artifact.mjs: branch main, this repository,
@@ -213,7 +258,7 @@ jobs:
       # CLI, answer "not green", which runs the suite — the safe direction.
       - name: Does this commit already carry a green full-suite?
         id: green
-        if: github.event_name == 'schedule'
+        if: github.event_name == 'schedule' && github.event.schedule != '23 * * * *'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -231,13 +276,18 @@ jobs:
         id: select
         env:
           EVENT: ${{ github.event_name }}
-          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 * * * *' && 'refresh') || '' }}
           FULL_GREEN: ${{ steps.green.outputs.full_green || 'false' }}
           PIPELINE_CHANGED: ${{ steps.pipeline.outputs.changed }}
+          FLOOR: ${{ steps.floor.outputs.run }}
         run: |
           args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")
           if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); elif [ "$PIPELINE_CHANGED" = true ]; then args+=(--input-mode full); fi
           if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi
+          # D-6771: the files the node floor runs, read from its own job so the list has one source; select.mjs
+          # answers `floor` true when its selection holds one of them, or when FLOOR (the static inputs) is true.
+          sed -n '/^  node-floor:$/,/^  [a-z-]*:$/p' .github/workflows/ci.yml | sed -n 's/^ *\(test\/[A-Za-z0-9._-]*\.test\.ts\)$/\1/p' > "$RUNNER_TEMP/floor-list.txt"
+          args+=(--floor-list "$RUNNER_TEMP/floor-list.txt" --floor-static "${FLOOR:-true}")
           node .github/ci/select.mjs "${args[@]}"
       # map-build refreshes against EXACTLY the map this job diffed from, not
       # whatever is newest by the time it runs, and is told which tests this
@@ -249,7 +299,7 @@ jobs:
       # did. traced.txt is always there, so the upload never finds nothing.
       - name: Hand the map to map-build
         if: steps.select.outputs.trace != 'none'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: select-inputs
           path: |
@@ -259,13 +309,53 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  # THE ONE INSTALL OF THE RUN (D-6770). Every server shard, trace shard, pwa
+  # shard, the pwa static checks and the Node-floor leg need the same four installed trees (server, agent, pwa,
+  # ui) and the same apt packages, and each used to run its own `apt-get` and
+  # four `npm ci`. This job installs them once per lockfile set and writes
+  # them to the Actions cache; the jobs below `need` it and RESTORE the entry
+  # read-only (./.github/actions/server-deps, whose header has the key). The
+  # key is the lockfile hashes, the runner image and the node version, never a
+  # branch, so a restored tree is what `npm ci` gives for that lockfile; a
+  # miss installs the old way. One entry per node version: '22' for the
+  # shards, the floor's own for `node-floor`. Not a required check, and the
+  # jobs that need it run even when it fails (`!cancelled()`), falling back
+  # to their own install, so it can only save time.
+  deps:
+    name: install dependencies (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    # A cold install of the four packages measured about three minutes
+    # (server-deps' old note on node-floor); 30 is a deadline, not an estimate.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # The server shards' '22' and node-floor's exact floor; the latter is
+        # pinned equal to `engines.node` by ci-pipeline.test.ts.
+        node: ['22', '22.16.0']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            agent/package-lock.json
+            pwa/package-lock.json
+            ui/package-lock.json
+      - uses: ./.github/actions/server-deps
+        with:
+          platform: linux
+          save: 'true'
+
   # The selected server tests, split across runners (design 2026-09-23 §7).
   # Skipped when nothing is selected — `test (server)` checks that the skip
   # was for that reason and no other.
   server-shard:
     name: server ${{ matrix.shard }}/${{ matrix.total }}
-    needs: select
-    if: needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')
+    needs: [select, deps]
+    if: ${{ !cancelled() && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}
     runs-on: ubuntu-latest
     # A deadline, not the default. Without this key a wedged job runs for
     # GitHub's 360 minutes before anyone learns it wedged. Each shard is
@@ -285,11 +375,11 @@ jobs:
       # not exist; the suite is written to go RED on a missing base rather than
       # quietly measure nothing, so removing this line breaks CI loudly instead
       # of disarming the history guard in silence.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # Above the engines floor in server/agent/pwa package.json
           # (>=22.16.0: node:sqlite stopped needing --experimental-sqlite at
@@ -346,7 +436,7 @@ jobs:
 
       - name: Keep the durations
         if: always() && needs.select.outputs.tests == 'full'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: times-${{ matrix.shard }}
           path: ${{ runner.temp }}/times.json
@@ -361,8 +451,8 @@ jobs:
     # tsc over server/src alone; about a minute. 15 carries a cold npm cache.
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -395,8 +485,8 @@ jobs:
       - name: Refuse a prerequisite that did not succeed (no script involved)
         if: needs.select.result != 'success' || contains(fromJSON('["failure","cancelled"]'), needs.server-shard.result) || contains(fromJSON('["failure","cancelled"]'), needs.server-typecheck.result)
         run: exit 1
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - name: Verdict
@@ -409,36 +499,36 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: node .github/ci/verdict.mjs server
 
-  # `test (agent)` and `test (pwa)` — required BY NAME, so this matrix keeps
-  # its id, its axis and its values, and carries no job-level `if:` or
-  # `needs:`: a skipped matrix never expands, and the two checks would never
-  # appear (design 2026-09-23 §4.2). On a refresh or a rebuild every STEP is
-  # skipped instead, which reports the checks green without running them.
-  # Not selected: together they take under three minutes (§3).
+  # `test (agent)` — required BY NAME, so this matrix keeps its id, its axis
+  # and its value, and carries no job-level `if:` or `needs:`: a skipped matrix
+  # never expands, and the check would never appear (design 2026-09-23 §4.2).
+  # On a refresh or a rebuild every STEP is skipped instead, which reports the
+  # check green without running it. `test (pwa)` is no longer a leg of this
+  # matrix: it is the aggregate `pwa` job below (D-6768). Not selected.
   test:
     runs-on: ubuntu-latest
     # A deadline, not the default. Without this key a wedged job runs for
-    # GitHub's 360 minutes before anyone learns it wedged; the slowest leg
-    # here is `pwa` at about 2.5 minutes (measured 2026-09-23), so 30 is a
-    # deadline with room for a cold npm cache, not a guess at the real thing.
+    # GitHub's 360 minutes before anyone learns it wedged; the agent leg takes
+    # about a minute (measured 2026-09-23), so 30 is a deadline with room for
+    # a cold npm cache, not a guess at the real thing.
     # Pinned — key AND ceiling — by server/test/oss-metadata.test.ts.
     timeout-minutes: 30
     env:
-      CCRC_LEG: ${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     strategy:
       fail-fast: false
       matrix:
-        package: [agent, pwa]
+        package: [agent]
     steps:
       # Full depth, as when this matrix also carried the server leg (whose
       # topology-clean needs `origin/main` — see server-shard): unchanged, so
-      # the agent and pwa suites meet the tree exactly as before.
-      - uses: actions/checkout@v4
+      # the agent suite meets the tree exactly as before.
+      - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: env.CCRC_LEG == 'run'
         with:
           node-version: '22'
@@ -448,19 +538,6 @@ jobs:
       - name: Install
         if: env.CCRC_LEG == 'run'
         working-directory: ${{ matrix.package }}
-        run: npm ci
-
-      # BEFORE the suite, not after it. pwa consumes @ccrc/ui as SOURCE, so
-      # `../ui/src/**` is resolved from ITS OWN directory — Node and vite walk
-      # up from `ui/src/primitives/`, reach `ui/`, and never look inside
-      # `pwa/node_modules`. Without `ui/node_modules` present first, all 119
-      # pwa suites fail at import with "Failed to resolve import
-      # 'class-variance-authority'". Invisible on a developer box, where that
-      # directory already exists; this ordering is the only thing that proves
-      # it on a clean checkout.
-      - name: Install @ccrc/ui
-        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
-        working-directory: ui
         run: npm ci
 
       # Local binary, never npx: `npx vitest` resolves to a global cache copy
@@ -475,39 +552,158 @@ jobs:
         working-directory: ${{ matrix.package }}
         run: ./node_modules/.bin/tsc --noEmit
 
-      # @ccrc/ui rides the pwa leg rather than taking a matrix value of its
-      # own: `test (agent)` and `test (pwa)` are required BY NAME, so the axis
-      # and its values are pinned, and a third value would mint a check name
-      # nothing is configured to require. The pwa suite already typechecks ui's
-      # SOURCE transitively (it imports it), so what is added here is what that
-      # misses — ui's own tsconfig, which also covers .storybook and the
-      # stories, and the proof that the generated palettes still match their
-      # seeds. Both are cheap; neither has a runner of its own.
+  # The pwa suite, split into three vitest shards (D-6768). The unsharded Test
+  # step measured about 576 s of a 10.8 min job; `--shard=i/3` takes each shard
+  # to about four minutes. No pwa times artifact exists (the published
+  # durations cover the server suite), so the split is vitest's own file split,
+  # not a packed one. The shards need `deps` but run whatever it did
+  # (`!cancelled()`), and every step skips on a refresh or a rebuild: `pwa`
+  # below is required by name and must always get a result to read.
+  pwa-shard:
+    name: pwa ${{ matrix.shard }}/${{ matrix.total }}
+    # The run's one install (D-6770), restored read-only through server-deps
+    # like the server shards; `!cancelled()` so a failed `deps` only costs the
+    # shard its own install. `pwa` below still reads every shard's result.
+    needs: deps
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    # A deadline, not the default: a shard is about four minutes plus install,
+    # and the whole unsharded suite was under eleven. Pinned — key AND ceiling —
+    # by server/test/oss-metadata.test.ts.
+    timeout-minutes: 30
+    env:
+      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+        total: [3]
+    steps:
+      - uses: actions/checkout@v7
+        if: env.CCRC_LEG == 'run'
+        with:
+          fetch-depth: 0
+
+      # '22', as `deps` and the server shards: the trees' cache key names the
+      # node version setup-node resolves, so another string would always miss.
+      - uses: actions/setup-node@v7
+        if: env.CCRC_LEG == 'run'
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            agent/package-lock.json
+            pwa/package-lock.json
+            ui/package-lock.json
+
+      # The run's one install (D-6770): pwa/ AND ui/ node_modules, restored
+      # from the `deps` entry (a miss installs them here). BEFORE the suite, not
+      # after it. pwa consumes @ccrc/ui as SOURCE, so `../ui/src/**` is resolved
+      # from ITS OWN directory — Node and vite walk up from
+      # `ui/src/primitives/`, reach `ui/`, and never look inside
+      # `pwa/node_modules`. Without `ui/node_modules` present first, all 119
+      # pwa suites fail at import with "Failed to resolve import
+      # 'class-variance-authority'". Invisible on a developer box, where that
+      # directory already exists; this ordering is the only thing that proves
+      # it on a clean checkout.
+      - uses: ./.github/actions/server-deps
+        if: env.CCRC_LEG == 'run'
+        with:
+          platform: linux
+
+      # Local binary, never npx: `npx vitest` resolves to a global cache copy
+      # with no jsdom and falsely reports "no tests" alongside 39 errors.
+      - name: Test
+        if: env.CCRC_LEG == 'run'
+        working-directory: pwa
+        run: ./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }}
+
+  # The pwa checks that are not tests, once (D-6768): the typecheck of pwa runs
+  # here and nowhere else. @ccrc/ui rides this job rather than the shards: the
+  # pwa suite already typechecks ui's SOURCE transitively (it imports it), so
+  # what is added is what that misses — ui's own tsconfig, which also covers
+  # .storybook and the stories, and the proof that the generated palettes still
+  # match their seeds. Same step-level skip as the shards.
+  pwa-static:
+    name: pwa typecheck and storybook
+    # Same install as the shards: the `deps` entry, restored read-only.
+    needs: deps
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+    steps:
+      - uses: actions/checkout@v7
+        if: env.CCRC_LEG == 'run'
+        with:
+          fetch-depth: 0
+
+      # '22', as `deps` and the server shards: the trees' cache key names the
+      # node version setup-node resolves, so another string would always miss.
+      - uses: actions/setup-node@v7
+        if: env.CCRC_LEG == 'run'
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            agent/package-lock.json
+            pwa/package-lock.json
+            ui/package-lock.json
+
+      # The same restored install, ui included, before the typecheck, for the
+      # shards' reason above.
+      - uses: ./.github/actions/server-deps
+        if: env.CCRC_LEG == 'run'
+        with:
+          platform: linux
+
+      - name: Typecheck
+        if: env.CCRC_LEG == 'run'
+        working-directory: pwa
+        run: ./node_modules/.bin/tsc --noEmit
+
       - name: Typecheck @ccrc/ui (incl. .storybook and stories)
-        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
+        if: env.CCRC_LEG == 'run'
         working-directory: ui
         run: ./node_modules/.bin/tsc --noEmit
 
       - name: Generated palettes match their seeds
-        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
+        if: env.CCRC_LEG == 'run'
         working-directory: ui
         run: npm run themes:check
 
       # Storybook is the design system's only surface that RENDERS its
       # components; everything else about ui is a text scrape (vitest runs with
-      # `css: false`, so nothing in this repo computes a style). Until now CI
-      # only TYPECHECKED the stories — `build-storybook` was never exercised, so
-      # it could have been broken for weeks and no leg would have said. It
-      # builds in seconds and the step costs almost nothing.
-      #
-      # This proves the stories BUILD, not that they look right. RENDERING them
-      # is the `storybook-a11y` job below — that dependency decision was taken,
-      # and this step stays because it is the cheap half and it runs on a leg
-      # that is REQUIRED by name, where that one is not.
+      # `css: false`, so nothing in this repo computes a style). This proves the
+      # stories BUILD, not that they look right. RENDERING them is the
+      # `storybook-a11y` job below, which is not required; this step stays
+      # because it is the cheap half and it runs under a required check.
       - name: Storybook builds (the one surface that renders the components)
-        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
+        if: env.CCRC_LEG == 'run'
         working-directory: ui
         run: npm run build-storybook
+
+  # `test (pwa)` — required BY NAME, so this job's `name:` is exactly that and
+  # no other job reports it (D-6768). It is the verdict over the shards and the
+  # static checks, modelled on `server` above: `always()`, so it reports even
+  # when a shard failed, and script-free, so it can only ADD red. A shard that
+  # failed, was cancelled or was skipped fails it. On a refresh or a rebuild
+  # the shards run with every step skipped and report success, as `test` does.
+  pwa:
+    name: test (pwa)
+    needs: [pwa-shard, pwa-static]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Refuse a shard or the static checks that did not succeed
+        if: needs.pwa-shard.result != 'success' || needs.pwa-static.result != 'success'
+        run: exit 1
+      - name: Every pwa shard and the static checks succeeded
+        run: echo "pwa shards ${{ needs.pwa-shard.result }}, static ${{ needs.pwa-static.result }}"
 
   # ── the one place a component is RENDERED and MEASURED ─────────────────────
   #
@@ -540,22 +736,24 @@ jobs:
   # THE SAME MODE SWITCH AS THE TEST LEGS, written as a job-level `if:`. The
   # `test` matrix and `build-pwa` skip by STEP only because they are required
   # by name and a skipped job never reports; this job is not required, so it
-  # skips whole, on exactly their `CCRC_LEG == 'skip'` predicate: a push to
-  # main (refresh — "no test legs") and a rebuild. And no merge-queue run,
+  # skips whole, on exactly their `CCRC_LEG == 'skip'` predicate: an hourly
+  # refresh ("no test legs") and a rebuild. And no merge-queue run,
   # like the other advisory legs. Pinned by server/test/ci-pipeline.test.ts.
   storybook-a11y:
     runs-on: ubuntu-latest
     # The browser download dominates; each skin's build and axe run is ~40s
     # for 180 stories, and the job runs one per skin.
     timeout-minutes: 20
-    if: github.event_name != 'merge_group' && !((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild')
+    if: github.event_name != 'merge_group' && !(github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild')
     steps:
-      # No token left behind in .git/config: everything below runs third-party
-      # npm code, and none of it has any reason to talk to GitHub.
-      - uses: actions/checkout@v4
+      # No token left behind: at this checkout major the token sits in a file
+      # under the runner's temp directory only for the checkout's own fetch,
+      # removed when that step ends. Everything below runs third-party npm
+      # code, and none of it has any reason to talk to GitHub.
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -607,7 +805,7 @@ jobs:
   # A SEPARATE JOB, not a matrix `os` dimension, deliberately: branch
   # protection requires the checks `test (server)` / `test (agent)` /
   # `test (pwa)` / `build-pwa` BY NAME, and adding a matrix axis to `test`
-  # renames two of them. `test-macos` is additive and non-required — a red
+  # renames one of them. `test-macos` is additive and non-required — a red
   # here blocks no pull request, which is the right cost while the leg earns
   # trust, and the PR page still shows it. It DOES gate a promotion:
   # `full-suite` below needs it green (design 2026-09-23 ruling 6).
@@ -653,10 +851,10 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.select.outputs.macos_matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -702,7 +900,7 @@ jobs:
   probe-macos:
     # Pull requests and the daily run only: an advisory probe must not gate a
     # dispatched full run, or release-stable's called one.
-    if: github.event_name == 'pull_request' || github.event_name == 'schedule'
+    if: github.event_name == 'pull_request' || (github.event_name == 'schedule' && github.event.schedule != '23 * * * *')
     runs-on: macos-latest
     # 25, not 10. The first run was cut at 10 with the auth suite still going,
     # and the reason is D-2661 rather than the suite being big: several cases
@@ -718,8 +916,8 @@ jobs:
     # should come back down.
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -784,11 +982,11 @@ jobs:
     timeout-minutes: 15
     # Required by name, like `test`: no job-level `if:`, steps skip instead.
     env:
-      CCRC_LEG: ${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: env.CCRC_LEG == 'run'
         with:
           # '22' here for consistency with the server shards, not because
@@ -803,15 +1001,20 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: pwa/package-lock.json
-      # `npm run build` is `tsc --noEmit && vite build`, and both halves read
-      # ui SOURCE through `exports['.']`. Same resolution rule as the test
-      # leg: ui's own node_modules or nothing resolves.
+      # The build reads ui SOURCE through `exports['.']`. Same resolution rule
+      # as the test leg: ui's own node_modules or nothing resolves.
+      #
+      # `vite build` alone, not `npm run build` (`tsc --noEmit && vite build`):
+      # `test (pwa)`'s Typecheck step (in `pwa-static`, D-6768) already runs
+      # that same `tsc --noEmit` on every run, so the second copy here bought
+      # nothing but a duplicate (D-6770). Exactly one pwa typecheck runs per CI
+      # run, in that job.
       - if: env.CCRC_LEG == 'run'
         working-directory: ui
         run: npm ci
       - if: env.CCRC_LEG == 'run'
         working-directory: pwa
-        run: npm ci && npm run build
+        run: npm ci && ./node_modules/.bin/vite build
       # The build is only proven by its output existing. A green build step with
       # no artifact is the failure this repo has already shipped once.
       - if: env.CCRC_LEG == 'run'
@@ -837,11 +1040,11 @@ jobs:
     # cache and a slow Chrome start, as build-pwa's is.
     timeout-minutes: 15
     env:
-      CCRC_LEG: ${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: env.CCRC_LEG == 'run'
         with:
           node-version: '22'
@@ -874,24 +1077,31 @@ jobs:
   # list is exact. Its `node-version` is pinned equal to `engines.node` by
   # server/test/ci-pipeline.test.ts, and so is its name.
   #
-  # Not required BY NAME (making it a required PR check is a branch-protection
-  # setting, the operator's act), but `full-suite` needs it, so it gates a
-  # stable promotion. No job-level `if:` and no `needs:`: it skips by STEP on a
-  # refresh or a rebuild, like the required legs, because a job skipped by
-  # `if:` reads as red in full-suite. Default checkout depth: nothing on its
-  # list reads the commit range.
+  # Not required BY NAME (the required checks are test (server), test (agent),
+  # test (pwa) and build-pwa), but `full-suite` needs it, so it gates a
+  # stable promotion. Its only job-level `if:` is `!cancelled()`, so a failed
+  # `needs:` never skips it: it skips by STEP on a refresh, a rebuild, or a
+  # pull request that changed none of its inputs (D-6771), like the required
+  # legs, because a job skipped by `if:` reads as red in full-suite. Default
+  # checkout depth: nothing on its list reads the commit range.
   node-floor:
     name: node floor (22.16.0)
+    # D-6771: `select` only lends its `floor` output — on a pull request it
+    # runs only when `select` found one of its inputs changed; every other
+    # event runs it unless it is a refresh or a rebuild.
+    needs: [select, deps]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    # server-deps installs three packages from a cold cache in about three
-    # minutes; the list runs in seconds. 30 is a deadline, not an estimate.
+    # server-deps installs four packages from a cold cache in about three
+    # minutes (it restores them from the `deps` job's entry otherwise); the
+    # list runs in seconds. 30 is a deadline, not an estimate.
     timeout-minutes: 30
     env:
-      CCRC_LEG: ${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && needs.select.outputs.floor != 'true')) && 'skip' || 'run' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: env.CCRC_LEG == 'run'
         with:
           node-version: '22.16.0'
@@ -946,8 +1156,8 @@ jobs:
   # Trace step itself fails.
   trace-shard:
     name: trace ${{ matrix.shard }}/${{ matrix.total }}
-    needs: select
-    if: needs.select.outputs.trace != 'none' && needs.select.outputs.trace_count != '0'
+    needs: [select, deps]
+    if: ${{ !cancelled() && needs.select.outputs.trace != 'none' && needs.select.outputs.trace_count != '0' }}
     runs-on: ubuntu-latest
     # Tracing costs 1.7-4.3x wall-clock (measured on the fleet box), and the
     # shard planner packs trace shards to about 15 minutes at that cost; 60 is
@@ -959,10 +1169,10 @@ jobs:
     steps:
       # Full depth for the same reason as server-shard: the traced tests are
       # the real tests, topology-clean included.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -985,7 +1195,7 @@ jobs:
           node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs "$WORKERS" --timeout 1560
       - name: Keep the records
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: records-${{ matrix.shard }}
           path: ${{ runner.temp }}/records.json
@@ -1017,18 +1227,18 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: records-*
           path: ${{ runner.temp }}/records
       - name: Fetch what select handed over
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: select-inputs
           path: ${{ runner.temp }}/select-inputs
@@ -1041,9 +1251,21 @@ jobs:
         run: |
           want=$(node -e 'console.log(JSON.parse(process.env.TRACE_MATRIX).include.length)')
           mkdir -p "$RUNNER_TEMP/flat" "$RUNNER_TEMP/ci-cache"
+          # Two layouts (D-6740): several artifacts each land in their own
+          # records-<shard>/ directory, but download-artifact v5 and later
+          # extract a pattern that matches ONE artifact straight into the path,
+          # as records/records.json. The single file counts only when no
+          # directory holds one, so nothing is counted twice; either way each
+          # copy is named records*.json, the names testmap.mjs reads.
+          shopt -s nullglob
+          recs=("$RUNNER_TEMP"/records/records-*/records.json)
+          shopt -u nullglob
+          if [ "${#recs[@]}" -eq 0 ] && [ -f "$RUNNER_TEMP/records/records.json" ]; then recs=("$RUNNER_TEMP/records/records.json"); fi
           got=0
-          for d in "$RUNNER_TEMP"/records/records-*; do
-            if [ -f "$d/records.json" ]; then cp "$d/records.json" "$RUNNER_TEMP/flat/$(basename "$d").json"; got=$((got + 1)); fi
+          for f in "${recs[@]}"; do
+            d=$(dirname "$f")
+            n=$(basename "$d")
+            cp "$f" "$RUNNER_TEMP/flat/$n.json"; got=$((got + 1))
           done
           if [ "$got" -ne "$want" ]; then
             echo "::error::$got of $want trace shards left records; no map is written for this commit"
@@ -1092,7 +1314,7 @@ jobs:
           fi
       - name: Keep the map as an artifact
         if: steps.cas.outputs.publish != 'false'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: testmap
           path: ${{ runner.temp }}/ci-cache/testmap.json
@@ -1101,13 +1323,26 @@ jobs:
       # Last, so the map above is published first: the Build step's
       # annotations name each test (3: newly fails under trace; 4: a floor test
       # written unknown). Both stay selected — an unknown test always runs.
-      - name: Red if the map build reported news
+      # News is REPORTED, not failed (D-6769): the hourly refresh gates
+      # nothing, a red one would only page whoever is watching main, and the
+      # map it published is correct. The daily rebuild uses the same step; its
+      # verdict is the full-suite job, not this one.
+      - name: Report what the map build found
         if: steps.build.outputs.rc != '0'
         env:
           RC: ${{ steps.build.outputs.rc }}
         run: |
-          echo "::error::the map was published, but testmap.mjs exited $RC — read the Build the map step's annotations"
-          exit 1
+          case "$RC" in
+            3) what='at least one test newly fails under trace, or timed out' ;;
+            4) what='a floor test lost its breadth and was written unknown' ;;
+            *) what="testmap.mjs exited $RC" ;;
+          esac
+          echo "::warning::the map was published, and the map build reported news: $what — read the Build the map step's annotations"
+          {
+            echo '### Map build news'
+            echo
+            echo "testmap.mjs exited \`$RC\`: $what. The map was published; those tests stay selected until a clean trace replaces them."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # The per-file durations the shard planner packs by, from the untraced
   # full run's JSON reports, published as the `testtimes` artifact. Only on
@@ -1118,20 +1353,34 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: times-*
           path: ${{ runner.temp }}/times
       - name: Merge the durations
         run: |
           mkdir -p "$RUNNER_TEMP/ci-cache"
-          node .github/ci/shards.mjs times --out "$RUNNER_TEMP/ci-cache/testtimes.json" "$RUNNER_TEMP"/times/*/times.json
+          # Two layouts (D-6740): several artifacts each land in their own
+          # times-<shard>/ directory, but download-artifact v5 and later
+          # extract a pattern that matches ONE artifact straight into the path,
+          # as times/times.json. The single file counts only when no directory
+          # holds one; shards.mjs is handed only files that exist, never an
+          # unmatched glob, and no file at all fails the step.
+          shopt -s nullglob
+          reports=("$RUNNER_TEMP"/times/*/times.json)
+          shopt -u nullglob
+          if [ "${#reports[@]}" -eq 0 ] && [ -f "$RUNNER_TEMP/times/times.json" ]; then reports=("$RUNNER_TEMP/times/times.json"); fi
+          if [ "${#reports[@]}" -eq 0 ]; then
+            echo "::error::no shard left a times.json; no durations are written"
+            exit 1
+          fi
+          node .github/ci/shards.mjs times --out "$RUNNER_TEMP/ci-cache/testtimes.json" "${reports[@]}"
       - name: Keep the durations as an artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: testtimes
           path: ${{ runner.temp }}/ci-cache/testtimes.json
@@ -1148,7 +1397,7 @@ jobs:
   # request's run (main-artifact.mjs green-full-suite) — and reads the
   # `verdict` output when it called this file itself.
   full-suite:
-    needs: [select, server, server-shard, server-typecheck, test, build-pwa, test-macos, node-floor, browser-pwa]
+    needs: [select, server, server-shard, server-typecheck, test, pwa, build-pwa, test-macos, node-floor, browser-pwa]
     # Never on a merge-queue run or a pull request: both skip test-macos, and a
     # run that fell back to `full` would read that skip as a red leg (landing-
     # order stage 2; amendment 2026-10-15). Neither is ever the stable gate's
@@ -1164,8 +1413,8 @@ jobs:
       - name: Refuse any leg that did not succeed (no script involved)
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
         run: exit 1
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       # The `verdict` output is written by THIS step, once verdict.mjs exits 0:
@@ -1175,7 +1424,7 @@ jobs:
       - name: Verdict
         id: verdict
         env:
-          RESULTS: select=${{ needs.select.result }} server=${{ needs.server.result }} server-shard=${{ needs.server-shard.result }} server-typecheck=${{ needs.server-typecheck.result }} test=${{ needs.test.result }} build-pwa=${{ needs.build-pwa.result }} test-macos=${{ needs.test-macos.result }} node-floor=${{ needs.node-floor.result }} browser-pwa=${{ needs.browser-pwa.result }}
+          RESULTS: select=${{ needs.select.result }} server=${{ needs.server.result }} server-shard=${{ needs.server-shard.result }} server-typecheck=${{ needs.server-typecheck.result }} test=${{ needs.test.result }} pwa=${{ needs.pwa.result }} build-pwa=${{ needs.build-pwa.result }} test-macos=${{ needs.test-macos.result }} node-floor=${{ needs.node-floor.result }} browser-pwa=${{ needs.browser-pwa.result }}
         run: |
           node .github/ci/verdict.mjs full
           echo "verdict=green" >> "$GITHUB_OUTPUT"

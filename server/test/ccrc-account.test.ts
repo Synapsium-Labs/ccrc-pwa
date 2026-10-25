@@ -27,7 +27,7 @@
 //     (`ccd-workspaces.test.ts:1177` selects /^ccd.*\.ts$/), so the poisons are
 //     here because they are right, not because a scanner demands them.
 import { describe, it, expect, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import * as pty from 'node-pty';
 import {
   appendFileSync, chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync,
@@ -47,6 +47,7 @@ import {
   systemctlCalls, systemdRunCalls,
 } from './codexLaneFixture.js';
 import { pythonOrSkip } from './ccgptHarness.js';
+import { CLOSED_AUTH_BASE, plantBackendCredential } from './codexAuthFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -71,7 +72,7 @@ const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');
  *  `../shared/base-url.mjs` too — `account-op.mjs`'s own header states the
  *  same fact), and node resolves both through the link's realpath — the
  *  fixture never needs a copy of either directory, which is also why a new
- *  sibling import costs this fixture nothing. (`ccrc-doctor.test.ts` COPIES
+ *  sibling import costs this fixture nothing. (`ccrc-doctorFixture.ts` COPIES
  *  instead, and there the closure has to be listed file by file — Task 33.)
  *
  *  IT ALSO MATERIALISES THE CONTAINMENT BINS, and that last line is not
@@ -209,7 +210,7 @@ interface Result { code: number; stdout: string; stderr: string }
  *  purpose: `env()` DELETES every `CCRC_*` this CLI reads so the answer never
  *  depends on the developer's exported shell, so a knob a test wants to set is
  *  a knob that has just been deleted. `runDoctor`'s shape
- *  (`ccrc-doctor.test.ts`'s `runDoctor`). */
+ *  (`ccrc-doctorFixture.ts`'s `runDoctor`). */
 function run(home: string, args: string[], stdin = '',
   extraEnv: NodeJS.ProcessEnv = {}): Result {
   const merged = { ...buildEnv(home), ...extraEnv };
@@ -1016,7 +1017,7 @@ function sourceCall(home: string, script: string, stdin = ''): Result {
  *  reason `ccrc-passwd.test.ts:100` states — without a terminal the refusing
  *  branch is the ONLY one a test can reach — and each pins the deletion of its
  *  guard as a mutation (`ccrc-passwd.test.ts:484`, `ccrc-expose.test.ts:262`,
- *  `ccrc-install.test.ts:3222`). This gate INVERTS: it refuses the terminal. It
+ *  `ccrc-install-*.test.ts`). This gate INVERTS: it refuses the terminal. It
  *  is pinned the same way anyway, because the inversion does not change the
  *  fact that a pipe-only test can never reach the branch, and a guard no test
  *  can reach is a guard nothing measures. Task 22's plan carried no test for
@@ -1041,7 +1042,7 @@ function sourceCallTty(home: string, script: string): Promise<Result> {
       clearTimeout(timer);
       resolve({ code, stdout: out, stderr: '' });   // a pty merges the two streams
     };
-    // 19s, NOT 20s — `ccrc-install.test.ts:3247`'s number and its reason.
+    // 19s, NOT 20s — `ccrc-install-*.test.ts`'s number and its reason.
     // `server/vitest.config.ts:87` sets `testTimeout: 20_000` on linux, so a
     // 20s timer here TIES with the runner and loses: measured at review round
     // 1, vitest won at 20012ms, `p.kill()` never ran and the pty `bash` was
@@ -2315,7 +2316,7 @@ describe('ccrc account add: the ordered write', () => {
     // The half `oneObject` alone cannot prove: that the two convergers' lines
     // were REDIRECTED and not discarded. `_inst_accounts_sh` (ccd/ccrc:5575)
     // and `cmd_wrappers` (:2904) both write these on stdout for `ccrc install`.
-    // Only the second is pinned there (ccrc-install.test.ts:2687-2688, the
+    // Only the second is pinned there (ccrc-install-*.test.ts, the
     // `summary:` regex; :2820 is `_inst_wrappers`' own line, ccd/ccrc:7148, and
     // nothing in server/test/ mentions `install: accounts.sh` at all) — so this
     // assertion is also the first one in the tree to measure the accounts.sh
@@ -5106,7 +5107,7 @@ function plantRow(home: string, sid: string, o: { wrapper: string; home?: string
  *  `env()` plants, which is why that one is conditional. Any argv other than
  *  `list-sessions` is a loud failure: a verb that started DRIVING tmux rather
  *  than asking it could not pass unnoticed (stubTmux's rule,
- *  `ccrc-doctor.test.ts`'s `stubTmux`). */
+ *  `ccrc-doctorFixture.ts`'s `stubTmux`). */
 function plantTmux(home: string, sessions: string[]): void {
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
   writeFileSync(join(home, '.local', 'bin', 'tmux'), [
@@ -6225,7 +6226,7 @@ describe('ccrc account remove', () => {
     // THE ORDER IS THE CLAIM: every read saw the row AND the roster entry still standing.
     expect(usageSvcCalls(home)).toEqual(Array(3).fill(`--user is-active ${SVC} row=present roster=named`));
     expect(r.stderr.split('\n').filter((l) => l.startsWith('ccrc account remove: '))).toEqual([
-      `ccrc account remove: ccrc's usage poll ${SVC} is running (active); waiting up to 30s for it to finish before $HOME/.cc-limits/ext-a.json is removed. ccrc never stops it: it may be writing the lane's OAuth token file.`]);
+      `ccrc account remove: ccrc's usage poll ${SVC} is running (active); waiting up to 30s for it to finish before $HOME/.cc-limits/ext-a.json is removed. ccrc never stops it, and a row removed under a running poll is written again.`]);
     expect(usageCtlCalls(home)).toEqual(['--user disable --now ccrc-codex-usage@ext-a.timer']);
     expect(lexists(link)).toBe(false);
     expect(existsSync(row), 'the limits row survived the removal').toBe(false);
@@ -6245,7 +6246,7 @@ describe('ccrc account remove', () => {
     const j = oneObject(r);
     expect(j['error']).toBe('usage-refresh-in-flight');
     const detail = String(j['detail']);
-    expect(detail.startsWith(`ccrc's usage poll ${SVC} for ext-a still reads activating after 2s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before $HOME/.cc-limits/ext-a.json: ccrc never stops a poll, because it may be writing the lane's OAuth token file, and a row removed under a running poll is written again.`), detail).toBe(true);
+    expect(detail.startsWith(`ccrc's usage poll ${SVC} for ext-a still reads activating after 2s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before $HOME/.cc-limits/ext-a.json: ccrc never stops a poll, and a row removed under a running poll is written again.`), detail).toBe(true);
     expect(detail).toContain('ccrc\'s usage timer ccrc-codex-usage@ext-a.timer is not enabled, so no new poll starts.');
     expect(detail).toContain('The roster entry and all account artifacts still stand');
     // P9: THIS run disabled the timer, so the refusal corrects the clause that says what stands, in one sentence.
@@ -7119,6 +7120,195 @@ describe('ccrc account remove', () => {
     const ccrc = readFileSync(CCRC_SRC, 'utf8');
     expect(ccd).toContain('_plat_mv_notdir "$tmp" "$REG/$1.$2"');
     expect(ccrc).toContain('_plat_mv_notdir "$tmp" "$_SVC_REG/$1.$2"');
+  });
+});
+
+// ── codex-bridge Stage 1, Task 9: removal takes the auth library's lock around the tier stop ────────────────────
+// The library's lock (`auth.json.lock` beside the credential, `ccd/ccgpt-auth.py`'s `held`) serialises every
+// credential write; removal takes it after the lane lock and releases it after `_codex_stop_lane`, so a stop never
+// lands inside a refresh's token round trip (D-6384). C10/C11's idiom: ccd/ccrc sourced, the stop and the re-measure
+// redefined after it, then the verb. The stop records whether the auth lock was held at that moment (a `flock -n` on
+// a new open fails while ccrc holds it on its own) and whether the case's holder had already let go.
+describe('ccrc account remove: a codex lane takes the auth library\'s lock (codex-bridge Stage 1, Task 9)', () => {
+  const itHold = it.skipIf(!PY3 || !HAVE_FLOCK);
+
+  async function authHoldBox(prefix: string, opts: { credential?: boolean } = {}): Promise<{
+    home: string; authDir: string; lock: string; launcher: string; roster: string; rosterBefore: string; laneOnly: string[];
+  }> {
+    const home = box(prefix);
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    const launcher = plantCodexLauncher(home);
+    const { laneOnly } = plantLaneState(home, lane);
+    plantTmux(home, []);
+    const authDir = join(home, lane.exec.authDir);
+    if (opts.credential !== false) plantBackendCredential(authDir);
+    // The library this tree ships, placed where `_codex_auth_lib` reads it.
+    copyFileSync(join(REPO, 'ccd', 'ccgpt-auth.py'), join(home, '.local', 'bin', 'ccgpt-auth.py'));
+    const roster = join(home, '.ccrc', 'accounts.json');
+    return { home, authDir, lock: join(authDir, 'auth.json.lock'), launcher, roster,
+      rosterBefore: readFileSync(roster, 'utf8'), laneOnly };
+  }
+
+  /** The removal verb with the stop replaced by a probe of the auth lock, under CLOSED_AUTH_BASE. With `timeoutMs`
+   *  it runs in a process group of its own (`spawnSyncGroup`), so a removal that blocks is ended with its children
+   *  and comes back with `timedOut` set instead of hanging the suite. */
+  function removeProbed(home: string, lock: string, opts: { timeoutMs?: number } = {}):
+    Result & { calls: string[]; ms: number; timedOut: boolean } {
+    const calls = join(home, 'auth-lock-calls');
+    const stubs = [
+      `_codex_stop_lane() { if [ ! -e '${path.dirname(lock)}' ]; then echo auth=no-authdir; elif flock -n '${lock}' true 2>/dev/null; then echo auth=free; else echo auth=held; fi >> '${calls}'`,
+      `  if [ -e '${join(home, 'holder-released')}' ]; then echo after-release >> '${calls}'; fi; return 0; }`,
+      '_codex_tier_ours() { return 1; }',
+    ].join('\n');
+    const t0 = Date.now();
+    const argv = ['-c', `. "${ccrcIn(home)}"\n${stubs}\ncmd_account remove --id codex-a`];
+    const o = { env: { ...env(home), CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE }, encoding: 'utf8' as const, input: '' };
+    const r0 = opts.timeoutMs === undefined ? spawnSync(BASH, argv, o)
+      : spawnSyncGroup(BASH, argv, { ...o, timeout: opts.timeoutMs });
+    const ms = Date.now() - t0;
+    return { code: r0.status ?? -1, stdout: r0.stdout ?? '', stderr: r0.stderr ?? '', ms,
+      timedOut: (r0.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT',
+      calls: existsSync(calls) ? readFileSync(calls, 'utf8').split('\n').filter(Boolean) : [] };
+  }
+
+  /** Another process holding the auth lock for `secs`: `flock(1)` on the same file, in its own process group so the
+   *  case can end it and its child together. Resolves once it holds; it touches `holder-released` just before it
+   *  lets go. */
+  async function holdAuthLock(home: string, lock: string, secs: number): Promise<ChildProcess> {
+    const held = join(home, 'holder-held');
+    const holder = spawn('flock', [lock, 'sh', '-c', `: > '${held}'; sleep ${secs}; : > '${join(home, 'holder-released')}'`],
+      { detached: true, stdio: 'ignore' });
+    await eventually(() => existsSync(held), 'the holder to take the auth lock', 5000);
+    return holder;
+  }
+  const endHolder = (h: ChildProcess): void => { try { if (h.pid) process.kill(-h.pid, 'SIGKILL'); } catch { /* gone */ } };
+
+  /** The refusal's "nothing removed": the roster, the launcher and the lane's own files all still stand. */
+  function nothingRemoved(b: { roster: string; rosterBefore: string; launcher: string; laneOnly: string[] }): void {
+    expect(readFileSync(b.roster, 'utf8'), 'the roster changed under a refused removal').toBe(b.rosterBefore);
+    expect(existsSync(b.launcher), 'the launcher went').toBe(true);
+    for (const f of b.laneOnly) expect(existsSync(f), `${f} was reaped`).toBe(true);
+  }
+
+  itHold('removal takes the auth library\'s lock around the stop: a holder makes it wait, then proceed', async () => {
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-wait-');
+    const holder = await holdAuthLock(b.home, b.lock, 2);
+    try {
+      const r = removeProbed(b.home, b.lock);
+      expect(r.code, r.stderr).toBe(0);
+      oneObject(r);
+      // The stop ran once, under the auth lock, and only after the holder had let go of it.
+      expect(r.calls, r.stderr).toEqual(['auth=held', 'after-release']);
+      expect(r.ms, 'the removal did not wait for the holder').toBeGreaterThanOrEqual(1500);
+      expect(readFileSync(b.roster, 'utf8')).not.toBe(b.rosterBefore);
+    } finally { endHolder(holder); }
+  });
+
+  itHold('a lane never signed in (no authDir) holds nothing and is removed, creating no authDir and no lock', async () => {
+    // The library is placed, so `_codex_auth paths` answers: only the absent-authDir arm stands between the hold and
+    // an open of a lock file in a directory that does not exist (auth-lock-unusable, codex-reap-failed).
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-noauthdir-', { credential: false });
+    expect(existsSync(b.authDir)).toBe(false);
+    const r = removeProbed(b.home, b.lock);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)['ok'], r.stderr).toBe(true);
+    expect(r.calls, 'the tiers were not stopped once').toEqual(['auth=no-authdir']);
+    expect(existsSync(b.authDir), 'the removal created the authDir').toBe(false);
+    expect(existsSync(b.lock), 'the removal created an auth lock').toBe(false);
+    expect(readFileSync(b.roster, 'utf8')).not.toBe(b.rosterBefore);
+  });
+
+  itHold('a holder past the bound refuses codex-reap-failed, nothing removed', async () => {
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-timeout-');
+    // The library's bound is 60 s (LOCK_WAIT_S), which no case may wait out: a stand-in at the library's path answers
+    // `paths` with the real lock path and a 1 s bound. The hold reads both from that answer and spells neither.
+    writeFileSync(join(b.home, '.local', 'bin', 'ccgpt-auth.py'), [
+      'import json, sys',
+      'argv = sys.argv[1:]',
+      'if argv[:1] == ["paths"]:',
+      '    d = argv[argv.index("--auth-dir") + 1]',
+      '    print(json.dumps({"credential": d + "/auth.json", "pending": d + "/auth.pending.json",',
+      '                      "lock": d + "/auth.json.lock", "status": d + "/auth.status.json", "lockWaitS": 1}))',
+      '',
+    ].join('\n'));
+    const holder = await holdAuthLock(b.home, b.lock, 8);
+    try {
+      const r = removeProbed(b.home, b.lock);
+      expect(r.code, r.stderr).toBe(1);
+      const j = oneObject(r);
+      expect(j['error']).toBe('codex-reap-failed');
+      expect(String(j['detail'])).toContain('auth library');
+      expect(r.calls, 'the tiers were stopped without the auth lock').toEqual([]);
+      expect(r.ms, 'the removal waited out the holder instead of its bound').toBeLessThan(7000);
+      nothingRemoved(b);
+    } finally { endHolder(holder); }
+  });
+
+  itHold('a symlink at the auth lock path refuses codex-reap-failed, nothing removed, its target untouched', async () => {
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-symlink-');
+    const target = join(b.home, 'elsewhere', 'not-a-lock');
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, 'somebody else\'s file\n', { mode: 0o644 });
+    const before = statSync(target, { bigint: true });
+    symlinkSync(target, b.lock);
+    const r = removeProbed(b.home, b.lock);
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['error']).toBe('codex-reap-failed');
+    expect(r.calls, 'the tiers were stopped although the lock could not be taken').toEqual([]);
+    nothingRemoved(b);
+    expect(lstatSync(b.lock).isSymbolicLink(), 'the symlink was replaced').toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe('somebody else\'s file\n');
+    const after = statSync(target, { bigint: true });
+    expect([after.ino, after.mtimeNs, after.mode]).toEqual([before.ino, before.mtimeNs, before.mode]);
+  });
+
+  itHold('a FIFO at the auth lock path refuses codex-reap-failed (auth-lock-unusable) without opening it, nothing removed', async () => {
+    // `exec {fd}>>` on a FIFO is an O_WRONLY open with no O_NONBLOCK, which blocks until a reader comes: only the
+    // non-regular-file half of the hold's refusal stands between the removal and that unbounded wait. The spawn is
+    // bounded and grouped, so a regression comes back as `timedOut` instead of hanging the suite.
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-fifo-');
+    const made = spawnSync('mkfifo', [b.lock], { encoding: 'utf8' });
+    expect(made.status, made.stderr).toBe(0);
+    const r = removeProbed(b.home, b.lock, { timeoutMs: 15_000 });
+    expect(r.timedOut, 'the removal blocked opening a FIFO as its auth lock').toBe(false);
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['error']).toBe('codex-reap-failed');
+    expect(r.stderr).toContain('auth-lock-unusable');
+    expect(r.calls, 'the tiers were stopped although the lock could not be taken').toEqual([]);
+    nothingRemoved(b);
+    expect(lstatSync(b.lock).isFIFO(), 'the FIFO was replaced').toBe(true);
+  });
+
+  itHold('a library whose paths answer names no lock path or bound refuses codex-reap-failed (auth-status-unreadable), nothing removed', async () => {
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-nopaths-');
+    // A stand-in at the library's path that answers `paths` with an empty object: rc 0, but no `lock` and no
+    // `lockWaitS`. The hold must refuse rather than go ahead holding nothing.
+    writeFileSync(join(b.home, '.local', 'bin', 'ccgpt-auth.py'), [
+      'import sys',
+      'if sys.argv[1:2] == ["paths"]:',
+      '    print("{}")',
+      '',
+    ].join('\n'));
+    const r = removeProbed(b.home, b.lock, { timeoutMs: 15_000 });
+    expect(r.timedOut).toBe(false);
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['error']).toBe('codex-reap-failed');
+    expect(r.stderr).toContain('auth-status-unreadable');
+    expect(r.calls, 'the tiers were stopped holding nothing').toEqual([]);
+    nothingRemoved(b);
+    expect(existsSync(b.lock), 'the removal created an auth lock').toBe(false);
+  });
+
+  itHold('under a 0277 umask the hold leaves the lock file it created at 0600', async () => {
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-umask-');
+    expect(existsSync(b.lock)).toBe(false);
+    const r = spawnSync(BASH, ['-c',
+      `. "${ccrcIn(b.home)}"\numask 0277\n_codex_auth_hold codex-a; echo "rc=$? fd=\${CX_AUTH_LOCK_FD:+set}"; _codex_auth_release`],
+      { env: { ...env(b.home), CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE }, encoding: 'utf8', input: '' });
+    expect(r.stdout, r.stderr).toMatch(/^rc=0 fd=set$/m);
+    expect(statSync(b.lock).mode & 0o777, 'the lock file the hold created').toBe(0o600);
   });
 });
 
@@ -8476,7 +8666,7 @@ describe('ccrc account check: auth status', () => {
 
   it('reports a timed-out auth status as timeout, not as unknown', () => {
     // No `linkReal` is needed and none exists in this file: unlike
-    // `ccrc-doctor.test.ts`, this suite's `env()` KEEPS the real PATH
+    // `ccrc-doctorFixture.ts`, this suite's `env()` KEEPS the real PATH
     // (`ghContainedEnv` PREPENDS the fixture bin rather than replacing PATH,
     // its returned `PATH: ${bin}:…`), so `_plat_timeout` finds the box's own `timeout`
     // and the stub finds `sleep`. `ccrc-cli.test.ts:80-86` says the same thing
@@ -10665,7 +10855,7 @@ describe('ccrc account check: the probe', () => {
     // call site is exactly what rotted, and a count cannot.
     //
     // THE EXISTING NO-COREUTILS CASE CANNOT MAKE THIS ASSERTION, and being
-    // reassured by it is the mistake to avoid: `ccrc-doctor.test.ts` replaces
+    // reassured by it is the mistake to avoid: `ccrc-doctorFixture.ts` replaces
     // PATH with a stub bin that has no `sleep` at all, so the `|| exit 0` guard
     // fires, the watcher exits immediately and no orphan is ever created. It
     // passes in seconds and proves nothing about this arm. The sleep-PRESENT

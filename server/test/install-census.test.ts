@@ -1909,6 +1909,10 @@ describe('the id-shaped executables: TOOLCHAIN_EXECUTABLES, _inst_bins and _unin
       + 'not place a file of that name, so every Codex lane on an installed box would exec nothing. Place it behind the '
       + 'gate, or point the emitter at what the gate places.')
       .toContain(target);
+    expect([gated.size, [...gated][0]],
+      'the GPT-lane block places five files, ccgpt-auth.py first: the library every other lane file will read its '
+      + 'credential through is placed before them (codex bridge Stage 1, Task 5)')
+      .toEqual([5, 'ccgpt-auth.py']);
   });
 
   it('both GPT_TOOLCHAIN_ACCOUNT_IDS mirrors are one set, and it reserves every id-shaped name the GPT-lane gate places', () => {
@@ -1974,7 +1978,7 @@ describe('every file `ccrc install` copies out of the tree rides the release tar
 // rides the release, and is shipped by the fallback. It also holds the verb's three registrations (usage line, dispatch, prose) together.
 describe('the coordination snapshot helper: run from the installed tree, shipped by both installers, registered as a verb (Task 8B)', () => {
   const HELPER_REL = 'deploy/coordination-snapshot.mjs';
-  const callers = ['_upd_backup', '_bak_snap_class', 'cmd_coordination_snapshot'] as const;
+  const callers = ['_upd_backup', '_bak_snap_class', '_bak_thin', 'cmd_coordination_snapshot'] as const;
   const bodyOfFn = (name: string): string => {
     const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(CCRC);
     if (m === null) throw new Error(`install-census.test.ts: ccd/ccrc has no ${name}() — this reader has gone stale`);
@@ -1986,8 +1990,8 @@ describe('the coordination snapshot helper: run from the installed tree, shipped
       expect(bodyOfFn(fn), fn).toMatch(/\$CCRC_HERE\/\.\.\/deploy\/coordination-snapshot\.mjs/);
     }
     expect(bodyOfFn('_upd_backup'), '_upd_backup').toMatch(/node --no-warnings "\$CCRC_HERE\/\.\.\/deploy\/coordination-snapshot\.mjs"/);
-    // The two that name the path once, in a variable, and run `node --no-warnings "$helper"`.
-    for (const fn of ['_bak_snap_class', 'cmd_coordination_snapshot']) {
+    // The three that name the path once, in a variable, and run `node --no-warnings "$helper"` (`_bak_thin` joined in wave 23, D-6353).
+    for (const fn of ['_bak_snap_class', '_bak_thin', 'cmd_coordination_snapshot']) {
       expect(bodyOfFn(fn), fn).toMatch(/helper="\$CCRC_HERE\/\.\.\/deploy\/coordination-snapshot\.mjs"/);
       expect(bodyOfFn(fn), fn).toMatch(/node --no-warnings "\$helper"/);
     }

@@ -409,12 +409,26 @@ describe('the sweep: skeleton, store open and refusals, and the shim', () => {
 
   it('parseSweepArgv: the shim\'s grammar, exactly', () => {
     expect(parseSweepArgv(['--secrets', '/s/a', '/s/b', '--', '/h/one', '/h/two'])).toEqual({
-      op: null, opArgs: [], rosterUnreadable: false, secrets: ['/s/a', '/s/b'], homes: ['/h/one', '/h/two'],
+      op: null, opArgs: [], rosterUnreadable: false, unanswered: [], secrets: ['/s/a', '/s/b'], homes: ['/h/one', '/h/two'],
     });
     expect(parseSweepArgv(['--op', 'import', '--apply', '--roster-unreadable', '--secrets', '--'])).toEqual({
-      op: 'import', opArgs: ['--apply'], rosterUnreadable: true, secrets: [], homes: [],
+      op: 'import', opArgs: ['--apply'], rosterUnreadable: true, unanswered: [], secrets: [], homes: [],
     });
     for (const bad of [[], ['--', '/h'], ['--secrets', '/s'], ['--op', '--secrets', '--'], ['--op', 'Import', '--secrets', '--']]) {
+      expect(parseSweepArgv(bad), JSON.stringify(bad)).toEqual({ error: 'bad-args' });
+    }
+  });
+
+  it('parseSweepArgv: each --unanswered path after --roster-unreadable and before --secrets, where an op\'s arguments stop too (codex-bridge Stage 1, Task 10)', () => {
+    expect(parseSweepArgv(['--unanswered', '/h/lane-a/auth', '--unanswered', '/h/lane-b/auth', '--secrets', '/s/a', '--', '/h/one'])).toEqual({
+      op: null, opArgs: [], rosterUnreadable: false, unanswered: ['/h/lane-a/auth', '/h/lane-b/auth'], secrets: ['/s/a'], homes: ['/h/one'],
+    });
+    expect(parseSweepArgv(['--op', 'import', '--apply', '--unanswered', '/h/lane-a/auth', '--secrets', '--'])).toEqual({
+      op: 'import', opArgs: ['--apply'], rosterUnreadable: false, unanswered: ['/h/lane-a/auth'], secrets: [], homes: [],
+    });
+    // No path; no path at the end; a relative path; out of order (before --roster-unreadable).
+    for (const bad of [['--unanswered', '--secrets', '--'], ['--unanswered'], ['--unanswered', 'relative/auth', '--secrets', '--'],
+      ['--unanswered', '/h/lane-a/auth', '--roster-unreadable', '--secrets', '--']]) {
       expect(parseSweepArgv(bad), JSON.stringify(bad)).toEqual({ error: 'bad-args' });
     }
   });
@@ -790,5 +804,85 @@ describe('the recall-off presence record, one tick step (W2-D30; W2-1 Task 4)', 
     expect(p2[K.seen]).toBe(String(S2));
     const o2 = outboxRecs(box).filter((r) => r.seq > o1[o1.length - 1]!.seq);
     expect(o2.map((r) => [r.rec['rk'], r.rec['t']]), 'its record carries the clamped end').toEqual([['change', S2]]);
+  }, 120_000);
+});
+
+
+// ── W2-2b Task 4 (W2-D43): the drain skips the recall_off_stale bump for a line carrying arm ───────────────────────
+// recall_off_stale is a live drain observation (§9.7, §9.14). A line carrying `arm` is an eval call, excluded from live
+// counters (§8.1, §10.2), so the drain bumps nothing for it and reads no recall-off file. Its recall_calls row is still
+// written, with its arm. No schema change and no new counter (W2-D10).
+describe('W2-D43: the drain skips the recall_off_stale bump for a line carrying arm (W2-2b Task 4)', () => {
+  const ID = 'claude-a-demo';
+  const G1 = '0189abcd-1234-4678-9abc-0123456789ab';
+  const G4 = '0189abcd-1234-4678-9abc-0123456789ae';
+  const T0 = Date.UTC(2026, 9, 1, 10, 0, 0);
+  interface SweepMod { applyEventLine(db: DatabaseSync, c: object, ev: object): unknown }
+  const bound = (prefix: string): HistoryBox => {
+    const box = makeHistoryBox(prefix);
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    return box;
+  };
+  /** recall-off/<ID> names G4, another generation than every line's G1: the drain's live read of it is 'stale'. */
+  const plantStale = (box: HistoryBox): void => {
+    const dir = historyPaths(box.home).recallOffDir;
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(dir, ID), `${G4}\n`);
+  };
+  const recLine = (extra: Record<string, unknown> = {}): Record<string, unknown> =>
+    ({ v: 1, ev: 'recall', id: ID, gen: G1, cmd: 'tree', rc: 0, ms: 1, ts: T0, ...extra });
+  const counterRows = (db: DatabaseSync): Array<[string, number]> =>
+    (db.prepare('SELECT name, n FROM counters ORDER BY name').all() as Array<{ name: string; n: number }>).map((r): [string, number] => [r.name, Number(r.n)]);
+  const staleOn = (db: DatabaseSync): number =>
+    Number((db.prepare("SELECT n FROM counters WHERE name = 'recall_off_stale'").get() as { n: number } | undefined)?.n ?? 0);
+
+  it('an arm line on a stale recall-off file bumps nothing and adds no counter, and its row keeps its arm; CONTROL: the same line without arm bumps once', async () => {
+    const sweep = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepMod;
+    const box = bound('ccrc-history-sweep-zqarmline-');
+    plantStale(box);
+    const db = new DatabaseSync(historyPaths(box.home).dbFile);
+    try {
+      const c = { home: box.home, now: () => T0 };
+      const ev = (key: string, rec: Record<string, unknown>): object => ({ key, rec, recvMs: T0, tsMs: T0, obs: { generation: { state: 'absent' } } });
+      const before = counterRows(db);
+      sweep.applyEventLine(db, c, ev('drained.1.1:1', recLine({ arm: 'treatment' })));
+      sweep.applyEventLine(db, c, ev('drained.1.1:2', recLine({ arm: 'control', rc: 8 })));
+      expect(staleOn(db), 'W2-D43: a line carrying arm is no live observation').toBe(0);
+      expect(counterRows(db), 'W2-D10: no counter is bumped or added').toEqual(before);
+      // CONTROL: the same file and a line without arm: the drain's live observation reads it as stale.
+      sweep.applyEventLine(db, c, ev('drained.1.1:3', recLine()));
+      expect(staleOn(db), 'CONTROL: an arm-less line on the same file bumps once').toBe(1);
+      const rows = (db.prepare('SELECT event_key, generation, rc, arm FROM recall_calls ORDER BY event_key').all() as
+        Array<{ event_key: string; generation: string; rc: number; arm: string | null }>).map((r) => [r.event_key, r.generation, Number(r.rc), r.arm]);
+      expect(rows, 'every line is received, each with its arm').toEqual([
+        ['drained.1.1:1', G1, 0, 'treatment'], ['drained.1.1:2', G1, 8, 'control'], ['drained.1.1:3', G1, 0, null],
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('drained by the pass: a spooled arm line lands in recall_calls with its arm and bumps nothing; CONTROL: an arm-less line bumps once', async () => {
+    const h = await import('./historyHelpers.js');
+    const box = bound('ccrc-history-sweep-zqarmline-drain-');
+    h.plantSession(box, ID, { generation: G1, project: 'demo' });
+    plantStale(box);
+    const arms = (): Array<string | null> => {
+      const db = openStoreRO(box);
+      try {
+        return (db.prepare('SELECT arm FROM recall_calls WHERE ccrc_id = ? ORDER BY ts_ms, event_key').all(ID) as Array<{ arm: string | null }>).map((r) => r.arm);
+      } finally {
+        db.close();
+      }
+    };
+    h.spoolLine(box, ID, recLine({ arm: 'treatment' }));
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);   // tick N renames the line, tick N+1 drains it
+    expect(arms(), 'the arm line is received').toEqual(['treatment']);
+    expect(counters(box)['recall_off_stale'] ?? 0, 'W2-D43: the drain bumps nothing for it').toBe(0);
+    h.spoolLine(box, ID, recLine({ ts: T0 + 1 }));
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
+    expect(arms(), 'CONTROL: the arm-less line is received too').toEqual(['treatment', null]);
+    expect(counters(box)['recall_off_stale'], 'CONTROL: and it bumps once').toBe(1);
   }, 120_000);
 });

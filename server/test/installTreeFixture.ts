@@ -1,5 +1,5 @@
 // installTreeFixture.ts — the ONE definition of the `ccrc install` fixture
-// tree, shared by `ccrc-install.test.ts` and `ccrc-install-graphify.test.ts`.
+// tree, shared by `ccrc-install-*.test.ts` and `ccrc-install-graphify.test.ts`.
 //
 // Both suites used to carry their own copy of `TREE_FILES` / `TREE_STUBS` /
 // `installFixtureTree`, each citing the other's header as the reason: a
@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 // (wave 9 R9-F8). It may never import `ccrcContainment.ts`, which reaches vitest through `ccdWsHelpers.ts`.
 import { CONTAINED_TOOLS, plantPoison } from './containedTools.js';
 // The second, and it imports nothing at all (Docs W4): the PWA bundle's one fixture worker, so the closing doctor's
-// `docs-sw` check reads the same text `ccrc-doctor.test.ts`'s `healthy()` plants.
+// `docs-sw` check reads the same text `ccrc-doctorFixture.ts`'s `healthy()` plants.
 import { swJs } from './swFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -53,20 +53,29 @@ export const TREE_FILES = [
   'ccd/ccrc-doctor-checks',
   'ccd/ccrc-wrapper-shape',
   'ccd/ccrc-adopt',
-  // The GPT lane's four common executables, COPIED from the repository: the
+  // The GPT lane's five common executables, COPIED from the repository: the
   // two `.py` files (Plan 2a, placed since Plan 2b-1), and the runtime builder
   // and launcher. Plan 2b-2 wrote each of those two unplaced, then added both
   // here in the commit that made `_inst_bins` place them: an entry joins this
   // list NO EARLIER than the commit that writes its source. `_inst_bins`
-  // places all four, so a tree missing any one fails an install for a fixture
+  // places all five, so a tree missing any one fails an install for a fixture
   // reason rather than a real one. NEVER stubbed: a stub once hid a placement
   // that dies on a real tree (D-3165), the class `install-census.test.ts`'s
   // tracked-source case reds on. The launcher is `ccrc-codex`, not `ccgpt`
-  // (D-3478).
+  // (D-3478). The auth library `ccgpt-auth.py` (codex bridge Stage 1, Task 5)
+  // joined in the commit that placed it, first, as `_inst_bins` orders it.
+  'ccd/ccgpt-auth.py',
   'ccd/ccgpt-proxy.py',
   'ccd/ccgpt-usage.py',
   'ccd/ccgpt-runtime',
   'ccd/ccrc-codex',
+  // The codex bridge's package (codex bridge Stage 2, Task 9), which the shim's
+  // direct entry imports from the installed TREE (CCGPT_BRIDGE_DIR, the tree's
+  // `ccd/codexbridge`), never from `~/.local/bin`: no installer places it, so
+  // it rides the tree and nothing else. A DIRECTORY entry, copied whole, so
+  // every `ccd/codexbridge/*.py` is in the fixture tree, a module added later
+  // included.
+  'ccd/codexbridge',
   // The generators, reached as `$CCRC_HERE/../deploy/<name>.mjs` — the same
   // "one directory up from this script" resolution `cmd_wrappers` uses, true
   // in a checkout and at `~/ccrc/deploy` on a deployed box.
@@ -99,7 +108,7 @@ export const TREE_FILES = [
   // realistic "the operator already has a roster" fixture is no repo file any
   // more — the shipped five-account migration roster left the tree with the
   // stage-5 de-brand (spec §5, D-202) — so FIVE_ACCOUNT_ROSTER (in
-  // `ccrc-install.test.ts`) serialises `DEFAULT_TEST_ROSTER` instead: a roster
+  // `ccrc-install-*.test.ts`) serialises `DEFAULT_TEST_ROSTER` instead: a roster
   // with `claude-b` in it, so "generated FROM the installed roster" stays
   // provable rather than merely plausible.
   'deploy/accounts.default.json',
@@ -204,6 +213,8 @@ export const TREE_FILES = [
   // `_inst_atomic` dies naming the missing source and every describe here goes
   // red for a fixture reason.
   'ccd/compact-card.mjs',
+  // The transcript reader ccd and the doctor load with `jq -L` (ARCH-65); `_inst_files` places it under `.cc-sessions/lib`.
+  'ccd/lib/transcript.jq',
   // The approval verifier (coordinator-first routing, plan Task 14, D-5297): `_inst_files` places it beside the hook
   // and before it, as the card's helper above, so a tree without it dies the same way.
   'ccd/approval-verify.mjs',

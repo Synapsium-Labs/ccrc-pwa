@@ -21,6 +21,7 @@
 //    `RESTAT_EVERY` ticks (a resume in place grows its journal again).
 import path from 'node:path';
 import type { FleetIO } from '../io.js';
+import { walkBack } from '../backread.js';
 import { READ_FROM_MAX_BYTES } from '../../../shared/agent-protocol.js';
 import { WORKFLOW_EVICT_MS, type WorkflowView } from '../../../shared/workflows.js';
 import {
@@ -58,6 +59,8 @@ export const RUNS_IN_PARALLEL = 8;
 export const ONE_TIME_RESERVE = 8;
 /** How many READ_FROM_MAX_BYTES chunks a done agent's read walks back past its tail. */
 export const WALKBACK_CHUNKS = 4;
+/** The reads of a done agent's walk: the tail, then WALKBACK_CHUNKS capped chunks. */
+const WALK_SIZES: readonly number[] = [TAIL_BYTES, ...Array<number>(WALKBACK_CHUNKS).fill(READ_FROM_MAX_BYTES)];
 
 const rotate = <T>(xs: readonly T[], by: number): T[] => {
   const k = xs.length === 0 ? 0 : by % xs.length;
@@ -324,23 +327,14 @@ export class SessionWorkflows {
   /** The last usage line's tokens, walking back from EOF: null when there is
    *  none within the bound, undefined when the budget ran out first. */
   private async lastTokensOf(file: string, size: number): Promise<number | null | undefined> {
-    let end = size;
-    let head = new Uint8Array(0); // the cut first line of the segment read last
-    for (let i = 0; i <= WALKBACK_CHUNKS && end > 0; i++) {
+    const walk = walkBack(this.io, file, size, WALK_SIZES);
+    while (walk.more()) {
       if (this.budget <= 0) return undefined;
-      const want = i === 0 ? TAIL_BYTES : READ_FROM_MAX_BYTES;
-      const start = Math.max(0, end - want);
-      const r = await this.io.readFileFromBytesMeasured(file, start, Math.max(1, end - start));
+      const r = await walk.next();
       this.budget--;
       if (!r.ok) return null;
-      const bytes = new Uint8Array(r.bytes.length + head.length);
-      bytes.set(r.bytes, 0);
-      bytes.set(head, r.bytes.length);
-      const measured = lastUsageTokens(new TextDecoder().decode(bytes));
+      const measured = lastUsageTokens(new TextDecoder().decode(r.segment.bytes));
       if (measured !== null) return measured;
-      const nl = r.bytes.indexOf(10);
-      head = nl < 0 ? bytes : bytes.slice(0, nl + 1);
-      end = start;
     }
     return null;
   }

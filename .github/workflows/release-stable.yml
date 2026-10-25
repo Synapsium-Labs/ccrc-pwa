@@ -4,8 +4,8 @@
 # (server/test/release-stable.test.ts). No build step — nothing here can
 # produce bytes; the gate runs one dependency-free module with the runner's
 # own node, and it only reads the API. The branch's ruleset (no force push,
-# no deletion; D-3130) keeps it fast-forward; the script refuses an untagged
-# merge HEAD.
+# no deletion; D-3130) keeps it fast-forward; the script refuses a HEAD that
+# carries no release tag.
 #
 # GATED ON THE FULL SUITE (design 2026-09-23 §8). Pull requests run only the
 # server tests their change can affect, so a promotion is where a selector
@@ -42,7 +42,7 @@ jobs:
     outputs:
       found: ${{ steps.look.outputs.found }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Evidence is a RUN that spec §8 names, of THIS commit, carrying a
       # green full-suite job: ci.yml's daily or manual full run on main, or
       # an earlier gate's called run on stable (its job is `full /
@@ -99,7 +99,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The script names the release by `git tag --points-at HEAD`; the
           # tag must be present, not a shallow single-commit fetch.

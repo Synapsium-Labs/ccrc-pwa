@@ -133,6 +133,9 @@ const CENSUS: readonly Row[] = [
   { source: 'dead-compare', file: 'pwa/src/fleet/groupFleet.ts', hits: 2, stances: ['true-of-pane'],
     why: 'a dead row\'s rank on the card and the stranded count over live rows: a sleeper\'s pane is not running; '
       + '`inArchivedFold` keeps it at the top level' },
+  { source: 'dead-compare', file: 'pwa/src/command/sessionEntries.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'the palette\'s session entries (D-6714) rank a dead row last among equal matches (tier 3): a sleeper\'s pane '
+      + 'is not running; it is still listed and found, and opening it is the session screen\'s wake' },
   { source: 'dead-compare', file: 'pwa/src/fleet/ArchiveAllPlane.tsx', hits: 1, stances: ['true-of-pane'],
     why: 'counts the batch\'s live rows: a sleeper is not running' },
   { source: 'dead-compare', file: 'pwa/src/screens/AccountsScreen.tsx', hits: 1, stances: ['true-of-pane'],

@@ -177,12 +177,17 @@ The test runner drives Playwright's Chromium, which
 `./node_modules/.bin/playwright install chromium` fetches once. Stop the two
 servers when the runs finish.
 
-### Reaching Instrument before there is a picker
+### Choosing a skin
 
-Instrument is a preview until its shell lands, and the Settings picker comes
-later. Until then, the command palette selects it: ⌘K (Ctrl+K off a Mac), then
-"Switch layout →", then "Instrument (preview)". "Match this device" on the
-same page returns to the default. Both are remembered per device (D-5103).
+"Match this device" is the default, and it asks the device, not the window:
+Instrument at a desk with a mouse (a pointer that can hover and is fine),
+Refined on a phone or a tablet (D-5096). It is read once per page load, so
+narrowing a desktop window does not change the skin, and neither does a
+reload: only the device's input does.
+
+Settings › Appearance › Layout picks one for this device, and so does the
+command palette: ⌘K (Ctrl+K off a Mac), then "Switch layout →", then a skin or
+"Match this device". Both are remembered per device (D-5103).
 
 Without a keyboard, or before the bundle runs, the browser console on the
 app's own page does the same, followed by a reload:

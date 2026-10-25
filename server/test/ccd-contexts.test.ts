@@ -21,8 +21,15 @@ import {
   ccdHeredocBraces,
 } from './consolidationCensus.js';
 
-/** The cross-context reference count on the day this ratchet landed. May only go DOWN. */
-const BASELINE = 521;
+/** The cross-context reference count on the day this ratchet landed. May only go DOWN, except a new destructive verb: ws-orphan (D-6629) adds the same eight lifecycle-journal calls into C1 that ws-collect makes; and ws-collect's loose arm (D-6625) adds six lifecycle-journal calls into C1's _lc_* helpers, the same journal the witnessed arm writes; and the read verb pr-landing (PL-1) adds the one `_reg_get` call into C1 that pr-state makes, to check a session's project and workspace.
+ *  Raised 535 -> 537 by D-6642: `ws-archive --if-no-pane` reads the pane through `_session_probe` and the unit through `_svc_is_active`.
+ *  And by an orchestrator ruling: D-6640 (ws-expire's `--child-of`) raised it 537 -> 540 for the three edges its new
+ *  child-of read makes from the EXPIRE verb into the registry and child-run helpers, measured after its rebase.
+ *  Lowered 540 -> 536 by ARCH-46: the registry-retire sequence is one `_reg_retire` helper with its own context row,
+ *  so its callers make one edge each instead of the inlined calls, measured after its rebase.
+ *  Raised 536 -> 537 by D-6638 (DR-26): the stale reclaim's one edge, the ladder's `_transcript_path` read, measured after its rebase.
+ *  Raised 537 -> 538 by pr-landing's one `_reg_get` edge (above), measured after its rebase onto DR-26. */
+const BASELINE = 538;
 
 const nameOf = (text: string): string => /^([A-Za-z_][A-Za-z0-9_]*)\(/.exec(text)![1]!;
 
@@ -146,7 +153,7 @@ describe('ccd cross-context references: the ratchet (D-6054)', () => {
     // call. A K row is a kernel or platform helper every context uses; add one here only with that reason in the PR.
     expect(ccdContextRows().map((r) => r.text.split('\t')).filter(([, c]) => c === 'K').map(([n]) => n)).toEqual([
       '_plat_mv_notdir', '_plat_ln_swap', '_plat_ctime', '_plat_mtime', '_plat_size', '_plat_btime', '_plat_devino',
-      '_plat_bytes', '_plat_epoch_ms', '_plat_cp_replace', '_plat_mktemp', '_plat_mktemp_d', '_plat_mode',
+      '_plat_bytes', '_plat_epoch_ms', '_plat_workdirid_pane', '_plat_cp_replace', '_plat_mktemp', '_plat_mktemp_d', '_plat_mode',
       '_plat_date_to_epoch', '_plat_sha256', '_plat_sha256_check', '_plat_uuid', '_plat_ppid', '_plat_cgroup',
       '_plat_timeout', '_plat_timeout_capability', '_plat_timeout_strict', 'die', '_json_str', '_fmt_eta', '_now_s_to',
       '_now_s', '_file_read_to',

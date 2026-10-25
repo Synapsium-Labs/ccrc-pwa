@@ -4,7 +4,7 @@
 // task did not implement — dispatching to one of them was its own, deliberately
 // distinct, refusal (exit 1, "not implemented yet") from an unrecognised verb
 // (exit 2, a USAGE error). All three have since graduated: `doctor` in Task 4
-// and `status` in Task 7 (both pinned by server/test/ccrc-doctor.test.ts), and
+// and `status` in Task 7 (both pinned by the `ccrc-doctor-*` test files), and
 // `adopt` in Task 8, pinned by the `ccrc: adopt` block below. The
 // "not implemented yet" register has no caller left and is gone from `ccrc`
 // with the last verb that used it — a refusal nothing can reach is a comment.
@@ -160,7 +160,7 @@ describe('ccrc: dispatch and usage', () => {
     // `install` joined it in stage 2d Task 6 — the verb the whole CLI is named
     // for, and the one an operator reaches for FIRST, before there is anything
     // on the box for the other five to measure. Same split: this line owns its
-    // discoverability, `server/test/ccrc-install.test.ts` owns what it does.
+    // discoverability, `server/test/ccrc-install-*.test.ts` owns what it does.
     //
     // `passwd` joined it in stage 3a Task 9 — the ONE writer of
     // `~/.ccrc/auth.scrypt`, and the only way to set the passphrase the PWA's
@@ -171,13 +171,13 @@ describe('ccrc: dispatch and usage', () => {
     //
     // `update` joined it in stage 4 Task 6 — fetch + verify a published
     // release, back up, re-run the install spine from the verified staged
-    // tree. Same split again: `server/test/ccrc-update.test.ts` owns what it
+    // tree. Same split again: `server/test/ccrc-update-*.test.ts` owns what it
     // does, this line owns that an operator can find it.
     //
     // `rollback` joined it in the centralised-update programme's wave 4
     // (design 2026-09-20 §11) — a verb, not the recipe `_upd_report` used to
     // print: update's own path, below the floor, under update's lock, then the
-    // gate and the sweep. Same split: `server/test/ccrc-update.test.ts` owns
+    // gate and the sweep. Same split: `server/test/ccrc-update-*.test.ts` owns
     // what it does, this line owns that an operator can find it.
     //
     // `uninstall`, `backup` and `logs` joined it in stage 4 Task 8 (spec §7):
@@ -193,19 +193,19 @@ describe('ccrc: dispatch and usage', () => {
     // `channel` joined it in W4a Task 8 — the READ-ONLY view of this box's
     // update-intent projection: what `ccrc update` with no --to would follow,
     // and the line `ccrc rollout --channel` reads over ssh. It takes no
-    // argument, by decision 15. `server/test/ccrc-update.test.ts` owns what it
+    // argument, by decision 15. `server/test/ccrc-update-*.test.ts` owns what it
     // does.
     //
     // `watchdog` joined it in W4a Task 9 — the verb `ccrc-update-watchdog.timer`
     // runs every minute on a server/both box: it re-measures a self-update
     // whose report went stale and reverts only a box that fails its health
     // probe. A timer's verb is still a verb an operator can type by hand.
-    // `server/test/ccrc-update.test.ts` owns what it does.
+    // `server/test/ccrc-update-*.test.ts` owns what it does.
     //
     // `versions` joined it in W6 Task 5 (design 2026-09-20 §11) — the kept
     // release trees under ~/ccrc-versions and the one hand-run prune, which
     // never removes a version the box needs. Same split:
-    // `server/test/ccrc-update.test.ts` owns what it does, this line owns that
+    // `server/test/ccrc-update-*.test.ts` owns what it does, this line owns that
     // an operator can find it.
     //
     // `codex` joined it in Plan 2b-2 Task 5 — `ccrc codex start|stop|status|login <id>`,

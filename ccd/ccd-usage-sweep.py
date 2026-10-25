@@ -246,6 +246,41 @@ def read_uuid_map(registry):
     return out
 
 
+LEDGER_KEEP_SECONDS = 30 * 86400
+
+
+def merge_uuid_ledger(path, current, now):
+    """D-6799: ccd rewrites `$REG/<id>.uuid` on every uuid rotation and removes it with
+    the row, so the registry alone knows only each session's CURRENT uuid. This ledger,
+    kept beside the sweep's own output, remembers every uuid this sweep has ever seen
+    a row name: {uuid: {"id": ccdId, "seen": epoch}}. The CURRENT map wins over the
+    ledger (a uuid a live row names is that row's), a stale entry is dropped after
+    LEDGER_KEEP_SECONDS unseen, and an unreadable or malformed ledger is rebuilt from
+    the current map alone. Returns the merged {uuid: ccdId}. Still partial: a rotation
+    that begins and ends between two sweeps is never seen."""
+    ledger = {}
+    try:
+        with open(path) as f:
+            raw = json.load(f)
+        if isinstance(raw, dict):
+            for u, row in raw.items():
+                if isinstance(row, dict) and isinstance(row.get("id"), str) and isinstance(row.get("seen"), (int, float)):
+                    ledger[u] = {"id": row["id"], "seen": row["seen"]}
+    except (OSError, ValueError):
+        pass
+    for u, cid in current.items():
+        ledger[u] = {"id": cid, "seen": now}
+    ledger = {u: r for u, r in ledger.items() if now - r["seen"] <= LEDGER_KEEP_SECONDS}
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(ledger, f, sort_keys=True)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+    return {u: r["id"] for u, r in ledger.items()}
+
+
 def read_seven(limits, account):
     try:
         with open(os.path.join(limits, account + ".json")) as f:
@@ -314,6 +349,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--days", type=int, default=7)
     ap.add_argument("--now", type=int, default=None)
+    ap.add_argument("--uuid-ledger", default=None, help="where the uuid history is kept (default: <out>.uuids.json)")
     ap.add_argument("--reap-orphans", action="store_true")
     a = ap.parse_args()
     now = a.now if a.now is not None else int(time.time())
@@ -328,6 +364,8 @@ def main():
     carried = {}
     records = scan(dirs, tokens, now, a.days, stats, carried)
     uuid_map = read_uuid_map(a.registry)
+    # the history-aware map, for `perCcdSession` only: `perSession`'s `ccdId` stays the live map
+    history_map = merge_uuid_ledger(a.uuid_ledger or (a.out + ".uuids.json"), uuid_map, now)
 
     per_model, per_class, per_effort, per_account, per_session = {}, {}, {}, {}, {}
     unpriced_records, unpriced_classes = {}, {}
@@ -356,6 +394,24 @@ def main():
         s["models"][rec["model"] or "(none)"] = s["models"].get(rec["model"] or "(none)", 0) + 1
         s["efforts"][rec["effort"]] = s["efforts"].get(rec["effort"], 0) + 1
 
+    # D-6799: the SAME deduplicated records, grouped by REGISTRY session id (the
+    # transcript's session uuid -> `$REG/<id>.uuid`, plus every earlier uuid the
+    # ledger remembers). `perSession` above is keyed by transcript uuid and a swap
+    # or a rebind gives one registry session several uuids, so a reader joining a
+    # run to its spend needs this key. PARTIAL: a uuid that came and went between
+    # two sweeps was never seen, and a registry row's uuids from before the ledger
+    # existed are unknown. A uuid no row ever named is counted apart, never merged.
+    per_ccd, unmapped_records, unmapped_sessions = {}, 0, set()
+    for rec in records.values():
+        cid = history_map.get(rec["sessionId"]) if rec["sessionId"] else None
+        if cid is None:
+            unmapped_records += 1
+            unmapped_sessions.add(rec["sessionId"] or "(none)")
+            continue
+        c = per_ccd.setdefault(cid, bucket())
+        add(c, rec)
+    per_ccd_unmapped = {"records": unmapped_records, "sessions": len(unmapped_sessions)}
+
     for account in sorted(set(dirs.values())):
         acct = per_account.setdefault(account, {"n": 0, "apiUsd": 0.0, "perClass": {}})
         acct["carriedAcrossDirs"] = carried.get(account, 0)
@@ -379,7 +435,8 @@ def main():
            "windowDays": a.days, "now": now, "scan": stats, "attribution": ATTRIBUTION,
            "rates": {"label": RATES_LABEL, "table": {k: list(v) for k, v in PROXY_RATES_USD_PER_MTOK.items()}},
            "perModel": per_model, "perClass": per_class, "perEffort": per_effort,
-           "perAccount": per_account, "perSession": per_session, "orphansReaped": reaped,
+           "perAccount": per_account, "perSession": per_session,
+           "perCcdSession": per_ccd, "perCcdSessionUnmapped": per_ccd_unmapped, "orphansReaped": reaped,
            "orphansSkippedUnreadable": orphans_skipped_unreadable}
     tmp = a.out + ".tmp"
     with open(tmp, "w") as f:

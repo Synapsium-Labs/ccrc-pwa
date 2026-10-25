@@ -10,6 +10,7 @@ import {
   docsPageUrl, entryView, githubBlobUrl,
   type DocPin, type DocsPageLocation, type DocsTreeOk, type EntryBadge, type EntryMode, type GithubTarget,
 } from '../../../shared/docs';
+import { doorMark } from '../command/door';
 import { formatAge } from '../fleet/formatReset';
 import { openExternal } from '../lib/markdown';
 import { navigate } from '../lib/router';
@@ -399,7 +400,14 @@ export function DocsHead(p: { readonly page: DocsPageLocation; readonly visit: D
   return (
     <header className="docs-head">
       <div className="docs-head-bar">
-        <button type="button" className="docs-back" aria-label={DOCS_HEAD_TEXT.back} onClick={() => navigate(docsUpHref(page))}>
+        {/* The index's up door goes to the fleet: it is the `go-fleet` door there (W2 Task S5), and only there. */}
+        <button
+          type="button"
+          className="docs-back"
+          aria-label={DOCS_HEAD_TEXT.back}
+          onClick={() => navigate(docsUpHref(page))}
+          {...(docsUpHref(page) === '/' ? doorMark('go-fleet') : {})}
+        >
           ‹
         </button>
         <Crumbs key={crumbs.at(-1)?.href} crumbs={crumbs} />

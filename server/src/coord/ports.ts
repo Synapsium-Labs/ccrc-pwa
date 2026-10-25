@@ -23,13 +23,14 @@ interface CcdAnswer {
   signal: string | null | Unmeasured;
 }
 
-/** D-6034 (ARCH-10, #543, step 1): the runner's `ran` arm, CARRIED by `ccd()` (`lifecycle.ts`), additive: on
- *  `ran: false` every existing field is what it was before the arm existed (`ok: false`, the runner's `stderr`, and
- *  `killed`/`signal` from the same hop), so a reader of `ok` alone is unchanged. A ran answer carries no `ran` key
- *  yet; step 2 makes it required. A lane that classifies a refusal reads `ran === false` FIRST and reports it as
- *  unmeasured and retryable, never as a refusal: a transport failure is never permission to act, nor a verdict. */
+/** D-6034, D-6840 (ARCH-10, #543): the runner's `ran` discriminant, CARRIED by `ccd()` (`lifecycle.ts`) and
+ *  required on both arms (an agent older than the key is read as `ran: true` by `asExecResult`): `ran: true` is a ccd that ran and exited (`ok` is its exit code 0); `ran: false` is the not-ran arm, whose
+ *  every other field is what it was before the arm existed (`ok: false`, the runner's `stderr`, and `killed`/`signal`
+ *  from the same hop), so a reader of `ok` alone narrows to the ran arm by `ok` itself. A reader that classifies a
+ *  refusal, a box word or a die reads `ran === false` FIRST and reports it as unmeasured and retryable, never as a
+ *  refusal: a transport failure is never permission to act, nor a verdict. */
 export type CcdResult =
-  | (CcdAnswer & { ran?: true })
+  | (CcdAnswer & { ran: true })
   | (CcdAnswer & NotRan & { ok: false });
 
 /** The single ccd capability: run one `ccd` verb. Failure contract: a non-zero exit is `ok: false` with the verb's

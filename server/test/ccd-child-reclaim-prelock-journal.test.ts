@@ -118,7 +118,7 @@ describe('wave 5’s reader classes each journaled die as a pre-lock FAILURE, ne
       expect(isChildReclaimPreLockToken(j.refusal), t).toBe(true);
       expect(childReclaimFailureLine(j), t).toBe(true);
       expect(childReclaimTerminalRefusal(
-        { sessionId: CHILD_ID, outcome: j.outcome, refusal: j.refusal, at: j.at, failingSince: null },
+        { outcome: j.outcome, refusal: j.refusal },
         childReclaimTokenKind), t).toBe(false);
       expect(lcRefusalWord(t), t).toBe(LC_REFUSAL_WORD[t as LcRefusalToken]);
       expect(lcRefusalWord(t), t).not.toBeNull();

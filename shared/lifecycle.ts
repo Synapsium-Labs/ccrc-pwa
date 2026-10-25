@@ -34,16 +34,45 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   // then never collect". Session-bound (S), collected by age PLUS the absence of
   // a live owner — the live-session, open-fd and newest-mtime checks the
   // collector's own header states.
-  { name: 'claude-tmp-session-dirs', root: '${TMPDIR:-/tmp}/claude-<uid>/<project>/<session-uuid>/ + loose top-level entries', pattern: 'S',
+  { name: 'claude-tmp-session-dirs', root: '${TMPDIR:-/tmp}/claude-<uid>/<project>/<session-uuid>/ + loose top-level entries; also /tmp/claude-<uid>/ when it differs, and a witnessed child leaf\'s ~/.cc-tmp/<id>/claude-<uid>/ (DR-8)', pattern: 'S',
     creators: ['claude (Claude Code: scratchpad, background-task output)', 'agents writing into the root'],
-    collector: 'ccd-tmp-sweep (hourly; not live, not in use, nothing newer than CCD_TMP_SWEEP_MAX_AGE_DAYS=7)',
-    bound: 'session lifetime + 7 days', tier: '138G uncollected on the fleet host 2026-09-22; single task .output files 1-4G', ruling: null },
+    collector: 'ccd-tmp-sweep (hourly; dead units: not live, not in use, nothing newer than CCD_TMP_SWEEP_MAX_AGE_DAYS=7, 2 days under pressure). Its live arm (DR-8, D-6620, shadow unless ~/.ccrc/tmp-sweep-live-arm exists) takes a live unit\'s scratchpad/tasks entry untouched for 14 days (3 under pressure), or, over the size budget, the oldest entries untouched 48 hours, into <root>/.ccd-tmp-quarantine/<uuid>/ and deletes them a 24-hour grace later after a fresh holder ask',
+    bound: 'session lifetime + 7 days; a live session\'s scratch: each entry 14 days untouched, and a size budget of 20 GiB per session (taken down to 15 GiB, 48-hour floor, 24 hours after the notice)', tier: '138G uncollected on the fleet host 2026-09-22; single task .output files 1-4G; 194 GiB of live scratch under one root (2026-10-23)', ruling: null },
+  // DR-8 (D-6620): the live arm's record, the one reader of which is the server (DR-12). Rolling (R): replaced whole
+  // by a rename at the end of every pass, shadow or live, so it holds the last scan\'s sessions and the moved rows of
+  // the last 7 days or 1,000, whichever is fewer.
+  { name: 'tmp-sweep-census', root: '~/.ccrc/tmp-sweep.json', pattern: 'R',
+    creators: ['ccd-tmp-sweep'], collector: 'ccd-tmp-sweep (replaced whole every pass; moved rows kept 7 days or 1,000)',
+    bound: 'rolling', tier: 'at most 1,000 moved rows plus one row per live session', ruling: null },
   // D-5888 (#298): a `--child` workspace's temp root, the policy's ruling 4. Only the per-id leaf: loose
-  // top-level entries in ~/.cc-tmp are a separate class with no owner yet, and this row does not claim them.
+  // top-level entries in ~/.cc-tmp are a separate class, and this row does not claim them. D-5888 declined them because
+  // nothing identified them; that is REVERSED by D-6627 (fleet disk retention spec 2026-10-23 section 2.4): the loose
+  // arm of ws-collect binds an entry's own identity in a token, and the class has its own row, `cc-tmp-loose-entries`.
   { name: 'child-tmp-roots', root: '~/.cc-tmp/<id>/', pattern: 'S',
     creators: ['ccd (_child_tmpdir: a --child workspace spawns with TMPDIR here)', 'everything that follows TMPDIR in that session, Claude Code\'s scratch included'],
     collector: 'the reclaim tail (_ws_tmproot_remove, kept while in use); ws-collect for a root that outlived its row (server-composed, witness-gated)',
     bound: 'the child\'s lifetime; a root kept in use, until ws-collect takes it on a server-minted audit token (witness-gated)', tier: 'per child; the scratch ccd-tmp-sweep would otherwise hold under claude-<uid>', ruling: null },
+  // Fleet disk retention DR-19 (D-6631; spec 2026-10-23 section 2.3; resolves policy Open Question 6, option (a)): linked
+  // worktrees no registry row names. W: each is a checkout of a project repository. The server's orphan-tree lane is
+  // the collector, in shadow until `orphan-tree-live` stands; it removes only a clean tree whose HEAD is on a remote (or a
+  // rescued one), never with --force.
+  { name: 'ccd-orphan-worktrees', root: '~/worktrees/<project>/<slug> with no registry row (a ws-gc orphan)', pattern: 'W',
+    creators: ['git worktree add outside ccd ws-add', 'a registry row removed by hand'],
+    collector: 'the orphan-tree lane (server; ccd ws-audit --orphans, ws-audit --orphan-hex, ws-orphan): two unchanged audit tokens at least 1 hour apart, shadow unless orphan-tree-live stands; ws-gc --prune stays the operator\'s',
+    bound: 'until the lane removes it: clean, HEAD on a remote (or pinned into the attic under the rescue arm), unregistered, unheld, quiet for 7 days',
+    tier: '5 trees / 5.16G on the fleet host in the 2026-08 audit', ruling: null },
+  { name: 'agent-worktrees', root: '<main>/.claude/worktrees/<name> and <main>/.superpowers/worktrees/<name> of any checkout', pattern: 'W',
+    creators: ['Claude Code (subagent and workflow checkouts)', 'the superpowers worktree skill'],
+    collector: 'the orphan-tree lane (server), the same ladder as ccd-orphan-worktrees; their branches are left, because the owner is Claude Code or the skill',
+    bound: 'until the lane removes it: clean, HEAD on a remote (or rescued), unregistered, unheld, quiet for 7 days',
+    tier: '~28G across ~94 worktrees measured 2026-08 (the policy\'s largest unassigned class)', ruling: null },
+  // D-6627: a top-level entry of ~/.cc-tmp that no witness and no registry row names. The loose arm of ws-collect owns it
+  // (the same lane, quarantine, re-proof and switch as the witnessed arm), shadowed until $REG/collect-loose-live stands.
+  { name: 'cc-tmp-loose-entries', root: '~/.cc-tmp/<name>', pattern: 'S',
+    creators: ['everything that writes into ~/.cc-tmp outside a witnessed child leaf (a tool run with TMPDIR set by hand, a human)'],
+    collector: 'ws-collect loose arm (server-composed; a regular file or directory of this uid, quiet for 48 hours (24 under disk pressure), unheld, no registry row at, inside or through it, bound by a token over its own identity)',
+    bound: '48 hours untouched (24 under disk pressure), then taken on a server-minted audit token; links and special files stay the operator\'s',
+    tier: '18 directories and 105 loose files, about 6.7 GiB, measured 2026-10-06', ruling: null },
   // Session-continuity wave 4: the pane-scope sweep's verdict record. Rolling (R):
   // rewritten whole by rename every tick, so it holds only the scopes dead NOW;
   // it lives in the runtime dir, so a reboot empties it — the safe direction for
@@ -78,8 +107,12 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd/history/sweep.mjs'], collector: null, bound: 'store lifetime',
     tier: '~0.2-0.25 GB/year (inferred); one file per UTC month and writer, never rewritten; doctor WARNs journal-growth above 40 MB in a trailing 30 days',
     ruling: 'kept with the store; removed only with it (uninstall --purge --purge-history)' },
-  { name: 'history-switches', root: '~/.ccrc/history-off, ~/.ccrc/history-max-gb', pattern: 'O',
-    creators: ['operator shell'], collector: null, bound: 'until removed', tier: '<64 B each',
+  // W2-2b (W2-D49; D-5768): headless-on joins the switches. It is the one with content, a store line and one line per
+  // listed family, so its tier is its own. L0 imports nothing, so the tier names HEADLESS_LIST_MAX_BYTES as text and
+  // carries its KiB figure; lifecycle.test.ts holds the figure to lib's constant and to the marker grammar.
+  { name: 'history-switches', root: '~/.ccrc/history-off, ~/.ccrc/history-max-gb, ~/.ccrc/history/headless-on', pattern: 'O',
+    creators: ['operator shell'], collector: null, bound: 'until removed',
+    tier: '<64 B each; `headless-on` bounded at 64 KiB (HEADLESS_LIST_MAX_BYTES), one store line plus one line per listed family',
     ruling: 'touched by hand; persists until removed (no writer in the tree, pinned by single-definition.test.ts)' },
   // ccrc history, W1-B2 (spec 2026-10-05 §9.4): the operator's own snapshots (`doctor --backup`).
   { name: 'history-backups', root: '~/.ccrc/history/db/backups/<ts>.db, and its .<ts>.db.tmp while one is written', pattern: 'O',
@@ -123,7 +156,13 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   // The window is named, not numbered: RUN_QUIET_S lives once, in the .mjs, which L0 cannot import.
   { name: 'server-test-run-dirs', root: '${TMPDIR:-/tmp}/ccrc-testrun-<6>/ (+ .dead mid-removal)', pattern: 'E',
     creators: ['server vitest globalSetup (server/test/run-tmp.globalsetup.mjs)'],
-    collector: 'server/test/run-tmp.globalsetup.mjs (teardown; SIGTERM/SIGINT/SIGHUP/exit arm; a later run\'s reap at setup and teardown: owner socket refuses AND ctime-quiet for RUN_QUIET_S)',
-    bound: 'one test run; after a SIGKILL, until a later run under the same TMPDIR finds it quiet',
+    collector: 'server/test/run-tmp.globalsetup.mjs (teardown; SIGTERM/SIGINT/SIGHUP/exit arm; a later run\'s reap at setup and teardown: owner socket refuses AND ctime-quiet for RUN_QUIET_S); ccd/ccd-tmp-sweep\'s test-run arm (DR-10, D-6622) for a root no later run visits: no socket bound at live.sock, ctime-quiet 6 h (1 h under pressure), unheld, in the box\'s TMPDIR and each witnessed child leaf with a row; shadow unless the live arm\'s marker exists',
+    bound: 'one test run; after a SIGKILL, until a later run under the same TMPDIR finds it quiet, or the sweep\'s test-run arm does (6 h quiet)',
     tier: '1,551 dirs / 5.74 GiB from five timed-out shards in one morning (#316, 2026-10-07)', ruling: null },
+  // Fleet disk retention, DR-29 (spec 2026-10-23 §Docs and registry): an archived workspace nobody claims, children
+  // included (a child only under its own marker, in shadow until armed). ccd's ws-expire removes it; the server asks.
+  { name: 'archived-workspaces', root: '<workdir> of an archived registry row (worktree, clips, tmp root)', pattern: 'W',
+    creators: ['ccd ws-archive'],
+    collector: 'ccd ws-expire, asked by the server\'s expiry lane (children included, a child only under its own capability and marker)',
+    bound: '7 days after the archive', tier: 'one worktree per archived row', ruling: null },
 ];

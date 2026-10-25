@@ -268,10 +268,10 @@ type MeasuredPr = 'open' | 'closed' | 'merged' | 'merge-unproven' | 'none' | 'un
  *  is no bound row at all (`rows: []`), used by the untrusted-claim-field
  *  tests below. */
 const runnerFor = (pr: MeasuredPr): Runner => async () => {
-  if (pr === 'unknown') return { code: 1, stdout: '', stderr: 'boom: pr-state unreachable' };
+  if (pr === 'unknown') return { ran: true, code: 1, stdout: '', stderr: 'boom: pr-state unreachable' };
   const rows: Record<string, unknown>[] = pr === 'none' ? [] :
     [prRow(pr === 'open' ? 'OPEN' : pr === 'closed' ? 'CLOSED' : 'MERGED', pr !== 'merge-unproven')];
-  return { code: 0, stdout: `${ccdLine(rows)}\n`, stderr: '' };
+  return { ran: true, code: 0, stdout: `${ccdLine(rows)}\n`, stderr: '' };
 };
 
 /** `testDeps` (the house harness) builds a full `Deps`, wired through the real
@@ -390,7 +390,7 @@ describe('verifyDone — the mismatch table', () => {
     // said nothing usable about this session".
     const root = project(TIP, null);
     const noLineRunner: Runner = async () => ({
-      code: 0,
+      ran: true, code: 0,
       stdout: `${JSON.stringify({ id: SESSION, phase: 'unknown', reason: 'error' })}\n`,
       stderr: '',
     });
@@ -869,7 +869,7 @@ describe('verifyReviewDone — a report and its tip are one pair (design 2026-09
   it('never runs pr-state — a review run has no PR to measure', async () => {
     const calls: string[][] = [];
     const root = project(TIP, null);
-    const deps = fingerprintDeps(async (_c, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; }, root);
+    const deps = fingerprintDeps(async (_c, args) => { calls.push(args); return { ran: true, code: 0, stdout: '', stderr: '' }; }, root);
     await verifyReviewDone(deps, RUN, claimFor(TIP, reportAt(root)));
     expect(calls.filter((c) => c[0] === 'pr-state')).toEqual([]);
   });

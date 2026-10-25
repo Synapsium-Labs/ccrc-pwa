@@ -32,7 +32,7 @@ export const itDarwin = it.skipIf(!IS_DARWIN);
  *  the `~/ccrc` flip, one `os.replace` — and `cmd_install`'s preflight
  *  probe, which proves an interpreter RUNS (macOS's `/usr/bin/python3` is an
  *  `xcode-select` stub until the Command Line Tools are installed). The
- *  `python3` stubs of `ccrc-install.test.ts` and `ccrc-update.test.ts` hand
+ *  `python3` stubs of `ccrc-installFixture.ts` and `ccrc-updateFixture.ts` hand
  *  exactly these to the real interpreter and refuse every other `-c`, so a
  *  new `python3 -c` on the install path is seen, not silently run.
  *  `macos-platform.test.ts` pins the first against `_plat_ln_swap`'s argv

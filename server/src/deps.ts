@@ -16,7 +16,7 @@ import type { FleetIdentityCell } from './fleetidentity.js';
 import type { KeyedQueue } from './inject/queue.js';
 import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
-import type { Presence } from './presence.js';
+import type { Viewers } from './viewer.js';
 import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childReclaim.js';
 import type { BoxTokenHolder } from './coord/token.js';
 import type { TokenRouteDriver } from './token/routes.js';
@@ -99,7 +99,7 @@ export interface Deps {
   notifyLog?: NotifyLog;
   /** Which sessions a human is currently looking at, so `FleetWatcher` can
    *  suppress a push for the pane already on screen. */
-  presence?: Presence;
+  viewers?: Viewers;
   /** The child-reclaim sweep's call into wave 3's executor, as a SEAM
    *  (child-reclamation wave 4). Production leaves it UNSET: the watcher then
    *  composes the one executor both triggers share — `reclaimChild` on the

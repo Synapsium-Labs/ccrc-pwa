@@ -46,7 +46,7 @@ describe('the reclaim parser reads it as a stuck failure', () => {
     expect(childReclaimFailureLine({ outcome: 'failed', refusal: W })).toBe(true);
     expect(childReclaimTokenKind(W)).toBeNull();
     expect(childReclaimTerminalRefusal(
-      { sessionId: 'demo-quiet-basin', outcome: 'failed', refusal: W, at: 1, failingSince: 1 }, childReclaimTokenKind,
+      { outcome: 'failed', refusal: W }, childReclaimTokenKind,
     )).toBe(false);
   });
 });

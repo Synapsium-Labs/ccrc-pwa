@@ -8,9 +8,9 @@ import { boardHome, type FleetSession, type RunSummary } from '../../../shared/a
 import { groupFleet } from '../fleet/groupFleet';
 import { nestFleet } from '../fleet/nestFleet';
 import { isRunClosed, runCard } from '../fleet/runWords';
-import { sessionLabel } from '../fleet/sessionLabel';
 import { matchRoute, ROUTES } from '../lib/routes';
 import type { Command, CommandContext } from './registry';
+import { sessionEntries } from './sessionEntries';
 
 /** The `g` chord's second key per route. Archive and Docs have none: `a` is
  *  Accounts and `d` is unclaimed, and both are doors off the fleet rather
@@ -106,15 +106,8 @@ export function baseCommands(): Command[] {
       title: 'Open session…',
       group: 'Sessions',
       when: (ctx) => ctx.sessions.length > 0,
-      run: (ctx) => ({
-        title: 'Open session',
-        commands: ctx.sessions.map((s): Command => ({
-          id: `open-session-${s.id}`,
-          title: sessionLabel(s),
-          group: s.project,
-          run: (c) => c.navigate(`/s/${encodeURIComponent(s.id)}`),
-        })),
-      }),
+      // The same entries the top search finds (D-6714), not search-only here: the page lists the whole fleet.
+      run: (ctx) => ({ title: 'Open session', commands: sessionEntries(ctx.sessions, ctx.runs, 'page') }),
     },
     {
       id: 'next-session',

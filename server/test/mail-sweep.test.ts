@@ -24,7 +24,7 @@ import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { PushPayload } from '../src/push.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
 import { MAIL_GATES, STALL_LEVEL_TEXT } from '../../shared/api.js';
@@ -263,19 +263,19 @@ const harness = (opts: { hasSession?: boolean; substrate?: string; panes?: (stri
       // D-309 (was D-B8-13): `hasSession: false` means the session is PROVEN gone, so the
       // stub says so the way the real binary does — a bare rc=1 with silent
       // stderr now means `unknown`, which is `substrate`'s job to simulate.
-      if (opts.substrate !== undefined) return { code: 1, stdout: '', stderr: `${opts.substrate}\n` };
+      if (opts.substrate !== undefined) return { ran: true, code: 1, stdout: '', stderr: `${opts.substrate}\n` };
       return opts.hasSession === false
-        ? { code: 1, stdout: '', stderr: "can't find session: cc-x\n" }
-        : { code: 0, stdout: '', stderr: '' };
+        ? { ran: true, code: 1, stdout: '', stderr: "can't find session: cc-x\n" }
+        : { ran: true, code: 0, stdout: '', stderr: '' };
     }
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
     if (args[0] === 'capture-pane') {
       const pane = panes[Math.min(capIdx, panes.length - 1)] ?? null;
       capIdx++;
-      return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
     }
-    if (args[0] === 'send-keys') return { code: 0, stdout: '', stderr: '' };
-    return { code: 1, stdout: '', stderr: '' };
+    if (args[0] === 'send-keys') return { ran: true, code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 1, stdout: '', stderr: '' };
   };
   return { home, calls, run };
 };
@@ -293,7 +293,7 @@ const primedWatcher = async (
   h: Harness, coord: CoordStore, over: Partial<Deps> = {},
 ): Promise<{ w: FleetWatcher; deps: Deps }> => {
   const deps: Deps = { ...testDeps(h.home, h.run), coord, ...over };
-  const w = new FleetWatcher(deps, new Bus(), 2000);
+  const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
   await w.tick();
   return { w, deps };
 };
@@ -534,7 +534,7 @@ describe('sweepMail: the gate', () => {
     seedHookState(h.home, ID);
     seedLiveState(h.home);
     queueTestDelivery(coord, ID, ENVELOPE);
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run), coord }, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(h.home, h.run), coord }), new Bus(), 2000);
 
     await w.tick();
     expect(literalSends(h.calls)).toEqual([]);
@@ -747,16 +747,16 @@ describe('sweepMail: the send', () => {
       if (args[0] === 'has-session') {
         hasSessionCalls++;
         await gate;   // every call parks here until releaseGate() below
-        return { code: 0, stdout: '', stderr: '' };
+        return { ran: true, code: 0, stdout: '', stderr: '' };
       }
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
       if (args[0] === 'capture-pane') {
         const pane = panes[Math.min(capIdx, panes.length - 1)] ?? null;
         capIdx++;
-        return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+        return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
       }
-      if (args[0] === 'send-keys') return { code: 0, stdout: '', stderr: '' };
-      return { code: 1, stdout: '', stderr: '' };
+      if (args[0] === 'send-keys') return { ran: true, code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 1, stdout: '', stderr: '' };
     };
     const h: Harness = { home, calls, run };
     const coord = store(h.home);
@@ -3510,7 +3510,7 @@ describe('sweepMail: a hibernated recipient is woken, never parked (D-5242)', ()
   };
   const ccdRec = (): { calls: string[][]; runCcd: Deps['runCcd'] } => {
     const calls: string[][] = [];
-    return { calls, runCcd: async (a) => { calls.push([...a]); return { ok: true, stdout: '', stderr: '', killed: false, signal: null }; } };
+    return { calls, runCcd: async (a) => { calls.push([...a]); return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null }; } };
   };
   const ensures = (calls: string[][]): string[] => calls.filter((a) => a[0] === 'ensure').map((a) => a[1]!);
   const SLEEPERS = ['project-a-basin-a', 'project-a-basin-b', 'project-a-basin-c', 'project-a-basin-d', 'project-a-basin-e'];
@@ -3673,19 +3673,19 @@ describe('sweepMail: a live recipient\'s mail PARKS, never rejects (D-5838)', ()
     const run: Runner = async (_cmd, args) => {
       calls.push([...args]);
       if (args[0] === 'has-session') {
-        return st.gone === true ? { code: 1, stdout: '', stderr: "can't find session: cc-x\n" }
-          : { code: 0, stdout: '', stderr: '' };
+        return st.gone === true ? { ran: true, code: 1, stdout: '', stderr: "can't find session: cc-x\n" }
+          : { ran: true, code: 0, stdout: '', stderr: '' };
       }
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
       if (args[0] === 'capture-pane') {
-        return st.gone === true ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: `❯ ${st.box}\n`, stderr: '' };
+        return st.gone === true ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: `❯ ${st.box}\n`, stderr: '' };
       }
       if (args[0] === 'send-keys') {
         if (args[3] === '-l') st.box += args[5]!;
         else if (args[3] === 'Enter' && st.enterWorks) st.box = '';
-        return { code: 0, stdout: '', stderr: '' };
+        return { ran: true, code: 0, stdout: '', stderr: '' };
       }
-      return { code: 1, stdout: '', stderr: '' };
+      return { ran: true, code: 1, stdout: '', stderr: '' };
     };
     return { home, calls, run };
   };
@@ -3865,6 +3865,11 @@ describe('sweepMail: a live recipient\'s mail PARKS, never rejects (D-5838)', ()
     expect(row.state).toBe('rejected');
     expect(row.rejectCode).toBe('undeliverable');
     expect(row.lastError).toBe('parked 24 h, never delivered: enter-ignored');
+    // ARCH-19: the sender is told of the rejection too, after the park notice.
+    const rejected = coord.db.prepare("SELECT body FROM mail WHERE toId = ? AND subject LIKE 'mail rejected%'")
+      .all(SENDER) as unknown as { body: string }[];
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.body).toContain('was rejected after 24 h parked');
   }, 30_000);
 
   it('tells the SENDING session once, by system mail, naming the subject, the recipient and the condition', async () => {
@@ -3989,7 +3994,7 @@ describe('sweepMail: a live recipient\'s mail PARKS, never rejects (D-5838)', ()
     const orig = h.run;
     const run: Runner = async (cmd, args) => {
       if (args[0] === 'send-keys' && args[3] === 'Enter') { enters++; if (enters === 2) absent = true; }
-      if (args[0] === 'capture-pane' && absent) return { code: 0, stdout: 'Compacting conversation…\n', stderr: '' };
+      if (args[0] === 'capture-pane' && absent) return { ran: true, code: 0, stdout: 'Compacting conversation…\n', stderr: '' };
       return orig(cmd, args);
     };
     const h2 = { ...h, run };

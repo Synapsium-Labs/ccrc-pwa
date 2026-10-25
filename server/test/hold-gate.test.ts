@@ -64,11 +64,11 @@ const mergedLine = (id: string, number = 42): string => JSON.stringify({
 function runnerFor(prOut: string | (() => string), calls: string[][], pid = '4242'): Runner {
   return async (_cmd, args) => {
     calls.push(args);
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${pid}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'pr-state') return { code: 0, stdout: typeof prOut === 'function' ? prOut() : prOut, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${pid}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'pr-state') return { ran: true, code: 0, stdout: typeof prOut === 'function' ? prOut() : prOut, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
 }
 
@@ -79,14 +79,14 @@ const liveIdle = (home: string, pid = '4242'): void => {
     JSON.stringify({ pid: Number(pid), sessionId: '1'.repeat(36), cwd: '/d', status: 'idle', statusUpdatedAt: 1 }));
 };
 
-/** `prSweepStartedAt` returns to 0 in `sweepPr`'s own `finally` — the one
+/** The PR flight clears when the sweep settles — the one
  *  signal that a whole sweep (`sweepMerged` included) has actually finished,
  *  same reasoning as `pr-sweep.test.ts`'s own waits. */
 const sweepSettled = (w: FleetWatcher): Promise<void> =>
-  vi.waitFor(() => { expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0); });
+  vi.waitFor(() => { expect(w.inFlight('pr')).toBeNull(); });
 
 const forceDue = (w: FleetWatcher): void => {
-  (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+  w.kick('pr');
 };
 
 /** THIS lane's pushes only. A watcher built with a `coord` also raises the run

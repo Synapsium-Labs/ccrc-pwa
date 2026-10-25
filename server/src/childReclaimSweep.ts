@@ -20,6 +20,7 @@ import {
   type ChildReclaimLeafKeptAttention, type ChildReclaimLeafKeptMany, type LeafKeptWord, type LifecycleMeas,
   type LifecycleOutcome, type MirroredLifecycleEvent, type RunState,
 } from '../../shared/api.js';
+import { CCD_LOCK_UNOPENABLE } from '../../shared/ccd-refusal.js';
 
 /** How long a presence defer may continue before the reclaim proceeds past it
  *  (spec §5.7, "Presence, and its bound"). Unbounded would be worse than
@@ -1098,7 +1099,7 @@ const FAILED: LifecycleOutcome = 'failed';
  *  journaled once the session id is valid. The usage, bad-session-id and python3 dies are never
  *  journaled, so they are never here. */
 export const CHILD_RECLAIM_PRE_LOCK_TOKEN = {
-  flock: 'flock-unavailable', lock: 'lock-unopenable', token: 'token-malformed', runId: 'run-id-malformed',
+  flock: 'flock-unavailable', lock: CCD_LOCK_UNOPENABLE, token: 'token-malformed', runId: 'run-id-malformed',
 } as const satisfies Readonly<Record<'flock' | 'lock' | 'token' | 'runId', LcRefusalToken>>;
 export type ChildReclaimPreLockToken = (typeof CHILD_RECLAIM_PRE_LOCK_TOKEN)[keyof typeof CHILD_RECLAIM_PRE_LOCK_TOKEN];
 const CHILD_RECLAIM_PRE_LOCK_TOKENS: readonly string[] = Object.values(CHILD_RECLAIM_PRE_LOCK_TOKEN);
@@ -1184,6 +1185,7 @@ export function childReclaimTierSeed(
       // (a word-less failure, neutral): the live memory's tier stands through both, so the walk reads past them
       if (kind !== 'terminal' && kind !== 'gone') continue;
     }
+    if (childReclaimTerminalRefusal(e, kindOf)) break;
     if (!childReclaimFailureLine(e)) break;
     if (!childReclaimTierCountable(e.refusal)) continue;
     if (token !== null && e.refusal !== token) break;
@@ -1192,6 +1194,11 @@ export function childReclaimTierSeed(
   }
   return token === null ? CHILD_RECLAIM_TIER_NONE : childReclaimTierFrom(token, run, stuckOf(token));
 }
+
+/** The ONE terminal word ccd journals on a `failed` line (D-6633): the nested rescue's measure answers
+ *  `nested-rescue-too-large` through `_lc_fail`, before it started anything. It is settled all the same, so it reads as
+ *  a terminal refusal. No other `failed` word does, even one the table classes terminal. */
+export const CHILD_RECLAIM_FAILED_TERMINAL_WORD = 'nested-rescue-too-large';
 
 /** THE reading of "this child stands under a TERMINAL refusal": its latest
  *  reclaim event is a refusal whose token wave 3 classes terminal. Shared by
@@ -1202,8 +1209,9 @@ export function childReclaimTierSeed(
  *  It is typed as the row without `detail`, so a caller holding a row from before that field still
  *  compiles. */
 export const childReclaimTerminalRefusal = (
-  row: Omit<ChildReclaimJournalRow, 'detail'>, kindOf: (token: string) => ChildReclaimTokenKind | null,
-): boolean => row.outcome === REFUSED && row.refusal !== null && kindOf(row.refusal) === 'terminal';
+  row: Pick<ChildReclaimJournalRow, 'outcome' | 'refusal'>, kindOf: (token: string) => ChildReclaimTokenKind | null,
+): boolean => row.refusal !== null && kindOf(row.refusal) === 'terminal'
+  && (row.outcome === REFUSED || (row.outcome === FAILED && row.refusal === CHILD_RECLAIM_FAILED_TERMINAL_WORD));
 
 /** Has this child's reclaim kept failing for the whole ceiling (spec §5.9)?
  *  At EXACTLY the ceiling, yes. A failure row with no run start says nothing. */

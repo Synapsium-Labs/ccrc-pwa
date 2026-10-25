@@ -13,6 +13,39 @@
 //   rows at min-h-[32px] ................................. "rows are 44px under a coarse pointer"
 //   the toggle read without try/catch .................... "…storage that throws leaves status"
 //   Idle open by default ................................. "…the last four folded"
+//
+// W2 Task T2e (D-6335): the two-line dense row, under the desk's fine pointer only. Its browser measures are
+// `browser/instrument-desk.browser.test.ts`'s. MUTATION TABLE (plan Task T2e Step 3; RUN, this suite alone):
+//   the dense block's media prelude without (pointer: fine) ... "nothing of the dense arrangement is declared outside the fine-pointer desk block"
+//                                                                 (and "under a fine pointer at a desk a status row is two lines on --row-h …")
+//   the no-context row's lamp rule removed .................... "under a fine pointer at a desk a status row is two lines on --row-h …"
+//   the state's flex `0 0 auto` as `0 1 auto` + `min-width: 0` ... "under a fine pointer at a desk a status row is two lines on --row-h …"
+//                                                                 (`expected '\n flex: 0 1 auto;\n min-width:…' to match /flex:\s*0 0 auto/`; the browser file's
+//                                                                 layout does not change under it, a wrapped flex line deciding on max-content sizes)
+// T2e review R32, F6 (carried into T2g, D-6715; RUN, this suite alone, then reverted): the token guard reads every rule of the block.
+//   `padding-top: 3px` added to the dense block's `.ins-row .sess-actions` rule, a rule the old four-selector loop did not name
+//                                                         "under a fine pointer at a desk a status row is two lines on --row-h …"
+//                                                         (`.ins-row .sess-actions: expected '\n padding-top: 3px;\n align-se…' not to match /\d+px|#[0-9a-f]{3,8}\b|rgb|hsl/i`);
+//                                                         the old loop, run on the same mutant, stayed green (20 passed)
+// The browser file's rows, a literal 32px floor outside (pointer: fine), the naive ⋯ inset and the lamp rule, are that
+// file's header's.
+//
+// W2 desk polish, Task T3f (D-6386): Done above Working in the status table and the phone tabs. MUTATION TABLE (plan Task
+// T3f Step 3; RUN, each mutant on a `git archive` copy of a234acfe2, these two suites alone, then restored):
+//   Working back above Done (STATUS_GROUPS' done and working orders swapped)
+//                                         "status mode shows Done above Working"
+//                                         (and the updated pins "status mode renders the groups in groupByStatus's order, the last four folded",
+//                                          "each group header names its status, and in project mode each row shows its word beside its lamp",
+//                                          "phone: the tabs select one group; All shows every group",
+//                                          "a group with no rows is absent at a desk and under All, present under its own phone tab")
+//   a folded group moved among the open ones (Idle at order 1.5)
+//                                         "status mode renders the groups in groupByStatus's order, the last four folded"
+//                                         (and "each group header names its status, and in project mode each row shows its word beside its lamp",
+//                                          "phone: the tabs select one group; All shows every group")
+//   PHONE_TABS alone reverted (STATUS_GROUPS left new)
+//                                         "the phone tabs read Needs you, Done, Working, All"
+//                                         (and "the toggle is a radiogroup with one checked; the phone tabs are a tablist with one selected")
+// The status-groups suite's rows for the first two are that file's header's.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -34,7 +67,7 @@ const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '');
 const CSS = strip(readFileSync(path.join(SKIN_DIR, 'instrument.css'), 'utf8'));
 const TABLE_SRC = readFileSync(path.join(SKIN_DIR, 'FleetTable.tsx'), 'utf8');
 
-const LABELS = ['Needs you', 'Working', 'Done', 'Idle', 'Cleanup', 'Archived', 'Dead'];
+const LABELS = ['Needs you', 'Done', 'Working', 'Idle', 'Cleanup', 'Archived', 'Dead'];
 
 const COORD = 'project-a-coord';
 const CHILD = 'project-a-worker';
@@ -88,14 +121,32 @@ const rowIds = (el: HTMLElement): string[] =>
 const toggle = (): HTMLElement => screen.getByRole('radiogroup', { name: 'Group sessions by' });
 const pick = (mode: 'Status' | 'Project'): void => { fireEvent.click(within(toggle()).getByRole('radio', { name: mode })); };
 
-/** The declarations of every rule whose selector list includes `selector`, outside any at-rule. */
-function declsOf(selector: string): string {
-  const top = CSS.replace(/@media[^{]+\{(?:[^{}]*\{[^}]*\})*\s*\}/g, '');
+/** The declarations of every rule whose selector list includes `selector`: outside any at-rule, or, with `media`, inside
+ *  the `@media` blocks whose prelude is exactly that (the sheet nests no at-rule in another). */
+function declsOf(selector: string, media: string | null = null): string {
   const out: string[] = [];
-  for (const r of top.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
-    if (r[1]!.split(',').map((s) => s.trim()).includes(selector)) out.push(r[2]!);
-  }
+  for (const r of rulesIn(media)) if (r.selectors.includes(selector)) out.push(r.decls);
   return out.join(';');
+}
+
+/** Every rule of the sheet outside any at-rule, or, with `media`, of the `@media` blocks whose prelude is exactly
+ *  that: its selector list and its declarations (the sheet nests no at-rule in another). `declsOf` reads it by selector. */
+function rulesIn(media: string | null): { selectors: string[]; decls: string }[] {
+  let scope = CSS.replace(/@media[^{]+\{(?:[^{}]*\{[^}]*\})*\s*\}/g, '');
+  if (media !== null) {
+    const bodies: string[] = [];
+    const at = /@media\s*([^{]+)\{/g;
+    let m: RegExpExecArray | null;
+    while ((m = at.exec(CSS)) !== null) {
+      let depth = 1;
+      let i = at.lastIndex;
+      for (; i < CSS.length && depth > 0; i += 1) depth += CSS[i] === '{' ? 1 : CSS[i] === '}' ? -1 : 0;
+      if (m[1]!.trim() === media) bodies.push(CSS.slice(at.lastIndex, i - 1));
+      at.lastIndex = i;
+    }
+    scope = bodies.join('\n');
+  }
+  return [...scope.matchAll(/([^{}]+)\{([^}]*)\}/g)].map((r) => ({ selectors: r[1]!.split(',').map((x) => x.trim()), decls: r[2]! }));
 }
 
 beforeEach(() => {
@@ -121,7 +172,7 @@ describe('status mode', () => {
   it('status mode renders the groups in groupByStatus\'s order, the last four folded', () => {
     mount();
     expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(
-      ['attention', 'working', 'done', 'idle', 'cleanup', 'archived', 'dead']);
+      ['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
     expect(groups().map((g) => head(g).getAttribute('aria-expanded'))).toEqual(
       ['true', 'true', 'true', 'false', 'false', 'false', 'false']);
     // A folded group draws no rows; an open one draws its own.
@@ -130,6 +181,19 @@ describe('status mode', () => {
     expect(rowIds(groupOf('attention'))).toEqual(['project-a-asks']);
     // The folds are the model's, never a second list.
     expect(Object.entries(STATUS_GROUPS).filter(([, g]) => g.folds).map(([b]) => b)).toEqual(['idle', 'cleanup', 'archived', 'dead']);
+  });
+
+  it('status mode shows Done above Working', () => {
+    mount();
+    const order = groups().map((g) => g.getAttribute('data-status-group'));
+    expect(order.indexOf('done')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('done')).toBeLessThan(order.indexOf('working'));
+    // In the document itself, not only in the list: the Done section precedes the Working one.
+    expect(groupOf('done').compareDocumentPosition(groupOf('working')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // And so do their rows, in the table's own row order.
+    const rows = [...table().querySelectorAll<HTMLElement>('[data-row]')].map((r) => r.getAttribute('data-row'));
+    expect(rows.indexOf(CHILD)).toBeGreaterThanOrEqual(0);
+    expect(rows.indexOf(CHILD)).toBeLessThan(rows.indexOf(COORD));
   });
 
   it('each group header names its status, and in project mode each row shows its word beside its lamp', () => {
@@ -205,7 +269,7 @@ describe('project mode and the doors', () => {
     pick('Status');
     const tabs = within(screen.getByRole('tablist', { name: 'Sessions by status' })).getAllByRole('tab');
     expect(tabs.map((t) => t.textContent)).toEqual([
-      expect.stringMatching(/^Needs you/), expect.stringMatching(/^Working/), expect.stringMatching(/^Done/), expect.stringMatching(/^All/)]);
+      expect.stringMatching(/^Needs you/), expect.stringMatching(/^Done/), expect.stringMatching(/^Working/), expect.stringMatching(/^All/)]);
     expect(tabs.filter((t) => t.getAttribute('aria-selected') === 'true')).toHaveLength(1);
   });
 
@@ -298,11 +362,20 @@ describe('phone', () => {
     expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(['attention']);
     fireEvent.click(tab(/^All/));
     expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(
-      ['attention', 'working', 'done', 'idle', 'cleanup', 'archived', 'dead']);
+      ['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
     expect(groups().map((g) => head(g).getAttribute('aria-expanded'))).toEqual(
       ['true', 'true', 'true', 'false', 'false', 'false', 'false']);
     // A tab's name carries its group's count.
     expect(tab(/^Needs you/)).toHaveAccessibleName(/1/);
+  });
+
+  it('the phone tabs read Needs you, Done, Working, All', () => {
+    stubWidth(false, false);
+    mount();
+    pick('Status');
+    const tabs = within(screen.getByRole('tablist', { name: 'Sessions by status' })).getAllByRole('tab');
+    expect(tabs.map((t) => t.textContent)).toEqual([
+      expect.stringMatching(/^Needs you/), expect.stringMatching(/^Done/), expect.stringMatching(/^Working/), expect.stringMatching(/^All/)]);
   });
 });
 
@@ -363,7 +436,7 @@ describe('review fixes', () => {
   it('a group with no rows is absent at a desk and under All, present under its own phone tab', () => {
     const sparse = FLEET.filter((s) => s.bucket !== 'attention' && s.bucket !== 'idle');
     mount(sparse);
-    expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(['working', 'done', 'cleanup', 'archived', 'dead']);
+    expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(['done', 'working', 'cleanup', 'archived', 'dead']);
     cleanup();
     stubWidth(false, false);
     mount(sparse);
@@ -410,5 +483,56 @@ describe('review fixes', () => {
     expect(all.getAttribute('aria-controls')).toBe(panel.id);
     expect(panel.getAttribute('aria-labelledby')).toBe(all.id);
     expect(panel.querySelector('[data-status-group]')).not.toBeNull();
+  });
+});
+
+describe('dense rows at the desk (T2e, D-6335)', () => {
+  const DENSE = '(min-width: 900px) and (pointer: fine)';
+
+  it('under a fine pointer at a desk a status row is two lines on --row-h: name and state, then the context', () => {
+    // The body is a wrapping flex row: the state word beside the name when both fit, on a line of its own when they do
+    // not (a flex line breaks on max-content sizes, so the name then has the whole line), and the context on a line of
+    // its own. Never a grid with a capped state column: that squeezed a long name into three lines beside the state.
+    const body = declsOf('.ins-row .sess-body', DENSE);
+    expect(body).toMatch(/display:\s*flex/);
+    expect(body).toMatch(/flex-flow:\s*row wrap/);
+    expect(body).not.toMatch(/grid/);
+    expect(body).toMatch(/min-height:\s*var\(--row-h\)/);
+    expect(declsOf('.ins-row .sess-body > .sess-open', DENSE)).toMatch(/flex:\s*1 1 auto/);
+    expect(declsOf('.ins-row .sess-body > .sess-open', DENSE)).toMatch(/min-width:\s*0/);
+    expect(declsOf('.ins-row .sess-body > .sess-meta:not(.sess-meta--context)', DENSE)).toMatch(/flex:\s*0 0 auto/);
+    expect(declsOf('.ins-row .sess-body > .sess-meta:not(.sess-meta--context)', DENSE)).toMatch(/margin-inline-start:\s*auto/);
+    expect(declsOf('.ins-row .sess-meta--context', DENSE)).toMatch(/flex:\s*1 0 100%/);
+    // The lamp and the actions button lose the three-line centring margin they carry from the shared sheet.
+    // The lamp is reached as the row's first cell (skin-boundary (b): a skin's sheet never names the lamp's class).
+    expect(declsOf('.ins-row .sess-line > :first-child', DENSE)).toMatch(/margin-top:\s*0/);
+    // A row with no context fact makes its name's line the floor high and puts the lamp at that line's middle, so the
+    // lamp is on the name's first line in a one-line row and in a two-line one (T2e fix round 1, F5).
+    expect(declsOf('.ins-row .sess-line:not(:has(.sess-meta--context)) .sess-body > .sess-open', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
+    expect(declsOf('.ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child', DENSE))
+      .toMatch(/margin-top:\s*calc\(\(var\(--row-h\) - var\(--fs-base\) \* var\(--lh-tight\)\) \/ 2\)/);
+    mount();
+    expect(table().querySelector('.ins-row .sess-line')!.firstElementChild, 'the first cell is the lamp').toHaveClass('sess-lamp');
+    expect(declsOf('.ins-row .sess-actions', DENSE)).toMatch(/margin-top:\s*0/);
+    expect(declsOf('.ins-row .sess-actions', DENSE)).toMatch(/align-self:\s*center/);
+    // The group heads and the toggle sit at --row-h.
+    expect(declsOf('.ins-group-head', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
+    expect(declsOf('.ins-toggle-option', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
+    // Every dense value is a token or a keyword: the pattern bars a px literal and a colour literal (hex, rgb, hsl), in
+    // every rule of the block (T2e review R32, F6), not in a list of selectors that a new rule would be left out of.
+    const dense = rulesIn(DENSE);
+    expect(dense.length, 'the dense block has rules').toBeGreaterThanOrEqual(8);
+    for (const r of dense) expect(r.decls, r.selectors.join(', ')).not.toMatch(/\d+px|#[0-9a-f]{3,8}\b|rgb|hsl/i);
+  });
+
+  it('nothing of the dense arrangement is declared outside the fine-pointer desk block', () => {
+    // A coarse pointer, or a width below 900, keeps the shared sheet's `--tap-min` rows, group heads and toggle.
+    for (const sel of ['.ins-row .sess-body', '.ins-row .sess-body > .sess-open', '.ins-row .sess-body > .sess-meta:not(.sess-meta--context)',
+      '.ins-row .sess-line > :first-child', '.ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child',
+      '.ins-row .sess-line:not(:has(.sess-meta--context)) .sess-body > .sess-open', '.ins-row .sess-actions',
+      '.ins-row .sess-meta--context', '.ins-group-head', '.ins-toggle-option']) {
+      expect(declsOf(sel), sel).not.toMatch(/min-height|margin-top|margin-inline|flex|display:\s*(grid|flex)|align-self/);
+      for (const media of ['(min-width: 900px)', '(pointer: fine)']) expect(declsOf(sel, media), `${sel} in ${media}`).toBe('');
+    }
   });
 });

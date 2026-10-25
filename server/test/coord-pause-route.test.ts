@@ -36,8 +36,8 @@ const makeRunner = (cfg: RunnerCfg = {}): { run: Runner; calls: string[][] } => 
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
-    if (cfg.fail?.has(verb)) return { code: 1, stdout: '', stderr: `ccd: ${verb} refused on the box` };
-    return { code: 0, stdout: verb === 'coord-pause' ? 'paused' : '', stderr: '' };
+    if (cfg.fail?.has(verb)) return { ran: true, code: 1, stdout: '', stderr: `ccd: ${verb} refused on the box` };
+    return { ran: true, code: 0, stdout: verb === 'coord-pause' ? 'paused' : '', stderr: '' };
   };
   return { run, calls };
 };
@@ -254,6 +254,9 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
    *  rides this entry as the caps read does, because this scan reads `app.post`
    *  handlers and the two verbs share the path.
    *
+   *  `/api/coord/review-cap` (D-6795): the operator's lift of the review-round cap for one work run, caps' argument
+   *  exactly: no machine lane may lift a cap on its own work, and the PWA holds no box token.
+   *
    *  `/api/coord/collect-lane` (child-reclamation wave 10): the operator's
    *  switch on what arms the temp-root collector's deletion. Arming it starts
    *  a deleting lane rather than releasing a wedge, so `UNGATED`'s argument
@@ -276,6 +279,7 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
    *  `server.ts` should add it here in the same change. */
   const SESSION_ONLY = new Set([
     '/api/coord/caps', '/api/coord/reclaim-pause', '/api/coord/stall-watch', '/api/coord/collect-lane',
+    '/api/coord/review-cap',
   ]);
 
   /** The two mechanisms that count as "the token was checked" — the shared

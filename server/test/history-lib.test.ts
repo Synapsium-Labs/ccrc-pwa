@@ -4568,6 +4568,13 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     expect(i?.remedy).toContain('~/.ccrc/history/spool/.draining/');
   });
 
+  it('redact-source-unreadable\'s remedy names the codex auth library\'s causes and the log that says which (codex-bridge Stage 1, Task 10, fix round 1)', () => {
+    const i = healthLib.deriveHealth(base({ redactUnreadable: ['/h/u/.local/share/ccrc/codex/lane-a'] })).warn.find((x) => x.word === 'redact-source-unreadable');
+    expect(i?.remedy).toContain('make /h/u/.local/share/ccrc/codex/lane-a readable by this user');
+    expect(i?.remedy).toContain('~/ccrc/ccd/ccgpt-auth.py and python3 are present');
+    expect(i?.remedy).toContain('journalctl --user -u ccd-history-sweep');
+  });
+
   it('spool-planted fires on spool_unreadable alone, and names it apart from the planted counts (FU8, FP5)', () => {
     const i = healthLib.deriveHealth(base({ spoolUnreadable: 3 })).warn.find((x) => x.word === 'spool-planted');
     expect(i?.detail).toContain('3 skipped drain(s) of a draining file or its sidecar the sweep could not read, whose id\'s later files wait behind it');
@@ -10903,5 +10910,931 @@ describe('lib: the recall-off presence record (W2-D30, W2-D31; W2-1 Task 4)', ()
     expect(p.malformed).toBe(1);
     // CONTROL: the well-formed row whose file is absent carries the old seen_ms, a real number.
     expect(changeOf(p, X)).toEqual([{ k: `${K.change}2005:${X}`, from: val(G1), to: 'absent', prev_seen_ms: 1000 }]);
+  });
+});
+
+// ── W2-2a Task 1 (W2-D34, W2-D38, W2-D39): the as-of cut, lib's one definition ────────────────────────────────────
+// asOfCut decides the cut at boundary N from what a reader measured; asOfEntrySql is the one SQL predicate that applies
+// it to an entries row, and asOfBinds its named parameters' values. Pure, so it runs on darwin too: the SQL cases run
+// over an in-memory node:sqlite database holding the two tables the predicate reads, and one case prepares it against a
+// real store's schema. D-5765 (history-w2-asof-invalid-word), D-5766 (history-w2-asof-time-cut)
+describe('W2-2a as-of cut: asOfCut, asOfEntrySql and asOfBinds, lib\'s one definition (W2-D34, W2-D38, W2-D39)', () => {
+  type Lib = typeof import('../../ccd/history/lib.mjs');
+  type Cut = import('../../ccd/history/lib.mjs').AsOfCut;
+  type In = Parameters<Lib['asOfCut']>[0];
+  type Row = { entry_id: number; uuid: string; line: number; ts_ms: number | null; type: string; provenance: string; is_compact_summary: number };
+  const lib = async (): Promise<Lib> => await import('../../ccd/history/lib.mjs');
+  const T = 1_760_000_000_000;   // T_N in the main fixture
+  const row = (entry_id: number, uuid: string, line: number, ts_ms: number | null, o: Partial<Row> = {}): Row =>
+    ({ entry_id, uuid, line, ts_ms, type: 'assistant', provenance: 'model', is_compact_summary: 0, ...o });
+  /** N's holding copy (file 1), in file order. N (`B`) has no stamp of its own, so T_N is p2's, the newest before it. */
+  const HOLD: readonly Row[] = [
+    row(1, 'p0', 0, T - 200, { type: 'user', provenance: 'operator' }),
+    row(2, 'pn', 1, null),
+    row(3, 'p2', 2, T),
+    row(4, 'B', 3, null, { type: 'system', provenance: 'harness' }),
+    row(5, 'q_lt', 4, T - 50),
+    row(6, 'echo', 5, T + 5, { type: 'user', provenance: 'harness', is_compact_summary: 1 }),
+    row(7, 'S', 6, T + 10, { type: 'user', provenance: 'summary', is_compact_summary: 1 }),
+    row(8, 'q_eq', 7, T),
+    row(9, 'k1', 8, null, { type: 'user', provenance: 'operator' }),
+    row(10, 'q_gt', 9, T + 100),
+  ];
+  /** Another transcript's copy (file 2): decided by stamp alone. */
+  const OTHER: readonly Row[] = [
+    row(11, 'o_lt', 0, T - 1),
+    row(12, 'o_eq', 1, T),
+    row(13, 'o_gt', 2, T + 1),
+    row(14, 'o_null', 3, null),
+    row(15, 'o_late', 20, T - 10),
+  ];
+  const ALL = [...HOLD, ...OTHER].map((r) => r.uuid);
+  const N = { entryId: 4, uuid: 'B', main: true, anchorUuid: 'B' };
+  const input = (o: Partial<In> = {}): In => ({ asof: 'B', boundary: N, copy: { fileId: 1, rows: HOLD }, kept: ['k1', 'ghost', 'k1', 7], ...o });
+  const cutOf = async (o: Partial<In> = {}): Promise<Cut> => {
+    const r = (await lib()).asOfCut(input(o));
+    if (!r.ok) throw new Error(`expected a cut, got ${JSON.stringify(r)}`);
+    return r.cut;
+  };
+  /** HOLD with the named rows restamped. */
+  const stamped = (ts: Record<string, number | null>): Row[] => HOLD.map((r) => (r.uuid in ts ? { ...r, ts_ms: ts[r.uuid] ?? null } : r));
+  const REFUSED = { ok: false, rc: 2, reason: 'asof-invalid' };
+  /** The two tables the predicate reads, holding HOLD as file 1 and OTHER as file 2. q_eq and q_lt are also early rows
+   *  of file 2, and q_eq shares one stored body (blob 900) with o_eq. */
+  const storeOf = (): FtsDb => {
+    const db = new FtsDb(':memory:');
+    db.exec(`CREATE TABLE entries (entry_id INTEGER PRIMARY KEY, uuid TEXT NOT NULL UNIQUE, ts_ms INTEGER, blob_id INTEGER NOT NULL);
+      CREATE TABLE memberships (file_id INTEGER NOT NULL, entry_id INTEGER NOT NULL, line INTEGER NOT NULL, PRIMARY KEY (file_id, entry_id));`);
+    const ent = db.prepare('INSERT INTO entries (entry_id, uuid, ts_ms, blob_id) VALUES (?, ?, ?, ?)');
+    const mem = db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
+    for (const [fileId, rows] of [[1, HOLD], [2, OTHER]] as const) {
+      for (const r of rows) {
+        ent.run(r.entry_id, r.uuid, r.ts_ms, r.uuid === 'q_eq' || r.uuid === 'o_eq' ? 900 : 100 + r.entry_id);
+        mem.run(fileId, r.entry_id, r.line);
+      }
+    }
+    mem.run(2, 8, 4);   // q_eq, early in file 2
+    mem.run(2, 5, 5);   // q_lt, early in file 2
+    return db;
+  };
+  /** The uuids a statement returns with the cut spliced and bound, or with neither when there is no cut. */
+  const visible = (l: Lib, db: FtsDb, cut: Cut | null): string[] => {
+    const where = cut === null ? '' : ` AND ${l.asOfEntrySql('e')}`;
+    return (db.prepare(`SELECT e.uuid AS uuid FROM entries e WHERE e.entry_id > :min${where} ORDER BY e.entry_id`)
+      .all({ min: 0, ...(cut === null ? {} : l.asOfBinds(cut)) }) as Array<{ uuid: string }>).map((r) => r.uuid);
+  };
+
+  it('C16, its one word: asof-invalid is an exit-2 REASONS word, so REFUSALS holds it', () => {
+    expect(REASONS['asof-invalid']).toBe(EXIT.REFUSED);
+    expect(REFUSALS).toContain('asof-invalid');
+  });
+
+  it('REASON_ROWS lists asof-invalid on its own line, beside its departure, D-5765', () => {
+    const src = readFileSync(fileURLToPath(new URL('../../ccd/history/lib.mjs', import.meta.url)), 'utf8').split('\n');
+    const at = src.findIndex((l) => l === "    'asof-invalid',");
+    expect(at, 'REASON_ROWS lists asof-invalid on its own line').toBeGreaterThan(-1);
+    expect(src.slice(Math.max(0, at - 4), at).join('\n')).toContain('D-5765 (history-w2-asof-invalid-word)');
+  });
+
+  it('asOfCut: T_N is the boundary\'s own stamp, the summary is derivation\'s pick, kept(N) is its strings once each, sorted', async () => {
+    const own = await cutOf({ copy: { fileId: 1, rows: stamped({ B: T - 20 }) } });
+    expect(own, 'N\'s own stamp is T_N, though p2 before it is stamped later').toEqual({
+      asof: 'B', tsCut: T - 20, boundaryEntryId: 4, summaryEntryId: 7, keptUuids: ['ghost', 'k1'], holdingFileId: 1, boundaryLine: 3,
+    });
+    expect(Object.isFrozen(own) && Object.isFrozen(own.keptUuids), 'one cut has one form').toBe(true);
+    expect((await cutOf({ kept: new Set<string>() })).keptUuids, 'an empty kept(N)').toEqual([]);
+  });
+
+  it('a NULL-ts boundary: T_N is the newest stamp at or before it in its holding copy, past NULL rows, and a stamp of 0 is a time', async () => {
+    expect((await cutOf()).tsCut, 'B has no stamp: p2\'s').toBe(T);
+    expect((await cutOf({ copy: { fileId: 1, rows: stamped({ p2: null }) } })).tsCut, 'p2 and pn have none: p0\'s').toBe(T - 200);
+    expect((await cutOf({ copy: { fileId: 1, rows: stamped({ p0: 0, p2: null }) } })).tsCut).toBe(0);
+    expect((await cutOf({ copy: { fileId: 1, rows: stamped({ p2: null, q_lt: T - 5 }) } })).tsCut, 'a row after N is never read').toBe(T - 200);
+  });
+
+  it('asof-invalid, each arm against its CONTROL: no boundary row, another row\'s, a sidechain, no holding copy, a copy without N, no time at or before N', async () => {
+    const l = await lib();
+    expect(l.asOfCut(input()).ok, 'CONTROL: the fixture cuts').toBe(true);
+    const arms: Array<[string, Partial<In>]> = [
+      ['no boundaries row has the uuid', { boundary: null }],
+      ['the boundary measured is not the asof\'s', { asof: 'p2' }],
+      ['N sits on a sidechain transcript', { boundary: { ...N, main: false } }],
+      ['no file holds N', { copy: null }],
+      ['the copy given does not hold N', { copy: { fileId: 2, rows: OTHER } }],
+      ['no stamp at or before N in its holding copy', { copy: { fileId: 1, rows: stamped({ p0: null, p2: null }) } }],
+    ];
+    for (const [arm, o] of arms) expect(l.asOfCut(input(o)), arm).toEqual(REFUSED);
+    expect(REASONS[REFUSED.reason], 'the refusal is a REASONS word of its exit').toBe(EXIT.REFUSED);
+  });
+
+  it('the summary entry is derivation\'s pick: never an echo row; the row an anchor names; none without an anchor or a summary', async () => {
+    expect((await cutOf()).summaryEntryId, 'the first compact summary after N that is not an echo').toBe(7);
+    expect((await cutOf({ boundary: { ...N, anchorUuid: 'q_lt' } })).summaryEntryId, 'an anchor naming a row picks it').toBe(5);
+    expect((await cutOf({ boundary: { ...N, anchorUuid: 'echo' } })).summaryEntryId, 'an echo row is never the pick').toBeNull();
+    expect((await cutOf({ boundary: { ...N, anchorUuid: null } })).summaryEntryId).toBeNull();
+    expect((await cutOf({ copy: { fileId: 1, rows: HOLD.filter((r) => r.uuid !== 'S') } })).summaryEntryId, 'only an echo after N').toBeNull();
+  });
+
+  it('asOfEntrySql and asOfBinds: an alias off the SQL-name grammar throws; no blob is named; the parameters are named, asof_-prefixed, and exactly the binds\' keys', async () => {
+    const l = await lib();
+    for (const bad of ['', '1e', 'e; DROP TABLE entries', 'e.x', 'e ']) {
+      expect(() => l.asOfEntrySql(bad), JSON.stringify(bad)).toThrow(TypeError);
+    }
+    const sql = l.asOfEntrySql('ent_2');
+    expect(sql.startsWith('(') && sql.endsWith(')'), 'one parenthesised boolean term').toBe(true);
+    expect(sql).toContain('ent_2.ts_ms <= :asof_ts');
+    expect(sql, 'keyed on entries, never on blobs').not.toMatch(/blob/i);
+    expect(sql, 'named parameters only').not.toContain('?');
+    const names = [...new Set([...l.asOfEntrySql('e').matchAll(/:([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]!))].sort();
+    expect(names.length > 0 && names.every((n) => n.startsWith('asof_')), names.join(' ')).toBe(true);
+    const binds = l.asOfBinds(await cutOf());
+    expect(Object.keys(binds).sort(), 'the regex child spreads the binds unfiltered, and node:sqlite refuses an unknown name').toEqual(names);
+    expect(binds).toEqual({ asof_ts: T, asof_file: 1, asof_line: 3, asof_boundary: 4, asof_summary: 7, asof_kept: '["ghost","k1"]' });
+  });
+
+  it('the positional-hide CONTROL: rows after N in its holding copy stamped exactly T_N and before T_N are hidden; without the cut they show', async () => {
+    const l = await lib();
+    const db = storeOf();
+    try {
+      const cut = await cutOf();
+      expect(cut.tsCut, 'CONTROL: T_N is the stamp both rows are measured against').toBe(T);
+      const seen = visible(l, db, cut);
+      expect(seen, 'q_eq is stamped exactly T_N, after N in its holding copy (and early in another copy too)').not.toContain('q_eq');
+      expect(seen, 'q_lt is stamped before T_N, the row right after N in its holding copy').not.toContain('q_lt');
+      expect(seen, 'CONTROL: p2, stamped exactly T_N before N in the same copy, is visible').toContain('p2');
+      expect(visible(l, db, null), 'CONTROL: the same fixture without the cut shows every row').toEqual(ALL);
+    } finally { db.close(); }
+  });
+
+  it('the cut decides by entry: NULL-ts rows absent; N, its summary and kept(N) present whatever their stamp or line; other copies by stamp alone', async () => {
+    const l = await lib();
+    const db = storeOf();
+    try {
+      const seen = new Set(visible(l, db, await cutOf()));
+      expect(Object.fromEntries(ALL.map((u) => [u, seen.has(u)]))).toEqual({
+        p0: true,                    // stamped before T_N, before N
+        pn: false,                   // NULL ts, before N
+        p2: true,                    // stamped exactly T_N, before N
+        B: true,                     // N itself, no stamp of its own
+        q_lt: false,                 // the row right after N in its holding copy, stamped before T_N
+        echo: false,                 // an echo after N: never the summary
+        S: true,                     // N's summary, stamped after T_N
+        q_eq: false,                 // after N in its holding copy, stamped exactly T_N
+        k1: true,                    // a member of kept(N), no stamp, after N
+        q_gt: false,
+        o_lt: true,
+        o_eq: true,                  // the named residual: another copy, the same millisecond as T_N (D-5766)
+        o_gt: false,
+        o_null: false,
+        o_late: true,                // another copy, before T_N, at a line past N's: the positional clause is the holding copy's alone
+      });
+      expect([seen.has('q_eq'), seen.has('o_eq')], 'q_eq and o_eq share one stored body and are decided apart').toEqual([false, true]);
+    } finally { db.close(); }
+  });
+
+  it('the predicate prepares and runs against a real store\'s schema', async () => {
+    const l = await lib();
+    const h = mkTmp('ccrc-history-asof-');
+    replayStore.createStore(h);
+    const db = replayStore.openWriter(l.historyPaths(h).dbFile);
+    try {
+      const cut = await cutOf();
+      expect(db.prepare(`SELECT e.uuid AS uuid FROM entries e WHERE e.transcript_pk = :tpk AND ${l.asOfEntrySql('e')}`)
+        .all({ tpk: 1, ...l.asOfBinds(cut) })).toEqual([]);
+    } finally { db.close(); }
+  });
+});
+
+// ── W2-2a Task 4 (W2-D37): an expand cursor's key names the as-of cut it was minted under ──────────────────────────
+// Pure, so it runs on darwin too. A cursor holds exactly its resource's fields (encodeCursor refuses any other), so the cut
+// joins the key itself: grep hashes it into `q` (recall.mjs grepKey), expand appends it to `t` here.
+describe('expandCursorKey and expandResumeOf under an as-of cut (W2-D37; W2-2a Task 4)', () => {
+  const lib = async () => await import('../../ccd/history/lib.mjs');
+  const N = '0189abcd-1234-4678-9abc-00000000a5f6';
+  const M = '0189abcd-1234-4678-9abc-00000000a5f7';
+  const U = '0189abcd-1234-4678-9abc-00000000a5f8';
+  /** One key of each kind expand prints: a node id, an entry uuid, a raw-only row's key and an around key. */
+  const KEYS = ['L0123456789abcdef0123', U, `x${'0123456789abcdef'.repeat(2)}`, `around:${U}:50:50`];
+  const cur = (t: string) => ({ v: 1 as const, resource: 'expand' as const, t, i: 0, o: 0 });
+
+  it('with no cut, the key is the expansion\'s own, unchanged, so a cursor printed before W2-2a still resumes', async () => {
+    const l = await lib();
+    for (const k of KEYS) expect(l.expandCursorKey(k, null), k).toBe(k);
+  });
+
+  it('under a cut, the key names its boundary, and no two cuts, nor a cut and none, share a key', async () => {
+    const l = await lib();
+    for (const k of KEYS) {
+      expect(l.expandCursorKey(k, N), k).toBe(`${k}:asof:${N}`);
+      expect(new Set([l.expandCursorKey(k, null), l.expandCursorKey(k, N), l.expandCursorKey(k, M)]).size, k).toBe(3);
+    }
+  });
+
+  it('a key minted under a cut resumes its own target, so a bare --cursor still names what it pages', async () => {
+    const l = await lib();
+    for (const k of KEYS) {
+      const plain = l.expandResumeOf(cur(k));
+      expect(plain, `CONTROL: ${k} resumes with no cut`).not.toBeNull();
+      expect(l.expandResumeOf(cur(l.expandCursorKey(k, N))), k).toEqual(plain);
+    }
+  });
+
+  it('decideExpandCursor refuses a cursor minted under another cut or under none, in both directions', async () => {
+    const l = await lib();
+    const K = KEYS[0]!;
+    const at = (minted: string | null, used: string | null) =>
+      l.decideExpandCursor({ cursor: cur(l.expandCursorKey(K, minted)), key: l.expandCursorKey(K, used), total: 1 });
+    expect([at(null, null), at(N, N)], 'CONTROL: the same cut, or none, resumes').toEqual([{ ok: true, i: 0, o: 0 }, { ok: true, i: 0, o: 0 }]);
+    for (const [minted, used] of [[null, N], [N, null], [N, M], [M, N]] as const) {
+      expect(at(minted, used), `${String(minted)} then ${String(used)}`).toEqual({ ok: false });
+    }
+  });
+
+  it('the longest key expand prints, under a cut, is still a cursor encodeCursor accepts and decodeCursor reads back', async () => {
+    const l = await lib();
+    const c = cur(l.expandCursorKey(`around:${U}:${l.AROUND_MAX}:${l.AROUND_MAX}`, N));
+    expect(c.t.length, 'CONTROL: the longest key there is').toBe(91);
+    expect(l.decodeCursor(l.encodeCursor(c), 'expand')).toEqual(c);
+  });
+});
+
+// ── W2-2a whole-branch fix wave (D-6282): the SQL pick of a leaf's summary row, held to lib's JS pick ───────────────────
+// asOfHiddenNodesSql judges a leaf by its summary row, which it reads from the store with SQL (asOfSummaryPickSql, the same
+// CTEs): the holding copy (pickHoldingCopy's rule) and the anchor arms (summaryRowFor's). This case builds seeded stores
+// with the tables those CTEs read, under their real NOT NULL constraints, and holds the SQL pick to the JS pick on every
+// leaf: the JS pick is pickHoldingCopy over each file of the boundary's transcript (live when source_key is '', holding
+// when it has the boundary as a member), then asOfCut over that copy's rows, whose summaryEntryId is summaryRowFor's pick
+// through lib's own meta mapping. The PRNG is seeded and the shapes counted, so the run is the same every time.
+describe('W2-2a as-of cut (D-6282): the SQL pick of a leaf\'s summary row equals pickHoldingCopy plus summaryRowFor on seeded stores', () => {
+  type Lib = typeof import('../../ccd/history/lib.mjs');
+  const lib = async (): Promise<Lib> => await import('../../ccd/history/lib.mjs');
+  const mulberry = (seed: number): (() => number) => {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  type Tally = { leaves: number; picked: number; multiCopy: number; liveAndRetired: number; self: number; selfPicked: number; other: number; echoAnchor: number; missing: number; none: number; noCopy: number; sharedBlob: number };
+
+  /** Every seeded store's leaves compared: the disagreements, and what shapes the run covered. */
+  async function compare(trials: number): Promise<{ bad: string[]; tally: Tally }> {
+    const l = await lib();
+    const { DatabaseSync } = await import('node:sqlite');
+    const sql = l.asOfSummaryPickSql();
+    const bad: string[] = [];
+    const tally: Tally = { leaves: 0, picked: 0, multiCopy: 0, liveAndRetired: 0, self: 0, selfPicked: 0, other: 0, echoAnchor: 0, missing: 0, none: 0, noCopy: 0, sharedBlob: 0 };
+    for (let t = 0; t < trials; t += 1) {
+      const rnd = mulberry(1000 + t);
+      const ri = (n: number): number => Math.floor(rnd() * n);
+      const of = <T>(a: readonly T[]): T => a[ri(a.length)]!;
+      const db = new DatabaseSync(':memory:');
+      db.exec(`CREATE TABLE ingest_files (file_id INTEGER PRIMARY KEY, source_key TEXT NOT NULL DEFAULT '', transcript_pk INTEGER NOT NULL);
+        CREATE TABLE entries (entry_id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT NOT NULL UNIQUE, transcript_pk INTEGER NOT NULL, type TEXT NOT NULL,
+          is_compact_summary INTEGER NOT NULL DEFAULT 0, provenance TEXT NOT NULL, ts_ms INTEGER, blob_id INTEGER);
+        CREATE TABLE memberships (file_id INTEGER NOT NULL, entry_id INTEGER NOT NULL, line INTEGER NOT NULL, PRIMARY KEY (file_id, entry_id));
+        CREATE TABLE boundaries (entry_id INTEGER PRIMARY KEY, transcript_pk INTEGER NOT NULL, anchor_uuid TEXT);
+        CREATE TABLE nodes (node_id TEXT PRIMARY KEY, kind TEXT NOT NULL, boundary_entry_id INTEGER, summary_blob_id INTEGER);`);
+      const nT = 1 + ri(2);
+      const nF = 1 + ri(4);
+      const nE = 4 + ri(8);
+      const files: Array<{ f: number; tp: number; sk: string }> = [];
+      for (let f = 1; f <= nF; f += 1) {
+        const x = { f, tp: 1 + ri(nT), sk: rnd() < 0.5 ? '' : `x${f}` };
+        files.push(x);
+        db.prepare('INSERT INTO ingest_files VALUES (?, ?, ?)').run(x.f, x.sk, x.tp);
+      }
+      const ents: Array<{ e: number; uuid: string; type: string; prov: string }> = [];
+      for (let e = 1; e <= nE; e += 1) {
+        const x = { e, uuid: `u${e}`, type: of(['user', 'assistant', 'system']), prov: of(['operator', 'harness', 'model']) };
+        ents.push(x);
+        // blob_id comes from a pool half the size of the entries, so entries share blobs and a blob's equality is not an entry's (D-6284)
+        db.prepare('INSERT INTO entries (entry_id, uuid, transcript_pk, type, is_compact_summary, provenance, ts_ms, blob_id) VALUES (?, ?, ?, ?, ?, ?, 100, ?)')
+          .run(x.e, x.uuid, 1 + ri(nT), x.type, rnd() < 0.4 ? 1 : 0, x.prov, 1 + ri(Math.ceil(nE / 2)));
+      }
+      for (const { f } of files) {   // each copy holds its own subset, in its own order (a Fisher-Yates shuffle)
+        const mem = ents.filter(() => rnd() < 0.7);
+        for (let i = mem.length - 1; i > 0; i -= 1) { const j = ri(i + 1); [mem[i], mem[j]] = [mem[j]!, mem[i]!]; }
+        mem.forEach((x, i) => db.prepare('INSERT INTO memberships VALUES (?, ?, ?)').run(f, x.e, i + 1));
+      }
+      const leaves: Array<{ id: string; e: number; uuid: string; tp: number; anchor: string | null; arm: string }> = [];
+      for (const b of ents.filter(() => rnd() < 0.4)) {
+        const other = of(ents);
+        const arm = of(['none', 'empty', 'self', 'self', 'other', 'other', 'missing']);
+        const anchor = arm === 'none' ? null : arm === 'empty' ? '' : arm === 'self' ? b.uuid : arm === 'other' ? other.uuid : 'nope';
+        const tp = 1 + ri(nT);
+        db.prepare('INSERT INTO boundaries VALUES (?, ?, ?)').run(b.e, tp, anchor);
+        db.prepare('INSERT INTO nodes (node_id, kind, boundary_entry_id) VALUES (?, ?, ?)').run(`L${b.e}`, 'native_leaf', b.e);
+        leaves.push({ id: `L${b.e}`, e: b.e, uuid: b.uuid, tp, anchor, arm });
+      }
+      const got = new Map<string, number | null>();
+      for (const r of db.prepare(sql).all({ asof_nodes: JSON.stringify(leaves.map((x) => x.id)) }) as unknown as Array<{ node_id: string; entry_id: number | null }>) {
+        got.set(r.node_id, r.entry_id === null ? null : Number(r.entry_id));
+      }
+      for (const x of leaves) {
+        const fl = files.filter((f) => f.tp === x.tp);
+        const holds = (f: number): boolean => db.prepare('SELECT 1 FROM memberships WHERE file_id = ? AND entry_id = ?').get(f, x.e) !== undefined;
+        const held = l.pickHoldingCopy(fl.map((f) => ({ fileId: f.f, live: f.sk === '', holds: holds(f.f) })));
+        let want: number | null = null;
+        if (held !== null) {
+          const rows = db.prepare(`SELECT m.line AS line, e.entry_id AS entry_id, e.uuid AS uuid, e.type AS type, e.provenance AS provenance,
+              e.is_compact_summary AS is_compact_summary, e.ts_ms AS ts_ms FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+            WHERE m.file_id = ? ORDER BY m.line`).all(held) as unknown as NonNullable<Parameters<Lib['asOfCut']>[0]['copy']>['rows'];
+          const cut = l.asOfCut({ asof: x.uuid, boundary: { entryId: x.e, uuid: x.uuid, main: true, anchorUuid: x.anchor }, copy: { fileId: held, rows }, kept: new Set() });
+          if (!cut.ok) throw new Error(`the JS side refused a seeded leaf: ${JSON.stringify(cut)}`);
+          want = cut.cut.summaryEntryId;
+        }
+        const have = got.has(x.id) ? got.get(x.id)! : 'no row';
+        // D-6284: derivation stores the picked entry's blob_id, NULL with no pick (derive.mjs's insNode), and nothing moves it
+        // afterwards, so the stored value is written from the JS pick, and the entry the SQL pick returns must carry the same blob.
+        const blobOf = (entry: number | null | string): number | null => entry === null || entry === 'no row' ? null
+          : (db.prepare('SELECT blob_id AS b FROM entries WHERE entry_id = ?').get(entry) as unknown as { b: number }).b;
+        db.prepare('UPDATE nodes SET summary_blob_id = ? WHERE node_id = ?').run(blobOf(want), x.id);
+        const stored = (db.prepare('SELECT summary_blob_id AS b FROM nodes WHERE node_id = ?').get(x.id) as unknown as { b: number | null }).b;
+        if (blobOf(have) !== stored) bad.push(`trial ${t} ${x.id} (${x.arm}): the SQL pick's blob is ${String(blobOf(have))}, the stored summary_blob_id ${String(stored)}`);
+        if (want !== null && db.prepare('SELECT 1 FROM entries WHERE blob_id = ? AND entry_id <> ?').get(blobOf(want)!, want) !== undefined) tally.sharedBlob += 1;
+        tally.leaves += 1;
+        if (want !== null) tally.picked += 1;
+        const holding = fl.filter((f) => holds(f.f));
+        if (holding.length > 1) tally.multiCopy += 1;
+        if (holding.some((f) => f.sk === '') && holding.some((f) => f.sk !== '')) tally.liveAndRetired += 1;
+        if (held === null) tally.noCopy += 1;
+        if (x.arm === 'self') { tally.self += 1; if (want !== null) tally.selfPicked += 1; }
+        if (x.arm === 'other') tally.other += 1;
+        if (x.arm === 'missing') tally.missing += 1;
+        if (x.arm === 'none' || x.arm === 'empty') tally.none += 1;
+        const target = ents.find((e) => e.uuid === x.anchor);
+        if (x.arm === 'other' && target !== undefined && target.type === 'user' && target.prov === 'harness') tally.echoAnchor += 1;
+        if (have !== want) bad.push(`trial ${t} ${x.id} (${x.arm}): the SQL says ${String(have)}, the JS pick ${String(want)}`);
+      }
+      db.close();
+    }
+    return { bad, tally };
+  }
+
+  it('on 250 seeded stores the SQL pick equals the JS pick on every leaf, over several copies, live and retired, divergent memberships and every anchor arm', async () => {
+    const { bad, tally } = await compare(250);
+    expect(bad.slice(0, 5)).toEqual([]);
+    // CONTROL: the stores cover what the case claims; a mutant of the pick has leaves to disagree on.
+    expect(tally.leaves, JSON.stringify(tally)).toBeGreaterThanOrEqual(400);
+    expect(tally.picked, 'leaves with a pick').toBeGreaterThanOrEqual(150);
+    expect(tally.multiCopy, 'leaves held by two or more copies').toBeGreaterThanOrEqual(100);
+    expect(tally.liveAndRetired, 'held by a live and a retired copy').toBeGreaterThanOrEqual(40);
+    expect(tally.selfPicked, 'anchor on the boundary itself, with a pick').toBeGreaterThanOrEqual(30);
+    expect(tally.echoAnchor, 'anchor on an echo row').toBeGreaterThanOrEqual(10);
+    expect(tally.missing + tally.none, 'anchors that name no row').toBeGreaterThanOrEqual(60);
+    expect(tally.noCopy, 'no copy holds the boundary').toBeGreaterThanOrEqual(5);
+    expect(tally.sharedBlob, 'D-6284: picks whose blob another entry shares, so the blob comparison is not the entry comparison').toBeGreaterThanOrEqual(100);
+  });
+});
+
+// ── W2-2b Task 1 (W2-D42, W2-D44, W2-D48): the headless seam's vocabulary and the marker, pure ────────────────────────
+// RECALL_ARMS is the arm vocabulary decideHeadless checks and the replay driver imports; HEADLESS_LIST_MAX_BYTES and
+// HEADLESS_LIST_MAX_PAIRS bound headless-on; parseHeadlessList is its grammar and formatHeadlessList the one producer of
+// its text; headlessMarkerOf folds the marker's one read, store.mjs's readBounded. Pure, so it runs on darwin too: the
+// reader case reads real files in a scratch directory. Every non-ASCII fixture character is built with fromCharCode.
+// D-5768 (history-w2-marker-grammar), D-5769 (history-w2-headless-refusal-words)
+describe('W2-2b Task 1: RECALL_ARMS, the marker bounds, the marker grammar and its fold (W2-D42, W2-D44, W2-D48)', () => {
+  type Lib = typeof import('../../ccd/history/lib.mjs');
+  type Pair = { ccrcId: string; generation: string };
+  const lib = async (): Promise<Lib> => await import('../../ccd/history/lib.mjs');
+  const ch = (c: number): string => String.fromCharCode(c);
+  const S = '0189abcd-1234-4678-9abc-00000000beef';   // the store's meta store_id
+  const G1 = '0189abcd-1234-4678-9abc-0000000000a1';
+  const MAL = { ok: false, rc: 2, reason: 'headless-malformed' };
+  const UNARMED = { ok: false, rc: 2, reason: 'headless-unarmed' };
+  const BASE = `store ${S}\nacct-a-demo ${G1}\n`;
+  const listed = (pairs: Pair[], storeId = S): { ok: true; storeId: string; pairs: Pair[] } => ({ ok: true, storeId, pairs });
+
+  it('C16, its two words: headless-malformed and headless-arm-unknown are exit-2 REASONS words, so REFUSALS holds them', () => {
+    for (const w of ['headless-malformed', 'headless-arm-unknown']) {
+      expect(REASONS[w], w).toBe(EXIT.REFUSED);
+      expect(REFUSALS, w).toContain(w);
+    }
+    // CONTROL: the other words W2-D46's step 1 answers were exit-2 words before this task.
+    for (const w of ['headless-unarmed', 'headless-in-pane', 'headless-unlisted', 'no-identity', 'bad-id', 'asof-invalid']) {
+      expect(REASONS[w], w).toBe(EXIT.REFUSED);
+    }
+  });
+
+  it('REASON_ROWS lists the two words on one line, beside their departure, D-5769', () => {
+    const src = readFileSync(fileURLToPath(new URL('../../ccd/history/lib.mjs', import.meta.url)), 'utf8').split('\n');
+    const at = src.findIndex((l) => l === "    'headless-malformed', 'headless-arm-unknown',");
+    expect(at, 'REASON_ROWS lists the two words on one line').toBeGreaterThan(-1);
+    expect(src.slice(Math.max(0, at - 4), at).join('\n')).toContain('D-5769 (history-w2-headless-refusal-words)');
+  });
+
+  it('RECALL_ARMS is the two arm words, in order, frozen; the marker\'s bounds are 65,536 bytes and 1,000 pairs', async () => {
+    const l = await lib();
+    expect(l.RECALL_ARMS).toEqual(['control', 'treatment']);
+    expect(Object.isFrozen(l.RECALL_ARMS), 'RECALL_ARMS is frozen').toBe(true);
+    expect(l.HEADLESS_LIST_MAX_BYTES).toBe(65536);
+    expect(l.HEADLESS_LIST_MAX_PAIRS).toBe(1000);
+  });
+
+  it('parseHeadlessList: comments, the store line, then pairs, comments and empty lines; - is the legacy generation; the final LF is optional; duplicates kept in file order; zero pairs parses', async () => {
+    const l = await lib();
+    const text = ['# W2 quiz, node a', `store ${S}`, '', '# the pilot pairs', `acct-a-demo ${G1}`, 'acct-b-demo -', `acct-a-demo ${G1}`, ''].join('\n');
+    const want = listed([{ ccrcId: 'acct-a-demo', generation: G1 }, { ccrcId: 'acct-b-demo', generation: '' }, { ccrcId: 'acct-a-demo', generation: G1 }]);
+    const got = l.parseHeadlessList(text);
+    expect(got).toEqual(want);
+    expect(l.parseHeadlessList(text.slice(0, -1)), 'no final LF').toEqual(want);
+    expect(got.ok && Object.isFrozen(got) && Object.isFrozen(got.pairs) && got.pairs.every((p) => Object.isFrozen(p)), 'one answer has one form').toBe(true);
+    expect(l.parseHeadlessList(`store ${S}\n`), 'zero pairs parses: decideHeadless answers headless-unlisted for it').toEqual(listed([]));
+    expect(l.parseHeadlessList(`# only a comment\nstore ${S}`)).toEqual(listed([]));
+    expect(l.parseHeadlessList(`store ${S}\n${'a'.repeat(SPOOL_ID_MAX)} -\n`), 'an id at SPOOL_ID_MAX').toEqual(listed([{ ccrcId: 'a'.repeat(SPOOL_ID_MAX), generation: '' }]));
+  });
+
+  it('parseHeadlessList: every other shape is headless-malformed; CONTROL: the base marker each is cut from parses', async () => {
+    const l = await lib();
+    expect(l.parseHeadlessList(BASE), 'CONTROL').toEqual(listed([{ ccrcId: 'acct-a-demo', generation: G1 }]));
+    const pair = `acct-a-demo ${G1}`;
+    const shapes: Array<[string, string]> = [
+      ['empty text', ''],
+      ['comments and no store line', '# a\n# b\n'],
+      ['an empty line before the store line', `\n${BASE}`],
+      ['a pair before the store line', `${pair}\nstore ${S}\n`],
+      ['a second store line', `${BASE}store ${S}\n`],
+      ['a second store line naming -, never a pair', `${BASE}store -\n`],
+      ['a store line naming no UUID', `store not-a-uuid\n${pair}\n`],
+      ['an uppercase store id', `store ${S.toUpperCase()}\n${pair}\n`],
+      ['two spaces after store', `store  ${S}\n${pair}\n`],
+      ['CR LF line ends', BASE.replace(/\n/g, '\r\n')],
+      ['a CR inside a comment', `# a\rb\n${BASE}`],
+      ['leading whitespace on a pair', `store ${S}\n ${pair}\n`],
+      ['trailing whitespace on a pair', `store ${S}\n${pair} \n`],
+      ['trailing whitespace on a comment', `${BASE}# note \n`],
+      ['a line of spaces', `${BASE}   \n`],
+      ['a no-break space after the store id', `store ${S}${ch(0xa0)}\n${pair}\n`],
+      ['a byte-order mark', `${ch(0xfeff)}${BASE}`],
+      ['a tab between id and generation', `store ${S}\nacct-a-demo\t${G1}\n`],
+      ['two spaces between id and generation', `store ${S}\nacct-a-demo  ${G1}\n`],
+      ['three fields', `${BASE}${pair} x\n`],
+      ['one field', `${BASE}acct-a-demo\n`],
+      ['an uppercase generation', `store ${S}\nacct-a-demo ${G1.toUpperCase()}\n`],
+      ['a generation neither a UUID nor -', `store ${S}\nacct-a-demo --\n`],
+      ['an id off the grammar: ..', `store ${S}\n.. ${G1}\n`],
+      ['an id off the grammar: a slash', `store ${S}\nacct/a ${G1}\n`],
+      ['an id longer than SPOOL_ID_MAX', `store ${S}\n${'a'.repeat(SPOOL_ID_MAX + 1)} -\n`],
+      ['U+FFFD, what readBounded writes for an invalid byte', `# a${ch(0xfffd)}b\n${BASE}`],
+      ['a lone surrogate', `# a${ch(0xd800)}b\n${BASE}`],
+    ];
+    for (const [what, text] of shapes) expect(l.parseHeadlessList(text), what).toEqual(MAL);
+    expect(REASONS[MAL.reason], 'the refusal is a REASONS word of its exit').toBe(EXIT.REFUSED);
+    expect(() => l.parseHeadlessList(5 as never), 'text that is not a string is the caller\'s defect, named').toThrow(/the marker text is not a string/);
+  });
+
+  it('parseHeadlessList: the bounds are inclusive, counted in bytes and in pair lines', async () => {
+    const l = await lib();
+    const head = `store ${S}\n`;
+    const fill = 65536 - Buffer.byteLength(head) - 2;   // the comment's '#' and its LF
+    const at = `${head}#${'x'.repeat(fill)}\n`;
+    expect(Buffer.byteLength(at), 'CONTROL: the fixture is exactly the bound').toBe(l.HEADLESS_LIST_MAX_BYTES);
+    expect(l.parseHeadlessList(at), 'exactly 65,536 bytes').toEqual(listed([]));
+    expect(l.parseHeadlessList(`${head}#${'x'.repeat(fill + 1)}\n`), 'one byte over').toEqual(MAL);
+    const wide = `${head}#${ch(0xe9)}${'x'.repeat(fill - 1)}\n`;
+    expect([wide.length, Buffer.byteLength(wide)], 'CONTROL: 65,536 characters, 65,537 bytes').toEqual([65536, 65537]);
+    expect(l.parseHeadlessList(wide), 'the bound is in bytes, never characters').toEqual(MAL);
+    const pairs = (n: number): string => `${head}${Array.from({ length: n }, (_, i) => `acct-${i}-demo -\n`).join('')}`;
+    const r1000 = l.parseHeadlessList(pairs(1000));
+    expect(r1000.ok && r1000.pairs.length, 'exactly 1,000 pairs').toBe(1000);
+    expect(l.parseHeadlessList(pairs(1001)), '1,001 pairs').toEqual(MAL);
+    expect(l.parseHeadlessList(`${head}${'acct-a-demo -\n'.repeat(1001)}`), 'the bound counts pair lines, duplicates included').toEqual(MAL);
+  });
+
+  it('formatHeadlessList: the store line, one line per pair in the given order, - for the legacy generation, one final LF, no comment', async () => {
+    const l = await lib();
+    expect(l.formatHeadlessList({ storeId: S, pairs: [{ ccrcId: 'acct-a-demo', generation: G1 }, { ccrcId: 'acct-b-demo', generation: '' }] }))
+      .toBe(`store ${S}\nacct-a-demo ${G1}\nacct-b-demo -\n`);
+    expect(l.formatHeadlessList({ storeId: S, pairs: [] })).toBe(`store ${S}\n`);
+  });
+
+  it('formatHeadlessList refuses every list parseHeadlessList would not read back: TypeError for the grammar, RangeError for a bound', async () => {
+    const l = await lib();
+    expect(() => l.formatHeadlessList({ storeId: S, pairs: [{ ccrcId: 'acct-a-demo', generation: G1 }] }), 'CONTROL').not.toThrow();
+    const grammar: Array<[string, { storeId: string; pairs: Pair[] }]> = [
+      ['a store id that is no UUID', { storeId: 'not-a-uuid', pairs: [] }],
+      ['an uppercase store id', { storeId: S.toUpperCase(), pairs: [] }],
+      ['the id store, which would read as a second store line', { storeId: S, pairs: [{ ccrcId: 'store', generation: '' }] }],
+      ['an id off the grammar', { storeId: S, pairs: [{ ccrcId: 'acct a', generation: G1 }] }],
+      ['an id longer than SPOOL_ID_MAX', { storeId: S, pairs: [{ ccrcId: 'a'.repeat(SPOOL_ID_MAX + 1), generation: '' }] }],
+      ['- as a generation: it is the marker\'s spelling of \'\', not a generation', { storeId: S, pairs: [{ ccrcId: 'acct-a-demo', generation: '-' }] }],
+      ['an uppercase generation', { storeId: S, pairs: [{ ccrcId: 'acct-a-demo', generation: G1.toUpperCase() }] }],
+    ];
+    for (const [what, x] of grammar) expect(() => l.formatHeadlessList(x), what).toThrow(TypeError);
+    expect(() => l.formatHeadlessList({ storeId: S, pairs: null as never }), 'pairs that is not an array').toThrow(/pairs is not an array/);
+    expect(() => l.formatHeadlessList({ storeId: S, pairs: [null as never] }), 'a pair that is not an object').toThrow(/undefined cannot be listed/);
+    const many = Array.from({ length: 1001 }, (_, i) => ({ ccrcId: `acct-${i}-demo`, generation: '' }));
+    expect(() => l.formatHeadlessList({ storeId: S, pairs: many.slice(0, 1000) }), 'CONTROL: 1,000 pairs').not.toThrow();
+    expect(() => l.formatHeadlessList({ storeId: S, pairs: many }), '1,001 pairs').toThrow(RangeError);
+    const long = Array.from({ length: 300 }, (_, i) => ({ ccrcId: `${String(i).padStart(3, '0')}${'a'.repeat(SPOOL_ID_MAX - 3)}`, generation: G1 }));
+    expect(() => l.formatHeadlessList({ storeId: S, pairs: long.slice(0, 200) }), 'CONTROL: 200 long pairs fit').not.toThrow();
+    expect(() => l.formatHeadlessList({ storeId: S, pairs: long }), '300 pairs of 224-character ids pass 65,536 bytes').toThrow(RangeError);
+  });
+
+  it('round trip: parseHeadlessList(formatHeadlessList(x)) answers x, and formatting the answer gives the same bytes', async () => {
+    const l = await lib();
+    let seed = 7;
+    const rnd = (): number => (seed = (seed * 48271) % 2147483647) / 2147483647;
+    const lists: Array<{ storeId: string; pairs: Pair[] }> = [
+      { storeId: S, pairs: [] },
+      { storeId: S, pairs: [{ ccrcId: 'a'.repeat(SPOOL_ID_MAX), generation: '' }, { ccrcId: 'acct_b.demo', generation: G1 }] },
+      { storeId: S, pairs: Array.from({ length: 1000 }, (_, i) => ({ ccrcId: `acct-${i % 7}-demo`, generation: i % 3 === 0 ? '' : G1 })) },
+    ];
+    for (let k = 0; k < 200; k += 1) {
+      lists.push({ storeId: S, pairs: Array.from({ length: Math.floor(rnd() * 12) }, () => ({ ccrcId: `acct-${Math.floor(rnd() * 5)}-demo`, generation: rnd() < 0.3 ? '' : G1 })) });
+    }
+    expect(lists.filter((x) => x.pairs.some((p) => p.generation === '')).length, 'CONTROL: the lists carry legacy pairs').toBeGreaterThan(100);
+    for (const x of lists) {
+      const text = l.formatHeadlessList(x);
+      const back = l.parseHeadlessList(text);
+      expect(back, text.slice(0, 80)).toEqual({ ok: true, ...x });
+      if (back.ok) expect(l.formatHeadlessList(back), 'formatting the answer gives the bytes back').toBe(text);
+    }
+  });
+
+  it('headlessMarkerOf: absent is headless-unarmed; unreadable and over-cap are headless-malformed, never absent (IV5); a value is parseHeadlessList\'s answer', async () => {
+    const l = await lib();
+    expect(l.headlessMarkerOf({ state: 'absent' })).toEqual(UNARMED);
+    expect(l.headlessMarkerOf({ state: 'unreadable' })).toEqual(MAL);
+    expect(l.headlessMarkerOf({ state: 'over-cap' })).toEqual(MAL);
+    expect(l.headlessMarkerOf({ state: 'value', value: BASE })).toEqual(l.parseHeadlessList(BASE));
+    expect(l.headlessMarkerOf({ state: 'value', value: BASE }), 'CONTROL').toEqual(listed([{ ccrcId: 'acct-a-demo', generation: G1 }]));
+    expect(l.headlessMarkerOf({ state: 'value', value: '' }), 'an empty marker is malformed, never unarmed').toEqual(MAL);
+    // Any other shape is malformed, never unarmed and never thrown (IV5, fail closed).
+    const odd: Array<[string, unknown]> = [['null', null], ['a value that is not text', { state: 'value', value: 5 }],
+      ['an unknown state carrying text', { state: 'bogus', value: BASE }]];
+    for (const [what, read] of odd) expect(l.headlessMarkerOf(read as never), what).toEqual(MAL);
+  });
+
+  it('the marker\'s one read, store.mjs readBounded at HEADLESS_LIST_MAX_BYTES with no link followed: the bound reads; one byte over, an invalid byte, a link, a directory and a FIFO are malformed', async () => {
+    const l = await lib();
+    const d = mkTmp('ccrc-history-headless-');
+    const read = (name: string) => l.headlessMarkerOf(replayStore.readBounded(join(d, name), l.HEADLESS_LIST_MAX_BYTES, false));
+    const head = `store ${S}\n`;
+    const fill = l.HEADLESS_LIST_MAX_BYTES - Buffer.byteLength(head) - 2;
+    t17fs.writeFileSync(join(d, 'at'), `${head}#${'x'.repeat(fill)}\n`);
+    t17fs.writeFileSync(join(d, 'over'), `${head}#${'x'.repeat(fill + 1)}\n`);
+    t17fs.writeFileSync(join(d, 'ok'), BASE);
+    t17fs.writeFileSync(join(d, 'bad-byte'), Buffer.concat([Buffer.from('# a'), Buffer.from([0xff]), Buffer.from(`\n${BASE}`)]));
+    t17fs.symlinkSync(join(d, 'ok'), join(d, 'link'));
+    t17fs.mkdirSync(join(d, 'dir'));
+    expect(spawnSync('mkfifo', [join(d, 'fifo')]).status, 'CONTROL: the FIFO was made').toBe(0);
+    expect(read('ok'), 'CONTROL').toEqual(listed([{ ccrcId: 'acct-a-demo', generation: G1 }]));
+    expect(read('at'), 'exactly HEADLESS_LIST_MAX_BYTES').toEqual(listed([]));
+    expect(replayStore.readBounded(join(d, 'over'), l.HEADLESS_LIST_MAX_BYTES, false), 'CONTROL: the reader answers over-cap').toEqual({ state: 'over-cap' });
+    expect(read('over')).toEqual(MAL);
+    expect(read('bad-byte'), 'an invalid UTF-8 byte').toEqual(MAL);
+    expect(read('link'), 'a link to a well-formed marker').toEqual(MAL);
+    expect(read('dir')).toEqual(MAL);
+    expect(read('fifo'), 'never waited on').toEqual(MAL);
+    expect(read('absent')).toEqual(UNARMED);
+  });
+});
+
+// ── W2-2b Task 2 (W2-D40, W2-D45, W2-D46): the headless seam's pure deciders ─────────────────────────────────────
+// decideHeadless takes the seam's rows before the store (W2-D46 step 1) and calls W2-2a's recallSeamEngaged and
+// decideSeamInPane (called, not folded); its marker is Task 1's headlessMarkerOf answer. decideAsOfFamily admits the
+// env path's family from CCRC_RECALL_ASOF at step 4, with the marker's store line and its pair, over asOfFamilySql's
+// rows. Pure, so it runs on darwin too; one case runs the statement on a real store's schema. Each refusal is pinned at
+// its step with the CONTROL one step later, and the order pair by pair. D-5767 (history-w2-env-identity-from-asof)
+describe('W2-2b headless seam: decideHeadless, decideHeadlessStore and decideAsOfFamily, the seam\'s pure deciders (W2-D40, W2-D45, W2-D46)', () => {
+  type Lib = typeof import('../../ccd/history/lib.mjs');
+  type Row = import('../../ccd/history/lib.mjs').AsOfFamilyRow;
+  type HIn = Parameters<Lib['decideHeadless']>[0];
+  type AIn = Parameters<Lib['decideAsOfFamily']>[0];
+  type Marker = HIn['marker'];
+  type Recall = HIn['recall'];
+  type Pair = { ccrcId: string; generation: string };
+  const lib = async (): Promise<Lib> => await import('../../ccd/history/lib.mjs');
+  const S = 'w2b-demo';
+  const OTHER_ID = 'w2b-other';
+  const G1 = 'a1a1a1a1-1111-4111-8111-111111111111';
+  const G2 = 'b2b2b2b2-2222-4222-8222-222222222222';
+  const STORE = 'c3c3c3c3-3333-4333-8333-333333333333';
+  const FOREIGN = 'c4c4c4c4-4444-4444-8444-444444444444';
+  const ASOF = 'd4d4d4d4-4444-4444-8444-444444444444';
+  const NONE: Recall = { session: null, arm: null, asof: null };
+  const TMUX = { ok: true, path: 'tmux' };
+  const refused = (reason: string): { ok: false; rc: number; reason: string } => ({ ok: false, rc: 2, reason });
+  /** A marker as Task 1's fold answers it, from the one formatter (W2-D44). */
+  const markerOf = (l: Lib, pairs: Pair[], storeId: string = STORE): Marker =>
+    l.headlessMarkerOf({ state: 'value', value: l.formatHeadlessList({ storeId, pairs }) });
+  /** The same marker text with one CR put before its first LF (so that LF is a CRLF): a CR anywhere is malformed (W2-D44). */
+  const withCr = (l: Lib): Marker => {
+    const text = l.formatHeadlessList({ storeId: STORE, pairs: [{ ccrcId: S, generation: G1 }] });
+    const lf = text.indexOf('\n');
+    return l.headlessMarkerOf({ state: 'value', value: text.slice(0, lf) + '\r\n' + text.slice(lf + 1) });
+  };
+  /** A marker that throws when looked at: a row before the marker row never reads it. */
+  const UNTOUCHABLE = { get ok(): never { throw new Error('the marker was looked at'); } } as unknown as Marker;
+  /** A function's text in lib.mjs: its `export function <name>(` line through the next line that is exactly `}`. */
+  const fnText = (name: string): string => {
+    const src = readFileSync(fileURLToPath(new URL('../../ccd/history/lib.mjs', import.meta.url)), 'utf8').split('\n');
+    const at = src.findIndex((x) => x.startsWith(`export function ${name}(`));
+    return at < 0 ? '' : src.slice(at, src.indexOf('}', at) + 1).join('\n');
+  };
+  /** Every seam value set and valid, the treatment arm; and the marker that lists S under G1. */
+  const full = (l: Lib): Recall => ({ session: S, arm: l.RECALL_ARMS[1]!, asof: ASOF });
+  const listed = (l: Lib): Marker => markerOf(l, [{ ccrcId: S, generation: G1 }]);
+  /** decideHeadless's input with no pane: every value valid unless `recall` overrides it. */
+  const atOf = (l: Lib) => (recall: Partial<Recall>, marker: Marker = listed(l)): HIn =>
+    ({ recall: { ...full(l), ...recall }, paneSet: false, marker });
+  /** One confirmed epoch of (S, G1), not merged, on a main transcript, holding ASOF's boundary. */
+  const row = (o: Partial<Row> = {}): Row => ({
+    uuid: ASOF, entry_id: 40, boundary_entry_id: 40, agent_id: '', cwd: '/home/u/tree/a', cwd_real: '/home/u/tree/a-real',
+    session_pk: 1, ccrc_id: S, generation: G1, project: 'proj-a', merged_into: null,
+    into_session_pk: null, into_ccrc_id: null, into_generation: null, into_project: null, into_merged_into: null, ...o,
+  });
+  const LIST = { storeId: STORE, pairs: [{ ccrcId: S, generation: G1 }] };
+  const askOf = (l: Lib) => (o: Partial<AIn> = {}): unknown =>
+    l.decideAsOfFamily({ session: S, asof: ASOF, rows: [row()], list: LIST, storeId: STORE, ...o });
+  const admitted = (generation: string, anchor: string | null, ccrcId: string = S): unknown =>
+    ({ ok: true, via: 'asof', generation, family: { ccrcId, project: 'proj-a' }, anchor });
+
+  it('decideHeadless: each word at its step, each case the CONTROL of the one before it (W2-D46 step 1)', async () => {
+    const l = await lib();
+    const FULL = full(l);
+    const at = atOf(l);
+    const steps: Array<[string, HIn, unknown]> = [
+      ['1. no seam value set, no pane: the tmux path', { recall: NONE, paneSet: false, marker: null }, TMUX],
+      ['1. no seam value set, in a pane: today\'s tmux path', { recall: NONE, paneSet: true, marker: null }, TMUX],
+      ['2. the seam set in a pane', { recall: FULL, paneSet: true, marker: null }, refused('headless-in-pane')],
+      ['3. no marker', at({}, l.headlessMarkerOf({ state: 'absent' })), refused('headless-unarmed')],
+      ['3. a marker that cannot be read is never read as absent', at({}, l.headlessMarkerOf({ state: 'unreadable' })), refused('headless-malformed')],
+      ['3. a marker the grammar refuses', at({}, withCr(l)), refused('headless-malformed')],
+      ['4. SESSION unset', at({ session: null }), refused('no-identity')],
+      ['4. SESSION empty is unset', at({ session: '' }), refused('no-identity')],
+      ['5. SESSION off the id grammar', at({ session: '../w2b-demo' }), refused('bad-id')],
+      ['6. SESSION on no list line', at({ session: OTHER_ID }), refused('headless-unlisted')],
+      ['6. a marker with zero pairs lists nobody', at({}, markerOf(l, [])), refused('headless-unlisted')],
+      ['7. ARM absent', at({ arm: null }), refused('headless-arm-unknown')],
+      ['7. ARM empty', at({ arm: '' }), refused('headless-arm-unknown')],
+      ['7. ARM outside RECALL_ARMS', at({ arm: 'other' }), refused('headless-arm-unknown')],
+      ['7. ARM in another case', at({ arm: FULL.arm!.toUpperCase() }), refused('headless-arm-unknown')],
+      ['8. ASOF absent', at({ asof: null }), refused('asof-invalid')],
+      ['8. ASOF empty', at({ asof: '' }), refused('asof-invalid')],
+      ['8. ASOF off the UUID grammar', at({ asof: 'not-a-uuid' }), refused('asof-invalid')],
+      ['8. ASOF in upper case', at({ asof: ASOF.toUpperCase() }), refused('asof-invalid')],
+    ];
+    for (const [why, input, want] of steps) expect(l.decideHeadless(input), why).toEqual(want);
+    const passed = { ok: true, path: 'headless', session: S, asof: ASOF, list: { storeId: STORE, pairs: [{ ccrcId: S, generation: G1 }] } };
+    for (const arm of l.RECALL_ARMS) {
+      expect(l.decideHeadless(at({ arm })), `past every row, ARM ${arm}: its exit 8 is step 6's, not this decider's`).toEqual({ ...passed, arm });
+    }
+    for (const w of ['headless-in-pane', 'headless-unarmed', 'headless-malformed', 'no-identity', 'bad-id', 'headless-unlisted',
+      'headless-arm-unknown', 'asof-invalid']) expect(REASONS[w], `${w} is an exit-2 REASONS word`).toBe(EXIT.REFUSED);
+  });
+
+  it('decideHeadless: an input that fails two adjacent steps answers the earlier word, pair by pair', async () => {
+    const l = await lib();
+    const at = atOf(l);
+    // Rows 1 and 2 cannot be told apart by any input (decideSeamInPane refuses only an engaged seam).
+    const pairs: Array<[string, HIn, unknown]> = [
+      ['2 before 3: a pane, and no marker', { recall: full(l), paneSet: true, marker: l.headlessMarkerOf({ state: 'absent' }) }, refused('headless-in-pane')],
+      ['3 before 4: a refused marker, and no SESSION', at({ session: null }, withCr(l)), refused('headless-malformed')],
+      ['4 before 5: an empty SESSION, which idOk refuses too', at({ session: '' }), refused('no-identity')],
+      ['5 before 6: an id off the grammar, on no list line', at({ session: '../w2b-demo' }), refused('bad-id')],
+      ['6 before 7: an unlisted id, and an unknown ARM', at({ session: OTHER_ID, arm: 'other' }), refused('headless-unlisted')],
+      ['7 before 8: an unknown ARM, and an ASOF off the grammar', at({ arm: null, asof: 'not-a-uuid' }), refused('headless-arm-unknown')],
+    ];
+    for (const [why, input, want] of pairs) expect(l.decideHeadless(input), why).toEqual(want);
+  });
+
+  it('W2-D45: empty is unset, a set paneSet is a pane, and the marker is looked at only past the pane row', async () => {
+    const l = await lib();
+    const EMPTY: Recall = { session: '', arm: '', asof: '' };
+    for (const paneSet of [false, true]) {
+      expect(l.decideHeadless({ recall: EMPTY, paneSet, marker: UNTOUCHABLE }), `empty values, paneSet ${paneSet}`).toEqual(TMUX);
+      expect(l.decideHeadless({ recall: NONE, paneSet, marker: UNTOUCHABLE }), `no values, paneSet ${paneSet}`).toEqual(TMUX);
+    }
+    expect(l.decideHeadless({ recall: { ...NONE, asof: ASOF }, paneSet: true, marker: UNTOUCHABLE }), 'a pane').toEqual(refused('headless-in-pane'));
+    expect(l.decideHeadless({ recall: { ...NONE, asof: ASOF }, paneSet: undefined as unknown as boolean, marker: UNTOUCHABLE }),
+      'anything but false is a pane (fail closed)').toEqual(refused('headless-in-pane'));
+    expect(() => l.decideHeadless({ recall: { ...NONE, arm: 'x' }, paneSet: false, marker: UNTOUCHABLE }),
+      'CONTROL: one row past the pane, the marker is looked at').toThrow('the marker was looked at');
+    expect(() => l.decideHeadless({ recall: { ...NONE, session: S }, paneSet: false, marker: null }),
+      'a marker not read past the pane row is the caller\'s defect').toThrow(/the seam is engaged and the marker was not read/);
+  });
+
+  it('R1: decideHeadless calls W2-2a\'s recallSeamEngaged and decideSeamInPane, which stay exported, and spells neither rule, nor the marker\'s fold, again', async () => {
+    const body = fnText('decideHeadless');
+    expect(body, 'decideHeadless is found').toContain('export function decideHeadless({ recall, paneSet, marker }) {');
+    expect(body, 'row 1 is W2-D45\'s rule').toContain("  if (!recallSeamEngaged(recall)) return { ok: true, path: 'tmux' };");
+    expect(body, 'row 2 is W2-D39\'s rule').toContain("  const inPane = decideSeamInPane({ pane: paneSet === false ? null : '', recall });");
+    expect(body, 'row 3 is headlessMarkerOf\'s answer').toContain('  if (!marker.ok) return marker;');
+    expect(body, 'row 4 is W2-D45\'s rule on SESSION alone')
+      .toContain("  if (!recallSeamEngaged({ session, arm: null, asof: null })) return refuseScope('no-identity');");
+    for (const second of [/typeof pane/, /PANE_RE/, /=== ''|!== ''/, /\.length\b/, /headless-in-pane/, /\.state\b/]) {
+      expect(body, `no second spelling: ${String(second)}`).not.toMatch(second);
+    }
+    const l = await lib();
+    expect([typeof l.recallSeamEngaged, typeof l.decideSeamInPane], 'kept, not folded').toEqual(['function', 'function']);
+  });
+
+  it('decideAsOfFamily: each word at its step, each case the CONTROL of the one before it (W2-D40; W2-D44\'s store line and pair)', async () => {
+    const l = await lib();
+    const ask = askOf(l);
+    const NO_EPOCH: Partial<Row> = { cwd: null, cwd_real: null, session_pk: null, ccrc_id: null, generation: null, project: null };
+    const HOP = { into_session_pk: 1, into_ccrc_id: S, into_generation: G1, into_project: 'proj-a', into_merged_into: null };
+    const steps: Array<[string, unknown, unknown]> = [
+      ['1. the store line names another store', ask({ list: { ...LIST, storeId: FOREIGN } }), refused('headless-unlisted')],
+      ['1. this store\'s meta holds no store_id', ask({ storeId: null }), refused('headless-unlisted')],
+      ['2. no entry has the uuid', ask({ rows: [] }), refused('asof-invalid')],
+      ['2. the rows are another uuid\'s', ask({ rows: [row({ uuid: G2 })] }), refused('asof-invalid')],
+      ['2. the entry has no boundaries row', ask({ rows: [row({ boundary_entry_id: null })] }), refused('asof-invalid')],
+      ['3. the boundary\'s transcript is a sidechain', ask({ rows: [row({ agent_id: 'a1' })] }), refused('asof-invalid')],
+      ['3. the boundary names no transcript', ask({ rows: [row({ agent_id: null })] }), refused('asof-invalid')],
+      ['4. the merged_into hop lands on a merged row', ask({ rows: [row({ session_pk: 4, generation: '', merged_into: 1, ...HOP, into_merged_into: 9 })] }), refused('asof-invalid')],
+      ['4. the merged_into hop lands on no row', ask({ rows: [row({ session_pk: 4, generation: '', merged_into: 9 })] }), refused('asof-invalid')],
+      ['4. no confirmed epoch', ask({ rows: [row(NO_EPOCH)] }), refused('asof-invalid')],
+      ['4. two families confirm the transcript',
+        ask({ rows: [row(), row({ session_pk: 6, ccrc_id: OTHER_ID, generation: G2 })] }), refused('asof-invalid')],
+      ['5. the one family is another id\'s, though (SESSION, its generation) is a pair',
+        ask({ rows: [row({ ccrc_id: OTHER_ID })] }), refused('asof-invalid')],
+      ['6. (SESSION, the family\'s generation) is no pair', ask({ rows: [row({ session_pk: 2, generation: G2 })] }), refused('headless-unlisted')],
+      ['admitted: an exact key, and the anchor is cwd_real', ask(), admitted(G1, '/home/u/tree/a-real')],
+      ['admitted: the anchor falls back to cwd', ask({ rows: [row({ cwd_real: null })] }), admitted(G1, '/home/u/tree/a')],
+      ['admitted: an epoch with neither has no anchor', ask({ rows: [row({ cwd: null, cwd_real: null })] }), admitted(G1, null)],
+      ['admitted: one family through two epoch rows, one on a row merged into it, and the first row\'s anchor',
+        ask({ rows: [row(), row({ session_pk: 4, generation: '', merged_into: 1, ...HOP, cwd_real: '/home/u/tree/b' })] }), admitted(G1, '/home/u/tree/a-real')],
+      ['admitted: a legacy family, generation \'\'',
+        ask({ rows: [row({ generation: '' })], list: { storeId: STORE, pairs: [{ ccrcId: S, generation: '' }] } }), admitted('', '/home/u/tree/a-real')],
+    ];
+    for (const [why, got, want] of steps) expect(got, why).toEqual(want);
+    // R3: row 1 is its own decision, which the read verbs call before any ASOF row is read, and decideAsOfFamily's first row.
+    expect(l.decideHeadlessStore({ list: LIST, storeId: STORE }), 'CONTROL: this store\'s own line').toEqual({ ok: true });
+    expect(l.decideHeadlessStore({ list: { ...LIST, storeId: FOREIGN }, storeId: STORE }), 'another store\'s line').toEqual(refused('headless-unlisted'));
+    expect(l.decideHeadlessStore({ list: LIST, storeId: null }), 'no meta store_id matches no line').toEqual(refused('headless-unlisted'));
+    const body = fnText('decideAsOfFamily');
+    expect(body, 'decideAsOfFamily\'s first row is decideHeadlessStore').toContain('  const store = decideHeadlessStore({ list, storeId });');
+    expect(body, 'and it spells the store-line rule no second time').not.toContain('list.storeId !==');
+  });
+
+  it('decideAsOfFamily: an input that fails two adjacent steps answers the earlier word', async () => {
+    const l = await lib();
+    const ask = askOf(l);
+    expect(ask({ list: { ...LIST, storeId: FOREIGN }, rows: [] }), '1 before 2: a foreign store line, and no entry')
+      .toEqual(refused('headless-unlisted'));
+    expect(ask({ rows: [row({ session_pk: 6, ccrc_id: OTHER_ID, generation: G2 })] }),
+      '5 before 6: another id\'s family, whose generation is no pair of SESSION\'s').toEqual(refused('asof-invalid'));
+    // Rows 2 to 5 answer one word, so swapping two of them changes no answer: each is pinned by its own drop mutant.
+  });
+
+  it('decideAsOfFamily over asOfFamilySql on a real store: purge and reuse, legacy and merged families, the D-6281 shape, each refusal', async () => {
+    const l = await lib();
+    const home = mkTmp('ccrc-history-w2b-family-');
+    replayStore.createStore(home, { storeId: STORE });
+    const db = replayStore.openWriter(l.historyPaths(home).dbFile);
+    try {
+      const G3 = 'e3e3e3e3-3333-4333-8333-333333333333';
+      const G4 = 'e4e4e4e4-4444-4444-8444-444444444444';
+      const G5 = 'e5e5e5e5-5555-4555-8555-555555555555';
+      const G6 = 'e6e6e6e6-6666-4666-8666-666666666666';
+      const uuid = (k: number): string => `f0f0f0f0-0000-4000-8000-${String(k).padStart(12, '0')}`;
+      const fam = db.prepare('INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms, merged_into) VALUES (?, ?, ?, ?, ?, ?)');
+      fam.run(1, S, G1, 'proj-a', 1000, null);
+      fam.run(2, S, G2, 'proj-a', 2000, null);              // S's newest family: the id was purged and reused
+      fam.run(3, 'w2b-legacy', '', 'proj-a', 500, null);
+      fam.run(5, 'w2b-merged', G3, 'proj-a', 600, null);
+      fam.run(4, 'w2b-merged', '', 'proj-a', 400, 5);       // a '' family merged into (w2b-merged, G3), still holding an epoch
+      fam.run(6, OTHER_ID, G4, 'proj-b', 700, null);
+      fam.run(9, 'w2b-chain', G6, 'proj-a', 320, null);
+      fam.run(8, 'w2b-chain', G5, 'proj-a', 310, 9);
+      fam.run(7, 'w2b-chain', '', 'proj-a', 300, 8);        // its one hop lands on a row merged again
+      const tr = db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid, agent_id) VALUES (?, ?, ?)');
+      for (const [tpk, k] of [[1, 101], [2, 102], [3, 103], [4, 104], [5, 105], [6, 106], [8, 108]] as const) tr.run(tpk, uuid(k), '');
+      tr.run(7, uuid(101), 'a1');                           // a sidechain of transcript 1's session
+      const ep = db.prepare(`INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, cwd, cwd_real, confirmed_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+      const epoch = (pk: number, seq: number, k: number, cwd: string | null, real: string | null, confirmed: number | null): void => {
+        ep.run(pk, seq, uuid(k), EPOCH_CAUSES[0]!, DECLARED_BY[0]!, cwd, real, confirmed);
+      };
+      epoch(1, 1, 101, '/home/u/tree/a', '/home/u/tree/a-real', 1100);
+      epoch(2, 1, 102, '/home/u/tree/b', '/home/u/tree/b', 2100);
+      epoch(3, 1, 103, '/home/u/tree/l', null, 600);
+      epoch(4, 1, 104, null, null, 450);
+      epoch(1, 2, 105, null, null, 1200);
+      epoch(6, 1, 105, null, null, 800);                    // transcript 5 is confirmed by two families
+      epoch(1, 3, 106, null, null, null);                   // transcript 6's one epoch is unconfirmed
+      epoch(7, 1, 108, null, null, 350);
+      const blob = db.prepare("INSERT INTO blobs (blob_id, sha256, codec, raw_len) VALUES (?, ?, 'raw', 0)");
+      const ent = db.prepare(`INSERT INTO entries (entry_id, uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns,
+        struct_file_id, blob_id) VALUES (?, ?, ?, 'system', 'harness', 1, ?, 1, ?)`);
+      const bnd = db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord) VALUES (?, ?, ?)');
+      /** Entry k on transcript `tpk`, with a boundaries row on `onTpk` (ord `ord`) unless that is null. */
+      const plant = (k: number, tpk: number, onTpk: number | null, ord = 1): string => {
+        blob.run(k, createHash('sha256').update(`w2b-family-${k}`).digest());
+        ent.run(k, uuid(k), tpk, k, k);
+        if (onTpk !== null) bnd.run(k, onTpk, ord);
+        return uuid(k);
+      };
+      const N1 = plant(1, 1, 1);
+      const N2 = plant(2, 2, 2);
+      const NL = plant(3, 3, 3);
+      const NM = plant(4, 4, 4);
+      const NB = plant(5, 5, 5);
+      const NU = plant(6, 6, 6);
+      const NS = plant(7, 7, 7);
+      const NP = plant(8, 1, null);                         // a plain row: no boundaries row
+      const NX = plant(9, 7, 1, 2);                         // D-6281: the entries row names the sidechain, the boundaries row the main transcript
+      const NC = plant(10, 8, 8);
+      const NZ = uuid(99);                                  // no entry has it
+      const own = (db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get() as unknown as { v: string }).v;
+      expect(own, 'CONTROL: the store is the one the marker names').toBe(STORE);
+      const pairs: Pair[] = [{ ccrcId: S, generation: G1 }, { ccrcId: 'w2b-legacy', generation: '' }, { ccrcId: 'w2b-merged', generation: G3 },
+        { ccrcId: OTHER_ID, generation: G4 }, { ccrcId: 'w2b-chain', generation: G5 }, { ccrcId: 'w2b-chain', generation: G6 }];
+      /** Step 1, then the statement, then step 4's decision, as Task 3 composes them. */
+      const admit = (session: string, asof: string, marker: Marker = markerOf(l, pairs)): unknown => {
+        const seam = l.decideHeadless({ recall: { session, arm: l.RECALL_ARMS[1]!, asof }, paneSet: false, marker });
+        if (!seam.ok || seam.path !== 'headless') throw new Error(`step 1 refused: ${JSON.stringify(seam)}`);
+        const rows = db.prepare(l.asOfFamilySql()).all({ asof: seam.asof }) as unknown as Row[];
+        return l.decideAsOfFamily({ session: seam.session, asof: seam.asof, rows, list: seam.list, storeId: own });
+      };
+      expect(admit(S, N1), 'purge and reuse: ASOF in G1\'s transcript reads G1, though S\'s newest family is G2')
+        .toEqual(admitted(G1, '/home/u/tree/a-real'));
+      expect(admit(S, N2), 'CONTROL: ASOF in G2\'s transcript, and (S, G2) is no pair').toEqual(refused('headless-unlisted'));
+      expect(admit(S, NX), 'D-6281: the boundaries row\'s transcript decides main, never the entries row\'s')
+        .toEqual(admitted(G1, '/home/u/tree/a-real'));
+      expect(admit('w2b-legacy', NL), 'a legacy family: \'\' is an exact key, and the anchor falls back to cwd')
+        .toEqual(admitted('', '/home/u/tree/l', 'w2b-legacy'));
+      expect(admit('w2b-merged', NM), 'a merged \'\' family is admitted as the family it merged into')
+        .toEqual(admitted(G3, null, 'w2b-merged'));
+      for (const [why, asof] of [['two families confirm its transcript', NB], ['its one epoch is unconfirmed', NU],
+        ['a sidechain boundary', NS], ['a plain row', NP], ['no entry', NZ]] as const) {
+        expect(admit(S, asof), why).toEqual(refused('asof-invalid'));
+      }
+      expect(admit('w2b-chain', NC), 'a hop that lands on a merged row').toEqual(refused('asof-invalid'));
+      expect(admit(OTHER_ID, N1), 'another id\'s family').toEqual(refused('asof-invalid'));
+      expect(admit(S, N1, markerOf(l, pairs, FOREIGN)), 'a marker for another store passes step 1 and is refused at admission')
+        .toEqual(refused('headless-unlisted'));
+    } finally { db.close(); }
+  });
+
+  it('the env path reads no registry or environment generation, and the tmux path\'s resolveGeneration is byte-identical (W2-D40; C48 stays tmux-only)', async () => {
+    for (const name of ['decideHeadless', 'decideHeadlessStore', 'asOfFamilySql', 'decideAsOfFamily']) {
+      const body = fnText(name);
+      expect(body.length, `${name} is found`).toBeGreaterThan(0);
+      expect(body, name).not.toMatch(/resolveGeneration|envGen|regGen|process\.env|CCRC_SESSION_GENERATION|\.workdir\b|newest/);
+    }
+    expect(fnText('resolveGeneration').split('\n'), 'resolveGeneration, byte for byte as at d119d6e90').toEqual([
+      'export function resolveGeneration({ envGen, regGen }) {',
+      "  if (typeof envGen === 'string' && UUID_RE.test(envGen)) return { value: envGen, via: 'env' };",
+      "  if (regGen.state === 'value' && UUID_RE.test(regGen.value.trim())) return { value: regGen.value.trim(), via: 'registry' };",
+      "  return { value: null, via: 'newest' };",
+      '}',
+    ]);
+    const l = await lib();
+    expect(l.resolveGeneration({ envGen: G2, regGen: { state: 'value', value: G1 } }), 'CONTROL: the tmux path still reads the env first')
+      .toEqual({ value: G2, via: 'env' });
+  });
+
+  it('decideAsOfFamily: a row whose merged_into hop lands on no row refuses the whole answer, though the other row alone would admit it (W2-D40 step 4; review 829 F3)', async () => {
+    const l = await lib();
+    const ask = askOf(l);
+    // The second epoch row is a family merged into a row that is not there (merged_into set, the joined row's pk null).
+    // The valid row alone is a listed, unmerged family of SESSION: a decider that dropped the null family, instead of
+    // refusing on it, would admit here, so the asserted value decides, not a TypeError on a null family.
+    const dangling = row({ session_pk: 4, generation: '', merged_into: 9 });
+    expect(ask({ rows: [row(), dangling] }), 'a hop to no row, beside a valid row').toEqual(refused('asof-invalid'));
+    expect(ask({ rows: [dangling, row()] }), 'and the same two rows in the other order').toEqual(refused('asof-invalid'));
+    expect(ask({ rows: [row()] }), 'CONTROL: the valid row alone admits').toEqual(admitted(G1, '/home/u/tree/a-real'));
+  });
+});
+
+describe('W2-2b review fix (D-6445): decideScope\'s workspace arm keeps the env anchor as stored, and the tmux registry text trimmed (W2-D40, W2-D41; D-5767)', () => {
+  const v = (value: string): libScope.Presence<string> => ({ state: 'value', value });
+  const at = (source: string, workdir: libScope.Presence<string>): unknown => libScope.decideScope({
+    source, id: 'claude-a-demo', generation: { value: null, via: 'newest' },
+    flags: { project: false, workspace: true, session: null },
+    reg: { project: v('demo'), workdir, sessionProject: null },
+  });
+  const ok = (source: string, workdir: string): unknown =>
+    ({ ok: true, kind: 'workspace', source, id: 'claude-a-demo', generation: null, project: 'demo', workdir });
+  const refused = { ok: false, rc: 2, reason: 'workspace-unreadable' };
+
+  it('the env source returns the anchor untrimmed, a trailing or a leading space kept', () => {
+    expect(at('env', v('/t/a ')), 'env: a trailing space is part of the stored directory name').toEqual(ok('env', '/t/a '));
+    expect(at('env', v(' /t/a')), 'env: a leading space too').toEqual(ok('env', ' /t/a'));
+    expect(at('env', v('/t/a')), 'env: an anchor with none is unchanged').toEqual(ok('env', '/t/a'));
+  });
+
+  it('CONTROL: the tmux source with the same input returns it trimmed, as a registry file\'s text is', () => {
+    expect(at('tmux', v('/t/a ')), 'CONTROL: tmux trims a registry file\'s text').toEqual(ok('tmux', '/t/a'));
+    expect(at('tmux', v(' /t/a\n')), 'CONTROL: tmux trims both ends and the newline').toEqual(ok('tmux', '/t/a'));
+  });
+
+  it('the refusals stay under env: a blank or whitespace-only anchor, an absent one and an unreadable one are each workspace-unreadable', () => {
+    for (const [name, workdir] of [['empty', v('')], ['whitespace only', v('  \t')], ['absent', { state: 'absent' }], ['unreadable', { state: 'unreadable' }]] as const) {
+      expect(at('env', workdir), `env: ${name}`).toEqual(refused);
+      expect(at('tmux', workdir), `CONTROL tmux: ${name}`).toEqual(refused);
+    }
+    expect(libScope.decideScope({
+      source: 'env', id: 'claude-a-demo', generation: { value: null, via: 'newest' }, flags: { project: false, workspace: true, session: null },
+      reg: { project: { state: 'absent' }, workdir: v('/t/a '), sessionProject: null },
+    }), 'env: the project refusal stays').toEqual(refused);
   });
 });

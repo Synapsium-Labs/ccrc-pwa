@@ -6,13 +6,19 @@ import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import { FleetWatcher } from '../src/watch.js';
 import { buildServer } from '../src/server.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
 import type { PrState } from '../../shared/api.js';
 import type { PushPayload } from '../src/push.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+
+/** Stamp the PR lane as if it last ran at `ms` (the on-demand stamp reads the wall clock, so the clock is set for it). */
+function stampPrAt(w: FleetWatcher, ms: number): void {
+  const spy = vi.spyOn(Date, 'now').mockReturnValue(ms);
+  try { w.stamp('pr'); } finally { spy.mockRestore(); }
+}
 
 function seed(ids: string[]): string {
   const home = mkTmp('ccrc-');
@@ -42,11 +48,11 @@ const mergedLine = (id: string, number = 42): string => JSON.stringify({
 function runnerFor(prOut: string, calls: string[][], pid = '4242'): Runner {
   return async (_cmd, args) => {
     calls.push(args);
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${pid}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'pr-state') return { code: 0, stdout: prOut, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${pid}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'pr-state') return { ran: true, code: 0, stdout: prOut, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
 }
 
@@ -62,7 +68,7 @@ describe('the third lane', () => {
     const home = seed(['demo-quiet-basin', 'demo-still-cove']);
     liveIdle(home);
     const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor('', calls)), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor('', calls))), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(calls.filter((c) => c[0] === 'pr-state')).toHaveLength(1));
     expect(calls.find((c) => c[0] === 'pr-state')).toEqual(['pr-state', '--project', 'demo']);
@@ -76,11 +82,11 @@ describe('the third lane', () => {
     liveIdle(home);
     const run: Runner = async (_cmd, args) => {
       if (args[0] === 'pr-state') return new Promise(() => { /* never resolves */ });
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
-    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, run)), new Bus(), 10_000);
     const started = Date.now();
     await w.tick();
     expect(Date.now() - started).toBeLessThan(2000);
@@ -106,11 +112,11 @@ describe('the third lane', () => {
       const run: Runner = async (_cmd, args) => {
         calls.push(args);
         if (args[0] === 'pr-state') return new Promise(() => { /* wedged forever */ });
-        if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-        if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-        return { code: 0, stdout: '', stderr: '' };
+        if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+        if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+        return { ran: true, code: 0, stdout: '', stderr: '' };
       };
-      const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
+      const w = new FleetWatcher(withFakeClock(testDeps(home, run)), new Bus(), 10_000);
       await w.tick();
       await new Promise((r) => setTimeout(r, 50));
       expect(calls.filter((c) => c[0] === 'pr-state')).toHaveLength(1);
@@ -130,7 +136,7 @@ describe('the third lane', () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls))), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
     w.stop();
@@ -140,7 +146,7 @@ describe('the third lane', () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor('{"id":"demo-qui', calls)), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor('{"id":"demo-qui', calls))), new Bus(), 10_000);
     await expect(w.tick()).resolves.toBeUndefined();
     w.stop();
   });
@@ -155,7 +161,7 @@ describe('the third lane', () => {
     liveIdle(home);
     const calls: string[][] = [];
     const out = `${JSON.stringify({ id: 'demo-still-cove', phase: 'unknown', reason: 'error' })}\n${mergedLine('demo-quiet-basin')}`;
-    const w = new FleetWatcher(testDeps(home, runnerFor(out, calls)), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor(out, calls))), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
     const broken = w.currentPrStates().get('demo-still-cove');
@@ -170,7 +176,7 @@ describe('the third lane', () => {
     const calls: string[][] = [];
     const deps = { ...testDeps(home, runnerFor('', calls)), fleetState: { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null, build: null } };
     deps.cfg = { ...deps.cfg, fleetMode: 'remote' };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 10_000);
     await w.tick();
     await new Promise((r) => setTimeout(r, 50));
     expect(calls.filter((c) => c[0] === 'pr-state')).toEqual([]);
@@ -191,7 +197,7 @@ describe('the swept state reaches the wire, not just currentPrStates()', () => {
     liveIdle(home);
     const calls: string[][] = [];
     const deps = testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls));
-    const watcher = new FleetWatcher(deps, new Bus(), 10_000);
+    const watcher = new FleetWatcher(withFakeClock(deps), new Bus(), 10_000);
     const app = await buildServer(deps, new Bus(), watcher);
     try {
       await watcher.tick();
@@ -211,7 +217,7 @@ describe('the swept state reaches the wire, not just currentPrStates()', () => {
     const calls: string[][] = [];
     const deps = testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls));
     const bus = new Bus();
-    const watcher = new FleetWatcher(deps, bus, 10_000);
+    const watcher = new FleetWatcher(withFakeClock(deps), bus, 10_000);
     const app = await buildServer(deps, bus, watcher);
     try {
       await watcher.tick();
@@ -255,7 +261,7 @@ describe('tick() feeds its OWN fleet assembly from the sweep too, not just the r
     liveIdle(home);
     const calls: string[][] = [];
     const bus = new Bus();
-    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), bus, 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls))), bus, 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
 
@@ -293,11 +299,11 @@ describe('the single-flight and due-interval guards hold their line, not just th
     const run: Runner = async (_cmd, args) => {
       calls.push(args);
       if (args[0] === 'pr-state') return new Promise(() => { /* wedged forever */ });
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
-    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, run)), new Bus(), 10_000);
     await w.tick();
     await new Promise((r) => setTimeout(r, 50));
     expect(calls.filter((c) => c[0] === 'pr-state')).toHaveLength(1);
@@ -310,7 +316,7 @@ describe('the single-flight and due-interval guards hold their line, not just th
   it('the single-flight guard holds even if the due-interval would otherwise allow a new sweep', async () => {
     // Isolates the single-flight guard from the due-interval guard: the test
     // above ("does NOT start a second sweep while wedged") never resets
-    // lastPrSweep, so the due-interval guard would ALSO block a second
+    // the lane's stamp, so the due-interval guard would ALSO block a second
     // sweep on its own — a single-flight guard broken toward "always allow"
     // could hide behind it. Force the due-interval open here so only
     // single-flight stands in the way.
@@ -320,15 +326,15 @@ describe('the single-flight and due-interval guards hold their line, not just th
     const run: Runner = async (_cmd, args) => {
       calls.push(args);
       if (args[0] === 'pr-state') return new Promise(() => { /* wedged forever */ });
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
-    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, run)), new Bus(), 10_000);
     await w.tick();
     await new Promise((r) => setTimeout(r, 50));
     expect(calls.filter((c) => c[0] === 'pr-state')).toHaveLength(1);
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;   // due-interval bypassed
+    w.kick('pr');   // due-interval bypassed
     await w.tick();
     await new Promise((r) => setTimeout(r, 50));
     expect(calls.filter((c) => c[0] === 'pr-state'), 'single-flight must hold even with the due-interval bypassed').toHaveLength(1);
@@ -336,7 +342,7 @@ describe('the single-flight and due-interval guards hold their line, not just th
   });
 
   it("an abandoned sweep's own finally must not clear a NEWER sweep's still-active latch", async () => {
-    // The `if (this.prSweepStartedAt === mySweep)` identity check in
+    // The owner-token identity check in the runner
     // sweepPr's finally, isolated: sweep A wedges and is abandoned past the
     // ceiling; sweep B supersedes it and is ALSO still in flight when A
     // finally settles. A's own finally running unconditionally must not
@@ -352,15 +358,15 @@ describe('the single-flight and due-interval guards hold their line, not just th
         calls.push(args);
         if (args[0] === 'pr-state') {
           const n = calls.filter((c) => c[0] === 'pr-state').length;
-          if (n === 1) return new Promise((resolve) => { resolveA = () => resolve({ code: 0, stdout: '', stderr: '' }); });
-          if (n === 2) return new Promise((resolve) => { resolveB = () => resolve({ code: 0, stdout: '', stderr: '' }); });
-          return { code: 0, stdout: '', stderr: '' };
+          if (n === 1) return new Promise((resolve) => { resolveA = () => resolve({ ran: true, code: 0, stdout: '', stderr: '' }); });
+          if (n === 2) return new Promise((resolve) => { resolveB = () => resolve({ ran: true, code: 0, stdout: '', stderr: '' }); });
+          return { ran: true, code: 0, stdout: '', stderr: '' };
         }
-        if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-        if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-        return { code: 0, stdout: '', stderr: '' };
+        if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+        if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+        return { ran: true, code: 0, stdout: '', stderr: '' };
       };
-      const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
+      const w = new FleetWatcher(withFakeClock(testDeps(home, run)), new Bus(), 10_000);
 
       await w.tick();   // sweep A starts, wedges on its own pr-state call
       await new Promise((r) => setTimeout(r, 50));
@@ -377,7 +383,7 @@ describe('the single-flight and due-interval guards hold their line, not just th
       // B is STILL legitimately in flight. Forcing due again must NOT start
       // a third sweep: A's finally clearing the latch out from under B would
       // be exactly the bug the identity check exists to prevent.
-      (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+      w.kick('pr');
       await w.tick();
       await new Promise((r) => setTimeout(r, 50));
       expect(calls.filter((c) => c[0] === 'pr-state'),
@@ -394,14 +400,14 @@ describe('the single-flight and due-interval guards hold their line, not just th
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls))), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(calls.filter((c) => c[0] === 'pr-state')).toHaveLength(1));
     // Wait for the FULL sweep (including archiveMerged and the finally that
     // releases the single-flight latch) so this test isolates the
     // due-interval guard rather than incidentally riding on single-flight
     // still being fresh.
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
     await w.tick();
     await new Promise((r) => setTimeout(r, 50));
     expect(calls.filter((c) => c[0] === 'pr-state'), 'a completed sweep still inside its interval must not repeat').toHaveLength(1);
@@ -419,8 +425,8 @@ describe('the single-flight and due-interval guards hold their line, not just th
     const idleHome = seed(['demo-quiet-basin']);
     liveIdle(idleHome);
     const idleCalls: string[][] = [];
-    const wIdle = new FleetWatcher(testDeps(idleHome, runnerFor('', idleCalls)), new Bus(), 10_000);
-    (wIdle as unknown as { lastPrSweep: number }).lastPrSweep = Date.now() - elapsed;
+    const wIdle = new FleetWatcher(withFakeClock(testDeps(idleHome, runnerFor('', idleCalls))), new Bus(), 10_000);
+    stampPrAt(wIdle, Date.now() - elapsed);
     await wIdle.tick();
     await new Promise((r) => setTimeout(r, 50));
     expect(idleCalls.filter((c) => c[0] === 'pr-state'), 'no pending PR — the slow 120s cadence applies').toEqual([]);
@@ -431,9 +437,9 @@ describe('the single-flight and due-interval guards hold their line, not just th
     const openHome = seed(['demo-quiet-basin']);
     liveIdle(openHome);
     const openCalls: string[][] = [];
-    const wOpen = new FleetWatcher(testDeps(openHome, runnerFor('', openCalls)), new Bus(), 10_000);
+    const wOpen = new FleetWatcher(withFakeClock(testDeps(openHome, runnerFor('', openCalls))), new Bus(), 10_000);
     (wOpen as unknown as { prStates: Map<string, PrState> }).prStates.set('demo-quiet-basin', openNotPending);
-    (wOpen as unknown as { lastPrSweep: number }).lastPrSweep = Date.now() - elapsed;
+    stampPrAt(wOpen, Date.now() - elapsed);
     await wOpen.tick();
     await new Promise((r) => setTimeout(r, 50));
     expect(openCalls.filter((c) => c[0] === 'pr-state'), 'open with settled checks is not "pending" — the slow cadence still applies').toEqual([]);
@@ -442,9 +448,9 @@ describe('the single-flight and due-interval guards hold their line, not just th
     const activeHome = seed(['demo-quiet-basin']);
     liveIdle(activeHome);
     const activeCalls: string[][] = [];
-    const wActive = new FleetWatcher(testDeps(activeHome, runnerFor('', activeCalls)), new Bus(), 10_000);
+    const wActive = new FleetWatcher(withFakeClock(testDeps(activeHome, runnerFor('', activeCalls))), new Bus(), 10_000);
     (wActive as unknown as { prStates: Map<string, PrState> }).prStates.set('demo-quiet-basin', openPending);
-    (wActive as unknown as { lastPrSweep: number }).lastPrSweep = Date.now() - elapsed;
+    stampPrAt(wActive, Date.now() - elapsed);
     await wActive.tick();
     await vi.waitFor(() => expect(activeCalls.filter((c) => c[0] === 'pr-state')).toHaveLength(1));
     wActive.stop();
@@ -459,27 +465,27 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     const failing = { value: false };
     const run: Runner = async (_cmd, args) => {
       calls.push(args);
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
       if (args[0] === 'pr-state') {
-        if (failing.value) return { code: 1, stdout: '', stderr: 'gh: rate limited' };
-        return { code: 0, stdout: `${mergedLine('demo-quiet-basin')}\n${mergedLine('demo-still-cove')}`, stderr: '' };
+        if (failing.value) return { ran: true, code: 1, stdout: '', stderr: 'gh: rate limited' };
+        return { ran: true, code: 0, stdout: `${mergedLine('demo-quiet-basin')}\n${mergedLine('demo-still-cove')}`, stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
-    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, run)), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
     expect(w.currentPrStates().get('demo-quiet-basin')?.number).toBe(42);
     // `phase` lands mid-sweep, well before `archiveMerged` and the `finally`
     // that releases the single-flight latch — wait for the FULL first sweep
     // to finish, or forcing a second one below would just bounce off its own
-    // still-fresh `prSweepStartedAt` and never reach the failing branch.
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    // still-fresh flight and never reach the failing branch.
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
 
     failing.value = true;
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('unknown'));
     const quiet = w.currentPrStates().get('demo-quiet-basin')!;
@@ -499,7 +505,7 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     expect(calls.filter((c) => c[0] === 'pr-state')).toHaveLength(2);
 
     // A third tick, forced due again, must NOT re-poll this project: it's backed off.
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     await new Promise((r) => setTimeout(r, 50));
     expect(calls.filter((c) => c[0] === 'pr-state'), 'an active per-project backoff must block the next due sweep').toHaveLength(2);
@@ -512,22 +518,22 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     liveIdle(home);
     const failing = { value: false };
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
       if (args[0] === 'pr-state') {
-        if (failing.value) return { code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
-        return { code: 0, stdout: `${mergedLine('demo-quiet-basin')}\n${mergedLine('demo-still-cove')}`, stderr: '' };
+        if (failing.value) return { ran: true, code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
+        return { ran: true, code: 0, stdout: `${mergedLine('demo-quiet-basin')}\n${mergedLine('demo-still-cove')}`, stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
-    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, run)), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
 
     failing.value = true;
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('unknown'));
     const quiet = w.currentPrStates().get('demo-quiet-basin')!;
@@ -542,22 +548,22 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     liveIdle(home);
     const failing = { value: false };
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
       if (args[0] === 'pr-state') {
         if (failing.value) return { code: 1, stdout: '', stderr: 'timeout', ran: false, reason: 'timeout', detail: 'timeout' };
-        return { code: 0, stdout: mergedLine('demo-quiet-basin'), stderr: '' };
+        return { ran: true, code: 0, stdout: mergedLine('demo-quiet-basin'), stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
-    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, run)), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
 
     failing.value = true;
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('unknown'));
     expect(w.currentPrStates().get('demo-quiet-basin')?.reason).toBe('cut-short');
@@ -571,30 +577,30 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     const killed = { value: true };
     let prStateCalls = 0;
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
       if (args[0] === 'pr-state') {
         prStateCalls += 1;
-        if (failing.value && killed.value) return { code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
-        if (failing.value) return { code: 1, stdout: '', stderr: '' };
-        return { code: 0, stdout: mergedLine('demo-quiet-basin'), stderr: '' };
+        if (failing.value && killed.value) return { ran: true, code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' };
+        if (failing.value) return { ran: true, code: 1, stdout: '', stderr: '' };
+        return { ran: true, code: 0, stdout: mergedLine('demo-quiet-basin'), stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const sweeps = (): string[] => warn.mock.calls.map((c) => String(c[0])).filter((s) => s.includes('PR sweep of demo'));
-    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
-    const internals = w as unknown as { prSweepStartedAt: number; lastPrSweep: number; prBackoff: Map<string, unknown> };
+    const w = new FleetWatcher(withFakeClock(testDeps(home, run)), new Bus(), 10_000);
+    const internals = w as unknown as { prBackoff: Map<string, unknown> };
     // One forced pass: waits for the sweep's own runner call AND for its single-flight latch to release, so a step
     // whose state does not change (the second failure) cannot be asserted before its sweep has run.
     const pass = async (): Promise<void> => {
       const before = prStateCalls;
-      internals.lastPrSweep = 0;
+      w.kick('pr');
       internals.prBackoff.clear();
       await w.tick();
       await vi.waitFor(() => expect(prStateCalls).toBe(before + 1));
-      await vi.waitFor(() => expect(internals.prSweepStartedAt).toBe(0));
+      await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
     };
     try {
       await pass();
@@ -630,7 +636,7 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     liveIdle(home);
     const calls: string[][] = [];
     const out = JSON.stringify({ phase: 'unknown', reason: 'unauthenticated' });
-    const w = new FleetWatcher(testDeps(home, runnerFor(out, calls)), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor(out, calls))), new Bus(), 10_000);
     const before = Date.now();
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.reason).toBe('unauthenticated'));
@@ -645,7 +651,7 @@ describe('backoffPr — a failed read never overwrites a good phase, and unauthe
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls))), new Bus(), 10_000);
     // Pre-seed an expired backoff so the per-project `until` gate doesn't
     // itself block this sweep — isolates `prBackoff.delete(project)`.
     (w as unknown as { prBackoff: Map<string, { until: number; step: number }> })
@@ -663,7 +669,7 @@ describe('the unsupported-verb branch — a fleet that never advertised pr-state
     liveIdle(home);
     const calls: string[][] = [];
     const deps = { ...testDeps(home, runnerFor('', calls)), fleetState: { connected: true, downSince: null, ccdVerbs: ['start'], rosterFp: null, build: null } };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.reason).toBe('unsupported'));
     const quiet = w.currentPrStates().get('demo-quiet-basin')!;
@@ -712,11 +718,11 @@ describe('the merged lane announces and never acts', () => {
     const calls: string[][] = [];
     const notify = vi.fn(async (_payload: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 10_000);
     await w.tick();
-    // `prSweepStartedAt` back to 0 is the one signal the whole sweep finished —
+    // the flight clearing is the one signal the whole sweep finished —
     // waiting on the absence of a call otherwise proves only that it is slow.
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     const payload = notify.mock.calls[0]![0];
@@ -735,14 +741,14 @@ describe('the merged lane announces and never acts', () => {
     const calls: string[][] = [];
     const notify = vi.fn(async (_payload: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
 
     // The same sweep again with the SAME PR: the latch holds, no second push.
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
     expect(notify).toHaveBeenCalledTimes(1);
 
     // A NEW pr-state reading, a higher PR number: `boundRow` binds the newest
@@ -750,7 +756,7 @@ describe('the merged lane announces and never acts', () => {
     // actually looks like on the wire.
     (w as unknown as { deps: { runCcd: unknown } }).deps.runCcd =
       testDeps(home, runnerFor(mergedLine('demo-quiet-basin', 43), calls)).runCcd;
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(2));
     expect(notify.mock.calls[1]![0].body).toContain('#43');
@@ -766,7 +772,7 @@ describe('the merged lane announces and never acts', () => {
     const calls: string[][] = [];
     const notify = vi.fn(async (_payload: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
@@ -781,7 +787,7 @@ describe('the merged lane announces and never acts', () => {
     const bus = new Bus();
     bus.on('session:demo-quiet-basin', () => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
-    const w = new FleetWatcher(deps, bus, 10_000);
+    const w = new FleetWatcher(withFakeClock(deps), bus, 10_000);
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
@@ -799,7 +805,7 @@ describe('the merged lane announces and never acts', () => {
     const calls: string[][] = [];
     const notify = vi.fn(async (_payload: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     // `detectDialogs` takes its own capture-pane/list-panes for every row, so
@@ -832,16 +838,15 @@ describe('the merged lane\'s surviving rungs choose the SENTENCE', () => {
     const calls: string[][] = [];
     const notify = vi.fn(async (_payload: PushPayload) => {});
     const grey = JSON.stringify({ id: 'demo-quiet-basin', phase: 'unknown', reason: 'timeout' });
-    const w = new FleetWatcher(
-      { ...testDeps(home, runnerFor(grey, calls)), push: { notify } as never }, new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(home, runnerFor(grey, calls)), push: { notify } as never }), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('unknown'));
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
     expect(notify).not.toHaveBeenCalled();
 
     (w as unknown as { deps: { runCcd: unknown } }).deps.runCcd =
       testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)).runCcd;
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     expect(notify.mock.calls[0]![0].body).toContain('nothing archived');
@@ -860,17 +865,17 @@ describe('the merged lane\'s surviving rungs choose the SENTENCE', () => {
     const home = seed(['demo-quiet-basin']);
     const calls: string[][] = [];
     const notify = vi.fn(async (_payload: PushPayload) => {});
-    const w = new FleetWatcher({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
-      io: unreadableField('demo-quiet-basin', 'workdir'), push: { notify } as never }, new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      io: unreadableField('demo-quiet-basin', 'workdir'), push: { notify } as never }), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    await vi.waitFor(() => expect(w.inFlight('pr')).toBeNull());
     expect(notify).not.toHaveBeenCalled();
     w.stop();
 
     const measured = vi.fn(async (_payload: PushPayload) => {});
-    const w2 = new FleetWatcher({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
-      push: { notify: measured } as never }, new Bus(), 10_000);
+    const w2 = new FleetWatcher(withFakeClock({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      push: { notify: measured } as never }), new Bus(), 10_000);
     await w2.tick();
     await vi.waitFor(() => expect(measured).toHaveBeenCalledTimes(1));
     w2.stop();
@@ -886,8 +891,8 @@ describe('the merged lane\'s surviving rungs choose the SENTENCE', () => {
     writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.hold'), 'program:orca wave:2/3');
     const calls: string[][] = [];
     const notify = vi.fn(async (_payload: PushPayload) => {});
-    const w = new FleetWatcher({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
-      push: { notify } as never }, new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      push: { notify } as never }), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     expect(notify.mock.calls[0]![0].body).toBe('PR #42 merged — program:orca wave:2/3; nothing archived.');
@@ -915,8 +920,8 @@ describe('the merged lane\'s surviving rungs choose the SENTENCE', () => {
 
     const calls: string[][] = [];
     const notify = vi.fn(async (_payload: PushPayload) => {});
-    const w = new FleetWatcher({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
-      coord, push: { notify } as never }, new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      coord, push: { notify } as never }), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     expect(notify.mock.calls[0]![0].body)
@@ -928,8 +933,8 @@ describe('the merged lane\'s surviving rungs choose the SENTENCE', () => {
     // Landing-order wave 3d: the durable "already told" read is `?.` too. Without it the read would throw here and
     // the lane's catch would still announce, so only the absence of its warning tells the two apart.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const w2 = new FleetWatcher({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
-      push: { notify: coordless } as never }, new Bus(), 10_000);
+    const w2 = new FleetWatcher(withFakeClock({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      push: { notify: coordless } as never }), new Bus(), 10_000);
     try {
       await w2.tick();
       await vi.waitFor(() => expect(coordless).toHaveBeenCalledTimes(1));
@@ -957,8 +962,8 @@ describe('the merged lane\'s surviving rungs choose the SENTENCE', () => {
     const home = seed(['demo-quiet-basin']);
     const calls: string[][] = [];
     const notify = vi.fn(async (_payload: PushPayload) => {});
-    const w = new FleetWatcher({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
-      push: { notify } as never }, new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      push: { notify } as never }), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     const payload = notify.mock.calls[0]![0];
@@ -979,7 +984,7 @@ describe('the sweep retains the measured repo, not just the PR phase', () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls))), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' }));
     w.stop();
@@ -989,7 +994,7 @@ describe('the sweep retains the measured repo, not just the PR phase', () => {
     const home = seed(['demo-quiet-basin']);
     const calls: string[][] = [];
     const failure = JSON.stringify({ phase: 'unknown', reason: 'no-remote' });
-    const w = new FleetWatcher(testDeps(home, runnerFor(failure, calls)), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor(failure, calls))), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'absent' }));
     w.stop();
@@ -999,7 +1004,7 @@ describe('the sweep retains the measured repo, not just the PR phase', () => {
     const home = seed(['demo-quiet-basin']);
     const calls: string[][] = [];
     const failure = JSON.stringify({ phase: 'unknown', reason: 'timeout' });
-    const w = new FleetWatcher(testDeps(home, runnerFor(failure, calls)), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor(failure, calls))), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'unmeasured' }));
     w.stop();
@@ -1015,14 +1020,14 @@ describe('the sweep retains the measured repo, not just the PR phase', () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls))), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' }));
 
     const failure = JSON.stringify({ phase: 'unknown', reason: 'timeout' });
     (w as unknown as { deps: { runCcd: unknown } }).deps.runCcd =
       testDeps(home, runnerFor(failure, calls)).runCcd;
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     // Proves the SECOND sweep actually ran and actually failed, so the
     // assertion below is about survival across a failure rather than a
@@ -1047,7 +1052,7 @@ describe('the sweep retains the measured repo, not just the PR phase', () => {
     // — it is what `ccd pr-state --project` was CALLED with.
     const lying = mergedLine('demo-quiet-basin').replace('"project":"demo"', '"project":"not-demo"');
     expect(lying).toContain('not-demo');          // anti-vacuity: the fixture really lies
-    const w = new FleetWatcher(testDeps(home, runnerFor(lying, calls)), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor(lying, calls))), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' }));
     // …and nothing was invented under the name the line made up.
@@ -1059,7 +1064,7 @@ describe('the sweep retains the measured repo, not just the PR phase', () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls))), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' }));
 
@@ -1072,7 +1077,7 @@ describe('the sweep retains the measured repo, not just the PR phase', () => {
     expect(noRepo).toContain('"repo":""');        // anti-vacuity
     (w as unknown as { deps: { runCcd: unknown } }).deps.runCcd =
       testDeps(home, runnerFor(noRepo, calls)).runCcd;
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    w.kick('pr');
     await w.tick();
     // The second sweep really ran and really parsed a full line — without this
     // the assertion below could be a no-op tick.
@@ -1089,7 +1094,7 @@ describe('the sweep retains the measured repo, not just the PR phase', () => {
     liveIdle(home);
     const calls: string[][] = [];
     const noRepo = mergedLine('demo-quiet-basin').replace('"repo":"o/r"', '"repo":""');
-    const w = new FleetWatcher(testDeps(home, runnerFor(noRepo, calls)), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(home, runnerFor(noRepo, calls))), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
     expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'unmeasured' });
@@ -1107,7 +1112,7 @@ describe('the sweep retains the measured repo, not just the PR phase', () => {
     liveIdle(home);
     const calls: string[][] = [];
     const deps = testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls));
-    const watcher = new FleetWatcher(deps, new Bus(), 10_000);
+    const watcher = new FleetWatcher(withFakeClock(deps), new Bus(), 10_000);
     const app = await buildServer(deps, new Bus(), watcher);
     try {
       await watcher.tick();

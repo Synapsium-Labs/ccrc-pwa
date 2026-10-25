@@ -239,8 +239,13 @@ const none = (payload: object | string, env: Record<string, string> = {}): void 
 // ── payload builders (the keys the captured lanes send) ──
 const ev = (name: string, extra: Record<string, unknown> = {}): Record<string, unknown> =>
   ({ session_id: CLAUDE_SID, transcript_path: TRANSCRIPT, cwd: '/rig/repo', hook_event_name: name, ...extra });
+// An Agent or Task launch names a model, as the hook's fan-out arm (D-6798) requires; a launch that names none is denied
+// there, and these suites are about the spool, not that arm.
 const pre = (tool: string, input: Record<string, unknown>, id = 'toolu_01AAAA', extra: Record<string, unknown> = {}): Record<string, unknown> =>
-  ev('PreToolUse', { tool_name: tool, tool_input: input, tool_use_id: id, ...extra });
+  ev('PreToolUse', {
+    tool_name: tool, tool_input: (tool === 'Agent' || tool === 'Task') && !('model' in input) ? { model: 'sonnet', ...input } : input,
+    tool_use_id: id, ...extra,
+  });
 const post = (tool: string, input: Record<string, unknown>, resp: unknown, id = 'toolu_01AAAA', extra: Record<string, unknown> = {}): Record<string, unknown> =>
   ev('PostToolUse', { tool_name: tool, tool_input: input, tool_response: resp, tool_use_id: id, ...extra });
 

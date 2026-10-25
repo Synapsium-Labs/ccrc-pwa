@@ -411,6 +411,75 @@ describe('generateAccountsSh — the credential-file projection (D-3524)', () =>
   });
 });
 
+// codex-bridge Stage 1, Task 10. History's sweep shim asks the auth library which files under a codex lane's
+// authDir hold a secret (`secret-files`), so it must be able to name each lane's authDir. Emitted always, like
+// `_ccrc_secrets_file`: `declare -F _ccrc_auth_dir` is the shim's version probe.
+describe('generateAccountsSh — the authDir projection (codex-bridge Stage 1)', () => {
+  const codexRoster = parseRoster({ version: 1, accounts: [
+    { id: 'a', label: 'A', configDirSuffix: '.a', exec: { kind: 'upstream', secretsFile: '.cc-secrets/a-oauth.env' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'codex-a', label: 'Codex A', configDirSuffix: '.claude-codex-a',
+      exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir: '.local/share/ccrc/codex/codex-a' },
+      homeAble: false, hue: 'violet', telemetry: 'codex' },
+    { id: 'codex-b', label: 'Codex B', configDirSuffix: '.claude-codex-b',
+      exec: { kind: 'codex', provider: 'openai', proxyPort: 45012, litellmPort: 45013, authDir: '.local/share/ccrc/codex/codex-b' },
+      homeAble: false, hue: 'blue', telemetry: 'codex' },
+  ] });
+  const codexHome = mkTmp('roster-gen-authdir-');
+  mkdirSync(path.join(codexHome, '.ccrc'), { recursive: true });
+  writeFileSync(path.join(codexHome, '.ccrc', 'accounts.sh'), generateAccountsSh(codexRoster));
+
+  const bareHome = mkTmp('roster-gen-authdir-bare-');
+  mkdirSync(path.join(bareHome, '.ccrc'), { recursive: true });
+  writeFileSync(path.join(bareHome, '.ccrc', 'accounts.sh'), generateAccountsSh(roster));
+
+  const armsOf = (body: string): string[] => {
+    const block = body.slice(body.indexOf('_ccrc_auth_dir() {'));
+    return [...block.slice(0, block.indexOf('esac')).matchAll(/^ {4}([a-z0-9-]+)\)/gm)].map((m) => m[1]!);
+  };
+
+  it('_ccrc_auth_dir is emitted always, names each codex row\'s authDir, and nothing for any other row', () => {
+    // No codex row: still defined, an empty case, silent at rc 0.
+    expect(sh(bareHome, 'declare -F _ccrc_auth_dir >/dev/null && echo yes')).toBe('yes');
+    expect(sh(bareHome, "_ccrc_auth_dir 'a' ; echo \"rc=$?\"")).toBe('rc=0');
+    expect(armsOf(generateAccountsSh(roster))).toEqual([]);
+    // Each codex row: its HOME-relative authDir.
+    expect(sh(codexHome, "_ccrc_auth_dir 'codex-a'")).toBe('.local/share/ccrc/codex/codex-a');
+    expect(sh(codexHome, "_ccrc_auth_dir 'codex-b'")).toBe('.local/share/ccrc/codex/codex-b');
+    // Any other row, and an unknown id: nothing at rc 0.
+    expect(sh(codexHome, "_ccrc_auth_dir 'a' ; echo \"rc=$?\"")).toBe('rc=0');
+    expect(sh(codexHome, "_ccrc_auth_dir 'nosuch' ; echo \"rc=$?\"")).toBe('rc=0');
+    const body = generateAccountsSh(codexRoster);
+    expect(armsOf(body).sort()).toEqual(['codex-a', 'codex-b']);
+    const block = body.slice(body.indexOf('_ccrc_auth_dir() {'));
+    expect(block.slice(0, block.indexOf('esac'))).not.toMatch(/^\s*\*\)/m);
+    expect(body.indexOf('_ccrc_auth_dir() {'), 'after _ccrc_secrets_file').toBeGreaterThan(body.indexOf('_ccrc_secrets_file() {'));
+  });
+
+  it('escapes an unvalidated authDir as inert literal text, prints an option-shaped one verbatim, and the payload never runs', () => {
+    // Built by hand, never parsed: the generator's own lock, as the hostile secretsFile case above.
+    const hostileHome = mkTmp('roster-gen-authdir-hostile-');
+    mkdirSync(path.join(hostileHome, '.ccrc'), { recursive: true });
+    const canary = path.join(hostileHome, 'canary-hit');
+    const hostile = `x$(touch ${canary})\`touch ${canary}\`"; touch ${canary}; echo "y`;
+    const lane = (id: string, authDir: string) => ({
+      id, label: id, configDirSuffix: `.${id}`,
+      exec: { kind: 'codex' as const, provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir }, homeAble: false,
+      hue: 'cyan' as const, telemetry: 'codex' as const, hidden: false, pool: null,
+    });
+    const h = lane('h', hostile);
+    const d = lane('d', '-n');
+    const hostileRoster = {
+      version: 1 as const, accounts: [h, d], byId: new Map([['h', h], ['d', d]]),
+      byIdLengthDesc: [d, h], homeAble: [], upstreamId: 'h',
+    };
+    writeFileSync(path.join(hostileHome, '.ccrc', 'accounts.sh'),
+      generateAccountsSh(hostileRoster as unknown as Parameters<typeof generateAccountsSh>[0]));
+    expect(sh(hostileHome, "_ccrc_auth_dir 'h'")).toBe(hostile);
+    expect(sh(hostileHome, "_ccrc_auth_dir 'd'")).toBe('-n');
+    expect(existsSync(canary)).toBe(false);
+  });
+});
+
 // D-5521 (A26a): an OpenRouter lane writes `telemetry: "openrouter"` and a compatible
 // lane writes `"none"`, where both used to write `"anthropic"`. Neither reports Claude
 // Code's rate limits into `~/.cc-limits` (an OpenRouter lane's meter is its credit,

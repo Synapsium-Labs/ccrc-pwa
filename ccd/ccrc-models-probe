@@ -10,12 +10,12 @@
 # catalogue nothing here can parse.
 #
 # ONE EXECUTABLE, ONE ARM PER KIND, because the three fetches have nothing in
-# common but their answer: Codex needs the lane's OAuth through LiteLLM's own
-# `Authenticator` (the token refresh lives there, and `ccgpt-usage` already
-# reaches it exactly this way — read that file, it is the model this arm
-# copies); OpenRouter's list needs no credential at all; a `compatible`
-# endpoint needs the lane's token and may not answer at all. What they share is
-# the NORMALISER and the WRITE, and those are single here.
+# common but their answer: Codex needs the lane's OAuth credential, READ
+# through ccrc's auth library (`ccd/ccgpt-auth.py`; `ccgpt-usage` reads it
+# exactly this way — read that file, it is the model this arm copies);
+# OpenRouter's list needs no credential at all; a `compatible` endpoint needs
+# the lane's token and may not answer at all. What they share is the
+# NORMALISER and the WRITE, and those are single here.
 #
 # ── THE WRITE IS ATOMIC AND THE FAILURE IS NOT DESTRUCTIVE ────────────────
 # The catalogue is read by another process (the server's fleet poll, ccd, the
@@ -159,121 +159,63 @@ trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 # `_models_run_probe`, and no directory unless its secrets file sets
 # CHATGPT_TOKEN_DIR, so it refuses here: `no-token-dir`, or `runtime-absent`
 # when its secrets file set one.
-# This arm is handed two values and reads nothing else:
-#   CHATGPT_TOKEN_DIR  the row's own exec.authDir, under $HOME;
-#   CCRC_CODEX_PYTHON  the interpreter `ccgpt-runtime python` resolved (the
-#                      isolated runtime), empty when none resolves.
-# It has NO default for either. A codex row carries an authDir and no
+# This arm is handed three values and reads nothing else:
+#   CHATGPT_TOKEN_DIR     the row's own exec.authDir, under $HOME;
+#   CCRC_CODEX_PYTHON     the interpreter `ccgpt-runtime python` resolved (the
+#                         isolated runtime), empty when none resolves;
+#   CCRC_MODELS_AUTH_LIB  the placed auth library (`ccrc`'s `_codex_auth_lib`),
+#                         a probe-specific name, so the runtime interpreter's
+#                         LiteLLM patch, which arms on CCRC_CODEX_AUTH_LIB, is
+#                         never armed by it (codex-bridge Stage 1, Task 7).
+# It has NO default for any of them. A codex row carries an authDir and no
 # secrets file, so a default here would have probed every codex lane with
-# one other lane's OAuth, through a LiteLLM nobody built for it.
+# one other lane's OAuth, through a runtime nobody built for it.
 #
 # Each missing input is its own one-line refusal, checked before any
-# interpreter runs, and `auth.json` is tested for EXISTENCE only (spec §9).
-# Every refusal names its remedy FIRST, because the stale path below keeps
-# only the first 300 characters of this arm's stderr.
+# interpreter runs. The credential itself is the library's to read (spec
+# 2026-10-15 §2.6: "exactly one ccrc library reads and writes them"): this arm
+# never tests for the file or opens it, and the library decides absence. The
+# program only READS: in litellm mode the lane's tier is the only refresher,
+# so an expired token is `token-expired` here, never refreshed, and a dead one
+# is never answered with a sign-in. Every refusal names its remedy FIRST,
+# because the stale path below keeps only the first 300 characters of this
+# arm's stderr.
 _fetch_codex_lane() {
-  local token_dir="${CHATGPT_TOKEN_DIR:-}" py="${CCRC_CODEX_PYTHON:-}"
+  local token_dir="${CHATGPT_TOKEN_DIR:-}" py="${CCRC_CODEX_PYTHON:-}" lib="${CCRC_MODELS_AUTH_LIB:-}"
   if [ -z "$token_dir" ]; then
     echo "$PROG: no-token-dir: run it through 'ccrc models refresh $ACCOUNT' — this codex-lane fetch was handed no CHATGPT_TOKEN_DIR, and it has no default: a codex lane's OAuth directory is its roster row's exec.authDir (spec §9.1)" >&2
     return 1
   fi
   if [ -z "$py" ] || [ ! -x "$py" ]; then
-    echo "$PROG: runtime-absent: run ccrc install (it builds the Codex runtime), then ccrc models refresh $ACCOUNT — this fetch was handed no runnable runtime interpreter (${py:-none}), so nothing imported litellm" >&2
+    echo "$PROG: runtime-absent: run ccrc install (it builds the Codex runtime), then ccrc models refresh $ACCOUNT — this fetch was handed no runnable runtime interpreter (${py:-none}), so nothing ran and nothing was sent" >&2
     return 1
   fi
-  if [ ! -f "$token_dir/auth.json" ]; then
-    echo "$PROG: not-logged-in: run ccrc codex login $ACCOUNT — its authDir ($token_dir) holds no auth.json; existence is all this probe checks, and it never reads one" >&2
+  if [ -z "$lib" ] || [ ! -f "$lib" ] || [ ! -r "$lib" ]; then
+    echo "$PROG: auth-library-absent: run ccrc update — this fetch was handed no readable auth library (${lib:-none}), so the credential of \"$ACCOUNT\" cannot be read; nothing was sent" >&2
     return 1
   fi
   # How the interpreter runs:
-  #   - under -I: no PYTHONPATH, PYTHONHOME or user site ahead of the
-  #     runtime's litellm;
-  #   - with the cost map local (D-3484): without it `import litellm`
-  #     fetches a mutable remote JSON, with three retries;
+  #   - under -I: no PYTHONPATH, PYTHONHOME or user site, and no script
+  #     directory on sys.path, which is why the program loads the library by
+  #     the path it is handed;
+  #   - with the cost map local (D-3484), for a runtime whose interpreter
+  #     still reaches litellm at startup;
   #   - with every CHATGPT_*/LITELLM_*/OPENAI_* variable the caller carried
   #     removed first. This is `ccrc codex login`'s own scrub, for its own
-  #     reason: the authenticator os.path.join()s CHATGPT_AUTH_FILE onto the
-  #     token dir, so an ambient absolute value would move the credential it
-  #     reads.
-  # The unattended guard inside covers THIS program only.
+  #     reason: no ambient value may move the credential this lane reads.
   (
     for v in ${!CHATGPT_@} ${!LITELLM_@} ${!OPENAI_@}; do unset "$v"; done
     unset CCRC_CODEX_PYTHON
-    export CHATGPT_TOKEN_DIR="$token_dir" LITELLM_LOCAL_MODEL_COST_MAP=True \
+    export CHATGPT_TOKEN_DIR="$token_dir" LITELLM_LOCAL_MODEL_COST_MAP=True CCRC_MODELS_AUTH_LIB="$lib" \
       CODEX_CLIENT_VERSION="$CODEX_CLIENT_VERSION" CCRC_PROBE_ACCOUNT="$ACCOUNT" CCRC_PROBE_PROG="$PROG"
     exec "$py" -I -
   ) > "$RAW" <<'PY'
 import os, sys, urllib.request
-from litellm.llms.chatgpt.authenticator import Authenticator
 
 PROG = os.environ["CCRC_PROBE_PROG"]
 ACCOUNT = os.environ["CCRC_PROBE_ACCOUNT"]
-
-
-# ── unattended-authenticator guard (Plan 3a Task 1): one text, in ccd/ccrc-models-probe and ccd/ccgpt-usage.py ──
-# A caller nobody watches must never start LiteLLM's device sign-in. What
-# litellm 1.101.0 does (the floor of the runtime's requirement, read from its
-# source): get_access_token falls through a usable token and a refresh to two
-# steps:
-#   - _wait_for_access_token, which polls up to 300 s on another sign-in's
-#     cooldown;
-#   - _login_device_code, which WRITES device_code_requested_at into the
-#     lane's auth.json, prints a code nobody reads, and polls up to 15 minutes.
-# A deadline cannot undo that write. A poll killed part-way leaves the marker,
-# and the lane's own LiteLLM tier then waits out the cooldown on live requests.
-# So both are refused here, in-process, before either can write. A runtime
-# whose Authenticator lacks a name this guard overrides, or one its caller
-# needs, is refused too: overriding a name the library no longer calls guards
-# nothing.
-import contextlib  # noqa: E402
-import logging  # noqa: E402
-
-
-class LoginRequired(Exception):
-    """The lane holds no token LiteLLM can use or refresh: only a person can sign it in."""
-
-
-class RuntimeApiMoved(Exception):
-    """This runtime's Authenticator lacks a name the guard depends on."""
-
-
-def _unattended(authenticator, required=("get_access_token",)):
-    missing = [name for name in (*required, "_login_device_code", "_wait_for_access_token")
-               if not callable(getattr(authenticator, name, None))]
-    if missing:
-        raise RuntimeApiMoved(", ".join(missing))
-
-    class Unattended(authenticator):
-        def _login_device_code(self, *args, **kwargs):
-            raise LoginRequired("device-code")
-
-        def _wait_for_access_token(self, *args, **kwargs):
-            raise LoginRequired("device-code-cooldown")
-
-    return Unattended
-
-
-# The guarded calls also run with logging switched off (fix round 1). On a
-# token it can neither use nor refresh, litellm LOGS a warning before the
-# guard refuses ("ChatGPT refresh token failed, re-login required: ..."),
-# with the token endpoint's error in it, and on a malformed answer that
-# answer's whole body ("Refresh response missing fields: {data}"). It would
-# land on stderr AHEAD of the caller's refusal, and the model probe keeps only
-# the first 300 characters of its stderr. Read from litellm's source, never
-# run: the warning goes through the `LiteLLM` logger. 1.101.0's handler
-# re-reads sys.stderr on every record, but an older `_logging`'s plain
-# StreamHandler bound sys.stderr when it was made, at import, out of
-# contextlib.redirect_stderr's reach. `logging.disable` stops every record
-# before any handler sees it, whatever stream that handler holds.
-@contextlib.contextmanager
-def _silenced():
-    previous = logging.root.manager.disable
-    logging.disable(logging.CRITICAL)
-    try:
-        yield
-    finally:
-        logging.disable(previous)
-# ── end unattended-authenticator guard ──
+TOKEN_DIR = os.environ["CHATGPT_TOKEN_DIR"]
+AUTH_LIB = os.environ["CCRC_MODELS_AUTH_LIB"]
 
 
 def refuse(code, sentence):
@@ -281,43 +223,74 @@ def refuse(code, sentence):
     raise SystemExit(1)
 
 
-# `get_access_token()` REFRESHES an expired token. That is the whole reason
-# this arm goes through LiteLLM rather than reading auth.json, and the guard
-# above makes sure it never goes further than a refresh.
-# ChatGPT-Account-Id comes from `get_account_id()`, the call LiteLLM's own
-# chatgpt transformations make for the same header, so this program never
-# opens auth.json itself (spec §9: existence and mode only). With the other
-# arm gone (Plan 4), no code this probe ships opens one: D-3161 is closed.
-# Both calls run `_silenced()`, so no line of litellm's own goes ahead of
-# this program's refusal, or carries the token endpoint's answer into it.
-try:
-    with _silenced():
-        auth = _unattended(Authenticator, ("get_access_token", "get_account_id"))()
-        token = auth.get_access_token()
-        account_id = auth.get_account_id()
-except RuntimeApiMoved as missing:
-    refuse("runtime-api-moved",
-           f"run ccrc update — this runtime's Authenticator has no {missing}, so the fetch for "
-           f"\"{ACCOUNT}\" cannot run without risking an interactive sign-in; nothing was sent. If this "
-           "build is current, the runtime's litellm range admits an Authenticator this probe does not know: report it")
-except LoginRequired:
-    refuse("login-required",
-           f"run ccrc codex login {ACCOUNT} — \"{ACCOUNT}\" holds no token the Codex runtime can use or "
-           "refresh, and this unattended probe never starts a device sign-in (that would write auth.json "
-           "and wait up to 15 minutes)")
+def load_auth_library():
+    """ccrc's auth library, loaded from the path the bash half checked, or the auth-library-absent refusal (naming
+    the exception's class, never its arguments). Bytecode is not written beside it."""
+    import importlib.util
+    was = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec = importlib.util.spec_from_file_location("ccgpt_auth", AUTH_LIB)
+        if spec is None or spec.loader is None:
+            raise ImportError("no loader")
+        lib = importlib.util.module_from_spec(spec)
+        sys.modules["ccgpt_auth"] = lib
+        spec.loader.exec_module(lib)
+        for name in ("read", "read_status", "expired", "bars"):
+            getattr(lib, name)
+        return lib
+    except (Exception, SystemExit) as e:
+        sys.modules.pop("ccgpt_auth", None)
+        refuse("auth-library-absent", f"run ccrc update — ccrc's auth library {AUTH_LIB} could not be loaded "
+               f"({type(e).__name__}), so the credential of \"{ACCOUNT}\" cannot be read; nothing was sent")
+    finally:
+        sys.dont_write_bytecode = was
+
+
+# The credential is READ, never refreshed and never signed in (codex-bridge
+# Stage 1, Task 7): `read` never writes, locks or touches the network; the
+# status the lane's tier recorded is current only for the credential it was
+# measured on, so a fresh sign-in clears it; a needs-signin bars before the
+# expiry, and a config-error bars only under the library's current OAuth
+# configuration: the library refresher's own rule, asked through `bars`
+# (D-6692). ChatGPT-Account-Id is the
+# reading's `account_id`, the value LiteLLM's tier sends for the same header,
+# so this program never opens the credential itself.
+lib = load_auth_library()
+r = lib.read(TOKEN_DIR)
+login = f"run ccrc codex login {ACCOUNT}"
+if r.credential == "absent":
+    refuse("not-logged-in", f"{login} — the auth library reads no credential for \"{ACCOUNT}\" ({r.detail})")
+if r.credential in ("unreadable", "foreign-family"):
+    refuse("credential-unusable", f"run ccrc doctor — {r.detail}")
+if r.credential != "present":
+    refuse("login-required", f"{login} — \"{ACCOUNT}\" holds no usable token ({r.detail}), and this unattended "
+           "probe never starts a sign-in")
+status = lib.read_status(TOKEN_DIR)
+# Whether the status bars is the library's one rule (`bars`, D-6692); this
+# probe only picks the refusal's words.
+if lib.bars(status) and status.get("state") == "needs-signin":
+    refuse("login-required", f"{login} — the tier of \"{ACCOUNT}\" recorded that its credential needs a sign-in, "
+           "and this unattended probe never starts one")
+if lib.bars(status):
+    refuse("credential-unusable", f"run ccrc update, then ccrc codex login {ACCOUNT} — the token endpoint refused "
+           "ccrc's OAuth client when the lane's tier last refreshed, and a sign-in alone does not cure it")
+if lib.expired(r):
+    refuse("token-expired", "none needed — the lane's tier refreshes it on its next request; if its refresh token "
+           "is dead, that request records needs-signin; nothing was sent")
 
 # The Authorization/originator/user-agent/session_id headers match
 # ccd/ccgpt-usage.py's own request (task-10-fix-rulings.md C-2): what the
-# backend expects from a real Codex CLI caller. The publisher sends no
-# ChatGPT-Account-Id; this arm sends the one LiteLLM's own tier sends.
+# backend expects from a real Codex CLI caller. Both readers send
+# ChatGPT-Account-Id when the reading has one.
 headers = {
-    "Authorization": f"Bearer {token}",
+    "Authorization": f"Bearer {r.access_token}",
     "originator": "codex_cli_rs",
     "user-agent": "codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown",
     "session_id": "00000000-0000-0000-0000-000000000000",
 }
-if account_id:
-    headers["ChatGPT-Account-Id"] = account_id
+if r.account_id:
+    headers["ChatGPT-Account-Id"] = r.account_id
 url = ("https://chatgpt.com/backend-api/codex/models?client_version="
        + os.environ["CODEX_CLIENT_VERSION"])
 req = urllib.request.Request(url, headers=headers)

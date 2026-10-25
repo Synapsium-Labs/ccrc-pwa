@@ -52,12 +52,12 @@ export const FIXTURE_SERVED = 'refs/remotes/origin/main';
 
 /** A measured, clean ccd exit carrying `stdout`. */
 export function okRes(stdout: string): CcdResult {
-  return { ok: true, stdout, stderr: '', killed: false, signal: null };
+  return { ran: true, ok: true, stdout, stderr: '', killed: false, signal: null };
 }
 
 /** A measured exit that wrote nothing and failed: the adapter answers `ccd-fault {stderrHead}`. */
 export function faultRes(stderr = 'usage'): CcdResult {
-  return { ok: false, stdout: '', stderr, killed: false, signal: null };
+  return { ran: true, ok: false, stdout: '', stderr, killed: false, signal: null };
 }
 
 /** One answer line as ccd writes it: one JSON text and one LF. */

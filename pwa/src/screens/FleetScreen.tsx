@@ -11,12 +11,15 @@ import {
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner, fleetHostBannerShows } from '../fleet/FleetHostBanner';
 import { HaltBanner, haltBannerShows } from '../fleet/HaltBanner';
-import { UpdateBanner, updateBannerShows } from '../fleet/UpdateBanner';
+import { DiskBanner } from '../fleet/DiskBanner';
+import { diskBannerShows } from '../fleet/diskWords';
+import { UpdateIndicator } from '../fleet/UpdateIndicator';
 import { UPDATES_STALE_TEXT } from '../fleet/useUpdatesView';
 import { SubstrateBanner, substrateBannerShows } from '../fleet/SubstrateBanner';
 import { PasskeyNotice, passkeyNoticeShows, usePasskeyStatus } from '../fleet/PasskeyNotice';
 import { BannerStack } from '../fleet/BannerStack';
 import { fleetSummary } from '../fleet/fleetSummary';
+import { poolLagText } from '../fleet/poolLag';
 import { unreadMailCount } from '../fleet/navBadges';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
 import { FleetCards } from '../fleet/FleetCards';
@@ -30,7 +33,8 @@ import { ackAll, acksSnapshot, prune, subscribeAcks } from '../lib/seen';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import type { FleetStore } from '../stores/fleet';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import { useFrameSet } from '../skins/frame';
+import { FLEET_ID, useFrameSet } from '../skins/frame';
+import { useDesk } from '../lib/useMediaQuery';
 import '../fleet/fleet.css';
 
 export function FleetScreen({
@@ -41,6 +45,7 @@ export function FleetScreen({
   showAccounts = true,
   banners = true,
   headChrome = true,
+  headCount = true,
   epoch,
   observedEpoch,
 }: {
@@ -52,9 +57,12 @@ export function FleetScreen({
   showAccounts?: boolean; // false on desktop — the accounts strip is a top bar there
   /** False where the skin's frame places the banner stack under its bar (W2 Task S4b): one stack at any width. */
   banners?: boolean;
-  /** False where the skin's bar holds the head's wordmark and doors (Refined at a desk, W2 Task S4b); the readouts
-   *  stay. */
+  /** False where the skin's bar holds the head's wordmark and doors (Refined's `Sidebar` and Instrument's
+   *  `ListColumn` at a desk, W2 Task S4b, T2e); the readouts stay. */
   headChrome?: boolean;
+  /** False where the skin's status bar prints the fleet's count (Instrument's `ListColumn` at a desk, T2g, D-6715):
+   *  the head draws no count line. The pool lag stays. */
+  headCount?: boolean;
   /** The server's current account-pool epoch (`GET /api/pools/epoch`, Task
    *  7), off `useFleetStore`'s `pools.epoch` (`app.tsx`) — the same `pools`
    *  frame the fleet WS/REST wire carries (`server/src/pools.ts`'s
@@ -134,7 +142,13 @@ export function FleetScreen({
   // deviations are argued; the chrome calls it once.
   const projects = chrome.projects;
   // The skin's own fleet list, when it has one (Instrument's table, W2 Task S10); none outside a frame or in Refined.
-  const FleetList = useFrameSet()?.FleetList ?? null;
+  const set = useFrameSet();
+  const FleetList = set?.FleetList ?? null;
+  // The skin's own head where this column holds the chrome (Refined's phone header, W2 Task S5), with the lane gauges
+  // under it, so the strip below steps aside: one readout of the lanes at any width. And its own New session door.
+  const Head = headChrome ? set?.Head ?? null : null;
+  const desk = useDesk();
+  const Fab = set?.Fab ?? null;
 
   // Once, not three times in one interpolation: the footer's count and its
   // size must describe the same pass over the same list.
@@ -196,10 +210,7 @@ export function FleetScreen({
   // equal here forever — a false "in sync". `observedEpoch` now refreshes on
   // the server's own watcher tick, so an equal pair here is a genuinely
   // current fact, not a stale first impression.
-  const poolLag =
-    epoch !== undefined && observedEpoch !== undefined && observedEpoch !== epoch
-      ? `epoch ${epoch} / observed ${observedEpoch === null ? 'never synced' : observedEpoch}`
-      : null;
+  const poolLag = poolLagText(epoch, observedEpoch);
 
   // Task 4: which card each run belongs on — the card its WORKER renders on —
   // is decided with every row's card by `fleetTree` (D-5527), from the whole
@@ -207,16 +218,21 @@ export function FleetScreen({
   // (`runCard`'s docstring has the two fallbacks and why each is load-bearing).
 
   return (
-    <section aria-label="Fleet" className="fleet" data-conn={conn}>
-      <FleetHead
-        countLine={sessions.length > 0 ? countLine : null}
-        poolLag={poolLag}
-        unreadMail={unreadMail}
-        chrome={headChrome}
-      />
+    <section id={FLEET_ID} aria-label="Fleet" className="fleet" data-conn={conn} tabIndex={-1}>
+      {Head !== null ? <Head /> : (
+        <FleetHead
+          countLine={headCount && sessions.length > 0 ? countLine : null}
+          poolLag={poolLag}
+          unreadMail={unreadMail}
+          chrome={headChrome}
+        />
+      )}
       {/* The global banners (W2 Task S2c's stack), here unless the skin's frame places them under its bar at a desk
           (Refined, W2 Task S4b): `banners` is false then, so one stack is mounted at any width. */}
       {banners && <FleetBanners />}
+      {/* The quiet update line (D-6327), where the banner sat, on a phone whose skin has no head of its own: Refined's
+          phone header holds its own, and at a desk both skins' bars hold it, so one instance is mounted at any width. */}
+      {Head === null && !desk && <UpdateIndicator form="row" />}
 
       {/* Its own poller, independent of `sessions` — it must render in EVERY
           branch below, not just the populated one. It used to sit only in
@@ -227,7 +243,7 @@ export function FleetScreen({
           hits first. It is not the only door any more (the header control
           above, D-161); the rule that a door must never render nothing is
           unchanged. */}
-      {showAccounts && <AccountsStrip />}
+      {showAccounts && Head === null && <AccountsStrip />}
 
       {/* The only door to /runs (fix, review finding 20) — moved OUT of the
           populated arm for the identical reason `AccountsStrip` was, three
@@ -353,9 +369,11 @@ export function FleetScreen({
         </>
       )}
 
-      <button type="button" className="fab" aria-label="New session" onClick={newSession}>
-        <span aria-hidden="true">+</span>
-      </button>
+      {Fab !== null ? <Fab /> : (
+        <button type="button" className="fab" aria-label="New session" onClick={newSession}>
+          <span aria-hidden="true">+</span>
+        </button>
+      )}
 
       {/* Wave 19, D-5124: the four surfaces show the stale sentence; this one region announces it, once. */}
       <div className="sr-only" role="status">{stale ? UPDATES_STALE_TEXT : null}</div>
@@ -390,17 +408,14 @@ export function FleetBanners(): ReactNode {
           shows: fleetHostBannerShows(fleetHealth),
           node: <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} stale={stale} />,
         },
-        // The halt, with each halting node's Ack in place (programme wave 14, R15(a)): above Update all, which it
-        // disables while it stands. Re-polls on every Ack.
+        // The disk alarm (D-6617), from the same health poll as the fleet-host banner above.
+        { id: 'disk', shows: diskBannerShows(fleetHealth), node: <DiskBanner health={fleetHealth} /> },
+        // The halt, with each halting node's Ack in place (programme wave 14, R15(a)). Re-polls on every Ack. The
+        // release that waits is not a banner (D-6327): it is the quiet update line, placed once per width.
         {
           id: 'halt',
           shows: haltBannerShows(updates.view),
           node: <HaltBanner updates={updates.view} seq={updates.seq} onAcked={updates.reload} stale={stale} />,
-        },
-        {
-          id: 'update',
-          shows: updateBannerShows(updates.view),
-          node: <UpdateBanner updates={updates.view} health={fleetHealth} onMoved={updates.reload} stale={stale} />,
         },
         // The substrate fault, said once (spec §4) — derived from the SAME injected store the rows render from,
         // so the banner and the chips can never disagree about which fleet they describe.

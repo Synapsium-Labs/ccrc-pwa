@@ -13,10 +13,10 @@ import { FleetWatcher } from '../src/watch.js';
 import type { Runner } from '../src/exec.js';
 import type { PushPayload } from '../src/push.js';
 import {
-  approvalDecision, askDecision, buildDigest, DIGEST_HOUR_UTC, digestDayFor, digestWindow, parseDigestDay,
+  approvalDecision, askDecision, buildDigest, DIGEST_HOUR_UTC, digestDayFor, digestPushCopy, digestWindow, parseDigestDay,
   readDigestHour,
 } from '../src/coord/digest.js';
-import { DIGEST_HOUR_FILE } from '../../shared/api.js';
+import { DIGEST_HOUR_FILE, DRIFT_KINDS, type DriftFinding } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -295,6 +295,10 @@ describe('the digest hour (spec §10: 07:00 UTC by default, ~/.ccrc/digest-hour 
 });
 
 describe('the digest beat (FleetWatcher.sweepDigest)', () => {
+  // The beat throttles on the monotonic clock (OA-C4, #803) and decides on the `now` it is handed. The fixture's beats are
+  // minutes apart in the `now` they hand, so `sweepAt` lets the same real time pass on the injected monotonic clock.
+  let mono = 0;
+  const sweepAt = (w: FleetWatcher, now: number): void => { mono = now; w.sweepDigest(now); };
   interface Beat { coord: CoordStore; home: string; sent: PushPayload[]; log: NotifyLog; watcher: () => FleetWatcher }
   async function beat(): Promise<Beat> {
     const { coord, home } = store();
@@ -302,8 +306,8 @@ describe('the digest beat (FleetWatcher.sweepDigest)', () => {
     const log = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
     await log.load();
     const sent: PushPayload[] = [];
-    const runner: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
-    const deps = { ...testDeps(home, runner), coord, notifyLog: log,
+    const runner: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
+    const deps = { ...testDeps(home, runner), monotonicMs: () => mono, coord, notifyLog: log,
       push: { notify: async (p: PushPayload) => { sent.push(p); } } as never };
     return { coord, home, sent, log, watcher: () => new FleetWatcher(deps, new Bus(), 10_000) };
   }
@@ -315,13 +319,13 @@ describe('the digest beat (FleetWatcher.sweepDigest)', () => {
     seedDay(b.coord);
     const w = b.watcher();
     // Before the hour the newest closed day is the 17th, whose window holds only the early answer.
-    w.sweepDigest(Date.parse('2026-10-18T06:59:00Z'));
+    sweepAt(w, Date.parse('2026-10-18T06:59:00Z'));
     expect(b.sent.map((p) => [p.title, p.url])).toEqual([['Coordinators decided 1 thing in your name', '/digest?day=2026-10-17']]);
     expect(b.coord.digestDay('2026-10-17')).toMatchObject({ count: 1 });
     expect(b.coord.digestDay(DAY)).toBeNull();
     b.sent.length = 0;
     b.coord.db.exec("DELETE FROM feed_events");
-    w.sweepDigest(Date.parse('2026-10-18T07:00:30Z'));
+    sweepAt(w, Date.parse('2026-10-18T07:00:30Z'));
     expect(b.sent).toHaveLength(1);
     expect(b.sent[0]).toMatchObject({
       title: 'Coordinators decided 6 things in your name',
@@ -330,17 +334,17 @@ describe('the digest beat (FleetWatcher.sweepDigest)', () => {
     });
     expect(feedCoord(b.coord)).toEqual([{ kind: 'coord', title: 'Coordinators decided 6 things in your name', body: b.sent[0]!.body }]);
     expect(b.coord.digestDay(DAY)).toMatchObject({ day: DAY, count: 6 });
-    w.sweepDigest(Date.parse('2026-10-18T09:00:00Z'));
+    sweepAt(w, Date.parse('2026-10-18T09:00:00Z'));
     expect(b.sent).toHaveLength(1);
   });
 
   it('a restart at the digest hour sends no second push', async () => {
     const b = await beat();
     seedDay(b.coord);
-    b.watcher().sweepDigest(Date.parse('2026-10-18T07:00:30Z'));
+    sweepAt(b.watcher(), Date.parse('2026-10-18T07:00:30Z'));
     expect(b.sent).toHaveLength(1);
-    b.watcher().sweepDigest(Date.parse('2026-10-18T07:01:40Z'));
-    b.watcher().sweepDigest(Date.parse('2026-10-18T07:03:00Z'));
+    sweepAt(b.watcher(), Date.parse('2026-10-18T07:01:40Z'));
+    sweepAt(b.watcher(), Date.parse('2026-10-18T07:03:00Z'));
     expect(b.sent).toHaveLength(1);
     expect(feedCoord(b.coord)).toHaveLength(1);
   });
@@ -352,19 +356,97 @@ describe('the digest beat (FleetWatcher.sweepDigest)', () => {
     answerAsk(b.coord, q, PARENT, 'Red', Date.parse('2026-10-18T08:00:00Z'));
     writeFileSync(path.join(b.home, '.ccrc', DIGEST_HOUR_FILE), '9');
     const w = b.watcher();
-    w.sweepDigest(Date.parse('2026-10-18T07:30:00Z'));
+    sweepAt(w, Date.parse('2026-10-18T07:30:00Z'));
     expect(b.sent).toEqual([]);
     expect(b.coord.digestDay(DAY)).toBeNull();
-    w.sweepDigest(Date.parse('2026-10-18T09:00:30Z'));
+    sweepAt(w, Date.parse('2026-10-18T09:00:30Z'));
     expect(b.sent).toHaveLength(1);
     expect(b.sent[0]).toMatchObject({ title: 'Coordinators decided 1 thing in your name', url: `/digest?day=${DAY}` });
   });
 
   it('a day with nothing decided sends none, and is claimed so the beat does not rebuild it', async () => {
     const b = await beat();
-    b.watcher().sweepDigest(Date.parse('2026-10-18T07:00:30Z'));
+    sweepAt(b.watcher(), Date.parse('2026-10-18T07:00:30Z'));
     expect(b.sent).toEqual([]);
     expect(feedCoord(b.coord)).toEqual([]);
     expect(b.coord.digestDay(DAY)).toMatchObject({ count: 0 });
+  });
+});
+
+/** A drift finding (D-5921) the digest's drift section reads back. */
+function drift(o: Partial<DriftFinding> & { key: string; kind: DriftFinding['kind'] }): DriftFinding {
+  return { subject: '{}', detail: 'out of step', factAt: null, runId: null, sessionId: null, ...o };
+}
+
+describe('the digest drift section (D-5923, spec 4.6)', () => {
+  const w = digestWindow(DAY, DIGEST_HOUR_UTC);
+  const read = (coord: CoordStore) => {
+    const built = buildDigest(coord, w.fromMs, w.toMs);
+    if (!built.ok) throw new Error(built.detail);
+    return built.digest;
+  };
+
+  it('a run-kind line carries its runId', () => {
+    const { coord } = store();
+    coord.recordDriftPass([drift({ key: 'run-quiet:9', kind: 'run-quiet', runId: 9 })], at(0));
+    expect(read(coord).drift?.lines.map((l) => [l.key, l.kind, l.runId])).toEqual([['run-quiet:9', 'run-quiet', 9]]);
+  });
+
+  it("a finding open at the window's end is a line, with its session id, its age from the fact, and the totals by kind", () => {
+    const { coord } = store();
+    coord.recordDriftPass([
+      drift({ key: 'run-quiet:7', kind: 'run-quiet', runId: 7, factAt: w.toMs - 3_600_000, detail: 'GH_TOKEN=ghx_neutral quiet' }),
+      drift({ key: 'mail-held:lane-a', kind: 'mail-held', sessionId: 'lane-a' }),
+    ], at(0));
+    const d = read(coord);
+    expect(d.drift?.lines.map((l) => [l.key, l.kind, l.runId, l.sessionId])).toEqual([
+      ['mail-held:lane-a', 'mail-held', null, 'lane-a'], ['run-quiet:7', 'run-quiet', 7, null],
+    ]);
+    expect(d.drift?.lines[1]).toMatchObject({ ageMs: 3_600_000, detail: 'GH_TOKEN=[REDACTED] quiet' });
+    expect(d.drift?.lines[0]?.ageMs, 'no fact time: the age runs from first sight').toBe(w.toMs - at(0));
+    expect(Object.keys(d.drift!.totals).sort()).toEqual([...DRIFT_KINDS].sort());
+    expect(d.drift?.totals).toMatchObject({ 'run-quiet': 1, 'mail-held': 1, 'claimant-gone': 0 });
+  });
+
+  it("a finding cleared before the window's end is not a line, and one first seen after it is not either", () => {
+    const { coord } = store();
+    coord.recordDriftPass([drift({ key: 'run-quiet:1', kind: 'run-quiet', runId: 1 })], at(0));
+    coord.recordDriftPass([], at(30));
+    coord.recordDriftPass([drift({ key: 'run-quiet:2', kind: 'run-quiet', runId: 2 })], w.toMs + 60_000);
+    expect(read(coord).drift).toEqual({ totals: expect.any(Object), lines: [] });
+  });
+
+  it('a zero-decision day with drift claims count 0 and sends no digest push', async () => {
+    const { coord, home } = store();
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    coord.recordDriftPass([drift({ key: 'run-quiet:1', kind: 'run-quiet', runId: 1 })], at(0));
+    const sent: PushPayload[] = [];
+    const runner: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
+    const deps = { ...testDeps(home, runner), monotonicMs: () => Date.parse('2026-10-18T07:00:30Z'), coord,
+      push: { notify: async (p: PushPayload) => { sent.push(p); } } as never };
+    new FleetWatcher(deps, new Bus(), 10_000).sweepDigest(Date.parse('2026-10-18T07:00:30Z'));
+    expect(sent).toEqual([]);
+    expect(coord.digestDay(DAY)).toMatchObject({ count: 0 });
+  });
+
+  it('the push body names drift only when non-zero', () => {
+    const totals = { decisions: 2, answers: 2, allows: 0, denies: 0, handOvers: 0, lapses: 0, guardForbidden: 0 };
+    expect(digestPushCopy(DAY, totals).body).toBe('2 answered — tap to review and correct');
+    expect(digestPushCopy(DAY, totals, 0).body).toBe('2 answered — tap to review and correct');
+    expect(digestPushCopy(DAY, totals, 3).body).toBe('2 answered · 3 out of step — tap to review and correct');
+  });
+
+  it("the beat's push counts the drift open at the window's end", async () => {
+    const { coord, home } = store();
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const q = ask(coord, { t: at(0) });
+    answerAsk(coord, q, PARENT, 'Red', at(1));
+    coord.recordDriftPass([drift({ key: 'run-quiet:1', kind: 'run-quiet', runId: 1 })], at(2));
+    const sent: PushPayload[] = [];
+    const runner: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
+    const deps = { ...testDeps(home, runner), monotonicMs: () => Date.parse('2026-10-18T07:00:30Z'), coord,
+      push: { notify: async (p: PushPayload) => { sent.push(p); } } as never };
+    new FleetWatcher(deps, new Bus(), 10_000).sweepDigest(Date.parse('2026-10-18T07:00:30Z'));
+    expect(sent[0]?.body).toBe('1 answered · 1 out of step — tap to review and correct');
   });
 });

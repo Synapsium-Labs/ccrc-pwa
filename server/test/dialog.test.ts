@@ -3,7 +3,7 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { editHintShown, freeTextRow, hasMenu, parseDialog, paneOptionRows, paneState, turnRunning } from '../src/pane/dialog.js';
-import { reviewRows } from '../../shared/ask-menu.js';
+import { reviewQuestions, reviewRows } from '../../shared/ask-menu.js';
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -239,10 +239,10 @@ describe('FleetWatcher dialog detection', () => {
     seedSession(home, 'claude-a-project-f', 'claude-a');
     let pane = fixture('ask-user-question.txt');
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: pane, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: pane, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
@@ -287,12 +287,12 @@ describe('FleetWatcher hookstate wiring', () => {
     const uuid = '1'.repeat(36);
     seedSession(home, 'claude-a-project-f', 'claude-a'); // writes this same uuid
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
       // A plain prompt, never a menu — dialogPending below is earned SOLELY
       // by the hookstate file, not by the pane detector.
-      if (args[0] === 'capture-pane') return { code: 0, stdout: 'done\n❯ \n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: 'done\n❯ \n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     writeFileSync(path.join(cfg.registryDir, 'claude-a-project-f.hookstate.json'), JSON.stringify({
@@ -340,9 +340,9 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
     let degrade = false;
     const io = degradedReadIO((p) => degrade && p.endsWith(`${id}.uuid`));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
@@ -385,14 +385,14 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
 
     let degrade = false;
     const io = degradedReadIO((p) => degrade && p.endsWith(`${id}.wrapper`));
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
     const watcher = new FleetWatcher(deps, new Bus());
     // `sweepTasks` throttles itself to once per TASK_SWEEP_MS — reset the
     // clock before each call so this test can force a real re-sweep on its
     // own schedule rather than fake timers or a 10 s sleep.
     const forceSweep = async (): Promise<void> => {
-      (watcher as unknown as { lastTaskSweep: number }).lastTaskSweep = 0;
+      watcher.kick('tasks');
       await (watcher as unknown as { sweepTasks: () => Promise<void> }).sweepTasks();
     };
 
@@ -446,11 +446,11 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
       ...localIO,
       readdir: async (p) => (blind && p === dir ? null : localIO.readdir(p)),
     };
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
     const watcher = new FleetWatcher(deps, new Bus());
     const forceSweep = async (): Promise<void> => {
-      (watcher as unknown as { lastTaskSweep: number }).lastTaskSweep = 0;
+      watcher.kick('tasks');
       await (watcher as unknown as { sweepTasks: () => Promise<void> }).sweepTasks();
     };
 
@@ -504,9 +504,9 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
     let listable = true;
     const io: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
@@ -557,9 +557,9 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
     let listable = true;
     const io: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '40613\n', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
@@ -598,14 +598,14 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
 
     let listable = true;
     const io: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
     const watcher = new FleetWatcher(deps, new Bus());
     // `sweepTasks` throttles itself to once per TASK_SWEEP_MS — reset the
     // clock before each call so this test can force a real re-sweep on its
     // own schedule (same idiom as the retain-don't-erase test above).
     const forceSweep = async (): Promise<void> => {
-      (watcher as unknown as { lastTaskSweep: number }).lastTaskSweep = 0;
+      watcher.kick('tasks');
       await (watcher as unknown as { sweepTasks: () => Promise<void> }).sweepTasks();
     };
 
@@ -1102,6 +1102,63 @@ describe('2.1.300 AskUserQuestion (recorded)', () => {
       expect(parseDialog(fixture('cc300-ask-review-skipped.txt'))!.body).toContain('⚠ You have not answered all questions');
       expect(parseDialog(fixture('cc300-ask-review-multiselect.txt'))!.body)
         .toContain('Which features do you want?\n   → Logging, Tracing');
+    });
+
+    // D-6324: the questions the review screen lists, read once in shared/ask-menu.ts (`reviewQuestions`). Each listed
+    // text is the FIRST line of its question: a long question wraps and lists only a prefix.
+    it('lists the question texts the review screen shows, between its tab row and its ready line', () => {
+      const listed = (f: string): string[] | null => reviewQuestions(parseDialog(fixture(f)));
+      expect(listed('cc300-ask-review-1q-multiselect.txt')).toEqual(['Which tools?']);
+      expect(listed('cc300-ask-review-4q-100col.txt')).toEqual([
+        'Which database engine?', 'Which deployment target?', 'Which monitoring stack?', 'Which licence?',
+      ]);
+      expect(listed('cc296-ask-2q-long-review.txt')).toEqual([
+        'The garden club waters the north beds from one shared tank. On hot weeks the tank runs dry by Thursday, and the volunteers on the late shift find nothing left for the tomato rows near the fence. A second tank would',
+        'The spring seed swap is booked at the village hall on the second Saturday in April. The hall committee now asks every group to bring its own folding tables, since theirs went to the school fete and never came back.',
+      ]);
+      // A review taller than the header climb loses its title and heading from the PARSE; the raw pane still lists all.
+      expect(listed('cc300-ask-review-4q-long.txt')).toEqual([
+        'Should the `ledger` table use **Postgres** or SQLite?',
+        'When the new release is ready, in which order should the two machines be updated, given that the second machine reads files the first machine writes and caches its settings at start-up, so a change that widens a',
+        'Any notes for the reviewer?',
+        'Which region?',
+      ]);
+    });
+
+    it('lists nothing from the scrollback above the review, and is null on a screen that is not a review', () => {
+      const pane = fixture('cc300-ask-review-1q-multiselect.txt');
+      const withBullet = pane.replace('\n←', '\n● A bullet from the scrollback\n←');
+      expect(withBullet).not.toBe(pane);
+      expect(reviewQuestions(parseDialog(withBullet))).toEqual(['Which tools?']);
+      expect(reviewQuestions(parseDialog(fixture('cc296-ask-2q-long-q1.txt')))).toBeNull();
+      expect(reviewQuestions(null)).toBeNull();
+    });
+
+    it('lists no question it cannot trust: a review with neither tab row nor heading in the capture', () => {
+      const lines = fixture('cc300-ask-review-1q-multiselect.txt').split('\n')
+        .filter((l) => !l.trim().startsWith('←') && l.trim() !== 'Review your answers');
+      expect(reviewQuestions(parseDialog(lines.join('\n')))).toEqual([]);
+    });
+
+    // Each bound of the listing alone, on panes built from a recorded review: still a review (`reviewRows`), so the
+    // listing is read, and each case reds when its bound is dropped.
+    const reviewPane = (edit: (lines: string[]) => string[]): Dialog => {
+      const d = parseDialog(edit(fixture('cc300-ask-review-1q-multiselect.txt').split('\n')).join('\n'));
+      expect(reviewRows(d)).not.toBeNull();
+      return d!;
+    };
+
+    it('still lists with the heading removed: the tab row is the upper boundary', () => {
+      expect(reviewQuestions(reviewPane((ls) => ls.filter((l) => l.trim() !== 'Review your answers')))).toEqual(['Which tools?']);
+    });
+
+    it('still lists with the tab row removed: the heading is the upper boundary', () => {
+      expect(reviewQuestions(reviewPane((ls) => ls.filter((l) => !l.trim().startsWith('←'))))).toEqual(['Which tools?']);
+    });
+
+    it('lists no ● line below the ready line', () => {
+      const below = reviewPane((ls) => ls.flatMap((l) => (l.trim() === 'Ready to submit your answers?' ? [l, ' ● Not a listed question'] : [l])));
+      expect(reviewQuestions(below)).toEqual(['Which tools?']);
     });
 
     it('Cancel is row 2, the cursor on it keeps the id, and after it no menu is left: the whole ask was declined', () => {

@@ -36,6 +36,7 @@ import { ACTOR_FLAGS_CAP, CCD_ARGV, sweepDec } from '../src/ccdargv.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import { childReclaimReleaseActor } from '../src/coord/childReclaim.js';
 import { configDirFor } from '../src/config.js';
 import type { Runner } from '../src/exec.js';
@@ -105,7 +106,7 @@ describe('every unattended ccd call site names itself', () => {
       .toEqual([]);
   });
 
-  it('found EXACTLY the fifteen pinned call sites — not a floor, an exact count', () => {
+  it('found EXACTLY the twelve pinned call sites — not a floor, an exact count', () => {
     // `toBeGreaterThanOrEqual(10)` was a floor, not a count: an eleventh
     // unattended call site — a NEW verb call this file's `SITES` array below
     // has no entry for — would satisfy `11 >= 10` silently, so a mislabelled
@@ -130,6 +131,9 @@ describe('every unattended ccd call site names itself', () => {
     // `CCD_ARGV.wsRelease(…)` site, distinct from `close.ts`'s five and
     // `dispatch.ts`'s one — no human in this path either, and it is a
     // different act on a different clock than the reclaim it can precede.
+    // Thirteen became twelve when the name sweep's pre-write probe stopped
+    // composing a `wsRename` argv: it asks `ccdCan(state, 'wsRename')` by row
+    // name (D-5866), so only the real rename spends `'sweep:names'`.
     let n = 0;
     for (const f of FILES) {
       n += readFileSync(path.join(srcRoot, f), 'utf8').split('\n')
@@ -143,15 +147,15 @@ describe('every unattended ccd call site names itself', () => {
 });
 
 /**
- * Fifteen sites — seven distinct labels, plus two that spend `dispatchRun`'s hoisted `dispatchDec` — each identified by the code AROUND
+ * Twelve sites — six distinct labels, plus two that spend `dispatchRun`'s hoisted `dispatchDec` — each identified by the code AROUND
  * the label rather than by the label itself — so a mutation that swaps two
  * valid labels between two valid sites cannot hide by also moving the
  * anchor. `close.ts`'s five `closeRun` sites share one identical label
  * (`` `run:${id} close` `` — `id` is `closeRun`'s own parameter at every one
  * of them, so there is no textual difference between "the right label" and
  * "the same label copied from a sibling site" to catch there); `watch.ts`'s
- * own two `sweepNames` sites share their identical label (`'sweep:names'`)
- * for the same reason. `closeReviewRun`'s two sites (Task 7, D-2796) are the
+ * one `sweepNames` site carries `'sweep:names'` (its pre-write probe asks
+ * `ccdCan` by row name and composes no argv, D-5866). `closeReviewRun`'s two sites (Task 7, D-2796) are the
  * same shape again, one label shared between them
  * (`` `run:${run.id} close` `` — `run` is `closeReviewRun`'s own parameter,
  * not `closeRun`'s `id`, so the source text differs from the five
@@ -163,32 +167,25 @@ describe('every unattended ccd call site names itself', () => {
  * reds against the hardcoded expectation below, exactly as the reviewer's
  * mutant (a foreign label pasted into what was then `archiveMerged`) proved
  * for `watch.ts` before that site was retired — the merged lane announces
- * now and no longer calls `ccd` at all, so `watch.ts` pins down to these two
- * `sweepNames` sites (operator ruling, 2026-09-10).
+ * now and no longer calls `ccd` at all, so `watch.ts` pins down to its
+ * `sweepNames` site (operator ruling, 2026-09-10).
  */
 interface Site { file: string; what: string; find: RegExp; label: string }
 const SITES: readonly Site[] = [
-  { file: 'watch.ts', what: 'sweepNames verb-probe (the pre-write `verbSupported` check)',
-    find: /CCD_ARGV\.wsRename\(r\.id, born, sweepDec\(this\.deps\.fleetState, ('[^']*')\)\)\)\) continue;/,
-    label: "'sweep:names'" },
   { file: 'watch.ts', what: 'sweepNames real rename (the queued `runCcd` call)',
     find: /CCD_ARGV\.wsRename\(r\.id, branch, sweepDec\(this\.deps\.fleetState, ('[^']*')\)\)\)\);/,
     label: "'sweep:names'" },
-  { file: 'coord/close.ts', what: 'abandon-arm hold (a surviving sibling claims the workspace)',
-    find: /CCD_ARGV\.wsHold\(run\.sessionId, handoff\.reason,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\)/,
-    label: '`run:${id} close`' },
-  { file: 'coord/close.ts', what: 'abandon-arm release (no survivor)',
-    find: /: CCD_ARGV\.wsRelease\(run\.sessionId, sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
-    label: '`run:${id} close`' },
-  { file: 'coord/close.ts', what: 'ordinary close, failed+archive branch',
-    find: /const argv = CCD_ARGV\.wsArchive\(run\.sessionId, sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
-    label: '`run:${id} close`' },
-  { file: 'coord/close.ts', what: 'ordinary close, final+safe release branch',
-    find: /const argv = CCD_ARGV\.wsRelease\(run\.sessionId, sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
-    label: '`run:${id} close`' },
-  { file: 'coord/close.ts', what: 'ordinary close, non-final/sibling-survivor hold branch',
-    find: /const argv = CCD_ARGV\.wsHold\(\n\s+run\.sessionId, nextHold\.reason,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\),\n\s+\);/,
-    label: '`run:${id} close`' },
+  // ARCH-35 (#556): `closeRun`'s five sites became ONE composer, `fleetArgv`, which `decideClose`'s plan feeds: the
+  // verb is the decider's answer and the actor is spelled once, in `dec` (pinned below). Three builders, three sites.
+  { file: 'coord/close.ts', what: 'close, the composed archive (`fleetArgv`)',
+    find: /case 'wsArchive':\n\s+return \{ argv: CCD_ARGV\.wsArchive\(sessionId, (dec)\), can: ccdCan\(deps\.fleetState, 'wsArchive'\) \};/,
+    label: 'dec' },
+  { file: 'coord/close.ts', what: 'close, the composed release (`fleetArgv`)',
+    find: /case 'wsRelease':\n\s+return \{ argv: CCD_ARGV\.wsRelease\(sessionId, (dec)\), can: ccdCan\(deps\.fleetState, 'wsRelease'\) \};/,
+    label: 'dec' },
+  { file: 'coord/close.ts', what: 'close, the composed hold (`fleetArgv`)',
+    find: /case 'wsHold':\n\s+return \{ argv: CCD_ARGV\.wsHold\(sessionId, act\.reason, (dec)\), can: ccdCan\(deps\.fleetState, 'wsHold'\) \};/,
+    label: 'dec' },
   // Task 7 (D-2796): `closeReviewRun` gets its own fleet act — a review run
   // closes on its own claim (design 2026-09-14 §5), one arm, one function,
   // never routed through `closeRun`'s shared machinery — so its two sites
@@ -261,6 +258,13 @@ const SITES: readonly Site[] = [
 ];
 
 describe('each unattended label is pinned to its own call site', () => {
+  it('coord/close.ts — the close composer declares the run it closes as the actor, once, for all three of its builders', () => {
+    const src = readFileSync(path.join(srcRoot, 'coord/close.ts'), 'utf8');
+    const m = /function fleetArgv\(deps: CloseRunDeps, id: number, sessionId: string, act: FleetAct\): FleetVerb \{\n\s+const dec = sweepDec\(deps\.fleetState, (`[^`]*`)\);/.exec(src);
+    expect(m, 'fleetArgv moved or was rewritten; update the anchor before trusting this guard again').not.toBeNull();
+    expect(m![1]).toBe('`run:${id} close`');
+  });
+
   it.each(SITES)('$file — $what declares exactly its own label', ({ file, find, label }) => {
     const src = readFileSync(path.join(srcRoot, file), 'utf8');
     const m = find.exec(src);
@@ -315,7 +319,7 @@ describe('an interpolated label carries the RUN ID ACTUALLY IN SCOPE, not merely
         };
         for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${SESSION}.${k}`), v);
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const base = testDeps(home, run);
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
@@ -350,7 +354,7 @@ describe('an interpolated label carries the RUN ID ACTUALLY IN SCOPE, not merely
       // before the argv this test reads is ever built (measured).
       fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-hold', ACTOR_FLAGS_CAP],
                     rosterFp: null, build: null },
-      tmux: base.tmux, queue: base.queue,
+      sendClear: clearSender(base),
     };
     const outcome = await dispatchRun(deps, opened.id, 'do the thing', undefined);
     expect(outcome.ok, `fixture must actually reach the hold step: ${JSON.stringify(outcome)}`).toBe(true);

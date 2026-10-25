@@ -38,7 +38,7 @@ const build = (onVerb?: (verb: string) => void) => {
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     onVerb?.(args[0] ?? '');
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const base = testDeps(home, run);
   const handed: ChildReclaimRequest[] = [];

@@ -434,7 +434,7 @@ const streamWith = async (opts: {
   answeredDuringCapture?: readonly { step: number; next: Dialog | null }[];
   /** The same, handled while poll `step`'s stat of the transcript is in flight (the capture before it is older). */
   answeredDuringStat?: readonly { step: number; next: Dialog | null }[];
-}): Promise<{ frames: any[]; askReads: number; marks: number[] }> => {
+}): Promise<{ frames: any[]; askReads: number; hookReads: number; marks: number[] }> => {
   const home = mkTmp('ccrc-ask-');
   seedRoster(home);
   seed(home);
@@ -457,14 +457,14 @@ const streamWith = async (opts: {
   let step = 0; // which poll we are on: 0 is start(), then one per tick
   const at = <T,>(xs: readonly T[], i: number): T => xs[Math.min(i, xs.length - 1)]!;
   const run: Runner = async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
     if (args[0] === 'capture-pane') {
       const pane = at(panes, step);
       for (const a of opts.answeredDuringCapture ?? []) if (a.step === step) bus.emit(`answered:${ID}`, a.next);
-      return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   // The tailer reads through io.tailFile, and `since` skips the backlog, so a
   // readFileFrom on the transcript is an ask read and nothing else — save the
@@ -474,8 +474,13 @@ const streamWith = async (opts: {
   // below still pin that it is paid once per stream. `readFileFrom` calls
   // straight into `localIO`'s own, so nothing is counted twice.
   let askReads = 0;
+  let hookReads = 0; // reads of this session's hookstate file, to pin one per tick (D-6324)
   const io: FleetIO = {
     ...localIO,
+    readFileMeasured: (p) => {
+      if (p === hookFile) hookReads += 1;
+      return localIO.readFileMeasured(p);
+    },
     readFileFrom: (p, off) => {
       if (p === file) askReads += 1;
       return localIO.readFileFrom(p, off);
@@ -524,7 +529,7 @@ const streamWith = async (opts: {
     stream.stop();
     rmSync(home, { recursive: true, force: true });
   }
-  return { frames, askReads, marks };
+  return { frames, askReads, hookReads, marks };
 };
 
 /** A complete, valid hookstate body — `session-hook.sh`'s own shape, same
@@ -647,6 +652,190 @@ describe('hook ask envelope frames', () => {
   it('does not resend ask_cleared on later ticks once the first check already sent it', async () => {
     const { frames } = await streamWith({ hookstateSequence: [null, null, null] });
     expect(frames.filter((f) => f.type === 'ask_cleared')).toHaveLength(1);
+  });
+
+  // D-6324: the structured copy outlives the 30-minute cut while the pane's menu is that question. Every age is an
+  // absolute 31 minutes before the clock, never relative to HOOKSTATE_FRESH_MS, so raising the constant is caught.
+  describe('an aged envelope is kept while its menu is up (D-6324)', () => {
+    const AGED_MS = 31 * 60_000;
+    const aged = (over: Record<string, unknown> = {}): Record<string, unknown> =>
+      hookBody({ updatedAt: Date.now() - AGED_MS, ...over });
+    /** The envelope session-hook.sh would have copied for the 2-column fixture's call: the transcript's own
+     *  `questions`, keeping `question` and each option's `label`/`description` and dropping `preview`. */
+    const ENVELOPE = (() => {
+      for (const line of fixture('transcript-ask-2col.jsonl').split('\n')) {
+        if (line.trim() === '') continue;
+        const content = JSON.parse(line)?.message?.content;
+        if (!Array.isArray(content)) continue;
+        for (const b of content) {
+          if (b?.name !== 'AskUserQuestion') continue;
+          return {
+            questions: (b.input.questions as { question: string; options: { label: string; description?: string }[] }[]).map((q) => ({
+              question: q.question,
+              options: q.options.map((o) => ({ label: o.label, description: o.description })),
+            })),
+          };
+        }
+      }
+      throw new Error('fixture holds no AskUserQuestion');
+    })();
+    const MENU = { pane: fixture('ask-2col-chat-about.txt'), transcript: fixture('transcript-ask-2col.jsonl') };
+    /** The garden-club call whose review `cc296-ask-2q-long-review.txt` paints (and `-right-review`, unanswered). */
+    const GARDEN = { questions: [
+      { question: 'The garden club waters the north beds from one shared tank. On hot weeks the tank runs dry by Thursday, and the volunteers on the late shift find nothing left for the tomato rows near the fence. A second tank would cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?',
+        options: [{ label: 'Split shifts (Recommended)' }, { label: 'Wait for the second tank' }] },
+      { question: 'The spring seed swap is booked at the village hall on the second Saturday in April. The hall committee now asks every group to bring its own folding tables, since theirs went to the school fete and never came back. We own four tables, but the swap usually fills nine. Two neighbouring groups have offered to lend theirs if we collect them on Friday evening in a hired van. Which arrangement should the club confirm with the hall?',
+        options: [{ label: 'Borrow and transport (Recommended)' }, { label: 'Move the swap outdoors' }, { label: 'Hire five big tables' }] },
+    ] };
+    const asks = (frames: any[]) => frames.filter((f) => f.type === 'ask');
+    const cleared = (frames: any[]) => frames.filter((f) => f.type === 'ask_cleared');
+
+    it('a stream that connects 31 minutes after the hook wrote the ask still receives it while its menu is up', async () => {
+      const { frames } = await streamWith({ ...MENU, hookstate: aged({ ask: ENVELOPE }) });
+      expect(asks(frames)).toHaveLength(1);
+      expect(asks(frames)[0].ask).toEqual(ENVELOPE);
+      expect(asks(frames)[0].key).toBe(askKey(ENVELOPE));
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('an open stream sends no ask_cleared at 31 minutes while its menu is up', async () => {
+      const { frames } = await streamWith({
+        ...MENU,
+        hookstateSequence: [hookBody({ ask: ENVELOPE }), aged({ ask: ENVELOPE }), aged({ ask: ENVELOPE })],
+      });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('keeps an aged multiSelect envelope while its unparsed multi menu is up', async () => {
+      const multi = { questions: [{ question: 'Which tools?', multiSelect: true, options: [{ label: 'Hammer' }, { label: 'Saw' }, { label: 'Drill' }] }] };
+      const { frames } = await streamWith({
+        pane: fixture('cc300-ask-multiselect-tools-open.txt'),
+        hookstateSequence: [aged({ ask: multi }), aged({ ask: multi })],
+      });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('ask_cleared follows once the menu leaves the pane', async () => {
+      const { frames } = await streamWith({
+        paneSequence: [MENU.pane, MENU.pane, ''],
+        transcript: MENU.transcript,
+        hookstate: aged({ ask: ENVELOPE }),
+      });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(1);
+      expect(frames.indexOf(asks(frames)[0])).toBeLessThan(frames.indexOf(cleared(frames)[0]));
+    });
+
+    it('an aged envelope is not kept while a different menu is up', async () => {
+      const { frames } = await streamWith({ pane: fixture('model-confirm.txt'), hookstate: aged({ ask: ENVELOPE }) });
+      expect(frames.some((f) => f.type === 'dialog')).toBe(true);
+      expect(asks(frames)).toHaveLength(0);
+      expect(cleared(frames)).toHaveLength(1);
+    });
+
+    it('an aged multi-question envelope is NOT kept on the review screen of another call', async () => {
+      // The colour/size envelope against `cc296-ask-2q-long-review.txt`, whose review lists two other questions.
+      const two = { questions: [
+        { question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Green' }] },
+        { question: 'Which size?', options: [{ label: 'Small' }, { label: 'Large' }] },
+      ] };
+      const { frames } = await streamWith({
+        paneSequence: [fixture('cc296-ask-2q-long-review.txt'), fixture('cc296-ask-2q-long-review.txt')],
+        hookstateSequence: [hookBody({ ask: two }), aged({ ask: two })],
+      });
+      expect(frames.some((f) => f.type === 'dialog')).toBe(true);
+      expect(asks(frames)).toHaveLength(1); // the fresh read
+      expect(cleared(frames)).toHaveLength(1); // the aged read, on a review that is not its own
+    });
+
+    it('an aged one-question multiSelect envelope is kept on its own review screen', async () => {
+      const tools = { questions: [{ question: 'Which tools?', multiSelect: true, options: [{ label: 'Hammer' }, { label: 'Saw' }, { label: 'Drill' }] }] };
+      const review = fixture('cc300-ask-review-1q-multiselect.txt');
+      const { frames } = await streamWith({
+        paneSequence: [review, review], hookstateSequence: [aged({ ask: tools }), aged({ ask: tools })],
+      });
+      expect(frames.some((f) => f.type === 'dialog')).toBe(true);
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('an aged envelope whose questions are the ones the review screen lists is kept', async () => {
+      // The listed text is the first line of each question, a prefix of the full text the envelope carries.
+      const review = fixture('cc296-ask-2q-long-review.txt');
+      const { frames } = await streamWith({ paneSequence: [review, review], hookstateSequence: [aged({ ask: GARDEN }), aged({ ask: GARDEN })] });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('an aged envelope is NOT kept on its own review screen while no question is answered (the review lists none)', async () => {
+      // `cc296-ask-2q-long-right-review.txt` is the garden-club call's review reached by → with nothing answered: it
+      // lists no question, and an empty listing cannot tell this call's review from another call's (fail-closed).
+      const review = fixture('cc296-ask-2q-long-right-review.txt');
+      const { frames } = await streamWith({
+        paneSequence: [review, review], hookstateSequence: [hookBody({ ask: GARDEN }), aged({ ask: GARDEN })],
+      });
+      expect(frames.some((f) => f.type === 'dialog')).toBe(true);
+      expect(asks(frames)).toHaveLength(1); // the fresh read
+      expect(cleared(frames)).toHaveLength(1); // the aged read, on a review that lists no answered question
+    });
+
+    it('a mid-redraw capture followed by a failed capture is not two redraws', async () => {
+      const redraw = fixture('ask-2col-partial-redraw.txt');
+      const { frames } = await streamWith({
+        paneSequence: [MENU.pane, redraw, null, MENU.pane], transcript: MENU.transcript, hookstate: aged({ ask: ENVELOPE }),
+      });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('an aged, kept envelope clears with the menu once FAILED_CAPTURES_CLEAR captures fail in a row', async () => {
+      // The third failure frames no menu (`dialog_cleared`); the envelope follows it on that tick and stays cleared.
+      for (const failures of [3, 5]) {
+        const { frames } = await streamWith({
+          paneSequence: [MENU.pane, MENU.pane, ...Array<null>(failures).fill(null)], transcript: MENU.transcript,
+          hookstate: aged({ ask: ENVELOPE }),
+        });
+        const dialogCleared = frames.findIndex((f) => f.type === 'dialog_cleared');
+        expect(asks(frames), `${failures}`).toHaveLength(1);
+        expect(dialogCleared, `${failures}`).toBeGreaterThan(-1);
+        expect(cleared(frames), `${failures}`).toHaveLength(1);
+        expect(frames.indexOf(cleared(frames)[0]), `${failures}`).toBe(dialogCleared + 1);
+      }
+    });
+
+    it('one unparsed mid-redraw capture does not clear an aged envelope; two in a row decide as today', async () => {
+      const redraw = fixture('ask-2col-partial-redraw.txt');
+      const one = await streamWith({
+        paneSequence: [MENU.pane, redraw, MENU.pane], transcript: MENU.transcript, hookstate: aged({ ask: ENVELOPE }),
+      });
+      expect(asks(one.frames)).toHaveLength(1);
+      expect(cleared(one.frames)).toHaveLength(0);
+      const two = await streamWith({
+        paneSequence: [MENU.pane, redraw, redraw], transcript: MENU.transcript, hookstate: aged({ ask: ENVELOPE }),
+      });
+      expect(asks(two.frames)).toHaveLength(1);
+      expect(cleared(two.frames)).toHaveLength(1);
+    });
+
+    it('an aged approval envelope clears at 31 minutes as today', async () => {
+      const approval = { approval: { tool: 'Bash', summary: 'rm -rf build/' } };
+      const { frames } = await streamWith({
+        ...MENU,
+        hookstateSequence: [hookBody({ ask: approval }), aged({ ask: approval })],
+      });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(1);
+    });
+
+    it('an aged session reads its hookstate once per tick', async () => {
+      const { hookReads } = await streamWith({
+        ...MENU,
+        hookstateSequence: [aged({ ask: ENVELOPE }), aged({ ask: ENVELOPE }), aged({ ask: ENVELOPE })],
+      });
+      expect(hookReads).toBe(3); // start() plus two ticks
+    });
   });
 });
 
@@ -846,9 +1035,9 @@ describe('session WS', () => {
     fileB = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
 
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
@@ -992,10 +1181,10 @@ describe('session WS', () => {
       '  3. Chat about this\n' +
       '\nEnter to select · ↑/↓ to navigate · Esc to cancel\n';
     const menuRun: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: menuPane, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: menuPane, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const menuCfg = loadConfig({ CCRC_HOME: home });
     const menuApp = await buildServer({ cfg: menuCfg, runCcd: ccdRunner(menuRun, menuCfg), tmux: new Tmux(menuRun), io: localIO, queue: new KeyedQueue() }, new Bus());
@@ -1056,9 +1245,9 @@ const unlistableIO: FleetIO = { ...localIO, readdir: async () => null };
 
 const mkLadderDeps = (home: string, io: FleetIO): Deps => {
   const run: Runner = async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const cfg = loadConfig({ CCRC_HOME: home });
   return { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
@@ -2716,11 +2905,11 @@ describe('chat header: an unmeasured live status file is not a session at rest (
     seed(home);   // the live file says status: 'idle'
     let pidFails = true;
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') {
-        return pidFails ? { code: 1, stdout: '', stderr: 'tmux: timeout' } : { code: 0, stdout: `${PID}\n`, stderr: '' };
+        return pidFails ? { ran: true, code: 1, stdout: '', stderr: 'tmux: timeout' } : { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const deps: Deps = { ...mkLadderDeps(home, localIO), tmux: new Tmux(run) };
     const frames: { type: string; status?: string; statusUpdatedAt?: number | null }[] = [];
@@ -2907,9 +3096,9 @@ describe('registry ladder: a mid-stream degrade never interrupts the open tail (
     let degrade = false;
     const io = degradedReadIO((p) => degrade && p.endsWith(`${ID}.uuid`));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
@@ -2971,7 +3160,7 @@ describe('session WS — dead session behind a symlinked workdir', () => {
 
     // DEAD is the point: has-session answers 1, so no live cwd can rescue the
     // resolution the way it always rescued running sessions.
-    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
     const deadApp = await buildServer(deps, new Bus());
@@ -3010,9 +3199,9 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     seedRoster(home);
     seed(home);
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
@@ -3070,9 +3259,9 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
   it("start()'s own checkMail call puts mail on the wire before any poll tick could", async () => {
     queueTo(ID, 'on connect, not on a tick');
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), coord };
@@ -3287,9 +3476,9 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
 
   it('sends no mail frame at all with no coord configured — the same absent-store silence every coord route answers', async () => {
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
@@ -3465,9 +3654,9 @@ describe('the tasks frame carries touchedAt (D-5372)', () => {
 
   const startFrames = async (): Promise<SessionStreamMsg[]> => {
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
@@ -3496,9 +3685,9 @@ describe('the tasks frame carries touchedAt (D-5372)', () => {
     const at = new Date('2026-10-14T11:53:34Z');
     seedTasks(['in_progress'], at);
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };

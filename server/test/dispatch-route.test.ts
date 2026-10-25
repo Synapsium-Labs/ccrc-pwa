@@ -9,13 +9,14 @@
 // one guarded runner, per `testDeps`'s own wiring), so ORDER between a ccd
 // call and a tmux one is observable from one combined `calls` array.
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import type { Runner } from '../src/exec.js';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, ROUTE_ARGV_CAP, ROUTE_CAP } from '../src/ccdargv.js';
+import { ACTOR_FLAGS_CAP, CCD_ARGV, ROUTE_ARGV_CAP, ROUTE_CAP, ROUTE_DEFAULT_CAP } from '../src/ccdargv.js';
 import { configDirFor } from '../src/config.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -57,23 +58,23 @@ function makeRunner(home: string, cfg: RunnerCfg = {}): { run: Runner; calls: st
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
-    if (cfg.fail?.has(verb)) return { code: 1, stdout: '', stderr: `${verb} failed` };
+    if (cfg.fail?.has(verb)) return { ran: true, code: 1, stdout: '', stderr: `${verb} failed` };
     if (verb === 'ws-add') {
       const ids = cfg.wsAddCreates ?? [`${PROJECT}-fresh`];
       for (const id of ids) seed(home, id);
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     }
     if (verb === 'capture-pane') {
       const p = panes[Math.min(capIdx, panes.length - 1)]!;
       capIdx++;
-      return { code: 0, stdout: p, stderr: '' };
+      return { ran: true, code: 0, stdout: p, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };   // ensure, ws-hold, route, send-keys, has-session…
+    return { ran: true, code: 0, stdout: '', stderr: '' };   // ensure, ws-hold, route, send-keys, has-session…
   };
   return { run, calls };
 }
 
-const DEFAULT_VERBS = ['ws-add', 'ensure', 'ws-hold', ACTOR_FLAGS_CAP, ROUTE_ARGV_CAP, ROUTE_CAP];
+const DEFAULT_VERBS = ['ws-add', 'ensure', 'ws-hold', ACTOR_FLAGS_CAP, ROUTE_ARGV_CAP, ROUTE_DEFAULT_CAP, ROUTE_CAP];
 
 interface HarnessCfg extends RunnerCfg {
   wave?: 1 | 2;
@@ -81,6 +82,7 @@ interface HarnessCfg extends RunnerCfg {
    *  session, the resume arm's own precondition. */
   sessionId?: string;
   ccdVerbs?: string[];
+  kind?: 'work' | 'review';
 }
 
 const harness = async (cfg: HarnessCfg = {}) => {
@@ -89,6 +91,7 @@ const harness = async (cfg: HarnessCfg = {}) => {
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const opened = coord.openRun({
     program: 'p', title: 't', project: PROJECT, wave: cfg.wave ?? 1, waveOf: 2, claimedBy: 'c',
+    ...(cfg.kind === undefined ? {} : { kind: cfg.kind }),
   });
   if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
   if (cfg.sessionId !== undefined) {
@@ -100,7 +103,7 @@ const harness = async (cfg: HarnessCfg = {}) => {
   const deps: DispatchRunDeps = {
     ...base, coord,
     fleetState: { connected: true, downSince: null, ccdVerbs: cfg.ccdVerbs ?? DEFAULT_VERBS, rosterFp: null, build: null },
-    configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
+    configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const, sendClear: clearSender(base),
   };
   return {
     coord, deps, runId: opened.id, calls,
@@ -293,6 +296,96 @@ describe('dispatch writes the routing record it was given (routing spec §5.3, s
     const normalise = (argv: readonly string[], id: number): string[] =>
       argv.map((t) => (t === `run:${id} dispatch` ? 'run:<id> dispatch' : t));
     expect(normalise(wsAdd1, h1.runId)).toEqual(normalise(wsAdd2, h2.runId));
-    expect(wsAdd1).not.toContain('--route');
+    // D-6794: "absent" now means the run kind's table row, the same in both spellings.
+    expect(wsAdd1).toContain('--route');
+  });
+});
+
+describe('a dispatch with no route gets its run kind\'s row (D-6794)', () => {
+  const WORK_ROW = ['--route', 'class=opus', '--route', 'effort=high', '--route', 'subagent=sonnet',
+    '--route', 'workflow=off', '--route', 'compact=40'];
+  const REVIEW_ROW = ['--route', 'class=sonnet', '--route', 'effort=high', '--route', 'subagent=sonnet',
+    '--route', 'workflow=on', '--route', 'compact=40'];
+
+  it('a work dispatch with no route gets the work row', async () => {
+    const h = await harness({ wave: 1, wsAddCreates: ['demo-work-default'] });
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    expect(h.calls.find((c) => c[0] === 'ws-add')!.slice(1, 2 + WORK_ROW.length)).toEqual(['--no-rc', ...WORK_ROW]);
+  });
+
+  it('a review dispatch with no route gets the review row', async () => {
+    const h = await harness({ wave: 1, kind: 'review', wsAddCreates: ['demo-review-default'] });
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    expect(h.calls.find((c) => c[0] === 'ws-add')!.slice(1, 2 + REVIEW_ROW.length)).toEqual(['--no-rc', ...REVIEW_ROW]);
+  });
+
+  it('the default row rides --route-default so ccd places by its class as a preference, never a refusal (seven-day ceiling)', async () => {
+    const h = await harness({ wave: 1, wsAddCreates: ['demo-ceiling'] });
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    const argv = h.calls.find((c) => c[0] === 'ws-add')!;
+    expect(argv).toContain('--route-default');
+    expect(argv.indexOf('--route-default')).toBeLessThan(argv.indexOf(PROJECT));
+    const r = await harness({ wave: 1, kind: 'review', wsAddCreates: ['demo-ceiling-review'] });
+    expect(await r.dispatch()).toMatchObject({ ok: true });
+    expect(r.calls.find((c) => c[0] === 'ws-add')).toContain('--route-default');
+  });
+
+  it('a route the coordinator passed never carries --route-default: an explicit class is strict', async () => {
+    const h = await harness({ wave: 1, wsAddCreates: ['demo-typed'] });
+    expect(await h.dispatch({ class: 'opus' })).toMatchObject({ ok: true });
+    expect(h.calls.find((c) => c[0] === 'ws-add')).not.toContain('--route-default');
+  });
+
+  it('a ccd without route-default-v1 gets NO default route at all (the pre-D-6794 argv), journalled', async () => {
+    const h = await harness({ wave: 1, wsAddCreates: ['demo-old-ccd'],
+      ccdVerbs: ['ws-add', 'ensure', 'ws-hold', ACTOR_FLAGS_CAP, ROUTE_ARGV_CAP, ROUTE_CAP] });
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    const argv = h.calls.find((c) => c[0] === 'ws-add')!;
+    expect(argv).not.toContain('--route');
+    expect(argv).not.toContain('--route-default');
+    expect(h.events()).toContain('route-omitted:no-route-default-cap');
+    expect(h.events().filter((e) => e.startsWith('route-defaulted') || e.startsWith('arm:'))).toEqual([]);
+  });
+
+  it('a route the coordinator passed is untouched, and nothing is journaled as defaulted', async () => {
+    const h = await harness({ wave: 1, kind: 'review', wsAddCreates: ['demo-passed-route'] });
+    expect(await h.dispatch({ effort: 'low' })).toMatchObject({ ok: true });
+    expect(h.calls.find((c) => c[0] === 'ws-add')).toEqual(
+      ['ws-add', '--no-rc', '--route', 'effort=low', PROJECT, '--surface', 'agent', '--actor', `run:${h.runId} dispatch`]);
+    expect(h.events().filter((e) => e.startsWith('route-defaulted'))).toEqual([]);
+  });
+
+  it('an empty passed route is a passed route: not filled', async () => {
+    const h = await harness({ wave: 1, wsAddCreates: ['demo-empty-passed'] });
+    expect(await h.dispatch({})).toMatchObject({ ok: true });
+    expect(h.calls.find((c) => c[0] === 'ws-add')).not.toContain('--route');
+    expect(h.events().filter((e) => e.startsWith('route-defaulted'))).toEqual([]);
+  });
+
+  it('the journal row is written, once, naming the kind', async () => {
+    const h = await harness({ wave: 1, wsAddCreates: ['demo-journal'] });
+    await h.dispatch();
+    expect(h.events().filter((e) => e.startsWith('route-defaulted'))).toEqual(['route-defaulted:work']);
+    expect(h.events()).toContain('arm:class=opus effort=high subagent=sonnet workflow=off compact=40');
+    const r = await harness({ wave: 1, kind: 'review', wsAddCreates: ['demo-journal-review'] });
+    await r.dispatch();
+    expect(r.events().filter((e) => e.startsWith('route-defaulted'))).toEqual(['route-defaulted:review']);
+  });
+
+  it('a resumed wave N>=2 with no route keeps its session record: no route verb, no journal row', async () => {
+    const h = await harness({ wave: 2, sessionId: 'demo-existing-default' });
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    expect(h.calls.filter((c) => c[0] === 'route')).toEqual([]);
+    expect(h.events().filter((e) => e.startsWith('route-defaulted') || e.startsWith('arm:'))).toEqual([]);
+  });
+
+  it('a session escalated by the ladder keeps its escalation after an unrouted wave-2 dispatch', async () => {
+    const h = await harness({ wave: 2, sessionId: 'demo-escalated' });
+    // The ladder's write (`POST /api/runs/:id/route`, `kind: ceiling`) lands in the registry through `ccd route`.
+    const field = path.join(h.deps.cfg.home, '.cc-sessions', 'demo-escalated.class');
+    writeFileSync(field, 'fable');
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    expect(h.calls.filter((c) => c[0] === 'route')).toEqual([]);
+    expect(readFileSync(field, 'utf8')).toBe('fable');
   });
 });

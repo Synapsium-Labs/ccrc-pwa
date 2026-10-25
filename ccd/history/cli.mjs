@@ -56,12 +56,14 @@ import { spawnSync } from 'node:child_process';
 import {
   REASONS, TMUX_DEADLINE_MS, SCOPE_SOURCES, SCHEMA_ADDED, READ_VERBS, idOk, makePairIndex, redactFinalJson, redactFinalText, redactFinalLines, makeBelt, beltUnits,
   REDACT_SOURCES_META, parseRedactSources,
-  decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, paneOk,
-  decideRecallOff, parseSpoolLine, SCOPE_FAMILIES_JSON_MAX,
+  decideSeamInPane, decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, paneOk,
+  decideRecallOff, parseSpoolLine, RECALL_ARMS,
+  recallSeamEngaged, decideHeadless, headlessMarkerOf, HEADLESS_LIST_MAX_BYTES,
+  decideHeadlessStore, asOfFamilySql, decideAsOfFamily, decideHeadlessRead, decideEnvProject,
   readEnvelope, shownLine, nextLine,
 } from './lib.mjs';
 import { loadSecrets, procIdentityOf, measureOpProcess, recallOffPresence } from './sweep.mjs';
-import { runTree, grepVerb, describeVerb, expandVerb, familiesOf, transcriptsOf, scopeHeader } from './recall.mjs';
+import { runTree, grepVerb, describeVerb, expandVerb, familiesOf, transcriptsOf, scopeHeader, scopeJsonOf, asOfCutOf } from './recall.mjs';
 import { spawn as spawnOp } from 'node:child_process';
 import { isatty as isattyOp } from 'node:tty';
 import { recoverStepAt as opRecoverStepAt, storedVersionAt as opStoredVersionAt } from './store.mjs';
@@ -454,6 +456,7 @@ export function render(env) {
 //     1. the argument whitelist (parseReadArgs; READ_OPTIONS is the one list per verb);
 //     2. §8.3's Darwin and recorded-role rows (decideCliStore): 9 before any identity, so a server box needs no
 //        pane;
+//     2a. the seam variables inside a pane (decideSeamInPane, W2-D39): 2 headless-in-pane, before any tmux spawn;
 //     3. the identity (decideIdentity over a bounded `tmux display-message -p -t "$TMUX_PANE" '#S'`);
 //     4. the harness (decideHarness over $REG/<id>.harness: unsupported and unreadable are refusals, never 6);
 //     5. the generation (resolveGeneration: CCRC_SESSION_GENERATION, then $REG/<id>.generation, then newest);
@@ -464,6 +467,23 @@ export function render(env) {
 //        epochs are never read;
 //     9. the pair index and its belt (redact_hashes, plus the frozen list and the declared secretsFiles the last
 //        tick recorded, read now) for output redaction (§8.3 layers 1 and 4).
+//   - With no pane and a seam value set (W2-D45: a CCRC_RECALL_* variable is set iff it is non-empty), the READ verbs
+//     take the HEADLESS path after steps 1, 2 and 2a, in W2-D46's order (readContextEnv;
+//     D-5767 (history-w2-env-identity-from-asof)):
+//     h1. the marker's one read (store.mjs readBounded at HEADLESS_LIST_MAX_BYTES, no link followed, folded by
+//         headlessMarkerOf), then decideHeadless: headless-unarmed, headless-malformed, no-identity, bad-id,
+//         headless-unlisted, headless-arm-unknown, asof-invalid;
+//     h2. the harness, still $REG/<id>.harness (W2-D40's stated residual);
+//     h3. the rest of §8.3's table after the 2 s stat, the read-only open, decideStatusRead;
+//     h4. decideHeadlessStore, the marker's store line, before any ASOF row is read; then decideAsOfFamily over
+//         asOfFamilySql's rows and the pair: the family is ADMITTED here, and only an admitted call writes a counter
+//         line (W2-D46);
+//     h5 and h6. decideHeadlessRead: recall-off/<id> against the resolved generation, then ARM=control: exit 8, counted;
+//     h7. decideScope with source env (--workspace anchored on the ASOF epoch's stored cwd_real ?? cwd),
+//         decideEnvProject (W2-D41: cross-project), the families and transcripts, then the cut (asOfCutOf) on
+//         rc.scope.cut.
+//     CCRC_SESSION_GENERATION, $REG/<id>.generation and the id's newest family are never read on this path, and tmux
+//     is never spawned.
 //   A failed read of the admitted store, in any step from 7 on or in the verb's own read, is ONE exit-5 answer
 //   (decideStatusReadFailure, as status gives); any other throw is a defect, exit 1.
 //   The verbs' executors are recall.mjs's. This block decides nothing: it renders, and runs the second belt (§8.3,
@@ -598,7 +618,12 @@ function scopeArgsOf(o) {
 
 /** The CLI's one write (§8.1): `{v, ev:'recall', id, gen?, cmd, rc, ms, ts}`, fenced like the hook's lines.
  *  It carries no query text and no argument (G5). `gen` rides only when it has the UUID grammar. A line the
- *  spool grammar would reject (parseSpoolLine) is never written: the answer is null. */
+ *  spool grammar would reject (parseSpoolLine) is never written: the answer is null.
+ *  W2-D43: this is the single writer of `arm`. A counted env call passes the RECALL_ARMS word step 1 admitted, and the
+ *  line carries it, so every live counter (`arm IS NULL`, W2-D13) leaves the call out; §8.2's "counted
+ *  `scope_source=env`" reads as `recall_calls.arm IS NOT NULL` (an erratum, E10, W2-5b's to amend). A tmux call passes
+ *  none: absent and null both mean none. Any other value answers null, so no line is written: a line without its word
+ *  would count an eval call as a live one (C-R). */
 export function recallLine(i) {
   const rec = { v: 1, ev: 'recall', id: i.id };
   if (typeof i.gen === 'string' && UUID_RE.test(i.gen)) rec.gen = i.gen;
@@ -606,6 +631,10 @@ export function recallLine(i) {
   rec.rc = i.rc;
   rec.ms = i.ms;
   rec.ts = i.ts;
+  if (i.arm !== undefined && i.arm !== null) {
+    if (!RECALL_ARMS.includes(i.arm)) return null;
+    rec.arm = i.arm;
+  }
   const line = JSON.stringify(rec);
   return parseSpoolLine(line).ok ? line : null;
 }
@@ -641,7 +670,9 @@ export function writeRecallLine(home, id, line, afterPrecheck = null, afterOpen 
   }
 }
 
-/** One counter line per identity-resolved read call, whatever its exit. */
+/** One counter line per counted read call, whatever its exit (D-5023): on the tmux path every call whose identity resolved,
+ *  on the env path every call step 4 admitted (W2-D46; the env branch's answers before it carry no id), with its arm
+ *  (W2-D43). None under history-off. */
 function countRecall(home, i) {
   if (existsSync(historyPaths(home).off)) return;
   const line = recallLine(i);
@@ -658,13 +689,15 @@ function realOrNull(p) {
 
 /** A defect (exit 1) thrown out of readContext after the read's identity resolved, D-5023 (fix round 1, review 441 F6): it
  *  carries the identity and generation known at the throw, so readVerb counts the call (rc 1) as it counts every other
- *  identity-resolved call. `cause` is the thrown value itself. */
+ *  identity-resolved call. `cause` is the thrown value itself. `arm` is the env branch's admitted arm (W2-D43), null on
+ *  the tmux path. */
 class ReadDefect extends Error {
-  constructor(cause, id, gen) {
+  constructor(cause, id, gen, arm) {
     super(thrownText(cause));
     this.cause = cause;
     this.id = id;
     this.gen = gen;
+    this.arm = arm;
   }
 }
 
@@ -672,11 +705,14 @@ class ReadDefect extends Error {
  *  On success the caller owns `rc.db` and closes it. A throw that is not a failed read of the admitted store is a
  *  defect, and once the identity resolved it leaves as a ReadDefect (D-5023). */
 export async function readContext(home, verb, parsed, nowMs = Date.now()) {
-  const seen = { id: null, gen: null };
+  const seen = { id: null, gen: null, arm: null };
   try {
-    return await readContextIn(home, verb, parsed, nowMs, seen);
+    // W2-D43: Task 3's env branch sets seen.arm at step 4's admission, beside id and gen; every answer carries it.
+    const r = await readContextIn(home, verb, parsed, nowMs, seen);
+    r.arm = seen.arm;
+    return r;
   } catch (e) {
-    if (typeof seen.id === 'string') throw new ReadDefect(e, seen.id, seen.gen);
+    if (typeof seen.id === 'string') throw new ReadDefect(e, seen.id, seen.gen, seen.arm);
     throw e;
   }
 }
@@ -688,6 +724,19 @@ async function readContextIn(home, verb, parsed, nowMs, seen) {
     return refusal(d.exit, d.reason, null, null, null);
   }
   const pane = process.env.TMUX_PANE ?? null;
+  // W2-D39: the seam variables inside a pane are 2 headless-in-pane, decided before any tmux spawn (C4, C31). Each of
+  // the three is read here, by name and once; lib decides what set means (W2-D45).
+  const recall = {
+    session: process.env.CCRC_RECALL_SESSION ?? null,
+    arm: process.env.CCRC_RECALL_ARM ?? null,
+    asof: process.env.CCRC_RECALL_ASOF ?? null,
+  };
+  const inPane = decideSeamInPane({ pane, recall });
+  if (!inPane.ok) return refusal(inPane.rc, inPane.reason, null, null, null);
+  // W2-D45, W2-D46: no pane and a seam value set is the headless path, whose identity and family come from the seam,
+  // never from tmux, CCRC_SESSION_GENERATION or the registry's generation (D-5767 (history-w2-env-identity-from-asof)).
+  // With nothing set the path below is today's, unchanged.
+  if (recallSeamEngaged(recall)) return readContextEnv(home, P, parsed, nowMs, seen, recall, pane);
   const who = decideIdentity({ pane, tmux: paneOk(pane) ? tmuxSession(pane) : null });
   if (!who.ok) return refusal(who.rc, who.reason, null, null, null);
   const id = who.id;
@@ -785,6 +834,120 @@ async function readContextIn(home, verb, parsed, nowMs, seen) {
   }
 }
 
+/** W2-D40's measurement (D-5767): lib's asOfFamilySql over the row stored under CCRC_RECALL_ASOF, on the admitted
+ *  read-only handle, run only once decideHeadlessStore passed the marker's store line (R3). Ids, keys and launch facts
+ *  only: no text is read. */
+function asOfRowsOf(db, asof) {
+  return db.prepare(asOfFamilySql()).all({ asof });
+}
+
+/** The headless path (§8.2's seam; W2-D46's order after its row 0 and W2-2a's in-pane row, which readContextIn ran). It
+ *  measures and hands each measurement to lib; it decides nothing. A refusal before step 4 names no id, so readVerb writes
+ *  no counter line for it; at step 4's admission `seen` takes the id, the resolved generation and the arm, and every
+ *  later answer names the id and generation (W2-D43, W2-D46). D-5767 (history-w2-env-identity-from-asof): the family is
+ *  the one CCRC_RECALL_ASOF's boundary sits in, never CCRC_SESSION_GENERATION's, $REG/<id>.generation's or the id's
+ *  newest; `--session <own id>` reads it, and `--workspace` anchors on its epoch's stored cwd_real ?? cwd, never on
+ *  $REG/<id>.workdir. Residuals, stated (W2-D40): the harness is still $REG/<id>.harness, and `--session <other>` takes
+ *  the other id's newest family, then the cut. */
+async function readContextEnv(home, P, parsed, nowMs, seen, recall, pane) {
+  // Step 1: the marker's one read (W2-D44; readContextIn sends only an engaged seam with no pane here), then
+  // decideHeadless's rows.
+  const marker = headlessMarkerOf(readBounded(P.headlessOn, HEADLESS_LIST_MAX_BYTES, false));
+  const head = decideHeadless({ recall, paneSet: pane !== null, marker });
+  if (!head.ok) return refusal(head.rc, head.reason, null, null, null);
+  // readContextIn sends only an engaged seam here, so decideHeadless cannot answer the tmux path; if it ever did, fail
+  // closed: an uncounted defect (seen.id is still null), never a read with no session.
+  if (head.path !== 'headless') throw new TypeError('readContextEnv: decideHeadless answered the tmux path');
+  const id = head.session;
+  // Step 2: the harness (W2-D40's stated residual: a reused id with another harness refuses, fail closed).
+  const harness = decideHarness(regPresence(P, id, 'harness'));
+  if (!harness.ok) return refusal(harness.rc, harness.reason, null, null, null);
+  // Step 3: §8.3's table after the 2 s stat, the read-only open and decideStatusRead.
+  const reach = await measureReach(home);
+  const d = decideCliStore(cliFactsOf(reach));
+  if (!d.read) return refusal(d.exit, d.reason, refusalStoreId(reach, P), null, null);
+  let db;
+  try {
+    db = openReader(P.dbFile);
+  } catch (e) {
+    const f = readFailure(e, refusalStoreId(reach, P), null, null);
+    if (f === null) throw e;
+    return f;
+  }
+  let handed = false;
+  let storeId = refusalStoreId(reach, P);
+  try {
+    const meta = db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get();
+    if (meta !== undefined) storeId = meta.v;
+    const mode = db.prepare('PRAGMA journal_mode').get().journal_mode;
+    const version = userVersion(db);
+    const rd = decideStatusRead({ userVersion: version, journalMode: mode, recordedMigration: undefined });
+    if (rd.reason !== undefined) return refusal(rd.exit, rd.reason, storeId, null, null);
+    // Step 4: the marker's store line first, against the meta row alone (W2-D44), before any ASOF row is read (R3); then
+    // the family from ASOF and its pair. ADMITTED here (W2-D46): from now on the call is counted.
+    const ownStore = meta === undefined ? null : meta.v;
+    const storeLine = decideHeadlessStore({ list: head.list, storeId: ownStore });
+    if (!storeLine.ok) return refusal(storeLine.rc, storeLine.reason, storeId, null, null);
+    const fam = decideAsOfFamily({
+      session: id, asof: head.asof, rows: asOfRowsOf(db, head.asof), list: head.list, storeId: ownStore,
+    });
+    if (!fam.ok) return refusal(fam.rc, fam.reason, storeId, null, null);
+    const gen = fam.generation;
+    seen.id = id;
+    seen.gen = gen;
+    seen.arm = head.arm;
+    // Steps 5 and 6: recall-off/<id> against the RESOLVED generation, then ARM=control: exit 8, counted (W2-D42).
+    const gate = decideHeadlessRead({ recallOff: decideRecallOff({ file: recallOffPresence(home, id), generation: gen }), arm: head.arm });
+    if (!gate.ok) return refusal(gate.rc, undefined, storeId, id, gen);
+    // Step 7: the scope with source env (W2-D41; C50), its env-only project guard, the families, then the cut.
+    const o = parsed.opts;
+    const session = typeof o.session === 'string' ? o.session : null;
+    const verdict = decideScope({
+      source: SCOPE_SOURCES[1], id, generation: { value: gen, via: fam.via },
+      flags: { project: o.project === true, workspace: o.workspace === true, session },
+      reg: {
+        project: regPresence(P, id, 'project'),
+        workdir: fam.anchor === null ? ABSENT : { state: 'value', value: fam.anchor },
+        sessionProject: session === null ? null : (idOk(session) ? regPresence(P, session, 'project') : ABSENT),
+      },
+    });
+    if (!verdict.ok) return refusal(verdict.rc, verdict.reason, storeId, id, gen);
+    const guard = decideEnvProject({ verdict, storedProject: fam.family.project });
+    if (!guard.ok) return refusal(guard.rc, guard.reason, storeId, id, gen);
+    // verdict.generation is the resolved one, an exact key ('' for a legacy family), for the own id, and null (that id's
+    // newest family) for another. The workspace anchor is matched as stored: no realpath at read time.
+    const families = familiesOf(db, {
+      kind: verdict.kind, id: verdict.id, generation: verdict.generation, project: verdict.project,
+      workdir: verdict.workdir, workdirReal: verdict.workdir,
+    });
+    const transcriptPks = transcriptsOf(db, families.map((f) => f.sessionPk));
+    if (transcriptPks.length === 0) return refusal(EXIT.NOT_INDEXED, undefined, storeId, id, gen);
+    // The cut (W2-D46 step 7): W2-2a's store half, so every door that reads rc.scope.cut applies it. Its asof-invalid
+    // (D-5765) comes after admission and is counted.
+    const cut = asOfCutOf({ db }, head.asof);
+    if (!cut.ok) return refusal(cut.rc, cut.reason, storeId, id, gen);
+    const rc = {
+      db, version, schema: SCHEMA_ADDED, storeId, nowMs, home, id, gen,
+      scope: {
+        kind: verdict.kind, id: verdict.id, generation: families.length === 1 ? families[0].generation : null,
+        project: verdict.project, workdir: verdict.workdir,
+        sessionPks: families.map((f) => f.sessionPk), transcriptPks, families, cut: cut.cut,
+      },
+      scopeArgs: scopeArgsOf(o),
+      pairIdx: pairIndexOf(db, home),
+    };
+    handed = true;
+    return rc;
+  } catch (e) {
+    // A failed read of the admitted store is ONE exit-5 answer, counted only once step 4 admitted the family.
+    const f = readFailure(e, storeId, seen.id, seen.gen);
+    if (f === null) throw e;
+    return f;
+  } finally {
+    if (!handed) db.close();
+  }
+}
+
 /** The recall.mjs runner each read verb calls. Each entry takes (rc, parsed, argv): `parsed` is parseReadArgs'
  *  answer (the whitelist), `argv` the verb's own words, which grep and describe re-read with their own value
  *  grammars. Tasks 12, 15 and 16 add grep, describe and expand in place. A verb not here answers bad-args before
@@ -812,17 +975,6 @@ function emitRefusal(r, json, pairIdx) {
   return r.exit;
 }
 
-/** The --json scope object (§8.3). A widened scope names only a bounded prefix; `families_total` is complete. */
-function scopeJson(rc) {
-  return {
-    kind: rc.scope.kind, id: rc.scope.id, project: rc.scope.project,
-    families: rc.scope.families.slice(0, SCOPE_FAMILIES_JSON_MAX)
-      .map((f) => ({ ccrc_id: f.ccrcId, generation: f.generation, first_seen_ms: f.firstSeenMs })),
-    families_total: rc.scope.families.length,
-    transcripts: rc.scope.transcriptPks.length,
-  };
-}
-
 /** A verb's result. Human form: the header, the body, `shown K of N`, the next: line, the hint. --json: one
  *  envelope. The second belt (§8.3, D-4613) is structure-aware: --json maps the envelope value through redactFinalJson before
  *  it is serialised, the human page goes through redactFinalText line by line and tag by tag. */
@@ -831,7 +983,7 @@ function emitResult(rc, res, json) {
   let text;
   if (json) {
     text = `${JSON.stringify(redactFinalJson(readEnvelope({
-      exit: res.exit, ...(res.reason === undefined ? {} : { reason: res.reason }), storeId: rc.storeId, scope: scopeJson(rc),
+      exit: res.exit, ...(res.reason === undefined ? {} : { reason: res.reason }), storeId: rc.storeId, scope: scopeJsonOf(rc),
       header: { indexedThroughMs: h.indexedThroughMs, lagS: h.lagS }, items: res.items, shown: res.shown, total: res.total,
       next: res.next === null ? null : nextLine(res.next),
       // D-4595 (history-json-envelope-carries-hint): the human form prints res.hint below; --json carries it too.
@@ -874,10 +1026,10 @@ async function readVerb(home, verb, argv) {
       ctx = await readContext(home, verb, parsed, t0);
     } catch (x) {
       if (!(x instanceof ReadDefect)) throw x;
-      who = { id: x.id, gen: x.gen };
+      who = { id: x.id, gen: x.gen, arm: x.arm };
       throw x.cause;
     }
-    who = { id: ctx.id, gen: ctx.gen };
+    who = { id: ctx.id, gen: ctx.gen, arm: ctx.arm };
     if (!('db' in ctx)) {
       exit = emitRefusal(ctx, json, NO_PAIRS);
     } else {
@@ -906,7 +1058,7 @@ async function readVerb(home, verb, argv) {
     errLine(`ccrc history: internal error: ${thrownText(e)}`, ctx !== null && 'db' in ctx ? ctx.pairIdx : NO_PAIRS);
     return exit;
   } finally {
-    if (who !== null && typeof who.id === 'string') countRecall(home, { id: who.id, gen: who.gen, cmd: verb, rc: exit, ms: Date.now() - t0, ts: Date.now() });
+    if (who !== null && typeof who.id === 'string') countRecall(home, { id: who.id, gen: who.gen, arm: who.arm, cmd: verb, rc: exit, ms: Date.now() - t0, ts: Date.now() });
   }
   return exit;
 }

@@ -7,8 +7,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { TerminalDrawer } from '../src/session/TerminalDrawer';
+import { reattachVerdict } from '../src/session/typedFrame';
 import type { DrawerTerm } from '../src/session/terminalFactory';
-import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
+import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, PTY_EXIT_CLOSE, TMUX_STATUS_ROWS } from '../../shared/api';
 
 /** What every attach dials: the window's own size plus tmux's status row. */
 const WINDOW_URL = `cols=${PINNED_WINDOW_COLS}&rows=${PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS}`;
@@ -30,7 +31,7 @@ class FakeSocket {
   closed = false;
   onopen: (() => void) | null = null;
   onmessage: ((ev: { data: unknown }) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((ev?: { code?: number }) => void) | null = null;
   onerror: (() => void) | null = null;
   constructor(url: string) {
     this.url = url;
@@ -192,6 +193,81 @@ describe('TerminalDrawer quick keys', () => {
 });
 
 // — connection overlay —
+
+// D-6368: a drawer never sits open on a dead pty. The server closes the socket
+// with PTY_EXIT_CLOSE when the pty exits; the drawer re-attaches once, and a
+// second such close inside the bound (a link still down answers the re-dial with
+// a failed open) ends at the connection-lost state and its Reconnect.
+describe('reattachVerdict (D-6368)', () => {
+  it('allows only a first pty-exit close or one strictly after the reattach bound', () => {
+    expect(reattachVerdict(PTY_EXIT_CLOSE, null, 1_000_000)).toBe(true);
+    expect(reattachVerdict(PTY_EXIT_CLOSE, 999_999, 1_000_000)).toBe(false);
+    expect(reattachVerdict(PTY_EXIT_CLOSE, 969_999, 1_000_000)).toBe(true);
+    expect(reattachVerdict(PTY_EXIT_CLOSE, 970_000, 1_000_000)).toBe(false);
+    expect(reattachVerdict(1006, null, 1_000_000)).toBe(false);
+    expect(reattachVerdict(undefined, null, 1_000_000)).toBe(false);
+  });
+});
+
+// D-6368: a drawer never sits open on a dead pty. The server closes the socket
+// with PTY_EXIT_CLOSE when the pty exits; the drawer re-attaches once, and a
+// second such close inside the bound (a link still down answers the re-dial with
+// a failed open) ends at the connection-lost state and its Reconnect.
+describe('TerminalDrawer follows its pty (D-6368)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a 4000 close re-attaches once', () => {
+    const { ws } = opened();
+    act(() => ws.onclose?.({ code: PTY_EXIT_CLOSE }));
+
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(FakeSocket.instances.at(-1)?.url).toContain(
+      `/ws/pty/${encodeURIComponent(ID)}?${WINDOW_URL}`,
+    );
+    expect(screen.getByText('attaching…')).toBeInTheDocument();
+    expect(screen.queryByText('connection lost')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument();
+  });
+
+  it('a second 4000 within the bound shows Reconnect', () => {
+    const { ws } = opened();
+    act(() => ws.onclose?.({ code: PTY_EXIT_CLOSE }));
+    const second = FakeSocket.instances.at(-1);
+    act(() => second?.onopen?.());
+    act(() => second?.onclose?.({ code: PTY_EXIT_CLOSE }));
+
+    expect(FakeSocket.instances).toHaveLength(2); // no third dial
+    expect(screen.getByText('connection lost')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
+  });
+
+  it('any other close shows Reconnect', () => {
+    const { ws } = opened();
+    act(() => ws.onclose?.({ code: 1006 }));
+
+    expect(FakeSocket.instances).toHaveLength(1); // no new socket
+    expect(screen.getByText('connection lost')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
+  });
+
+  it('a 4000 after the bound re-attaches again', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_000_000);
+    const { ws } = opened();
+    act(() => ws.onclose?.({ code: PTY_EXIT_CLOSE }));
+    const second = FakeSocket.instances.at(-1);
+    act(() => second?.onopen?.());
+
+    vi.setSystemTime(1_000_000 + 30_001);
+    act(() => second?.onclose?.({ code: PTY_EXIT_CLOSE }));
+
+    expect(FakeSocket.instances).toHaveLength(3);
+    expect(screen.getByText('attaching…')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument();
+  });
+});
 
 describe('TerminalDrawer connection overlay', () => {
   it('narrates attaching, clears on open, reports loss with a Reconnect', () => {

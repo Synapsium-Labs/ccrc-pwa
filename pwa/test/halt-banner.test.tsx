@@ -3,7 +3,7 @@
 // (`POST /api/updates/ack`, `api.ackUpdateNode`) the Settings row uses.
 //
 // Found by CLASS and TEXT, never by a bare getByRole('status'): several banners on the fleet screen are status
-// regions too (update-banner.test.tsx says why).
+// regions too (the fleet-host and substrate banners, for one).
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';

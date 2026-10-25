@@ -46,7 +46,7 @@ import {
 } from '../fleet/settingsText';
 import { WITHDRAWN_KEPT_CLAUSE, rollbackBlockedText } from '../fleet/UpdateMoveSheet';
 import { haltingNodes, updateAllHaltedText } from '../fleet/updateHalt';
-import { isPlaceableInstant, newestPending, nodeVersion, pendingTag } from '../fleet/useUpdatesView';
+import { isPlaceableInstant, newestPending, nodeVersion, pendingTag } from '../fleet/updatesRead';
 import { NO_NOTES_TEXT, NoteText, ReleaseNotes, hasReleaseNotes } from '../fleet/ReleaseNotes';
 import { RELEASE_NOTE_GROUPS, parseReleaseNotes } from '../../../shared/release-notes';
 import { releaseDate } from '../lib/format';
@@ -144,9 +144,9 @@ export function sortReleases(releases: readonly ReleaseWire[]): ReleaseWire[] {
 // The catalogue carries every release; the list shows at most three in any group, in every fleet state. A window,
 // not a filter: what is left out is COUNTED (newerHidden, olderHidden) and named with the way to reach it (the
 // What's-new sheet for newer changes, the CLI for an older release), so no release is hidden without a word.
-// Built only from sortReleases, releaseDirection's managed set, pendingTag (through newestPending, the banner's own
-// rule), nodeVersion, previousVersion, highestVersion with floorRead, each row's channel and yanked, and the fleet
-// channel, so the window, the banner and a row's button cannot disagree. The server and the wire carry every row
+// Built only from sortReleases, releaseDirection's managed set, pendingTag (through newestPending, the update line's
+// own rule), nodeVersion, previousVersion, highestVersion with floorRead, each row's channel and yanked, and the fleet
+// channel, so the window, the update line and a row's button cannot disagree. The server and the wire carry every row
 // (spec §15.3's residue): the cap is the PWA's slice.
 
 /** The most rows any group of the window holds (spec §7, ruling D1). Both groups read it. */
@@ -699,7 +699,7 @@ export function ReleaseList({
 //   * THE ARROW IS pendingTag's. A desired tag renders as `→ vX` only when
 //     pendingTag (fleet/useUpdatesView.ts) returns it — measured, on a resolved
 //     channel, with a stamp that was READ, not macOS, and newer by semver. This
-//     row adds no clause of its own, so it cannot disagree with the banner or
+//     row adds no clause of its own, so it cannot disagree with the update line or
 //     BuildLine, which read the same predicate. When the node
 //     has no desired tag or no channel, the resolver's own sentence
 //     (resolveDetail) stands in: no badge, no arrow (§13). Nothing here says

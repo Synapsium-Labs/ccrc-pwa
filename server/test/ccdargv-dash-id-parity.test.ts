@@ -102,6 +102,8 @@ const TOKEN = 'a'.repeat(64);
 /** `wsCollect`'s token parameter type, named without importing L0 (this file reads `ccdargv.js` and nothing else from
  *  the shipped tree). */
 type CollectTokenArg = Parameters<typeof CCD_ARGV.wsCollect>[0];
+/** `wsOrphan`'s token parameter type, named the same way (D-6630). */
+type OrphanTokenArg = Parameters<typeof CCD_ARGV.wsOrphan>[0];
 const DECOY_HOLD = 'program:decoy wave:1/1';
 const JUNK_WITNESS = 'this is no witness\n';
 /** The test roster's account the two-argument forms name. A dash project that a pre-wave stop takes as a pair
@@ -207,6 +209,14 @@ const DASH_PROBES: Record<string, DashProbe> = {
         .toBe(JUNK_WITNESS);
     },
   },
+  // Fleet disk retention DR-18 (D-6630): ws-orphan's id is a TREE PATH, and it travels only as hex (`treeHex`), so the
+  // probed dash id is composed as the hex of its bytes. The decoded path is no plain real directory, so the verb
+  // answers `not-a-worktree` before any lock, and no decoy row is read.
+  'ws-orphan': {
+    argv: (id, d) => [CCD_ARGV.wsOrphan(TOKEN as OrphanTokenArg, Buffer.from(id).toString('hex'), false, d)],
+    decoy: plantSessionDecoys,
+    untouched: () => holdsIntact(),
+  },
   // ws-add's id is its PROJECT. A project of `--actor` used to become project `agent` (spec §2.2), so the decoy is a
   // real repo named `agent`, and a redirect would create a workspace in it.
   'ws-add': {
@@ -260,8 +270,8 @@ const decsFor = (verb: string): readonly DecRow[] =>
 describe('no dash-leading id redirects a verb the server composes, on the real binary (path-identity spec §2.8)', () => {
   it('every dec-appending verb has a dash probe, and stop has two orders', () => {
     expect(decAppendingVerbs())
-      .toEqual(['hibernate', 'ws-add', 'ws-archive', 'ws-collect', 'ws-expire', 'ws-hold', 'ws-reclaim', 'ws-release', 'ws-rename',
-        'ws-restore']);
+      .toEqual(['hibernate', 'ws-add', 'ws-archive', 'ws-collect', 'ws-expire', 'ws-hold', 'ws-orphan', 'ws-reclaim', 'ws-release',
+        'ws-rename', 'ws-restore']);
     expect(decAppendingVerbs().filter((v) => !(v in DASH_PROBES)), 'a dec-appending verb has no dash probe').toEqual([]);
     expect(Object.keys(DASH_PROBES).sort()).toEqual([...decAppendingVerbs(), 'stop'].sort());
     for (const v of decAppendingVerbs()) expect(DASH_PROBES[v]!.argv('probe-id', PROBE_DEC), v).toHaveLength(1);
@@ -390,10 +400,11 @@ describe('no dash-leading id redirects a verb the server composes, on the real b
   };
   const decWords = (d: ActorFlags): Record<string, string> =>
     ({ surface: d.surface, actor: d.actor, ...(d.reason === null ? {} : { reason: d.reason }) });
-  /** In this fixture these three answer before any line carries the pairs (ws-archive `status-unknown`, ws-rename
-   *  `worktree-unregistered`, ws-restore `not-archived` under its own `surface: none`), so their cases prove the loop
-   *  keeps the prose; `ccd-session-verbs-dash-id.test.ts` takes each to its act. Every other verb must journal them. */
-  const ANSWERS_BEFORE_THE_PAIRS: readonly string[] = ['ws-archive', 'ws-rename', 'ws-restore'];
+  /** In this fixture these four answer before any line carries the pairs (ws-archive `status-unknown`, ws-rename
+   *  `worktree-unregistered`, ws-restore `not-archived` under its own `surface: none`, ws-orphan `not-a-worktree` on
+   *  the row's id read as a tree path, D-6630), so their cases prove the loop keeps the prose;
+   *  `ccd-session-verbs-dash-id.test.ts` takes the first three to their act. Every other verb must journal them. */
+  const ANSWERS_BEFORE_THE_PAIRS: readonly string[] = ['ws-archive', 'ws-orphan', 'ws-rename', 'ws-restore'];
   const sameDec = (a: unknown, b: unknown): boolean =>
     JSON.stringify(Object.entries(a ?? {}).sort()) === JSON.stringify(Object.entries(b ?? {}).sort());
 

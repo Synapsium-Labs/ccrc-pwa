@@ -10,22 +10,21 @@ import {
   continuesInto, resumedPastMarker, rungRank, TranscriptResolver, type TranscriptResolution,
 } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
-import { hasMenu, parseDialog } from './pane/dialog.js';
+import { parseDialog } from './pane/dialog.js';
 import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
 import { SessionWorkflows, sessionDirOf } from './workflows/read.js';
 import { workflowsFrame, type Proc } from './workflows/model.js';
-import { readHookState } from './hookstate.js';
-import { askKey } from './askkey.js';
-import type { Dialog, DialogAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
-import { reviewRows } from '../../shared/ask-menu.js';
+import { foldHookStateRead, readHookStateRawMeasured } from './hookstate.js';
+import { askKey, nextAgedKeep, NO_AGED_KEEP, type AgedKeep } from './askkey.js';
+import type { Dialog, DialogAsk, DialogMulti, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
+import { reviewQuestions, reviewRows } from '../../shared/ask-menu.js';
 
 const POLL_MS = 2000;
 /** Failed captures in a row after which the menu the client holds is cleared (decision `ask-failed-capture-holds`):
  *  three polls, at least 6 s of the pane unreadable. One or two are the blips a slow remote call produces. */
 const FAILED_CAPTURES_CLEAR = 3;
 const BACKLOG_N = 50;
-const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see checkDialog's own comment
 
 interface Resolved {
   uuid: string;
@@ -82,8 +81,12 @@ export class SessionStream {
   private status: SessionStatus | null = null;
   /** What the client last saw of the pane menu — see nextDialogFrame. */
   private seenDialog: DialogSeen = { id: null, ask: null, raw: null };
+  /** `checkHookAsk`'s keep decision for an aged envelope (D-6324). */
+  private agedKeep: AgedKeep = NO_AGED_KEEP;
   /** Failed captures in a row since the last reading of the pane (decision `ask-failed-capture-holds`). */
   private failedCaptures = 0;
+  /** This tick's capture failed and `checkDialog` held the menu (under FAILED_CAPTURES_CLEAR): no reading (D-6324). */
+  private captureHeld = false;
   /** Bumped on every `answered:<id>` this stream handles; a poll reading taken under an older value read the pane
    *  from before that answer and is dropped (decision `ask-stale-poll-dropped`). */
   private answeredGen = 0;
@@ -385,23 +388,17 @@ export class SessionStream {
     // hold one forever. A session the registry reports gone never reaches here (`tick` returns early).
     if (pane === null) {
       this.failedCaptures += 1;
-      if (this.failedCaptures >= FAILED_CAPTURES_CLEAR) {
+      this.captureHeld = this.failedCaptures < FAILED_CAPTURES_CLEAR;
+      if (!this.captureHeld) {
         this.askProbe = null;
         this.frame(null, 'poll');
       }
       return;
     }
     this.failedCaptures = 0;
-    // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the
-    // WHOLE pane, and an RC-off pane renders the busy marker WHILE a dialog is
-    // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
-    // 'busy' here and this call site would suppress the parse forever. hasMenu
-    // is deliberately independent of the busy check for exactly that reason
-    // (pane/dialog.ts:42-54); it's the same idiom send.ts:320 uses to decide
-    // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
-    // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
-    // captureAnsi().
-    let dialog = hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
+    this.captureHeld = false;
+    // parseDialog opens with the hasMenu gate (not paneState), so a busy marker painted beside a menu does not veto the parse (D-102).
+    let dialog = parseDialog(pane);
     // Read the transcript only while this menu is still unexplained. Once its ask
     // is latched, re-reading costs a 256 KB tail every 2 s and can buy nothing:
     // nextDialogFrame would suppress the frame anyway. Menus that never latch are
@@ -646,18 +643,19 @@ export class SessionStream {
     this.send({ type: 'mail', mail: outstanding });
   }
 
-  /** Read this session's hookstate and send `ask` / `ask_cleared` when the
-   *  hook-sourced envelope appears, changes (JSON-compare), or goes away —
-   *  null, stale, or the file itself missing all read the same here: nothing
-   *  fresh to report. `readHookState` already gates freshness and identity
-   *  (uuid match against the registry), so a null return covers all three
-   *  uniformly — this frame just tracks the transition, not the reason. */
+  /** Read this session's hookstate once and send `ask` / `ask_cleared` when the hook-sourced envelope appears,
+   *  changes (JSON-compare), or goes away. The envelope is the fresh, current-session one (`foldHookStateRead`: a
+   *  missing, foreign or malformed file reads as none), or, past the 30-minute cut, the aged one while this tick's
+   *  menu (`seenDialog`, set by `checkDialog` just before) is that envelope's call (`nextAgedKeep`, D-6324). */
   private async checkHookAsk(uuid: string): Promise<void> {
     if (this.stopped) return;
-    const hs = await readHookState(this.deps.io, this.deps.cfg.registryDir, this.id, uuid, Date.now());
+    const raw = await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, this.id, uuid);
     if (this.stopped) return;
+    const read = foldHookStateRead(raw, Date.now());
+    const hs = read.ok ? read.state : null;
     this.hookWorkflowBackground = hs?.background?.kinds.includes('workflow') === true;
-    const ask = hs?.ask ?? null;
+    this.agedKeep = nextAgedKeep(this.agedKeep, raw, this.seenDialog, !this.captureHeld);
+    const ask = hs?.ask ?? (raw.ok && this.agedKeep.kept ? raw.state.ask : null);
     const json = ask === null ? null : JSON.stringify(ask);
     if (json === this.lastAskJson) return;
     this.lastAskJson = json;
@@ -1091,6 +1089,10 @@ export interface DialogSeen {
   id: string | null;
   ask: DialogAsk | null;
   raw: string | null;
+  /** An unparsed multiSelect menu's labels (`Dialog.multi`), the evidence `keepAgedAsk` reads (D-6324). */
+  multi?: DialogMulti;
+  /** The question texts a review screen lists (`reviewQuestions`); absent when the pane is not a review (D-6324). */
+  review?: string[];
 }
 
 /**
@@ -1132,7 +1134,8 @@ export function nextDialogFrame(
   const repainted = !dialog.parsed && prev.raw !== dialog.raw;
   if (!isNew && !upgraded && !repainted) return { seen: prev, msg: null };
   return {
-    seen: { id: dialog.id, ask, raw: dialog.parsed ? null : dialog.raw },
+    seen: { id: dialog.id, ask, raw: dialog.parsed ? null : dialog.raw, multi: dialog.multi,
+      review: reviewQuestions(dialog) ?? undefined },
     msg: { type: 'dialog', dialog: ask === null ? dialog : { ...dialog, ask } },
   };
 }

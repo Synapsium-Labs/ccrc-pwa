@@ -18,6 +18,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import type { CcdResult } from '../src/lifecycle.js';
 import type { CcdArgv } from '../src/ccdargv.js';
 import { configDirFor } from '../src/config.js';
@@ -65,10 +66,10 @@ const harness = async (cfg: Cfg) => {
 
   const runCcd = async (argv: CcdArgv): Promise<CcdResult> => {
     if (argv[0] === 'ws-add') seedRow(home, NEW_ID);
-    return { ok: true, stdout: '', stderr: '', killed: false, signal: null };
+    return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null };
   };
 
-  const base = testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' }));
+  const base = testDeps(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
   const conf = base.cfg;
 
   // The fixture roster maps wrapper `claude` to suffix `.claude`, and NOTHING in
@@ -89,7 +90,7 @@ const harness = async (cfg: Cfg) => {
     configDir: cfg.unrostered === true
       ? (): string | undefined => undefined
       : (w: string): string | undefined => configDirFor(conf, w),
-    turnVerdict: async () => 'idle' as const,
+    turnVerdict: async () => 'idle' as const, sendClear: clearSender(base),
   } as DispatchRunDeps;
 
   return {
@@ -168,17 +169,17 @@ describe('the dispatch preflight measures the worker skill and never refuses', (
     // Bind a session that has NO registry row — the resume arm's tolerated case.
     coord.setSession(opened.id, 'demo-ghost-session');
 
-    const base = testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' }));
+    const base = testDeps(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
     const asked: string[] = [];
     const deps = {
       ...base, io: localIO, coord,
       runCcd: async (): Promise<CcdResult> =>
-        ({ ok: true, stdout: '', stderr: '', killed: false, signal: null }),
+        ({ ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null }),
       configDir: (w: string): string | undefined => {
         asked.push(w);
         return configDirFor(base.cfg, w);
       },
-      turnVerdict: async () => 'idle' as const,
+      turnVerdict: async () => 'idle' as const, sendClear: clearSender(base),
     } as DispatchRunDeps;
 
     // D-5238, D-5273: with no row there is no wrapper to read a live file under, so the live `/clear` gate cannot measure

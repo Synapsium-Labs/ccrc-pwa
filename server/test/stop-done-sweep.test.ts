@@ -16,7 +16,7 @@ import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
-import { Presence } from '../src/presence.js';
+import { Viewers } from '../src/viewer.js';
 import { readSessionRecord } from '../src/registry.js';
 import { liveRowFor, turnReadDeps } from '../src/turnverdict.js';
 import type { Runner } from '../src/exec.js';
@@ -96,11 +96,11 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
         return { ok: true as const, run: (runId === 900 ? { reviews: 901 } : { id: runId, state: st ?? 'working', reviews: null }) as never };
       },
     },
-    runCcd: async (a) => { f.argv.push([...a]); return { ok: f.ccdOk, stdout: '', stderr: f.ccdOk ? '' : 'refused', killed: false, signal: null }; },
+    runCcd: async (a) => { f.argv.push([...a]); return { ran: true, ok: f.ccdOk, stdout: '', stderr: f.ccdOk ? '' : 'refused', killed: false, signal: null }; },
     fleetState: {
       ccdVerbs: [...(o.verb === false ? ['stop-surface'] : ['hibernate']), ACTOR_FLAGS_CAP, ...(o.holdOk ? [HIBERNATE_HOLD_OK_CAP] : [])],
     } as unknown as FleetState,
-    presence: { isOpen: () => false },
+    viewers: { isOpen: () => false },
     notifyLog: {
       epoch: 'e',
       record: (e: { kind: string; sessionId: string; runId: number | null; title: string; body: string }) => {
@@ -167,12 +167,24 @@ describe('stopDonePass (D-5370)', () => {
   it('ccd refusing session-busy (attached, at the act) is not asked again for the retry interval, and writes no feed row', async () => {
     const f = fake([ID]);
     const m = mem();
-    const runCcd: StopDoneSweepDeps['runCcd'] = async (a) => { f.argv.push([...a]); return { ok: false, stdout: '', stderr: 'ccd: session-busy: attached — 1 terminal(s) attached to the pane', killed: false, signal: null }; };
+    const runCcd: StopDoneSweepDeps['runCcd'] = async (a) => { f.argv.push([...a]); return { ran: true, ok: false, stdout: '', stderr: 'ccd: session-busy: attached — 1 terminal(s) attached to the pane', killed: false, signal: null }; };
     const out = await stopDonePass({ ...f.deps, runCcd }, m, [row(ID)], [rec(ID)], []);
     expect(out).toEqual([{ id: ID, kind: 'skipped', detail: 'attached' }]);
     expect(sleepRows(f)).toEqual([]);
     await stopDonePass({ ...f.deps, runCcd }, m, [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([HIB(ID)]);
+  });
+
+  it('a call that never ran is a failure, never a session-busy skip, even when the runner words spell one (D-6840)', async () => {
+    const f = fake([ID]);
+    const words = 'ccd: session-busy: attached — 1 terminal(s) attached to the pane';
+    const runCcd: StopDoneSweepDeps['runCcd'] = async (a) => {
+      f.argv.push([...a]);
+      return { ran: false, reason: 'transport', detail: words, ok: false, stdout: '', stderr: words, killed: 'unmeasured', signal: 'unmeasured' };
+    };
+    const out = await stopDonePass({ ...f.deps, runCcd }, mem(), [row(ID)], [rec(ID)], []);
+    expect(out).toEqual([{ id: ID, kind: 'failed', detail: words }]);
+    expect(sleepRows(f)).toEqual([]);
   });
 
   it('happy path: one declared stop of the worker, on the serialiser, and one feed row naming its run', async () => {
@@ -268,18 +280,18 @@ describe('stopDonePass (D-5370)', () => {
 
   it('a worker somebody has on screen is not stopped', async () => {
     const f = fake([ID]);
-    await stopDonePass({ ...f.deps, presence: { isOpen: (id) => id === ID } }, mem(), [row(ID)], [rec(ID)], []);
+    await stopDonePass({ ...f.deps, viewers: { isOpen: (id) => id === ID } }, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([]);
   });
 
   it('D-5242\'s presence contract: an open screen in a hidden tab holds the worker as it holds a sleeping session', async () => {
     const f = fake([ID]);
-    const presence = new Presence(() => NOW);
+    const viewers = new Viewers(() => NOW);
     const tok = Symbol('fixture');
-    presence.markOpen(tok, ID);
-    presence.setVisible(tok, null);
-    expect(presence.isVisible(ID)).toBe(false);
-    await stopDonePass({ ...f.deps, presence }, mem(), [row(ID)], [rec(ID)], []);
+    viewers.markOpen(tok, ID);
+    viewers.setVisible(tok, null);
+    expect(viewers.isVisible(ID)).toBe(false);
+    await stopDonePass({ ...f.deps, viewers }, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([]);
   });
 
@@ -288,7 +300,7 @@ describe('stopDonePass (D-5370)', () => {
     await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([HIB(ID)]);
     const g = fake([ID]);
-    const out = await stopDonePass({ ...g.deps, presence: undefined }, mem(), [row(ID)], [rec(ID)], []);
+    const out = await stopDonePass({ ...g.deps, viewers: undefined }, mem(), [row(ID)], [rec(ID)], []);
     expect(out).toEqual([]);
     expect(g.argv).toEqual([]);
   });
@@ -638,7 +650,7 @@ describe('wired by buildServer (D-5370)', () => {
     seedRoster(home);
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: mkTmp('ccrc-projects-') } as never);
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-    const deps = { ...testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' })), cfg, coord };
+    const deps = { ...testDeps(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' })), cfg, coord };
     const w = new FleetWatcher(deps as never, new Bus(), 10_000);
     const before = (w as unknown as { stopDoneSerial: unknown }).stopDoneSerial;
     const app = await buildServer({ ...deps, mailToken: 'f'.repeat(64) } as never, new Bus(), w);
@@ -662,7 +674,7 @@ describe('run by the watcher\'s tick (D-5370)', () => {
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: mkTmp('ccrc-projects-') } as never);
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     try {
-      const deps = { ...testDeps(home, async () => ({ code: 1, stdout: '', stderr: '' })), cfg, coord };
+      const deps = { ...testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), cfg, coord };
       const w = new FleetWatcher(deps as never, new Bus(), 10_000);
       const spy = vi.spyOn(w, 'sweepStopDone').mockResolvedValue(undefined);
       await w.tick();
@@ -723,12 +735,12 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     const calls: string[][] = [];
     const run: Runner = async (_cmd, args) => {
       calls.push(args);
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PANE}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
-    // buildServer always hands the watcher a Presence; an absent port reads as a viewer (fail closed).
-    const deps = { ...testDeps(home, run), cfg, coord, fleetState: { ccdVerbs: ['hibernate'] }, presence: new Presence(() => Date.now()) };
+    // buildServer always hands the watcher a Viewers; an absent port reads as a viewer (fail closed).
+    const deps = { ...testDeps(home, run), cfg, coord, fleetState: { ccdVerbs: ['hibernate'] }, viewers: new Viewers(() => Date.now()) };
     const w = new FleetWatcher(deps as never, new Bus(), 10_000);
     (w as unknown as { stopDoneStartedAt: number }).stopDoneStartedAt = startedAt;
     w.useStopDoneSerialiser({ serial: async (fn: () => Promise<unknown>) => fn() } as never);

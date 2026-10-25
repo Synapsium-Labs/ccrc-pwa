@@ -7,7 +7,7 @@ import { generateAccountsSh } from '../../shared/generate.mjs';
 import { readBuildInfo, type BuildInfo } from './buildinfo.js';
 import { realRunner, Tmux } from './exec.js';
 import { ccdRunner } from './lifecycle.js';
-import { localIO } from './io.js';
+import { localIOFor } from './io.js';
 import { attachPty } from './pty.js';
 import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
@@ -17,7 +17,7 @@ import { makeRefreshCaps } from './refreshcaps.js';
 import { FleetIdentityCell } from './fleetidentity.js';
 import { PushService } from './push.js';
 import { NotifyLog } from './notifylog.js';
-import { Presence } from './presence.js';
+import { Viewers } from './viewer.js';
 import { KeyedQueue } from './inject/queue.js';
 import { bootBoxToken } from './token/boot.js';
 import { BoxTokenDriver } from './token/driver.js';
@@ -57,7 +57,7 @@ const push = cfg.vapidPublic && cfg.vapidPrivate
 // suppression are useful even on a box with no VAPID keys, so both are always
 // wired. Same directory as the push subscription store.
 const notifyLog = new NotifyLog(path.join(cfg.home, '.ccrc', 'notify-log.json'));
-const presence = new Presence();
+const viewers = new Viewers();
 
 // The box token (spec 4.2, D-4388): minted, adopted or recovered by `bootBoxToken`,
 // which refuses a hand-made unusable or placeholder file exactly as
@@ -157,7 +157,7 @@ if (cfg.fleetMode === 'remote') {
   // downstream holds a runner, which is what makes `CcdArgv` total (task 13S).
   deps = {
     cfg, build, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
-    spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, presence, queue, mailToken, coord,
+    spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, viewers, queue, mailToken, coord,
     poolEdgeLog,
     catalogue,
     updateIntentLog,
@@ -219,8 +219,8 @@ if (cfg.fleetMode === 'remote') {
   // be read stays unmeasured; the connection label is never an identity.
   const localFleetIdentity = new FleetIdentityCell();
   deps = {
-    cfg, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
-    spawnPty: attachPty, push, notifyLog, presence, queue, mailToken, coord,
+    cfg, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIOFor(cfg.home),
+    spawnPty: attachPty, push, notifyLog, viewers, queue, mailToken, coord,
     poolEdgeLog,
     catalogue,
     updateIntentLog,

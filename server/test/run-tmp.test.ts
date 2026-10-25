@@ -2,7 +2,7 @@
 // fixture inside it, removed at teardown, on a signal, or by the next run under the same TMPDIR.
 //
 // WHY THIS FILE EXISTS. Before it, only hooks inside the WORKER processes removed fixtures, and nothing that
-// outlives a killed worker owned them. Measured on a Mac: `timeout 25 vitest run test/ccrc-doctor.test.ts` under
+// outlives a killed worker owned them. Measured on a Mac: `timeout 25 vitest run test/ccrc-doctor-codex.test.ts` under
 // a scratch TMPDIR left 11 entries and 15 MB behind (rc 124), and #316 counted 1,551 directories and 5.74 GiB
 // from five timed-out shards in one morning. A killed run is the ordinary case on a box that runs this suite
 // under `timeout`, Ctrl-C, a tmux hangup and the OOM killer.
@@ -18,6 +18,8 @@
 //   - The wiring (T1): THIS run is inside its own run directory, whose owner answers.
 //   - End to end (T5): a real nested vitest under the `globalSetup` DERIVED from `vitest.config.ts`, killed every
 //     way a run is killed, and refused under a TMPDIR too long for a socket.
+//   - A TMPDIR inside a work tree (T7, D-6636): the run's parent moves to `CCRC_SESSION_TMPDIR` when that is outside
+//     every tree, else to `/tmp`, nothing is created inside the tree, and a TMPDIR outside a tree is unchanged.
 //   - `setup()` and its teardown (T6), in a bare `node` child: a run removed under it says so, a run whose rename
 //     failed is left collectible, an inherited refusal is dropped, and a malformed quiet window keeps the default.
 //
@@ -41,7 +43,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   DEAD_SUFFIX, RUN_DIR_ENV, RUN_OWNER, RUN_PREFIX, RUN_QUIET_ENV, RUN_QUIET_S, RUN_REFUSED_ENV, RUN_SOCKET,
-  RUN_SUN_PATH_MAX, RUN_TMP, condemn, openRun, probeRun, reapRuns,
+  RUN_SUN_PATH_MAX, RUN_TMP, condemn, openRun, probeRun, reapRuns, removeOwnedDir,
 } from './run-tmp.globalsetup.mjs';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -639,6 +641,28 @@ describe('armSignals — a persistent arm that collects the run and always exits
   });
 });
 
+describe('removeOwnedDir — vitest\'s tmpDir on a signal (D-6623)', () => {
+  it('T5g: a directory goes, a symbolic link at the path is left and never followed, absent is fine', () => {
+    const base = socketBase();
+    const dir = path.join(base, 'd');
+    mkdirSync(dir);
+    writeFileSync(path.join(dir, 'f'), 'x');
+    removeOwnedDir(dir);
+    expect(existsSync(dir)).toBe(false);
+    const victim = path.join(base, 'victim');
+    mkdirSync(victim);
+    writeFileSync(path.join(victim, 'keep'), 'x');
+    const link = path.join(base, 'link');
+    symlinkSync(victim, link);
+    removeOwnedDir(link);
+    expect(existsSync(path.join(victim, 'keep')), 'the link was followed').toBe(true);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    removeOwnedDir(path.join(base, 'absent'));
+    removeOwnedDir(victim, -2);
+    expect(existsSync(path.join(victim, 'keep')), 'a foreign-uid directory was removed').toBe(true);
+  });
+});
+
 describe('this run is wired (T1)', () => {
   it('runs inside its own run directory, and that directory\'s owner answers', async () => {
     const refused = process.env[RUN_REFUSED_ENV];
@@ -697,7 +721,21 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
    *  `globalSetup` by absolute path, one fixture test, and a record file. */
   function fixture(): string {
     const fx = mkTmp('ccrc-runtmp-e2e-');
-    const config = { test: { globals: true, include: ['*.fx.test.mjs'], testTimeout: 60_000, globalSetup: globalSetupEntries() } };
+    // `plant.mjs` runs first and, when FX_PLANT is set, makes vitest's REAL `project.tmpDir` (it may not exist yet) with a
+    // file inside and records the path: the arm must remove that very directory on a signal, leaving the base empty.
+    writeFileSync(path.join(fx, 'plant.mjs'), [
+      "import { mkdirSync, writeFileSync } from 'node:fs';",
+      'export default function plant(project) {',
+      '  if (!process.env.FX_PLANT) return;',
+      '  const p = project.tmpDir;',
+      "  mkdirSync(p, { recursive: true });",
+      "  writeFileSync(p + '/x', 'x');",
+      "  writeFileSync(process.env.FX_RECORD + '.planted', p);",
+      '}',
+      '',
+    ].join('\n'));
+    const config = { test: { globals: true, include: ['*.fx.test.mjs'], testTimeout: 60_000,
+      globalSetup: [path.join(fx, 'plant.mjs'), ...globalSetupEntries()] } };
     writeFileSync(path.join(fx, 'vitest.config.mjs'), `export default ${JSON.stringify(config)};\n`);
     writeFileSync(path.join(fx, 'run.fx.test.mjs'), FX_TEST);
     return fx;
@@ -740,6 +778,13 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     throw new Error(`the nested run wrote no record\n--- nested output ---\n${n.output()}`);
   }
 
+  /** The real `project.tmpDir` the fixture planted, read back from its record; it must sit under the base. */
+  const plantedDir = (n: Nested, base: string): string => {
+    const p = readFileSync(`${path.join(n.fx, 'record.jsonl')}.planted`, 'utf8');
+    expect(p.startsWith(`${base}${path.sep}`), 'vitest\'s tmpDir is not under the base').toBe(true);
+    return p;
+  };
+
   const runsIn = (base: string): string[] => readdirSync(base).filter((f) => f.startsWith(RUN_PREFIX));
 
   /** A run killed the one way no arm can answer: SIGKILL to main, then its orphan workers. */
@@ -755,13 +800,17 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
 
   it('T5a: GNU timeout\'s double SIGTERM — main, then its group — exits 143 and leaves nothing', async () => {
     const base = socketBase();
-    const n = nested(base, 'sleep');
+    const n = nested(base, 'sleep', { FX_PLANT: '1' });
     const rec = await firstRecord(n);
+    const planted = plantedDir(n, base);
+    expect(existsSync(planted), 'the plant never happened, so this case proves nothing').toBe(true);
     process.kill(n.pid, 'SIGTERM');      // GNU timeout signals its child first...
     process.kill(-n.pid, 'SIGTERM');     // ...then its process group: main's second SIGTERM, after vitest's `once`
     expect(await n.exit, n.output()).toEqual({ code: 143, signal: null });
     expect(rec.tmpdir).toMatch(new RegExp(`^${base}/${RUN_PREFIX}[A-Za-z0-9]{6}/${RUN_TMP}$`));
     expect(runsIn(base)).toEqual([]);
+    expect(existsSync(planted), 'vitest\'s tmpDir survived the signal').toBe(false);
+    expect(readdirSync(base), 'the base is not empty after the signal').toEqual([]);
   }, 120_000);
 
   it('T5b: a worker that dies outright — teardown still collects the fixture it left', async () => {
@@ -793,11 +842,15 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
 
   it('T5d: SIGHUP to the group — a closed terminal or tmux pane — exits 129 and leaves nothing', async () => {
     const base = socketBase();
-    const n = nested(base, 'sleep');
+    const n = nested(base, 'sleep', { FX_PLANT: '1' });
     await firstRecord(n);
+    const planted = plantedDir(n, base);
+    expect(existsSync(planted), 'the plant never happened, so this case proves nothing').toBe(true);
     process.kill(-n.pid, 'SIGHUP');
     expect(await n.exit, n.output()).toEqual({ code: 129, signal: null });
     expect(runsIn(base)).toEqual([]);
+    expect(existsSync(planted), 'vitest\'s tmpDir survived the signal').toBe(false);
+    expect(readdirSync(base), 'the base is not empty after the signal').toEqual([]);
   }, 120_000);
 
   it('T5e: a dead run that is not quiet at setup is reaped at TEARDOWN once it is', async () => {
@@ -904,5 +957,53 @@ describe('setup() and its teardown, in a bare node child (T6)', () => {
     const seen = await setupChild(base, 'nothing', { [RUN_QUIET_ENV]: '10m' });
     expect(seen.stderr).toContain(`${RUN_QUIET_ENV}="10m" is not a whole number of seconds; using ${RUN_QUIET_S}`);
     expect(existsSync(o.run), 'a fresh dead run was reaped: the quiet gate was off').toBe(true);
+  });
+
+  describe('T7: a TMPDIR inside a work tree is never the run parent (D-6636)', () => {
+    /** A fixture work tree under a short base, with `<tree>/a/.tmp-step0` as the agent-chosen TMPDIR. `gitAsFile`
+     *  spells `.git` as a linked worktree does. */
+    function tree(gitAsFile = false): { root: string; tmp: string } {
+      const root = socketBase();
+      if (gitAsFile) writeFileSync(path.join(root, '.git'), 'gitdir: /nonexistent\n'); else mkdirSync(path.join(root, '.git'));
+      const tmp = path.join(root, 'a', '.tmp-step0');
+      mkdirSync(tmp, { recursive: true });
+      return { root, tmp };
+    }
+    const none = { CCRC_SESSION_TMPDIR: '' };
+
+    it('T7a: with CCRC_SESSION_TMPDIR outside every tree, the run parent is built there, and the tree stays empty', async () => {
+      const t = tree();
+      const session = socketBase();
+      const seen = await setupChild(t.tmp, 'nothing', { CCRC_SESSION_TMPDIR: session });
+      expect(path.dirname(seen.run!)).toBe(session);
+      expect(seen.stderr).toContain(`ccrc-test: TMPDIR ${t.tmp} is inside a work tree; the run's temp moved to ${session}`);
+      expect(readdirSync(t.tmp), 'something was created inside the work tree').toEqual([]);
+    });
+
+    it('T7b: without it, the run parent is /tmp, and the tree stays empty', async () => {
+      const t = tree();
+      const seen = await setupChild(t.tmp, 'nothing', none);
+      expect(path.dirname(seen.run!)).toBe(realpathSync('/tmp'));
+      expect(seen.stderr).toContain(`the run's temp moved to ${realpathSync('/tmp')}`);
+      expect(readdirSync(t.tmp)).toEqual([]);
+    });
+
+    it('T7c: a CCRC_SESSION_TMPDIR that is itself inside a tree (a .git file counts) is not used', async () => {
+      const t = tree(true);
+      const inner = path.join(t.root, 'a', 'session');
+      mkdirSync(inner);
+      const seen = await setupChild(t.tmp, 'nothing', { CCRC_SESSION_TMPDIR: inner });
+      expect(path.dirname(seen.run!)).toBe(realpathSync('/tmp'));
+      expect(readdirSync(inner)).toEqual([]);
+      expect(readdirSync(t.tmp)).toEqual([]);
+    });
+
+    it('T7d: a TMPDIR outside every tree is unchanged — the parent is in it and nothing is said', async () => {
+      const base = socketBase();
+      const session = socketBase();
+      const seen = await setupChild(base, 'nothing', { CCRC_SESSION_TMPDIR: session });
+      expect(path.dirname(seen.run!)).toBe(base);
+      expect(seen.stderr).not.toContain('work tree');
+    });
   });
 });

@@ -571,7 +571,7 @@ if [ "$TARGET" = "agent" ]; then
     && { [ ! -f ~/.local/libexec/ccrc/ccd ] || cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body; } \
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
-    && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } && { [ ! -f ~/.cc-sessions/approval-verify.mjs ] || cp -a ~/.cc-sessions/approval-verify.mjs ~/ccrc-backups/$TS/approval-verify.mjs; } \
+    && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } && { [ ! -f ~/.cc-sessions/approval-verify.mjs ] || cp -a ~/.cc-sessions/approval-verify.mjs ~/ccrc-backups/$TS/approval-verify.mjs; } && { [ ! -f ~/.cc-sessions/lib/transcript.jq ] || cp -a ~/.cc-sessions/lib/transcript.jq ~/ccrc-backups/$TS/transcript.jq; } \
     && { [ ! -f ~/.config/systemd/user/ccrc-agent.service ] || cp -a ~/.config/systemd/user/ccrc-agent.service ~/ccrc-backups/$TS/ccrc-agent.service; } \
     && { [ ! -f ~/.config/systemd/user/claude-session@.service ] || cp -a ~/.config/systemd/user/claude-session@.service ~/ccrc-backups/$TS/claude-session@.service; }"
   # `--exclude 'ccrc-mail.token'`: a checkout may still hold a gitignored
@@ -629,6 +629,11 @@ if [ "$TARGET" = "agent" ]; then
   # All executables go through install_atomic — see its comment for why a
   # plain scp over these exact files is a live correctness bug — save ccd
   # itself, which is a PAIR rendered on the box (the pair helper's header, above).
+  # The transcript reader ccd and the doctor load with `jq -L` (ARCH-65), 644:
+  # data for jq. BEFORE the ccd it serves, so a partial deploy never leaves a
+  # new ccd without it (a missing file only makes a read answer NOT MEASURED).
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/lib'
+  install_atomic ccd/lib/transcript.jq .cc-sessions/lib/transcript.jq 644
   install_ccd_pair
   # The coordination client, beside ccd because the fleet host is where sessions
   # run and a session-side client on the server box is a copy nobody invokes. A
@@ -852,7 +857,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # The chain above places ccrc's OWN usage pair, `ccrc-codex-usage@`, never
   # `ccgpt-usage@` (another repo's), and arms none: `ccrc install` does, per lane.
   #
-  # The GPT lane's four executables, on this agent lane only: `ccd/ccrc`'s
+  # The GPT lane's five executables, on this agent lane only: `ccd/ccrc`'s
   # `_inst_bins` places them on every role but server. The rsync above already
   # lands them at ~/ccrc/ccd/; without these lines a fallback deploy never put
   # them on PATH. After the build and before the stamp, so a failed copy aborts
@@ -870,6 +875,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # union of the two, so a name placed only in the wrong lane passes there),
   # when anything in this file enables a template or an instance of one, and
   # when a source either helper here copies is not tracked in the repository.
+  install_atomic ccd/ccgpt-auth.py .local/bin/ccgpt-auth.py 755
   install_atomic ccd/ccgpt-proxy.py .local/bin/ccgpt-proxy.py 755
   install_atomic ccd/ccgpt-usage.py .local/bin/ccgpt-usage.py 755
   install_atomic ccd/ccgpt-runtime .local/bin/ccgpt-runtime 755

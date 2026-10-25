@@ -25,6 +25,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, toRunSummary } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import type { CcdResult } from '../src/lifecycle.js';
 import { UNMEASURED } from '../src/exec.js';
 import { ROUTE_ARGV_CAP, type CcdArgv } from '../src/ccdargv.js';
@@ -121,15 +122,15 @@ const harness = async (cfg: HarnessCfg) => {
         seedRow(home, r.id, { held: r.held ?? null, spawnRc: r.spawnRc ?? null });
       }
       return {
-        ok: cfg.ccd.ok, stdout: '', stderr: cfg.ccd.stderr,
+        ran: true, ok: cfg.ccd.ok, stdout: '', stderr: cfg.ccd.stderr,
         killed: cfg.ccd.killed ?? UNMEASURED,
         signal: cfg.ccd.signal === undefined ? UNMEASURED : cfg.ccd.signal,
       };
     }
-    return { ok: true, stdout: '', stderr: '', killed: false, signal: null };
+    return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null };
   };
 
-  const base = testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' }));
+  const base = testDeps(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
   // `listed: false` on the AFTER read only — BEFORE must succeed, or the test
   // proves nothing about the asymmetry. `sawWsAdd` flips when the double runs.
   let sawWsAdd = false;
@@ -144,7 +145,7 @@ const harness = async (cfg: HarnessCfg) => {
     // consumer-declared port (wave 2, F2). NOTE: the `as` assertion below does
     // NOT make this optional — a missing property would pass the compiler here
     // and throw at the call, which is why it is written out.
-    configDir: (w: string) => configDirFor(base.cfg as CcrcConfig, w), turnVerdict: async () => 'idle' as const,
+    configDir: (w: string) => configDirFor(base.cfg as CcrcConfig, w), turnVerdict: async () => 'idle' as const, sendClear: clearSender(base),
   } as DispatchRunDeps;
 
   return {

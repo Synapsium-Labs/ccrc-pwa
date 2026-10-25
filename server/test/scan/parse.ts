@@ -193,6 +193,77 @@ export function wireFacts(p: ParsedFile): WireFacts {
   return out;
 }
 
+/** D-5862 (ARCH-68): the lane-schedule facts of one parsed file, read by a walk of their own (as `wireFacts` is), so the
+ *  census module imports no parser. Syntax only. */
+export interface ScheduleFacts {
+  /** Every property declaration of every class: the class, the name, whether it is numeric (a numeric literal or
+   *  `-Infinity` initialiser, or a `number` type, bare or nullable), and its 1-based line. */
+  fields: Array<{ cls: string; name: string; numeric: boolean; line: number }>;
+  /** Every relational comparison (`<`, `<=`, `>`, `>=`) one side of which is `<anything> - this.F`: the enclosing class
+   *  (`null` outside one), the field `F`, what the other side is (`name` an UPPER_CASE identifier, `literal` a numeric
+   *  literal, `product` a product of those, `other` anything else), and whether that other side is a bare millisecond literal
+   *  (a numeric literal of 1000 or more, or a product with one). */
+  comparisons: Array<{ cls: string | null; field: string; other: 'name' | 'literal' | 'product' | 'other'; literalMs: boolean; line: number }>;
+  /** Every top-level `const NAME = <initialiser>;`: whether the initialiser is a bare identifier (a reference). */
+  constants: Array<{ name: string; reference: boolean; line: number }>;
+}
+
+const RELATIONAL = new Set<ts.SyntaxKind>([ts.SyntaxKind.LessThanToken, ts.SyntaxKind.LessThanEqualsToken,
+  ts.SyntaxKind.GreaterThanToken, ts.SyntaxKind.GreaterThanEqualsToken]);
+
+/** The lane-schedule facts of `p` (D-5862). */
+export function scheduleFacts(p: ParsedFile): ScheduleFacts {
+  const sf = ts.createSourceFile(p.path, p.text, ts.ScriptTarget.Latest, true, scriptKindOf(p.path));
+  const lineOf = (n: ts.Node): number => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const out: ScheduleFacts = { fields: [], comparisons: [], constants: [] };
+  const strip = (e: ts.Expression): ts.Expression => (ts.isParenthesizedExpression(e) ? strip(e.expression) : e);
+  const num = (e: ts.Expression): number | null => (ts.isNumericLiteral(e) ? Number(e.text.replace(/_/g, '')) : null);
+  const classify = (raw: ts.Expression): { other: 'name' | 'literal' | 'product' | 'other'; literalMs: boolean } => {
+    const e = strip(raw);
+    if (ts.isNumericLiteral(e)) return { other: 'literal', literalMs: (num(e) ?? 0) >= 1000 };
+    if (ts.isIdentifier(e) && /^[A-Z][A-Z0-9_]*$/.test(e.text)) return { other: 'name', literalMs: false };
+    if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.AsteriskToken) {
+      const l = classify(e.left); const r = classify(e.right);
+      if (l.other !== 'other' && r.other !== 'other') return { other: 'product', literalMs: l.literalMs || r.literalMs };
+    }
+    return { other: 'other', literalMs: false };
+  };
+  const clockField = (raw: ts.Expression): string | null => {
+    const b = strip(raw);
+    if (!ts.isBinaryExpression(b) || b.operatorToken.kind !== ts.SyntaxKind.MinusToken) return null;
+    const r = strip(b.right);
+    return ts.isPropertyAccessExpression(r) && r.expression.kind === ts.SyntaxKind.ThisKeyword ? r.name.text : null;
+  };
+  const visit = (node: ts.Node, cls: string | null): void => {
+    const here = ts.isClassDeclaration(node) ? node.name?.text ?? null : cls;
+    if (ts.isPropertyDeclaration(node) && ts.isIdentifier(node.name) && here !== null) {
+      const init = node.initializer;
+      const numericInit = init !== undefined && (ts.isNumericLiteral(init) || (ts.isPrefixUnaryExpression(init)
+        && (ts.isNumericLiteral(init.operand) || (ts.isIdentifier(init.operand) && init.operand.text === 'Infinity'))));
+      const type = node.type?.getText(sf) ?? '';
+      const numericType = /(^|\|)\s*number\s*(\||$)/.test(type);
+      out.fields.push({ cls: here, name: node.name.text, numeric: numericInit || numericType, line: lineOf(node) });
+    }
+    if (ts.isBinaryExpression(node) && RELATIONAL.has(node.operatorToken.kind)) {
+      for (const [a, b] of [[node.left, node.right], [node.right, node.left]] as const) {
+        const f = clockField(a);
+        if (f !== null) { out.comparisons.push({ cls: here, field: f, ...classify(b), line: lineOf(node) }); break; }
+      }
+    }
+    ts.forEachChild(node, (c) => visit(c, here));
+  };
+  visit(sf, null);
+  for (const st of sf.statements) {
+    if (!ts.isVariableStatement(st)) continue;
+    for (const d of st.declarationList.declarations) {
+      if (ts.isIdentifier(d.name) && d.initializer !== undefined) {
+        out.constants.push({ name: d.name.text, reference: ts.isIdentifier(d.initializer), line: lineOf(d) });
+      }
+    }
+  }
+  return out;
+}
+
 const unionLiterals = (t: ts.TypeNode): string[] | null => {
   const members = ts.isUnionTypeNode(t) ? [...t.types] : [t];
   const out = members.map(literalText);
@@ -382,4 +453,84 @@ export function stringPieces(text: string, fileName = 'source.ts'): StringPiece[
   };
   visit(sf);
   return out;
+}
+
+/** A string-valued expression: a string literal, a template, or a `+` chain of them (how a long SQL statement is
+ *  written across lines). `text` is the cooked value with each `${…}` replaced by `${}`; `start`/`end` span the
+ *  whole expression in the source; `line` is 1-based, where it starts. `partial` is true when the expression is an
+ *  operand of a larger `+` chain that is NOT wholly string text (`'UPDATE t SET a = ?, ' + cond + ' WHERE …'`): its
+ *  `text` is then only a fragment of the statement, and `chainStart`/`chainEnd` span the whole chain (else the
+ *  expression itself), so a census can read the raw source of the statement the fragment belongs to. */
+export interface StringExpression {
+  text: string;
+  start: number;
+  end: number;
+  line: number;
+  partial: boolean;
+  chainStart: number;
+  chainEnd: number;
+}
+
+/** The maximal string-valued expressions of a source text, in source order (ARCH-06: `sqlStatementsIn` reads the SQL a
+ *  store holds). A chain counts only when every operand is a string literal, a template or a parenthesised chain, so
+ *  `'a' + x` is two expressions, not one. KNOWN WIDTH: a substitution's own text is not read, and a template nested
+ *  inside a `${…}` is an expression of its own. */
+export function stringExpressions(text: string, fileName = 'source.ts'): StringExpression[] {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
+  const out: StringExpression[] = [];
+  /** The cooked value of `n` when it is wholly string text, else `null`. */
+  const valueOf = (n: ts.Node): string | null => {
+    if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) return n.text;
+    if (ts.isTemplateExpression(n)) return n.head.text + n.templateSpans.map((s) => '${}' + s.literal.text).join('');
+    if (ts.isParenthesizedExpression(n)) return valueOf(n.expression);
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const l = valueOf(n.left);
+      const r = l === null ? null : valueOf(n.right);
+      return r === null ? null : l + r;
+    }
+    return null;
+  };
+  const visit = (node: ts.Node): void => {
+    const v = valueOf(node);
+    if (v !== null && !ts.isParenthesizedExpression(node)) {
+      // The outermost `+` chain this operand sits in (parentheses looked through): its span is the statement's source.
+      let top: ts.Node = node;
+      while (top.parent && (ts.isParenthesizedExpression(top.parent)
+        || (ts.isBinaryExpression(top.parent) && top.parent.operatorToken.kind === ts.SyntaxKind.PlusToken))) top = top.parent;
+      out.push({ text: v, start: node.getStart(sf), end: node.getEnd(), line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
+        partial: top !== node, chainStart: top.getStart(sf), chainEnd: top.getEnd() });
+      // A template's substitutions can hold strings of their own.
+      if (ts.isTemplateExpression(node)) node.templateSpans.forEach((s) => visit(s.expression));
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/** One parse per (file name, text), kept for the last text of each file: `inlinedSourceOf` asks for many positions of one file. */
+const sourceFiles = new Map<string, { text: string; sf: ts.SourceFile }>();
+const sourceFileOf = (text: string, fileName: string): ts.SourceFile => {
+  const hit = sourceFiles.get(fileName);
+  if (hit && hit.text === text) return hit.sf;
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
+  sourceFiles.set(fileName, { text, sf });
+  return sf;
+};
+
+/** The offset where the statement holding `pos` starts: the innermost statement that sits in a block, a source file or a
+ *  case clause (so `void this.x(…)`, `const a = this.x(…)` and `await this.x(…)` all start at their first keyword).
+ *  `pos` outside every statement gives `pos`. */
+export function statementStartAt(text: string, pos: number, fileName = 'source.ts'): number {
+  const sf = sourceFileOf(text, fileName);
+  let found = pos;
+  const visit = (n: ts.Node): void => {
+    if (pos < n.getStart(sf) || pos >= n.getEnd()) return;
+    if (ts.isStatement(n) && (ts.isBlock(n.parent) || ts.isSourceFile(n.parent) || ts.isCaseOrDefaultClause(n.parent)
+      || ts.isModuleBlock(n.parent))) found = n.getStart(sf);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return found;
 }
