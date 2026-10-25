@@ -42,7 +42,7 @@ import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
 import type { SessionRecord } from '../src/registry.js';
 import { ACTOR_FLAGS_CAP, EXPIRE_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
-import { PRESENCE_OPEN_TTL_MS, holdReason, type CoordStatus, type FleetSession } from '../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS, holdReason, type CoordStatus, type FleetSession } from '../../shared/api.js';
 import { reclaimPauseParseSites } from './consolidationCensus.js';
 import { ID as COLLECT_ID, rig as collectRig } from './collectTempRootFixture.js';
 import { seedRoster, testDeps } from './helpers.js';
@@ -181,7 +181,7 @@ const childRig = async () => {
     coord, io, cfg: base.cfg, runCcd: base.runCcd,
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: ['ws-audit', 'ws-reclaim', RECLAIM_CAP, ACTOR_FLAGS_CAP] },
-    presence: { isVisible: () => false }, notifyLog,
+    viewers: { isVisible: () => false }, notifyLog,
   });
   const req: ChildReclaimRequest = { sessionId: 'demo-a', runId: opened.id, trigger: 'close', deferExpired: false,
     deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'none' } };
@@ -479,7 +479,7 @@ const expireRig = async () => {
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const deps = (io: FleetIO): ExpireArchivedDeps => ({ coord, io, cfg: base.cfg, runCcd: base.runCcd,
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: ['ws-audit', 'ws-expire', EXPIRE_CAP, ACTOR_FLAGS_CAP] },
-    presence: { isVisible: () => false } });
+    viewers: { isVisible: () => false } });
   return { base, reg, deps, verbs, req: { sessionId: XID, archivedAt: XARCH, expiresAt: XDUE },
     onAudit: (fn: () => void): void => { duringAudit = fn; } };
 };
@@ -562,7 +562,7 @@ describe('stopDoneSweep.ts — stopDonePass reads reclaim-paused off the tick\'s
       } as unknown as StopDoneSweepDeps['coord'],
       runCcd: async (a) => { argv.push([...a]); return { ran: true as const, ok: true, stdout: '', stderr: '', killed: false, signal: null }; },
       fleetState: { ccdVerbs: ['hibernate', ACTOR_FLAGS_CAP] } as unknown as FleetState,
-      presence: { isOpen: () => false },
+      viewers: { isOpen: () => false },
       notifyLog: { epoch: 'e', record: (e: object) => ({ ...e, seq: 1, at: NOW }), flush: async () => undefined } as unknown as StopDoneSweepDeps['notifyLog'],
       liveWord: async () => ({ ok: true, word: 'idle', since: null }),
       turnVerdict: async () => 'idle',
@@ -570,7 +570,7 @@ describe('stopDoneSweep.ts — stopDonePass reads reclaim-paused off the tick\'s
       rowAtAct: async (r) => ({ ok: true, row: { ...row, id: r.id } }),
       serial: async (fn) => fn(),
       queueRun: async (_id, fn) => fn(),
-      startedAt: NOW - PRESENCE_OPEN_TTL_MS - 60_000,
+      startedAt: NOW - VIEWER_OPEN_TTL_MS - 60_000,
       now: () => NOW,
     };
     return { deps, argv };
@@ -616,7 +616,7 @@ const watchRig = (o: { io?: (base: FleetIO, reg: string) => FleetIO } = {}) => {
     ...base, cfg, coord, io: o.io?.(base.io, reg) ?? base.io,
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: ['ws-audit', 'ws-reclaim', 'ws-expire', RECLAIM_CAP, RECLAIM_PAUSE_CAP, EXPIRE_CAP, ACTOR_FLAGS_CAP] },
-    presence: { isVisible: () => false },
+    viewers: { isVisible: () => false },
     childReclaimExec: async (req: ChildReclaimRequest): Promise<ChildReclaimOutcome> => {
       requests.push(req);
       return { kind: 'reclaimed', sessionId: req.sessionId, runId: req.runId, wip: { kind: 'none' }, secretsDropped: 0 };

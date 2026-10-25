@@ -8629,8 +8629,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   referent, which — measured by the same bytes — goes `:5918` ->
       //   `:5961`. Still not `:5644`, so the entry stays 1 -> 1.
       //   Hibernation's server half (D-5242, plan Task 17a, `FleetSession.hibernatedAt` and its revive,
-      //   `PRESENCE_OPEN_TTL_MS`): three pure-insertion hunks, +5 at `FleetSession.lastEnd`, +3 in
-      //   `reviveFleetSession` and +12 beside `PRESENCE_TTL_MS`, a net +20 wholly above the referent. Neither frozen
+      //   `VIEWER_OPEN_TTL_MS`): three pure-insertion hunks, +5 at `FleetSession.lastEnd`, +3 in
+      //   `reviveFleetSession` and +12 beside `VIEWER_TTL_MS`, a net +20 wholly above the referent. Neither frozen
       //   corpus document changed. The shift slid a `null`-bearing comment line (`.branch` reads null) under `:5644`,
       //   so the entry reads 0 — A COINCIDENTAL PASS, NEVER A REPAIR, the same as before the `b501698a` rebase: the
       //   cited sentence's referent, `return isLcRefusalToken(token) ? …`, is at `:8520`, and Task 11 still owns the

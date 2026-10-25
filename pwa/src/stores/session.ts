@@ -5,7 +5,7 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import {
   composePrompt,
-  PRESENCE_REFRESH_MS,
+  VIEWER_REFRESH_MS,
   SECRET_MASK,
   type ChatEvent,
   type Dialog,
@@ -731,7 +731,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
 
     /**
      * Tell the server whether this session is on the operator's screen, so it
-     * can suppress notifications for it (`server/src/presence.ts`, read by the
+     * can suppress notifications for it (`server/src/viewer.ts`, read by the
      * watcher's `pushOne`). A notification for the pane you are looking at
      * teaches you to dismiss notifications.
      *
@@ -754,8 +754,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
      * whenever no close frame arrives — a phone in a lift or a tunnel sends no
      * FIN — and every notification for this session would then be suppressed
      * for a viewer who is long gone, indefinitely. So the server expires a
-     * claim it has not heard for `PRESENCE_TTL_MS` and this re-states it every
-     * `PRESENCE_REFRESH_MS` (three refreshes of slack, both defined together
+     * claim it has not heard for `VIEWER_TTL_MS` and this re-states it every
+     * `VIEWER_REFRESH_MS` (three refreshes of slack, both defined together
      * in `shared/api.ts`).
      *
      * WHATEVER the visibility (D-5242's presence contract): the server also
@@ -865,7 +865,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         socket.start();
         document.addEventListener('visibilitychange', onVisible);
         window.addEventListener('online', nudge);
-        heartbeat ??= setInterval(beat, PRESENCE_REFRESH_MS);
+        heartbeat ??= setInterval(beat, VIEWER_REFRESH_MS);
       },
 
       disconnect() {

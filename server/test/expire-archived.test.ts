@@ -61,7 +61,7 @@ const rig = async (over: { script?: Script; caps?: FleetState; live?: boolean; p
       : over.unlistable === 'rejects' ? { ...base.io, readdirMeasured: async () => { throw new Error('EIO'); } }
       : { ...base.io, readdirMeasured: async () => ({ ok: false, reason: over.unlistable === true ? 'unreadable' : over.unlistable as ReadFailure }) },
     runCcd: base.runCcd, fleetState: over.caps ?? CAPS,
-    presence: { isVisible: (id: string) => over.visible === true && id === ID }, notifyLog,
+    viewers: { isVisible: (id: string) => over.visible === true && id === ID }, notifyLog,
   };
   const verbs = () => calls.map((c) => c[0]);
   return { deps, calls, verbs, coord, req: { sessionId: ID, archivedAt: ARCH, expiresAt: DUE } };

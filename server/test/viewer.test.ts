@@ -1,13 +1,13 @@
 // D-5242 (plan Task 17a, spec §5.11): the presence contract. Beside the VISIBLE claim (a screen on display, which
 // suppresses pushes, unchanged) `Presence` keeps an OPEN claim per `/ws/session/:id` connection: stamped at connect and
-// by every frame, visible or hidden, believed for `PRESENCE_OPEN_TTL_MS` after its last frame, dropped at close. The
+// by every frame, visible or hidden, believed for `VIEWER_OPEN_TTL_MS` after its last frame, dropped at close. The
 // cases are AT THE TTLs, not at t = 0: an open claim on the visible TTL would pass every t = 0 case and lapse at 45 s.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
-import { Presence } from '../src/presence.js';
+import { Viewers } from '../src/viewer.js';
 import { buildServer, type Deps } from '../src/server.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
@@ -15,7 +15,7 @@ import { ccdRunner } from '../src/lifecycle.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { PRESENCE_OPEN_TTL_MS, PRESENCE_REFRESH_MS, PRESENCE_TTL_MS } from '../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS, VIEWER_REFRESH_MS, VIEWER_TTL_MS } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 
@@ -26,24 +26,24 @@ const MIN = 60 * SEC;
 
 const clocked = () => {
   const c = { t: T0 };
-  return { c, p: new Presence(() => c.t) };
+  return { c, p: new Viewers(() => c.t) };
 };
 
-describe('PRESENCE_OPEN_TTL_MS', () => {
+describe('VIEWER_OPEN_TTL_MS', () => {
   it('is ten minutes: a hidden tab\'s timers may be throttled to one wake-up a minute, so it outlives several missed beats', () => {
-    expect(PRESENCE_OPEN_TTL_MS).toBe(10 * MIN);
-    expect(PRESENCE_OPEN_TTL_MS).toBeGreaterThan(PRESENCE_TTL_MS);
+    expect(VIEWER_OPEN_TTL_MS).toBe(10 * MIN);
+    expect(VIEWER_OPEN_TTL_MS).toBeGreaterThan(VIEWER_TTL_MS);
   });
 });
 
 describe('Presence: the open claim', () => {
-  it('a connection that reported visible:false and then beat hidden every 15 s is still open at 46 s, past PRESENCE_TTL_MS', () => {
+  it('a connection that reported visible:false and then beat hidden every 15 s is still open at 46 s, past VIEWER_TTL_MS', () => {
     const { c, p } = clocked();
     const tok = Symbol('a');
     p.markOpen(tok, ID);
     p.touch(tok);
     p.setVisible(tok, null);
-    for (let at = PRESENCE_REFRESH_MS; at <= 45 * SEC; at += PRESENCE_REFRESH_MS) {
+    for (let at = VIEWER_REFRESH_MS; at <= 45 * SEC; at += VIEWER_REFRESH_MS) {
       c.t = T0 + at;
       p.touch(tok);
       p.setVisible(tok, null);
@@ -58,7 +58,7 @@ describe('Presence: the open claim', () => {
     const tok = Symbol('a');
     p.markOpen(tok, ID);
     for (let m = 1; m <= 9; m++) {
-      // Just before the next beat: 59 s after the last frame, past PRESENCE_TTL_MS — red against a 45 s open claim.
+      // Just before the next beat: 59 s after the last frame, past VIEWER_TTL_MS — red against a 45 s open claim.
       c.t = T0 + m * MIN - 1 * SEC;
       expect(p.isOpen(ID), `${m} min, before the beat`).toBe(true);
       c.t = T0 + m * MIN;
@@ -68,7 +68,7 @@ describe('Presence: the open claim', () => {
     }
   });
 
-  it('one hidden frame and then silence: still open at 46 s, past PRESENCE_TTL_MS (red against the visible TTL)', () => {
+  it('one hidden frame and then silence: still open at 46 s, past VIEWER_TTL_MS (red against the visible TTL)', () => {
     const { c, p } = clocked();
     const tok = Symbol('a');
     p.markOpen(tok, ID);
@@ -79,20 +79,20 @@ describe('Presence: the open claim', () => {
     expect(p.isVisible(ID)).toBe(false);
   });
 
-  it('with no frame for PRESENCE_OPEN_TTL_MS + 1 ms it is not open; one millisecond earlier it is', () => {
+  it('with no frame for VIEWER_OPEN_TTL_MS + 1 ms it is not open; one millisecond earlier it is', () => {
     const { c, p } = clocked();
     const tok = Symbol('a');
     p.markOpen(tok, ID);
-    c.t = T0 + PRESENCE_OPEN_TTL_MS - 1;
+    c.t = T0 + VIEWER_OPEN_TTL_MS - 1;
     expect(p.isOpen(ID)).toBe(true);
-    c.t = T0 + PRESENCE_OPEN_TTL_MS + 1;
+    c.t = T0 + VIEWER_OPEN_TTL_MS + 1;
     expect(p.isOpen(ID)).toBe(false);
   });
 
-  it('at exactly PRESENCE_OPEN_TTL_MS with no frame it has lapsed, as the visible claim does at its own TTL', () => {
+  it('at exactly VIEWER_OPEN_TTL_MS with no frame it has lapsed, as the visible claim does at its own TTL', () => {
     const { c, p } = clocked();
     p.markOpen(Symbol('a'), ID);
-    c.t = T0 + PRESENCE_OPEN_TTL_MS;
+    c.t = T0 + VIEWER_OPEN_TTL_MS;
     expect(p.isOpen(ID)).toBe(false);
   });
 
@@ -147,9 +147,9 @@ describe('Presence: the visible claim keeps its exact meaning', () => {
     const tok = Symbol('a');
     p.markOpen(tok, ID);
     p.setVisible(tok, ID);
-    c.t = T0 + PRESENCE_TTL_MS - 1;
+    c.t = T0 + VIEWER_TTL_MS - 1;
     expect(p.isVisible(ID)).toBe(true);
-    c.t = T0 + PRESENCE_TTL_MS;
+    c.t = T0 + VIEWER_TTL_MS;
     expect(p.isVisible(ID)).toBe(false);
     expect(p.isOpen(ID)).toBe(true);
   });
@@ -160,7 +160,7 @@ describe('Presence: the visible claim keeps its exact meaning', () => {
     p.setVisible(tok, ID);
     c.t = T0 + 30 * SEC;
     p.touch(tok);
-    c.t = T0 + PRESENCE_TTL_MS;
+    c.t = T0 + VIEWER_TTL_MS;
     expect(p.isVisible(ID)).toBe(false);
   });
 });
@@ -172,7 +172,7 @@ describe('/ws/session/:id keeps the open claim', () => {
   let app: FastifyInstance | undefined;
   let port: number;
   const clock = { t: T0 };
-  let presence: Presence;
+  let viewers: Viewers;
 
   beforeEach(async () => {
     home = mkTmp('ccrc-presence-');
@@ -181,8 +181,8 @@ describe('/ws/session/:id keeps the open claim', () => {
     const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     clock.t = T0;
-    presence = new Presence(() => clock.t);
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), presence };
+    viewers = new Viewers(() => clock.t);
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), viewers };
     app = await buildServer(deps, new Bus());
     await app.listen({ host: '127.0.0.1', port: 0 });
     const addr = app.server.address();
@@ -211,8 +211,8 @@ describe('/ws/session/:id keeps the open claim', () => {
   it('connecting opens the claim, with no frame sent', async () => {
     const ws = await open();
     try {
-      await until(() => presence.isOpen(ID), 'the open claim at connect');
-      expect(presence.isVisible(ID)).toBe(false);
+      await until(() => viewers.isOpen(ID), 'the open claim at connect');
+      expect(viewers.isVisible(ID)).toBe(false);
     } finally {
       ws.close();
     }
@@ -221,14 +221,14 @@ describe('/ws/session/:id keeps the open claim', () => {
   it('a hidden frame re-stamps the open claim and sets no visible one', async () => {
     const ws = await open();
     try {
-      await until(() => presence.isOpen(ID), 'the open claim at connect');
+      await until(() => viewers.isOpen(ID), 'the open claim at connect');
       clock.t = T0 + 9 * MIN;
       ws.send(JSON.stringify({ type: 'visible', visible: false }));
       // Let the frame land, then move past the connect stamp's TTL: only the frame's stamp can keep it open.
       await new Promise((r) => setTimeout(r, 100));
       clock.t = T0 + 18 * MIN;
-      expect(presence.isOpen(ID)).toBe(true);
-      expect(presence.isVisible(ID)).toBe(false);
+      expect(viewers.isOpen(ID)).toBe(true);
+      expect(viewers.isVisible(ID)).toBe(false);
     } finally {
       ws.close();
     }
@@ -237,12 +237,12 @@ describe('/ws/session/:id keeps the open claim', () => {
   it('a frame that fails to parse still re-stamps the open claim: it proves the socket alive', async () => {
     const ws = await open();
     try {
-      await until(() => presence.isOpen(ID), 'the open claim at connect');
+      await until(() => viewers.isOpen(ID), 'the open claim at connect');
       clock.t = T0 + 9 * MIN;
       ws.send('not json');
       await new Promise((r) => setTimeout(r, 100));
       clock.t = T0 + 18 * MIN;
-      expect(presence.isOpen(ID)).toBe(true);
+      expect(viewers.isOpen(ID)).toBe(true);
     } finally {
       ws.close();
     }
@@ -251,9 +251,9 @@ describe('/ws/session/:id keeps the open claim', () => {
   it('closing the socket drops both claims at once', async () => {
     const ws = await open();
     ws.send(JSON.stringify({ type: 'visible', visible: true }));
-    await until(() => presence.isVisible(ID), 'the visible claim');
-    expect(presence.isOpen(ID)).toBe(true);
+    await until(() => viewers.isVisible(ID), 'the visible claim');
+    expect(viewers.isOpen(ID)).toBe(true);
     ws.close();
-    await until(() => !presence.isOpen(ID) && !presence.isVisible(ID), 'both claims dropped at close');
+    await until(() => !viewers.isOpen(ID) && !viewers.isVisible(ID), 'both claims dropped at close');
   });
 });

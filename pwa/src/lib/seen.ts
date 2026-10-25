@@ -14,9 +14,9 @@ const BADGED: ReadonlySet<FleetSession['bucket']> = new Set(['attention', 'done'
  * of the person holding the phone, not of the fleet — storing this map
  * server-side would let the desktop mark the phone's badge read.
  *
- * The server DOES keep a viewer notion: `server/src/presence.ts`, "which
+ * The server DOES keep a viewer notion: `server/src/viewer.ts`, "which
  * sessions a human is currently LOOKING AT". It is a DIFFERENT fact, not a
- * copy of this one, and the difference is deliberate. Presence collapses
+ * copy of this one, and the difference is deliberate. A viewer claim collapses
  * across every connected client (`isVisible(id)` is true if ANY connection
  * token claims the session), is never persisted, and is read in exactly one
  * place — the push gate in `watch.ts`'s `pushOne` (watch.ts:254). It neither

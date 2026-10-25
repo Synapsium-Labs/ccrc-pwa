@@ -149,16 +149,16 @@ export const laneFixture = (opts: LaneOpts = {}) => {
   const coord = opts.coord ?? new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const fleetState: FleetState = { connected: true, downSince: null, rosterFp: null, build: null,
     ccdVerbs: [...(opts.ccdVerbs ?? ['ws-audit', 'ws-reclaim', 'ws-release', RECLAIM_CAP, RECLAIM_PAUSE_CAP, ACTOR_FLAGS_CAP])] };
-  const presence = { isVisible: (id: string) => opts.visible?.(id) === true };
+  const viewers = { isVisible: (id: string) => opts.visible?.(id) === true };
   const requests: ChildReclaimRequest[] = [];
   const outcomes: ChildReclaimOutcome[] = [];
   const deps = {
-    ...base, cfg, io, coord, fleetState, presence, monotonicMs: () => mono,
+    ...base, cfg, io, coord, fleetState, viewers, monotonicMs: () => mono,
     ...(opts.notifyLog === undefined ? {} : { notifyLog: opts.notifyLog }),
     childReclaimExec: async (req: ChildReclaimRequest): Promise<ChildReclaimOutcome> => {
       requests.push(req);
       const o = opts.exec !== undefined ? await opts.exec(req) : await base.queue.run(req.sessionId, () => reclaimChild(
-        { coord, io, cfg, runCcd: base.runCcd, fleetState, presence }, req));
+        { coord, io, cfg, runCcd: base.runCcd, fleetState, viewers }, req));
       outcomes.push(o);
       return o;
     },

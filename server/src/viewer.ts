@@ -1,4 +1,4 @@
-import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS } from '../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS, VIEWER_TTL_MS } from '../../shared/api.js';
 
 /**
  * Which sessions a human is currently LOOKING AT.
@@ -15,8 +15,8 @@ import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS } from '../../shared/api.js';
  *    'close' never fires, and the claim would sit here suppressing every
  *    notification for that session until the TCP stack gave up retransmitting
  *    the next write, which on a quiet stream is never. So a claim is believed
- *    only while the client keeps re-stating it (`PRESENCE_REFRESH_MS`, see
- *    `shared/api.ts`), and a claim older than `PRESENCE_TTL_MS` is three
+ *    only while the client keeps re-stating it (`VIEWER_REFRESH_MS`, see
+ *    `shared/api.ts`), and a claim older than `VIEWER_TTL_MS` is three
  *    refreshes stale and is dropped where it is found.
  *
  * The expiry direction is the fail-shut one: an expired claim means NOTIFY.
@@ -28,20 +28,20 @@ import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS } from '../../shared/api.js';
  * TWO CLAIMS PER CONNECTION (D-5242, spec §5.11's presence contract):
  *
  *  - the VISIBLE claim (`setVisible`, `isVisible`): a screen on display. It
- *    suppresses pushes, on `PRESENCE_TTL_MS`, exactly as it always has;
+ *    suppresses pushes, on `VIEWER_TTL_MS`, exactly as it always has;
  *  - the OPEN claim (`markOpen`, `touch`, `isOpen`): a `/ws/session/:id`
  *    socket that is still there, visible or hidden. Stamped at connect,
  *    re-stamped by EVERY frame the client sends (the heartbeat beats while
- *    hidden too), dropped at close, believed for `PRESENCE_OPEN_TTL_MS` after
+ *    hidden too), dropped at close, believed for `VIEWER_OPEN_TTL_MS` after
  *    its last stamp. It is what keeps a session someone has open from being put
  *    to sleep (hibernation's `viewer` hold, and the stop-done lane's, D-5370).
  *
  * A server that just restarted believes no screen is open either, which is
  * wrong for a hidden tab that has not reconnected yet — so each reader of
- * `isOpen` holds its own act for `PRESENCE_OPEN_TTL_MS` after the server
+ * `isOpen` holds its own act for `VIEWER_OPEN_TTL_MS` after the server
  * starts.
  */
-export class Presence {
+export class Viewers {
   private byToken = new Map<symbol, { id: string; at: number }>();
   /** The open claims (D-5242), one per connection token, beside the visible ones and never mixed with them. */
   private openByToken = new Map<symbol, { id: string; at: number }>();
@@ -49,8 +49,8 @@ export class Presence {
   /** `now` is injectable so a test can age a claim without spending 45 s. */
   constructor(
     private readonly now: () => number = Date.now,
-    private readonly ttlMs = PRESENCE_TTL_MS,
-    private readonly openTtlMs = PRESENCE_OPEN_TTL_MS,
+    private readonly ttlMs = VIEWER_TTL_MS,
+    private readonly openTtlMs = VIEWER_OPEN_TTL_MS,
   ) {}
 
   /** A `/ws/session/:id` connection opened: its open claim, stamped now. */
@@ -79,7 +79,7 @@ export class Presence {
     this.openByToken.delete(token);
   }
 
-  /** Has anyone `id` open — on screen or in a hidden tab — with a frame inside `PRESENCE_OPEN_TTL_MS`? Sweeps expired
+  /** Has anyone `id` open — on screen or in a hidden tab — with a frame inside `VIEWER_OPEN_TTL_MS`? Sweeps expired
    *  open claims as it walks, as `isVisible` does its own. */
   isOpen(id: string): boolean {
     const cutoff = this.now() - this.openTtlMs;

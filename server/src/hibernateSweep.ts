@@ -1,4 +1,4 @@
-import type { Presence } from './presence.js';
+import type { Viewers } from './viewer.js';
 import type { Deps } from './server.js';
 import type { FleetState } from './fleetstate.js';
 import type { SessionRecord } from './registry.js';
@@ -28,7 +28,7 @@ import {
  *  2. N is `$REG/hibernate-after-hours` when listed (read then, and only then), else the default;
  *  3. per row with a registry record: the store's answers (open runs as worker through `openRunsForSession` and as
  *     claimant through `openRunsClaimedBy`, both `state NOT IN` the terminal set; the live claims, read once a pass;
- *     outstanding mail), `Presence.isOpen`, the opt-out marker from the listing; a read that fails, or no store at
+ *     outstanding mail), `Viewers.isOpen`, the opt-out marker from the listing; a read that fails, or no store at
  *     all, holds `runs-unreadable`;
  *  4. a row the verdict answers `measure` for has its raw live word and its turn marker read, and is asked again;
  *  5. a `hibernate` answer, unarmed, logs `ccrc-server: hibernate-shadow <id> idle=<h>h`, at most once per id per
@@ -42,7 +42,7 @@ import {
  *     `ccd: session-busy: <reason>` at exit 3, is a QUIET skip — one line per id per `HIBERNATE_ACT_LINE_MS`, never a
  *     warning per sweep — and the next sweep asks again.
  *
- * The verdict holds every candidate `viewer` for `PRESENCE_OPEN_TTL_MS` after `startedAt`, the process start the
+ * The verdict holds every candidate `viewer` for `VIEWER_OPEN_TTL_MS` after `startedAt`, the process start the
  * watcher hands it: presence is never persisted, and a hidden tab that has not reconnected after a deploy is not an
  * empty screen.
  */
@@ -65,7 +65,7 @@ export interface HibernateSweepDeps {
   /** Undefined without a coordination store: every row then holds `runs-unreadable`. */
   readonly coord: Pick<CoordStore, 'openRunsForSession' | 'openRunsClaimedBy' | 'activeClaims' | 'outstandingMailFor'> | undefined;
   /** Undefined: every row holds `viewer` (fail closed): a screen nothing measured is never an empty one. */
-  readonly presence: Pick<Presence, 'isOpen'> | undefined;
+  readonly viewers: Pick<Viewers, 'isOpen'> | undefined;
   /** `turnverdict.ts`'s `liveWordFor`, over the watcher's thunks. */
   readonly liveWord: (rec: SessionRecord) => Promise<
     { ok: true; word: string; since: number | null } | { ok: false; reason: 'no-pane' | 'no-config-dir' | 'unmeasured' }>;
@@ -174,7 +174,7 @@ export async function hibernatePass(
   // Built again for each ask: the store and presence are re-read AFTER the live reads, which take real time.
   const inputFor = (row: HibernateRow, claims: ReadonlySet<string> | null, live: HibernateLive, at: number): HibernateInput => ({
     row, optedOut: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`), store: storeRead(deps.coord, claims, row.id),
-    viewer: deps.presence?.isOpen(row.id) ?? true, sinceStartMs: at - deps.startedAt, live,
+    viewer: deps.viewers?.isOpen(row.id) ?? true, sinceStartMs: at - deps.startedAt, live,
   });
   for (const s of sessions) {
     const rec = byId.get(s.id);

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { heldKindOf, stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
 import { STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS } from '../src/stopDone.js';
-import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS, type FleetSession } from '../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS, VIEWER_TTL_MS, type FleetSession } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
 import type { FleetState } from '../src/fleetstate.js';
 import path from 'node:path';
@@ -16,7 +16,7 @@ import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
-import { Presence } from '../src/presence.js';
+import { Viewers } from '../src/viewer.js';
 import { readSessionRecord } from '../src/registry.js';
 import { liveRowFor, turnReadDeps } from '../src/turnverdict.js';
 import type { Runner } from '../src/exec.js';
@@ -28,7 +28,7 @@ import { HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, NO_HIBERNATE_SUF
 // the declared stop, the one feed row, and the retry memory.
 
 const NOW = 1_800_000_000_000;
-const STARTED = NOW - PRESENCE_OPEN_TTL_MS - 60_000;
+const STARTED = NOW - VIEWER_OPEN_TTL_MS - 60_000;
 const HOUR = 3_600_000;
 /** A `done` marker seven hours old — past N — nothing in the background, nothing scheduled. */
 const MARK_IDLE = { ok: true, state: 'done', bg: 0, crons: 0, turnAt: NOW - 7 * HOUR - 60_000, stopAt: NOW - 7 * HOUR, restartAt: null } as const;
@@ -100,7 +100,7 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
     fleetState: {
       ccdVerbs: [...(o.verb === false ? ['stop-surface'] : ['hibernate']), ACTOR_FLAGS_CAP, ...(o.holdOk ? [HIBERNATE_HOLD_OK_CAP] : [])],
     } as unknown as FleetState,
-    presence: { isOpen: () => false },
+    viewers: { isOpen: () => false },
     notifyLog: {
       epoch: 'e',
       record: (e: { kind: string; sessionId: string; runId: number | null; title: string; body: string }) => {
@@ -280,18 +280,18 @@ describe('stopDonePass (D-5370)', () => {
 
   it('a worker somebody has on screen is not stopped', async () => {
     const f = fake([ID]);
-    await stopDonePass({ ...f.deps, presence: { isOpen: (id) => id === ID } }, mem(), [row(ID)], [rec(ID)], []);
+    await stopDonePass({ ...f.deps, viewers: { isOpen: (id) => id === ID } }, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([]);
   });
 
   it('D-5242\'s presence contract: an open screen in a hidden tab holds the worker as it holds a sleeping session', async () => {
     const f = fake([ID]);
-    const presence = new Presence(() => NOW);
+    const viewers = new Viewers(() => NOW);
     const tok = Symbol('fixture');
-    presence.markOpen(tok, ID);
-    presence.setVisible(tok, null);
-    expect(presence.isVisible(ID)).toBe(false);
-    await stopDonePass({ ...f.deps, presence }, mem(), [row(ID)], [rec(ID)], []);
+    viewers.markOpen(tok, ID);
+    viewers.setVisible(tok, null);
+    expect(viewers.isVisible(ID)).toBe(false);
+    await stopDonePass({ ...f.deps, viewers }, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([]);
   });
 
@@ -300,7 +300,7 @@ describe('stopDonePass (D-5370)', () => {
     await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([HIB(ID)]);
     const g = fake([ID]);
-    const out = await stopDonePass({ ...g.deps, presence: undefined }, mem(), [row(ID)], [rec(ID)], []);
+    const out = await stopDonePass({ ...g.deps, viewers: undefined }, mem(), [row(ID)], [rec(ID)], []);
     expect(out).toEqual([]);
     expect(g.argv).toEqual([]);
   });
@@ -311,11 +311,11 @@ describe('stopDonePass (D-5370)', () => {
     expect(f.argv).toEqual([]);
   });
 
-  it('the post-start hold lasts PRESENCE_OPEN_TTL_MS (D-5242): past the visible TTL it still holds, past the open one it stops', async () => {
+  it('the post-start hold lasts VIEWER_OPEN_TTL_MS (D-5242): past the visible TTL it still holds, past the open one it stops', async () => {
     const f = fake([ID]);
-    await stopDonePass({ ...f.deps, startedAt: NOW - PRESENCE_TTL_MS - 1 }, mem(), [row(ID)], [rec(ID)], []);
+    await stopDonePass({ ...f.deps, startedAt: NOW - VIEWER_TTL_MS - 1 }, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([]);
-    await stopDonePass({ ...f.deps, startedAt: NOW - PRESENCE_OPEN_TTL_MS }, mem(), [row(ID)], [rec(ID)], []);
+    await stopDonePass({ ...f.deps, startedAt: NOW - VIEWER_OPEN_TTL_MS }, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([HIB(ID)]);
   });
 
@@ -740,7 +740,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     // buildServer always hands the watcher a Presence; an absent port reads as a viewer (fail closed).
-    const deps = { ...testDeps(home, run), cfg, coord, fleetState: { ccdVerbs: ['hibernate'] }, presence: new Presence(() => Date.now()) };
+    const deps = { ...testDeps(home, run), cfg, coord, fleetState: { ccdVerbs: ['hibernate'] }, viewers: new Viewers(() => Date.now()) };
     const w = new FleetWatcher(deps as never, new Bus(), 10_000);
     (w as unknown as { stopDoneStartedAt: number }).stopDoneStartedAt = startedAt;
     w.useStopDoneSerialiser({ serial: async (fn: () => Promise<unknown>) => fn() } as never);

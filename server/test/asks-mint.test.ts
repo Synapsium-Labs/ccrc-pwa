@@ -23,7 +23,7 @@ import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { NotifyLog } from '../src/notifylog.js';
-import { Presence } from '../src/presence.js';
+import { Viewers } from '../src/viewer.js';
 import type { PushPayload } from '../src/push.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -102,7 +102,7 @@ const BARE_PROMPT = 'ready\n❯ \n';
 function fixture(opts: {
   push: { notify: (p: PushPayload) => Promise<void> };
   notifyLog?: NotifyLog;
-  presence?: Presence;
+  viewers?: Viewers;
   sessions: string[];
 }): {
   coord: CoordStore; home: string;
@@ -139,7 +139,7 @@ function fixture(opts: {
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const deps = {
     ...testDeps(home, runner), push: opts.push as never, notifyLog: opts.notifyLog,
-    presence: opts.presence, coord,
+    viewers: opts.viewers, coord,
   };
   const w = new FleetWatcher(deps, new Bus(), 10_000);
   return {
@@ -463,11 +463,11 @@ describe('the ask mint point (D-2172, D-2173)', () => {
   it('records the held ask even while the operator is watching the child\'s pane (recordAlways)', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-    const presence = new Presence();
-    presence.setVisible(Symbol('t'), 'cc-a');
+    const viewers = new Viewers();
+    viewers.setVisible(Symbol('t'), 'cc-a');
     const log = new NotifyLog(path.join(await dir(), 'n.json'));
     await log.load();
-    const f = fixture({ push, notifyLog: log, presence, sessions: ['ccrc-pwa/cc-a'] });
+    const f = fixture({ push, notifyLog: log, viewers, sessions: ['ccrc-pwa/cc-a'] });
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
       wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
@@ -785,11 +785,11 @@ describe('the first-sighting race and a parent that is not live (D-5290)', () =>
   it('the tick-2 hold under presence suppression still writes the record (recordOnly, D-2172)', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-    const presence = new Presence();
-    presence.setVisible(Symbol('t'), CHILD);
+    const viewers = new Viewers();
+    viewers.setVisible(Symbol('t'), CHILD);
     const log = new NotifyLog(path.join(await dir(), 'n.json'));
     await log.load();
-    const f = fixture({ push, notifyLog: log, presence, sessions: [`project-a/${CHILD}`, `project-a/${PARENT}`] });
+    const f = fixture({ push, notifyLog: log, viewers, sessions: [`project-a/${CHILD}`, `project-a/${PARENT}`] });
     const runId = dispatch(f, CHILD, PARENT);
     f.child(CHILD, runId);
     await f.tick();

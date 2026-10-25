@@ -3,7 +3,7 @@ import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { CcdResult, RunCcd } from './ports.js';
 import type { CcdArgv } from '../ccdargv.js';
-import type { Presence } from '../presence.js';
+import type { Viewers } from '../viewer.js';
 import type { NotifyLog } from '../notifylog.js';
 import { CCD_ARGV, EXPIRE_CAP, EXPIRE_CHILD_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import type { CoordStore } from './store.js';
@@ -35,7 +35,7 @@ import { recordNestedRescueShadow } from './nestedRescueShadow.js';
  *      takes at its act): a run that names it as worker or claimant, a review that still needs it, or a store that
  *      cannot say, defers it. The lane read these when its pass began; a run can bind the row since, and ccd cannot
  *      see the coordination store, so this read is the only guard of the run conjuncts at the act;
- *   4. a person looking at the session defers it — WITHOUT a ceiling (spec §5.3: "Presence defers WITHOUT a
+ *   4. a person looking at the session defers it — WITHOUT a ceiling (spec §5.3: "Viewers defers WITHOUT a
  *      ceiling");
  *   5. the audit — one that cannot be read is the audit's own failure (`audit-failed`), never the verb's — and its
  *      `expiresAt` through the one reader: a document without it is NO EVIDENCE, and nothing is
@@ -53,7 +53,7 @@ import { recordNestedRescueShadow } from './nestedRescueShadow.js';
 export interface ExpireArchivedDeps {
   coord: CoordStore;
   io: FleetIO; cfg: CcrcConfig; runCcd: RunCcd; fleetState?: FleetState;
-  presence?: Pick<Presence, 'isVisible'>;
+  viewers?: Pick<Viewers, 'isVisible'>;
   notifyLog?: NotifyLog;
 }
 
@@ -104,7 +104,7 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
     return answer({ kind: 'deferred', why: kept, detail: `the coordination store, re-read at the act, keeps ${sessionId} (${kept})` });
   }
   // 4 — a person at the session. No ceiling: presence defers for as long as it lasts.
-  if (deps.presence?.isVisible(sessionId) === true) {
+  if (deps.viewers?.isVisible(sessionId) === true) {
     return answer({ kind: 'deferred', why: 'presence', detail: 'someone is viewing this session' });
   }
   // 5 — the audit, and the threshold through its one reader.

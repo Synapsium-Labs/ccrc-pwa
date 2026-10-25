@@ -78,11 +78,11 @@ describe('the design spec', () => {
     expect(s).toContain('about eight extra journaled terminal audits or failing acts per such id');
   });
   it('Appendix A cites the presence constants at the lines that hold them', () => {
-    const m = /`PRESENCE_REFRESH_MS = 15_000`, `PRESENCE_TTL_MS = 45_000` \(`shared\/api\.ts:(\d+)-(\d+)`\)/.exec(s);
+    const m = /`VIEWER_REFRESH_MS = 15_000`, `VIEWER_TTL_MS = 45_000` \(`shared\/api\.ts:(\d+)-(\d+)`\)/.exec(s);
     expect(m, 'the citation is gone').not.toBeNull();
     const api = readFileSync(path.join(root, 'shared/api.ts'), 'utf8').split('\n');
-    expect(api[Number(m![1]) - 1]).toContain('export const PRESENCE_REFRESH_MS = 15_000;');
-    expect(api[Number(m![2]) - 1]).toContain('export const PRESENCE_TTL_MS = 45_000;');
+    expect(api[Number(m![1]) - 1]).toContain('export const VIEWER_REFRESH_MS = 15_000;');
+    expect(api[Number(m![2]) - 1]).toContain('export const VIEWER_TTL_MS = 45_000;');
   });
 });
 

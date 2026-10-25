@@ -12,10 +12,10 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { NotifyLog } from '../src/notifylog.js';
-import { Presence } from '../src/presence.js';
+import { Viewers } from '../src/viewer.js';
 import { askKey } from '../src/askkey.js';
 import type { PushPayload } from '../src/push.js';
-import { FLEET_SCOPE, PRESENCE_REFRESH_MS, PRESENCE_TTL_MS, type NodeRole, type UpdateChannel } from '../../shared/api.js';
+import { FLEET_SCOPE, VIEWER_REFRESH_MS, VIEWER_TTL_MS, type NodeRole, type UpdateChannel } from '../../shared/api.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, type NodeMeasurement, type ReleaseListingRow, type UpdateIntentPatch } from '../src/coord/store.js';
 import { okRuns } from './coordReadHelpers.js';
@@ -127,7 +127,7 @@ function watcher(opts: {
   /** Plan W3 Task 3: optional — omitted, the watcher has NO push service,
    *  as a box with no VAPID keys runs (`index.ts` builds `push` only then). */
   push?: { notify: (p: PushPayload) => Promise<void> };
-  presence?: Presence;
+  viewers?: Viewers;
   notifyLog?: NotifyLog;
   /** Task 10: when true, a real `CoordStore` (over this fixture home's own
    *  `.ccrc/coord.db`) is wired in and returned — the mail/run notify lanes
@@ -163,7 +163,7 @@ function watcher(opts: {
     ...base,
     ...(opts.cfg ? { cfg: { ...base.cfg, ...opts.cfg } } : {}),
     ...(opts.push ? { push: opts.push as never } : {}),
-    presence: opts.presence,
+    viewers: opts.viewers,
     notifyLog: opts.notifyLog,
     coord,
     ...(opts.io ? { io: opts.io } : {}),
@@ -223,10 +223,10 @@ describe('push copy discipline — project context, presence suppression, log fi
   it('fires nothing for a session a client reports visible', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-    const presence = new Presence();
+    const viewers = new Viewers();
     const token = Symbol('t');
-    presence.setVisible(token, 'cc-a');
-    const w = watcher({ push, presence, sessions: ['ccrc-pwa/cc-a'] });
+    viewers.setVisible(token, 'cc-a');
+    const w = watcher({ push, viewers, sessions: ['ccrc-pwa/cc-a'] });
     await w.tick();
     w.markIdle('cc-a');
     await w.tick();
@@ -236,12 +236,12 @@ describe('push copy discipline — project context, presence suppression, log fi
   it('fires again once every client has disconnected', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-    const presence = new Presence();
+    const viewers = new Viewers();
     const token = Symbol('t');
-    presence.setVisible(token, 'cc-a');
-    const w = watcher({ push, presence, sessions: ['ccrc-pwa/cc-a'] });
+    viewers.setVisible(token, 'cc-a');
+    const w = watcher({ push, viewers, sessions: ['ccrc-pwa/cc-a'] });
     await w.tick();
-    presence.drop(token);
+    viewers.drop(token);
     w.markIdle('cc-a');
     await w.tick();
     expect(sent).toHaveLength(1);
@@ -258,11 +258,11 @@ describe('push copy discipline — project context, presence suppression, log fi
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
     let now = 1_000_000;
-    const presence = new Presence(() => now, PRESENCE_TTL_MS);
-    presence.setVisible(Symbol('t'), 'cc-a');        // the phone said so, then vanished
-    const w = watcher({ push, presence, sessions: ['ccrc-pwa/cc-a'] });
+    const viewers = new Viewers(() => now, VIEWER_TTL_MS);
+    viewers.setVisible(Symbol('t'), 'cc-a');        // the phone said so, then vanished
+    const w = watcher({ push, viewers, sessions: ['ccrc-pwa/cc-a'] });
     await w.tick();
-    now += PRESENCE_TTL_MS + 1;                      // no heartbeat ever arrived
+    now += VIEWER_TTL_MS + 1;                      // no heartbeat ever arrived
     w.markIdle('cc-a');
     await w.tick();
     expect(sent).toHaveLength(1);
@@ -272,14 +272,14 @@ describe('push copy discipline — project context, presence suppression, log fi
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
     let now = 1_000_000;
-    const presence = new Presence(() => now, PRESENCE_TTL_MS);
+    const viewers = new Viewers(() => now, VIEWER_TTL_MS);
     const token = Symbol('t');
-    presence.setVisible(token, 'cc-a');
-    const w = watcher({ push, presence, sessions: ['ccrc-pwa/cc-a'] });
+    viewers.setVisible(token, 'cc-a');
+    const w = watcher({ push, viewers, sessions: ['ccrc-pwa/cc-a'] });
     await w.tick();
     // Heartbeats at the client's own cadence carry the claim past the TTL.
-    for (let i = 0; i < 4; i++) { now += PRESENCE_REFRESH_MS; presence.setVisible(token, 'cc-a'); }
-    expect(now).toBeGreaterThan(1_000_000 + PRESENCE_TTL_MS);
+    for (let i = 0; i < 4; i++) { now += VIEWER_REFRESH_MS; viewers.setVisible(token, 'cc-a'); }
+    expect(now).toBeGreaterThan(1_000_000 + VIEWER_TTL_MS);
     w.markIdle('cc-a');
     await w.tick();
     expect(sent).toEqual([]);
@@ -288,12 +288,12 @@ describe('push copy discipline — project context, presence suppression, log fi
   it('records into the log only what was actually sent', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-    const presence = new Presence();
+    const viewers = new Viewers();
     const token = Symbol('t');
-    presence.setVisible(token, 'cc-a');
+    viewers.setVisible(token, 'cc-a');
     const log = new NotifyLog(path.join(await dir(), 'n.json'));
     await log.load();
-    const w = watcher({ push, presence, notifyLog: log, sessions: ['ccrc-pwa/cc-a'] });
+    const w = watcher({ push, viewers, notifyLog: log, sessions: ['ccrc-pwa/cc-a'] });
     await w.tick();
     w.markIdle('cc-a');
     await w.tick();
@@ -887,11 +887,11 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
   it('the presence-gate exemption: a visible session still gets the RECORD, never the PUSH', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-    const presence = new Presence();
-    presence.setVisible(Symbol('t'), 'cc-a');
+    const viewers = new Viewers();
+    viewers.setVisible(Symbol('t'), 'cc-a');
     const log = new NotifyLog(path.join(await dir(), 'n.json'));
     await log.load();
-    const w = watcher({ push, presence, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+    const w = watcher({ push, viewers, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a'] });
     await w.tick();                    // priming: seeds the mail watermark
 
     const mail = w.coord!.insertMail({
@@ -1474,11 +1474,11 @@ describe('the release push — once per tag, across restarts, sessionless (desig
 
   it('a visible session does not suppress it — the release push has no session to be looking at', () => {
     const { sent, push } = recorder();
-    const presence = new Presence();
-    presence.setVisible(Symbol('t'), 'cc-a');
-    const w = watcher({ push, presence, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+    const viewers = new Viewers();
+    viewers.setVisible(Symbol('t'), 'cc-a');
+    const w = watcher({ push, viewers, coord: true, sessions: ['ccrc-pwa/cc-a'] });
     seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
-    expect(presence.isVisible('cc-a')).toBe(true);        // control: the gate WOULD suppress a pushOne about cc-a
+    expect(viewers.isVisible('cc-a')).toBe(true);        // control: the gate WOULD suppress a pushOne about cc-a
     expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
     expect(sent).toHaveLength(1);
   });

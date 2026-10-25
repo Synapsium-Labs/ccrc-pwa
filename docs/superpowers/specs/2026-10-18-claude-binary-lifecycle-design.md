@@ -198,7 +198,7 @@ A roll requires everything hibernation requires, with two parameters changed: th
 | live word `idle`; no menu; bucket `idle`; `background` null; roster empty | server verdict | `hibernateVerdict` |
 | turn marker `done`, `bg` exactly 0, `crons` exactly 0 (−1 or absent holds) | server and ccd | same |
 | no `.hold`, no open run as worker or claimant, no claim, no queued mail, runs readable | server | same |
-| nobody viewing (`Presence.isOpen`, held for `PRESENCE_OPEN_TTL_MS` after server start) | server | same |
+| nobody viewing (`Presence.isOpen`, held for `VIEWER_OPEN_TTL_MS` after server start) | server | same |
 | not stranded, swap-blocked, substrate fault, archived, expiring | server | same |
 | no `esc to interrupt`, prompt present with an empty box, 60 s quiet, no fresh `lastswap`, nobody attached (`#{session_attached}` = 0) | ccd at the act | `cmd_hibernate` |
 | **quiet window: the turn marker's newest `turnAt`/`stopAt`/`restartAt` older than the roll window** (default 90 min, §12) instead of hibernation's N | server | `hibernateVerdict(i, now, afterMs)` already takes N as a parameter |

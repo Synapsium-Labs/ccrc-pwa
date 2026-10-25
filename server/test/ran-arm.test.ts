@@ -195,7 +195,7 @@ const expiryRig = async (answer: { audit: () => ExecResult; verb: () => ExecResu
   await notifyLog.load();
   const deps: ExpireArchivedDeps = {
     coord: new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db'))), cfg: base.cfg, io: base.io,
-    runCcd: base.runCcd, fleetState: CAPS, presence: { isVisible: () => false }, notifyLog,
+    runCcd: base.runCcd, fleetState: CAPS, viewers: { isVisible: () => false }, notifyLog,
   };
   return { deps, calls, req: { sessionId: EXP_ID, archivedAt: ARCH, expiresAt: DUE } };
 };

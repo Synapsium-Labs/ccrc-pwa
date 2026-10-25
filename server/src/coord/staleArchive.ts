@@ -1,7 +1,7 @@
 // The stale-archive arm: L3, it gathers the facts and acts.
 import type { SessionRecord } from '../registry.js';
 import type { FleetState } from '../fleetstate.js';
-import type { Presence } from '../presence.js';
+import type { Viewers } from '../viewer.js';
 import type { CoordStore } from './store.js';
 import type { RunCcd } from './ports.js';
 import type { NoticeRecord } from '../notice.js';
@@ -56,7 +56,7 @@ export interface StaleArchiveDeps {
   /** Undefined without a coordination store: the claims cannot be read, so every row is kept. */
   readonly coord: Pick<CoordStore, 'childReclaimCoordinatorClaims' | 'openCoordinatorIds' | 'lifecycleFor'> | undefined;
   /** Undefined: every row has a viewer (fail closed). */
-  readonly presence: Pick<Presence, 'isVisible'> | undefined;
+  readonly viewers: Pick<Viewers, 'isVisible'> | undefined;
   /** The feed, `record-only`, bound by the composition root. */
   readonly notice: (event: NoticeRecord) => void;
   readonly runCcd: RunCcd;
@@ -206,7 +206,7 @@ export async function staleArchivePass(
     const evidenceAtMs = await evidenceFor(deps, coord, rec, names);
     const v = staleArchiveVerdict(
       { workspace: rec.workspace, archivedAt: rec.archivedAt, child: rec.child, identityMeasured: rec.unmeasured.length === 0, held: rec.held },
-      { claims: 'never', pane, sightings, viewer: deps.presence?.isVisible(rec.id) !== false, evidenceAtMs },
+      { claims: 'never', pane, sightings, viewer: deps.viewers?.isVisible(rec.id) !== false, evidenceAtMs },
       now);
     if (!v.eligible) { mem.would.delete(rec.id); continue; }
     due.push({ rec, evidenceAtMs: evidenceAtMs! });
@@ -245,7 +245,7 @@ async function act(
 ): Promise<StaleArchiveOutcome> {
   const id = rec.id;
   return deps.queueRun(id, async (): Promise<StaleArchiveOutcome> => {
-    if (deps.presence?.isVisible(id) !== false) return { kind: 'deferred', id, why: 'viewer' };
+    if (deps.viewers?.isVisible(id) !== false) return { kind: 'deferred', id, why: 'viewer' };
     // The switches and the row, once more, nearest the argv: a pause raised, the switch lifted, a hold or a child mark set,
     // an archive or a claim made since the verdict all stop it here (ccd's own refusal covers only a pane).
     let listed: MeasuredDirectoryRead;

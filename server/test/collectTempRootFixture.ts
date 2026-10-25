@@ -267,7 +267,7 @@ export const rig = (o: RigOpts = {}) => {
   const deps: CollectTempRootDeps = {
     coord: o.coord?.(coord) ?? coord, io, cfg: base.cfg, fleetState: state,
     runCcd: async (argv) => { attempts.push([...argv]); return base.runCcd(argv); },
-    presence: { isVisible: (id: string) => visible && id === ID },
+    viewers: { isVisible: (id: string) => visible && id === ID },
     lane: lane.port, observeIntervalMs: INTERVAL, control, link,
   };
   return {
