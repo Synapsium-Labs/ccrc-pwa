@@ -11415,7 +11415,7 @@ _models_advance_child() {   # <soft secs> <phase> [args…] -> the child's stdou
   printf '%s\n' "$out"
 }
 
-# A read phase of the step, admitted first (rc 3: no time for it, nothing run). plan, check and receipt end within
+# A read phase of the step, admitted first (rc 3: no time for it, nothing run). plan, check, receipt and mode end within
 # MODELS_NODE_BOUND_S (+ the grace); the canary within its own deadline + 15.
 _models_advance_read() {   # <plan|check|receipt|canary|mode> <id> [args…] -> frames on stdout (rc 0); stdin is the child's
   local phase="${1:-}" soft

@@ -2298,4 +2298,26 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the advance step on a direct lane (c
     expect(laneProxyRequests(proxy)).toEqual([]);
     expect(r.stderr, 'the unreadable mode is silent, as an unmeasured tier is').toBe('');
   }, T);
+
+  // The render's rc-1 arm (Task 11b fix round 1, I1): a lane.json with no `bridge` (one written before Task 10) reads
+  // rc 1 from the mode reader, and the hand verb `ccrc models litellm <id>` renders with no materialise before it, so
+  // the render meets that rc there. It is today's render: the LiteLLM tier is asked and, running the previous list,
+  // stopped and started on the new one. The stop stand-in leaves the tier down, as a real stop does, so the re-check
+  // right before the restart reads 1.
+  it('a lane.json whose mode cannot be read leaves the hand render as it was: it asks the LiteLLM tier and restarts it', async () => {
+    await setup();
+    tierOf('litellm', 0);
+    const p = join(home, '.ccrc', 'codex', 'lane-a', 'lane.json');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8')) as Record<string, unknown>;
+    delete j['bridge'];
+    fs.writeFileSync(p, `${JSON.stringify(j, null, 2)}\n`);
+    fs.appendFileSync(yamlPath(), '# the previous rendering\n');
+    const stopDown = '_codex_stop_tier() { printf \'stop %s %s\\n\' "$1" "$2" >> "$HOME/lane-calls"; '
+      + 'printf \'1\\n\' > "$HOME/fake/tier-$1-$2"; printf \'stopped\\n\'; }';
+    const r = sourced('cmd_models litellm lane-a', {}, stopDown);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(oneObject(r)).toMatchObject({ changed: true, restarted: true });
+    expect(fs.readFileSync(yamlPath(), 'utf8')).not.toContain('# the previous rendering');
+    expect(laneCalls()).toEqual(['ours lane-a litellm', 'stop lane-a litellm', 'ours lane-a litellm', 'start lane-a litellm']);
+  }, T);
 });
