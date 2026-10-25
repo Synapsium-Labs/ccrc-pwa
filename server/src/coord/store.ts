@@ -818,6 +818,9 @@ export type OpenSiblingsResult =
 export interface ChildReclaimNamingRow {
   readonly id: number; readonly sessionId: string; readonly program: string;
   readonly wave: number; readonly waveOf: number | null; readonly state: RunState;
+  /** The run's claimant (ARCH-62, #797): `claimantsOfSession` and `heldFor`'s fallback read the worker's coordinators
+   *  from these rows, so a run the session merely CLAIMS never enters (or fails) that answer. */
+  readonly claimedBy: string | null;
 }
 
 export type RunsNamingSessionResult =
@@ -3499,7 +3502,7 @@ export class CoordStore {
       const m = measureRunNumbers(r);
       if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
       runs.push({ id: m.nums.id, sessionId, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf,
-        state: isRunState(r.state) ? r.state : 'unknown' });
+        state: isRunState(r.state) ? r.state : 'unknown', claimedBy: r.claimedBy });
     }
     return { ok: true, runs };
   }

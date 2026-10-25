@@ -18,7 +18,7 @@ import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import type { OpenSiblingsResult } from '../src/coord/store.js';
 import type { CollectToken } from '../../shared/api.js';
 import { FULL_CAPS, ID, INTERVAL, RIPE, T0, TOK, TOK2, auditDoc, rig } from './collectTempRootFixture.js';
-import { openRunsClaimedBy } from './coordReadHelpers.js';
+import { openRunsClaimedBy } from '../src/coord/bindingReads.js';
 
 const job: CollectJob = { id: ID, epoch: 0 };   // the rig's cell starts at epoch 0 (`r.job()` builds the same); no case here moves it
 const AUDIT = ['ws-audit', '--session', ID, '--collect'];

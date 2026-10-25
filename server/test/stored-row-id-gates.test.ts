@@ -25,7 +25,8 @@ import type { FleetIO } from '../src/io.js';
 import { isRegistryId } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { okRun, openRunsClaimedBy } from './coordReadHelpers.js';
+import { okRun } from './coordReadHelpers.js';
+import { openRunsClaimedBy } from '../src/coord/bindingReads.js';
 import { REFUSED_IDS } from './registryIdCases.js';
 import { appFor, recorder, seedRow, storedRun } from './idGateFixture.js';
 

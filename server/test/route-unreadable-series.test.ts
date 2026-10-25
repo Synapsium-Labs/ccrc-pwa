@@ -52,3 +52,27 @@ describe('POST /api/runs/:id/route over an unreadable run series', () => {
     expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
   });
 });
+
+// ARCH-62 slice 2, ruling (a): the open door's "is this coordinator somebody's worker?" read is `openClaimantsOf`'s scope
+// exactly, the coordinator's WORKER rows. A run it already CLAIMS whose id is beyond 2^53 is not in that scope, so it
+// must not fail the open into a 500 (it did on the fold over `bindingRunsOf`).
+describe('POST /api/runs from a coordinator that claims a run this process cannot represent', () => {
+  it('is not a 500', async () => {
+    const home = mkTmp('ccrc-open-unreadable-claim-');
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    for (const [k, v] of Object.entries({ wrapper: 'claude', project: 'demo', workdir: '/w/coord', uuid: 'u-coord',
+      started: '1', workspace: 'coord', branch: 'ws/coord', base: 'origin/main' })) {
+      writeFileSync(path.join(reg, `coord.${k}`), v);
+    }
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const fleetState = { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: [ACTOR_FLAGS_CAP] as string[] };
+    app = await buildServer({ ...testDeps(home, run), mailToken: TOKEN, coord, fleetState });
+    const own = coord.openRun({ program: 'q', title: 'q', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'coord' }) as { id: number };
+    coord.db.prepare('UPDATE runs SET id = ? WHERE id = ?').run(2n ** 53n + 1n, own.id);
+    const res = await app.inject({ method: 'POST', url: '/api/runs', headers: { 'x-ccrc-mail-token': TOKEN }, payload: {
+      program: 'p', title: 't', project: 'demo', wave: 1, waveOf: 3, claimedBy: 'coord', homeProject: 'demo', claimedByUuid: 'u-coord' } });
+    expect(res.statusCode).not.toBe(500);
+  });
+});

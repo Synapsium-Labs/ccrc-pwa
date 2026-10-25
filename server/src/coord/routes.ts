@@ -25,7 +25,7 @@ import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
-import { claimantsOfSession, runsTouching, UnreadableSeries } from './bindingReads.js';
+import { claimantsOfSession, runsTouching } from './bindingReads.js';
 import { readSessionSpendMeasured } from '../shares.js';
 import { boundSessionsOf, joinRunSpend } from './runSpend.js';
 import { pageInbox, renderEnvelope, renderInboxEntry } from './envelope.js';
@@ -1955,20 +1955,18 @@ export function registerCoordRoutes(
     const { id, ask } = request;
 
     return coordMutex.run(async () => {
-      let decision: Awaited<ReturnType<typeof decideRoute>>;
-      try { decision = await decideRoute({
+      const decision = await decideRoute({
         ask,
         run: coord.run(id),
         // D-5866: the `route` row; `routeSet`, the class rung's pair below, is answered by the same `ROUTE_CAP`.
         ccdCanRoute: ccdCan(deps.fleetState, 'route'),
-        trail: (sid) => runsTouching(coord, sid).flatMap((r) =>
-          coord.runEvents(r.id).map((e) => ({ at: e.at, runId: r.id, runSessionId: r.sessionId, detail: e.detail }))),
+        trail: (sid) => {
+          const touched = runsTouching(coord, sid);
+          return !touched.ok ? touched : { ok: true, events: touched.runs.flatMap((r) =>
+            coord.runEvents(r.id).map((e) => ({ at: e.at, runId: r.id, runSessionId: r.sessionId, detail: e.detail }))) };
+        },
         measure: (sid, field) => fieldMeasured(deps.io, deps.cfg.registryDir, sid, field),
-      }); } catch (err) {
-        // A series this process cannot represent is a partial history, which must not read as "no earlier move": refuse by name.
-        if (err instanceof UnreadableSeries) return refuseRoute(reply, 'runs-unreadable', { detail: err.message });
-        throw err;
-      }
+      });
       if (!decision.ok) return refuseRoute(reply, decision.refused, decision.extra);
       const { sid, mode, field, from, to, kind, effortReset } = decision.move;
 

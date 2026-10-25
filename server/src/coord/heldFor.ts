@@ -24,13 +24,22 @@
 import { ASK_OPERATOR_PRINCIPAL, type AskMintReleaseReason, type ChildMark } from '../../../shared/api.js';
 import type { SessionRecord } from '../registry.js';
 import { childBirthOf } from './childSpent.js';
-import { bindingOf, childParentOf, hasOwnerlessUndecidedOpen, incarnationOf } from './runBinding.js';
+import { bindingOf, childParentOf, hasOwnerlessUndecidedOpen, incarnationOf, type Incarnation } from './runBinding.js';
 import { claimantMeasuredDead, measureClaimant, type ReclaimDeps } from './reclaim.js';
+import { provenParentOf } from './bindingReads.js';
 
 export type HeldFor =
   | { readonly kind: 'not-a-child' }
   | { readonly kind: 'held'; readonly parent: string; readonly runId: number }
   | { readonly kind: 'released'; readonly parent: string; readonly runId: number; readonly reason: AskMintReleaseReason };
+
+/** The series (`bindingRunsOf`) also reads the runs the child CLAIMS; when it cannot be represented, the parent the worker
+ *  rows alone prove is the answer heldFor gave before the fold (ARCH-62 slice 2, ruling (a)). None proven: it fails. */
+function provenParentOrThrow(coord: ReclaimDeps['coord'], childId: string, incarnation: Incarnation, detail: string): string {
+  const proven = provenParentOf(coord, childId, incarnation);
+  if (!proven.ok || proven.parent === null) throw new Error(`heldFor: ${detail}`);
+  return proven.parent;
+}
 
 export async function heldFor(
   deps: ReclaimDeps, childId: string, mark: ChildMark, recs: readonly Pick<SessionRecord, 'id' | 'archivedAt' | 'stopped'>[],
@@ -44,10 +53,11 @@ export async function heldFor(
   const minting = coord.run(mark.runId);
   const incarnation = incarnationOf(childId, childBirthOf(minting, childId));
   const series = coord.bindingRunsOf(childId);
-  if (!series.ok) throw new Error(`heldFor: ${series.detail}`);
   // An unstamped run opened before the birth and then bound to it is undecidable, not a ghost: the minting run's own
   // claimant keeps the hold (the dup arm, a wave N >= 2 run planned before wave 1 was dispatched).
-  const parent = childParentOf(series.runs, minting.ok && minting.run !== null ? minting.run.claimedBy : null, incarnation);
+  const parent = series.ok
+    ? childParentOf(series.runs, minting.ok && minting.run !== null ? minting.run.claimedBy : null, incarnation)
+    : provenParentOrThrow(coord, childId, incarnation, series.detail);
   if (parent === childId) return notAChild;
   // D-5362: the binding is "the parent is the claimant of the run the mark names", not "the mark names the newest
   // open run": a wave N >= 2 run resumes the same workspace, whose `.child` still names wave 1.
@@ -62,7 +72,7 @@ export async function heldFor(
     if (sib.siblings.length === 0) {
       // An ownerless open run the binding cannot place (a wave N >= 2 planned before the birth, bound without a stamp)
       // still counts as a sibling: the ruling on ARCH-62 slice 1 keeps today's `run-unclaimed` for it.
-      if (!hasOwnerlessUndecidedOpen(bindingOf(series.runs, incarnation))) return notAChild;
+      if (!series.ok || !hasOwnerlessUndecidedOpen(bindingOf(series.runs, incarnation))) return notAChild;
     }
     return nobody('run-unclaimed');
   }

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
-import { openRunsClaimedBy } from './coordReadHelpers.js';
+import { openRunsClaimedBy } from '../src/coord/bindingReads.js';
 
 const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));

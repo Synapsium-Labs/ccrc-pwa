@@ -111,8 +111,8 @@ export function storeBindingReaders(text: string, file = 'server/src/coord/store
  *  new one is a deliberate entry. */
 export const ATTRIBUTE_READS: readonly string[] = ['sessionProject', 'strandedClear', 'childStaleActivity'];
 
-/** The store methods the spec's reader list names that select by a RUN id, not by a session or claimant: they read one run's
- *  own `claimedBy` / `sessionId` column (the run is already chosen), so they decide nothing about which run is a session's.
- *  The raw detector never sees them (no session-keyed query); named here so a final slice measuring "readers <= 4" cannot
- *  mistake them for folded. Legitimately different, pending an orchestrator ruling. */
+/** The store binding readers the spec's reader list (K10) names that select by a RUN id, not by a session or claimant: they
+ *  read one run's own `claimedBy` / `sessionId` column. The raw detector never sees them (no session-keyed query), but they
+ *  COUNT among the store's binding readers (orchestrator ruling on ARCH-62 slice 2); slice 4 folds them onto `run(id)`.
+ *  Named here so the census number is honest until then: the session-keyed readers plus these. */
 export const RUN_KEYED_READS: readonly string[] = ['resolveCoordinator', 'resolveWorker'];

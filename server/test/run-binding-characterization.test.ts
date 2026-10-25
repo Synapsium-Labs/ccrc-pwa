@@ -9,7 +9,8 @@ import { describe, expect, it } from 'vitest';
 import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
-import { okSiblings, openClaimantsOf, openRunsClaimedBy, parentOfSession } from './coordReadHelpers.js';
+import { okSiblings, parentOfSession } from './coordReadHelpers.js';
+import { claimantsOfSession, openRunsClaimedBy } from '../src/coord/bindingReads.js';
 
 const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-binding-char-'), '.ccrc', 'coord.db')));
@@ -31,7 +32,7 @@ describe('today\'s session-keyed run readers (characterization, ARCH-60)', () =>
     const b = open(s, 'prog-b', 'coord-2');
     s.setSession(b, 'demo-w');
     expect(parentOfSession(s, 'demo-w')).toBe('coord-2');
-    expect(openClaimantsOf(s, 'demo-w')).toEqual(['coord-2', 'coord-1']);
+    expect(claimantsOfSession(s, 'demo-w')).toEqual(['coord-2', 'coord-1']);
   });
 
   it('the open-vs-newest pair: runsNamingSession lists every state, openRunsForSession only the open ones', () => {
@@ -55,7 +56,7 @@ describe('today\'s session-keyed run readers (characterization, ARCH-60)', () =>
     s.setSession(fresh, 'demo-w', 1_700_000_000_000);
     finish(s, fresh);
     expect(parentOfSession(s, 'demo-w')).toBe('coord-gone');
-    expect(openClaimantsOf(s, 'demo-w')).toEqual(['coord-gone']);
+    expect(claimantsOfSession(s, 'demo-w')).toEqual(['coord-gone']);
   });
 
   it('the birth is stamped with the session it was recorded for, and cleared when the occupant changes', () => {
@@ -93,7 +94,7 @@ describe('the other session-keyed readers as they answer before ARCH-62', () => 
     s.setSession(a, 'demo-w');
     tx(s.db, () => { s.db.prepare("UPDATE runs SET state = 'from-a-newer-build' WHERE id = ?").run(a); });
     expect(parentOfSession(s, 'demo-w')).toBe('coord-1');
-    expect(openClaimantsOf(s, 'demo-w')).toEqual(['coord-1']);
+    expect(claimantsOfSession(s, 'demo-w')).toEqual(['coord-1']);
     expect(okSiblings(s.openRunsForSession('demo-w')).map((r) => r.id)).toEqual([a]);
     const named = s.runsNamingSession('demo-w');
     expect(named.ok && named.runs.map((r) => r.state)).toEqual(['unknown']);
@@ -107,7 +108,7 @@ describe('the other session-keyed readers as they answer before ARCH-62', () => 
     s.setSession(b, 'demo-w');
     tx(s.db, () => { s.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(b); });
     expect(parentOfSession(s, 'demo-w')).toBeNull();
-    expect(openClaimantsOf(s, 'demo-w')).toEqual(['coord-1']);
+    expect(claimantsOfSession(s, 'demo-w')).toEqual(['coord-1']);
   });
 
   it('a finished worker has no parent and no claimants', () => {
@@ -116,7 +117,7 @@ describe('the other session-keyed readers as they answer before ARCH-62', () => 
     s.setSession(a, 'demo-w');
     finish(s, a);
     expect(parentOfSession(s, 'demo-w')).toBeNull();
-    expect(openClaimantsOf(s, 'demo-w')).toEqual([]);
+    expect(claimantsOfSession(s, 'demo-w')).toEqual([]);
   });
 
   it('openRunsClaimedBy lists a claimant\'s open runs, session-less planned ones included', () => {

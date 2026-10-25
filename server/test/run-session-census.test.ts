@@ -41,9 +41,14 @@ const SITES: Record<string, number> = {
 };
 const SITES_TOTAL = 71;
 
-/** The store's binding readers at this commit, by name. */
+/** The store's session-keyed binding readers at this commit, by name (the raw detector's count, writers and attribute
+ *  reads named apart). */
 const READERS: readonly string[] = ['bindingRunsOf', 'lastRunBySession', 'openRunsForSession', 'runsNamingSession'];
-/** The counted exit's number (spec §5.9): open-only, any state, last-closed, and the series the binding decides over. */
+/** The store's binding readers as the spec (K10) counts them at this commit: the four above plus the two run-keyed ones
+ *  (`RUN_KEYED_READS`, `resolveCoordinator` and `resolveWorker`), which slice 4 folds onto `run(id)`. */
+const COUNTED_READERS = 6;
+/** The counted exit's number (spec §5.9): open-only, any state, last-closed, and the series the binding decides over. Met
+ *  once slice 4 folds the run-keyed readers; not met at this commit (6 > 4). */
 const READERS_CEILING = 4;
 
 describe('the equality-site query (ARCH-62 census)', () => {
@@ -100,8 +105,10 @@ describe('the store binding readers (ARCH-62 census)', () => {
     expect(found).toEqual([...READERS].sort());
   });
 
-  it('are at most the ceiling the counted exit names', () => {
-    expect(READERS.length).toBeLessThanOrEqual(READERS_CEILING);
+  it('count six with the run-keyed readers: the exit ceiling is four, pending slice 4', () => {
+    expect(found.length + RUN_KEYED_READS.length).toBe(COUNTED_READERS);
+    // What slice 4 must reach: with `resolveCoordinator`/`resolveWorker` folded onto `run(id)`, only these remain.
+    expect(found.length).toBeLessThanOrEqual(READERS_CEILING);
   });
 
   it('a binding writer and an attribute read are named, not counted', () => {
@@ -111,7 +118,7 @@ describe('the store binding readers (ARCH-62 census)', () => {
   });
 });
 
-describe('the run-keyed reads the spec names (ARCH-62 census)', () => {
+describe('the run-keyed binding readers the spec counts (ARCH-62 census; folded onto run(id) in slice 4)', () => {
   const text = readFileSync(`${REPO}/server/src/coord/store.ts`, 'utf8');
 
   it('are exactly resolveCoordinator and resolveWorker, still on the store, each read by run id', () => {
@@ -119,7 +126,7 @@ describe('the run-keyed reads the spec names (ARCH-62 census)', () => {
     for (const n of RUN_KEYED_READS) expect(text).toMatch(new RegExp(`^  ${n}\\(runId: `, 'm'));
   });
 
-  it('are not session-keyed readers: the raw detector does not count them', () => {
+  it('are counted by name, not by the raw detector, which sees only session-keyed queries', () => {
     expect(storeBindingReaders(text).filter((n) => RUN_KEYED_READS.includes(n))).toEqual([]);
   });
 });

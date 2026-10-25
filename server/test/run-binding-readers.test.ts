@@ -10,9 +10,9 @@ import { CoordStore } from '../src/coord/store.js';
 import { bornIncarnation, unbornIncarnation } from '../src/coord/runBinding.js';
 import { heldFor } from '../src/coord/heldFor.js';
 import { runDriftPass, type DriftLaneDeps } from '../src/coord/driftLane.js';
-import { claimantsOfSession, openRunsClaimedBy, runsTouching, UnreadableSeries } from '../src/coord/bindingReads.js';
+import { claimantsOfSession, openRunsClaimedBy, runsTouching } from '../src/coord/bindingReads.js';
 import { mkTmp } from './tmpHelpers.js';
-import { okSiblings, openClaimantsOf, parentOfSession } from './coordReadHelpers.js';
+import { okSiblings, parentOfSession } from './coordReadHelpers.js';
 
 const BORN = 1_700_000_000_000;
 const store = (): CoordStore =>
@@ -44,7 +44,7 @@ describe('the readers take the worker\'s incarnation (ARCH-62)', () => {
     const b = open(s, 'prog-b', 'coord-2');
     s.setSession(b, 'demo-w');
     expect(parentOfSession(s, 'demo-w', inc)).toBe('coord-2');
-    expect(openClaimantsOf(s, 'demo-w', inc)).toEqual(['coord-2', 'coord-1']);
+    expect(claimantsOfSession(s, 'demo-w', inc)).toEqual(['coord-2', 'coord-1']);
     expect(okSiblings(s.openRunsForSession('demo-w', undefined, inc)).map((r) => r.id)).toEqual([a, b]);
   });
 
@@ -52,11 +52,11 @@ describe('the readers take the worker\'s incarnation (ARCH-62)', () => {
     const s = store();
     const { stale, fresh } = recycled(s, true);
     expect(parentOfSession(s, 'demo-w', inc)).toBeNull();
-    expect(openClaimantsOf(s, 'demo-w', inc)).toEqual([]);
+    expect(claimantsOfSession(s, 'demo-w', inc)).toEqual([]);
     expect(okSiblings(s.openRunsForSession('demo-w', undefined, inc))).toEqual([]);
     // Without an incarnation the readers keep the id-string rule (a coordinator, a manual workspace).
     expect(parentOfSession(s, 'demo-w')).toBe('coord-gone');
-    expect(openClaimantsOf(s, 'demo-w', unbornIncarnation('demo-w', 'not-a-child'))).toEqual(['coord-gone']);
+    expect(claimantsOfSession(s, 'demo-w', unbornIncarnation('demo-w', 'not-a-child'))).toEqual(['coord-gone']);
     expect([stale, fresh].length).toBe(2);
   });
 
@@ -148,15 +148,58 @@ describe('the folded readers, asked through bindingReads (ARCH-62 slice 2)', () 
     s.setSession(a, 'demo-w');
     const b = open(s, 'prog-b', 'demo-w');
     finish(s, a);
-    expect(runsTouching(s, 'demo-w').map((r) => r.id)).toEqual([a, b]);
-    expect(runsTouching(s, 'nobody')).toEqual([]);
+    expect(runsTouching(s, 'demo-w')).toMatchObject({ ok: true, runs: [{ id: a }, { id: b }] });
+    expect(runsTouching(s, 'nobody')).toEqual({ ok: true, runs: [] });
   });
 
-  it('a series the process cannot represent throws, never reads as an empty list', () => {
+  it('runsTouching answers a series the process cannot represent as a named failure, never an empty walk', () => {
     const bad = { bindingRunsOf: () => ({ ok: false as const, detail: 'id out of range' }) };
+    expect(runsTouching(bad, 'x')).toEqual({ ok: false, detail: 'runsTouching: id out of range' });
+  });
+
+  it('claimantsOfSession throws on a worker row it cannot prove, never reads as an empty list', () => {
+    const bad = { runsNamingSession: () => ({ ok: false as const, kind: 'run-unreadable' as const, detail: 'id out of range' }) };
     expect(() => claimantsOfSession(bad, 'x')).toThrow('id out of range');
-    expect(() => runsTouching(bad, 'x')).toThrow('id out of range');
-    expect(() => runsTouching(bad, 'x')).toThrow(UnreadableSeries);
+  });
+
+  // Ruling (a): `openClaimantsOf`'s scope exactly. The session's WORKER rows decide it; a run it CLAIMS (here one whose id
+  // is beyond 2^53) neither enters the answer nor fails it. Red on the fold over `bindingRunsOf` (it threw).
+  it('claimantsOfSession reads the worker rows only: a claimed run beyond 2^53 neither widens nor fails it', () => {
+    const s = store();
+    const a = open(s, 'prog-a', 'coord-x');
+    s.setSession(a, 'demo-w');
+    const own = open(s, 'prog-own', 'demo-w');
+    s.db.prepare('UPDATE runs SET id = ? WHERE id = ?').run(2n ** 53n + 1n, own);
+    expect(claimantsOfSession(s, 'demo-w')).toEqual(['coord-x']);
+    expect(claimantsOfSession(s, 'coord-x')).toEqual([]);
+    const solo = store();
+    const big = open(solo, 'prog-big', 'coord-big');
+    solo.db.prepare('UPDATE runs SET id = ? WHERE id = ?').run(2n ** 53n + 1n, big);
+    expect(claimantsOfSession(solo, 'coord-big')).toEqual([]);
+  });
+
+  // Ruling (a): heldFor, when the whole series cannot be represented but the worker rows prove a parent, answers with that
+  // parent, as `parentOfSession` let it before the fold. Red on the fold (it threw `heldFor: ...`).
+  it('heldFor falls back to the proven parent when the series read fails', async () => {
+    const s = store();
+    const a = open(s, 'prog-a', 'coord-1');
+    s.setSession(a, 'demo-w');
+    s.db.prepare('UPDATE runs SET coordProject = ? WHERE id = ?').run('p', a);
+    const own = open(s, 'prog-own', 'demo-w');
+    s.db.prepare('UPDATE runs SET id = ? WHERE id = ?').run(2n ** 53n + 1n, own);
+    expect(s.bindingRunsOf('demo-w').ok).toBe(false);
+    const verdict = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: a } as never, [], BORN);
+    expect(verdict).toEqual({ kind: 'released', parent: 'coord-1', runId: a, reason: 'parent-not-live' });
+  });
+
+  it('heldFor still fails when the series read fails and no parent is proven', async () => {
+    const s = store();
+    const a = open(s, 'prog-a', 'coord-1');
+    s.setSession(a, 'demo-w');
+    finish(s, a);
+    const own = open(s, 'prog-own', 'demo-w');
+    s.db.prepare('UPDATE runs SET id = ? WHERE id = ?').run(2n ** 53n + 1n, own);
+    await expect(heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: a } as never, [], BORN)).rejects.toThrow(/^heldFor: /);
   });
 });
 
