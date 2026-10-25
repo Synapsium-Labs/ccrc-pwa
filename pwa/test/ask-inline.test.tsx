@@ -40,7 +40,9 @@ vi.mock('react-virtuoso', async () => {
   };
 });
 
+const watchers: Array<() => void> = [];
 afterEach(() => {
+  for (const stop of watchers.splice(0)) stop();
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -95,6 +97,27 @@ function mount(o: { status?: 'idle' | 'busy'; events?: ChatEvent[]; row?: FleetS
 
 /** A frame, so every timer the ask's arrival starts (the focus move, about 16 ms on) has run. */
 const frame = async (): Promise<void> => act(async () => { await new Promise((r) => setTimeout(r, 60)); });
+
+/** R102: records every `focusin` that lands inside the inline card from now on. After a send this client initiates, the
+ *  next screen assigns no focus, so none may fire here until the operator re-engages; focus a reused row node RETAINS
+ *  fires no event, which is why the oracle is this record and not `activeElement` alone. Stopped by `afterEach`. */
+function watchCardFocus(): { seen: () => string[] } {
+  const seen: string[] = [];
+  const on = (e: Event): void => {
+    const t = e.target instanceof Element ? e.target : null;
+    if (t !== null && t.closest('[data-ask-surface="inline"]') !== null) seen.push(`${t.tagName} ${t.textContent?.slice(0, 30) ?? ''}`);
+  };
+  document.addEventListener('focusin', on, true);
+  watchers.push(() => document.removeEventListener('focusin', on, true));
+  return { seen: () => seen };
+}
+
+/** R102: the focus after this client's answer is either the node it was on right after the answer (a reused row may keep
+ *  it) or the page body (a row that left the DOM drops it there); never a node the next screen assigned it to. */
+function expectNoRefocus(w: { seen: () => string[] }, atAnswer: Element | null, what: string): void {
+  expect(w.seen(), `${what}: no focus or focusin was assigned inside the card`).toEqual([]);
+  expect([atAnswer, document.body], `${what}: focus is where the answer left it, or on the body`).toContain(document.activeElement);
+}
 
 const cards = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('[data-ask-surface]')];
 const dialogs = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('[role="dialog"]')];
@@ -282,9 +305,19 @@ const nextScreen = (): Dialog => ({
     '  4. Chat about this'].join('\n'),
 });
 const QUESTION_2 = 'Should tracing be on from the first deploy?';
+/** Aged question 2 of fixture 1: the envelope gone, the pane's other rows, the transcript's copy of the question. */
+const agedQuestion2 = (): Dialog => {
+  const q2 = HOOK_QUESTIONS[1]!;
+  return {
+    ...askFixture(2).dialog!, id: 'dlg-a2-q2', selectedIndex: 1,
+    options: [...q2.options.map((o, i) => ({ index: i + 1, label: o.label, description: o.description })),
+      { index: q2.options.length + 1, label: 'Type something.' }, { index: q2.options.length + 2, label: 'Chat about this' }],
+    ask: { question: q2.question, header: q2.header, multiSelect: false, options: q2.options.map((o) => ({ ...o })) },
+  };
+};
 
 describe('the keys survive a screen change inside the card (D-6326)', () => {
-  it('after a key answers a question in the card, the next question takes the keys without a click', async () => {
+  it('after a key answers a question in the card, the next question takes no focus and a digit sends nothing (R102)', async () => {
     media(true);
     const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: nextScreen() });
     const { arrive } = mount();
@@ -292,18 +325,18 @@ describe('the keys survive a screen change inside the card (D-6326)', () => {
     arrive(1);
     const first = opt(card(), /^Redis/);
     act(() => first.focus());
-    await act(async () => { key(first, '1'); });
+    const watch = watchCardFocus();
+    const at: { node: Element | null } = { node: null };
+    await act(async () => { key(first, '1'); at.node = document.activeElement; });
     await frame();
     expect(answer).toHaveBeenCalledWith(ID, askFixture(1).dialog!.id, 1);
     expect(within(card()).getByText(QUESTION_2), 'question 2 is in the card').toBeInTheDocument();
-    // The row that held focus left the DOM with question 1: focus must be in the card again, with no click.
-    const active = document.activeElement as HTMLElement;
-    expect(card().contains(active), 'focus is inside the card').toBe(true);
-    expect(active).toBe(opt(card(), /^Yes/));
+    // The row that held focus left the DOM with question 1. R102: a send this client initiated released the keyboard, so
+    // question 2 takes no focus (before R102 it took the highlighted row, and the next digit answered it).
+    expectNoRefocus(watch, at.node, 'question 2');
     answer.mockReturnValue(new Promise(() => {}));
-    key(document.activeElement!, '2');
-    expect(answer).toHaveBeenCalledTimes(2);
-    expect(answer).toHaveBeenLastCalledWith(ID, 'dlg-a2', 2);
+    key(document.activeElement ?? document.body, '2');
+    expect(answer, 'a digit sends nothing').toHaveBeenCalledTimes(1);
   });
 
   it('a screen change takes no focus back from the composer the operator moved to after the key answer', async () => {
@@ -359,7 +392,7 @@ describe('a keyboard engagement ends with its ask (D-6326)', () => {
 describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
   const reviewDialog = (): Dialog => askFixture(8).dialog!;
 
-  it('a digit whose answer brings the review leaves focus on the review\'s highlighted row, and a next key acts', async () => {
+  it('a digit whose answer brings the review takes no focus on the review, and a next digit sends nothing (R102)', async () => {
     // Premises: the desk; fixture 1's envelope up; the answer's `next` is the review (review 917 F1's shape).
     media(true);
     const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: reviewDialog() });
@@ -368,21 +401,20 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
     arrive(1);
     const first = opt(card(), /^Redis/);
     act(() => first.focus());
-    await act(async () => { key(first, '1'); });
+    const watch = watchCardFocus();
+    const at: { node: Element | null } = { node: null };
+    await act(async () => { key(first, '1'); at.node = document.activeElement; });
     await frame();
     expect(answer).toHaveBeenCalledTimes(1);
-    const submit = opt(card(), /^Submit answers/);
-    expect(submit, 'premise: the review is mounted').toBeInTheDocument();
-    expect(card().contains(document.activeElement), 'focus is back inside the card on the review').toBe(true);
-    expect(document.activeElement, 'on the review\'s highlighted row').toBe(submit);
+    expect(opt(card(), /^Submit answers/), 'premise: the review is mounted').toBeInTheDocument();
+    expectNoRefocus(watch, at.node, 'the review');
     answer.mockReturnValue(new Promise(() => {}));
-    key(document.activeElement!, '1');
-    expect(answer, 'a key on the review acts').toHaveBeenCalledTimes(2);
-    expect(answer).toHaveBeenLastCalledWith(ID, askFixture(8).dialog!.id, 1);
+    key(document.activeElement ?? document.body, '1');
+    expect(answer, 'a digit on the review sends nothing').toHaveBeenCalledTimes(1);
   });
 
-  it('← from the review back to a question leaves focus inside the card on the question\'s row, and a key acts', async () => {
-    // Premises: the review is up with its envelope; ← inside the card moves the pane's tab, and `next` is question 1.
+  it('← from the review back to a question takes no focus on the question, and a digit sends nothing (R102)', async () => {
+    // Premises: the review is up with its envelope; ← inside the card moves the pane's tab (a send), and `next` is question 1.
     media(true);
     const tab = vi.spyOn(api, 'answerDialogTab').mockResolvedValueOnce({ ok: true, next: askFixture(1).dialog! });
     const { arrive } = mount();
@@ -390,15 +422,16 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
     arrive(8);
     const submit = opt(card(), /^Submit answers/);
     act(() => submit.focus());
-    await act(async () => { key(submit, 'ArrowLeft'); });
+    const watch = watchCardFocus();
+    const at: { node: Element | null } = { node: null };
+    await act(async () => { key(submit, 'ArrowLeft'); at.node = document.activeElement; });
     await frame();
     expect(tab).toHaveBeenCalledTimes(1);
     expect(within(card()).getByText(QUESTION), 'premise: the question is back').toBeInTheDocument();
-    expect(card().contains(document.activeElement), 'focus is back inside the card on the question').toBe(true);
-    expect(document.activeElement, 'on the question\'s highlighted row').toBe(opt(card(), /^Redis/));
+    expectNoRefocus(watch, at.node, 'the question');
     const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
-    key(document.activeElement!, '2');
-    expect(answer, 'a key on the question acts').toHaveBeenCalledWith(ID, askFixture(1).dialog!.id, 2);
+    key(document.activeElement ?? document.body, '2');
+    expect(answer, 'a digit sends nothing').not.toHaveBeenCalled();
   });
 
   it('an ask that replaces an engaged one in the same batch as the clear takes no focus from the page body', async () => {
@@ -520,18 +553,7 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
 // ONE ask per generation, because its pane dialog id changes per screen; a plain menu is its own ask per screen.
 describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
   const reviewDialog = (): Dialog => askFixture(8).dialog!;
-  /** Aged question 2 of fixture 1: the envelope gone, the pane's other rows, the transcript's copy of the question. */
-  const agedQuestion2 = (): Dialog => {
-    const q2 = HOOK_QUESTIONS[1]!;
-    return {
-      ...askFixture(2).dialog!, id: 'dlg-a2-q2', selectedIndex: 1,
-      options: [...q2.options.map((o, i) => ({ index: i + 1, label: o.label, description: o.description })),
-        { index: q2.options.length + 1, label: 'Type something.' }, { index: q2.options.length + 2, label: 'Chat about this' }],
-      ask: { question: q2.question, header: q2.header, multiSelect: false, options: q2.options.map((o) => ({ ...o })) },
-    };
-  };
-
-  it('an aged question\'s digit whose answer brings the review leaves focus on the review\'s highlighted row, and a key acts', async () => {
+  it('an aged question\'s digit whose answer brings the review takes no focus on the review, and a next digit sends nothing (R102)', async () => {
     // Premises: the desk; fixture 2 (no envelope, the transcript's copy) up; the answer's `next` is the review (P1).
     media(true);
     const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: reviewDialog() });
@@ -541,18 +563,18 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     expect(store.getState().ask, 'premise: no envelope').toBeNull();
     const first = opt(card(), /^Redis/);
     act(() => first.focus());
-    await act(async () => { key(first, '1'); });
+    const watch = watchCardFocus();
+    const at: { node: Element | null } = { node: null };
+    await act(async () => { key(first, '1'); at.node = document.activeElement; });
     await frame();
-    const submit = opt(card(), /^Submit answers/);
-    expect(submit, 'premise: the review is mounted').toBeInTheDocument();
-    expect(card().contains(document.activeElement), 'focus is inside the card on the aged review').toBe(true);
-    expect(document.activeElement, 'on the review\'s highlighted row').toBe(submit);
+    expect(opt(card(), /^Submit answers/), 'premise: the review is mounted').toBeInTheDocument();
+    expectNoRefocus(watch, at.node, 'the aged review');
     answer.mockReturnValue(new Promise(() => {}));
-    key(document.activeElement!, '1');
-    expect(answer, 'a key on the aged review acts').toHaveBeenCalledTimes(2);
+    key(document.activeElement ?? document.body, '1');
+    expect(answer, 'a digit on the aged review sends nothing').toHaveBeenCalledTimes(1);
   });
 
-  it('← from an aged review back to its question leaves focus on the question\'s row, and a key acts', async () => {
+  it('← from an aged review back to its question takes no focus on the question, and a digit sends nothing (R102)', async () => {
     // Premises: the review is up, then the envelope clears (the aged copy of the same ask); ← inside the card moves the
     // pane's tab and `next` is the question with its transcript copy.
     media(true);
@@ -564,33 +586,40 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     expect(store.getState().ask, 'premise: no envelope').toBeNull();
     const submit = opt(card(), /^Submit answers/);
     act(() => submit.focus());
-    await act(async () => { key(submit, 'ArrowLeft'); });
+    const watch = watchCardFocus();
+    const at: { node: Element | null } = { node: null };
+    await act(async () => { key(submit, 'ArrowLeft'); at.node = document.activeElement; });
     await frame();
     expect(tab).toHaveBeenCalledTimes(1);
     expect(within(card()).getByText(QUESTION), 'premise: the question is back').toBeInTheDocument();
-    expect(card().contains(document.activeElement), 'focus is inside the card on the aged question').toBe(true);
-    expect(document.activeElement, 'on the question\'s highlighted row').toBe(opt(card(), /^Redis/));
+    expectNoRefocus(watch, at.node, 'the aged question');
     const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
-    key(document.activeElement!, '2');
-    expect(answer, 'a key on the aged question acts').toHaveBeenCalledTimes(1);
+    key(document.activeElement ?? document.body, '2');
+    expect(answer, 'a digit sends nothing').not.toHaveBeenCalled();
   });
 
-  it('an aged question\'s digit whose answer brings another question, with the focused row gone, keeps focus in the card', async () => {
+  it('an aged question\'s digit whose answer brings another question, with the focused row gone, takes no focus and a digit sends nothing (R102)', async () => {
     // Premises: fixture 2 up; the operator focuses its THIRD row and answers it; question 2 has two options, so that row's
     // node does not exist on the next screen (review 932's P2 passed only because the first row's node was reused).
     media(true);
-    vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: agedQuestion2() });
+    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: agedQuestion2() });
     const { arrive } = mount();
     await frame();
     arrive(2);
     const third = opt(card(), /^None/);
     act(() => third.focus());
-    await act(async () => { key(third, '3'); });
+    const watch = watchCardFocus();
+    const at: { node: Element | null } = { node: null };
+    await act(async () => { key(third, '3'); at.node = document.activeElement; });
     await frame();
     expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
     expect(third.isConnected, 'premise: the focused row\'s node left the DOM').toBe(false);
-    expect(card().contains(document.activeElement), 'focus is inside the card on question 2').toBe(true);
-    expect(document.activeElement, 'on question 2\'s highlighted row').toBe(opt(card(), /^Yes/));
+    // R102: the focus the lost row dropped to the body is not taken back by the next screen.
+    expectNoRefocus(watch, at.node, 'aged question 2');
+    expect(document.activeElement, 'the focus the lost row dropped is on the body').toBe(document.body);
+    answer.mockReturnValue(new Promise(() => {}));
+    key(document.activeElement ?? document.body, '2');
+    expect(answer, 'a digit sends nothing').toHaveBeenCalledTimes(1);
   });
 
   it('a clear and a byte-identical envelope in ONE batch, with a screen change, take no focus from the page body', async () => {
@@ -617,20 +646,24 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     expect(card().contains(document.activeElement), 'the new ask took focus from the body').toBe(false);
   });
 
-  it('an aged ask engaged by a key, then a drop and a reconnect whose first frames are the screen and ask_cleared, keeps the keys', async () => {
+  it('an aged ask answered by a key, then a drop and a reconnect whose first frames are the screen and ask_cleared, takes no focus (R102)', async () => {
     // Premises (R1): fixture 2 (no envelope) engaged by a key, the answer in flight; the socket drops (`onState`'s own
     // writes: the connection has not spoken, the pane's menu is lowered); the new connection speaks with the next question
     // and, as the server's per-connection ask record always makes it for an ask with no envelope, `ask_cleared`: all in one
-    // batch. The store held no envelope for that frame to clear, so it is the same ask.
+    // batch. The store held no envelope for that frame to clear, so it is the same ask. R102: the key was an ANSWER this
+    // client sent, which released the keyboard at once, so neither the reconnect nor the next question takes focus.
     media(true);
-    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(2);
     expect(store.getState().ask, 'premise: no envelope is held').toBeNull();
     const first = opt(card(), /^Redis/);
     act(() => first.focus());
+    const watch = watchCardFocus();
+    const at: { node: Element | null } = { node: null };
     key(first, '1');
+    at.node = document.activeElement;
     act(() => (document.activeElement as HTMLElement | null)?.blur());
     act(() => store.setState({ conn: 'down', askFrameSeen: false, dialog: null }));
     act(() => store.setState({ conn: 'open' }));
@@ -640,7 +673,9 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     });
     await frame();
     expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
-    expect(card().contains(document.activeElement), 'R1: focus is inside the card after the reconnect').toBe(true);
+    expectNoRefocus(watch, at.node, 'the reconnect');
+    key(document.activeElement ?? document.body, '2');
+    expect(answer, 'a digit sends nothing').toHaveBeenCalledTimes(1);
   });
 
   it('an aged ask\'s menu that vanishes and returns in ONE batch (dialog_cleared, then a screen) is a new ask and takes no focus from the body', async () => {
@@ -666,19 +701,23 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     expect(card().contains(document.activeElement), 'the returned menu took focus from the body').toBe(false);
   });
 
-  it('a hooked ask\'s menu that vanishes for one poll and returns as the next question keeps the keys', async () => {
+  it('a hooked ask\'s menu that vanishes for one poll and returns as the next question, after a key answer, takes no focus (R102)', async () => {
     // Premises (R2): fixture 1's envelope up and engaged by a key, the answer in flight; focus falls to the body; a poll
     // sees no menu (`dialog_cleared`, its own batch) and the next poll the next question. The hook's envelope never went, and
-    // for a hooked ask the hook is the lifecycle authority, so the pane's blink is not the ask's end.
+    // for a hooked ask the hook is the lifecycle authority, so the pane's blink is not the ask's end. R102: the key was an
+    // answer this client sent, which released the keyboard, so the question that returns takes no focus.
     media(true);
-    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(1);
     const section = card();
     const first = opt(section, /^Redis/);
     act(() => first.focus());
+    const watch = watchCardFocus();
+    const at: { node: Element | null } = { node: null };
     key(first, '1');
+    at.node = document.activeElement;
     act(() => (document.activeElement as HTMLElement | null)?.blur());
     act(() => store.getState().apply({ type: 'dialog_cleared' }));
     await frame();
@@ -687,27 +726,35 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     await frame();
     expect(card(), 'premise: the same card carries question 2').toBe(section);
     expect(within(section).getByText(QUESTION_2), 'premise: question 2 is in the card').toBeInTheDocument();
-    expect(card().contains(document.activeElement), 'R2: focus is back inside the card after the transient clear').toBe(true);
+    expectNoRefocus(watch, at.node, 'the question after the transient clear');
+    key(document.activeElement ?? document.body, '2');
+    expect(answer, 'a digit sends nothing').toHaveBeenCalledTimes(1);
   });
 
-  it('an aged ask\'s same screen sent again releases nothing: the next screen still takes the keys back', async () => {
-    // Premises: engaged on fixture 2 by a key; the SAME dialog frame arrives again (a repeat, no clear); focus falls to the
-    // body; the next aged question arrives. A repeated frame is no lifecycle event.
+  it('an aged ask\'s same screen sent again after a key answer, then the next question, takes no focus (R102)', async () => {
+    // Premises: fixture 2 answered by a key; the SAME dialog frame arrives again (a repeat, no clear); focus falls to the
+    // body; the next aged question arrives. A repeated frame is no lifecycle event, and R102's release at the send (not
+    // the frame) is what leaves the next question without focus.
     media(true);
-    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(2);
     const first = opt(card(), /^Redis/);
     act(() => first.focus());
+    const watch = watchCardFocus();
+    const at: { node: Element | null } = { node: null };
     key(first, '1');
+    at.node = document.activeElement;
     act(() => store.getState().apply({ type: 'dialog', dialog: askFixture(2).dialog! }));
     await frame();
     act(() => (document.activeElement as HTMLElement | null)?.blur());
     act(() => store.getState().apply({ type: 'dialog', dialog: agedQuestion2() }));
     await frame();
     expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
-    expect(card().contains(document.activeElement), 'the repeat released the engagement: focus stayed on the body').toBe(true);
+    expectNoRefocus(watch, at.node, 'the next aged question');
+    key(document.activeElement ?? document.body, '2');
+    expect(answer, 'a digit sends nothing').toHaveBeenCalledTimes(1);
   });
 
   it('a plain menu replaced by another plain menu takes no focus from the page body: each menu is its own ask', async () => {
@@ -751,6 +798,71 @@ describe('one lifecycle generation in the ask identity (R69 F1, F4)', () => {
     store.getState().apply({ type: 'dialog', dialog: askFixture(2).dialog! });
     store.getState().apply({ type: 'dialog_cleared' });
     expect(epoch(), 'dialog_cleared with no envelope held counts one').toBe(2);
+  });
+});
+
+// R102 (the operator's ruling after review 944): at the desk, a send THIS client initiates ends the keyboard's engagement at
+// that moment, in the same event, and the next screen takes no automatic focus. These are the release's cases; the fence and
+// the explicit re-entry (R105, R106) follow in the cases below.
+describe('a send this client initiates releases the keyboard (R102)', () => {
+  it('an answer whose request never resolves, with the next screen arriving by a socket frame, takes no focus and a digit sends nothing', async () => {
+    // Premises: aged fixture 2 (no envelope); a digit answers and its request stays pending; the pane's next question reaches
+    // the store as a frame, which clears the in-flight marker (`[dialogId, closed]`) and re-enables the rows. The aged copy's
+    // rows are keyed by position, so question 2 REUSES the node that holds focus.
+    media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(2);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    const watch = watchCardFocus();
+    const at: { node: Element | null } = { node: null };
+    key(first, '1');
+    at.node = document.activeElement;
+    expect(answer).toHaveBeenCalledTimes(1);
+    act(() => store.getState().apply({ type: 'dialog', dialog: agedQuestion2() }));
+    await frame();
+    expect(within(card()).getByText(HOOK_QUESTIONS[1]!.question), 'premise: question 2 is in the card').toBeInTheDocument();
+    expectNoRefocus(watch, at.node, 'the frame-delivered question');
+    key(document.activeElement ?? document.body, '2');
+    expect(answer, 'a digit sends nothing').toHaveBeenCalledTimes(1);
+  });
+
+  it('a digit refused in the gap (the connection is not live) releases nothing: ArrowDown still moves the highlight', async () => {
+    // Premises: fixture 1 up with focus on its first row; the socket drops, so the held surface is read-only and `claim()`
+    // refuses every send. A refused claim initiated nothing, so it releases nothing; a later ArrowDown is not fenced.
+    // Green before and after R102 (a regression guard against releasing before the refusals).
+    media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(1);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    act(() => store.setState({ conn: 'down', askFrameSeen: false, dialog: null }));
+    key(first, '2');
+    expect(answer, 'the gap refuses the digit').not.toHaveBeenCalled();
+    key(first, 'ArrowDown');
+    expect(document.activeElement, 'ArrowDown still moves the highlight to the next row').toBe(opt(card(), /^In-process/));
+  });
+
+  it('on the phone (coarse pointer, below 900) a key answer still moves focus to the next screen\'s row, as before', async () => {
+    // Premises: no desk, no fine pointer: the Sheet. The release is the desk's alone (`useDesk()` at the seam), so the
+    // phone's own per-hook engagement keeps carrying focus to the next question. Green before and after R102.
+    media(false);
+    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValueOnce({ ok: true, next: nextScreen() });
+    const { arrive } = mount();
+    await frame();
+    arrive(1);
+    const sheet = dialogs()[0]!;
+    const first = opt(sheet, /^Redis/);
+    act(() => first.focus());
+    await act(async () => { key(first, '1'); });
+    await frame();
+    expect(answer).toHaveBeenCalledTimes(1);
+    expect(within(dialogs()[0]!).getByText(QUESTION_2), 'premise: question 2 is in the Sheet').toBeInTheDocument();
+    expect(document.activeElement, 'the next question\'s highlighted row took focus').toBe(opt(dialogs()[0]!, /^Yes/));
   });
 });
 
