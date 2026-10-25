@@ -1894,7 +1894,7 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
 ## Deviations found
 
 Every entry carries the number the controller issued (D-6410 to D-6431 at plan time, D-6804 to D-6839 for wave 1, D-6862
-to D-6907 for wave 2). A further departure found while executing is written `D-TBD-<slug>` and named in the task's
+to D-6907 and D-6921 for wave 2). A further departure found while executing is written `D-TBD-<slug>` and named in the task's
 report.
 
 ### D-6410 — `end_turn:false` is continued upstream, never `pause_turn`
@@ -3166,3 +3166,20 @@ report.
 - **Cost if wrong:** The waiver caps `ccd/ccrc` at +550 for this branch, so a later fix round that adds more than 10
   code lines reds the growth check until a waiver covers the new delta, and the debt stands until consolidation W5 pays
   it down (the file's `payer`). A merge-base that moves can change the measured delta.
+
+### D-6921 — the settings census classes the bridge start's forwarded auth endpoint
+
+- **Departs from:** Main's settings census (centralised update wave 24, #1237, D-6598), which reds its C5 row on any
+  `${CCRC_…:-}` read in `ccd/ccrc` that its `ENV_ONLY` table does not class
+  (`server/test/ccrc-settings-census.test.ts`). The plan predates the census and names no entry for Task 11.
+- **What changed:** Task 11's `_codex_bridge_prepare` (`ccd/ccrc:13803`) reads `${CCRC_CODEX_AUTH_BASE:-}`, to forward
+  it to a direct lane's bridge only when its caller set it. `ENV_ONLY` gains one `fixture-path` entry for that name;
+  the class's comment now reads "a path, endpoint or permission", and the file's two counts name D-6921's one beside
+  D-6588's 42. No other row changes.
+- **Why:** The name is Stage 1's test endpoint for the auth library (`ccd/ccgpt-auth.py`'s `auth_base`, loopback
+  only). A test points it at a loopback fake and a live box never sets it, so it is a fixture's value, never a box's
+  setting, which is what `ENV_ONLY` holds. The census reached this branch with #1237 in the second merge of main, after
+  the wave's gate list was drawn, and the pull request's test selection ran it.
+- **Cost if wrong:** If a live box ever needs another auth endpoint, the class is wrong and the name moves to
+  `CCRC_SETTINGS` with a `_ccrc_knob` read. Until then the entry names one read the census now sees, and C5 still reds
+  the next name nobody classed.

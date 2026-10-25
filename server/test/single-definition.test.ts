@@ -9221,7 +9221,8 @@ describe('codex bridge Stage 2 Task 10: the bridge file names and the lane mode 
     const files = shipped();
     expect(files, 'CONTROL: the corpus holds the writer').toContain('deploy/models-op.mjs');
     for (const name of BRIDGE_FILE_NAMES) {
-      const quoted = new RegExp(`['"]${name.replace(/\./g, '\\.')}['"]`);
+      const escaped = name.replace(/[.*+?^$()|[\]\\{}]/g, (c) => `\\${c}`);
+      const quoted = new RegExp(`['"]${escaped}['"]`);
       const holders = files.filter((f) => quoted.test(readFileSync(path.join(ccrcRoot, f), 'utf8'))).sort();
       expect(holders, name).toEqual(['deploy/models-op.mjs']);
     }
@@ -9231,7 +9232,8 @@ describe('codex bridge Stage 2 Task 10: the bridge file names and the lane mode 
     expect(start, 'laneManifest must be findable').toBeGreaterThan(-1);
     const body = src.slice(start, src.indexOf('\n}\n', start));
     for (const name of BRIDGE_FILE_NAMES) {
-      const quoted = new RegExp(`['"]${name.replace(/\./g, '\\.')}['"]`, 'g');
+      const escaped = name.replace(/[.*+?^$()|[\]\\{}]/g, (c) => `\\${c}`);
+      const quoted = new RegExp(`['"]${escaped}['"]`, 'g');
       expect((body.match(quoted) ?? []).length, `${name} in laneManifest`).toBe(1);
       expect((src.match(quoted) ?? []).length, `${name} in models-op.mjs`).toBe(1);
     }
