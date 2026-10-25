@@ -325,7 +325,9 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // The gap (D-6325, review 843 F3): the connection is not live, so the held surface is read-only in what it SHOWS as well
   // as at the send. Every control that sends is disabled by this flag, which is NOT part of `locked`: `locked` also
   // refuses the dismissal, and the gap must still hide. The Other field and its row stay as they are (the operator's own
-  // text, its focus and a phone keyboard survive), and so does a pick-several box (a local tick, not a send).
+  // text, its focus and a phone keyboard survive), and so does a pick-several box (a local tick, not a send). After a send
+  // (R106), a click in the gap does not lift the fence: the Other field may take focus there, but its keys stay fenced until a
+  // new click or Go to question after the reconnect.
   const gap = !live;
   const sending = useRef(false);
   useLayoutEffect(() => {
