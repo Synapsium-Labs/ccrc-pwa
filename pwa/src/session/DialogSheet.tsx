@@ -336,6 +336,10 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
     if (closed) return false;
     if (sending.current) return false;
     sending.current = true;
+    // R102: a send THIS client initiates at the desk ends the keyboard's engagement here, in the same event and before any
+    // await. Refused claims returned above and released nothing; a multiSelect `toggle` is no claim. `desk` and `open` are
+    // declared below: `claim` only ever runs after a render.
+    if (desk && open) engagement.release();
     return true;
   };
 

@@ -74,6 +74,8 @@ export interface AskEngagement {
   readonly engaged: () => boolean;
   /** A key was handled inside the inline card: engage with the ask showing now (the owner's layout effect compares). */
   readonly engage: () => void;
+  /** R102: a send this client initiated at the desk (`DialogSheet`'s `claim()`): end the engagement now, in the same event. */
+  readonly release: () => void;
 }
 
 /**
@@ -89,6 +91,8 @@ export interface AskEngagement {
 export function useAskEngagement(identity: string | null): AskEngagement {
   const held = useRef<string | null>(null);
   const now = useRef<string | null>(identity);
+  // R102: raised by `release()` (the fence that stops the keys in the card is added with it, below).
+  const fenced = useRef(false);
   // ONE release: whenever the identity is not the one engaged (a different ask, a replacement, a clear), the engagement is
   // gone for good, in the commit that shows the new identity and before any focus timer reads it. Comparing at read time
   // instead would let a replaced ask regain it when byte-identical content came back (A -> B -> A, no clear between).
@@ -112,6 +116,10 @@ export function useAskEngagement(identity: string | null): AskEngagement {
     engaged: () => held.current !== null,
     engage: () => {
       held.current = now.current;
+    },
+    release: () => {
+      held.current = null;
+      fenced.current = true;
     },
   }));
   return owner;
