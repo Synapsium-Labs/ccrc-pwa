@@ -6237,6 +6237,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     within 60 s. The fix belongs in a wave; it is reported to the operator.
   `STATUS 2026-10-25T20:25:43Z fleet=v0.0.699 server=v0.0.699 health=v0.0.699 newest=v0.0.701 intent=*:dev/auto=off`
   `pin=None link=<versions>/v0.0.699 backups=fleet:165M/server:9270M disk=fleet:101G/work:351G/server:21G`
+- **2026-10-25 21:25 UTC — v0.0.702 released (five merges: CI, tests, a docs ledger and one ccd collect fix, #1513); no
+  move; no anomaly.** The soak is untouched, and the orphan-tree lane wrote no record in the hour.
+  `STATUS 2026-10-25T21:25:40Z fleet=v0.0.699 server=v0.0.699 health=v0.0.699 newest=v0.0.702 intent=*:dev/auto=off`
+  `pin=None link=<versions>/v0.0.699 backups=fleet:165M/server:9270M disk=fleet:101G/work:355G/server:21G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
