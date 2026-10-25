@@ -1268,6 +1268,7 @@ describe('the other send paths are held while an inline ask is up (R89)', () => 
     expect(prompt, 'a click on the disabled Retry makes no request').toHaveBeenCalledTimes(1);
     expect(screen.getByText('resend me'), 'the failed bubble keeps its text').toBeInTheDocument();
     expect(store.getState().pending.map((p) => p.state), 'and stays failed: no optimistic duplicate, nothing queued').toEqual(['failed']);
+    expect(screen.getByRole('button', { name: 'Discard' }), 'Discard is not a send and stays enabled').toBeEnabled();
 
     clearAsk(store);
     expect(cards(), 'premise: the card is gone').toHaveLength(0);
@@ -1278,6 +1279,21 @@ describe('the other send paths are held while an inline ask is up (R89)', () => 
     await tick();
     expect(prompt, 'one click makes exactly one request').toHaveBeenCalledTimes(2);
     expect(prompt.mock.calls[1]!.slice(0, 2), 'with the original text').toEqual([ID, 'resend me']);
+  });
+
+  it('Discard on a failed bubble stays enabled while fixture 7 is up, and removes the bubble without a request', async () => {
+    media(true);
+    const { arrive, prompt, store } = mount();
+    await failedSend(prompt, 'resend me', OFFLINE);
+    arrive(7);
+    card();
+    expect(retryBtn(), 'premise: Retry is held').toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Discard' }), 'Discard is enabled while the card is up').toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    await tick();
+    expect(store.getState().pending, 'the pending is gone').toEqual([]);
+    expect(screen.queryByText('resend me'), 'and so is its bubble').toBeNull();
+    expect(prompt, 'and no request was made').toHaveBeenCalledTimes(1);
   });
 
   it.each([
