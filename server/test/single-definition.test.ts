@@ -8606,8 +8606,8 @@ describe('one change latch (ARCH-76): changeLatch (D-5861)', () => {
 // guard field of its own. Named by `consolidationCensus.ts`'s `laneClockFields` and `singleFlightGuards`, and for a clock
 // nobody named by `laneClockShapes` (a numeric field compared as `now - this.X < CONST`). What stays is reported by name:
 // W4's two lanes (`stopDoneSweeping`/`lastStopDoneSweep`, `hibernateSweeping`/`lastHibernateSweep`), the tick's own guard,
-// `dispatchNow`'s run and its one follow-up (a trigger with no cadence), and `DelegationLane#lastSweepAt` while another series
-// holds that class. Each counts only down. The census is loaded inside the rows, so this block adds no import line.
+// `dispatchNow`'s run and its one follow-up (a trigger with no cadence). `DelegationLane#lastSweepAt` is the `delegation` row
+// (the series that held that class has merged). Each counts only down. The census is loaded inside the rows, so this block adds no import line.
 describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () => {
   const text = (xs: ReadonlyArray<{ text: string }>): string[] => xs.map((x) => x.text.trim());
 
@@ -8653,6 +8653,11 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
       'private dispatchAgain = false;', 'private dispatchRun: Promise<DispatchRunResult> | null = null;',
       'private hibernateSweeping = false;', 'private stopDoneSweeping = false;', 'private ticking = false;',
     ]);
+  });
+
+  it('the delegation lane keeps no clock or guard of its own: its cadence and single flight are the `delegation` row', async () => {
+    const { laneClockReported } = await import('./consolidationCensus.js');
+    expect(laneClockReported(), 'DelegationLane#lastSweepAt is a row of LANE_SCHEDULE').toEqual([]);
   });
 
   it('no throttle reads the wall clock: every row of LANE_SCHEDULE is monotonic (OA-C4, ruled (a) on #803), 0 wall rows', async () => {

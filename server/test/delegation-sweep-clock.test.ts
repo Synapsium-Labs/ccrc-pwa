@@ -83,22 +83,22 @@ describe('the delegation lane\'s cadence (D-5862)', () => {
     expect(w.reads()).toBe(2);
   });
 
-  it('WALL (today): a wall clock stepped back by an hour holds the lane for the step, though a whole cadence of real time passed', async () => {
+  it('a wall clock stepped back by an hour does not hold the lane: a whole cadence of real time passed, so it runs (monotonic since D-5862)', async () => {
     const w = world();
     at(NOW); w.plant();
     await w.call();
     wallStep(-HOUR);
     at(Date.now() + DELEGATION_SWEEP_MS);                             // a whole cadence of real time passes
     await w.call();
-    expect(w.reads()).toBe(1);
+    expect(w.reads()).toBe(2);
   });
 
-  it('WALL (today): a wall clock stepped forward by an hour runs the lane early, with no real time passed', async () => {
+  it('a wall clock stepped forward by an hour does not run the lane early: no real time passed (monotonic since D-5862)', async () => {
     const w = world();
     at(NOW); w.plant();
     await w.call();
     wallStep(HOUR);
     await w.call();
-    expect(w.reads()).toBe(2);
+    expect(w.reads()).toBe(1);
   });
 });
