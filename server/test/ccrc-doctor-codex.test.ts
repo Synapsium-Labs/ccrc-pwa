@@ -17,6 +17,7 @@ import { createStore } from '../../ccd/history/store.mjs';
 import { HEALTH_COUNTERS, HEALTH_META, HEALTH_WORDS, RECOVERY_STALL_TICKS, SCHEMA_VERSION, deriveHealth, historyPaths, formatOpMarker, procStartOf, bootIdOf } from '../../ccd/history/lib.mjs';
 import { PRELOADS, preloadOptions } from './historyHelpers.js';
 import { plantDirectLane, plantRunningBridge, writeBridgeRecord } from './ccrc-doctorFixture.js';
+import { runBridgeDriver } from './codexBridgeFixture.js';
 import { SW_DENYLIST_DEFAULT, swJs } from './swFixtures.js';
 import { SERVER_CAPS_LEASE_S } from '../../shared/api.js';
 import { installDoctorHooks, here, REPO, CCRC_SRC, CHECKS_SRC, BASH, realPath, Result, installCcrc, writeChecks, stubBin, stub, unstub, linkReal, stubNode, RosterEntry, UPSTREAM, writeRoster, writeRawRoster, entry, binDir, shq, writeCcrcEnv, stubLaunchctl, unitDirOf, unitFileOf, writeUnitFile, removeUnitFile, containedPath, doctorEnv, OOM_DROPIN, plantOomPolicy, DOCTOR_DEADLINE_BIN, runDoctorBounded, runDoctor, DH_INSTALLER, installerEvents, installerHook, plantHookRegistration, plantSpoolDir, BT_PY_ARM, healthy, PY, describeCodex, itCodex, writeLaneModels, renderLane, startedJson, lanePorts, editRosterRow, healthyCodexBox, broken, tableNames, lineFor, anyVerdictFor, HEALTHY_SKIPS, noRunnerBugLine, plantSession, checksDecl, FixCodexCase, AGED, laneFileText, SHARED_PORT_REFUSAL, FIX_TRIPWIRES, plantHistoryShim, historyBox } from './ccrc-doctorFixture.js';
@@ -5453,6 +5454,118 @@ describeCodex('ccrc doctor: codex, a direct lane\'s rows (codex bridge Stage 2, 
     expect(p.stdout).toContain('install: codex tiers: codex-a bridge: restarted — it was running code this install replaced');
     expect(p.stdout).toContain('install: codex tiers: codex-c shim: restarted — it was running code this install replaced');
     expect(p.stdout).toContain('install: codex tiers: 3 codex lane(s) — 2 restarted, 0 left as they were, 0 not restarted');
+  });
+});
+
+
+// ── codex bridge Stage 2, Task 17: D3, the doctor warns on an unexplained name ──────────────────────────────────────
+// A `direct` lane's bridge lists every name `known.py` does not explain in its stats file's `unexplained` (Task 5);
+// the doctor reads that list, and only that list, from the file `lane.json`'s `bridgeFiles.stats` names, and prints
+// each name bounded by stats.py's NAME_RE (else `unrecognised`), never a value. The stats files here are written by
+// the real `Stats` through the bridge driver, except the one case that must hold what no `Stats` would write.
+describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge Stage 2, Task 17)', () => {
+  const laneDir = (home: string, id: string): string => join(home, '.ccrc', 'codex', id);
+  /** `lane.json`'s `bridgeFiles.stats`, read back: the name is `laneManifest`'s, never spelled here. */
+  const statsFile = (home: string, id: string): string =>
+    join(laneDir(home, id), (JSON.parse(readFileSync(join(laneDir(home, id), 'lane.json'), 'utf8')) as
+      { bridgeFiles: Record<string, string> }).bridgeFiles['stats']);
+  const DRIFT = (id: string, n: number, list: string): string =>
+    `WARN codex: ${id}: the bridge met ${n} name(s) it does not know: ${list} (names only, never content). Each is a protocol change to read; it is explained by adding it to ccd/codexbridge/known.py in a reviewed change.`;
+  const DRIFT_FIX = '  remedy: read what each name is in the upstream Codex source (openai/codex), then explain it by adding it to ccd/codexbridge/known.py in a reviewed change; the rollout of that change restarts the bridge, whose start drops an explained name from the list, and this line clears — ccrc never explains a name for you';
+  /** Lane `id`'s stats file as its bridge writes it: the real `Stats`, each name counted through `name()`, then a
+   *  forced flush (tmp, fchmod 0600, fsync, rename). */
+  const writeStats = async (home: string, id: string, names: ReadonlyArray<readonly [string, string]>): Promise<string> => {
+    const file = statsFile(home, id);
+    const ops = [
+      { op: 'stats-open', path: file, lane: id },
+      ...names.map(([family, name]) => ({ op: 'stats-call', method: 'name', args: [family, name] })),
+      { op: 'stats-call', method: 'flush', kwargs: { force: true } },
+    ];
+    const r = await runBridgeDriver(home, { ops }, {}, { timeoutMs: 60_000 });
+    expect(r.timedOut, r.stderr).toBe(false);
+    const lines = driverLines(r.stdout);
+    expect(lines.map((l) => l['op']), `${r.stdout}\n${r.stderr}`).toEqual(ops.map((o) => o.op));
+    for (const l of lines) expect(l['raised'], JSON.stringify(l)).toBeUndefined();
+    expect(lines[lines.length - 1]['result']).toBe(true);
+    return file;
+  };
+  const KNOWN_EVENT = 'response.metadata';   // in known.KNOWN's eventType family (codex-bridge-count-stats.test.ts)
+  const NEW_EVENT = 'response.fx_new_event';
+
+  it('a direct lane with an unexplained event type warns, naming it', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-warn-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    const file = await writeStats(home, 'codex-a', [['eventType', KNOWN_EVENT], ['eventType', NEW_EVENT], ['eventType', NEW_EVENT]]);
+    expect((JSON.parse(readFileSync(file, 'utf8')) as { unexplained: unknown }).unexplained).toEqual({ eventType: [NEW_EVENT] });
+    const r = runDoctor(home);
+    const re = new RegExp(`^${reEsc(DRIFT('codex-a', 1, `eventType:${NEW_EVENT}`))}$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe(DRIFT_FIX);
+    expect(r.stdout.split('\n').filter((l) => /the bridge met/.test(l))).toHaveLength(1);
+    expect(r.stdout).not.toContain(KNOWN_EVENT);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('a known name never warns', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-known-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    const file = await writeStats(home, 'codex-a', [['eventType', KNOWN_EVENT], ['eventType', KNOWN_EVENT]]);
+    const doc = JSON.parse(readFileSync(file, 'utf8')) as { names: Record<string, unknown>; unexplained: unknown };
+    expect(doc.names['eventType']).toEqual({ [KNOWN_EVENT]: 2 });
+    expect(doc.unexplained).toEqual({});
+    const r = runDoctor(home);
+    expect(r.stdout).not.toMatch(/the bridge met/);
+    expect(lineFor(r.stdout, 'codex') ?? '', r.stdout).toMatch(/^PASS codex: .*codex-a \(ports \d+\/\d+, direct mode, /);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // A lane switched back to litellm keeps its bridge files (Task 13), and with them the unexplained list its bridge
+  // left: no bridge runs there, so the list is no drift of that lane's.
+  it('a litellm lane has no drift row', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-litellm-', ['codex-a', 'codex-b']);
+    plantDirectLane(home, 'codex-b');
+    for (const id of ['codex-a', 'codex-b']) await writeStats(home, id, [['eventType', NEW_EVENT]]);
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(new RegExp(`^${reEsc(DRIFT('codex-b', 1, `eventType:${NEW_EVENT}`))}$`, 'm'));
+    expect(r.stdout).not.toMatch(/codex-a: the bridge met/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // No `Stats` writes a name outside NAME_RE, so this file is planted by hand: each name or family outside it prints
+  // `unrecognised`, once, and no byte of any of them reaches the output.
+  it('the WARN line holds names only', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-bounded-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    const file = statsFile(home, 'codex-a');
+    const sentinels = [
+      'fx-sentinel value with spaces',
+      `fx-sentinel-${'x'.repeat(64)}`,
+      'fx-sentinel\nWARN codex: forged line',
+      'fx-sëntinel',
+      'fx-sentinel\u0000nul',
+    ];
+    writeFileSync(file, `${JSON.stringify({
+      version: 1, lane: 'codex-a',
+      unexplained: { eventType: ['response.fx_ok', ...sentinels, 42], 'fx-sentinel family': ['response.fx_two'] },
+    })}\n`, { mode: 0o600 });
+    chmodSync(file, 0o600);
+    const r = runDoctor(home);
+    const list = 'eventType:response.fx_ok, eventType:unrecognised, unrecognised:response.fx_two';
+    const re = new RegExp(`^${reEsc(DRIFT('codex-a', 3, list))}$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe(DRIFT_FIX);
+    expect(r.stdout).not.toMatch(/sentinel|sëntinel|forged/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // One bound, two spellings that cannot drift: the bridge bounds every name it writes by stats.py's NAME_RE, and the
+  // doctor bounds every name it prints by the same pattern text.
+  it('the doctor bounds a name by stats.py\'s NAME_RE, spelled the same', () => {
+    const py = [...readFileSync(join(REPO, 'ccd', 'codexbridge', 'stats.py'), 'utf8').matchAll(/^NAME_RE = re\.compile\(r"([^"]+)"\)$/gm)];
+    const sh = [...readFileSync(CHECKS_SRC, 'utf8').matchAll(/^\s*local name_re='([^']+)'$/gm)];
+    expect(py).toHaveLength(1);
+    expect(sh).toHaveLength(1);
+    expect(sh[0][1]).toBe(py[0][1]);
   });
 });
 

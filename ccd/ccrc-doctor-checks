@@ -7312,6 +7312,7 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
       "set the lane's upstream back to \"backend\" (or remove it) in \$HOME/.ccrc/accounts.json by hand, then run 'ccrc doctor --fix' (it re-renders lane.json from the roster), then: ccrc codex start $id — ccrc never edits a roster row for you"
   fi
   _dr_cx_bridge_files "$id"
+  [ "$mode" != direct ] || _dr_cx_drift "$id"
   if [ "$models" -ne 1 ]; then DRX_LANE_WORDS+=", model state unread"; return 0; fi
   # The lane's model state, ONLY through models-op's `show`.
   ans="$(_models_node show --file "$roster" --id "$id" 2>/dev/null)"
@@ -7641,6 +7642,54 @@ _dr_cx_bridge_files() {   # <id>
         "chmod 600 $p"
     fi
   done
+  return 0
+}
+
+# THE DRIFT ROW (codex-bridge Stage 2, Task 17; spec §2.9 D3, D-6418), a
+# direct lane's only: a litellm lane runs no bridge, and the stats file a lane
+# switched back keeps is no drift of its. The bridge lists every name
+# `ccd/codexbridge/known.py` does not explain in its stats file's
+# `unexplained` (Task 5), and drops one a reviewed change explains when it
+# next starts, so the list is the whole question: a name is explained only in
+# code, and this row never asks known.py itself. The file is lane.json's
+# `bridgeFiles.stats`, read as `_dr_cx_bridge_files` reads it, and only a
+# regular file is opened (a symlink or another kind of file is that row's
+# FAIL; a FIFO is never opened). NAMES ONLY, NEVER CONTENT: jq hands over each
+# family and name on a line of its own, or an empty line for a non-string or
+# a string holding a control character (so no name spans two lines), and each
+# is printed only when it matches `name_re`, else `unrecognised`. `name_re` is
+# stats.py's NAME_RE, the bound the bridge writes every name under, in the same
+# pattern text (ccrc-doctor-codex.test.ts pins the two equal), matched under
+# LC_ALL=C so a range never reaches past ASCII. An absent file, or one that is
+# not a version-1 document with an `unexplained` object, has no drift row.
+_dr_cx_drift() {   # <id>
+  local id="$1" dir lj sf p i fam name LC_ALL=C
+  local name_re='^[A-Za-z0-9_.:/-]{1,64}$'
+  local -a got=() listed=()
+  local -A seen=()
+  dir="$(_codex_lane_dir "$id")"; lj="$dir/lane.json"
+  [ -f "$lj" ] || return 0
+  sf="$(jq -r 'if type == "object" and (.bridgeFiles | type) == "object" and (.bridgeFiles.stats | type) == "string"
+      then .bridgeFiles.stats else "" end' "$lj" 2>/dev/null)" || return 0
+  [[ "$sf" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$sf" != . ] && [ "$sf" != .. ] || return 0
+  p="$dir/$sf"
+  [ -f "$p" ] && [ ! -L "$p" ] || return 0
+  mapfile -t got < <(jq -r 'def line: if type == "string" and (explode | all(. >= 32 and . != 127)) then . else "" end;
+      if type == "object" and .version == 1 and (.unexplained | type) == "object"
+      then .unexplained | to_entries[] | (.key | line) as $f
+        | (.value | if type == "array" then .[] else empty end) | $f, line
+      else empty end' "$p" 2>/dev/null)
+  for (( i = 0; i + 1 < ${#got[@]}; i += 2 )); do
+    fam="${got[$i]}"; name="${got[$((i + 1))]}"
+    [[ "$fam" =~ $name_re ]] || fam=unrecognised
+    [[ "$name" =~ $name_re ]] || name=unrecognised
+    [ -z "${seen[$fam:$name]:-}" ] || continue
+    seen[$fam:$name]=1
+    listed+=("$fam:$name")
+  done
+  [ "${#listed[@]}" -gt 0 ] || return 0
+  _dr_cx_warn "$id: the bridge met ${#listed[@]} name(s) it does not know: $(_dr_cx_join ', ' "${listed[@]}") (names only, never content). Each is a protocol change to read; it is explained by adding it to ccd/codexbridge/known.py in a reviewed change." \
+    "read what each name is in the upstream Codex source (openai/codex), then explain it by adding it to ccd/codexbridge/known.py in a reviewed change; the rollout of that change restarts the bridge, whose start drops an explained name from the list, and this line clears — ccrc never explains a name for you"
   return 0
 }
 
