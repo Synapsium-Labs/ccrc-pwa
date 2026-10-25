@@ -115,6 +115,10 @@ export interface DiskMeasured {
 export interface DiskHolder {
   readonly label: string;
   readonly bytes: number;
+  /** Inodes the holder holds (#1411), absent from an older server or a sweep that predates the count. */
+  readonly inodes?: number;
+  /** True when `inodes` is a lower bound: the sweep's walk did not finish. */
+  readonly inodesPartial?: true;
 }
 
 /** The orphan-worktree lane's census in the `disk` block (spec §2.3, D-6631): how many linked worktrees no registry row
@@ -262,7 +266,9 @@ export function readDiskHealth(x: unknown): DiskHealth | null {
     for (const h of v['holders']) {
       const bytes = isObj(h) ? num(h['bytes']) : null;
       if (!isObj(h) || typeof h['label'] !== 'string' || bytes === null) return null;
-      holders.push({ label: h['label'], bytes });
+      const inodes = h['inodes'] === undefined ? null : num(h['inodes']);
+      if (h['inodes'] !== undefined && inodes === null) return null;
+      holders.push({ label: h['label'], bytes, ...(inodes === null ? {} : { inodes }), ...(h['inodesPartial'] === true ? { inodesPartial: true as const } : {}) });
     }
   }
   const orphanTrees = readOrphanTrees(v['orphanTrees']);

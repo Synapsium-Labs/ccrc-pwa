@@ -295,9 +295,9 @@ describe('the PR sweep: single flight that abandons a stuck run', () => {
     const sweep = (): Promise<void> => (w as unknown as Any)['sweepPr']!();
     return { w, settle, sweep };
   }
-  const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await new Promise((res) => setImmediate(res)); };
   // A run that SHOULD start is waited for, not counted in ticks: a loaded CI shard can take more than twenty
-  // turns to reach the runner. A run that should NOT start keeps the fixed flush, which is all a negative can wait for.
+  // turns to reach the runner. A sweep that should NOT start a run is AWAITED instead: its promise settles when the
+  // lane has decided, so the negative asserts after the decision, never after a guessed number of turns.
   const until = async (cond: () => boolean): Promise<void> => {
     for (let i = 0; i < 5000 && !cond(); i++) await new Promise((res) => setImmediate(res));
   };
@@ -308,7 +308,7 @@ describe('the PR sweep: single flight that abandons a stuck run', () => {
     void r.sweep(); await until(() => r.settle.length === 1);
     expect(r.settle).toHaveLength(1);
     at(NOW + STUCK - 1);
-    void r.sweep(); await flush();
+    await r.sweep();
     expect(r.settle, 'a run younger than the ceiling was abandoned').toHaveLength(1);
     at(NOW + STUCK);
     void r.sweep(); await until(() => r.settle.length === 2);
@@ -318,13 +318,12 @@ describe('the PR sweep: single flight that abandons a stuck run', () => {
   it('an abandoned run settling late does not clear the newer run, and the newer one still holds the lane', async () => {
     const r = rigPr();
     at(NOW);
-    void r.sweep(); await until(() => r.settle.length === 1);
+    const first = r.sweep(); await until(() => r.settle.length === 1);
     at(NOW + STUCK);
-    void r.sweep(); await until(() => r.settle.length === 2);
-    expect(r.settle).toHaveLength(2);
-    r.settle[0]!({ ran: true, code: 0, stdout: '', stderr: '' }); await flush();      // the abandoned run settles late
+    void r.sweep(); await vi.waitFor(() => expect(r.settle).toHaveLength(2));
+    r.settle[0]!({ ran: true, code: 0, stdout: '', stderr: '' }); await first;        // the abandoned run settles late
     at(NOW + STUCK + 150_000);                                             // past the cadence, short of the newer run's ceiling
-    void r.sweep(); await flush();
+    await r.sweep();
     expect(r.settle, 'the late run cleared the newer run\'s flight').toHaveLength(2);
   });
 });

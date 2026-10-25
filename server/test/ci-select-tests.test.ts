@@ -430,7 +430,7 @@ describe('end-to-end with testmap.mjs: what a real map selects', () => {
     const sel = selectTests({
       map, changes: [{ status: 'A', path: 'server/test/new.test.ts', symlink: false }],
       liveTests: ['server/test/new.test.ts', 'server/test/plain.test.ts', 'server/test/single-definition.test.ts'],
-      existsAt: () => true,
+      existsAt: (_ref, p) => p !== 'server/test/new.test.ts',
     });
     expect(sel).toEqual({
       mode: 'selected',
@@ -470,12 +470,22 @@ describe('end-to-end with testmap.mjs: what a real map selects', () => {
     expect(sel).toEqual({ mode: 'selected', tests: [{ file: 'server/test/dep.test.ts', rule: 2, path: 'server/test/dep.test.ts' }] });
   });
 
-  it('a rebuild whose trace for a test never arrived leaves it out of the map, and rule 1 selects it', () => {
+  it('a rebuild whose trace for a test never arrived leaves it out of the map, and select answers full: it was never traced (uncertain means full)', () => {
     const map = buildMap(SHA_A, { format: RECORDS_FORMAT, baseline, tests: { 'server/test/traced.test.ts': split() } });
     const sel = selectTests({
       map, changes: [], liveTests: ['server/test/traced.test.ts', 'server/test/lost.test.ts'], existsAt: () => true,
     });
-    expect(sel).toEqual({ mode: 'selected', tests: [{ file: 'server/test/lost.test.ts', rule: 1, path: 'server/test/lost.test.ts' }] });
+    expect(sel.mode).toBe('full');
+    expect((sel as { reason: string }).reason).toMatch(/uncertain.*server\/test\/lost\.test\.ts \(never traced\)/);
+  });
+
+  it('a test added since the map (absent at its sha) is still rule 1, in a stamped map too', () => {
+    const map = buildMap(SHA_A, { format: RECORDS_FORMAT, baseline, tests: { 'server/test/traced.test.ts': split() } });
+    const sel = selectTests({
+      map, changes: [{ status: 'A', path: 'server/test/added.test.ts', symlink: false }],
+      liveTests: ['server/test/added.test.ts', 'server/test/traced.test.ts'], existsAt: (_ref, p) => p !== 'server/test/added.test.ts',
+    });
+    expect(sel).toEqual({ mode: 'selected', tests: [{ file: 'server/test/added.test.ts', rule: 1, path: 'server/test/added.test.ts' }] });
   });
 
   it('a renamed test file (D old + A new): the new name is selected by rule 1, the old map entry is ignored', () => {
@@ -494,7 +504,7 @@ describe('end-to-end with testmap.mjs: what a real map selects', () => {
       ],
       // live tests come from HEAD, where the old name no longer exists
       liveTests: ['server/test/new-name.test.ts', 'server/test/other.test.ts'],
-      existsAt: () => true,
+      existsAt: (_ref, p) => p !== 'server/test/new-name.test.ts',
     });
     expect(sel).toEqual({
       mode: 'selected',

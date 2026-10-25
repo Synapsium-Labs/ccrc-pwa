@@ -23,8 +23,8 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readMap } from './testmap.mjs';
-import { readChanges, liveTestFiles, unsafeTestPaths, gitExistsAt, selectTests, RULE_NAMES } from './select-tests.mjs';
-import { planShards, toMatrix, PROFILES } from './shards.mjs';
+import { readChanges, liveTestFiles, unsafeTestPaths, gitExistsAt, selectTests, gitStaleChanges, selectIgnoringUncertainty, uncertainTests, RULE_NAMES } from './select-tests.mjs';
+import { planShards, planTraceBatch, toMatrix, PROFILES } from './shards.mjs';
 
 /** @typedef {import('./testmap.mjs').TestMap} TestMap */
 /** @typedef {import('./select-tests.mjs').Selection} Selection */
@@ -131,7 +131,9 @@ function liveTestsOrRefuse(repoDir) {
  * @param {string | undefined} mapFile
  * @param {string[]} liveTests every live server test file (already computed
  *   by the caller, so this never re-reads it)
- * @returns {{ selection: Selection, map: TestMap | null }}
+ * @returns {{ selection: Selection, map: TestMap | null, retrace?: { selection: Selection, uncertain: ReturnType<typeof uncertainTests> } }}
+ *   `retrace` is what a REFRESH traces from: the selection without its uncertain-means-full answer, and the uncertain
+ *   records themselves.
  */
 function computeRealSelection(repoDir, mapFile, liveTests) {
   try {
@@ -160,12 +162,65 @@ function computeRealSelection(repoDir, mapFile, liveTests) {
     }
     const changes = readChanges(repoDir, map.sha, 'HEAD');
     const existsAt = gitExistsAt(repoDir);
-    const selection = selectTests({ map, changes, liveTests, existsAt });
-    return { selection, map };
+    const staleChanges = gitStaleChanges(repoDir, map);
+    const selection = selectTests({ map, changes, liveTests, existsAt, staleChanges });
+    const retrace = {
+      selection: selectIgnoringUncertainty({ map, changes, liveTests, existsAt }),
+      uncertain: uncertainTests({ map, liveTests, staleChanges, existsAt }),
+    };
+    return { selection, map, retrace };
   } catch (e) {
     const msg = e && e.message ? String(e.message) : String(e);
     return { selection: { mode: 'full', reason: `selector error: ${msg || 'unknown error'}` }, map: null };
   }
+}
+
+/** The commit time of `sha` in ms, 0 when git does not know it (so an unknown stamp sorts as the oldest).
+ *  @param {string} repoDir @param {string} sha */
+function commitTimeMs(repoDir, sha) {
+  try {
+    return Number(execFileSync('git', ['show', '-s', '--format=%ct', sha], { cwd: repoDir, stdio: 'pipe' }).toString().trim()) * 1000 || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** A refresh's trace candidates in the order to trace them: first the tests that are new, changed or never traced
+ *  (a record for them is the most missing), then everything else oldest-stamp first, so each refresh moves the
+ *  stalest records. Selected tests and uncertain ones, once each.
+ *  @param {string} repoDir @param {TestMap} map @param {string[]} liveTests
+ *  @param {Selection} selection @param {Array<{ file: string, tracedAt: string | null }>} uncertain @returns {string[]} */
+export function refreshPriority(repoDir, map, liveTests, selection, uncertain) {
+  /** @type {Set<string>} */
+  const first = new Set();
+  /** @type {Set<string>} */
+  const all = new Set();
+  if (selection.mode === 'full') {
+    for (const f of liveTests) all.add(f);
+  } else {
+    for (const t of selection.tests) { all.add(t.file); if (t.rule === 1) first.add(t.file); }
+  }
+  for (const u of uncertain) { all.add(u.file); if (u.tracedAt === null) first.add(u.file); }
+  const times = new Map();
+  const stampTime = (f) => {
+    const at = map.tests[f]?.tracedAt ?? map.sha;
+    if (!times.has(at)) times.set(at, commitTimeMs(repoDir, at));
+    return times.get(at);
+  };
+  const rank = (f) => (first.has(f) ? 0 : 1);
+  return [...all].sort((a, b) => rank(a) - rank(b) || (rank(a) === 1 ? stampTime(a) - stampTime(b) : 0) || (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** The map's age warning: the map is older than `thresholdMs` (3 h: the refresh is hourly, so a map this old means
+ *  refreshes are not finishing). Aged by the time it was built, else by its commit's time. Null when it is not old.
+ *  @param {TestMap} map @param {number} nowMs @param {number} commitMs the map commit's time, 0 when unknown
+ *  @param {number} [thresholdMs] @returns {string | null} */
+export function staleMapWarning(map, nowMs, commitMs, thresholdMs = 3 * 3_600_000) {
+  const builtMs = map.builtAt ? Date.parse(map.builtAt) : commitMs;
+  if (!builtMs) return null;
+  const age = nowMs - builtMs;
+  if (age <= thresholdMs) return null;
+  return `the map is ${Math.floor(age / 3_600_000)} h old (older than ${thresholdMs / 3_600_000} h): the hourly refresh is not finishing, so selection leans on a stale map`;
 }
 
 /** Markdown for `$GITHUB_STEP_SUMMARY` (spec §6.4's reason table, plus the
@@ -173,15 +228,16 @@ function computeRealSelection(repoDir, mapFile, liveTests) {
  *  this table alone). In shadow mode `selection` is still the REAL,
  *  would-be selection — only the matrices differ (contract: "the table is
  *  the would-be selection and the matrices carry ALL live tests").
- *  @param {{ event: string, inputMode: string|undefined, decide: ModeDecision, testsOut: string, shadowFlag: boolean, fallback: string, selection: Selection|null, mapSha: string, fileCount: number }} args
+ *  @param {{ event: string, inputMode: string|undefined, decide: ModeDecision, testsOut: string, shadowFlag: boolean, fallback: string, selection: Selection|null, mapSha: string, fileCount: number, notes?: string[] }} args
  *  @returns {string} */
-function renderSummary({ event, inputMode, decide, testsOut, shadowFlag, fallback, selection, mapSha, fileCount }) {
+function renderSummary({ event, inputMode, decide, testsOut, shadowFlag, fallback, selection, mapSha, fileCount, notes = [] }) {
   const lines = ['## CI test selection', ''];
   lines.push(`- event: \`${event}\`${inputMode ? ` (input mode: \`${inputMode}\`)` : ''}`);
   lines.push(`- tests: \`${testsOut}\`${shadowFlag ? ' — shadow: matrices below carry ALL live tests' : ''}`);
   lines.push(`- trace: \`${decide.trace}\``);
   if (mapSha) lines.push(`- map: \`${mapSha}\``);
   if (fallback) lines.push(`- fallback reason: ${fallback}`);
+  for (const n of notes) lines.push(`- ${n}`);
   lines.push('');
   if (selection && selection.mode === 'selected') {
     if (selection.tests.length === 0) {
@@ -299,12 +355,12 @@ function main() {
       selectionResult = realSel.selection;
     }
   } else if (decide.trace === 'refresh') {
-    if (realSel.selection.mode === 'full') {
-      fallback = realSel.selection.reason;
-    } else {
-      mapSha = realSel.map.sha;
-      selectionResult = realSel.selection;
-    }
+    // A usable map is always REFRESHED, even when the change forces everything (a pipeline edit, a lockfile): the
+    // refresh is bounded, so the tests it cannot reach in one go are carried with their old stamp, and the build
+    // that replaced the whole map would be the unbounded trace this fix removes.
+    if (realSel.map) mapSha = realSel.map.sha;
+    if (realSel.retrace && realSel.retrace.selection.mode === 'selected') selectionResult = realSel.retrace.selection;
+    if (realSel.selection.mode === 'full') fallback = realSel.selection.reason;
   }
 
   const shadowFlag = testsOut === 'selected' && selectionMode === 'shadow';
@@ -321,12 +377,22 @@ function main() {
 
   /** @type {string[]} */
   let traceList;
+  /** @type {import('./shards.mjs').ShardPlan | null} */
+  let tracePlan = null;
+  /** @type {string[]} */
+  let deferred = [];
   if (decide.trace === 'none') {
     traceList = [];
   } else if (decide.trace === 'refresh') {
-    traceList = realSel.selection.mode === 'full'
-      ? [...liveTestsAll]
-      : realSel.selection.tests.map((t) => t.file);
+    // The candidates in priority order, as many as the trace shards' budget holds (planTraceBatch); the rest wait
+    // for the next refresh, carried in the map with the stamp they have.
+    const candidates = realSel.retrace
+      ? refreshPriority(repoDir, realSel.map, liveTestsAll, realSel.retrace.selection, realSel.retrace.uncertain)
+      : [...liveTestsAll];
+    ({ plan: tracePlan, batch: traceList, deferred } = planTraceBatch(candidates, durations ?? {}, {
+      shards: PROFILES.trace.max, budgetMs: PROFILES.trace.budgetMs, workers: PROFILES.trace.workers,
+      scale: PROFILES.trace.scale, defaultMs: PROFILES.trace.defaultMs,
+    }));
   } else {
     // rebuild: trace every live test (spec §5.3 / contract Task 9).
     traceList = [...liveTestsAll];
@@ -343,7 +409,8 @@ function main() {
   // no --shard, so the trace plan must always be a real partition (LPT at
   // defaultMs when no duration is known), never the fallback that hands every
   // shard every file plus a vitest `i/n`.
-  const tracePlan = planShards(traceList, durations ?? {}, PROFILES.trace);
+  // A refresh's plan came from planTraceBatch above, bounded.
+  tracePlan ??= planShards(traceList, durations ?? {}, PROFILES.trace);
 
   // What this run MEANT to trace, for map-build: a refresh writes every one of
   // these that left no record as unknown instead of carrying its old entry.
@@ -374,9 +441,25 @@ function main() {
     fallback,
   });
 
+  /** @type {string[]} */
+  const notes = [];
+  if (decide.trace === 'refresh') {
+    notes.push(`refresh: ${traceList.length} test(s) traced this run, bounded to ${PROFILES.trace.budgetMs / 60_000} min per trace shard`);
+    if (deferred.length > 0) notes.push(`deferred to a later refresh: ${deferred.length} test(s), carried with the stamp they have`);
+    if (traceList.length === 0 && deferred.length > 0) {
+      process.stdout.write(`::warning::no test fits one trace shard's ${PROFILES.trace.budgetMs / 60_000} min budget; ${deferred.length} deferred, nothing traced\n`);
+    }
+  }
+  const nowMs = opt.now ? Date.parse(opt.now) : Date.now();
+  const mapAge = realSel?.map ? staleMapWarning(realSel.map, nowMs, commitTimeMs(repoDir, realSel.map.sha)) : null;
+  if (mapAge) {
+    notes.push(`**warning: ${mapAge}**`);
+    process.stdout.write(`::warning::${mapAge}\n`);
+  }
+
   writeSummary(renderSummary({
     event, inputMode, decide, testsOut, shadowFlag, fallback,
-    selection: selectionResult, mapSha, fileCount: testFileList.length,
+    selection: selectionResult, mapSha, fileCount: testFileList.length, notes,
   }));
 }
 

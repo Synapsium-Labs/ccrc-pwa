@@ -23,7 +23,7 @@ import { readLiveState, readLiveStateMeasured } from './livestate.js';
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import { finishedAfter } from './coord/finished.js';
-import { readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
+import { foldHookStateRead, readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { readBoxText, sendPrompt } from './inject/send.js';
 import {
@@ -578,7 +578,7 @@ const APPROVAL_RULED_GRACE_MS = 10_000;
 
 /**
  * Polls the fleet: captures every registered pane to detect menu dialogs
- * (emitting `session:<id>` dialog / dialog_cleared messages on change), then
+ * (publishing each look on `pane:<id>` for the session's feed), then
  * emits 'fleet' on the bus only when the assembled JSON changed.
  *
  * In remote mode, every poll taken while actually connected also persists a
@@ -3343,8 +3343,12 @@ export class FleetWatcher {
           if (prev) next.set(r.id, prev);
           return;
         }
-        const hs = await readHookState(this.deps.io, this.deps.cfg.registryDir, r.id, r.uuid, now);
-        if (hs) next.set(r.id, hs);
+        // The raw read, folded here, is what `readHookState` is; the same raw read goes to the session's feed.
+        const raw = await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, r.id, r.uuid);
+        // `at` is when the read returned, not the sweep's `now`: a slow remote read is as fresh as its answer.
+        this.bus.emit(`hook:${r.id}`, { at: Date.now(), uuid: r.uuid, raw });
+        const hs = foldHookStateRead(raw, now);
+        if (hs.ok) next.set(r.id, hs.state);
       }),
     );
     this.hookStates = next;
@@ -8791,15 +8795,15 @@ export class FleetWatcher {
 
   /**
    * Capture each registered session's pane (dead panes capture as null); a menu
-   * pane parses to a dialog. Emit `dialog` when the id changed since last tick,
-   * `dialog_cleared` when a previously-reported dialog vanished. Returns the
-   * set of session ids with a dialog pending, for the fleet assembly.
+   * pane parses to a dialog; the look itself is published on `pane:<id>`. Acts
+   * when the dialog id changed since last tick or a reported dialog vanished.
+   * Returns the set of session ids with a dialog pending, for the fleet assembly.
    *
    * The id alone is the right gate HERE, unlike the per-session stream's
    * (`nextDialogFrame`): this sweep only ever sees the bare pane parse, and its
-   * `dialog` emission is consumed for the push notification and the fleet's
+   * dialog is consumed for the push notification and the fleet's
    * dialogPending flag — the open session's own stream owns the frame the client
-   * renders, and drops these (`sessionws.ts` onSessionMsg). Enrich the parse here
+   * renders (the feed reads the pane this sweep publishes). Enrich the parse here
    * and this gate needs the same upgrade path.
    *
    * `records` is `tick()`'s own registry read, passed in rather than fetched
@@ -8825,7 +8829,12 @@ export class FleetWatcher {
     // D-5925: the boot's snapshot of held rows, read before this tick's `sweepApprovals` can lapse any of them.
     if (!this.primed && !this.reseedLoaded) this.loadReseed();
     for (const r of recs) {
+      const paneAt = Date.now();
       const pane = await this.deps.tmux.capture(r.id);
+      // The look is published once for the session's feed (ARCH-52): an open session's stream reads the pane from here,
+      // not from a capture of its own. The `dialog` / `dialog_cleared` frames this sweep used to emit were dropped by
+      // every stream (it frames its own reading), so they are gone with the second copy.
+      this.bus.emit(`pane:${r.id}`, { at: paneAt, doneAt: Date.now(), pane });
       // Same capture feeds the statusline read — no extra tmux call. FOUR
       // conditions, four outcomes (D-2012, corrected by Finding 3 of the
       // fix round below — the three-outcome version this replaced treated
@@ -8988,7 +8997,6 @@ export class FleetWatcher {
             }
           }
           this.dialogIds.set(r.id, dialog.id);
-          this.bus.emit(`session:${r.id}`, { type: 'dialog', dialog });
           this.settlingAsks.delete(r.id);
           if (mayRaise) {
             // D-5290: the FIRST raise waits while the child's hookstate is not
@@ -9102,7 +9110,6 @@ export class FleetWatcher {
             console.warn(`ccrc-server: settling a cleared ask hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — a held row may remain orphaned in coord.db`);
           }
         }
-        this.bus.emit(`session:${r.id}`, { type: 'dialog_cleared' });
       }
     }
     // D-5925, spec §5.2 step 3: a child measured ABSENT from the listing (its `.uuid` gone, not a refused or

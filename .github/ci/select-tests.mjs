@@ -211,26 +211,97 @@ function affectedSet(change, existsAt, mapSha) {
 }
 
 /**
- * @param {{ map: TestMap, changes: Change[], liveTests: string[], existsAt: (ref: string, p: string) => boolean }} args
+ * UNCERTAIN means FULL (selection spec §6.3). A record is only as good as the commit it was traced at, and a bounded
+ * refresh carries the tests it did not retrace with their old stamp. A live test is uncertain when its record is older
+ * than a change that would select it — the change set between its `tracedAt` and the map's `sha`, `staleChanges` — or
+ * when it was never traced: it existed when the map was built and the map holds no record for it. A test added since
+ * the map is not uncertain; rule 1 selects it. A record at the map's own sha is never uncertain, and nor is one that
+ * rule 2 selects whatever changed (unknown, or reading `.git`). No change set for a stamp, a stamp that is not a
+ * commit select could diff, is uncertain too: nothing says the record is current.
+ * @param {{ map: TestMap, liveTests: string[], staleChanges?: Map<string, Change[]>, existsAt: (ref: string, p: string) => boolean }} args
+ * @returns {Array<{ file: string, why: string, tracedAt: string | null }>}
+ */
+export function uncertainTests({ map, liveTests, staleChanges, existsAt }) {
+  /** @type {Array<{ file: string, why: string, tracedAt: string | null }>} */
+  const out = [];
+  /** @type {Map<string, string[]>} */
+  const groups = new Map();
+  // Only a map that stamps its records can say a test was never traced: in a map from before stamping, a test
+  // missing from it is the old rule 1 (selected, not full).
+  const stamped = Object.values(map.tests).some((r) => r.tracedAt !== undefined);
+  for (const file of [...liveTests].sort()) {
+    if (!Object.prototype.hasOwnProperty.call(map.tests, file)) {
+      if (stamped && existsAt(map.sha, file)) out.push({ file, why: 'never traced', tracedAt: null });
+      continue;
+    }
+    const at = map.tests[file].tracedAt ?? map.sha;
+    if (at === map.sha) continue;
+    const g = groups.get(at);
+    if (g) g.push(file); else groups.set(at, [file]);
+  }
+  for (const [at, files] of groups) {
+    const changes = staleChanges?.get(at);
+    if (!changes) {
+      for (const file of files) out.push({ file, why: `no change set since ${at.slice(0, 12)}`, tracedAt: at });
+      continue;
+    }
+    const full = fullTrigger(changes, map.baseline);
+    if (full) {
+      for (const file of files) out.push({ file, why: `${full}, after it was traced`, tracedAt: at });
+      continue;
+    }
+    for (const t of selectAmong({ map, sha: at, changes, files, existsAt })) {
+      if (t.rule !== 2) out.push({ file: t.file, why: `${RULE_NAMES[t.rule]} ${t.path}, after it was traced`, tracedAt: at });
+    }
+  }
+  return out.sort((x, y) => (x.file < y.file ? -1 : x.file > y.file ? 1 : 0));
+}
+
+/**
+ * @param {{ map: TestMap, changes: Change[], liveTests: string[], existsAt: (ref: string, p: string) => boolean, staleChanges?: Map<string, Change[]> }} args
+ *   `staleChanges`: for each older stamp in the map, the changes from that commit to the map's `sha` (select.mjs
+ *   reads them). A record with an older stamp and no change set here is uncertain; a map from before stamping has
+ *   no older stamps.
  * @returns {Selection}
  */
-export function selectTests({ map, changes, liveTests, existsAt }) {
+export function selectTests({ map, changes, liveTests, existsAt, staleChanges }) {
   const full = fullTrigger(changes, map.baseline);
   if (full) return { mode: 'full', reason: full };
+  const uncertain = uncertainTests({ map, liveTests, staleChanges, existsAt });
+  if (uncertain.length > 0) {
+    const u = uncertain[0];
+    return { mode: 'full', reason: `uncertain: ${uncertain.length} test(s) whose record is older than a change to what it read, first ${u.file} (${u.why})` };
+  }
+  return { mode: 'selected', tests: selectAmong({ map, sha: map.sha, changes, files: liveTests, existsAt }) };
+}
 
+/** The selection a refresh retraces from: the full trigger and the per-file rules, but NOT the uncertain-means-full
+ *  answer — a refresh is what makes the uncertain records certain again, so it asks `uncertainTests` for them itself.
+ *  @param {{ map: TestMap, changes: Change[], liveTests: string[], existsAt: (ref: string, p: string) => boolean }} args
+ *  @returns {Selection} */
+export function selectIgnoringUncertainty({ map, changes, liveTests, existsAt }) {
+  const full = fullTrigger(changes, map.baseline);
+  if (full) return { mode: 'full', reason: full };
+  return { mode: 'selected', tests: selectAmong({ map, sha: map.sha, changes, files: liveTests, existsAt }) };
+}
+
+/** The per-file rules (spec §6.2) over `files`, for `changes` made since `sha` (the commit the records were traced at).
+ *  @param {{ map: TestMap, sha: string, changes: Change[], files: string[], existsAt: (ref: string, p: string) => boolean }} args
+ *  @returns {Array<{ file: string, rule: 1|2|3|4|5|6, path: string }>} */
+function selectAmong({ map, sha, changes, files, existsAt }) {
   // Precompute once per change, not once per test x change.
   const changed = [...changes].sort((a, b) => a.path.localeCompare(b.path));
   const changedByPath = new Map(changed.map((c) => [c.path, c]));
   const analyses = changed.map((c) => {
     if (c.status === 'M') return { change: c, Pa: [c.path], E: null };
-    const { Pa, E } = affectedSet(c, existsAt, map.sha);
+    const { Pa, E } = affectedSet(c, existsAt, sha);
     return { change: c, Pa, E };
   });
 
   /** @type {Array<{ file: string, rule: 1|2|3|4|5|6, path: string }>} */
   const selected = [];
 
-  for (const file of [...liveTests].sort()) {
+  for (const file of [...files].sort()) {
     const changedHere = changedByPath.get(file);
     const inMap = Object.prototype.hasOwnProperty.call(map.tests, file);
 
@@ -305,7 +376,7 @@ export function selectTests({ map, changes, liveTests, existsAt }) {
     }
   }
 
-  return { mode: 'selected', tests: selected };
+  return selected;
 }
 
 /** `live-tests [--repo DIR]`: `liveTestFiles` at HEAD, one path per line —
@@ -324,6 +395,26 @@ function liveTestsCli(args) {
     throw new Error(`select-tests.mjs live-tests: a live test path a list cannot carry: ${unsafe.map((p) => JSON.stringify(p)).join(', ')}`);
   }
   process.stdout.write(live.map((f) => `${f}\n`).join(''));
+}
+
+/** For each stamp older than the map's own sha, the changes from that commit to the map's sha: what a record traced
+ *  there has missed since. A stamp git cannot diff (not a commit here, or not an ancestor of the map's sha) gets no
+ *  entry, which `uncertainTests` reads as uncertain.
+ *  @param {string} repoDir @param {TestMap} map @returns {Map<string, import('./select-tests.mjs').Change[]>} */
+export function gitStaleChanges(repoDir, map) {
+  /** @type {Map<string, import('./select-tests.mjs').Change[]>} */
+  const out = new Map();
+  for (const rec of Object.values(map.tests)) {
+    const at = rec.tracedAt;
+    if (!at || at === map.sha || out.has(at)) continue;
+    try {
+      execFileSync('git', ['merge-base', '--is-ancestor', at, map.sha], { cwd: repoDir, stdio: 'pipe' });
+      out.set(at, readChanges(repoDir, at, map.sha));
+    } catch {
+      // no entry: uncertain
+    }
+  }
+  return out;
 }
 
 async function main() {
@@ -347,6 +438,7 @@ async function main() {
   const liveTests = liveTestFiles(repoDir, opt.to ?? 'HEAD');
   const selection = selectTests({
     map: mapResult.map, changes, liveTests, existsAt: gitExistsAt(repoDir),
+    staleChanges: gitStaleChanges(repoDir, mapResult.map),
   });
   console.log(JSON.stringify(selection));
 }

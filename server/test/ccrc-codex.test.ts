@@ -1723,7 +1723,8 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     expect(r.status, r.stderr).toBe(0);
     // `1 None`: the --setenv pair arrived, and the CALLER's environment did not.
     await eventually(() => fs.existsSync(log) && fs.readFileSync(log, 'utf8').includes('1 None'), 'the probe line in its log');
-    expect(sh('systemctl --user is-active probe.service').stdout.trim()).toBe('active');
+    // The supervisor writes `starting` first and `active` once the child exists.
+    await eventually(() => sh('systemctl --user is-active probe.service').stdout.trim() === 'active', 'the probe unit to read active');
     const pid = unitPid(home, 'probe.service');
     expect(pid).toBeGreaterThan(1);
     expect(sh('systemctl --user show -p MainPID --value probe.service').stdout.trim()).toBe(String(pid));

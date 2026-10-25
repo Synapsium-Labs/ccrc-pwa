@@ -10,7 +10,7 @@ import type { FleetIO } from '../src/io.js';
 import { localIO } from '../src/io.js';
 import { runTmpSweepCensusLane, newTmpSweepLaneState } from '../src/tmpSweepLane.js';
 import {
-  parseTmpSweepCensus, tmpSweepBudget, tmpSweepHolders, tmpSweepReceipts,
+  parseTmpSweepCensus, tmpSweepBudget, tmpSweepHolders, tmpSweepInodeBudget, tmpSweepReceipts,
   type TmpSweepCensus, type TmpSweepMoved, type TmpSweepSession,
 } from '../src/tmpSweep.js';
 import { MAIL_BODY_MAX_BYTES, MAIL_SUBJECT_MAX_BYTES } from '../../shared/api.js';
@@ -473,5 +473,122 @@ describe('runTmpSweepCensusLane', () => {
     expect(r.mailTo(WORKER)).toEqual([]);
     await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
     expect(r.mailTo(WORKER)).toHaveLength(1);
+  });
+});
+
+// ── inodes (#1411, D-6920): measured next to bytes, told once per episode, deleting nothing ────────────────
+const MI = 1_000_000;
+const inodeTop = [['mut-a', 3_400_000], ['mut-b', 200_000], ['mut-c', 90_000], ['mut-d', 40_000], ['mut-e', 9_000], ['mut-f', 1]] as const;
+const overInodes = (over: Partial<TmpSweepSession> = {}): TmpSweepSession => session({
+  bytes: 2 * GIB, inodes: 3_700_000, inodesAtLeast: 3_700_000,
+  inodeTop: inodeTop.map(([name, inodes]) => ({ name, inodes })),
+  inodeBudget: { state: 'over', overSince: T0, limit: MI }, ...over,
+});
+
+describe('the census reader — inode fields', () => {
+  it('round-trips a session row with its inode fields', () => {
+    const c = census({ sessions: [overInodes()] });
+    expect(parseTmpSweepCensus(json(c))).toEqual(c);
+  });
+  it('a row with an unfinished walk (inodes null) is measured: null is the writer\'s word for unmeasured', () => {
+    const c = census({ sessions: [overInodes({ inodes: null })] });
+    expect(parseTmpSweepCensus(json(c))?.sessions[0]?.inodes).toBeNull();
+  });
+  it.each([
+    ['a negative count', { inodes: -1 }], ['a non-integer lower bound', { inodesAtLeast: 1.5 }],
+    ['a top row with no name', { inodeTop: [{ inodes: 3 }] }], ['an inodeBudget with no state', { inodeBudget: { overSince: null } }],
+    ['a string overSince', { inodeBudget: { state: 'over', overSince: 'x' } }],
+  ])('%s makes the whole census unmeasured', (_n, bad) => {
+    const wire = census({ sessions: [overInodes()] });
+    Object.assign(wire.sessions[0] as object, bad);
+    expect(parseTmpSweepCensus(json(wire))).toBeNull();
+  });
+});
+
+describe('tmpSweepInodeBudget — one notice per over-inode-budget episode', () => {
+  it('first sighting: one notice naming the count, the budget and the five largest entries by inodes, biggest first', () => {
+    const [n, ...rest] = tmpSweepInodeBudget(census({ sessions: [overInodes()] }), new Set());
+    expect(rest).toEqual([]);
+    expect(n!.sessionId).toBe('project-a-quiet-basin');
+    expect(n!.subject).toBe(`tmp-sweep: project-a-quiet-basin over inode budget (since ${new Date(T0).toISOString()})`);
+    expect(n!.body).toContain('3,700,000 inodes');
+    expect(n!.body).toContain('1,000,000');
+    expect(n!.body.indexOf('mut-a')).toBeLessThan(n!.body.indexOf('mut-b'));
+    expect(n!.body).toContain('mut-a (3,400,000)');
+    expect(n!.body).not.toContain('mut-f');
+    expect(n!.body).toMatch(/nothing is removed/i);
+    expect(n!.coordinatorBody).toBe(`Session project-a-quiet-basin: ${n!.body}`);
+  });
+  it('an unfinished walk says "at least", never a plain count', () => {
+    const [n] = tmpSweepInodeBudget(census({ sessions: [overInodes({ inodes: null, inodesAtLeast: 2_000_000 })] }), new Set());
+    expect(n!.body).toContain('at least 2,000,000 inodes, could not finish counting');
+  });
+  it('an unfinished walk whose lower bound kept growing (state growing) is told once, "at least N inodes, could not finish counting", never "over"', () => {
+    const grow = overInodes({ inodes: null, inodesAtLeast: 400_000, inodeBudget: { state: 'growing', overSince: T0, limit: MI } });
+    const [n, ...rest] = tmpSweepInodeBudget(census({ sessions: [grow] }), new Set());
+    expect(rest).toEqual([]);
+    expect(n!.body).toContain('at least 400,000 inodes, could not finish counting');
+    expect(n!.body).not.toMatch(/, over the/);
+    expect(n!.body).toMatch(/nothing is removed/i);
+    expect(n!.key).toBe(`${grow.uuid}:inodes:${T0}`);
+    expect(tmpSweepInodeBudget(census({ sessions: [grow] }), new Set([n!.key])), 'once').toEqual([]);
+  });
+  it('the same episode sends no second notice; a new overSince sends one; its key never collides with the byte budget\'s', () => {
+    const c = census({ sessions: [overInodes()] });
+    const noticed = new Set(tmpSweepInodeBudget(c, new Set()).map((n) => n.key));
+    expect(tmpSweepInodeBudget(c, noticed)).toEqual([]);
+    expect(tmpSweepInodeBudget(census({ sessions: [overInodes({ inodeBudget: { state: 'over', overSince: T0 + HOUR, limit: MI } })] }), noticed)).toHaveLength(1);
+    const both = census({ sessions: [overBudget({}, [])] });
+    const byteKey = tmpSweepBudget(both, new Set())[0]!.key;
+    expect(tmpSweepInodeBudget(census({ sessions: [overInodes({ inodeBudget: { state: 'over', overSince: T0, limit: MI } })] }), new Set())[0]!.key).not.toBe(byteKey);
+  });
+  it('a session under the budget, unmeasured and not over, or with no inode fields has no notice', () => {
+    expect(tmpSweepInodeBudget(census({ sessions: [overInodes({ inodeBudget: { state: 'ok', overSince: null, limit: MI } })] }), new Set())).toEqual([]);
+    expect(tmpSweepInodeBudget(census({ sessions: [overInodes({ inodes: null, inodeBudget: { state: 'unmeasured', overSince: null, limit: MI } })] }), new Set())).toEqual([]);
+    expect(tmpSweepInodeBudget(census({ sessions: [session()] }), new Set())).toEqual([]);
+  });
+  it('a shadow census still notifies, and a subject stays inside the mail subject bound', () => {
+    const n = tmpSweepInodeBudget(census({ arm: 'shadow', sessions: [overInodes({ id: 'x'.repeat(40) })] }), new Set())[0]!;
+    expect(n).toBeDefined();
+    expect(Buffer.byteLength(n.subject)).toBeLessThanOrEqual(MAIL_SUBJECT_MAX_BYTES);
+  });
+});
+
+describe('tmpSweepHolders — inodes beside bytes', () => {
+  it('a holder carries its inode count; a partial one is marked, and an inode-heavy small session is named too', () => {
+    const rows = [
+      ...[9, 8, 7, 6, 5].map((g, i) => session({ id: `b-${i}`, uuid: `ub-${i}`, bytes: g * GIB, inodes: 100, inodesAtLeast: 100 })),
+      overInodes({ id: 'many', uuid: 'umany', bytes: 1 * GIB, inodes: null, inodesAtLeast: 2_000_000 }),
+    ];
+    const got = tmpSweepHolders(census({ sessions: rows }));
+    expect(got.slice(0, 5).map((h) => h.label)).toEqual(['b-0', 'b-1', 'b-2', 'b-3', 'b-4']);
+    expect(got[0]).toEqual({ label: 'b-0', bytes: 9 * GIB, inodes: 100 });
+    expect(got[5]).toEqual({ label: 'many', bytes: 1 * GIB, inodes: 2_000_000, inodesPartial: true });
+    expect(got).toHaveLength(6);
+  });
+});
+
+describe('runTmpSweepCensusLane — the inode notice', () => {
+  it('over the inode budget: the session and its coordinator are each mailed once, naming the biggest subtrees; a re-read and a restart send nothing', async () => {
+    const r = laneRig(json(census({ sessions: [overInodes()] })));
+    workerOfCoordinator(r.coord);
+    await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+    await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+    await runTmpSweepCensusLane(r.deps, newTmpSweepLaneState(), KNOWN);
+    expect(r.mailTo(WORKER)).toHaveLength(1);
+    expect(r.mailTo(WORKER)[0]!.subject).toMatch(/^tmp-sweep: project-a-quiet-basin over inode budget/);
+    expect(r.mailTo(WORKER)[0]!.body).toContain('mut-a (3,400,000)');
+    expect(r.mailTo(COORD)).toHaveLength(1);
+    expect(r.mailTo(COORD)[0]!.body).toContain(WORKER);
+  });
+  it('a session over both budgets is told twice, once for each', async () => {
+    const r = laneRig(json(census({ sessions: [overInodes({ bytes: 24 * GIB, budget: { state: 'over', overSince: T0, enforceAt: T0 + 24 * HOUR, removedBytes: 0, kept: [] } })] })));
+    await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+    expect(r.mailTo(WORKER).map((m) => m.subject.includes('inode'))).toEqual([false, true]);
+  });
+  it('the holders carry inodes', async () => {
+    const r = laneRig(json(census({ sessions: [overInodes()] })));
+    const out = await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+    expect(out.holders).toEqual([{ label: WORKER, bytes: 2 * GIB, inodes: 3_700_000 }]);
   });
 });

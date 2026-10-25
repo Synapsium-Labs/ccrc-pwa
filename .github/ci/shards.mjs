@@ -20,7 +20,7 @@ import { pathToFileURL } from 'node:url';
 /**
  * @typedef {{ index: number, total: number, files: string[], vitestShard: string|null, workers: number }} Shard
  * @typedef {Shard[]} ShardPlan
- * @typedef {{ targetMs: number, min: number, max: number, workers: number, defaultMs: number, scale?: number }} ShardProfile
+ * @typedef {{ targetMs: number, min: number, max: number, workers: number, defaultMs: number, scale?: number, budgetMs?: number }} ShardProfile
  */
 
 /**
@@ -50,7 +50,10 @@ export const PROFILES = {
   linux: { targetMs: 240_000, min: 1, max: 12, workers: 2, defaultMs: 5000 },
   macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 2, defaultMs: 5000, scale: 1.5 },
   macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 2, defaultMs: 5000, scale: 1.5 },
-  trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6 },
+  // `budgetMs`: what ONE trace shard may be planned to take. The job's own timeout is 60 minutes; a refresh plans to
+  // 45 and defers the rest (planTraceBatch), because a shard that hits the timeout is cancelled, leaves no records,
+  // and the map is not published at all.
+  trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6, budgetMs: 2_700_000 },
 };
 
 function clamp(n, lo, hi) {
@@ -121,6 +124,45 @@ export function planShards(files, durations, { targetMs, min, max, workers, defa
     vitestShard: null,
     workers,
   }));
+}
+
+/**
+ * A BOUNDED trace plan (the test-map refresh). The map refresh used to trace everything the merges since the last map
+ * affected, in at most 8 shards, however long that took; a stale map selects more, so each refresh outgrew its 60-minute
+ * shards, was cancelled, and none was ever published. This takes `files` in the order given — most important first —
+ * and plans as many as fit: a file goes to the least-loaded shard if its cost still keeps that shard within
+ * `budgetMs`, and is DEFERRED if it fits none (a later, smaller file may still fit). A shard's load is what
+ * planShards counts: Σ duration · scale / workers, with a file of no known duration costing the median of the known
+ * ones (`defaultMs` when none are). Never plans a shard past the budget. Shards come out numbered 1..n of n, the
+ * empty ones dropped; the matrix shape is `toMatrix`'s.
+ *
+ * @param {string[]} files repo-relative test files, in priority order
+ * @param {Record<string, number>} durations repo-relative path -> ms
+ * @param {{ shards: number, budgetMs: number, workers: number, scale: number, defaultMs: number }} limits
+ * @returns {{ plan: ShardPlan, batch: string[], deferred: string[] }} `batch` in the order given
+ */
+export function planTraceBatch(files, durations, { shards, budgetMs, workers, scale, defaultMs }) {
+  const known = Object.values(durations).sort((a, b) => a - b);
+  const mid = known.length >> 1;
+  const fallback = known.length === 0 ? defaultMs : known.length % 2 === 1 ? known[mid] : (known[mid - 1] + known[mid]) / 2;
+  const costOf = (f) => ((durations[f] ?? fallback) * scale) / workers;
+  const loads = new Array(shards).fill(0);
+  /** @type {string[][]} */
+  const buckets = Array.from({ length: shards }, () => []);
+  /** @type {Set<string>} */
+  const taken = new Set();
+  for (const f of files) {
+    const cost = costOf(f);
+    let idx = 0;
+    for (let i = 1; i < shards; i++) if (loads[i] < loads[idx]) idx = i;
+    if (loads[idx] + cost > budgetMs) continue;
+    buckets[idx].push(f);
+    loads[idx] += cost;
+    taken.add(f);
+  }
+  const used = buckets.filter((b) => b.length > 0);
+  const plan = used.map((b, i) => ({ index: i + 1, total: used.length, files: b, vitestShard: null, workers }));
+  return { plan, batch: files.filter((f) => taken.has(f)), deferred: files.filter((f) => !taken.has(f)) };
 }
 
 function toServerRelative(repoRelPath) {
