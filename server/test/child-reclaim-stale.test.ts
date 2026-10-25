@@ -196,7 +196,7 @@ const lane = (opts: LaneOpts = {}) => {
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: ['ws-audit', 'ws-reclaim', RECLAIM_CAP, RECLAIM_PAUSE_CAP, ACTOR_FLAGS_CAP,
         ...(opts.cap === false ? [] : [RECLAIM_STALE_CAP])] },
-    presence: { isVisible: () => false },
+    viewers: { isVisible: () => false },
     childReclaimExec: async (req: ChildReclaimRequest): Promise<ChildReclaimOutcome> => {
       requests.push(req);
       return answer(req);
@@ -469,7 +469,7 @@ const rig = async (over: { fleetState?: FleetState; claimedBy?: string | null; p
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
   const deps: ChildReclaimDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd, fleetState: over.fleetState ?? CAPS,
-    presence: { isVisible: () => false }, notifyLog };
+    viewers: { isVisible: () => false }, notifyLog };
   const req = (stale: ChildReclaimRequest['stale']): ChildReclaimRequest =>
     ({ sessionId: ID, runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'absent' }, ...(stale === undefined ? {} : { stale }) });
