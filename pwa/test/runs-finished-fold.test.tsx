@@ -253,10 +253,10 @@ describe('the fold’s words (D-6442)', () => {
 describe('measurement — Step 0 of C10 (D-6442)', () => {
   // On demand only, from `pwa/`: `CCRC_MEASURE=1 ./node_modules/.bin/vitest run
   // --silent=false --reporter=verbose test/runs-finished-fold.test.tsx -t measurement`.
-  // What matters is naming a reporter: with none the run passes and prints no `[C10 step 0]` line. Measured with
-  // vitest 4.1.10, `CCRC_MEASURE=1 ./node_modules/.bin/vitest run <flags> test/runs-finished-fold.test.tsx -t
-  // measurement`: `--reporter=verbose` prints it, and so do `--reporter=default` and `--reporter=default
-  // --silent=false`; `--silent=false` alone prints nothing, and so does no flag at all.
+  // Name a reporter: with none, vitest 4.1.10 picks its `agent` reporter when `CLAUDECODE`, `CLAUDE_CODE` or
+  // `AI_AGENT` is set, and no `[C10 step 0]` line prints (with or without `--silent=false`), and its `default`
+  // reporter otherwise, which prints it. Measured in an agent session and with those three unset (review 944):
+  // `--reporter=verbose` and `--reporter=default` print it in both.
   // No timing assertion: the numbers go to the console and the PR body. Real
   // `performance.now` is left alone (only timers and Date are faked), because a
   // faked clock would report every Profiler duration as zero.

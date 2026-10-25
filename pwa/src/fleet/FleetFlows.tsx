@@ -32,7 +32,8 @@ export function useFleetFlows(): FleetFlowDoors {
   const { openPool } = projects;
   // Stable doors (C6, D-6438): a part that holds them (the command layer, a list row) is not handed new ones by a
   // fleet frame. `openActions` reads the NEWEST row from the store at call time, so no subscription to `sessions`
-  // is needed to keep it current. The dependencies are the chrome's stable setters and openers, named one by one.
+  // is needed to keep it current. The dependencies are the chrome's setters and openers, named one by one, and none
+  // changes on a fleet frame; `openPool` does change when `/api/projects` answers (it reads that answer's placement).
   return useMemo<FleetFlowDoors>(() => ({
     openNewSession: () => setNewOpen(true),
     openAddWorkspace: (project) => setAddWorkspaceFor(project),

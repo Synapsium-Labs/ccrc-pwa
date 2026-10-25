@@ -328,9 +328,10 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
   // only replaces `pending`, and the window's end writes the newest and opens the next, so frames alone write at most
   // once per window. The exceptions are three lifecycle flushes, which write `pending` whatever the window says: the
   // page turning hidden (the `visibilitychange` to hidden), `pagehide` and `disconnect()`. So one window can hold
-  // more than one write. A frame that arrives while the page is ALREADY hidden only becomes `pending`: it is written
-  // when the window's timer fires (which a hidden tab may throttle and a discarded tab never runs) or at the next
-  // lifecycle flush, so a background page that is closed or discarded without one of those events can lose it. A
+  // more than one write. The scheduler never reads visibility, so a frame that arrives while the page is ALREADY
+  // hidden is treated like any other: written at once when no window is open, and only `pending` inside an open one,
+  // where it is written when the window's timer fires (which a hidden tab may throttle and a discarded tab never runs)
+  // or at the next lifecycle flush, so a background page closed or discarded without one of those can lose it. A
   // frame the snapshot would refuse (an empty or degraded one, `snapshotRefused`) is never scheduled, so it neither
   // opens a window nor displaces a pending frame.
   let pending: FleetSession[] | null = null;
