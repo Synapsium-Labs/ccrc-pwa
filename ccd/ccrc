@@ -2352,7 +2352,7 @@ MODELS_SUBS="clear-window discovery hold init release revert rm set-class set-ef
 # `deploy/models-op.mjs`'s `OPS` rows marked `writes: true`, which `single-definition.test.ts` checks in both
 # directions; `ccrc-models-lock.test.ts` forbids a bare call of any of them (`materialise --check true` excepted,
 # since it writes nothing).
-MODELS_WRITE_OPS="advance-backfill advance-commit clear-window discovery hold init materialise release revert rm set-class set-effort set-subagent set-window"
+MODELS_WRITE_OPS="advance-backfill advance-commit clear-window discovery hold init lower-windows materialise release revert rm set-class set-effort set-subagent set-window"
 
 # The BOX-WIDE subcommands this build implements — a different question from a
 # lane's own classes, on a different cadence (§5).
@@ -11739,6 +11739,34 @@ _models_advance_steps() {   # <id> <deadline-secs> -> appends to the caller's `e
   return 0
 }
 
+# D25 (codex-bridge Stage 2, Task 15): a refusal the lane's bridge recorded lowers that model's window, through the
+# hourly refresh. Only a `direct` lane (its mode read from the rendered lane.json by `_codex_lane_mode`, never the
+# roster; a lane whose mode cannot be read is not one) whose lane.json names a stats file (`bridgeFiles.stats`, a bare
+# file name, never `.` or `..`) is asked; `deploy/models-op.mjs`'s `lower-windows` decides everything else, under the
+# lane-files lock. Prints one JSON object for the caller to merge into the lane's refresh row, and only when there is
+# something to say: `{"lowered":[…]}` when a window was lowered, `{"lowerFailed":"<detail>"}` when the op refused (an
+# unreadable stats or windows file, a held lock); nothing otherwise. Always rc 0: a lowering never fails a row, whose
+# `ok` is the probe's, the materialise's and the render's.
+_models_lower_lane() {   # <id> <roster file>
+  local id="$1" file="$2" mode mrc dir sf body rc=0 why low
+  mode="$(_codex_lane_mode "$id" 2>/dev/null)"; mrc=$?
+  [ "$mrc" -eq 0 ] && [ "$mode" = direct ] || return 0
+  dir="$(_codex_lane_dir "$id")"
+  sf="$(jq -r 'if type == "object" then (.bridgeFiles.stats // empty | strings) else empty end' "$dir/lane.json" 2>/dev/null)" || sf=''
+  [[ "$sf" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$sf" != . ] && [ "$sf" != .. ] || return 0
+  body="$(_models_node_locked "$id" lower-windows --file "$file" --id "$id" --stats "$dir/$sf" 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    why="$(printf '%s' "$body" | tail -n1 | jq -r '.detail // .error // empty' 2>/dev/null)"
+    [ -n "$why" ] || why="lower-windows exited $rc with no answer"
+    jq -cn --arg why "$why" '{lowerFailed: $why}'
+    return 0
+  fi
+  low="$(printf '%s' "$body" | tail -n1 | jq -c 'if (.lowered | type) == "array" and (.lowered | length) > 0
+      then {lowered: .lowered} else empty end' 2>/dev/null)" || low=''
+  [ -z "$low" ] || printf '%s\n' "$low"
+  return 0
+}
+
 # The box-wide half of the verb group: the CATALOGUES the class registries are
 # classified against, which is a different question from a lane's own classes
 # and runs on a different cadence — a timer runs `--all` hourly
@@ -11812,6 +11840,14 @@ _models_box_sub() {   # <subcommand> [args…]
       local adv_deadline adv_budget adv_end adv_k adv_j adv_left adv_entered=0 adv_rows adv_map adv_r adv_x adv
       local -a adv_ids=() adv_at=() adv_ev=()
       n="$(printf '%s' "$wanted" | jq 'length')"
+      # D25's lowering pass (codex-bridge Stage 2, Task 15), a pass of its OWN before any probe: a refusal recorded by
+      # a `direct` lane's bridge lowers its model's window whatever this hour's probe does, so a failed probe never
+      # skips a lowering. What it says lands on the lane's row below (`lowered`, `lowerFailed`), indexed as `wanted`.
+      local -a low_ev=()
+      for (( i = 0; i < n; i++ )); do
+        id="$(printf '%s' "$wanted" | jq -r ".[$i].id")"
+        low_ev[i]="$(_models_lower_lane "$id" "$file")"
+      done
       i=0
       while [ "$i" -lt "$n" ]; do
         id="$(printf '%s' "$wanted" | jq -r ".[$i].id")"
@@ -11899,6 +11935,7 @@ _models_box_sub() {   # <subcommand> [args…]
             '{id:$id, probe:$p, ok:false, reason:$reason}')"
           failed=1
         fi
+        [ -z "${low_ev[i]:-}" ] || row="$(jq -cn --argjson r "$row" --argjson x "${low_ev[i]}" '$r + $x')"
         rows+=("$row")
         i=$((i + 1))
       done

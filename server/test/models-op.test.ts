@@ -4308,3 +4308,166 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
     expect(commit({ id: 'lane-c' }).body['error']).toBe('anthropic-lane');
   });
 });
+
+describe('lower-windows: a refusal lowers the window (codex-bridge D25, Stage 2 Task 15)', () => {
+  // The bridge's stats file (Task 5's version 1) on a codex-kind lane, planted by hand: only `refusals` and `routes`
+  // are read. Model ids are read off the fixtures by position, never spelled (this repository is public).
+  const ID = CODEX_ROW.id;
+  const OPUS = SEEDED.classes.opus!;
+  const statsPath = (): string => path.join(home, '.ccrc', 'codex', ID, 'bridge.stats.json');
+  const plantStats = (refusals: Record<string, unknown>, routes: Record<string, unknown> = {}): void => {
+    fs.mkdirSync(path.dirname(statsPath()), { recursive: true });
+    fs.writeFileSync(statsPath(), JSON.stringify({
+      version: 1, lane: ID, since: '2026-10-01T00:00:00Z', startedAt: '2026-10-01T00:00:00Z',
+      updatedAt: '2026-10-14T12:00:00Z', routes, refusals, outcomes: {}, names: {}, unexplained: {},
+      usageHeaders: null, lastUpstreamRequestId: null,
+    }), { mode: 0o600 });
+  };
+  const AT = '2026-10-14T12:00:00Z';
+  const refusal = (tokens: number, at: string = AT): Record<string, unknown> =>
+    ({ tokens, window: 400000, at, estimated: true });
+  const entry = (tokens: number, setAt: string): Record<string, unknown> => ({ tokens, setAt });
+  const lower = (): Result =>
+    opEnv({ CCRC_MODELS_NOW: NOW }, 'lower-windows', '--file', rosterPath(), '--id', ID, '--stats', statsPath());
+  const windowsFile = (): Record<string, unknown> & { windows: Record<string, Record<string, unknown>> } =>
+    JSON.parse(fs.readFileSync(winPath(ID), 'utf8'));
+  const tokensOf = (model: string): unknown => windowsFile().windows[model]?.['tokens'];
+
+  beforeEach(() => {
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+    writeCatalogue(ID);
+    plantCodex(ID);
+  });
+
+  it('a refusal at 380000 sets the window to 342000', () => {
+    plantWindows(ID, { windows: { [OPUS]: entry(400000, '2026-10-01T00:00:00Z') } });
+    plantStats({ [`backend/${OPUS}`]: refusal(380000) });
+    const r = lower();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, lowered: [{ model: OPUS, from: 400000, to: 342000, refused: 380000 }],
+      skipped: [] });
+    expect(tokensOf(OPUS)).toBe(342000);
+  });
+
+  it('a refusal never raises a window', () => {
+    plantWindows(ID, { windows: { [OPUS]: entry(300000, '2026-10-01T00:00:00Z') } });
+    plantStats({ [`backend/${OPUS}`]: refusal(380000) });
+    const r = lower();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ lowered: [], skipped: [{ model: OPUS, why: 'not-lower' }] });
+    expect(tokensOf(OPUS)).toBe(300000);
+  });
+
+  it('a set-window after the refusal is not undone', () => {
+    plantWindows(ID, { windows: { [OPUS]: entry(400000, '2026-10-14T13:00:00Z') } });
+    plantStats({ [`backend/${OPUS}`]: refusal(380000) });
+    const r = lower();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ lowered: [], skipped: [{ model: OPUS, why: 'older-than-entry' }] });
+    expect(tokensOf(OPUS)).toBe(400000);
+  });
+
+  it("a first entry is capped at the lane's window", () => {
+    // No entry for the model: the lane's window is the default rule's, min(catalogue context, 200000).
+    plantStats({ [`backend/${OPUS}`]: refusal(380000) });
+    const before = contextWindowFor(SEEDED, CODEX, null).tokens;
+    expect(before).toBe(200000);
+    const r = lower();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ lowered: [{ model: OPUS, from: null, to: 200000, refused: 380000 }] });
+    expect(tokensOf(OPUS)).toBe(200000);
+  });
+
+  it('a refusal of 1100 tokens is skipped below-minimum', () => {
+    plantWindows(ID, { windows: { [OPUS]: entry(400000, '2026-10-01T00:00:00Z') } });
+    plantStats({ [`backend/${OPUS}`]: refusal(1100) });
+    const r = lower();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ lowered: [], skipped: [{ model: OPUS, why: 'below-minimum' }] });
+    expect(tokensOf(OPUS)).toBe(400000);
+  });
+
+  it('a model no class names is skipped', () => {
+    plantStats({ 'backend/model-9-omega': refusal(380000) });
+    const r = lower();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ lowered: [], skipped: [{ model: 'model-9-omega', why: 'not-a-lane-model' }] });
+    expect(windowsFile().windows['model-9-omega']).toBeUndefined();
+  });
+
+  it('a refusal estimated low never lowers below the largest accepted prompt', () => {
+    plantWindows(ID, { windows: { [OPUS]: entry(400000, '2026-10-01T00:00:00Z') } });
+    plantStats({ [`backend/${OPUS}`]: refusal(120000) },
+      { [`backend/${OPUS}`]: { requests: 9, bytesPerToken: 3.5, promptTokensMax: 281500, promptTokensLast: 200000 } });
+    const r = lower();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ lowered: [{ model: OPUS, from: 400000, to: 282000, refused: 120000 }] });
+    expect(tokensOf(OPUS)).toBe(282000);
+  });
+
+  it('a refusal on another route is not read', () => {
+    plantWindows(ID, { windows: { [OPUS]: entry(400000, '2026-10-01T00:00:00Z') } });
+    const before = fs.readFileSync(winPath(ID), 'utf8');
+    plantStats({ [`siwc/${OPUS}`]: refusal(380000) },
+      { [`siwc/${OPUS}`]: { requests: 1, bytesPerToken: 3.5, promptTokensMax: 1000, promptTokensLast: 1000 } });
+    const r = lower();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, lowered: [], skipped: [] });
+    expect(fs.readFileSync(winPath(ID), 'utf8')).toBe(before);
+  });
+
+  it('the entry records refusedTokensEstimate', () => {
+    plantWindows(ID, { windows: { [OPUS]: entry(400000, '2026-10-01T00:00:00Z') } });
+    plantStats({ [`backend/${OPUS}`]: refusal(380000) });
+    expect(lower().code).toBe(0);
+    expect(windowsFile().windows[OPUS]).toEqual({ tokens: 342000, setAt: NOW, source: 'refusal',
+      refusedTokensEstimate: 380000 });
+    expect(windowsFile()['refusalsApplied']).toEqual({ [`backend/${OPUS}`]: AT });
+    expect(fs.statSync(winPath(ID)).mode & 0o777).toBe(0o600);
+  });
+
+  it('a refusal lowers, clear-window removes it, and the next refresh does not lower again', () => {
+    plantWindows(ID, { windows: { [OPUS]: entry(400000, '2026-10-01T00:00:00Z') } });
+    plantStats({ [`backend/${OPUS}`]: refusal(380000) });
+    expect(lower().body['lowered']).toEqual([{ model: OPUS, from: 400000, to: 342000, refused: 380000 }]);
+    const c = op('clear-window', '--file', rosterPath(), '--id', ID, '--model', OPUS);
+    expect(c.code, c.stdout + c.stderr).toBe(0);
+    expect(c.body['removed']).toBe(true);
+    // The applied record is a top-level key clear-window does not know, so the file is kept with it (D-5161).
+    expect(windowsFile()['refusalsApplied']).toEqual({ [`backend/${OPUS}`]: AT });
+    const again = lower();
+    expect(again.code, again.stdout + again.stderr).toBe(0);
+    expect(again.body).toMatchObject({ lowered: [], skipped: [{ model: OPUS, why: 'already-applied' }] });
+    expect(windowsFile().windows[OPUS]).toBeUndefined();
+  });
+
+  it('a refusal skipped older-than-entry, then set-window and clear-window, is not applied on the next refresh', () => {
+    plantWindows(ID, { windows: { [OPUS]: entry(400000, '2026-10-14T13:00:00Z') } });
+    plantStats({ [`backend/${OPUS}`]: refusal(380000) });
+    expect(lower().body['skipped']).toEqual([{ model: OPUS, why: 'older-than-entry' }]);
+    expect(windowsFile()['refusalsApplied']).toEqual({ [`backend/${OPUS}`]: AT });
+    expect(op('set-window', '--file', rosterPath(), '--id', ID, '--model', OPUS, '--tokens', '450000').code).toBe(0);
+    expect(op('clear-window', '--file', rosterPath(), '--id', ID, '--model', OPUS).code).toBe(0);
+    const again = lower();
+    expect(again.code, again.stdout + again.stderr).toBe(0);
+    expect(again.body).toMatchObject({ lowered: [], skipped: [{ model: OPUS, why: 'already-applied' }] });
+    expect(windowsFile().windows[OPUS]).toBeUndefined();
+  });
+
+  it('an absent stats file lowers nothing and writes nothing', () => {
+    const r = lower();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, stats: 'absent', lowered: [], skipped: [] });
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+
+  it("a stats file of another lane is refused, and nothing is written", () => {
+    plantStats({ [`backend/${OPUS}`]: refusal(380000) });
+    const s = JSON.parse(fs.readFileSync(statsPath(), 'utf8'));
+    fs.writeFileSync(statsPath(), JSON.stringify({ ...s, lane: 'lane-b' }));
+    const r = lower();
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('stats-invalid');
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+});

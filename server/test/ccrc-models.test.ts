@@ -3200,3 +3200,81 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
     });
   });
 });
+
+describe('the hourly refresh lowers a refused window on a direct lane (codex-bridge D25, Stage 2 Task 15)', () => {
+  // A `direct` codex-kind lane (`exec.bridge`), its registry made by its own `init codex`, so its lane.json names the
+  // bridge's stats file (`bridgeFiles.stats`). Every class model carries a measured window set before the refusal, so
+  // the lane's window is the measured rule's and a lowering reaches settings.json's eighth key. Model ids are read
+  // off the fixtures by position, never spelled.
+  const ID = 'codex-a';
+  const OPUS = SEEDED.classes.opus!;
+  const CLASS_MODELS = [...new Set(Object.values(SEEDED.classes).filter((v): v is string => v !== null))];
+  const AT = '2026-10-14T12:00:00Z';
+  const winFile = (): string => join(home, '.ccrc', 'models', `${ID}.windows.json`);
+  const tokensOf = (model: string): unknown =>
+    (JSON.parse(fs.readFileSync(winFile(), 'utf8')) as { windows: Record<string, { tokens: number }> })
+      .windows[model]?.tokens;
+  const eighthKey = (): string | undefined =>
+    (JSON.parse(fs.readFileSync(join(home, `.claude-${ID}`, 'settings.json'), 'utf8')) as { env: Record<string, string> })
+      .env['CLAUDE_CODE_MAX_CONTEXT_TOKENS'];
+
+  async function seatLane(bridge: 'direct' | 'litellm'): Promise<void> {
+    const [p1, p2] = await freePorts(2);
+    fs.rmSync(home, { recursive: true, force: true });
+    home = box({ ...ROSTER, accounts: [...ROSTER.accounts, codexRow(ID, p1!, p2!, { bridge })] });
+    const r = run(['models', ID, 'init', 'codex']);
+    expect(r.code, r.stderr).toBe(0);
+    const lane = JSON.parse(fs.readFileSync(join(home, '.ccrc', 'codex', ID, 'lane.json'), 'utf8'));
+    expect(lane.bridge).toBe(bridge);
+    fs.writeFileSync(winFile(), `${JSON.stringify({ windows: Object.fromEntries(CLASS_MODELS.map((m) =>
+      [m, { tokens: 400000, setAt: '2026-10-01T00:00:00Z' }])) }, null, 2)}\n`, { mode: 0o600 });
+    const stats = join(home, '.ccrc', 'codex', ID, lane.bridgeFiles.stats);
+    fs.writeFileSync(stats, JSON.stringify({
+      version: 1, lane: ID, since: AT, startedAt: AT, updatedAt: AT, routes: {},
+      refusals: { [`backend/${OPUS}`]: { tokens: 380000, window: 400000, at: AT, estimated: true } },
+      outcomes: {}, names: {}, unexplained: {}, usageHeaders: null, lastUpstreamRequestId: null,
+    }), { mode: 0o600 });
+  }
+
+  it('the hourly refresh lowers before the probe, and a failed probe does not stop it', async () => {
+    await seatLane('direct');
+    const r = refreshFaked(ID, { CCRC_MODELS_PROBE_FIXTURE: join(home, 'nope') });
+    expect(r.code).toBe(1);
+    const rows = oneObject(r)['refreshed'] as Record<string, unknown>[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: ID, ok: false,
+      lowered: [{ model: OPUS, from: 400000, to: 342000, refused: 380000 }] });
+    expect(tokensOf(OPUS)).toBe(342000);
+  });
+
+  it('the new window reaches settings.json in the same run', async () => {
+    await seatLane('direct');
+    expect(eighthKey(), 'the planted windows are not materialised before the run').not.toBe('342000');
+    const r = refreshFaked(ID);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)['refreshed']).toEqual([{ id: ID, probe: 'codex', ok: true, count: 9, litellm: 'rendered',
+      lowered: [{ model: OPUS, from: 400000, to: 342000, refused: 380000 }] }]);
+    expect(eighthKey()).toBe('342000');
+  });
+
+  it('a lowering the op refuses is named on the row, and never fails it', async () => {
+    await seatLane('direct');
+    const lane = JSON.parse(fs.readFileSync(join(home, '.ccrc', 'codex', ID, 'lane.json'), 'utf8'));
+    fs.writeFileSync(join(home, '.ccrc', 'codex', ID, lane.bridgeFiles.stats), '{not json');
+    const r = refreshFaked(ID);
+    expect(r.code, r.stderr).toBe(0);
+    const rows = oneObject(r)['refreshed'] as Record<string, unknown>[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: ID, probe: 'codex', ok: true, count: 9, litellm: 'rendered' });
+    expect(String(rows[0]!['lowerFailed'])).toMatch(/is not valid JSON/);
+    expect(tokensOf(OPUS)).toBe(400000);
+  });
+
+  it("a litellm lane's stats file is not read", async () => {
+    await seatLane('litellm');
+    const r = refreshFaked(ID);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)['refreshed']).toEqual([{ id: ID, probe: 'codex', ok: true, count: 9, litellm: 'rendered' }]);
+    expect(tokensOf(OPUS)).toBe(400000);
+  });
+});
