@@ -466,3 +466,12 @@ files went red under load and passed in full alone: `secret-mask`, on its 20,000
 `deviation-refs`, on its tree scan's 20 s case budget. In the whole PWA suite, 311 of 314 files passed. The other three,
 `contrast`, `dialog-sheet` and `wrap-screen-golden`, were red only on per-case 5 s timeouts, and each passed in full
 alone. `npm run build` is green.
+
+That tip, `f6fce7bfa`, was pushed in the same command as the final merge-tree probe, not gated on its answer. The
+probe exited 1: main had moved again, and #1390 had edited the 08-10 spec's ring map beside the C5 row. No wave-done
+named that tip. Under the corrections' sequencing line on #1390, `origin/main` was merged a third time, at `a2269126b`,
+keeping main's C4 row and this wave's C5 row; the spec differs from main by that row only. On that tree every server
+gate and the seven touched PWA files are green. Three server files went red in the batch, at load 51 to 56: a
+`single-definition` scan case and `deviation-refs`' tree scan on their 20 s case budgets, and `secret-mask`'s 2 MB
+timing bound. Run alone with a larger case budget, the first two passed; the third is red on a clean `main` at the same
+load. Every later push is gated on the probe's exit code, in its own step.
