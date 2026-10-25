@@ -24,7 +24,7 @@ import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import {
   BACKLOG_HORIZON_MS, DEAD_GRACE_MS, FAILED_IDLE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS,
   FROZEN_NO_EVENT_MS, ORPHAN_PUSH_MS, STALL_FAILED_PREFIX, stallFailedSubject,
-  STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_ORPHANED_PREFIX, STALL_QUIET_MS, STALL_REPORT_PREFIX,
+  STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_ORPHANED_PREFIX, STALL_RESTARTED_PREFIX, STALL_QUIET_MS, STALL_REPORT_PREFIX,
   parseStallDetail, stallArmingOf, stallDetail, COORD_DEAF_MS, STALL_MARKERS, type StallArming,
 } from '../src/coord/stall.js';
 import { parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock, type StallBoxArming, type StallSettingsPatch } from '../src/coord/stallsettings.js';
@@ -1399,9 +1399,69 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     at(D_AT + ORPHAN_PUSH_MS + STALL_SWEEP_MS);
     await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
     expect(sent.map((p) => p.tag)).toEqual([`orphaned-${WORKER}-${RESTART_AT}`]);
+    // D5 (#759): the restarted arm told the worker and its coordinator at the first sweep (both rungs together), before orphan D's idle wait ran out.
     expect(stallRows(coord, runId)).toEqual([
+      stallDetail('live', 'restarted', 1, RESTART_AT), stallDetail('live', 'restarted', 2, RESTART_AT),
       stallDetail('live', 'orphan-d', 1, RESTART_AT), stallDetail('live', 'orphan-d', 2, RESTART_AT),
     ]);
+  });
+
+  const restartedTo = (coord: CoordStore, id: string): MailRow[] =>
+    operatorMail(coord).filter((m) => m.toId === id && m.subject.startsWith(STALL_RESTARTED_PREFIX));
+
+  it('D5: a run worker restarted over lost background tasks is told at once, and its coordinator hears once (restarted, armed)', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    const runId = seedRun(coord, { program: 'demo-program' });
+    seedCaseD(h.home, WORKER, UUID);
+    at(RESTART_AT + 2 * 60_000);                      // two minutes after the restart: far short of ORPHAN_D_IDLE_MS
+    for (let i = 0; i < 3; i++) {
+      await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+      at(RESTART_AT + 2 * 60_000 + (i + 1) * STALL_SWEEP_MS);
+    }
+    expect(restartedTo(coord, WORKER)).toHaveLength(1);
+    expect(restartedTo(coord, COORD)).toHaveLength(1);
+    expect(orphanedTo(coord, WORKER), 'orphan D is still waiting out its idle time').toEqual([]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'restarted', 1, RESTART_AT), stallDetail('live', 'restarted', 2, RESTART_AT)]);
+  });
+
+  it('D5: the coordinator still hears once when the worker takes a turn on its notice before the next sweep', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    seedRun(coord, { program: 'demo-program' });
+    seedCaseD(h.home, WORKER, UUID);
+    at(RESTART_AT + 2 * 60_000);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    // The mail lane types the notice in; the worker's turn starts (marker working), then ends (done, stop after the restart).
+    seedTurnMark(h.home, WORKER, {
+      sessionId: UUID, event: 'UserPromptSubmit', at: RESTART_AT + 3 * 60_000, turnAt: RESTART_AT + 3 * 60_000,
+      stopAt: RESTART_AT - 600_000, restartAt: RESTART_AT, lostBg: 0, lostKinds: '', lostIds: '',
+    });
+    at(RESTART_AT + 2 * 60_000 + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    seedTurnMark(h.home, WORKER, {
+      sessionId: UUID, event: 'Stop', at: RESTART_AT + 5 * 60_000, turnAt: RESTART_AT + 3 * 60_000,
+      stopAt: RESTART_AT + 5 * 60_000, restartAt: RESTART_AT, lostBg: 0, lostKinds: '', lostIds: '',
+    });
+    at(RESTART_AT + 2 * 60_000 + 2 * STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    expect(restartedTo(coord, WORKER)).toHaveLength(1);
+    expect(restartedTo(coord, COORD)).toHaveLength(1);
+  });
+
+  it('D5: dark, the restarted arm records shadow rows for the operator to read and sends no mail', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    const runId = seedRun(coord, { program: 'demo-program' });
+    seedCaseD(h.home, WORKER, UUID);
+    at(RESTART_AT + 2 * 60_000);
+    for (let i = 0; i < 3; i++) {
+      await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
+      at(RESTART_AT + 2 * 60_000 + (i + 1) * STALL_SWEEP_MS);
+    }
+    expect(restartedTo(coord, WORKER)).toEqual([]);
+    expect(restartedTo(coord, COORD)).toEqual([]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('shadow', 'restarted', 1, RESTART_AT), stallDetail('shadow', 'restarted', 2, RESTART_AT)]);
   });
 
   it('a coordinator\'s repeated failure stays a repeat after its prior failed: mail leaves the 24 h read (failed-arm-bounded-by-the-mail-horizon (D-3752))', async () => {

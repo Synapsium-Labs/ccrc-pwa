@@ -111,7 +111,7 @@ import { redactCommand } from './coord/redact.js';
 import {
   BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
-  stallFailedVerdict, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
+  stallFailedVerdict, stallRestartedVerdicts, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
   stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
   stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
   stallReactivation, stallVerdict, stallW2ReportMail, turnMarkStale,
@@ -3023,9 +3023,9 @@ export class FleetWatcher {
    *   and newer than the first check on it. The bind is read from the store only for a `re stall-check:`
    *   subject. Any other mail wearing that prefix is pushed as ordinary mail, so no box-token holder can use
    *   the prefix to keep a mail off the phone.
-   * - A `self-wake` (wave 2: an `orphaned:` or `failed:` notice the watch mails a session about its own turn) is
-   *   recorded, never pushed. The session is the one to act on it, and orphan D's rung 2 pushes the operator from
-   *   the lane itself (`⚠ orphaned`) when that mail sits unacknowledged.
+   * - A `self-wake` (wave 2: an `orphaned:`, `failed:` or `restarted:` notice to a session about its own turn, or the
+   *   `restarted:` heads-up to the run's coordinator) is recorded, never pushed. The session is the one to act on it,
+   *   and orphan D's rung 2 pushes the operator from the lane itself (`⚠ orphaned`) when that mail sits unacknowledged.
    * - A `report` (the watch's mail to the coordinator: wave 1's r2, and wave 2's frozen, dead and failed rung) is
    *   pushed under a title by its kind, read back from its own subject (`stallReportKind`, `stallReportTitle`):
    *   `⚠ stall`, `⚠ frozen`, `⚠ dead` or `⚠ failed` › <run workspace>. The lane never pushes a report itself, so
@@ -6458,7 +6458,7 @@ export class FleetWatcher {
       sessionId: id, role: 'worker', run: primary, worker, mark, liveStartedAt: lr?.startedAt ?? null,
       markUnreadableSince, mail: read.mail, deliveries: read.deliveries, notices, arming, coordinationPaused: paused,
     };
-    for (const sv of [stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallOrphanDVerdict(si, now)]) {
+    for (const sv of [...stallRestartedVerdicts(si, now), stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, primary.project, sv, now);
     }
   }
