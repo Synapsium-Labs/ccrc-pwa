@@ -94,7 +94,7 @@ describe('the reclaim lane records one "would rescue" row per refused child', ()
     const calls: string[][] = [];
     const run: Runner = async (_c, args) => {
       calls.push(args);
-      return args[0] === 'ws-audit' ? { code: 0, stdout: audit(runId), stderr: '' } : { code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
+      return args[0] === 'ws-audit' ? { ran: true, code: 0, stdout: audit(runId), stderr: '' } : { ran: true, code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
     };
     const base = testDeps(home, run);
     const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
@@ -150,8 +150,8 @@ describe('the expiry lane records one "would rescue" row per refused archive', (
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     const audit = JSON.stringify({ session: ID, mode: 'expire', archivedAt: ARCH, expiresAt: DUE, alive: false, exists: true,
       reaping: null, sensitive: [], verdict: 'containment-unproven', detail: 'a nested checkout', ...extra });
-    const run: Runner = async (_c, args) => (args[0] === 'ws-audit' ? { code: 0, stdout: audit, stderr: '' }
-      : { code: 1, stdout: '', stderr: `unscripted ${args[0]}` });
+    const run: Runner = async (_c, args) => (args[0] === 'ws-audit' ? { ran: true, code: 0, stdout: audit, stderr: '' }
+      : { ran: true, code: 1, stdout: '', stderr: `unscripted ${args[0]}` });
     const base = testDeps(home, run);
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
