@@ -841,7 +841,7 @@ export function usageTokens(u) {
  *  @param {StreamFacts} facts
  *  @returns {number} */
 export function spendTokens(facts) {
-  return Math.max(usageTokens(facts.resultUsage), usageTokens(facts.assistantUsage));
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.max(usageTokens(facts.resultUsage), usageTokens(facts.assistantUsage)));
 }
 
 // ── D-5986: no-follow, type-checked I/O under --out ────────────────────────────────────────────────────────

@@ -1571,6 +1571,20 @@ describe('W2-4 Task 5: the batch runner, at most 2 at once, gated, resumable (W2
     expect(ledgerRows(b.out)).toEqual([{ name: 'left-1', tokens: T5_LEFTOVER_TOKENS }, { name: 'left-1', tokens: T5_TOKENS }]);
   }, 60_000);
 
+  it('F9: a resumed leftover stream records the clamped charge and clears its .part instead of throwing', () => {
+    const b = t5Box('ccrc-replay-t5-leftover-overflow-');
+    const out = t5drv.prepareOut(t5path.join(b.home, 'overflow-out'));
+    const stream = JSON.stringify({ type: 'result', usage: { input_tokens: Number.MAX_SAFE_INTEGER, output_tokens: 1 } }) + '\n';
+    t5fs.writeFileSync(t5path.join(out, 'overflow-0.jsonl.part'), stream);
+    const claim = t5drv.claimOut(out);
+    try {
+      expect(ledgerRows(out)).toEqual([{ name: 'overflow-0', tokens: Number.MAX_SAFE_INTEGER }]);
+      expect(t5fs.existsSync(t5path.join(out, 'overflow-0.jsonl.part'))).toBe(false);
+    } finally {
+      claim.release();
+    }
+  });
+
   it('a gate sees a leftover\'s charge: a budget the leftover alone exhausts refuses budget-exhausted with no spawn', async () => {
     const b = t5Box('ccrc-replay-t5-leftover-gate-');
     t5fs.writeFileSync(t5path.join(b.out, 'left-2.jsonl.part'), T5_LEFTOVER_STREAM);
@@ -11267,6 +11281,12 @@ describe('W2-5b1 Task 1: the stream reader attributes each message and tool pair
     const none = w5b1Drv.readStreamJson(w5b1SubStream(null));
     expect([none.resultUsage, none.usageSource, w5b1Drv.spendTokens(none)]).toEqual([null, 'assistant', 340]);
     expect(w5b1Drv.usageTokens(null)).toBe(0);
+  });
+
+  it('F9: spend clamps an unsafe usage sum to the largest safe charge, never leaving a recordSpend-invalid amount', () => {
+    const f = w5b1Drv.readStreamJson(w5b1SubStream(W5B1_U(Number.MAX_SAFE_INTEGER, 1, 0, 0)));
+    expect(w5b1Drv.usageTokens(f.resultUsage), 'CONTROL: the source stream really overflows a safe integer').toBeGreaterThan(Number.MAX_SAFE_INTEGER);
+    expect(w5b1Drv.spendTokens(f)).toBe(Number.MAX_SAFE_INTEGER);
   });
 
   it('a parent_tool_use_id that is not a string reads null, and a message with no id keeps its parent', () => {
