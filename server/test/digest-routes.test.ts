@@ -75,6 +75,20 @@ describe('GET /api/digest?day= (spec §10)', () => {
     expect(old.day).toBe(DAY);
   });
 
+  it("a day whose window has not closed yet ages its drift to now, never past it", async () => {
+    f = await approvalsFixture();
+    const now = Date.now();
+    f.coord.recordDriftPass([{ key: 'run-quiet:4', kind: 'run-quiet', subject: '{}', detail: 'quiet', factAt: now - 60_000, runId: 4,
+      sessionId: null }], now - 30_000);
+    const tomorrow = new Date(now + 86_400_000).toISOString().slice(0, 10);
+    const d = (await f.app.inject({ method: 'GET', url: `/api/digest?day=${tomorrow}` })).json() as DigestAnswer;
+    expect(d.toMs).toBeGreaterThan(now);
+    const age = d.drift?.lines[0]?.ageMs ?? -1;
+    expect(age).toBeGreaterThanOrEqual(60_000);
+    expect(age).toBeLessThan(d.toMs - (now - 60_000));
+    expect(age).toBeLessThanOrEqual(Date.now() - (now - 60_000));
+  });
+
   it('a day that is not a UTC date is 400 bad-request', async () => {
     f = await approvalsFixture();
     for (const bad of ['2026-13-01', 'yesterday', '2026-10-18%27']) {

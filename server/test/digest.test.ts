@@ -386,7 +386,13 @@ describe('the digest drift section (D-5923, spec 4.6)', () => {
     return built.digest;
   };
 
-  it("a finding open at the window's end is a line, with its ids, its age from the fact, and the totals by kind", () => {
+  it('a run-kind line carries its runId', () => {
+    const { coord } = store();
+    coord.recordDriftPass([drift({ key: 'run-quiet:9', kind: 'run-quiet', runId: 9 })], at(0));
+    expect(read(coord).drift?.lines.map((l) => [l.key, l.kind, l.runId])).toEqual([['run-quiet:9', 'run-quiet', 9]]);
+  });
+
+  it("a finding open at the window's end is a line, with its session id, its age from the fact, and the totals by kind", () => {
     const { coord } = store();
     coord.recordDriftPass([
       drift({ key: 'run-quiet:7', kind: 'run-quiet', runId: 7, factAt: w.toMs - 3_600_000, detail: 'GH_TOKEN=ghx_neutral quiet' }),

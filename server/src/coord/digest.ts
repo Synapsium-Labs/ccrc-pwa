@@ -102,8 +102,9 @@ export function approvalDecision(r: ApprovalRow): { kind: DigestLineKind; at: nu
 export type DigestBuilt = Pick<DigestAnswer, 'totals' | 'byCoordinator' | 'lines' | 'drift'>;
 
 /** The digest over `[dayStartMs, dayEndMs)`: one line per coordinator decision, in time order (ties by table, then
- *  id), the totals, and each coordinator's count. Pure over the store's reads. */
-export function buildDigest(store: CoordStore, dayStartMs: number, dayEndMs: number):
+ *  id), the totals, and each coordinator's count. Pure over the store's reads. `ageEndMs` is where a drift line's age
+ *  stops: the window's end by default; a caller reading a window that has not closed yet passes `now`. */
+export function buildDigest(store: CoordStore, dayStartMs: number, dayEndMs: number, ageEndMs = dayEndMs):
   { ok: true; digest: DigestBuilt } | { ok: false; detail: string } {
   const asks = store.digestAsks(dayStartMs, dayEndMs);
   if (!asks.ok) return asks;
@@ -144,20 +145,20 @@ export function buildDigest(store: CoordStore, dayStartMs: number, dayEndMs: num
   for (const l of lines) per.set(l.coordinator, (per.get(l.coordinator) ?? 0) + 1);
   const byCoordinator = [...per].map(([coordinator, decisions]) => ({ coordinator, decisions }))
     .sort((a, b) => b.decisions - a.decisions || a.coordinator.localeCompare(b.coordinator));
-  const drift = driftSection(store, dayEndMs);
+  const drift = driftSection(store, dayEndMs, ageEndMs);
   return { ok: true, digest: { totals, byCoordinator, lines, ...(drift ? { drift } : {}) } };
 }
 
 /** The drift section (D-5923): the findings open at the window's end, never counted into `decisions`. An unreadable
  *  table leaves the section out (absence permits) and never fails the digest, which is about decisions. */
-function driftSection(store: CoordStore, dayEndMs: number): DigestBuilt['drift'] | null {
+function driftSection(store: CoordStore, dayEndMs: number, ageEndMs: number): DigestBuilt['drift'] | null {
   const read = store.driftFindingsOpenAt(dayEndMs);
   if (!read.ok) return null;
   const totals = Object.fromEntries(DRIFT_KINDS.map((k) => [k, 0])) as Record<DriftKind, number>;
   const lines: DriftLine[] = read.rows.map((r) => {
     totals[r.kind] += 1;
     return { key: r.key, kind: r.kind, subject: r.subject, detail: redactCommand(r.detail),
-      ageMs: Math.max(0, dayEndMs - (r.factAt ?? r.firstSeenAt)), sessionId: r.sessionId, runId: r.runId };
+      ageMs: Math.max(0, ageEndMs - (r.factAt ?? r.firstSeenAt)), sessionId: r.sessionId, runId: r.runId };
   });
   return { totals, lines };
 }
