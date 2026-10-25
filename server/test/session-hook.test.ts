@@ -570,16 +570,16 @@ describe('the fleet gate and failure polarity', () => {
     expect(s.ask).toBeNull();
     expect(fs.statSync(stateFile()).size).toBeLessThan(65536);
   });
-  it('p95 of 20 runs stays under the budget (150ms CI allowance; 50ms target)', () => {
-    const times: number[] = [];
-    for (let i = 0; i < 20; i++) {
+  it.runIf(process.env['CCRC_PERF'] === '1')('p95 of 40 runs stays under the budget (150ms CI allowance; 50ms target)', () => {
+    const times: number[] = []; run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });   // one warm-up, discarded; CCRC_PERF=1 only (the perf job, D-6929)
+    for (let i = 0; i < 40; i++) {
       const t0 = Date.now();
       run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
       times.push(Date.now() - t0);
     }
     times.sort((a, b) => a - b);
-    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
-  }, 30000);
+    expect(times[37]).toBeLessThan(150);   // p95 of 40 = the third-largest (times[37]); the threshold is unchanged
+  }, 60000);
   // R1 FIX (D-1898): an absolute ms budget was tried first and rejected — see the
   // measurement below for why. This asserts a RATIO of SessionStart's median to
   // PostToolUse's median, both measured IN THE SAME RUN (interleaved, same
@@ -623,7 +623,7 @@ describe('the fleet gate and failure polarity', () => {
   // silently and with the suite green. The absolute p95 budget in the test above
   // is what still binds the cheap arm; if that budget is ever raised, this ratio's
   // masking window widens with it, and the two must be re-argued together.
-  it('SessionStart costs no more than 4.2x the cheap PostToolUse arm, on a 200-row registry', () => {
+  it.runIf(process.env['CCRC_PERF'] === '1')('SessionStart costs no more than 4.2x the cheap PostToolUse arm, on a 200-row registry (40 pairs after a warm-up pair; perf job only, D-6929)', () => {
     const reg = path.join(home, '.cc-sessions');
     const now = Math.floor(Date.now() / 1000);
     for (let i = 0; i < 200; i++) {
@@ -643,8 +643,8 @@ describe('the fleet gate and failure polarity', () => {
     plantGraph(tree, { built: 'deadbee' });
 
     const cheapTimes: number[] = [];
-    const mainTimes: number[] = []; run({ hook_event_name: 'UserPromptSubmit' }); run({ hook_event_name: 'SubagentStart', agent_id: 'a-1', agent_type: 'general-purpose' });   // a-1 is JOINED, so the cheap arm stays a subagent's (delegation broker wave 3)
-    for (let i = 0; i < 20; i++) {
+    const mainTimes: number[] = []; run({ hook_event_name: 'UserPromptSubmit' }); run({ hook_event_name: 'SubagentStart', agent_id: 'a-1', agent_type: 'general-purpose' }); run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a-1' }); run({ hook_event_name: 'SessionStart', cwd: tree, source: 'startup' });   // the last two are the discarded warm-up pair; a-1 is JOINED, so the cheap arm stays a subagent's (delegation broker wave 3)
+    for (let i = 0; i < 40; i++) {
       const t0 = process.hrtime.bigint();
       run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a-1' });
       cheapTimes.push(Number(process.hrtime.bigint() - t0) / 1e6);
@@ -658,7 +658,7 @@ describe('the fleet gate and failure polarity', () => {
     };
     const ratio = median(mainTimes) / median(cheapTimes);   // ratio-row-reads-the-median (D-3704) (above)
     expect(ratio).toBeLessThan(4.2);
-  });
+  }, 120000);
 });
 
 // ── The fork fallback: attribution with no pane at all ─────────────────────
@@ -10967,7 +10967,7 @@ describe('the delegation spool leaves the hook\'s other writers alone', () => {
   // 2026-10-22 it read 164 ms in a merge-queue run on a slow runner and ejected an unrelated docs-only pull request; its three
   // 150 ms siblings (the pin above, the `ccd-tool-adj` row and the agent PostToolUse row) have failed full runs at 150-233 ms.
   // An absolute ms number is the wrong shape here for D-1898's reason (above), so this asserts its method instead: a RATIO of two
-  // arms timed IN THE SAME RUN, interleaved one present then one absent, 20 pairs after a warm-up of one of each, read as
+  // arms timed IN THE SAME RUN, interleaved one present then one absent, 40 pairs after a warm-up of one of each, read as
   // median over median (ratio-row-reads-the-median, D-3704). The present arm is the payload with the owner directory and the
   // generation present; the absent arm is the same payload shape with the directory moved aside (outside the timed region), so
   // the gate's `-d` fails, the spool's text is never compiled and the arm is the parse alone.
@@ -10988,7 +10988,7 @@ describe('the delegation spool leaves the hook\'s other writers alone', () => {
   // that pin's budget is ever raised, this window widens with it, and the two must be re-argued together. And below the
   // window, with no masking at all: one extra jq fork of the spool (mutant 1.463-1.628 against shipped 1.160-1.285, ~7% best
   // margin) does not separate, so the smallest spool regression this row can see is two forks.
-  it('the spool\'s increment: 20 realistic Bash PostToolUse runs with the spool present cost under 1.5x the same runs without it (median/median), each writing its line', () => {
+  it.runIf(process.env['CCRC_PERF'] === '1')('the spool\'s increment: 40 realistic Bash PostToolUse runs with the spool present cost under 1.5x the same runs without it (median/median), each writing its line', () => {
     const payload = (toolUseId: string): object => ({
       session_id: SID, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${SID}.jsonl`, cwd: '/rig/repo', prompt_id: 'd9a6fd11-6f0f-41f3-8c1b-0932efbc04a6',
       permission_mode: 'default', effort: { level: 'medium' }, hook_event_name: 'PostToolUse', tool_name: 'Bash',
@@ -11006,14 +11006,14 @@ describe('the delegation spool leaves the hook\'s other writers alone', () => {
         return t;
       } finally { fs.renameSync(aside, SPOOL()); }
     };
-    const ids = (arm: string): string[] => Array.from({ length: 20 }, (_, i) => `toolu_01${arm}${String(i).padStart(2, '0')}AAAAAAAAAAAAAAAA`);
+    const ids = (arm: string): string[] => Array.from({ length: 40 }, (_, i) => `toolu_01${arm}${String(i).padStart(2, '0')}AAAAAAAAAAAAAAAA`);
     const presentIds = ids('Pin');
     const absentIds = ids('Abs');
     const WARM = 'toolu_01WarmPresentAAAAAAAAAAAAAA';
     ms(payload(WARM)); absent(payload('toolu_01WarmAbsentAAAAAAAAAAAAAAA'));
     const present: number[] = [];
     const without: number[] = [];
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 40; i++) {
       present.push(ms(payload(presentIds[i]!)));
       without.push(absent(payload(absentIds[i]!)));
     }
@@ -11021,7 +11021,7 @@ describe('the delegation spool leaves the hook\'s other writers alone', () => {
     expect(lines.map((l) => l.toolUseId).sort(), 'the warm-up and every present run wrote one line each, and no absent run wrote any')
       .toEqual([WARM, ...presentIds].sort());
     expect(lines.map((l) => `${l.eventKind}:${l.toolName}`), 'every one of those lines is the Bash PostToolUse it was sent')
-      .toEqual(Array(21).fill('PostToolUse:Bash'));
+      .toEqual(Array(41).fill('PostToolUse:Bash'));
     const median = (xs: number[]): number => {
       const s = [...xs].sort((a, b) => a - b);
       return (s[Math.floor((s.length - 1) / 2)]! + s[Math.floor(s.length / 2)]!) / 2;
@@ -11029,7 +11029,7 @@ describe('the delegation spool leaves the hook\'s other writers alone', () => {
     const ratio = median(present) / median(without);   // the-spool-cost-pin-reads-a-same-run-ratio (D-6321) (above)
     expect(ratio, `R=${ratio.toFixed(4)} (present ${median(present).toFixed(1)} ms, absent ${median(without).toFixed(1)} ms) against a bound of 1.5`)
       .toBeLessThan(1.5);
-  }, 60000);
+  }, 120000);
 });
 
 // ── The tmux question's BOUND (slice-0 carry) ──────────────────────────────
@@ -12093,7 +12093,7 @@ describe('ccrc history: the recall CLI is not search-gated (spec 2026-10-05 §8.
   });
 });
 
-describe('the hot-path budget through the shell prefix (D-5241)', () => {
+describe.runIf(process.env['CCRC_PERF'] === '1')('the hot-path budget through the shell prefix (D-5241)', () => {
   // AT THE END OF THIS FILE, not beside the PostToolUse pin it mirrors: this file's lines are cited
   // by number (the citation census above), and an insertion above them moves that census.
   // D-5241: on Linux every hook command runs through `CLAUDE_CODE_SHELL_PREFIX`
@@ -12103,42 +12103,42 @@ describe('the hot-path budget through the shell prefix (D-5241)', () => {
   // and one `bash -c`. Measured 2026-10-17 on a workstation (macOS), 20 runs
   // each, the two tests in one run: this PostToolUse hook 56 ms a run bare, 58
   // ms through the prefix (a bare `bash -c true` 6.1 ms p50, 17.9 ms through it).
-  it('p95 of 20 runs through the ccd-tool-adj prefix stays under the same budget (D-5241)', () => {
+  it('p95 of 40 runs through the ccd-tool-adj prefix stays under the same budget (D-5241)', () => {
     const prefix = path.resolve(__dirname, '../../ccd/ccd-tool-adj');
     const times: number[] = [];
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 41; i++) {   // the first run is a warm-up, discarded (CCRC_PERF=1 only: the perf job, D-6929)
       const t0 = Date.now();
       execFileSync(prefix, [`bash ${sh(HOOK)}`], {
         input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash' }),
         encoding: 'utf8', env: hookEnv(),
       });
-      times.push(Date.now() - t0);
+      if (i > 0) times.push(Date.now() - t0);
     }
     times.sort((a, b) => a - b);
-    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
-  }, 30000);
+    expect(times[37]).toBeLessThan(150);   // p95 of 40 = times[37]; the threshold is unchanged
+  }, 60000);
 });
 
 // The hot-path budget for an agent payload (D-5232). APPENDED at the very end, so no line a citation anchors moves.
-describe('the PostToolUse budget holds for agent payloads (D-5232)', () => {
+describe.runIf(process.env['CCRC_PERF'] === '1')('the PostToolUse budget holds for agent payloads (D-5232)', () => {
   // D-5232 (plan 2026-10-16 Task 2): the same budget for an AGENT PostToolUse behind the server's word
   // `hook-main-state-v1`, which reads `~/.ccrc/server-caps` with builtins and takes the one fresh read to carry the
   // main state. The file to carry is a Stop's `done`, written first.
-  it('p95 of 20 agent PostToolUse runs behind hook-main-state-v1 stays under the same 150 ms budget (D-5232)', () => {
+  it('p95 of 40 agent PostToolUse runs behind hook-main-state-v1 stays under the same 150 ms budget (D-5232)', () => {
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     fs.writeFileSync(path.join(home, '.ccrc', 'server-caps'),
       `at ${Math.floor(Date.now() / 1000)}\ncaps dispatch-live-gate-v1 hook-main-state-v1\nend\n`);
     run({ hook_event_name: 'Stop', background_tasks: [] });
     const times: number[] = [];
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 41; i++) {   // the first run is a warm-up, discarded (CCRC_PERF=1 only: the perf job, D-6929)
       const t0 = Date.now();
       run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a0000000000000001', agent_type: 'general-purpose' });
-      times.push(Date.now() - t0);
+      if (i > 0) times.push(Date.now() - t0);
     }
     expect(readState().state, 'the carry ran: the Stop\'s done stands').toBe('done');
     times.sort((a, b) => a - b);
-    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
-  }, 30000);
+    expect(times[37]).toBeLessThan(150);   // p95 of 40 = times[37]; the threshold is unchanged
+  }, 60000);
 });
 // ── ccrc history: the PreCompact scope marker (history spec 2026-10-05 §5.1, §5.5 S16; W1-B3 task 8) ──
 // APPENDED, with NO new import line: the citation census cites this file by line.

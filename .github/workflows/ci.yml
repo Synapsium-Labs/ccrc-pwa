@@ -512,6 +512,44 @@ jobs:
         working-directory: server
         run: ./node_modules/.bin/tsc --noEmit
 
+  # THE HOOK'S WALL-CLOCK BUDGETS, ON A RUNNER OF THEIR OWN (D-6929, ARCH root-cause rank 7 of the 2026-10-25 landing
+  # measurement). session-hook.test.ts times `bash ccd/session-hook.sh` against an absolute 150 ms p95, a 4.2x ratio and a 1.5x
+  # ratio. In a server shard those rows run beside twelve workers of fork-heavy suites, and the p95 of the old twenty samples was
+  # the second-largest of them, so two scheduler stalls failed it: 24 flaky jobs and 2 queue ejections in the fourteen days before
+  # this job. The rows are skipped unless CCRC_PERF=1 (`it.runIf` / `describe.runIf`), and this job sets it: one file, one worker,
+  # no file parallelism, nothing else on the runner. Each row discards one warm-up and takes 40 samples (p95 = the third-largest),
+  # and its threshold is the one it always had; nothing was loosened, the rows moved to a quiet machine. What the required suite
+  # keeps of the hook's cost is a load-independent pin: the fork count of the cheap PostToolUse arm under strace.
+  # NOT REQUIRED: operator ruling 2026-10-25. It becomes a required check on merge_group after two weeks with zero flakes
+  # (counted by the flaky-job method, from the first green run of this job); until then a red here blocks nothing.
+  # Same gate as the server shards: it runs when a selection or a full run exists, and not for a docs-only change.
+  server-perf:
+    name: perf (server)
+    needs: [select, deps]
+    if: ${{ !cancelled() && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            agent/package-lock.json
+            pwa/package-lock.json
+      - uses: ./.github/actions/server-deps
+        with:
+          platform: linux
+      # `-t` picks the budget rows by title, and CCRC_PERF=1 un-skips them. Local binary, never npx (see server-shard).
+      - name: Budgets
+        working-directory: server
+        env:
+          CCRC_PERF: '1'
+        run: |
+          ./node_modules/.bin/vitest run test/session-hook.test.ts --maxWorkers=1 --no-file-parallelism -t 'p95 of 40|costs no more than 4\.2x|spool.s increment'
+
   # THE REQUIRED `test (server)` CHECK (design 2026-09-23 §4.2). A summary,
   # because the server tests now run as a variable number of shards and a
   # required check needs one fixed name. `if: always()` because a job whose
