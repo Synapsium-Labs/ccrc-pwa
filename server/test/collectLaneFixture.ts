@@ -27,6 +27,7 @@ import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { COLLECT_FEED_TITLE, COLLECT_LANE_LIVE_MARKER, collectLooseId } from '../src/collectLane.js';
 import { COLLECT_LOOSE_LIVE_MARKER } from '../../shared/switches.js';
 import { NotifyLog } from '../src/notifylog.js';
+import { drainTick, guardQuietAtTestEnd } from './laneQuiet.js';
 import type { FleetIO } from '../src/io.js';
 import type { Runner } from '../src/exec.js';
 import type { PushPayload } from '../src/push.js';
@@ -232,6 +233,7 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
     monotonicMs: () => mono, collectLane: { journal, bootNonce: 'test' } };
   if (opts.armed === true) writeFileSync(path.join(reg, COLLECT_LANE_LIVE_MARKER), '');
   const watcher = new FleetWatcher(deps as never, new Bus(), 10_000);
+  guardQuietAtTestEnd(watcher);
   const startMono = mono;
 
   // ── helpers ──
@@ -322,7 +324,7 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
    *  both lanes is throttled. */
   const attention = async (): Promise<readonly ChildReclaimAttention[]> => {
     await watcher.sweepChildReclaim([], names());
-    await watcher.tick();
+    await drainTick(watcher);                               // tick() fires writers it never awaits: none may outlive the case
     return watcher.currentCoord()?.childReclaimAttention ?? [];
   };
   /** The box-wide collector items: a `collect` item whose `sessionId` is one of the fixed labels, never an id. */
