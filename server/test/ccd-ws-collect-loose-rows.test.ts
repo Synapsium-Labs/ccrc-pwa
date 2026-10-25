@@ -95,8 +95,12 @@ describe.skipIf(!LINUX)('a loose regular file beside registry rows', () => {
     expect(verdictOf('stray.json', clockAfter(p, 49))['verdict']).toBe('containment-unproven');
   }, 60_000);
 
-  it('a row spelled with the root’s physical path holds it too', () => {
-    const p = mkLoose('stray.json', 'file');
+  it('a row spelled with the root’s physical path holds it too (the box’s bind-mount shape)', () => {
+    const real = path.join(h.home, 'volume', 'cc-tmp');
+    fs.mkdirSync(real, { recursive: true });
+    fs.symlinkSync(real, ccTmp());
+    const p = at('stray.json');
+    fs.writeFileSync(p, 'scratch\n');
     fs.writeFileSync(path.join(regDir(), 'demo-odd.workdir'), path.join(fs.realpathSync(ccTmp()), 'stray.json'));
     fs.writeFileSync(path.join(regDir(), 'demo-odd.uuid'), 'deadbeef-0000-4000-8000-000000000000');
     expect(verdictOf('stray.json', clockAfter(p, 49))['verdict']).toBe('containment-unproven');
