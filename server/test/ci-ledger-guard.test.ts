@@ -1,4 +1,4 @@
-// D-TBD-ledger-guard (ARCH root-cause fix, #1519): a pull request that is not a ledger pull request
+// D-TBD-ledger-guard (a root-cause fix from the landing measurement): a pull request that is not a ledger pull request
 // may not modify or delete an existing file under docs/superpowers/programs/ or docs/superpowers/plans/.
 // It may ADD a per-task note under docs/superpowers/plans/<plan>/<task-or-pr>.md; the coordinator folds
 // the notes into the ledger in one ledger pull request per wave. A `Ledger-Edit: <reason>` trailer on any
