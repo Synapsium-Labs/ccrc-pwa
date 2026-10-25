@@ -194,6 +194,9 @@ const routeFlags = (r: RouteFields | null): string[] =>
  * INSIDE the literal — so the walk stops short of `decFlags(`, `ws-add` drops
  * out of the derived set, and that suite reds on a builder that still declares.
  */
+const routeDefaultFlags = (routeDefault: boolean, r: RouteFields | null): string[] =>
+  routeDefault && r !== null ? ['--route-default'] : [];
+
 const childFlags = (child: number | null): string[] =>
   child === null ? [] : ['--child', String(child)];
 
@@ -530,8 +533,8 @@ export const CCD_ARGV = {
    * composes the previous argv token for token.
    */
   wsAddWorker: (p: string, dec: ActorFlags | null, route: RouteFields | null = null, child: number | null = null,
-                slug: string | null = null) =>
-                 argv(['ws-add', '--no-rc', ...childFlags(child), ...routeFlags(route), p,
+                slug: string | null = null, routeDefault = false) =>
+                 argv(['ws-add', '--no-rc', ...childFlags(child), ...routeFlags(route), ...routeDefaultFlags(routeDefault, route), p,
                    ...(slug === null ? [] : [slug]), ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
@@ -933,6 +936,13 @@ export const ROUTE_CAP = 'route-v1';
  *  other: `_route_argv_check` (this token) and `cmd_route` (`ROUTE_CAP`) are
  *  different parse paths in `ccd/ccd`, landed in separate commits. */
 export const ROUTE_ARGV_CAP = 'route-argv-v1';
+
+/** The `ccd caps` token that says `ws-add` takes `--route-default` (D-6794): the `--route` pairs beside it are the
+ *  server's default row for the run kind, so ccd places by their class as a preference (strict=0) and a lane at the
+ *  weekly ceiling still places. Read with `capSupported` (null refuses): an older `cmd_ws_add` would bind the flag
+ *  as the project. Absent, a defaulted spawn sends NO route (the argv that shipped before D-6794) and journals
+ *  `route-omitted:no-route-default-cap`. ccd's `echo route-default-v1` is the other spelling. */
+export const ROUTE_DEFAULT_CAP = 'route-default-v1';
 
 /** The `ccd caps` token that says this box parses `--child <runId>` on
  *  `ws-add`, stamps `$REG/<id>.child` before the first spawn, and exports a
