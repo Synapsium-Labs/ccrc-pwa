@@ -14102,7 +14102,9 @@ _codex_cmd_stop() {   # <id>
 #      is. Where `flock` is missing nothing is held, as `_codex_lock`. It is
 #      RELEASED before step 5: a tier the start spawns would inherit the fd and
 #      hold every account verb off for its whole life (`_codex_lock`'s "THE FD
-#      MUST NOT REACH A TIER").
+#      MUST NOT REACH A TIER"). The file is the box's, not the lane's, so two
+#      switches of DIFFERENT lanes serialise on it too, through their tier stops
+#      (fix round 2, review R2/R4): `roster-busy` names either holder.
 #   1. The row, and lane.json made current (`_codex_lane_json_ensure`), whose
 #      mode is the lane's OLD mode. The ensure comes first because the old mode
 #      is read from a current lane.json, so it may render lane.json (and the
@@ -14120,8 +14122,9 @@ _codex_cmd_stop() {   # <id>
 #      launcher started from it, name the old, and the way back named there,
 #      `ccrc codex switch <id> <old mode>`, has to bring the roster back rather
 #      than leave the next render to split the lane under its running tiers. On
-#      a lane whose roster and lane.json agree, both writes put back the same
-#      bytes.
+#      a lane whose roster already records the mode, `codex-mode` writes nothing
+#      (fix round 2, review R1/R3: a hand-edited roster keeps its own bytes), and
+#      lane.json is rendered again from the same roster.
 #   2. The OUTGOING set (the other mode's tiers: to `direct`, shim then
 #      litellm; to `litellm`, bridge), front first, through `_codex_stop_tier`,
 #      each word CAPTURED (ruling PF-21): a `foreign` word or a stop that fails
@@ -14156,12 +14159,12 @@ _codex_cmd_switch() {   # <id> <litellm|direct>
   if command -v flock >/dev/null 2>&1; then
     plock="$_SVC_REG/.account-placement.lock"
     if ! mkdir -p -- "$_SVC_REG" 2>/dev/null || ! { exec {pfd}>>"$plock"; } 2>/dev/null; then
-      _codex_say lane-unwritable "$plock could not be opened, so this switch cannot be serialised against the account verbs that write ~/.ccrc/accounts.json. Fix $_SVC_REG, then re-run. Nothing was stopped or written."
+      _codex_say roster-unwritable "$plock could not be opened, so this switch cannot be serialised against the account verbs that write ~/.ccrc/accounts.json. Fix $_SVC_REG, then re-run. Nothing was stopped or written."
       exit 1
     fi
     bound=$(( $(_codex_ready_secs) + 30 ))
     if ! flock -w "$bound" "$pfd"; then
-      _codex_say roster-busy "an account verb has held the roster writers' lock ($plock) for ${bound}s without finishing, and this switch writes the roster. Re-run once it has ended. Nothing was stopped or written."
+      _codex_say roster-busy "another roster writer (a 'ccrc account' verb, or a 'ccrc codex switch' of this or another lane) has held the roster writers' lock ($plock) for ${bound}s without finishing, and this switch writes the roster. Re-run once it has ended. Nothing was stopped or written."
       exit 1
     fi
   fi
@@ -14189,11 +14192,11 @@ _codex_cmd_switch() {   # <id> <litellm|direct>
         exit 1
       fi
       if ! _codex_lane_json_render; then
-        _codex_say switch-stopped "$id runs its $to tiers ($said) and its mode was recorded again, but lane.json could not be rendered (said above). Nothing was stopped. Fix what is named above, then re-run 'ccrc codex switch $id $to'."
+        _codex_say switch-stopped "$id runs its $to tiers ($said) and the roster records that mode, but lane.json could not be rendered (said above). Nothing was stopped. Fix what is named above, then re-run 'ccrc codex switch $id $to'."
         exit 1
       fi
       if ! w="$(_codex_lane_mode "$id")" || [ "$w" != "$to" ]; then
-        _codex_say switch-stopped "$id runs its $to tiers ($said) and its mode was recorded again, but $(_codex_lane_dir "$id")/lane.json reads ${w:-no mode} after it was rendered. Nothing was stopped. 'ccrc doctor' names what renders it; re-run 'ccrc codex switch $id $to'."
+        _codex_say switch-stopped "$id runs its $to tiers ($said) and the roster records that mode, but $(_codex_lane_dir "$id")/lane.json reads ${w:-no mode} after it was rendered. Nothing was stopped. 'ccrc doctor' names what renders it; re-run 'ccrc codex switch $id $to'."
         exit 1
       fi
       printf '%s codex: %s: already %s (%s)\n' "$PROG" "$id" "$to" "$said"

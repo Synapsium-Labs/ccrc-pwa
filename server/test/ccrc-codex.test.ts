@@ -4835,5 +4835,102 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
       expect(fs.existsSync(join(laneDir(home, 'codex-a'), 'shim.pid')), 'a shim was started').toBe(false);
       expect(alive(listener.pid), 'the switch stopped the foreign listener').toBe(true);
     }, 60_000);
+
+    // ── fix round 2 ──────────────────────────────────────────────────────────────────────────────────────────────────
+    // Quality R1: step 0's two refusals. Either one carrying on would run steps 1-4, the roster's read-modify-write
+    // included, without the roster writers' lock.
+    itLinux('a roster writers\' lock that cannot be opened stops the switch before anything is stopped or written', async () => {
+      const { home, start } = await litellmUp();
+      const [lit, shim] = [pidOf(start, 'litellm'), pidOf(start, 'shim')];
+      const reg = join(home, '.cc-sessions');
+      const lock = join(reg, '.account-placement.lock');
+      fs.mkdirSync(lock, { recursive: true });   // a directory: `exec {pfd}>>` cannot open it
+      const [roster, lane] = [rosterBytes(home), laneBytes(home)];
+      const r = cx(home, ['switch', 'codex-a', 'direct']);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toBe(`ccrc codex: roster-unwritable: ${lock} could not be opened, so this switch cannot be serialised `
+        + `against the account verbs that write ~/.ccrc/accounts.json. Fix ${reg}, then re-run. Nothing was stopped or written.\n`);
+      expect([rosterBytes(home), laneBytes(home)]).toEqual([roster, lane]);
+      expect(alive(lit) && alive(shim), 'the switch stopped a tier without the roster writers\' lock').toBe(true);
+    }, 120_000);
+
+    itLinux('a roster writers\' lock held past the bound stops the switch as roster-busy, with nothing stopped or written', async () => {
+      const { home, start } = await litellmUp();
+      const [lit, shim] = [pidOf(start, 'litellm'), pidOf(start, 'shim')];
+      const lock = join(home, '.cc-sessions', '.account-placement.lock');
+      fs.mkdirSync(path.dirname(lock), { recursive: true });
+      const holder = spawn('flock', [lock, 'sh', '-c', 'touch "$0"; sleep 60', join(home, 'held')], { stdio: 'ignore' });
+      trackChild(home, holder);
+      try {
+        await eventually(() => fs.existsSync(join(home, 'held')), 'the holder to take the roster writers\' lock');
+        const [roster, lane] = [rosterBytes(home), laneBytes(home)];
+        // CCRC_CODEX_READY_S=1: the bound is 1 + 30 s.
+        const r = cx(home, ['switch', 'codex-a', 'direct'], { CCRC_CODEX_READY_S: '1' });
+        expect(r.code).toBe(1);
+        expect(r.stdout).toBe('');
+        expect(r.stderr).toBe(`ccrc codex: roster-busy: another roster writer (a 'ccrc account' verb, or a 'ccrc codex switch' of `
+          + `this or another lane) has held the roster writers' lock (${lock}) for 31s without finishing, and this switch `
+          + 'writes the roster. Re-run once it has ended. Nothing was stopped or written.\n');
+        expect([rosterBytes(home), laneBytes(home)]).toEqual([roster, lane]);
+        expect(alive(lit) && alive(shim), 'the switch stopped a tier without the roster writers\' lock').toBe(true);
+      } finally {
+        holder.kill('SIGKILL');
+      }
+    }, 120_000);
+
+    // Quality R2: the `already` arm's three failures. The lane runs its litellm tiers; each refusal leaves them
+    // running and says nothing was stopped.
+    itLinux('a split lane whose roster will not take its mode back is refused, never answered already', async () => {
+      const { home, start } = await litellmUp();
+      const [lit, shim] = [pidOf(start, 'litellm'), pidOf(start, 'shim')];
+      // I1's split: the roster names direct while lane.json, and the running tiers, are litellm.
+      const json = JSON.parse(rosterBytes(home)) as { accounts: Array<{ id: string; exec: Record<string, unknown> }> };
+      json.accounts.find((a) => a.id === 'codex-a')!.exec['bridge'] = 'direct';
+      fs.writeFileSync(join(home, '.ccrc', 'accounts.json'), `${JSON.stringify(json, null, 2)}\n`);
+      const [roster, lane] = [rosterBytes(home), laneBytes(home)];
+      const dot = join(home, '.ccrc');
+      fs.chmodSync(dot, 0o555);
+      let r: Result;
+      try {
+        r = cx(home, ['switch', 'codex-a', 'litellm']);
+      } finally {
+        fs.chmodSync(dot, 0o755);
+      }
+      expect(r.code).toBe(1);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toMatch(/\(roster-write\)$/m);
+      expect(r.stderr).toMatch(/^ccrc codex: switch-stopped: codex-a runs its litellm tiers \(litellm running, shim running\), but its mode could not be recorded again in ~\/\.ccrc\/accounts\.json \(said above\)\. Nothing was stopped\. Fix what is named above, then re-run 'ccrc codex switch codex-a litellm'\.$/m);
+      expect([rosterBytes(home), laneBytes(home)]).toEqual([roster, lane]);
+      expect(execOf(home)['bridge']).toBe('direct');
+      expect(alive(lit) && alive(shim), 'the refusal touched a running tier').toBe(true);
+    }, 120_000);
+
+    itLinux('an already lane whose lane.json cannot be rendered is refused, never answered already', async () => {
+      const { home, start } = await litellmUp();
+      const [lit, shim] = [pidOf(start, 'litellm'), pidOf(start, 'shim')];
+      const [roster, lane] = [rosterBytes(home), laneBytes(home)];
+      const r = lib(home, '_models_node_locked() { return 1; }\ncmd_codex switch codex-a litellm');
+      expect(r.code).toBe(1);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toMatch(/^ccrc codex: lane-unwritable: 'ccrc models' could not render /m);
+      expect(r.stderr).toMatch(/^ccrc codex: switch-stopped: codex-a runs its litellm tiers \(litellm running, shim running\) and the roster records that mode, but lane\.json could not be rendered \(said above\)\. Nothing was stopped\. .*'ccrc codex switch codex-a litellm'\.$/m);
+      expect([rosterBytes(home), laneBytes(home)]).toEqual([roster, lane]);
+      expect(alive(lit) && alive(shim), 'the refusal touched a running tier').toBe(true);
+    }, 120_000);
+
+    itLinux('an already lane whose rendered lane.json reads another mode is refused, never answered already', async () => {
+      const { home, start } = await litellmUp();
+      const [lit, shim] = [pidOf(start, 'litellm'), pidOf(start, 'shim')];
+      const roster = rosterBytes(home);
+      // A render that answers ok and leaves lane.json naming the other mode.
+      const r = lib(home, '_models_node_locked() { f="$(_codex_lane_dir codex-a)/lane.json"; jq \'.bridge = "direct"\' "$f" > "$f.x" && mv "$f.x" "$f"; '
+        + 'printf \'{"ok":true,"wrote":{"lane":"fixture"}}\\n\'; }\ncmd_codex switch codex-a litellm');
+      expect(r.code).toBe(1);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toMatch(/^ccrc codex: switch-stopped: codex-a runs its litellm tiers \(litellm running, shim running\) and the roster records that mode, but .*lane\.json reads direct after it was rendered\. Nothing was stopped\. .*'ccrc codex switch codex-a litellm'\.$/m);
+      expect(rosterBytes(home)).toBe(roster);
+      expect(alive(lit) && alive(shim), 'the refusal touched a running tier').toBe(true);
+    }, 120_000);
   });
 });

@@ -372,6 +372,30 @@ describe('account-op codex-mode (codex bridge Stage 2, Task 12)', () => {
     expect(readFileSync(file, 'utf8')).toBe(before);
   });
 
+  // Fix round 2 (review R1/R3): the mode the row already records is not written again, so a hand-edited roster keeps
+  // its own spelling (indentation, key order) when `ccrc codex switch` answers `already`.
+  it('writes nothing when the row already records the mode, so a hand-edited roster keeps its bytes', () => {
+    const { file } = lane();
+    const json = JSON.parse(readFileSync(file, 'utf8')) as { accounts: Array<{ id: string; exec: Record<string, unknown> }> };
+    const row = json.accounts.find((a) => a.id === 'lane-a')!;
+    // `bridge` first in exec, and the whole file on one line: neither is this file's writer's spelling.
+    row.exec = { bridge: 'direct', ...row.exec };
+    const direct = `${JSON.stringify(json)}\n`;
+    writeFileSync(file, direct);
+    const d = op(['--file', file, '--id', 'lane-a', '--bridge', 'direct']);
+    expect(d, d.stderr).toEqual({ code: 0, stdout: '', stderr: '' });
+    expect(readFileSync(file, 'utf8')).toBe(direct);
+    delete row.exec['bridge'];
+    const litellm = `${JSON.stringify(json, null, 4)}\n`;
+    writeFileSync(file, litellm);
+    const l = op(['--file', file, '--id', 'lane-a', '--bridge', 'litellm']);
+    expect(l, l.stderr).toEqual({ code: 0, stdout: '', stderr: '' });
+    expect(readFileSync(file, 'utf8')).toBe(litellm);
+    // A different mode is still written.
+    expect(op(['--file', file, '--id', 'lane-a', '--bridge', 'direct']).code).toBe(0);
+    expect(execOf(file)['bridge']).toBe('direct');
+  });
+
   it('refuses a non-codex row, an unknown mode and an id the roster lacks, and writes nothing', () => {
     const { file } = lane();
     const before = readFileSync(file, 'utf8');
