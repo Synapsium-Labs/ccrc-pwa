@@ -739,7 +739,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PANE}\n`, stderr: '' };
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
-    // buildServer always hands the watcher a Presence; an absent port reads as a viewer (fail closed).
+    // buildServer always hands the watcher a Viewers; an absent port reads as a viewer (fail closed).
     const deps = { ...testDeps(home, run), cfg, coord, fleetState: { ccdVerbs: ['hibernate'] }, viewers: new Viewers(() => Date.now()) };
     const w = new FleetWatcher(deps as never, new Bus(), 10_000);
     (w as unknown as { stopDoneStartedAt: number }).stopDoneStartedAt = startedAt;

@@ -69,7 +69,7 @@ export function requestBody(input: Record<string, unknown>, id = CHILD): Request
 export interface Approvals {
   home: string; coord: CoordStore; app: FastifyInstance; watcher: FleetWatcher; log: NotifyLog;
   sent: PushPayload[]; panes: Map<string, string>; gone: Set<string>; unmeasured: Set<string>;
-  /** The Presence the routes read (`buildServer` sets it on the shared deps; a restart keeps it). */
+  /** The Viewers the routes read (`buildServer` sets it on the shared deps; a restart keeps it). */
   viewers: Viewers;
   /** A registry row: wrapper `claude`, the project, a workdir, a uuid, and a live state file naming `version`. */
   seed(id: string, project: string, version?: string | null): void;

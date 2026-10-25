@@ -250,7 +250,7 @@ describe('hibernatePass: the store reads, on a real store', () => {
   });
 });
 
-describe('hibernatePass: the viewer is Presence.isOpen', () => {
+describe('hibernatePass: the viewer is Viewers.isOpen', () => {
   it('a connection that reported visible:false still holds its session (an open screen in a hidden tab)', async () => {
     let t = NOW;
     const viewers = new Viewers(() => t);

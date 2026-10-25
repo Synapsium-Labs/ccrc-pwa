@@ -35,8 +35,8 @@ import { recordNestedRescueShadow } from './nestedRescueShadow.js';
  *      takes at its act): a run that names it as worker or claimant, a review that still needs it, or a store that
  *      cannot say, defers it. The lane read these when its pass began; a run can bind the row since, and ccd cannot
  *      see the coordination store, so this read is the only guard of the run conjuncts at the act;
- *   4. a person looking at the session defers it — WITHOUT a ceiling (spec §5.3: "Viewers defers WITHOUT a
- *      ceiling");
+ *   4. a person looking at the session defers it — WITHOUT a ceiling (spec §5.3: "Presence defers WITHOUT a
+ *      ceiling" — that spec's "presence" is the viewer claim `Viewers` now holds);
  *   5. the audit — one that cannot be read is the audit's own failure (`audit-failed`), never the verb's — and its
  *      `expiresAt` through the one reader: a document without it is NO EVIDENCE, and nothing is
  *      composed; an archive other than the one the lane queued is a row that moved, retried — checked BEFORE a

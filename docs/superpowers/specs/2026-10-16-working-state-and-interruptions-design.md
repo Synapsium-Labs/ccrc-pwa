@@ -611,7 +611,7 @@ hold has a name):
   (`coord/store.ts` ≈:3185 and ≈:3228; the archive door's `coordinator-has-open-runs` refusal reads the first), and the
   population the dead-coordinator lane sweeps, so a coordinator whose runs wait at `awaiting-review` or `merging` is never
   put to sleep. A run read that fails holds (`runs-unreadable`); no claim it holds; no queued mail to it;
-- nobody has it open (hold `viewer`), under this **presence contract**. `Presence` (`server/src/viewer.ts`) keeps,
+- nobody has it open (hold `viewer`), under this **presence contract**. `Viewers` (`server/src/viewer.ts`) keeps,
   beside today's visible claim, an *open* claim per `/ws/session/:id` connection: stamped when the socket connects
   (`server.ts` ≈:1734) and re-stamped by every frame the client sends, visible or not, dropped when the socket closes,
   and believed for `PRESENCE_OPEN_TTL_MS` (10 minutes, beside `PRESENCE_TTL_MS` in `shared/api.ts` ≈:4166) after its last

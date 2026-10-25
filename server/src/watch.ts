@@ -4821,9 +4821,9 @@ export class FleetWatcher {
 
   /** The ONE executor, as both triggers reach it: `reclaimChild` on the
    *  session's own `KeyedQueue`, with the deps the close route composes — so
-   *  presence, the ceiling and the feed row behave identically however a
+   *  the viewer claim, the ceiling and the feed row behave identically however a
    *  reclaim was started (spec §5.7). Composes EXACTLY the close port's seven
-   *  members (`coord, io, cfg, runCcd, fleetState, presence, notifyLog`),
+   *  members (`coord, io, cfg, runCcd, fleetState, viewers, notifyLog`),
    *  `now` unset — built HERE, inside the queue callback, as the close port
    *  does. `Deps.childReclaimExec` replaces the whole call in a test, and
    *  nowhere else. */
