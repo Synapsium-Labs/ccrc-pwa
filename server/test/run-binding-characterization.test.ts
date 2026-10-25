@@ -72,3 +72,69 @@ describe('today\'s session-keyed run readers (characterization, ARCH-60)', () =>
     expect(row()).toEqual({ sessionBornAt: null, sessionBornFor: null });
   });
 });
+
+// ARCH-62 (#797), characterization: the rest of the session-keyed readers the store holds, pinned before they are
+// routed through `bindingOf`. Green on the code before the routing; the routing commit changes none of these.
+describe('the other session-keyed readers as they answer before ARCH-62', () => {
+  it('openRunsForSession excludes the named run and lists the rest in id order', () => {
+    const s = store();
+    const a = open(s, 'prog-a', 'coord-1');
+    s.setSession(a, 'demo-w');
+    const b = open(s, 'prog-b', 'coord-2');
+    s.setSession(b, 'demo-w');
+    expect(okSiblings(s.openRunsForSession('demo-w')).map((r) => r.id)).toEqual([a, b]);
+    expect(okSiblings(s.openRunsForSession('demo-w', a)).map((r) => r.id)).toEqual([b]);
+    expect(okSiblings(s.openRunsForSession('demo-other')).map((r) => r.id)).toEqual([]);
+  });
+
+  it('a run in a state this build cannot name counts as open, for the parent, the set and the sibling list', () => {
+    const s = store();
+    const a = open(s, 'prog-a', 'coord-1');
+    s.setSession(a, 'demo-w');
+    tx(s.db, () => { s.db.prepare("UPDATE runs SET state = 'from-a-newer-build' WHERE id = ?").run(a); });
+    expect(s.parentOfSession('demo-w')).toBe('coord-1');
+    expect(s.openClaimantsOf('demo-w')).toEqual(['coord-1']);
+    expect(okSiblings(s.openRunsForSession('demo-w')).map((r) => r.id)).toEqual([a]);
+    const named = s.runsNamingSession('demo-w');
+    expect(named.ok && named.runs.map((r) => r.state)).toEqual(['unknown']);
+  });
+
+  it('an ownerless open run makes the parent null and is no entry in the claimant set', () => {
+    const s = store();
+    const a = open(s, 'prog-a', 'coord-1');
+    s.setSession(a, 'demo-w');
+    const b = open(s, 'prog-b', 'coord-2');
+    s.setSession(b, 'demo-w');
+    tx(s.db, () => { s.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(b); });
+    expect(s.parentOfSession('demo-w')).toBeNull();
+    expect(s.openClaimantsOf('demo-w')).toEqual(['coord-1']);
+  });
+
+  it('a finished worker has no parent and no claimants', () => {
+    const s = store();
+    const a = open(s, 'prog-a', 'coord-1');
+    s.setSession(a, 'demo-w');
+    finish(s, a);
+    expect(s.parentOfSession('demo-w')).toBeNull();
+    expect(s.openClaimantsOf('demo-w')).toEqual([]);
+  });
+
+  it('openRunsClaimedBy lists a claimant\'s open runs, session-less planned ones included', () => {
+    const s = store();
+    const a = open(s, 'prog-a', 'coord-1');
+    s.setSession(a, 'demo-w');
+    const b = open(s, 'prog-b', 'coord-1');
+    const c = open(s, 'prog-c', 'coord-1');
+    finish(s, c);
+    expect(okSiblings(s.openRunsClaimedBy('coord-1')).map((r) => r.id)).toEqual([a, b]);
+  });
+
+  it('resolveWorker and resolveCoordinator read one run\'s own columns', () => {
+    const s = store();
+    const a = open(s, 'prog-a', 'coord-1');
+    expect(s.resolveWorker(a)).toBeNull();
+    s.setSession(a, 'demo-w');
+    expect(s.resolveWorker(a)).toBe('demo-w');
+    expect(s.resolveCoordinator(a)).toBe('coord-1');
+  });
+});
