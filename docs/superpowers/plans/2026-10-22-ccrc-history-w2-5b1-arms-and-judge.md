@@ -3797,6 +3797,14 @@ git commit -m "feat(history-replay): marker, verify --section pilot|quiz and the
   -m "$CO_AUTHORED_BY"
 ```
 
+Fix-round marker-state measurement (W2-D84):
+
+| Guard | Actual measured mutation | Actual red title | Restoration `cmp` |
+|---|---|---|---|
+| Repeated pair preserves membership but differs in bytes | Add `read.list.pairs.length !== got.size` to the `pairs-differ` branch | `verify --section quiz reports the same pairs with one line repeated as itself, never folded, and ok is false (W2-D84)`; expected `bytes-differ`, received `pairs-differ` | 0 |
+
+The valid exact-marker rows remain the CONTROL; the repeated-line row passed again after literal restoration.
+
 ### Task 4: The arm engine: `arms --section pilot|quiz`, both arms of each question in batches, preflighted before every batch, with the one re-run, the manifests, the answer records and the summary
 
 This task turns Tasks 1 to 3's pieces into the operator's arm batches (W2 decisions §5, act 14's usage pilot and act 21). It adds one subcommand, `arms`, in two forms, and registers it in `HANDLERS`. It also owns the readers Task 5's judge shares with it (R8, R26): `loadArmRun`, `armNodeOf` and `readArmAnswers`, and `refuseSpawnAdmission` and `preflightSpawn`, factored out of W2-5a's writer code with its behaviour and pins unchanged:
