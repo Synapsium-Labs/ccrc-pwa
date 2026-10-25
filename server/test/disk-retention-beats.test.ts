@@ -16,6 +16,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import type { Deps } from '../src/server.js';
 import { CHILD_RECLAIM_SWEEP_MS } from '../src/laneSchedule.js';
+import { STALE_ARCHIVE_SWEEP_MS } from '../src/coord/staleArchive.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -128,5 +129,57 @@ describe('the orphan-worktree beat (D-6631): the monotonic clock at the child-re
     await watcher.sweepOrphanTrees();
     expect(passes()).toBe(0);
     expect(watcher.orphanTreesHealth()).toBeNull();
+  });
+});
+
+describe('the stale-archive beat (D-6643): the wall clock, one pass an hour, one at a time, never rejecting', () => {
+  // A pass reads `viewers` off the deps once it starts: count the reads. (A pass with no coord ends at once, which is enough.)
+  function build(throwOnPass = false): { watcher: FleetWatcher; passes: () => number } {
+    let passes = 0;
+    const deps = { ...testDeps() } as Deps;
+    Object.defineProperty(deps, 'viewers', { get: () => { passes++; if (throwOnPass) throw new Error('boom'); return undefined; } });
+    return { watcher: new FleetWatcher(deps, new Bus()), passes: () => passes };
+  }
+
+  it('runs on the first call, holds a call 1 ms short of the cadence, and runs again at it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(3_000_000);
+    const { watcher, passes } = build();
+    await watcher.sweepStaleArchive([], []);
+    expect(passes()).toBe(1);
+    vi.setSystemTime(3_000_000 + STALE_ARCHIVE_SWEEP_MS - 1);
+    await watcher.sweepStaleArchive([], []);
+    expect(passes(), 'held 1 ms short of the cadence').toBe(1);
+    vi.setSystemTime(3_000_000 + STALE_ARCHIVE_SWEEP_MS);
+    await watcher.sweepStaleArchive([], []);
+    expect(passes(), 'the cadence elapsed').toBe(2);
+  });
+
+  it('skips a call while a pass is still in flight, even one past the cadence', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(4_000_000);
+    const { watcher, passes } = build();
+    const first = watcher.sweepStaleArchive([], []);
+    vi.setSystemTime(4_000_000 + STALE_ARCHIVE_SWEEP_MS);
+    const second = watcher.sweepStaleArchive([], []);
+    await Promise.all([first, second]);
+    expect(passes(), 'the second call met a pass in flight').toBe(1);
+    vi.setSystemTime(4_000_000 + 2 * STALE_ARCHIVE_SWEEP_MS);
+    await watcher.sweepStaleArchive([], []);
+    expect(passes(), 'the flight cleared').toBe(2);
+  });
+
+  it('a throwing pass is caught, never rejects, and frees the flight', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(5_000_000);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { watcher, passes } = build(true);
+      await expect(watcher.sweepStaleArchive([], [])).resolves.toBeUndefined();
+      expect(warn.mock.calls.some((c) => /sweepStaleArchive failed \(boom\)/.test(String(c[0]))), 'the throw is warned').toBe(true);
+      vi.setSystemTime(5_000_000 + STALE_ARCHIVE_SWEEP_MS);
+      await watcher.sweepStaleArchive([], []);
+      expect(passes(), 'the guard was released by the throw').toBe(2);
+    } finally { warn.mockRestore(); }
   });
 });
