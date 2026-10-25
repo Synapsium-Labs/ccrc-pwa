@@ -11,6 +11,7 @@ import type { HookState } from './hookstate.js';
 import type { FleetSession, HookAsk, LifecycleInput, PrState, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
+import { readSession } from './sessionReading.js';
 import { sessionBucket, sessionLifecycle, sessionRoleOf, spawnVerdict } from '../../shared/api.js';
 import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
@@ -599,7 +600,8 @@ export async function assembleFleet(
     // to the substrate-unreachable spec: what the fleet view shows for
     // cannot-ask is a product judgement (a new SessionStatus crosses the wire
     // and every render seam), not a guard this assembly may improvise.
-    const alive = await tmux.hasSession(r.id);
+    const verdict = await tmux.sessionVerdict(r.id);
+    const alive = verdict.verdict === 'live';
     let status: SessionStatus = 'dead';
     let name: string | null = null, statusUpdatedAt: number | null = null, version: string | null = null;
     // D-76. Claude Code's own "I am blocked on the human" verdict, hoisted out
@@ -759,6 +761,12 @@ export async function assembleFleet(
     // specifically to render this field — it is not a permanent argument, only
     // this task's.
     const lifecycleInput: LifecycleInput = lifecycleInputFor(r, alive, now * 1000);
+    const lifecycle = sessionLifecycle(lifecycleInput);
+    // ARCH-48 (#783): the wire's `presence` and `deadSince`, from `readSession` over the facts THIS assembly measured —
+    // the row (listed, so present), tmux's verdict, the lifecycle just derived and the registry's `.hibernated` stamp.
+    // The reading is computed here once; a reader renders it (doubt is `unknown`, never `dead`).
+    const reading = readSession({ row: 'present', pane: verdict.verdict, lifecycle, hibernatedAt: r.hibernatedAt,
+      turn: alive && status !== 'dead' ? status : null });
     const session: FleetSession = {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(cfg.roster, r.id),
       project: r.project, workdir: r.workdir, workspace: r.workspace, name, title: r.title, status, statusUpdatedAt,
@@ -884,7 +892,11 @@ export async function assembleFleet(
       // archived row it is redundant but true. `pwa/test/session-lifecycle
       // .test.tsx` pins both, so this paragraph cannot silently go stale the
       // way its predecessor did.
-      lifecycle: sessionLifecycle(lifecycleInput),
+      lifecycle,
+      presence: reading.presence,
+      // Only a dead lifecycle with a dated stamp: `stopped` (the stop stamp's own instant); an `orphan` or a
+      // `never-started` row has nothing that dates its death.
+      deadSince: reading.deadCause === 'stopped' && r.stopped !== null ? r.stopped.at * 1000 : null,
       // Epoch MS on the wire — the timebase `statusUpdatedAt`/`bucketSince`
       // already use and the PWA's relative-time helpers already read.
       // `archivedAt` is the one exception, in seconds, because it shipped that

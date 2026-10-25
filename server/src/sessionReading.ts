@@ -26,7 +26,7 @@
 // `unmeasurable` with the pane gone is `unknown` too, `why: 'lifecycleDoubt'`. The destructive door answers that one
 // doubt `alive` (D-1140, in `measureClaimant`'s switch on `why`): fail-shut is that caller's policy, not the reading's,
 // so a display reader of `presence` sees the doubt as a doubt.
-import { DEAD_CAUSES, lifecycleIsDead, type DeadCause, type SessionLifecycle } from '../../shared/api.js';
+import { DEAD_CAUSES, lifecycleIsDead, type DeadCause, type Presence, type SessionLifecycle } from '../../shared/api.js';
 
 /** What the registry said about the one id: `SingleRead`'s kinds, with `found` spelled `present`. */
 export type RowFact = 'present' | 'absent' | 'unmeasurable' | 'unlistable' | 'bad-id';
@@ -49,7 +49,8 @@ export interface SessionFacts {
   readonly viewer?: ViewerWord;
 }
 
-export type Presence = 'alive' | 'asleep' | 'dead' | 'unknown';
+/** The wire word (`Presence` lives in L0 beside `FleetSession.presence`; re-exported for this module's readers). */
+export type { Presence };
 export type Turn = 'busy' | 'idle' | 'shell' | 'unknown';
 /** Which death (`DEAD_CAUSES` and `DeadCause` live in L0, `shared/api.ts`, beside `DEAD_LIFECYCLES`; re-exported here
  *  for this module's readers). */

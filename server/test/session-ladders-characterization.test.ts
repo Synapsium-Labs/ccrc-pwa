@@ -140,6 +140,8 @@ interface Observed {
   /** The fleet frame's row: `absent` when the frame does not list the id at all. */
   frame: string;
   liveRow: string;
+  /** The wire's `presence/deadSince` on the frame's row (ARCH-48, #783); `absent` when the frame does not list the id. */
+  presence: string;
   resolve: string;
   claimProbe: string;
   measuredDead: boolean;
@@ -154,6 +156,7 @@ const observe = async (r: Row): Promise<Observed> => {
   const s = fleet.find((x) => x.id === w.id);
   const frame = s === undefined ? 'absent'
     : `${s.status}${s.statusUnmeasured ? '+unmeasured' : ''}/${s.lifecycle}`;
+  const presence = s === undefined ? 'absent' : `${s.presence}/${s.deadSince}`;
 
   const rec = await readSessionRecord(w.io, w.cfg, w.id);
   let liveRow = 'no-record';
@@ -177,7 +180,7 @@ const observe = async (r: Row): Promise<Observed> => {
 
   const m = await measureClaimant({ coord, io: w.io, cfg: w.cfg, tmux: w.tmux }, w.id, NOW);
   const crash = deadCoordinatorCrash(m, { kind: 'no-history' }).kind;
-  return { liveStatus: ls, frame, liveRow, resolve, claimProbe, measuredDead: claimantMeasuredDead(m), crash };
+  return { liveStatus: ls, frame, liveRow, presence, resolve, claimProbe, measuredDead: claimantMeasuredDead(m), crash };
 };
 
 /** Recorded from the code as it stands before ARCH-48 moves any of these readers. The columns that differ on a row are
@@ -185,22 +188,22 @@ const observe = async (r: Row): Promise<Observed> => {
  *  `busy+unmeasured`; the frame lists neither an unlistable directory nor a listed-but-unassembled row; `measuredDead`
  *  is true only for a proven absence or a dead lifecycle, and false for a sleeper. */
 const EXPECTED: Record<string, Observed> = {
-  "the registry directory will not list": { liveStatus: 'dead', frame: 'absent', liveRow: 'no-record', resolve: 'no:unmeasurable', claimProbe: 'gone', measuredDead: false, crash: 'unmeasurable' },
-  "an id that is not a registry id": { liveStatus: 'dead', frame: 'absent', liveRow: 'no-record', resolve: 'no:absent', claimProbe: 'gone', measuredDead: false, crash: 'unmeasurable' },
-  "no row in a directory that listed cleanly": { liveStatus: 'dead', frame: 'absent', liveRow: 'no-record', resolve: 'no:absent', claimProbe: 'gone', measuredDead: true, crash: 'unmeasured' },
-  "listed but unassembled (a coordinator mid-write, D-1144)": { liveStatus: 'dead', frame: 'absent', liveRow: 'no-record', resolve: 'no:absent', claimProbe: 'gone', measuredDead: false, crash: 'unmeasurable' },
-  "a live pane, live file idle": { liveStatus: 'idle', frame: 'idle/unsupervised', liveRow: 'idle/unsupervised', resolve: 'ok:idle', claimProbe: 'running', measuredDead: false, crash: 'alive' },
-  "a live pane, live file busy": { liveStatus: 'busy', frame: 'busy/unsupervised', liveRow: 'busy/unsupervised', resolve: 'ok:busy', claimProbe: 'running', measuredDead: false, crash: 'alive' },
-  "a live pane, live file waiting (collapsed to busy)": { liveStatus: 'busy', frame: 'busy/unsupervised', liveRow: 'busy/unsupervised', resolve: 'ok:busy', claimProbe: 'running', measuredDead: false, crash: 'alive' },
-  "a live pane, no live file yet (the seconds after ws-add)": { liveStatus: 'idle', frame: 'idle/unsupervised', liveRow: 'idle/unsupervised', resolve: 'ok:idle', claimProbe: 'running', measuredDead: false, crash: 'alive' },
-  "a live pane, live file unreadable": { liveStatus: 'idle', frame: 'busy+unmeasured/unsupervised', liveRow: 'busy+unmeasured/unsupervised', resolve: 'ok:busy', claimProbe: 'running', measuredDead: false, crash: 'alive' },
-  "a live pane, the pane pid read failed": { liveStatus: 'idle', frame: 'busy+unmeasured/unsupervised', liveRow: 'busy+unmeasured/unsupervised', resolve: 'ok:busy', claimProbe: 'running', measuredDead: false, crash: 'alive' },
-  "a live pane outranks a stop stamp": { liveStatus: 'idle', frame: 'idle/unsupervised', liveRow: 'idle/unsupervised', resolve: 'ok:idle', claimProbe: 'running', measuredDead: false, crash: 'alive' },
-  "tmux did not answer": { liveStatus: 'dead', frame: 'dead/orphan', liveRow: 'dead/orphan', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: false, crash: 'unmeasurable' },
-  "gone + a stop stamp": { liveStatus: 'dead', frame: 'dead/stopped', liveRow: 'dead/stopped', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: true, crash: 'stopped' },
-  "gone + a stop stamp + hibernated": { liveStatus: 'dead', frame: 'dead/stopped', liveRow: 'dead/stopped', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: false, crash: 'alive' },
-  "gone + a long-gone heartbeat, stale hibernated stamp": { liveStatus: 'dead', frame: 'dead/orphan', liveRow: 'dead/orphan', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: true, crash: 'crashed' },
-  "gone + a fresh supervisor heartbeat (restarting)": { liveStatus: 'dead', frame: 'dead/restarting', liveRow: 'dead/restarting', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: false, crash: 'alive' },
+  "the registry directory will not list": { liveStatus: 'dead', frame: 'absent', liveRow: 'no-record', presence: 'absent', resolve: 'no:unmeasurable', claimProbe: 'gone', measuredDead: false, crash: 'unmeasurable' },
+  "an id that is not a registry id": { liveStatus: 'dead', frame: 'absent', liveRow: 'no-record', presence: 'absent', resolve: 'no:absent', claimProbe: 'gone', measuredDead: false, crash: 'unmeasurable' },
+  "no row in a directory that listed cleanly": { liveStatus: 'dead', frame: 'absent', liveRow: 'no-record', presence: 'absent', resolve: 'no:absent', claimProbe: 'gone', measuredDead: true, crash: 'unmeasured' },
+  "listed but unassembled (a coordinator mid-write, D-1144)": { liveStatus: 'dead', frame: 'absent', liveRow: 'no-record', presence: 'absent', resolve: 'no:absent', claimProbe: 'gone', measuredDead: false, crash: 'unmeasurable' },
+  "a live pane, live file idle": { liveStatus: 'idle', frame: 'idle/unsupervised', liveRow: 'idle/unsupervised', presence: 'alive/null', resolve: 'ok:idle', claimProbe: 'running', measuredDead: false, crash: 'alive' },
+  "a live pane, live file busy": { liveStatus: 'busy', frame: 'busy/unsupervised', liveRow: 'busy/unsupervised', presence: 'alive/null', resolve: 'ok:busy', claimProbe: 'running', measuredDead: false, crash: 'alive' },
+  "a live pane, live file waiting (collapsed to busy)": { liveStatus: 'busy', frame: 'busy/unsupervised', liveRow: 'busy/unsupervised', presence: 'alive/null', resolve: 'ok:busy', claimProbe: 'running', measuredDead: false, crash: 'alive' },
+  "a live pane, no live file yet (the seconds after ws-add)": { liveStatus: 'idle', frame: 'idle/unsupervised', liveRow: 'idle/unsupervised', presence: 'alive/null', resolve: 'ok:idle', claimProbe: 'running', measuredDead: false, crash: 'alive' },
+  "a live pane, live file unreadable": { liveStatus: 'idle', frame: 'busy+unmeasured/unsupervised', liveRow: 'busy+unmeasured/unsupervised', presence: 'alive/null', resolve: 'ok:busy', claimProbe: 'running', measuredDead: false, crash: 'alive' },
+  "a live pane, the pane pid read failed": { liveStatus: 'idle', frame: 'busy+unmeasured/unsupervised', liveRow: 'busy+unmeasured/unsupervised', presence: 'alive/null', resolve: 'ok:busy', claimProbe: 'running', measuredDead: false, crash: 'alive' },
+  "a live pane outranks a stop stamp": { liveStatus: 'idle', frame: 'idle/unsupervised', liveRow: 'idle/unsupervised', presence: 'alive/null', resolve: 'ok:idle', claimProbe: 'running', measuredDead: false, crash: 'alive' },
+  "tmux did not answer": { liveStatus: 'dead', frame: 'dead/orphan', liveRow: 'dead/orphan', presence: 'unknown/null', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: false, crash: 'unmeasurable' },
+  "gone + a stop stamp": { liveStatus: 'dead', frame: 'dead/stopped', liveRow: 'dead/stopped', presence: `dead/${SEC * 1000}`, resolve: 'ok:dead', claimProbe: 'gone', measuredDead: true, crash: 'stopped' },
+  "gone + a stop stamp + hibernated": { liveStatus: 'dead', frame: 'dead/stopped', liveRow: 'dead/stopped', presence: 'asleep/null', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: false, crash: 'alive' },
+  "gone + a long-gone heartbeat, stale hibernated stamp": { liveStatus: 'dead', frame: 'dead/orphan', liveRow: 'dead/orphan', presence: 'dead/null', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: true, crash: 'crashed' },
+  "gone + a fresh supervisor heartbeat (restarting)": { liveStatus: 'dead', frame: 'dead/restarting', liveRow: 'dead/restarting', presence: 'alive/null', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: false, crash: 'alive' },
 };
 
 describe('the other liveness ladders, on the same rows (today\'s answers, differences included)', () => {
