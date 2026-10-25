@@ -147,8 +147,14 @@ describe('the coordinator skill: its contract', () => {
     expect(flat(skill)).toContain('never read by this session');
     expect(flat(refs('wave-lifecycle.md'))).not.toContain('Review the handoff commit the way you would review any commit.');
     expect(flat(refs('wave-lifecycle.md'))).not.toContain('your ordinary review');
-    // R5 amendment 2026-10-25: the loose `--admin` allowance is withdrawn; only the narrow licence remains.
-    expect(flat(refs('wave-lifecycle.md'))).not.toMatch(/where the repository(\u2019|')?s? ruleset requires it/);
+  });
+
+  it('withdraws the loose --admin allowance (R5 as amended 2026-10-25, ruling 5)', () => {
+    const lifecycle = flat(refs('wave-lifecycle.md'));
+    expect(lifecycle).not.toMatch(/where the repository(\u2019|')?s? ruleset requires it/);
+    expect(lifecycle).not.toContain('narrow approval licence');
+    expect(lifecycle).toContain("`--admin` and GitHub API merge or enqueue calls are governed by the repository's "
+      + 'external policy authority; until that authority answers (wave 2b), a coordinator never uses them');
   });
 
   // ── the COUNT, which the verbatim pin above structurally cannot see ──────

@@ -771,10 +771,11 @@ whole time, which is the only prevention this ordering rule buys.
    read, the exact SHA is the producer run's own verified `handoffCommit`:
    prove the merge with `gh pr view <pr> --json state,headRefOid`, answering
    MERGED with `headRefOid` equal to it — the coordinator merges with
-   `gh pr merge <pr> --squash --match-head-commit <handoffCommit>` (`--admin`
-   only under the narrow approval licence of spec §5.7.4, §11 item 10, until wave 2b ships, and never on an
-   unattended landing) for exactly this
-   reason — and on a native-queue project it lands with the same binding, as
+   `gh pr merge <pr> --squash --match-head-commit <handoffCommit>` for
+   exactly this reason (`--admin` and GitHub API merge or enqueue calls are
+   governed by the repository's external policy authority; until that
+   authority answers (wave 2b), a coordinator never uses them) — and on a
+   native-queue project it lands with the same binding, as
    "Landing on a native-queue project" below says. An UNMARKED producer —
    every workspace minted without a marker: by a box whose ccd did not yet
    mark children, or by a dispatch that journaled `child-omitted` (§2) — is
