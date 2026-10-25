@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=02c20fc33f9ae1440414d4840034d98b2828e74994e56d4a7ccf213d3a695191
+# ccrc:generated 1 sha256=7a367cfed3ab6695822894e99814da4e005a1c2dfd15b61ca24a8bd089b01ae8
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5214,24 +5214,6 @@ _lc_dec_ok() {   # text -> 0 iff it fits _LC_DEC_MAX *BYTES*. Prints nothing.
   (( ${#1} <= _LC_DEC_MAX ))
 }
 # ── end lifecycle journal ────────────────────────────────────────── LC-END ──
-_turn_reading() {   # config-dir pid -> TR_WHY ok|absent|not-regular|no-status, TR_WORD, TR_RAW, TR_SF; 0 iff why=ok
-  # ARCH-50 (K4): the ONE read of a session's status file, `<cfg>/sessions/<pid>.json`, for `_ws_status` and
-  # `_idle_for_keystroke`. It answers the same four words as the server's `turnWordOf` (`idle`, `busy`, `shell`, else
-  # `unknown`) and keeps the word as read in TR_RAW. Each caller keeps its own policy line over the result and its
-  # own failure vocabulary over TR_WHY. `_swap_idle_gate` is NOT a caller (D-5240, D-5349): it keeps its own verdict.
-  # `-e` paired with `-L` for D-1848's reason: a dangling symlink is not absence. `-f` before the grep for D-2379:
-  # `grep FILE` opens by name, and a FIFO with no writer would block for ever.
-  local sf="$1/sessions/$2.json" st
-  TR_SF="$sf"; TR_RAW=""; TR_WORD=unknown
-  if [[ ! -e "$sf" && ! -L "$sf" ]]; then TR_WHY=absent; return 1
-  elif [[ ! -f "$sf" ]]; then TR_WHY=not-regular; return 1
-  fi
-  st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
-  [[ -n "$st" ]] || { TR_WHY=no-status; return 1; }
-  TR_WHY=ok; TR_RAW="$st"
-  case "$st" in idle|busy|shell) TR_WORD="$st" ;; esac
-  return 0
-}
 _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   # Fails closed twice over, and both halves are load-bearing.
   #
@@ -5279,6 +5261,9 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   # every unreadable/unrecognised shape to the same non-zero `[[ -n "$st" ]]
   # || return 1` lands on, so a mode-000 `$sf` is unaffected either way —
   # measured, not assumed.
+  # ARCH-50 (K4): the file is read once, by `_turn_reading`, which owns the `-f` rung and the grep above. Only the
+  # word `idle` is idle here; every other word, `shell` included, answers busy, and an unreadable file answers non-zero.
+  # (Placed far below this function, with the other late helpers, so no line above it moves.)
   _turn_reading "$cfg" "$pid" || return 1
   [[ "$TR_WORD" == idle ]] || { echo busy; return 0; }
   echo idle
@@ -21255,11 +21240,8 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # send the operator looking for a file that is not the problem.
   # ARCH-50: the file is read once, by `_turn_reading`; the two failure sentences and this lane's policy line stay here.
   if ! _turn_reading "$sf" "$spid"; then
-    if [[ "$TR_WHY" == not-regular ]]; then
-      KS_WHY=status-unreadable; KS_DETAIL="not a regular file: $TR_SF${ctxnote:+, $ctxnote}"
-    else
-      KS_WHY=status-unreadable; KS_DETAIL="no status in $TR_SF${ctxnote:+, $ctxnote}"
-    fi
+    KS_WHY=status-unreadable; KS_DETAIL="no status in $TR_SF${ctxnote:+, $ctxnote}"
+    [[ "$TR_WHY" == not-regular ]] && KS_DETAIL="not a regular file: $TR_SF${ctxnote:+, $ctxnote}"
     return 1
   fi
   sf="$TR_SF"; st="$TR_RAW"
@@ -41447,6 +41429,24 @@ _ws_reap_crumb_unread() {   # id breadcrumb-as-read -> rc 0, having printed ws-r
 # fourteen). `wsaudit.test.ts` harvests the whole file, so both words are found.
 # ── end ws-reap's mirror ─────────────────────────────────────────────────── MIRROR-END ──
 
+_turn_reading() {   # config-dir pid -> TR_WHY ok|absent|not-regular|no-status, TR_WORD, TR_RAW, TR_SF; 0 iff why=ok
+  # ARCH-50 (K4): the ONE read of a session's status file, `<cfg>/sessions/<pid>.json`, for `_ws_status` and
+  # `_idle_for_keystroke`. It answers the same four words as the server's `turnWordOf` (`idle`, `busy`, `shell`, else
+  # `unknown`) and keeps the word as read in TR_RAW. Each caller keeps its own policy line over the result and its
+  # own failure vocabulary over TR_WHY. `_swap_idle_gate` is NOT a caller (D-5240, D-5349): it keeps its own verdict.
+  # `-e` paired with `-L` for D-1848's reason: a dangling symlink is not absence. `-f` before the grep for D-2379:
+  # `grep FILE` opens by name, and a FIFO with no writer would block for ever.
+  local sf="$1/sessions/$2.json" st
+  TR_SF="$sf"; TR_RAW=""; TR_WORD=unknown
+  if [[ ! -e "$sf" && ! -L "$sf" ]]; then TR_WHY=absent; return 1
+  elif [[ ! -f "$sf" ]]; then TR_WHY=not-regular; return 1
+  fi
+  st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
+  [[ -n "$st" ]] || { TR_WHY=no-status; return 1; }
+  TR_WHY=ok; TR_RAW="$st"
+  case "$st" in idle|busy|shell) TR_WORD="$st" ;; esac
+  return 0
+}
 # ── ws-reap's ignored read of a nested child (spec 2026-09-22 §1, §5.5) ────────
 # `_ws_reap_eval`'s per-child descent and `_ws_reap_locked`'s children-phase
 # resume each call this right after the child's `status` read, and each call

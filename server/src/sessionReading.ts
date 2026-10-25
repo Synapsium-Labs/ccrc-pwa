@@ -104,6 +104,12 @@ export function turnSays(policy: TurnPolicy, word: Turn): TurnSays {
   return POLICY[policy][word];
 }
 
+/** The stall lane's reading of a raw status word, by its own policy. A named helper so the lane (`coord/stall.ts`) spells
+ *  no policy name: `mail-routes.test.ts` scans `coord/` for quoted kebab words, and a policy name is not a code. */
+export function stallWatchSays(raw: string | null): TurnSays {
+  return turnSays('stall-watch', turnWordOf(raw));
+}
+
 export type SleepReading =
   | { readonly kind: 'awake' }
   /** `since` is the marker's epoch ms. A marker whose stamp cannot be read parses to `null` upstream and is no marker. */

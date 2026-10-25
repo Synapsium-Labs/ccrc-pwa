@@ -1,11 +1,11 @@
 import { ACTIVE_RUN_STATES, MAIL_REPLAY_MS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT, isRunState, isSessionLifecycle, lifecycleIsDead } from '../../../shared/api.js';
 import type { MailGate, RunState } from '../../../shared/api.js';
 import type { MailTurnMode } from '../turnidle.js';
-import { turnSays, turnWordOf } from '../sessionReading.js';
+import { stallWatchSays } from '../sessionReading.js';
 /**
  * The worker stall watch's pure half (design 2026-09-29 §4.2, wave 1). L1: clock-free, fs-free, fastify-free and
  * store-free. `stall-vocabulary.test.ts` pins that, and the coord-ring scan in `single-definition.test.ts` forbids
- * this file `./db.js` and `node:sqlite`. Its one permitted value import is L0, `shared/api.ts`.
+ * this file `./db.js` and `node:sqlite`. Its permitted value imports are L0, `shared/api.ts`, and `stallWatchSays` from `../sessionReading.js` (L1, which imports only L0).
  *
  * Spelled ONCE here: the subject prefixes, and the observation-detail heads that `stallDetail` writes and
  * `parseStallDetail` reads back. `single-definition.test.ts` reds on a second quoted copy anywhere in the four
@@ -661,7 +661,7 @@ function isWatchNotice(m: StallMailRow): boolean {
 }
 
 function isIdleWord(word: string): boolean {
-  return turnSays('stall-watch', turnWordOf(word)) === 'rest';
+  return stallWatchSays(word) === 'rest';
 }
 
 /** Whose turn it is, read from the newest mail between the worker and anyone but the watch (spec §4.2).
