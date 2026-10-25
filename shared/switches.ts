@@ -190,7 +190,7 @@ export const SWITCHES = {
   },
   [CHILD_RECLAIM_DISABLED_MARKER]: {
     storage: { marker: CHILD_RECLAIM_DISABLED_MARKER }, default: 'absent: child reclaim runs', owner: 'C4',
-    meaning: 'Meant to switch off child reclaim alone, leaving expiry, collect and the coordinator reclaim running. Nothing reads it yet: touching it stops nothing until the child-spent reason moves (ARCH-44).',
+    meaning: 'Switches off child reclaim alone: the sweep and the close hand-off queue none, and the executor refuses to act. Expiry, collect, the dead-coordinator lane and stop-done keep running; reclaim-paused stops those too.',
     writer: 'hand-only',
   },
   [CHILD_STALE_RECLAIM_LIVE_MARKER]: {

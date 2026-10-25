@@ -154,6 +154,7 @@ import {
   recordChildReclaimKeptFeed, recordChildReclaimLeafKeptFeed, releaseRetiredChildHold, type ChildReclaimOutcome, type ChildReclaimReleaseOutcome,
   type ChildReclaimReleaseRequest, type ChildReclaimRequest,
 } from './coord/childReclaim.js';
+import { childReclaimDisabledOf, childReclaimDisabledStops } from './coord/childReclaimDisabled.js';
 import {
   childReclaimAskOrder, childReclaimAttention, childReclaimAttentionWithKept, childReclaimDeferExpired, childReclaimDue,
   childReclaimFeedQuiet, childReclaimFirstSighting, childReclaimHoldRead, childReclaimJournalRow, childReclaimKeptItems,
@@ -4198,7 +4199,8 @@ export class FleetWatcher {
     // conjunct, so a child needs two FRESH passes once a switch is lowered
     // (or the box gains the missing capability).
     if (!ccdCan(this.deps.fleetState, 'wsReclaim') || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)
-        || readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set') {
+        || readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set'
+        || childReclaimDisabledStops({ coord, notifyLog: this.deps.notifyLog }, childReclaimDisabledOf(names))) {
       if (this.childReclaimJudged !== null) this.childReclaimJudged = childReclaimKeptVerdicts(this.childReclaimJudged);
       this.childReclaimPublishAttention(mirrorArms, live);
       this.childReclaimSweepState.clear();
