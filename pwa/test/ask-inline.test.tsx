@@ -468,15 +468,15 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
     ['a transcript row', (): Element => screen.getByText('Running them now.')],
   ])('after a click on %s, the next screen takes no focus back', async (_where, target) => {
     // Premises: a key engaged the card; the operator then pressed the page (pointerdown), the focused row blurred to the
-    // body as a click on a non-focusable area does; the next question arrives.
+    // body as a click on a non-focusable area does; the next question arrives. R102: engaged by a non-answer key (a digit
+    // would send, and a send releases the engagement itself), so the pointerdown's release is what ends it.
     media(true);
-    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(1);
     const first = opt(card(), /^Redis/);
     act(() => first.focus());
-    key(first, '1');
+    key(first, 'ArrowDown');
     act(() => { fireEvent.pointerDown(target()); });
     act(() => (document.activeElement as HTMLElement | null)?.blur());
     act(() => store.getState().apply({ type: 'dialog', dialog: nextScreen() }));
@@ -511,15 +511,15 @@ describe('one keyboard engagement per logical ask (R64 F1, F2)', () => {
 
   it('leaving the card by focus alone (the composer focused, then blurred; no pointerdown) ends the engagement', async () => {
     // Premises: a key engaged the card; focus then moved to the composer and fell to the body with no pointer press, so
-    // only the `focusin` outside the card can say the operator left; the next question arrives.
+    // only the `focusin` outside the card can say the operator left; the next question arrives. R102: engaged by a non-answer
+    // key (a digit would send, and a send releases the engagement itself), so the focusin release is what ends it.
     media(true);
-    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     const { arrive, store } = mount();
     await frame();
     arrive(1);
     const first = opt(card(), /^Redis/);
     act(() => first.focus());
-    key(first, '1');
+    key(first, 'ArrowDown');
     act(() => composer().focus());
     act(() => composer().blur());
     expect(document.activeElement, 'premise: focus fell to the body').toBe(document.body);
@@ -1295,6 +1295,105 @@ describe('a raise rendered in one batch with a Deny\'s completion unlocks nothin
       root.unmount();
       host.remove();
     }
+  });
+});
+
+// THE RETAINED PATH, pinned as today's behaviour and NOT endorsed. R99 and R102 leave one case alone: an engagement made by a
+// NON-ANSWER key (an arrow), across a screen change this client did not send (a socket frame). It continues, and the new
+// screen's highlighted row takes focus when the engaged row unmounted with the old screen. This is the external-replacement
+// residual, unwaived: a send this client initiates releases (above), an arrow does not. The cases deliver the change by a frame,
+// for the hooked ask and for the aged one, question to question, question to review and review to question.
+describe('an arrow-engaged keyboard continues across a screen change this client did not send (the unwaived residual)', () => {
+  const reviewD = (): Dialog => askFixture(8).dialog!;
+
+  it.each([
+    ['question to question', (): Dialog => nextScreen(), /^Yes/],
+    ['question to the review', reviewD, /^Submit answers/],
+  ] as const)('hooked ask, %s: the new screen\'s highlighted row takes focus', async (_what, next, row) => {
+    media(true);
+    const { arrive, store } = mount();
+    await frame();
+    arrive(1);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    key(first, 'ArrowDown'); // engages, sends nothing; focus is on the second row
+    const moved = document.activeElement as HTMLElement;
+    expect(card().contains(moved) && moved !== first, 'premise: the arrow moved focus to another row').toBe(true);
+    act(() => store.getState().apply({ type: 'dialog', dialog: next() }));
+    await frame();
+    expect(moved.isConnected, 'premise: the engaged row left the DOM with its screen').toBe(false);
+    expect(document.activeElement, 'the new screen\'s highlighted row took focus').toBe(opt(card(), row));
+  });
+
+  it('hooked ask, the review to a question: the question\'s highlighted row takes focus', async () => {
+    media(true);
+    const { arrive, store } = mount();
+    await frame();
+    arrive(8);
+    const submit = opt(card(), /^Submit answers/);
+    act(() => submit.focus());
+    key(submit, 'ArrowDown');
+    const moved = document.activeElement as HTMLElement;
+    expect(card().contains(moved) && moved !== submit, 'premise: the arrow moved focus to the Cancel row').toBe(true);
+    act(() => store.getState().apply({ type: 'dialog', dialog: askFixture(1).dialog! }));
+    await frame();
+    expect(within(card()).getByText(QUESTION), 'premise: question 1 is up').toBeInTheDocument();
+    expect(moved.isConnected, 'premise: the engaged row left the DOM').toBe(false);
+    expect(document.activeElement, 'the question\'s highlighted row took focus').toBe(opt(card(), /^Redis/));
+  });
+
+  it('aged ask, a question whose third row is gone on the next question: the next question\'s highlighted row takes focus', async () => {
+    media(true);
+    const { arrive, store } = mount();
+    await frame();
+    arrive(2);
+    expect(store.getState().ask, 'premise: no envelope').toBeNull();
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    key(first, 'ArrowDown');
+    key(document.activeElement!, 'ArrowDown');
+    const third = opt(card(), /^None/);
+    expect(document.activeElement, 'premise: the arrows moved focus to the third row').toBe(third);
+    act(() => store.getState().apply({ type: 'dialog', dialog: agedQuestion2() }));
+    await frame();
+    expect(third.isConnected, 'premise: the third row\'s node left the DOM').toBe(false);
+    expect(document.activeElement, 'the next question\'s highlighted row took focus').toBe(opt(card(), /^Yes/));
+  });
+
+  it('aged ask, a question to the review: the review\'s highlighted row takes focus', async () => {
+    media(true);
+    const { arrive, store } = mount();
+    await frame();
+    arrive(2);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    key(first, 'ArrowDown');
+    key(document.activeElement!, 'ArrowDown');
+    const third = opt(card(), /^None/);
+    expect(document.activeElement, 'premise: the arrows moved focus to the third row').toBe(third);
+    act(() => store.getState().apply({ type: 'dialog', dialog: reviewD() }));
+    await frame();
+    expect(third.isConnected, 'premise: the third row\'s node left the DOM').toBe(false);
+    expect(document.activeElement, 'the review\'s highlighted row took focus').toBe(opt(card(), /^Submit answers/));
+  });
+
+  it('aged ask, the review to its question: the question\'s highlighted row takes focus', async () => {
+    media(true);
+    const { arrive, store } = mount();
+    await frame();
+    arrive(8);
+    act(() => store.getState().apply({ type: 'ask_cleared' })); // the aged copy of the same ask
+    expect(store.getState().ask, 'premise: no envelope').toBeNull();
+    const submit = opt(card(), /^Submit answers/);
+    act(() => submit.focus());
+    key(submit, 'ArrowDown');
+    const moved = document.activeElement as HTMLElement;
+    expect(card().contains(moved) && moved !== submit, 'premise: the arrow moved focus to the Cancel row').toBe(true);
+    act(() => store.getState().apply({ type: 'dialog', dialog: askFixture(2).dialog! }));
+    await frame();
+    expect(within(card()).getByText(QUESTION), 'premise: the question is up').toBeInTheDocument();
+    expect(moved.isConnected, 'premise: the engaged row left the DOM').toBe(false);
+    expect(document.activeElement, 'the question\'s highlighted row took focus').toBe(opt(card(), /^Redis/));
   });
 });
 
