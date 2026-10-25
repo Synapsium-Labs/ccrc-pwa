@@ -80,7 +80,7 @@ function ChatItemBody({
     case 'task':
       return <TaskCard notification={item.notification} />;
     case 'pending':
-      return <PendingBubble id={id} send={item.send} onRetry={onRetry} onDiscard={onDiscard} />;
+      return <PendingBubble id={id} send={item.send} onRetry={onRetry} onDiscard={onDiscard} sendHeld={askBelow} />;
     case 'working':
       return <WorkingIndicator />;
   }

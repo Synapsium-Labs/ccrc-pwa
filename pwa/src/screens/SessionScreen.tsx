@@ -640,7 +640,9 @@ export function SessionScreen({
             events={events}
             pending={pending}
             busy={pulsing}
-            onRetry={(key) => useStore.getState().retry(key)}
+            // D-6326 (R89): Retry is a send, held while the inline card is mounted (the bubble's button is disabled for the
+            // same fact); nothing is queued to go when the card leaves.
+            onRetry={(key) => { if (askInline) return; useStore.getState().retry(key); }}
             onDiscard={(key) => useStore.getState().discard(key)}
             askPending={askPending}
             askBelow={askInline}

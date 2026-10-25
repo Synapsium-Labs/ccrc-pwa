@@ -115,11 +115,16 @@ export function PendingBubble({
   send,
   onRetry,
   onDiscard,
+  sendHeld = false,
 }: {
   id: string;
   send: PendingSend;
   onRetry?: (key: string) => void;
   onDiscard?: (key: string) => void;
+  /** D-6326 (R89): the desk's inline ask card is mounted, so Retry, a send path, is disabled with the composer's Send
+   *  until the question is answered. The bubble stays as it is and nothing is queued to go when the card leaves;
+   *  `SessionScreen`'s `onRetry` is guarded on the same fact. Discard is not a send and stays enabled. */
+  sendHeld?: boolean;
 }): ReactNode {
   const attachments = send.attachments;
   if (send.state === 'sending') {
@@ -190,7 +195,7 @@ export function PendingBubble({
           && send.draft !== undefined && send.draft.trim() !== '' && (
           <SendItButton id={id} sendKey={send.key} expect={send.draft} onSent={onDiscard} />
         )}
-        <button type="button" className="pending-retry" onClick={() => onRetry?.(send.key)}>
+        <button type="button" className="pending-retry" disabled={sendHeld} onClick={() => onRetry?.(send.key)}>
           Retry
         </button>
         <button type="button" onClick={() => onDiscard?.(send.key)}>

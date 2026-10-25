@@ -260,7 +260,10 @@ export function Composer({
 
   const closeConflict = (): void => setConflict(null);
   const resolveConflict = (text: string): void => {
-    if (!conflict) return;
+    // D-6326 (R89): both resolving buttons are sends, held while the inline ask card is mounted. The buttons are disabled
+    // for the same fact; this is the defence behind them. The conflict is NOT cleared when held, so the sheet stays open
+    // with its draft and text, and nothing is queued to go when the card leaves.
+    if (!conflict || askUp) return;
     onResolve?.(conflict.key, text, { replaceDraft: true });
     setConflict(null);
   };
@@ -421,6 +424,7 @@ export function Composer({
               <div className="draft-actions">
                 <Button
                   variant="primary"
+                  disabled={askUp}
                   onClick={() => resolveConflict(conflict.text)}
                 >
                   Replace draft
@@ -429,6 +433,7 @@ export function Composer({
                     because `conflict.draft` is now the whole box. */}
                 <Button
                   variant="ghost"
+                  disabled={askUp}
                   onClick={() => resolveConflict(`${conflict.draft}\n${conflict.text}`)}
                 >
                   Append anyway
