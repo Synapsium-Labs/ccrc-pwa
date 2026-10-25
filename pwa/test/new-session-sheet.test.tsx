@@ -906,7 +906,7 @@ describe('NewSessionSheet — step 2 shows the cached project list at once', () 
   it('a deliberate crossing pick from the cache survives a fetch whose changed row is still crossing, and Start sends crossPool', async () => {
     let answer!: (r: { roots: string[]; projects: ProjectRow[] }) => void;
     const create = await pickCrossingFromCache(new Promise((resolve) => { answer = resolve; }));
-    // A NEW row object for the same workdir, with another placement: the reconcile really replaces the pick's row.
+    // The selected project survives the changed row, and Start keeps the deliberate crossing with crossPool: true.
     const changed = proj('quiet-basin', { state: 'tagged', name: 'pool-b' }, { kind: 'unmeasurable' });
     await act(async () => { answer({ roots: ['/w'], projects: [changed] }); });
     expect(await screen.findByRole('button', { name: /^Start quiet-basin/ })).toBeEnabled();
