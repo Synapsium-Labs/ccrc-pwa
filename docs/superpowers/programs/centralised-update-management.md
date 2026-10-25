@@ -44,7 +44,9 @@ numbers; the spec wave each one implements is named beside it.
 | 20 | — (B2: the Docs helper's group stop) | `_stop`, `_signal_group` and `_group_alive` survive Darwin's EPERM from a zombie-only group; row 64 of `ccd-docs-tree.test.ts` goes green on macOS (operator ruling 2026-10-17 15:50) | fleet-first | — | **FOLLOW-UP MERGED** 2026-10-18 16:54 UTC: #607 as `af19bc1fb` (run 566, worker plain-delta; review 609 plus one fix round): the full run on `main` after #441 showed row 64 red on macOS again, the cause was measured on Darwin (an EPERM at the SIGTERM before the leader is reapable), and the fix polls inside the one grace. Row 64 and `ccd-docs-index` are green on macOS (full run 39140769427). Run 566 closed `done`. Was: **MERGED WITH WAVE 15** 2026-10-18 13:11 UTC: in #441 (`322fa3753`); run 566 stays planned as the plan's record, for the operator to abandon. Was: **RIDES WAVE 15** 2026-10-17 16:20 UTC: plan `808f9f549` (D-5333, D-5334; unmeasured); dispatch refused `cap-daily` (48 of 48), so the work rides run 300's branch (#441, mail 5969); run 566 stays planned as the plan's record. Was: **PLANNING** 2026-10-17 15:51 UTC: run 566 open (planned), block 5333 to 5342; plan workflow `wf_dae77d40-97a`; `ccd/ccd` consent asked of claim 1557's coordinator (mail 5957); lands after #410, first-ready against #448 |
 | 21 | — (found by the exit-criteria census) | `.github/workflows/release.yml` parses again (#645 broke line 95), and a guard that every workflow and composite action parses as YAML | — | 5565 to 5569 | **MERGED** 2026-10-19 01:02 UTC: #664 as `ad46cc3b7` (tree equal to the tested merge with `main` `f1c181679`); run 611 done. Was: fix round 1, 2026-10-19 00:35 UTC: review 620 accepted `629f4a755` with 6 minor findings (mail 6573); rulings in mail 6574. Was: in review 2026-10-19 00:20 UTC, wave-done verified at `629f4a755` (PR #664); review run 620 (swift-summit). Was: dispatched 2026-10-18 23:30 UTC, run 611 (worker soft-mesa), route opus/high/sonnet/off, compact 40 |
 | 23 | — (backup retention; operator ruling 2026-10-22) | `ccrc update`'s backups keep the `coord.db` snapshot only where a restore or rollback can read it, so ten kept backups stop costing ten copies of the database | both (`ccd/ccrc`) | 6346 to 6365 | **DONE** 2026-10-23 12:35 UTC: PR #1137 merged at 12:27 as `531797d62`, from the reviewed head `9a6a1dc49`, and released as v0.0.581, a dev prerelease; run 775 closed. The boxes move by the operator's tap, since auto is off. Was **MERGING** 2026-10-23 12:10 UTC: review 853 at `9a6a1dc49` found one minor text line and nothing else: each new row reds by its own assertion under its mutant, and the Linux-pinned row reaches no GNU-only tool, so it should pass on a real Mac. Accepted; the line is carried to wave 24. Run 775 at merging; PR #1137 in the merge queue at `9a6a1dc49`; soft-basin told before the tap (mail 8506). Was **IN REVIEW** 2026-10-23 11:55 UTC: fix-round-5 wave-done 8499 at `9a6a1dc49`, tests and two text lines, no code line changed; every server shard in CI green. Run 775 is awaiting review. Review run 853, a lean one scoped to the round's rows, mutants and texts, dispatched at 11:56 to a fresh reviewer; its first question is whether the Linux-pinned row passes on a real macOS runner. Was **FIX ROUND 5** 2026-10-23 10:40 UTC: review 847 at `cb2916ec0` found nothing wrong in the reader: a 400-file fuzz against systemd found no file where systemd sets the knob and the tip reads 3. The round is tests and two text lines: the new prune row pinned to an OS, with a macOS twin (left unpinned, it would red the daily run on macOS); a knob-less NUL row; and an every-position row. Rulings mail 8436; run 775 back at working. Was **IN REVIEW** 2026-10-23 08:55 UTC: review run 847 dispatched at 08:58 to a fresh reviewer, once the work volume cleared the floor. Was **IN REVIEW** 2026-10-23 03:55 UTC: fix-round-4 wave-done 8376 at `cb2916ec0`. The rulings are built, and the round's own review fuzzed 900 files against systemd with no mismatch on Linux. Two departures are ratified, each toward keeping data: macOS always asks the model, because bash can set the knob from a split or quoted name; and a NUL byte still refuses. Run 775 is awaiting review. Review run 847 is open with three wave lenses, drafted from the rulings and the claims, never the diff. Its dispatch waits on disk. Was **FIX ROUND 4** 2026-10-23 02:35 UTC: review 839 at `d9dc8891d` found no defect in what was ruled, and four small gaps. The knob is now read from `ccrc.env` alone, and the refusal for a file the reader cannot decide applies only to a file that names the knob; that refusal had stopped the count prune where main pruned. Rulings mail 8368; run 775 back at working. Was **IN REVIEW** 2026-10-23 01:45 UTC: review run 839 dispatched at 01:49 to a fresh reviewer, once the work volume cleared the floor. Was **IN REVIEW** 2026-10-22 23:35 UTC: fix-round-3 wave-done 8306 at `d9dc8891d`; CI green, `test (server)` included (the local suite line is unrun). The worker departed from four ruled rows. Each errs toward refusing, so data is kept. But an undecidable exposure file stops the count prune too, which is the review's first question. Run 775 is awaiting review. Review run 839 is open with three wave lenses, drafted from the plan, the rulings and the claims, never the diff, plus a systemd oracle confined to fixture files. Its dispatch waits on disk. Was **FIX ROUND 3** 2026-10-22 21:10 UTC: review 817 at `65d5daa83` found 9. Two are important: the knob's value is still read under the box's locale, so a stray byte above it silently gives keep 3; and the timing estimate is unpinned. Ruled: read the knob through the tree's byte-wise model of systemd, which also closes the multi-line and trailing-space shapes; the deadline parse mismatch goes to wave 24; pins and text. Rulings mail 8252; run 775 back at working. PR #1137's CI green, `ccrc-update.test.ts` whole. Was **IN REVIEW** 2026-10-22 19:10 UTC: fix-round-2 wave-done 8188 at `65d5daa83` (suite unrun: `ccrc-update.test.ts` by describe; CI's `test (server)` is the arbiter); run 775 awaiting review; review run 817 dispatched 19:15 to a fresh reviewer. Was **FIX ROUND 2** 2026-10-22 16:55 UTC: review 806 at `28df42ded` found 8 (one important: the `ccrc.env` shape scan still falls back silently for some lines, and refuses other keys' lines); ruled as one positive rule under byte semantics, plus text and pin fixes; rulings mail 8131, a two-number reserve; run 775 back at working, routing unchanged. PR #1137's CI green. Was **IN REVIEW** 2026-10-22 16:20 UTC: review run 806 dispatched to a fresh reviewer once the fleet's work volume cleared the floor (10.9G). Was **IN REVIEW (dispatch held)** 2026-10-22 16:00 UTC: fix-round wave-done 8115 at `28df42ded` (suite unrun); run 775 awaiting review; review run 806 opened, its dispatch held by the fleet's 10G free-space floor. Was **FIX ROUND 1** 2026-10-22 14:40 UTC: review 794 at `bedc992c3` found 14 (F1 blocks: a usage line named `ccrc.env` twice, red in CI; F2 and F3 ruled as fixes, from the worker's last two reserve numbers); run 775 back at working, the worker's effort raised to xhigh (shallow); rulings mail 8052. Was **IN REVIEW** 2026-10-22 14:10 UTC: wave-done 8013 at `bedc992c3`, PR #1137 (suite red, failure shallow: two phase-sequence rows the gate caught, fixed without loosening); run 775 awaiting review; review run 794 dispatched. Was **DISPATCHED** 2026-10-22 11:40 UTC: run 775 to a fresh child; the plan at `9b94a2124` with its rulings at `12e879032`. Consents for the shared files: `ccd/ccrc` beside run 722's claim (mails 7946, 7949) and README beside run 774's (7947, 7950). Lands first-ready |
-| 24 | — (settings live in ccrc config; operator directive 2026-10-22) | every operator-facing `CCRC_*` tunable read by `ccd/ccrc` (and its units) reads `~/.ccrc/ccrc.env` through `_box_env_value`, a set process environment still winning, each documented in `deploy/ccrc.env.example`; a census and a guard that keeps it true | both (`ccd/ccrc`) | 6587 to 6606, 6744 to 6751, 6841 to 6844 | **IN REVIEW, IN THIS SESSION** 2026-10-25 11:26 UTC: the operator authorized the cap's lift, which no console control can
+| 24 | — (settings live in ccrc config; operator directive 2026-10-22) | every operator-facing `CCRC_*` tunable read by `ccd/ccrc` (and its units) reads `~/.ccrc/ccrc.env` through `_box_env_value`, a set process environment still winning, each documented in `deploy/ccrc.env.example`; a census and a guard that keeps it true | both (`ccd/ccrc`) | 6587 to 6606, 6744 to 6751, 6841 to 6844 | **ACCEPTED, IN THE MERGE QUEUE** 2026-10-25 13:28 UTC: the in-session review found no critical and no important
+  finding (23 minor advisories, carried as R48 to R50; 13 refuted; no lens unverified, no finding unexamined). Run 855 at
+  merging; `4580b30b1` queued at position 2. Was **IN REVIEW, IN THIS SESSION** 2026-10-25 11:26 UTC: the operator authorized the cap's lift, which no console control can
   make (R47), and then asked the coordinator to run the review itself. The held-out panel runs as written over the whole
   branch at `4580b30b1` (merge base `d5e9a1792`) in a read-only worktree, beside an attacker lens, a lens on the two merges
   of main, a lens on the round's claims, the whole-branch pass, the suites and CI. Every finding goes to a Sonnet refute
@@ -68,6 +70,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
 `GET /api/claims` read and a claim per wave (coordinator clause 10).
 
 ## Decisions & deviations
+
+- **Wave 24, fix round 5, reviewed in this session (2026-10-25).** The review-round cap refused a fourth review run, and
+  the operator asked the coordinator to run the review. The held-out panel ran as written over the whole branch, beside
+  six brief lenses, for 45 agents in all. Findings per lens, advisory and refuted:
+  - panel correctness 3 and 0, spec 4 and 2, reproduce 2 and 1;
+  - attacker 1 and 3, absorbs 1 and 0, round claims 6 and 0, whole branch 3 and 1, suites 1 and 2, CI 2 and 4.
+  None was critical or important, so the wave lands. The external per-PR gate's check is red on #1237, as it was on
+  #1211 and #1259. It runs in shadow and is not a required context.
 
 - **2026-09-22 — the operator's directive.** "Act as the coordinator and take this programme to full completion
   and then rollout." Read as: every remaining wave is authorised, each wave's PR is admin-merged
@@ -6154,6 +6164,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   server read in its start arm, which returns, never exits, and does not touch the tool-call path; so, like the rest, it goes
   in the broker's daily mail only. `STATUS 2026-10-25T12:25:41Z fleet=v0.0.677 server=v0.0.677 health=v0.0.677`
   `newest=v0.0.682 intent=*:dev/auto=off backups=fleet:209M/server:11978M disk=fleet:103G/server:18G`
+- **2026-10-25 13:25 UTC — a fifth console move, to v0.0.683; v0.0.684 released; no anomalies.** Fleet box 12:56:44 to
+  12:58:20, server box 12:59:20 to 13:11:19, both `done`, `from: pwa`; the server restarted at 13:02:41 and kept 5. Neither
+  release touches the parts the broker's soak watches. Two attempt filings in the hour, the latest with a stall of 6.3 s.
+  `STATUS 2026-10-25T13:25:43Z fleet=v0.0.683 server=v0.0.683 health=v0.0.683 newest=v0.0.684 intent=*:dev/auto=off`
+  `backups=fleet:210M/server:12036M disk=fleet:103G/server:18G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
@@ -6538,6 +6553,34 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   push notice and nothing to act on, and no `ccrc` verb exists either. On a box with the auth gate armed, the operator's only
   way is a hand-written request from a signed-in browser. When the operator authorized the lift for run 855, this session could
   not carry it out, and must not. Give the notice, or the run's review card, a lift control.
+- **R48 (wave 24's in-session review; the bootstrap installer).** `install.sh` has none of wave 24's release-host
+  defences:
+  - its two release curls have no `-g`;
+  - it prints the base URL unredacted;
+  - it prints the host-supplied tarball name raw, with no length bound, no printable-ASCII rule and no refusal of a `/`, and
+    that name reaches `curl -o` before any checksum check;
+  - it fetches SHA256SUMS with no time or size bound.
+  It is trust-on-first-use, so a hostile host could serve hostile code anyway, but a terminal escape needs none of that.
+  Two related gaps are also open:
+  - the contained curl front's `-g` admission is unpinned on macOS, with no refused-row for `-gK` or `-gx`;
+  - the verifier's exit-3 dependency-load sentence still prints unfiltered.
+  Residue R23 (the curl front) was not picked up when wave 24 touched that front.
+- **R49 (wave 24's in-session review; records and comments).**
+  - The plan's hunk map gives add plus delete as the add count for 672293450.
+  - The plan's file list is stale.
+  - deviation 6842's entry says three cases where there are four.
+  - The 6751 describe's comment says characters where the code counts bytes.
+  - The count rule for lines above the plan's base line 11635 nets minus 3 in the `_upd_redact` hunk, unledgered.
+  - README's blank-budget sentence holds only from the environment.
+  - Deviation 6751's enumeration counts the box stamp's sha, ref and builtAt as bounded, which only its version is.
+- **R50 (wave 24's in-session review; minor behaviour).**
+  - With an undecided deadline such as `2e6`, the watchdog's `max` falls to 900000 and only warns, so it can judge before
+    the server, contrary to its own comment.
+  - A console-driven move's parent reads its settings from the server's environment, which systemd parsed, while its
+    detached child reads the file. `_ccrc_knob`'s header and W24-P5 say the file is the only source.
+  - The backup hard cap's 63-second bound is argued for an update and also applied to a rollback by flip.
+  - `sha256sum -c` opens every path the rest of SHA256SUMS names.
+  - `ccrc-uninstall` exits 1 with every row passing when a fake supervisor outlives its test under load.
 
 ## Next-wave brief
 
