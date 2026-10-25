@@ -52,26 +52,26 @@ interface Row {
 
 const ROWS: Row[] = [
   { name: 'the registry directory will not list', seed: (h) => seedRow(h, ID), tmux: GONE,
-    io: { ...localIO, readdir: async () => null }, state: 'unmeasurable' , facts: { row: 'unlistable', pane: null, lifecycle: null, hibernated: false, turn: null }, presence: 'unknown' },
-  { name: 'an id that is not a registry id', seed: (h) => seedRow(h, ID), tmux: GONE, id: '--flag', state: 'unmeasurable' , facts: { row: 'bad-id', pane: null, lifecycle: null, hibernated: false, turn: null }, presence: 'unknown' },
-  { name: 'no row in a directory that listed cleanly', seed: (h) => seedRow(h, OTHER), tmux: GONE, state: 'dead', cause: 'absent' , facts: { row: 'absent', pane: null, lifecycle: null, hibernated: false, turn: null }, presence: 'dead' },
+    io: { ...localIO, readdir: async () => null }, state: 'unmeasurable' , facts: { row: 'unlistable', pane: null, lifecycle: null, hibernatedAt: null, turn: null }, presence: 'unknown' },
+  { name: 'an id that is not a registry id', seed: (h) => seedRow(h, ID), tmux: GONE, id: '--flag', state: 'unmeasurable' , facts: { row: 'bad-id', pane: null, lifecycle: null, hibernatedAt: null, turn: null }, presence: 'unknown' },
+  { name: 'no row in a directory that listed cleanly', seed: (h) => seedRow(h, OTHER), tmux: GONE, state: 'dead', cause: 'absent' , facts: { row: 'absent', pane: null, lifecycle: null, hibernatedAt: null, turn: null }, presence: 'dead' },
   { name: 'listed but unassembled (a coordinator mid-write, D-1144)', tmux: GONE, state: 'unmeasurable',
     seed: (h) => {
       const reg = path.join(h, '.cc-sessions');
       mkdirSync(reg, { recursive: true });
       writeFileSync(path.join(reg, `${ID}.uuid`), `u-${ID}`);
       writeFileSync(path.join(reg, `${ID}.started`), '1');
-    } , facts: { row: 'unmeasurable', pane: null, lifecycle: null, hibernated: false, turn: null }, presence: 'unknown' },
-  { name: 'a live pane outranks a stop stamp', seed: (h) => seedRow(h, ID, { stopped: `${SEC} ccd` }), tmux: LIVE, state: 'alive' , facts: { row: 'present', pane: 'live', lifecycle: 'stopped', hibernated: false, turn: null }, presence: 'alive' },
-  { name: 'tmux did not answer', seed: (h) => seedRow(h, ID), tmux: { verdict: 'unknown', detail: 'no server running' }, state: 'unmeasurable' , facts: { row: 'present', pane: 'unknown', lifecycle: 'unmeasurable', hibernated: false, turn: null }, presence: 'unknown' },
-  { name: 'gone + a stop stamp', seed: (h) => seedRow(h, ID, { stopped: `${SEC} ccd` }), tmux: GONE, state: 'dead', cause: 'stopped' , facts: { row: 'present', pane: 'gone', lifecycle: 'stopped', hibernated: false, turn: null }, presence: 'dead' },
+    } , facts: { row: 'unmeasurable', pane: null, lifecycle: null, hibernatedAt: null, turn: null }, presence: 'unknown' },
+  { name: 'a live pane outranks a stop stamp', seed: (h) => seedRow(h, ID, { stopped: `${SEC} ccd` }), tmux: LIVE, state: 'alive' , facts: { row: 'present', pane: 'live', lifecycle: 'stopped', hibernatedAt: null, turn: null }, presence: 'alive' },
+  { name: 'tmux did not answer', seed: (h) => seedRow(h, ID), tmux: { verdict: 'unknown', detail: 'no server running' }, state: 'unmeasurable' , facts: { row: 'present', pane: 'unknown', lifecycle: 'unmeasurable', hibernatedAt: null, turn: null }, presence: 'unknown' },
+  { name: 'gone + a stop stamp', seed: (h) => seedRow(h, ID, { stopped: `${SEC} ccd` }), tmux: GONE, state: 'dead', cause: 'stopped' , facts: { row: 'present', pane: 'gone', lifecycle: 'stopped', hibernatedAt: null, turn: null }, presence: 'dead' },
   { name: 'gone + a stop stamp + hibernated (asleep, not dead)', tmux: GONE, state: 'alive',
-    seed: (h) => seedRow(h, ID, { stopped: `${SEC} ccd`, hibernated: `${SEC} 7` }) , facts: { row: 'present', pane: 'gone', lifecycle: 'stopped', hibernated: true, turn: null }, presence: 'asleep' },
+    seed: (h) => seedRow(h, ID, { stopped: `${SEC} ccd`, hibernated: `${SEC} 7` }) , facts: { row: 'present', pane: 'gone', lifecycle: 'stopped', hibernatedAt: NOW, turn: null }, presence: 'asleep' },
   { name: 'gone + a long-gone heartbeat, stale hibernated stamp', tmux: GONE, state: 'dead', cause: 'orphan',
-    seed: (h) => seedRow(h, ID, { supervised: String(SEC - 3600), hibernated: `${SEC - 7200} 7` }) , facts: { row: 'present', pane: 'gone', lifecycle: 'orphan', hibernated: true, turn: null }, presence: 'dead' },
+    seed: (h) => seedRow(h, ID, { supervised: String(SEC - 3600), hibernated: `${SEC - 7200} 7` }) , facts: { row: 'present', pane: 'gone', lifecycle: 'orphan', hibernatedAt: NOW, turn: null }, presence: 'dead' },
   { name: 'gone + a row that never started', tmux: GONE, state: 'dead', cause: 'never-started',
-    seed: (h) => { seedRow(h, ID); rmSync(path.join(h, '.cc-sessions', `${ID}.started`)); } , facts: { row: 'present', pane: 'gone', lifecycle: 'never-started', hibernated: false, turn: null }, presence: 'dead' },
-  { name: 'gone + a fresh supervisor heartbeat (restarting)', seed: (h) => seedRow(h, ID, { supervised: String(SEC) }), tmux: GONE, state: 'alive' , facts: { row: 'present', pane: 'gone', lifecycle: 'restarting', hibernated: false, turn: null }, presence: 'alive' },
+    seed: (h) => { seedRow(h, ID); rmSync(path.join(h, '.cc-sessions', `${ID}.started`)); } , facts: { row: 'present', pane: 'gone', lifecycle: 'never-started', hibernatedAt: null, turn: null }, presence: 'dead' },
+  { name: 'gone + a fresh supervisor heartbeat (restarting)', seed: (h) => seedRow(h, ID, { supervised: String(SEC) }), tmux: GONE, state: 'alive' , facts: { row: 'present', pane: 'gone', lifecycle: 'restarting', hibernatedAt: null, turn: null }, presence: 'alive' },
 ];
 
 describe('the liveness truth table, through measureClaimant (today\'s fail-shut ladder)', () => {
@@ -101,29 +101,52 @@ describe('the same rows through readSession (the pure function over facts)', () 
       expect(state).toBe(row.state);
       if (row.cause !== undefined) expect(r.deadCause).toBe(row.cause);
       else expect(r.deadCause).toBeNull();
+      // The parts the presence is derived from: a proven absence or a gone pane is `absent`, a live pane `present`, and
+      // every doubt `unmeasurable`; a sleeper is `asleep since` its marker and nothing else is.
+      const f = row.facts;
+      expect(r.substrate).toBe(f.row === 'absent' || (f.row === 'present' && f.pane === 'gone') ? 'absent'
+        : f.row === 'present' && f.pane === 'live' ? 'present' : 'unmeasurable');
+      expect(r.sleep).toEqual(row.presence === 'asleep' ? { kind: 'asleep', since: NOW } : { kind: 'awake' });
+      expect(r.lifecycle).toBe(f.row === 'present' && f.pane === 'gone' ? f.lifecycle : null);
+      expect(r.viewer).toBe('not-fed');
     });
   }
 
   it('a listed-but-unassembled row never reads dead, whatever tmux says (D-1144)', () => {
     for (const pane of ['live', 'gone', 'unknown', null] as const) {
-      const r = readSession({ row: 'unmeasurable', pane, lifecycle: 'orphan', hibernated: false, turn: null });
+      const r = readSession({ row: 'unmeasurable', pane, lifecycle: 'orphan', hibernatedAt: null, turn: null });
       expect(r.presence).toBe('unknown');
     }
   });
 
   it('a gone pane over a lifecycle that could not be measured is alive, never dead (D-1140)', () => {
     for (const lifecycle of ['unmeasurable', null] as const) {
-      const r = readSession({ row: 'present', pane: 'gone', lifecycle, hibernated: false, turn: null });
+      const r = readSession({ row: 'present', pane: 'gone', lifecycle, hibernatedAt: null, turn: null });
       expect(r).toMatchObject({ presence: 'alive', why: 'lifecycleDoubt', deadCause: null });
     }
   });
 
-  it('the turn rides along only for a live pane, and an unmeasured status reads unknown', () => {
-    const base = { row: 'present', pane: 'live', lifecycle: null, hibernated: false } as const;
-    expect(readSession({ ...base, turn: 'busy' }).turn).toBe('busy');
-    expect(readSession({ ...base, turn: 'shell' }).turn).toBe('shell');
-    expect(readSession({ ...base, turn: null }).turn).toBe('unknown');
-    expect(readSession({ ...base, pane: 'gone', lifecycle: 'running', turn: 'idle' }).turn).toBe('unknown');
+  it('the turn rides along only for a live pane, and an unmeasured status reads unknown, with its why', () => {
+    const base = { row: 'present', pane: 'live', lifecycle: null, hibernatedAt: null } as const;
+    expect(readSession({ ...base, turn: 'busy' }).turn).toEqual({ word: 'busy', why: 'measured' });
+    expect(readSession({ ...base, turn: 'idle' }).turn).toEqual({ word: 'idle', why: 'measured' });
+    expect(readSession({ ...base, turn: 'shell' }).turn).toEqual({ word: 'shell', why: 'measured' });
+    expect(readSession({ ...base, turn: null }).turn).toEqual({ word: 'unknown', why: 'unmeasured' });
+    expect(readSession({ ...base, pane: 'gone', lifecycle: 'running', turn: 'idle' }).turn).toEqual({ word: 'unknown', why: 'noPane' });
+    expect(readSession({ ...base, pane: 'unknown', turn: 'idle' }).turn).toEqual({ word: 'unknown', why: 'paneUnknown' });
+    expect(readSession({ ...base, row: 'absent', pane: null, turn: 'idle' }).turn).toEqual({ word: 'unknown', why: 'noRow' });
+  });
+
+  it('the viewer is a declared arm: not-fed unless a caller supplies it, and never invented as none', () => {
+    const base = { row: 'present', pane: 'live', lifecycle: null, hibernatedAt: null, turn: null } as const;
+    expect(readSession(base).viewer).toBe('not-fed');
+    for (const viewer of ['none', 'open', 'visible'] as const) expect(readSession({ ...base, viewer }).viewer).toBe(viewer);
+  });
+
+  it('sleep names its marker\'s time, and a row with no readable marker stays awake', () => {
+    const base = { row: 'present', pane: 'gone', lifecycle: 'stopped', turn: null } as const;
+    expect(readSession({ ...base, hibernatedAt: 7 }).sleep).toEqual({ kind: 'asleep', since: 7 });
+    expect(readSession({ ...base, hibernatedAt: null }).sleep).toEqual({ kind: 'awake' });
   });
 });
 

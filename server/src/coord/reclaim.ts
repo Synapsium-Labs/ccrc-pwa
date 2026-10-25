@@ -133,7 +133,7 @@ export async function measureClaimant(
     row: read.kind === 'found' ? 'present' : read.kind,
     pane: sv === null ? null : sv.verdict,
     lifecycle: lc,
-    hibernated: read.kind === 'found' && read.record.hibernatedAt !== null,
+    hibernatedAt: read.kind === 'found' ? read.record.hibernatedAt : null,
     turn: null,
   });
   switch (r.why) {

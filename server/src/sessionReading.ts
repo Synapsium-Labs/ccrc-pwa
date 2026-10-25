@@ -7,7 +7,16 @@
 //
 // THE LIVENESS TRUTH TABLE lives in `test/session-reading-truth-table.test.ts`: one row per input, the same rows driven
 // through this function, through `measureClaimant` and against `ccd-tmp-sweep`'s box-side predicate, which stays (it
-// runs without the server) and whose protected set the table holds equal to `alive` and `asleep`.
+// runs without the server) and whose protected set the table holds equal to `alive` and `asleep`. The other readers of
+// the old ladders (`liveStatus`, the fleet frame, `liveRowFor`, `resolve`, `claimProbe`, the dead-coordinator
+// predicate) are pinned on the same rows in `test/session-ladders-characterization.test.ts`.
+//
+// THE SHAPE IS THE SPEC'S (consolidation spec C1, SessionReading): five parts, not one word. `substrate` is whether the
+// session's process is there (`present | absent | unmeasurable`), `lifecycle` is the `sessionLifecycle` word, `turn` is
+// `busy | idle | shell | unknown` with the `why` of an unknown, `sleep` is `awake | asleep since T`, and `viewer` is
+// `none | open | visible`, or `not-fed` while no caller supplies one (the viewer registry is a different fact under the
+// same word, renamed by its own ticket; nothing feeds it yet). `presence` stays, but as a DERIVED word over the parts
+// (the wire's `alive | asleep | dead | unknown`): it is computed in one place below and holds no fact of its own.
 //
 // DOUBT IS NEVER DEAD. Only a proven absence (`absent`) and a lifecycle `lifecycleIsDead` names are `dead`; a listed
 // row that could not be assembled, an unlistable registry, an id that is not a registry id and a tmux that did not
@@ -22,15 +31,19 @@ export type RowFact = 'present' | 'absent' | 'unmeasurable' | 'unlistable' | 'ba
 export type PaneFact = 'live' | 'gone' | 'unknown' | null;
 /** The status word, from the status file first and the pane second; `null` when nothing measured it. */
 export type TurnFact = 'busy' | 'idle' | 'shell' | null;
+/** The viewer registry's word for this session, when a caller has it. */
+export type ViewerWord = 'none' | 'open' | 'visible';
 
 export interface SessionFacts {
   readonly row: RowFact;
   readonly pane: PaneFact;
   /** The registry row's lifecycle; read only when the row is present and the pane is gone. */
   readonly lifecycle: SessionLifecycle | null;
-  /** The row carries `.hibernated`. */
-  readonly hibernated: boolean;
+  /** When the row's `.hibernated` marker says the session went to sleep (epoch ms); `null` when it carries none. */
+  readonly hibernatedAt: number | null;
   readonly turn: TurnFact;
+  /** Optional: no caller feeds the viewer yet, and an absent one reads `not-fed`, never `none`. */
+  readonly viewer?: ViewerWord;
 }
 
 export type Presence = 'alive' | 'asleep' | 'dead' | 'unknown';
@@ -38,40 +51,90 @@ export type Turn = 'busy' | 'idle' | 'shell' | 'unknown';
 /** Which death: the registry never listed the id, or one of the lifecycle words `lifecycleIsDead` names. */
 export type DeadCause = 'absent' | Extract<SessionLifecycle, 'stopped' | 'orphan' | 'never-started'>;
 
+/** Whether the session's process is there. `absent` is a proven absence (no row, or a pane tmux says is gone);
+ *  `unmeasurable` is every doubt: an unlistable registry, a bad id, a row that could not be assembled, a tmux that did
+ *  not answer or was never asked. */
+export type Substrate = 'present' | 'absent' | 'unmeasurable';
+
+/** Why the turn reads `unknown` (or that it was measured): the arm of the ladder that decided it. */
+export type TurnWhy = 'measured' | 'unmeasured' | 'noRow' | 'noPane' | 'paneUnknown';
+export interface TurnReading { readonly word: Turn; readonly why: TurnWhy }
+
+export type SleepReading =
+  | { readonly kind: 'awake' }
+  /** `since` is the marker's epoch ms. A marker whose stamp cannot be read parses to `null` upstream and is no marker. */
+  | { readonly kind: 'asleep'; readonly since: number };
+
+/** `not-fed` is a declared arm, not a measurement: the caller supplied no viewer fact. */
+export type ViewerReading = ViewerWord | 'not-fed';
+
 /** Why the presence is what it is, one word per arm of the ladder (a caller words its own sentence from it). */
 export type PresenceWhy =
   | 'rowAbsent' | 'rowUnassembled' | 'rowUnlistable' | 'badId'
   | 'paneLive' | 'paneUnknown' | 'hibernated' | 'lifecycleDead' | 'lifecycleAlive' | 'lifecycleDoubt';
 
 export interface SessionReading {
+  readonly substrate: Substrate;
+  /** The registry row's lifecycle word; `null` when it was not read (no row, or a pane that is live or unanswered). */
+  readonly lifecycle: SessionLifecycle | null;
+  readonly turn: TurnReading;
+  readonly sleep: SleepReading;
+  readonly viewer: ViewerReading;
+  /** DERIVED from the parts above by `readSession`'s ladder, never a second fact. */
   readonly presence: Presence;
   readonly why: PresenceWhy;
   /** Set exactly when `presence` is `dead`. */
   readonly deadCause: DeadCause | null;
-  readonly turn: Turn;
 }
 
-const reading = (presence: Presence, why: PresenceWhy, turn: TurnFact, deadCause: DeadCause | null = null): SessionReading =>
-  ({ presence, why, deadCause, turn: turn ?? 'unknown' });
+interface Verdict {
+  readonly presence: Presence;
+  readonly why: PresenceWhy;
+  readonly substrate: Substrate;
+  readonly deadCause?: DeadCause;
+  readonly asleep?: true;
+}
 
-export function readSession(f: SessionFacts): SessionReading {
+/** The ladder: facts to presence, one arm per `PresenceWhy`. */
+function presenceOf(f: SessionFacts): Verdict {
   switch (f.row) {
-    case 'absent': return reading('dead', 'rowAbsent', null, 'absent');
-    case 'unmeasurable': return reading('unknown', 'rowUnassembled', null);
-    case 'unlistable': return reading('unknown', 'rowUnlistable', null);
-    case 'bad-id': return reading('unknown', 'badId', null);
+    case 'absent': return { presence: 'dead', why: 'rowAbsent', substrate: 'absent', deadCause: 'absent' };
+    case 'unmeasurable': return { presence: 'unknown', why: 'rowUnassembled', substrate: 'unmeasurable' };
+    case 'unlistable': return { presence: 'unknown', why: 'rowUnlistable', substrate: 'unmeasurable' };
+    case 'bad-id': return { presence: 'unknown', why: 'badId', substrate: 'unmeasurable' };
     case 'present': break;
     default: {
       const _x: never = f.row;
       return _x;
     }
   }
-  if (f.pane === 'live') return reading('alive', 'paneLive', f.turn);
+  if (f.pane === 'live') return { presence: 'alive', why: 'paneLive', substrate: 'present' };
   // `null` on a present row is a caller that never asked tmux: nothing measured the pane.
-  if (f.pane === 'unknown' || f.pane === null) return reading('unknown', 'paneUnknown', null);
+  if (f.pane === 'unknown' || f.pane === null) return { presence: 'unknown', why: 'paneUnknown', substrate: 'unmeasurable' };
   const lc = f.lifecycle;
-  if (lc === 'stopped' && f.hibernated) return reading('asleep', 'hibernated', null);
-  if (lc === null || lc === 'unmeasurable') return reading('alive', 'lifecycleDoubt', null);
-  if (lifecycleIsDead(lc)) return reading('dead', 'lifecycleDead', null, lc as DeadCause);
-  return reading('alive', 'lifecycleAlive', null);
+  if (lc === 'stopped' && f.hibernatedAt !== null) return { presence: 'asleep', why: 'hibernated', substrate: 'absent', asleep: true };
+  if (lc === null || lc === 'unmeasurable') return { presence: 'alive', why: 'lifecycleDoubt', substrate: 'absent' };
+  if (lifecycleIsDead(lc)) return { presence: 'dead', why: 'lifecycleDead', substrate: 'absent', deadCause: lc as DeadCause };
+  return { presence: 'alive', why: 'lifecycleAlive', substrate: 'absent' };
+}
+
+const turnOf = (f: SessionFacts): TurnReading => {
+  if (f.row !== 'present') return { word: 'unknown', why: 'noRow' };
+  if (f.pane === 'gone') return { word: 'unknown', why: 'noPane' };
+  if (f.pane !== 'live') return { word: 'unknown', why: 'paneUnknown' };
+  return f.turn === null ? { word: 'unknown', why: 'unmeasured' } : { word: f.turn, why: 'measured' };
+};
+
+export function readSession(f: SessionFacts): SessionReading {
+  const v = presenceOf(f);
+  return {
+    substrate: v.substrate,
+    lifecycle: f.row === 'present' && f.pane === 'gone' ? f.lifecycle : null,
+    turn: turnOf(f),
+    sleep: v.asleep === true && f.hibernatedAt !== null ? { kind: 'asleep', since: f.hibernatedAt } : { kind: 'awake' },
+    viewer: f.viewer ?? 'not-fed',
+    presence: v.presence,
+    why: v.why,
+    deadCause: v.deadCause ?? null,
+  };
 }

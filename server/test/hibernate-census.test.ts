@@ -152,10 +152,10 @@ const CENSUS: readonly Row[] = [
 /** Readers outside the scan's reach, by name, each with the text that holds its stance. */
 const NAMED: readonly { name: string; stances: readonly Stance[]; file: string; holds: (src: string) => boolean; why: string }[] = [
   { name: 'readSession', stances: ['consults'], file: 'server/src/sessionReading.ts',
-    holds: (s) => /export function readSession[\s\S]*?lc === 'stopped' && f\.hibernated/.test(s),
+    holds: (s) => /function presenceOf[\s\S]*?lc === 'stopped' && f\.hibernatedAt !== null/.test(s),
     why: 'reads a sleeping row `asleep`, never dead' },
   { name: 'measureClaimant', stances: ['consults'], file: 'server/src/coord/reclaim.ts',
-    holds: (s) => /export async function measureClaimant[\s\S]*?hibernated: read\.kind === 'found' && read\.record\.hibernatedAt !== null[\s\S]*?case 'hibernated'/.test(s),
+    holds: (s) => /export async function measureClaimant[\s\S]*?hibernatedAt: read\.kind === 'found' \? read\.record\.hibernatedAt : null[\s\S]*?case 'hibernated'/.test(s),
     why: 'hands the `.hibernated` stamp to `readSession` and answers a sleeping claimant `alive`, why hibernated' },
   { name: 'ccd cmd_forget', stances: ['consults'], file: 'ccd/ccd', holds: (s) => /hibernated/.test(bashFn(s, 'cmd_forget')),
     why: 'refuses a hibernated row (`_lc_refuse hibernated`): wake it or stop it first' },

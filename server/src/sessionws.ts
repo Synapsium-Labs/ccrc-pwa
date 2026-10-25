@@ -762,7 +762,8 @@ export class SessionStream {
         //
         // The two surfaces are two renderings of one measurement: a fleet card reading `busy` beside a chat header
         // reading `idle` for the same session in the same second leaves the operator no way to tell which to believe.
-        // Each surface pins its half in its own tests (`fleet.test.ts`, `sessionws.test.ts`); the liveness half is the truth table.
+        // Each surface pins its half in its own tests (`fleet.test.ts`, `sessionws.test.ts`); the card/header pair is held to one
+        // word, row by row, in `session-ladders-characterization.test.ts`, and the liveness half is the truth table.
         const read = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
         if (read.ok) {
           if (read.state.cwd) cwd = read.state.cwd;
