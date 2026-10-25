@@ -99,7 +99,6 @@ _reg_generation_mint	C1
 _reg_generation_init	C1
 _reg_purge_unremoved	C1
 _reg_purge	C1
-_reg_retire	C1
 _substrate_mark	C1
 _substrate_clear	C1
 _ws_seed_home	C1
@@ -200,6 +199,7 @@ _ws_tomb_children	C4
 cmd_ws_reap	C4
 _crumb_parse	C4
 _ws_reap_locked	C4
+_reg_retire	C1
 _ws_reap_tail	C4
 _ws_gc_bytes	C4
 _ws_gc_age	C4

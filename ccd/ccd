@@ -3711,7 +3711,7 @@ _compact_lock_why_short() {   # -> the SHORT clause the `ws-gc --prune` sweep's
                               # COMPACT_LOCK_WHY (r8 R8-M3).
                               #
                               # THE SWEEP REPORT AND THE DURABLE RECORD DID NOT
-                              # AGREE. One line after `_pr_why` renders the
+                              # AGREE. One line after `_reg_retire` renders the
                               # token-specific remedy into the journal, the
                               # status-1 arm told the human reading the report
                               # "the compaction lock was unavailable" — the
@@ -4142,16 +4142,6 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   rm -f "$REG/$id.generation" || _reg_purge_unremoved "$REG/$id.generation"; rm -f "$REG/$id.joined" "$REG/$id.joinedprev" || { [[ -e "$REG/$id.joined" ]] && _reg_purge_unremoved "$REG/$id.joined"; [[ -e "$REG/$id.joinedprev" ]] && _reg_purge_unremoved "$REG/$id.joinedprev"; }
   _compact_lock_release "$_pg_fd"
   return "$_pg_urc"
-}
-# ARCH-46: the registry-retire sequence every durable caller spelled by hand. Runs `_reg_purge` and
-# keeps its VALUE in REG_RETIRE_RC (0 purged, 2 lock mechanism absent, 3 purged with residue, else 1),
-# and for the one status that carries a remedy renders `_compact_lock_why_remedy` at once, before
-# anything can clobber COMPACT_LOCK_WHY, into REG_RETIRE_WHY. It decides nothing: each caller words
-# its own failure. Always returns 0 (ccd has no `set -e`), so a caller reads the globals.
-_reg_retire() {   # id verb
-  REG_RETIRE_RC=0; REG_RETIRE_WHY=""
-  _reg_purge "$1" || REG_RETIRE_RC=$?
-  case "$REG_RETIRE_RC" in 0|2|3) ;; *) REG_RETIRE_WHY=$(_compact_lock_why_remedy "$1" "$2") ;; esac
 }
 _substrate_mark() {   # id — record "this supervisor could not reach tmux" ($REG/<id>.substrate)
   # ONE writer per file: this row's supervisor — and the FIRST WRITE WINS. The epoch is
@@ -8198,6 +8188,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # `rm -f` would not take is still on disk — a message telling that operator
   # to wait for a compaction to settle prescribes a wait for a compaction that
   # is not running and promises state that no longer exists.
+  # `_reg_retire` keeps `_reg_purge`'s VALUE in REG_RETIRE_RC, and REG_RETIRE_WHY below.
   _reg_retire "$id" ws-rm                                                  # finding F3
   if (( REG_RETIRE_RC == 3 )); then
     _lc_fail destroy "$id" "$lctx" purge-incomplete \
@@ -8244,6 +8235,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # acquire sites, one level up; this is it one level down, where the
     # record is DURABLE — and it is the ONE renderer all five durable callers
     # consult, so this caller's text cannot drift from theirs.
+    # REG_RETIRE_WHY is that remedy, rendered by `_reg_retire` before anything can clobber COMPACT_LOCK_WHY.
     _lc_fail destroy "$id" "$lctx" purge-refused \
       "the workspace was torn down, but the registry row could not be purged: $REG_RETIRE_WHY" \
       verb ws-rm dec.reason "$reason"
@@ -14703,6 +14695,16 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
   _ws_reap_tail "$id" ""
 }
 
+# ARCH-46: the registry-retire sequence every durable caller spelled by hand. Runs `_reg_purge` and
+# keeps its VALUE in REG_RETIRE_RC (0 purged, 2 lock mechanism absent, 3 purged with residue, else 1),
+# and for the one status that carries a remedy renders `_compact_lock_why_remedy` at once, before
+# anything can clobber COMPACT_LOCK_WHY, into REG_RETIRE_WHY. It decides nothing: each caller words
+# its own failure. Always returns 0 (ccd has no `set -e`), so a caller reads the globals.
+_reg_retire() {   # id verb
+  REG_RETIRE_RC=0; REG_RETIRE_WHY=""
+  _reg_purge "$1" || REG_RETIRE_RC=$?
+  case "$REG_RETIRE_RC" in 0|2|3) ;; *) REG_RETIRE_WHY=$(_compact_lock_why_remedy "$1" "$2") ;; esac
+}
 _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   local id="$1" resumed="$2" project workdir branch regbranch main attic clips tomb bytes
   project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
@@ -15958,7 +15960,7 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
           verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg
         # AND THE SWEEP'S OWN REPORT ROW SAYS THE SAME THING THE JOURNAL DOES
         # (r8 R8-M3). This line said "the compaction lock was unavailable"
-        # unconditionally — the contention story — one line after `_pr_why`
+        # unconditionally — the contention story — one line after `_reg_retire`
         # rendered a durable remedy that, for four of the five tokens,
         # explicitly refuses to call the condition contention. The short form
         # is a SECOND RENDERER keyed on the same tokens rather than a second
