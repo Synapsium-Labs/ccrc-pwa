@@ -87,7 +87,7 @@ describe("the catch-up response's bytes, filled through each moved writer (D-585
 
 // ─── PART 2: the funnel ──────────────────────────────────────────────────────────────────────────────────────────────
 
-const sinks = (rec: FeedRecorder) => ({ notifyLog: rec.notifyLog, coord: rec.coord, push: rec.push, viewers: rec.presence });
+const sinks = (rec: FeedRecorder) => ({ notifyLog: rec.notifyLog, coord: rec.coord, push: rec.push, viewers: rec.viewers });
 const EVENT: NoticeRecord = { kind: 'done', sessionId: A, title: 'done › project-a', body: 'finished', runId: null };
 
 describe('notify: each mode over visible ∈ {true, false} equals pushOne\'s matching row (D-5857)', () => {
@@ -155,7 +155,7 @@ describe("notify: the caller's record reaches the ring unchanged (D-5857)", () =
 describe('notify: the sinks are independently optional (D-5857)', () => {
   it('no ring, no archive row: with no notify log nothing is archived, and the push still goes', async () => {
     const rec = await feedRecorder(mkTmp('ccrc-notice-nolog-unit-'));
-    const out = notify({ coord: rec.coord, push: rec.push, viewers: rec.presence }, EVENT, 'push');
+    const out = notify({ coord: rec.coord, push: rec.push, viewers: rec.viewers }, EVENT, 'push');
     expect(rec.calls).toEqual(['push']);
     expect(rec.archived).toEqual([]);
     expect(out).toEqual({ recorded: false, archived: 'none' });

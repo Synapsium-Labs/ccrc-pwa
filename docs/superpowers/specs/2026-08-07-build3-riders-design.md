@@ -262,7 +262,7 @@ or decline explicitly.
 ### What ships (deliberately inert)
 
 1. **Constants, once, in `shared/`** — beside
-   `VIEWER_REFRESH_MS`/`VIEWER_TTL_MS`, the established one-definition
+   `PRESENCE_REFRESH_MS`/`PRESENCE_TTL_MS`, the established one-definition
    slot:
    ```ts
    /** Wire protocol generation of the PWA↔server pair. Bump on a breaking

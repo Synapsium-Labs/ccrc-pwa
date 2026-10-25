@@ -42,7 +42,7 @@ import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
 import type { SessionRecord } from '../src/registry.js';
 import { ACTOR_FLAGS_CAP, EXPIRE_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
-import { VIEWER_OPEN_TTL_MS, holdReason, type CoordStatus, type FleetSession } from '../../shared/api.js';
+import { PRESENCE_OPEN_TTL_MS, holdReason, type CoordStatus, type FleetSession } from '../../shared/api.js';
 import { reclaimPauseParseSites } from './consolidationCensus.js';
 import { ID as COLLECT_ID, rig as collectRig } from './collectTempRootFixture.js';
 import { seedRoster, testDeps } from './helpers.js';
@@ -570,7 +570,7 @@ describe('stopDoneSweep.ts — stopDonePass reads reclaim-paused off the tick\'s
       rowAtAct: async (r) => ({ ok: true, row: { ...row, id: r.id } }),
       serial: async (fn) => fn(),
       queueRun: async (_id, fn) => fn(),
-      startedAt: NOW - VIEWER_OPEN_TTL_MS - 60_000,
+      startedAt: NOW - PRESENCE_OPEN_TTL_MS - 60_000,
       now: () => NOW,
     };
     return { deps, argv };

@@ -1,4 +1,4 @@
-import { VIEWER_OPEN_TTL_MS, type FleetSession } from '../../../shared/api.js';
+import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../../shared/api.js';
 import { HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER } from '../../../shared/switches.js';
 
 /**
@@ -26,7 +26,7 @@ import { HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER } from '../../../share
  * - no hold, no open run naming it as worker or claimant in ANY non-terminal state (the store's `state NOT IN` the
  *   terminal set, so `planned`, `awaiting-review`, `merging`, `closing` and `unknown` hold too), no claim, no mail;
  * - nobody has it open (`Viewers.isOpen`, a hidden tab included), and nothing is believed about presence for
- *   `VIEWER_OPEN_TTL_MS` after the server starts, since presence is never persisted;
+ *   `PRESENCE_OPEN_TTL_MS` after the server starts, since presence is never persisted;
  * - not stranded, swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate`.
  *
  * THE `measure` ARM (hibernate-verdict-measure-arm (D-5425)): the plan's signature answers `hibernate` or a hold;
@@ -201,7 +201,7 @@ export function hibernateVerdict(i: HibernateInput, now: number, afterMs: number
   if (s.openClaimant) return hold('run-claimant');
   if (s.claim) return hold('claim');
   if (s.mail) return hold('mail');
-  if (i.viewer || i.sinceStartMs < VIEWER_OPEN_TTL_MS) return hold('viewer');
+  if (i.viewer || i.sinceStartMs < PRESENCE_OPEN_TTL_MS) return hold('viewer');
   if (r.dialogPending) return hold('menu');
   if (r.bucket !== 'idle') return hold('bucket');
   if (r.background !== null) return hold('background');

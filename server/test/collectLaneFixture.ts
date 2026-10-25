@@ -228,7 +228,7 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
   const identity = new FleetIdentityCell();
   const deps = { ...base, fleetIdentity: identity, cfg, io, coord, notifyLog, fleetState,
     ...(opts.push !== undefined ? { push: opts.push } : {}),
-    presence: { isVisible: (id: string) => visible(id) },
+    viewers: { isVisible: (id: string) => visible(id) },
     monotonicMs: () => mono, collectLane: { journal, bootNonce: 'test' } };
   if (opts.armed === true) writeFileSync(path.join(reg, COLLECT_LANE_LIVE_MARKER), '');
   const watcher = new FleetWatcher(deps as never, new Bus(), 10_000);

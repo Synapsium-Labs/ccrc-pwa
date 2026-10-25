@@ -86,7 +86,7 @@ const fixture = async (opts: Opts = {}) => {
     monotonicMs: () => clock,
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: ['ws-audit', 'ws-expire', ...(opts.cap === false ? [] : [EXPIRE_CAP]), ACTOR_FLAGS_CAP] },
-    presence: { isVisible: () => false },
+    viewers: { isVisible: () => false },
   };
   const watcher = new FleetWatcher(deps as never, new Bus(), 10_000);
   /** An archived workspace, as `ws-archive` leaves it: the epoch in `.archived`. */

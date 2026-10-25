@@ -15,7 +15,7 @@ import { NotifyLog } from '../src/notifylog.js';
 import { Viewers } from '../src/viewer.js';
 import { askKey } from '../src/askkey.js';
 import type { PushPayload } from '../src/push.js';
-import { FLEET_SCOPE, VIEWER_REFRESH_MS, VIEWER_TTL_MS, type NodeRole, type UpdateChannel } from '../../shared/api.js';
+import { FLEET_SCOPE, PRESENCE_REFRESH_MS, PRESENCE_TTL_MS, type NodeRole, type UpdateChannel } from '../../shared/api.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, type NodeMeasurement, type ReleaseListingRow, type UpdateIntentPatch } from '../src/coord/store.js';
 import { okRuns } from './coordReadHelpers.js';
@@ -258,11 +258,11 @@ describe('push copy discipline — project context, presence suppression, log fi
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
     let now = 1_000_000;
-    const viewers = new Viewers(() => now, VIEWER_TTL_MS);
+    const viewers = new Viewers(() => now, PRESENCE_TTL_MS);
     viewers.setVisible(Symbol('t'), 'cc-a');        // the phone said so, then vanished
     const w = watcher({ push, viewers, sessions: ['ccrc-pwa/cc-a'] });
     await w.tick();
-    now += VIEWER_TTL_MS + 1;                      // no heartbeat ever arrived
+    now += PRESENCE_TTL_MS + 1;                      // no heartbeat ever arrived
     w.markIdle('cc-a');
     await w.tick();
     expect(sent).toHaveLength(1);
@@ -272,14 +272,14 @@ describe('push copy discipline — project context, presence suppression, log fi
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
     let now = 1_000_000;
-    const viewers = new Viewers(() => now, VIEWER_TTL_MS);
+    const viewers = new Viewers(() => now, PRESENCE_TTL_MS);
     const token = Symbol('t');
     viewers.setVisible(token, 'cc-a');
     const w = watcher({ push, viewers, sessions: ['ccrc-pwa/cc-a'] });
     await w.tick();
     // Heartbeats at the client's own cadence carry the claim past the TTL.
-    for (let i = 0; i < 4; i++) { now += VIEWER_REFRESH_MS; viewers.setVisible(token, 'cc-a'); }
-    expect(now).toBeGreaterThan(1_000_000 + VIEWER_TTL_MS);
+    for (let i = 0; i < 4; i++) { now += PRESENCE_REFRESH_MS; viewers.setVisible(token, 'cc-a'); }
+    expect(now).toBeGreaterThan(1_000_000 + PRESENCE_TTL_MS);
     w.markIdle('cc-a');
     await w.tick();
     expect(sent).toEqual([]);

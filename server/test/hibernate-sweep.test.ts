@@ -13,7 +13,7 @@ import {
   HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER, HIBERNATE_SWEEP_MS,
   NO_HIBERNATE_SUFFIX, type HibernateMark,
 } from '../src/coord/hibernate.js';
-import { VIEWER_OPEN_TTL_MS, RUN_STATES, TERMINAL_RUN_STATES, type FleetSession, type RunState } from '../../shared/api.js';
+import { PRESENCE_OPEN_TTL_MS, RUN_STATES, TERMINAL_RUN_STATES, type FleetSession, type RunState } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -34,7 +34,7 @@ import type { CcdResult } from '../src/lifecycle.js';
 const NOW = 1_800_000_000_000;
 const MIN = 60_000;
 const HOUR = 60 * MIN;
-const STARTED = NOW - VIEWER_OPEN_TTL_MS - MIN;
+const STARTED = NOW - PRESENCE_OPEN_TTL_MS - MIN;
 const ID = 'project-a-quiet-basin';
 const OTHER = 'lane-a-project-a';
 
@@ -157,16 +157,16 @@ describe('hibernatePass: the shadow line', () => {
 });
 
 describe('hibernatePass: after a server start, presence is unknown', () => {
-  it('an idle row with no open claim logs nothing inside VIEWER_OPEN_TTL_MS of the start, and logs one sweep after', async () => {
+  it('an idle row with no open claim logs nothing inside PRESENCE_OPEN_TTL_MS of the start, and logs one sweep after', async () => {
     const f = fake();
     f.deps = { ...f.deps, startedAt: NOW };
     const m = mem();
-    for (let t = NOW; t < NOW + VIEWER_OPEN_TTL_MS; t += HIBERNATE_SWEEP_MS) {
+    for (let t = NOW; t < NOW + PRESENCE_OPEN_TTL_MS; t += HIBERNATE_SWEEP_MS) {
       f.clock.now = t;
       await pass(f, m);
     }
     expect(f.lines).toEqual([]);
-    f.clock.now = NOW + VIEWER_OPEN_TTL_MS + HIBERNATE_SWEEP_MS;
+    f.clock.now = NOW + PRESENCE_OPEN_TTL_MS + HIBERNATE_SWEEP_MS;
     await pass(f, m);
     expect(f.lines).toHaveLength(1);
   });
@@ -260,7 +260,7 @@ describe('hibernatePass: the viewer is Presence.isOpen', () => {
     expect(viewers.isVisible(ID)).toBe(false);
     const f = fake({ viewers });
     expect((await pass(f))[0]!.verdict).toEqual({ act: 'hold', reason: 'viewer' });
-    t = NOW + VIEWER_OPEN_TTL_MS + 1;
+    t = NOW + PRESENCE_OPEN_TTL_MS + 1;
     f.clock.now = t;
     expect((await pass(f))[0]!.verdict.act).toBe('hibernate');
   });

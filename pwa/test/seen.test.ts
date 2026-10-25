@@ -216,7 +216,7 @@ describe('one comparison, two kinds of key', () => {
 
 // The 'why' comment above loadAcks is load-bearing: it is where the next
 // reader learns whether a server-side notion of a viewer exists. It said none
-// did, while server/src/viewer.ts is exactly that and already suppresses
+// did, while server/src/presence.ts is exactly that and already suppresses
 // pushes across devices — the "comment asserts more than the code proves"
 // defect this repo treats as real. A comment cannot be checked by rendering,
 // so it is checked by reading, the same way fleet-css.test.ts checks CSS.
@@ -231,12 +231,12 @@ describe('the per-device rationale', () => {
     .replace(/^[ \t]*\*[ \t]?/gm, '')
     .replace(/\s+/g, ' ');
 
-  it('does not deny the server-side viewer notion that viewer.ts is', () => {
+  it('does not deny the server-side viewer notion that presence.ts is', () => {
     expect(doc).not.toMatch(/server has no notion of a viewer/);
   });
 
-  it('names viewer.ts and says what that other viewer notion actually decides', () => {
-    expect(doc).toMatch(/viewer\.ts/);
+  it('names presence.ts and says what that other viewer notion actually decides', () => {
+    expect(doc).toMatch(/presence\.ts/);
     expect(doc).toMatch(/push/i);
   });
 

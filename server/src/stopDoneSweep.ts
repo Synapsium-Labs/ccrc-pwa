@@ -9,7 +9,7 @@ import { CCD_ARGV, HIBERNATE_HOLD_OK_CAP, capSupported, sweepDec, verbSupported 
 import { HIBERNATE_DISABLED_MARKER, NO_HIBERNATE_SUFFIX } from './coord/hibernate.js';
 import { RECLAIM_PAUSE_MARKER } from './coord/rundefs.js';
 import { programmeHoldOf } from './coord/rundefs.js';
-import { VIEWER_OPEN_TTL_MS, TERMINAL_RUN_STATES, type FleetSession } from '../../shared/api.js';
+import { PRESENCE_OPEN_TTL_MS, TERMINAL_RUN_STATES, type FleetSession } from '../../shared/api.js';
 import {
   STOP_DONE_ACTOR, STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_MEASURES_PER_PASS, STOP_DONE_PARKED_STATES,
   STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS,
@@ -239,7 +239,7 @@ export async function stopDonePass(
   const inputFor = (row: StopDoneRow, store: StopDoneStoreRead, live: StopDoneLive, at: number): StopDoneInput => ({
     row, heldKind: heldKindOf(row.held, deps.coord), holdOkVerb, store, viewer: deps.viewers?.isOpen(row.id) ?? true,
     sinceStartMs: at - deps.startedAt,
-    presenceTtlMs: VIEWER_OPEN_TTL_MS, verb, optedOut: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`),
+    viewerOpenTtlMs: PRESENCE_OPEN_TTL_MS, verb, optedOut: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`),
     live, now: at, graceMs: STOP_DONE_GRACE_MS,
   });
   // The excluded row's count, over the whole population (pure: the verdict asked twice, no live read).

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { heldKindOf, stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
 import { STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS } from '../src/stopDone.js';
-import { VIEWER_OPEN_TTL_MS, VIEWER_TTL_MS, type FleetSession } from '../../shared/api.js';
+import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS, type FleetSession } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
 import type { FleetState } from '../src/fleetstate.js';
 import path from 'node:path';
@@ -28,7 +28,7 @@ import { HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, NO_HIBERNATE_SUF
 // the declared stop, the one feed row, and the retry memory.
 
 const NOW = 1_800_000_000_000;
-const STARTED = NOW - VIEWER_OPEN_TTL_MS - 60_000;
+const STARTED = NOW - PRESENCE_OPEN_TTL_MS - 60_000;
 const HOUR = 3_600_000;
 /** A `done` marker seven hours old — past N — nothing in the background, nothing scheduled. */
 const MARK_IDLE = { ok: true, state: 'done', bg: 0, crons: 0, turnAt: NOW - 7 * HOUR - 60_000, stopAt: NOW - 7 * HOUR, restartAt: null } as const;
@@ -311,11 +311,11 @@ describe('stopDonePass (D-5370)', () => {
     expect(f.argv).toEqual([]);
   });
 
-  it('the post-start hold lasts VIEWER_OPEN_TTL_MS (D-5242): past the visible TTL it still holds, past the open one it stops', async () => {
+  it('the post-start hold lasts PRESENCE_OPEN_TTL_MS (D-5242): past the visible TTL it still holds, past the open one it stops', async () => {
     const f = fake([ID]);
-    await stopDonePass({ ...f.deps, startedAt: NOW - VIEWER_TTL_MS - 1 }, mem(), [row(ID)], [rec(ID)], []);
+    await stopDonePass({ ...f.deps, startedAt: NOW - PRESENCE_TTL_MS - 1 }, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([]);
-    await stopDonePass({ ...f.deps, startedAt: NOW - VIEWER_OPEN_TTL_MS }, mem(), [row(ID)], [rec(ID)], []);
+    await stopDonePass({ ...f.deps, startedAt: NOW - PRESENCE_OPEN_TTL_MS }, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([HIB(ID)]);
   });
 

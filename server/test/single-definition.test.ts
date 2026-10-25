@@ -7265,8 +7265,8 @@ describe('D-5242: hibernation’s markers have no writer, and its holds one home
       expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c).toEqual([home === undefined ? DEFINER : definerOf(home)]);
     }
   });
-  it('VIEWER_OPEN_TTL_MS is declared once, in shared/api.ts beside VIEWER_TTL_MS', () => {
-    const decl = /\b(?:const|let|var)\s+VIEWER_OPEN_TTL_MS\b/;
+  it('PRESENCE_OPEN_TTL_MS is declared once, in shared/api.ts beside PRESENCE_TTL_MS', () => {
+    const decl = /\b(?:const|let|var)\s+PRESENCE_OPEN_TTL_MS\b/;
     expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel)).toEqual(['shared/api.ts']);
   });
 });

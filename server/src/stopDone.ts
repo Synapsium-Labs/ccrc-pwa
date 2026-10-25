@@ -179,9 +179,9 @@ export interface StopDoneInput {
   /** `Viewers.isOpen` for this id (D-5242's presence contract): an open screen, visible or hidden. */
   readonly viewer: boolean;
   /** Milliseconds since the server started: presence is never persisted, so a viewer that has not reconnected yet
-   *  reads as none for one open-claim TTL (`VIEWER_OPEN_TTL_MS`) after a start. */
+   *  reads as none for one open-claim TTL (`PRESENCE_OPEN_TTL_MS`) after a start. */
   readonly sinceStartMs: number;
-  readonly presenceTtlMs: number;
+  readonly viewerOpenTtlMs: number;
   /** `verbSupported` for `CCD_ARGV.hibernate`: the box's ccd lists `hibernate` in its caps. */
   readonly verb: boolean;
   /** `$REG/<id>.no-hibernate` is listed. */
@@ -235,7 +235,7 @@ export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
   if (s.openClaimant) return hold('run-claimant');
   if (s.claim) return hold('claim');
   if (s.mail) return hold('mail');
-  if (i.viewer || i.sinceStartMs < i.presenceTtlMs) return hold('viewer');
+  if (i.viewer || i.sinceStartMs < i.viewerOpenTtlMs) return hold('viewer');
   if (r.dialogPending) return hold('menu');
   if (r.bucket !== 'idle') return hold('bucket');
   if (r.background !== null) return hold('background');

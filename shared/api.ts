@@ -4588,8 +4588,8 @@ export type SessionClientMsg = { type: 'visible'; visible: boolean };
 /**
  * The presence heartbeat, defined ONCE for both halves because they are one
  * mechanism: the client re-states "this session is on screen" every
- * `VIEWER_REFRESH_MS`, and the server stops believing a claim it has not
- * heard for `VIEWER_TTL_MS`.
+ * `PRESENCE_REFRESH_MS`, and the server stops believing a claim it has not
+ * heard for `PRESENCE_TTL_MS`.
  *
  * A close frame is not guaranteed. A phone that loses signal in a lift or a
  * tunnel sends no FIN, the socket's 'close' never fires, and a claim held for
@@ -4604,20 +4604,20 @@ export type SessionClientMsg = { type: 'visible'; visible: boolean };
  * backgrounded tab all resolve to the same rule: keep saying it, or stop
  * counting.
  */
-export const VIEWER_REFRESH_MS = 15_000;
-export const VIEWER_TTL_MS = 45_000;
+export const PRESENCE_REFRESH_MS = 15_000;
+export const PRESENCE_TTL_MS = 45_000;
 /**
  * The OPEN claim's lifetime (D-5242, spec §5.11's presence contract): how long the server believes a
  * `/ws/session/:id` connection is still open after its last frame, visible or hidden. Every frame re-stamps it, and
  * the client's heartbeat now beats whatever the visibility (`visible:false` while hidden, which `isVisible` reads
  * exactly as before), so a hidden but running tab keeps its session from being put to sleep.
  *
- * Why it is so much longer than `VIEWER_TTL_MS`: a browser throttles a hidden tab's timers, to about one wake-up a
- * minute at the most, so the hidden beat arrives a minute apart rather than every `VIEWER_REFRESH_MS`, and the claim
+ * Why it is so much longer than `PRESENCE_TTL_MS`: a browser throttles a hidden tab's timers, to about one wake-up a
+ * minute at the most, so the hidden beat arrives a minute apart rather than every `PRESENCE_REFRESH_MS`, and the claim
  * must outlive several of those missed beats. A page the browser froze sends nothing, and its claim lapses after this
  * long — the case the open screen's wake covers when the operator comes back.
  */
-export const VIEWER_OPEN_TTL_MS = 10 * 60_000;
+export const PRESENCE_OPEN_TTL_MS = 10 * 60_000;
 
 /** Wire protocol generation of the PWA↔server pair. Bump on a breaking
  *  wire change. FLEET_PROTO_MIN is the kill-switch: raise it above an

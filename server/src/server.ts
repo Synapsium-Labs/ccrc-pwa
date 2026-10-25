@@ -1911,11 +1911,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // get un-notified by the first one's disconnect. It is the TTL, not this
     // key, that handles a socket dying WITHOUT a close frame — every frame
     // below re-stamps the claim, and the client sends one every
-    // VIEWER_REFRESH_MS for exactly that reason (see Viewers's own doc).
+    // PRESENCE_REFRESH_MS for exactly that reason (see Viewers's own doc).
     const token = Symbol('viewer');
     // D-5242's presence contract: the OPEN claim, stamped at connect and re-stamped by EVERY frame — before the frame
     // is parsed, so even one that fails to parse proves the socket alive. A hidden tab beats too, and holds its session
-    // awake for `VIEWER_OPEN_TTL_MS` after its last frame; `drop` at close removes both claims.
+    // awake for `PRESENCE_OPEN_TTL_MS` after its last frame; `drop` at close removes both claims.
     viewers.markOpen(token, id);
     socket.on('message', (raw) => {
       viewers.touch(token);

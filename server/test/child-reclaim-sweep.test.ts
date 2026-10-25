@@ -66,7 +66,7 @@ interface FixtureOpts {
   /** Reuse a coordination database (the restart case). */
   coord?: CoordStore;
   home?: string;
-  /** Wired into `deps.presence` — the ports-composition case. */
+  /** Wired into `deps.viewers` — the ports-composition case. */
   visible?: (id: string) => boolean;
   /** Wired into `deps.notifyLog` — the ports-composition case. */
   notifyLog?: NotifyLog;
@@ -139,7 +139,7 @@ const fixture = (opts: FixtureOpts = {}) => {
         ...(opts.releaseCap === false ? [] : ['ws-release']),
         ACTOR_FLAGS_CAP,
       ] },
-    presence: { isVisible: (id: string) => opts.visible?.(id) === true },
+    viewers: { isVisible: (id: string) => opts.visible?.(id) === true },
     ...(opts.notifyLog === undefined ? {} : { notifyLog: opts.notifyLog }),
     ...(opts.exec === 'real' ? {} : {
       childReclaimExec: async (req: ChildReclaimRequest) => { requests.push(req); return answer(req); },
@@ -1626,7 +1626,7 @@ describe('the production path', () => {
 
   it('composes the SAME ports the close route does — presence blocks it before any argv is composed', async () => {
     // `presence: true` must reach the executor and defer BEFORE `ws-audit`
-    // is ever called — proof the production path wires `deps.presence`
+    // is ever called — proof the production path wires `deps.viewers`
     // through, exactly as `execChildReclaim`'s docstring says.
     const f = fixture({ exec: 'real', visible: (id) => id === 'demo-a' });
     finishedChild(f);

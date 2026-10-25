@@ -2254,7 +2254,7 @@ describe('POST /api/runs/:id/close', () => {
   });
 
   it('the reclaim port wires every port reclaimChild declares — presence included (Task 8 review)', async () => {
-    // A route-level proof, not merely a type check: `ChildReclaimDeps.presence`
+    // A route-level proof, not merely a type check: `ChildReclaimDeps.viewers`
     // is OPTIONAL, so an omission at the route's wiring is not a compile
     // error. If `childReclaimPort` (`routes.ts`) failed to pass `viewers`
     // through, `isVisible` below would never be called and the executor would

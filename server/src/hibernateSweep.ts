@@ -42,7 +42,7 @@ import {
  *     `ccd: session-busy: <reason>` at exit 3, is a QUIET skip — one line per id per `HIBERNATE_ACT_LINE_MS`, never a
  *     warning per sweep — and the next sweep asks again.
  *
- * The verdict holds every candidate `viewer` for `VIEWER_OPEN_TTL_MS` after `startedAt`, the process start the
+ * The verdict holds every candidate `viewer` for `PRESENCE_OPEN_TTL_MS` after `startedAt`, the process start the
  * watcher hands it: presence is never persisted, and a hidden tab that has not reconnected after a deploy is not an
  * empty screen.
  */
