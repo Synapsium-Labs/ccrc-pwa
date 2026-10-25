@@ -184,7 +184,7 @@ export const SWITCHES = {
   },
   [CHILD_RECLAIM_DISABLED_MARKER]: {
     storage: { marker: CHILD_RECLAIM_DISABLED_MARKER }, default: 'absent: child reclaim runs', owner: 'C4',
-    meaning: 'Child reclaim alone is switched off: a spent child is not reclaimed, while expiry, collect and the coordinator reclaim go on.',
+    meaning: 'Meant to switch off child reclaim alone, leaving expiry, collect and the coordinator reclaim running. Nothing reads it yet: touching it stops nothing until the child-spent reason moves (ARCH-44).',
     writer: 'hand-only',
   },
   [IDLE_NUDGE_DISABLED_MARKER]: {

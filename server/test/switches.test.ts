@@ -82,6 +82,8 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(row.writer).toBe('hand-only');
     expect(row.owner).toBe('C4');
     expect(row.default).toMatch(/^absent: /);
+    // No reader yet (the child-spent reader lands with ARCH-44): the operator sentence must not claim the switch acts today.
+    expect(row.meaning).toMatch(/Nothing reads it yet/);
     // Absence changes nothing: a listing without the marker reads 'clear' for it and leaves every other row as it was.
     const without = readSwitches(['mail-disabled']);
     const withIt = readSwitches(['mail-disabled', CHILD_RECLAIM_DISABLED_MARKER]);
