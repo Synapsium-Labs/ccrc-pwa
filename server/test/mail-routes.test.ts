@@ -772,6 +772,15 @@ describe('the rejection table is total, in both directions', () => {
                                   // field ever carries it. Each caller maps it to
                                   // a word of its own (`bad-session`,
                                   // `spent-unmeasured`, `marker-unreadable`).
+      // ARCH-19 (#539): `coord/delivery.ts` decides what the sweep does with a refused send, so it now names the
+      // send's own refusal words (`inject/send.ts`'s `SendPromptResult` errors). They are the SEND's vocabulary, set on
+      // a delivery's `lastError` and `lastGate` as free text; none is a `MailRejectCode`, and none reaches the wire as
+      // a refusal.
+      'auto-continue-armed',
+      'turn-running',
+      'stash-failed',
+      'stash-occupied',
+      'enter-ignored',
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;

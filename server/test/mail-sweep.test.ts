@@ -3865,6 +3865,11 @@ describe('sweepMail: a live recipient\'s mail PARKS, never rejects (D-5838)', ()
     expect(row.state).toBe('rejected');
     expect(row.rejectCode).toBe('undeliverable');
     expect(row.lastError).toBe('parked 24 h, never delivered: enter-ignored');
+    // ARCH-19: the sender is told of the rejection too, after the park notice.
+    const rejected = coord.db.prepare("SELECT body FROM mail WHERE toId = ? AND subject LIKE 'mail rejected%'")
+      .all(SENDER) as unknown as { body: string }[];
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.body).toContain('was rejected after 24 h parked');
   }, 30_000);
 
   it('tells the SENDING session once, by system mail, naming the subject, the recipient and the condition', async () => {

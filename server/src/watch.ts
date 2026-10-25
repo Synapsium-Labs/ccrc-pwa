@@ -48,7 +48,7 @@ import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthI
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, SERVER_CAPS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, isRegistryId, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, SERVER_CAPS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, isRegistryId, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 import { ASKS_DISABLED_MARKER, MAIL_DISABLED_MARKER, readSwitches } from '../../shared/switches.js';
 // The pause marker, reached through `rundefs.ts`'s re-export of its one definition, the `shared/switches.ts` row.
@@ -136,7 +136,7 @@ import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
 import {
-  MAIL_REPLAY_CEILING_ERROR, toRunSummary, type AskRow, type CoordStore, type MarkReleaseNotifiedResult,
+  toRunSummary, type AskRow, type CoordStore, type MarkReleaseNotifiedResult,
   type OpenSibling, type RunRow,
 } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
@@ -195,6 +195,7 @@ import type { MoveFeedRecord } from './update/dispatch.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { LaneRunner } from './laneRunner.js';
+import { decideParked, decideRecipientAbsent, decideReplayCeiling, decideSendFailure, decideSessionDead, decideTmuxUnknown, MAIL_ARMED_HOLD_MS, MAIL_PARK_PROBE_MS, MAIL_PARK_RETRY_MS, type SettleAction } from './coord/delivery.js';
 import { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, DIVERGENCE_SWEEP_MS, IDLE_NUDGE_SWEEP_MS, LC_SWEEP_MS, STALL_SWEEP_MS, PR_BACKOFF_MAX_MS, PR_SWEEP_MS, READINESS_SWEEP_MS, type LaneName } from './laneSchedule.js';
 // THE TEMP-ROOT COLLECTOR'S LANE (child reclamation wave 9, spec §5.10). A block of its own, so no import line above
 // changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
@@ -494,106 +495,6 @@ const COORD_COOLDOWN_MS = 30_000;
  *  the edge proves the turn started, so the recipient is thinking, not
  *  ignoring. The VALUE is `shared/api.ts`'s (`stall.ts` reads it too). */
 
-/** WHAT `MAIL_MAX_ATTEMPTS` MEANS, kept beside the code that enforces it. The
- *  VALUE moved to `shared/api.ts` in Task 408 — `MailSummary.attempts` puts
- *  the running count on the wire, so the PWA now names the same budget and a
- *  second `6` in the client would be a second copy of a policy number. The
- *  reasoning stays here, where the ceiling is actually applied.
- *
- *  The PRE-DELIVERY attempt budget, and the spacing between attempts —
- *  applies ONLY while a delivery's own `deliveredAt` is still null (review
- *  finding 4). A row that has NEVER been delivered PARKS at the cap — since
- *  D-5838 (#754) the durable, still-outstanding parked state, no longer
- *  `rejected('undeliverable')` while its recipient lives (`MAIL_PARK_RETRY_MS`
- *  below) — and THE MAIL ROW IS UNTOUCHED (spec:170-172): the record of what
- *  was said survives the failure to say it. The instant `deliveredAt` is set, this budget stops applying: the
- *  row's own history already disproves 'undeliverable', so a failing REPLAY
- *  backs off instead of rejecting on THIS counter — `attempts` keeps
- *  counting on a delivered row too (it is one cumulative column), just
- *  without a ceiling that turns a failing SEND into a park.
- *
- *  A delivered row's own park is `MAIL_REPLAY_MAX_ATTEMPTS` below, a
- *  SEPARATE counter over successful replays (fix — review finding 20: before
- *  it existed, a delivery no one ever acked replayed "forever, bounded by
- *  ack rather than by a count" — true, and that is exactly what left
- *  spec:170-172's own terminal state structurally unreachable for any
- *  delivery that succeeded even once, since `MAIL_COOLDOWN_MS` only SPACES
- *  the injections and a send that keeps succeeding can never fail its way
- *  into this counter).
- *
- *  That is also what makes the constant below real (review finding 9): a
- *  NEVER-delivered row's own schedule (attempts 1..5, 30 s doubling to 8 min)
- *  never reaches `MAIL_BACKOFF_MAX_MS` before `MAIL_MAX_ATTEMPTS` parks it —
- *  `Math.min` never binds on that path and the ceiling is decorative there.
- *  A delivered row's `attempts` is not capped at 6, so by attempt 6
- *  (30 000 * 2^5 = 960 000) `Math.min` genuinely clamps to the ceiling —
- *  doubling from 30 s to the same 15-minute ceiling `PR_BACKOFF_MAX_MS`
- *  already uses, one ceiling for "this keeps not working" across the whole
- *  watcher. */
-const MAIL_BACKOFF_BASE_MS = 30_000;
-const MAIL_BACKOFF_MAX_MS = PR_BACKOFF_MAX_MS;
-
-/** D-2369: how long a nudge is held when the recipient's own auto-continue is
- *  armed. Not a backoff step: the recipient is not failing, it is waiting, so
- *  the hold counts no attempt and `MAIL_MAX_ATTEMPTS` cannot park it. Five
- *  minutes against a reset that may be hours away: cheap re-reads, and the
- *  first sweep after the session resumes delivers. */
-const MAIL_ARMED_HOLD_MS = 300_000;
-
-/** Worker stall watch §4.1: how long a nudge is held when `sendPrompt` refused
- *  it `turn-running`. The live word delivered it (`shell`), but the pane's last
- *  8 rows showed `esc to interrupt`. Like `MAIL_ARMED_HOLD_MS`, this is not a
- *  backoff step. The recipient is not failing, so the hold counts no attempt
- *  and `MAIL_MAX_ATTEMPTS` cannot park it. Unlike that hold, the sender is not
- *  told, because a running turn is not a blocked recipient. *Chosen*, 60 s: a
- *  turn may end in seconds, while `MAIL_ARMED_HOLD_MS` is sized for a usage-limit
- *  reset. */
-const MAIL_TURN_HOLD_MS = 60_000;
-
-/** The ceiling on successful, UNACKED replays (review finding 20) — see
- *  `MAIL_MAX_ATTEMPTS`'s own docstring for why that counter cannot serve
- *  this role. At `MAIL_REPLAY_MS` (10 min) between replays, 20 attempts is
- *  a little over three hours of a recipient provably receiving the same
- *  envelope and never acking it — long enough that an ordinary slow ack
- *  (a session busy on something else for a while) never comes close, short
- *  enough that `MAIL_COOLDOWN_MS`'s own docstring's "denial of service
- *  dressed as coordination" eventually parks rather than running for the
- *  life of the box. */
-const MAIL_REPLAY_MAX_ATTEMPTS = 20;
-
-/** THE PARKED STATE (D-5838, #754). A mail is never rejected as
- *  undeliverable while its recipient session is alive. Measured before this:
- *  in 21 days five wave briefs to new workers and two workers' done-mails to
- *  their coordinators were rejected — `enter-ignored` on the FIRST attempt (the
- *  nudge sat in a fresh box), or `draft-present` at `MAIL_MAX_ATTEMPTS` after
- *  about 15 minutes of a human's unsent text — and the sending session was never
- *  told. Now such a row PARKS (`CoordStore.parkDelivery`): still `queued`, so
- *  every outstanding reader keeps it, and:
- *   - the sweep PROBES its recipient's box (`readBoxText`, at most every
- *     `MAIL_PARK_PROBE_MS`) and wakes it the moment the box differs from what it
- *     held at the park — a draft cleared or changed;
- *   - otherwise it is re-attempted every `MAIL_PARK_RETRY_MS`, through every
- *     gate, so a recipient that has since died or stopped is rejected exactly as
- *     before (the lifecycle rung) — the park keeps no dead recipient's mail;
- *   - an `enter-ignored` park never TYPES while its box still holds what it
- *     held at the park — that would put the nudge under itself. On its timer, a
- *     box holding exactly our own nudge is resumed by `sendPrompt`'s
- *     `resumeIfOwn` arm (a correspondence-checked Enter, never a blind one, never
- *     a retype), at most once per retry; any other unchanged text is held with
- *     nothing pressed. A box the park could not read is unknown, not empty
- *     (`parkBoxSeen`);
- *   - its SENDING session is told once, by system mail; the operator is told
- *     once, at `MAIL_PARK_ESCALATE_MS` parked (`tellSender`'s push, its tag
- *     `mail-parked-<id>`);
- *   - at `MAIL_PARK_CEILING_MS` parked it is rejected, with a `lastError` that
- *     says so (`parkExpiredError`). */
-const MAIL_PARK_RETRY_MS = 600_000;
-const MAIL_PARK_PROBE_MS = 30_000;
-const MAIL_PARK_ESCALATE_MS = 900_000;
-const MAIL_PARK_CEILING_MS = 24 * 60 * 60_000;
-/** The park ceiling's `lastError` (D-5838) — free text, the reason appended. */
-const parkExpiredError = (reason: string | null): string =>
-  `parked 24 h, never delivered: ${reason ?? 'unknown'}`;
 /** The words a park notice uses for its reason (D-5838). Branched on the
  *  literal tokens it has words for; anything else is named as a failing send. */
 function parkWords(reason: string | null): { why: string; when: string } {
@@ -7356,6 +7257,15 @@ export class FleetWatcher {
     await this.runLane('mail', () => this.mailPass(store, fleet));
   }
 
+  /** The one executor of a settling `DeliveryAction` (`coord/delivery.ts`): a back-off or a rejection, and for a rejection
+   *  that names a park, the sender's notice once the write landed. True when the write landed. */
+  private settleDelivery(store: CoordStore, id: number, a: SettleAction, who?: { mailId: number; toId: string }): boolean {
+    if (a.kind === 'backOff') return this.landed(store.backOff(id, a.why, a.until, a.countsAsAttempt), 'backOff', id);
+    if (!this.landed(store.rejectDelivery(id, a.code, a.error), 'rejectDelivery', id)) return false;
+    if (a.told !== null && who !== undefined) this.tellParkedSender(store, who.mailId, who.toId, 'rejected', a.told.reason);
+    return true;
+  }
+
   private async mailPass(store: CoordStore, fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
 
@@ -7492,17 +7402,16 @@ export class FleetWatcher {
     // delivers to everyone else, exactly as an ordinary row's stuck send does.
     const probeFor = new Map<string, (typeof parkedRows)[number][]>();
     for (const p of parkedRows) {
-      if (now - p.parkedAt >= MAIL_PARK_CEILING_MS) {
+      const verdict = decideParked(p, now);
+      if (verdict.kind === 'reject') {
         ceilinged = true;
-        if (!this.landed(store.rejectDelivery(p.id, 'undeliverable', parkExpiredError(p.parkReason)), 'rejectDelivery', p.id)) continue;
-        this.tellParkedSender(store, p.mailId, p.toId, 'rejected', p.parkReason);
+        this.settleDelivery(store, p.id, verdict, p);
         continue;
       }
-      if (p.parkEscalatedAt === null && now - p.parkedAt >= MAIL_PARK_ESCALATE_MS
-          && store.markParkEscalated(p.id, now).changed) {
+      if (verdict.escalate && store.markParkEscalated(p.id, now).changed) {
         this.escalatePark(store, p, sessionProjects, projects);
       }
-      if (p.nextAttemptAt <= now || this.mailInFlight.has(p.toId)) continue;
+      if (!verdict.waiting || this.mailInFlight.has(p.toId)) continue;
       if (now - (this.parkProbeAt.get(p.id) ?? 0) < MAIL_PARK_PROBE_MS) continue;
       this.parkProbeAt.set(p.id, now);
       const rows = probeFor.get(p.toId) ?? [];
@@ -7688,50 +7597,8 @@ export class FleetWatcher {
           // below, not just in this comment, for whoever greps the ROW rather
           // than the source.
           gated(d, unmeasurable ? 'registry-unmeasurable' : 'registry-absent');
-          const attempts = d.attempts + 1;
-          // D-1069 — THE PARK STAYS, and a DELIVERED row now says why it parked.
-          //
-          // An earlier draft of this change (D-1067, withdrawn before merge)
-          // added `&& d.deliveredAt === null` here, mirroring the SEND-failure
-          // park ~250 lines below. That was wrong, and `store.ts`'s own
-          // OUTSTANDING_OR_ABANDONED_SQL comment says why: a `rejected` row
-          // stays visible to a HUMAN ("is this worth a human's attention")
-          // while staying terminal for the LANE ("should the delivery lane act
-          // on this again"). This park is the ONLY thing that ends the lane for
-          // a delivered row whose recipient's registry row was PURGED.
-          // `cancelOutstandingDeliveries` is runId-scoped, so peer mail
-          // (`runId IS NULL`) is out of its reach, and `MAIL_REPLAY_MAX_ATTEMPTS`
-          // counts SUCCESSFUL replays, which a row gated HERE never gets.
-          // Without the park the row stays due at the 15-minute ceiling for
-          // ever — and `_ws_slug_new` recycles a purged slug (`ccd/ccd:3653`,
-          // and ccd's own comment: "144 per project, recycled by ws-reap"), so
-          // that id can be re-minted for an unrelated workspace and the lane
-          // will then type this stale envelope into it. `mail_deliveries`
-          // carries no recipient uuid, so nothing downstream can tell the two
-          // recipients apart. The hazard is bounded today only because this
-          // park ends the row ~26 minutes after the purge.
-          //
-          // What WAS wrong is the sentence. `'recipient not in registry'` beside
-          // `rejectCode: 'undeliverable'` reads as "this never arrived", and for
-          // a delivered row that is false. `lastError` is free text a maintainer
-          // greps, so the row itself now says what actually happened. The ack
-          // door stays shut either way (`markAcked` admits only the replay-
-          // ceiling park) and that is correct here: a PURGE is permanent —
-          // `ws-restore` restores an ARCHIVED workspace, which keeps its
-          // registry row and so lands on the session-dead rung, not this one —
-          // so the only party that could ever walk through that door is a
-          // re-minted stranger wearing the same id.
-          if (attempts >= MAIL_MAX_ATTEMPTS && !unmeasurable) {
-            this.landed(store.rejectDelivery(d.id, 'undeliverable',
-              d.deliveredAt === null
-                ? 'recipient not in registry'
-                : 'recipient purged after this message was delivered, and never acked'), 'rejectDelivery', d.id);
-          } else {
-            const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
-            this.landed(store.backOff(d.id,
-              unmeasurable ? 'registry row listed but unreadable (registry-unmeasurable)' : 'recipient not in registry',
-              now + step, !unmeasurable), 'backOff', d.id);
-          }
+          // Back off, count, and reject only a recipient proven absent (D-1069): `decideRecipientAbsent`.
+          this.settleDelivery(store, d.id, decideRecipientAbsent(d, unmeasurable, now));
           continue;
         }
         // D-309 (was D-B8-13): `gone` — tmux itself said the recipient's pane does not
@@ -7832,20 +7699,12 @@ export class FleetWatcher {
           // just without a ceiling that turns a failing SEND into a park" — and
           // that an uncapped counter is exactly what makes MAIL_BACKOFF_MAX_MS
           // reachable rather than decorative.
-          const attempts = d.attempts + 1;
-          const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
-          if (d.deliveredAt === null && attempts >= MAIL_MAX_ATTEMPTS) {
-            this.landed(store.rejectDelivery(d.id, 'undeliverable', `recipient session is ${lc}`), 'rejectDelivery', d.id);
-          } else {
-            this.landed(store.backOff(d.id, `recipient session is ${lc}`, now + step, true), 'backOff', d.id);
-          }
+          this.settleDelivery(store, d.id, decideSessionDead(d, lc, now));
           continue;
         }
         if (sv.verdict === 'unknown') {
           gated(d, 'tmux-unknown');
-          const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** d.attempts, MAIL_BACKOFF_MAX_MS);
-          this.landed(store.backOff(d.id, `tmux did not answer (substrate-unknown): ${sv.detail}`, now + step, false),
-            'backOff', d.id);
+          this.settleDelivery(store, d.id, decideTmuxUnknown(d, sv.detail, now));
           continue;
         }
         const hs = await hookStateFor(d.toId);
@@ -8018,13 +7877,11 @@ export class FleetWatcher {
             // and re-parking a terminal row is exactly what rejectDelivery's
             // own guard exists to refuse.
             const bumped = store.bumpReplayCount(d.id);
-            if (bumped.state === 'counted' && bumped.replayCount >= MAIL_REPLAY_MAX_ATTEMPTS) {
-              this.landed(store.rejectDelivery(d.id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR), 'rejectDelivery', d.id);
-            }
+            const ceiling = bumped.state === 'counted' ? decideReplayCeiling(bumped.replayCount) : null;
+            if (ceiling !== null) this.settleDelivery(store, d.id, ceiling);
           }
           continue;
         }
-        const attempts = d.attempts + 1;
         /**
          * TELL THE SENDER, ONCE (Task 409). Every operator-visible signal this
          * lane had was recipient-side and arrived only AFTER the park — and
@@ -8058,92 +7915,39 @@ export class FleetWatcher {
           this.pushSenderNotice(store, d.mailId, d.toId, why, tag, sessionProjects, projects);
         };
 
-        if (res.error === 'auto-continue-armed') {
-          // D-2369. Before the attempts ceiling on purpose: a held delivery is
-          // not a failed one. Told once per hold.
-          if (d.lastError !== 'auto-continue-armed') {
+        // The guard order is `decideSendFailure`'s: the two holds, then the park (never for a delivered row), then the
+        // park ceiling, then the back-off. D-5912: the two stash refusals are the delivery's GATE as well as its
+        // `lastError`, so `mail-stuck`'s "Its last gate:" names them (its port carries no `lastError`, D-792).
+        const failure = decideSendFailure(d, res.error, now);
+        if (failure.gate === 'stash-failed') gated(d, 'stash-failed');
+        if (failure.gate === 'stash-occupied') gated(d, 'stash-occupied');
+        const act = failure.action;
+        if (act.kind === 'hold') {
+          // D-2369 / worker stall watch §4.1: told once per hold, and only for a blocked recipient, never a running turn.
+          if (act.tellSender) {
             tellSender('the recipient is waiting out a usage limit on its own; the nudge is held until it resumes',
               `mail-blocked-${d.id}`);
           }
-          this.landed(store.backOff(d.id, res.error, now + MAIL_ARMED_HOLD_MS, false), 'backOff', d.id);
-          continue;
-        }
-
-        if (res.error === 'turn-running') {
-          // Worker stall watch §4.1. The pane guard saw `esc to interrupt` and
-          // refused before any keystroke. This arm sits before the attempts
-          // ceiling, as the hold above does, because a running turn is not a
-          // failed send. There is NO `tellSender`: a running turn is not a
-          // blocked recipient, and the first sweep after the hold reads the
-          // live word again.
-          this.landed(store.backOff(d.id, res.error, now + MAIL_TURN_HOLD_MS, false), 'backOff', d.id);
-          continue;
-        }
-
-        // D-5912: the two stash refusals are the delivery's GATE as well as its
-        // `lastError`, so `mail-stuck`'s "Its last gate:" names them (its port
-        // carries no `lastError`, D-792). They then take the path `dialog-open`
-        // and `box-unreadable` take: the back-off, the park at the attempts
-        // ceiling, the operator's one `mail-parked` push, and the 24 h ceiling.
-        // No hold arm exempts them: with the stash armed a draft is no reason to
-        // wait, so either word means something abnormal the operator should hear.
-        if (res.error === 'stash-failed') gated(d, 'stash-failed');
-        if (res.error === 'stash-occupied') gated(d, 'stash-occupied');
-
-        // The park below applies ONLY to a row that has NEVER been delivered
-        // (review finding 4): `d.deliveredAt === null` is the row's own,
-        // durable proof of that. Rejecting a row that HAS been delivered
-        // would write a false 'undeliverable' record over a message that
-        // demonstrably reached the recipient, and would silently end
-        // replay-until-ack (spec:174-177) — see `MAIL_MAX_ATTEMPTS`'s own
-        // docstring for the full reasoning, including why this is also what
-        // makes `MAIL_BACKOFF_MAX_MS` reachable (review finding 9).
-        if (d.deliveredAt === null
-            && (res.error === 'enter-ignored' || attempts >= MAIL_MAX_ATTEMPTS || d.parkedAt !== null)) {
-          // D-5838 (#754): PARK, never reject, a live recipient's mail. The
-          // recipient has passed every lifecycle rung above, so it is alive; the
-          // reject this replaced lost five wave briefs and two done-mails in 21
-          // days. `enter-ignored` parks at once — the nudge is sitting in a FRESH
-          // box, `submitEnter`'s doctrine forbids a blind third Enter, and typing
-          // again would put the nudge under itself; its re-attempt waits for the
-          // box to change, or resumes our own nudge on the timer (the hold
-          // above). Any other refusal parks at the attempts ceiling, as the reject used to — and an already-parked row
-          // re-parks on every failure, keeping its first `parkedAt`.
-          // `MAIL_PARK_RETRY_MS`'s docstring has the whole contract.
-          if (d.parkedAt !== null && now - d.parkedAt >= MAIL_PARK_CEILING_MS) {
-            if (!this.landed(store.rejectDelivery(d.id, 'undeliverable', parkExpiredError(res.error)), 'rejectDelivery', d.id)) continue;
-            this.tellParkedSender(store, d.mailId, d.toId, 'rejected', res.error);
-            continue;
-          }
-          // What the box holds NOW, for the probe to compare against, read once
-          // more. (D-5912: no refusal on this lane carries the box any more; the
-          // lane's sends stash a draft, so `draft-present` cannot reach here.)
+          this.landed(store.backOff(d.id, act.why, act.until, false), 'backOff', d.id);
+        } else if (act.kind === 'park') {
+          // D-5838 (#754): PARK, never reject, a live recipient's mail. What the box holds NOW, for the probe to compare
+          // against, read once more. (D-5912: no refusal on this lane carries the box any more; the lane's sends stash a
+          // draft, so `draft-present` cannot reach here.)
           const box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId);
-          if (!this.landed(store.parkDelivery(d.id, res.error, box, now, now + MAIL_PARK_RETRY_MS), 'parkDelivery', d.id)) continue;
+          if (!this.landed(store.parkDelivery(d.id, act.reason, box, now, act.retryAt), 'parkDelivery', d.id)) continue;
           this.parkProbeAt.set(d.id, now);
-          if (d.parkedAt === null) {
-            this.tellParkedSender(store, d.mailId, d.toId, 'parked', res.error);
-            // A park that followed `MAIL_MAX_ATTEMPTS` failures has already been
-            // stuck about `MAIL_PARK_ESCALATE_MS`: the operator hears it now.
-            if (res.error !== 'enter-ignored' && store.markParkEscalated(d.id, now).changed) {
-              this.escalatePark(store, { id: d.id, mailId: d.mailId, toId: d.toId, parkReason: res.error },
-                sessionProjects, projects);
-            }
+          if (act.tellSender) this.tellParkedSender(store, d.mailId, d.toId, 'parked', act.reason);
+          // A park that followed `MAIL_MAX_ATTEMPTS` failures has already been stuck about `MAIL_PARK_ESCALATE_MS`:
+          // the operator hears it now.
+          if (act.escalate && store.markParkEscalated(d.id, now).changed) {
+            this.escalatePark(store, { id: d.id, mailId: d.mailId, toId: d.toId, parkReason: act.reason },
+              sessionProjects, projects);
           }
-          continue;
+        } else {
+          // D-5997: told only once the write LANDED: an ack that beat it means the mail arrived. D-5912: no sender notice
+          // on a back-off; a long wait is the park's `mail-parked` push (spec §2.4).
+          this.settleDelivery(store, d.id, act, d);
         }
-        // THE FIRST failure of this kind, and only the first. `d.lastError` is
-        // what the row already carried coming IN (`dueDeliveries` selects it),
-        // so a repeat of the same refusal does not re-raise — the tray is not
-        // a ticker. What stays live across every back-off tick is the strip,
-        // via `attempts` on the wire (Task 408).
-        // D-5997: told only once the back-off LANDED — an ack that beat it means
-        // the mail arrived, and its sender hears nothing about a blocked box.
-        // D-5912: no sender notice here any more. The one this lane had was for
-        // `draft-present`, which its sends can no longer produce (they stash the
-        // draft); a long wait is the park's `mail-parked` push (spec §2.4).
-        const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
-        if (!this.landed(store.backOff(d.id, res.error, now + step), 'backOff', d.id)) continue;
       } finally {
         this.mailInFlight.delete(d.toId);
       }
