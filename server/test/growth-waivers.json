@@ -59,6 +59,13 @@
     },
     {
       "file": "ccd/ccd",
+      "maxDelta": 76,
+      "d": "D-6634",
+      "reason": "disk retention DR-22: the orphan ladder's rung 11 rescue arm (eligibility, token binding, nested pin, nested removal) and the census's nested-checkout reach, bash that sits beside the ladder it extends (ccd sources only accounts.sh, so there is no sourced-library path), measured +66 net code lines against the DR-17 and DR-20 merge (exemption requested from the orchestrator)",
+      "added": "2026-10-24"
+    },
+    {
+      "file": "ccd/ccd",
       "maxDelta": 67,
       "d": "D-6638",
       "reason": "disk retention DR-26: the stale reclaim arm (the stale flags on the verb and the audit, the hold-digest rung 4, the idle rung and its token binding) and the direct-entry guard's stale tail are bash that must sit beside the ladder they extend, measured +57 net code lines against the merge-base with current main (orchestrator exemption requested)",
