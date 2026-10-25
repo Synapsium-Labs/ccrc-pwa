@@ -58,6 +58,10 @@ describe('inboxTarget', () => {
     expect(inboxTarget(ev({ kind: 'run', sessionId: '', runId: 7 }), sessions(LISTED), runs(7))).toEqual({ kind: 'runs', path: '/runs' });
   });
 
+  it('a drift push (kind coord, no session, a run) opens the run board', () => {
+    expect(inboxTarget(ev({ kind: 'coord', sessionId: '', runId: 7 }), sessions(LISTED), runs(7))).toEqual({ kind: 'runs', path: '/runs' });
+  });
+
   it('the run is read through eventRunId', () => {
     // An unrevived record (an older build's cached row) reaches a renderer with
     // the key missing. `undefined` used as a Map key is the hazard eventRunId's
