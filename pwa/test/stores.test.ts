@@ -2156,9 +2156,21 @@ describe('fleet store', () => {
       store.getState().connect();
       lastSocket().open();
     };
+    // Every store a case makes is disconnected after it, even when an assertion failed first: a case's own
+    // `disconnect()` sits on its success path, so a failing case (a mutant's) would otherwise leave its listeners,
+    // its window timer and its pending frame running into the next case. Disconnecting twice is harmless.
+    const made: Array<ReturnType<typeof createFleetStore>> = [];
+    const make = (): ReturnType<typeof createFleetStore> => {
+      const store = createFleetStore(quiet);
+      made.push(store);
+      return store;
+    };
+    afterEach(() => {
+      for (const store of made.splice(0)) store.getState().disconnect();
+    });
 
     it('an identical frame keeps the array', () => {
-      const store = createFleetStore(quiet);
+      const store = make();
       open(store);
       lastSocket().message(frameOf('one'));
       const first = store.getState().sessions;
@@ -2185,7 +2197,7 @@ describe('fleet store', () => {
     it('ten frames write the snapshot at most once in 30 s', () => {
       vi.useFakeTimers();
       const spy = setItem();
-      const store = createFleetStore(quiet);
+      const store = make();
       open(store);
       for (let i = 0; i < 10; i++) {
         lastSocket().message(frameOf(`f${i}`));
@@ -2198,7 +2210,7 @@ describe('fleet store', () => {
     it('the newest frame is written when the window closes', () => {
       vi.useFakeTimers();
       const spy = setItem();
-      const store = createFleetStore(quiet);
+      const store = make();
       open(store);
       lastSocket().message(frameOf('A'));
       expect(written(spy)).toEqual(['A']); // the first frame, at once
@@ -2219,7 +2231,7 @@ describe('fleet store', () => {
     it('the window reopens after its timed write', () => {
       vi.useFakeTimers();
       const spy = setItem();
-      const store = createFleetStore(quiet);
+      const store = make();
       open(store);
       lastSocket().message(frameOf('A')); // 0 s: written at once, and opens the window
       vi.advanceTimersByTime(10_000);
@@ -2248,7 +2260,7 @@ describe('fleet store', () => {
     it('a refused frame opens no window', () => {
       vi.useFakeTimers();
       const spy = setItem();
-      const store = createFleetStore(quiet);
+      const store = make();
       open(store);
       lastSocket().message(degradedFrameOf('X')); // refused: nothing written, and no window opened
       expect(written(spy)).toEqual([]);
@@ -2261,7 +2273,7 @@ describe('fleet store', () => {
     it('a refused frame does not displace the pending one', () => {
       vi.useFakeTimers();
       const spy = setItem();
-      const store = createFleetStore(quiet);
+      const store = make();
       open(store);
       lastSocket().message(frameOf('A')); // 0 s: written
       vi.advanceTimersByTime(5_000);
@@ -2276,7 +2288,7 @@ describe('fleet store', () => {
     it('a hidden page writes the pending snapshot at once', () => {
       vi.useFakeTimers();
       const spy = setItem();
-      const store = createFleetStore(quiet);
+      const store = make();
       open(store);
       lastSocket().message(frameOf('A'));
       vi.advanceTimersByTime(1_000);
@@ -2297,7 +2309,7 @@ describe('fleet store', () => {
     it('pagehide writes the pending snapshot at once', () => {
       vi.useFakeTimers();
       const spy = setItem();
-      const store = createFleetStore(quiet);
+      const store = make();
       open(store);
       lastSocket().message(frameOf('A'));
       vi.advanceTimersByTime(1_000);
@@ -2312,7 +2324,7 @@ describe('fleet store', () => {
     it('disconnect writes the pending snapshot and stops the window', () => {
       vi.useFakeTimers();
       const spy = setItem();
-      const store = createFleetStore(quiet);
+      const store = make();
       open(store);
       lastSocket().message(frameOf('A'));
       vi.advanceTimersByTime(1_000);
@@ -2338,7 +2350,7 @@ describe('fleet store', () => {
       // equal to them by construction (a revived row can carry a key the live wire does not, and keepRows would
       // then rightly take the live object; that is not what this case pins).
       saveFleetSnapshot([fleetSession('ws-a', 'lane-a'), fleetSession('ws-b', 'lane-a')]);
-      const store = createFleetStore(quiet);
+      const store = make();
       const hydrated = store.getState().sessions;
       expect(hydrated, 'the snapshot did not hydrate: this case would pin nothing').toHaveLength(2);
       expect(store.getState().fleetFrameSeen).toBe(false);
