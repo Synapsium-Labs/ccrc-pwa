@@ -86,6 +86,8 @@ export interface NotBindingSite { readonly file: string; readonly text: string; 
 export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
   { file: 'server/src/coord/childReclaim.ts', text: 'v.id !== sessionId', count: 2,
     why: 'a ccd verb\'s JSON answer must name the session the server asked about: validation of an adapter reply, no run is read' },
+  { file: 'server/src/childReclaimSweep.ts', text: 'a.sessionId === sessionId',
+    why: 'an attention row of the feed names the session it is about: an alert\'s subject, no run is read' },
   { file: 'server/src/coord/childReclaim.ts', text: 'v.reclaimed !== sessionId',
     why: 'the reclaim verb\'s JSON answer must name the session the server asked it to reclaim: validation of an adapter reply, no run is read' },
 ];
