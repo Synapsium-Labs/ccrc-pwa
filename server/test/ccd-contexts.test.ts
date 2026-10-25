@@ -26,8 +26,9 @@ import {
  *  And by an orchestrator ruling: D-6640 (ws-expire's `--child-of`) raised it 537 -> 540 for the three edges its new
  *  child-of read makes from the EXPIRE verb into the registry and child-run helpers, measured after its rebase.
  *  Lowered 540 -> 536 by ARCH-46: the registry-retire sequence is one `_reg_retire` helper with its own context row,
- *  so its callers make one edge each instead of the inlined calls, measured after its rebase. */
-const BASELINE = 536;
+ *  so its callers make one edge each instead of the inlined calls, measured after its rebase.
+ *  Raised 536 -> 537 by D-6638 (DR-26): the stale reclaim's one edge, the ladder's `_transcript_path` read, measured after its rebase. */
+const BASELINE = 537;
 
 const nameOf = (text: string): string => /^([A-Za-z_][A-Za-z0-9_]*)\(/.exec(text)![1]!;
 

@@ -61,7 +61,7 @@
       "file": "ccd/ccd",
       "maxDelta": 67,
       "d": "D-6638",
-      "reason": "disk retention DR-26: the stale reclaim arm (the stale flags on the verb and the audit, the hold-digest rung 4, the idle rung and its token binding) and the direct-entry guard's stale tail are bash that must sit beside the ladder they extend, measured +57 net code lines against the DR-20 head (orchestrator exemption requested)",
+      "reason": "disk retention DR-26: the stale reclaim arm (the stale flags on the verb and the audit, the hold-digest rung 4, the idle rung and its token binding) and the direct-entry guard's stale tail are bash that must sit beside the ladder they extend, measured +57 net code lines against the merge-base with current main (orchestrator exemption requested)",
       "added": "2026-10-24"
     }
   ]
