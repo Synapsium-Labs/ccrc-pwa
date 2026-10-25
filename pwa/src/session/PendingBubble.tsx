@@ -78,15 +78,21 @@ function SendItButton({
   sendKey,
   expect,
   onSent,
+  held = false,
 }: {
   id: string;
   sendKey: string;
   /** The box row the failed send left behind — the correspondence claim. */
   expect: string;
   onSent?: (key: string) => void;
+  /** D-6326 (R96): the desk's inline ask card is mounted, the `sendHeld` fact Retry reads. `Send it` presses Enter on the box,
+   *  which is a send, so it is disabled with Retry; the guard at the top of `press` is the defence behind the button. */
+  held?: boolean;
 }): ReactNode {
   const [busy, setBusy] = useState(false);
   const press = async (): Promise<void> => {
+    // Held: no submit, no Enter, and the bubble and its recovery state stay as they are for after the card leaves.
+    if (held) return;
     setBusy(true);
     try {
       await api.submit(id, expect);
@@ -102,7 +108,7 @@ function SendItButton({
     }
   };
   return (
-    <button type="button" className="pending-send-it" disabled={busy} onClick={() => void press()}>
+    <button type="button" className="pending-send-it" disabled={busy || held} onClick={() => void press()}>
       Send it
     </button>
   );
@@ -121,7 +127,7 @@ export function PendingBubble({
   send: PendingSend;
   onRetry?: (key: string) => void;
   onDiscard?: (key: string) => void;
-  /** D-6326 (R89): the desk's inline ask card is mounted, so Retry, a send path, is disabled with the composer's Send
+  /** D-6326 (R89, R96): the desk's inline ask card is mounted, so Retry and `Send it`, send paths, are disabled with the composer's Send
    *  until the question is answered. The bubble stays as it is and nothing is queued to go when the card leaves;
    *  `SessionScreen`'s `onRetry` is guarded on the same fact. Discard is not a send and stays enabled. */
   sendHeld?: boolean;
@@ -193,7 +199,7 @@ export function PendingBubble({
         {(send.code === 'enter-ignored' || send.code === 'verify-failed')
           && send.submittable === true
           && send.draft !== undefined && send.draft.trim() !== '' && (
-          <SendItButton id={id} sendKey={send.key} expect={send.draft} onSent={onDiscard} />
+          <SendItButton id={id} sendKey={send.key} expect={send.draft} onSent={onDiscard} held={sendHeld} />
         )}
         <button type="button" className="pending-retry" disabled={sendHeld} onClick={() => onRetry?.(send.key)}>
           Retry
