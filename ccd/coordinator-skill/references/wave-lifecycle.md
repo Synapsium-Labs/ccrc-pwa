@@ -1322,8 +1322,9 @@ resolved that an admin could skip (a `pull_request` rule's
 `required_review_thread_resolution`, or classic
 `required_conversation_resolution` without `enforce_admins`), classic required
 checks carry `enforce_admins`, and every ruleset carrying required checks
-answers `current_user_can_bypass` with exactly `never`, any other answer, an
-unreadable answer, or a rule that names no ruleset, counting as able to bypass. The verdict weighs all three: it answers `admin=licensed`, and only
+answers `current_user_can_bypass` with exactly `never` (any other answer, an
+unreadable answer, or a rule that names no ruleset counting as able to
+bypass). The verdict weighs all three: it answers `admin=licensed`, and only
 then the spelling is
 `gh pr merge <pr> --<method> --admin --match-head-commit <handoffCommit>`, or it stops `licence-fails`.
 
