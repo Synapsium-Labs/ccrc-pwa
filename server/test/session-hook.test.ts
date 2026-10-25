@@ -8457,7 +8457,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // place or in the tail. Both corpus documents are byte-identical to `origin/main`. S6-R11, no D-number.
       // 147 -> 151 at model-class auto-advance W2 (Codex arm), S6-R11: the note above the map names the movers.
       // 151 -> 149 at disk retention DR-26 (D-6638): two of the spec anchors re-pointed by content there now hold what they quote. S6-R11.
-      'ccd/ccd': 149,
+      // 149 -> 146 at the hook-helpers refactor (ARCH-74, S6-R11): its `ccd/ccd` hunks slide every anchor below `:1281`
+      // by +30; the spec sites that shift broke were re-pointed by content (byte-checked), and the shift alone moves
+      // three more off their stale bytes onto text carrying a row token. No rule changed.
+      'ccd/ccd': 146,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8895,7 +8898,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // 147 -> 151 and nothing else moved (the note above the map names the four movers and their one cause).
     // Measured from the same dump as the map, never retyped. No D-number.
     // 204 -> 202 at disk retention DR-26 (D-6638): the census's own arithmetic, ccd/ccd 151 -> 149 and nothing else moved. S6-R11.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(202);
+    // 202 -> 199 at the hook-helpers refactor (ARCH-74): the census's own arithmetic, ccd/ccd 149 -> 146 and nothing else moved. S6-R11.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(199);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -9865,7 +9869,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:5810-5811',
         'ccd/ccd:12032-12034',
         'ccd/ccd:11665-11670',
-        'ccd/ccd:12594-12659',
+        // LEFT at the hook-helpers refactor (ARCH-74, S6-R11): `:12594-12659`, its +30 `ccd/ccd` shift.
         'ccd/ccd:13809',
         'ccd/ccd:13812',
         'ccd/ccd:6425',
@@ -9874,14 +9878,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:3390-3402',
         'ccd/ccd:3401',
         'ccd/ccd:4029',
-        'ccd/ccd:4046',
+        // LEFT at the hook-helpers refactor (ARCH-74, S6-R11): `:4046`, its +30 `ccd/ccd` shift.
         'ccd/ccd:3038',
         'ccd/ccd:2972-2973',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
         'ccd/ccd:11665-11670',
-        'ccd/ccd' + ':13601-13666',
+        // LEFT at the hook-helpers refactor (ARCH-74, S6-R11): `:13601-13666`, its +30 `ccd/ccd` shift.
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         // LEFT here at model-class auto-advance W2 (S6-R11): `:2874` x2 (the note above this assertion).
@@ -9896,7 +9900,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:6771',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'ccd/ccd' + ':5385-5388',
-        'ccd/ccd:4642-4653',
+        // LEFT at the hook-helpers refactor (ARCH-74, S6-R11): `:4642-4653`, its +30 `ccd/ccd` shift.
         // LEFT here at model-class auto-advance W2 (S6-R11): `:5819-5823` (the note above this assertion).
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
@@ -10118,7 +10122,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:3390-3402',
         'spec:2209 ccd/ccd:3401',
         'spec:2209 ccd/ccd:4029',
-        'spec:2209 ccd/ccd:4046',
+        // LEFT at the hook-helpers refactor (ARCH-74, S6-R11): `spec:2209 :4046`, the same +30 shift.
         'spec:2209 ccd/ccd:3038',
         'spec:2209 ccd/ccd:2972-2973',
         'spec:2209 ccd/ccd:8609',

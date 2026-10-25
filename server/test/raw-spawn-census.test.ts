@@ -663,7 +663,9 @@ function envOf(s: Src, open: number, close: number, bs: Binding[]): Shape | null
 // `bashPath` is `ccrc-token-sync.test.ts`'s `command -v bash`, read before PATH is narrowed (D-5256 made its joined
 // command line a script spawn).
 const RUNNERS = new Set(["'bash'", 'BASH', 'DEADLINE_BIN', 'DOCTOR_DEADLINE_BIN', 'bashPath']);
-const READERS = new Set(["'git'"]); // `git show <rev>:<path>` and `git ls-files <path>` name the script as a path
+// `git show <rev>:<path>` and `git ls-files <path>` name the script as a path; `'node'` is
+// `hook-helpers-generated.test.ts`'s `node shared/hook-helpers.mjs --check <hook> <ccd>`, which only reads ccd's text.
+const READERS = new Set(["'git'", "'node'"]);
 interface Spawn {
   file: string; line: number; kind: 'script' | 'sliced' | null; prog: string; placed: boolean;
   shape: Shape | null; argText: string;

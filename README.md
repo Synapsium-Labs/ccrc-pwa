@@ -1212,7 +1212,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `models <id> <subcommand>`, `models refresh <id>\|--all`, `models litellm <id>` | a lane's model-class registry, and the provider catalogue it is classified against |
 | `codex start\|stop\|status\|login <id>` | a Codex lane's LiteLLM gateway and shim; refused on a server-role box |
 | `token sync\|probe` | the box token's fleet side: `sync --from agent` is ccrc-agent's token-sync op (a one-time code on stdin, trade for the new value, write `~/.cc-secrets/ccrc-mail.token`, prove it with one call); `probe --file <path> [--url <base>]` presents a file's value once and prints only the HTTP status and accepted, refused or unmeasured |
-| `restamp <file>` | re-stamp a file carrying a `ccrc:generated` marker after its body changed |
+| `restamp <file>` | re-stamp a file carrying a `ccrc:generated` marker after its body changed; for `ccd/session-hook.sh`, regenerate its generated helpers region from `ccd/ccd` |
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same directory shape, pruned
 to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — never the backup it just made, a dir named
@@ -7082,6 +7082,10 @@ Three conventions carry more weight here than style:
   either side of it, resolve every other hunk as source, then restamp. `restamp` refuses a
   file with no marker, a symlink, and any generator's output under `~/.local/bin` or
   `~/.ccrc` — regenerate those with `ccrc wrappers` or `ccrc install`.
+  `ccd/session-hook.sh` carries a generated helpers region (`shared/hook-helpers.mjs`);
+  after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
+  `bash ccd/ccrc restamp ccd/session-hook.sh`. Restamping `ccd/ccd` says when the hook's
+  region has gone stale.
 
 Design records live in `docs/superpowers/specs/`; the architecture rules the code is held to
 are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`.
