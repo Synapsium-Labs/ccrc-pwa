@@ -88,7 +88,7 @@ describe('D4: the roster card, armed', () => {
     expect(c).not.toContain('#14');
   });
 
-  it('ends with an awaiting-you list: awaiting-review runs, unread mail, parked mail', () => {
+  it('ends with an awaiting-you list: awaiting-review runs and parked mail, never the worker\'s unread backlog', () => {
     fakeApi(list(
       run_('', { id: 12, state: 'awaiting-review' }),
       run_('', { id: 15, unreadMail: 3 }),
@@ -98,7 +98,8 @@ describe('D4: the roster card, armed', () => {
     const last = r[r.length - 1]!;
     expect(last).toMatch(/^awaiting you:/);
     expect(last).toContain('review #12');
-    expect(last).toContain('unread mail #15 (3)');
+    expect(last).not.toContain('unread mail');
+    expect(last).not.toContain('#15');
     expect(last).toContain('parked mail #16 (2)');
   });
 
@@ -150,6 +151,25 @@ describe('D4: the roster card, armed', () => {
     expect(c).not.toContain('$(y)');
     expect(rosterOf(c).split('\n').filter((l) => l.startsWith('#17')).length).toBe(1);
   });
+});
+
+describe('D4: the guards on the card', () => {
+  beforeEach(arm);
+
+  it('the card kill-switch file silences it', () => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'ccrc-card-off'), '');
+    fakeApi(list(run_('', { id: 31 })));
+    expect(hook('compact')).not.toContain('ccrc-roster');
+  });
+
+  it('a server that hangs costs the card within the bound, not the whole session start', () => {
+    fs.writeFileSync(path.join(home, '.local', 'bin', 'ccrc-api'), '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 });
+    const t0 = Date.now();
+    const c = hook('compact');
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(c).not.toContain('ccrc-roster');
+  }, 20_000);
 });
 
 describe('D4: unarmed, the card is a shadow record only', () => {
