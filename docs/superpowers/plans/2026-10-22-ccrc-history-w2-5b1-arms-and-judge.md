@@ -1809,6 +1809,14 @@ Then re-run `-t 'W2-5b1 Task 1'` on the restored tree. Expected green (predicted
 
 The set-parity case's red comes from its own CONTROL lines: the gate is never edited (S2's C9).
 
+Fix-round measurement for spend saturation (D-6467, D-6309):
+
+| Guard | Actual measured mutation | Actual red title | Restoration `cmp` |
+|---|---|---|---|
+| Safe spend charge | Remove `Math.min(Number.MAX_SAFE_INTEGER, ...)`, retaining the larger reading | `F9: spend clamps an unsafe usage sum to the largest safe charge, never leaving a recordSpend-invalid amount` (9,007,199,254,740,992 instead of 9,007,199,254,740,991) | 0 |
+
+The same boundary was watched RED before the clamp and GREEN after it. The independent fixture resume case, `F9: a resumed leftover stream records the clamped charge and clears its .part instead of throwing`, records the largest safe charge and settles the leftover file; this is a resume-path success, not a second credited mutation.
+
 - [ ] **Step 7: Run the neighbours that read these files.** In the foreground, with a timeout of at least 600000 ms. A red file is re-run alone before it is called a break (CLAUDE.md's load flakes; `typecheck-tests` is one).
 
 ```bash
