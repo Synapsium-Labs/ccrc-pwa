@@ -8283,7 +8283,7 @@ Each is the coordinator's, under the operator's directive of 2026-10-19, made wh
 - `marker` writes nothing and round-trips; no driver line spells `/headless-on` or pairs a write verb with `.headlessOn` (O13).
 - Every `--record` consumer re-checks `gate_code` first.
 - A refusal that needs no store and no spawn answers before `--out` is made; a data case after `--out` never exits INTERNAL.
-- Each new guard was measured red under its mutant, then green. The plan lists every mutant and the case it reds.
+- The plan's measured-guard tables record each retained correction guard's edit, actual red title and restoration `cmp`, with separately selected restored greens. They distinguish helper admission from consumer ordering, historical summarized evidence from current measurements, order-only observations from semantic kills, and surviving redundant deletions from grouped protection kills.
 
 (the case titles Step 6 counted or found, one per must-hold, and the re-check rows)
 
@@ -8301,6 +8301,12 @@ Each is the coordinator's, under the operator's directive of 2026-10-19, made wh
 - **The card's parent is decided by W2-D35's node rule**; whether a `describe` of that parent drops a tool_use ref under the cut is R8's rule, which the CLI applies at read time and which stays in recall.mjs (S2, C8).
 - **O13's known width**: a marker path held in a variable and read on a later line is not seen by the scans.
 - **Same millisecond and clock steps outside the holding copy** remain as the decisions document's §7 states; the cut is lib's, and this PR adds no second spelling.
+- **Batch-granular recall switches:** W2-D78 (i) and (ii) run per batch as ruled. A recall-off or headless-on change mid-batch can reach at most the rest of that batch; no operator act changes either mid-window.
+- **Non-authentication API errors:** an attempt with `is_error` and no ANSWER still counts as answered under W2-D80's literal classifier. The absent-rate halt is the backstop; broader infrastructure-error classification is a gate follow-up, not changed here.
+- **Pinned judge input on resume:** if fresh masking differs from a pinned, un-spawned judge input, resume refuses `judge-input-changed`. The remedy is a fresh `--out`, not overwriting the pin.
+- **Answer reuse is scoped to `--out`:** answers are reused within one output directory; Q25 requires a fresh `--out` per phase and per node.
+- **A result before a kill is an answer:** an arm run killed after its result event counts as answered under W2-D80's literal rule, even if its run record carries a signal.
+- **A tool-result undercount:** an array `tool_result` with no text block reads as unpaired; this is a small uptake undercount.
 
 ### How it was measured
 
