@@ -63,6 +63,14 @@ const CENSUS: readonly Row[] = [
     why: 'that same rung: `lc === \'stopped\' && f.hibernatedAt !== null` reads asleep' },
   { source: 'tmux-verdict', file: 'server/src/sessionReading.ts', hits: 1, stances: ['consults'],
     why: '`PaneFact` mirrors the verdict\'s words; `gone` falls to the hibernated rung' },
+  { source: 'dead-compare', file: 'server/src/fleet.ts', hits: 1, stances: ['consults'],
+    why: 'the frame row hands `readSession` the turn word and keeps it only while the row is not dead; a sleeping row '
+      + 'reads asleep there, so it carries no turn' },
+  { source: 'stopped-compare', file: 'server/src/fleet.ts', hits: 1, stances: ['consults'],
+    why: 'the frame row\'s `deadSince` reads `readSession`\'s dead cause: a sleeper reads asleep, not dead, so it has no '
+      + 'dead-since stamp' },
+  { source: 'tmux-verdict', file: 'server/src/fleet.ts', hits: 1, stances: ['consults'],
+    why: 'the frame hands tmux\'s verdict and the `.hibernated` stamp to `readSession`, which reads a sleeping row as asleep' },
   { source: 'tmux-verdict', file: 'server/src/coord/reclaim.ts', hits: 1, stances: ['consults'],
     why: '`measureClaimant`\'s tmux rung; it hands the verdict and the `.hibernated` stamp to `readSession`' },
   { source: 'dead-lifecycle', file: 'server/src/coord/stall.ts', hits: 1, stances: ['held-awake'],
