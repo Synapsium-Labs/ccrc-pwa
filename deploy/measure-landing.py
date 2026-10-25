@@ -39,6 +39,8 @@ usage: measure-landing.py <subcommand> [args] [--since YYYY-MM-DD] [--until YYYY
   episodes       [--project NAME ...]
   mail-latency
   green-to-merge OWNER/REPO [--required a,b,..]
+  queue-ejections OWNER/REPO
+  queue-waits    OWNER/REPO [--required a,b,..]
   inversions     OWNER/REPO --fleet-login L1,L2,.. [--required a,b,..]
 The window defaults to the frozen baseline, 2026-09-08..2026-09-22 inclusive.
 """
@@ -61,17 +63,19 @@ GH_PATH = re.compile(r'^(?![^?]*(?:^|/)\.\.(?:/|\?|$))'
                      r'(user|repos/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(/[A-Za-z0-9._/-]*)?)(\?[A-Za-z0-9._=&%:+-]*)?$')
 
 
-def _gh(path):
-    """GET one GitHub REST path and return its JSON. GET is not a default here, it
+def _gh(path, text=False):
+    """GET one GitHub REST path and return its JSON (or, with text=True, its body as
+    text: a job's log is plain text behind a redirect, with escape sequences gh refuses
+    to print unless told to; the flag changes what gh PRINTS, never what it sends). GET is not a default here, it
     is the only method this file can express: the argv is fixed, and a path that
     carries anything but a REST path (no `..` segment) and a query string is refused
     before gh runs."""
     if not GH_PATH.match(path):
         raise SystemExit(f'measure-landing: refused a GitHub path that is not a plain REST read: {path!r}')
     for attempt in range(4):   # a 5xx is GitHub's, and it passes; anything else is an answer
-        r = subprocess.run(['gh', 'api', '-X', 'GET', path], capture_output=True, text=True, timeout=60)
+        r = subprocess.run(['gh', 'api', '-X', 'GET', '--allow-escape-sequences', path], capture_output=True, text=True, timeout=60)
         if r.returncode == 0:
-            return json.loads(r.stdout)
+            return r.stdout if text else json.loads(r.stdout)
         if 'HTTP 5' not in r.stderr:
             break
         time.sleep(2 * (attempt + 1))
@@ -442,6 +446,201 @@ def cmd_green_to_merge(repo, required, win, cache):
             'headNotGreen': unmeasured}
 
 
+# ── the merge queue's ejections ─────────────────────────────────────────────
+QUEUE_BRANCH = re.compile(r'^gh-readonly-queue/[^/]+/pr-(\d+)-[0-9a-f]{7,40}$')
+ANSI = re.compile(r'\x1b\[[0-9;]*m')
+# The log lines a cause is read from; the cache keeps only these, never a whole log.
+LOG_SIGNAL = re.compile(r'FAIL +\S+\.test\.ts|##\[error\]|EnvironmentTeardownError|EADDRINUSE|Address already in use|EPIPE|'
+                        r'AssertionError|error TS\d+|Operation too slow')
+# KNOWN LIMIT: the bare `expected N to be less than/greater than M` alternative carries no unit,
+# so a content assertion on a count (`expected 0 to be greater than 0` for rows found) is read as
+# timing too; the ledger states this caveat beside the flake/real split (measure-landing.test.ts pins it).
+TIMING = re.compile(r'expected \d+(\.\d+)? to be (less than|greater than)|sent \d+ bytes in \d+ms|Operation too slow')
+
+
+def queue_pr(branch):
+    """The PR a merge_group run tested, from its queue branch name; None for any other branch."""
+    m = QUEUE_BRANCH.match(branch or '')
+    return int(m.group(1)) if m else None
+
+
+def root_job(failed_steps):
+    """A failed job is a CAUSE unless every step that failed in it is the aggregator's
+    'Refuse a prerequisite' step: that job only reports that a shard failed."""
+    return not failed_steps or not all(s.startswith('Refuse a prerequisite') for s in failed_steps)
+
+
+def failure_cause(lines, steps):
+    """One failed job's cause from its signal lines and its failed step names. A test
+    that FAILed outranks a teardown/pipe signature beside it (the signature may be
+    the noise of a real failure); signatures are ordered most-specific first.
+    flake:* — the same code passes on a re-run: a vitest worker closing its rpc,
+    a held port, a broken pipe, a wall-clock or throughput assertion.
+    real:* — the code under test: a compile error, or a test whose assertion is
+    about content. infra:setup-step — the job died before any test ran."""
+    text = '\n'.join(ANSI.sub('', l) for l in lines)
+    failed_test = re.search(r'(^|\s)FAIL +\S+\.test\.ts', text)
+    if re.search(r'error TS\d+', text):
+        return 'real:typecheck'
+    if not failed_test:
+        if 'EnvironmentTeardownError' in text:
+            return 'flake:vitest-teardown'
+        if re.search(r'EADDRINUSE|Address already in use', text):
+            return 'flake:port-in-use'
+        if 'EPIPE' in text:
+            return 'flake:broken-pipe'
+    if re.search(r'EADDRINUSE|Address already in use', text):
+        return 'flake:port-in-use'
+    if TIMING.search(text):
+        return 'flake:timing'
+    if failed_test or 'AssertionError' in text:
+        return 'real:test'
+    if any(s.startswith('Run ') or s.startswith('Set up') for s in steps) and not lines:
+        return 'infra:setup-step'
+    return 'unclassified'
+
+
+def job_signal(repo, job_id, cache):
+    """The signal lines of one job's log (ANSI stripped), cached; the log is read as text."""
+    def read():
+        log = _gh(f'repos/{repo}/actions/jobs/{job_id}/logs', text=True)
+        out = []
+        for l in log.splitlines():
+            l = ANSI.sub('', l)
+            if LOG_SIGNAL.search(l):
+                out.append(re.sub(r'^\d{4}-\d\d-\d\dT[\d:.]+Z\s*', '', l)[:200])
+        return out[:40]
+    return cache.get(f'logsignal-{repo}-{job_id}', read)
+
+
+def queue_wait_split(green, merged, events):
+    """Where a queued PR's green-to-merge wait went. `events` are (kind, time)
+    pairs from the PR's timeline, kind 'added_to_merge_queue' or
+    'removed_from_merge_queue'. FIRST ENTRY is the earliest add at or after
+    `green`; LAST ENTRY is the latest add at or before `merged` (an add not
+    followed by a removal before the merge is the one that landed, and every
+    later add supersedes an ejected earlier one). Returns minutes
+    (green to first entry, last entry to merge, green to merge), or None when
+    the PR was never added to the queue inside [green, merged]."""
+    adds = sorted(P(t) for k, t in events if k == 'added_to_merge_queue')
+    g, m = P(green), P(merged)
+    first = next((a for a in adds if a >= g), None)
+    last = next((a for a in reversed(adds) if a <= m), None)
+    if first is None or last is None:
+        return None
+    mins = lambda a, b: round((b - a).total_seconds() / 60, 1)
+    return mins(g, first), mins(last, m), mins(g, m)
+
+
+def cmd_queue_waits(repo, required, win, cache):
+    """ADDED for the 2026-10-25 re-measurement: stage 2's green-to-merge wait split
+    at the queue door, for PRs merged in the window that went through the merge queue.
+    `green` is as in green-to-merge; the queue events come from each PR's issue
+    timeline (`added_to_merge_queue`, `removed_from_merge_queue`). A PR merged
+    without a queue entry, or whose head was not green, is counted apart."""
+    lo, hi = win[0] + 'T00:00:00Z', win[1] + 'T23:59:59Z'
+    pre, post, total, noqueue, notgreen, ejected = [], [], [], 0, 0, 0
+    for p in pulls(repo, win, cache):
+        if not p.get('merged_at') or not lo <= p['merged_at'] <= hi:
+            continue
+        cs = [c for c in checks(repo, p['head']['sha'], cache) if c.get('name') in required]
+        if required_state(cs, required) != 'green':
+            notgreen += 1
+            continue
+        green = max(c['completed_at'] for c in cs if c.get('conclusion') == 'success')
+        n = p['number']
+        tl = cache.get(f'timeline-{repo}-{n}', lambda: [
+            {'event': e['event'], 'created_at': e['created_at']}
+            for e in _pages(f'repos/{repo}/issues/{n}/timeline')
+            if e.get('event') in ('added_to_merge_queue', 'removed_from_merge_queue')])
+        ev = [(e['event'], e['created_at']) for e in tl]
+        sp = queue_wait_split(green, p['merged_at'], ev)
+        if sp is None:
+            noqueue += 1
+            continue
+        pre.append(sp[0]); post.append(sp[1]); total.append(sp[2])
+        # GitHub also logs a removal when the entry merges, so a removal counts as an ejection
+        # only when the PR was added again afterwards
+        last_add = max(P(t) for k, t in ev if k == 'added_to_merge_queue')
+        ejected += any(k == 'removed_from_merge_queue' and P(t) < last_add for k, t in ev)
+    return {'repo': repo, 'window': win, 'prs': len(total), 'mergedWithoutQueueEntry': noqueue,
+            'headNotGreen': notgreen, 'prsReQueued': ejected,
+            'greenToFirstEntryMin': summary(pre), 'lastEntryToMergeMin': summary(post),
+            'greenToMergeMin': summary(total)}
+
+
+def collapse_failures(rows, secs=10):
+    """Failed merge_group runs that are one cause, not two. With a build size above 1 the
+    runs of one group overlap, so one breaking change fails each of them seconds apart,
+    and a run's queue branch names the PR it tested, which may only have ridden behind
+    the culprit. A row joins the previous row's group when it was created within `secs`
+    of that row and shares a failing test with it (or both name no test and the same
+    cause). Returns the groups as lists of rows, oldest first."""
+    groups = []
+    for r in sorted(rows, key=lambda x: x['at']):
+        if groups:
+            prev = groups[-1][-1]
+            near = (P(r['at']) - P(prev['at'])).total_seconds() <= secs
+            same = (set(r['tests']) & set(prev['tests'])) if (r['tests'] or prev['tests']) \
+                else r['cause'] == prev['cause']
+            if near and same:
+                groups[-1].append(r)
+                continue
+        groups.append([r])
+    return groups
+
+
+def cmd_queue_ejections(repo, win, cache):
+    """ADDED for the 2026-10-25 re-measurement (the spec's §10 has no queue metric,
+    because the queue came after it): every merge_group run in the window, the failed
+    ones read down to the failing job's log and given a cause (failure_cause), and
+    each ejected PR checked for a later merge. A cancelled run is counted apart, never
+    as an ejection: the queue cancels an entry when a PR ahead of it ejects."""
+    rs = runs(repo, 'merge_group', win, cache)
+    merged = {p['number'] for p in pulls(repo, win, cache) if p.get('merged_at')}
+    counts = collections.Counter()
+    by_cause, by_test, rows = collections.Counter(), collections.Counter(), []
+    for r in rs:
+        c = r.get('conclusion')
+        counts['total'] += 1
+        counts[c if c in ('success', 'failure', 'cancelled') else 'other'] += 1
+        if c not in ('failure', 'timed_out'):
+            continue
+        causes, tests = [], []
+        for j in jobs(repo, r['id'], cache):
+            if j.get('conclusion') not in RED:
+                continue
+            steps = [s['name'] for s in j.get('steps', []) if s.get('conclusion') in RED]
+            if not root_job(steps):
+                continue
+            sig = job_signal(repo, j['id'], cache)
+            causes.append(failure_cause(sig, steps))
+            tests += sorted({m.group(1) for l in sig for m in [re.search(r'FAIL +(\S+\.test\.ts)', l)] if m})
+        cause = sorted(set(causes))[0] if causes else 'unclassified'
+        # a run with real and flaky jobs is real: the real failure alone would have ejected it
+        cause = next((x for x in sorted(set(causes)) if x.startswith('real:')), cause)
+        by_cause[cause] += 1
+        by_test.update(set(tests))
+        rows.append({'run': r['id'], 'at': r['created_at'], 'pr': queue_pr(r.get('head_branch')), 'cause': cause,
+                     'tests': sorted(set(tests))})
+    prs = {x['pr'] for x in rows if x['pr']}
+    done = counts['success'] + counts['failure']
+    groups = collapse_failures(rows)
+    group_causes = collections.Counter(next((x['cause'] for x in g if x['cause'].startswith('real:')), g[0]['cause'])
+                                       for g in groups)
+    return {
+        'repo': repo, 'window': win,
+        'runs': {k: counts[k] for k in ('total', 'success', 'failure', 'cancelled', 'other')},
+        'ejections': len(rows), 'ejectionRate': round(len(rows) / done, 3) if done else None,
+        'byCause': dict(by_cause.most_common()), 'failingTests': dict(by_test.most_common(15)),
+        'distinctPrsEjected': len(prs), 'ejectedThenMerged': len(prs & merged),
+        # one failed run per cause: overlapping build-2 runs that failed together are one event,
+        # and a run's named PR is not always the PR that broke it
+        'failureEvents': len(groups), 'failureEventsByCause': dict(group_causes.most_common()),
+        'rows': rows,
+    }
+
+
 def cmd_inversions(repo, required, win, cache, logins):
     """Ports g5_inversions.py. A is READY when its FIRST merge of main in the
     window found its head (the merge's first parent) already green on every
@@ -723,6 +922,10 @@ def main(argv):
         rep = cmd_remerge(repo, win, cache, args['clone'])
     elif sub == 'green-to-merge':
         rep = cmd_green_to_merge(repo, req(), win, cache)
+    elif sub == 'queue-ejections':
+        rep = cmd_queue_ejections(repo, win, cache)
+    elif sub == 'queue-waits':
+        rep = cmd_queue_waits(repo, req(), win, cache)
     elif sub == 'inversions':
         logins = fleet_logins(args)   # BEFORE req(): the refusal precedes every GET and every cache write
         rep = cmd_inversions(repo, req(), win, cache, logins)
@@ -734,7 +937,7 @@ def main(argv):
         print(f'measure-landing.py: unknown subcommand {sub!r}', file=sys.stderr); return 2
     name = f"{sub}{'-' + repo.replace('/', '_') if repo else ''}-{win[0]}-{win[1]}.json"
     json.dump(rep, open(os.path.join(out, name), 'w'), indent=1)
-    print(json.dumps({k: v for k, v in rep.items() if k not in ('pairs', 'perCoordinator')}, indent=1))
+    print(json.dumps({k: v for k, v in rep.items() if k not in ('pairs', 'perCoordinator', 'rows')}, indent=1))
     return 0
 
 
