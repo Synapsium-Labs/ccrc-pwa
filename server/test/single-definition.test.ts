@@ -6871,7 +6871,7 @@ describe('one tryHold decides every ask hold (D-5290)', () => {
     expect(holders(DEFINES_TRY)).toEqual(['server/src/watch.ts']);
   });
 
-  it("watch.ts mints only inside tryHold, reads parentOfSession only there, and calls it from all three raise paths", () => {
+  it("watch.ts mints only inside tryHold, reads the child's run series only there, and calls it from all three raise paths", () => {
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
     const start = watch.search(/\basync\s+tryHold\s*\(/);
     const end = watch.indexOf('\n  }\n', start);
@@ -6881,12 +6881,14 @@ describe('one tryHold decides every ask hold (D-5290)', () => {
     expect(body.match(/\bthis\.hold\(/g) ?? []).toHaveLength(1);
     expect(rest).not.toMatch(/\bthis\.hold\(/);
     // D-5530 (plan Task 16): the claimant decision moved, whole, into `coord/heldFor.ts`, which the approvals mint
-    // reads too: `tryHold` calls it, and the watcher reads `parentOfSession` nowhere else.
+    // reads too: `tryHold` calls it, and the watcher reads the child's run series (`bindingRunsOf`, which replaced
+    // `parentOfSession`: ARCH-62 slice 2) nowhere else. heldFor reads it through `childParentRead` (bindingReads.ts),
+    // the one parent read it shares with the drift lane.
     expect(body).toMatch(/\bheldFor\(/);
-    expect(rest).not.toMatch(/\.parentOfSession\(/);
+    expect(rest).not.toMatch(/\.bindingRunsOf\(/);
     expect(rest.match(/\bthis\.tryHold\(/g) ?? []).toHaveLength(3);
     const heldForSrc = stallCode(path.join(ccrcRoot, 'server/src/coord/heldFor.ts'));
-    expect(heldForSrc).toMatch(/\.parentOfSession\(/);
+    expect(heldForSrc).toMatch(/\bchildParentRead\(/);
     expect(heldForSrc).toMatch(/\bclaimantMeasuredDead\(/);
   });
 

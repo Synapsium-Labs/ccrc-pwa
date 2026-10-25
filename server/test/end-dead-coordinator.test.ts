@@ -164,7 +164,11 @@ describe('the one executor — shadow, the switch, and the store', () => {
   it('a store that cannot say which runs the claimant holds ends nothing', async () => {
     const r = await rig();
     r.working('alpha', 'demo-w1');
-    r.deps.coord.openRunsClaimedBy = () => { throw new Error('database is not open'); };
+    const real = r.deps.coord.openRunsForSession.bind(r.deps.coord);
+    r.deps.coord.openRunsForSession = (id, e, i, role) => {
+      if (role === 'claimant') throw new Error('database is not open');
+      return real(id, e, i, role);
+    };
     expect(await endDeadCoordinator(r.deps, CRASHED, NOW)).toMatchObject({ kind: 'store-unreadable' });
     expect(r.abandoned).toEqual([]);
   });

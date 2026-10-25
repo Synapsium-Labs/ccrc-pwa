@@ -3,6 +3,7 @@ import type { Deps } from './server.js';
 import type { FleetState } from './fleetstate.js';
 import type { SessionRecord } from './registry.js';
 import type { CoordStore } from './coord/store.js';
+import { openRunsClaimedBy } from './coord/bindingReads.js';
 import type { FleetSession } from '../../shared/api.js';
 import { CCD_ARGV, sweepDec, verbSupported } from './ccdargv.js';
 import {
@@ -63,7 +64,7 @@ export interface HibernateActPort {
 
 export interface HibernateSweepDeps {
   /** Undefined without a coordination store: every row then holds `runs-unreadable`. */
-  readonly coord: Pick<CoordStore, 'openRunsForSession' | 'openRunsClaimedBy' | 'activeClaims' | 'outstandingMailFor'> | undefined;
+  readonly coord: Pick<CoordStore, 'openRunsForSession' | 'activeClaims' | 'outstandingMailFor'> | undefined;
   /** Undefined: every row holds `viewer` (fail closed): a screen nothing measured is never an empty one. */
   readonly viewers: Pick<Viewers, 'isOpen'> | undefined;
   /** `turnverdict.ts`'s `liveWordFor`, over the watcher's thunks. */
@@ -114,7 +115,7 @@ function storeRead(coord: HibernateSweepDeps['coord'], claimants: ReadonlySet<st
   try {
     const worker = coord.openRunsForSession(id);
     if (!worker.ok) return { ok: false, detail: worker.detail };
-    const claimant = coord.openRunsClaimedBy(id);
+    const claimant = openRunsClaimedBy(coord, id);
     if (!claimant.ok) return { ok: false, detail: claimant.detail };
     return {
       ok: true, openWorker: worker.siblings.length > 0, openClaimant: claimant.siblings.length > 0,
