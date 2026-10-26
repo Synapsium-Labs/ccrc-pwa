@@ -15,6 +15,7 @@
 The streamed arm already exists. `compressFdRange` (store.mjs) reads 1 MiB pieces (`RANGE_PIECE`) into `createBrotliCompress` and a streaming sha256, and holds the compressed output. D-4589 already gives both arms one probe. This wave makes two changes:
 - It moves the sweep's whole-or-stream decision from `SIDECAR_WHOLE_MAX` to a new, smaller `SIDECAR_READ_WHOLE_MAX` (D-6971).
 - It makes `compressFdRange` read into ONE reused `RANGE_PIECE` buffer, awaiting each write's callback before refilling it (D-6973). Today it allocates a fresh piece per read, and the dead pieces wait for a GC, which is the very dependence this wave removes. Measured in a standalone script on Node 24.14.1, for 64 MiB of word text, as peak RSS growth: whole read 85,896 KiB; streamed with a fresh piece per read 57,788 KiB; streamed with one reused piece 23,976 KiB.
+  - Measured (Task 2), on Node 22.16.0 as own peak: the pinned walk-cap high mode fell about 22-24 MB, from 271,256-271,788 KiB to 247,784-250,176 KiB, and DM47 fell about 37 MB. Every run is under 262,144 KiB. The worst margin is 4.6%, not the predicted 5%.
 
  `SIDECAR_WHOLE_MAX` keeps its value and its other meanings:
 - expand's one-call decode bound;
@@ -164,6 +165,8 @@ The streamed arm already exists. `compressFdRange` (store.mjs) reads 1 MiB piece
   - DM47's 64 MiB case: the same command with `-t "DM47: a 64 MiB sidecar"`.
   Do 5 runs alone, and 5 pinned to one CPU (`taskset -c <one cpu>`), for each case. Record each printed `peak RSS <n> KiB` line. The figure is the own peak (`VmHWM`), through CP-38's preload, which Step 0 confirmed is on your base.
   Expected: every "after" run is below 249,000 KiB, a 5% margin under 262,144. Report the largest and its margin. If any run is above 249,000 KiB, stop and mail the coordinator with every figure. Also run the box's Node, 3 runs alone per case.
+  - Measured: two of the five pinned walk-cap runs were over 249,000 KiB: 250,176 and 249,996. The largest is 11,968 KiB under 262,144, a 4.6% margin. Every other run was under 249,000. The worker stopped and mailed every figure.
+  - Ruling (coordinator): the 249,000 KiB line was a trigger for a look, not a bound. It was met at 4.6%, and the coordinator accepted that margin.
 
 - [ ] **Step 3: Write "## Measured".** Give the "before" (Task 1 Step 0) and "after" tables, the Node versions, and the CPU pinning. If no "before" run reached the high mode, say so: the high mode is then evidenced by CI only, from the walk-cap's 270,984-272,028 KiB own-peak readings on the floor leg. Commit: `docs(plan): CP-39b, the measured peaks (CP-39b Task 2; D-6971)`
 
@@ -179,10 +182,39 @@ The streamed arm already exists. `compressFdRange` (store.mjs) reads 1 MiB piece
   - Steps for the coordinator: the §9.2 sentence, and watching the node floor leg on the next daily full run
 - [ ] Read the threads with `gh api graphql`, and confirm CI ran at the head. The node floor leg is expected green. If it is red, stop and mail the coordinator, because that is this wave's red now.
 
+## Measured
+
+Every figure is the sweep's own peak (`VmHWM`) in KiB, printed by the case's `peak RSS <n> KiB` line through CP-38's preload. The interpreter is Node 22.16.0, the floor (the official linux-x64 tarball, sha256 checked against its `SHASUMS256.txt`), unless a row says otherwise. "Pinned" means `taskset -c 5`, one CPU of 16. Each run is one command in the foreground, one per call, with `free -m` read first (at least 14.6 GB available throughout).
+
+Method: the default reporter prints nothing on a passing run, so every figure was read with `--reporter=verbose --silent=false` added to the plan's command. It is the same test, in the same process, one run per call. Two "before" walk-cap runs made before the flag was added passed with no figure printed; they are counted as passes below.
+
+**Before**, at base `ba36d7420` (CP-38's merge):
+
+| Case | Alone | Pinned |
+|---|---|---|
+| Walk-cap (`O20 at the walk's cap`) | 268,484 · 269,068 · 268,676 · 269,172 · 217,112, plus two passes with no figure | 271,788 · 271,604 · 271,404 · 271,256 · 271,756 |
+| DM47's 64 MiB case | 233,832 · 233,140 · 224,144 · 234,736 · 232,972 | 228,204 · 232,760 · 232,180 · 233,756 · 232,676 |
+
+The high GC mode was reached locally: alone on four of the five printed walk-cap runs, and pinned on all five. Each of those runs was over 262,144, so the case was red. That agrees with CI's 270,984-272,028 on the floor leg.
+
+**After**, at `28d4ab3a5` (Task 1 before its D-6973 follow-up, which adds only an error handler and a destroy on the error path):
+
+| Case | Alone | Pinned |
+|---|---|---|
+| Walk-cap | 244,104 · 208,392 · 223,148 · 190,148 · 224,852 | 247,784 · 250,176 · 248,068 · 248,836 · 249,996 |
+| DM47's 64 MiB case | 197,100 · 195,172 · 194,352 · 197,144 · 196,916 | 195,360 · 182,228 · 197,300 · 193,252 · 195,636 |
+
+The largest reading is 250,176 (walk-cap, pinned): 11,968 KiB, or 4.6%, under 262,144. The coordinator accepted that margin (Task 2 Step 2). Every run passed.
+
+**The box's Node, v24.14.1** (bound 512 MiB), alone, at `28d4ab3a5`:
+- walk-cap: 333,588 · 273,264 · 189,808;
+- DM47: 210,872 · 210,484 · 210,988.
+
 ## Residuals named
 
 - The streamed arm compresses while it reads, before the blob probe. A changed (size, `mtime_ns`) sidecar between 8 and 64 MiB whose bytes are already stored now costs a compression the whole arm skipped. That is CPU only, and only on a re-read.
 - The walk phase's heap is unchanged. The margin under 256 MiB is what Task 2 measures.
+- What remains of the pinned walk-cap peak is the walk phase's own heap. Lowering it is a Later item; the margin is 4.6%.
 - An incompressible sidecar near 64 MiB still costs about twice its compressed size in the streamed arm: `out[]` plus `Buffer.concat`. Measured in a standalone script on Node 24.14.1, random 64 MiB grew peak RSS by 206,476 KiB whole, 156,900 KiB streamed with a fresh piece, and 143,884 KiB with the reused piece. Beside the walk phase's heap that is over O20's bound. O20 is evidenced here for compressible content only; a bound or design decision for incompressible sidecars is the operator's (Later).
 - `SIDECAR_WHOLE_MAX`'s name now describes only the decode bound.
 
