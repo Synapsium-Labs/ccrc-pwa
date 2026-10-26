@@ -5383,8 +5383,9 @@ in Settings, or on the fleet box touch `mail-gate-strict` (busy delivery) or
 that cannot take it now, so a held coordinator holds every child's question,
 status and done claim. A coordinator (a claimant of an active run with no child
 marker) with mail the server still holds for 30 min (a delivery still `queued`,
-or a delivered one whose replay a gate holds), whatever word it reads, draws one
-`⚠ coordinator blocked` push per episode (D-6942). The push names the reason in
+timed from its queue time; a delivered mail's gated replay never counts),
+whatever word it reads, draws one `⚠ coordinator blocked` push per episode
+(D-6942). The push names the reason in
 plain words: waiting on you (an open question), with the child mails queued
 behind it; held behind a background workflow (`busy` with no turn running); its
 own long busy stretch (`busy` with a turn); or idle but not receiving mail

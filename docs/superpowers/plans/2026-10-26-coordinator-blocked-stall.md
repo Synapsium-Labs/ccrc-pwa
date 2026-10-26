@@ -5,8 +5,8 @@ only on a ledger branch. One number, D-6942, was issued for the arm.
 
 ## Deviations found
 
-- **D-6942** — `coord-blocked`: mail to a coordinator that the server still holds (a delivery still `queued`, or a
-  delivered one whose replay a gate holds) for `COORD_BLOCKED_HELD_MS` (30 min) draws one operator push per episode,
+- **D-6942** — `coord-blocked`: mail to a coordinator that the server still holds (a delivery still `queued`, timed from its
+  mail's queue time; a delivered mail's gated replay is mail already received and never counts) for `COORD_BLOCKED_HELD_MS` (30 min) draws one operator push per episode,
   whatever word the coordinator reads. The push names the gate reason in operator words: waiting on you (an open
   question) with the child mails queued behind it, held behind a background workflow (`busy` with no turn), its own
   long busy stretch (`busy` with a turn), or idle but not receiving mail. Rung 2 (escalated) follows at a 60 min busy

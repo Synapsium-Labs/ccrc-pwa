@@ -67,7 +67,7 @@ const STALL_ARM_MAP = {
   'coord-deaf': 'the worker passed the ball to its coordinator and that mail sat unacked COORD_DEAF_MS from its first delivery, or DELEGATE_CAP_MS + COORD_DEAF_MS from its queue while it stays queued behind the gate: one operator push',
   'mail-stuck': 'a delivery to the session stayed queued MAIL_STUCK_MS after its main loop went idle (a live idle or shell word in every mode, the strict mode included, an accepted residual; or a finished turn under a live busy, which the `busy` mode delivers on only while the strict mode is absent), or behind a registry gate: one operator push per delivery',
   'marker-unreadable': 'the turn marker read unmeasured or malformed for MARKER_UNREADABLE_MS: one operator push per episode',
-  'coord-blocked': 'mail to a coordinator (no child marker, claiming an open run) held COORD_BLOCKED_HELD_MS, queued or gate-held, whatever word it reads: one operator push per episode naming the gate reason, rung 2 at a COORD_BLOCKED_STRETCH_MS busy or waiting stretch or a COORD_BLOCKED_OLD_MS old mail; it only reports (D-6942)',
+  'coord-blocked': 'mail to a coordinator (no child marker, claiming an open run) still queued COORD_BLOCKED_HELD_MS from its queue time, whatever word it reads: one operator push per episode naming the gate reason, rung 2 at a COORD_BLOCKED_STRETCH_MS busy or waiting stretch or a COORD_BLOCKED_OLD_MS old mail; it only reports (D-6942)',
 } as const;
 export type StallArm = keyof typeof STALL_ARM_MAP;
 export const STALL_ARMS = Object.keys(STALL_ARM_MAP) as StallArm[];
@@ -374,8 +374,10 @@ export const MARKER_UNREADABLE_MS = 3_600_000;
  *  strict circular wait was found. The 33 episodes of mail held more than an hour were an open operator question (20,
  *  about 102 h, three of them over 10 h overnight), the coordinator's own long busy stretch, a background workflow
  *  with no turn running, and an idle coordinator not receiving mail (unsent input text, an account limit), so the
- *  arm reads the server's held mail and never requires a busy word, which would miss the last kind. Held mail of
- *  COORD_BLOCKED_HELD_MS flags; a COORD_BLOCKED_STRETCH_MS busy or waiting stretch, or a COORD_BLOCKED_OLD_MS old mail,
+ *  arm reads the server's held mail and never requires a busy word, which would miss the last kind. Held mail is a
+ *  delivery still `queued`, timed from its mail's queue time: the census's own span, creation to the coordinator first
+ *  receiving it, so the replay below measures this definition. A delivered row's gated replay is mail already received
+ *  and is outside it; it never counts. Mail queued COORD_BLOCKED_HELD_MS flags; a COORD_BLOCKED_STRETCH_MS busy or waiting stretch, or a COORD_BLOCKED_OLD_MS old mail,
  *  escalates. Replayed over the census these thresholds give about 32 flags in 14 days (about 2.3 a day), 18 of them
  *  operator questions; a 60 min held threshold alone gives about 4 a day, and 2 h / 60 min about 1.4. The flag sits
  *  below MAIL_STUCK_MS, so held mail is named before the generic stuck push would be. Constants first: the
@@ -1982,9 +1984,11 @@ export interface StallCoordBlockedInput {
   readonly session: StallSessionInput; readonly child: StallChildFact; readonly runs: readonly StallRunRow[];
   readonly episode: StallCoordEpisode | null;
 }
-/** One held item: a delivery to the coordinator still `queued` (held since its mail's queue time), or a delivered
- *  one whose replay a gate holds (since that gate's own stamp; `markDelivered` clears the gate columns, so a gate on a
- *  delivered row is its replay's). */
+/** One held item: a delivery to the coordinator still `queued`, held since its mail's queue time, whatever gate holds
+ *  it. A delivered row is never held: the coordinator has received it, and `dueDeliveries` replays an unacked one every
+ *  MAIL_REPLAY_MS, so a busy or waiting coordinator gates each replay while `noteGate` keeps `gateSince` unbroken.
+ *  Counting those would flag every unacked mail of an ordinary busy stretch, outside the census's creation-to-first-seen
+ *  definition; an unacked delivered mail is coord-deaf's case. */
 interface StallCoordHeld { readonly delivery: StallDeliveryRow; readonly mail: StallMailRow; readonly since: number }
 
 /** Why the mail is held, read from the coordinator's live word and turn marker. Each is one of the census's holds, and
@@ -2020,15 +2024,14 @@ export function stallCoordBusySince(input: StallSessionInput): number | null {
   return m !== null && m.state === 'working' && m.turnAt !== null && m.turnAt < live.since ? m.turnAt : live.since;
 }
 
-/** Every held delivery to the coordinator whose mail this read holds, longest held first. */
+/** Every queued delivery to the coordinator whose mail this read holds, longest held first. */
 function stallCoordHeld(input: StallSessionInput): StallCoordHeld[] {
   const out: StallCoordHeld[] = [];
   for (const d of input.deliveries) {
     if (d.toId !== input.sessionId) continue;
-    const gated = d.state === 'delivered' && d.lastGate !== null && d.gateSince !== null;
-    if (d.state !== 'queued' && !gated) continue;
+    if (d.state !== 'queued') continue;
     const mail = input.mail.find((m) => m.id === d.mailId);
-    if (mail !== undefined) out.push({ delivery: d, mail, since: d.state === 'queued' ? mail.at : d.gateSince ?? mail.at });
+    if (mail !== undefined) out.push({ delivery: d, mail, since: mail.at });
   }
   return out.sort((a, b) => a.since - b.since || a.mail.id - b.mail.id);
 }
