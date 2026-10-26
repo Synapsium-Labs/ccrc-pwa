@@ -43,8 +43,12 @@ export interface HostPressureHealth {
   io: PsiResource | null;
 }
 
-const PRESSURE_LEVELS: readonly string[] = ['ok', 'warn', 'critical', 'unmeasured'] satisfies PressureLevel[];
-const PRESSURE_LINKS: readonly string[] = ['answering', 'host-pressure', 'link-down'] satisfies PressureLink[];
+const PRESSURE_LEVEL_MAP: Record<PressureLevel, true> = { ok: true, warn: true, critical: true, unmeasured: true };
+const PRESSURE_LINK_MAP: Record<PressureLink, true> = { answering: true, 'host-pressure': true, 'link-down': true };
+/** Every `PressureLevel` and every `PressureLink`, derived from the types (a member added to a union is a compile error
+ *  until it is here). */
+export const PRESSURE_LEVELS = Object.keys(PRESSURE_LEVEL_MAP) as PressureLevel[];
+export const PRESSURE_LINKS = Object.keys(PRESSURE_LINK_MAP) as PressureLink[];
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const pct = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100 ? v : null);
@@ -101,8 +105,8 @@ export function readHostPressure(x: unknown): HostPressureHealth | null {
   const at = v['at'] === null ? null : typeof v['at'] === 'number' && Number.isFinite(v['at']) ? v['at'] : undefined;
   const level = v['level'];
   const link = v['link'];
-  if (at === undefined || typeof level !== 'string' || !PRESSURE_LEVELS.includes(level)) return null;
-  if (typeof link !== 'string' || !PRESSURE_LINKS.includes(link)) return null;
+  if (at === undefined || typeof level !== 'string' || !(PRESSURE_LEVELS as string[]).includes(level)) return null;
+  if (typeof link !== 'string' || !(PRESSURE_LINKS as string[]).includes(link)) return null;
   const memory = v['memory'] === null ? null : readResource(v['memory']);
   const io = v['io'] === null ? null : readResource(v['io']);
   if ((v['memory'] !== null && memory === null) || (v['io'] !== null && io === null)) return null;

@@ -77,6 +77,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { MeasuredDirectoryRead } from './io.js';
 import { TmpCensusBeat } from './tmpSweepLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
+import { PressureLane } from './pressureLane.js';
+import type { HostPressureHealth } from '../../shared/pressure.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
 import {
@@ -1089,6 +1091,8 @@ export class FleetWatcher {
    *  `readiness: null` on the wire rather than omitting the key. */
   /** The disk alarm (D-6615) and the tmp sweep census lane (D-6624): each holds its clock and its memory. */
   private readonly diskAlarm = new DiskAlarmLane(() => this.deps);
+  /** The host-pressure beat (#1170): its last reading classifies a stalled link. */
+  private readonly pressureLane = new PressureLane(() => this.deps);
   private readonly tmpCensus = new TmpCensusBeat(() => this.deps);
   /** The registry ids of the last good listing (`null` until one lands: nothing is mailed without it). */
   private registryIds: ReadonlySet<string> | null = null;
@@ -1918,6 +1922,11 @@ export class FleetWatcher {
     return block === null ? null : { ...block, holders: this.tmpCensus.holders() };
   }
 
+  /** `FleetHealth.psi` (#1170), with the link as the route reads it; `null` before the first ask (absence is UNKNOWN). */
+  pressure(linkUp: boolean): HostPressureHealth | null { return this.pressureLane.block(linkUp); }
+  /** The host-pressure beat (#1170). PUBLIC for the reason `sweepDisk` is: `tick()` dispatches it with `void`. */
+  async sweepPressure(): Promise<void> { await this.pressureLane.sweep(); }
+
   /** What the lane last concluded, for tests and diagnostics: nothing here is wire. */
   delegationReport() {
     return this.delegationLane().report();
@@ -2224,6 +2233,8 @@ export class FleetWatcher {
       // awaited: a `statfs` of a stalled volume is what hangs (the agent bounds each root, the link bounds the request),
       // and the dialog detector must not wait behind it. Own clock (`DiskAlarmLane`).
       void this.sweepDisk().catch(() => { /* one bad sweep must not kill the poll */ });
+      // The host-pressure beat (#1170), above the fail-shut return for the same reason: a thrash is when that read fails.
+      void this.sweepPressure();
       // The tmp sweep's census (D-6624) sits beside it for the same reason: a file read, and the holders are wanted
       // exactly when the registry read fails. Own clock (`TmpCensusBeat`), never awaited.
       void this.sweepTmpSweepCensus().catch(() => { /* one bad sweep must not kill the poll */ });

@@ -12310,3 +12310,16 @@ export type DeadCause = typeof DEAD_CAUSES[number];
  *  reads it knows the server will mail the checks and may end its turn. Its one reader is the coordinator, through the
  *  answer `ccrc-api runs advance` prints. */
 export interface AdvanceOk { ok: true; run: RunSummary; checksMail?: typeof CHECKS_MAIL_TOKEN }
+
+/** `FleetHealth`'s host-pressure block (#1170), at the foot as an interface merge, the disk block's rule, so no line
+ *  cited above moves. */
+import type { HostPressureHealth } from './pressure.js';
+export interface FleetHealth {
+  /**
+   * The fleet host's memory and io PSI as the server's pressure lane last read it, its level, and the link's
+   * classification by it (`link: 'host-pressure'` is a stalled link whose last reading showed the host stalling: the
+   * agent alive, the host thrashing). Optional for the absence-permits reason: an older server omits it. Read it
+   * through `readHostPressure` alone; absent reads as UNKNOWN, never as a calm host.
+   */
+  psi?: HostPressureHealth;
+}
