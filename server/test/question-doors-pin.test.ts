@@ -17,7 +17,8 @@
 // hold every one of their refusals). Here each operator door has its front ladder, one press refusal, its success,
 // and, for the two that touch a question table, every record arm: no coord, nothing held, held and taken, CAS lost,
 // the store refusing and throwing (the operator's press goes through unrecorded, D-2169, D-2545), and approval marking
-// before the key, gated on the child's hookstate (none read, an approval envelope, an AskUserQuestion).
+// before the key, gated on the child's hookstate (none read, one with no ask, an approval envelope, an
+// AskUserQuestion).
 // `guard-forbidden` on the rule door is reached only when the classifier answers differently at the rule than at the
 // mint; `approvals-routes.test.ts` holds it, and this file does not.
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
@@ -898,11 +899,23 @@ const OP_DIALOG_ROWS: Row[] = [
     return dialogOutcome(s, await op(s.f, `/api/sessions/${CHILD}/dialog`, { dialogId: 'not-this-one', optionIndex: 1 }), 1);
   }],
   // The hookstate gate: with the watcher holding the child's hookstate, only an approval envelope marks the rows. An
-  // operator's answer to an AskUserQuestion leaves a claimant's held approval row held (principals do not cross).
+  // operator's answer to an AskUserQuestion, or under a hookstate that carries no ask, leaves a claimant's held
+  // approval row held (principals do not cross).
   ['POST /api/sessions/:id/dialog | approval marking | the hookstate is an AskUserQuestion: the held approval row stays held', async () => {
     const s = await dialogFixture([PERMISSION_PANE]);
     await s.f.watcher.tick();
     expect('questions' in (s.f.watcher.currentHookStates().get(CHILD)?.ask ?? {})).toBe(true);
+    expect((await s.f.request(requestBody(ORDINARY))).statusCode).toBe(201);
+    markInKeys(s.f);
+    return dialogOutcome(s, await op(s.f, `/api/sessions/${CHILD}/dialog`, { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }), 1);
+  }],
+  ['POST /api/sessions/:id/dialog | approval marking | the hookstate carries no ask: the held approval row stays held', async () => {
+    const s = await dialogFixture([PERMISSION_PANE]);
+    hookstate(s.f, CHILD, s.now, null);
+    await s.f.watcher.tick();
+    const hs = s.f.watcher.currentHookStates().get(CHILD);
+    expect(hs).toBeDefined();
+    expect(hs?.ask).toBeNull();
     expect((await s.f.request(requestBody(ORDINARY))).statusCode).toBe(201);
     markInKeys(s.f);
     return dialogOutcome(s, await op(s.f, `/api/sessions/${CHILD}/dialog`, { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }), 1);
@@ -1276,6 +1289,8 @@ const EXPECTED: Record<string, Outcome> = {
   "POST /api/sessions/:id/dialog | approval marking | a held approval row is marked operator before the key, even when the press refuses":
     {"status": 409, "body": "{\"ok\":false,\"error\":\"stale-dialog\"}", "effects": {"keys": [], "approval": {"state": "operator", "answeredBy": "operator", "releaseReason": null}}},
   "POST /api/sessions/:id/dialog | approval marking | the hookstate is an AskUserQuestion: the held approval row stays held":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"keys": ["project-a-quiet-basin Enter"], "approval": {"state": "held", "answeredBy": null, "releaseReason": null}}},
+  "POST /api/sessions/:id/dialog | approval marking | the hookstate carries no ask: the held approval row stays held":
     {"status": 200, "body": "{\"ok\":true}", "effects": {"keys": ["project-a-quiet-basin Enter"], "approval": {"state": "held", "answeredBy": null, "releaseReason": null}}},
   "POST /api/sessions/:id/dialog | approval marking | the hookstate is an approval: the held approval row is marked operator before the key":
     {"status": 200, "body": "{\"ok\":true}", "effects": {"keys": ["project-a-quiet-basin <markApprovalOperator>", "project-a-quiet-basin Enter"], "approval": {"state": "operator", "answeredBy": "operator", "releaseReason": null}}},
