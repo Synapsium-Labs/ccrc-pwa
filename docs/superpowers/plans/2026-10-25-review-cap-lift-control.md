@@ -390,6 +390,39 @@ Review 960 ran the held-out panel and an egress lens: 26 agents, none died. Ever
 
 If any item contradicts what you measure at your tip, stop and ask me before choosing. Then send a fresh wave-done.
 
+## Coordinator rulings on review 962 (2026-10-26)
+
+Recorded verbatim from the mail.
+
+Run 946, wave 1: review 962 ruled, and a conflict-sync. Record everything from this line on verbatim in the plan, as "Coordinator rulings on review 962 (2026-10-26)". Leave out the report path above it, because it names a session. Run 946 is back at working, for the sync only.
+
+Review 962, the third and last round under the cap, ran the held-out panel and the egress lens: 32 agents, none died. Everything measured holds: F1's fix, F2, V1, V2, the rulings record word for word, the 8-file scope, M8 and M9, growth, every suite, and CI green at 1bd054e00. The wave is ACCEPTED on that reading.
+
+**F1 does not block. It is carried to a later wave.** A text cut to empty is worded falsely. If every findings line is one 300+ character token, the sheet reads "The report lists no open findings.", and a summary that opens with a 600+ character token reads "No review has reported yet." beside the report's path. It does not block for these reasons:
+- the leak is closed, and every boundary case fails toward hiding;
+- only a pathological input reaches it, since real bullets and summaries carry whitespace early;
+- the report's path is always shown beside it;
+- three of the four lenses refuted it 3-0;
+- its summary half is review 951's A2, already carried;
+- a fix would need a fourth review, which needs the cap lifted by the console door this PR adds.
+The later wave words the empty-cut states as withheld, and tells a null summary apart from no review by `reviewRunId`.
+
+**A1 to A5 are carried to the ledger.**
+- A1: the cut's docstring rule.
+- A2 and A3: As built's row count, and its missing gate and growth record.
+- A4: the 8-slot cap before the empty filter.
+- A5: the push body has no byte bound. This predates the wave.
+Make no edit for them now.
+
+**The conflict-sync.** PR #1524 conflicts with main, measured at 01:4xZ. merge-tree exits 1, with conflicts in `server/test/auth-gate.test.ts` and `server/test/coordinator-skill.test.ts`. Main has 8 commits since your merge-base, among them #1392, #1399, #1430 and #1526.
+- Merge origin/main. In each conflict, keep both sides: the union of the route entries, and each count recomputed from the merged tree. Make no other edit, apart from this rulings section and one As built line naming each resolution.
+- Gates: auth-gate, coordinator-skill, box-token-census, coord-pause-route, single-definition, growth-check, routes, run-routes, secret-mask, typecheck-tests and deviation-refs. Run each file whole, one at a time, with `--pool=forks --maxWorkers=2`, and re-run a timeout alone.
+- Run the merge probe in its own step, and push once only if it exits 0.
+- Send a wave-done for that tip. Say which files differ from 1bd054e00 other than by main's own changes. It should be only the two conflicted tests, the plan, and any count that main's routes moved.
+- There is no review round after this. The merge queue re-tests the combined code with the full suite, and I enqueue the PR once its required checks pass.
+
+If the conflicts reach any file beyond those two tests, stop and ask me before resolving them.
+
 ## As built (2026-10-25)
 
 Built on `origin/main` at `d12739bd6`: the plan's five tasks, one commit each after the plan's copy, then one commit
@@ -528,3 +561,10 @@ the merge probe exited 0. Claims 2505, 2507, 2509, 2511 and 2516 were released a
   and reds its row.
 - **V2.** `session-hook.test.ts`'s re-anchor note now names two hunks in `shared/api.ts`, +50 at `:6472` and +11 at
   `:6626`, where it said one.
+
+**Conflict-sync after review 962 (2026-10-26).** `origin/main` was merged at `e0a36f311`. In both conflicted tests,
+`GET /api/coord/review-cap/:id` met main's `GET /api/coord/shadow-journal` (#1392), and each was resolved by keeping both.
+`coordinator-skill.test.ts` keeps both EXEMPT entries, this wave's first. `auth-gate.test.ts` keeps main's 46 and 124
+history lines, adds 47 and 125 lines for this route, and recomputes the counts from the merged tree: coord routes 47,
+`ROUTES` 125, the HTTP half 122, gated 80, exempt still 42. The three comments its prose pins read now say 125 and 122.
+`auth/gate.ts`'s docstring goes to 122 routes.
