@@ -536,19 +536,19 @@ describe('W29: the sync never prints a URL\'s userinfo', () => {
     const block = /^redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
     expect(block, 'ccd-update-sync has no redact block').not.toBeNull();
     const home = mkTmp('upd-sync-w29-invalid-userinfo-');
-    const fixture = join(home, 'url');
+    const fixture = join(home, 'url \' " $(printf expanded) [*]');
     writeFileSync(fixture, Buffer.from([
       ...Buffer.from('u:hun', 'ascii'), 0xff,
       ...Buffer.from('ter2@127.0.0.1:9', 'ascii'),
     ]));
+    const redactor = join(home, 'redactor \' " $(printf expanded) [*].sh');
+    writeFileSync(redactor, block![0]);
     const env = ghContainedEnv(home, {
       HOME: home, LC_ALL: locale, PATH: process.env['PATH'] ?? '',
     }, { systemd: true, tmux: true });
-    const p = spawnSync('bash', ['-c', [
-      block![0],
-      'input="$(cat -- "$1")"',
-      'redact "$input"',
-    ].join('\n'), '_', fixture], { env });
+    const p = spawnSync('bash', ['--noprofile', '--norc', '-s', '--', redactor, fixture], {
+      env, input: '. "$1"\ninput="$(cat -- "$2")"\nredact "$input"\n',
+    });
     expect(p.status, p.stderr.toString()).toBe(0);
     expect(p.stdout).toEqual(Buffer.from('127.0.0.1:9', 'ascii'));
   });

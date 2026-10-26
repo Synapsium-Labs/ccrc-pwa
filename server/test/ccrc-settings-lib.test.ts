@@ -28,10 +28,10 @@ const freshHome = (): string => {
 };
 afterAll(() => { for (const h of homes) { try { chmodSync(join(h, '.ccrc', 'ccrc.env'), 0o600); } catch { /* not there */ } rmSync(h, { recursive: true, force: true }); } });
 
-/** A bash with no inherited CCRC_ name: HOME, PATH and TMPDIR, plus what the row names. */
+/** Static program text on stdin; paths stay in argv. No inherited CCRC_ name beyond what the row names. */
 const bash = (home: string, script: string, args: string[], extra: Record<string, string> = {}) =>
-  spawnSync('bash', ['--noprofile', '--norc', '-c', script, '_', ...args],
-    { env: { HOME: home, PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: join(home, 'tmp'), ...extra }, encoding: 'utf8' });
+  spawnSync('bash', ['--noprofile', '--norc', '-s', '--', ...args],
+    { input: script, env: { HOME: home, PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: join(home, 'tmp'), ...extra }, encoding: 'utf8' });
 
 /** The sliced bodies of the committed library, by name: `^name() {` through the first line that is exactly `}`. */
 const bodiesOf = (text: string): Map<string, string[]> => {
@@ -119,6 +119,19 @@ describe('W29: ccd/lib/ccrc-settings.sh is ccd/ccrc\'s reader, generated, never 
     if (want) {
       expect(viaCcrc.stdout).toMatch(want);
       expect(viaLib.stdout).toMatch(want);
+    }
+  });
+
+  it('W29-L6: reader paths with shell punctuation remain one literal argument', () => {
+    const home = freshHome();
+    put('CCRC_BACKUP_KEEP=5\n')(home);
+    for (const [name, source] of [['ccrc', CCRC], ['library', LIB]] as const) {
+      const copy = join(home, `${name} ' " $(printf expanded) [*].sh`);
+      writeFileSync(copy, read(source));
+      const r = bash(home, '. "$1"; _ccrc_knob "$2" 10; printf "%s|%s\\n" "$KNOB" "$KNOB_FROM"', [copy, 'CCRC_BACKUP_KEEP']);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stderr).toBe('');
+      expect(r.stdout).toBe('5|file\n');
     }
   });
 
