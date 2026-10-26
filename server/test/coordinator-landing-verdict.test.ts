@@ -218,7 +218,7 @@ const ROUTES: Case[] = [
     'ROUTE G method=merge admin=never strict=no'],
   ['route G: the pre-queue configuration stops approval-missing, since no route uses --admin (§5.7.7)', preQueue,
     approvalMissing('G')],
-  ['route G: an approval that is given licenses nothing', with_(preQueue, (f) => ({ ...f,
+  ['route G: an approval that is given is not missing, so the route stands', with_(preQueue, (f) => ({ ...f,
     pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'APPROVED' }) })),
     'ROUTE G method=squash admin=never strict=no'],
   ['route G: another gate (a required workflow) and no required check', with_(bare, rules({ type: 'workflows', ruleset_id: 5, parameters: {} })),
@@ -246,15 +246,15 @@ const ROUTES: Case[] = [
       required_linear_history: { enabled: false }, required_signatures: { enabled: false } }),
     pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'REVIEW_REQUIRED' }) }),
     approvalMissing('U')],
-  ['route G: an approval is required and the reviewDecision is empty, so nothing is licensed', with_(preQueue, (f) => ({ ...f,
+  ['route G: an approval is required and the reviewDecision is empty: it is not APPROVED, so approval-missing', with_(preQueue, (f) => ({ ...f,
     pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: '' }) })),
-    'ROUTE G method=squash admin=never strict=no'],
-  ['route G: an approval is required and the reviewDecision is null, so nothing is licensed', with_(preQueue, (f) => ({ ...f,
+    approvalMissing('G')],
+  ['route G: an approval is required and the reviewDecision is null: it is not APPROVED, so approval-missing', with_(preQueue, (f) => ({ ...f,
     pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: null }) })),
-    'ROUTE G method=squash admin=never strict=no'],
-  ['route G: an approval is required and the reviewDecision is a word the block does not list, so nothing is licensed',
+    approvalMissing('G')],
+  ['route G: an approval is required and the reviewDecision is a word the block does not list: it is not APPROVED, so approval-missing',
     with_(preQueue, (f) => ({ ...f, pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'SOMETHING_NEW' }) })),
-    'ROUTE G method=squash admin=never strict=no'],
+    approvalMissing('G')],
   ['route G under read 3b: the check set from the branch view, strictness unknown', with_(via3b, {
     branch: ok({ name: 'main', protection: { enabled: true, required_status_checks: { enforcement_level: 'everyone',
       contexts: ['build-pwa'], checks: [{ context: 'build-pwa', app_id: 15368 }] } } }), checkruns: runs(run('build-pwa')) }),
@@ -427,6 +427,14 @@ const routeFixtures: [string, () => Fixture, () => Fixture, string][] = [
     'ROUTE U method=squash admin=never strict=no'],
 ];
 
+/** The entry of `routeFixtures` for a route letter, and a loud failure when there is none, so a reordered table cannot silently
+ *  test another route. */
+const routeFixture = (letter: string): [string, () => Fixture, () => Fixture, string] => {
+  const e = routeFixtures.find(([r]) => r === letter);
+  if (!e) throw new Error(`routeFixtures has no entry for route ${letter}`);
+  return e;
+};
+
 const REQUESTS: Case[] = [
   ...routeFixtures.flatMap(([route, zero, positive]): Case[] => [
     [`route ${route}: no approval is required and the summary says changes are requested: the early stop, whatever the route`,
@@ -590,8 +598,8 @@ const IGNORES: Case[] = [
     keyFor(false)],
   ['ignore: REVIEW_REQUIRED, a request in the list, a required approval and the matching key still stop approval-missing',
     with_(preQueue, { reviews: ok([rev(7, CR)]) }), approvalMissing('G'), keyFor(false, 7)],
-  ['ignore: the summary says changes requested, an approval is required, and the matching key gives admin never',
-    with_(preQueue, { pr: prWith(CR), reviews: ok([rev(7, CR)]) }), 'ROUTE G method=squash admin=never strict=no', keyFor(true, 7)],
+  ['ignore: the summary says changes requested, an approval is required, and the matching key still stops approval-missing',
+    with_(preQueue, { pr: prWith(CR), reviews: ok([rev(7, CR)]) }), approvalMissing('G'), keyFor(true, 7)],
   ['ignore: a matching key does not bypass a red required check', with_(measured, { reviews: ok([rev(7, CR)]),
     checkruns: runs(run('test (server)', 'failure'), run('test (agent)'), run('test (pwa)'), run('build-pwa')) }),
     'RED test (server) [github-actions]', keyFor(false, 7)],
@@ -613,8 +621,8 @@ const IGNORES: Case[] = [
 ];
 
 // The approval check, its count half and its route-Q half.
-const LICENCE: Case[] = [
-  ['route U: no approval is required, the decision is REVIEW_REQUIRED and no request stands: nothing is licensed',
+const APPROVAL_CHECK: Case[] = [
+  ['route U: no approval is required, the decision is REVIEW_REQUIRED and no request stands: no approval is counted missing and the route stands',
     with_(bare, { pr: prWith('REVIEW_REQUIRED') }), 'ROUTE U method=squash admin=never strict=no'],
   ['route Q: an approval is required and missing, REVIEW_REQUIRED, no request: the queue route is never stopped for it',
     with_(measured, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }), queue('SQUASH')), pr: prWith('REVIEW_REQUIRED') })),
@@ -792,8 +800,8 @@ const FIELDS: Case[] = [
     with_(measured, (f) => ({ ...f, protection: ok({ ...(measured().protection as Answer).body as object, required_pull_request_reviews: [] }) })),
     'STOP unreadable: read 3'],
   // What stays valid: absence, zero, safe integers, booleans, and the sparse classic shapes.
-  ['a count of 0 with REVIEW_REQUIRED licenses nothing (read 2)', countRule(0), 'ROUTE U method=squash admin=never strict=no'],
-  ['a missing count defaults to 0 and licenses nothing (read 2)',
+  ['a count of 0 with REVIEW_REQUIRED requires no approval, so the route stands (read 2)', countRule(0), 'ROUTE U method=squash admin=never strict=no'],
+  ['a missing count defaults to 0 and requires no approval, so the route stands (read 2)',
     with_(bare, { ...rules({ type: 'pull_request', ruleset_id: 11, parameters: {} }), pr: prWith('REVIEW_REQUIRED') }),
     'ROUTE U method=squash admin=never strict=no'],
   ['the largest safe integer is a count above 0: the approval is required and missing, so the stop is approval-missing (read 2)',
@@ -808,7 +816,7 @@ const FIELDS: Case[] = [
   ['classic required_pull_request_reviews null: no classic review configuration', classicCount(null), 'ROUTE U method=squash admin=never strict=no'],
   ['classic required_pull_request_reviews an object without a count: a sparse shape stays valid', classicCount({}),
     'ROUTE U method=squash admin=never strict=no'],
-  ['classic required_approving_review_count 0 licenses nothing', classicCount({ required_approving_review_count: 0 }),
+  ['classic required_approving_review_count 0 requires no approval, so the route stands', classicCount({ required_approving_review_count: 0 }),
     'ROUTE U method=squash admin=never strict=no'],
   ['classic required_approving_review_count 2 is a missing approval: approval-missing', classicCount({ required_approving_review_count: 2 }),
     approvalMissing('U')],
@@ -1117,15 +1125,41 @@ const LOSS: Case[] = [
 
 // ---- Fix round 5: no route uses --admin, and a direct route that needs a missing approval stops (spec §11, ruling 5) ----
 // The approval is missing when a pull_request rule's, or classic protection's, required_approving_review_count is above 0 and the
-// reviewDecision is REVIEW_REQUIRED. The stop is `approval-missing`, on route G and route U alike, whether or not a request for
-// changes stands (an ignored one included), under read 3b too, and never on route Q, whose enqueue the queue gates itself.
-const missingG = with_(routeFixtures[1]![2], { pr: prWith('REVIEW_REQUIRED') });
+// reviewDecision is anything but APPROVED (REVIEW_REQUIRED, CHANGES_REQUESTED, empty, null, absent, an unlisted word): the stop
+// fails closed. It is `approval-missing`, on route G and route U alike, whether or not a request for changes stands (an ignored
+// one included), under read 3b too, and never on route Q, whose enqueue the queue gates itself. It comes after read 5's lines.
+const missingG = with_(routeFixture('G')[2], { pr: prWith('REVIEW_REQUIRED') });
 const missingU = bareApproval();
-const missingClassic = with_(routeFixtures[2]![2], { pr: prWith('REVIEW_REQUIRED') });
+const missingClassic = with_(routeFixture('U')[2], { pr: prWith('REVIEW_REQUIRED') });
 const APPROVAL: Case[] = [
   ['route G: a ruleset requires an approval (count 1) and the decision is REVIEW_REQUIRED: approval-missing, route G', missingG, approvalMissing('G')],
   ['route U: nothing else is required, a ruleset requires an approval and it is missing: approval-missing, route U', missingU, approvalMissing('U')],
   ['route U: classic protection alone requires an approval (count 1) and it is missing: approval-missing', missingClassic, approvalMissing('U')],
+  ['route G: an approval is required and the reviewDecision is CHANGES_REQUESTED with the exact key given: approval-missing, route G',
+    with_(missingG, { pr: prWith(CR), reviews: ok([rev(7, CR)]) }), approvalMissing('G'), keyFor(true, 7)],
+  ['route U: a ruleset approval is required and the reviewDecision is CHANGES_REQUESTED with the exact key given: approval-missing, route U',
+    with_(missingU, { pr: prWith(CR), reviews: ok([rev(7, CR)]) }), approvalMissing('U'), keyFor(true, 7)],
+  ['route U: a classic approval is required and the reviewDecision is CHANGES_REQUESTED with the exact key given: approval-missing, route U',
+    with_(missingClassic, { pr: prWith(CR), reviews: ok([rev(7, CR)]) }), approvalMissing('U'), keyFor(true, 7)],
+  ['route U: a classic approval is required and the reviewDecision is empty: approval-missing', with_(missingClassic, { pr: prWith('') }),
+    approvalMissing('U')],
+  ['route U: a classic approval is required and the reviewDecision is null: approval-missing', with_(missingClassic, { pr: prWith(null) }),
+    approvalMissing('U')],
+  ['route G: an approval is required and the reviewDecision is absent from read 1: approval-missing', with_(missingG, {
+    pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN' }) }), approvalMissing('G')],
+  ['route G: an approval is required and the reviewDecision is an unlisted word: approval-missing', with_(missingG, { pr: prWith('SOMETHING_NEW') }),
+    approvalMissing('G')],
+  ['read 3b: a direct route U with the reviewDecision empty and a ruleset approval required: approval-missing', with_(via3b, (f) => ({ ...f,
+    ...rules(pull({ required_approving_review_count: 1 })), pr: prWith('') })), approvalMissing('U')],
+  ['route Q: a ruleset approval is required and the reviewDecision is empty: still the queue route', with_(routeFixture('Q')[2], { pr: prWith('') }),
+    GOOD_Q],
+  // F2: the approval stop comes after read 5, so a red or pending required check is said first.
+  ['order: a required check is red and an approval is missing: the RED line comes first', with_(preQueue, {
+    checkruns: runs(run('test (server)', 'failure'), run('test (agent)'), run('test (pwa)'), run('build-pwa')) }),
+    'RED test (server) [github-actions]'],
+  ['order: a required check is pending and an approval is missing: the WAIT line comes first', with_(preQueue, {
+    checkruns: runs(run('test (server)', null, 'in_progress'), run('test (agent)'), run('test (pwa)'), run('build-pwa')) }),
+    'WAIT pending: test (server)'],
   ['route G: an approval is required and the decision is APPROVED: the route stands, admin never', with_(missingG, { pr: prWith('APPROVED') }),
     'ROUTE G method=merge admin=never strict=no'],
   ['route U: a classic approval is required and the decision is APPROVED: the route stands, admin never', with_(missingClassic, { pr: prWith('APPROVED') }),
@@ -1136,9 +1170,9 @@ const APPROVAL: Case[] = [
     approvalMissing('G'), keyFor(false, 7)],
   ['route U: an ignored request does not skip the approval check, a classic approval missing and the exact key given', with_(missingClassic, { reviews: ok([rev(7, CR)]) }),
     approvalMissing('U'), keyFor(false, 7)],
-  ['route Q: a ruleset approval required and missing is still the queue route, admin never', with_(routeFixtures[0]![2], { pr: prWith('REVIEW_REQUIRED') }),
+  ['route Q: a ruleset approval required and missing is still the queue route, admin never', with_(routeFixture('Q')[2], { pr: prWith('REVIEW_REQUIRED') }),
     GOOD_Q],
-  ['route Q: the same with an ignored request and the exact key given', with_(routeFixtures[0]![2], { pr: prWith('REVIEW_REQUIRED'), reviews: ok([rev(7, CR)]) }),
+  ['route Q: the same with an ignored request and the exact key given', with_(routeFixture('Q')[2], { pr: prWith('REVIEW_REQUIRED'), reviews: ok([rev(7, CR)]) }),
     GOOD_Q, keyFor(false, 7)],
   ['read 3b: a direct route G with a ruleset approval required and missing: approval-missing, route G', with_(via3b, (f) => ({ ...f,
     ...rules(pull({ required_approving_review_count: 1 }), rsc([{ context: 'build-pwa', integration_id: 15368 }], 21)),
@@ -1563,7 +1597,7 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
       .toEqual([`api repos/{owner}/{repo}/compare/main...${HC}`]);
   });
 
-  it.each([...ROUTES, ...CHECKS, ...STOPS, APPROVAL_WITH_RULESET, ...REQUESTS, ...IGNORES, ...LICENCE, ...APPROVAL, ...MALFORMED,
+  it.each([...ROUTES, ...CHECKS, ...STOPS, APPROVAL_WITH_RULESET, ...REQUESTS, ...IGNORES, ...APPROVAL_CHECK, ...APPROVAL, ...MALFORMED,
   ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES, ...ORDER, ...LOSS, ...READ1, ...READ3])('%s', (_name, fx, line, env) => {
     expect(blocks).toHaveLength(1);
     const r = verdict(fx(), env);

@@ -1003,12 +1003,12 @@ unk=$(jq -c '[.[].type] - ["pull_request", "merge_queue", "required_status_check
 [ "$unk" = "[]" ] || stop "unknown-rule-type: $(jq -r "$shown" <<<"$unk")"
 
 # Read 3: classic protection. A 404 is "not protected" only with exactly that message; a 401 or 403 goes to read 3b.
-# A 200 body is typed where the approval check and the required set read it (the review count, the names of the required
-# checks; the conversation switch's `enabled`, which nothing reads now, stays typed): a missing field keeps its default,
-# a wrong type is a stop, and the body is exactly one value (`-s` slurps the answer: an empty body, or two or more
-# values, is a stop here). The names
-# are one predicate, `classic_names`, which read 3b's projection of the same checks uses too: a missing or null
-# container or list is no entries, a present one is an object or an array, and every entry has a non-empty string name.
+# A 200 body is typed where the approval check and the required set read it (the review count, the names of the
+# required checks; the conversation switch's `enabled`, which nothing reads now, stays typed): a missing field keeps
+# its default, a wrong type is a stop, and the body is exactly one value (`-s` slurps the answer: an empty body, or
+# two or more values, is a stop here). The names are one predicate, `classic_names`, which read 3b's projection of the
+# same checks uses too: a missing or null container or list is no entries, a present one is an object or an array, and
+# every entry has a non-empty string name.
 # The call's exit status is kept apart from the text it printed (`rc3`, read on the line after the call): text that says
 # 200 is an answer only when the call exited 0, while a 404 and a 401 or 403 come, by design, from a call that exits
 # nonzero, so the status is not checked ahead of the status line. The 404's message is judged in jq on the JSON itself,
@@ -1158,15 +1158,16 @@ esac
 # repository's external policy authority, and until that authority answers (wave 2b) a coordinator never uses them
 # (spec §11, the amendment of 2026-10-25, ruling 5, which supersedes the approval licence). So a direct route that
 # needs an approval the fleet cannot give, and finds it missing, stops here, whether or not a request stands: without
-# --admin that merge could only be refused, or pass over the approval by a bypass no authority has granted.
+# --admin that merge could only be refused, or pass over the approval by a bypass no authority has granted. A required
+# approval is missing unless read 1's reviewDecision is exactly APPROVED: any other value, empty or absent, is missing.
 if [ "$route" != Q ]; then
   if [ "$req" != "[]" ] || [ -n "$gates" ]; then route=G; else route=U; fi
 fi
 missing=$(jq -nr --argjson r "$rules" --argjson p "$prot" --argjson pr "$r1" '
   if (any($r[]; .type == "pull_request" and (.parameters.required_approving_review_count // 0) > 0)
       or ($p.required_pull_request_reviews.required_approving_review_count // 0) > 0) | not then "no"
-  elif $pr.reviewDecision == "REVIEW_REQUIRED" then "yes"
-  else "no" end') || stop "unreadable: the approval"
+  elif $pr.reviewDecision == "APPROVED" then "no"
+  else "yes" end') || stop "unreadable: the approval"
 if [ "$route" != Q ] && [ "$missing" = yes ]; then
   stop "approval-missing: route $route needs an approval the fleet cannot give, and --admin is never used"
 fi
@@ -1288,12 +1289,11 @@ when another required name becomes missing or pending. The operator's ignore
 answer permits only the complete fresh verdict with the exact `CR_IGNORE` key,
 inside the current attempt: it neither replenishes nor consumes a waiting phase,
 and when the bound is spent that run uses `BOUND_S=0`, a `WAIT` it prints is
-reported with no watch. A
-different required name, a returned route, a rerun, the clock, an account or
-session resumption and a repeated mail are not resets. Outside these two doors,
-only an explicit operator instruction to start another attempt authorizes one:
-never infer it from an ignore answer or from automation, and no report, rerun,
-fresh route or passage of time is one.
+reported with no watch. A different required name, a returned route, a rerun,
+the clock, an account or session resumption and a repeated mail are not resets.
+Outside these two doors, only an explicit operator instruction to start another
+attempt authorizes one: never infer it from an ignore answer or from automation,
+and no report, rerun, fresh route or passage of time is one.
 
 **No `--admin`.** `--admin` and GitHub API merge or enqueue calls are governed
 by the repository's external policy authority; until that authority answers
@@ -1303,14 +1303,14 @@ item 10, so no answer read here licenses `--admin`: not a missing approval, not
 `enforce_admins`, and not a ruleset's `current_user_can_bypass`, which the
 verdict no longer reads. A direct route that needs an approval the fleet cannot
 give, and finds it missing (a `pull_request` rule's, or classic protection's,
-`required_approving_review_count` above 0, and `reviewDecision` is
-`REVIEW_REQUIRED`), stops `approval-missing` before any merge, whether or not a
-request for changes stands, an ignored one included: without `--admin` that
-merge could only be refused, or pass over the approval by a bypass the external
-authority has not granted. Under read 3b classic protection's approvals cannot
-be read, so there GitHub's refusal is the stop, `github-refused`. Route Q is
-unchanged: its enqueue never passes `--admin`. And `--admin` is never a
-fallback: a fallback is `--admin` after a refusal.
+`required_approving_review_count` above 0, and `reviewDecision` anything but
+`APPROVED`), stops `approval-missing` before any merge, whether or not a request
+for changes stands, an ignored one included: without `--admin` that merge could
+only be refused, or pass over the approval by a bypass the external authority
+has not granted. Under read 3b classic protection's approvals cannot be read, so
+there GitHub's refusal is the stop, `github-refused`. Route Q is unchanged: its
+enqueue never passes `--admin`. And `--admin` is never a fallback: a fallback is
+`--admin` after a refusal.
 
 **On every route** the merge is proven as step 3 proves it: MERGED, with
 `headRefOid` equal to `handoffCommit`. A refused merge on route G or U is

@@ -3109,9 +3109,9 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(prose).toContain('And `--admin` is never a fallback: a fallback is `--admin` after a refusal.');
     expect(prose).toContain('never retried with another method, with `--admin` or with `--auto`');
     expect(prose).toContain('This session writes no setting to make a route work');
-    // Only REVIEW_REQUIRED is a missing approval, and a direct route that needs one stops `approval-missing` before any merge,
+    // A required approval is missing unless `reviewDecision` is exactly APPROVED (fail closed), and a direct route that needs one stops `approval-missing` before any merge,
     // whether or not a request for changes stands, an ignored one included (the old `$standing` short-circuit is retired).
-    expect(prose).toContain('`required_approving_review_count` above 0, and `reviewDecision` is `REVIEW_REQUIRED`), stops `approval-missing` before any merge, whether or not a request for changes stands, an ignored one included');
+    expect(prose).toContain('`required_approving_review_count` above 0, and `reviewDecision` anything but `APPROVED`), stops `approval-missing` before any merge, whether or not a request for changes stands, an ignored one included');
     // No licence is left in the prose: no licensed line, no licence stop, no licence paragraph.
     expect(prose).not.toContain('admin=licensed');
     expect(prose).not.toContain('licence-fails');
@@ -3240,13 +3240,13 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(para.match(/enqueue it anyway/g), 'the withdrawn no-checks exception is back').toBeNull();
   });
 
-  it('pins the whole No --admin paragraph and the proof paragraph that forbids a retry with --admin, so no condition, gate or sentence can change unseen (the licence action pin)', () => {
+  it('pins the whole No --admin paragraph and the proof paragraph that forbids a retry with --admin, so no condition, gate or sentence can change unseen (the no-admin action pin)', () => {
     const from = prose.indexOf('**No `--admin`.**');
     const to = prose.indexOf('**A requested change.**');
     expect(from, 'the No --admin paragraph is gone').toBeGreaterThanOrEqual(0);
     expect(to, 'the No --admin paragraph and the proof paragraph lost the requested-change section that follows them').toBeGreaterThan(from);
     const whole = [
-      '**No `--admin`.** `--admin` and GitHub API merge or enqueue calls are governed by the repository\'s external policy authority; until that authority answers (wave 2b), a coordinator never uses them (spec §11, the amendment of 2026-10-25, ruling 5). That ruling supersedes the approval licence of spec §5.7.4 and §11 item 10, so no answer read here licenses `--admin`: not a missing approval, not `enforce_admins`, and not a ruleset\'s `current_user_can_bypass`, which the verdict no longer reads. A direct route that needs an approval the fleet cannot give, and finds it missing (a `pull_request` rule\'s, or classic protection\'s, `required_approving_review_count` above 0, and `reviewDecision` is `REVIEW_REQUIRED`), stops `approval-missing` before any merge, whether or not a request for changes stands, an ignored one included: without `--admin` that merge could only be refused, or pass over the approval by a bypass the external authority has not granted. Under read 3b classic protection\'s approvals cannot be read, so there GitHub\'s refusal is the stop, `github-refused`. Route Q is unchanged: its enqueue never passes `--admin`. And `--admin` is never a fallback: a fallback is `--admin` after a refusal.',
+      '**No `--admin`.** `--admin` and GitHub API merge or enqueue calls are governed by the repository\'s external policy authority; until that authority answers (wave 2b), a coordinator never uses them (spec §11, the amendment of 2026-10-25, ruling 5). That ruling supersedes the approval licence of spec §5.7.4 and §11 item 10, so no answer read here licenses `--admin`: not a missing approval, not `enforce_admins`, and not a ruleset\'s `current_user_can_bypass`, which the verdict no longer reads. A direct route that needs an approval the fleet cannot give, and finds it missing (a `pull_request` rule\'s, or classic protection\'s, `required_approving_review_count` above 0, and `reviewDecision` anything but `APPROVED`), stops `approval-missing` before any merge, whether or not a request for changes stands, an ignored one included: without `--admin` that merge could only be refused, or pass over the approval by a bypass the external authority has not granted. Under read 3b classic protection\'s approvals cannot be read, so there GitHub\'s refusal is the stop, `github-refused`. Route Q is unchanged: its enqueue never passes `--admin`. And `--admin` is never a fallback: a fallback is `--admin` after a refusal.',
       '**On every route** the merge is proven as step 3 proves it: MERGED, with `headRefOid` equal to `handoffCommit`.',
       'A refused merge on route G or U is read, reported and stopped on, and never retried with another method, with `--admin` or with `--auto`.',
       'This session writes no setting to make a route work: no ruleset, no branch protection, no merge-method or auto-merge setting (clause 15).',
