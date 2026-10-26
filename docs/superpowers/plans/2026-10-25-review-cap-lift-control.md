@@ -362,6 +362,34 @@ First, merge origin/main. It is 6 commits ahead and merges clean. Then:
 
 If any item contradicts what you measure at your tip, stop and ask me before choosing. Then send a fresh wave-done.
 
+## Coordinator rulings on review 960 (2026-10-26)
+
+Recorded verbatim from the fix-round mail.
+
+Run 946, wave 1: fix round 2, ruled on review 960 at f907225ad. Record everything from this line on verbatim in the plan, as "Coordinator rulings on review 960 (2026-10-26)". Leave out the report path above it, because it names a session. Run 946 is back at working.
+
+Review 960 ran the held-out panel and an egress lens: 26 agents, none died. Everything else measured holds: M7, the anchors, the rulings record, the three merges, growth, every suite, and CI green at the tip. Two findings are important, and both are fixed in this round. Two advisories are fixed with them.
+
+1. **F1, important: no cut may leave a partial token.** The summary (600 chars) and each findings line (300 chars) are cut after shape-redaction and before the answer hook. The hook masks a key only whole, so a key the cut splits goes out as an unmasked prefix. The reviewer measured 14 characters out through the real GET. The cuts came with #1331 and also feed the 409 refusal's `ask` and the notice and push body. This wave's GET makes the same text readable at any time, so the gap is closed here.
+   - Write one pure helper in `reviewcap.ts`. It cuts at the limit, and when the cut falls inside a run of non-whitespace it drops that whole trailing run. Then it adds the marker it adds now.
+   - Use it for every one of these cuts, the summary's in `store.ts` and the findings lines' in `reviewcap.ts`, so all three egresses share it. A text with no whitespace before the limit comes out as the marker alone. That fails toward hiding.
+   - Rows: a secret-mask row with the compatible key planted across char 600 of the summary, and one across char 300 of a findings line. The GET's answer holds no 8-character prefix of either key. Add one row for the 409 refusal's `ask` too.
+   - M8: drop the trailing-run rule, measure those rows red, then restore with cmp. Add M8 to the mutation table.
+   - The notice text changes only where a cut used to fall inside a token. Say so in As built.
+2. **F2, important: the docstring sentence.** Add to the GET's docstring (`routes.ts`, about :2193-2197): "503 `run-unreadable` when the store read fails (D-6912)." The plan's D-6912 entry and As built already say it is there, so this makes them true. Note the miss in As built.
+3. **V1: pin `not-configured`.** Add one row per cap route with no coord store: each answers 501 `not-configured`. Dropping either `notConfigured` guard must red one.
+4. **V2: fix the note in `session-hook.test.ts`, about :9072.** The 61 lines are two hunks, +50 at :6472 and +11 at :6626, not one.
+
+**This is the last round the cap allows without the operator.** Review 960 was round 2 of 3, so a third review can open. A fourth would need the operator to lift the cap. Keep the round to these four items, with no other edits.
+- Merge origin/main only if the merge probe exits nonzero (clause 16). A clean branch lands as it is, and the merge queue now runs the full suite.
+- Gate the push on the probe's rc, in its own step.
+
+**Gates.** Run review-cap, run-routes, routes, secret-mask, reconstruction-drill, refusal-status, single-definition, growth-check, the five rings suites, docs-parity, citations, session-hook, typecheck-tests and deviation-refs. Then run the touched PWA files and `npm run build`. Run each file whole, one at a time, with `--pool=forks --maxWorkers=2`. A file that times out is re-run alone, and you say so. Re-measure growth: `store.ts` is growth-checked.
+
+**Claims.** Your claims 2505 and 2507 reach hard expiry at about 01:08Z and 01:17Z. Re-take them first, before you edit `store.ts`.
+
+If any item contradicts what you measure at your tip, stop and ask me before choosing. Then send a fresh wave-done.
+
 ## As built (2026-10-25)
 
 Built on `origin/main` at `d12739bd6`: the plan's five tasks, one commit each after the plan's copy, then one commit
@@ -431,6 +459,8 @@ under `ulimit -u (threads + 1500)` and `timeout -k 10 600`; each file was restor
 | M5 the sheet posts on open | sheet "reads the ask once", "Lift cap posts once", "Cancel lifts nothing" |
 | M6 the GET composes its own ask, findings `unnamed` | run-routes "answers the refusal's own ask" |
 | M7 (fix round 1) the GET leaves `MASKED_GET_ROUTES` | secret-mask's masked-summary row, and its egress inventory row ("is neither masked nor exempt") |
+| M8 (fix round 2) `cutWhole` drops its trailing-run rule (`return cut`) | review-cap's three `cutWhole` rows that cut inside a token, secret-mask's "sends no part of a key that the summary's or a findings line's cut falls inside", and run-routes' "the 409's ask sends no part of a key" |
+| M9 (fix round 2) either cap route drops its `notConfigured` guard | run-routes' 501 row for that route: "GET … answers 501 not-configured" for the GET's, "POST … answers 501 not-configured" for the lift's |
 
 **Growth.** Net code lines against the merge-base, measured with `growthCheck.ts`'s `netGrowth` after the merge:
 `server/src/coord/store.ts` +19, `server/src/coord/routes.ts` +16, `pwa/src/lib/api.ts` +3. Re-measured in fix round 1
@@ -475,3 +505,26 @@ gate and the seven touched PWA files are green. Three server files went red in t
 `single-definition` scan case and `deviation-refs`' tree scan on their 20 s case budgets, and `secret-mask`'s 2 MB
 timing bound. Run alone with a larger case budget, the first two passed; the third is red on a clean `main` at the same
 load. Every later push is gated on the probe's exit code, in its own step.
+
+**Fix round 2 (review 960, 2026-10-26).** The four ruled items and nothing else; `origin/main` was not merged, because
+the merge probe exited 0. Claims 2505, 2507, 2509, 2511 and 2516 were released and re-taken before any edit, as 2549 to
+2553.
+
+- **F1.** One pure helper, `cutWhole` in `coord/reviewcap.ts`, makes both cuts: the summary's (600 characters, in
+  `CoordStore.lastReviewReport`) and each findings line's (300, in `extractOpenFindings`). So the 409 refusal's `ask`,
+  the notice and push body, and the GET all share it. When a cut falls inside a run of non-whitespace, it drops that
+  whole run. The ruling said the helper then "adds the marker it adds now", but neither cut added a marker, here or on
+  `origin/main`. Asked through the structured ask, the coordinator ruled: no marker. So a text with no whitespace before
+  the limit comes out empty: such a summary reads `null`, as an empty one already did, and such a findings line is
+  dropped. The notice text changes only where a cut used to fall inside a token, and there it loses that token's
+  prefix. Rows: three pure `cutWhole` rows and one `extractOpenFindings` row in review-cap; a secret-mask row with
+  fingerprinted keys planted across character 600 of the summary and character 300 of a findings line, whose GET answer
+  holds no 8-character piece of either; and a run-routes row for the 409's `ask` across the summary's cut. M8 is in the
+  table above.
+- **F2.** The GET's docstring now names the 503 `run-unreadable` (D-6912). Fix round 1's edit of that docstring never
+  applied: it was a text replacement with no assertion, and its indentation did not match. The commit message, the
+  D-6912 entry and this note all said it was done; review 960 found it was not.
+- **V1.** A run-routes row per cap route with no coordination store answers 501 `not-configured`; M9 drops either guard
+  and reds its row.
+- **V2.** `session-hook.test.ts`'s re-anchor note now names two hunks in `shared/api.ts`, +50 at `:6472` and +11 at
+  `:6626`, where it said one.
