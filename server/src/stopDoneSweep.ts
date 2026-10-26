@@ -5,6 +5,7 @@ import type { NotifyLog } from './notifylog.js';
 import type { SessionRecord } from './registry.js';
 import type { CoordStore } from './coord/store.js';
 import type { TurnVerdict } from './coord/archiveDoor.js';
+import { notify } from './notice.js';
 import { CCD_ARGV, HIBERNATE_HOLD_OK_CAP, capSupported, sweepDec, verbSupported } from './ccdargv.js';
 import { HIBERNATE_DISABLED_MARKER, NO_HIBERNATE_SUFFIX } from './coord/hibernate.js';
 import { RECLAIM_PAUSE_MARKER } from './coord/rundefs.js';
@@ -188,25 +189,20 @@ function runStateWords(state: string): string {
 }
 
 function recordFeed(deps: StopDoneSweepDeps, row: StopDoneFeedRow): void {
-  const log = deps.notifyLog;
-  if (!log) return;
-  try {
-    const ev = log.record(row.kind === 'asleep'
-      ? {
-        kind: 'run', sessionId: row.id, runId: row.runId, title: 'Worker asleep',
-        body: `${row.id} was put to sleep: its run ${row.runId} is ${runStateWords(row.state)} and it sat idle. Mail, a re-dispatch or a restart wakes it.`,
-      }
-      : {
-        kind: 'coord', sessionId: '', runId: null, title: `${STOP_DONE_MAIL_ONLY_TITLE}: ${row.count}`,
-        body: `${row.count} finished worker(s) stay awake for unread mail to them, with nothing in the coordination store or their workspace holding them besides; their panes are measured once it is read.`,
-      });
-    deps.coord.recordFeedEvent(log.epoch, ev);
-  } catch (err) {
-    const what = row.kind === 'asleep' ? `${row.id}'s sleep has no feed row` : 'the mail-only count has no feed row';
-    console.warn(`ccrc-server: stop-done: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — ${what}`);
-  } finally {
-    void log.flush();
-  }
+  // D-7041: through the funnel, record-only (recorded whatever the presence, never pushed), with the lane's own prefix
+  // and sentence on a failed archive. `viewers` is not handed over: record-only consults no presence.
+  notify({ notifyLog: deps.notifyLog, coord: deps.coord }, row.kind === 'asleep'
+    ? {
+      kind: 'run', sessionId: row.id, runId: row.runId, title: 'Worker asleep',
+      body: `${row.id} was put to sleep: its run ${row.runId} is ${runStateWords(row.state)} and it sat idle. Mail, a re-dispatch or a restart wakes it.`,
+    }
+    : {
+      kind: 'coord', sessionId: '', runId: null, title: `${STOP_DONE_MAIL_ONLY_TITLE}: ${row.count}`,
+      body: `${row.count} finished worker(s) stay awake for unread mail to them, with nothing in the coordination store or their workspace holding them besides; their panes are measured once it is read.`,
+    }, 'record-only', {
+    lane: 'stop-done',
+    degraded: row.kind === 'asleep' ? `${row.id}'s sleep has no feed row` : 'the mail-only count has no feed row',
+  });
 }
 
 /** The excluded row, written on this process's first pass and then only when the count differs from the last one. */
