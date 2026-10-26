@@ -93,7 +93,9 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     return pid;
   }
 
-  it('a direct lane starts the bridge tier only, on the shim\'s port and unit, with the key read in process', async () => {
+  // PLATFORM-ONLY: the subject is the unit arm (systemd-run's argv, the shim's unit name), and `_svc_have_user_manager`
+  // answers 1 on darwin (D-3483), so darwin has no unit arm. Its nohup arm is the both-platform case below (D-6994).
+  itLinux('a direct lane starts the bridge tier only, on the shim\'s port and unit, with the key read in process', async () => {
     const { home, proxyPort, shimFile } = await bridgeBox({ userManager: true });
     const catalogue = join(home, '.ccrc', 'models', 'codex-a.json');
     writeBridgeCatalogue(catalogue, BRIDGE_MODELS);
@@ -129,6 +131,42 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     const rec = JSON.parse(fs.readFileSync(join(laneDir(home, 'codex-a'), 'bridge.started'), 'utf8')) as Record<string, string>;
     expect(Object.keys(rec)).toEqual(['interpreter', 'code', 'bridge', 'mode']);
     expect(rec).toMatchObject({ interpreter: cmd[0], code: bridgeCode(shimFile, home), mode: 'direct' });
+    expect(rec['bridge']).toMatch(/^[0-9a-f]{64}$/);
+    for (const f of ['litellm.started', 'shim.started', 'litellm.pid', 'shim.pid']) {
+      expect(fs.existsSync(join(laneDir(home, 'codex-a'), f)), f).toBe(false);
+    }
+  }, 120_000);
+
+  // D-6994: the case above's nohup twin, on both platforms. With no user manager (darwin always, Linux here) the bridge
+  // tier is a nohup child: its pid recorded, its argv the bridge's, the key out of `ps`, read in process. The
+  // interpreter is taken from the record, never from `ps`, which may print another spelling of it (a framework
+  // python3 re-execs its app bundle), so `ps` is matched on the argv's tail only.
+  it('a direct lane starts the bridge tier only under nohup, its pid recorded and the key read in process', async () => {
+    const { home, proxyPort, shimFile } = await bridgeBox({ userManager: false });
+    const catalogue = join(home, '.ccrc', 'models', 'codex-a.json');
+    writeBridgeCatalogue(catalogue, BRIDGE_MODELS);
+    const r = cx(home, ['start', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    const pid = Number(/^ccrc codex: codex-a: bridge started \(nohup (\d+)\)\n$/.exec(r.stdout)?.[1]);
+    expect(pid > 1, r.stdout).toBe(true);
+    expect(fs.readFileSync(join(laneDir(home, 'codex-a'), 'bridge.pid'), 'utf8')).toBe(`${pid}\n`);
+    expect(systemdRunArgv(home), 'no unit was started').toEqual([]);
+    const ps = psArgs(pid);
+    expect(ps, ps).toContain(` -I ${shimFile} --ccrc-bridge=direct --ccrc-lane=codex-a`);
+    expect(ps).not.toMatch(/LITELLM_MASTER_KEY|sk-[0-9a-f]{48}/);
+    const lane = await laneAnswer(proxyPort);
+    expect(lane?.status).toBe(200);
+    expect(JSON.parse(lane!.body)).toEqual({ lane: 'codex-a', mode: 'direct' });
+    // The key was read in process: refused without it, served with it.
+    const url = `http://127.0.0.1:${proxyPort}/v1/models`;
+    expect((await fetch(url, { signal: AbortSignal.timeout(5000) })).status).toBe(401);
+    const ok = await fetch(url, { headers: { 'x-api-key': keyOf(home) }, signal: AbortSignal.timeout(5000) });
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as { data: Array<{ id: string }> }).data.map((m) => m.id)).toEqual([...BRIDGE_MODELS]);
+    const rec = JSON.parse(fs.readFileSync(join(laneDir(home, 'codex-a'), 'bridge.started'), 'utf8')) as Record<string, string>;
+    expect(Object.keys(rec)).toEqual(['interpreter', 'code', 'bridge', 'mode']);
+    expect(path.isAbsolute(rec['interpreter']!), rec['interpreter']).toBe(true);
+    expect(rec).toMatchObject({ code: bridgeCode(shimFile, home), mode: 'direct' });
     expect(rec['bridge']).toMatch(/^[0-9a-f]{64}$/);
     for (const f of ['litellm.started', 'shim.started', 'litellm.pid', 'shim.pid']) {
       expect(fs.existsSync(join(laneDir(home, 'codex-a'), f)), f).toBe(false);
@@ -380,7 +418,10 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     expect(fs.existsSync(join(d, 'lane.json'))).toBe(false);
   }, 60_000);
 
-  it('a bridge started through ccrc codex start under ghContainedEnv gets both bases', async () => {
+  // PLATFORM-ONLY: the instrument is systemd-run's argv (the unit's --setenv pairs), and darwin's nohup arm leaves no
+  // argv record of its pairs. The bridge arm's two forwards are pinned on both platforms by the recorder case
+  // 'with both bases set, the bridge arm forwards both' below (D-6994).
+  itLinux('a bridge started through ccrc codex start under ghContainedEnv gets both bases', async () => {
     const { home } = await bridgeBox({ userManager: true });
     const e = env(home);
     const up = e['CCGPT_BRIDGE_UPSTREAM_BASE'];
@@ -408,6 +449,21 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     const pairs = argv.slice(0, argv.indexOf('--'));
     expect(pairs).toContain('CCGPT_BRIDGE=direct');
     expect(pairs.filter((p) => /^(CCGPT_BRIDGE_UPSTREAM_BASE|CCRC_CODEX_AUTH_BASE)=/.test(p))).toEqual([]);
+    fs.rmSync(join(laneDir(home, 'codex-a'), 'bridge.pid'), { force: true });
+  }, 60_000);
+
+  // D-6994: the mirror of the case above, on both platforms (the unit-argv case before SVC_BRIDGE is Linux-only):
+  // with ghContainedEnv's two loopback bases set, the bridge arm hands both to its platform helper.
+  it('with both bases set, the bridge arm forwards both', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    const e = env(home);
+    expect(e['CCGPT_BRIDGE_UPSTREAM_BASE'], 'ghContainedEnv set no upstream base').toMatch(/^http:\/\/127\.0\.0\.1:\d+/);
+    expect(e['CCRC_CODEX_AUTH_BASE'], 'ghContainedEnv set no auth base').toMatch(/^http:\/\/127\.0\.0\.1:\d+/);
+    const r = startBridgeAlone(home);
+    expect(r.code, r.stderr).toBe(0);
+    const argv = fs.readFileSync(join(home, 'svc-bridge'), 'utf8').split('\n');
+    expect(argv.slice(0, argv.indexOf('--'))).toEqual(expect.arrayContaining([
+      `CCGPT_BRIDGE_UPSTREAM_BASE=${e['CCGPT_BRIDGE_UPSTREAM_BASE']!}`, `CCRC_CODEX_AUTH_BASE=${e['CCRC_CODEX_AUTH_BASE']!}`]));
     fs.rmSync(join(laneDir(home, 'codex-a'), 'bridge.pid'), { force: true });
   }, 60_000);
 
@@ -691,7 +747,10 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
       expect(alive(listener.pid) && await portAccepts(proxyPort), 'the switch stopped the foreign listener').toBe(true);
     }, 60_000);
 
-    it('a tier that will not stop leaves the lane down and named', async () => {
+    // PLATFORM-ONLY: a tier that will not stop is the unit arm's state (failUnitStop steers the fake `systemctl stop`).
+    // On darwin every tier is a nohup child whose stop ends in a re-proven SIGKILL, so there is no such tier to make,
+    // and the switch-stopped branch is the same shell on both platforms (D-6994).
+    itLinux('a tier that will not stop leaves the lane down and named', async () => {
       const { home, proxyPort, litellmPort } = await litellmUp({ userManager: true });
       const units = laneJson(home, 'codex-a')['units'] as { litellm: string; shim: string };
       const roster = rosterBytes(home);

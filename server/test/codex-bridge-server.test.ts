@@ -14,7 +14,7 @@ import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { connect } from 'node:net';
 import path, { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { gzipSync } from 'node:zlib';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -42,6 +42,22 @@ const LANE = 'lane-a';
 const MODEL = BRIDGE_MODELS[0];
 /** Every case flushes the stats file at each request, so a case reads what the bridge counted. */
 const BASE_CONSTS = { 'stats.FLUSH_S': 0 };
+
+/** Nesting that `json.loads` refuses with RecursionError on every python3 the package supports (D-6995). 3.9 to 3.13
+ *  COUNT the depth (sys.getrecursionlimit, or the C limit: 3.12.3 refuses at 9998); 3.14 and later check the real C
+ *  stack instead, and a macOS build links python's main thread with a 16 MiB stack, where 100000 levels decoded
+ *  (the macOS runner's python3, 3.15.0). 2e6 levels need at least 32 MB even at a 16-byte frame per level: twice the
+ *  largest stack a supported build has. A python3 that decodes it anyway reds the case's precondition, by name. */
+const UNDECODABLE_DEPTH = 2_000_000;
+/** A closed array nested `depth` deep: valid JSON, so only the decoder's recursion bound can refuse it. */
+const tooDeep = (depth = UNDECODABLE_DEPTH): string => `${'['.repeat(depth)}${']'.repeat(depth)}`;
+/** The precondition, measured on the python3 the case runs (`-I`, as the bridge runs): true iff `json.loads` of `doc`
+ *  raises RecursionError. It runs on python's main thread, as the start's read_manifest does. */
+function pythonRefusesDecode(doc: string): boolean {
+  const prog = 'import json, sys\ntry:\n    json.loads(sys.stdin.read())\nexcept RecursionError:\n    sys.exit(3)\n';
+  const r = spawnSync(PY!, ['-I', '-c', prog], { input: doc, encoding: 'utf8', timeout: 30_000 });
+  return r.status === 3;
+}
 
 // ── the upstream's events ─────────────────────────────────────────────────────────────────────────────────────────
 const ev = (type: string, o: Json = {}): string => `event: ${type}\ndata: ${JSON.stringify({ type, ...o })}\n\n`;
@@ -166,7 +182,8 @@ function readStats(lane: BridgeLane): Json {
 }
 
 /** The stats file once `ready` holds of it: the bridge flushes after the answer's last byte, so a case polls (at most
- *  3 s) rather than racing the flush. */
+ *  3 s) rather than racing the flush. Only for a case whose last answer met no write in flight: a case that sends
+ *  answers back to back reads `readStats` after `bridge.stop()`'s drain instead (D-6997). */
 async function statsWhen(lane: BridgeLane, ready: (s: Json) => boolean): Promise<Json> {
   const t0 = Date.now();
   for (;;) {
@@ -302,7 +319,10 @@ describe.skipIf(!PY)('the direct-mode server: one streamed reply (codex-bridge s
       expect(rs).toBeLessThan(fc);
       expect(up.requests[0].values['chatgpt-account-id']).toBe(FIXTURE_ACCOUNT_ID);
       expect(up.requests[0].values['chatgpt-account-id']).not.toBe(LANE);
-      const stats = await statsWhen(lane, (d) => d.outcomes['2xx'] === 2);
+      // D-6997: two answers back to back, so the second's flush can meet the first's write in flight and write nothing;
+      // nothing flushes an idle lane again until the next request or the drain's forced flush. Read after the drain.
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const stats = readStats(lane);
       expect(stats.outcomes['2xx']).toBe(2);
       expect(Object.keys(stats.outcomes).filter((k) => k.startsWith('store:'))).toEqual([]);
     });
@@ -379,8 +399,8 @@ describe.skipIf(!PY)('the overflow and the usage that compaction reads (D-6415, 
 
   it('a settings.json nested too deep to decode is the default window: the overflow is still a 400', async () => {
     await withBridge([{ status: 400, body: { error: { code: 'context_length_exceeded', message: 'too long' } } }], async ({ bridge, lane }) => {
-      // JSON that nests past the decoder's recursion limit: json.loads raises RecursionError, not a ValueError
-      writeFileSync(lane.settings, `{"env": ${'['.repeat(100000)}${']'.repeat(100000)}}`);
+      // JSON that nests past the decoder's recursion limit: json.loads raises RecursionError, not a ValueError (D-6995)
+      writeFileSync(lane.settings, `{"env": ${tooDeep()}}`);
       const a = await call(bridge, '/v1/messages', { body: messages({ text: big }) });
       expect(a.status, a.text).toBe(400);
       expect(a.json?.error.message).toMatch(/^prompt is too long: \d+ tokens > \d+ maximum$/);
@@ -403,7 +423,7 @@ describe.skipIf(!PY)('the overflow and the usage that compaction reads (D-6415, 
 
 describe.skipIf(!PY)('the timers: ping, the commit point and the idle bound (Review Focus 1)', () => {
   it('pings through a silence, then the live text', async () => {
-    const answer: ResponsesAnswer = { status: 200, sse: { delayMs: 1200, chunks: [
+    const answer: ResponsesAnswer = { status: 200, sse: { delayMs: 2000, chunks: [
       created(), added(0, 'msg_fx1') + delta(0, 'msg_fx1', 'hel'), delta(0, 'msg_fx1', 'lo') + done(0, msgItem('msg_fx1', 'hello')) + completed(),
     ] } };
     await withBridge([answer], async ({ bridge }) => {
@@ -412,7 +432,12 @@ describe.skipIf(!PY)('the timers: ping, the commit point and the idle bound (Rev
       const ev = events(a);
       const deltas = ev.map((e, i) => [e, i] as const).filter(([e]) => e === 'content_block_delta').map(([, i]) => i);
       expect(deltas).toHaveLength(2);
-      expect(ev.slice(0, deltas[0]).filter((e) => e === 'ping').length).toBeGreaterThanOrEqual(3);
+      // D-6996: each ping is PING_S after the LAST write (out.last_write_at), so the per-ping wake-up overshoot L adds
+      // up from ping to ping: ping k lands at about T0 + k*(PING_S + L), while the fake's silence is one timer. With
+      // the commit at HOLD_S 0.3 and the first text at 1.2 s, `>= 3` allowed 0.3 + L + 3*(0.2 + L) <= 1.2, an L of
+      // about 75 ms; with the text at 2.0 s, `>= 2` allows 0.3 + L + 2*(0.2 + L) <= 2.0, an L of about 433 ms. What
+      // makes L that large on macOS is unmeasured. Deleting the ping still reds: nothing else writes here (0 pings).
+      expect(ev.slice(0, deltas[0]).filter((e) => e === 'ping').length).toBeGreaterThanOrEqual(2);
       // the first text arrived live: pings follow it before the second text and the done event
       expect(ev.slice(deltas[0], deltas[1]).filter((e) => e === 'ping').length).toBeGreaterThanOrEqual(3);
       expect(textOf(a)).toBe('hello');
@@ -689,7 +714,10 @@ describe.skipIf(!PY)('the continuation and the fold (D-6410, D-6431, Review Focu
       const ev = events(a);
       const starts = ev.map((e, i) => [e, i] as const).filter(([e]) => e === 'content_block_start').map(([, i]) => i);
       expect(starts).toHaveLength(2);
-      expect(ev.slice(starts[0], starts[1]).filter((e) => e === 'ping').length).toBeGreaterThanOrEqual(3);
+      // D-6996: the next head is held 1000 ms after the bridge's last write, and each ping is PING_S after the last
+      // write, so the per-ping wake-up overshoot L adds up: `>= 3` allowed 3*(0.2 + L) <= 1.0, an L of about 133 ms;
+      // `>= 2` allows 2*(0.2 + L) <= 1.0, an L of about 300 ms. What makes L that large on macOS is unmeasured.
+      expect(ev.slice(starts[0], starts[1]).filter((e) => e === 'ping').length).toBeGreaterThanOrEqual(2);
       expect(textOf(a)).toBe('part 1part 2');
       expect(ev.at(-1)).toBe('message_stop');
     }, { consts: { 'server.PING_S': 0.2 } });
@@ -878,8 +906,8 @@ describe.skipIf(!PY)('an undecidable catalogue is the bridge\'s fault, not the c
     ['a list of rows that are not objects', (file: string) => writeFileSync(file, JSON.stringify({ models: [5] }))],
     ['a list of rows with no id', (file: string) => writeFileSync(file, JSON.stringify({ models: [{ name: 'x' }] }))],
     ['a list with one row out of shape', (file: string) => writeFileSync(file, JSON.stringify({ models: [{ id: BRIDGE_MODELS[0] }, { id: '' }] }))],
-    // JSON that nests past the decoder's recursion limit: json.loads raises RecursionError, not a ValueError
-    ['nested too deep to decode', (file: string) => writeFileSync(file, `{"models": ${'['.repeat(100000)}${']'.repeat(100000)}}`)],
+    // JSON that nests past the decoder's recursion limit: json.loads raises RecursionError, not a ValueError (D-6995)
+    ['nested too deep to decode', (file: string) => writeFileSync(file, `{"models": ${tooDeep()}}`)],
   ] as const) {
     it(`a catalogue that is ${what} is 503 api_error, retryable, and never a substitution`, async () => {
       await withBridge([], async ({ bridge, up, lane }) => {
@@ -904,7 +932,12 @@ describe.skipIf(!PY)('a lane.json nested too deep to decode refuses the start', 
   it('the start exits with its one ccgpt-proxy: direct: line, never a traceback', async () => {
     const home = mkTmp('cb-server-');
     const lane = plantBridgeLane(home, LANE);
-    writeFileSync(join(lane.laneDir, 'lane.json'), `${'['.repeat(100000)}${']'.repeat(100000)}`);
+    // D-6995: the depth is a version and platform rule, so it is measured first. A python3 that decodes the document
+    // would answer "names another lane" and never reach read_manifest's RecursionError arm.
+    const doc = tooDeep();
+    expect(pythonRefusesDecode(doc), `precondition: this python3 decodes JSON nested ${UNDECODABLE_DEPTH} deep, so the case `
+      + 'cannot reach the RecursionError arm: raise UNDECODABLE_DEPTH').toBe(true);
+    writeFileSync(join(lane.laneDir, 'lane.json'), doc);
     const err = await spawnBridge(home, LANE, { consts: BASE_CONSTS }).then(() => null, (e: Error) => e);
     expect(err).not.toBeNull();
     expect(err!.message).toMatch(/: ccgpt-proxy: direct: lane\.json in CCGPT_LANE_DIR is missing or not JSON\n?$/);
@@ -1021,7 +1054,13 @@ describe.skipIf(!PY)('the credential (spec §2.4, §2.6; the plan contract\'s er
       }
       expect(up.requests).toHaveLength(2);
       expect(auth!.requests).toHaveLength(0);
-      expect((await statsWhen(lane, (d) => d.outcomes['4xx'] === 2)).outcomes['refresh-skipped-fresh-token']).toBe(2);
+      // D-6997: read after the drain, never by polling. An unforced flush that meets a write in flight leaves its counts
+      // dirty (stats.flush's in-flight rule, pinned in codex-bridge-count-stats), and nothing flushes an idle lane
+      // again until the next request or the drain's forced flush, so the second answer's counts can stay in memory.
+      expect(await bridge.stop()).toEqual({ code: 0, signal: null });
+      const stats = readStats(lane);
+      expect(stats.outcomes['4xx']).toBe(2);
+      expect(stats.outcomes['refresh-skipped-fresh-token']).toBe(2);
     }, { auth: { token: [{ status: 200, body: issuedAnswer() }] } });
   });
 
