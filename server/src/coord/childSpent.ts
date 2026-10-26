@@ -51,7 +51,14 @@ export type ChildSpentVerdict =
  */
 export type ChildBirth =
   | { readonly kind: 'at'; readonly ms: number }
-  | { readonly kind: 'unplaceable'; readonly detail: string };
+  | { readonly kind: 'unplaceable'; readonly detail: string;
+      /** Set on ONE arm only, the re-stamped dispatch: the minting run still records a birth for THIS session id
+       *  (`sessionBornFor === sessionId`), but its `dispatchStartedAt` moved, so no PR row is placed against it. It is
+       *  still the birth the occupant's own minting run recorded, and the run binding reads it
+       *  (`runBinding.anchoredIncarnation`, D-5920). After a cross-build rollback and a same-id redraw it is the earlier
+       *  occupant's birth on that SAME run; the binding then counts that run's history as this occupant's, as the
+       *  id-string rule did already. Every other arm has no birth of the occupant's own run to give. */
+      readonly recorded?: number };
 
 /** The clock-skew allowance either side of a birth, in ms. The birth is the
  *  server's clock and `createdAt` is GitHub's, so a row inside ±this window is
@@ -155,7 +162,8 @@ export function childBirthOf(read: ChildBirthRunRead, sessionId: string): ChildB
     return { kind: 'unplaceable', detail: "the minting run's birth does not belong to its current session" };
   }
   if (read.run.sessionBornAt !== read.run.dispatchStartedAt) {
-    return { kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth" };
+    return { kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth",
+      recorded: read.run.sessionBornAt };
   }
   return { kind: 'at', ms: read.run.sessionBornAt };
 }

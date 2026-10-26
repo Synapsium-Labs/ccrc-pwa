@@ -21,7 +21,7 @@ const BORN = 1_700_000_000_000;
 let n = 0;
 const run = (over: Partial<BindingRun> = {}): BindingRun =>
   ({ id: ++n, sessionId: 'demo-w', claimedBy: 'coord-1', state: 'dispatched', openedAt: BORN + 10,
-     sessionBornAt: null, sessionBornFor: null, ...over });
+     sessionBornAt: null, sessionBornFor: null, dispatchStartedAt: null, ...over });
 
 describe('Incarnation', () => {
   it('a placed birth is a born incarnation; an unplaceable one is unborn and says why', () => {

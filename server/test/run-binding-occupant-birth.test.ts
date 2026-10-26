@@ -1,13 +1,16 @@
-// ARCH-60 follow-up (#1407, part of #795): ONE rule says which birth is the occupant's of a session id, and every reader of
-// the binding follows it. The write (`CoordStore.stampOccupantBirth`) and the read (`anchoredIncarnation`) agree, and
-// bindingOf, claimantsOf, boundRunsOf, openRunsForSession, sessionRunRead and withChildIds answer about the same occupant.
+// ARCH-60 follow-up (#1407, part of #795): which birth is the occupant's of a session id. The read (`anchoredIncarnation`)
+// takes only the birth the worker's OWN minting run recorded; the write (`CoordStore.stampOccupantBirth`) stamps the newest
+// birth on record unless the name was adopted since. They agree on a live worker, and bindingOf, claimantsOf, boundRunsOf,
+// openRunsForSession, sessionRunRead and withChildIds answer about the same occupant.
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  anchoredIncarnation, bindingOf, boundRunsOf, claimantsOf, occupantBirthOf, parentOf, unbornIncarnation,
+  anchoredIncarnation, bindingOf, boundRunsOf, claimantsOf, incarnationOf, occupantBirthOf, parentOf, unbornIncarnation,
+  type Incarnation,
 } from '../src/coord/runBinding.js';
+import { childBirthOf } from '../src/coord/childSpent.js';
 import { incarnationsOfSessions, sessionRunRead, withChildIds } from '../src/coord/runWire.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -26,7 +29,8 @@ const series = (s: CoordStore, session: string) => {
   return r.runs;
 };
 const done = (s: CoordStore, id: number): void => { s.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(id); };
-const UNPLACEABLE = unbornIncarnation('demo-w', 'unplaceable');
+/** The worker's incarnation as every reader builds it: from its minting run, through `childBirthOf`. */
+const markedBy = (s: CoordStore, minting: number): Incarnation => incarnationOf('demo-w', childBirthOf(s.run(minting), 'demo-w'));
 
 /** A reused name: an earlier occupant with a PLACEABLE birth (OLD = its dispatchStartedAt), then the live occupant whose
  *  minting run recorded BORN but cannot be placed (dispatchStartedAt null: the adopted shape). */
@@ -43,7 +47,7 @@ function reusedName(s: CoordStore): { earlier: number; minting: number } {
 describe('the occupant\'s birth: one rule for the stamp and the anchor', () => {
   it('the stamp writes what the anchor reads, over a placeable older birth and a newer unplaceable one', () => {
     const s = store();
-    reusedName(s);
+    const { minting } = reusedName(s);
     const before = series(s, 'demo-w');
     const expected = occupantBirthOf(before, 'demo-w');
     expect(expected).toBe(BORN);
@@ -51,7 +55,17 @@ describe('the occupant\'s birth: one rule for the stamp and the anchor', () => {
     s.setSession(wave, 'demo-w');
     const stamped = s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(wave) as { sessionBornAt: number };
     expect(stamped.sessionBornAt).toBe(expected);
-    expect(anchoredIncarnation(before, UNPLACEABLE)).toMatchObject({ kind: 'born', bornAt: expected });
+    const raw = markedBy(s, minting);
+    expect(raw).toMatchObject({ kind: 'unborn', why: 'unplaceable', recordedAt: BORN });
+    expect(anchoredIncarnation(raw)).toMatchObject({ kind: 'born', bornAt: expected });
+  });
+
+  it('an unplaceable incarnation whose minting run recorded no birth of its own is never anchored to a birth another run recorded', () => {
+    const s = store();
+    reusedName(s);
+    const bare = unbornIncarnation('demo-w', 'unplaceable');
+    expect(occupantBirthOf(series(s, 'demo-w'), 'demo-w')).toBe(BORN);
+    expect(anchoredIncarnation(bare)).toBe(bare);
   });
 
   it('the stamp reads the same run set as the anchor: a run an older build rebound away keeps a birth for the id, and neither half reads it', () => {
@@ -77,11 +91,12 @@ describe('the occupant\'s birth: one rule for the stamp and the anchor', () => {
     done(s, minting);
     const c = open(s, 'prog-c', 'coord-1', BORN + 10);
     s.setSession(c, 'demo-w');
-    const binding = bindingOf(series(s, 'demo-w'), UNPLACEABLE);
+    const live = markedBy(s, minting);
+    const binding = bindingOf(series(s, 'demo-w'), live);
     expect(binding.open?.id).toBe(c);
     expect(binding.newest?.id).toBe(c);
     expect(parentOf(binding)).toBe('coord-1');
-    expect(s.openRunsForSession('demo-w', undefined, UNPLACEABLE)).toMatchObject({ ok: true, siblings: [{ id: c }] });
+    expect(s.openRunsForSession('demo-w', undefined, live)).toMatchObject({ ok: true, siblings: [{ id: c }] });
   });
 });
 
@@ -99,17 +114,18 @@ describe('every reader of the binding answers about the same occupant (GAP 1 fix
     const s = store();
     const { live } = ghostFixture(s);
     const runs = series(s, 'demo-w');
-    expect(bindingOf(runs, UNPLACEABLE).open).toBeNull();
-    expect(claimantsOf(runs, UNPLACEABLE)).toEqual([]);
-    expect(boundRunsOf(runs, UNPLACEABLE, 'open')).toEqual([]);
-    expect(boundRunsOf(runs, UNPLACEABLE, 'any').map((r) => r.id)).toEqual([live]);
-    expect(s.openRunsForSession('demo-w', undefined, UNPLACEABLE)).toMatchObject({ ok: true, siblings: [] });
+    const inc = markedBy(s, live);
+    expect(bindingOf(runs, inc).open).toBeNull();
+    expect(claimantsOf(runs, inc)).toEqual([]);
+    expect(boundRunsOf(runs, inc, 'open')).toEqual([]);
+    expect(boundRunsOf(runs, inc, 'any').map((r) => r.id)).toEqual([live]);
+    expect(s.openRunsForSession('demo-w', undefined, inc)).toMatchObject({ ok: true, siblings: [] });
   });
 
   it('the card (sessionRunRead) and the ghost coordinator (withChildIds) agree', () => {
     const s = store();
     const { ghost, live } = ghostFixture(s);
-    const sessions = [{ id: 'demo-w', child: { kind: 'unreadable' } as const }];
+    const sessions = [{ id: 'demo-w', child: { kind: 'child', runId: live } as const }];
     const incarnations = incarnationsOfSessions(s, sessions);
     expect(sessionRunRead(s, 'demo-w', incarnations.get('demo-w')!)).toMatchObject({ ok: true, openRun: null, run: { id: live } });
     const summaries = [{ id: ghost, claimedBy: 'coord-gone' }] as never;

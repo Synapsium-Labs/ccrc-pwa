@@ -22,14 +22,29 @@ bind sites go to 0" is met for every site except that one, which is named below.
   own: the dispatch did not watch it being minted, so `childBirthOf` must read it `unplaceable`, and the bind gate and
   the close hold rather than date PR rows against it. Two candidate sources were checked and rejected:
   - **The occupant stamp's source** (the newest birth any run of the series recorded for the id). For an adopted id,
-    no run of this dispatch recorded a birth, so any birth on record for the id is an EARLIER occupant's under a
-    recycled name. Stamping it would bind the adopted worker's run to that earlier occupant, which is the ghost-parent
-    error #1407 exists to remove.
+    no run of this dispatch recorded a birth, so any birth on record for the id may be an EARLIER occupant's under a
+    recycled name. Stamping it, or anchoring the reader to it, would bind the adopted worker's runs to that earlier
+    occupant, which is the ghost-parent error #1407 exists to remove.
   - **The registry row** (`$REG/<id>.spawn`, the epoch ccd's `_spawn` writes). It is ccd's clock, in seconds, written
     on every spawn of the id, not once at mint, and the server's birth column is a server-clock instant taken just
     before the `ws-add` (spec section 5.3). Writing it on the minting run would also put a birth on the row
     `childBirthOf` reads, which then stays `unplaceable` only because the two instants differ: a coincidence, not a
     rule.
-  Consequence, accepted: a later wave bound to an adopted worker stamps no birth unless a run of its series recorded
-  one, and reads by the id-string rule, the same residual as a `not-a-child` session (#1532). The census pins the arm
+  Consequence, accepted: an adopted worker reads by the id-string rule, the same residual as a `not-a-child` session
+  (#1532). Its parent is the claimant of the newest open run that names the id, which is the adopting run's. A run of
+  an earlier occupant that is still open also names the id. Without a birth the columns cannot tell it apart, so
+  `claimantsOf` still lists its claimant after the adopting one.
+  Neither half borrows a birth that another run recorded for the id:
+  - **The read.** `anchoredIncarnation` (`server/src/coord/runBinding.ts`, applied by `bindsRun`) anchors an
+    `unplaceable` worker only to the birth its OWN minting run recorded for it. That is the re-stamped arm of
+    `childBirthOf`, which carries the birth as `recorded`. An adopted worker's minting run records none, so it is never
+    dated to an earlier occupant. The first anchor of this PR (`0d1b8ead5`) took the newest birth on record for the id
+    and made the earlier occupant's open run the parent, the D6 ghost (D-5920).
+  - **The write.** `occupantBirthOf`, the stamp's source, answers no birth when a run of the series names the id,
+    records no birth, and was dispatched after the newest birth on record. That shape is an adoption, because every
+    fresh spawn records its birth as its own `dispatchStartedAt`. So a later wave bound to an adopted worker records
+    nothing, and it too reads by the id-string rule.
+  The adopted read-back case in `server/test/run-binding-bind-records.test.ts` pins both halves: an earlier occupant's
+  run still open, the name adopted, then a later wave. `childParentOf`, `claimantsOf` and `sessionRunRead` answer the
+  adopting run's claimant, and the later wave records no birth. That case is red at `0d1b8ead5`. The census pins the arm
   by name, so a change that makes it record a birth, or a new arm that records none, reds the suite.

@@ -1,7 +1,7 @@
 import type { ChildMark, RunSummary, SessionRun } from '../../../shared/api.js';
 import type { BindingReadPort } from './bindingReads.js';
 import { childBirthOf } from './childSpent.js';
-import { anchoredIncarnation, bindingOf, childrenOf, incarnationOf, unbornIncarnation, type BindingRun, type Incarnation } from './runBinding.js';
+import { bindingOf, childrenOf, incarnationOf, unbornIncarnation, type BindingRun, type Incarnation } from './runBinding.js';
 
 /**
  * The run binding as it rides the wire (ARCH-61 server half, GitHub #796; epic #771; consolidation spec §3 K10, §5.9). No I/O:
@@ -48,18 +48,14 @@ export function sessionRunRead(port: Pick<BindingReadPort, 'bindingRunsOf'>, ses
   return { ok: true, run: toSessionRun(binding.newest), openRun: toSessionRun(binding.open) };
 }
 
-/** Each of `sessions`' incarnation, read once, ANCHORED over the worker's own series (`anchoredIncarnation`), so
- *  `childrenOf`, which sees only the claimant's series, answers about the same occupant `sessionRunRead` does. A series this
- *  process cannot represent leaves the mark's incarnation as it is. A mark is the registry's reading of the session, as the
- *  fleet row carries it. */
+/** Each of `sessions`' incarnation, read once. A mark is the registry's reading of the session, as the fleet row carries it.
+ *  The anchor needs no series (`anchoredIncarnation` reads only the birth the worker's own minting run recorded, and
+ *  `bindsRun` applies it for every reader), so `childrenOf`, which sees only the claimant's series, answers about the same
+ *  occupant `sessionRunRead` does. */
 export function incarnationsOfSessions(
-  port: Pick<BindingReadPort, 'run' | 'bindingRunsOf'>, sessions: readonly { readonly id: string; readonly child: ChildMark }[],
+  port: Pick<BindingReadPort, 'run'>, sessions: readonly { readonly id: string; readonly child: ChildMark }[],
 ): ReadonlyMap<string, Incarnation> {
-  return new Map(sessions.map((s) => {
-    const raw = incarnationOfMark(port, s.id, s.child);
-    const series = port.bindingRunsOf(s.id);
-    return [s.id, series.ok ? anchoredIncarnation(series.runs, raw) : raw];
-  }));
+  return new Map(sessions.map((s) => [s.id, incarnationOfMark(port, s.id, s.child)]));
 }
 
 /** `RunSummary.childIds` for every run in `runs`: `childrenOf(claimant)`, read once per distinct claimant. `incarnations` is the

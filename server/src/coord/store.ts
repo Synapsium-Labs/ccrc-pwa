@@ -1952,7 +1952,7 @@ export class CoordStore {
       if (!n.ok) return { ok: false, kind: 'run-unreadable', detail: n.detail };
       runs.push({ id: n.value, sessionId: r.sessionId, claimedBy: r.claimedBy,
         state: isRunState(r.state) ? r.state : 'unknown', openedAt: r.openedAt,
-        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor });
+        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor, dispatchStartedAt: r.dispatchStartedAt });
     }
     return { ok: true, runs };
   }
@@ -1968,7 +1968,7 @@ export class CoordStore {
     return this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
       'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state, sessionId, claimedBy, ' +
-      `openedAt, sessionBornAt, sessionBornFor FROM runs WHERE ${where} ORDER BY id`,
+      `openedAt, sessionBornAt, sessionBornFor, dispatchStartedAt FROM runs WHERE ${where} ORDER BY id`,
     ).all(...(column === 'either' ? [id, id] : [id])) as unknown as SeriesRow[];
   }
 
@@ -3043,7 +3043,8 @@ export class CoordStore {
     // The bound incarnation (ARCH-62, #1407): a bind that names no birth of its own (a later wave bound to a worker that
     // already exists) records the birth of the occupant it binds to, the NEWEST birth any run of the session's series
     // recorded for it (`stampOccupantBirth`, placement of the minting run plays no part), so `bindsRun` answers it
-    // exactly. No stamp, and the id-string rule, only where no run of the series ever recorded a birth for the session.
+    // exactly. No stamp, and the id-string rule, where no run of the series ever recorded a birth for the session, or
+    // where a run of the series adopted the name after that birth (D-6993: the birth may be an earlier occupant's).
     // Only when the bind changes the occupant: a same-session re-statement (markDispatched after an adopted bind's
     // explicit null) must not date the run to an earlier occupant's birth.
     if (bornAt === undefined && changesOccupant) this.stampOccupantBirth(runId, sessionId);
@@ -3056,12 +3057,13 @@ export class CoordStore {
   }
 
   /** Stamp run `runId` (just bound to `sessionId`, with no birth of its own) with the occupant's birth: `occupantBirthOf`
-   *  (`coord/runBinding.ts`, the one rule) over the session's series as `bindingRunsOf` reads it, the same run set and the
-   *  same function `anchoredIncarnation` reads, so the stamp cannot drift from the anchor (`run-binding-occupant-birth.test.ts`
-   *  pins a rebound run's birth outside the series). Placement of the minting run plays no part, so a worker whose
-   *  `dispatchStartedAt` moved is still the occupant that birth names. Write-once: a run that carries a birth keeps it. A
-   *  session with no birth on record (a coordinator, a manual workspace, an adopted one) or whose series cannot be read
-   *  stays unstamped and keeps the id-string rule. On a worker alive across migration 16 the newest birth can be a
+   *  (`coord/runBinding.ts`, the one rule) over the session's series as `bindingRunsOf` reads it
+   *  (`run-binding-occupant-birth.test.ts` pins a rebound run's birth outside the series). Placement of the minting run plays
+   *  no part, so a worker whose `dispatchStartedAt` moved is stamped with the birth its own minting run recorded, the one
+   *  `anchoredIncarnation` reads for it. Write-once: a run that carries a birth keeps it. A session with no birth on record
+   *  (a coordinator, a manual workspace), one whose series ADOPTED the name after the newest birth on record (D-6993: that
+   *  birth may be an earlier occupant's, never the adopted worker's own), or whose series cannot be read stays unstamped
+   *  and keeps the id-string rule. On a worker alive across migration 16 the newest birth can be a
    *  backfilled wave-N row, not the minting run: the legacy exception `runBinding.ts` names (WHICH RUNS BIND A BORN
    *  INCARNATION). */
   private stampOccupantBirth(runId: number, sessionId: string): void {

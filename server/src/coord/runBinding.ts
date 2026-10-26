@@ -19,7 +19,8 @@ import type { ChildBirth } from './childSpent.js';
  * ONE reading of it). `unborn` is every session that has no placeable birth: a coordinator or a manual workspace (no
  * `.child` marker, `not-a-child`) and a child whose birth cannot be placed (`unplaceable`). Those keep the rule that
  * held before this file (the id string), so a refactor that moves the readers changes no answer for them; the word
- * says which kind of unknown it is, so a caller that must treat the two differently can.
+ * says which kind of unknown it is, so a caller that must treat the two differently can. The one exception is below
+ * (`anchoredIncarnation`): an `unplaceable` child whose own minting run still records its birth.
  *
  * WHICH RUNS BIND A BORN INCARNATION. A run names the session, and
  *   - carries a birth: it binds iff that birth is THIS incarnation's (same instant, recorded for this session id);
@@ -31,9 +32,14 @@ import type { ChildBirth } from './childSpent.js';
  *     ghost coordinator), and is never dropped: `bindingOf` lists it in `undecided`. Since ARCH-62 slice 4 (#1407)
  *     `CoordStore.bindSession` records the occupant's birth on a later wave it binds (`stampOccupantBirth`), so a run
  *     bound to the live worker is `bound` and a run bound to an earlier occupant is `unbound`, whatever its `openedAt`;
- *     the undecidable arm is left for rows bound before the stamp. A worker whose minting run can no longer be placed (`unplaceable`)
- *     is its newest RECORDED birth (`anchoredIncarnation`), so an earlier occupant's run is `unbound`; a `not-a-child` session
- *     keeps the id-string rule (gap 1 of #1407, tracked in #1532). One LEGACY exception, accepted and pinned
+ *     the undecidable arm is left for rows bound before the stamp. A worker whose OWN minting run recorded its birth but
+ *     whose dispatch moved since (`unplaceable` with `recordedAt`, the re-stamped arm of `childBirthOf`) is that birth
+ *     (`anchoredIncarnation`, applied by `bindsRun`), so an earlier occupant's run is `unbound`. Every other unborn session
+ *     keeps the id-string rule: an adopted worker (D-6993: its minting run records no birth, and a birth another run
+ *     recorded for the id may be an earlier occupant's, so it is never borrowed), a minting run that is absent, rebound or
+ *     unreadable, and a `not-a-child` session (gap 1 of #1407, tracked in #1532). The stamp refuses the same borrowing: a
+ *     wave bound after a run of the series adopted the name records no birth (`occupantBirthOf`). One LEGACY exception,
+ *     accepted and pinned
  *     (`run-binding-bound-birth.test.ts`): migration 16's backfill dated every bound run to its OWN `dispatchStartedAt`,
  *     later waves included, so for a worker alive across that migration the newest placeable birth of its id can be a
  *     backfilled wave-N row rather than its minting run. A wave bound after this build is then stamped with that
@@ -53,7 +59,10 @@ export type UnbornWhy = 'not-a-child' | 'unplaceable';
 
 type IncarnationShape =
   | { readonly kind: 'born'; readonly sessionId: string; readonly bornAt: number }
-  | { readonly kind: 'unborn'; readonly sessionId: string; readonly why: UnbornWhy };
+  | { readonly kind: 'unborn'; readonly sessionId: string; readonly why: UnbornWhy;
+      /** The birth the occupant's OWN minting run recorded for it when that run's dispatch moved since (`ChildBirth`'s
+       *  `recorded`, the re-stamped arm). Absent on every other unborn session: no run of its own dates it. */
+      readonly recordedAt?: number };
 
 /** A worker session's incarnation: the session id plus the birth of its current occupant. Built only by the three
  *  constructors below, so a bare id string cannot stand in for one. */
@@ -62,12 +71,13 @@ export type Incarnation = IncarnationShape & { readonly [incarnationBrand]: true
 export const bornIncarnation = (sessionId: string, bornAt: number): Incarnation =>
   ({ kind: 'born', sessionId, bornAt }) as Incarnation;
 
-export const unbornIncarnation = (sessionId: string, why: UnbornWhy): Incarnation =>
-  ({ kind: 'unborn', sessionId, why }) as Incarnation;
+export const unbornIncarnation = (sessionId: string, why: UnbornWhy, recordedAt?: number): Incarnation =>
+  (recordedAt === undefined ? { kind: 'unborn', sessionId, why } : { kind: 'unborn', sessionId, why, recordedAt }) as Incarnation;
 
-/** The incarnation of a child whose minting run answered `birth` (`childBirthOf`). */
+/** The incarnation of a child whose minting run answered `birth` (`childBirthOf`). An unplaceable birth keeps the one
+ *  instant its own minting run recorded for it, if any (`recorded`): `anchoredIncarnation` reads that and nothing else. */
 export const incarnationOf = (sessionId: string, birth: ChildBirth): Incarnation =>
-  birth.kind === 'at' ? bornIncarnation(sessionId, birth.ms) : unbornIncarnation(sessionId, 'unplaceable');
+  birth.kind === 'at' ? bornIncarnation(sessionId, birth.ms) : unbornIncarnation(sessionId, 'unplaceable', birth.recorded);
 
 /** The columns of a run the binding reads: `CoordStore.bindingRunsOf`'s row, and satisfied structurally by `RunRow`. */
 export interface BindingRun {
@@ -78,6 +88,10 @@ export interface BindingRun {
   readonly openedAt: number;
   readonly sessionBornAt: number | null;
   readonly sessionBornFor: string | null;
+  /** When the run's fresh-spawn dispatch began (`CoordStore.markDispatchStarted`, the fresh-spawn arm only), or `null`.
+   *  Read by `occupantBirthOf` alone: a run that names the session, records no birth and was dispatched after a birth on
+   *  record is an ADOPTION (`dispatch.ts#spawnFresh`, D-6993). */
+  readonly dispatchStartedAt: number | null;
 }
 
 /** Whether `run` binds `incarnation`: yes, no, or `'undecidable'` (an unstamped run opened before the birth). */
@@ -88,8 +102,10 @@ export type RunBinds = 'bound' | 'unbound' | 'undecidable';
  *  decision that must tell one occupant of a reused name from another reads the series through `bindingOf` instead. */
 export const runNamesSession = (run: { readonly sessionId: string | null }, sessionId: string): boolean => run.sessionId === sessionId;
 
-/** Whether `run` is bound to `incarnation`, by the rules above. */
-export function bindsRun(incarnation: Incarnation, run: BindingRun): RunBinds {
+/** Whether `run` is bound to `incarnation`, by the rules above, after `anchoredIncarnation`: every reader decides through
+ *  here, so every reader anchors the same way. */
+export function bindsRun(rawIncarnation: Incarnation, run: BindingRun): RunBinds {
+  const incarnation = anchoredIncarnation(rawIncarnation);
   if (!runNamesSession(run, incarnation.sessionId)) return 'unbound';
   if (incarnation.kind === 'unborn') return 'bound';
   if (run.sessionBornAt !== null) {
@@ -112,30 +128,36 @@ export interface SessionBinding {
 
 const byIdDesc = (a: BindingRun, b: BindingRun): number => b.id - a.id;
 
-/** THE birth of the current occupant of a session id: the NEWEST birth any run of the series recorded for it, `null` when
- *  none did. One rule for both halves: `CoordStore.stampOccupantBirth` writes it (this function, over `bindingRunsOf`'s
- *  series, pinned by `run-binding-occupant-birth.test.ts`) and `anchoredIncarnation` reads it, so a wave bound to a
- *  worker reads `bound` for that worker. A name's occupants are minted in order, so the newest recorded birth is the live
- *  one; placement of the minting run (`childBirthOf`) plays no part, so a moved `dispatchStartedAt` cannot split the two. */
+/** The birth a LATER wave bound to `sessionId` records (`CoordStore.stampOccupantBirth` writes this, over `bindingRunsOf`'s
+ *  series): the NEWEST birth any run of the series recorded for the id, so a moved `dispatchStartedAt` on the minting run
+ *  (the re-stamped arm of `childBirthOf`) does not stop the stamp. `null`, and no stamp, when no run recorded one, AND when
+ *  that birth was not provably minted by the occupant's own run: a run of the series names the session, records no birth
+ *  and was dispatched after it (`dispatchStartedAt` later than the birth). That run ADOPTED a workspace under the name
+ *  (`dispatch.ts#spawnFresh`'s adopted arm, D-6993), so the newest birth on record can be an EARLIER occupant's, and
+ *  stamping it would date the adopted worker's wave to that occupant. Every fresh spawn records its birth as its own
+ *  `dispatchStartedAt`, so no fresh mint is mistaken for an adoption. */
 export function occupantBirthOf(runs: readonly BindingRun[], sessionId: string): number | null {
   const births = runs.filter((r) => r.sessionBornFor === sessionId && r.sessionBornAt !== null).map((r) => r.sessionBornAt as number);
-  return births.length === 0 ? null : Math.max(...births);
+  if (births.length === 0) return null;
+  const newest = Math.max(...births);
+  const adoptedSince = runs.some((r) => runNamesSession(r, sessionId) && r.sessionBornAt === null
+    && r.dispatchStartedAt !== null && r.dispatchStartedAt > newest);
+  return adoptedSince ? null : newest;
 }
 
-/** An `unplaceable` incarnation whose series records births for its id is its occupant's birth (`occupantBirthOf`): every
- *  bind records it (`CoordStore.bindSession`), so a run recorded for an older birth belongs to an earlier occupant of the
- *  name, whatever the placement of the minting run says now. Any other incarnation is itself (`not-a-child` has no birth to
- *  read: gap 1 of #1407, tracked in #1532). `runs` is the WORKER's series (`CoordStore.bindingRunsOf`); every reader that
- *  holds it anchors through this, and a reader that holds only the claimant's series (`childrenOf`) is handed an incarnation
- *  anchored where the worker's series was read (`runWire.incarnationsOfSessions`). */
-export function anchoredIncarnation(runs: readonly BindingRun[], incarnation: Incarnation): Incarnation {
-  if (incarnation.kind !== 'unborn' || incarnation.why !== 'unplaceable') return incarnation;
-  const birth = occupantBirthOf(runs, incarnation.sessionId);
-  return birth === null ? incarnation : bornIncarnation(incarnation.sessionId, birth);
+/** The incarnation every reader decides with (`bindsRun` calls this first). An `unplaceable` incarnation whose OWN minting
+ *  run recorded a birth for it (`recordedAt`, the re-stamped arm of `childBirthOf`: the run's `dispatchStartedAt` moved
+ *  after the birth) is that birth, so a run recorded for an older birth belongs to an earlier occupant of the name and is
+ *  `unbound`. Every other incarnation is itself, and an unborn one keeps the id-string rule: an adopted worker (its
+ *  minting run records no birth, D-6993), a minting run that is absent, rebound or unreadable, and a `not-a-child` session
+ *  (gap 1 of #1407, tracked in #1532). A birth some OTHER run recorded for the id is never borrowed: under a recycled name
+ *  it is an earlier occupant's, and anchoring to it would make that occupant's open run the parent (D6, D-5920). */
+export function anchoredIncarnation(incarnation: Incarnation): Incarnation {
+  if (incarnation.kind !== 'unborn' || incarnation.recordedAt === undefined) return incarnation;
+  return bornIncarnation(incarnation.sessionId, incarnation.recordedAt);
 }
 
-export function bindingOf(runs: readonly BindingRun[], rawIncarnation: Incarnation): SessionBinding {
-  const incarnation = anchoredIncarnation(runs, rawIncarnation);
+export function bindingOf(runs: readonly BindingRun[], incarnation: Incarnation): SessionBinding {
   const bound = runs.filter((r) => binds(incarnation, r)).sort(byIdDesc);
   const undecided = runs.filter((r) => bindsRun(incarnation, r) === 'undecidable').sort(byIdDesc);
   return { newest: bound[0] ?? null, open: bound.find(isOpen) ?? null, undecided };
@@ -169,8 +191,7 @@ export function childParentOf(runs: readonly BindingRun[], minter: string | null
 }
 
 /** EVERY coordinator that currently has this incarnation working for it, newest open run first, each once. */
-export function claimantsOf(runs: readonly BindingRun[], rawIncarnation: Incarnation): string[] {
-  const incarnation = anchoredIncarnation(runs, rawIncarnation);
+export function claimantsOf(runs: readonly BindingRun[], incarnation: Incarnation): string[] {
   const seen = new Set<string>();
   for (const r of runs.filter((x) => binds(incarnation, x) && isOpen(x)).sort(byIdDesc)) {
     if (r.claimedBy !== null) seen.add(r.claimedBy);
@@ -180,8 +201,7 @@ export function claimantsOf(runs: readonly BindingRun[], rawIncarnation: Incarna
 
 /** Every run that binds `incarnation`, by id: in any state, or only the open ones. The readers that list a worker's runs
  *  (`CoordStore.runsNamingSession`, `openRunsForSession`) project this; `bindingOf` answers the newest and the open one. */
-export function boundRunsOf(runs: readonly BindingRun[], rawIncarnation: Incarnation, which: 'any' | 'open'): BindingRun[] {
-  const incarnation = anchoredIncarnation(runs, rawIncarnation);
+export function boundRunsOf(runs: readonly BindingRun[], incarnation: Incarnation, which: 'any' | 'open'): BindingRun[] {
   return runs.filter((r) => binds(incarnation, r) && (which === 'any' || isOpen(r))).sort((a, b) => a.id - b.id);
 }
 

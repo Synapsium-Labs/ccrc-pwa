@@ -1,12 +1,15 @@
 // ARCH-60 follow-up (#1407, part of #795): every bind records the incarnation it binds to. This file pins, by name, what
-// `CoordStore.bindSession` writes for the bound incarnation, and the two gaps #1407 names. Written first as a
-// characterization (green on the code before the fix); the gap cases carry a WRONG-ANSWER comment and flip with the fix.
+// `CoordStore.bindSession` writes for the bound incarnation, and the two gaps #1407 names. Red on the pre-fix source
+// (d6aae6879: GAP 1, GAP 2, four census arms and the measured allow-list fail) and green after. The adopted read-back case
+// at the end is red at 0d1b8ead5 (the first anchor, which borrowed an earlier occupant's birth) and green after.
 import { mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { bindingOf, bornIncarnation, parentOf, unbornIncarnation } from '../src/coord/runBinding.js';
+import { bindingOf, bornIncarnation, childParentOf, claimantsOf, incarnationOf, parentOf, unbornIncarnation } from '../src/coord/runBinding.js';
+import { childBirthOf } from '../src/coord/childSpent.js';
+import { incarnationsOfSessions, sessionRunRead } from '../src/coord/runWire.js';
 import { REPO_ROOT, callsIn, parsedFile, sqlStatementsInFile, symbolOf } from './scan/symbols.js';
 import { mkTmp } from './tmpHelpers.js';
 import { ID_GATE_TOKEN, appFor, recorder, seedRow } from './idGateFixture.js';
@@ -63,14 +66,16 @@ describe('a bind with no placeable birth still records an incarnation (the gaps 
     expect(binding.newest?.id).toBe(w2);
   });
 
-  it('GAP 1 (unplaceable): an unborn session with recorded births is its newest recorded birth, so an earlier occupant\'s open run is no parent', () => {
+  it('GAP 1 (unplaceable): an unplaceable worker whose own minting run recorded its birth is that birth, so an earlier occupant\'s open run is no parent', () => {
     const s = store();
     const ghost = open(s, 'prog-old', 'coord-gone', OLD);
     s.setSession(ghost, 'demo-w', OLD);
     const live = open(s, 'prog-new', 'coord-live', BORN + 1000);
     s.setSession(live, 'demo-w', BORN);
     s.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(live);
-    const binding = bindingOf(series(s, 'demo-w'), unbornIncarnation('demo-w', 'unplaceable'));
+    const incarnation = incarnationOf('demo-w', childBirthOf(s.run(live), 'demo-w'));
+    expect(incarnation).toMatchObject({ kind: 'unborn', why: 'unplaceable', recordedAt: BORN });
+    const binding = bindingOf(series(s, 'demo-w'), incarnation);
     expect(binding.open).toBeNull();
     expect(parentOf(binding)).toBeNull();
     expect(binding.newest?.id).toBe(live);
@@ -141,12 +146,12 @@ describe('every bind site records an incarnation, or is named (ARCH-60 follow-up
     } finally { await app.close(); }
   };
   /** `dispatchRun` wave 1 into `spawnFresh`: `ws-add` leaves `ADOPTED`'s row; `adopt` cuts it short, so the arm adopts. */
-  const wave1 = (adopt: boolean) => async (): Promise<Born> => {
+  const spawnWave1 = async (adopt: boolean, seed: (coord: CoordStore) => void, claimedBy = CLAIMANT): Promise<{ coord: CoordStore; id: number }> => {
     const home = mkTmp('ccrc-bind-census-spawn-');
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-    unplaceableOnRecord(coord, ADOPTED);
-    const opened = coord.openRun({ program: 'prog-wave', title: 'wave', project: 'demo', wave: 1, waveOf: 3, claimedBy: CLAIMANT });
+    seed(coord);
+    const opened = coord.openRun({ program: 'prog-wave', title: 'wave', project: 'demo', wave: 1, waveOf: 3, claimedBy });
     if (!('id' in opened)) throw new Error(JSON.stringify(opened));
     const runCcd = async (argv: CcdArgv): Promise<CcdResult> => {
       if (argv[0] === 'ws-add') {
@@ -161,7 +166,11 @@ describe('every bind site records an incarnation, or is named (ARCH-60 follow-up
       configDir: (w: string) => configDirFor(base.cfg as CcrcConfig, w), turnVerdict: async () => 'idle' as const,
       sendClear: clearSender(base) } as DispatchRunDeps;
     expect(await dispatchRun(deps, opened.id, 'go', undefined, undefined, undefined)).toMatchObject({ ok: true, adopted: adopt });
-    return born(coord, opened.id) as Born;
+    return { coord, id: opened.id };
+  };
+  const wave1 = (adopt: boolean) => async (): Promise<Born> => {
+    const { coord, id } = await spawnWave1(adopt, (c) => unplaceableOnRecord(c, ADOPTED));
+    return born(coord, id) as Born;
   };
 
   const records = (b: Born, session: string): boolean => b.sessionBornAt !== null && b.sessionBornFor === session;
@@ -194,5 +203,42 @@ describe('every bind site records an incarnation, or is named (ARCH-60 follow-up
     const nothing: string[] = [];
     for (const a of ARMS) if (!records(await a.drive(), a.session)) nothing.push(a.arm);
     expect(nothing).toEqual(RECORDS_NOTHING);
+  });
+
+  // READ BACK, not only what the bind wrote (review of #1573: the census above never read an adopted worker back through
+  // the anchor). D6's ghost parent (D-5920) over the residual arm: an EARLIER occupant of the recycled name was minted
+  // (placeable birth OLD_BIRTH) by a run that is still OPEN because its coordinator is gone; a run planned before that
+  // mint then dispatches and ADOPTS the name's workspace, recording no birth (D-6993). The adopted worker's minting run
+  // carries no birth, so it keeps the id-string rule: its parent is the adopting run's claimant, never the dead
+  // coordinator the earlier occupant's birth would anchor it to. Red at 0d1b8ead5 (every unplaceable worker anchored to
+  // the newest recorded birth of its id: childParentOf/claimantsOf/sessionRunRead answered coord-gone).
+  it('an adopted worker under a recycled name whose earlier occupant\'s run is still open reads the ADOPTING run\'s claimant, and its later wave borrows no birth', async () => {
+    const T0 = 1_700_000_000_000;
+    const OLD_BIRTH = T0 + 5000;
+    let earlier = 0;
+    const { coord, id } = await spawnWave1(true, (c) => {
+      earlier = open(c, 'prog-old', 'coord-gone', T0);
+      c.markDispatchStarted(earlier, OLD_BIRTH);
+      c.setSession(earlier, ADOPTED, OLD_BIRTH);
+    }, 'coord-live');
+    // Planned before the earlier occupant was minted (the reviewer's probe: the adopting run's openedAt < OLD_BIRTH).
+    coord.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(T0 + 1000, id);
+    expect(born(coord, id)).toEqual({ sessionBornAt: null, sessionBornFor: null });
+    expect(coord.run(earlier)).toMatchObject({ ok: true, run: { state: 'planned', sessionId: ADOPTED, sessionBornAt: OLD_BIRTH } });
+    const runs = series(coord, ADOPTED);
+    const incarnation = incarnationOf(ADOPTED, childBirthOf(coord.run(id), ADOPTED));
+    expect(incarnation).toMatchObject({ kind: 'unborn', why: 'unplaceable' });
+    expect(childParentOf(runs, 'coord-live', incarnation)).toBe('coord-live');
+    // The id-string rule cannot tell the earlier occupant's open run apart (D-6993), so it is still listed, but AFTER the
+    // adopting run's claimant, and never alone.
+    expect(claimantsOf(runs, incarnation)[0]).toBe('coord-live');
+    const viaMark = incarnationsOfSessions(coord, [{ id: ADOPTED, child: { kind: 'child', runId: id } }]).get(ADOPTED)!;
+    expect(sessionRunRead(coord, ADOPTED, viaMark)).toMatchObject({ ok: true, openRun: { id, claimedBy: 'coord-live' } });
+    // The stamp borrows no birth either: a later wave bound to the adopted worker records none, never the earlier
+    // occupant's (`occupantBirthOf`: the name was adopted after that birth), and the adopting claimant stays the parent.
+    const wave2 = open(coord, 'prog-wave-2', 'coord-live', T0 + 9000);
+    coord.setSession(wave2, ADOPTED);
+    expect(born(coord, wave2)).toEqual({ sessionBornAt: null, sessionBornFor: null });
+    expect(childParentOf(series(coord, ADOPTED), 'coord-live', incarnation)).toBe('coord-live');
   });
 });
