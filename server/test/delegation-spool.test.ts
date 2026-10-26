@@ -202,8 +202,11 @@ const hookEnv = (env: Record<string, string> = {}): NodeJS.ProcessEnv => ({
 });
 type Ran = { stdout: string; stderr: string };
 /** One hook run. Exit 0 is asserted here, once, for every caller: the hook's contract is exit 0 on every path. */
-/** A run whose pane lookup went unanswered (the 2 s bound, under load) was an identity skip: it is replayed, at most four times, and said. */
-const run = (payload: object | string, env: Record<string, string> = {}): Ran => {
+/**
+ * A run whose pane lookup went unanswered (the 2 s bound, under load) was an identity skip: it is replayed, at most four times,
+ * and said. `onReplay` undoes what the skipped run left in a row's own records (its `payload=$(cat)` came before the lookup).
+ */
+const run = (payload: object | string, env: Record<string, string> = {}, onReplay: () => void = () => {}): Ran => {
   for (let attempt = 0; ; attempt += 1) {
     const answered = records(tmuxAnswered()).length;
     const r = spawnSync('bash', [HOOK], {
@@ -213,6 +216,7 @@ const run = (payload: object | string, env: Record<string, string> = {}): Ran =>
     const skipped = hookEnv(env)['TMUX_PANE'] !== '' && records(tmuxAnswered()).length === answered;
     if (!skipped || attempt === 4) return { stdout: r.stdout, stderr: r.stderr };
     console.info(`delegation-spool: the pane lookup went unanswered (an identity skip), replaying the hook run (attempt ${attempt + 2})`);
+    onReplay();
   }
 };
 
@@ -1826,18 +1830,30 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       ['UserPromptSubmit (a notification)', () => ev('UserPromptSubmit', { prompt: '<task-notification>\n<task-id>w1</task-id>\n<tool-use-id>t1</tool-use-id>\n<status>completed</status>\n</task-notification>' })],
       ['SessionEnd', () => ev('SessionEnd', { reason: 'clear' })],
     ];
+    it('a replayed identity skip is not counted twice: the skipped run\'s own fork leaves the count (#1587)', () => {
+      const counts = shims();
+      // One lookup outlasts the bound. Absolute paths: the stub's own mkdir and sleep must not be counted as the hook's.
+      tmuxStub(OWNER, `if /bin/mkdir '${home}/tmux-slow' 2>/dev/null; then exec /bin/sleep 3; fi\n`);
+      run(pre('Agent', { prompt: 'x' }), {}, () => { fs.rmSync(path.join(home, 'forks'), { force: true }); });
+      expect(fs.existsSync(path.join(home, 'tmux-slow')), 'the slow lookup happened').toBe(true);
+      expect(rawLines(), 'the replay wrote the line').toHaveLength(1);
+      expect(counts()['cat'], 'one payload read: the replay\'s').toBe(1);
+    });
+
     it.each(cases)('%s: the same externals run whether the spool directory exists or not, so a line costs no fork', (n, mk) => {
       fs.mkdirSync(path.join(home, 'repo', '.git', 'worktrees', 'agent-a1'), { recursive: true });
       const counts = shims();
+      // A replayed identity skip forked its `cat` before the lookup: the count is the replay's alone.
+      const forget = (): void => { fs.rmSync(path.join(home, 'forks'), { force: true }); };
       const before = counts();
-      run(mk());
+      run(mk(), {}, forget);
       const withSpool = counts();
       expect(rawLines().length, 'the spool run wrote its line (anti-vacuity)').toBe(1);
       fs.rmSync(path.join(spoolBase()), { recursive: true });
       fs.rmSync(path.join(reg(), `${OWNER}.hookstate.json`), { force: true });
       fs.rmSync(path.join(reg(), `${OWNER}.turn.json`), { force: true });
       fs.rmSync(path.join(home, 'forks'));
-      run(mk());
+      run(mk(), {}, forget);
       const without = counts();
       expect(withSpool, `${n}: with a line`).toEqual(without);
       expect(before).toEqual({});
