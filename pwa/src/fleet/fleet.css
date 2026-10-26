@@ -2080,6 +2080,55 @@ button.proj-card-pool::before {
   color: var(--ink-tertiary);
 }
 
+/* Delegated work and its worktrees (delegation broker wave 4): a nested line of words, the pending row's register.
+   NOT a tap surface: nothing in wave 4 acts on one of these rows. The chips are words in a currentColor frame, the
+   .sess-workson idiom, so nothing is read out of colour. Neutral class names: this sheet names no broker word. */
+.proj-nest > .proj-work {
+  flex: 1;
+  min-width: 0;
+}
+.proj-work {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: var(--tap-min);
+  min-width: 0;
+  font-size: var(--fs-meta);
+  color: var(--ink-secondary);
+}
+.proj-work-parts {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.proj-work-parts > *:not(:first-child)::before {
+  content: '·';
+  margin: 0 var(--sp-1);
+  color: var(--ink-tertiary);
+}
+.proj-work-chip {
+  flex: none;
+  padding: 0 var(--sp-1);
+  border: 1px solid currentColor;
+  border-radius: var(--r-sm);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  color: var(--ink-secondary);
+}
+/* The two group headers: a disclosure in the Released fold's register. */
+.proj-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0;
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  color: var(--ink-tertiary);
+}
+
 /* F4 (cross-repo): the sentence under a rule-3 orphan. NOT a tap surface and
    never a --glow — it explains a row, it is not a row — and it takes
    `--ink-tertiary` on `.proj-card-body`'s own ground, the register

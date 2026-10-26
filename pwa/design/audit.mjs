@@ -850,6 +850,23 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the emptied card's own sentence about where its work went (spec §6, board-placement wave 2), same ground and register as .proj-abroad-line above — both sit directly on .proj-card-body's ground. Its selector names no ancestor, so no route could ground it",
   },
+  // ── delegated work and its worktrees on a project card (delegation broker wave 4, PR2) ──────────────────────
+  '.proj-work': {
+    under: ['var(--bg-surface)'],
+    why: "a delegated activity's, worktree's or unowned tree's line, nested in .proj-nest inside .proj-card-body, the .proj-pending register on the same card ground. Never a selected row (nothing in wave 4 opens or acts on one), and the selector names no ancestor, so no route could ground it",
+  },
+  '.proj-work-parts > *:not(:first-child)::before': {
+    under: ['var(--bg-surface)'],
+    why: "the middot between the cells of a .proj-work line, the .proj-pending-meta separator's twin on the same card ground. Registered separately for the reason the .auth-block-sub entry states",
+  },
+  '.proj-work-chip': {
+    under: ['var(--bg-surface)'],
+    why: "the inferred chip and the creating Bash call's chip on a raw worktree's line (D-6999), words in a currentColor frame like .sess-workson, on the same card ground; it paints no background of its own",
+  },
+  '.proj-group-toggle': {
+    under: ['var(--bg-surface)'],
+    why: "the card's two delegation group headers (Offline coordinator, Unowned work), <BareRow> disclosures in the Released fold toggle's register, on the same card ground. A rule of its own rather than a fourth member of that toggle rule, so no shipped key is rekeyed",
+  },
   '.proj-released-toggle, .proj-archived-toggle, .proj-children-toggle': {
     under: ['var(--bg-surface)'],
     why: "the card's fold toggles (workspace lifecycle spec §5.1), and since D-6088 the coordinator's folded-workers line, which sits in .proj-card-body on the same card ground; rekeyed when that selector joined the rule. Siblings of .proj-card-body inside the card, on the card's own ground. ONE rule since both became <BareRow>: they had declared the same seven declarations as each other as well as the six the component carries, and this key moved with them — a rule key is `<basename> <selector>`, so merging two selectors rekeys, which the gate said out loud rather than passing quietly. Neither sets a background of its own and the selector names no ancestor, so no route could ground it",

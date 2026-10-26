@@ -14,7 +14,7 @@
 // without touching localStorage.
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
-import { BareRow, Button } from '@ccrc/ui';
+import { BareRow, Button, Icon } from '@ccrc/ui';
 import type { FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary } from '../../../shared/api';
 import { navigate } from '../lib/router';
 import { orphanNote, type OrphanNote } from './orphanWords';
@@ -22,12 +22,14 @@ import { addWorkspaceLabel, poolOfPlacement, type ProjectPlacementRead } from '.
 import { formatElapsed } from './formatReset';
 import { releasedByProgramme, type FleetGroup } from './groupFleet';
 import { archivableReleased } from './archiveReleased';
-import { nestFleet, type FleetRow } from './nestFleet';
+import { nestFleet, type DelegationGroupKind, type FleetRow } from './nestFleet';
 import { childRunContext, workingOnCard, type FleetTreeGroup } from './fleetTree';
 import { ProjectCardHead } from './ProjectCardHead';
 import type { CardRollup, RolledRow } from './rollup';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, dispatchWindow, runForSession, waveLabel } from './runWords';
 import { SessionLine } from './SessionLine';
+import { sessionLabel } from './sessionLabel';
+import { GROUP_WORDS, activityLine, creatorChip, inferredChip, unownedLine, worktreeLine } from './delegationWords';
 import { actionDoor } from '../command/door';
 import './fleet.css';
 
@@ -108,6 +110,8 @@ export function ProjectCard({
   frameSeen = false,
   rollup,
   onToggleChildren,
+  offlineOpen = false,
+  unownedOpen = false,
 }: {
   group: FleetGroup;
   onOpen: (id: string) => void;
@@ -216,6 +220,11 @@ export function ProjectCard({
   rollup?: CardRollup;
   /** Open or close a coordinator's worker line, by the coordinator's id. */
   onToggleChildren?: (parentId: string) => void;
+  /** Whether the delegation broker's "Offline coordinator" and "Unowned work" groups are expanded (wave 4). The
+   *  `archivedOpen` inversion: under `<project>::offline-coordinator` and `<project>::unowned`, presence means EXPANDED,
+   *  so both start closed. */
+  offlineOpen?: boolean;
+  unownedOpen?: boolean;
 }): ReactNode {
   const collapsed = rollup?.collapsed ?? collapsedProp;
   // A measured row carries pool and placement from one `/api/projects` read.
@@ -263,8 +272,28 @@ export function ProjectCard({
   // `nestFleet` over the same two inputs, which is the identical answer.
   const rows: readonly RolledRow[] = rollup?.rows
     ?? ('rows' in group ? (group as FleetTreeGroup).rows : nestFleet(group.sessions, runs));
-  const rowKey = (row: RolledRow): string =>
-    row.kind === 'session' ? row.session.id : row.kind === 'pending' ? `spawn:${row.run.id}` : `workers:${row.parentId}`;
+  const rowKey = (row: RolledRow): string => {
+    switch (row.kind) {
+      case 'session': return row.session.id;
+      case 'pending': return `spawn:${row.run.id}`;
+      case 'summary': return `workers:${row.parentId}`;
+      case 'activity': return `activity:${row.activity.activityId}`;
+      case 'lease': return `lease:${row.lease.leaseId}`;
+      case 'unowned': return `unowned:${row.item.project}:${row.item.adminRecord}`;
+      case 'delegation-group': return `group:${row.group}`;
+    }
+  };
+  // Delegation broker wave 4: a group's members render only while the operator holds it open; the header always does.
+  const groupOpen: Readonly<Record<DelegationGroupKind, boolean>> = { 'offline-coordinator': offlineOpen, unowned: unownedOpen };
+  const memberOf = (row: RolledRow): DelegationGroupKind | null =>
+    row.kind === 'activity' || row.kind === 'lease' || row.kind === 'unowned' ? row.group : null;
+  const shownRows = rows.filter((row) => { const g = memberOf(row); return g === null || groupOpen[g]; });
+  // A worktree's `via` worker by its display name, or its raw id when the fleet does not carry it.
+  const viaLabel = (id: string | null): string | null => {
+    if (id === null) return null;
+    const s = coordOf(id);
+    return s === null ? id : sessionLabel(s);
+  };
   // Task 5: the hold reason's door, decided HERE because this is the level that
   // holds the runs. `runForSession` answers off the run rows — never by reading
   // the id out of the hold string, which stays display-only (its docstring
@@ -319,8 +348,55 @@ export function ProjectCard({
     />
   );
 
-  const rowBody = (row: RolledRow): ReactNode =>
-    row.kind === 'session' ? line(row.session, noteFor(row))
+  /** A delegation row's words, each a cell of one line (delegation broker wave 4). `delegationWords.ts` spells them. */
+  const workLine = (parts: readonly string[], title: string, tail: ReactNode = null): ReactNode => (
+    <div className="proj-work" title={title}>
+      <span className="proj-work-parts">
+        {parts.map((p, i) => <span key={i} className="proj-work-part">{p}</span>)}
+      </span>
+      {tail}
+    </div>
+  );
+
+  const rowBody = (row: RolledRow): ReactNode => {
+    if (row.kind === 'activity') {
+      const a = activityLine(row.activity);
+      return workLine(a.parts, a.title);
+    }
+    if (row.kind === 'lease') {
+      const w = worktreeLine(row.lease, viaLabel(row.via), workingOnCard({ project: row.lease.project }, group.project));
+      // D-6999: the chips are words, never colour alone, and nothing here acts on the row.
+      const chips = [inferredChip(row.lease), creatorChip(row.lease)];
+      return workLine(w.parts, w.title, <>
+        {w.sourceProject !== null && (
+          <span className="sess-workson" data-project={w.sourceProject} title={`works on ${w.sourceProject}’s code`}>
+            <Icon name="folder-code" />
+            <span className="sr-only">works on </span>
+            <span className="sess-workson-name">{w.sourceProject}</span>
+          </span>
+        )}
+        {chips.map((c, i) => c === null ? null : <span key={i} className="proj-work-chip" title={c.title}>{c.text}</span>)}
+      </>);
+    }
+    if (row.kind === 'unowned') {
+      const u = unownedLine(row.item);
+      return workLine(u.parts, u.title);
+    }
+    if (row.kind === 'delegation-group') {
+      const open = groupOpen[row.group];
+      return (
+        <BareRow
+          className="proj-group-toggle"
+          aria-expanded={open}
+          title={GROUP_WORDS[row.group].title}
+          onClick={() => onToggle?.(`${group.project}::${row.group}`)}
+        >
+          <span className="proj-card-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
+          {`${GROUP_WORDS[row.group].label} (${row.count})`}
+        </BareRow>
+      );
+    }
+    return row.kind === 'session' ? line(row.session, noteFor(row))
     : row.kind === 'pending' ? <PendingSpawn run={row.run} nowMs={nowMs} />
     : (
       // D-6088 rule 6: the coordinator's workers as one line, the Released fold's disclosure in the row's place.
@@ -343,6 +419,7 @@ export function ProjectCard({
         </span>
       </BareRow>
     );
+  };
 
   return (
     <section
@@ -377,7 +454,7 @@ export function ProjectCard({
           {/* D-5545: an orphaned worker's marker rides ITS ROW now — "coordinator gone" as the row's one
               attention marker (`orphanNote`'s presence, `SessionLine`'s `coordinator`) — instead of a second
               line under it that repeated the row's programme and wave. */}
-          {rows.map((row) => (
+          {shownRows.map((row) => (
             row.depth === 0 ? (
               // A Fragment, never a wrapper element: the top-level row's DOM stays byte-identical to the one that
               // shipped before the tree existed, and `.proj-card-body`'s column flex lays out its children directly.

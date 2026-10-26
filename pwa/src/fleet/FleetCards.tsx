@@ -10,7 +10,7 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import { useNow } from '@ccrc/ui';
-import { fleetTree } from './fleetTree';
+import { fleetTree, unplacedActivities } from './fleetTree';
 import { ProjectCard } from './ProjectCard';
 import { anyDispatchPending, isRunClosed } from './runWords';
 import { useFolded, useRollupPrefs } from './foldState';
@@ -34,6 +34,9 @@ export function FleetCards({ selectedId, onOpen }: {
   const roster = useStore((s) => s.roster);
   const pools = useStore((s) => s.pools);
   const fleetFrameSeen = useStore((s) => s.fleetFrameSeen);
+  // Delegation broker wave 4: the `delegation` frame, `null` when unavailable — never defaulted to an empty one, so
+  // an older server's screen claims nothing (spec §5.13).
+  const delegation = useStore((s) => s.delegation);
   // The unseen watermark, subscribed as `FleetScreen` subscribes it (seen.ts publishes; no re-read of storage).
   const acks = useSyncExternalStore(subscribeAcks, acksSnapshot);
   const flows = useFleetFlows();
@@ -62,7 +65,8 @@ export function FleetCards({ selectedId, onOpen }: {
   const [rollupPrefs, updateRollup] = useRollupPrefs();
   const rollNow = useRollupClock(sessions);
   // The tree the cards draw, once, and its rollup over the same groups (D-6088).
-  const tree = fleetTree(sessions, projects.knownProjects, activeRuns, acks);
+  const tree = fleetTree(sessions, projects.knownProjects, activeRuns, acks, delegation);
+  const unplaced = unplacedActivities(sessions, delegation);
   const rollup = rollupFleet(tree, rollupPrefs, Math.max(nowMs, rollNow), selectedId);
   // Rule 4's reset: a stored ▾ made in the other activity class, or an open worker line whose coordinator left, is
   // dropped — from a FRESH frame only, never from a cached snapshot (`fleetFrameSeen`). `prunePrefs` answers null when
@@ -85,7 +89,12 @@ export function FleetCards({ selectedId, onOpen }: {
   const archiveAll = chrome.archiveAll;
 
   return (
-    <div className="fleet-list" ref={listRef}>
+    <div
+      className="fleet-list"
+      ref={listRef}
+      data-delegation={delegation === null ? 'unavailable' : 'measured'}
+      data-delegation-unplaced={unplaced > 0 ? unplaced : undefined}
+    >
       {tree.map((g) => (
         <ProjectCard
           key={g.project}
@@ -163,6 +172,9 @@ export function FleetCards({ selectedId, onOpen }: {
           archivedOpen={folded.has(`${g.project}::archived`)}
           /* The same inversion, for the Released fold (workspace lifecycle spec §5.1). */
           releasedOpen={folded.has(`${g.project}::released`)}
+          /* The same inversion, for the delegation broker's two groups (wave 4): both start closed. */
+          offlineOpen={folded.has(`${g.project}::offline-coordinator`)}
+          unownedOpen={folded.has(`${g.project}::unowned`)}
           onArchiveReleased={flows.openArchiveAll}
           archivingReleased={archiveAll.archiving.has(g.project)}
         />

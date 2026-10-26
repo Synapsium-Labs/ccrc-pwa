@@ -15,6 +15,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { HOUR, MIN, NOW, asking, coordinatorFleet, sess } from './rollupFixture';
+import { activity, frame } from './delegationFixture';
+import { NEST_BRACKET } from '../src/fleet/ProjectCard';
 
 const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
@@ -129,6 +131,24 @@ describe.each([REFINED, INSTRUMENT] as const)('the fleet rollup in the %s fleet 
     cleanup();
     mount(skin);
     expect(cardOf('project-a').getAttribute('data-collapsed')).toBeNull();
+  });
+
+  it('W4-U31: a folded coordinator counts two live activities in its line and hides them; expanded, both nest', () => {
+    const store = mount(skin);
+    act(() => {
+      store.setState({ delegation: frame({ activities: [
+        activity({ activityId: 'a1', parentId: 'coord', displayName: 'map the tree' }),
+        activity({ activityId: 'a2', parentId: 'coord', displayName: 'read the plan', openedAt: '2026-10-26T10:01:00.000Z' }),
+      ] }) });
+    });
+    const c = cardOf('project-c');
+    const line = within(c).getByRole('button', { name: /5 workers/ });
+    expect([...line.querySelectorAll('.proj-children-part')].map((el) => el.textContent)).toContain('2 delegated');
+    expect(c.querySelectorAll('.proj-work')).toHaveLength(0);
+    fireEvent.click(line);
+    const rows = [...cardOf('project-c').querySelectorAll('.proj-work')];
+    expect(rows).toHaveLength(2);
+    for (const r of rows) expect(r.closest('.proj-nest')?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);
   });
 });
 
