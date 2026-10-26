@@ -187,8 +187,13 @@ _node_publish() {
   mkdir -p "$dir" "$envd" || { NODE_WHY="cannot create $dir or $envd"; return 1; }
   for b in node npm npx; do
     tmp="$dir/$b.tmp.$$"
-    # `mv -fT` renames over an existing link in one rename(2) (the flip's idiom, ccd/ccrc `_plat_mv_notdir`).
-    { ln -s "$NODE_BIN_DIR/$b" "$tmp" && mv -fT -- "$tmp" "$dir/$b"; } || { rm -f "$tmp"; NODE_WHY="cannot publish $dir/$b"; return 1; }
+    # `mv -f` renames over an existing link (or a dangling one) in one rename(2). Not GNU `mv -T`, which BSD mv lacks,
+    # and not ccd/ccrc's `_plat_mv_notdir`: this library is also sourced where that platform block is absent (install.sh,
+    # deploy.sh's box-side command). So its darwin arm's two guards are spelled here: a plain mv moves INTO a directory,
+    # so a real directory is refused and a link to one is removed first.
+    if [ -d "$dir/$b" ] && [ ! -L "$dir/$b" ]; then NODE_WHY="cannot publish $dir/$b: a directory is in the way"; return 1; fi
+    if [ -L "$dir/$b" ] && [ -d "$dir/$b" ]; then rm -f -- "$dir/$b" || { NODE_WHY="cannot publish $dir/$b"; return 1; }; fi
+    { ln -s "$NODE_BIN_DIR/$b" "$tmp" && mv -f -- "$tmp" "$dir/$b"; } || { rm -f "$tmp"; NODE_WHY="cannot publish $dir/$b"; return 1; }
   done
   tmp="$envd/50-ccrc-node.conf.tmp.$$"
   {

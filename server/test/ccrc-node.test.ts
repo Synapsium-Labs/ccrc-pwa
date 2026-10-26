@@ -6,7 +6,7 @@
 // case that needs a terminal redefines that function after sourcing. Chosen over
 // `script -qc` because `script`'s flags differ between util-linux and BSD.
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { mkTmp } from './tmpHelpers.js';
@@ -232,6 +232,25 @@ describe('_node_publish', () => {
     publish(fx, path.join(fx.nvm, 'versions/node/v22.16.0/bin'));
     const calls = readFileSync(log, 'utf8');
     for (const n of ['node', 'npm', 'npx']) expect(calls).toMatch(new RegExp(`${n}\\.tmp\\.\\d+ \\S*node-bin/${n}\\n`));
+  });
+  it('a directory where a link goes is refused, never written into; a link to one is replaced (no GNU mv -T)', () => {
+    // A plain `mv` moves INTO a directory and answers 0, so without the guard the temp link lands inside it and the
+    // publish reports success with no link placed.
+    const fx = fixture(['v22.16.0'], null);
+    const bin = path.join(fx.nvm, 'versions/node/v22.16.0/bin');
+    const npm = path.join(links(fx), 'npm');
+    mkdirSync(npm, { recursive: true });
+    const r = run(fx, `NODE_BIN_DIR="${bin}"; _node_publish; echo "rc=$? why=$NODE_WHY"`);
+    expect(r.out).toMatch(/^rc=1 why=cannot publish \S*node-bin\/npm: a directory is in the way$/);
+    expect(spawnSync('ls', ['-A', npm], { encoding: 'utf8' }).stdout).toBe('');
+    // A link to a directory is replaced by the node link, and the directory it named is left untouched.
+    const elsewhere = path.join(fx.home, 'elsewhere');
+    mkdirSync(elsewhere);
+    rmSync(npm, { recursive: true });
+    symlinkSync(elsewhere, npm);
+    expect(publish(fx, bin).out).toBe('rc=0');
+    expect(readlinkSync(npm)).toBe(path.join(bin, 'npm'));
+    expect(spawnSync('ls', ['-A', elsewhere], { encoding: 'utf8' }).stdout).toBe('');
   });
   it('a box with no user manager: files written, no reload, rc 0', () => {
     const fx = fixture(['v22.16.0'], null);
