@@ -10996,7 +10996,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 // from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
-export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1';
+export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -11018,6 +11018,13 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  (it edits `bucket.test.ts` on Task 1's `background` and Task 9's `dispatch-live-gate.test.ts`) and carries the
    *  stall clocks itself; `stall-verdict.test.ts` pins them beside the word. */
   'hook-main-state-v1': true,
+  /** D-7031 (Task Q3g, ARCH-58's server half): this server's session stream carries `pairing` (`AskPairing`) at the top
+   *  level of its `ask` and `dialog` frames, computed by `server/src/pane/askPairing.ts#pairEnvelope` from the envelope
+   *  and the dialog that stream last sent, and held equal to `pwa/src/session/askLive.ts` over Q3a's corpus
+   *  (`ask-pairing.test.ts`). Absent when either side is absent or the envelope is an approval; never a new frame, and
+   *  never inside `dialog`. W7 gates its client on this word before it reads the field and deletes its own pairing.
+   *  Added by the change that builds the field and its two senders, cut after both. */
+  'ask-pairing-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */

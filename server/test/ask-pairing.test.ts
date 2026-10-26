@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Dialog, HookAskQuestion } from '../../shared/api.js';
+import { SERVER_CAPS, type Dialog, type HookAskQuestion } from '../../shared/api.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import {
   askScreen, liveQuestion, namedQuestion, pairEnvelope, pairMatches, questionCorresponds, shownQuestion, titleMatches,
@@ -97,4 +97,10 @@ describe('the session stream sends the pairing on the frames it already sends (T
       if (frame.type === 'dialog') expect('pairing' in frame.dialog, `${at}: never inside dialog`).toBe(false);
     });
   }, 30_000);
+});
+
+describe('the cap word W7 gates on (Task Q3g)', () => {
+  it('SERVER_CAPS advertises ask-pairing-v1', () => {
+    expect(SERVER_CAPS).toContain('ask-pairing-v1');
+  });
 });
