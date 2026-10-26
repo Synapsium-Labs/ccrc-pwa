@@ -386,13 +386,19 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   //    the server stated no envelope at that moment: the ask ended during the drop, OR the server flapped (a failed
   //    hook-state read, or an aged-envelope keep decision restarting). Either releases the keys, the safe direction. If the
   //    store holds no envelope, that first `ask_cleared` is only the connection speaking, and counts nothing.
-  //  - A HOOKED ask adds its envelope (`askKey`: the same for every question and the review, so the keys stay engaged
-  //    question → review, review ← question and question → question) and a different envelope is a different ask.
+  //  - A HOOKED ask adds its envelope (`askKey`: the same for every question and the review, so on the phone the keys stay
+  //    engaged question → review, review ← question and question → question; at the desk the screen is joined to it, below)
+  //    and a different envelope is a different ask.
   //  - An ask-backed surface with no envelope (the transcript's copy of a question, its review, an unreadable ask: `askLike`,
   //    decided from `source`, the held source when the surface is held) adds the word `ask`: the ask frames this controller
   //    reads carry no per-ask id, and the pane dialog's id (`sha1(options + title)`) changes on EVERY screen, so the
   //    generation alone is the ask.
   //  - A plain menu or the terminal door adds its pane dialog's id: each such screen is its own ask, as it always was.
+  //  - AT THE DESK (R115) the identity also carries the screen showing (hooked: `screenNow`; otherwise the pane dialog's id),
+  //    so a screen change this client did not send is a new identity: it ends the engagement and, when the keyboard was engaged
+  //    or focus is in the card, fences it (`useAskEngagement`). The phone's identity is unchanged. The operator accepted the
+  //    cost (R115, amending R64 for these changes): no desk continuity across an external screen change, and a redraw under a
+  //    new aged dialog id fences too.
   // R102, R105, R106 (AT THE DESK; the phone's Sheet is unchanged): the identity above ends an engagement when the ASK changes.
   // Two more acts end or lift it, both owned by `useAskEngagement`. A send this client initiates calls `engagement.release()`
   // in `claim()`, in the same event: the engagement ends, the next screen takes no automatic focus, and a fence stops the keys
@@ -401,21 +407,24 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
   // event, and the raise's eligibility is captured in render (`raiseMark`), so one made during a flight or in the gap is spent
   // and nothing replays it after the reply. Tab moves focus and never unlocks. RESIDUALS, unchanged and unwaived: an identical
   // replacement driven externally, a request already issued (landing on an identical replacement), and acting on what is shown.
-  // KNOWN GAP, kept plain: two DIFFERENT aged asks back to back with no clear between them cannot be told from two screens
-  // of one aged ask, so they share an identity and the engagement continues into the second. The transcript's events do hold
-  // the AskUserQuestion call's `toolId`, which would tell them apart; this controller deliberately does not read it (the
-  // transcript lags the pane and rotates, and reading it would add a coupling and a parser). The continuation only ever takes
-  // focus that the engaged control's replacement dropped to the body (or that is already inside the card), never external focus.
+  // KNOWN GAP, kept plain: at the desk two DIFFERENT aged asks back to back with no clear between them are told apart by their
+  // pane dialog ids (R115), but two BYTE-IDENTICAL screens (the same dialog id) are still one identity. The transcript's events
+  // do hold the AskUserQuestion call's `toolId`, which would tell even those apart; this controller deliberately does not read
+  // it (the transcript lags the pane and rotates, and reading it would add a coupling and a parser). The continuation only ever
+  // takes focus that the engaged control's replacement dropped to the body (or that is already inside the card), never external
+  // focus.
   const askEpoch = useStore((s) => s.askEpoch);
   const askLike = source.kind === 'structured' || source.kind === 'review' || source.kind === 'ask-unreadable';
-  const askIdentity = closed || (askKey === null && dialog === null) ? null
-    : `${askEpoch}:${askKey ?? (askLike ? 'ask' : `menu:${dialog?.id}`)}`;
   // An approval is one screen; a question ask is one per question plus its review (`askScreen`).
   const screenNow = !hooked ? null : 'approval' in envelope ? (dialog === null ? null : 'approval') : askScreen(envelope, dialog);
+  const desk = useDesk();
+  // R115: the screen showing, joined to the identity at the desk only (hooked: `screenNow`; otherwise the pane dialog's id).
+  const screenKey = hooked ? screenNow : (dialog?.id ?? null);
+  const askIdentity = closed || (askKey === null && dialog === null) ? null
+    : `${askEpoch}:${askKey ?? (askLike ? 'ask' : `menu:${dialog?.id}`)}${desk ? `|screen:${screenKey}` : ''}`;
   // D-6326: INLINE there is no dismissal (the card covers nothing, and has no ✕, scrim or "Not now"), so at the desk a hide
   // never makes it vanish: `leave()` opening the terminal leaves the question where it is. The slots stay, so a crossing
   // below 900 reads what was waved away, and `raise` still clears them.
-  const desk = useDesk();
   const open = !closed && (desk || (hooked
     ? !(askKey === dismissedKey && (screenNow === null || screenNow === dismissedScreen))
     : dialog !== null && dialog.id !== dismissedKey && dialog.id !== dismissedDialogId));

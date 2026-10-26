@@ -40,11 +40,13 @@
 //   envelope for a hooked ask, to one word for an ask-backed surface with no envelope (the transcript's copy of a
 //   question, its review, an unreadable ask: the ask frames this controller reads carry no per-ask id and the pane
 //   dialog's id changes per screen), and to the pane dialog's id for a plain menu or the terminal door (each such
-//   screen is its own ask). One known gap, kept plain: two DIFFERENT aged asks back to back with no clear between
-//   them cannot be told from two screens of one aged ask, so they share an identity and the engagement continues into
-//   the second (the transcript's events hold the AskUserQuestion call's `toolId`, which this controller deliberately
-//   does not read: the transcript lags and rotates, and it would add a coupling and a parser); it only ever takes
-//   focus that the engaged control's replacement dropped to the body, never focus that is outside the card.
+//   screen is its own ask). One known gap, kept plain: two BYTE-IDENTICAL aged screens (the same pane dialog id)
+//   are one identity (the transcript's events hold the AskUserQuestion call's `toolId`, which this controller deliberately
+//   does not read: the transcript lags and rotates, and it would add a coupling and a parser); the continuation only ever
+//   takes focus that the engaged control's replacement dropped to the body, never focus that is outside the card. At the
+//   desk (R115) the identity also carries the screen showing, so a new question, the review or a different aged ask with
+//   no clear between them is a new identity, which ends the engagement and, when it was engaged or focus is in the card,
+//   raises the fence.
 // - R102, R105, R106 (D-6326; the operator's ruling after review 944) AT THE DESK, a send THIS client initiates ends the
 //   engagement for good, and the card is then dead to the keyboard until the operator re-enters on purpose:
 //     RELEASE. `DialogSheet`'s `claim()`, the one gate every send passes (an option, own words, a multiSelect commit, a tab
@@ -65,10 +67,12 @@
 //     question during the flight pre-authorizes nothing, and a NEW one is needed after the reply. Tab and a `focusin` (script
 //     focus, the own-words field) clear nothing: no code in the ask assigns focus after the release (a census test pins the
 //     list of focus movers), and the own-words field takes focus only on a deliberate open (`OwnWords`).
-//     RESIDUALS, unchanged and not waived: an externally driven, byte-identical replacement with no observed clear (the
-//     known gap above) still continues an engagement made by non-answer keys; a request already issued can still land on a
-//     byte-identical replacement (the desktop route compares content-derived ids); and a deliberate re-entry acts on
-//     whatever the card then shows.
+//     R115: a change of the ask's identity this client did not send (an external screen change, a different ask) ends the
+//     engagement the same way and raises the same fence, when the keyboard was engaged or focus is in the card at that commit.
+//     RESIDUALS, not waived: an externally driven, BYTE-IDENTICAL replacement (no identity change this client can see)
+//     still continues an engagement made by non-answer keys; a request already issued can still land on a byte-identical
+//     replacement (the desktop route compares content-derived ids; no client fence revokes an issued request); and a
+//     deliberate re-entry acts on whatever the card then shows.
 // - A held-down digit or arrow across tabs is no key at all (`askKeyAction` reads `repeat`), and a send the sheet
 //   already has in flight refuses another at the ONE gate every send passes, its `claim` (a box's toggle reads the
 //   same `sending`), so this hook keeps no second gate of its own.
@@ -115,7 +119,9 @@ export interface AskEngagement {
  * string. It holds the identity engaged and lets go, in one layout effect, as soon as the identity is any other (a
  * replacement, a clear, even in the same batch), so an ask that comes back later with equal content starts unengaged.
  * It also lets go on deliberate movement out of the card. Focus that falls to the body because the focused row
- * unmounted fires neither event, so that case stays engaged: it is the one continuation.
+ * unmounted fires neither event, so that case stays engaged: it is the one continuation. At the desk it now survives only
+ * a screen change that keeps the identity (a redraw of the same hooked screen under a new pane id); a change of identity
+ * this client did not cause also raises the fence when the keyboard was engaged or focus is in the card (R115).
  */
 export function useAskEngagement(identity: string | null, eligible: () => boolean = () => true): AskEngagement {
   const held = useRef<string | null>(null);
@@ -133,9 +139,18 @@ export function useAskEngagement(identity: string | null, eligible: () => boolea
   // ONE release: whenever the identity is not the one engaged (a different ask, a replacement, a clear), the engagement is
   // gone for good, in the commit that shows the new identity and before any focus timer reads it. Comparing at read time
   // instead would let a replaced ask regain it when byte-identical content came back (A -> B -> A, no clear between).
+  // R115: such a change this client did not cause also raises the fence when the keyboard was engaged or focus is inside the
+  // inline card at this commit, because a row node the new screen reused can keep focus with no event. With focus outside the
+  // card and no engagement it fences nothing. (The desk's identity carries the screen, so a screen change is one.)
   useLayoutEffect(() => {
     now.current = identity;
-    if (held.current !== identity) held.current = null;
+    if (held.current !== identity) {
+      const at = document.activeElement;
+      if (held.current !== null || (at instanceof Element && at.closest('[data-ask-surface="inline"]') !== null)) {
+        fenced.current = true;
+      }
+      held.current = null;
+    }
   }, [identity]);
   useEffect(() => {
     const away = (e: Event): void => {
