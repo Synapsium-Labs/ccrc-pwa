@@ -19,6 +19,7 @@ import {
 import { redactCommand } from './redact.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import type { ApprovalRow, AskRow, CoordStore } from './store.js';
+import { decidedIn } from './questions.js';
 
 /** The digest's own kebab words (its line kinds and its refusals), for `mail-routes.test.ts`'s scan of every quoted
  *  kebab token under `server/src/coord`: admitted through this guard, derived from `shared/api.ts`'s tables, never a
@@ -106,13 +107,12 @@ export type DigestBuilt = Pick<DigestAnswer, 'totals' | 'byCoordinator' | 'lines
  *  stops: the window's end by default; a caller reading a window that has not closed yet passes `now`. */
 export function buildDigest(store: CoordStore, dayStartMs: number, dayEndMs: number, ageEndMs = dayEndMs):
   { ok: true; digest: DigestBuilt } | { ok: false; detail: string } {
-  const asks = store.digestAsks(dayStartMs, dayEndMs);
-  if (!asks.ok) return asks;
-  const approvals = store.digestApprovals(dayStartMs, dayEndMs);
-  if (!approvals.ok) return approvals;
+  // D-7026: both tables through `coord/questions.ts`, the asks first; a refusal of either is the refusal.
+  const decided = decidedIn(store, { fromMs: dayStartMs, toMs: dayEndMs });
+  if (!decided.ok) return decided;
   const inWindow = (at: number): boolean => at >= dayStartMs && at < dayEndMs;
   const lines: DigestLine[] = [];
-  for (const { ask, corrected } of asks.rows) {
+  for (const { ask, corrected } of decided.asks) {
     const d = askDecision(ask);
     if (d === null || !inWindow(d.at)) continue;
     lines.push({
@@ -122,7 +122,7 @@ export function buildDigest(store: CoordStore, dayStartMs: number, dayEndMs: num
     });
   }
   let guardForbidden = 0;
-  for (const r of approvals.rows) {
+  for (const r of decided.approvals) {
     // D-5492: the guard's refusals are the requests the classifier classed `forbidden`; counted, never lines.
     if (r.releaseReason === 'forbidden' && inWindow(r.askAt)) guardForbidden += 1;
     const d = approvalDecision(r);
