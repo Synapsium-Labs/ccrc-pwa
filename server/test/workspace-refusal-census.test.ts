@@ -15,6 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ARCHIVE_REFUSAL_CODES, LC_REFUSAL_WORD } from '../../shared/api.js';
 import { SENTENCES } from '../src/wsaudit.js';
+import { parseFile } from './scan/parse.js';
 import {
   WORKSPACE_TRANSITIONS, WORKSPACE_VERBS, WORKSPACE_STATES, WORKSPACE_REFUSALS_BY_VERB, isWorkspaceRefusal,
   isWorkspaceVerb, isWorkspaceState, workspaceEdge,
@@ -200,9 +201,10 @@ describe('WORKSPACE_TRANSITIONS answers the census (ARCH-41, #776)', () => {
   // of an edge (ccd's bash enforcement is the anti-corruption layer's and is pinned by the census); it must take each
   // refusal's code and status from the table, spelling neither.
   it('archiveDoor.ts takes every refusal from workspaceEdge: no literal status at a refuse() site', () => {
-    expect(DOOR).toMatch(/workspaceEdge/);
-    expect(DOOR).toMatch(/shared\/workspaceTransitions\.js/);
+    const door = parseFile(path.join(ROOT, 'server/src/coord/archiveDoor.ts'));
+    const fromTable = door.imports.filter((i) => /shared\/workspaceTransitions\.js$/.test(i.specifier)).flatMap((i) => i.names);
+    expect(fromTable).toContain('workspaceEdge');
     // The only literal status left is `unsupported()`'s 501, a route-shape word with no state behind it.
-    expect((DOOR.match(/\b(?:refuse|reply)\(\s*\d{3}\b/g) ?? []).map((m) => m.replace(/\s+/g, ''))).toEqual(['reply(501']);
+    expect([...DOOR.matchAll(/\b(?:refuse|reply)\(\s*\d{3}\b/g)].map((m) => m[0].replace(/\s+/g, ''))).toEqual(['reply(501']);
   });
 });

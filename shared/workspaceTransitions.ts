@@ -18,7 +18,7 @@
  * `main` (a project's main checkout, not a workspace), `workspace` (the row is a workspace), `held` (a program holds it)
  * and `rowless` (no registry row names the id).
  */
-import type { ArchiveRefusal } from './api.js';
+import { ARCHIVE_REFUSALS, type ArchiveRefusal } from './api.js';
 
 export type WorkspaceVerb = 'archive' | 'restore' | 'forget' | 'reap' | 'expire' | 'reclaim' | 'collect';
 const WORKSPACE_VERB_MAP: Record<WorkspaceVerb, true> = {
@@ -56,13 +56,13 @@ export interface CcdWorkspaceEdge {
 export type WorkspaceTransition = ServerWorkspaceEdge | CcdWorkspaceEdge;
 
 export const WORKSPACE_TRANSITIONS: readonly WorkspaceTransition[] = [
-  { verb: 'archive', from: ['live'], refusal: 'status-unknown', by: 'server', status: 409, precondition: 'the turn could not be measured, whatever the consents' },
-  { verb: 'archive', from: ['live'], refusal: 'session-busy', by: 'server', status: 409, precondition: 'the turn is in progress and `interrupt` was not given' },
-  { verb: 'archive', from: ['live', 'stopped'], refusal: 'worktree-gone', by: 'server', status: 409, precondition: 'a workspace whose worktree the box proved gone' },
-  { verb: 'archive', from: ['live'], refusal: 'run-open', by: 'server', status: 409, precondition: 'the session is the worker of a non-terminal run and `force` was not given' },
-  { verb: 'archive', from: ['live'], refusal: 'coordinator-has-open-runs', by: 'server', status: 409, precondition: 'the session claims a non-terminal run and `programme:end` was not given, or the store is unreadable' },
-  { verb: 'archive', from: ['live'], refusal: 'programme-partly-ended', by: 'server', status: 409, precondition: 'ending the programme was refused or threw part-way, so nothing is stopped or archived' },
-  { verb: 'archive', from: ['live', 'stopped'], refusal: 'manifest-unbuildable', by: 'server', status: 409, precondition: 'ccd could not build the archive manifest (ccd refuses; the door reads its answer, ccdArchiveRefusal)' },
+  { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.statusUnknown, by: 'server', status: 409, precondition: 'the turn could not be measured, whatever the consents' },
+  { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.sessionBusy, by: 'server', status: 409, precondition: 'the turn is in progress and `interrupt` was not given' },
+  { verb: 'archive', from: ['live', 'stopped'], refusal: ARCHIVE_REFUSALS.worktreeGone, by: 'server', status: 409, precondition: 'a workspace whose worktree the box proved gone' },
+  { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.runOpen, by: 'server', status: 409, precondition: 'the session is the worker of a non-terminal run and `force` was not given' },
+  { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.coordinatorHasOpenRuns, by: 'server', status: 409, precondition: 'the session claims a non-terminal run and `programme:end` was not given, or the store is unreadable' },
+  { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.programmePartlyEnded, by: 'server', status: 409, precondition: 'ending the programme was refused or threw part-way, so nothing is stopped or archived' },
+  { verb: 'archive', from: ['live', 'stopped'], refusal: ARCHIVE_REFUSALS.manifestUnbuildable, by: 'server', status: 409, precondition: 'ccd could not build the archive manifest (ccd refuses; the door reads its answer, ccdArchiveRefusal)' },
   { verb: 'restore', from: ['live', 'stopped', 'asleep'], refusal: 'not-archived', by: 'ccd', precondition: 'no archive stamp stands for the session' },
   { verb: 'restore', from: ['archived'], refusal: 'worktree-missing', by: 'ccd', precondition: 'the recorded worktree directory is gone' },
   { verb: 'restore', from: ['archived'], refusal: 'in-progress', by: 'ccd', precondition: 'an expiry or reclaim breadcrumb of the workspace stands' },
@@ -104,8 +104,8 @@ export const WORKSPACE_TRANSITIONS: readonly WorkspaceTransition[] = [
   { verb: 'reap', from: ['archived'], refusal: 'base-missing', by: 'ccd', precondition: 'the base branch no longer resolves' },
   { verb: 'reap', from: ['archived'], refusal: 'tree-differs', by: 'ccd', precondition: 'the merge cannot be proven to hold the branch work' },
   { verb: 'reap', from: ['archived'], refusal: 'clips-unreadable', by: 'ccd', precondition: 'the pasted-image directory could not be listed' },
-  { verb: 'reap', from: ['archived'], refusal: 'session-busy', by: 'ccd', precondition: 'the session is mid-turn' },
-  { verb: 'reap', from: ['archived'], refusal: 'status-unknown', by: 'ccd', precondition: 'the session status could not be read' },
+  { verb: 'reap', from: ['archived'], refusal: ARCHIVE_REFUSALS.sessionBusy, by: 'ccd', precondition: 'the session is mid-turn' },
+  { verb: 'reap', from: ['archived'], refusal: ARCHIVE_REFUSALS.statusUnknown, by: 'ccd', precondition: 'the session status could not be read' },
   { verb: 'reap', from: ['archived'], refusal: 'held', by: 'ccd', precondition: 'a program holds the workspace' },
   { verb: 'reap', from: ['archived'], refusal: 'in-progress', by: 'ccd', precondition: 'another cleanup of the workspace holds the lock' },
   { verb: 'reap', from: ['archived'], refusal: 'state-changed', by: 'ccd', precondition: 'the workspace changed since the audit the token fingerprints' },
