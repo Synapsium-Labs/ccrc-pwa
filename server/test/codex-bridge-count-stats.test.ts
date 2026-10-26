@@ -390,9 +390,9 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     expect(doc.since).toBe('2026-01-01T00:00:00.000Z');
   });
 
-  // The whole-wave fix round, Z1 (D-TBD-markers-clear-on-restart): `unrecognised` and `overflow` are markers, which
-  // no change to known.py can explain, so the load carries neither in `unexplained`; each comes back only when the
-  // bridge meets such a name again. A real unexplained name, and every `names` counter, is carried as before.
+  // The whole-wave fix round, Z1: `unrecognised` and `overflow` are markers, which no change to known.py can explain,
+  // so the load carries neither in `unexplained`; each comes back only when the bridge meets such a name again. A real
+  // unexplained name, and every `names` counter, is carried as before.
   it('a restart clears the unrecognised and overflow markers, and carries a real unexplained name', async () => {
     const { home, file } = lane('cb-stats-markers-');
     const planted = {
