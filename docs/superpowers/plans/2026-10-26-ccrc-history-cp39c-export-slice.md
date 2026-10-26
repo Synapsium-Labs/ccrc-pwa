@@ -183,6 +183,7 @@ Outside both slices (before them, unbudgeted, as today): `measureSegmentListing`
     - `export_attempt_ms` is `String(T)`, `export_pass_ms` is null, `segmentsOf(box)` is `[]`, and both marks are null.
   - (e) On a run with time left, the slice holds what the run has left, not just its floor. The run's limits are `{ maxMs: 2 * x9Lib.EXPORT_SLICE_MS }` (the default run is shorter than the floor). The clock answers `T` until the temp exists, then `T + x9Lib.EXPORT_SLICE_MS + 1_000`. Expect:
     - CONTROL: `x9Lib.EXPORT_SLICE_MS + 1_000` is below `2 * x9Lib.EXPORT_SLICE_MS`.
+    - CONTROL: `flipped` is true, as in (d), so the case cannot pass without reaching the writer (added by the worker's per-task review).
     - `r` matches `{ state: 'written', rows: 2, complete: true }`.
   - (f) The measured defect, through `tick()`. Build the context as CP-39's `pass` helper does (history-derive.test.ts about :1678-1690): `SW.passCtx({ home: box.home, P, ids: SW.idsFromFiles(P), now: () => T, out: () => undefined, parsed: { homes: box.homes, secrets: [], unanswered: [], rosterUnreadable: false }, deps: { managedSettings: [], statfs: roomy }, pause: null, ingest: true })`, with no readdir patch. Then set `ctx.budget.startMs = T - (RUN_BUDGET_MS + 10_000)`: the run is spent before step 1. Run `SW.tick(db, ctx)` on a writer (`onStore`), with stderr spied. Expect:
     - CONTROL: `SW.budgetLeft(ctx.budget)` is false before the tick.
@@ -191,16 +192,16 @@ Outside both slices (before them, unbudgeted, as today): `measureSegmentListing`
     - Both rows are marked with that segment.
 
 - [ ] **Step 2: Run, and record the reds.**
-  `./node_modules/.bin/vitest run test/history-export.test.ts -t "CP-39c"` (from `server/`, foreground, timeout at least 600000). Predicted, for the worker to measure:
-  - (a) red: `expected undefined to be 180000`.
-  - (b) red, both arms: `expected { state: 'held', segment: null, rows: 0, … } to match object { state: 'written', rows: 2, complete: true }`.
+  `./node_modules/.bin/vitest run test/history-export.test.ts -t "CP-39c"` (from `server/`, foreground, timeout at least 600000). Measured (6 failed, 1 passed, 7 run), as predicted:
+  - (a) red: `expected undefined to be 180000 // Object.is equality`.
+  - (b) red, both arms: `expected { state: 'held', segment: null, …(4) } to match object { state: 'written', rows: 2, …(1) }`.
   - (c) green. Today no step reads the budget on a waiting step. On the admitted step, the run has bytes left, so `origin/main`'s `exportPass` passes `room <= 0` and reads the clock through `budgetLeft`: the second CONTROL's counter reads 1. M3 is its red.
-  - (d) red at the `flipped` CONTROL: `expected false to be true` (the pass is held before it selects).
-  - (e) red at its CONTROL on the undefined constant (`NaN` is not below `NaN`).
+  - (d) red at the `flipped` CONTROL: `CONTROL: the pass reached its writer: expected false to be true` (the pass is held before it selects).
+  - (e) red at its CONTROL on the undefined constant: `CONTROL: the late clock is inside the run: expected NaN to be less than NaN`.
   - (f) red: `expected [] to deeply equal [ '1.<writer>.db' ]`.
-  Then run `-t "the selection reaches the due rows"`. Predicted: four cases red on E1's wording, at three `heldLine` assertion sites: the two direct-`exportPass` (c) cases (about :2154 and :2191, asserting at about :2177 and :2213) and both arms of the held-early pair (a loop over `bytes` and `clock`, about :2229, asserting at about :2246). Record what is measured.
+  Then run `-t "the selection reaches the due rows"`. Measured (4 failed, 9 passed), as predicted: four cases red on E1's wording, at three `heldLine` assertion sites: the two direct-`exportPass` (c) cases (received "held by the run's budget (90000 ms, 536870912 bytes)") and both arms of the held-early pair (a loop over `bytes` and `clock`; received "(90000 ms, 0 bytes)" and "(0 ms, 536870912 bytes)").
 
-- [ ] **Step 3a: The constants alone.** Add the pass's two lib.mjs exports and their lib.d.mts lines only, and re-run the CP-39c filter. Predicted: (a), (c) and (e) green ((e) on the run's own 360 s); (b), (d) and (f) red as before. Record what is measured.
+- [ ] **Step 3a: The constants alone.** Add the pass's two lib.mjs exports and their lib.d.mts lines only, and re-run the CP-39c filter. Measured (4 failed, 3 passed), as predicted: (a), (c) and (e) green ((e) on the run's own 360 s); (b) both arms, (d) and (f) red with Step 2's text.
 
 - [ ] **Step 3b: The pass's slice.**
   - lib.mjs: the constants' doc says that the pass runs on its own slice of the one run budget (D-6974). It says that 180 s is *chosen* from a measurement: the pass's fixed cost before the writer's first budget check, about 8-11 s of CPU plus cold IO, is about 20-110 s of wall clock at the unit's measured share, and 180 s leaves about 70 s of writing at 0.1 of a core; the floor is paid on at most one tick in 30. It says that the bytes are the segment bound, which the preflight already admits on the home filesystem, and that neither is a `DERIVE_SHARES` entry, because a share cuts ingest's ceiling on every tick.
@@ -211,12 +212,12 @@ Outside both slices (before them, unbudgeted, as today): `measureSegmentListing`
   - `noteExportPassHeld`: the line becomes `history-sweep: the export pass was held by its slice of the run's budget (${ctx.budget.maxMs} ms, ${ctx.budget.maxBytes} bytes) before it wrote a due row; it tries again at its next interval`. Its comment says that the pass runs on its slice (D-6974), and the line names the slice's limits, both of them (D-6976).
   - Reword the comments the Files table names for the pass: "the run's budget" becomes "its slice of the run's budget" where it means the pass's budget. `exportPass`'s early-held comment says that through `exportStep` this branch is reached only by a zero floor over a spent run, and otherwise only by a direct caller on the run's budget. It names no third route.
   - The tick docstring's step 23 adds "on its own slice of the run's ONE budget (D-6974)". The step must still start with `` `exportStep` `` (history-sweep.test.ts's F39 describe reads it). The D-6936 comment (about :3723) adds: "and, on a step whose export runs, the export's floors, the pass's unbudgeted spans and the check's unbudgeted prefix (D-6974, D-6975)".
-  Re-run the CP-39c filter: all green.
+  Re-run the CP-39c filter: all green (measured: 7 passed).
 
-- [ ] **Step 4: The cases this changes, red first.** Run `-t "the selection reaches the due rows"`. Predicted, for the worker to measure:
-  - the held-early pair (about :2229, `exportStep` on `{ maxBytes: 0 }` and `{ maxMs: 0 }`) is red: `written` where `held` was pinned. Those cases pin the defect's own mechanism;
-  - the (f) pair (about :2268, `exportStep` with `limits: { maxBytes }` for a small room) stays green, but its room is now the floor, so "the first row forced past a small room" no longer happens.
-  Record both, then Step 5.
+- [ ] **Step 4: The cases this changes, red first.** Run `-t "the selection reaches the due rows"`. Measured (2 failed, 11 passed), as predicted:
+  - the held-early pair (`exportStep` on `{ maxBytes: 0 }` and `{ maxMs: 0 }`) is red: `held: the budget was spent before the selection began: expected { state: 'written', …(5) } to deeply equal { state: 'held', segment: null, …(4) }`. Those cases pin the defect's own mechanism;
+  - the (f) pair (`exportStep` with `limits: { maxBytes }` for a small room) stays green, but its room is now the floor, so "the first row forced past a small room" no longer happens.
+  Then Step 5 (measured after E2 and E3: 13 passed).
 
 - [ ] **Step 5: In place (D-6976).**
   - E2: the held-early pair. Its first `exportStep` call (at `T`) adds `exportSliceFloor: ZERO_FLOOR` to `deps`. Its title becomes `(c) an export step whose slice starts spent (a zero floor over a spent run: ${spent}) records its attempt and says so once, so the next step waits its interval; a step with a budget that lasts then writes the rows and clears the record`. The comment above it (about :2224-2227) says that the pass runs on its own slice (D-6974), so through the step only a zero floor (the seam) over a spent run reaches this hold. Its `heldLine` arguments stay.
@@ -234,7 +235,7 @@ Outside both slices (before them, unbudgeted, as today): `measureSegmentListing`
   - `./node_modules/.bin/vitest run test/single-definition` (a directory filter)
   - `./node_modules/.bin/vitest run test/single-definition-pin.test.ts`
 
-- [ ] **Step 7: Mutants.** Each must go red, and each is restored byte for byte, with `cmp` silent, before the next.
+- [ ] **Step 7: Mutants.** Each must go red, and each is restored byte for byte, with `cmp` silent, before the next. Measured: each went red exactly where expected below, and every restore was `cmp` silent (M3: `a waiting step makes no slice: expected 1 to be +0`; M4: `expected 134217728 to be 268435456`; M5 also reddened the two direct-`exportPass` held cases; M7, re-run after (e) gained its `flipped` CONTROL, fails at the result while the CONTROL passes).
   - M1: `exportStep` returns `exportPass(db, ctx)` again. Expect (b), (d) and (f) red.
   - M2: `exportPassSlice` passes `{ maxMs: 0, maxBytes: 0 }` as its floor. Expect (b), (d) and (f) red ((d) at its `flipped` CONTROL: on the fully spent run the pass is held before it selects).
   - M3: `exportStep` makes the pass's slice at its first line (`const slice = exportPassSlice(ctx);`), unused until the pass. Expect (c) red (one read on a waiting step).
@@ -268,13 +269,13 @@ Why: the check runs first in the step and outside the cadence, on `ctx.budget`. 
     - `r` matches `{ state: 'written' }`, and `r.rows` is above 0: the pass ran on a fresh slice of its own;
     - no `history-sweep:` line contains `export pass was held`;
     - `export_pass_ms` is set, and `export_attempt_ms` is null.
-    The figures (how many batches fit in 3 s at 1 s a read, and how many rows the pass writes) are the worker's to measure; the regex, the `written` state and the absent held line are the pins.
+    The figures are not pins; the regex, the `written` state and the absent held line are. Measured: the stop record read `budget <ms> 8` (two batches of four marks fit the 3 s slice at 1 s a read), the clock moved 12 reads over the whole step, and the pass wrote 5 rows (5 blobs) into one segment.
   - (c) `x9Lib.EXPORT_CHECK_SLICE_MS` is `20_000`, and `x9Lib.EXPORT_CHECK_SLICE_BYTES` is `128 * 1024 * 1024`.
 
-- [ ] **Step 2: Run, and record the reds** at Task 1's tree: `-t "CP-39c: the check after a bind"`. Predicted, for the worker to measure:
-  - (a) red: `stop` is `budget <ms> 0`, where null was expected (no batch on the spent run).
-  - (b) red at the stop record: `budget <ms> 0` does not match (no batch cleared anything; the pass then writes on its own slice).
-  - (c) red: `expected undefined to be 20000`.
+- [ ] **Step 2: Run, and record the reds** at Task 1's tree: `-t "CP-39c: the check after a bind"`. Measured (3 failed):
+  - (a) red at the `endState` equality, which runs before the run-bytes assertion: `the check ran to its done stamp in one step, on its own slice: expected { …(7) } to deeply equal { …(7) }`. Its diff holds the predicted cause: `stop` is `budget <ms> 0` where null was expected (no batch on the spent run), with `missing` null, `counter` 0 and every mark still set. The CONTROL passed.
+  - (b) red at the stop record, as predicted: `the check cleared marks, then its own slice ran out: expected 'budget <ms> 0' to match /^budget [0-9]+ [1-9][0-9]*$/` (no batch cleared anything).
+  - (c) red, as predicted: `expected undefined to be 20000 // Object.is equality`.
 
 - [ ] **Step 3: The check's slice.**
   - lib.mjs: after `EXPORT_SLICE_BYTES`, `export const EXPORT_CHECK_SLICE_MS = 20_000;` and `export const EXPORT_CHECK_SLICE_BYTES = 128 * 1024 * 1024;`. Their doc says: the check after a bind runs on its own slice of the one run budget (D-6975); D-4344's slice figures, *chosen*, as named constants of their own; made only on a step that owes a check, so such a step pays 20 s, plus the check's unbudgeted prefix (the listing, the whole-and-own reads, the two marked-name scans and the first WAL truncate, which the slice's clock pays before the first batch), plus one batch, until the check is done. lib.d.mts declares both.
@@ -282,20 +283,20 @@ Why: the check runs first in the step and outside the cadence, on `ctx.budget`. 
   - `exportStep`: inside `if (markCheck.check)`, the call becomes `checkSegmentMarks(db, { ...ctx, budget: exportCheckSlice(ctx) }, markCheck.record, listing)`. A comment names D-6975: made only on a step that owes a check, just before it; the pass never reads it, and makes its own fresh slice after (D-6974).
   - The pass's call stays as Task 1 left it. `exportPass`'s early-held comment and E2's comment stay as Task 1 wrote them: the check's slice never reaches the pass, so no third route to that branch exists.
   - `checkSegmentMarks`' doc: "its stored bytes to the run's budget" becomes "its stored bytes to its slice of the run's budget, and so to the run", and "a spent run budget (`budget`)" becomes "a spent slice of the run budget (`budget`)". It says that `exportStep` hands it a slice of its own (D-6975). `exportStep`'s doc says the same.
-  Re-run the filter: all three green.
+  Re-run the filter: all three green (measured).
 
-- [ ] **Step 4: The cases this changes, red first.** Run the bind-check describe (`-t "the check after a bind runs in bounded"`), then `-t "a carried segment counts only"` and `-t "the check re-arms"`. Predicted red, for the worker to measure: the four cases that stop a check on the run's budget through `exportStep`, because each check now finishes on its own floor. Each runs inside a waiting cadence, so only the check's slice changes them:
-  - E6: "a check the run budget stops resumes on the next step" (about :2849);
-  - E7: "a segment that arrives and one moved aside between two steps" (about :2879);
-  - E8: "a check stopped on its budget before its first batch still records the damaged segment" (about :3505);
-  - E9: "a listing that fails never deletes the stop record of a check the listing re-armed" (about :3681).
-  Record what is measured, then Step 5.
+- [ ] **Step 4: The cases this changes, red first.** Run the bind-check describe (`-t "the check after a bind runs in bounded"`), then `-t "a carried segment counts only"` and `-t "the check re-arms"`. Measured red, as predicted, and no other case: the four cases that stop a check on the run's budget through `exportStep`, because each check now finishes on its own floor. Each runs inside a waiting cadence, so only the check's slice changes them:
+  - E6: "a check the run budget stops resumes on the next step": `step 1: one batch (two blobs and their two referrers), then the budget: expected null to be 'budget <ms> 4'`;
+  - E7: "a segment that arrives and one moved aside between two steps": `step 1 stops at the budget after one batch: expected null to be 'budget <ms> 4'`;
+  - E8: "a check stopped on its budget before its first batch still records the damaged segment": `CONTROL: the check stopped on budget with nothing cleared: expected null to be 'budget <ms> 0'`;
+  - E9: "a listing that fails never deletes the stop record of a check the listing re-armed": `CONTROL: the vanish-owed check stopped at the budget: expected null to be 'budget <ms> 2'`.
+  Then Step 5 (measured after it: the three filters together, 41 passed).
 
 - [ ] **Step 5: In place (D-6976).** E6 and E7: each `step` constant's `deps` adds `exportCheckSliceFloor: ZERO_FLOOR`. E8: its `exportStep` call adds `deps: { exportCheckSliceFloor: ZERO_FLOOR }`. E9: its first `exportStep` call's `deps` adds `exportCheckSliceFloor: ZERO_FLOOR`. Each case gets a one-line comment naming D-6976: a zero floor keeps the run's budget as the check's. Nothing else changes.
 
 - [ ] **Step 6: Run green.** Task 1 Step 6's list, one per call.
 
-- [ ] **Step 7: Mutants.** Each red, then restored byte for byte, with `cmp` silent.
+- [ ] **Step 7: Mutants.** Each red, then restored byte for byte, with `cmp` silent. Measured: each went red exactly where expected below, and every restore was `cmp` silent (M9's held line named `3000 ms, 1073741824 bytes`; M11: `expected 268435456 to be 134217728`; the M6 re-run reddened six cases, E2's two arms, E6, E7, E8 and E9).
   - M8: the check is called with `ctx` again. Expect (a) and (b) red.
   - M9: the pass reuses the check's slice. `exportStep` keeps the check's slice in a `let checkSlice = null`, and the pass becomes `exportPass(db, { ...ctx, budget: checkSlice ?? exportPassSlice(ctx) })`. Expect (b) red: `held`, with the line naming the check's slice (`3000 ms, 1073741824 bytes`).
   - M10: `exportStep` makes the check's slice at its first line, owed or not (`const checkSlice = exportCheckSlice(ctx);`). Expect Task 1's (c) red (one read on a waiting step that owes no check).
