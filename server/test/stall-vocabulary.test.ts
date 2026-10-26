@@ -388,7 +388,7 @@ describe('wave 2: rungRecipient is one total per-arm table (planning departure r
     'orphan-d': ['worker', 'operator'], restarted: ['worker', 'coordinator'], 'orphan-e': ['worker'], failed: ['worker', 'coordinator'],
     frozen: ['coordinator'], dead: ['coordinator'],
     'coord-deaf': ['operator'], 'mail-stuck': ['operator'], 'marker-unreadable': ['operator'],
-    'coord-blocked': ['operator'],
+    'coord-blocked': ['operator', 'operator'],
   };
   it.each(STALL_ARMS)('%s: each rung it has goes to its recipient, and a rung it lacks throws', (arm) => {
     for (const rung of [1, 2, 3] as const) {

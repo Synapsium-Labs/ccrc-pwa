@@ -25,7 +25,7 @@ import {
   BACKLOG_HORIZON_MS, DEAD_GRACE_MS, FAILED_IDLE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS,
   FROZEN_NO_EVENT_MS, ORPHAN_PUSH_MS, STALL_FAILED_PREFIX, stallFailedSubject,
   STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_ORPHANED_PREFIX, STALL_RESTARTED_PREFIX, STALL_QUIET_MS, STALL_REPORT_PREFIX,
-  parseStallDetail, stallArmingOf, stallDetail, COORD_DEAF_MS, COORD_BLOCKED_BUSY_MS, COORD_BLOCKED_HELD_MS, STALL_MARKERS, type StallArming,
+  parseStallDetail, stallArmingOf, stallDetail, COORD_DEAF_MS, COORD_BLOCKED_HELD_MS, COORD_BLOCKED_STRETCH_MS, STALL_MARKERS, type StallArming,
 } from '../src/coord/stall.js';
 import { parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock, type StallBoxArming, type StallSettingsPatch } from '../src/coord/stallsettings.js';
 import type { PushPayload } from '../src/push.js';
@@ -2422,15 +2422,16 @@ describe('sweepStalls: the stall-watch settings (stall watch settings §9)', () 
   });
 });
 
-describe('sweepStalls: coord-blocked (D-TBD-coord-blocked-stall)', () => {
-  // A coordinator whose turn stays open while mail to it waits undelivered behind that turn. The coordinator has its
-  // own pane (COORD_PID) and live file, so its word and the worker's are separate facts. Its turn opens after the
-  // run's S4 mails; a child's question is queued five minutes later and never delivered (the sweeps here never run the
-  // mail lane). The level is the Settings choice, so these rows also prove the arm needs no marker of its own.
+describe('sweepStalls: coord-blocked (D-6942)', () => {
+  // Mail to a coordinator that the server still holds. The coordinator has its own pane (COORD_PID) and live file, so
+  // its word and the worker's are separate facts. A child's question is queued five minutes into its busy stretch and
+  // never delivered (the sweeps here never run the mail lane). The level is the Settings choice, so these rows also
+  // prove the arm needs no marker of its own.
   const COORD_PID = 4343;
   const BUSY_AT = IDLE_AT + 10 * 60_000;
   const MAIL_AT = BUSY_AT + 5 * 60_000;
-  const FIRE_AT = MAIL_AT + COORD_BLOCKED_HELD_MS;    // busy 65 min, held 60 min behind the turn
+  const FIRE_AT = MAIL_AT + COORD_BLOCKED_HELD_MS;          // held 30 min, busy 35 min: rung 1
+  const ESCALATE_AT = BUSY_AT + COORD_BLOCKED_STRETCH_MS;    // busy 60 min: rung 2
   const seedCoordLive = (h: Harness, status: string, since: number): void => {
     writeFileSync(path.join(h.home, '.claude', 'sessions', `${COORD_PID}.json`), JSON.stringify({
       pid: COORD_PID, sessionId: COORD_UUID, cwd: '/w/demo', name: null, nameSource: null,
@@ -2446,61 +2447,72 @@ describe('sweepStalls: coord-blocked (D-TBD-coord-blocked-stall)', () => {
   });
   const sessions = [fleetRow(WORKER), fleetRow(COORD)];
   const blockedPushes = (sent: readonly PushPayload[]): PushPayload[] => sent.filter((p) => p.tag?.includes('-coord-blocked-') === true);
-  const setup = async (level: 'alert' | 'log' = 'alert', queue = true): Promise<{ h: Harness; coord: CoordStore; w: FleetWatcher; sent: PushPayload[] }> => {
+  const queue = (coord: CoordStore, kind = 'question'): void => {
+    const m = coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId: null, kind, subject: 'q', body: 'b', artifacts: [] });
+    coord.queueDelivery(m.id, COORD, 'envelope');
+  };
+  const setup = async (level: 'alert' | 'log' = 'alert', withMail = true, word = 'busy'): Promise<{ h: Harness; coord: CoordStore; w: FleetWatcher; sent: PushPayload[] }> => {
     const r = await rig();
     seedRegistry(r.h.home, COORD, COORD_UUID);
     seedRun(r.coord, { program: 'demo-program' });
-    seedCoordLive(r.h, 'busy', BUSY_AT);
+    seedCoordLive(r.h, word, BUSY_AT);
     at(BUSY_AT);
     choose(r.coord, { level });
-    if (queue) {
-      at(MAIL_AT);
-      const m = r.coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId: null, kind: 'question', subject: 'q', body: 'b', artifacts: [] });
-      r.coord.queueDelivery(m.id, COORD, 'envelope');
-    }
+    if (withMail) { at(MAIL_AT); queue(r.coord); }
     return r;
   };
 
-  it('busy long + held mail: one push, at the hour and not before, naming the coordinator, its busy span, the oldest item and the child', async () => {
+  it('held mail: one push at 30 min and not before, naming the reason, the oldest item and the child; one escalation at the 60 min stretch', async () => {
     const { w, sent } = await setup();
-    at(FIRE_AT - STALL_SWEEP_MS);
-    await w.sweepStalls(sessions, [], tickWith());
+    await sweepThrough(w, sessions, [], tickWith(), MAIL_AT, FIRE_AT - STALL_SWEEP_MS);
     expect(blockedPushes(sent)).toEqual([]);
-    await sweepThrough(w, sessions, [], tickWith(), FIRE_AT, FIRE_AT + 3 * STALL_SWEEP_MS);
+    await sweepThrough(w, sessions, [], tickWith(), FIRE_AT, ESCALATE_AT - STALL_SWEEP_MS);
     const pushes = blockedPushes(sent);
-    expect(pushes.map((p) => p.tag)).toEqual([`stall-${COORD}-coord-blocked-1-${BUSY_AT}`]);
+    expect(pushes.map((p) => p.tag)).toEqual([`stall-${COORD}-coord-blocked-1-${MAIL_AT}`]);
     expect(pushes[0]!.title).toBe(`⚠ coordinator blocked › ${COORD}`);
-    expect(pushes[0]!.body).toContain(`coordinator ${COORD}: its turn has been busy since`);
+    expect(pushes[0]!.body).toContain(`coordinator ${COORD}: held behind a background workflow.`);
     expect(pushes[0]!.body).toContain(`from ${WORKER}, was queued at`);
     expect(pushes[0]!.body).toContain(`Children waiting: ${WORKER} (run `);
+    await sweepThrough(w, sessions, [], tickWith(), ESCALATE_AT, ESCALATE_AT + 3 * STALL_SWEEP_MS);
+    expect(blockedPushes(sent).map((p) => p.tag))
+      .toEqual([`stall-${COORD}-coord-blocked-1-${MAIL_AT}`, `stall-${COORD}-coord-blocked-2-${MAIL_AT}`]);
   });
 
-  it('busy long without held mail: no push', async () => {
-    const { w, sent } = await setup('alert', false);
-    await sweepThrough(w, sessions, [], tickWith(), FIRE_AT, FIRE_AT + 2 * STALL_SWEEP_MS);
-    expect(blockedPushes(sent)).toEqual([]);
-  });
-
-  it('held mail with an idle coordinator: no coord-blocked push (mail stuck owns a delivery problem)', async () => {
-    const { h, w, sent } = await setup();
-    seedCoordLive(h, 'idle', BUSY_AT);
-    await sweepThrough(w, sessions, [], tickWith(), FIRE_AT, FIRE_AT + 2 * STALL_SWEEP_MS);
-    expect(blockedPushes(sent)).toEqual([]);
-  });
-
-  it('a new episode after recovery flags again, under the new turn\'s key', async () => {
-    const { h, coord, w, sent } = await setup();
+  it('an open question (waiting) flags too, worded as waiting on you', async () => {
+    const { w, sent } = await setup('alert', true, 'waiting');
     await sweepThrough(w, sessions, [], tickWith(), FIRE_AT, FIRE_AT + STALL_SWEEP_MS);
-    const IDLE2 = FIRE_AT + 2 * STALL_SWEEP_MS;
-    seedCoordLive(h, 'idle', IDLE2);                 // the turn ends; the held mail is still queued (no mail lane here)
-    await sweepThrough(w, sessions, [], tickWith(), IDLE2, IDLE2 + 2 * STALL_SWEEP_MS);
-    const BUSY2 = IDLE2 + 3 * STALL_SWEEP_MS;
-    seedCoordLive(h, 'waiting', BUSY2);               // a new turn, on a dialog this time
-    at(BUSY2);
-    const m = coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId: null, kind: 'status', subject: 's', body: 'b', artifacts: [] });
-    coord.queueDelivery(m.id, COORD, 'envelope');
-    await sweepThrough(w, sessions, [], tickWith(), BUSY2 + COORD_BLOCKED_BUSY_MS, BUSY2 + COORD_BLOCKED_BUSY_MS + 2 * STALL_SWEEP_MS);
-    expect(blockedPushes(sent).map((p) => p.tag)).toEqual([`stall-${COORD}-coord-blocked-1-${BUSY_AT}`, `stall-${COORD}-coord-blocked-1-${BUSY2}`]);
+    const pushes = blockedPushes(sent);
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0]!.body).toContain('the coordinator is waiting on you (an open question); 1 child mail is queued behind it.');
+  });
+
+  it('held mail under an idle coordinator flags as idle but not receiving mail', async () => {
+    const { w, sent } = await setup('alert', true, 'idle');
+    await sweepThrough(w, sessions, [], tickWith(), FIRE_AT, FIRE_AT + STALL_SWEEP_MS);
+    const pushes = blockedPushes(sent);
+    expect(pushes.map((p) => p.tag)).toEqual([`stall-${COORD}-coord-blocked-1-${MAIL_AT}`]);
+    expect(pushes[0]!.body).toContain('idle but not receiving mail (input text or account limit).');
+  });
+
+  it('nothing held: no push, however long the coordinator is busy', async () => {
+    const { w, sent } = await setup('alert', false);
+    await sweepThrough(w, sessions, [], tickWith(), FIRE_AT, ESCALATE_AT + 2 * STALL_SWEEP_MS);
+    expect(blockedPushes(sent)).toEqual([]);
+  });
+
+  it('recovery then a new episode: once the held mail goes through the episode closes, and new held mail pushes again under its own key', async () => {
+    const { coord, w, sent } = await setup();
+    await sweepThrough(w, sessions, [], tickWith(), FIRE_AT, FIRE_AT + STALL_SWEEP_MS);
+    const DONE_AT = FIRE_AT + 2 * STALL_SWEEP_MS;
+    at(DONE_AT);
+    coord.db.prepare("UPDATE mail_deliveries SET state = 'acked', deliveredAt = ?, ackedAt = ? WHERE toId = ?").run(DONE_AT, DONE_AT, COORD);
+    await sweepThrough(w, sessions, [], tickWith(), DONE_AT, DONE_AT + 2 * STALL_SWEEP_MS);
+    const MAIL2 = DONE_AT + 3 * STALL_SWEEP_MS;
+    at(MAIL2);
+    queue(coord, 'status');
+    await sweepThrough(w, sessions, [], tickWith(), MAIL2, MAIL2 + COORD_BLOCKED_HELD_MS + STALL_SWEEP_MS);
+    expect(blockedPushes(sent).map((p) => p.tag).filter((t) => t!.includes('-coord-blocked-1-')))
+      .toEqual([`stall-${COORD}-coord-blocked-1-${MAIL_AT}`, `stall-${COORD}-coord-blocked-1-${MAIL2}`]);
   });
 
   it('below the Alert level it records shadow only: one run-less shadow line, no push', async () => {
@@ -2508,7 +2520,7 @@ describe('sweepStalls: coord-blocked (D-TBD-coord-blocked-stall)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await sweepThrough(w, sessions, [], tickWith(), FIRE_AT, FIRE_AT + 2 * STALL_SWEEP_MS);
     expect(blockedPushes(sent)).toEqual([]);
-    expect(lines(warn, `ccrc-server: stall-watch shadow coord-blocked r1 ${COORD} (run-less) key ${BUSY_AT}`)).toBe(1);
+    expect(lines(warn, `ccrc-server: stall-watch shadow coord-blocked r1 ${COORD} (run-less) key ${MAIL_AT}`)).toBe(1);
   });
 
   it('a claimant that is itself a child workspace is never flagged', async () => {
@@ -2520,7 +2532,7 @@ describe('sweepStalls: coord-blocked (D-TBD-coord-blocked-stall)', () => {
 
   it('it only reports: the held mail stays queued, and nothing is typed into the coordinator\'s pane', async () => {
     const { h, coord, w } = await setup();
-    await sweepThrough(w, sessions, [], tickWith(), FIRE_AT, FIRE_AT + STALL_SWEEP_MS);
+    await sweepThrough(w, sessions, [], tickWith(), FIRE_AT, ESCALATE_AT + STALL_SWEEP_MS);
     const states = (coord.db.prepare('SELECT state FROM mail_deliveries WHERE toId = ?').all(COORD) as unknown as { state: string }[]).map((r) => r.state);
     expect(states).toEqual(['queued']);
     expect(h.calls.filter((a) => a[0] === 'send-keys')).toEqual([]);
