@@ -3,15 +3,18 @@
 The operator's runbook for W2's live evaluation, with the coordinator's checkpoints (CP-40 of the ccrc-history completion plan). One named node: **the fleet box** (operator ruling, 2026-10-25). Every
 command is cited to the decisions document (`docs/superpowers/plans/2026-10-19-ccrc-history-w2-decisions.md`, "§5 act N",
 "W2-Dn") or to the plan task that ships it (W2-3, W2-4, W2-5a, W2-5b1, W2-5b2, W2-6). Every verb, flag,
-refusal word and output path below was checked against the merged code of the final W2 release, `v0.0.730`. If the
-installed tag differs, re-read each verb's usage before running it. Plan text is never ground truth; the merged code is.
+refusal word and output path below was checked against the merged code of `v0.0.730`. By the operator's ruling of 2026-10-26 (R-B1), the
+final W2 release is the tag cut from the budget-amendment wave's merge, not `v0.0.730` (see "Before act 7"). On that tag,
+as on any other, re-read each verb's usage before running it. Plan text is never ground truth; the merged code is.
 
 ## In short
 
 - **What the window is.** A pre-registered live A/B over the fleet box's session families active at W2 open, plus a frozen
   quiz run in both arms. Control families get a `recall-off/<id>` file (the CLI exits 8 for them). Treatment families keep
   recall and the card line. The gate (W2-D89: accuracy, fabrication, uptake) is computed once, after window end, by
-  `report`. Nothing that scores moves between part 1 and close (W2-D6 build freeze, W2-D7 maintenance freeze).
+  `report`. Nothing that scores moves between part 1 and close (W2-D6 build freeze, W2-D7 maintenance freeze). From act 6 to act 28
+  no release is installed and the account's wrapper does not change. If either is forced, W2 halts and closes with no
+  verdict (the operator's ruling of 2026-10-26, R-B2).
 - **Minimum calendar time: about 15 to 17 days.** The window is `planned_days` long, 14 by default, and may be up to one
   day longer, never shorter (W2-D25). Before it come step 0a, pilot sourcing, the census, Q18, the pilot, quiz sourcing and
   part 2. That takes hours to a few days, and it depends on the account's limits: every batch stops at 70% (W2-D55). After
@@ -21,7 +24,7 @@ installed tag differs, re-read each verb's usage before running it. Plan text is
   - **The operator** runs every command on the fleet box and labels the hand-check sheet (W2-D81). The operator also owns
     the update intent, both freezes, the markers and the rulings.
   - **The coordinator** sees only shas, counts and aggregates. Its jobs: re-measure the release stamp and the Claude Code
-    version at window start and end (acts 20 and 23), measure the surface diff before any freeze exception (W2-D6), record
+    version at window start and end (acts 20 and 23), record each halt with its time, record
     every amendment, every `--accept-failed-pilot` use and every forced act in the programme ledger, and compute and post
     the gate (Q7, Q14).
 - **Only shas, counts and aggregates go public** (W2-D25). Never public: store ids, ccrc ids, generations, the account,
@@ -96,10 +99,10 @@ same `--out` (W2-D80 and §7, the classification of the unmeasured and driver wo
 |---|---|---|
 | `limits-threshold` | stop | Wait until `max(five, seven)` < `limits.threshold_pct` (70), then re-run the same command (W2-D55). |
 | `limits-stale` | stop | Refresh the limits row with one interactive statusline render on the account, then re-run. Never edit `~/.cc-limits` (W2-D55, §5 act 21). |
-| `budget-exhausted` | stop | The budget in force is spent. Before part 1, re-run with a larger `--budget`. Part 1 to part 2: part 1's `pilot_budget` binds, so raising it needs a superseding draft, which is a ruling: it re-runs acts 12 to 17, a full re-pilot included (act 12, "Any superseding draft"). From part 2: `spend_budget` is signed, and no amendment kind carries a budget (W2-D90). `open --finalize` derives `spend_budget` from the pilot's usage extrapolation and refuses any other `--spend-budget`, so no flag raises it. So this is an operator ruling. |
+| `budget-exhausted` | stop | The budget in force is spent. Before part 1, re-run with a larger `--budget`. Part 1 to part 2: part 1's `pilot_budget` binds, so raising it needs a superseding draft, which is a ruling: it re-runs acts 12 to 17, a full re-pilot included (act 12, "Any superseding draft"). From part 2: `spend_budget` is signed. `open --finalize` derives it from the pilot's usage extrapolation and refuses any other `--spend-budget`, and in `v0.0.730` no amendment kind carries a budget (W2-D90). The remedy is a new amendment kind that raises `spend_budget`, built in a small wave before act 10 (the operator's ruling of 2026-10-26, R-B1). That wave is not built yet: fill in its kind name, flags and refusal words here and in act 21 from its merged code. |
 | `claude-version-moved` | stop | Before part 2: a ruling; the likely remedy is step 0a on a fresh `--out`, a superseding draft and a re-pilot (W2-D6, W2-D56). After part 2: the act 21 re-pilot and a `version-move` amendment. |
-| `tree-moved`, `code-changed` | stop | The build freeze was breached. Roll the node back to the piloted tag, or have the coordinator measure the surface diff and the operator rule a freeze exception (W2-D6). Before window start the remedy is a re-pilot and a superseding draft. After it, follow act 21's freeze-exception order: write the amendment while the piloted tag is still installed, then install the release and run batches with `--allow-code-change`, stamped `code-changed` (K6, Q23). `open --amend` takes no `--allow-code-change`, so once a `gate_code` file differs it refuses `code-changed`. At this stop the release is already installed: if it moved only the stamp, write the amendment as things stand; if it moved a `gate_code` file, roll the node back to the piloted tag, write the amendment (`freeze-exception`, with `--node-label` and `--release-tag`), then reinstall the release. After the install, the quiz re-pilot refuses, and if a `gate_code` file moved, so do `marker`, `verify` and every later `open --amend`: stop: an operator ruling. |
-| `wrapper-moved` | stop | A generated account's wrapper changed. No amendment kind covers it: operator ruling. |
+| `tree-moved`, `code-changed` | stop | The build freeze was breached: a release was installed. From act 6 to act 28 no release is installed, and there is no freeze exception (the operator's ruling of 2026-10-26, R-B2). Do not roll back and resume. W2 halts and closes with no verdict: acts 26 to 29, as the halts table says. The code would refuse an amendment anyway once a `gate_code` file differs: `open --amend` takes no `--allow-code-change` and refuses `code-changed`. |
+| `wrapper-moved` | stop | A generated account's wrapper changed. From act 6 to act 28 the account's wrapper does not change (the operator's ruling of 2026-10-26, R-B2). W2 halts and closes with no verdict: acts 26 to 29, as the halts table says. |
 | `code-unmeasured`, `version-unmeasured`, `tree-unmeasured`, `wrapper-unmeasured` | stop | Make the input readable: the code file, the launcher's `--version`, a tagged release stamp, the wrapper. Then re-run. `--allow-code-change` never covers these (W2-D24, W2-D56). |
 | `out-refused` | stop | Read the detail. `create-failed`/`marker-unwritable`: remove `--out` by hand, then re-run (W2-D53). `relative` or `parent-absent`: pass an absolute path whose parent directory exists (the driver never creates a parent). `in-git-tree`: choose a path outside every git tree. `pilot-source.json is here`: use a fresh `--out` (Q25). `run-json-mismatch`: re-run with the original flags or on a fresh `--out`. A `.pid` that is not regular, or an unreadable ledger: inspect, then a ruling. |
 | `run-live` | stop | A leftover run's child is alive or cannot be measured. Wait for it to exit, then re-run. Never kill it, charge it or remove it by hand (W2-D55). |
@@ -115,7 +118,7 @@ same `--out` (W2-D80 and §7, the classification of the unmeasured and driver wo
 | `args-invalid`, `input-invalid` | refusal | Read the detail; fix the flag or the input. |
 | `in-pane` | refusal | Use a shell with no `TMUX_PANE`. |
 | `roster-invalid`, `account-refused` | refusal | The account is not admissible (W2-D52). Act 1's naming changes: ruling. |
-| `pilot-failed` | refusal | The pilot failed. From `step0b`, `fidelity` and `pilot-result`, the file and its sha were written first (K3); `open --finalize` refuses it again unless `--accept-failed-pilot` carries the ruling (Q27). W2 halts for the operator's ruling (W2-D57, §5 act 14). |
+| `pilot-failed` | refusal | The pilot failed. From `step0b`, `fidelity` and `pilot-result`, the file and its sha were written first (K3); `open --finalize` refuses it again unless `--accept-failed-pilot` carries the ruling (Q27). From `step0b`, W2 halts and re-pilots, and nothing is accepted (the operator's ruling of 2026-10-26, R-B3; act 14a). From `fidelity` or `pilot-result`, W2 halts for the operator's ruling (W2-D57, §5 act 14). |
 
 ## Before act 7
 
@@ -131,7 +134,10 @@ Every line must be measured and recorded before step 0a.
   - 5h-1's plan approved and 5h-2's redaction questions ruled.
 - [ ] **Every W2 PR merged.** On `main` today: 5h-1 (#737), 5h-2 (#1010), W2-1 (#1105), W2-2a (#1126), W2-2b (#1154), W2-3
   (#856), W2-4 (#826) and W2-5a (#1134). Since merged: W2-5b1 (#1497), W2-6 (#1547) and W2-5b2 with the coordinator's K25 to
-  K27 amendment (#1560) (W2-D6, §5 act 5). The final W2 release is `v0.0.730`, cut from that last merge.
+  K27 amendment (#1560) (W2-D6, §5 act 5). Still to come: the budget-amendment wave, which adds an amendment kind that
+  raises `spend_budget` (the operator's ruling of 2026-10-26, R-B1). It is not built yet. The final W2 release is the tag cut from its merge, not
+  `v0.0.730`, and act 10 waits for that release. Acts 5 and 6 roll it, so acts 7 and 9 run on it too: part 1 refuses a
+  step 0a or pilot-source record stamped with another release (`release-mismatch`).
 - [ ] **That release is on the fleet box (§5 act 6).** Rolled out through the release lane (`ccrc rollout --to <tag>`, or
   `ccrc update --to <tag>` on the box). `ccrc version` names `<tag>` with a complete, signed `install:` line. Step 0a
   reads only `version` in `~/.ccrc/build.json`: an untagged build (no `version`), or a stamp that is absent, unreadable
@@ -145,7 +151,9 @@ Every line must be measured and recorded before step 0a.
   node's own intent row decides over `*`. The coordinator reads `GET /api/updates` to confirm the intent row (`auto`,
   `pinnedTag`) and the node's `desiredTag`. Nobody taps Install, Update or Roll back for the node until act 28: a tap
   moves it whatever `auto` says. Once a node row exists it decides for the node from then on
-  (`server/src/update/resolve.ts`: no row means the fleet row decides), and no route deletes a row.
+  (`server/src/update/resolve.ts`: no row means the fleet row decides), and no route deletes a row. From act 6 to act 28
+  no release is installed and the account's wrapper does not change. If either is forced (a security fix, an account
+  outage), W2 halts and closes with no verdict (the operator's ruling of 2026-10-26, R-B2).
 - [ ] **5h-1 and 5h-2 on the node, and the 5h-2 re-clean measured complete and recorded (§5 acts 2-3, W2-D8).**
 - [ ] **Backfill re-run complete and recorded (§5 act 4, W2-D8).** From a terminal outside every session (`--apply`
   refuses `apply-in-session` inside one): pause with `systemctl --user stop ccd-history-sweep.timer`, run
@@ -321,7 +329,8 @@ Every line must be measured and recorded before step 0a.
   id, ccrc id and generation), which W2-D25 keeps private.
 - **On `lengthen`:** supersede the draft with the same seed, as below, with `window_plan.planned_days` the one key
   added. Then repeat acts 11 and 12 under the new part 1, with a new T0, writing to new versioned names (Conventions).
-- **Any superseding draft** (`lengthen`, the quiz-floor remedy, a raised `pilot_budget`):
+- **Any superseding draft** (`lengthen`, the quiz-floor remedy, a raised `pilot_budget`, the re-pilot after a failed
+  step 0b (R-B3, act 14a), whose new key is the one its fix changes, if any):
   - Re-run act 10 with the same flags and the SAME overrides file as the draft it supersedes, with only the new key
     added, plus `--supersedes <old part 1> --supersedes-sha256 <old H1>`. `--supersedes` carries only the seed: every
     other field is rebuilt from the defaults and this call's `--overrides`, so an override left out silently reverts to
@@ -332,7 +341,7 @@ Every line must be measured and recorded before step 0a.
   - Every later act that reads the new part 1 also takes `--supersedes <old part 1> --supersedes-sha256 <old H1>`, or
     refuses `args-invalid` `supersedes-required`, through act 17, `open --finalize` included. From part 2 on, `--part1`
     carries the superseding draft and `--supersedes` names only a final that part 2 supersedes.
-  - Signed after act 13 has run (the quiz-floor remedy, a raised `pilot_budget`), it voids every output bound to the old
+  - Signed after act 13 has run (the quiz-floor remedy, a raised `pilot_budget`, a step 0b re-pilot), it voids every output bound to the old
     part 1's sha. `open --finalize` refuses `input-invalid` `quiz-meta record-mismatch`, then `power record-mismatch`,
     then `pilot-result record-mismatch`; `pilot-result` refuses the old fidelity, arms and judged files, and `freeze`
     refuses the old `sourced.json` (`sourced record-mismatch`). So re-run act 12 (`power`; act 11's census and
@@ -381,15 +390,13 @@ Every line must be measured and recorded before step 0a.
     `--step0b <OUT_PILOT>/pilot/step0b/fallback.json --step0b-sha256 <H_0B>`, `<H_0B>` being the fallback run's sha (K2). If
     fidelity or the usage pilot already ran without it, run 14b to 14d again on a fresh `--out`, each with `--step0b`, because
     `pilot-result` reads them from one `--out`.
-  - If the turn bound reads `unmeasured` because the max-turns stop is spelled other than `error_max_turns`: the
-    coordinator rules before the pilot proceeds (W2-D57 amendment).
-  - Any other failure: W2 halts for the operator's ruling (W2-D57).
-  - A ruling to accept a step 0b failure (Q27) still needs `pilot-result.json`, which act 17 reads even under
-    `--accept-failed-pilot`. `fidelity`, `arms` and `judge` refuse `pilot-failed` before any spawn when handed a
-    `--step0b` that did not pass (K2). Running them without `--step0b` after a failed step 0b goes past K2: stop: an
-    operator ruling. If it is ruled, run 14b and 14c without `--step0b` on the same `<OUT_PILOT>`, then 14d with the
-    failed step 0b file, which `pilot-result` folds into its `failures`. Then act 17 with `--accept-failed-pilot`. A
-    ruling to abort follows the halts table.
+  - If the turn bound reads `unmeasured` because the max-turns stop is spelled other than `error_max_turns`, step 0b did
+    not pass. The coordinator's ruling on the spelling (W2-D57 amendment) names the cause; the rest is as below.
+  - Any other failure, too: W2 halts. By the operator's ruling of 2026-10-26 (R-B3, K2's letter), nothing is accepted past a
+    failed step 0b. Fix the cause, then re-pilot on a superseding draft: act 10 again, then acts 12 to 17, with all of
+    act 14 on a fresh `<OUT_PILOT>` (act 12, "Any superseding draft"). Never run 14b to 14d without `--step0b` after a
+    failed step 0b, and never take it to act 17 with `--accept-failed-pilot`. If the fix needs a release install, R-B2's
+    bar applies: W2 halts and closes with no verdict. To abort, follow the halts table.
 - **14b fidelity** (W2-D76; W2-5b2 Task 2; Q8, Q9, K13). It runs in box mode with no marker.
   ```
   replay fidelity --section pilot --out <OUT_PILOT> --record <P>/part1.json --record-sha256 <H1> \
@@ -422,7 +429,8 @@ Every line must be measured and recorded before step 0a.
     the absent rate per arm, the uptake reading (`is-error`, `not-error` or `unseen`), both spend readings, step 0b's sha
     and mode, and `failures`.
   - On failure: `pilot-failed`, and W2 halts for the operator's ruling (§5 act 14). The only way forward without a
-    re-pilot is `--accept-failed-pilot` at act 17, and the coordinator records that use (Q27, K14).
+    re-pilot is `--accept-failed-pilot` at act 17, and the coordinator records that use (Q27, K14). That way is closed
+    to a failed step 0b, which never reaches 14d (R-B3, act 14a).
 - **Post:** `H_0B`, the fidelity sha, the arms summary sha, `H_PR`, pass or fail, and the extrapolation's `at_target` figure (for `quiz.target` questions; act 17 derives the signed budget for the frozen count).
 - **Waits:** every batch stops at 70% and resumes when re-run (W2-D55). Run at most 2 concurrent runs, in a low-usage
   window (spec §10.2).
@@ -551,21 +559,24 @@ Every line must be measured and recorded before step 0a.
   ```
   replay arms  --section quiz --out <OUT_ARMS> --record <cur part2> --record-sha256 <H2> \
     --part1 <P>/part1.json --part1-sha256 <H1> --frozen <OUT_QUIZ>/quiz/frozen.json --frozen-sha256 <H_Q> \
-    [--supersedes <P>/part2.v<k-1>.json --supersedes-sha256 <H2_prev>] [--allow-code-change]
+    [--supersedes <P>/part2.v<k-1>.json --supersedes-sha256 <H2_prev>]
   #   stderr: "spend share <s> = ceil(<B> x <n> / <N>)", then sha256 of <OUT_ARMS>/quiz/arms/summary.json
-  replay judge --section quiz --out <OUT_ARMS> (the same record, part1, frozen, supersedes and stamp flags)
+  replay judge --section quiz --out <OUT_ARMS> (the same record, part1, frozen and supersedes flags)
   #   → <OUT_ARMS>/quiz/judged.json and <OUT_ARMS>/quiz/judge/<id>.input.json
   ```
   Pass `--supersedes` only once part 2 supersedes an earlier final (an amendment, or a pre-window `--prior-final`),
   naming the final the current one supersedes (W2-D25). The chain is checked one link at a time, so after any number
   of amendments `--supersedes` names only the current record's direct predecessor (for the second amendment's
   consumers, `--record <P>/part2.v3.json --supersedes <P>/part2.v2.json`). An amended record read without it refuses
-  `record-invalid`. Pass `--allow-code-change` only after a ruled freeze exception.
+  `record-invalid`. Never pass `--allow-code-change`: there is no freeze exception in this window (R-B2).
 - **Stops:** re-run the same command on the same `--out` (see the table). Stopped questions are `not-run`, not failed
   (W2-D80).
   - On a second infrastructure failure, the question is `run-failed` and excluded from both arms.
   - The budget remains a soft stop. K25 reads the judge's gate as judge spend only, while `arms` counts all spend; the
     overshoot is disclosed, not capped.
+  - A `budget-exhausted` stop: write the new amendment kind that raises `spend_budget` (R-B1), then follow every
+    amendment's rules (W2-D90, K8). Its command, flags and refusal words are filled in here from the budget-amendment
+    wave's merged code; this runbook does not guess them.
 - **After a `claude-version-moved` stop** (W2-D56, W2-D90; W2-5b2 Task 3; Q12, K1, K7, K22). Each re-pilot gets a fresh
   `<OUT_REPILOT_m>`.
   ```
@@ -589,28 +600,18 @@ Every line must be measured and recorded before step 0a.
     `replay verify --section ab … > <P>/verify-ab.v<k+1>.json`. Never write over `*.start.json`. A question half done on the old
     version re-runs both arms under `<arm>.m<i>.a<n>`, with attempts starting at 1 (K7, K27).
   - A failed re-pilot cannot be amended (K22 (c)). The operator rules whether the window stands.
-- **A forced frozen act or a freeze exception** (W2-D7, W2-D6; W2-5b2 Task 3 `AMEND_DETAILS`):
+- **A forced frozen act** (W2-D7; W2-5b2 Task 3 `AMEND_DETAILS`):
   ```
   replay open --amend --kind forced-act       … --act <name> --act-ms <ms> [--node-label <node-label>] > <P>/part2.v<k+1>.json
-  replay open --amend --kind freeze-exception … --surface <text> --ruling <text> [--node-label <node-label> --release-tag <candidate>] > <P>/part2.v<k+1>.json
   ```
-  - **A freeze exception that installs a release, in this order:** (1) the coordinator measures the surface diff;
-    (2) the operator rules; (3) with the piloted tag STILL installed, write the amendment with both `--node-label` and
-    `--release-tag <candidate>`, and post its sha; (4) install `<candidate>`; (5) resume `arms` and `judge` with
-    `--allow-code-change`. `open --amend` re-checks the four `gate_code` files (`deploy/history-gate.mjs`,
-    `deploy/measure-history.py`, `deploy/history-replay.mjs`, `ccd/history/lib.mjs`) against the installed tree and
-    takes no `--allow-code-change`, so once one of them differs every kind refuses `code-changed`. Amending first
-    matters only when the candidate moves one of them, and is harmless otherwise, so always amend first.
-  - Without `--node-label` and `--release-tag` naming the installed tag, every batch stops `tree-moved`, even with
-    `--allow-code-change`. `--release-tag` without `--node-label` refuses `args-invalid`.
-  - If the candidate is already installed and moved a `gate_code` file, the amendment cannot be written under it: roll
-    the node back to the piloted tag, write the amendment, post its sha, then install `<candidate>` again (K6). Whether
-    to roll back mid-window is an operator ruling.
-  - After the install, the quiz re-pilot refuses, and if a `gate_code` file moved, so do `marker`, `verify` and every
-    later `open --amend` (`version-move`, `forced-act`): stop: an operator ruling.
   - Post the sha before the next batch. The next `arms` batch's W2-D78 (iii) re-check must pass, and the operator rules
     whether the quiz and the window stand (W2-D7).
-  - Keep `--surface` and `--ruling` text free of private names.
+- **No release install and no wrapper change** (the operator's ruling of 2026-10-26, R-B2). From act 6 to act 28 no release is
+  installed and the account's wrapper does not change. There is no freeze exception: the `freeze-exception` amendment
+  kind and `--allow-code-change` are not used. If an install or a wrapper change is forced (a security fix, an account
+  outage), W2 halts and closes with no verdict: acts 26 to 29 (see the halts table). The code would refuse the
+  amendment anyway once a `gate_code` file differs: `open --amend` takes no `--allow-code-change` and refuses
+  `code-changed`.
 - **Waits:**
   - the 70% threshold;
   - `limits-stale`: a statusline render;
@@ -624,7 +625,7 @@ Every line must be measured and recorded before step 0a.
   ```
   replay handcheck --sheet --out <OUT_REPORT> --record <cur part2> --record-sha256 <H2> \
     --part1 <P>/part1.json --part1-sha256 <H1> --frozen <OUT_QUIZ>/quiz/frozen.json --frozen-sha256 <H_Q> \
-    --judged <OUT_ARMS>/quiz/judged.json --judged-sha256 <H_J> [--supersedes …] [--allow-code-change]
+    --judged <OUT_ARMS>/quiz/judged.json --judged-sha256 <H_J> [--supersedes …]
   #   → <OUT_REPORT>/handcheck/sheet.txt and sheet.json (sha256 of sheet.json on stderr)
   ```
   With one node there is nothing to gather: act 24 passes every input in place, by path and sha. `report` reads the
@@ -654,7 +655,7 @@ Every line must be measured and recorded before step 0a.
   replay verify --section ab --record <cur part2> --record-sha256 <H2> --part1 <P>/part1.json --part1-sha256 <H1> \
     --frozen <OUT_QUIZ>/quiz/frozen.json --frozen-sha256 <H_Q> [--supersedes …] > <P>/verify-ab.end.json   # H_VAE
   counters count --record <cur part2> --record-sha256 <H2> --part1 <P>/part1.json --part1-sha256 <H1> \
-    --frozen <OUT_QUIZ>/quiz/frozen.json --frozen-sha256 <H_Q> [--supersedes …] [--allow-code-change] \
+    --frozen <OUT_QUIZ>/quiz/frozen.json --frozen-sha256 <H_Q> [--supersedes …] \
     --measure <P>/measure.json --measure-sha256 <H_M> --verify-ab <P>/verify-ab.end.json --verify-ab-sha256 <H_VAE> \
     --store <home>/.ccrc/history/db/history.db --out <OUT_COUNT>
   #   → <OUT_COUNT>/counters.json, sha256 <H_CT> on stderr
@@ -691,7 +692,7 @@ Every line must be measured and recorded before step 0a.
     --sourced <OUT_QUIZ>/quiz/sourced.json --sourced-sha256 <H_SRC> \
     --verify-ab <P>/verify-ab.end.json --verify-ab-sha256 <H_VAE> \
     --measure <P>/measure.json --measure-sha256 <H_M> \
-    --labels <labels file> --labels-sha256 <H_L> [--supersedes …] [--allow-code-change]
+    --labels <labels file> --labels-sha256 <H_L> [--supersedes …]
   #   → <OUT_REPORT>/verdict.json, written once, sha256 <H_V> on stderr
   ```
 - **The record:** every node output must name the current record's sha. After any amendment, re-run `arms`, `judge` and
@@ -709,8 +710,8 @@ Every line must be measured and recorded before step 0a.
 
 - **Act** (§5 act 25; W2-D89; Q7, Q14).
   - Read `verdict.json`: `pass`, `fail`, `halt` or `incomplete`, with every criterion that could be computed. A
-    `code-changed` stamp is carried onto the verdict.
-  - Record the decision: pass, fail, or a ruling on any halt or `code-changed` stamp, with `H_V`.
+    `code-changed` stamp is carried onto the verdict; under R-B2 no batch carries one.
+  - Record the decision: pass, fail, or a ruling on any halt, with `H_V`.
 - **Post:** the aggregates and the decision:
   - the arm accuracies and fabrication rates with their CIs;
   - live uptake per window and per turn by arm and producer;
@@ -771,13 +772,13 @@ The **markers in place** at each point:
 
 | Halt | Raised by | Markers in place | Undo | W2-D86 counters? |
 |---|---|---|---|---|
-| Step 0b fails (W2-D57, W2-D58) | act 14a `pilot-failed` | freeze, intent, pilot-HO, outs | 27 (pilot-HO), 28, 29; 26 is not needed. Or, to accept: a ruling, then finish 14b to 14d as act 14a says, and act 17 with `--accept-failed-pilot` | No: there is no part 2 or window, and `count` needs both (W2-6 run checks). Whether W2 may close without it is an operator ruling, since W2-D86 says W2 does not close without the counter report. |
-| Fidelity or usage pilot fails (W2-D76, K13) | acts 14b and 14d `pilot-failed` | the same | the same. Or, to accept: after a 14b failure, finish 14c and 14d (after a 14d failure `pilot-result.json` already exists), then act 17 with `--accept-failed-pilot` | No (as above) |
-| A failed pilot accepted | act 17 `--accept-failed-pilot` (Q27) | none extra | none: continue | Yes, at act 23. The coordinator records the use (K14). |
+| Step 0b fails (W2-D57, W2-D58) | act 14a `pilot-failed` | freeze, intent, pilot-HO, outs | none: re-pilot (the operator's ruling of 2026-10-26, R-B3). Fix the cause, then a superseding draft and acts 12 to 17, as act 14a says. Nothing is accepted. If W2 closes instead: 27 (pilot-HO), 28, 29; 26 is not needed | No: a halt before window start closes W2 without W2-D86's counter report, and the ledger records the halt (the operator's ruling of 2026-10-26, R-B4). With no part 2 there is nothing to count. |
+| Fidelity or usage pilot fails (W2-D76, K13) | acts 14b and 14d `pilot-failed` | the same | by ruling: re-pilot as for step 0b, or close with 27 (pilot-HO), 28, 29. Or, to accept: after a 14b failure, finish 14c and 14d (after a 14d failure `pilot-result.json` already exists), then act 17 with `--accept-failed-pilot` | No (as above) |
+| A failed fidelity or usage pilot accepted (never a failed step 0b, R-B3) | act 17 `--accept-failed-pilot` (Q27) | none extra | none: continue | Yes, at act 23. The coordinator records the use (K14). |
 | Q18 change (`lengthen` or `add-nodes`) | act 12 | freeze, intent, outs | none for `lengthen`: supersede the draft and repeat 11-12. `add-nodes` needs a ruling. | n/a (no halt) |
-| Quiz floor (fewer than 60 questions or 12 families) | act 16; finalize refuses `below-floor` | freeze, intent, outs (pilot-HO already gone) | to abort: 28, 29. To proceed: a ruling, then a superseding draft that lowers `quiz.halt_floor`, built from the old draft's overrides file with that key added (act 12, "Any superseding draft"). That draft changes `H1`, so pilot-result's `record_sha256` no longer matches (K21). Finalize binds power, the quiz meta and the pilot result to part 1's sha, so acts 12-17 re-run. Act 11's census and `verify --registry` outputs are not bound to `H1` and carry over while `active_rule.lookback_ms` is unchanged. | No |
+| Quiz floor (fewer than 60 questions or 12 families) | act 16; finalize refuses `below-floor` | freeze, intent, outs (pilot-HO already gone) | to abort: 28, 29. To proceed: a ruling, then a superseding draft that lowers `quiz.halt_floor`, built from the old draft's overrides file with that key added (act 12, "Any superseding draft"). That draft changes `H1`, so pilot-result's `record_sha256` no longer matches (K21). Finalize binds power, the quiz meta and the pilot result to part 1's sha, so acts 12-17 re-run. Act 11's census and `verify --registry` outputs are not bound to `H1` and carry over while `active_rule.lookback_ms` is unchanged. | No: an abort here closes W2 without W2-D86's counter report (R-B4) |
 | Failed re-pilot (K22 (c)) | act 21 | all, incl. RO and quiz-HO | if the window does not stand: 26, 27, 28, 29 | Only at or after `<E_ms>` (`window-open` otherwise). Either keep the markers until `<E_ms>` and run act 23, or record an operator ruling to close without it. |
-| Build-freeze breach (`tree-moved`, `code-changed`) not excepted | any batch | all present at that point | by ruling | as for a failed re-pilot |
+| A release install or a wrapper change from act 6 to act 28 (`tree-moved`, `code-changed`, `wrapper-moved`; the operator's ruling of 2026-10-26, R-B2) | any preflight or batch | all present at that point | 26 (only if act 18 ran), 27, 28, 29, with no verdict. There is no freeze exception and no roll back and resume | No: R-B2 closes W2 with acts 26 to 29 only. Before window start, R-B4 says the same |
 | Absent rate over `absent_rate_max` in either arm (W2-D64, W2-D89) | act 24 verdict `halt` | RO and quiz-HO already handled by the order 23 → 24; clearing waits for 26 | 26-29 after the ruling | Yes: act 23 ran before the report |
 | Run-failed over `run_failed_max` (5%) (W2-D80, W2-D89) | act 24 `halt`; criteria 1 and 2 not computed | the same | the same | Yes |
 | Hand-check agreement under 0.8 (W2-D81, W2-D89) | act 24 `halt` | the same | the same | Yes |
@@ -787,26 +788,16 @@ The **markers in place** at each point:
 | Answer records edited or corrupted: two records of one arm on one node with their `answer_field.state` swapped, under an unchanged per-arm arms summary (a W2-5b2 residual) | act 24 `report` exits 1 (`internal error`), not `input-invalid`; nothing is written | the same | none: restore the answer records `arms` wrote under `<OUT_ARMS>/quiz/answers/`, then re-run act 24 on a fresh report `--out` | Yes |
 
 In every abort, the order is fixed: 26 (only if act 18 ran), then 27 (if a marker is on disk), then 28, then 29. Record each
-time, and the ruling's own time, in the ledger.
+time, and the ruling's own time, in the ledger. A halt before window start closes W2 without W2-D86's counter report,
+and the ledger records the halt (the operator's ruling of 2026-10-26, R-B4).
 
 ## Coordinator duties during the window
 
-- **Before any freeze exception (W2-D6).** Measure the surface diff and post the result with the operator's ruling and its
-  time:
-  ```
-  git diff --quiet <piloted-tag> <candidate> -- 'ccd/history/**' ccd/ccd-history-sweep 'ccd/history-skill/**' \
-    ccd/install-history-skill.sh ccd/session-hook.sh ccd/install-session-hooks.sh ccd/compact-card.mjs \
-    shared/wrapper.mjs deploy/systemd/ccd-history-sweep.service deploy/systemd/ccd-history-sweep.timer \
-    'deploy/history-*.mjs' deploy/measure-history.py
-  ```
-  Separately, diff as blocks: `ccd/ccrc`'s `history)` dispatch block and its `CCRC_HERE` preamble, and `ccd/ccd`'s
-  `CCRC_SESSION_GENERATION` export (a `CCRC_SESSION_GENERATION='<uuid>'` prefix on the pane's launch command, not a
-  shell `export`) and `.generation` writer (`_reg_generation_mint`, reached through `_reg_generation_init`). No tool
-  extracts these blocks: the record's `freezes.surface` names them only as `ccd/ccrc#history-dispatch-block` and
-  `ccd/ccd#generation-blocks`, so diff them by hand. After part 2, the exception is also an amendment (W2-D90), written before the candidate is
-  installed (act 21), so post the diff and the ruling before anything is installed.
+- **No freeze exception (W2-D6; the operator's ruling of 2026-10-26, R-B2).** From act 6 to act 28 no release is installed
+  and the account's wrapper does not change. If either is forced (a security fix, an account outage), W2 halts and closes
+  with no verdict (acts 26 to 29). Record the halt, its cause and its time in the ledger.
 - **Record every `--accept-failed-pilot` use** in the ledger as the operator's act, with the failures it printed (Q27, K14).
-- **Record each forced frozen act and freeze exception** with its time, its amendment's sha, and the result of the next
+- **Record each forced frozen act** with its time, its amendment's sha, and the result of the next
   arms batch's W2-D78 (iii) re-check, which must pass (W2-D7).
 - **Re-measure the release stamp and the live Claude Code version** at window start (act 20) and at window end (act 23).
   Both go in the report (W2-D6).
@@ -822,29 +813,31 @@ time, and the ruling's own time, in the ledger.
 
 **Agreed**
 - One named node, the fleet box (ruling 2026-10-25). Acts 7 to 29 run there in §5's order.
-- Every W2 PR is merged; W2-5b1 (#1497), W2-6 (#1547) and W2-5b2 with K25 to K27 (#1560) were the last. The final W2
-  release is `v0.0.730`, and every verb, flag, refusal word and output path here was checked against its code.
+- Every W2 PR so far is merged; W2-5b1 (#1497), W2-6 (#1547) and W2-5b2 with K25 to K27 (#1560) were the last. Every
+  verb, flag, refusal word and output path here was checked against `v0.0.730`'s code.
 - The two-part record, saved 0600 off-repo, with only shas, counts and aggregates public (W2-D25).
 - Stops resume and refusals need a changed input (`DRIVER_STOPS` and `DRIVER_REFUSALS`). `pilot-failed` halts (K3).
 - A quiz-floor superseding draft cannot reuse the pilot result: `open --finalize` refuses one written under another
   part 1 (K21), so acts 12 to 17 re-run.
+- A spent budget after part 2 (the operator's ruling of 2026-10-26, R-B1): a small build wave, before act 10, adds an amendment
+  kind that raises `spend_budget`. The final W2 release is the tag cut from its merge. Acts 5 and 6 roll that tag, not
+  `v0.0.730`, and act 10 waits for it.
+- No release install and no change to the account's wrapper from act 6 to act 28 (R-B2). There is no freeze exception.
+  If either is forced, W2 halts and closes with no verdict (acts 26 to 29). `tree-moved`, `code-changed` and
+  `wrapper-moved` are halts. This settles both freeze-exception questions: no release is installed in the window, so
+  no `gate_code` file moves under the record and no re-pilot runs under a moved tree.
+- A failed step 0b halts and re-pilots (R-B3, K2's letter): fix the cause, then a superseding draft. Nothing is accepted
+  past it, and no pilot act runs without `--step0b` after it.
+- A halt before window start closes W2 without W2-D86's counter report (R-B4). With no part 2 there is nothing to count.
+  The close acts 26 to 29 run, and the ledger records the halt.
 
 **Waiting on you**
 - Act 1's account and the three exact model ids (arm, writer, judge).
-- Acts 5 and 6: roll `v0.0.730` onto the fleet box through the release lane, then pin its update intent to `v0.0.730`
+- The budget-amendment wave (R-B1): built, merged and released. Then fill in its kind name, flags and refusal words in
+  the `budget-exhausted` row and act 21, and re-check every verb here against its tag.
+- Acts 5 and 6: roll that wave's tag onto the fleet box through the release lane, then pin its update intent to that tag
   (or set it off) and record the time. The rest of "Before act 7" follows.
-- Rulings this runbook cannot make:
-  - the `budget-exhausted` remedy after part 2: `open --finalize` derives `spend_budget`, and no amendment kind carries
-    a budget;
-  - `wrapper-moved`, which no amendment kind covers;
-  - whether a pre-window halt may close W2 without W2-D86's counter report;
-  - a freeze exception that moves a `gate_code` file: after the install, `marker`, `verify` and every later
-    `open --amend` refuse `code-changed` and take no `--allow-code-change`, so acts 23 and 24 get no verify output under
-    the amended record, and no later version-move or forced-act can be amended;
-  - a freeze exception that installs a release: the quiz re-pilot takes no `--allow-code-change`, so after the install a
-    later `claude-version-moved` cannot be re-piloted;
-  - whether pilot acts may run without `--step0b` after step 0b failed, so that an accepted step 0b failure has a
-    `pilot-result.json` (K2, Q27).
+- Rulings this runbook cannot make: none left. The operator's ruling of 2026-10-26 settled all six.
 
 **Later**
 - Publishing the seed after close (W2-D25).
