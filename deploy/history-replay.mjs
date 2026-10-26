@@ -5204,7 +5204,7 @@ const PRED_INPUT = Object.freeze(['supersedes', 'supersedes-sha256']);
 const NODE_INPUTS = Object.freeze(['census', 'census-sha256', 'verify', 'verify-sha256']);
 /** W2-5b2 Task 3 (Q13, K6): every detail flag open --amend's form takes; AMEND_DETAILS decides which a kind requires, may
  *  take or refuses (its union is this list, pinned in history-replay.test.ts). Declared here because SUBCOMMAND_FLAGS reads it. */
-export const AMEND_FLAGS = Object.freeze(['node-label', 'claude-code-version', 'repilot', 'repilot-sha256', 'surface', 'ruling', 'release-tag', 'act', 'act-ms']);
+export const AMEND_FLAGS = Object.freeze(['node-label', 'claude-code-version', 'repilot', 'repilot-sha256', 'surface', 'ruling', 'release-tag', 'act', 'act-ms', 'spend-budget']);
 /** Each subcommand form's flags: a flag outside both lists is refused, a required one missing is refused. */
 const SUBCOMMAND_FLAGS = Object.freeze({
   'pilot-source': { required: ['out', 'account', 'budget', 'writer-model', 'step0a', 'step0a-sha256'], optional: ['sha-min-prefix', 'writer-input', 'n-fidelity', 'n-usage'] },
@@ -8770,7 +8770,8 @@ HANDLERS.set('pilot-result', (flags, env) => pilotResultCommand(flags, env));
 export const FREEZE_EXCEPTION_KIND = 'freeze-exception';
 /** Each amendment kind's detail flags and its detail (Q13, as K6 amends it): version-move `{claude_code_version,
  *  repilot_sha256}`, its node required (W2-D56, Q12); freeze-exception `{surface, ruling, release_tag?}` (W2-D6, K6),
- *  `release_tag` present only when given; forced-act `{act, at_ms}` (W2-D7); the node optional for the last two. Keyed by
+ *  `release_tag` present only when given; forced-act `{act, at_ms}` (W2-D7); the node optional for the last two;
+ *  budget-raise `{spend_budget}`, its node refused (W2-7, D-7063). Keyed by
  *  the gate's AMENDMENT_KINDS, whose words it holds as a set, and its flags are exactly AMEND_FLAGS (history-replay.test.ts
  *  pins both). */
 export const AMEND_DETAILS = Object.freeze({
@@ -8780,6 +8781,8 @@ export const AMEND_DETAILS = Object.freeze({
     detail: (flags) => ({ surface: flags.surface, ruling: flags.ruling, ...(flags['release-tag'] === undefined ? {} : { release_tag: flags['release-tag'] }) }) }),
   'forced-act': Object.freeze({ required: Object.freeze(['act', 'act-ms']), optional: Object.freeze(['node-label']),
     detail: (flags) => ({ act: flags.act, at_ms: flags['act-ms'] }) }),
+  'budget-raise': Object.freeze({ required: Object.freeze(['spend-budget']), optional: Object.freeze([]),
+    detail: (flags) => ({ spend_budget: flags['spend-budget'] }) }),
 });
 /** The detail texts that must say something: an empty one is refused. */
 const AMEND_TEXT_FLAGS = Object.freeze(['surface', 'ruling', 'release-tag', 'act']);
@@ -9164,8 +9167,9 @@ export async function repilotResultCommand(flags, driverEnv, deps = { now: () =>
  *  input; its ranges); the node, one of the record's; for a version move, the re-pilot result, its sha checked before its
  *  bytes are parsed, its shape, its record, its node, its version and its pass. Then the record with the amendment
  *  appended, the gate's validator against part 1, the frozen list and the record it supersedes (after window start, an
- *  append and nothing else), and the part 2 ranges (R30). Prints the record and its sha on stderr; reads no HOME, spawns
- *  nothing, writes nothing. */
+ *  append and nothing else), and the part 2 ranges (R30). A budget-raise is held above the budget in force by the
+ *  validator (budget-not-raised), never by a second comparison here. Prints the record and its sha on stderr; reads no
+ *  HOME, spawns nothing, writes nothing. */
 async function openAmend(flags, driverEnv, deps) {
   checkFlags('open --amend', flags);
   const kind = flags.kind;

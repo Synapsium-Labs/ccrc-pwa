@@ -11256,7 +11256,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       return { path: p, sha: r7Sha('not json'), value: {} };
     };
     const rows3: Array<[string, (c: R7) => { argv: string[]; now?: number; want: [string, string] }]> = [
-      ['an unknown kind', (c) => ({ argv: argv3(c, ['--kind', 'version-bump']), want: ['args-invalid', 'kind "version-bump" is not one of version-move, freeze-exception, forced-act'] })],
+      ['an unknown kind', (c) => ({ argv: argv3(c, ['--kind', 'version-bump']), want: ['args-invalid', 'kind "version-bump" is not one of version-move, freeze-exception, forced-act, budget-raise'] })],
       ['another kind\'s detail flag', (c) => ({ argv: argv3(c, [...move3(repilot3(c.f)), '--surface', 's']), want: ['args-invalid', '--surface is not a version-move flag'] })],
       ['a re-pilot on a freeze exception', (c) => ({ argv: argv3(c, [...FREEZE3, ...inp('repilot', repilot3(c.f))]), want: ['args-invalid', '--repilot is not a freeze-exception flag'] })],
       ['a release tag on a forced act', (c) => ({ argv: argv3(c, [...FORCED3, '--release-tag', 'v9.9.9']), want: ['args-invalid', '--release-tag is not a forced-act flag'] })],
@@ -24334,4 +24334,95 @@ b2t2Describe('W2-5b2 Task 2 fix round 2: judgeSpentOf throws a RangeError naming
     b2t2Expect(B2.judgeSpentOf([{ name: 'quiz/judge/j0001-1', tokens: edge }]), 'CONTROL: the safe edge').toBe(edge);
     b2t2Expect(B2.judgeSpentOf([{ name: 'quiz/judge/j0001-1', tokens: edge }, { name: 'quiz/arms/q1/control.a1', tokens: 1 }]), 'CONTROL: an arm row is not added').toBe(edge);
   });
+});
+
+// ── W2-7 Task 1: open --amend --kind budget-raise (R-B1, D-7063) ──────────────────────────────────────────────────────
+// A raise of the spend budget is one more amendment: part 2 superseding the record, one entry appended, nothing that scores
+// moved. Reuses W2-5b1 Task 4's and W2-5b2 Task 3's module-scope fixtures (w5b4Quiz, b23Open, b23Amend). Every HOME is a
+// fixture; nothing spawns.
+import { describe as w27Describe, expect as w27Expect, it as w27It } from 'vitest';
+import { renameSync as w27Rename } from 'node:fs';
+
+const w27Raise = (fx: W5b4R, rec: W5b4Saved, pred: W5b4Saved | null, figure: string | null, extra: string[] = []): string[] =>
+  ['open', '--amend', '--kind', 'budget-raise', ...(figure === null ? [] : ['--spend-budget', figure]), ...extra,
+    ...w5b4Inp('record', rec), ...(pred === null ? [] : w5b4Inp('supersedes', pred)),
+    ...w5b4Inp('part1', fx.d as W5b4Saved), ...w5b4Inp('frozen', fx.fz as W5b4Saved)];
+
+w27Describe('W2-7 Task 1: open --amend --kind budget-raise appends one raise of the spend budget, and refuses one that does not raise (R-B1, D-7063)', () => {
+  const inForce = w5b4Gate.spendBudgetInForce as unknown as (r: W5b4R) => unknown;
+
+  w27It('R-SPEC: AMEND_DETAILS\' budget-raise requires --spend-budget alone and builds {spend_budget}', () => {
+    const spec = D4.AMEND_DETAILS['budget-raise'] as W5b4R;
+    w27Expect(spec.required).toEqual(['spend-budget']);
+    w27Expect(spec.optional).toEqual([]);
+    w27Expect(spec.detail({ 'spend-budget': 7 }, null)).toEqual({ spend_budget: 7 });
+    w27Expect((D4.AMEND_FLAGS as string[]).at(-1)).toBe('spend-budget');
+    w27Expect(D4.FLAG_SPECS['spend-budget']).toBe('int');
+  });
+
+  w27It('R-OK: a raise prints part 2 superseding the record, one budget-raise appended with no node, its sha on stderr; only supersedes, finalized_ms and amendments move, and the version preflight is unchanged', async () => {
+    const fx = w5b4Quiz(w5b4Home());
+    const r = await b23Open(w27Raise(fx, fx.f, null, '1500000'));
+    w27Expect([r.refusal, r.code], r.stderr).toEqual([null, 0]);
+    const rec = JSON.parse(r.stdout) as W5b4R;
+    w27Expect(r.stdout).toBe(`${w5b4Lib.canonicalJson(rec)}\n`);
+    w27Expect(r.stderr).toBe(`sha256 ${w5b4Gate.recordSha256(rec)}\n`);
+    w27Expect(rec.amendments).toEqual([{ kind: 'budget-raise', node_label_ref: null, at_ms: B23_NOW,
+      detail_sha256: w5b4Lib.sha256Hex(w5b4Lib.canonicalJson({ spend_budget: 1_500_000 })), detail: { spend_budget: 1_500_000 } }]);
+    w27Expect([rec.supersedes, rec.finalized_ms]).toEqual([fx.f.sha, B23_NOW]);
+    w27Expect(w5b4Lib.canonicalJson({ ...rec, supersedes: fx.final.supersedes, finalized_ms: fx.final.finalized_ms, amendments: fx.final.amendments }),
+      'R-ONLY: nothing else moved').toBe(w5b4Lib.canonicalJson(fx.final));
+    w27Expect(inForce(rec)).toBe(1_500_000);
+    w27Expect(rec.spend_budget).toBe(1_000_000);
+    w27Expect((D4.expectedForNode(rec, W5B4_STORE_A) as W5b4R).from).toBe('step0a');
+  }, 120_000);
+
+  w27It('R-PRE: before window start a raise is appended the same way (part 2 exists), and only supersedes, finalized_ms and amendments move', async () => {
+    const fx = w5b4Quiz(w5b4Home());
+    const r = await b23Open(w27Raise(fx, fx.f, null, '1500000'), W5B4_T0 + W5B4_DAY / 2);
+    w27Expect([r.refusal, r.code], r.stderr).toEqual([null, 0]);
+    const rec = JSON.parse(r.stdout) as W5b4R;
+    w27Expect(rec.amendments).toHaveLength(1);
+    w27Expect(rec.amendments[0].at_ms).toBe(W5B4_T0 + W5B4_DAY / 2);
+    w27Expect(w5b4Lib.canonicalJson({ ...rec, supersedes: fx.final.supersedes, finalized_ms: fx.final.finalized_ms, amendments: fx.final.amendments }),
+      'R-ONLY: nothing else moved, before window start').toBe(w5b4Lib.canonicalJson(fx.final));
+    w27Expect(inForce(rec)).toBe(1_500_000);
+    w27Expect(rec.spend_budget).toBe(1_000_000);
+  }, 120_000);
+
+  w27It('R-2ND: a second raise is read beside the first: equal to it refuses, above it appends after it byte for byte', async () => {
+    const fx = w5b4Quiz(w5b4Home());
+    const a1 = await b23Amend(fx, fx.f, null, ['--kind', 'budget-raise', '--spend-budget', '1500000']);
+    const same = await b23Open(w27Raise(fx, a1, fx.f, '1500000'), B23_NOW + 1000);
+    w27Expect(same.refusal).toEqual({ word: 'record-invalid', detail: 'amendments[1].detail.spend_budget budget-not-raised' });
+    w27Expect(same.stdout).toBe('');
+    const above = await b23Open(w27Raise(fx, a1, fx.f, '2000000'), B23_NOW + 1000);
+    w27Expect([above.refusal, above.code], above.stderr).toEqual([null, 0]);
+    const rec = JSON.parse(above.stdout) as W5b4R;
+    w27Expect(w5b4Lib.canonicalJson(rec.amendments[0])).toBe(w5b4Lib.canonicalJson(a1.value.amendments[0]));
+    w27Expect(rec.amendments).toHaveLength(2);
+    w27Expect(inForce(rec)).toBe(2_000_000);
+  }, 120_000);
+
+  type Row = [string, (fx: W5b4R) => string[], string, string];
+  const NOT_RAISED = 'amendments[0].detail.spend_budget budget-not-raised';
+  const rows: Row[] = [
+    ['R-EQ a raise equal to the signed budget', (fx) => w27Raise(fx, fx.f, null, '1000000'), 'record-invalid', NOT_RAISED],
+    ['R-LO a raise below it', (fx) => w27Raise(fx, fx.f, null, '999999'), 'record-invalid', NOT_RAISED],
+    ['no figure', (fx) => w27Raise(fx, fx.f, null, null), 'args-invalid', 'spend-budget-required'],
+    ['a zero', (fx) => w27Raise(fx, fx.f, null, '0'), 'args-invalid', '--spend-budget wants a positive integer, got "0"'],
+    ['a node', (fx) => w27Raise(fx, fx.f, null, '2000000', ['--node-label', 'node-0']), 'args-invalid', '--node-label is not a budget-raise flag'],
+    ['another kind\'s flag', (fx) => w27Raise(fx, fx.f, null, '2000000', ['--act', 'reparse']), 'args-invalid', '--act is not a budget-raise flag'],
+    ['a figure on another kind', (fx) => ['open', '--amend', '--kind', 'forced-act', '--act', 'reparse', '--act-ms', String(B23_NOW - 1), '--spend-budget', '2000000',
+      ...w5b4Inp('record', fx.f), ...w5b4Inp('part1', fx.d as W5b4Saved), ...w5b4Inp('frozen', fx.fz as W5b4Saved)], 'args-invalid', '--spend-budget is not a forced-act flag'],
+    ['R-PART1 part 1 given as the record', (fx) => ['open', '--amend', '--kind', 'budget-raise', '--spend-budget', '2000000',
+      ...w5b4Inp('record', fx.d as W5b4Saved), ...w5b4Inp('part1', fx.d as W5b4Saved), ...w5b4Inp('frozen', fx.fz as W5b4Saved)], 'record-invalid', 'record part "draft", wanted final'],
+    ['--allow-code-change', (fx) => w27Raise(fx, fx.f, null, '2000000', ['--allow-code-change']), 'args-invalid', '--allow-code-change is not a open --amend flag'],
+  ];
+  w27It.each(rows)('R-ROWS: open --amend --kind budget-raise refuses, printing nothing: %s', async (_why, argvOf, word, detail) => {
+    const fx = w5b4Quiz(w5b4Home());
+    const r = await b23Open(argvOf(fx));
+    w27Expect(r.refusal, r.stderr).toEqual({ word, detail });
+    w27Expect(r.stdout).toBe('');
+  }, 120_000);
 });
