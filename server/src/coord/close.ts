@@ -401,7 +401,7 @@ async function closeReviewRun(
   const coord = deps.coord;
   /** The OTHER open runs on this workspace, read fresh at the decision point and never cached; the closing run
    *  excludes itself. Returns the RESULT, not the list (D-2545): "unreadable" must never arrive as `[]`. */
-  const siblingsOf = (sessionId: string): OpenSiblingsResult => coord.openRunsForSession(sessionId, run.id);
+  const siblingsOf = (sessionId: string): OpenSiblingsResult => coord.bindingsOf(sessionId).worker({ excludeRunId: run.id });
   if (b.final !== undefined || b.archive !== undefined ||
       (b.state !== undefined && b.state !== 'done' && b.state !== 'failed')) {
     return { ok: false, kind: 'bad-request' };
