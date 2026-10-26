@@ -18,6 +18,9 @@ import { REFUSAL_STATUS } from '../../shared/refusal.js';
 import { decideArchive, refusedAtStop, archiveOutcome, edgeStatus, type ArchiveMeasure } from '../src/coord/archiveDoor.js';
 import { SENTENCES } from '../src/wsaudit.js';
 import { parseFile } from './scan/parse.js';
+import { EXPIRE_TOKEN_KIND, expireTokenKind, parseExpireResult } from '../src/archivedExpiry.js';
+import { CHILD_RECLAIM_TOKEN_KIND, childReclaimTokenKind, isChildReclaimToken, parseChildReclaimResult } from '../src/coord/childReclaim.js';
+import { COLLECT_REFUSAL_CLASS, COLLECT_REFUSAL_WORDS, collectRefusalClass } from '../src/collectLane.js';
 import {
   WORKSPACE_TRANSITIONS, WORKSPACE_VERBS, WORKSPACE_STATES, WORKSPACE_REFUSALS_BY_VERB, isWorkspaceRefusal,
   isWorkspaceVerb, isWorkspaceState, workspaceEdge,
@@ -271,5 +274,67 @@ describe('WORKSPACE_TRANSITIONS answers the census (ARCH-41, #776)', () => {
     // The only numeric statuses left: 200 (success and the partial outcome), 501 (`unsupported()`, a route-shape word) and 502.
     expect([...DOOR.matchAll(/\b(?:refuse|reply)\(\s*\d{3}\b|\bstatus:\s*\d{3}\b/g)].map((x) => x[0].replace(/\s+/g, ''))).toEqual(
       ['reply(501', 'status:200', 'status:200', 'status:502']);
+  });
+});
+
+// ── Characterization of the three TS lanes that read these refusals (ARCH-41 fix round 3), green on the old code. ────
+// `archivedExpiry.ts`, `coord/childReclaim.ts` and `collectLane.ts` each classify a ccd refusal word and narrow it to a
+// known word. This pins today's answers, word for word, so moving their vocabularies onto WORKSPACE_TRANSITIONS is
+// provably behaviour-identical.
+describe('the expire, reclaim and collect lanes read refusals as they do today (characterization)', () => {
+  const PROBES = ['toString', '__proto__', 'nope', 'dirty-tree', 'expire-in-progress', 'not-witnessed', 'not-idle', ''];
+  const EXPIRE_KINDS = {
+    'no-such-session': 'gone', 'not-archived': 'gone', 'not-a-workspace': 'terminal', 'branch-elsewhere': 'terminal',
+    'tree-unreadable': 'terminal', 'containment-unproven': 'terminal', 'no-worktree-record': 'terminal',
+    'not-expired': 'retry', child: 'retry', paused: 'retry', held: 'retry', attached: 'retry', live: 'retry',
+    'in-use': 'retry', 'tree-busy': 'retry', 'state-changed': 'retry', 'in-progress': 'retry',
+    'reap-in-progress': 'retry', 'reclaim-in-progress': 'retry', 'nested-rescue-too-large': 'terminal',
+    'nested-rescue-failed': 'retry',
+  };
+  const RECLAIM_KINDS = {
+    'no-such-session': 'gone', 'not-a-workspace': 'terminal', 'not-a-child': 'terminal', 'branch-elsewhere': 'terminal',
+    'tree-unreadable': 'terminal', 'containment-unproven': 'terminal', 'no-worktree-record': 'terminal',
+    paused: 'retry', held: 'retry', attached: 'retry', 'tree-busy': 'retry', 'state-changed': 'retry',
+    'in-progress': 'retry', 'reap-in-progress': 'retry', 'nested-rescue-too-large': 'terminal',
+    'nested-rescue-failed': 'retry', 'not-idle': 'retry',
+  };
+  const COLLECT_CLASSES = {
+    'witness-mismatch': 'terminal', 'quarantine-kept': 'terminal', 'containment-unproven': 'terminal',
+    'not-witnessed': 'retry', registered: 'retry', 'changed-recently': 'retry',
+    'state-changed': 'retry', 'in-use': 'retry', 'in-progress': 'retry', paused: 'retry',
+  };
+  const refusedDoc = (w: string): string => JSON.stringify({ refused: w, detail: 'd' });
+
+  it('expire: every word’s kind, and the result parser narrows exactly those words', () => {
+    expect(EXPIRE_TOKEN_KIND).toEqual(EXPIRE_KINDS);
+    for (const [w, k] of Object.entries(EXPIRE_KINDS)) {
+      expect(expireTokenKind(w), w).toBe(k);
+      expect(parseExpireResult('s', refusedDoc(w), ''), w).toEqual({ kind: 'refused', token: w, detail: 'd' });
+    }
+    for (const w of PROBES.filter((p) => !(p in EXPIRE_KINDS))) {
+      expect(expireTokenKind(w), w).toBeNull();
+      expect(parseExpireResult('s', refusedDoc(w), '').kind, w).toBe('failed');
+    }
+  });
+
+  it('reclaim: every word’s kind, and the guard and result parser narrow exactly those words', () => {
+    expect(CHILD_RECLAIM_TOKEN_KIND).toEqual(RECLAIM_KINDS);
+    for (const [w, k] of Object.entries(RECLAIM_KINDS)) {
+      expect(childReclaimTokenKind(w), w).toBe(k);
+      expect(isChildReclaimToken(w), w).toBe(true);
+      expect(parseChildReclaimResult('s', refusedDoc(w), ''), w).toEqual({ kind: 'refused', token: w, detail: 'd' });
+    }
+    for (const w of PROBES.filter((p) => !(p in RECLAIM_KINDS))) {
+      expect(childReclaimTokenKind(w), w).toBeNull();
+      expect(isChildReclaimToken(w), w).toBe(false);
+      expect(parseChildReclaimResult('s', refusedDoc(w), '').kind, w).toBe('failed');
+    }
+  });
+
+  it('collect: every word’s class in its order, and an unknown word is a retry', () => {
+    expect(COLLECT_REFUSAL_CLASS).toEqual(COLLECT_CLASSES);
+    expect(COLLECT_REFUSAL_WORDS).toEqual(Object.keys(COLLECT_CLASSES));
+    for (const [w, c] of Object.entries(COLLECT_CLASSES)) expect(collectRefusalClass(w), w).toBe(c);
+    for (const w of PROBES.filter((p) => !(p in COLLECT_CLASSES))) expect(collectRefusalClass(w), w).toBe('retry');
   });
 });
