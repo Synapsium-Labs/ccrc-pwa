@@ -9321,7 +9321,7 @@ function b2t5World(o: B2t5Opts = {}) {
   const lt = b2t5Pick(B2T5_S1, twin ? 'twin' : 'live-t1', B2T5_T, 700);
   const lc = b2t5Pick(B2T5_S1, 'live-c1', B2T5_C, 720);
   const l2: W5b4Ref = twin ? { store_id: B2T5_S2, ccrc_id: 'twin', generation: lt.generation } : b2t5Pick(B2T5_S2, 'live-t2', B2T5_T, 740);
-  const list = b2t5Gate.assignArms(W5B4_SEED, [lt, lc, l2]) as B2t5R[];
+  const list = b2t5Gate.assignArms(W5B4_SEED, [lt, lc, l2]) as Array<W5b4Ref & { arm: string }>;
   const draft = w5b4Draft(home, { stores: B2T5_STORES });
   const d = w5b4Save(draft, 'part1.json');
   const fz = w5b4SaveText(B2T5.frozenListText('quiz', W5B4_HEAD, made) as string, 'frozen.json');
@@ -9400,7 +9400,7 @@ function b2t5World(o: B2t5Opts = {}) {
   // The sample the sheet draws, through W2-5b2 Task 4's pure plan (K4) over the judged files as saved.
   const plan = B2T5.handcheckPlanOf({ record: final, recordSha256: f.sha, frozenSha256: fz.sha, entries, map, mapSha256: b2t5Lib.sha256Hex(mapText),
     judged: B2T5_STORES.map((s) => ({ path: nodes[s]!.judged.path, sha256: nodes[s]!.judged.sha, value: nodes[s]!.judged.value })) }) as B2t5R;
-  const hItems = (plan.items as B2t5R[]).map((i) => ({ ...i, label: i.judge }));
+  const hItems = (plan.items as B2t5R[]).map((i): B2t5R => ({ ...i, label: i.judge }));
   const sampled = plan.sampled as string[];
   const lines = ['# the operator\'s hand-check labels (W2-D81, Q19)'];
   for (const it of hItems) {
@@ -10964,7 +10964,7 @@ python3 "$S/t5-mutants.py" M1 && (cd server && ./node_modules/.bin/vitest run te
 | M20 | unmeasured never 0 | `quizUptakeOf\|quiz uptake read unmeasured` | 2 failed |
 | M21 | every refusal before `--out` | `W2-5b2 Task 5: report over gathered node outputs` | 42 failed \| 20 passed (of its 62): every row asserting no `--out` (10 sha, 27 refusal, 3 W2-D24, window-open, `--allow-code-change`) |
 | M22 | verdict.json never replaced | `written once` | 1 failed |
-| M23 | the report decides nothing | `W2-5b2 Task 5: report (pure parts\|over gathered node outputs)` | 5 failed: the decides-nothing scan; the fail, hold, override and run-failed cases |
+| M23 | the report decides nothing | `W2-5b2 Task 5: report(, pure parts\| over gathered node outputs)` | 4 failed: the decides-nothing scan; the fail, hold and override cases (the run-failed case asserts halts and criteria, not the verdict word, so the mutant leaves it green) |
 | M24 | the report words disjoint from the reasons | `report words\|droppedOf\|W2-D23: a treatment family` | 3 failed |
 | M25 | the hold: an unlabelled judge-failed answer | `unlabelled judge-failed\|gateInputsOf` | 2 failed |
 | M26 | run-failed out of both arms | `run-failed question is excluded\|gateInputsOf` | 2 failed (each a `TypeError`) |
@@ -11133,6 +11133,8 @@ git add deploy/history-replay.mjs server/test/history-replay.test.ts
 CO_AUTHORED_BY='<the Co-Authored-By line the attribution reminder gives>'
 git commit -m "feat(history-replay): report, every node's gathered outputs sha-checked into decideGate's inputs, verdict.json and the report-only figures (W2-5b2 Task 5; W2-D85, W2-D89, W2-D23, W2-D82, W2-D24; S2, Q15, Q23, Q28, V1; K8, K11, K12, K24, K27; D-6646)" -m "In-place edits of earlier cases (K5): W2-4 Task 1's FLAG_SPECS pin gains report's ten flags (judged and judged-sha256 are Task 4's, K4); W2-4 Task 9's HANDLERS line gains 'report'. W2-5b1 Task 4's readArmAnswers becomes readAnswerRecords' projection, its words unchanged. The hand-check through Task 4's loadHandcheckPlan, readHandcheckLabels and handcheckResultOf (K4); a stale presence record refused (K11); quiz uptake by arm marked aggregate-only when a quiz family is dropped (K24). K27 reads W2-5b1's existing ARM_PAYLOAD_CHANGED record reason as a deduped report-only qid list while W2-D89 keeps the question run-failed. Red first: <Step 4's measured failed count> failed then green; mutants M1 to M46, K27a and K27b measured as Step 8 recorded them (<each measured over predicted, or: each as predicted>), the driver restored by cmp. The F1 carry (D-6470, review 958's F1, Step 8a): judgeInputOf's answer field over CR, CRLF, U+2028 and U+2029, against a pinned hand copy of the gate's private LINE_BREAK (a departure with no number, in the PR body); <its measured passed count> passed, mutant F1C measured (<its red titles>), the driver restored by cmp." -m "$CO_AUTHORED_BY"
 ```
+
+Measured at the base 3cd9f0813 (Task 5), recorded over the predictions above. Step 1: every name, count and value as predicted (the missing gate names were `ANSWER_STATES`, `assembleReports`, `changedFamilies`, `decideGate` and `splitAtFirstExit8`; `applyHandcheck` and `handcheckAgreement` were Task 4's; `readArmAnswers` once; the `HANDLERS.keys()` line W2-4 Task 9's, ending `'pilot-result', 'handcheck'`, now ending `'handcheck', 'report'`). Step 4: 79 failed, 0 passed, as predicted. Step 7: 79 passed on the first run of the driver, the W2-5b1 filter 292 passed, and the walk needed no `beforeAll` wait (it spawns W2-5b1's arm stub, and the whole file stayed green). Two type fixes in the fixture, found by the test typecheck (`typecheck-tests` red, `tsc` named three errors): `b2t5World`'s `list` is typed `Array<W5b4Ref & { arm: string }>`, and `hItems` maps to `B2t5R` (both lines are corrected in the block above); no guard changed. Step 8: all 48 mutants (M1 to M46, K27a, K27b) red in the cases they name, with these measured differences. M23's filter as printed (`report (pure parts|...)`) selected only the 62-case subcommand describe, because the pure describe's title carries a comma; the filter is now `report(, pure parts| over gathered node outputs)`, and the mutant fails 4 (the decides-nothing scan, the fail case, the hold case and the override case), not 5: the run-failed case asserts halts and criteria and never the verdict word. M21 failed 42 and passed 20, M3 failed 5 and passed 5, M1 failed 3, M12 3, M13 3, M14 2, M16 2, M17 2, M20 2, M24 3, M25 2, M26 2, M27 2, M46 2, K27a 2 and K27b 1, each as predicted; every other mutant failed the one case it names. Step 8a: the F1 carry's five cases passed on arrival, and F1C failed 3 (CR, U+2028, U+2029, each at `the swallowed last ANSWER line carries the mark, never the surviving fact`) and passed 2 (CRLF and the scan), as predicted. The whole file passed 1584 (1502 before this task, plus 77 cases from Step 3 and 5 from Step 8a), `tsc` silent. No departure was needed.
 
 ### Task 6: README's replay-driver paragraph and its pin, the spec errata in place, the departures, the whole-PR checks and the PR
 

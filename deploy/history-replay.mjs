@@ -42,7 +42,7 @@ import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/histor
 import { asOfCutOf, expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf } from '../ccd/history/recall.mjs';
 import { pairIndexOf } from '../ccd/history/cli.mjs';
 import { admitFile, ftsTextOfBlob, readRegPresence } from '../ccd/history/sweep.mjs';
-import { AMENDMENT_KINDS, ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, LABELS, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, applyHandcheck, assignArms, assignmentSha256, buildWindows, checkGateCode, classifyRun, cmpFrac, collapseWs, expectedWindows, familyKey, frac, handcheckAgreement, handcheckSample, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
+import { AMENDMENT_KINDS, ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ANSWER_STATES, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, LABELS, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, applyHandcheck, assembleReports, assignArms, assignmentSha256, buildWindows, changedFamilies, checkGateCode, classifyRun, cmpFrac, collapseWs, decideGate, expectedWindows, familyKey, frac, handcheckAgreement, handcheckSample, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, splitAtFirstExit8, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -187,6 +187,10 @@ export const FLAG_SPECS = Object.freeze(/** @type {Record<string, FlagKind>} */ 
   fidelity: 'string', 'fidelity-sha256': 'string',
   // W2-5b2 Task 4 (W2-D81, Q2): `handcheck --sheet`, and every node's judged file with its sha, paired by position.
   sheet: 'bool', judged: 'list', 'judged-sha256': 'list',
+  // W2-5b2 Task 5 (W2-D85, Q2): report's gathered inputs, a list flag per node paired by position with its sha, and the
+  // operator's hand-check labels (Q19). --judged and its sha are Task 4's (K4).
+  'arms-summary': 'list', 'arms-summary-sha256': 'list', 'verify-quiz': 'list', 'verify-quiz-sha256': 'list',
+  'verify-ab': 'list', 'verify-ab-sha256': 'list', measure: 'list', 'measure-sha256': 'list', labels: 'string', 'labels-sha256': 'string',
 }));
 
 /** The subcommands, by name. Empty until Tasks 8 and 9 register `step0a` and `probe`, so every subcommand is
@@ -5235,6 +5239,9 @@ const SUBCOMMAND_FLAGS = Object.freeze({
   // W2-5b2 Task 4 (Q2, Q23): the reporting node's hand-check sheet, over every node's judged file and the part 2 chain.
   'handcheck --sheet': { required: ['sheet', 'out', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256', 'judged', 'judged-sha256'],
     optional: [...PRED_INPUT, 'allow-code-change'] },
+  report: { required: ['out', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256', 'arms-summary', 'arms-summary-sha256', 'judged', 'judged-sha256',
+    'verify-quiz', 'verify-quiz-sha256', 'sourced', 'sourced-sha256', 'verify-ab', 'verify-ab-sha256', 'measure', 'measure-sha256', 'labels', 'labels-sha256'],
+  optional: [...PRED_INPUT, 'allow-code-change'] },
 });
 
 const copyJson = (v) => JSON.parse(JSON.stringify(v));
@@ -7280,14 +7287,15 @@ function settleAnswers(ctx, states) {
     }
   }
 }
-/** A section's answer records under --out, as the judge reads them (R8, R26; W2-5b2 reads the same files): each
+/** Answers {rel, sha256, record}, the record whole, for W2-5b2 Task 5's report; readArmAnswers projects it.
+ *  A section's answer records under --out, as the judge reads them (R8, R26; W2-5b2 reads the same files): each
  *  `<section>/answers/<qid>.<arm>.json` settleAnswers wrote, projected as {qid, arm, outcome, reply, correct}: `outcome`
  *  the record's arm_state, `reply` the answered attempt's raw result text (the judge redacts it, W2-D54), `correct` its
  *  labelCorrect flag. No directory is no record. A file it cannot read, or one that is not this section's answer record
  *  under its own name, refuses out-refused (D-5986, D-6309's rule).
  *  @param {string} out  @param {'pilot' | 'quiz'} section */
-export function readArmAnswers(out, section) {
-  armSectionOk('readArmAnswers', section);
+export function readAnswerRecords(out, section) {
+  armSectionOk('readAnswerRecords', section);
   const rel = `${section}/answers`;
   const st = lstatOrNull(out, rel);
   if (st === null) return [];
@@ -7308,8 +7316,16 @@ export function readArmAnswers(out, section) {
       refuse('out-refused', `${rel}/${n} is not JSON`);
     }
     if (!plainObject(r) || r.kind !== ANSWER_KIND || r.section !== section || `${r.qid}.${r.arm}.json` !== n) refuse('out-refused', `${rel}/${n} is not an answer record`);
-    return { qid: r.qid, arm: r.arm, outcome: r.arm_state, reply: r.reply, correct: r.correct };
+    return { rel: `${rel}/${n}`, sha256: sha256Hex(read.bytes), record: r };
   });
+}
+/** The judge's view of readAnswerRecords (R8, R26): each record projected as {qid, arm, outcome, reply, correct}, its
+ *  refusals readAnswerRecords' own, word for word (W2-5b2 Task 5 split the read out, W2-D12: report reads the same
+ *  files whole, each with its file's sha).
+ *  @param {string} out  @param {'pilot' | 'quiz'} section */
+export function readArmAnswers(out, section) {
+  armSectionOk('readArmAnswers', section);
+  return readAnswerRecords(out, section).map(({ record: r }) => ({ qid: r.qid, arm: r.arm, outcome: r.arm_state, reply: r.reply, correct: r.correct }));
 }
 /** The summary (Q30), rewritten whole; answers its path under --out. */
 function writeArmsSummary(ctx, states, stop) {
@@ -9454,6 +9470,617 @@ export async function handcheckCommand(flags, driverEnv, deps = { loadFinal: loa
 }
 
 HANDLERS.set('handcheck', (flags, env) => handcheckCommand(flags, env));
+
+// ── W2-5b2 Task 5: report, the verdict from every node's gathered outputs (W2-D85, W2-D89, W2-D23, W2-D82, W2-D24) ──
+// `report --record <final>` runs on the reporting node after window end, over the files act 24 gathers, each passed with its
+// sha (Q2): every quiz node's arms summary (inside that node's gathered --out, beside its answer records), judged.json,
+// verify --section quiz output and quiz-source output; every named node's verify --section ab output and measure-history.py
+// --families report; and the operator's hand-check labels. It reads no HOME and no store and spawns nothing, so every
+// refusal answers before prepareOut makes --out (W2-5a's R10, D-6307; D-6309's rule). The record first (loadFinalRecord:
+// the chain, W2-D24's re-check with Q23's stamp after window start, the part 2 ranges), then each input's sha before a byte
+// of it is parsed, then every input against the record and the others; then decideGate's inputs are gathered and
+// decideGate is called once. The report decides nothing: verdict.json carries decideGate's answer whole (W2-D85, W2-D89).
+// Families are keyed by familyKey (RP7). The per-arm report-only figures drop every changed family (W2-D23) and every
+// family whose verify --section ab state is not ok, each state listed apart (V1); decideGate's inputs are not narrowed
+// (criterion 3 reads every listed treatment family). Live uptake reads measure-history's calls, which are arm IS NULL rows
+// only, so no replay arm's call reaches it, whatever generation the drain filed it under (W2-2b's legacy-family carry);
+// quiz uptake reads each arm run's own stream facts. W2-6's counters are their own entry's report (W2-D88), never read
+// here. Every per-arm value is keyed by RECALL_ARMS' members at run time (W2-D42).
+
+/** verdict.json (W2-D85): written once, under the reporting node's --out. */
+export const VERDICT_KIND = 'ccrc-history-w2-verdict';
+export const VERDICT_FILE = 'verdict.json';
+/** The report's own words (S2's C21, Q28): driver-local, pinned disjoint from DRIVER_REASONS and GATE_REASONS. A dropped
+ *  family's word: changed (W2-D23), then every verify --section ab state but ok, in AB_STATES' order (V1). */
+export const REPORT_DROPS = Object.freeze(['changed', ...AB_STATES.slice(1)]);
+/** The pooled stratum of a per-arm live figure, beside each producer's (W2-D15). */
+export const REPORT_ALL_PRODUCERS = 'all';
+/** S2's C15: what each gathered measure-history output's read instant is a proxy of. */
+export const READ_INSTANT_PROXY = 'measure-history-file-mtime';
+/** W2-D82, Q10: quiz uptake is measured, or unmeasured when the pilot found the control arm's exit 8 is not is_error. */
+export const QUIZ_UPTAKE_READINGS = Object.freeze(['measured', 'unmeasured']);
+/** K24: a node's arms summary pins its questions' uptake only as per-arm sums, so a quiz uptake figure from which V1 or
+ *  W2-D23 dropped a quiz family is pinned in aggregate only, and says so under this word. */
+export const QUIZ_UPTAKE_AGGREGATE_ONLY = 'aggregate-only';
+/** Gathered from each quiz node (a store the frozen list holds questions on), and from every named node. */
+const REPORT_QUIZ_INPUTS = Object.freeze(['arms-summary', 'judged', 'verify-quiz', 'sourced']);
+const REPORT_NODE_INPUTS = Object.freeze(['verify-ab', 'measure']);
+
+// ── pure ──
+/** An exact share, or null when nothing was counted: unmeasured is never 0. Pure.  @param {number} num  @param {number} den */
+export function shareOf(num, den) {
+  return den === 0 ? null : { num, den };
+}
+
+/** W2-D23 and V1: the families out of every per-arm report-only figure, each under its own word: every changed family, then
+ *  every family whose verify --section ab state is not ok, under that state. Never folded: a family both changed and
+ *  unrealised is listed under both. decideGate's inputs are not narrowed by it. Pure.
+ *  @param {string[]} changed familyKeys  @param {Map<string, string>} abStates familyKey -> an AB_STATES word
+ *  @returns {{lists: Record<string, string[]>, keys: Set<string>}} */
+export function droppedOf(changed, abStates) {
+  const lists = Object.fromEntries(REPORT_DROPS.map((w) => [w, []]));
+  for (const k of changed) lists[REPORT_DROPS[0]].push(k);
+  for (const [k, s] of abStates) {
+    if (!AB_STATES.includes(s)) throw new TypeError(`droppedOf: ${k} has verify state ${JSON.stringify(s)}`);
+    if (s !== AB_STATES[0]) lists[s].push(k);
+  }
+  for (const w of REPORT_DROPS) lists[w].sort(cmpUnit);
+  return { lists, keys: new Set(REPORT_DROPS.flatMap((w) => lists[w])) };
+}
+
+/** W2-D85: live uptake per window and per turn, by arm and by the window's producer (W2-D15), with the pooled stratum, over
+ *  the gate's measured windows of every family not dropped (W2-D23, V1). A share with nothing counted is null. Pure.
+ *  @param {Array<{key: string, arm: string, windows: Array<{producer: string}>}>} families assembleReports' families
+ *  @param {ReadonlySet<string>} dropped */
+export function liveUptakeOf(families, dropped) {
+  const cells = Object.fromEntries(RECALL_ARMS.map((arm) => [arm, new Map()]));
+  for (const f of families) {
+    if (dropped.has(f.key)) continue;
+    const byProducer = cells[f.arm];
+    if (byProducer === undefined) throw new TypeError(`liveUptakeOf: family ${f.key} has arm ${JSON.stringify(f.arm)}`);
+    for (const w of f.windows) {
+      for (const p of [w.producer, REPORT_ALL_PRODUCERS]) {
+        if (!byProducer.has(p)) byProducer.set(p, []);
+        byProducer.get(p).push(w);
+      }
+    }
+  }
+  return Object.fromEntries(RECALL_ARMS.map((arm) => [arm, Object.fromEntries([...cells[arm].keys()].sort(cmpUnit).map((p) => {
+    const t = windowTotals(cells[arm].get(p));
+    return [p, { ...t, per_window: shareOf(t.with_call, t.windows), per_turn: shareOf(t.calls, t.turns) }];
+  }))]));
+}
+
+/** Spec §10.2's first-call indicator, reported and never gated (W2-D85's first-call difference): per arm, the measured
+ *  windows holding at least one call, a control family's calls counted only up to its first exit 8 (the gate's
+ *  splitAtFirstExit8) and those after it reported apart; the difference of the two arms' shares (treatment minus control)
+ *  as an exact fraction, null when either arm has no measured window. Over the families not dropped (W2-D23, V1). Pure.
+ *  @param {Array<{key: string, arm: string, report: {calls: Array<[number, number, string]>}}>} families
+ *  @param {ReadonlySet<string>} dropped */
+export function firstCallOf(families, dropped) {
+  const byArm = Object.fromEntries(RECALL_ARMS.map((arm) => [arm, { windows: 0, with_call: 0, after_first_exit8: 0 }]));
+  for (const f of families) {
+    if (dropped.has(f.key)) continue;
+    const cell = byArm[f.arm];
+    if (cell === undefined) throw new TypeError(`firstCallOf: family ${f.key} has arm ${JSON.stringify(f.arm)}`);
+    const split = f.arm === CONTROL_ARM ? splitAtFirstExit8(f.report.calls) : { upTo: f.report.calls, after: [] };
+    for (const w of buildWindows({ ...f.report, calls: split.upTo })) {
+      if (w.state !== 'measured') continue;
+      cell.windows += 1;
+      if (w.with_call) cell.with_call += 1;
+    }
+    cell.after_first_exit8 += split.after.length;
+  }
+  const t = byArm[TREATMENT_ARM];
+  const c = byArm[CONTROL_ARM];
+  const difference = t.windows === 0 || c.windows === 0 ? null
+    : { num: t.with_call * c.windows - c.with_call * t.windows, den: t.windows * c.windows };
+  return { by_arm: byArm, difference };
+}
+
+/** W2-D82: quiz uptake per arm (the questions with a call, the calls, those via an Agent subagent and the errored ones),
+ *  over the answered questions whose family is not dropped (V1: every per-arm figure); unmeasured, never 0, when the pilot
+ *  found the control arm's exit 8 is not is_error (Q10). The node summaries pin uptake only as per-arm sums (D-6646), so
+ *  the figure is exactly pinned only when no quiz family is dropped; when `dropped` meets one, by_arm_pinned carries
+ *  QUIZ_UPTAKE_AGGREGATE_ONLY, and otherwise the key is absent (K24). Pure.
+ *  @param {string} reading a QUIZ_UPTAKE_READINGS word  @param {Array<{key: string, state: string, arms: Record<string, any>}>} questions
+ *  @param {ReadonlySet<string>} dropped */
+export function quizUptakeOf(reading, questions, dropped) {
+  if (!QUIZ_UPTAKE_READINGS.includes(reading)) throw new TypeError(`quizUptakeOf: reading ${JSON.stringify(reading)} is not one of ${QUIZ_UPTAKE_READINGS.join(', ')}`);
+  if (reading !== QUIZ_UPTAKE_READINGS[0]) return { reading, by_arm: null };
+  const byArm = Object.fromEntries(RECALL_ARMS.map((arm) => [arm, { questions: 0, with_call: 0, calls: 0, via_agent: 0, errored: 0 }]));
+  for (const q of questions) {
+    if (q.state !== 'answered' || dropped.has(q.key)) continue;
+    for (const arm of RECALL_ARMS) {
+      const u = q.arms[arm].uptake;
+      const cell = byArm[arm];
+      cell.questions += 1;
+      if (u.calls > 0) cell.with_call += 1;
+      cell.calls += u.calls;
+      cell.via_agent += u.via_agent;
+      cell.errored += u.errored;
+    }
+  }
+  if (questions.some((q) => dropped.has(q.key))) return { reading, by_arm: byArm, by_arm_pinned: QUIZ_UPTAKE_AGGREGATE_ONLY };   // K24
+  return { reading, by_arm: byArm };
+}
+
+/** K27: W2-5b1 writes ARM_PAYLOAD_CHANGED on the excluded owed arm only; its answered sibling shares question_state
+ * run-failed without a reason. Select the reason-bearing record, validate that it is run-failed, and deduplicate qids so
+ * the report exposes one exclusion per question. This is report-only: nodeAnswersOf still feeds the existing run-failed
+ * question state to decideGate and its W2-D89 threshold. Pure. (W2-5b1's build departure; re-anchor at W2-5b1's merged code.)
+ * @param {Iterable<{record: {qid: string, question_state: string, reason?: string}}>} records */
+export function payloadChangedOf(records) {
+  const qids = new Set();
+  for (const { record } of records) {
+    if (record.reason === undefined) continue;
+    if (record.reason !== ARM_PAYLOAD_CHANGED) continue;
+    if (record.question_state !== 'run-failed') {
+      throw new TypeError(`payloadChangedOf: ${record.qid} has ${ARM_PAYLOAD_CHANGED} but question_state ${JSON.stringify(record.question_state)}`);
+    }
+    qids.add(record.qid);
+  }
+  const ordered = [...qids].sort(cmpUnit);
+  return { count: ordered.length, qids: ordered };
+}
+
+/** W2-D34's asof_same_ms_hits, gathered from each quiz node's quiz-source output for its frozen questions: per store the
+ *  questions counted, those with a hit, and the hits; a frozen question its output does not count is unmeasured, never 0. Pure.
+ *  @param {Array<{qid: string, store_id: string}>} entries  @param {Map<string, any>} sourcedByStore */
+export function sameMsHitsOf(entries, sourcedByStore) {
+  const byStore = {};
+  const unmeasured = [];
+  for (const e of entries) {
+    if (byStore[e.store_id] === undefined) byStore[e.store_id] = { questions: 0, with_hits: 0, hits: 0 };
+    const n = sourcedByStore.get(e.store_id)?.asof_same_ms_hits?.[e.qid]?.asof_same_ms_hits;
+    if (!Number.isSafeInteger(n) || n < 0) { unmeasured.push(e.qid); continue; }
+    const cell = byStore[e.store_id];
+    cell.questions += 1;
+    cell.hits += n;
+    if (n > 0) cell.with_hits += 1;
+  }
+  return { by_store: byStore, unmeasured: unmeasured.sort(cmpUnit) };
+}
+
+/** assembleReports' refusal as a driver refusal (W2-D22): its two code words are the driver's own spellings (W2-D24); every
+ *  other GATE_REASONS word is input-invalid naming it. Pure.  @param {{reason: string, detail: string}} r */
+export function gateRefusalOf(r) {
+  return r.reason === 'code-changed' || r.reason === 'code-unmeasured'
+    ? { word: r.reason, detail: `measure ${r.detail}` } : { word: 'input-invalid', detail: `measure ${r.reason}: ${r.detail}` };
+}
+
+/** W2-D85's judge and hand-check figures, by arm: the judged answers and their labels, the judge-failed ones and those the
+ *  operator left unlabelled (the hold), and the sampled ones (W2-D81). A family in `dropped` (V1's states and W2-D23's
+ *  changed families, droppedOf's keys) counts in no figure but `sampled`: the hand-check's sample is never narrowed by V1
+ *  (K12; W2-D81 fixes `of: 'judged'`), and decideGate's own hold reads every item. Pure.
+ *  @param {Array<{id: string, arm: string, key: string, judgeFailed: boolean, label: string | null}>} items
+ *  @param {string[]} sampled  @param {Map<string, string>} operator  @param {ReadonlySet<string>} dropped */
+export function judgeTallyOf(items, sampled, operator, dropped) {
+  const picked = new Set(sampled);
+  const byArm = Object.fromEntries(RECALL_ARMS.map((arm) => [arm, { judged: 0, judge_failed: 0, uncertain: 0, fabricated: 0, sampled: 0, judge_failed_unlabelled: 0 }]));
+  for (const i of items) {
+    const cell = byArm[i.arm];
+    if (picked.has(i.id)) cell.sampled += 1;   // K12: the sample stays whole
+    if (dropped.has(i.key)) continue;   // V1, K12, W2-D23: a dropped family leaves every other judge figure
+    if (i.judgeFailed) {
+      cell.judge_failed += 1;
+      if (!operator.has(i.id)) cell.judge_failed_unlabelled += 1;
+    } else {
+      cell.judged += 1;
+      cell[i.label] += 1;
+    }
+  }
+  return byArm;
+}
+
+/** decideGate's inputs (W2-D89), gathered here and decided nowhere. The quiz: every frozen question under its family's
+ *  familyKey (RP7), a run-failed one excluded from both arms (W2-D80), each arm's label the string match's `correct`
+ *  (W2-D63) or the judge's after the hand-check override (W2-D81), null for a judge-failed answer the operator has not
+ *  labelled (the hold). The live A/B: assembleReports' families as they are, each marked changed (W2-D23) and unrealised
+ *  when its verify state is not ok (V1); decideGate keeps both in criterion 3 and drops them from its comparison block. The
+ *  hand-check's agreement by arm. Every per-arm key is a RECALL_ARMS member read at run time (W2-D42). Pure.
+ *  @param {{record: any, entries: any[], answers: Map<string, {state: string, arms: Record<string, any>}>,
+ *    judgedByPair: Map<string, {id: string, outcome: string}>, labels: Map<string, string>, agreement: Record<string, unknown>,
+ *    live: Array<{key: string, arm: string, windows: object[]}>, changed: ReadonlySet<string>, abStates: Map<string, string>,
+ *    stamps: ReadonlySet<string>, reportOnly: unknown}} o */
+export function gateInputsOf({ record, entries, answers, judgedByPair, labels, agreement, live, changed, abStates, stamps, reportOnly }) {
+  const families = new Map();
+  for (const e of entries) {
+    const key = familyKeyOf(e);
+    if (!families.has(key)) families.set(key, { key, questions: [] });
+    const a = answers.get(e.qid);
+    if (a === undefined) throw new TypeError(`gateInputsOf: frozen question ${e.qid} has no answers`);
+    if (a.state === 'run-failed') {
+      families.get(key).questions.push({ qid: e.qid, runFailed: true });
+      continue;
+    }
+    const q = { qid: e.qid, runFailed: false };
+    for (const arm of RECALL_ARMS) {
+      const r = a.arms[arm];
+      if (r.correct === true) {
+        q[arm] = { label: 'correct', answerState: r.answer_field.state, judgeFailed: false };
+        continue;
+      }
+      const j = judgedByPair.get(judgePairKey(e.qid, arm));
+      if (j === undefined) throw new TypeError(`gateInputsOf: question ${e.qid} has a non-correct answer the judge did not judge`);
+      q[arm] = { label: labels.get(j.id) ?? null, answerState: r.answer_field.state, judgeFailed: j.outcome === 'judge-failed' };
+    }
+    families.get(key).questions.push(q);
+  }
+  for (const f of live) if (!abStates.has(f.key)) throw new TypeError(`gateInputsOf: live family ${f.key} has no verify state`);
+  return {
+    seedHex: record.bootstrap.seed, B: record.bootstrap.B, halts: record.halts, codeChanged: stamps.has('code-changed'),
+    quiz: { families: [...families.values()] },
+    live: { families: live.map((f) => ({ key: f.key, arm: f.arm, windows: f.windows,
+      changed: changed.has(f.key), unrealised: abStates.get(f.key) !== AB_STATES[0] })) },
+    handcheck: { agreement: Object.fromEntries(RECALL_ARMS.map((arm) => [arm, agreement[arm]])) },
+    reportOnly,
+  };
+}
+
+/** One quiz node's judged.json against the record and its answers (W2-D79, Q18, R18): the section, this record, its frozen
+ *  list, the judge model and the signed rubric, and the judge map's sha, which the report recomputes from the seed over the
+ *  frozen list (every node's map is those bytes). Its items, through the map, are exactly this node's non-correct answers
+ *  of answered questions (a run-failed question is judged in neither arm, W2-D80), each once, judged with a label or
+ *  judge-failed without one. Answers each item by its (qid, arm). Pure; refuses input-invalid or quiz-sha-mismatch. */
+export function judgedOf({ judged, storeId, recordSha256, record, frozenSha256, mapSha256, map, answers }) {
+  const at = `judged ${storeId}`;
+  const j = judged;
+  if (!plainObject(j) || j.kind !== JUDGED_KIND || j.v !== 1 || j.section !== 'quiz' || !Array.isArray(j.items) || !Array.isArray(j.stamps)) {
+    refuse('input-invalid', `${at} is not a quiz judged file`);
+  }
+  if (j.record_sha256 !== recordSha256) refuse('input-invalid', `${at} record-mismatch: run judge --section quiz again under this record (it resumes and spawns nothing)`);
+  if (j.frozen_sha256 !== frozenSha256) refuse('quiz-sha-mismatch', `${at} names frozen list ${String(j.frozen_sha256)}, the record's is ${frozenSha256}`);
+  if (j.map_sha256 !== mapSha256) refuse('input-invalid', `${at} map-mismatch: its judge map is not the seed's over the frozen list (R18)`);
+  if (j.judge_model !== record.judge_model || j.rubric_id !== record.rubric_id || j.rubric_sha256 !== record.rubric_sha256) {
+    refuse('input-invalid', `${at} judge-mismatch: another judge model or rubric than the record's`);
+  }
+  const byId = new Map(map.map((m) => [m.id, m]));
+  const got = new Map();
+  for (const it of j.items) {
+    const m = plainObject(it) ? byId.get(it.id) : undefined;
+    if (m === undefined) refuse('input-invalid', `${at} item ${JSON.stringify(it?.id ?? null)} is not in the judge map`);
+    const k = judgePairKey(m.qid, m.arm);
+    if (got.has(k)) refuse('input-invalid', `${at} item ${it.id} is listed twice`);
+    const ok = (it.outcome === 'judged' && (it.label === 'uncertain' || it.label === 'fabricated')) || (it.outcome === 'judge-failed' && it.label === null);
+    if (!ok) refuse('input-invalid', `${at} item ${it.id} outcome ${JSON.stringify(it.outcome)} label ${JSON.stringify(it.label)}`);
+    got.set(k, { id: it.id, qid: m.qid, arm: m.arm, outcome: it.outcome, label: it.label });
+  }
+  const want = [];
+  for (const [qid, a] of answers) {
+    if (a.state !== 'answered') continue;
+    for (const arm of RECALL_ARMS) if (a.arms[arm].correct !== true) want.push(judgePairKey(qid, arm));
+  }
+  const missing = want.filter((k) => !got.has(k)).length;
+  const extra = [...got.keys()].filter((k) => !want.includes(k)).length;
+  if (missing > 0 || extra > 0) refuse('input-invalid', `${at} does not cover exactly this node's non-correct answers: ${missing} missing, ${extra} extra`);
+  return got;
+}
+
+// ── measuring ──
+/** S2's C15: when each gathered measure-history output was read, by proxy: its file's mtime (a copy that keeps no mtime
+ *  moves it later), labelled as the proxy it is, beside the report's own instant. An mtime that cannot be read is
+ *  unmeasured, never 0. `stat` is a test seam.
+ *  @param {Array<{path: string, value: {store_id: string}}>} measures  @param {number} nowMs */
+export function readInstantOf(measures, nowMs, stat = lstatSync) {
+  const byStore = {};
+  for (const m of measures) {
+    try {
+      byStore[m.value.store_id] = { state: 'measured', mtime_ms: Math.floor(stat(m.path).mtimeMs) };
+    } catch (e) {
+      byStore[m.value.store_id] = { state: 'unmeasured', code: errCode(e) };
+    }
+  }
+  return { proxy: READ_INSTANT_PROXY, by_store: byStore, report_ms: nowMs };
+}
+
+/** One input kind's files by the store each names: one per store, every store of `want` present and none other, each a
+ *  store the record names (W2-D84's node rule). */
+function inputsByStore(name, inputs, want, record) {
+  const m = new Map();
+  for (const i of inputs) {
+    const s = plainObject(i.value) ? i.value.store_id : undefined;
+    if (typeof s !== 'string') refuse('input-invalid', `${name} names no store_id`);
+    requireNamedNode(record, s);
+    if (m.has(s)) refuse('input-invalid', `${name} store-id-duplicate ${s}`);
+    m.set(s, i);
+  }
+  for (const s of want) if (!m.has(s)) refuse('input-invalid', `${name} store-missing ${record.nodes.find((n) => n.store_id === s).label}`);
+  for (const s of m.keys()) if (!want.includes(s)) refuse('input-invalid', `${name} for store ${s}, which holds no frozen question`);
+  return m;
+}
+
+/** One quiz node's answer records, read from the --out its sha-checked arms summary sits in (readAnswerRecords), held to the
+ *  frozen list and to that summary (W2-D85: every input sha-checked; D-6646):
+ *  each record names one of this node's frozen questions, with that entry's family, boundary and fact kind; every question
+ *  has both arms' records, settled as W2-5b1's arms settles them (W2-D80, R14); and armsSummaryOf over the records gives
+ *  the summary's bytes exactly, so the per-arm sums they hold (answered, each answer-field state, correct, and uptake's
+ *  questions with a call, calls, via_agent and errored) are the ones the summary's sha pins. A question's uptake and
+ *  answer-field value are pinned only through those sums, never one by one (K24): every gate input stays pinned, and the
+ *  report-only quiz uptake by arm is exactly pinned only when V1 drops no quiz family (quizUptakeOf marks it
+ *  aggregate-only otherwise). K27's `ARM_PAYLOAD_CHANGED` is a reason on the excluded owed arm's `run-failed` record only;
+ *  its answered sibling shares the question state and has no reason. payloadChangedOf reads the record collection whole,
+ *  derives one sorted qid per reason-bearing record, and armsSummaryOf must reproduce that optional summary field byte for
+ *  byte (W2-5b1's build departure; re-anchor at W2-5b1's merged code). A record's own record_sha256 is not compared: it is
+ *  written once, under the record in force when its question settled, and amendments only append (W2-D90). Answers the
+ *  records by qid, their files' shas and their stamps. */
+function nodeAnswersOf({ summary, storeId, recordSha256, entries }) {
+  const s = summary.value;
+  const at = `arms-summary ${storeId}`;
+  if (!plainObject(s) || s.kind !== ARMS_SUMMARY_KIND || s.v !== 1 || s.section !== 'quiz') refuse('input-invalid', `${at} is not a quiz arms summary`);
+  if (s.record_sha256 !== recordSha256) refuse('input-invalid', `${at} record-mismatch: run arms --section quiz again under this record (a settled question is never spawned again)`);
+  if (s.stop !== null || !plainObject(s.counts) || s.counts.rerun_owed !== 0 || s.counts.not_run !== 0) {
+    refuse('input-invalid', `${at} arms-unsettled: every question is answered or run-failed before the report (W2-D80)`);
+  }
+  const tail = armsSummaryRel('quiz').split('/');
+  const parts = summary.path.split(path.sep);
+  if (parts.length <= tail.length || parts.slice(-tail.length).join('/') !== tail.join('/')) {
+    refuse('input-invalid', `${at} is not <out>/${tail.join('/')}: pass the summary inside its node's gathered --out, beside its answer records`);
+  }
+  const root = parts.slice(0, -tail.length).join(path.sep);
+  const mine = new Map(entries.map((e) => [e.qid, e]));
+  const recs = new Map();
+  const files = [];
+  const records = [];
+  const stamps = new Set();
+  for (const item of readAnswerRecords(root, 'quiz')) {
+    const { rel, sha256, record: r } = item;
+    const e = mine.get(r.qid);
+    if (e === undefined || !RECALL_ARMS.includes(r.arm) || r.store_id !== storeId || r.ccrc_id !== e.ccrc_id || r.generation !== e.generation
+      || r.boundary_uuid !== e.boundary_uuid || r.fact_kind !== e.kind) {
+      refuse('input-invalid', `${at}: ${rel} is not one of this node's frozen questions`);
+    }
+    if (!Array.isArray(r.stamps) || (r.run !== null && (!plainObject(r.answer_field) || !ANSWER_STATES.includes(r.answer_field.state)
+      || typeof r.correct !== 'boolean' || !plainObject(r.uptake)))) {
+      refuse('input-invalid', `${at}: ${rel} is not a settled answer record`);
+    }
+    recs.set(judgePairKey(r.qid, r.arm), r);
+    files.push({ rel, sha256 });
+    records.push(item);
+    for (const st of r.stamps) stamps.add(st);
+  }
+  let payloadChanged;
+  try {
+    payloadChanged = payloadChangedOf(records);
+  } catch (e) {
+    if (!(e instanceof TypeError)) throw e;
+    refuse('input-invalid', `${at} ${e.message}`);
+  }
+  const answers = new Map();
+  const questions = [];
+  for (const e of entries) {
+    const arms = {};
+    for (const arm of RECALL_ARMS) {
+      const r = recs.get(judgePairKey(e.qid, arm));
+      if (r === undefined) refuse('input-invalid', `${at}: question ${e.qid} has no answer record for arm ${arm}`);
+      arms[arm] = r;
+    }
+    const states = [...new Set(RECALL_ARMS.map((arm) => arms[arm].question_state))];
+    const state = states.length === 1 ? states[0] : null;
+    if ((state !== 'answered' && state !== 'run-failed')
+      || (state === 'answered' && RECALL_ARMS.some((arm) => arms[arm].arm_state !== 'answered' || arms[arm].run === null))) {
+      refuse('input-invalid', `${at}: question ${e.qid} is not settled in its answer records (W2-D80)`);
+    }
+    answers.set(e.qid, { state, arms });
+    questions.push({ qid: e.qid, state, arms: RECALL_ARMS.map((arm) => ({ arm, answer: arms[arm].run === null ? null
+      : { answer_field: arms[arm].answer_field, correct: arms[arm].correct, absent: arms[arm].absent, reply: arms[arm].reply, uptake: arms[arm].uptake } })) });
+  }
+  let again;
+  try {
+    again = armsSummaryOf({ section: 'quiz', recordSha256: s.record_sha256, storeId: s.store_id, budget: s.budget, spend: s.spend,
+      batches: s.batches, stop: s.stop, stamps: s.stamps, questions, payloadChanged: payloadChanged.qids });
+  } catch (e) {
+    if (!(e instanceof TypeError)) throw e;
+    refuse('input-invalid', `${at} ${e.message}`);
+  }
+  if (sha256Hex(`${canonicalJson(again)}\n`) !== summary.sha256) refuse('input-invalid', `${at} does not match its answer records: armsSummaryOf over them gives other bytes`);
+  for (const st of s.stamps) stamps.add(st);
+  return { answers, files, stamps, payloadChanged };
+}
+
+/** One quiz node's verify --section quiz output (W2-D84, Q16): this record's, its headless-on state and over-hide count. */
+function verifyQuizOf(v, storeId, recordSha256) {
+  const at = `verify-quiz ${storeId}`;
+  if (!plainObject(v) || v.kind !== VERIFY_HEADLESS_KIND || v.v !== 1 || v.section !== 'quiz' || !plainObject(v.found) || !plainObject(v.over_hide)) {
+    refuse('input-invalid', `${at} is not a verify --section quiz output`);
+  }
+  if (v.record_sha256 !== recordSha256) refuse('input-invalid', `${at} record-mismatch: run verify --section quiz again under this record`);
+  return { headless_on: v.found.state, over_hide: v.over_hide };
+}
+
+/** One node's verify --section ab output (W2-D84, Q15, V1): this record's, listing exactly the record's assignment on this
+ *  store, each family once with its arm and an AB_STATES word. Answers the states by familyKey. */
+function verifyAbOf(v, storeId, recordSha256, assignment) {
+  const at = `verify-ab ${storeId}`;
+  if (!plainObject(v) || v.kind !== VERIFY_AB_KIND || v.v !== 1 || !Array.isArray(v.families)) refuse('input-invalid', `${at} is not a verify --section ab output`);
+  if (v.record_sha256 !== recordSha256) refuse('input-invalid', `${at} record-mismatch: run verify --section ab again under this record`);
+  const want = assignment.filter((a) => a.store_id === storeId);
+  const states = new Map();
+  for (const f of v.families) {
+    const a = plainObject(f) ? want.find((x) => x.ccrc_id === f.ccrc_id && x.generation === f.generation) : undefined;
+    if (a === undefined || f.arm !== a.arm || !AB_STATES.includes(f.state)) refuse('input-invalid', `${at} lists ${JSON.stringify(f?.ccrc_id ?? null)} off the record's assignment`);
+    const key = familyKeyOf(a);
+    if (states.has(key)) refuse('input-invalid', `${at} lists ${a.ccrc_id} twice`);
+    states.set(key, f.state);
+  }
+  if (states.size !== want.length) refuse('input-invalid', `${at} does not list ${want.length - states.size} assigned family(ies)`);
+  if (v.seen_after_write !== true) {   // K11, as W2-6's V2: after the output's own checks; only true passes
+    refuse('input-invalid', `${at} presence-stale: its presence record has not seen the newest recall-off write (newest_write ${JSON.stringify(v.newest_write ?? null)}); run verify --section ab again once the sweep has seen it (W2-D84)`);
+  }
+  return { states, seen_after_write: v.seen_after_write === true };
+}
+
+/** One quiz node's quiz-source output (W2-D34's counts): its shape, part 1's sha, the record's assignment, and every frozen
+ *  question of this store among its entries. */
+function sourcedOf(s, storeId, part1Sha256, assignmentSha256, entries) {
+  const at = `sourced ${storeId}`;
+  const bad = sourcedError(s);
+  if (bad !== null) refuse('input-invalid', `${at} shape ${bad}`);
+  if (s.record_sha256 !== part1Sha256) refuse('input-invalid', `${at} record-mismatch: quiz-source ran on another part 1`);
+  if (s.assignment_sha256 !== assignmentSha256) refuse('assignment-mismatch', `${at} derived ${s.assignment_sha256}, the record's assignment is ${assignmentSha256}`);
+  const qids = new Set(s.entries.map((e) => e.qid));
+  const lost = entries.filter((e) => !qids.has(e.qid));
+  if (lost.length > 0) refuse('input-invalid', `${at} does not hold frozen question ${lost[0].qid}`);
+  return s;
+}
+
+/** Every named node's measure-history report (W2-D22, W2-D23): each carries its presence rows, assembleReports keys and checks
+ *  them against the record (its refusal mapped, gateRefusalOf), and changedFamilies reads the rows, each under its report's
+ *  store. Answers the assembly, the changed families and each listed family's raw report by familyKey. */
+function liveOf(measures, record, allowCodeChange) {
+  for (const m of measures) {
+    const w2 = m.value.w2;
+    if (!plainObject(w2) || !Array.isArray(w2.recall_off)) {
+      refuse('input-invalid', `measure ${m.value.store_id} w2.recall_off absent: without the presence rows no family could read as changed (W2-D23)`);
+    }
+  }
+  let assembled;
+  try {
+    assembled = assembleReports(measures.map((m) => m.value), record, { allowCodeChange });
+  } catch (e) {
+    if (!(e instanceof TypeError)) throw e;
+    refuse('input-invalid', `measure ${e.message}`);
+  }
+  if (!assembled.ok) {
+    const g = gateRefusalOf(assembled);
+    refuse(g.word, g.detail);
+  }
+  const rows = [];
+  for (const m of measures) {
+    for (const kv of m.value.w2.recall_off) {
+      if (!Array.isArray(kv) || kv.length !== 2) refuse('input-invalid', `measure ${m.value.store_id} recall_off row ${JSON.stringify(kv)} is not [k, v]`);
+      rows.push({ store_id: m.value.store_id, k: kv[0], v: kv[1] });
+    }
+  }
+  let changed;
+  try {
+    changed = changedFamilies(rows, record.window, record.assignment);
+  } catch (e) {
+    if (!(e instanceof Error)) throw e;   // changedFamilies throws on data alone: a presence row off W2-D30's grammar
+    refuse('input-invalid', `measure ${e.message}`);
+  }
+  const raw = new Map();
+  for (const m of measures) for (const f of m.value.w2.families) raw.set(familyKey(m.value.store_id, f.ccrc_id, f.generation), f);
+  return { assembled, changed, raw };
+}
+
+// ── the command ──
+/** report's seams (tests pass their own; no flag takes one): the clock, the tree whose gate_code files are re-checked
+ *  (loadFinalRecord's root, W2-D24), and the pilot's quiz-uptake reading (W2-5b2 Task 2's quizUptakeReadingOf, W2-D82). */
+export const REPORT_DEPS = Object.freeze({ now: () => Date.now(), root: TREE_ROOT, uptakeReading: quizUptakeReadingOf });
+
+/** `report --record <final>` (W2-D85; acts 23 and 24), on the reporting node after window end. Every refusal answers
+ *  before --out exists; verdict.json is written once, its sha on stderr, stdout empty (D-5983).
+ *  @param {Flags} flags  @param {DriverEnv} driverEnv  @returns {Promise<number>} */
+export async function reportCommand(flags, driverEnv, deps = REPORT_DEPS) {
+  checkFlags('report', flags);
+  const nowMs = deps.now();
+  const run = loadFinalRecord(flags, { nowMs, root: deps.root });   // W2-D24 (report): gate_code before any other input
+  const record = run.record;
+  if (nowMs < record.window.end_ms) refuse('input-invalid', `window-open: report runs at or after window.end_ms ${record.window.end_ms} (acts 23 and 24)`);
+  const entries = run.frozen.list.entries;
+  const quizStores = [...new Set(entries.map((e) => e.store_id))].sort(cmpUnit);
+  const nodeStores = record.nodes.map((n) => n.store_id).sort(cmpUnit);
+  const by = {};
+  for (const n of [...REPORT_QUIZ_INPUTS, ...REPORT_NODE_INPUTS]) {
+    by[n] = inputsByStore(n, loadInputs(flags, n, n === 'measure' ? OUT_STREAM_CAP : OUT_JSON_CAP),
+      REPORT_QUIZ_INPUTS.includes(n) ? quizStores : nodeStores, record);
+  }
+  const stamps = new Set(run.stamps);
+  const map = judgeMapOf(record.bootstrap.seed, entries, RECALL_ARMS);
+  const mapSha256 = sha256Hex(judgeMapText('quiz', run.frozen.sha256, map));
+  const answers = new Map();
+  const answerFiles = [];
+  const payloadChangedQids = new Set();
+  const judgedByPair = new Map();
+  const overHide = {};
+  const headlessOn = {};
+  const sourcedByStore = new Map();
+  for (const s of quizStores) {
+    const mine = entries.filter((e) => e.store_id === s);
+    const node = nodeAnswersOf({ summary: by['arms-summary'].get(s), storeId: s, recordSha256: run.sha256, entries: mine });
+    for (const [qid, a] of node.answers) answers.set(qid, a);
+    for (const qid of node.payloadChanged.qids) payloadChangedQids.add(qid);
+    for (const f of node.files) answerFiles.push({ store_id: s, ...f });
+    for (const st of node.stamps) stamps.add(st);
+    const j = by.judged.get(s).value;
+    const pairs = judgedOf({ judged: j, storeId: s, recordSha256: run.sha256, record, frozenSha256: run.frozen.sha256, mapSha256, map, answers: node.answers });
+    for (const [k, it] of pairs) judgedByPair.set(k, it);
+    for (const st of j.stamps) stamps.add(st);
+    const vq = verifyQuizOf(by['verify-quiz'].get(s).value, s, run.sha256);
+    overHide[s] = vq.over_hide;
+    headlessOn[s] = vq.headless_on;
+    sourcedByStore.set(s, sourcedOf(by.sourced.get(s).value, s, flags['part1-sha256'], record.assignment_sha256, mine));
+  }
+  const abStates = new Map();
+  const presence = {};
+  for (const s of nodeStores) {
+    const v = verifyAbOf(by['verify-ab'].get(s).value, s, run.sha256, record.assignment);
+    for (const [k, st] of v.states) abStates.set(k, st);
+    presence[s] = v.seen_after_write;
+  }
+  const measures = nodeStores.map((s) => by.measure.get(s));
+  const live = liveOf(measures, record, flags['allow-code-change'] === true);
+  if (live.assembled.code_changed) stamps.add('code-changed');
+  // The hand-check (W2-D81), through W2-5b2 Task 4's one plan (W2-D12, K4): the --judged files read again by their shas and
+  // held as the sheet held them, the sample the sheet drew, Q19's strict label reader, and the gate's override and
+  // agreement inside handcheckResultOf.
+  const plan = loadHandcheckPlan(flags, run);
+  const operator = readHandcheckLabels(flags.labels, flags['labels-sha256'], plan);
+  const hc = handcheckResultOf(plan, operator);
+  const labels = new Map(hc.items.filter((i) => i.label !== null).map((i) => [i.id, i.label]));
+  const agreement = hc.agreement;
+  const keyOfQid = new Map(entries.map((e) => [e.qid, familyKeyOf(e)]));
+  const items = plan.items.map((i) => ({ id: i.id, arm: i.arm, key: keyOfQid.get(i.qid), judgeFailed: i.outcome === 'judge-failed', label: i.judge }));
+  const sampled = plan.sampled;
+  const dropped = droppedOf(live.changed.changed, abStates);
+  const questions = entries.map((e) => ({ key: familyKeyOf(e), state: answers.get(e.qid).state, arms: answers.get(e.qid).arms }));
+  const liveFamilies = live.assembled.families;
+  const payloadChanged = { qids: [...payloadChangedQids].sort(cmpUnit) };
+  const reportOnly = {
+    quiz_counts: questionCountsOf(questions.map((q) => q.state)),
+    ...(payloadChanged.qids.length === 0 ? {} : { payload_changed: { count: payloadChanged.qids.length, qids: payloadChanged.qids } }),
+    quiz_uptake: quizUptakeOf(deps.uptakeReading(record.pilot_result), questions, dropped.keys),
+    live_uptake: liveUptakeOf(liveFamilies, dropped.keys),
+    first_call: firstCallOf(liveFamilies.map((f) => ({ key: f.key, arm: f.arm, report: live.raw.get(f.key) })), dropped.keys),
+    dropped: dropped.lists,
+    recall_off_gaps: live.changed.gaps,
+    live_excluded: live.assembled.excluded,
+    judge: judgeTallyOf(items, sampled, operator, dropped.keys),
+    handcheck_agreement: agreement,
+    asof_same_ms_hits: sameMsHitsOf(entries, sourcedByStore),
+    over_hide: overHide,
+    headless_on: headlessOn,
+    presence_seen_after_write: presence,
+    read_instant: readInstantOf(measures, nowMs),
+  };
+  const inputs = gateInputsOf({ record, entries, answers, judgedByPair, labels, agreement, live: liveFamilies,
+    changed: new Set(live.changed.changed), abStates, stamps, reportOnly });
+  const gate = decideGate(inputs);
+  if (!gate.ok) refuse('input-invalid', `${gate.reason}: ${gate.detail}`);
+  const verdict = {
+    kind: VERDICT_KIND, v: 1, record_sha256: run.sha256, part1_sha256: flags['part1-sha256'], frozen_sha256: run.frozen.sha256,
+    release_tag: record.gate_code.release_tag, stamps: [...stamps].sort(cmpUnit), amendments: record.amendments,
+    inputs: {
+      ...Object.fromEntries(Object.entries(by).map(([n, m]) => [n, [...m].sort(([a], [b]) => cmpUnit(a, b)).map(([s, i]) => ({ store_id: s, sha256: i.sha256 }))])),
+      labels: flags['labels-sha256'], answers: answerFiles,
+    },
+    families: { quiz: inputs.quiz.families.map((f) => f.key), live: inputs.live.families.map((f) => ({ key: f.key, arm: f.arm })) },
+    gate, report_ms: nowMs,
+  };
+  const out = prepareOut(flags.out);
+  const claim = claimOut(out);
+  try {
+    if (lstatOrNull(out, VERDICT_FILE) !== null) refuse('out-refused', `${VERDICT_FILE} already exists: a verdict is never replaced (use a fresh --out)`);
+    writePlain(out, VERDICT_FILE, `${canonicalJson(verdict)}\n`);
+    process.stderr.write(`sha256 ${shaOfPlain(out, VERDICT_FILE)}\n`);
+    return EXIT.OK;
+  } finally {
+    claim.release();
+  }
+}
+
+HANDLERS.set('report', (flags, env) => reportCommand(flags, env));
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised
 // when main runs. Importing the module (the tests do) runs nothing. The exit code is set, never forced, so stderr drains.

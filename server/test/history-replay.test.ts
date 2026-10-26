@@ -221,7 +221,10 @@ describe('history-replay W2-4 Task 1: the argument grammar', () => {
       surface: 'string', ruling: 'string', 'release-tag': 'string', act: 'string', 'act-ms': 'int',
       fidelity: 'string', 'fidelity-sha256': 'string',
       // W2-5b2 Task 4 (W2-D81, Q2): the hand-check sheet's mode flag and every node's judged file, paired by position
-      sheet: 'bool', judged: 'list', 'judged-sha256': 'list' });
+      sheet: 'bool', judged: 'list', 'judged-sha256': 'list',
+      // W2-5b2 Task 5 (W2-D85, Q2): report's gathered inputs, a list flag per node paired with its sha, and the labels
+      'arms-summary': 'list', 'arms-summary-sha256': 'list', 'verify-quiz': 'list', 'verify-quiz-sha256': 'list',
+      'verify-ab': 'list', 'verify-ab-sha256': 'list', measure: 'list', 'measure-sha256': 'list', labels: 'string', 'labels-sha256': 'string' });
   });
 
   it('a subcommand, a string, an int and a bool parse to {sub, flags}', () => {
@@ -4853,7 +4856,7 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     ]);
     // The driver's whole subcommand set, in registration order: W2-4's two, W2-5a Task 7's six, then W2-5b1's and
     // W2-5b2's, in task order (Task 1's grammar cases use an unregistered name).
-    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify', 'marker', 'arms', 'judge', 'step0b', 'fidelity', 'pilot-result', 'handcheck']);
+    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify', 'marker', 'arms', 'judge', 'step0b', 'fidelity', 'pilot-result', 'handcheck', 'report']);
   });
 
   // D-5983: the sha256 line is on stderr (as open and freeze print it), exactly one line, and stdout is empty.
@@ -21806,5 +21809,975 @@ describe('W2-5b2 Task 4: handcheck --sheet (W2-D81, W2-D24; Q2, Q23)', () => {
     expect(man.stamps, 'Q23: the measured change is a stamp on the manifest').toEqual(['code-changed']);
     expect(man.items, 'every answer correct on both nodes: nothing to hand-check').toEqual([]);
     expect(readFileSync(join(fx.out, 'handcheck', 'sheet.txt'), 'utf8')).toContain('\n# items 0\n');
+  });
+});
+
+// ── W2-5b2 Task 5: report, the verdict from every node's gathered outputs (W2-D85, W2-D89, W2-D23, W2-D82, W2-D24) ──
+// Every input is made by the driver's own producers (buildDraft, buildFinal, frozenListText, armAnswerOf, armsSummaryOf,
+// judgeMapOf, verifyHeadlessReport, verifyAbReport, sourcedReport) over W2-5b1 Task 4's record fixtures, saved under mkTmp
+// trees outside any git tree; measure-history.py's reports are built by hand in its documented shape (no Python runs).
+// `report` runs in-process, its clock, its code root and the pilot's uptake reading injected (deps, never flags). The walk
+// first runs W2-5b1's real arms and judge on W2-5b1's arm stub. Nothing spawns a model, reads the live HOME or writes
+// outside its own mkTmp trees; key-shaped values are built at runtime. The test may spell the arm words; the driver never
+// does (W2-D42).
+import { describe as b2t5Describe, expect as b2t5Expect, it as b2t5It, vi as b2t5Vi } from 'vitest';
+import { utimesSync as b2t5Utimes } from 'node:fs';
+import * as b2t5Drv from '../../deploy/history-replay.mjs';
+import * as b2t5Gate from '../../deploy/history-gate.mjs';
+import * as b2t5Lib from '../../ccd/history/lib.mjs';
+import { mkTmp as b2t5MkTmp } from './tmpHelpers.js';
+
+type B2t5R = Record<string, any>;
+type B2t5Saved = { path: string; sha: string; value: any };
+type B2t5Result = { code: unknown; stdout: string; stderr: string; refusal: { word: string; detail: string } | null };
+type B2t5Call = { command: string; isError?: boolean; parent?: string };
+type B2t5Opts = {
+  twin?: boolean;
+  soloQuiz?: boolean;
+  answer?: (e: B2t5R, arm: string) => { text: string; calls?: B2t5Call[] };
+  runFailed?: (e: B2t5R) => boolean;
+  /** K27 fixture: the control arm is the excluded owed arm; its answered sibling remains answer-bearing. */
+  payloadChanged?: (e: B2t5R) => boolean;
+  judgeLabel?: (qid: string, arm: string) => 'uncertain' | 'fabricated' | null;
+  operator?: (id: string, judge: string | null) => string | null;
+  ab?: (f: B2t5R) => string;
+  liveCalls?: (f: B2t5R, w: number, ts: number) => Array<[number, number, string]>;
+  recallOff?: Array<[string, string]>;
+  hits?: (qid: string) => number;
+  summaryStamps?: string[];
+};
+const B2T5 = b2t5Drv as unknown as B2t5R;
+const B2T5_S1 = '00000000-0000-4000-8000-0000000052a1';
+const B2T5_S2 = '00000000-0000-4000-8000-0000000052b1';
+const B2T5_STORES = [B2T5_S1, B2T5_S2];
+/** The arm values in W2-2b's frozen order, by position. */
+const B2T5_ARMS: string[] = [...(b2t5Lib.RECALL_ARMS as readonly string[])];
+const B2T5_C = B2T5_ARMS[0]!;
+const B2T5_T = B2T5_ARMS[1]!;
+const B2T5_START = W5B4_T0 + W5B4_DAY;
+const B2T5_END = W5B4_T0 + 15 * W5B4_DAY;
+/** After window end: report's clock (acts 23 and 24). */
+const B2T5_NOW = W5B4_T0 + 16 * W5B4_DAY;
+const b2t5Hex = (label: string): string => b2t5Lib.sha256Hex(`w2-5b2 task 5 fixture: ${label}`) as string;
+const b2t5Key = (f: B2t5R): string => b2t5Gate.familyKey(f.store_id, f.ccrc_id, f.generation) as string;
+/** The first generation of `id` on `store` whose arm under W5B4_SEED is `arm` (W2-D19), searched from n0. */
+function b2t5Pick(store: string, id: string, arm: string, n0: number): W5b4Ref {
+  for (let n = n0; ; n += 1) {
+    const f = { store_id: store, ccrc_id: id, generation: w5b4Gen(n) };
+    if (b2t5Gate.armOf(W5B4_SEED, f) === arm) return f;
+  }
+}
+/** Text saved as the operator saves an output: 0600, in a fresh directory outside any git tree, with its bytes' sha. */
+function b2t5SaveText(text: string, name: string): B2t5Saved {
+  const p = join(b2t5MkTmp('ccrc-w5b2-t5-in-'), name);
+  writeFileSync(p, text, { mode: 0o600 });
+  return { path: p, sha: b2t5Lib.sha256Hex(text) as string, value: text };
+}
+/** A saved JSON file rewritten in place with `value` (canonical JSON and one newline), and its new sha. */
+function b2t5Rewrite(s: B2t5Saved, value: B2t5R): B2t5Saved {
+  const text = `${b2t5Lib.canonicalJson(value) as string}\n`;
+  writeFileSync(s.path, text, { mode: 0o600 });
+  return { path: s.path, sha: b2t5Lib.sha256Hex(text) as string, value };
+}
+/** One answered (qid, arm)'s record, in W2-5b1 Task 4's answer-record fields, its answer by the driver's armAnswerOf. */
+function b2t5Answered(recordSha: string, e: B2t5R, arm: string, a: { text: string; calls?: B2t5Call[] }, questionState: string): B2t5R {
+  const toolPairs = (a.calls ?? []).map((c, i) => ({ id: `toolu_b2t5_${i}`, name: 'Bash', input: { command: c.command },
+    result: c.isError === true ? 'exit 8' : 'ok', isError: c.isError === true, parentToolUseId: c.parent ?? null }));
+  const ans = B2T5.armAnswerOf(e, { result: { text: a.text }, toolPairs }, 7) as B2t5R;
+  const run = `quiz/arms/${e.qid as string}/${arm}.a1`;
+  return { kind: B2T5.ANSWER_KIND, v: 1, section: 'quiz', record_sha256: recordSha, store_id: e.store_id, qid: e.qid, arm, ccrc_id: e.ccrc_id,
+    generation: e.generation, boundary_uuid: e.boundary_uuid, fact_kind: e.kind, question_state: questionState, arm_state: 'answered',
+    attempts: [{ name: run, class: 'answered', code: 0, signal: null, tokens: 65, error_fields: [] }], run, ...ans, stamps: [] };
+}
+/** A run-failed arm's record: two infrastructure failures and no answered attempt (W2-D80). */
+function b2t5Failed(recordSha: string, e: B2t5R, arm: string): B2t5R {
+  const names = [1, 2].map((n) => `quiz/arms/${e.qid as string}/${arm}.a${n}`);
+  return { kind: B2T5.ANSWER_KIND, v: 1, section: 'quiz', record_sha256: recordSha, store_id: e.store_id, qid: e.qid, arm, ccrc_id: e.ccrc_id,
+    generation: e.generation, boundary_uuid: e.boundary_uuid, fact_kind: e.kind, question_state: 'run-failed', arm_state: 'run-failed',
+    attempts: names.map((name) => ({ name, class: 'infra-failed', code: 1, signal: null, tokens: 0, error_fields: [] })),
+    run: null, answer_field: null, correct: null, absent: null, reply: null, uptake: null, stamps: [] };
+}
+/** K27's actual W2-5b1 departure shape: only the owed arm has the reason; its answered sibling retains its answer but shares
+ * question_state run-failed, so the report must select the reason-bearing record and deduplicate qids rather than count states.
+ * (W2-5b1's build departure; re-anchor at W2-5b1's merged code.) */
+function b2t5PayloadChanged(recordSha: string, e: B2t5R, arm: string, a: { text: string; calls?: B2t5Call[] }): B2t5R {
+  if (arm !== B2T5_C) return b2t5Answered(recordSha, e, arm, a, 'run-failed');
+  return { ...b2t5Failed(recordSha, e, arm), reason: B2T5.ARM_PAYLOAD_CHANGED };
+}
+/** measure-history.py's --families report for one listed family, in its documented shape: one boundary per window inside the
+ *  window, one copy each holding no assistant row and ending 1 s after it, so each window is measured with an inclusive end.
+ *  A treatment family has three windows, each with one call; a control family two, the first with one call. */
+function b2t5Family(a: B2t5R, i: number, o: B2t5Opts): B2t5R {
+  const n = a.arm === B2T5_T ? 3 : 2;
+  const calls: Array<[number, number, string]> = [];
+  const boundaries = Array.from({ length: n }, (_, w) => {
+    const ts = B2T5_START + 3_600_000 + i * 1_000_000 + w * 10_000;
+    calls.push(...(o.liveCalls !== undefined ? o.liveCalls(a, w, ts) : a.arm === B2T5_T || w === 0 ? [[ts + 10, 0, 'grep'] as [number, number, string]] : []));
+    return { boundary_uuid: w5b4Gen(7600 + i * 10 + w), ts_ms: ts, copies: [{ file_id: 1, source_key: '', boundary_line: 1 + w * 10, after_count: 1,
+      summary_line: null, next_boundary_line: null, next_boundary_ts_ms: null, last_ts_ms: ts + 1000, rows: [], models: [], truncated: false }] };
+  });
+  return { ccrc_id: a.ccrc_id, generation: a.generation, found: true, merged_generations: [], calls, boundaries };
+}
+/** The report's world: two named nodes, each holding one quiz family (two questions on node-0's store, one on node-1's) and
+ *  live families (node-0 a treatment and a control family, node-1 a treatment family); part 1 and part 2 through the driver's
+ *  own builders; and every input report reads, saved with its sha. By default the treatment arm answers right and the
+ *  control arm UNKNOWN, the judge labels every non-correct answer uncertain, the operator agrees, every verify state is ok
+ *  and every treatment window holds a call: a passing set (a prediction, measured by Step 7). */
+function b2t5World(o: B2t5Opts = {}) {
+  const home = w5b4Home(null);
+  const twin = o.twin === true;
+  const qa: W5b4Ref = { store_id: B2T5_S1, ccrc_id: twin ? 'quiz-twin' : 'quiz-a', generation: w5b4Gen(610) };
+  const qb: W5b4Ref = { store_id: B2T5_S2, ccrc_id: twin ? 'quiz-twin' : 'quiz-b', generation: w5b4Gen(twin ? 610 : 620) };
+  const made = o.soloQuiz === true ? [w5b4Entry(qa, 21), w5b4Entry(qa, 22)] : [w5b4Entry(qa, 21), w5b4Entry(qa, 22), w5b4Entry(qb, 23)];
+  const lt = b2t5Pick(B2T5_S1, twin ? 'twin' : 'live-t1', B2T5_T, 700);
+  const lc = b2t5Pick(B2T5_S1, 'live-c1', B2T5_C, 720);
+  const l2: W5b4Ref = twin ? { store_id: B2T5_S2, ccrc_id: 'twin', generation: lt.generation } : b2t5Pick(B2T5_S2, 'live-t2', B2T5_T, 740);
+  const list = b2t5Gate.assignArms(W5B4_SEED, [lt, lc, l2]) as Array<W5b4Ref & { arm: string }>;
+  const draft = w5b4Draft(home, { stores: B2T5_STORES });
+  const d = w5b4Save(draft, 'part1.json');
+  const fz = w5b4SaveText(B2T5.frozenListText('quiz', W5B4_HEAD, made) as string, 'frozen.json');
+  const final = B2T5.buildFinal({ draft, draftSha256: d.sha,
+    assembled: { nodes: B2T5_STORES.map((s) => ({ store_id: s, census_sha256: b2t5Hex(`census ${s}`), report: { census: { as_of_ms: W5B4_T0 } } })), drops: [] },
+    assignment: { list, sha256: b2t5Gate.assignmentSha256(list) },
+    power: { headline: null, at_power_80: null, at_rho_0: null, rho_hat: null, n_f: {}, coverage: {}, pre_window_uptake: {} }, powerSha256: b2t5Hex('power'),
+    frozen: { sha256: fz.sha, list: fz.value, families: B2T5.familiesOf(fz.value.entries) },
+    pilotResult: { fidelity: [], usage_extrapolation: {}, step0b_sha256: b2t5Hex('step0b'), settings_mode: 'restricted', absent_rate: { num: 0, den: 10 } },
+    spendBudget: 1_000_000, window: { start: B2T5_START, end: B2T5_END }, decision: 'keep', nowMs: W5B4_T0 }) as B2t5R;
+  const f = w5b4Save(final, 'part2.json');
+  const entries = fz.value.entries as B2t5R[];
+  const map = B2T5.judgeMapOf(final.bootstrap.seed, entries, B2T5_ARMS) as Array<{ id: string; qid: string; arm: string }>;
+  const mapText = B2T5.judgeMapText('quiz', fz.sha, map) as string;
+  const answerOf = o.answer ?? ((e: B2t5R, arm: string) => ({ text: arm === B2T5_T ? `ANSWER: ${e.fact as string}` : 'ANSWER: UNKNOWN' }));
+  const nodes: Record<string, B2t5R> = {};
+  for (const s of B2T5_STORES) {
+    const mine = entries.filter((e) => e.store_id === s);
+    const root = join(b2t5MkTmp('ccrc-w5b2-t5-node-'), 'out');
+    mkdirSync(join(root, 'quiz', 'answers'), { recursive: true, mode: 0o700 });
+    mkdirSync(join(root, 'quiz', 'arms'), { recursive: true, mode: 0o700 });
+    const recs: B2t5R[] = [];
+    const questions = mine.map((e) => {
+      const failed = o.runFailed?.(e) === true;
+      const payloadChanged = o.payloadChanged?.(e) === true;
+      const arms = B2T5_ARMS.map((arm) => {
+        const r = payloadChanged ? b2t5PayloadChanged(f.sha, e, arm, answerOf(e, arm))
+          : failed && arm === B2T5_C ? b2t5Failed(f.sha, e, arm)
+          : b2t5Answered(f.sha, e, arm, answerOf(e, arm), failed ? 'run-failed' : 'answered');
+        recs.push(r);
+        return { arm, answer: r.run === null ? null : { answer_field: r.answer_field, correct: r.correct, absent: r.absent, reply: r.reply, uptake: r.uptake } };
+      });
+      return { qid: e.qid as string, state: failed || payloadChanged ? 'run-failed' : 'answered', arms };
+    });
+    for (const r of recs) writeFileSync(join(root, 'quiz', 'answers', `${r.qid as string}.${r.arm as string}.json`), `${b2t5Lib.canonicalJson(r) as string}\n`, { mode: 0o600 });
+    const summary = B2T5.armsSummaryOf({ section: 'quiz', recordSha256: f.sha, storeId: s,
+      budget: { in_force: 600_000, spend_budget: 1_000_000, n_node: mine.length, n_all: entries.length }, spend: 130 * mine.length, batches: 1,
+      stop: null, stamps: o.summaryStamps ?? [], questions,
+      payloadChanged: [...new Set(recs.filter((r) => r.reason === B2T5.ARM_PAYLOAD_CHANGED).map((r) => r.qid as string))].sort() }) as B2t5R;
+    const summaryPath = join(root, 'quiz', 'arms', 'summary.json');
+    const summaryText = `${b2t5Lib.canonicalJson(summary) as string}\n`;
+    writeFileSync(summaryPath, summaryText, { mode: 0o600 });
+    writeFileSync(join(root, 'quiz', 'judge.map.json'), mapText, { mode: 0o600 });
+    const items = recs.filter((r) => r.question_state === 'answered' && r.correct !== true).map((r) => {
+      const label = o.judgeLabel === undefined ? 'uncertain' : o.judgeLabel(r.qid, r.arm);
+      return { id: map.find((m) => m.qid === r.qid && m.arm === r.arm)!.id, outcome: label === null ? 'judge-failed' : 'judged', label, attempts: [] };
+    }).sort((a, b) => (a.id < b.id ? -1 : 1));
+    const judgedPath = join(root, 'quiz', 'judged.json');
+    const judgedValue = { kind: B2T5.JUDGED_KIND, v: 1, section: 'quiz', store_id: s, record_sha256: f.sha, frozen_sha256: fz.sha,
+      map_sha256: b2t5Lib.sha256Hex(mapText), judge_model: final.judge_model, rubric_id: final.rubric_id, rubric_sha256: final.rubric_sha256,
+      settings_mode: 'restricted', reply_max_bytes: 16384, items, budget: 600_000, spend: 0, stamps: [] };
+    const judgedText = `${b2t5Lib.canonicalJson(judgedValue) as string}\n`;
+    writeFileSync(judgedPath, judgedText, { mode: 0o600 });
+    nodes[s] = {
+      root, mine, recs, items,
+      summary: { path: summaryPath, sha: b2t5Lib.sha256Hex(summaryText), value: summary },
+      judged: { path: judgedPath, sha: b2t5Lib.sha256Hex(judgedText), value: judgedValue },
+      verifyQuiz: w5b4Save(B2T5.verifyHeadlessReport({ recordSha256: f.sha, storeId: s, section: 'quiz', expectedSha256: b2t5Hex(`marker ${s}`),
+        found: { state: 'ok', sha256: b2t5Hex(`marker ${s}`), missing: [], extra: [] },
+        overHide: { cut: 'all-visible', binds: {}, leaves: 4, hidden: 1, hidden_ids: [`leaf-${s}`], hidden_ids_max: 1000 } }), `verify-quiz-${s}.json`),
+      sourced: w5b4Save(B2T5.sourcedReport({ recordSha256: d.sha, storeId: s, assignmentSha256: final.assignment_sha256, inputs: [],
+        sourced: { entries: mine.map((e, i) => ({ ...e, rank: [b2t5Hex(`rank ${s}`), i] })), counts: {},
+          asof_same_ms_hits: Object.fromEntries(mine.map((e) => [e.qid, { asof_same_ms_hits: o.hits?.(e.qid) ?? 0 }])) }, spend: 0 }), `sourced-${s}.json`),
+    };
+  }
+  B2T5_STORES.forEach((s, i) => {
+    const fams = list.filter((a) => a.store_id === s);
+    nodes[s]!.verifyAb = w5b4Save(B2T5.verifyAbReport({ recordSha256: f.sha, storeId: s,
+      families: fams.map((a) => ({ ccrc_id: a.ccrc_id, generation: a.generation, arm: a.arm, state: o.ab?.(a) ?? 'ok' })), newest: { state: 'absent' }, seen: B2T5_START }),
+    `verify-ab-${s}.json`);
+    nodes[s]!.measure = w5b4Save({ store_id: s, user_version: 2, script_sha256: final.gate_code.files['deploy/measure-history.py'], counters: {},
+      w1f_grep_p95_ms: null, census: null,
+      w2: { row_cap: b2t5Gate.ROW_CAP, window_start_ms: B2T5_START, window_end_ms: B2T5_END, families: fams.map((a, k) => b2t5Family(a, k + 3 * i, o)),
+        recall_off: i === 0 ? o.recallOff ?? [] : [] } }, `measure-${s}.json`);
+  });
+  // The sample the sheet draws, through W2-5b2 Task 4's pure plan (K4) over the judged files as saved.
+  const plan = B2T5.handcheckPlanOf({ record: final, recordSha256: f.sha, frozenSha256: fz.sha, entries, map, mapSha256: b2t5Lib.sha256Hex(mapText),
+    judged: B2T5_STORES.map((s) => ({ path: nodes[s]!.judged.path, sha256: nodes[s]!.judged.sha, value: nodes[s]!.judged.value })) }) as B2t5R;
+  const hItems = (plan.items as B2t5R[]).map((i): B2t5R => ({ ...i, label: i.judge }));
+  const sampled = plan.sampled as string[];
+  const lines = ['# the operator\'s hand-check labels (W2-D81, Q19)'];
+  for (const it of hItems) {
+    if (!sampled.includes(it.id)) continue;
+    const want = o.operator === undefined ? (it.label ?? 'fabricated') : o.operator(it.id, it.label ?? null);
+    if (want !== null) lines.push(`${it.id as string} ${want}`);
+  }
+  const labels = b2t5SaveText(`${lines.join('\n')}\n`, 'labels.txt');
+  const out = join(b2t5MkTmp('ccrc-w5b2-t5-out-'), 'out');
+  const per = (flag: string, field: string): string[] => B2T5_STORES.flatMap((s) => w5b4Inp(flag, nodes[s]![field] as W5b4Saved));
+  const argv = (over: Record<string, string[] | null> = {}, extra: string[] = [], at: string = out): string[] => {
+    const parts: Record<string, string[] | null> = {
+      record: w5b4Inp('record', f), part1: w5b4Inp('part1', d), frozen: w5b4Inp('frozen', fz),
+      'arms-summary': per('arms-summary', 'summary'), judged: per('judged', 'judged'), 'verify-quiz': per('verify-quiz', 'verifyQuiz'),
+      sourced: per('sourced', 'sourced'), 'verify-ab': per('verify-ab', 'verifyAb'), measure: per('measure', 'measure'),
+      labels: w5b4Inp('labels', labels as W5b4Saved), ...over,
+    };
+    return ['report', '--out', at, ...Object.values(parts).flatMap((v) => v ?? []), ...extra];
+  };
+  return { home, entries, list, lt, lc, l2, d, fz, final, f, map, nodes, hItems, sampled, labels, out, argv };
+}
+/** `report` in-process, as main runs it (parseArgs, then the handler): its clock after window end, the checkout as its code
+ *  root and the pilot's uptake reading measured, unless `deps` says otherwise; stdout and stderr captured, a refusal
+ *  answered as {word, detail}; any other throw is the case's failure (D-6309's rule). */
+async function b2t5Report(argv: string[], deps: B2t5R = {}): Promise<B2t5Result> {
+  const err: string[] = [];
+  const out: string[] = [];
+  const e1 = b2t5Vi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write);
+  const o1 = b2t5Vi.spyOn(process.stdout, 'write').mockImplementation(((s: string | Uint8Array) => { out.push(String(s)); return true; }) as typeof process.stdout.write);
+  try {
+    const { flags } = B2T5.parseArgs(argv) as { flags: B2t5R };
+    const code = await B2T5.reportCommand(flags, { HOME: undefined, TMUX_PANE: undefined, LANG: undefined },
+      { now: () => B2T5_NOW, root: W5B4_REPO, uptakeReading: () => 'measured', ...deps });
+    return { code, stdout: out.join(''), stderr: err.join(''), refusal: null };
+  } catch (e) {
+    if (e instanceof b2t5Drv.DriverRefusal) return { code: null, stdout: out.join(''), stderr: err.join(''), refusal: { word: (e as B2t5R).word, detail: (e as B2t5R).detail } };
+    throw e;
+  } finally {
+    e1.mockRestore();
+    o1.mockRestore();
+  }
+}
+const b2t5Verdict = (out: string): B2t5R => JSON.parse(readFileSync(join(out, 'verdict.json'), 'utf8')) as B2t5R;
+/** decideGate's answer without its report-only echo: what a report-only change must never move (RP6). */
+const b2t5Gated = (v: B2t5R): B2t5R => ({ ...v.gate, report_only: null });
+/** A code root holding the four gate_code files, copied (`edit` appends a byte to one; `drop` removes one), so codeShas()
+ *  over it moves while the driver runs from the checkout (loadFinalRecord's root, W2-D24). */
+function b2t5Tree(o: { edit?: string; drop?: string } = {}): string {
+  const tree = b2t5MkTmp('ccrc-w5b2-t5-tree-');
+  for (const rel of B2T5.CODE_SHA_FILES as string[]) {
+    mkdirSync(join(tree, path.dirname(rel)), { recursive: true });
+    copyFileSync(join(W5B4_REPO, rel), join(tree, rel));
+  }
+  if (o.edit !== undefined) writeFileSync(join(tree, o.edit), '\n', { flag: 'a' });
+  if (o.drop !== undefined) rmSync(join(tree, o.drop));
+  return tree;
+}
+/** The flags of every gathered input pointed at a path that does not exist (the W2-D24 rows read none of them). */
+const b2t5Absent = (w: B2t5R): string[] => w.argv(Object.fromEntries(['arms-summary', 'judged', 'verify-quiz', 'sourced', 'verify-ab', 'measure', 'labels']
+  .map((n) => [n, [`--${n}`, '/home/u/absent-input.json', `--${n}-sha256`, b2t5Hex(`absent ${n}`)]])));
+/** A node file of `w` rewritten in place by `edit` over a copy of its value. */
+const b2t5Edit = (w: B2t5R, s: string, field: string, edit: (v: B2t5R) => B2t5R): void => {
+  w.nodes[s][field] = b2t5Rewrite(w.nodes[s][field] as B2t5Saved, edit(structuredClone(w.nodes[s][field].value) as B2t5R));
+};
+/** The path of node `s`'s first question's answer record for `arm`. */
+const b2t5RecordOf = (w: B2t5R, s: string, arm: string): string => join(w.nodes[s].root, 'quiz', 'answers', `${w.nodes[s].mine[0].qid as string}.${arm}.json`);
+const B2T5_DRV_TEXT = readFileSync(join(W5B4_REPO, 'deploy', 'history-replay.mjs'), 'utf8');
+const b2t5Code = (l: string): boolean => { const t = l.trim(); return t !== '' && !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*'); };
+const B2T5_SECTION = B2T5_DRV_TEXT.slice(B2T5_DRV_TEXT.indexOf(' W2-5b2 Task 5: report, the verdict from every node'), B2T5_DRV_TEXT.indexOf("HANDLERS.set('report'"));
+const b2t5PayloadEntry = (w: B2t5R): B2t5R => w.nodes[B2T5_S1]!.mine[0] as B2t5R;
+
+b2t5Describe('W2-5b2 Task 5: report, pure parts', () => {
+  b2t5It('the report words are driver-local and disjoint from DRIVER_REASONS and GATE_REASONS (S2 C21, Q28)', () => {
+    b2t5Expect(B2T5.REPORT_DROPS).toEqual(['changed', ...(B2T5.AB_STATES as string[]).slice(1)]);
+    b2t5Expect(Object.isFrozen(B2T5.REPORT_DROPS)).toBe(true);
+    b2t5Expect(B2T5.QUIZ_UPTAKE_READINGS).toEqual(['measured', 'unmeasured']);
+    b2t5Expect(B2T5.QUIZ_UPTAKE_AGGREGATE_ONLY, 'K24').toBe('aggregate-only');
+    b2t5Expect(B2T5.READ_INSTANT_PROXY).toBe('measure-history-file-mtime');
+    b2t5Expect(B2T5.REPORT_ALL_PRODUCERS).toBe('all');
+    b2t5Expect([B2T5.VERDICT_KIND, B2T5.VERDICT_FILE]).toEqual(['ccrc-history-w2-verdict', 'verdict.json']);
+    for (const w of [...B2T5.REPORT_DROPS, ...B2T5.QUIZ_UPTAKE_READINGS, B2T5.QUIZ_UPTAKE_AGGREGATE_ONLY, B2T5.READ_INSTANT_PROXY, B2T5.REPORT_ALL_PRODUCERS] as string[]) {
+      b2t5Expect(B2T5.DRIVER_REASONS, w).not.toContain(w);
+      b2t5Expect(b2t5Gate.GATE_REASONS, w).not.toContain(w);
+    }
+  });
+
+  b2t5It('droppedOf lists every changed family and every verify state but ok, each under its own word, never folded (W2-D23, V1)', () => {
+    const ab = new Map([['k-ok', 'ok'], ['k-ca', 'control-absent'], ['k-cm', 'control-mismatch'], ['k-tn', 'treatment-named'], ['k-un', 'unreadable']]);
+    const d = B2T5.droppedOf(['k-un', 'k-ch'], ab) as { lists: Record<string, string[]>; keys: Set<string> };
+    b2t5Expect(d.lists).toEqual({ changed: ['k-ch', 'k-un'], 'control-absent': ['k-ca'], 'control-mismatch': ['k-cm'], 'treatment-named': ['k-tn'], unreadable: ['k-un'] });
+    b2t5Expect([...d.keys].sort()).toEqual(['k-ca', 'k-ch', 'k-cm', 'k-tn', 'k-un']);
+    b2t5Expect(d.keys.has('k-ok'), 'CONTROL: ok drops nothing').toBe(false);
+    b2t5Expect(() => B2T5.droppedOf([], new Map([['k', 'absent']]))).toThrow(TypeError);
+  });
+
+  b2t5It('liveUptakeOf: per window and per turn, by arm and by producer with the pooled stratum; a dropped family counts nowhere; nothing counted is null (W2-D85)', () => {
+    const w = (producer: string, calls: number, turns: number): B2t5R => ({ state: 'measured', producer, calls, turns, with_call: calls > 0 });
+    const fams = [
+      { key: 'k1', arm: B2T5_T, windows: [w('anthropic', 2, 4), w('unknown', 0, 0)] },
+      { key: 'k2', arm: B2T5_C, windows: [w('anthropic', 0, 3)] },
+      { key: 'k3', arm: B2T5_T, windows: [w('anthropic', 5, 5)] },
+    ];
+    const got = B2T5.liveUptakeOf(fams, new Set(['k3'])) as B2t5R;
+    b2t5Expect(got[B2T5_T]).toEqual({
+      all: { windows: 2, with_call: 1, calls: 2, turns: 4, unmeasured: 0, per_window: { num: 1, den: 2 }, per_turn: { num: 2, den: 4 } },
+      anthropic: { windows: 1, with_call: 1, calls: 2, turns: 4, unmeasured: 0, per_window: { num: 1, den: 1 }, per_turn: { num: 2, den: 4 } },
+      unknown: { windows: 1, with_call: 0, calls: 0, turns: 0, unmeasured: 0, per_window: { num: 0, den: 1 }, per_turn: null },
+    });
+    b2t5Expect(got[B2T5_C].all.per_window, 'a control window with no call').toEqual({ num: 0, den: 1 });
+    b2t5Expect(B2T5.liveUptakeOf([], new Set()), 'no family: no stratum, never zeros').toEqual({ [B2T5_C]: {}, [B2T5_T]: {} });
+    b2t5Expect(B2T5.shareOf(0, 0)).toBeNull();
+  });
+
+  b2t5It('firstCallOf: control calls count up to the first exit 8 and the rest are reported apart; treatment calls all count; the difference is exact (spec 10.2)', () => {
+    const at = (w: number): number => B2T5_START + 3_600_000 + w * 10_000;
+    const rep = (n: number, calls: Array<[number, number, string]>): B2t5R => ({ ccrc_id: 'x', generation: w5b4Gen(1), found: true, merged_generations: [], calls,
+      boundaries: Array.from({ length: n }, (_, w) => ({ boundary_uuid: w5b4Gen(50 + w), ts_ms: at(w), copies: [{ file_id: 1, source_key: '', boundary_line: 1 + w * 10,
+        after_count: 1, summary_line: null, next_boundary_line: null, next_boundary_ts_ms: null, last_ts_ms: at(w) + 1000, rows: [], models: [], truncated: false }] })) });
+    const control = rep(3, [[at(0) + 10, 8, 'grep'], [at(1) + 10, 0, 'grep'], [at(2) + 10, 8, 'grep']]);
+    const treatment = rep(2, [[at(0) + 10, 8, 'grep'], [at(1) + 10, 0, 'grep']]);
+    const got = B2T5.firstCallOf([{ key: 'kc', arm: B2T5_C, report: control }, { key: 'kt', arm: B2T5_T, report: treatment }], new Set()) as B2t5R;
+    b2t5Expect(got.by_arm[B2T5_C]).toEqual({ windows: 3, with_call: 1, after_first_exit8: 2 });
+    b2t5Expect(got.by_arm[B2T5_T], 'a treatment family is never cut').toEqual({ windows: 2, with_call: 2, after_first_exit8: 0 });
+    b2t5Expect(got.difference).toEqual({ num: 2 * 3 - 1 * 2, den: 6 });
+    b2t5Expect(B2T5.firstCallOf([{ key: 'kt', arm: B2T5_T, report: treatment }], new Set()).difference, 'no control window: null, never 0').toBeNull();
+    b2t5Expect(B2T5.firstCallOf([{ key: 'kc', arm: B2T5_C, report: control }], new Set(['kc'])).by_arm[B2T5_C], 'a dropped family counts nowhere')
+      .toEqual({ windows: 0, with_call: 0, after_first_exit8: 0 });
+  });
+
+  b2t5It('quizUptakeOf: per arm with via_agent over answered questions not dropped; unmeasured is null, never 0 (W2-D82, Q10, V1)', () => {
+    const u = (calls: number, via: number, err: number): B2t5R => ({ uptake: { calls, via_agent: via, errored: err } });
+    const qs = [
+      { key: 'f1', state: 'answered', arms: { [B2T5_C]: u(0, 0, 2), [B2T5_T]: u(3, 1, 0) } },
+      { key: 'f1', state: 'answered', arms: { [B2T5_C]: u(1, 0, 0), [B2T5_T]: u(0, 0, 0) } },
+      { key: 'f2', state: 'answered', arms: { [B2T5_C]: u(9, 9, 9), [B2T5_T]: u(9, 9, 9) } },
+      { key: 'f1', state: 'run-failed', arms: { [B2T5_C]: { uptake: null }, [B2T5_T]: u(9, 9, 9) } },
+    ];
+    b2t5Expect(B2T5.quizUptakeOf('measured', qs, new Set(['f2']))).toEqual({ reading: 'measured', by_arm: {
+      [B2T5_C]: { questions: 2, with_call: 1, calls: 1, via_agent: 0, errored: 2 },
+      [B2T5_T]: { questions: 2, with_call: 1, calls: 3, via_agent: 1, errored: 0 } }, by_arm_pinned: 'aggregate-only' });
+    b2t5Expect(B2T5.quizUptakeOf('unmeasured', qs, new Set())).toEqual({ reading: 'unmeasured', by_arm: null });
+    b2t5Expect(() => B2T5.quizUptakeOf('absent', qs, new Set())).toThrow(TypeError);
+  });
+
+  b2t5It('quizUptakeOf: a dropped quiz family marks by_arm aggregate-only, the summaries pinning uptake only as per-arm sums; CONTROL: no dropped quiz family, no mark and the figure as before (K24)', () => {
+    const u = (calls: number, via: number, err: number): B2t5R => ({ uptake: { calls, via_agent: via, errored: err } });
+    const qs = [
+      { key: 'f1', state: 'answered', arms: { [B2T5_C]: u(1, 0, 1), [B2T5_T]: u(2, 1, 0) } },
+      { key: 'f2', state: 'answered', arms: { [B2T5_C]: u(0, 0, 0), [B2T5_T]: u(4, 0, 1) } },
+    ];
+    b2t5Expect(B2T5.quizUptakeOf('measured', qs, new Set(['f2'])), 'a dropped quiz family: the figure is pinned in aggregate only').toEqual({ reading: 'measured', by_arm: {
+      [B2T5_C]: { questions: 1, with_call: 1, calls: 1, via_agent: 0, errored: 1 },
+      [B2T5_T]: { questions: 1, with_call: 1, calls: 2, via_agent: 1, errored: 0 } }, by_arm_pinned: 'aggregate-only' });
+    const control = B2T5.quizUptakeOf('measured', qs, new Set(['k-live'])) as B2t5R;
+    b2t5Expect(control, 'CONTROL: a dropped key that is no quiz family marks nothing').toEqual({ reading: 'measured', by_arm: {
+      [B2T5_C]: { questions: 2, with_call: 1, calls: 1, via_agent: 0, errored: 1 },
+      [B2T5_T]: { questions: 2, with_call: 2, calls: 6, via_agent: 1, errored: 1 } } });
+    b2t5Expect(Object.keys(control), 'CONTROL: no mark key at all, the figure as before').toEqual(['reading', 'by_arm']);
+    b2t5Expect(B2T5.quizUptakeOf('measured', qs, new Set()), 'CONTROL: nothing dropped').toEqual(control);
+  });
+
+  b2t5It('K27: payloadChangedOf selects only reason-bearing run-failed records and returns deterministic deduplicated qids (W2-5b1 build departure; re-anchor at W2-5b1 merged code)', () => {
+    const excludedA = { qid: 'q-a', question_state: 'run-failed', reason: B2T5.ARM_PAYLOAD_CHANGED };
+    const excludedADuplicate = { ...excludedA };
+    const siblingA = { qid: 'q-a', question_state: 'run-failed', arm_state: 'answered' };
+    const excludedB = { qid: 'q-b', question_state: 'run-failed', reason: B2T5.ARM_PAYLOAD_CHANGED };
+    b2t5Expect(B2T5.payloadChangedOf([{ record: excludedB }, { record: siblingA }, { record: excludedA }, { record: excludedADuplicate }]))
+      .toEqual({ count: 2, qids: ['q-a', 'q-b'] });
+    b2t5Expect(() => B2T5.payloadChangedOf([{ record: { ...excludedA, question_state: 'answered' } }])).toThrow(TypeError);
+  });
+
+  b2t5It('K27 CONTROL: a reasonless sibling and an ordinary run failure add no payload-drift qid', () => {
+    const sibling = { qid: 'q-a', question_state: 'run-failed', arm_state: 'answered' };
+    const ordinary = { qid: 'q-c', question_state: 'run-failed' };
+    b2t5Expect(B2T5.payloadChangedOf([{ record: sibling }, { record: ordinary }])).toEqual({ count: 0, qids: [] });
+  });
+
+  b2t5It('sameMsHitsOf gathers each node asof_same_ms_hits for its frozen questions; one it does not count is unmeasured (W2-D34)', () => {
+    const es = [w5b4Entry({ store_id: B2T5_S1, ccrc_id: 'a', generation: w5b4Gen(1) }, 1), w5b4Entry({ store_id: B2T5_S1, ccrc_id: 'a', generation: w5b4Gen(1) }, 2),
+      w5b4Entry({ store_id: B2T5_S2, ccrc_id: 'b', generation: w5b4Gen(2) }, 3)];
+    const src = new Map<string, B2t5R>([[B2T5_S1, { asof_same_ms_hits: { [es[0]!.qid]: { asof_same_ms_hits: 2 }, [es[1]!.qid]: { asof_same_ms_hits: 0 } } }],
+      [B2T5_S2, { asof_same_ms_hits: {} }]]);
+    b2t5Expect(B2T5.sameMsHitsOf(es, src)).toEqual({ by_store: { [B2T5_S1]: { questions: 2, with_hits: 1, hits: 2 }, [B2T5_S2]: { questions: 0, with_hits: 0, hits: 0 } },
+      unmeasured: [es[2]!.qid] });
+  });
+
+  b2t5It('gateRefusalOf keeps the two code words and reads every other assembleReports word as input-invalid (W2-D22, W2-D24)', () => {
+    b2t5Expect(B2T5.gateRefusalOf({ ok: false, reason: 'code-changed', detail: 'report 0: x' })).toEqual({ word: 'code-changed', detail: 'measure report 0: x' });
+    b2t5Expect(B2T5.gateRefusalOf({ ok: false, reason: 'code-unmeasured', detail: 'd' })).toEqual({ word: 'code-unmeasured', detail: 'measure d' });
+    b2t5Expect(B2T5.gateRefusalOf({ ok: false, reason: 'window-mismatch', detail: 'd' })).toEqual({ word: 'input-invalid', detail: 'measure window-mismatch: d' });
+  });
+
+  b2t5It('judgeTallyOf: per arm the judged answers and their labels, the judge-failed ones, those left unlabelled, and the sampled ones; a dropped family counts in the sample alone (W2-D85, W2-D81, V1, K12)', () => {
+    const items = [
+      { id: 'j0001', arm: B2T5_C, key: 'fam-a', judged: true, judgeFailed: false, label: 'uncertain' },
+      { id: 'j0002', arm: B2T5_C, key: 'fam-a', judged: true, judgeFailed: false, label: 'fabricated' },
+      { id: 'j0003', arm: B2T5_T, key: 'fam-b', judged: false, judgeFailed: true, label: null },
+      { id: 'j0004', arm: B2T5_T, key: 'fam-b', judged: false, judgeFailed: true, label: null },
+    ];
+    const sampled = ['j0002', 'j0003', 'j0004'];
+    const operator = new Map([['j0003', 'uncertain']]);
+    const armC = { judged: 2, judge_failed: 0, uncertain: 1, fabricated: 1, sampled: 1, judge_failed_unlabelled: 0 };
+    b2t5Expect(B2T5.judgeTallyOf(items, sampled, operator, new Set()), 'CONTROL: nothing dropped').toEqual({
+      [B2T5_C]: armC,
+      [B2T5_T]: { judged: 0, judge_failed: 2, uncertain: 0, fabricated: 0, sampled: 2, judge_failed_unlabelled: 1 },
+    });
+    b2t5Expect(B2T5.judgeTallyOf(items, sampled, operator, new Set(['fam-b'])), 'V1: fam-b dropped, its sample kept (K12)').toEqual({
+      [B2T5_C]: armC,
+      [B2T5_T]: { judged: 0, judge_failed: 0, uncertain: 0, fabricated: 0, sampled: 2, judge_failed_unlabelled: 0 },
+    });
+  });
+
+  b2t5It('gateInputsOf: the quiz by familyKey, run-failed out of both arms, the hold as a null label; live families changed and unrealised for every state but ok (W2-D89, V1, RP7)', () => {
+    const e = (store: string, n: number): B2t5R => w5b4Entry({ store_id: store, ccrc_id: 'same', generation: w5b4Gen(30) }, n);
+    const [e1, e2, e3] = [e(B2T5_S1, 1), e(B2T5_S2, 2), e(B2T5_S1, 3)] as [B2t5R, B2t5R, B2t5R];
+    const rec = (correct: boolean, state: string): B2t5R => ({ correct, answer_field: { state } });
+    const answers = new Map<string, B2t5R>([
+      [e1.qid, { state: 'answered', arms: { [B2T5_C]: rec(false, 'unknown'), [B2T5_T]: rec(true, 'value') } }],
+      [e2.qid, { state: 'answered', arms: { [B2T5_C]: rec(false, 'absent'), [B2T5_T]: rec(false, 'value') } }],
+      [e3.qid, { state: 'run-failed', arms: {} }],
+    ]);
+    // W2-5b1 Task 5's judgePairKey: the qid, a NUL built at runtime (W5B5_NUL, as the driver's JUDGE_PAIR_SEP), the arm.
+    const k = (q: string, a: string): string => `${q}${W5B5_NUL}${a}`;
+    const judgedByPair = new Map<string, B2t5R>([
+      [k(e1.qid, B2T5_C), { id: 'j0001', outcome: 'judged' }],
+      [k(e2.qid, B2T5_C), { id: 'j0002', outcome: 'judge-failed' }],
+      [k(e2.qid, B2T5_T), { id: 'j0003', outcome: 'judged' }],
+    ]);
+    const labels = new Map([['j0001', 'uncertain'], ['j0003', 'fabricated']]);
+    const states = B2T5.AB_STATES as string[];
+    const live = states.map((_, i) => ({ key: b2t5Gate.familyKey(B2T5_S1, `l${i}`, w5b4Gen(40)) as string, arm: i % 2 === 0 ? B2T5_T : B2T5_C, windows: [] }));
+    const abStates = new Map(live.map((f, i) => [f.key, states[i]!]));
+    const record = { bootstrap: { seed: W5B4_SEED, B: 10000 }, halts: { handcheck_agreement_min: 0.8, run_failed_max: 0.05, absent_rate_max: 0.05 } };
+    const got = B2T5.gateInputsOf({ record, entries: [e1, e2, e3], answers, judgedByPair, labels,
+      agreement: { [B2T5_C]: { num: 1, den: 1 }, [B2T5_T]: null, all: { num: 1, den: 1 } },
+      live, changed: new Set([live[0]!.key]), abStates, stamps: new Set(['code-changed']), reportOnly: { r: 1 } });
+    b2t5Expect(got).toEqual({
+      seedHex: W5B4_SEED, B: 10000, halts: record.halts, codeChanged: true,
+      quiz: { families: [
+        { key: b2t5Gate.familyKey(B2T5_S1, 'same', w5b4Gen(30)), questions: [
+          { qid: e1.qid, runFailed: false, [B2T5_C]: { label: 'uncertain', answerState: 'unknown', judgeFailed: false }, [B2T5_T]: { label: 'correct', answerState: 'value', judgeFailed: false } },
+          { qid: e3.qid, runFailed: true } ] },
+        { key: b2t5Gate.familyKey(B2T5_S2, 'same', w5b4Gen(30)), questions: [
+          { qid: e2.qid, runFailed: false, [B2T5_C]: { label: null, answerState: 'absent', judgeFailed: true }, [B2T5_T]: { label: 'fabricated', answerState: 'value', judgeFailed: false } } ] },
+      ] },
+      live: { families: live.map((f, i) => ({ ...f, changed: i === 0, unrealised: i !== 0 })) },
+      handcheck: { agreement: { [B2T5_C]: { num: 1, den: 1 }, [B2T5_T]: null } },
+      reportOnly: { r: 1 },
+    });
+    b2t5Expect(() => B2T5.gateInputsOf({ record, entries: [], answers, judgedByPair, labels, agreement: {}, live, changed: new Set(), abStates: new Map(),
+      stamps: new Set(), reportOnly: null }), 'a live family with no verify state is a defect').toThrow(TypeError);
+  });
+
+  b2t5It('readInstantOf: each measure-history file mtime as a labelled proxy, unmeasured never 0, beside the report instant (S2 C15)', () => {
+    const ms = [{ path: '/home/u/m1.json', value: { store_id: B2T5_S1 } }, { path: '/home/u/m2.json', value: { store_id: B2T5_S2 } }];
+    const stat = (p: string): { mtimeMs: number } => {
+      if (p.endsWith('m2.json')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return { mtimeMs: 1234.7 };
+    };
+    b2t5Expect(B2T5.readInstantOf(ms, 99, stat)).toEqual({ proxy: 'measure-history-file-mtime', report_ms: 99,
+      by_store: { [B2T5_S1]: { state: 'measured', mtime_ms: 1234 }, [B2T5_S2]: { state: 'unmeasured', code: 'EACCES' } } });
+  });
+
+  b2t5It('the report decides nothing and reads no counter: one decideGate call, no verdict word, no W2-6 file, no recall_calls or counters row (W2-D85, W2-D88)', () => {
+    b2t5Expect(B2T5_DRV_TEXT.split('\n').filter(b2t5Code).filter((l) => /\bdecideGate\(/.test(l)), 'one call, in report').toEqual(['  const gate = decideGate(inputs);']);
+    const code = B2T5_SECTION.split('\n').filter(b2t5Code);
+    b2t5Expect(code.length, 'the section is found').toBeGreaterThan(50);
+    b2t5Expect(code.filter((l) => /'(pass|fail|halt|incomplete)'/.test(l)), 'no verdict word').toEqual([]);
+    b2t5Expect(B2T5_SECTION, 'W2-6 stays its own entry (W2-D88)').not.toMatch(/history-counters|counters\.json/);
+    b2t5Expect(code.filter((l) => /recall_calls|\.counters\b/.test(l)), 'uptake reads calls rows and stream facts only').toEqual([]);
+    b2t5Expect(() => B2T5.parseArgs(['report', '--counters', '/home/u/counters.json'])).toThrow(/unknown flag "--counters"/);
+  });
+});
+
+b2t5Describe('W2-5b2 Task 5: report over gathered node outputs', () => {
+  b2t5It('a passing set: verdict.json holds the decideGate answer whole, its sha is the one stderr line, and every input is named by its sha (W2-D85, W2-D89, D-5983)', async () => {
+    const w = b2t5World();
+    const r = await b2t5Report(w.argv());
+    b2t5Expect(r.refusal).toBeNull();
+    b2t5Expect(r.code).toBe(0);
+    const text = readFileSync(join(w.out, 'verdict.json'), 'utf8');
+    b2t5Expect(r.stderr, 'only the sha line').toBe(`sha256 ${b2t5Lib.sha256Hex(text) as string}\n`);
+    b2t5Expect(r.stdout).toBe('');
+    b2t5Expect(statSync(join(w.out, 'verdict.json')).mode & 0o777).toBe(0o600);
+    const v = JSON.parse(text) as B2t5R;
+    b2t5Expect(v).toMatchObject({ kind: B2T5.VERDICT_KIND, v: 1, record_sha256: w.f.sha, part1_sha256: w.d.sha, frozen_sha256: w.fz.sha,
+      release_tag: W5B4_STAMP, stamps: [], amendments: [], report_ms: B2T5_NOW });
+    b2t5Expect(v.gate).toMatchObject({ ok: true, verdict: 'pass', halts: [], stamp: null, counts: { Q: 3, run_failed: 0 } });
+    b2t5Expect(v.gate.criteria.accuracy).toMatchObject({ point_t: { num: 3, den: 3 }, point_c: { num: 0, den: 3 }, holds: true });
+    b2t5Expect(v.gate.criteria.uptake).toMatchObject({ point: { num: 6, den: 6 }, holds: true });
+    const byStore = (field: string): B2t5R[] => B2T5_STORES.map((s) => ({ store_id: s, sha256: (w.nodes[s]![field] as B2t5Saved).sha }));
+    b2t5Expect(v.inputs).toEqual({
+      'arms-summary': byStore('summary'), judged: byStore('judged'), 'verify-quiz': byStore('verifyQuiz'), sourced: byStore('sourced'),
+      'verify-ab': byStore('verifyAb'), measure: byStore('measure'), labels: w.labels.sha,
+      answers: B2T5_STORES.flatMap((s) => readdirSync(join(w.nodes[s]!.root, 'quiz', 'answers')).sort().map((n) => ({ store_id: s, rel: `quiz/answers/${n}`,
+        sha256: b2t5Lib.sha256Hex(readFileSync(join(w.nodes[s]!.root, 'quiz', 'answers', n))) }))),
+    });
+    b2t5Expect(v.gate.report_only.quiz_counts).toEqual({ questions: 3, answered: 3, run_failed: 0, rerun_owed: 0, not_run: 0 });
+    b2t5Expect(v.gate.report_only.over_hide[B2T5_S1]).toMatchObject({ cut: 'all-visible', hidden: 1, hidden_ids: [`leaf-${B2T5_S1}`] });
+    b2t5Expect(v.gate.report_only.headless_on).toEqual({ [B2T5_S1]: 'ok', [B2T5_S2]: 'ok' });
+    b2t5Expect(v.gate.report_only.presence_seen_after_write, 'K11: only a fresh presence record reaches the report').toEqual({ [B2T5_S1]: true, [B2T5_S2]: true });
+  });
+
+  b2t5It('the verdict moves only as the gate inputs move: a treatment arm that answers nothing right fails criterion 1 (W2-D89)', async () => {
+    const w = b2t5World({ answer: () => ({ text: 'ANSWER: UNKNOWN' }) });
+    b2t5Expect((await b2t5Report(w.argv())).refusal).toBeNull();
+    const v = b2t5Verdict(w.out);
+    b2t5Expect(v.gate).toMatchObject({ ok: true, verdict: 'fail', halts: [] });
+    b2t5Expect(v.gate.criteria.accuracy).toMatchObject({ point_t: { num: 0, den: 3 }, holds: false });
+    b2t5Expect(v.gate.report_only.judge[B2T5_T]).toMatchObject({ judged: 3, uncertain: 3 });
+  });
+
+  b2t5It.each([
+    ['report', 'deploy/history-gate.mjs'],
+    ['report (the driver itself)', 'deploy/history-replay.mjs'],
+  ])('code-changed before any other input is read, re-checks the code it runs under: %s', async (_name, edit) => {
+    const w = b2t5World();
+    const r = await b2t5Report(b2t5Absent(w), { root: b2t5Tree({ edit }) });
+    b2t5Expect(r.refusal).toEqual({ word: 'code-changed', detail: `changed ${edit}` });
+    b2t5Expect(existsSync(w.out), 'no --out is made').toBe(false);
+    const control = await b2t5Report(b2t5Absent(w));
+    b2t5Expect(control.refusal, 'CONTROL: on unchanged code the first gathered input is read').toEqual({ word: 'input-invalid', detail: 'arms-summary unreadable ENOENT' });
+  });
+
+  b2t5It.each([['report', 'deploy/measure-history.py']])('code-unmeasured, never code-changed, for a gate_code file that cannot be read: %s', async (_name, drop) => {
+    const w = b2t5World();
+    const r = await b2t5Report(b2t5Absent(w), { root: b2t5Tree({ drop }) });
+    b2t5Expect(r.refusal?.word).toBe('code-unmeasured');
+    b2t5Expect(r.refusal?.detail).toContain(drop);
+    b2t5Expect(existsSync(w.out), 'no --out is made').toBe(false);
+  });
+
+  b2t5It('--allow-code-change: args-invalid before window start, after it a stamp on the verdict; without it code-changed (Q23, W2-D24)', async () => {
+    const w = b2t5World();
+    const tree = b2t5Tree({ edit: 'deploy/history-gate.mjs' });
+    b2t5Expect((await b2t5Report(w.argv(), { root: tree })).refusal?.word, 'without the flag').toBe('code-changed');
+    const early = await b2t5Report(w.argv({}, ['--allow-code-change']), { root: tree, now: () => B2T5_START - 1 });
+    b2t5Expect(early.refusal?.word, 'before window start the flag is refused (W2-5b1 Task 1 rule)').toBe('args-invalid');
+    b2t5Expect(existsSync(w.out), 'neither made --out').toBe(false);
+    const r = await b2t5Report(w.argv({}, ['--allow-code-change']), { root: tree });
+    b2t5Expect(r.refusal).toBeNull();
+    const v = b2t5Verdict(w.out);
+    b2t5Expect(v.stamps).toEqual(['code-changed']);
+    b2t5Expect(v.gate).toMatchObject({ stamp: 'code-changed', verdict: 'pass' });
+  });
+
+  b2t5It('a code-changed stamp on a gathered output is carried onto the verdict, never a verdict of its own (Q23, W2-D89)', async () => {
+    const w = b2t5World({ summaryStamps: ['code-changed'] });
+    b2t5Expect((await b2t5Report(w.argv())).refusal).toBeNull();
+    const v = b2t5Verdict(w.out);
+    b2t5Expect(v.stamps).toEqual(['code-changed']);
+    b2t5Expect(v.gate).toMatchObject({ stamp: 'code-changed', verdict: 'pass' });
+    const plain = b2t5World();
+    b2t5Expect((await b2t5Report(plain.argv())).refusal).toBeNull();
+    b2t5Expect(b2t5Verdict(plain.out).stamps, 'CONTROL: no stamp, none carried').toEqual([]);
+  });
+
+  b2t5It('report runs after window end: before it window-open, before --out; at window.end_ms exactly it runs (acts 23 and 24)', async () => {
+    const w = b2t5World();
+    const early = await b2t5Report(w.argv(), { now: () => B2T5_END - 1 });
+    b2t5Expect(early.refusal).toEqual({ word: 'input-invalid', detail: `window-open: report runs at or after window.end_ms ${B2T5_END} (acts 23 and 24)` });
+    b2t5Expect(existsSync(w.out)).toBe(false);
+    b2t5Expect((await b2t5Report(w.argv(), { now: () => B2T5_END })).refusal, 'CONTROL: the window is half-open').toBeNull();
+  });
+
+  b2t5It.each([
+    ['record', 'record-sha-mismatch'], ['part1', 'record-sha-mismatch'], ['frozen', 'quiz-sha-mismatch'],
+    ['arms-summary', 'input-sha-mismatch'], ['judged', 'input-sha-mismatch'], ['verify-quiz', 'input-sha-mismatch'], ['sourced', 'input-sha-mismatch'],
+    ['verify-ab', 'input-sha-mismatch'], ['measure', 'input-sha-mismatch'], ['labels', 'input-sha-mismatch'],
+  ])('every input is sha-checked before a byte of it is parsed: --%s (W2-D85, W2-D25)', async (name, word) => {
+    const w = b2t5World();
+    const argv = w.argv();
+    argv[argv.indexOf(`--${name}-sha256`) + 1] = b2t5Hex(`wrong ${name}`);
+    const r = await b2t5Report(argv);
+    b2t5Expect(r.refusal?.word).toBe(word);
+    b2t5Expect(existsSync(w.out), 'no --out is made').toBe(false);
+  });
+
+  const other = '00000000-0000-4000-8000-0000000052c1';
+  const s1 = B2T5_S1;
+  b2t5It.each([
+    ['an arms summary of another record', () => { const w = b2t5World(); b2t5Edit(w, s1, 'summary', (v) => ({ ...v, record_sha256: b2t5Hex('another record') })); return w; },
+      'input-invalid', `arms-summary ${s1} record-mismatch`],
+    ['an unsettled arms summary', () => { const w = b2t5World(); b2t5Edit(w, s1, 'summary', (v) => ({ ...v, counts: { ...v.counts, not_run: 1 } })); return w; },
+      'input-invalid', `arms-summary ${s1} arms-unsettled`],
+    ['an arms summary outside its gathered --out', () => {
+      const w = b2t5World(); const p = join(b2t5MkTmp('ccrc-w5b2-t5-moved-'), 'summary.json');
+      copyFileSync(w.nodes[s1].summary.path, p); w.nodes[s1].summary = { ...w.nodes[s1].summary, path: p }; return w;
+    }, 'input-invalid', `arms-summary ${s1} is not <out>/quiz/arms/summary.json`],
+    ['an answer record its summary does not count', () => {
+      const w = b2t5World(); const p = b2t5RecordOf(w, s1, B2T5_C); const r = JSON.parse(readFileSync(p, 'utf8')) as B2t5R;
+      writeFileSync(p, `${b2t5Lib.canonicalJson({ ...r, answer_field: { state: 'absent' }, absent: true }) as string}\n`); return w;
+    }, 'input-invalid', `arms-summary ${s1} does not match its answer records`],
+    ['an answer record of another family', () => {
+      const w = b2t5World(); const p = b2t5RecordOf(w, s1, B2T5_C); const r = JSON.parse(readFileSync(p, 'utf8')) as B2t5R;
+      writeFileSync(p, `${b2t5Lib.canonicalJson({ ...r, ccrc_id: 'quiz-other' }) as string}\n`); return w;
+    }, 'input-invalid', `arms-summary ${s1}: quiz/answers/`],
+    ['an answer record missing', () => { const w = b2t5World(); rmSync(b2t5RecordOf(w, s1, B2T5_C)); return w; }, 'input-invalid', `arms-summary ${s1}: question `],
+    ['a judged file naming a correct answer', () => {
+      const w = b2t5World(); const q = w.nodes[s1].mine[0] as B2t5R; const id = w.map.find((m) => m.qid === q.qid && m.arm === B2T5_T)!.id;
+      b2t5Edit(w, s1, 'judged', (v) => ({ ...v, items: [...v.items, { id, outcome: 'judged', label: 'uncertain', attempts: [] }] })); return w;
+    }, 'input-invalid', `judged ${s1} does not cover exactly this node's non-correct answers: 0 missing, 1 extra`],
+    ['a judged item outside the judge map', () => {
+      const w = b2t5World(); b2t5Edit(w, s1, 'judged', (v) => ({ ...v, items: [...v.items, { id: 'j9999', outcome: 'judged', label: 'uncertain', attempts: [] }] })); return w;
+    }, 'input-invalid', `judged ${s1} item "j9999" is not in the judge map`],
+    ['a judged item listed twice', () => { const w = b2t5World(); b2t5Edit(w, s1, 'judged', (v) => ({ ...v, items: [...v.items, v.items[0]] })); return w; },
+      'input-invalid', `judged ${s1} item `],
+    ['a judged item judge-failed with a label', () => {
+      const w = b2t5World(); b2t5Edit(w, s1, 'judged', (v) => ({ ...v, items: [{ ...v.items[0], outcome: 'judge-failed' }, ...v.items.slice(1)] })); return w;
+    }, 'input-invalid', `judged ${s1} item `],
+    ['a judged file over another judge map', () => { const w = b2t5World(); b2t5Edit(w, s1, 'judged', (v) => ({ ...v, map_sha256: b2t5Hex('map') })); return w; },
+      'input-invalid', `judged ${s1} map-mismatch`],
+    ['a judged file of another judge model', () => { const w = b2t5World(); b2t5Edit(w, s1, 'judged', (v) => ({ ...v, judge_model: 'claude-opus-9-2' })); return w; },
+      'input-invalid', `judged ${s1} judge-mismatch`],
+    ['a verify --section quiz output of another record', () => { const w = b2t5World(); b2t5Edit(w, s1, 'verifyQuiz', (v) => ({ ...v, record_sha256: b2t5Hex('x') })); return w; },
+      'input-invalid', `verify-quiz ${s1} record-mismatch`],
+    ['a quiz-source output of another part 1', () => { const w = b2t5World(); b2t5Edit(w, s1, 'sourced', (v) => ({ ...v, record_sha256: b2t5Hex('x') })); return w; },
+      'input-invalid', `sourced ${s1} record-mismatch`],
+    ['a quiz-source output under another assignment', () => { const w = b2t5World(); b2t5Edit(w, s1, 'sourced', (v) => ({ ...v, assignment_sha256: b2t5Hex('x') })); return w; },
+      'assignment-mismatch', `sourced ${s1} derived `],
+    ['a quiz-source output missing a frozen question', () => { const w = b2t5World(); b2t5Edit(w, s1, 'sourced', (v) => ({ ...v, entries: v.entries.slice(1) })); return w; },
+      'input-invalid', `sourced ${s1} does not hold frozen question`],
+    ['a verify --section ab output of another record', () => { const w = b2t5World(); b2t5Edit(w, s1, 'verifyAb', (v) => ({ ...v, record_sha256: b2t5Hex('x') })); return w; },
+      'input-invalid', `verify-ab ${s1} record-mismatch`],
+    ['a verify --section ab output missing an assigned family', () => { const w = b2t5World(); b2t5Edit(w, s1, 'verifyAb', (v) => ({ ...v, families: v.families.slice(1) })); return w; },
+      'input-invalid', `verify-ab ${s1} does not list 1 assigned family(ies)`],
+    ['a verify --section ab output listing a family off the assignment', () => {
+      const w = b2t5World(); b2t5Edit(w, s1, 'verifyAb', (v) => ({ ...v, families: v.families.map((f: B2t5R, i: number) => (i === 0 ? { ...f, arm: f.arm === B2T5_T ? B2T5_C : B2T5_T } : f)) })); return w;
+    }, 'input-invalid', `verify-ab ${s1} lists `],
+    ['a verify --section ab output whose presence record has not seen the newest recall-off write (K11, as W2-6\'s V2)', () => {
+      const w = b2t5World(); b2t5Edit(w, s1, 'verifyAb', (v) => ({ ...v, newest_write: { state: 'value', ms: B2T5_START }, seen_ms: B2T5_START - 1, seen_after_write: false, ok: false })); return w;
+    }, 'input-invalid', `verify-ab ${s1} presence-stale`],
+    ['a measure-history report without the presence rows', () => {
+      const w = b2t5World(); b2t5Edit(w, s1, 'measure', (v) => { const w2 = { ...v.w2 }; delete w2.recall_off; return { ...v, w2 }; }); return w;
+    }, 'input-invalid', `measure ${s1} w2.recall_off absent`],
+    ['a measure-history report over another window', () => { const w = b2t5World(); b2t5Edit(w, s1, 'measure', (v) => ({ ...v, w2: { ...v.w2, window_end_ms: B2T5_END + 1 } })); return w; },
+      'input-invalid', 'measure window-mismatch: report 0'],
+    ['a measure-history report of another script', () => { const w = b2t5World(); b2t5Edit(w, s1, 'measure', (v) => ({ ...v, script_sha256: b2t5Hex('another script') })); return w; },
+      'code-changed', 'measure report 0: measure-history.py sha256'],
+    ['a node measure-history report missing', () => { const w = b2t5World(); const a = w.argv({ measure: w5b4Inp('measure', w.nodes[s1].measure) }); return { ...w, argv: () => a }; },
+      'input-invalid', 'measure store-missing node-1'],
+    ['two arms summaries of one store', () => {
+      const w = b2t5World(); const a = w.argv({ 'arms-summary': [...w5b4Inp('arms-summary', w.nodes[s1].summary), ...w5b4Inp('arms-summary', w.nodes[s1].summary),
+        ...w5b4Inp('arms-summary', w.nodes[B2T5_S2].summary)] }); return { ...w, argv: () => a };
+    }, 'input-invalid', `arms-summary store-id-duplicate ${s1}`],
+    ['an input naming a store the record does not name', () => { const w = b2t5World(); b2t5Edit(w, s1, 'verifyQuiz', (v) => ({ ...v, store_id: other })); return w; },
+      'input-invalid', `store ${other} is not one of the record's nodes`],
+    ['a quiz input for a node that holds no frozen question', () => b2t5World({ soloQuiz: true }),
+      'input-invalid', `arms-summary for store ${B2T5_S2}, which holds no frozen question`],
+  ] as Array<[string, () => B2t5R, string, string]>)('refused before --out: %s (W2-D85, W2-5a R10)', async (_title, make, word, prefix) => {
+    const w = make();
+    const r = await b2t5Report(w.argv());
+    b2t5Expect(r.refusal?.word).toBe(word);
+    b2t5Expect(r.refusal?.detail.startsWith(prefix), `${r.refusal?.detail ?? 'no refusal'} starts with ${prefix}`).toBe(true);
+    b2t5Expect(existsSync(w.out), 'no --out is made').toBe(false);
+  });
+
+  b2t5It.each([
+    ['control-absent', 'live-c1'], ['control-mismatch', 'live-c1'], ['treatment-named', 'live-t1'], ['unreadable', 'live-t1'],
+  ])('V1: a family whose verify state is %s leaves every per-arm figure under its own word and stays in criterion 3 (W2-D23, Q15, W2-D84)', async (state, id) => {
+    const base = b2t5World();
+    const w = b2t5World({ ab: (f) => (f.ccrc_id === id ? state : 'ok') });
+    b2t5Expect((await b2t5Report(base.argv())).refusal).toBeNull();
+    b2t5Expect((await b2t5Report(w.argv())).refusal).toBeNull();
+    const vb = b2t5Verdict(base.out);
+    const v = b2t5Verdict(w.out);
+    const fam = id === 'live-c1' ? w.lc : w.lt;
+    const arm = id === 'live-c1' ? B2T5_C : B2T5_T;
+    for (const word of B2T5.REPORT_DROPS as string[]) b2t5Expect(v.gate.report_only.dropped[word], word).toEqual(word === state ? [b2t5Key(fam)] : []);
+    b2t5Expect(vb.gate.comparison.dropped, 'CONTROL: every state ok drops nothing').toEqual([]);
+    b2t5Expect(v.gate.comparison.dropped, 'the comparison block of decideGate drops it too').toEqual([b2t5Key(fam)]);
+    b2t5Expect(v.gate.criteria.uptake, 'criterion 3 still reads it (W2-D23)').toEqual(vb.gate.criteria.uptake);
+    b2t5Expect(v.gate.report_only.live_uptake[arm].all?.windows ?? 0, 'its windows leave the per-arm figure')
+      .toBe(vb.gate.report_only.live_uptake[arm].all.windows - (arm === B2T5_C ? 2 : 3));
+  });
+
+  b2t5It('W2-D23: a treatment family whose recall-off file changed in the window still counts in criterion 3 and leaves the comparison; a gap row drops nothing', async () => {
+    const base = b2t5World();
+    const rows: Array<[string, string]> = [
+      [`recall_off:change:${B2T5_START + 5_000}:${base.lt.ccrc_id}`, JSON.stringify({ from: null, to: base.lt.generation, prev_seen_ms: null })],
+      [`recall_off:gap:${B2T5_START + 6_000}`, JSON.stringify({ from: null, to: B2T5_START + 6_000 })],
+    ];
+    const w = b2t5World({ recallOff: rows });
+    b2t5Expect((await b2t5Report(base.argv())).refusal).toBeNull();
+    b2t5Expect((await b2t5Report(w.argv())).refusal).toBeNull();
+    const vb = b2t5Verdict(base.out);
+    const v = b2t5Verdict(w.out);
+    b2t5Expect(v.gate.report_only.dropped.changed).toEqual([b2t5Key(w.lt)]);
+    b2t5Expect(v.gate.comparison.dropped).toEqual([b2t5Key(w.lt)]);
+    b2t5Expect(v.gate.criteria.uptake, 'criterion 3 still counts it').toEqual(vb.gate.criteria.uptake);
+    b2t5Expect(v.gate.report_only.live_uptake[B2T5_T].all.windows, 'the per-arm figure does not').toBe(3);
+    b2t5Expect(v.gate.report_only.recall_off_gaps).toEqual([{ store_id: B2T5_S1, ts_ms: B2T5_START + 6_000, from: null, to: B2T5_START + 6_000 }]);
+  });
+
+  b2t5It('W2-D81: an unlabelled judge-failed answer holds the verdict incomplete; labelled, it counts (Q19)', async () => {
+    const opts = (operator: B2t5Opts['operator']): B2t5Opts => ({ judgeLabel: (_q, arm) => (arm === B2T5_C ? null : 'uncertain'), operator });
+    const held = b2t5World(opts((_id, judge) => judge));
+    b2t5Expect((await b2t5Report(held.argv())).refusal).toBeNull();
+    const v = b2t5Verdict(held.out);
+    b2t5Expect(v.gate.verdict).toBe('incomplete');
+    b2t5Expect(v.gate.criteria.accuracy).toBeNull();
+    b2t5Expect(v.gate.report_only.judge[B2T5_C]).toMatchObject({ judge_failed: 3, judge_failed_unlabelled: 3 });
+    const labelled = b2t5World(opts((_id, judge) => judge ?? 'uncertain'));
+    b2t5Expect((await b2t5Report(labelled.argv())).refusal).toBeNull();
+    b2t5Expect(b2t5Verdict(labelled.out).gate.verdict, 'CONTROL: every judge-failed answer labelled').toBe('pass');
+  });
+
+  b2t5It('W2-D81: the operator label replaces the judge label on a sampled answer, and agreement below the minimum halts, by arm', async () => {
+    const w = b2t5World({ operator: () => 'fabricated' });
+    b2t5Expect((await b2t5Report(w.argv())).refusal).toBeNull();
+    const v = b2t5Verdict(w.out);
+    b2t5Expect(v.gate.verdict).toBe('halt');
+    b2t5Expect(v.gate.halts).toContain('handcheck-agreement');
+    b2t5Expect(v.gate.report_only.handcheck_agreement[B2T5_C]).toEqual({ num: 0, den: 1 });
+    b2t5Expect(v.gate.report_only.handcheck_agreement[B2T5_T]).toBeNull();
+    b2t5Expect(v.gate.criteria.fabrication, 'the override is the label the gate counts').toMatchObject({ c: { num: 1, den: 3 } });
+  });
+
+  b2t5It('W2-D80: a run-failed question is excluded from both arms, judged in neither, and past run_failed_max it halts', async () => {
+    const w = b2t5World({ runFailed: (e) => e.store_id === B2T5_S2 });
+    b2t5Expect((await b2t5Report(w.argv())).refusal).toBeNull();
+    const v = b2t5Verdict(w.out);
+    b2t5Expect(v.gate.counts).toMatchObject({ Q: 2, run_failed: 1 });
+    b2t5Expect(v.gate.halts).toEqual(['run-failed']);
+    b2t5Expect(v.gate.criteria.accuracy).toBeNull();
+    b2t5Expect(w.nodes[B2T5_S2]!.items, 'the judge saw neither arm').toEqual([]);
+    b2t5Expect(v.gate.report_only.quiz_uptake.by_arm[B2T5_T].questions).toBe(2);
+  });
+
+  b2t5It('K27: a W2-5b1 payload-drift exclusion is run-failed for W2-D89 and is reported once by qid, while its answered sibling keeps no reason (W2-5b1 build departure; re-anchor at W2-5b1 merged code)', async () => {
+    const first = b2t5World();
+    const qid = b2t5PayloadEntry(first).qid as string;
+    const w = b2t5World({ payloadChanged: (e) => e.qid === qid });
+    b2t5Expect((await b2t5Report(w.argv())).refusal).toBeNull();
+    const v = b2t5Verdict(w.out);
+    b2t5Expect(v.gate.counts, 'the existing W2-D89 input counts the question, not a new reason vocabulary').toMatchObject({ Q: 2, run_failed: 1 });
+    b2t5Expect(v.gate.halts).toContain('run-failed');
+    b2t5Expect(v.gate.report_only.payload_changed).toEqual({ count: 1, qids: [qid] });
+    const excluded = JSON.parse(readFileSync(b2t5RecordOf(w, B2T5_S1, B2T5_C), 'utf8')) as B2t5R;
+    const sibling = JSON.parse(readFileSync(b2t5RecordOf(w, B2T5_S1, B2T5_T), 'utf8')) as B2t5R;
+    b2t5Expect(excluded).toMatchObject({ qid, question_state: 'run-failed', arm_state: 'run-failed', reason: B2T5.ARM_PAYLOAD_CHANGED });
+    b2t5Expect(sibling, 'the sibling shares question_state but retains its answer and never owns the reason').toMatchObject({ qid, question_state: 'run-failed', arm_state: 'answered' });
+    b2t5Expect(Object.hasOwn(sibling, 'reason')).toBe(false);
+    b2t5Expect(B2T5.payloadChangedOf([{ record: excluded }, { record: sibling }]), 'both records carry question_state, but only the reason-bearing record is selected').toEqual({ count: 1, qids: [qid] });
+  });
+
+  b2t5It('K27 CONTROL: an infrastructure run failure has no payload-drift report-only field', async () => {
+    const first = b2t5World();
+    const qid = b2t5PayloadEntry(first).qid as string;
+    const control = b2t5World({ runFailed: (e) => e.qid === qid });
+    b2t5Expect((await b2t5Report(control.argv())).refusal).toBeNull();
+    b2t5Expect(Object.hasOwn(b2t5Verdict(control.out).gate.report_only, 'payload_changed')).toBe(false);
+  });
+
+  b2t5It('W2-D82, Q10: quiz uptake read unmeasured is null, never 0, and moves no verdict; the default reading is W2-5b2 Task 2 own', async () => {
+    b2t5Expect(B2T5.REPORT_DEPS.uptakeReading).toBe(B2T5.quizUptakeReadingOf);
+    const w = b2t5World();
+    b2t5Expect((await b2t5Report(w.argv(), { uptakeReading: () => 'unmeasured' })).refusal).toBeNull();
+    const v = b2t5Verdict(w.out);
+    b2t5Expect(v.gate.report_only.quiz_uptake).toEqual({ reading: 'unmeasured', by_arm: null });
+    b2t5Expect(v.gate.verdict).toBe('pass');
+  });
+
+  b2t5It('S2 C15: the read instant of each measure-history output is its file mtime, labelled, beside the report instant', async () => {
+    const w = b2t5World();
+    b2t5Utimes(w.nodes[B2T5_S1]!.measure.path, 1_900_000_000, 1_900_000_000);
+    b2t5Utimes(w.nodes[B2T5_S2]!.measure.path, 1_900_000_100, 1_900_000_100);
+    b2t5Expect((await b2t5Report(w.argv())).refusal).toBeNull();
+    b2t5Expect(b2t5Verdict(w.out).gate.report_only.read_instant).toEqual({ proxy: 'measure-history-file-mtime', report_ms: B2T5_NOW,
+      by_store: { [B2T5_S1]: { state: 'measured', mtime_ms: 1_900_000_000_000 }, [B2T5_S2]: { state: 'measured', mtime_ms: 1_900_000_100_000 } } });
+  });
+
+  b2t5It('verdict.json is written once: a second report into the same --out refuses out-refused and leaves the first (W2-D53)', async () => {
+    const w = b2t5World();
+    b2t5Expect((await b2t5Report(w.argv())).refusal).toBeNull();
+    const first = readFileSync(join(w.out, 'verdict.json'), 'utf8');
+    const again = await b2t5Report(w.argv(), { now: () => B2T5_NOW + 1 });
+    b2t5Expect(again.refusal).toEqual({ word: 'out-refused', detail: 'verdict.json already exists: a verdict is never replaced (use a fresh --out)' });
+    b2t5Expect(readFileSync(join(w.out, 'verdict.json'), 'utf8')).toBe(first);
+  });
+
+  b2t5It('RP6-e2e: the same seed and inputs give the same verdict.json, byte for byte, twice', async () => {
+    const w = b2t5World();
+    const second = join(b2t5MkTmp('ccrc-w5b2-t5-out2-'), 'out');
+    b2t5Expect((await b2t5Report(w.argv())).refusal).toBeNull();
+    b2t5Expect((await b2t5Report(w.argv({}, [], second))).refusal).toBeNull();
+    b2t5Expect(readFileSync(join(second, 'verdict.json'), 'utf8')).toBe(readFileSync(join(w.out, 'verdict.json'), 'utf8'));
+  });
+
+  b2t5It('RP6-e2e: dropping control calls after the first exit 8 changes no verdict; they are reported apart', async () => {
+    const calls = (after: boolean) => (f: B2t5R, w: number, ts: number): Array<[number, number, string]> => (f.arm === B2T5_T ? [[ts + 10, 0, 'grep']]
+      : w === 0 ? [[ts + 10, 8, 'grep']] : w === 1 && after ? [[ts + 10, 0, 'grep']] : []);
+    const a = b2t5World({ liveCalls: calls(true) });
+    const b = b2t5World({ liveCalls: calls(false) });
+    b2t5Expect((await b2t5Report(a.argv())).refusal).toBeNull();
+    b2t5Expect((await b2t5Report(b.argv())).refusal).toBeNull();
+    const va = b2t5Verdict(a.out);
+    const vb = b2t5Verdict(b.out);
+    b2t5Expect(b2t5Gated(va)).toEqual(b2t5Gated(vb));
+    b2t5Expect(va.gate.report_only.first_call.by_arm[B2T5_C]).toEqual({ windows: 2, with_call: 1, after_first_exit8: 1 });
+    b2t5Expect(vb.gate.report_only.first_call.by_arm[B2T5_C]).toEqual({ windows: 2, with_call: 1, after_first_exit8: 0 });
+    b2t5Expect(va.gate.report_only.live_uptake[B2T5_C].all.with_call, 'CONTROL: the call after it is in the live figure').toBe(2);
+  });
+
+  b2t5It('RP6-e2e: quiz uptake and the uptake difference change no verdict (W2-D82)', async () => {
+    const answer = (calls: B2t5Call[]) => (e: B2t5R, arm: string) => ({ text: arm === B2T5_T ? `ANSWER: ${e.fact as string}` : 'ANSWER: UNKNOWN', calls: arm === B2T5_T ? calls : [] });
+    const a = b2t5World({ answer: answer([{ command: 'ccrc history grep fixture' }, { command: 'ccrc history show fixture', parent: 'toolu_agent' }]) });
+    const b = b2t5World({ answer: answer([]) });
+    b2t5Expect((await b2t5Report(a.argv())).refusal).toBeNull();
+    b2t5Expect((await b2t5Report(b.argv())).refusal).toBeNull();
+    const va = b2t5Verdict(a.out);
+    const vb = b2t5Verdict(b.out);
+    b2t5Expect(b2t5Gated(va)).toEqual(b2t5Gated(vb));
+    b2t5Expect(va.gate.report_only.quiz_uptake.by_arm[B2T5_T]).toEqual({ questions: 3, with_call: 3, calls: 6, via_agent: 3, errored: 0 });
+    b2t5Expect(vb.gate.report_only.quiz_uptake.by_arm[B2T5_T]).toEqual({ questions: 3, with_call: 0, calls: 0, via_agent: 0, errored: 0 });
+  });
+
+  b2t5It('RP7-e2e: two nodes families with the same ccrc id string are two clusters and two A/B assignments, keyed by familyKey', async () => {
+    const w = b2t5World({ twin: true });
+    b2t5Expect((await b2t5Report(w.argv())).refusal).toBeNull();
+    const v = b2t5Verdict(w.out);
+    const parse = (k: string): string[] => JSON.parse(k) as string[];
+    const quiz = (v.families.quiz as string[]).map(parse);
+    b2t5Expect(quiz.map((q) => q[1])).toEqual(['quiz-twin', 'quiz-twin']);
+    b2t5Expect(new Set(quiz.map((q) => q[0]))).toEqual(new Set(B2T5_STORES));
+    const twins = (v.families.live as B2t5R[]).filter((f) => parse(f.key)[1] === 'twin');
+    b2t5Expect(twins).toHaveLength(2);
+    for (const t of twins) {
+      const [store_id, ccrc_id, generation] = parse(t.key) as [string, string, string];
+      b2t5Expect(t.arm, store_id).toBe(b2t5Gate.armOf(W5B4_SEED, { store_id, ccrc_id, generation }));
+    }
+    b2t5Expect(w.final.assignment.filter((a: B2t5R) => a.ccrc_id === 'twin')).toHaveLength(2);
+  });
+});
+
+// The walk spawns W2-5b1's arm stub (arms) and W2-4's recording stub path (judge), so darwin skips it, as W2-5b1's walk is.
+b2t5Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 5: the end-to-end walk, W2-5b1 arms and judge on the stub, then report (RP6-e2e, Q2)', () => {
+  b2t5It('two nodes: arms, judge and verify on each, measure-history reports and the labels, then report; decideGate decides, and report spawns nothing (W2-D85)', async () => {
+    const mk = (store: string): string => {
+      const h = w5b4MkTmp('ccrc-w5b2-t5-walk-');
+      writeFileSync(join(h, STUB_STREAM), W5B5_LABELLED);   // before w5b4Node: --version and part 1's step 0a read it
+      w5b4Node(h);
+      w5b4CreateStore(h, { storeId: store });
+      return h;
+    };
+    const homes: Record<string, string> = { [W5B4_STORE_A]: mk(W5B4_STORE_A), [W5B4_STORE_B]: mk(W5B4_STORE_B) };
+    const fx = w5b4Quiz(homes[W5B4_STORE_A]!);
+    const famB = fx.entries.find((e) => e.store_id === W5B4_STORE_B)!;
+    w5b4Marker(homes[W5B4_STORE_B]!, W5B4_STORE_B, [{ store_id: W5B4_STORE_B, ccrc_id: famB.ccrc_id, generation: famB.generation }]);
+    const outs: Record<string, string> = { [W5B4_STORE_A]: fx.out, [W5B4_STORE_B]: w5b4Out() };
+    const recordArgs = [...w5b4Inp('record', fx.f), ...w5b4Inp('part1', fx.d), ...w5b4Inp('frozen', fx.fz)];
+    const stores = [W5B4_STORE_A, W5B4_STORE_B];
+    for (const s of stores) {
+      for (const q of fx.entries.filter((e) => e.store_id === s)) {
+        w5b4Act(homes[s]!, q, W5B4_TREATMENT, '.jsonl', w5b4Stream({ text: `ANSWER: ${q.fact as string}`, calls: [{ command: 'ccrc history grep fixture' }] }));
+        w5b4Act(homes[s]!, q, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'ANSWER: UNKNOWN', calls: [{ command: 'ccrc history grep fixture', isError: true }] }));
+      }
+      const arms = await w5b4Arms(homes[s]!, ['arms', '--section', 'quiz', '--out', outs[s]!, ...recordArgs]);
+      b2t5Expect([arms.refusal, arms.code], `arms on ${s}`).toEqual([null, 0]);
+      const flags = (B2T5.parseArgs(['judge', '--section', 'quiz', '--out', outs[s]!, ...recordArgs]) as { flags: B2t5R }).flags;
+      const j = await w5b5InProcess(() => W5B5.judgeCommand(flags, W5B5_ENV(homes[s]!),
+        { loadArmRun: replay.loadArmRun, armNodeOf: replay.armNodeOf, readArmAnswers: replay.readArmAnswers, now: () => W5B4_T0 + 2 * W5B4_DAY }));
+      b2t5Expect([j.refusal, j.code], `judge on ${s}`).toEqual([null, 0]);
+    }
+    const capture = async (fn: () => Promise<unknown>): Promise<string> => {
+      const text: string[] = [];
+      const o1 = b2t5Vi.spyOn(process.stdout, 'write').mockImplementation(((t: string | Uint8Array) => { text.push(String(t)); return true; }) as typeof process.stdout.write);
+      const e1 = b2t5Vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as typeof process.stderr.write);
+      try { await fn(); } finally { o1.mockRestore(); e1.mockRestore(); }
+      return text.join('');
+    };
+    const per: Record<string, B2t5R> = {};
+    for (const s of stores) {
+      const env = { HOME: homes[s], TMUX_PANE: undefined, LANG: undefined };
+      const verifyOf = (section: string): Promise<string> => capture(() => B2T5.verifyCommand((B2T5.parseArgs(['verify', '--section', section, ...recordArgs]) as { flags: B2t5R }).flags, env));
+      const mine = fx.entries.filter((e) => e.store_id === s);
+      const at = (rel: string): B2t5Saved => ({ path: join(outs[s]!, rel), sha: b2t5Lib.sha256Hex(readFileSync(join(outs[s]!, rel))) as string, value: null });
+      per[s] = {
+        summary: at('quiz/arms/summary.json'), judged: at('quiz/judged.json'),
+        verifyQuiz: b2t5SaveText(await verifyOf('quiz'), `verify-quiz-${s}.json`),
+        // K11: a fixture store holds no presence record, so its own verify --section ab answers seen_after_write false, which
+        // report refuses; the walk's ab output is the driver's verifyAbReport over this node's empty assignment, swept at window start.
+        verifyAb: w5b4Save(B2T5.verifyAbReport({ recordSha256: fx.f.sha, storeId: s, families: [], newest: { state: 'absent' }, seen: fx.final.window.start_ms }), `verify-ab-${s}.json`),
+        measure: w5b4Save({ store_id: s, user_version: 2, script_sha256: fx.final.gate_code.files['deploy/measure-history.py'], counters: {}, w1f_grep_p95_ms: null, census: null,
+          w2: { row_cap: b2t5Gate.ROW_CAP, window_start_ms: fx.final.window.start_ms, window_end_ms: fx.final.window.end_ms, families: [], recall_off: [] } }, `measure-${s}.json`),
+        sourced: w5b4Save(B2T5.sourcedReport({ recordSha256: fx.d.sha, storeId: s, assignmentSha256: fx.final.assignment_sha256, inputs: [],
+          sourced: { entries: mine.map((e, i) => ({ ...e, rank: [b2t5Hex(`walk rank ${s}`), i] })), counts: {},
+            asof_same_ms_hits: Object.fromEntries(mine.map((e, i) => [e.qid, { asof_same_ms_hits: i }])) }, spend: 0 }), `sourced-${s}.json`),
+      };
+    }
+    const map = B2T5.judgeMapOf(fx.final.bootstrap.seed, fx.entries, B2T5_ARMS);
+    const judgedItems = stores.flatMap((s) => (JSON.parse(readFileSync(per[s]!.judged.path, 'utf8')) as B2t5R).items as B2t5R[]);
+    const plan = B2T5.handcheckPlanOf({ record: fx.final, recordSha256: fx.f.sha, frozenSha256: fx.fz.sha, entries: fx.entries, map,
+      mapSha256: b2t5Lib.sha256Hex(B2T5.judgeMapText('quiz', fx.fz.sha, map)),
+      judged: stores.map((s) => ({ path: per[s]!.judged.path, sha256: per[s]!.judged.sha, value: JSON.parse(readFileSync(per[s]!.judged.path, 'utf8')) })) }) as B2t5R;
+    const hItems = plan.items as B2t5R[];
+    const sampled = plan.sampled as string[];
+    b2t5Expect(hItems.length, 'CONTROL: the judged files name the items judgedItems lists').toBe(judgedItems.length);
+    const labels = b2t5SaveText(`${['# the operator\'s labels', ...hItems.filter((i) => sampled.includes(i.id)).map((i) => `${i.id as string} ${(i.judge as string | null) ?? 'fabricated'}`)].join('\n')}\n`, 'labels.txt');
+    const spawned = (): number => stores.reduce((n, s) => n + (stubLog(homes[s]!) ?? []).length, 0);
+    const before = spawned();
+    const out = join(b2t5MkTmp('ccrc-w5b2-t5-walk-out-'), 'out');
+    const argv = ['report', '--out', out, ...recordArgs,
+      ...stores.flatMap((s) => [...w5b4Inp('arms-summary', per[s]!.summary), ...w5b4Inp('judged', per[s]!.judged), ...w5b4Inp('verify-quiz', per[s]!.verifyQuiz),
+        ...w5b4Inp('sourced', per[s]!.sourced), ...w5b4Inp('verify-ab', per[s]!.verifyAb), ...w5b4Inp('measure', per[s]!.measure)]),
+      ...w5b4Inp('labels', labels as W5b4Saved)];
+    const r = await b2t5Report(argv);
+    b2t5Expect(r.refusal).toBeNull();
+    b2t5Expect(r.code).toBe(0);
+    const text = readFileSync(join(out, 'verdict.json'), 'utf8');
+    b2t5Expect(r.stderr, 'only the sha line (D-5983)').toBe(`sha256 ${b2t5Lib.sha256Hex(text) as string}\n`);
+    const v = JSON.parse(text) as B2t5R;
+    b2t5Expect(v.gate.ok).toBe(true);
+    b2t5Expect(v.gate.verdict, 'w5b4Quiz part 2 assigns no live family, so criterion 3 has no cluster').toBe('halt');
+    b2t5Expect(v.gate.halts).toEqual(['empty-arm']);
+    b2t5Expect(v.gate.criteria.accuracy).toMatchObject({ point_t: { num: 5, den: 5 }, point_c: { num: 0, den: 5 } });
+    b2t5Expect(v.gate.criteria.fabrication).toMatchObject({ t: { num: 0, den: 5 }, c: { num: 5, den: 5 } });
+    b2t5Expect(v.gate.report_only.quiz_uptake.by_arm[B2T5_T]).toEqual({ questions: 5, with_call: 5, calls: 5, via_agent: 0, errored: 0 });
+    b2t5Expect(v.gate.report_only.quiz_uptake.by_arm[B2T5_C]).toEqual({ questions: 5, with_call: 0, calls: 0, via_agent: 0, errored: 5 });
+    b2t5Expect(v.families.quiz).toHaveLength(2);
+    b2t5Expect(v.inputs.answers).toHaveLength(10);
+    b2t5Expect(spawned(), 'report spawns nothing').toBe(before);
+  }, 300_000);
+});
+
+// ── W2-5b2 Task 5: the F1 carry, judgeInputOf's answer field over every gate line break (D-6470) ─────────────────────
+// W2-5b1's fix round reads the judge input's answer_field from the masked reply and gives it the mask mark when a
+// raw ANSWER line was swallowed, counting ANSWER lines over the driver's module-private ANSWER_FIELD_LINE_BREAK, which
+// mirrors the gate's module-private LINE_BREAK. One case per gate line break on W2-5b1's two-line reproduction: a
+// surviving first ANSWER line, then an OPENSSH private-key block whose own lines, the last ANSWER line among them, are
+// split by that same break, so a splitter that misses the break reads both raw ANSWER lines as one. Every separator and
+// the backslash come from String.fromCharCode, so no escape in this block can be decoded by a write.
+const B2T5_BS = String.fromCharCode(0x5c);
+/** A hand copy of history-gate.mjs's private LINE_BREAK. The gate is a signed GATE_CODE_FILES member and is never
+ *  edited, so the splitter is not imported; the scan case below holds this copy to the gate's own declaration line. */
+const B2T5_GATE_LINE_BREAK = new RegExp(`${B2T5_BS}r${B2T5_BS}n|[${B2T5_BS}n${B2T5_BS}r${B2T5_BS}p{Zl}${B2T5_BS}p{Zp}]`, 'u');
+const B2T5_BREAKS: Array<[string, string]> = [
+  ['CR', String.fromCharCode(13)], ['CRLF', String.fromCharCode(13, 10)],
+  ['U+2028', String.fromCharCode(0x2028)], ['U+2029', String.fromCharCode(0x2029)],
+];
+const B2T5_F1_FACT = 'npm run fixture-lint';
+const B2T5_F1_BODY = ['QyNTUxOQ', 'AAACDx3B', 'q9yC2mT0', 'm4w5'].join('');
+/** W2-5b1's reproduction with `br` between every line: the surviving ANSWER line, then the key block holding the last. */
+const b2t5F1Reply = (br: string): string => {
+  const edge = (word: string): string => [['-----', word].join(''), ['OPEN', 'SSH', 'PRIVATE', 'KEY-----'].join(' ')].join(' ');
+  return [`ANSWER: ${B2T5_F1_FACT}`, edge('BEGIN'), B2T5_F1_BODY, `ANSWER: ${B2T5_F1_BODY}`, edge('END')].join(br);
+};
+
+b2t5Describe('W2-5b2 Task 5: the F1 carry, the judge input\'s answer field over every gate line break (D-6470)', () => {
+  b2t5It.each(B2T5_BREAKS)('a surviving first ANSWER line and a key block swallowing the last, split by %s, give answer_field the mask mark', (_name, br) => {
+    b2t5Expect(`a${br}b`.split(B2T5_GATE_LINE_BREAK), 'CONTROL: the gate\'s line rule reads this break as one line break').toEqual(['a', 'b']);
+    const reply = b2t5F1Reply(br);
+    b2t5Expect(w5b5Gate.parseAnswerField(reply), 'CONTROL: the raw last ANSWER is inside the key block').toMatchObject({ state: 'value', value: B2T5_F1_BODY });
+    const input = W5B5.judgeInputOf(w5b5Entry(B2T5_F1_FACT), reply, t4Lib.makePairIndex([]));
+    b2t5Expect(input.reply, 'CONTROL: the whole block is masked and the first ANSWER line survives').toBe(`ANSWER: ${B2T5_F1_FACT}${br}${t4Lib.REDACTED_MARK}`);
+    b2t5Expect(w5b5Gate.parseAnswerField(input.reply), 'CONTROL: the masked reply alone would answer the surviving fact').toMatchObject({ state: 'value', value: B2T5_F1_FACT });
+    b2t5Expect(input.answer_field, 'the swallowed last ANSWER line carries the mark, never the surviving fact').toBe(t4Lib.REDACTED_MARK);
+    b2t5Expect(w5b5Lib.canonicalJson(input)).not.toContain(B2T5_F1_BODY);
+  });
+
+  b2t5It('ANSWER_FIELD_LINE_BREAK is declared once and read by both of judgeInputOf\'s counts, and the hand copy is the gate\'s LINE_BREAK', () => {
+    const code = (file: string): string[] => readFileSync(join(W5B4_REPO, 'deploy', file), 'utf8').split('\n').filter(b2t5Code).map((l) => l.trim());
+    const drv = code('history-replay.mjs');
+    b2t5Expect(drv.filter((l) => l.startsWith('const ANSWER_FIELD_LINE_BREAK = ')), 'declared once').toHaveLength(1);
+    b2t5Expect(drv.filter((l) => l.includes('.split(ANSWER_FIELD_LINE_BREAK)')), 'the raw and the masked counts').toHaveLength(2);
+    b2t5Expect(code('history-gate.mjs').filter((l) => l.startsWith('const LINE_BREAK = ')), 'the gate\'s one private splitter, as the copy spells it')
+      .toEqual([`const LINE_BREAK = /${B2T5_GATE_LINE_BREAK.source}/${B2T5_GATE_LINE_BREAK.flags};`]);
   });
 });
