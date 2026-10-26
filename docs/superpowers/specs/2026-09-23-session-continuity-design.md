@@ -309,6 +309,21 @@ the compaction-card citation-corpus procedure.
 
 The historical backlog on source accounts is not recovered (§11).
 
+**Amended 2026-10-26 (issue #317 items 3-4): the stale transcript copies are collected (D-TBD-carry-dedupe).** A carry
+copies the transcript and keeps the source, so every account a session visits keeps a full stale copy (measured
+2026-10-26 on one box: 238 uuids on more than one account, 49.4 GiB in copies other than the largest). Wave 1 is the
+operator verb `ccd carry-dedupe [--apply] [--uuid U] [--min-age-hours 24]`, a dry run unless `--apply` is given. Per
+uuid it skips one carried or swapped inside the window, or one whose carry slot (`$REG/.carry.lock`) is held. It then
+picks one keeper account: the live session's, else the registry wrapper's, else the copy that is strictly the largest
+and strictly the newest. Any tie refuses, because a keep-the-largest rule alone is unsafe (a live session held a
+same-size copy on another account minutes after an auto-swap back). A non-keeper copy is unlinked only when its bytes
+are a prefix of the keeper's, or when the keeper holds every message uuid in it; otherwise it is `diverged` and kept.
+Identical sidecar files become one inode through the D-4500 link route, and with no route they are left and counted.
+Each uuid's verdict is one `carry-dedupe` line in swap.log, and stage 1's instrument sums its reclaimed bytes. Running
+`--apply` on a fleet is an operator decision taken on a dry-run report. Wave 2 drops the source right after a carry,
+but only when the resumed session runs on the destination, the destination has grown past the copied size, and the
+merge was neither deferred nor kept. It reuses this proof, and it keeps the source on a refusal or `--force`.
+
 ### 5.2 Stage 2 — spike: Claude Code's native exit handoff under ccd (half a day; decides stage 3)
 
 On one scratch session on a scratch account, with a Bash background watcher, a Monitor task, a two-agent workflow

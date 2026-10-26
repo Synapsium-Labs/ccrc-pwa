@@ -8776,6 +8776,7 @@ cmd_caps() {   # one verb name per line — what THIS copy of ccd implements.
 account-pane
 attach
 caps
+carry-dedupe
 clip
 coord-pause
 enable
@@ -27409,6 +27410,85 @@ print(f'merged {added} {replaced} {len(diverged)} {deferred}')
 PY
 }
 
+cmd_carry_dedupe() {   # [--apply] [--uuid U] [--min-age-hours H] — reclaim the stale transcript copies swap carries left behind (#317). Dry run by default.
+  # THE BACKLOG (#317 items 3-4). `_swap_carry_jsonl` COPIES the transcript and
+  # never removes the source: a transcript is appended to, so it cannot be a
+  # hardlink, and every account a session passed through keeps a full stale
+  # copy. This verb collects them, after the fact, one uuid at a time. It
+  # changes nothing unless `--apply` is given; without it, it prints what it
+  # would do. Dropping the source right after a verified carry is wave 2, on
+  # top of this verb's keeper and proof (and is not this verb's job).
+  #
+  # PER UUID held by two or more account roots (a transcript `<uuid>.jsonl` or a
+  # sidecar `<uuid>/` under `<cfg>/projects/*/`), in uuid order:
+  #   1. RECENT: any swap.log line in the last `--min-age-hours` (24) that names
+  #      the uuid, other than this verb's own, skips it — a swap line carries
+  #      `(uuid U)` and every carry's `carry U:`/`sidecar U` lines name it.
+  #   2. LOCKED: the carry's own box-wide slot, `$REG/.carry.lock`, taken
+  #      non-blocking for the uuid (flock(2), the same lock `_carry_slot_take`
+  #      takes), so no dedupe runs beside a carry. Never unlinked.
+  #   3. THE KEEPER, an account: the one account a LIVE registry row for the uuid
+  #      is on; else the one account its registry rows' `wrapper` names; else the
+  #      account whose largest copy is STRICTLY the largest and STRICTLY the
+  #      newest. Two candidates, or a size/mtime tie, is `tie`; a named keeper
+  #      holding no transcript is `keeperless`. A keep-the-largest rule alone is
+  #      unsafe (a live session held a same-size copy on another account three
+  #      minutes after an auto-swap back, measured 10-06), which is why it is
+  #      the last rule and refuses any tie.
+  #   4. THE PROOF, per non-keeper transcript name: its bytes are a byte prefix
+  #      of the keeper's largest copy (streamed, 1 MiB chunks), OR every message
+  #      `uuid` in it is in the keeper and every line without one appears in the
+  #      keeper verbatim (a sanitized carry rewrites text, never uuids).
+  #      Otherwise `diverged`, and it stays. A name sharing the keeper's inode,
+  #      or resolving to the keeper's path, is never unlinked; a name whose
+  #      mtime is inside the window is `recent` (something may still write it).
+  #      An inode's bytes count as reclaimed only when every one of its names is
+  #      unlinked. Each name is re-stat'ed just before its unlink.
+  #   5. SIDECARS: for each non-keeper sidecar tree, a regular file equal to the
+  #      keeper's at the same relpath (size, then sha256) and older than the
+  #      window is replaced by a hardlink to the keeper's (temp name, then
+  #      rename). A link EXDEV refused asks `_carry_link_route`'s route (#338,
+  #      D-4500, inode-proved) once per tree pair; with no route the file is left
+  #      and counted `copy: <CARRY_CAUSES word>`. macOS has no table, so it
+  #      never routes; the transcript proof needs none.
+  # THE PROGRAM is `ccd/lib/carry-dedupe.py` (beside this script in a tree, else
+  # where the installers put it, `$HOME/.cc-sessions/lib`, as `transcript.jq`),
+  # not a third mode of `_carry_py`, so this file does not grow; it asks the
+  # route through this file's `_carry_link_route`, never a copy of it. The
+  # refusals are a closed vocabulary, `DEDUPE_REFUSALS`, spelled once there;
+  # `ccd-carry-dedupe.test.ts` pins it. With `--apply`, one line per
+  # uuid goes to swap.log:
+  #   `carry-dedupe <uuid> kept=<account|-> unlinked=N bytes=B refused=<word|-> linked=L[, copy: <cause> F files B bytes]`
+  # `bytes` is everything reclaimed for the uuid, transcripts and sidecars;
+  # `deploy/measure-continuity.py` sums it. Exit 0 when every uuid was handled
+  # or refused for a named reason; 1 when one hit an I/O error (`error`).
+  local apply=0 only=- age=24 usage="usage: ccd carry-dedupe [--apply] [--uuid <uuid>] [--min-age-hours <n>]"
+  while (( $# )); do
+    case "$1" in
+      --apply)         apply=1; shift ;;
+      --uuid)          [[ $# -ge 2 ]] || die "$usage"; only="$2"; shift 2 ;;
+      --min-age-hours) [[ $# -ge 2 ]] || die "$usage"; age="$2"; shift 2 ;;
+      *)               die "$usage" ;;
+    esac
+  done
+  [[ "$only" == - || "$only" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || die "$usage"
+  [[ "$age" =~ ^[0-9]{1,6}$ ]] || die "$usage"
+  command -v python3 >/dev/null 2>&1 || die "carry-dedupe needs python3"
+  local a f id u w lib="${BASH_SOURCE[0]%/*}/lib/carry-dedupe.py"
+  [[ -f "$lib" ]] || lib="$HOME/.cc-sessions/lib/carry-dedupe.py"
+  [[ -f "$lib" ]] || die "carry-dedupe: its program is not installed ($lib) — re-run ccrc install"
+  {
+    for a in "${CCRC_ACCOUNTS[@]}"; do printf 'A\t%s\t%s\n' "$a" "$(_cfg_dir "$a")"; done
+    for f in "$REG"/*.uuid; do
+      [[ -f "$f" ]] || continue
+      id="${f##*/}"; id="${id%.uuid}"
+      _reg_get_to u "$id" uuid || continue
+      _reg_get_to w "$id" wrapper || w=""
+      if _alive "$id"; then printf 'O\t%s\t%s\tlive\n' "$u" "$w"; else printf 'O\t%s\t%s\trow\n' "$u" "$w"; fi
+    done
+  } | python3 "$lib" "$REG" "$apply" "$only" "$age" "${BASH_SOURCE[0]}"
+}
+
 _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first carry as a hardlink tree, a return visit as a merge. Always rc 0.
   # <projects dir>/<uuid>/ holds subagents, tool-results and workflows, and was
   # copied by NOTHING before this build: 188MB of the incident session's state,
@@ -45456,6 +45536,7 @@ case "${1:-}" in
   hibernate) shift; cmd_hibernate "$@" ;;
   swap)      shift; cmd_swap "$@" ;;
   swap-self) shift; cmd_swap_self "$@" ;;
+  carry-dedupe) shift; cmd_carry_dedupe "$@" ;;
   prefer)    shift; cmd_prefer "$@" ;;
   ls|list)   cmd_ls ;;
   menu|pick) cmd_menu ;;
@@ -45494,6 +45575,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi
