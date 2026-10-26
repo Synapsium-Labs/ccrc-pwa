@@ -377,11 +377,12 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 
   // D-5856 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1b; ARCH-70 (#805)).
   // Every reclaim-paused reader, at the pass and at the act, goes through `readSwitches`: the private parse sites fold
-  // 10 -> 1 on C1b's tip. The one left is the stop-done lane's (`stopDoneSweep.ts`), which W4 moves. May only shrink.
-  it('reclaim-paused is parsed at <= 1 site outside readSwitches (may only shrink)', () => {
+  // 10 -> 1 on C1b's tip. The one left was the stop-done lane's (`stopDoneSweep.ts`); D-7041 (ARCH-43; spec §5.7
+  // "1 -> 0") folds it, so none is left. May only shrink.
+  it('reclaim-paused is parsed at <= 0 sites outside readSwitches (may only shrink)', () => {
     const sites = reclaimPauseParseSites();
-    expect(sites.length, 'a private includes(RECLAIM_PAUSE_MARKER): read it through readSwitches').toBeLessThanOrEqual(1);
-    expect(sites.map((x) => x.file)).toEqual(sites.length === 0 ? [] : ['server/src/stopDoneSweep.ts']);
+    expect(sites.length, 'a private includes(RECLAIM_PAUSE_MARKER): read it through readSwitches').toBeLessThanOrEqual(0);
+    expect(sites.map((x) => x.file)).toEqual([]);
   });
 
   // D-5853 (Task C0f; ARCH-00 (#525)). The test scanners' TS parser, the operator's option (a) (a TypeScript 6 alias),
