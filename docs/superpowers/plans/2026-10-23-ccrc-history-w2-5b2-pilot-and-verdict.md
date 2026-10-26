@@ -12255,7 +12255,7 @@ Each is the coordinator's, under the operator's directive of 2026-10-19, and eac
 - The sheet is blinded; the label reader is strict.
 - `report` decides nothing, sha-checks every input, keys families by `familyKey`; RP6-e2e and RP7-e2e.
 - Every `--record` consumer re-checks `gate_code` first; a refusal that needs no store and no spawn answers before `--out`; a data case after `--out` never exits INTERNAL; the driver never spells an arm word.
-- The errata in place, each citing its number (the script's output above); README names the `--no-warnings` shebang, the flow and K25's approximate non-hard disclosure (Task 6's pin, RM1 to RM11 and the named bound-disclosure mutant).
+- The errata in place, each citing its number (the script's output above); README names the `--no-warnings` shebang, the flow and K25's approximate non-hard disclosure (Task 6's pin, RM1 to RM12 and the named bound-disclosure mutant).
 - Each guard a task's mutant step lists (Tasks 1, 2 and 5: Step 8; Task 3: Step 6; Task 4: Step 7; Task 6: Step 2) was measured red under its mutant, then green, as the task's commit note records; a refusal with no mutant is named under that task's "no mutant, by design" list.
 
 (the case titles Step 9 counted or found, one per must-hold, and the re-check rows)
@@ -12367,13 +12367,13 @@ Every other guard this PR adds is in Tasks 1 to 5, each with its own mutant list
 
 ## Fix round 1: the review's corrections and this round's measurements
 
-Round 1 of 3 pinned the review's guards in code and tests (commit `fix(history): W2-5b2 fix round 1, the review's guards pinned (D-6694)`, two files, no new number: D-6694 is cited and nothing is defined). This section records, over the predictions in the tasks above, what that round measured. It is text only. The history-replay file went from 1590 cases to 1613 (Part A, 23 more) and 1693 (Part B, 80 more). The selections at the fix commit are Task 1 44, Task 2 140, Task 3 76, Task 4 65 and Task 5 133. Every mutant below ran against its owning task's whole describes (`-t 'W2-5b2 Task N'`), one mutant per call, and was restored with a copy and `cmp`; a red-first prediction was written before each run.
+Round 1 of 3 pinned the review's guards in code and tests (commit `fix(history): W2-5b2 fix round 1, the review's guards pinned (D-6694)`, two files, no new number: D-6694 is cited and nothing is defined). This section records, over the predictions in the tasks above, what that round measured. It is text only. The history-replay file went from 1590 cases to 1613 (Part A, 23 more) and 1693 (Part B, 80 more). The selections at the fix commit are Task 1 44, Task 2 140, Task 3 76, Task 4 65 and Task 5 139 (133 was read before Part B's six `inputsByStore` rows were appended; fix round 2 re-measured it). Every mutant below ran against its owning task's whole describes (`-t 'W2-5b2 Task N'`), one mutant per call, and was restored with a copy and `cmp`; a red-first prediction was written before each run.
 
 ### Part A: predictions against measurements
 
 - **F1 (`live_uptake` carries no `unmeasured`).** Predicted: the old code keeps `unmeasured: 0` in every cell, so the edited unit case (three `unmeasured: 0` pins removed) and the new case (one measured and two unmeasured live windows) go red, and `live_excluded.unmeasured.count` of 2 already holds. Measured as predicted. The fixture option `unmeasuredWindow` (a family copy whose last timestamp is null) is new. Mutant, the field put back in a cell: 2 failed, 81 passed (Task 5). Task 5's `liveUptakeOf` text above, with its `unmeasured` field, is superseded: the count lives in `live_excluded.unmeasured`.
 - **F2 and F3 (no or malformed session id is unmeasured).** Predicted: `null` reads `failed persistence; unmeasured -` and `''`, `'a/b'`, `'.x'` throw a TypeError out of `persistenceLeft`. Measured: 9 red exactly so, green after the fix. Words: `no-session-id` and `session-id-malformed`; `persistenceCheckOf` needed no change. Mutants (Task 1, 44): null folded back into `left` 3 red; malformed rethrown 7 red.
-- **A1 (the sheet quotes on every break).** Predicted: CR, CRLF, U+2028 and U+2029 red, LF green. Measured as predicted. Mutant, the quote back to LF only (Task 4, 59 at that point): 4 red, 54 passed. The pin `ANSWER_FIELD_LINE_BREAK is declared once and read by both of judgeInputOf's counts…` (Step 8a above) counted exactly two `.split(ANSWER_FIELD_LINE_BREAK)` lines; it now counts those two plus the sheet's `const quote = …` as the third, retitled `… and the sheet's quote …`. That is an edit of this PR's own case, not of an earlier PR's, and the same mutant reds it too.
+- **A1 (the sheet quotes on every break).** Predicted: CR, CRLF, U+2028 and U+2029 red, LF green. Measured as predicted. Mutant, the quote back to LF only (Task 4): 4 red (the tally first written, 54 passed of 59, added to 58; re-measured, it is 4 failed and 61 passed of 65 at that head, and 4 failed and 68 passed of 72 at fix round 2's tip). The pin `ANSWER_FIELD_LINE_BREAK is declared once and read by both of judgeInputOf's counts…` (Step 8a above) counted exactly two `.split(ANSWER_FIELD_LINE_BREAK)` lines; it now counts those two plus the sheet's `const quote = …` as the third, retitled `… and the sheet's quote …`. That is an edit of this PR's own case, not of an earlier PR's, and the same mutant reds it too.
 - **A2 (a leading BOM is stripped).** Predicted green on today's code, because it pins kept behaviour, so its red-first is its mutant. Measured green; mutant `ignoreBOM: true` on the strict decoder: 1 red, 58 passed (Task 4).
 - **A6 (a malformed answer record is `input-invalid` at the report).** Predicted: four red on the word only. Measured as predicted. Scope, measured: only malformed content (not JSON, not an answer record) says `input-invalid`; the judge's reader and every state, unreadable or not-regular refusal keep `out-refused`. Mutant, the report's call back to the default word: 4 red, 83 passed (Task 5).
 - **A7 (`sameMsHitsOf`'s `n < 0` term).** Predicted green on today's code. Measured green; mutant `Number.isSafeInteger(n)` alone: 1 red (the negative row), 89 passed (Task 5). The fractional and string rows are CONTROLs of the `isSafeInteger` term.
@@ -12434,6 +12434,627 @@ U6's first run reported 22 passed because its old anchor no longer matched; it w
 - **A5.** The 5.5 s wait in Task 1's stub describe is a literal `5_500`, tied to `STOP_GRACE_MS` in `onStopSignal` only by a comment: the constant is a module `const`, not exported, and this PR adds no export. And Tasks 2 and 3's stub describes are safe only by file order, after Task 1's wait.
 - **A9.** The gate's `recordSha256` and `assignmentSha256` imports are shadowed by parameters in 16 new places (9 existed before this PR). Harmless today, because neither is called in those scopes.
 - **A6's limit.** Only a malformed answer record's content refuses `input-invalid` at the report. An unreadable (permission), linked or directory answer-record file still refuses `out-refused`, as every reader of those files does.
+
+## Fix round 2: the guard census, the mutants' anchors and the review's corrections
+
+Round 2 of 3 closed the class that fix round 1 began on. Commit `fix(history): W2-5b2 fix round 2, the report refusals pinned and the class closed` (two files, no new number). Every refusal and every thrown TypeError or RangeError on the paths of the five subcommands this PR adds (`step0b`, `fidelity`, `pilot-result`, `handcheck`, `report`) now has a row and a mutant, or a by-design entry whose reason holds in the code, and so does every such guard this PR added anywhere else in the driver (the closing pass, Part D: `open`, `arms` and the helpers they call). This section is text only. It records the census and how to re-run it, the anchor and replacement of every mutant that fix rounds 1 and 2 left without one, and the review's remaining corrections.
+
+### What the round changed
+
+- **Code: one refusal added, none removed.** `fidelityRepilotCommand` refuses a frozen entry whose `boundary_uuid` is not a lowercase UUID, `input-invalid`, before `--out` and any spawn (mutant `t3-229`). It had thrown a TypeError out of `fidelityRunName`, which is INTERNAL: three rows were run red first against the unfixed driver and failed with that TypeError. No other bad input escaped as a TypeError, so nothing else in the driver changed but comments: the comments that cited D-6694 for fix round 1's work now cite "W2-5b2 fix round 1" (D-6694 stays on K29's original side only), and `readAnswerRecords`' doc says it answers `{rel, sha256, record}`, the projection `readArmAnswers` does not make.
+- **Tests: 1693 to 1841 cases** (Part A 60, Part B 51, Part D 37), in 21 describes appended after fix round 1's last describe. Each new row was written against the intact driver and ran green first, because its guard exists; its red is its guard's mutant, with the prediction (the rows that exercise the term, and nothing else) written before the run. Every mutant measured as predicted but `t5-334b`, which reds 1 row, not the predicted 2: a word as the answer field has no `.state`, so the next term refuses it, and only the null row needs the `plainObject` term. One mutant, `t2-247`, survives by design (below).
+- **Probe describes.** The by-design entries are shown by probe rows in the describes `W2-5b2 Task 1 fix round 2: the TypeErrors of step0b's pure helpers …`, `… Task 2 fix round 2: the TypeErrors of fidelity's pure helpers …`, `… Task 4 fix round 2: the TypeErrors of the hand-check's pure helpers …` and `… Task 5 fix round 2: the TypeErrors and the refusal of report's gate inputs …`. Each probe shows the pure TypeError exists and that the refusal or contract the reason names comes first.
+- **Part D, the closing pass.** The census above covered the paths of the five subcommands only, and listed `throw new TypeError(` only. Walked over the whole driver, with `throw new RangeError(` listed too, it finds 29 more W2-5b2 guards: `judgeSpentOf`'s RangeError (on the five paths, missed by the first listing) and 28 that the five handlers do not reach: `openFinalize` 5, `openCommand` 1, `openAmend` 14, `armRunName` 1, `versionSplitOf` and `moveAfterSplit` 1 each, `readArmManifests` 5. All 29 are pinned (rows 157 to 185 below; 32 mutants with anchors in the Part D JSON block, 31 for these guards and `d-recheck-uuid`): 19 already had a row and an earlier mutant (`openFinalize`'s first four, `versionSplitOf`, `moveAfterSplit` and 13 of `openAmend`'s), which now have JSON entries measured at this tip, the earlier `T2:` and `T3:` ids named beside them; 10 gained a mutant, a row or both: `openCommand`'s `open wants exactly one of` (a mutant, and rows for no mode and for four modes), `armRunName`'s TypeError (a row asserting its message, and a mutant), `readArmManifests`' five (rows for the first three and the fourth and fifth under the unit, mutants for all), `openFinalize`'s spend-budget echo (a mutant), `openAmend`'s version-mismatch (a mutant) and `judgeSpentOf`'s RangeError (a row asserting its message, and a mutant). Nothing is by design. No bad input escaped as a TypeError, so the driver is unchanged in Part D.
+- **Part D, the optional probe.** `step0b --section quiz` with a first question whose `boundary_uuid` is not a lowercase UUID reaches `spawnEnv`'s TypeError only through the test seam: the suite's fake re-check lets it through, three rows were run red first against that fake (a TypeError out of `spawnEnv`), but `step0bCommand` as main runs it (`HANDLERS.set('step0b', (flags, env) => step0bCommand(flags, env))` passes no deps) asks the real `recheckBatch`, which refuses `quiz-unanswerable` `<qid> clause (a) boundary-uuid-invalid` in `step0bCardOf`, before `--out` and any spawn. The rows now run the real re-check and pin that refusal (mutant `d-recheck-uuid`, which neutralises `recheckQuestion`'s own uuid clause, W2-5b1's, a `fail(...)` answer and no `refuse(`, so no census row); CONTROL: a lowercase UUID passes that clause and the real re-check refuses `boundary-absent` for this fixture store, which holds none of the boundaries.
+
+### The census
+
+**Scope (the coordinator's ruling).** The class to close is W2-5b2's own guards (K5: every refusal a task adds). The guards of W2-4, W2-5a and W2-5b1 that lie on the same paths are counted as owned by their wave, pinned by that wave's own suite, and get no rows here. A guard whose word or detail this PR changed counts as W2-5b2's: that is why `readAnswerRecords`' two malformed-content refusals (W2-5b1's guards, with `malformedWord` this PR's) have rows. Part D widens the walk from the five handlers' closure to every top-level function of the driver (`all`, below), so a W2-5b2 guard on the `open`, `arms`, `judge`, `verify` or `freeze` paths, or in a helper none of the five reaches, is in the count; the earlier waves' guards there are owned by their waves in the same way.
+
+**What counts as a guard.** A `refuse(` call, a `throw new TypeError(` or a `throw new RangeError(` (the first listing missed the RangeError) in a top-level function reachable from `step0bCommand`, `fidelityCommand`, `pilotResultCommand`, `handcheckCommand` or `reportCommand` by any reference to another top-level name (a function passed as a callback or a seam default counts, so the closure over-approximates). The quiz forms are inside these closures. Two expansions, both written into the procedure: `handcheckPlanOf`'s local `bad(` helper holds one `refuse`, so its 17 call sites are the guards; and `verifyAbOf`'s per-entry `refuse` is four guards, one per term (`plainObject(f)`, `a === undefined`, `f.arm !== a.arm`, `!AB_STATES.includes(f.state)`), because the review asked for those terms singly. The `all` scope drops the reachability filter: every top-level function of the driver. Any other refusal with several terms is one guard: its row title lists its bad inputs and its mutant removes the refusal. Where a term can fail alone, this round's term mutants (Parts A and B: `t2-232a` to `t2-232c`, `t2-236a`, `t2-236b`, `t2-244a` to `t2-244c`, the `t5-334` family, `t5-337` family and the like) are anchored in the JSON blocks below; fix round 1's term mutants were measured but are not recorded one by one, and Part D's shape guards (`readArmManifests`' manifest check, `openAmend`'s flag checks) are mutated whole, their terms covered by one row input each.
+
+**Owner.** A guard whose line `git diff -U0 fa25c9ee6` shows as added is W2-5b2's. Any other guard belongs to the wave whose merge last wrote its line by `git blame`: W2-4 `780c8126c`, W2-5a `c34f82830`, W2-5b1 `66c8bfa84`. Measured by the `cross` argument of the script below, over the whole driver: exactly one earlier-wave guard has an added line in its whole `if` statement (condition and branch), `persistenceLeft`'s sessionId TypeError (the throw at about :2730, W2-4's by blame). This PR rewrote its condition (about :2729) to call `sessionIdMalformed`, the predicate `persistenceMeasured` also uses, but its word and detail are unchanged and the throw line is W2-4's, so by the rule above it stays W2-4's and has no row here. `step0b` no longer reaches it: `persistenceMeasured` answers a null or malformed session id `unmeasured` first (the A1 residual below), so the guard stays an assertion behind that answer. No other guard's condition was changed by this PR, so the line rule leaves out nothing else.
+
+**Status.** *Pinned*: a row asserts the guard's word and detail, and a mutant (an anchor and a replacement, in this plan) removes or neutralises the guard, or the term, and the row goes red. *By design*: the guard cannot be reached with a bad input, or its refusal is shadowed, or a mutant of it is equivalent, and the reason holds in the code; each is shown by a probe row, and a shadow is itself pinned by the mutant named beside it. A mutant is credited to a guard when its anchor covers the guard's condition or its refuse call, or when it removes the guard's only call and its recorded red is the guard's row. Mutant ids `T<task>:<id>` are the plan's earlier mutants (Tasks 1 to 6 and fix round 1: 261 anchored pairs, 259 distinct ids, counted and checked by the earlier-mutants script at the end of this section); the lower-case ids are this round's, in the JSON blocks below.
+
+**The procedure.** From the repository root, with `pwa/node_modules` installed (the script loads the TypeScript parser from it), on a tree whose `deploy/history-replay.mjs` is clean. The arguments `rows`, `all` and `cross` combine, in any order (`node - rows all`, `node - all cross`):
+
+```bash
+node - rows <<'EOF'
+// The W2-5b2 guard census. Run from the repository root, with pwa/node_modules installed: node - [rows] [all] [cross] < this file
+// A guard is a refuse( call or a `throw new TypeError(` or `throw new RangeError(`. By default it is one on the closure of the
+// five handlers; `all` takes every top-level function of the driver; `rows` lists the guards; `cross` checks the owner rule.
+const ts = require(require.resolve('typescript', { paths: ['pwa'] }));
+const fs = require('node:fs');
+const sh = (...a) => require('node:child_process').execFileSync('git', a, { encoding: 'utf8', maxBuffer: 1 << 28 });
+const F = 'deploy/history-replay.mjs', BASE = 'fa25c9ee6';
+const WAVE = { '780c8126c': 'W2-4', c34f82830: 'W2-5a', '66c8bfa84': 'W2-5b1' };
+const sf = ts.createSourceFile(F, fs.readFileSync(F, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+const lineOf = (n) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+// Owner: this PR's if the line is added against BASE; else the wave whose merge last wrote it.
+const added = new Set();
+for (const m of sh('diff', '-U0', BASE, '--', F).matchAll(/^@@ -\S+ \+(\d+)(?:,(\d+))? @@/gm))
+  for (let i = 0; i < (m[2] === undefined ? 1 : +m[2]); i++) added.add(+m[1] + i);
+const blame = [null];
+for (const m of sh('blame', '--line-porcelain', '--', F).matchAll(/^([0-9a-f]{40}) \d+ \d+/gm)) blame.push(m[1].slice(0, 9));
+const owner = (l) => (added.has(l) ? 'W2-5b2' : WAVE[blame[l]] ?? `UNKNOWN(${blame[l]})`);
+// Call graph: top-level functions and consts; an edge is any reference to another top-level name.
+const decl = new Map();
+for (const st of sf.statements) {
+  if (ts.isFunctionDeclaration(st) && st.name) decl.set(st.name.text, st);
+  else if (ts.isVariableStatement(st)) for (const d of st.declarationList.declarations) if (ts.isIdentifier(d.name)) decl.set(d.name.text, d);
+}
+const refs = (name) => { const s = new Set(); const w = (n) => { if (ts.isIdentifier(n) && n.text !== name && decl.has(n.text) && !['HANDLERS', 'refuse', 'DriverRefusal'].includes(n.text)) s.add(n.text); ts.forEachChild(n, w); }; w(decl.get(name)); return s; };
+const HANDLERS = { step0b: 'step0bCommand', fidelity: 'fidelityCommand', 'pilot-result': 'pilotResultCommand', handcheck: 'handcheckCommand', report: 'reportCommand' };
+const reach = new Set(Object.values(HANDLERS));
+for (const q = [...reach]; q.length;) for (const g of refs(q.pop())) if (!reach.has(g)) { reach.add(g); q.push(g); }
+// Guards. handcheckPlanOf's local `bad` helper holds one refuse, so its call sites are the guards;
+// verifyAbOf's per-entry refuse is four guards (plainObject(f), a === undefined, f.arm, AB_STATES).
+const ALL = process.argv.includes('all');
+const rows = [];
+for (const [top, node] of decl) {
+  if (!reach.has(top) && !ALL) continue;
+  const walk = (n, fn) => {
+    if (ts.isFunctionLike(n)) fn = (n.name && n.name.text) || (ts.isVariableDeclaration(n.parent) && n.parent.name.getText(sf)) || fn;
+    const callee = ts.isCallExpression(n) && ts.isIdentifier(n.expression) ? n.expression.text : null;
+    const isThrow = ts.isThrowStatement(n) && ts.isNewExpression(n.expression) && ['TypeError', 'RangeError'].includes(n.expression.expression.getText(sf));
+    if ((callee === 'refuse' && fn !== 'bad') || (callee === 'bad' && top === 'handcheckPlanOf') || isThrow) {
+      const l = lineOf(n), args = isThrow ? n.expression.arguments : n.arguments;
+      const word = callee === 'refuse' ? args[0].getText(sf) : callee === 'bad' ? "'input-invalid'" : n.expression.expression.getText(sf);
+      const detail = (callee === 'refuse' ? args[1] : args[0])?.getText(sf).replace(/\s+/g, ' ') ?? '';
+      const k = top === 'verifyAbOf' && sf.text.split('\n')[l - 1].includes('AB_STATES.includes(f.state)') ? 4 : 1;
+      for (let t = 0; t < k; t++) rows.push({ stmt: (() => { let p = n; while (p && !ts.isIfStatement(p)) p = p.parent; return p ? [sf.getLineAndCharacterOfPosition(p.getStart(sf)).line + 1, sf.getLineAndCharacterOfPosition(p.end).line + 1] : [l, l]; })(), five: reach.has(top), line: l, top, fn, owner: owner(l), word, detail, term: k > 1 ? t + 1 : 0, subs: Object.keys(HANDLERS).filter((s) => { const q = new Set([HANDLERS[s]]); for (const x of q) if (x !== top) for (const g of refs(x)) q.add(g); return q.has(top); }).join(',') });
+    }
+    ts.forEachChild(n, (c) => walk(c, fn));
+  };
+  walk(node, top);
+}
+rows.sort((a, b) => a.line - b.line || a.term - b.term);
+const tally = {};
+for (const r of rows) tally[r.owner] = (tally[r.owner] ?? 0) + 1;
+console.log('guards', rows.length, JSON.stringify(Object.fromEntries(Object.entries(tally).sort())));
+if (process.argv.includes('rows')) for (const r of rows) console.log([r.five ? '' : 'OUT', r.line, r.owner, r.top === r.fn ? r.top : `${r.top}/${r.fn}`, r.term || '', r.word, r.detail.slice(0, 70)].join('\t'));
+if (process.argv.includes('cross')) {
+  const hits = rows.filter((r) => r.owner !== 'W2-5b2' && (() => { for (let i = r.stmt[0]; i <= r.stmt[1]; i++) if (added.has(i)) return true; return false; })());
+  console.log('earlier-wave guards whose enclosing if holds an added line:', hits.length);
+  for (const r of hits) console.log(r.line, r.owner, r.top, r.word, r.detail.slice(0, 60), r.stmt.join('-'));
+}
+EOF
+```
+
+Expected, with no argument: `guards 364 {"W2-4":118,"W2-5a":59,"W2-5b1":30,"W2-5b2":157}`, the five handlers' closure. With `all`: `guards 576 {"W2-4":151,"W2-5a":160,"W2-5b1":80,"W2-5b2":185}`, the whole driver. With `rows`, then one tab-separated line per guard (`OUT` when the guard is off the five paths, line, owner, function, term, word, detail) in code order; no line shows `UNKNOWN`. With `cross`, `earlier-wave guards whose enclosing if holds an added line: 1` and the one line, `persistenceLeft`'s sessionId TypeError (the owner rule below). The W2-5b2 lines of `rows all` are the 185 rows of the two tables below, 157 on the five paths and 28 off them, with the same function names and words; the table check at the end of this section compares them. Without `rows` only the totals print. Each row's anchor occurs exactly once in the driver (an `N-LINE:` anchor is N consecutive lines, indentation omitted, written with `⏎` between them, and occurs once as a block).
+
+**Totals at the Part D tip.**
+
+| Owner | Guards on the five paths | Guards in the whole driver | Pinned | By design | No row and no mutant |
+|---|---|---|---|---|---|
+| W2-5b2 | 157 | 185 | 161 | 24 | 0 |
+| W2-5b1 | 30 | 80 | owned: W2-5b1's suite, no rows here | | |
+| W2-5a | 59 | 160 | owned: W2-5a's suite, no rows here | | |
+| W2-4 | 118 | 151 | owned: W2-4's suite, no rows here | | |
+| all | 364 | 576 | | | |
+
+W2-5b2's 185 are rows 1 to 156 (the five paths, as listed at `109e3728b`), row 157 (`judgeSpentOf`'s RangeError, on the five paths) and rows 158 to 185 (off them). The earlier waves' guards are "owned by W2-x": 207 on the five paths (118 + 59 + 30), 391 in the whole driver (151 + 160 + 80). The first census, at fix round 1's head (`23f47b656`), counted 362 guards and 155 of W2-5b2's: 84 pinned with an anchored mutant, 18 pinned by a mutant recorded in prose only, 4 with a row and no mutant, 26 with neither, 23 by-design candidates. Round 2 (Parts A to C) added one guard (the refusal above) and left none without a row and a mutant or a ruling: the 4 and the 26 became pinned (25 of the 26; the 26th, `t2-247`, became by design as an equivalent mutant), and the 18 gained their anchors. So 84 + 18 + 4 + 25 + 1 new = 132 pinned, and 23 + 1 = 24 by design, of 156. Part D added 29 guards to the count (the RangeError and the 28 off the five paths, as the closing pass above says) and pinned all 29: 132 + 29 = 161 pinned of 185, 24 by design.
+
+**The `refuseRangeRows` call sites.** `refuseRangeRows(checks)` is W2-5b1's helper (its one `refuse('record-invalid', …)` is that wave's guard). W2-5b2 added four call sites that pass it rows. None is a `refuse(` line, so the script does not count them: they stand beside the 185, with the same two statuses. (1) `pilot.tolerance` in `fidelityCommand`'s pilot form: pinned by `T2:M58` (delete the line; the row "refuses a tolerance that is no six-place decimal in [0, 1] before --out and any spawn") and by `d-tol-pilot`, the same mutation re-measured. (2) `pilot.tolerance` in the re-pilot (`fidelityRepilotCommand`, the line ends `// @anchor repilot-tolerance-range`): pinned by `M-F6-tol` of fix round 1 (above) and `d-tol-repilot`. (3) `halts.absent_rate_max` in `pilotResultCommand`: by design, as Task 2's text says (M55 is retired): `loadRecordInput` runs `validateOpenRecord` first, and the gate refuses an `absent_rate_max` outside its range as `halts.absent_rate_max value-outside-set`, so no record reaches the driver's row out of range; the red-first row "refuses a part 1 whose halts.absent_rate_max is out of range" shows the validator's word, and no mutant of the driver's row reds. (4) the settings-mode row in `loadArmRun`'s pilot form, `refuseRangeRows([settingsModeRow('settings_mode', …)])`: pinned by `t1-215p`; the predicate all the settings-mode rows share, `settingsModeRow`, is mutated by `T2:M31`, and `refuseOutOfRangeValues`' `settings` argument by `T2:M21` (the argument dropped).
+
+**Residual (A10).** `freezeCommand` is on none of the five paths, and it calls `sourcedError` on a `loadInputs` body directly. A `null` or non-object `--sourced` body therefore reaches `sourcedError`'s `!plainObject(o)` term there and answers `sourced shape kind`. That term is W2-5a's guard and unpinned. On report's path it is behind `inputsByStore`, which refuses a body that is no object (`names no store_id`) before any reader sees it; the first `!plainObject` terms of `nodeAnswersOf`, `verifyQuizOf`, `verifyAbOf` and `sourcedError` carry no row of their own for that reason, and the six `inputsByStore` rows (and the mutant `g-inputs-store`) pin it. Fix round 1's by-design note ("a body that is not an object never reaches the term") holds for report only.
+
+**The W2-5b2 guards, one row each.** The function is the top-level function (`outer/inner` where a guard sits in a local function). The word is the first argument of `refuse` (`TypeError` for a throw). A pinned row's text is its test title, shortened; a by-design row's text is the reason.
+
+| # | Anchor | Function | Word | Status | Row title, or the reason it holds | Mutant |
+|---|---|---|---|---|---|---|
+| 1 | `` throw new TypeError(`batchGate: `` | batchGate | `TypeError` | pinned | P4: batchGate rejects unknown scope at construction before any read; CONTROL: default all and judge construct | T2:JG4u |
+| 2 | `throw new TypeError('mainThreadT` | mainThreadTurns | `TypeError` | by design | internal contract: both callers (turnBoundHeld in step0bMechanics, step0bRunOf) pass readStreamJson facts, whose `messages` is a list for every stream text; the hostile-streams probe shows no TypeError (the result is written, all twelve checks unmeasured) | — |
+| 3 | `` throw new TypeError(`persistenceLeft: co `` | persistenceConfigDirOk | `TypeError` | by design | internal contract: configDir is launch.configDir = join(path.resolve(home), suffix) (admitAccount), absolute for every suffix tried, and subcommandHome refuses an unset or relative HOME first (`args-invalid`); mutant t1-124s removes that refusal and reds the row | t1-124s (the shield) |
+| 4 | `` refuse('input-invalid', `masking `` | maskingAgreementOf | `'input-invalid'` | pinned | K26 card seam: a pair learned after the before-out card preflight … refused input-invalid masking-snapshots-disagree step0b; K28 later arm batch …; K… | T1:K28a |
+| 5 | `` refuse(malformedWord, `${rel}/${n} is not JS `` | readAnswerRecords | `malformedWord` | pinned | A6: an answer record of bytes that are not JSON refuses input-invalid, never out-refused, before --out | t5-7330 |
+| 6 | `` refuse(malformedWord, `${rel}/${n} is not an `` | readAnswerRecords | `malformedWord` | pinned | A6: an answer record of another kind / another section / a record under another (qid, arm)'s name refuses input-invalid | t5-7332 |
+| 7 | `` throw new TypeError(`${who}: section ${JSON.stringify(section)} is not one of ${STEP `` | step0bNameOk | `TypeError` | by design | shadowed: `--section` off STEP0B_SECTIONS is refused `args-invalid` first, before --out and any spawn; the only callers are step0bCommand's nameOf and step0bRel | t1-215s (the shield) |
+| 8 | `` throw new TypeError(`${who}: set `` | step0bNameOk | `TypeError` | by design | shadowed: --settings-mode off SETTINGS_MODES is `args-invalid`, part 1's and part 2's settings_mode off the set are `record-invalid`; mutants t1-215s and t1-215p remove the shadows and red the rows | t1-215s, t1-215p (the shields) |
+| 9 | `` throw new TypeError(`step0bRunNa `` | step0bRunName | `TypeError` | by design | internal contract: every run name is `turn-bound` or a step0bProbesOf probe, equal to STEP0B_PROBES; the probe row accepts every STEP0B_SECTIONS x SETTINGS_MODES pair and every run | — |
+| 10 | `` throw new TypeError(`step0bVerdi `` | step0bVerdictOf | `TypeError` | by design | internal contract: step0bVerdictOf is handed the checks step0bCommand builds; the hostile-streams probe runs a stream for every run that is empty, not JSON, null, a list or an object with a number type, and the result is still written with every check unmeasured | — |
+| 11 | `throw new TypeError('armToolsOf:` | armToolsOf | `TypeError` | by design | internal contract: armToolsOf reads spawnArgv's argv, which always pushes `--tools Bash,Agent` for an arm; the probe shows ['Agent','Bash'] under both settings modes | — |
+| 12 | `` throw new TypeError(`step0bProbe `` | step0bProbesOf | `TypeError` | by design | internal contract: STEP0B_SYNTHETIC_TRANSCRIPT is absolute, `syntheticTranscript` is a deps test seam read once, and `HANDLERS.set('step0b', ...)` passes no deps, so no flag sets it | — |
+| 13 | `throw new TypeError('step0bStdin` | step0bStdinOf | `TypeError` | by design | internal contract: a payload whose card cannot render is discarded `card-unrenderable` and refused quiz-unanswerable by step0bCardOf first; an accepted line matches CARD_LINE_RE (anchored, no newline) | — |
+| 14 | `` refuse('input-invalid', `synthetic transcript ${p} u `` | refuseSyntheticPresent | `'input-invalid'` | pinned | Q11 unmeasured: a synthetic transcript path whose lstat fails for a reason other than absence refuses input-invalid "unmeasured <errno>"; CONTROL: an… | t1-221 |
+| 15 | `` refuse('input-invalid', `synthetic transcript ${p} e `` | refuseSyntheticPresent | `'input-invalid'` | pinned | W2-5b2 Task 1 refuses before --out, with the stub log absent: Q11: the synthetic transcript path exists | T1:M14 |
+| 16 | `` refuse('quiz-unanswerable', `${c `` | step0bCardOf | `'quiz-unanswerable'` | pinned | W2-5b2 Task 1 refuses before --out, with the stub log absent: D-6469: the payload no longer reconstructs | T1:M30 |
+| 17 | `` refuse('out-refused', `run-stream-changed ${o.na `` | step0bRunOf | `'out-refused'` | pinned | a run's stream gone when step 0b writes its result refuses out-refused "run-stream-changed <run>" and writes no result; CONTROL: the same pilot passes | t1-224 |
+| 18 | `` refuse('out-refused', `${PILOT_SOURC `` | refusePilotSourceOut | `'out-refused'` | pinned | pilot-source.json is refused before any spawn (step0b); an --out holding pilot-source.json is refused … (fidelity, Q25); refuses an --out holding pil… | T1:M15, T2:M5, T2:M59, T3:P13 |
+| 19 | `` refuse('args-invalid', `step0b w `` | step0bCommand | `'args-invalid'` | pinned | W2-5b2 Task 1 refuses before --out, with the stub log absent: a section outside STEP0B_SECTIONS | T1:M29 |
+| 20 | `` refuse('args-invalid', `settings-mode ${aske `` | step0bCommand | `'args-invalid'` | pinned | W2-5b2 Task 1 refuses before --out, with the stub log absent: a settings mode outside SETTINGS_MODES | T1:M28 |
+| 21 | `refuse('pilot-failed', step0bFai` | step0bCommand | `'pilot-failed'` | pinned | a skill missing under --restricted is recorded and halts with pilot-failed …; a denial probe the arm ran …; a turn-bound run that stops within the bo… | T1:M10 |
+| 22 | `` throw new TypeError(`fidelityRunName: ${JSON.stringify(b `` | fidelityRunName | `TypeError` | by design | shadowed on both paths, each shadow pinned: the pilot path by pilotSourceMismatchOf (`pilot fidelity entry`, mutant t2-229s), the quiz path by the refusal fix round 2 added in fidelityRepilotCommand (mutant t3-229) | t2-229s, t3-229 (the shields) |
+| 23 | `` throw new TypeError(`fidelityRunName: ${JSON.stringify(r `` | fidelityRunName | `TypeError` | by design | internal contract: the jobs are `FIDELITY_RUNS.map((run) => jobOf(...))`; the probe accepts every FIDELITY_RUNS member | — |
+| 24 | `throw new TypeError('fidelityOri` | fidelityOriginalOf | `TypeError` | by design | internal contract: `src` is the literal `{ home, configDirs: rosterConfigDirs(...) }` built once in fidelityBoundariesOf, and fidelityOriginalOf is called nowhere but through `deps.original`; the real-store describe runs the default with a real src | — |
+| 25 | `refuse('input-invalid', 'step0b shape ki` | step0bOf | `'input-invalid'` | pinned | loadArmRun pilot refuses step 0b a body of null \| a list \| another kind \| version 2 input-invalid, before any store, spawn or --out; CONTROL: the int… | t2-232, t2-232a, t2-232b, t2-232c |
+| 26 | `` refuse('input-invalid', `step0b sect `` | step0bOf | `'input-invalid'` | pinned | loadArmRun pilot refuses a step 0b of another section before any store, spawn or --out (K2, K3); refuses a step 0b result of another section and writ… | T2:M38 |
+| 27 | `refuse('input-invalid', 'step0b reco` | step0bOf | `'input-invalid'` | pinned | loadArmRun pilot refuses another part 1 step 0b before any store, spawn or --out (K2, K3); refuses a step 0b result of another record and writes no r… | T2:M37 |
+| 28 | `refuse('input-invalid', 'step0b shape se` | step0bOf | `'input-invalid'` | pinned | loadArmRun pilot refuses a settings mode outside SETTINGS_MODES \| no settings mode input-invalid | t2-235 |
+| 29 | `refuse('input-invalid', 'step0b shape ve` | step0bOf | `'input-invalid'` | pinned | step 0b shape verdict: failed / unmeasured null \| a word \| an object \| a check listed twice, input-invalid, never a TypeError out of `.every` | T2:M39, T2:M40, t2-236a, t2-236b |
+| 30 | `` refuse('pilot-failed', `step0b $ `` | step0bModeOf | `'pilot-failed'` | pinned | arms --section pilot … refuses a failed one …; judge --section pilot … a failed step 0b refuses pilot-failed …; fidelity --section pilot … refuses a … | T2:M36 |
+| 31 | `if (typeof outArg !== 'string' \|` | pilotOut | `'out-refused'` | pinned | --out must be absolute: a relative --out is out-refused "relative"; CONTROL: the absolute path is read | t2-238 |
+| 32 | `refuse('input-invalid', '--out h` | pilotOut | `'input-invalid'` | pinned | refuses an --out that is not there and writes no result (Q10, D-6309) | T2:M60 |
+| 33 | `` refuse('out-refused', `unmeasure `` | pilotOut | `'out-refused'` | pinned | an --out whose lstat fails for another reason than absence is out-refused "unmeasured <errno>"; CONTROL: an absent --out is the other word | t2-240 |
+| 34 | `` refuse('input-invalid', `${rel} abse `` | pilotOutFile | `'input-invalid'` | pinned | refuses no judged file and writes no result (Q10, D-6309) | T2:M61 |
+| 35 | `` 2-LINE:if (read.state === 'absent') refuse('input-invalid', `${rel} absent: ${writer} writes it first`); ⏎ if (read.state === 'bad') refuse('out-refused', `${rel} ${badWord(read)}`); `` | pilotOutFile | `'out-refused'` | pinned | fidelity.json \| pilot/judged.json replaced by a directory refuses out-refused "<file> ..." and writes no result; CONTROL: the intact out writes a res… | t2-242 |
+| 36 | `` 3-LINE:v = JSON.parse(read.bytes.toString('utf8')); ⏎ } catch { ⏎ refuse('out-refused', `${rel} is not JSON`); `` | pilotOutFile | `'out-refused'` | pinned | fidelity.json \| pilot/judged.json that is not JSON refuses out-refused "<file> is not JSON" | t2-243 |
+| 37 | `` refuse('out-refused', `${rel} is not a $ `` | pilotOutFile | `'out-refused'` | pinned | fidelity.json of another kind \| version 2 \| null \| a list, pilot/judged.json of another kind: out-refused "<file> is not a <kind>" | t2-244, t2-244a, t2-244b, t2-244c |
+| 38 | `` refuse('input-invalid', `${rel} reco `` | pilotOutFile | `'input-invalid'` | pinned | refuses a fidelity output of another record and writes no result (Q10, D-6309) | T2:M62 |
+| 39 | `` refuse('out-refused', `run-json-invalid ${name} ${ba `` | runUsageOf | `'out-refused'` | pinned | a run.json replaced by a directory refuses out-refused naming the run, and writes no result | t2-246 |
+| 40 | ``     refuse('out-refused', `run-json-invalid ${name}`); `` | runUsageOf | `'out-refused'` | by design | equivalent mutant: the JSON.parse catch and the `!plainObject(j)` shape guard that follows it share one word and one detail (`out-refused`, `run-json-invalid <name>`); with the catch deleted, `j` is undefined and the shape guard refuses with the same text, so no behaviour changes (measured 0 red) | t2-247 (survives) |
+| 41 | `\|\| !usageReadingOk(j.usage_assis` | runUsageOf | `'out-refused'` | pinned | refuses a run.json that does not read and writes no result (Q10, D-6309); refuses a run.json with no settings mode and writes no result (Q10, D-6309) | T2:M52 |
+| 42 | `` refuse('args-invalid', `fidelity `` | fidelityCommand | `'args-invalid'` | pinned | a --section of usage \| absent refuses args-invalid naming FIDELITY_SECTIONS, with no --out made and no spawn; CONTROL: pilot runs | t2-249 |
+| 43 | `` 2-LINE:const pbad = pilotSourceError(pilot.value); ⏎ if (pbad !== null) refuse('input-invalid', `pilot shape ${pbad}`); `` | fidelityCommand | `'input-invalid'` | pinned | refuses a pilot-source output off its shape before --out and any spawn (Q9, D-6309) | T2:M56 |
+| 44 | `` refuse('input-invalid', `pilot $ `` | fidelityCommand | `'input-invalid'` | pinned | refuses <seed / frozen sha / families / n_fidelity / store …> before --out and any spawn (Q9, D-6309) | T2:M1, T2:M2, T2:M3, T2:M4 |
+| 45 | `` refuse('pilot-failed', `fidelity fai `` | fidelityCommand | `'pilot-failed'` | pinned | three box-mode runs per boundary … then pilot-failed …; K26 fidelity agreement CONTROL … | T2:M44, T2:M45 |
+| 46 | `` refuse('args-invalid', `pilot-re `` | pilotResultCommand | `'args-invalid'` | pinned | a --section of usage \| absent refuses args-invalid naming PILOT_RESULT_SECTIONS; CONTROL: pilot is read | t2-253 |
+| 47 | `` refuse('out-refused', `${FIDELIT `` | pilotResultCommand | `'out-refused'` | pinned | F7: a fidelity output with a settings mode that is no text \| boundaries that are no list \| a boundary that is null, no object, with no uuid, a state … | g-fid-shape |
+| 48 | `\|\| !plainObject(summary.arms) \|\|` | pilotResultCommand | `'out-refused'` | pinned | F7: an arms summary of another section \| counts that are no object \| a count key that is no count (five keys) \| arms that are no object \| an absent r… | g-sum-shape |
+| 49 | `` refuse('input-invalid', `${sumRe `` | pilotResultCommand | `'input-invalid'` | pinned | refuses an unsettled usage pilot and writes no result (Q10, D-6309) | T2:M29 |
+| 50 | `if (!plainObject(controlStats) \|` | pilotResultCommand | `'out-refused'` | pinned | F7: an arms summary with no stats for the control arm \| uptake_calls negative \| errored text refuses out-refused | g-ctl-stats |
+| 51 | `` refuse('out-refused', `${judgedR `` | pilotResultCommand | `'out-refused'` | pinned | F7: a judged file of another section \| with a settings mode that is no text refuses out-refused | g-judged-pilot |
+| 52 | `refuse('input-invalid', 'the usa` | pilotResultCommand | `'input-invalid'` | pinned | refuses a usage pilot that charged nothing and writes no result (Q10, D-6309) | T2:M63 |
+| 53 | `` refuse('pilot-failed', `pilot-result failed (${f `` | pilotResultCommand | `'pilot-failed'` | pinned | records %s as failures: the result written, its sha printed, then pilot-failed naming them (Q10, K3, K13) | T2:M46 |
+| 54 | `` refuse('out-refused', `${REPILOT_RES `` | refuseRepilotDone | `'out-refused'` | pinned | one re-pilot per --out, one version per re-pilot: … a finished re-pilot refuses step 0b and fidelity (K1, W2-D53); a failed re-pilot halts at every a… | T3:P4 |
+| 55 | `` refuse('out-refused', `${REPILOT_VERSION_REL} ${ `` | readRepilotPin | `'out-refused'` | pinned | the re-pilot version pin replaced by a directory refuses out-refused by its own word, before any spawn | t3-262 |
+| 56 | `` refuse('out-refused', `${REPILOT_VERSION_REL} is not JSO `` | readRepilotPin | `'out-refused'` | pinned | the re-pilot version pin that is not JSON refuses out-refused, before any spawn | t3-263 |
+| 57 | `` refuse('out-refused', `${REPILOT_VERSION_REL} is not a r `` | readRepilotPin | `'out-refused'` | pinned | the re-pilot version pin null \| a list \| another kind \| version 2 \| a record sha, store id or Claude Code version that is no text \| an empty version … | t3-264, t3-264a, t3-264b, t3-264c, t3-264d, t3-264e, t3-264f, t3-264g |
+| 58 | `` refuse('out-refused', `${REPILOT_VERSION_REL} is ano `` | readRepilotPin | `'out-refused'` | pinned | one re-pilot per --out, one version per re-pilot: … a pin of another record refuses before any spawn … | T3:P3 |
+| 59 | `refuse(bad.word, bad.detail);` | repilotExpectedOf | `bad.word` | pinned | the first act measures --version once and pins it: a --version that prints nothing refuses version-unmeasured, before any run, and pins nothing; CONT… | t3-266 |
+| 60 | `` refuse('input-invalid', `frozen boun `` | fidelityRepilotCommand | `'input-invalid'` | pinned | a frozen entry whose boundary_uuid is an uppercase UUID \| a path-shaped text \| a UUID with a newline is refused input-invalid before --out and any sp… | t3-229 |
+| 61 | `` refuse('pilot-failed', `fidelity qui `` | fidelityRepilotCommand | `'pilot-failed'` | pinned | a failed re-pilot halts at every act …: fidelity outside the tolerance refuses pilot-failed … | T3:P6 |
+| 62 | `` refuse('input-invalid', `step0b stor `` | repilotResultCommand | `'input-invalid'` | pinned | F6: a step 0b naming no node of the record refuses input-invalid before it writes anything | g-repilot-node |
+| 63 | `refuse('input-invalid', 'step0b shape ba` | repilotResultCommand | `'input-invalid'` | pinned | F6: step 0b batches null \| an empty list \| a batch that is no object \| a batch with no version text refuse input-invalid | g-repilot-batches |
+| 64 | `` refuse('input-invalid', `fidelit `` | repilotResultCommand | `'input-invalid'` | pinned | pilot-result --section quiz refuses inputs that are not this re-pilot's … (K1), row "a fidelity output of another record / store / of the pilot"; F6:… | T3:P9 |
+| 65 | `` refuse('input-invalid', `--out h `` | repilotResultCommand | `'input-invalid'` | pinned | pilot-result --section quiz refuses inputs that are not this re-pilot's … (K1), row "an --out that is not there" | T3:P12 |
+| 66 | `` refuse('input-invalid', `${REPIL `` | repilotResultCommand | `'input-invalid'` | pinned | pilot-result --section quiz refuses inputs that are not this re-pilot's … (K1), row "no pin under --out" | T3:P10 |
+| 67 | `` refuse('input-invalid', `repilot version-spl `` | repilotResultCommand | `'input-invalid'` | pinned | pilot-result --section quiz refuses inputs that are not this re-pilot's … (K1), row "versions split from the pin" | T3:P8 |
+| 68 | `` refuse('pilot-failed', `repilot ${no `` | repilotResultCommand | `'pilot-failed'` | pinned | a failed re-pilot halts at every act … pilot-result writes a failed result once and refuses pilot-failed; F6 K13 settings-mode rows | T3:P7 |
+| 69 | `bad('is not a judged file');` | handcheckPlanOf | `'input-invalid'` | pinned | a file of another kind refuses input-invalid, naming the file by its position | T4:H31, t4-259p, t4-259v |
+| 70 | `` bad(`section ${JSON.stringify(d. `` | handcheckPlanOf | `'input-invalid'` | pinned | the pilot section refuses input-invalid, naming the file by its position | T4:H30 |
+| 71 | `` bad(`record ${JSON.stringify(d.r `` | handcheckPlanOf | `'input-invalid'` | pinned | another record refuses input-invalid, naming the file by its position | T4:H4 |
+| 72 | `` bad(`frozen ${JSON.stringify(d.f `` | handcheckPlanOf | `'input-invalid'` | pinned | another frozen list refuses input-invalid, naming the file by its position | T4:H38 |
+| 73 | `` bad(`map ${JSON.stringify(d.map_ `` | handcheckPlanOf | `'input-invalid'` | pinned | another judge map refuses input-invalid, naming the file by its position | T4:H5 |
+| 74 | `` bad(`store ${JSON.stringify(d.st `` | handcheckPlanOf | `'input-invalid'` | pinned | a store that is no node refuses input-invalid, naming the file by its position | T4:H39 |
+| 75 | `` bad(`store ${d.store_id} repeats `` | handcheckPlanOf | `'input-invalid'` | pinned | one node twice refuses input-invalid, naming the file by its position | T4:H6 |
+| 76 | `` bad(`judge ${JSON.stringify(thei `` | handcheckPlanOf | `'input-invalid'` | pinned | another judge model refuses input-invalid, naming the file by its position | T4:H40 |
+| 77 | `` bad(`reply_max_bytes ${JSON.stri `` | handcheckPlanOf | `'input-invalid'` | pinned | another reply cap refuses input-invalid, naming the file by its position | T4:H41 |
+| 78 | `bad('stamps is not a list of wor` | handcheckPlanOf | `'input-invalid'` | pinned | stamps that are not words refuses input-invalid, naming the file by its position | T4:H42 |
+| 79 | `bad('items is not a list');` | handcheckPlanOf | `'input-invalid'` | pinned | F5: items that are null / an object / a string refuse input-invalid "items is not a list", naming the file by its position | g-plan-items |
+| 80 | `` bad(`item ${JSON.stringify(plain `` | handcheckPlanOf | `'input-invalid'` | pinned | an item that is no judge id refuses input-invalid, naming the file by its position | T4:H43 |
+| 81 | `` bad(`item ${it.id} is not in the `` | handcheckPlanOf | `'input-invalid'` | pinned | an item outside the map refuses input-invalid, naming the file by its position | T4:H44 |
+| 82 | `` bad(`item ${it.id} repeats`); `` | handcheckPlanOf | `'input-invalid'` | pinned | an item two files carry refuses input-invalid, naming the file by its position | T4:H10 |
+| 83 | `` bad(`item ${it.id} names a quest `` | handcheckPlanOf | `'input-invalid'` | pinned | an item of another node refuses input-invalid, naming the file by its position | T4:H7 |
+| 84 | `` bad(`item ${it.id} outcome ${JSO `` | handcheckPlanOf | `'input-invalid'` | pinned | an outcome outside the two refuses input-invalid, naming the file by its position | T4:H45 |
+| 85 | `` bad(`item ${it.id} ${it.outcome} `` | handcheckPlanOf | `'input-invalid'` | pinned | a judged item with no label / a judge-failed item with a label / a judged item labelled correct refuses input-invalid, naming the file by its position | T4:H9 |
+| 86 | `` refuse('input-invalid', `judged- `` | handcheckPlanOf | `'input-invalid'` | pinned | a node holding questions with no judged file refuses input-invalid, naming the file by its position | T4:H8 |
+| 87 | `` refuse('input-invalid', `${where} un `` | readJudgeInputFile | `'input-invalid'` | pinned | each sampled item's input is read as judge left it: a missing file, a link or another kind refuses input-invalid, naming its node and path | T4:H46 |
+| 88 | `` refuse('input-invalid', `${where} ${badW `` | readJudgeInputFile | `'input-invalid'` | pinned | each sampled item's input is read as judge left it: … (the link: `not-regular`) | T4:H47 |
+| 89 | `` refuse('input-invalid', `${where} no `` | readJudgeInputFile | `'input-invalid'` | pinned | a sampled item's judge input that is not JSON refuses input-invalid "not-json"; CONTROL: the unedited input reads | t4-295 |
+| 90 | `` refuse('input-invalid', `${where} ${why} `` | readJudgeInputFile | `'input-invalid'` | pinned | each sampled item's input is read as judge left it: … another kind …; judgeInputFault holds an input to its six keys … | T4:H13, T4:H14, T4:H15 |
+| 91 | `` throw new TypeError(`handcheckSh `` | handcheckSheetText | `TypeError` | by design | internal contract: the one caller passes `fin.record.rubric_id`, and loadFinalRecord (handcheck and report both call it first) refuses a part 2 whose rubric_id is off RUBRIC_IDS `record-invalid`; the probe re-signs a record with rubric 'v2' and measures it | — |
+| 92 | `throw new TypeError('parseHandch` | parseHandcheckLabels | `TypeError` | by design | internal contract: one caller, readHandcheckLabels, hands it the strict TextDecoder's string; a label file that does not decode is refused `labels not-utf8` first (H22) | — |
+| 93 | `` refuse('input-invalid', `labels line ${n} is `` | parseHandcheckLabels | `'input-invalid'` | pinned | an id alone refuses input-invalid (the label reader is strict, Q19); a comment after the word refuses input-invalid (the label reader is strict, Q19)… | T4:H35, T4:H36 |
+| 94 | `` refuse('input-invalid', `labels line ${n} la `` | parseHandcheckLabels | `'input-invalid'` | pinned | the word correct refuses input-invalid (the label reader is strict, Q19); a capitalised word refuses input-invalid (the label reader is strict, Q19) | T4:H37 |
+| 95 | `` refuse('input-invalid', `labels line ${n} id `` | parseHandcheckLabels | `'input-invalid'` | pinned | an id not on the sheet refuses input-invalid (the label reader is strict, Q19) | T4:H18 |
+| 96 | `` refuse('input-invalid', `labels line ${n} re `` | parseHandcheckLabels | `'input-invalid'` | pinned | an id twice refuses input-invalid (the label reader is strict, Q19) | T4:H19 |
+| 97 | `` refuse('input-invalid', `labels- `` | parseHandcheckLabels | `'input-invalid'` | pinned | a sampled judged id with no line refuses input-invalid (the label reader is strict, Q19) | T4:H20 |
+| 98 | `refuse('input-invalid', 'labels` | readHandcheckLabels | `'input-invalid'` | pinned | readHandcheckLabels checks the file's sha before a byte is read, and refuses bytes that are not UTF-8 | T4:H22 |
+| 99 | `throw new TypeError('handcheckRe` | handcheckResultOf | `TypeError` | by design | internal contract: one caller, reportCommand, hands it readHandcheckLabels' answer unchanged, which is always a Map | — |
+| 100 | `` throw new TypeError(`handcheckRe `` | handcheckResultOf | `TypeError` | pinned | an operator label for an id that is not on the sheet is a defect the reader never lets through: TypeError | T4:H29 |
+| 101 | `refuse('args-invalid', 'handchec` | handcheckCommand | `'args-invalid'` | pinned | handcheck without --sheet refuses args-invalid "handcheck wants --sheet" before --out; CONTROL: with it that refusal is not the answer | t4-307 |
+| 102 | `` throw new TypeError(`droppedOf: `` | droppedOf | `TypeError` | by design | shadowed: droppedOf has one call, fed `abStates`, which only verifyAbOf builds, and verifyAbOf's `!AB_STATES.includes(f.state)` term refuses a state off AB_STATES first (pinned by t5-9922s) | t5-9922s (the shield) |
+| 103 | `` throw new TypeError(`liveUptakeO `` | liveUptakeOf | `TypeError` | by design | shadowed: a family's arm is `arms.get(key)` over record.assignment, whose arms validateOpenRecord re-derives from the seed (`assignment-mismatch`, record-invalid), so it is one of ASSIGNMENT_ARMS, held to RECALL_ARMS as a set (S2 C9); the probe re-signs `assignment[0].arm` as 'other' and measures the refusal | — |
+| 104 | `` throw new TypeError(`firstCallOf `` | firstCallOf | `TypeError` | by design | as :9560 (liveUptakeOf): the same arm vocabulary, the same upstream refusal | — |
+| 105 | `` throw new TypeError(`quizUptakeO `` | quizUptakeOf | `TypeError` | by design | internal contract: `reading` is quizUptakeReadingOf's answer (REPORT_DEPS; the report handler passes no deps), which answers `unmeasured` for anything but its own readings; the probe runs 11 hostile pilot results | — |
+| 106 | `` throw new TypeError(`payloadChan `` | payloadChangedOf | `TypeError` | pinned | report: an answer record carrying ARM_PAYLOAD_CHANGED on an answered question refuses input-invalid with payloadChangedOf's message; CONTROL: a run-f… | t5-312 |
+| 107 | `` throw new TypeError(`gateInputsOf: f `` | gateInputsOf | `TypeError` | by design | shadowed: a question missing an arm's answer record is refused `input-invalid` first (probe row: `question <qid> has no answer record for arm control`) | — |
+| 108 | `` throw new TypeError(`gateInputsOf: q `` | gateInputsOf | `TypeError` | by design | shadowed: judgedOf's `missing > 0` term refuses a judged file missing a non-correct answer ("1 missing, 0 extra"), pinned by t5-9777m | t5-9777m (the shield) |
+| 109 | `` throw new TypeError(`gateInputsOf: l `` | gateInputsOf | `TypeError` | by design | shadowed: verifyAbOf's size check refuses a verify --section ab output missing an assigned family (`does not list 1 assigned family(ies)`) | T5:M11 (the shield) |
+| 110 | `` refuse('input-invalid', `${at} is not a quiz jud `` | judgedOf | `'input-invalid'` | pinned | F4, F5: a judged file with another kind / version / the pilot section / items null / items an object / stamps null, and judgedOf called with null \| a… | g-judged-shape |
+| 111 | `` refuse('input-invalid', `${at} record-mismatch: run judg `` | judgedOf | `'input-invalid'` | pinned | F4: a judged file written under another record refuses input-invalid "record-mismatch" before --out | g-judged-record |
+| 112 | `` refuse('quiz-sha-mismatch', `${a `` | judgedOf | `'quiz-sha-mismatch'` | pinned | F4: a judged file naming another frozen list refuses quiz-sha-mismatch before --out, naming both | g-judged-frozen |
+| 113 | `` refuse('input-invalid', `${at} m `` | judgedOf | `'input-invalid'` | pinned | refused before --out: a judged file over another judge map (W2-D85, W2-5a R10) | T5:M9 |
+| 114 | `` refuse('input-invalid', `${at} j `` | judgedOf | `'input-invalid'` | pinned | refused before --out: a judged file of another judge model (W2-D85, W2-5a R10) | T5:M30, t5-9757r, t5-9757s |
+| 115 | `` refuse('input-invalid', `${at} item ${JS `` | judgedOf | `'input-invalid'` | pinned | refused before --out: a judged item outside the judge map (W2-D85, W2-5a R10) | T5:M37 |
+| 116 | `` refuse('input-invalid', `${at} item ${it.id} is `` | judgedOf | `'input-invalid'` | pinned | refused before --out: a judged item listed twice (W2-D85, W2-5a R10) | T5:M39 |
+| 117 | `` refuse('input-invalid', `${at} item ${it.id} out `` | judgedOf | `'input-invalid'` | pinned | refused before --out: a judged item judge-failed with a label (W2-D85, W2-5a R10) | T5:M38 |
+| 118 | `` refuse('input-invalid', `${at} does not cove `` | judgedOf | `'input-invalid'` | pinned | refused before --out: a judged file naming a correct answer (W2-D85, W2-5a R10) | T5:M8, t5-9777m |
+| 119 | `` refuse('input-invalid', `${name} nam `` | inputsByStore | `'input-invalid'` | pinned | F4: inputsByStore, a --<name> body of null refuses input-invalid "names no store_id" before --out (six rows) | g-inputs-store |
+| 120 | `` refuse('input-invalid', `${name} store-i `` | inputsByStore | `'input-invalid'` | pinned | refused before --out: two arms summaries of one store (W2-D85, W2-5a R10) | T5:M41 |
+| 121 | `` refuse('input-invalid', `${name} store-m `` | inputsByStore | `'input-invalid'` | pinned | refused before --out: a node measure-history report missing (W2-D85, W2-5a R10) | T5:M10 |
+| 122 | `` refuse('input-invalid', `${name} for `` | inputsByStore | `'input-invalid'` | pinned | refused before --out: a quiz input for a node that holds no frozen question (W2-D85, W2-5a R10) | T5:M42 |
+| 123 | `` refuse('input-invalid', `${at} is not a quiz arm `` | nodeAnswersOf | `'input-invalid'` | pinned | F4: an arms summary of another kind \| version \| the pilot section refuses input-invalid "is not a quiz arms summary" | g-arms-shape |
+| 124 | `` refuse('input-invalid', `${at} record-mismatch: run arms `` | nodeAnswersOf | `'input-invalid'` | pinned | refused before --out: an arms summary of another record (W2-D85, W2-5a R10) | T5:M4 |
+| 125 | `` refuse('input-invalid', `${at} a `` | nodeAnswersOf | `'input-invalid'` | pinned | refused before --out: an unsettled arms summary (W2-D85, W2-5a R10) | T5:M5, t5-9834s, t5-9834c, t5-9834r |
+| 126 | `` refuse('input-invalid', `${at} is not <o `` | nodeAnswersOf | `'input-invalid'` | pinned | refused before --out: an arms summary outside its gathered --out (W2-D85, W2-5a R10) | T5:M35 |
+| 127 | `` refuse('input-invalid', `${at}: ${rel} is not on `` | nodeAnswersOf | `'input-invalid'` | pinned | refused before --out: an answer record of another family (W2-D85, W2-5a R10); F4: an answer record naming another store_id / ccrc_id / generation / b… | T5:M7, g-qid-frozen |
+| 128 | `` refuse('input-invalid', `${at}: ${rel} is not a `` | nodeAnswersOf | `'input-invalid'` | pinned | report: an answer record with stamps null \| a word, answer field null \| a word, answer state not-run \| outside ANSWER_STATES, correct null \| a word, … | t5-334, t5-334a, t5-334b, t5-334c, t5-334d, t5-334e, t5-334f |
+| 129 | `` 3-LINE:refuse('input-invalid', `${at} ${e.message}`); ⏎ } ⏎ const answers = new Map(); `` | nodeAnswersOf | `'input-invalid'` | pinned | report: an answer record carrying ARM_PAYLOAD_CHANGED on an answered question carries payloadChangedOf's message; CONTROL: a run-failed question repo… | t5-335 |
+| 130 | `` refuse('input-invalid', `${at}: question ${e.qid} ha `` | nodeAnswersOf | `'input-invalid'` | pinned | refused before --out: an answer record missing (W2-D85, W2-5a R10) | T5:M36 |
+| 131 | `` refuse('input-invalid', `${at}: question ${e.qid} is `` | nodeAnswersOf | `'input-invalid'` | pinned | report: a question whose records name different question states \| answered in both whose control arm_state is run-failed \| whose control record holds… | t5-337, t5-337A, t5-337B1, t5-337B2, t5-337G |
+| 132 | `` 3-LINE:refuse('input-invalid', `${at} ${e.message}`); ⏎ } ⏎ if (sha256Hex(`${canonicalJson(again)}\n`) !== summary.sha256) refuse('input-invalid', `${at} does not match its answer records: armsSummaryOf over them gives other bytes`); `` | nodeAnswersOf | `'input-invalid'` | pinned | report: an arms summary whose stamps are no list, re-signed, refuses input-invalid carrying armsSummaryOf's message, not the byte comparison's | t5-338 |
+| 133 | `` refuse('input-invalid', `${at} does not matc `` | nodeAnswersOf | `'input-invalid'` | pinned | refused before --out: an answer record its summary does not count (W2-D85, W2-5a R10) | T5:M6 |
+| 134 | `` refuse('input-invalid', `${at} is not a verify --section qui `` | verifyQuizOf | `'input-invalid'` | pinned | F4: a verify --section quiz output with another kind \| version \| the ab section \| found null \| over_hide null refuses input-invalid | g-vquiz-shape |
+| 135 | `` refuse('input-invalid', `${at} record-mismatch: run verify --section qui `` | verifyQuizOf | `'input-invalid'` | pinned | refused before --out: a verify --section quiz output of another record (W2-D85, W2-5a R10) | T5:M31 |
+| 136 | `` refuse('input-invalid', `${at} is not a verify --section ab `` | verifyAbOf | `'input-invalid'` | pinned | F4: a verify --section ab output with another kind / another version / families that are no list refuses input-invalid | g-vab-shape |
+| 137 | `` refuse('input-invalid', `${at} record-mismatch: run verify --section ab `` | verifyAbOf | `'input-invalid'` | pinned | refused before --out: a verify --section ab output of another record (W2-D85, W2-5a R10) | T5:M32 |
+| 138 | `plainObject(f) ? want.find(` | verifyAbOf (term 1 of 4) | `'input-invalid'` | pinned | F2: a family entry that is null \| a word \| a list refuses input-invalid "lists null off the record's assignment" | t5-9922p |
+| 139 | `if (a === undefined \|\| f.arm !== a.arm` | verifyAbOf (term 2 of 4) | `'input-invalid'` | pinned | F2: a family entry that is no assigned family of this store refuses input-invalid naming its id | t5-9922a |
+| 140 | `f.arm !== a.arm \|\| !AB_STATES.includes(f.state)` | verifyAbOf (term 3 of 4) | `'input-invalid'` | pinned | refused before --out: a verify --section ab output listing a family off the assignment (W2-D85, W2-5a R10) | T5:M40 |
+| 141 | `!AB_STATES.includes(f.state)) refuse(` | verifyAbOf (term 4 of 4) | `'input-invalid'` | pinned | F2: an assigned family listed with a state off AB_STATES refuses input-invalid naming its id | t5-9922s |
+| 142 | `` refuse('input-invalid', `${at} lists ${a `` | verifyAbOf | `'input-invalid'` | pinned | F4: a family listed twice, the last copy with another state, refuses input-invalid "lists <family> twice" | g-vab-twice |
+| 143 | `` refuse('input-invalid', `${at} does not list `` | verifyAbOf | `'input-invalid'` | pinned | refused before --out: a verify --section ab output missing an assigned family (W2-D85, W2-5a R10) | T5:M11 |
+| 144 | `` refuse('input-invalid', `${at} p `` | verifyAbOf | `'input-invalid'` | pinned | refused before --out: a verify --section ab output whose presence record has not seen the newest recall-off write (K11, …) (W2-D85, W2-5a R10) | T5:M44 |
+| 145 | `` refuse('input-invalid', `${at} s `` | sourcedOf | `'input-invalid'` | pinned | F4: a quiz-source output with another kind \| version \| entries that are no list refuses input-invalid "shape" | g-sourced-shape |
+| 146 | `` refuse('input-invalid', `${at} record-mismatch: quiz `` | sourcedOf | `'input-invalid'` | pinned | refused before --out: a quiz-source output of another part 1 (W2-D85, W2-5a R10) | T5:M29 |
+| 147 | `` refuse('assignment-mismatch', `$ `` | sourcedOf | `'assignment-mismatch'` | pinned | refused before --out: a quiz-source output under another assignment (W2-D85, W2-5a R10) | T5:M43 |
+| 148 | `` refuse('input-invalid', `${at} does not hold `` | sourcedOf | `'input-invalid'` | pinned | refused before --out: a quiz-source output missing a frozen question (W2-D85, W2-5a R10) | T5:M33 |
+| 149 | `` refuse('input-invalid', `measure ${m.value.store_id} w2. `` | liveOf | `'input-invalid'` | pinned | refused before --out: a measure-history report without the presence rows (W2-D85, W2-5a R10) | T5:M15, t5-9955p |
+| 150 | `` 2-LINE:if (!(e instanceof TypeError)) throw e; ⏎ refuse('input-invalid', `measure ${e.message}`); `` | liveOf | `'input-invalid'` | pinned | report: a measure report whose w2 families are no list refuses input-invalid carrying assembleReports' message | t5-9963 |
+| 151 | `refuse(g.word, g.detail);` | liveOf | `g.word` | pinned | refused before --out: a measure-history report over another window (W2-D85, W2-5a R10); refused before --out: a measure-history report of another scr… | T5:M16 |
+| 152 | `` refuse('input-invalid', `measure ${m.value.store_id} rec `` | liveOf | `'input-invalid'` | pinned | report: a presence record holding a row of one element \| three elements \| a two-character word refuses input-invalid "is not [k, v]" | t5-9972, t5-9972a, t5-9972l |
+| 153 | `` 2-LINE:if (!(e instanceof Error)) throw e;   // changedFamilies throws on data alone: a presence row off W2-D30's grammar ⏎ refuse('input-invalid', `measure ${e.message}`); `` | liveOf | `'input-invalid'` | pinned | report: a change row whose key is off W2-D30's grammar refuses input-invalid carrying the gate's message | t5-9981 |
+| 154 | `` refuse('input-invalid', `window- `` | reportCommand | `'input-invalid'` | pinned | report runs after window end: before it window-open, before --out; at window.end_ms exactly it runs (acts 23 and 24) | T5:M2 |
+| 155 | `` refuse('input-invalid', `${gate. `` | reportCommand | `'input-invalid'` | by design | shadowed: decideGate's only `ok: false` is `question-not-run`, raised for an answer state of 'not-run'; nodeAnswersOf holds the answer states to ANSWER_STATES, which has no 'not-run', through "is not a settled answer record" (pinned by t5-334c); the probe row shows that refusal, not question-not-run | t5-334c (the shield) |
+| 156 | `` refuse('out-refused', `${VERDICT `` | reportCommand | `'out-refused'` | pinned | verdict.json is written once: a second report into the same --out refuses out-refused and leaves the first (W2-D53) | T5:M22 |
+
+**Rows 157 to 185: the W2-5b2 guards the first listing did not cover (Part D).** Row 157 is on the five paths (`judgeSpentOf`'s RangeError, which the TypeError-only listing missed); rows 158 to 185 are off them, in code order: `openFinalize` (158 to 162), `openCommand` (163), `armRunName` (164), `versionSplitOf` and `moveAfterSplit` (165, 166), `readArmManifests` (167 to 171) and `openAmend` (172 to 185). Every one is pinned; the mutant column names the Part D entry, and the earlier plan mutant of the same mutation in brackets where there is one.
+
+| # | Anchor | Function | Word | Status | Row title, or the reason it holds | Mutant |
+|---|---|---|---|---|---|---|
+| 157 | `throw new RangeError('judgeSpent` | judgeSpentOf | `RangeError` | pinned | P4: judgeSpentOf counts exact section/JUDGE_DIR/ prefixes, … overflow throws; fix round 2: a judge sum past the safe-integer range throws RangeError "judgeSpentOf: spend past safe-integer range"; CONTROL: the safe edge sums, an arm row past it is not added. No input reaches it: spendLinesOf has already refused a ledger whose whole sum is past the range (D-5986), and a part of a safe sum is safe | d-judgespent (T2:JG4o is the same mutation) |
+| 158 | `` refuse('input-invalid', `pilot-result re `` | openFinalize | `'input-invalid'` | pinned | K21: open --finalize refuses a pilot result written under another record \| under no record sha \| another record whose pilot failed: input-invalid naming both shas, before part 2 is printed; CONTROL: this part 1's result prints part 2 | d-fin-record (T2:M54) |
+| 159 | `` refuse('pilot-failed', `pilot-result failed: `` | openFinalize | `'pilot-failed'` | pinned | a failed pilot refuses pilot-failed naming its failures and the ruling; --accept-failed-pilot prints the file failures and part 2 (Q27, K3, K14) | d-fin-failed (T2:M18, T2:M48) |
+| 160 | `refuse('args-invalid', '--accept` | openFinalize | `'args-invalid'` | pinned | the same case: --accept-failed-pilot on a pilot that passed refuses args-invalid "names a ruling on a failed pilot" | d-fin-accept (T2:M19) |
+| 161 | `` refuse('input-invalid', `pilot-result us `` | openFinalize | `'input-invalid'` | pinned | a pilot result whose extrapolation gives no safe spend budget for the frozen list refuses input-invalid, before part 2 is printed (C5, D-6280); CONTROL: chain7's own result derives 30000000 | d-fin-nobudget (T2:M57) |
+| 162 | `` refuse('args-invalid', `spend-bu `` | openFinalize | `'args-invalid'` | pinned | spend_budget is derived from the pilot result for the frozen list, and an echo that differs refuses args-invalid naming the derived figure (C5, Q6, D-6280, K15) | d-fin-echo |
+| 163 | `refuse('args-invalid', 'open wan` | openCommand | `'args-invalid'` | pinned | fix round 2: open with no mode \| --amend and --finalize \| --draft and --template \| all four refuses args-invalid "open wants exactly one of …" and prints nothing; CONTROL: --template alone prints the template; with the Task 3 table row "a second mode" | d-open-modes |
+| 164 | `` throw new TypeError(`armRunName: mov `` | armRunName | `TypeError` | pinned | fix round 2: armRunName throws a TypeError naming the move when it is -1 \| 1.5 \| '0' \| NaN \| past the safe range; CONTROL: an undefined move takes the default, null, 0 and 12 name a run. The callers pass an amendment index (`ctx.moves[i].index`), so no flag reaches it | d-armrun-move |
+| 165 | `` refuse('out-refused', `run-versi `` | versionSplitOf | `'out-refused'` | pinned | versionSplitOf: half-done on another version only; … an answered run no manifest names refuses out-refused "run-version-unmeasured <run>" (W2-D56, W2-D80, W2-D84) | d-split-unmeasured (T3:E4) |
+| 166 | `` refuse('out-refused', `version-s `` | moveAfterSplit | `'out-refused'` | pinned | moveAfterSplit: unsplit stays where it was read; split goes to the newest move; a split at the newest move refuses out-refused "version-split <qid> at amendments[<n>]" (W2-D56) | d-split-newest (T3:E5) |
+| 167 | `` 4-LINE:const rel = armBatchDir(section); ⏎ const st = lstatOrNull(out, rel); ⏎ if (st === null) return []; ⏎ if (!st.isDirectory()) refuse('out-refused', `${rel} is not a directory`); `` | readArmManifests | `'out-refused'` | pinned | fix round 2: batches is a file or a link to a directory (a link is never followed) refuses "<rel> is not a directory"; CONTROL: no batches directory reads as no manifests, and an intact one reads in batch order | d-man-dir |
+| 168 | `` 3-LINE:names = readdirSync(path.join(out, rel)).filter((n) => ARM_BATCH_FILE_RE.test(n)).sort(); ⏎ } catch (e) { ⏎ refuse('out-refused', `${rel} unreadable ${errCode(e)}`); `` | readArmManifests | `'out-refused'` | pinned | fix round 2: batches is a directory nobody may list refuses "<rel> unreadable EACCES" (skipped as root) | d-man-list |
+| 169 | `` 3-LINE:const read = readPlain(path.join(out, rel, n), OUT_JSON_CAP); ⏎ if (read.state !== 'bytes') refuse('out-refused', `${rel}/${n} ${read.state === 'bad' ? badWord(read) : read.state}`); ⏎ let m; `` | readArmManifests | `'out-refused'` | pinned | fix round 2: a manifest that is a directory \| a link \| a file past the 16 MiB cap \| a file nobody may read refuses by its read's word: not-regular, not-regular, over-cap, EACCES (the last skipped as root) | d-man-read |
+| 170 | `` 3-LINE:refuse('out-refused', `${rel}/${n} is not JSON`); ⏎ } ⏎ const ok = plainObject(m) && m.kind === ARM_BATCH_KIND && m.section === section && `${String(m.batch).padStart(4, '0')}.json` === n `` | readArmManifests | `'out-refused'` | pinned | under a version move the batch manifests are read: one that is not JSON refuses "<rel>/<n> is not JSON" (Q14, W2-D84, D-6309's rule); fix round 2: empty bytes \| text \| half a document \| a trailing comma; the first bad manifest in batch order is the one named | d-man-json |
+| 171 | `` refuse('out-refused', `${rel}/${n} is not a batc `` | readArmManifests | `'out-refused'` | pinned | under a version move … one not this section's refuses "<rel>/<n> is not a batch manifest"; fix round 2: null \| a list \| a word \| another kind \| another section \| a batch number its name does not give \| no number \| no version \| an empty version \| a version that is no text \| runs that are no list \| a run that is no object \| a run with no name \| a run whose name is no text | d-man-shape |
+| 172 | `` refuse('args-invalid', `kind ${J `` | openAmend | `'args-invalid'` | pinned | open --amend refuses, printing nothing: an unknown kind | d-amend-kind (T3:M10) |
+| 173 | `` refuse('args-invalid', `--${k} is not a ${ki `` | openAmend | `'args-invalid'` | pinned | open --amend refuses, printing nothing: another kind's detail flag \| a re-pilot on a freeze exception \| a release tag on a forced act | d-amend-flag (T3:M11) |
+| 174 | `` 2-LINE:for (const k of AMEND_FLAGS) if (flags[k] !== undefined && !spec.required.includes(k) && !spec.optional.includes(k)) refuse('args-invalid', `--${k} is not a ${kind} flag`); ⏎ for (const k of spec.required) if (flags[k] === undefined) refuse('args-invalid', `${k}-required`); `` | openAmend | `'args-invalid'` | pinned | open --amend refuses, printing nothing: a version move with no re-pilot (Q12) \| no node (Q13) \| a freeze exception with no ruling \| a forced act with no time | d-amend-required (T3:M12) |
+| 175 | `` refuse('args-invalid', `--${k} is em `` | openAmend | `'args-invalid'` | pinned | open --amend refuses, printing nothing: an empty surface \| ruling \| release tag \| act | d-amend-empty (T3:M9) |
+| 176 | `refuse('args-invalid', '--releas` | openAmend | `'args-invalid'` | pinned | open --amend refuses, printing nothing: a release tag with no node (K6) | d-amend-tag (T3:M14) |
+| 177 | `` refuse('args-invalid', `--node-label is `` | openAmend | `'args-invalid'` | pinned | open --amend refuses, printing nothing: two nodes | d-amend-labels (T3:M21) |
+| 178 | `` refuse('args-invalid', `--act-ms `` | openAmend | `'args-invalid'` | pinned | open --amend refuses, printing nothing: an act after now | d-amend-actms (T3:M8) |
+| 179 | `` refuse('args-invalid', `--node-label ${l `` | openAmend | `'args-invalid'` | pinned | open --amend refuses, printing nothing: a freeze exception \| a version move on no node of the record | d-amend-node (T3:M7) |
+| 180 | `` refuse('input-invalid', `repilot sha `` | openAmend | `'input-invalid'` | pinned | open --amend refuses, printing nothing: a re-pilot that is no re-pilot result ("repilot shape fields") | d-amend-rp-shape (T3:M15) |
+| 181 | `` refuse('input-invalid', `repilot rec `` | openAmend | `'input-invalid'` | pinned | open --amend refuses, printing nothing: a re-pilot of another record (K1) | d-amend-rp-record (T3:M16) |
+| 182 | `` refuse('input-invalid', `repilot nod `` | openAmend | `'input-invalid'` | pinned | open --amend refuses, printing nothing: a re-pilot of another node (K1) | d-amend-rp-node (T3:M17) |
+| 183 | `` refuse('input-invalid', `repilot version-mis `` | openAmend | `'input-invalid'` | pinned | open --amend refuses, printing nothing: a re-pilot that measured another version \| an empty version (K1); this guard had no mutant before round 2 | d-amend-rp-version |
+| 184 | `` refuse('pilot-failed', `repilot ${la `` | openAmend | `'pilot-failed'` | pinned | open --amend refuses, printing nothing: a re-pilot that failed (K1, K3); and the failed re-pilot halts at every act | d-amend-rp-passed (T3:M19) |
+| 185 | `` 2-LINE:const v = validateOpenRecord(amended, { draft, predecessor: rec.record, frozen: { families: rec.frozen.families, n_questions: rec.frozen.list.entries.length } }); ⏎ if (!v.ok) refuse('record-invalid', v.errors.map((e) => `${e.path} ${e.word}`).join('; ')); `` | openAmend | `'record-invalid'` | pinned | open --amend refuses, printing nothing: a clock before the record it supersedes (the validator's chain) | d-amend-valid (T3:M6) |
+
+### Mutants of fix round 2, the prose-only mutants of fix round 1, and U1 to U12
+
+Each entry is JSON: `id`; `select`, the `-t` regex of the vitest run (a task's whole describes, `W2-5b2 Task N`, except U1 to U12); `anchor`, which occurs exactly once in `deploy/history-replay.mjs` at this tip; `repl`, which replaces it; and `red`, the failed count measured (the selection grew as rows were added, so the failed count is the figure that holds). Part A's and Part B's mutants were measured as each was written, one per call, against the selection of that moment. Fix round 1's Part B recorded its mutants in prose only: each guard it pinned has one whole-guard mutant here (`g-*`, the refuse replaced by `void 0`; 16 of the 17, with `t5-7330` and `t5-7332`, are the 18 guards the first census counted as prose-only, and the 17th, `g-qid-frozen`, is the whole-guard form of a guard whose other terms `T5:M7` pins), and fix round 1's Part A mutants F1, F2, F3, A1, A2 and A7 have theirs. The term mutants of those guards (one term replaced by `false`, each with its own row) stay as the two fix round 1 sections above describe them. The `g-*` mutants, `f1-field` to `a7-negative` and U1 to U12 were written and measured at this tip, one per call; U1 to U12 equal the table of fix round 1 above. Part D's mutants are in the last block. Every earlier mutant of this plan (261 anchored pairs) is counted and checked by the earlier-mutants script at the end of this section, and each anchor occurs exactly once at this tip.
+
+**Part A (Tasks 1 to 3; 37 mutants).**
+
+```json mutants
+[
+  {"id":"t1-124s","select":"W2-5b2 Task 1","anchor":"function subcommandHome(env) {\n  if (typeof env.HOME !== 'string' || !path.isAbsolute(env.HOME)) refuse(","repl":"function subcommandHome(env) {\n  if (false) refuse(","red":"1"},
+  {"id":"t1-215p","select":"W2-5b2 Task 1","anchor":"    refuseRangeRows([settingsModeRow('settings_mode', rec.record.settings_mode)]);   // W2-5b2 Task 2: the one settings-mode row","repl":"    void 0;   // W2-5b2 Task 2: the one settings-mode row","red":"1"},
+  {"id":"t1-215s","select":"W2-5b2 Task 1","anchor":"  if (asked !== undefined && !SETTINGS_MODES.includes(asked)) refuse('args-invalid', `settings-mode ${asked}`);","repl":"  if (false) refuse('args-invalid', `settings-mode ${asked}`);","red":"2"},
+  {"id":"t1-221","select":"W2-5b2 Task 1","anchor":"    refuse('input-invalid', `synthetic transcript ${p} unmeasured ${errCode(e)}`);","repl":"    void 0;","red":"1"},
+  {"id":"t1-224","select":"W2-5b2 Task 1","anchor":"  if (read.state !== 'bytes') refuse('out-refused', `run-stream-changed ${o.name}`);","repl":"  if (false) refuse('out-refused', `run-stream-changed ${o.name}`);","red":"1"},
+  {"id":"t2-229s","select":"W2-5b2 Task 2","anchor":"typeof b.boundary_uuid !== 'string' || !UUID_RE.test(b.boundary_uuid) || seen.has(b.boundary_uuid)) return 'fidelity entry';","repl":"typeof b.boundary_uuid !== 'string' || seen.has(b.boundary_uuid)) return 'fidelity entry';","red":"3"},
+  {"id":"t2-232","select":"W2-5b2 Task 2","anchor":"  if (!plainObject(o) || o.kind !== STEP0B_KIND || o.v !== 1) refuse('input-invalid', 'step0b shape kind');","repl":"  if (false) refuse('input-invalid', 'step0b shape kind');","red":"5"},
+  {"id":"t2-232a","select":"W2-5b2 Task 2","anchor":"  if (!plainObject(o) || o.kind !== STEP0B_KIND ||","repl":"  if (o.kind !== STEP0B_KIND ||","red":"1"},
+  {"id":"t2-232b","select":"W2-5b2 Task 2","anchor":"|| o.kind !== STEP0B_KIND || o.v !== 1) refuse('input-invalid', 'step0b shape kind')","repl":"|| o.v !== 1) refuse('input-invalid', 'step0b shape kind')","red":"2"},
+  {"id":"t2-232c","select":"W2-5b2 Task 2","anchor":"o.kind !== STEP0B_KIND || o.v !== 1) refuse('input-invalid', 'step0b shape kind')","repl":"o.kind !== STEP0B_KIND) refuse('input-invalid', 'step0b shape kind')","red":"1"},
+  {"id":"t2-235","select":"W2-5b2 Task 2","anchor":"  if (!SETTINGS_MODES.includes(o.settings_mode)) refuse('input-invalid', 'step0b shape settings_mode');","repl":"  if (false) refuse('input-invalid', 'step0b shape settings_mode');","red":"3"},
+  {"id":"t2-236a","select":"W2-5b2 Task 2","anchor":"const checks = (l) => Array.isArray(l) && l.every(","repl":"const checks = (l) => l.every(","red":"4"},
+  {"id":"t2-236b","select":"W2-5b2 Task 2","anchor":"STEP0B_CHECKS.includes(c)) && new Set(l).size === l.length;","repl":"STEP0B_CHECKS.includes(c));","red":"2"},
+  {"id":"t2-238","select":"W2-5b2 Task 2","anchor":"  if (typeof outArg !== 'string' || !path.isAbsolute(outArg)) refuse('out-refused', 'relative');","repl":"  if (false) refuse('out-refused', 'relative');","red":"1"},
+  {"id":"t2-240","select":"W2-5b2 Task 2","anchor":"refuse('input-invalid', '--out holds no pilot: fidelity, arms --section pilot and judge --section pilot write there first');\n    refuse('out-refused', `unmeasured ${errCode(e)}`);","repl":"refuse('input-invalid', '--out holds no pilot: fidelity, arms --section pilot and judge --section pilot write there first');\n    void 0;","red":"1"},
+  {"id":"t2-242","select":"W2-5b2 Task 2","anchor":"writes it first`);\n  if (read.state === 'bad') refuse('out-refused', `${rel} ${badWord(read)}`);","repl":"writes it first`);\n  if (false) refuse('out-refused', `${rel} ${badWord(read)}`);","red":"2"},
+  {"id":"t2-243","select":"W2-5b2 Task 2","anchor":"    refuse('out-refused', `${rel} is not JSON`);\n  }\n  if (!plainObject(v) ||","repl":"    void 0;\n  }\n  if (!plainObject(v) ||","red":"2"},
+  {"id":"t2-244","select":"W2-5b2 Task 2","anchor":"  if (!plainObject(v) || v.kind !== kind || v.v !== 1) refuse('out-refused', `${rel} is not a ${kind}`);","repl":"  if (false) refuse('out-refused', `${rel} is not a ${kind}`);","red":"5"},
+  {"id":"t2-244a","select":"W2-5b2 Task 2","anchor":"  if (!plainObject(v) || v.kind !== kind ||","repl":"  if (v.kind !== kind ||","red":"1"},
+  {"id":"t2-244b","select":"W2-5b2 Task 2","anchor":"|| v.kind !== kind || v.v !== 1) refuse('out-refused', `${rel} is not a ${kind}`)","repl":"|| v.v !== 1) refuse('out-refused', `${rel} is not a ${kind}`)","red":"2"},
+  {"id":"t2-244c","select":"W2-5b2 Task 2","anchor":"v.kind !== kind || v.v !== 1) refuse('out-refused', `${rel} is not a ${kind}`)","repl":"v.kind !== kind) refuse('out-refused', `${rel} is not a ${kind}`)","red":"1"},
+  {"id":"t2-246","select":"W2-5b2 Task 2","anchor":"  if (read.state === 'bad') refuse('out-refused', `run-json-invalid ${name} ${badWord(read)}`);","repl":"  if (false) refuse('out-refused', `run-json-invalid ${name} ${badWord(read)}`);","red":"1"},
+  {"id":"t2-247","select":"W2-5b2 Task 2","anchor":"  } catch {\n    refuse('out-refused', `run-json-invalid ${name}`);","repl":"  } catch {\n    void 0;","red":"0"},
+  {"id":"t2-249","select":"W2-5b2 Task 2","anchor":"  if (!FIDELITY_SECTIONS.includes(section)) refuse(","repl":"  if (false) refuse(","red":"2"},
+  {"id":"t2-253","select":"W2-5b2 Task 2","anchor":"  if (!PILOT_RESULT_SECTIONS.includes(section)) refuse(","repl":"  if (false) refuse(","red":"2"},
+  {"id":"t3-229","select":"W2-5b2 Task 3","anchor":"    if (unnamable !== undefined) refuse('input-invalid', `frozen boundary_uuid ${JSON.stringify(unnamable.boundary_uuid)} is not a lowercase UUID`);","repl":"    if (false) refuse('input-invalid', `frozen boundary_uuid ${JSON.stringify(unnamable.boundary_uuid)} is not a lowercase UUID`);","red":"3"},
+  {"id":"t3-262","select":"W2-5b2 Task 3","anchor":"  if (read.state === 'bad') refuse('out-refused', `${REPILOT_VERSION_REL} ${badWord(read)}`);","repl":"  if (false) refuse('out-refused', `${REPILOT_VERSION_REL} ${badWord(read)}`);","red":"1"},
+  {"id":"t3-263","select":"W2-5b2 Task 3","anchor":"    refuse('out-refused', `${REPILOT_VERSION_REL} is not JSON`);","repl":"    void 0;","red":"1"},
+  {"id":"t3-264","select":"W2-5b2 Task 3","anchor":"  if (!plainObject(p) || p.kind !== REPILOT_VERSION_KIND || p.v !== 1 || typeof p.record_sha256 !== 'string' || typeof p.store_id !== 'string'\n    || typeof p.claude_code_version !== 'string' || p.claude_code_version === '') refuse(","repl":"  if (false) refuse(","red":"9"},
+  {"id":"t3-264a","select":"W2-5b2 Task 3","anchor":"  if (!plainObject(p) || p.kind !== REPILOT_VERSION_KIND","repl":"  if (p.kind !== REPILOT_VERSION_KIND","red":"1"},
+  {"id":"t3-264b","select":"W2-5b2 Task 3","anchor":"p.kind !== REPILOT_VERSION_KIND || p.v !== 1 ||","repl":"p.v !== 1 ||","red":"1"},
+  {"id":"t3-264c","select":"W2-5b2 Task 3","anchor":"|| p.v !== 1 || typeof p.record_sha256 !== 'string'","repl":"|| typeof p.record_sha256 !== 'string'","red":"1"},
+  {"id":"t3-264d","select":"W2-5b2 Task 3","anchor":"typeof p.record_sha256 !== 'string' || typeof p.store_id !== 'string'\n","repl":"typeof p.store_id !== 'string'\n","red":"1"},
+  {"id":"t3-264e","select":"W2-5b2 Task 3","anchor":"|| typeof p.store_id !== 'string'\n    || typeof p.claude_code_version !== 'string'","repl":"\n    || typeof p.claude_code_version !== 'string'","red":"2"},
+  {"id":"t3-264f","select":"W2-5b2 Task 3","anchor":"\n    || typeof p.claude_code_version !== 'string' || p.claude_code_version === '') refuse(","repl":"\n    || p.claude_code_version === '') refuse(","red":"1"},
+  {"id":"t3-264g","select":"W2-5b2 Task 3","anchor":"|| typeof p.claude_code_version !== 'string' || p.claude_code_version === '') refuse(","repl":"|| typeof p.claude_code_version !== 'string') refuse(","red":"1"},
+  {"id":"t3-266","select":"W2-5b2 Task 3","anchor":"  if (bad !== null) refuse(bad.word, bad.detail);","repl":"  if (false) refuse(bad.word, bad.detail);","red":"1"}
+]
+```
+
+**Part B (Tasks 4 and 5; 36 mutants).**
+
+```json mutants
+[
+  {"id":"t4-259p","select":"W2-5b2 Task 4","anchor":"if (!plainObject(d) || d.kind !== JUDGED_KIND ||","repl":"if (d.kind !== JUDGED_KIND ||","red":"1"},
+  {"id":"t4-259v","select":"W2-5b2 Task 4","anchor":"d.kind !== JUDGED_KIND || d.v !== 1) bad(","repl":"d.kind !== JUDGED_KIND) bad(","red":"1"},
+  {"id":"t4-295","select":"W2-5b2 Task 4","anchor":"    refuse('input-invalid', `${where} not-json`);","repl":"    void 0;","red":"1"},
+  {"id":"t4-307","select":"W2-5b2 Task 4","anchor":"  if (flags.sheet !== true) refuse(","repl":"  if (false) refuse(","red":"2"},
+  {"id":"t5-312","select":"W2-5b2 Task 5","anchor":"    if (record.question_state !== 'run-failed') {","repl":"    if (false) {","red":"2"},
+  {"id":"t5-334","select":"W2-5b2 Task 5","anchor":"      refuse('input-invalid', `${at}: ${rel} is not a settled answer record`);","repl":"      void 0;","red":"11"},
+  {"id":"t5-334a","select":"W2-5b2 Task 5","anchor":"if (!Array.isArray(r.stamps) || (r.run !== null","repl":"if (false || (r.run !== null","red":"2"},
+  {"id":"t5-334b","select":"W2-5b2 Task 5","anchor":"(!plainObject(r.answer_field) || !ANSWER_STATES.includes(r.answer_field.state)","repl":"(false || !ANSWER_STATES.includes(r.answer_field.state)","red":"1"},
+  {"id":"t5-334c","select":"W2-5b2 Task 5","anchor":"|| !ANSWER_STATES.includes(r.answer_field.state)","repl":"|| false","red":"3"},
+  {"id":"t5-334d","select":"W2-5b2 Task 5","anchor":"|| typeof r.correct !== 'boolean' ||","repl":"|| false ||","red":"2"},
+  {"id":"t5-334e","select":"W2-5b2 Task 5","anchor":"|| !plainObject(r.uptake)))) {","repl":"|| false))) {","red":"2"},
+  {"id":"t5-334f","select":"W2-5b2 Task 5","anchor":"(r.run !== null && (!plainObject(r.answer_field)","repl":"(true && (!plainObject(r.answer_field)","red":"6"},
+  {"id":"t5-335","select":"W2-5b2 Task 5","anchor":"    refuse('input-invalid', `${at} ${e.message}`);\n  }\n  const answers = new Map();","repl":"    void 0;\n  }\n  const answers = new Map();","red":"1"},
+  {"id":"t5-337","select":"W2-5b2 Task 5","anchor":"      refuse('input-invalid', `${at}: question ${e.qid} is not settled in its answer records (W2-D80)`);","repl":"      void 0;","red":"3"},
+  {"id":"t5-337A","select":"W2-5b2 Task 5","anchor":"if ((state !== 'answered' && state !== 'run-failed')","repl":"if (false","red":"1"},
+  {"id":"t5-337B1","select":"W2-5b2 Task 5","anchor":"arms[arm].arm_state !== 'answered' || arms[arm].run === null","repl":"arms[arm].run === null","red":"1"},
+  {"id":"t5-337B2","select":"W2-5b2 Task 5","anchor":"arms[arm].arm_state !== 'answered' || arms[arm].run === null","repl":"arms[arm].arm_state !== 'answered'","red":"1"},
+  {"id":"t5-337G","select":"W2-5b2 Task 5","anchor":"|| (state === 'answered' && RECALL_ARMS.some(","repl":"|| (true && RECALL_ARMS.some(","red":"6"},
+  {"id":"t5-338","select":"W2-5b2 Task 5","anchor":"    refuse('input-invalid', `${at} ${e.message}`);\n  }\n  if (sha256Hex(","repl":"    void 0;\n  }\n  if (sha256Hex(","red":"1"},
+  {"id":"t5-7330","select":"W2-5b2 Task 5","anchor":"      refuse(malformedWord, `${rel}/${n} is not JSON`);","repl":"      refuse('out-refused', `${rel}/${n} is not JSON`);","red":"1"},
+  {"id":"t5-7332","select":"W2-5b2 Task 5","anchor":"refuse(malformedWord, `${rel}/${n} is not an answer record`)","repl":"refuse('out-refused', `${rel}/${n} is not an answer record`)","red":"3"},
+  {"id":"t5-9757r","select":"W2-5b2 Task 5","anchor":"|| j.rubric_id !== record.rubric_id","repl":"","red":"1"},
+  {"id":"t5-9757s","select":"W2-5b2 Task 5","anchor":"|| j.rubric_sha256 !== record.rubric_sha256","repl":"","red":"1"},
+  {"id":"t5-9777m","select":"W2-5b2 Task 5","anchor":"if (missing > 0 || extra > 0) refuse(","repl":"if (extra > 0) refuse(","red":"2"},
+  {"id":"t5-9834c","select":"W2-5b2 Task 5","anchor":"|| !plainObject(s.counts) || s.counts.rerun_owed","repl":"|| s.counts.rerun_owed","red":"1"},
+  {"id":"t5-9834r","select":"W2-5b2 Task 5","anchor":"|| s.counts.rerun_owed !== 0 ||","repl":"||","red":"1"},
+  {"id":"t5-9834s","select":"W2-5b2 Task 5","anchor":"if (s.stop !== null || !plainObject(s.counts)","repl":"if (!plainObject(s.counts)","red":"1"},
+  {"id":"t5-9922a","select":"W2-5b2 Task 5","anchor":"if (a === undefined || f.arm !== a.arm ||","repl":"if (f.arm !== a.arm ||","red":"4"},
+  {"id":"t5-9922p","select":"W2-5b2 Task 5","anchor":"const a = plainObject(f) ? want.find((x) => x.ccrc_id === f.ccrc_id && x.generation === f.generation) : undefined;","repl":"const a = want.find((x) => x.ccrc_id === f.ccrc_id && x.generation === f.generation);","red":"1"},
+  {"id":"t5-9922s","select":"W2-5b2 Task 5","anchor":"|| !AB_STATES.includes(f.state)) refuse(","repl":") refuse(","red":"2"},
+  {"id":"t5-9955p","select":"W2-5b2 Task 5","anchor":"if (!plainObject(w2) || !Array.isArray(w2.recall_off))","repl":"if (!Array.isArray(w2.recall_off))","red":"1"},
+  {"id":"t5-9963","select":"W2-5b2 Task 5","anchor":"    refuse('input-invalid', `measure ${e.message}`);\n  }\n  if (!assembled.ok) {","repl":"    void 0;\n  }\n  if (!assembled.ok) {","red":"1"},
+  {"id":"t5-9972","select":"W2-5b2 Task 5","anchor":"if (!Array.isArray(kv) || kv.length !== 2) refuse('input-invalid', `measure ${m.value.store_id} recall_off row ${JSON.stringify(kv)} is not [k, v]`);","repl":"void 0;","red":"3"},
+  {"id":"t5-9972a","select":"W2-5b2 Task 5","anchor":"if (!Array.isArray(kv) || kv.length !== 2) refuse(","repl":"if (kv.length !== 2) refuse(","red":"1"},
+  {"id":"t5-9972l","select":"W2-5b2 Task 5","anchor":"|| kv.length !== 2) refuse(","repl":") refuse(","red":"2"},
+  {"id":"t5-9981","select":"W2-5b2 Task 5","anchor":"    refuse('input-invalid', `measure ${e.message}`);\n  }\n  const raw = new Map();","repl":"    void 0;\n  }\n  const raw = new Map();","red":"1"}
+]
+```
+
+**Fix round 1's whole-guard mutants (`g-*`), its Part A mutants F1, F2, F3, A1, A2 and A7, and U1 to U12 (35 mutants).**
+
+```json mutants
+[
+  {"id":"f1-field","select":"W2-5b2 Task 5","anchor":"return [p, { windows: t.windows, with_call: t.with_call, calls: t.calls, turns: t.turns,","repl":"return [p, { windows: t.windows, with_call: t.with_call, calls: t.calls, turns: t.turns, unmeasured: t.unmeasured,","red":"2"},
+  {"id":"f2-null","select":"W2-5b2 Task 1","anchor":"o.sessionId === null ? 'no-session-id'","repl":"false ? 'no-session-id'","red":"4"},
+  {"id":"f3-malformed","select":"W2-5b2 Task 1","anchor":"typeof o.sessionId === 'string' && sessionIdMalformed(o.sessionId) ? 'session-id-malformed'","repl":"false ? 'session-id-malformed'","red":"7"},
+  {"id":"a1-quote","select":"W2-5b2 Task 4","anchor":"const quote = (text) => text.split(ANSWER_FIELD_LINE_BREAK)","repl":"const quote = (text) => text.split('\\n')","red":"4 (Task 4); 1 (Task 5, the three-reader pin)"},
+  {"id":"a2-bom","select":"W2-5b2 Task 4","anchor":"new TextDecoder('utf-8', { fatal: true }).decode(bytes)","repl":"new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)","red":"1"},
+  {"id":"a7-negative","select":"W2-5b2 Task 5","anchor":"if (!Number.isSafeInteger(n) || n < 0) { unmeasured.push(e.qid); continue; }","repl":"if (!Number.isSafeInteger(n)) { unmeasured.push(e.qid); continue; }","red":"1"},
+  {"id":"g-fid-shape","select":"W2-5b2 Task 2","anchor":"&& ['measured', 'unmeasured'].includes(b.state) && typeof b.pass === 'boolean')) refuse('out-refused', `${FIDELITY_FILE} is not a fidelity output`);","repl":"&& ['measured', 'unmeasured'].includes(b.state) && typeof b.pass === 'boolean')) void 0;","red":"7"},
+  {"id":"g-sum-shape","select":"W2-5b2 Task 2","anchor":"|| !plainObject(summary.arms) || !plainObject(summary.absent_rate)) refuse('out-refused', `${sumRel} is not a pilot arms summary`);","repl":"|| !plainObject(summary.arms) || !plainObject(summary.absent_rate)) void 0;","red":"9"},
+  {"id":"g-ctl-stats","select":"W2-5b2 Task 2","anchor":"|| !nonNegativeInt(controlStats.errored)) refuse('out-refused', `${sumRel} is not a pilot arms summary`);","repl":"|| !nonNegativeInt(controlStats.errored)) void 0;","red":"3"},
+  {"id":"g-judged-pilot","select":"W2-5b2 Task 2","anchor":"typeof judged.settings_mode !== 'string') refuse('out-refused', `${judgedRel} is not a pilot judged file`);","repl":"typeof judged.settings_mode !== 'string') void 0;","red":"2"},
+  {"id":"g-repilot-node","select":"W2-5b2 Task 3","anchor":"if (node === undefined) refuse('input-invalid', `step0b store ${String(s0v.store_id)} is not one of the record's nodes`);","repl":"if (node === undefined) void 0;","red":"1"},
+  {"id":"g-repilot-batches","select":"W2-5b2 Task 3","anchor":"    refuse('input-invalid', 'step0b shape batches');","repl":"    void 0;","red":"1"},
+  {"id":"g-plan-items","select":"W2-5b2 Task 4","anchor":"if (!Array.isArray(d.items)) bad('items is not a list');","repl":"if (false) bad('items is not a list');","red":"3"},
+  {"id":"g-judged-shape","select":"W2-5b2 Task 5","anchor":"    refuse('input-invalid', `${at} is not a quiz judged file`);","repl":"    void 0;","red":"9"},
+  {"id":"g-judged-record","select":"W2-5b2 Task 5","anchor":"if (j.record_sha256 !== recordSha256) refuse(","repl":"if (false) refuse(","red":"1"},
+  {"id":"g-judged-frozen","select":"W2-5b2 Task 5","anchor":"if (j.frozen_sha256 !== frozenSha256) refuse(","repl":"if (false) refuse(","red":"1"},
+  {"id":"g-inputs-store","select":"W2-5b2 Task 5","anchor":"if (typeof s !== 'string') refuse('input-invalid', `${name} names no store_id`);","repl":"if (typeof s !== 'string') void 0;","red":"6"},
+  {"id":"g-qid-frozen","select":"W2-5b2 Task 5","anchor":"      refuse('input-invalid', `${at}: ${rel} is not one of this node's frozen questions`);","repl":"      void 0;","red":"8"},
+  {"id":"g-arms-shape","select":"W2-5b2 Task 5","anchor":"|| s.section !== 'quiz') refuse('input-invalid', `${at} is not a quiz arms summary`);","repl":"|| s.section !== 'quiz') void 0;","red":"3"},
+  {"id":"g-vquiz-shape","select":"W2-5b2 Task 5","anchor":"    refuse('input-invalid', `${at} is not a verify --section quiz output`);","repl":"    void 0;","red":"5"},
+  {"id":"g-vab-shape","select":"W2-5b2 Task 5","anchor":"|| !Array.isArray(v.families)) refuse('input-invalid', `${at} is not a verify --section ab output`);","repl":"|| !Array.isArray(v.families)) void 0;","red":"3"},
+  {"id":"g-vab-twice","select":"W2-5b2 Task 5","anchor":"if (states.has(key)) refuse('input-invalid', `${at} lists ${a.ccrc_id} twice`);","repl":"if (false) void 0;","red":"1"},
+  {"id":"g-sourced-shape","select":"W2-5b2 Task 5","anchor":"if (bad !== null) refuse('input-invalid', `${at} shape ${bad}`);","repl":"if (false) void 0;","red":"3"},
+  {"id":"U1","select":"the original side read from a swept store","anchor":" || j.uuid !== row.uuid) return { state: 'lost', word: 'source-line-uuid-mismatch' };","repl":") return { state: 'lost', word: 'source-line-uuid-mismatch' };","red":"3"},
+  {"id":"U2","select":"the original side read from a swept store","anchor":"    const a = admitFile(p, h, configDirs, home);","repl":"    let a; try { const fd0 = openSync(p, constants.O_RDONLY); a = { ok: true, fd: fd0, st: fstatSync(fd0) }; } catch { a = { ok: false, why: 'missing' }; }","red":"3"},
+  {"id":"U3","select":"the original side read from a swept store","anchor":"if (a.why !== 'missing' && refused === null) refused = a.why;","repl":"if (refused === null) refused = a.why;","red":"2"},
+  {"id":"U4","select":"the original side read from a swept store","anchor":"    if (read.state !== 'line') return { state: 'lost', word: `source-line-${read.state}` };","repl":"    if (read.state !== 'line') continue;","red":"2"},
+  {"id":"U5","select":"the original side read from a swept store","anchor":"return { state: got >= LINE_MAX && pos < size ? 'too-long' : 'unterminated' };","repl":"return { state: 'unterminated' };","red":"1"},
+  {"id":"U6","select":"the original side read from a swept store","anchor":"read = readLine(a.fd, Number(row.line), Number(a.st.size));","repl":"read = readLine(a.fd, Number(row.line) + 1, Number(a.st.size));","red":"22"},
+  {"id":"U7","select":"fidelity hands the original-side read","anchor":"const src = { home, configDirs: rosterConfigDirs(readRoster(home).roster, home) };","repl":"const src = { home, configDirs: [] };","red":"1"},
+  {"id":"U8","select":"the original side read from a swept store","anchor":"      return { state: 'lost', word: `source-read-failed-${typeof e?.code === 'string' ? e.code : 'unknown'}` };","repl":"      throw e;","red":"3"},
+  {"id":"U9","select":"the original side read from a swept store","anchor":"word: `source-read-failed-${typeof e?.code === 'string' ? e.code : 'unknown'}` };","repl":"word: 'source-line-unterminated' };","red":"3"},
+  {"id":"U10","select":"the original side read from a swept store","anchor":"      if (e instanceof TypeError) throw e;\n      return { state: 'lost', word: `source-read-failed-","repl":"      return { state: 'lost', word: `source-read-failed-","red":"1"},
+  {"id":"U11","select":"the original side read from a swept store","anchor":"      return { state: 'lost', word: 'source-line-not-json' };\n    }","repl":"      continue;\n    }","red":"3"},
+  {"id":"U12","select":"the original side read from a swept store","anchor":"    if (h === undefined) continue;\n    const a = admitFile(p, h, configDirs, home);","repl":"    if (h === undefined) return { state: 'lost', word: 'source-refused-outside-roots' };\n    const a = admitFile(p, h, configDirs, home);","red":"1"}
+]
+```
+
+**Part D (the closing pass; 32 mutants).** Measured at this tip, one per call, against their task's whole describes (`W2-5b2 Task 1`: 56 cases, `Task 2`: 177, `Task 3`: 124), restored with `cmp` silent each time. Most of them re-state, as JSON, the mutation of an earlier plan mutant, named in the table beside each (`T2:M18`, `T2:M19`, `T2:M54`, `T2:M57`, `T2:M58` as `d-tol-pilot`, `M-F6-tol` as `d-tol-repilot`, `T2:JG4o` as `d-judgespent`, `T3:E4`, `T3:E5`, `T3:M6` to `T3:M12`, `T3:M14` to `T3:M17`, `T3:M19`, `T3:M21`), so each now runs from the procedure below. The new mutations are `d-fin-echo`, `d-open-modes`, `d-armrun-move`, the five `d-man-*`, `d-amend-rp-version` and `d-recheck-uuid`.
+
+```json mutants
+[
+  {"id": "d-fin-record", "select": "W2-5b2 Task 2", "anchor": "if (pilotResult.record_sha256 !== rec.sha256) refuse('input-invalid', `pilot-result record-mismatch", "repl": "if (false) refuse('input-invalid', `pilot-result record-mismatch", "red": "3"},
+  {"id": "d-fin-failed", "select": "W2-5b2 Task 2", "anchor": "if (pilotResult.failures.length > 0 && !accept) refuse('pilot-failed'", "repl": "if (false && !accept) refuse('pilot-failed'", "red": "1"},
+  {"id": "d-fin-accept", "select": "W2-5b2 Task 2", "anchor": "if (pilotResult.failures.length === 0 && accept) refuse('args-invalid'", "repl": "if (false && accept) refuse('args-invalid'", "red": "1"},
+  {"id": "d-fin-nobudget", "select": "W2-5b2 Task 2", "anchor": "if (spendBudget === null) refuse('input-invalid'", "repl": "if (false) refuse('input-invalid'", "red": "1"},
+  {"id": "d-fin-echo", "select": "W2-5b2 Task 2", "anchor": "if (flags['spend-budget'] !== spendBudget) {", "repl": "if (false) {", "red": "1"},
+  {"id": "d-open-modes", "select": "W2-5b2 Task 3", "anchor": "if (modes.length !== 1) refuse('args-invalid'", "repl": "if (false) refuse('args-invalid'", "red": "2"},
+  {"id": "d-armrun-move", "select": "W2-5b2 Task 3", "anchor": "if (move !== null && !(Number.isSafeInteger(move) && move >= 0)) throw new TypeError(", "repl": "if (false) throw new TypeError(", "red": "6"},
+  {"id": "d-split-unmeasured", "select": "W2-5b2 Task 3", "anchor": "if (spawnedUnder === undefined) refuse('out-refused', `run-version-unmeasured ${won.name}`);", "repl": "if (spawnedUnder === undefined) return false;", "red": "1"},
+  {"id": "d-split-newest", "select": "W2-5b2 Task 3", "anchor": "if (move === newest) refuse('out-refused', `version-split", "repl": "if (false) refuse('out-refused', `version-split", "red": "1"},
+  {"id": "d-man-dir", "select": "W2-5b2 Task 3", "anchor": "  const st = lstatOrNull(out, rel);\n  if (st === null) return [];\n  if (!st.isDirectory()) refuse('out-refused', `${rel} is not a directory`);\n  let names;\n  try {\n    names = readdirSync(path.join(out, rel)).filter((n) => ARM_BATCH_FILE_RE", "repl": "  const st = lstatOrNull(out, rel);\n  if (st === null) return [];\n  let names;\n  try {\n    names = readdirSync(path.join(out, rel)).filter((n) => ARM_BATCH_FILE_RE", "red": "1"},
+  {"id": "d-man-list", "select": "W2-5b2 Task 3", "anchor": "names = readdirSync(path.join(out, rel)).filter((n) => ARM_BATCH_FILE_RE.test(n)).sort();\n  } catch (e) {\n    refuse('out-refused', `${rel} unreadable ${errCode(e)}`);\n  }", "repl": "names = readdirSync(path.join(out, rel)).filter((n) => ARM_BATCH_FILE_RE.test(n)).sort();\n  } catch (e) {\n    names = [];\n  }", "red": "1"},
+  {"id": "d-man-read", "select": "W2-5b2 Task 3", "anchor": "    if (read.state !== 'bytes') refuse('out-refused', `${rel}/${n} ${read.state === 'bad' ? badWord(read) : read.state}`);\n    let m;\n    try {\n      m = JSON.parse(read.bytes.toString('utf8'));\n    } catch {\n      refuse('out-refused', `${rel}/${n} is not JSON`);\n    }\n    const ok =", "repl": "    if (false) refuse('out-refused', `${rel}/${n} ${read.state === 'bad' ? badWord(read) : read.state}`);\n    let m;\n    try {\n      m = JSON.parse(read.bytes.toString('utf8'));\n    } catch {\n      refuse('out-refused', `${rel}/${n} is not JSON`);\n    }\n    const ok =", "red": "2"},
+  {"id": "d-man-json", "select": "W2-5b2 Task 3", "anchor": "      refuse('out-refused', `${rel}/${n} is not JSON`);\n    }\n    const ok =", "repl": "      m = null;\n    }\n    const ok =", "red": "6"},
+  {"id": "d-man-shape", "select": "W2-5b2 Task 3", "anchor": "if (!ok) refuse('out-refused', `${rel}/${n} is not a batch manifest`);", "repl": "if (false) refuse('out-refused', `${rel}/${n} is not a batch manifest`);", "red": "15"},
+  {"id": "d-amend-kind", "select": "W2-5b2 Task 3", "anchor": "if (!AMENDMENT_KINDS.includes(kind)) refuse('args-invalid', `kind ", "repl": "if (false) refuse('args-invalid', `kind ", "red": "1"},
+  {"id": "d-amend-flag", "select": "W2-5b2 Task 3", "anchor": "if (flags[k] !== undefined && !spec.required.includes(k) && !spec.optional.includes(k)) refuse(", "repl": "if (false) refuse(", "red": "3"},
+  {"id": "d-amend-required", "select": "W2-5b2 Task 3", "anchor": "for (const k of spec.required) if (flags[k] === undefined) refuse('args-invalid', `${k}-required`);\n  for (const k of AMEND_TEXT_FLAGS)", "repl": "for (const k of spec.required) if (false) refuse('args-invalid', `${k}-required`);\n  for (const k of AMEND_TEXT_FLAGS)", "red": "4"},
+  {"id": "d-amend-empty", "select": "W2-5b2 Task 3", "anchor": "for (const k of AMEND_TEXT_FLAGS) if (flags[k] === '') refuse(", "repl": "for (const k of AMEND_TEXT_FLAGS) if (false) refuse(", "red": "4"},
+  {"id": "d-amend-tag", "select": "W2-5b2 Task 3", "anchor": "if (flags['release-tag'] !== undefined && labels.length === 0) refuse(", "repl": "if (false) refuse(", "red": "1"},
+  {"id": "d-amend-labels", "select": "W2-5b2 Task 3", "anchor": "if (labels.length > 1) refuse(", "repl": "if (false) refuse(", "red": "1"},
+  {"id": "d-amend-actms", "select": "W2-5b2 Task 3", "anchor": "if (flags['act-ms'] !== undefined && flags['act-ms'] > nowMs) refuse(", "repl": "if (false) refuse(", "red": "1"},
+  {"id": "d-amend-node", "select": "W2-5b2 Task 3", "anchor": "if (label !== null && !rec.record.nodes.some((n) => n.label === label)) refuse(", "repl": "if (false) refuse(", "red": "2"},
+  {"id": "d-amend-rp-shape", "select": "W2-5b2 Task 3", "anchor": "if (bad !== null) refuse('input-invalid', `repilot shape", "repl": "if (false) refuse('input-invalid', `repilot shape", "red": "1"},
+  {"id": "d-amend-rp-record", "select": "W2-5b2 Task 3", "anchor": "if (rp.record_sha256 !== rec.sha256) refuse('input-invalid', `repilot record-mismatch", "repl": "if (false) refuse('input-invalid', `repilot record-mismatch", "red": "1"},
+  {"id": "d-amend-rp-node", "select": "W2-5b2 Task 3", "anchor": "if (rp.node_label !== label || rp.store_id !== node.store_id) refuse(", "repl": "if (false) refuse(", "red": "1"},
+  {"id": "d-amend-rp-version", "select": "W2-5b2 Task 3", "anchor": "if (rp.claude_code_version !== flags['claude-code-version']) {", "repl": "if (false) {", "red": "2"},
+  {"id": "d-amend-rp-passed", "select": "W2-5b2 Task 3", "anchor": "if (!rp.passed) refuse('pilot-failed', `repilot ${label}", "repl": "if (false) refuse('pilot-failed', `repilot ${label}", "red": "2"},
+  {"id": "d-amend-valid", "select": "W2-5b2 Task 3", "anchor": "  if (!v.ok) refuse('record-invalid', v.errors.map((e) => `${e.path} ${e.word}`).join('; '));\n  refuseOutOfRangeValues({ budget: amended.spend_budget", "repl": "  if (false) refuse('record-invalid', v.errors.map((e) => `${e.path} ${e.word}`).join('; '));\n  refuseOutOfRangeValues({ budget: amended.spend_budget", "red": "1"},
+  {"id": "d-tol-pilot", "select": "W2-5b2 Task 2", "anchor": "  refuseRangeRows([['pilot.tolerance', tolerance !== null]]);\n  const", "repl": "  const", "red": "1"},
+  {"id": "d-tol-repilot", "select": "W2-5b2 Task 3", "anchor": "  refuseRangeRows([['pilot.tolerance', tolerance !== null]]);   // @anchor repilot-tolerance-range\n", "repl": "", "red": "1"},
+  {"id": "d-recheck-uuid", "select": "W2-5b2 Task 1", "anchor": "if (typeof entry.boundary_uuid !== 'string' || !UUID_RE.test(entry.boundary_uuid)) return fail('a', 'boundary-uuid-invalid');", "repl": "if (false) return fail('a', 'boundary-uuid-invalid');", "red": "3"},
+  {"id": "d-judgespent", "select": "W2-5b2 Task 2", "anchor": "if (!Number.isSafeInteger(sum)) throw new RangeError('judgeSpentOf: spend past safe-integer range');", "repl": "if (false) throw new RangeError('judgeSpentOf: spend past safe-integer range');", "red": "2"}
+]
+```
+
+To check that every anchor occurs once, from the repository root:
+
+```bash
+node - <<'EOF'
+const fs = require('node:fs');
+const plan = fs.readFileSync('docs/superpowers/plans/2026-10-23-ccrc-history-w2-5b2-pilot-and-verdict.md', 'utf8');
+const src = fs.readFileSync('deploy/history-replay.mjs', 'utf8');
+let n = 0, once = 0;
+for (const b of plan.matchAll(/^```json mutants\n([\s\S]*?)\n```$/gm)) for (const m of JSON.parse(b[1])) {
+  n += 1;
+  if (src.split(m.anchor).length - 1 === 1) once += 1; else console.log('NOT ONCE', m.id);
+}
+console.log('mutants', n, 'anchored once', once);
+EOF
+```
+
+Expected: `mutants 140 anchored once 140`. To run one (here `t5-9972`), from the repository root, with `free -m` read first: save the driver outside the tree, apply the entry, run its `select` from `server/`, restore, and compare.
+
+```bash
+ID=t5-9972 SEL='W2-5b2 Task 5' S=$(mktemp -d)
+cp deploy/history-replay.mjs "$S/orig.mjs"
+ID=$ID node - <<'EOF'
+const fs = require('node:fs');
+const plan = fs.readFileSync('docs/superpowers/plans/2026-10-23-ccrc-history-w2-5b2-pilot-and-verdict.md', 'utf8');
+const all = [...plan.matchAll(/^```json mutants\n([\s\S]*?)\n```$/gm)].flatMap((b) => JSON.parse(b[1]));
+const m = all.find((x) => x.id === process.env.ID);
+const src = fs.readFileSync('deploy/history-replay.mjs', 'utf8');
+if (src.split(m.anchor).length !== 2) throw new Error('anchor not once');
+fs.writeFileSync('deploy/history-replay.mjs', src.replace(m.anchor, () => m.repl));
+EOF
+(cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t "$SEL" 2>&1 | grep -E '^ +Tests |^ +× ' | cut -c1-200)
+cp "$S/orig.mjs" deploy/history-replay.mjs; cmp "$S/orig.mjs" deploy/history-replay.mjs && git diff --exit-code deploy/history-replay.mjs
+```
+
+Expected for `t5-9972`: `Tests  3 failed | … passed`, then `cmp` and `git diff --exit-code` print nothing.
+
+The earlier mutants (`T<task>:<id>`) are the `mut "$F" 'anchor' 'replacement'` lines, the `'ID': (r"""anchor""", r"""replacement""")` pairs and the one `OLD = … NEW = …` pair of Tasks 1 to 6 and fix round 1; the id is the nearest comment line above that starts `# <ID> (` or `# <ID>:`, and the task the nearest `### Task N` heading above (`FR1` after fix round 1's heading). This script counts them and checks that each anchor occurs exactly once in the driver (save it as `earlier.cjs`, run from the repository root: `node - < earlier.cjs`):
+
+```bash
+node - <<'EOF'
+// The earlier mutants (Tasks 1 to 6 and fix round 1): count them, check each anchor occurs once; `ids` also lists their T<task>:<id>.
+// Run from the repository root: node - [ids] < this file
+const fs = require('node:fs');
+const plan = fs.readFileSync('docs/superpowers/plans/2026-10-23-ccrc-history-w2-5b2-pilot-and-verdict.md', 'utf8');
+const src = fs.readFileSync('deploy/history-replay.mjs', 'utf8');
+const heads = [...plan.matchAll(/^### Task (\d):|^## Fix round 1/gm)].map((m) => [m.index, m[1] ?? 'FR1']);
+const taskAt = (pos) => heads.filter(([i]) => i <= pos).pop()?.[1] ?? '?';
+const idAt = (pos) => [...plan.slice(0, pos).matchAll(/^# ((?=[A-Za-z-]*[0-9])[A-Z][A-Za-z0-9-]*)[ :(]/gm)].pop()?.[1] ?? '?';
+// one shell word: adjacent "…", '…' and bare runs; inside "…" a backslash before $ ` " \ is dropped
+const word = (s, i) => {
+  let out = '';
+  while (i < s.length && !/\s/.test(s[i])) {
+    if (s[i] === '"') for (i++; s[i] !== '"'; i++) out += s[i] === '\\' && '$`"\\'.includes(s[i + 1]) ? s[++i] : s[i];
+    else if (s[i] === "'") for (i++; s[i] !== "'"; i++) out += s[i];
+    else out += s[i];
+    i++;
+  }
+  return [out, i];
+};
+const pairs = [];
+for (const m of plan.matchAll(/^[ \t]*mut "\$[A-Z]" /gm)) {
+  const [a, i] = word(plan, m.index + m[0].length), [b] = word(plan, i + 1);
+  pairs.push({ id: idAt(m.index), task: taskAt(m.index), old: a, new: b });
+}
+for (const m of plan.matchAll(/^\s*'([A-Za-z0-9-]+)': \(r"""(.*?)""",\s*r"""(.*?)"""\)/gms)) pairs.push({ id: m[1], task: taskAt(m.index), old: m[2], new: m[3] });
+for (const m of plan.matchAll(/^OLD = r?("""|'|")(.*?)\1\s*\nNEW = r?("""|'|")(.*?)\3/gms)) pairs.push({ id: 'F1C', task: taskAt(m.index), old: m[2], new: m[4] });
+const once = pairs.filter((p) => src.split(p.old).length === 2);
+console.log('earlier mutants', pairs.length, 'anchored once', once.length);
+for (const p of pairs) if (!once.includes(p)) console.log('NOT ONCE', `T${p.task}:${p.id}`, src.split(p.old).length - 1);
+if (process.argv[2] === 'ids') console.log(once.map((p) => `T${p.task}:${p.id}`).join(' '));
+EOF
+```
+
+Expected: `earlier mutants 261 anchored once 261`; `node - ids < earlier.cjs` also prints their 261 ids, 259 distinct. The last check reads the two tables of the census above against the census script (saved as `census.cjs`) and against these mutants. For every W2-5b2 guard of `node - rows all < census.cjs` there is one row with the same function and word; every row's anchor occurs once in the driver; every mutant id a row names is an earlier plan mutant or a JSON entry of this plan (save it as `tablecheck.cjs`; run `CENSUS=census.cjs EARLIER=earlier.cjs node - < tablecheck.cjs`):
+
+```bash
+node - <<'EOF'
+// The tables against the census and the mutants. Run from the repository root: CENSUS=<census script> EARLIER=<earlier-mutants script> node - < this file
+// For every W2-5b2 guard of `node - rows all` (the census script, saved as $CENSUS), one table row with its function and word;
+// each row's anchor once in the driver; each mutant id the row names an earlier plan mutant or a JSON entry of this plan.
+const fs = require('node:fs');
+const plan = fs.readFileSync('docs/superpowers/plans/2026-10-23-ccrc-history-w2-5b2-pilot-and-verdict.md', 'utf8');
+const src = fs.readFileSync('deploy/history-replay.mjs', 'utf8');
+const cells = (l) => l.split(/(?<!\\)\|/).slice(1, -1).map((c) => c.trim().replace(/\\\|/g, '|'));
+const table = plan.split('\n').filter((l) => /^\| \d+ \|/.test(l)).map(cells);   // # | anchor | function | word | status | row | mutant
+const want = require('node:child_process').execSync('node - rows all < ' + process.env.CENSUS, { encoding: 'utf8' }).split('\n')
+  .filter((l) => l.includes('\tW2-5b2\t')).map((l) => l.split('\t')).map((f) => ({ fn: f[3], word: f[5] }));
+const strip = (s) => s.replace(/`/g, '');
+const anchorOnce = (a) => {
+  const m = /^`` (.*) ``$/.exec(a) ?? /^`(.*)`$/.exec(a);
+  const t = m[1], n = /^\d+-LINE:(.*)$/.exec(t);
+  if (n === null) return src.split(t).length - 1;
+  const re = new RegExp(n[1].split(' ⏎ ').map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\n\\s*'), 'g');
+  return (src.match(re) ?? []).length;
+};
+const earlier = new Set(require('node:child_process').execSync('node - ids < ' + process.env.EARLIER, { encoding: 'utf8' }).trim().split('\n').pop().split(' '));
+const json = new Set([...plan.matchAll(/^```json mutants\n([\s\S]*?)\n```$/gm)].flatMap((b) => JSON.parse(b[1]).map((m) => m.id)));
+let bad = 0;
+const left = table.map((c) => ({ n: +c[0], fn: strip(c[2]).replace(/ \(term \d of 4\)$/, ''), word: strip(c[3]) }));
+for (const w of want) {
+  const i = left.findIndex((g) => g.fn === w.fn && g.word === w.word);
+  if (i < 0) { bad += 1; console.log('NO ROW', w.fn, w.word); } else left.splice(i, 1);
+}
+for (const g of left) { bad += 1; console.log('EXTRA ROW', g.n, g.fn, g.word); }
+const tally = {};
+for (const c of table) {
+  tally[c[4]] = (tally[c[4]] ?? 0) + 1;
+  if (anchorOnce(c[1]) !== 1) { bad += 1; console.log('ANCHOR NOT ONCE', c[0]); }
+  for (const id of c[6].replace(/\([^)]*\)/g, ' ').match(/[A-Za-z][A-Za-z0-9-]*(?::[A-Za-z0-9-]+)?/g) ?? []) {
+    if (/^(the|shield|shields|survives|equivalent|is|same|mutation|and)$/i.test(id) || id === '—') continue;
+    if (!earlier.has(id) && !json.has(id)) { bad += 1; console.log('NO SUCH MUTANT', c[0], id); }
+  }
+}
+console.log('rows', table.length, 'census', want.length, 'problems', bad, JSON.stringify(tally));
+EOF
+```
+
+Expected: `rows 185 census 185 problems 0 {"pinned":161,"by design":24}`.
+
+### The review's remaining corrections
+
+- **A1, a residual: no or a malformed session id leaves the project-dir half unmeasured.** For a `null` or malformed session id (`persistenceMeasured`'s `no-session-id` and `session-id-malformed`) the run is recorded `unmeasured` before `persistenceLeft` runs, with `project_dir: null`. `persistenceLeft` would still have measured `projects/<slug of cwd>`, which needs only the cwd, so a run that left a project directory but gave no usable session id reads `unmeasured persistence`, not `failed persistence`. It still halts `pilot-failed` either way (`step0bVerdictOf` passes only with no failed and no unmeasured check), and every F2 and F3 row uses a clean `projects/`.
+- **A2, the describes' order.** The fix round's describes sit after Task 6's README describe because they were appended in the fix round, not in task order. Fix round 1's Part B describes come first, in descending task order (Task 5 F4, Task 4 F5, Task 3 F6, Task 2 F7, then Task 5's `inputsByStore`), and fix round 2's follow them (Part A: Tasks 1 to 3, then Part B: Tasks 4 and 5). File order matters only through A5's residual: Tasks 2 and 3's stub describes are safe by file order after Task 1's 5.5 s wait.
+- **A3, the must-hold text.** The PR-body must-hold reads "RM1 to RM12", in this plan's Step 15 body (corrected in place above) and in the PR body.
+- **A6, A7 and A12, the counts, re-measured at `109e3728b` and again at the Part D tip.** Cases and titles are lines of `vitest list test/history-replay.test.ts` (from `server/`; its output is one line per case, so `grep -cF` over it counts titles). The whole run's `Tests` line agrees with the file total.
+
+| Count | At `23f47b656` | At `109e3728b` | At the Part D tip | How |
+|---|---|---|---|---|
+| Cases in the file | 1693 | 1804 | 1841 | `grep -c .` over the list; 1590, 1613 and 1693 at `cc4d1f5af`, `7dadea29d` and `39b01c80d` reproduce |
+| Titles naming `W2-5b2 Task` | | 580 | 617 | `grep -cF 'W2-5b2 Task'` |
+| Task 1 selection | 44 | 51 | 56 | `grep -cF 'W2-5b2 Task 1'`, equal to the `-t` selection |
+| Task 2 selection | 140 | 176 | 177 | likewise |
+| Task 3 selection | 76 | 93 | 124 | likewise |
+| Task 4 selection | 65 | 72 | 72 | likewise |
+| Task 5 selection | 139 (read as 133 in fix round 1) | 183 | 183 | likewise |
+| Task 6 selection | 6 | 6 | 6 | likewise |
+| Step 9's form, `W2-5b2 Task N:` | | 44, 117, 73, 59, 90, 6 | 44, 117, 73, 59, 90, 6 | `grep -cF "W2-5b2 Task $n:"`; it leaves out the fix round describes, which are titled `Task N F4:` or `Task N fix round 2:` |
+
+The selections sum to 581, one more than the 580 titles, at `109e3728b`, and to 618 against 617 at the Part D tip, because one title in Task 5's describe names Task 2 (`… the default reading is W2-5b2 Task 2 own`). The diff of the four files against `fa25c9ee6` (`git diff --numstat`): `deploy/history-replay.mjs` 2,767 lines (2,646 insertions, 121 deletions), `server/test/history-replay.test.ts` 5,786 (5,752 and 34) at `109e3728b` and 5,955 (5,921 and 34) at the Part D tip, `README.md` 51 (50 and 1), the spec 36 (18 and 18); 8,466 insertions and 174 deletions in all at `109e3728b`, 8,635 and 174 at the Part D tip (7,698 and 174 at `23f47b656`, where the driver was 2,761 lines and the test 5,024). Part D changed no line of the driver. The A7 tally is corrected in fix round 1's Part A above.
+- **A9, one mutation counted as two.** P16 and K28b have the same anchor and the same replacement: both mutate the one loop in `step0bCommand` that serves both sections. They are one mutation measured from two selections (Task 1: 1 failed, 43 passed; Task 3: 1 failed, 75 passed), and P16 guards no quiz-specific code.
+- **A10 is stated under the census above:** the by-design note covers report's path only, and `freezeCommand`'s direct reach of `sourcedError`'s `!plainObject` term is the named residual.
+- **Fix round 1's "Not claimed" bullet is superseded.** `nodeAnswersOf`'s `is not a settled answer record` check and `verifyAbOf`'s per-entry `plainObject(f)` term, which that bullet named as unclaimed, are pinned now (`t5-334` to `t5-334f`, `t5-9922p`), with the other unpinned terms the review named (`nodeAnswersOf`'s `is not settled in its answer records`, `liveOf`'s `recall_off row … is not [k, v]`, `verifyAbOf`'s `a === undefined` and `AB_STATES` terms).
+
+### Residuals added by round 2
+
+- **An unused parameter.** The test helper `b23Step0b` takes a fourth parameter, `rec`, that its body does not use: it calls `fx.rec(rec)`, and `fx.rec` takes no argument. It is fix round 1's code and is left; the round 2 rows that need another record build their own argv.
+- **The element types of `stamps` on report's path are not checked.** The elements of an answer record's, an arms summary's and a judged file's `stamps` list reach `verdict.stamps` untyped on report's path, and `verdict.stamps` is sorted by `cmpUnit`, which does not throw; a judged file is held to a list of words later, by `handcheckPlanOf`. It is no TypeError path, so it is no guard of the census. Read from the code and not run.
+- **`reportCommand`'s `!gate.ok` refusal is by design, and the shield is `nodeAnswersOf`'s ANSWER_STATES term.** `decideGate` has exactly one `ok: false` return, `question-not-run`, raised for an answer state of `not-run`. The answer states `gateInputsOf` reads are `r.answer_field.state` of the questions that are not `run-failed`, and `nodeAnswersOf` holds them to `ANSWER_STATES`, which has no `not-run`, through `is not a settled answer record` (pinned by `t5-334c`). An earlier reason, "an unsettled summary or question is refused first", was not the whole of it. A second shield, measured: with that whole refusal deleted (`t5-334`), a record whose answer state is `not-run` is still refused before `decideGate`, as `arms-summary <store> does not match its answer records: armsSummaryOf over them gives other bytes`.
 
 ## Deviations found
 
