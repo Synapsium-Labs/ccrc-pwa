@@ -436,7 +436,9 @@ const COUNT_DEPS = Object.freeze({ loadFinal: loadFinalRecord, now: () => Date.n
 /** count: the flags; a fresh --out; part 2 through the part 2 loader at the read instant (its chain, W2-D24's re-check
  *  first, --allow-code-change taken after window start only and answered as a stamp); this node's measure and verify
  *  outputs, each sha-checked before it is parsed; the store, read-only; the report built in memory; and only then --out,
- *  with counters.json written once. Every refusal comes before --out exists. */
+ *  with counters.json written once. Every refusal of an input comes before --out exists; the one exception is
+ *  writeReport's: a write failure after prepareOut made --out refuses out-refused and leaves the marked --out, which a
+ *  re-run then refuses as existing. */
 export function countCommand(flags, deps = COUNT_DEPS) {
   checkFormFlags('count', flags);
   if ((flags.supersedes === undefined) !== (flags['supersedes-sha256'] === undefined)) refuse('args-invalid', '--supersedes and --supersedes-sha256 go together');

@@ -272,7 +272,7 @@ It cites D-5770 and D-5771 (W2-3's plan), D-5774 (the deploy-local vocabularies)
 - **Every measure, every boundary (U5).** The frame calls every measure for every boundary of every found family the report lists, unmeasured windows and `zero_windows` families included; a measure that needs the window answers `window-unmeasured` itself. A `found: false` family has no boundary and no row; it is reported in `excluded.not_found`.
 - **Unmeasured is never 0.** A row of an unmeasured window carries `turns: null` and `recall_calls: null`; a stratum with no measured window carries `null` sums and each counter's `summary` is `null` there; `windows`, `measured` and `unmeasured` are counts of rows and may be 0.
 - **Strata (U8, V3).** For each arm in `ASSIGNMENT_ARMS` a stratum per producer in lib's `BACKENDS` and a pooled `all`, over rows that are neither changed nor unrealised; `dropped_strata.changed` and `dropped_strata.unrealised` tally those rows by arm and then by producer, the same `[arm][producer | 'all']` shape as `strata` (V3), so a dropped treatment family is never read beside the control arm's. A family both changed and unrealised is tallied in both. A row whose arm, producer or verify state is outside its list is a defect (`TypeError`).
-- **A fresh `--out`.** `count` refuses an `--out` that exists (`out-refused`, `exists: a counter report goes under a fresh --out`) before it reads anything. Every refusal comes before `writeReport`'s `prepareOut`, so a refused run leaves no `--out`. `counters.json` is created `wx`, mode 0600; the sha line is the sha of the bytes written.
+- **A fresh `--out`.** `count` refuses an `--out` that exists (`out-refused`, `exists: a counter report goes under a fresh --out`) before it reads anything. Every refusal of an input comes before `writeReport`'s `prepareOut`, so a refused run leaves no `--out`; the one exception is `writeReport`'s own: a write failure after `prepareOut` made `--out` refuses `out-refused` and leaves the marked `--out`, which a re-run then refuses as existing (a residual, review 963 F6). `counters.json` is created `wx`, mode 0600; the sha line is the sha of the bytes written.
 - **No environment.** `main` takes `argv` only; the counter spawns nothing.
 
 **Residuals, named:**
@@ -1470,7 +1470,9 @@ const COUNT_DEPS = Object.freeze({ loadFinal: loadFinalRecord, now: () => Date.n
 /** count: the flags; a fresh --out; part 2 through the part 2 loader at the read instant (its chain, W2-D24's re-check
  *  first, --allow-code-change taken after window start only and answered as a stamp); this node's measure and verify
  *  outputs, each sha-checked before it is parsed; the store, read-only; the report built in memory; and only then --out,
- *  with counters.json written once. Every refusal comes before --out exists. */
+ *  with counters.json written once. Every refusal of an input comes before --out exists; the one exception is
+ *  writeReport's: a write failure after prepareOut made --out refuses out-refused and leaves the marked --out, which a
+ *  re-run then refuses as existing. */
 export function countCommand(flags, deps = COUNT_DEPS) {
   checkFormFlags('count', flags);
   if ((flags.supersedes === undefined) !== (flags['supersedes-sha256'] === undefined)) refuse('args-invalid', '--supersedes and --supersedes-sha256 go together');
@@ -1545,6 +1547,8 @@ cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-6
 Expected GREEN (predicted): 31 passed on linux (30 passed and 1 skipped on darwin). If a frame case is red, re-derive its number from the fixture with the gate's `buildWindows` on the same family, as the case's own CONTROL does; a wrong prediction is corrected in this plan's text in the same commit (U17). The guard is never weakened to match a number.
 
 *Measured over predicted (Task 1, U17):* Step 3 measured as predicted (28 failed, 3 passed). Step 5's filtered run measured 31 passed, but the whole file did not: an earlier case of the file calls `vi.resetModules()` (D-6301's), so `w6cLoad`'s dynamic import loads a fresh driver whose `DriverRefusal` is not the statically imported class, and 13 W2-6 cases failed the `instanceof` test in `w6cRefusalOf` and `w6cInProcess` although the word and detail were right. The helpers now test `w6cIsRefusal` (the class, or an `Error` named `DriverRefusal`), and the word and detail are still asserted in full. The emission pin's `tallies` expression also failed the server test project's typecheck (`Object.values` of an `any` read as `unknown[]`), so it casts to `W6cR[]` first. Both corrections are in the code above. The whole file then measured 1163 passed.
+
+*Fix round 1 (review 963 F6, comment only):* `countCommand`'s doc comment said every refusal comes before `--out` exists; `writeReport` is the exception (a `writeFileSync` failure after `prepareOut` refuses `out-refused` and leaves the marked `--out`). The comment and the Choices paragraph above now say so; no code line changed.
 
 - [ ] **Step 6: Measure every new guard red, then green.** From the repository root. Each mutant is one or more exact replacements, each asserted to match once. The mutant table is written through a quoted heredoc, so no shell expansion touches the code. Every run restores the touched files with `cp`.
 
