@@ -21,6 +21,7 @@ import {
   type LifecycleOutcome, type MirroredLifecycleEvent, type RunState,
 } from '../../shared/api.js';
 import { CCD_LOCK_UNOPENABLE } from '../../shared/ccd-refusal.js';
+import { runNamesSession } from './coord/runBinding.js';
 
 /** How long a presence defer may continue before the reclaim proceeds past it
  *  (spec §5.7, "Presence, and its bound"). Unbounded would be worse than
@@ -395,7 +396,7 @@ export function childReclaimHoldRead(
   const reason = raw.trim();
   if (!candidatesRead.ok) return { kind: 'unmeasured', reason, detail: candidatesRead.detail };
   for (const c of candidatesRead.candidates) {
-    if (c.sessionId !== sessionId && c.runId !== mintingRunId) continue;
+    if (!runNamesSession(c, sessionId) && c.runId !== mintingRunId) continue;
     if (!isTerminalRunState(c.state)) continue;
     const open = holdReason(c.program, c.wave, c.waveOf, c.runId);
     const close = holdReason(c.program, c.wave + 1, c.waveOf, null);
@@ -644,7 +645,7 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
     // A live minting run keeps its child unless it provably moved on to a
     // DIFFERENT one — which is what a re-dispatched run that bound the child it
     // did get looks like. Naming this child, or no session, keeps it.
-    if (run.sessionId === null || run.sessionId === i.sessionId) {
+    if (run.sessionId === null || runNamesSession(run, i.sessionId)) {
       return { eligible: false, why: 'minting-run-open' };
     }
     // …and a planned run inside the spawn-stall window may still be binding.

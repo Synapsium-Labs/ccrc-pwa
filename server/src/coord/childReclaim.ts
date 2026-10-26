@@ -22,6 +22,7 @@ import {
 import { readCcdRefusal, withoutCcdRefusal } from '../../../shared/ccd-refusal.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
+import { runNamesSession } from './runBinding.js';
 import { readSwitches } from '../../../shared/switches.js';
 import {
   CHILD_RUN_ID, LC_REASON_MAX_BYTES, REG_GENERATION_SHAPE, TERMINAL_RUN_STATES, holdReason, type ChildMark,
@@ -711,7 +712,7 @@ export function childReclaimDecision(input: ChildReclaimDecisionInput): ChildRec
   if (input.mark.kind === 'none') return no('not-a-child');
   if (input.mark.kind === 'unreadable') return no('marker-unreadable');
   if (input.minting.kind === 'unreadable') return no('marker-unreadable');
-  if (input.minting.kind === 'absent' || input.minting.sessionId !== input.sessionId) return no('not-a-child');
+  if (input.minting.kind === 'absent' || !runNamesSession(input.minting, input.sessionId)) return no('not-a-child');
   if (!input.siblings.ok) return no('siblings-unreadable');
   if (input.siblings.siblings.length > 0) return no('siblings-open');
   if (input.hasCoordinated === 'unreadable') return no('siblings-unreadable');

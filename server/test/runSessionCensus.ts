@@ -76,6 +76,46 @@ export function equalitySites(root: string = REPO): EqualitySite[] {
   return out;
 }
 
+/** A site the census sees that is NOT a decision about which run a session works: named with the reason, so a new one is a
+ *  deliberate entry and a stale one is red. `text` is the site's own text (`EqualitySite.text`); `count` the number of sites
+ *  with that text in `file` (default 1). ARCH-62 slice 3: the exit's "all through `bindingOf`/`childrenOf`" is about the
+ *  sites that ask which run is a session's; a comparison of a registry row's id, a verb's reported id, the claimant of one
+ *  run row (a compare-and-set or a reviewed run's own coordinator) or a checkpoint row asks something else. */
+export interface NotBindingSite { readonly file: string; readonly text: string; readonly count?: number; readonly why: string }
+
+export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
+  { file: 'server/src/coord/routes.ts', text: 'r.id === sessionId',
+    why: 'a lookup of a REGISTRY record by its id (the approval route\'s child gate): no run is read' },
+  { file: 'server/src/coord/routes.ts', text: 's.sessionId === byId',
+    why: 'a row of the intent checkpoint\'s own session list, matched to the id the intent was declared for: no run is read' },
+  { file: 'server/src/coord/openRun.ts', text: 'c.target!.claimedBy !== c.b.claimedBy',
+    why: 'a review run names the coordinator of the run it reviews: one run row\'s claimant against the request\'s, no session is asked about' },
+  { file: 'server/src/coord/openRun.ts', text: 'x !== c.b.claimedBy',
+    why: 'drops the opener itself from claimantsOfSession\'s answer (a self-claimed run is admitted, D-3012): the binding is decided in claimantsOf' },
+  { file: 'server/src/coord/dispatchDecide.ts', text: 'r.id === f.sessionId',
+    why: 'a lookup of a REGISTRY record by its id, to measure the wrapper and identity of the session: no run is read' },
+  { file: 'server/src/coord/closeDecide.ts', text: 'fresh.run.claimedBy === f.claimedBy',
+    why: 'the sweep\'s compare-and-set: the claimant of ONE re-read run must still be the one the sweep measured, whichever session works it' },
+  { file: 'server/src/coord/childReclaim.ts', text: 'v.id !== sessionId', count: 2,
+    why: 'a ccd verb\'s JSON answer must name the session the server asked about: validation of an adapter reply, no run is read' },
+  { file: 'server/src/childReclaimSweep.ts', text: 'a.sessionId === sessionId',
+    why: 'an attention row of the feed names the session it is about: an alert\'s subject, no run is read' },
+  { file: 'server/src/coord/childReclaim.ts', text: 'v.reclaimed !== sessionId',
+    why: 'the reclaim verb\'s JSON answer must name the session the server asked it to reclaim: validation of an adapter reply, no run is read' },
+];
+
+/** The sites that still decide a binding by hand: every site but the `NOT_BINDING_SITES` ones. */
+export function unroutedSites(sites: readonly EqualitySite[], notBinding: readonly NotBindingSite[] = NOT_BINDING_SITES): EqualitySite[] {
+  const budget = new Map(notBinding.map((n) => [`${n.file}\u0000${n.text}`, n.count ?? 1]));
+  return sites.filter((s) => {
+    const k = `${s.file}\u0000${s.text}`;
+    const left = budget.get(k) ?? 0;
+    if (left === 0) return true;
+    budget.set(k, left - 1);
+    return false;
+  });
+}
+
 /** The count per file, files with no site left out. */
 export function countsByFile(sites: readonly EqualitySite[]): Record<string, number> {
   const out: Record<string, number> = {};
@@ -116,3 +156,33 @@ export const ATTRIBUTE_READS: readonly string[] = ['sessionProject', 'strandedCl
  *  COUNT among the store's binding readers (orchestrator ruling on ARCH-62 slice 2); slice 4 folds them onto `run(id)`.
  *  Named here so the census number is honest until then: the session-keyed readers plus these. */
 export const RUN_KEYED_READS: readonly string[] = ['resolveCoordinator', 'resolveWorker'];
+
+/** A caller of `runNamesSession` outside `runBinding.ts`. The helper is `run.sessionId === id` behind a name, which the
+ *  equality detector cannot see, so wrapping a site in it must not lower the census silently: each caller is pinned here with
+ *  its exact count and a reason. These are id-string decisions by name, NOT routing through `bindingOf`/`childrenOf`; the
+ *  exit measurement of the final routing slice accounts for them. */
+export interface NamesSessionCaller { readonly file: string; readonly count: number; readonly why: string }
+
+export const RUN_NAMES_SESSION_CALLERS: readonly NamesSessionCaller[] = [
+  { file: 'server/src/coord/childReclaim.ts', count: 1,
+    why: 'the minting run of a child marker is ONE run with no series in hand: it names the session or it does not (not-a-child)' },
+  { file: 'server/src/childReclaimSweep.ts', count: 2,
+    why: 'a hold candidate and a minting run are single runs with no series in hand: the sweep asks only whether the run names the session' },
+];
+
+/** The calls of `runNamesSession` in one source text (an import is not a call). */
+export function runNamesSessionCallsOf(text: string, file: string): number {
+  return parseSource(text, file).calls.filter((c) => c.name === 'runNamesSession').length;
+}
+
+/** The callers of `runNamesSession` under `server/src` outside `runBinding.ts`: file -> count. */
+export function runNamesSessionCallers(root: string = REPO): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const f of tsFiles(root, 'server/src')) {
+    const file = path.relative(root, f).split(path.sep).join('/');
+    if (file === 'server/src/coord/runBinding.ts') continue;
+    const n = runNamesSessionCallsOf(readFileSync(f, 'utf8'), file);
+    if (n > 0) out[file] = n;
+  }
+  return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)));
+}
