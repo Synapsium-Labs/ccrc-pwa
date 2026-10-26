@@ -368,7 +368,7 @@ async function closeWorkRun(
     line = verdict.plan.line;
   }
   // Decide and validate the hold before any close-path write: `foldPrLineage` persists measured history.
-  const sibRead = coord.openRunsForSession(sessionId, id);
+  const sibRead = coord.bindingsOf(sessionId).worker({ excludeRunId: id });
   const act = await decideClose({ step: 'close', run, siblings: sibRead, final, state, archive: plan.archive,
     gate: () => childGateAtClose(deps, run, sessionId, sibRead, final, state, line) });
   if (act.kind !== 'go') return stopped(deps, act);
