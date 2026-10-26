@@ -2671,7 +2671,6 @@ export function mainThreadTurns(facts) {
 /** Step 0b's turn bound (W2-D57; coordinator ruling, as revised). `held` is true ONLY when the result event shows that
  *  the max-turns limit stopped the run (its subtype is MAX_TURNS_STOP_SUBTYPE) AND the run made at most maxTurns
  *  main-thread assistant turns (mainThreadTurns; R1). More than maxTurns assistant turns is false: the bound did
-```
  *  not hold, whatever the result event says. A run that ended within the bound for any other reason (another subtype,
  *  or no result event) is 'unmeasured', never true. `turns` is the assistant turn count the verdict read; the result
  *  event's num_turns and subtype (null without one) are recorded beside it, so a reader sees why. No tool-call count
@@ -2714,13 +2713,20 @@ function entriesNamedBy(root, sessionId) {
   return found.sort();
 }
 
+/** persistenceLeft's argument rule for the config dir: an absolute path. A relative one is the caller's defect. */
+function persistenceConfigDirOk(configDir) {
+  if (typeof configDir !== 'string' || !path.isAbsolute(configDir)) throw new TypeError(`persistenceLeft: configDir ${JSON.stringify(configDir)} is not absolute`);
+}
+/** A string that is no session id (persistenceLeft's rule): empty, holding a slash, or starting with a dot. */
+const sessionIdMalformed = (id) => id === '' || id.includes('/') || id.startsWith('.');
+
 /** Step 0b's persistence check (W2-D57): what a `--no-session-persistence` run left under `<configDir>/projects/`.
  *  `transcripts`: entries named by the init event's session_id anywhere under it; `projectDir`: whether
  *  `projects/<slug of the run's cwd>` exists, whatever its type. A null session id leaves the transcript half
  *  unmeasured, so `left` is true. An lstat or readdir failure other than ENOENT throws, never reads as clean. */
 export function persistenceLeft({ configDir, sessionId, cwd }) {
-  if (typeof configDir !== 'string' || !path.isAbsolute(configDir)) throw new TypeError(`persistenceLeft: configDir ${JSON.stringify(configDir)} is not absolute`);
-  if (sessionId !== null && (typeof sessionId !== 'string' || sessionId === '' || sessionId.includes('/') || sessionId.startsWith('.'))) {
+  persistenceConfigDirOk(configDir);
+  if (sessionId !== null && (typeof sessionId !== 'string' || sessionIdMalformed(sessionId))) {
     throw new TypeError(`persistenceLeft: sessionId ${JSON.stringify(sessionId)} is not a session id`);
   }
   const projects = path.join(configDir, 'projects');
@@ -2737,10 +2743,16 @@ export function persistenceLeft({ configDir, sessionId, cwd }) {
 
 /** W2-5b2 Task 1: persistenceLeft as step 0b records it, `{left, transcripts, project_dir}`. An lstat or readdir failure
  *  under projects/ (an errno, which persistenceLeft throws so it never reads as clean) is answered as left, with the errno
- *  named as `unmeasured`: the run is recorded and fails closed after --out, never an exit 1 (D-6309's rule). Any other
- *  throw (a TypeError for a bad argument) is a defect and stays one.
+ *  named as `unmeasured`: the run is recorded and fails closed after --out, never an exit 1 (D-6309's rule). So is a run
+ *  whose stream gave no session id (`unmeasured: 'no-session-id'`) or one that is none (`'session-id-malformed'`: empty,
+ *  holding a slash, or starting with a dot): that id is the spawned run's own data, so no transcript half was read and
+ *  neither a clean `left: false` nor a `fail` for a leak that was never measured. Any other throw (a TypeError for a bad
+ *  argument of the driver's own) is a defect and stays one (F2, F3; D-6694).
  *  @param {{ configDir: string, sessionId: string | null, cwd: string }} o */
 export function persistenceMeasured(o) {
+  persistenceConfigDirOk(o.configDir);
+  const idWord = o.sessionId === null ? 'no-session-id' : typeof o.sessionId === 'string' && sessionIdMalformed(o.sessionId) ? 'session-id-malformed' : null;
+  if (idWord !== null) return { left: true, transcripts: [], project_dir: null, unmeasured: idWord };
   let l;
   try {
     l = persistenceLeft(o);
@@ -7292,9 +7304,11 @@ function settleAnswers(ctx, states) {
  *  `<section>/answers/<qid>.<arm>.json` settleAnswers wrote, projected as {qid, arm, outcome, reply, correct}: `outcome`
  *  the record's arm_state, `reply` the answered attempt's raw result text (the judge redacts it, W2-D54), `correct` its
  *  labelCorrect flag. No directory is no record. A file it cannot read, or one that is not this section's answer record
- *  under its own name, refuses out-refused (D-5986, D-6309's rule).
- *  @param {string} out  @param {'pilot' | 'quiz'} section */
-export function readAnswerRecords(out, section) {
+ *  under its own name, refuses out-refused (D-5986, D-6309's rule); `malformedWord` names the word of the second kind of
+ *  refusal alone (not JSON, not an answer record), out-refused for the judge's read of its own --out and input-invalid for
+ *  the report, whose gathered answer records are an input like the others (A6, D-6694).
+ *  @param {string} out  @param {'pilot' | 'quiz'} section  @param {'out-refused' | 'input-invalid'} [malformedWord] */
+export function readAnswerRecords(out, section, malformedWord = 'out-refused') {
   armSectionOk('readAnswerRecords', section);
   const rel = `${section}/answers`;
   const st = lstatOrNull(out, rel);
@@ -7313,9 +7327,9 @@ export function readAnswerRecords(out, section) {
     try {
       r = JSON.parse(read.bytes.toString('utf8'));
     } catch {
-      refuse('out-refused', `${rel}/${n} is not JSON`);
+      refuse(malformedWord, `${rel}/${n} is not JSON`);
     }
-    if (!plainObject(r) || r.kind !== ANSWER_KIND || r.section !== section || `${r.qid}.${r.arm}.json` !== n) refuse('out-refused', `${rel}/${n} is not an answer record`);
+    if (!plainObject(r) || r.kind !== ANSWER_KIND || r.section !== section || `${r.qid}.${r.arm}.json` !== n) refuse(malformedWord, `${rel}/${n} is not an answer record`);
     return { rel: `${rel}/${n}`, sha256: sha256Hex(read.bytes), record: r };
   });
 }
@@ -8523,9 +8537,11 @@ function pilotOutFile(out, rel, kind, recordSha256, writer) {
  *  Number.MAX_SAFE_INTEGER is the driver's own record (W2-5b1's F9 clamps only `tokens`), so it is not refused here:
  *  `rawResult` and `rawAssistant` carry it as written, for Q7's relation, and `result` and `assistant` read it at the
  *  driver's clamp (`chargedReading`). The clamp covers a run.json read on its own, without the ledger (a fidelity or
- *  report path). On a pilot --out such a run's charge is MAX_SAFE_INTEGER on the ledger too, and the next line sums
- *  past the safe range, so pilot-result refuses `out-refused` `spend.jsonl malformed` at spendLinesOf before any
- *  run.json is read (D-6309's fail-closed rule). A non-integer, negative or non-number reading still refuses. */
+ *  report path). On a pilot --out such a run's charge is MAX_SAFE_INTEGER on the ledger too. spendLinesOf refuses
+ *  `out-refused` `spend.jsonl malformed` once the ledger's running sum passes the safe range, which any other line that
+ *  charges more than 0 (before it or after it) brings about, and pilot-result reads the ledger before any run.json
+ *  (D-6309's fail-closed rule). A ledger where every other line charges 0 still sums safely, so this clamp is what keeps
+ *  that run's figures at the safe range. A non-integer, negative or non-number reading still refuses. (A8, D-6694.) */
 export function runUsageOf(out, name) {
   const read = readPlain(path.join(out, `${name}.run.json`), OUT_JSON_CAP);
   if (read.state === 'absent') return null;
@@ -9034,7 +9050,7 @@ async function fidelityRepilotCommand(flags, driverEnv, deps) {
   const r = run.record;
   refuseUnusableInputs(home, flags.out, [['arm-model', r.arm_model]]);
   const tolerance = decimalOf(r.pilot?.tolerance);
-  refuseRangeRows([['pilot.tolerance', tolerance !== null]]);
+  refuseRangeRows([['pilot.tolerance', tolerance !== null]]);   // @anchor repilot-tolerance-range
   const rs = openReplayStore(home);   // the run's one store open, read-only, before --out (D-6311)
   try {
     const node = armNodeOf(run, rs.storeId);
@@ -9334,7 +9350,7 @@ function readJudgeInputFile(dir, storeId, id, entry) {
  *  @returns {string} */
 export function handcheckSheetText({ recordSha256, frozenSha256, rubricId, items }) {
   if (!RUBRIC_IDS.includes(rubricId)) throw new TypeError(`handcheckSheetText: rubric ${JSON.stringify(rubricId)} is not one of ${RUBRIC_IDS.join(', ')}`);
-  const quote = (text) => text.split('\n').map((l) => (l === '' ? '|' : `| ${l}`));
+  const quote = (text) => text.split(ANSWER_FIELD_LINE_BREAK).map((l) => (l === '' ? '|' : `| ${l}`));   // A1: every break the scans know
   const lines = [
     '# ccrc history W2 hand-check sheet (W2-D81): one block per item, in id order.',
     `# record ${recordSha256}`,
@@ -9405,7 +9421,8 @@ export function parseHandcheckLabels(text, plan) {
 }
 
 /** The label file by its sha, as every input is read (loadInputBytes: outside any git tree, the sha before a byte is
- *  decoded), decoded as strict UTF-8 (`labels not-utf8`), then parseHandcheckLabels. Task 5's report calls it.
+ *  decoded), decoded as strict UTF-8 (`labels not-utf8`), then parseHandcheckLabels. A leading BOM is dropped by the decoder
+ *  (the operator's editor may write one), so the strict grammar never sees it (A2, D-6694). Task 5's report calls it.
  *  @param {string} p  @param {string} sha256  @param {HandcheckPlan} plan  @returns {Map<string, string>} */
 export function readHandcheckLabels(p, sha256, plan) {
   const { bytes } = loadInputBytes('labels', p, sha256);
@@ -9529,7 +9546,10 @@ export function droppedOf(changed, abStates) {
 }
 
 /** W2-D85: live uptake per window and per turn, by arm and by the window's producer (W2-D15), with the pooled stratum, over
- *  the gate's measured windows of every family not dropped (W2-D23, V1). A share with nothing counted is null. Pure.
+ *  the gate's measured windows of every family not dropped (W2-D23, V1). A share with nothing counted is null. A cell carries
+ *  no `unmeasured` count: assembleReports keeps only the measured windows in a family's `windows` and moves the rest to its
+ *  `excluded.unmeasured`, keyed by store, family and boundary with no producer, so no per-producer count could be true here.
+ *  The count lives in the report's `live_excluded.unmeasured` (F1, D-6694). Pure.
  *  @param {Array<{key: string, arm: string, windows: Array<{producer: string}>}>} families assembleReports' families
  *  @param {ReadonlySet<string>} dropped */
 export function liveUptakeOf(families, dropped) {
@@ -9547,7 +9567,8 @@ export function liveUptakeOf(families, dropped) {
   }
   return Object.fromEntries(RECALL_ARMS.map((arm) => [arm, Object.fromEntries([...cells[arm].keys()].sort(cmpUnit).map((p) => {
     const t = windowTotals(cells[arm].get(p));
-    return [p, { ...t, per_window: shareOf(t.with_call, t.windows), per_turn: shareOf(t.calls, t.turns) }];
+    return [p, { windows: t.windows, with_call: t.with_call, calls: t.calls, turns: t.turns,
+      per_window: shareOf(t.with_call, t.windows), per_turn: shareOf(t.calls, t.turns) }];
   }))]));
 }
 
@@ -9823,7 +9844,7 @@ function nodeAnswersOf({ summary, storeId, recordSha256, entries }) {
   const files = [];
   const records = [];
   const stamps = new Set();
-  for (const item of readAnswerRecords(root, 'quiz')) {
+  for (const item of readAnswerRecords(root, 'quiz', 'input-invalid')) {
     const { rel, sha256, record: r } = item;
     const e = mine.get(r.qid);
     if (e === undefined || !RECALL_ARMS.includes(r.arm) || r.store_id !== storeId || r.ccrc_id !== e.ccrc_id || r.generation !== e.generation
