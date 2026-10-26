@@ -5,6 +5,7 @@ import path from 'node:path';
 import { PROVIDER_IDS } from '../../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from '../helpers.js';
 import { ALL, BASH, ROOTS, ccrcRoot, codeLines, here, holdersOf, prose, rel, sources } from './helpers.js';
+import { accountMarkerWriters, disabledProjectionWriters } from '../census-w5/accountMarkers.js';
 
 
 // Increment 1a (docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md):
@@ -1359,5 +1360,21 @@ describe('one upstream .cc-secrets/<id>-oauth.env fallback, in exactly five bash
       .toBe('<dir>/<id>-oauth.env');
     expect(shape(ccdSrc[0]!), 'ccd stats a path the writer does not create')
       .toBe('<dir>/<id>-oauth.env');
+  });
+});
+
+// NO ROSTER PROJECTION (D-7048; ARCH-72, Task C5a; spec K16). `$REG/<lane>-disabled` is an operator switch, not a
+// projection of the roster's kind fields (`homeAble`, a report's `disabled`): collapsing them would make a measured,
+// working lane permanently unplaceable and turn the UI's Enable control into a roster write (`_acct_mark_off`'s header).
+// Its writers are exactly the bodies `accountMarkerWriters('disabled')` names (3 at base; C5c takes them to 1); no
+// other file under `deploy/`, `shared/` or `ccd/` writes a lane's switch, in bash, JS/TS or Python. The writer set is
+// already at its target, so the count is pinned now at 0 (spec §5.1 rule 3). The behavioural half, a hand-raised switch
+// surviving every verb that does not name its lane, is in `account-markers-pin.test.ts`.
+describe('the disabled switch is never projected from the roster (D-7048)', () => {
+  it('no file under deploy/, shared/ or ccd/ writes a <lane>-disabled path outside the named writer bodies: 0', () => {
+    const named = accountMarkerWriters('disabled').map((s) => s.name);
+    expect(named.length, 'the named writer bodies are found at all').toBeGreaterThan(0);
+    const extra = disabledProjectionWriters();
+    expect(extra.map((s) => `${s.name}  ${s.text.trim()}`), `named writers: ${named.join(', ')}`).toEqual([]);
   });
 });
