@@ -1,7 +1,7 @@
 // Fleet zustand store: mirrors the `/ws/fleet` stream — full session
 // snapshots on every change plus fleet-wide notices (account swaps etc.).
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { FLEET_PROTO, isPoolsEnforcement, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
+import { FLEET_PROTO, isPoolsEnforcement, type AccountsResponse, type CoordStatus, type DelegationProjectionWire, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot, snapshotRefused } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
@@ -198,6 +198,17 @@ export interface FleetState {
    *  depth `runs`/`fleet` take: a member this build cannot name is the model's
    *  to count, never this boundary's to drop. */
   divergenceCensus: DivergenceCensus | null;
+  /** The delegation broker's projection (wave 4, spec §5.8), off the fleet-level `delegation` frame.
+   *
+   *  `null` means UNAVAILABLE, never "no delegated work" (spec §5.13): no frame on THIS connection yet (an older
+   *  server, or a lane with no projection), or the server withdrew it (`delegation: null`). No `delegationFrameSeen`
+   *  twin, for `pools`' reason: a measured frame is never an empty value that could be mistaken for silence.
+   *
+   *  PER CONNECTION, unlike `pools`/`divergenceCensus`: `onOpen` clears it, so a reconnect to an older server reads
+   *  unavailable rather than the last server's rows. NOT hydrated from, or written to, the offline snapshot, for
+   *  `pools`' reason. Envelope-level validation only; a member word this build cannot name is `readDelegation`'s
+   *  (`fleet/delegationWords.ts`) to re-file, never this boundary's to drop. */
+  delegation: DelegationProjectionWire | null;
   /** The LAST successful `/api/projects` read, as `FleetScreen` made it —
    *  lifted here so the session view can label a repo (R3) without a second
    *  agent round trip per project on every mount. `null` = no read yet on
@@ -308,6 +319,15 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
   // present-but-wrong-typed proto/min is rejected, not coerced — a `hello`
   // this parser cannot trust is exactly the kind of frame absence-permits
   // exists to be safe against, so it is dropped like any other unknown one.
+  // Delegation broker wave 4: the envelope only. `null` is the server's withdrawal and is a frame, not a gap.
+  if (t === 'delegation') {
+    if (!('delegation' in m)) return null;
+    const d = (m as { delegation?: unknown }).delegation;
+    if (d === null) return m as FleetMsg;                                   // the server's withdrawal: unavailable again
+    if (isRecord(d) && typeof d.asOf === 'string'
+      && Array.isArray(d.activities) && Array.isArray(d.leases) && Array.isArray(d.unowned)) return m as FleetMsg;
+    return null;
+  }
   if (
     t === 'hello'
     && typeof (m as { proto?: unknown }).proto === 'number'
@@ -475,6 +495,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       pools: null,
       // Not hydrated either, for the same reason — see the field's docstring.
       divergenceCensus: null,
+      // Unavailable until this connection's first frame, and never hydrated — see the field's docstring.
+      delegation: null,
       projects: null,
       roster: snapshot?.roster ?? [],
       // Never hydrated: the snapshot holds no lane, by design (G15).
@@ -623,10 +645,13 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               // disagree. The whole census replaces the last one: the server
               // sends it entire on every change, never a delta.
               set({ divergenceCensus: { items: msg.divergences, at: Date.now() } });
+            } else if (msg.type === 'delegation') {
+              set({ delegation: msg.delegation });
             }
           },
           onState: (conn) => set({ conn }),
-          onOpen: () => { askCatchUp(); askDurableFeed(); },
+          // `delegation` is per connection: a reconnect reads unavailable until the new server speaks.
+          onOpen: () => { set({ delegation: null }); askCatchUp(); askDurableFeed(); },
           makeSocket: deps.makeSocket,
         });
         socket.start();
