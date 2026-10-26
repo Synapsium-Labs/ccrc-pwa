@@ -2516,6 +2516,38 @@ describe('sweepStalls: coord-blocked (D-6942)', () => {
       .toEqual([`stall-${COORD}-coord-blocked-1-${MAIL_AT}`, `stall-${COORD}-coord-blocked-1-${MAIL2}`]);
   });
 
+  // The lane keeps the episode between sweeps (`stallCoordEpisodes`). With two mails held, the push goes out keyed on
+  // the oldest; once that one is delivered the second is the oldest held mail, and only the remembered episode keeps
+  // the key, so the same episode never pushes rung 1 twice.
+  const deliveryIds = (coord: CoordStore): number[] =>
+    (coord.db.prepare('SELECT id FROM mail_deliveries WHERE toId = ? ORDER BY id').all(COORD) as unknown as { id: number }[]).map((r) => r.id);
+
+  it('the oldest held mail delivered while a second stays queued: still one rung-1 push, under the first key', async () => {
+    const { coord, w, sent } = await setup();
+    at(MAIL_AT + 60_000);
+    queue(coord, 'status');
+    await sweepThrough(w, sessions, [], tickWith(), FIRE_AT, FIRE_AT + STALL_SWEEP_MS);
+    coord.markDelivered(deliveryIds(coord)[0]!, FIRE_AT + 2 * STALL_SWEEP_MS);
+    await sweepThrough(w, sessions, [], tickWith(), FIRE_AT + 2 * STALL_SWEEP_MS, FIRE_AT + 6 * STALL_SWEEP_MS);
+    expect(blockedPushes(sent).map((p) => p.tag)).toEqual([`stall-${COORD}-coord-blocked-1-${MAIL_AT}`]);
+  });
+
+  it('the prune drops the remembered episode once the coordinator is no longer judged: back under a claim, it keys afresh', async () => {
+    const { coord, w, sent } = await setup();
+    const MAIL2 = MAIL_AT + 60_000;
+    at(MAIL2);
+    queue(coord, 'status');
+    await sweepThrough(w, sessions, [], tickWith(), FIRE_AT, FIRE_AT + STALL_SWEEP_MS);
+    coord.markDelivered(deliveryIds(coord)[0]!, FIRE_AT + 2 * STALL_SWEEP_MS);
+    // One sweep with no run claimed by the coordinator: it is not judged, so the prune forgets its episode.
+    coord.db.prepare("UPDATE runs SET claimedBy = '' WHERE claimedBy = ?").run(COORD);
+    await sweepThrough(w, sessions, [], tickWith(), FIRE_AT + 2 * STALL_SWEEP_MS, FIRE_AT + 2 * STALL_SWEEP_MS);
+    coord.db.prepare("UPDATE runs SET claimedBy = ? WHERE claimedBy = ''").run(COORD);
+    await sweepThrough(w, sessions, [], tickWith(), FIRE_AT + 3 * STALL_SWEEP_MS, FIRE_AT + 6 * STALL_SWEEP_MS);
+    expect(blockedPushes(sent).map((p) => p.tag))
+      .toEqual([`stall-${COORD}-coord-blocked-1-${MAIL_AT}`, `stall-${COORD}-coord-blocked-1-${MAIL2}`]);
+  });
+
   it('a delivered mail whose replays a busy coordinator gates is never held: no push through the escalation window', async () => {
     // The coordinator has seen it: the mail lane delivered it, and every MAIL_REPLAY_MS replay of the unacked row is
     // gated while the coordinator stays busy, with `noteGate` keeping `gateSince` unbroken across the repeats.
