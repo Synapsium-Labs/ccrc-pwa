@@ -285,7 +285,9 @@ never put in the environment.
 (0600, the bridge's only non-secret output), `store` = `reasoning.sqlite` (0600, plus sqlite's `-wal`/`-shm`),
 `recordings` = `recordings/` (0700, written only while `record-streams` exists in the lane directory, Task 18).
 Markers with no writer in the tree: `bridge-instructions` (send `system` as top-level `instructions`, D11's per-lane
-switch) and `record-streams`; and Task 18's `liveprobe-allowed` and `liveprobe.count`. Removal reaps all four.
+switch) and `record-streams`; and Task 18's `liveprobe-allowed`. Task 18's probe writes `liveprobe.count` (through
+`liveprobe.count.tmp`, renamed over it). Removal reaps those four files, and `liveprobe.count.tmp` and the stats file's
+`.tmp`, which a killed write leaves.
 
 **Routes** (Task 8): `POST /v1/messages` (with or without `?beta=true`), `POST /v1/messages/count_tokens`,
 `GET /v1/models`, `GET /ccgpt/lane` (no key). The bridge's lane answer is `{"lane": <id>, "mode": "direct"}`, never
@@ -1799,7 +1801,10 @@ waves 1 and 2; `ccrc doctor` is clean for it; its access token is fresh (`ccrc c
 .auth`), because the live probe never refreshes in `litellm` mode.
 
 **2. The first live step: at most six tiny requests** (D27; spec §5). `touch ~/.ccrc/codex/lane-b/liveprobe-allowed`,
-then `python3 -I ~/ccrc/ccd/codexbridge/liveprobe.py --lane lane-b --step <n>`, one at a time:
+then `CCGPT_CCRC_VERSION="$(ccrc version | sed -n 's/^version //p')" python3 -I ~/ccrc/ccd/codexbridge/liveprobe.py --lane lane-b
+--step <n>`, one at a time. The prefix gives the probe the version the bridge's start sends, so step 1 measures the
+flip's User-Agent: `ccrc version` prints a `version` line only when the box's stamp names one, and without it the probe
+sends `dev`, as the bridge does:
 1. a one-word reply: `originator: ccrc` accepted, developer-first with no `instructions`, the usage fields, the
    response header names (`x-codex-*`, `openai-model`, `x-request-id`);
 2. two parallel tool calls with `parallel_tool_calls: true` and top-level tools;
@@ -1893,9 +1898,9 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
 
 ## Deviations found
 
-Every entry carries the number the controller issued (D-6410 to D-6431 at plan time, D-6804 to D-6839 for wave 1, D-6862
-to D-6907 and D-6921 for wave 2). A further departure found while executing is written `D-TBD-<slug>` and named in the task's
-report.
+Every entry carries the number the controller issued (D-6410 to D-6431 at plan time, D-6804 to D-6839 for wave 1,
+D-6862 to D-6907 and D-6921 for wave 2, D-6944 to D-6963 for wave 3). A further departure found while executing is
+written `D-TBD-<slug>` and named in the task's report.
 
 ### D-6410 — `end_turn:false` is continued upstream, never `pause_turn`
 
@@ -2806,7 +2811,8 @@ report.
   and the cases to `server/test/ccrc-install-codex.test.ts:490`, :501, :512 (retitled by the whole-wave fix round) and
   :982-989. Because #1293 split the doctor suite, Task 13's cases are in `server/test/ccrc-doctor-codex.test.ts:5057`
   and its helpers in `server/test/ccrc-doctorFixture.ts:1905`, imported on their own line
-  (`ccrc-doctor-codex.test.ts:19`). After the second merge of main, Tasks 11 and 12's bridge-tier describe moved
+  (`ccrc-doctor-codex.test.ts:19`). Task 17's drift cases are in `server/test/ccrc-doctor-codex.test.ts:5466` (ruling
+  W3-R1). After the second merge of main, Tasks 11 and 12's bridge-tier describe moved
   unchanged to `server/test/ccrc-codex-bridge.test.ts:30`, and the helpers the split files share moved, exported, to
   `server/test/ccrcCodexFixture.ts`. Plan 2b-2's lifecycle and login describes, with the fixture-contract describe
   before them, moved unchanged to `server/test/ccrc-codex-lifecycle.test.ts:108` and :2039, so `ccrc-codex.test.ts`
@@ -3183,3 +3189,320 @@ report.
 - **Cost if wrong:** If a live box ever needs another auth endpoint, the class is wrong and the name moves to
   `CCRC_SETTINGS` with a `_ccrc_knob` read. Until then the entry names one read the census now sees, and C5 still reds
   the next name nobody classed.
+
+### D-6944 — a restart clears the unrecognised and overflow markers
+
+- **Departs from:** Task 5's `Stats` load (plan :834-840), which carries `unexplained` across a restart and drops from
+  it only a name `known.KNOWN` now covers.
+- **What changed:** `_load` also drops `unrecognised` and `overflow` from each carried family and marks the load
+  changed, so the constructor rewrites the file at the restart (`ccd/codexbridge/stats.py:246-248`, module docstring
+  :32-37). The `names` counters are carried whole, so a family already at NAMES_MAX maps its next new name to
+  `overflow` again (`_slot`, :259-263), and either marker comes back only when the bridge meets such a name again. The
+  case is at `server/test/codex-bridge-count-stats.test.ts:396`, with row Z1.
+- **Why:** Neither marker is a name a change to known.py could ever explain, so a carried one held Task 17's WARN for
+  good, and the 7-day watch's "no unexplained new name" could never read clean again after one.
+- **Cost if wrong:** A restart forgets that a marker was met until the bridge meets such a name again, so a WARN read
+  only after a rollout can miss it. The `names` counters still hold the markers' counts.
+
+### D-6945 — the drift WARN carries a remedy line, with a clause for each marker by family
+
+- **Departs from:** Task 17's Interfaces (plan :1668-1672) give the WARN as one sentence with no remedy, but every
+  doctor finding is a sentence plus a remedy line. The plan says nothing of the `unrecognised` and `overflow` markers
+  a list can hold.
+- **What changed:** The WARN line is the plan's sentence, verbatim (`ccd/ccrc-doctor-checks:7759`), and its remedy
+  (:7756) says to read each name in the upstream source and explain it in `ccd/codexbridge/known.py` in a reviewed
+  change. When the list holds a marker, `_dr_cx_drift_marker` (:7779-7797) adds a clause per kind of family it was met
+  in (:7742-7748): an event, item, error-code or incomplete-reason name is read in a recording made while
+  `record-streams` is in the lane directory; a responseHeader name the same way, but only a 2xx answer's head is
+  recorded; and a request-side or unknown family's name from the client's request, never from `record-streams`; each
+  clause ends by saying the bridge's restart clears the marker, and a marker is never added to known.py. The clauses
+  are pinned at `server/test/ccrc-doctor-codex.test.ts:5497-5502`, with cases at :5582, :5737, :5773 and :5796 (row
+  Z2).
+- **Why:** A marker is what the bridge writes for a name outside NAME_RE or past NAMES_MAX
+  (`ccd/codexbridge/stats.py:65`, :70), so adding it to known.py would explain nothing. The bridge records only a 2xx
+  answer's stream and head (`ccd/codexbridge/server.py:776-777`), and request-side names come from Claude Code's
+  request (`inbound.py`, `server.py:629`), which no recording holds, so a remedy that always sent the operator to
+  `record-streams` would point at a file that cannot show the name.
+- **Cost if wrong:** Only remedy text changes, pinned in one describe block, and a rename of `record-streams` must
+  update the clauses too. The family split is spelled in the doctor's own `case` (:7742-7746), unpinned against
+  known.KNOWN, so a new family falls to the request-side clause, the direction that never sends the operator to a
+  recording.
+
+### D-6946 — the drift list counts distinct pairs and prints the first 32
+
+- **Departs from:** Task 17's WARN, `<n> name(s) … <family>:<name>, …` (plan :1668), which says neither whether a
+  repeated pair is counted twice nor how long the list may grow.
+- **What changed:** A repeated `<family>:<name>` is listed once, including several names that each print as
+  `unrecognised`, and `<n>` counts distinct pairs (`ccd/ccrc-doctor-checks:7749-7751`; the header says so at
+  :7680-7682). The line prints the first `shown=32` (:7697, :7754), then `, … and <n-32> more` (:7755). Cases are at
+  `server/test/ccrc-doctor-codex.test.ts:5582` and :5773.
+- **Why:** A real `Stats` file never repeats a pair; only a hand-made file can, and there collapsed sentinels would
+  otherwise read as many names. The bridge caps each family at NAMES_MAX names plus `overflow`, so without a cap one
+  lane's line could carry about 2,570 names.
+- **Cost if wrong:** 32 is the doctor's own number, with no counterpart in stats.py, so the operator sees the rest
+  only as a count and reads the stats file for them. A different cap is a one-line change, pinned by row CQ4-cap.
+
+### D-6947 — a stats file the row cannot read is the drift row's unmeasured WARN
+
+- **Departs from:** The Global Constraints' "Two new WARNs" (plan :181-183) and Task 17's single WARN (plan :1668),
+  neither of which says what happens when a stats file is present but cannot be read as the bridge's.
+- **What changed:** The drift row WARNs `… cannot be told: its stats file <p> cannot be read as the bridge's (<why>) —
+  unmeasured, never read as no unexplained name` for a regular stats file whose size cannot be measured, that is
+  larger than READ_MAX, that this user cannot open, that lists more names than a bridge writes, or that is not one
+  version-1 JSON document of this lane with an `unexplained` object (`ccd/ccrc-doctor-checks:7707-7737`); it prints
+  whatever else the codex check finds, and an absent file is still no finding (:7706). Each why has its own remedy: a
+  `stat` check (:7729); make the file readable by the user the bridge and doctor run as, chowning it first if another
+  user owns it, then `chmod 600` (:7731); or stop, move aside and start (:7733). Cases are at
+  `server/test/ccrc-doctor-codex.test.ts:5651-5772`.
+- **Why:** Without this WARN, a broken stats file reads the same as "no unexplained name", which is exactly the
+  question the 7-day watch asks (plan :1670-1671). The WARN is one row in two forms, the way Task 13's bridge-tier
+  stale row has its "cannot be told" form, so it stays inside the two-WARN limit if that limit counts rows.
+- **Cost if wrong:** If the limit counts sentences, the same why and remedy move to `_dr_cx_fail` with no other
+  change, and a broken stats file then fails the codex check.
+
+### D-6948 — the drift row reads within the bridge's own bounds, pinned to stats.py
+
+- **Departs from:** Task 17 (plan :1666-1676), which names NAME_RE as the only bound on what the row reads.
+- **What changed:** The row never runs jq on a file larger than `read_max=$(( 16 * 2**20 ))`, and it calls a file that
+  lists more than `families * (names_max + 1)` names (10 x 257) unmeasured without walking it
+  (`ccd/ccrc-doctor-checks:7697`, :7710, :7715-7717). Three pin cases hold the doctor's NAME_RE, READ_MAX, NAMES_MAX
+  and family count equal to `ccd/codexbridge/stats.py:65`, :84, :70 and known.KNOWN
+  (`server/test/ccrc-doctor-codex.test.ts:5811`, :5819, :5828), and the case at :5737 walks a file at exactly the
+  bound.
+- **Why:** The doctor then reads exactly the files a real `Stats` writes. A hand-made file cannot make it parse an
+  unbounded document or walk an unbounded list in bash.
+- **Cost if wrong:** Three numbers are spelled in bash beside their Python owner, and the pins go red when either side
+  moves, so a change costs one edit on each side. The row is stricter than the bridge: a file the bridge would still
+  load, with too many names, reads as unmeasured.
+
+### D-6949 — `make_streams.py --from-recording` waits for the first recording
+
+- **Departs from:** Task 18's scrubber (plan :1694-1695): "Its output is a corpus stream (Task 3's format), with its
+  expectation written by `make_streams.py`'s `--from-recording`."
+- **What changed:** Ruling W3-R2: the flag is not built, and `server/test/fixtures/codexbridge/make_streams.py` is
+  unchanged. Instead, the case at `server/test/codex-bridge-live-tools.test.ts:481` feeds the scrubber's output to the
+  replay suite's reader (the driver's `reduce` op, in 13-byte chunks) and asserts a whole parse, and
+  `ccd/codexbridge/record.py:30-31` says a recording's `expect.json` is written by hand in the reviewed change that
+  adds it.
+- **Why:** No recording exists before the first live step. The runbook already scrubs recordings into the corpus "in a
+  reviewed change" (plan :1817-1818), which is where a generator can be measured against a real stream, and
+  make_streams.py is not in Task 18's Files.
+- **Cost if wrong:** A small follow-up at the live step: either the first recording's expectation is written by hand,
+  or the flag is built then.
+
+### D-6950 — a recording holds its head, and the bridge records only a 2xx answer
+
+- **Departs from:** Task 18 (plan :1687-1688): "the bridge writes each upstream response's raw bytes", at most
+  RECORD_MAX files. It does not say whether the head is part of those bytes, which answers are recorded, or how the
+  cap is counted.
+- **What changed:** A recording is `HTTP/1.1 <status>`, one `name: value` line per header, a blank line, then the raw
+  body (`ccd/codexbridge/record.py:103-106`), and the bridge records only a 2xx answer
+  (`ccd/codexbridge/server.py:776-777`, :792-801). The cap counts the bridge's own `<utc>-<n>.sse` files on disk
+  (`record.py:61`, :144-167). The probe names its recordings `liveprobe-<step>-<utc>-<n>.sse`
+  (`ccd/codexbridge/liveprobe.py:429`), which never match that pattern, so they never count against the cap.
+- **Why:** The head lets runbook step 3 read the cache headers from a recording, and it is what the scrubber's "drops
+  every header line" removes. An error answer is a JSON body read by `backend.error_of`, not a stream, and counting
+  files on disk makes the cap hold across restarts.
+- **Cost if wrong:** The bridge never keeps a non-2xx answer; the probe's recording keeps any status, so the operator
+  studies one there. A recording carries header values raw, so it stays 0600 in a 0700 directory and is never
+  committed unscrubbed.
+
+### D-6951 — the scrubber rewrites every string but a few structural ones
+
+- **Departs from:** Task 18's scrubber (plan :1692-1694), "every text with a fixed synthetic string of the same
+  structure", which says neither what the structure is nor which values count as text.
+- **What changed:** Every string is rewritten unless its key is kept: ids become `<prefix>_fx<n>`, `encrypted_content`
+  becomes `ENC-<n>`, a call's `arguments` that parse as JSON keep their keys, numbers and shape with every string
+  rewritten, and every tool or function `name` becomes `tool_fx<n>`, one per distinct name in a stream
+  (`ccd/codexbridge/record.py:284-304`, :262-282). Only `type`, `status`, `role`, `phase` and `object` are kept
+  anywhere, `reason` only in `incomplete_details` and `code` only in an error object or an `error` event (:210-218,
+  :302); every other string, an id-shaped one under another key and `model` included, keeps each non-alphanumeric
+  character and has each letter or digit replaced by `x` (:234-236, :304), and a `data:` line that is not JSON becomes
+  the fixed `MALFORMED_LINE` (:219, :326-327). Cases are at `server/test/codex-bridge-live-tools.test.ts:344`, :418,
+  :437 and :481, with rows Z3a, Z3b and Z3c.
+- **Why:** A string under a key the scrubber has never heard of, such as a web search's query, an image's revised
+  prompt, a tool schema's enum or a code interpreter's source, then never reaches the public corpus, and the kept keys
+  are only what `sse.SseParser` and `reducer.Reducer` need to parse and replay a stream. A text that keeps its length,
+  whitespace and punctuation still joins its live deltas to its done text, and one synthetic name per tool keeps a
+  call matched to its tool.
+- **Cost if wrong:** Object keys are kept everywhere, argument keys and schema property names included, as are the
+  values under the kept keys, and the residue check catches ids, JWTs, keys and encrypted content there but not plain
+  words; so a recording still needs a human read before it enters the corpus, which the runbook's reviewed change
+  already requires. An id-shaped string under a key outside ID_KEYS no longer matches the item it names.
+
+### D-6952 — the bridge start requires `bridgeFiles.recordings`, read by field name
+
+- **Departs from:** D-6832, under which `config_from_env` requires only `bridgeFiles.stats` and `.store`; and Task 18
+  (plan :1682), which adds a recording hook to server.py without saying how the recordings name is read.
+- **What changed:** `_BridgeFiles` (`ccd/codexbridge/server.py:130-137`) declares the three keys as NamedTuple fields,
+  and `read_manifest` walks `_BridgeFiles._fields` and requires each value to be a file name (:200-205), so a
+  lane.json without `recordings` refuses at start (case `server/test/codex-bridge-live-tools.test.ts:301`).
+  `BridgeConfig.recordings_path` defaults to `""`, which records nothing (:127).
+- **Why:** `recordings` is both a key and its own file name, and single-definition's Task 10 row allows exactly one
+  quoted spelling of each file name, in `laneManifest` (`server/test/single-definition.test.ts:9245`); the presence
+  check already wants all three keys (D-6866). The field has a default because the driver's refresher op builds a
+  BridgeConfig by keyword without it (`server/test/fixtures/codexbridge/driver.py:794`).
+- **Cost if wrong:** A lane.json rendered without `recordings` refuses to start a direct bridge. The refusal names the
+  field (`lane.json's bridgeFiles.recordings is not a file name`) and no remedy; `ccrc update` re-renders the file.
+
+### D-6953 — the probe's six steps, model, effort and session
+
+- **Departs from:** Task 18's probe (plan :1696-1701) and the runbook's step list (plan :1804-1815), where step 3 is
+  replayed "with and without its rs_ id, if step 3 is refused with it", and step 6 is "spare".
+- **What changed:** Step 6 is step 3 with each reasoning item sent without its `rs_` id, and re-running any step is
+  that step again, counted (`ccd/codexbridge/liveprobe.py:8-20`). Steps 3 and 6 rebuild step 2's reply from its latest
+  recording through the bridge's reducer and `stream.fold`, each call under `toolu_01` plus 22 hex of a hash of its
+  call id (:179-181, :199-246); the model is the lane catalogue's first id (:251-255), effort is `low` (:74), and the
+  session id is `uuid5(NAMESPACE_URL, "ccrc-liveprobe:<lane>")` (:136), so steps 1 and 5 share their `session-id` and
+  `prompt_cache_key`. `--dry-run` still needs the marker and still refuses past six, but reads no credential and
+  counts nothing (:392-401).
+- **Why:** A fixed step 6 keeps the without-id request inside the six-request cap without a flag. Rebuilding step 3
+  from step 2's own recording sends back what the upstream actually answered, and a fixed per-lane session id is what
+  lets step 5 measure the cache.
+- **Cost if wrong:** If step 3 is accepted with its id, step 6 spends one of the six requests on a variant the runbook
+  would not have needed, and a step that has to be re-run then uses the count's last spare.
+
+### D-6954 — the probe spells its lane, catalogue and auth-library paths itself
+
+- **Departs from:** The Global Constraints' "One definition of every name" (plan :143-145) and the contract under
+  which the bridge receives its lane directory (`CCGPT_LANE_DIR`), catalogue (`CCGPT_CATALOGUE`) and library
+  (`CCRC_CODEX_AUTH_LIB`) from its tier environment (plan :270-274). Task 18 (plan :1696) gives the probe only `--lane
+  <id>`.
+- **What changed:** `lane_files` spells `~/.ccrc/codex/<lane>` and `~/.ccrc/models/<lane>.json`
+  (`ccd/codexbridge/liveprobe.py:125`, :138-139), mirroring their owners `_codex_lane_dir` (`ccd/ccrc:12145`) and the
+  bridge environment's `CCGPT_CATALOGUE` (`ccd/ccrc:13801`), and comments name each owner (:122-124, :137).
+  `credential` loads `CCRC_CODEX_AUTH_LIB` when it is set, else the contract's `~/.local/bin/ccgpt-auth.py` (:75,
+  :279), through `server.load_auth_lib`.
+- **Why:** The probe is an operator CLI run with no tier environment, so it has no owner environment to receive the
+  paths from. It is a separate process, not a second reader inside the bridge.
+- **Cost if wrong:** If an owner's path moves, the probe looks in the old place and refuses `no-marker` or
+  `lane-unknown` until its spelling follows. No test pins the two spellings equal.
+
+### D-6955 — the probe refuses a lane.json the bridge would refuse
+
+- **Departs from:** Task 18's probe (plan :1696-1701), whose only refusals are the missing marker, the count past six,
+  and an expired or absent credential.
+- **What changed:** `lane_files` reads lane.json through the bridge's own `server.read_manifest`
+  (`ccd/codexbridge/liveprobe.py:130`; `ccd/codexbridge/server.py:184-207`), so a missing, foreign or malformed
+  lane.json refuses `lane-unknown`, or `lane-malformed` naming the field (:131-135). That covers a missing or
+  non-HOME-relative `authDir` or `configDir`, and any `bridgeFiles` name that is not a file name; cases are at
+  `server/test/codex-bridge-live-tools.test.ts:655`.
+- **Why:** One reader keeps the probe and the bridge from disagreeing about a lane. It also means a recordings name
+  such as `../x` can never place the probe's raw recording outside the lane directory.
+- **Cost if wrong:** A lane whose lane.json is stale, even with a good `authDir`, cannot be probed until `ccrc update`
+  re-renders the file.
+
+### D-6956 — the probe names a failure by its class, with exit codes
+
+- **Departs from:** Task 18's probe (plan :1696-1701), which lists what the probe prints for an answer and its
+  refusals, but spells no failure line and no exit codes.
+- **What changed:** A failure before the send prints `liveprobe: failed <class>; nothing was sent` and exits 1
+  (`ccd/codexbridge/liveprobe.py:415-417`); one in the send or while the answer is read prints `transport <class>` or
+  `transport timeout-<phase>` and exits 3 (:419-425, :332-338); and one opening or heading the answer's recording, or
+  escaping its report, prints `recording <class>` and exits 3 (:438-443). Exit 0 is a 2xx answer read to its end and
+  recorded whole, 2 a usage error, and the count is raised before the post, so a request that never left is still
+  charged (docstring :39-45; :411). Cases are at `server/test/codex-bridge-live-tools.test.ts:675`, :686, :705, :772
+  and :786.
+- **Why:** An exception's text can carry a value: http.client formats a header it refuses with `%r`, which would
+  include the token, so only the class is printed. Raising the count before the post keeps the six-request cap true
+  whatever fails.
+- **Cost if wrong:** The operator sees a class name, not a cause, and must look on the box for the rest. A request
+  that http.client refuses in `putheader` still spends one of the six.
+
+### D-6957 — a probe answer whose recording fails says so and exits 3
+
+- **Departs from:** Task 18's probe (plan :1700-1701), which "records the raw stream" and "prints only" the answer's
+  names, and says nothing of a recording that cannot be made or is cut short.
+- **What changed:** `Recording` sets `failed` when a write raises (`ccd/codexbridge/record.py:75`, :86-88). After the
+  answer's lines, a recording that was not made (`ensure_dir` False or `open_file` None) or was cut short prints
+  `liveprobe: recording unwritten` and exits 3, whatever the status, and the request still counts
+  (`ccd/codexbridge/liveprobe.py:428-437`, docstring :37-43). Cases are at
+  `server/test/codex-bridge-live-tools.test.ts:801` and :824, with rows Z4a and Z4b.
+- **Why:** Before, a 200 whose recording failed exited 0 with no recording, so the operator lost the answer the step
+  was spent on without being told, and step 3 could rebuild from an older step-2 recording unseen.
+- **Cost if wrong:** A request whose answer was good but whose recording failed is spent, so re-running that step uses
+  one of the six. The line names no cause; the operator checks the recordings directory on the box.
+
+### D-6958 — account removal reaps the probe count's and the stats file's tmp
+
+- **Departs from:** The bridge's contract (plan :287-290), "Removal reaps all four" markers, and Task 11's reap list
+  (plan :1360-1362), which name no tmp file.
+- **What changed:** `_codex_reap_files` also removes `liveprobe.count.tmp` and `<bridgeFiles.stats>.tmp`, the second
+  derived from the stats name lane.json carries (`ccd/ccrc:13217-13220`, :13246). The removal case lists both
+  leftovers (`server/test/ccrc-codex-bridge.test.ts:357`, :362), with rows Z11a and Z11b.
+- **Why:** The probe writes its count beside itself and renames it (`ccd/codexbridge/liveprobe.py:156-167`), and the
+  stats flush does the same with `<path>.tmp` (`ccd/codexbridge/stats.py:385`), so a killed writer leaves a file the
+  removal would otherwise leave in the lane directory.
+- **Cost if wrong:** Two more names in the reap list, one edit to drop. A tmp name a later writer adopts must be added
+  here too, or removal leaves it behind.
+
+### D-6959 — the runbook gives the probe the bridge's version
+
+- **Departs from:** The contract's `CCGPT_CCRC_VERSION` ("the box's stamp, or `dev`", plan :273-274) and the probe's
+  own docstring, which says it sends the bridge's User-Agent (`ccd/codexbridge/liveprobe.py:10`); the probe derives no
+  version and reads `CCGPT_CCRC_VERSION` from its environment, else `dev` (:408), while the bridge's start takes the
+  stamp's version through `_box_build_fields` (`ccd/ccrc:13796-13797`).
+- **What changed:** The probe is unchanged: the runbook's step 2 runs it with `CCGPT_CCRC_VERSION` set from `ccrc
+  version`'s `version` line, which `cmd_version` prints from the same `_box_build_fields` only when the stamp names
+  one (`ccd/ccrc:3013-3032`). With no such line the variable is empty and the probe sends `dev`, which is the bridge's
+  fallback too.
+- **Why:** The build stamp has no Python reader to import: its bash readers are pinned at exactly two
+  (`server/test/single-definition.test.ts:1358`) and its field checks live in one file (:1263), so a probe-side parser
+  would be a third reader that could accept a stamp `_box_build_fields` rejects, the drift this was meant to close.
+- **Cost if wrong:** An operator who runs the probe without the runbook's prefix sends `ccrc/dev`, so step 1 measures
+  a User-Agent other than the one the flip uses, and nothing checks it. A later `ccrc`-side launcher that passes the
+  version it already derives would retire the prefix.
+
+### D-6960 — a fifth finding family, the endpoint literal
+
+- **Departs from:** Task 19's Interfaces (plan :1721-1722), where findings name a request-struct field, event literal,
+  error-code literal or header literal. The plan's own test, "it reports the removal of the compaction endpoint
+  constant" (plan :1735-1737), needs an endpoint family.
+- **What changed:** `FAMILIES` gains `endpoint literal` (`.github/ci/codex-wire-watch.mjs:54`), which covers a URL, a
+  path literal that is not a media type, and any printable literal on a `const …ENDPOINT|PATH|ROUTE|URL` line
+  (:276-278). Cases are at `server/test/codex-wire-watch.test.ts:61` and :67.
+- **Why:** Without this family, the compaction-endpoint case (the 0.155.0 shape, D-6424) cannot go red first. A
+  removed or added route is also a wire change the bridge must follow.
+- **Cost if wrong:** Some noise in an issue, for example a renamed URL constant or a path that is not a route.
+
+### D-6961 — the request-struct family covers sent enums and serde wire names
+
+- **Departs from:** Task 19's "request-struct field" (plan :1721), which names struct fields only.
+- **What changed:** Each enum that derives `Serialize` adds `Enum::Variant` and `Enum::Variant.field`
+  (`.github/ci/codex-wire-watch.mjs:258-265`). A serde `rename` adds the wire name (`Struct.field=wire`,
+  `Enum::Variant=wire`), and a container's serde `tag` and `rename_all` become members (`Type#tag=v`,
+  `Type#rename_all=v`) (:184-197, :240-243). Cases are at `server/test/codex-wire-watch.test.ts:117` and :151, with
+  rows G8 and G17.
+- **Why:** Codex's input items are one sent enum (`protocol/src/models.rs`), so a struct-only scan misses a new or
+  removed item type. A serde rename changes the JSON on the wire while the Rust name stays the same.
+- **Cost if wrong:** More names are reported. `rename(serialize = …)`, `content = …` and a container-level `rename`
+  are not read, so a change there is caught only by someone reading the release.
+
+### D-6962 — the walk reads only the workflow's own issues
+
+- **Departs from:** Task 19 (plan :1723-1726): one state issue, `codex wire: state`, and a pair's issue "skipped when
+  that title exists".
+- **What changed:** `ownIssues` lists `state=all&creator=github-actions[bot]`, keeps only issues whose `user.login` is
+  `BOT_LOGIN`, and drops pull requests (`.github/ci/codex-wire-watch.mjs:45`, :509-514); both the state and the
+  "already opened" check read that list. The case is at `server/test/codex-wire-watch.test.ts:399`, with row G5.
+- **Why:** This repository is public, so anyone can open an issue with either title. A forged state issue would move
+  the walk past releases, and a forged pair title would suppress a finding.
+- **Cost if wrong:** An operator who sets the state by hand must edit the workflow's own state issue, not open a new
+  one, because a state issue the workflow did not open is ignored.
+
+### D-6963 — with no state yet, a failing newest pair still seeds the state
+
+- **Departs from:** Task 19 (plan :1728-1732): the state is left at the last pair compared, never past the one that
+  failed, and with no state issue yet the walk starts at the second-newest stable tag. On a first run where no pair is
+  compared, that names no tag to write.
+- **What changed:** `runWatch` writes `reached = walked ?? (state === null ? pairs[0]?.[0] ?? null : null)`
+  (`.github/ci/codex-wire-watch.mjs:442-443`), so with no state yet a newest pair that fails still creates the state
+  at its older tag, where the walk began, and the job exits non-zero. The module header (:12-13) and the workflow's
+  comment (`.github/workflows/codex-wire-watch.yml:7-9`) say so, and the case is at
+  `server/test/codex-wire-watch.test.ts:331`, with row G12.
+- **Why:** Otherwise a failing first run writes nothing, and the next run starts again at a newer newest pair and
+  skips the one that failed. That breaks "every release between two runs is compared, never skipped" (plan
+  :1732-1733).
+- **Cost if wrong:** The first scheduled run creates the state issue in this public repository even when its only pair
+  fails. The state then names the older tag of a pair that was never compared, which by the plan's own rule is where
+  the walk starts.
