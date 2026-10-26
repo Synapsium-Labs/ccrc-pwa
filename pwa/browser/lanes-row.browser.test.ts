@@ -334,6 +334,21 @@ describe('in Refined with a release waiting the update row sits below the banner
   }
 });
 
+// A phone's card is 50 px from its content when it has two windows, and 36 px (a weekly-only lane) or 40 px (never read) when
+// it does not and the floor is gone, measured at 390 and 360 in both skins. The grid stretches a card to the tallest in its row,
+// so the 17 lanes above never show it: each short card shares a row with a two-window one. A lone short card is a row of its
+// own: two more signed-out weekly-only lanes sort after the rest, so the last card, odd one out, stands alone on the phone.
+const SHORT_LANES = ['lane-r', 'lane-s'].map((label, k) => ({
+  acct: { wrapper: `w${17 + k}`, five: null, seven: 35, ts: nowSec - 60, fiveResetAt: null, sevenResetAt: nowSec + 86_400 * 2, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: true },
+  entry: { id: `w${17 + k}`, label, hue: 'cyan', homeAble: true, hidden: false },
+}));
+const PHONE_FIXTURE: AppFixture = {
+  ...FIXTURE,
+  api: { ...FIXTURE.api, '/api/accounts': {
+    ...ACCOUNTS, accounts: [...ACCOUNTS.accounts, ...SHORT_LANES.map((l) => l.acct)], roster: [...ACCOUNTS.roster, ...SHORT_LANES.map((l) => l.entry)],
+  } },
+};
+
 // A touch screen at a desk (a tablet in landscape, a touch laptop) and a phone (390, always touch).
 const COARSE: AppView[] = [
   ...SKINS.flatMap((skin) => THEMES.flatMap((theme) => WIDTHS.map((width) => ({ skin, theme, width, touch: true })))),
@@ -343,25 +358,26 @@ const COARSE: AppView[] = [
 describe('under coarse emulation every card and All accounts is at least 44 px tall', () => {
   for (const view of COARSE) {
     it(named(view), async () => {
-      const opened = await openApp(browser!, view, FIXTURE);
+      const want = view.width < 900 ? 19 : 17; // the phone's roster adds the two short lanes
+      const opened = await openApp(browser!, view, view.width < 900 ? PHONE_FIXTURE : FIXTURE);
       const { ctx, page, errors } = opened;
       try {
         await page.goto(server!.origin + '/');
-        await page.waitForFunction(() => document.querySelectorAll('.accounts-strip .account-gauge').length === 17, undefined, { timeout: 30_000 });
+        await page.waitForFunction((n) => document.querySelectorAll('.accounts-strip .account-gauge').length === n, want, { timeout: 30_000 });
         await page.waitForTimeout(300);
-        const small = await page.evaluate(() => {
+        const small = await page.evaluate((count) => {
           if (!matchMedia('(pointer: coarse)').matches) return ['the coarse pointer was not emulated'];
           const out: string[] = [];
           const cards = [...document.querySelectorAll<HTMLElement>('.accounts-strip .account-gauge')];
           const end = document.querySelector<HTMLElement>('.accounts-strip .accounts-end button');
-          if (cards.length !== 17) out.push(`${cards.length} cards, not 17`);
+          if (cards.length !== count) out.push(`${cards.length} cards, not ${count}`);
           if (end === null) out.push('no All accounts');
           for (const el of [...cards, ...(end === null ? [] : [end])]) {
             const r = el.getBoundingClientRect();
             if (r.height < 43.5) out.push(`${el.querySelector('.account-gauge-label')?.textContent ?? el.textContent?.trim() ?? '?'} is ${Math.round(r.width)} x ${r.height.toFixed(1)}`);
           }
           return out;
-        });
+        }, want);
         expect(small).toEqual([]);
         expect(errors).toEqual([]);
       } finally {
