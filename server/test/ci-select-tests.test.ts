@@ -454,6 +454,33 @@ describe('end-to-end with testmap.mjs: what a real map selects', () => {
     expect(sel).toEqual({ mode: 'selected', tests: [{ file: 'server/test/linker.test.ts', rule: 6, path: 'deploy/present.mjs' }] });
   });
 
+  // D4 (codex bridge Stage 2, Task 19): every bridge suite's driver imports the whole package through
+  // `load_all()`, so each one's trace reads every module, and a change to any module selects the replay corpus
+  // with the rest of the bridge suites. The daily full run backs the selection.
+  it('a change under ccd/codexbridge selects the bridge suites', () => {
+    const pkg = ['ccd/codexbridge/__init__.py', 'ccd/codexbridge/reducer.py', 'ccd/codexbridge/sse.py'];
+    const map = buildMap(SHA_A, {
+      format: RECORDS_FORMAT, baseline,
+      tests: {
+        'server/test/codex-bridge-replay.test.ts': split({}, { read: pkg }),
+        'server/test/codex-bridge-sse.test.ts': split({}, { read: pkg }),
+        'server/test/plain.test.ts': split({}, { read: ['server/src/plain.ts'] }),
+      },
+    });
+    const sel = selectTests({
+      map, changes: [{ status: 'M', path: 'ccd/codexbridge/reducer.py', symlink: false }],
+      liveTests: ['server/test/codex-bridge-replay.test.ts', 'server/test/codex-bridge-sse.test.ts', 'server/test/plain.test.ts'],
+      existsAt: () => true,
+    });
+    expect(sel).toEqual({
+      mode: 'selected',
+      tests: [
+        { file: 'server/test/codex-bridge-replay.test.ts', rule: 3, path: 'ccd/codexbridge/reducer.py' },
+        { file: 'server/test/codex-bridge-sse.test.ts', rule: 3, path: 'ccd/codexbridge/reducer.py' },
+      ],
+    });
+  });
+
   it('a refresh whose trace for a changed test never arrived leaves it ALWAYS selected (rule 2)', () => {
     const old = buildMap(SHA_A, {
       format: RECORDS_FORMAT, baseline,

@@ -1,0 +1,44 @@
+# D1, the Codex source watch (codex bridge spec §2.9; Stage 2 plan, Task 19).
+# Daily, it walks every stable openai/codex release since the last walk,
+# pair by pair, oldest first, diffs the nine wire-contract files at each pair
+# and opens one issue per pair with findings (`codex wire: <old>..<new>`).
+# The last walked tag is the body of one issue, `codex wire: state`, which
+# the first run creates. A pair that cannot be compared ends the walk with
+# the state left at the last pair walked, and fails this job.
+# .github/ci/codex-wire-watch.mjs owns all of it and is tested offline
+# (server/test/codex-wire-watch.test.ts).
+#
+# Least privilege: the job's own token only, no secrets. It reads the
+# public upstream releases and files, and reads and writes this
+# repository's issues; checkout keeps no credential. The runner's own node
+# runs one dependency-free module, so nothing is installed.
+name: codex-wire-watch
+
+on:
+  schedule:
+    - cron: '41 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-wire-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Walk the stable Codex releases since the last walk
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: node .github/ci/codex-wire-watch.mjs --repo "$REPO"
