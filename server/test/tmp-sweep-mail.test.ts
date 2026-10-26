@@ -351,7 +351,7 @@ describe('runTmpSweepCensusLane', () => {
     } finally { warn.mockRestore(); }
   });
 
-  // ARCH-76 characterization (D-TBD-tmpsweep-warnonce): the lane's `warnOnce` is a once-ever SET of keys, not a change
+  // ARCH-76 characterization (D-6991): the lane's `warnOnce` is a once-ever SET of keys, not a change
   // latch. A key that came back after a different key, or after a clean pass, stays silent for the life of the state,
   // where `changeLatch` (`server/src/changeLatch.ts`) would speak again on each change. Green on the code as written.
   it('warnOnce is once-ever per key: a key that comes back after another key or a clean pass is not logged again', async () => {

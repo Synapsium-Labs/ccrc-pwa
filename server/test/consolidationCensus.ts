@@ -681,7 +681,7 @@ export function dialogFrameProducers(root: string = REPO): CensusSite[] {
 }
 
 /**
- * ARCH-76 (#811) follow-up (D-TBD-tmpsweep-warnonce): the definitions of a `warn…Once` helper under `server/src` and
+ * ARCH-76 (#811) follow-up (D-6991): the definitions of a `warn…Once` helper under `server/src` and
  * `shared/`, outside `server/src/changeLatch.ts`. A definition is a code line that declares the name with `function`,
  * `const` or `let`; a call, an import or a comment naming it is not one. "Warn once until it changes" is `changeLatch`; a
  * helper that is something else stays only as a row of `ONCE_WARN_ALLOWED`, with its reason, so the ratchet counts it on
@@ -695,5 +695,5 @@ export function onceWarnDefinitions(root: string = REPO): CensusSite[] {
 /** The `warn…Once` definitions kept on purpose, by file, each with why it is not a change latch. This list only shrinks. */
 export const ONCE_WARN_ALLOWED: ReadonlyArray<{ readonly file: string; readonly reason: string }> = [
   // tmp-sweep-mail.test.ts's characterization: a key that comes back after another key or a clean pass stays silent.
-  { file: 'server/src/tmpSweepLane.ts', reason: 'once-ever, not a change latch, D-TBD-tmpsweep-warnonce' },
+  { file: 'server/src/tmpSweepLane.ts', reason: 'once-ever, not a change latch, D-6991' },
 ];

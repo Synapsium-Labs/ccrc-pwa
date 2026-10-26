@@ -915,7 +915,7 @@ describe('one change latch (ARCH-76): changeLatch (D-5861)', () => {
     }
   });
 
-  // ARCH-76 follow-up (D-TBD-tmpsweep-warnonce): a `warn…Once` helper outside changeLatch.ts is a row of
+  // ARCH-76 follow-up (D-6991): a `warn…Once` helper outside changeLatch.ts is a row of
   // `ONCE_WARN_ALLOWED` with its reason, or it is a change latch and uses changeLatch(). The list only shrinks, and a
   // row whose helper has gone is stale and fails too.
   it('every warn…Once helper outside changeLatch.ts is allowlisted with a reason, 1 row (tmpSweepLane.ts)', async () => {

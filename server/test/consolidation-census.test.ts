@@ -566,9 +566,9 @@ describe('ARCH-52: SessionStream polls and dialog frame producers', () => {
   });
 });
 
-// ARCH-76 (#811) follow-up (D-TBD-tmpsweep-warnonce). The once-warn census: a `warn…Once` helper defined outside
+// ARCH-76 (#811) follow-up (D-6991). The once-warn census: a `warn…Once` helper defined outside
 // `server/src/changeLatch.ts`. The ratchet in `single-definition/advance-switches.test.ts` holds it to `ONCE_WARN_ALLOWED`.
-describe('onceWarnDefinitions: `warn…Once` helpers defined outside changeLatch.ts (D-TBD-tmpsweep-warnonce)', () => {
+describe('onceWarnDefinitions: `warn…Once` helpers defined outside changeLatch.ts (D-6991)', () => {
   it('FIXTURE: a function, a const and a let are definitions; a call, an import, a comment and changeLatch.ts are not', () => {
     const tree = mkdtempSync(path.join(tmpdir(), 'consolidation-census-oncewarn-'));
     try {
