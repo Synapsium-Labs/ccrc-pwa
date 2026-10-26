@@ -5802,4 +5802,69 @@ describe('D-6967 (wave-3 follow-up 10): a transient bucket-read failure waits fo
     await carveOutPass(w, at(3), live('demo-a'));
     expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^capability-absent/) });
   });
+
+  it('D-6967 R-O (second case, M14): an hour whose wait a read ended while another hour of the owner still waits leaves no stale word when it is listed again', async () => {
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a'));
+    await passAt(w, at(0), live('demo-a'));                                                    // hour 10 measured
+    const h11 = H + DELEGATION_HOUR_MS;
+    writeBucket(w, 'demo-a', '2026101511', startLine('demo-a', iso(h11 + 5_000)));
+    await passAt(w, h11 + 30_000, live('demo-a'));                                             // 11:00:30: hour 11 measured
+    expect(intervalFor(w.home, 'demo-a', HOUR11)).toMatchObject({ state: 'measured' });
+    w.faults.range.add('demo-a');
+    await passAt(w, h11 + 90_000, live('demo-a'));                                             // 11:01:30, hour 10 unclosed: both hours wait
+    expect([waitOf(w, 'demo-a'), waitOf(w, 'demo-a', h11)]).toEqual([expect.stringMatching(/^range-unreadable/), expect.stringMatching(/^range-unreadable/)]);
+    w.faults.range.clear();
+    const realRange = w.io.readFileFromBytesMeasured;
+    w.io.readFileFromBytesMeasured = async (p, o, m, t, sig) => (p.endsWith(`${BUCKET10}.spool`) ? { ok: false, reason: 'unreadable' } : realRange(p, o, m, t, sig));
+    await passAt(w, h11 + 150_000, live('demo-a'));                                            // hour 11 is read (its wait ends); hour 10 still waits
+    expect(waitOf(w, 'demo-a', h11), 'hour 11\'s wait ended').toBeUndefined();
+    expect(waitOf(w, 'demo-a'), 'hour 10 still waits, so the entry stays').toMatch(/^range-unreadable/);
+    w.io.readFileFromBytesMeasured = realRange;
+    await carveOutPass(w, h11 + 210_000, live('demo-a'));                                      // hour 11 is listed again
+    expect(intervalFor(w.home, 'demo-a', HOUR11), 'its own word, not a stale one').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^capability-absent/) });
+    expect(intervalFor(w.home, 'demo-a'), 'hour 10\'s waited loss').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^range-unreadable/) });
+  });
+
+  it('D-6967 R-Q (M17, R107): a cut pass\'s late flush of a read never ends a wait a NEWER pass recorded on a non-live owner', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    makeOwner(w, 'demo-z');
+    await passAt(w, at(0), live('demo-a', 'demo-z'));                                          // (demo-a, P, H) measured: the carrier
+    w.faults.listing.set('demo-a', 'throw');
+    await passAt(w, at(1), live('demo-z'));                                                    // demo-a ended: R102 re-reads it, and it waits
+    expect(waitOf(w, 'demo-a'), 'waits').toMatch(/^directory-unreadable/);
+    w.faults.listing.clear();
+    let openFlush!: () => void;
+    const flushGate = new Promise<void>((resolve) => { openFlush = resolve; });
+    let nApplied!: () => void;
+    const nDone = new Promise<void>((resolve) => { nApplied = resolve; });
+    const realApply = DelegationDurability.prototype.applyAcceptedBatch;
+    let gated = true;
+    vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch').mockImplementation(async function (this: DelegationDurability, batches) {
+      if (!gated) return realApply.call(this, batches);
+      gated = false;
+      await flushGate;
+      try { return await realApply.call(this, batches); } finally { nApplied(); }
+    });
+    // pass N reads the pending (non-live) demo-a whole (a new line, so its flush applies something), and is cut on demo-z's held listing;
+    // its application is held
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', iso(at(1) + 10_000)));
+    let releaseZ!: () => void;
+    const zListed = w.calls.listings.filter((o) => o === 'demo-z').length;
+    w.faults.hold.set('demo-z', new Promise<void>((resolve) => { releaseZ = resolve; }));
+    await cutWhile(w, at(2), { demo: [] }, [sessionOf('demo-z')], {
+      reached: () => w.calls.listings.filter((o) => o === 'demo-z').length > zListed,
+      release: () => { w.faults.hold.delete('demo-z'); releaseZ(); },
+    });
+    w.faults.listing.set('demo-a', 'throw');
+    await passAt(w, at(3), live('demo-z'));                                                    // pass N+1: demo-a's read fails again; it waits
+    w.faults.listing.clear();
+    openFlush();                                                                               // then N's late flush and its forgetting run
+    await nDone;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(waitOf(w, 'demo-a'), 'N+1\'s wait survives N\'s late forgetting').toMatch(/^directory-unreadable/);
+    await carveOutPass(w, at(4), live('demo-z'));
+    expect(intervalFor(w.home, 'demo-a'), 'the waited word lands').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^directory-unreadable/) });
+  });
 });
