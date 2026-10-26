@@ -113,4 +113,37 @@ describe('the lanes\' words', () => {
       expect(percentTemplates, `${file} holds no percentage template of its own`).toEqual([]);
     }
   });
+
+  // Review 940's A1: the precedence (never measured, then rolled over) is windowReading's alone. A second copy in the
+  // Gauge broke once, at e03335345, with swap-sheet red until 327f5bffe. So the Gauge hands windowReading its clamped
+  // value, whatever consts that value passes through, and the flag as the second argument, and decides no rollover.
+  it('the picker\'s Gauge hands windowReading its clamped value and decides no rollover of its own', () => {
+    const src = parseTs(join(__dirname, '..', 'src', 'fleet', 'AccountRow.tsx'));
+    let gauge: ts.FunctionDeclaration | undefined;
+    ts.forEachChild(src, (n) => { if (ts.isFunctionDeclaration(n) && n.name?.text === 'Gauge') gauge = n; });
+    expect(gauge, 'AccountRow.tsx declares Gauge').toBeDefined();
+    const consts = new Map<string, ts.Expression>();
+    const calls: ts.CallExpression[] = [];
+    const collect = (n: ts.Node): void => {
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer !== undefined) consts.set(n.name.text, n.initializer);
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'windowReading') calls.push(n);
+      ts.forEachChild(n, collect);
+    };
+    collect(gauge!.body!);
+    expect(calls, 'Gauge calls windowReading once').toHaveLength(1);
+    // Every identifier the first argument reads, following Gauge's own consts transitively.
+    const reached = new Set<string>();
+    const reach = (n: ts.Node): void => {
+      if (ts.isIdentifier(n)) {
+        if (reached.has(n.text)) return;
+        reached.add(n.text);
+        const init = consts.get(n.text);
+        if (init !== undefined) reach(init);
+      }
+      ts.forEachChild(n, reach);
+    };
+    reach(calls[0].arguments[0]);
+    expect([...reached], 'the reading Gauge hands windowReading names no rollover').not.toContain('rolledOver');
+    expect(calls[0].arguments[1].getText(src), 'the flag is passed through as windowReading\'s second argument').toBe('rolledOver');
+  });
 });

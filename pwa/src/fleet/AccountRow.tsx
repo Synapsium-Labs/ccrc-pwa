@@ -40,12 +40,12 @@ import './fleet.css';
 function Gauge({ label, value, rolledOver, off = false }: {
   label: string; value: number | null; rolledOver: boolean; off?: boolean;
 }): ReactNode {
-  const pct = rolledOver || value === null ? null : Math.min(100, Math.max(0, value));
-  // The reading takes the clamped, rounded value. Never measured decides first (null in, null out: a window with
-  // nothing read has nothing the server could have zeroed, so no flag makes it "0%"); then a rolled-over window, which
-  // carries no value for the meter, only the flag, reads 0; then the clamp.
-  const reading = value === null ? null : rolledOver || pct === null ? 0 : Math.round(pct);
-  const { shown, spoken } = windowReading(reading, rolledOver);
+  // The precedence (never measured, then rolled over) is `windowReading`'s, so the Gauge hands it the clamped value and
+  // the flag and decides nothing itself. The meter gets no value for a rolled-over window (its track stays empty) nor
+  // for a never-measured one.
+  const clamped = value === null ? null : Math.min(100, Math.max(0, value));
+  const pct = rolledOver ? null : clamped;
+  const { shown, spoken } = windowReading(clamped === null ? null : Math.round(clamped), rolledOver);
   return (
     <span className="acct-gauge">
       <span>{label}</span>
