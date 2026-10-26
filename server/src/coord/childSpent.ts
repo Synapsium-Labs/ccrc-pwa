@@ -51,17 +51,7 @@ export type ChildSpentVerdict =
  */
 export type ChildBirth =
   | { readonly kind: 'at'; readonly ms: number }
-  | { readonly kind: 'unplaceable'; readonly detail: string;
-      /** Set on ONE arm only, the re-stamped dispatch: the minting run still records a birth for THIS session id
-       *  (`sessionBornFor === sessionId`), but its `dispatchStartedAt` moved, so no PR row is placed against it. It is
-       *  still the birth the occupant's own minting run recorded, and the run binding anchors to it while it is the newest
-       *  birth the worker's series records for the id (`runBinding.anchoredIncarnation`, D-5920). After a cross-build
-       *  rollback and a same-id redraw it is an earlier occupant's birth on that SAME run. While it is still the newest,
-       *  the stamp writes it on the live occupant's waves too, and the binding counts that run's history as this
-       *  occupant's, as the id-string rule did already. When a newer birth is on record, the live occupant's waves carry
-       *  that one instead, so the binding does not anchor and keeps the id-string rule. Every other arm has no birth of
-       *  the occupant's own run to give. */
-      readonly recorded?: number };
+  | { readonly kind: 'unplaceable'; readonly detail: string };
 
 /** The clock-skew allowance either side of a birth, in ms. The birth is the
  *  server's clock and `createdAt` is GitHub's, so a row inside ±this window is
@@ -165,8 +155,7 @@ export function childBirthOf(read: ChildBirthRunRead, sessionId: string): ChildB
     return { kind: 'unplaceable', detail: "the minting run's birth does not belong to its current session" };
   }
   if (read.run.sessionBornAt !== read.run.dispatchStartedAt) {
-    return { kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth",
-      recorded: read.run.sessionBornAt };
+    return { kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth" };
   }
   return { kind: 'at', ms: read.run.sessionBornAt };
 }

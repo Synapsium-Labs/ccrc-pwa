@@ -545,8 +545,6 @@ describe('childBirthOf — the minting run row, read five ways', () => {
       row({ dispatchStartedAt: BIRTH_MS + 60_000 }),
       "the minting run's dispatch was re-stamped after this session's birth"],
   ] as const)('unplaceable when %s', (_what, read, detail) => {
-    // Only the re-stamped arm keeps the birth its own run recorded (`recorded`, read by the run binding alone).
-    const recorded = detail === "the minting run's dispatch was re-stamped after this session's birth" ? { recorded: BIRTH_MS } : {};
-    expect(childBirthOf(read, ID)).toEqual({ kind: 'unplaceable', detail, ...recorded });
+    expect(childBirthOf(read, ID)).toEqual({ kind: 'unplaceable', detail });
   });
 });

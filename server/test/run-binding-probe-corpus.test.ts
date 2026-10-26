@@ -1,0 +1,450 @@
+// ARCH-60 follow-up (#1407, part of #795): THE PROBE CORPUS of PR #1573. One case per shape a review round reported (rounds
+// 1 to 5), each read back the way the server reads it: the child's parent (`childParentOf`), its claimants
+// (`claimantsOf`), the card (`sessionRunRead`), the coordinators' `childIds` (`withChildIds`), the hold (`heldFor`) and,
+// where the shape has one, the birth a later wave was stamped with.
+//
+// THE ACCEPTANCE BAR: on every shape, this branch answers what the merge base answers, or a better answer. Each case pins
+// the merge base's answer (`base`, recorded by running this file over the merge-base sources with
+// BINDING_CORPUS_EXPECT=base, which asserts that column there) and, where this branch answers differently, its answer
+// (`head`) with why it is better. Without that variable the file asserts this branch's answer. A case whose two answers are the same wrong answer is an
+// INHERITED residual: out of scope for this PR, named in the plan note's "Residuals, inherited from main" section and
+// left to the follow-up for D6 gap 1 (an unborn incarnation that reuses a workspace name still inherits a ghost run).
+//
+// The file uses only what the merge base also exports, so it runs over either source tree unchanged. A fixture writes
+// the rows a build would write; where the shape says an OLDER build or the merge-base build wrote a row, the fixture
+// writes that build's columns itself, so the rows are the same under either source tree.
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { childParentOf, claimantsOf } from '../src/coord/runBinding.js';
+import { incarnationsOfSessions, sessionRunRead, withChildIds } from '../src/coord/runWire.js';
+import { heldFor } from '../src/coord/heldFor.js';
+import { mkTmp } from './tmpHelpers.js';
+
+const W = 'demo-w';
+const T0 = 1_700_000_000_000;
+/** Instant `k` of a fixture: T0, T1, ... one hour apart, so an answer names its birth as `T<k>`. */
+const t = (k: number): number => T0 + k * 3_600_000;
+const tName = (ms: number | null): string | null => {
+  if (ms === null) return null;
+  const k = (ms - T0) / 3_600_000;
+  return Number.isInteger(k) ? `T${k}` : `T0+${ms - T0}ms`;
+};
+
+class Fixture {
+  readonly s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-binding-corpus-'), '.ccrc', 'coord.db')));
+  private readonly labels = new Map<number, string>();
+  label = (id: number | null | undefined): string | null => (id === null || id === undefined ? null : this.labels.get(id) ?? `#${id}`);
+  /** A run planned by `claimedBy`, opened at `openedAt`. */
+  open(label: string, claimedBy: string | null, openedAt: number): number {
+    const id = (this.s.openRun({ program: `prog-${label}`, title: label, project: 'p', wave: 1, waveOf: null, claimedBy: claimedBy ?? 'nobody' }) as { id: number }).id;
+    this.s.db.prepare('UPDATE runs SET openedAt = ?, claimedBy = ?, coordProject = ? WHERE id = ?').run(openedAt, claimedBy, 'p', id);
+    this.labels.set(id, label);
+    return id;
+  }
+  /** The fresh-spawn arm: the dispatch starts at `at` and the bind records `at` as the birth (placeable). */
+  mint(id: number, at: number, session = W): void { this.s.markDispatchStarted(id, at); this.s.setSession(id, session, at); }
+  /** A birth recorded on the run with no matching `dispatchStartedAt` (unplaceable: the re-stamped arm). */
+  recordUnplaceable(id: number, at: number, session = W): void { this.s.setSession(id, session, at); }
+  /** The adopted arm of `spawnFresh`: the dispatch starts at `at`, the bind names the id with an explicit null birth. */
+  adopt(id: number, at: number, session = W): void { this.s.markDispatchStarted(id, at); this.s.setSession(id, session, null); }
+  /** THIS build's later-wave bind (two-argument `setSession`: the occupant stamp). */
+  bind(id: number, session = W): void { this.s.setSession(id, session); }
+  /** A bind written by a build with its own birth columns: `at` (the merge-base build's stamp) or none (an OLDER build). */
+  bindAs(id: number, at: number | null, session = W): void {
+    this.s.setSession(id, session);
+    this.s.db.prepare('UPDATE runs SET sessionBornAt = ?, sessionBornFor = ? WHERE id = ?').run(at, at === null ? null : session, id);
+  }
+  /** An OLDER build redraws the same id on run `id`: only its `dispatchStartedAt` moves. */
+  redraw(id: number, at: number): void { this.s.db.prepare('UPDATE runs SET dispatchStartedAt = ? WHERE id = ?').run(at, id); }
+  /** A failed fresh-spawn attempt: the dispatch started at `at`, no session was bound. */
+  dispatchStarted(id: number, at: number): void { this.s.markDispatchStarted(id, at); }
+  done(id: number): void { this.s.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(id); }
+  stampOf(id: number): string | null {
+    const r = this.s.db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE id = ?').get(id) as { sessionBornAt: number | null; sessionBornFor: string | null };
+    return r.sessionBornAt === null ? null : `${tName(r.sessionBornAt)} for ${r.sessionBornFor}`;
+  }
+}
+
+/** What the server answers about the worker: every reader that takes its incarnation, from its registry mark. */
+interface Answer {
+  readonly parent: string | null;
+  readonly claimants: readonly string[];
+  readonly card: string | null;
+  readonly childIds: Readonly<Record<string, readonly (string | null)[]>>;
+  readonly held: string;
+  readonly stamp?: string | null;
+}
+
+interface Shape {
+  readonly f: Fixture;
+  /** The run the worker's `.child` mark names, or `null` for a session with no mark. */
+  readonly mark: number | null;
+  /** The coordinators whose `childIds` the answer lists. */
+  readonly coords: readonly string[];
+  /** The later wave whose recorded birth the answer reports. */
+  readonly wave?: number;
+}
+
+async function answer({ f, mark, coords, wave }: Shape): Promise<Answer> {
+  const { s } = f;
+  const child = mark === null ? { kind: 'none' as const } : { kind: 'child' as const, runId: mark };
+  const inc = incarnationsOfSessions(s, [{ id: W, child }]).get(W)!;
+  const minting = mark === null ? null : s.run(mark);
+  const series = s.bindingRunsOf(W);
+  if (!series.ok) throw new Error(series.detail);
+  const minter = minting !== null && minting.ok && minting.run !== null ? minting.run.claimedBy : null;
+  const card = sessionRunRead(s, W, inc);
+  const summaries = coords.map((c) => ({ id: 0, claimedBy: c })) as never;
+  const withIds = withChildIds(s, summaries, new Map([[W, inc]]), () => undefined) as unknown as { childIds?: number[] }[];
+  const verdict = await heldFor({ coord: s } as never, W, child, [], t(99));
+  const held = [verdict.kind, 'parent' in verdict ? verdict.parent : null, 'reason' in verdict ? verdict.reason : null]
+    .filter((x) => x !== null).join(':');
+  return {
+    parent: childParentOf(series.runs, minter, inc),
+    claimants: claimantsOf(series.runs, inc),
+    card: card.ok ? f.label(card.openRun?.id) : `unreadable: ${card.detail}`,
+    childIds: Object.fromEntries(coords.map((c, i) => [c, (withIds[i]!.childIds ?? []).map((id) => f.label(id))])),
+    held,
+    ...(wave === undefined ? {} : { stamp: f.stampOf(wave) }),
+  };
+}
+
+type Verdict = 'better' | 'same';
+interface Case {
+  readonly shape: string;
+  /** The review round that reported it. */
+  readonly round: string;
+  readonly build: () => Shape;
+  readonly base: Answer;
+  /** This branch's answer, when it differs from the merge base's; absent, it is the merge base's. */
+  readonly head?: Answer;
+  readonly verdict: Verdict;
+  /** Why `head` is better, or for a `same` case that is wrong on both, the residual it is. */
+  readonly why?: string;
+  readonly residual?: 'inherited';
+}
+
+const CORPUS: readonly Case[] = [
+  {
+    shape: 'GAP 2: a later wave bound to a worker whose minting run recorded a birth it cannot place',
+    round: 'PR scope (gap 2)',
+    build: () => {
+      const f = new Fixture();
+      const w1 = f.open('w1', 'coord-1', t(5) - 1000);
+      f.recordUnplaceable(w1, t(5));
+      const w2 = f.open('w2', 'coord-1', t(5) - 1000);
+      f.bind(w2);
+      return { f, mark: w1, coords: ['coord-1'], wave: w2 };
+    },
+    base: { parent: 'coord-1', claimants: ['coord-1'], card: 'w2', childIds: { 'coord-1': ['w1', 'w2'] }, held: 'released:coord-1:parent-not-live', stamp: null },
+    head: { parent: 'coord-1', claimants: ['coord-1'], card: 'w2', childIds: { 'coord-1': ['w1', 'w2'] }, held: 'released:coord-1:parent-not-live', stamp: 'T5 for demo-w' },
+    verdict: 'better',
+    why: 'the later wave records the birth the worker\'s own minting run recorded (T5); the merge base recorded none',
+  },
+  {
+    shape: 'the dup-arm re-open over an unplaceable wave 1, wave 1 then done',
+    round: 'PR scope (dup arm)',
+    build: () => {
+      const f = new Fixture();
+      const wave2 = f.open('wave2', 'coord-1', t(5) - 1000);
+      const wave1 = f.open('wave1', 'coord-1', t(5) - 10);
+      f.recordUnplaceable(wave1, t(5));
+      f.bind(wave2);
+      f.done(wave1);
+      return { f, mark: wave1, coords: ['coord-1'], wave: wave2 };
+    },
+    base: { parent: 'coord-1', claimants: ['coord-1'], card: 'wave2', childIds: { 'coord-1': ['wave2'] }, held: 'released:coord-1:parent-not-live', stamp: null },
+    head: { parent: 'coord-1', claimants: ['coord-1'], card: 'wave2', childIds: { 'coord-1': ['wave2'] }, held: 'released:coord-1:parent-not-live', stamp: 'T5 for demo-w' },
+    verdict: 'better',
+    why: 'wave 2 records the birth wave 1 recorded (T5); the merge base recorded none',
+  },
+  {
+    shape: 'the dup-arm re-open over a placeable wave 1, wave 1 then done',
+    round: 'PR scope (dup arm)',
+    build: () => {
+      const f = new Fixture();
+      const wave2 = f.open('wave2', 'coord-1', t(5) - 1000);
+      const wave1 = f.open('wave1', 'coord-1', t(5) - 10);
+      f.mint(wave1, t(5));
+      f.bind(wave2);
+      f.done(wave1);
+      return { f, mark: wave1, coords: ['coord-1'], wave: wave2 };
+    },
+    base: { parent: 'coord-1', claimants: ['coord-1'], card: 'wave2', childIds: { 'coord-1': ['wave2'] }, held: 'released:coord-1:parent-not-live', stamp: 'T5 for demo-w' },
+    verdict: 'same',
+  },
+  {
+    shape: 'GAP 1 (unplaceable): an earlier occupant\'s run still open, the live minting run done',
+    round: 'PR scope (gap 1); round 4 (card vs ghost childIds)',
+    build: () => {
+      const f = new Fixture();
+      const ghost = f.open('ghost', 'coord-gone', t(0));
+      f.recordUnplaceable(ghost, t(0));
+      const live = f.open('live', 'coord-live', t(5) + 1000);
+      f.recordUnplaceable(live, t(5));
+      f.done(live);
+      return { f, mark: live, coords: ['coord-gone', 'coord-live'] };
+    },
+    base: { parent: 'coord-gone', claimants: ['coord-gone'], card: 'ghost', childIds: { 'coord-gone': ['ghost'], 'coord-live': [] }, held: 'released:operator:run-other-programme' },
+    verdict: 'same',
+    why: 'D6 gap 1: the earlier occupant\'s open run is the parent (coord-gone), and the card and coord-gone\'s childIds show it',
+    residual: 'inherited',
+  },
+  {
+    shape: 'GAP 1 (not-a-child): a manual workspace with no mark',
+    round: 'PR scope (gap 1)',
+    build: () => {
+      const f = new Fixture();
+      const manual = f.open('manual', 'coord-1', t(0));
+      f.bind(manual);
+      return { f, mark: null, coords: ['coord-1'] };
+    },
+    base: { parent: 'coord-1', claimants: ['coord-1'], card: 'manual', childIds: { 'coord-1': ['manual'] }, held: 'not-a-child' },
+    verdict: 'same',
+  },
+  {
+    shape: 'a placeable older birth, a newer unplaceable one, then a later wave',
+    round: 'round 1 (bound-birth pin)',
+    build: () => {
+      const f = new Fixture();
+      const a = f.open('a', 'coord-1', t(0));
+      f.mint(a, t(0));
+      const minting = f.open('minting', 'coord-1', t(0) + 1);
+      f.recordUnplaceable(minting, t(5));
+      const c = f.open('c', 'coord-1', t(5) + 2000);
+      f.bind(c);
+      return { f, mark: minting, coords: ['coord-1'], wave: c };
+    },
+    base: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['a', 'minting', 'c'] }, held: 'released:coord-1:parent-not-live', stamp: 'T0 for demo-w' },
+    head: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['a', 'minting', 'c'] }, held: 'released:coord-1:parent-not-live', stamp: 'T5 for demo-w' },
+    verdict: 'better',
+    why: 'the later wave records T5, the birth the live occupant\'s own minting run recorded; the merge base dated it to the earlier occupant (T0). coord-1\'s childIds still list the earlier occupant\'s open run a, as on the merge base (inherited, D6 gap 1)',
+  },
+  {
+    shape: 'a reused name (earlier occupant placeable and done), the live minting run unplaceable and open, then a later wave',
+    round: 'round 1 (stamp equals anchor)',
+    build: () => {
+      const f = new Fixture();
+      const earlier = f.open('earlier', 'coord-gone', t(0));
+      f.mint(earlier, t(0));
+      f.done(earlier);
+      const minting = f.open('minting', 'coord-1', t(5) - 1000);
+      f.recordUnplaceable(minting, t(5));
+      const c = f.open('c', 'coord-1', t(5) + 10);
+      f.bind(c);
+      return { f, mark: minting, coords: ['coord-1', 'coord-gone'], wave: c };
+    },
+    base: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['minting', 'c'], 'coord-gone': [] }, held: 'released:coord-1:parent-not-live', stamp: 'T0 for demo-w' },
+    head: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['minting', 'c'], 'coord-gone': [] }, held: 'released:coord-1:parent-not-live', stamp: 'T5 for demo-w' },
+    verdict: 'better',
+    why: 'the later wave records T5, the live occupant\'s own recorded birth; the merge base dated it to the earlier occupant (T0)',
+  },
+  {
+    shape: 'a reused name, the live minting run unplaceable and done, then a later wave',
+    round: 'round 1 (the wave keeps its parent)',
+    build: () => {
+      const f = new Fixture();
+      const earlier = f.open('earlier', 'coord-gone', t(0));
+      f.mint(earlier, t(0));
+      f.done(earlier);
+      const minting = f.open('minting', 'coord-1', t(5) - 1000);
+      f.recordUnplaceable(minting, t(5));
+      f.done(minting);
+      const c = f.open('c', 'coord-1', t(5) + 10);
+      f.bind(c);
+      return { f, mark: minting, coords: ['coord-1'], wave: c };
+    },
+    base: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['c'] }, held: 'released:coord-1:parent-not-live', stamp: 'T0 for demo-w' },
+    head: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['c'] }, held: 'released:coord-1:parent-not-live', stamp: 'T5 for demo-w' },
+    verdict: 'better',
+    why: 'the later wave records T5, the live occupant\'s own recorded birth; the merge base dated it to the earlier occupant (T0)',
+  },
+  {
+    shape: 'a pre-planned wave 2 bound after wave 1 recorded its birth and before wave 1\'s dispatch moved to it, wave 1 done',
+    round: 'round 1 (readers: the original order)',
+    build: () => {
+      const f = new Fixture();
+      const w1 = f.open('w1', 'coord-1', t(5) - 1000);
+      const w2 = f.open('w2', 'coord-1', t(5) - 1000);
+      const g = f.open('g', 'coord-ghost', t(5) - 1000);
+      f.bindAs(g, null);
+      f.recordUnplaceable(w1, t(5));
+      f.bind(w2);
+      f.redraw(w1, t(5));
+      f.done(w1);
+      return { f, mark: w1, coords: ['coord-1', 'coord-ghost'], wave: w2 };
+    },
+    base: { parent: 'coord-1', claimants: [], card: null, childIds: { 'coord-1': [], 'coord-ghost': [] }, held: 'released:coord-1:parent-not-live', stamp: null },
+    head: { parent: 'coord-1', claimants: ['coord-1'], card: 'w2', childIds: { 'coord-1': ['w2'], 'coord-ghost': [] }, held: 'released:coord-1:parent-not-live', stamp: 'T5 for demo-w' },
+    verdict: 'better',
+    why: 'wave 2 records T5 and is bound to the live worker (claimants, card, coord-1\'s childIds); the merge base left it undecided, so the card showed no open run',
+  },
+  {
+    shape: 'a newer birth for the id on a run an older build rebound away, then a later wave',
+    round: 'round 2 (rebound-run pin)',
+    build: () => {
+      const f = new Fixture();
+      const earlier = f.open('earlier', 'coord-gone', t(0));
+      f.mint(earlier, t(0));
+      f.done(earlier);
+      const minting = f.open('minting', 'coord-1', t(5) - 1000);
+      f.recordUnplaceable(minting, t(5));
+      const rebound = f.open('rebound', 'coord-x', t(5) + 100);
+      f.recordUnplaceable(rebound, t(6));
+      f.s.db.prepare("UPDATE runs SET sessionId = 'demo-other' WHERE id = ?").run(rebound);
+      const c = f.open('c', 'coord-1', t(5) + 10);
+      f.bind(c);
+      return { f, mark: minting, coords: ['coord-1'], wave: c };
+    },
+    base: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['minting', 'c'] }, held: 'released:coord-1:parent-not-live', stamp: 'T0 for demo-w' },
+    head: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['minting', 'c'] }, held: 'released:coord-1:parent-not-live', stamp: 'T5 for demo-w' },
+    verdict: 'better',
+    why: 'the later wave records T5, the live occupant\'s own recorded birth; the merge base dated it to the earlier occupant (T0)',
+  },
+  {
+    shape: 'the adopted arm under a recycled name, the earlier occupant\'s run still open with the LOWER id, then a later wave',
+    round: 'round 3 (adopted read-back)',
+    build: () => {
+      const f = new Fixture();
+      const earlier = f.open('earlier', 'coord-gone', t(0));
+      f.mint(earlier, t(1));
+      const adopting = f.open('adopting', 'coord-live', t(0) + 1000);
+      f.adopt(adopting, t(2));
+      const wave2 = f.open('wave2', 'coord-live', t(3));
+      f.bind(wave2);
+      return { f, mark: adopting, coords: ['coord-live', 'coord-gone'], wave: wave2 };
+    },
+    base: { parent: 'coord-live', claimants: ['coord-live', 'coord-gone'], card: 'wave2', childIds: { 'coord-live': ['adopting', 'wave2'], 'coord-gone': ['earlier'] }, held: 'released:coord-live:parent-not-live', stamp: 'T1 for demo-w' },
+    head: { parent: 'coord-live', claimants: ['coord-live', 'coord-gone'], card: 'wave2', childIds: { 'coord-live': ['adopting', 'wave2'], 'coord-gone': ['earlier'] }, held: 'released:coord-live:parent-not-live', stamp: null },
+    verdict: 'better',
+    why: 'wave 2 borrows no birth; the merge base dated it to the earlier occupant (T1)',
+  },
+  {
+    shape: 'a cross-build rollback with a same-id redraw after a later mint (minting run done)',
+    round: 'round 4 (rollback probe)',
+    build: () => {
+      const f = new Fixture();
+      const r = f.open('R', 'coord-live', t(1) - 100);
+      f.mint(r, t(1));
+      const wa = f.open('WA', 'coord-gone', t(1) + 100);
+      f.bind(wa);
+      const rx = f.open('Rx', 'coord-x', t(2) - 100);
+      f.mint(rx, t(2));
+      f.done(rx);
+      f.redraw(r, t(4));
+      f.done(r);
+      const w2 = f.open('W2', 'coord-live', t(4) + 100);
+      f.bind(w2);
+      return { f, mark: r, coords: ['coord-live', 'coord-gone'], wave: w2 };
+    },
+    base: { parent: 'coord-live', claimants: ['coord-live', 'coord-gone'], card: 'W2', childIds: { 'coord-live': ['W2'], 'coord-gone': ['WA'] }, held: 'released:coord-live:parent-not-live', stamp: 'T2 for demo-w' },
+    verdict: 'same',
+  },
+  {
+    shape: 'R1: a cross-build rollback where the live occupant\'s wave carries an OLDER birth (the merge-base build\'s stamp)',
+    round: 'round 5 (R1)',
+    build: () => {
+      const f = new Fixture();
+      const r0 = f.open('R0', 'coord-r0', t(0) - 100);
+      f.mint(r0, t(0));
+      f.done(r0);
+      const r = f.open('R', 'coord-live', t(1) - 100);
+      f.mint(r, t(1));
+      const wa = f.open('WA', 'coord-gone', t(1) + 100);
+      f.bindAs(wa, t(1));
+      f.redraw(r, t(4));
+      const w2 = f.open('W2', 'coord-live', t(4) + 100);
+      f.bindAs(w2, t(0));
+      return { f, mark: r, coords: ['coord-live', 'coord-gone'] };
+    },
+    base: { parent: 'coord-live', claimants: ['coord-live', 'coord-gone'], card: 'W2', childIds: { 'coord-live': ['R', 'W2'], 'coord-gone': ['WA'] }, held: 'released:coord-live:parent-not-live' },
+    verdict: 'same',
+  },
+  {
+    shape: 'R2: an older build binds the live occupant\'s pre-planned wave with no stamp',
+    round: 'round 5 (R2)',
+    build: () => {
+      const f = new Fixture();
+      const r = f.open('R', 'coord-live', t(0));
+      const wa = f.open('WA', 'coord-gone', t(0));
+      const l = f.open('L', 'coord-live', t(0));
+      f.mint(r, t(1));
+      f.bindAs(wa, t(1));
+      f.redraw(r, t(4));
+      f.bindAs(l, null);
+      return { f, mark: r, coords: ['coord-live', 'coord-gone'] };
+    },
+    base: { parent: 'coord-live', claimants: ['coord-live', 'coord-gone'], card: 'L', childIds: { 'coord-live': ['R', 'L'], 'coord-gone': ['WA'] }, held: 'released:coord-live:parent-not-live' },
+    verdict: 'same',
+  },
+  {
+    shape: 'R3: a run planned before the birth, a failed fresh-spawn attempt after it, then rebound to the worker by the dup arm',
+    round: 'round 5 (R3)',
+    build: () => {
+      const f = new Fixture();
+      const x = f.open('X', 'coord-b', t(0));
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.done(m);
+      f.dispatchStarted(x, t(2));
+      f.bind(x);
+      return { f, mark: m, coords: ['coord-a', 'coord-b'], wave: x };
+    },
+    base: { parent: 'coord-b', claimants: ['coord-b'], card: 'X', childIds: { 'coord-a': [], 'coord-b': ['X'] }, held: 'released:operator:run-other-programme', stamp: 'T1 for demo-w' },
+    verdict: 'same',
+  },
+  {
+    shape: 'residual: the adopted arm with the earlier occupant\'s open run holding the HIGHER id',
+    round: 'round 5 (inherited)',
+    build: () => {
+      const f = new Fixture();
+      const adopting = f.open('adopting', 'coord-live', t(0));
+      const earlier = f.open('earlier', 'coord-gone', t(0) + 1000);
+      f.mint(earlier, t(1));
+      f.adopt(adopting, t(2));
+      return { f, mark: adopting, coords: ['coord-live', 'coord-gone'] };
+    },
+    base: { parent: 'coord-gone', claimants: ['coord-gone', 'coord-live'], card: 'earlier', childIds: { 'coord-live': ['adopting'], 'coord-gone': ['earlier'] }, held: 'released:operator:run-other-programme' },
+    verdict: 'same',
+    why: 'D-6993 under D6 gap 1: the earlier occupant\'s open run holds the higher id, so it is the parent (coord-gone)',
+    residual: 'inherited',
+  },
+  {
+    shape: 'residual: a cross-build rollback with C\'s minting run R still open and a third coordinator\'s open wave',
+    round: 'round 5 (inherited)',
+    build: () => {
+      const f = new Fixture();
+      const r = f.open('R', 'coord-live', t(1) - 100);
+      f.mint(r, t(1));
+      const w3 = f.open('W3', 'coord-third', t(1) + 100);
+      f.bind(w3);
+      f.redraw(r, t(4));
+      return { f, mark: r, coords: ['coord-live', 'coord-third'] };
+    },
+    base: { parent: 'coord-third', claimants: ['coord-third', 'coord-live'], card: 'W3', childIds: { 'coord-live': ['R'], 'coord-third': ['W3'] }, held: 'released:operator:run-other-programme' },
+    verdict: 'same',
+    why: 'D6 gap 1: the third coordinator\'s wave, bound to an earlier occupant, is the parent (coord-third), not the minting run\'s coord-live',
+    residual: 'inherited',
+  },
+];
+
+const EXPECT: 'base' | 'head' = process.env['BINDING_CORPUS_EXPECT'] === 'base' ? 'base' : 'head';
+const RECORD = process.env['BINDING_CORPUS_RECORD'] === '1';
+
+describe(`the probe corpus of #1573 (expecting the ${EXPECT} answers)`, () => {
+  it.each(CORPUS.map((c) => [c.shape, c] as const))('%s', async (_shape, c) => {
+    const got = await answer(c.build());
+    if (RECORD) console.log(`CORPUS ${JSON.stringify({ shape: c.shape, got })}`);
+    expect(got).toEqual(EXPECT === 'base' ? c.base : c.head ?? c.base);
+  });
+
+  it('no case is worse: a "same" case pins one answer, a "better" one says why, and a residual is a "same" case', () => {
+    for (const c of CORPUS) {
+      if (c.verdict === 'same') expect(c.head, c.shape).toBeUndefined();
+      else { expect(c.head, c.shape).toBeDefined(); expect(c.head, c.shape).not.toEqual(c.base); expect(c.why, c.shape).toBeTruthy(); }
+      if (c.residual !== undefined) { expect(c.verdict, c.shape).toBe('same'); expect(c.why, c.shape).toBeTruthy(); }
+    }
+  });
+});

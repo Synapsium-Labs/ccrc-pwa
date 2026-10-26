@@ -4398,7 +4398,7 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
       // birth it recorded first. This is the fail-closed cost the check
       // accepts: the close would simply hold.
       expect(childBirthOf({ ok: true, run: row! }, 'demo-worker')).toEqual({
-        kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth", recorded: 1_000,
+        kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth",
       });
     });
 
@@ -4522,7 +4522,7 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
         expect(row.sessionBornFor).toBe('demo-s1');   // matches — the id never changed
         expect(row.dispatchStartedAt).toBe(2_000);    // re-stamped — the re-mint is real
         expect(childBirthOf({ ok: true, run: row }, 'demo-s1')).toEqual({
-          kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth", recorded: 1_000,
+          kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth",
         });
       });
     });
