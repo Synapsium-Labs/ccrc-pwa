@@ -11,8 +11,9 @@ import { fileURLToPath } from 'node:url';
 import type { Dialog, HookAskQuestion } from '../../shared/api.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import {
-  askScreen, liveQuestion, namedQuestion, pairEnvelope, questionCorresponds, shownQuestion, titleMatches,
+  askScreen, liveQuestion, namedQuestion, pairEnvelope, pairMatches, questionCorresponds, shownQuestion, titleMatches,
 } from '../src/pane/askPairing.js';
+import { pairMatches as transcriptPairMatches } from '../src/transcript/ask.js';
 import { CORPUS } from './askPairingStream.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -63,5 +64,11 @@ describe('pane/askPairing.ts: the server\'s envelope pairing (Task Q3g)', () => 
     expect(shownQuestion(env, d)).toEqual(L.shownQuestion(env, d));
     expect(askScreen(env, d)).toBe(L.askScreen(env, d));
     if (d !== null) for (const q of env.questions) expect(titleMatches(q.question, d.title)).toBe(L.titleMatches(q.question, d.title));
+  });
+
+  it('the server keeps one normalize-and-prefix rule: transcript/ask.ts re-exports the one in pane/askPairing.ts', () => {
+    expect(transcriptPairMatches).toBe(pairMatches);
+    expect(pairMatches('  Yes,  deploy ', 'yes, deploy now')).toBe(true);
+    expect(pairMatches('', 'x')).toBe(false);
   });
 });

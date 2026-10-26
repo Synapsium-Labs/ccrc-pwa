@@ -13,10 +13,11 @@
 // `Dialog.multi`, `parsed` and the review screen are read through `shared/ask-menu.ts`'s rules (`reviewRows`), never
 // spelled again.
 //
-// The option match is the server's one normalize-and-prefix rule, `pairMatches`, imported, never spelled again.
+// The normalize-and-prefix rule (`pairMatches`) lives here: THE server's one rule for "this scraped row and this
+// structured option are the same option". `transcript/ask.ts` re-exports it, so its importers (`inject/ask.ts`'s menu
+// identity gate, `askkey.ts`) keep their imports, `alignAsk` keeps calling it, and the server keeps one definition.
 import type { Dialog, HookAskQuestion } from '../../../shared/api.js';
 import { reviewRows } from '../../../shared/ask-menu.js';
-import { pairMatches } from '../transcript/ask.js';
 
 /** The pairing of one question envelope with one pane reading: `shownQuestion`'s four facts, `askScreen`, and
  *  `questionCorresponds` per question. */
@@ -34,8 +35,21 @@ export interface AskPairingQuestions {
   readonly questions: readonly HookAskQuestion[];
 }
 
-/** Trim, lowercase and collapse whitespace runs: what the title match compares. */
+/** Trim, lowercase and collapse whitespace runs: what both the option match and the title match compare. */
 const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, ' ').trim();
+
+/** Either side may be the truncated one: `leftCol` cuts a scraped label at a run of two spaces or at the two-column
+ *  gutter, so compare as prefixes, after `norm` on both. An empty side matches nothing.
+ *
+ *  THE rule for "this scraped row and this structured option are the same option", moved here from
+ *  `transcript/ask.ts` (which re-exports it). `inject/ask.ts`'s menu-identity gate must decide the same question a
+ *  keystroke earlier, and the PWA's `askLive.ts` mirrors it (`prefixMatches`) until W7. A second server definition
+ *  would let the layers disagree about which menu is on screen while each stayed internally consistent
+ *  (`census-w3/questions.ts#envelopePairingRules` counts the server's definitions: 1). */
+export const pairMatches = (a: string, b: string): boolean => {
+  const [x, y] = [norm(a), norm(b)];
+  return x !== '' && y !== '' && (x.startsWith(y) || y.startsWith(x));
+};
 
 /** Does the envelope question `q` describe the same live menu `dialog` is showing, every option lined up with the
  *  pane's option at its position? An answer types the pane by index, so no row is forgiven here (unlike `alignAsk`).
