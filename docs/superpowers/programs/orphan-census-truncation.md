@@ -14,8 +14,8 @@ line in a file another wave holds under claim (below).
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | A truncated census is retried with a back-off, starting at `ORPHAN_RETRY_MS`, and each one writes a feed row that names the rows seen and the seconds taken. The unreadable arm's retry gets its first row. | #1569 | **IN REVIEW** 2026-10-26 12:16 UTC: review run 990, on the held-out panel plus a lens on load and on failing toward keeping. The wave-done (mail 10145) re-measured at `9efdbd52d`: the workspace branch, the handoff and the PR head agree, the PR touches the plan and three server files only, and it merges cleanly. Was **DISPATCHED** 2026-10-26 11:56 UTC, run 986. |
-| 2 | Pressure reads the disk alarm's critical state (`DiskAlarmLane.block()?.pressure`), through a third port on `OrphanTreeBeat` and one line in `server/src/watch.ts`. | — | **PLANNED.** It is dispatched once the other wave's claim on `watch.ts` is released, after the delegation broker's soak ends on 2026-10-31. |
+| 1 | A truncated census is retried with a back-off, starting at `ORPHAN_RETRY_MS`, and each one writes a feed row that names the rows seen and the seconds taken. The unreadable arm's retry gets its first row. | #1569 | **ACCEPTED, IN THE MERGE QUEUE** 2026-10-26 12:36 UTC: review 990 at `9efdbd52d` found one important finding (F1, latent until wave 2) and three minor ones, all carried to wave 2 below. Its CI was green at the tip, with 35 checks passing. The PR was enqueued at 12:36:55, at position 4. Was **IN REVIEW** 2026-10-26 12:16 UTC: review run 990, on the held-out panel plus a lens on load and on failing toward keeping. The wave-done (mail 10145) re-measured at `9efdbd52d`: the workspace branch, the handoff and the PR head agree, the PR touches the plan and three server files only, and it merges cleanly. Was **DISPATCHED** 2026-10-26 11:56 UTC, run 986. |
+| 2 | First, F1's fix: the due instant is stored apart from the cadence, so a change of pressure can only lengthen a pending retry. Then pressure reads the disk alarm's critical state (`DiskAlarmLane.block()?.pressure`), through a third port on `OrphanTreeBeat` and one line in `server/src/watch.ts`. | — | **PLANNED** as run 992, opened 2026-10-26 12:36 UTC. It is dispatched once the other wave's claim on `watch.ts` is released, after the delegation broker's soak ends on 2026-10-31. |
 
 ## Decisions & deviations
 
@@ -35,6 +35,20 @@ line in a file another wave holds under claim (below).
 - **The worker's two open readings, ruled 2026-10-26 12:16 UTC.**
   - (a) The back-off's cap is the pass's cadence (`censusMs`), which equals `ORPHAN_CENSUS_MS` until wave 2: accepted.
   - (b) An unreadable census neither resets nor extends the truncated streak: accepted.
+
+- **Review 990 (2026-10-26 12:36 UTC): wave 1 accepted, and its findings carried to wave 2.**
+  - **F1 (important, latent).** A rise in pressure after a truncated census re-asks the census on the next tick, so the
+    back-off is skipped. The retry instant is stored as `now - censusMs + waitMs` with the writing pass's cadence, and it
+    is tested with the reading pass's own. The unreadable arm, unchanged from `main`, has the same shape. No pass can read
+    pressure until wave 2 wires it (`orphanTreeBeat.ts` passes `pressure: () => false`), so the defect cannot fire at
+    wave 1's tip. Wave 2 may not land without the fix: a due instant stored apart from the cadence, so a change of
+    pressure can only lengthen a pending retry. A row pins each direction.
+  - **F2 (minor).** No row pins that the truncated arm passes the pass's own `censusMs`. Wave 2's pressure knob on the
+    rig pins it.
+  - **F3 (minor, disclosed in deviation 6987).** The streak starts over on every server restart. On a box where every
+    census truncates, that means six bounded walks in the first 7 h 45 min after each restart. Wave 2 either keeps
+    this, saying so, or persists the streak.
+  - **F4 (minor).** The plan's anchors drift by one line at the tip, so wave 2's plan edit corrects them.
 
 ## Carried constraints
 
