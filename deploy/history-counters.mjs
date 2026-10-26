@@ -739,6 +739,8 @@ const hasKeys = (v, keys) => isPlain(v) && Object.keys(/** @type {object} */ (v)
 /** The verdicts a card counter measures: decideCardDelivery's three that close a window (its wait is unmeasured). */
 const CARD_VERDICT_WORDS = Object.freeze(['served', 'mismatch', 'none']);
 const complianceValueOk = (v) => typeof v === 'string';
+// unreadable's keys are free names: expandEntryBody's states are literals in recall.mjs, not an exported vocabulary, so
+// no allowed set is built from a declared one; foldEcho sums whatever key arrives as a number.
 const echoValueOk = (v) => hasKeys(v, ['hits', 'errors', 'untimed', 'unreadable', 'prov_stale', 'recall_calls', 'gap'])
   && [v.hits, v.errors, v.untimed, v.prov_stale, v.recall_calls].every(isCount) && Number.isSafeInteger(v.gap)
   && isPlain(v.unreadable) && Object.values(v.unreadable).every(isCount);
@@ -922,7 +924,10 @@ export const REDISCOVERY = Object.freeze({
 // stratify and this file's own folds, so counts add and no summary is ever added to another. A node report is data: a
 // row or an answer off the shapes count writes is refused, never folded or coerced: a row's turns and recall_calls (a
 // non-negative integer on a measured row, null on an unmeasured one) and each counter's measured value (its spec's
-// `answer`). A row's store_id is not checked against its node report's (a named residual).
+// `answer`), and a row's ab_state (one of AB_STATES) with its unrealised (exactly ab_state !== AB_OK), which the strata
+// key on. NOT checked, named: a row's store_id against its node report's, its ts_ms, family, boundary_uuid, ccrc_id and
+// generation, and any extra field; and echo_hits' unreadable keys, which are free names (lib exports no vocabulary of
+// expandEntryBody's states to build an allowed set from), summed by foldEcho as numbers, never dropped or coerced.
 
 export const COUNTERS_COMBINED_KIND = 'ccrc-history-w2-counters-combined';
 export const COUNTERS_COMBINED_FILE = 'counters-combined.json';
@@ -937,9 +942,13 @@ function combineRow(w, measures) {
     || typeof w.changed !== 'boolean' || typeof w.unrealised !== 'boolean' || (w.state !== 'measured' && w.state !== 'unmeasured')) {
     throw new TypeError(`combine: a row off the counter's shape: ${JSON.stringify(w ?? null).slice(0, 200)}`);
   }
+  if (!AB_STATES.includes(w.ab_state)) throw new TypeError(`combine: a row's ab_state is ${JSON.stringify(w.ab_state ?? null)}, which is none of AB_STATES`);
+  if (w.unrealised !== (w.ab_state !== AB_OK)) {
+    throw new TypeError(`combine: a row's unrealised is ${w.unrealised}, where its ab_state ${w.ab_state} makes it ${w.ab_state !== AB_OK}`);
+  }
   for (const k of ['turns', 'recall_calls']) {
     if (w.state === 'measured' ? !isCount(w[k]) : w[k] !== null) {
-      throw new TypeError(`combine: a ${w.state} row's ${k} is ${JSON.stringify(w[k] ?? null)}, where ${w.state === 'measured' ? 'a non-negative integer' : 'null'} is the shape`);
+      throw new TypeError(`combine: ${w.state === 'measured' ? 'a measured' : 'an unmeasured'} row's ${k} is ${JSON.stringify(w[k] ?? null)}, where ${w.state === 'measured' ? 'a non-negative integer' : 'null'} is the shape`);
     }
   }
   return { ...w, measures: Object.fromEntries(COUNTER_NAMES.map((n) => [n, answerOf(n, w.measures?.[n], measures[n]?.answer)])) };
@@ -948,8 +957,8 @@ function combineRow(w, measures) {
 /** The nodes' reports summed (U2). Each node is {sha256, value}. Refused input-invalid, in this order: a value that is
  *  no counter report (counters-shape); definitions other than v1 (counters-def-mismatch); a COMBINE_SAME field other than
  *  the first node's (node-mismatch); a counter other than this one (script-mismatch); a store twice (store-duplicate);
- *  a row, an answer or a list off its shape (counters-shape): a row's turns and recall_calls, and each counter's measured
- *  value against its spec's `answer`. The record's stores no node report covers are named in
+ *  a row, an answer or a list off its shape (counters-shape): a row's ab_state, unrealised, turns and recall_calls, and each
+ *  counter's measured value against its spec's `answer`. The record's stores no node report covers are named in
  *  nodes_missing, never refused: the comparison says it is over fewer nodes than the record assigned (U2). measures and
  *  ownSha256 are injectable for tests. */
 export function combineReports(nodes, { measures = COUNTER_MEASURES, ownSha256 = scriptSha256() } = {}) {
@@ -1007,7 +1016,8 @@ export function combineReports(nodes, { measures = COUNTER_MEASURES, ownSha256 =
 /** combine: the paired node-report flags, a fresh --out, each node report sha-checked before it is parsed, the sum built
  *  in memory, and only then --out, with counters-combined.json written once. Every refusal of an input comes before --out
  *  exists; the one exception is writeReport's: a write failure after prepareOut made --out refuses out-refused and leaves
- *  the marked --out, which a re-run then refuses as existing. */
+ *  the marked --out, which a re-run then refuses as existing. prepareOut's own createOut can also leave a new --out when it
+ *  refuses (D-5986), which is not a refusal of an input. */
 export function combineCommand(flags) {
   checkFormFlags('combine', flags);
   const paths = flags['node-report'];

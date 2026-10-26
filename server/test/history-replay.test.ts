@@ -12774,12 +12774,12 @@ w6cDescribe('W2-6 Task 3: combine, the nodes\' reports summed into one arm compa
 
   w6cIt('combine refuses a measured row\'s turns that is no count, and an unmeasured row\'s that is not null (review 963 F1)', async () => {
     await f1Refuses([(w) => ({ ...w, turns: null }), (w) => ({ ...w, turns: '3' }), (w) => ({ ...w, turns: -1 }), (w) => ({ ...w, turns: 1.5 }),
-      (w) => ({ ...w, state: 'unmeasured' })], /a (measured|unmeasured) row's turns is /);
+      (w) => ({ ...w, state: 'unmeasured' })], /(a measured|an unmeasured) row's turns is /);
   });
 
   w6cIt('combine refuses a measured row\'s recall_calls that is no count, and an unmeasured row\'s that is not null (review 963 F1)', async () => {
     await f1Refuses([(w) => ({ ...w, recall_calls: '7' }), (w) => ({ ...w, recall_calls: null }), (w) => ({ ...w, recall_calls: -1 }),
-      (w) => ({ ...w, state: 'unmeasured', turns: null })], /a (measured|unmeasured) row's recall_calls is /);
+      (w) => ({ ...w, state: 'unmeasured', turns: null })], /(a measured|an unmeasured) row's recall_calls is /);
   });
 
   const f1Off = (name: string): RegExp => new RegExp(`^counters-shape: countersReport: ${name} answered a measured value off its shape`);
@@ -12812,6 +12812,60 @@ w6cDescribe('W2-6 Task 3: combine, the nodes\' reports summed into one arm compa
     const ctr = await w6cLoad();
     for (const name of W6C_NAMES) w6cExpect(typeof ctr.COUNTER_MEASURES[name].answer, name).toBe('function');
     w6cExpect(typeof w6cProbe()[W6C_NAMES[0]!].answer, 'CONTROL').toBe('undefined');
+  });
+
+  // Review 965 F1: lib exports no vocabulary of expandEntryBody's states, so an unreadable key is not refused; it is summed
+  // as a number, whatever its name, so a key of a node report is never dropped or turned into a string.
+  w6cIt('combine accepts an unreadable key of any name and sums it as a number across the nodes: __proto__ and constructor are kept (review 965 F1)', async () => {
+    const ctr = await w6cLoad();
+    const sh = f1Shaped(ctr);
+    const odd = JSON.parse('{"tombstone":1,"__proto__":3,"constructor":3}') as unknown;
+    const withOdd = (r: W6cR): W6cR => ({ ...r, windows: r.windows.map((w: W6cR) => (w.state === 'measured'
+      ? f1Answer(F1_E, { ...(F1_SHAPED[F1_E] as Record<string, unknown>), unreadable: odd })(w) : w)) });
+    const A = withOdd(w6cT3AsRead(w6cFrame(ctr, { measures: sh })));
+    const B = withOdd(w6cT3AsRead(w6cT3NodeB(ctr, sh)));
+    const c = W6C_T3.combineReports([{ sha256: 'a1'.repeat(32), value: A }, { sha256: 'b2'.repeat(32), value: B }]);
+    const cell = c.strata.control.all.counters[F1_E];
+    w6cExpect(cell.measured, 'CONTROL: one control window on each node').toBe(2);
+    w6cExpect(Object.entries(cell.summary.unreadable).sort()).toEqual([['__proto__', 6], ['constructor', 6], ['tombstone', 2]]);
+  });
+
+  // Review 965 F2: the strata key on a row's unrealised, so a row's ab_state and unrealised are checked as a pair count writes.
+  w6cIt('combine refuses a row whose ab_state is no AB_STATES word (review 965 F2)', async () => {
+    await f1Refuses([(w) => ({ ...w, ab_state: 'no-such-state' }), (w) => ({ ...w, ab_state: null }), (w) => ({ ...w, ab_state: 7 })], /a row's ab_state is /);
+  });
+  w6cIt('combine refuses a row whose unrealised is not exactly ab_state !== AB_OK: control-absent with unrealised false, and ok with unrealised true (review 965 F2)', async () => {
+    await f1Refuses([(w) => ({ ...w, ab_state: 'control-absent', unrealised: false }), (w) => ({ ...w, unrealised: true })], /a row's unrealised is /);
+  });
+
+  // Review 965 F3: count's runtime path is unchanged. This CONTROL holds each spec's `answer` to what the real measures write.
+  w6cIt('every real spec\'s `answer` accepts every measured value the real measures produce on the Task 2 and Task 3 fixture stores (review 965 F3; CONTROL: each counter measured at least once)', async () => {
+    const ctr = await w6cLoad();
+    const seen: Record<string, number> = Object.fromEntries(W6C_NAMES.map((name) => [name, 0]));
+    const check = (name: string, a: W6cR): void => {
+      if (a.state !== 'measured') return;
+      seen[name] = seen[name]! + 1;
+      w6cExpect(ctr.COUNTER_MEASURES[name].answer(a.value), `${name}: ${JSON.stringify(a.value)}`).toBe(true);
+    };
+    const echo = w6cT2EchoStore();
+    const card = w6cT2CardStore();
+    const wait = w6cT2WaitStore();
+    const stores: Array<[{ dbFile: string }, W6cT2Part[]]> = [
+      [echo, [echo.fA1, echo.fA1Cut, echo.fA1Moved, echo.fA2, echo.fH1, echo.fH2, echo.fH3, echo.fGhost, echo.fGhostMeasured]],
+      [card, [card.fB, card.fC1, card.fC2, card.fD, card.fE, card.fF, card.fEA, card.fEB, card.fRT, card.fNS]],
+      [wait, [wait.fG, wait.fU]],
+    ];
+    for (const [st, parts] of stores) {
+      w6cT2With(st.dbFile, (cs) => {
+        for (const p of parts) {
+          const ctx = w6cT2Ctx(cs, p);
+          for (const name of W6C_NAMES.slice(0, 5)) check(name, ctr.COUNTER_MEASURES[name].measure(ctx));
+        }
+      });
+    }
+    check(F1_R, w6cT3Measure(w6cT3Story(w6cT3Turns(11, { 10: [w6cT3Read('r10', W6C_T3_A)] }))));
+    check(F1_R, w6cT3Measure(w6cT3Story(w6cT3Turns(11, { 11: [w6cT3Read('r11', W6C_T3_A)] }))));
+    w6cExpect(Object.values(seen).every((n) => n > 0), `CONTROL: every counter was measured at least once: ${JSON.stringify(seen)}`).toBe(true);
   });
 
   w6cIt('combine writes one report under a fresh --out, its sha the one stderr line; its paired list flags must pair, and a flag outside its form is args-invalid', async () => {
