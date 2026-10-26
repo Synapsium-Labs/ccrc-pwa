@@ -336,7 +336,7 @@ describe('in Refined with a release waiting the update row sits below the banner
 
 // A touch screen at a desk (a tablet in landscape, a touch laptop) and a phone (390, always touch).
 const COARSE: AppView[] = [
-  ...SKINS.flatMap((skin) => THEMES.flatMap((theme) => [900, 1920].map((width) => ({ skin, theme, width, touch: true })))),
+  ...SKINS.flatMap((skin) => THEMES.flatMap((theme) => WIDTHS.map((width) => ({ skin, theme, width, touch: true })))),
   ...SKINS.map((skin) => ({ skin, theme: PHOSPHOR, width: 390 })),
 ];
 
