@@ -15,6 +15,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ARCHIVE_REFUSAL_CODES, LC_REFUSAL_WORD } from '../../shared/api.js';
 import { SENTENCES } from '../src/wsaudit.js';
+import {
+  WORKSPACE_TRANSITIONS, WORKSPACE_VERBS, WORKSPACE_STATES, WORKSPACE_REFUSALS_BY_VERB, isWorkspaceRefusal,
+  isWorkspaceVerb, isWorkspaceState, workspaceEdge,
+} from '../../shared/workspaceTransitions.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (p: string): string => readFileSync(path.join(ROOT, p), 'utf8');
@@ -154,5 +158,50 @@ describe('workspace refusal census (ARCH-41, #776): today’s client-read refusa
   it('every archive wire word is a census edge (the door has no refusal the census missed)', () => {
     const covered = new Set(WORKSPACE_REFUSAL_CENSUS.filter((x) => x.verb === 'archive').map((x) => x.code));
     expect([...covered].sort()).toEqual([...ARCHIVE_REFUSAL_CODES].sort());
+  });
+});
+
+// ── The table (commit 2): WORKSPACE_TRANSITIONS answers every census edge, and the archive decider reads it. ──────────
+describe('WORKSPACE_TRANSITIONS answers the census (ARCH-41, #776)', () => {
+  const rowKey = (verb: string, from: readonly string[], code: string): string => `${verb}|${[...from].join('|')}|${code}`;
+
+  it('every census edge is a table row, field for field', () => {
+    const rows = new Map(WORKSPACE_TRANSITIONS.map((t) => [rowKey(t.verb, t.from, t.refusal), t] as const));
+    for (const x of WORKSPACE_REFUSAL_CENSUS) {
+      const row = rows.get(rowKey(x.verb, x.from.split('|'), x.code));
+      expect(row, key(x)).toBeDefined();
+      expect(row!.by, key(x)).toBe(x.by);
+      expect(row!.precondition, key(x)).toBe(x.precondition);
+    }
+  });
+
+  it('the table has no row the census did not see (a new edge is a census edge first)', () => {
+    expect(WORKSPACE_TRANSITIONS).toHaveLength(WORKSPACE_REFUSAL_CENSUS.length);
+  });
+
+  it('the derived lists and guards are total: every verb and state a row names is listed, and only those', () => {
+    for (const t of WORKSPACE_TRANSITIONS) {
+      expect(isWorkspaceVerb(t.verb), t.verb).toBe(true);
+      for (const f of t.from) expect(isWorkspaceState(f), f).toBe(true);
+      expect(isWorkspaceRefusal(t.verb, t.refusal)).toBe(true);
+    }
+    expect([...WORKSPACE_VERBS].sort()).toEqual(['archive', 'collect', 'expire', 'forget', 'reap', 'reclaim', 'restore']);
+    expect(WORKSPACE_STATES).toContain('archived');
+    expect(isWorkspaceRefusal('restore', 'dirty-tree')).toBe(false);
+    expect(new Set(WORKSPACE_REFUSALS_BY_VERB.archive)).toEqual(new Set(ARCHIVE_REFUSAL_CODES));
+  });
+
+  it('workspaceEdge answers each archive wire word and throws on a word with no row', () => {
+    for (const code of ARCHIVE_REFUSAL_CODES) expect(workspaceEdge('archive', code).status, code).toBe(409);
+    expect(() => workspaceEdge('archive', 'nope' as never)).toThrow(/no archive edge/);
+  });
+
+  // COUNTED EXIT: refusal edges not answered from WORKSPACE_TRANSITIONS go to 0. The archive door is the one TS decider
+  // of an edge (ccd's bash enforcement is the anti-corruption layer's and is pinned by the census); it must take each
+  // refusal's code and status from the table, spelling neither.
+  it('archiveDoor.ts takes every refusal from workspaceEdge: no literal status at a refuse() site', () => {
+    expect(DOOR).toMatch(/workspaceEdge/);
+    expect(DOOR).toMatch(/shared\/workspaceTransitions\.js/);
+    expect(DOOR.match(/\brefuse\(\s*\d{3}\b/g) ?? []).toEqual([]);
   });
 });
