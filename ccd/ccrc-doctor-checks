@@ -7672,15 +7672,18 @@ _dr_cx_bridge_files() {   # <id>
 # not stats.py's `_load`, and the known differences are all files no `Stats`
 # writes, only a hand-edited or foreign one. Stricter than the bridge: a file
 # of this lane with no `unexplained` object, or with more names than a bridge
-# writes, is one the bridge carries (as no names, or whole) and this row calls
-# unmeasured. Looser: jq's `.version == 1` is true of `1.0`, which stats.py's
-# `_is_int` resets (jq 1.6 cannot tell the two apart at all); jq reads invalid
-# UTF-8 as U+FFFD where stats.py's strict decode resets the file (such a name
-# prints `unrecognised`); and a family outside known.KNOWN, which the bridge
-# drops, is listed here. An absent file has no drift row (no bridge has served
-# yet). A regular file this row cannot read so (its size unmeasured, too large,
-# too many names, unparseable, unreadable, another version or another lane's,
-# no `unexplained` object) is never read as "no unexplained name": it is this
+# writes, is one the bridge carries (as no names, or filtered to its families
+# and bounded names) and this row calls unmeasured. Looser: jq's
+# `.version == 1` is true of `1.0`, which stats.py's `_is_int` resets (jq 1.6
+# cannot tell the two apart at all); jq reads invalid UTF-8 as U+FFFD where
+# stats.py's strict decode resets the file (such a name prints
+# `unrecognised`); an entry that is not a string or fails NAME_RE, which
+# `_load` drops, prints `unrecognised` here and is counted in <n>; and a family
+# outside known.KNOWN, which the bridge drops, is listed here. An absent file
+# has no drift row (no bridge has served yet). A regular file this row cannot
+# read so (its size unmeasured, unreadable by this user, too large, too many
+# names, unparseable, another version or another lane's, no `unexplained`
+# object) is never read as "no unexplained name": it is this
 # row's unmeasured WARN, a form of the drift row as the bridge tier's "cannot
 # be told" WARN is a form of its stale row, so it is printed whatever else the
 # codex check finds. `unrecognised` and `overflow` (more names in a family
@@ -7706,6 +7709,8 @@ _dr_cx_drift() {   # <id>
     why='its size could not be measured'
   elif [ "$sz" -gt "$read_max" ]; then
     why='it is larger than the bridge reads, READ_MAX in ccd/codexbridge/stats.py'
+  elif [ ! -r "$p" ]; then
+    why='it could not be opened for reading'
   else
     mapfile -t got < <(jq -rs --arg id "$id" --argjson max "$(( families * (names_max + 1) ))" 'def line: if type == "string" and (explode | all(. >= 32 and . != 127)) then . else "" end;
         if length == 1 and (.[0] | type == "object" and .version == 1 and .lane == $id and (.unexplained | type) == "object")
@@ -7722,6 +7727,8 @@ _dr_cx_drift() {   # <id>
   if [ -n "$why" ]; then
     if [ "$why" = 'its size could not be measured' ]; then
       fix="check that stat runs on PATH (coreutils on a GNU box, the base system on macOS) and can read $p, then re-run doctor"
+    elif [ "$why" = 'it could not be opened for reading' ]; then
+      fix="make $p readable by the user doctor runs as, its owner (chmod 600 $p, the mode the bridge keeps it at), then re-run doctor"
     else
       fix="stop the lane (ccrc codex stop $id), move $p aside by hand, then start it again: the bridge starts a new stats file, which this line reads, and lists again any name it meets — ccrc never removes it for you"
     fi
