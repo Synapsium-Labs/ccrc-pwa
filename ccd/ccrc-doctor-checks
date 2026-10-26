@@ -7663,21 +7663,35 @@ _dr_cx_bridge_files() {   # <id>
 # LC_ALL=C so a range never reaches past ASCII (under a UTF-8 locale bash's
 # `[A-Za-z]` accepts letters such as `ë`, measured). The line prints the first
 # `shown` names and counts the rest, so one file cannot make it unbounded.
-# WHAT THE BRIDGE READS, THIS ROW READS: a file is the bridge's only when it is
-# one version-1 document of THIS lane (`.lane`) with an `unexplained` object,
-# no larger than stats.py's READ_MAX (same arithmetic text, pinned equal too);
-# the bridge resets any other at its next start. An absent file has no drift
-# row (no bridge has served yet). A regular file this row could not read as
-# the bridge's (unparseable, unreadable, too large, another version or another
-# lane's) is never read as "no unexplained name": it adds "drift unread" to the
-# lane's words, `models`' "model state unread" rule. `unrecognised` and
-# `overflow` (more names in a family than the bridge counts) are markers, not
-# names, and the remedy says so whenever the list holds one: neither is ever
-# explained in known.py.
+# WHAT THIS ROW READS: names only from one JSON document of version 1 and of
+# THIS lane (`.lane`) whose `unexplained` is an object, no larger than
+# stats.py's READ_MAX and listing at most `families` times `names_max` + 1
+# names (known.KNOWN's families, each NAMES_MAX names and `overflow`; READ_MAX,
+# NAMES_MAX and the family count are pinned equal to the doctor's own by
+# ccrc-doctor-codex.test.ts), which is every file a real `Stats` writes. It is
+# not stats.py's `_load`, and the known differences are all files no `Stats`
+# writes, only a hand-edited or foreign one. Stricter than the bridge: a file
+# of this lane with no `unexplained` object, or with more names than a bridge
+# writes, is one the bridge carries (as no names, or whole) and this row calls
+# unmeasured. Looser: jq's `.version == 1` is true of `1.0`, which stats.py's
+# `_is_int` resets (jq 1.6 cannot tell the two apart at all); jq reads invalid
+# UTF-8 as U+FFFD where stats.py's strict decode resets the file (such a name
+# prints `unrecognised`); and a family outside known.KNOWN, which the bridge
+# drops, is listed here. An absent file has no drift row (no bridge has served
+# yet). A regular file this row cannot read so (its size unmeasured, too large,
+# too many names, unparseable, unreadable, another version or another lane's,
+# no `unexplained` object) is never read as "no unexplained name": it is this
+# row's unmeasured WARN, a form of the drift row as the bridge tier's "cannot
+# be told" WARN is a form of its stale row, so it is printed whatever else the
+# codex check finds. `unrecognised` and `overflow` (more names in a family
+# than the bridge counts) are markers, not names, and the remedy says so
+# whenever the list holds one: neither is ever explained in known.py, and the
+# name behind one is read only in a recording, which the bridge makes only
+# while the operator's `record-streams` marker is in the lane directory.
 _dr_cx_drift() {   # <id>
-  local id="$1" dir lj sf p i fam name sz list fix LC_ALL=C unrec=0 over=0
+  local id="$1" dir lj sf p i fam name sz list fix why='' LC_ALL=C unrec=0 over=0
   local name_re='^[A-Za-z0-9_.:/-]{1,64}$'
-  local read_max=$(( 16 * 2**20 )) shown=32
+  local read_max=$(( 16 * 2**20 )) names_max=256 families=10 shown=32
   local -a got=() listed=()
   local -A seen=()
   dir="$(_codex_lane_dir "$id")"; lj="$dir/lane.json"
@@ -7688,13 +7702,32 @@ _dr_cx_drift() {   # <id>
   p="$dir/$sf"
   [ -f "$p" ] && [ ! -L "$p" ] || return 0
   sz="$(_plat_size -- "$p" 2>/dev/null)" || sz=''
-  if [[ ! "$sz" =~ ^[0-9]+$ ]] || [ "$sz" -gt "$read_max" ]; then DRX_LANE_WORDS+=", drift unread"; return 0; fi
-  mapfile -t got < <(jq -rs --arg id "$id" 'def line: if type == "string" and (explode | all(. >= 32 and . != 127)) then . else "" end;
-      if length == 1 and (.[0] | type == "object" and .version == 1 and .lane == $id and (.unexplained | type) == "object")
-      then "v1", (.[0].unexplained | to_entries[] | (.key | line) as $f
-        | (.value | if type == "array" then .[] else empty end) | $f, line)
-      else "other" end' "$p" 2>/dev/null)
-  if [ "${got[0]:-}" != v1 ]; then DRX_LANE_WORDS+=", drift unread"; return 0; fi
+  if [[ ! "$sz" =~ ^[0-9]+$ ]]; then
+    why='its size could not be measured'
+  elif [ "$sz" -gt "$read_max" ]; then
+    why='it is larger than the bridge reads, READ_MAX in ccd/codexbridge/stats.py'
+  else
+    mapfile -t got < <(jq -rs --arg id "$id" --argjson max "$(( families * (names_max + 1) ))" 'def line: if type == "string" and (explode | all(. >= 32 and . != 127)) then . else "" end;
+        if length == 1 and (.[0] | type == "object" and .version == 1 and .lane == $id and (.unexplained | type) == "object")
+        then if ([.[0].unexplained[] | arrays | length] | add // 0) > $max then "many"
+          else "v1", (.[0].unexplained | to_entries[] | (.key | line) as $f
+            | (.value | if type == "array" then .[] else empty end) | $f, line) end
+        else "other" end' "$p" 2>/dev/null)
+    case "${got[0]:-}" in
+      v1) ;;
+      many) why='it lists more names than the bridge writes, NAMES_MAX names and overflow in each of the families of ccd/codexbridge/known.py' ;;
+      *) why='it is not one version-1 JSON document of this lane with an unexplained object' ;;
+    esac
+  fi
+  if [ -n "$why" ]; then
+    if [ "$why" = 'its size could not be measured' ]; then
+      fix="check that stat runs on PATH (coreutils on a GNU box, the base system on macOS) and can read $p, then re-run doctor"
+    else
+      fix="stop the lane (ccrc codex stop $id), move $p aside by hand, then start it again: the bridge starts a new stats file, which this line reads, and lists again any name it meets — ccrc never removes it for you"
+    fi
+    _dr_cx_warn "$id: whether the bridge met a name it does not know cannot be told: its stats file $p cannot be read as the bridge's ($why) — unmeasured, never read as no unexplained name" "$fix"
+    return 0
+  fi
   for (( i = 1; i + 1 < ${#got[@]}; i += 2 )); do
     fam="${got[$i]}"; name="${got[$((i + 1))]}"
     [[ "$fam" =~ $name_re ]] || fam=unrecognised
@@ -7709,8 +7742,8 @@ _dr_cx_drift() {   # <id>
   list="$(_dr_cx_join ', ' "${listed[@]:0:$shown}")"
   [ "${#listed[@]}" -le "$shown" ] || list+=", … and $(( ${#listed[@]} - shown )) more"
   fix="read what each name is in the upstream Codex source (openai/codex), then explain it by adding it to ccd/codexbridge/known.py in a reviewed change; the rollout of that change restarts the bridge, whose start drops an explained name from the list, and this line clears — ccrc never explains a name for you"
-  [ "$unrec" -eq 0 ] || fix+="; unrecognised is not a name: it stands for one outside the bound the bridge writes every name under (NAME_RE in ccd/codexbridge/stats.py), so read that name in a recording of the lane's stream, and never add unrecognised to known.py"
-  [ "$over" -eq 0 ] || fix+="; overflow is not a name: it stands for more distinct names in that family than the bridge counts (NAMES_MAX in ccd/codexbridge/stats.py), so read the names past it in a recording of the lane's stream, and never add overflow to known.py"
+  [ "$unrec" -eq 0 ] || fix+="; unrecognised is not a name: it stands for one outside the bound the bridge writes every name under (NAME_RE in ccd/codexbridge/stats.py), so put the operator's record-streams marker in $dir (the bridge records the lane's stream only while it is there), read that name in the recording when the bridge meets it again, and never add unrecognised to known.py"
+  [ "$over" -eq 0 ] || fix+="; overflow is not a name: it stands for more distinct names in that family than the bridge counts (NAMES_MAX in ccd/codexbridge/stats.py), so put the operator's record-streams marker in $dir (the bridge records the lane's stream only while it is there), read the names past it in the recording when the bridge meets them again, and never add overflow to known.py"
   _dr_cx_warn "$id: the bridge met ${#listed[@]} name(s) it does not know: $list (names only, never content). Each is a protocol change to read; it is explained by adding it to ccd/codexbridge/known.py in a reviewed change." "$fix"
   return 0
 }
