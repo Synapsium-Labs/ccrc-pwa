@@ -113,8 +113,8 @@ export interface SessionBinding {
 const byIdDesc = (a: BindingRun, b: BindingRun): number => b.id - a.id;
 
 /** THE birth of the current occupant of a session id: the NEWEST birth any run of the series recorded for it, `null` when
- *  none did. One rule for both halves: `CoordStore.stampOccupantBirth` writes it (its SQL orders `sessionBornAt DESC`, pinned
- *  to agree with this by `run-binding-occupant-birth.test.ts`) and `anchoredIncarnation` reads it, so a wave bound to a
+ *  none did. One rule for both halves: `CoordStore.stampOccupantBirth` writes it (this function, over `bindingRunsOf`'s
+ *  series, pinned by `run-binding-occupant-birth.test.ts`) and `anchoredIncarnation` reads it, so a wave bound to a
  *  worker reads `bound` for that worker. A name's occupants are minted in order, so the newest recorded birth is the live
  *  one; placement of the minting run (`childBirthOf`) plays no part, so a moved `dispatchStartedAt` cannot split the two. */
 export function occupantBirthOf(runs: readonly BindingRun[], sessionId: string): number | null {

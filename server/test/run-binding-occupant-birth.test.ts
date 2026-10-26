@@ -54,6 +54,23 @@ describe('the occupant\'s birth: one rule for the stamp and the anchor', () => {
     expect(anchoredIncarnation(before, UNPLACEABLE)).toMatchObject({ kind: 'born', bornAt: expected });
   });
 
+  it('the stamp reads the same run set as the anchor: a run an older build rebound away keeps a birth for the id, and neither half reads it', () => {
+    const s = store();
+    reusedName(s);
+    // The rollback shape: a NEWER birth recorded for demo-w on a run whose sessionId an older build moved elsewhere
+    // without touching either birth column. It is outside demo-w's series (`bindingRunsOf`: sessionId OR claimedBy).
+    const rebound = open(s, 'prog-r', 'coord-x', BORN + 100);
+    s.setSession(rebound, 'demo-w', BORN + 500);
+    s.db.prepare("UPDATE runs SET sessionId = 'demo-other' WHERE id = ?").run(rebound);
+    const before = series(s, 'demo-w');
+    expect(before.map((r) => r.id)).not.toContain(rebound);
+    expect(occupantBirthOf(before, 'demo-w')).toBe(BORN);
+    const wave = open(s, 'prog-c', 'coord-1', BORN + 10);
+    s.setSession(wave, 'demo-w');
+    const stamped = s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(wave) as { sessionBornAt: number };
+    expect(stamped.sessionBornAt).toBe(BORN);
+  });
+
   it('a wave bound to the live worker is bound and keeps its parent, with the earlier occupant\'s run no part of it', () => {
     const s = store();
     const { minting } = reusedName(s);

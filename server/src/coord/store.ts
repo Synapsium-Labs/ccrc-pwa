@@ -13,7 +13,7 @@ import { decideAllocation } from './ledger.js';
 // nothing else, so the shape it returns is the policy's to define.
 import type { CoordPlacementStamp } from './placement.js';
 import type { LastRun } from './released.js';
-import type { BindingRun, Incarnation } from './runBinding.js';
+import { occupantBirthOf, type BindingRun, type Incarnation } from './runBinding.js';
 import { boundRows, openRows, type SeriesRow } from './bindingRows.js';
 // Stall watch wave 1: the stall lane's row shapes are declared by their CONSUMER,
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
@@ -3041,8 +3041,9 @@ export class CoordStore {
       this.db.prepare('UPDATE runs SET sessionBornAt = NULL, sessionBornFor = NULL WHERE id = ?').run(runId);
     }
     // The bound incarnation (ARCH-62, #1407): a bind that names no birth of its own (a later wave bound to a worker that
-    // already exists) records the birth of the occupant it binds to, so `bindsRun` answers it exactly. No stamp, and
-    // today's answers, where the session never had a placeable birth.
+    // already exists) records the birth of the occupant it binds to, the NEWEST birth any run of the session's series
+    // recorded for it (`stampOccupantBirth`, placement of the minting run plays no part), so `bindsRun` answers it
+    // exactly. No stamp, and the id-string rule, only where no run of the series ever recorded a birth for the session.
     // Only when the bind changes the occupant: a same-session re-statement (markDispatched after an adopted bind's
     // explicit null) must not date the run to an earlier occupant's birth.
     if (bornAt === undefined && changesOccupant) this.stampOccupantBirth(runId, sessionId);
@@ -3054,20 +3055,21 @@ export class CoordStore {
     return { rebound: true, reissued };
   }
 
-  /** Stamp run `runId` (just bound to `sessionId`, with no birth of its own) with the occupant's birth: the newest birth any
-   *  run recorded FOR this session (`occupantBirthOf`, `coord/runBinding.ts`, the one rule; the SQL below mirrors it and
-   *  `run-binding-occupant-birth.test.ts` pins that they agree). Placement of the minting run plays no part, so a worker
-   *  whose `dispatchStartedAt` moved is still the occupant that birth names. Write-once: a run that carries a birth keeps
-   *  it. A session with no such run is a coordinator, a manual workspace or an adopted one: it stays unstamped and keeps the
-   *  id-string rule. On a worker alive across migration 16 the newest birth can be a backfilled wave-N row, not the
-   *  minting run: the legacy exception `runBinding.ts` names (WHICH RUNS BIND A BORN INCARNATION). */
+  /** Stamp run `runId` (just bound to `sessionId`, with no birth of its own) with the occupant's birth: `occupantBirthOf`
+   *  (`coord/runBinding.ts`, the one rule) over the session's series as `bindingRunsOf` reads it, the same run set and the
+   *  same function `anchoredIncarnation` reads, so the stamp cannot drift from the anchor (`run-binding-occupant-birth.test.ts`
+   *  pins a rebound run's birth outside the series). Placement of the minting run plays no part, so a worker whose
+   *  `dispatchStartedAt` moved is still the occupant that birth names. Write-once: a run that carries a birth keeps it. A
+   *  session with no birth on record (a coordinator, a manual workspace, an adopted one) or whose series cannot be read
+   *  stays unstamped and keeps the id-string rule. On a worker alive across migration 16 the newest birth can be a
+   *  backfilled wave-N row, not the minting run: the legacy exception `runBinding.ts` names (WHICH RUNS BIND A BORN
+   *  INCARNATION). */
   private stampOccupantBirth(runId: number, sessionId: string): void {
-    this.db.prepare(
-      'UPDATE runs SET sessionBornAt = b.at, sessionBornFor = ? FROM ' +
-      '(SELECT sessionBornAt AS at FROM runs WHERE sessionBornFor = ? AND sessionBornAt IS NOT NULL ' +
-      'ORDER BY sessionBornAt DESC LIMIT 1) AS b ' +
-      'WHERE runs.id = ? AND runs.sessionBornAt IS NULL',
-    ).run(sessionId, sessionId, runId);
+    const series = this.bindingRunsOf(sessionId);
+    const at = series.ok ? occupantBirthOf(series.runs, sessionId) : null;
+    if (at === null) return;
+    this.db.prepare('UPDATE runs SET sessionBornAt = ?, sessionBornFor = ? WHERE id = ? AND sessionBornAt IS NULL')
+      .run(at, sessionId, runId);
   }
 
   /**
