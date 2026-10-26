@@ -36,13 +36,13 @@ import path, { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { CONTROL_FILE_MAX, EXIT, HEADLESS_LIST_MAX_BYTES, RECALL_ARMS, RECALL_OFF_META, REDACTED_MARK, SCHEMA_ADDED, SEARCHABLE_PROVENANCE, UUID_RE, asOfBinds, asOfHiddenNodesSql, asOfVisibleEntriesSql, backendOf, blobOverDecodeCap, canonicalJson, cardLine, displayPrefixes, entryIndexText, formatHeadlessList, ftsPhrase, ftsTextOf, historyPaths, idOk, isHistoryCommand, isSyntheticModel, parseHeadlessList, producerOf, producerOfCopy, recallOffPath, recallOffStatusOf, redactField, redactFinalJson, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
+import { CONTROL_FILE_MAX, EXIT, HEADLESS_LIST_MAX_BYTES, LINE_MAX, RECALL_ARMS, RECALL_OFF_META, REDACTED_MARK, SCHEMA_ADDED, SEARCHABLE_PROVENANCE, UUID_RE, asOfBinds, asOfHiddenNodesSql, asOfVisibleEntriesSql, backendOf, blobOverDecodeCap, canonicalJson, cardLine, displayPrefixes, entryIndexText, formatHeadlessList, ftsPhrase, ftsTextOf, historyPaths, idOk, isHistoryCommand, isSyntheticModel, parseHeadlessList, producerOf, producerOfCopy, recallOffPath, recallOffStatusOf, redactField, redactFinalJson, renderEntryText, sha256Hex, summaryRowFor, toolResultIdsOf, toolUsesOf } from '../ccd/history/lib.mjs';
 import { StoreError, openReader, readBounded, userVersion } from '../ccd/history/store.mjs';
 import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/history/derive.mjs';
 import { asOfCutOf, expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf } from '../ccd/history/recall.mjs';
 import { pairIndexOf } from '../ccd/history/cli.mjs';
-import { ftsTextOfBlob, readRegPresence } from '../ccd/history/sweep.mjs';
-import { ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, assignArms, assignmentSha256, buildWindows, checkGateCode, classifyRun, collapseWs, expectedWindows, familyKey, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
+import { admitFile, ftsTextOfBlob, readRegPresence } from '../ccd/history/sweep.mjs';
+import { ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, assignArms, assignmentSha256, buildWindows, checkGateCode, classifyRun, cmpFrac, collapseWs, expectedWindows, familyKey, frac, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -178,6 +178,8 @@ export const FLAG_SPECS = Object.freeze(/** @type {Record<string, FlagKind>} */ 
   // W2-5b1 Task 1 (W2-D24, Q23): a part 2 consumer's stamp, taken at or after window start only (loadFinalRecord). No W2-5a
   // form lists it, so each refuses it through checkFlags.
   'allow-code-change': 'bool',
+  // W2-5b2 Task 2 (K2, Q27): the pilot acts read step 0b's result with its sha; open --finalize takes the ruling on a failed pilot.
+  step0b: 'string', 'step0b-sha256': 'string', 'accept-failed-pilot': 'bool',
 }));
 
 /** The subcommands, by name. Empty until Tasks 8 and 9 register `step0a` and `probe`, so every subcommand is
@@ -1127,18 +1129,16 @@ function spendRow(line) {
   return { name: v.name, tokens: v.tokens };
 }
 
-/** The cumulative spend under `out` (W2-D55): every line summed, a repeated name included (never de-duplicated:
- *  over-counting is the budget's safe direction). 0 when no ledger exists yet. A ledger the driver cannot read whole
- *  refuses `out-refused` (D-5986), with exactly one of `spend.jsonl is not a regular file`, `spend.jsonl unreadable <code>`,
- *  `spend.jsonl over-cap` and `spend.jsonl malformed` (a torn or foreign line, one recordSpend would not write, or lines that
- *  each read but sum past the safe-integer range): raising
- *  --budget clears none of these states, so `budget-exhausted` means only that spend has reached the budget. (Task 4
- *  answered all of them `budget-exhausted` `ledger-unreadable`.)
- *  @param {string} out
- *  @returns {number} */
-export function spentSoFar(out) {
+/** Every ledger line under `out` as {name, tokens}, in order (W2-D55); none when no ledger exists yet. The ledger's one
+ *  reader (W2-5b2 Task 2 factored it out of spentSoFar, its refusals byte for byte): spentSoFar sums it, and pilot-result
+ *  sums the usage pilot's lines by name. A ledger the driver cannot read whole refuses `out-refused` (D-5986), with
+ *  exactly one of `spend.jsonl is not a regular file`, `spend.jsonl unreadable <code>`, `spend.jsonl over-cap` and
+ *  `spend.jsonl malformed` (a torn or foreign line, one recordSpend would not write, or lines that each read but sum
+ *  past the safe-integer range).
+ *  @param {string} out  @returns {Array<{ name: string, tokens: number }>} */
+export function spendLinesOf(out) {
   const read = readPlain(`${out}/${SPEND_LEDGER}`, OUT_STREAM_CAP);   // D-5986: lstat, no-follow open, fstat, bounded read
-  if (read.state === 'absent') return 0;
+  if (read.state === 'absent') return [];
   if (read.state === 'bad') {
     if (read.why === 'not-regular') refuse('out-refused', `${SPEND_LEDGER} is not a regular file`);
     if (read.why === 'over-cap') refuse('out-refused', `${SPEND_LEDGER} over-cap`);
@@ -1147,12 +1147,38 @@ export function spentSoFar(out) {
   const text = read.bytes.toString('utf8');
   const rows = text.split('\n');
   if (rows.pop() !== '') refuse('out-refused', `${SPEND_LEDGER} malformed`);   // the last line was torn
+  const lines = [];
   let sum = 0;
   for (const line of rows) {
     const row = spendRow(line);
     if (row === null) refuse('out-refused', `${SPEND_LEDGER} malformed`);
     sum += row.tokens;
     if (!Number.isSafeInteger(sum)) refuse('out-refused', `${SPEND_LEDGER} malformed`);   // D-5986: lines that each read but sum past the safe range
+    lines.push(row);
+  }
+  return lines;
+}
+
+/** The cumulative spend under `out` (W2-D55): every line spendLinesOf reads, summed, a repeated name included (never
+ *  de-duplicated: over-counting is the budget's safe direction). 0 when no ledger exists yet; otherwise spendLinesOf's
+ *  refusals: raising --budget clears none of those states, so `budget-exhausted` means only that spend has reached the
+ *  budget. (Task 4 answered all of them `budget-exhausted` `ledger-unreadable`.)
+ *  @param {string} out
+ *  @returns {number} */
+export function spentSoFar(out) {
+  return spendLinesOf(out).reduce((a, l) => a + l.tokens, 0);
+}
+
+/** The judge's own spend over already validated ledger rows (K25, D-6723), both sections and every repeated name.
+ *  Prefixes are section/JUDGE_DIR/, not substrings: judgex and another section never count. Pure; never reads or filters
+ *  raw ledger bytes. spendLinesOf validates every row and the whole sum before the gate calls this function.
+ *  @param {Array<{name: string, tokens: number}>} rows  @returns {number} */
+export function judgeSpentOf(rows) {
+  let sum = 0;
+  for (const row of rows) {
+    if (!ARM_SECTIONS.some((section) => row.name.startsWith(`${section}/${JUDGE_DIR}/`))) continue;
+    sum += row.tokens;
+    if (!Number.isSafeInteger(sum)) throw new RangeError('judgeSpentOf: spend past safe-integer range');
   }
   return sum;
 }
@@ -2008,19 +2034,24 @@ export function decideBudget(spent, budget) {
   return spent >= budget ? { word: 'budget-exhausted', detail: `spent ${spent} of ${budget}` } : null;
 }
 
+/** The ledger reading a spawn gate applies; only the judge selects its own rows (K25, D-6723). */
+export const SPEND_SCOPES = Object.freeze(['all', 'judge']);
 /** The gate called before each batch and before each spawn: the budget first, then the limits row. Throws DriverRefusal.
  *  It reads the ledger before its own spawn and cannot see a run in flight, and a run's spend lands when it closes: the
  *  gate admits a spawn while spent < budget, so the ledger can end up to c WHOLE runs past `--budget`, where c is the
  *  batch's concurrency (step 0a 1, the probe 2). The budget is a soft stop. Operator line: set `--budget` at least c
- *  runs' spend below any total you must not cross; the limits threshold stop is separate (D-5814). */
-export function batchGate({ out, home, accountId, budget, limits, now = Date.now }) {
+ *  runs' spend below any total you must not cross; the limits threshold stop is separate (D-5814).
+ *  K25: scope defaults to the whole ledger; only openJudge selects judge rows, after the entire ledger is validated. The limits half and its order are unchanged. */
+export function batchGate({ out, home, accountId, budget, limits, now = Date.now, scope = 'all' }) {
+  if (!SPEND_SCOPES.includes(scope)) throw new TypeError(`batchGate: scope ${JSON.stringify(scope)} is not one of ${SPEND_SCOPES.join(', ')}`);
   if (!Number.isSafeInteger(budget) || budget <= 0) throw new TypeError(`a budget is a positive integer: ${String(budget)}`);
   const thresholdPct = limits?.threshold_pct;
   const maxAgeMs = limits?.max_age_ms;
   if (typeof thresholdPct !== 'number' || !(thresholdPct > 0 && thresholdPct <= 100)) throw new TypeError(`limits.threshold_pct is in (0, 100]: ${String(thresholdPct)}`);
   if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs <= 0) throw new TypeError(`limits.max_age_ms is a positive integer: ${String(maxAgeMs)}`);
   return () => {
-    const spent = decideBudget(spentSoFar(out), budget);
+    const spend = scope === 'judge' ? judgeSpentOf(spendLinesOf(out)) : spentSoFar(out);
+    const spent = decideBudget(spend, budget);
     if (spent !== null) refuse(spent.word, spent.detail);
     refuseOnLimits(home, accountId, { thresholdPct, maxAgeMs }, now());
   };
@@ -4789,32 +4820,37 @@ export function loadFrozenList(p, sha256, section) {
   return doc;
 }
 
-/** A stored assistant row's first-call input (spec §10.2: input + cache_creation + cache_read), or null when its usage
- *  cannot be read: an absent `input_tokens`, or any count that is not a non-negative safe integer. An absent cache count
- *  is 0. Never 0 for an unreadable row. */
-export function usageInputOf(body) {
-  const u = body?.message?.usage;
+/** An assistant row's first-call input (spec §10.2: input + cache_creation + cache_read), read from its TRANSCRIPT LINE
+ *  (`{message: {usage}}`, D-6694: the store keeps a user or assistant row's `message.content` only, so a usage reading is
+ *  never in a stored body), or null when its usage cannot be read: an absent `input_tokens`, or any count that is not a
+ *  non-negative safe integer. An absent cache count is 0. Never 0 for an unreadable row.
+ *  @param {any} line  the transcript line, or any object holding its `message.usage` */
+export function usageInputOf(line) {
+  const u = line?.message?.usage;
   if (u === null || typeof u !== 'object' || Array.isArray(u)) return null;
   const count = (v, required) => (v === undefined && !required ? 0 : Number.isSafeInteger(v) && v >= 0 ? v : null);
   const parts = [count(u.input_tokens, true), count(u.cache_creation_input_tokens, false), count(u.cache_read_input_tokens, false)];
   return parts.includes(null) ? null : parts.reduce((a, b) => a + b, 0);
 }
 
-/** A stored user row's text: a string content as it is, a block list as its text blocks joined by newlines, null when it
- *  holds none (the stream reader's own rule, sjResultText). */
+/** A stored user row's text, read from its stored body (the row's `message.content` itself, blobBodyOf): a string content as
+ *  it is, a block list as its text blocks joined by newlines, null when it holds none (the stream reader's own rule,
+ *  sjResultText). */
 export function userTextOf(body) {
-  return sjResultText(body?.message?.content);
+  return sjResultText(body);
 }
 
 /** The fidelity pilot's original side, from the store's rows (each `{type, provenance, model, body, rawLen}`, in file
- *  order): the epoch's first call (the first assistant row whose model is not synthetic), the operator rows before it
- *  (their text is that call's user text), and the first non-synthetic assistant row after the summary row of N's holding
- *  copy. Every missing piece answers `unmeasured` with its own reason. Pure. */
+ *  order; `body` the stored message content, `line` the row's transcript line, `{message: {usage}}`, D-6694): the epoch's
+ *  first call (the first assistant row whose model is not synthetic), the operator rows before it (their text is that
+ *  call's user text), and the first non-synthetic assistant row after the summary row of N's holding copy. A call's usage
+ *  is read from its `line` and its user text from its `body`; a row's `line` is read only for those two calls. Every
+ *  missing piece answers `unmeasured` with its own reason. Pure. */
 export function originalSideOf({ epochRows, copyRows, summaryIndex }) {
   const isCall = (r) => r.type === 'assistant' && typeof r.model === 'string' && !isSyntheticModel(r.model);
   const firstAt = epochRows.findIndex(isCall);
   if (firstAt === -1) return { state: 'unmeasured', why: 'epoch-first-call-absent' };
-  const firstInput = usageInputOf(epochRows[firstAt].body);
+  const firstInput = usageInputOf(epochRows[firstAt].line);
   if (firstInput === null) return { state: 'unmeasured', why: 'epoch-first-usage-absent' };
   const userRows = [];
   for (const r of epochRows.slice(0, firstAt)) {
@@ -4825,7 +4861,7 @@ export function originalSideOf({ epochRows, copyRows, summaryIndex }) {
   if (userRows.length === 0) return { state: 'unmeasured', why: 'epoch-first-user-text-absent' };
   const post = copyRows.slice(summaryIndex + 1).find(isCall);
   if (post === undefined) return { state: 'unmeasured', why: 'post-boundary-call-absent' };
-  const postInput = usageInputOf(post.body);
+  const postInput = usageInputOf(post.line);
   if (postInput === null) return { state: 'unmeasured', why: 'post-boundary-usage-absent' };
   return { state: 'measured', firstInput, postInput, userRows };
 }
@@ -5144,7 +5180,7 @@ const SUBCOMMAND_FLAGS = Object.freeze({
   'open --draft': { required: ['draft', 'step0a', 'step0a-sha256', 'node-label', 'node-store-id', 'pilot', 'pilot-sha256', 'account', 'arm-model', 'writer-model', 'judge-model'],
     optional: ['overrides', ...PRED_INPUT] },
   'open --finalize': { required: ['finalize', ...DRAFT_INPUT, ...NODE_INPUTS, 'power', 'power-sha256', 'frozen', 'frozen-sha256', 'quiz-meta', 'quiz-meta-sha256',
-    'pilot-result', 'pilot-result-sha256', 'spend-budget', 'window-start', 'window-end', 'q18-decision'], optional: [...PRED_INPUT, 'prior-final', 'prior-final-sha256'] },
+    'pilot-result', 'pilot-result-sha256', 'spend-budget', 'window-start', 'window-end', 'q18-decision'], optional: [...PRED_INPUT, 'prior-final', 'prior-final-sha256', 'accept-failed-pilot'] },
   'verify --registry': { required: ['registry', ...DRAFT_INPUT, 'census', 'census-sha256'], optional: [...PRED_INPUT] },
   'verify --section ab': { required: ['section', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },
   // W2-5b1 Task 3 (W2-D84): marker prints one node (--node-label, once); pilot reads part 1, quiz and ab read part 2.
@@ -5155,14 +5191,19 @@ const SUBCOMMAND_FLAGS = Object.freeze({
   'verify --section quiz': { required: ['section', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },
   // W2-5b1 Task 4 (Q2, Q23): the pilot form reads part 1 and the pilot frozen list and takes no --allow-code-change (a
   // pilot act's remedy for a code change is a re-pilot, W2-D6); the quiz form reads part 2 with its part 1 and frozen list.
-  'arms --section pilot': { required: ['section', 'out', ...DRAFT_INPUT, 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },
+  'arms --section pilot': { required: ['section', 'out', ...DRAFT_INPUT, 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT, 'step0b', 'step0b-sha256'] },
   'arms --section quiz': { required: ['section', 'out', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT, 'allow-code-change'] },
   // W2-5b1 Task 5 (Q2, Q23): the judge reads exactly what arms reads (Task 4's loadArmRun), and no flag of its own.
-  'judge --section pilot': { required: ['section', 'out', ...DRAFT_INPUT, 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },
+  'judge --section pilot': { required: ['section', 'out', ...DRAFT_INPUT, 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT, 'step0b', 'step0b-sha256'] },
   'judge --section quiz': { required: ['section', 'out', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT, 'allow-code-change'] },
   // W2-5b2 Task 1 (Q23, Q26): step 0b reads part 1 and the pilot frozen list, takes no --allow-code-change (a pilot act's
   // remedy for a code change is a re-pilot, W2-D6), and takes --settings-mode for Q26's fallback re-run.
   'step0b --section pilot': { required: ['section', 'out', ...DRAFT_INPUT, 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT, 'settings-mode'] },
+  // W2-5b2 Task 2 (Q8, Q9, Q23, Q25; K2): fidelity reads part 1, pilot-source's output with its sha and, under the fallback
+  // flow, step 0b's result with its sha; pilot-result reads part 1, step 0b's result with its sha, and the pilot's own --out.
+  // Neither takes --allow-code-change (a pilot act's remedy is a re-pilot, W2-D6). Task 3 adds each one's quiz section (K1).
+  'fidelity --section pilot': { required: ['section', 'out', ...DRAFT_INPUT, 'pilot', 'pilot-sha256'], optional: [...PRED_INPUT, 'step0b', 'step0b-sha256'] },
+  'pilot-result --section pilot': { required: ['section', 'out', ...DRAFT_INPUT, 'step0b', 'step0b-sha256'], optional: [...PRED_INPUT] },
 });
 
 const copyJson = (v) => JSON.parse(JSON.stringify(v));
@@ -5750,13 +5791,22 @@ function pilotSourceError(o) {
   if (!plainObject(o.used) || !plainObject(o.code_shas)) return 'used';
   return null;
 }
-function pilotResultError(o) {
+/** The pilot result open --finalize reads (C4, W2-5a's R8): pilot-result's file, the five fields part 2 copies checked to
+ *  the producer's shape (a boolean `pass` per fidelity boundary; the extrapolation's inputs, extrapolationError, and its
+ *  uptake, the reading its own counts give, uptakeShapeOk, so part 2 never carries a forged "measured", K15; a boolean
+ *  `pass` on the absent rate), and `failures`, a sorted list of distinct words, never empty while a boundary or the absent
+ *  rate failed. The first field that is not, or null. Exported so the producer's output is pinned against it (W2-5b2 Task 2). */
+export function pilotResultError(o) {
   if (!plainObject(o) || o.kind !== PILOT_RESULT_KIND || o.v !== 1) return 'kind';
-  if (!Array.isArray(o.fidelity) || !o.fidelity.every(plainObject)) return 'fidelity';
-  if (!plainObject(o.usage_extrapolation)) return 'usage_extrapolation';
+  if (!Array.isArray(o.fidelity) || !o.fidelity.every((f) => plainObject(f) && typeof f.pass === 'boolean')) return 'fidelity';
+  if (extrapolationError(o.usage_extrapolation) !== null || !uptakeShapeOk(o.usage_extrapolation.uptake)) return 'usage_extrapolation';
   if (typeof o.step0b_sha256 !== 'string' || !SHA256_RE.test(o.step0b_sha256)) return 'step0b_sha256';
   if (!SETTINGS_MODES.includes(o.settings_mode)) return 'settings_mode';
-  return plainObject(o.absent_rate) ? null : 'absent_rate';
+  if (!plainObject(o.absent_rate) || typeof o.absent_rate.pass !== 'boolean') return 'absent_rate';
+  const f = o.failures;
+  if (!Array.isArray(f) || !f.every((w) => typeof w === 'string' && w !== '') || f.join('\n') !== [...new Set(f)].sort().join('\n')) return 'failures';
+  if (f.length === 0 && (o.fidelity.some((x) => !x.pass) || !o.absent_rate.pass)) return 'failures';
+  return null;
 }
 
 // ── the subcommands ────────────────────────────────────────────────────────────────────────────────────────
@@ -5784,11 +5834,11 @@ function refuseRangeRows(checks) {
  *  Tightening W2-3's validator in the gate is not this file's.
  *  W2-5b1 Task 1 (S2's C22): `budgetField` names the budget's field (`spend_budget` for a part 2 consumer); `quotas: null`
  *  skips the quiz-quota rows (a part 2 consumer samples nothing); `part2`, a final, adds part2RangeChecks' rows.
- *  `batch` adds batchShapeChecks' rows (W2-5b1 Task 4).
+ *  `batch` adds batchShapeChecks' rows (W2-5b1 Task 4). `settings` adds settingsModeRow's row for that mode (W2-5b2 Task 2).
  *  @param {{ budget: unknown, budgetField?: string, limits: { threshold_pct?: unknown, max_age_ms?: unknown } | undefined,
  *    quotas: { target: unknown, caps: { family?: unknown, boundary?: unknown, kind_per_family?: unknown } | undefined } | null,
- *    part2?: any, batch?: boolean }} o */
-export function refuseOutOfRangeValues({ budget, budgetField = 'pilot_budget', limits, quotas, part2 = null, batch = false }) {
+ *    part2?: any, batch?: boolean, settings?: { mode: unknown } | null }} o */
+export function refuseOutOfRangeValues({ budget, budgetField = 'pilot_budget', limits, quotas, part2 = null, batch = false, settings = null }) {
   const checks = [
     [budgetField, positiveInt(budget)],
     ['limits.threshold_pct', positiveInt(limits?.threshold_pct) && /** @type {number} */ (limits?.threshold_pct) <= 100],
@@ -5802,6 +5852,8 @@ export function refuseOutOfRangeValues({ budget, budgetField = 'pilot_budget', l
     // W2-5b1 Task 4 (R4): the arm batch's shape, asked by `arms` on either part (part 2 also carries it through part2).
     ...(batch ? batchShapeChecks(limits) : []),
     ...(part2 === null ? [] : part2RangeChecks(part2)),
+    // W2-5b2 Task 2 (review 811 F4): the settings mode a writer or an arm spawns under, last, so earlier details are unchanged.
+    ...(settings === null ? [] : [settingsModeRow('settings_mode', settings.mode)]),
   ];
   refuseRangeRows(checks);
 }
@@ -5821,8 +5873,8 @@ export function refuseOutOfRangeValues({ budget, budgetField = 'pilot_budget', l
  *  `tree-moved` where open would have said `claude-version-moved`.
  *  @param {{ home: string, accountId: string, budget: number, limits: { threshold_pct: number, max_age_ms: number },
  *    quotas: { target: number, caps: { family: number, boundary: number, kind_per_family: number } }, expected: object }} o */
-function refuseWriterAdmission({ home, accountId, budget, limits, quotas, expected }) {
-  refuseOutOfRangeValues({ budget, limits, quotas });
+function refuseWriterAdmission({ home, accountId, budget, limits, quotas, settings = null, expected }) {
+  refuseOutOfRangeValues({ budget, limits, quotas, settings });   // W2-5b2 Task 2 (review 811 F4): quiz-source's settings mode before --out
   refuseSpawnAdmission({ home, accountId, limits, expected });
 }
 
@@ -5926,7 +5978,7 @@ export async function quizSourceCommand(flags, driverEnv, deps = { sourceQuiz })
     const expected = { claude_code_version: entry.claude_code_version, release_stamp: rec.record.gate_code.release_tag,
       wrapper_sha256: entry.wrapper_sha256, code_shas: rec.record.gate_code.files };
     refuseWriterAdmission({ home, accountId: rec.record.account, budget: rec.record.pilot_budget, limits: rec.record.limits,
-      quotas: { target: rec.record.quiz.target, caps: rec.record.quiz.caps }, expected });   // D-6307, D-6311, D-6309: before --out exists
+      quotas: { target: rec.record.quiz.target, caps: rec.record.quiz.caps }, settings: { mode: rec.record.settings_mode }, expected });   // D-6307, D-6311, D-6309: before --out exists
     const out = prepareOut(flags.out);
     refuseColonInRealOut(out);
     const claim = claimOut(out);
@@ -6085,17 +6137,36 @@ async function openFinalize(flags, driverEnv, deps) {
   const pilotResult = loadInput('pilot-result', flags['pilot-result'], flags['pilot-result-sha256']).value;
   const prbad = pilotResultError(pilotResult);
   if (prbad !== null) refuse('input-invalid', `pilot-result shape ${prbad}`);
+  // W2-5b2 Task 2 (K21): the pilot result is bound to the part 1 it finalizes, as quiz-meta and power are, before any
+  // verdict is read from it, so another record's failed pilot answers input-invalid here, never pilot-failed below.
+  if (pilotResult.record_sha256 !== rec.sha256) refuse('input-invalid', `pilot-result record-mismatch: written under ${String(pilotResult.record_sha256)}, not part 1's ${rec.sha256}`);
   const decision = flags['q18-decision'];
   if (!Q18_DECISIONS.includes(decision)) refuse('args-invalid', `q18-decision ${JSON.stringify(decision)} is not one of ${Q18_DECISIONS.join(', ')}`);
+  // W2-5b2 Task 2 (Q27, K3): a failed pilot halts W2 for a ruling, under the pilot acts' one word; --accept-failed-pilot is
+  // that ruling, its failures printed below (K14: part 2 keeps the five fields) and recorded by the coordinator in the
+  // ledger as the operator's act. On a pilot that passed the flag refuses: never a habit.
+  const accept = flags['accept-failed-pilot'] === true;
+  if (pilotResult.failures.length > 0 && !accept) refuse('pilot-failed', `pilot-result failed: ${pilotResult.failures.join('; ')}; a ruling to proceed is --accept-failed-pilot (Q27)`);
+  if (pilotResult.failures.length === 0 && accept) refuse('args-invalid', '--accept-failed-pilot names a ruling on a failed pilot, and this pilot passed');
+  // C5, closing D-6280: spend_budget is the pilot's extrapolation for the frozen list (Q6), derived here; --spend-budget
+  // is the operator's echo of the figure approved at act 17, refused when it differs.
+  const nQuestions = frozen.list.entries.length;
+  const spendBudget = spendBudgetOf(pilotResult.usage_extrapolation, nQuestions);
+  if (spendBudget === null) refuse('input-invalid', `pilot-result usage_extrapolation gives no safe spend budget for ${nQuestions} questions`);
+  if (flags['spend-budget'] !== spendBudget) {
+    const u = pilotResult.usage_extrapolation;
+    refuse('args-invalid', `spend-budget ${flags['spend-budget']} is not the derived ${spendBudget} = ceil(${u.margin.num} x ${nQuestions} x ${u.pilot_spend.total} / (${u.margin.den} x ${u.pilot_questions}))`);
+  }
   const prior = flags['prior-final'] === undefined ? null : loadInput('prior-final', flags['prior-final'], flags['prior-final-sha256'], RECORD_WORDS);
   const final = buildFinal({
     draft: rec.record, draftSha256: rec.sha256, priorSha256: prior === null ? null : prior.sha256, assembled, assignment,
-    power: powerIn.value, powerSha256: powerIn.sha256, frozen, pilotResult, spendBudget: flags['spend-budget'],
+    power: powerIn.value, powerSha256: powerIn.sha256, frozen, pilotResult, spendBudget,
     window: { start: flags['window-start'], end: flags['window-end'] }, decision, nowMs: deps.now(),
   });
   const v = validateOpenRecord(final, { draft: rec.record, predecessor: prior === null ? null : prior.value,
     frozen: { families: frozen.families, n_questions: frozen.list.entries.length } });
   if (!v.ok) refuse('record-invalid', v.errors.map((e) => `${e.path} ${e.word}`).join('; '));
+  if (accept) process.stderr.write(`ccrc history-replay: open --finalize accepts a failed pilot under --accept-failed-pilot (Q27): ${pilotResult.failures.join('; ')}\n`);
   return printWithSha(final);
 }
 
@@ -6241,7 +6312,7 @@ function part2RangeChecks(r) {
   const checks = [
     ...batchShapeChecks(r?.limits),
     ['quiz.n_questions', positiveInt(r?.quiz?.n_questions)],
-    ['pilot_result.settings_mode', SETTINGS_MODES.includes(r?.pilot_result?.settings_mode)],
+    settingsModeRow('pilot_result.settings_mode', r?.pilot_result?.settings_mode),
     ...versionMoveChecks(r),
   ];
   return checks;
@@ -6878,7 +6949,8 @@ function nodeQuestions(section, entries, storeId) {
  *  quiz, Task 1's loadFinalRecord (the chain, W2-D24's re-check first with Q23's stamp after window start, the part 2
  *  ranges), the settings mode part 2's pilot_result.settings_mode (Q26); pilot, part 1 through loadRecordInput, its
  *  gate_code re-checked (recheckCode; the pilot forms take no --allow-code-change, Q23), then the pilot frozen list
- *  against part 1's pilot.frozen_sha256, the settings mode part 1's. Reads no store, spawns nothing, writes nothing.
+ *  against part 1's pilot.frozen_sha256, the settings mode part 1's. Under --step0b/--step0b-sha256 the settings mode is that step 0b
+ *  result's instead, a passed one for this part 1 (W2-5b2 Task 2's step0bModeOf, K2). Reads no store, spawns nothing, writes nothing.
  *  @param {Flags} flags  @param {'pilot' | 'quiz'} section  @param {{ nowMs: number }} o */
 export function loadArmRun(flags, section, { nowMs }) {
   armSectionOk('loadArmRun', section);
@@ -6886,8 +6958,10 @@ export function loadArmRun(flags, section, { nowMs }) {
     const rec = loadRecordInput(flags, 'draft');
     const codeStamps = recheckCode(rec.record);   // W2-D24 (arms and judge --section pilot)
     const fz = loadPilotFrozen(flags, rec.record);
-    if (!SETTINGS_MODES.includes(rec.record.settings_mode)) refuse('record-invalid', 'settings_mode out-of-range');
-    return { section, record: rec.record, recordSha256: rec.sha256, frozen: fz, settingsMode: rec.record.settings_mode, allowCodeChange: false, codeStamps };
+    refuseRangeRows([settingsModeRow('settings_mode', rec.record.settings_mode)]);   // W2-5b2 Task 2: the one settings-mode row
+    const step0b = step0bModeOf(flags, rec.sha256);   // W2-5b2 Task 2 (K2, Q26): a passed step 0b's mode, or part 1's without --step0b
+    return { section, record: rec.record, recordSha256: rec.sha256, frozen: fz, settingsMode: step0b === null ? rec.record.settings_mode : step0b.settingsMode,
+      allowCodeChange: false, codeStamps };
   }
   const rec = loadFinalRecord(flags, { nowMs });   // W2-D24 (arms and judge --section quiz)
   return { section, record: rec.record, recordSha256: rec.sha256, frozen: rec.frozen,
@@ -7256,7 +7330,7 @@ export async function armsCommand(flags, driverEnv, deps = { recheck: recheckBat
     if (section === 'quiz') process.stderr.write(`ccrc history-replay: spend share ${budget} = ceil(${record.spend_budget} x ${questions.length} / ${nAll})\n`);
     const out = prepareOut(flags.out);
     refuseColonInRealOut(out);
-    if (lstatOrNull(out, PILOT_SOURCE_FILE) !== null) refuse('out-refused', `${PILOT_SOURCE_FILE} is here: arms run on a fresh --out, never pilot-source's`);
+    refusePilotSourceOut(out, 'arms run');   // Q25, one spelling (W2-5b2 Task 1's, K4)
     const claim = claimOut(out);
     try {
       const { json, roster } = readRoster(home);
@@ -7521,7 +7595,7 @@ export async function openJudge(o) {
   refuseOpusModel('judge-model', model);
   const { json, roster } = readRoster(home);
   const launch = admitAccount(json, roster, accountId, home);   // RP3-judge: every refusal here lands before any spawn
-  const gate = batchGate({ out, home, accountId: launch.accountId, budget, limits });
+  const gate = batchGate({ out, home, accountId: launch.accountId, budget, limits, scope: 'judge' });
   const stamps = new Set();
   const preflightNow = async () => {
     const pre = await preflightSpawn({ launch, home, out, lang, gate, expected, allowCodeChange: o.allowCodeChange === true });
@@ -7971,6 +8045,620 @@ export async function step0bCommand(flags, driverEnv, deps = { recheck: recheckB
 }
 
 HANDLERS.set('step0b', (flags, env) => step0bCommand(flags, env));
+
+// ── W2-5b2 Task 2: fidelity, the usage pilot's result and open --finalize's reader (W2-D76, W2-D55, W2-D64, W2-D82; Q6 to Q10, Q25, Q27; K2, K3, K13, K15; D-6280, D-6644) ──
+// Two subcommands, run on the pilot node after part 1, in the pilot's one fresh --out (Q1, Q25), each with one section,
+// pilot (Task 3 adds quiz, K1):
+//   fidelity       three box-mode spawns per fidelity boundary of pilot-source's output (the arm argv with no seam env,
+//                  so no marker, Q8), through W2-5a's composer and arithmetic, each boundary held to part 1's tolerance;
+//                  pilot-source's output is checked against part 1 first (seed, frozen sha, families, n_fidelity, store; Q9);
+//   pilot-result   step 0b's result (with its sha), fidelity's output and W2-5b1's usage pilot (its arms summary, its
+//                  judged file, the spend ledger and its runs' run.json) read back from --out, and the file open
+//                  --finalize reads (C4).
+// Step 0b's settings mode (K2): fidelity, and W2-5b1's arms and judge --section pilot through loadArmRun, run under a
+// passed step 0b result's mode when --step0b names one, else part 1's. One halt rule (K3): each act writes its file and
+// prints its sha, then refuses pilot-failed when a check failed; open --finalize refuses a failed result without
+// --accept-failed-pilot (Q27). A failed check is recorded, never folded (Q10). Unmeasured is never 0. The arm words are
+// never spelled (W2-D42): every per-arm value is keyed by RECALL_ARMS' members at run time.
+
+/** fidelity's output under --out (W2-D76): per boundary its figures and its verdict against part 1's tolerance. */
+export const FIDELITY_KIND = 'ccrc-history-w2-fidelity';
+export const FIDELITY_FILE = 'fidelity.json';
+/** pilot-result's output under --out: the file W2-5a's pilotResultError reads (C4, W2-5a's R8). */
+export const PILOT_RESULT_FILE = 'pilot-result.json';
+/** Q6's margin, 1.25 as an exact fraction: the ruling's choice. */
+export const USAGE_MARGIN = Object.freeze({ num: 5, den: 4 });
+/** Q6: the extrapolation's formula, recorded in usage_extrapolation beside its inputs. */
+export const USAGE_EXTRAPOLATION_FORMULA = 'ceil(margin.num x n_questions x pilot_spend.total / (margin.den x pilot_questions))';
+/** W2-D82's reading of the control arm's exit 8, a driver-local report list (S2's C21): `is-error` measures quiz uptake;
+ *  `not-error` (an exit 8 that did not surface as is_error) and `unseen` (no control call to read) leave it unmeasured. */
+export const UPTAKE_READINGS = Object.freeze(['is-error', 'not-error', 'unseen']);
+/** The ledger's names for the usage pilot's spawns: W2-5b1 Task 4's arm runs and Task 5's judge runs, pilot section. */
+export const USAGE_PILOT_PREFIXES = Object.freeze({ arms: 'pilot/arms/', judge: `pilot/${JUDGE_DIR}/` });
+/** The sections `fidelity` and `pilot-result` take (K1, K2): the pilot here; Task 3 adds the mid-window re-pilot's quiz. */
+export const FIDELITY_SECTIONS = Object.freeze(['pilot']);
+export const PILOT_RESULT_SECTIONS = Object.freeze(['pilot']);
+const FIDELITY_RUN_DIR = 'fidelity';
+/** A count a driver file under --out carries: a non-negative safe integer. */
+const nonNegativeInt = (v) => Number.isSafeInteger(v) && /** @type {number} */ (v) >= 0;
+/** A usage reading as W2-5b1's launchRun writes it into run.json: a non-negative integer, which may pass
+ *  Number.MAX_SAFE_INTEGER (W2-5b1's F9 clamps only `tokens`; the two readings are written unclamped). A non-integer, a
+ *  negative or a non-number is not one, and refuses as before. */
+const usageReadingOk = (v) => Number.isInteger(v) && /** @type {number} */ (v) >= 0;
+/** One usage figure as the driver charges it (D-6467, D-6309's rule): W2-5b1's spendTokens over a usage of exactly `n`
+ *  tokens, so a figure past Number.MAX_SAFE_INTEGER saturates there through the driver's one clamp, never a second
+ *  spelling of it. `n` is a non-negative integer, safe or not.
+ *  @param {number} n  @returns {number} */
+const chargedReading = (n) => spendTokens(/** @type {any} */ ({ resultUsage: null, assistantUsage: { input: n, cacheCreation: 0, cacheRead: 0, output: 0 } }));
+
+// ── pure ──
+/** A record decimal as an exact fraction, or null: a finite number in [0, 1] whose String has at most six places. The
+ *  gate's own rule for the decimals it signs (its decimalFrac is private), spelled again and pinned against the
+ *  validator's verdict, as W2-5a spelled two gate privates. Pure.  @param {unknown} x  @returns {{num: number, den: number} | null} */
+export function decimalOf(x) {
+  if (typeof x !== 'number' || !Number.isFinite(x) || x < 0 || x > 1) return null;
+  const m = String(x).match(/^(\d+)(?:\.(\d{1,6}))?$/);   // String#match, not the RegExp method: W2-4 Task 5's no-shell scan reds on a code line spelling exec
+  if (m === null) return null;
+  const places = m[2] ?? '';
+  return frac(Number(m[1] + places), 10 ** places.length);
+}
+
+/** One fidelity run's name under --out: `fidelity/<boundary uuid>/<run>`, one per FIDELITY_RUNS member. Pure. */
+export function fidelityRunName(boundaryUuid, run) {
+  if (typeof boundaryUuid !== 'string' || !UUID_RE.test(boundaryUuid)) throw new TypeError(`fidelityRunName: ${JSON.stringify(boundaryUuid)} is not a boundary uuid`);
+  if (!FIDELITY_RUNS.includes(run)) throw new TypeError(`fidelityRunName: ${JSON.stringify(run)} is not one of ${FIDELITY_RUNS.join(', ')}`);
+  return `${FIDELITY_RUN_DIR}/${boundaryUuid}/${run}`;
+}
+
+/** W2-D76's verdict for one boundary (spec §10.2: "The tolerance, ±25%"): measured figures pass when
+ *  |replay_payload − original_payload| ≤ tolerance × original_payload, exactly, in integers. Unmeasured never passes. Pure.
+ *  @param {{state: string, original_payload?: number, replay_payload?: number}} figures  @param {{num: number, den: number}} tolerance */
+export function fidelityPassOf(figures, tolerance) {
+  if (figures.state !== 'measured') return false;
+  const diff = BigInt(Math.abs(figures.replay_payload - figures.original_payload));
+  return diff * BigInt(tolerance.den) <= BigInt(tolerance.num) * BigInt(figures.original_payload);
+}
+
+/** Q9: pilot-source's output against part 1, which copied its seed, frozen sha, families and n_fidelity (W2-D76), and its
+ *  store against the record's nodes and this node: the first mismatch as a detail word, or null. Every fidelity boundary
+ *  is a distinct uuid on a pilot family of the pilot's store, at most n_fidelity of them. Pure.
+ *  @param {Record<string, any>} pilot  @param {Record<string, any>} record  @param {string} storeId */
+export function pilotSourceMismatchOf(pilot, record, storeId) {
+  const p = record.pilot;
+  if (pilot.seed !== p.seed) return 'seed-mismatch';
+  if (pilot.frozen_sha256 !== p.frozen_sha256) return 'frozen_sha256-mismatch';
+  if (canonicalJson(pilot.families) !== canonicalJson(p.families)) return 'families-mismatch';
+  if (pilot.n_fidelity !== p.n_fidelity) return 'n_fidelity-mismatch';
+  if (!record.nodes.some((n) => n.store_id === pilot.store_id)) return `store ${String(pilot.store_id)} is not one of the record's nodes`;
+  if (pilot.store_id !== storeId) return `store ${pilot.store_id} is not this node's ${storeId}`;
+  if (!Array.isArray(pilot.fidelity) || pilot.fidelity.length > p.n_fidelity) return 'fidelity is not a list of at most n_fidelity boundaries';
+  const listed = new Set(p.families.map((f) => `${f.store_id} ${f.ccrc_id} ${f.generation}`));
+  const seen = new Set();
+  for (const b of pilot.fidelity) {
+    if (!plainObject(b) || typeof b.boundary_uuid !== 'string' || !UUID_RE.test(b.boundary_uuid) || seen.has(b.boundary_uuid)) return 'fidelity entry';
+    seen.add(b.boundary_uuid);
+    if (b.store_id !== pilot.store_id || !listed.has(`${b.store_id} ${b.ccrc_id} ${b.generation}`)) return `fidelity ${b.boundary_uuid} off the pilot families`;
+  }
+  return null;
+}
+
+/** W2-D64's guard on the pilot, per arm (Q10): `rates` is the arms summary's absent_rate ({<arm>: {num, den}}, W2-5b1 Task
+ *  4), `max` part 1's halts.absent_rate_max as decimalOf reads it. An arm over the max fails; an arm with no answered
+ *  question, or none in the rates, is unmeasured, never a rate of 0; each is listed apart. Pure. */
+export function absentRateCheckOf(rates, max) {
+  const arms = {};
+  const over = [];
+  const unmeasured = [];
+  for (const arm of RECALL_ARMS) {
+    const r = plainObject(rates) ? rates[arm] : undefined;
+    if (!plainObject(r) || !nonNegativeInt(r.num) || !nonNegativeInt(r.den) || r.num > r.den) { arms[arm] = null; unmeasured.push(arm); continue; }
+    arms[arm] = { num: r.num, den: r.den };
+    if (r.den === 0) { unmeasured.push(arm); continue; }
+    if (cmpFrac(frac(r.num, r.den), max) > 0) over.push(arm);
+  }
+  return { arms, max: { num: max.num, den: max.den }, over, unmeasured, pass: over.length === 0 && unmeasured.length === 0 };
+}
+
+/** W2-D82's is_error reading (Q10), from the control arm's answered runs in the arms summary (W2-5b1 Task 4's uptakeOf: a
+ *  history call whose result is is_error is `errored`, any other paired one a call). In control every history call
+ *  answers exit 8, so a call there is an exit 8 that did not surface as is_error: `not-error`, and quiz uptake is
+ *  unmeasured. Errored calls and no plain call: `is-error`, measured. Neither: `unseen`, unmeasured too, never read as
+ *  measured. Never a failure. Pure.  @param {{calls: number, errored: number}} control */
+export function uptakeReadingOf({ calls, errored }) {
+  const reading = calls > 0 ? 'not-error' : errored > 0 ? 'is-error' : 'unseen';
+  return { reading, quiz_uptake: reading === 'is-error' ? 'measured' : 'unmeasured', control_calls: calls, control_errored: errored };
+}
+
+/** An uptake record is exactly the one uptakeReadingOf gives from its own two counts: one spelling of W2-D82's rule for
+ *  the producer's reader (pilotResultError) and the report's (quizUptakeReadingOf), so a forged "measured" never reads. Pure. */
+function uptakeShapeOk(u) {
+  return plainObject(u) && nonNegativeInt(u.control_calls) && nonNegativeInt(u.control_errored)
+    && canonicalJson(uptakeReadingOf({ calls: u.control_calls, errored: u.control_errored })) === canonicalJson(u);
+}
+
+/** K15: W2-D82's reading as part 2 carries it, at pilot_result.usage_extrapolation.uptake.quiz_uptake (the pilot-result
+ *  file holds it at the same path): `measured` only for an uptake uptakeShapeOk holds; anything else, an absent, malformed
+ *  or forged one included, `unmeasured` (D-6644: never measured, never a failure). The one reader W2-5b2's report calls. Pure.
+ *  @param {unknown} pilotResult  @returns {'measured' | 'unmeasured'} */
+export function quizUptakeReadingOf(pilotResult) {
+  const u = plainObject(pilotResult) && plainObject(pilotResult.usage_extrapolation) ? pilotResult.usage_extrapolation.uptake : undefined;
+  return uptakeShapeOk(u) ? u.quiz_uptake : 'unmeasured';
+}
+
+/** The first field of a usage_extrapolation open --finalize cannot derive from, or null: Q6's formula and margin, a
+ *  positive pilot question count, and the usage pilot's spend (arms + judge = total, total at least 1). The report-only
+ *  fields (at_target, uptake, spend_readings) are not read. Pure. */
+export function extrapolationError(ux) {
+  if (!plainObject(ux) || ux.v !== 1) return 'v';
+  if (ux.formula !== USAGE_EXTRAPOLATION_FORMULA) return 'formula';
+  if (!plainObject(ux.margin) || ux.margin.num !== USAGE_MARGIN.num || ux.margin.den !== USAGE_MARGIN.den) return 'margin';
+  if (!positiveInt(ux.pilot_questions)) return 'pilot_questions';
+  const s = ux.pilot_spend;
+  if (!plainObject(s) || !nonNegativeInt(s.arms) || !nonNegativeInt(s.judge) || !positiveInt(s.total) || s.total !== s.arms + s.judge) return 'pilot_spend';
+  return null;
+}
+
+/** Q6 and C5 (closing D-6280): the spend budget for `nQuestions` frozen questions, ceil(margin.num × nQuestions × the usage
+ *  pilot's spend / (margin.den × its question count)), in BigInt, so it is exact for any safe inputs. Null when the
+ *  extrapolation does not read, the count is not positive, or the answer is not a safe integer. Pure. */
+export function spendBudgetOf(ux, nQuestions) {
+  if (extrapolationError(ux) !== null || !positiveInt(nQuestions)) return null;
+  const num = BigInt(ux.margin.num) * BigInt(nQuestions) * BigInt(ux.pilot_spend.total);
+  const den = BigInt(ux.margin.den) * BigInt(ux.pilot_questions);
+  const v = (num + den - 1n) / den;
+  return v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : null;
+}
+
+/** Q7's measured relation, report-only: each run by its run.json's two RAW readings (runUsageOf's rawResult and
+ *  rawAssistant; D-6467: the charge is the larger, saturated at Number.MAX_SAFE_INTEGER, D-6309's rule), the result usage
+ *  absent, below the assistant-message sum, equal, or above; a charged run with no run.json `unrecorded`. The relation is
+ *  never read on clamped readings, so two unequal readings past the safe range are never `equal`. Only the sums saturate,
+ *  through the driver's one clamp (`chargedReading`), so a total past the safe range reads Number.MAX_SAFE_INTEGER, never
+ *  an unsafe or rounded figure.
+ *  @param {Array<{name: string, run: null | {rawResult: number | null, rawAssistant: number, charged: number}}>} rows */
+export function spendReadingsOf(rows) {
+  const c = { runs: rows.length, unrecorded: 0, result_absent: 0, result_below_assistant: 0, equal: 0, result_above_assistant: 0,
+    result_tokens: 0, assistant_tokens: 0, charged_tokens: 0 };
+  for (const { run } of rows) {
+    if (run === null) { c.unrecorded += 1; continue; }
+    c.assistant_tokens = chargedReading(c.assistant_tokens + run.rawAssistant);
+    c.charged_tokens = chargedReading(c.charged_tokens + run.charged);
+    if (run.rawResult === null) { c.result_absent += 1; continue; }
+    c.result_tokens = chargedReading(c.result_tokens + run.rawResult);
+    if (run.rawResult < run.rawAssistant) c.result_below_assistant += 1;
+    else if (run.rawResult === run.rawAssistant) c.equal += 1;
+    else c.result_above_assistant += 1;
+  }
+  return c;
+}
+
+/** Q10: every failed check of the pilot, each once, sorted by code unit: a fidelity boundary outside the tolerance or
+ *  unmeasured, fewer boundaries than part 1's n_fidelity, an absent rate over the max or unmeasured, each step 0b failure,
+ *  and a settings mode the usage pilot ran under that is not step 0b's. W2-D82's reading is never one. Pure. */
+export function pilotFailuresOf({ boundaries, nFidelity, absent, step0bFailures, settingsMismatches }) {
+  const f = [];
+  for (const b of boundaries) {
+    if (b.pass) continue;
+    f.push(b.state === 'measured' ? `fidelity ${b.boundary_uuid} outside-tolerance` : `fidelity ${b.boundary_uuid} unmeasured ${b.why}`);
+  }
+  if (boundaries.length < nFidelity) f.push(`fidelity short ${boundaries.length} of ${nFidelity}`);
+  for (const arm of absent.over) f.push(`absent-rate ${arm} over`);
+  for (const arm of absent.unmeasured) f.push(`absent-rate ${arm} unmeasured`);
+  for (const w of step0bFailures) f.push(`step0b ${w}`);
+  for (const m of settingsMismatches) f.push(`settings-mode ${m}`);
+  return [...new Set(f)].sort();
+}
+
+/** The pilot result (C4): the five fields part 2 copies, then `record_sha256` and `failures`. Pure. */
+export function pilotResultOf({ recordSha256, boundaries, extrapolation, step0bSha256, settingsMode, absent, failures }) {
+  return { kind: PILOT_RESULT_KIND, v: 1, record_sha256: recordSha256, fidelity: boundaries, usage_extrapolation: extrapolation,
+    step0b_sha256: step0bSha256, settings_mode: settingsMode, absent_rate: absent, failures };
+}
+
+/** The one spelling of a settings-mode range row (Q26, review 811 F4): [path, a SETTINGS_MODES word]. Part 1's
+ *  `settings_mode` (quiz-source's writer, `arms --section pilot`, `fidelity`) and part 2's `pilot_result.settings_mode`
+ *  (part2RangeChecks) read through it; spawnArgv and openWriter throw on any other word after --out. Pure. */
+function settingsModeRow(rowPath, mode) {
+  return [rowPath, SETTINGS_MODES.includes(mode)];
+}
+
+// ── measuring and acting ──
+// Q25's refusal is W2-5b2 Task 1's refusePilotSourceOut(out, who) (K4): `step0b`, `arms`, `fidelity` and `pilot-result` call it.
+
+/** The two reads fidelity's original side adds: a boundary row by its uuid, and N's own transcript's rows in N's holding
+ *  copy, in file order (a row a resume copied in from another epoch belongs to another transcript and is not this epoch's). */
+const FIDELITY_STMTS = new WeakMap();
+function fidelityStmts(db) {
+  let s = FIDELITY_STMTS.get(db);
+  if (s !== undefined) return s;
+  s = {
+    boundaryOf: db.prepare('SELECT b.entry_id AS entry_id FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id WHERE e.uuid = ?'),
+    epochRows: db.prepare(`SELECT m.line AS line, e.entry_id AS entry_id, e.uuid AS uuid, e.type AS type, e.model AS model,
+        e.provenance AS provenance, e.blob_id AS blob_id
+      FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? AND e.transcript_pk = ? ORDER BY m.line`),
+    // D-4704's statement: a copy's source paths in the store's order (derive.mjs's summaryDirectionOf reads the same).
+    pathsOf: db.prepare('SELECT path FROM file_paths WHERE file_id = ? ORDER BY path'),
+  };
+  FIDELITY_STMTS.set(db, s);
+  return s;
+}
+
+/** Boundary N's entry id from pilot-source's `boundary_uuid`, or null when the store holds no such boundary. */
+export function boundaryEntryIdOf(rs, boundaryUuid) {
+  const r = fidelityStmts(rs.db).boundaryOf.get(boundaryUuid);
+  return r === undefined ? null : Number(r.entry_id);
+}
+
+/** One source line from `offset`, without its '\n' (derive.mjs's readLineAt, D-4704, which is module-private, kept to its
+ *  rule and told apart): read in pieces, never past LINE_MAX. `line` with its text; `too-long` when LINE_MAX bytes hold no
+ *  '\n'; `unterminated` when the file ends first (an offset at or past its end included). */
+const SOURCE_LINE_PIECE = 64 * 1024;
+function sourceLineAt(fd, offset, size) {
+  const parts = [];
+  let got = 0;
+  let pos = offset;
+  while (pos < size && got < LINE_MAX) {
+    const want = Math.min(SOURCE_LINE_PIECE, size - pos, LINE_MAX - got);
+    const buf = Buffer.allocUnsafe(want);
+    const n = readSync(fd, buf, 0, want, pos);
+    if (n === 0) break;
+    const nl = buf.subarray(0, n).indexOf(0x0a);
+    if (nl >= 0) {
+      parts.push(buf.subarray(0, nl));
+      return { state: 'line', text: Buffer.concat(parts).toString('utf8') };
+    }
+    parts.push(buf.subarray(0, n));
+    got += n;
+    pos += n;
+  }
+  return { state: got >= LINE_MAX && pos < size ? 'too-long' : 'unterminated' };
+}
+
+/** A row's `message.usage` read back from its source line in the holding copy (D-6694; D-4704's way: the store keeps the
+ *  row's message content only, and summaryDirectionOf reads the rest back from the source line). The copy's paths in the
+ *  store's order; a path under no rostered config dir is skipped, as D-4704 skips it; the FIRST path the sweep's admitFile
+ *  admits (O_NOFOLLOW, regular, under a rostered projects/ root) answers, whatever its line holds: the line is read at the
+ *  row's membership offset bounded by LINE_MAX and believed only when it parses and its uuid is the row's. Answers
+ *  `{state: 'line', line: {message: {usage}}}`, nothing else of the line kept, or `{state: 'lost', word}`:
+ *  `source-line-too-long`, `source-line-unterminated`, `source-line-not-json`, `source-line-uuid-mismatch` and
+ *  `source-read-failed-<errno>` (an IO error of the read itself; a TypeError is a defect and throws) for the admitted path;
+ *  with no path admitted, `source-missing` when every asked path was missing, else the first refusal's
+ *  `source-refused-<admitFile's why>`. Every fd is closed. A file past its home's retention, or rewritten, is one of
+ *  these (D-6694's residual). `src.readLine`, optional, is a test seam for the read (sourceLineAt by default), never a flag.
+ *  @param {{ home: string, configDirs: readonly string[], readLine?: typeof sourceLineAt }} src */
+function sourceUsageOf(rs, fileId, row, { home, configDirs, readLine = sourceLineAt }) {
+  let refused = null;
+  for (const { path: p } of fidelityStmts(rs.db).pathsOf.all(fileId)) {
+    const h = configDirs.find((d) => p.startsWith(`${d}/`));
+    if (h === undefined) continue;
+    const a = admitFile(p, h, configDirs, home);
+    if (!a.ok) {
+      if (a.why !== 'missing' && refused === null) refused = a.why;
+      continue;
+    }
+    let read;
+    try {
+      read = readLine(a.fd, Number(row.line), Number(a.st.size));
+    } catch (e) {
+      if (e instanceof TypeError) throw e;
+      return { state: 'lost', word: `source-read-failed-${typeof e?.code === 'string' ? e.code : 'unknown'}` };
+    } finally {
+      closeSync(a.fd);
+    }
+    if (read.state !== 'line') return { state: 'lost', word: `source-line-${read.state}` };
+    let j;
+    try {
+      j = JSON.parse(read.text);
+    } catch {
+      return { state: 'lost', word: 'source-line-not-json' };
+    }
+    if (j === null || typeof j !== 'object' || j.uuid !== row.uuid) return { state: 'lost', word: 'source-line-uuid-mismatch' };
+    return { state: 'line', line: { message: { usage: j.message?.usage } } };
+  }
+  return { state: 'lost', word: refused === null ? 'source-missing' : `source-refused-${refused}` };
+}
+
+/** The fidelity pilot's original side for boundary N (spec §10.2), read from the store for W2-5a's pure originalSideOf: the
+ *  epoch rows (N's own transcript's rows in N's holding copy before N) and the holding copy's rows, each body read only
+ *  when originalSideOf inspects it, through entryBodyOf (a user row's text), and each call's usage read from its source
+ *  line only for the two calls originalSideOf reads (D-6694: the store keeps no usage; `src` is `{home, configDirs}`, the
+ *  user HOME and rosterConfigDirs' answer, with sourceUsageOf's optional `readLine` seam). A copy that cannot be read answers its RECON_DISCARDS word, a copy with no
+ *  summary row `summary-absent`, a body lost to a tombstone, a cap or a decode `body-<word>`, and a source line that could
+ *  not be read its own word (sourceUsageOf's), never an empty text or a 0. A boundary whose source file is past its home's
+ *  retention, or was rewritten, is unmeasured (D-6694's residual).
+ *  @param {ReplayStore} rs  @param {number} boundaryEntryId  @param {{ home: string, configDirs: readonly string[] }} src */
+export function fidelityOriginalOf(rs, boundaryEntryId, src) {
+  if (src === undefined || typeof src.home !== 'string' || !Array.isArray(src.configDirs)) throw new TypeError('fidelityOriginalOf: src is {home, configDirs}');
+  const copy = boundaryCopyOf(rs, boundaryEntryId);
+  if (copy.state !== 'copy') return { state: 'unmeasured', why: copy.why };
+  if (copy.summaryIndex === null) return { state: 'unmeasured', why: 'summary-absent' };
+  const lost = [];
+  const withRow = (r) => {
+    let k = null;
+    let u = null;
+    const load = () => (k ??= entryBodyOf(rs, r));
+    const source = () => (u ??= sourceUsageOf(rs, copy.fileId, r, src));
+    return {
+      type: r.type, provenance: r.provenance, model: r.model,
+      get body() { const x = load(); if (x.state === 'lost') { lost.push(`body-${x.word}`); return null; } return x.body; },
+      get rawLen() { const x = load(); return x.state === 'lost' ? 0 : x.rawLen; },
+      get line() { const x = source(); if (x.state === 'lost') { lost.push(x.word); return null; } return x.line; },
+    };
+  };
+  const boundaryLine = copy.rows[copy.boundaryIndex].line;
+  const epochRows = fidelityStmts(rs.db).epochRows.all(copy.fileId, copy.boundary.transcript_pk).filter((r) => r.line < boundaryLine).map(withRow);
+  const side = originalSideOf({ epochRows, copyRows: copy.rows.map(withRow), summaryIndex: copy.summaryIndex });
+  if (lost.length > 0) return { state: 'unmeasured', why: lost[0] };
+  return side;
+}
+
+/** Step 0b's result (W2-5b2 Task 1's file, loaded through loadInput, its sha checked before a byte was parsed), read for
+ *  `section` (K4: Task 1's names): its kind, its section, part 1's sha, its settings mode, and its verdict, `passed` true
+ *  exactly when `failed` and `unmeasured` (STEP0B_CHECKS members, each list distinct) are both empty. Anything else
+ *  refuses input-invalid. A result that did not pass is returned as it is: recording it is pilot-result's job, refusing to
+ *  run under it step0bModeOf's. Task 3 calls it with 'quiz'. */
+function step0bOf(loaded, recordSha256, section) {
+  const o = loaded.value;
+  if (!plainObject(o) || o.kind !== STEP0B_KIND || o.v !== 1) refuse('input-invalid', 'step0b shape kind');
+  if (o.section !== section) refuse('input-invalid', `step0b section ${String(o.section)}, wanted ${section}`);
+  if (o.record_sha256 !== recordSha256) refuse('input-invalid', 'step0b record-mismatch');
+  if (!SETTINGS_MODES.includes(o.settings_mode)) refuse('input-invalid', 'step0b shape settings_mode');
+  const checks = (l) => Array.isArray(l) && l.every((c) => STEP0B_CHECKS.includes(c)) && new Set(l).size === l.length;
+  if (!checks(o.failed) || !checks(o.unmeasured) || o.passed !== (o.failed.length === 0 && o.unmeasured.length === 0)) refuse('input-invalid', 'step0b shape verdict');
+  return { sha256: loaded.sha256, section, settingsMode: o.settings_mode, passed: o.passed, failed: [...o.failed], unmeasured: [...o.unmeasured] };
+}
+
+/** K2 (Q26, W2-D58): the step 0b result a pilot act runs under, or null when the act names none (--step0b and
+ *  --step0b-sha256 both absent: part 1's settings mode, as W2-5b1 ships). Named, it is read whole (loadInput: the pair
+ *  asked together, the sha before the parse), held to step0bOf for the pilot section, and must have passed: a pilot act
+ *  never runs under a step 0b that did not, so one that did not refuses pilot-failed (K3), naming its mode and its
+ *  failed and unmeasured checks apart. Called by loadArmRun's pilot branch (arms, judge) and fidelity, before any store,
+ *  spawn or --out. */
+function step0bModeOf(flags, recordSha256) {
+  if (flags.step0b === undefined && flags['step0b-sha256'] === undefined) return null;
+  const s = step0bOf(loadInput('step0b', flags.step0b, flags['step0b-sha256']), recordSha256, 'pilot');
+  if (!s.passed) refuse('pilot-failed', `step0b ${s.settingsMode} did not pass: failed ${s.failed.join(' ') || '-'}; unmeasured ${s.unmeasured.join(' ') || '-'}; a pilot act runs under a step 0b that passed (K2)`);
+  return s;
+}
+
+/** The pilot's --out, which pilot-result reads and never makes: absent refuses input-invalid, then prepareOut's checks. */
+function pilotOut(outArg) {
+  if (typeof outArg !== 'string' || !path.isAbsolute(outArg)) refuse('out-refused', 'relative');
+  try {
+    lstatSync(path.resolve(outArg));
+  } catch (e) {
+    if (e?.code === 'ENOENT') refuse('input-invalid', '--out holds no pilot: fidelity, arms --section pilot and judge --section pilot write there first');
+    refuse('out-refused', `unmeasured ${errCode(e)}`);
+  }
+  return prepareOut(outArg);
+}
+
+/** One driver JSON file under the pilot's --out, written under part 1 (D-5986: plain reads; D-6309's rule: a file that is
+ *  not what its writer writes refuses out-refused, never a TypeError). Absent: input-invalid, naming its writer. */
+function pilotOutFile(out, rel, kind, recordSha256, writer) {
+  const read = readPlain(path.join(out, rel), OUT_JSON_CAP);
+  if (read.state === 'absent') refuse('input-invalid', `${rel} absent: ${writer} writes it first`);
+  if (read.state === 'bad') refuse('out-refused', `${rel} ${badWord(read)}`);
+  let v;
+  try {
+    v = JSON.parse(read.bytes.toString('utf8'));
+  } catch {
+    refuse('out-refused', `${rel} is not JSON`);
+  }
+  if (!plainObject(v) || v.kind !== kind || v.v !== 1) refuse('out-refused', `${rel} is not a ${kind}`);
+  if (v.record_sha256 !== recordSha256) refuse('input-invalid', `${rel} record-mismatch: written under ${String(v.record_sha256)}, not part 1's ${recordSha256}`);
+  return v;
+}
+
+/** One run's two usage readings, raw and clamped, its charge and its settings mode, from its run.json (W2-5b1 Task 1's
+ *  fields, D-6467; W2-4's settings_mode, which K13's mismatch reads), or null when the run has none (a run the ledger
+ *  charged that was stopped in flight). A run.json that does not read refuses out-refused. A usage reading past
+ *  Number.MAX_SAFE_INTEGER is the driver's own record (W2-5b1's F9 clamps only `tokens`), so it is not refused here:
+ *  `rawResult` and `rawAssistant` carry it as written, for Q7's relation, and `result` and `assistant` read it at the
+ *  driver's clamp (`chargedReading`). The clamp covers a run.json read on its own, without the ledger (a fidelity or
+ *  report path). On a pilot --out such a run's charge is MAX_SAFE_INTEGER on the ledger too, and the next line sums
+ *  past the safe range, so pilot-result refuses `out-refused` `spend.jsonl malformed` at spendLinesOf before any
+ *  run.json is read (D-6309's fail-closed rule). A non-integer, negative or non-number reading still refuses. */
+export function runUsageOf(out, name) {
+  const read = readPlain(path.join(out, `${name}.run.json`), OUT_JSON_CAP);
+  if (read.state === 'absent') return null;
+  if (read.state === 'bad') refuse('out-refused', `run-json-invalid ${name} ${badWord(read)}`);
+  let j;
+  try {
+    j = JSON.parse(read.bytes.toString('utf8'));
+  } catch {
+    refuse('out-refused', `run-json-invalid ${name}`);
+  }
+  if (!plainObject(j) || j.kind !== RUN_KIND || j.name !== name || !(j.usage_result_tokens === null || usageReadingOk(j.usage_result_tokens))
+    || !usageReadingOk(j.usage_assistant_tokens) || !nonNegativeInt(j.tokens) || !SETTINGS_MODES.includes(j.settings_mode)) refuse('out-refused', `run-json-invalid ${name}`);
+  return { result: j.usage_result_tokens === null ? null : chargedReading(j.usage_result_tokens), assistant: chargedReading(j.usage_assistant_tokens),
+    rawResult: j.usage_result_tokens, rawAssistant: j.usage_assistant_tokens, charged: j.tokens, settingsMode: j.settings_mode };
+}
+
+/** The fidelity measurement, boundary by boundary (W2-D76, spec §10.2): one function for `fidelity --section pilot` and
+ *  the re-pilot's quiz form (W2-5b2 Task 3, K1). For each head in order: the boundary's entry (`deps.resolve`), its
+ *  original side (`deps.original`), and its three stdins (`deps.stdins`) built under every retained reading of the pair
+ *  index (W2-5b1's maskingSnapshotsOf, then Task 1's maskingAgreementOf, site fidelity: they must agree, or the boundary
+ *  refuses input-invalid `masking-snapshots-disagree fidelity` before its preflight; K26, K28);
+ *  then W2-D56's preflight (`spawnPre`) and one batch
+ *  of FIDELITY_RUNS box-mode jobs (`jobOf(boundaryUuid, run, stdin)`); then W2-5a's figures and the verdict against
+ *  `tolerance`. A boundary whose original side or stdins are unmeasured spawns nothing; a run that failed (a non-zero
+ *  exit, a signal, no result event; D-6305's rule read for a fidelity run) leaves its boundary unmeasured, never a 0.
+ *  Answers the boundaries in `heads`' order, each in fidelity.json's boundary shape, and the last batch's measured
+ *  version, or null when nothing was spawned. The quiz caller passes home too: no second admission or agreement. */
+async function fidelityBoundariesOf({ rs, home, heads, deps, tolerance, spawnPre, jobOf, gate, claim, concurrency }) {
+  const boundaries = [];
+  let version = null;
+  const src = { home, configDirs: rosterConfigDirs(readRoster(home).roster, home) };   // D-6694: where a source line is read
+  for (const head of heads) {
+    const unmeasured = (why) => boundaries.push({ ...head, state: 'unmeasured', why, figures: null, pass: false });
+    const id = deps.resolve(rs, head.boundary_uuid);
+    if (id === null) { unmeasured('boundary-absent'); continue; }
+    const original = deps.original(rs, id, src);
+    if (original.state !== 'measured') { unmeasured(original.why); continue; }
+    // K26, K28 (D-6481 carried): this boundary's retained readings, admitted now, each building the three stdins; they
+    // agree run by run (or on one unmeasured word) before W2-D56's preflight or any run of the boundary spawns.
+    const snapshots = maskingSnapshotsOf(rs, home);
+    const made = await maskingAgreementOf(snapshots, 'fidelity', (idx) => deps.stdins({ ...rs, idx }, id, original.userRows),
+      (first, built) => first.state === built.state && (first.state === 'stdins' ? FIDELITY_RUNS.every((run) => sameMaskingText(first.stdins[run], built.stdins[run])) : first.why === built.why));
+    if (made.state !== 'stdins') { unmeasured(made.why); continue; }
+    const pre = await spawnPre();   // W2-D56 before every batch
+    version = pre.version;
+    const jobs = FIDELITY_RUNS.map((run) => jobOf(head.boundary_uuid, run, made.stdins[run]));
+    const outcomes = await runBatch(jobs, { gate, claim, concurrency });
+    const failed = FIDELITY_RUNS.find((_run, i) => !(outcomes[i].code === 0 && outcomes[i].signal === null && outcomes[i].facts.result !== null));
+    if (failed !== undefined) { unmeasured(`${failed}-run-failed`); continue; }
+    const figures = fidelityFigures({ original, runs: Object.fromEntries(FIDELITY_RUNS.map((run, i) => [run, outcomes[i].facts])) });
+    if (figures.state !== 'measured') { unmeasured(figures.why); continue; }
+    const { state, ...fig } = figures;
+    boundaries.push({ ...head, state, why: null, figures: fig, pass: fidelityPassOf(figures, tolerance) });
+  }
+  return { boundaries, version };
+}
+
+// A handler that takes deps after its env names that parameter driverEnv, never env (W2-4 Task 5's env scan).
+/** `fidelity --section pilot` (W2 decisions §5 act 14; W2-D76, spec §10.2's fidelity pilot): after part 1, on the pilot
+ *  node. In order: the section and its form's flags; HOME; part 1 and its gate_code, first (W2-D24; no
+ *  --allow-code-change, Q23); the unusable inputs; the ranges (D-6309's rule: the pilot budget, the limits and batch
+ *  shape, part 1's settings mode, pilot.tolerance); step 0b's result when --step0b names one, which must have passed for
+ *  this part 1 and whose settings mode the runs then take (K2); pilot-source's output with its sha, its shape, and
+ *  against part 1 (Q9); the store, once, this node named, and W2-5b1 Task 4's refuseSpawnAdmission; all before
+ *  prepareOut. Then a fresh --out (Q25), the claim, the account, the gate (part 1's pilot_budget, W2-D55), and per
+ *  boundary: the original side, its three stdins agreed over every retained reading (K26, K28), W2-D56's preflight, one batch of three box-mode runs, the figures and
+ *  the verdict. A boundary whose original side or stdins are unmeasured spawns nothing; a run that failed (a non-zero
+ *  exit, a signal, no result event) leaves its boundary unmeasured. fidelity.json is written and its sha printed on
+ *  stderr, stdout empty (D-5983); then a boundary that did not pass, or fewer than n_fidelity, refuses pilot-failed (K3,
+ *  K13), else exit 0. */
+export async function fidelityCommand(flags, driverEnv, deps = { resolve: boundaryEntryIdOf, original: fidelityOriginalOf, stdins: fidelityStdins }) {
+  const section = flags.section;
+  if (!FIDELITY_SECTIONS.includes(section)) refuse('args-invalid', `fidelity wants --section ${FIDELITY_SECTIONS.join(' or --section ')}, not ${JSON.stringify(section ?? null)}`);
+  checkFlags(`fidelity --section ${section}`, flags);
+  const home = subcommandHome(driverEnv);
+  const rec = loadRecordInput(flags, 'draft');
+  recheckCode(rec.record);   // W2-D24 (fidelity): gate_code before any other input
+  const r = rec.record;
+  refuseUnusableInputs(home, flags.out, [['arm-model', r.arm_model]]);
+  refuseOutOfRangeValues({ budget: r.pilot_budget, limits: r.limits, quotas: null, batch: true, settings: { mode: r.settings_mode } });
+  const tolerance = decimalOf(r.pilot?.tolerance);
+  refuseRangeRows([['pilot.tolerance', tolerance !== null]]);
+  const step0b = step0bModeOf(flags, rec.sha256);   // K2: a passed step 0b's mode, or part 1's
+  const settingsMode = step0b === null ? r.settings_mode : step0b.settingsMode;
+  const pilot = loadInput('pilot', flags.pilot, flags['pilot-sha256']);
+  const pbad = pilotSourceError(pilot.value);
+  if (pbad !== null) refuse('input-invalid', `pilot shape ${pbad}`);
+  const rs = openReplayStore(home);   // the run's one store open (R3), read-only, before --out (D-6311)
+  try {
+    requireNamedNode(r, rs.storeId);
+    const mismatch = pilotSourceMismatchOf(pilot.value, r, rs.storeId);   // Q9
+    if (mismatch !== null) refuse('input-invalid', `pilot ${mismatch}`);
+    const { expected } = expectedForNode(r, rs.storeId);
+    refuseSpawnAdmission({ home, accountId: r.account, limits: r.limits, expected });   // D-6307, D-6311 (R26)
+    const out = prepareOut(flags.out);
+    refuseColonInRealOut(out);
+    refusePilotSourceOut(out, 'fidelity runs');   // Q25
+    const claim = claimOut(out);
+    try {
+      const { json, roster } = readRoster(home);
+      const launch = admitAccount(json, roster, r.account, home);
+      const gate = batchGate({ out, home, accountId: launch.accountId, budget: r.pilot_budget, limits: r.limits });
+      const lang = driverEnv.LANG;
+      const heads = pilot.value.fidelity.map((b) => ({ store_id: b.store_id, ccrc_id: b.ccrc_id, generation: b.generation, boundary_uuid: b.boundary_uuid }));
+      const { boundaries, version } = await fidelityBoundariesOf({ rs, home, heads, deps, tolerance, gate, claim, concurrency: r.limits.concurrency,
+        spawnPre: () => preflightSpawn({ launch, home, out, lang, gate, expected }),   // W2-D56 against part 1's expected, before every batch
+        jobOf: (boundaryUuid, run, stdin) => {
+          const job = { launch, mode: 'box', model: r.arm_model, settingsMode, stdin, out, name: fidelityRunName(boundaryUuid, run), lang };
+          return deps.timeoutMs === undefined ? job : { ...job, timeoutMs: deps.timeoutMs };
+        } });
+      writePlain(out, FIDELITY_FILE, canonicalJson({ kind: FIDELITY_KIND, v: 1, record_sha256: rec.sha256, pilot_sha256: pilot.sha256,
+        step0b_sha256: step0b === null ? null : step0b.sha256, store_id: rs.storeId, settings_mode: settingsMode, model: r.arm_model,
+        claude_code_version: version, tolerance: { num: tolerance.num, den: tolerance.den }, n_fidelity: r.pilot.n_fidelity, boundaries,
+        budget: r.pilot_budget, spend: spentSoFar(out) }) + '\n');
+      process.stderr.write(`sha256 ${shaOfPlain(out, FIDELITY_FILE)}\n`);   // D-5983: stderr; stdout stays empty
+      // K3, K13: recorded first, then the halt; the fidelity checks alone (pilot-result lists them again beside the rest).
+      const failed = pilotFailuresOf({ boundaries, nFidelity: r.pilot.n_fidelity, absent: { over: [], unmeasured: [] }, step0bFailures: [], settingsMismatches: [] });
+      if (failed.length > 0) refuse('pilot-failed', `fidelity failed (${failed.length}): ${failed.join('; ')}`);
+      return EXIT.OK;
+    } finally {
+      claim.release();
+    }
+  } finally {
+    rs.close();
+  }
+}
+
+/** `pilot-result --section pilot` (§5 act 14's last step; C4, Q6, Q7, Q10; W2-D64, W2-D82; K3, K13, K15): over the
+ *  pilot's --out, after fidelity, arms --section pilot and judge --section pilot. In order: the section and its form's
+ *  flags; part 1 and its gate_code, first (W2-D24); the absent rate's max in range; step 0b's result with its sha
+ *  (W2-5b2 Task 1's, through step0bOf: a result that did not pass is read, and its checks recorded); the --out, which
+ *  must exist (Q25: not pilot-source's), and the claim; fidelity's output, the arms summary (settled) and the judged
+ *  file, each written under part 1; the ledger by run name (Q6), every recorded run's two readings and its settings mode
+ *  (Q7, K13), the absent rate (W2-D64), the is_error reading (W2-D82, D-6644) and the failures (Q10). Writes
+ *  pilot-result.json and prints its sha on stderr, stdout empty (D-5983); then any failure refuses pilot-failed naming
+ *  them (K3), else exit 0. open --finalize holds a failed result for the operator's ruling (Q27). */
+export async function pilotResultCommand(flags, env) {
+  const section = flags.section;
+  if (!PILOT_RESULT_SECTIONS.includes(section)) refuse('args-invalid', `pilot-result wants --section ${PILOT_RESULT_SECTIONS.join(' or --section ')}, not ${JSON.stringify(section ?? null)}`);
+  checkFlags(`pilot-result --section ${section}`, flags);
+  const rec = loadRecordInput(flags, 'draft');
+  recheckCode(rec.record);   // W2-D24 (pilot-result): gate_code before any other input
+  const r = rec.record;
+  const absentMax = decimalOf(r.halts?.absent_rate_max);
+  refuseRangeRows([['halts.absent_rate_max', absentMax !== null]]);
+  const step0b = step0bOf(loadInput('step0b', flags.step0b, flags['step0b-sha256']), rec.sha256, section);
+  const out = pilotOut(flags.out);
+  refuseColonInRealOut(out);
+  refusePilotSourceOut(out, 'pilot-result reads a pilot');   // Q25
+  const claim = claimOut(out);
+  try {
+    const fid = pilotOutFile(out, FIDELITY_FILE, FIDELITY_KIND, rec.sha256, 'fidelity');
+    const boundaries = fid.boundaries;
+    if (typeof fid.settings_mode !== 'string' || !Array.isArray(boundaries) || !boundaries.every((b) => plainObject(b) && typeof b.boundary_uuid === 'string'
+      && ['measured', 'unmeasured'].includes(b.state) && typeof b.pass === 'boolean')) refuse('out-refused', `${FIDELITY_FILE} is not a fidelity output`);
+    const sumRel = armsSummaryRel('pilot');
+    const summary = pilotOutFile(out, sumRel, ARMS_SUMMARY_KIND, rec.sha256, 'arms --section pilot');
+    const c = summary.counts;
+    if (summary.section !== 'pilot' || !plainObject(c) || !['questions', 'answered', 'run_failed', 'rerun_owed', 'not_run'].every((k) => nonNegativeInt(c[k]))
+      || !plainObject(summary.arms) || !plainObject(summary.absent_rate)) refuse('out-refused', `${sumRel} is not a pilot arms summary`);
+    if (summary.stop !== null || c.questions === 0 || c.answered + c.run_failed !== c.questions) {
+      refuse('input-invalid', `${sumRel} unsettled: ${c.not_run} not run, ${c.rerun_owed} owing a re-run${plainObject(summary.stop) ? `, stopped ${String(summary.stop.word)}` : ''}; arms --section pilot finishes the usage pilot first`);
+    }
+    const controlStats = summary.arms[CONTROL_ARM];   // never an arm word on a code line (W2-D42)
+    if (!plainObject(controlStats) || !nonNegativeInt(controlStats.uptake_calls) || !nonNegativeInt(controlStats.errored)) refuse('out-refused', `${sumRel} is not a pilot arms summary`);
+    const judgedRel = `pilot/${JUDGED_FILE}`;
+    const judged = pilotOutFile(out, judgedRel, JUDGED_KIND, rec.sha256, 'judge --section pilot');
+    if (judged.section !== 'pilot' || typeof judged.settings_mode !== 'string') refuse('out-refused', `${judgedRel} is not a pilot judged file`);
+    const lines = spendLinesOf(out);
+    const spentUnder = (prefix) => lines.filter((l) => l.name.startsWith(prefix)).reduce((a, l) => a + l.tokens, 0);
+    const spend = { arms: spentUnder(USAGE_PILOT_PREFIXES.arms), judge: spentUnder(USAGE_PILOT_PREFIXES.judge) };
+    if (spend.arms + spend.judge === 0) refuse('input-invalid', 'the usage pilot charged nothing: arms and judge spend under --out is 0');
+    const runPrefixes = [`${FIDELITY_RUN_DIR}/`, USAGE_PILOT_PREFIXES.arms, USAGE_PILOT_PREFIXES.judge];
+    const names = [...new Set(lines.map((l) => l.name))].filter((n) => runPrefixes.some((p) => n.startsWith(p)));
+    const base = { v: 1, formula: USAGE_EXTRAPOLATION_FORMULA, margin: { num: USAGE_MARGIN.num, den: USAGE_MARGIN.den },
+      pilot_questions: c.questions, pilot_spend: { arms: spend.arms, judge: spend.judge, total: spend.arms + spend.judge } };
+    const runs = names.map((name) => ({ name, run: runUsageOf(out, name) }));
+    const extrapolation = { ...base, at_target: { n_questions: r.quiz.target, spend_budget: spendBudgetOf(base, r.quiz.target) },
+      uptake: uptakeReadingOf({ calls: controlStats.uptake_calls, errored: controlStats.errored }),
+      spend_readings: spendReadingsOf(runs) };
+    const absent = absentRateCheckOf(summary.absent_rate, absentMax);
+    // K13: each surface's modes, its runs' run.json (the arms summary names none) and its own file's, against step 0b's.
+    const modesOf = (prefix, own) => [...new Set([...own, ...runs.filter((x) => x.run !== null && x.name.startsWith(prefix)).map((x) => x.run.settingsMode)])].sort();
+    const settingsMismatches = [['arms', modesOf(USAGE_PILOT_PREFIXES.arms, [])], ['fidelity', modesOf(`${FIDELITY_RUN_DIR}/`, [fid.settings_mode])],
+      ['judge', modesOf(USAGE_PILOT_PREFIXES.judge, [judged.settings_mode])]]
+      .flatMap(([what, modes]) => modes.filter((m) => m !== step0b.settingsMode).map((m) => `${what} ran under ${m}, step 0b under ${step0b.settingsMode}`));
+    const step0bFailures = [...step0b.failed.map((c) => `${c} failed`), ...step0b.unmeasured.map((c) => `${c} unmeasured`)];
+    const failures = pilotFailuresOf({ boundaries, nFidelity: r.pilot.n_fidelity, absent, step0bFailures, settingsMismatches });
+    writePlain(out, PILOT_RESULT_FILE, canonicalJson(pilotResultOf({ recordSha256: rec.sha256, boundaries, extrapolation,
+      step0bSha256: step0b.sha256, settingsMode: step0b.settingsMode, absent, failures })) + '\n');
+    process.stderr.write(`sha256 ${shaOfPlain(out, PILOT_RESULT_FILE)}\n`);   // D-5983: stderr, whatever the pilot showed; stdout stays empty
+    if (failures.length > 0) refuse('pilot-failed', `pilot-result failed (${failures.length}): ${failures.join('; ')}; open --finalize refuses it without --accept-failed-pilot (Q27)`);   // K3
+    return EXIT.OK;
+  } finally {
+    claim.release();
+  }
+}
+
+HANDLERS.set('fidelity', (flags, env) => fidelityCommand(flags, env));
+HANDLERS.set('pilot-result', (flags, env) => pilotResultCommand(flags, env));
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised
 // when main runs. Importing the module (the tests do) runs nothing. The exit code is set, never forced, so stderr drains.

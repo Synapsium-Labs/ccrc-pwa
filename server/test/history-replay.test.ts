@@ -213,7 +213,9 @@ describe('history-replay W2-4 Task 1: the argument grammar', () => {
       'spend-budget': 'int', 'window-start': 'int', 'window-end': 'int', 'q18-decision': 'string',
       draft: 'bool', finalize: 'bool', template: 'bool', registry: 'bool', section: 'string',
       // W2-5b1 Task 1 (W2-D24, Q23): a part 2 consumer's stamp, taken at or after window start only
-      'allow-code-change': 'bool' });
+      'allow-code-change': 'bool',
+      // W2-5b2 Task 2 (K2, Q27): the pilot acts read step 0b's result with its sha; open --finalize takes the ruling on a failed pilot
+      step0b: 'string', 'step0b-sha256': 'string', 'accept-failed-pilot': 'bool' });
   });
 
   it('a subcommand, a string, an int and a bool parse to {sub, flags}', () => {
@@ -3074,8 +3076,9 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
   // module's braces updates that module's entry here in the same commit. So no edit adds a second reader unseen: keptOf
   // (W2-D68), sweep.mjs's recall-off content reader (W2-D29, R6) or a decode of its own. W2-D24's code hash covers the
   // driver and the gate. The other ccd/history modules ride the release tag (W2-D24). W2-5b1 Task 1 adds asOfCutOf to
-  // recall.mjs's names (W2-2a's cut, which the card's parent and W2-D78(iii) read); lib's and the gate's names are not
-  // pinned here, and W2-5b1 Task 1's own case holds the names that PR consumes from them.
+  // recall.mjs's names (W2-2a's cut, which the card's parent and W2-D78(iii) read). W2-5b2 Task 2 adds admitFile to
+  // sweep.mjs's names, for the fidelity original side's source-line read, so the sweep's own admission is the only one; lib's and
+  // the gate's names are not pinned here, and W2-5b1 Task 1's own case holds the names that PR consumes from them.
   const EXPECTED_IMPORTS = ['node:fs', 'node:os', 'node:path', 'node:child_process', 'node:url', 'node:crypto',
     '../ccd/history/lib.mjs', '../ccd/history/store.mjs', '../ccd/history/derive.mjs', '../ccd/history/recall.mjs',
     '../ccd/history/cli.mjs', '../ccd/history/sweep.mjs', './history-gate.mjs', '../shared/roster-json.mjs'];
@@ -3086,7 +3089,7 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
     '../ccd/history/derive.mjs': '{ blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf }',
     '../ccd/history/recall.mjs': '{ asOfCutOf, expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf }',
     '../ccd/history/cli.mjs': '{ pairIndexOf }',
-    '../ccd/history/sweep.mjs': '{ ftsTextOfBlob, readRegPresence }',
+    '../ccd/history/sweep.mjs': '{ admitFile, ftsTextOfBlob, readRegPresence }',
   };
   const importViolations = (text: string): string[] => {
     const found: string[] = [];
@@ -4844,7 +4847,7 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     ]);
     // The driver's whole subcommand set, in registration order: W2-4's two, W2-5a Task 7's six, then W2-5b1's and
     // W2-5b2's, in task order (Task 1's grammar cases use an unregistered name).
-    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify', 'marker', 'arms', 'judge', 'step0b']);
+    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify', 'marker', 'arms', 'judge', 'step0b', 'fidelity', 'pilot-result']);
   });
 
   // D-5983: the sha256 line is on stderr (as open and freeze print it), exactly one line, and stdout is empty.
@@ -8522,21 +8525,26 @@ describe('W2-5a Task 6: the fidelity pilot payloads and overhead arithmetic', ()
     expect(replay.readStreamJson(sj(RESULT)).firstCallUsage).toBeNull();
   });
 
-  it('usageInputOf and userTextOf read a stored row body, and an unreadable count is null, never 0', () => {
+  // W2-5b2 Task 2 (D-6694, K5 extended by the ruling on the stored-usage question): the store keeps a row's message content
+  // only, so usageInputOf reads a TRANSCRIPT LINE (`{message: {usage}}`) and userTextOf a stored body (the content itself).
+  it('usageInputOf reads a transcript line and userTextOf a stored body, and an unreadable count is null, never 0', () => {
     expect(replay.usageInputOf({ message: { usage: usage(100, 200, 300) } })).toBe(600);
     expect(replay.usageInputOf({ message: { usage: { input_tokens: 7 } } }), 'absent cache counts are 0').toBe(7);
     expect(replay.usageInputOf({ message: { usage: { cache_read_input_tokens: 7 } } })).toBeNull();
     expect(replay.usageInputOf({ message: { usage: { input_tokens: -1 } } })).toBeNull();
     expect(replay.usageInputOf({ message: {} })).toBeNull();
-    expect(replay.userTextOf({ message: { content: 'plain text' } })).toBe('plain text');
-    expect(replay.userTextOf({ message: { content: [{ type: 'text', text: 'a' }, { type: 'tool_result', content: 'x' }, { type: 'text', text: 'b' }] } })).toBe('a\nb');
-    expect(replay.userTextOf({ message: { content: [{ type: 'tool_result', content: 'x' }] } })).toBeNull();
+    expect(replay.userTextOf('plain text')).toBe('plain text');
+    expect(replay.userTextOf([{ type: 'text', text: 'a' }, { type: 'tool_result', content: 'x' }, { type: 'text', text: 'b' }])).toBe('a\nb');
+    expect(replay.userTextOf([{ type: 'tool_result', content: 'x' }])).toBeNull();
+    expect(replay.userTextOf(null), 'a body that is no content holds no text').toBeNull();
   });
 
-  const row = (type: string, provenance: string, model: string | null, body: object) =>
-    ({ type, provenance, model, body, rawLen: Buffer.byteLength(JSON.stringify(body)) });
-  const user = (provenance: string, text: string) => row('user', provenance, null, { type: 'user', message: { role: 'user', content: text } });
-  const asst = (model: string, u: object) => row('assistant', 'model', model, { type: 'assistant', message: { role: 'assistant', usage: u, content: [] } });
+  // W2-5b2 Task 2 (D-6694): a row is {type, provenance, model, body, rawLen, line}: `body` the stored message content, `line` an
+  // assistant row's transcript line ({message: {usage}}), the only place a usage reading lives.
+  const row = (type: string, provenance: string, model: string | null, body: unknown, line: object | null = null) =>
+    ({ type, provenance, model, body, rawLen: Buffer.byteLength(JSON.stringify(body)), line });
+  const user = (provenance: string, text: string) => row('user', provenance, null, text);
+  const asst = (model: string, u: object) => row('assistant', 'model', model, [], { message: { usage: u } });
   const EPOCH = [
     user('harness', 'harness notice text'),
     user('operator', 'please rebuild the fixture package'),
@@ -8547,7 +8555,7 @@ describe('W2-5a Task 6: the fidelity pilot payloads and overhead arithmetic', ()
   const COPY = [
     asst('claude-fixture-1', usage(5, 5, 5)),
     user('operator', 'before the boundary'),
-    row('user', 'summary', null, { type: 'user', message: { role: 'user', content: 'the summary' } }),
+    row('user', 'summary', null, 'the summary'),
     asst('<synthetic>', usage(1, 0, 0)),
     asst('claude-fixture-1', usage(1000, 4000, 25000)),
   ];
@@ -8563,7 +8571,9 @@ describe('W2-5a Task 6: the fidelity pilot payloads and overhead arithmetic', ()
       .toEqual({ state: 'unmeasured', why: 'epoch-first-user-text-absent' });
     expect(replay.originalSideOf({ epochRows: EPOCH, copyRows: COPY.slice(0, 4), summaryIndex: 2 }))
       .toEqual({ state: 'unmeasured', why: 'post-boundary-call-absent' });
-    const noUsage = [...COPY.slice(0, 4), row('assistant', 'model', 'claude-fixture-1', { message: { content: [] } })];
+    const noUsage = [...COPY.slice(0, 4), row('assistant', 'model', 'claude-fixture-1', [], { message: {} })];
+    expect(replay.originalSideOf({ epochRows: EPOCH.map((r) => (r.type === 'assistant' ? { ...r, line: null } : r)), copyRows: COPY, summaryIndex: 2 }),
+      'a row whose line was not read (the caller recorded why) has no usage here').toEqual({ state: 'unmeasured', why: 'epoch-first-usage-absent' });
     expect(replay.originalSideOf({ epochRows: EPOCH, copyRows: noUsage, summaryIndex: 2 }))
       .toEqual({ state: 'unmeasured', why: 'post-boundary-usage-absent' });
   });
@@ -9172,8 +9182,14 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
     const meta = save7(r7drv.quizMetaReport({ recordSha256: d.sha, frozenSha256: fz.sha, assignmentSha256: assignment.sha256, entries: merged,
       floor: draft.quiz.halt_floor, minFamilies: draft.quiz.min_families, sourced: [sA, sB].map((s) => ({ store_id: s.value.store_id, sha256: s.sha })) }) as R7, 'frozen.meta.json');
     const power = save7(r7drv.powerReport(draft, d.sha, assembled) as R7, 'power.json');
+    // W2-5b2 Task 2 (C5, D-6280): the producer's shape. Its extrapolation derives the 30,000,000 the finalize argv echoes:
+    // ceil(5 x 5 questions x 24,000,000 / (4 x 5 pilot questions)); its uptake is W2-D82's measured reading (K15).
     const pilotResult = save7({ kind: r7drv.PILOT_RESULT_KIND, v: 1, fidelity: [{ boundary_uuid: gen(901), pass: true }],
-      usage_extrapolation: { tokens_per_question: 1000 }, step0b_sha256: hex('step0b'), settings_mode: 'restricted', absent_rate: { num: 0, den: 10 } }, 'pilot-result.json');
+      usage_extrapolation: { v: 1, formula: r7drv.USAGE_EXTRAPOLATION_FORMULA, margin: { num: 5, den: 4 }, pilot_questions: 5,
+        pilot_spend: { arms: 20_000_000, judge: 4_000_000, total: 24_000_000 },
+        uptake: { reading: 'is-error', quiz_uptake: 'measured', control_calls: 0, control_errored: 5 } },
+      step0b_sha256: hex('step0b'), settings_mode: 'restricted', absent_rate: { num: 0, den: 10, pass: true }, failures: [],
+      record_sha256: d.sha }, 'pilot-result.json');   // K21: written under this part 1, as pilot-result writes it
     const frozen = { sha256: fz.sha, list: fz.value, families: r7drv.familiesOf(fz.value.entries) };
     const final = r7drv.buildFinal({ draft, draftSha256: d.sha, priorSha256: null, assembled, assignment, power: power.value, powerSha256: power.sha,
       frozen, pilotResult: pilotResult.value, spendBudget: 30_000_000, window: { start: T0 + DAY, end: T0 + 15 * DAY }, decision: 'keep', nowMs: T0 }) as R7;
@@ -10169,20 +10185,29 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
     // after --out. refuseOutOfRangeValues refuses them `record-invalid` before prepareOut, one row per field. Each CONTROL
     // is the boundary value (1, and 100 for the threshold), which gets past the range check: its refusal, if any, is a
     // later word, and --out is made unless that word is itself a pre-check word of the limits row.
-    type RangeRow = { field: string; path: string[]; bad: number[]; edge: number; after?: { word: string; made: boolean } };
+    type RangeRow = { field: string; path: string[]; bad: number[]; edge: number; after?: { word: string; made: boolean }; fresh?: boolean };
     const RANGE_ROWS: RangeRow[] = [
       { field: 'pilot_budget', path: ['pilot_budget'], bad: [0, -1], edge: 1 },
-      { field: 'limits.threshold_pct', path: ['limits', 'threshold_pct'], bad: [0, 101], edge: 100 },
-      // A one-millisecond age bound is in range and the fixture's limits row is older, so the limits word answers, still before --out.
-      { field: 'limits.max_age_ms', path: ['limits', 'max_age_ms'], bad: [0, -1], edge: 1, after: { word: 'limits-stale', made: false } },
+      // Review 811 F2 (W2-5b2 Task 2): 101 first. Without the range check it passes the limits row (20 < 101) and reaches
+      // batchGate's TypeError after --out, the hazard this row guards; 0 first would answer limits-threshold before --out.
+      { field: 'limits.threshold_pct', path: ['limits', 'threshold_pct'], bad: [101, 0], edge: 100 },
+      // Review 811 F2: the limits row is stamped 30 s ahead of the clock (inside decideLimits' 60 s skew), so its age is below
+      // 0: without the range check, 0 and -1 pass the limits row and reach batchGate's TypeError after --out. The CONTROL
+      // at 1 ms then goes through.
+      { field: 'limits.max_age_ms', path: ['limits', 'max_age_ms'], bad: [0, -1], edge: 1, fresh: true },
       { field: 'quiz.target', path: ['quiz', 'target'], bad: [0, -1], edge: 1 },
       { field: 'quiz.caps.family', path: ['quiz', 'caps', 'family'], bad: [0, -1], edge: 1 },
       { field: 'quiz.caps.boundary', path: ['quiz', 'caps', 'boundary'], bad: [0, -1], edge: 1 },
       { field: 'quiz.caps.kind_per_family', path: ['quiz', 'caps', 'kind_per_family'], bad: [0, -1], edge: 1 },
     ];
     const overrideAt = (path: string[], v: number): R7 => path.reduceRight((acc: R7 | number, k) => ({ [k]: acc }), v) as R7;
-    const quizRun7 = async (over: R7): Promise<{ home: string; refusal: R7 | null; made: boolean; calls: number }> => {
+    const quizRun7 = async (over: R7, fresh = false): Promise<{ home: string; refusal: R7 | null; made: boolean; calls: number }> => {
       const home = home7(STORE_A);
+      if (fresh) {   // review 811 F2: a limits row stamped 30 s ahead, so no age bound, in range or out of it, reads it stale
+        const nowS = Math.floor(Date.now() / 1000);
+        r7fs.writeFileSync(r7path.join(home, '.cc-limits', 'up-a.json'),
+          JSON.stringify({ five: 10, seven: 20, ts: nowS + 30, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+      }
       const c = chain7(home, over);
       const out = outDir();
       const calls: R7[] = [];
@@ -10194,13 +10219,13 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       'D-6309: quiz-source, a signed record with %s out of range refuses record-invalid before --out and any spawn; CONTROL: the boundary value passes the range check',
       async (_field, row) => {
         for (const v of row.bad) {
-          const bad = await quizRun7(overrideAt(row.path, v));
+          const bad = await quizRun7(overrideAt(row.path, v), row.fresh === true);
           r7expect(bad.made, `${row.field}=${v}: no --out, the refusal answered before prepareOut`).toBe(false);
           r7expect(bad.refusal, `${row.field}=${v}`).toEqual({ word: 'record-invalid', detail: `${row.field} out-of-range` });
           r7expect(bad.calls).toBe(0);
           r7expect(stubLog(bad.home) ?? [], 'no spawn at all, not even the --version probe').toEqual([]);
         }
-        const ok = await quizRun7(overrideAt(row.path, row.edge));
+        const ok = await quizRun7(overrideAt(row.path, row.edge), row.fresh === true);
         r7expect(ok.refusal?.word, `CONTROL ${row.field}=${row.edge}: past the range check (${JSON.stringify(ok.refusal)})`).not.toBe('record-invalid');
         if (row.after === undefined) {
           r7expect(ok.refusal, 'CONTROL: the whole run goes through').toBeNull();
@@ -10219,7 +10244,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7expect(bad.made).toBe(false);
     }, 120_000);
 
-    r7it('D-6309: refuseOutOfRangeValues takes only positive safe integers (a float, a string, NaN and an absent value are out of range) and writes nothing', () => {
+    r7it('D-6309: refuseOutOfRangeValues takes only positive safe integers (a float, a string, NaN and an absent value are out of range)', () => {
       const good = { budget: 1, limits: { threshold_pct: 100, max_age_ms: 1 }, quotas: { target: 1, caps: { family: 1, boundary: 1, kind_per_family: 1 } } };
       r7expect(() => r7drv.refuseOutOfRangeValues(good)).not.toThrow();
       // pilot-source's own values (the flag grammar's positive integers, LIMITS_DEFAULTS, the draft's caps) are in range.
@@ -10448,7 +10473,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
 
     r7it('a window shorter than planned_days is refused by the validator (W2-D25)', () => {
       const c = chain7(home7(null));
-      const r = run7(null, null, finalizeArgv(c, { rest: ['--spend-budget', '1', '--window-start', String(T0 + DAY), '--window-end', String(T0 + 14 * DAY), '--q18-decision', 'keep'] }));
+      const r = run7(null, null, finalizeArgv(c, { rest: ['--spend-budget', '30000000', '--window-start', String(T0 + DAY), '--window-end', String(T0 + 14 * DAY), '--q18-decision', 'keep'] }));
       r7expect(r.stderr).toBe(refusalLine('record-invalid', 'window window-length'));
     });
   });
@@ -10949,6 +10974,166 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       } finally {
         rs.close();
       }
+    });
+  });
+
+  // ── W2-5b2 Task 2: open --finalize's derived spend budget and its hold on a failed pilot (C5, Q6, Q27; K3, K14, K15; D-6280), the
+  // review 811 range carries (F3, F4) and W2-D24's re-check for fidelity and pilot-result ──
+  // Nested for W2-5a Task 7's signed fixtures (chain7, finalizeArgv, run7, tree7, home7, inProcess, verify7). Live-safe:
+  // every HOME is home7's mkTmp tree; quiz-source's sourcing is a fake that spawns nothing; open --finalize spawns nothing.
+  r7describe('W2-5b2 Task 2: open finalize derives the spend budget and holds a failed pilot, and the range carries of review 811', () => {
+    const rest = (budget: string, extra: string[] = []): string[] =>
+      ['--spend-budget', budget, '--window-start', String(T0 + DAY), '--window-end', String(T0 + 15 * DAY), '--q18-decision', 'keep', ...extra];
+    const failedResult = (c: R7): Saved => save7({ ...c.pilotResult.value, fidelity: [{ boundary_uuid: gen(901), pass: false }],
+      failures: [`fidelity ${gen(901)} outside-tolerance`] }, 'pilot-result.json');
+
+    r7it('spend_budget is derived from the pilot result for the frozen list, and an echo that differs refuses args-invalid; part 2 carries the uptake reading (C5, Q6, D-6280, K15)', () => {
+      const home = home7(null);
+      const c = chain7(home);
+      r7expect(r7drv.spendBudgetOf(c.pilotResult.value.usage_extrapolation, 5)).toBe(30_000_000);
+      const ok = run7(null, home, finalizeArgv(c));
+      r7expect(ok.code, ok.stderr).toBe(0);
+      const rec = JSON.parse(ok.stdout);
+      r7expect(rec.spend_budget).toBe(30_000_000);
+      r7expect(rec.pilot_result.usage_extrapolation.uptake, 'K15: W2-D82\'s reading lives in part 2').toEqual({ reading: 'is-error', quiz_uptake: 'measured', control_calls: 0, control_errored: 5 });
+      r7expect(r7drv.quizUptakeReadingOf(rec.pilot_result), 'K15: the one reader the report calls').toBe('measured');
+      for (const b of ['29999999', '30000001', '1']) {
+        r7expect(run7(null, home, finalizeArgv(c, { rest: rest(b) })).stderr, b)
+          .toBe(refusalLine('args-invalid', `spend-budget ${b} is not the derived 30000000 = ceil(5 x 5 x 24000000 / (4 x 5))`));
+      }
+    });
+
+    r7it('a failed pilot refuses pilot-failed; --accept-failed-pilot prints the file failures and part 2; the flag on a passed pilot refuses (Q27, K3, K14)', () => {
+      const home = home7(null);
+      const c = chain7(home);
+      const failed = failedResult(c);
+      const held = run7(null, home, finalizeArgv(c, { 'pilot-result': inp('pilot-result', failed) }));
+      r7expect([held.code, held.stdout]).toEqual([2, '']);
+      r7expect(held.stderr).toBe(refusalLine('pilot-failed', `pilot-result failed: fidelity ${gen(901)} outside-tolerance; a ruling to proceed is --accept-failed-pilot (Q27)`));
+      const ok = run7(null, home, finalizeArgv(c, { 'pilot-result': inp('pilot-result', failed), rest: rest('30000000', ['--accept-failed-pilot']) }));
+      r7expect(ok.code, ok.stderr).toBe(0);
+      const rec = JSON.parse(ok.stdout);
+      r7expect(ok.stderr).toBe(`ccrc history-replay: open --finalize accepts a failed pilot under --accept-failed-pilot (Q27): fidelity ${gen(901)} outside-tolerance\nsha256 ${r7gate.recordSha256(rec)}\n`);
+      r7expect(rec.pilot_result.fidelity, 'part 2 carries the failed boundary as it was measured').toEqual([{ boundary_uuid: gen(901), pass: false }]);
+      r7expect(Object.keys(rec.pilot_result).sort(), 'K14: part 2 keeps the five fields; the failures stay in the file').toEqual(['absent_rate', 'fidelity', 'settings_mode', 'step0b_sha256', 'usage_extrapolation']);
+      r7expect(run7(null, home, finalizeArgv(c, { rest: rest('30000000', ['--accept-failed-pilot']) })).stderr)
+        .toBe(refusalLine('args-invalid', '--accept-failed-pilot names a ruling on a failed pilot, and this pilot passed'));
+    });
+
+    const without = (v: R7, key: string): R7 => Object.fromEntries(Object.entries(v).filter(([k]) => k !== key));
+    r7it.each([
+      ['no failures list', (v: R7): R7 => without(v, 'failures'), 'failures'],
+      ['a failed boundary under an empty failures list', (v: R7): R7 => ({ ...v, fidelity: [{ boundary_uuid: gen(901), pass: false }] }), 'failures'],
+      ['unsorted failures', (v: R7): R7 => ({ ...v, failures: ['step0b b', 'step0b a'] }), 'failures'],
+      ['an absent rate with no pass flag', (v: R7): R7 => ({ ...v, absent_rate: { num: 0, den: 10 } }), 'absent_rate'],
+      ['a boundary with no pass flag', (v: R7): R7 => ({ ...v, fidelity: [{ boundary_uuid: gen(901) }] }), 'fidelity'],
+      ['a margin that is not 5/4', (v: R7): R7 => ({ ...v, usage_extrapolation: { ...v.usage_extrapolation, margin: { num: 3, den: 2 } } }), 'usage_extrapolation'],
+      ['a total that is not arms plus judge', (v: R7): R7 => ({ ...v, usage_extrapolation: { ...v.usage_extrapolation, pilot_spend: { arms: 1, judge: 1, total: 3 } } }), 'usage_extrapolation'],
+      // K15: the reading part 2 carries is the one its counts give, so the report never reads a forged "measured".
+      ['no uptake reading', (v: R7): R7 => ({ ...v, usage_extrapolation: without(v.usage_extrapolation, 'uptake') }), 'usage_extrapolation'],
+      ['an uptake its counts do not give', (v: R7): R7 => ({ ...v, usage_extrapolation: { ...v.usage_extrapolation,
+        uptake: { reading: 'is-error', quiz_uptake: 'measured', control_calls: 1, control_errored: 5 } } }), 'usage_extrapolation'],
+    ] as Array<[string, (v: R7) => R7, string]>)('the pilot result reader refuses %s: input-invalid pilot-result shape, before part 2 is built (C4)', (_what, edit, word) => {
+      const home = home7(null);
+      const c = chain7(home);
+      const bad = save7(edit(c.pilotResult.value as R7), 'pilot-result.json');
+      r7expect(run7(null, home, finalizeArgv(c, { 'pilot-result': inp('pilot-result', bad) })).stderr).toBe(refusalLine('input-invalid', `pilot-result shape ${word}`));
+    });
+
+    // K21: the pilot result is bound to the part 1 it finalizes. Another record's failed pilot is another record's, so the
+    // binding answers before Q27's hold reads its failures.
+    r7it.each([
+      ['another record', (c: R7): R7 => ({ ...c.pilotResult.value, record_sha256: hex('another record') }), hex('another record')],
+      ['no record sha', (c: R7): R7 => without(c.pilotResult.value as R7, 'record_sha256'), 'undefined'],
+      ['another record whose pilot failed', (c: R7): R7 => ({ ...failedResult(c).value, record_sha256: hex('another record') }), hex('another record')],
+    ] as Array<[string, (c: R7) => R7, string]>)('K21: open --finalize refuses a pilot result written under %s: input-invalid naming both shas, before part 2 is printed; CONTROL: this part 1\'s result prints part 2', (_what, edit, under) => {
+      const home = home7(null);
+      const c = chain7(home);
+      const bad = run7(null, home, finalizeArgv(c, { 'pilot-result': inp('pilot-result', save7(edit(c), 'pilot-result.json')) }));
+      r7expect([bad.code, bad.stdout]).toEqual([2, '']);
+      r7expect(bad.stderr).toBe(refusalLine('input-invalid', `pilot-result record-mismatch: written under ${under}, not part 1's ${c.d.sha}`));
+      const ok = run7(null, home, finalizeArgv(c));
+      r7expect(ok.code, `CONTROL: ${ok.stderr}`).toBe(0);
+      r7expect(JSON.parse(ok.stdout).spend_budget).toBe(30_000_000);
+    });
+
+    r7it('a pilot result whose extrapolation gives no safe spend budget for the frozen list refuses input-invalid, before part 2 is printed (C5, D-6280); CONTROL: chain7 own result derives 30000000', () => {
+      const home = home7(null);
+      const c = chain7(home);
+      const u = c.pilotResult.value.usage_extrapolation as R7;
+      const big = save7({ ...c.pilotResult.value, usage_extrapolation: { ...u, pilot_questions: 1,
+        pilot_spend: { arms: Number.MAX_SAFE_INTEGER - 1, judge: 1, total: Number.MAX_SAFE_INTEGER } } }, 'pilot-result.json');
+      r7expect(r7drv.extrapolationError(big.value.usage_extrapolation), 'the reader takes it, so the derivation is what refuses').toBeNull();
+      const bad = run7(null, home, finalizeArgv(c, { 'pilot-result': inp('pilot-result', big) }));
+      r7expect([bad.code, bad.stdout]).toEqual([2, '']);
+      r7expect(bad.stderr).toBe(refusalLine('input-invalid', 'pilot-result usage_extrapolation gives no safe spend budget for 5 questions'));
+      r7expect(JSON.parse(run7(null, home, finalizeArgv(c)).stdout).spend_budget, 'CONTROL').toBe(30_000_000);
+    });
+
+    /** quiz-source in-process over a chain (its part 1 `d` and verify outputs replaceable), its sourcing a fake that spawns nothing. */
+    const quizRun = async (home: string, c: R7, d: Saved = c.d, vA: Saved = c.vA, vB: Saved = c.vB): Promise<{ refusal: R7 | null; made: boolean }> => {
+      const out = outDir();
+      const { flags } = r7drv.parseArgs(['quiz-source', '--out', out, ...inp('record', d), ...inp('census', c.cA), ...inp('census', c.cB),
+        ...inp('verify', vA), ...inp('verify', vB)]) as R7;
+      const r = await inProcess(() => r7drv.quizSourceCommand(flags as never, envOf(home) as never,
+        { sourceQuiz: async () => ({ entries: [], fidelity: [], counts: {} }) } as never));
+      return { refusal: r.refusal, made: r7fs.existsSync(out) };
+    };
+
+    (process.platform === 'darwin' ? r7it.skip : r7it)('review 811 F3: the range check answers ahead of admission, record-invalid on a home whose account is refused; CONTROL: in range, the account refusal answers', async () => {
+      const home = home7(STORE_A);
+      const bad = await quizRun(home, chain7(home, { pilot_budget: 0 }, 'nope'));
+      r7expect(bad.refusal).toEqual({ word: 'record-invalid', detail: 'pilot_budget out-of-range' });
+      r7expect(bad.made, 'no --out').toBe(false);
+      const ok = await quizRun(home, chain7(home, {}, 'nope'));
+      r7expect(ok.refusal, 'CONTROL: the account alone is refused').toEqual({ word: 'account-refused', detail: 'unknown-id' });
+      r7expect(ok.made).toBe(false);
+      r7expect(stubLog(home) ?? [], 'no spawn at all').toEqual([]);
+    }, 120_000);
+
+    (process.platform === 'darwin' ? r7it.skip : r7it)('review 811 F4: quiz-source refuses a part 1 settings mode outside SETTINGS_MODES before --out and any spawn, never a TypeError after it; CONTROL: restricted makes --out', async () => {
+      const home = home7(STORE_A);
+      const c = chain7(home);
+      // A record the validator signs (every step 0a entry's mode equals part 1's) that the driver's own builder never makes.
+      const draft = { ...c.draft, settings_mode: 'bogus', step0a: (c.draft.step0a as R7[]).map((s) => ({ ...s, settings_mode: 'bogus' })) };
+      const d = save7(draft, 'part1.json');
+      const vA = save7(verify7(d.sha, c.cA, { 'a-d': 'registry-absent' }), 'verify-a.json');
+      const vB = save7(verify7(d.sha, c.cB), 'verify-b.json');
+      const bad = await quizRun(home, c, d, vA, vB);
+      r7expect(bad.refusal).toEqual({ word: 'record-invalid', detail: 'settings_mode out-of-range' });
+      r7expect(bad.made, 'no --out').toBe(false);
+      r7expect(stubLog(home) ?? [], 'no spawn, not even --version').toEqual([]);
+      const ok = await quizRun(home, c);
+      r7expect(ok.refusal, 'CONTROL').toBeNull();
+      r7expect(ok.made, 'CONTROL: --out made').toBe(true);
+    }, 120_000);
+
+    // W2-D24 for this task's two --record consumers, under W2-5a's titles (R23's precedent): the next input each reads is
+    // left unreadable, so a re-check that ran after it would answer that input's word.
+    const rows24: Array<[string, (c: R7) => string[]]> = [
+      ['fidelity', (c) => ['fidelity', '--section', 'pilot', '--out', outDir(), ...inp('record', c.d), '--pilot', '/nowhere/p', '--pilot-sha256', c.d.sha]],
+      ['pilot-result', (c) => ['pilot-result', '--section', 'pilot', '--out', outDir(), ...inp('record', c.d), '--step0b', '/nowhere/s', '--step0b-sha256', c.d.sha]],
+    ];
+    r7it.each(rows24)('code-changed before any other input is read, re-checks the code it runs under: %s', (_sub, argv) => {
+      const home = home7(null);
+      const c = chain7(home);
+      const r = run7(tree7({ edit: 'deploy/measure-history.py' }), home, argv(c));
+      r7expect(r.code).toBe(2);
+      r7expect(r.stderr).toBe(refusalLine('code-changed', 'changed deploy/measure-history.py'));
+      r7expect(printRuns(home)).toEqual([]);
+    });
+    r7it.each(rows24)('code-unmeasured, never code-changed, for a gate_code file that cannot be read: %s', (_sub, argv) => {
+      const home = home7(null);
+      const c = chain7(home);
+      r7expect(run7(tree7({ drop: 'deploy/measure-history.py' }), home, argv(c)).stderr)
+        .toBe(refusalLine('code-unmeasured', 'deploy/measure-history.py is absent'));
+    });
+    r7it('CONTROL: under an unchanged copy of the tree, each W2-5b2 Task 2 row reaches the read it was built to fail', () => {
+      const home = home7(null);
+      const c = chain7(home);
+      const tree = tree7();
+      const want = ['input-invalid: pilot unreadable ENOENT', 'input-invalid: step0b unreadable ENOENT'];
+      rows24.forEach(([sub, argv], i) => r7expect(run7(tree, home, argv(c)).stderr, sub).toBe(`ccrc history-replay: ${want[i]}\n`));
     });
   });
 });
@@ -19120,4 +19305,1036 @@ b2t1Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 1: step0b --sect
     b2t1Expect([b2t1PrintRuns(home).length, b2t1Versions(home)], 'the second run re-measured the version per batch and spawned no run').toEqual([8, 4]);
     b2t1Expect({ ...second, measured_ms: 0 }).toEqual({ ...first, measured_ms: 0 });
   }, 60_000);
+});
+
+// ── W2-5b2 Task 2: fidelity, the usage pilot's result and the pilot's pure parts (W2-D76, W2-D64, W2-D82, W2-D55; Q6 to Q10, Q25; K2, K3, K13, K15) ──
+// Every HOME is a mkTmp fixture made by W2-5b1 Task 4's w5b4Node (up-a, a fresh limits row, a tagged stamp) with the arm stub
+// widened here, so a box-mode run prints the stream its stdin's first line names (B2T2_STUB). fidelity runs in-process with
+// its three store reads injected; the store describe runs them for real over a swept store. No case spawns a real model,
+// reads the live HOME or writes outside its own mkTmp trees. The test may spell the arm words; the driver never does (W2-D42).
+import { describe as b2t2Describe, expect as b2t2Expect, it as b2t2It, beforeAll as b2t2BeforeAll } from 'vitest';
+import * as b2t2Drv from '../../deploy/history-replay.mjs';
+import * as b2t2Gate from '../../deploy/history-gate.mjs';
+import { renameSync as b2t2Rename } from 'node:fs';
+import { LINE_MAX as B2T2_LINE_MAX } from '../../ccd/history/lib.mjs';
+
+type B2t2R = Record<string, any>;
+const B2 = b2t2Drv as unknown as B2t2R;
+/** W2-5b1 Task 4's arm stub with one more branch: a print-mode run with no CCRC_RECALL_ARM (fidelity's box mode) prints
+ *  `stub-box/<its stdin's first line, sanitised>.jsonl` when that file exists. Arm runs, judge runs and --version are as before. */
+const B2T2_STUB = ((): string => {
+  const old = `  process.stdout.write(per('.jsonl') ?? opt(${JSON.stringify(STUB_STREAM)}) ?? '');`;
+  if (!W5B4_ARM_STUB.includes(old)) throw new Error('B2T2_STUB: W2-5b1 Task 4 stub line moved; re-anchor it');
+  return W5B4_ARM_STUB.replace(old, [
+    "  const boxKey = print && key === null ? stdin.split('\\n')[0].replace(/[^a-z0-9-]/g, '-') : null;",
+    `  process.stdout.write(per('.jsonl') ?? (boxKey === null ? null : opt('stub-box/' + boxKey + '.jsonl')) ?? opt(${JSON.stringify(STUB_STREAM)}) ?? '');`,
+  ].join('\n'));
+})();
+/** The five fidelity boundaries the fixtures name (part 1's n_fidelity, W2-D76). */
+const B2T2_B = [w5b4Gen(7001), w5b4Gen(7002), w5b4Gen(7003), w5b4Gen(7004), w5b4Gen(7005)];
+/** A box-mode run's stream: init, one assistant message whose usage is `first` input tokens (W2-5a's firstCallUsage), and a
+ *  result event unless `result` is false (a run with no result event failed, D-6305's rule). */
+function b2t2Box(first: number, result = true): string {
+  const ev: object[] = [
+    { type: 'system', subtype: 'init', session_id: 'fixture-box-session', model: W5B4_ARM_MODEL, tools: ['Bash', 'Agent'], mcp_servers: [], plugins: [], skills: [], slash_commands: [] },
+    { type: 'assistant', message: { id: 'msg-b2t2-1', usage: { input_tokens: first, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 1 },
+      content: [{ type: 'text', text: 'ANSWER: UNKNOWN' }] } },
+  ];
+  if (result) ev.push({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'ANSWER: UNKNOWN', permission_denials: [], usage: { input_tokens: first, output_tokens: 1 } });
+  return ev.map((e) => JSON.stringify(e)).join('\n') + '\n';
+}
+function b2t2Plant(home: string, key: string, first: number, result = true): void {
+  mkdirSync(join(home, 'stub-box'), { recursive: true });
+  writeFileSync(join(home, 'stub-box', `${key}.jsonl`), b2t2Box(first, result));
+}
+/** Boundary entries `ids`, each planted to pass: 25,000, then 9,000 and 9,200 input tokens (a replay payload of 16,000
+ *  against B2T2_ORIGINAL's 18,200, inside 25%). */
+function b2t2PlantPass(home: string, ids: number[] = [1, 2, 3, 4, 5]): void {
+  for (const id of ids) {
+    b2t2Plant(home, `b2t2-${id}-payload`, 25000);
+    b2t2Plant(home, `b2t2-${id}-empty`, 9000);
+    b2t2Plant(home, `b2t2-${id}-user-text`, 9200);
+  }
+}
+/** Step 0b's result in W2-5b2 Task 1's shape, the eight fields step0bOf reads (K4), saved outside any git tree; `passed`
+ *  follows `failed` and `unmeasured` as Task 1's step0bVerdictOf makes it, unless `over` says otherwise. */
+function b2t2Step0b(recordSha: string, o: { mode?: string; failed?: string[]; unmeasured?: string[]; over?: B2t2R } = {}): W5b4Saved {
+  const failed = o.failed ?? [];
+  const unmeasured = o.unmeasured ?? [];
+  const mode = o.mode ?? 'restricted';
+  return w5b4Save({ kind: B2.STEP0B_KIND, v: 1, section: 'pilot', record_sha256: recordSha, settings_mode: mode,
+    passed: failed.length === 0 && unmeasured.length === 0, failed, unmeasured, ...o.over }, `step0b-${mode}.json`);
+}
+/** A fixture node (w5b4Home: store A) running B2T2_STUB as up-a. */
+function b2t2Home(): string {
+  const home = w5b4Home();
+  writeFileSync(join(home, '.local', 'bin', 'up-a'), B2T2_STUB, { mode: 0o700 });
+  return home;
+}
+/** pilot-source's output for w5b4Draft's part 1 (its seed, frozen sha, families and n_fidelity), with `boundaries` as its
+ *  fidelity list and `over` replacing any field. */
+function b2t2PilotSource(o: { over?: B2t2R; boundaries?: string[] } = {}): B2t2R {
+  return { kind: B2.PILOT_SOURCE_KIND, v: 1, store_id: W5B4_STORE_A, seed: w5b4Hex('pilot seed'), n_fidelity: 5, n_usage: 5,
+    families: [W5B4_PILOT], fidelity: (o.boundaries ?? B2T2_B).map((u) => ({ ...W5B4_PILOT, boundary_uuid: u })),
+    frozen_sha256: w5b4Hex('pilot frozen'), writer_model: W5B4_OPUS,
+    used: { labeller: { ...w5b4Gate.LABELLER, path_forms: [...w5b4Gate.LABELLER.path_forms] }, sha_min_prefix: 7, writer_input: 'excerpt',
+      baseline_files: 'v1', writer_prompt_sha256: w5b4Gate.WRITER_PROMPT_SHA256, answer_protocol_sha256: w5b4Gate.ANSWER_PROTOCOL_SHA256 },
+    code_shas: w5b4Shas(), release_stamp: W5B4_STAMP, budget: 3_000_000, spend: 900_000, counts: {}, ...o.over };
+}
+/** The original side every injected boundary measures: W2-5a's arithmetic fixture (12,000 in, 30,000 after the summary). */
+const B2T2_ORIGINAL = { state: 'measured', firstInput: 12000, postInput: 30000, userRows: [{ text: 'please rebuild the fixture package', rawLen: 34 }] };
+/** fidelity's three store reads, injected: boundary `B2T2_B[i]` is entry i + 1 (null when listed in `absent`); every stdin's
+ *  first line is `b2t2-<entry>-<run>`, the stub's key. */
+const b2t2Deps = (o: { absent?: string[] } = {}): B2t2R => ({
+  resolve: (_rs: unknown, uuid: string): number | null => (o.absent?.includes(uuid) === true ? null : B2T2_B.indexOf(uuid) + 1),
+  original: (): B2t2R => B2T2_ORIGINAL,
+  stdins: (_rs: unknown, id: number): B2t2R => ({ state: 'stdins',
+    stdins: { payload: `b2t2-${id}-payload\nthe payload\n`, empty: `b2t2-${id}-empty\n`, 'user-text': `b2t2-${id}-user-text\n` } }),
+});
+/** Part 1 (w5b4Draft, `draftOver` its overrides) and pilot-source's output, saved; a fresh --out; the fidelity argv, with
+ *  `--step0b` when `step0b` makes a result for part 1's sha (K2). */
+function b2t2Fidelity(home: string, o: { draftOver?: B2t2R; stores?: string[]; source?: B2t2R; step0b?: (sha: string) => W5b4Saved } = {}) {
+  const draft = w5b4Draft(home, { over: o.draftOver, stores: o.stores });
+  const d = w5b4Save(draft, 'part1.json');
+  const p = w5b4Save(o.source ?? b2t2PilotSource(), 'pilot-source.json');
+  const out = w5b4Out();
+  const s0 = o.step0b?.(d.sha) ?? null;
+  return { draft, d, p, out, s0,
+    argv: ['fidelity', '--section', 'pilot', '--out', out, ...w5b4Inp('record', d), ...w5b4Inp('pilot', p), ...(s0 === null ? [] : w5b4Inp('step0b', s0))] };
+}
+/** An in-process call: stdout and stderr captured, a refusal answered as {word, detail}; any other throw is the case's failure. */
+async function b2t2Call(fn: () => Promise<unknown>): Promise<{ code: unknown; stdout: string; stderr: string; refusal: { word: string; detail: string } | null }> {
+  const err: string[] = [];
+  const out: string[] = [];
+  const e1 = w5b4Vi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write);
+  const o1 = w5b4Vi.spyOn(process.stdout, 'write').mockImplementation(((s: string | Uint8Array) => { out.push(String(s)); return true; }) as typeof process.stdout.write);
+  try {
+    return { code: await fn(), stdout: out.join(''), stderr: err.join(''), refusal: null };
+  } catch (e) {
+    if (e instanceof b2t2Drv.DriverRefusal) return { code: null, stdout: out.join(''), stderr: err.join(''), refusal: { word: (e as B2t2R).word, detail: (e as B2t2R).detail } };
+    throw e;
+  } finally {
+    e1.mockRestore();
+    o1.mockRestore();
+  }
+}
+const b2t2Flags = (argv: string[]): B2t2R => (B2.parseArgs(argv) as { flags: B2t2R }).flags;
+const B2T2_ENV = (home: string): B2t2R => ({ HOME: home, TMUX_PANE: undefined, LANG: W5B4_LANG });
+/** One answered (qid, arm) as W2-5b1 Task 4's armsSummaryOf reads it. */
+const b2t2Ans = (state: string, uptake: { calls?: number; errored?: number } = {}): B2t2R =>
+  ({ answer_field: { state }, correct: state === 'value', uptake: { calls: uptake.calls ?? 0, via_agent: 0, errored: uptake.errored ?? 0 } });
+/** The pilot arms summary, through W2-5b1 Task 4's own armsSummaryOf. */
+const b2t2Summary = (sha: string, questions: B2t2R[], stop: B2t2R | null = null): B2t2R => B2.armsSummaryOf({ section: 'pilot', recordSha256: sha,
+  storeId: W5B4_STORE_A, budget: { in_force: 3_000_000, spend_budget: null, n_node: questions.length, n_all: questions.length }, spend: 0, batches: 1,
+  stop, stamps: [], questions });
+/** One fidelity.json boundary on the pilot family. */
+const b2t2Bnd = (n: number, state = 'measured', pass = true, why: string | null = null): B2t2R => ({ ...W5B4_PILOT, boundary_uuid: w5b4Gen(n), state, why,
+  figures: state === 'measured' ? { original_payload: 18200, replay_payload: pass ? 16000 : 31000, original_overhead: 11800, replay_overhead: 9000, user_text_tokens: 200 } : null, pass });
+type B2t2Names = { a: string[]; judge: string; fidelity: string };
+/** A pilot --out as fidelity, arms --section pilot and judge --section pilot leave it, written by hand in their shapes: part 1
+ *  over a two-question pilot (w5b4Pilot), fidelity.json, the arms summary, the judged file, spend lines and run.json files;
+ *  and step 0b's output, saved. Each piece is replaceable. */
+function b2t2PilotOut(home: string, o: { fidelity?: B2t2R[]; fidelitySha?: string; questions?: (q1: B2t2R, q2: B2t2R) => B2t2R[]; stop?: B2t2R;
+  judged?: B2t2R | null; step0b?: (sha: string) => W5b4Saved; mode?: string; ledger?: (n: B2t2Names) => Array<[string, number]>;
+  runs?: (n: B2t2Names) => Record<string, B2t2R | null> } = {}) {
+  const mode = o.mode ?? 'restricted';   // the mode every surface below ran under
+  const fx = w5b4Pilot(home, { n: 2 });
+  const out = B2.prepareOut(fx.out) as string;
+  const [q1, q2] = fx.entries as [B2t2R, B2t2R];
+  const write = (rel: string, v: unknown): void => {
+    mkdirSync(path.dirname(join(out, rel)), { recursive: true });
+    writeFileSync(join(out, rel), `${w5b4Lib.canonicalJson(v) as string}\n`, { mode: 0o600 });
+  };
+  const boundaries = o.fidelity ?? [7101, 7102, 7103, 7104, 7105].map((n) => b2t2Bnd(n));
+  write('fidelity.json', { kind: B2.FIDELITY_KIND, v: 1, record_sha256: o.fidelitySha ?? fx.d.sha, settings_mode: mode, boundaries });
+  const questions = o.questions?.(q1, q2) ?? [q1, q2].map((q) => ({ qid: q.qid, state: 'answered', arms: [
+    { arm: W5B4_CONTROL, answer: b2t2Ans('value', { errored: 1 }) }, { arm: W5B4_TREATMENT, answer: b2t2Ans('value', { calls: 1 }) }] }));
+  write('pilot/arms/summary.json', b2t2Summary(fx.d.sha, questions, o.stop ?? null));
+  if (o.judged !== null) write('pilot/judged.json', o.judged ?? { kind: B2.JUDGED_KIND, v: 1, section: 'pilot', record_sha256: fx.d.sha, settings_mode: mode, items: [] });
+  const armName = (q: B2t2R, arm: string): string => `pilot/arms/${q.qid as string}/${arm}.a1`;
+  const names: B2t2Names = { a: [armName(q1, W5B4_CONTROL), armName(q1, W5B4_TREATMENT), armName(q2, W5B4_CONTROL), armName(q2, W5B4_TREATMENT)],
+    judge: 'pilot/judge/j0001-1', fidelity: `fidelity/${w5b4Gen(7101)}/payload` };
+  const ledger = o.ledger?.(names) ?? [...names.a.map((n) => [n, 1000] as [string, number]), [names.judge, 500], [names.fidelity, 300], [`pilot/step0b/${mode}/turn-bound`, 50]];
+  for (const [n, t] of ledger) B2.recordSpend(out, n, t);
+  const runJson = (result: number | null, assistant: number, tokens: number): B2t2R => ({ usage_result_tokens: result, usage_assistant_tokens: assistant, tokens, settings_mode: mode });
+  const runs = o.runs?.(names) ?? { [names.a[0]!]: runJson(1000, 1000, 1000), [names.a[1]!]: runJson(1000, 1000, 1000), [names.a[2]!]: runJson(800, 1000, 1000),
+    [names.a[3]!]: runJson(null, 1000, 1000), [names.fidelity]: runJson(300, 300, 300) };
+  for (const [n, v] of Object.entries(runs)) if (v !== null) write(`${n}.run.json`, { kind: 'ccrc-history-replay-run', name: n, ...v });
+  const s0 = o.step0b?.(fx.d.sha) ?? b2t2Step0b(fx.d.sha, { mode });
+  return { fx, out, q1, q2, names, boundaries, s0,
+    argv: (s: W5b4Saved = s0): string[] => ['pilot-result', '--section', 'pilot', '--out', fx.out, ...w5b4Inp('record', fx.d), ...w5b4Inp('step0b', s)] };
+}
+type B2t2Pilot = ReturnType<typeof b2t2PilotOut>;
+const b2t2RunPilot = async (p: B2t2Pilot) => b2t2Call(() => B2.pilotResultCommand(b2t2Flags(p.argv()), B2T2_ENV(w5b4MkTmp('ccrc-b2t2-env-'))));
+const b2t2ResultOf = (p: B2t2Pilot): B2t2R => JSON.parse(readFileSync(join(p.out, 'pilot-result.json'), 'utf8')) as B2t2R;
+
+/** Real loaders/node reader, one non-correct answer, and a labelled one-run judge stub. The quiz fixture has node A's
+ *  three of five questions (share 60 of 100); the pilot fixture's pilot_budget is 100. Save the stream before the records
+ *  so their measured version agrees with the stub's --version reply. No existing W2-5b1 case or fixture is edited. */
+function b2t2JudgeFixture(section: 'pilot' | 'quiz') {
+  const home = w5b4Home();
+  writeFileSync(join(home, STUB_STREAM), W5B5_LABELLED);
+  const fx = (section === 'quiz' ? w5b4Quiz(home, { spendBudget: 100 }) : w5b4Pilot(home, { over: { pilot_budget: 100 } })) as B2t2R;
+  const own = (section === 'quiz' ? fx.mine : fx.entries) as B2t2R[];
+  const wrong = own[0]!;
+  const answers = own.flatMap((q) => W5B4_ARMS.map((arm) => w5b5Answer(q.qid as string, arm, 'answered',
+    q === wrong && arm === W5B4_CONTROL ? 'ANSWER: UNKNOWN' : `ANSWER: ${q.fact as string}`, !(q === wrong && arm === W5B4_CONTROL))));
+  const out = B2.prepareOut(fx.out) as string;
+  const argv = section === 'quiz' ? fx.argv() as string[] : fx.argv as string[];
+  const call = () => b2t2Call(() => B2.judgeCommand(b2t2Flags(['judge', ...argv.slice(1)]), B2T2_ENV(home), {
+    loadArmRun: B2.loadArmRun, armNodeOf: B2.armNodeOf, readArmAnswers: () => answers, now: () => W5B4_T0 + 2 * W5B4_DAY,
+  }));
+  const result = (): B2t2R => JSON.parse(readFileSync(join(out, section, 'judged.json'), 'utf8')) as B2t2R;
+  return { home, fx, out, call, result };
+}
+
+b2t2Describe('W2-5b2 Task 2: K25 pure scoped spend', () => {
+  b2t2It('P4: judgeSpentOf counts exact section/JUDGE_DIR/ prefixes, duplicates and both sections; CONTROL: whole-ledger inputs remain untouched; overflow throws', () => {
+    b2t2Expect(B2.SPEND_SCOPES).toEqual(['all', 'judge']);
+    b2t2Expect(Object.isFrozen(B2.SPEND_SCOPES)).toBe(true);
+    const rows = [
+      { name: 'pilot/judge/j0001-1', tokens: 5 }, { name: 'quiz/judge/j0002-1', tokens: 7 }, { name: 'quiz/judge/j0002-1', tokens: 7 },
+      ...['quiz/judgex/j0001-1', 'pilot/judge', 'quiz/judge-other/j0001-1', 'other/judge/j0001-1',
+        'quiz/arms/q1/control.a1', 'step0b/turn-bound', 'pilot/step0b/restricted/turn-bound'].map((name) => ({ name, tokens: 100 })),
+    ];
+    const before = JSON.stringify(rows);
+    b2t2Expect(B2.judgeSpentOf(rows)).toBe(19);
+    b2t2Expect(JSON.stringify(rows), 'pure: never filters the caller array in place').toBe(before);
+    b2t2Expect(B2.judgeSpentOf([]), 'CONTROL: no judge spend is 0').toBe(0);
+    b2t2Expect(B2.judgeSpentOf([{ name: 'quiz/judge/j0001-1', tokens: Number.MAX_SAFE_INTEGER }]), 'CONTROL: safe edge').toBe(Number.MAX_SAFE_INTEGER);
+    b2t2Expect(() => B2.judgeSpentOf([{ name: 'pilot/judge/j0001-1', tokens: Number.MAX_SAFE_INTEGER }, { name: 'quiz/judge/j0002-1', tokens: 1 }])).toThrow(RangeError);
+  });
+
+  b2t2It('P4: batchGate rejects unknown scope at construction before any read; CONTROL: default all and judge construct', () => {
+    const args = { out: '/home/u/not-read/out', home: '/home/u/not-read', accountId: 'up-a', budget: 60, limits: B2.LIMITS_DEFAULTS };
+    for (const scope of ['arms', '', null, 0]) b2t2Expect(() => B2.batchGate({ ...args, scope }), String(scope)).toThrow(TypeError);
+    b2t2Expect(typeof B2.batchGate(args), 'CONTROL: default scope').toBe('function');
+    for (const scope of B2.SPEND_SCOPES) b2t2Expect(typeof B2.batchGate({ ...args, scope }), `CONTROL: ${scope}`).toBe('function');
+  });
+});
+
+b2t2Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 2: K25 the judge scope and whole-ledger arms', () => {
+  b2t2It('P1: quiz arms charged 130 against share 60 do not block the judge; judged.json and its sha include whole-ledger spend; CONTROL: no arm rows', async () => {
+    for (const armSpend of [0, 130]) {
+      const p = b2t2JudgeFixture('quiz');
+      if (armSpend > 0) B2.recordSpend(p.out, 'quiz/arms/fixture/control.a1', armSpend);
+      const r = await p.call();
+      b2t2Expect([r.refusal, r.code, r.stdout], r.stderr).toEqual([null, 0, '']);
+      b2t2Expect(w5b4Runs(p.home), 'one labelled judge attempt').toHaveLength(1);
+      const text = readFileSync(join(p.out, 'quiz', 'judged.json'), 'utf8');
+      b2t2Expect(r.stderr, 'sha of the whole judged file').toBe(`sha256 ${sha256Hex(text)}\n`);
+      const rows = readFileSync(join(p.out, 'spend.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { name: string; tokens: number });
+      const own = rows.filter((row) => row.name.startsWith('quiz/judge/')).reduce((sum, row) => sum + row.tokens, 0);
+      b2t2Expect(own).toBeGreaterThan(0);
+      b2t2Expect(p.result()).toMatchObject({ budget: 60, spend: armSpend + own, counts: { judged: 1 } });
+      b2t2Expect(p.result().spend, 'whole ledger, never the scoped gate reading').toBe(B2.spentSoFar(p.out));
+    }
+  }, 120_000);
+
+  b2t2It('P1p: pilot step0b, fidelity and arms already consumed pilot_budget; the judge still runs under that same budget; CONTROL: no prior rows', async () => {
+    for (const seed of [false, true]) {
+      const p = b2t2JudgeFixture('pilot');
+      if (seed) {
+        B2.recordSpend(p.out, 'pilot/step0b/restricted/turn-bound', 40);
+        B2.recordSpend(p.out, `fidelity/${B2T2_B[0]!}/payload`, 30);
+        B2.recordSpend(p.out, 'pilot/arms/fixture/control.a1', 60);
+      }
+      const r = await p.call();
+      b2t2Expect([r.refusal, r.code, r.stdout], r.stderr).toEqual([null, 0, '']);
+      b2t2Expect(w5b4Runs(p.home)).toHaveLength(1);
+      const text = readFileSync(join(p.out, 'pilot', 'judged.json'), 'utf8');
+      b2t2Expect(r.stderr).toBe(`sha256 ${sha256Hex(text)}\n`);
+      const rows = readFileSync(join(p.out, 'spend.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { name: string; tokens: number });
+      const own = rows.filter((row) => row.name.startsWith('pilot/judge/')).reduce((sum, row) => sum + row.tokens, 0);
+      b2t2Expect(own, 'the judge charged its own attempt').toBeGreaterThan(0);
+      b2t2Expect(p.result()).toMatchObject({ budget: 100, spend: (seed ? 130 : 0) + own });
+      b2t2Expect(p.result().spend).toBe(B2.spentSoFar(p.out));
+    }
+  }, 120_000);
+
+  b2t2It.each(['torn', 'foreign', 'overflow'])('P2: a %s non-judge ledger row refuses out-refused before any spawn; CONTROL: a valid over-share arm row is admissible', async (bad) => {
+    const control = b2t2JudgeFixture('quiz');
+    B2.recordSpend(control.out, 'quiz/arms/fixture/control.a1', 130);
+    b2t2Expect((await control.call()).code, 'CONTROL: valid non-judge rows do not count toward judge gate').toBe(0);
+    const p = b2t2JudgeFixture('quiz');
+    if (bad === 'torn') writeFileSync(join(p.out, 'spend.jsonl'), '{"name":"quiz/arms/fixture/control.a1","tokens":1');
+    if (bad === 'foreign') writeFileSync(join(p.out, 'spend.jsonl'), '{"kind":"foreign","name":"quiz/arms/fixture/control.a1","tokens":1,"ts_ms":1}\n');
+    if (bad === 'overflow') {
+      B2.recordSpend(p.out, 'quiz/arms/fixture/control.a1', Number.MAX_SAFE_INTEGER);
+      B2.recordSpend(p.out, 'quiz/arms/fixture/treatment.a1', 1);
+    }
+    const r = await p.call();
+    b2t2Expect(r.refusal).toEqual({ word: 'out-refused', detail: 'spend.jsonl malformed' });
+    b2t2Expect(stubLog(p.home), 'no spawn, not even --version').toBeNull();
+    b2t2Expect(existsSync(join(p.out, 'quiz', 'judged.json'))).toBe(false);
+  }, 120_000);
+
+  b2t2It('P3: arms count all rows including judge rows and non-judge rows; CONTROL: sub-share judge-only spend admits an arm', async () => {
+    for (const [judge, arms] of [[65, 0], [35, 30]]) {
+      const home = w5b4Home();
+      const fx = w5b4Quiz(home, { spendBudget: 100 });
+      const out = B2.prepareOut(fx.out) as string;
+      B2.recordSpend(out, 'quiz/judge/j0000-1', judge);
+      if (arms! > 0) B2.recordSpend(out, 'quiz/arms/fixture/control.a1', arms);
+      const r = await w5b4Arms(home, fx.argv());
+      b2t2Expect(r.refusal).toEqual({ word: 'budget-exhausted', detail: 'spent 65 of 60' });
+      b2t2Expect(w5b4Runs(home), 'neither mixed-ledger half alone reaches share, but the whole ledger does').toHaveLength(0);
+    }
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { spendBudget: 100, over: { limits: { concurrency: 1 } } });
+    B2.recordSpend(B2.prepareOut(fx.out), 'quiz/judge/j0000-1', 35);
+    await w5b4Arms(home, fx.argv());
+    b2t2Expect(w5b4Runs(home), 'CONTROL: a pending arm is really admitted below share').toHaveLength(1);
+  }, 120_000);
+
+  b2t2It('P5: finished arms resume past budget after judge spend with zero spawns or preflight; CONTROL: finished resume before judge spend also spawns nothing', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home);
+    b2t2Expect((await w5b4Arms(home, fx.argv())).code).toBe(0);
+    const before = stubLog(home);
+    b2t2Expect(w5b4Runs(home)).toHaveLength(6);
+    b2t2Expect((await w5b4Arms(home, fx.argv())).code, 'CONTROL: no pending work').toBe(0);
+    b2t2Expect(stubLog(home)).toEqual(before);
+    B2.recordSpend(fx.out, 'quiz/judge/j0000-1', 600_001);
+    const r = await w5b4Arms(home, fx.argv());
+    b2t2Expect([r.refusal, r.code], r.stderr).toEqual([null, 0]);
+    b2t2Expect(stubLog(home), 'no new --version or print-mode spawn').toEqual(before);
+    b2t2Expect(JSON.parse(readFileSync(join(fx.out, 'quiz', 'arms', 'summary.json'), 'utf8'))).toMatchObject({
+      spend: B2.spentSoFar(fx.out), stop: null, counts: { questions: 3, answered: 3 },
+    });
+  }, 120_000);
+});
+
+b2t2Describe('W2-5b2 Task 2: the pilot pure parts', () => {
+  b2t2It('decimalOf reads a record decimal exactly, and the validator signs exactly what it reads below 1 (the gate private decimalFrac, spelled again)', () => {
+    b2t2Expect(B2.decimalOf(0.25)).toEqual({ num: 25, den: 100 });
+    b2t2Expect(B2.decimalOf(0.05)).toEqual({ num: 5, den: 100 });
+    b2t2Expect(B2.decimalOf(0)).toEqual({ num: 0, den: 1 });
+    b2t2Expect(B2.decimalOf(1)).toEqual({ num: 1, den: 1 });
+    b2t2Expect(B2.decimalOf(0.123456)).toEqual({ num: 123456, den: 1000000 });
+    for (const bad of [0.1234567, 1.5, -0.1, Number.NaN, '0.25', null, 1e-7]) b2t2Expect(B2.decimalOf(bad), String(bad)).toBeNull();
+    const home = w5b4Home(null);
+    for (const x of [0.05, 0.123456, 0.1234567, 0, 0.999999, 1, 1e-7]) {
+      const draft = w5b4Draft(home, { over: { halts: { run_failed_max: x } } });
+      const v = w5b4Gate.validateOpenRecord(draft, { draft: null, predecessor: null, frozen: null }) as { ok: boolean };
+      b2t2Expect(v.ok, `parity at ${String(x)}`).toBe(B2.decimalOf(x) !== null && x < 1);
+    }
+  });
+
+  b2t2It('fidelityPassOf holds the replay payload within the tolerance of the original, the edge exact; unmeasured never passes (W2-D76)', () => {
+    const tol = { num: 25, den: 100 };
+    const fig = (replay: number): B2t2R => ({ state: 'measured', original_payload: 18200, replay_payload: replay, original_overhead: 11800, replay_overhead: 9000, user_text_tokens: 200 });
+    b2t2Expect([22750, 22751, 13650, 13649, 18200].map((x) => B2.fidelityPassOf(fig(x), tol))).toEqual([true, false, true, false, true]);
+    b2t2Expect(B2.fidelityPassOf({ state: 'unmeasured', why: 'user-text-nonpositive' }, tol)).toBe(false);
+    b2t2Expect(B2.fidelityPassOf(fig(18200), { num: 0, den: 1 }), 'a zero tolerance passes equality').toBe(true);
+    b2t2Expect(B2.fidelityPassOf(fig(18201), { num: 0, den: 1 })).toBe(false);
+  });
+
+  b2t2It('fidelityRunName is fidelity/<boundary uuid>/<run> for each FIDELITY_RUNS member; anything else is a TypeError', () => {
+    b2t2Expect((B2.FIDELITY_RUNS as string[]).map((run) => B2.fidelityRunName(B2T2_B[0], run))).toEqual(['payload', 'empty', 'user-text'].map((x) => `fidelity/${B2T2_B[0]!}/${x}`));
+    b2t2Expect(() => B2.fidelityRunName(B2T2_B[0], 'other')).toThrow(TypeError);
+    b2t2Expect(() => B2.fidelityRunName('../x', 'empty')).toThrow(TypeError);
+  });
+
+  b2t2It('absentRateCheckOf: an arm over the max fails, at the max passes, an arm with no answered question is unmeasured and never 0 (W2-D64)', () => {
+    const max = { num: 5, den: 100 };
+    const ok = { [W5B4_CONTROL]: { num: 1, den: 20 }, [W5B4_TREATMENT]: { num: 0, den: 20 } };
+    b2t2Expect(B2.absentRateCheckOf(ok, max)).toEqual({ arms: ok, max, over: [], unmeasured: [], pass: true });
+    b2t2Expect(B2.absentRateCheckOf({ ...ok, [W5B4_TREATMENT]: { num: 2, den: 20 } }, max)).toMatchObject({ over: [W5B4_TREATMENT], unmeasured: [], pass: false });
+    b2t2Expect(B2.absentRateCheckOf({ ...ok, [W5B4_CONTROL]: { num: 0, den: 0 } }, max)).toMatchObject({ over: [], unmeasured: [W5B4_CONTROL], pass: false });
+    b2t2Expect(B2.absentRateCheckOf({ [W5B4_CONTROL]: { num: 0, den: 2 } }, max), 'an arm missing from the rates').toMatchObject({ unmeasured: [W5B4_TREATMENT], pass: false });
+  });
+
+  b2t2It('uptakeReadingOf: errored calls and no plain call is is-error and measured; a plain control call is not-error and none at all unseen, both unmeasured; no reading is a failure (W2-D82, Q10)', () => {
+    b2t2Expect(B2.uptakeReadingOf({ calls: 0, errored: 3 })).toEqual({ reading: 'is-error', quiz_uptake: 'measured', control_calls: 0, control_errored: 3 });
+    b2t2Expect(B2.uptakeReadingOf({ calls: 1, errored: 3 })).toEqual({ reading: 'not-error', quiz_uptake: 'unmeasured', control_calls: 1, control_errored: 3 });
+    b2t2Expect(B2.uptakeReadingOf({ calls: 0, errored: 0 })).toEqual({ reading: 'unseen', quiz_uptake: 'unmeasured', control_calls: 0, control_errored: 0 });
+    b2t2Expect(B2.UPTAKE_READINGS).toEqual(['is-error', 'not-error', 'unseen']);
+    for (const w of B2.UPTAKE_READINGS as string[]) {
+      b2t2Expect(B2.DRIVER_REASONS, w).not.toContain(w);
+      b2t2Expect(b2t2Gate.GATE_REASONS, w).not.toContain(w);
+    }
+    b2t2Expect(B2.pilotFailuresOf({ boundaries: [], nFidelity: 0, absent: { over: [], unmeasured: [] }, step0bFailures: [], settingsMismatches: [] })).toEqual([]);
+  });
+
+  b2t2It('quizUptakeReadingOf reads part 2 pilot_result: measured only for the is-error reading its own counts give; absent, malformed or forged is unmeasured (K15, W2-D82, D-6644)', () => {
+    const pr = (uptake: unknown): B2t2R => ({ usage_extrapolation: { v: 1, uptake } });
+    const reading = (calls: number, errored: number): B2t2R => B2.uptakeReadingOf({ calls, errored });
+    b2t2Expect(B2.quizUptakeReadingOf(pr(reading(0, 3)))).toBe('measured');
+    b2t2Expect(B2.quizUptakeReadingOf(pr(reading(1, 3))), 'not-error').toBe('unmeasured');
+    b2t2Expect(B2.quizUptakeReadingOf(pr(reading(0, 0))), 'unseen (D-6644)').toBe('unmeasured');
+    for (const [what, v] of [['no uptake', pr(undefined)], ['no extrapolation', {}], ['no pilot result', null], ['W2-5b1 Task 4 fixture', { usage_extrapolation: {} }],
+      ['measured under unseen counts', pr({ reading: 'unseen', quiz_uptake: 'measured', control_calls: 0, control_errored: 0 })],
+      ['is-error over a plain call', pr({ reading: 'is-error', quiz_uptake: 'measured', control_calls: 1, control_errored: 3 })],
+      ['a count that is no integer', pr({ reading: 'is-error', quiz_uptake: 'measured', control_calls: 0, control_errored: 1.5 })],
+    ] as Array<[string, unknown]>) b2t2Expect(B2.quizUptakeReadingOf(v), what).toBe('unmeasured');
+  });
+
+  b2t2It('spendBudgetOf is ceil(5 x n x spend / (4 x pilot questions)) in integers, exact past 2^53 products, null when not a safe integer (Q6, C5)', () => {
+    const ux = (total: number, pq: number): B2t2R => ({ v: 1, formula: B2.USAGE_EXTRAPOLATION_FORMULA, margin: { num: 5, den: 4 }, pilot_questions: pq, pilot_spend: { arms: total, judge: 0, total } });
+    b2t2Expect(B2.spendBudgetOf(ux(24_000_000, 5), 5)).toBe(30_000_000);
+    b2t2Expect(B2.spendBudgetOf(ux(4500, 2), 100)).toBe(281_250);
+    b2t2Expect(B2.spendBudgetOf(ux(1, 3), 1), 'ceil, never floor').toBe(1);
+    b2t2Expect(B2.spendBudgetOf(ux(7, 2), 3), 'ceil(105 / 8)').toBe(14);
+    b2t2Expect(B2.spendBudgetOf(ux(Number.MAX_SAFE_INTEGER, 5), 4), 'exact where a float product rounds').toBe(Number.MAX_SAFE_INTEGER);
+    b2t2Expect(B2.spendBudgetOf(ux(Number.MAX_SAFE_INTEGER, 1), 2), 'past the safe range').toBeNull();
+    b2t2Expect(B2.spendBudgetOf(ux(4500, 2), 0)).toBeNull();
+    b2t2Expect(B2.spendBudgetOf({ ...ux(4500, 2), margin: { num: 3, den: 2 } }, 100), 'Q6 margin only').toBeNull();
+    b2t2Expect(B2.USAGE_MARGIN).toEqual({ num: 5, den: 4 });
+  });
+
+  b2t2It('extrapolationError names the first field open --finalize cannot use; report-only fields are not read', () => {
+    const good = { v: 1, formula: B2.USAGE_EXTRAPOLATION_FORMULA, margin: { num: 5, den: 4 }, pilot_questions: 5, pilot_spend: { arms: 3, judge: 2, total: 5 } };
+    b2t2Expect(B2.extrapolationError(good)).toBeNull();
+    b2t2Expect(B2.extrapolationError({ ...good, at_target: {}, uptake: {}, spend_readings: {} })).toBeNull();
+    const rows: Array<[B2t2R | null, string]> = [
+      [null, 'v'], [{ ...good, v: 2 }, 'v'], [{ ...good, formula: 'x' }, 'formula'], [{ ...good, margin: { num: 5, den: 3 } }, 'margin'],
+      [{ ...good, pilot_questions: 0 }, 'pilot_questions'], [{ ...good, pilot_spend: { arms: 3, judge: 2, total: 6 } }, 'pilot_spend'],
+      [{ ...good, pilot_spend: { arms: 0, judge: 0, total: 0 } }, 'pilot_spend'], [{ ...good, pilot_spend: { arms: -1, judge: 6, total: 5 } }, 'pilot_spend'],
+    ];
+    for (const [u, word] of rows) b2t2Expect(B2.extrapolationError(u), word).toBe(word);
+  });
+
+  b2t2It('spendReadingsOf counts each run by the relation of its two usage readings, a run with no run.json apart (Q7)', () => {
+    const run = (result: number | null, assistant: number): B2t2R =>
+      ({ result, assistant, rawResult: result, rawAssistant: assistant, charged: Math.max(result ?? 0, assistant) });
+    b2t2Expect(B2.spendReadingsOf([{ name: 'a', run: run(10, 10) }, { name: 'b', run: run(8, 10) }, { name: 'c', run: run(12, 10) },
+      { name: 'd', run: run(null, 10) }, { name: 'e', run: null }]))
+      .toEqual({ runs: 5, unrecorded: 1, result_absent: 1, result_below_assistant: 1, equal: 1, result_above_assistant: 1, result_tokens: 30, assistant_tokens: 40, charged_tokens: 42 });
+    // Two unequal readings past the safe range (2 ** 53 + 2 and 2 ** 53, each exact as a double): the relation is read on the
+    // raw readings, so it is above, never equal, though both clamp to Number.MAX_SAFE_INTEGER; only the sums saturate.
+    const over = Number.MAX_SAFE_INTEGER + 1;
+    const max = Number.MAX_SAFE_INTEGER;
+    b2t2Expect(B2.spendReadingsOf([{ name: 'f', run: { result: max, assistant: max, rawResult: over + 2, rawAssistant: over, charged: max } }]), 'raw relation, saturated sums')
+      .toEqual({ runs: 1, unrecorded: 0, result_absent: 0, result_below_assistant: 0, equal: 0, result_above_assistant: 1, result_tokens: max, assistant_tokens: max, charged_tokens: max });
+  });
+
+  b2t2It('pilotFailuresOf lists every failed check once, sorted (Q10)', () => {
+    const b = (u: string, state: string, pass: boolean, why: string | null = null): B2t2R => ({ boundary_uuid: u, state, why, pass });
+    b2t2Expect(B2.pilotFailuresOf({
+      boundaries: [b(B2T2_B[1]!, 'measured', false), b(B2T2_B[0]!, 'unmeasured', false, 'boundary-absent'), b(B2T2_B[2]!, 'measured', true)],
+      nFidelity: 5, absent: { over: [W5B4_TREATMENT], unmeasured: [W5B4_CONTROL] }, step0bFailures: ['skill failed', 'skill failed'],
+      settingsMismatches: ['judge ran under restricted, step 0b under fallback'],
+    })).toEqual([
+      `absent-rate ${W5B4_CONTROL} unmeasured`, `absent-rate ${W5B4_TREATMENT} over`,
+      `fidelity ${B2T2_B[0]!} unmeasured boundary-absent`, `fidelity ${B2T2_B[1]!} outside-tolerance`, 'fidelity short 3 of 5',
+      'settings-mode judge ran under restricted, step 0b under fallback', 'step0b skill failed',
+    ]);
+  });
+
+  b2t2It('USAGE_PILOT_PREFIXES are where W2-5b1 names the pilot arm and judge runs, and never a quiz run', () => {
+    for (const arm of W5B4_ARMS) b2t2Expect((B2.armRunName('pilot', 'q-1', arm, 1) as string).startsWith(B2.USAGE_PILOT_PREFIXES.arms), arm).toBe(true);
+    b2t2Expect((B2.armRunName('quiz', 'q-1', W5B4_ARMS[0], 1) as string).startsWith(B2.USAGE_PILOT_PREFIXES.arms)).toBe(false);
+    b2t2Expect(B2.USAGE_PILOT_PREFIXES).toEqual({ arms: 'pilot/arms/', judge: `pilot/${B2.JUDGE_DIR as string}/` });
+  });
+
+  b2t2It('refuseOutOfRangeValues with settings ranges the settings mode (review 811 F4); without it the W2-5a callers are unchanged', () => {
+    const good = { budget: 1, limits: { threshold_pct: 100, max_age_ms: 1 }, quotas: null };
+    b2t2Expect(() => B2.refuseOutOfRangeValues({ ...good, settings: { mode: 'bogus' } })).toThrow(/^record-invalid: settings_mode out-of-range$/);
+    b2t2Expect(() => B2.refuseOutOfRangeValues({ ...good, settings: { mode: undefined } })).toThrow(/settings_mode out-of-range/);
+    for (const mode of ['restricted', 'fallback']) b2t2Expect(() => B2.refuseOutOfRangeValues({ ...good, settings: { mode } }), mode).not.toThrow();
+    b2t2Expect(() => B2.refuseOutOfRangeValues(good), 'no settings, no row').not.toThrow();
+  });
+});
+
+const B2T2_NOT_PASSED = (mode: string, failed: string, unmeasured: string): string =>
+  `step0b ${mode} did not pass: failed ${failed}; unmeasured ${unmeasured}; a pilot act runs under a step 0b that passed (K2)`;
+
+b2t2Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 2: step 0b\'s settings mode for the pilot acts (K2)', () => {
+  /** W2-5b1's pilot fixture on a fresh node, and loadArmRun('pilot') over its arms argv plus `extra(part 1's sha)`. */
+  const loadPilot = (extra: (sha: string) => string[] = () => []) => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home);
+    return { home, fx, load: (): B2t2R => B2.loadArmRun(b2t2Flags([...fx.argv, ...extra(fx.d.sha)]), 'pilot', { nowMs: Date.now() }) as B2t2R };
+  };
+
+  b2t2It('loadArmRun pilot answers a passed step 0b result settings mode, the one loader arms and judge share; CONTROL: without --step0b, part 1 mode as W2-5b1 ships (K2, Q26)', () => {
+    b2t2Expect(loadPilot().load().settingsMode, 'CONTROL: part 1 mode').toBe('restricted');
+    b2t2Expect(loadPilot((sha) => w5b4Inp('step0b', b2t2Step0b(sha, { mode: 'fallback' }))).load().settingsMode).toBe('fallback');
+    b2t2Expect(loadPilot((sha) => w5b4Inp('step0b', b2t2Step0b(sha))).load().settingsMode, 'a passed restricted result').toBe('restricted');
+  });
+
+  const S0_ROWS: Array<[string, (sha: string) => W5b4Saved, { word: string; detail: string }]> = [
+    ['a step 0b with a failed check', (sha) => b2t2Step0b(sha, { failed: ['skill'] }), { word: 'pilot-failed', detail: B2T2_NOT_PASSED('restricted', 'skill', '-') }],
+    ['a step 0b with an unmeasured check', (sha) => b2t2Step0b(sha, { mode: 'fallback', unmeasured: ['turn-bound', 'persistence'] }),
+      { word: 'pilot-failed', detail: B2T2_NOT_PASSED('fallback', '-', 'turn-bound persistence') }],
+    ['another part 1 step 0b', () => b2t2Step0b(w5b4Hex('another part 1'), { mode: 'fallback' }), { word: 'input-invalid', detail: 'step0b record-mismatch' }],
+    ['a step 0b of another section', (sha) => b2t2Step0b(sha, { over: { section: 'quiz' } }), { word: 'input-invalid', detail: 'step0b section quiz, wanted pilot' }],
+    ['a passed flag its checks contradict', (sha) => b2t2Step0b(sha, { failed: ['skill'], over: { passed: true } }), { word: 'input-invalid', detail: 'step0b shape verdict' }],
+    ['a check that is no step 0b check', (sha) => b2t2Step0b(sha, { over: { failed: ['nope'], passed: false } }), { word: 'input-invalid', detail: 'step0b shape verdict' }],
+    ['another kind', (sha) => b2t2Step0b(sha, { over: { kind: 'ccrc-history-w2-other' } }), { word: 'input-invalid', detail: 'step0b shape kind' }],
+    ['a settings mode outside SETTINGS_MODES', (sha) => b2t2Step0b(sha, { over: { settings_mode: 'open' } }), { word: 'input-invalid', detail: 'step0b shape settings_mode' }],
+  ];
+  b2t2It.each(S0_ROWS)('loadArmRun pilot refuses %s before any store, spawn or --out (K2, K3)', (_what, make, want) => {
+    const fx = loadPilot((sha) => w5b4Inp('step0b', make(sha)));
+    let got: unknown = null;
+    try { fx.load(); } catch (e) { got = e instanceof b2t2Drv.DriverRefusal ? { word: (e as B2t2R).word, detail: (e as B2t2R).detail } : e; }
+    b2t2Expect(got).toEqual(want);
+    b2t2Expect(existsSync(fx.fx.out), 'no --out').toBe(false);
+  });
+
+  b2t2It('step 0b sha is checked before a byte is parsed, and the pair is asked whole (K2, D-5983)', () => {
+    const dir = w5b4MkTmp('ccrc-b2t2-s0-');
+    const bad = join(dir, 'step0b.json');
+    writeFileSync(bad, 'not json\n', { mode: 0o600 });
+    const said = (extra: string[]): unknown => {
+      try { return loadPilot(() => extra).load(); } catch (e) { return { word: (e as B2t2R).word, detail: (e as B2t2R).detail }; }
+    };
+    const other = w5b4Hex('another file');
+    b2t2Expect(said(['--step0b', bad, '--step0b-sha256', other])).toEqual({ word: 'input-sha-mismatch', detail: `step0b: expected ${other}, measured ${sha256Hex('not json\n')}` });
+    b2t2Expect(said(['--step0b', bad, '--step0b-sha256', sha256Hex('not json\n')]), 'CONTROL: its own sha reaches the parse').toEqual({ word: 'input-invalid', detail: 'step0b not-json' });
+    b2t2Expect(said(['--step0b-sha256', other])).toEqual({ word: 'args-invalid', detail: '--step0b names no path' });
+  });
+
+  b2t2It('arms --section pilot runs every arm run under a passed step 0b mode and records it in each run.json, and refuses a failed one before --out and any spawn (K2, K3)', async () => {
+    const bad = w5b4Home();
+    const fxb = w5b4Pilot(bad);
+    const r = await w5b4Arms(bad, [...fxb.argv, ...w5b4Inp('step0b', b2t2Step0b(fxb.d.sha, { failed: ['skill'] }))]);
+    b2t2Expect(r.refusal).toEqual({ word: 'pilot-failed', detail: B2T2_NOT_PASSED('restricted', 'skill', '-') });
+    b2t2Expect(existsSync(fxb.out), 'no --out').toBe(false);
+    b2t2Expect(stubLog(bad), 'no spawn, not even --version').toBeNull();
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home);
+    const ok = await w5b4Arms(home, [...fx.argv, ...w5b4Inp('step0b', b2t2Step0b(fx.d.sha, { mode: 'fallback' }))]);
+    b2t2Expect(ok.refusal, ok.stderr).toBeNull();
+    b2t2Expect(w5b4Runs(home).length, 'both arms of both questions').toBe(4);
+    for (const run of w5b4Runs(home)) b2t2Expect((run.argv as string[]).slice(0, 2), 'under step 0b mode').toEqual(['--setting-sources', 'project,local']);
+    const name = B2.armRunName('pilot', (fx.entries[0] as B2t2R).qid, W5B4_CONTROL, 1) as string;
+    b2t2Expect(JSON.parse(readFileSync(join(fx.out, `${name}.run.json`), 'utf8')).settings_mode, 'the mode pilot-result reads (K13)').toBe('fallback');
+  }, 120_000);
+
+  b2t2It('judge --section pilot takes the pair through the same loader: a failed step 0b refuses pilot-failed and another part 1 input-invalid, before --out (K2)', async () => {
+    for (const [make, want] of [
+      [(sha: string) => b2t2Step0b(sha, { unmeasured: ['skill'] }), { word: 'pilot-failed', detail: B2T2_NOT_PASSED('restricted', '-', 'skill') }],
+      [() => b2t2Step0b(w5b4Hex('another part 1')), { word: 'input-invalid', detail: 'step0b record-mismatch' }],
+    ] as Array<[(sha: string) => W5b4Saved, { word: string; detail: string }]>) {
+      const home = w5b4Home();
+      const fx = w5b4Pilot(home);
+      const flags = b2t2Flags(['judge', ...fx.argv.slice(1), ...w5b4Inp('step0b', make(fx.d.sha))]);
+      const r = await w5b5InProcess(() => W5B5.judgeCommand(flags, W5B5_ENV(home)));
+      b2t2Expect(r.refusal).toEqual(want);
+      b2t2Expect(existsSync(fx.out), 'no --out').toBe(false);
+      b2t2Expect(stubLog(home), 'no spawn').toBeNull();
+    }
+  }, 120_000);
+
+  b2t2It('fidelity --section pilot runs under a passed step 0b mode and names its sha, and refuses a failed one before --out and any spawn (K2, K3)', async () => {
+    const bad = b2t2Home();
+    const fxb = b2t2Fidelity(bad, { step0b: (sha) => b2t2Step0b(sha, { failed: ['tools'] }) });
+    const r = await b2t2Call(() => B2.fidelityCommand(b2t2Flags(fxb.argv), B2T2_ENV(bad), b2t2Deps()));
+    b2t2Expect(r.refusal).toEqual({ word: 'pilot-failed', detail: B2T2_NOT_PASSED('restricted', 'tools', '-') });
+    b2t2Expect(existsSync(fxb.out), 'no --out').toBe(false);
+    b2t2Expect(stubLog(bad), 'no spawn').toBeNull();
+    const home = b2t2Home();
+    b2t2PlantPass(home);
+    const fx = b2t2Fidelity(home, { step0b: (sha) => b2t2Step0b(sha, { mode: 'fallback' }) });
+    const ok = await b2t2Call(() => B2.fidelityCommand(b2t2Flags(fx.argv), B2T2_ENV(home), b2t2Deps()));
+    b2t2Expect([ok.refusal, ok.code], ok.stderr).toEqual([null, 0]);
+    const doc = JSON.parse(readFileSync(join(fx.out, 'fidelity.json'), 'utf8')) as B2t2R;
+    b2t2Expect([doc.settings_mode, doc.step0b_sha256]).toEqual(['fallback', fx.s0!.sha]);
+    for (const run of w5b4Runs(home)) b2t2Expect((run.argv as string[]).slice(0, 2), 'under step 0b mode').toEqual(['--setting-sources', 'project,local']);
+  }, 120_000);
+});
+
+b2t2Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 2: the original side read from a swept store', () => {
+  let box: w5a1H.HistoryBox;
+  const u = (i: number): string => `b2b20002-0000-4000-8000-${String(i).padStart(12, '0')}`;
+  b2t2BeforeAll(() => {
+    box = w5a1H.makeHistoryBox('ccrc-b2t2-store-');
+    const cwd = join(box.home, 'tree', 'demo');
+    mkdirSync(cwd, { recursive: true });
+    const ts = (i: number): string => new Date(Date.UTC(2026, 9, 3, 10, 0, i)).toISOString();
+    const base = { sessionId: u(0), cwd };
+    const usage = (row: Record<string, unknown>, input: number, cc: number, cr: number): Record<string, unknown> => {
+      (row.message as Record<string, unknown>).usage = { input_tokens: input, cache_creation_input_tokens: cc, cache_read_input_tokens: cr, output_tokens: 3 };
+      return row;
+    };
+    const rows = [
+      w5a1Fx.userRow({ ...base, uuid: u(1), ts: ts(1), text: 'please rebuild the fidelity fixture' }),
+      usage(w5a1Fx.assistantRow({ ...base, uuid: u(2), ts: ts(2), parentUuid: u(1), msgId: 'msg_b2t2_2', text: 'rebuilding it now' }), 2000, 9000, 1000),
+      w5a1Fx.assistantRow({ ...base, uuid: u(3), ts: ts(3), parentUuid: u(2), msgId: 'msg_b2t2_3', text: 'done with the rebuild' }),
+      w5a1Fx.boundaryRow({ ...base, uuid: u(4), ts: ts(4), parentUuid: u(3), trigger: 'manual', headUuid: u(3), anchorUuid: u(5), tailUuid: u(3), allUuids: [u(3)] }),
+      w5a1Fx.summaryRow({ ...base, uuid: u(5), ts: ts(5), parentUuid: u(4), text: '<summary>\n1. Primary Request and Intent:\n   rebuild the fidelity fixture\n</summary>' }),
+      usage(w5a1Fx.assistantRow({ ...base, uuid: u(6), ts: ts(6), parentUuid: u(5), msgId: 'msg_b2t2_6', text: 'continuing after the summary' }), 1000, 4000, 25000),
+    ];
+    w5a1H.seedFamily(box, { id: 'claude-a-b2t2', project: 'demo', generation: '0189abcd-1234-4678-9abc-0000000b2b20', uuid: u(0),
+      rows: (rows.map((r) => JSON.stringify(r)).join('\n') + '\n') as unknown as object[], workdir: cwd });
+    const t = w5a1H.runSweep(box);
+    if (t.code !== 0) throw new Error(`b2t2 store: the sweep exited ${String(t.code)}: ${t.stderr}`);
+  }, 360_000);
+
+  // D-6694: the store keeps a row's message content only, so the original side's two usage readings come from the TRANSCRIPT
+  // LINE of the holding copy's source file, read at the row's membership offset (D-4704's way) behind the sweep's admitFile.
+  // The fixture is the real sweep over a transcript planted under a rostered config dir's projects/.
+  const srcOf = (): { home: string; configDirs: string[] } => ({ home: box.home, configDirs: [...box.homes].sort() });
+  const measure = (src: { home: string; configDirs: string[] } = srcOf()): B2t2R => {
+    const rs = B2.openReplayStore(box.home) as B2t2R;
+    try {
+      return B2.fidelityOriginalOf(rs, B2.boundaryEntryIdOf(rs, u(4)) as number, src) as B2t2R;
+    } finally {
+      rs.close();
+    }
+  };
+  const sourcePath = (): string => {
+    const rs = B2.openReplayStore(box.home) as B2t2R;
+    try {
+      const rows = rs.db.prepare("SELECT path FROM file_paths WHERE path NOT LIKE '%/0000-aside.jsonl'").all() as Array<{ path: string }>;   // the walk cases add one that sorts first
+      b2t2Expect(rows, 'one source file').toHaveLength(1);
+      return rows[0]!.path;
+    } finally {
+      rs.close();
+    }
+  };
+  /** Byte offset of line `k` of the planted transcript (ASCII, so a string offset is a byte offset). */
+  const lineAt = (text: string, k: number): number => text.split('\n').slice(0, k).reduce((a, l) => a + l.length + 1, 0);
+  /** Run `fn` over the source file rewritten by `mutate` (null: moved aside; 'link': a symlink to the original bytes), then restore it byte for byte. */
+  const withSource = <T,>(mutate: ((text: string) => string) | null | 'link', fn: () => T): T => {
+    const p = sourcePath();
+    const orig = readFileSync(p);
+    const aside = `${p}.aside`;
+    try {
+      if (mutate === null) b2t2Rename(p, aside);
+      else if (mutate === 'link') { b2t2Rename(p, aside); symlinkSync(aside, p); }
+      else writeFileSync(p, mutate(orig.toString('utf8')));
+      return fn();
+    } finally {
+      rmSync(p, { force: true });
+      if (mutate === null || mutate === 'link') b2t2Rename(aside, p);
+      else writeFileSync(p, orig);
+      b2t2Expect(readFileSync(p).equals(orig), 'the source file is restored byte for byte').toBe(true);
+    }
+  };
+  const FIRST = 1;   // the epoch's first call is line 1 of the planted transcript, the post-boundary call line 5
+  const POST = 5;
+  const inLine = (k: number, f: (line: string) => string) => (text: string): string => text.split('\n').map((l, i) => (i === k ? f(l) : l)).join('\n');
+  const OTHER_UUID = 'b2b20002-0000-4000-8000-0000000000ff';
+
+  b2t2It('the epoch first call net of its operator text, and the first call after the summary row, read from the store and the source lines (W2-D76, D-6694)', () => {
+    const rs = B2.openReplayStore(box.home) as B2t2R;
+    try {
+      const id = B2.boundaryEntryIdOf(rs, u(4)) as number;
+      b2t2Expect(Number.isSafeInteger(id)).toBe(true);
+      const side = B2.fidelityOriginalOf(rs, id, srcOf()) as B2t2R;
+      b2t2Expect([side.state, side.firstInput, side.postInput], JSON.stringify(side)).toEqual(['measured', 12000, 30000]);
+      b2t2Expect(side.userRows.map((r: B2t2R) => r.text)).toEqual(['please rebuild the fidelity fixture']);
+      b2t2Expect(side.userRows[0].rawLen).toBeGreaterThan(0);
+      b2t2Expect(Object.keys(side).sort(), 'nothing else of a source line is kept').toEqual(['firstInput', 'postInput', 'state', 'userRows']);
+      b2t2Expect(B2.boundaryEntryIdOf(rs, u(5)), 'the summary row is no boundary').toBeNull();
+      b2t2Expect(B2.boundaryEntryIdOf(rs, w5b4Gen(1)), 'a uuid the store does not hold').toBeNull();
+      b2t2Expect(B2.fidelityOriginalOf(rs, 999_999, srcOf()), 'CONTROL: no boundary answers its own word, never a 0').toEqual({ state: 'unmeasured', why: 'boundary-absent' });
+      b2t2Expect(() => B2.fidelityOriginalOf(rs, id), 'the source is asked for, never defaulted').toThrow(TypeError);
+    } finally {
+      rs.close();
+    }
+  });
+
+  // One word per reason; each row is measured against the CONTROL above (the same file, unmutated, measures).
+  const WORDS: Array<[string, () => B2t2R, string]> = [
+    ['a source file that is gone', () => withSource(null, () => measure()), 'source-missing'],
+    ['a source file that is a symlink, though the same bytes as a regular file measure', () => withSource('link', () => measure()), 'source-refused-non_regular'],
+    // D-4704 skips a path under no rostered config dir without answering for it, so with nothing asked the answer is the missing one.
+    ['no rostered config dir holding the path, so no path is asked', () => measure({ ...srcOf(), configDirs: [] }), 'source-missing'],
+    ['a user HOME the config dirs do not lie under', () => measure({ ...srcOf(), home: '/home/u' }), 'source-refused-outside-roots'],
+    ['a line past LINE_MAX with no newline', () => withSource((t) => t.slice(0, lineAt(t, FIRST)) + 'x'.repeat(B2T2_LINE_MAX + 1), () => measure()), 'source-line-too-long'],
+    ['a file that ends inside the line', () => withSource((t) => t.slice(0, lineAt(t, FIRST) + 20), () => measure()), 'source-line-unterminated'],
+    ['a line that is no JSON', () => withSource(inLine(FIRST, (l) => `X${l.slice(1)}`), () => measure()), 'source-line-not-json'],
+    ['the first call line carrying another uuid', () => withSource(inLine(FIRST, (l) => l.replace(u(2), OTHER_UUID)), () => measure()), 'source-line-uuid-mismatch'],
+    ['the post-boundary line carrying another uuid', () => withSource(inLine(POST, (l) => l.replace(u(6), OTHER_UUID)), () => measure()), 'source-line-uuid-mismatch'],
+    ['the post-boundary line that is no JSON', () => withSource(inLine(POST, (l) => `X${l.slice(1)}`), () => measure()), 'source-line-not-json'],
+    // CONTROLS for IV5: a line that WAS read and holds no readable usage is the absent word, not a source word.
+    ['CONTROL: the first call line read and holding no usage', () => withSource(inLine(FIRST, (l) => l.replace('"usage"', '"usagx"')), () => measure()), 'epoch-first-usage-absent'],
+    ['CONTROL: the post-boundary line read and holding no usage', () => withSource(inLine(POST, (l) => l.replace('"usage"', '"usagx"')), () => measure()), 'post-boundary-usage-absent'],
+  ];
+  b2t2It.each(WORDS)('%s: unmeasured with its own word, never a 0 and never folded into a usage-absent word (D-6694, IV5)', (_what, run, why) => {
+    b2t2Expect(run()).toEqual({ state: 'unmeasured', why });
+    b2t2Expect(measure().state, 'CONTROL: the file as it was').toBe('measured');
+  }, 60_000);
+
+  // D-4704's walk (fix round 1): the copy's paths in the store's order, a path under no rostered config dir skipped, and the FIRST
+  // path the sweep's admitFile admits answers, whatever its line holds. The store records one path for the planted file, so
+  // each case gives the copy one more path that sorts before it (a row in file_paths, removed again with its file).
+  const withExtraPath = <T,>(make: ((p: string) => void) | null, fn: () => T): T => {
+    const real = sourcePath();
+    const before = `${real.slice(0, real.lastIndexOf('/'))}/0000-aside.jsonl`;   // sorts before the planted <uuid>.jsonl
+    const db = new W5a1Db(w5b4Lib.historyPaths(box.home).dbFile as string);
+    const fileId = (db.prepare('SELECT file_id AS f FROM file_paths WHERE path = ?').get(real) as { f: number }).f;
+    db.prepare('INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES (?, ?, 0)').run(before, fileId);
+    try {
+      make?.(before);
+      return fn();
+    } finally {
+      rmSync(before, { force: true });
+      db.prepare('DELETE FROM file_paths WHERE path = ?').run(before);
+      db.close();
+    }
+  };
+  const PATHS: Array<[string, (p: string) => void, string | null, string]> = [
+    ['an earlier path whose file is gone: the next admitted path answers (CONTROL for the walk)', () => undefined, null, 'measured'],
+    ['an earlier path that is a symlink: refused, the next admitted path answers', (p) => symlinkSync(sourcePath(), p), null, 'measured'],
+    ['an earlier path that is a regular file with a bad line: it is the first admitted, so its line word answers though the later path would measure', (p) => writeFileSync(p, `${' '.repeat(lineAt(readFileSync(sourcePath(), 'utf8'), FIRST))}not json\n`), 'source-line-not-json', 'measured'],
+    ['an earlier path with a line of another uuid: the first admitted answers', (p) => writeFileSync(p, `${' '.repeat(lineAt(readFileSync(sourcePath(), 'utf8'), FIRST))}{"uuid":"x"}\n`), 'source-line-uuid-mismatch', 'measured'],
+  ];
+  b2t2It.each(PATHS)('D-4704 walk: %s', (_what, make, word, _control) => {
+    const side = withExtraPath(make, () => measure());
+    if (word === null) b2t2Expect(side.state, JSON.stringify(side)).toBe('measured');
+    else b2t2Expect(side).toEqual({ state: 'unmeasured', why: word });
+    b2t2Expect(measure().state, 'CONTROL: the store and the file as they were').toBe('measured');
+  }, 60_000);
+  b2t2It('D-4704 walk: with no path admitted, every asked path missing answers source-missing and otherwise the first refusal answers, not a missing one', () => {
+    b2t2Expect(withSource(null, () => withExtraPath(null, () => measure())), 'both paths gone').toEqual({ state: 'unmeasured', why: 'source-missing' });
+    b2t2Expect(withSource(null, () => withExtraPath((p) => symlinkSync('/nowhere', p), () => measure())), 'a dangling symlink first (ELOOP: non_regular), the planted file gone')
+      .toEqual({ state: 'unmeasured', why: 'source-refused-non_regular' });
+    b2t2Expect(withSource('link', () => withExtraPath(null, () => measure())), 'the earlier one gone, the planted name a symlink')
+      .toEqual({ state: 'unmeasured', why: 'source-refused-non_regular' });
+    b2t2Expect(measure().state, 'CONTROL: as they were').toBe('measured');
+  }, 60_000);
+
+  // An IO error of the line read itself (EIO on an admitted file) is data after --out, never an INTERNAL exit (D-6309's rule): its
+  // own word with the errno, never folded; a TypeError is a defect and still throws. The read is injected through src.readLine.
+  const ioFail = (code: string | undefined) => (): never => { throw Object.assign(new Error('read failed'), code === undefined ? {} : { code }); };
+  b2t2It.each([['EIO', 'source-read-failed-EIO'], ['EACCES', 'source-read-failed-EACCES'], [undefined, 'source-read-failed-unknown']] as Array<[string | undefined, string]>)(
+    'an IO error (%s) in the source line read is unmeasured with its own word and the errno, never folded into another (D-6694, D-6309)', (code, why) => {
+      b2t2Expect(measure({ ...srcOf(), readLine: ioFail(code) } as never)).toEqual({ state: 'unmeasured', why });
+      b2t2Expect(measure().state, 'CONTROL: the real read').toBe('measured');
+    });
+  b2t2It('a TypeError in the source line read is a defect and still throws, never an unmeasured word', () => {
+    b2t2Expect(() => measure({ ...srcOf(), readLine: () => { throw new TypeError('defect'); } } as never)).toThrow(TypeError);
+    b2t2Expect(measure().state, 'CONTROL').toBe('measured');
+  });
+});
+
+b2t2Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 2: fidelity on the stub', () => {
+  const plantAll = (home: string): void => {
+    for (const [id, payload] of [[1, 25000], [2, 40000]] as const) {
+      b2t2Plant(home, `b2t2-${id}-payload`, payload);
+      b2t2Plant(home, `b2t2-${id}-empty`, 9000);
+      b2t2Plant(home, `b2t2-${id}-user-text`, 9200);
+    }
+    b2t2Plant(home, 'b2t2-4-payload', 25000, false);   // boundary 4's payload run prints no result event: a failed run
+    b2t2Plant(home, 'b2t2-4-empty', 9000);
+    b2t2Plant(home, 'b2t2-4-user-text', 9200);
+  };
+
+  b2t2It('three box-mode runs per boundary, no seam env and no marker, each boundary netted and held to the tolerance; an absent boundary spawns nothing and a failed run measures nothing; written, its sha printed, then pilot-failed; a resume reuses every run (W2-D76, Q8, W2-D56, W2-D53, K3, K13)', async () => {
+    const home = b2t2Home();
+    plantAll(home);
+    const fx = b2t2Fidelity(home, { source: b2t2PilotSource({ boundaries: B2T2_B.slice(0, 4) }) });
+    const call = () => b2t2Call(() => B2.fidelityCommand(b2t2Flags(fx.argv), B2T2_ENV(home), b2t2Deps({ absent: [B2T2_B[2]!] })));
+    const held = { word: 'pilot-failed', detail: `fidelity failed (4): fidelity ${B2T2_B[1]!} outside-tolerance; fidelity ${B2T2_B[2]!} unmeasured boundary-absent; `
+      + `fidelity ${B2T2_B[3]!} unmeasured payload-run-failed; fidelity short 4 of 5` };
+    const r = await call();
+    b2t2Expect([r.refusal, r.code, r.stdout]).toEqual([held, null, '']);
+    const text = readFileSync(join(fx.out, 'fidelity.json'), 'utf8');
+    b2t2Expect(r.stderr, 'written and its sha printed before the halt (D-5983, K3)').toBe(`sha256 ${sha256Hex(text)}\n`);
+    const doc = JSON.parse(text) as B2t2R;
+    const fig = (replay: number): B2t2R => ({ original_payload: 18200, replay_payload: replay, original_overhead: 11800, replay_overhead: 9000, user_text_tokens: 200 });
+    const head = (u: string): B2t2R => ({ ...W5B4_PILOT, boundary_uuid: u });
+    b2t2Expect(doc.boundaries).toEqual([
+      { ...head(B2T2_B[0]!), state: 'measured', why: null, figures: fig(16000), pass: true },
+      { ...head(B2T2_B[1]!), state: 'measured', why: null, figures: fig(31000), pass: false },
+      { ...head(B2T2_B[2]!), state: 'unmeasured', why: 'boundary-absent', figures: null, pass: false },
+      { ...head(B2T2_B[3]!), state: 'unmeasured', why: 'payload-run-failed', figures: null, pass: false },
+    ]);
+    b2t2Expect([doc.kind, doc.record_sha256, doc.pilot_sha256, doc.step0b_sha256, doc.store_id, doc.settings_mode, doc.model, doc.tolerance, doc.n_fidelity, doc.claude_code_version])
+      .toEqual([B2.FIDELITY_KIND, fx.d.sha, fx.p.sha, null, W5B4_STORE_A, 'restricted', W5B4_ARM_MODEL, { num: 25, den: 100 }, 5, w5b4Version(home)]);
+    const runs = w5b4Runs(home);
+    const keys = [1, 2, 4].flatMap((id) => ['payload', 'empty', 'user-text'].map((run) => `b2t2-${id}-${run}`));
+    b2t2Expect(runs.map((x) => (x.stdin as string).split('\n')[0]).sort(), 'three runs per spawned boundary, none for the absent one').toEqual(keys.sort());
+    for (const run of runs) {
+      b2t2Expect((run.envKeys as string[]).filter((k) => k.startsWith('CCRC_RECALL_')), 'box mode: no seam env (Q8)').toEqual([]);
+      const at = (run.argv as string[]).indexOf('--tools');
+      b2t2Expect((run.argv as string[]).slice(at, at + 2), 'the arm argv').toEqual(['--tools', 'Bash,Agent']);
+    }
+    b2t2Expect(w5b4Versions(home), 'one W2-D56 preflight per spawned boundary').toBe(3);
+    b2t2Expect(existsSync(w5b4Lib.historyPaths(home).headlessOn as string), 'no marker was written or needed (Q8)').toBe(false);
+    const again = await call();
+    b2t2Expect([again.refusal, again.code], 'the same halt').toEqual([held, null]);
+    b2t2Expect(w5b4Runs(home), 'a resume reuses every finished run').toHaveLength(9);
+    b2t2Expect(readFileSync(join(fx.out, 'fidelity.json'), 'utf8'), 'the same output').toBe(text);
+  }, 120_000);
+
+  b2t2It('CONTROL for the halt: five boundaries inside the tolerance exit 0, fidelity.json written and only its sha printed (K3, W2-D76)', async () => {
+    const home = b2t2Home();
+    b2t2PlantPass(home);
+    const fx = b2t2Fidelity(home);
+    const r = await b2t2Call(() => B2.fidelityCommand(b2t2Flags(fx.argv), B2T2_ENV(home), b2t2Deps()));
+    b2t2Expect([r.refusal, r.code, r.stdout]).toEqual([null, 0, '']);
+    const text = readFileSync(join(fx.out, 'fidelity.json'), 'utf8');
+    b2t2Expect(r.stderr).toBe(`sha256 ${sha256Hex(text)}\n`);
+    b2t2Expect((JSON.parse(text) as B2t2R).boundaries.map((b: B2t2R) => [b.boundary_uuid, b.state, b.pass])).toEqual(B2T2_B.map((u) => [u, 'measured', true]));
+  }, 120_000);
+
+  b2t2It('fidelity hands the original-side read the user HOME and the roster config dirs it admits a source line under (D-6694)', async () => {
+    const home = b2t2Home();
+    b2t2PlantPass(home, [1]);
+    const fx = b2t2Fidelity(home, { source: b2t2PilotSource({ boundaries: B2T2_B.slice(0, 1) }) });
+    const deps = b2t2Deps();
+    const asked: unknown[][] = [];
+    deps.original = (...args: unknown[]): B2t2R => { asked.push(args.slice(1)); return B2T2_ORIGINAL; };
+    await b2t2Call(() => B2.fidelityCommand(b2t2Flags(fx.argv), B2T2_ENV(home), deps));
+    b2t2Expect(asked).toEqual([[1, { home, configDirs: B2.rosterConfigDirs(B2.readRoster(home).roster, home) }]]);
+    b2t2Expect((asked[0]![1] as { configDirs: string[] }).configDirs.length, 'the roster names config dirs').toBeGreaterThan(0);
+  }, 120_000);
+
+  // K26, K28 (D-6481 carried): each measurable boundary builds its three stdins under every retained reading of the pair
+  // index, which must agree before its preflight or any run spawns. The injected stdins append a value masked through the
+  // reading's own index; the store learns it while boundary 1 builds, so boundary 2's admission holds the old reading and
+  // the new one, and fidelity refuses rather than masking with either. The CONTROL learns nothing.
+  const k26Fidelity = async (learn: boolean): Promise<{ r: Awaited<ReturnType<typeof b2t2Call>>; home: string; out: string; value: string; seen: Array<[number, boolean]> }> => {
+    const value = ['fixture', '-pair-', 'late-boundary'].join('');
+    const home = b2t2Home();
+    b2t2PlantPass(home, [1, 2]);
+    const fx = b2t2Fidelity(home, { source: b2t2PilotSource({ boundaries: B2T2_B.slice(0, 2) }) });
+    const deps = b2t2Deps();
+    const base = deps.stdins as (rs: B2t2R, id: number) => B2t2R;
+    const seen: Array<[number, boolean]> = [];
+    deps.stdins = (rs: B2t2R, id: number): B2t2R => {
+      const made = base(rs, id);
+      const masked = b1t2Lib.redactField(value, rs.idx) as string;
+      seen.push([id, !masked.includes(value)]);
+      if (learn && id === 1) fwLearn(home, value);   // W2-5b1's test-only store writer, right after boundary 1's one build
+      return { ...made, stdins: Object.fromEntries(Object.entries(made.stdins as Record<string, string>).map(([key, text]) => [key, `${text}${masked}\n`])) };
+    };
+    const r = await b2t2Call(() => B2.fidelityCommand(b2t2Flags(fx.argv), B2T2_ENV(home), deps));
+    return { r, home, out: fx.out as string, value, seen };
+  };
+  b2t2It('K26 fidelity agreement: a pair learned while boundary 1 builds makes boundary 2\'s readings disagree, refused input-invalid masking-snapshots-disagree fidelity before its preflight, boundary 1\'s runs kept and no fidelity.json written (K28, D-6481 carried)', async () => {
+    const c = await k26Fidelity(true);
+    b2t2Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree fidelity' });
+    b2t2Expect(c.seen, 'boundary 1: one reading; boundary 2: the old reading, then the new one').toEqual([[1, false], [2, false], [2, true]]);
+    const runs = w5b4Runs(c.home);
+    b2t2Expect(runs.map((x) => (x.stdin as string).split('\n')[0]).sort(), 'boundary 1 only').toEqual(['b2t2-1-empty', 'b2t2-1-payload', 'b2t2-1-user-text']);
+    for (const x of runs) b2t2Expect(x.stdin as string, 'boundary 1 ran under its one, unmasked reading').toContain(c.value);
+    b2t2Expect(w5b4Versions(c.home), 'boundary 2 reached no preflight').toBe(1);
+    b2t2Expect(existsSync(join(c.out, 'fidelity.json')), 'no fidelity output').toBe(false);
+  }, 120_000);
+  b2t2It('K26 fidelity agreement CONTROL: with no pair learned each boundary holds one reading, both measure, and the value stays visible in every stdin (K28)', async () => {
+    const c = await k26Fidelity(false);
+    b2t2Expect(c.r.refusal, 'two measured boundaries, then the short halt').toEqual({ word: 'pilot-failed', detail: 'fidelity failed (1): fidelity short 2 of 5' });
+    b2t2Expect(c.seen).toEqual([[1, false], [2, false]]);
+    const runs = w5b4Runs(c.home);
+    b2t2Expect(runs).toHaveLength(6);
+    for (const x of runs) b2t2Expect(x.stdin as string).toContain(c.value);
+    b2t2Expect((JSON.parse(readFileSync(join(c.out, 'fidelity.json'), 'utf8')) as B2t2R).boundaries.map((b: B2t2R) => [b.state, b.pass])).toEqual([['measured', true], ['measured', true]]);
+  }, 120_000);
+
+  const Q9: Array<[string, (h: string) => ReturnType<typeof b2t2Fidelity>, string]> = [
+    ['a seed that is not part 1 seed', (h) => b2t2Fidelity(h, { source: b2t2PilotSource({ over: { seed: w5b4Hex('another seed') } }) }), 'pilot seed-mismatch'],
+    ['a frozen sha that is not part 1 one', (h) => b2t2Fidelity(h, { source: b2t2PilotSource({ over: { frozen_sha256: w5b4Hex('another list') } }) }), 'pilot frozen_sha256-mismatch'],
+    ['families that are not part 1 families', (h) => b2t2Fidelity(h, { source: b2t2PilotSource({ over: { families: [{ ...W5B4_PILOT, generation: w5b4Gen(941) }] } }) }), 'pilot families-mismatch'],
+    ['an n_fidelity that is not part 1 one', (h) => b2t2Fidelity(h, { source: b2t2PilotSource({ over: { n_fidelity: 4 } }) }), 'pilot n_fidelity-mismatch'],
+    ['a store that is no node', (h) => b2t2Fidelity(h, { source: b2t2PilotSource({ over: { store_id: W5B4_STORE_B } }) }), `pilot store ${W5B4_STORE_B} is not one of the record's nodes`],
+    ['another node store', (h) => b2t2Fidelity(h, { stores: [W5B4_STORE_A, W5B4_STORE_B], source: b2t2PilotSource({ over: { store_id: W5B4_STORE_B } }) }), `pilot store ${W5B4_STORE_B} is not this node's ${W5B4_STORE_A}`],
+    ['a boundary off the pilot families', (h) => b2t2Fidelity(h, { source: b2t2PilotSource({ over: { fidelity: [{ ...W5B4_PILOT, ccrc_id: 'pilot-other', boundary_uuid: B2T2_B[0] }] } }) }), `pilot fidelity ${B2T2_B[0]!} off the pilot families`],
+    ['a tolerance that is no six-place decimal in [0, 1]', (h) => b2t2Fidelity(h, { draftOver: { pilot: { tolerance: 1.5 } } }), 'pilot.tolerance out-of-range'],
+    ['a pilot-source output off its shape', (h) => b2t2Fidelity(h, { source: b2t2PilotSource({ over: { kind: 'ccrc-history-w2-other' } }) }), 'pilot shape kind'],
+  ];
+  b2t2It.each(Q9)('refuses %s before --out and any spawn (Q9, D-6309)', async (_what, make, detail) => {
+    const home = b2t2Home();
+    const fx = make(home);
+    const r = await b2t2Call(() => B2.fidelityCommand(b2t2Flags(fx.argv), B2T2_ENV(home), b2t2Deps()));
+    b2t2Expect(r.refusal).toEqual({ word: detail.startsWith('pilot.tolerance') ? 'record-invalid' : 'input-invalid', detail });
+    b2t2Expect(existsSync(fx.out), 'no --out').toBe(false);
+    b2t2Expect(stubLog(home), 'no spawn').toBeNull();
+  }, 60_000);
+
+  b2t2It('an --out holding pilot-source.json is refused, and without it the same --out runs (Q25)', async () => {
+    const home = b2t2Home();
+    b2t2PlantPass(home);
+    const fx = b2t2Fidelity(home);
+    const out = B2.prepareOut(fx.out) as string;
+    writeFileSync(join(out, 'pilot-source.json'), '{}\n', { mode: 0o600 });
+    const r = await b2t2Call(() => B2.fidelityCommand(b2t2Flags(fx.argv), B2T2_ENV(home), b2t2Deps()));
+    b2t2Expect(r.refusal).toEqual({ word: 'out-refused', detail: 'pilot-source.json is here: fidelity runs on a fresh --out, never pilot-source\'s' });
+    b2t2Expect(stubLog(home), 'no spawn').toBeNull();
+    rmSync(join(out, 'pilot-source.json'));
+    b2t2Expect((await b2t2Call(() => B2.fidelityCommand(b2t2Flags(fx.argv), B2T2_ENV(home), b2t2Deps()))).code, 'CONTROL').toBe(0);
+  }, 60_000);
+});
+
+b2t2Describe('W2-5b2 Task 2: pilot-result over one pilot out', () => {
+  b2t2It('a passed pilot: the shape open --finalize reads, the usage pilot spend from the ledger by name, both readings, stdout empty and the sha on stderr; the same inputs give the same bytes (C4, Q6, Q7)', async () => {
+    const p = b2t2PilotOut(w5b4Home());
+    const r = await b2t2RunPilot(p);
+    b2t2Expect([r.refusal, r.code, r.stdout]).toEqual([null, 0, '']);
+    const text = readFileSync(join(p.out, 'pilot-result.json'), 'utf8');
+    b2t2Expect(r.stderr).toBe(`sha256 ${sha256Hex(text)}\n`);
+    b2t2Expect(JSON.parse(text)).toEqual({
+      kind: B2.PILOT_RESULT_KIND, v: 1, record_sha256: p.fx.d.sha, fidelity: p.boundaries,
+      usage_extrapolation: { v: 1, formula: B2.USAGE_EXTRAPOLATION_FORMULA, margin: { num: 5, den: 4 }, pilot_questions: 2,
+        pilot_spend: { arms: 4000, judge: 500, total: 4500 }, at_target: { n_questions: 100, spend_budget: 281_250 },
+        uptake: { reading: 'is-error', quiz_uptake: 'measured', control_calls: 0, control_errored: 2 },
+        spend_readings: { runs: 6, unrecorded: 1, result_absent: 1, result_below_assistant: 1, equal: 3, result_above_assistant: 0,
+          result_tokens: 3100, assistant_tokens: 4300, charged_tokens: 4300 } },
+      step0b_sha256: p.s0.sha, settings_mode: 'restricted',
+      absent_rate: { arms: { [W5B4_CONTROL]: { num: 0, den: 2 }, [W5B4_TREATMENT]: { num: 0, den: 2 } }, max: { num: 5, den: 100 }, over: [], unmeasured: [], pass: true },
+      failures: [],
+    });
+    b2t2Expect(B2.pilotResultError(JSON.parse(text)), 'the producer writes what the reader takes (C4)').toBeNull();
+    b2t2Expect(B2.quizUptakeReadingOf(JSON.parse(text)), 'the reading the report reads (K15)').toBe('measured');
+    b2t2Expect((await b2t2RunPilot(p)).code).toBe(0);
+    b2t2Expect(readFileSync(join(p.out, 'pilot-result.json'), 'utf8')).toBe(text);
+  });
+
+  const qs = (control2: B2t2R | null, treatment2: B2t2R | null, state2 = 'answered') => (q1: B2t2R, q2: B2t2R): B2t2R[] => [
+    { qid: q1.qid, state: 'answered', arms: [{ arm: W5B4_CONTROL, answer: b2t2Ans('value', { errored: 1 }) }, { arm: W5B4_TREATMENT, answer: b2t2Ans('value') }] },
+    { qid: q2.qid, state: state2, arms: [{ arm: W5B4_CONTROL, answer: control2 }, { arm: W5B4_TREATMENT, answer: treatment2 }] },
+  ];
+  const FAILS: Array<[string, (h: string) => B2t2Pilot, string[]]> = [
+    ['a boundary outside the tolerance, one unmeasured and one short', (h) => b2t2PilotOut(h, { fidelity: [b2t2Bnd(7101, 'measured', false), b2t2Bnd(7102, 'unmeasured', false, 'original-overhead-negative'), b2t2Bnd(7103), b2t2Bnd(7104)] }),
+      [`fidelity ${w5b4Gen(7101)} outside-tolerance`, `fidelity ${w5b4Gen(7102)} unmeasured original-overhead-negative`, 'fidelity short 4 of 5']],
+    ['an absent rate over the max', (h) => b2t2PilotOut(h, { questions: qs(b2t2Ans('value'), b2t2Ans('absent')) }), [`absent-rate ${W5B4_TREATMENT} over`]],
+    ['no answered question in either arm', (h) => b2t2PilotOut(h, { questions: (q1, q2) => [q1, q2].map((q) => ({ qid: q.qid, state: 'run-failed', arms: [{ arm: W5B4_CONTROL, answer: null }, { arm: W5B4_TREATMENT, answer: null }] })) }),
+      [`absent-rate ${W5B4_CONTROL} unmeasured`, `absent-rate ${W5B4_TREATMENT} unmeasured`]],
+    ['step 0b checks failed and unmeasured, recorded rather than refused on read', (h) => b2t2PilotOut(h, { step0b: (sha) => b2t2Step0b(sha, { failed: ['tools', 'skill'], unmeasured: ['turn-bound'] }) }),
+      ['step0b skill failed', 'step0b tools failed', 'step0b turn-bound unmeasured']],
+    ['a step 0b settings mode the usage pilot did not run under', (h) => b2t2PilotOut(h, { step0b: (sha) => b2t2Step0b(sha, { mode: 'fallback' }) }),
+      ['settings-mode arms ran under restricted, step 0b under fallback', 'settings-mode fidelity ran under restricted, step 0b under fallback', 'settings-mode judge ran under restricted, step 0b under fallback']],
+    // K13: the arms summary names no mode, so one arm run left from before the fallback switch is read from its run.json.
+    ['one arm run under part 1 mode beside a fallback usage pilot', (h) => b2t2PilotOut(h, { mode: 'fallback',
+      runs: (n) => ({ [n.a[0]!]: { usage_result_tokens: 1000, usage_assistant_tokens: 1000, tokens: 1000, settings_mode: 'restricted' } }) }),
+      ['settings-mode arms ran under restricted, step 0b under fallback']],
+  ];
+  b2t2It.each(FAILS)('records %s as failures: the result written, its sha printed, then pilot-failed naming them (Q10, K3, K13)', async (_what, make, failures) => {
+    const p = make(w5b4Home());
+    const r = await b2t2RunPilot(p);
+    b2t2Expect([r.refusal, r.code]).toEqual([{ word: 'pilot-failed',
+      detail: `pilot-result failed (${failures.length}): ${failures.join('; ')}; open --finalize refuses it without --accept-failed-pilot (Q27)` }, null]);
+    const doc = b2t2ResultOf(p);
+    b2t2Expect(doc.failures).toEqual(failures);
+    b2t2Expect(B2.pilotResultError(doc)).toBeNull();
+    b2t2Expect(r.stderr, 'the sha before the halt (D-5983, K3)').toBe(`sha256 ${sha256Hex(readFileSync(join(p.out, 'pilot-result.json'), 'utf8'))}\n`);
+  });
+
+  b2t2It('CONTROL for K13: a usage pilot wholly under a passed fallback step 0b passes, and its result names fallback (K2, Q26)', async () => {
+    const p = b2t2PilotOut(w5b4Home(), { mode: 'fallback', step0b: (sha) => b2t2Step0b(sha, { mode: 'fallback' }) });
+    const r = await b2t2RunPilot(p);
+    b2t2Expect([r.refusal, r.code], r.stderr).toEqual([null, 0]);
+    const doc = b2t2ResultOf(p);
+    b2t2Expect([doc.settings_mode, doc.step0b_sha256, doc.failures]).toEqual(['fallback', p.s0.sha, []]);
+  });
+
+  // A run whose reading passed Number.MAX_SAFE_INTEGER, as the driver leaves it: W2-5b1's F9 clamps only the charge, so
+  // run.json carries both readings unclamped and tokens at the clamp, and recordSpend wrote that same clamped charge.
+  // 2 ** 53 is the first integer past the safe range, exact as a double and in JSON; 2 ** 53 + 2 is the next.
+  const B2T2_OVER = Number.MAX_SAFE_INTEGER + 1;
+  const b2t2Saturated = (): B2t2Pilot => b2t2PilotOut(w5b4Home(), {
+    ledger: (n) => [[n.a[0]!, Number.MAX_SAFE_INTEGER], ...n.a.slice(1).map((x) => [x, 1000] as [string, number]), [n.judge, 500], [n.fidelity, 300], ['pilot/step0b/restricted/turn-bound', 50]],
+    runs: (n) => ({ [n.a[0]!]: { usage_result_tokens: B2T2_OVER + 2, usage_assistant_tokens: B2T2_OVER, tokens: Number.MAX_SAFE_INTEGER, settings_mode: 'restricted' } }) });
+
+  b2t2It('a pilot out whose run charged a usage reading past Number.MAX_SAFE_INTEGER refuses out-refused spend.jsonl malformed at the ledger, before any run.json is read (D-6467, D-6309\'s rule)', async () => {
+    // The ledger row carries the saturated charge, so the next line sums past the safe range: spendLinesOf's sum check
+    // (W2-5b1's spentSoFar, carried byte for byte) refuses, D-6309's fail-closed rule. runUsageOf's clamp is not reached.
+    const p = b2t2Saturated();
+    const r = await b2t2RunPilot(p);
+    b2t2Expect(r.refusal, r.stderr).toEqual({ word: 'out-refused', detail: 'spend.jsonl malformed' });
+    b2t2Expect(existsSync(join(p.out, 'pilot-result.json')), 'nothing written').toBe(false);
+  });
+
+  b2t2It('runUsageOf reads a run.json usage reading past Number.MAX_SAFE_INTEGER raw and at the driver\'s one clamp, never refused (D-6467, D-6309\'s rule)', () => {
+    // The clamp's own case: a run.json read on its own, without the ledger, where the clamp is the only guard.
+    const p = b2t2Saturated();
+    b2t2Expect(B2.runUsageOf(p.out, p.names.a[0]!)).toEqual({ result: Number.MAX_SAFE_INTEGER, assistant: Number.MAX_SAFE_INTEGER,
+      rawResult: B2T2_OVER + 2, rawAssistant: B2T2_OVER, charged: Number.MAX_SAFE_INTEGER, settingsMode: 'restricted' });
+  });
+
+  b2t2It.each([
+    ['a plain control call: not-error', qs(b2t2Ans('value', { calls: 1 }), b2t2Ans('value')), { reading: 'not-error', quiz_uptake: 'unmeasured', control_calls: 1, control_errored: 1 }],
+    ['no control call at all: unseen', (q1: B2t2R, q2: B2t2R): B2t2R[] => [q1, q2].map((q) => ({ qid: q.qid, state: 'answered', arms: [{ arm: W5B4_CONTROL, answer: b2t2Ans('value') }, { arm: W5B4_TREATMENT, answer: b2t2Ans('value') }] })),
+      { reading: 'unseen', quiz_uptake: 'unmeasured', control_calls: 0, control_errored: 0 }],
+  ] as Array<[string, (q1: B2t2R, q2: B2t2R) => B2t2R[], B2t2R]>)('the is_error reading, %s, leaves quiz uptake unmeasured and is never a failure (W2-D82, Q10)', async (_what, questions, uptake) => {
+    const p = b2t2PilotOut(w5b4Home(), { questions });
+    b2t2Expect((await b2t2RunPilot(p)).code).toBe(0);
+    const doc = b2t2ResultOf(p);
+    b2t2Expect(doc.usage_extrapolation.uptake).toEqual(uptake);
+    b2t2Expect(doc.failures).toEqual([]);
+  });
+
+  const REFUSALS: Array<[string, (h: string) => B2t2Pilot, (p: B2t2Pilot) => { word: string; detail: string }, ((p: B2t2Pilot) => void)?]> = [
+    ['an unsettled usage pilot', (h) => b2t2PilotOut(h, { questions: qs(null, null, 'not-run'), stop: { word: 'budget-exhausted', kind: 'stop', detail: 'spent 9 of 9' } }),
+      () => ({ word: 'input-invalid', detail: 'pilot/arms/summary.json unsettled: 1 not run, 0 owing a re-run, stopped budget-exhausted; arms --section pilot finishes the usage pilot first' })],
+    ['no judged file', (h) => b2t2PilotOut(h, { judged: null }), () => ({ word: 'input-invalid', detail: 'pilot/judged.json absent: judge --section pilot writes it first' })],
+    ['a fidelity output of another record', (h) => b2t2PilotOut(h, { fidelitySha: w5b4Hex('another part 1') }),
+      (p) => ({ word: 'input-invalid', detail: `fidelity.json record-mismatch: written under ${w5b4Hex('another part 1')}, not part 1's ${p.fx.d.sha}` })],
+    ['a usage pilot that charged nothing', (h) => b2t2PilotOut(h, { ledger: (n) => [[n.fidelity, 300]] }),
+      () => ({ word: 'input-invalid', detail: 'the usage pilot charged nothing: arms and judge spend under --out is 0' })],
+    ['a run.json that does not read', (h) => b2t2PilotOut(h, { runs: (n) => ({ [n.a[0]!]: { usage_result_tokens: 1.5, usage_assistant_tokens: 1, tokens: 1 } }) }),
+      (p) => ({ word: 'out-refused', detail: `run-json-invalid ${p.names.a[0]!}` })],
+    ['a step 0b result of another record', (h) => b2t2PilotOut(h, { step0b: () => b2t2Step0b(w5b4Hex('another part 1')) }),
+      () => ({ word: 'input-invalid', detail: 'step0b record-mismatch' })],
+    ['a step 0b result of another section', (h) => b2t2PilotOut(h, { step0b: (sha) => b2t2Step0b(sha, { over: { section: 'quiz' } }) }),
+      () => ({ word: 'input-invalid', detail: 'step0b section quiz, wanted pilot' })],
+    ['a run.json with no settings mode', (h) => b2t2PilotOut(h, { runs: (n) => ({ [n.a[0]!]: { usage_result_tokens: 1000, usage_assistant_tokens: 1000, tokens: 1000, settings_mode: 'open' } }) }),
+      (p) => ({ word: 'out-refused', detail: `run-json-invalid ${p.names.a[0]!}` })],
+    ['an --out holding pilot-source.json', (h) => b2t2PilotOut(h), () => ({ word: 'out-refused', detail: 'pilot-source.json is here: pilot-result reads a pilot on a fresh --out, never pilot-source\'s' }),
+      (p) => writeFileSync(join(p.out, 'pilot-source.json'), '{}\n', { mode: 0o600 })],
+    ['an --out that is not there', (h) => b2t2PilotOut(h), () => ({ word: 'input-invalid', detail: '--out holds no pilot: fidelity, arms --section pilot and judge --section pilot write there first' }),
+      (p) => rmSync(p.out, { recursive: true, force: true })],
+  ];
+  b2t2It.each(REFUSALS)('refuses %s and writes no result (Q10, D-6309)', async (_what, make, want, then) => {
+    const p = make(w5b4Home());
+    then?.(p);
+    const r = await b2t2RunPilot(p);
+    b2t2Expect(r.refusal).toEqual(want(p));
+    b2t2Expect(existsSync(join(p.out, 'pilot-result.json')), 'no result').toBe(false);
+  });
+
+  b2t2It('refuses a part 1 whose halts.absent_rate_max is out of range: the validator\'s record-invalid value-outside-set before step 0b and the --out are read, no result (S2\'s C22, D-6309); CONTROL: in range, the same --out passes', async () => {
+    const p = b2t2PilotOut(w5b4Home());
+    const bad = w5b4Save({ ...p.fx.draft, halts: { ...(p.fx.draft.halts as B2t2R), absent_rate_max: 1.5 } }, 'part1-bad.json');
+    const argv = ['pilot-result', '--section', 'pilot', '--out', p.fx.out, ...w5b4Inp('record', bad), ...w5b4Inp('step0b', p.s0)];
+    const r = await b2t2Call(() => B2.pilotResultCommand(b2t2Flags(argv), B2T2_ENV(w5b4MkTmp('ccrc-b2t2-env-'))));
+    b2t2Expect(r.refusal).toEqual({ word: 'record-invalid', detail: 'halts.absent_rate_max value-outside-set' });   // the validator's word: loadRecordInput runs validateOpenRecord before the driver's own row
+    b2t2Expect(existsSync(join(p.out, 'pilot-result.json')), 'no result').toBe(false);
+    b2t2Expect((await b2t2RunPilot(p)).code, 'CONTROL').toBe(0);
+  });
+});
+
+b2t2Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 2: the usage pilot walk under step 0b\'s fallback, arms then judge then fidelity then pilot-result', () => {
+  b2t2It('one fresh --out, every act under a passed fallback step 0b: the usage pilot spend read from the ledger, the absent rate and the is_error reading from the arms summary, the judge on the non-correct answers, no settings-mode failure, and every failure listed and halted (Q6, Q7, Q10, W2-D64, W2-D82; K2, K3, K13)', async () => {
+    const home = w5b4MkTmp('ccrc-b2t2-walk-');
+    writeFileSync(join(home, STUB_STREAM), W5B5_LABELLED);   // before w5b4Node, so --version and part 1's step 0a read it
+    w5b4Node(home);
+    writeFileSync(join(home, '.local', 'bin', 'up-a'), B2T2_STUB, { mode: 0o700 });
+    w5b4CreateStore(home, { storeId: W5B4_STORE_A });
+    const fx = w5b4Pilot(home, { n: 2 });
+    const [q1, q2] = fx.entries as [B2t2R, B2t2R];
+    // Step 0b's passed fallback result (Task 1's shape), as the fallback flow leaves it (Q26): every act below names it.
+    const s0 = b2t2Step0b(fx.d.sha, { mode: 'fallback' });
+    const s0Argv = w5b4Inp('step0b', s0);
+    w5b4Act(home, q1, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'ANSWER: UNKNOWN' }));
+    w5b4Act(home, q1, W5B4_TREATMENT, '.jsonl', w5b4Stream({ text: `ANSWER: ${q1.fact as string}` }));
+    w5b4Act(home, q2, W5B4_CONTROL, '.jsonl', w5b4Stream({ text: 'ANSWER: deadbee' }));
+    w5b4Act(home, q2, W5B4_TREATMENT, '.jsonl', w5b4Stream({ text: 'I do not remember the commit.' }));
+    b2t2Expect((await w5b4Arms(home, [...fx.argv, ...s0Argv])).code).toBe(0);
+    const judge = await w5b5InProcess(() => W5B5.judgeCommand(b2t2Flags(['judge', ...fx.argv.slice(1), ...s0Argv]), W5B5_ENV(home)));
+    b2t2Expect([judge.refusal, judge.code]).toEqual([null, 0]);
+    b2t2PlantPass(home, [1]);
+    const p = w5b4Save(b2t2PilotSource({ boundaries: [B2T2_B[0]!], over: { frozen_sha256: fx.fz.sha } }), 'pilot-source.json');   // part 1's pilot.frozen_sha256 is this fixture's frozen list
+    const fid = await b2t2Call(() => B2.fidelityCommand(b2t2Flags(['fidelity', '--section', 'pilot', '--out', fx.out, ...w5b4Inp('record', fx.d), ...w5b4Inp('pilot', p), ...s0Argv]),
+      B2T2_ENV(home), b2t2Deps()));
+    b2t2Expect([fid.refusal, fid.code], 'one boundary of five: fidelity halts, recorded (K3, K13)').toEqual([{ word: 'pilot-failed', detail: 'fidelity failed (1): fidelity short 1 of 5' }, null]);
+    const pr = await b2t2Call(() => B2.pilotResultCommand(b2t2Flags(['pilot-result', '--section', 'pilot', '--out', fx.out, ...w5b4Inp('record', fx.d), ...s0Argv]), B2T2_ENV(home)));
+    const text = readFileSync(join(fx.out, 'pilot-result.json'), 'utf8');
+    b2t2Expect([pr.refusal, pr.code, pr.stdout]).toEqual([{ word: 'pilot-failed',
+      detail: `pilot-result failed (2): absent-rate ${W5B4_TREATMENT} over; fidelity short 1 of 5; open --finalize refuses it without --accept-failed-pilot (Q27)` }, null, '']);
+    b2t2Expect(pr.stderr, 'the sha before the halt (K3)').toBe(`sha256 ${sha256Hex(text)}\n`);
+    const doc = JSON.parse(text) as B2t2R;
+    const ledger = readFileSync(join(fx.out, 'spend.jsonl'), 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as { name: string; tokens: number });
+    const sum = (prefix: string): number => ledger.filter((l) => l.name.startsWith(prefix)).reduce((a, l) => a + l.tokens, 0);
+    b2t2Expect(sum('pilot/judge/'), 'the judge ran on the usage pilot non-correct answers (Q6)').toBeGreaterThan(0);
+    b2t2Expect(doc.usage_extrapolation.pilot_spend).toEqual({ arms: sum('pilot/arms/'), judge: sum('pilot/judge/'), total: sum('pilot/arms/') + sum('pilot/judge/') });
+    b2t2Expect(doc.usage_extrapolation.pilot_questions).toBe(2);
+    const read = [...new Set(ledger.map((l) => l.name))].filter((n) => /^(fidelity|pilot\/arms|pilot\/judge)\//.test(n));
+    b2t2Expect([doc.usage_extrapolation.spend_readings.runs, doc.usage_extrapolation.spend_readings.unrecorded], 'Q7 over every recorded run').toEqual([read.length, 0]);
+    for (const n of read) b2t2Expect(JSON.parse(readFileSync(join(fx.out, `${n}.run.json`), 'utf8')).settings_mode, `${n} ran under step 0b mode (K2)`).toBe('fallback');
+    b2t2Expect(JSON.parse(readFileSync(join(fx.out, 'pilot', 'judged.json'), 'utf8')).settings_mode, 'the judged file names it too').toBe('fallback');
+    b2t2Expect(doc.usage_extrapolation.uptake).toEqual({ reading: 'unseen', quiz_uptake: 'unmeasured', control_calls: 0, control_errored: 0 });
+    b2t2Expect(B2.quizUptakeReadingOf(doc), 'unseen is unmeasured (D-6644, K15)').toBe('unmeasured');
+    b2t2Expect(doc.absent_rate.arms).toEqual({ [W5B4_CONTROL]: { num: 0, den: 2 }, [W5B4_TREATMENT]: { num: 1, den: 2 } });
+    b2t2Expect(doc.fidelity.map((b: B2t2R) => [b.boundary_uuid, b.pass])).toEqual([[B2T2_B[0]!, true]]);
+    b2t2Expect([doc.settings_mode, doc.step0b_sha256]).toEqual(['fallback', s0.sha]);
+    b2t2Expect(doc.failures, 'no settings-mode failure: every surface ran under step 0b mode').toEqual([`absent-rate ${W5B4_TREATMENT} over`, 'fidelity short 1 of 5']);
+    b2t2Expect(B2.pilotResultError(doc), 'the producer writes the shape open --finalize reads (C4)').toBeNull();
+  }, 240_000);
 });
