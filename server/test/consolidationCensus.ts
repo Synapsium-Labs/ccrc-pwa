@@ -23,7 +23,7 @@ export interface CensusSite { readonly file: string; readonly line: number; read
 
 /** Every `.ts`/`.tsx`/`.mjs` file under `root/dir`, sorted; declaration files and `__`-prefixed transient mutants
  *  (the `boot.test.ts` precedent in `single-definition.test.ts`'s `sources`) are skipped. */
-function sourceFiles(root: string, dir: string): string[] {
+export function sourceFiles(root: string, dir: string): string[] {
   const out: string[] = [];
   const walk = (d: string): void => {
     if (!existsSync(d)) return;
@@ -46,7 +46,7 @@ export function codeOf(line: string): string {
 }
 
 /** Every match of `re` (global) on a code line of each file under `dirs`, one site per match. */
-function sitesOf(root: string, dirs: readonly string[], re: RegExp, skip: (rel: string) => boolean = () => false): CensusSite[] {
+export function sitesOf(root: string, dirs: readonly string[], re: RegExp, skip: (rel: string) => boolean = () => false): CensusSite[] {
   const out: CensusSite[] = [];
   for (const dir of dirs) {
     for (const f of sourceFiles(root, dir)) {
@@ -60,7 +60,7 @@ function sitesOf(root: string, dirs: readonly string[], re: RegExp, skip: (rel: 
   return out;
 }
 
-const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** `recordFeedEvent(` call expressions under `server/src`, outside `coord/store.ts` (which defines the door and may
  *  call itself). A method SIGNATURE (`recordFeedEvent(epoch: number, …)` opening a line) is a declaration, not a call.
@@ -547,14 +547,14 @@ export const SINGLE_FLIGHT_NAMES: readonly string[] = [
 ];
 
 /** The facts of `server/src/watch.ts` (or a fixture's), with the file's lines; `null` when the tree has none. */
-function watcherFacts(root: string, rel = 'server/src/watch.ts'): { facts: ScheduleFacts; lines: string[]; file: string } | null {
+export function watcherFacts(root: string, rel = 'server/src/watch.ts'): { facts: ScheduleFacts; lines: string[]; file: string } | null {
   const abs = path.join(root, rel);
   if (!existsSync(abs)) return null;
   const parsed = parsedFile(abs);
   return { facts: scheduleFacts(parsed), lines: parsed.text.split('\n'), file: rel };
 }
 
-const siteAt = (w: { lines: string[]; file: string }, line: number): CensusSite => ({ file: w.file, line, text: w.lines[line - 1] ?? '' });
+export const siteAt = (w: { lines: string[]; file: string }, line: number): CensusSite => ({ file: w.file, line, text: w.lines[line - 1] ?? '' });
 
 /** The named lane clocks (`LANE_CLOCK_NAMES`) still declared as fields of `FleetWatcher`. */
 export function laneClockFields(root: string = REPO): CensusSite[] {
