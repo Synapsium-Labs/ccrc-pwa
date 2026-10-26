@@ -9970,6 +9970,22 @@ function renderAskBrief(
 //       restart with no listing back in the hour, the hour rests on its P row alone; an outage spanning its close (the arm closes the
 //       row before any live read of P) fails closed, as a loss at expiry. A verdict over a window is final once its last hour has left
 //       the read horizon.
+//     - THE HOURS A TRANSIENT BUCKET-READ FAILURE WAITS ON (D-6967, the operator's "a failed folder read waits for a later read in the same
+//       hour"; `waits` on the pending owner of a real incarnation). Only `directory-unreadable` and `range-unreadable` wait, and only while
+//       the DURABLE state holds a measured (session, I, hour) row recorded before the hour's close (`laneCarries`: never a row this pass
+//       staged); every other word, and a first read with no such row, is today's immediate gap. A wait stages nothing: the hour joins the
+//       entry's `hours` (a lost window through `pendingWindows`) with its word beside it in `waits`, the two removed together on every path,
+//       recorded only after the read's abort check (so a cut pass never records or rewords one; a later failure rewords it), and `listedBy`
+//       never lowered (R107). `forgetRead` never drops a waiting hour unless THIS observation ended its wait, under R101's gate and R107's:
+//       an applicable result that is not a carve-out (a measured read, the no-op skip, or any loss, which lands its own word) is a read; a
+//       carve-out (`directory-absent`, `capability-absent`) is never a read: it stages the waited word as an interval-only gap (R90 keeps
+//       the loss) and the hour leaves only once that is durable (`noteGap` finding it on file counts); an hour read whole after its close (a
+//       cut pass's late flush) ends with no gap. A result refused by name, a cut, a failed flush or an R82 refusal end nothing, and the hour
+//       left unread expires with R89's words. Restart-safe because the wait is never what keeps the hour honest: the carrier row is (the
+//       checkpoint arm's close read, and upkeep's `hour-never-closed`). Residues: a failed first read of an hour still costs it; after a
+//       restart a `capability-absent` result can take the hour's word in place of the unread stretch, which R88's not-ready window holds;
+//       a persistent failure shows as a loss only at the horizon; and D-6471's inputs move: a waiting incarnation is a pending owner `priorOf`
+//       reads, and a waiting read of P discharges nothing it owes, both the safe direction.
 //
 //   REPORT-ONLY EFFECTS. Attempts are made durable through one checkpoint-only change BEFORE any lease is journaled (so the next pass
 //   sees them), then each lease request goes through `createLease` (which deduplicates on the identity key, so a request re-emitted
@@ -10251,8 +10267,10 @@ interface LaneEvidenceIndex {
 /** One owner to observe in a pass. `incarnation: null` is a parent whose incarnation could not be measured (`reason` says why).
  *  `listedHours` are the hours (ms) a pass listed it in and no completed observation has covered yet, inside the read horizon (R89).
  *  `read` (D-6471, lane memory): the hours whose bucket result this observation applied or skipped as unchanged, never refused by name
- *  and never a carve-out: what may discharge an hour owed under this incarnation. */
-interface LaneOwner { id: string; incarnation: string | null; reason: string; live: boolean; listedHours: readonly number[]; read?: number[] }
+ *  and never a carve-out: what may discharge an hour owed under this incarnation. `ended` (D-6967, lane memory): the hours whose WAIT
+ *  this observation ended without a read: a carve-out that staged the waited loss, or an hour read whole after its close; never in
+ *  `read`, so a carve-out never discharges an owed hour. */
+interface LaneOwner { id: string; incarnation: string | null; reason: string; live: boolean; listedHours: readonly number[]; read?: number[]; ended?: number[] }
 /** R89: an owner a pass LISTED from the census, and the hours (ms) it was listed in, until one observation of it completes. */
 interface LanePendingOwner {
   id: string; incarnation: string | null; reason: string; hours: Set<number>;
@@ -10262,6 +10280,10 @@ interface LanePendingOwner {
   /** D-6471: the hours of an `(id, null)` owner DEFERRED by an `unreadable` listing, each with the prior incarnation P it waits for. Lane
    *  memory only, never durable: what keeps the hour honest across a restart is the (id, P, hour) row the deferral required. */
   owed?: Map<number, string>;
+  /** D-6967: the hours of a real incarnation that WAIT after a transient read failure, each with the loss word it would have recorded. A
+   *  wait exists only while its hour is in `hours` too: every path that removes the hour removes its word in the same statement. Lane
+   *  memory only, never durable: what keeps the hour honest across a restart is the measured (id, incarnation, hour) row it required. */
+  waits?: Map<number, string>;
 }
 /** An owner's identity in a pass and in the pending memory: (id, incarnation or null). */
 const laneOwnerKey = (id: string, incarnation: string | null): string => JSON.stringify([id, incarnation]);
@@ -10301,6 +10323,12 @@ const laneCloseAt = (hourMs: number): number => hourMs + DELEGATION_HOUR_MS + DE
 const laneInstantMs = (iso: string): number | null => {
   try { return parseDelegationInstant(iso); } catch (err) { if (err instanceof DelegationModelError) return null; throw err; }
 };
+/** D-6967 (§3.2): whether `state` holds a MEASURED (id, incarnation, hour) row recorded before the hour's close, the CARRIER a transient
+ *  read failure may wait on. Read from the durable state, so a row staged in this pass and not yet flushed never counts; a row whose
+ *  instant does not parse is none (the immediate gap, the safe direction). */
+const laneCarries = (state: DeepReadonly<DelegationRecoveryState>, id: string, inc: string, hourMs: number): boolean =>
+  state.checkpoint.observationIntervals.some((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === formatDelegationInstant(hourMs)
+    && r.state === 'measured' && (laneInstantMs(r.recordedAt) ?? Infinity) < laneCloseAt(hourMs));
 
 /** The census, flat: every project whose delegation census was a MEASURED success contributes its records, each (project, adminRecord)
  *  once. A project whose view was null is left OUT of `censused` and contributes nothing: an empty list would read as "every tree is gone"
@@ -11430,7 +11458,8 @@ class DelegationLane {
           ? laneIncarnationGap(p.owed?.has(hourMs) === true ? 'unreadable' : p.reason)      // D-6471 (review 838 F3): an owed hour was deferred under `unreadable`
           : `${DELEGATION_HOUR_NEVER_CLOSED}: listed in this hour, and never read before the hour left the read horizon`;
         // D-6471: a deferred hour stays (owed) until its loss gap is durable: a later pass finds the row and lets it go
-        if (await this.noteGap(pass, durable, p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs, detail) || !p.owed?.has(hourMs)) { p.hours.delete(hourMs); p.owed?.delete(hourMs); }
+        // D-6967: a waiting hour expires here too, with R89's words, and its word leaves with it
+        if (await this.noteGap(pass, durable, p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs, detail) || !p.owed?.has(hourMs)) { p.hours.delete(hourMs); p.owed?.delete(hourMs); p.waits?.delete(hourMs); }
       }
       if (p.hours.size === 0) this.pendingOwners.delete(k);
     }
@@ -11477,9 +11506,13 @@ class DelegationLane {
       catch { /* a dropped agent round trip is an unreadable listing */ }
       if (pass.signal.aborted) return;
     }
-    for (const hourMs of this.hoursOf(pass, durable.state(), owner, inc, listing)) {
+    const hours = this.hoursOf(pass, durable.state(), owner, inc, listing);
+    // D-6967 (§3.4 (5)): a listed hour `hoursOf` leaves out was read whole after its close (a cut pass's late flush); its wait ends too
+    for (const h of owner.listedHours) if (!hours.includes(h)) (owner.ended ??= []).push(h);
+    for (const hourMs of hours) {
       if (pass.signal.aborted) return;
-      if (await this.observeHour(pass, durable, owner.id, inc, hourMs, listing, capabilityPresent)) (owner.read ??= []).push(hourMs);
+      const seen = await this.observeHour(pass, durable, owner.id, inc, hourMs, listing, capabilityPresent);
+      if (seen !== false) (owner[seen] ??= []).push(hourMs);
     }
   }
 
@@ -11607,13 +11640,17 @@ class DelegationLane {
       if (refusedOwners.has(JSON.stringify([owner.id, owner.incarnation ?? DELEGATION_UNMEASURED_INCARNATION]))) continue;
       // D-6471: a LIVE read of P, durable, discharges the hours deferred for P that it read (R107: unless a newer pass listed them)
       const deferred = owner.live ? this.pendingOwners.get(laneOwnerKey(owner.id, null)) : undefined;
-      for (const h of deferred !== undefined && deferred.listedBy <= pass.seq ? owner.read ?? [] : []) if (deferred!.owed?.get(h) === owner.incarnation) { deferred!.owed.delete(h); deferred!.hours.delete(h); }
+      for (const h of deferred !== undefined && deferred.listedBy <= pass.seq ? owner.read ?? [] : []) if (deferred!.owed?.get(h) === owner.incarnation) { deferred!.owed.delete(h); deferred!.hours.delete(h); deferred!.waits?.delete(h); }
       if (deferred?.hours.size === 0) this.pendingOwners.delete(laneOwnerKey(owner.id, null));
       const k = laneOwnerKey(owner.id, owner.incarnation);
       const pending = this.pendingOwners.get(k);
       if (pending === undefined) continue;
       if (pending.listedBy > pass.seq) continue;                         // R107: a newer pass listed it; that pass decides
-      for (const hourMs of owner.listedHours) if (pending.owed?.has(hourMs) !== true) pending.hours.delete(hourMs);   // D-6471: owed stays
+      // D-6471: owed stays. D-6967: so does a waiting hour, unless THIS observation ended its wait (a read, or a carve-out's loss, durable now)
+      for (const hourMs of owner.listedHours) {
+        if (pending.owed?.has(hourMs) === true || (pending.waits?.has(hourMs) === true && owner.read?.includes(hourMs) !== true && owner.ended?.includes(hourMs) !== true)) continue;
+        pending.hours.delete(hourMs); pending.waits?.delete(hourMs);
+      }
       if (pending.hours.size === 0) this.pendingOwners.delete(k);
     }
   }
@@ -11660,10 +11697,11 @@ class DelegationLane {
     return false;
   }
 
-  /** True when a bucket result for the hour was applied or skipped as unchanged, not refused by name and not a carve-out (D-6471). */
+  /** `'read'` when a bucket result for the hour was applied or skipped as unchanged, not refused by name and not a carve-out (D-6471);
+   *  `'ended'` when a carve-out met a waiting hour and staged its waited loss (D-6967); `false` otherwise, a wait recorded included. */
   private async observeHour(
     pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, listing: MeasuredDirectoryRead, capabilityPresent: boolean | null,
-  ): Promise<boolean> {
+  ): Promise<'read' | 'ended' | false> {
     const bucket = laneBucketOf(hourMs);
     const closing = pass.now >= laneCloseAt(hourMs);
     const row = durable.state().checkpoint.bucketCursors.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.bucket === bucket);
@@ -11673,18 +11711,36 @@ class DelegationLane {
     });
     if (pass.signal.aborted) return false;                               // a late answer of a cut pass applies nothing
     const state = durable.state();                                       // AT THIS MOMENT, never a copy taken before the read (M5/M6)
+    const failed = read.ok ? null : unreadableDelegationBucketResult({ sessionId: id, parentIncarnation: inc, bucket }, state, { reason: read.reason, detail: read.detail });
+    const k = laneOwnerKey(id, inc);
+    // D-6967 (§3.1 to §3.3): a TRANSIENT failure stages nothing and WAITS on the pending entry, under its own word, while the durable state
+    // carries the hour; a later failure rewords it. After the abort check above, so a cut pass never records or rewords a wait.
+    if (!read.ok && (read.reason === 'directory-unreadable' || read.reason === 'range-unreadable') && laneCarries(state, id, inc, hourMs)) {
+      const p = this.pendingOwners.get(k) ?? { id, incarnation: inc, reason: '', hours: new Set<number>(), listedBy: pass.seq };
+      p.hours.add(hourMs);
+      (p.waits ??= new Map()).set(hourMs, failed!.detail);
+      p.listedBy = Math.max(p.listedBy, pass.seq);                       // R107: never lower a newer pass's stamp
+      this.pendingOwners.set(k, p);
+      return false;
+    }
     const seen = { accepted: 0, read: false };
     const gate = this.gateOf(pass, durable, state, id, inc, hourMs, bucket, seen);
     try {
       if (read.ok) await ingestAndApplyDelegationBucket(read.input, state, gate);
-      else await gate.applyBucketResult(unreadableDelegationBucketResult({ sessionId: id, parentIncarnation: inc, bucket }, state, { reason: read.reason, detail: read.detail }));
+      else await gate.applyBucketResult(failed!);
     } catch (err) {
       if (err instanceof DelegationIngestError) { console.warn(`ccrc-server: delegation bucket ${id}/${bucket} was refused: ${err.message}`); return false; }
       throw err;
     }
     // An hour read AFTER it closed, with nothing new in it, is not read again by this process (once the pass's application is durable).
     if (closing && read.ok && seen.accepted === 0) pass.settle.push(this.settledKey(id, inc, hourMs));
-    return seen.read;
+    // D-6967 (§3.4 (2)): a carve-out never ends a wait as a read. It stages the waited loss as an interval-only gap (the cursor stays the
+    // carve-out result's; R90's merge keeps the loss in either order), and `forgetRead` lets the hour go only once that is durable.
+    const waiting = this.pendingOwners.get(k);
+    const word = waiting?.hours.has(hourMs) === true ? waiting.waits?.get(hourMs) : undefined;
+    if (seen.read || word === undefined) return seen.read ? 'read' : false;
+    await this.noteGap(pass, durable, id, inc, hourMs, word);
+    return pass.signal.aborted ? false : 'ended';
   }
 
   /** The durable door for one bucket result: the no-op skip, then Task 8's own adapter (taking note of what it journaled). */

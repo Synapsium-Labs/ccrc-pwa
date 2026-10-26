@@ -668,12 +668,13 @@ describe('the no-op skip (hand-off 2): a bucket result that changes nothing make
     setCensus(w, { demo: [] }, { 'demo-a': measured() }, NOW);
     await pass(w);
     expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'measured' });
-    w.faults.range.add('demo-a');
+    // D-6967: a word that does not wait and moves no cursor, with no new bytes (a range fault on this measured hour now waits)
+    w.fleet.ccdVerbs = ['caps'];
     const calls = durableCalls();
     setNow(NOW + DELEGATION_SWEEP_MS);
     await pass(w);
     expect(calls.applyAcceptedBatch).toHaveBeenCalledTimes(1);
-    expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^range-unreadable/) });
+    expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^capability-absent/) });
   });
 
   it('a closed hour is written ONCE more after the margin (so its record postdates its close) and is then never read again', async () => {
@@ -4720,8 +4721,8 @@ describe('R90 (W3, coordinator 5512): within one hour a loss word displaces a ca
     creatorAfter(w, at(0));
     appendBucket(w, 'demo-x', BUCKET10, bashPre('demo-x', 'toolu_o1', ['old-tree'], iso(at(0) + 21_000)), bashPost('demo-x', 'toolu_o1', ['old-tree'], iso(at(0) + 22_000)));
     w.faults.range.add('demo-x');
-    await censusPass(w, at(1), WITH_TREE, pair);                         // its range cannot be read: a loss word
-    expect(intervalFor(w.home, 'demo-x')!.detail).toMatch(/^range-unreadable/);
+    await censusPass(w, at(1), WITH_TREE, pair);                         // its range cannot be read: a loss word, which waits (D-6967)
+    expect(intervalFor(w.home, 'demo-x'), 'D-6967: the measured row carries the hour, so it waits').toMatchObject({ state: 'measured' });
     w.fleet.ccdVerbs = ['caps'];                                         // the fleet stops offering the capability: a carve-out word, later
     for (let i = 2; i < 6; i++) await censusPass(w, at(i), WITH_TREE, pair);
     expect(leasesOf(w.home), 'the hour vetoes').toEqual([]);
@@ -5356,5 +5357,449 @@ describe('D-6471 (wave-3 follow-up 9): an `unreadable` incarnation defers its ho
     // from here no listing falls in H, so nothing defers H again: only the memory pass N+1 left can carry it to its expiry
     for (const t of [CLOSED, EXPIRED, EXPIRED + STEP]) await passAt(w, t, { 'demo-a': unreadable, 'demo-z': measured() });
     expect(standIn(w, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: LOSS });
+  });
+});
+
+describe('D-6967 (wave-3 follow-up 10): a transient bucket-read failure waits for a later read in the same hour while a durable measured row carries it', () => {
+  const H = Date.parse(HOUR10);
+  const HOUR11 = '2026-10-15T11:00:00.000Z';
+  const CLOSED = H + DELEGATION_HOUR_MS + DELEGATION_HOUR_CLOSE_MARGIN_MS + 60_000;          // 11:03: the hour 10 is closed
+  const EXPIRED = H + (DELEGATION_SPOOL_LOOKBACK_HOURS + 1) * DELEGATION_HOUR_MS + 5 * 60_000; // the hour 10 has left the read horizon
+  const CAP = ['caps', DELEGATION_EVENTS_CAP];
+  const unreadable: ParentIncarnation = { kind: 'unmeasured', reason: 'unreadable' };
+  const live = (...ids: string[]): Record<string, ParentIncarnation> => Object.fromEntries(ids.map((id) => [id, measured()]));
+  /** One pass at `t`, its census taken at `t`, listing each session of `incs` live with that incarnation. */
+  const passAt = async (w: World, t: number, incs: Record<string, ParentIncarnation>, projects: Record<string, CensusView> = { demo: [] }): Promise<void> => {
+    setNow(t);
+    setCensus(w, projects, incs, t);
+    await pass(w, Object.keys(incs).map((id) => sessionOf(id)));
+  };
+  /** A pass while the fleet does not offer the capability (`capability-absent`, a carve-out word), which reads no bucket of any owner. */
+  const carveOutPass = async (w: World, t: number, incs: Record<string, ParentIncarnation>, projects?: Record<string, CensusView>): Promise<void> => {
+    w.fleet.ccdVerbs = ['caps'];
+    await passAt(w, t, incs, projects);
+    w.fleet.ccdVerbs = [...CAP];
+  };
+  type Lane = {
+    pendingWindows(s: unknown): Array<{ sessionId: string; parentIncarnation: string; startedAt: string }>;
+    pendingOwners: Map<string, { hours: Set<number>; waits?: Map<number, string> }>;
+  };
+  const laneOf = (w: World): Lane => (w.watcher as unknown as { delegationLane(): Lane }).delegationLane();
+  /** Whether the lane holds (id, incarnation, hour) as a lost window of its own (`pendingWindows`, private). */
+  const windowOf = async (w: World, id: string, hourMs = H, inc = INC): Promise<boolean> => {
+    const state = (await w.watcher.delegationApplier())!.state();
+    return laneOf(w).pendingWindows(state).some((x) => x.sessionId === id && x.parentIncarnation === inc && x.startedAt === iso(hourMs));
+  };
+  /** The word (id, INC, hour) waits under, read from the lane's private pending memory: a wait is the hour in both `hours` and `waits`. */
+  const waitOf = (w: World, id: string, hourMs = H): string | undefined => {
+    const p = laneOf(w).pendingOwners.get(JSON.stringify([id, INC]));
+    return p?.hours.has(hourMs) === true ? p.waits?.get(hourMs) : undefined;
+  };
+  const owed = async (w: World, id: string): Promise<boolean> => windowOf(w, id, H, DELEGATION_UNMEASURED_INCARNATION);
+  const unmeasuredOf = (w: World, hour = HOUR10) => intervalsOf(w.home).filter((r) => r.utcHour === hour && r.state === 'unmeasured');
+  const healthOfH = (w: World) => delegationHealthWindowOf(intervalsOf(w.home), H + DELEGATION_HOUR_MS);
+  const quiet = (): void => { vi.spyOn(console, 'warn').mockImplementation(() => {}); };
+  /** Passes at `t0 + i * STEP` from i = 1 until the first one after which the applier is ready and not failed (D-6471's F7 helper). */
+  const untilRecovered = async (w: World, t0: number, incs: Record<string, ParentIncarnation>, each = passAt): Promise<number> => {
+    for (let i = 1; i < 12; i++) {
+      await each(w, t0 + i * STEP, incs);
+      const applier = (await w.watcher.delegationApplier())!;
+      if (applier.failure() === null && applier.state().phase === 'ready') return i;
+    }
+    throw new Error('the applier never recovered');
+  };
+  /** demo-a's hour 10 measured from one line (a cursor row), then a range fault that makes it wait: the start of most rows. */
+  const waitingOnRange = async (): Promise<World> => {
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a'));
+    await passAt(w, at(0), live('demo-a'));
+    expect(intervalFor(w.home, 'demo-a'), 'the carrier: measured, recorded before the close').toMatchObject({ state: 'measured' });
+    w.faults.range.add('demo-a');
+    await passAt(w, at(1), live('demo-a'));
+    expect(unmeasuredOf(w), 'it waits: no unmeasured row').toEqual([]);
+    w.faults.range.clear();
+    return w;
+  };
+
+  it('D-6967 R-A (the 19:00Z shape): measured, then a pass whose reads fail, then a read with nothing new: no unmeasured row, and the hour counts measured', async () => {
+    for (const fault of ['throw', 'unreadable', 'range'] as const) {
+      const w = world();
+      const ids = ['demo-a', 'demo-b'];
+      for (const id of ids) if (fault === 'range') writeBucket(w, id, BUCKET10, startLine(id)); else makeOwner(w, id);
+      await passAt(w, at(0), live(...ids));
+      for (const id of ids) if (fault === 'range') w.faults.range.add(id); else w.faults.listing.set(id, fault);
+      await passAt(w, at(1), live(...ids));
+      expect(unmeasuredOf(w), `${fault}: no unmeasured row while it waits`).toEqual([]);
+      for (const id of ids) expect(await windowOf(w, id), `${fault}: ${id}'s hour is a lost window while it waits`).toBe(true);
+      w.faults.listing.clear();
+      w.faults.range.clear();
+      await passAt(w, at(2), live(...ids));                                                     // nothing new: the no-op skip
+      expect(unmeasuredOf(w), fault).toEqual([]);
+      for (const id of ids) {
+        expect(intervalFor(w.home, id), `${fault}: ${id}`).toMatchObject({ state: 'measured' });
+        expect(await windowOf(w, id), `${fault}: ${id}'s wait ended with the read`).toBe(false);
+      }
+      expect(healthOfH(w), fault).toMatchObject({ measuredSessionHours: 2, unmeasuredSessionHours: 0 });
+    }
+  });
+
+  it('D-6967 R-A (correlation): a rung-4 candidate overlapping the waiting hour is held while it waits, and decided once the wait ends', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    makeOwner(w, 'demo-x');
+    await passAt(w, at(-1), live('demo-a', 'demo-x'), BEFORE_TREE);                           // ready; demo-x's hour 10 is measured
+    creatorAfter(w, at(0));                                                                    // demo-a creates raw-tree; demo-x makes no call
+    w.faults.listing.set('demo-x', 'throw');
+    for (let i = 1; i < 4; i++) await passAt(w, at(i), live('demo-a', 'demo-x'), WITH_TREE);
+    expect(waitOf(w, 'demo-x'), 'waits').toMatch(/^directory-unreadable/);
+    expect(leasesOf(w.home), 'the waiting hour is a lost window: rung 4 holds').toEqual([]);
+    const control = world();                                                                   // CONTROL: demo-x read throughout links by then
+    makeOwner(control, 'demo-a');
+    makeOwner(control, 'demo-x');
+    await passAt(control, at(-1), live('demo-a', 'demo-x'), BEFORE_TREE);
+    creatorAfter(control, at(0));
+    for (let i = 1; i < 4; i++) await passAt(control, at(i), live('demo-a', 'demo-x'), WITH_TREE);
+    expect(leasedOf(control), 'CONTROL').toEqual([['raw-tree', 'raw', 'demo-a']]);
+    w.faults.listing.clear();
+    for (let i = 4; i < 9; i++) await passAt(w, at(i), live('demo-a', 'demo-x'), WITH_TREE);
+    expect(waitOf(w, 'demo-x'), 'the wait ended').toBeUndefined();
+    expect(intervalFor(w.home, 'demo-x')).toMatchObject({ state: 'measured' });
+    expect(leasedOf(w), 'read whole: the candidate is decided').toEqual([['raw-tree', 'raw', 'demo-a']]);
+  });
+
+  it('D-6967 R-A2 (the word): a range fault, then a listing fault, then a carve-out: the hour lands the LATER transient word', async () => {
+    const w = await waitingOnRange();
+    expect(waitOf(w, 'demo-a')).toMatch(/^range-unreadable/);
+    w.faults.listing.set('demo-a', 'throw');
+    await passAt(w, at(2), live('demo-a'));
+    expect(waitOf(w, 'demo-a'), 'still waits, under the later word').toMatch(/^directory-unreadable/);
+    w.faults.listing.clear();
+    await carveOutPass(w, at(3), live('demo-a'));
+    expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^directory-unreadable/) });
+  });
+
+  it('D-6967 R-B (never read again): the hour counts measured until it leaves the read horizon, then expires with R89\'s words, and its lost window passes to the durable row', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), live('demo-a'));
+    w.faults.listing.set('demo-a', 'throw');
+    for (const t of [at(1), at(2), CLOSED, CLOSED + STEP]) {
+      await passAt(w, t, live('demo-a'));
+      expect(intervalFor(w.home, 'demo-a'), `measured at ${iso(t)}`).toMatchObject({ state: 'measured' });
+      expect(await windowOf(w, 'demo-a'), `a lost window of the lane's at ${iso(t)}`).toBe(true);
+    }
+    expect(healthOfH(w)).toMatchObject({ measuredSessionHours: 1, unmeasuredSessionHours: 0 });
+    for (const t of [EXPIRED, EXPIRED + STEP]) await passAt(w, t, live('demo-a'));
+    expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^hour-never-closed: listed in this hour/) });
+    expect(await windowOf(w, 'demo-a'), 'it left the lane\'s memory').toBe(false);
+    const cp = disk(w.home).checkpoint!;
+    expect(delegationLostWindowsOf(cp.observationIntervals, cp.bucketCursors, EXPIRED + STEP)
+      .some((x) => x.sessionId === 'demo-a' && x.parentIncarnation === INC && x.startedAt === HOUR10), 'the durable row\'s lost window').toBe(true);
+  });
+
+  it('D-6967 R-C (no carrier): a first read of an hour that fails records its gap at once: a first-ever pass, and the first pass of H+1 after a measured H', async () => {
+    const first = world();
+    makeOwner(first, 'demo-a');
+    first.faults.listing.set('demo-a', 'throw');
+    await passAt(first, at(0), live('demo-a'));
+    expect(intervalFor(first.home, 'demo-a'), 'a first-ever pass').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^directory-unreadable/) });
+    const next = world();
+    makeOwner(next, 'demo-a');
+    await passAt(next, at(0), live('demo-a'));
+    next.faults.listing.set('demo-a', 'throw');
+    await passAt(next, at(60), live('demo-a'));                                                // 11:30: H+1's first read
+    expect(intervalFor(next.home, 'demo-a', HOUR11), 'H+1 has no carrier').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^directory-unreadable/) });
+  });
+
+  it('D-6967 R-D (a carve-out after a wait): the waited `range-unreadable` lands in the carve-out pass, the carve-out word never displaces it, and the link is vetoed', async () => {
+    const pair = live('demo-a', 'demo-x');
+    const w = world();
+    makeOwner(w, 'demo-a');
+    writeBucket(w, 'demo-x', BUCKET10, startLine('demo-x', '2026-10-15T10:01:00.000Z'));
+    await passAt(w, at(-1), pair, BEFORE_TREE);                                                // ready; demo-x's bucket is read: a cursor row
+    creatorAfter(w, at(0));
+    appendBucket(w, 'demo-x', BUCKET10, bashPre('demo-x', 'toolu_o1', ['old-tree'], iso(at(0) + 21_000)), bashPost('demo-x', 'toolu_o1', ['old-tree'], iso(at(0) + 22_000)));
+    w.faults.range.add('demo-x');
+    await passAt(w, at(1), pair, WITH_TREE);                                                   // its range cannot be read: it waits
+    expect(intervalFor(w.home, 'demo-x'), 'waits').toMatchObject({ state: 'measured' });
+    expect(waitOf(w, 'demo-x')).toMatch(/^range-unreadable/);
+    w.fleet.ccdVerbs = ['caps'];                                                               // the carve-out, later
+    await passAt(w, at(2), pair, WITH_TREE);
+    expect(intervalFor(w.home, 'demo-x'), 'the waited loss lands in the carve-out pass').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^range-unreadable/) });
+    for (let i = 3; i < 6; i++) await passAt(w, at(i), pair, WITH_TREE);
+    expect(leasesOf(w.home), 'the hour vetoes').toEqual([]);
+    expect(disk(w.home).checkpoint!.bucketCursors.find((c) => c.sessionId === 'demo-x')!.detail, 'the carve-out result was applied').toMatch(/^capability-absent/);
+    expect(intervalFor(w.home, 'demo-x')!.detail, 'a carve-out word never displaces a loss word').toMatch(/^range-unreadable/);
+  });
+
+  it('D-6967 R-E (a measured loss after a wait): a torn tail read, a wait, then its bucket gone: ingestion\'s `bucket-vanished-unread` ends the wait as a read, with its own word', async () => {
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a'), '{"v":1,"observedAt":"2026-10-15T10:06');   // one complete line, then bytes with no LF
+    await passAt(w, at(0), live('demo-a'));
+    const row = disk(w.home).checkpoint!.bucketCursors.find((c) => c.sessionId === 'demo-a')!;
+    expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'measured' });
+    expect(row.cursor, 'the torn tail is unread').toBeLessThan(row.lastSize);
+    w.faults.listing.set('demo-a', 'throw');
+    await passAt(w, at(1), live('demo-a'));
+    expect(waitOf(w, 'demo-a'), 'waits').toMatch(/^directory-unreadable/);
+    w.faults.listing.clear();
+    rmSync(bucketFile(w, 'demo-a', BUCKET10));
+    const staged = vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch');
+    await passAt(w, at(2), live('demo-a'));
+    expect(intervalFor(w.home, 'demo-a'), 'its own loss word').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^bucket-vanished-unread/) });
+    const details = staged.mock.calls.flatMap((c) => c[0].map((b) => b.interval?.detail ?? null));
+    expect(details.filter((d) => d !== null && /^directory-unreadable/.test(d)), 'no waited word was staged').toEqual([]);
+    expect(waitOf(w, 'demo-a'), 'the wait ended').toBeUndefined();
+  });
+
+  it('D-6967 R-F (a, b1, b2): a restart during a wait leaves the hour to its carrier: a read closes it measured, no read leaves upkeep\'s words, and a re-created wait expires with R89\'s', async () => {
+    const restarted = async (): Promise<World> => {
+      const w = world();
+      makeOwner(w, 'demo-a');
+      await passAt(w, at(0), live('demo-a'));
+      w.faults.listing.set('demo-a', 'throw');
+      await passAt(w, at(1), live('demo-a'));
+      expect(waitOf(w, 'demo-a'), 'waits before the restart').toMatch(/^directory-unreadable/);
+      await w.watcher.closeDelegation();
+      return world({ home: w.home });
+    };
+    const a = await restarted();
+    await passAt(a, at(2), live('demo-a'));
+    await passAt(a, CLOSED, live('demo-a'));
+    expect(unmeasuredOf(a), '(a) no unmeasured row').toEqual([]);
+    expect(intervalFor(a.home, 'demo-a'), '(a)').toMatchObject({ state: 'measured' });
+    expect(Date.parse(intervalFor(a.home, 'demo-a')!.recordedAt), '(a) closed after its close').toBeGreaterThanOrEqual(H + DELEGATION_HOUR_MS + DELEGATION_HOUR_CLOSE_MARGIN_MS);
+    const b1 = await restarted();
+    for (const t of [EXPIRED, EXPIRED + STEP]) await passAt(b1, t, live('demo-a'));
+    expect(intervalFor(b1.home, 'demo-a'), '(b1) upkeep').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^hour-never-closed: recorded before the hour ended/) });
+    const b2 = await restarted();
+    b2.faults.listing.set('demo-a', 'throw');
+    await passAt(b2, at(2), live('demo-a'));
+    expect(waitOf(b2, 'demo-a'), '(b2) the wait is re-created').toMatch(/^directory-unreadable/);
+    for (const t of [EXPIRED, EXPIRED + STEP]) await passAt(b2, t, live('demo-a'));
+    expect(intervalFor(b2.home, 'demo-a'), '(b2) R89').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^hour-never-closed: listed in this hour/) });
+  });
+
+  it('D-6967 R-F (c, the residue): a restart during a wait, then a `capability-absent` first ready pass: the carve-out word lands, and R88, not the word, holds a candidate begun before that pass', async () => {
+    const pair = live('demo-a', 'demo-x');
+    const outcome = async (late: boolean): Promise<unknown[]> => {
+      const w = world();
+      makeOwner(w, 'demo-a');
+      makeOwner(w, 'demo-x');
+      await passAt(w, at(-1), pair, BEFORE_TREE);                                              // ready; demo-x's hour 10 is measured
+      w.faults.listing.set('demo-x', 'throw');
+      await passAt(w, at(0), pair, BEFORE_TREE);
+      expect(waitOf(w, 'demo-x'), 'waits').toMatch(/^directory-unreadable/);
+      if (!late) creatorAfter(w, at(0));                                                       // begun before the restart's first ready pass
+      await w.watcher.closeDelegation();
+      const r = world({ home: w.home, ccdVerbs: ['caps'] });
+      await passAt(r, at(2), pair, WITH_TREE);                                                 // the restart's first ready pass, at(2)
+      expect(intervalFor(r.home, 'demo-x'), 'the carve-out word lands').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^capability-absent/) });
+      r.fleet.ccdVerbs = [...CAP];                                                             // offered again: the creator calls are read
+      if (late) creatorAfter(r, at(3));                                                        // begun after the ready instant plus the skew
+      for (let i = 4; i < 10; i++) await passAt(r, at(i), pair, WITH_TREE);
+      return leasedOf(r);
+    };
+    expect(await outcome(false), 'begun before the ready instant: R88 holds it').toEqual([]);
+    expect(await outcome(true), 'CONTROL, begun after it: decided, so the carve-out word does not veto').toEqual([['raw-tree', 'raw', 'demo-a']]);
+  });
+
+  it('D-6967 R-G (a wait survives a cut and a failed flush): the waited word lands at the next carve-out, and the first completed durable read ends the wait', async () => {
+    for (const then of ['carve', 'read'] as const) {
+      const cut = await waitingOnRange();
+      await cutAt(cut, at(2), { demo: [] }, [sessionOf('demo-a')], live('demo-a'), 'demo-a');   // (i) the discharging pass is cut on the listing
+      expect(waitOf(cut, 'demo-a'), `(i) ${then}: still waits after the cut`).toMatch(/^range-unreadable/);
+      if (then === 'read') {
+        await passAt(cut, at(3), live('demo-a'));
+        expect(waitOf(cut, 'demo-a'), '(i) the read ended it').toBeUndefined();
+      }
+      await carveOutPass(cut, at(4), live('demo-a'));
+      expect(intervalFor(cut.home, 'demo-a')!.detail, `(i) ${then}`).toMatch(then === 'carve' ? /^range-unreadable/ : /^capability-absent/);
+
+      const failed = await waitingOnRange();
+      appendBucket(failed, 'demo-a', BUCKET10, startLine('demo-a', iso(at(1) + 10_000)));     // so the discharging pass journals
+      quiet();
+      vi.spyOn(DelegationJournalWriter.prototype, 'write').mockRejectedValueOnce(new Error('EIO: a fixture fault at the journal write'));
+      await passAt(failed, at(2), live('demo-a'));                                             // (ii) its flush fails past its first byte
+      expect((await failed.watcher.delegationApplier())!.failure(), '(ii) failed closed').not.toBeNull();
+      expect(waitOf(failed, 'demo-a'), `(ii) ${then}: still waits after the failed flush`).toMatch(/^range-unreadable/);
+      await untilRecovered(failed, at(2), live('demo-a'), then === 'carve' ? carveOutPass : passAt);
+      if (then === 'read') {
+        expect(waitOf(failed, 'demo-a'), '(ii) the read after the recovery ended it').toBeUndefined();
+        await carveOutPass(failed, at(20), live('demo-a'));
+      }
+      expect(intervalFor(failed.home, 'demo-a')!.detail, `(ii) ${then}`).toMatch(then === 'carve' ? /^range-unreadable/ : /^capability-absent/);
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('D-6967 R-H (a, the close read): the first read after the close fails and waits, the next succeeds and closes the hour measured', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), live('demo-a'));
+    w.faults.listing.set('demo-a', 'throw');
+    await passAt(w, CLOSED, {});                                                               // nobody listed: the close read of (demo-a, P, H)
+    expect(unmeasuredOf(w), 'waits').toEqual([]);
+    expect(waitOf(w, 'demo-a')).toMatch(/^directory-unreadable/);
+    w.faults.listing.clear();
+    await passAt(w, CLOSED + STEP, {});
+    expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'measured' });
+    expect(Date.parse(intervalFor(w.home, 'demo-a')!.recordedAt), 'closed').toBeGreaterThanOrEqual(H + DELEGATION_HOUR_MS + DELEGATION_HOUR_CLOSE_MARGIN_MS);
+    expect(waitOf(w, 'demo-a')).toBeUndefined();
+  });
+
+  it('D-6967 R-H (b, M8): a row recorded at or after its close is no carrier: under the read-every-bucket seam, a later read of the closed hour that fails records its gap at once', async () => {
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a'));
+    await passAt(w, at(0), live('demo-a'));
+    await passAt(w, CLOSED, live('demo-a'));
+    expect(Date.parse(intervalFor(w.home, 'demo-a')!.recordedAt), 'closed').toBeGreaterThanOrEqual(H + DELEGATION_HOUR_MS + DELEGATION_HOUR_CLOSE_MARGIN_MS);
+    w.watcher.setDelegationSeams({ readEveryListedBucket: true });
+    w.faults.range.add('demo-a');
+    await passAt(w, CLOSED + STEP, live('demo-a'));
+    expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^range-unreadable/) });
+  });
+
+  it('D-6967 R-I (a session that ended): R102\'s re-read fails and waits; the next pass reads it, and the owner leaves the pending memory', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), live('demo-a'));
+    w.faults.listing.set('demo-a', 'throw');
+    await passAt(w, at(1), {});                                                                // ended: R102 re-pends it, and its re-read fails
+    expect(unmeasuredOf(w), 'waits').toEqual([]);
+    expect(waitOf(w, 'demo-a')).toMatch(/^directory-unreadable/);
+    w.faults.listing.clear();
+    await passAt(w, at(2), {});
+    expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'measured' });
+    expect(laneOf(w).pendingOwners.has(JSON.stringify(['demo-a', INC])), 'forgotten').toBe(false);
+  });
+
+  it('D-6967 R-J (M12): a carve-out pass whose flush fails keeps the hour waiting; the waited loss lands in the first completed pass after the recovery', async () => {
+    const w = await waitingOnRange();
+    quiet();
+    vi.spyOn(DelegationDurability.prototype as never as { replaceCheckpoint: (b: Uint8Array) => Promise<void> }, 'replaceCheckpoint')
+      .mockImplementationOnce(async () => { throw new Error('EIO: a fixture fault at the checkpoint rename'); });
+    await carveOutPass(w, at(2), live('demo-a'));
+    expect((await w.watcher.delegationApplier())!.failure(), 'failed closed').not.toBeNull();
+    expect(intervalFor(w.home, 'demo-a'), 'nothing of it is durable').toMatchObject({ state: 'measured' });
+    expect(waitOf(w, 'demo-a'), 'still waits').toMatch(/^range-unreadable/);
+    await untilRecovered(w, at(2), live('demo-a'), carveOutPass);
+    expect(intervalFor(w.home, 'demo-a'), 'the waited loss, never displaced by the carve-out').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^range-unreadable/) });
+  });
+
+  it('D-6967 R-K (M13): a read the applier refuses before writing (R82) keeps the hour waiting; the pass that applies it ends the wait', async () => {
+    for (const then of ['carve', 'read'] as const) {
+      const w = await waitingOnRange();
+      appendBucket(w, 'demo-a', BUCKET10, startLine('demo-a', iso(at(1) + 10_000)));          // so the read stages a cursor
+      const real = DelegationDurability.prototype.applyAcceptedBatch;
+      const refuse = vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch').mockImplementation(function (this: DelegationDurability, batches) {
+        return real.call(this, batches.map((b) => (b.cursor !== null && b.cursor.sessionId === 'demo-a'
+          ? { ...b, cursor: { ...b.cursor, anchor: { start: b.cursor.cursor + 1, sha256: 'a'.repeat(64) } } } : b)));
+      });
+      quiet();
+      await passAt(w, at(2), live('demo-a'));
+      expect((await w.watcher.delegationApplier())!.failure(), 'a pre-write refusal: the applier is not failed').toBeNull();
+      expect(waitOf(w, 'demo-a'), `${then}: refused, still waits`).toMatch(/^range-unreadable/);
+      refuse.mockRestore();
+      if (then === 'read') {
+        await passAt(w, at(3), live('demo-a'));
+        expect(waitOf(w, 'demo-a'), 'applied: the wait ended').toBeUndefined();
+      }
+      await carveOutPass(w, at(4), live('demo-a'));
+      expect(intervalFor(w.home, 'demo-a')!.detail, then).toMatch(then === 'carve' ? /^range-unreadable/ : /^capability-absent/);
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('D-6967 R-L (M12b): an hour D-6471 owes for P whose next live read of P waits stays owed; a carve-out never discharges it; the following read does', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), live('demo-a'));
+    await passAt(w, at(1), { 'demo-a': unreadable });                                          // H owed for P (D-6471)
+    expect(await owed(w, 'demo-a'), 'owed').toBe(true);
+    w.faults.listing.set('demo-a', 'throw');
+    await passAt(w, at(2), live('demo-a'));                                                    // the live read of P fails: it waits
+    expect(waitOf(w, 'demo-a'), 'waits').toMatch(/^directory-unreadable/);
+    expect(await owed(w, 'demo-a'), 'a waiting read discharges nothing').toBe(true);
+    w.faults.listing.clear();
+    await carveOutPass(w, at(3), live('demo-a'));
+    expect(intervalFor(w.home, 'demo-a'), 'the waited loss').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^directory-unreadable/) });
+    expect(await owed(w, 'demo-a'), 'a carve-out never discharges').toBe(true);
+    await passAt(w, at(4), live('demo-a'));
+    expect(await owed(w, 'demo-a'), 'the read discharges it').toBe(false);
+    expect(waitOf(w, 'demo-a')).toBeUndefined();
+    expect(intervalFor(w.home, 'demo-a', HOUR10, DELEGATION_UNMEASURED_INCARNATION), 'no stand-in row').toBeUndefined();
+  });
+
+  it('D-6967 R-M (M2): the reader\'s `bucket-vanished-unread` (a listed bucket gone before it was read) never waits: it lands in that pass', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), live('demo-a'));                                                    // an empty hour, measured: the carrier
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a'));
+    const realRange = w.io.readFileFromBytesMeasured;
+    w.io.readFileFromBytesMeasured = async (p, o, m, t, sig) => {
+      if (p.includes('/spool/demo-a/')) rmSync(p, { force: true });                           // listed, then gone before the read
+      return realRange(p, o, m, t, sig);
+    };
+    await passAt(w, at(1), live('demo-a'));
+    expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^bucket-vanished-unread/) });
+  });
+
+  it('D-6967 R-N (M11): `capability-unmeasured` never waits: it lands in that pass', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await passAt(w, at(0), live('demo-a'));
+    w.fleet.ccdVerbs = null;
+    await passAt(w, at(1), live('demo-a'));
+    expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^capability-unmeasured/) });
+  });
+
+  it('D-6967 R-P (M19, §3.4 (5)): a waiting hour that a cut pass\'s late flush closes, read whole after its close, ends its wait with no gap', async () => {
+    const pair = live('demo-a', 'demo-z');
+    const w = world();
+    makeOwner(w, 'demo-a');
+    makeOwner(w, 'demo-z');
+    await passAt(w, at(0), pair);                                                              // (demo-a, P, H) measured: the carrier
+    let openFlush!: () => void;
+    const flushGate = new Promise<void>((resolve) => { openFlush = resolve; });
+    let nApplied!: () => void;
+    const nDone = new Promise<void>((resolve) => { nApplied = resolve; });
+    const realApply = DelegationDurability.prototype.applyAcceptedBatch;
+    let gated = true;
+    vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch').mockImplementation(async function (this: DelegationDurability, batches) {
+      if (!gated) return realApply.call(this, batches);
+      gated = false;
+      await flushGate;
+      try { return await realApply.call(this, batches); } finally { nApplied(); }
+    });
+    // pass N (after the close) reads demo-a's hour 10 whole, staging its close, and is cut on demo-z's held listing; its application is held
+    let releaseZ!: () => void;
+    w.faults.hold.set('demo-z', new Promise<void>((resolve) => { releaseZ = resolve; }));
+    await cutWhile(w, CLOSED, { demo: [] }, [sessionOf('demo-a'), sessionOf('demo-z')], {
+      reached: () => w.calls.listings.filter((o) => o === 'demo-z').length >= 2,
+      release: () => { w.faults.hold.delete('demo-z'); releaseZ(); },
+    });
+    // pass N+1: demo-a's listing fails, and the row on file is still recorded before the close: hour 10 waits
+    w.faults.listing.set('demo-a', 'throw');
+    await passAt(w, CLOSED + STEP, pair);
+    expect(waitOf(w, 'demo-a'), 'waits').toMatch(/^directory-unreadable/);
+    w.faults.listing.clear();
+    openFlush();                                                                               // then N's flush lands: hour 10 is read whole after its close
+    await nDone;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(Date.parse(intervalFor(w.home, 'demo-a')!.recordedAt), 'closed by N\'s late flush').toBeGreaterThanOrEqual(H + DELEGATION_HOUR_MS + DELEGATION_HOUR_CLOSE_MARGIN_MS);
+    expect(waitOf(w, 'demo-a'), 'a late flush ends nothing by itself').toMatch(/^directory-unreadable/);
+    await passAt(w, CLOSED + 2 * STEP, pair);
+    expect(waitOf(w, 'demo-a'), 'the next completed, durable pass ends the wait').toBeUndefined();
+    for (const t of [EXPIRED, EXPIRED + STEP]) await passAt(w, t, pair);
+    expect(intervalFor(w.home, 'demo-a'), 'no gap: it was read whole').toMatchObject({ state: 'measured' });
+  });
+
+  it('D-6967 R-O (M14): a wait a read ended leaves no stale word: a later carve-out lands its own word', async () => {
+    const w = await waitingOnRange();
+    await passAt(w, at(2), live('demo-a'));                                                    // the read ends the wait
+    expect(waitOf(w, 'demo-a')).toBeUndefined();
+    await carveOutPass(w, at(3), live('demo-a'));
+    expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^capability-absent/) });
   });
 });
