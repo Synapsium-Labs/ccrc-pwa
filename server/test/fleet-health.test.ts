@@ -489,18 +489,25 @@ describe('/api/fleet/health: the delegation observation health (wave 3, Task 13)
     });
   });
 
-  // Delegation broker wave 4 (PR2, licensed by the coordinator's ruling): the PWA reads the `delegation` FRAME into a store
-  // slot of that name, so `.delegation` is allowed in wave 4 PR2's frame files only (`W4_PWA_FILES`, read from the scope
-  // census in `delegation-wave3.integration.test.ts`, its one definition). The health member's type stays named nowhere.
-  it('adds no PWA state for the health member: its type is named nowhere in pwa/src, and `.delegation` only in wave 4\'s frame files', () => {
+  // Delegation broker wave 4 (PR2; D-7010, licensed by the coordinator for ask 142): the PWA reads the `delegation` FRAME into
+  // a store slot of that name, so `.delegation` is allowed in wave 4 PR2's frame files only. `W4_PWA_FILES` is a local of the
+  // scope census (`delegation-wave3.integration.test.ts`, PR1's), not exported, so it is mirrored here literally, and the
+  // mirror is checked against the census's own text so the two cannot drift. The health member's type stays named nowhere.
+  const W4_PWA_FILES = [
+    'pwa/src/fleet/delegationWords.ts',
+    'pwa/src/stores/fleet.ts', 'pwa/src/fleet/nestFleet.ts', 'pwa/src/fleet/fleetTree.ts', 'pwa/src/fleet/rollup.ts',
+    'pwa/src/fleet/ProjectCard.tsx', 'pwa/src/fleet/FleetCards.tsx', 'pwa/src/fleet/sessionFacts.ts',
+    'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/fleet/SessionLine.tsx', 'pwa/src/screens/SessionScreen.tsx',
+  ];
+  it('wave 3 Task 13, narrowed in wave 4: the health member adds no PWA state (its type is named nowhere in pwa/src), and `.delegation` (the frame\'s store slot) appears only in wave 4\'s frame files', () => {
     const fh: FleetHealth = { mode: 'local', connected: true, downSince: null };
     expect(fh.delegation).toBeUndefined();
     const repo = path.resolve(__dirname, '../..');
     const census = readFileSync(path.join(__dirname, 'delegation-wave3.integration.test.ts'), 'utf8');
     const block = /const W4_PWA_FILES = \[([\s\S]*?)\] as const;/.exec(census);
     expect(block, 'the scope census still declares W4_PWA_FILES').not.toBeNull();
-    const allowed = [...block![1]!.matchAll(/'([^']+)'/g)].map((m) => m[1]!);
-    expect(allowed.length).toBe(11);
+    expect([...block![1]!.matchAll(/'([^']+)'/g)].map((m) => m[1]!), 'the mirror equals the census').toEqual(W4_PWA_FILES);
+    const allowed: string[] = [...W4_PWA_FILES];
     const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
       const p = path.join(dir, e.name);
       return e.isDirectory() ? walk(p) : /\.(ts|tsx|svelte|js)$/.test(e.name) ? [path.relative(repo, p).split(path.sep).join('/')] : [];

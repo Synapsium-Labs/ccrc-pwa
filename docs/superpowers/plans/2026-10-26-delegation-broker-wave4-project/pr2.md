@@ -30,15 +30,22 @@ second definition line as a collision.
   JSON, `pwa/test/characterise.ts`) and pins the first 16 hex digits of each output's SHA-256 as an inline snapshot, captured on
   `main`'s code before any source edit. A key-order change to one `nestFleet` row reds all three files. The null-argument twins
   (W4-U11, U19, U23) replay the recorded inputs and compare the full JSON string, not the fingerprint.
-- D-7010, `the-health-row-admits-the-frame-slot` (PR2, found by CI's `server 1/12` at d3a88e8eb; licensed by the
-  coordinator's ruling, through the worker's structured ask). Wave 3's row in `server/test/fleet-health.test.ts` ("adds no PWA
-  state and no fleet frame") grepped `pwa/src` for `/DelegationObservationHealth|\.delegation\b/`. It was meant to keep the
-  `/api/fleet/health` member out of the PWA, but it cannot tell that member from the frame's store slot `FleetState.delegation`
-  (Task 2.1), which PR2 reads at four sites in three files. The plan lists no change to it, and PR2 may not touch `server/` on
-  its own. The row now has W4-SC1's allow-list semantics. `DelegationObservationHealth` stays named nowhere in `pwa/src`, and
-  `.delegation` is allowed only in `W4_PWA_FILES`, which the row reads from the scope census's own text (its one definition), with a
-  CONTROL row. Three mutants each red it: dropping the allow-list clause, dropping the type ban, and adding a fake file to the
-  list.
+- D-7010, `the-wave-3-health-row-narrowed-to-w4-pwa-files` (PR2, found by CI's `server 1/12` at d3a88e8eb; licensed by the
+  coordinator for ask 142, which also names it a plan gap rather than a departure by this PR). Wave 3's row in
+  `server/test/fleet-health.test.ts` (Task 13, "adds no PWA state and no fleet frame") grepped `pwa/src` for
+  `/DelegationObservationHealth|\.delegation\b/`. It was meant to keep the `/api/fleet/health` member out of the PWA, but it cannot
+  tell that member from the frame's store slot `FleetState.delegation` (Task 2.1), which PR2 reads at four sites in three files,
+  by design. That one row changes; nothing else in `server/` does beyond the cherry-pick:
+  - `DelegationObservationHealth` stays named nowhere in `pwa/src`;
+  - `.delegation` is allowed only in `W4_PWA_FILES`;
+  - `W4_PWA_FILES` is a local of the scope census (PR1's, not exported and not edited), so the row mirrors the eleven paths
+    literally, and checks the mirror against the census's own text so the two cannot drift;
+  - a CONTROL row shows that a file outside the list naming `.delegation` is red, and so is a listed file naming the health's type;
+  - the row is retitled, keeping its wave-3 reference ("wave 3 Task 13, narrowed in wave 4"), because it no longer says "no fleet
+    frame".
+
+  Four mutants each red it: dropping the allow-list clause, dropping the type ban, adding a fake file to the allowed list, and
+  drifting the mirror from the census.
 
 ## Smaller notes (no number)
 
