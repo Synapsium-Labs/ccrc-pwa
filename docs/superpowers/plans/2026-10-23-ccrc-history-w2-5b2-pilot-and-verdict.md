@@ -836,7 +836,7 @@ W2-5b1's invariant is that `judge` is registered right after `arms`. Its `.slice
 // each retained reading's own index, so a pair learned between preflights makes the readings disagree, which step0b must
 // refuse, never masking with the newest reading. No case spawns a real model, reads the live HOME, or writes outside its
 // own mkTmp trees. The test may spell the arm words; the driver never does.
-import { describe as b2t1Describe, expect as b2t1Expect, it as b2t1It, vi as b2t1Vi } from 'vitest';
+import { beforeAll as b2t1BeforeAll, describe as b2t1Describe, expect as b2t1Expect, it as b2t1It, vi as b2t1Vi } from 'vitest';
 import * as b2t1Drv from '../../deploy/history-replay.mjs';
 import * as b2t1Gate from '../../deploy/history-gate.mjs';
 import * as b2t1Lib from '../../ccd/history/lib.mjs';
@@ -1195,6 +1195,12 @@ b2t1Describe('W2-5b2 Task 1: the step 0b checks and the pilot-failed word, pure 
 // The subcommand describe spawns the step 0b stub; it skips on darwin, as W2-5b1 Task 4's stub describes do (this task's
 // own choice; the pure describe above runs everywhere).
 b2t1Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 1: step0b --section pilot on the stub (W2-D57, W2-D58, W2-D56, W2-D78, W2-D24; Q11, Q23, Q25, Q26, Q31)', () => {
+  // W2-5b1 Task 4's SIGINT cases call main's stop handler directly (onStopSignal), which arms an unref'd STOP_GRACE_MS (5 s)
+  // timer that SIGKILLs every group the driver's live-child registry holds when it fires. The file runs those cases a few
+  // seconds before this describe, so the timer would fire here and kill a stub run at random (measured: a run killed at
+  // 12 ms, in the same case of each of three whole-file runs). Waiting out the grace once, before the first case, leaves no stale timer.
+  b2t1BeforeAll(async () => { await pause(5_500); }, 20_000);
+
   b2t1It('every check passes: the box run, then seven treatment-arm runs through the card on the first usage question, each batch behind its preflight; the result written and its sha printed; exit 0', async () => {
     const home = b2t1Home();
     const fx = b2t1Pilot(home);
@@ -2130,6 +2136,8 @@ Expected (predicted, not measured): green.
 - The second command is K28's pin on W2-5b1's two callers, by the titles W2-5b1's fix round gave them (each alternative measured to match at 0de4cc990): every case of `W2-5b1 Task 4: fix wave, the pair index across arm batches` (about :14103; the arms and judge `D-6481` pairs, `C03`, `C05` to `C15`, the `N2` readers, the F3 pair, about :15642 and :15667, and the all-excluded SIGINT pair, about :15710 and :15721), `W2-5b1 Task 4: C04 consumer, …` (about :14036) and its CONTROL (about :14052), the two `W2-5b1 Task 4: F2 consumer, …` cases (about :14061 and :14082: a failed refresh, and nine distinct readings refused at the count cap, both refusals before any build), and `W2-5b1 Task 4: correction Phase A, bounded snapshot helper contract` (about :15798), all passing unchanged and none edited. On darwin the fix-wave describe, the C04 CONTROL and both F2 cases are skipped (`skipIf(darwin)`), and the C04 consumer and Phase A run, so the filter still selects. Each `masking-snapshots-disagree arms` and `… judge` case still refuses with that detail; C13 still counts 0, 0, 1 and 4 comparisons; C15's identities and stacks hold. A red here is a byte-for-byte break of the factoring: fix the factoring, never a W2-5b1 case.
 
 Record the measured pass count in the commit's task note. If a fixture assumption fails (for example, the stub's key or the `w5b4Pilot` options), fix the fixture, never the guard, and record the measured value over the prediction in a `docs(plan): … (W2-5b2 Task 1)` commit.
+
+Measured at W2-5b1's merged base (`fa25c9ee6` plus the plan commits), recorded over the predictions above (Task 1): Step 0 and Step 1 as predicted (every count `1`, `6`, `2`, `2`, `0`, `W2-5b1 on this base`, every driver name `0`, every fixture name `1`; W2-6 merged, its region interior). Step 4: 37 failed (2 + 12 + 23), 22 passed. Step 7: the first command 61 passed (1198 skipped), the second 171 passed (1088 skipped). One fixture correction, in the stub describe: a `beforeAll` that waits 5.5 s once (`b2t1BeforeAll`, the import in the group above). Without it three whole-file runs each lost one stub run to `SIGKILL` at about 12 ms, in the 16-run skill case, while the same case passed alone: W2-5b1 Task 4's SIGINT cases call `onStopSignal` directly, and its unref'd `STOP_GRACE_MS` timer (5 s) fires a few seconds later, in this describe, killing the live children the driver then holds. The whole file is 1259 passed with it. `typecheck-tests` cannot start in a worktree with no `pwa/node_modules` (`Cannot find module 'typescript'`); the server leg it runs, `tsc -p test/tsconfig.tests.json --noEmit`, reports nothing in `history-replay` (only `agent/src/server.ts`, whose `ws` is not installed here). Step 8: all thirty-three mutants red as predicted; M22 measured 3 failed (the predicted two, plus `driverWordClass answers each word's class`).
 
 - [ ] **Step 8: Measure every guard red, then green.** From the repository root. Each block applies one exact replacement, which must match exactly once, runs one filter and shows it red, then restores the file with `cp`. The python body is a quoted heredoc. The "Expected RED" lines are predictions: measure each one, and record any corrected prediction in a separate `docs(plan): … (W2-5b2 Task 1)` commit touching only this plan. Run the preamble once, its `cp` of the original included, then each mutant as its own tool call: repeat the preamble's definitions without that `cp`, apply the one mutant, run its one filter, and end with `cmp` of the file against the copy, which must print nothing. After a call that timed out or was cut off, restore with `cp` and `cmp` before anything else. The closing `cmp` and `rm` run in a last call of their own.
 

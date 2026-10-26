@@ -161,12 +161,13 @@ describe('history-replay W2-4 Task 1: the driver words (W2-D59, W2-D12; D-5774)'
   const PLAN_CHOSEN = ['args-invalid', 'in-pane', 'roster-invalid', 'account-refused', 'input-invalid', 'code-unmeasured', 'version-unmeasured', 'tree-unmeasured', 'wrapper-unmeasured'];
   const FIX_ROUND_1 = ['run-live', 'out-in-use', 'interrupted'];   // D-5984, D-5985
   const W2_5A = ['store-unreadable'];   // W2-5a Task 1: a store this node cannot open or read (W2-D59, its owner PR's word)
+  const W2_5B2 = ['pilot-failed'];   // W2-5b2 Task 1: a pilot check that did not pass, refused after its result is written (W2-D57, Q10)
 
-  it('DRIVER_REASONS is frozen, duplicate-free, and exactly W2-D59\'s sixteen words in order, then W2-4\'s nine, then fix round 1\'s three, then W2-5a\'s', () => {
+  it('DRIVER_REASONS is frozen, duplicate-free, and exactly W2-D59\'s sixteen words in order, then W2-4\'s nine, then fix round 1\'s three, then W2-5a\'s, then W2-5b2\'s', () => {
     expect(W2_D59).toHaveLength(16);
     expect(Object.isFrozen(replay.DRIVER_REASONS)).toBe(true);
     expect(new Set(replay.DRIVER_REASONS).size, 'a word is listed twice').toBe(replay.DRIVER_REASONS.length);
-    expect([...replay.DRIVER_REASONS]).toEqual([...W2_D59, ...PLAN_CHOSEN, ...FIX_ROUND_1, ...W2_5A]);
+    expect([...replay.DRIVER_REASONS]).toEqual([...W2_D59, ...PLAN_CHOSEN, ...FIX_ROUND_1, ...W2_5A, ...W2_5B2]);
   });
 
   it('DRIVER_REASONS is disjoint from lib REASONS: no driver word is a CLI word (C-J)', () => {
@@ -4841,9 +4842,9 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     expect(t9Fs.readdirSync(t9Path.join(out, 'probe')).sort(), 'the streams live under out/probe').toEqual([
       'spelling-1.jsonl', 'spelling-1.run.json', 'spelling-2.jsonl', 'spelling-2.run.json', 'spelling-3.jsonl', 'spelling-3.run.json',
     ]);
-    // The driver's whole subcommand set, in registration order: W2-4's two, W2-5a Task 7's six, then W2-5b1's, in task
-    // order (Task 1's grammar cases use an unregistered name).
-    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify', 'marker', 'arms', 'judge']);
+    // The driver's whole subcommand set, in registration order: W2-4's two, W2-5a Task 7's six, then W2-5b1's and
+    // W2-5b2's, in task order (Task 1's grammar cases use an unregistered name).
+    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify', 'marker', 'arms', 'judge', 'step0b']);
   });
 
   // D-5983: the sha256 line is on stderr (as open and freeze print it), exactly one line, and stdout is empty.
@@ -15626,7 +15627,7 @@ describe('W2-5b1 Task 5: the judge subcommand', () => {
       expect(W5B5.DRIVER_REASONS, w).not.toContain(w);
       expect(w5b5Gate.GATE_REASONS as readonly string[], w).not.toContain(w);
     }
-    expect([...W5B5.HANDLERS.keys()].slice(-2), 'judge is registered right after arms').toEqual(['arms', 'judge']);
+    expect([...W5B5.HANDLERS.keys()].indexOf('judge'), 'judge is registered right after arms').toBe([...W5B5.HANDLERS.keys()].indexOf('arms') + 1);
   });
 });
 
@@ -18447,4 +18448,676 @@ describe('W2-5b1 Task 4: correction Phase A, bounded snapshot helper contract', 
     expect(refusal).toBeInstanceOf(h.Refusal); expect(refusal).toMatchObject({ word: 'input-invalid', detail: 'masking-snapshots-material-cap' }); expect((refusal as Error).message).toBe('input-invalid: masking-snapshots-material-cap'); unchanged();
   });
 
+});
+
+// ── W2-5b2 Task 1: step 0b, `step0b --section pilot` (W2-D57, W2-D58; Q10, Q11, Q23, Q25, Q26, Q31; R1) ─────────────
+// Appended at the end of the file, after W2-5b1's last describe; never inside W2-6's region, which sits before W2-5b1's
+// first appended block (W2-6's U4; U15). The pure describe builds its facts with readStreamJson. The subcommand describe
+// runs step0b in-process on W2-5b1 Task 4's fixture node (w5b4Home: up-a, a fresh limits row, a tagged stamp, a
+// createStore store) with its launcher replaced by the step 0b stub below, the pilot record, frozen list and headless-on
+// from w5b4Pilot, and W2-5b1 Task 2's question re-check and payload injected (Task 2 pins its own). The K26/K28 cases
+// learn a pair into that fixture store between card builds and inject a payload reader whose card line is masked through
+// each retained reading's own index, so a pair learned between preflights makes the readings disagree, which step0b must
+// refuse, never masking with the newest reading. No case spawns a real model, reads the live HOME, or writes outside its
+// own mkTmp trees. The test may spell the arm words; the driver never does.
+import { beforeAll as b2t1BeforeAll, describe as b2t1Describe, expect as b2t1Expect, it as b2t1It, vi as b2t1Vi } from 'vitest';
+import * as b2t1Drv from '../../deploy/history-replay.mjs';
+import * as b2t1Gate from '../../deploy/history-gate.mjs';
+import * as b2t1Lib from '../../ccd/history/lib.mjs';
+import { closeWriter as b2t1CloseWriter, openWriter as b2t1OpenWriter } from '../../ccd/history/store.mjs';
+
+type B2t1R = Record<string, any>;
+type B2t1Result = { code: unknown; stdout: string; stderr: string; refusal: { word: string; detail: string } | null };
+const D21 = b2t1Drv as unknown as B2t1R;
+/** The card line the injected payload answers: one line, as lib's cardLine is (W2-5b1 Task 2 pins the real one). */
+const B2T1_CARD = 'fixture card line for step 0b';
+/** The stub's per-run controls live under $HOME/<B2T1_DIR>, keyed by b2t1Key. */
+const B2T1_DIR = 'stub-0b';
+/** K26: a value no fixture text holds, assembled at runtime so it can be learned as a redaction pair. */
+const B2T1_LEARNED = ['zq', 'step0b', 'k26', 'widened01'].join('');
+/** K26, K28: the card line the index-sensitive payload reader masks: one line, holding B2T1_LEARNED. */
+const B2T1_LEARNED_CARD = `${B2T1_CARD}: I tried ${B2T1_LEARNED} first.`;
+
+/** W2-4's recording stub, reshaped for step 0b: the same log line (so stubLog reads it). A print-mode run is keyed by the
+ *  sha256 of its settings mode (`--restricted` in its argv, else fallback), a newline and its stdin, and prints
+ *  `<home>/stub-0b/<key>.jsonl`, else STUB_STREAM; with `<key>.rm` present it removes the path that file names, and with
+ *  `<key>.persist` present it writes what --no-session-persistence forbids (W2-4 Task 9's persisting stub, keyed by the
+ *  stream's init session_id). `--version` prints STUB_STREAM. */
+const B2T1_STUB = `#!/usr/bin/env node
+(async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const crypto = await import('node:crypto');
+  const start = Date.now();
+  const home = path.resolve(path.dirname(process.argv[1]), '..', '..');
+  const at = (f) => path.join(home, f);
+  const opt = (f) => { try { return fs.readFileSync(at(f), 'utf8'); } catch { return null; } };
+  const argv = process.argv.slice(2);
+  const print = argv.includes('-p');
+  const stdin = print ? fs.readFileSync(0, 'utf8') : '';
+  const mode = argv.includes('--restricted') ? 'restricted' : 'fallback';
+  const key = crypto.createHash('sha256').update(mode + '\\n' + stdin).digest('hex');
+  const dir = ${JSON.stringify(B2T1_DIR)};
+  const env = {};
+  for (const [n, v] of Object.entries(process.env)) if (n !== 'CLAUDE_CODE_OAUTH_TOKEN') env[n] = v;
+  fs.appendFileSync(at(${JSON.stringify(T5_STUB_LOG)}), JSON.stringify({ argv, envKeys: Object.keys(process.env).sort(), env,
+    cwd: process.cwd(), cwdMode: fs.statSync(process.cwd()).mode & 0o777, cwdEntries: fs.readdirSync(process.cwd()), stdin,
+    start, end: Date.now() }) + '\\n');
+  const text = (print ? opt(dir + '/' + key + '.jsonl') : null) ?? opt(${JSON.stringify(STUB_STREAM)}) ?? '';
+  if (print) {
+    const rm = opt(dir + '/' + key + '.rm');
+    if (rm !== null) fs.rmSync(rm, { force: true });
+    if (opt(dir + '/' + key + '.persist') !== null) {
+      const sid = JSON.parse(text.split('\\n')[0]).session_id;
+      const p = path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', process.cwd().replace(/[^A-Za-z0-9]/g, '-'));
+      fs.mkdirSync(p, { recursive: true });
+      fs.writeFileSync(path.join(p, sid + '.jsonl'), text);
+    }
+  }
+  process.stdout.write(text);
+})();
+`;
+
+/** A stream-json a step 0b run prints: the init event (unless `init` is false; a field given as null is left out), one
+ *  tool pair per call (its events carrying `parent` as parent_tool_use_id; a denied call's tool_result an error, and the
+ *  result event's permission_denials naming it), `main` more main-thread text messages and `sub` subagent ones, an
+ *  optional event carrying an `error` field, and a result event (unless `result` is false) with `subtype`. */
+function b2t1Stream(o: { tools?: string[] | null; mcp?: unknown[] | null; plugins?: unknown[] | null; skills?: unknown[] | null;
+  init?: boolean; calls?: Array<{ command?: string; name?: string; denied?: boolean; parent?: string | null }>;
+  main?: number; sub?: number; subtype?: string; result?: boolean; error?: string; session?: string }): string {
+  const ev: B2t1R[] = [];
+  if (o.init !== false) {
+    const init: B2t1R = { type: 'system', subtype: 'init', session_id: o.session ?? 'fixture-0b-session', model: W5B4_ARM_MODEL, slash_commands: [] };
+    const put = (k: string, v: unknown[] | null | undefined, dflt: unknown[]): void => { if (v !== null) init[k] = v ?? dflt; };
+    put('tools', o.tools, ['Bash', 'Agent']);
+    put('mcp_servers', o.mcp, []);
+    put('plugins', o.plugins, []);
+    put('skills', o.skills, ['ccrc-history']);
+    ev.push(init);
+  }
+  const usage = { input_tokens: 1, output_tokens: 1 };
+  const denials: B2t1R[] = [];
+  (o.calls ?? []).forEach((c, i) => {
+    const id = `toolu_b2t1_${i}`;
+    const name = c.name ?? 'Bash';
+    const input = name === 'Bash' ? { command: c.command ?? '' } : { prompt: 'fixture subagent task' };
+    ev.push({ type: 'assistant', parent_tool_use_id: c.parent ?? null, message: { id: `msg-b2t1-${i}`, usage, content: [{ type: 'tool_use', id, name, input }] } });
+    ev.push({ type: 'user', parent_tool_use_id: c.parent ?? null, message: { content: [{ type: 'tool_result', tool_use_id: id,
+      content: c.denied === true ? 'permission denied' : 'ok', is_error: c.denied === true }] } });
+    if (c.denied === true) denials.push({ tool_name: name, tool_use_id: id, tool_input: input });
+  });
+  for (let i = 0; i < (o.main ?? 0); i += 1) ev.push({ type: 'assistant', parent_tool_use_id: null, message: { id: `msg-b2t1-main-${i}`, usage, content: [{ type: 'text', text: 'DONE' }] } });
+  for (let i = 0; i < (o.sub ?? 0); i += 1) ev.push({ type: 'assistant', parent_tool_use_id: 'toolu_b2t1_agent', message: { id: `msg-b2t1-sub-${i}`, usage, content: [{ type: 'text', text: 'sub' }] } });
+  if (o.error !== undefined) ev.push({ type: 'assistant', error: o.error, message: { id: 'msg-b2t1-error', content: [{ type: 'text', text: 'x' }] } });
+  if (o.result !== false) {
+    const subtype = o.subtype ?? 'success';
+    ev.push({ type: 'result', subtype, is_error: subtype !== 'success', num_turns: (o.main ?? 0) + (o.calls ?? []).length, result: 'DONE',
+      permission_denials: denials, usage: { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 30, output_tokens: 5 } });
+  }
+  return ev.map((e) => JSON.stringify(e)).join('\n') + '\n';
+}
+/** The turn-bound run that holds: 12 main-thread turns, 2 subagent messages beside them (R1), the max-turns stop. */
+const b2t1Turn = (): string => b2t1Stream({ main: 12, sub: 2, subtype: b2t1Drv.MAX_TURNS_STOP_SUBTYPE as string, session: 'fixture-0b-turn-bound' });
+/** The stream each probe answers with when it passes (W2-D58), its init session named by the probe so a persistence
+ *  finding is that run's alone: a taught spelling's call made and not denied, a denial probe's call denied, the Agent
+ *  call with its subagent's one Bash call. `o` overrides the stream's other options. */
+function b2t1PassStream(p: B2t1R, o: B2t1R = {}): string {
+  const session = `fixture-0b-${p.probe as string}`;
+  if (p.expect === 'admitted') return b2t1Stream({ session, ...o, calls: [{ command: p.command }] });
+  if (p.expect === 'denied') return b2t1Stream({ session, ...o, calls: [{ command: p.command, denied: true }] });
+  return b2t1Stream({ session, ...o, calls: [{ name: 'Agent' }, { command: p.command, parent: 'toolu_b2t1_0' }] });
+}
+const b2t1Key = (mode: string, stdin: string): string => sha256Hex(`${mode}\n${stdin}`) as string;
+function b2t1Put(home: string, mode: string, stdin: string, ext: string, text: string): void {
+  mkdirSync(join(home, B2T1_DIR), { recursive: true });
+  writeFileSync(join(home, B2T1_DIR, `${b2t1Key(mode, stdin)}${ext}`), text);
+}
+const b2t1Probes = (home: string): B2t1R[] => D21.step0bProbesOf(home, D21.STEP0B_SYNTHETIC_TRANSCRIPT) as B2t1R[];
+const b2t1Stdin = (p: B2t1R): string => D21.step0bStdinOf(B2T1_CARD, p) as string;
+/** Plant every step 0b run's stream for `mode`: the passing ones, each replaced by `over[<probe or turn-bound>]`. The arm
+ *  runs are keyed by their stdin over `card`: B2T1_CARD, or the card line a K26/K28 case's payload reader answers. */
+function b2t1PlantAll(home: string, mode: string, over: Record<string, string> = {}, card: string = B2T1_CARD): void {
+  b2t1Put(home, mode, D21.TURN_PROBE_PROMPT as string, '.jsonl', over['turn-bound'] ?? b2t1Turn());
+  for (const p of b2t1Probes(home)) b2t1Put(home, mode, D21.step0bStdinOf(card, p) as string, '.jsonl', over[p.probe as string] ?? b2t1PassStream(p));
+}
+/** A W2-5b1 Task 4 fixture node whose launcher is the step 0b stub. */
+function b2t1Home(store: string | null = W5B4_STORE_A): string {
+  const home = w5b4Home(store);
+  writeFileSync(join(home, '.local', 'bin', 'up-a'), B2T1_STUB, { mode: 0o700 });
+  return home;
+}
+/** W2-5b1 Task 4's pilot section (two usage questions on its pilot family, part 1, the frozen list, headless-on), the
+ *  first question in qid order computed here, and step0b's argv. */
+function b2t1Pilot(home: string, o: B2t1R = {}): B2t1R {
+  const fx = w5b4Pilot(home, { n: 2, ...o }) as B2t1R;
+  const first = [...(fx.entries as B2t1R[])].sort((a, b) => (a.qid < b.qid ? -1 : a.qid > b.qid ? 1 : 0))[0]!;
+  return { ...fx, q: first, argv: (extra: string[] = []): string[] => ['step0b', '--section', 'pilot', '--out', fx.out as string,
+    ...w5b4Inp('record', fx.d), ...w5b4Inp('frozen', fx.fz), ...extra] };
+}
+/** W2-5b1 Task 2's recheckBatch and armPayloads, stood in with their shapes: every question passes (W5B4_FAKE's), and the
+ *  payload carries B2T1_CARD as its card line. */
+const B2T1_FAKE: B2t1R = {
+  recheck: W5B4_FAKE.recheck,
+  payloads: (_rs: unknown, _id: number, _question: string, cut: B2t1R): B2t1R => ({ state: 'payloads', plain: `fixture payload ${cut.qid as string}\n`,
+    carded: `${B2T1_CARD}\n\nfixture payload ${cut.qid as string}\n`, card: { state: 'card', line: B2T1_CARD } }),
+  now: W5B4_FAKE.now,
+};
+/** K26: the store learns `value` as a redaction pair, as the sweep's recordPairs does between preflights (W2-5b1's own
+ *  D-6481 case writes it the same way), through the fixture HOME's store writer. */
+function b2t1Learn(home: string, value: string): void {
+  const db = b2t1OpenWriter(b2t1Lib.historyPaths(home).dbFile);
+  try {
+    db.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, 1)').run(value.length, Buffer.from(b2t1Lib.sha256Hex(value), 'hex'));
+  } finally {
+    b2t1CloseWriter(db);
+  }
+}
+/** K26, K28: W2-5b1 Task 2's armPayloads stood in, index-sensitive. Its card line is B2T1_LEARNED_CARD masked through the
+ *  pair index of the reading it is built under; each build records in `seen` whether that masked B2T1_LEARNED (true), and
+ *  right after build `learnAt` (1-based; null never) the store learns B2T1_LEARNED, as the sweep's recordPairs would. */
+function b2t1IndexPayloads(home: string, learnAt: number | null, seen: boolean[]): (rs: B2t1R, id: number, question: string, cut: B2t1R) => B2t1R {
+  return (rs, id, question, cut) => {
+    const line = b2t1Lib.redactField(B2T1_LEARNED_CARD, rs.idx) as string;
+    seen.push(!line.includes(B2T1_LEARNED));
+    if (seen.length === learnAt) b2t1Learn(home, B2T1_LEARNED);
+    return { ...(B2T1_FAKE.payloads(rs, id, question, cut) as B2t1R), card: { state: 'card', line } };
+  };
+}
+/** `step0b` in-process, as main runs it (parseArgs, then the handler), with B2T1_FAKE's deps under `deps`: stdout and
+ *  stderr captured, a refusal answered as {word, detail}; any other throw is the case's failure (D-6309's rule). */
+async function b2t1Run(home: string, argv: string[], deps: B2t1R = {}): Promise<B2t1Result> {
+  const err: string[] = [];
+  const out: string[] = [];
+  const e1 = b2t1Vi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write);
+  const o1 = b2t1Vi.spyOn(process.stdout, 'write').mockImplementation(((s: string | Uint8Array) => { out.push(String(s)); return true; }) as typeof process.stdout.write);
+  try {
+    const { flags } = D21.parseArgs(argv) as { flags: B2t1R };
+    const code = await D21.step0bCommand(flags, { HOME: home, TMUX_PANE: undefined, LANG: W5B4_LANG }, { ...B2T1_FAKE, ...deps });
+    return { code, stdout: out.join(''), stderr: err.join(''), refusal: null };
+  } catch (e) {
+    if (e instanceof b2t1Drv.DriverRefusal) return { code: null, stdout: out.join(''), stderr: err.join(''), refusal: { word: (e as B2t1R).word, detail: (e as B2t1R).detail } };
+    throw e;
+  } finally {
+    e1.mockRestore();
+    o1.mockRestore();
+  }
+}
+const b2t1PrintRuns = (home: string): B2t1R[] => ((stubLog(home) ?? []) as unknown as B2t1R[]).filter((e) => e.argv.includes('-p'));
+const b2t1Versions = (home: string): number => ((stubLog(home) ?? []) as unknown as B2t1R[]).filter((e) => e.argv[0] === '--version').length;
+const b2t1Result = (out: string, mode = 'restricted'): B2t1R => w5b4Json(join(out, 'pilot', 'step0b', `${mode}.json`));
+
+b2t1Describe('W2-5b2 Task 1: the step 0b checks and the pilot-failed word, pure (W2-D57, W2-D58, W2-D59; Q10, Q11, Q26; R1)', () => {
+  b2t1It('pilot-failed is the last driver word, a refusal, and no CLI or gate word (W2-D59; W2-D57: a failure halts for a ruling)', () => {
+    const reasons = D21.DRIVER_REASONS as string[];
+    const refusals = D21.DRIVER_REFUSALS as string[];
+    b2t1Expect(reasons[reasons.length - 1]).toBe('pilot-failed');
+    b2t1Expect(refusals[refusals.length - 1]).toBe('pilot-failed');
+    b2t1Expect(D21.driverWordClass('pilot-failed')).toBe('refusal');
+    b2t1Expect(Object.hasOwn(b2t1Lib.REASONS, 'pilot-failed'), 'not a CLI word').toBe(false);
+    b2t1Expect((b2t1Gate.GATE_REASONS as readonly string[]).includes('pilot-failed'), 'not a gate word').toBe(false);
+    b2t1Expect(new D21.DriverRefusal('pilot-failed', 'x').word).toBe('pilot-failed');
+  });
+
+  b2t1It('turnBoundHeld counts main-thread turns only: 12 of them beside 3 subagent messages under the max-turns stop hold, 13 do not (R1)', () => {
+    const STOP = D21.MAX_TURNS_STOP_SUBTYPE as string;
+    const f = D21.readStreamJson(b2t1Stream({ main: 12, sub: 3, subtype: STOP }));
+    b2t1Expect(f.assistantMessages, 'CONTROL: the reader still counts every message (R1: unchanged)').toBe(15);
+    b2t1Expect(D21.mainThreadTurns(f)).toBe(12);
+    b2t1Expect(D21.turnBoundHeld(f)).toEqual({ held: true, turns: 12, num_turns: 12, subtype: STOP });
+    b2t1Expect(D21.turnBoundHeld(D21.readStreamJson(b2t1Stream({ main: 13, sub: 3, subtype: STOP }))), 'CONTROL: 13 main-thread turns do not hold')
+      .toEqual({ held: false, turns: 13, num_turns: 13, subtype: STOP });
+    b2t1Expect(() => D21.mainThreadTurns({ assistantMessages: 3 }), 'facts without messages are a defect').toThrow(TypeError);
+  });
+
+  b2t1It('admissionCheckOf and denialCheckOf: pass, fail and unmeasured apart, from W2-4\'s probe finding (W2-D58, Q10)', () => {
+    const f = (o: B2t1R): B2t1R => ({ denied: false, ran: true, tool_error: false, result_seen: true, ...o });
+    const rows: Array<[B2t1R, string, string]> = [
+      [f({}), 'pass', 'fail'],
+      [f({ denied: true, tool_error: true }), 'fail', 'pass'],
+      [f({ ran: false }), 'unmeasured', 'unmeasured'],
+      [f({ result_seen: false }), 'unmeasured', 'unmeasured'],
+      [f({ result_seen: false, denied: true }), 'unmeasured', 'unmeasured'],
+      [f({ tool_error: true }), 'pass', 'fail'],
+    ];
+    for (const [finding, admitted, denied] of rows) {
+      b2t1Expect(D21.admissionCheckOf(finding), `admission ${JSON.stringify(finding)}`).toEqual({ state: admitted, ...finding });
+      b2t1Expect(D21.denialCheckOf(finding), `denial ${JSON.stringify(finding)}`).toEqual({ state: denied, ...finding });
+    }
+  });
+
+  b2t1It('initChecksOf: tools exactly the argv\'s, no MCP server, no plugin, the skill listed by name or object; a missing init or field is unmeasured, a measured fail on any run wins (W2-D57, W2-D58)', () => {
+    const want = D21.armToolsOf(D21.spawnArgv({ mode: 'arm', model: W5B4_ARM_MODEL, settingsMode: 'restricted', home: '/home/u' }));
+    b2t1Expect(want, 'CONTROL: the arm argv grants exactly Bash and Agent').toEqual(['Agent', 'Bash']);
+    const ok = { sessionId: 's', model: 'm', tools: ['Bash', 'Agent'], mcpServers: [], plugins: [], skills: ['ccrc-history'], slashCommands: [] };
+    const all = (state: string): B2t1R => ({ tools: { state }, mcp: { state }, plugins: { state }, skill: { state } });
+    b2t1Expect(D21.initChecksOf([ok, { ...ok, skills: [{ name: 'ccrc-history', path: '/x' }] }], want)).toEqual(all('pass'));
+    b2t1Expect(D21.initChecksOf([ok, null], want), 'a run with no init event').toEqual(all('unmeasured'));
+    b2t1Expect(D21.initChecksOf([], want), 'no run').toEqual(all('unmeasured'));
+    const one = (o: B2t1R): B2t1R => D21.initChecksOf([ok, { ...ok, ...o }], want);
+    b2t1Expect(one({ tools: ['Bash', 'Agent', 'Read'] }).tools).toEqual({ state: 'fail' });
+    b2t1Expect(one({ tools: ['Bash'] }).tools).toEqual({ state: 'fail' });
+    b2t1Expect(one({ tools: ['Bash', 'Bash'] }).tools, 'a repeat is not the set').toEqual({ state: 'fail' });
+    b2t1Expect(one({ tools: null }).tools).toEqual({ state: 'unmeasured' });
+    b2t1Expect(one({ mcpServers: [{ name: 'x', status: 'connected' }] }).mcp).toEqual({ state: 'fail' });
+    b2t1Expect(one({ mcpServers: null }).mcp).toEqual({ state: 'unmeasured' });
+    b2t1Expect(one({ plugins: [{ name: 'p' }] }).plugins).toEqual({ state: 'fail' });
+    b2t1Expect(one({ skills: [] }).skill).toEqual({ state: 'fail' });
+    b2t1Expect(one({ skills: ['ccrc-history-extra', { name: 'other' }] }).skill, 'a near name is not the skill').toEqual({ state: 'fail' });
+    b2t1Expect(one({ skills: null }).skill).toEqual({ state: 'unmeasured' });
+    b2t1Expect(D21.initChecksOf([null, { ...ok, skills: [] }], want).skill, 'a measured fail beats an unmeasured run').toEqual({ state: 'fail' });
+  });
+
+  b2t1It('subagentToolsOf: the names of the tool calls whose parent_tool_use_id is set, sorted and unique, labelled inferred; none is unmeasured (Q11)', () => {
+    const f = D21.readStreamJson(b2t1Stream({ calls: [{ name: 'Agent' }, { command: 'a', parent: 'toolu_b2t1_0' }, { command: 'b', parent: 'toolu_b2t1_0' }, { name: 'Read', parent: 'toolu_b2t1_0' }] }));
+    b2t1Expect(D21.subagentToolsOf(f.toolPairs)).toEqual({ state: 'measured', tools: ['Bash', 'Read'], parents: ['toolu_b2t1_0'], inferred: true });
+    b2t1Expect(D21.subagentToolsOf(D21.readStreamJson(b2t1Stream({ calls: [{ name: 'Agent' }, { command: 'c' }] })).toolPairs), 'CONTROL: main-thread calls are not the subagent\'s')
+      .toEqual({ state: 'unmeasured', why: 'no-subagent-tool-use', tools: [], parents: [], inferred: true });
+  });
+
+  b2t1It('step0bVerdictOf: passes only when every check passes; the failed and the unmeasured listed apart, in STEP0B_CHECKS order (Q10, fail-closed)', () => {
+    const checks = (o: Record<string, string> = {}): B2t1R => Object.fromEntries((D21.STEP0B_CHECKS as string[]).map((n) => [n, { state: o[n] ?? 'pass' }]));
+    b2t1Expect(D21.step0bVerdictOf(checks())).toEqual({ passed: true, failed: [], unmeasured: [] });
+    b2t1Expect(D21.step0bVerdictOf(checks({ skill: 'fail', 'turn-bound': 'unmeasured', 'deny-rg': 'fail', 'spelling-2': 'unmeasured' })))
+      .toEqual({ passed: false, failed: ['skill', 'deny-rg'], unmeasured: ['turn-bound', 'spelling-2'] });
+    b2t1Expect(D21.step0bVerdictOf(checks({ mcp: 'unmeasured' })), 'an unmeasured check alone does not pass').toEqual({ passed: false, failed: [], unmeasured: ['mcp'] });
+    const missing = checks();
+    delete missing.persistence;
+    b2t1Expect(() => D21.step0bVerdictOf(missing), 'a missing check is a defect, never a pass').toThrow(TypeError);
+    b2t1Expect(() => D21.step0bVerdictOf(checks({ tools: 'ok' })), 'a word outside STEP0B_STATES').toThrow(TypeError);
+  });
+
+  b2t1It('step0bProbesOf: the three taught commands, the chain, the substitution and the rg over the synthetic path, then the Agent call; each stdin the card line, one blank line, then the prompt (W2-D58, Q11, Q20)', () => {
+    const T = '/nonexistent/fixture/t.jsonl';
+    const taught = '~/.local/bin/ccrc history status --json';
+    const ps = D21.step0bProbesOf('/home/u', T) as B2t1R[];
+    b2t1Expect(ps.map((p) => p.probe)).toEqual([...(D21.STEP0B_PROBES as string[])]);
+    b2t1Expect(ps.map((p) => [p.expect, p.command])).toEqual([
+      ['admitted', '/home/u/.local/bin/ccrc history status --json'],
+      ['admitted', '"$HOME/.local/bin/ccrc" history status --json'],
+      ['admitted', taught],
+      ['denied', `${taught}; cat ${T}`],
+      ['denied', `${taught} "$(cat ${T})"`],
+      ['denied', `rg -n . ${T}`],
+      ['subagent', taught],
+    ]);
+    b2t1Expect(() => D21.step0bProbesOf('/home/u', 'relative/t.jsonl')).toThrow(TypeError);
+    const s = D21.step0bStdinOf('CARD', ps[3]) as string;
+    b2t1Expect(s.startsWith('CARD\n\nThis is a permission check.'), s).toBe(true);
+    b2t1Expect(s.split('\n')).toContain(`${taught}; cat ${T}`);
+    const a = D21.step0bStdinOf('CARD', ps[6]) as string;
+    b2t1Expect(a.startsWith('CARD\n\nThis is a subagent check. Use the Agent tool exactly once'), a).toBe(true);
+    b2t1Expect(a.split('\n')).toContain(taught);
+    b2t1Expect(() => D21.step0bStdinOf('two\nlines', ps[0]), 'a card is one line').toThrow(TypeError);
+    b2t1Expect(D21.STEP0B_SYNTHETIC_TRANSCRIPT).toMatch(/^\/nonexistent\//);
+  });
+
+  b2t1It('HISTORY_SKILL is the name the shipped skill declares, and STEP0B_STATES is disjoint from DRIVER_REASONS and GATE_REASONS (S2\'s C21)', () => {
+    const head = readFileSync(join(REPO, 'ccd', 'history-skill', 'SKILL.md'), 'utf8').split('\n').slice(0, 5);
+    b2t1Expect(head).toContain(`name: ${D21.HISTORY_SKILL as string}`);
+    b2t1Expect([...(D21.STEP0B_STATES as string[])]).toEqual(['pass', 'fail', 'unmeasured']);
+    b2t1Expect((D21.STEP0B_STATES as string[]).filter((w) => (D21.DRIVER_REASONS as string[]).includes(w) || (b2t1Gate.GATE_REASONS as readonly string[]).includes(w))).toEqual([]);
+  });
+
+  b2t1It('step0bFailureDetail: the failed and the unmeasured apart, the turn-bound subtype when unmeasured, and the fallback when the skill is missing under restricted (W2-D57, C16; Q26)', () => {
+    const checks = (o: B2t1R = {}): B2t1R => ({ ...Object.fromEntries((D21.STEP0B_CHECKS as string[]).map((n) => [n, { state: 'pass' }])), ...o });
+    const tb = { state: 'unmeasured', held: 'unmeasured', turns: 12, num_turns: 12, subtype: 'success' };
+    const c1 = checks({ skill: { state: 'fail' }, 'turn-bound': tb });
+    b2t1Expect(D21.step0bFailureDetail('restricted', c1, D21.step0bVerdictOf(c1))).toBe('step0b restricted: failed skill; unmeasured turn-bound; '
+      + 'turn-bound subtype "success": a spelling other than error_max_turns is a coordinator ruling (W2-D57); '
+      + 'the skill is not listed under restricted: re-run step0b with --settings-mode fallback (Q26)');
+    const c2 = checks({ skill: { state: 'fail' } });
+    b2t1Expect(D21.step0bFailureDetail('fallback', c2, D21.step0bVerdictOf(c2)), 'CONTROL: under fallback there is no further mode').toBe('step0b fallback: failed skill; unmeasured -');
+    const c3 = checks({ 'deny-chain': { state: 'fail' } });
+    b2t1Expect(D21.step0bFailureDetail('restricted', c3, D21.step0bVerdictOf(c3))).toBe('step0b restricted: failed deny-chain; unmeasured -');
+  });
+
+  b2t1It('step0bRunName and step0bRel name the section and the settings mode, so a fallback re-run never meets the restricted runs (Q26)', () => {
+    b2t1Expect(D21.step0bRunName('pilot', 'restricted', 'turn-bound')).toBe('pilot/step0b/restricted/turn-bound');
+    b2t1Expect(D21.step0bRunName('pilot', 'fallback', 'deny-rg')).toBe('pilot/step0b/fallback/deny-rg');
+    b2t1Expect(D21.step0bRel('pilot', 'restricted')).toBe('pilot/step0b/restricted.json');
+    b2t1Expect(D21.step0bRel('pilot', 'fallback')).toBe('pilot/step0b/fallback.json');
+    b2t1Expect(() => D21.step0bRunName('usage', 'restricted', 'agent'), 'a section outside STEP0B_SECTIONS').toThrow(TypeError);
+    b2t1Expect(() => D21.step0bRunName('pilot', 'open', 'agent')).toThrow(TypeError);
+    b2t1Expect(() => D21.step0bRunName('pilot', 'restricted', 'spelling-4')).toThrow(TypeError);
+    b2t1Expect(() => D21.step0bRel('pilot', 'open')).toThrow(TypeError);
+  });
+
+  b2t1It.skipIf((process.getuid?.() ?? 1) === 0)('persistenceMeasured: an unreadable projects directory is left with its errno named, never clean and never a throw; a TypeError stays a defect (W2-D57; D-6309\'s rule)', () => {
+    const configDir = join(mkTmp('ccrc-b2t1-pm-'), '.claude');
+    mkdirSync(join(configDir, 'projects'), { recursive: true });
+    b2t1Expect(D21.persistenceMeasured({ configDir, sessionId: 's', cwd: '/tmp/run-a' }), 'CONTROL: a readable empty projects dir').toEqual({ left: false, transcripts: [], project_dir: false });
+    chmodSync(join(configDir, 'projects'), 0o000);
+    try {
+      b2t1Expect(D21.persistenceMeasured({ configDir, sessionId: 's', cwd: '/tmp/run-a' })).toEqual({ left: true, transcripts: [], project_dir: null, unmeasured: 'EACCES' });
+    } finally {
+      chmodSync(join(configDir, 'projects'), 0o700);
+    }
+    b2t1Expect(() => D21.persistenceMeasured({ configDir: 'rel', sessionId: 's', cwd: '/tmp/run-a' })).toThrow(TypeError);
+  });
+
+  // K28 (D-6481 carried): one agreement function, its refusal detail spelled once and naming a site, never a value; every
+  // call agrees the readings its own preflight admitted; and no pair index is refreshed outside W2-5b1's admission. A code
+  // line is one whose trimmed text does not open a comment. Task 2 adds the fidelity call; the assertions hold either way.
+  b2t1It('K28: maskingAgreementOf is declared once, its masking-snapshots-disagree detail is spelled once with a literal site, each call has its own maskingSnapshotsOf admission, and refreshPairIndex is called only inside maskingSnapshotsOf (K26, D-6481 carried)', () => {
+    const code = readFileSync(join(W5B4_REPO, 'deploy', 'history-replay.mjs'), 'utf8').split('\n')
+      .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).map((l) => l.trim());
+    b2t1Expect(code.filter((l) => l.startsWith('async function maskingAgreementOf(')), 'declared once').toEqual(['async function maskingAgreementOf(snapshots, site, build, agree) {']);
+    b2t1Expect(code.filter((l) => l.includes('masking-snapshots-disagree')), 'the detail spelled once').toEqual(["else if (!agree(agreed, built)) refuse('input-invalid', `masking-snapshots-disagree ${site}`);"]);
+    const siteOf = (l: string): string => /maskingAgreementOf\(snapshots, '([a-z0-9]+)', /.exec(l)?.[1] ?? l;
+    const sites = code.filter((l) => l.includes('maskingAgreementOf(') && !l.startsWith('async function ')).map(siteOf);
+    b2t1Expect(sites.filter((s) => !['arms', 'judge', 'step0b', 'fidelity'].includes(s)), 'every call passes its admitted snapshots and a literal site').toEqual([]);
+    for (const s of ['arms', 'judge', 'step0b']) b2t1Expect(sites.filter((x) => x === s), `one ${s} call`).toHaveLength(1);
+    b2t1Expect(code.filter((l) => l.startsWith('const snapshots = maskingSnapshotsOf(')), 'one admission per call').toHaveLength(sites.length);
+    b2t1Expect(code.filter((l) => l.includes('refreshPairIndex(')), 'no refresh outside the admission')
+      .toEqual(['function refreshPairIndex(rs, home) {', 'function maskingSnapshotsOf(rs, home) { refreshPairIndex(rs, home); return rs.maskingSnapshots.snapshots; }']);
+    // CONTROL: the site needle reads a planted literal call, and answers a call with a computed site whole, so it is caught.
+    b2t1Expect(siteOf("return maskingAgreementOf(snapshots, 'step0b', async (idx) => {")).toBe('step0b');
+    b2t1Expect(siteOf('const x = await maskingAgreementOf(snapshots, who, build, agree);')).toBe('const x = await maskingAgreementOf(snapshots, who, build, agree);');
+  });
+});
+
+// The subcommand describe spawns the step 0b stub; it skips on darwin, as W2-5b1 Task 4's stub describes do (this task's
+// own choice; the pure describe above runs everywhere).
+b2t1Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 1: step0b --section pilot on the stub (W2-D57, W2-D58, W2-D56, W2-D78, W2-D24; Q11, Q23, Q25, Q26, Q31)', () => {
+  // W2-5b1 Task 4's SIGINT cases call main's stop handler directly (onStopSignal), which arms an unref'd STOP_GRACE_MS (5 s)
+  // timer that SIGKILLs every group the driver's live-child registry holds when it fires. The file runs those cases a few
+  // seconds before this describe, so the timer would fire here and kill a stub run at random (measured: a run killed at
+  // 12 ms, in the same case of each of three whole-file runs). Waiting out the grace once, before the first case, leaves no stale timer.
+  b2t1BeforeAll(async () => { await pause(5_500); }, 20_000);
+
+  b2t1It('every check passes: the box run, then seven treatment-arm runs through the card on the first usage question, each batch behind its preflight; the result written and its sha printed; exit 0', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    b2t1PlantAll(home, 'restricted');
+    const r = await b2t1Run(home, fx.argv());
+    b2t1Expect(r.refusal, r.stderr).toBeNull();
+    b2t1Expect(r.code).toBe(0);
+    b2t1Expect(r.stdout).toBe('');
+    const text = readFileSync(join(fx.out, 'pilot', 'step0b', 'restricted.json'), 'utf8');
+    b2t1Expect(r.stderr).toBe(`sha256 ${sha256Hex(text) as string}\n`);
+    const q = fx.q as B2t1R;
+    b2t1Expect((fx.entries as B2t1R[]).filter((e) => e.boundary_uuid !== q.boundary_uuid), 'CONTROL: the second question is another boundary').toHaveLength(1);
+    const doc = JSON.parse(text) as B2t1R;
+    b2t1Expect([doc.kind, doc.v, doc.section, doc.record_sha256, doc.store_id, doc.settings_mode, doc.record_settings_mode, doc.account, doc.model])
+      .toEqual([D21.STEP0B_KIND, 1, 'pilot', fx.d.sha, W5B4_STORE_A, 'restricted', 'restricted', 'up-a', W5B4_ARM_MODEL]);
+    b2t1Expect(doc.question, 'Q11: the first usage question in qid order').toEqual({ qid: q.qid, ccrc_id: q.ccrc_id, generation: q.generation, boundary_uuid: q.boundary_uuid });
+    b2t1Expect([doc.passed, doc.failed, doc.unmeasured]).toEqual([true, [], []]);
+    for (const n of D21.STEP0B_CHECKS as string[]) b2t1Expect(doc.checks[n].state, n).toBe('pass');
+    b2t1Expect(doc.checks['turn-bound'], 'R1 end to end: 12 main-thread turns beside 2 subagent messages hold')
+      .toEqual({ state: 'pass', held: true, turns: 12, num_turns: 12, subtype: 'error_max_turns' });
+    b2t1Expect(doc.subagent).toEqual({ state: 'measured', tools: ['Bash'], parents: ['toolu_b2t1_0'], inferred: true });
+    const names = ['turn-bound', ...(D21.STEP0B_PROBES as string[])].map((p) => `pilot/step0b/restricted/${p}`);
+    b2t1Expect(doc.runs.map((x: B2t1R) => [x.name, x.mode])).toEqual(names.map((n, i) => [n, i === 0 ? 'box' : 'arm']));
+    b2t1Expect(doc.runs.map((x: B2t1R) => x.error_fields)).toEqual(names.map(() => []));
+    b2t1Expect(doc.runs[0].main_turns).toBe(12);
+    b2t1Expect(doc.batches).toEqual([{ claude_code_version: w5b4Version(home), runs: names.slice(0, 1) }, { claude_code_version: w5b4Version(home), runs: names.slice(1) }]);
+    b2t1Expect(doc.persistence.map((x: B2t1R) => [x.name, x.left])).toEqual(names.map((n) => [n, false]));
+    b2t1Expect(doc.synthetic_transcript).toBe(D21.STEP0B_SYNTHETIC_TRANSCRIPT);
+    // the spawns: --version, the box run, --version, then the seven arm runs at concurrency 2 (W2-D56 before each batch)
+    const log = (stubLog(home) ?? []) as unknown as B2t1R[];
+    b2t1Expect(log.map((e) => (e.argv[0] === '--version' ? 'version' : 'print')).join(' ')).toBe(['version', 'print', 'version', ...Array(7).fill('print')].join(' '));
+    const prints = b2t1PrintRuns(home);
+    b2t1Expect(prints[0]!.argv).toEqual(D21.spawnArgv({ mode: 'box', model: W5B4_ARM_MODEL, settingsMode: 'restricted', home }));
+    b2t1Expect(prints[0]!.stdin).toBe(D21.TURN_PROBE_PROMPT);
+    b2t1Expect((prints[0]!.envKeys as string[]).filter((k) => k.startsWith('CCRC_RECALL_')), 'the box run carries no seam value').toEqual([]);
+    const arms = prints.slice(1);
+    for (const e of arms) {
+      b2t1Expect(e.argv).toEqual(D21.spawnArgv({ mode: 'arm', model: W5B4_ARM_MODEL, settingsMode: 'restricted', home }));
+      b2t1Expect([e.env.CCRC_RECALL_SESSION, e.env.CCRC_RECALL_ARM, e.env.CCRC_RECALL_ASOF], 'W2-D50: the treatment arm on the first question').toEqual([q.ccrc_id, W5B4_TREATMENT, q.boundary_uuid]);
+      b2t1Expect((e.stdin as string).startsWith(`${B2T1_CARD}\n\n`), 'driven through the card (W2-D58)').toBe(true);
+    }
+    b2t1Expect(arms.map((e) => e.stdin as string).sort()).toEqual(b2t1Probes(home).map(b2t1Stdin).sort());
+  }, 60_000);
+
+  b2t1It('a skill missing under --restricted is recorded and halts with pilot-failed; the re-run under --settings-mode fallback runs beside it on the same --out and passes (Q26, Q10)', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    b2t1PlantAll(home, 'restricted', Object.fromEntries(b2t1Probes(home).map((p) => [p.probe as string, b2t1PassStream(p, { skills: [] })])));
+    const r = await b2t1Run(home, fx.argv());
+    b2t1Expect(r.refusal).toEqual({ word: 'pilot-failed',
+      detail: 'step0b restricted: failed skill; unmeasured -; the skill is not listed under restricted: re-run step0b with --settings-mode fallback (Q26)' });
+    const restricted = join(fx.out, 'pilot', 'step0b', 'restricted.json');
+    const text = readFileSync(restricted, 'utf8');
+    b2t1Expect(r.stderr, 'recorded before the halt: its sha is printed').toBe(`sha256 ${sha256Hex(text) as string}\n`);
+    const doc = JSON.parse(text) as B2t1R;
+    b2t1Expect([doc.passed, doc.failed, doc.unmeasured, doc.checks.skill.state]).toEqual([false, ['skill'], [], 'fail']);
+    b2t1PlantAll(home, 'fallback');
+    const r2 = await b2t1Run(home, fx.argv(['--settings-mode', 'fallback']));
+    b2t1Expect(r2.refusal, r2.stderr).toBeNull();
+    b2t1Expect(r2.code).toBe(0);
+    const doc2 = b2t1Result(fx.out, 'fallback');
+    b2t1Expect([doc2.passed, doc2.settings_mode, doc2.record_settings_mode]).toEqual([true, 'fallback', 'restricted']);
+    b2t1Expect(doc2.runs.every((x: B2t1R) => (x.name as string).startsWith('pilot/step0b/fallback/'))).toBe(true);
+    b2t1Expect(readFileSync(restricted, 'utf8'), 'the restricted result stands beside it, never folded').toBe(text);
+    const fb = b2t1PrintRuns(home).slice(8);
+    b2t1Expect(fb).toHaveLength(8);
+    for (const e of fb) b2t1Expect(e.argv.slice(0, 4)).toEqual(['--setting-sources', 'project,local', '--settings', '{"disableAllHooks":true}']);
+  }, 60_000);
+
+  b2t1It('a denial probe the arm ran, a run with no result event and an Agent call with no subagent tool use: failed and unmeasured apart, the subagent unmeasured with no check of its own, and every error field recorded (Q10, Q11, Q31)', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    const by = (n: string): B2t1R => b2t1Probes(home).find((p) => p.probe === n)!;
+    b2t1PlantAll(home, 'restricted', {
+      'deny-chain': b2t1Stream({ calls: [{ command: by('deny-chain').command }] }),
+      'spelling-2': b2t1Stream({ calls: [{ command: by('spelling-2').command }], result: false, error: 'fixture_error_a' }),
+      agent: b2t1Stream({ calls: [{ name: 'Agent' }], error: 'fixture_error_b' }),
+    });
+    const r = await b2t1Run(home, fx.argv());
+    b2t1Expect(r.refusal).toEqual({ word: 'pilot-failed', detail: 'step0b restricted: failed deny-chain; unmeasured spelling-2' });
+    const doc = b2t1Result(fx.out);
+    b2t1Expect(doc.checks['deny-chain']).toEqual({ state: 'fail', denied: false, ran: true, tool_error: false, result_seen: true });
+    b2t1Expect(doc.checks['spelling-2'].state).toBe('unmeasured');
+    b2t1Expect(doc.subagent).toEqual({ state: 'unmeasured', why: 'no-subagent-tool-use', tools: [], parents: [], inferred: true });
+    const errs = Object.fromEntries(doc.runs.map((x: B2t1R) => [x.name, x.error_fields]));
+    b2t1Expect(errs['pilot/step0b/restricted/spelling-2']).toEqual(['fixture_error_a']);
+    b2t1Expect(errs['pilot/step0b/restricted/agent']).toEqual(['fixture_error_b']);
+    b2t1Expect(errs['pilot/step0b/restricted/spelling-1'], 'CONTROL: a run with no error field').toEqual([]);
+  }, 60_000);
+
+  b2t1It('a turn-bound run that stops within the bound under another subtype is unmeasured, never held, and the refusal names the subtype (W2-D57, C16)', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    b2t1PlantAll(home, 'restricted', { 'turn-bound': b2t1Stream({ main: 12, subtype: 'error_turn_limit', session: 'fixture-0b-turn-bound' }) });
+    const r = await b2t1Run(home, fx.argv());
+    b2t1Expect(r.refusal).toEqual({ word: 'pilot-failed',
+      detail: 'step0b restricted: failed -; unmeasured turn-bound; turn-bound subtype "error_turn_limit": a spelling other than error_max_turns is a coordinator ruling (W2-D57)' });
+    b2t1Expect(b2t1Result(fx.out).checks['turn-bound']).toEqual({ state: 'unmeasured', held: 'unmeasured', turns: 12, num_turns: 12, subtype: 'error_turn_limit' });
+  }, 60_000);
+
+  b2t1It('a run that leaves its transcript fails persistence; an unreadable projects directory is unmeasured, never clean and never an exit 1 (W2-D57; D-6309\'s rule)', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    b2t1PlantAll(home, 'restricted');
+    const rg = b2t1Probes(home).find((p) => p.probe === 'deny-rg')!;
+    b2t1Put(home, 'restricted', b2t1Stdin(rg), '.persist', '');
+    const r = await b2t1Run(home, fx.argv());
+    b2t1Expect(r.refusal).toEqual({ word: 'pilot-failed', detail: 'step0b restricted: failed persistence; unmeasured -' });
+    const left = (b2t1Result(fx.out).persistence as B2t1R[]).filter((x) => x.left);
+    b2t1Expect(left.map((x) => [x.name, x.transcripts.length, x.project_dir])).toEqual([['pilot/step0b/restricted/deny-rg', 1, true]]);
+    if ((process.getuid?.() ?? 1) === 0) return;   // mode 000 binds no root
+    const home2 = b2t1Home();
+    const fx2 = b2t1Pilot(home2);
+    b2t1PlantAll(home2, 'restricted');
+    const projects = join(home2, '.claude', 'projects');
+    mkdirSync(projects, { recursive: true });
+    chmodSync(projects, 0o000);
+    try {
+      const r2 = await b2t1Run(home2, fx2.argv());
+      b2t1Expect(r2.refusal).toEqual({ word: 'pilot-failed', detail: 'step0b restricted: failed -; unmeasured persistence' });
+      b2t1Expect((b2t1Result(fx2.out).persistence as B2t1R[]).every((x) => x.unmeasured === 'EACCES' && x.left === true)).toBe(true);
+    } finally {
+      chmodSync(projects, 0o700);
+    }
+  }, 120_000);
+
+  b2t1It('the record\'s batch_max splits the seven arm runs, and W2-D56\'s --version and W2-D78\'s checks come before every batch (W2-D56, W2-D78)', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home, { over: { limits: { batch_max: 4 } } });
+    b2t1PlantAll(home, 'restricted');
+    const r = await b2t1Run(home, fx.argv());
+    b2t1Expect(r.code, r.stderr).toBe(0);
+    b2t1Expect(b2t1Versions(home), 'one --version per batch: the box batch and two arm batches').toBe(3);
+    b2t1Expect(b2t1Result(fx.out).batches.map((b: B2t1R) => b.runs.length)).toEqual([1, 4, 3]);
+    // headless-on removed by the box run: the arm batch refuses before its --version spawn, and no result is written
+    const home2 = b2t1Home();
+    const fx2 = b2t1Pilot(home2);
+    b2t1PlantAll(home2, 'restricted');
+    b2t1Put(home2, 'restricted', D21.TURN_PROBE_PROMPT as string, '.rm', b2t1Lib.historyPaths(home2).headlessOn as string);
+    const r2 = await b2t1Run(home2, fx2.argv());
+    b2t1Expect(r2.refusal?.word).toBe('family-unlisted');
+    b2t1Expect([b2t1Versions(home2), b2t1PrintRuns(home2).length], 'the box batch ran; the arm batch spawned nothing').toEqual([1, 1]);
+    b2t1Expect(existsSync(join(fx2.out, 'pilot', 'step0b', 'restricted.json')), 'a refusal mid-way writes no result').toBe(false);
+  }, 120_000);
+
+  // K26, K28 (D-6481 carried): every card preflight builds the re-check and the card under every retained reading of the
+  // pair index (W2-5b1's maskingSnapshotsOf) and refuses when their card lines disagree, never masking with the newest
+  // reading. The injected payload reader masks B2T1_LEARNED_CARD through each reading's own index; the store learns the
+  // value right after one build, so the next preflight's admission holds the old reading and the new one.
+  b2t1It('K26 card seam: a pair learned after the before-out card preflight makes the arm batch\'s two readings disagree, refused input-invalid masking-snapshots-disagree step0b before the arm batch\'s --version, never the newest mask (K28, D-6481 carried)', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    b2t1PlantAll(home, 'restricted', {}, B2T1_LEARNED_CARD);
+    const seen: boolean[] = [];
+    const r = await b2t1Run(home, fx.argv(), { payloads: b2t1IndexPayloads(home, 1, seen) });
+    b2t1Expect(r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree step0b' });
+    b2t1Expect(seen, 'before --out: one reading; the arm batch: the old reading, then the new one').toEqual([false, false, true]);
+    b2t1Expect([b2t1Versions(home), b2t1PrintRuns(home).length], 'the box batch ran; the arm batch spawned nothing, not even --version').toEqual([1, 1]);
+    b2t1Expect(existsSync(join(fx.out, 'pilot', 'step0b', 'restricted.json')), 'a refusal mid-way writes no result').toBe(false);
+  }, 60_000);
+  b2t1It('K26 card seam CONTROL: with no pair learned every card preflight holds one reading, the value stays visible on every arm run\'s card, and the pilot passes (K28)', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    b2t1PlantAll(home, 'restricted', {}, B2T1_LEARNED_CARD);
+    const seen: boolean[] = [];
+    const r = await b2t1Run(home, fx.argv(), { payloads: b2t1IndexPayloads(home, null, seen) });
+    b2t1Expect(r.refusal, r.stderr).toBeNull();
+    b2t1Expect(r.code).toBe(0);
+    b2t1Expect(seen, 'one reading at each of the two card preflights, neither masking').toEqual([false, false]);
+    const arms = b2t1PrintRuns(home).slice(1);
+    b2t1Expect(arms).toHaveLength(7);
+    for (const e of arms) b2t1Expect((e.stdin as string).startsWith(`${B2T1_LEARNED_CARD}\n\n`), 'the agreed card drives every arm run').toBe(true);
+  }, 60_000);
+  b2t1It('K28 later arm batch: a pair learned after the first arm batch\'s card preflight lets its four runs stand and refuses the second arm batch input-invalid masking-snapshots-disagree step0b before its --version (K26, D-6481 carried)', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home, { over: { limits: { batch_max: 4 } } });
+    b2t1PlantAll(home, 'restricted', {}, B2T1_LEARNED_CARD);
+    const seen: boolean[] = [];
+    const r = await b2t1Run(home, fx.argv(), { payloads: b2t1IndexPayloads(home, 2, seen) });
+    b2t1Expect(r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree step0b' });
+    b2t1Expect(seen, 'before --out and the first arm batch: one reading each; the second arm batch: old, then new').toEqual([false, false, false, true]);
+    b2t1Expect([b2t1Versions(home), b2t1PrintRuns(home).length], 'the box batch and the first arm batch ran; the second spawned nothing').toEqual([2, 5]);
+    for (const e of b2t1PrintRuns(home).slice(1)) b2t1Expect((e.stdin as string).startsWith(`${B2T1_LEARNED_CARD}\n\n`), 'the first arm batch ran under the agreed card').toBe(true);
+    b2t1Expect(existsSync(join(fx.out, 'pilot', 'step0b', 'restricted.json')), 'a refusal mid-way writes no result').toBe(false);
+  }, 120_000);
+  b2t1It('K28 later arm batch CONTROL: with no pair learned no card preflight masks the value, both arm batches run, and the pilot passes (K26)', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home, { over: { limits: { batch_max: 4 } } });
+    b2t1PlantAll(home, 'restricted', {}, B2T1_LEARNED_CARD);
+    const seen: boolean[] = [];
+    const r = await b2t1Run(home, fx.argv(), { payloads: b2t1IndexPayloads(home, null, seen) });
+    b2t1Expect(r.code, r.stderr).toBe(0);
+    b2t1Expect(seen.length > 0 && seen.every((masked) => !masked), 'no reading masked the value').toBe(true);
+    b2t1Expect(b2t1Versions(home), 'one --version per batch').toBe(3);
+    b2t1Expect(b2t1Result(fx.out).batches.map((b: B2t1R) => b.runs.length)).toEqual([1, 4, 3]);
+  }, 120_000);
+
+  // A matcher is a RegExp, or a function building one at run time: an export read while the describe is collected would
+  // throw before Step 5 and fail the whole file, so every row reads D21 inside its own case.
+  const BEFORE_OUT: Array<[string, string, RegExp | (() => RegExp), (h: string) => { fx: B2t1R; argv: string[]; deps?: B2t1R }]> = [
+    ['Q23: --allow-code-change is not a step0b flag', 'args-invalid', /^--allow-code-change is not a step0b --section pilot flag$/, (h) => {
+      const fx = b2t1Pilot(h);
+      return { fx, argv: fx.argv(['--allow-code-change']) };
+    }],
+    // The detail is built from STEP0B_SECTIONS, so the expectation is too: Task 3's 'quiz' widens both alike.
+    ['a section outside STEP0B_SECTIONS', 'args-invalid', () => new RegExp(`^step0b wants --section ${(D21.STEP0B_SECTIONS as string[]).join(' or --section ')}, not "usage"$`), (h) => {
+      const fx = b2t1Pilot(h);
+      return { fx, argv: (fx.argv() as string[]).map((a) => (a === 'pilot' ? 'usage' : a)) };
+    }],
+    ['a settings mode outside SETTINGS_MODES', 'args-invalid', /^settings-mode open$/, (h) => {
+      const fx = b2t1Pilot(h);
+      return { fx, argv: fx.argv(['--settings-mode', 'open']) };
+    }],
+    ['a batch_max that cannot hold both arms (R28 of the W2-5b1 plan)', 'record-invalid', /^limits\.batch_max out-of-range$/, (h) => {
+      const fx = b2t1Pilot(h, { over: { limits: { batch_max: 1 } } });
+      return { fx, argv: fx.argv() };
+    }],
+    ['W2-D78 (i): no headless-on', 'family-unlisted', /./, (h) => {
+      const fx = b2t1Pilot(h, { marker: false });
+      return { fx, argv: fx.argv() };
+    }],
+    ['W2-D78 (ii): a recall-off entry for the family', 'family-recall-off', /^present pilot-4$/, (h) => {
+      const p = b2t1Lib.recallOffPath(h, 'pilot-4') as string;
+      mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+      writeFileSync(p, '');
+      const fx = b2t1Pilot(h);
+      return { fx, argv: fx.argv() };
+    }],
+    ['W2-D78 (iii): the question no longer answers', 'quiz-unanswerable', /^fixture clause \(b\) unanswerable$/, (h) => {
+      const fx = b2t1Pilot(h);
+      return { fx, argv: fx.argv(), deps: { recheck: async (): Promise<never> => b2t1Drv.refuse('quiz-unanswerable', 'fixture clause (b) unanswerable') } };
+    }],
+    ['D-6469: the payload no longer reconstructs', 'quiz-unanswerable', / payload card-unrenderable$/, (h) => {
+      const fx = b2t1Pilot(h);
+      return { fx, argv: fx.argv(), deps: { payloads: (): B2t1R => ({ state: 'discard', why: 'card-unrenderable' }) } };
+    }],
+    ['Q11: the synthetic transcript path exists', 'input-invalid', /^synthetic transcript .+ exists$/, (h) => {
+      const fx = b2t1Pilot(h);
+      return { fx, argv: fx.argv(), deps: { syntheticTranscript: fx.d.path } };
+    }],
+  ];
+  b2t1It.each(BEFORE_OUT)('W2-5b2 Task 1 refuses before --out, with the stub log absent: %s', async (_label, word, detail, setup) => {
+    const home = b2t1Home();
+    const { fx, argv, deps } = setup(home);
+    const r = await b2t1Run(home, argv, deps ?? {});
+    b2t1Expect(r.refusal?.word).toBe(word);
+    b2t1Expect(r.refusal?.detail).toMatch(typeof detail === 'function' ? detail() : detail);
+    b2t1Expect(existsSync(fx.out as string), 'no --out is made').toBe(false);
+    b2t1Expect(stubLog(home), 'no spawn, not even --version').toBeNull();
+  }, 60_000);
+
+  // W2-D24 (R23 of the W2-5b1 plan, carried): step0b re-checks the code it runs under before any other input, under W2-5a's
+  // title; the record is signed with a code sha this tree does not have, the frozen list is unreadable and there is no store.
+  b2t1It.each([['step0b --section pilot']])('code-changed before any other input is read, re-checks the code it runs under: %s', async () => {
+    const home = b2t1Home(null);
+    const fx = b2t1Pilot(home, { shas: { ...w5b4Shas(), 'deploy/measure-history.py': w5b4Hex('moved') } });
+    const argv = (fx.argv() as string[]).map((a) => (a === fx.fz.path ? join(home, 'no-such-frozen.json') : a));
+    const r = await b2t1Run(home, argv);
+    b2t1Expect(r.refusal).toEqual({ word: 'code-changed', detail: 'changed deploy/measure-history.py' });
+    b2t1Expect(existsSync(fx.out as string), 'no --out').toBe(false);
+    b2t1Expect(stubLog(home), 'no spawn').toBeNull();
+  }, 60_000);
+  b2t1It('CONTROL: under unchanged code shas the same argv reaches the frozen list read the W2-D24 row was built to fail, before --out and any spawn', async () => {
+    const home = b2t1Home(null);
+    const fx = b2t1Pilot(home);
+    const argv = (fx.argv() as string[]).map((a) => (a === fx.fz.path ? join(home, 'no-such-frozen.json') : a));
+    const r = await b2t1Run(home, argv);
+    b2t1Expect(r.refusal?.word).toBe('input-invalid');
+    b2t1Expect(r.refusal?.detail, 'the frozen list read, not the code').toMatch(/unreadable ENOENT$/);
+    b2t1Expect(existsSync(fx.out as string), 'no --out').toBe(false);
+    b2t1Expect(stubLog(home), 'no spawn').toBeNull();
+  }, 60_000);
+
+  b2t1It('an --out holding pilot-source.json is refused before any spawn (Q25)', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    const out = D21.prepareOut(fx.out) as string;
+    writeFileSync(join(out, 'pilot-source.json'), '{}\n', { mode: 0o600 });
+    const r = await b2t1Run(home, fx.argv());
+    b2t1Expect(r.refusal).toEqual({ word: 'out-refused', detail: 'pilot-source.json is here: step0b runs on a fresh --out, never pilot-source\'s' });
+    b2t1Expect(stubLog(home)).toBeNull();
+    b2t1Expect(existsSync(join(out, 'pilot'))).toBe(false);
+  }, 60_000);
+
+  b2t1It('a second run on the same --out spawns no print-mode run: the recorded runs are read back, and the result repeats but for its instant (W2-D53)', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    b2t1PlantAll(home, 'restricted');
+    b2t1Expect((await b2t1Run(home, fx.argv())).code).toBe(0);
+    const first = b2t1Result(fx.out);
+    b2t1Expect((await b2t1Run(home, fx.argv())).code).toBe(0);
+    const second = b2t1Result(fx.out);
+    b2t1Expect([b2t1PrintRuns(home).length, b2t1Versions(home)], 'the second run re-measured the version per batch and spawned no run').toEqual([8, 4]);
+    b2t1Expect({ ...second, measured_ms: 0 }).toEqual({ ...first, measured_ms: 0 });
+  }, 60_000);
 });

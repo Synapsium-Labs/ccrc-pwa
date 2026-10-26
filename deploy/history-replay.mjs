@@ -68,7 +68,9 @@ import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
  *  the batch's last check, when every child has closed, is not handled: the result is written, and the driver exits 0, or
  *  ends by that signal if it comes after main has removed its listeners: D-5984). The last is W2-5a's (Task 1):
  *  `store-unreadable`, a store this node cannot open or read (store.mjs's StoreError word, or SQLite's own error as
- *  store-read-failed), so reconstruction never reads an absent store as an empty one. */
+ *  store-read-failed), so reconstruction never reads an absent store as an empty one. W2-5b2's (Task 1) is `pilot-failed`:
+ *  a pilot check that did not pass (step 0b's, the fidelity pilot's, the pilot's absent rate), refused only after its
+ *  result is written and its sha printed, so the operator rules on a recorded finding (W2-D57: a failure halts W2; Q10). */
 export const DRIVER_REASONS = Object.freeze([
   'family-unlisted', 'family-recall-off',
   'quiz-unanswerable', 'quiz-sha-mismatch',
@@ -81,6 +83,7 @@ export const DRIVER_REASONS = Object.freeze([
   'code-unmeasured', 'version-unmeasured', 'tree-unmeasured', 'wrapper-unmeasured',
   'run-live', 'out-in-use', 'interrupted',
   'store-unreadable',
+  'pilot-failed',
 ]);
 
 /** A refusal: one DRIVER_REASONS word and its detail. Any other throw is a defect (EXIT.INTERNAL). */
@@ -127,13 +130,15 @@ export const DRIVER_STOPS = Object.freeze([
 ]);
 /** Every other driver word is a REFUSAL: its remedy is a changed input, flag, account or record, or an operator act on
  *  the marker, a control file or a frozen question (W2-D78's three), never a wait. In DRIVER_REASONS order. Both lists
- *  are spelled, so a word added to DRIVER_REASONS reds history-replay.test.ts's "exactly once" pin until it is classified. */
+ *  are spelled, so a word added to DRIVER_REASONS reds history-replay.test.ts's "exactly once" pin until it is classified.
+ *  W2-5b2's `pilot-failed` is a refusal: its remedy is the operator's ruling on a recorded pilot (W2-D57), never a wait. */
 export const DRIVER_REFUSALS = Object.freeze([
   'family-unlisted', 'family-recall-off',
   'quiz-unanswerable', 'quiz-sha-mismatch',
   'record-invalid', 'record-sha-mismatch', 'input-sha-mismatch',
   'assignment-mismatch',
   'args-invalid', 'in-pane', 'roster-invalid', 'account-refused', 'input-invalid',
+  'pilot-failed',
 ]);
 /** A driver word's class, for the batch summary and the operator's line (Q24, Q30). Pure.
  *  @param {string} word  @returns {'stop' | 'refusal'} */
@@ -2603,16 +2608,26 @@ export async function probeCommand(flags, env) {
 }
 HANDLERS.set('probe', probeCommand);
 
+/** R1 (W2-5b2 Task 1): a run's main-thread assistant turns, the messages readStreamJson saw whose first event named no
+ *  parent_tool_use_id (W2-5b1 Task 1's facts.messages). An Agent subagent's messages are the subagent's turns, not the
+ *  run's. assistantMessages keeps counting every message (W2-4's meaning, R1). Pure.
+ *  @param {{ messages: Array<{ parentToolUseId: string | null }> }} facts  @returns {number} */
+export function mainThreadTurns(facts) {
+  if (!Array.isArray(facts?.messages)) throw new TypeError('mainThreadTurns: facts.messages is readStreamJson\'s message list');
+  return facts.messages.filter((m) => m.parentToolUseId === null).length;
+}
+
 /** Step 0b's turn bound (W2-D57; coordinator ruling, as revised). `held` is true ONLY when the result event shows that
  *  the max-turns limit stopped the run (its subtype is MAX_TURNS_STOP_SUBTYPE) AND the run made at most maxTurns
- *  assistant turns (readStreamJson's assistantMessages). More than maxTurns assistant turns is false: the bound did
+ *  main-thread assistant turns (mainThreadTurns; R1). More than maxTurns assistant turns is false: the bound did
+```
  *  not hold, whatever the result event says. A run that ended within the bound for any other reason (another subtype,
  *  or no result event) is 'unmeasured', never true. `turns` is the assistant turn count the verdict read; the result
  *  event's num_turns and subtype (null without one) are recorded beside it, so a reader sees why. No tool-call count
  *  enters the verdict. Pure. */
 export function turnBoundHeld(facts, maxTurns = MAX_TURNS) {
   if (!Number.isInteger(maxTurns) || maxTurns < 1) throw new TypeError(`turnBoundHeld: maxTurns ${String(maxTurns)} is not a positive integer`);
-  const turns = facts.assistantMessages;
+  const turns = mainThreadTurns(facts);   // R1: an Agent subagent's messages are not the run's turns
   const numTurns = facts.result === null ? null : facts.result.numTurns;
   const subtype = facts.result === null ? null : facts.result.subtype;
   if (turns > maxTurns) return { held: false, turns, num_turns: numTurns, subtype };
@@ -2669,20 +2684,37 @@ export function persistenceLeft({ configDir, sessionId, cwd }) {
   return { left: sessionId === null || projectDir || transcripts.length > 0, transcripts, projectDir };
 }
 
+/** W2-5b2 Task 1: persistenceLeft as step 0b records it, `{left, transcripts, project_dir}`. An lstat or readdir failure
+ *  under projects/ (an errno, which persistenceLeft throws so it never reads as clean) is answered as left, with the errno
+ *  named as `unmeasured`: the run is recorded and fails closed after --out, never an exit 1 (D-6309's rule). Any other
+ *  throw (a TypeError for a bad argument) is a defect and stays one.
+ *  @param {{ configDir: string, sessionId: string | null, cwd: string }} o */
+export function persistenceMeasured(o) {
+  let l;
+  try {
+    l = persistenceLeft(o);
+  } catch (e) {
+    if (e instanceof TypeError || typeof e?.code !== 'string') throw e;
+    return { left: true, transcripts: [], project_dir: null, unmeasured: e.code };
+  }
+  return { left: l.left, transcripts: l.transcripts, project_dir: l.projectDir };
+}
+
 /** Step 0b's mechanics without the seam (W2-D57): one box-mode run of TURN_PROBE_PROMPT named 'step0b/turn-bound'
  *  (resumed from its run.json when it finished before), then the turn bound over its stream and the persistence
  *  check over the account's config dir, keyed by that run's init session_id and its cwd. The run goes through runBatch
  *  with the caller's required `gate` (W2-5b passes its batchGate) and `claim` (claimOut's, D-5985), so it is gated and
  *  claimed like every spawn; the caller also
- *  passes `lang`, its LANG from main's env (undefined when unset), into the run's RunJob. */
-export async function step0bMechanics({ launch, out, model, settingsMode, lang, gate, claim }) {
-  const [run] = await runBatch([{ launch, mode: 'box', model, settingsMode, stdin: TURN_PROBE_PROMPT, out, name: STEP0B_TURN_RUN, lang }], { concurrency: 1, gate, claim });
-  const left = persistenceLeft({
-    configDir: launch.configDir, sessionId: run.facts.init === null ? null : run.facts.init.sessionId, cwd: run.cwd,
-  });
+ *  passes `lang`, its LANG from main's env (undefined when unset), into the run's RunJob. W2-5b2 Task 1: the run is named
+ *  `name` (W2-4's `step0b/turn-bound` by default; `step0b` names it under its section and settings mode, Q26), and the
+ *  persistence half is persistenceMeasured's, so an unreadable projects/ is recorded, never a throw after --out. */
+export async function step0bMechanics({ launch, out, model, settingsMode, lang, gate, claim, name = STEP0B_TURN_RUN }) {
+  const [run] = await runBatch([{ launch, mode: 'box', model, settingsMode, stdin: TURN_PROBE_PROMPT, out, name, lang }], { concurrency: 1, gate, claim });
   return {
     turn_bound: turnBoundHeld(run.facts),
-    persistence: { left: left.left, transcripts: left.transcripts, project_dir: left.projectDir },
+    persistence: persistenceMeasured({
+      configDir: launch.configDir, sessionId: run.facts.init === null ? null : run.facts.init.sessionId, cwd: run.cwd,
+    }),
   };
 }
 
@@ -5128,6 +5160,9 @@ const SUBCOMMAND_FLAGS = Object.freeze({
   // W2-5b1 Task 5 (Q2, Q23): the judge reads exactly what arms reads (Task 4's loadArmRun), and no flag of its own.
   'judge --section pilot': { required: ['section', 'out', ...DRAFT_INPUT, 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },
   'judge --section quiz': { required: ['section', 'out', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT, 'allow-code-change'] },
+  // W2-5b2 Task 1 (Q23, Q26): step 0b reads part 1 and the pilot frozen list, takes no --allow-code-change (a pilot act's
+  // remedy for a code change is a re-pilot, W2-D6), and takes --settings-mode for Q26's fallback re-run.
+  'step0b --section pilot': { required: ['section', 'out', ...DRAFT_INPUT, 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT, 'settings-mode'] },
 });
 
 const copyJson = (v) => JSON.parse(JSON.stringify(v));
@@ -6930,6 +6965,29 @@ function questionArmsOf(ctx, q) {
   return { q, arms, state, next: settled ? [] : arms.filter((a) => a.next !== null).map((a) => ({ arm: a.arm, attempt: a.next })) };
 }
 
+/** K28 (W2-5b2 Task 1; D-6481 carried, K26): the one all-readings-agree loop, factored out of W2-5b1's armBatchPreflight
+ *  and judgeCommand without a change of behaviour, and called by step 0b's card preflight and fidelity's per-boundary
+ *  measurement too. `snapshots` is what maskingSnapshotsOf(rs, home) answered in the caller's same preflight, so its
+ *  admission refusals (belt overflow, count cap, material cap, invalid, refresh failed) come before any build; this
+ *  function never refreshes, reads the store, writes or spawns. `build(idx)` builds the caller's spawned text from one
+ *  retained reading's pair index (it may be async; its own refusals and throws pass through unchanged); `agree(first,
+ *  built)` compares a later reading's build with the first's through sameMaskingText. Readings are built in retained
+ *  order, each compared as soon as it is built; the first disagreement refuses input-invalid
+ *  `masking-snapshots-disagree <site>`, `site` one of the literal words arms, judge, step0b and fidelity, so the detail
+ *  names a site and never a value. Answers the first reading's build: agreeing readings are byte-equal, and no
+ *  newest-reading mask is ever chosen.
+ *  @param {Array<{ idx: unknown }>} snapshots  @param {string} site  @param {(idx: any) => any} build
+ *  @param {(first: any, built: any) => boolean} agree  @returns {Promise<any>} */
+async function maskingAgreementOf(snapshots, site, build, agree) {
+  let agreed;
+  for (let i = 0; i < snapshots.length; i += 1) {
+    const built = await build(snapshots[i].idx);
+    if (i === 0) agreed = built;
+    else if (!agree(agreed, built)) refuse('input-invalid', `masking-snapshots-disagree ${site}`);
+  }
+  return agreed;
+}
+
 /** W2-D78 and W2-D56 before one arm batch, composed once. Read-only first:
  *  (0) retained masking snapshots, including the seed and every admitted fresh reading, are refreshed (D-6481,
  *      refreshPairIndex); every retained reading must recheck and build both payloads before exclusions;
@@ -6946,9 +7004,9 @@ async function armBatchPreflight(ctx, pending) {
   const qs = pending.map((s) => s.q);
   requireListed(ctx.home, ctx.storeId, familiesOf(qs));   // W2-D78 (i)
   refuseRecallOff(ctx.home, [...new Set(qs.map((q) => q.ccrc_id))]);   // W2-D78 (ii)
-  let baseline = null;
-  for (const snapshot of snapshots) {
-    const view = { ...ctx.rs, idx: snapshot.idx };
+  // K28 (W2-5b2 Task 1): every retained reading builds both payloads of the full original batch, and they must agree.
+  const baseline = await maskingAgreementOf(snapshots, 'arms', async (idx) => {
+    const view = { ...ctx.rs, idx };
     const verdicts = await ctx.deps.recheck(view, qs, { configDirs: ctx.configDirs });   // every retained reading must permit the full original batch
     const built = new Map();
     for (const s of pending) {
@@ -6957,11 +7015,8 @@ async function armBatchPreflight(ctx, pending) {
       if (p.state !== 'payloads') refuse('quiz-unanswerable', `${s.q.qid} payload ${p.why}`);   // D-6469
       built.set(s.q.qid, new Map([[CONTROL_ARM, p.plain], [TREATMENT_ARM, p.carded]]));
     }
-    if (baseline === null) { baseline = built; continue; }
-    for (const s of pending) for (const arm of RECALL_ARMS) {
-      if (!sameMaskingText(baseline.get(s.q.qid).get(arm), built.get(s.q.qid).get(arm))) refuse('input-invalid', 'masking-snapshots-disagree arms');
-    }
-  }
+    return built;
+  }, (first, built) => pending.every((s) => RECALL_ARMS.every((arm) => sameMaskingText(first.get(s.q.qid).get(arm), built.get(s.q.qid).get(arm)))));
   const stdins = new Map();
   const kept = [];
   let shas = null;
@@ -7547,14 +7602,14 @@ export async function judgeCommand(flags, driverEnv, deps = { loadArmRun, armNod
       const own = run.frozen.list.entries.filter((e) => e.store_id === rs.storeId);   // Q2: this node's questions only
       const picked = judgeItemsOf({ entries: own, answers: deps.readArmAnswers(out, section), arms: RECALL_ARMS, shaMinPrefix: r.labeller.sha_min_prefix });
       const snapshots = maskingSnapshotsOf(rs, home);
-      let jobs = null;
-      for (const snapshot of snapshots) {
-        const built = judgeJobsOf({ items: picked.items, map, idx: snapshot.idx });
-        if (jobs === null) { jobs = built; continue; }
-        if (jobs.length !== built.length || jobs.some((job, i) => job.id !== built[i].id || !sameMaskingText(canonicalJson(job.input) + '\n', canonicalJson(built[i].input) + '\n'))) {
-          refuse('input-invalid', 'masking-snapshots-disagree judge');
+      // K28 (W2-5b2 Task 1): every retained reading builds the ordered jobs; their count, ids and canonical inputs agree.
+      const jobs = await maskingAgreementOf(snapshots, 'judge', (idx) => judgeJobsOf({ items: picked.items, map, idx }), (first, built) => {
+        if (first.length !== built.length) return false;
+        for (let i = 0; i < first.length; i += 1) {
+          if (first[i].id !== built[i].id || !sameMaskingText(canonicalJson(first[i].input) + '\n', canonicalJson(built[i].input) + '\n')) return false;
         }
-      }
+        return true;
+      });
       const judge = await openJudge({ home, accountId: node.account, model: r.judge_model, settingsMode: node.settingsMode, rubricId: r.rubric_id,
         claim, budget: node.budget, limits: node.limits, expected: node.expected, allowCodeChange: run.allowCodeChange === true, lang: driverEnv.LANG });
       const items = await judge.judge(section, jobs);
@@ -7583,6 +7638,339 @@ export async function judgeCommand(flags, driverEnv, deps = { loadArmRun, armNod
 }
 
 HANDLERS.set('judge', (flags, env) => judgeCommand(flags, env));
+
+// ── W2-5b2 Task 1: step 0b, `step0b --section pilot` (W2-D57, W2-D58; Q10, Q11, Q23, Q25, Q26, Q31; R1) ──────────────
+// The pilot's first act after part 1 (W2 decisions §5, act 14), on the pilot node, in the pilot's fresh --out (Q25), with
+// headless-on listing the pilot pairs (act 13). Two kinds of batch, each behind W2-D56's preflight (W2-5b1's preflightSpawn):
+//   - the box batch: W2-4's step0bMechanics, one box-mode run of TURN_PROBE_PROMPT: the turn bound over the run's
+//     main-thread turns (R1) and the persistence check (W2-D57);
+//   - the arm batches, at most limits.batch_max runs each: one treatment-arm run per STEP0B_PROBES member on the first
+//     usage question in qid order (Q11), each stdin the question's card line, one blank line, then the probe's prompt,
+//     so the treatment arm is driven through the card and the shipped skill (W2-D58): each taught spelling once
+//     (admitted), three denial probes over a synthetic transcript path that does not exist (Q11), and one Agent call,
+//     whose subagent's tool_use names, read through parentToolUseId, are recorded as its tool list, labelled inferred.
+//     Every arm run's init event must show exactly the tools its argv grants, no MCP server, no plugin, and the
+//     ccrc-history skill (W2-D57, W2-D58). W2-D78 (i), (ii) and (iii) and the card are asked before --out and before
+//     every arm batch (W2-5b1's requireListed, refuseRecallOff, recheckBatch and armPayloads; D-6469), each time under
+//     every retained reading of the store's pair index (W2-5b1's maskingSnapshotsOf), whose card lines must agree
+//     (maskingAgreementOf, K28) or the preflight refuses masking-snapshots-disagree step0b, never the newest mask (K26).
+// Each check is pass, fail or unmeasured, never folded (W2-D84's rule for an unmeasured value); a pilot passes only when
+// every check passes (Q10, fail-closed). The result is written under --out whatever it shows and `sha256 <hex>` printed
+// on stderr (D-5983); a pilot that did not pass then refuses `pilot-failed`, naming the failed and the unmeasured checks
+// apart (W2-D57: a failure halts W2 for an operator ruling). A skill missing under --restricted is one such failure: the
+// operator re-runs with --settings-mode fallback (Q26), whose runs and result live beside the restricted ones, never over
+// them. Every error field each run's events carried is recorded (Q31). No --allow-code-change (Q23). The arm words are
+// never spelled here: the arm is TREATMENT_ARM (W2-D42).
+
+/** The sections step 0b runs for. This task ships the pilot's; the mid-window re-pilot on a listed quiz family (Q12) is
+ *  a later W2-5b2 task's, which adds its section here. */
+export const STEP0B_SECTIONS = Object.freeze(['pilot']);
+/** The kind word of `<section>/step0b/<settings mode>.json`. */
+export const STEP0B_KIND = 'ccrc-history-w2-step0b';
+/** The treatment-arm runs, in order (W2-D58; Q11): each taught spelling once, the three denial probes, the Agent call. */
+export const STEP0B_PROBES = Object.freeze(['spelling-1', 'spelling-2', 'spelling-3', 'deny-chain', 'deny-subst', 'deny-rg', 'agent']);
+/** The checks a pilot must pass, every one of them (Q10, fail-closed), in the order a result lists them. */
+export const STEP0B_CHECKS = Object.freeze(['turn-bound', 'persistence', 'tools', 'mcp', 'plugins', 'skill',
+  'spelling-1', 'spelling-2', 'spelling-3', 'deny-chain', 'deny-subst', 'deny-rg']);
+/** A check's state: driver-local report words (S2's C21), never refusals; unmeasured is never folded into the other two. */
+export const STEP0B_STATES = Object.freeze(['pass', 'fail', 'unmeasured']);
+/** The skill every treatment-arm run's init event must list (W2-D58), as ccd/history-skill/SKILL.md names it. */
+export const HISTORY_SKILL = 'ccrc-history';
+/** Q11: the transcript path the denial probes name. It must not exist, which step0b measures before --out. */
+export const STEP0B_SYNTHETIC_TRANSCRIPT = '/nonexistent/ccrc-step0b/00000000-0000-4000-8000-0000000000b0.jsonl';
+const STEP0B_RUNS = Object.freeze(['turn-bound', ...STEP0B_PROBES]);
+
+function step0bNameOk(who, section, settingsMode) {
+  if (!STEP0B_SECTIONS.includes(section)) throw new TypeError(`${who}: section ${JSON.stringify(section)} is not one of ${STEP0B_SECTIONS.join(', ')}`);
+  if (!SETTINGS_MODES.includes(settingsMode)) throw new TypeError(`${who}: settings mode ${JSON.stringify(settingsMode)} is not one of ${SETTINGS_MODES.join(', ')}`);
+}
+/** One step 0b run's name under --out: its section, its settings mode (Q26: a fallback re-run on the same --out never
+ *  meets a restricted run, which W2-4's finishedOutcome would refuse as run-json-mismatch) and the run. Pure.
+ *  @param {string} section  @param {string} settingsMode  @param {string} run  @returns {string} */
+export function step0bRunName(section, settingsMode, run) {
+  step0bNameOk('step0bRunName', section, settingsMode);
+  if (!STEP0B_RUNS.includes(run)) throw new TypeError(`step0bRunName: ${JSON.stringify(run)} is not a step 0b run`);
+  return `${section}/step0b/${settingsMode}/${run}`;
+}
+/** The result's path under --out, one per section and settings mode, so a re-run under fallback writes beside the
+ *  restricted result, never over it (Q26). Pure.  @param {string} section  @param {string} settingsMode  @returns {string} */
+export function step0bRel(section, settingsMode) {
+  step0bNameOk('step0bRel', section, settingsMode);
+  return `${section}/step0b/${settingsMode}.json`;
+}
+
+// ── pure ──
+/** One check over several runs: a measured fail on any run fails it; otherwise an unmeasured run, or no run at all,
+ *  leaves it unmeasured; otherwise it passes. Each run's own reading stays in the result. Pure. */
+function foldStates(states) {
+  if (states.includes('fail')) return 'fail';
+  if (states.length === 0 || states.includes('unmeasured')) return 'unmeasured';
+  return 'pass';
+}
+/** W2-D57's turn bound as a check: turnBoundHeld's `held`, true a pass, false a fail, 'unmeasured' unmeasured (C16: any
+ *  subtype but MAX_TURNS_STOP_SUBTYPE is the coordinator's ruling, never held). Pure. */
+export function turnBoundCheckOf(tb) {
+  const state = tb.held === true ? 'pass' : tb.held === false ? 'fail' : 'unmeasured';
+  return { state, held: tb.held, turns: tb.turns, num_turns: tb.num_turns, subtype: tb.subtype };
+}
+/** W2-D57's persistence check over every step 0b run: one that left a transcript or a project dir fails it; one whose
+ *  check could not be measured (persistenceMeasured's `unmeasured`) leaves it unmeasured. Pure. */
+export function persistenceCheckOf(runs) {
+  return { state: foldStates(runs.map((p) => (p.unmeasured !== undefined ? 'unmeasured' : p.left ? 'fail' : 'pass'))) };
+}
+/** A taught spelling's run (W2-D58), from W2-4's probeFindingOf: admitted when the stream's result event carries
+ *  permission_denials (result_seen), the call was made (ran) and no denial names it. A denial fails it; no result event,
+ *  or no call made, is unmeasured: the run showed nothing about admission. tool_error is recorded and decides nothing. Pure. */
+export function admissionCheckOf(f) {
+  const state = !f.result_seen ? 'unmeasured' : f.denied ? 'fail' : f.ran ? 'pass' : 'unmeasured';
+  return { state, denied: f.denied, ran: f.ran, tool_error: f.tool_error, result_seen: f.result_seen };
+}
+/** A denial probe's run (W2-D58): a denial naming its call passes; a call that ran with no denial is a fail (print mode
+ *  admitted it); no result event, or no call made, is unmeasured. Pure. */
+export function denialCheckOf(f) {
+  const state = !f.result_seen ? 'unmeasured' : f.denied ? 'pass' : f.ran ? 'fail' : 'unmeasured';
+  return { state, denied: f.denied, ran: f.ran, tool_error: f.tool_error, result_seen: f.result_seen };
+}
+const skillNamed = (s) => s === HISTORY_SKILL || (plainObject(s) && s.name === HISTORY_SKILL);
+const sameSet = (got, want) => got.length === want.length && [...got].sort().join('\n') === [...want].sort().join('\n');
+/** W2-D57's "the arm's init event" and W2-D58's init assertions, one check each over every arm run's init event: tools
+ *  exactly `want` (the arm argv's, armToolsOf), no MCP server, no plugin, the ccrc-history skill listed (a string, or an
+ *  object with that name). A run with no init event, or a field that is not a list, leaves that check unmeasured on that
+ *  run (foldStates). Pure.
+ *  @param {Array<StreamInit | null>} inits  @param {readonly string[]} want */
+export function initChecksOf(inits, want) {
+  const over = (read) => ({ state: foldStates(inits.map((i) => (i === null ? 'unmeasured' : read(i)))) });
+  return {
+    tools: over((i) => (i.tools === null ? 'unmeasured' : sameSet(i.tools, want) ? 'pass' : 'fail')),
+    mcp: over((i) => (i.mcpServers === null ? 'unmeasured' : i.mcpServers.length === 0 ? 'pass' : 'fail')),
+    plugins: over((i) => (i.plugins === null ? 'unmeasured' : i.plugins.length === 0 ? 'pass' : 'fail')),
+    skill: over((i) => (i.skills === null ? 'unmeasured' : i.skills.some(skillNamed) ? 'pass' : 'fail')),
+  };
+}
+/** Q11: an Agent subagent's tool list, as its observed tool_use names: every tool pair whose parentToolUseId is set
+ *  (W2-5b1 Task 1), names sorted and unique, labelled inferred (no event lists a subagent's tools). A subagent that made no
+ *  tool call leaves it unmeasured. Recorded only: Q10's list fails no pilot on it. Pure. */
+export function subagentToolsOf(toolPairs) {
+  const child = toolPairs.filter((p) => typeof p.parentToolUseId === 'string');
+  const parents = [...new Set(child.map((p) => p.parentToolUseId))].sort();
+  if (child.length === 0) return { state: 'unmeasured', why: 'no-subagent-tool-use', tools: [], parents, inferred: true };
+  return { state: 'measured', tools: [...new Set(child.map((p) => p.name))].sort(), parents, inferred: true };
+}
+/** Q10, fail-closed: the pilot passes only when every check passes; the failed and the unmeasured are listed apart, in
+ *  STEP0B_CHECKS order, never folded. A missing check, or a state outside STEP0B_STATES, is a defect. Pure. */
+export function step0bVerdictOf(checks) {
+  for (const name of STEP0B_CHECKS) {
+    if (!plainObject(checks?.[name]) || !STEP0B_STATES.includes(checks[name].state)) {
+      throw new TypeError(`step0bVerdictOf: check ${name} has no state of ${STEP0B_STATES.join(', ')}`);
+    }
+  }
+  const failed = STEP0B_CHECKS.filter((n) => checks[n].state === 'fail');
+  const unmeasured = STEP0B_CHECKS.filter((n) => checks[n].state === 'unmeasured');
+  return { passed: failed.length === 0 && unmeasured.length === 0, failed, unmeasured };
+}
+/** The `pilot-failed` detail: the settings mode, the failed and the unmeasured checks apart; the turn-bound subtype read
+ *  when that check is unmeasured (C16: another spelling is the coordinator's ruling); and, when the skill is missing under
+ *  restricted, the re-run Q26 names. Pure. */
+export function step0bFailureDetail(settingsMode, checks, verdict) {
+  const parts = [`step0b ${settingsMode}: failed ${verdict.failed.join(' ') || '-'}; unmeasured ${verdict.unmeasured.join(' ') || '-'}`];
+  const tb = checks['turn-bound'];
+  if (tb.state === 'unmeasured') parts.push(`turn-bound subtype ${JSON.stringify(tb.subtype)}: a spelling other than ${MAX_TURNS_STOP_SUBTYPE} is a coordinator ruling (W2-D57)`);
+  if (settingsMode === 'restricted' && checks.skill.state === 'fail') parts.push('the skill is not listed under restricted: re-run step0b with --settings-mode fallback (Q26)');
+  return parts.join('; ');
+}
+/** The tools a spawn's argv grants (`--tools <list>`), sorted: the set every arm run's init must show exactly. Pure. */
+export function armToolsOf(argv) {
+  const i = argv.indexOf('--tools');
+  if (i < 0 || typeof argv[i + 1] !== 'string') throw new TypeError('armToolsOf: the argv carries no --tools value');
+  return argv[i + 1].split(',').filter((t) => t !== '').sort();
+}
+/** The treatment-arm runs' commands (W2-D58; Q11), in STEP0B_PROBES order: each taught spelling's `history status
+ *  --json` (W2-4's probeCommandOf); then three print mode must deny, each naming `transcript`, a path that does not exist:
+ *  the card's command chained to a `cat`, the card's command with a `$(…)` substitution, and an `rg`; then the Agent call,
+ *  whose subagent is asked to run the card's command. Pure.  @param {string} home  @param {string} transcript */
+export function step0bProbesOf(home, transcript) {
+  if (typeof transcript !== 'string' || !path.isAbsolute(transcript)) throw new TypeError(`step0bProbesOf: transcript ${JSON.stringify(transcript)} is not absolute`);
+  const taught = allowedToolSpellings(home).map(probeCommandOf);
+  const card = taught[2];   // the card's spelling (spec §8.6), the one the denial probes extend
+  return Object.freeze([
+    ...taught.map((command, i) => ({ probe: STEP0B_PROBES[i], expect: 'admitted', command })),
+    { probe: 'deny-chain', expect: 'denied', command: `${card}; cat ${transcript}` },
+    { probe: 'deny-subst', expect: 'denied', command: `${card} "$(cat ${transcript})"` },
+    { probe: 'deny-rg', expect: 'denied', command: `rg -n . ${transcript}` },
+    { probe: 'agent', expect: 'subagent', command: card },
+  ].map((p) => Object.freeze(p)));
+}
+/** The Agent probe's prompt: one Agent call whose subagent runs exactly `command` once. */
+function agentPromptOf(command) {
+  return [
+    'This is a subagent check. Use the Agent tool exactly once, and make no other tool call yourself.',
+    'Ask the subagent to use its Bash tool exactly once, to run exactly this command, with nothing added before or after it:',
+    '',
+    command,
+    '',
+    'After the subagent returns, reply with the single word DONE.',
+  ].join('\n') + '\n';
+}
+/** One treatment-arm run's stdin: the card line, one blank line, then the probe's prompt (W2-5b1 Task 2's prependCard,
+ *  the treatment payload's shape, Q20). Pure.  @param {string} cardLine  @param {{expect: string, command: string}} p */
+export function step0bStdinOf(cardLine, p) {
+  if (typeof cardLine !== 'string' || cardLine === '' || cardLine.includes('\n')) throw new TypeError('step0bStdinOf: the card line is one non-empty line');
+  return prependCard(cardLine, p.expect === 'subagent' ? agentPromptOf(p.command) : probePromptOf(p.command));
+}
+
+// ── measuring and acting ──
+/** Q11: the synthetic transcript path does not exist, measured before --out. A path that exists, or one whose lstat
+ *  fails for another reason, refuses input-invalid: the denial probes would name a real file. */
+function refuseSyntheticPresent(p) {
+  try {
+    lstatSync(p);
+  } catch (e) {
+    if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') return;
+    refuse('input-invalid', `synthetic transcript ${p} unmeasured ${errCode(e)}`);
+  }
+  refuse('input-invalid', `synthetic transcript ${p} exists`);
+}
+/** W2-D78 (i), (ii) and (iii) for step 0b's one question, then its card line, through W2-5b1's requireListed,
+ *  refuseRecallOff, recheckBatch (over the roster's config dirs) and armPayloads; a payload that no longer reconstructs
+ *  refuses quiz-unanswerable `<qid> payload <word>` (D-6469). K26, K28 (D-6481 carried): the store's retained readings are
+ *  admitted first (W2-5b1's maskingSnapshotsOf), and the re-check and the card are built under every one of them; their
+ *  card lines must agree (maskingAgreementOf, site step0b), or the preflight refuses input-invalid
+ *  `masking-snapshots-disagree step0b` before any spawn or persistence, never masking with the newest reading. Answers
+ *  the agreed card line. Called before --out and before every arm batch, for the pilot and the quiz section alike. */
+async function step0bCardOf(ctx) {
+  const snapshots = maskingSnapshotsOf(ctx.rs, ctx.home);
+  requireListed(ctx.home, ctx.storeId, familiesOf([ctx.q]));   // W2-D78 (i)
+  refuseRecallOff(ctx.home, [ctx.q.ccrc_id]);   // W2-D78 (ii)
+  return maskingAgreementOf(snapshots, 'step0b', async (idx) => {
+    const view = { ...ctx.rs, idx };
+    const v = (await ctx.deps.recheck(view, [ctx.q], { configDirs: ctx.configDirs })).get(ctx.q.qid);   // W2-D78 (iii), under every retained reading
+    const p = ctx.deps.payloads(view, v.boundaryEntryId, ctx.q.question, v.cut);
+    if (p.state !== 'payloads') refuse('quiz-unanswerable', `${ctx.q.qid} payload ${p.why}`);   // D-6469
+    return p.card.line;
+  }, sameMaskingText);
+}
+/** One run as the result records it: its outcome's code, signal and charge, its init session, its result subtype, its
+ *  main-thread and total messages (R1), and every error field its events carried (Q31; W2-5b1 Task 4's errorFieldsOf). */
+function step0bRunOf(mode, o) {
+  const read = readPlain(o.streamPath, OUT_STREAM_CAP);
+  if (read.state !== 'bytes') refuse('out-refused', `run-stream-changed ${o.name}`);
+  const f = o.facts;
+  return {
+    name: o.name, mode, code: o.code, signal: o.signal ?? null, tokens: o.tokens,
+    session_id: f.init === null ? null : f.init.sessionId,
+    subtype: f.result === null ? null : f.result.subtype, is_error: f.result === null ? null : f.result.isError,
+    main_turns: mainThreadTurns(f), messages: f.messages.length,
+    error_fields: errorFieldsOf(streamEventsOf(read.bytes.toString('utf8'))),
+  };
+}
+
+/** Q25's refusal, one spelling (W2-D12, K4): a pilot act runs on a fresh --out, never on pilot-source's, so an --out that
+ *  holds PILOT_SOURCE_FILE refuses out-refused, naming the act. step0b calls it here; W2-5b2 Task 2 routes arms through it
+ *  and calls it from fidelity and pilot-result, and Task 3 from the re-pilot's forms.
+ *  @param {string} out  @param {string} who */
+function refusePilotSourceOut(out, who) {
+  if (lstatOrNull(out, PILOT_SOURCE_FILE) !== null) refuse('out-refused', `${PILOT_SOURCE_FILE} is here: ${who} on a fresh --out, never pilot-source's`);
+}
+
+// A handler that takes deps after its env names that parameter driverEnv, never env (W2-4 Task 5's env scan).
+/** `step0b --section pilot` (W2 decisions §5 act 14; W2-D57, W2-D58). In order: the section and its form's flags (no
+ *  --allow-code-change, Q23), the asked settings mode; HOME; W2-5b1's loadArmRun (part 1, its gate_code re-checked first,
+ *  W2-D24; the pilot frozen list against part 1; part 1's settings mode); the unusable inputs; the store, once, and
+ *  armNodeOf (this node named, its questions in qid order, part 1's pilot_budget, W2-D56's expected); the ranges with the
+ *  batch shape and refuseSpawnAdmission; W2-D78 (i) to (iii) and the card for the first question; the synthetic path
+ *  absent (Q11); all before prepareOut (W2-5a's R10). Then --out (fresh of pilot-source's output, Q25), the claim, the
+ *  account, the gate, the box batch and the arm batches, each behind preflightSpawn. The result is written whatever it
+ *  shows and its sha printed on stderr, stdout empty (D-5983); exit 0 when the pilot passed, else `pilot-failed` (exit 2). */
+export async function step0bCommand(flags, driverEnv, deps = { recheck: recheckBatch, payloads: armPayloads, now: () => Date.now() }) {
+  const section = flags.section;
+  if (!STEP0B_SECTIONS.includes(section)) refuse('args-invalid', `step0b wants --section ${STEP0B_SECTIONS.join(' or --section ')}, not ${JSON.stringify(section ?? null)}`);
+  checkFlags(`step0b --section ${section}`, flags);
+  const asked = flags['settings-mode'];
+  if (asked !== undefined && !SETTINGS_MODES.includes(asked)) refuse('args-invalid', `settings-mode ${asked}`);
+  const home = subcommandHome(driverEnv);
+  const run = loadArmRun(flags, section, { nowMs: deps.now() });   // W2-D24 (step0b): gate_code before any other input
+  const record = run.record;
+  const settingsMode = asked ?? run.settingsMode;   // Q26: part 1's mode, or the fallback the operator re-runs with
+  const transcript = deps.syntheticTranscript ?? STEP0B_SYNTHETIC_TRANSCRIPT;
+  refuseUnusableInputs(home, flags.out, [['arm-model', record.arm_model]]);
+  const rs = openReplayStore(home);
+  try {
+    const storeId = rs.storeId;
+    const node = armNodeOf(run, storeId);
+    const q = node.questions[0];   // Q11: the first usage question in qid order (a frozen list is sorted by qid)
+    refuseOutOfRangeValues({ budget: node.budget, budgetField: section === 'pilot' ? 'pilot_budget' : 'spend_budget', limits: node.limits, quotas: null, batch: true });
+    refuseSpawnAdmission({ home, accountId: node.account, limits: node.limits, expected: node.expected });   // step0b: W2-5a's R10
+    const ctx = { home, rs, storeId, q, deps, configDirs: rosterConfigDirs(readRoster(home).roster, home) };
+    await step0bCardOf(ctx);   // W2-D78 (i) to (iii) and the card before --out; asked again before every arm batch
+    refuseSyntheticPresent(transcript);   // Q11
+    const out = prepareOut(flags.out);
+    refuseColonInRealOut(out);
+    refusePilotSourceOut(out, 'step0b runs');
+    const claim = claimOut(out);
+    try {
+      const { json, roster } = readRoster(home);
+      const launch = admitAccount(json, roster, node.account, home);
+      const gate = batchGate({ out, home, accountId: launch.accountId, budget: node.budget, limits: node.limits });
+      const model = record.arm_model;
+      const lang = driverEnv.LANG;
+      const nameOf = (r) => step0bRunName(section, settingsMode, r);
+      let expected = node.expected;   // W2-D56's values for every batch; the re-pilot replaces the version (W2-5b2 Task 3)
+      const spawnPre = () => preflightSpawn({ launch, home, out, lang, gate, expected });
+      const batches = [];
+      // The box batch: W2-D56, then W2-4's mechanics under this mode's name (R1's main-thread turns; persistence).
+      const pre0 = await spawnPre();
+      const mech = await step0bMechanics({ launch, out, model, settingsMode, lang, gate, claim, name: nameOf('turn-bound') });
+      batches.push({ claude_code_version: pre0.version, runs: [nameOf('turn-bound')] });
+      const box = finishedOutcome({ launch, mode: 'box', model, settingsMode, out, name: nameOf('turn-bound') });
+      // The arm batches: W2-D78 and the card, then W2-D56, before each; at most limits.batch_max runs at limits.concurrency.
+      const probes = step0bProbesOf(home, transcript);
+      const outcomes = [];
+      for (let i = 0; i < probes.length; i += node.limits.batch_max) {
+        const cardLine = await step0bCardOf(ctx);
+        const pre = await spawnPre();
+        const jobs = probes.slice(i, i + node.limits.batch_max).map((p) => {
+          const job = { launch, mode: 'arm', model, settingsMode, recall: { session: q.ccrc_id, arm: TREATMENT_ARM, asof: q.boundary_uuid },
+            stdin: step0bStdinOf(cardLine, p), out, name: nameOf(p.probe), lang };
+          return deps.timeoutMs === undefined ? job : { ...job, timeoutMs: deps.timeoutMs };
+        });
+        outcomes.push(...await runBatch(jobs, { gate, claim, concurrency: node.limits.concurrency }));
+        batches.push({ claude_code_version: pre.version, runs: jobs.map((j) => j.name) });
+      }
+      const persistence = [{ name: box.name, ...mech.persistence }, ...outcomes.map((o) => ({ name: o.name,
+        ...persistenceMeasured({ configDir: launch.configDir, sessionId: o.facts.init === null ? null : o.facts.init.sessionId, cwd: o.cwd }) }))];
+      const checks = {
+        'turn-bound': turnBoundCheckOf(mech.turn_bound),
+        persistence: persistenceCheckOf(persistence),
+        ...initChecksOf(outcomes.map((o) => o.facts.init), armToolsOf(spawnArgv({ mode: 'arm', model, settingsMode, home }))),
+        ...Object.fromEntries(probes.flatMap((p, k) => (p.expect === 'subagent' ? [] : [[p.probe,
+          (p.expect === 'admitted' ? admissionCheckOf : denialCheckOf)(probeFindingOf(outcomes[k].facts, p.command))]]))),
+      };
+      const verdict = step0bVerdictOf(checks);
+      const agent = outcomes[probes.findIndex((p) => p.expect === 'subagent')];
+      const output = {
+        kind: STEP0B_KIND, v: 1, section, record_sha256: run.recordSha256, store_id: storeId, measured_ms: Date.now(),
+        account: launch.accountId, model, settings_mode: settingsMode, record_settings_mode: run.settingsMode,
+        question: { qid: q.qid, ccrc_id: q.ccrc_id, generation: q.generation, boundary_uuid: q.boundary_uuid },
+        synthetic_transcript: transcript, batches, checks, subagent: subagentToolsOf(agent.facts.toolPairs), persistence,
+        runs: [step0bRunOf('box', box), ...outcomes.map((o) => step0bRunOf('arm', o))],
+        passed: verdict.passed, failed: verdict.failed, unmeasured: verdict.unmeasured,
+        budget: node.budget, spend: spentSoFar(out),
+      };
+      const rel = step0bRel(section, settingsMode);
+      ensurePlainDir(out, `${section}/step0b`);
+      writePlain(out, rel, canonicalJson(output) + '\n');
+      process.stderr.write(`sha256 ${shaOfPlain(out, rel)}\n`);   // D-5983: printed whatever the pilot showed
+      if (!verdict.passed) refuse('pilot-failed', step0bFailureDetail(settingsMode, checks, verdict));   // W2-D57: halts, recorded
+      return EXIT.OK;
+    } finally {
+      claim.release();
+    }
+  } finally {
+    rs.close();
+  }
+}
+
+HANDLERS.set('step0b', (flags, env) => step0bCommand(flags, env));
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised
 // when main runs. Importing the module (the tests do) runs nothing. The exit code is set, never forced, so stderr drains.
