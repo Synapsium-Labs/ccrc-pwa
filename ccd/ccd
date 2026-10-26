@@ -1519,9 +1519,9 @@ SUBSTRATE_PROBE_DEADLINE_S=8    # bound on ONE has-session probe. Healthy answer
                                 # an unbounded probe turns a wedge into a silent supervisor hang.
 SUBSTRATE_BACKOFF_S=30          # unknown-tick interval once the fault is established
 SUBSTRATE_BACKOFF_AFTER=3       # consecutive unknowns before backing off 5s -> 30s
-SPAWN_EFFORT="ultracode"        # /effort sent at settle to a session with NO routing record
-                                # ("" disables) — a pre-slice-1 session, exactly today's
-                                # behaviour. A session WITH a record never gets this keystroke:
+SPAWN_EFFORT="high"             # /effort sent at settle to a session with NO routing record ("" disables):
+                                # the coordinator row's effort, never ultracode (coordinator clause 19,
+                                # pinned by routing-references.test.ts). A session WITH a record never gets this keystroke:
                                 # its own effort field rides `--effort`/`--settings` on the
                                 # spawn argv instead (`_spawn_start`, routing spec §5.2).
                                 # ultracode DOES have `--settings` keys (measured Claude Code
@@ -20812,9 +20812,9 @@ _route_bytes() {   # value -> its length in BYTES (controller ruling S1-R2).
 # be the one thing that has to be re-edited on every release — see
 # `settings-aliases.test.ts`, which reds on exactly that.
 #
-# The other three fields are unchanged: an operator spawn still orchestrates at
-# `ultracode` with `sonnet` subagents and workflows on.
-ROUTE_COORDINATOR_ROW="class=opus effort=ultracode subagent=sonnet workflow=on"   # spec §3's coordinator row: the default for an OPERATOR spawn (§4)
+# Effort is `high`, never `ultracode` (standing workflow orchestration; coordinator clause 19, 2026-10-25);
+# `workflow=on` stays so a clause-19 review can launch. routing-references.test.ts pins this row to the matrix.
+ROUTE_COORDINATOR_ROW="class=opus effort=high subagent=sonnet workflow=on"   # spec §3's coordinator row: the default for an OPERATOR spawn (§4)
 
 _route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the byte count (never the bytes)
   # BEFORE ANY SIDE EFFECT. Every caller runs this above its first write — above
