@@ -6273,6 +6273,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **The soak.** Under the 9472 rule a change inside the lane's class is told to the broker's coordinator before a tap
     (mail 9898). Whether a tap restarts the soak clock is that coordinator's decision, so a tap onto v0.0.713 or later
     waits on its answer.
+  - **Cleared, 01:28 UTC (mail 9900).** A tap does not restart the soak clock, provided the hours after it read
+    normally. The first tap onto v0.0.713 or later owes a same-day report:
+    - pass counts around that boot: about one a minute, never two inside a minute, no long gap;
+    - cut passes and over-budget lines;
+    - the pass block's median and p90 before and after;
+    - the move hour's measured and unmeasured rows.
   `STATUS 2026-10-26T01:25:39Z fleet=v0.0.702 server=v0.0.702 health=v0.0.702 newest=v0.0.713 intent=*:dev/auto=off`
   `pin=None link=<versions>/v0.0.702 backups=fleet:165M/server:9341M disk=fleet:98G/work:452G/server:21G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
