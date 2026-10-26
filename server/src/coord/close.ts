@@ -328,7 +328,7 @@ async function abandonRun(
     const halt = await sweepGateOf(deps, id, sweep) ?? commitAbandon(deps, id, plan, causedBy, sweep, false);
     return halt ?? { ok: true, id, state: 'failed', released: false, ...handOffChildReclaim(deps, NO_CHILD_GATE) };
   }
-  const sibRead = deps.coord.openRunsForSession(sessionId, id);
+  const sibRead = deps.coord.bindingsOf(sessionId).worker({ excludeRunId: id });
   // An abandon never runs `verifyDone`, so there is no measured line to reuse: `null` is what "it did not run" IS.
   const act = await decideClose({ step: 'abandon', run, siblings: sibRead,
     gate: () => childGateAtClose(deps, run, sessionId, sibRead, false, 'failed', null) });

@@ -10,8 +10,9 @@ import { parsedFile } from '../scan/symbols.js';
 import { REPO } from '../consolidationCensus.js';
 import { BOUND_BY_READERS, boundByCalls, boundBySites, type BoundBySite } from './bindings.js';
 
-/** The real tree's site count may only shrink: each move onto `bindingsOf` lowers it in the same commit. */
-const BOUND_BY_CEILING = 22;
+/** The real tree's site count, pinned exactly (a ceiling that is also a floor, `run-session-census.test.ts`'s rule): each
+ *  move onto `bindingsOf` lowers it in the same commit, and a new site is red until it is moved or justified. */
+const BOUND_BY_CEILING = 21;
 
 /** Where each reader is defined, by its qualified name: a rename moves the reader out of the census, and this row says so. */
 const READER_HOMES: Readonly<Record<string, readonly [string, string]>> = {
@@ -69,11 +70,10 @@ describe('ARCH-42 bound-by census (D-TBD-bound-by-census)', () => {
     }
   });
 
-  it('REAL: the site count never rises past its ceiling', () => {
+  it('REAL: the site count is the pinned one', () => {
     const sites = boundBySites(REPO);
     show(sites);
-    expect(sites.length).toBeLessThanOrEqual(BOUND_BY_CEILING);
-    expect(sites.length).toBeGreaterThan(0);
+    expect(sites.length).toBe(BOUND_BY_CEILING);
   });
 
   it('REAL: every reader is still defined where the census looks for it', () => {
