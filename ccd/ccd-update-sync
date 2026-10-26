@@ -132,9 +132,9 @@ TIMEOUT="${CCRC_UPDATE_SYNC_TIMEOUT:-20}"
 # `redact <text>` -- what NO line this script prints may carry verbatim
 # (review 155 C18, fix round 1 item 11): a URL's userinfo and this box's own
 # absolute home directory (-> ~). It applies all three of ccd/ccrc's
-# `_upd_redact` rules (wave 29, R45, D-6984): the scheme rule, after one slash
-# or two (scheme://user:pass@host -> scheme://host; scheme:/user:pass@host ->
-# scheme:/host, which curl also authenticates with); the rule for a base with
+# `_upd_redact` rules (wave 29, R45, D-6984): the scheme rule, after one or
+# more slashes (scheme://user:pass@host -> scheme://host; scheme:/user:pass@host
+# -> scheme:/host, which curl also authenticates with); the rule for a base with
 # no scheme (user:pass@host, which curl takes as http, and which nothing here
 # refuses in agent.env -> host); and the home rule. One difference, on
 # purpose: this script strips the base's trailing '/' and closes its exit-6
@@ -150,16 +150,17 @@ TIMEOUT="${CCRC_UPDATE_SYNC_TIMEOUT:-20}"
 # redacts them without hand-editing each sentence, and covers any future
 # line the same way.
 redact() {
-  local s="$1" had_extglob=0
+  local s="$1" had_extglob=0 LC_ALL=C
   shopt -q extglob && had_extglob=1
   shopt -s extglob
   # Bounded to characters a URL authority actually allows before an '@' --
   # never '/' or whitespace -- so an unrelated '@' past the authority is
   # left alone (ccd/ccrc's `_upd_redact` states the same rule). Review fix
   # round 1, N2 (ccd/ccrc's own copy): '?' and '#' also end the authority --
-  # excluded so the class stops at the first of '/', '?' or '#'.
-  s="${s//:\/\/+([^\/@?#[:space:]])@/:\/\/}"
-  s="${s//:\/+([^\/@?#[:space:]])@/:\/}"   # one slash: the two-slash form is already masked, so its `/` never starts a match
+  # excluded so the class stops at the first of '/', '?' or '#'. Local
+  # LC_ALL=C keeps an invalid UTF-8 byte inside the authority class.
+  local sre=':(/+)[^/@?#[:space:]]+@'
+  while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
   # No scheme: every '@'-ended run from a token's start (the text's, or after whitespace, '"' or '<'), `_upd_redact`'s
   # class, whose host ends at '/', '?', '#', ')' or the text's end; prose's `user@host` with nothing after it is masked too.
   local re='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)+)([^/@?#[:space:])]+([/?#)]|$))'

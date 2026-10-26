@@ -837,6 +837,54 @@ describe('W29: the keepalive reads its settings from ~/.ccrc/ccrc.env through cc
     expect(turns()).toEqual([]);
   });
 
+  it.each([
+    ['9223372036854775808', 'file'], ['9223372036854775808', 'environment'],
+    ['99999999999999999999', 'file'], ['99999999999999999999', 'environment'],
+  ])('W29-K7: unrepresentable freshness %s from %s refuses before a turn or work lock', (value, source) => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    ccrcEnv(`CCRC_KEEPALIVE_FRESH=${source === 'file' ? value : '1800'}\n`);
+    const r = reboot(source === 'environment' ? { CCRC_KEEPALIVE_FRESH: value } : {});
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toContain(`CCRC_KEEPALIVE_FRESH must be a representable whole number — got '${value}', as set in ${source === 'file' ? '~/.ccrc/ccrc.env' : 'the environment'}; nothing was measured`);
+    expect(r.stderr).not.toContain('integer expression expected');
+    expect(turns()).toEqual([]);
+    expect(fs.existsSync(j('.ccrc', 'keepalive.lock'))).toBe(false);
+    expect(fs.existsSync(j('.ccrc', 'keepalive.json'))).toBe(false);
+  });
+
+  it.each([
+    ['0', true], ['00', true], ['08', false], ['01800', false],
+    ['0000000000000000000000000000000008', false],
+    ['9223372036854775807', false], ['09223372036854775807', false],
+  ] as const)('W29-K8: representable freshness %s preserves decimal leading zeros and zero semantics', (value, spends) => {
+    const date = spawnSync('bash', ['-c', 'command -v date'], { encoding: 'utf8' }).stdout.trim();
+    fs.writeFileSync(j('fixture-bin', 'date'), `#!/usr/bin/env bash
+case "$1" in +%s) printf '1700000000\\n' ;; *) exec '${date}' "$@" ;; esac
+`, { mode: 0o755 });
+    plantWrapper('claude-a', renders('claude-a'));
+    fs.mkdirSync(j('.cc-limits'), { recursive: true });
+    fs.writeFileSync(j('.cc-limits', 'claude-a.json'), JSON.stringify({ five: 9, seven: 3, ts: 1699999997 }));
+    ccrcEnv(`CCRC_KEEPALIVE_FRESH=${value}\n`);
+    const r = reboot();
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).not.toContain('integer expression expected');
+    expect(row('claude-a').outcome).toBe(spends ? 'refreshed' : 'skipped');
+    expect(turns().some((l) => l.startsWith('turn claude-a '))).toBe(spends);
+  });
+
+  it('W29-K9: the largest representable freshness still throttles a previous attempt without telemetry', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    fs.mkdirSync(j('.ccrc', 'keepalive-state'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'keepalive-state', 'claude-a.json'),
+      JSON.stringify({ lastAttempt: Math.floor(Date.now() / 1000) - 3600, fails: 1 }));
+    ccrcEnv('CCRC_KEEPALIVE_FRESH=9223372036854775807\n');
+    const r = reboot();
+    expect(r.status, r.stderr).toBe(0);
+    expect(row('claude-a').reason).toContain('under CCRC_KEEPALIVE_FRESH=9223372036854775807');
+    expect(turns()).toEqual([]);
+  });
+
   it('W29-K6: a prompt with a quote inside it stops the pass, and no turn is taken', () => {
     plantWrapper('claude-a', renders('claude-a'));
     plantLimits('claude-a', 9, 9999);

@@ -286,6 +286,10 @@ for knob in CCRC_KEEPALIVE_FRESH CCRC_KEEPALIVE_TURN_TIMEOUT \
     || { src=""; [ "$knob" != CCRC_KEEPALIVE_FRESH ] || src="$KA_FRESH_FROM"
          _ka_say "$knob must be a whole number — got '${!knob}'$src; nothing was measured"; exit 1; }
 done
+# Use the freshness gates' own decimal comparison, not bash arithmetic (which
+# wraps overflow and treats leading zeros as octal), to prove representability.
+[ "$CCRC_KEEPALIVE_FRESH" -ge 0 ] 2>/dev/null \
+  || { _ka_say "CCRC_KEEPALIVE_FRESH must be a representable whole number — got '$CCRC_KEEPALIVE_FRESH'$KA_FRESH_FROM; nothing was measured"; exit 1; }
 
 STARTED="$(date -u +%FT%TZ)"
 

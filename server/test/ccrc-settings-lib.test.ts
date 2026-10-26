@@ -87,7 +87,7 @@ describe('W29: ccd/lib/ccrc-settings.sh is ccd/ccrc\'s reader, generated, never 
     expect(last).toBe(`${home}/.ccrc/ccrc.env|${list}`);
   });
 
-  type Case = [string, (home: string) => void, Record<string, string>?, string?];
+  type Case = [string, (home: string) => void, Record<string, string>?, string?, RegExp?];
   const env = (home: string): string => join(home, '.ccrc', 'ccrc.env');
   const put = (text: string | Buffer) => (home: string) => writeFileSync(env(home), text, { mode: 0o600 });
   const CASES: Case[] = [
@@ -104,10 +104,11 @@ describe('W29: ccd/lib/ccrc-settings.sh is ccd/ccrc\'s reader, generated, never 
     ['a directory', (h) => mkdirSync(env(h))],
     ['# CCRC_BACKUP_KEEP=5 alone', put('# CCRC_BACKUP_KEEP=5\n')],
     ['OTHER=1 alone', put('OTHER=1\n')],
+    ['a setting inside an unrelated multi-line quoted value', put('OTHER="a\nCCRC_BACKUP_KEEP=5\nb"\n'), {}, 'CCRC_BACKUP_KEEP', /^1\|\|\|CCRC_BACKUP_KEEP cannot be measured: .*a quote left open on an earlier line/],
     ['an environment value of 7 over a file value of 5', put('CCRC_BACKUP_KEEP=5\n'), { CCRC_BACKUP_KEEP: '7' }],
     ['the key CCRC_NOT_A_SETTING', put('CCRC_NOT_A_SETTING=5\n'), {}, 'CCRC_NOT_A_SETTING'],
   ];
-  it.each(CASES)('W29-L4: the library and ccd/ccrc answer alike: %s', (_name, setup, extra = {}, key = 'CCRC_BACKUP_KEEP') => {
+  it.each(CASES)('W29-L4: the library and ccd/ccrc answer alike: %s', (_name, setup, extra = {}, key = 'CCRC_BACKUP_KEEP', want) => {
     const home = freshHome();
     setup(home);
     const probe = '. "$1"; _ccrc_knob "$2" 10; rc=$?; printf "%s|%s|%s|%s\\n" "$rc" "$KNOB" "$KNOB_FROM" "$KNOB_WHY"';
@@ -115,6 +116,10 @@ describe('W29: ccd/lib/ccrc-settings.sh is ccd/ccrc\'s reader, generated, never 
     const viaLib = bash(home, probe, [LIB, key], extra);
     expect(viaCcrc.stdout.split('|').length, `ccd/ccrc answered: ${viaCcrc.stdout}${viaCcrc.stderr}`).toBe(4);
     expect(viaLib.stdout).toBe(viaCcrc.stdout);
+    if (want) {
+      expect(viaCcrc.stdout).toMatch(want);
+      expect(viaLib.stdout).toMatch(want);
+    }
   });
 
   it('W29-L5: --check names the first differing line', () => {

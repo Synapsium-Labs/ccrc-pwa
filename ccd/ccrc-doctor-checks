@@ -10781,9 +10781,11 @@ _check_box-settings() {
         v="${v#"$pre"}"; [[ ! "$v" =~ ^([^/@[:space:]]*@)+ ]] || v="${v#"${BASH_REMATCH[0]}"}"; v="$pre$v"
       fi
       set+="${set:+, }$k=$v"
-      [ "$role" != server ] || case "$sweeps" in *" $k "*) set+=" (read by the ccd-* sweeps, which do not run on a server-role box)" ;; esac
     elif [ "$KNOB_FROM" = empty ]; then set+="${set:+, }$k= (empty: the default)"
     else unset+="${unset:+,} $k"
+    fi
+    if [ "$role" = server ] && { [ "$KNOB_FROM" = file ] || [ "$KNOB_FROM" = empty ]; }; then
+      case "$sweeps" in *" $k "*) set+=" (read by the ccd-* sweeps, which do not run on a server-role box)" ;; esac
     fi
   done
   if [ -n "$why" ]; then

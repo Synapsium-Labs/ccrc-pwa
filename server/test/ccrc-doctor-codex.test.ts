@@ -6404,6 +6404,13 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
     expect(w.code).toBe(2);
   });
 
+  it('W29-D3: an empty sweep setting on a server-role box names its default and the inactive sweeps', () => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-sweep-empty-', ['CCRC_GRAPH_BUDGET=']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(
+      /^PASS box-settings: the box's ccrc.env sets CCRC_GRAPH_BUDGET= \(empty: the default\) \(read by the ccd-\* sweeps, which do not run on a server-role box\); not set there/);
+    expect(r.code).toBe(0);
+  });
+
   it('W29-D2: on a server-role box a sweep setting is still reported, and says the sweeps do not run there', () => {
     const r = runBs(settingsBox('ccrc-doctor-bs-sweep-server-', ['CCRC_GRAPH_BUDGET=4', 'CCRC_BACKUP_KEEP=5']));
     expect(verdict(r), r.stdout + r.stderr).toMatch(

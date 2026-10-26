@@ -368,6 +368,14 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
     expect(call('K=/home/u/x', '/home/u')).toBe('K=~/x');
     expect(call('/home/u', '/home/u')).toBe('~');
     expect(call('http://h/p', '/')).toBe('http://h/p');
+    // _upd_redact strips every @-ended run in a scheme authority, even if curl refuses that base.
+    expect(call('https://u:p@x@host', '/fixture-home')).toBe('https://host');
+    expect(call('u:p@x@host/path', '/fixture-home')).toBe('host/path');
+    // A slash, query or fragment ends the authority; later @ text stays whole.
+    for (const url of ['https://host/path@x', 'https://host?a@b', 'https://host#a@b']) {
+      expect(call(url, '/fixture-home')).toBe(url);
+    }
+    expect(call('https://u:p@host?a@b#c@d', '/fixture-home')).toBe('https://host?a@b#c@d');
     const section = (text: string, fn: string): string => {
       const i = text.indexOf('  local home="${HOME:-}"\n', text.indexOf(`${fn}() {`));
       return text.slice(i, text.indexOf("  printf '%s' \"$s\"\n}", i));
@@ -506,11 +514,43 @@ describe('W29: the sync never prints a URL\'s userinfo', () => {
     expect(r.stderr).toContain('could not resolve host in https://127.0.0.1:9)');
   });
 
+  it.each(['https:///', 'https:////'])('W29-Y5: a base with 3+ slashes (%s) loses its userinfo', (base) => {
+    const r = failingSync(`${base}u:hunter2@127.0.0.1:9/`);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).not.toContain('hunter2');
+    expect(r.stderr).toContain(`could not resolve host in ${base}127.0.0.1:9)`);
+  });
+
   it('W29-Y4: a base with no scheme, which curl takes as http, loses its userinfo too (the coordinator\'s ruling on R45)', () => {
     const r = failingSync('u:hunter2@127.0.0.1:9');
     expect(r.code, r.stderr).toBe(1);
     expect(r.stderr).not.toContain('hunter2');
     expect(r.stderr).toContain('could not resolve host in 127.0.0.1:9)');
+  });
+
+  it('W29-Y6: under a UTF-8 locale, invalid UTF-8 inside userinfo is still masked (D-6984)', ({ skip }) => {
+    const locales = spawnSync('locale', ['-a'], { encoding: 'utf8' }).stdout ?? '';
+    const locale = locales.split('\n').find((l) => /^en_US\.utf-?8$/i.test(l));
+    if (!locale) { skip(); return; }
+    const src = readFileSync(SYNC, 'utf8');
+    const block = /^redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
+    expect(block, 'ccd-update-sync has no redact block').not.toBeNull();
+    const home = mkTmp('upd-sync-w29-invalid-userinfo-');
+    const fixture = join(home, 'url');
+    writeFileSync(fixture, Buffer.from([
+      ...Buffer.from('u:hun', 'ascii'), 0xff,
+      ...Buffer.from('ter2@127.0.0.1:9', 'ascii'),
+    ]));
+    const env = ghContainedEnv(home, {
+      HOME: home, LC_ALL: locale, PATH: process.env['PATH'] ?? '',
+    }, { systemd: true, tmux: true });
+    const p = spawnSync('bash', ['-c', [
+      block![0],
+      'input="$(cat -- "$1")"',
+      'redact "$input"',
+    ].join('\n'), '_', fixture], { env });
+    expect(p.status, p.stderr.toString()).toBe(0);
+    expect(p.stdout).toEqual(Buffer.from('127.0.0.1:9', 'ascii'));
   });
 
   it('W29-Y3: the header above redact() names the rules it applies, not "the same two rules"', () => {
