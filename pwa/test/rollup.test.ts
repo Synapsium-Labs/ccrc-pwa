@@ -7,9 +7,19 @@ import { withRunBinding } from './runBindingFixture';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetTree } from '../src/fleet/fleetTree';
 import {
-  NO_ROLLUP_PREFS, ROLLUP_RECENT_MS, nextRollupBoundary, operatorAsk, prunePrefs, rollupFleet, toggleChildren, toggleProject,
-  type CardRollup, type RolledRow, type RollupPrefs,
+  NO_ROLLUP_PREFS, ROLLUP_RECENT_MS, nextRollupBoundary, operatorAsk, prunePrefs, rollupCard, rollupFleet as rollupFleetOf,
+  toggleChildren, toggleProject, type CardRollup, type RolledRow, type RollupPrefs,
 } from '../src/fleet/rollup';
+import { fingerprint, type Recorded } from './characterise';
+
+/** W4-U0: every card each `rollupFleet` call of this file's cases rolls up, recorded as `rollupCard`'s own answer
+ *  (see `characterise.ts`). */
+const cardCalls: Recorded<Parameters<typeof rollupCard>>[] = [];
+const rollupFleet = (...args: Parameters<typeof rollupFleetOf>): ReturnType<typeof rollupFleetOf> => {
+  const [groups, prefs, now, selectedId] = args;
+  for (const g of groups) cardCalls.push({ args: [g, prefs, now, selectedId], json: JSON.stringify(rollupCard(g, prefs, now, selectedId)) });
+  return rollupFleetOf(...args);
+};
 import {
   HOUR, MIN, NOW, answeredByCoordinator, asking, coordinatorFleet, heldByCoordinator, run, sess,
 } from './rollupFixture';
@@ -220,5 +230,49 @@ describe('rollup — the fixes after review (D-6088)', () => {
     const b = sess('b1', 'project-b', { statusUpdatedAt: NOW - 10 * MIN, bucketSince: NOW - 10 * MIN });
     expect(nextRollupBoundary([a, b], NOW)).toBe(NOW - 29 * MIN + ROLLUP_RECENT_MS);
     expect(nextRollupBoundary([sess('q', 'project-q')], NOW)).toBeNull();
+  });
+});
+
+describe('W4-U0: today\'s rollup, characterised before delegation rows (delegation broker wave 4)', () => {
+  it('every card above rolls up to the JSON captured on main', () => {
+    expect(cardCalls.length).toBeGreaterThan(0);
+    expect(cardCalls.map((c) => fingerprint(c.json))).toMatchInlineSnapshot(`
+      [
+        "d215668b6a458987",
+        "886e12646adedd53",
+        "34f8c85b8c61725e",
+        "b169673beafb166f",
+        "8fced958f5a5b724",
+        "8e8f172ba93a5225",
+        "bf9d75639981e8bd",
+        "4412f9d16b480eb2",
+        "7cc9d90d9a833ac7",
+        "f24265ec7a89a366",
+        "cc9dec506b50d956",
+        "7cc9d90d9a833ac7",
+        "c8538eb131381fae",
+        "ccbcead54e4cc7a9",
+        "a7c66ddc7c3f23af",
+        "753f290e91cd7878",
+        "46905ada29b28c80",
+        "d3c2b849c728c03f",
+        "d3c2b849c728c03f",
+        "46905ada29b28c80",
+        "b073c4cd5e7b88ba",
+        "46905ada29b28c80",
+        "9a673c9c0c2596ed",
+        "5ab3d19f0162443f",
+        "9efe6f54e98b80f2",
+        "9a673c9c0c2596ed",
+        "f24265ec7a89a366",
+        "9efe6f54e98b80f2",
+        "f24265ec7a89a366",
+        "ae52eb354dba0777",
+        "79d9bef9fb12ae26",
+        "c390d74ee1ca6eed",
+        "46905ada29b28c80",
+        "de336cfe6db0ab4c",
+      ]
+    `);
   });
 });

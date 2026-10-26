@@ -13,12 +13,17 @@
 import { describe, it, expect } from 'vitest';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { nestFleet as nest, type FleetRow } from '../src/fleet/nestFleet';
+import { nestFleet as nestFleetOf, type FleetRow } from '../src/fleet/nestFleet';
 import { withRunBinding } from './runBindingFixture';
+import { fingerprint, recording, type Recorded } from './characterise';
+
+/** W4-U0: every `nestFleet` call this file's cases make, recorded (see `characterise.ts`). */
+const nestCalls: Recorded<Parameters<typeof nestFleetOf>>[] = [];
+const recordedNest = recording(nestFleetOf, nestCalls);
 
 /** The helper as a current server feeds it (D-7182, C7d): each session carries the run binding the server sends over the
  *  case's runs (`runBindingFixture.ts`), the input `attentionFirst`'s worker reader (`workerOf`) reads. */
-const nestFleet = (sessions: readonly FleetSession[], runs: readonly RunSummary[]): FleetRow[] => nest(withRunBinding(sessions, runs), runs);
+const nestFleet = (sessions: readonly FleetSession[], runs: readonly RunSummary[]): FleetRow[] => recordedNest(withRunBinding(sessions, runs), runs);
 
 const sess = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
   fleetSession({ id, project: 'ccrc-pwa', workspace: id, ...over });
@@ -299,5 +304,38 @@ describe('nestFleet — the top-level order is never re-sorted', () => {
     const sessions = [sess('other'), sess('w1'), sess('coord'), sess('unrelated')];
     const rows = nestFleet(sessions, [run({ id: 10, sessionId: 'w1', claimedBy: 'coord' })]);
     expect(shape(rows)).toEqual([['other', 0], ['coord', 0], ['w1', 1], ['unrelated', 0]]);
+  });
+});
+
+describe('W4-U0: today\'s tree, characterised before delegation rows (delegation broker wave 4)', () => {
+  it('every fixture set above renders the JSON captured on main', () => {
+    expect(nestCalls.length).toBeGreaterThan(0);
+    expect(nestCalls.map((c) => fingerprint(c.json))).toMatchInlineSnapshot(`
+      [
+        "2492c2b4b77a7ee7",
+        "a9231053bdbc6e13",
+        "dfa57c739b9f6cc5",
+        "dfa57c739b9f6cc5",
+        "f34850989ace2fc6",
+        "095bb5fe90ea5ec8",
+        "f34850989ace2fc6",
+        "12dc89e1b0295014",
+        "e1db894e885cfe7a",
+        "8bd0f387f5fb85c5",
+        "fabf0d289d58b4b1",
+        "83a654fd3ee945b7",
+        "197ca2884d173eed",
+        "97488a0242312060",
+        "6b23aab7b74e939d",
+        "b92c138a6ed3f43d",
+        "7280f8ee2e17279e",
+        "b92c138a6ed3f43d",
+        "ec693fd9544332fb",
+        "d2291ee3d9e4430e",
+        "ef53fc580bda7912",
+        "9d2f0f33dfdf4a7a",
+        "eb5aa6b06403a7f7",
+      ]
+    `);
   });
 });

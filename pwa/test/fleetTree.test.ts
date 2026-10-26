@@ -5,11 +5,16 @@ import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { cardsOf, coordinationLine, coordinationOf as coordinationOfTree, fleetTree as fleetTreeOf, workingOn } from '../src/fleet/fleetTree';
 import { withRunBinding } from './runBindingFixture';
+import { fingerprint, recording, type Recorded } from './characterise';
+
+/** W4-U0: every `fleetTree` call this file's cases make, recorded (see `characterise.ts`). */
+const treeCalls: Recorded<Parameters<typeof fleetTreeOf>>[] = [];
+const recordedTree = recording(fleetTreeOf, treeCalls);
 
 // The tree and the header as a current server feeds them (D-7182, C7d): each session carries the run binding the server
 // sends over the runs the case hands them (`runBindingFixture.ts`). Every assertion below reads the real model.
 const fleetTree = (sessions: FleetSession[], projects: readonly string[], rs: readonly RunSummary[]): ReturnType<typeof fleetTreeOf> =>
-  fleetTreeOf(withRunBinding(sessions, rs), projects, rs);
+  recordedTree(withRunBinding(sessions, rs), projects, rs);
 const coordinationOf = (s: FleetSession, sessions: readonly FleetSession[], rs: readonly RunSummary[]): ReturnType<typeof coordinationOfTree> =>
   coordinationOfTree(withRunBinding([s], rs)[0]!, withRunBinding(sessions, rs), rs);
 import { STATE_WORD } from '../src/fleet/sessionFacts';
@@ -265,5 +270,28 @@ describe('the header title for a review run', () => {
     const review = run({ id: 42, kind: 'review', reviews: 41, sessionId: 'lane-b-project-b-quiet-river' });
     const c = coordinationOf(crossChild('project-a'), [coordinator, crossChild('project-a')], [review])!;
     expect(coordinationLine(c).title).toMatch(/^this workspace reviews one wave of Port the API/);
+  });
+});
+
+describe('W4-U0: today\'s tree, characterised before delegation rows (delegation broker wave 4)', () => {
+  it('every fixture set above renders the JSON captured on main', () => {
+    expect(treeCalls.length).toBeGreaterThan(0);
+    expect(treeCalls.map((c) => fingerprint(c.json))).toMatchInlineSnapshot(`
+      [
+        "7238fc1ccb39cd91",
+        "2dcc8e7db34b6972",
+        "c2b1c4fbc383efa3",
+        "afec98f7add32b4a",
+        "afec98f7add32b4a",
+        "7abe92f21eb047dc",
+        "3b0c6bc57e68b73e",
+        "495e11812fac1dfd",
+        "5c64241582b713b0",
+        "1fecb6a5645e7e8e",
+        "ae77e22eac7c913b",
+        "10e24e1975059fe1",
+        "a3d43382df21dd42",
+      ]
+    `);
   });
 });
