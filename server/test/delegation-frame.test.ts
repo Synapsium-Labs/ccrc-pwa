@@ -3,7 +3,9 @@
 // After a delegation pass that RAN, the watcher reads the narrow run stamps, asks the lane for its projection (decided in L1,
 // `projectDelegation`) and broadcasts it on the bus when its content changed (`asOf` excluded). An absent frame is "unavailable": the
 // lane withholds a projection until two reconciles, a listed registry and a ready applier, and a lane that can no longer project
-// WITHDRAWS a frame it sent (one `null`). Rows W4-W1 to W4-W9; mutants W4-M05, W4-M02b, W4-M20, W4-M24, W4-M10, W4-M12, W4-M17, W4-M18.
+// WITHDRAWS a frame it sent (one `null`). W4-W7 and W4-W8 drive the lane directly (`sweepDelegation`, an unlisted registry noted by
+// hand); W4-W10 drives `tick()`, which returns on an unlistable registry before any lane runs and withdraws there. Rows W4-W1 to
+// W4-W10; mutants W4-M05, W4-M02b, W4-M20, W4-M24, W4-M10, W4-M12, W4-M17, W4-M18, W4-M26.
 //
 // THE RIG IS COPIED, minimally, from `delegation-watch.test.ts` (`world`, `setCensus`, `censusPass`, `primed`, `rawTreeWorld`, `bashPre`,
 // `bashPost`), which is follow-up 10's file and is not edited here; `bus` is kept on the `World`. Folding the two into one shared helper is
@@ -14,6 +16,7 @@ import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { DelegationProjectionWire, FleetSession } from '../../shared/api.js';
 import { loadConfig } from '../src/config.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { FleetWatcher, DELEGATION_SWEEP_MS } from '../src/watch.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -47,6 +50,8 @@ interface World {
   bus: Bus;
   /** Every `delegation` value the bus carried, in order. */
   frames: Array<DelegationProjectionWire | null>;
+  /** While true, the registry directory does not list (`io.readdir` answers null), as `tick()` meets an unlistable registry. */
+  unlisted: boolean;
 }
 
 const sessionOf = (id: string, status: 'idle' | 'busy' | 'dead' = 'idle', project = 'demo', workdir?: string) =>
@@ -61,14 +66,19 @@ function world(opts: { coord?: boolean } = {}): World {
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: projectsRoot } as never);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const flags = { unlisted: false };
+  const io: FleetIO = { ...localIO, readdir: async (p, t) => (flags.unlisted && p === cfg.registryDir ? null : localIO.readdir(p, t)) };
   const deps = {
-    ...testDeps(home), monotonicMs: () => Date.now(), cfg, ...(opts.coord === false ? {} : { coord }),
+    ...testDeps(home), monotonicMs: () => Date.now(), cfg, io, ...(opts.coord === false ? {} : { coord }),
     fleetState: { connected: true, downSince: null, ccdVerbs: ['caps', DELEGATION_EVENTS_CAP] },
   };
   const bus = new Bus();
   const frames: Array<DelegationProjectionWire | null> = [];
   bus.on('delegation', (d) => { frames.push(d); });
-  const made: World = { home, cfg, watcher: new FleetWatcher(deps as never, bus, 10_000), coord, bus, frames };
+  const made: World = {
+    home, cfg, watcher: new FleetWatcher(deps as never, bus, 10_000), coord, bus, frames,
+    get unlisted() { return flags.unlisted; }, set unlisted(v: boolean) { flags.unlisted = v; },
+  };
   worlds.push(made);
   return made;
 }
@@ -240,6 +250,22 @@ describe('the delegation frame: projected after a pass that ran, broadcast on a 
     vi.spyOn(applier, 'state').mockReturnValue({ ...real, phase: 'reconstructing' } as never);
     await censusPass(w, at(6));
     expect(w.frames.slice(4)).toEqual([null]);
+  });
+
+  it('W4-W10 (the withdrawal through tick()): an unlistable registry withdraws a sent frame once, before any lane runs', async () => {
+    const w = await leasedWorld();
+    const sent = w.watcher.currentDelegation();
+    w.unlisted = true;
+    await w.watcher.tick();
+    expect(w.frames.slice(2)).toEqual([null]);
+    expect(w.watcher.currentDelegation()).toBeNull();
+    await w.watcher.tick();
+    expect(w.frames).toHaveLength(3);
+    w.unlisted = false;
+    w.watcher.noteDelegationRegistry(true);
+    await censusPass(w, at(3));
+    expect(w.frames).toHaveLength(4);
+    expect({ ...w.frames[3]!, asOf: '' }).toEqual({ ...sent!, asOf: '' });
   });
 
   it('W4-W9 (programme ownership on the L4 path): a listed session whose workdir is the raw tree removes its lease row', async () => {

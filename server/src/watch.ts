@@ -1917,18 +1917,21 @@ export class FleetWatcher {
       if (!read.ok) { console.warn(`ccrc-server: the delegation frame skipped a pass: runs refused (${read.detail})`); return; }
       wire = this.delegationLane().projection(sessions, read.runs);
     } catch (err) { console.warn(`ccrc-server: the delegation frame skipped a pass (${err instanceof Error ? err.message : String(err)})`); return; }
-    if (wire === null) {
-      if (this.delegationNow === null) return;
-      this.delegationNow = null;
-      this.lastDelegationJson = null;
-      this.bus.emit('delegation', null);
-      return;
-    }
+    if (wire === null) { this.withdrawDelegation(); return; }
     const json = JSON.stringify({ ...wire, asOf: '' });
     if (json === this.lastDelegationJson) return;
     this.lastDelegationJson = json;
     this.delegationNow = wire;
     this.bus.emit('delegation', wire);
+  }
+
+  /** WITHDRAWS a sent frame, once (`delegation: null`): after a pass that cannot project, and from `tick()` on an unlistable
+   *  registry, which returns before any lane runs. Nothing sent, nothing to withdraw. */
+  private withdrawDelegation(): void {
+    if (this.delegationNow === null) return;
+    this.delegationNow = null;
+    this.lastDelegationJson = null;
+    this.bus.emit('delegation', null);
   }
 
   /** The seven-day observation health, as of now, from the checkpoint's own intervals. `undefined` until the lane has tried to open its
@@ -2321,6 +2324,7 @@ export class FleetWatcher {
         ?.catch(() => { /* one bad sweep must not kill the poll */ });
       this.noteDelegationRegistry(registryRead.listed);
       if (!registryRead.listed) {
+        this.withdrawDelegation();                                      // wave 4: no lane runs below, so the frame is withdrawn here
         // Retain, don't erase, at fleet scale: `this.hookStates`/
         // `this.taskProgress`/`this.prevStatus`/`this.lastJson` are all left
         // exactly as the prior successful tick set them. Nothing is broadcast
