@@ -11112,9 +11112,11 @@ class DelegationLane {
 
   /** Wave 4: the projection as of the last pass, decided in L1 (`projectDelegation`); null while there is nothing measured to
    *  project: no applier, recovery not ready, the registry unlisted this tick, or fewer than two reconciles in this process
-   *  (a measured absence needs two successful censuses). Not stored; never a durable write. */
+   *  (a measured absence needs two successful censuses). Not stored; never a durable write. It projects the census the last pass
+   *  read (`passCensus`), never a second read: a census read is a pass's own (`delegation-sweep-clock.test.ts` counts them). */
+  private passCensus: DelegationCensusPass | null = null;
   projection(sessions: readonly DelegationProjectionSession[], runs: readonly DelegationProjectionRun[]): DelegationProjectionWire | null {
-    const census = this.census();
+    const census = this.passCensus;
     if (this.durable === null || census === null || !this.registryListed || !this.reconciled || this.reconciliations < 2) return null;
     const state = this.durable.state();
     if (state.phase !== 'ready') return null;
@@ -11141,6 +11143,7 @@ class DelegationLane {
       this.notReady = true;                                              // R88: nothing is listed, so nothing is read
       return;
     }
+    this.passCensus = census;                                            // wave 4: what `projection()` projects
     const ac = new AbortController();
     const cut = new Promise<'cut'>((resolve) => { ac.signal.addEventListener('abort', () => resolve('cut'), { once: true }); });
     const timer = setTimeout(() => ac.abort(), DELEGATION_PASS_BUDGET_MS);
