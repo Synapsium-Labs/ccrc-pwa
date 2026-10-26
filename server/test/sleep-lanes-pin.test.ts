@@ -1029,3 +1029,90 @@ describe('the opt-out marker', () => {
     expect((await hbPass(hb, [HIBERNATE_LIVE_MARKER, `${ID}.${NO_HIBERNATE_SUFFIX}`]))[0]!.verdict).toEqual({ act: 'hold', reason: 'opted-out' });
   });
 });
+
+// ── C4b (D-7040; ARCH-43, second PR): one row per field of `SleepPolicy`, on the old verdicts ─────────────────────────
+// APPENDED by C4b's characterization commit, green on the two old ladders before `decideSleep` exists. Each row names
+// one field of the policy row `server/src/sleep.ts` declares, and shows its two values as the old verdicts answer them:
+// run-done's value through `stopDoneVerdict`, idle-hours' through `hibernateVerdict`. The move commits change none of
+// these rows.
+describe('C4b: one row per SleepPolicy field, each value answering the old verdict\'s word', () => {
+  it('field entry.child: run-done holds a non-child (not-a-child, child-unreadable); idle-hours never reads the marker', () => {
+    expect([sdRow({ child: { kind: 'none' } }), sdRow({ child: { kind: 'unreadable' } })].map((m) => sdv(m(SD))))
+      .toEqual(['not-a-child', 'child-unreadable']);
+    expect([hbRow({ child: { kind: 'none' } }), hbRow({ child: { kind: 'unreadable' } })].map((m) => hbv(m(HB))))
+      .toEqual(['hibernate', 'hibernate']);
+  });
+
+  it('field entry.archivedBucket: idle-hours holds archived for bucket archived; run-done reads only archivedAt (its bucket rung answers)', () => {
+    expect(sdv(sdRow({ bucket: 'archived' })(SD))).toBe('bucket');
+    expect(hbv(hbRow({ bucket: 'archived' })(HB))).toBe('archived');
+    expect([sdv(sdRow({ archivedAt: NOW - HOUR })(SD)), hbv(hbRow({ archivedAt: NOW - HOUR })(HB))]).toEqual(['archived', 'archived']);
+  });
+
+  it('field entry.paneDead: idle-hours holds pane for a dead row, right after archived; run-done does not read the row\'s status', () => {
+    expect(hbv(hbRow({ status: 'dead' })(HB))).toBe('pane');
+    expect(hbv(hbRow({ status: 'dead', archivedAt: NOW - HOUR })(HB))).toBe('archived');
+    expect(hbv(hbRow({ status: 'dead', unmeasured: ['uuid'] })(HB))).toBe('pane');
+    expect(sdv(sdRow({ status: 'dead' })(SD))).toBe('hibernate');
+  });
+
+  it('field entry.stopped: run-done holds stopped for a stop stamp, after archived and before unmeasured; idle-hours does not read it', () => {
+    const stamp = { stoppedBy: { at: NOW - HOUR, surface: 'agent' } };
+    expect(sdv(sdRow(stamp)(SD))).toBe('stopped');
+    expect(sdv(sdRow({ ...stamp, archivedAt: NOW - HOUR })(SD))).toBe('archived');
+    expect(sdv(sdRow({ ...stamp, unmeasured: ['uuid'] })(SD))).toBe('stopped');
+    expect(hbv(hbRow(stamp)(HB))).toBe('hibernate');
+  });
+
+  it('field held: run-done lets a workspace hold pass with hibernate-hold-ok, carrying its text; idle-hours holds any hold', () => {
+    expect(stopDoneVerdict({ ...SD, heldKind: 'programme', row: { ...SD.row, held: PROGRAMME_HOLD } }))
+      .toStrictEqual({ act: 'hibernate', runId: 7, idleMs: 7 * HOUR, holdOk: PROGRAMME_HOLD });
+    expect(sdv({ ...SD, heldKind: 'programme', holdOkVerb: false, row: { ...SD.row, held: PROGRAMME_HOLD } })).toBe('held');
+    expect(hbv(hbRow({ held: PROGRAMME_HOLD })(HB))).toBe('held');
+  });
+
+  it('field runClock: run-done reads the run\'s close after runs-unreadable (no-run, not-done, close-unplaced, grace); idle-hours reads no run', () => {
+    expect([sdLast(null), sdLast({ state: 'working' }), sdLast({ closedAt: null }), sdLast({ closedAt: NOW - 1 })].map((m) => sdv(m(SD))))
+      .toEqual(['no-run', 'not-done', 'close-unplaced', 'grace']);
+    expect(sdv(sdLast(null)(sdStore({ openWorker: true })(SD))), 'the run clock stands above run-worker').toBe('no-run');
+    expect(hibernateVerdict(HB, NOW, N)).toStrictEqual({ act: 'hibernate', idleMs: 7 * HOUR });
+  });
+
+  it('field verbBeforeMeasure: run-done holds no-verb before measure; idle-hours answers measure with no verb read', () => {
+    expect(sdv(sdIn({ verb: false, live: { kind: 'unread' } })(SD))).toBe('no-verb');
+    expect(sdv(sdIn({ verb: false })(SD)), 'no-verb stands above the live reads').toBe('no-verb');
+    expect(sdv(sdIn({ verb: false })(sdRow({ subagents: [{ id: 'agent-a' }] })(SD))), 'and below roster').toBe('roster');
+    expect(hbv(hbIn({ live: { kind: 'unread' } })(HB))).toBe('measure');
+  });
+
+  it('field turnVerdict: run-done reads the fail-closed turn verdict after the live word; idle-hours has no turn read', () => {
+    expect([sdLive({ turn: 'busy' }), sdLive({ turn: 'unmeasured' })].map((m) => sdv(m(SD)))).toEqual(['turn', 'unmeasured']);
+    expect(sdv(sdLive({ turn: 'busy', word: { ok: true, word: 'busy' } })(SD))).toBe('live-word');
+    expect(sdv(sdLive({ turn: 'busy' })(sdMark({ state: 'running' })(SD))), 'the turn stands above the marker').toBe('turn');
+    expect(Object.keys(HB.live).sort(), 'idle-hours\' live read carries no turn').toEqual(['kind', 'mark', 'word']);
+  });
+
+  it('field liveWord: one rule serves both, the sleep turn policy (rest on idle alone), over the whole corpus', () => {
+    const rests = WORDS.map((w) => (w === 'idle' ? 'hibernate' : 'live-word'));
+    expect(WORDS.map((w) => sdv(sdLive({ word: { ok: true, word: w } })(SD)))).toEqual(rests);
+    expect(WORDS.map((w) => hbv(hbLive({ word: { ok: true, word: w } })(HB)))).toEqual(rests);
+  });
+
+  it('field quiet.boundary: run-done holds recent while idleMs < its threshold; idle-hours while idleMs <= N', () => {
+    expect([sdv(sdMark(quiet(GRACE - 1))(SD)), sdv(sdMark(quiet(GRACE))(SD))]).toEqual(['recent', 'hibernate']);
+    expect([hbv(hbMark(quiet(N))(HB)), hbv(hbMark(quiet(N + 1))(HB))]).toEqual(['recent', 'hibernate']);
+  });
+
+  it('field quiet threshold: run-done\'s is its input\'s grace, idle-hours\' its afterMs (N)', () => {
+    const closed = sdIn({ graceMs: 2 * HOUR })(sdLast({ closedAt: NOW - 3 * HOUR })(SD));
+    expect([sdv(sdMark(quiet(2 * HOUR - 1))(closed)), sdv(sdMark(quiet(2 * HOUR))(closed))]).toEqual(['recent', 'hibernate']);
+    expect([hbv(hbMark(quiet(HOUR))(HB), HOUR), hbv(hbMark(quiet(HOUR + 1))(HB), HOUR)]).toEqual(['recent', 'hibernate']);
+  });
+
+  it('field quiet.parkedMs: run-done takes STOP_DONE_PARKED_IDLE_MS for a parked or sibling-parked run; idle-hours has no parked clock', () => {
+    const parked = sdLast({ state: 'merging', closedAt: null })(SD);
+    expect([sdv(sdMark(quiet(GRACE + 1))(parked)), sdv(sdMark(quiet(STOP_DONE_PARKED_IDLE_MS))(parked))]).toEqual(['recent', 'hibernate']);
+    expect(sdv(sdMark(quiet(GRACE + 1))(sdStore({ parkedWorker: true })(SD)))).toBe('recent');
+    expect(Object.keys(HB.store).includes('parkedWorker'), 'idle-hours\' store read carries no parked run').toBe(false);
+  });
+});
