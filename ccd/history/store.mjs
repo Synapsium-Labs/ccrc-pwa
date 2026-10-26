@@ -1050,7 +1050,8 @@ const RANGE_PIECE = 1 << 20;
  *  a streaming sha256 rather than refused"). One RANGE_PIECE buffer is allocated and reused for every read
  *  (D-6973): each write is awaited through its callback, which fires only once the compressor has consumed the
  *  piece, so the next read may overwrite it, and a write error rejects instead of writing on into a destroyed
- *  stream. Returns null when the file ends before `end`, because it shrank under the read: the caller holds its
+ *  stream; a compressor or read error rejects the call, with `finished` observed from its creation and the encoder
+ *  destroyed. Returns null when the file ends before `end`, because it shrank under the read: the caller holds its
  *  cursor and tries again next tick. */
 export async function compressFdRange(fd, start, end) {
   const hash = newSha256();
@@ -1060,18 +1061,24 @@ export async function compressFdRange(fd, start, end) {
   const out = [];
   enc.on('data', (c) => { out.push(c); });
   const finished = new Promise((resolve, reject) => { enc.once('end', resolve); enc.once('error', reject); });
+  finished.catch(() => {});   // observed from creation: a rejection the loop never reaches is not unhandled
   const piece = Buffer.allocUnsafe(Math.min(RANGE_PIECE, end - start));
-  for (let pos = start; pos < end;) {
-    const want = Math.min(RANGE_PIECE, end - pos);
-    const n = readSync(fd, piece, 0, want, pos);
-    if (n === 0) { enc.destroy(); return null; }
-    const chunk = n === piece.length ? piece : piece.subarray(0, n);
-    hash.update(chunk);
-    await new Promise((res, rej) => enc.write(chunk, (e) => (e ? rej(e) : res())));
-    pos += n;
+  try {
+    for (let pos = start; pos < end;) {
+      const want = Math.min(RANGE_PIECE, end - pos);
+      const n = readSync(fd, piece, 0, want, pos);
+      if (n === 0) { enc.destroy(); return null; }
+      const chunk = n === piece.length ? piece : piece.subarray(0, n);
+      hash.update(chunk);
+      await new Promise((res, rej) => enc.write(chunk, (e) => (e ? rej(e) : res())));
+      pos += n;
+    }
+    enc.end();
+    await finished;
+  } catch (e) {
+    enc.destroy();
+    throw e;
   }
-  enc.end();
-  await finished;
   return { sha: hash.digest(), z: Buffer.concat(out), rawLen: end - start };
 }
 

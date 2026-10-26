@@ -148,6 +148,8 @@ The streamed arm already exists. `compressFdRange` (store.mjs) reads 1 MiB piece
   - M3: lib.mjs's constant set to `SIDECAR_WHOLE_MAX`. Expect (a) red. Run (a) alone (`-t "CP-39b.*\\(a\\)"`), because (b)-(e) size themselves from the constant by design.
   - M4: `compressFdRange` allocates a fresh piece per read again. Expect (b) red on the one-buffer assertion.
   - M5: `enc.write(chunk)` with neither the callback nor `drain` awaited. Expect (b) red on the decode. Measured in a standalone script on Node 24.14.1 (a 20 MiB patterned file, one reused 1 MiB piece): corrupt every time, while the callback await and a drain-only wait both decode correctly.
+  - M6: drop only the handler on `finished` (`finished.catch(() => {})`). Expect (f) red on the unhandled rejection.
+    - Measured: (f) red with `AssertionError: no rejection was left unhandled: expected [ …(1) ] to deeply equal []`. At the base code (28d4ab3a5) (f) was red with the same line, before the fix.
 
 - [ ] **Step 7: Commit.** `feat(history): a sidecar over 8 MiB is captured by the streamed arm, through one reused piece (CP-39b Task 1; D-6971, D-6972, D-6973)`
 
@@ -194,6 +196,6 @@ The streamed arm already exists. `compressFdRange` (store.mjs) reads 1 MiB piece
   - DM47's 64 MiB case is retitled, because its 64 MiB sidecar is now streamed like the larger one. Both are still checked byte for byte, under O20's bound.
   - S6's streamed-arm title and FPM6's comment name the new threshold.
   The arm boundary itself is pinned by CP-39b's cases at `SIDECAR_READ_WHOLE_MAX`.
-- **D-6973** — `history-compress-range-one-piece` (Task 1; O20). `compressFdRange` reads into one reused `RANGE_PIECE` buffer, awaiting each write's callback before refilling it, in place of a fresh 1 MiB buffer per read whose dead copies wait for a GC. Measured in a standalone script on Node 24.14.1, for 64 MiB of word text, as peak RSS growth: 85,896 KiB whole, 57,788 KiB streamed with a fresh piece, 23,976 KiB with one reused piece.
+- **D-6973** — `history-compress-range-one-piece` (Task 1; O20). `compressFdRange` reads into one reused `RANGE_PIECE` buffer, awaiting each write's callback before refilling it, in place of a fresh 1 MiB buffer per read whose dead copies wait for a GC. Measured in a standalone script on Node 24.14.1, for 64 MiB of word text, as peak RSS growth: 85,896 KiB whole, 57,788 KiB streamed with a fresh piece, 23,976 KiB with one reused piece. `compressFdRange` observes its `finished` promise's rejection from creation and destroys the encoder on any throw out of the loop, so a compressor or read error rejects the call and never leaves an unhandled rejection (pinned by CP-39b case (f), mutant M6).
   - The pieces, their order, the sha256 and the decoded bytes are unchanged.
   - The capture of a transcript line longer than `LINE_MAX` takes the same path, and gains the same saving.

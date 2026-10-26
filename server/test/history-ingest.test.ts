@@ -15,6 +15,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { syncBuiltinESMExports } from 'node:module';
 import { createHash, randomBytes } from 'node:crypto';
+import { Transform } from 'node:stream';
 import { brotliCompressSync, brotliDecompressSync, constants as zc } from 'node:zlib';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
@@ -3117,6 +3118,40 @@ describe('history ingest: the FTS index (plan task 23)', () => {
         fs.rmSync(box.home, { recursive: true, force: true });
       }
     }, 300_000);
+    it('(f) a compressor error rejects compressFdRange and leaves no unhandled rejection (D-6973)', async () => {
+      const { store } = await IX.api();
+      const zlib = (await import('node:zlib')).default;
+      const real = Object.getOwnPropertyDescriptor(zlib, 'createBrotliCompress')!;   // node:zlib's exports are configurable, not writable
+      const box = IX.newBox('ccrc-hist-cp39b-f-');
+      const seen: unknown[] = [];
+      const onUnhandled = (e: unknown): void => { seen.push(e); };
+      const boom = new Error('cp39b-f: the compressor failed on its second write');
+      process.on('unhandledRejection', onUnhandled);
+      let fd = -1;
+      try {
+        const file = path.join(box.home, 'range.bin');
+        fs.writeFileSync(file, Buffer.alloc(3 * (1 << 20), 0x61));   // three RANGE_PIECE pieces
+        fd = fs.openSync(file, 'r');
+        Object.defineProperty(zlib, 'createBrotliCompress', {
+          ...real,
+          value: function createBrotliCompress(): Transform {
+            let writes = 0;
+            return new Transform({ transform(chunk: Buffer, _enc, cb) { writes += 1; if (writes === 2) cb(boom); else cb(null, chunk); } });
+          },
+        });
+        syncBuiltinESMExports();
+        await expect(store.compressFdRange(fd, 0, 3 * (1 << 20))).rejects.toBe(boom);
+        await new Promise((r) => setTimeout(r, 0));
+        await new Promise((r) => setImmediate(r));
+        expect(seen, 'no rejection was left unhandled').toEqual([]);
+      } finally {
+        Object.defineProperty(zlib, 'createBrotliCompress', real);
+        syncBuiltinESMExports();
+        process.off('unhandledRejection', onUnhandled);
+        if (fd >= 0) fs.closeSync(fd);
+        fs.rmSync(box.home, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('T23-a (D-4312): the backfill and the re-index never decompress a whole sidecar, and charge blobs one at a time', () => {
