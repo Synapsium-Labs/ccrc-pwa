@@ -1,7 +1,7 @@
 // The caps door. Before it, `CoordStore.setCaps` had NO caller anywhere in
 // `server/src` (D-1164): the only way to change a cap was to edit `coord.db` by
 // hand. One cap is left, `maxConcurrentWorkers`: the daily brake is retired
-// (D-TBD-retire-daily-brake), and `retire-daily-brake.test.ts` pins how this
+// (D-7068), and `retire-daily-brake.test.ts` pins how this
 // door treats its field from an older PWA.
 //
 // Its POSTURE is the part worth reading twice. NOT box-token — the box token
@@ -292,7 +292,7 @@ describe('POST /api/coord/caps', () => {
     //
     // There were two disjoint dials when this was written, and it pinned that
     // both survived a concurrent pair. The daily dial is retired
-    // (D-TBD-retire-daily-brake), so the pair now moves the ONE dial twice, and
+    // (D-7068), so the pair now moves the ONE dial twice, and
     // the property is the feed's: each write's `before` is the value the other
     // left, so the two records chain from the seed rather than both starting at
     // it.
@@ -335,7 +335,7 @@ describe('POST /api/coord/caps', () => {
     // With the merge base read OUTSIDE the lock, both saves read `{3, 12}`
     // while the hold is in flight and the second writes the first's field back
     // unchanged. With it read inside, the second reads what the first stored.
-    // One dial is left since D-TBD-retire-daily-brake, so the witness is now the
+    // One dial is left since D-7068, so the witness is now the
     // feed: a `before` read outside the lock makes both records say `3 → …`.
     const TOKEN = 'f'.repeat(64);
     let signalHeld = (): void => {};

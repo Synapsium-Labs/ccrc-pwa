@@ -7300,7 +7300,7 @@ export interface MailSummary {
 /** The enforced cap (spec:199-201). The COUNT is a query over `runs`, never
  *  stored beside it — see `CoordStore.capsUsage`.
  *
- *  ONE cap since D-TBD-retire-daily-brake (operator ruling 2026-10-26): the
+ *  ONE cap since D-7068 (operator ruling 2026-10-26): the
  *  daily dispatch brake, `maxSessionsPerDay`, is retired, and with it the
  *  rolling 24 h count `dispatchedIn24h` and the `cap-daily` refusal. Both
  *  fields are DROPPED from the wire rather than kept deprecated-optional: the

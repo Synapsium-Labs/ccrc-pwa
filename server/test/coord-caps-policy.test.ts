@@ -19,7 +19,7 @@ describe('decideCaps', () => {
       .toEqual({ ok: true, next: { maxConcurrentWorkers: 5 } });
   });
 
-  // The daily brake is retired (D-TBD-retire-daily-brake). Its field is accepted from an older PWA and IGNORED: never
+  // The daily brake is retired (D-7068). Its field is accepted from an older PWA and IGNORED: never
   // merged, never validated, and a body carrying nothing else is its own verdict, not a write.
   it('ignores the retired daily field beside a live one, whatever its value', () => {
     for (const legacy of [16, 0, CAP_MAX + 1, 2.5, 'x']) {

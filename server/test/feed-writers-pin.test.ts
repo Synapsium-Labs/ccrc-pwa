@@ -567,7 +567,7 @@ describe("coord/routes.ts POST /api/coord/caps: recorded always, never pushed (D
     expect(withoutFlush(calls)).toEqual(['record', 'archive']);
     expect(flushedAfterRecord(calls)).toBe(true);
     expect(rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title, e.body]))
-      // The body no longer names the retired daily dial (D-TBD-retire-daily-brake).
+      // The body no longer names the retired daily dial (D-7068).
       .toEqual([['coord', '', null, 'caps changed', 'workers 3 → 5']]);
     expect(rec.pushes).toEqual([]);
     catchUpMatchesRing(rec);

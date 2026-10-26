@@ -2214,7 +2214,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
     // caught it and this one did not.
     ['the running-worker cap counts dispatched ACTIVE runs, not merely non-terminal ones',
       'concurrency counts dispatched runs in an ACTIVE state'],
-    // The daily brake is retired (D-TBD-retire-daily-brake): the pin that it counted every dispatch became the pin
+    // The daily brake is retired (D-7068): the pin that it counted every dispatch became the pin
     // that there is no such count.
     ['concurrency is the only cap; no daily dispatch count',
       'There is no daily dispatch count: concurrency is the only cap.'],
@@ -2421,7 +2421,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
     // And the caps it warns about are the real ones, spelled as the codes the
     // dispatch actually answers with.
     expect(section, 'the crossing section never names cap-concurrency').toContain('cap-concurrency');
-    // The daily brake is retired (D-TBD-retire-daily-brake): the section may not warn about a refusal the server
+    // The daily brake is retired (D-7068): the section may not warn about a refusal the server
     // no longer sends.
     expect(section, 'the crossing section still names the retired cap-daily').not.toContain('cap-daily');
   });
@@ -2470,7 +2470,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
 
   // D-2686's caps paragraph tells a refused coordinator which numbers to read. It once had to tell two refusal
   // frames apart (`cap-daily` carried `used`, never `running`); the daily brake is retired
-  // (D-TBD-retire-daily-brake), so one frame is left. HARVESTED from the refusal frame rather than typed, so
+  // (D-7068), so one frame is left. HARVESTED from the refusal frame rather than typed, so
   // renaming a field, or adding a cap, reds here.
   const capRefusalFields = (code: string): string[] | null => {
     // ARCH-22 (#553): the refusal frames moved with the admit step into the decider (`refused({ ... })`).

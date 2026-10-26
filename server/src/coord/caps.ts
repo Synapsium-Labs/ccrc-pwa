@@ -14,7 +14,7 @@ import type { CoordCaps } from '../../../shared/api.js';
  * reader from looking.
  *
  * This module exists because `setCaps` validates NOTHING and returns `void`
- * (`store.ts:1357`, D-1164): it binds the caps straight into an UPDATE, so
+ * (`store.ts#setCaps`, D-1164): it binds the caps straight into an UPDATE, so
  * 0, -5, 1.5 and 1e9 all persist. Nothing in `server/src` had ever called it,
  * so the absence never showed — the caps changed by hand-editing sqlite.
  *
@@ -37,7 +37,7 @@ export const CAP_MIN = 1;
  *  setting and far below the range where `640` could read as deliberate. It
  *  once bounded the daily brake too, on `MAIL_QUIET_MS`'s stated principle (two
  *  numbers for one policy is two numbers to get out of step); that brake is
- *  retired (D-TBD-retire-daily-brake), so it bounds the concurrency cap alone. */
+ *  retired (D-7068), so it bounds the concurrency cap alone. */
 export const CAP_MAX = 64;
 
 /** The two members are what a route must tell apart, so they carry different
@@ -66,7 +66,7 @@ const FIELDS = ['maxConcurrentWorkers'] as const;
 /** Dials that no longer exist, accepted and IGNORED on the wire (the wire rule:
  *  absence permits, and a legacy field must not 400). `maxSessionsPerDay` is
  *  the daily dispatch brake, retired by the operator on 2026-10-26
- *  (D-TBD-retire-daily-brake): an older cached PWA still sends it with every
+ *  (D-7068): an older cached PWA still sends it with every
  *  save that touched its row, and refusing that save would break the workers
  *  dial beside it. Its value is never read, so it is never validated either:
  *  an out-of-range legacy value is as meaningless as an in-range one. */

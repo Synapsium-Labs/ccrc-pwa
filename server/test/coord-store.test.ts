@@ -509,7 +509,7 @@ describe('CoordStore: runs', () => {
 });
 
 describe('CoordStore: caps', () => {
-  // The rolling 24 h dispatch count is retired with the daily brake (D-TBD-retire-daily-brake): `capsUsage` counts
+  // The rolling 24 h dispatch count is retired with the daily brake (D-7068): `capsUsage` counts
   // running runs only, and takes no clock.
   it('counts running runs from the rows, not from a counter', () => {
     const s = store();

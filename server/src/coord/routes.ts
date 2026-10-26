@@ -2128,7 +2128,7 @@ export function registerCoordRoutes(
    *  OPERATOR DIAL. Before this, `CoordStore.setCaps` had no caller anywhere in
    *  `server/src`: the only way to change a cap was to hand-edit `coord.db`
    *  (D-1164). There were two caps then; the daily dispatch brake is retired
-   *  (D-TBD-retire-daily-brake), and `maxConcurrentWorkers` is the one left.
+   *  (D-7068), and `maxConcurrentWorkers` is the one left.
    *
    *  NOT BOX-TOKEN, AND NOT `UNGATED` EITHER — two different facts, and this is
    *  the first route in the tree that needs them apart (D-1240). The box token
@@ -2225,7 +2225,7 @@ export function registerCoordRoutes(
     // This is a shape probe only — the merge that is actually written is
     // recomputed under the lock below, so the caps it reads here do not matter.
     const shape = decideCaps(coord.caps(), req.body ?? {});
-    // AN OLDER PWA'S SAVE OF A RETIRED DIAL (D-TBD-retire-daily-brake): accepted, written nowhere and recorded
+    // AN OLDER PWA'S SAVE OF A RETIRED DIAL (D-7068): accepted, written nowhere and recorded
     // nowhere — no cap that still exists moved. The answer is the current view, so that PWA settles on it.
     if (shape.ok === 'retired') return reply.code(200).send({ ok: true, ...capsView(coord) });
     if (!shape.ok) {

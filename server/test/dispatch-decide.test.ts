@@ -160,7 +160,7 @@ describe('decideDispatch, the admit step', () => {
       .toEqual({ ok: false, kind: 'refused', code: 'mail-disabled' });
     expect(reads.n).toBe(0);
   });
-  // The daily cap that once followed concurrency is retired (D-TBD-retire-daily-brake): concurrency is the last
+  // The daily cap that once followed concurrency is retired (D-7068): concurrency is the last
   // admission gate, and past it a clean listing goes.
   it('gate order: concurrency is the last admission gate', () => {
     const full = caps({ overConcurrency: { limit: 3, running: 3 }, usage: { running: 3 } });

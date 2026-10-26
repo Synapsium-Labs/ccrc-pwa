@@ -1100,7 +1100,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(calls).toEqual([]);
   });
 
-  // The daily brake's rolling-24h case lived here; the brake is retired (D-TBD-retire-daily-brake) and
+  // The daily brake's rolling-24h case lived here; the brake is retired (D-7068) and
   // `retire-daily-brake.test.ts` pins that a dispatch past the old count is admitted.
 
   it('runs ws-add for wave 1 and learns the id from the registry, not from ccd\'s sentence', async () => {

@@ -4749,7 +4749,7 @@ export class CoordStore {
 
   // ── caps ───────────────────────────────────────────────────────────────────
 
-  /** THE RETIRED COLUMN (D-TBD-retire-daily-brake, operator ruling 2026-10-26). `coordinator_state` still carries
+  /** THE RETIRED COLUMN (D-7068, operator ruling 2026-10-26). `coordinator_state` still carries
    *  `maxSessionsPerDay`, the daily dispatch brake's limit: migration 1 created it `NOT NULL` and seeded it, and it
    *  STAYS — no destructive migration drops a column a rollback to an older build would read. Nothing here reads or
    *  writes it any more: `caps()` selects the concurrency cap alone, and `setCaps` updates that column and
@@ -4801,7 +4801,7 @@ export class CoordStore {
    * other predict"). Here there is no second box to predict for, so there is no
    * excuse for a second copy at all.
    *
-   * ONE count since D-TBD-retire-daily-brake: the rolling 24 h dispatch count, `dispatchedIn24h`, existed only for
+   * ONE count since D-7068: the rolling 24 h dispatch count, `dispatchedIn24h`, existed only for
    * the daily brake, and nothing else read it, so it is no longer computed. With it went the clock parameter, which
    * only that count's window used: `running` is a property of the runs' states, not of the time of asking.
    */

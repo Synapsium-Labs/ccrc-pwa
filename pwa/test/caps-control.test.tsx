@@ -1,5 +1,5 @@
 // The operator's dial on the coordination cap (one since the daily brake was
-// retired, D-TBD-retire-daily-brake). Its shape is CoordBanner's
+// retired, D-7068). Its shape is CoordBanner's
 // beside it — injectable props defaulting to the `api` singleton, a render gate
 // that shows nothing until the first read lands — with ONE deliberate
 // departure: the pause toggle refuses to be optimistic because a
@@ -34,7 +34,7 @@ describe('CapsControl', () => {
     expect(await screen.findByText('1 / 3')).toBeInTheDocument();
   });
 
-  it('has no per-day dial: the daily brake is retired (D-TBD-retire-daily-brake)', async () => {
+  it('has no per-day dial: the daily brake is retired (D-7068)', async () => {
     // The server no longer refuses on a daily count nor reports one, so a row for
     // it would be a dial wired to nothing. One input, one usage reading.
     const { container } = render(<CapsControl coordCaps={READ} />);

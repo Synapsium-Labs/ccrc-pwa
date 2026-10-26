@@ -140,7 +140,7 @@ describe('dispatchRun runs its gates in a fixed order (ARCH-22)', () => {
     expect(await dispatchRun(f.deps, f.open(), 'go', undefined)).toEqual({ ok: false, kind: 'refused', code: 'mail-disabled' });
   });
 
-  // The daily cap that once followed this gate is retired (D-TBD-retire-daily-brake): the concurrency cap is the last
+  // The daily cap that once followed this gate is retired (D-7068): the concurrency cap is the last
   // admission gate, so this row names it alone.
   it('concurrency cap: at zero answers cap-concurrency', async () => {
     const f = fixture();

@@ -3,7 +3,7 @@
 // and the caps changed by hand-editing `coord.db`.
 //
 // ONE DIAL, `workers`. The `per day` row and its rolling-24 h usage line are
-// gone with the daily dispatch brake they drove (D-TBD-retire-daily-brake,
+// gone with the daily dispatch brake they drove (D-7068,
 // operator ruling 2026-10-26): the server no longer refuses on a daily count
 // and no longer reports one.
 //

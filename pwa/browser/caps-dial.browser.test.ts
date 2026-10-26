@@ -1,6 +1,6 @@
 // The caps dial on the runs board, in a real Chrome over the production build, at every width. jsdom lays nothing
 // out, so `test/caps-control.test.tsx` holds the behaviour and this file holds what only an engine can say: with the
-// daily brake retired (D-TBD-retire-daily-brake) the dial is ONE field, its input, its usage reading and its save
+// daily brake retired (D-7068) the dial is ONE field, its input, its usage reading and its save
 // stay whole inside the viewport and inside the row at phone, laptop and wide widths, and nothing overflows sideways.
 //
 // The app answers from a fixture (`browser/app.ts`): no server, no ccd. Run: `( cd pwa && CCRC_CHROME=<a Chrome or

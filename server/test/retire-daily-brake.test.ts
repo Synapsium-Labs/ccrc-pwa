@@ -1,4 +1,4 @@
-// The daily dispatch brake is retired (operator ruling 2026-10-26, D-TBD-retire-daily-brake; it supersedes the
+// The daily dispatch brake is retired (operator ruling 2026-10-26, D-7068; it supersedes the
 // fleet-capacity spec's F3, which would have kept the brake counting fresh workspaces with a ceiling of 256).
 //
 // What the brake did: every dispatch inside a rolling 24 h — a fresh workspace, a warm resume and a review alike —

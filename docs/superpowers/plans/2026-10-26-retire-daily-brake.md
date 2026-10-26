@@ -1,6 +1,6 @@
 # Retire the daily dispatch brake
 
-**Ruling (operator, 2026-10-26), D-TBD-retire-daily-brake:** retire `maxSessionsPerDay`, the daily dispatch brake,
+**Ruling (operator, 2026-10-26), D-7068:** retire `maxSessionsPerDay`, the daily dispatch brake,
 entirely. The concurrency cap `maxConcurrentWorkers` stays, unchanged.
 
 **It supersedes F3 of the fleet-capacity spec** (`docs/superpowers/specs/2026-10-20-fleet-capacity-and-worker-lifecycle-design.md`,
@@ -48,5 +48,5 @@ leave alone. The spec file is not edited; this note is the record.
 
 ## Deviations found
 
-- **D-TBD-retire-daily-brake** — the operator retires the daily dispatch brake (`maxSessionsPerDay`, `cap-daily`,
+- **D-7068** — the operator retires the daily dispatch brake (`maxSessionsPerDay`, `cap-daily`,
   `dispatchedIn24h`) on 2026-10-26, superseding fleet-capacity F3 (2026-10-20). The column stays, unread.

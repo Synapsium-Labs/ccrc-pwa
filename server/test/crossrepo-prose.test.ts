@@ -221,7 +221,7 @@ describe('README: cross-repo programmes', () => {
     expect([...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES].slice().sort(),
       'the states excluded from the running cap are no longer idle ∪ terminal')
       .toEqual(['awaiting-review', 'closing', 'done', 'failed', 'merging', 'planned']);
-    // The daily brake is retired (D-TBD-retire-daily-brake): its rolling-window count is gone from the store.
+    // The daily brake is retired (D-7068): its rolling-window count is gone from the store.
     expect(STORE, 'the store counts rows dispatched inside a rolling window again — the retired daily brake')
       .not.toContain('dispatchedAt IS NOT NULL AND dispatchedAt > ?');
     expect(s, 'the section still equates two held workspaces with two running-worker slots')
