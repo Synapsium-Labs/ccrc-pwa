@@ -5836,7 +5836,7 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
     it('G-OK: a raise above the budget in force is appended, after window start and before it', () => {
       const after = amendOver(f1(), [raise(30_000_001)]);
       expect(verdict(after, ctxOver(f1()))).toEqual([]);
-      expect(verdict(amendOver(f1(), [raise(30_000_001, null, T0 - DAY / 2)]), ctxOver(f1()))).toEqual([]);
+      expect(verdict(amendOver(f1(), [raise(30_000_001, null, T0 - DAY / 2)], T0 - DAY / 2), ctxOver(f1())), 'before window start').toEqual([]);
       expect(inForce(after)).toBe(30_000_001);
       expect(after.spend_budget).toBe(30_000_000);
     });
@@ -5863,19 +5863,17 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
       expect(verdict(amendOver(f1(), added), ctxOver(f1()))).toEqual([]);
     });
 
-    it('G-DETAIL: the detail carries the figure and nothing else', () => {
-      const rows: Array<[Rec, Err[]]> = [
-        [{ spend_budget: 40_000_000, quiz: 1 }, [at(0, 'detail.quiz', 'field-unknown')]],
-        [{}, [at(0, 'detail.spend_budget', 'field-missing')]],
-        [{ spend_budget: null }, [at(0, 'detail.spend_budget', 'field-missing')]],
-        [{ spend_budget: '40000000' }, [at(0, 'detail.spend_budget', 'field-malformed')]],
-        [{ spend_budget: 40_000_000.5 }, [at(0, 'detail.spend_budget', 'field-malformed')]],
-        [{ spend_budget: 2 ** 53 }, [at(0, 'detail.spend_budget', 'field-malformed')]],
-        [{ spend_budget: -1 }, [at(0, 'detail.spend_budget', 'budget-not-raised')]],
-      ];
-      for (const [detail, want] of rows) {
-        expect(verdict(amendOver(f1(), [raiseWith(detail)]), ctxOver(f1())), JSON.stringify(detail)).toEqual(want);
-      }
+    const detailRows: Array<[Rec, Err[]]> = [
+      [{ spend_budget: 40_000_000, quiz: 1 }, [at(0, 'detail.quiz', 'field-unknown')]],
+      [{}, [at(0, 'detail.spend_budget', 'field-missing')]],
+      [{ spend_budget: null }, [at(0, 'detail.spend_budget', 'field-missing')]],
+      [{ spend_budget: '40000000' }, [at(0, 'detail.spend_budget', 'field-malformed')]],
+      [{ spend_budget: 40_000_000.5 }, [at(0, 'detail.spend_budget', 'field-malformed')]],
+      [{ spend_budget: 2 ** 53 }, [at(0, 'detail.spend_budget', 'field-malformed')]],
+      [{ spend_budget: -1 }, [at(0, 'detail.spend_budget', 'budget-not-raised')]],
+    ];
+    it.each(detailRows)('G-DETAIL: the detail carries the figure and nothing else: %j', (detail, want) => {
+      expect(verdict(amendOver(f1(), [raiseWith(detail)]), ctxOver(f1()))).toEqual(want);
     });
 
     it('G-VALID: a raise is compared only with a valid earlier figure: an earlier raise refused for its own defect answers one word, not a second budget-not-raised', () => {
