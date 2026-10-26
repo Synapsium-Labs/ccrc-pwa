@@ -447,7 +447,8 @@ const COUNT_DEPS = Object.freeze({ loadFinal: loadFinalRecord, now: () => Date.n
  *  outputs, each sha-checked before it is parsed; the store, read-only; the report built in memory; and only then --out,
  *  with counters.json written once. Every refusal of an input comes before --out exists; the one exception is
  *  writeReport's: a write failure after prepareOut made --out refuses out-refused and leaves the marked --out, which a
- *  re-run then refuses as existing. */
+ *  re-run then refuses as existing. prepareOut's own createOut can also leave a new --out when it refuses (D-5986), which
+ *  is not a refusal of an input. */
 export function countCommand(flags, deps = COUNT_DEPS) {
   checkFormFlags('count', flags);
   if ((flags.supersedes === undefined) !== (flags['supersedes-sha256'] === undefined)) refuse('args-invalid', '--supersedes and --supersedes-sha256 go together');

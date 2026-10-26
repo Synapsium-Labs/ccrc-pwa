@@ -1481,7 +1481,8 @@ const COUNT_DEPS = Object.freeze({ loadFinal: loadFinalRecord, now: () => Date.n
  *  outputs, each sha-checked before it is parsed; the store, read-only; the report built in memory; and only then --out,
  *  with counters.json written once. Every refusal of an input comes before --out exists; the one exception is
  *  writeReport's: a write failure after prepareOut made --out refuses out-refused and leaves the marked --out, which a
- *  re-run then refuses as existing. */
+ *  re-run then refuses as existing. prepareOut's own createOut can also leave a new --out when it refuses (D-5986), which
+ *  is not a refusal of an input. */
 export function countCommand(flags, deps = COUNT_DEPS) {
   checkFormFlags('count', flags);
   if ((flags.supersedes === undefined) !== (flags['supersedes-sha256'] === undefined)) refuse('args-invalid', '--supersedes and --supersedes-sha256 go together');
@@ -1557,7 +1558,7 @@ Expected GREEN (predicted): 31 passed on linux (30 passed and 1 skipped on darwi
 
 *Measured over predicted (Task 1, U17):* Step 3 measured as predicted (28 failed, 3 passed). Step 5's filtered run measured 31 passed, but the whole file did not: an earlier case of the file calls `vi.resetModules()` (D-6301's), so `w6cLoad`'s dynamic import loads a fresh driver whose `DriverRefusal` is not the statically imported class, and 13 W2-6 cases failed the `instanceof` test in `w6cRefusalOf` and `w6cInProcess` although the word and detail were right. The helpers now test `w6cIsRefusal` (the class, or an `Error` named `DriverRefusal`), and the word and detail are still asserted in full. The emission pin's `tallies` expression also failed the server test project's typecheck (`Object.values` of an `any` read as `unknown[]`), so it casts to `W6cR[]` first. Both corrections are in the code above. The whole file then measured 1163 passed.
 
-*Fix round 1 (review 963 F6, comment only):* `countCommand`'s doc comment said every refusal comes before `--out` exists; `writeReport` is the exception (a `writeFileSync` failure after `prepareOut` refuses `out-refused` and leaves the marked `--out`). The comment and the Choices paragraph above now say so; no code line changed.
+*Fix round 1 (review 963 F6, comment only):* `countCommand`'s doc comment said every refusal comes before `--out` exists; `writeReport` is the exception (a `writeFileSync` failure after `prepareOut` refuses `out-refused` and leaves the marked `--out`). The comment and the Choices paragraph above now say so; no code line changed. *Fix round 2 (review 965 F5):* the comment adds that `prepareOut`'s own `createOut` can also leave a new `--out` when it refuses (D-5986, an I/O failure making `--out`), which is not a refusal of an input; still no code line changed.
 
 - [ ] **Step 6: Measure every new guard red, then green.** From the repository root. Each mutant is one or more exact replacements, each asserted to match once. The mutant table is written through a quoted heredoc, so no shell expansion touches the code. Every run restores the touched files with `cp`.
 
