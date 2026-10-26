@@ -68,7 +68,8 @@
 //     focus, the own-words field) clear nothing: no code in the ask assigns focus after the release (a census test pins the
 //     list of focus movers), and the own-words field takes focus only on a deliberate open (`OwnWords`).
 //     R115: a change of the ask's identity this client did not send (an external screen change, a different ask) ends the
-//     engagement the same way and raises the same fence, when the keyboard was engaged or focus is in the card at that commit.
+//     engagement the same way and raises the same fence, when focus is in the card at that commit, or the keyboard was
+//     engaged and an inline card still shows an ask (a clear, or a crossing to the Sheet, leaves no fence behind).
 //     RESIDUALS, not waived: an externally driven, BYTE-IDENTICAL replacement (no identity change this client can see)
 //     still continues an engagement made by non-answer keys; a request already issued can still land on a byte-identical
 //     replacement (the desktop route compares content-derived ids; no client fence revokes an issued request); and a
@@ -141,12 +142,15 @@ export function useAskEngagement(identity: string | null, eligible: () => boolea
   // instead would let a replaced ask regain it when byte-identical content came back (A -> B -> A, no clear between).
   // R115: such a change this client did not cause also raises the fence when the keyboard was engaged or focus is inside the
   // inline card at this commit, because a row node the new screen reused can keep focus with no event. With focus outside the
-  // card and no engagement it fences nothing. (The desk's identity carries the screen, so a screen change is one.)
+  // card and no engagement it fences nothing. (The desk's identity carries the screen, so a screen change is one.) The
+  // engaged arm counts only while an inline card shows an ask after the change: a clear shows nothing, and a crossing below
+  // 900 shows the Sheet, so neither leaves a fence for the next card, which arrives with focus outside it.
   useLayoutEffect(() => {
     now.current = identity;
     if (held.current !== identity) {
       const at = document.activeElement;
-      if (held.current !== null || (at instanceof Element && at.closest('[data-ask-surface="inline"]') !== null)) {
+      const showing = identity !== null && document.querySelector('[data-ask-surface="inline"]') !== null;
+      if ((held.current !== null && showing) || (at instanceof Element && at.closest('[data-ask-surface="inline"]') !== null)) {
         fenced.current = true;
       }
       held.current = null;
