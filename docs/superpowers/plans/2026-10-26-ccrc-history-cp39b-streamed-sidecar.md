@@ -114,6 +114,7 @@ The streamed arm already exists. `compressFdRange` (store.mjs) reads 1 MiB piece
 - [ ] **Step 2: Run, and record the reds.**
   `./node_modules/.bin/vitest run test/history-ingest.test.ts -t "CP-39b"` (from `server/`, foreground, timeout at least 600000).
   Predicted: (a)-(d) are red on the undefined export (every size is NaN), and (e) may pass on empty files. Record what is measured.
+  - Measured: all five were red, (e) included, not four. (a) failed with `expected undefined to be 8388608`. (b) failed with `The "size" argument must be of type number. Received undefined`. (c), (d) and (e) failed with `The value of "size" is out of range ... Received NaN`, so (e) did not pass on empty files: its files are sized from the undefined export, and the write throws first.
 
 - [ ] **Step 3a: The constant alone.** Add the lib.mjs export and the lib.d.mts line only, and re-run the same filter. Predicted:
   - (a) is green.

@@ -47,7 +47,7 @@ import {
   heavyVersionsBetween, passOutcome, planFileRead, planMigration, planRun, storeVersionDamaged, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
   SQLITE_CODES, decideDrainFailure, blobOverDecodeCap, CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
-  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, sidecarNameMatcher, ftsTextOf,
+  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_READ_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, sidecarNameMatcher, ftsTextOf,
   SIDECAR_WALK_META, parseSidecarWalk, formatSidecarWalk, emptySidecarWalk, startSidecarWalk, foldWalkCandidates, finishSidecarWalk, walkCandidates,
   parseSidecarScanAt, formatSidecarScanAt, sidecarWrapClose,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
@@ -5626,7 +5626,7 @@ function countSidecarTooLarge(db) {
  *  - An unchanged (size, mtime_ns) is skipped before any open (DM47).
  *  - Otherwise it is admitted like a transcript (O_NOFOLLOW, a regular file under a rostered
  *    projects/ root).
- *  - It is read whole up to SIDECAR_WHOLE_MAX, else streamed through compressFdRange.
+ *  - It is read whole up to SIDECAR_READ_WHOLE_MAX, else streamed through compressFdRange (D-6971).
  *  - It is hashed and stored as a blob of its bytes, and linked by linkSidecar.
  *  - Its index text is made from those same bytes, before the transaction: the whole read's buffer, or the streamed
  *    arm's compressed blob through ftsTextOfBlob's bounded prefix decoder, never a second read of the file (FPM6).
@@ -5676,7 +5676,7 @@ export async function ingestSidecar(db, ctx, s, budget, g) {
       const b = stmts(db).blobId.get(h);
       return b === undefined || b.fts_indexed === 0;
     };
-    if (size <= SIDECAR_WHOLE_MAX) {
+    if (size <= SIDECAR_READ_WHOLE_MAX) {
       const buf = readAt(a.fd, 0, size);
       if (buf.length < size) return null;                 // it shrank under the read: next tick
       sha = blobShaOfBytes(buf);
@@ -5690,7 +5690,7 @@ export async function ingestSidecar(db, ctx, s, budget, g) {
       // D-4312 (history-sidecar-redact-before-cut): the redaction window, decoded from the compressed bytes by the backfill's own bounded reader
       if (unindexed(sha)) text = (await ftsTextOfBlob(c.z, true, ctx.pairIdx, size)).text;
     }
-    // D-4589: one probe for both arms, so the streamed arm (over SIDECAR_WHOLE_MAX) is pinned by the same case as the whole one.
+    // D-4589: one probe for both arms, so the streamed arm (over SIDECAR_READ_WHOLE_MAX) is pinned by the same case as the whole one.
     if (stmts(db).blobLive.get(sha) === undefined) z = make();
     withTx(db, 'NORMAL', () => {
       const fresh = z !== null && storeBlob(db, sha, z, size);

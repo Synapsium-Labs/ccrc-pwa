@@ -1749,7 +1749,8 @@ describe('history ingest: sidecars (plan task 21)', () => {
     } finally { db.close(); }
   });
 
-  it('DM47: a 64 MiB sidecar is read whole and a larger one streamed, both byte for byte, with peak RSS under O20\'s bound', () => {
+  it('DM47: a 64 MiB sidecar and a larger one are both streamed, byte for byte, with peak RSS under O20\'s bound', () => {
+    // D-6972: both files are over SIDECAR_READ_WHOLE_MAX, so the streamed arm takes both; the CP-39b describe pins the boundary itself.
     const box = IX.newBox('ccrc-hist-dm47d-');
     try {
       IX.plantCopy(box.homes[0]!, IX.U, linkRows());
@@ -2867,7 +2868,7 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       } finally { db.close(); }
     });
 
-    it('S6: the streamed arm (a sidecar over SIDECAR_WHOLE_MAX) redacts the larger window before its cut as well', () => {
+    it('S6: the streamed arm (a sidecar over SIDECAR_READ_WHOLE_MAX) redacts the larger window before its cut as well', () => {
       const box = IX.newBox('ccrc-hist-s6b-');
       const tok = hex(24);
       secretFile(box, 'side.env', `ZQ_SIDE_VALUE=${tok}\n`);
@@ -2928,7 +2929,7 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       const box = IX.newBox('ccrc-hist-fpm6-');
       try {
         IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
-        plant(box, 'swap.txt', 67_108_864 + 4096);                       // over SIDECAR_WHOLE_MAX: the streamed arm
+        plant(box, 'swap.txt', 67_108_864 + 4096);                       // over SIDECAR_READ_WHOLE_MAX: the streamed arm
         IX.sweepTwice(box, opts(box));
         expect(swaps(box)).toBe('');                                     // the file's head is read once, by the compress
         const db = openStoreRO(box);
@@ -2973,6 +2974,149 @@ describe('history ingest: the FTS index (plan task 23)', () => {
         expect(matches(db, 'zqfar')).toBe(0);                          // still past the cut
       } finally { db.close(); }
     });
+  });
+
+  describe('CP-39b: a sidecar over SIDECAR_READ_WHOLE_MAX is captured by the streamed arm (D-6971, D-6973)', () => {
+    /** `size` bytes of IX.words text (4000-word pieces cut to size): the bytes themselves. */
+    const wordBytes = (size: number): Buffer => {
+      const out = Buffer.alloc(size);
+      for (let at = 0, k = 1; at < size; k += 1) at += Buffer.from(IX.words(4000, k)).copy(out, at, 0, size - at);
+      return out;
+    };
+    const sha256Of = (b: Buffer): Buffer => createHash('sha256').update(b).digest();
+    const tool = (box: HistoryBox): string => {
+      const dir = path.join(box.homes[0]!, 'projects', IX.SLUG, IX.U, 'tool-results');
+      fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    };
+    /** One box with one transcript and a store in this process; no ingestTick, so the transcript reads as caught up. */
+    const inProcess = async (prefix: string) => {
+      const { sweep: S, lib } = await IX.api();
+      const box = IX.newBox(prefix);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+      const { db, ids } = await IX.openFixtureStore(box);
+      const run = (): Promise<{ bytes: number; complete: boolean; paused: boolean }> =>
+        S.ingestSidecars(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 180_000, ids), S.newBudget(), [IX.U]);
+      return { box, db, lib, run };
+    };
+    const rowOf = (db: DatabaseSync, name: string): { sha: Buffer; len: number; z: Buffer } => {
+      const r = db.prepare(`SELECT b.sha256 AS sha, b.raw_len AS len, b.z AS z FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id
+        WHERE s.name = ?`).get(name) as { sha: Uint8Array; len: number; z: Uint8Array };
+      return { sha: Buffer.from(r.sha), len: r.len, z: Buffer.from(r.z) };
+    };
+    /** For each sidecar file named in `names`, the largest `length` a readSync asks for and the buffer objects it passes. */
+    const spyReads = (names: string[]): { seen: Map<string, { max: number; bufs: Set<unknown> }>; restore: () => void } => {
+      const real = fs.readSync;
+      const seen = new Map<string, { max: number; bufs: Set<unknown> }>();
+      (fs as { readSync: unknown }).readSync = function readSync(fd: number, ...rest: unknown[]): number {
+        const base = path.basename(fs.readlinkSync(`/proc/self/fd/${fd}`));
+        if (names.includes(base)) {
+          const e = seen.get(base) ?? { max: 0, bufs: new Set<unknown>() };
+          e.max = Math.max(e.max, Number(rest[2]));
+          e.bufs.add(rest[0]);
+          seen.set(base, e);
+        }
+        return (real as (...a: unknown[]) => number)(fd, ...rest);
+      };
+      syncBuiltinESMExports();
+      return { seen, restore: () => { (fs as { readSync: unknown }).readSync = real; syncBuiltinESMExports(); } };
+    };
+
+    it('(a) the threshold is 8 MiB, below SIDECAR_WHOLE_MAX', async () => {
+      const { lib } = await IX.api();
+      expect(lib.SIDECAR_READ_WHOLE_MAX).toBe(8 * 1024 * 1024);
+      expect(lib.SIDECAR_READ_WHOLE_MAX).toBeLessThan(lib.SIDECAR_WHOLE_MAX);
+    });
+
+    it('(b) a sidecar of exactly the threshold is read whole; one byte more is streamed through ONE reused buffer, both stored byte for byte', async () => {
+      const { box, db, lib, run } = await inProcess('ccrc-hist-cp39b-b-');
+      const M = lib.SIDECAR_READ_WHOLE_MAX;
+      const spy = spyReads(['at.txt', 'over.txt']);
+      try {
+        const dir = tool(box);
+        const atBytes = wordBytes(M);
+        const overBytes = wordBytes(M + 1);
+        fs.writeFileSync(path.join(dir, 'at.txt'), atBytes);
+        fs.writeFileSync(path.join(dir, 'over.txt'), overBytes);
+        await run();
+        const at = spy.seen.get('at.txt');
+        const over = spy.seen.get('over.txt');
+        expect(at, 'CONTROL: at.txt was read').toBeDefined();
+        expect(over, 'CONTROL: over.txt was read').toBeDefined();
+        expect(at!.max).toBe(M);
+        expect(over!.max).toBeLessThanOrEqual(1 << 20);
+        expect(over!.bufs.size, 'every read of over.txt passed one buffer object').toBe(1);
+        const a = rowOf(db, 'at.txt');
+        const o = rowOf(db, 'over.txt');
+        expect({ sha: a.sha, len: a.len }).toEqual({ sha: sha256Of(atBytes), len: M });
+        expect({ sha: o.sha, len: o.len }).toEqual({ sha: sha256Of(overBytes), len: M + 1 });
+        expect(brotliDecompressSync(o.z).equals(overBytes)).toBe(true);
+      } finally {
+        spy.restore();
+        db.close();
+        fs.rmSync(box.home, { recursive: true, force: true });
+      }
+    }, 300_000);
+
+    it('(c) a sidecar just over the threshold has its secret out of the index and its far word out of the window, as the whole arm does', async () => {
+      const { lib } = await IX.api();
+      const box = IX.newBox('ccrc-hist-cp39b-c-');
+      const tok = hex(24);
+      secretFile(box, 'side.env', `ZQ_SIDE_VALUE=${tok}\n`);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+      const dir = path.join(box.homes[0]!, 'projects', IX.SLUG, IX.U, 'tool-results');
+      fs.mkdirSync(dir, { recursive: true });
+      try {
+        const size = lib.SIDECAR_READ_WHOLE_MAX + 4096;
+        const body = Buffer.alloc(size, 0x20);
+        const head = Buffer.from(`zqhead\nZQ_SIDE_VALUE=${tok}\n`);
+        head.copy(body, 0);
+        Buffer.from('zqfarword\n').copy(body, lib.SIDECAR_FTS_BYTES + lib.SIDECAR_REDACT_MARGIN + 1024);
+        fs.writeFileSync(path.join(dir, 'over.txt'), body);
+        IX.sweepTwice(box);
+        const db = openStoreRO(box);
+        try {
+          expect(matches(db, 'zqhead'), 'CONTROL: the head word is indexed').toBe(1);
+          expect(ftsBytes(db).includes(tok.slice(0, 12))).toBe(false);
+          expect(matches(db, 'zqfarword')).toBe(0);
+          expect(IX.blobsHold(db, tok)).toBe(true);
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    }, 300_000);
+
+    it('(d) an incompressible sidecar over the threshold is stored with its sha256 and raw_len, and its blob decodes to its bytes', async () => {
+      const { box, db, lib, run } = await inProcess('ccrc-hist-cp39b-d-');
+      try {
+        const bytes = randomBytes(lib.SIDECAR_READ_WHOLE_MAX + 4096);
+        fs.writeFileSync(path.join(tool(box), 'rand.bin'), bytes);
+        await run();
+        const r = rowOf(db, 'rand.bin');
+        expect({ sha: r.sha, len: r.len }).toEqual({ sha: createHash('sha256').update(bytes).digest(), len: bytes.length });
+        expect(brotliDecompressSync(r.z).equals(bytes)).toBe(true);
+      } finally {
+        db.close();
+        fs.rmSync(box.home, { recursive: true, force: true });
+      }
+    }, 300_000);
+
+    it('(e) two names with the same over-threshold bytes give one blob and two sidecars rows', async () => {
+      const { box, db, lib, run } = await inProcess('ccrc-hist-cp39b-e-');
+      try {
+        const size = lib.SIDECAR_READ_WHOLE_MAX + 4096;
+        const bytes = wordBytes(size);
+        const sha = sha256Of(bytes);
+        fs.writeFileSync(path.join(tool(box), 'a.txt'), bytes);
+        fs.copyFileSync(path.join(tool(box), 'a.txt'), path.join(tool(box), 'b.txt'));
+        await run();
+        expect(IX.count(db, 'sidecars')).toBe(2);
+        const blobs = db.prepare('SELECT blob_id AS id FROM blobs WHERE sha256 = ?').all(sha) as { id: number }[];
+        expect(blobs.length).toBe(1);
+        expect(IX.count(db, 'sidecars', `blob_id = ${blobs[0]!.id}`)).toBe(2);
+      } finally {
+        db.close();
+        fs.rmSync(box.home, { recursive: true, force: true });
+      }
+    }, 300_000);
   });
 
   describe('T23-a (D-4312): the backfill and the re-index never decompress a whole sidecar, and charge blobs one at a time', () => {

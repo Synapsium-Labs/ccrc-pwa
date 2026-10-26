@@ -1041,14 +1041,17 @@ export function runMigration(db, home, i) {
 }
 
 /** One read when streaming a range: big enough to keep the compressor busy, small enough that
- *  the stream never holds more than a few of them. */
+ *  the stream never holds more than one of them. */
 const RANGE_PIECE = 1 << 20;
 
 /** A byte range of an open file, sha256-hashed and Brotli-compressed (BR_QUALITY, codec `br5`) in
- *  one streaming pass, so a line longer than LINE_MAX, or a sidecar over SIDECAR_WHOLE_MAX, is
+ *  one streaming pass, so a line longer than LINE_MAX, or a sidecar over SIDECAR_READ_WHOLE_MAX, is
  *  captured without ever being held whole (§9.2 step 4: "streamed through createBrotliCompress and
- *  a streaming sha256 rather than refused"). Returns null when the file ends before `end`, because
- *  it shrank under the read: the caller holds its cursor and tries again next tick. */
+ *  a streaming sha256 rather than refused"). One RANGE_PIECE buffer is allocated and reused for every read
+ *  (D-6973): each write is awaited through its callback, which fires only once the compressor has consumed the
+ *  piece, so the next read may overwrite it, and a write error rejects instead of writing on into a destroyed
+ *  stream. Returns null when the file ends before `end`, because it shrank under the read: the caller holds its
+ *  cursor and tries again next tick. */
 export async function compressFdRange(fd, start, end) {
   const hash = newSha256();
   const enc = createBrotliCompress({
@@ -1057,13 +1060,14 @@ export async function compressFdRange(fd, start, end) {
   const out = [];
   enc.on('data', (c) => { out.push(c); });
   const finished = new Promise((resolve, reject) => { enc.once('end', resolve); enc.once('error', reject); });
+  const piece = Buffer.allocUnsafe(Math.min(RANGE_PIECE, end - start));
   for (let pos = start; pos < end;) {
-    const piece = Buffer.allocUnsafe(Math.min(RANGE_PIECE, end - pos));
-    const n = readSync(fd, piece, 0, piece.length, pos);
+    const want = Math.min(RANGE_PIECE, end - pos);
+    const n = readSync(fd, piece, 0, want, pos);
     if (n === 0) { enc.destroy(); return null; }
     const chunk = n === piece.length ? piece : piece.subarray(0, n);
     hash.update(chunk);
-    if (!enc.write(chunk)) await new Promise((resolve) => { enc.once('drain', resolve); });
+    await new Promise((res, rej) => enc.write(chunk, (e) => (e ? rej(e) : res())));
     pos += n;
   }
   enc.end();
