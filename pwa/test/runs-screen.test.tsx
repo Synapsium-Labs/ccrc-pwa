@@ -527,8 +527,8 @@ describe('the coord banner mounts on /runs (Task 11, spec §4.2)', () => {
     const store = makeStore();
     act(() => { store.setState({ coord: { pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] }, coordFrameSeen: true }); });
     const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })}
-      loadCaps={async () => ({ caps: { maxConcurrentWorkers: 3, maxSessionsPerDay: 12 },
-                               usage: { running: 1, dispatchedIn24h: 4 } })} loadSpend={NO_SPEND} />);
+      loadCaps={async () => ({ caps: { maxConcurrentWorkers: 3 },
+                               usage: { running: 1 } })} loadSpend={NO_SPEND} />);
     // The control's read is its own, not the store's — so this waits for it
     // rather than asserting into a tree that has not resolved.
     await waitFor(() => expect(container.querySelector('.caps-control')).not.toBeNull());

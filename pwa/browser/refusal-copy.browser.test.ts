@@ -72,7 +72,7 @@ const FIXTURE: AppFixture = {
     '/api/projects': { roots: ['/w'], projects: [{ name: 'project-a', workdir: '/w/project-a' }] },
     '/api/runs': { runs: [RUN] },
     '/api/claims': [],
-    '/api/coord/caps': { caps: { maxConcurrentWorkers: 4, maxSessionsPerDay: 20 }, usage: { running: 1, dispatchedIn24h: 1 } },
+    '/api/coord/caps': { caps: { maxConcurrentWorkers: 4 }, usage: { running: 1 } },
     [`/api/sessions/${WORKER}/pr`]: { pr: MERGED_PR, draft: null, facts: null },
   },
   fleetFrames: [

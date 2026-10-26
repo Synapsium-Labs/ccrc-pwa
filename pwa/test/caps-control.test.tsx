@@ -1,4 +1,5 @@
-// The operator's dial on the two coordination caps. Its shape is CoordBanner's
+// The operator's dial on the coordination cap (one since the daily brake was
+// retired, D-TBD-retire-daily-brake). Its shape is CoordBanner's
 // beside it — injectable props defaulting to the `api` singleton, a render gate
 // that shows nothing until the first read lands — with ONE deliberate
 // departure: the pause toggle refuses to be optimistic because a
@@ -16,8 +17,8 @@ import type { CoordCapsView } from '../../shared/api';
 afterEach(cleanup);
 
 const VIEW = (over: Partial<CoordCapsView> = {}): CoordCapsView => ({
-  caps: { maxConcurrentWorkers: 3, maxSessionsPerDay: 12 },
-  usage: { running: 1, dispatchedIn24h: 4 },
+  caps: { maxConcurrentWorkers: 3 },
+  usage: { running: 1 },
   ...over,
 });
 const READ = (): Promise<CoordCapsView> => Promise.resolve(VIEW());
@@ -28,21 +29,31 @@ describe('CapsControl', () => {
     expect(container.querySelector('.caps-control')).toBeNull();
   });
 
-  it('shows usage against each cap once the read lands', async () => {
+  it('shows usage against the cap once the read lands', async () => {
     render(<CapsControl coordCaps={READ} />);
     expect(await screen.findByText('1 / 3')).toBeInTheDocument();
-    expect(screen.getByText('4 / 12')).toBeInTheDocument();
+  });
+
+  it('has no per-day dial: the daily brake is retired (D-TBD-retire-daily-brake)', async () => {
+    // The server no longer refuses on a daily count nor reports one, so a row for
+    // it would be a dial wired to nothing. One input, one usage reading.
+    const { container } = render(<CapsControl coordCaps={READ} />);
+    await screen.findByText('1 / 3');
+    expect(screen.queryByLabelText(/per day/i), 'the retired per-day dial is back').toBeNull();
+    expect(container.querySelector('#caps-per-day')).toBeNull();
+    expect(container.querySelectorAll('.caps-field')).toHaveLength(1);
+    expect(container.querySelectorAll('.caps-usage')).toHaveLength(1);
   });
 
   it('sends only the field the operator changed', async () => {
-    const setCoordCaps = vi.fn(async () => VIEW({ caps: { maxConcurrentWorkers: 5, maxSessionsPerDay: 12 } }));
+    const setCoordCaps = vi.fn(async () => VIEW({ caps: { maxConcurrentWorkers: 5 } }));
     render(<CapsControl coordCaps={READ} setCoordCaps={setCoordCaps} />);
     fireEvent.change(await screen.findByLabelText(/workers/i), { target: { value: '5' } });
     fireEvent.click(screen.getByRole('button', { name: /save/i }));
     await waitFor(() => expect(setCoordCaps).toHaveBeenCalledWith({ maxConcurrentWorkers: 5 }));
   });
 
-  it('sends nothing at all when neither field was touched', async () => {
+  it('sends nothing at all when the field was not touched', async () => {
     // The route refuses an empty body; the control should not spend a round trip
     // discovering that.
     const setCoordCaps = vi.fn(async () => VIEW());
@@ -55,7 +66,7 @@ describe('CapsControl', () => {
   it('settles on the response body, not on what was typed', async () => {
     // The server is the authority on what was stored. Typing 9 and being told 4
     // must render 4 — the honesty half of "the reply is the confirmation".
-    const setCoordCaps = vi.fn(async () => VIEW({ caps: { maxConcurrentWorkers: 4, maxSessionsPerDay: 12 } }));
+    const setCoordCaps = vi.fn(async () => VIEW({ caps: { maxConcurrentWorkers: 4 } }));
     render(<CapsControl coordCaps={READ} setCoordCaps={setCoordCaps} />);
     fireEvent.change(await screen.findByLabelText(/workers/i), { target: { value: '9' } });
     fireEvent.click(screen.getByRole('button', { name: /save/i }));
