@@ -6180,6 +6180,26 @@ compaction. A subagent's compaction, `~/.ccrc/history-off` and a session whose r
 get no line. On a box with history the compaction card renders 513 characters shorter, to leave the
 line its room, and the sweep counts from each transcript whether the line arrived and named its leaf.
 
+**The W2 counters.** W2's replay eval decides its gate from its quiz and from live uptake alone. Beside
+them, `deploy/history-counters.mjs` reports six counters that never feed the gate: `compliance`,
+`echo_hits`, `lag`, `card_served`, `card_id_mismatch` and `rediscovery`. Each is counted per
+post-compaction window of a family on the eval's list, by arm and by the producer of the window's boundary,
+under the definitions part 1 of the open record signs (`counters_def` `v1`, the text frozen as
+`COUNTERS_DEF_V1` in `deploy/history-gate.mjs`). It builds each window with the gate's own turn and window
+rules over `measure-history.py`'s raw rows, reads the node's store only through `store.mjs`'s `openReader`,
+and never reads the node-wide `counters` table. A value it cannot measure is `unmeasured`, never 0. A gap
+between two measures, such as echo hits against the window's `recall_calls` count, is reported, never
+repaired. A control window (the `recall-off` arm, below) carries no card line, so its card figures are
+reported and never compared. A family whose recall-off file changed during the window, or whose state in
+its node's `verify --section ab` output is anything but `ok` (`control-absent`, `control-mismatch`,
+`treatment-named` or `unreadable`, each listed apart), is dropped from the arm comparison only and tallied
+apart by arm and by producer. That verify output must name the part 2 being counted and show that the
+presence record has seen the newest recall-off write, or the run is refused: when part 2 is amended during
+the window, the operator re-runs `verify --section ab` on each node before counting. The replay driver
+does not import the counter and the open record pins no hash of it, so each report names its own sha256.
+It ships in the release part 1 pins; the operator runs it on each named node after the window ends, then
+sums the nodes' reports into one comparison.
+
 **Box verbs and operator verbs.** `ccrc history status` reports the store, its lag, size, cap, free
 space and journal; doctor's `history` check reads it. Its `spool-planted` warning counts each node at
 `~/.ccrc/history/spool/<id>.jsonl` that is a FIFO, a link, a directory or any other non-regular node:

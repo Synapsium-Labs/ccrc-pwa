@@ -127,7 +127,7 @@ These six inputs follow from the decisions and rulings, would mislead the operat
 3. **A window, turn, copy or card rule spelled again, or the wrong copy read.** Two copies of one boundary where `windowCopyOf` and `pickHoldingCopy` disagree; a turn key or longest-copy rule in the counter; an inclusion rule outside the gate; the card glue drifting from card.mjs's. Expected: turns from the window copy, producer and card from the holding copy; the scans red; the card parity CONTROL's served and mismatch counts equal to `measureCardDelivery`'s on the same store. **Task 1** (the two-copy CONTROL, mutants M4 and M5), **Task 2** (the module scan, the parity CONTROL and its mutants), **Task 3** (the turn-key scan), **Task 4** (the `turnsOf` pin).
 4. **A dropped family in the arm comparison, or missing from the rows.** A family whose recall-off file changed in the window; a family whose verify state is any of the four that are not `ok`, a treatment family's `treatment-named` and an `unreadable` file included (V1); a dropped family tallied under the other arm, or by producer alone (V3); a gap row. Expected: the family in `windows` with `changed` or `unrealised` true, in `dropped` under its own state word, tallied in `dropped_strata[kind][arm][producer]` under its own arm, absent from every arm stratum; the gap in `recall_off_gaps`, dropping nothing; an absent `w2.recall_off` refused. **Task 1** (mutants M2, M3, M10, M24, M42 and M43), **Task 3** (`combine`'s `dropped_strata`, mutant M14).
 5. **A run on the wrong inputs, or one that leaves a partial `--out`.** A run before window end; a record under other definitions; a store not of the record, a measure or verify output of another store or record, a verify output missing a family or listing one twice, a verify output whose presence record has not seen the newest recall-off write (V2); a moved tree with and without `--allow-code-change`; an existing `--out`; a required flag missing, `--supersedes` without its sha, a relative `--out`. Expected: each refused with its driver word before `prepareOut`, in `checkCountInputs`' order, so no `--out` is left; a run at `end_ms` exactly measured; a stamped run carries `code_changed: true`. **Task 1** (mutants M12, M13, M21 to M23, M26, M27, M30 to M33, M39, M40 and M41).
-6. **A cross-node sum that is not a sum.** Node reports of two records, two counter scripts (V4) or one store twice; a node of the record with no report; a combine that copies one node's strata or folds with code other than the counting script's. Expected: each refused `input-invalid`; a node no report covers named in `nodes_missing`; the combined strata equal `stratify` over the concatenated rows, their window counts the nodes' sums. **Task 3** (mutants M13 to M15, M18 and M20).
+6. **A cross-node sum that is not a sum.** Node reports of two records, two counter scripts (V4) or one store twice; a node of the record with no report; a combine that copies one node's strata or folds with code other than the counting script's. Expected: each refused `input-invalid`; a row or an answer off the shapes `count` writes refused `counters-shape`, never folded or coerced (review 963 F1); a node no report covers named in `nodes_missing`; the combined strata equal `stratify` over the concatenated rows, their window counts the nodes' sums. **Task 3** (mutants M13 to M15, M18, M20 and M21 to M36).
 
 ## File Structure
 
@@ -247,7 +247,7 @@ It cites D-5770 and D-5771 (W2-3's plan), D-5774 (the deploy-local vocabularies)
   - `COUNTER_NAMES`: `Object.freeze(COUNTERS_DEF_V1.map((c) => c.name))`;
   - `COUNTER_UNMEASURED`, frozen: `'window-unmeasured'` and `'pending'` here;
   - module-private `measured(value): Measure`, `unmeasured(why): Measure` (throws a `TypeError` for a word outside the list) and `nonEmpty(name, values)` (a fold's guard: throws on an empty list);
-  - `Measure = {state: 'measured', value} | {state: 'unmeasured', why}`; `CounterSpec = {source: string, measure: (ctx: WindowCtx) => Measure, fold: (values: unknown[]) => unknown}`;
+  - `Measure = {state: 'measured', value} | {state: 'unmeasured', why}`; `CounterSpec = {source: string, measure: (ctx: WindowCtx) => Measure, fold: (values: unknown[]) => unknown, answer?: (value: unknown) => boolean}` (`answer`, review 963 F1: the shape of the measured value the counter writes, which combine checks; Tasks 2 and 3's six specs state it, a stand-in spec need not);
   - `WindowCtx`, frozen: `{rs: CounterStore, family: {key, store_id, ccrc_id, generation, arm}, boundary, window, copy: Copy | null, turns: Turn[] | null, calls, nowMs}`; `copy` and `turns` are null exactly when `window.state` is `'unmeasured'`;
   - `windowCtx({rs, family, boundary, window, calls, nowMs}): WindowCtx`, the one place the counter calls `turnsOf`;
   - `windowRow({ctx, changed, abState, measures}): Row`, where `Row = {family, store_id, ccrc_id, generation, arm, changed, unrealised, ab_state, boundary_uuid, ts_ms, producer, state, turns: number | null, recall_calls: number | null, measures: Record<name, Measure>}`;
@@ -272,7 +272,7 @@ It cites D-5770 and D-5771 (W2-3's plan), D-5774 (the deploy-local vocabularies)
 - **Every measure, every boundary (U5).** The frame calls every measure for every boundary of every found family the report lists, unmeasured windows and `zero_windows` families included; a measure that needs the window answers `window-unmeasured` itself. A `found: false` family has no boundary and no row; it is reported in `excluded.not_found`.
 - **Unmeasured is never 0.** A row of an unmeasured window carries `turns: null` and `recall_calls: null`; a stratum with no measured window carries `null` sums and each counter's `summary` is `null` there; `windows`, `measured` and `unmeasured` are counts of rows and may be 0.
 - **Strata (U8, V3).** For each arm in `ASSIGNMENT_ARMS` a stratum per producer in lib's `BACKENDS` and a pooled `all`, over rows that are neither changed nor unrealised; `dropped_strata.changed` and `dropped_strata.unrealised` tally those rows by arm and then by producer, the same `[arm][producer | 'all']` shape as `strata` (V3), so a dropped treatment family is never read beside the control arm's. A family both changed and unrealised is tallied in both. A row whose arm, producer or verify state is outside its list is a defect (`TypeError`).
-- **A fresh `--out`.** `count` refuses an `--out` that exists (`out-refused`, `exists: a counter report goes under a fresh --out`) before it reads anything. Every refusal comes before `writeReport`'s `prepareOut`, so a refused run leaves no `--out`. `counters.json` is created `wx`, mode 0600; the sha line is the sha of the bytes written.
+- **A fresh `--out`.** `count` refuses an `--out` that exists (`out-refused`, `exists: a counter report goes under a fresh --out`) before it reads anything. Every refusal of an input comes before `writeReport`'s `prepareOut`, so a refused run leaves no `--out`; the one exception is `writeReport`'s own: a write failure after `prepareOut` made `--out` refuses `out-refused` and leaves the marked `--out`, which a re-run then refuses as existing (a residual, review 963 F6). `counters.json` is created `wx`, mode 0600; the sha line is the sha of the bytes written.
 - **No environment.** `main` takes `argv` only; the counter spawns nothing.
 
 **Residuals, named:**
@@ -373,13 +373,16 @@ const w6cLoad = async (): Promise<W6cR> => (await import('../../deploy/history-c
 const W6C_NAMES: string[] = (w6cGate.COUNTERS_DEF_V1 as Array<{ name: string }>).map((c) => c.name);
 const w6cIsComment = (l: string): boolean => /^\s*(\*|\/\/|\/\*)/.test(l);
 const w6cCode = (p: string): string[] => w6cFs.readFileSync(p, 'utf8').split('\n').filter((l) => !w6cIsComment(l));
+/** A driver refusal: the statically imported driver's class, or the one a module graph loaded after an earlier case's
+ *  vi.resetModules() carries (w6cLoad imports the counter dynamically, so its driver is then a fresh copy). */
+const w6cIsRefusal = (e: unknown): boolean => e instanceof w6cDrv.DriverRefusal || (e instanceof Error && e.name === 'DriverRefusal');
 /** A call's driver refusal as {word, detail}, null when it returns; any other throw passes through. */
 function w6cRefusalOf(fn: () => unknown): W6cRefusal {
   try {
     fn();
     return null;
   } catch (e) {
-    if (e instanceof w6cDrv.DriverRefusal) return { word: (e as W6cR).word, detail: (e as W6cR).detail };
+    if (w6cIsRefusal(e)) return { word: (e as W6cR).word, detail: (e as W6cR).detail };
     throw e;
   }
 }
@@ -390,7 +393,7 @@ function w6cInProcess(fn: () => unknown): { code: unknown; stderr: string; refus
   try {
     return { code: fn(), stderr: lines.join(''), refusal: null };
   } catch (e) {
-    if (e instanceof w6cDrv.DriverRefusal) return { code: null, stderr: lines.join(''), refusal: { word: (e as W6cR).word, detail: (e as W6cR).detail } };
+    if (w6cIsRefusal(e)) return { code: null, stderr: lines.join(''), refusal: { word: (e as W6cR).word, detail: (e as W6cR).detail } };
     throw e;
   } finally {
     spy.mockRestore();
@@ -735,8 +738,8 @@ w6cDescribe('W2-6 Task 1: the counter module, its frame and its pins (W2-D86, W2
     const ctr = await w6cLoad();
     const out = w6cFrame(ctr);
     for (const r of out.windows) w6cExpect(Object.keys(r.measures), r.boundary_uuid).toEqual(W6C_NAMES);
-    const tallies = [...Object.values(out.strata).flatMap((a: W6cR) => Object.values(a)),
-      ...Object.values(out.dropped_strata).flatMap((k: W6cR) => Object.values(k).flatMap((a: W6cR) => Object.values(a)))];
+    const tallies = [...(Object.values(out.strata) as W6cR[]).flatMap((a) => Object.values(a)),
+      ...(Object.values(out.dropped_strata) as W6cR[]).flatMap((k) => (Object.values(k) as W6cR[]).flatMap((a) => Object.values(a)))];
     w6cExpect(tallies, 'two arms of four tallies, then two dropped kinds of two arms of four (V3)').toHaveLength(2 * 4 + 2 * 2 * 4);
     for (const t of tallies as W6cR[]) w6cExpect(Object.keys(t.counters)).toEqual(W6C_NAMES);
     w6cExpect(Object.keys(out.sources.counters)).toEqual(W6C_NAMES);
@@ -1126,8 +1129,10 @@ function nonEmpty(name, values) {
  *    boundary: object, window: object, copy: object | null, turns: Array<object> | null, calls: Array<[number, number, string]>,
  *    nowMs: number }} WindowCtx */
 /** One counter: the source it reads, named; its measure of one window; its fold of a stratum's measured values, never
- *  called on none.
- *  @typedef {{ source: string, measure: (ctx: WindowCtx) => Measure, fold: (values: unknown[]) => unknown }} CounterSpec */
+ *  called on none. `answer`, when a spec states it, is the shape of the measured value that counter writes: combine refuses
+ *  a node report's measured answer that fails it (a stand-in spec that states none is not checked).
+ *  @typedef {{ source: string, measure: (ctx: WindowCtx) => Measure, fold: (values: unknown[]) => unknown,
+ *    answer?: (value: unknown) => boolean }} CounterSpec */
 
 /** The frame's own sources, named in every report beside each counter's (W2-D87: every source is named). */
 export const FRAME_SOURCES = Object.freeze({
@@ -1170,10 +1175,17 @@ function checkMeasures(measures) {
 }
 
 /** One measure's answer, checked: measured with a value (never null), or unmeasured with a COUNTER_UNMEASURED word.
- *  Anything else is a defect.  @param {string} name  @param {unknown} a  @returns {Measure} */
-function answerOf(name, a) {
+ *  Anything else is a defect. When the counter's spec states the shape of its value (`valueOk`, combine hands it), a
+ *  measured value off that shape is the same refusal, never coerced.
+ *  @param {string} name  @param {unknown} a  @param {((value: unknown) => boolean) | undefined} [valueOk]  @returns {Measure} */
+function answerOf(name, a, valueOk) {
   const o = /** @type {any} */ (a);
-  if (o?.state === 'measured' && o.value !== undefined && o.value !== null) return { state: 'measured', value: o.value };
+  if (o?.state === 'measured' && o.value !== undefined && o.value !== null) {
+    if (valueOk !== undefined && !valueOk(o.value)) {
+      throw new TypeError(`countersReport: ${name} answered a measured value off its shape: ${JSON.stringify(o.value).slice(0, 200)}`);
+    }
+    return { state: 'measured', value: o.value };
+  }
   if (o?.state === 'unmeasured' && COUNTER_UNMEASURED.includes(o.why)) return { state: 'unmeasured', why: o.why };
   throw new TypeError(`countersReport: ${name} answered ${JSON.stringify(a ?? null)}: a measure answers measured with a value or unmeasured with a COUNTER_UNMEASURED word`);
 }
@@ -1467,7 +1479,10 @@ const COUNT_DEPS = Object.freeze({ loadFinal: loadFinalRecord, now: () => Date.n
 /** count: the flags; a fresh --out; part 2 through the part 2 loader at the read instant (its chain, W2-D24's re-check
  *  first, --allow-code-change taken after window start only and answered as a stamp); this node's measure and verify
  *  outputs, each sha-checked before it is parsed; the store, read-only; the report built in memory; and only then --out,
- *  with counters.json written once. Every refusal comes before --out exists. */
+ *  with counters.json written once. Every refusal of an input comes before --out exists; the one exception is
+ *  writeReport's: a write failure after prepareOut made --out refuses out-refused and leaves the marked --out, which a
+ *  re-run then refuses as existing. prepareOut's own createOut can also leave a new --out when it refuses (D-5986), which
+ *  is not a refusal of an input. */
 export function countCommand(flags, deps = COUNT_DEPS) {
   checkFormFlags('count', flags);
   if ((flags.supersedes === undefined) !== (flags['supersedes-sha256'] === undefined)) refuse('args-invalid', '--supersedes and --supersedes-sha256 go together');
@@ -1540,6 +1555,10 @@ cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-6
 ```
 
 Expected GREEN (predicted): 31 passed on linux (30 passed and 1 skipped on darwin). If a frame case is red, re-derive its number from the fixture with the gate's `buildWindows` on the same family, as the case's own CONTROL does; a wrong prediction is corrected in this plan's text in the same commit (U17). The guard is never weakened to match a number.
+
+*Measured over predicted (Task 1, U17):* Step 3 measured as predicted (28 failed, 3 passed). Step 5's filtered run measured 31 passed, but the whole file did not: an earlier case of the file calls `vi.resetModules()` (D-6301's), so `w6cLoad`'s dynamic import loads a fresh driver whose `DriverRefusal` is not the statically imported class, and 13 W2-6 cases failed the `instanceof` test in `w6cRefusalOf` and `w6cInProcess` although the word and detail were right. The helpers now test `w6cIsRefusal` (the class, or an `Error` named `DriverRefusal`), and the word and detail are still asserted in full. The emission pin's `tallies` expression also failed the server test project's typecheck (`Object.values` of an `any` read as `unknown[]`), so it casts to `W6cR[]` first. Both corrections are in the code above. The whole file then measured 1163 passed.
+
+*Fix round 1 (review 963 F6, comment only):* `countCommand`'s doc comment said every refusal comes before `--out` exists; `writeReport` is the exception (a `writeFileSync` failure after `prepareOut` refuses `out-refused` and leaves the marked `--out`). The comment and the Choices paragraph above now say so; no code line changed. *Fix round 2 (review 965 F5):* the comment adds that `prepareOut`'s own `createOut` can also leave a new `--out` when it refuses (D-5986, an I/O failure making `--out`), which is not a refusal of an input; still no code line changed.
 
 - [ ] **Step 6: Measure every new guard red, then green.** From the repository root. Each mutant is one or more exact replacements, each asserted to match once. The mutant table is written through a quoted heredoc, so no shell expansion touches the code. Every run restores the touched files with `cp`.
 
@@ -1627,7 +1646,7 @@ Then one call per mutant, `bash .superpowers/sdd/history-w2-6/scratch/r6t1.sh <m
 | M10 | `the recall-off rows` | 1 failed: no refusal for an absent list |
 | M11 | `two code words` | 1 failed: `input-invalid` where `code-changed` was expected |
 | M12 | `an --out that exists` | 1 failed: `store-unreadable` and loads 1, where `out-refused` and 0 were expected |
-| M13 | `leaves no --out\|an --out that exists` | 3 failed: an `--out` exists after each refusal |
+| M13 | `leaves no --out\|an --out that exists` | 3 failed: an `--out` exists after each refusal (measured: the filter selects 20 cases, 3 failed and 17 passed) |
 | M14 | `count writes one report` | 1 failed: the stderr sha is of the bytes without their newline |
 | M15 | `refuses as the driver` | 1 failed: `store-id-unreadable` where the driver says `store-id-absent` |
 | M16 | `standalone entry\|run as a file` | 2 failed on linux (the shebang text; stderr starts `(node:<pid>) ExperimentalWarning`), 1 on darwin |
@@ -1642,7 +1661,7 @@ Then one call per mutant, `bash .superpowers/sdd/history-w2-6/scratch/r6t1.sh <m
 | M25 | `the frame: one row per boundary` | 1 failed: F_U's `turns` 0 where `null` was expected |
 | M26 | `allow-code-change \(Q23\|count takes --allow-code-change` | 2 failed: `code_changed` false under the loader's stamp |
 | M27 | `allow-code-change \(Q23` | 1 failed: the flagged run refuses `code-changed` |
-| M28 | `run checks refuse in one order` | 1 failed: a verify output missing a family, or a family at another arm, is accepted |
+| M28 | `run checks refuse in one order` | 1 failed: a verify output missing a family, or a family at another arm, is accepted (measured: the frame then throws `windowRow: family … has verify state undefined`, a `TypeError`, so the case fails on that throw) |
 | M29 | `count takes --allow-code-change` | 1 failed: `--node-label` is accepted (the run then succeeds) |
 | M30 | `count writes one report` | 1 failed: the loader is handed `{}` where `{nowMs: <the clock>}` was expected |
 | M31 | `the count flag guards` | 1 failed: a missing `--measure` is not refused `measure-required` before the record is read |
@@ -1652,7 +1671,7 @@ Then one call per mutant, `bash .superpowers/sdd/history-w2-6/scratch/r6t1.sh <m
 | M35 | `the frame refuses what it cannot place` | 1 failed: producer `nobody` makes a row |
 | M36 | `the frame refuses what it cannot place` | 1 failed: verify state `no-such-state` makes a row |
 | M37 | `the frame refuses what it cannot place` | 1 failed: the throw is the turn count's (`counts 3 turns, and its copy gives 10`), not `is not boundary` |
-| M38 | `the frame refuses what it cannot place` | 1 failed: the gate's `TypeError` escapes unrefused |
+| M38 | `the frame refuses what it cannot place` | 1 failed: the gate's `TypeError` escapes unrefused (measured: `assembleReports: report 0: w2 is no object holding a families array`) |
 | M39 | `run checks refuse in one order` | 1 failed: a family listed twice is accepted, its last state kept |
 | M40 | `presence record has not seen` | 1 failed: the stale verify output is counted (refusal null where `verify-ab-presence-stale` was expected; V2) |
 | M41 | `presence record has not seen` | 1 failed: the presence check runs before the verify output's own checks (detail `verify-ab-presence-stale: checked first` where the full detail was expected; V2's order) |
@@ -1743,7 +1762,7 @@ It cites D-5770 and D-5771 (W2-3's window and copy rules) and D-6238 (`expandEnt
   - the measures, each `(ctx: WindowCtx) => Measure`: `complianceAt` (value: the status string), `echoAt`, `lagAt`, `cardAt` (memoised per `ctx`, so both card counters answer one verdict object);
   - the folds, each never handed an empty list (`nonEmpty`): `foldCompliance(values) → {status: Record<PARSE_STATUS word, n>, out_of_vocabulary, ok_degraded: {num, den}}`; `foldEcho(values) → {hits, errors, untimed, unreadable, prov_stale, recall_calls, gap}`; `foldLag(values) → {lag_ms: number[]}`, ascending; `foldCardFor('served' | 'mismatch') → (values) => {n, verdicts: {served, mismatch, none}, attachments_unread}`, any other word a `TypeError`;
   - the specs, frozen: `COMPLIANCE`, `ECHO_HITS`, `LAG`, `CARD_SERVED`, `CARD_ID_MISMATCH`;
-  - module-private: `COUNTER_STMTS` and `counterStmts(db)` (SELECTs only, prepared once per handle), `insideWindow(ctx, ts)`, `firstToolResult(body)`, `CARD_VERDICTS`, `cardVerdictOf(ctx)`, `CARD_SOURCE`.
+  - module-private: `COUNTER_STMTS` and `counterStmts(db)` (SELECTs only, prepared once per handle), `insideWindow(ctx, ts)`, `firstToolResult(body)`, `CARD_VERDICTS`, `cardVerdictOf(ctx)`, `CARD_SOURCE`; and, added by review 963 F1 (the shape of each measured value, read by combine): `isCount`, `isPlain`, `hasKeys`, `CARD_VERDICT_WORDS` (the verdicts `foldCardFor` also derives its keys from) and `complianceValueOk`, `echoValueOk`, `lagValueOk`, `cardValueOk`, `rediscoveryValueOk`.
 - Produces (test side): the import bindings `w6cCtrMod`, `w6cCardMod`, `w6cHash`; the module-scope `W6C_T2`, `W6C_T2_MODEL`, `W6C_T2_NOW`, `W6C_T2_GEN`, `W6C_T2_LEAF`, `w6cT2Uid`, `w6cT2Leaf`, `w6cT2NodeId`, `w6cT2Line`, `w6cT2Result`, the row builders, `w6cT2Plant`, `w6cT2Open`, `w6cT2With`, `w6cT2Copy`, `w6cT2Rep`, `w6cT2Part`, `w6cT2Ctx`, `w6cT2EchoStore`, `w6cT2CardStore`, `w6cT2WaitStore`; the describes `W2-6 Task 2: the five spec counters, their folds and their place (W2-D87, W2-D15)` (7 cases, pure and the module scan) and `W2-6 Task 2: the five spec counters over fixture stores (W2-D87, W2-D86, U9, U10)` (8 cases). Neither spawns a child, so neither is skipped on darwin.
 
 **Choices this task makes:**
@@ -1753,19 +1772,19 @@ It cites D-5770 and D-5771 (W2-3's window and copy rules) and D-6238 (`expandEnt
 - **An echo row is in the window by the gate's rule, never by a second one.** The rows are taken from `ctx.copy` in file order, after the boundary line and before the next main boundary's line, the positional range measure-history.py's raw rows use; each is placed in time by `windowOf` over one synthetic call at its `ts_ms`, so the inclusive start and the exclusive or inclusive end are spelled once, in the gate (W2-D14). A row with a null `ts_ms` is counted `untimed` over the whole positional range (U10).
 - **A boundary the store does not hold is unmeasured for every counter** (`boundary-absent`), never 0 echo hits: the store answers for a boundary measure-history.py reported only if it holds it. The coordinator confirmed this for echo hits (V4).
 - **A boundary no copy holds is `boundary-uncopied`, not `none`.** card.mjs's `deliveryOf` reads it `none` (no copy, so not live, so the window reads complete). That never moves a served or mismatch count, so the parity CONTROL stays exact; but "no copy" is not a measured delivery (D-6562).
-- **The card's copy is `holdingCopyOf` over the store, not the gate's `producerCopyOf` over Python's copies.** Both apply lib's `pickHoldingCopy`; only the store's row carries the `eof_ms` `eofAfterBoundary` needs. `live` is card.mjs's: `source_key === ''` and `ingest_files.status === 'live'`. The boundary's time is `ctx.boundary.ts_ms`, and the wait is `ctx.nowMs` less the leaf's `created_ms`.
+- **The card's copy is `holdingCopyOf` over the store, not the gate's `producerCopyOf` over Python's copies.** Both apply lib's `pickHoldingCopy`; only the store's row carries the `eof_ms` `eofAfterBoundary` needs. `live` is card.mjs's: `source_key === ''` and `ingest_files.status === 'live'`. The boundary's time is the store's, card.mjs's `stampAt` spelled again (the newest stamped row at or before the boundary's line in the holding copy, `null` when none, D-6563), and the wait is `ctx.nowMs` less the leaf's `created_ms`.
 - **Compliance, lag and the card are measured for every boundary, an unmeasured window included (U5).** Echo hits need the window's bounds, so an unmeasured window answers `window-unmeasured`.
 - **The folds divide nothing.** The ok+degraded share is `{num, den}`; a fold is never called on an empty list (Task 1 answers `null` there), so `den` is never 0. Lag is the sorted list of measured values; no p95 or median that `COUNTERS_DEF_V1` does not define.
 - **The card verdict per boundary is computed once and projected twice.** Both card specs measure with `cardAt`, memoised on the frozen `ctx` Task 1 hands every measure of one row; `card_served`'s fold counts `served`, `card_id_mismatch`'s counts `mismatch`, and each carries the whole distribution.
 
-**Departure:** **D-6562** (`history-w2-counters-card-glue-respelled`). W2-D87 says the card counters use "the same functions the sweep's card measure uses, so no rule is spelled again". The functions are shared: `cardIdsIn`, `cardWindowComplete` and `decideCardDelivery`, each called once and declared nowhere here, which the module scan pins. The glue around them is card.mjs's module-private `deliveryOf`, and W2-6 never touches `ccd/**`, so it is spelled a second time in `cardVerdictOf`: the rows after the boundary up to the next boundary, at most `CARD_MEASURE_ROWS`; `live`; the `CARD_ATTACHMENT_MAX_BYTES` skip; `waitedMs`. Held by the parity CONTROL against card.mjs's `measureCardDelivery` on the same fixture store (its served and mismatch counts) and by mutants M17 to M22 and M24. A boundary no copy holds answers `boundary-uncopied` where card.mjs answers `none`. Moving the glue into lib is a later `ccd/**` follow-up.
+**Departure:** **D-6562** (`history-w2-counters-card-glue-respelled`). W2-D87 says the card counters use "the same functions the sweep's card measure uses, so no rule is spelled again". The functions are shared: `cardIdsIn`, `cardWindowComplete` and `decideCardDelivery`, each called once and declared nowhere here, which the module scan pins. The glue around them is card.mjs's module-private `deliveryOf`, and W2-6 never touches `ccd/**`, so it is spelled a second time in `cardVerdictOf`: the rows after the boundary up to the next boundary, at most `CARD_MEASURE_ROWS`; `live`; the `CARD_ATTACHMENT_MAX_BYTES` skip; `waitedMs`. Held by the parity CONTROL against card.mjs's `measureCardDelivery` on the same fixture store (its aggregate counts: measured 8, served 1, mismatch 1, waiting 1) and by mutants M17 to M22, M24 and M30 to M34 (D-6563). A boundary no copy holds answers `boundary-uncopied` where card.mjs answers `none`. Moving the glue into lib is a later `ccd/**` follow-up.
 
 **Residuals, named:**
 - **Untimed echo rows are counted over the whole positional range** (U10), so a null-stamped echo row past the window's end is still `untimed`; reported beside the hits, folded into nothing.
 - **Lag reads the node's tick series**, so two windows on one node near one instant share a reading (decisions §7, W2-D87).
 - **The store is read after measure-history.py ran.** Echo hits read the window copy's lines from Python's report, and the card reads the store's holding copy at the run's read instant. A sweep tick between the two can append rows; a line it moved, or a file id a rebuild renumbered, leaves the boundary away from its reported line, which echo hits answer `boundary-moved`, never a read of other rows. The operator runs both after window end on a frozen tree (W2-D88).
 - **Echo rows written in subagent transcripts are not in the main copy:** a positive gap against `recall_calls`.
-- **The card glue is a second spelling** (D-6562); the parity CONTROL covers the fixture's shapes only.
+- **The card glue is a second spelling** (D-6562); the parity CONTROL covers the fixture's shapes only, and compares card.mjs's aggregate counts, the only thing `measureCardDelivery` exposes (review 963 F3).
 - **The leaf-of-boundary rule is a second spelling.** `counterStmts`' `leaves` spells leaf N's node (the depth-0 node whose `boundary_entry_id` is N) again from the driver's module-private `LEAF_OF_BOUNDARY_SQL` (W2-5b1), without its `LIMIT 1`, so `boundaryLeafOf` can tell `leaf-ambiguous` apart; the driver's scan reads the driver alone, so nothing reds on a drift. Held by M1 here and, in Task 3, by the span parity pin, which reads the counter's span through `boundaryLeafOf`'s node id. This file spells the rule once: Task 3 reuses that node id rather than a second subquery.
 
 - [ ] **Step 0: Check Task 1's state.** From the repository root, before any edit:
@@ -1994,6 +2013,7 @@ const w6cT2Ctx = (cs: W6cT2Cs, p: W6cT2Part, nowMs = W6C_T2_NOW): W6cR =>
 const W6C_T2_LEAF = {
   A1: w6cT2Leaf(0xa1), H1: w6cT2Leaf(0x91), H2: w6cT2Leaf(0x92), B: w6cT2Leaf(0xb1), C1: w6cT2Leaf(0xc1), D: w6cT2Leaf(0xd1),
   E: w6cT2Leaf(0xe1), F: w6cT2Leaf(0xf1), G: w6cT2Leaf(0x61), U: w6cT2Leaf(0x71), X: w6cT2Leaf(0xfff),
+  EA: w6cT2Leaf(0xea), EB: w6cT2Leaf(0xeb), RT: w6cT2Leaf(0x77), NS: w6cT2Leaf(0x57),
 };
 
 /** Store 1: compliance, echo hits and lag. Transcript A (file 1) holds two boundaries: A1 (line 3, ts 10000), whose
@@ -2068,7 +2088,13 @@ function w6cT2EchoStore() {
  *  meets C2's boundary before C1's line, which sits after C2 (none). D has two copies: the live one (file 3, the holding
  *  copy) names D, the retired one (file 4, more rows after the boundary, so the WINDOW copy) names another leaf
  *  (served). E's only attachment is past CARD_ATTACHMENT_MAX_BYTES by its stored raw_len (none, one unread). F's line is
- *  the 41st row after its boundary (none). C2 has no leaf. */
+ *  the 41st row after its boundary (none). C2 has no leaf. EA, EB and RT (D-6563) each have a live-looking window that is
+ *  still open by rows and by the leaf's age, closed by something else: EA's file ends a grace after the boundary's own
+ *  stamp (none); EB's boundary row has no stamp, so the store's stamp is the newest stamped row before it, and the report
+ *  names a later time that would leave the window open (none); RT's copy has source_key '' but its file is retired (none).
+ *  NS (D-6563's null arm) has no stamped row at or before its boundary line (the boundary is line 1 and unstamped), so the
+ *  store's stamp is null and the file's end closes nothing, though the report's time would close it: the window waits
+ *  (card-wait). Its leaf is the LAST node, so card.mjs's wait stops its cursor with no leaf after it. */
 function w6cT2CardStore() {
   const u = (seed: number) => (n: number): string => w6cT2Uid(seed, n);
   const [uB, uC, uD, uE, uF] = [u(0xb), u(0xc), u(0xd), u(0xe), u(0xf)];
@@ -2084,6 +2110,12 @@ function w6cT2CardStore() {
   const F = [w6cT2Op(uF(1), 99000), w6cT2Asst(uF(2), 99500), w6cT2Bnd(uF(3), 100000), w6cT2Sum(uF(4), 100001),
     ...Array.from({ length: 39 }, (_, i) => w6cT2Asst(uF(5 + i), 100100 + i)),          // lines 5 to 43
     w6cT2Att(uF(44), 101000, w6cT2Line(W6C_T2_LEAF.F))];                                // line 44: the 41st row after line 3
+  const [uEA, uEB, uRT] = [u(0x11), u(0x12), u(0x13)];
+  const EA = [w6cT2Op(uEA(1), 109000), w6cT2Asst(uEA(2), 109500), w6cT2Bnd(uEA(3), 110000), w6cT2Sum(uEA(4), 110001), w6cT2Asst(uEA(5), 110100)];
+  const EB = [w6cT2Op(uEB(1), 119000), w6cT2Asst(uEB(2), 119500), { ...w6cT2Bnd(uEB(3), 0), ts: null }, w6cT2Sum(uEB(4), 120001), w6cT2Asst(uEB(5), 120100)];
+  const RT = [w6cT2Op(uRT(1), 129000), w6cT2Asst(uRT(2), 129500), w6cT2Bnd(uRT(3), 130000), w6cT2Sum(uRT(4), 130001), w6cT2Asst(uRT(5), 130100)];
+  const uNS = u(0x14);
+  const NS = [{ ...w6cT2Bnd(uNS(1), 0), ts: null }, w6cT2Sum(uNS(2), 140001), w6cT2Asst(uNS(3), 140100)];
   const all = (rows: W6cT2Row[]): string[] => rows.map((r) => r.uuid);
   const st = w6cT2Plant({
     transcripts: [
@@ -2095,6 +2127,14 @@ function w6cT2CardStore() {
       ] },
       { pk: 4, ccUuid: w6cT2Uid(0xcd, 4), rows: E, files: [{ fileId: 5, uuids: all(E) }] },
       { pk: 5, ccUuid: w6cT2Uid(0xcd, 5), rows: F, files: [{ fileId: 6, uuids: all(F) }] },
+      // EA: the file ends RAW_LEAF_GRACE_MS after the boundary's stamp. EB: it ends that long after the stamp of the row
+      // before the (unstamped) boundary. RT: the only copy has source_key '' and a retired file.
+      { pk: 6, ccUuid: w6cT2Uid(0xcd, 6), rows: EA, files: [{ fileId: 7, eofMs: 110000 + w6cLib.RAW_LEAF_GRACE_MS, uuids: all(EA) }] },
+      { pk: 7, ccUuid: w6cT2Uid(0xcd, 7), rows: EB, files: [{ fileId: 8, eofMs: 119500 + w6cLib.RAW_LEAF_GRACE_MS, uuids: all(EB) }] },
+      { pk: 8, ccUuid: w6cT2Uid(0xcd, 8), rows: RT, files: [{ fileId: 9, status: 'retired', uuids: all(RT) }] },
+      // NS: the boundary is line 1 and unstamped, so no stamped row is at or before it; the file ends a grace after the
+      // REPORT's time for it (140000), which would close the window if that time were read.
+      { pk: 9, ccUuid: w6cT2Uid(0xcd, 9), rows: NS, files: [{ fileId: 10, eofMs: 140000 + w6cLib.RAW_LEAF_GRACE_MS, uuids: all(NS) }] },
     ],
     nodes: [
       { id: W6C_T2_LEAF.B, boundary: uB(3), status: 'not-requested', createdMs: 41000 },
@@ -2102,11 +2142,20 @@ function w6cT2CardStore() {
       { id: W6C_T2_LEAF.D, boundary: uD(3), status: 'not-requested', createdMs: 71000 },
       { id: W6C_T2_LEAF.E, boundary: uE(3), status: 'not-requested', createdMs: 81000 },
       { id: W6C_T2_LEAF.F, boundary: uF(3), status: 'not-requested', createdMs: 101000 },
+      { id: W6C_T2_LEAF.EA, boundary: uEA(3), status: 'not-requested', createdMs: W6C_T2_NOW - 1000 },
+      { id: W6C_T2_LEAF.EB, boundary: uEB(3), status: 'not-requested', createdMs: W6C_T2_NOW - 1000 },
+      { id: W6C_T2_LEAF.RT, boundary: uRT(3), status: 'not-requested', createdMs: W6C_T2_NOW - 1000 },
+      { id: W6C_T2_LEAF.NS, boundary: uNS(1), status: 'not-requested', createdMs: W6C_T2_NOW - 1000 },   // last: a wait stops card.mjs's cursor here
     ],
   });
   const M = W6C_T2_MODEL;
   return {
     ...st,
+    fEA: w6cT2Part(w6cT2Rep(uEA(3), 110000, [w6cT2Copy({ file_id: 7, boundary_line: 3, after_count: 3, summary_line: 4, last_ts_ms: 110100 })])),
+    // The report names 120000 for EB's boundary: with that time the file's end is short of a grace, which the old reading took.
+    fEB: w6cT2Part(w6cT2Rep(uEB(3), 120000, [w6cT2Copy({ file_id: 8, boundary_line: 3, after_count: 3, summary_line: 4, last_ts_ms: 120100 })])),
+    fRT: w6cT2Part(w6cT2Rep(uRT(3), 130000, [w6cT2Copy({ file_id: 9, boundary_line: 3, after_count: 3, summary_line: 4, last_ts_ms: 130100 })])),
+    fNS: w6cT2Part(w6cT2Rep(uNS(1), 140000, [w6cT2Copy({ file_id: 10, boundary_line: 1, after_count: 2, summary_line: 2, last_ts_ms: 140100 })])),
     fB: w6cT2Part(w6cT2Rep(uB(3), 40000, [w6cT2Copy({ file_id: 1, boundary_line: 3, after_count: 3, summary_line: 4, last_ts_ms: 40100, rows: [[6, 40100, null, null, uB(6), M]] })])),
     fC1: w6cT2Part(w6cT2Rep(uC(3), 50000, [w6cT2Copy({ file_id: 2, boundary_line: 3, after_count: 5, summary_line: 4, next_boundary_line: 6, next_boundary_ts_ms: 60000, last_ts_ms: 60002, rows: [[5, 50100, null, null, uC(5), M]] })])),
     fC2: w6cT2Part(w6cT2Rep(uC(6), 60000, [w6cT2Copy({ file_id: 2, boundary_line: 6, after_count: 2, summary_line: 7, last_ts_ms: 60002 })])),
@@ -2179,6 +2228,13 @@ w6cDescribe('W2-6 Task 2: the five spec counters, their folds and their place (W
       { hits: 1, errors: 1, untimed: 1, unreadable: { tombstone: 1 }, prov_stale: 0, recall_calls: 3, gap: 2 },
       { hits: 2, errors: 0, untimed: 0, unreadable: { tombstone: 1, 'no-tool-result': 2 }, prov_stale: 1, recall_calls: 1, gap: -1 },
     ])).toEqual({ hits: 3, errors: 1, untimed: 1, unreadable: { tombstone: 2, 'no-tool-result': 2 }, prov_stale: 1, recall_calls: 4, gap: 1 });
+  });
+
+  w6cIt('foldEcho: an unreadable key is only ever summed, as a number, whatever its name: __proto__ and constructor are kept, never dropped or turned into a string (review 965 F1)', () => {
+    const one = (): W6cR => ({ hits: 0, errors: 0, untimed: 0, unreadable: JSON.parse('{"tombstone":1,"__proto__":3,"constructor":3}'), prov_stale: 0, recall_calls: 0, gap: 0 });
+    const t = W6C_T2.foldEcho([one(), one()]).unreadable as Record<string, unknown>;
+    w6cExpect(Object.entries(t).sort(), 'CONTROL: tombstone sums as it did, and the two odd keys with it').toEqual([['__proto__', 6], ['constructor', 6], ['tombstone', 2]]);
+    w6cExpect(w6cLib.canonicalJson(t), 'the keys reach the report').toBe('{"__proto__":6,"constructor":6,"tombstone":2}');
   });
 
   w6cIt('foldLag: the measured lags, ascending', () => {
@@ -2278,23 +2334,29 @@ w6cDescribe('W2-6 Task 2: the five spec counters over fixture stores (W2-D87, W2
       w6cExpect(card(st.fD), 'the holding copy, not the window copy').toEqual(verdict('served'));
       w6cExpect(card(st.fE), 'skipped unread past CARD_ATTACHMENT_MAX_BYTES, as card.mjs skips it').toEqual(verdict('none', 1));
       w6cExpect(card(st.fF), 'the line is the 41st row after the boundary').toEqual(verdict('none'));
+      w6cExpect(card(st.fEA), 'a live window short of rows and of age, closed by the file ending a grace after the boundary\'s stamp').toEqual(verdict('none'));
+      w6cExpect(card(st.fEB), 'the boundary row has no stamp: the store\'s stamp is the row before it, not the report\'s time (D-6563)').toEqual(verdict('none'));
+      w6cExpect(card(st.fRT), 'source_key is empty but the file is retired, so the copy is not live and the window is closed').toEqual(verdict('none'));
+      w6cExpect(card(st.fNS), 'no stamped row at or before the boundary: the store\'s stamp is null, so the file\'s end closes nothing and the window waits, though the report\'s time would close it (D-6563)')
+        .toEqual({ state: 'unmeasured', why: 'card-wait' });
     });
   });
 
-  w6cIt('card parity CONTROL (D-6562): card.mjs\'s own measureCardDelivery, over the same store, measures the same five leaves with the same served and mismatch counts (each leaf\'s verdict is the card case\'s)', () => {
+  w6cIt('card parity CONTROL (D-6562): card.mjs\'s own measureCardDelivery, over the same store, agrees with the counter on its aggregate counts only, which is all it exposes (measured 8, served 1, mismatch 1, waiting 1); each leaf\'s own verdict is pinned by the card case', () => {
     const st = w6cT2CardStore();
-    const ours = w6cT2With(st.dbFile, (cs) => [st.fB, st.fC1, st.fD, st.fE, st.fF].map((p) => W6C_T2.cardAt(w6cT2Ctx(cs, p))));
+    const ours = w6cT2With(st.dbFile, (cs) => [st.fB, st.fC1, st.fD, st.fE, st.fF, st.fEA, st.fEB, st.fRT, st.fNS].map((p) => W6C_T2.cardAt(w6cT2Ctx(cs, p))));
     const w = w6cStore.openWriter(st.dbFile);
     try {
       w6cStore.withTx(w, 'NORMAL', () => { w6cStore.setStep(w, 'card-measure', 1, '0', null); });
       const theirs = (w6cCardMod as unknown as W6cR).measureCardDelivery(w, { nowMs: W6C_T2_NOW, budgetLeft: () => true }, { bytes: 0 });
-      w6cExpect(theirs).toEqual({ measured: 5, served: 1, mismatch: 1, waiting: 0 });
+      w6cExpect(theirs).toEqual({ measured: 8, served: 1, mismatch: 1, waiting: 1 });
     } finally {
       w6cStore.closeWriter(w);
     }
-    w6cExpect(ours.every((v) => v.state === 'measured')).toBe(true);
-    w6cExpect(ours.filter((v) => v.value.verdict === 'served')).toHaveLength(1);
-    w6cExpect(ours.filter((v) => v.value.verdict === 'mismatch')).toHaveLength(1);
+    w6cExpect(ours.slice(0, 8).every((v) => v.state === 'measured')).toBe(true);
+    w6cExpect(ours[8], 'NS waits in both: card.mjs counts it waiting and stops, the counter answers card-wait').toEqual({ state: 'unmeasured', why: 'card-wait' });
+    w6cExpect(ours.filter((v) => v.value?.verdict === 'served')).toHaveLength(1);
+    w6cExpect(ours.filter((v) => v.value?.verdict === 'mismatch')).toHaveLength(1);
   });
 
   w6cIt('card: a window still open at the read instant is card-wait, never none; a boundary no copy holds is boundary-uncopied (CONTROL: the same G past CARD_MEASURE_MAX_WAIT_MS is none)', () => {
@@ -2315,7 +2377,7 @@ w6cDescribe('W2-6 Task 2: the five spec counters over fixture stores (W2-D87, W2
     const out = w6cT2With(st.dbFile, (cs) => {
       const row = (p: W6cT2Part, changed = false): W6cR => W6C_T2.windowRow({ ctx: w6cT2Ctx(cs, p), changed, abState: w6cDrv.AB_STATES[0], measures });
       const rows = [row(st.fA1), row(st.fA2), row(st.fH1, true), row(st.fGhost)];
-      return { rows, ...W6C_T2.stratify(rows, measures) };
+      return { rows, ...W6C_T2.stratify(rows, measures) } as W6cR;
     });
     const [C, E, L, S, M] = W6C_NAMES;
     w6cExpect(out.rows[0].measures[S!]).toEqual({ state: 'measured', value: { verdict: 'served', attachments_unread: 0 } });
@@ -2395,8 +2457,8 @@ import { ASSIGNMENT_ARMS, COUNTERS_DEF_V1, COUNTERS_DEF_V1_SHA256, K, K_UNIT, as
 //   card_served,      per boundary, one verdict projected twice: lib's decideCardDelivery over cardIdsIn of the
 //   card_id_mismatch  attachments in the first CARD_MEASURE_ROWS rows after the boundary in its holding copy (derive.mjs
 //                     holdingCopyOf, lib's pickHoldingCopy), with cardWindowComplete: the functions card.mjs's measure
-//                     calls. The glue around them (the rows read, `live`, the attachment size bound, the wait) is card.mjs's
-//                     deliveryOf, module-private, spelled a second time here (D-6562).
+//                     calls. The glue around them (the rows read, `live`, the attachment size bound, the boundary's time,
+//                     the wait) is card.mjs's deliveryOf, module-private, spelled a second time here (D-6562, D-6563).
 
 const COUNTER_STMTS = new WeakMap();
 
@@ -2418,6 +2480,8 @@ function counterStmts(db) {
       ORDER BY m.line`),
     lineOf: db.prepare('SELECT line FROM memberships WHERE file_id = ? AND entry_id = ?'),
     fileStatus: db.prepare('SELECT status FROM ingest_files WHERE file_id = ?'),
+    stampAt: db.prepare(`SELECT e.ts_ms AS ts_ms FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+      WHERE m.file_id = ? AND m.line <= ? AND e.ts_ms IS NOT NULL ORDER BY m.line DESC LIMIT 1`),
     cardRows: db.prepare(`SELECT e.entry_id AS entry_id, e.type AS type, e.blob_id AS blob_id, bl.raw_len AS raw_len,
         CASE WHEN b.entry_id IS NULL THEN 0 ELSE 1 END AS is_boundary
       FROM memberships m JOIN entries e ON e.entry_id = m.entry_id LEFT JOIN boundaries b ON b.entry_id = e.entry_id
@@ -2533,10 +2597,11 @@ export function echoAt(ctx) {
   return measured(v);
 }
 
-/** Echo hits over one stratum: the measured windows' counts summed, `unreadable` merged word by word, and the gap of the
- *  sums (recall_calls - hits). */
+/** Echo hits over one stratum: the measured windows' counts summed, `unreadable` merged word by word (into a prototype-less
+ *  object, so no key of a node report, `__proto__` and `constructor` included, is dropped or read as inherited), and the
+ *  gap of the sums (recall_calls - hits). */
 export function foldEcho(values) {
-  const t = { hits: 0, errors: 0, untimed: 0, unreadable: {}, prov_stale: 0, recall_calls: 0, gap: 0 };
+  const t = { hits: 0, errors: 0, untimed: 0, unreadable: Object.create(null), prov_stale: 0, recall_calls: 0, gap: 0 };
   for (const v of nonEmpty('foldEcho', values)) {
     t.hits += v.hits;
     t.errors += v.errors;
@@ -2566,7 +2631,8 @@ export function cardAt(ctx) {
  *  its holding copy, stopping at the next boundary, with lib's cardWindowComplete. An attachment whose stored raw_len
  *  passes CARD_ATTACHMENT_MAX_BYTES is skipped unread, as card.mjs skips it, and so is one expandEntryBody cannot give;
  *  each is counted in `attachments_unread`. A window still open at the read instant is card-wait; a boundary no copy
- *  holds is boundary-uncopied. The glue is card.mjs's deliveryOf, spelled a second time (D-6562).
+ *  holds is boundary-uncopied. The glue is card.mjs's deliveryOf, spelled a second time (D-6562), the boundary's time
+ *  included (the store's stampAt, D-6563).
  *  @param {WindowCtx} ctx */
 function cardVerdictOf(ctx) {
   const leaf = boundaryLeafOf(ctx.rs, ctx.boundary.boundary_uuid);
@@ -2600,7 +2666,12 @@ function cardVerdictOf(ctx) {
     }
     ids.push(...cardIdsIn(k.primary));
   }
-  const eofAfter = eofAfterBoundary({ eofMs: holding.eof_ms === null ? null : Number(holding.eof_ms), boundaryTsMs: ctx.boundary.ts_ms });
+  // The boundary's time is the store's, as card.mjs's stampAt reads it: the newest stamped row at or before the boundary's
+  // line in the holding copy, null when none is stamped. The report's time can differ (D-6563).
+  const stamp = s.stampAt.get(fileId, line);
+  const eofAfter = eofAfterBoundary({
+    eofMs: holding.eof_ms === null ? null : Number(holding.eof_ms), boundaryTsMs: stamp === undefined ? null : Number(stamp.ts_ms),
+  });
   const windowComplete = cardWindowComplete({ live, rowsSeen, nextBoundary, eofAfter, waitedMs: ctx.nowMs - leaf.created_ms });
   const verdict = decideCardDelivery({ ids, leafId: leaf.node_id, windowComplete });
   if (verdict === 'wait') return unmeasured('card-wait');
@@ -2612,7 +2683,7 @@ function cardVerdictOf(ctx) {
 export function foldCardFor(verdict) {
   if (verdict !== 'served' && verdict !== 'mismatch') throw new TypeError(`history-counters: a card counter counts served or mismatch, not ${verdict}`);
   return (values) => {
-    const verdicts = { served: 0, mismatch: 0, none: 0 };
+    const verdicts = Object.fromEntries(CARD_VERDICT_WORDS.map((w) => [w, 0]));
     let unread = 0;
     for (const v of nonEmpty(`foldCardFor(${verdict})`, values)) {
       if (!Object.hasOwn(verdicts, v.verdict)) throw new TypeError(`history-counters: not a card verdict: ${v.verdict}`);
@@ -2623,22 +2694,44 @@ export function foldCardFor(verdict) {
   };
 }
 
+// The shape of each counter's measured value, as its measure above writes it (review 963 F1): the keys it writes and,
+// where it writes an integer, a non-negative safe one (echo_hits' gap is a difference and may be negative). combine
+// refuses a node report's answer that is off its counter's shape; count's own measures write these shapes.
+/** A count a measure writes: a non-negative safe integer.  @param {unknown} v */
+const isCount = (v) => Number.isSafeInteger(v) && /** @type {number} */ (v) >= 0;
+/** A plain object (not a list).  @param {unknown} v */
+const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+/** A plain object holding exactly these keys.  @param {unknown} v  @param {string[]} keys */
+const hasKeys = (v, keys) => isPlain(v) && Object.keys(/** @type {object} */ (v)).length === keys.length && keys.every((k) => Object.hasOwn(/** @type {object} */ (v), k));
+/** The verdicts a card counter measures: decideCardDelivery's three that close a window (its wait is unmeasured). */
+const CARD_VERDICT_WORDS = Object.freeze(['served', 'mismatch', 'none']);
+const complianceValueOk = (v) => typeof v === 'string';
+// unreadable's keys are free names: expandEntryBody's states are literals in recall.mjs, not an exported vocabulary, so
+// no allowed set is built from a declared one; foldEcho sums whatever key arrives as a number.
+const echoValueOk = (v) => hasKeys(v, ['hits', 'errors', 'untimed', 'unreadable', 'prov_stale', 'recall_calls', 'gap'])
+  && [v.hits, v.errors, v.untimed, v.prov_stale, v.recall_calls].every(isCount) && Number.isSafeInteger(v.gap)
+  && isPlain(v.unreadable) && Object.values(v.unreadable).every(isCount);
+const lagValueOk = (v) => hasKeys(v, ['lag_ms', 'tick_ts_ms']) && isCount(v.lag_ms) && isCount(v.tick_ts_ms);
+const cardValueOk = (v) => hasKeys(v, ['verdict', 'attachments_unread']) && CARD_VERDICT_WORDS.includes(v.verdict) && isCount(v.attachments_unread);
+const rediscoveryValueOk = (v) => hasKeys(v, ['hit', 'distinct_paths', 'reads', 'sources', 'unresolved']) && typeof v.hit === 'boolean'
+  && [v.distinct_paths, v.reads, v.sources, v.unresolved].every(isCount);
+
 /** The five spec counters, each Task 1's CounterSpec with its source named (W2-D87). */
 export const COMPLIANCE = Object.freeze({
   source: 'nodes.status of the depth-0 leaf whose boundary opens the window (lib PARSE_STATUS), with the ok plus degraded share',
-  measure: complianceAt, fold: foldCompliance,
+  measure: complianceAt, fold: foldCompliance, answer: complianceValueOk,
 });
 export const ECHO_HITS = Object.freeze({
   source: 'entries.provenance recall-echo (lib provenanceOf, stored under PROV_VERSION) in the window copy, the first tool_result through recall.mjs expandEntryBody, beside the window\'s recall_calls',
-  measure: echoAt, fold: foldEcho,
+  measure: echoAt, fold: foldEcho, answer: echoValueOk,
 });
 export const LAG = Object.freeze({
   source: 'ticks.lag_ms of the newest tick at or before the boundary with a measured lag',
-  measure: lagAt, fold: foldLag,
+  measure: lagAt, fold: foldLag, answer: lagValueOk,
 });
 const CARD_SOURCE = 'lib decideCardDelivery over cardIdsIn of the attachments in the first CARD_MEASURE_ROWS rows after the boundary in its holding copy (derive.mjs holdingCopyOf), with cardWindowComplete; the glue spelled again from card.mjs (D-6562)';
-export const CARD_SERVED = Object.freeze({ source: CARD_SOURCE, measure: cardAt, fold: foldCardFor('served') });
-export const CARD_ID_MISMATCH = Object.freeze({ source: CARD_SOURCE, measure: cardAt, fold: foldCardFor('mismatch') });
+export const CARD_SERVED = Object.freeze({ source: CARD_SOURCE, measure: cardAt, fold: foldCardFor('served'), answer: cardValueOk });
+export const CARD_ID_MISMATCH = Object.freeze({ source: CARD_SOURCE, measure: cardAt, fold: foldCardFor('mismatch'), answer: cardValueOk });
 
 ```
 
@@ -2666,7 +2759,7 @@ Expected (predicted): 46 passed (Task 1's 31 and this task's 15; 45 and 1 skippe
 
 | # | Guard | Edit (old → new) | Predicted red |
 |---|---|---|---|
-| M1 | compliance: the depth-0 rule | `WHERE boundary_entry_id = ? AND depth = 0 ORDER BY node_id` → `WHERE boundary_entry_id = ? ORDER BY node_id` | 2: compliance case (A1 answers `leaf-ambiguous`), frame case |
+| M1 | compliance: the depth-0 rule | `WHERE boundary_entry_id = ? AND depth = 0 ORDER BY node_id` → `WHERE boundary_entry_id = ? ORDER BY node_id` | 3: compliance case (A1 answers `leaf-ambiguous`), frame case, and the echo unmeasured case, whose compliance CONTROL on the cut A1 is then unmeasured (measured; predicted 2) |
 | M2 | the ok+degraded share | `num: status.ok + status.degraded,` → `num: status.ok + status.degraded + status.invalid,` | 1: foldCompliance case, `num` 3 |
 | M3 | a status outside PARSE_STATUS kept apart | `else outOfVocabulary += 1;` → `else status.absent += 1;` | 1: foldCompliance case, `absent` 1, `out_of_vocabulary` 0 |
 | M4 | the error test | `if (block.is_error === true) v.errors += 1;` → `if (block.is_error !== false) v.errors += 1;` | 2: echo case (hits 0, errors 2), frame case |
@@ -2695,6 +2788,12 @@ Expected (predicted): 46 passed (Task 1's 31 and this task's 15; 45 and 1 skippe
 | M27 | a stale `tool` row is read (U9) | `(e.provenance = 'tool' AND e.prov_version <> ?)` → `(e.provenance = 'tool' AND e.prov_version <> ? AND 0)` | 1: echo case, `prov_stale` 1 (line 17 unseen) |
 | M28 | two leaves are leaf-ambiguous | delete the line `if (leaves.length > 1) return unmeasured('leaf-ambiguous');` | 1: compliance case, H3 measured `ok` (and its card measured) |
 | M29 | the boundary at its reported line | delete the line `if (at === undefined \|\| Number(at.line) !== ctx.copy.boundary_line) return unmeasured('boundary-moved');` | 1: echo unmeasured case, A1 read from line 2 is measured |
+| M30 | the boundary's time is the store's (D-6563) | `boundaryTsMs: stamp === undefined ? null : Number(stamp.ts_ms),` → `boundaryTsMs: ctx.boundary.ts_ms,` | 2: card case (EB answers `card-wait`), parity CONTROL (ours not all measured) |
+| M31 | the file's end closes a live window | `const eofAfter = eofAfterBoundary({` → `const eofAfter = false && eofAfterBoundary({` | 2: card case (EA answers `card-wait`), parity CONTROL |
+| M32 | `live` needs the file's status | `const live = holding.source_key === '' && s.fileStatus.get(fileId)?.status === 'live';` → `const live = holding.source_key === '';` | 2: card case (RT answers `card-wait`), parity CONTROL |
+| M33 | the null arm is reached and read (D-6563) | `boundaryTsMs: stamp === undefined ? null : Number(stamp.ts_ms),` → `boundaryTsMs: stamp === undefined ? (() => { throw new Error('no stamp'); })() : Number(stamp.ts_ms),` | 2: card case (NS throws `no stamp`), parity CONTROL |
+| M34 | no stamp is null, never the report's time (D-6563) | `boundaryTsMs: stamp === undefined ? null : Number(stamp.ts_ms),` → `boundaryTsMs: stamp === undefined ? Number(ctx.boundary.ts_ms) : Number(stamp.ts_ms),` | 2: card case (NS answers `measured`, the file's end closing it), parity CONTROL (`ours[8]` measured) |
+| M35 | `unreadable` sums into a prototype-less object (review 965 F1) | `unreadable: Object.create(null), prov_stale: 0, recall_calls: 0, gap: 0 };\n  for (const v of nonEmpty('foldEcho'` → `unreadable: {}, ...` | 1: the `foldEcho` `__proto__` and `constructor` case (the entries are `constructor` as a string and no `__proto__`) |
 
 M24 and M25 are behaviour-preserving on these fixtures; only the module scan sees them, which is the point: the scan pins where each rule lives, not what it answers. A mutant that stays green is reported with its measured output, and the guard is strengthened, never the CONTROL weakened. After the last mutant, `cmp .superpowers/sdd/history-w2-6/counters.task2.mjs deploy/history-counters.mjs` prints nothing.
 
@@ -2710,6 +2809,12 @@ cd server && ./node_modules/.bin/vitest run test/dtbd.test.ts
 ```
 
 Expected: all green. In `history-replay` that includes W2-4's `node:sqlite` scan, W2-5a's W2-D74 decode scan over `deploy/*.mjs`, and Task 1's pins on the counter module (import list, names, node-wide scan). `single-definition` passes because no O14 `VOCABS` name is declared in `deploy/`: `PARSE_STATUS` and `BACKENDS` are imported, never declared, and `COMPLIANCE` and its siblings are not lib names. `dtbd` passes because the departure is cited by its issued number.
+
+*Measured over predicted (Task 2, U17):* Steps 3 and 5 measured as predicted (17 failed and 29 passed red; 46 passed green, the whole file 1178 passed). Every mutant M1 to M29 measured red, M1 with 3 failures where 2 were predicted (see its row). `typecheck-tests` was red once, which the plan did not predict: the frame case's `{ rows, ...W6C_T2.stratify(rows, measures) }` is typed as `{ rows }` alone, because spreading a `Record<string, any>` adds no keys, so `out.strata` and `out.dropped_strata` were `TS2339` errors. The literal now ends `as W6cR`, in the case's text above; the guard and every assertion are unchanged, and the suite then measured 12 passed. *Fix round 1 (U17, D-6563):* the card's boundary time is the store's `stampAt`, as card.mjs reads it, where this plan first took the report's `ts_ms`; the card store gained leaves EA, EB and RT, and the parity CONTROL measures eight leaves where five were written. Run on the old line, the card case and the parity CONTROL were red (EB answered `card-wait`; EA and RT passed on the old code, since the report's time equals the store's for EA and the old `live` already read the file's status for RT; they pin M31 and M32); M30 to M32 measured red, 2 failed each.
+
+*Fix round 1 (review 963 F2, F3; U17):* the null arm (`stamp === undefined`) was reachable and no fixture reached it. The card store gained NS: its boundary is line 1 and unstamped, so no stamped row is at or before it, and its file ends a grace after the REPORT's time for it, which would close the window if that time were read. The correct answer is therefore `card-wait`, not `none` (a closed window would leave the report's-time fallback unseen, since a next boundary or a non-live file closes the window whatever the stamp says). NS is the last node, so card.mjs's wait stops its cursor with no leaf after it, and the parity CONTROL now reads `{ measured: 8, served: 1, mismatch: 1, waiting: 1 }` (predicted before the run, measured the same) with `ours[8]` unmeasured `card-wait`. The card case and the parity CONTROL were green on the unmodified counter at once (the code was right; the gap was the pin), 15 passed. M33 (a throw on the null arm) and M34 (the report's time as the null arm's fallback) each measured red, 2 failed each (the card case and the parity CONTROL), restored byte for byte (`cmp` clean). F3: the parity CONTROL's title now says it compares card.mjs's aggregate counts, which is all `measureCardDelivery` returns; a swap of which leaf is served and which is a mismatch passes it, and the card case pins each leaf.
+
+*Fix round 2 (review 965 F1(b), F4; U17):* `foldEcho` summed `unreadable` into a plain `{}`, so a node report's `__proto__` key was dropped from the stratum summary and `constructor`, `toString` and the like came out as strings (`"function Object() { [native code] }3"`). It now sums into `Object.create(null)`. The new case (two values, each `unreadable` `{"tombstone":1,"__proto__":3,"constructor":3}` made by `JSON.parse`) measured red on the unmodified fold (the entries held `constructor` as a string and no `__proto__`) and green after: `-t 'W2-6 Task 2'` 16 passed (15 before), the Task 1 to 4 filter 88. M35 (the plain `{}` back) measured red, 1 failed, restored byte for byte (`cmp` clean). Plan text: the D-6562 entry now cites M30 to M34 and the Departure paragraph the parity CONTROL's aggregate counts `{measured 8, served 1, mismatch 1, waiting 1}`.
 
 - [ ] **Step 8: Commit.**
 
@@ -2759,8 +2864,8 @@ It cites D-5770 and D-5771 (W2-3's), D-6238 (W2-1's body states) and D-6301 (W2-
   - `COUNTERS_COMBINED_KIND = 'ccrc-history-w2-counters-combined'`, `COUNTERS_COMBINED_FILE = 'counters-combined.json'`;
   - `combineReports(nodes: Array<{sha256, value}>, {measures = COUNTER_MEASURES, ownSha256 = scriptSha256()}): CombinedReport`, where `CombinedReport = {kind, v: 1, counters_def, k, k_unit, record_sha256, script_sha256, window, code_changed, nodes: [{store_id, sha256, user_version, read_ms, code_changed}], record_nodes, nodes_missing, sources, excluded, dropped, recall_off_gaps, windows, strata, dropped_strata}`;
   - `combineCommand(flags): number`; `COUNTER_SUBCOMMANDS` becomes `['count', 'combine']`;
-  - module-private: `REDISCOVERY_STMTS`, `rediscoveryStmts(db)`, `bodyFor(rs, row)`, `COMBINE_SAME`, `combineRow(row)`.
-- Produces (test side): the module-scope `W6C_T3`, `W6C_T3_MODEL`, `W6C_T3_CWD`, `W6C_T3_T0`, `W6C_T3_A`, `W6C_T3_FAMILY`, `w6cT3Uid`, `w6cT3Use`, `w6cT3Read`, `w6cT3Op`, `w6cT3Res`, `w6cT3Asst`, `w6cT3Bnd`, `w6cT3Sum`, `w6cT3Turns`, `w6cT3Story`, `w6cT3PlantStore`, `w6cT3Frame`, `w6cT3Cs`, `w6cT3Ctx`, `w6cT3Measure`, `w6cT3Hit`, `w6cT3NodeB`, `w6cT3AsRead`; the describes `W2-6 Task 3: re-discovery (W2-D86; D-6561, U11)` (21 cases, the `it.each` counting seven) and `W2-6 Task 3: combine, the nodes' reports summed into one arm comparison (U2, W2-D88)` (3 cases).
+  - module-private: `REDISCOVERY_STMTS`, `rediscoveryStmts(db)`, `bodyFor(rs, row)`, `COMBINE_SAME`, `combineRow(row, measures)`.
+- Produces (test side): the module-scope `W6C_T3`, `W6C_T3_MODEL`, `W6C_T3_CWD`, `W6C_T3_T0`, `W6C_T3_A`, `W6C_T3_FAMILY`, `w6cT3Uid`, `w6cT3Use`, `w6cT3Read`, `w6cT3Op`, `w6cT3Res`, `w6cT3Asst`, `w6cT3Bnd`, `w6cT3Sum`, `w6cT3Turns`, `w6cT3Story`, `w6cT3PlantStore`, `w6cT3Frame`, `w6cT3Cs`, `w6cT3Ctx`, `w6cT3Measure`, `w6cT3Hit`, `w6cT3NodeB`, `w6cT3AsRead`; the describes `W2-6 Task 3: re-discovery (W2-D86; D-6561, U11)` (21 cases, the `it.each` counting seven) and `W2-6 Task 3: combine, the nodes' reports summed into one arm comparison (U2, W2-D88)` (3 cases; 12 after review 963 F1: nine cases added, one per shape class; 16 after review 965: four more).
 
 **Choices this task makes:**
 - **`NotebookEdit`'s file is its `notebook_path` (D-6561).** W2-D86 and `COUNTERS_DEF_V1`'s signed text say "the `file_path` of a … NotebookEdit tool_use"; Claude Code's `NotebookEdit` names its file `notebook_path`, as lib's `toolUseInputPath`, derive's card fields and W2-5a's `MINE_PATH_FIELDS` read it. Read literally, `NotebookEdit` would never match. The signed text stays as W2-3 froze it: editing it would move `COUNTERS_DEF_V1_SHA256` and touch the gate. E25 (Task 4) states the field.
@@ -2769,11 +2874,13 @@ It cites D-5770 and D-5771 (W2-3's), D-6238 (W2-1's body states) and D-6301 (W2-
 - **A window row is found by its line in `ctx.copy`, then checked by uuid.** The sweep may have run between measure-history.py and the counter, so a moved row is `row-moved`, never a silent read of another row.
 - **The span side reads assistant rows only.** A `tool_use` lives only in an assistant row; a tombstoned user row in the span (a tool result) leaves the window measured.
 - **The report carries counts, never paths:** an indicator and counts, as W2-D86 asks; a path is private data, and the report travels to the reporting node (act 24).
-- **`combine` re-folds; it never adds summaries.** Each summary is a counter's own fold, so the sum of two summaries is not spelled anywhere; `combine` concatenates the nodes' rows (each re-checked against Task 1's row shape and Measure shape) and calls `stratify` with this file's specs, which is why the nodes' `script_sha256` must be this file's own. Counts add by construction.
-- **`combine`'s order of refusals** (all `input-invalid`, each its own detail word): a value that is no counter report (`counters-shape`); definitions other than v1 (`counters-def-mismatch`); a node whose record, window, definitions, K or script differs from the first's (`node-mismatch`; two counter scripts among the nodes are refused here, V4); a script other than this one (`script-mismatch`); a store twice (`store-duplicate`); a row or answer off the shape (`counters-shape`). Every refusal comes before `--out` exists.
+- **`combine` re-folds; it never adds summaries.** Each summary is a counter's own fold, so the sum of two summaries is not spelled anywhere; `combine` concatenates the nodes' rows (each re-checked against Task 1's row shape and Measure shape, and, since review 963 F1, a measured row's `turns` and `recall_calls` as non-negative integers, an unmeasured row's as `null`, and each measured answer against its counter spec's `answer`: its keys, and non-negative integers where it writes integers; refused `counters-shape`, never coerced) and calls `stratify` with this file's specs, which is why the nodes' `script_sha256` must be this file's own. Counts add by construction.
+- **`combine`'s order of refusals** (all `input-invalid`, each its own detail word): a value that is no counter report (`counters-shape`); definitions other than v1 (`counters-def-mismatch`); a node whose record, window, definitions, K or script differs from the first's (`node-mismatch`; two counter scripts among the nodes are refused here, V4); a script other than this one (`script-mismatch`); a store twice (`store-duplicate`); a row or answer off the shape (`counters-shape`). Every refusal of an input comes before `--out` exists (`writeReport`'s write failure and `prepareOut`'s own `createOut` can leave one: see the Residuals).
 - **A node with no report is named, not refused (U2).** Each node report carries `record_nodes`, the record's stores (Task 1), and `COMBINE_SAME` holds it equal across the nodes; `combine` names in `nodes_missing` each store no node report covers, so a comparison over fewer nodes than the record assigned says so. Refusing such a combine instead would be a coordinator ruling; the missing node's rows are never invented.
 
 **Residuals, named:**
+- **A row's `store_id` is not checked against its node report's** (review 963 F1, the half left open): a node report that passes its sha check and carries this counter's script sha could carry rows naming another store. Every other cross-node case Review Focus 6 names is refused.
+- **Also unchecked, named (review 965 F2, F6):** a row's `ts_ms`, `family`, `boundary_uuid`, `ccrc_id`, `generation` and any extra field; `echo_hits`' `unreadable` key names (free, summed as numbers); `answerOf` accepts any `COUNTER_UNMEASURED` word for any counter, and an unmeasured row's measured `echo_hits` or `rediscovery` answer is folded.
 - **Bash reads are not counted** (W2-D86): any shell read of a span file.
 - **The leaf span is spelled twice:** the driver's `spanRowsOf` (W2-5a) and the counter's `leafSpanRowsOf`; neither file may load the other's store opener. A parity pin holds the two equal over one store. The counter's span reads `boundaryLeafOf`'s node id, so the leaf-of-boundary rule (the driver's `LEAF_OF_BOUNDARY_SQL`) is spelled once in the counter, Task 2's `leaves`, and the pin, reading through that node id, holds it too.
 - **A path reached through a symlink** compares as a different path; **a relative path resolved against N's epoch's launch cwd** is wrong if the session's tools resolved against another directory, the rare case.
@@ -3176,6 +3283,137 @@ w6cDescribe('W2-6 Task 3: combine, the nodes\' reports summed into one arm compa
     w6cExpect(w6cRefusalOf(() => W6C_T3.combineReports([]))).toEqual({ word: 'args-invalid', detail: 'node-report-required' });
   });
 
+  // Review 963 F1: a node report is data. combine refuses a row or an answer off the shapes count writes, never folding or
+  // coercing it. The shaped nodes answer each counter with exactly the measured value its measure writes, and are combined
+  // with the real specs (the default measures), whose `answer` checks are what refuse.
+  const [F1_C, F1_E, F1_L, F1_S, F1_M, F1_R] = W6C_NAMES as [string, string, string, string, string, string];
+  const F1_SHAPED: Record<string, unknown> = {
+    [F1_C]: 'not-requested',
+    [F1_E]: { hits: 1, errors: 0, untimed: 0, unreadable: { tombstone: 1 }, prov_stale: 0, recall_calls: 2, gap: 1 },
+    [F1_L]: { lag_ms: 40, tick_ts_ms: 10 },
+    [F1_S]: { verdict: 'served', attachments_unread: 0 },
+    [F1_M]: { verdict: 'served', attachments_unread: 0 },
+    [F1_R]: { hit: true, distinct_paths: 1, reads: 2, sources: 1, unresolved: 0 },
+  };
+  /** The real specs with their measures replaced by the shaped answers; their folds and `answer` checks are the real ones. */
+  const f1Shaped = (ctr: W6cR): W6cR => Object.fromEntries(W6C_NAMES.map((name) => [name, { ...ctr.COUNTER_MEASURES[name],
+    measure: (ctx: W6cR): W6cR => (ctx.turns === null ? { state: 'unmeasured', why: 'window-unmeasured' } : { state: 'measured', value: F1_SHAPED[name] }) }]));
+  /** combine over node A and node B whose first window is `edit`ed: the refusal as {word, detail}, null when it folds. */
+  const f1Refusal = (A: W6cR, B: W6cR, edit: (w: W6cR) => W6cR): W6cRefusal =>
+    w6cRefusalOf(() => W6C_T3.combineReports([{ sha256: 'a1'.repeat(32), value: A }, { sha256: 'b2'.repeat(32), value: { ...B, windows: [edit(B.windows[0]), ...B.windows.slice(1)] } }]));
+  const f1Answer = (name: string, value: unknown) => (w: W6cR): W6cR => ({ ...w, measures: { ...w.measures, [name]: { state: 'measured', value } } });
+  /** Every edit is refused input-invalid, counters-shape, with `detail` naming what is off; the unedited report folds first. */
+  async function f1Refuses(edits: Array<(w: W6cR) => W6cR>, detail: RegExp): Promise<void> {
+    const ctr = await w6cLoad();
+    const sh = f1Shaped(ctr);
+    const A = w6cT3AsRead(w6cFrame(ctr, { measures: sh }));
+    const B = w6cT3AsRead(w6cT3NodeB(ctr, sh));
+    w6cExpect(B.windows[0].state, 'CONTROL: B\'s first window is measured').toBe('measured');
+    w6cExpect(f1Refusal(A, B, (w) => w), 'CONTROL: the shaped nodes fold').toBeNull();
+    for (const edit of edits) {
+      const r = f1Refusal(A, B, edit);
+      w6cExpect(r?.word).toBe('input-invalid');
+      w6cExpect(r?.detail).toMatch(/^counters-shape: /);
+      w6cExpect(r?.detail).toMatch(detail);
+    }
+  }
+
+  w6cIt('combine refuses a measured row\'s turns that is no count, and an unmeasured row\'s that is not null (review 963 F1)', async () => {
+    await f1Refuses([(w) => ({ ...w, turns: null }), (w) => ({ ...w, turns: '3' }), (w) => ({ ...w, turns: -1 }), (w) => ({ ...w, turns: 1.5 }),
+      (w) => ({ ...w, state: 'unmeasured' })], /(a measured|an unmeasured) row's turns is /);
+  });
+
+  w6cIt('combine refuses a measured row\'s recall_calls that is no count, and an unmeasured row\'s that is not null (review 963 F1)', async () => {
+    await f1Refuses([(w) => ({ ...w, recall_calls: '7' }), (w) => ({ ...w, recall_calls: null }), (w) => ({ ...w, recall_calls: -1 }),
+      (w) => ({ ...w, state: 'unmeasured', turns: null })], /(a measured|an unmeasured) row's recall_calls is /);
+  });
+
+  const f1Off = (name: string): RegExp => new RegExp(`^counters-shape: countersReport: ${name} answered a measured value off its shape`);
+  w6cIt('combine refuses a compliance answer that is no status string (review 963 F1)', async () => {
+    await f1Refuses([f1Answer(F1_C, 7), f1Answer(F1_C, ['ok']), f1Answer(F1_C, {})], f1Off(F1_C));
+  });
+  w6cIt('combine refuses an echo_hits answer off its keys or counts (review 963 F1)', async () => {
+    const ok = F1_SHAPED[F1_E] as Record<string, unknown>;
+    await f1Refuses([f1Answer(F1_E, { unreadable: {} }), f1Answer(F1_E, { ...ok, hits: '1' }), f1Answer(F1_E, { ...ok, errors: -1 }), f1Answer(F1_E, { ...ok, gap: 0.5 }),
+      f1Answer(F1_E, { ...ok, unreadable: { tombstone: 'x' } }), f1Answer(F1_E, { ...ok, unreadable: [1] }), f1Answer(F1_E, { ...ok, extra: 0 })], f1Off(F1_E));
+  });
+  w6cIt('combine refuses a lag answer off its keys or counts (review 963 F1)', async () => {
+    await f1Refuses([f1Answer(F1_L, { lag_ms: 'x' }), f1Answer(F1_L, { lag_ms: -5, tick_ts_ms: 1 }), f1Answer(F1_L, { lag_ms: 5, tick_ts_ms: '1' }),
+      f1Answer(F1_L, 40)], f1Off(F1_L));
+  });
+  w6cIt('combine refuses a card_served answer off its verdict or its unread count (review 963 F1)', async () => {
+    await f1Refuses([f1Answer(F1_S, { verdict: 'served', attachments_unread: 'q' }), f1Answer(F1_S, { verdict: 'wait', attachments_unread: 0 }),
+      f1Answer(F1_S, { verdict: 'served' }), f1Answer(F1_S, { verdict: 'served', attachments_unread: -1 })], f1Off(F1_S));
+  });
+  w6cIt('combine refuses a card_id_mismatch answer off its verdict or its unread count (review 963 F1)', async () => {
+    await f1Refuses([f1Answer(F1_M, { verdict: 'wait', attachments_unread: 0 }), f1Answer(F1_M, { verdict: 'mismatch', attachments_unread: 'q' }),
+      f1Answer(F1_M, { verdict: 'mismatch', attachments_unread: 0, extra: 1 })], f1Off(F1_M));
+  });
+  w6cIt('combine refuses a rediscovery answer off its keys, its indicator or its counts (review 963 F1)', async () => {
+    const ok = F1_SHAPED[F1_R] as Record<string, unknown>;
+    await f1Refuses([f1Answer(F1_R, {}), f1Answer(F1_R, { ...ok, hit: 'yes' }), f1Answer(F1_R, { ...ok, reads: -1 }), f1Answer(F1_R, { ...ok, unresolved: 0.5 }),
+      f1Answer(F1_R, { ...ok, sources: '1' })], f1Off(F1_R));
+  });
+  w6cIt('every real counter spec states the shape of the value it writes, as its `answer` (review 963 F1; CONTROL: a stand-in spec states none and is not checked)', async () => {
+    const ctr = await w6cLoad();
+    for (const name of W6C_NAMES) w6cExpect(typeof ctr.COUNTER_MEASURES[name].answer, name).toBe('function');
+    w6cExpect(typeof w6cProbe()[W6C_NAMES[0]!].answer, 'CONTROL').toBe('undefined');
+  });
+
+  // Review 965 F1: lib exports no vocabulary of expandEntryBody's states, so an unreadable key is not refused; it is summed
+  // as a number, whatever its name, so a key of a node report is never dropped or turned into a string.
+  w6cIt('combine accepts an unreadable key of any name and sums it as a number across the nodes: __proto__ and constructor are kept (review 965 F1)', async () => {
+    const ctr = await w6cLoad();
+    const sh = f1Shaped(ctr);
+    const odd = JSON.parse('{"tombstone":1,"__proto__":3,"constructor":3}') as unknown;
+    const withOdd = (r: W6cR): W6cR => ({ ...r, windows: r.windows.map((w: W6cR) => (w.state === 'measured'
+      ? f1Answer(F1_E, { ...(F1_SHAPED[F1_E] as Record<string, unknown>), unreadable: odd })(w) : w)) });
+    const A = withOdd(w6cT3AsRead(w6cFrame(ctr, { measures: sh })));
+    const B = withOdd(w6cT3AsRead(w6cT3NodeB(ctr, sh)));
+    const c = W6C_T3.combineReports([{ sha256: 'a1'.repeat(32), value: A }, { sha256: 'b2'.repeat(32), value: B }]);
+    const cell = c.strata.control.all.counters[F1_E];
+    w6cExpect(cell.measured, 'CONTROL: one control window on each node').toBe(2);
+    w6cExpect(Object.entries(cell.summary.unreadable).sort()).toEqual([['__proto__', 6], ['constructor', 6], ['tombstone', 2]]);
+  });
+
+  // Review 965 F2: the strata key on a row's unrealised, so a row's ab_state and unrealised are checked as a pair count writes.
+  w6cIt('combine refuses a row whose ab_state is no AB_STATES word (review 965 F2)', async () => {
+    await f1Refuses([(w) => ({ ...w, ab_state: 'no-such-state' }), (w) => ({ ...w, ab_state: null }), (w) => ({ ...w, ab_state: 7 })], /a row's ab_state is /);
+  });
+  w6cIt('combine refuses a row whose unrealised is not exactly ab_state !== AB_OK: control-absent with unrealised false, and ok with unrealised true (review 965 F2)', async () => {
+    await f1Refuses([(w) => ({ ...w, ab_state: 'control-absent', unrealised: false }), (w) => ({ ...w, unrealised: true })], /a row's unrealised is /);
+  });
+
+  // Review 965 F3: count's runtime path is unchanged. This CONTROL holds each spec's `answer` to what the real measures write.
+  w6cIt('every real spec\'s `answer` accepts every measured value the real measures produce on the Task 2 and Task 3 fixture stores (review 965 F3; CONTROL: each counter measured at least once)', async () => {
+    const ctr = await w6cLoad();
+    const seen: Record<string, number> = Object.fromEntries(W6C_NAMES.map((name) => [name, 0]));
+    const check = (name: string, a: W6cR): void => {
+      if (a.state !== 'measured') return;
+      seen[name] = seen[name]! + 1;
+      w6cExpect(ctr.COUNTER_MEASURES[name].answer(a.value), `${name}: ${JSON.stringify(a.value)}`).toBe(true);
+    };
+    const echo = w6cT2EchoStore();
+    const card = w6cT2CardStore();
+    const wait = w6cT2WaitStore();
+    const stores: Array<[{ dbFile: string }, W6cT2Part[]]> = [
+      [echo, [echo.fA1, echo.fA1Cut, echo.fA1Moved, echo.fA2, echo.fH1, echo.fH2, echo.fH3, echo.fGhost, echo.fGhostMeasured]],
+      [card, [card.fB, card.fC1, card.fC2, card.fD, card.fE, card.fF, card.fEA, card.fEB, card.fRT, card.fNS]],
+      [wait, [wait.fG, wait.fU]],
+    ];
+    for (const [st, parts] of stores) {
+      w6cT2With(st.dbFile, (cs) => {
+        for (const p of parts) {
+          const ctx = w6cT2Ctx(cs, p);
+          for (const name of W6C_NAMES.slice(0, 5)) check(name, ctr.COUNTER_MEASURES[name].measure(ctx));
+        }
+      });
+    }
+    check(F1_R, w6cT3Measure(w6cT3Story(w6cT3Turns(11, { 10: [w6cT3Read('r10', W6C_T3_A)] }))));
+    check(F1_R, w6cT3Measure(w6cT3Story(w6cT3Turns(11, { 11: [w6cT3Read('r11', W6C_T3_A)] }))));
+    w6cExpect(Object.values(seen).every((n) => n > 0), `CONTROL: every counter was measured at least once: ${JSON.stringify(seen)}`).toBe(true);
+  });
+
   w6cIt('combine writes one report under a fresh --out, its sha the one stderr line; its paired list flags must pair, and a flag outside its form is args-invalid', async () => {
     const ctr = await w6cLoad();
     const quiet = Object.fromEntries(W6C_NAMES.map((name) => [name, { source: `fixture: ${name}`, measure: (): W6cR => ({ state: 'unmeasured', why: 'window-unmeasured' }),
@@ -3399,7 +3637,7 @@ export function foldRediscovery(values) {
 /** The sixth counter's spec, in Task 1's shape (W2-D86, W2-D87). */
 export const REDISCOVERY = Object.freeze({
   source: 'Read tool_use paths in the window\'s turns 1 to K against the Read, Edit, MultiEdit, Write and NotebookEdit paths of leaf N\'s node_sources span, both made absolute against N\'s epoch cwd, bodies through recall.mjs expandEntryBody; Bash reads (cat, sed, rg) are not counted (W2-D86)',
-  measure: rediscoveryAt, fold: foldRediscovery,
+  measure: rediscoveryAt, fold: foldRediscovery, answer: rediscoveryValueOk,
 });
 
 // ── W2-6 Task 3: combine, the nodes' reports summed into one arm comparison (W2-D88; U2) ─────────────────────────────
@@ -3407,26 +3645,43 @@ export const REDISCOVERY = Object.freeze({
 // comparison stays W2-6's (U2). The nodes must agree on the record, the window, the definitions, K and the counter that
 // ran, and that counter must be this one: the strata are re-folded from the concatenated per-window rows through Task 1's
 // stratify and this file's own folds, so counts add and no summary is ever added to another. A node report is data: a
-// row or an answer off Task 1's shapes is refused, never folded.
+// row or an answer off the shapes count writes is refused, never folded or coerced: a row's turns and recall_calls (a
+// non-negative integer on a measured row, null on an unmeasured one) and each counter's measured value (its spec's
+// `answer`), and a row's ab_state (one of AB_STATES) with its unrealised (exactly ab_state !== AB_OK), which the strata
+// key on. NOT checked, named: a row's store_id against its node report's, its ts_ms, family, boundary_uuid, ccrc_id and
+// generation, and any extra field; and echo_hits' unreadable keys, which are free names (lib exports no vocabulary of
+// expandEntryBody's states to build an allowed set from), summed by foldEcho as numbers, never dropped or coerced.
 
 export const COUNTERS_COMBINED_KIND = 'ccrc-history-w2-counters-combined';
 export const COUNTERS_COMBINED_FILE = 'counters-combined.json';
 /** The node-report fields every node must share, and the combined report carries once. */
 const COMBINE_SAME = Object.freeze(['counters_def', 'k', 'k_unit', 'record_nodes', 'record_sha256', 'script_sha256', 'window']);
 
-/** One node report's row, checked against Task 1's row shape, each answer re-checked by answerOf. */
-function combineRow(w) {
+/** One node report's row, checked against Task 1's row shape (a measured row's turns and recall_calls are counts, an
+ *  unmeasured row's are null), each answer re-checked by answerOf against its counter's spec (review 963 F1).
+ *  @param {any} w  @param {Record<string, any>} measures */
+function combineRow(w, measures) {
   if (w === null || typeof w !== 'object' || !ASSIGNMENT_ARMS.includes(w.arm) || !BACKENDS.includes(w.producer)
     || typeof w.changed !== 'boolean' || typeof w.unrealised !== 'boolean' || (w.state !== 'measured' && w.state !== 'unmeasured')) {
     throw new TypeError(`combine: a row off the counter's shape: ${JSON.stringify(w ?? null).slice(0, 200)}`);
   }
-  return { ...w, measures: Object.fromEntries(COUNTER_NAMES.map((n) => [n, answerOf(n, w.measures?.[n])])) };
+  if (!AB_STATES.includes(w.ab_state)) throw new TypeError(`combine: a row's ab_state is ${JSON.stringify(w.ab_state ?? null)}, which is none of AB_STATES`);
+  if (w.unrealised !== (w.ab_state !== AB_OK)) {
+    throw new TypeError(`combine: a row's unrealised is ${w.unrealised}, where its ab_state ${w.ab_state} makes it ${w.ab_state !== AB_OK}`);
+  }
+  for (const k of ['turns', 'recall_calls']) {
+    if (w.state === 'measured' ? !isCount(w[k]) : w[k] !== null) {
+      throw new TypeError(`combine: ${w.state === 'measured' ? 'a measured' : 'an unmeasured'} row's ${k} is ${JSON.stringify(w[k] ?? null)}, where ${w.state === 'measured' ? 'a non-negative integer' : 'null'} is the shape`);
+    }
+  }
+  return { ...w, measures: Object.fromEntries(COUNTER_NAMES.map((n) => [n, answerOf(n, w.measures?.[n], measures[n]?.answer)])) };
 }
 
 /** The nodes' reports summed (U2). Each node is {sha256, value}. Refused input-invalid, in this order: a value that is
  *  no counter report (counters-shape); definitions other than v1 (counters-def-mismatch); a COMBINE_SAME field other than
  *  the first node's (node-mismatch); a counter other than this one (script-mismatch); a store twice (store-duplicate);
- *  a row, an answer or a list off its shape (counters-shape). The record's stores no node report covers are named in
+ *  a row, an answer or a list off its shape (counters-shape): a row's ab_state, unrealised, turns and recall_calls, and each
+ *  counter's measured value against its spec's `answer`. The record's stores no node report covers are named in
  *  nodes_missing, never refused: the comparison says it is over fewer nodes than the record assigned (U2). measures and
  *  ownSha256 are injectable for tests. */
 export function combineReports(nodes, { measures = COUNTER_MEASURES, ownSha256 = scriptSha256() } = {}) {
@@ -3451,7 +3706,7 @@ export function combineReports(nodes, { measures = COUNTER_MEASURES, ownSha256 =
   const sorted = (xs) => [...xs].sort();
   try {
     const reps = nodes.map(({ value: r }) => r);
-    const rows = reps.flatMap((r) => r.windows.map(combineRow));
+    const rows = reps.flatMap((r) => r.windows.map((w) => combineRow(w, measures)));
     return {
       kind: COUNTERS_COMBINED_KIND, v: 1, counters_def: first.counters_def, k: first.k, k_unit: first.k_unit,
       record_sha256: first.record_sha256, script_sha256: first.script_sha256, window: first.window,
@@ -3482,7 +3737,10 @@ export function combineReports(nodes, { measures = COUNTER_MEASURES, ownSha256 =
 }
 
 /** combine: the paired node-report flags, a fresh --out, each node report sha-checked before it is parsed, the sum built
- *  in memory, and only then --out, with counters-combined.json written once. Every refusal comes before --out exists. */
+ *  in memory, and only then --out, with counters-combined.json written once. Every refusal of an input comes before --out
+ *  exists; the one exception is writeReport's: a write failure after prepareOut made --out refuses out-refused and leaves
+ *  the marked --out, which a re-run then refuses as existing. prepareOut's own createOut can also leave a new --out when it
+ *  refuses (D-5986), which is not a refusal of an input. */
 export function combineCommand(flags) {
   checkFormFlags('combine', flags);
   const paths = flags['node-report'];
@@ -3512,7 +3770,7 @@ cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts
 ```
 
 Expected:
-- The filtered run: 70 passed (Task 1's 31, Task 2's 15, this task's 24; 69 and 1 skipped on darwin) (predicted).
+- The filtered run: 70 passed (Task 1's 31, Task 2's 15, this task's 24; 69 and 1 skipped on darwin) (predicted). After review 963 F1, 79 (this task's 33: nine cases added); after review 965, 83 (this task's 37: four more).
 - The whole file is green: W2-4's, W2-5a's and W2-5b1's cases, and W2-6's.
 - `typecheck-tests` green. A failure naming only `agent/src/` or a module that is not installed comes from the worktree's install, not from this task.
 
@@ -3584,6 +3842,22 @@ Then one call per mutant, `bash .superpowers/sdd/history-w2-6/scratch/r6t3.sh <m
 | M18 | a node no report covers is named (U2) | `combineReports re-folds` | 1: the lone node's combine names no missing node (`[]` where `[W6C_OTHER]` was expected) |
 | M19 | a hit is never hidden by an unresolved path | `rediscoveryVerdict: a Read` | 1: the hit beside an unresolved read answers `path-unresolved` |
 | M20 | node reports of two counter scripts (V4) | `combineReports refuses` | 1: the second node's other script is combined (refusal null where `node-mismatch: node report 1's script_sha256 …` was expected) |
+| M21 | a measured row's turns is a count (review 963 F1) | `for (const k of ['turns', 'recall_calls']) {` → `for (const k of ['recall_calls']) {` | 1: the `turns` case |
+| M22 | a measured row's recall_calls is a count | `for (const k of ['turns', 'recall_calls']) {` → `for (const k of ['turns']) {` | 1: the `recall_calls` case |
+| M23 | an unmeasured row's turns and recall_calls are null | `if (w.state === 'measured' ? !isCount(w[k]) : w[k] !== null) {` → `if (w.state === 'measured' ? !isCount(w[k]) : false) {` | 2: the `turns` and `recall_calls` cases (their unmeasured rows fold) |
+| M24 | a measured answer meets its spec's shape | `if (valueOk !== undefined && !valueOk(o.value)) {` → `if (false) {` | 6: each counter's answer case |
+| M25 | compliance's shape | `fold: foldCompliance, answer: complianceValueOk,` → `fold: foldCompliance, answer: () => true,` | 1: the compliance case |
+| M26 | echo_hits' shape | `fold: foldEcho, answer: echoValueOk,` → `fold: foldEcho, answer: () => true,` | 1: the echo_hits case |
+| M27 | lag's shape | `fold: foldLag, answer: lagValueOk,` → `fold: foldLag, answer: () => true,` | 1: the lag case |
+| M28 | card_served's shape | `fold: foldCardFor('served'), answer: cardValueOk` → `fold: foldCardFor('served'), answer: () => true` | 1: the card_served case |
+| M29 | card_id_mismatch's shape | `fold: foldCardFor('mismatch'), answer: cardValueOk` → `fold: foldCardFor('mismatch'), answer: () => true` | 1: the card_id_mismatch case |
+| M30 | rediscovery's shape | `fold: foldRediscovery, answer: rediscoveryValueOk,` → `fold: foldRediscovery, answer: () => true,` | 1: the rediscovery case |
+| M31 | combine hands each row its specs | `r.windows.map((w) => combineRow(w, measures))` → `r.windows.map((w) => combineRow(w, {}))` | 6: each counter's answer case |
+| M32 | an answer holds exactly its keys | `isPlain(v) && Object.keys(/** @type {object} */ (v)).length === keys.length && keys.every(` → `isPlain(v) && keys.every(` | 2: the echo_hits case (`extra: 0`) and the card_id_mismatch case (`extra: 1`) |
+| M33 | counts are non-negative | `const isCount = (v) => Number.isSafeInteger(v) && /** @type {number} */ (v) >= 0;` → `const isCount = (v) => Number.isSafeInteger(v);` | 6: the `turns`, `recall_calls`, echo_hits, lag, card_served and rediscovery cases |
+| M34 | a row's ab_state is an AB_STATES word (review 965 F2) | `if (!AB_STATES.includes(w.ab_state)) throw new TypeError(` → `if (false) throw new TypeError(` | 1: the `ab_state` case |
+| M35 | a row's unrealised is exactly `ab_state !== AB_OK` | `if (w.unrealised !== (w.ab_state !== AB_OK)) {` → `if (false) {` | 1: the `unrealised` case (`control-absent` with `unrealised: false`) |
+| M36 | every real `answer` accepts what the real measures write (review 965 F3) | `const complianceValueOk = (v) => typeof v === 'string';` → `const complianceValueOk = (v) => v === 'not-requested';` | 1: the `answer` CONTROL over the fixture stores (`degraded` and `fixture-status` are refused) |
 
 ```bash
 S=.superpowers/sdd/history-w2-6/scratch
@@ -3603,6 +3877,12 @@ cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'expa
 ```
 
 Expected: green. `single-definition` runs whole, because its O14 corpus scans `deploy/`: this section declares no `VOCABS` name and no second `FACT_KINDS` or `LABELS`. `dtbd`: the departure is cited by its issued number. `history-recall -t 'expandEntryBody'`: the W2-1 export this task reads is unchanged; if the filter selects nothing, run the file whole.
+
+*Measured over predicted (Task 3, U17):* Steps 3 and 5 measured as predicted (25 failed and 45 passed red, the two Task 1 reds the import CONTROL's "the counter itself" line and the import pin; 70 passed green). Every mutant M1 to M20 measured red on the predicted cases (M3, M6, M10 and M14 two failures each, the rest one). The whole-file run measured 1201 passed and one failure, W2-5b1's D-6482 spawn-timing case, which passed alone (2 passed); the task report records a later whole-file run. `typecheck-tests` 12 passed and `deviation-refs` 31 passed. No prediction needed correcting.
+
+*Fix round 1 (review 963 F1, F6; U17):* `combine`'s comment promised that a node report's row or answer off Task 1's shapes is refused, never folded, and `combineRow` checked only the arm, producer, flags and state, and `answerOf` any non-null measured value. A one-node report with a measured row `turns: null, recall_calls: '7', echo_hits {unreadable: {}}, rediscovery {}, lag {lag_ms: 'x'}, attachments_unread: 'q'` was folded to turns 0, recall_calls "07", NaN sums and `lag_ms: ["x"]`. Now `combineRow` refuses (`counters-shape`) a measured row whose `turns` or `recall_calls` is no non-negative safe integer and an unmeasured row whose is not `null`, and `answerOf` takes the counter spec's new optional `answer` (the shape of the value its measure writes: its keys, and non-negative integers where it writes integers, echo_hits' `gap` a safe integer of either sign; compliance a string; card verdicts `served`, `mismatch` or `none`) and refuses a measured value that fails it; a stand-in spec that states none is not checked. The shapes are read from `echoAt`, `lagAt`, `cardVerdictOf`, `rediscoveryVerdict` and `complianceAt`; `foldCardFor` now derives its verdict keys from the same `CARD_VERDICT_WORDS`. Nine cases were added (a CONTROL that every real spec states an `answer`; `turns`; `recall_calls`; and one per counter's answer, six; each first checks that the shaped nodes fold); on the unmodified counter all nine measured red, and green after (the combine describe 12 passed, the whole Task 1 to 4 filter 87). M21 to M33 measured red as the table says, each restored byte for byte (`cmp` clean). The row's `store_id` against its node report's stays a named residual. F6: `combineCommand`'s comment now names `writeReport`'s write-failure exception, as `countCommand`'s does.
+
+*Fix round 2 (review 965 F1, F2, F3, F4, F5, F7; U17):* four cases and no behaviour beyond the rulings. F1: lib and recall.mjs export no vocabulary of `expandEntryBody`'s body states (they are literals in `expandEntryBody`; the driver spells its own tables), so ruling (a), refusing an `unreadable` key outside the words `echoAt` can write, was skipped as the ruling allows; `echoValueOk` and the combine comment name the width (free keys accepted), and (b), Task 2's `foldEcho` summing into `Object.create(null)`, makes every accepted key a number. A combine-level case (`__proto__` and `constructor` keys on both nodes' control windows, summed 6 and 6 beside `tombstone` 2) was green on arrival, after Task 2's fix; Task 2's M35 reds it too (the Task 1 to 4 filter then shows 2 failed). F2: `combineRow` refuses a row whose `ab_state` is no `AB_STATES` word and a row whose `unrealised` is not exactly `ab_state !== AB_OK` (`control-absent` with `unrealised: false`, the review's row, folded into the treatment stratum before); both cases measured red on the unmodified `combineRow` and green after; the comment names `ts_ms`, `family`, `boundary_uuid`, `ccrc_id`, `generation`, extra fields and `store_id` as unchecked. F3: one CONTROL runs the five real measures over the Task 2 stores (echo, card, wait) and rediscovery over the Task 3 stories, and holds each measured value to its spec's `answer` (every counter measured at least once); it was green on arrival, as the review's reproduce lens predicted, and M36 reds it. count's runtime path is unchanged. F5: `combineCommand`'s comment also names `prepareOut`'s own `createOut` (D-5986). F7: the error text reads `an unmeasured row's`, and the two cases' patterns pin `(a measured|an unmeasured)` (red on the old text, 2 failed); the sentence above counts nine cases, the shaped-nodes fold being a check inside each. M34 to M36 each measured red, 1 failed, restored byte for byte (`cmp` clean). `-t 'W2-6 Task 3: combine'` 16 passed, `-t 'W2-6 Task'` 92 passed.
 
 - [ ] **Step 8: Commit.**
 
@@ -4032,10 +4312,12 @@ Expected: `});`; the last describe's line with its line number, `8520:describe('
 ```ts
 // W2-6 Task 4 (W2-D86, U12): turnsOf, the gate's turn rule, is declared once, in the gate, and only the gate and the
 // report-only counter name it, the counter calling it on one code line (its windowCtx), so the driver builds no turns and
-// no third turn rule exists. APPENDED after the file's last describe, for the reason the CCRC HISTORY block above states
-// (session-hook.test.ts's citation audit cites this file by line); no import line is added. ALL_MJS, stallCode,
-// stallCodeText and rel are that block's. KNOWN WIDTH: a code line that names turnsOf after a trailing comment marker
-// still counts, and a name assembled from pieces is not seen.
+// no third turn rule exists under that name. Placed after this file's last describe, in the history area file, as D-6928's
+// rule puts a history guard. The CCRC HISTORY block that defines ALL_MJS is helpers.ts's, not this file's; stallCode,
+// stallCodeText and rel are defined above that block there, and stallCodeText was added to the existing ./helpers.js import
+// line (no import line is added). KNOWN WIDTH: the pin matches the name turnsOf only, so a turn rule re-spelled under
+// another name is out of its reach; a code line that names turnsOf after a trailing comment marker still counts; and a
+// name assembled from pieces is not seen.
 describe('ccrc history W2-6 Task 4: turnsOf is declared in the gate alone, and the gate and the counter are its only callers (W2-D86, U12)', () => {
   const DECLARES = /^\s*(?:export\s+)?(?:function\s+turnsOf\s*\(|(?:const|let|var)\s+turnsOf\s*=)/;
   const NAMES_IT = /\bturnsOf\b/;
@@ -4458,13 +4740,18 @@ gh api -X PATCH "repos/$OWNER/$REPO/pulls/$PR" -F "body=@.superpowers/sdd/histor
 
 **Mutants.** The README guard: M1 (paragraph deleted), M2 (doubled), M3 (a counter name dropped), M4 (the never-the-gate rule softened). The spec guard: M5 (the rev 3.6 bullet restored), M6 (a write tool dropped), M7 (the citation dropped), M8 (the never-repaired rule dropped), M9 (the two bullets swapped), M10 (`notebook_path` dropped, D-6561), M13 (`treatment-named` dropped from the dropped states, V1); and back on README, M11 (the same, V1) and M12 (the re-run guidance softened, V4). The `turnsOf` pin: S1 to S4. The checks carry their own CONTROLs: the paragraph reader's CONTROL case; the `turnsOf` patterns' CONTROL case; Step 3's checker answering `defined 2` on a copy with a synthetic entry doubled; Step 6's import checker counting a planted unprefixed binding; Step 12's list CONTROL counting the list's first name, and its home-path pattern counting a non-fixture home; and each focused `-t` run selecting its named cases, so none passes vacuously.
 
+*Measured over predicted (Task 4, U17):* Step 1 measured as predicted (7 failed, 1 passed), and Step 4's 8 passed once README and the spec held their lines. Mutants M1 to M13 and S1 to S4 each measured red on the predicted cases (M9's message reads `expected 2740 to be 2742`, the zero-based line numbers). Drift in Step 5: the file's last describe on this base is `codex bridge Stage 2 Task 10: …` (about :9263, 9,304 lines), not W2-2b's, which sits mid-file (about :9023); the new describe is appended after the file's last line all the same, as the coordinator ruled. Step 6's numstat and hunks are measured on the working tree against the merge-base, because Step 7 commits after it (README `20 0`, the spec `2 2`, the test file one hunk of `1753 0`, `single-definition.test.ts` `40 0`; README card 6180, insert-after 6181, box 6182; test anchor 11129, insert-after 11130 of 16546; single-definition insert-after 9304 of 9304; `imports 15 unprefixed 0`). Task 2's fix round defined D-6563 (see Deviations found), and a plan-text tidy commit corrected the departure prose to eight card leaves and three numbers. After #1528 (D-6928) split `server/test/single-definition.test.ts` into `server/test/single-definition/<area>.test.ts` and `helpers.ts` on `main`, which the merge of `main` took, the `turnsOf` callers describe no longer lives in the single file Task 4's Files line and Step 5 name: it is appended after the last line of `server/test/single-definition/switches-history.test.ts` (the history area file, where D-6928's rule puts a new guard), unchanged apart from one added name, `stallCodeText`, on that file's existing `./helpers.js` import line. Measured there: the filter selects 4 of 118 and passes 4, and S1 to S4 each go red on the predicted case. Step 6's single-definition line becomes `41 1` on the area file (the describe's 40 lines and its blank line, and the changed import line) in two hunks, the import line and a pure append with `insert-after 666 of 666`; the `40 0` numstat, `insert-after 9304 of 9304` and the single-file Q29 row are the predictions this replaces.
+
+*Fix round 1 (review 963 F4, F5; comment only):* the pin's comment now says what holds at its new path: the CCRC HISTORY block it follows is `helpers.ts`'s and defines `ALL_MJS` of the four names it reads (`stallCode`, `stallCodeText` and `rel` sit above that block there); one name, `stallCodeText`, joined the existing `./helpers.js` import line; and the known width names that the pin matches `turnsOf` only, so a turn rule re-spelled under another name is out of its reach. No code line changed, and Step 5's code block above carries the same comment.
+
 **Commit:** one, Step 7's. Every later step reads. A fix a later check calls for goes into the task that owns the code, as a correction commit in that task's form (`fix(history-counters): <what> (W2-6 Task <N>; W2-D<n>)`), committed before Step 14's push, and Steps 6 to 13 are re-run after it. A number issued during the build is defined in this plan's `## Deviations found` by the commit that first cites it.
 
 ---
 
 ## Deviations found
 
-Two numbers are defined here. D-6561 and D-6562 were issued by the coordinator for the departures found while this plan was drafted, before dispatch, and this plan defines them on `main` before any task runs. A number issued during the build is appended below by the commit that first cites it.
+Three numbers are defined here. D-6561 and D-6562 were issued by the coordinator for the departures found while this plan was drafted, before dispatch, and this plan defines them on `main` before any task runs; D-6563 was issued during the build. A number issued during the build is appended below by the commit that first cites it.
 
 - **D-6561** — `history-w2-counters-notebook-path` (Task 3; W2-D86, and `COUNTERS_DEF_V1`'s signed `rediscovery` text): re-discovery reads a `NotebookEdit` tool_use's file from its `notebook_path` field, where W2-D86 and the signed text say "the `file_path` of a … NotebookEdit tool_use". Claude Code's `NotebookEdit` input names its file `notebook_path`, as lib's `toolUseInputPath`, derive's card fields and W2-5a's `MINE_PATH_FIELDS` read it, so the literal text would make `NotebookEdit` never match and a notebook re-read never count. The signed text cannot change here: editing it moves `COUNTERS_DEF_V1_SHA256` and touches `deploy/history-gate.mjs`, which W2-6 never touches, and part 1 signs that sha. So the code departs from the letter, the module's comment and E25's in-place line (Task 4) state the field, and a correction of the signed text is a later PR's. Pins: Task 3's `toolPathsOf` case (a `NotebookEdit` with `notebook_path` counts, one with `file_path` does not) and mutant M1 of Task 3; Task 4's E25 content case and its mutant M10.
-- **D-6562** — `history-w2-counters-card-glue-respelled` (Task 2; W2-D87, "the same functions the sweep's card measure uses, so no rule is spelled again"): `card_served` and `card_id_mismatch` call lib's shared `cardIdsIn`, `cardWindowComplete` and `decideCardDelivery`, once each and declared nowhere in the counter, but the glue around them is spelled a second time in the counter's `cardVerdictOf`: the rows after the boundary up to the next boundary, at most `CARD_MEASURE_ROWS`; `live` (`source_key === ''` and `ingest_files.status === 'live'`); the `CARD_ATTACHMENT_MAX_BYTES` skip; and `waitedMs`. card.mjs's `deliveryOf`, which holds that glue, is module-private, and W2-6 never touches `ccd/**`, so the counter cannot import it. A boundary no copy holds answers unmeasured `boundary-uncopied` in the counter, where card.mjs answers `none`: that never moves a served or mismatch count, and W2-D87 never reports an unmeasured value as a count. Moving the glue into lib, so both callers import it, is a later `ccd/**` follow-up. Pins: Task 2's parity CONTROL (card.mjs's own `measureCardDelivery`, over the same fixture store, measures the same five leaves with the same served and mismatch counts; each leaf's verdict is pinned by the card case's own expectations), its module scan (each lib function called once, declared nowhere here), its card and wait cases, and mutants M17 to M22 and M24 of Task 2.
+- **D-6562** — `history-w2-counters-card-glue-respelled` (Task 2; W2-D87, "the same functions the sweep's card measure uses, so no rule is spelled again"): `card_served` and `card_id_mismatch` call lib's shared `cardIdsIn`, `cardWindowComplete` and `decideCardDelivery`, once each and declared nowhere in the counter, but the glue around them is spelled a second time in the counter's `cardVerdictOf`: the rows after the boundary up to the next boundary, at most `CARD_MEASURE_ROWS`; `live` (`source_key === ''` and `ingest_files.status === 'live'`); the `CARD_ATTACHMENT_MAX_BYTES` skip; and `waitedMs`. card.mjs's `deliveryOf`, which holds that glue, is module-private, and W2-6 never touches `ccd/**`, so the counter cannot import it. A boundary no copy holds answers unmeasured `boundary-uncopied` in the counter, where card.mjs answers `none`: that never moves a served or mismatch count, and W2-D87 never reports an unmeasured value as a count. Moving the glue into lib, so both callers import it, is a later `ccd/**` follow-up. Pins: Task 2's parity CONTROL (card.mjs's own `measureCardDelivery`, over the same fixture store, agrees with the counter on the aggregate counts it returns: measured 8, served 1, mismatch 1, waiting 1; it exposes no per-leaf verdict, so each leaf's verdict is pinned by the card case's own expectations, review 963 F3), its module scan (each lib function called once, declared nowhere here), its card and wait cases, and mutants M17 to M22, M24 and M30 to M34 (D-6563) of Task 2.
+- **D-6563** — `history-w2-counters-card-boundary-stamp` (Task 2; W2-D87, D-6562): the plan's `cardVerdictOf` took `eofAfterBoundary`'s boundary time from the measure report's `ts_ms`. card.mjs's `deliveryOf` takes the store's newest stamped row at or before the boundary's line in the holding copy (its `stampAt` statement), and `null` when none is stamped. The two differ when the boundary row has no timestamp, or whenever the report's time is not the store's, which can move a window between `card-wait` and `none`. The counter now spells `stampAt` again with card.mjs's SQL and parameters, the fifth piece of D-6562's re-spelled glue (beside the rows read, `live`, the size bound and `waitedMs`). Pins: Task 2's card fixture store holds four more leaves, EA (a live window short of rows and of age that the file's end closes), EB (the boundary row has no stamp and the report names a later time, so only the store's stamp closes the window), RT (`source_key` empty, file retired, so not live), each answering `none` in the card case and in the parity CONTROL against `measureCardDelivery`, and NS (review 963 F2: no stamped row at or before the boundary's line, so the store's stamp is `null`, the file's end closes nothing and the window waits, `card-wait`; it is the last node, so card.mjs counts it waiting and stops with no leaf after it: measured 8, waiting 1); mutants M30 to M34 of Task 2 (the report's time, no end-of-file test, `live` without the file's status, a throw on the null arm, the report's time as the null arm's fallback).
