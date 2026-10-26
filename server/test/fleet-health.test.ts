@@ -489,15 +489,34 @@ describe('/api/fleet/health: the delegation observation health (wave 3, Task 13)
     });
   });
 
-  it('adds no PWA state and no fleet frame: the type is an optional member and the PWA source never names it', () => {
+  // Delegation broker wave 4 (PR2, licensed by the coordinator's ruling): the PWA reads the `delegation` FRAME into a store
+  // slot of that name, so `.delegation` is allowed in wave 4 PR2's frame files only (`W4_PWA_FILES`, read from the scope
+  // census in `delegation-wave3.integration.test.ts`, its one definition). The health member's type stays named nowhere.
+  it('adds no PWA state for the health member: its type is named nowhere in pwa/src, and `.delegation` only in wave 4\'s frame files', () => {
     const fh: FleetHealth = { mode: 'local', connected: true, downSince: null };
     expect(fh.delegation).toBeUndefined();
-    const pwa = path.resolve(__dirname, '../../pwa/src');
-    const grep = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const repo = path.resolve(__dirname, '../..');
+    const census = readFileSync(path.join(__dirname, 'delegation-wave3.integration.test.ts'), 'utf8');
+    const block = /const W4_PWA_FILES = \[([\s\S]*?)\] as const;/.exec(census);
+    expect(block, 'the scope census still declares W4_PWA_FILES').not.toBeNull();
+    const allowed = [...block![1]!.matchAll(/'([^']+)'/g)].map((m) => m[1]!);
+    expect(allowed.length).toBe(11);
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
       const p = path.join(dir, e.name);
-      return e.isDirectory() ? grep(p) : /\.(ts|tsx|svelte|js)$/.test(e.name) && /DelegationObservationHealth|\.delegation\b/.test(readFileSync(p, 'utf8')) ? [p] : [];
+      return e.isDirectory() ? walk(p) : /\.(ts|tsx|svelte|js)$/.test(e.name) ? [path.relative(repo, p).split(path.sep).join('/')] : [];
     });
-    expect(grep(pwa)).toEqual([]);
+    const offenders = (files: readonly string[], text: (f: string) => string): string[] => files.filter((f) => {
+      const src = text(f);
+      return /DelegationObservationHealth/.test(src) || (/\.delegation\b/.test(src) && !allowed.includes(f));
+    });
+    expect(offenders(walk(path.join(repo, 'pwa/src')), (f) => readFileSync(path.join(repo, f), 'utf8'))).toEqual([]);
+    // CONTROL: a file outside the list reading `.delegation` is red, and so is a listed file naming the health's type.
+    const fake: Record<string, string> = {
+      'pwa/src/fleet/Other.tsx': 'export const d = (s: { delegation: null }) => s.delegation;\n',
+      'pwa/src/fleet/FleetCards.tsx': 'type H = DelegationObservationHealth;\n',
+      'pwa/src/stores/fleet.ts': 'export const d = (s: { delegation: null }) => s.delegation;\n',
+    };
+    expect(offenders(Object.keys(fake), (f) => fake[f]!)).toEqual(['pwa/src/fleet/Other.tsx', 'pwa/src/fleet/FleetCards.tsx']);
   });
 });
 

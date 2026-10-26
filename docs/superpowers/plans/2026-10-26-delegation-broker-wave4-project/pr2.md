@@ -30,7 +30,15 @@ second definition line as a collision.
   JSON, `pwa/test/characterise.ts`) and pins the first 16 hex digits of each output's SHA-256 as an inline snapshot, captured on
   `main`'s code before any source edit. A key-order change to one `nestFleet` row reds all three files. The null-argument twins
   (W4-U11, U19, U23) replay the recorded inputs and compare the full JSON string, not the fingerprint.
-- D-7010 stays `unused`.
+- D-7010, `the-health-row-admits-the-frame-slot` (PR2, found by CI's `server 1/12` at d3a88e8eb; licensed by the
+  coordinator's ruling, through the worker's structured ask). Wave 3's row in `server/test/fleet-health.test.ts` ("adds no PWA
+  state and no fleet frame") grepped `pwa/src` for `/DelegationObservationHealth|\.delegation\b/`. It was meant to keep the
+  `/api/fleet/health` member out of the PWA, but it cannot tell that member from the frame's store slot `FleetState.delegation`
+  (Task 2.1), which PR2 reads at four sites in three files. The plan lists no change to it, and PR2 may not touch `server/` on
+  its own. The row now has W4-SC1's allow-list semantics. `DelegationObservationHealth` stays named nowhere in `pwa/src`, and
+  `.delegation` is allowed only in `W4_PWA_FILES`, which the row reads from the scope census's own text (its one definition), with a
+  CONTROL row. Three mutants each red it: dropping the allow-list clause, dropping the type ban, and adding a fake file to the
+  list.
 
 ## Smaller notes (no number)
 
@@ -52,4 +60,4 @@ second definition line as a collision.
   files, all in `W4_PWA_FILES` (`SessionMeta.tsx` names none); `lease` by six of them plus main's two (`HaltBanner.tsx`,
   `updateHalt.ts`). No file outside the list.
 - `server/src/watch.ts` and `server/src/coord/store.ts` are untouched (growth 0). PR2's only `server/` and `shared/` changes are
-  PR1's cherry-picked Task 1.1 commit and the one-line spec citation the brief licensed.
+  PR1's cherry-picked Task 1.1 commit, the one-line spec citation the brief licensed, and D-7010's row.
