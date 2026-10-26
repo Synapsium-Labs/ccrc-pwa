@@ -6265,6 +6265,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   unchanged, and no `watch.ts` line inside the lane's spans changed.
   `STATUS 2026-10-26T00:25:41Z fleet=v0.0.702 server=v0.0.702 health=v0.0.702 newest=v0.0.711 intent=*:dev/auto=off`
   `pin=None link=<versions>/v0.0.702 backups=fleet:165M/server:9341M disk=fleet:98G/work:436G/server:21G`
+- **2026-10-26 01:25 UTC — v0.0.712 and v0.0.713 released; the first is a release the soak's broker is told of before
+  a tap; no move; no anomaly.**
+  - **The change.** #1399 moves the delegation lane's single flight and cadence out of its class and into a
+    `delegation` row of the lane schedule. The value stays 60 s, the clock becomes monotonic, and the pass body is
+    unchanged.
+  - **The soak.** Under the 9472 rule a change inside the lane's class is told to the broker's coordinator before a tap
+    (mail 9898). Whether a tap restarts the soak clock is that coordinator's decision, so a tap onto v0.0.713 or later
+    waits on its answer.
+  `STATUS 2026-10-26T01:25:39Z fleet=v0.0.702 server=v0.0.702 health=v0.0.702 newest=v0.0.713 intent=*:dev/auto=off`
+  `pin=None link=<versions>/v0.0.702 backups=fleet:165M/server:9341M disk=fleet:98G/work:452G/server:21G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
