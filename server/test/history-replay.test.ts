@@ -19186,7 +19186,7 @@ b2t1Describe('W2-5b2 Task 1: the step 0b checks and the pilot-failed word, pure 
     b2t1Expect(() => D21.persistenceMeasured({ configDir: 'rel', sessionId: 's', cwd: '/tmp/run-a' })).toThrow(TypeError);
   });
 
-  // Fix round 1, F2 and F3 (D-6694): the session id comes from the spawned run's own stream, so it is run data. None of
+  // W2-5b2 fix round 1 (review 981), F2 and F3: the session id comes from the spawned run's own stream, so it is run data. None of
   // null, '', a slash or a leading dot is an input defect of the driver: each is a reading step 0b could not make.
   b2t1It('persistenceMeasured: a stream with no session id, or a session id that is none, is unmeasured and named, never left and never a TypeError; persistenceCheckOf reads each as unmeasured (F2, F3; W2-D57; D-6309\'s rule)', () => {
     const configDir = join(mkTmp('ccrc-b2t1-pm-id-'), '.claude');
@@ -19234,7 +19234,7 @@ b2t1Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 1: step0b --sect
   // seconds before this describe, so the timer would fire here and kill a stub run at random (measured: a run killed at
   // 12 ms, in the same case of each of three whole-file runs). Waiting out the grace once, before the first case, leaves no stale timer.
   // The 5_500 is onStopSignal's STOP_GRACE_MS (5_000, a module constant of deploy/history-replay.mjs that the driver does not
-  // export, so it is spelled here) plus a 500 ms margin; if that constant moves, this wait moves with it (A5, D-6694).
+  // export, so it is spelled here) plus a 500 ms margin; if that constant moves, this wait moves with it (A5; W2-5b2 fix round 1 (review 981)).
   // Only this describe waits: Tasks 2 and 3's stub describes follow it in the file and are safe by that order alone, a named residual.
   b2t1BeforeAll(async () => { await pause(5_500); }, 20_000);
 
@@ -19364,7 +19364,7 @@ b2t1Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 1: step0b --sect
     }
   }, 120_000);
 
-  // Fix round 1, F2 and F3 (D-6694): at both call sites of persistenceMeasured (the box run's, in step0bMechanics, and an
+  // W2-5b2 fix round 1 (review 981), F2 and F3: at both call sites of persistenceMeasured (the box run's, in step0bMechanics, and an
   // arm run's, in the subcommand), a stream with no session id, or a malformed one, is unmeasured: the result is written,
   // its sha printed, and the halt names `unmeasured persistence`, never `failed persistence` and never a TypeError out of
   // the handler (b2t1Run lets any throw but a refusal fail the case).
@@ -21562,7 +21562,7 @@ describe('W2-5b2 Task 4: the sheet is blinded and shows each item as the judge s
     expect(text.split('\n').filter((l) => l.startsWith('== '))).toEqual(['== j0003 ==']);
   });
 
-  // Fix round 1, A1 (D-6694): the sheet quotes a field's lines on the same break set as the driver's answer-field scan
+  // W2-5b2 fix round 1 (review 981), A1: the sheet quotes a field's lines on the same break set as the driver's answer-field scan
   // (ANSWER_FIELD_LINE_BREAK: CRLF, LF, CR, U+2028, U+2029), the set the gate's LINE_BREAK holds too, so an editor that breaks
   // a line on any of them still shows an opened block as quoted text.
   it.each([
@@ -21702,7 +21702,7 @@ describe('W2-5b2 Task 4: the label reader is strict (Q19)', () => {
     expect(b2t4Refusal(() => B2T4.readHandcheckLabels(q, sha256Hex(bad), plan))).toEqual({ word: 'input-invalid', detail: 'labels not-utf8' });
   });
 
-  // Fix round 1, A2 (D-6694; the coordinator's ruling: keep stripping a leading BOM, because operators edit this file in
+  // W2-5b2 fix round 1 (review 981), A2 (the coordinator's ruling: keep stripping a leading BOM, because operators edit this file in
   // editors that write one). The reader's TextDecoder drops it (ignoreBOM false), so the strict grammar never sees U+FEFF.
   it('readHandcheckLabels: a file led by a UTF-8 BOM reads the same as one without, whether its first line is a comment or a label (A2)', () => {
     const { plan } = b2t4Ready();
@@ -22293,7 +22293,7 @@ b2t5Describe('W2-5b2 Task 5: report, pure parts', () => {
       unmeasured: [es[2]!.qid] });
   });
 
-  // Fix round 1, A7 (D-6694): a count that is no non-negative safe integer is unmeasured, never added to the figure.
+  // W2-5b2 fix round 1 (review 981), A7: a count that is no non-negative safe integer is unmeasured, never added to the figure.
   b2t5It.each([['a negative count', -1], ['a fractional count', 1.5], ['a count written as a string', '2']])('sameMsHitsOf: %s is unmeasured and adds nothing (A7)', (_name, bad) => {
     const es = [w5b4Entry({ store_id: B2T5_S1, ccrc_id: 'a', generation: w5b4Gen(1) }, 1), w5b4Entry({ store_id: B2T5_S1, ccrc_id: 'a', generation: w5b4Gen(1) }, 2),
       w5b4Entry({ store_id: B2T5_S1, ccrc_id: 'a', generation: w5b4Gen(1) }, 3)];
@@ -22572,7 +22572,7 @@ b2t5Describe('W2-5b2 Task 5: report over gathered node outputs', () => {
     b2t5Expect(existsSync(w.out), 'no --out is made').toBe(false);
   });
 
-  // Fix round 1, A6 (D-6694): an answer record the report is handed that is no answer record is a defect of an INPUT, like
+  // W2-5b2 fix round 1 (review 981), A6: an answer record the report is handed that is no answer record is a defect of an INPUT, like
   // every other gathered input's, so it refuses input-invalid; the judge's read of its own --out (readArmAnswers) keeps
   // out-refused for the same two defects (W2-5b1 Task 4's case), and a record that cannot be read at all is still out-refused.
   b2t5It.each([
@@ -22628,7 +22628,7 @@ b2t5Describe('W2-5b2 Task 5: report over gathered node outputs', () => {
     b2t5Expect(v.gate.report_only.recall_off_gaps).toEqual([{ store_id: B2T5_S1, ts_ms: B2T5_START + 6_000, from: null, to: B2T5_START + 6_000 }]);
   });
 
-  // Fix round 1, F1 (D-6694): live_uptake reads the gate's MEASURED windows only, so a per-cell `unmeasured` count could only
+  // W2-5b2 fix round 1 (review 981), F1: live_uptake reads the gate's MEASURED windows only, so a per-cell `unmeasured` count could only
   // ever read 0 beside the truth. The count lives in live_excluded.unmeasured, keyed by store, family and boundary.
   b2t5It('F1: one measured and two unmeasured live windows: no live_uptake cell carries `unmeasured`, and live_excluded.unmeasured counts the two', async () => {
     const base = b2t5World();
@@ -22919,7 +22919,7 @@ b2t5Describe('W2-5b2 Task 5: the F1 carry, the judge input\'s answer field over 
     b2t5Expect(drv.filter((l) => l.startsWith('const ANSWER_FIELD_LINE_BREAK = ')), 'declared once').toHaveLength(1);
     const splits = drv.filter((l) => l.includes('.split(ANSWER_FIELD_LINE_BREAK)'));
     b2t5Expect(splits.filter((l) => !l.startsWith('const quote = ')), 'the raw and the masked counts').toHaveLength(2);
-    b2t5Expect(splits.filter((l) => l.startsWith('const quote = (text) => text.split(ANSWER_FIELD_LINE_BREAK)')), 'and the hand-check sheet\'s quote (A1, D-6694)').toHaveLength(1);
+    b2t5Expect(splits.filter((l) => l.startsWith('const quote = (text) => text.split(ANSWER_FIELD_LINE_BREAK)')), 'and the hand-check sheet\'s quote (A1; W2-5b2 fix round 1 (review 981))').toHaveLength(1);
     b2t5Expect(code('history-gate.mjs').filter((l) => l.startsWith('const LINE_BREAK = ')), 'the gate\'s one private splitter, as the copy spells it')
       .toEqual([`const LINE_BREAK = /${B2T5_GATE_LINE_BREAK.source}/${B2T5_GATE_LINE_BREAK.flags};`]);
   });
@@ -23016,7 +23016,7 @@ describe('W2-5b2 Task 6: README states the replay driver once, after the headles
   });
 });
 
-// ── Fix round 1, F4 to F7 (D-6694): every refusal and stamp carry a task adds has its own row ───────────────────
+// ── W2-5b2 fix round 1 (review 981), F4 to F7: every refusal and stamp carry a task adds has its own row ───────────────────
 // The plan's rule ("every refusal a task adds") asked for a case that goes red when its guard is deleted. One describe per
 // function, one row per guard, each guard its own mutant (the guard's line deleted or neutralised), measured against the
 // owning task's whole describes. A row goes green on the shipped code; its red-first is that mutant, predicted before the run
@@ -23403,4 +23403,935 @@ b2t5Describe('W2-5b2 Task 5 F4: inputsByStore refuses a gathered input that is n
       b2t5Expect(r.refusal).toEqual({ word: 'input-invalid', detail: `${name} names no store_id` });
       b2t5Expect(existsSync(w.out), 'no --out is made').toBe(false);
     });
+});
+
+// ── W2-5b2 fix round 2 (review 998), Part A: Tasks 1 to 3's report refusals pinned and the class closed ──
+// Every row below is red-first with its CONTROL, and each guard's own mutant is recorded in the plan. A refusal that names
+// a driver word is the only thing a bad input may answer: a TypeError out of a handler is an INTERNAL exit, never a case's pass.
+b2t1Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 1 fix round 2: step0b\'s synthetic-transcript measure and its read-back of a run\'s stream refuse by their own words (review 998)', () => {
+  b2t1It('Q11 unmeasured: a synthetic transcript path whose lstat fails for a reason other than absence refuses input-invalid "unmeasured <errno>" before --out and any spawn; CONTROL: an absent path (ENOENT, and ENOTDIR under a file) passes the measure and makes --out', async () => {
+    const dir = mkTmp('ccrc-w2-5b2-fr2-synth-');
+    symlinkSync(join(dir, 'b'), join(dir, 'a'));
+    symlinkSync(join(dir, 'a'), join(dir, 'b'));
+    const loop = join(dir, 'a', 'x.jsonl');   // a link loop on the way: lstat answers ELOOP, which is neither ENOENT nor ENOTDIR
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    const r = await b2t1Run(home, fx.argv(), { syntheticTranscript: loop });
+    b2t1Expect(r.refusal).toEqual({ word: 'input-invalid', detail: `synthetic transcript ${loop} unmeasured ELOOP` });
+    b2t1Expect(existsSync(fx.out as string), 'no --out is made').toBe(false);
+    b2t1Expect(stubLog(home), 'no spawn, not even --version').toBeNull();
+    writeFileSync(join(dir, 'file'), 'x');
+    for (const [what, p] of [['ENOENT', join(dir, 'absent.jsonl')], ['ENOTDIR', join(dir, 'file', 'x.jsonl')]] as Array<[string, string]>) {
+      const h = b2t1Home();
+      const f = b2t1Pilot(h);
+      const c = await b2t1Run(h, f.argv(), { syntheticTranscript: p });
+      b2t1Expect(c.refusal?.detail ?? '', `CONTROL ${what}: not refused by the measure`).not.toMatch(/^synthetic transcript /);
+      b2t1Expect(existsSync(f.out as string), `CONTROL ${what}: the measure passed, so --out is made`).toBe(true);
+    }
+  }, 120_000);
+
+  b2t1It('a run\'s stream that is gone when step 0b writes its result refuses out-refused "run-stream-changed <run>" and writes no result; CONTROL: the same pilot without the removal passes', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    b2t1PlantAll(home, 'restricted');
+    const box = join(fx.out as string, 'pilot', 'step0b', 'restricted', 'turn-bound.jsonl');
+    const rg = b2t1Probes(home).find((p) => p.probe === 'deny-rg')!;
+    b2t1Put(home, 'restricted', b2t1Stdin(rg), '.rm', box);   // an arm run removes the box run's recorded stream while the arm batch is still running
+    const r = await b2t1Run(home, fx.argv());
+    b2t1Expect(r.refusal).toEqual({ word: 'out-refused', detail: 'run-stream-changed pilot/step0b/restricted/turn-bound' });
+    b2t1Expect(existsSync(join(fx.out as string, 'pilot', 'step0b', 'restricted.json')), 'no result is written').toBe(false);
+    b2t1Expect(existsSync(box), 'the stream is the thing that went').toBe(false);
+    const home2 = b2t1Home();
+    const fx2 = b2t1Pilot(home2);
+    b2t1PlantAll(home2, 'restricted');
+    const ok = await b2t1Run(home2, fx2.argv());
+    b2t1Expect([ok.refusal, ok.code], `CONTROL: ${ok.stderr}`).toEqual([null, 0]);
+  }, 120_000);
+});
+
+// The TypeErrors below are in exported pure helpers, each pinned by a pure-call row where one exists. None is a guard against an
+// input: each is a defect-in-the-caller check, and each row here shows the caller cannot hand it a bad value, by the refusal or
+// the contract that precedes it (the by-design entries of the fix-round-2 census, reasons measured by these rows).
+b2t1Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 1 fix round 2: the TypeErrors of step0b\'s pure helpers that no input reaches, each shown unreachable by the refusal or the contract that precedes it (by design; review 998)', () => {
+  b2t1It('step0bNameOk: a section or a settings mode off its set is refused by a driver word first (--section, --settings-mode, part 1\'s settings_mode, part 2\'s pilot_result.settings_mode), before --out and any spawn; CONTROL: the intact pilot passes', async () => {
+    const refusedBeforeOut = async (what: string, home: string, argv: string[], out: string, want: { word: string; detail: string }): Promise<void> => {
+      const r = await b2t1Run(home, argv);
+      b2t1Expect(r.refusal, what).toEqual(want);
+      b2t1Expect(existsSync(out), `${what}: no --out`).toBe(false);
+      b2t1Expect(stubLog(home), `${what}: no spawn`).toBeNull();
+    };
+    {
+      const home = b2t1Home();
+      const fx = b2t1Pilot(home);
+      await refusedBeforeOut('--section usage', home, (fx.argv() as string[]).map((a) => (a === 'pilot' ? 'usage' : a)), fx.out as string,
+        { word: 'args-invalid', detail: `step0b wants --section ${(D21.STEP0B_SECTIONS as string[]).join(' or --section ')}, not "usage"` });
+      await refusedBeforeOut('--settings-mode open', home, fx.argv(['--settings-mode', 'open']), fx.out as string, { word: 'args-invalid', detail: 'settings-mode open' });
+    }
+    {
+      const home = b2t1Home();
+      const fx = b2t1Pilot(home);
+      const draft = { ...fx.draft, settings_mode: 'bogus', step0a: (fx.draft.step0a as B2t1R[]).map((s) => ({ ...s, settings_mode: 'bogus' })) };
+      const d = w5b4Save(draft, 'part1.json');   // a record the validator signs (every step 0a entry's mode equals part 1's) that the builder never makes
+      await refusedBeforeOut('part 1 settings_mode bogus', home, ['step0b', '--section', 'pilot', '--out', fx.out as string, ...w5b4Inp('record', d), ...w5b4Inp('frozen', fx.fz)],
+        fx.out as string, { word: 'record-invalid', detail: 'settings_mode out-of-range' });
+    }
+    {
+      const fx = b23RepilotNode();
+      const rout = w5b4Out();
+      const bad = w5b4Save({ ...fx.final, pilot_result: { ...fx.final.pilot_result, settings_mode: 'bogus' } }, 'part2.json');
+      await refusedBeforeOut('part 2 pilot_result.settings_mode bogus', fx.home as string,
+        ['step0b', '--section', 'quiz', '--out', rout, ...w5b4Inp('record', bad), ...w5b4Inp('part1', fx.d as W5b4Saved), ...w5b4Inp('frozen', fx.fz as W5b4Saved)],
+        rout, { word: 'record-invalid', detail: 'pilot_result.settings_mode out-of-range' });
+    }
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    b2t1PlantAll(home, 'restricted');
+    const ok = await b2t1Run(home, fx.argv());
+    b2t1Expect([ok.refusal, ok.code], `CONTROL: ${ok.stderr}`).toEqual([null, 0]);
+  }, 120_000);
+
+  b2t1It('step0bRunName, step0bRel and step0bProbesOf: every section and mode a handler can name, and every run it can name, are accepted (no TypeError); the transcript is absolute and no flag sets it', () => {
+    const home = b2t1Home();
+    const probes = (D21.step0bProbesOf(home, D21.STEP0B_SYNTHETIC_TRANSCRIPT) as B2t1R[]).map((p) => p.probe as string);
+    b2t1Expect(probes, 'the runs the handler names are STEP0B_PROBES, in order').toEqual(D21.STEP0B_PROBES);
+    for (const section of D21.STEP0B_SECTIONS as string[]) for (const mode of D21.SETTINGS_MODES as string[]) {
+      b2t1Expect(D21.step0bRel(section, mode), `${section} ${mode}`).toBe(`${section}/step0b/${mode}.json`);
+      for (const run of ['turn-bound', ...probes]) b2t1Expect(D21.step0bRunName(section, mode, run)).toBe(`${section}/step0b/${mode}/${run}`);
+    }
+    b2t1Expect(path.isAbsolute(D21.STEP0B_SYNTHETIC_TRANSCRIPT as string)).toBe(true);
+    const src = readFileSync(join(REPO, 'deploy', 'history-replay.mjs'), 'utf8');
+    b2t1Expect(src.match(/syntheticTranscript/g)?.length, 'the one read of deps.syntheticTranscript, a test seam').toBe(1);
+    b2t1Expect(src.includes("HANDLERS.set('step0b', (flags, env) => step0bCommand(flags, env));"), 'the handler passes no deps').toBe(true);
+  });
+
+  b2t1It('mainThreadTurns, step0bVerdictOf, armToolsOf and step0bStdinOf are handed what their callers build, whatever a run printed: hostile streams for every run are recorded unmeasured, the result written and its sha printed, then pilot-failed, never a TypeError (b2t1Run lets any other throw fail the case)', async () => {
+    for (const text of ['', 'not json\n', 'null\n', '[]\n', '{"type":1}\n', '{"type":"assistant","message":null}\n', '{"type":"system","subtype":"init"}\n']) {
+      b2t1Expect(Array.isArray(D21.readStreamJson(text).messages), JSON.stringify(text)).toBe(true);
+      b2t1Expect(Number.isInteger(D21.mainThreadTurns(D21.readStreamJson(text))), JSON.stringify(text)).toBe(true);
+    }
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    const over: Record<string, string> = { 'turn-bound': '' };
+    for (const p of b2t1Probes(home)) over[p.probe as string] = 'not json\n{"type":1}\n[]\nnull\n';
+    b2t1PlantAll(home, 'restricted', over);
+    const r = await b2t1Run(home, fx.argv());
+    b2t1Expect(r.refusal).toEqual({ word: 'pilot-failed', detail: `step0b restricted: failed -; unmeasured ${(D21.STEP0B_CHECKS as string[]).join(' ')}; turn-bound subtype null: a spelling other than error_max_turns is a coordinator ruling (W2-D57)` });
+    const text = readFileSync(join(fx.out as string, 'pilot', 'step0b', 'restricted.json'), 'utf8');
+    b2t1Expect(r.stderr, 'recorded before the halt: its sha is printed').toBe(`sha256 ${sha256Hex(text) as string}\n`);
+    b2t1Expect((JSON.parse(text) as B2t1R).unmeasured, 'every check answered a STEP0B_STATES word').toEqual(D21.STEP0B_CHECKS);
+    for (const mode of D21.SETTINGS_MODES as string[]) {
+      b2t1Expect(D21.armToolsOf(D21.spawnArgv({ mode: 'arm', model: W5B4_ARM_MODEL, settingsMode: mode, home })), mode).toEqual(['Agent', 'Bash']);
+    }
+  }, 120_000);
+
+  b2t1It('step0bCommand refuses a HOME that is unset or not absolute before anything is read, so persistenceMeasured\'s configDir (join of an absolute home and a roster suffix) is always absolute; CONTROL: an absolute HOME passes', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    for (const bad of ['rel/home', '', undefined]) {
+      const r = await b2t2Call(() => D21.step0bCommand(b2t2Flags(fx.argv()), { HOME: bad, TMUX_PANE: undefined, LANG: W5B4_LANG }, B2T1_FAKE));
+      b2t1Expect(r.refusal, JSON.stringify(bad)).toEqual({ word: 'args-invalid', detail: 'HOME is unset or not absolute' });
+      b2t1Expect(existsSync(fx.out as string), `${JSON.stringify(bad)}: no --out`).toBe(false);
+    }
+    for (const suffix of ['.claude', '/etc/claude', '../up', 'a/../../b']) b2t1Expect(path.isAbsolute(join(path.resolve(home), suffix)), suffix).toBe(true);
+    b2t1PlantAll(home, 'restricted');
+    const ok = await b2t1Run(home, fx.argv());
+    b2t1Expect([ok.refusal, ok.code], `CONTROL: ${ok.stderr}`).toEqual([null, 0]);
+  }, 120_000);
+
+  b2t1It('step0bStdinOf: the card line is lib\'s cardLine, whose own grammar refuses a newline or an empty leaf, so a payload that builds is one non-empty line', () => {
+    const leaf = 'Labcdef12';
+    const line = b2t1Lib.cardLine({ leaf }) as string;
+    b2t1Expect([line === '', line.includes('\n'), (b2t1Lib.CARD_LINE_RE as RegExp).test(line)]).toEqual([false, false, true]);
+    for (const bad of ['', 'Lab\ncdef12', 'L12', 'Labcdef12\n']) b2t1Expect(() => b2t1Lib.cardLine({ leaf: bad }), JSON.stringify(bad)).toThrow(TypeError);
+    b2t1Expect(() => D21.step0bStdinOf(line, { expect: 'admitted', command: 'c' })).not.toThrow();
+  });
+});
+
+/** b23Quiz with the first of node A's five frozen entries rewritten by `edit` (its qid recomputed), so a frozen list can
+ *  carry a value the driver's own sampler would never write; every other piece as b23Quiz builds it (fix round 2, review 998). */
+function fr2Quiz(home: string, edit: (e: W5b4R) => W5b4R, every = false): W5b4R {
+  const famA: W5b4Ref = { store_id: W5B4_STORE_A, ccrc_id: 'quiz-a', generation: w5b4Gen(410) };
+  const famB: W5b4Ref = { store_id: W5B4_STORE_B, ccrc_id: 'quiz-b', generation: w5b4Gen(420) };
+  const made = [21, 22, 23, 24, 25].map((n) => w5b4Entry(famA, n)).concat([w5b4Entry(famB, 26)]);
+  // `every`: edit all of the node's entries (fix round 2, Part D), so the one a command takes first, in qid order, is an edited one
+  for (const i of every ? [0, 1, 2, 3, 4] : [0]) {
+    const { qid: _old, ...body } = edit(made[i]!);
+    made[i] = { ...body, qid: D4.qidOf(body) as string };
+  }
+  const draft = w5b4Draft(home, { stores: [W5B4_STORE_A, W5B4_STORE_B] });
+  const d = w5b4Save(draft, 'part1.json');
+  const fz = w5b4SaveText(D4.frozenListText('quiz', W5B4_HEAD, made) as string, 'frozen.json');
+  const final = D4.buildFinal({ draft, draftSha256: d.sha,
+    assembled: { nodes: [W5B4_STORE_A, W5B4_STORE_B].map((s) => ({ store_id: s, census_sha256: w5b4Hex(`census ${s}`), report: { census: { as_of_ms: W5B4_T0 } } })), drops: [] },
+    assignment: { list: [], sha256: w5b4Gate.assignmentSha256([]) },
+    power: { headline: null, at_power_80: null, at_rho_0: null, rho_hat: null, n_f: {}, coverage: {}, pre_window_uptake: {} }, powerSha256: w5b4Hex('power'),
+    frozen: { sha256: fz.sha, list: fz.value, families: D4.familiesOf(fz.value.entries) },
+    pilotResult: { kind: D4.PILOT_RESULT_KIND, v: 1, record_sha256: d.sha, fidelity: [],
+      usage_extrapolation: { v: 1, formula: 'ceil(margin.num x n_questions x pilot_spend.total / (margin.den x pilot_questions))', margin: { num: 5, den: 4 }, pilot_questions: 5,
+        pilot_spend: { arms: 1, judge: 1, total: 2 }, at_target: { n_questions: 5, spend_budget: 3 },
+        uptake: { reading: 'is-error', quiz_uptake: 'measured', control_calls: 0, control_errored: 1 }, spend_readings: {} },
+      step0b_sha256: w5b4Hex('step0b'), settings_mode: 'restricted',
+      absent_rate: { arms: {}, max: { num: 5, den: 100 }, over: [], unmeasured: [], pass: true }, failures: [] },
+    spendBudget: 1_000_000, window: { start: W5B4_T0 + W5B4_DAY, end: W5B4_T0 + 15 * W5B4_DAY }, decision: 'keep', nowMs: W5B4_T0 }) as W5b4R;
+  const f = w5b4Save(final, 'part2.json');
+  w5b4Marker(home, W5B4_STORE_A, [famA]);
+  const entries = fz.value.entries as W5b4R[];
+  const mine = entries.filter((e) => e.store_id === W5B4_STORE_A);
+  return { entries, mine, heads: [...mine].sort(b23ByQid), draft, d, fz, final, f, home,
+    rec: (): string[] => [...w5b4Inp('record', f), ...w5b4Inp('part1', d), ...w5b4Inp('frozen', fz)] };
+}
+
+b2t2Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 2 fix round 2: step 0b\'s result is read by its shape (kind, version, section, mode and the verdict\'s lists), each term refusing input-invalid and never a TypeError (review 998)', () => {
+  /** loadArmRun('pilot') over W2-5b1's pilot fixture and the step 0b result `make(part 1's sha)` makes: a refusal answered as {word, detail}. */
+  const load = (make: (sha: string) => W5b4Saved): { got: unknown; out: string; ok: B2t2R | null } => {
+    const home = w5b4Home();
+    const fx = w5b4Pilot(home);
+    try {
+      return { got: null, out: fx.out, ok: B2.loadArmRun(b2t2Flags([...fx.argv, ...w5b4Inp('step0b', make(fx.d.sha))]), 'pilot', { nowMs: Date.now() }) as B2t2R };
+    } catch (e) {
+      if (!(e instanceof b2t2Drv.DriverRefusal)) throw e;   // a TypeError is the defect these rows exist to fail on
+      return { got: { word: (e as B2t2R).word, detail: (e as B2t2R).detail }, out: fx.out, ok: null };
+    }
+  };
+  const refusal = (detail: string): { word: string; detail: string } => ({ word: 'input-invalid', detail });
+  const ROWS: Array<[string, (sha: string) => W5b4Saved, string]> = [
+    ['a body of null (no plainObject)', () => w5b4Save(null, 's0.json'), 'step0b shape kind'],
+    ['a body that is a list', () => w5b4Save([], 's0.json'), 'step0b shape kind'],
+    ['another kind', (sha) => b2t2Step0b(sha, { over: { kind: 'ccrc-history-w2-other' } }), 'step0b shape kind'],
+    ['version 2', (sha) => b2t2Step0b(sha, { over: { v: 2 } }), 'step0b shape kind'],
+    ['a settings mode outside SETTINGS_MODES', (sha) => b2t2Step0b(sha, { over: { settings_mode: 'open' } }), 'step0b shape settings_mode'],
+    ['no settings mode', (sha) => b2t2Step0b(sha, { over: { settings_mode: undefined } }), 'step0b shape settings_mode'],
+    ['failed that is null', (sha) => b2t2Step0b(sha, { over: { failed: null, passed: false } }), 'step0b shape verdict'],
+    ['failed that is a word, not a list', (sha) => b2t2Step0b(sha, { over: { failed: 'skill', passed: false } }), 'step0b shape verdict'],
+    ['unmeasured that is null', (sha) => b2t2Step0b(sha, { over: { unmeasured: null, passed: false } }), 'step0b shape verdict'],
+    ['unmeasured that is an object', (sha) => b2t2Step0b(sha, { over: { unmeasured: {}, passed: false } }), 'step0b shape verdict'],
+    ['a check listed twice in failed', (sha) => b2t2Step0b(sha, { over: { failed: ['skill', 'skill'], passed: false } }), 'step0b shape verdict'],
+    ['a check listed twice in unmeasured', (sha) => b2t2Step0b(sha, { over: { unmeasured: ['tools', 'tools'], passed: false } }), 'step0b shape verdict'],
+  ];
+  b2t2It('CONTROL: the intact step 0b result, and the same failed and unmeasured lists with distinct checks, are read (the failed one is not refused by the shape)', () => {
+    b2t2Expect(load((sha) => b2t2Step0b(sha)).ok?.settingsMode).toBe('restricted');
+    const failed = load((sha) => b2t2Step0b(sha, { failed: ['skill', 'tools'], unmeasured: ['mcp'] }));
+    b2t2Expect(failed.got, 'distinct lists pass the shape, and the failed step 0b is then pilot-failed (K2)').toEqual({ word: 'pilot-failed',
+      detail: B2T2_NOT_PASSED('restricted', 'skill tools', 'mcp') });
+  });
+  b2t2It.each(ROWS)('loadArmRun pilot refuses step 0b %s input-invalid, before any store, spawn or --out', (_what, make, detail) => {
+    const r = load(make);
+    b2t2Expect(r.got).toEqual(refusal(detail));
+    b2t2Expect(existsSync(r.out), 'no --out').toBe(false);
+  });
+});
+
+b2t2Describe('W2-5b2 Task 2 fix round 2: pilot-result reads its --out and the pilot\'s files by their own refusals (review 998)', () => {
+  const withOut = (argv: string[], out: string): string[] => argv.map((a, i) => (argv[i - 1] === '--out' ? out : a));
+  const call = (argv: string[]) => b2t2Call(() => B2.pilotResultCommand(b2t2Flags(argv), B2T2_ENV(w5b4MkTmp('ccrc-b2t2-env-'))));
+  b2t2It('CONTROL: the intact pilot out writes a result, so every row below fails on its one edit', async () => {
+    const p = b2t2PilotOut(w5b4Home());
+    const r = await b2t2RunPilot(p);
+    b2t2Expect([r.refusal, r.code]).toEqual([null, 0]);
+  });
+
+  b2t2It('--out must be absolute: a relative --out is out-refused "relative"; CONTROL: the same pilot by its absolute path is read', async () => {
+    const p = b2t2PilotOut(w5b4Home());
+    const rel = await call(withOut(p.argv(), 'relative/dir'));
+    b2t2Expect(rel.refusal).toEqual({ word: 'out-refused', detail: 'relative' });
+    b2t2Expect(path.isAbsolute(p.fx.out), 'CONTROL: the intact --out is absolute').toBe(true);
+    b2t2Expect((await b2t2RunPilot(p)).refusal, 'CONTROL').toBeNull();
+  });
+
+  b2t2It('an --out whose lstat fails for another reason than absence is out-refused "unmeasured <errno>" (ENOTDIR under a file), never "holds no pilot"; CONTROL: an absent --out is that other word', async () => {
+    const p = b2t2PilotOut(w5b4Home());
+    const file = join(w5b4MkTmp('ccrc-b2t2-notdir-'), 'f');
+    writeFileSync(file, 'x');
+    const under = await call(withOut(p.argv(), `${file}/out`));
+    b2t2Expect(under.refusal).toEqual({ word: 'out-refused', detail: 'unmeasured ENOTDIR' });
+    const gone = await call(withOut(p.argv(), join(w5b4MkTmp('ccrc-b2t2-gone-'), 'absent')));
+    b2t2Expect(gone.refusal, 'CONTROL: an absent --out is the other word').toEqual({ word: 'input-invalid', detail: '--out holds no pilot: fidelity, arms --section pilot and judge --section pilot write there first' });
+  });
+
+  const EDITS: Array<[string, string, (file: string) => void, string]> = [
+    ['fidelity.json replaced by a directory', 'fidelity.json', (f) => { rmSync(f); mkdirSync(f); }, 'fidelity.json not-regular'],
+    ['pilot/judged.json replaced by a directory', 'pilot/judged.json', (f) => { rmSync(f); mkdirSync(f); }, 'pilot/judged.json not-regular'],
+    ['fidelity.json that is not JSON', 'fidelity.json', (f) => writeFileSync(f, 'not json\n'), 'fidelity.json is not JSON'],
+    ['pilot/judged.json that is not JSON', 'pilot/judged.json', (f) => writeFileSync(f, '{"kind":'), 'pilot/judged.json is not JSON'],
+    ['fidelity.json of another kind', 'fidelity.json', (f) => writeFileSync(f, `${JSON.stringify({ ...JSON.parse(readFileSync(f, 'utf8')), kind: 'ccrc-history-w2-other' })}\n`), `fidelity.json is not a ${B2.FIDELITY_KIND}`],
+    ['fidelity.json of version 2', 'fidelity.json', (f) => writeFileSync(f, `${JSON.stringify({ ...JSON.parse(readFileSync(f, 'utf8')), v: 2 })}\n`), `fidelity.json is not a ${B2.FIDELITY_KIND}`],
+    ['fidelity.json holding null', 'fidelity.json', (f) => writeFileSync(f, 'null\n'), `fidelity.json is not a ${B2.FIDELITY_KIND}`],
+    ['fidelity.json holding a list', 'fidelity.json', (f) => writeFileSync(f, '[]\n'), `fidelity.json is not a ${B2.FIDELITY_KIND}`],
+    ['pilot/judged.json of another kind', 'pilot/judged.json', (f) => writeFileSync(f, `${JSON.stringify({ ...JSON.parse(readFileSync(f, 'utf8')), kind: 'ccrc-history-w2-other' })}\n`), `pilot/judged.json is not a ${B2.JUDGED_KIND}`],
+  ];
+  b2t2It.each(EDITS)('%s refuses out-refused "<file> ..." and writes no result', async (_what, rel, edit, detail) => {
+    const p = b2t2PilotOut(w5b4Home());
+    edit(join(p.out, rel));
+    const r = await b2t2RunPilot(p);
+    b2t2Expect(r.refusal).toEqual({ word: 'out-refused', detail });
+    b2t2Expect(existsSync(join(p.out, 'pilot-result.json')), 'no result').toBe(false);
+  });
+
+  const RUN_EDITS: Array<[string, (file: string) => void, (name: string) => string]> = [
+    ['a run.json replaced by a directory', (f) => { rmSync(f); mkdirSync(f); }, (n) => `run-json-invalid ${n} not-regular`],
+    ['a run.json that is not JSON', (f) => writeFileSync(f, 'not json\n'), (n) => `run-json-invalid ${n}`],
+  ];
+  b2t2It.each(RUN_EDITS)('%s refuses out-refused naming the run, and writes no result', async (_what, edit, detail) => {
+    const p = b2t2PilotOut(w5b4Home());
+    const name = p.names.a[0]!;
+    edit(join(p.out, `${name}.run.json`));
+    const r = await b2t2RunPilot(p);
+    b2t2Expect(r.refusal).toEqual({ word: 'out-refused', detail: detail(name) });
+    b2t2Expect(existsSync(join(p.out, 'pilot-result.json')), 'no result').toBe(false);
+  });
+
+  b2t2It.each([['usage', 'usage'], ['absent', undefined]] as Array<[string, string | undefined]>)('a --section of %s refuses args-invalid naming PILOT_RESULT_SECTIONS; CONTROL: pilot is read', async (_what, section) => {
+    const p = b2t2PilotOut(w5b4Home());
+    const argv = p.argv();
+    const i = argv.indexOf('--section');
+    const bad = section === undefined ? [...argv.slice(0, i), ...argv.slice(i + 2)] : argv.map((a, k) => (k === i + 1 ? section : a));
+    const r = await call(bad);
+    b2t2Expect(r.refusal).toEqual({ word: 'args-invalid', detail: `pilot-result wants --section ${(B2.PILOT_RESULT_SECTIONS as string[]).join(' or --section ')}, not ${JSON.stringify(section ?? null)}` });
+    b2t2Expect((await b2t2RunPilot(p)).refusal, 'CONTROL: --section pilot').toBeNull();
+  });
+});
+
+b2t2Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 2 fix round 2: fidelity refuses a section off FIDELITY_SECTIONS by its own word (review 998)', () => {
+  b2t2It.each([['usage', 'usage'], ['absent', undefined]] as Array<[string, string | undefined]>)('a --section of %s refuses args-invalid naming FIDELITY_SECTIONS, with no --out made and no spawn; CONTROL: pilot runs', async (_what, section) => {
+    const home = b2t2Home();
+    b2t2PlantPass(home);
+    const fx = b2t2Fidelity(home);
+    const i = fx.argv.indexOf('--section');
+    const bad = section === undefined ? [...fx.argv.slice(0, i), ...fx.argv.slice(i + 2)] : fx.argv.map((a, k) => (k === i + 1 ? section : a));
+    const r = await b2t2Call(() => B2.fidelityCommand(b2t2Flags(bad), B2T2_ENV(home), b2t2Deps()));
+    b2t2Expect(r.refusal).toEqual({ word: 'args-invalid', detail: `fidelity wants --section ${(B2.FIDELITY_SECTIONS as string[]).join(' or --section ')}, not ${JSON.stringify(section ?? null)}` });
+    b2t2Expect(existsSync(fx.out), 'no --out').toBe(false);
+    b2t2Expect(stubLog(home), 'no spawn').toBeNull();
+    const ok = await b2t2Call(() => B2.fidelityCommand(b2t2Flags(fx.argv), B2T2_ENV(home), b2t2Deps()));
+    b2t2Expect([ok.refusal, ok.code], `CONTROL: ${ok.stderr}`).toEqual([null, 0]);
+  }, 120_000);
+});
+
+b23Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 3 fix round 2: the re-pilot reads its version pin and measures the version by their own refusals (review 998)', () => {
+  const PIN = 'quiz/repilot-version.json';
+  type Made = { fx: W5b4R; rout: string };
+  /** One node, its step 0b run once (which pins the version); each row works on its own copy of that --out. */
+  const made = async (): Promise<Made> => {
+    const fx = b23RepilotNode();
+    const rout = w5b4Out();
+    b23Expect((await b23Step0b(fx, rout)).refusal).toBeNull();
+    return { fx, rout };
+  };
+  const copyOut = (c: Made): string => { const d = join(mkTmp('ccrc-w2-5b2-fr2-pin-'), 'out'); f6CpSync(c.rout, d, { recursive: true }); return d; };
+  const pinValue = (c: Made): W5b4R => JSON.parse(readFileSync(join(c.rout, PIN), 'utf8')) as W5b4R;
+  const rewrite = (c: Made, edit: (v: W5b4R) => unknown) => (out: string): void => writeFileSync(join(out, PIN), `${JSON.stringify(edit(pinValue(c)))}\n`);
+  const without = (v: W5b4R, key: string): W5b4R => { const c = { ...v }; delete c[key]; return c; };
+  const SHAPE = `${PIN} is not a re-pilot version pin`;
+  const EDITS = (c: Made): Array<[string, (out: string) => void, string]> => [
+    ['replaced by a directory', (out) => { rmSync(join(out, PIN)); mkdirSync(join(out, PIN)); }, `${PIN} not-regular`],
+    ['not JSON', (out) => writeFileSync(join(out, PIN), 'not json\n'), `${PIN} is not JSON`],
+    ['null', (out) => writeFileSync(join(out, PIN), 'null\n'), SHAPE],
+    ['a list', (out) => writeFileSync(join(out, PIN), '[]\n'), SHAPE],
+    ['another kind', rewrite(c, (v) => ({ ...v, kind: 'ccrc-history-w2-other' })), SHAPE],
+    ['version 2', rewrite(c, (v) => ({ ...v, v: 2 })), SHAPE],
+    ['a record sha that is no text', rewrite(c, (v) => ({ ...v, record_sha256: 7 })), SHAPE],
+    ['no store id', rewrite(c, (v) => without(v, 'store_id')), SHAPE],
+    ['a store id that is no text', rewrite(c, (v) => ({ ...v, store_id: 7 })), SHAPE],
+    ['an empty Claude Code version', rewrite(c, (v) => ({ ...v, claude_code_version: '' })), SHAPE],
+    ['a Claude Code version that is no text', rewrite(c, (v) => ({ ...v, claude_code_version: 7 })), SHAPE],
+  ];
+  const NAMES = ['replaced by a directory', 'not JSON', 'null', 'a list', 'another kind', 'version 2', 'a record sha that is no text', 'no store id', 'a store id that is no text',
+    'an empty Claude Code version', 'a Claude Code version that is no text'];
+  b23It('CONTROL: the untouched pin lets the same step 0b resume, reading its runs back and spawning no run', async () => {
+    const c = await made();
+    const prints = b2t1PrintRuns(c.fx.home as string).length;
+    b23Expect((await b23Step0b(c.fx, copyOut(c))).refusal).toBeNull();
+    b23Expect(b2t1PrintRuns(c.fx.home as string).length, 'the pin is read and the recorded runs are read back, so no run respawns (W2-D53)').toBe(prints);
+  }, 300_000);
+  b23It.each(NAMES)('a version pin %s refuses out-refused by its own word on the re-pilot\'s next act, before any spawn', async (name) => {
+    const c = await made();
+    const out = copyOut(c);
+    const [, edit, detail] = EDITS(c).find(([n]) => n === name)!;
+    edit(out);
+    const before = (stubLog(c.fx.home as string) ?? []).length;
+    const r = await b23Step0b(c.fx, out);
+    b23Expect(r.refusal).toEqual({ word: 'out-refused', detail });
+    b23Expect((stubLog(c.fx.home as string) ?? []).length, 'no spawn, not even --version').toBe(before);
+  }, 300_000);
+
+  b23It('the first act measures --version once and pins it: a --version that prints nothing refuses version-unmeasured naming its code and signal, before any run, and pins nothing; CONTROL: a version pins it on a fresh --out', async () => {
+    const fx = b23RepilotNode();
+    const home = fx.home as string;
+    const was = w5b4Version(home);
+    b23SetVersion(home, '');
+    const rout = w5b4Out();
+    const r = await b23Step0b(fx, rout);
+    b23Expect(r.refusal).toEqual({ word: 'version-unmeasured', detail: '--version failed (code 0, signal null)' });
+    b23Expect([b2t1Versions(home), b2t1PrintRuns(home).length], 'one --version, no run').toEqual([1, 0]);
+    b23Expect(existsSync(join(rout, PIN)), 'nothing pinned').toBe(false);
+    b23SetVersion(home, was);
+    const rout2 = w5b4Out();
+    b23Expect((await b23Step0b(fx, rout2)).refusal, 'CONTROL').toBeNull();
+    b23Expect(w5b4Json(join(rout2, PIN)).claude_code_version, 'CONTROL: pinned').toBe(was);
+  }, 300_000);
+});
+
+b23Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 3 fix round 2: fidelity --section quiz refuses a frozen entry whose boundary uuid cannot name a run, input-invalid and never a TypeError out of fidelityRunName (review 998)', () => {
+  const run = async (edit: (e: W5b4R) => W5b4R) => {
+    const home = b2t1Home();
+    const fx = fr2Quiz(home, edit);
+    b2t1PlantAll(home, 'restricted');
+    b23PlantFidelity(home, 5);
+    const rout = w5b4Out();
+    const r = await b2t2Call(() => D4.fidelityCommand(b2t2Flags(['fidelity', '--section', 'quiz', '--out', rout, ...fx.rec()]), B2T2_ENV(home), b23FidDeps(fx.heads as W5b4R[])));
+    return { r, rout, home, fx };
+  };
+  b23It('CONTROL: a frozen list of lowercase UUID boundaries runs the five boundaries', async () => {
+    const c = await run((e) => e);
+    b23Expect([c.r.refusal, c.r.code], c.r.stderr).toEqual([null, 0]);
+    b23Expect(existsSync(join(c.rout, 'quiz', 'fidelity.json'))).toBe(true);
+  }, 300_000);
+  b23It.each([['an uppercase UUID', (u: string) => u.toUpperCase()], ['a path-shaped text', () => '../x'], ['a UUID with a newline', (u: string) => `${u}\n`]] as Array<[string, (u: string) => string]>)(
+    'a frozen entry whose boundary_uuid is %s is refused input-invalid before --out and any spawn', async (_what, spell) => {
+      const c = await run((e) => ({ ...e, boundary_uuid: spell(String(e.boundary_uuid)) }));
+      const bad = (c.fx.heads as W5b4R[]).find((h) => !(b2t1Lib.UUID_RE as RegExp).test(h.boundary_uuid as string))!.boundary_uuid as string;
+      b23Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: `frozen boundary_uuid ${JSON.stringify(bad)} is not a lowercase UUID` });
+      b23Expect(existsSync(c.rout), 'no --out is made').toBe(false);
+      b23Expect(stubLog(c.home), 'no spawn, not even --version').toBeNull();
+    }, 300_000);
+});
+
+b2t2Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 2 fix round 2: the TypeErrors of fidelity\'s pure helpers that no input reaches, each shown unreachable by the refusal or the contract that precedes it (by design; review 998)', () => {
+  b2t2It.each([['an uppercase UUID', (u: string) => u.toUpperCase()], ['a path-shaped text', () => '../x'], ['a UUID with a newline', (u: string) => `${u}\n`], ['a number', () => 7 as unknown as string]] as Array<[string, (u: string) => string]>)(
+    'fidelityRunName\'s uuid: on the pilot path a pilot-source boundary_uuid that is %s is refused input-invalid "pilot fidelity entry" (pilotSourceMismatchOf) before --out and any spawn; CONTROL: the lowercase UUIDs run', async (_what, spell) => {
+      const home = b2t2Home();
+      b2t2PlantPass(home);
+      const boundaries = [...B2T2_B];
+      const bad = fx2Spell(boundaries, spell);
+      const fx = b2t2Fidelity(home, { source: bad });
+      const r = await b2t2Call(() => B2.fidelityCommand(b2t2Flags(fx.argv), B2T2_ENV(home), b2t2Deps()));
+      b2t2Expect(r.refusal).toEqual({ word: 'input-invalid', detail: 'pilot fidelity entry' });
+      b2t2Expect(existsSync(fx.out), 'no --out').toBe(false);
+      b2t2Expect(stubLog(home), 'no spawn').toBeNull();
+      const home2 = b2t2Home();
+      b2t2PlantPass(home2);
+      const fx2 = b2t2Fidelity(home2);
+      const ok = await b2t2Call(() => B2.fidelityCommand(b2t2Flags(fx2.argv), B2T2_ENV(home2), b2t2Deps()));
+      b2t2Expect([ok.refusal, ok.code], `CONTROL: ${ok.stderr}`).toEqual([null, 0]);
+    }, 120_000);
+  const fx2Spell = (boundaries: string[], spell: (u: string) => string): B2t2R => {
+    const source = b2t2PilotSource({ boundaries });
+    source.fidelity = (source.fidelity as B2t2R[]).map((b, i) => (i === 0 ? { ...b, boundary_uuid: spell(b.boundary_uuid as string) } : b));
+    return source;
+  };
+
+  b2t2It('fidelityRunName\'s run and fidelityOriginalOf\'s src are handed only what their one caller builds: the jobs are FIDELITY_RUNS.map\'s, the src literal is {home, configDirs} and deps.original is asked once, with it', () => {
+    const uuid = w5b4Gen(7001);
+    for (const run of B2.FIDELITY_RUNS as string[]) b2t2Expect(B2.fidelityRunName(uuid, run)).toBe(`fidelity/${uuid}/${run}`);
+    const src = readFileSync(join(REPO, 'deploy', 'history-replay.mjs'), 'utf8');
+    b2t2Expect(src.includes('const jobs = FIDELITY_RUNS.map((run) => jobOf(head.boundary_uuid, run, made.stdins[run]));'), 'the jobs of a boundary').toBe(true);
+    b2t2Expect(src.includes('const src = { home, configDirs: rosterConfigDirs(readRoster(home).roster, home) };'), 'the src literal').toBe(true);
+    b2t2Expect(src.match(/deps\.original\(/g)?.length, 'one call').toBe(1);
+    b2t2Expect(src.includes('const original = deps.original(rs, id, src);'), 'with that src').toBe(true);
+    b2t2Expect(src.match(/fidelityOriginalOf\(/g)?.length, 'its definition and nothing else (the default dep names it without a call)').toBe(1);
+  });
+});
+
+// ── W2-5b2 fix round 2 (review 998), Part B: Tasks 4 and 5's report refusals pinned and the class closed ──
+// Every row below is red-first with its CONTROL, and each guard's or term's own mutant is recorded in the plan. A refusal that
+// names a driver word is the only thing a bad input may answer: a TypeError out of a handler is an INTERNAL exit, which
+// f4Refused and b2t5Report turn into the case's failure.
+describe('W2-5b2 Task 4 fix round 2: handcheck refuses a judge input that is not JSON, a judged file that is no object or of version 2, and a call without --sheet, each by its own refusal (review 998)', () => {
+  it('a sampled item\'s judge input that is not JSON refuses input-invalid "not-json", naming its node and path, and not the shape word a parse failure would fall to; CONTROL: the unedited input reads', () => {
+    const fin = b2t4Fin({ share: 1 });
+    const x = b2t4Both('ccrc-w2-5b2-t4-fr2-notjson-', fin);
+    const i0 = (x.a.doc.items as Array<Record<string, any>>)[0]!.id as string;
+    expect(B2T4.handcheckSheetOf(fin, x.plan).sheetText, 'CONTROL: the unedited input reads').toContain(`\n== ${i0} ==\n`);
+    writeFileSync(join(x.a.dir, 'judge', `${i0}.input.json`), 'not json\n');
+    expect(b2t4Refusal(() => B2T4.handcheckSheetOf(fin, x.plan))).toEqual({ word: 'input-invalid', detail: `judged ${B2T4_A} judge/${i0}.input.json not-json` });
+  });
+
+  it.each([['null', 'null\n'], ['a list', '[]\n']])('a judged file holding %s refuses input-invalid "is not a judged file", naming its position, and never a TypeError; CONTROL: both nodes\' files as written give a plan', (_what, text) => {
+    const fin = b2t4Fin();
+    const root = mkTmp('ccrc-w2-5b2-t4-fr2-judged-body-');
+    const a = b2t4Write(root, B2T4_A, { fin });
+    const b = b2t4Write(root, B2T4_B, { fin });
+    expect(B2T4.loadHandcheckPlan(b2t4Flags([a, b]), fin).items.length, 'CONTROL: the files as written give a plan').toBeGreaterThan(0);
+    writeFileSync(a.judged, text);
+    expect(b2t4Refusal(() => B2T4.loadHandcheckPlan(b2t4Flags([{ ...a, sha: sha256Hex(text) }, b]), fin))).toEqual({ word: 'input-invalid', detail: 'judged 1 is not a judged file' });
+  });
+
+  it('a judged file of version 2 refuses input-invalid "is not a judged file" before any other term of it is read; CONTROL: version 1 as written is read', () => {
+    const fin = b2t4Fin();
+    const root = mkTmp('ccrc-w2-5b2-t4-fr2-judged-v2-');
+    const a = b2t4Write(root, B2T4_A, { fin });
+    const b = b2t4Write(root, B2T4_B, { fin });
+    expect(B2T4.loadHandcheckPlan(b2t4Flags([a, b]), fin).items.length, 'CONTROL: version 1 as written').toBeGreaterThan(0);
+    const v2 = b2t4Write(root, B2T4_A, { fin, over: { v: 2 } });
+    expect(b2t4Refusal(() => B2T4.loadHandcheckPlan(b2t4Flags([v2, b]), fin))).toEqual({ word: 'input-invalid', detail: 'judged 1 is not a judged file' });
+  });
+
+  it('handcheck without --sheet refuses args-invalid "handcheck wants --sheet" before --out, and with it that refusal is not the answer (CONTROL)', () => {
+    const home = mkTmp('ccrc-w2-5b2-t4-fr2-sheet-');
+    const out = join(home, 'report-out');
+    const said = (argv: string[]): [unknown, string] => { const r = runDriver(home, argv); return [r.code, r.stderr]; };
+    expect(said(['handcheck', '--out', out])).toEqual([2, refusalLine('args-invalid', 'handcheck wants --sheet')]);
+    const control = said(['handcheck', '--sheet', '--out', out]);
+    expect(control[1], 'CONTROL: with --sheet the grammar goes on to the next refusal').not.toBe(refusalLine('args-invalid', 'handcheck wants --sheet'));
+    expect(existsSync(out), 'no --out').toBe(false);
+  });
+});
+
+describe('W2-5b2 Task 4 fix round 2: the TypeErrors of the hand-check\'s pure helpers that no input reaches, each shown unreachable by the refusal or the contract that precedes it (review 998)', () => {
+  const src = readFileSync(join(REPO, 'deploy', 'history-replay.mjs'), 'utf8');
+  const callsOf = (name: string): number => (src.match(new RegExp(`${name}\\(`, 'g')) ?? []).length;
+
+  b2t5It('handcheckSheetText\'s rubric TypeError: a part 2 whose rubric_id is off RUBRIC_IDS is refused record-invalid by loadFinalRecord, which handcheck and report both call before any sheet text is made, and the one caller passes that field', () => {
+    const w = b2t5World();
+    const loaded = (argv: string[]): unknown => {
+      const { flags } = B2T5.parseArgs(argv) as { flags: B2t5R };
+      return B2T5.loadFinalRecord(flags, { nowMs: B2T5_NOW, root: W5B4_REPO });
+    };
+    b2t5Expect((loaded(w.argv()) as B2t5R).record.rubric_id, 'CONTROL: the record as written loads, with a rubric of RUBRIC_IDS').toSatisfy((id: string) => (b2t5Gate.RUBRIC_IDS as readonly string[]).includes(id));
+    const other = b2t5SaveText(`${b2t5Lib.canonicalJson({ ...w.final, rubric_id: 'v2' }) as string}\n`, 'record-v2.json');
+    let caught: unknown = null;
+    try { loaded(w.argv({ record: w5b4Inp('record', other as unknown as W5b4Saved) })); } catch (e) { caught = e; }
+    b2t5Expect(caught instanceof b2t5Drv.DriverRefusal, `a DriverRefusal, not ${String(caught)}`).toBe(true);
+    b2t5Expect((caught as B2t5R).word).toBe('record-invalid');
+    b2t5Expect((caught as B2t5R).detail).toContain('rubric_id');
+    b2t5Expect(callsOf('handcheckSheetText'), 'its definition and one call').toBe(2);
+    b2t5Expect(src.includes('rubricId: fin.record.rubric_id'), 'the caller passes the loaded record\'s field').toBe(true);
+  });
+
+  b2t5It('parseHandcheckLabels\' text TypeError and handcheckResultOf\'s Map TypeError: each has one caller, which passes a decoded string and the Map parseHandcheckLabels answers; a label file that does not decode is refused before the parse', () => {
+    b2t5Expect(callsOf('parseHandcheckLabels'), 'its definition and the one call in readHandcheckLabels').toBe(2);
+    b2t5Expect(src.includes('return parseHandcheckLabels(text, plan);'), 'it parses the strict decoder\'s string').toBe(true);
+    b2t5Expect(callsOf('readHandcheckLabels'), 'its definition and the one call in reportCommand').toBe(2);
+    b2t5Expect(callsOf('handcheckResultOf'), 'its definition and the one call in reportCommand').toBe(2);
+    b2t5Expect(src.includes('const operator = readHandcheckLabels(flags.labels, flags[\'labels-sha256\'], plan);'), 'the operator labels are readHandcheckLabels\' answer').toBe(true);
+    b2t5Expect(src.includes('const hc = handcheckResultOf(plan, operator);'), 'handed to handcheckResultOf unchanged').toBe(true);
+    const { plan } = b2t4Ready();
+    b2t5Expect(B2T4.parseHandcheckLabels(`${b2t4Agree(plan).join('\n')}\n`, plan), 'a Map').toBeInstanceOf(Map);
+  });
+});
+
+const fr2First = (w: B2t5R, s: string = B2T5_S1): string => w.nodes[s].mine[0].qid as string;
+const fr2Rel = (w: B2t5R, arm: string, s: string = B2T5_S1): string => `quiz/answers/${fr2First(w, s)}.${arm}.json`;
+
+b2t5Describe('W2-5b2 Task 5 fix round 2: nodeAnswersOf refuses an answer record that is not a settled one, term by term (review 998 F1)', () => {
+  const s1 = B2T5_S1;
+  b2t5It('CONTROL: the unedited world reports, and so does one whose node 2 is wholly run-failed (a settled record may hold run null and no answer)', async () => {
+    b2t5Expect((await b2t5Report(b2t5World().argv())).refusal).toBeNull();
+    const failed = b2t5World({ runFailed: (e) => e.store_id === B2T5_S2 });
+    const r = await b2t5Report(failed.argv());
+    b2t5Expect(r.refusal, r.stderr).toBeNull();
+  });
+
+  b2t5It.each([
+    ['stamps that are null', (r: B2t5R) => ({ ...r, stamps: null })],
+    ['stamps that are a word, not a list', (r: B2t5R) => ({ ...r, stamps: 'code-changed' })],
+    ['an answer field that is null', (r: B2t5R) => ({ ...r, answer_field: null })],
+    ['an answer field that is a word', (r: B2t5R) => ({ ...r, answer_field: 'value' })],
+    ['an answer state of not-run (a state no answer field holds)', (r: B2t5R) => ({ ...r, answer_field: { ...r.answer_field, state: 'not-run' } })],
+    ['an answer state outside ANSWER_STATES', (r: B2t5R) => ({ ...r, answer_field: { ...r.answer_field, state: 'maybe' } })],
+    ['a correct flag that is null', (r: B2t5R) => ({ ...r, correct: null })],
+    ['a correct flag that is a word', (r: B2t5R) => ({ ...r, correct: 'yes' })],
+    ['an uptake that is null', (r: B2t5R) => ({ ...r, uptake: null })],
+    ['an uptake that is a word', (r: B2t5R) => ({ ...r, uptake: 'none' })],
+  ])('an answer record with %s refuses input-invalid "is not a settled answer record", naming the file, before --out and never a TypeError', async (_what, edit) => {
+    const w = b2t5World();
+    f4EditRecord(w, s1, B2T5_C, edit);
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `arms-summary ${s1}: ${fr2Rel(w, B2T5_C)} is not a settled answer record` });
+  });
+});
+
+b2t5Describe('W2-5b2 Task 5 fix round 2: nodeAnswersOf refuses a question that is not settled in its answer records, term by term (W2-D80; review 998 F1)', () => {
+  const s1 = B2T5_S1;
+  const detail = (w: B2t5R): string => `arms-summary ${s1}: question ${fr2First(w)} is not settled in its answer records (W2-D80)`;
+  b2t5It('CONTROL: the unedited world, and one whose first question is run-failed in both arms, report', async () => {
+    b2t5Expect((await b2t5Report(b2t5World().argv())).refusal).toBeNull();
+    const failed = b2t5World({ runFailed: (e) => e.store_id === B2T5_S2 });
+    const r = await b2t5Report(failed.argv());
+    b2t5Expect(r.refusal, r.stderr).toBeNull();
+  });
+
+  b2t5It('a question whose two records name different question states refuses input-invalid, before the summary is re-derived', async () => {
+    const w = b2t5World();
+    f4EditRecord(w, s1, B2T5_C, (r) => ({ ...r, question_state: 'run-failed' }));
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: detail(w) });
+  });
+
+  b2t5It('a question answered in both records whose control arm_state is run-failed refuses input-invalid', async () => {
+    const w = b2t5World();
+    f4EditRecord(w, s1, B2T5_C, (r) => ({ ...r, arm_state: 'run-failed' }));
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: detail(w) });
+  });
+
+  b2t5It('a question answered in both records whose control record holds run null refuses input-invalid', async () => {
+    const w = b2t5World();
+    f4EditRecord(w, s1, B2T5_C, (r) => ({ ...r, run: null }));
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: detail(w) });
+  });
+});
+
+b2t5Describe('W2-5b2 Task 5 fix round 2: nodeAnswersOf turns the TypeErrors of payloadChangedOf and armsSummaryOf into input-invalid, and an arms summary is unsettled by any one of its four terms (review 998)', () => {
+  const s1 = B2T5_S1;
+  b2t5It('CONTROL: a world whose excluded owed arm holds ARM_PAYLOAD_CHANGED on a run-failed question reports, and the verdict names the question', async () => {
+    const w = b2t5World({ payloadChanged: (e) => e.store_id === B2T5_S2 });
+    const r = await b2t5Report(w.argv());
+    b2t5Expect(r.refusal, r.stderr).toBeNull();
+    b2t5Expect(b2t5Verdict(w.out).gate.report_only.payload_changed.count).toBe(1);
+  });
+
+  b2t5It('an answer record carrying ARM_PAYLOAD_CHANGED on a question whose state is answered refuses input-invalid, carrying payloadChangedOf\'s message (never a TypeError out of report)', async () => {
+    const w = b2t5World();
+    f4EditRecord(w, s1, B2T5_C, (r) => ({ ...r, reason: B2T5.ARM_PAYLOAD_CHANGED }));
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid',
+      detail: `arms-summary ${s1} payloadChangedOf: ${fr2First(w)} has ${B2T5.ARM_PAYLOAD_CHANGED as string} but question_state "answered"` });
+  });
+
+  b2t5It('an arms summary whose stamps are no list, re-signed, refuses input-invalid carrying armsSummaryOf\'s message, and not the byte comparison\'s (never a TypeError out of report)', async () => {
+    const w = b2t5World();
+    b2t5Edit(w, s1, 'summary', (v) => ({ ...v, stamps: 5 }));
+    const r = await f4Refused(w);
+    b2t5Expect(r.word).toBe('input-invalid');
+    b2t5Expect(r.detail, 'armsSummaryOf\'s TypeError, not the later comparison').toMatch(new RegExp(`^arms-summary ${s1} [^\\n]* is not iterable$`));
+  });
+
+  b2t5It.each([
+    ['a stop recorded', (v: B2t5R) => ({ ...v, stop: { word: 'budget-exhausted', kind: 'stop', detail: 'x' } })],
+    ['counts that are null', (v: B2t5R) => ({ ...v, counts: null })],
+    ['a question still owing a re-run', (v: B2t5R) => ({ ...v, counts: { ...v.counts, rerun_owed: 1 } })],
+  ])('an arms summary with %s refuses input-invalid "arms-unsettled" before any answer record is read, and never a TypeError', async (_what, edit) => {
+    const w = b2t5World();
+    b2t5Edit(w, s1, 'summary', edit);
+    const r = await f4Refused(w);
+    b2t5Expect(r.word).toBe('input-invalid');
+    b2t5Expect(r.detail).toBe(`arms-summary ${s1} arms-unsettled: every question is answered or run-failed before the report (W2-D80)`);
+  });
+});
+
+b2t5Describe('W2-5b2 Task 5 fix round 2: verifyAbOf refuses a family entry that is no object, that is off the assignment or that holds a state off AB_STATES, input-invalid and never a TypeError (review 998 F2)', () => {
+  const s1 = B2T5_S1;
+  const listed = (w: B2t5R): B2t5R[] => w.nodes[s1].verifyAb.value.families as B2t5R[];
+  b2t5It('CONTROL: the node lists its two assigned families, and the unedited world reports', async () => {
+    const w = b2t5World();
+    b2t5Expect(listed(w).length).toBe(2);
+    b2t5Expect((await b2t5Report(w.argv())).refusal).toBeNull();
+  });
+
+  b2t5It.each([['null', null], ['a word', 'live-t1'], ['a list', []]])('a family entry that is %s refuses input-invalid "lists null off the record\'s assignment" before --out', async (_what, bad) => {
+    const w = b2t5World();
+    b2t5Edit(w, s1, 'verifyAb', (v) => ({ ...v, families: [bad, ...v.families.slice(1)] }));
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `verify-ab ${s1} lists null off the record's assignment` });
+  });
+
+  b2t5It('a family entry that is no assigned family of this store refuses input-invalid naming its id before --out', async () => {
+    const w = b2t5World();
+    b2t5Edit(w, s1, 'verifyAb', (v) => ({ ...v, families: [{ ...v.families[0], ccrc_id: 'live-not-assigned' }, ...v.families.slice(1)] }));
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `verify-ab ${s1} lists "live-not-assigned" off the record's assignment` });
+  });
+
+  b2t5It('an assigned family listed with a state off AB_STATES refuses input-invalid naming its id before --out', async () => {
+    const w = b2t5World();
+    const id = listed(w)[0]!.ccrc_id as string;
+    b2t5Edit(w, s1, 'verifyAb', (v) => ({ ...v, families: [{ ...v.families[0], state: 'maybe' }, ...v.families.slice(1)] }));
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `verify-ab ${s1} lists ${JSON.stringify(id)} off the record's assignment` });
+  });
+});
+
+b2t5Describe('W2-5b2 Task 5 fix round 2: judgedOf refuses a judged file of another rubric, and one that misses a non-correct answer (review 998)', () => {
+  const s1 = B2T5_S1;
+  b2t5It('CONTROL: the unedited world reports', async () => {
+    b2t5Expect((await b2t5Report(b2t5World().argv())).refusal).toBeNull();
+  });
+
+  b2t5It.each([
+    ['rubric_id', (v: B2t5R) => ({ ...v, rubric_id: 'v2' })],
+    ['rubric_sha256', (v: B2t5R) => ({ ...v, rubric_sha256: b2t5Hex('another rubric') })],
+  ])('a judged file naming another %s than the record\'s refuses input-invalid "judge-mismatch" before --out', async (_term, edit) => {
+    const w = b2t5World();
+    b2t5Edit(w, s1, 'judged', edit);
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `judged ${s1} judge-mismatch: another judge model or rubric than the record's` });
+  });
+
+  b2t5It('a judged file that lacks one non-correct answer of its node refuses input-invalid "1 missing, 0 extra" before --out, never a TypeError out of the gate inputs', async () => {
+    const w = b2t5World();
+    b2t5Expect(w.nodes[s1].judged.value.items.length, 'CONTROL: the node\'s judged file holds items').toBeGreaterThan(0);
+    b2t5Edit(w, s1, 'judged', (v) => ({ ...v, items: v.items.slice(1) }));
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `judged ${s1} does not cover exactly this node's non-correct answers: 1 missing, 0 extra` });
+  });
+});
+
+b2t5Describe('W2-5b2 Task 5 fix round 2: liveOf turns the measure reports\' TypeErrors and malformed presence rows into input-invalid (review 998 F1)', () => {
+  const s1 = B2T5_S1;
+  const editRows = (w: B2t5R, rows: unknown): void => b2t5Edit(w, s1, 'measure', (m) => ({ ...m, w2: { ...m.w2, recall_off: rows } }));
+  b2t5It('CONTROL: the unedited world, and one whose presence record holds one well-formed row, report', async () => {
+    b2t5Expect((await b2t5Report(b2t5World().argv())).refusal).toBeNull();
+    const w = b2t5World();
+    editRows(w, [[`${b2t5Lib.RECALL_OFF_META as string}seen_ms`, '1']]);
+    const r = await b2t5Report(w.argv());
+    b2t5Expect(r.refusal, r.stderr).toBeNull();
+  });
+
+  b2t5It.each([['null', null], ['a list', []]])('a measure report whose w2 is %s refuses input-invalid "w2.recall_off absent" before the gate reads it', async (_what, w2) => {
+    const w = b2t5World();
+    b2t5Edit(w, s1, 'measure', (m) => ({ ...m, w2 }));
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid',
+      detail: `measure ${s1} w2.recall_off absent: without the presence rows no family could read as changed (W2-D23)` });
+  });
+
+  b2t5It('a measure report whose w2 families are no list refuses input-invalid carrying assembleReports\' message (never a TypeError out of report)', async () => {
+    const w = b2t5World();
+    b2t5Edit(w, s1, 'measure', (m) => ({ ...m, w2: { ...m.w2, families: null } }));
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: 'measure assembleReports: report 0: w2 is no object holding a families array' });
+  });
+
+  b2t5It.each([
+    ['a row of one element', ['k'], '["k"]'],
+    ['a row of three elements', ['k', 'v', 'w'], '["k","v","w"]'],
+    ['a row that is a two-character word, not a pair', 'ab', '"ab"'],
+  ] as Array<[string, unknown, string]>)('a presence record holding %s refuses input-invalid "is not [k, v]" before the rows are read', async (_what, row, shown) => {
+    const w = b2t5World();
+    editRows(w, [row]);
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: `measure ${s1} recall_off row ${shown} is not [k, v]` });
+  });
+
+  b2t5It('a change row whose key is off W2-D30\'s grammar refuses input-invalid carrying the gate\'s message (never an Error out of report)', async () => {
+    const w = b2t5World();
+    editRows(w, [[`${b2t5Lib.RECALL_OFF_META as string}change:x`, '{}']]);
+    b2t5Expect(await f4Refused(w)).toEqual({ word: 'input-invalid', detail: 'measure recall-off meta row "recall_off:change:x": its ts_ms is not a decimal integer' });
+  });
+});
+
+b2t5Describe('W2-5b2 Task 5 fix round 2: the TypeErrors and the refusal of report\'s gate inputs that no input reaches, each shown unreachable by the refusal or the contract that precedes it (review 998)', () => {
+  const s1 = B2T5_S1;
+  b2t5It('liveUptakeOf\'s and firstCallOf\'s arm TypeErrors: a family\'s arm is the record\'s assignment arm, and a part 2 whose assignment names another arm is refused record-invalid by loadFinalRecord before any input is read', async () => {
+    const w = b2t5World();
+    const r = await b2t5Report(w.argv());
+    b2t5Expect(r.refusal, r.stderr).toBeNull();
+    const arms = (b2t5Verdict(w.out) as B2t5R).families.live.map((f: B2t5R) => f.arm as string);
+    b2t5Expect(arms.length, 'CONTROL: the verdict lists live families').toBeGreaterThan(0);
+    for (const arm of arms) b2t5Expect(B2T5_ARMS, `a live family\'s arm ${arm}`).toContain(arm);
+    const tampered = structuredClone(w.final);
+    tampered.assignment[0].arm = 'other';
+    const other = b2t5SaveText(`${b2t5Lib.canonicalJson(tampered) as string}\n`, 'record-arm-other.json');
+    const out2 = join(b2t5MkTmp('ccrc-w5b2-t5-out-'), 'out');
+    const bad = w.argv({ record: w5b4Inp('record', other as unknown as W5b4Saved) }, [], out2);
+    const refused = await b2t5Report(bad);
+    b2t5Expect(refused.refusal?.word).toBe('record-invalid');
+    b2t5Expect(refused.refusal?.detail).toContain('assignment[0].arm assignment-mismatch');
+    b2t5Expect(existsSync(out2), 'no --out is made').toBe(false);
+  });
+
+  b2t5It('quizUptakeOf\'s reading TypeError: report\'s default reading is quizUptakeReadingOf, which answers one of QUIZ_UPTAKE_READINGS for any pilot result, a forged one included', () => {
+    b2t5Expect(B2T5.REPORT_DEPS.uptakeReading).toBe(B2T5.quizUptakeReadingOf);
+    const src = readFileSync(join(REPO, 'deploy', 'history-replay.mjs'), 'utf8');
+    b2t5Expect(src.includes("HANDLERS.set('report', (flags, env) => reportCommand(flags, env));"), 'no flag or handler argument sets the reading').toBe(true);
+    const uptake = (calls: number, errored: number, quiz_uptake: string): B2t5R => ({ usage_extrapolation: { uptake: { reading: 'is-error', quiz_uptake, control_calls: calls, control_errored: errored } } });
+    for (const v of [null, undefined, [], 'x', 7, {}, { usage_extrapolation: null }, { usage_extrapolation: { uptake: null } }, uptake(0, 3, 'aggregate-only'), uptake(0, 3, 'bogus'), uptake(2, 0, 'measured')] as unknown[]) {
+      b2t5Expect(B2T5.QUIZ_UPTAKE_READINGS, JSON.stringify(v) ?? 'undefined').toContain(B2T5.quizUptakeReadingOf(v));
+    }
+  });
+
+  b2t5It('gateInputsOf\'s three TypeErrors: report refuses first, input-invalid, a question with no answer record for an arm, a judged file that misses a non-correct answer, and a node\'s verify --section ab output that misses an assigned family', async () => {
+    const a = b2t5World();
+    rmSync(b2t5RecordOf(a, s1, B2T5_C));
+    b2t5Expect(await f4Refused(a)).toEqual({ word: 'input-invalid', detail: `arms-summary ${s1}: question ${fr2First(a)} has no answer record for arm ${B2T5_C}` });
+    const b = b2t5World();
+    b2t5Edit(b, s1, 'judged', (v) => ({ ...v, items: v.items.slice(1) }));
+    const rb = await f4Refused(b);
+    b2t5Expect([rb.word, rb.detail.includes('1 missing, 0 extra')]).toEqual(['input-invalid', true]);
+    const c = b2t5World();
+    b2t5Edit(c, s1, 'verifyAb', (v) => ({ ...v, families: v.families.slice(1) }));
+    b2t5Expect(await f4Refused(c)).toEqual({ word: 'input-invalid', detail: `verify-ab ${s1} does not list 1 assigned family(ies)` });
+  });
+
+  b2t5It('droppedOf\'s state TypeError: a verify state off AB_STATES is refused input-invalid by verifyAbOf, the only source of report\'s states, so droppedOf never sees one', async () => {
+    b2t5Expect(() => B2T5.droppedOf([], new Map([['k', 'maybe']])), 'the pure TypeError exists').toThrow(TypeError);
+    const w = b2t5World();
+    b2t5Edit(w, s1, 'verifyAb', (v) => ({ ...v, families: v.families.map((f: B2t5R, i: number) => (i === 0 ? { ...f, state: 'maybe' } : f)) }));
+    const r = await f4Refused(w);
+    b2t5Expect([r.word, r.detail.startsWith(`verify-ab ${s1} lists `)]).toEqual(['input-invalid', true]);
+    const src = readFileSync(join(REPO, 'deploy', 'history-replay.mjs'), 'utf8');
+    b2t5Expect((src.match(/droppedOf\(/g) ?? []).length, 'its definition and the one call in reportCommand').toBe(2);
+    b2t5Expect(src.includes('const dropped = droppedOf(live.changed.changed, abStates);'), 'fed the states verifyAbOf answered').toBe(true);
+  });
+
+  b2t5It('reportCommand\'s gate refusal: decideGate answers ok false only for an answer state of not-run, which no answer field holds (ANSWER_STATES), so a record naming it is refused "not a settled answer record" first and report never writes question-not-run', async () => {
+    const gateSrc = readFileSync(join(REPO, 'deploy', 'history-gate.mjs'), 'utf8');
+    const from = gateSrc.indexOf('export function decideGate(inputs) {');
+    const decide = gateSrc.slice(from, gateSrc.indexOf('\n}\n', from));
+    b2t5Expect(decide.match(/ok: false/g)?.length, 'decideGate has one ok: false').toBe(1);
+    b2t5Expect(decide.includes("return { ok: false, reason: 'question-not-run'"), 'and it is question-not-run').toBe(true);
+    b2t5Expect([...(b2t5Gate.ANSWER_STATES as readonly string[])], 'no answer state is not-run').not.toContain('not-run');
+    const w = b2t5World();
+    f4EditRecord(w, s1, B2T5_C, (r) => ({ ...r, answer_field: { ...r.answer_field, state: 'not-run' } }));
+    const r = await f4Refused(w);
+    b2t5Expect(r.word).toBe('input-invalid');
+    b2t5Expect(r.detail).toBe(`arms-summary ${s1}: ${fr2Rel(w, B2T5_C)} is not a settled answer record`);
+    b2t5Expect(r.detail, 'not the gate\'s word').not.toContain('question-not-run');
+  });
+});
+
+// ── W2-5b2 fix round 2, Part D: the guards the five handlers do not reach (open, arms) ───────────────────────────────────
+b23Describe('W2-5b2 Task 3 fix round 2: open names exactly one mode, and armRunName refuses a move that is no amendment index, each by its own word (closing the class, review 998)', () => {
+  b23It('open with no mode, with two modes and with --template and --draft refuses args-invalid "open wants exactly one of …" before any input is read; CONTROL: --template alone prints the template', async () => {
+    const WANT = { word: 'args-invalid', detail: 'open wants exactly one of --draft, --finalize, --template and --amend' };
+    for (const argv of [['open'], ['open', '--amend', '--finalize'], ['open', '--draft', '--template'], ['open', '--draft', '--finalize', '--template', '--amend']]) {
+      const r = await b23Open(argv);
+      b23Expect(r.refusal, argv.join(' ')).toEqual(WANT);
+      b23Expect(r.stdout, 'prints nothing').toBe('');
+    }
+    const ok = await b23Open(['open', '--template']);
+    b23Expect([ok.refusal, ok.code], 'CONTROL').toEqual([null, 0]);
+    b23Expect(ok.stdout.length, 'CONTROL: the template is printed').toBeGreaterThan(0);
+  });
+
+  b23It.each([[-1], [1.5], ['0'], [Number.NaN], [Number.MAX_SAFE_INTEGER + 1]] as Array<[unknown]>)(
+    'armRunName throws a TypeError naming the move when it is %s', (bad) => {
+      const caught = (() => { try { D4.armRunName('quiz', 'q', W5B4_CONTROL, 1, bad); return null; } catch (e) { return e; } })();
+      b23Expect(caught, String(bad)).toBeInstanceOf(TypeError);
+      b23Expect((caught as TypeError).message).toBe(`armRunName: move ${String(bad)} is not an amendment index`);
+    });
+  b23It('CONTROL: armRunName\'s move undefined takes the default null and names the W2-5b1 run, and 0 and 12 put .m<i> before the attempt', () => {
+    b23Expect(D4.armRunName('quiz', 'q', W5B4_CONTROL, 1, undefined)).toBe(`quiz/arms/q/${W5B4_CONTROL}.a1`);
+    b23Expect(D4.armRunName('quiz', 'q', W5B4_CONTROL, 1, null)).toBe(`quiz/arms/q/${W5B4_CONTROL}.a1`);
+    b23Expect(D4.armRunName('quiz', 'q', W5B4_CONTROL, 1, 0)).toBe(`quiz/arms/q/${W5B4_CONTROL}.m0.a1`);
+    b23Expect(D4.armRunName('quiz', 'q', W5B4_CONTROL, 2, 12)).toBe(`quiz/arms/q/${W5B4_CONTROL}.m12.a2`);
+  });
+});
+
+b23Describe('W2-5b2 Task 3 fix round 2: readArmManifests refuses a manifest directory or manifest that cannot be read, by the word of each cause, out-refused and never a TypeError (closing the class, review 998)', () => {
+  const REL = 'quiz/arms/batches';
+  const outWith = (): string => {
+    const out = join(mkTmp('ccrc-w2-5b2-fr2d-arm-'), 'out');
+    mkdirSync(join(out, 'quiz', 'arms'), { recursive: true });
+    return out;
+  };
+  const manifest = (over: Record<string, unknown> = {}): string => `${JSON.stringify({ kind: D4.ARM_BATCH_KIND, v: 1, section: 'quiz', batch: 1, claude_code_version: 'v-a', runs: [{ name: 'quiz/arms/q/c.a1' }], ...over })}\n`;
+  const read = (out: string): unknown => b23Refused(() => D4.readArmManifests(out, 'quiz'));
+  const withBatches = (): { out: string; dir: string; file: string } => {
+    const out = outWith();
+    const dir = join(out, REL);
+    mkdirSync(dir);
+    return { out, dir, file: join(dir, '0001.json') };
+  };
+  const asRoot = process.getuid?.() === 0;
+
+  b23It('CONTROL: no batches directory reads as no manifests, and an intact manifest reads as itself, in batch order, a name that is not NNNN.json left out', () => {
+    const { out, dir, file } = withBatches();
+    b23Expect(D4.readArmManifests(outWith(), 'quiz')).toEqual([]);
+    writeFileSync(file, manifest());
+    writeFileSync(join(dir, '0002.json'), manifest({ batch: 2 }));
+    writeFileSync(join(dir, 'notes.json'), 'not json');
+    b23Expect((D4.readArmManifests(out, 'quiz') as W5b4R[]).map((m) => m.batch)).toEqual([1, 2]);
+  });
+  b23It('batches is a file or a link to a directory (a link is never followed): "<rel> is not a directory"', () => {
+    const a = outWith();
+    writeFileSync(join(a, REL), 'x');
+    b23Expect(read(a), 'a file').toEqual(['out-refused', `${REL} is not a directory`]);
+    const b = outWith();
+    mkdirSync(join(b, 'elsewhere'));
+    symlinkSync(join(b, 'elsewhere'), join(b, REL));
+    b23Expect(read(b), 'a link to a directory is not followed').toEqual(['out-refused', `${REL} is not a directory`]);
+  });
+  b23It.skipIf(asRoot)('batches is a directory nobody may list: "<rel> unreadable EACCES" (skipped as root, which lists it anyway)', () => {
+    const { out, dir } = withBatches();
+    chmodSync(dir, 0o000);
+    try {
+      b23Expect(read(out)).toEqual(['out-refused', `${REL} unreadable EACCES`]);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+  });
+  b23It('a manifest that is a directory, a link or a file past the cap refuses by its read\'s word: not-regular, not-regular, over-cap', () => {
+    const d = withBatches();
+    mkdirSync(d.file);
+    b23Expect(read(d.out), 'a directory').toEqual(['out-refused', `${REL}/0001.json not-regular`]);
+    const l = withBatches();
+    writeFileSync(join(l.dir, 'real'), manifest());
+    symlinkSync(join(l.dir, 'real'), l.file);
+    b23Expect(read(l.out), 'a link').toEqual(['out-refused', `${REL}/0001.json not-regular`]);
+    const c = withBatches();
+    writeFileSync(c.file, '');
+    t2Fs.truncateSync(c.file, 16 * 1024 * 1024 + 1);
+    b23Expect(read(c.out), 'a sparse file one byte past 16 MiB').toEqual(['out-refused', `${REL}/0001.json over-cap`]);
+  });
+  b23It.skipIf(asRoot)('a manifest nobody may read refuses by its errno: "<rel>/<n> EACCES" (skipped as root)', () => {
+    const { out, file } = withBatches();
+    writeFileSync(file, manifest());
+    chmodSync(file, 0o000);
+    try {
+      b23Expect(read(out)).toEqual(['out-refused', `${REL}/0001.json EACCES`]);
+    } finally {
+      chmodSync(file, 0o600);
+    }
+  });
+  b23It.each([['empty bytes', ''], ['text', 'x'], ['half a document', '{"kind":'], ['a trailing comma', '{"a":1,}']] as Array<[string, string]>)(
+    'a manifest of %s refuses "<rel>/<n> is not JSON"', (_what, bytes) => {
+      const { out, file } = withBatches();
+      writeFileSync(file, bytes);
+      b23Expect(read(out)).toEqual(['out-refused', `${REL}/0001.json is not JSON`]);
+    });
+  b23It.each([
+    ['null', 'null'], ['a list', '[]'], ['a word', '"x"'],
+    ['another kind', manifest({ kind: 'ccrc-history-w2-other' })],
+    ['another section', manifest({ section: 'pilot' })],
+    ['a batch number its name does not give', manifest({ batch: 2 })],
+    ['a batch number that is no number', manifest({ batch: 'one' })],
+    ['no version', manifest({ claude_code_version: undefined })],
+    ['an empty version', manifest({ claude_code_version: '' })],
+    ['a version that is no text', manifest({ claude_code_version: 7 })],
+    ['runs that are no list', manifest({ runs: 'q' })],
+    ['a run that is no object', manifest({ runs: ['q'] })],
+    ['a run with no name', manifest({ runs: [{}] })],
+    ['a run whose name is no text', manifest({ runs: [{ name: 7 }] })],
+  ] as Array<[string, string]>)('a manifest that is %s refuses "<rel>/<n> is not a batch manifest", each term alone; the batch number is read from the file name', (_what, bytes) => {
+    const { out, file } = withBatches();
+    writeFileSync(file, bytes);
+    b23Expect(read(out)).toEqual(['out-refused', `${REL}/0001.json is not a batch manifest`]);
+  });
+  b23It('the first bad manifest in batch order refuses, naming its own file', () => {
+    const { out, dir, file } = withBatches();
+    writeFileSync(file, manifest());
+    writeFileSync(join(dir, '0002.json'), 'x');
+    b23Expect(read(out)).toEqual(['out-refused', `${REL}/0002.json is not JSON`]);
+  });
+});
+
+b2t1Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 1 fix round 2: step0b --section quiz refuses a first question whose boundary uuid is no lowercase UUID quiz-unanswerable in the re-check, before --out and any spawn, so the spawn environment\'s TypeError is never reached (closing the class, review 998)', () => {
+  const run = async (spell: (u: string) => string, deps: B2t1R = {}) => {
+    const home = b2t1Home();
+    const fx = fr2Quiz(home, (e) => ({ ...e, boundary_uuid: spell(String(e.boundary_uuid)) }), true);
+    b2t1PlantAll(home, 'restricted');
+    const rout = w5b4Out();
+    const r = await b23Step0b({ ...fx, home }, rout, deps);
+    return { r, rout, home, fx };
+  };
+  const SPELLINGS = [['an uppercase UUID', (u: string) => u.toUpperCase()], ['a path-shaped text', () => '../x'], ['a UUID with a newline', (u: string) => `${u}\n`]] as Array<[string, (u: string) => string]>;
+  b2t1It('CONTROL: lowercase UUID boundaries run step 0b --section quiz with the fake re-check, and the real re-check, which finds this fixture store without the boundary, refuses by another clause: boundary-absent', async () => {
+    const ok = await run((u) => u);
+    b2t1Expect([ok.r.refusal, ok.r.code], ok.r.stderr).toEqual([null, 0]);
+    const real = await run((u) => u, { recheck: D21.recheckBatch });
+    b2t1Expect(real.r.refusal).toEqual({ word: 'quiz-unanswerable', detail: `${((real.fx.heads as B2t1R[])[0]!).qid as string} clause (a) boundary-absent` });
+  }, 300_000);
+  b2t1It.each(SPELLINGS)('a boundary_uuid that is %s: step0b as main runs it (the real re-check) refuses quiz-unanswerable "<qid> clause (a) boundary-uuid-invalid" before --out and any spawn', async (_what, spell) => {
+    const c = await run(spell, { recheck: D21.recheckBatch });
+    const first = (c.fx.heads as B2t1R[])[0]!;
+    b2t1Expect(c.r.refusal, c.r.stderr).toEqual({ word: 'quiz-unanswerable', detail: `${first.qid as string} clause (a) boundary-uuid-invalid` });
+    b2t1Expect(existsSync(c.rout), 'no --out is made').toBe(false);
+    b2t1Expect(stubLog(c.home), 'no spawn, not even --version').toBeNull();
+  }, 300_000);
+  b2t1It('the TypeError is the test seam\'s alone: with the fake re-check the same input reaches spawnEnv, which holds the uuid to UUID_RE as a defect (production passes no deps)', async () => {
+    await b2t1Expect(run((u) => u.toUpperCase())).rejects.toThrow(/spawnEnv: recall\.asof .* is not a lowercase UUID/);
+    const src = readFileSync(join(REPO, 'deploy', 'history-replay.mjs'), 'utf8');
+    b2t1Expect(src.includes("HANDLERS.set('step0b', (flags, env) => step0bCommand(flags, env));"), 'no handler argument stubs the re-check').toBe(true);
+  }, 300_000);
+});
+
+b2t2Describe('W2-5b2 Task 2 fix round 2: judgeSpentOf throws a RangeError naming the overflow, past a sum the ledger reader has already refused (closing the class, review 998)', () => {
+  b2t2It('a judge sum past the safe-integer range throws RangeError "judgeSpentOf: spend past safe-integer range"; CONTROL: the safe edge sums, and a sum past the range from rows that are not the judge\'s is never added', () => {
+    const edge = Number.MAX_SAFE_INTEGER;
+    const caught = (() => { try { B2.judgeSpentOf([{ name: 'pilot/judge/j0001-1', tokens: edge }, { name: 'quiz/judge/j0002-1', tokens: 1 }]); return null; } catch (e) { return e; } })();
+    b2t2Expect(caught).toBeInstanceOf(RangeError);
+    b2t2Expect((caught as RangeError).message).toBe('judgeSpentOf: spend past safe-integer range');
+    b2t2Expect(B2.judgeSpentOf([{ name: 'quiz/judge/j0001-1', tokens: edge }]), 'CONTROL: the safe edge').toBe(edge);
+    b2t2Expect(B2.judgeSpentOf([{ name: 'quiz/judge/j0001-1', tokens: edge }, { name: 'quiz/arms/q1/control.a1', tokens: 1 }]), 'CONTROL: an arm row is not added').toBe(edge);
+  });
 });

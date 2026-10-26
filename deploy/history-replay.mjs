@@ -2747,7 +2747,7 @@ export function persistenceLeft({ configDir, sessionId, cwd }) {
  *  whose stream gave no session id (`unmeasured: 'no-session-id'`) or one that is none (`'session-id-malformed'`: empty,
  *  holding a slash, or starting with a dot): that id is the spawned run's own data, so no transcript half was read and
  *  neither a clean `left: false` nor a `fail` for a leak that was never measured. Any other throw (a TypeError for a bad
- *  argument of the driver's own) is a defect and stays one (F2, F3; D-6694).
+ *  argument of the driver's own) is a defect and stays one (F2, F3; W2-5b2 fix round 1 (review 981)).
  *  @param {{ configDir: string, sessionId: string | null, cwd: string }} o */
 export function persistenceMeasured(o) {
   persistenceConfigDirOk(o.configDir);
@@ -7299,14 +7299,15 @@ function settleAnswers(ctx, states) {
     }
   }
 }
-/** Answers {rel, sha256, record}, the record whole, for W2-5b2 Task 5's report; readArmAnswers projects it.
- *  A section's answer records under --out, as the judge reads them (R8, R26; W2-5b2 reads the same files): each
- *  `<section>/answers/<qid>.<arm>.json` settleAnswers wrote, projected as {qid, arm, outcome, reply, correct}: `outcome`
+/** A section's answer records under --out, as the judge reads them (R8, R26; W2-5b2 reads the same files): each
+ *  `<section>/answers/<qid>.<arm>.json` settleAnswers wrote, in file-name order. It answers {rel, sha256, record} per
+ *  file: `rel` the path under --out, `sha256` the file's bytes' sha, `record` the parsed record whole, for W2-5b2 Task 5's
+ *  report (W2-5b2 fix round 2, review 998: A5). readArmAnswers projects it as {qid, arm, outcome, reply, correct}: `outcome`
  *  the record's arm_state, `reply` the answered attempt's raw result text (the judge redacts it, W2-D54), `correct` its
  *  labelCorrect flag. No directory is no record. A file it cannot read, or one that is not this section's answer record
  *  under its own name, refuses out-refused (D-5986, D-6309's rule); `malformedWord` names the word of the second kind of
  *  refusal alone (not JSON, not an answer record), out-refused for the judge's read of its own --out and input-invalid for
- *  the report, whose gathered answer records are an input like the others (A6, D-6694).
+ *  the report, whose gathered answer records are an input like the others (A6; W2-5b2 fix round 1 (review 981)).
  *  @param {string} out  @param {'pilot' | 'quiz'} section  @param {'out-refused' | 'input-invalid'} [malformedWord] */
 export function readAnswerRecords(out, section, malformedWord = 'out-refused') {
   armSectionOk('readAnswerRecords', section);
@@ -8541,7 +8542,7 @@ function pilotOutFile(out, rel, kind, recordSha256, writer) {
  *  `out-refused` `spend.jsonl malformed` once the ledger's running sum passes the safe range, which any other line that
  *  charges more than 0 (before it or after it) brings about, and pilot-result reads the ledger before any run.json
  *  (D-6309's fail-closed rule). A ledger where every other line charges 0 still sums safely, so this clamp is what keeps
- *  that run's figures at the safe range. A non-integer, negative or non-number reading still refuses. (A8, D-6694.) */
+ *  that run's figures at the safe range. A non-integer, negative or non-number reading still refuses. (A8; W2-5b2 fix round 1 (review 981).) */
 export function runUsageOf(out, name) {
   const read = readPlain(path.join(out, `${name}.run.json`), OUT_JSON_CAP);
   if (read.state === 'absent') return null;
@@ -9039,7 +9040,7 @@ async function repilotExpectedOf({ out, recordSha256, storeId, launch, lang, gat
  *  its flags (no --allow-code-change, Q23); HOME; part 2 through loadArmRun('quiz') (gate_code first, W2-D24); the unusable
  *  inputs and part 2's pilot.tolerance; the store, once, and armNodeOf (this node, its questions in qid order, its share of
  *  spend_budget, W2-D56's expected); the ranges and refuseSpawnAdmission; this node's first n_fidelity distinct boundaries
- *  (repilotBoundariesOf); all before prepareOut. Then the --out (never pilot-source's, never a finished re-pilot's), the
+ *  (repilotBoundariesOf), each a lowercase UUID, as a run name needs (fix round 2, review 998); all before prepareOut. Then the --out (never pilot-source's, never a finished re-pilot's), the
  *  claim, the account, the gate, the pinned version (repilotExpectedOf), and Task 2's per-boundary measurement in box mode
  *  under part 2's settings mode, each batch behind preflightSpawn against the pin. Writes quiz/fidelity.json and prints its
  *  sha (D-5983); then a boundary that did not pass, or fewer than n_fidelity, refuses pilot-failed (K3, K13). */
@@ -9056,6 +9057,11 @@ async function fidelityRepilotCommand(flags, driverEnv, deps) {
     const node = armNodeOf(run, rs.storeId);
     refuseOutOfRangeValues({ budget: node.budget, budgetField: 'spend_budget', limits: node.limits, quotas: null, batch: true });
     const heads = repilotBoundariesOf(node.questions, r.pilot.n_fidelity);
+    // W2-5b2 fix round 2 (review 998): a frozen entry's boundary_uuid is a non-empty text and nothing more (entryError), while
+    // a run is named fidelity/<boundary uuid>/<run> and fidelityRunName holds the uuid to UUID_RE. The pilot path has this
+    // refusal in pilotSourceMismatchOf; the quiz path takes its heads from the frozen list, so it is made here, before --out.
+    const unnamable = heads.find((h) => !UUID_RE.test(h.boundary_uuid));
+    if (unnamable !== undefined) refuse('input-invalid', `frozen boundary_uuid ${JSON.stringify(unnamable.boundary_uuid)} is not a lowercase UUID`);
     refuseSpawnAdmission({ home, accountId: node.account, limits: node.limits, expected: node.expected });   // D-6307, D-6311
     const out = prepareOut(flags.out);
     refuseColonInRealOut(out);
@@ -9422,7 +9428,7 @@ export function parseHandcheckLabels(text, plan) {
 
 /** The label file by its sha, as every input is read (loadInputBytes: outside any git tree, the sha before a byte is
  *  decoded), decoded as strict UTF-8 (`labels not-utf8`), then parseHandcheckLabels. A leading BOM is dropped by the decoder
- *  (the operator's editor may write one), so the strict grammar never sees it (A2, D-6694). Task 5's report calls it.
+ *  (the operator's editor may write one), so the strict grammar never sees it (A2; W2-5b2 fix round 1 (review 981)). Task 5's report calls it.
  *  @param {string} p  @param {string} sha256  @param {HandcheckPlan} plan  @returns {Map<string, string>} */
 export function readHandcheckLabels(p, sha256, plan) {
   const { bytes } = loadInputBytes('labels', p, sha256);
@@ -9549,7 +9555,7 @@ export function droppedOf(changed, abStates) {
  *  the gate's measured windows of every family not dropped (W2-D23, V1). A share with nothing counted is null. A cell carries
  *  no `unmeasured` count: assembleReports keeps only the measured windows in a family's `windows` and moves the rest to its
  *  `excluded.unmeasured`, keyed by store, family and boundary with no producer, so no per-producer count could be true here.
- *  The count lives in the report's `live_excluded.unmeasured` (F1, D-6694). Pure.
+ *  The count lives in the report's `live_excluded.unmeasured` (F1; W2-5b2 fix round 1 (review 981)). Pure.
  *  @param {Array<{key: string, arm: string, windows: Array<{producer: string}>}>} families assembleReports' families
  *  @param {ReadonlySet<string>} dropped */
 export function liveUptakeOf(families, dropped) {
