@@ -31,8 +31,9 @@ import type { ChildBirth } from './childSpent.js';
  *     ghost coordinator), and is never dropped: `bindingOf` lists it in `undecided`. Since ARCH-62 slice 4 (#1407)
  *     `CoordStore.bindSession` records the occupant's birth on a later wave it binds (`stampOccupantBirth`), so a run
  *     bound to the live worker is `bound` and a run bound to an earlier occupant is `unbound`, whatever its `openedAt`;
- *     the undecidable arm is left for rows bound before the stamp. An `unborn` session that reuses a name keeps the
- *     id-string rule (gap 1 of #1407, tracked in #1532). One LEGACY exception, accepted and pinned
+ *     the undecidable arm is left for rows bound before the stamp. A worker whose minting run can no longer be placed (`unplaceable`)
+ *     is its newest RECORDED birth (`anchoredIncarnation`), so an earlier occupant's run is `unbound`; a `not-a-child` session
+ *     keeps the id-string rule (gap 1 of #1407, tracked in #1532). One LEGACY exception, accepted and pinned
  *     (`run-binding-bound-birth.test.ts`): migration 16's backfill dated every bound run to its OWN `dispatchStartedAt`,
  *     later waves included, so for a worker alive across that migration the newest placeable birth of its id can be a
  *     backfilled wave-N row rather than its minting run. A wave bound after this build is then stamped with that
@@ -111,7 +112,19 @@ export interface SessionBinding {
 
 const byIdDesc = (a: BindingRun, b: BindingRun): number => b.id - a.id;
 
-export function bindingOf(runs: readonly BindingRun[], incarnation: Incarnation): SessionBinding {
+/** An `unplaceable` incarnation whose series records births for its id is its NEWEST recorded birth: every bind records the
+ *  occupant's birth (`CoordStore.bindSession`), so a run recorded for an older birth belongs to an earlier occupant of the
+ *  name, whatever the placement of the minting run says now. Any other incarnation is itself (`not-a-child` has no birth to
+ *  read: gap 1 of #1407, tracked in #1532). */
+export function anchoredIncarnation(runs: readonly BindingRun[], incarnation: Incarnation): Incarnation {
+  if (incarnation.kind !== 'unborn' || incarnation.why !== 'unplaceable') return incarnation;
+  const { sessionId } = incarnation;
+  const births = runs.filter((r) => r.sessionBornFor === sessionId && r.sessionBornAt !== null).map((r) => r.sessionBornAt as number);
+  return births.length === 0 ? incarnation : bornIncarnation(sessionId, Math.max(...births));
+}
+
+export function bindingOf(runs: readonly BindingRun[], rawIncarnation: Incarnation): SessionBinding {
+  const incarnation = anchoredIncarnation(runs, rawIncarnation);
   const bound = runs.filter((r) => binds(incarnation, r)).sort(byIdDesc);
   const undecided = runs.filter((r) => bindsRun(incarnation, r) === 'undecidable').sort(byIdDesc);
   return { newest: bound[0] ?? null, open: bound.find(isOpen) ?? null, undecided };

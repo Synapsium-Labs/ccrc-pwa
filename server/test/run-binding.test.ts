@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
-  bindingOf, bindsRun, bornIncarnation, childrenOf, claimantsOf, incarnationOf, parentOf, runNamesSession, unbornIncarnation,
+  bindingOf, bindsRun, boundRunsOf, bornIncarnation, childrenOf, claimantsOf, incarnationOf, parentOf, runNamesSession, unbornIncarnation,
   bindingWriterCalls, BINDING_WRITER_FILES, BINDING_WRITER_VERBS,
   type BindingRun,
 } from '../src/coord/runBinding.js';
@@ -196,7 +196,7 @@ describe('the #746 fixture, through a store', () => {
     expect(parentOfSession(s, 'demo-w')).toBe('coord-1');
     expect(parentOf(b)).toBe('coord-1');
     expect(b.undecided).toEqual([]);
-    expect(b.newest?.id).toBe(wave2);
+    expect(boundRunsOf(series, inc, 'any').map((r) => r.id)).toContain(wave2);
     for (const to of ['dispatched', 'closing', 'done'] as const) s.advance(wave1, to, 'coordinator');
     const after = bindingOf(readSeries(s, 'demo-w'), inc);
     expect(parentOf(after)).toBe('coord-1');

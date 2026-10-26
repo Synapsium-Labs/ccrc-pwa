@@ -97,9 +97,10 @@ describe('the readers take the worker\'s incarnation (ARCH-62)', () => {
     const g = open(s, 'prog-g', 'coord-ghost');
     s.setSession(g, 'demo-w');
     s.db.prepare('UPDATE runs SET openedAt = ? WHERE id IN (?, ?, ?)').run(BORN - 1000, w1, w2, g);
-    s.setSession(w1, 'demo-w', BORN);
-    // Wave 2 is bound BEFORE wave 1's dispatch records the birth, so the bind has none to stamp: the undecided wave 2.
+    // Wave 2 is bound BEFORE any run records the birth, so the bind has none to stamp: the undecided wave 2. (A wave bound
+    // AFTER a birth was recorded records it, even one `childBirthOf` cannot place yet: run-binding-bind-records.test.ts.)
     s.setSession(w2, 'demo-w');
+    s.setSession(w1, 'demo-w', BORN);
     s.db.prepare('UPDATE runs SET dispatchStartedAt = ?, coordProject = ? WHERE id = ?').run(BORN, 'p', w1);
     expect(s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(w2), 'wave 2 is not bound without a birth').toEqual({ sessionBornAt: null });
     finish(s, w1);
