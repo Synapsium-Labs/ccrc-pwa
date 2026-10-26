@@ -5754,7 +5754,7 @@ describe('D-6967 (wave-3 follow-up 10): a transient bucket-read failure waits fo
     expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^capability-unmeasured/) });
   });
 
-  it('D-6967 R-P (M19, §3.4 (5)): a waiting hour that a cut pass\'s late flush closes, read whole after its close, ends its wait with no gap', async () => {
+  it('D-6967 R-P (M19, the close read): a waiting hour that a cut pass\'s late flush closes, read whole after its close, ends its wait with no gap', async () => {
     const pair = live('demo-a', 'demo-z');
     const w = world();
     makeOwner(w, 'demo-a');
@@ -5824,6 +5824,34 @@ describe('D-6967 (wave-3 follow-up 10): a transient bucket-read failure waits fo
     await carveOutPass(w, h11 + 210_000, live('demo-a'));                                      // hour 11 is listed again
     expect(intervalFor(w.home, 'demo-a', HOUR11), 'its own word, not a stale one').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^capability-absent/) });
     expect(intervalFor(w.home, 'demo-a'), 'hour 10\'s waited loss').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^range-unreadable/) });
+  });
+
+  it('D-6967 R-R (M22, M23): a pending entry that holds only waiting hours adds no other hour as a lost window; one that holds a hour not waiting keeps R106', async () => {
+    const h11 = H + DELEGATION_HOUR_MS;
+    const h12 = h11 + DELEGATION_HOUR_MS;
+    /** demo-a's hour 10 measured from one line; then, with `fault`, a standing range fault on hour 10's bucket alone. */
+    const start = async (fault: boolean): Promise<World> => {
+      const w = world();
+      writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a'));
+      await passAt(w, at(0), live('demo-a'));
+      const realRange = w.io.readFileFromBytesMeasured;
+      if (fault) w.io.readFileFromBytesMeasured = async (p, o, m, t, sig) => (p.endsWith(`${BUCKET10}.spool`) ? { ok: false, reason: 'unreadable' } : realRange(p, o, m, t, sig));
+      for (const t of [h11 + 30_000, h11 + 90_000]) await passAt(w, t, live('demo-a'));             // two passes in hour 11, which reads (an empty hour)
+      expect(intervalFor(w.home, 'demo-a', HOUR11), 'hour 11 is measured, and not closed').toMatchObject({ state: 'measured' });
+      return w;
+    };
+    const w = await start(true);
+    expect(waitOf(w, 'demo-a'), 'hour 10 waits').toMatch(/^range-unreadable/);
+    expect(await windowOf(w, 'demo-a', H), 'the waiting hour is a lost window').toBe(true);
+    expect(await windowOf(w, 'demo-a', h11), 'hour 11, read whole, is not: the entry holds only waiting hours').toBe(false);
+    const control = await start(false);
+    expect(await windowOf(control, 'demo-a', H), 'CONTROL').toBe(false);
+    expect(await windowOf(control, 'demo-a', h11), 'CONTROL').toBe(false);
+    // a pass cut on demo-a's listing leaves its own hour 12 in the entry, not waiting: R106 is kept, so hour 11 (measured, not closed) is listed
+    await cutAt(w, h12 + 30_000, { demo: [] }, [sessionOf('demo-a')], live('demo-a'), 'demo-a');
+    expect(await windowOf(w, 'demo-a', h12), 'the cut pass\'s own hour').toBe(true);
+    expect(await windowOf(w, 'demo-a', h11), 'R106 kept for an entry with a hour not waiting').toBe(true);
+    expect(await windowOf(w, 'demo-a', H), 'hour 10 still waits').toBe(true);
   });
 
   it('D-6967 R-Q (M17, R107): a cut pass\'s late flush of a read never ends a wait a NEWER pass recorded on a non-live owner', async () => {

@@ -9974,7 +9974,8 @@ function renderAskBrief(
 //       hour"; `waits` on the pending owner of a real incarnation). Only `directory-unreadable` and `range-unreadable` wait, and only while
 //       the DURABLE state holds a measured (session, I, hour) row recorded before the hour's close (`laneCarries`: never a row this pass
 //       staged); every other word, and a first read with no such row, is today's immediate gap. A wait stages nothing: the hour joins the
-//       entry's `hours` (a lost window through `pendingWindows`) with its word beside it in `waits`, the two removed together on every path,
+//       entry's `hours` (a lost window through `pendingWindows`, where an entry whose hours all wait adds no R106 hour, review 976 F1)
+//       with its word beside it in `waits`, the two removed together on every path,
 //       recorded only after the read's abort check (so a cut pass never records or rewords one; a later failure rewords it), and `listedBy`
 //       never lowered (R107). `forgetRead` never drops a waiting hour unless THIS observation ended its wait, under R101's gate and R107's:
 //       an applicable result that is not a carve-out (a measured read, the no-op skip, or any loss, which lands its own word) is a read; a
@@ -10323,7 +10324,7 @@ const laneCloseAt = (hourMs: number): number => hourMs + DELEGATION_HOUR_MS + DE
 const laneInstantMs = (iso: string): number | null => {
   try { return parseDelegationInstant(iso); } catch (err) { if (err instanceof DelegationModelError) return null; throw err; }
 };
-/** D-6967 (§3.2): whether `state` holds a MEASURED (id, incarnation, hour) row recorded before the hour's close, the CARRIER a transient
+/** D-6967: whether `state` holds a MEASURED (id, incarnation, hour) row recorded before the hour's close, the CARRIER a transient
  *  read failure may wait on. Read from the durable state, so a row staged in this pass and not yet flushed never counts; a row whose
  *  instant does not parse is none (the immediate gap, the safe direction). */
 const laneCarries = (state: DeepReadonly<DelegationRecoveryState>, id: string, inc: string, hourMs: number): boolean => {
@@ -11471,12 +11472,16 @@ class DelegationLane {
 
   /** R89: the hours of every owner a pass listed and no completed observation has read, as lost windows (on every repository). R106
    *  (review F6): and every hour of it the checkpoint holds MEASURED and not yet closed (recorded before its close): lines may have
-   *  landed there after its last read (an owner read at 10:59:30 whose read throws at 11:00:30 is listed in hour 11 only). */
+   *  landed there after its last read (an owner read at 10:59:30 whose read throws at 11:00:30 is listed in hour 11 only). D-6967 (review
+   *  976 F1): R106 applies only to an entry holding at least one hour that is NOT waiting. An entry whose hours all wait is left only by
+   *  a completed, durable pass whose `forgetRead` removed every other hour, so every other measured, unclosed hour of it was read whole
+   *  in that pass, which is when, with no wait, the lane would have forgotten the entry and listed no window: it adds its own hours only.
+   *  A cut, a failed flush, an R82 refusal or an R107 skip leaves a hour not waiting in `hours`, so R106 applies there as before. */
   private pendingWindows(state: DeepReadonly<DelegationRecoveryState>): DelegationListingWindow[] {
     const out: DelegationListingWindow[] = [];
     for (const p of this.pendingOwners.values()) {
       const hours = new Set(p.hours);
-      if (p.incarnation !== null) {
+      if (p.incarnation !== null && [...p.hours].some((h) => p.waits?.has(h) !== true)) {
         for (const r of state.checkpoint.observationIntervals) {
           if (r.sessionId !== p.id || r.parentIncarnation !== p.incarnation || r.state !== 'measured') continue;
           const at = laneInstantMs(r.utcHour);
@@ -11511,7 +11516,7 @@ class DelegationLane {
       if (pass.signal.aborted) return;
     }
     const hours = this.hoursOf(pass, durable.state(), owner, inc, listing);
-    // D-6967 (§3.4 (5)): a listed hour `hoursOf` leaves out was read whole after its close (a cut pass's late flush); its wait ends too
+    // D-6967, the close read: a listed hour `hoursOf` leaves out was read whole after its close (a cut pass's late flush); its wait ends too
     for (const h of owner.listedHours) if (!hours.includes(h)) (owner.ended ??= []).push(h);
     for (const hourMs of hours) {
       if (pass.signal.aborted) return;
@@ -11717,7 +11722,7 @@ class DelegationLane {
     const state = durable.state();                                       // AT THIS MOMENT, never a copy taken before the read (M5/M6)
     const failed = read.ok ? null : unreadableDelegationBucketResult({ sessionId: id, parentIncarnation: inc, bucket }, state, { reason: read.reason, detail: read.detail });
     const k = laneOwnerKey(id, inc);
-    // D-6967 (§3.1 to §3.3): a TRANSIENT failure stages nothing and WAITS on the pending entry, under its own word, while the durable state
+    // D-6967: a TRANSIENT failure stages nothing and WAITS on the pending entry, under its own word, while the durable state
     // carries the hour; a later failure rewords it. After the abort check above, so a cut pass never records or rewords a wait.
     if (!read.ok && (read.reason === 'directory-unreadable' || read.reason === 'range-unreadable') && laneCarries(state, id, inc, hourMs)) {
       const p = this.pendingOwners.get(k) ?? { id, incarnation: inc, reason: '', hours: new Set<number>(), listedBy: pass.seq };
@@ -11738,7 +11743,7 @@ class DelegationLane {
     }
     // An hour read AFTER it closed, with nothing new in it, is not read again by this process (once the pass's application is durable).
     if (closing && read.ok && seen.accepted === 0) pass.settle.push(this.settledKey(id, inc, hourMs));
-    // D-6967 (§3.4 (2)): a carve-out never ends a wait as a read. It stages the waited loss as an interval-only gap (the cursor stays the
+    // D-6967: a carve-out never ends a wait as a read. It stages the waited loss as an interval-only gap (the cursor stays the
     // carve-out result's; R90's merge keeps the loss in either order), and `forgetRead` lets the hour go only once that is durable.
     const waiting = this.pendingOwners.get(k);
     const word = waiting?.hours.has(hourMs) === true ? waiting.waits?.get(hourMs) : undefined;
