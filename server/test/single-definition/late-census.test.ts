@@ -4,6 +4,9 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { sourceOfSymbol } from '../scan/symbols.js';
+import { identifierReferences, stringExpressions } from '../scan/parse.js';
+import { sleepVerdictLadders } from '../consolidationCensus.js';
+import { SLEEP_POLICY_NAMES } from '../../src/sleep.js';
 import { SWITCHES } from '../../../shared/switches.js';
 import { ALL, ALL_MJS, BASH, HISTORY_DIR, HISTORY_MJS, ccrcRoot, codeLines, here, holdersOf, mjsUnder, prose, rel, stallCode, stallCodeText } from './helpers.js';
 
@@ -582,5 +585,44 @@ describe('codex bridge Stage 2 Task 10: the bridge file names and the lane mode 
     // CONTROL: the one bash reader of the mode reads lane.json's key, so the scan above is not vacuously empty of
     // a reader.
     expect(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8')).toMatch(/^_codex_lane_mode\(\)\s+\{/m);
+  });
+});
+
+
+// D-7040 (ARCH-43, consolidation plan 2026-10-26 Task C4b; spec K1, C4 "Policies, not lanes"). APPENDED. The two sleep
+// lanes share ONE hold ladder, `decideSleep` in `server/src/sleep.ts`, steered by each policy row's fields and never by
+// its name. `sleepVerdictLadders` (the census in `consolidationCensus.ts`: each server/src function whose body returns a
+// `hold('viewer')` call) read 2 at C4b's base (`stopDone.ts#stopDoneVerdict`, `coord/hibernate.ts#hibernateVerdict`)
+// and is pinned at 1 here; it may only shrink. The name scan walks `decideSleep`'s parsed body (`scan/symbols.ts`,
+// `scan/parse.ts`), never a text match over the file: a read of `.name` (a comparison, a `switch`, a destructure), of
+// `SLEEP_POLICY_NAMES`, or a quoted policy name is red.
+describe('the sleep lanes share one ladder, which never asks which policy it runs (D-7040; ARCH-43)', () => {
+  const HOME = 'server/src/sleep.ts';
+  /** Every way `body` could ask which policy it runs, each as the source that does it. */
+  const nameReads = (body: string): string[] => [
+    ...identifierReferences(body, 'decideSleep.ts', new Set(['name', 'SLEEP_POLICY_NAMES'])).map((r) => r.context),
+    ...stringExpressions(body, 'decideSleep.ts').filter((e) => (SLEEP_POLICY_NAMES as readonly string[]).includes(e.text)).map((e) => e.text),
+  ];
+
+  it('the sleep verdict ladders are one, decideSleep in sleep.ts (2 -> 1 at C4b; may only shrink)', () => {
+    expect(sleepVerdictLadders().map((s) => s.symbol)).toEqual([`${HOME}#decideSleep`]);
+  });
+
+  it('CONTROL: the name scan sees a comparison, a switch, a destructure, the name list and a quoted name, and passes a field read', () => {
+    const probe = (stmt: string): number => nameReads(`function decideSleep(i, policy) { ${stmt} }`).length;
+    expect([
+      "if (policy.name === 'run-done') return 1;",
+      'switch (policy.name) { default: return 1; }',
+      'const { name } = policy; return name;',
+      'return SLEEP_POLICY_NAMES.indexOf(policy.held);',
+      "return policy.held === 'idle-hours';",
+    ].map(probe)).toEqual([2, 1, 2, 1, 1]);
+    expect(probe('if (policy.turnVerdict && policy.entry.child) return 1;')).toBe(0);
+  });
+
+  it('decideSleep reads no policy name', () => {
+    const body = sourceOfSymbol(HOME, 'decideSleep');
+    expect(body, 'CONTROL: the slice is the ladder').toContain("hold('viewer')");
+    expect(nameReads(body)).toEqual([]);
   });
 });
