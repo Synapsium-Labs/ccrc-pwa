@@ -51,12 +51,14 @@ const BASE_CONSTS = { 'stats.FLUSH_S': 0 };
 const UNDECODABLE_DEPTH = 2_000_000;
 /** A closed array nested `depth` deep: valid JSON, so only the decoder's recursion bound can refuse it. */
 const tooDeep = (depth = UNDECODABLE_DEPTH): string => `${'['.repeat(depth)}${']'.repeat(depth)}`;
-/** The precondition, measured on the python3 the case runs (`-I`, as the bridge runs): true iff `json.loads` of `doc`
- *  raises RecursionError. It runs on python's main thread, as the start's read_manifest does. */
-function pythonRefusesDecode(doc: string): boolean {
+/** The precondition, measured on the python3 the case runs (`-I`, as the bridge runs): `refused` iff `json.loads` of
+ *  `doc` raises RecursionError. It runs on python's main thread, as the start's read_manifest does. `how` names any
+ *  other outcome, since each has its own remedy: exit 0 decoded the document (raise UNDECODABLE_DEPTH), exit 1 is
+ *  another exception (MemoryError, say), and a signal is a crash or the 30 s bound. */
+function pythonDecodeOutcome(doc: string): { refused: boolean; how: string } {
   const prog = 'import json, sys\ntry:\n    json.loads(sys.stdin.read())\nexcept RecursionError:\n    sys.exit(3)\n';
   const r = spawnSync(PY!, ['-I', '-c', prog], { input: doc, encoding: 'utf8', timeout: 30_000 });
-  return r.status === 3;
+  return { refused: r.status === 3, how: `exit ${r.status} signal ${r.signal} stderr ${JSON.stringify((r.stderr ?? '').slice(-300))}` };
 }
 
 // ── the upstream's events ─────────────────────────────────────────────────────────────────────────────────────────
@@ -935,8 +937,9 @@ describe.skipIf(!PY)('a lane.json nested too deep to decode refuses the start', 
     // D-6995: the depth is a version and platform rule, so it is measured first. A python3 that decodes the document
     // would answer "names another lane" and never reach read_manifest's RecursionError arm.
     const doc = tooDeep();
-    expect(pythonRefusesDecode(doc), `precondition: this python3 decodes JSON nested ${UNDECODABLE_DEPTH} deep, so the case `
-      + 'cannot reach the RecursionError arm: raise UNDECODABLE_DEPTH').toBe(true);
+    const pre = pythonDecodeOutcome(doc);
+    expect(pre.refused, `precondition: json.loads of JSON nested ${UNDECODABLE_DEPTH} deep did not raise RecursionError `
+      + `(${pre.how}), so the case cannot reach that arm; exit 0 means it decoded: raise UNDECODABLE_DEPTH`).toBe(true);
     writeFileSync(join(lane.laneDir, 'lane.json'), doc);
     const err = await spawnBridge(home, LANE, { consts: BASE_CONSTS }).then(() => null, (e: Error) => e);
     expect(err).not.toBeNull();

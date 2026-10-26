@@ -1903,9 +1903,9 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
 ## Deviations found
 
 Every entry carries the number the controller issued (D-6410 to D-6431 at plan time, D-6804 to D-6839 for wave 1,
-D-6862 to D-6907 and D-6921 for wave 2, D-6944 to D-6963 for wave 3, D-6994 to D-6998 for the follow-up that made the
-suite pass on macOS). A further departure found while executing is
-written `D-TBD-<slug>` and named in the task's report.
+D-6862 to D-6907 and D-6921 for wave 2, D-6944 to D-6963 for wave 3, D-6994 to D-6998 for the follow-up to the
+suite's macOS failures). A further departure found while executing is written `D-TBD-<slug>` and named in the task's
+report.
 
 ### D-6410 — `end_turn:false` is continued upstream, never `pause_turn`
 
@@ -3522,7 +3522,7 @@ written `D-TBD-<slug>` and named in the task's report.
 
 ### D-6994 — the three unit-arm bridge-tier cases are Linux-only, with nohup and recorder twins on both platforms
 
-- **Departs from:** Task 11's Step 1 (plan :1371-1372, :1386-1388) and Task 12's Step 1 (plan :1509-1510), which list
+- **Departs from:** Task 11's Step 1 (plan :1371-1372, :1387-1388) and Task 12's Step 1 (plan :1509-1510), which list
   `'a direct lane starts the bridge tier only, on the shim's port and unit, with the key read in process'`, `'a
   bridge started through ccrc codex start under ghContainedEnv gets both bases'` (the fake `systemd-run` records the
   pairs) and `'a tier that will not stop leaves the lane down and named'` with no platform, though Task 11 says a macOS
