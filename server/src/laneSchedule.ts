@@ -146,7 +146,7 @@ export type LaneName =
   | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'serverCaps'
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
-  | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees';
+  | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -239,6 +239,13 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   {
     name: 'orphanTrees', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'mono', flight: 'none', warnKey: null,
     derivedFrom: { name: 'childReclaim', reason: 'a sibling of the child lane on the same tick, shadow until its own switch' },
+  },
+  // The delegation lane (wave 3): the census's cadence, followed by reference. One pass at a time (a call beside a running pass
+  // is refused); the lane catches its own failures with sentences of its own, so no row warns. It spends the cadence only once
+  // it has a census to read (`kick` hands it back otherwise), which is why the lane, not `run`, decides what a throttled call is.
+  {
+    name: 'delegation', cadenceMs: DIVERGENCE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
+    derivedFrom: { name: 'DIVERGENCE_SWEEP_MS', reason: 'the lane reads each census pass once, so it follows the census\'s own beat' },
   },
 ];
 

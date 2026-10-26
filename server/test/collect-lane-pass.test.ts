@@ -28,6 +28,7 @@ import { COLLECT_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
 import { COLLECT_BOX_LABELS } from '../../shared/api.js';
 import { collectRig, type CcdAnswer, type CollectRig } from './collectLaneFixture.js';
 import { FULL_CAPS } from './collectTempRootFixture.js';
+import { drainTick } from './laneQuiet.js';
 import { codeOnly } from './sourceScan.js';
 import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 
@@ -80,7 +81,8 @@ describe('the laneâ€™s constants are derived, and the tick dispatches it (spec Â
   it('and a tick reaches the lane: a witnessed id is audited', async () => {
     const f = await collectRig();
     f.witness('demo-a');
-    await f.watcher.tick();
+    // tick() fires lanes it never awaits (the `delegation` row among them since D-5862): none may outlive the case.
+    await drainTick(f.watcher);
     await vi.waitFor(() => expect(f.audits('demo-a')).toHaveLength(1));
   });
 });

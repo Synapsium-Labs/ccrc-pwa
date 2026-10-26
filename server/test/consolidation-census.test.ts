@@ -459,11 +459,11 @@ describe('the lane schedule census (D-5862)', () => {
     ]);
   });
 
-  it('REAL: the census runs on the tree, and W4\'s two clocks and the delegation lane\'s are the ones left', async () => {
+  it('REAL: the census runs on the tree, and W4\'s two clocks are the ones left (the delegation lane\'s is a row since D-5862)', async () => {
     const fields = laneClockFields();
     show('laneClockFields', fields);
     expect(fields.map((x) => x.text).join('\n')).toContain('lastStopDoneSweep');
-    expect(laneClockReported().map((x) => x.text).join('\n')).toContain('lastSweepAt');
+    expect(laneClockReported(), 'DelegationLane#lastSweepAt is the `delegation` row of LANE_SCHEDULE').toEqual([]);
     expect(declaredDerivations()).toHaveLength(3);
   });
 });

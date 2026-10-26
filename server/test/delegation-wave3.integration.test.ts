@@ -129,7 +129,7 @@ function world(opts: WorldOptions = {}): World {
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const ccdVerbs = opts.ccdVerbs === undefined ? ['caps', DELEGATION_EVENTS_CAP] : opts.ccdVerbs;
-  const deps = { ...testDeps(home, run), cfg, io, coord, fleetState: { connected: true, downSince: null, ccdVerbs } };
+  const deps = { ...testDeps(home, run), monotonicMs: () => Date.now(), cfg, io, coord, fleetState: { connected: true, downSince: null, ccdVerbs } };
   const made: World = { home, reg: cfg.registryDir, ccrcDir: cfg.ccrcDir, watcher: new FleetWatcher(deps as never, new Bus(), 10_000), coord, faults, calls, writes, run, cfg, deps };
   worlds.push(made);
   return made;
