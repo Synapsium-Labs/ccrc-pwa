@@ -1,8 +1,8 @@
 # Centralised update management, wave 29: the ccd-* sweeps read their settings from ccrc.env through ccrc's own reader, placed as one shared file: Implementation Plan
 
-Wave 24 put ccrc's own settings on one reader, `_ccrc_knob`, so that a console update, the watchdog and a timer honour a line in `~/.ccrc/ccrc.env` and a setting survives a reboot without an `environment.d` fragment. It left one class out on purpose: the operator settings that the ccd-* sibling scripts read under their own timers. Those scripts never source `ccd/ccrc`, so sharing the reader needs a placed library file, a new install-census placement. Wave 24's Reading 9 put that to the coordinator, and ruling 9 carried it to "a later wave with a shared reader file" (wave-24 plan, `docs/superpowers/plans/2026-10-23-centralised-update-w24-settings-live-in-ccrc-config.md:79-92`, `:1118`, `:1172-1173`). This is that wave. It also takes five residue items the triage folded into it (R38, R45, R46, R48, R50).
+Wave 24 put ccrc's own settings on one reader, `_ccrc_knob`, so that a console update, the watchdog and a timer honour a line in `~/.ccrc/ccrc.env` and a setting survives a reboot without an `environment.d` fragment. It left one class out on purpose: the operator settings that the ccd-* sibling scripts read under their own timers. Those scripts never source `ccd/ccrc`, so sharing the reader needs a placed library file, a new install-census placement. Wave 24's Reading 9 put that to the coordinator, and ruling 9 carried it to "a later wave with a shared reader file" (wave-24 plan, `docs/superpowers/plans/2026-10-23-centralised-update-w24-settings-live-in-ccrc-config.md:79-92`, `:1118`, `:1172-1173`). This is that wave. It also takes three residue items the triage folded into it (R38, R45, R46); the coordinator's ruling 2 moved R48 and R50 (Tasks 8 and 9) out of the wave.
 
-Every citation below is `path:line` at `origin/main` `ba36d7420`, read with `git show ba36d7420:<path>`. The worker re-reads each one in the landed text before the task that edits it (the absorb step).
+Every citation below is `path:line` at `origin/main` `ba36d7420`, read with `git show ba36d7420:<path>`. The worker re-reads each one in the landed text before the task that edits it (the absorb step). The wave's base is `ea1e84c09` (ruling 3): each citation is re-read there, and As built records any that moved.
 
 **What was measured at `ba36d7420`.**
 
@@ -42,12 +42,12 @@ The keepalive header calls `CCRC_KEEPALIVE_FRESH` and `CCRC_KEEPALIVE_MODEL` "TH
 - `ccd/lib/ccrc-settings.sh` (new, generated, 0644): the `BOX_ENV_FILE=` line, the `CCRC_SETTINGS=` line and the eight function bodies above, copied whole out of `ccd/ccrc` by `deploy/gen-settings-lib.mjs` (new). `server/test/ccrc-settings-lib.test.ts` (new) reds when the two differ. `ccd/ccrc` never sources it, and keeps its reader exactly where it is.
 - Installed at `~/.local/libexec/ccrc/ccrc-settings.sh`, beside ccd's body (D-3696), by `_inst_bins` on every OS and role, and by `deploy/deploy.sh`'s agent arm. Removed by `_uninst_tree_bins`.
 - Each sweep finds it beside itself first (`ccd/lib/…`, which is how the repository's suites run it), then in `~/.local/libexec/ccrc/`: the `transcript.jq` precedent (`ccd/ccd:17180-17185`). The two-line loader is spelled identically in each sweep. A missing or broken library stops the pass, exit 1.
-- `ccd/ccrc`'s `CCRC_SETTINGS` gains the six names. Each sweep reads its settings with `_ccrc_knob NAME <default> && NAME="$KNOB"`, so every later use and message in the script is unchanged. A refused or invalid value stops the pass before its lock, exit 1, and never runs a default.
+- `ccd/ccrc`'s `CCRC_SETTINGS` gains the six names. Each sweep reads its settings with `_ccrc_knob NAME <default> && NAME="$KNOB"`, so every later use and message in the script is unchanged. A refused or invalid value stops the pass before its lock, exit 1, and never runs a default. The refusal line on stderr names the setting, where it came from (the environment or `~/.ccrc/ccrc.env`) and what was refused, so the unit's journal says why it failed (ruling 1).
 - Wave 24's census (`server/test/ccrc-settings-census.test.ts`) reads the sweeps' calls for C2 and C4. A new describe extends C5, C6 and C8 to every bash executable `_inst_bins` places and to every node helper (`deploy/*.mjs`, `ccd/*.mjs`, `shared/*.mjs`). That is the extension wave 24 carried (its `:91`, `:1135`).
 - **Why not `EnvironmentFile=%h/.ccrc/ccrc.env` on the three units:** wave 24 refused it for its timers: systemd's parse instead of the one reader, every secret in `ccrc.env` exported into the sweep and every child it starts (the keepalive runs `claude`), and a set environment could no longer win.
 
 **Deploy class:**
-- Box tooling only: `ccd/ccrc`, three sweeps, a new library file, `install.sh`, `deploy/coordination-snapshot.mjs`, `ccd/ccd-update-sync`. Nothing on the wire changes, and nothing in the server, agent or PWA.
+- Box tooling only: `ccd/ccrc`, `ccd/ccrc-doctor-checks`, three sweeps, a new library file, `deploy/coordination-snapshot.mjs`, `ccd/ccd-update-sync`. Nothing on the wire changes, and nothing in the server, agent or PWA.
 - It rides `ccrc update` to each box, and `_inst_bins` places the library BEFORE the sweeps it serves. So a new sweep never runs without its library, except on a box whose `_inst_bins` died between the two placements. That box refuses one pass loudly, exit 1, and the next `ccrc update --force` places both.
 - An old sweep never sources anything. A downgrade below this wave leaves the library behind, unused, until uninstall.
 
@@ -56,7 +56,7 @@ The keepalive header calls `CCRC_KEEPALIVE_FRESH` and `CCRC_KEEPALIVE_MODEL` "TH
 - Task 2 (placement) needs Task 1's file.
 - Task 3 (the sweeps) needs Tasks 1 and 2.
 - Task 4 (the sibling census) needs Task 3.
-- Tasks 5 to 9 (the folded residue) are independent of 1 to 4 and of each other. Tasks 5 and 9 share `ccd/ccrc` with Tasks 1 to 3, so they run after them.
+- Tasks 5 to 7 (the folded residue) are independent of 1 to 4 and of each other. Task 5 shares `ccd/ccrc` with Tasks 1 to 3, so it runs after them. (Tasks 8 and 9 left the wave, ruling 2.)
 - Task 10 is the gate and the PR.
 
 One PR, from this workspace's own branch.
@@ -84,12 +84,13 @@ Residue the triage did not fold, with its disposition:
 - **R44** (wave-31 text and pin nits): carried as stale history, for a small docs-and-test follow-up.
 - **R47** (review-cap console control): closed. It shipped in #1524.
 - **R49** (wave-24 record and comment nits): closed as accepted stale history. Task 3 rewrites the README settings paragraph, so its blank-budget sentence is re-read there and corrected only if that paragraph still carries it.
+- **R48 and R50's first and fourth bullets (Tasks 8 and 9, with Readings 12 and 14 and every row those tasks own): not in this wave** (ruling 2). Both change behaviour outside the settings directive: the bootstrap's release-host defences and SHA256SUMS's one line, and the watchdog's wedged judgement (the critique notes that Task 9 trades judging too soon for never judging while the deadline reads undecided). Carried past closure to an issue the coordinator files.
 - **R50, second bullet** (a console parent reads settings from the manager's environment while the detached child reads the file): not folded. The `--detach` parent's one release-host read is its asset probe, and the child repeats that probe on its own reading (wave-24 plan `:435`, "the parent's probe and the detached child's repeat"), so the child decides. Making the two read alike means the server spawning ccrc with a scrubbed environment (`server/src/update/spawn.ts`), which is a server change. Reading 12.
 - **R50, third bullet** (the hard-cap term's 63 s also applies to a rollback by flip): no code change. The 63 s is the start chain's ceiling (wave-24 plan `:435`). On a flip it is at worst an earlier bound, so the bound errs early, never past the server's cap. Task 9 records that in `_bak_gc`'s header, comment only. Reading 13.
 
 Other things this wave leaves out:
 - **The other `CCRC_` reads in the sweeps and helpers** (call bounds, fixture paths, internal tuning: `CCRC_GRAPH_BUILD_TIMEOUT`, `CCRC_GRAPH_STALE_ESCAPE_COMMITS`, `CCRC_GRAPH_STALE_ESCAPE_SECS`, `CCRC_GRAPH_HOOKSTATE_FRESH_SECS`, `CCRC_KEEPALIVE_TURN_TIMEOUT`, `CCRC_KEEPALIVE_BACKOFF_AFTER`, `CCRC_KEEPALIVE_BACKOFF_BASE`, `CCRC_KEEPALIVE_BACKOFF_MAX`, `CCRC_UPDATE_SYNC_TIMEOUT`, `CCRC_POOL_SYNC_TIMEOUT`, `CCRC_HEALTH_URL`, `CCRC_HEALTH_TIMEOUT`, `CCRC_AUTH_*`, `CCRC_PROC_ROOT`, `CCRC_CGROUP_ROOT`, `CCRC_TREE`, `CCRC_RUNTIME_PIP_S`, `CCRC_RUNTIME_PROBE_S`, `CCRC_CODEX_PYTHON`, `CCRC_MODELS_PROBE_FIXTURE`, `CCRC_UPSTREAM`): they stay environment-only. Task 4's census classes each one with a reason, under wave 24's ruling 1, plus one new class, `tuning` (Reading 5).
-- **`install.sh`'s `CCRC_RELEASE_BASE_URL`**: it stays environment-only, because the bootstrap runs before any `ccrc.env` exists. Task 8 hardens how it fetches, not where it reads.
+- **`install.sh`'s `CCRC_RELEASE_BASE_URL`**: it stays environment-only, because the bootstrap runs before any `ccrc.env` exists. How it fetches is R48's, carried with Task 8.
 - **A unit timeout derived from a raised budget.** `TimeoutStartSec` stays as shipped. The example says what raising `CCRC_GRAPH_BUDGET` or `CCRC_USAGE_SWEEP_DAYS` costs (Task 3, W29-S8). Reading 10.
 - **Darwin sweeps.** The three sweeps stay unplaced on Darwin (the non-Darwin arm, `ccd/ccrc:16561`). The library is placed there all the same (Reading 3).
 - **R38 beyond the named sites.** About 74 further `[[ =~ ]]` digit ranges in `ccd/ccrc` and 19 in `ccd/ccrc-doctor-checks` check internal formats (tags, pids, hashes), not operator values. They are carried as one issue (Reading 15).
@@ -98,17 +99,17 @@ Other things this wave leaves out:
 
 - **Files:**
   - Source:
-    - `ccd/ccrc`;
+    - `ccd/ccrc`, `ccd/ccrc-doctor-checks` (the `box-settings` check's server-role line, ruling 4);
     - `ccd/lib/ccrc-settings.sh` (new, generated);
     - `deploy/gen-settings-lib.mjs` (new);
     - `ccd/ccd-graph-sweep`, `ccd/ccd-telemetry-keepalive`, `ccd/ccd-usage-sweep`, `ccd/ccd-update-sync`;
     - `deploy/deploy.sh`, `deploy/coordination-snapshot.mjs`, `deploy/ccrc.env.example`;
-    - `install.sh`, `README.md`, and this plan.
+    - `README.md`, and this plan.
   - Tests:
     - new: `server/test/ccrc-settings-lib.test.ts`;
     - `server/test/ccrc-settings-census.test.ts`, `server/test/install-census.test.ts`, `server/test/ccrc-install-tree.test.ts`, `server/test/installTreeFixture.ts`, `server/test/ccrc-uninstall.test.ts`;
     - `server/test/graph-sweep.test.ts`, `server/test/telemetry-keepalive.test.ts`, `server/test/keepalive-freshness-parity.test.ts`, `server/test/usage-sweep-runner.test.ts`, `server/test/ccrc-doctor-codex.test.ts` (its box-settings describe, only where a row pins the full list of settings);
-    - `server/test/ccd-update-sync.test.ts`, `server/test/coordination-snapshot.test.ts`, `server/test/install-sh.test.ts`, `server/test/ccrc-update-fetch.test.ts`, `server/test/ccrc-update-phases.test.ts`;
+    - `server/test/ccd-update-sync.test.ts`, `server/test/coordination-snapshot.test.ts`, `server/test/ccrc-update-phases.test.ts`;
     - the inherited-env scrub lists: `server/test/ccrc-updateFixture.ts` (`updateEnv`), `server/test/ccrc-installFixture.ts` (`ccrcEnv`), `server/test/updateIntentFixtures.ts` (`nodeEnv`), and the ccrc-uninstall harness.
   - Never edited: `ccd/ccd`, `ccd/ccd-entry*.py`, `ccd/contexts.tsv`, anything under `server/src`, `agent/src` or `pwa/`. No restamp.
 - **Functions this wave edits in `ccd/ccrc`** (the consent list):
@@ -123,26 +124,23 @@ Other things this wave leaves out:
     - `_upd_watchdog_probe_gap_s` (:20686);
     - `_upd_sweep` (:24124);
     - and every other `=~` digit range inside those seven bodies;
-  - `_upd_resolve` (:21928), its SHA256SUMS read (:22000-22005): Task 8;
-  - `cmd_watchdog` (:20765), its deadline line (:20863, in place) and its wedged arm (:20927): Task 9;
-  - `_bak_gc`'s header (:25226-25247), comment only: Task 9.
+  - (`_upd_resolve`, `cmd_watchdog` and `_bak_gc`'s header left the list with Tasks 8 and 9, ruling 2.)
 
   No line is added or removed above `:16000`. The R38 edits at :4507, :4660, :6762 and :12282 are in place. No edit touches `_box_*` or `_ccrc_knob`, so the library is regenerated only for the `CCRC_SETTINGS` line (Task 3).
 - **Claims, in groups, each taken whole when its group frees.** Re-read the live claims before each group with `ccrc-api claims list --project ccrc-pwa` (a read).
-  - Group A (Tasks 1, 2, 3's `ccd/ccrc` line, 5, 8's ccrc half, 9): `ccd/ccrc`, `ccd/lib/ccrc-settings.sh`, `deploy/gen-settings-lib.mjs`, `deploy/deploy.sh`, `server/test/ccrc-settings-lib.test.ts`, `server/test/install-census.test.ts`, `server/test/ccrc-install-tree.test.ts`, `server/test/installTreeFixture.ts`, `server/test/ccrc-uninstall.test.ts`, `server/test/ccrc-update-fetch.test.ts`, `server/test/ccrc-update-phases.test.ts`, and the four scrub-list files.
-  - Group B (Tasks 3, 4): the three sweeps, their four suites, `server/test/ccrc-doctor-codex.test.ts`, `server/test/ccrc-settings-census.test.ts`, `deploy/ccrc.env.example`, `README.md`.
+  - Group A (Tasks 1, 2, 3's `ccd/ccrc` line, 5): `ccd/ccrc`, `ccd/lib/ccrc-settings.sh`, `deploy/gen-settings-lib.mjs`, `deploy/deploy.sh`, `server/test/ccrc-settings-lib.test.ts`, `server/test/install-census.test.ts`, `server/test/ccrc-install-tree.test.ts`, `server/test/installTreeFixture.ts`, `server/test/ccrc-uninstall.test.ts`, `server/test/ccrc-update-phases.test.ts`, and the four scrub-list files.
+  - Group B (Tasks 3, 4): the three sweeps, their four suites, `ccd/ccrc-doctor-checks`, `server/test/ccrc-doctor-codex.test.ts`, `server/test/ccrc-settings-census.test.ts`, `deploy/ccrc.env.example`, `README.md`.
   - Group C (Task 6): `ccd/ccd-update-sync`, `server/test/ccd-update-sync.test.ts`.
   - Group D (Task 7): `deploy/coordination-snapshot.mjs`, `server/test/coordination-snapshot.test.ts`.
-  - Group E (Task 8's bootstrap half): `install.sh`, `server/test/install-sh.test.ts`.
 
-  At the time of writing no open PR but #1404 touches a file in groups A to E. #1404 overlaps group A in `ccd/ccrc` and `deploy/deploy.sh`, and group B in `README.md`, at lines this plan avoids (above).
+  At the time of writing no open PR but #1404 touches a file in groups A to D. #1404 overlaps group A in `ccd/ccrc` and `deploy/deploy.sh`, and group B in `README.md`, at lines this plan avoids (above).
 - **Growth.** `server/test/growthCheck.ts:48`, `GROWTH_LIMIT = 40`, measured from the merge-base with `origin/main`.
-  - `ccd/ccrc` is a listed file. This plan's estimate is about +9 net code lines: Task 2 +5, Task 8 +2, Task 9 +2, Tasks 3 and 5 zero (in place).
-  - Read `server/test/growth-check.test.ts`'s list. If a sweep or `install.sh` is listed, the same limit applies to it.
+  - `ccd/ccrc` is a listed file. This plan's estimate is about +5 net code lines: Task 2 +5, Tasks 3 and 5 zero (in place); Tasks 8 and 9 left the wave.
+  - Read `server/test/growth-check.test.ts`'s list. If a sweep or `ccd/ccrc-doctor-checks` is listed, the same limit applies to it.
   - Measure with `GROWTH_CHECK=1 ./node_modules/.bin/vitest run test/growth-check.test.ts` after each task that edits a listed file.
   - No waiver is planned. Past 39, stop and report. The open route is the reviewed waiver ledger (D-6223), as its own commit, with a number from the wave's deviation block.
 - **Citation debt and numeric citations.**
-  - `session-hook.test.ts -t 'CITATION DEBT'` stays green. Every hunk of `git diff -U0 origin/main -- ccd/ccrc` above `:16000` has equal old and new counts.
+  - `session-hook.test.ts -t 'CITATION DEBT'` stays green. Since #1521 (ruling 3) it reads the two frozen documents against each cited file as it stood at the document's freeze commit, so an edit to `ccd/ccrc` no longer moves the debt map; README's own census is still read live and must stay empty, so no README line citation into a file this wave edits may stop resolving.
   - No line this wave adds to a source or test file carries `<file>:NNN` (`citations`). Cite a function, a `file#symbol` or a describe name.
   - The anchors in this plan are for reading, never for copying into a comment.
 - **Pins this wave keeps green as they are:**
@@ -205,13 +203,11 @@ Other things this wave leaves out:
   - Task 2: `_inst_bins`, `_uninst_tree_bins`.
   - Task 3: `CCRC_SETTINGS` and its header.
   - Task 5: the seven validator bodies.
-  - Task 8: `_upd_resolve`.
-  - Task 9: `cmd_watchdog`, `_bak_gc`'s header.
 - `deploy/deploy.sh`: one `install_atomic` (Task 2).
 - The three sweeps: the loader and the knob lines (Task 3), their validators (Tasks 3 and 5).
 - `ccd/ccd-update-sync`: `redact()` and its header (Task 6).
 - `deploy/coordination-snapshot.mjs`: `thinBackups`' pre-migration keep (Task 7).
-- `install.sh`: its `--release` arm (Task 8).
+- `ccd/ccrc-doctor-checks`: `_check_box-settings`, its server-role line (Task 3, ruling 4).
 - `deploy/ccrc.env.example`, `README.md`: Task 3.
 - Tests: as each task names.
 
@@ -311,6 +307,7 @@ A bash row sources a script into a fixture HOME through its suite's own helper. 
   - `_uninst_tree_bins`: `rm -f -- "$HOME/.local/libexec/ccrc/ccrc-settings.sh" || _ccrc_die "removing the settings reader from \$HOME/.local/libexec/ccrc failed"`, then its echo. Place them before the `.local/bin` block's comment paragraph, so they run before `rmdir … libexec/ccrc` (:26824).
   - `deploy.sh`: `install_atomic ccd/lib/ccrc-settings.sh .local/libexec/ccrc/ccrc-settings.sh 644`.
   - No `_upd_backup_set` row (Reading 4).
+  - **Why `_inst_bins` and not `_inst_files`** (ruling 4): `_inst_files` returns at once on a server-role box ("a server-role box hosts no sessions"), and W29-I2 places the library there too; and `_inst_bins` is where the sweeps the library serves are placed, so placing it there, above them, is what puts it on the box before any sweep that sources it.
 - [ ] **Step 4: Run them green**, then whole:
   - `install-census.test.ts`, `ccrc-install-tree.test.ts`, `ccrc-install-landing.test.ts`, `ccrc-install-units.test.ts`, `ccrc-install-role.test.ts`, `ccrc-versioned-audit.test.ts`, `gen-wrappers.test.ts`, `graph-noise-ship.test.ts`, `usage-sweep-deploy-ship.test.ts`, `transcript-jq-ship.test.ts`;
   - by describe: `ccrc-uninstall.test.ts -t 'W29-I3'`, and the describes naming `_uninst_tree_bins`;
@@ -361,20 +358,25 @@ _settings_lib="${BASH_SOURCE[0]%/*}/lib/ccrc-settings.sh"; [ -f "$_settings_lib"
     - `keepalive:` / `nothing was measured`, using `printf`, since `_ka_say` is defined only at :155;
     - `usage-sweep:` / `nothing was swept`.
 
+    `$KNOB_WHY` already names the setting and the file (`<KEY> cannot be measured: ~/.ccrc/ccrc.env …`), which is ruling 1's source for a refusal of the reader.
+
     Defaults: 8, 4, `haiku`, `"Reply with the single word: ok"`, 1800, 7. The prompt's is double-quoted, which is how wave 24's `defaultsOf` reads a quoted default.
   - **New validation** (fail-closed, before the lock, explicit digits as R34 spelled `_keep_ok`):
     - `CCRC_GRAPH_BUDGET` matches `^[0123456789]{1,3}$` (0 rebuilds none);
     - `CCRC_GRAPH_MAX_WORKERS` matches `^[123456789][0123456789]?$`;
     - `CCRC_USAGE_SWEEP_DAYS` matches `^[123456789][0123456789]{0,2}$`.
 
-    The refusal reads `<prefix>: NAME must be a whole number from <lo> to <hi> — got '<value, at most 32 bytes, each non-printable byte as ?>'; <suffix>`, and the script exits 1. The keepalive's existing loop (:268-273) keeps validating `CCRC_KEEPALIVE_FRESH`, unchanged but for Task 5's digit spelling. The model and the prompt stay unvalidated, as today (Reading 7).
+    The refusal reads `<prefix>: NAME must be a whole number from <lo> to <hi> — got '<value, at most 32 bytes, each non-printable byte as ?>', as set in <the environment | ~/.ccrc/ccrc.env>; <suffix>` (ruling 1: the source is `KNOB_FROM`'s, in `_keep_knob`'s words), and the script exits 1. The keepalive's existing loop (:268-273) keeps validating `CCRC_KEEPALIVE_FRESH`; its digits are NOT already explicit (`^[0-9]+$` at :271, ruling 3), so Task 5 spells them, and for `CCRC_KEEPALIVE_FRESH` its sentence gains the same `, as set in …` source clause. The model and the prompt stay unvalidated, as today (Reading 7).
+  - **The pause check comes first** (ruling 4). The usage sweep's setting reads go after its pause-file check (`[ -e "$PAUSE" ] && { echo "usage-sweep: paused …"; exit 0; }`), so a paused sweep stays paused, exit 0, even when `ccrc.env` is faulted. The same order holds for any sweep that checks a pause file before its work.
+  - **Sweep headers** (ruling 4). Each sweep header that advises a drop-in for one of these settings is corrected to name a `~/.ccrc/ccrc.env` line (the keepalive's "CCRC_KEEPALIVE_FRESH=7200 in a drop-in", and its loop's "writing CCRC_KEEPALIVE_FRESH=30m in a drop-in").
+  - **The doctor's `box-settings`** (D-6599) keeps its every-role rule and reports the six too. On a server-role box (ccrc.env's `CCRC_ROLE=server`), a sweep setting's part of its line says the sweeps do not run there (ruling 4).
 
 - [ ] **Step 1: Write the failing rows.** Each reboot row spawns under `env -i` (Global Constraints). Its fixture `~/.ccrc/ccrc.env` holds only the named line and is mode 0600.
   - `graph-sweep.test.ts`, `describe('W29: the sweep reads its settings from ~/.ccrc/ccrc.env through ccrc\'s reader')`:
     - `W29-G1` (the reboot case): two stale trees, the file says `CCRC_GRAPH_BUDGET=1` and the environment names no `CCRC_`. Then `outcomeOf(second)` is `skipped-budget` and its detail is `pass budget 1 reached`.
     - `W29-G2`: environment `CCRC_GRAPH_BUDGET=2` over a file value of 1 → both trees build.
     - `W29-G3`: file `export CCRC_GRAPH_BUDGET=1` → exit 1, and stderr matches `/^graph-sweep: CCRC_GRAPH_BUDGET cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take .* — nothing was swept$/m`. No `~/.ccrc/graph-sweep.json` is written and no engine runs.
-    - `W29-G4`: file `CCRC_GRAPH_BUDGET=8x` → exit 1, with `CCRC_GRAPH_BUDGET must be a whole number from 0 to 999 — got '8x'; nothing was swept`.
+    - `W29-G4`: file `CCRC_GRAPH_BUDGET=8x` → exit 1, with `CCRC_GRAPH_BUDGET must be a whole number from 0 to 999 — got '8x', as set in ~/.ccrc/ccrc.env; nothing was swept`.
     - `W29-G5`: file `CCRC_GRAPH_MAX_WORKERS=2` → the engine shim records `GRAPHIFY_MAX_WORKERS=2`.
     - `W29-G6`: the sweep copied to `<home>/.local/bin/` with no library under `<home>/.local/libexec/ccrc/` → exit 1, with the loader's line naming `~/.local/libexec/ccrc/ccrc-settings.sh`, and no census written.
   - `telemetry-keepalive.test.ts`, the same describe title with "keepalive":
@@ -382,13 +384,14 @@ _settings_lib="${BASH_SOURCE[0]%/*}/lib/ccrc-settings.sh"; [ -f "$_settings_lib"
     - `W29-K2`: `CCRC_KEEPALIVE_PROMPT="Reply: ok"` → `-p` `Reply: ok`.
     - `W29-K3`: `CCRC_KEEPALIVE_FRESH=7200` and an account reported 3600 s ago → no turn, with the skip detail `under CCRC_KEEPALIVE_FRESH=7200`. With the environment `CCRC_KEEPALIVE_FRESH=1800` too → a turn.
     - `W29-K4`: a mode-000 `ccrc.env` → exit 1, stderr names `~/.ccrc/ccrc.env is there but cannot be read`, `turns()` is `[]`, and there is no `keepalive.json`.
-    - `W29-K5`: file `CCRC_KEEPALIVE_FRESH=30m` → the existing sentence `CCRC_KEEPALIVE_FRESH must be a whole number — got '30m'`, exit 1.
+    - `W29-K5`: file `CCRC_KEEPALIVE_FRESH=30m` → the existing sentence `CCRC_KEEPALIVE_FRESH must be a whole number — got '30m'`, followed by `, as set in ~/.ccrc/ccrc.env`, exit 1.
     - `W29-K6`: `CCRC_KEEPALIVE_PROMPT=say "ok"` → exit 1, with stderr's `cannot be measured` clause, and no turn.
   - `usage-sweep-runner.test.ts`:
     - `W29-U1` (reboot): `CCRC_USAGE_SWEEP_DAYS=3` → the scanner shim receives `--days 3`, and stdout says `in the last 3 days`.
     - `W29-U2`: no `ccrc.env` → `--days 7`.
     - `W29-U3`: a dangling-link `ccrc.env` → exit 1, and the scanner never runs.
-  - `ccrc-doctor-codex.test.ts`, in wave 24's box-settings describe: `W29-D1: a sweep's setting is reported like ccrc's`. The file holds `CCRC_GRAPH_BUDGET=4`, so the result is PASS matching `/CCRC_GRAPH_BUDGET=4/`. With `export CCRC_GRAPH_BUDGET=4` instead, it is WARN, naming the line.
+    - `W29-U4` (ruling 4): the pause file present and a dangling-link `ccrc.env` → exit 0, the paused line, and the scanner never runs.
+  - `ccrc-doctor-codex.test.ts`, in wave 24's box-settings describe: `W29-D1: a sweep's setting is reported like ccrc's`. The file holds `CCRC_GRAPH_BUDGET=4`, so the result is PASS matching `/CCRC_GRAPH_BUDGET=4/`. With `export CCRC_GRAPH_BUDGET=4` instead, it is WARN, naming the line. `W29-D2` (ruling 4): with `CCRC_ROLE=server` and `CCRC_GRAPH_BUDGET=4` in the file, the line still reports the setting and says the sweeps do not run on a server-role box.
   - `keepalive-freshness-parity.test.ts`: the two regexes move to `/^[ \t]*_ccrc_knob[ \t]+CCRC_KEEPALIVE_FRESH[ \t]+[^ \t]+.*$/` (broad) and `/^_ccrc_knob CCRC_KEEPALIVE_FRESH ([0-9]+) && /` (narrow). The test's prose drops "in a systemd drop-in" for "a `~/.ccrc/ccrc.env` line". Its assertion against `SWAP_FRESH` is unchanged.
 - [ ] **Step 2: Run them red**, one file at a time (`-t 'W29'`). Then run wave 24's census whole. Once the list grows it is red at C4 (six settings that nothing in `FILES` takes) and at C2 (six settings with no example block and no README mention), and green again after Step 3's census and documentation edits. Record each row's measured state.
 - [ ] **Step 3: Implement.** In order:
@@ -444,9 +447,9 @@ _settings_lib="${BASH_SOURCE[0]%/*}/lib/ccrc-settings.sh"; [ -f "$_settings_lib"
       - plus `ccd/ccrc-models-probe` by name, which ccrc runs from its tree, never placed.
 
       Its code is `codeOf()` of each file.
-    - `HELPER_FILES`: tracked `deploy/*.mjs`, `ccd/*.mjs` and `shared/*.mjs`.
-    - `SIBLING_ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }>`. `EnvOnlyClass` gains `'tuning'`, a sweep's internal policy number its header does not offer an operator, overridable for tests. It holds every name `envReads()` finds in `SIBLING_FILES` outside `SETTINGS` and outside `ENV_ONLY`, each with a one-sentence reason naming the header or function. The worker measures the set at the absorbed tip. At `ba36d7420` it includes the names in "Not in this wave".
-    - `HELPER_ENV_ONLY` gains the helper names a scan finds (`/process\.env(?:\.|\[['"])(CCRC_[A-Z0-9_]+)/g`), each with a reason. At `ba36d7420` these are `CCRC_SIGSTORE_TRUSTED_ROOT` (kept) and `CCRC_RECALL_ARM`, `CCRC_RECALL_ASOF`, `CCRC_RECALL_SESSION` and `CCRC_SESSION_GENERATION` (class: per-run).
+    - `HELPER_FILES` (ruling 3: `ccd/*.mjs` matches only two files): the tracked `.mjs` files `ccd/ccrc` invokes, derived from its code lines (every `<dir>/<name>.mjs` path it names, resolved against the tree), so `ccd/history/cli.mjs` (named as `$CCRC_HERE/history/cli.mjs`) is in it. The worker measures the set at the base and lists it in As built.
+    - `SIBLING_ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }>`. If the census finds `CCRC_MODELS_AUTH_LIB` and `CCRC_AUTH_NO_MAIN` at the base, each is listed with its reason (ruling 4). `EnvOnlyClass` gains `'tuning'`, a sweep's internal policy number its header does not offer an operator, overridable for tests. It holds every name `envReads()` finds in `SIBLING_FILES` outside `SETTINGS` and outside `ENV_ONLY`, each with a one-sentence reason naming the header or function. The worker measures the set at the absorbed tip. At `ba36d7420` it includes the names in "Not in this wave".
+    - `HELPER_ENV_ONLY` gains the helper names a scan finds (`/process\.env(?:\.|\[['"])(CCRC_[A-Z0-9_]+)/g`), each with a reason. At `ba36d7420` these are `CCRC_SIGSTORE_TRUSTED_ROOT` (kept, `deploy/verify-provenance.mjs`) and `CCRC_RECALL_ARM`, `CCRC_RECALL_ASOF`, `CCRC_RECALL_SESSION` and `CCRC_SESSION_GENERATION` (class: per-run), all four in `ccd/history/cli.mjs` (ruling 3).
     - `LOADER`: the two lines of Task 3, as a constant.
   - **Rows.**
     - `it('W29-S1: every setting a sweep reads is taken once, as _ccrc_knob NAME <default> && NAME="$KNOB", and never expanded with a default')`:
@@ -504,7 +507,7 @@ _settings_lib="${BASH_SOURCE[0]%/*}/lib/ccrc-settings.sh"; [ -f "$_settings_lib"
 ### Task 5: explicit digits in the validators of values ccrc reads from outside (R38, W29-e)
 
 **Files:**
-- Modify: `ccd/ccrc`, the seven bodies in the consent list, in place. The keepalive's knob loop (`ccd/ccd-telemetry-keepalive:271`) and Task 3's three new sweep validators are already explicit.
+- Modify: `ccd/ccrc`, the seven bodies in the consent list, in place; and the keepalive's knob loop (`ccd/ccd-telemetry-keepalive:271`, `^[0-9]+$`), which is NOT already explicit (ruling 3). Task 3's three new sweep validators are written explicit.
 - Test: `server/test/ccrc-settings-census.test.ts`, and `server/test/ccrc-update-phases.test.ts` (the watchdog describe, for the probe gap).
 
 **Interfaces:**
@@ -556,52 +559,13 @@ This task changes backup retention, which the daily disk soak measures. The brie
 - [ ] **Step 5: Mutation.** Drop the credit test: W29-T1 goes red.
 - [ ] **Step 6: Commit.** `fix(backups): a counted pre-migration data set is the pre-migration keep (wave 29, R46)`.
 
-### Task 8: the bootstrap's release-host defences, and SHA256SUMS held to one line on both paths (R48, R50 fourth bullet; W29-h)
+### Task 8: moved out of this wave (ruling 2)
 
-**Files:**
-- Modify: `install.sh` (its `--release` arm, :72-95), and `ccd/ccrc`'s `_upd_resolve` (:22000-22005).
-- Test: `server/test/install-sh.test.ts` (the describe `install.sh --release: fetch, verify, hand off to the staged ccrc`, :290), and `server/test/ccrc-update-fetch.test.ts`.
+R48 and R50's fourth bullet (the bootstrap's release-host defences, and SHA256SUMS held to one line on both paths), with Reading 14 and rows W29-H1 to W29-H6. Carried past closure to an issue the coordinator files. Its text stands in this plan's first commit.
 
-**Interfaces:**
-- Produces, in `install.sh`:
-  - **The SHA256SUMS fetch** runs as `curl -g -fsSL --connect-timeout 10 --max-time 20 --max-filesize 4096 -o …`.
-  - **The tarball fetch** runs as `curl -g -fsSL --connect-timeout 10 --speed-limit 1024 --speed-time 30 -o …`.
-  - **The five numbers** are ccrc's defaults (`ccd/ccrc:2106`, :2138, :2139, :2153, :2154), copied because the bootstrap runs before ccrc exists, and held equal by W29-H2.
-  - **The release base is never printed** when `CCRC_RELEASE_BASE_URL` is set. Each line says `the release base in CCRC_RELEASE_BASE_URL`, and the default base prints whole.
-  - **The tarball name** is held to at most 200 bytes of printable ASCII under `LC_ALL=C`, and must hold no `/`, before any line prints it, the tests `_upd_resolve` makes. Any other name is refused, and the line names the count, not the bytes.
-  - **SHA256SUMS** must be exactly one line, `^[0123456789abcdef]{64} [ *]ccrc-[^/]+\.tar\.gz$`, or it is refused: `install.sh: SHA256SUMS is not one line naming one ccrc tarball — refusing`, exit 1, before the tarball fetch. A release writes one line (`deploy/build-release.sh:234`), so `sha256sum -c` then opens the tarball alone.
-- Produces, in `_upd_resolve`: the same one-line test, before the tarball-name tests, dying `SHA256SUMS is not one line naming one ccrc tarball — refusing; nothing on this box was changed`.
-- The residue's two other phrases, "an unpinned macOS curl-front -g admission" and "an unfiltered verifier exit-3 sentence", are cited from the residue alone. Step 0 finds them.
+### Task 9: moved out of this wave (ruling 2)
 
-- [ ] **Step 0:**
-  - Read R48 in the wave-24 review record. For each of those two phrases that names a line in this tree, add a row and a fix here. For one that does not, report it in the wave-done.
-  - Then `git grep -n 'SHA256SUMS' -- server/test agent/test`, and confirm that no fixture writes a SHA256SUMS of more than one line. A fixture that does is rewritten, and listed as a pin changed on purpose.
-- [ ] **Step 1: Write the rows.**
-  - `W29-H1`: the curl shim's recorded argv for the two fetches carries exactly the flags above.
-  - `W29-H2` (text): `install.sh`'s five literals equal the `:=` defaults of `CCRC_RELEASE_CONNECT_TIMEOUT`, `CCRC_RELEASE_SPEED_LIMIT`, `CCRC_RELEASE_SPEED_TIME`, `CCRC_RELEASE_SUMS_MAX_TIME` and `CCRC_RELEASE_SUMS_MAX_FILESIZE` in `ccd/ccrc`. It sits beside the existing owner/repo source pin.
-  - `W29-H3`: `CCRC_RELEASE_BASE_URL=https://u:hunter2@mirror.example/releases` → no output line contains `hunter2` or `mirror.example`.
-  - `W29-H4`: a two-line SHA256SUMS → refused with the sentence above, and the curl shim records no tarball fetch.
-  - `W29-H5`: `it.each` over the names `ccrc-x/../y.tar.gz`, a 201-byte name and a name with a `\x1b` byte → refused, and no output byte sequence of the name appears.
-  - `W29-H6` (`ccrc-update-fetch.test.ts`): a two-line SHA256SUMS and a 63-hex digest each make `ccrc update` die with the one-line sentence. Nothing is fetched past SHA256SUMS, and nothing on the box changes.
-- [ ] **Step 2: Red**, **Step 3: implement**, **Step 4: green**: `install-sh.test.ts`, `ccrc-install-role.test.ts -t 'install.sh'`, `ccrc-update-fetch.test.ts`, `ccrc-update-phases.test.ts`, `ccrc-update-kept.test.ts`, `build-release.test.ts`, `growth-check`.
-- [ ] **Step 5: Mutations.** Drop `--max-filesize`: W29-H1 goes red. Change one literal to 11: W29-H2. Accept two lines: W29-H4 and W29-H6. Drop the `/` test: W29-H5.
-- [ ] **Step 6: Commit.** `fix(release): the bootstrap's fetch bounds and name tests, and a one-line SHA256SUMS on both paths (wave 29, R48, R50)`.
-
-### Task 9: the watchdog does not call a live holder wedged on an undecided deadline (R50 first bullet; W29-i)
-
-**Files:**
-- Modify: `ccd/ccrc`'s `cmd_watchdog`, its deadline line (:20863, in place) and its wedged arm (:20927, one line added); `_bak_gc`'s header (comment only, Reading 13).
-- Test: `server/test/ccrc-update-phases.test.ts`, the describe `ccrc watchdog: a re-measurement, never a timestamp alone (design §11)`.
-
-**Interfaces:**
-- Produces:
-  - **The deadline line** keeps its WARN and also records the undecided reading in a local `drc=1`.
-  - **The wedged arm** runs first `[ "$drc" -eq 0 ] || { echo "watchdog: updater pid $who has held ~/.ccrc/update.lock with no report for ${age}s, but CCRC_UPDATE_DEADLINE_MS does not read as one whole number of milliseconds everywhere the server may take it from, so it is not recorded as wedged; nothing was reverted"; return 0; }`.
-  - **A dead holder** is still probed and handled as today. Only the overwrite of a LIVE holder's report waits on a decided deadline. Wave 24's D-6602 residual (`2e6`) is the case.
-- [ ] **Step 1: Write the row.** `it('W29-W1: an undecided deadline (2e6) never records a live holder as wedged')`. The setup is the wedged row's: `report(home, { phase: 'installing', ageS: 1900, pid: 4321 })` and `holdLock(home)`, with `CCRC_UPDATE_DEADLINE_MS=2e6` in the environment. Assertions: rc 0; stdout matches the line above; `readFileSync(jsonPath(home))` equals the report written before; and no `recorded as wedged` text. The existing wedged row is the decided-deadline control, unchanged.
-- [ ] **Step 2: Red**, **Step 3: implement**, **Step 4: green**: the whole file, `update-watchdog-revert.test.ts`, `growth-check`.
-- [ ] **Step 5: Mutation.** Drop the guard: W29-W1 goes red (`recorded as wedged`).
-- [ ] **Step 6: Commit.** `fix(watchdog): an undecided deadline never writes a live holder's report over as wedged (wave 29, R50)`.
+R50's first bullet (the watchdog and an undecided deadline) and its third bullet's `_bak_gc` header note, with Reading 13's comment and row W29-W1. Carried past closure with Task 8. Its text stands in this plan's first commit.
 
 ### Task 10: the gate and the PR
 
@@ -610,7 +574,7 @@ This task changes backup retention, which the daily disk soak measures. The brie
   - re-run Task 2's rows and W29-I4;
   - and confirm that its `rmdir …/lib` still runs after this wave's `rm` and before `rmdir …/libexec/ccrc`.
 - [ ] **Step 2: The touched suites, one file at a time:**
-  - every suite named in Tasks 1 to 9's Step 4;
+  - every suite named in Tasks 1 to 7's Step 4;
   - `ccrc-update-flip-backups.test.ts`, `ccrc-update-kept.test.ts`, `update-intent-cross-side.test.ts` and `update-projection.test.ts` (users of `nodeEnv`);
   - `ccrc-doctor-fleet.test.ts` and `ccrc-doctor-exposure.test.ts`;
   - by describe: `ccrc-uninstall.test.ts`, the describes Task 2 touched (its whole-file process-leak exit is R42's, carried);
@@ -625,8 +589,8 @@ This task changes backup retention, which the daily disk soak measures. The brie
   - the shared file: generated, where it is placed, and why it is not a move (citations and slices) and not #1404's mechanism;
   - the refusal behaviour (a refused or invalid setting stops the pass, exit 1, before the lock);
   - the census's sibling half and its classes;
-  - each folded residue item with its row;
-  - the residue it did not fold, with dispositions;
+  - each folded residue item with its row (R38, R45, R46);
+  - the residue it did not fold, with dispositions (R48 and R50 carried by ruling 2, and the triage's others);
   - growth measured;
   - every pin changed on purpose;
   - and the operator's migration. On the fleet box, write each sweep setting as a `~/.ccrc/ccrc.env` line, read `ccrc doctor`'s `box-settings`, then remove any drop-in or `environment.d` line for these names, because a set environment still wins. This wave asks no act on a box.
@@ -648,9 +612,9 @@ This task changes backup retention, which the daily disk soak measures. The brie
 9. **No per-pass line naming each setting's source.** The doctor's `box-settings` is the read-only door (D-6599). The alternative is one stderr line per pass, which costs exact-output rows in three suites.
 10. **Unit timeouts stay fixed.** The example names the cost, and W29-S8 ties the budget block to the unit's number. The alternative derives `TimeoutStartSec` at install from the setting, which means a unit template.
 11. **`install.sh` keeps reading `CCRC_RELEASE_BASE_URL` from the environment alone**, because it runs before `ccrc.env` exists. Its copied curl bounds are pinned by W29-H2. The alternative is a bootstrap that reads an existing `ccrc.env` when re-run on an installed box.
-12. **R50's parent-versus-child reading is not folded.** The child's repeated probe decides, and equal readings need the server to spawn ccrc with a scrubbed environment. The alternative is a server wave that scrubs `CCRC_SETTINGS` names from the update spawn's environment.
+12. *(Moved out of this wave with Tasks 8 and 9, ruling 2.)* **R50's parent-versus-child reading is not folded.** The child's repeated probe decides, and equal readings need the server to spawn ccrc with a scrubbed environment. The alternative is a server wave that scrubs `CCRC_SETTINGS` names from the update spawn's environment.
 13. **The 63 s hard-cap term stays on a rollback by flip.** It errs early. The alternative is a smaller term for a flip, measured from the flip's own start chain.
-14. **SHA256SUMS must be one line**, refused otherwise, rather than checked through a filtered one-line copy. The release writes one line. The alternative tolerates extra lines and verifies only the tarball's.
+14. *(Moved out of this wave with Task 8, ruling 2.)* **SHA256SUMS must be one line**, refused otherwise, rather than checked through a filtered one-line copy. The release writes one line. The alternative tolerates extra lines and verifies only the tarball's.
 15. **R38's scope.** Chosen: the seven named bodies, plus the sweeps' settings validators, guarded by W29-A1. About 93 internal-format ranges are carried. The alternative is a mechanical sweep of every `=~` range in `ccd/ccrc` and `ccd/ccrc-doctor-checks`, with a census over both files.
 16. **No integrity pin on the library in this wave.** A digest pin like #1404's is a follow-up after #1404 merges. The alternative is to wait for #1404 and pin now.
 17. **`keepalive-freshness-parity.test.ts` is rewritten to the new spelling**, keeping its two-tier count. The alternative leaves `CCRC_KEEPALIVE_FRESH` environment-only, which Reading 5 rejects.
@@ -673,3 +637,18 @@ The coordinator read the readings, the critique and the task list, and rules as 
    - **Task 2's placement.** Task 2 states why `_inst_bins` places the library rather than `_inst_files`.
 5. **#1404, as Reading 16 chose: no pin in this wave.** If #1404 merges before this PR, merge main, keep this wave's directory separate from #1404's `lib/`, and say so in As built.
 6. **Load.** The fleet box is under the delegation broker's soak, with a tight budget for unmeasured hours. Run every suite one file at a time, at idle priority (`nice -n 19 ionice -c3`), and keep any subagent fan-out to two at once.
+
+## Deviations found
+
+Issued to this wave: D-6979 to D-6986. Each is defined below as the decision it names is made; an unused one is recorded as spare.
+
+## As built
+
+**The coordinator's rulings, applied (second commit).** The first commit is the plan as the coordinator wrote it, byte for byte. The second applied the rulings section above:
+- Ruling 1: the Goal's refusal sentence and Task 3's refusal text name the setting's source (`KNOB_WHY` for a reader refusal, `, as set in <the environment | ~/.ccrc/ccrc.env>` for a validation refusal); W29-G4 and W29-K5 changed to match.
+- Ruling 2: Tasks 8 and 9 are stubs; R48 and R50 (first and fourth bullets), Readings 12 and 14, and rows W29-H1 to H6 and W29-W1 left the wave. `install.sh`, `install-sh.test.ts`, `ccrc-update-fetch.test.ts`, Group E, and the consent entries for `_upd_resolve`, `cmd_watchdog` and `_bak_gc` left the Global Constraints; the growth estimate fell to about +5; Task 10 reads Tasks 1 to 7.
+- Ruling 3: Task 5 spells the keepalive loop's digits; `HELPER_FILES` is the `.mjs` set `ccd/ccrc` invokes, and the `CCRC_RECALL_*` and `CCRC_SESSION_GENERATION` reads are named as `ccd/history/cli.mjs`'s; the base is `ea1e84c09`, and the citation-debt bullet states #1521's rule.
+- Ruling 4: the pause-first order (new row W29-U4), the sweep headers' drop-in advice, the two environment-only names, the doctor's server-role line (new row W29-D2, and `ccd/ccrc-doctor-checks` joins the files and Group B), and Task 2's reason for `_inst_bins`.
+- Rulings 5 and 6: no pin (Reading 16 as written); the load rule is the brief's.
+- The brief and the worker skill (clause 16) govern the absorb step: no rebase at any point, a merge only on a measured trigger, so the Global Constraints' "Rebase before the first push" does not apply.
+
