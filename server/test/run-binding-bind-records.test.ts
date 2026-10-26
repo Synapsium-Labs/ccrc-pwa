@@ -39,27 +39,39 @@ describe('the bound incarnation has one writer (ARCH-60 follow-up, #1407)', () =
   });
 });
 
-describe('a bind with no placeable birth records nothing (the gaps of #1407, characterization)', () => {
-  it('GAP 2, wrong answer: a wave bound to a live worker whose minting run cannot be placed stays undecided', () => {
+describe('a bind with no placeable birth still records an incarnation (the gaps of #1407)', () => {
+  it('GAP 2: a wave bound to a live worker whose minting run cannot be placed records the recorded birth and is bound', () => {
     const s = store();
     const w1 = open(s, 'prog-a', 'coord-1', BORN - 1000);
     // The minting run recorded a birth but its dispatchStartedAt does not agree, so `childBirthOf` cannot place it.
     s.setSession(w1, 'demo-w', BORN);
     const w2 = open(s, 'prog-b', 'coord-1', BORN - 1000);
     s.setSession(w2, 'demo-w');
-    // WRONG ANSWER (today): no birth is recorded for the later wave, so it reads undecidable, never a parent.
-    expect(born(s, w2)).toEqual({ sessionBornAt: null, sessionBornFor: null });
+    expect(born(s, w2)).toEqual({ sessionBornAt: BORN, sessionBornFor: 'demo-w' });
     const binding = bindingOf(series(s, 'demo-w'), bornIncarnation('demo-w', BORN));
-    expect(binding.undecided.map((r) => r.id)).toEqual([w2]);
+    expect(binding.undecided).toEqual([]);
+    expect(binding.newest?.id).toBe(w2);
   });
 
-  it('GAP 1, residual: an unborn incarnation binds every run that names the id, whatever birth the run recorded', () => {
+  it('GAP 1 (unplaceable): an unborn session with recorded births is its newest recorded birth, so an earlier occupant\'s open run is no parent', () => {
     const s = store();
-    const old = open(s, 'prog-old', 'coord-gone', OLD);
-    s.setSession(old, 'demo-w', OLD);
-    const binding = bindingOf(series(s, 'demo-w'), unbornIncarnation('demo-w', 'not-a-child'));
-    // Accepted until the registry names an occupant epoch (#1532): the id-string rule holds for an unborn session.
-    expect(binding.open?.id).toBe(old);
-    expect(parentOf(binding)).toBe('coord-gone');
+    const ghost = open(s, 'prog-old', 'coord-gone', OLD);
+    s.setSession(ghost, 'demo-w', OLD);
+    const live = open(s, 'prog-new', 'coord-live', BORN + 1000);
+    s.setSession(live, 'demo-w', BORN);
+    s.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(live);
+    const binding = bindingOf(series(s, 'demo-w'), unbornIncarnation('demo-w', 'unplaceable'));
+    expect(binding.open).toBeNull();
+    expect(parentOf(binding)).toBeNull();
+    expect(binding.newest?.id).toBe(live);
+  });
+
+  it('GAP 1 (not-a-child), residual: a session that never had a recorded birth keeps the id-string rule (#1532)', () => {
+    const s = store();
+    const manual = open(s, 'prog-m', 'coord-1', OLD);
+    s.setSession(manual, 'manual-ws');
+    const binding = bindingOf(series(s, 'manual-ws'), unbornIncarnation('manual-ws', 'not-a-child'));
+    expect(binding.open?.id).toBe(manual);
+    expect(parentOf(binding)).toBe('coord-1');
   });
 });
