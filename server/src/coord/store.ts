@@ -3041,11 +3041,9 @@ export class CoordStore {
       this.db.prepare('UPDATE runs SET sessionBornAt = NULL, sessionBornFor = NULL WHERE id = ?').run(runId);
     }
     // The bound incarnation (ARCH-62, #1407): a bind that names no birth of its own (a later wave bound to a worker that
-    // already exists) records the birth of the occupant it binds to, the NEWEST birth any run of the session's series
-    // recorded for it (`stampOccupantBirth`, placement of the minting run plays no part), so `bindsRun` answers it
-    // exactly. No stamp, and the id-string rule, where no run of the series ever recorded a birth for the session, or
-    // where another run of the series has the adopted shape after that birth (D-6993: the birth may be an earlier
-    // occupant's).
+    // already exists) records the birth of the occupant it binds to (`stampOccupantBirth`: the newest placeable birth the
+    // session's series recorded for it, else the newest recorded one), so `bindsRun` answers it exactly. No stamp, and
+    // the id-string rule, where no run of the series ever recorded a birth for the session.
     // Only when the bind changes the occupant: a same-session re-statement (markDispatched after an adopted bind's
     // explicit null) must not date the run to an earlier occupant's birth.
     if (bornAt === undefined && changesOccupant) this.stampOccupantBirth(runId, sessionId);
@@ -3059,16 +3057,15 @@ export class CoordStore {
 
   /** Stamp run `runId` (just bound to `sessionId`, with no birth of its own) with the occupant's birth: `occupantBirthOf`
    *  (`coord/runBinding.ts`, the one rule) over the session's series as `bindingRunsOf` reads it
-   *  (`run-binding-occupant-birth.test.ts` pins a rebound run's birth outside the series). Placement of the minting run plays
-   *  no part, so a worker whose `dispatchStartedAt` moved is stamped with the newest birth on record. Write-once: a run
-   *  that carries a birth keeps it. A session with no birth on record (a coordinator, a manual workspace), one where
-   *  another run of the series has the adopted shape after the newest birth on record (D-6993: that birth may be an
-   *  earlier occupant's), or whose series cannot be read stays unstamped and keeps the id-string rule. On a worker alive
-   *  across migration 16 the newest birth can be a backfilled wave-N row, not the minting run: the legacy exception
-   *  `runBinding.ts` names (WHICH RUNS BIND A BORN INCARNATION). */
+   *  (`run-binding-occupant-birth.test.ts` pins a rebound run's birth outside the series). The newest placeable birth on
+   *  record, as the merge base stamped; only when none can be placed (a worker whose `dispatchStartedAt` moved), the newest
+   *  birth on record. Write-once: a run that carries a birth keeps it. A session with no birth on record (a coordinator, a
+   *  manual workspace), or whose series cannot be read, stays unstamped and keeps the id-string rule. On a worker alive
+   *  across migration 16 the newest placeable birth can be a backfilled wave-N row, not the minting run: the legacy
+   *  exception `runBinding.ts` names (WHICH RUNS BIND A BORN INCARNATION). */
   private stampOccupantBirth(runId: number, sessionId: string): void {
     const series = this.bindingRunsOf(sessionId);
-    const at = series.ok ? occupantBirthOf(series.runs, sessionId, runId) : null;
+    const at = series.ok ? occupantBirthOf(series.runs, sessionId) : null;
     if (at === null) return;
     this.db.prepare('UPDATE runs SET sessionBornAt = ?, sessionBornFor = ? WHERE id = ? AND sessionBornAt IS NULL')
       .run(at, sessionId, runId);

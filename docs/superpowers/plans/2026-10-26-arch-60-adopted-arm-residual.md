@@ -7,7 +7,7 @@ standing. It edits no other plan and no programme ledger.
 
 `server/test/run-binding-bind-records.test.ts` drives every call of `bindSession`, `setSession` and `markDispatched` in
 `server/src` through the path that reaches it, over one fixture: a worker whose only birth on record cannot be placed by
-`childBirthOf`. It reads what each bind wrote on the run it bound. Run over the pre-fix source (`d6aae6879`), 5 of the 6
+`childBirthOf`. It reads what each bind wrote on the run it bound. Run over the merge base (`ce7b94dab`), 5 of the 6
 driven arms recorded no birth: the open route (`holdAndBindSession`), `CoordStore.markDispatched`,
 `CoordStore.dispatchRun`, the `CoordStore.setSession` pass-through and the adopted arm of `dispatch.ts#spawnFresh`. Only
 the fresh-spawn arm recorded one. After the fix, 1 arm records none: the adopted arm. So the exit "unbound-incarnation
@@ -21,9 +21,9 @@ bind sites go to 0" is met for every site except that one, which is named below.
   section 5.1, and the placement rule in section 5.3) says an adopted workspace holds no birth that is provably its
   own: the dispatch did not watch it being minted, so `childBirthOf` must read it `unplaceable`, and the bind gate and
   the close hold rather than date PR rows against it. Two candidate sources were checked and rejected:
-  - **The occupant stamp's source** (the newest birth any run of the series recorded for the id). For an adopted id,
-    no run of this dispatch recorded a birth, so any birth on record for the id may be an EARLIER occupant's under a
-    recycled name. Stamping it, or anchoring the reader to it, would bind the adopted worker's runs to that earlier
+  - **The occupant stamp's source** (the birth a later wave of the id records). For an adopted id, no run of this
+    dispatch recorded a birth, so any birth on record for the id may be an EARLIER occupant's under a recycled name.
+    Writing it on the adopting run, or anchoring the reader to it, would bind the adopted worker's runs to that earlier
     occupant, which is the ghost-parent error #1407 exists to remove.
   - **The registry row** (`$REG/<id>.spawn`, the epoch ccd's `_spawn` writes). It is ccd's clock, in seconds, written
     on every spawn of the id, not once at mint, and the server's birth column is a server-clock instant taken just
@@ -37,26 +37,34 @@ bind sites go to 0" is met for every site except that one, which is named below.
   below).
   Neither half borrows a birth that another run recorded for the id:
   - **The read.** No reader anchors an `unplaceable` worker to any birth on record (round 5 of PR #1573). Two anchors
-    were tried and both made a shape worse than the merge base. The first (`0d1b8ead5`) took the newest birth on record
-    for the id and made an earlier occupant's open run the adopted worker's parent, the D6 ghost (D-5920). The second
-    (`b974fc5e7`, `7d1850675`) took the birth the worker's own minting run recorded, while no newer one was on record. A
+    were tried on earlier rounds of PR #1573 and both made a shape worse than the merge base. The first took the newest
+    birth on record for the id and made an earlier occupant's open run the adopted worker's parent, the D6 ghost
+    (D-5920). The second took the birth the worker's own minting run recorded, while no newer one was on record. A
     recorded birth on a re-stamped minting run is never proven to be the LIVE occupant's: after a same-id redraw by an
     older build (a cross-build rollback) or a crash between `ws-add` and `setSession`, it is an earlier occupant's on the
     same run. Anchored to it, the readers dropped the live occupant's waves and kept a dead coordinator's. So every
     `unplaceable` worker keeps the merge base's id-string rule, and `runWire.incarnationsOfSessions` builds the fleet's
     incarnations from the marks alone, with no series read per session per frame.
-  - **The write.** `occupantBirthOf`, the stamp's source, answers no birth when ANOTHER run of the series names the id,
-    records no birth, and was dispatched after the newest birth on record. The adopted arm has that shape. The shape does
-    not prove an adoption (a run whose fresh spawn failed and that was later rebound to the worker has it too), so the
-    stamp declines rather than guesses. The run being stamped is excluded: its own failed spawn attempt is no adoption
-    of the name, and counting it left a later wave of a placeable worker unstamped and undecidable (found in the round-4 review). So a
-    later wave bound to an adopted worker records nothing, and it too reads by the id-string rule.
-  The adopted read-back case in `server/test/run-binding-bind-records.test.ts` pins both halves: an earlier occupant's
-  run still open, the name adopted, then a later wave. `childParentOf`, `claimantsOf` and `sessionRunRead` answer the
-  adopting run's claimant, and the later wave records no birth. The read half is red at `0d1b8ead5` and green on the
-  merge base. The stamp half is red on the merge base, whose placeable-only stamp gave the later wave the earlier
-  occupant's birth. The census pins the arm by name, so a change that makes it record a birth, or a new arm that records
-  none, reds the suite.
+  - **The write.** `occupantBirthOf`, the stamp's source, takes the newest PLACEABLE birth on record for the id, as the
+    merge base does, and only when no birth for the id can be placed, the newest birth on record. Nothing vetoes it. An
+    earlier round vetoed the stamp when another run of the series named the id, recorded no birth and was dispatched
+    after that birth, the adopted arm's shape. The veto helped no reader: an adopted worker's mark names the adopting run,
+    which records no birth, so the worker is `unplaceable` and its readers never read the stamp. And it made a
+    placeable worker worse than the merge base (round 6): every build before the stamp cleared the births on an
+    occupant change and stamped nothing, so a failed fresh spawn that an older build later rebound to the worker leaves
+    the same shape, live databases hold it, and the veto then left that worker's later waves unstamped, undecidable,
+    off its card and off its coordinators' `childIds`. So a later wave bound to an adopted worker records what the
+    merge base records, and the adopted worker reads by the id-string rule whatever it records.
+  The adopted read-back case in `server/test/run-binding-bind-records.test.ts` pins this: an earlier occupant's run
+  still open, the name adopted, then a later wave. `childParentOf`, `claimantsOf` and `sessionRunRead` answer the
+  adopting run's claimant, on the merge base and on this PR. The census pins the arm by name, so a change that makes it
+  record a birth, or a new arm that records none, reds the suite.
+  One more rule of the same write, not a deviation: when the id has a placeable birth, the stamp takes the newest
+  placeable one, exactly as the merge base does, even when a NEWER unplaceable birth is on record. Preferring that newer
+  birth would date a later wave of a `born` worker to an instant its readers do not place (round 6, shape S4 of the
+  corpus: the wave lost its parent and its card), while it changes no answer for an `unplaceable` worker, whose readers
+  never read the stamp. Only when no birth for the id can be placed does this PR stamp where the merge base stamps
+  nothing (gap 2).
 
 ## The acceptance bar
 

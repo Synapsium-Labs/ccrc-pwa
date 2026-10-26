@@ -1,5 +1,5 @@
 // ARCH-60 follow-up (#1407, part of #795): THE PROBE CORPUS of PR #1573. One case per shape a review round reported (rounds
-// 1 to 5), each read back the way the server reads it: the child's parent (`childParentOf`), its claimants
+// 1 to 6), each read back the way the server reads it: the child's parent (`childParentOf`), its claimants
 // (`claimantsOf`), the card (`sessionRunRead`), the coordinators' `childIds` (`withChildIds`), the hold (`heldFor`) and,
 // where the shape has one, the birth a later wave was stamped with.
 //
@@ -218,9 +218,8 @@ const CORPUS: readonly Case[] = [
       return { f, mark: minting, coords: ['coord-1'], wave: c };
     },
     base: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['a', 'minting', 'c'] }, held: 'released:coord-1:parent-not-live', stamp: 'T0 for demo-w' },
-    head: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['a', 'minting', 'c'] }, held: 'released:coord-1:parent-not-live', stamp: 'T5 for demo-w' },
-    verdict: 'better',
-    why: 'the later wave records T5, the birth the live occupant\'s own minting run recorded; the merge base dated it to the earlier occupant (T0). coord-1\'s childIds still list the earlier occupant\'s open run a, as on the merge base (inherited, D6 gap 1)',
+    verdict: 'same',
+    why: 'the stamp is the merge base\'s (T0, the newest placeable birth): the worker is unplaceable, so no reader of it reads the stamp, and preferring the newer unplaceable birth made a born worker worse (round 6, S4). coord-1\'s childIds list the earlier occupant\'s open run a on both (inherited, D6 gap 1)',
   },
   {
     shape: 'a reused name (earlier occupant placeable and done), the live minting run unplaceable and open, then a later wave',
@@ -237,9 +236,7 @@ const CORPUS: readonly Case[] = [
       return { f, mark: minting, coords: ['coord-1', 'coord-gone'], wave: c };
     },
     base: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['minting', 'c'], 'coord-gone': [] }, held: 'released:coord-1:parent-not-live', stamp: 'T0 for demo-w' },
-    head: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['minting', 'c'], 'coord-gone': [] }, held: 'released:coord-1:parent-not-live', stamp: 'T5 for demo-w' },
-    verdict: 'better',
-    why: 'the later wave records T5, the live occupant\'s own recorded birth; the merge base dated it to the earlier occupant (T0)',
+    verdict: 'same',
   },
   {
     shape: 'a reused name, the live minting run unplaceable and done, then a later wave',
@@ -257,9 +254,7 @@ const CORPUS: readonly Case[] = [
       return { f, mark: minting, coords: ['coord-1'], wave: c };
     },
     base: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['c'] }, held: 'released:coord-1:parent-not-live', stamp: 'T0 for demo-w' },
-    head: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['c'] }, held: 'released:coord-1:parent-not-live', stamp: 'T5 for demo-w' },
-    verdict: 'better',
-    why: 'the later wave records T5, the live occupant\'s own recorded birth; the merge base dated it to the earlier occupant (T0)',
+    verdict: 'same',
   },
   {
     shape: 'a pre-planned wave 2 bound after wave 1 recorded its birth and before wave 1\'s dispatch moved to it, wave 1 done',
@@ -299,9 +294,7 @@ const CORPUS: readonly Case[] = [
       return { f, mark: minting, coords: ['coord-1'], wave: c };
     },
     base: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['minting', 'c'] }, held: 'released:coord-1:parent-not-live', stamp: 'T0 for demo-w' },
-    head: { parent: 'coord-1', claimants: ['coord-1'], card: 'c', childIds: { 'coord-1': ['minting', 'c'] }, held: 'released:coord-1:parent-not-live', stamp: 'T5 for demo-w' },
-    verdict: 'better',
-    why: 'the later wave records T5, the live occupant\'s own recorded birth; the merge base dated it to the earlier occupant (T0)',
+    verdict: 'same',
   },
   {
     shape: 'the adopted arm under a recycled name, the earlier occupant\'s run still open with the LOWER id, then a later wave',
@@ -317,9 +310,7 @@ const CORPUS: readonly Case[] = [
       return { f, mark: adopting, coords: ['coord-live', 'coord-gone'], wave: wave2 };
     },
     base: { parent: 'coord-live', claimants: ['coord-live', 'coord-gone'], card: 'wave2', childIds: { 'coord-live': ['adopting', 'wave2'], 'coord-gone': ['earlier'] }, held: 'released:coord-live:parent-not-live', stamp: 'T1 for demo-w' },
-    head: { parent: 'coord-live', claimants: ['coord-live', 'coord-gone'], card: 'wave2', childIds: { 'coord-live': ['adopting', 'wave2'], 'coord-gone': ['earlier'] }, held: 'released:coord-live:parent-not-live', stamp: null },
-    verdict: 'better',
-    why: 'wave 2 borrows no birth; the merge base dated it to the earlier occupant (T1)',
+    verdict: 'same',
   },
   {
     shape: 'a cross-build rollback with a same-id redraw after a later mint (minting run done)',
@@ -427,6 +418,191 @@ const CORPUS: readonly Case[] = [
     verdict: 'same',
     why: 'D6 gap 1: the third coordinator\'s wave, bound to an earlier occupant, is the parent (coord-third), not the minting run\'s coord-live',
     residual: 'inherited',
+  },
+  // Round 6. An OLDER build (every build before the bind cleared the births and stamped nothing) left a run R that names the
+  // worker, records no birth and has a dispatchStartedAt after the birth: a failed fresh spawn, then an open-route or
+  // dup-arm rebind to the worker. Live databases hold this shape. A later wave bound by THIS build must still record the
+  // placeable birth of the worker's own minting run.
+  {
+    shape: 'V1: a pre-planned wave of the minter, an older build\'s rebind of a failed spawn after the birth (R open), the minting run open',
+    round: 'round 6 (V1)',
+    build: () => {
+      const f = new Fixture();
+      const w = f.open('W', 'coord-a', t(0));
+      const r = f.open('R', 'coord-b', t(0) + 50);
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.dispatchStarted(r, t(2));
+      f.bindAs(r, null);
+      f.bind(w);
+      return { f, mark: m, coords: ['coord-a', 'coord-b'], wave: w };
+    },
+    base: { parent: 'coord-a', claimants: ['coord-a'], card: 'M', childIds: { 'coord-a': ['W', 'M'], 'coord-b': [] }, held: 'released:coord-a:parent-not-live', stamp: 'T1 for demo-w' },
+    verdict: 'same',
+  },
+  {
+    shape: 'V1b: a pre-planned wave of the minter, an older build\'s rebind of a failed spawn after the birth (R open), the minting run done',
+    round: 'round 6 (V1b)',
+    build: () => {
+      const f = new Fixture();
+      const w = f.open('W', 'coord-a', t(0));
+      const r = f.open('R', 'coord-b', t(0) + 50);
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.done(m);
+      f.dispatchStarted(r, t(2));
+      f.bindAs(r, null);
+      f.bind(w);
+      return { f, mark: m, coords: ['coord-a', 'coord-b'], wave: w };
+    },
+    base: { parent: 'coord-a', claimants: ['coord-a'], card: 'W', childIds: { 'coord-a': ['W'], 'coord-b': [] }, held: 'released:coord-a:parent-not-live', stamp: 'T1 for demo-w' },
+    verdict: 'same',
+  },
+  {
+    shape: 'V1c: a third coordinator\'s pre-planned wave, an older build\'s rebind of a failed spawn after the birth (R done), the minting run done',
+    round: 'round 6 (V1c)',
+    build: () => {
+      const f = new Fixture();
+      const w = f.open('W', 'coord-c', t(0));
+      const r = f.open('R', 'coord-b', t(0) + 50);
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.done(m);
+      f.dispatchStarted(r, t(2));
+      f.bindAs(r, null);
+      f.done(r);
+      f.bind(w);
+      return { f, mark: m, coords: ['coord-a', 'coord-b', 'coord-c'], wave: w };
+    },
+    base: { parent: 'coord-c', claimants: ['coord-c'], card: 'W', childIds: { 'coord-a': [], 'coord-b': [], 'coord-c': ['W'] }, held: 'released:operator:run-other-programme', stamp: 'T1 for demo-w' },
+    verdict: 'same',
+  },
+  {
+    shape: 'V1d: as V1c, but R first minted another session and an older build then rebound it to the worker',
+    round: 'round 6 (V1d)',
+    build: () => {
+      const f = new Fixture();
+      const w = f.open('W', 'coord-c', t(0));
+      const r = f.open('R', 'coord-b', t(0) + 50);
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.done(m);
+      f.mint(r, t(2), 'demo-y');
+      f.bindAs(r, null);
+      f.done(r);
+      f.bind(w);
+      return { f, mark: m, coords: ['coord-a', 'coord-b', 'coord-c'], wave: w };
+    },
+    base: { parent: 'coord-c', claimants: ['coord-c'], card: 'W', childIds: { 'coord-a': [], 'coord-b': [], 'coord-c': ['W'] }, held: 'released:operator:run-other-programme', stamp: 'T1 for demo-w' },
+    verdict: 'same',
+  },
+  {
+    shape: 'V9: a third coordinator\'s pre-planned wave, an older build\'s rebind of a failed spawn on a run opened after the birth (R open)',
+    round: 'round 6 (V9)',
+    build: () => {
+      const f = new Fixture();
+      const w = f.open('W', 'coord-c', t(0));
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.done(m);
+      const r = f.open('R', 'coord-b', t(1) + 50);
+      f.dispatchStarted(r, t(2));
+      f.bindAs(r, null);
+      f.bind(w);
+      return { f, mark: m, coords: ['coord-a', 'coord-b', 'coord-c'], wave: w };
+    },
+    base: { parent: 'coord-b', claimants: ['coord-b', 'coord-c'], card: 'R', childIds: { 'coord-a': [], 'coord-b': ['R'], 'coord-c': ['W'] }, held: 'released:operator:run-other-programme', stamp: 'T1 for demo-w' },
+    verdict: 'same',
+  },
+  {
+    shape: 'S1: the minter\'s pre-planned wave, an older build\'s rebind of the minter\'s own failed spawn (F open), the minting run done',
+    round: 'round 6 (S1)',
+    build: () => {
+      const f = new Fixture();
+      const l = f.open('L', 'coord-a', t(0));
+      const fr = f.open('F', 'coord-a', t(0));
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.done(m);
+      f.dispatchStarted(fr, t(2));
+      f.bindAs(fr, null);
+      f.bind(l);
+      return { f, mark: m, coords: ['coord-a'], wave: l };
+    },
+    base: { parent: 'coord-a', claimants: ['coord-a'], card: 'L', childIds: { 'coord-a': ['L'] }, held: 'released:coord-a:parent-not-live', stamp: 'T1 for demo-w' },
+    verdict: 'same',
+  },
+  {
+    shape: 'S1b: as S1, the minting run left open',
+    round: 'round 6 (S1b)',
+    build: () => {
+      const f = new Fixture();
+      const l = f.open('L', 'coord-a', t(0));
+      const fr = f.open('F', 'coord-a', t(0));
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.dispatchStarted(fr, t(2));
+      f.bindAs(fr, null);
+      f.bind(l);
+      return { f, mark: m, coords: ['coord-a'], wave: l };
+    },
+    base: { parent: 'coord-a', claimants: ['coord-a'], card: 'M', childIds: { 'coord-a': ['L', 'M'] }, held: 'released:coord-a:parent-not-live', stamp: 'T1 for demo-w' },
+    verdict: 'same',
+  },
+  {
+    shape: 'S2: another coordinator\'s pre-planned wave, an older build\'s rebind of a failed spawn (F done), the minting run done',
+    round: 'round 6 (S2)',
+    build: () => {
+      const f = new Fixture();
+      const l = f.open('L', 'coord-b', t(0));
+      const fr = f.open('F', 'coord-a', t(0));
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.done(m);
+      f.dispatchStarted(fr, t(2));
+      f.bindAs(fr, null);
+      f.done(fr);
+      f.bind(l);
+      return { f, mark: m, coords: ['coord-a', 'coord-b'], wave: l };
+    },
+    base: { parent: 'coord-b', claimants: ['coord-b'], card: 'L', childIds: { 'coord-a': [], 'coord-b': ['L'] }, held: 'released:operator:run-other-programme', stamp: 'T1 for demo-w' },
+    verdict: 'same',
+  },
+  {
+    shape: 'S3: an adopted-arm row after a live placeable mint, then the minter\'s pre-planned wave',
+    round: 'round 6 (S3)',
+    build: () => {
+      const f = new Fixture();
+      const l = f.open('L', 'coord-a', t(0));
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.done(m);
+      const a = f.open('A', 'coord-a', t(1) + 100);
+      f.adopt(a, t(2));
+      f.done(a);
+      f.bind(l);
+      return { f, mark: m, coords: ['coord-a'], wave: l };
+    },
+    base: { parent: 'coord-a', claimants: ['coord-a'], card: 'L', childIds: { 'coord-a': ['L'] }, held: 'released:coord-a:parent-not-live', stamp: 'T1 for demo-w' },
+    verdict: 'same',
+  },
+  {
+    shape: 'S4: a born worker, a NEWER unplaceable birth for the id on another run, then the minter\'s pre-planned wave',
+    round: 'round 6 (S4)',
+    build: () => {
+      const f = new Fixture();
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.done(m);
+      const q = f.open('Q', 'coord-q', t(3) - 100);
+      f.recordUnplaceable(q, t(3));
+      f.done(q);
+      const l = f.open('L', 'coord-a', t(0));
+      f.bind(l);
+      return { f, mark: m, coords: ['coord-a', 'coord-q'], wave: l };
+    },
+    base: { parent: 'coord-a', claimants: ['coord-a'], card: 'L', childIds: { 'coord-a': ['L'], 'coord-q': [] }, held: 'released:coord-a:parent-not-live', stamp: 'T1 for demo-w' },
+    verdict: 'same',
   },
 ];
 
