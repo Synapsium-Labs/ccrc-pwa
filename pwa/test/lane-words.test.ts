@@ -142,8 +142,9 @@ describe('the lanes\' words', () => {
       }
       ts.forEachChild(n, reach);
     };
-    reach(calls[0].arguments[0]);
+    const [reading, flag] = calls[0]!.arguments;
+    reach(reading!);
     expect([...reached], 'the reading Gauge hands windowReading names no rollover').not.toContain('rolledOver');
-    expect(calls[0].arguments[1].getText(src), 'the flag is passed through as windowReading\'s second argument').toBe('rolledOver');
+    expect(flag!.getText(src), 'the flag is passed through as windowReading\'s second argument').toBe('rolledOver');
   });
 });
