@@ -90,7 +90,10 @@ a read that fails or throws fails or throws as it did):
 - `claimants(incarnation?)`: `claimantsOfSession(id, incarnation)` (`claimantsOf`).
 
 Its body is `bindingsOver(port, id)` in `coord/bindingReads.ts`, so a consumer-declared port (a test fake, the archive
-door's port) gets the same answers from the same five reads. After the last move the census is **1**: `bindingsOver`
+door's port) gets the same answers from the same five reads. `sessionRunRead` moves beside the other readers in
+`bindingReads.ts` (byte for byte; `runWire.ts` re-exports it, so its importers are unchanged), because the store may
+import `bindingReads.ts` (it imports only `runBinding.ts`) but not `runWire.ts`, whose `childSpent.ts` import reaches
+the PR-history I/O. After the last move the census is **1**: `bindingsOver`
 itself.
 
 ## Commits

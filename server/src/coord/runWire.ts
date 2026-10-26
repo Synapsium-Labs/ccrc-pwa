@@ -1,7 +1,7 @@
-import type { ChildMark, RunSummary, SessionRun } from '../../../shared/api.js';
+import type { ChildMark, RunSummary } from '../../../shared/api.js';
 import type { BindingReadPort } from './bindingReads.js';
 import { childBirthOf } from './childSpent.js';
-import { bindingOf, childrenOf, incarnationOf, unbornIncarnation, type BindingRun, type Incarnation } from './runBinding.js';
+import { childrenOf, incarnationOf, unbornIncarnation, type Incarnation } from './runBinding.js';
 
 /**
  * The run binding as it rides the wire (ARCH-61 server half, GitHub #796; epic #771; consolidation spec §3 K10, §5.9). No I/O:
@@ -22,8 +22,6 @@ import { bindingOf, childrenOf, incarnationOf, unbornIncarnation, type BindingRu
  * is read as a session with no mark, which is the rule every reader had before the binding.
  */
 
-const toSessionRun = (r: BindingRun | null): SessionRun | null => r === null ? null : { id: r.id, state: r.state, claimedBy: r.claimedBy };
-
 /** The incarnation of `sessionId` whose registry mark is `child`. A `child` mark reads its minting run through `port.run`;
  *  that read can fail, and then the birth is unplaceable (`childBirthOf`'s own word), never an empty answer. */
 export function incarnationOfMark(port: Pick<BindingReadPort, 'run'>, sessionId: string, child: ChildMark): Incarnation {
@@ -34,19 +32,9 @@ export function incarnationOfMark(port: Pick<BindingReadPort, 'run'>, sessionId:
   }
 }
 
-/** One session's two named queries over its binding series, or the reason the series could not be read. */
-export type SessionRunRead =
-  | { readonly ok: true; readonly run: SessionRun | null; readonly openRun: SessionRun | null }
-  | { readonly ok: false; readonly detail: string };
-
-/** `FleetSession.run` and `.openRun` for one session: `bindingOf` over `port.bindingRunsOf(id)`. A series this process
- *  cannot represent answers `ok:false` with why, never a guess. */
-export function sessionRunRead(port: Pick<BindingReadPort, 'bindingRunsOf'>, sessionId: string, incarnation: Incarnation): SessionRunRead {
-  const series = port.bindingRunsOf(sessionId);
-  if (!series.ok) return { ok: false, detail: series.detail };
-  const binding = bindingOf(series.runs, incarnation);
-  return { ok: true, run: toSessionRun(binding.newest), openRun: toSessionRun(binding.open) };
-}
+/** `FleetSession.run` and `.openRun` for one session: defined beside the store's other binding readers (`bindingReads.ts`), so
+ *  `CoordStore.bindingsOf` answers it; re-exported here for the wire's readers. */
+export { sessionRunRead, type SessionRunRead } from './bindingReads.js';
 
 /** Each of `sessions`' incarnation, read once. A mark is the registry's reading of the session, as the fleet row carries it. */
 export function incarnationsOfSessions(

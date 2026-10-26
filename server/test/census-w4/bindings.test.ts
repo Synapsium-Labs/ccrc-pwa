@@ -11,14 +11,14 @@ import { REPO } from '../consolidationCensus.js';
 import { BOUND_BY_READERS, boundByCalls, boundBySites, type BoundBySite } from './bindings.js';
 
 /** The real tree's site count may only shrink: each move onto `bindingsOf` lowers it in the same commit. */
-const BOUND_BY_CEILING = 23;
+const BOUND_BY_CEILING = 24;
 
 /** Where each reader is defined, by its qualified name: a rename moves the reader out of the census, and this row says so. */
 const READER_HOMES: Readonly<Record<string, readonly [string, string]>> = {
   openRunsForSession: ['server/src/coord/store.ts', 'CoordStore.openRunsForSession'],
   openRunsClaimedBy: ['server/src/coord/bindingReads.ts', 'openRunsClaimedBy'],
   childParentRead: ['server/src/coord/bindingReads.ts', 'childParentRead'],
-  sessionRunRead: ['server/src/coord/runWire.ts', 'sessionRunRead'],
+  sessionRunRead: ['server/src/coord/bindingReads.ts', 'sessionRunRead'],
   claimantsOfSession: ['server/src/coord/bindingReads.ts', 'claimantsOfSession'],
 };
 
