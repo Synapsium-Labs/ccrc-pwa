@@ -109,10 +109,11 @@ describe('file-times reporter (real vitest run)', () => {
 
 describe('vitest.select.config.ts sequencer', () => {
   const serverRootTsx = path.join(serverRoot, 'node_modules', '.bin', 'tsx');
-  // `sharded` stands in for a `--shard=i/n` run; `sizes` (keyed `:<server-relative path>`, as BaseSequencer
-  // keys its cache) are the file sizes BaseSequencer's default order falls back to with no past results.
+  // `sharded` stands in for a `--shard=i/n` run. The fake cache is vitest 5's: no past result for any
+  // specification. With none, BaseSequencer's default order falls back to each file's size, which vitest 5
+  // reads from the file system (its cache no longer holds sizes), so a case that needs sizes passes real files.
   function sortedBy(env: Record<string, string>, moduleIds: string[],
-    { sharded = false, sizes = {} }: { sharded?: boolean, sizes?: Record<string, number> } = {}): string[] {
+    { sharded = false }: { sharded?: boolean } = {}): string[] {
     const dir = mkTmp('ci-shard-times-seq-');
     const target = path.join(serverRoot, 'vitest.select.config.ts').replace(/\\/g, '/');
     const script = path.join(dir, 'run.mts');
@@ -121,9 +122,8 @@ describe('vitest.select.config.ts sequencer', () => {
       'const Seq = (cfg as any).test.sequence.sequencer;',
       "const project = { name: '', config: { sequence: { groupOrder: 0 }, isolate: true } };",
       `const files = ${JSON.stringify(moduleIds)}.map((moduleId) => ({ moduleId, project }));`,
-      `const sizes: Record<string, number> = ${JSON.stringify(sizes)};`,
       `const ctx = { config: { root: ${JSON.stringify(serverRoot)}, ${sharded ? 'shard: { index: 1, count: 2 }' : ''} },`,
-      '  cache: { getFileTestResults: () => undefined, getFileStats: (k: string) => (k in sizes ? { size: sizes[k] } : undefined) } };',
+      '  cache: { getTestSpecificationResult: () => undefined } };',
       'const out = await new Seq(ctx).sort(files);',
       'process.stdout.write(JSON.stringify(out.map((f: any) => f.moduleId)));',
     ].join('\n'), 'utf8');
@@ -165,9 +165,10 @@ describe('vitest.select.config.ts sequencer', () => {
     const dir = mkTmp('ci-shard-times-seq-s-');
     const list = path.join(dir, 'tests.txt');
     writeFileSync(list, 'test/a.test.ts\ntest/b.test.ts\ntest/c.test.ts\n');
-    // BaseSequencer with no past results runs larger files first.
-    const sizes = { ':test/a.test.ts': 1, ':test/b.test.ts': 3, ':test/c.test.ts': 2 };
-    expect(sortedBy({ CCRC_TEST_LIST: list }, [id('a'), id('b'), id('c')], { sharded: true, sizes }))
-      .toEqual([id('b'), id('c'), id('a')]);
+    // BaseSequencer with no past results runs larger files first: real files of 1, 3 and 2 bytes, listed a, b, c.
+    const file = (n: string, bytes: number) => { const f = path.join(dir, `${n}.test.ts`); writeFileSync(f, 'x'.repeat(bytes)); return f; };
+    const [a, b, c] = [file('a', 1), file('b', 3), file('c', 2)];
+    expect(sortedBy({ CCRC_TEST_LIST: list }, [a, b, c], { sharded: true }))
+      .toEqual([b, c, a]);
   });
 });
