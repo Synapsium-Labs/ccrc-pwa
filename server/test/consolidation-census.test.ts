@@ -15,7 +15,7 @@ import {
   REPO, runCcdOldFoldSites, runCcdSiteArms, RAN_NARROW_WINDOW, RAN_TABLE, type CensusSite, type RanTableRow,
 } from './consolidationCensus.js';
 import { capabilityChoiceSites, W4_HELD_FILES } from './consolidationCensus.js';
-import { changeLatchSites, changeLatchReported } from './consolidationCensus.js';
+import { changeLatchSites, changeLatchReported, onceWarnDefinitions } from './consolidationCensus.js';
 import { registryListingSites } from './consolidationCensus.js';
 import { dialogFrameProducers, sessionStreamPollSites } from './consolidationCensus.js';
 import { cadenceLiterals, declaredDerivations, laneClockFields, laneClockReported, laneClockShapes, singleFlightGuards } from './consolidationCensus.js';
@@ -563,5 +563,40 @@ describe('ARCH-52: SessionStream polls and dialog frame producers', () => {
     show('dialogFrameProducers', producers);
     expect(polls, 'a SessionStream read comes from its session\'s feed (sessionFeed.ts), never from a poll of its own').toEqual([]);
     expect(producers.map((s) => s.file), 'every dialog frame is built by the stream\'s one gate').toEqual(['server/src/sessionws.ts']);
+  });
+});
+
+// ARCH-76 (#811) follow-up (D-TBD-tmpsweep-warnonce). The once-warn census: a `warn…Once` helper defined outside
+// `server/src/changeLatch.ts`. The ratchet in `single-definition/advance-switches.test.ts` holds it to `ONCE_WARN_ALLOWED`.
+describe('onceWarnDefinitions: `warn…Once` helpers defined outside changeLatch.ts (D-TBD-tmpsweep-warnonce)', () => {
+  it('FIXTURE: a function, a const and a let are definitions; a call, an import, a comment and changeLatch.ts are not', () => {
+    const tree = mkdtempSync(path.join(tmpdir(), 'consolidation-census-oncewarn-'));
+    try {
+      const at = (rel: string, body: string): void => {
+        const p = path.join(tree, rel);
+        mkdirSync(path.dirname(p), { recursive: true });
+        writeFileSync(p, body);
+      };
+      at('server/src/a.ts', [
+        'const warnOnce = (k: string): void => {};',          // 1: a definition
+        'warnOnce("x");',                                      // 2: a call
+        '// const warnOnce = 1;',                              // 3: a comment
+        'export function warnDiskOnce(k: string): void {}',    // 4: a definition
+      ].join('\n'));
+      at('server/src/b.ts', ['import { warnOnce } from "./a.js";', 'let warnReadOnce = () => {};'].join('\n'));   // 2
+      at('shared/c.ts', 'function warnOnce(): void {}');                                                           // 1
+      at('server/src/changeLatch.ts', 'const warnOnce = 1;');
+      expect(onceWarnDefinitions(tree).map((s) => [s.file, s.line])).toEqual([
+        ['server/src/a.ts', 1], ['server/src/a.ts', 4], ['server/src/b.ts', 2], ['shared/c.ts', 1],
+      ]);
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+    }
+  });
+
+  it('REAL: finds tmpSweepLane.ts\'s helper, and prints the list for the PR body', () => {
+    const sites = onceWarnDefinitions();
+    show('onceWarnDefinitions', sites);
+    expect(files(sites)).toContain('server/src/tmpSweepLane.ts');
   });
 });
