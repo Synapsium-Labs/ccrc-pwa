@@ -10500,8 +10500,8 @@ describe('history scope marker: PreCompact records whose context is compacting (
     const fnLines = fnCode.split('\n');
     const w = fnLines.findIndex((l) => l.includes('> "$f"; } 2>/dev/null'));
     expect(w, 'no marker write').toBeGreaterThan(0);
-    expect(fnLines[w - 1]!.trim(), 'the regular-file test sits directly above the write, builtins only')
-      .toBe('[[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0');
+    expect(fnLines[w - 1]!.trim(), 'the regular-file test sits directly above the write, builtins only (D-5434\'s positive form, W4)')
+      .toBe('if [[ -L "$f" || -d "$f" || -p "$f" || -S "$f" || -b "$f" || -c "$f" ]]; then return 0; fi');
     // Either spelling of the directory: Task 9 re-points these lines to its HISTORY_SCOPE_DIR constant.
     const notLinkedScope = /&& ! -L "(?:\$HOME\/\.ccrc\/history\/scope|\$HISTORY_SCOPE_DIR)" \]\]/;
     expect(gate, 'the gate refuses a symlinked scope/').toMatch(notLinkedScope);
