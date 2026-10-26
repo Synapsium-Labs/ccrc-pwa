@@ -518,8 +518,8 @@ export function redactRuleTables(root: string = REPO): string[] {
 /**
  * D-5862 (Task C1h; ARCH-68 #803; spec K11, §2.3's clock row): the watcher's lane schedule, four queries over
  * `server/src/watch.ts`, read from its syntax tree (`scan/parse.ts`'s `scheduleFacts`, the one parser importer), never from a
- * count typed by hand. Exit targets (C1h): `laneClockFields` and `laneClockShapes` list only W4's two clocks (and
- * `DelegationLane#lastSweepAt`, reported, while another series holds that class); `singleFlightGuards` lists only
+ * count typed by hand. Exit targets (C1h): `laneClockFields` and `laneClockShapes` list only W4's two clocks
+ * (`DelegationLane#lastSweepAt` became the `delegation` row, so `laneClockReported` lists nothing); `singleFlightGuards` lists only
  * `ticking`, `dispatchRun` and `dispatchAgain`, and W4's two; `cadenceLiterals` is empty.
  * KNOWN WIDTH: a clock or guard reached through a computed name, a field of another class and a literal assembled from
  * pieces (`60 * 1000`, which is read, but `MINUTE * 5` is not a literal) are other shapes; a cadence compared through
@@ -562,7 +562,7 @@ export function laneClockFields(root: string = REPO): CensusSite[] {
   return w === null ? [] : w.facts.fields.filter((f) => f.cls === 'FleetWatcher' && LANE_CLOCK_NAMES.includes(f.name)).map((f) => siteAt(w, f.line));
 }
 
-/** `DelegationLane#lastSweepAt`, a cadence clock in a class another series holds: reported by name, never ratcheted. */
+/** `DelegationLane#lastSweepAt`, a cadence clock in a class another series held: reported by name, and empty since it became the `delegation` row (D-5862). */
 export function laneClockReported(root: string = REPO): CensusSite[] {
   const w = watcherFacts(root);
   return w === null ? [] : w.facts.fields.filter((f) => f.cls === 'DelegationLane' && f.name === 'lastSweepAt').map((f) => siteAt(w, f.line));

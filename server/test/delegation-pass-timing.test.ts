@@ -82,7 +82,7 @@ interface World {
   hold: Map<string, Promise<void>>;
   calls: { listings: string[] };
   /** The virtual monotonic clock the lane times itself by (`Deps.monotonicMs`). Only a row's hook advances it. */
-  clock: { t: number };
+  clock: { t: number; wall?: number };
   /** D-5832: the virtual CPU clock (`cpuMicros`): cumulative microseconds, and whether it is a thread's. */
   cpu: { us: number; thread: boolean };
   /** D-5832: the virtual stall sampler (`loopDelay`): `stretch` is read and zeroed by the next stretch read; `max`/`p99` are the pass-wide values. */
@@ -175,7 +175,15 @@ function setCensus(w: World, projects: Record<string, CensusView>, incarnations:
   return pass;
 }
 const measured = (inc = INC): ParentIncarnation => ({ kind: 'measured', incarnation: inc });
-const setNow = (ms: number): void => { vi.spyOn(Date, 'now').mockReturnValue(ms); };
+const wallNow = (ms: number): void => { vi.spyOn(Date, 'now').mockReturnValue(ms); };
+/** Moves the fake wall clock to `ms` and the virtual monotonic clock (the one the lane's cadence reads, D-5862) by the same step, so a
+ *  cadence of real time passes between two passes as it did when the throttle read `Date.now()`. A pass's own phase timing is a
+ *  difference of two readings inside the pass, so the step between passes never shows in it. */
+const setNow = (w: World, ms: number): void => {
+  if (w.clock.wall !== undefined) w.clock.t += ms - w.clock.wall;
+  w.clock.wall = ms;
+  wallNow(ms);
+};
 const pass = async (w: World, sessions: readonly Sess[], records: readonly Rec[] = sessions.map((s) => recordOf(s.id, s.project))): Promise<void> => {
   await w.watcher.sweepDelegation(sessions as never, records as never);
 };
@@ -184,14 +192,14 @@ const DEMO_A = [sessionOf('demo-a')];
 const censusPass = async (
   w: World, now: number, projects: Record<string, CensusView>, sessions: readonly Sess[] = DEMO_A, age = 0,
 ): Promise<void> => {
-  setNow(now);
+  setNow(w, now);
   setCensus(w, projects, Object.fromEntries(sessions.map((s) => [s.id, measured()])), now - age);
   await pass(w, sessions);
 };
 /** R88: the lane's FIRST READY PASS at `PRIMED_AT`, before every call a fixture's spool holds (the earliest is 10:01). */
 const PRIMED_AT = Date.UTC(2026, 9, 15, 10, 0, 30);
 const primed = async (w: World): Promise<World> => {
-  setNow(PRIMED_AT);
+  setNow(w, PRIMED_AT);
   setCensus(w, {}, {}, PRIMED_AT);
   await pass(w, []);
   return w;
@@ -1116,7 +1124,7 @@ describe('D-5692 R6: a pass with no reconcile writes a line with no reconcile ke
     expect(plan.mock.calls.length, 'the first pass reconciled its census').toBe(1);
     r.arm({ flush: 1500 });
     // the SAME census again (its measuredAt is the first pass's), one cadence later: the lane reconciles a census only once
-    setNow(at(1));
+    setNow(w, at(1));
     setCensus(w, { demo: [OLD, RAW] }, { 'demo-a': measured() }, at(0));
     await pass(w, DEMO_A);
     expect(plan.mock.calls.length, 'the second pass reconciled nothing').toBe(1);
@@ -1149,7 +1157,7 @@ describe('D-5692 R7: a pass cut by its budget writes its line at its late settle
     r.arm({ noteSessions: 1001, flush: 1500 });
     let release!: () => void;
     w.hold.set('demo-a', new Promise<void>((resolve) => { release = resolve; }));
-    setNow(NOW);
+    setNow(w, NOW);
     setCensus(w, { demo: [] }, { 'demo-a': measured() }, NOW);
     const stuck = pass(w, DEMO_A);
     await vi.waitFor(() => expect(w.calls.listings).toEqual(['demo-a']), { timeout: 10_000 });
@@ -1335,7 +1343,7 @@ describe('D-5832 R4 (review 677 F6): the two R109 cut-before-owners exits each w
     writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
     const r = rig(w);
     r.arm({ noteSessions: 1001 });                                    // block is over the threshold before either exit
-    setNow(NOW);
+    setNow(w, NOW);
     setCensus(w, { demo: [] }, { 'demo-a': measured() }, NOW);
     return { w, warn, r };
   };

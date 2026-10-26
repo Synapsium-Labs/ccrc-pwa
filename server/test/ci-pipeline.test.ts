@@ -580,7 +580,7 @@ describe('ci.yml: the map\'s inputs and outputs (design 2026-09-23 §5.3-§5.5)'
     expect(build).toContain('--traced "$RUNNER_TEMP/select-inputs/traced.txt"');
     // --map always names the fetch path, so select.mjs can say "no map restored at <path>" when none was fetched.
     // Outside the checkout (final review FR-4): a pull request can commit `.ci-cache/testmap.json` into the tree.
-    expect(runScript(step(job('select'), 'Select'))).toContain('args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")\n');
+    expect(runScript(step(job('select'), 'Select'))).toContain('args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --base "$BASE" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")\n');
     expect(runScript(step(job('select'), 'Select'))).toContain('if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi\n');
     expect(step(job('select'), 'Hand the map to map-build')).toMatch(/^ {10}path: \|\n {12}\$\{\{ runner\.temp \}\}\/ci-cache\/testmap\.json\n {12}\$\{\{ runner\.temp \}\}\/ci-cache\/traced\.txt\n {12}\$\{\{ runner\.temp \}\}\/ci-cache\/testmap\.artifact$/m);
     // Handed over whenever anything is traced: a build needs the fetched map too, to tell news from old failures.
@@ -938,7 +938,7 @@ describe('ci.yml: a pull request that changes the pipeline runs everything, deci
     expect(pipelineStep()).toMatch(/^ {10}BASE: \$\{\{ github\.event_name == 'merge_group' && github\.event\.merge_group\.base_sha \|\| format\('origin\/\{0\}', github\.base_ref\) \}\}$/m);
     const sel = step(job('select'), 'Select');
     expect(sel).toMatch(/^ {10}PIPELINE_CHANGED: \$\{\{ steps\.pipeline\.outputs\.changed \}\}$/m);
-    expect(runScript(sel)).toContain('elif [ "$PIPELINE_CHANGED" = true ]; then args+=(--input-mode full); fi');
+    expect(runScript(sel)).toContain('elif [ "$PIPELINE_CHANGED" = true ] || [ "$FULL_LABEL" = true ]; then args+=(--input-mode full); fi');
   });
 
   it('a change under .github/ -> changed=true; anything else -> false; a base it cannot diff against -> true', () => {
@@ -1035,7 +1035,8 @@ describe('ci.yml: test (pwa) is a summary over the pwa shards (D-6768)', () => {
     expect(total, 'the shard matrix names no total').toBeDefined();
     expect(list!.split(',').map((x) => Number(x.trim())), 'the shards are not exactly 1..total')
       .toEqual(Array.from({ length: Number(total) }, (_, i) => i + 1));
-    expect(shard).toMatch(/^ {8}run: \.\/node_modules\/\.bin\/vitest run --shard=\$\{\{ matrix\.shard \}\}\/\$\{\{ matrix\.total \}\}$/m);
+    // the full run (the else branch) is the exact shard command; a `changed` scope adds --changed to it
+    expect(shard).toMatch(/^ {12}\.\/node_modules\/\.bin\/vitest run --shard=\$\{\{ matrix\.shard \}\}\/\$\{\{ matrix\.total \}\}$/m);
     const tsc = [...jobs(read(CI))].filter(([, bl]) => /working-directory: pwa\n\s+run: \.\/node_modules\/\.bin\/tsc --noEmit/.test(bl)).map(([id]) => id);
     expect(tsc, 'the pwa typecheck must run in exactly one job').toEqual(['pwa-static']);
   });
@@ -1143,7 +1144,7 @@ describe('ci.yml: dependencies are installed once per run, and handed to the job
     for (const st of saves) expect(st, 'a save that runs without save: true').toMatch(/if: .*inputs\.save == 'true'/);
     expect(a, 'actions/cache itself would save on every caller').not.toMatch(/uses: actions\/cache@/);
     const callers = [...jobs(read(CI))].filter(([, b]) => /^ {6}- uses: \.\/\.github\/actions\/server-deps$/m.test(b));
-    expect(callers.map(([id]) => id).sort()).toEqual(['deps', 'node-floor', 'pwa-shard', 'pwa-static', 'server-shard', 'test-macos', 'trace-shard']);
+    expect(callers.map(([id]) => id).sort()).toEqual(['deps', 'node-floor', 'pwa-shard', 'pwa-static', 'server-perf', 'server-shard', 'test-macos', 'trace-shard']);
     for (const [id, b] of callers) {
       const saves = /save: 'true'/.test(b);
       expect(saves, `${id}: only deps may save`).toBe(id === 'deps');
@@ -1326,13 +1327,14 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
 
   it('checks out, sets up Node 22, installs pwa with npm ci, and runs the browser config with the local vitest', () => {
     const s = steps(job('browser-pwa'));
-    expect(s, 'the browser leg has exactly five steps').toHaveLength(5);
+    expect(s, 'the browser leg has exactly six steps (the reach step is the sixth)').toHaveLength(6);
     // A version pin is a deliberate edit, so a future bump reds it again
     // (D-6739: the pins name the majors #364 moved to).
     expect(s[0]).toMatch(/^ {6}- uses: actions\/checkout@v7\n/);
-    expect(s[1]).toMatch(/^ {6}- uses: actions\/setup-node@v7\n/);
-    expect(s[1]).toMatch(/^ {10}node-version: '22'$/m);
-    expect(s[1]).toMatch(/^ {10}cache-dependency-path: pwa\/package-lock\.json$/m);
+    expect(s[1]).toMatch(/^ {6}- name: Can this change reach the browser tests\?\n/);
+    expect(s[2]).toMatch(/^ {6}- uses: actions\/setup-node@v7\n/);
+    expect(s[2]).toMatch(/^ {10}node-version: '22'$/m);
+    expect(s[2]).toMatch(/^ {10}cache-dependency-path: pwa\/package-lock\.json$/m);
     expect(step(job('browser-pwa'), 'Install')).toMatch(/^ {8}working-directory: pwa\n {8}run: npm ci\n/m);
     // pwa reads @ccrc/ui as SOURCE and the leg's imports reach it, so ui is installed too, before the Test step.
     expect(step(job('browser-pwa'), 'Install @ccrc/ui')).toMatch(/^ {8}working-directory: ui\n {8}run: npm ci\n/m);
@@ -1361,5 +1363,99 @@ describe('Review 439 F26: the browser leg cannot be softened by continue-on-erro
     expect(step(b, 'Test'), 'a shell override on the Test step').not.toMatch(/^ {8}shell:/m);
     expect(b, 'job-level defaults').not.toMatch(/^ {4}defaults:/m);
     expect(read(CI), 'workflow-level defaults').not.toMatch(/^defaults:/m);
+  });
+});
+
+// The light pull-request run (operator ruling 2026-10-25): .github/ci/reach.mjs decides, per package, whether a
+// pull request's change can reach the agent, pwa and browser TESTS. Pinned here: who asks, what the answer gates,
+// and what it must never gate (a typecheck, the build, a required check's existence).
+describe('ci.yml: the light pull-request rule for the agent, pwa and browser tests (ruling 2026-10-25)', () => {
+  const GATE = "if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'";
+
+  // A label starts NO run: a labeled run would cancel the run in progress (this PR's concurrency group) and its check
+  // runs would supersede the earlier ones, so ending it early, or skipping its required jobs, would report green over
+  // a red run. The full-ci label is read when the next push (or a reopen) starts a run.
+  it('a label starts no run (default activity types), and the full-ci label forces the full suite of the next run', () => {
+    expect(read(CI)).toMatch(/^ {2}pull_request:\n {2}# THE MERGE QUEUE/m);
+    expect(read(CI)).not.toMatch(/^ {4}types: .*labeled/m);
+    expect(read(CI)).toContain("FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}");
+  });
+
+  it('a `changed` pwa run also runs, sharded, every test reach.mjs says reads the tree from disk', () => {
+    const t = step(job('pwa-shard'), 'Test');
+    expect(t).toContain('ALWAYS: ${{ steps.reach.outputs.always }}');
+    expect(t).toContain('./node_modules/.bin/vitest run --shard=${{ matrix.shard }}/${{ matrix.total }} --passWithNoTests $ALWAYS');
+    expect(t, 'no hand-kept glob of the always-run suites').not.toContain('-census.test.ts');
+  });
+
+  it('each of the three legs asks reach.mjs on a pull request only, and gates only its install and test steps on the answer', () => {
+    for (const [id, pkg] of [['test', 'agent'], ['pwa-shard', 'pwa'], ['browser-pwa', 'browser']] as const) {
+      const b = job(id);
+      const ask = step(b, `Can this change reach the ${pkg} tests?`);
+      expect(ask, id).toContain("if: env.CCRC_LEG == 'run' && github.event_name == 'pull_request'");
+      expect(ask, id).toContain(`node .github/ci/reach.mjs --pkg ${pkg} --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"`);
+      expect(step(b, 'Test'), `${id}: the tests skip on the answer`).toContain(GATE);
+    }
+    // The agent's typecheck is NOT gated: a light run still typechecks every package.
+    expect(step(job('test'), 'Typecheck')).not.toContain('reach');
+    expect(step(job('test'), 'Typecheck')).toContain("if: env.CCRC_LEG == 'run'");
+  });
+
+  it('the pwa typecheck, the static checks and the build never consult the answer', () => {
+    for (const id of ['pwa-static', 'build-pwa', 'server-typecheck']) {
+      expect(job(id), id).not.toContain('steps.reach');
+    }
+  });
+});
+
+// ── D-6929: the hook's wall-clock budgets run in a perf job of their own ────
+describe('ci.yml: the session-hook budgets run in `perf (server)`, which is not required yet (D-6929)', () => {
+  const HOOK_TEST = 'server/test/session-hook.test.ts';
+
+  it('is one job, named `perf (server)`, gated like the server shards, with a deadline and no part in the required summaries', () => {
+    const b = job('server-perf');
+    expect(jobKey(b, 'name')).toBe('perf (server)');
+    expect(needs(b)).toEqual(['deps', 'select']);
+    expect(jobKey(b, 'if')).toBe(jobKey(job('server-shard'), 'if'));
+    expect(jobKey(b, 'timeout-minutes')).toBe('20');
+    // NOT REQUIRED for two weeks (operator ruling 2026-10-25): no required summary or aggregate reads it.
+    for (const id of ['server', 'full-suite']) expect(needs(job(id)), `${id} must not wait on the perf job`).not.toContain('server-perf');
+    expect(b, 'continue-on-error would hide a red from the day it becomes required').not.toMatch(/continue-on-error/);
+  });
+
+  it('runs only the hook test file, one worker, no file parallelism, with CCRC_PERF=1, and selects the budget rows by title', () => {
+    const t = step(job('server-perf'), 'Budgets');
+    expect(t).toMatch(/^ {10}CCRC_PERF: '1'$/m);
+    expect(runScript(t)).toBe(
+      "./node_modules/.bin/vitest run test/session-hook.test.ts --maxWorkers=1 --no-file-parallelism -t 'p95 of 40|costs no more than 4\\.2x|costs no more than 4x the cheap|spool.s increment'\n");
+  });
+
+  it('every title the job selects is a row that exists, gated on CCRC_PERF, the compaction serve\'s 4x ratio among them, and no ungated row reads a clock around the hook', () => {
+    const src = read(HOOK_TEST);
+    const gate = "process.env['CCRC_PERF'] === '1'";
+    // The budget rows: the file's wall-clock assertions, each under the gate, with the thresholds the rows always had.
+    for (const title of ["it.runIf(%G)('p95 of 40 runs stays under the budget", "it.runIf(%G)('SessionStart costs no more than 4.2x", "it.runIf(%G)('the spool\\'s increment: 40 realistic",
+      "it.runIf(%G)('costs no more than 4x the cheap PostToolUse arm with a card present",
+      "describe.runIf(%G)('the hot-path budget through the shell prefix", "describe.runIf(%G)('the PostToolUse budget holds for agent payloads"]) {
+      expect(src, title).toContain(title.replace('%G', gate));
+    }
+    expect((src.match(/toBeLessThan\(150\)/g) ?? []).length, 'three absolute 150 ms pins, thresholds unchanged').toBe(3);
+    expect(src).toContain('toBeLessThan(4.2)');
+    expect(src).toContain('.toBeLessThan(1.5)');
+    expect(src, 'the compaction serve keeps its own bound, 4 on Linux').toContain('const bound = IS_DARWIN ? 8 : 4;');
+    // NO WALL CLOCK IN A REQUIRED CHECK (operator principle 2026-10-25): every `process.hrtime` read sits in a row that is
+    // gated itself or sits in a gated describe. The nearest `it(`/`describe(` header above each read decides.
+    const header = /^ *(?:describe|it|itLinux)(?:\.(?:runIf|skipIf)\([^\n]*?\))?\('/gm;
+    const heads = [...src.matchAll(header)].map((m) => ({ at: m.index!, text: m[0], indent: m[0].search(/\S/) }));
+    for (const clock of src.matchAll(/process\.hrtime/g)) {
+      const above = heads.filter((h) => h.at < clock.index!);
+      const row = above.at(-1)!;
+      const outer = [...above].reverse().find((h) => h.indent < row.indent && h.text.trimStart().startsWith('describe'));
+      const gated = (h: { text: string } | undefined): boolean => h !== undefined && h.text.includes(`runIf(${gate})`);
+      const line = src.slice(0, clock.index!).split('\n').length;
+      expect(gated(row) || gated(outer), `session-hook.test.ts:${line} reads a clock in an ungated row: ${row.text.trim()}`).toBe(true);
+    }
+    // Every `Date.now() - t0` timing in the three p95 rows is under the gate: no ungated row reads times[37].
+    expect((src.match(/expect\(times\[37\]\)\.toBeLessThan\(150\)/g) ?? []).length).toBe(3);
   });
 });

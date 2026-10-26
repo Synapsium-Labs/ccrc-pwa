@@ -131,16 +131,18 @@ export interface RouteFacts {
   readonly run: { ok: true; run: RouteRunFacts | null } | { ok: false; detail: string };
   /** Whether ccd carries the `route` verb (D-5866; `routeSet` answers the same cap). */
   readonly ccdCanRoute: boolean;
-  /** Every run event of every run the session touches (routing slice 6), in any order. */
-  readonly trail: (sid: string) => readonly RouteTrailEvent[];
+  /** Every run event of every run the session touches (routing slice 6), in any order; or why the runs it touches could
+   *  not be read (ARCH-62, #797: a series this process cannot represent), which refuses `runs-unreadable` because a
+   *  partial history must not read as "no earlier move". */
+  readonly trail: (sid: string) => { ok: true; events: readonly RouteTrailEvent[] } | { ok: false; detail: string };
   /** One of the session's registry fields, measured. */
   readonly measure: (sid: string, field: 'class' | 'effort' | 'degraded') => Promise<RegistryRead>;
 }
 
 /** Every word the route can refuse with: the nine of `RunRouteRefuseCode` and
- *  the three that are the run's or the capability's (`run-unreadable`,
- *  `unknown-run`, `unsupported`). */
-export type RouteRefusalWord = RunRouteRefuseCode | 'run-unreadable' | 'unknown-run' | 'unsupported';
+ *  the four that are the run's, its session's series' or the capability's
+ *  (`run-unreadable`, `runs-unreadable`, `unknown-run`, `unsupported`). */
+export type RouteRefusalWord = RunRouteRefuseCode | 'run-unreadable' | 'runs-unreadable' | 'unknown-run' | 'unsupported';
 
 /** The move to apply: what `ccd route` is asked to write and the run event
  *  records. `kind` is null for a demotion or a manual write. */
@@ -265,7 +267,9 @@ export async function decideRoute(facts: RouteFacts): Promise<RouteDecision> {
   const { current, rawClass, degraded } = rung;
 
   const kind = how.by === 'kind' ? how.kind : null;
-  const folded = foldRouteTrail(facts.trail(sid), sid, kind);
+  const trail = facts.trail(sid);
+  if (!trail.ok) return refused('runs-unreadable', { detail: trail.detail });
+  const folded = foldRouteTrail(trail.events, sid, kind);
   const { priorSameKind } = folded;
   // Ruling S5-R17, applied before the ladder: a demotion whose `to` is no longer the measured value was cleared out
   // of band. D-6790: a live class demotion whose origin is above the main ceiling (fable) is never restored by an

@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import { SHAPE_ONLY_MASKER } from '../accounts/mask.js';
+import { decideShadowJournalQuery } from './shadowJournal.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
 import {
@@ -25,6 +26,7 @@ import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
+import { claimantsOfSession, runsTouching } from './bindingReads.js';
 import { readSessionSpendMeasured } from '../shares.js';
 import { boundSessionsOf, joinRunSpend } from './runSpend.js';
 import { pageInbox, renderEnvelope, renderInboxEntry } from './envelope.js';
@@ -1475,7 +1477,7 @@ export function registerCoordRoutes(
       // two conditions the verdict handles differently (design §3 F2).
       programKnown: (slug) => coord.programs().some((p) => p.slug === slug),
       programHome: (slug) => coord.programHome(slug),
-      openClaimantsOf: (s) => coord.openClaimantsOf(s),
+      openClaimantsOf: (s) => claimantsOfSession(coord, s),
       // D-5298 (coordinator-first Task 11b, spec §6.4): the three registry
       // facts, each read only by the gate that needs it. The switch-over reads
       // this box's role (as `config.ts`'s `deriveRole` decided it), its own
@@ -1965,8 +1967,11 @@ export function registerCoordRoutes(
         run: coord.run(id),
         // D-5866: the `route` row; `routeSet`, the class rung's pair below, is answered by the same `ROUTE_CAP`.
         ccdCanRoute: ccdCan(deps.fleetState, 'route'),
-        trail: (sid) => coord.runsTouching(sid).flatMap((r) =>
-          coord.runEvents(r.id).map((e) => ({ at: e.at, runId: r.id, runSessionId: r.sessionId, detail: e.detail }))),
+        trail: (sid) => {
+          const touched = runsTouching(coord, sid);
+          return !touched.ok ? touched : { ok: true, events: touched.runs.flatMap((r) =>
+            coord.runEvents(r.id).map((e) => ({ at: e.at, runId: r.id, runSessionId: r.sessionId, detail: e.detail }))) };
+        },
         measure: (sid, field) => fieldMeasured(deps.io, deps.cfg.registryDir, sid, field),
       });
       if (!decision.ok) return refuseRoute(reply, decision.refused, decision.extra);
@@ -2432,6 +2437,16 @@ export function registerCoordRoutes(
     const coord = deps.coord;
     const names = await deps.io.readdir(deps.cfg.registryDir);
     return reply.code(200).send({ ok: true, ...stallWatchView(coord, names, Date.now(), watcher?.stallFallback() ?? null) });
+  });
+
+  // The unarmed disk lanes' shadow journal (D-6861), read only: what `expire-child`, `stale-archive` and
+  // `nested-rescue` would have done, newest first, kept past the feed's 2000 rows. `?lane=`, `?subject=`, `?limit=`.
+  app.get('/api/coord/shadow-journal', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const q = decideShadowJournalQuery(req.query as Record<string, unknown>);
+    if (!q.ok) return refuseRoute(reply, 'bad-request', { detail: q.detail });
+    // A path and a detail came off a session's workspace: masked before they leave (D-5995).
+    return reply.code(200).send({ ok: true, rows: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(deps.coord.shadowVerdicts(q, Date.now())) });
   });
 
   app.post('/api/coord/stall-watch', async (req, reply) => {

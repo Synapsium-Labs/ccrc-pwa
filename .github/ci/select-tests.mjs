@@ -13,7 +13,7 @@ import { pathToFileURL } from 'node:url';
 /** @typedef {import('./testmap.mjs').DepRecord} DepRecord */
 /** @typedef {import('./testmap.mjs').TestMap} TestMap */
 /** @typedef {{ status: 'A'|'M'|'D', path: string, symlink: boolean }} Change */
-/** @typedef {{ mode: 'selected', tests: Array<{ file: string, rule: 1|2|3|4|5|6, path: string }> } | { mode: 'full', reason: string }} Selection */
+/** @typedef {{ mode: 'selected', tests: Array<{ file: string, rule: 1|2|3|4|5|6, path: string }>, queued?: { unmapped: string[], uncertain: string[], why: Record<string, string> } } | { mode: 'full', reason: string }} Selection */
 
 /** Each rule's name, as the reason table prints it (spec §6.2's numbering). */
 export const RULE_NAMES = { 1: 'NEW', 2: 'ALWAYS', 3: 'READ', 4: 'PROBED', 5: 'LISTED', 6: 'SUBTREE' };
@@ -258,16 +258,56 @@ export function uncertainTests({ map, liveTests, staleChanges, existsAt }) {
 }
 
 /**
- * @param {{ map: TestMap, changes: Change[], liveTests: string[], existsAt: (ref: string, p: string) => boolean, staleChanges?: Map<string, Change[]> }} args
+ * @param {{ map: TestMap, changes: Change[], liveTests: string[], existsAt: (ref: string, p: string) => boolean, staleChanges?: Map<string, Change[]>, queueRunsUnmapped?: boolean, drift?: Change[] | null }} args
  *   `staleChanges`: for each older stamp in the map, the changes from that commit to the map's `sha` (select.mjs
  *   reads them). A record with an older stamp and no change set here is uncertain; a map from before stamping has
  *   no older stamps.
+ *
+ *   `queueRunsUnmapped` (a pull request, diffed from its merge base; operator ruling 2026-10-25: the merge queue
+ *   runs the whole suite): what the map cannot vouch for is LEFT TO THE QUEUE instead of turning the pull request
+ *   into a full run. A live test the map has no entry for is selected only when the change touches it (rule 1);
+ *   an uncertain test (its record older than a change to what it read) is selected only when this change hits it
+ *   through the per-file rules, read against the record it has. The rest are listed in `queued`, with the reason
+ *   for each uncertain one in `queued.why`, and the queue's full run is what tests them before the merge.
+ *
+ *   `drift` (only with `queueRunsUnmapped`): what main changed between the map's sha and the pull request's merge
+ *   base. The pull request's `changes` start at its merge base, so main's own changes since the map are in neither
+ *   `changes` nor `staleChanges`: a record traced at the map's sha that main has since changed — main edited the
+ *   test file, or a file it read — would otherwise be trusted with its old read set and neither selected nor
+ *   counted. Every mapped test the per-file rules select on the drift (rule 2 aside: it is selected anyway) is
+ *   therefore uncertain too, a full trigger in the drift makes every mapped test uncertain, and so does
+ *   `drift: null` (the map's sha is not in the merge base's history, so nothing says what main changed).
+ *   Selecting or going full for each of these made a day-old map run most of the suite on every pull request.
  * @returns {Selection}
  */
-export function selectTests({ map, changes, liveTests, existsAt, staleChanges }) {
+export function selectTests({ map, changes, liveTests, existsAt, staleChanges, queueRunsUnmapped = false, drift }) {
   const full = fullTrigger(changes, map.baseline);
   if (full) return { mode: 'full', reason: full };
   const uncertain = uncertainTests({ map, liveTests, staleChanges, existsAt });
+  if (queueRunsUnmapped) {
+    const tests = selectAmong({ map, sha: map.sha, changes, files: liveTests, existsAt, queueRunsUnmapped: true });
+    const chosen = new Set(tests.map((t) => t.file));
+    const isMapped = (f) => Object.prototype.hasOwnProperty.call(map.tests, f);
+    const unmapped = liveTests.filter((f) => !isMapped(f) && !chosen.has(f)).sort();
+    /** @type {Map<string, string>} */
+    const why = new Map(uncertain.filter((u) => isMapped(u.file)).map((u) => [u.file, u.why]));
+    const mapped = liveTests.filter(isMapped);
+    if (drift === null) {
+      for (const f of mapped) if (!why.has(f)) why.set(f, `main's history since the map is unknown (${map.sha.slice(0, 12)} is not an ancestor of the merge base)`);
+    } else if (drift && drift.length > 0) {
+      const driftFull = fullTrigger(drift, map.baseline);
+      if (driftFull) {
+        for (const f of mapped) if (!why.has(f)) why.set(f, `main changed what every test reads (${driftFull}) since the map`);
+      } else {
+        for (const t of selectAmong({ map, sha: map.sha, changes: drift, files: mapped, existsAt })) {
+          if (t.rule !== 2 && !why.has(t.file)) why.set(t.file, `main changed ${t.path} since the map`);
+        }
+      }
+    }
+    const uncertainQueued = [...why.keys()].filter((f) => !chosen.has(f)).sort();
+    const queuedWhy = Object.fromEntries(uncertainQueued.map((f) => [f, /** @type {string} */ (why.get(f))]));
+    return { mode: 'selected', tests, queued: { unmapped, uncertain: uncertainQueued, why: queuedWhy } };
+  }
   if (uncertain.length > 0) {
     const u = uncertain[0];
     return { mode: 'full', reason: `uncertain: ${uncertain.length} test(s) whose record is older than a change to what it read, first ${u.file} (${u.why})` };
@@ -286,9 +326,10 @@ export function selectIgnoringUncertainty({ map, changes, liveTests, existsAt })
 }
 
 /** The per-file rules (spec §6.2) over `files`, for `changes` made since `sha` (the commit the records were traced at).
- *  @param {{ map: TestMap, sha: string, changes: Change[], files: string[], existsAt: (ref: string, p: string) => boolean }} args
+ *  `queueRunsUnmapped`: a test the map has no entry for is selected only when the change touches it (selectTests).
+ *  @param {{ map: TestMap, sha: string, changes: Change[], files: string[], existsAt: (ref: string, p: string) => boolean, queueRunsUnmapped?: boolean }} args
  *  @returns {Array<{ file: string, rule: 1|2|3|4|5|6, path: string }>} */
-function selectAmong({ map, sha, changes, files, existsAt }) {
+function selectAmong({ map, sha, changes, files, existsAt, queueRunsUnmapped = false }) {
   // Precompute once per change, not once per test x change.
   const changed = [...changes].sort((a, b) => a.path.localeCompare(b.path));
   const changedByPath = new Map(changed.map((c) => [c.path, c]));
@@ -307,6 +348,7 @@ function selectAmong({ map, sha, changes, files, existsAt }) {
 
     // Rule 1 — NEW: the test file itself is new/modified, or the map has no
     // entry for it at all (never traced, so nothing else here is safe to trust).
+    if (!inMap && queueRunsUnmapped && !changedHere) continue;
     if (!inMap || (changedHere && (changedHere.status === 'A' || changedHere.status === 'M'))) {
       selected.push({ file, rule: 1, path: file });
       continue;

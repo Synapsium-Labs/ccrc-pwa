@@ -142,7 +142,7 @@ function parseGithubOutput(text: string): Record<string, string> {
   return out;
 }
 
-type RunOpts = { event: string; inputMode?: string; selection?: 'shadow' | 'enforce'; fullGreen?: 'true' | 'false'; mapFile?: string; timesFile?: string; traceList?: string; floorList?: string; floorStatic?: string };
+type RunOpts = { event: string; inputMode?: string; selection?: 'shadow' | 'enforce'; fullGreen?: 'true' | 'false'; mapFile?: string; base?: string; timesFile?: string; traceList?: string; floorList?: string; floorStatic?: string };
 
 function runSelect(repo: string, opts: RunOpts) {
   const io = mkTmp('ccrc-ci-select-io-');
@@ -160,6 +160,7 @@ function runSelect(repo: string, opts: RunOpts) {
   ];
   if (opts.inputMode) args.push('--input-mode', opts.inputMode);
   if (opts.mapFile) args.push('--map', opts.mapFile);
+  if (opts.base) args.push('--base', opts.base);
   if (opts.timesFile) args.push('--times', opts.timesFile);
   if (opts.traceList) args.push('--trace-list', opts.traceList);
   if (opts.floorList) args.push('--floor-list', opts.floorList);
@@ -208,6 +209,12 @@ function expectValidMatrix(matrixJson: string, expectedWorkers: number): void {
 }
 
 describe('decideMode', () => {
+  it('merge_group -> full/none: the queue runs the whole server suite whatever the change (operator ruling 2026-10-25)', () => {
+    for (const inputMode of [undefined, 'full']) {
+      expect(decideMode({ event: 'merge_group', inputMode, fullGreen: false })).toEqual({ tests: 'full', trace: 'none', skip: false });
+    }
+  });
+
   it('pull_request -> selected/none', () => {
     expect(decideMode({ event: 'pull_request', fullGreen: false })).toEqual({ tests: 'selected', trace: 'none', skip: false });
   });
@@ -273,9 +280,9 @@ describe('modeInvariantViolation: what a trigger can never answer (ruling T2)', 
     expect(modeInvariantViolation('pull_request', 'full', 'full')).toBeNull();
   });
 
-  it('a merge_group never answers tests none either — a queue run runs what a pull request runs (operator ruling 2026-09-28)', () => {
+  it('a merge_group never answers tests none either, and runs the full suite (operator ruling 2026-10-25)', () => {
     expect(modeInvariantViolation('merge_group', undefined, 'none')).toMatch(/merge_group/);
-    expect(modeInvariantViolation('merge_group', undefined, 'selected')).toBeNull();
+    expect(modeInvariantViolation('merge_group', undefined, 'selected')).toMatch(/merge_group/);
     expect(modeInvariantViolation('merge_group', 'full', 'full')).toBeNull();
   });
 
@@ -316,15 +323,17 @@ describe('select.mjs CLI — pull_request', () => {
     expect(summary).not.toContain('server/test/d.test.ts');
   });
 
-  it('merge_group (a merge-queue run) -> the SAME selection as the pull request, matrices and all (operator ruling 2026-09-28)', () => {
-    const { repo, mapFile, baseSha } = buildMainFixture();
+  it('merge_group (a merge-queue run) -> the FULL server matrix, the same one a full dispatch plans, whatever the change (operator ruling 2026-10-25)', () => {
+    const { repo, mapFile } = buildMainFixture();
+    const full = runSelect(repo, { event: 'workflow_dispatch', inputMode: 'full', selection: 'enforce', mapFile });
     const pr = runSelect(repo, { event: 'pull_request', selection: 'enforce', mapFile });
     const queue = runSelect(repo, { event: 'merge_group', selection: 'enforce', mapFile });
     expect(queue.status).toBe(0);
-    expect(queue.outputs.tests).toBe('selected');
-    expect(queue.outputs.map_sha).toBe(baseSha);
-    expect(queue.outputs.count).toBe(pr.outputs.count);
-    expect(queue.outputs.server_matrix).toBe(pr.outputs.server_matrix);
+    expect(queue.outputs.tests).toBe('full');
+    expect(queue.outputs.count).toBe(full.outputs.count);
+    expect(queue.outputs.server_matrix).toBe(full.outputs.server_matrix);
+    // …and the light pull request ran fewer files than the queue will, which is the saving.
+    expect(Number(pr.outputs.count)).toBeLessThan(Number(queue.outputs.count));
     expect(queue.summary).toContain('- event: `merge_group`');
   });
 
@@ -522,6 +531,143 @@ describe('select.mjs CLI — pull_request', () => {
     expect(status).toBe(0);
     expect(outputs.tests).toBe('full');
     expect(outputs.fallback).toBe(`map: ${sideSha} is not an ancestor of HEAD`);
+  });
+
+  describe('a pull request run with --base diffs from its merge base, not from the map commit', () => {
+    // main moves on after the map (it changes src/foo.ts, which test a reads); the PR then changes only src/bar.ts.
+    const staleMapFixture = () => {
+      const repo = initRepo();
+      writeFile(repo, 'src/foo.ts', 'export const foo = 1;\n');
+      writeFile(repo, 'src/bar.ts', 'export const bar = 1;\n');
+      writeFile(repo, 'server/test/a.test.ts', "it('a', () => {});\n");
+      writeFile(repo, 'server/test/b.test.ts', "it('b', () => {});\n");
+      const baseSha = commitAll(repo, 'base');
+      const mapFile = writeMapFile(repo, {
+        format: 1, sha: baseSha, baseline: depRecord(),
+        tests: { 'server/test/a.test.ts': testRecord({ read: ['src/foo.ts'] }), 'server/test/b.test.ts': testRecord({ read: ['src/other.ts'] }) },
+      });
+      writeFile(repo, 'src/foo.ts', 'export const foo = 2;\n');
+      commitAll(repo, 'main moves past the map');
+      git(repo, ['checkout', '-q', '-b', 'pr']);
+      writeFile(repo, 'src/bar.ts', 'export const bar = 2;\n');
+      commitAll(repo, 'the PR change');
+      return { repo, mapFile };
+    };
+
+    it('without --base (the trusted modes) the diff runs from the map commit and a is selected', () => {
+      const { repo, mapFile } = staleMapFixture();
+      const { outputs } = runSelect(repo, { event: 'pull_request', mapFile });
+      expect(outputs.tests).toBe('selected');
+      expect(outputs.count).toBe('1');
+    });
+
+    it('with --base main only the PR\'s own change is selected: nothing reads src/bar.ts, so no server test runs', () => {
+      const { repo, mapFile } = staleMapFixture();
+      const { outputs, summary } = runSelect(repo, { event: 'pull_request', mapFile, base: 'main' });
+      expect(outputs.tests).toBe('selected');
+      expect(outputs.count).toBe('0');
+      // a reads src/foo.ts, which main changed after the map: its record is not trusted, so it is left to the queue
+      // and counted, never dropped without a word.
+      expect(outputs.queued_count).toBe('1');
+      expect(summary).toContain('`server/test/a.test.ts` (main changed src/foo.ts since the map)');
+    });
+
+    it('a test main edited after the map is listed as uncertain when the PR touches an unrelated file', () => {
+      const repo = initRepo();
+      writeFile(repo, 'src/other.ts', 'export const other = 1;\n');
+      writeFile(repo, 'server/test/t.test.ts', "it('t', () => {});\n");
+      const mapSha = commitAll(repo, 'map');
+      const mapFile = writeMapFile(repo, {
+        format: 1, sha: mapSha, baseline: depRecord(),
+        tests: { 'server/test/t.test.ts': { ...testRecord({ read: ['src/a.ts'] }), tracedAt: mapSha } },
+      });
+      writeFile(repo, 'server/test/t.test.ts', "it('t', () => { expect(1).toBe(1); });\n");
+      commitAll(repo, 'main edits the test after the map');
+      git(repo, ['checkout', '-q', '-b', 'pr']);
+      writeFile(repo, 'src/other.ts', 'export const other = 2;\n');
+      commitAll(repo, 'the PR change');
+      const { status, outputs, summary } = runSelect(repo, { event: 'pull_request', mapFile, base: 'main' });
+      expect(status).toBe(0);
+      expect(outputs.tests).toBe('selected');
+      expect(outputs.count).toBe('0');
+      expect(outputs.queued_count).toBe('1');
+      expect(summary).toContain('1 uncertain test(s)');
+      expect(summary).toContain('`server/test/t.test.ts` (main changed server/test/t.test.ts since the map)');
+    });
+
+    it('a map that is not in the merge base\'s history leaves every mapped test the PR does not hit to the queue', () => {
+      const repo = initRepo();
+      writeFile(repo, 'src/other.ts', 'export const other = 1;\n');
+      writeFile(repo, 'server/test/t.test.ts', "it('t', () => {});\n");
+      commitAll(repo, 'base');
+      git(repo, ['checkout', '-q', '-b', 'pr']);
+      writeFile(repo, 'src/other.ts', 'export const other = 2;\n');
+      commitAll(repo, 'the PR change');
+      git(repo, ['checkout', '-q', 'main']);
+      writeFile(repo, 'main.txt', 'y\n');
+      const mapSha = commitAll(repo, 'main moves on; the map is built here');
+      git(repo, ['checkout', '-q', 'pr']);
+      const mapFile = writeMapFile(repo, {
+        format: 1, sha: mapSha, baseline: depRecord(),
+        tests: { 'server/test/t.test.ts': { ...testRecord({ read: ['src/a.ts'] }), tracedAt: mapSha } },
+      });
+      const { status, outputs } = runSelect(repo, { event: 'pull_request', mapFile, base: 'main' });
+      expect(status).toBe(0);
+      expect(outputs.tests).toBe('selected');
+      expect(outputs.count).toBe('0');
+      expect(outputs.queued_count).toBe('1');
+    });
+
+    // A bounded refresh carried a's record from an older commit (tracedAt) and src/foo.ts, which a reads, changed
+    // after it; c arrived without a record. The PR changes only src/bar.ts.
+    const stampedFixture = () => {
+      const repo = initRepo();
+      writeFile(repo, 'src/foo.ts', 'export const foo = 1;\n');
+      writeFile(repo, 'src/bar.ts', 'export const bar = 1;\n');
+      writeFile(repo, 'server/test/a.test.ts', "it('a', () => {});\n");
+      writeFile(repo, 'server/test/b.test.ts', "it('b', () => {});\n");
+      const oldSha = commitAll(repo, 'old');
+      writeFile(repo, 'src/foo.ts', 'export const foo = 2;\n');
+      writeFile(repo, 'server/test/c.test.ts', "it('c', () => {});\n");
+      const mapSha = commitAll(repo, 'map');
+      const mapFile = writeMapFile(repo, {
+        format: 1, sha: mapSha, baseline: depRecord(),
+        tests: {
+          'server/test/a.test.ts': { ...testRecord({ read: ['src/foo.ts'] }), tracedAt: oldSha },
+          'server/test/b.test.ts': { ...testRecord({ read: ['src/other.ts'] }), tracedAt: mapSha },
+        },
+      });
+      git(repo, ['checkout', '-q', '-b', 'pr']);
+      writeFile(repo, 'src/bar.ts', 'export const bar = 2;\n');
+      commitAll(repo, 'the PR change');
+      return { repo, mapFile };
+    };
+
+    it('stale stamps + a pull request: the uncertain and unmapped tests the PR does not touch are left to the queue, and the summary counts them', () => {
+      const { repo, mapFile } = stampedFixture();
+      const { status, outputs, summary } = runSelect(repo, { event: 'pull_request', mapFile, base: 'main' });
+      expect(status).toBe(0);
+      expect(outputs.tests).toBe('selected');
+      expect(outputs.count).toBe('0');
+      expect(outputs.queued_count).toBe('2');
+      expect(summary).toContain('left to the merge queue: 1 unmapped test(s)');
+      expect(summary).toContain('and 1 uncertain test(s)');
+    });
+
+    it('the same stale stamps without --base (no pull request base) answer full: uncertain means full', () => {
+      const { repo, mapFile } = stampedFixture();
+      const { outputs } = runSelect(repo, { event: 'pull_request', mapFile });
+      expect(outputs.tests).toBe('full');
+      expect(outputs.fallback).toMatch(/^uncertain:/);
+      expect(outputs.queued_count).toBe('0');
+    });
+
+    it('--base is ignored off a pull_request: a merge_group still runs the full suite', () => {
+      const { repo, mapFile } = staleMapFixture();
+      const { outputs } = runSelect(repo, { event: 'merge_group', mapFile, base: 'main' });
+      expect(outputs.tests).toBe('full');
+      expect(outputs.count).toBe('2');
+    });
   });
 
   it('macOS budget follows the EVENT: a pull request that fell back to full still gets at most 2 macOS shards', () => {

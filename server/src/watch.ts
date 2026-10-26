@@ -134,6 +134,7 @@ import {
 import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/ledger.js';
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
+import { openRunsClaimedBy } from './coord/bindingReads.js';
 import type { PushPayload } from './push.js';
 import { notify, noticeSink } from './notice.js';
 import { runDriftPass } from './coord/driftLane.js';
@@ -177,7 +178,7 @@ import {
   rankArchivedHeld, type ArchivedExpiryEntry, type ArchivedExpiryVerdict,
   type ExpiryStoreRead,
 } from './archivedExpiry.js';
-import { childEverCoordinated, expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
+import { childEverCoordinated, expireArchived, expireLaneLive, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
 import {
   deadAnchorNext, deadCoordinatorNewEpisode, deadCoordinatorAttention, deadCoordinatorBreaker,
   deadCoordinatorBreakerHeldKey, deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal, deadCoordinatorJournalSpawnedAt,
@@ -1881,7 +1882,7 @@ export class FleetWatcher {
    *  field initialiser runs, so it cannot be built beside the other fields. */
   private delegationLaneMemo: DelegationLane | null = null;
   private delegationLane(): DelegationLane {
-    this.delegationLaneMemo ??= new DelegationLane(this.deps, () => this.delegationCensus);
+    this.delegationLaneMemo ??= new DelegationLane(this.deps, () => this.delegationCensus, this.lanes);
     return this.delegationLaneMemo;
   }
 
@@ -5417,7 +5418,7 @@ export class FleetWatcher {
         identityMeasured: r.unmeasured.length === 0, held: r.held, store: read, expiresAt: entry.expiresAt, nowMs: now, childArm,
       });
       entry = archivedExpirySighted(entry, v, r.held, now);
-      entry = this.recordChildShadow(coord, r, v, entry);
+      entry = this.recordChildShadow(coord, r, v, entry, expireLaneLive(names));
       this.archivedExpiryState.set(r.id, entry);
       if (!v.eligible && v.why === 'expiry-unknown' && now >= entry.nextAskAt) learn.push(r.id);
       if (archivedExpiryDue(entry, now)) due.push(r.id);
@@ -5472,10 +5473,11 @@ export class FleetWatcher {
 
   /** A marked child the verdict would take but for `expire-child-live` (D-6641): ONE feed row per archive, "would be
    *  cleaned up (child)", so the operator sees the arm's population before arming it. Nothing is composed. */
-  private recordChildShadow(coord: CoordStore, r: SessionRecord, v: ArchivedExpiryVerdict, entry: ArchivedExpiryEntry): ArchivedExpiryEntry {
+  private recordChildShadow(coord: CoordStore, r: SessionRecord, v: ArchivedExpiryVerdict, entry: ArchivedExpiryEntry,
+    laneLive: boolean): ArchivedExpiryEntry {
     if (v.eligible || v.why !== 'child-shadow' || entry.expiresAt === null || entry.lastOutcome === CHILD_SHADOW_OUTCOME) return entry;
     recordExpireFeed({ coord, notifyLog: this.deps.notifyLog }, { kind: 'would-expire', sensitive: 0, child: true,
-      sessionId: r.id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt }, false);
+      sessionId: r.id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt, ...(laneLive ? { childArmHeld: true } : {}) }, false);
     return { ...entry, lastOutcome: CHILD_SHADOW_OUTCOME };
   }
 
@@ -5881,7 +5883,7 @@ export class FleetWatcher {
       if (key !== this.deadCoordinatorBreakerCommittedKey) {
         if (next.length === 0 && this.deadCoordinatorBreakerHeldRunId !== null) record.push(this.deadCoordinatorBreakerHeldRunId);
         for (const id of [...next.map((m) => m.id), ...before.map((m) => m.id), ...ids]) {
-          const open = coord.openRunsClaimedBy(id);
+          const open = openRunsClaimedBy(coord, id);
           if (open.ok && open.siblings.length > 0) { record.push(open.siblings[0]!.id); break; }
         }
       }
@@ -9784,10 +9786,11 @@ function renderAskBrief(
 // L4: it GATHERS (the owner's directory listing and a bounded byte range through `FleetIO`) and it APPLIES; every decision is a
 // pure module's (`ingestDelegationBucket`, `correlateDelegation`, `planDelegationReconciliation`, the health arithmetic).
 //
-//   ONE PASS AT A TIME (M5/M6). `sweeping` is the single-flight latch; a pass that finds another running returns at once, which also
-//   keeps two census passes from being reconciled side by side (the newer `measuredAt` only). A pass has a BUDGET enforced by a
-//   deadline the work cannot veto: a read that never answers ends the pass, its late answer is discarded (`signal.aborted` is checked
-//   after every await before anything is applied), and the next pass is not blocked by it.
+//   ONE PASS AT A TIME (M5/M6). The `delegation` row of `LANE_SCHEDULE` (`flight: 'skip'`) is the single-flight latch; a pass that
+//   finds another running returns at once, which also keeps two census passes from being reconciled side by side (the newer
+//   `measuredAt` only). A pass has a BUDGET enforced by a deadline the work cannot veto: a read that never answers ends the pass, its
+//   late answer is discarded (`signal.aborted` is checked after every await before anything is applied), and the next pass is not
+//   blocked by it.
 //   A DOCUMENTED RELAXATION (M2): a budget cut releases the latch while the cut pass's work may still be unwinding, so "a pass never
 //   starts while the previous one runs" holds for a pass that ends and is relaxed for one that is cut. That is deliberate: holding the
 //   latch until a hung read answered would wedge the lane for good. The late work is inert because an abort check follows every
@@ -10471,8 +10474,6 @@ class DelegationLane {
   private opening: Promise<DelegationDurability | null> | null = null;
   /** The lane has tried to open the applier: from then on a health is reported (absence before that reads as unknown). */
   private attempted = false;
-  private sweeping = false;
-  private lastSweepAt = 0;
   private lastRecoverAt = 0;
   private registryListed = true;
   /** Hours already read after they closed, this process: not read again. Memory only; a restart reads each once more. */
@@ -10748,7 +10749,7 @@ class DelegationLane {
     } catch { /* diagnostics only: a line that cannot be built is not written, and `run` settles as it would have */ }
   }
 
-  constructor(private readonly deps: Deps, private readonly census: () => DelegationCensusPass | null) {}
+  constructor(private readonly deps: Deps, private readonly census: () => DelegationCensusPass | null, private readonly lanes: LaneRunner) {}
 
   /** R103 (review F3): an unlistable registry stops `tick()` before the census and before this lane's pass (its fail-shut return), so
    *  nothing is listed while it lasts: it is "no census", and marks the lane NOT READY. The first pass after it sets the ready instant. */
@@ -11046,16 +11047,18 @@ class DelegationLane {
 
   async sweep(sessions: readonly LaneSession[], records: readonly LaneRecord[]): Promise<void> {
     if (this.deps.coord === undefined) return;                           // no coordination database, no lane
-    if (this.sweeping) return;                                           // SINGLE FLIGHT (M5/M6)
+    // SINGLE FLIGHT (M5/M6) and the cadence are the `delegation` row's: a call beside a pass, or inside the cadence, is refused.
+    await this.lanes.run('delegation', () => this.pass(records, sessions));
+  }
+
+  private async pass(records: readonly LaneRecord[], sessions: readonly LaneSession[]): Promise<void> {
     const now = Date.now();
-    if (this.lastSweepAt !== 0 && now - this.lastSweepAt < DELEGATION_SWEEP_MS) return;
     const census = this.census();
     if (census === null) {                                               // no census yet: wait, and keep the cadence unspent
+      this.lanes.kick('delegation');
       this.notReady = true;                                              // R88: nothing is listed, so nothing is read
       return;
     }
-    this.sweeping = true;
-    this.lastSweepAt = now;
     const ac = new AbortController();
     const cut = new Promise<'cut'>((resolve) => { ac.signal.addEventListener('abort', () => resolve('cut'), { once: true }); });
     const timer = setTimeout(() => ac.abort(), DELEGATION_PASS_BUDGET_MS);
@@ -11079,7 +11082,6 @@ class DelegationLane {
     } finally {
       clearTimeout(timer);
       ac.abort();                                                        // whatever outlives the pass finds its signal aborted
-      this.sweeping = false;
     }
   }
 

@@ -12,7 +12,7 @@
 //
 // EVERY UNCERTAIN ANSWER IS "NOT THIS PASS". The path these verdicts feed asks for a deletion with no human in it;
 // the executor re-reads, and ccd re-proves inside its lock at the instant of deletion. This file narrows the window.
-import { nestedWouldRescueCount } from '../../shared/nestedRescue.js';
+import { nestedWouldRescueCount, nestedWouldRescuePaths } from '../../shared/nestedRescue.js';
 import {
   TERMINAL_RUN_STATES, leafKeptWord, type ArchivedHeld, type ArchivedHeldRow, type ChildMark, type ExpiryAttention,
   type LcRefusalToken, type LeafKeptWord, type RunState,
@@ -157,6 +157,7 @@ export type ExpireAuditRead =
       readonly sensitive: number; readonly inUse: readonly ExpireInUse[];
       /** How many nested repositories the audit says the rescue arm would rescue (D-6633); absent when none. */
       readonly nestedWouldRescue?: number;
+      readonly nestedWouldRescuePaths?: readonly string[];
       readonly verdict:
         | { readonly kind: 'expirable'; readonly token: string }
         | { readonly kind: 'refused'; readonly token: ExpireToken; readonly detail: string } };
@@ -180,7 +181,8 @@ export function parseExpireAudit(sessionId: string, ok: boolean, stdout: string)
     ? [{ pid: u.pid, comm: u.comm, cwd: u.cwd }] : [])) : [];
   const wouldRescue = nestedWouldRescueCount(v);
   const base = { kind: 'document' as const, archivedAt: epochOrNull(v.archivedAt), expiresAt: expireAuditExpiresAt(v),
-    sensitive, inUse, ...(wouldRescue > 0 ? { nestedWouldRescue: wouldRescue } : {}) };
+    sensitive, inUse,
+    ...(wouldRescue > 0 ? { nestedWouldRescue: wouldRescue, nestedWouldRescuePaths: nestedWouldRescuePaths(v) } : {}) };
   if (v.verdict === 'expirable') {
     if (typeof v.token !== 'string' || !TOKEN_SHAPE.test(v.token)) {
       return { kind: 'unreadable', detail: 'ws-audit --expire said expirable with no 64-hex token' };

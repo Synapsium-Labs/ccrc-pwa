@@ -1,5 +1,5 @@
-// ARCH-62 (#797), slice 1 only: this is NOT the counted exit (the server equality-site census and the store's binding
-// readers cut to <= 4 are later slices). It pins what slice 1 did: the store's session-keyed run readers are
+// ARCH-62 (#797), slices 1 and 2: this is NOT the counted exit (`run-session-census.test.ts` is its measure). It pins what
+// slices 1 and 2 did: the store's session-keyed run readers are
 // projections of ONE series read, decided through `bindingOf`/`claimantsOf`/`boundRunsOf` (coord/runBinding.ts) by
 // coord/bindingRows.ts. A new reader of the run↔session link goes through `seriesRows`, or states why it is a
 // different query here.
@@ -12,8 +12,7 @@ const ROWS = 'server/src/coord/bindingRows.ts';
 
 // The readers of the link, and the one SQL reader they share. `runsTouching` is the routing door's OR walk and
 // `lastRunBySession` the last-closed query: different queries, kept (consolidation spec §3 K10).
-const PROJECTIONS = ['bindingRunsOf', 'parentOfSession', 'openClaimantsOf', 'openRunsForSession', 'openRunsClaimedBy',
-  'runsNamingSession'].map((n) => `CoordStore.${n}`);
+const PROJECTIONS = ['bindingRunsOf', 'openRunsForSession', 'runsNamingSession'].map((n) => `CoordStore.${n}`);
 const calls = (file: string, name: string): string[] => callsIn(symbolOf(file, name)).map((c) => c.callee);
 const callsSeries = (text: string): boolean => /\bseriesRows\b/.test(text);
 
@@ -33,7 +32,7 @@ describe('the run↔session readers are projections of one series (ARCH-62)', ()
   });
 
   it('the projections decide through the binding, not an equality of their own', () => {
-    const decide = [['parentFromRows', 'bindingOf'], ['claimantsFromRows', 'claimantsOf'], ['boundRows', 'boundRunsOf']] as const;
+    const decide = [['boundRows', 'boundRunsOf']] as const;
     for (const [fn, via] of decide) {
       expect(calls(ROWS, fn).some((t) => new RegExp(`\\b${via}\\b`).test(t)), `${fn} does not call ${via}`).toBe(true);
     }

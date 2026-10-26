@@ -6871,7 +6871,7 @@ describe('one tryHold decides every ask hold (D-5290)', () => {
     expect(holders(DEFINES_TRY)).toEqual(['server/src/watch.ts']);
   });
 
-  it("watch.ts mints only inside tryHold, reads parentOfSession only there, and calls it from all three raise paths", () => {
+  it("watch.ts mints only inside tryHold, reads the child's run series only there, and calls it from all three raise paths", () => {
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
     const start = watch.search(/\basync\s+tryHold\s*\(/);
     const end = watch.indexOf('\n  }\n', start);
@@ -6881,12 +6881,14 @@ describe('one tryHold decides every ask hold (D-5290)', () => {
     expect(body.match(/\bthis\.hold\(/g) ?? []).toHaveLength(1);
     expect(rest).not.toMatch(/\bthis\.hold\(/);
     // D-5530 (plan Task 16): the claimant decision moved, whole, into `coord/heldFor.ts`, which the approvals mint
-    // reads too: `tryHold` calls it, and the watcher reads `parentOfSession` nowhere else.
+    // reads too: `tryHold` calls it, and the watcher reads the child's run series (`bindingRunsOf`, which replaced
+    // `parentOfSession`: ARCH-62 slice 2) nowhere else. heldFor reads it through `childParentRead` (bindingReads.ts),
+    // the one parent read it shares with the drift lane.
     expect(body).toMatch(/\bheldFor\(/);
-    expect(rest).not.toMatch(/\.parentOfSession\(/);
+    expect(rest).not.toMatch(/\.bindingRunsOf\(/);
     expect(rest.match(/\bthis\.tryHold\(/g) ?? []).toHaveLength(3);
     const heldForSrc = stallCode(path.join(ccrcRoot, 'server/src/coord/heldFor.ts'));
-    expect(heldForSrc).toMatch(/\.parentOfSession\(/);
+    expect(heldForSrc).toMatch(/\bchildParentRead\(/);
     expect(heldForSrc).toMatch(/\bclaimantMeasuredDead\(/);
   });
 
@@ -8604,8 +8606,8 @@ describe('one change latch (ARCH-76): changeLatch (D-5861)', () => {
 // guard field of its own. Named by `consolidationCensus.ts`'s `laneClockFields` and `singleFlightGuards`, and for a clock
 // nobody named by `laneClockShapes` (a numeric field compared as `now - this.X < CONST`). What stays is reported by name:
 // W4's two lanes (`stopDoneSweeping`/`lastStopDoneSweep`, `hibernateSweeping`/`lastHibernateSweep`), the tick's own guard,
-// `dispatchNow`'s run and its one follow-up (a trigger with no cadence), and `DelegationLane#lastSweepAt` while another series
-// holds that class. Each counts only down. The census is loaded inside the rows, so this block adds no import line.
+// `dispatchNow`'s run and its one follow-up (a trigger with no cadence). `DelegationLane#lastSweepAt` is the `delegation` row
+// (the series that held that class has merged). Each counts only down. The census is loaded inside the rows, so this block adds no import line.
 describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () => {
   const text = (xs: ReadonlyArray<{ text: string }>): string[] => xs.map((x) => x.text.trim());
 
@@ -8651,6 +8653,11 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
       'private dispatchAgain = false;', 'private dispatchRun: Promise<DispatchRunResult> | null = null;',
       'private hibernateSweeping = false;', 'private stopDoneSweeping = false;', 'private ticking = false;',
     ]);
+  });
+
+  it('the delegation lane keeps no clock or guard of its own: its cadence and single flight are the `delegation` row', async () => {
+    const { laneClockReported } = await import('./consolidationCensus.js');
+    expect(laneClockReported(), 'DelegationLane#lastSweepAt is a row of LANE_SCHEDULE').toEqual([]);
   });
 
   it('no throttle reads the wall clock: every row of LANE_SCHEDULE is monotonic (OA-C4, ruled (a) on #803), 0 wall rows', async () => {

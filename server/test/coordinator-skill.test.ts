@@ -644,6 +644,9 @@ describe('the coordinator skill: linkage', () => {
       // D-6910: the operator's read of that cap's ask, unnamed for the caps reason: the read is the first half of the
       // invitation. The same forbid-mention case covers it, since it names `review-cap` at all.
       'GET /api/coord/review-cap/:id',
+      // DISK RETENTION shadow journal (D-6861) — a read-only view for the operator (and the agent that
+      // reviews a disk lane before the operator arms it), not a coordination door: no session decides or acts through it.
+      'GET /api/coord/shadow-journal',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {

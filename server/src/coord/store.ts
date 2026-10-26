@@ -14,7 +14,7 @@ import { decideAllocation } from './ledger.js';
 import type { CoordPlacementStamp } from './placement.js';
 import type { LastRun } from './released.js';
 import type { BindingRun, Incarnation } from './runBinding.js';
-import { boundRows, claimantsFromRows, openRows, parentFromRows, type SeriesRow } from './bindingRows.js';
+import { boundRows, openRows, type SeriesRow } from './bindingRows.js';
 // Stall watch wave 1: the stall lane's row shapes are declared by their CONSUMER,
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
 // reads below implement them.
@@ -64,6 +64,10 @@ import { bodyDigest } from '../../../shared/mark.mjs';
 // Fix round 1, item 5 (ruling A): the same tag comparator every other
 // ordering in this design uses — never `publishedAt` — for `newestUnyankedStable`.
 import { newestTag } from '../../../shared/semver.js';
+import {
+  SHADOW_JOURNAL_MAX_AGE_MS, SHADOW_JOURNAL_MAX_ROWS, isShadowLane, shadowVerdictKey,
+  type ShadowLane, type ShadowVerdictInput, type ShadowVerdictRow,
+} from '../../../shared/shadowJournal.js';
 // Centralised-update wave 19 (R24(d)): `rowHalts` asks the dispatcher's own halt rule rather than restating it.
 import { isHaltingUpdate } from '../../../shared/update-move.js';
 import {
@@ -1930,34 +1934,21 @@ export class CoordStore {
   }
 
   /**
-   * Every run this session touches — as WORKER (`sessionId`) or as
-   * COORDINATOR (`claimedBy`) — ANY state, ordered by id (routing spec
-   * 2026-09-14 §3, routing slice 6, Task 1). This is the routing door's
-   * (`routes.ts`) own read: the ladder's history ("the last unreversed
-   * demotion", the same-kind count that gates `max`) is a property of the
-   * SESSION, not of one run row, so the door walks the union of
-   * `runEvents(r.id)` over what this method answers rather than one run's
-   * trail alone. A session can be the worker of one run and the
-   * coordinator of another at once — both belong in the walk, which is why
-   * this is an OR, not an either/or pick.
-   */
-  runsTouching(sessionId: string): { id: number; sessionId: string | null; claimedBy: string | null }[] {
-    return this.db.prepare(
-      'SELECT id, sessionId, claimedBy FROM runs WHERE sessionId = ? OR claimedBy = ? ORDER BY id',
-    ).all(sessionId, sessionId) as { id: number; sessionId: string | null; claimedBy: string | null }[];
-  }
-
-  /**
    * The series `coord/runBinding.ts` derives a binding from (ARCH-60, #795): every run `id` works on (`sessionId`) or
    * claims (`claimedBy`), ANY state, by id, with the columns the binding reads and no more. The two roles are ONE read
    * because the binding's queries ask both ("whose worker is this?", "whose children are these?") of the same series,
    * and `runsTouching`'s reason for the OR holds. ALL-OR-FAILURE like every session-keyed read here (D-2545): an `id`
    * this process cannot represent fails the whole read, so a partial series never reads as "nothing else is bound".
+   *
+   * `ids: 'ordinal'` answers the same series with each `id` the row's ORDINAL in it (1, 2, ...; the series is by id, so
+   * the order is the id order exactly) and proves no integer, so it never fails on one: the projection `parentOfSession`
+   * and `openClaimantsOf` made before the fold (`bindingRows.ts`'s reason). For a caller whose answer is a claimant, never
+   * a run id (`claimantsOfSession`, a child's parent when the proven series fails). An ordinal is not a run id.
    */
-  bindingRunsOf(id: string): BindingRunsResult {
+  bindingRunsOf(id: string, ids: 'proven' | 'ordinal' = 'proven'): BindingRunsResult {
     const runs: BindingRun[] = [];
-    for (const r of this.seriesRows('either', id)) {
-      const n = persistedInt(r.idText, 'run id');
+    for (const [i, r] of this.seriesRows('either', id).entries()) {
+      const n = ids === 'ordinal' ? { ok: true as const, value: i + 1 } : persistedInt(r.idText, 'run id');
       if (!n.ok) return { ok: false, kind: 'run-unreadable', detail: n.detail };
       runs.push({ id: n.value, sessionId: r.sessionId, claimedBy: r.claimedBy,
         state: isRunState(r.state) ? r.state : 'unknown', openedAt: r.openedAt,
@@ -3425,27 +3416,6 @@ export class CoordStore {
   }
 
   /**
-   * "Which OPEN runs does this session COORDINATE?" — `openRunsForSession`'s question asked of the OTHER column
-   * (workspace lifecycle spec §5.2): every non-terminal run whose `claimedBy` is `claimantId`, in id order, for the
-   * archive door's `coordinator-has-open-runs` refusal and its `{programme:'end'}` act. `openCoordinatorIds` answers
-   * WHO coordinates something, as a set of ids; this answers WHICH runs, with the columns the refusal names.
-   *
-   * `openRunsForSession`'s predicate (`state NOT IN` the terminal set, so a row in a state this build cannot name
-   * counts as open) and its row (`OpenSibling`, the four integers CAST and proven, ALL-OR-FAILURE, D-2545): a partial
-   * list is how "this coordinator has no open runs" gets asserted about one that does, one step from an archive.
-   * Synchronous, like every other read on this store.
-   */
-  openRunsClaimedBy(claimantId: string): OpenSiblingsResult {
-    const runs: OpenSibling[] = [];
-    for (const r of openRows(this.seriesRows('claimedBy', claimantId))) {
-      const m = measureRunNumbers(r);
-      if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
-      runs.push({ id: m.nums.id, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf });
-    }
-    return { ok: true, siblings: runs };
-  }
-
-  /**
    * "Which OPEN runs name this session?" — the question the hold file
    * structurally cannot answer, asked at three destructive decision points.
    *
@@ -3471,12 +3441,22 @@ export class CoordStore {
    *
    * `excludeRunId` defaults to `-1`, an id AUTOINCREMENT never mints, so the
    * "no exclusion" call and the excluding call are ONE query, not two.
+   *
+   * ARCH-62 (#797): the ONE open-only reader. `role: 'claimant'` asks the question of the OTHER column (workspace
+   * lifecycle spec §5.2): every non-terminal run whose `claimedBy` is `sessionId`, session-less planned runs included,
+   * in id order, for the archive door's `coordinator-has-open-runs` refusal, its `{programme:'end'}` act and the
+   * sweeps that ask whether a session coordinates anything. It takes no incarnation (a claimant is not a birth). Its
+   * predicate and its row are the worker's: `state NOT IN` the terminal set, a state this build cannot name counting as
+   * open, and `OpenSibling`'s four integers CAST and proven, ALL-OR-FAILURE (D-2545).
    */
-  openRunsForSession(sessionId: string, excludeRunId?: number, incarnation?: Incarnation): OpenSiblingsResult {
+  openRunsForSession(
+    sessionId: string, excludeRunId?: number, incarnation?: Incarnation, role: 'worker' | 'claimant' = 'worker',
+  ): OpenSiblingsResult {
     // The rows this returns are proven (D-2545), `RUN_ROW_COLUMNS`'s reason: its consumers are DESTRUCTIVE decision
     // points, so an unrepresentable row refuses in words rather than throwing out of a sweep or a fleet act.
     const siblings: OpenSibling[] = [];
-    for (const r of boundRows(this.seriesRows('sessionId', sessionId), sessionId, 'open', incarnation)) {
+    const series = this.seriesRows(role === 'claimant' ? 'claimedBy' : 'sessionId', sessionId);
+    for (const r of role === 'claimant' ? openRows(series) : boundRows(series, sessionId, 'open', incarnation)) {
       if (r.idText === String(excludeRunId ?? -1)) continue;
       const m = measureRunNumbers(r);
       // ALL-OR-FAILURE (`RunReadResult`'s own docstring): a partial sibling list is how "nothing else claims this
@@ -5064,6 +5044,37 @@ export class CoordStore {
     const r = this.db.prepare("SELECT COUNT(*) AS n FROM drift_findings WHERE pushedVia = 'item' AND pushedAt >= ?")
       .get(dayStartMs) as { n: unknown };
     return Number(r.n);
+  }
+
+  // ── the unarmed disk lanes' shadow journal (D-6861): one writer, `recordShadowVerdict` ────────
+
+  /** Once per key (`INSERT OR IGNORE`, so a restart does not write it twice), then prune by age and keep the newest
+   *  `SHADOW_JOURNAL_MAX_ROWS`. Answers whether a new row landed. `detail` and `path` pass `redactCommand`, and the key
+   *  is built from the REDACTED path, so nothing redaction removes reaches the file through `key`. */
+  recordShadowVerdict(v: ShadowVerdictInput, now: number): boolean {
+    return tx(this.db, () => {
+      const storedPath = v.path === null ? null : redactCommand(v.path);
+      const put = this.db.prepare(
+        'INSERT OR IGNORE INTO shadow_journal (key, lane, subject, path, rung, bytes, inodes, detail, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(shadowVerdictKey({ ...v, path: storedPath }), v.lane, v.subject, storedPath, v.rung, v.bytes, v.inodes,
+        redactCommand(v.detail), now);
+      this.db.prepare('DELETE FROM shadow_journal WHERE at < ?').run(now - SHADOW_JOURNAL_MAX_AGE_MS);
+      this.db.prepare('DELETE FROM shadow_journal WHERE key IN (SELECT key FROM shadow_journal ORDER BY at DESC, rowid DESC LIMIT -1 OFFSET ?)')
+        .run(SHADOW_JOURNAL_MAX_ROWS);
+      return Number(put.changes) === 1;
+    });
+  }
+
+  /** Newest first, and none older than `SHADOW_JOURNAL_MAX_AGE_MS` at `now` (the prune runs only on a write, and the
+   *  lanes may stop writing). A row whose lane this build cannot name (a later build wrote it) is skipped, never a
+   *  failed read. */
+  shadowVerdicts(q: { readonly lane: ShadowLane | null; readonly subject: string | null; readonly limit: number }, now: number): ShadowVerdictRow[] {
+    const rows = this.db.prepare(
+      'SELECT key, lane, subject, path, rung, bytes, inodes, detail, at FROM shadow_journal WHERE (?1 IS NULL OR lane = ?1) ' +
+      'AND (?2 IS NULL OR subject = ?2) AND at >= ?4 ORDER BY at DESC, rowid DESC LIMIT ?3',
+    ).all(q.lane, q.subject, q.limit, now - SHADOW_JOURNAL_MAX_AGE_MS) as { key: string; lane: string; subject: string;
+      path: string | null; rung: string; bytes: number | null; inodes: number | null; detail: string; at: number }[];
+    return rows.flatMap((r): ShadowVerdictRow[] => (isShadowLane(r.lane) ? [{ ...r, lane: r.lane }] : []));
   }
 
   /** The runs and deliveries a stall OPERATOR rung already told the operator about, in mode `live` (a `shadow` row never
@@ -7617,75 +7628,6 @@ export class CoordStore {
   }
 
   /* ── asks (ask pre-emption lane, D-2169..D-2171) ─────────────────────── */
-
-  /** The parent of a dispatched program worker: the coordinator of the run
-   *  that dispatched it. DERIVED, never stored — `reclaimProgram` rewrites
-   *  `runs.claimedBy` for every run of a program in one transaction, so a
-   *  derived answer follows a handover for free while a stored id would name
-   *  a corpse.
-   *
-   *  `state NOT IN ${TERMINAL_RUN_STATES_SQL}` used to be COPIED, hand-written,
-   *  from `openRunsForSession` (`:2048`) and `openCoordinatorIds`
-   *  (`:2098-2103`), deliberately never the OLD `TERMINAL_RUN_STATES`: that
-   *  constant used to be derived from `RUN_TRANSITIONS`, which gives
-   *  `'unknown'` an empty outgoing-edge list and so called it terminal — but
-   *  every shipped session-keyed query in this file counts an `'unknown'` row
-   *  (a token a newer build wrote and this one degrades on read) as OPEN.
-   *  Since design 2026-09-14 §7.1 (D-2794) `TERMINAL_RUN_STATES` is L0's own
-   *  pair (`shared/api.ts`) and does NOT call `'unknown'` terminal either, so
-   *  the divergence this paragraph used to warn about is gone: this query now
-   *  names `TERMINAL_RUN_STATES_SQL` directly, agreeing with `rundefs.ts`'s
-   *  `survivorOf` (built on `openRunsForSession`) on which run of a session is
-   *  open, including on an `'unknown'` row.
-   *
-   *  ORDER BY id DESC is a CONVENTION, not a guarantee: nothing in the schema
-   *  forbids two open runs naming one sessionId, and the coordinator protocol
-   *  DELIBERATELY creates that state by opening wave N+1 before closing wave
-   *  N. The newest run's claimant is the right answer there, and
-   *  `rundefs.ts`'s `survivorOf` documents the same protocol-not-DB-enforced
-   *  caveat. Pinned by a two-wave/two-claimant test, verified red under
-   *  ASC (fix round 1, finding 2).
-   *
-   *  ARCH-62 (#797): decided by `bindingOf` over `seriesRows`. `incarnation`, when the caller knows the worker's birth
-   *  (`heldFor`, the drift lane), makes a run opened for an EARLIER occupant of a reused name no parent (#746); without
-   *  one the rule is the id string, as before. `openClaimantsOf`, `openRunsForSession` and `runsNamingSession` take it
-   *  the same way. */
-  parentOfSession(childId: string, incarnation?: Incarnation): string | null {
-    return parentFromRows(this.seriesRows('sessionId', childId), childId, incarnation);
-  }
-
-  /** EVERY coordinator that currently has `sessionId` working for it: the
-   *  DISTINCT non-null `claimedBy` of every non-terminal run naming it as
-   *  `sessionId`, newest run first.
-   *
-   *  A SET, NOT THE NEWEST, and that difference is the whole reason this
-   *  method exists beside `parentOfSession` rather than replacing it.
-   *  `runs_by_session` (`schema.ts`) is a NON-UNIQUE index, and two shipped
-   *  paths deliberately put several open runs on one session: the coordinator
-   *  protocol opens wave N+1 before closing wave N, and nothing stops a
-   *  session being one programme's worker while another programme's run still
-   *  names it. `parentOfSession`'s `LIMIT 1` therefore answers a question
-   *  about the NEWEST run — which is the right question for the ask lane, whose
-   *  own docstring argues it, and the WRONG one for a guard whose sentence is
-   *  "this session is nobody else's worker". Read newest-first so a caller
-   *  taking the first offender names the most recent one.
-   *
-   *  OWNERLESS ROWS CONTRIBUTE NOTHING. `claimedBy IS NOT NULL` is spelled in
-   *  the query, so a reconstructed row (D-12, `claimedBy` left NULL because
-   *  `reconstruct` cannot know who will resume) is not an entry here and is
-   *  not a silent one either — D-3012 ruled that such a run is ADMITTED at the
-   *  doors, because `by` is what those refusals are for and there is no `by`
-   *  to name. That admission is D-3012's and stays; this method just refuses
-   *  to smuggle a `null` into a list of ids.
-   *
-   *  A FINISHED WORKER IS NOT A WORKER: a session whose runs are all terminal
-   *  answers `[]`, the same complement of `TERMINAL_RUN_STATES_SQL` every
-   *  session-keyed read in this file uses (including the `'unknown'` token a
-   *  newer build may have written, which is OPEN here). Synchronous, like
-   *  every read on this store. */
-  openClaimantsOf(sessionId: string, incarnation?: Incarnation): string[] {
-    return claimantsFromRows(this.seriesRows('sessionId', sessionId), sessionId, incarnation);
-  }
 
   /** D-2545, the ask half. `id` and `runId` — the two columns in the RUN-ID
    *  DOMAIN (`isPositiveDecimalSafeInteger`) — are CAST to TEXT and proven,
