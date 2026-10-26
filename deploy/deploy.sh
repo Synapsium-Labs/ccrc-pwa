@@ -638,6 +638,9 @@ if [ "$TARGET" = "agent" ]; then
   # `ccd carry-dedupe`'s program (#317), 644: a script python3 runs, never executed directly.
   install_atomic ccd/lib/carry-dedupe.py .cc-sessions/lib/carry-dedupe.py 644
   install_ccd_pair
+  # The settings reader the ccd-* sweeps source (wave 29, D-6980), beside ccd's body: after the pair, whose
+  # installer creates ~/.local/libexec/ccrc, and before the sweeps below.
+  install_atomic ccd/lib/ccrc-settings.sh .local/libexec/ccrc/ccrc-settings.sh 644
   # The coordination client, beside ccd because the fleet host is where sessions
   # run and a session-side client on the server box is a copy nobody invokes. A
   # plain install_atomic and NOT a shim: it sources nothing, so one file is the

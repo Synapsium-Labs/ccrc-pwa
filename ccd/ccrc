@@ -16743,6 +16743,12 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
     _inst_atomic "$tree/ccd/ccrc-codex"      "$bin/ccrc-codex"      755
     lane_bins=", ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex" lane_note=""
   fi
+  # The settings reader the ccd-* sweeps source (wave 29, D-6980): generated from this file's `_ccrc_knob` closure
+  # (deploy/gen-settings-lib.mjs), 0644, beside ccd's body and off PATH, on every OS and role, and HERE, above the sweeps
+  # it serves, so no sweep this run places runs without it. Not `_inst_files`, which skips a server-role box whole.
+  mkdir -p "$HOME/.local/libexec/ccrc" || _ccrc_die "cannot create \$HOME/.local/libexec/ccrc"
+  _inst_atomic "$tree/ccd/lib/ccrc-settings.sh" "$HOME/.local/libexec/ccrc/ccrc-settings.sh" 644
+  echo "install: lib: ccrc-settings.sh (the settings reader the ccd-* sweeps source) in \$HOME/.local/libexec/ccrc"
   # `ccd-cap-scopes` FINDS UNCAPPED tmux pane CGROUP SCOPES and caps them.
   # macOS has neither cgroups nor scopes, and `_inst_units`' Darwin arm
   # installs no timer to run it — so placing the binary there would put a file
@@ -26988,6 +26994,9 @@ _uninst_tree_bins() {
   # declaration): they stay with mail.token.
   rm -f -- "$BOX_TOKEN_GENERATION_FILE" "$BOX_TOKEN_SYNC_REPORT" \
     || _ccrc_die "removing the box token's generation record and sync report failed"
+  # The settings reader `_inst_bins` places beside ccd's body (wave 29, D-6980), by name, before the libexec rmdir below.
+  rm -f -- "$HOME/.local/libexec/ccrc/ccrc-settings.sh" || _ccrc_die "removing the settings reader from \$HOME/.local/libexec/ccrc failed"
+  echo "uninstall: tree: ccrc-settings.sh removed from \$HOME/.local/libexec/ccrc"
   # ONE RULE, and the `rm -f` below IS the census: every executable
   # `_inst_bins` writes into `$HOME/.local/bin` is removed here, because an
   # uninstall that removed a binary's units (above) and left the binary itself

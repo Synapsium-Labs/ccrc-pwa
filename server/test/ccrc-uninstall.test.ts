@@ -961,6 +961,32 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(r.stdout).toContain('its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; ');
   });
 
+  it('W29-I3: uninstall removes the reader, and ~/.local/libexec/ccrc with it only when that leaves it empty', () => {
+    // wave 29 (D-6980): the settings reader the ccd-* sweeps source sits beside ccd's body, and goes by name in a
+    // statement of its own, before the directory's only-if-empty rmdir.
+    const lib = (home: string): string => join(home, '.local', 'libexec', 'ccrc', 'ccrc-settings.sh');
+    const plantLib = (home: string): void => {
+      mkdirSync(join(home, '.local', 'libexec', 'ccrc'), { recursive: true });
+      writeFileSync(lib(home), '# fixture settings reader\n', { mode: 0o644 });
+    };
+    const line = 'uninstall: tree: ccrc-settings.sh removed from $HOME/.local/libexec/ccrc';
+    const kept = mkTmp('ccrc-uninst-settings-lib-kept-');
+    plantInstalledBox(kept);
+    plantLib(kept);
+    writeFileSync(join(kept, '.local', 'libexec', 'ccrc', 'mine'), 'mine\n');
+    const r = runVerb(kept, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(lib(kept)), 'the settings reader survived').toBe(false);
+    expect(readFileSync(join(kept, '.local', 'libexec', 'ccrc', 'mine'), 'utf8'), 'an operator file beside it was removed').toBe('mine\n');
+    expect(r.stdout.split('\n').filter((l) => l === line)).toHaveLength(1);
+    const empty = mkTmp('ccrc-uninst-settings-lib-');
+    plantInstalledBox(empty);
+    plantLib(empty);
+    expect(runVerb(empty, 'uninstall').code).toBe(0);
+    expect(existsSync(lib(empty)), 'the settings reader survived').toBe(false);
+    expect(existsSync(join(empty, '.local', 'libexec', 'ccrc')), 'an emptied ccrc libexec directory survived').toBe(false);
+  });
+
   it('a STAMPED ccd-account-auth is still the bin arm\'s subject, never counted as a wrapper', () => {
     // `_inst_atomic` does not stamp, so a real box's copy is unmarked and the
     // wrapper arm keeps it silently whether or not `_uninst_wrappers`' case

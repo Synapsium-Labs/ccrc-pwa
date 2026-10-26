@@ -2222,7 +2222,8 @@ const FILE_FNS = ['_inst_files', '_inst_skills', '_inst_graphify_skill', '_inst_
 const MV_FNS = ['_inst_accounts_sh'];
 /** Every other function in `ccd/ccrc` that calls `_inst_atomic`, and why it is not an install lane's placement. */
 const OTHER_INST_ATOMIC_FNS: Readonly<Record<string, string>> = {
-  _inst_bins: 'its `.local/bin` names are the bins describe\'s',
+  _inst_bins: 'its `.local/bin` names are the bins describe\'s; its other placements (the settings reader under '
+    + '`.local/libexec/ccrc`, wave 29) are read by `spineFilePaths` beside FILE_FNS',
   _inst_units: 'its unit files are the units describe\'s',
   _inst_units_darwin: 'launchd plists, macOS only; deploy.sh deploys only to the Linux fleet box',
   _exp_ddns_units: 'the opt-in public endpoint\'s DNS units, placed by its own verb, never by install',
@@ -2266,6 +2267,16 @@ function homeRelative(fn: string, word: string, local: Local): string[] {
 /** What the install spine places outside `.local/bin` and the unit directory, home-relative. */
 function spineFilePaths(): Set<string> {
   const out = new Set<string>();
+  // `_inst_bins` places on PATH, which the bins describe holds equal, and beside ccd's body: the settings reader the
+  // ccd-* sweeps source (wave 29, D-6980). Its destinations outside `.local/bin` are this describe's.
+  {
+    const fn = '_inst_bins';
+    const body = fnBody(fn);
+    const local = assignments(body);
+    for (const w of argAt(fn, '_inst_atomic', calls(body, '_inst_atomic'), 1)) {
+      for (const p of homeRelative(fn, w, local)) if (!p.startsWith('.local/bin/')) out.add(p);
+    }
+  }
   for (const fn of FILE_FNS) {
     const body = fnBody(fn);
     const local = loopBindings(body, assignments(body));
@@ -2322,5 +2333,29 @@ describe('deploy/deploy.sh and `ccrc install` place the same files outside PATH 
     expect(spine, 'the loop-bound skill installers are read').toContain('.cc-sessions/install-worker-skill.sh');
     expect(spine, 'the file-scope stamp path is read').toContain('.ccrc/build.json');
     expect(spine, 'the generated roster is read').toContain('.ccrc/accounts.sh');
+  });
+});
+
+// ── wave 29 (D-6980): ~/.local/libexec/ccrc ───────────────────────────────
+// ccd's body has lived there since D-3696, placed by the entry installer and held by the pair describe above. Wave 29
+// adds the settings reader the ccd-* sweeps source, which `_inst_bins` and deploy.sh each place with one atomic copy
+// and `_uninst_tree_bins` removes by name. The three sets are read from the source, as every census in this file is.
+const LIBEXEC_DIR = '$HOME/.local/libexec/ccrc';
+const DEPLOY_LIBEXEC_DIRS = ['.local/libexec/ccrc', '~/.local/libexec/ccrc'];
+
+describe('the libexec census: what _inst_bins places under ~/.local/libexec/ccrc, _uninst_tree_bins removes and deploy.sh places', () => {
+  it('W29-I4: the three sets are equal, ccd\'s body apart', () => {
+    const ib = fnBody('_inst_bins');
+    const placed = census('_inst_bins', 'placement', argAt('_inst_bins', '_inst_atomic', calls(ib, '_inst_atomic'), 1),
+      [LIBEXEC_DIR], assignments(ib));
+    const ub = fnBody('_uninst_tree_bins');
+    const removed = census('_uninst_tree_bins', 'removal', rmFOperands(ub), [LIBEXEC_DIR], assignments(ub));
+    const deployed = deployPlaced('install_atomic', DEPLOY_LIBEXEC_DIRS);
+    for (const set of [placed, removed, deployed]) set.delete('ccd');   // the body: the pair describe's (D-3696)
+    expect(placed.size, 'the _inst_bins reader found nothing under ~/.local/libexec/ccrc: it has gone stale').toBeGreaterThan(0);
+    expect([...placed].filter((n) => !removed.has(n)).sort(), '_inst_bins places these and _uninst_tree_bins never removes them').toEqual([]);
+    expect([...removed].filter((n) => !placed.has(n)).sort(), '_uninst_tree_bins removes these and _inst_bins never places them').toEqual([]);
+    expect([...placed].filter((n) => !deployed.has(n)).sort(), '_inst_bins places these and deploy.sh does not').toEqual([]);
+    expect([...deployed].filter((n) => !placed.has(n)).sort(), 'deploy.sh places these and _inst_bins does not').toEqual([]);
   });
 });

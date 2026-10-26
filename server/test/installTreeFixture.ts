@@ -232,6 +232,9 @@ export const TREE_FILES = [
   'ccd/lib/transcript.jq',
   // `ccd carry-dedupe`'s program (#317); `_inst_files` places it beside the reader above.
   'ccd/lib/carry-dedupe.py',
+  // The settings reader the ccd-* sweeps source (wave 29): `_inst_bins` places it under ~/.local/libexec/ccrc on every
+  // OS and role, so a tree without it dies in `_inst_atomic` naming the missing source.
+  'ccd/lib/ccrc-settings.sh',
   // The approval verifier (coordinator-first routing, plan Task 14, D-5297): `_inst_files` places it beside the hook
   // and before it, as the card's helper above, so a tree without it dies the same way.
   'ccd/approval-verify.mjs',
