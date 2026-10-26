@@ -42,8 +42,16 @@ function plant(mutate: ((t: string) => string | null) = (t) => t, body: 'install
 const MARK = (): string => path.join(h.home, 'lib-ran');
 const RAN = 'echo ran > "$HOME/lib-ran"\n';
 /** Source `ccd` and say what came of it: the status of the source, then which moved names exist. */
+/** A driver script written to `<home>/<name>` and run as `bash <file> <ccd>`: no `-c` string, so no path of this run is
+ *  ever spliced into shell text; `ccd` reaches the script only as `$1`. */
+function driver(name: string, body: string): string {
+  const file = path.join(h.home, name);
+  fs.writeFileSync(file, `${body}\n`, { mode: 0o644 });
+  return file;
+}
+const SOURCED = `source "$1"; rc=$?; echo "rc=$rc"; for f in ${MOVED.join(' ')}; do declare -F "$f" >/dev/null && echo "has $f"; done`;
 function sourced(ccd: string, extra: NodeJS.ProcessEnv = {}): { out: string; err: string } {
-  const r = spawnSync('bash', ['-c', `source "$1"; rc=$?; echo "rc=$rc"; for f in ${MOVED.join(' ')}; do declare -F "$f" >/dev/null && echo "has $f"; done`, 'lib', ccd],
+  const r = spawnSync('bash', [driver('sourced.sh', SOURCED), ccd],
     { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, h.env(extra), { systemd: true, tmux: true, net: true }) });
   return { out: r.stdout, err: r.stderr };
 }
@@ -172,7 +180,7 @@ describe('the load needs no temp file', () => {
     return { ...ghContainedEnv(h.home, h.env(), { systemd: true, tmux: true, net: true }), PATH: bin, XDG_RUNTIME_DIR: '/tmp' };
   }
   function sourcedStripped(ccd: string): { out: string; err: string } {
-    const r = spawnSync('bash', ['-c', `source "$1"; rc=$?; echo "rc=$rc"; declare -F cmd_ws_orphan >/dev/null && echo has`, 'lib', ccd],
+    const r = spawnSync('bash', [driver('sourced-stripped.sh', 'source "$1"; rc=$?; echo "rc=$rc"; declare -F cmd_ws_orphan >/dev/null && echo has'), ccd],
       { encoding: 'utf8', cwd: h.home, env: strippedPath() });
     return { out: r.stdout, err: r.stderr };
   }
