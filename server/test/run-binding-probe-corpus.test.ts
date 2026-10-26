@@ -1,5 +1,5 @@
 // ARCH-60 follow-up (#1407, part of #795): THE PROBE CORPUS of PR #1573. One case per shape a review round reported (rounds
-// 1 to 7), each read back the way the server reads it: the child's parent (`childParentOf`), its claimants
+// 1 to 8), each read back the way the server reads it: the child's parent (`childParentOf`), its claimants
 // (`claimantsOf`), the card (`sessionRunRead`), the coordinators' `childIds` (`withChildIds`), the hold (`heldFor`) and,
 // where the shape has one, the birth a later wave was stamped with.
 //
@@ -9,6 +9,11 @@
 // (`head`) with why it is better. Without that variable the file asserts this branch's answer. A case whose two answers are the same wrong answer is an
 // INHERITED residual: out of scope for this PR, named in the plan note's "Residuals, inherited from main" section and
 // left to the follow-up for D6 gap 1 (an unborn incarnation that reuses a workspace name still inherits a ghost run).
+//
+// Since round 8 the later-wave stamp is the merge base's, byte for byte (`CoordStore.stampOccupantBirth` is unchanged:
+// the newest placeable birth on record for the id, else none). Every round-8 shape that was worse traced to a stamp the
+// merge base never writes (the fallback to an unplaceable birth), which an older build's rebind or a later redraw then
+// carried onto another incarnation. The rows that were better only through that fallback (gap 2) are residuals now.
 //
 // The file uses only what the merge base also exports, so it runs over either source tree unchanged. A fixture writes
 // the rows a build would write; where the shape says an OLDER build or the merge-base build wrote a row, the fixture
@@ -141,9 +146,9 @@ const CORPUS: readonly Case[] = [
       return { f, mark: w1, coords: ['coord-1'], wave: w2 };
     },
     base: { parent: 'coord-1', claimants: ['coord-1'], card: 'w2', childIds: { 'coord-1': ['w1', 'w2'] }, held: 'released:coord-1:parent-not-live', stamp: null },
-    head: { parent: 'coord-1', claimants: ['coord-1'], card: 'w2', childIds: { 'coord-1': ['w1', 'w2'] }, held: 'released:coord-1:parent-not-live', stamp: 'T5 for demo-w' },
-    verdict: 'better',
-    why: 'the later wave records the birth the worker\'s own minting run recorded (T5); the merge base recorded none',
+    verdict: 'same',
+    why: 'gap 2: the later wave records no birth (the stamp is the merge base\'s, placeable births only); the readers still answer coord-1 by openedAt. A fallback stamp closed it in rounds 6 and 7 and was withdrawn in round 8 (the plan note)',
+    residual: 'inherited',
   },
   {
     shape: 'the dup-arm re-open over an unplaceable wave 1, wave 1 then done',
@@ -158,9 +163,9 @@ const CORPUS: readonly Case[] = [
       return { f, mark: wave1, coords: ['coord-1'], wave: wave2 };
     },
     base: { parent: 'coord-1', claimants: ['coord-1'], card: 'wave2', childIds: { 'coord-1': ['wave2'] }, held: 'released:coord-1:parent-not-live', stamp: null },
-    head: { parent: 'coord-1', claimants: ['coord-1'], card: 'wave2', childIds: { 'coord-1': ['wave2'] }, held: 'released:coord-1:parent-not-live', stamp: 'T5 for demo-w' },
-    verdict: 'better',
-    why: 'wave 2 records the birth wave 1 recorded (T5); the merge base recorded none',
+    verdict: 'same',
+    why: 'gap 2 on the dup arm: wave 2 records no birth, as on the merge base (the fallback stamp withdrawn in round 8)',
+    residual: 'inherited',
   },
   {
     shape: 'the dup-arm re-open over a placeable wave 1, wave 1 then done',
@@ -274,9 +279,9 @@ const CORPUS: readonly Case[] = [
       return { f, mark: w1, coords: ['coord-1', 'coord-ghost'], wave: w2 };
     },
     base: { parent: 'coord-1', claimants: [], card: null, childIds: { 'coord-1': [], 'coord-ghost': [] }, held: 'released:coord-1:parent-not-live', stamp: null },
-    head: { parent: 'coord-1', claimants: ['coord-1'], card: 'w2', childIds: { 'coord-1': ['w2'], 'coord-ghost': [] }, held: 'released:coord-1:parent-not-live', stamp: 'T5 for demo-w' },
-    verdict: 'better',
-    why: 'wave 2 records T5 and is bound to the live worker (claimants, card, coord-1\'s childIds); the merge base left it undecided, so the card showed no open run',
+    verdict: 'same',
+    why: 'gap 2: wave 2 records no birth and stays undecided once wave 1\'s dispatch moves onto the birth, so the card shows no open run and coord-1\'s childIds lose it (the fallback stamp that bound it was withdrawn in round 8)',
+    residual: 'inherited',
   },
   {
     shape: 'a newer birth for the id on a run an older build rebound away, then a later wave',
@@ -816,6 +821,263 @@ const CORPUS: readonly Case[] = [
     },
     base: { parent: 'coord-c', claimants: ['coord-c', 'coord-a', 'coord-b'], card: 'L2', childIds: { 'coord-a': ['M'], 'coord-b': ['L'], 'coord-c': ['L2'] }, held: 'released:operator:run-other-programme', stamp: null },
     verdict: 'same',
+  },
+  {
+    shape: 'R8-X1c: another worker Y, its birth unplaceable (re-stamped), has a wave V bound by this build; an older build moves V to the born worker',
+    round: 'round 8 (X1c)',
+    build: () => {
+      const f = new Fixture();
+      const mw = f.open('MW', 'coord-x', t(0) - 100);
+      f.mint(mw, t(0));
+      const my = f.open('MY', 'coord-a', t(1) - 100);
+      f.mint(my, t(1), 'demo-y');
+      f.dispatchStarted(my, t(2));
+      const v = f.open('V', 'coord-x', t(3));
+      f.bind(v, 'demo-y');
+      f.olderMove(v, W);
+      f.done(mw);
+      return { f, mark: mw, coords: ['coord-x', 'coord-a'], wave: v };
+    },
+    base: { parent: 'coord-x', claimants: ['coord-x'], card: 'V', childIds: { 'coord-x': ['V'], 'coord-a': ['MY'] }, held: 'released:coord-x:parent-not-live', stamp: null },
+    verdict: 'same',
+  },
+  {
+    shape: 'R8-X1c-open: as R8-X1c, the minting run MW left open',
+    round: 'round 8 (X1c)',
+    build: () => {
+      const f = new Fixture();
+      const mw = f.open('MW', 'coord-x', t(0) - 100);
+      f.mint(mw, t(0));
+      const my = f.open('MY', 'coord-a', t(1) - 100);
+      f.mint(my, t(1), 'demo-y');
+      f.dispatchStarted(my, t(2));
+      const v = f.open('V', 'coord-x', t(3));
+      f.bind(v, 'demo-y');
+      f.olderMove(v, W);
+      return { f, mark: mw, coords: ['coord-x', 'coord-a'], wave: v };
+    },
+    base: { parent: 'coord-x', claimants: ['coord-x'], card: 'V', childIds: { 'coord-x': ['MW', 'V'], 'coord-a': ['MY'] }, held: 'released:coord-x:parent-not-live', stamp: null },
+    verdict: 'same',
+  },
+  {
+    shape: 'R8-X1c-ctrl: as R8-X1c, Y placeable (no re-stamp)',
+    round: 'round 8 (X1c)',
+    build: () => {
+      const f = new Fixture();
+      const mw = f.open('MW', 'coord-x', t(0) - 100);
+      f.mint(mw, t(0));
+      const my = f.open('MY', 'coord-a', t(1) - 100);
+      f.mint(my, t(1), 'demo-y');
+      const v = f.open('V', 'coord-x', t(3));
+      f.bind(v, 'demo-y');
+      f.olderMove(v, W);
+      f.done(mw);
+      return { f, mark: mw, coords: ['coord-x', 'coord-a'], wave: v };
+    },
+    base: { parent: null, claimants: [], card: null, childIds: { 'coord-x': [], 'coord-a': ['MY'] }, held: 'not-a-child', stamp: 'T1 for demo-y' },
+    verdict: 'same',
+    why: 'a leftover birth for another session: V carries Y\'s placeable stamp, and after the older build moves V to W, bindsRun reads it as unbound for W, so V drops out. Candidate fix for the follow-up: read a run\'s recorded birth only when it was recorded for the session the run names now',
+    residual: 'inherited',
+  },
+  {
+    shape: 'R8-M1: re-stamped M (crash after markDispatchStarted), this build binds V, then a same-id redraw by this build re-mints M, M done',
+    round: 'round 8',
+    build: () => {
+      const f = new Fixture();
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.dispatchStarted(m, t(2));
+      const v = f.open('V', 'coord-a', t(3));
+      f.bind(v);
+      f.mint(m, t(4));
+      f.done(m);
+      return { f, mark: m, coords: ['coord-a'], wave: v };
+    },
+    base: { parent: 'coord-a', claimants: [], card: null, childIds: { 'coord-a': [] }, held: 'released:coord-a:parent-not-live', stamp: null },
+    verdict: 'same',
+    why: 'V, bound before the re-mint, stays undecided, so parentOrMinter makes coord-a the parent with no claimant; with a placeable birth (R8-M1-ctrl) the merge base stamps V and reads it as the earlier occupant\'s, not-a-child. Closing it needs gap 2\'s stamp',
+    residual: 'inherited',
+  },
+  {
+    shape: 'R8-M1-ctrl: as R8-M1, M placeable when V is bound',
+    round: 'round 8',
+    build: () => {
+      const f = new Fixture();
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      const v = f.open('V', 'coord-a', t(3));
+      f.bind(v);
+      f.mint(m, t(4));
+      f.done(m);
+      return { f, mark: m, coords: ['coord-a'], wave: v };
+    },
+    base: { parent: null, claimants: [], card: null, childIds: { 'coord-a': [] }, held: 'not-a-child', stamp: 'T1 for demo-w' },
+    verdict: 'same',
+  },
+  {
+    shape: 'R8-M2: as R8-M1, V ownerless',
+    round: 'round 8',
+    build: () => {
+      const f = new Fixture();
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.dispatchStarted(m, t(2));
+      const v = f.open('V', null, t(3));
+      f.bind(v);
+      f.mint(m, t(4));
+      f.done(m);
+      return { f, mark: m, coords: ['coord-a'], wave: v };
+    },
+    base: { parent: null, claimants: [], card: null, childIds: { 'coord-a': [] }, held: 'released:operator:run-unclaimed', stamp: null },
+    verdict: 'same',
+    why: 'as R8-M1: the undecided ownerless V holds the child as run-unclaimed, where R8-M1-ctrl reads not-a-child',
+    residual: 'inherited',
+  },
+  {
+    shape: 'R8-M3: as R8-M1, V another coordinator, M open',
+    round: 'round 8',
+    build: () => {
+      const f = new Fixture();
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.dispatchStarted(m, t(2));
+      const v = f.open('V', 'coord-b', t(3));
+      f.bind(v);
+      f.mint(m, t(4));
+      return { f, mark: m, coords: ['coord-a', 'coord-b'], wave: v };
+    },
+    base: { parent: 'coord-a', claimants: ['coord-a'], card: 'M', childIds: { 'coord-a': ['M'], 'coord-b': [] }, held: 'released:coord-a:parent-not-live', stamp: null },
+    verdict: 'same',
+  },
+  {
+    shape: 'R8-M4: re-stamped M, this build binds V, the name re-minted on another run N of coord-a (new mark), N done',
+    round: 'round 8',
+    build: () => {
+      const f = new Fixture();
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.dispatchStarted(m, t(2));
+      const v = f.open('V', 'coord-a', t(3));
+      f.bind(v);
+      f.done(m);
+      const n = f.open('N', 'coord-a', t(4) - 100);
+      f.mint(n, t(4));
+      f.done(n);
+      return { f, mark: n, coords: ['coord-a'], wave: v };
+    },
+    base: { parent: 'coord-a', claimants: [], card: null, childIds: { 'coord-a': [] }, held: 'released:coord-a:parent-not-live', stamp: null },
+    verdict: 'same',
+    why: 'as R8-M1, with the re-mint on a new run N: the undecided V makes coord-a the parent',
+    residual: 'inherited',
+  },
+  {
+    shape: 'R8-A1: adopted M (no birth), an earlier occupant E with an unplaceable birth, this build binds V, then M re-minted, M done',
+    round: 'round 8',
+    build: () => {
+      const f = new Fixture();
+      const e = f.open('E', 'coord-gone', t(0) - 100);
+      f.mint(e, t(0));
+      f.dispatchStarted(e, t(0) + 50);
+      f.done(e);
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.adopt(m, t(1));
+      const v = f.open('V', 'coord-a', t(3));
+      f.bind(v);
+      f.mint(m, t(4));
+      f.done(m);
+      return { f, mark: m, coords: ['coord-a', 'coord-gone'], wave: v };
+    },
+    base: { parent: 'coord-a', claimants: [], card: null, childIds: { 'coord-a': [], 'coord-gone': [] }, held: 'released:coord-a:parent-not-live', stamp: null },
+    verdict: 'same',
+    why: 'as R8-M1, after an adoption (D-6993): the undecided V makes coord-a the parent',
+    residual: 'inherited',
+  },
+  {
+    shape: 'N1: the minting run M re-dispatched and its id reused, the minter\'s later wave X bound before M records the new birth (M open)',
+    round: 'round 8 (N1)',
+    build: () => {
+      const f = new Fixture();
+      const m = f.open('M', 'coord-1', t(0) - 100);
+      f.mint(m, t(0));
+      f.dispatchStarted(m, t(5));
+      const x = f.open('X', 'coord-1', t(6));
+      f.bind(x);
+      f.recordUnplaceable(m, t(5));
+      return { f, mark: m, coords: ['coord-1'], wave: x };
+    },
+    base: { parent: 'coord-1', claimants: ['coord-1'], card: 'X', childIds: { 'coord-1': ['M', 'X'] }, held: 'released:coord-1:parent-not-live', stamp: null },
+    verdict: 'same',
+  },
+  {
+    shape: 'N1b: as N1, X another coordinator\'s wave, M done',
+    round: 'round 8 (N1b)',
+    build: () => {
+      const f = new Fixture();
+      const m = f.open('M', 'coord-1', t(0) - 100);
+      f.mint(m, t(0));
+      f.dispatchStarted(m, t(5));
+      const x = f.open('X', 'coord-2', t(6));
+      f.bind(x);
+      f.recordUnplaceable(m, t(5));
+      f.done(m);
+      return { f, mark: m, coords: ['coord-1', 'coord-2'], wave: x };
+    },
+    base: { parent: 'coord-2', claimants: ['coord-2'], card: 'X', childIds: { 'coord-1': [], 'coord-2': ['X'] }, held: 'released:operator:run-other-programme', stamp: null },
+    verdict: 'same',
+  },
+  {
+    shape: 'N8: another session V\'s only birth unplaceable, this build binds X to V, an older build rebinds X to the born worker',
+    round: 'round 8 (N8)',
+    build: () => {
+      const f = new Fixture();
+      const mv = f.open('MV', 'coord-v', t(1) - 100);
+      f.recordUnplaceable(mv, t(1), 'demo-v');
+      const m = f.open('M', 'coord-a', t(2) - 100);
+      f.mint(m, t(2));
+      const x = f.open('X', 'coord-x', t(3));
+      f.bind(x, 'demo-v');
+      f.olderMove(x, W);
+      return { f, mark: m, coords: ['coord-x', 'coord-a'], wave: x };
+    },
+    base: { parent: 'coord-x', claimants: ['coord-x', 'coord-a'], card: 'X', childIds: { 'coord-x': ['X'], 'coord-a': ['M'] }, held: 'released:operator:run-other-programme', stamp: null },
+    verdict: 'same',
+  },
+  {
+    shape: 'N8b: as N8, M done',
+    round: 'round 8 (N8b)',
+    build: () => {
+      const f = new Fixture();
+      const mv = f.open('MV', 'coord-v', t(1) - 100);
+      f.recordUnplaceable(mv, t(1), 'demo-v');
+      const m = f.open('M', 'coord-a', t(2) - 100);
+      f.mint(m, t(2));
+      const x = f.open('X', 'coord-x', t(3));
+      f.bind(x, 'demo-v');
+      f.olderMove(x, W);
+      f.done(m);
+      return { f, mark: m, coords: ['coord-x', 'coord-a'], wave: x };
+    },
+    base: { parent: 'coord-x', claimants: ['coord-x'], card: 'X', childIds: { 'coord-x': ['X'], 'coord-a': [] }, held: 'released:operator:run-other-programme', stamp: null },
+    verdict: 'same',
+  },
+  {
+    shape: 'N8c: as N8, V\'s birth placeable',
+    round: 'round 8 (N8c)',
+    build: () => {
+      const f = new Fixture();
+      const mv = f.open('MV', 'coord-v', t(1) - 100);
+      f.mint(mv, t(1), 'demo-v');
+      const m = f.open('M', 'coord-a', t(2) - 100);
+      f.mint(m, t(2));
+      const x = f.open('X', 'coord-x', t(3));
+      f.bind(x, 'demo-v');
+      f.olderMove(x, W);
+      return { f, mark: m, coords: ['coord-x', 'coord-a'], wave: x };
+    },
+    base: { parent: 'coord-a', claimants: ['coord-a'], card: 'M', childIds: { 'coord-x': [], 'coord-a': ['M'] }, held: 'released:coord-a:parent-not-live', stamp: 'T1 for demo-v' },
+    verdict: 'same',
+    why: 'as R8-X1c-ctrl: X keeps demo-v\'s stamp after the older build rebinds it to W, so X reads unbound for W',
+    residual: 'inherited',
   },
 ];
 

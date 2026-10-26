@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
-  bindingOf, bindsRun, boundRunsOf, bornIncarnation, childrenOf, claimantsOf, incarnationOf, parentOf, runNamesSession, unbornIncarnation,
+  bindingOf, bindsRun, bornIncarnation, childrenOf, claimantsOf, incarnationOf, parentOf, runNamesSession, unbornIncarnation,
   bindingWriterCalls, BINDING_WRITER_FILES, BINDING_WRITER_VERBS,
   type BindingRun,
 } from '../src/coord/runBinding.js';
@@ -179,7 +179,7 @@ describe('the #746 fixture, through a store', () => {
     expect(childrenOf(series, 'coord-gone', (id) => unbornIncarnation(id, 'not-a-child')).map((r) => r.id)).toEqual([stale]);
   });
 
-  it('the dup-arm re-open: a planned run opened before the birth, then bound after it, records the birth and is bound (#1407)', () => {
+  it('the dup-arm re-open: a planned run opened before the birth, then bound after it, is undecidable, never a parent and never dropped', () => {
     const s = store();
     const input = { program: 'prog-two', title: 't', project: 'p', wave: 2, waveOf: null, claimedBy: 'coord-1' };
     const wave2 = (s.openRun(input) as { id: number }).id;
@@ -195,13 +195,12 @@ describe('the #746 fixture, through a store', () => {
     const b = bindingOf(series, inc);
     expect(parentOfSession(s, 'demo-w')).toBe('coord-1');
     expect(parentOf(b)).toBe('coord-1');
-    expect(b.undecided).toEqual([]);
-    expect(boundRunsOf(series, inc, 'any').map((r) => r.id)).toContain(wave2);
+    expect(b.undecided.map((r) => r.id)).toEqual([wave2]);
     for (const to of ['dispatched', 'closing', 'done'] as const) s.advance(wave1, to, 'coordinator');
     const after = bindingOf(readSeries(s, 'demo-w'), inc);
-    expect(parentOf(after)).toBe('coord-1');
-    expect(after.undecided).toEqual([]);
-    expect(childrenOf(readSeries(s, 'coord-1'), 'coord-1', () => inc).map((r) => r.id)).toContain(wave2);
+    expect(parentOf(after)).toBeNull();
+    expect(after.undecided.map((r) => r.id)).toEqual([wave2]);
+    expect(childrenOf(readSeries(s, 'coord-1'), 'coord-1', () => inc).map((r) => r.id)).not.toContain(wave2);
   });
 
   it('bindingRunsOf answers the runs a session works on and the runs it claims, by id', () => {

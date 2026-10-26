@@ -1,18 +1,25 @@
 # ARCH-60 follow-up (#1407): the adopted arm's residual
 
-A plan note for PR #1573 (every bind records the incarnation it binds to). It defines the one deviation that PR leaves
-standing. It edits no other plan and no programme ledger.
+A plan note for PR #1573 (the bind-site census and the probe corpus, at the merge base's stamp). It defines the one
+deviation that PR names, and records the gap 2 design it withdrew. It edits no other plan and no programme ledger.
 
 ## The counted exit, as measured
 
 `server/test/run-binding-bind-records.test.ts` drives every call of `bindSession`, `setSession` and `markDispatched` in
-`server/src` through the path that reaches it, over one fixture: a worker whose only birth on record cannot be placed by
-`childBirthOf`. It reads what each bind wrote on the run it bound. Run over the merge base (`ce7b94dab`, whose server
-sources the current merge base `865e1833b` keeps unchanged), 5 of the 6
-driven arms recorded no birth: the open route (`holdAndBindSession`), `CoordStore.markDispatched`,
-`CoordStore.dispatchRun`, the `CoordStore.setSession` pass-through and the adopted arm of `dispatch.ts#spawnFresh`. Only
-the fresh-spawn arm recorded one. After the fix, 1 arm records none: the adopted arm. So the exit "unbound-incarnation
-bind sites go to 0" is met for every site except that one, which is named below.
+`server/src` through the path that reaches it, over two fixtures: a worker whose birth on record `childBirthOf` places,
+and one whose only birth on record it cannot place. It reads what each bind wrote on the run it bound. The census is the
+same over the merge base (`865e1833b`) and this PR, because since round 8 this PR writes the merge base's stamp
+unchanged (`CoordStore.stampOccupantBirth`: the newest placeable birth on record for the id, else none):
+
+- Over a placeable birth, 5 of the 6 driven arms record it: the open route (`holdAndBindSession`),
+  `CoordStore.markDispatched`, `CoordStore.dispatchRun`, the `CoordStore.setSession` pass-through and the fresh-spawn
+  arm of `dispatch.ts#spawnFresh`. The one that records none is the adopted arm (D-6993, below).
+- Over an unplaceable birth, only the fresh-spawn arm records one (its own). The other five record none: gap 2, a
+  residual of this PR (below), left to the follow-up.
+
+So the exit "unbound-incarnation bind sites go to 0" is NOT met by this PR. It is met for every site except the adopted
+arm whenever the id has a placeable birth on record, and it is not met at all for an id whose only births are
+unplaceable. Rounds 6 and 7 closed that second part with a fallback stamp; round 8 withdrew it (below).
 
 ## Deviations found
 
@@ -46,43 +53,17 @@ bind sites go to 0" is met for every site except that one, which is named below.
     same run. Anchored to it, the readers dropped the live occupant's waves and kept a dead coordinator's. So every
     `unplaceable` worker keeps the merge base's id-string rule, and `runWire.incarnationsOfSessions` builds the fleet's
     incarnations from the marks alone, with no series read per session per frame.
-  - **The write.** `occupantBirthOf`, the stamp's source, reads the merge base's rows: every run recording a birth
-    for the id, whatever its `sessionId` now names. It takes the newest PLACEABLE birth among them, as the merge base
-    does. Only when none can be placed does it fall back, and only to a birth every row agrees on: two different births
-    on record mean the columns cannot say which is the live occupant's, so it stamps nothing, as the merge base does.
-    And the fallback never re-places the run it stamps: when its birth equals that run's own `dispatchStartedAt`, it
-    writes nothing. Nothing vetoes the stamp.
-    A fallback stamp is read. A worker that is `unplaceable` when the wave is bound can be `born` when the wave is
-    read: a same-id redraw moves the minting run's `dispatchStartedAt` onto its birth, or an older build moves a run
-    with a placeable birth back to the worker. That is why the fallback must be unambiguous and must never make the
-    stamped run placeable. Round 7 measured three ways to get this wrong, each worse than the merge base:
-    - The newest recorded birth, when the births disagree (shapes P1-q and P1b-q of the corpus). It can be another
-      run's, so once the minting run's dispatch moves onto the worker's own birth, the wave stamped with the other
-      birth reads `unbound`.
-    - The fallback birth written onto the minting run itself (shapes P10, P10b and P6d). The open route's dup arm
-      rebinds the minting run back to the worker after a retried open moved it away. The only birth left on record is
-      a later wave's copy of the minting run's own birth. Writing that copy back makes the minting run placeable
-      again, and every pre-planned wave the merge base left unstamped then becomes undecidable.
-    - A narrower row set, the session's series (`sessionId` or `claimedBy` naming the id). A placeable birth left on a
-      run an older build moved away is then not read. Once that run is moved back, the worker is born there again, and
-      the waves bound in between lose their parent (shapes P1-back, P1b-back, P1d-back and P1e-back).
-    An earlier round vetoed the stamp when another run named the id, recorded no birth and was dispatched after that
-    birth (the adopted arm's shape). That veto made a placeable worker worse than the merge base (round 6). Every
-    build before the stamp cleared the births on an occupant change and stamped nothing. So a failed fresh spawn that
-    an older build later rebound to the worker leaves the same shape, and live databases hold it. The veto then left
-    that worker's later waves unstamped and undecidable, off its card and off its coordinators' `childIds`. So a later
-    wave bound to an adopted worker records what the merge base records. While the adopted worker stays `unplaceable`,
-    it reads by the id-string rule, whatever that wave records.
+  - **The write.** The stamp is the merge base's, unchanged: the newest PLACEABLE birth on record for the id, read
+    over every run recording a birth for it, whatever its `sessionId` now names. Nothing vetoes it. So a later wave
+    bound to an adopted worker records what the merge base records, and while the adopted worker stays `unplaceable`
+    it reads by the id-string rule, whatever that wave records. (An earlier round vetoed the stamp when another run
+    named the id, recorded no birth and was dispatched after that birth, the adopted arm's shape. That veto made a
+    placeable worker worse than the merge base in round 6: a failed fresh spawn that an older build later rebound to
+    the worker leaves the same shape, and live databases hold it.)
   The adopted read-back case in `server/test/run-binding-bind-records.test.ts` pins this: an earlier occupant's run
   still open, the name adopted, then a later wave. `childParentOf`, `claimantsOf` and `sessionRunRead` answer the
   adopting run's claimant, on the merge base and on this PR. The census pins the arm by name, so a change that makes it
   record a birth, or a new arm that records none, reds the suite.
-  One more rule of the same write, not a deviation: when the id has a placeable birth, the stamp takes the newest
-  placeable one, exactly as the merge base does, even when a NEWER unplaceable birth is on record. Preferring that newer
-  birth would date a later wave of a `born` worker to an instant its readers do not place (round 6, shape S4 of the
-  corpus: the wave lost its parent and its card). Only when no birth for the id can be placed, every birth on record
-  agrees, and that birth is not the stamped run's own dispatch instant does this PR stamp where the merge base stamps
-  nothing (gap 2).
 
 ## The acceptance bar
 
@@ -90,7 +71,8 @@ On every shape in the probe corpus (`server/test/run-binding-probe-corpus.test.t
 PR #1573 reported), this PR answers what the merge base answers, or a better answer. A shape where both give the same
 wrong answer is an inherited residual: out of scope for this PR, listed below, and left to the follow-up for "D6 gap 1:
 an unborn incarnation that reuses a workspace name still inherits a ghost run". Each corpus case pins the merge base's
-answer, recorded by running the file over the merge-base sources, and this PR's answer where it differs.
+answer, recorded by running the file over the merge-base sources, and this PR's answer where it differs. Since round 8
+no case differs: the stamp is the merge base's, and all 53 cases give the merge base's answer on this PR.
 
 ## Residuals, inherited from main
 
@@ -105,6 +87,55 @@ Each is a corpus case marked `residual: 'inherited'`, whose answer is the same o
 - **A cross-build rollback with the minting run still open and a third coordinator's open wave.** An older build redraws
   the name on the minting run R, which stays open; a wave of the earlier occupant, claimed by a third coordinator, is
   newer and still open, so that coordinator is the parent instead of R's.
+- **Gap 2 (three corpus cases: "GAP 2", "the dup-arm re-open over an unplaceable wave 1", "a pre-planned wave 2 bound
+  after wave 1 recorded its birth").** A later wave bound to a worker whose only birth on record cannot be placed records
+  no birth. The first two still read the right parent by `openedAt`. In the third, wave 2 stays undecided once wave 1's
+  dispatch moves onto the birth, so the card shows no open run and coordinator `childIds` lose it. Rounds 6 and 7 of
+  this PR answered all three better through a fallback stamp, withdrawn in round 8 (next section).
+- **A leftover birth for another session (R8-X1c-ctrl, N8c).** A wave stamped with another session's placeable birth,
+  then moved to the worker by an older build (which keeps the birth columns), reads `unbound` for the worker, so the
+  wave drops out of its parent, card and `childIds`. A verifier prototyped a reader fix: `bindsRun` uses a run's recorded
+  birth only when it was recorded for the session the run names now (`sessionBornFor === sessionId`), else the
+  `openedAt` rule, the test `childBirthOf` already applies. Measured on a prototype over round 7's head: R8-X1c-ctrl
+  got better than the merge base, round 7's 39 corpus cases kept their answers, and one existing pin (a birth recorded
+  for another session reads `unbound`) flips. That is a reader policy change, so it is left to the follow-up.
+- **A wave bound before a same-id re-mint (R8-M1, R8-M2, R8-M4, R8-A1).** The minting run's birth cannot be placed when a
+  later wave V is bound (a crash after `markDispatchStarted`, or an adoption), so V records nothing; the name is then
+  re-minted, the worker is born after V opened, and V is undecided. `parentOrMinter` makes the minter the parent with no
+  claimant (`run-unclaimed` when V is ownerless). With a placeable birth at bind time (R8-M1-ctrl) the merge base
+  stamps V and reads it as the earlier occupant's, `not-a-child`. Closing these needs gap 2's stamp.
+
+## Gap 2: the fallback stamp, withdrawn in round 8 (for the follow-up)
+
+The design rounds 6 and 7 shipped, written down so the follow-up does not repeat it. When no birth on record for the id
+could be placed, the stamp fell back to the one birth every row recorded for the id (no stamp when they disagreed), and
+never to the stamped run's own `dispatchStartedAt`. It closed gap 2's three corpus cases. A fallback stamp is read: a
+worker that is `unplaceable` when the wave is bound can be `born` when the wave is read (a same-id redraw moves the
+minting run's `dispatchStartedAt` onto its birth, or an older build moves a run with a placeable birth back). Round 7
+found three narrower versions worse than the merge base: the newest recorded birth when births disagree (P1-q, P1b-q),
+the fallback written onto the minting run itself (P10, P10b, P6d), and a narrower row set, the session's series (P1-back,
+P1b-back, P1d-back, P1e-back).
+
+Round 8 found shapes where even the agreed, never-self-placing fallback is worse than the merge base. The cause in each:
+the fallback writes a stamp the merge base never writes, and the columns cannot keep it with the incarnation it was
+meant for.
+
+- **An older build's rebind carries it (R8-X1c, R8-X1c-open, N8, N8b).** Another session Y's only birth is unplaceable.
+  This build binds wave V to Y and the fallback stamps V with Y's birth. An older build (one that predates the birth
+  columns) moves V to the worker and keeps both birth columns, so V reads `unbound` for the worker: parent `null` and
+  `not-a-child` where the merge base answers V's coordinator. Any write the merge base never makes can be carried to
+  another session this way, so no fallback stamp is never-worse here.
+- **A current-build race (N1, N1b).** The minting run M minted the id at T0. M is re-dispatched (`markDispatchStarted`
+  at T5) and `ws-add` reuses the id. A later wave X, opened after T5, is bound in the window before M records T5. The
+  only birth on record is T0, with M's dispatch moved to T5: exactly gap 2's premise, so the fallback stamps X with T0.
+  Once M records T5 the worker is born at T5 and X reads `unbound`. The merge base leaves X unstamped, opened after T5,
+  and reads it bound.
+
+Two narrower fallbacks were measured and rejected. Falling back only when no recorded row has a dispatch start fixes N1
+and N1b but not N8 and N8b, and `spawnFresh` never writes such a row, so it closes no real gap 2. Reading a recorded
+birth only when it was recorded for the session the run names now (the reader fix above) fixes R8-X1c but not N1b.
+Whatever closes gap 2 must say which incarnation a stamp belongs to in a way an older build's rebind and a late
+`setSession` cannot break; the birth columns alone cannot.
 
 Both verifiers of round 4 suggested a direction for the follow-up: the minting run wins while it is open and names the
 session. It is not taken here because it is a new reader rule, and the bar for this PR is "no worse than main".

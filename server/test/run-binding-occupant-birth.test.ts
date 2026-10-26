@@ -1,7 +1,7 @@
 // ARCH-60 follow-up (#1407, part of #795): which birth a later wave records for a session id. The write
-// (`CoordStore.stampOccupantBirth`, through `occupantBirthOf`) reads every run recording a birth for the id (the merge
-// base's rows) and stamps the newest placeable birth, else the one birth every row agrees on, never one that would make the
-// stamped run itself placeable; no row vetoes it. The read takes no birth from it for an `unplaceable` worker: that worker keeps the
+// (`CoordStore.stampOccupantBirth`) is the merge base's, unchanged: it reads every run recording a birth for the id and
+// stamps the newest PLACEABLE one, else nothing (gap 2 stays open: #1573 round 8 withdrew the fallback to an unplaceable
+// birth, see the plan note); no row vetoes it. The read takes no birth from it for an `unplaceable` worker: that worker keeps the
 // id-string rule (round 5 of #1573: no recorded birth is provably the live occupant's own once its minting run's dispatch
 // moved, so anchoring to one made the readers worse than the merge base after a cross-build rollback), and bindingOf,
 // claimantsOf, boundRunsOf, openRunsForSession, sessionRunRead and withChildIds answer about the same runs.
@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  bindingOf, boundRunsOf, claimantsOf, incarnationOf, occupantBirthOf, parentOf, type Incarnation, type RecordedBirth,
+  bindingOf, boundRunsOf, claimantsOf, incarnationOf, parentOf, type Incarnation,
 } from '../src/coord/runBinding.js';
 import { childBirthOf } from '../src/coord/childSpent.js';
 import { incarnationsOfSessions, sessionRunRead, withChildIds } from '../src/coord/runWire.js';
@@ -31,9 +31,6 @@ const series = (s: CoordStore, session: string) => {
   return r.runs;
 };
 const done = (s: CoordStore, id: number): void => { s.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(id); };
-/** The rows the stamp reads: every run recording a birth for the id, whatever its `sessionId` now names. */
-const births = (s: CoordStore, session: string): RecordedBirth[] => s.db.prepare(
-  'SELECT sessionBornAt, sessionBornFor, dispatchStartedAt FROM runs WHERE sessionBornFor = ?').all(session) as unknown as RecordedBirth[];
 const stampOf = (s: CoordStore, id: number) => s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(id) as { sessionBornAt: number | null };
 /** The worker's incarnation as every reader builds it: from its minting run, through `childBirthOf`. */
 const markedBy = (s: CoordStore, minting: number): Incarnation => incarnationOf('demo-w', childBirthOf(s.run(minting), 'demo-w'));
@@ -56,7 +53,6 @@ describe('the occupant\'s birth: the stamp, and an unplaceable reader that takes
     const s = store();
     const { minting } = reusedName(s);
     const wave = open(s, 'prog-c', 'coord-1', BORN + 10);
-    expect(occupantBirthOf(births(s, 'demo-w'), 'demo-w')).toEqual({ at: OLD, placeable: true });
     s.setSession(wave, 'demo-w');
     expect(stampOf(s, wave).sessionBornAt).toBe(OLD);
     // The worker reads by the id-string rule (its minting run cannot be placed): the wave is its open run either way.
@@ -86,14 +82,15 @@ describe('the occupant\'s birth: the stamp, and an unplaceable reader that takes
     expect(boundRunsOf(series(s, 'demo-w'), live, 'open').map((r) => r.id)).toContain(wave);
   });
 
-  it('with no placeable birth on record and one birth recorded for the id, the stamp writes it', () => {
+  it('with no placeable birth on record and one birth recorded for the id, no stamp: the merge base\'s answer (gap 2, a residual since #1573 round 8)', () => {
     const s = store();
     const minting = open(s, 'prog-new', 'coord-1', BORN - 1000);
     s.setSession(minting, 'demo-w', BORN);
     const wave = open(s, 'prog-c', 'coord-1', BORN + 10);
-    expect(occupantBirthOf(births(s, 'demo-w'), 'demo-w')).toEqual({ at: BORN, placeable: false });
     s.setSession(wave, 'demo-w');
-    expect(stampOf(s, wave).sessionBornAt).toBe(BORN);
+    // A stamp here (the withdrawn fallback) was carried onto another incarnation by an older build's rebind, or read
+    // against a later same-id redraw, and made round-8 shapes worse than the merge base.
+    expect(stampOf(s, wave).sessionBornAt).toBeNull();
   });
 
   it('with no placeable birth on record and two different births recorded for the id, no stamp: the columns cannot say which is the occupant\'s (#1573 round 6, F3)', () => {
@@ -104,7 +101,6 @@ describe('the occupant\'s birth: the stamp, and an unplaceable reader that takes
     s.setSession(q, 'demo-w', BORN + 1000);
     done(s, q);
     const wave = open(s, 'prog-c', 'coord-1', BORN + 10);
-    expect(occupantBirthOf(births(s, 'demo-w'), 'demo-w')).toBeNull();
     s.setSession(wave, 'demo-w');
     expect(stampOf(s, wave).sessionBornAt).toBeNull();
     // The minting run's dispatch later moves onto its birth (a same-id redraw): the worker is born at BORN, and the
@@ -115,7 +111,7 @@ describe('the occupant\'s birth: the stamp, and an unplaceable reader that takes
     expect(boundRunsOf(series(s, 'demo-w'), live, 'open').map((r) => r.id)).toContain(wave);
   });
 
-  it('the fallback never re-places the stamped run: the dup arm rebinding the minting run back reads its own birth off a later wave and writes nothing (#1573 round 6, F1)', () => {
+  it('the dup arm rebinding the minting run back, with only a later wave\'s copy of its birth on record, writes nothing (#1573 round 6, F1)', () => {
     const s = store();
     const k = open(s, 'prog-k', 'coord-c', OLD);
     const m = open(s, 'prog-m', 'coord-a', BORN - 100);
@@ -150,13 +146,6 @@ describe('the occupant\'s birth: the stamp, and an unplaceable reader that takes
 });
 
 describe('no row vetoes the stamp (#1573 round 6: an older build\'s rebind of a failed spawn)', () => {
-  const minted: RecordedBirth = { sessionBornAt: BORN, sessionBornFor: 'demo-w', dispatchStartedAt: BORN };
-  const attempted: RecordedBirth = { sessionBornAt: null, sessionBornFor: null, dispatchStartedAt: BORN + 1000 };
-
-  it('a run naming the worker with no birth and a spawn attempt after the birth leaves the placeable birth the stamp', () => {
-    expect(occupantBirthOf([attempted, minted], 'demo-w')).toEqual({ at: BORN, placeable: true });
-  });
-
   it('through the store: an older build rebound a failed spawn to the worker, then this build binds a pre-planned wave; it is stamped and bound', () => {
     const s = store();
     const w = open(s, 'prog-w', 'coord-c', OLD);

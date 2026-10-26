@@ -141,8 +141,6 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (the id-string test of bindsRun)" },
   { file: 'server/src/coord/runBinding.ts', text: 'run.sessionBornFor === incarnation.sessionId',
     why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (the birth test of bindsRun)" },
-  { file: 'server/src/coord/runBinding.ts', text: 'r.sessionBornFor === sessionId',
-    why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (occupantBirthOf, the births recorded for the id that the occupant stamp reads)" },
   { file: 'server/src/coord/runBinding.ts', text: 'r.claimedBy === minter',
     why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (parentOrMinter: an undecided run of the minting claimant)" },
   { file: 'server/src/coord/runBinding.ts', text: 'r.claimedBy === coordinatorId',
