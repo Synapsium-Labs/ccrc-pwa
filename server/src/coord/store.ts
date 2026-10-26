@@ -4,7 +4,7 @@ import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import { redactCommand } from './redact.js';
-import { REVIEW_CAP_SUMMARY_MAX, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
+import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { decideAllocation } from './ledger.js';
@@ -4346,7 +4346,7 @@ export class CoordStore {
     ).get(workRunId, REVIEW_DONE_SUBJECT) as { runId: number; body: string; artifacts: string } | undefined;
     if (row === undefined) return { reviewRunId: null, summary: null, report: null };
     const nl = row.body.indexOf('\n');
-    const text = (nl < 0 ? '' : row.body.slice(nl + 1)).trim();
+    const text = cutWhole(redactCommand((nl < 0 ? '' : row.body.slice(nl + 1)).trim()), REVIEW_CAP_SUMMARY_MAX);
     let report: string | null = null;
     try {
       const a: unknown = JSON.parse(row.artifacts);
@@ -4354,7 +4354,7 @@ export class CoordStore {
     } catch { /* an unreadable list names no report */ }
     return {
       reviewRunId: Number(row.runId),
-      summary: text === '' ? null : redactCommand(text).slice(0, REVIEW_CAP_SUMMARY_MAX),
+      summary: text === '' ? null : text,
       report,
     };
   }

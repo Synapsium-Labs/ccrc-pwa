@@ -881,6 +881,36 @@ describe('the review findings: every egress of session text is masked (D-5995)',
       reviewRunId: review.id, summary: `1 finding: rotate ${SECRET_MASK} today`, report,
       findings: { state: 'read', lines: ['**F1 (tests, minor)** `b.ts#case` — no case.'] } } });
   });
+
+  // Review 960 F1: the summary (600 characters) and each findings line (300) are cut before the answer hook, which masks
+  // a key only whole. A key planted across either cut must not go out as a prefix: the cut drops the token it falls in.
+  it("GET /api/coord/review-cap/:id sends no part of a key that the summary's or a findings line's cut falls inside", async () => {
+    const inSummary = `cmp.${fill(10, 's1', 'hex')}.${fill(10, 's2', 'hex')}.${fill(10, 's3', 'hex')}`;
+    const inFinding = `cmp.${fill(10, 'f1', 'hex')}.${fill(10, 'f2', 'hex')}.${fill(10, 'f3', 'hex')}`;
+    const home = mkTmp('ccrc-mask-cap-cut-');
+    seedRoster(home);
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      coord, masker: maskerWith({ secrets: [inSummary, inFinding] }).m }, new Bus());
+    const at = { program: 'p', title: 'T', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'coordinator' };
+    const work = coord.openRun(at) as { id: number };
+    const review = coord.openRun({ ...at, kind: 'review', reviews: work.id }) as { id: number };
+    const summaryWords = 'word '.repeat(118);           // 590 characters, so the key spans character 600
+    const findingWords = '**F1** ' + 'word '.repeat(57); // 292 characters, so the key spans character 300
+    const report = path.join(home, 'review-1.md');
+    writeFileSync(report, `# Review\n\n## Findings\n- ${findingWords}${inFinding} tail\n`);
+    coord.insertMail({ fromId: ID, fromUuid: UUID_A, toId: 'coordinator', runId: review.id, kind: 'status',
+      subject: 'review-done', body: `{"reviewedTip":"x"}\n${summaryWords}${inSummary} tail`, artifacts: [report] });
+    const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${work.id}` });
+    expect(res.statusCode).toBe(200);
+    expect(leaksNone(res.body, inSummary) && leaksNone(res.body, inFinding), res.body.slice(0, 300)).toBe(true);
+    const { lastReview } = (res.json() as { ask: { lastReview: { summary: string; findings: { lines: string[] } } } }).ask;
+    expect(lastReview.summary).toBe(summaryWords.trimEnd());
+    expect(lastReview.findings.lines).toEqual([findingWords.trimEnd()]);
+  });
 });
 
 // ── the orchestrator's rulings on the drawer and the mask's cost (D-5995) ──

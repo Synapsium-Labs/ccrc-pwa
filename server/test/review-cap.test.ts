@@ -17,7 +17,7 @@ import {
 } from '../../shared/api.js';
 import { parseFile, parseSource, type CallSite, type ParsedFile } from './scan/parse.js';
 import { REPO, walkSrc } from './rings/walkSrc.js';
-import { REVIEW_ROUND_CAP, extractOpenFindings, reviewCapAsk, reviewCapNotice, reviewCapRefuses, reviewCapStatus, reviewFindingsOf } from '../src/coord/reviewcap.js';
+import { REVIEW_FINDING_MAX, REVIEW_ROUND_CAP, cutWhole, extractOpenFindings, reviewCapAsk, reviewCapNotice, reviewCapRefuses, reviewCapStatus, reviewFindingsOf } from '../src/coord/reviewcap.js';
 
 describe('reviewCapRefuses', () => {
   it('the cap is 3', () => { expect(REVIEW_ROUND_CAP).toBe(3); });
@@ -58,6 +58,28 @@ describe('extractOpenFindings', () => {
     expect(reviewFindingsOf({ ok: false, reason: 'absent' })).toEqual({ state: 'absent' });
     expect(reviewFindingsOf({ ok: false, reason: 'unreadable' })).toEqual({ state: 'unreadable' });
     expect(reviewFindingsOf({ ok: true, content: '## Findings\n' })).toEqual({ state: 'read', lines: [] });
+  });
+});
+
+// Review 960 F1: a cut never leaves part of a token, because the egress mask matches a key only whole.
+describe('cutWhole', () => {
+  it('leaves a text within the limit as it is', () => {
+    expect(cutWhole('abc def', 7)).toBe('abc def');
+  });
+  it('keeps a cut that falls on whitespace as the bare cut', () => {
+    expect(cutWhole('abc def ghi', 7)).toBe('abc def');
+    expect(cutWhole('abc def ghi', 4)).toBe('abc ');
+  });
+  it('drops the whole token a cut falls inside, appending nothing', () => {
+    expect(cutWhole('abc defghi jkl', 6)).toBe('abc');
+  });
+  it('a text with no whitespace before the limit comes out empty', () => {
+    expect(cutWhole('abcdefghijkl mno', 6)).toBe('');
+  });
+  it('a findings line cut inside a token drops the token, and a line that is one long token is dropped', () => {
+    const long = 'k'.repeat(REVIEW_FINDING_MAX + 5);
+    const got = extractOpenFindings(`## Findings\n- **F1** see ${long}\n- ${long}\n- **F2** short\n`);
+    expect(got).toEqual(['**F1** see', '**F2** short']);
   });
 });
 

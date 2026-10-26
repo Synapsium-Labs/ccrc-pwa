@@ -24,6 +24,15 @@ export const reviewCapStatus = (kind: RunKind, rounds: number,
   kind !== 'work' ? null
     : { rounds, cap: REVIEW_ROUND_CAP, askedAt: row?.askedAt ?? null, liftedAt: row?.liftedAt ?? null };
 
+/** `text` cut to at most `max` characters, never inside a token (review 960 F1). The egress mask matches a key only
+ *  whole, so a cut that falls inside a run of non-whitespace drops that whole run rather than send its prefix unmasked;
+ *  a text with no whitespace before the limit comes out empty, failing toward hiding. Nothing is appended. */
+export function cutWhole(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  return /\S$/.test(cut) && /\S/.test(text[max]!) ? cut.replace(/\S+$/, '').trimEnd() : cut;
+}
+
 /** At most this many finding lines ride the ask, each at most `REVIEW_FINDING_MAX` characters. */
 export const REVIEW_FINDINGS_MAX = 8;
 export const REVIEW_FINDING_MAX = 300;
@@ -43,7 +52,8 @@ export function extractOpenFindings(report: string): string[] {
     picked = lines.filter((l) => l.includes('needs a ruling:'));
   }
   return picked.slice(0, REVIEW_FINDINGS_MAX)
-    .map((l) => redactCommand(l.trim().replace(/^[-*]\s+/, '')).slice(0, REVIEW_FINDING_MAX));
+    .map((l) => cutWhole(redactCommand(l.trim().replace(/^[-*]\s+/, '')), REVIEW_FINDING_MAX))
+    .filter((l) => l !== '');
 }
 
 /** Words the read of a report as a `ReviewFindings`. */

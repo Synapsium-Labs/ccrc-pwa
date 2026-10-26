@@ -9068,8 +9068,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // equality with empty and they get a debt.
     //
     // AND THE REVIEW-CAP LIFT PROVED IT A THIRD TIME (review 951 F2): that wave
-    // added a net +61 lines to `shared/api.ts` above the same sentence (the
-    // review cap's types and words, one hunk at `:6472`), and all four of its
+    // added a net +61 lines to `shared/api.ts` above the same sentence, in
+    // two hunks (review 960 V2): +50 at `:6472`, the review cap's types and
+    // words, and +11 at `:6626`, `RunSummary.reviewCap`. All four of its
     // anchors stopped resolving. Re-anchored BY CONTENT the same way, each base
     // block found byte-identically and uniquely in the merged file:
     // `:8526-8528` -> `:8587-8589`, `:8578` -> `:8639`, `:8586` -> `:8647`,

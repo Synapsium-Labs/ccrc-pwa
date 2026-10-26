@@ -4276,6 +4276,32 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
       expect(w.coord.reviewRounds(workId)).toBe(4);
     });
 
+    // Review 960 F1: the refusal's `ask` takes the same cut as the GET, so a key the summary's cut falls inside goes
+    // out as no part of itself (the cut drops the whole token), even with no masker that knows the key.
+    it("the 409's ask sends no part of a key that the summary's 600-character cut falls inside", async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      const key = ['cmp', '0a1b2c3d4e', '5f6a7b8c9d', 'e0f1a2b3c4'].join('.');
+      const words = 'word '.repeat(118); // 590 characters, so the key spans character 600
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: ids[2]!,
+        kind: 'status', subject: 'review-done', body: `{"reviewedTip":"x"}\n${words}${key} tail`, artifacts: [] });
+      const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
+      expect(refused.statusCode).toBe(409);
+      for (let i = 0; i + 8 <= key.length; i++) expect(refused.body, key.slice(i, i + 8)).not.toContain(key.slice(i, i + 8));
+      expect((refused.json() as { ask: { lastReview: { summary: string } } }).ask.lastReview.summary).toBe(words.trimEnd());
+    });
+
+    // Review 960 V1: `REVIEW_CAP_REFUSAL_TEXT`'s `not-configured` word has a route row behind it, one per cap route.
+    it.each([['GET', '/api/coord/review-cap/7'], ['POST', '/api/coord/review-cap']] as const)(
+      '%s %s answers 501 not-configured without a coordination store', async (method, url) => {
+        const home = mkTmp('ccrc-runs-');
+        app = await buildServer(testDeps(home));   // no `coord` key at all
+        const res = await app.inject({ method, url, ...(method === 'POST' ? { payload: { run: 7 } } : {}) });
+        expect(res.statusCode).toBe(501);
+        expect(res.json()).toMatchObject({ ok: false, error: 'not-configured' });
+      });
+
     it('the lift refuses a body with no run, and an id that is not a work run', async () => {
       const home = mkTmp('ccrc-runs-');
       const { w, workId } = await capApp(home);

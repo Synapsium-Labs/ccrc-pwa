@@ -2193,7 +2193,7 @@ export function registerCoordRoutes(
   /**
    * `GET /api/coord/review-cap/:id` (D-6910): the operator's sheet reads a work run's review-cap ask before lifting it,
    * through the refusal's own helper, so it shows what the notice said. Session-gated with no box token, like the lift.
-   * 404 for an id that is not a work run, 400 for a bad id.
+   * 404 for an id that is not a work run, 400 for a bad id, and 503 `run-unreadable` when the store read fails (D-6912).
    */
   app.get('/api/coord/review-cap/:id', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
