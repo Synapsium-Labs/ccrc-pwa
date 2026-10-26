@@ -19,7 +19,7 @@ import {
 import { redactCommand } from './redact.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import type { ApprovalRow, AskRow, CoordStore } from './store.js';
-import { decidedIn } from './questions.js';
+import { decidedIn, forCorrection } from './questions.js';
 
 /** The digest's own kebab words (its line kinds and its refusals), for `mail-routes.test.ts`'s scan of every quoted
  *  kebab token under `server/src/coord`: admitted through this guard, derived from `shared/api.ts`'s tables, never a
@@ -210,13 +210,13 @@ export type DigestCorrectResult =
 export function correctDigestRow(coord: CoordStore, b: DigestCorrectBody): DigestCorrectResult {
   let coordinator: string;
   if (b.rowKind === 'ask') {
-    const read = coord.askForCorrection(b.id);
+    const read = forCorrection(coord, 'ask', b.id);
     if (!read.ok) return { ok: false, why: 'digest-unreadable' };
     if (read.row === null) return { ok: false, why: 'unknown-ask' };
     if (askDecision(read.row.ask) === null) return { ok: false, why: 'not-coordinator' };
     coordinator = read.row.ask.parentId;
   } else {
-    const read = coord.approvalById(b.id);
+    const read = forCorrection(coord, 'approval', b.id);
     if (!read.ok) return { ok: false, why: 'digest-unreadable' };
     if (read.row === null) return { ok: false, why: 'unknown-approval' };
     if (approvalDecision(read.row) === null) return { ok: false, why: 'not-coordinator' };
