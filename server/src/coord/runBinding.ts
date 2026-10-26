@@ -112,15 +112,26 @@ export interface SessionBinding {
 
 const byIdDesc = (a: BindingRun, b: BindingRun): number => b.id - a.id;
 
-/** An `unplaceable` incarnation whose series records births for its id is its NEWEST recorded birth: every bind records the
- *  occupant's birth (`CoordStore.bindSession`), so a run recorded for an older birth belongs to an earlier occupant of the
+/** THE birth of the current occupant of a session id: the NEWEST birth any run of the series recorded for it, `null` when
+ *  none did. One rule for both halves: `CoordStore.stampOccupantBirth` writes it (its SQL orders `sessionBornAt DESC`, pinned
+ *  to agree with this by `run-binding-occupant-birth.test.ts`) and `anchoredIncarnation` reads it, so a wave bound to a
+ *  worker reads `bound` for that worker. A name's occupants are minted in order, so the newest recorded birth is the live
+ *  one; placement of the minting run (`childBirthOf`) plays no part, so a moved `dispatchStartedAt` cannot split the two. */
+export function occupantBirthOf(runs: readonly BindingRun[], sessionId: string): number | null {
+  const births = runs.filter((r) => r.sessionBornFor === sessionId && r.sessionBornAt !== null).map((r) => r.sessionBornAt as number);
+  return births.length === 0 ? null : Math.max(...births);
+}
+
+/** An `unplaceable` incarnation whose series records births for its id is its occupant's birth (`occupantBirthOf`): every
+ *  bind records it (`CoordStore.bindSession`), so a run recorded for an older birth belongs to an earlier occupant of the
  *  name, whatever the placement of the minting run says now. Any other incarnation is itself (`not-a-child` has no birth to
- *  read: gap 1 of #1407, tracked in #1532). */
+ *  read: gap 1 of #1407, tracked in #1532). `runs` is the WORKER's series (`CoordStore.bindingRunsOf`); every reader that
+ *  holds it anchors through this, and a reader that holds only the claimant's series (`childrenOf`) is handed an incarnation
+ *  anchored where the worker's series was read (`runWire.incarnationsOfSessions`). */
 export function anchoredIncarnation(runs: readonly BindingRun[], incarnation: Incarnation): Incarnation {
   if (incarnation.kind !== 'unborn' || incarnation.why !== 'unplaceable') return incarnation;
-  const { sessionId } = incarnation;
-  const births = runs.filter((r) => r.sessionBornFor === sessionId && r.sessionBornAt !== null).map((r) => r.sessionBornAt as number);
-  return births.length === 0 ? incarnation : bornIncarnation(sessionId, Math.max(...births));
+  const birth = occupantBirthOf(runs, incarnation.sessionId);
+  return birth === null ? incarnation : bornIncarnation(incarnation.sessionId, birth);
 }
 
 export function bindingOf(runs: readonly BindingRun[], rawIncarnation: Incarnation): SessionBinding {
@@ -158,7 +169,8 @@ export function childParentOf(runs: readonly BindingRun[], minter: string | null
 }
 
 /** EVERY coordinator that currently has this incarnation working for it, newest open run first, each once. */
-export function claimantsOf(runs: readonly BindingRun[], incarnation: Incarnation): string[] {
+export function claimantsOf(runs: readonly BindingRun[], rawIncarnation: Incarnation): string[] {
+  const incarnation = anchoredIncarnation(runs, rawIncarnation);
   const seen = new Set<string>();
   for (const r of runs.filter((x) => binds(incarnation, x) && isOpen(x)).sort(byIdDesc)) {
     if (r.claimedBy !== null) seen.add(r.claimedBy);
@@ -168,7 +180,8 @@ export function claimantsOf(runs: readonly BindingRun[], incarnation: Incarnatio
 
 /** Every run that binds `incarnation`, by id: in any state, or only the open ones. The readers that list a worker's runs
  *  (`CoordStore.runsNamingSession`, `openRunsForSession`) project this; `bindingOf` answers the newest and the open one. */
-export function boundRunsOf(runs: readonly BindingRun[], incarnation: Incarnation, which: 'any' | 'open'): BindingRun[] {
+export function boundRunsOf(runs: readonly BindingRun[], rawIncarnation: Incarnation, which: 'any' | 'open'): BindingRun[] {
+  const incarnation = anchoredIncarnation(runs, rawIncarnation);
   return runs.filter((r) => binds(incarnation, r) && (which === 'any' || isOpen(r))).sort((a, b) => a.id - b.id);
 }
 

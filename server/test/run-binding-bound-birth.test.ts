@@ -128,14 +128,14 @@ describe('the bind records the occupant\'s birth (ARCH-62 slice 4, #1407)', () =
     expect(binding.undecided).toEqual([]);
   });
 
-  it('a birth the minting run cannot place (it differs from the run\'s dispatchStartedAt) is not stamped', () => {
+  it('a birth the minting run cannot place (it differs from the run\'s dispatchStartedAt) is still the occupant\'s: the newest recorded birth is stamped, as the reader anchors it', () => {
     const s = store();
     const a = open(s, 'prog-a', 'coord-1', OLD);
     mint(s, a, 'demo-w', OLD);
     const adopted = open(s, 'prog-x', 'coord-1', OLD + 1);
-    s.setSession(adopted, 'demo-w', BORN);   // dispatchStartedAt is NULL: childBirthOf calls this birth unplaceable
+    s.setSession(adopted, 'demo-w', BORN);   // dispatchStartedAt is NULL: childBirthOf calls this birth unplaceable (one rule: occupantBirthOf)
     const c = open(s, 'prog-c', 'coord-1', BORN + 2000);
     s.setSession(c, 'demo-w');
-    expect(s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(c)).toEqual({ sessionBornAt: OLD });
+    expect(s.db.prepare('SELECT sessionBornAt FROM runs WHERE id = ?').get(c)).toEqual({ sessionBornAt: BORN });
   });
 });
