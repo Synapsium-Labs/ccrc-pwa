@@ -401,6 +401,8 @@ _resume_env	C2
 _tool_adj_env	C2
 _child_tmpdir	C4
 _delegation_spool_dir	C5
+_dsp_old_absent	C5
+_delegation_spool_prune_absent	C5
 _child_spawn_compose	C5
 _account_spawn_compose	C2
 _ws_tmproot_witness_file	C4

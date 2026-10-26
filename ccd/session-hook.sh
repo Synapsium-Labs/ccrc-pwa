@@ -3572,9 +3572,9 @@ fi
 # PRUNE: the first write of an hour (the bucket did not exist) removes this owner's regular `<10 digits>.spool` files older than the
 # cutoff hour (24 hours before now) from THIS directory and nothing else, by exact names it listed from it. That is at most once an
 # hour per owner without any state to keep; two first writers racing both prune, harmlessly. It is the one fork on this path (one
-# `rm`, and only when a stale bucket exists). THE HOOK PRUNES ONLY A LIVE OWNER, FROM ITS OWN WRITE: a removed owner, or one whose
-# session never runs again, keeps its last 24 to 25 hourly buckets for good, because nothing in wave 3 removes them (no ccd purge,
-# no server delete); the plan's "hooks retain only their own 24-hour buckets" holds for an owner that keeps writing.
+# `rm`, and only when a stale bucket exists). THE HOOK PRUNES ONLY A LIVE OWNER, FROM ITS OWN WRITE: a removed owner's last 24 to 25
+# hourly buckets and its directory stand until a later spawn of any session removes them, once its registry row is gone and every
+# bucket is past its day (ccd's `_delegation_spool_prune_absent`, which states the rule); the server never deletes them.
 #
 # SessionStart `compact` is recorded here, before the hook's one early exit below (it used to exit in its arm; `sessend` carries it).
 DSP_LIST_NAMES=256 DSP_NAME_BYTES=64
