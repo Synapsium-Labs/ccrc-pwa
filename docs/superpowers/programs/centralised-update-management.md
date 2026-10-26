@@ -6290,6 +6290,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   (skills) and #1530 (routing slice 4) are the others. The soak treats all three as daily-only.
   `STATUS 2026-10-26T03:33:42Z fleet=v0.0.702 server=v0.0.702 health=v0.0.702 newest=v0.0.718 intent=*:dev/auto=off`
   `pin=None link=<versions>/v0.0.702 backups=fleet:165M/server:9341M disk=fleet:98G/work:495G/server:21G`
+- **2026-10-26 04:25 UTC — v0.0.719 released (#1524, the console's review-cap lift); no move; no anomaly.** It touches
+  no lane path.
+  `STATUS 2026-10-26T04:25:45Z fleet=v0.0.702 server=v0.0.702 health=v0.0.702 newest=v0.0.719 intent=*:dev/auto=off`
+  `pin=None link=<versions>/v0.0.702 backups=fleet:165M/server:9341M disk=fleet:99G/work:499G/server:21G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
