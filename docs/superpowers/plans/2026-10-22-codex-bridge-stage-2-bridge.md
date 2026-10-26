@@ -3280,9 +3280,9 @@ written `D-TBD-<slug>` and named in the task's report.
 - **Departs from:** Task 18's scrubber (plan :1694-1695): "Its output is a corpus stream (Task 3's format), with its
   expectation written by `make_streams.py`'s `--from-recording`."
 - **What changed:** Ruling W3-R2: the flag is not built, and `server/test/fixtures/codexbridge/make_streams.py` is
-  unchanged. Instead, the case at `server/test/codex-bridge-live-tools.test.ts:481` feeds the scrubber's output to the
+  unchanged. Instead, the case at `server/test/codex-bridge-live-tools.test.ts:519` feeds the scrubber's output to the
   replay suite's reader (the driver's `reduce` op, in 13-byte chunks) and asserts a whole parse, and
-  `ccd/codexbridge/record.py:30-31` says a recording's `expect.json` is written by hand in the reviewed change that
+  `ccd/codexbridge/record.py:31-32` says a recording's `expect.json` is written by hand in the reviewed change that
   adds it.
 - **Why:** No recording exists before the first live step. The runbook already scrubs recordings into the corpus "in a
   reviewed change" (plan :1817-1818), which is where a generator can be measured against a real stream, and
@@ -3296,9 +3296,9 @@ written `D-TBD-<slug>` and named in the task's report.
   RECORD_MAX files. It does not say whether the head is part of those bytes, which answers are recorded, or how the
   cap is counted.
 - **What changed:** A recording is `HTTP/1.1 <status>`, one `name: value` line per header, a blank line, then the raw
-  body (`ccd/codexbridge/record.py:103-106`), and the bridge records only a 2xx answer
+  body (`ccd/codexbridge/record.py:104-107`), and the bridge records only a 2xx answer
   (`ccd/codexbridge/server.py:776-777`, :792-801). The cap counts the bridge's own `<utc>-<n>.sse` files on disk
-  (`record.py:61`, :144-167). The probe names its recordings `liveprobe-<step>-<utc>-<n>.sse`
+  (`record.py:62`, :145-168). The probe names its recordings `liveprobe-<step>-<utc>-<n>.sse`
   (`ccd/codexbridge/liveprobe.py:429`), which never match that pattern, so they never count against the cap.
 - **Why:** The head lets runbook step 3 read the cache headers from a recording, and it is what the scrubber's "drops
   every header line" removes. An error answer is a JSON body read by `backend.error_of`, not a stream, and counting
@@ -3314,21 +3314,26 @@ written `D-TBD-<slug>` and named in the task's report.
 - **What changed:** Every string is rewritten unless its key is kept: ids become `<prefix>_fx<n>`, `encrypted_content`
   becomes `ENC-<n>`, a call's `arguments` that parse as JSON keep their keys, numbers and shape with every string
   rewritten, and every tool or function `name` becomes `tool_fx<n>`, one per distinct name in a stream
-  (`ccd/codexbridge/record.py:284-304`, :262-282). Only `type`, `status`, `role`, `phase` and `object` are kept
-  anywhere, `reason` only in `incomplete_details` and `code` only in an error object or an `error` event (:210-218,
-  :302); every other string, an id-shaped one under another key and `model` included, keeps each non-alphanumeric
-  character and has each letter or digit replaced by `x` (:234-236, :304), and a `data:` line that is not JSON becomes
-  the fixed `MALFORMED_LINE` (:219, :326-327). Cases are at `server/test/codex-bridge-live-tools.test.ts:344`, :418,
-  :437 and :481, with rows Z3a, Z3b and Z3c.
+  (`ccd/codexbridge/record.py:287-308`, :265-285). Only `type`, `status`, `role`, `phase` and `object` are kept
+  anywhere, `reason` only in `incomplete_details`, and `code` or a bare-string `error` only in an error object or an
+  `error` event (:211-221, :305-307; the closing round's K1, so `errors.classify_failed` gives a scrubbed bare-string
+  error the row it gave the original). Each kept string is kept only in a code's shape, lower-cased under
+  `errors.CODE_RE` as `errors._names` reads a code, and any other there is content (:306; K5, from the commit security
+  review). Every other string, an id-shaped one under another key and `model` included, keeps each non-alphanumeric
+  character and has each letter or digit replaced by `x` (:237-239, :308), and a `data:` line that is not JSON becomes
+  the fixed `MALFORMED_LINE` (:222, :330-331). Cases are at `server/test/codex-bridge-live-tools.test.ts:344`, :419,
+  :440, :502 and :519, with rows Z3a, Z3b, Z3c, K1 and K5.
 - **Why:** A string under a key the scrubber has never heard of, such as a web search's query, an image's revised
   prompt, a tool schema's enum or a code interpreter's source, then never reaches the public corpus, and the kept keys
   are only what `sse.SseParser` and `reducer.Reducer` need to parse and replay a stream. A text that keeps its length,
   whitespace and punctuation still joins its live deltas to its done text, and one synthetic name per tool keeps a
   call matched to its tool.
-- **Cost if wrong:** Object keys are kept everywhere, argument keys and schema property names included, as are the
-  values under the kept keys, and the residue check catches ids, JWTs, keys and encrypted content there but not plain
-  words; so a recording still needs a human read before it enters the corpus, which the runbook's reviewed change
-  already requires. An id-shaped string under a key outside ID_KEYS no longer matches the item it names.
+- **Cost if wrong:** Object keys are kept everywhere, argument keys and schema property names included, as are
+  code-shaped values under the kept keys, and the residue check catches ids, JWTs, keys and encrypted content there
+  but not plain words; so a recording still needs a human read before it enters the corpus, which the runbook's
+  reviewed change already requires. An id-shaped string under a key outside ID_KEYS no longer matches the item it
+  names, and a kept-key value outside a code's shape (a free-text `error`, say) replays as the synthetic text, not as
+  the original row.
 
 ### D-6952 — the bridge start requires `bridgeFiles.recordings`, read by field name
 
@@ -3388,7 +3393,7 @@ written `D-TBD-<slug>` and named in the task's report.
   (`ccd/codexbridge/liveprobe.py:130`; `ccd/codexbridge/server.py:184-207`), so a missing, foreign or malformed
   lane.json refuses `lane-unknown`, or `lane-malformed` naming the field (:131-135). That covers a missing or
   non-HOME-relative `authDir` or `configDir`, and any `bridgeFiles` name that is not a file name; cases are at
-  `server/test/codex-bridge-live-tools.test.ts:655`.
+  `server/test/codex-bridge-live-tools.test.ts:693`.
 - **Why:** One reader keeps the probe and the bridge from disagreeing about a lane. It also means a recordings name
   such as `../x` can never place the probe's raw recording outside the lane directory.
 - **Cost if wrong:** A lane whose lane.json is stale, even with a good `authDir`, cannot be probed until `ccrc update`
@@ -3403,8 +3408,8 @@ written `D-TBD-<slug>` and named in the task's report.
   `transport timeout-<phase>` and exits 3 (:419-425, :332-338); and one opening or heading the answer's recording, or
   escaping its report, prints `recording <class>` and exits 3 (:438-443). Exit 0 is a 2xx answer read to its end and
   recorded whole, 2 a usage error, and the count is raised before the post, so a request that never left is still
-  charged (docstring :39-45; :411). Cases are at `server/test/codex-bridge-live-tools.test.ts:675`, :686, :705, :772
-  and :786.
+  charged (docstring :39-45; :411). Cases are at `server/test/codex-bridge-live-tools.test.ts:713`, :724, :743, :810
+  and :824.
 - **Why:** An exception's text can carry a value: http.client formats a header it refuses with `%r`, which would
   include the token, so only the class is printed. Raising the count before the post keeps the six-request cap true
   whatever fails.
@@ -3415,11 +3420,11 @@ written `D-TBD-<slug>` and named in the task's report.
 
 - **Departs from:** Task 18's probe (plan :1700-1701), which "records the raw stream" and "prints only" the answer's
   names, and says nothing of a recording that cannot be made or is cut short.
-- **What changed:** `Recording` sets `failed` when a write raises (`ccd/codexbridge/record.py:75`, :86-88). After the
+- **What changed:** `Recording` sets `failed` when a write raises (`ccd/codexbridge/record.py:76`, :87-89). After the
   answer's lines, a recording that was not made (`ensure_dir` False or `open_file` None) or was cut short prints
   `liveprobe: recording unwritten` and exits 3, whatever the status, and the request still counts
   (`ccd/codexbridge/liveprobe.py:428-437`, docstring :37-43). Cases are at
-  `server/test/codex-bridge-live-tools.test.ts:801` and :824, with rows Z4a and Z4b.
+  `server/test/codex-bridge-live-tools.test.ts:839` and :862, with rows Z4a and Z4b.
 - **Why:** Before, a 200 whose recording failed exited 0 with no recording, so the operator lost the answer the step
   was spent on without being told, and step 3 could rebuild from an older step-2 recording unseen.
 - **Cost if wrong:** A request whose answer was good but whose recording failed is spent, so re-running that step uses

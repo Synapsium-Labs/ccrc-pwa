@@ -367,15 +367,16 @@ describe.skipIf(!PY)('the scrubber: a recording becomes a corpus stream (codex-b
     expect(existsSync(path.join(BRIDGE_DIR, '__pycache__')), 'a __pycache__ in ccd/codexbridge').toBe(false);
   });
 
-  // A structural key's value is kept as it is (the whole-wave fix round, Z3: every other string is rewritten), so each
-  // value below, under `status`, survives the rewrite, and the residue check refuses it by the one pattern it matches.
-  // Each value is fixed (never random), so no other pattern can match it by chance: the JWT is built from fixed
-  // segments.
+  // A structural key's value is kept as it is when it is in a code's shape (the whole-wave fix round, Z3: every other
+  // string is rewritten; the closing round, K5: a kept key's string outside errors.CODE_RE, lower-cased, is content),
+  // so each value below, under `status`, survives the rewrite, and the residue check refuses it by the one pattern it
+  // matches. Each value is fixed (never random), so no other pattern can match it by chance: the JWT is built from
+  // short fixed segments, so it stays within CODE_RE's 64 characters, and the id stands alone.
   const b64 = (o: object | string): string => Buffer.from(typeof o === 'string' ? o : JSON.stringify(o)).toString('base64url');
-  const FIXED_JWT = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ sub: 'fixture', exp: 1 })}.${b64('fixture-signature')}`;
+  const FIXED_JWT = `${b64({ alg: 'none' })}.${b64({ sub: 'fx' })}.${b64('sig')}`;
   for (const [pattern, value] of [
     ['jwt', FIXED_JWT],
-    ['id', 'see rs_ab12cd34ef for the item'],
+    ['id', 'rs_ab12cd34ef'],
     ['key', `sk-${'A1'.repeat(12)}`],
   ] as const) {
     it(`the scrubber refuses an output that still matches ${pattern}`, async () => {
@@ -496,6 +497,23 @@ describe.skipIf(!PY)('the scrubber: a recording becomes a corpus stream (codex-b
     const names = [data[0].response.tools[0].name, data[3].item.name, data[5].response.tools[0].name];
     expect(names[0]).toMatch(/^tool_fx[0-9]+$/);
     expect(names).toEqual([names[0], names[0], names[0]]);
+  });
+
+  it('the scrubber keeps a structural or terminal string only in a code\'s shape, and rewrites any other there', async () => {
+    const home = mkTmp('cb-live-scrub-shape-');
+    const inFile = path.join(home, 'in.sse');
+    const outFile = path.join(home, 'out.sse');
+    writeFileSync(inFile, ev('response.output_item.done', { output_index: 0, item: { type: 'message', id: 'msg_fx1',
+      role: 'Sentinel role words', phase: 'SentinelPhase of a brief', status: 'completed', content: [] } })
+      + ev('error', { error: 'SentinelError free text from upstream' })
+      + ev('error', { code: 'Sentinel code with spaces', message: 'x' }));
+    const r = await runCli(home, RECORD_PY, ['scrub', inFile, outFile]);
+    expect(r.status, r.stderr).toBe(0);
+    const out = readFileSync(outFile, 'utf8');
+    expect(out, 'a value outside a code\'s shape under a kept key is content').not.toContain('Sentinel');
+    const data = out.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)) as Json);
+    expect(data.map((d) => d.type)).toEqual(['response.output_item.done', 'error', 'error']);
+    expect([data[0].item.type, data[0].item.status]).toEqual(['message', 'completed']);
   });
 
   it("the scrubber's output is a corpus stream: the replay suite's reader parses it", async () => {

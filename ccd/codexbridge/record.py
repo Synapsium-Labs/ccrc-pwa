@@ -18,17 +18,18 @@ format, `make_streams.py`'s `Stream.add`: `event: <name>`, `data: <compact JSON>
 (one number per distinct id and prefix, so an item's id and a delta's `item_id` still agree); every `encrypted_content`
 becomes `ENC-<n>`; every tool or function `name` becomes `tool_fx<n>` (one number per distinct name, so a call still
 names the tool its echo declares); and EVERY OTHER STRING, under any key but the few the corpus reader needs to parse
-and replay a stream (STRUCTURAL_KEYS, and TERMINAL_KEYS in a terminal's place), becomes a synthetic string of the same
-structure: each letter or digit becomes `x` and every other character is kept, so a text keeps its length, its
-whitespace and its punctuation, and the live deltas of a message still join to its done text (the whole-wave fix round,
-Z3: a string under a key this module has never heard of, such as a web search's query, an image's revised prompt or a
-tool schema's enum, never reaches the public corpus). A function call's `arguments` that parse as JSON keep their keys,
-numbers and shape, and only their strings are rewritten. Object KEYS are kept everywhere (an argument's or a schema
-property's name included), so a recording still needs a human read before it enters the corpus. A `data:` line that is
-not JSON becomes a fixed malformed line. Then the output is checked against SCRUB_PATTERNS (an unscrubbed id, a JWT, an
-encrypted content that is not `ENC-<n>`, a key, a line that is not an `event:` or `data:` line), which a structural
-key's value can still match: any match refuses (rc 1) and writes nothing. Its expectation in `expect.json` is written by
-hand in the reviewed change that adds it (make_streams.py's rule).
+and replay a stream (STRUCTURAL_KEYS, and TERMINAL_KEYS in a terminal's place, each in a code's shape), becomes a
+synthetic string of the same structure: each letter or digit becomes `x` and every other character is kept, so a text
+keeps its length, its whitespace and its punctuation, and the live deltas of a message still join to its done text
+(the whole-wave fix round, Z3: a string under a key this module has never heard of, such as a web search's query, an
+image's revised prompt or a tool schema's enum, never reaches the public corpus). A function call's `arguments` that
+parse as JSON keep their keys, numbers and shape, and only their strings are rewritten. Object KEYS are kept
+everywhere (an argument's or a schema property's name included), so a recording still needs a human read before it
+enters the corpus. A `data:` line that is not JSON becomes a fixed malformed line. Then the output is checked against
+SCRUB_PATTERNS (an unscrubbed id, a JWT, an encrypted content that is not `ENC-<n>`, a key, a line that is not an
+`event:` or `data:` line), which a structural key's value can still match: any match refuses (rc 1) and writes
+nothing. Its expectation in `expect.json` is written by hand in the reviewed change that adds it (make_streams.py's
+rule).
 
 The module's CLI runs only under `__main__` (the block below), so importing it through `load_all()` does nothing.
 """
@@ -51,7 +52,7 @@ import threading
 import time
 from typing import Callable, Dict, List, Mapping, Optional, Tuple
 
-from . import sse
+from . import errors, sse
 
 RECORD_MAX = 20
 RECORD_MARKER = "record-streams"
@@ -213,7 +214,9 @@ NAME_KEY = "name"  # a tool's or a function call's name: `tool_fx<n>`, one per d
 # TERMINAL_KEYS, each only in the one object it maps to: `reason` in `incomplete_details` (`reducer`'s incomplete
 # reason), and `code` or a string `error` in an `error` object or a top-level `error` event (`errors.classify_failed`,
 # whose `_names` reads a string `error` when there is no `code`), because either key elsewhere can be content (a code
-# interpreter call's source); a dict under `error` is recursed into. Every other string is rewritten (`_synthetic`).
+# interpreter call's source); a dict under `error` is recursed into. A kept key's string is kept only in a code's
+# shape (`errors.CODE_RE`, lower-cased, as `errors._names` reads a code); any other is content. Every other string is
+# rewritten (`_synthetic`).
 STRUCTURAL_KEYS = frozenset({"type", "status", "role", "phase", "object"})
 TERMINAL_KEYS = {"reason": "incomplete_details", "code": "error", "error": "error"}  # type: Dict[str, str]
 MALFORMED_LINE = 'data: {"malformed"'
@@ -299,7 +302,8 @@ class _Scrubber:
             return self.arguments(value)
         if key == NAME_KEY:
             return self.tool_of(value)
-        if key in STRUCTURAL_KEYS or (key in TERMINAL_KEYS and TERMINAL_KEYS[key] == within):
+        kept = key in STRUCTURAL_KEYS or (key in TERMINAL_KEYS and TERMINAL_KEYS[key] == within)
+        if kept and errors.CODE_RE.fullmatch(value.lower()):
             return value
         return _synthetic(value)  # a text that looks like an id keeps its length too, so deltas join
 
