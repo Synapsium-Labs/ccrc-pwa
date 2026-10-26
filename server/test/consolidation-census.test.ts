@@ -3,8 +3,8 @@
 // claims and to pass over what it must not (a comment, an import, a bare word). Against the REAL tree, so it finds
 // the one site the spec cites: a query that silently matched nothing would be red here, not quietly zero.
 //
-// NO COUNT IS PINNED (spec §5.1 rule 3, rev 2): a census reports until its series reaches its target, and the
-// may-only-shrink pin lands in the commit that reaches it. Each real-tree row prints its list instead, so a PR body
+// A COUNT IS PINNED ONLY ONCE ITS SERIES REACHES ITS TARGET (spec §5.1 rule 3, rev 2): a census reports until then,
+// and the may-only-shrink pin lands in the commit that reaches it. Each real-tree row prints its list instead, so a PR body
 // can quote it, measured on the PR's tip.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -17,6 +17,7 @@ import {
 import { capabilityChoiceSites, W4_HELD_FILES } from './consolidationCensus.js';
 import { changeLatchSites, changeLatchReported } from './consolidationCensus.js';
 import { registryListingSites } from './consolidationCensus.js';
+import { dialogFrameProducers, sessionStreamPollSites } from './consolidationCensus.js';
 import { cadenceLiterals, declaredDerivations, laneClockFields, laneClockReported, laneClockShapes, singleFlightGuards } from './consolidationCensus.js';
 
 const show = (name: string, sites: readonly CensusSite[]): void => {
@@ -510,5 +511,57 @@ describe('registryListingSites: where watch.ts lists the registry, tagged select
     const sites = registryListingSites();
     console.log(`census registryListingSites: ${sites.length}\n${sites.map((s) => `  ${s.line} ${s.method} ${s.tag}  ${s.text.trim()}`).join('\n')}`);
     expect(sites.filter((s) => s.method === 'FleetWatcher.tick').length, 'the tick lists the registry').toBeGreaterThan(0);
+  });
+});
+
+// ARCH-52 (#787; spec §5.5 exit): ARCH-52's pin: both series reached their target, so the counts are held there
+// (D-6977), against a fixture first and the real tree second.
+describe('ARCH-52: SessionStream polls and dialog frame producers', () => {
+  const stream = [
+    "import { readTasks } from './tasks/read.js';",
+    '// await readTasks(io, cfgDir, uuid) named in a comment is not a call',
+    'class SessionStream {',
+    '  async tick() {',
+    '    const pane = await this.deps.tmux.capture(this.id);',
+    '    const d = parseDialog(pane);',
+    '    const t = await readTasks(io, cfgDir, uuid);',
+    '    const h = await readHookStateRawMeasured(io, dir, id, uuid);',
+    '    const m = this.deps.coord.outstandingMailFor(this.id, 500);',
+    '  }',
+    '}',
+  ].join('\n');
+
+  it('FIXTURE: the pane, plan, hookstate and mail reads in sessionws.ts are polls; an import, a comment and another file are not', () => {
+    const tree = mkdtempSync(path.join(tmpdir(), 'arch52-census-'));
+    try {
+      mkdirSync(path.join(tree, 'server/src'), { recursive: true });
+      writeFileSync(path.join(tree, 'server/src/sessionws.ts'), stream);
+      writeFileSync(path.join(tree, 'server/src/sessionFeed.ts'), stream);
+      expect(sessionStreamPollSites(tree).map((s) => s.line)).toEqual([5, 6, 7, 8, 9]);
+      expect(new Set(sessionStreamPollSites(tree).map((s) => s.file))).toEqual(new Set(['server/src/sessionws.ts']));
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+    }
+  });
+
+  it('FIXTURE: a dialog frame producer is one site per file, a comment and a comparison are nothing', () => {
+    const tree = mkdtempSync(path.join(tmpdir(), 'arch52-census-'));
+    try {
+      mkdirSync(path.join(tree, 'server/src'), { recursive: true });
+      writeFileSync(path.join(tree, 'server/src/a.ts'), "bus.emit('session:x', { type: 'dialog', dialog });\nsend({ type: 'dialog_cleared' });\n");
+      writeFileSync(path.join(tree, 'server/src/b.ts'), "// { type: 'dialog' } in prose\nif (m.type === 'dialog') return;\n");
+      expect(dialogFrameProducers(tree).map((s) => `${s.file}:${s.line}`)).toEqual(['server/src/a.ts:1']);
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+    }
+  });
+
+  it('REAL TREE: SessionStream polls 4 -> 0, and dialog frame producers 2 -> 1 (sessionws.ts alone)', () => {
+    const polls = sessionStreamPollSites();
+    const producers = dialogFrameProducers();
+    show('sessionStreamPollSites', polls);
+    show('dialogFrameProducers', producers);
+    expect(polls, 'a SessionStream read comes from its session\'s feed (sessionFeed.ts), never from a poll of its own').toEqual([]);
+    expect(producers.map((s) => s.file), 'every dialog frame is built by the stream\'s one gate').toEqual(['server/src/sessionws.ts']);
   });
 });
