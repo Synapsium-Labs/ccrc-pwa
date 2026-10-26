@@ -22,7 +22,13 @@ export const STALE_SIBLING_MS = 14 * 24 * 3_600_000;
 
 /** What the registry says of a run's claimant: `archived-or-gone` is a PROVEN archive or absence; every doubt is
  *  `unmeasured` and keeps the run. */
-export type ClaimantState = 'live' | 'archived-or-gone' | 'unmeasured';
+export const CLAIMANT_STATES = ['live', 'archived-or-gone', 'unmeasured'] as const;
+export type ClaimantState = typeof CLAIMANT_STATES[number];
+
+/** The claimant words, spelled once in `CLAIMANT_STATES`: they ride the split and never a `refused` or `reject.code`. */
+export function isClaimantState(v: unknown): v is ClaimantState {
+  return typeof v === 'string' && (CLAIMANT_STATES as readonly string[]).includes(v);
+}
 
 /** The columns of an open run the rule reads. */
 export interface SiblingFact {
