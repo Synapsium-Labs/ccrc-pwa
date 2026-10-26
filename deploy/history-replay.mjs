@@ -7950,10 +7950,10 @@ function agentPromptOf(command) {
   ].join('\n') + '\n';
 }
 /** One treatment-arm run's stdin: the card line, one blank line, then the probe's prompt (W2-5b1 Task 2's prependCard,
- *  the treatment payload's shape, Q20). Pure.  @param {string} cardLine  @param {{expect: string, command: string}} p */
-export function step0bStdinOf(cardLine, p) {
-  if (typeof cardLine !== 'string' || cardLine === '' || cardLine.includes('\n')) throw new TypeError('step0bStdinOf: the card line is one non-empty line');
-  return prependCard(cardLine, p.expect === 'subagent' ? agentPromptOf(p.command) : probePromptOf(p.command));
+ *  the treatment payload's shape, Q20). Pure.  @param {string} card  @param {{expect: string, command: string}} p */
+export function step0bStdinOf(card, p) {
+  if (typeof card !== 'string' || card === '' || card.includes('\n')) throw new TypeError('step0bStdinOf: the card line is one non-empty line');
+  return prependCard(card, p.expect === 'subagent' ? agentPromptOf(p.command) : probePromptOf(p.command));
 }
 
 // ── measuring and acting ──
@@ -8067,11 +8067,11 @@ export async function step0bCommand(flags, driverEnv, deps = { recheck: recheckB
       const probes = step0bProbesOf(home, transcript);
       const outcomes = [];
       for (let i = 0; i < probes.length; i += node.limits.batch_max) {
-        const cardLine = await step0bCardOf(ctx);
+        const card = await step0bCardOf(ctx);
         const pre = await spawnPre();
         const jobs = probes.slice(i, i + node.limits.batch_max).map((p) => {
           const job = { launch, mode: 'arm', model, settingsMode, recall: { session: q.ccrc_id, arm: TREATMENT_ARM, asof: q.boundary_uuid },
-            stdin: step0bStdinOf(cardLine, p), out, name: nameOf(p.probe), lang };
+            stdin: step0bStdinOf(card, p), out, name: nameOf(p.probe), lang };
           return deps.timeoutMs === undefined ? job : { ...job, timeoutMs: deps.timeoutMs };
         });
         outcomes.push(...await runBatch(jobs, { gate, claim, concurrency: node.limits.concurrency }));
