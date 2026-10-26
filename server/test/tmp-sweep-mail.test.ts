@@ -351,6 +351,34 @@ describe('runTmpSweepCensusLane', () => {
     } finally { warn.mockRestore(); }
   });
 
+  // ARCH-76 characterization (D-6991): the lane's `warnOnce` is a once-ever SET of keys, not a change
+  // latch. A key that came back after a different key, or after a clean pass, stays silent for the life of the state,
+  // where `changeLatch` (`server/src/changeLatch.ts`) would speak again on each change. Green on the code as written.
+  it('warnOnce is once-ever per key: a key that comes back after another key or a clean pass is not logged again', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const said = (needle: string): number => warn.mock.calls.filter((c) => String(c[0]).includes(needle)).length;
+      const r = laneRig('{not json');
+      await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+      r.body.current = json(census());                                     // a clean pass between
+      await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+      r.body.current = '{not json';
+      await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+      expect(said('malformed'), 'a clean pass re-armed the malformed warning').toBe(1);
+
+      const row = (id: string, seq: number) => json(census({ seq, moved: [moved(seq, { id })] }));
+      r.body.current = row('project-y-gone', 1);
+      await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+      r.body.current = row('project-x-gone', 2);
+      await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+      r.state.mailed = 0;                                                  // the first id's row again, after a different one
+      r.body.current = row('project-y-gone', 1);
+      await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+      expect([said('project-y-gone'), said('project-x-gone')], 'A, B, A: a change latch would log A twice').toEqual([1, 1]);
+      expect(r.state.logged.has('malformed'), 'nothing clears the set').toBe(true);
+    } finally { warn.mockRestore(); }
+  });
+
   it('a notice for an id with no registry row this pass is not latched: the row appearing later is told', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {

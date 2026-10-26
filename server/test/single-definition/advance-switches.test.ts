@@ -914,6 +914,20 @@ describe('one change latch (ARCH-76): changeLatch (D-5861)', () => {
       rm(tree, { recursive: true, force: true });
     }
   });
+
+  // ARCH-76 follow-up (D-6991): a `warn…Once` helper outside changeLatch.ts is a row of
+  // `ONCE_WARN_ALLOWED` with its reason, or it is a change latch and uses changeLatch(). The list only shrinks, and a
+  // row whose helper has gone is stale and fails too.
+  it('every warn…Once helper outside changeLatch.ts is allowlisted with a reason, 1 row (tmpSweepLane.ts)', async () => {
+    const { onceWarnDefinitions, ONCE_WARN_ALLOWED } = await import('../consolidationCensus.js');
+    const allowed = new Set(ONCE_WARN_ALLOWED.map((r) => r.file));
+    const sites = onceWarnDefinitions();
+    expect(sites.filter((s) => !allowed.has(s.file)).map((s) => `${s.file}:${s.line} ${s.text.trim()}`),
+      'use changeLatch() from server/src/changeLatch.ts, or add a ONCE_WARN_ALLOWED row saying why it is not a change latch').toEqual([]);
+    expect(ONCE_WARN_ALLOWED.filter((r) => !sites.some((s) => s.file === r.file)).map((r) => r.file), 'a stale allowlist row').toEqual([]);
+    expect(ONCE_WARN_ALLOWED.every((r) => r.reason.trim().length > 0), 'a row without a reason').toBe(true);
+    expect(ONCE_WARN_ALLOWED.length, 'the allowlist only shrinks').toBeLessThanOrEqual(1);
+  });
 });
 
 
