@@ -2,9 +2,9 @@
 // The spawn chain (the update spawn kernel and the spawner audits, ARCH-73)
 // fills it with its census queries, in C8c, then C8d, then C8e.
 // Each query returns `CensusSite` rows the way `consolidationCensus.ts`'s own do, and it imports what it needs from
-// `consolidationCensus.ts`; it never re-exports this module, so no import cycle forms, and every count a W8 PR body
-// quotes comes from a named query of this module. It reads no imported value at top level (only types, and functions
-// called inside a query). Its fixture and real-tree rows live in the sibling `spawn.test.ts`, which the chain's
-// first task creates. No other chain edits this file; a chain's first task that finds it non-empty stops and
-// reports.
+// `consolidationCensus.ts`, which never re-exports it (D-TBD-c8-0b-header-wording), so no import cycle forms, and
+// every count a W8 PR body quotes comes from a named query of this module. It reads no imported value at top level
+// (only types, and functions called inside a query). Its fixture and real-tree rows live in the sibling
+// `spawn.test.ts`, which the chain's first task creates. No other chain edits this file; a chain's first task that
+// finds it non-empty stops and reports.
 export {};
