@@ -11984,7 +11984,7 @@ const w6cT2Ctx = (cs: W6cT2Cs, p: W6cT2Part, nowMs = W6C_T2_NOW): W6cR =>
 const W6C_T2_LEAF = {
   A1: w6cT2Leaf(0xa1), H1: w6cT2Leaf(0x91), H2: w6cT2Leaf(0x92), B: w6cT2Leaf(0xb1), C1: w6cT2Leaf(0xc1), D: w6cT2Leaf(0xd1),
   E: w6cT2Leaf(0xe1), F: w6cT2Leaf(0xf1), G: w6cT2Leaf(0x61), U: w6cT2Leaf(0x71), X: w6cT2Leaf(0xfff),
-  EA: w6cT2Leaf(0xea), EB: w6cT2Leaf(0xeb), RT: w6cT2Leaf(0x77),
+  EA: w6cT2Leaf(0xea), EB: w6cT2Leaf(0xeb), RT: w6cT2Leaf(0x77), NS: w6cT2Leaf(0x57),
 };
 
 /** Store 1: compliance, echo hits and lag. Transcript A (file 1) holds two boundaries: A1 (line 3, ts 10000), whose
@@ -12062,7 +12062,10 @@ function w6cT2EchoStore() {
  *  the 41st row after its boundary (none). C2 has no leaf. EA, EB and RT (D-6563) each have a live-looking window that is
  *  still open by rows and by the leaf's age, closed by something else: EA's file ends a grace after the boundary's own
  *  stamp (none); EB's boundary row has no stamp, so the store's stamp is the newest stamped row before it, and the report
- *  names a later time that would leave the window open (none); RT's copy has source_key '' but its file is retired (none). */
+ *  names a later time that would leave the window open (none); RT's copy has source_key '' but its file is retired (none).
+ *  NS (D-6563's null arm) has no stamped row at or before its boundary line (the boundary is line 1 and unstamped), so the
+ *  store's stamp is null and the file's end closes nothing, though the report's time would close it: the window waits
+ *  (card-wait). Its leaf is the LAST node, so card.mjs's wait stops its cursor with no leaf after it. */
 function w6cT2CardStore() {
   const u = (seed: number) => (n: number): string => w6cT2Uid(seed, n);
   const [uB, uC, uD, uE, uF] = [u(0xb), u(0xc), u(0xd), u(0xe), u(0xf)];
@@ -12082,6 +12085,8 @@ function w6cT2CardStore() {
   const EA = [w6cT2Op(uEA(1), 109000), w6cT2Asst(uEA(2), 109500), w6cT2Bnd(uEA(3), 110000), w6cT2Sum(uEA(4), 110001), w6cT2Asst(uEA(5), 110100)];
   const EB = [w6cT2Op(uEB(1), 119000), w6cT2Asst(uEB(2), 119500), { ...w6cT2Bnd(uEB(3), 0), ts: null }, w6cT2Sum(uEB(4), 120001), w6cT2Asst(uEB(5), 120100)];
   const RT = [w6cT2Op(uRT(1), 129000), w6cT2Asst(uRT(2), 129500), w6cT2Bnd(uRT(3), 130000), w6cT2Sum(uRT(4), 130001), w6cT2Asst(uRT(5), 130100)];
+  const uNS = u(0x14);
+  const NS = [{ ...w6cT2Bnd(uNS(1), 0), ts: null }, w6cT2Sum(uNS(2), 140001), w6cT2Asst(uNS(3), 140100)];
   const all = (rows: W6cT2Row[]): string[] => rows.map((r) => r.uuid);
   const st = w6cT2Plant({
     transcripts: [
@@ -12098,6 +12103,9 @@ function w6cT2CardStore() {
       { pk: 6, ccUuid: w6cT2Uid(0xcd, 6), rows: EA, files: [{ fileId: 7, eofMs: 110000 + w6cLib.RAW_LEAF_GRACE_MS, uuids: all(EA) }] },
       { pk: 7, ccUuid: w6cT2Uid(0xcd, 7), rows: EB, files: [{ fileId: 8, eofMs: 119500 + w6cLib.RAW_LEAF_GRACE_MS, uuids: all(EB) }] },
       { pk: 8, ccUuid: w6cT2Uid(0xcd, 8), rows: RT, files: [{ fileId: 9, status: 'retired', uuids: all(RT) }] },
+      // NS: the boundary is line 1 and unstamped, so no stamped row is at or before it; the file ends a grace after the
+      // REPORT's time for it (140000), which would close the window if that time were read.
+      { pk: 9, ccUuid: w6cT2Uid(0xcd, 9), rows: NS, files: [{ fileId: 10, eofMs: 140000 + w6cLib.RAW_LEAF_GRACE_MS, uuids: all(NS) }] },
     ],
     nodes: [
       { id: W6C_T2_LEAF.B, boundary: uB(3), status: 'not-requested', createdMs: 41000 },
@@ -12108,6 +12116,7 @@ function w6cT2CardStore() {
       { id: W6C_T2_LEAF.EA, boundary: uEA(3), status: 'not-requested', createdMs: W6C_T2_NOW - 1000 },
       { id: W6C_T2_LEAF.EB, boundary: uEB(3), status: 'not-requested', createdMs: W6C_T2_NOW - 1000 },
       { id: W6C_T2_LEAF.RT, boundary: uRT(3), status: 'not-requested', createdMs: W6C_T2_NOW - 1000 },
+      { id: W6C_T2_LEAF.NS, boundary: uNS(1), status: 'not-requested', createdMs: W6C_T2_NOW - 1000 },   // last: a wait stops card.mjs's cursor here
     ],
   });
   const M = W6C_T2_MODEL;
@@ -12117,6 +12126,7 @@ function w6cT2CardStore() {
     // The report names 120000 for EB's boundary: with that time the file's end is short of a grace, which the old reading took.
     fEB: w6cT2Part(w6cT2Rep(uEB(3), 120000, [w6cT2Copy({ file_id: 8, boundary_line: 3, after_count: 3, summary_line: 4, last_ts_ms: 120100 })])),
     fRT: w6cT2Part(w6cT2Rep(uRT(3), 130000, [w6cT2Copy({ file_id: 9, boundary_line: 3, after_count: 3, summary_line: 4, last_ts_ms: 130100 })])),
+    fNS: w6cT2Part(w6cT2Rep(uNS(1), 140000, [w6cT2Copy({ file_id: 10, boundary_line: 1, after_count: 2, summary_line: 2, last_ts_ms: 140100 })])),
     fB: w6cT2Part(w6cT2Rep(uB(3), 40000, [w6cT2Copy({ file_id: 1, boundary_line: 3, after_count: 3, summary_line: 4, last_ts_ms: 40100, rows: [[6, 40100, null, null, uB(6), M]] })])),
     fC1: w6cT2Part(w6cT2Rep(uC(3), 50000, [w6cT2Copy({ file_id: 2, boundary_line: 3, after_count: 5, summary_line: 4, next_boundary_line: 6, next_boundary_ts_ms: 60000, last_ts_ms: 60002, rows: [[5, 50100, null, null, uC(5), M]] })])),
     fC2: w6cT2Part(w6cT2Rep(uC(6), 60000, [w6cT2Copy({ file_id: 2, boundary_line: 6, after_count: 2, summary_line: 7, last_ts_ms: 60002 })])),
@@ -12291,23 +12301,26 @@ w6cDescribe('W2-6 Task 2: the five spec counters over fixture stores (W2-D87, W2
       w6cExpect(card(st.fEA), 'a live window short of rows and of age, closed by the file ending a grace after the boundary\'s stamp').toEqual(verdict('none'));
       w6cExpect(card(st.fEB), 'the boundary row has no stamp: the store\'s stamp is the row before it, not the report\'s time (D-6563)').toEqual(verdict('none'));
       w6cExpect(card(st.fRT), 'source_key is empty but the file is retired, so the copy is not live and the window is closed').toEqual(verdict('none'));
+      w6cExpect(card(st.fNS), 'no stamped row at or before the boundary: the store\'s stamp is null, so the file\'s end closes nothing and the window waits, though the report\'s time would close it (D-6563)')
+        .toEqual({ state: 'unmeasured', why: 'card-wait' });
     });
   });
 
-  w6cIt('card parity CONTROL (D-6562): card.mjs\'s own measureCardDelivery, over the same store, measures the same eight leaves with the same served and mismatch counts (each leaf\'s verdict is the card case\'s)', () => {
+  w6cIt('card parity CONTROL (D-6562): card.mjs\'s own measureCardDelivery, over the same store, agrees with the counter on its aggregate counts only, which is all it exposes (measured 8, served 1, mismatch 1, waiting 1); each leaf\'s own verdict is pinned by the card case', () => {
     const st = w6cT2CardStore();
-    const ours = w6cT2With(st.dbFile, (cs) => [st.fB, st.fC1, st.fD, st.fE, st.fF, st.fEA, st.fEB, st.fRT].map((p) => W6C_T2.cardAt(w6cT2Ctx(cs, p))));
+    const ours = w6cT2With(st.dbFile, (cs) => [st.fB, st.fC1, st.fD, st.fE, st.fF, st.fEA, st.fEB, st.fRT, st.fNS].map((p) => W6C_T2.cardAt(w6cT2Ctx(cs, p))));
     const w = w6cStore.openWriter(st.dbFile);
     try {
       w6cStore.withTx(w, 'NORMAL', () => { w6cStore.setStep(w, 'card-measure', 1, '0', null); });
       const theirs = (w6cCardMod as unknown as W6cR).measureCardDelivery(w, { nowMs: W6C_T2_NOW, budgetLeft: () => true }, { bytes: 0 });
-      w6cExpect(theirs).toEqual({ measured: 8, served: 1, mismatch: 1, waiting: 0 });
+      w6cExpect(theirs).toEqual({ measured: 8, served: 1, mismatch: 1, waiting: 1 });
     } finally {
       w6cStore.closeWriter(w);
     }
-    w6cExpect(ours.every((v) => v.state === 'measured')).toBe(true);
-    w6cExpect(ours.filter((v) => v.value.verdict === 'served')).toHaveLength(1);
-    w6cExpect(ours.filter((v) => v.value.verdict === 'mismatch')).toHaveLength(1);
+    w6cExpect(ours.slice(0, 8).every((v) => v.state === 'measured')).toBe(true);
+    w6cExpect(ours[8], 'NS waits in both: card.mjs counts it waiting and stops, the counter answers card-wait').toEqual({ state: 'unmeasured', why: 'card-wait' });
+    w6cExpect(ours.filter((v) => v.value?.verdict === 'served')).toHaveLength(1);
+    w6cExpect(ours.filter((v) => v.value?.verdict === 'mismatch')).toHaveLength(1);
   });
 
   w6cIt('card: a window still open at the read instant is card-wait, never none; a boundary no copy holds is boundary-uncopied (CONTROL: the same G past CARD_MEASURE_MAX_WAIT_MS is none)', () => {
