@@ -5,6 +5,10 @@
 # The last walked tag is the body of one issue, `codex wire: state`, which
 # the first run creates. A pair that cannot be compared ends the walk with
 # the state left at the last pair walked, and fails this job.
+# If upstream moves or renames a contract file, the pair that spans the move
+# fails on every run, even after CONTRACT_FILES follows it. To recover:
+# update CONTRACT_FILES, read that pair's diff by hand, then set the state
+# issue's body to the newer tag of the stuck pair.
 # .github/ci/codex-wire-watch.mjs owns all of it and is tested offline
 # (server/test/codex-wire-watch.test.ts).
 #

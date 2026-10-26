@@ -9,9 +9,15 @@
 //
 // The walk never skips a release. A pair counts as walked only when all nine files were read at both of its tags and
 // its issue (if any) is open; the first pair that cannot be compared ends the walk, the state stays at the last pair
-// walked, and the job exits non-zero. With no state issue yet, the walk is the newest pair. The state and the
-// "already opened" check read only issues the workflow's own token opened (`BOT_LOGIN`): this repository is public,
-// and anyone can open an issue with either title.
+// walked, and the job exits non-zero. With no state issue yet, the walk is the newest pair, and the state is created
+// at its older tag even when that pair fails. The state and the "already opened" check read only issues the
+// workflow's own token opened (`BOT_LOGIN`): this repository is public, and anyone can open an issue with either title.
+//
+// When upstream moves or renames a contract file, the walk stops at the pair that spans the move, for good: the older
+// tag has only the old path and the newer tag only the new one, so that pair is never comparable, before or after
+// `CONTRACT_FILES` follows the move (the ::error:: line names the file and the tag). The operator's step: update
+// `CONTRACT_FILES`, read that pair's diff by hand, then set the state issue's body to the newer tag of the stuck pair;
+// the next run walks on from there.
 //
 // Pure parts (`contractFacts`, `wireReport`, `nextPairs`, `pairTitle`, `issueBody`) and the walk (`runWatch`) are
 // unit-tested offline in server/test/codex-wire-watch.test.ts; `githubIo` is the only code that talks to the REST
@@ -39,6 +45,9 @@ export const BOT_LOGIN = 'github-actions[bot]';
 export const STABLE_TAG_RE = /^rust-v(\d+)\.(\d+)\.(\d+)$/;
 /** At most this many findings are listed in one issue body; the rest are counted. */
 export const BODY_FINDINGS_MAX = 200;
+/** And at most this many characters of finding lines, so a body stays under GitHub's 65,536-character limit (a body
+ *  over it is refused, and the pair could then never be walked). */
+export const BODY_FINDINGS_CHARS = 60_000;
 
 /** The families a finding names, in report order. */
 export const FAMILIES = Object.freeze(['request-struct field', 'event literal', 'error-code literal', 'header literal', 'endpoint literal']);
@@ -58,15 +67,21 @@ const PRINTABLE_NAME_RE = /^[^\s`@<>]{1,200}$/;
 
 /**
  * Comments, doc comments and string-literal contents blanked (newlines kept, so offsets and lines still match the
- * source), and every string literal with its offset. A `'` is a char literal only in a char literal's exact shape;
- * otherwise it is a lifetime or a label.
- * @param {string} src @returns {{ code: string, literals: Array<{ value: string, at: number }> }}
+ * source), and every string literal with its offset. `kept` is the same text with only the comments blanked, so a
+ * span of `code` read at the same offsets in `kept` gives its literals' values (a serde attribute's, say). A `'` is a
+ * char literal only in a char literal's exact shape; otherwise it is a lifetime or a label.
+ * @param {string} src @returns {{ code: string, kept: string, literals: Array<{ value: string, at: number }> }}
  */
 function lex(src) {
   const out = src.split('');
+  const keep = src.split('');
   /** @type {Array<{ value: string, at: number }>} */
   const literals = [];
   const blank = (from, to) => { for (let k = from; k < to; k++) if (out[k] !== '\n') out[k] = ' '; };
+  const blankComment = (from, to) => {
+    blank(from, to);
+    for (let k = from; k < to; k++) if (keep[k] !== '\n') keep[k] = ' ';
+  };
   let i = 0;
   const n = src.length;
   while (i < n) {
@@ -75,7 +90,7 @@ function lex(src) {
     if (c === '/' && src[i + 1] === '/') {
       const end = src.indexOf('\n', i);
       const stop = end === -1 ? n : end;
-      blank(i, stop);
+      blankComment(i, stop);
       i = stop;
       continue;
     }
@@ -85,7 +100,7 @@ function lex(src) {
       while (j < n && depth > 0) {
         if (src[j] === '/' && src[j + 1] === '*') { depth++; j += 2; } else if (src[j] === '*' && src[j + 1] === '/') { depth--; j += 2; } else j++;
       }
-      blank(i, j);
+      blankComment(i, j);
       i = j;
       continue;
     }
@@ -115,7 +130,7 @@ function lex(src) {
     }
     i++;
   }
-  return { code: out.join(''), literals };
+  return { code: out.join(''), kept: keep.join(''), literals };
 }
 
 /** The offset just past the `}` that closes the `{` at `open`, in lexed code. */
@@ -136,76 +151,116 @@ function testModules(code) {
   return ranges;
 }
 
-/** The top-level comma-separated items of a struct or enum body (the text between its braces), attributes removed. */
-function bodyItems(body) {
+/**
+ * The top-level comma-separated items of a struct or enum body (the text between its braces), each as `{ code, kept }`:
+ * the item's lexed text and the same span of `kept`. `code` and `kept` are spans of equal length.
+ * @param {string} code @param {string} kept @returns {Array<{ code: string, kept: string }>}
+ */
+function bodyItems(code, kept) {
   const items = [];
   let depth = 0;
-  let seg = '';
-  const flush = () => {
-    const s = seg.replace(/#\[[^\]]*\]/g, ' ').trim();
-    if (s) items.push(s);
-    seg = '';
+  let start = 0;
+  const flush = (end) => {
+    if (code.slice(start, end).replace(/#\[[^\]]*\]/g, ' ').trim()) items.push({ code: code.slice(start, end), kept: kept.slice(start, end) });
   };
-  for (let k = 0; k < body.length; k++) {
-    const ch = body[k];
-    if (ch === '-' && body[k + 1] === '>') { seg += '->'; k++; continue; }
+  for (let k = 0; k < code.length; k++) {
+    const ch = code[k];
+    if (ch === '-' && code[k + 1] === '>') { k++; continue; }
     if ('([{<'.includes(ch)) depth++;
     else if (')]}>'.includes(ch)) depth--;
-    if (ch === ',' && depth === 0) { flush(); continue; }
-    seg += ch;
+    if (ch === ',' && depth === 0) { flush(k); start = k + 1; }
   }
-  flush();
+  flush(code.length);
   return items;
 }
 
-/** The field names declared at the top level of a struct body. */
-function structFields(body) {
-  return bodyItems(body).flatMap((s) => {
-    const m = /^(?:pub(?:\s*\([^)]*\))?\s+)?(?:r#)?([A-Za-z_]\w*)\s*:(?!:)/.exec(s);
-    return m ? [m[1]] : [];
+/** An item's leading attributes (read from `kept`, so their values are there) and the rest of it, both spans.
+ *  @param {{ code: string, kept: string }} item */
+function splitAttrs(item) {
+  const lead = (/^\s*(?:#\[[^\]]*\]\s*)*/.exec(item.code) ?? [''])[0].length;
+  return { attrs: item.kept.slice(0, lead), code: item.code.slice(lead), kept: item.kept.slice(lead) };
+}
+
+/** The value of every `key = "value"` in an attribute text's `#[serde(...)]` attributes: what a field, a variant or
+ *  a container is called (`rename`), tagged (`tag`) or renamed by (`rename_all`) on the wire. A value outside
+ *  `PRINTABLE_NAME_RE` is never a name. @param {string} attrs @param {string} key @returns {string[]} */
+function serdeValues(attrs, key) {
+  const out = [];
+  const re = new RegExp(`(?:^|[\\s,(])${key}\\s*=\\s*"([^"]*)"`);
+  for (const a of attrs.matchAll(/#\[\s*serde\s*\(([^\]]*)\)\s*\]/g)) {
+    const v = re.exec(/** @type {string} */ (a[1]));
+    if (v && PRINTABLE_NAME_RE.test(/** @type {string} */ (v[1]))) out.push(/** @type {string} */ (v[1]));
+  }
+  return out;
+}
+
+/** The field names declared at the top level of a struct body, `field`, and a renamed field's wire name too,
+ *  `field=wire`. @param {string} code @param {string} kept @returns {string[]} */
+function structFields(code, kept) {
+  return bodyItems(code, kept).flatMap((item) => {
+    const it = splitAttrs(item);
+    const m = /^(?:pub(?:\s*\([^)]*\))?\s+)?(?:r#)?([A-Za-z_]\w*)\s*:(?!:)/.exec(it.code);
+    if (!m) return [];
+    return [m[1], ...serdeValues(it.attrs, 'rename').map((w) => `${m[1]}=${w}`)];
   });
 }
 
-/** An enum body's variants, `Variant`, and the fields of each struct-like variant, `Variant.field`. */
-function enumMembers(body) {
-  return bodyItems(body).flatMap((s) => {
-    const m = /^([A-Za-z_]\w*)\s*(\{)?/.exec(s);
+/** An enum body's variants, `Variant`, the fields of each struct-like variant, `Variant.field`, and a renamed
+ *  variant's or field's wire name, `Variant=wire` and `Variant.field=wire`.
+ *  @param {string} code @param {string} kept @returns {string[]} */
+function enumMembers(code, kept) {
+  return bodyItems(code, kept).flatMap((item) => {
+    const it = splitAttrs(item);
+    const m = /^([A-Za-z_]\w*)\s*(\{)?/.exec(it.code);
     if (!m) return [];
-    if (!m[2]) return [m[1]];
-    const inner = s.slice(m[0].length, s.lastIndexOf('}'));
-    return [m[1], ...structFields(inner).map((f) => `${m[1]}.${f}`)];
+    const own = [m[1], ...serdeValues(it.attrs, 'rename').map((w) => `${m[1]}=${w}`)];
+    if (!m[2]) return own;
+    const close = it.code.lastIndexOf('}');
+    return [...own, ...structFields(it.code.slice(m[0].length, close), it.kept.slice(m[0].length, close)).map((f) => `${m[1]}.${f}`)];
   });
 }
 
 /**
  * What one contract file names, by family: `request-struct field` keys are `Struct.field` for every struct that
  * derives `Serialize` or whose name ends in `Request` (what is sent), and `Enum::Variant` and `Enum::Variant.field` for
- * every enum that derives `Serialize`; the literal families are classified by shape and by the line they sit on. A name
- * may sit in more than one family.
+ * every enum that derives `Serialize`; a serde `rename` adds the wire name (`Struct.field=wire`, `Enum::Variant=wire`),
+ * and a container's serde `tag` and `rename_all` are members too (`Struct#tag=type`), so a change to what the JSON is
+ * called is a removed and an added name. The literal families are classified by shape and by the line they sit on. A
+ * name may sit in more than one family.
  * @param {string} src @returns {Record<string, Set<string>>}
  */
 export function contractFacts(src) {
-  const { code, literals } = lex(src);
+  const { code, kept, literals } = lex(src);
   const cut = testModules(code);
   const inTest = (at) => cut.some(([a, b]) => at >= a && at < b);
   /** @type {Record<string, Set<string>>} */
   const facts = Object.fromEntries(FAMILIES.map((f) => [f, new Set()]));
+  const sent = facts['request-struct field'];
+  /** The container's own serde `tag` and `rename_all`, from its attributes at `at` (`len` long in `code`). */
+  const container = (name, at, len) => {
+    const attrs = kept.slice(at, at + len);
+    for (const key of ['tag', 'rename_all']) for (const v of serdeValues(attrs, key)) sent.add(`${name}#${key}=${v}`);
+  };
+  /** The `code` and `kept` spans of the body whose `{` is at `open`. @param {number} open @returns {[string, string]} */
+  const body = (open) => {
+    const end = closeBrace(code, open) - 1;
+    return [code.slice(open + 1, end), kept.slice(open + 1, end)];
+  };
 
   const structRe = /((?:#\[[^\]]*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?struct\s+([A-Za-z_]\w*)\s*(?:<[^{;]*>)?\s*(?:where[^{;]*)?\{/g;
   for (let m; (m = structRe.exec(code));) {
     if (inTest(m.index)) continue;
-    const sent = /\bSerialize\b/.test(m[1]) || /Request$/.test(m[2]);
-    if (!sent) continue;
-    const open = m.index + m[0].length - 1;
-    for (const f of structFields(code.slice(open + 1, closeBrace(code, open) - 1))) facts['request-struct field'].add(`${m[2]}.${f}`);
+    if (!/\bSerialize\b/.test(m[1]) && !/Request$/.test(m[2])) continue;
+    container(m[2], m.index, m[1].length);
+    for (const f of structFields(...body(m.index + m[0].length - 1))) sent.add(`${m[2]}.${f}`);
   }
   // An enum that is sent is a request shape too: its variants (`Enum::Variant`) and a struct-like variant's fields
   // (`Enum::Variant.field`) — the input items are one such enum.
   const enumRe = /((?:#\[[^\]]*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?enum\s+([A-Za-z_]\w*)\s*(?:<[^{;]*>)?\s*(?:where[^{;]*)?\{/g;
   for (let m; (m = enumRe.exec(code));) {
     if (inTest(m.index) || !/\bSerialize\b/.test(m[1])) continue;
-    const open = m.index + m[0].length - 1;
-    for (const v of enumMembers(code.slice(open + 1, closeBrace(code, open) - 1))) facts['request-struct field'].add(`${m[2]}::${v}`);
+    container(m[2], m.index, m[1].length);
+    for (const v of enumMembers(...body(m.index + m[0].length - 1))) sent.add(`${m[2]}::${v}`);
   }
 
   for (const { value, at } of literals) {
@@ -311,7 +366,15 @@ export function pairTitle(older, newer) {
  *  names only. @param {string} older @param {string} newer @param {{ changed: string[], findings: string[] }} report
  *  @returns {string} */
 export function issueBody(older, newer, report) {
-  const shown = report.findings.slice(0, BODY_FINDINGS_MAX);
+  /** @type {string[]} */
+  const shown = [];
+  let size = 0;
+  for (const f of report.findings) {
+    const line = `- ${f}`;
+    if (shown.length >= BODY_FINDINGS_MAX || size + line.length + 1 > BODY_FINDINGS_CHARS) break;
+    shown.push(line);
+    size += line.length + 1;
+  }
   const more = report.findings.length - shown.length;
   return [
     `The wire-contract files of ${UPSTREAM} changed between \`${older}\` and \`${newer}\`.`,
@@ -319,7 +382,7 @@ export function issueBody(older, newer, report) {
     `Compare: https://github.com/${UPSTREAM}/compare/${older}...${newer}`,
     '',
     'Findings:',
-    ...shown.map((f) => `- ${f}`),
+    ...shown,
     ...(more > 0 ? [`- … and ${more} more`] : []),
     '',
     'Changed contract files:',
@@ -341,8 +404,9 @@ export function issueBody(older, newer, report) {
  */
 
 /** The walk. Returns the exit code: 0 when every pair since the state was walked, 1 when one could not be compared
- *  (the state then names the last pair walked). A failure to read the issues or the releases, or to write the state,
- *  throws. @param {WatchIo} io @returns {Promise<number>} */
+ *  (the state then names the last pair walked, or, with no state before this run, the older tag of the newest pair,
+ *  where the walk began). A failure to read the issues or the releases, or to write the state, throws.
+ *  @param {WatchIo} io @returns {Promise<number>} */
 export async function runWatch(io) {
   const own = await io.ownIssues();
   const states = own.filter((i) => i.title === STATE_TITLE).sort((a, b) => a.number - b.number);
@@ -372,9 +436,12 @@ export async function runWatch(io) {
       break;
     }
   }
-  if (walked !== null) await io.writeState(walked, state ? state.number : null);
+  // With no state yet, a first pair that fails still records where the walk began, so the next run compares that pair
+  // rather than start again at a newer newest pair and skip it.
+  const reached = walked ?? (state === null ? pairs[0]?.[0] ?? null : null);
+  if (reached !== null) await io.writeState(reached, state ? state.number : null);
   if (failure !== null) {
-    io.log(`::error::codex-wire-watch: ${failure}; the state stays at ${walked ?? lastWalked ?? '(none)'}`);
+    io.log(`::error::codex-wire-watch: ${failure}; the state is ${reached ?? lastWalked ?? '(none)'}`);
     return 1;
   }
   return 0;

@@ -4,9 +4,15 @@
 // 0.155.0 removal of the compaction endpoint constant; no upstream source is copied here), and the walk runs through
 // the module's own GitHub layer with `fetch` injected, so nothing here opens a socket. The workflow reads the real
 // files at run time. Mutation rows G1-G4, and G5-G9 (the author filter, the missing-file refusal, the test-module
-// cut, the enum scan and the printable-name bound), are measured in the commit body of Task 19.
+// cut, the enum scan and the printable-name bound), are measured in the commit body of Task 19; G10-G19 (fix round
+// 1: the CLI's exit codes, the first-run state seed, the release flags and paging, the body's length cap, the serde
+// names and the printable-name class and length) in the fix round's. The CLI cases run the script as a child process
+// against a fake served on loopback, with a synthetic token and nothing of this environment passed on.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
@@ -97,8 +103,35 @@ describe('wireReport over the nine contract files', () => {
     const after = { ...BASE };
     after['core/src/client.rs'] = BASE['core/src/client.rs']!
       .replace('const RESPONSES_ENDPOINT: &str = "/responses";',
-        'const RESPONSES_ENDPOINT: &str = "/responses";\nconst DOCS_URL: &str = "https://example.invalid/`x`";\nconst HELP_URL: &str = "ask @someone";');
+        'const RESPONSES_ENDPOINT: &str = "/responses";\nconst DOCS_URL: &str = "https://example.invalid/`x`";\nconst HELP_URL: &str = "ask @someone";'
+        + '\nconst TEAM_URL: &str = "@team-a";\nconst MARKUP_URL: &str = "<b>x</b>";'
+        + `\nconst LONG_PATH: &str = "/${'a'.repeat(200)}";`);
     expect(wireReport(BASE, after).findings).toEqual([]);
+  });
+
+  it('a change to a serde rename, tag or rename_all of what is sent is a finding', () => {
+    const after = { ...BASE };
+    after['protocol/src/models.rs'] = BASE['protocol/src/models.rs']!
+      .replace('#[serde(tag = "type", rename_all = "snake_case")]', '#[serde(tag = "kind", rename_all = "camelCase")]')
+      .replace('    Reasoning(ReasoningItem),\n', '    #[serde(rename = "reasoning_item")]\n    Reasoning(ReasoningItem),\n')
+      .replace('arguments: String, call_id: String', 'arguments: String, #[serde(rename = "id")] call_id: String');
+    after['codex-api/src/common.rs'] = BASE['codex-api/src/common.rs']!
+      .replace('    pub store: bool,\n', '    #[serde(rename = "store_flag")]\n    pub store: bool,\n');
+    expect(wireReport(BASE, after).findings).toEqual([
+      'removed request-struct field `ResponseItem#rename_all=snake_case` (protocol/src/models.rs)',
+      'removed request-struct field `ResponseItem#tag=type` (protocol/src/models.rs)',
+      'added request-struct field `ResponseItem#rename_all=camelCase` (protocol/src/models.rs)',
+      'added request-struct field `ResponseItem#tag=kind` (protocol/src/models.rs)',
+      'added request-struct field `ResponseItem::FunctionCall.call_id=id` (protocol/src/models.rs)',
+      'added request-struct field `ResponseItem::Reasoning=reasoning_item` (protocol/src/models.rs)',
+      'added request-struct field `ResponsesApiRequest.store=store_flag` (codex-api/src/common.rs)',
+    ]);
+    const renamed = { ...after };
+    renamed['codex-api/src/common.rs'] = after['codex-api/src/common.rs']!.replace('"store_flag"', '"store_on"');
+    expect(wireReport(after, renamed).findings).toEqual([
+      'removed request-struct field `ResponsesApiRequest.store=store_flag` (codex-api/src/common.rs)',
+      'added request-struct field `ResponsesApiRequest.store=store_on` (codex-api/src/common.rs)',
+    ]);
   });
 
   it('a name that moves between contract files is no finding', () => {
@@ -174,11 +207,24 @@ describe('the issue text', () => {
       '',
     ].join('\n'));
   });
+
+  it('stays under GitHub\'s body limit however long the findings, and counts the rest', () => {
+    const files = CONTRACT_FILES.join(', ');
+    const findings = Array.from({ length: 200 }, (_, k) => `removed endpoint literal \`/${String(k).padStart(3, '0')}${'x'.repeat(196)}\` (${files})`);
+    const body = issueBody(tag(161), tag(162), { changed: [...CONTRACT_FILES], findings });
+    expect(body.length).toBeLessThanOrEqual(65_536);
+    const shown = body.split('\n').filter((l) => l.startsWith('- removed ')).length;
+    expect(shown).toBeGreaterThan(0);
+    expect(body).toContain(`- … and ${200 - shown} more\n`);
+    expect(200 - shown).toBeGreaterThan(0);
+  });
 });
 
 // ─── the walk, through the module's own GitHub layer with fetch injected ────────
 
 type Issue = { number: number, title: string, body: string, user: { login: string, type: string }, pull_request?: object };
+/** A release, newest first as the API lists them: a tag, or a tag with its draft and prerelease flags. */
+type Release = string | { tag: string, draft?: boolean, prerelease?: boolean };
 type Call = { method: string, url: string, auth?: string, body?: { title?: string, body?: string } };
 
 const API = 'http://api.fake.invalid';
@@ -186,20 +232,26 @@ const REPO = 'owner-a/repo-a';
 const bot = { login: 'github-actions[bot]', type: 'Bot' };
 
 /** A fake of the four REST calls the walk makes. `files[tag]` is that tag's contract set, or a number: the
- *  status every contents request at that tag answers. Nothing here opens a socket. */
-function fakeGitHub(opts: { tags: string[], files: Record<string, Record<string, string> | number>, issues: Issue[] }) {
+ *  status every contents request at that tag answers. Lists are paged by `per_page` and `page`, as the API pages
+ *  them. Nothing here opens a socket. */
+function fakeGitHub(opts: { tags: Release[], files: Record<string, Record<string, string> | number>, issues: Issue[], api?: string }) {
+  const api = opts.api ?? API;
   const calls: Call[] = [];
+  const logs: string[] = [];
   const issues = opts.issues.map((i) => ({ ...i }));
   const json = (v: unknown, status = 200): Response => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json' } });
   const fetchImpl = async (input: string, init: { method?: string, body?: string, headers?: Record<string, string> } = {}): Promise<Response> => {
     const method = init.method ?? 'GET';
     calls.push({ method, url: input, auth: init.headers?.authorization, ...(init.body ? { body: JSON.parse(init.body) } : {}) });
-    if (!input.startsWith(`${API}/`)) throw new Error(`the walk reached outside the fake: ${input}`);
+    if (!input.startsWith(`${api}/`)) throw new Error(`the walk reached outside the fake: ${input}`);
     const u = new URL(input);
     const page = Number(u.searchParams.get('page') ?? '1');
+    const perPage = Number(u.searchParams.get('per_page') ?? '30');
+    const paged = <T>(all: T[]): T[] => all.slice((page - 1) * perPage, page * perPage);
     if (method === 'GET' && u.pathname === `/repos/${UPSTREAM}/releases`) {
-      const all = opts.tags.map((t, i) => ({ tag_name: t, draft: false, prerelease: false, id: i }));
-      return json(page === 1 ? all : []);
+      return json(paged(opts.tags.map((t, i) => (typeof t === 'string'
+        ? { tag_name: t, draft: false, prerelease: false, id: i }
+        : { tag_name: t.tag, draft: t.draft === true, prerelease: t.prerelease === true, id: i }))));
     }
     const contents = new RegExp(`^/repos/${UPSTREAM}/contents/codex-rs/(.+)$`).exec(u.pathname);
     if (method === 'GET' && contents) {
@@ -210,7 +262,7 @@ function fakeGitHub(opts: { tags: string[], files: Record<string, Record<string,
       return text === undefined ? json({ message: 'Not Found' }, 404) : new Response(text, { status: 200 });
     }
     if (u.pathname === `/repos/${REPO}/issues`) {
-      if (method === 'GET') return json(page === 1 ? issues : []);
+      if (method === 'GET') return json(paged(issues));
       if (method === 'POST') {
         const b = JSON.parse(init.body ?? '{}');
         const made = { number: 100 + issues.length, title: b.title, body: b.body, user: bot };
@@ -227,10 +279,13 @@ function fakeGitHub(opts: { tags: string[], files: Record<string, Record<string,
     }
     return json({ message: `unexpected ${method} ${u.pathname}` }, 500);
   };
-  const io = githubIo({ repo: REPO, token: 'synthetic-token', apiBase: API, fetchImpl, log: () => {} });
+  const io = githubIo({ repo: REPO, token: 'synthetic-token', apiBase: api, fetchImpl, log: (l) => { logs.push(l); } });
   const posted = () => calls.filter((c) => c.method === 'POST').map((c) => c.body?.title);
   const patched = () => calls.filter((c) => c.method === 'PATCH').map((c) => `${c.url.split('/').pop()}=${c.body?.body}`);
-  return { io, calls, posted, patched, issues };
+  /** The pairs the walk compared, from its own log lines. */
+  const walkedPairs = () => logs.flatMap((l) => /^codex-wire-watch: (\S+): \d+ file/.exec(l)?.[1] ?? []);
+  const read = (t: string) => calls.some((c) => c.url.includes(`ref=${encodeURIComponent(t)}`));
+  return { io, calls, logs, posted, patched, walkedPairs, read, issues, fetchImpl };
 }
 
 describe('the walk', () => {
@@ -266,6 +321,45 @@ describe('the walk', () => {
     expect(await runWatch(gh.io)).not.toBe(0);
     expect(gh.posted()).toEqual([]);
     expect(gh.patched()).toEqual([]);
+  });
+
+  it('with no state yet, a newest pair that fails still records its older tag, and the next run compares that pair', async () => {
+    const gh = fakeGitHub({ tags: [tag(161), tag(160)], files: { [tag(160)]: BASE, [tag(161)]: 500 }, issues: [] });
+    expect(await runWatch(gh.io)).toBe(1);
+    expect(gh.posted()).toEqual([STATE_TITLE]);
+    expect(gh.issues.find((i) => i.title === STATE_TITLE)?.body).toBe(tag(160));
+    // A release lands before the next run: the pair that failed is compared, not skipped for the new newest pair.
+    const next = fakeGitHub({
+      tags: [tag(162), tag(161), tag(160)], files: { [tag(160)]: BASE, [tag(161)]: BASE, [tag(162)]: BASE }, issues: gh.issues,
+    });
+    expect(await runWatch(next.io)).toBe(0);
+    expect(next.walkedPairs()).toEqual([`${tag(160)}..${tag(161)}`, `${tag(161)}..${tag(162)}`]);
+  });
+
+  it('a draft or a prerelease with a stable-shaped tag is never walked', async () => {
+    const gh = fakeGitHub({
+      tags: [{ tag: tag(163), draft: true }, { tag: tag(162), prerelease: true }, tag(161), tag(160)],
+      files: { [tag(160)]: BASE, [tag(161)]: BASE, [tag(162)]: 500, [tag(163)]: 500 },
+      issues: [{ number: 7, title: STATE_TITLE, body: tag(160), user: bot }],
+    });
+    expect(await runWatch(gh.io)).toBe(0);
+    expect(gh.walkedPairs()).toEqual([`${tag(160)}..${tag(161)}`]);
+    expect(gh.patched()).toEqual([`7=${tag(161)}`]);
+    expect(gh.read(tag(162)) || gh.read(tag(163))).toBe(false);
+  });
+
+  it('a state on the second page of releases walks every stable tag on both pages', async () => {
+    const alphas = (minor: number, n: number): Release[] =>
+      Array.from({ length: n }, (_, k) => ({ tag: `rust-v0.${minor}.0-alpha.${n - k}`, prerelease: true }));
+    const tags: Release[] = [tag(163), ...alphas(163, 130), tag(162), tag(161), tag(160), ...alphas(160, 16)];
+    expect(tags).toHaveLength(150);
+    const gh = fakeGitHub({
+      tags, files: { [tag(160)]: BASE, [tag(161)]: BASE, [tag(162)]: BASE, [tag(163)]: BASE },
+      issues: [{ number: 7, title: STATE_TITLE, body: tag(161), user: bot }],
+    });
+    expect(await runWatch(gh.io)).toBe(0);
+    expect(gh.walkedPairs()).toEqual([`${tag(161)}..${tag(162)}`, `${tag(162)}..${tag(163)}`]);
+    expect(gh.patched()).toEqual([`7=${tag(163)}`]);
   });
 
   it('a pair whose issue already exists is walked and not opened twice', async () => {
@@ -305,6 +399,60 @@ describe('the walk', () => {
     expect(gh.calls.every((c) => c.url.startsWith(`${API}/repos/`))).toBe(true);
     expect(gh.calls.every((c) => c.auth === 'Bearer synthetic-token')).toBe(true);
   });
+});
+
+/** Serve one fake on loopback and run the CLI against it as a child process, with a synthetic token and no other
+ *  environment than PATH: its exit status. */
+async function runCli(build: (api: string) => ReturnType<typeof fakeGitHub>, env: Record<string, string> = { GITHUB_TOKEN: 'synthetic-token' }): Promise<number | null> {
+  let gh: ReturnType<typeof fakeGitHub> | undefined;
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      void gh!.fetchImpl(`${api}${req.url ?? ''}`, {
+        method: req.method ?? 'GET',
+        headers: { authorization: String(req.headers.authorization ?? '') },
+        ...(body ? { body } : {}),
+      }).then(async (r) => {
+        res.writeHead(r.status, { 'content-type': r.headers.get('content-type') ?? 'text/plain' });
+        res.end(Buffer.from(await r.arrayBuffer()));
+      }, (e: unknown) => { res.writeHead(500); res.end(String(e)); });
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const api = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  gh = build(api);
+  try {
+    const child = spawn(process.execPath, [SCRIPT, '--repo', REPO], {
+      env: { PATH: process.env.PATH ?? '', GITHUB_API_URL: api, ...env }, stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    return await new Promise<number | null>((resolve, reject) => { child.on('error', reject); child.on('close', (code) => resolve(code)); });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+const SCRIPT = path.join(HERE, '..', '..', '.github', 'ci', 'codex-wire-watch.mjs');
+
+describe('the CLI', () => {
+  it('exits 0 on a walk that compared every pair', async () => {
+    const code = await runCli((api) => fakeGitHub({ api, tags: [tag(161), tag(160)], files: { [tag(160)]: BASE, [tag(161)]: BASE }, issues: [] }));
+    expect(code).toBe(0);
+  }, 30_000);
+
+  it('exits non-zero on a pair that could not be compared', async () => {
+    const code = await runCli((api) => fakeGitHub({
+      api, tags: [tag(162), tag(161), tag(160)],
+      files: { [tag(160)]: BASE, [tag(161)]: BASE, [tag(162)]: 500 },
+      issues: [{ number: 7, title: STATE_TITLE, body: tag(160), user: bot }],
+    }));
+    expect(code).toBe(1);
+  }, 30_000);
+
+  it('exits 2 when it cannot start the walk', async () => {
+    const code = await runCli((api) => fakeGitHub({ api, tags: [], files: {}, issues: [] }), {});
+    expect(code).toBe(2);
+  }, 30_000);
 });
 
 describe('the workflow', () => {
