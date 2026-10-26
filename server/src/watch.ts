@@ -9718,7 +9718,7 @@ export class FleetWatcher {
     // behaviour. Reached by a typed result rather than by `node:sqlite`'s bare
     // `RangeError`, but landing in the same place on purpose, and it throws
     // BEFORE `insertAsk` so there is nothing to compensate.
-    const sib = this.deps.coord!.openRunsForSession(r.id);
+    const sib = this.deps.coord!.bindingsOf(r.id).worker();
     if (!sib.ok) throw new Error(`hold: ${sib.detail}`);
     const openRuns = sib.siblings;
     const runId = openRuns.length > 0 ? openRuns[openRuns.length - 1]!.id : null;
