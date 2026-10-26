@@ -12,7 +12,9 @@
  * nothing and prices the reclaim; `--apply` unlinks only a non-keeper copy whose
  * bytes are a prefix of the keeper's or whose message uuids the keeper holds;
  * a tie, a divergence, a recent carry and a held carry slot each refuse by
- * name, and so does a carry that lands while the run is going (a swap.log line
+ * name, and a refusal is all or nothing for its uuid (a proved copy beside a
+ * diverged or recent one is not unlinked, no sidecar is linked);
+ * `--identical-only` leaves a proved copy that is not byte-identical, counted; and so does a carry that lands while the run is going (a swap.log line
  * past the start, or a `cp -p` copy: old mtime, new ctime); identical sidecar files become one inode through the #338 link route,
  * and with no route they are left and counted; the live session's transcript
  * is never touched. The refusal words are a closed vocabulary, spelled once.
@@ -172,6 +174,62 @@ describe('ccd carry-dedupe: the keeper and the transcript proof', () => {
     expect(refusal(done.out)).toBe('diverged');
     expect(fs.existsSync(transcript('.claude'))).toBe(true);
     expect(dedupeLines()[0]).toMatch(/ kept=claude-d unlinked=0 bytes=0 refused=diverged /);
+  });
+
+  it('(c2) all or nothing per uuid: one copy diverged, another proved: nothing of the uuid is unlinked or linked', () => {
+    const R = 'tool-results/r.json';
+    const body = lines(ids(10));
+    put(transcript('.claude'), body.slice(0, 300));               // proved: a byte prefix of the keeper's
+    put(transcript('.claude-a'), lines([...ids(3), 'only-on-a']));  // diverged: a message uuid the keeper lacks
+    put(transcript('.claude-d'), body);
+    put(sidecar('.claude', R), 'RESULT-BODY\n');
+    put(sidecar('.claude-d', R), 'RESULT-BODY\n');
+    row('sess-b', 'claude-d');
+    const dry = run('');
+    expect(refusal(dry.out)).toBe('diverged');
+    expect(dry.out.split('\n').find((l) => l.startsWith(UUID)), 'the dry run prices nothing for a refused uuid').toMatch(/ claude-d +0 +0 +0 diverged$/);
+    const done = run('--apply');
+    expect(done.rc, done.out).toBe(0);
+    expect(refusal(done.out)).toBe('diverged');
+    expect(done.out.split('\n').find((l) => l.startsWith(UUID))).toMatch(/ claude-d +0 +0 +0 diverged$/);
+    expect(fs.existsSync(transcript('.claude')), 'the proved copy stays: its uuid was refused').toBe(true);
+    expect(fs.existsSync(transcript('.claude-a'))).toBe(true);
+    expect(ino(sidecar('.claude', R)), 'no sidecar is linked for a refused uuid').not.toBe(ino(sidecar('.claude-d', R)));
+    expect(dedupeLines()[0]).toMatch(/ kept=claude-d unlinked=0 bytes=0 refused=diverged linked=0$/);
+  });
+
+  it('(c3) all or nothing per uuid: a recent copy beside a proved one leaves both', () => {
+    const body = lines(ids(10));
+    put(transcript('.claude'), body.slice(0, 300));
+    put(transcript('.claude-a'), body.slice(0, 200), Math.floor(Date.now() / 1000) - 60);
+    put(transcript('.claude-d'), body);
+    row('sess-b', 'claude-d');
+    const done = run('--apply');
+    expect(refusal(done.out)).toBe('recent');
+    expect(fs.existsSync(transcript('.claude'))).toBe(true);
+    expect(fs.existsSync(transcript('.claude-a'))).toBe(true);
+    expect(dedupeLines()[0]).toMatch(/ unlinked=0 bytes=0 refused=recent /);
+  });
+
+  it('(c4) --identical-only: a strict-prefix copy is left and counted, a byte-identical one goes', () => {
+    const body = lines(ids(10));
+    put(transcript('.claude'), body.slice(0, 300));   // proved by prefix, not identical
+    put(transcript('.claude-a'), body);               // identical to the keeper's (same size, same sha256)
+    put(transcript('.claude-d'), body);
+    row('sess-b', 'claude-d');
+    const dry = run('--identical-only');
+    expect(dry.out).toMatch(/identical copies only/);
+    expect(dry.out).toMatch(/ NONIDENT REFUSED$/m);
+    expect(dry.out.split('\n').find((l) => l.startsWith(UUID))).toMatch(new RegExp(` claude-d +1 +0 +${body.length} +1 -$`));
+    const done = run('--apply --identical-only');
+    expect(done.rc, done.out).toBe(0);
+    expect(refusal(done.out)).toBe('-');
+    expect(fs.existsSync(transcript('.claude')), 'the strict-prefix copy is not a candidate').toBe(true);
+    expect(fs.existsSync(transcript('.claude-a')), 'the identical copy is reclaimed').toBe(false);
+    expect(dedupeLines()[0]).toMatch(new RegExp(` unlinked=1 bytes=${body.length} refused=- linked=0 nonidentical=1$`));
+    // Without the flag the default proof is unchanged: the prefix copy goes.
+    expect(refusal(run('--apply').out)).toBe('-');
+    expect(fs.existsSync(transcript('.claude'))).toBe(false);
   });
 
   it('(d) carried an hour ago (the real carry\'s swap.log line): skipped recent', () => {

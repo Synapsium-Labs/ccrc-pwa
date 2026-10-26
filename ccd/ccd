@@ -27410,7 +27410,7 @@ print(f'merged {added} {replaced} {len(diverged)} {deferred}')
 PY
 }
 
-cmd_carry_dedupe() {   # [--apply] [--uuid U] [--min-age-hours H] — reclaim the stale transcript copies swap carries left behind (#317). Dry run by default.
+cmd_carry_dedupe() {   # [--apply] [--uuid U] [--min-age-hours H] [--identical-only] — reclaim the stale transcript copies swap carries left behind (#317). Dry run by default.
   # THE BACKLOG (#317 items 3-4). `_swap_carry_jsonl` COPIES the transcript and
   # never removes the source: a transcript is appended to, so it cannot be a
   # hardlink, and every account a session passed through keeps a full stale
@@ -27444,6 +27444,11 @@ cmd_carry_dedupe() {   # [--apply] [--uuid U] [--min-age-hours H] — reclaim th
   #      `cp -p` carry since: old mtime, new inode), is `recent`.
   #      An inode's bytes count as reclaimed only when every one of its names is
   #      unlinked. Each name is re-stat'ed just before its unlink.
+  #      ALL OR NOTHING: one name refused (`diverged`, `recent`) leaves every
+  #      copy of the uuid and its sidecars as they are (FILES 0, LINKED 0).
+  #      `--identical-only` narrows the candidates to names byte-identical to
+  #      the keeper's (size, then sha256); a proved name that is not is left,
+  #      counted in the NONIDENT column (`nonidentical=N`), and refuses nothing.
   #   5. SIDECARS: for each non-keeper sidecar tree, a regular file equal to the
   #      keeper's at the same relpath (size, then sha256) and not `recent` (4.)
   #      is replaced by a hardlink to the keeper's (temp name, then
@@ -27458,14 +27463,15 @@ cmd_carry_dedupe() {   # [--apply] [--uuid U] [--min-age-hours H] — reclaim th
   # refusals are a closed vocabulary, `DEDUPE_REFUSALS`, spelled once there;
   # `ccd-carry-dedupe.test.ts` pins it. With `--apply`, one line per
   # uuid goes to swap.log:
-  #   `carry-dedupe <uuid> kept=<account|-> unlinked=N bytes=B refused=<word|-> linked=L[, copy: <cause> F files B bytes]`
+  #   `carry-dedupe <uuid> kept=<account|-> unlinked=N bytes=B refused=<word|-> linked=L[ nonidentical=N][, copy: <cause> F files B bytes]`
   # `bytes` is everything reclaimed for the uuid, transcripts and sidecars;
   # `deploy/measure-continuity.py` sums it. Exit 0 when every uuid was handled
   # or refused for a named reason; 1 when one hit an I/O error (`error`).
-  local apply=0 only=- age=24 usage="usage: ccd carry-dedupe [--apply] [--uuid <uuid>] [--min-age-hours <n>]"
+  local apply=0 only=- age=24 ident=0 usage="usage: ccd carry-dedupe [--apply] [--uuid <uuid>] [--min-age-hours <n>] [--identical-only]"
   while (( $# )); do
     case "$1" in
       --apply)         apply=1; shift ;;
+      --identical-only) ident=1; shift ;;
       --uuid)          [[ $# -ge 2 ]] || die "$usage"; only="$2"; shift 2 ;;
       --min-age-hours) [[ $# -ge 2 ]] || die "$usage"; age="$2"; shift 2 ;;
       *)               die "$usage" ;;
@@ -27486,7 +27492,7 @@ cmd_carry_dedupe() {   # [--apply] [--uuid U] [--min-age-hours H] — reclaim th
       _reg_get_to w "$id" wrapper || w=""
       if _alive "$id"; then printf 'O\t%s\t%s\tlive\n' "$u" "$w"; else printf 'O\t%s\t%s\trow\n' "$u" "$w"; fi
     done
-  } | python3 "$lib" "$REG" "$apply" "$only" "$age" "${BASH_SOURCE[0]}"
+  } | python3 "$lib" "$REG" "$apply" "$only" "$age" "${BASH_SOURCE[0]}" "$ident"
 }
 
 _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first carry as a hardlink tree, a return visit as a merge. Always rc 0.

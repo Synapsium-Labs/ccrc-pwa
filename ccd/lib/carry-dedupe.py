@@ -1,7 +1,7 @@
 # ccd/lib/carry-dedupe.py — `ccd carry-dedupe`'s program (#317 items 3-4).
 #
 # Run only by `cmd_carry_dedupe` in ccd/ccd, whose header states the rules:
-#   python3 carry-dedupe.py <reg> <apply 0|1> <uuid|-> <min-age-hours> <ccd path>
+#   python3 carry-dedupe.py <reg> <apply 0|1> <uuid|-> <min-age-hours> <ccd path> [<identical-only 0|1>]
 # with the account roots and registry rows on stdin, one per line:
 #   A<TAB><account><TAB><config dir>      O<TAB><uuid><TAB><account><TAB>live|row
 # It lives here, not in ccd/ccd's embedded `_carry_py`, so the god file does not
@@ -36,6 +36,9 @@ def route(a, b):
 
 
 reg, apply, only, cutoff, CCD = sys.argv[1], sys.argv[2] == '1', sys.argv[3], time.time() - int(sys.argv[4]) * 3600, sys.argv[5]
+# `--identical-only`: a proved copy is a candidate only when it is byte-identical to the keeper's (same size, same
+# sha256); a proved copy that is not is left, counted per row (NONIDENT), and does not refuse the uuid.
+IDENT = len(sys.argv) > 6 and sys.argv[6] == '1'
 TMP_DD = '.ccd-carry-dedupe-'
 UUID = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 sys.stdout.reconfigure(errors='backslashreplace')
@@ -236,7 +239,7 @@ def one(u, by, out):
         kp = max(by[k]['t'], key=lambda p: (os.lstat(p).st_size, os.lstat(p).st_mtime_ns))
         kst = os.lstat(kp)
         kinos = {(os.lstat(p).st_dev, os.lstat(p).st_ino) for p in by[k]['t']}
-        refused, plan, memo = None, {}, []
+        refused, plan, memo, ksha = None, {}, [], None
         for a in sorted(by):
             for p in [] if a == k else by[a]['t']:
                 st = os.lstat(p)
@@ -244,10 +247,16 @@ def one(u, by, out):
                     continue
                 if changed(st):
                     refused = refused or RECENT
-                elif proven(p, st, kp, kst, memo):
-                    plan.setdefault((st.st_dev, st.st_ino), []).append((p, st))
-                else:
+                elif not proven(p, st, kp, kst, memo):
                     refused = refused or DIVERGED
+                elif IDENT and (st.st_size != kst.st_size or sha(p) != (ksha := ksha or sha(kp))):
+                    out['nonident'] += 1
+                else:
+                    plan.setdefault((st.st_dev, st.st_ino), []).append((p, st))
+        # ALL OR NOTHING per uuid: a transcript is unlinked with no quarantine, so one refused copy leaves every
+        # copy of the uuid, and its sidecars, exactly as they are (FILES 0, LINKED 0, the refusal word).
+        if refused:
+            return refused
         for names in plan.values():
             out['bytes'] += names[0][1].st_size if len(names) == names[0][1].st_nlink else 0
             for p, st in names:
@@ -262,18 +271,23 @@ def one(u, by, out):
 
 rc, tot = 0, {'uuids': 0, 'copies': 0, 'bytes': 0, 'refused': 0}
 print('dedupe: --apply' if apply else 'dedupe: dry run, nothing changes (pass --apply to reclaim)')
-print(f'{"UUID":<36} {"COPIES":>6} {"KEPT":<16} {"FILES":>5} {"LINKED":>6} {"BYTES":>14} REFUSED')
+if IDENT:
+    print('dedupe: identical copies only (a proved copy not byte-identical to the keeper\'s is left, NONIDENT)')
+NI = f' {"NONIDENT":>8}' if IDENT else ''
+print(f'{"UUID":<36} {"COPIES":>6} {"KEPT":<16} {"FILES":>5} {"LINKED":>6} {"BYTES":>14}{NI} REFUSED')
 for u in sorted(u for u in held if len(held[u]) > 1):
-    out = {'kept': '-', 'unlinked': 0, 'linked': 0, 'bytes': 0, 'copy': {}, 'n': 0}
+    out = {'kept': '-', 'unlinked': 0, 'linked': 0, 'bytes': 0, 'copy': {}, 'n': 0, 'nonident': 0}
     try:
         why = one(u, held[u], out)
     except OSError as e:
         print(f'ccd: carry-dedupe {u}: {e!r}', file=sys.stderr)
         why, rc = IO_ERROR, 1
     tot['uuids'] += 1; tot['copies'] += len(held[u]); tot['bytes'] += out['bytes']; tot['refused'] += 1 if why else 0
-    print(f'{u:<36} {len(held[u]):>6} {out["kept"]:<16} {out["unlinked"]:>5} {out["linked"]:>6} {out["bytes"]:>14} {why or "-"}')
+    ni = f' {out["nonident"]:>8}' if IDENT else ''
+    print(f'{u:<36} {len(held[u]):>6} {out["kept"]:<16} {out["unlinked"]:>5} {out["linked"]:>6} {out["bytes"]:>14}{ni} {why or "-"}')
     if apply:
         cp = ''.join(f', copy: {c} {v[0]} files {v[1]} bytes' for c, v in sorted(out['copy'].items()))
+        cp = (f' nonidentical={out["nonident"]}' if IDENT else '') + cp
         with open(os.path.join(reg, 'swap.log'), 'a') as fh:
             fh.write(f'{time.strftime("%Y-%m-%d %H:%M:%S")} carry-dedupe {u} kept={out["kept"]} unlinked={out["unlinked"]} '
                      f'bytes={out["bytes"]} refused={why or "-"} linked={out["linked"]}{cp}\n')
