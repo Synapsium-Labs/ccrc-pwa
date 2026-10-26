@@ -79,14 +79,18 @@ Each goes into the PR's Residuals.
 - [ ] **Step 2: run it red.** `./node_modules/.bin/vitest run test/history-rss-preload.test.ts`. Predicted:
   - The spawn guard reds at the bound (`expected <about 409,600 or more> to be less than 204800`), because today's preload prints maxRSS.
   - Each unit case reds at its dynamic import of the missing module.
+  - Measured (Node 24, this box): 7 failed. The guard red `expected 416612 to be less than 204800`, the parent at 480,940 KiB. Each unit case red `Cannot find module` on `rss-peak.mjs`.
 - [ ] **Step 3: the fix.** Create `rss-peak.mjs` and wire the preload as in Interfaces. Its header comment says why maxRSS is wrong on Linux, citing D-6964. Then add the ring and the one allowance to `history-lib.test.ts`'s `FIXTURE_RING` (D-6965), and the one line to `ci.yml`'s node floor Test list. Before the ring edit, run `history-lib.test.ts -t` on its fixture-ring case: it reds on `rss-peak.mjs has no ring` and on the forbidden import. After it, the case is green.
+  - Measured: before the ring edit the case reds once, on `preload-rss.mjs: expected [ './rss-peak.mjs' ] to deeply equal []`. The loop reaches `preload-rss.mjs` before `rss-peak.mjs` and stops at the first failure, so `rss-peak.mjs has no ring` is never printed. Both are the ring's red.
 - [ ] **Step 4: run it green**, and record the guard's printed figure.
+  - Measured: 7 passed; the child printed 48,700 KiB (source `vmhwm`) with the parent at 481,100 KiB. A bare Node child measures about 47 MiB, not 45.
 - [ ] **Step 5: mutants, each measured red and restored byte for byte (`cmp`):**
   - M1: the preload prints `process.resourceUsage().maxRSS` again. The spawn guard reds.
   - M2: `ownPeakKiB` drops its `catch`, so a throwing reader throws. The throwing-reader case reds.
   - M3: the positive check is dropped, so `VmHWM: 0 kB` answers `vmhwm` 0. Its case reds.
   - M4: the allowance is removed from `FIXTURE_RING`. The fixture-ring case reds on the forbidden import.
   - M5: `rss-peak.mjs` gains an import (`import 'node:fs';`). Under its no-import ring, the fixture-ring case reds.
+  - Measured, each restored by `cp` from a saved copy and `cmp` silent: M1 `expected 417084 to be less than 204800`; M2 reds the throwing-reader case and the fallback-values case (2 failed); M3 `expected { kib: +0, source: 'vmhwm' } to deeply equal { kib: 55, source: 'maxrss' }`; M4 `preload-rss.mjs: expected [ './rss-peak.mjs' ] to deeply equal []`; M5 `rss-peak.mjs: expected [ 'node:fs' ] to deeply equal []`.
 - [ ] **Step 6: commit.** `test(history): the RSS preload reads the process's own peak, not the spawning worker's (CP-38 Task 1; D-6964, D-6965)`.
 
 ### Task 2: every consumer re-measured

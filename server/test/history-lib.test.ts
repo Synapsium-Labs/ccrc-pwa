@@ -120,13 +120,17 @@ describe('every ccd/history module and history test fixture keeps its ring (spec
    *   (FU6, B3M21/B3M22): a lazy `import()` that LAZY_IMPORTS names for that file, exactly. preload-faults.mjs reads store.mjs's
    *   StoreError that way, past its patches, so that a fault it injects is the error class the reader really classifies. A test
    *   preload reading a shipped error class crosses no shipped ring, and the list is per file and exact, never a switch.
+   * - The one STATIC allowance (CP-38, D-6965), in the same style: preload-rss.mjs imports `./rss-peak.mjs`, the pure reader of the process's
+   *   own peak, and STATIC_IMPORTS names that for that file, exactly (an unused allowance reds too). rss-peak.mjs itself imports nothing.
    * - run-pass imports the three history modules and node builtins, never `node:sqlite`, so it reaches SQLite only through store.mjs.
    */
   const FIXTURE_RING = (name: string): ((s: string) => boolean) | null =>
     /^preload-[a-z0-9-]+\.mjs$/.test(name) ? (s) => !s.startsWith('node:')
     : name === 'run-pass.mjs' ? (s) => !(/^(\.\.\/){4}ccd\/history\/(sweep|store|lib)\.mjs$/.test(s) || (s.startsWith('node:') && s !== 'node:sqlite'))
+    : name === 'rss-peak.mjs' ? () => true
     : null;
   const LAZY_IMPORTS: Record<string, string[]> = { 'preload-faults.mjs': ['../../../../ccd/history/store.mjs'] };
+  const STATIC_IMPORTS: Record<string, string[]> = { 'preload-rss.mjs': ['./rss-peak.mjs'] };
 
   it("CONTROL: the scanner reads named, default, namespace, multi-line, export-from and side-effect imports, skips comment lines, and is not blinded by a /* inside a string", () => {
     expect(specsOf("import a from 'x1';\nimport * as b from 'x2';\nimport {\n c,\n} from 'x3';\nexport { d } from 'x4';\nimport 'x5';\n// import 'x6'\n/* import 'x7' */").sort()).toEqual(['x1', 'x2', 'x3', 'x4', 'x5']);
@@ -192,7 +196,7 @@ describe('every ccd/history module and history test fixture keeps its ring (spec
       const forbids = FIXTURE_RING(n);
       expect(forbids, `${n} has no ring`).not.toBeNull();
       const src = readFileSync(join(FIX, n), 'utf8');
-      expect(specsOf(src).filter(forbids!), n).toEqual([]);
+      expect(specsOf(src).filter(forbids!), n).toEqual(STATIC_IMPORTS[n] ?? []);
       // The one dynamic-import door a fixture may hold is named per file and exact (a list, not a switch): FU4's M30 fault
       // takes StoreError from store.mjs lazily, past its patches. Any other `import(` in a fixture reds.
       const dynamic = [...codeOf(src).matchAll(/(?<![.\w])import\s*\(\s*['"]([^'"]+)['"]\s*\)/g)].map((x) => x[1]!);
