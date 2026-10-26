@@ -8,8 +8,9 @@
 // rows G1-G4, and G5-G9 (the author filter, the missing-file refusal, the test-module cut, the enum scan and the
 // printable-name bound), are measured in the commit body of Task 19; G10-G19 (fix round 1: the CLI's exit codes, the
 // first-run state seed, the release flags and paging, the body's length cap, the serde names and the printable-name
-// class and length) in fix round 1's; G20-G24 (fix round 2: the first-run paging stop, `<`, `>` and whitespace each
-// alone, and the CLI's API base) in fix round 2's.
+// class and length) in fix round 1's; G20-G25 and G20b (fix round 2: the first-run paging stop, `<`, `>` and
+// whitespace each alone, the CLI's API base and that the CLI walk reached the fake) in fix round 2's; G26-G27 (fix
+// round 3: each arm of the release paging stop set never to stop) in fix round 3's.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -355,8 +356,9 @@ describe('the walk', () => {
   it('a state on the second page of releases walks every stable tag on both pages', async () => {
     const alphas = (minor: number, n: number): Release[] =>
       Array.from({ length: n }, (_, k) => ({ tag: `rust-v0.${minor}.0-alpha.${n - k}`, prerelease: true }));
-    const tags: Release[] = [tag(163), ...alphas(163, 130), tag(162), tag(161), tag(160), ...alphas(160, 16)];
-    expect(tags).toHaveLength(150);
+    // 201 releases: page 2 is full, so only the stop predicate ends the paging there, before page 3.
+    const tags: Release[] = [tag(163), ...alphas(163, 130), tag(162), tag(161), tag(160), ...alphas(160, 67)];
+    expect(tags).toHaveLength(201);
     const gh = fakeGitHub({
       tags, files: { [tag(160)]: BASE, [tag(161)]: BASE, [tag(162)]: BASE, [tag(163)]: BASE },
       issues: [{ number: 7, title: STATE_TITLE, body: tag(161), user: bot }],
@@ -364,17 +366,21 @@ describe('the walk', () => {
     expect(await runWatch(gh.io)).toBe(0);
     expect(gh.walkedPairs()).toEqual([`${tag(161)}..${tag(162)}`, `${tag(162)}..${tag(163)}`]);
     expect(gh.patched()).toEqual([`7=${tag(163)}`]);
+    expect(gh.calls.filter((c) => c.url.includes('/releases?')).length).toBe(2);
   });
 
   it('with no state yet, a first page holding one stable tag pages on to the second for the newest pair', async () => {
     const alphas = (minor: number, n: number): Release[] =>
       Array.from({ length: n }, (_, k) => ({ tag: `rust-v0.${minor}.0-alpha.${n - k}`, prerelease: true }));
-    const tags: Release[] = [tag(163), ...alphas(163, 130), tag(162), tag(161), tag(160), ...alphas(160, 16)];
+    // 201 releases: page 2 is full, so only the stop predicate ends the paging there, before page 3.
+    const tags: Release[] = [tag(163), ...alphas(163, 130), tag(162), tag(161), tag(160), ...alphas(160, 67)];
+    expect(tags).toHaveLength(201);
     const gh = fakeGitHub({ tags, files: { [tag(162)]: BASE, [tag(163)]: BASE }, issues: [] });
     expect(await runWatch(gh.io)).toBe(0);
     expect(gh.walkedPairs()).toEqual([`${tag(162)}..${tag(163)}`]);
     expect(gh.posted()).toEqual([STATE_TITLE]);
     expect(gh.issues.find((i) => i.title === STATE_TITLE)?.body).toBe(tag(163));
+    expect(gh.calls.filter((c) => c.url.includes('/releases?')).length).toBe(2);
   });
 
   it('a pair whose issue already exists is walked and not opened twice', async () => {
@@ -417,9 +423,11 @@ describe('the walk', () => {
 });
 
 /** Preloaded into the child: its global `fetch` refuses any URL off 127.0.0.1, so a regression in how the CLI picks
- *  its API base fails the case instead of sending the synthetic token to a live endpoint. */
-const LOOPBACK_ONLY = 'data:text/javascript,const f=globalThis.fetch;globalThis.fetch=(u,i)=>{const s=String(u instanceof Request?u.url:u);'
-  + 'return new URL(s).hostname==="127.0.0.1"?f(u,i):Promise.reject(new Error("off loopback: "+s))};';
+ *  its API base fails the case instead of sending the synthetic token to a live endpoint. The source is
+ *  percent-encoded, so none of its characters (its `?` included) depends on how a loader parses a data: URL. */
+const LOOPBACK_ONLY = 'data:text/javascript,' + encodeURIComponent('const f=globalThis.fetch;globalThis.fetch=(u,i)=>{'
+  + 'const s=String(u instanceof Request?u.url:u);'
+  + 'return new URL(s).hostname==="127.0.0.1"?f(u,i):Promise.reject(new Error("off loopback: "+s))};');
 
 /** Serve one fake on loopback and run the CLI against it as a child process, with a synthetic token and no other
  *  environment than PATH: its exit status, and the fake, whose `calls` show the walk reached it. */

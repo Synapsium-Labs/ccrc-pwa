@@ -9,9 +9,10 @@
 //
 // The walk never skips a release. A pair counts as walked only when all nine files were read at both of its tags and
 // its issue (if any) is open; the first pair that cannot be compared ends the walk, the state stays at the last pair
-// walked, and the job exits non-zero. With no state issue yet, the walk is the newest pair, and the state is created
-// at its older tag even when that pair fails. The state and the "already opened" check read only issues the
-// workflow's own token opened (`BOT_LOGIN`): this repository is public, and anyone can open an issue with either title.
+// walked, and the job exits non-zero. With no state issue yet, the walk is the newest pair: the state is created at
+// its newer tag, or at its older tag when that pair fails. The state and the "already opened" check read only issues
+// the workflow's own token opened (`BOT_LOGIN`): this repository is public, and anyone can open an issue with either
+// title.
 //
 // When upstream moves or renames a contract file, the walk stops at the pair that spans the move, for good: the older
 // tag has only the old path and the newer tag only the new one, so that pair is never comparable, before or after

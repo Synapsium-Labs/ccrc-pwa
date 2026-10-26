@@ -4,9 +4,9 @@
 # and opens one issue per pair with findings (`codex wire: <old>..<new>`).
 # The last walked tag is the body of one issue, `codex wire: state`, which
 # the first run creates. A pair that cannot be compared ends the walk with
-# the state left at the last pair walked, and fails this job (with no state
-# yet, the state is created at the older tag of the newest pair, even when
-# that pair fails).
+# the state left at the last pair walked, and fails this job. With no state
+# yet, the walk is the newest pair: the state is created at its newer tag,
+# or at its older tag when that pair fails.
 # If upstream moves or renames a contract file, the pair that spans the move
 # fails on every run, even after CONTRACT_FILES follows it. To recover:
 # update CONTRACT_FILES, read that pair's diff by hand, then set the state
