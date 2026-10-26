@@ -12730,6 +12730,83 @@ w6cDescribe('W2-6 Task 3: combine, the nodes\' reports summed into one arm compa
     w6cExpect(w6cRefusalOf(() => W6C_T3.combineReports([]))).toEqual({ word: 'args-invalid', detail: 'node-report-required' });
   });
 
+  // Review 963 F1: a node report is data. combine refuses a row or an answer off the shapes count writes, never folding or
+  // coercing it. The shaped nodes answer each counter with exactly the measured value its measure writes, and are combined
+  // with the real specs (the default measures), whose `answer` checks are what refuse.
+  const [F1_C, F1_E, F1_L, F1_S, F1_M, F1_R] = W6C_NAMES as [string, string, string, string, string, string];
+  const F1_SHAPED: Record<string, unknown> = {
+    [F1_C]: 'not-requested',
+    [F1_E]: { hits: 1, errors: 0, untimed: 0, unreadable: { tombstone: 1 }, prov_stale: 0, recall_calls: 2, gap: 1 },
+    [F1_L]: { lag_ms: 40, tick_ts_ms: 10 },
+    [F1_S]: { verdict: 'served', attachments_unread: 0 },
+    [F1_M]: { verdict: 'served', attachments_unread: 0 },
+    [F1_R]: { hit: true, distinct_paths: 1, reads: 2, sources: 1, unresolved: 0 },
+  };
+  /** The real specs with their measures replaced by the shaped answers; their folds and `answer` checks are the real ones. */
+  const f1Shaped = (ctr: W6cR): W6cR => Object.fromEntries(W6C_NAMES.map((name) => [name, { ...ctr.COUNTER_MEASURES[name],
+    measure: (ctx: W6cR): W6cR => (ctx.turns === null ? { state: 'unmeasured', why: 'window-unmeasured' } : { state: 'measured', value: F1_SHAPED[name] }) }]));
+  /** combine over node A and node B whose first window is `edit`ed: the refusal as {word, detail}, null when it folds. */
+  const f1Refusal = (A: W6cR, B: W6cR, edit: (w: W6cR) => W6cR): W6cRefusal =>
+    w6cRefusalOf(() => W6C_T3.combineReports([{ sha256: 'a1'.repeat(32), value: A }, { sha256: 'b2'.repeat(32), value: { ...B, windows: [edit(B.windows[0]), ...B.windows.slice(1)] } }]));
+  const f1Answer = (name: string, value: unknown) => (w: W6cR): W6cR => ({ ...w, measures: { ...w.measures, [name]: { state: 'measured', value } } });
+  /** Every edit is refused input-invalid, counters-shape, with `detail` naming what is off; the unedited report folds first. */
+  async function f1Refuses(edits: Array<(w: W6cR) => W6cR>, detail: RegExp): Promise<void> {
+    const ctr = await w6cLoad();
+    const sh = f1Shaped(ctr);
+    const A = w6cT3AsRead(w6cFrame(ctr, { measures: sh }));
+    const B = w6cT3AsRead(w6cT3NodeB(ctr, sh));
+    w6cExpect(B.windows[0].state, 'CONTROL: B\'s first window is measured').toBe('measured');
+    w6cExpect(f1Refusal(A, B, (w) => w), 'CONTROL: the shaped nodes fold').toBeNull();
+    for (const edit of edits) {
+      const r = f1Refusal(A, B, edit);
+      w6cExpect(r?.word).toBe('input-invalid');
+      w6cExpect(r?.detail).toMatch(/^counters-shape: /);
+      w6cExpect(r?.detail).toMatch(detail);
+    }
+  }
+
+  w6cIt('combine refuses a measured row\'s turns that is no count, and an unmeasured row\'s that is not null (review 963 F1)', async () => {
+    await f1Refuses([(w) => ({ ...w, turns: null }), (w) => ({ ...w, turns: '3' }), (w) => ({ ...w, turns: -1 }), (w) => ({ ...w, turns: 1.5 }),
+      (w) => ({ ...w, state: 'unmeasured' })], /a (measured|unmeasured) row's turns is /);
+  });
+
+  w6cIt('combine refuses a measured row\'s recall_calls that is no count, and an unmeasured row\'s that is not null (review 963 F1)', async () => {
+    await f1Refuses([(w) => ({ ...w, recall_calls: '7' }), (w) => ({ ...w, recall_calls: null }), (w) => ({ ...w, recall_calls: -1 }),
+      (w) => ({ ...w, state: 'unmeasured', turns: null })], /a (measured|unmeasured) row's recall_calls is /);
+  });
+
+  const f1Off = (name: string): RegExp => new RegExp(`^counters-shape: countersReport: ${name} answered a measured value off its shape`);
+  w6cIt('combine refuses a compliance answer that is no status string (review 963 F1)', async () => {
+    await f1Refuses([f1Answer(F1_C, 7), f1Answer(F1_C, ['ok']), f1Answer(F1_C, {})], f1Off(F1_C));
+  });
+  w6cIt('combine refuses an echo_hits answer off its keys or counts (review 963 F1)', async () => {
+    const ok = F1_SHAPED[F1_E] as Record<string, unknown>;
+    await f1Refuses([f1Answer(F1_E, { unreadable: {} }), f1Answer(F1_E, { ...ok, hits: '1' }), f1Answer(F1_E, { ...ok, errors: -1 }), f1Answer(F1_E, { ...ok, gap: 0.5 }),
+      f1Answer(F1_E, { ...ok, unreadable: { tombstone: 'x' } }), f1Answer(F1_E, { ...ok, unreadable: [1] }), f1Answer(F1_E, { ...ok, extra: 0 })], f1Off(F1_E));
+  });
+  w6cIt('combine refuses a lag answer off its keys or counts (review 963 F1)', async () => {
+    await f1Refuses([f1Answer(F1_L, { lag_ms: 'x' }), f1Answer(F1_L, { lag_ms: -5, tick_ts_ms: 1 }), f1Answer(F1_L, { lag_ms: 5, tick_ts_ms: '1' }),
+      f1Answer(F1_L, 40)], f1Off(F1_L));
+  });
+  w6cIt('combine refuses a card_served answer off its verdict or its unread count (review 963 F1)', async () => {
+    await f1Refuses([f1Answer(F1_S, { verdict: 'served', attachments_unread: 'q' }), f1Answer(F1_S, { verdict: 'wait', attachments_unread: 0 }),
+      f1Answer(F1_S, { verdict: 'served' }), f1Answer(F1_S, { verdict: 'served', attachments_unread: -1 })], f1Off(F1_S));
+  });
+  w6cIt('combine refuses a card_id_mismatch answer off its verdict or its unread count (review 963 F1)', async () => {
+    await f1Refuses([f1Answer(F1_M, { verdict: 'wait', attachments_unread: 0 }), f1Answer(F1_M, { verdict: 'mismatch', attachments_unread: 'q' }),
+      f1Answer(F1_M, { verdict: 'mismatch', attachments_unread: 0, extra: 1 })], f1Off(F1_M));
+  });
+  w6cIt('combine refuses a rediscovery answer off its keys, its indicator or its counts (review 963 F1)', async () => {
+    const ok = F1_SHAPED[F1_R] as Record<string, unknown>;
+    await f1Refuses([f1Answer(F1_R, {}), f1Answer(F1_R, { ...ok, hit: 'yes' }), f1Answer(F1_R, { ...ok, reads: -1 }), f1Answer(F1_R, { ...ok, unresolved: 0.5 }),
+      f1Answer(F1_R, { ...ok, sources: '1' })], f1Off(F1_R));
+  });
+  w6cIt('every real counter spec states the shape of the value it writes, as its `answer` (review 963 F1; CONTROL: a stand-in spec states none and is not checked)', async () => {
+    const ctr = await w6cLoad();
+    for (const name of W6C_NAMES) w6cExpect(typeof ctr.COUNTER_MEASURES[name].answer, name).toBe('function');
+    w6cExpect(typeof w6cProbe()[W6C_NAMES[0]!].answer, 'CONTROL').toBe('undefined');
+  });
+
   w6cIt('combine writes one report under a fresh --out, its sha the one stderr line; its paired list flags must pair, and a flag outside its form is args-invalid', async () => {
     const ctr = await w6cLoad();
     const quiet = Object.fromEntries(W6C_NAMES.map((name) => [name, { source: `fixture: ${name}`, measure: (): W6cR => ({ state: 'unmeasured', why: 'window-unmeasured' }),

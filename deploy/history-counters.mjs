@@ -89,8 +89,10 @@ function nonEmpty(name, values) {
  *    boundary: object, window: object, copy: object | null, turns: Array<object> | null, calls: Array<[number, number, string]>,
  *    nowMs: number }} WindowCtx */
 /** One counter: the source it reads, named; its measure of one window; its fold of a stratum's measured values, never
- *  called on none.
- *  @typedef {{ source: string, measure: (ctx: WindowCtx) => Measure, fold: (values: unknown[]) => unknown }} CounterSpec */
+ *  called on none. `answer`, when a spec states it, is the shape of the measured value that counter writes: combine refuses
+ *  a node report's measured answer that fails it (a stand-in spec that states none is not checked).
+ *  @typedef {{ source: string, measure: (ctx: WindowCtx) => Measure, fold: (values: unknown[]) => unknown,
+ *    answer?: (value: unknown) => boolean }} CounterSpec */
 
 /** The frame's own sources, named in every report beside each counter's (W2-D87: every source is named). */
 export const FRAME_SOURCES = Object.freeze({
@@ -133,10 +135,17 @@ function checkMeasures(measures) {
 }
 
 /** One measure's answer, checked: measured with a value (never null), or unmeasured with a COUNTER_UNMEASURED word.
- *  Anything else is a defect.  @param {string} name  @param {unknown} a  @returns {Measure} */
-function answerOf(name, a) {
+ *  Anything else is a defect. When the counter's spec states the shape of its value (`valueOk`, combine hands it), a
+ *  measured value off that shape is the same refusal, never coerced.
+ *  @param {string} name  @param {unknown} a  @param {((value: unknown) => boolean) | undefined} [valueOk]  @returns {Measure} */
+function answerOf(name, a, valueOk) {
   const o = /** @type {any} */ (a);
-  if (o?.state === 'measured' && o.value !== undefined && o.value !== null) return { state: 'measured', value: o.value };
+  if (o?.state === 'measured' && o.value !== undefined && o.value !== null) {
+    if (valueOk !== undefined && !valueOk(o.value)) {
+      throw new TypeError(`countersReport: ${name} answered a measured value off its shape: ${JSON.stringify(o.value).slice(0, 200)}`);
+    }
+    return { state: 'measured', value: o.value };
+  }
   if (o?.state === 'unmeasured' && COUNTER_UNMEASURED.includes(o.why)) return { state: 'unmeasured', why: o.why };
   throw new TypeError(`countersReport: ${name} answered ${JSON.stringify(a ?? null)}: a measure answers measured with a value or unmeasured with a COUNTER_UNMEASURED word`);
 }
@@ -705,7 +714,7 @@ function cardVerdictOf(ctx) {
 export function foldCardFor(verdict) {
   if (verdict !== 'served' && verdict !== 'mismatch') throw new TypeError(`history-counters: a card counter counts served or mismatch, not ${verdict}`);
   return (values) => {
-    const verdicts = { served: 0, mismatch: 0, none: 0 };
+    const verdicts = Object.fromEntries(CARD_VERDICT_WORDS.map((w) => [w, 0]));
     let unread = 0;
     for (const v of nonEmpty(`foldCardFor(${verdict})`, values)) {
       if (!Object.hasOwn(verdicts, v.verdict)) throw new TypeError(`history-counters: not a card verdict: ${v.verdict}`);
@@ -716,22 +725,42 @@ export function foldCardFor(verdict) {
   };
 }
 
+// The shape of each counter's measured value, as its measure above writes it (review 963 F1): the keys it writes and,
+// where it writes an integer, a non-negative safe one (echo_hits' gap is a difference and may be negative). combine
+// refuses a node report's answer that is off its counter's shape; count's own measures write these shapes.
+/** A count a measure writes: a non-negative safe integer.  @param {unknown} v */
+const isCount = (v) => Number.isSafeInteger(v) && /** @type {number} */ (v) >= 0;
+/** A plain object (not a list).  @param {unknown} v */
+const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+/** A plain object holding exactly these keys.  @param {unknown} v  @param {string[]} keys */
+const hasKeys = (v, keys) => isPlain(v) && Object.keys(/** @type {object} */ (v)).length === keys.length && keys.every((k) => Object.hasOwn(/** @type {object} */ (v), k));
+/** The verdicts a card counter measures: decideCardDelivery's three that close a window (its wait is unmeasured). */
+const CARD_VERDICT_WORDS = Object.freeze(['served', 'mismatch', 'none']);
+const complianceValueOk = (v) => typeof v === 'string';
+const echoValueOk = (v) => hasKeys(v, ['hits', 'errors', 'untimed', 'unreadable', 'prov_stale', 'recall_calls', 'gap'])
+  && [v.hits, v.errors, v.untimed, v.prov_stale, v.recall_calls].every(isCount) && Number.isSafeInteger(v.gap)
+  && isPlain(v.unreadable) && Object.values(v.unreadable).every(isCount);
+const lagValueOk = (v) => hasKeys(v, ['lag_ms', 'tick_ts_ms']) && isCount(v.lag_ms) && isCount(v.tick_ts_ms);
+const cardValueOk = (v) => hasKeys(v, ['verdict', 'attachments_unread']) && CARD_VERDICT_WORDS.includes(v.verdict) && isCount(v.attachments_unread);
+const rediscoveryValueOk = (v) => hasKeys(v, ['hit', 'distinct_paths', 'reads', 'sources', 'unresolved']) && typeof v.hit === 'boolean'
+  && [v.distinct_paths, v.reads, v.sources, v.unresolved].every(isCount);
+
 /** The five spec counters, each Task 1's CounterSpec with its source named (W2-D87). */
 export const COMPLIANCE = Object.freeze({
   source: 'nodes.status of the depth-0 leaf whose boundary opens the window (lib PARSE_STATUS), with the ok plus degraded share',
-  measure: complianceAt, fold: foldCompliance,
+  measure: complianceAt, fold: foldCompliance, answer: complianceValueOk,
 });
 export const ECHO_HITS = Object.freeze({
   source: 'entries.provenance recall-echo (lib provenanceOf, stored under PROV_VERSION) in the window copy, the first tool_result through recall.mjs expandEntryBody, beside the window\'s recall_calls',
-  measure: echoAt, fold: foldEcho,
+  measure: echoAt, fold: foldEcho, answer: echoValueOk,
 });
 export const LAG = Object.freeze({
   source: 'ticks.lag_ms of the newest tick at or before the boundary with a measured lag',
-  measure: lagAt, fold: foldLag,
+  measure: lagAt, fold: foldLag, answer: lagValueOk,
 });
 const CARD_SOURCE = 'lib decideCardDelivery over cardIdsIn of the attachments in the first CARD_MEASURE_ROWS rows after the boundary in its holding copy (derive.mjs holdingCopyOf), with cardWindowComplete; the glue spelled again from card.mjs (D-6562)';
-export const CARD_SERVED = Object.freeze({ source: CARD_SOURCE, measure: cardAt, fold: foldCardFor('served') });
-export const CARD_ID_MISMATCH = Object.freeze({ source: CARD_SOURCE, measure: cardAt, fold: foldCardFor('mismatch') });
+export const CARD_SERVED = Object.freeze({ source: CARD_SOURCE, measure: cardAt, fold: foldCardFor('served'), answer: cardValueOk });
+export const CARD_ID_MISMATCH = Object.freeze({ source: CARD_SOURCE, measure: cardAt, fold: foldCardFor('mismatch'), answer: cardValueOk });
 
 // ── W2-6 Task 3: re-discovery (W2-D86), the sixth counter ───────────────────────────────────────────────────────────
 // Re-discovery, per window of a listed family (W2-D86): a Read tool_use in turns 1 to K of the window whose file path,
@@ -881,7 +910,7 @@ export function foldRediscovery(values) {
 /** The sixth counter's spec, in Task 1's shape (W2-D86, W2-D87). */
 export const REDISCOVERY = Object.freeze({
   source: 'Read tool_use paths in the window\'s turns 1 to K against the Read, Edit, MultiEdit, Write and NotebookEdit paths of leaf N\'s node_sources span, both made absolute against N\'s epoch cwd, bodies through recall.mjs expandEntryBody; Bash reads (cat, sed, rg) are not counted (W2-D86)',
-  measure: rediscoveryAt, fold: foldRediscovery,
+  measure: rediscoveryAt, fold: foldRediscovery, answer: rediscoveryValueOk,
 });
 
 // ── W2-6 Task 3: combine, the nodes' reports summed into one arm comparison (W2-D88; U2) ─────────────────────────────
@@ -889,26 +918,36 @@ export const REDISCOVERY = Object.freeze({
 // comparison stays W2-6's (U2). The nodes must agree on the record, the window, the definitions, K and the counter that
 // ran, and that counter must be this one: the strata are re-folded from the concatenated per-window rows through Task 1's
 // stratify and this file's own folds, so counts add and no summary is ever added to another. A node report is data: a
-// row or an answer off Task 1's shapes is refused, never folded.
+// row or an answer off the shapes count writes is refused, never folded or coerced: a row's turns and recall_calls (a
+// non-negative integer on a measured row, null on an unmeasured one) and each counter's measured value (its spec's
+// `answer`). A row's store_id is not checked against its node report's (a named residual).
 
 export const COUNTERS_COMBINED_KIND = 'ccrc-history-w2-counters-combined';
 export const COUNTERS_COMBINED_FILE = 'counters-combined.json';
 /** The node-report fields every node must share, and the combined report carries once. */
 const COMBINE_SAME = Object.freeze(['counters_def', 'k', 'k_unit', 'record_nodes', 'record_sha256', 'script_sha256', 'window']);
 
-/** One node report's row, checked against Task 1's row shape, each answer re-checked by answerOf. */
-function combineRow(w) {
+/** One node report's row, checked against Task 1's row shape (a measured row's turns and recall_calls are counts, an
+ *  unmeasured row's are null), each answer re-checked by answerOf against its counter's spec (review 963 F1).
+ *  @param {any} w  @param {Record<string, any>} measures */
+function combineRow(w, measures) {
   if (w === null || typeof w !== 'object' || !ASSIGNMENT_ARMS.includes(w.arm) || !BACKENDS.includes(w.producer)
     || typeof w.changed !== 'boolean' || typeof w.unrealised !== 'boolean' || (w.state !== 'measured' && w.state !== 'unmeasured')) {
     throw new TypeError(`combine: a row off the counter's shape: ${JSON.stringify(w ?? null).slice(0, 200)}`);
   }
-  return { ...w, measures: Object.fromEntries(COUNTER_NAMES.map((n) => [n, answerOf(n, w.measures?.[n])])) };
+  for (const k of ['turns', 'recall_calls']) {
+    if (w.state === 'measured' ? !isCount(w[k]) : w[k] !== null) {
+      throw new TypeError(`combine: a ${w.state} row's ${k} is ${JSON.stringify(w[k] ?? null)}, where ${w.state === 'measured' ? 'a non-negative integer' : 'null'} is the shape`);
+    }
+  }
+  return { ...w, measures: Object.fromEntries(COUNTER_NAMES.map((n) => [n, answerOf(n, w.measures?.[n], measures[n]?.answer)])) };
 }
 
 /** The nodes' reports summed (U2). Each node is {sha256, value}. Refused input-invalid, in this order: a value that is
  *  no counter report (counters-shape); definitions other than v1 (counters-def-mismatch); a COMBINE_SAME field other than
  *  the first node's (node-mismatch); a counter other than this one (script-mismatch); a store twice (store-duplicate);
- *  a row, an answer or a list off its shape (counters-shape). The record's stores no node report covers are named in
+ *  a row, an answer or a list off its shape (counters-shape): a row's turns and recall_calls, and each counter's measured
+ *  value against its spec's `answer`. The record's stores no node report covers are named in
  *  nodes_missing, never refused: the comparison says it is over fewer nodes than the record assigned (U2). measures and
  *  ownSha256 are injectable for tests. */
 export function combineReports(nodes, { measures = COUNTER_MEASURES, ownSha256 = scriptSha256() } = {}) {
@@ -933,7 +972,7 @@ export function combineReports(nodes, { measures = COUNTER_MEASURES, ownSha256 =
   const sorted = (xs) => [...xs].sort();
   try {
     const reps = nodes.map(({ value: r }) => r);
-    const rows = reps.flatMap((r) => r.windows.map(combineRow));
+    const rows = reps.flatMap((r) => r.windows.map((w) => combineRow(w, measures)));
     return {
       kind: COUNTERS_COMBINED_KIND, v: 1, counters_def: first.counters_def, k: first.k, k_unit: first.k_unit,
       record_sha256: first.record_sha256, script_sha256: first.script_sha256, window: first.window,
@@ -964,7 +1003,9 @@ export function combineReports(nodes, { measures = COUNTER_MEASURES, ownSha256 =
 }
 
 /** combine: the paired node-report flags, a fresh --out, each node report sha-checked before it is parsed, the sum built
- *  in memory, and only then --out, with counters-combined.json written once. Every refusal comes before --out exists. */
+ *  in memory, and only then --out, with counters-combined.json written once. Every refusal of an input comes before --out
+ *  exists; the one exception is writeReport's: a write failure after prepareOut made --out refuses out-refused and leaves
+ *  the marked --out, which a re-run then refuses as existing. */
 export function combineCommand(flags) {
   checkFormFlags('combine', flags);
   const paths = flags['node-report'];
