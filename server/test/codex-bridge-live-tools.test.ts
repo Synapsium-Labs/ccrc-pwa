@@ -673,6 +673,72 @@ describe.skipIf(!PY)('the live probe: the first live step, bounded (codex-bridge
     }
   });
 
+  /** `liveprobe.main` for step 1 in the fixture `home`, imported directly with `backend.post` replaced by one that
+   *  sends nothing and answers 200 with `x-request-id: req-fx1` and the body `mode` names: `raise-mid-stream` yields a
+   *  completed event and then raises, `raise-head` streams a completed event but has `record.head` raise. Both
+   *  raise a ValueError carrying SENTINEL. The script's last stderr line is `driver rc=<n> closed=<0|1>`, written
+   *  only when main returns. */
+  const SENTINEL = 'SENTINELRAISED';
+  function probeFaked(home: string, mode: 'raise-mid-stream' | 'raise-head'): Run {
+    const completed = ev('response.completed', { response: { status: 'completed', end_turn: true, usage: { input_tokens: 1 } } });
+    const script = [
+      'import json, sys',
+      'sys.dont_write_bytecode = True',
+      'sys.path.insert(0, sys.argv[1])',
+      'from codexbridge import backend, liveprobe, record',
+      'mode, completed, sentinel, lane = sys.argv[2], sys.argv[3].encode("utf-8"), sys.argv[4], sys.argv[5]',
+      'closed = []',
+      'def chunks():',
+      '    yield completed',
+      '    if mode == "raise-mid-stream":',
+      '        raise ValueError(sentinel)',
+      'def fake_post(base, body, headers, **kw):',
+      '    return backend.Upstream(200, {"x-request-id": "req-fx1"}, chunks(), lambda: closed.append(1))',
+      'backend.post = fake_post',
+      'if mode == "raise-head":',
+      '    def bad_head(status, headers):',
+      '        raise ValueError(sentinel)',
+      '    record.head = bad_head',
+      'rc = liveprobe.main(["--lane", lane, "--step", "1"])',
+      'sys.stdout.flush()',
+      'sys.stderr.write("driver rc=%d closed=%d\\n" % (rc, 1 if closed else 0))',
+    ].join('\n');
+    const r = spawnSync(PY!, ['-I', '-c', script, CCD_DIR, mode, completed, SENTINEL, LANE], {
+      cwd: home, encoding: 'utf8', timeout: 15_000,
+      env: {
+        PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: tmpdir(), CCRC_CODEX_AUTH_LIB: BRIDGE_AUTH_LIB,
+        CCGPT_BRIDGE_UPSTREAM_BASE: CLOSED_AUTH_BASE, CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE, HOME: home,
+      },
+    });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  }
+
+  it("a failure inside the answer's stream is named by its class, and what came before it is still reported", () => {
+    const home = mkTmp('cb-live-probe-midstream-');
+    const lane = plantBridgeLane(home, LANE);
+    touch(path.join(lane.laneDir, 'liveprobe-allowed'));
+    const r = probeFaked(home, 'raise-mid-stream');
+    expect(r.status, r.stderr).toBe(0);
+    // report()'s own catch: the terminal seen before the failure is still reported after the transport line
+    expect(r.stdout).toBe(['status 200', 'request-id req-fx1', 'header x-request-id', 'event response.completed',
+      'transport ValueError', 'end_turn true', 'usage input_tokens 1'].map((l) => `liveprobe: ${l}\n`).join(''));
+    expect(r.stderr).toBe('driver rc=3 closed=1\n');
+    expect(r.stdout + r.stderr).not.toContain(SENTINEL);
+    expect(readFileSync(path.join(lane.laneDir, 'liveprobe.count'), 'utf8')).toBe('1\n');
+  });
+
+  it('a failure while the answer is being recorded is named by its class, and the answer is closed', () => {
+    const home = mkTmp('cb-live-probe-recfail-');
+    const lane = plantBridgeLane(home, LANE);
+    touch(path.join(lane.laneDir, 'liveprobe-allowed'));
+    const r = probeFaked(home, 'raise-head');
+    expect(r.status, r.stderr).toBe(0);
+    // main's catch around the recording and report block
+    expect(r.stdout).toBe('liveprobe: transport ValueError\n');
+    expect(r.stderr).toBe('driver rc=3 closed=1\n');
+    expect(r.stdout + r.stderr).not.toContain(SENTINEL);
+  });
+
   it('--dry-run prints the body it would send, and sends and counts nothing', async () => {
     const home = mkTmp('cb-live-probe-dry-');
     const lane = plantBridgeLane(home, LANE, { credential: false });

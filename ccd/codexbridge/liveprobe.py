@@ -33,7 +33,9 @@ recording's cap never counts it), for the operator to scrub into the corpus (`re
 A refusal is one stderr line, `liveprobe: refused <word>: <sentence>`; any other failure before the send is
 `liveprobe: failed <class>; nothing was sent`, and one after it `liveprobe: transport <class>`: an exception is named
 by its class only, never its text (http.client formats a header value it refuses with %r). Exit 0 answered 2xx, 1
-refused or failed (nothing sent), 2 usage, 3 sent but not answered 2xx.
+refused or failed (nothing sent), 2 usage, 3 attempted and counted but not answered 2xx: the count is raised before
+the post, so a request that never left (a header http.client refuses in putheader, before endheaders writes a byte; a
+refused connection) is charged too.
 
 The CLI runs only under `__main__` (the block below), so importing the module through `load_all()` does nothing.
 """
@@ -110,6 +112,9 @@ def _name(value: object) -> str:
 def lane_files(lane: str) -> LaneFiles:
     """The lane's directory, which must hold ALLOW_MARKER before anything else is read, then its `lane.json`."""
     home = os.path.expanduser("~")
+    # Spelled here, not received: the bridge gets this path as CCGPT_LANE_DIR from ccd/ccrc's bridge environment, and
+    # deploy/models-op.mjs's laneManifest writes the lane.json in it, but the probe is an operator CLI run with no tier
+    # environment, so it has no owner to receive the path from.
     lane_dir = os.path.join(home, ".ccrc", "codex", lane)
     if not os.path.exists(os.path.join(lane_dir, ALLOW_MARKER)):
         raise Refused("no-marker", "the lane directory holds no " + ALLOW_MARKER + " marker; the operator touches it "
@@ -122,6 +127,7 @@ def lane_files(lane: str) -> LaneFiles:
                           "'ccrc update'")
         raise Refused("lane-malformed", "the lane's lane.json is out of shape at " + e.field + "; run 'ccrc update'")
     session = str(uuid.uuid5(uuid.NAMESPACE_URL, "ccrc-liveprobe:" + lane))
+    # The catalogue's path is spelled here for the same reason: the bridge receives it as CCGPT_CATALOGUE (ccd/ccrc).
     return LaneFiles(lane, lane_dir, manifest.auth_dir, os.path.join(lane_dir, manifest.files.recordings),
                      os.path.join(home, ".ccrc", "models", lane + ".json"), session)
 
@@ -319,7 +325,8 @@ def report(up: backend.Upstream, rec: Optional[record.Recording]) -> int:
     except backend.UpstreamTimeout as e:
         _out("transport timeout-" + _name(e.phase))
         ok = False
-    except Exception as e:  # its class only: an exception's text can carry a value
+    except Exception as e:  # its class only: an exception's text can carry a value. Kept apart from main's catch below,
+        # so a terminal seen before the failure is still reported (the mid-stream case pins it)
         _out("transport " + _name(type(e).__name__))
         ok = False
     if terminal is not None or ok:
@@ -417,7 +424,8 @@ def main(argv: List[str]) -> int:
         if rec is not None:
             rec.write(record.head(up.status, up.headers))
         return report(up, rec)
-    except Exception as e:  # its class only, as above
+    except Exception as e:  # its class only, as above: a failure recording the answer, or in report() outside its
+        # own catch (the recording-failure case pins it)
         _out("transport " + _name(type(e).__name__))
         return 3
     finally:
