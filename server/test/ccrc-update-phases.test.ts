@@ -14,6 +14,7 @@ import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { itLinux, itDarwin, platformContrast } from './platformFixtures.js';
 import { installVersionedTree } from './installTreeFixture.js';
+import { assertSpineFrontContained } from './codexLaneFixture.js';
 import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
 // Fix round 1 item 3 / review 155 C31: W2's OWN reader (never a hand copy),
 // the same import pattern `update-intent-cross-side.test.ts` already uses.
@@ -32,6 +33,7 @@ import {
   replantDoctorStubs,
   plantOldBox,
   plantCoordDb,
+  writeManifest,
   plantCollectJournal,
   expectJournalUntouched,
   journalCopiesUnder,
@@ -848,6 +850,17 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     // HOME becomes a LITERAL tilde character, not the redaction's own
     // process $HOME re-expanded back in.
     expect(call(`${home}/.ccrc/floor`)).toBe('~/.ccrc/floor');
+    // D-6748: a base with no scheme loses its userinfo at a token's start, with or without a ':' in it; prose's `user@host`,
+    // an email, a query's email and a scoped package name stay byte for byte.
+    expect(call('fetching user:s3cretTOKEN@127.0.0.1:1/rel/x and "tok@h/r"')).toBe('fetching 127.0.0.1:1/rel/x and "h/r"');
+    // Fix round 3: a '<' or '"' past the run's first character is the password's; one that starts a token still ends prose.
+    expect(call('see <u:p<w@h/r> and u:p"w@h/r')).toBe('see <h/r> and h/r');
+    // Fix round 4, F1: a scheme followed by one slash or by three (curl authenticates with both) loses its userinfo, its
+    // slashes kept as written.
+    expect(call('fetching http:/u:s3cretTOKEN@h/r and https:///u:s3cretTOKEN@h/r')).toBe('fetching http:/h/r and https:///h/r');
+    for (const kept of ['curl: (6) user@host', 'mail a@example.com today', 'https://h/r?email=a@example.com/y', '@scope/pkg']) {
+      expect(call(kept), kept).toBe(kept);
+    }
   });
 
   // Review fix round 1, M6: the OLD blind substring replace was not
@@ -987,6 +1000,350 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       expect(r.status, `${verb} must actually have refused`).not.toBe(0);
     }
   });
+
+  // D-6748 (fix round 1, F7): a base in ccrc.env with NO scheme (`user:pass@host/r`, which curl takes as http) is masked by
+  // `_upd_redact` as the scheme form is, on each of the three ways it would leave the box: the fetching line, the die line and
+  // update.json's detail. The poisoned curl (exit 99) fails the first fetch, so `_upd_resolve`'s URL-bearing die fires.
+  const schemeless = (prefix: string, base?: { url: string; from: 'file' | 'env' | 'env-bytes' }): { r: Result; secret: string; home: string } => {
+    const secret = 's3cretTOKEN';
+    const home = mkTmp(prefix);
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const url = base?.url ?? `user:${secret}@127.0.0.1:1/rel`;
+    if (base === undefined || base.from === 'file') writeFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=${url}\n`);
+    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
+    delete env['CCRC_RELEASE_BASE_URL'];
+    if (base?.from === 'env') env['CCRC_RELEASE_BASE_URL'] = url;
+    assertNoRealTool(env, home);
+    // 'env-bytes': node passes an env value as UTF-8, so a raw invalid byte is made by printf's `%b` in a bash that then runs ccrc.
+    const p = base?.from === 'env-bytes'
+      ? spawnSync(BASH, ['-c', 'CCRC_RELEASE_BASE_URL="$(printf %b "$1")"; export CCRC_RELEASE_BASE_URL; exec "$BASH" "$2" update --to v0.0.1',
+        '_', url, join(REPO, 'ccd', 'ccrc')], { env: { ...env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' }, encoding: 'utf8' })
+      : spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', '--to', 'v0.0.1'], { env, encoding: 'utf8' });
+    const r = { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
+    expect(r.code, `it must refuse: ${r.stderr}`).not.toBe(0);
+    return { r, secret, home };
+  };
+  const SCHEMELESS_URL = '127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS';
+
+  it('a scheme-less credentialed base in ccrc.env: the fetching line names the URL without its userinfo (D-6748)', () => {
+    const { r, secret } = schemeless('ccrc-redact-schemeless-fetch-');
+    expect(r.stdout.split('\n'), r.stdout).toContain(`update: fetching ${SCHEMELESS_URL} …`);
+    expect(r.stdout).not.toContain(secret);
+    expect(r.stdout).not.toContain('user:');
+  });
+
+  it('a scheme-less credentialed base in ccrc.env: the download-failed die names the URL without its userinfo (D-6748)', () => {
+    const { r, secret } = schemeless('ccrc-redact-schemeless-die-');
+    const die = r.stderr.split('\n').filter((l) => l.includes('download failed:'));
+    expect(die, r.stderr).toHaveLength(1);
+    expect(die[0]).toContain(SCHEMELESS_URL);
+    expect(r.stderr).not.toContain(secret);
+    expect(r.stderr).not.toContain('user:');
+  });
+
+  it('a scheme-less credentialed base in ccrc.env: update.json\'s detail names the URL without its userinfo (D-6748)', () => {
+    const { secret, home } = schemeless('ccrc-redact-schemeless-json-');
+    const raw = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
+    const detail = String(JSON.parse(raw).detail ?? '');
+    expect(detail, raw).toContain('download failed:');
+    expect(detail).toContain('127.0.0.1:1/rel/download/');
+    expect(raw).not.toContain(secret);
+    expect(raw).not.toContain('user:');
+  });
+
+  // D-6748 (fix round 3, item 1): a password may hold a raw '<' or '"' (curl sends both in a scheme-less userinfo), so the mask
+  // runs through them past the run's first character. Each row reads all three ways out: the fetching line, the one die line
+  // and update.json's detail; no fragment of the userinfo may appear in any of them.
+  // The third: an invalid UTF-8 byte (from the environment, as the file reader refuses a non-ASCII line) under a UTF-8 locale,
+  // where bash's `=~` matches characters and an invalid byte ended every run, until `_upd_redact` read bytes (LC_ALL=C).
+  for (const [label, from, pass] of [['<', 'file', 'S3cr<etTOKEN'], ['"', 'env', 'S3cr"etTOKEN'],
+    ['an invalid UTF-8 byte', 'env-bytes', 'S3cr\\377etTOKEN']] as const) {
+    it(`a scheme-less base whose password holds ${label} (${from === 'file' ? 'ccrc.env' : from === 'env' ? 'the environment' : 'the environment, a UTF-8 locale'}): the fetching line, the die line and update.json's detail carry no part of the userinfo (D-6748, fix round 3)`, () => {
+      const { r, home } = schemeless(`ccrc-redact-schemeless-${from}-`, { url: `fleetuser:${pass}@mirror.example/rel`, from });
+      const url = 'mirror.example/rel/download/v0.0.1/SHA256SUMS';
+      expect(r.stdout.split('\n'), r.stdout).toContain(`update: fetching ${url} …`);
+      const die = r.stderr.split('\n').filter((l) => l.includes('download failed:'));
+      expect(die, r.stderr).toHaveLength(1);
+      expect(die[0]).toContain(url);
+      const raw = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
+      const detail = String(JSON.parse(raw).detail ?? '');
+      expect(detail, raw).toContain(`download failed: ${url}`);
+      for (const [where, text] of [['stdout', r.stdout], ['stderr', r.stderr], ['update.json', raw]]) {
+        for (const part of ['fleetuser', 'S3cr', 'etTOKEN']) expect(text, `${where} carries ${part}`).not.toContain(part);
+      }
+    });
+  }
+
+  // D-6748 (fix round 4, F1): a scheme followed by one slash (`http:/`) or by three (`https:///`): curl authenticates with
+  // both, and `_upd_release_base` does not validate the scheme, so each reaches the three ways out, from ccrc.env and from
+  // the environment alike. The userinfo goes and the slashes stay as written.
+  for (const [scheme, from] of [['http:/', 'file'], ['http:/', 'env'], ['https:///', 'file'], ['https:///', 'env']] as const) {
+    it(`a base spelled ${scheme} (${from === 'file' ? 'ccrc.env' : 'the environment'}): the fetching line, the die line and update.json's detail carry no part of the userinfo (D-6748, fix round 4)`, () => {
+      const { r, home } = schemeless(`ccrc-redact-slashes-${from}-`, { url: `${scheme}fleetuser:S3cr3tTOKEN@mirror.example/rel`, from });
+      const url = `${scheme}mirror.example/rel/download/v0.0.1/SHA256SUMS`;
+      expect(r.stdout.split('\n'), r.stdout).toContain(`update: fetching ${url} …`);
+      const die = r.stderr.split('\n').filter((l) => l.includes('download failed:'));
+      expect(die, r.stderr).toHaveLength(1);
+      expect(die[0]).toContain(url);
+      const raw = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
+      const detail = String(JSON.parse(raw).detail ?? '');
+      expect(detail, raw).toContain(`download failed: ${url}`);
+      for (const [where, text] of [['stdout', r.stdout], ['stderr', r.stderr], ['update.json', raw]]) {
+        for (const part of ['fleetuser', 'S3cr3t', 'TOKEN']) expect(text, `${where} carries ${part}`).not.toContain(part);
+      }
+    });
+  }
+
+  // D-6748 (fix round 5, review 926's F1): curl expands `{…}` and `[…]` in a URL before it parses it, so a base spelled
+  // `http:{/}/u:p@h` authenticated while `_upd_redact` printed it whole. Every release curl passes `-g`: curl then refuses such
+  // a base (rc 3) before it sends anything, and never globs the tarball name SHA256SUMS supplies. Read off the fixture curl's
+  // full argv, one curl at a time, by the URL it fetched: `_upd_resolve`'s SHA256SUMS, `_upd_fetch`'s tarball and bundle, and
+  // `_upd_asset_listed`'s probe (rollback's pre-check and arm 2's, one function).
+  it('every release curl passes -g: SHA256SUMS, the tarball, the bundle and _upd_asset_listed\'s probe (D-6748, fix round 5)', () => {
+    const home = freshUpdateBox('ccrc-update-globoff-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--to', 'v2.0.0']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const env = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases` };
+    replantDoctorStubs(home);
+    assertNoRealTool(env, home);
+    const p = spawnSync(BASH, ['-c', '. "$1"; _upd_asset_listed v2.0.0 SHA256SUMS; echo "rc $?"', 'ccrc-under-test',
+      join(REPO, 'ccd', 'ccrc')], { env, encoding: 'utf8' });
+    expect(p.stdout, `stderr: ${p.stderr}`).toBe('rc 0\n');
+    const argv = curlFullArgv(home);
+    const url = (line: string): string => line.trim().split(/\s+/).pop() ?? '';
+    const globoff = (line: string): boolean => line.trim().split(/\s+/).some((t) => t === '--globoff' || /^-[A-Za-z]*g[A-Za-z]*$/.test(t));
+    const rel = `local://${home}/releases/download/v2.0.0/`;
+    const calls: Array<[string, string[]]> = [
+      ['SHA256SUMS (resolve, then the probe)', argv.filter((l) => url(l) === `${rel}SHA256SUMS`)],
+      ['the tarball', argv.filter((l) => url(l) === `${rel}ccrc-v2.0.0.tar.gz`)],
+      ['the bundle', argv.filter((l) => url(l) === `${rel}ccrc-v2.0.0.tar.gz.sigstore.json`)],
+    ];
+    expect(calls.map(([, ls]) => ls.length), argv.join('\n')).toEqual([2, 1, 1]);
+    expect(calls[0][1][1], 'the second SHA256SUMS call is the probe').toMatch(/ -o \/dev\/null /);
+    for (const [what, ls] of calls) for (const l of ls) expect(globoff(l), `${what}: ${l}`).toBe(true);
+  });
+
+  // D-6751 (fix round 5, review 926's F2): two values the release host supplies, SHA256SUMS's tarball name and the staged
+  // build.json's version (under --allow-unsigned, nothing but the transport checksum vouches for it), are held to 200
+  // characters where each is read. Neither curl's --max-filesize (curl 8.4.0 or later, the default knob) nor anything else bounds
+  // them otherwise, and `_upd_redact`'s loops grow about x7-8 per doubling on the review's combined shape (a failing `"a` run,
+  // then `<x@y/` units). The fixture curl serves each value whole, as an older curl or a raised knob would let through, at
+  // 100 000 characters and at that shape at about 16 000: the run must die naming the length, every sentence that leaves the
+  // box (the die line, the fetching lines, update.json's detail) must stay within 200 characters, and the run must end in 30 s.
+  const worstShape = (n: number): string => `x${'"a'.repeat(Math.floor(n / 4))}@ ${'<x@y/'.repeat(Math.floor(n / 10))}`;
+  const boundedRun = (home: string, args: string[], locale?: string): { r: Result; ms: number } => {
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases`,
+      ...(locale === undefined ? {} : { LANG: locale, LC_ALL: locale }) };
+    replantDoctorStubs(home);
+    assertSpineFrontContained(env, home);
+    assertNoRealTool(env, home);
+    const t0 = Date.now();
+    // The spawn's own 90 s kill only ends a run the bound did not; the 30 s assertion below is the row's measure.
+    const p = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', ...args], { env, encoding: 'utf8', timeout: 90_000 });
+    return { r: { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' }, ms: Date.now() - t0 };
+  };
+  const expectBounded = (home: string, run: { r: Result; ms: number }, lead: string, value: string): void => {
+    const { r, ms } = run;
+    expect(ms, `the run took ${ms} ms`).toBeLessThan(30_000);
+    expect(r.code, `stderr: ${r.stderr.slice(0, 2000)}`).toBe(1);
+    const die = r.stderr.split('\n').filter((l) => l.startsWith(`ccrc: ${lead} is `));
+    expect(die, r.stderr.slice(0, 2000)).toHaveLength(1);
+    expect(die[0]).toContain(`${lead} is ${value.length} bytes or not printable ASCII, not a ccrc release's (starts: ${value.slice(0, 40)}) — refusing`);
+    expect(die[0].length, die[0]).toBeLessThanOrEqual(200);
+    const fetching = r.stdout.split('\n').filter((l) => l.startsWith('update: fetching '));
+    expect(fetching.length, r.stdout.slice(0, 2000)).toBeGreaterThan(0);
+    for (const l of fetching) expect(l.length, l.slice(0, 300)).toBeLessThanOrEqual(200);
+    const report = JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+    expect(report['phase']).toBe('failed');
+    expect(String(report['detail'])).toContain(`${lead} is ${value.length} bytes or not printable ASCII`);
+    expect(String(report['detail']).length).toBeLessThanOrEqual(200);
+    expect(r.stdout + r.stderr, 'more than 200 characters of the value left the box').not.toContain(value.slice(0, 201));
+  };
+  for (const [label, name] of [['100 000 characters', `ccrc-${'x'.repeat(100_000 - 12)}.tar.gz`],
+    ['the combined worst shape at about 16 000 characters', worstShape(16_000)]] as const) {
+    it(`SHA256SUMS naming a tarball of ${label}: the update dies at the read naming its length, every sentence within 200 characters, within 30 s (D-6751, fix round 5)`, () => {
+      const home = freshUpdateBox('ccrc-update-bound-name-');
+      plantOldBox(home, { version: 'v1.0.0' });
+      const relDir = join(home, 'releases', 'latest', 'download');
+      mkdirSync(relDir, { recursive: true });
+      writeFileSync(join(relDir, 'SHA256SUMS'), `${'a'.repeat(64)}  ${name}\n`);
+      expectBounded(home, boundedRun(home, []), 'SHA256SUMS\'s tarball name', name);
+      expect(localUrls(home), 'only SHA256SUMS was fetched').toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
+    }, 150_000);
+  }
+  // R45: each die prints its 40-byte excerpt with every byte outside printable ASCII as `?`, read byte-wise (LC_ALL=C).
+  it('a 300-character tarball name with an ESC and a CR in its first 40 characters: the die and update.json\'s detail show ? for each, never the byte (D-6751, R45)', () => {
+    const home = freshUpdateBox('ccrc-update-bound-name-ctl-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const relDir = join(home, 'releases', 'latest', 'download');
+    mkdirSync(relDir, { recursive: true });
+    const name = `ccrc-\x1b[31mred\rcover-${'x'.repeat(300 - 27)}.tar.gz`;
+    expect(name.length).toBe(300);
+    writeFileSync(join(relDir, 'SHA256SUMS'), `${'a'.repeat(64)}  ${name}\n`);
+    const { r } = boundedRun(home, []);
+    expect(r.code, r.stderr).toBe(1);
+    const shown = name.slice(0, 40).replace(/[\x1b\r]/g, '?');
+    const report = JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+    const detail = String(report['detail']);
+    for (const [where, text] of [['stderr', r.stderr], ['update.json\'s detail', detail]] as const) {
+      expect(text, `${where} carries ESC`).not.toContain('\x1b');
+      expect(text, `${where} carries CR`).not.toContain('\r');
+      expect(text, where).toContain(`is 300 bytes or not printable ASCII, not a ccrc release's (starts: ${shown})`);
+    }
+    const die = r.stderr.split('\n').filter((l) => l.startsWith("ccrc: SHA256SUMS's tarball name is "));
+    expect(die, r.stderr).toHaveLength(1);
+    expect(die[0].length, die[0]).toBeLessThanOrEqual(200);
+  });
+  for (const [label, version] of [['100 000 characters', `v${'x'.repeat(100_000 - 1)}`],
+    ['the combined worst shape at about 16 000 characters', worstShape(16_000)]] as const) {
+    it(`an unsigned release whose build.json names a version of ${label}: the update dies at the read naming its length, every sentence within 200 characters, within 30 s (D-6751, fix round 5)`, () => {
+      const home = freshUpdateBox('ccrc-update-bound-version-');
+      plantOldBox(home, { version: 'v1.0.0' });
+      const tree = stubTree(home, { version: 'v2.0.0' });
+      rmSync(join(tree, 'MANIFEST'));
+      writeFileSync(join(tree, 'build.json'), `${JSON.stringify({ sha: 'newsha0000000000000000000000000000000000', ref: 'release',
+        builtAt: '2026-08-21T00:00:00Z', dirty: false, version })}\n`);
+      writeManifest(tree);
+      packRelease(home, tree, { tag: 'v2.0.0', latest: false, bundle: false });
+      expectBounded(home, boundedRun(home, ['--to', 'v2.0.0', '--allow-unsigned']), 'build.json\'s version', version);
+      expect(existsSync(join(home, 'staged-ccrc-argv')), 'the staged install ran').toBe(false);
+    }, 150_000);
+  }
+
+  // D-6751 (fix round 5 part 2, R46): a value of 200 bytes or fewer used to pass the bound and still carry raw ESC, BEL, CR
+  // or a C1 byte to the operator's terminal (the fetching line, the later dies). Each value must also be printable ASCII,
+  // matched byte-wise under LC_ALL=C, and its length is counted in bytes the same way, whatever the caller's locale.
+  const sumsName = (home: string, name: string | Buffer): void => {
+    const relDir = join(home, 'releases', 'latest', 'download');
+    mkdirSync(relDir, { recursive: true });
+    writeFileSync(join(relDir, 'SHA256SUMS'), Buffer.concat([Buffer.from(`${'a'.repeat(64)}  `), Buffer.from(name), Buffer.from('\n')]));
+  };
+  const nameDie = (r: Result): string[] => r.stderr.split('\n').filter((l) => l.startsWith("ccrc: SHA256SUMS's tarball name is "));
+  const reportRaw = (home: string): Buffer => readFileSync(join(home, '.ccrc', 'update.json'));
+  // A C0 byte but the newline, DEL, a C1 character, or U+FFFD (what a raw byte of 0x80 or more decodes to when it is not UTF-8).
+  const HOSTILE = /[\x00-\x09\x0b-\x1f\x7f-\x9f\ufffd]/;
+  // Every way out a hostile byte could take: stderr, every fetching line on stdout, and update.json.
+  const expectNoHostileByte = (home: string, r: Result): void => {
+    expect(r.stderr, 'stderr').not.toMatch(HOSTILE);
+    for (const l of r.stdout.split('\n').filter((x) => x.startsWith('update: fetching '))) expect(l, 'a fetching line').not.toMatch(HOSTILE);
+    expect(reportRaw(home).toString('utf8'), 'update.json').not.toMatch(HOSTILE);
+  };
+  it('a 30-byte tarball name carrying an OSC 52 clipboard write: the update dies at the read, and no ESC or BEL reaches stderr, a fetching line or update.json (D-6751, R46)', () => {
+    const home = freshUpdateBox('ccrc-update-bound-name-osc-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const name = 'ccrc-\x1b]52;c;SGVsbG8=\x07v1.tar.gz';
+    expect(Buffer.byteLength(name)).toBe(30);
+    sumsName(home, name);
+    const { r } = boundedRun(home, []);
+    expect(r.code, r.stderr).toBe(1);
+    expect(nameDie(r), r.stderr).toEqual(["ccrc: SHA256SUMS's tarball name is 30 bytes or not printable ASCII, not a ccrc release's (starts: ccrc-?]52;c;SGVsbG8=?v1.tar.gz) — refusing; nothing on this box was changed"]);
+    expectNoHostileByte(home, r);
+    expect(localUrls(home), 'only SHA256SUMS was fetched').toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
+  });
+  /** The UTF-8 locale this host's bash really runs under: `C.UTF-8` on Linux runners, `en_US.UTF-8` on macOS. A locale
+   *  that is not installed falls back to C silently and would hollow the UTF-8 arm, so the effect is measured, and a
+   *  host with neither runs the arm under `C.UTF-8` and fails it rather than skipping (fix round 5's re-review, m2). */
+  const UTF8 = ['C.UTF-8', 'en_US.UTF-8'].find((loc) => spawnSync(BASH, ['-c', `x=$'\\xc3\\xa9'; printf '%s' "\${#x}"`],
+    { encoding: 'utf8', env: { LC_ALL: loc } }).stdout === '1') ?? 'C.UTF-8';
+  for (const locale of [UTF8, 'C']) {
+    it(`a tarball name with one byte 0x9b (a C1 CSI), the caller's locale ${locale}: the update dies at the read and the byte reaches no way out (D-6751, R46)`, () => {
+      const home = freshUpdateBox('ccrc-update-bound-name-c1-');
+      plantOldBox(home, { version: 'v1.0.0' });
+      sumsName(home, Buffer.concat([Buffer.from('ccrc-'), Buffer.from([0x9b]), Buffer.from('2Jv1.tar.gz')]));
+      const { r } = boundedRun(home, [], locale);
+      expect(r.code, r.stderr).toBe(1);
+      expect(nameDie(r), r.stderr).toEqual(["ccrc: SHA256SUMS's tarball name is 17 bytes or not printable ASCII, not a ccrc release's (starts: ccrc-?2Jv1.tar.gz) — refusing; nothing on this box was changed"]);
+      expectNoHostileByte(home, r);
+    });
+  }
+  it('a tarball name of exactly 200 bytes passes the bound, and one of 201 bytes dies at it (D-6751, R46)', () => {
+    for (const [n, dies] of [[200, false], [201, true]] as const) {
+      const home = freshUpdateBox(`ccrc-update-bound-name-edge-${n}-`);
+      plantOldBox(home, { version: 'v1.0.0' });
+      const name = `ccrc-${'x'.repeat(n - 12)}.tar.gz`;
+      expect(name.length).toBe(n);
+      sumsName(home, name);
+      const { r } = boundedRun(home, []);
+      expect(r.code, r.stderr).toBe(1);
+      if (dies) {
+        expect(nameDie(r), r.stderr).toEqual([`ccrc: SHA256SUMS's tarball name is 201 bytes or not printable ASCII, not a ccrc release's (starts: ${name.slice(0, 40)}) — refusing; nothing on this box was changed`]);
+      } else {
+        expect(nameDie(r), `${n} bytes: ${r.stderr}`).toEqual([]);
+        // The fetching line names HOME as `~` (`_upd_redact`), so it is matched by its tail.
+        const fetched = r.stdout.split('\n').filter((l) => l.startsWith('update: fetching ') && l.endsWith(`/releases/latest/download/${name} …`));
+        expect(fetched, `it reached the tarball: ${r.stdout}`).toHaveLength(1);
+        expect(r.stderr, 'and died fetching it').toContain(`ccrc: download failed: local://~/releases/latest/download/${name} `);
+      }
+    }
+  });
+  it('a tarball name of 201 bytes in 107 characters, the caller\'s locale UTF-8: the bound counts bytes and dies (D-6751, R46)', () => {
+    const home = freshUpdateBox('ccrc-update-bound-name-mb-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const name = `ccrc-${'é'.repeat(94)}v.tar.gz`;
+    expect([name.length, Buffer.byteLength(name)]).toEqual([107, 201]);
+    sumsName(home, name);
+    const { r } = boundedRun(home, [], UTF8);
+    expect(r.code, r.stderr).toBe(1);
+    expect(nameDie(r), r.stderr).toEqual([`ccrc: SHA256SUMS's tarball name is 201 bytes or not printable ASCII, not a ccrc release's (starts: ccrc-${'?'.repeat(35)}) — refusing; nothing on this box was changed`]);
+  });
+  // The same bound on build.json's version (the unsigned path). A C0 byte such as ESC is refused before it, by
+  // `_box_build_fields` (its die names no value); a C1 byte is refused there only under a UTF-8 locale, so under C it
+  // reaches this bound (review 926's m7). The edge and the byte count are pinned the same way as the name's.
+  const unsignedVersion = (prefix: string, version: string, locale?: string): { home: string; r: Result } => {
+    const home = freshUpdateBox(prefix);
+    plantOldBox(home, { version: 'v1.0.0' });
+    const tree = stubTree(home, { version: 'v2.0.0' });
+    rmSync(join(tree, 'MANIFEST'));
+    writeFileSync(join(tree, 'build.json'), `${JSON.stringify({ sha: 'newsha0000000000000000000000000000000000', ref: 'release',
+      builtAt: '2026-08-21T00:00:00Z', dirty: false, version })}\n`);
+    writeManifest(tree);
+    packRelease(home, tree, { tag: 'v2.0.0', latest: false, bundle: false });
+    const { r } = boundedRun(home, ['--to', 'v2.0.0', '--allow-unsigned'], locale);
+    expect(r.code, r.stderr).toBe(1);
+    expect(existsSync(join(home, 'staged-ccrc-argv')), 'the staged install ran').toBe(false);
+    return { home, r };
+  };
+  const versionDie = (r: Result): string[] => r.stderr.split('\n').filter((l) => l.startsWith("ccrc: build.json's version is "));
+  const MALFORMED = 'ccrc: the extracted tree\'s build.json is unreadable or malformed (rc 6)';
+  it('an unsigned release whose build.json version carries an OSC 52 write: the update dies, and no ESC or BEL reaches any way out (D-6751, R46)', () => {
+    const { home, r } = unsignedVersion('ccrc-update-bound-version-osc-', 'v\x1b]52;c;SGVsbG8=\x07');
+    expect(r.stderr.split('\n').filter((l) => l.startsWith(MALFORMED)), r.stderr).toHaveLength(1);
+    expectNoHostileByte(home, r);
+  }, 150_000);
+  for (const locale of [UTF8, 'C']) {
+    it(`an unsigned release whose build.json version carries U+009B (a C1 CSI), the caller's locale ${locale}: the update dies, and the byte reaches no way out (D-6751, R46)`, () => {
+      const { home, r } = unsignedVersion('ccrc-update-bound-version-c1-', 'v2.0.0\u009b2J', locale);
+      if (locale === 'C') {
+        expect(versionDie(r), r.stderr).toEqual(["ccrc: build.json's version is 10 bytes or not printable ASCII, not a ccrc release's (starts: v2.0.0??2J) — refusing; nothing outside the staging dir was touched"]);
+      } else {
+        expect(r.stderr.split('\n').filter((l) => l.startsWith(MALFORMED)), r.stderr).toHaveLength(1);
+      }
+      expectNoHostileByte(home, r);
+    }, 150_000);
+  }
+  it('an unsigned release whose build.json version is exactly 200 bytes passes the bound, and one of 201 bytes dies at it (D-6751, R46)', () => {
+    for (const [n, dies] of [[200, false], [201, true]] as const) {
+      const version = `v${'x'.repeat(n - 1)}`;
+      const { r } = unsignedVersion(`ccrc-update-bound-version-edge-${n}-`, version);
+      if (dies) {
+        expect(versionDie(r), r.stderr).toEqual([`ccrc: build.json's version is 201 bytes or not printable ASCII, not a ccrc release's (starts: ${version.slice(0, 40)}) — refusing; nothing outside the staging dir was touched`]);
+      } else {
+        expect(versionDie(r), `${n} bytes: ${r.stderr}`).toEqual([]);
+        expect(r.stderr, 'it reached the version binding').toContain(`build.json says version '${version}' but the release was resolved as v2.0.0`);
+      }
+    }
+  }, 300_000);
+  it('an unsigned release whose build.json version is 201 bytes in 101 characters, the caller\'s locale UTF-8: the bound counts bytes and dies (D-6751, R46)', () => {
+    const version = `v${'é'.repeat(100)}`;
+    expect([version.length, Buffer.byteLength(version)]).toEqual([101, 201]);
+    const { r } = unsignedVersion('ccrc-update-bound-version-mb-', version, UTF8);
+    expect(versionDie(r), r.stderr).toEqual([`ccrc: build.json's version is 201 bytes or not printable ASCII, not a ccrc release's (starts: v${'?'.repeat(39)}) — refusing; nothing outside the staging dir was touched`]);
+  }, 150_000);
 
   // Fix round 1 item 11 / review 155 C17: the floor death's update.json
   // DETAIL keeps its VERDICT (D-3249) even with a HOME long enough that the
@@ -1970,7 +2327,7 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
     const home = gateBox('ccrc-update-gate-knob-', 'server');
     const r = runUpdate(home, [], { CCRC_UPDATE_HEALTH_S: 'soon' });
     expect(r.code, r.stdout).toBe(0);
-    expect(r.stdout).toMatch(/^update: WARN: CCRC_UPDATE_HEALTH_S='soon' is not a number of seconds — using 90$/m);
+    expect(r.stdout).toMatch(/^update: WARN: CCRC_UPDATE_HEALTH_S='soon' is not a number of seconds \(digits only, at most 18\) — using 90$/m);
   });
 
   // THE ARMS, SOURCED. `ccrc` recomputes CCD_OS from $OSTYPE at source time
@@ -2560,6 +2917,24 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
       join(home, 'ccrc', 'ccd', 'ccrc'), 'update', '--to', 'v1.0.0', '--no-gate', '--from', 'restore',
     ]);
     expect(String(lastReport(home)['detail'])).toMatch(/^arm2: restored v1\.0\.0; gate: /);
+  });
+
+  // F10 (fix round 1): `_upd_asset_listed`'s rc 3 is a base this box cannot read, never curl or the host. The new tree's install
+  // adds an `export` mirror line beside the plain one the parent fetched through, so only arm 2's question meets the refusal.
+  it('a release base arm 2 cannot read is named as that, not as curl, and the restore child still decides (F10)', () => {
+    const home = freshUpdateBox('ccrc-update-restore-base-');
+    plantRestoreBox(home, { onInstall: [`printf 'export CCRC_RELEASE_BASE_URL=local://%s/releases\\n' "$HOME" >> "$HOME/.ccrc/ccrc.env"`] });
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=local://${home}/releases\n`);
+    const r = runUpdate(home, [], { CCRC_RELEASE_BASE_URL: '' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout.split('\n')).toContain('update: arm 2: CCRC_RELEASE_BASE_URL cannot be measured: ~/.ccrc/ccrc.env names it on a line '
+      + 'this reader does not take (it reads only a plain KEY=value line), so no host was asked whether v1.0.0 ships a bundle — the '
+      + 'restore child\'s own resolve decides');
+    expect(r.stderr).toContain('ccrc: CCRC_RELEASE_BASE_URL cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader does not take');
+    expect(r.stdout).not.toContain('curl failed');
+    expect(restoreChildArgv(home)).toEqual([
+      join(home, 'ccrc', 'ccd', 'ccrc'), 'update', '--to', 'v1.0.0', '--no-gate', '--from', 'restore',
+    ]);
   });
 
   it('a spine that COMPLETED and then failed its gate, restored by arm 3: the completed-install record goes, so the box reads incomplete — never converged on the release it backed out of', () => {
@@ -5117,6 +5492,38 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     report(home2, { phase: 'installing', ageS: 16 * 60 });
     expect(runWatchdog(home2, [], { CCRC_UPDATE_DEADLINE_MS: undefined }).code).toBe(0);
     expect(readReport(home2).phase).toBe('failed');
+  });
+
+  // Wave 24 (D-6602): the watchdog takes the LARGEST deadline reading, for both of its thresholds, and says when one cannot be read.
+  const W24_WATCHDOG_WARN = 'watchdog: WARN: CCRC_UPDATE_DEADLINE_MS does not read as one whole number of milliseconds everywhere the '
+    + 'server may take it from (the environment, the box\'s ccrc.env, the exposure file) — using the largest reading ccrc could decide';
+
+  itLinux('W24-D4: the watchdog warns on a deadline it cannot read and uses the largest it can', () => {
+    const home = watchBox('ccrc-watchdog-w24-d4-');
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_UPDATE_DEADLINE_MS=6e5\n');
+    report(home, { phase: 'installing', ageS: 700 });
+    const r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: undefined });
+    expect(r.code, r.stderr).toBe(0);
+    const out = r.stdout.split('\n');
+    expect(out[0]).toBe(W24_WATCHDOG_WARN);
+    expect(out[1]).toMatch(/^watchdog: update in progress \(installing, 70\ds old\)$/);
+    expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+  });
+
+  itLinux('W24-D5: the watchdog never wedges a live update the server still counts as inside its deadline', async () => {
+    const home = watchBox('ccrc-watchdog-w24-d5-');
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_UPDATE_DEADLINE_MS=1800000\n');
+    report(home, { phase: 'installing', ageS: 700 });
+    const before = readFileSync(jsonPath(home), 'utf8');
+    const pgid = await holdLock(home);
+    try {
+      // The environment's 300 s would make 700 s past twice the deadline; the server reads ccrc.env's 1800 s.
+      const r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: '300000' });
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).not.toMatch(/wedged/);
+      expect(r.stdout).toMatch(/^watchdog: update in progress \(installing, 70\ds old\)$/m);
+      expect(readFileSync(jsonPath(home), 'utf8'), 'the report is not rewritten').toBe(before);
+    } finally { release(pgid); }
   });
 
   itLinux('a fleet node has nothing to watch; an unrecorded role is the spine\'s default, both; any argument is a usage error', () => {

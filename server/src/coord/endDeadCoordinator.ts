@@ -3,6 +3,7 @@ import type { FleetIO, MeasuredDirectoryRead } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { NotifyLog } from '../notifylog.js';
 import type { CoordStore } from './store.js';
+import { openRunsClaimedBy } from './bindingReads.js';
 import type { CloseOutcome, SweepCloseGuard } from './close.js';
 import { closeRefusalOf } from './archiveDoor.js';
 import { measureClaimant, type ReclaimDeps } from './reclaim.js';
@@ -207,7 +208,7 @@ export async function endDeadCoordinator(
   // 2 — the runs it holds NOW.
   let runs: { id: number; program: string }[];
   try {
-    const read = deps.coord.openRunsClaimedBy(claimantId);
+    const read = openRunsClaimedBy(deps.coord, claimantId);
     if (!read.ok) return { kind: 'store-unreadable', detail: read.detail };
     runs = read.siblings;
   } catch (err) {

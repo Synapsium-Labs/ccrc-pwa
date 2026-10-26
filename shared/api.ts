@@ -13,8 +13,14 @@ import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
 import type { WorkflowView } from './workflows.js';
+import type { CHECKS_MAIL_TOKEN } from './landing.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
+
+/** Whether a session is there (ARCH-48, #783): the wire word `readSession` derives (`server/src/sessionReading.ts`). The
+ *  ONE definition, in L0, so the frame's field and the reading's part cannot name different words. */
+export const PRESENCES = ['alive', 'asleep', 'dead', 'unknown'] as const;
+export type Presence = typeof PRESENCES[number];
 
 /** Which attention bucket a session belongs to. THE authority: the fleet
  *  screen's sections, its counts and the row's own state word all read this one
@@ -304,6 +310,18 @@ export interface FleetSession {
    *  malformed marker. ADDITIVE: the row's lifecycle reads `stopped` and its bucket `dead` as for any deliberate stop
    *  (no new `SessionBucket` member), and this field alone tells a sleeping session from one that is gone. */
   hibernatedAt: number | null;
+  /** ARCH-48 (#783): whether this session is there, computed ONCE by the server's `readSession` (`sessionReading.ts`) and
+   *  only rendered by a reader: `alive`, `asleep` (hibernated, woken by mail or ensure), `dead` (the pane is gone and the
+   *  lifecycle is one `lifecycleIsDead` names) or `unknown` (a doubt: tmux did not answer, the lifecycle could not be
+   *  read; doubt is never `dead`). ADDITIVE: no `FLEET_PROTO` bump, and an older server omits it, so a reader treats an
+   *  absent key as "not said" (a cached row revives without it). */
+  presence?: Presence;
+  /** ARCH-48 (#783): when a `dead` presence began, epoch MS, from the stop stamp. THE NARROW READING: set ONLY for a
+   *  `stopped` death (the stop stamp is the death's own instant), and null for every other row. A dead `orphan` gets null
+   *  even though its last supervisor heartbeat has a time: that time is when supervision was last seen, not when the
+   *  session died, and dating an orphan from it is a later decision. `never-started` has nothing to date. ADDITIVE like
+   *  `presence`. */
+  deadSince?: number | null;
   /** How many graph READS this session has made — `hookstate.ts`'s
    *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
    *  bump, and an older peer that omits it revives as `null` below.
@@ -4069,7 +4087,9 @@ export function isMarkerState(v: unknown): v is MarkerState {
 
 /** The sweep's words for a marked child it keeps for a person (child-reclamation
  *  spec §5.9): standing answers, read from records rather than a failed read, that
- *  automatic reclamation never acts on while they stand. Spelled ONCE, as the keys
+ *  automatic reclamation never acts on while they stand. D-6639: `minting-run-absent` and
+ *  `review-report-stale` (and the hold, which is no kept word) now LAPSE: the stale arm reclaims such a child once
+ *  nothing has touched it for seven days and the operator has armed it. No word is removed; their sentences say when. Spelled ONCE, as the keys
  *  of a total table, and the runtime list is derived. The SERVER's sweep answers
  *  them and composes their sentences (`server/src/childReclaimSweep.ts`, which
  *  says what ends each). The PWA renders sentences and never switches on a word. */
@@ -6452,6 +6472,56 @@ export interface ChildReclaimStatus {
   readonly at: number | null;
 }
 
+/**
+ * A work run's review-round cap (D-6909, building on D-6795): how many review runs name it, the cap, and when the
+ * cap's ask was raised (the refused fourth open) and lifted (the operator's `POST /api/coord/review-cap`). Both times
+ * are epoch ms on the server's clock, and null until that event. Only a work run carries one.
+ */
+export interface ReviewCapStatus { rounds: number; cap: number; askedAt: number | null; liftedAt: number | null }
+
+/** The last review's report as the store reads it from its `review-done` mail; both fields are null when no review
+ *  has reported. `summary` is the mail body after its fingerprint line. Moved here from `server/src/coord/reviewcap.ts`
+ *  (D-6910) so the PWA reads the same type the refusal sends. */
+export interface LastReviewReport { reviewRunId: number | null; summary: string | null; report: string | null }
+
+/** What reading the last review's report gave; four answers, never three. `read` carries the open findings (possibly
+ *  none); `unnamed` is no report path on file; `absent` and `unreadable` are the two read failures `readFileMeasured`
+ *  keeps apart. Those two are `ReadFailure`'s words (`shared/agent-protocol.ts`). This file cannot import that type
+ *  (its type-only imports are pinned, `peers-claims-l0.test.ts`), so the states are DERIVED from this array, as
+ *  `STALL_STORED_STATES` does, and `review-cap.test.ts` holds the failure pair EQUAL to `ReadFailure` at compile time. */
+export const REVIEW_FINDINGS_STATES = ['read', 'unnamed', 'absent', 'unreadable'] as const;
+export type ReviewFindingsState = (typeof REVIEW_FINDINGS_STATES)[number];
+export type ReviewFindings =
+  | { state: 'read'; lines: string[] }
+  | { state: Exclude<ReviewFindingsState, 'read'> };
+
+/** What the cap's notice and the console's lift sheet say about the last review's report when it was not read
+ *  (D-6910, D-6911): spelled once, beside the type it words, and read by `reviewCapNotice`
+ *  (`server/src/coord/reviewcap.ts`) and `findingsWords` (`pwa/src/fleet/reviewCapWords.ts`), so the sheet says what the
+ *  notice said. Total over the states that are not `read`, so a new state is a compile error here. The notice stays
+ *  silent on `unnamed` (no report path; a review may still have reported), so only the sheet says that word. */
+export const REVIEW_FINDINGS_WORDS: Readonly<Record<Exclude<ReviewFindingsState, 'read'>, string>> = {
+  unnamed: 'No report is on file.',
+  absent: 'The report file is gone.',
+  unreadable: 'The report file could not be read.',
+};
+/** A report that was read and lists no open findings. */
+export const REVIEW_FINDINGS_NONE_OPEN = 'The report lists no open findings.';
+
+/** The structured ask the `cap-review-rounds` refusal answers with, the notice words, and
+ *  `GET /api/coord/review-cap/:id` reads back (D-6910). */
+export interface ReviewCapAsk {
+  run: number; rounds: number; cap: number;
+  lastReview: LastReviewReport & { findings: ReviewFindings };
+}
+
+/** `GET /api/coord/review-cap/:id`'s answer (D-6910): the ask, composed by the same helper as the refusal's, and when
+ *  it was raised and lifted (`ReviewCapStatus`'s two times). */
+export interface ReviewCapView { ok: true; ask: ReviewCapAsk; askedAt: number | null; liftedAt: number | null }
+
+/** `POST /api/coord/review-cap`'s answer (D-6795), typed once for the route's literal and the PWA's call. */
+export interface ReviewCapLiftAnswer { ok: true; run: number; rounds: number; cap: number; lifted: true }
+
 export interface RunSummary {
   id: number;
   program: string;              // slug
@@ -6606,6 +6676,17 @@ export interface RunSummary {
    * omits it and a `RunSummary` is cast, never revived.
    */
   childReclaim: ChildReclaimStatus | null;
+
+  /**
+   * D-6909: this run's review-round cap. A work run carries its `ReviewCapStatus`; a review run, or a run of unknown
+   * kind, carries `null`. Batch-read in `hydrateRun`, so every emitter carries it: `GET /api/runs`, the live
+   * `{type:'runs'}` frame and the advance echo.
+   *
+   * ADDITIVE; `FLEET_PROTO` is not bumped. REQUIRED here for `health`'s reason (`hydrateRun` returns a literal).
+   * OPTIONAL at the PWA's one reader, `reviewCapOf` (`pwa/src/fleet/reviewCapWords.ts`), because an older server
+   * omits it and a `RunSummary` is cast, never revived: absent reads as unmeasured, never as "not waiting".
+   */
+  reviewCap: ReviewCapStatus | null;
 }
 
 /** Speed and quality per run (routing spec 2026-09-14 §6), READ-ONLY, from the
@@ -8503,7 +8584,7 @@ export type LcRefusalToken =
   | 'session-live'             // forget, on a running session
   | 'session-verdict-unknown' | 'hibernated'  // tmux did not answer: fail-shut, nothing removed; `hibernated` (D-5242): forget on a sleeping row, wake or stop it first
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
-  | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands
+  | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands // @anchor purge-refusal-union
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
   | 'purge-mechanism-absent'  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
   | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): ccrc could not keep the child's work — the pin phase, or one of the tail's per-deletion keeps — so the verb stopped before deleting anything further
@@ -8555,7 +8636,7 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // sentence must not say "nothing happened". What it says is what is still
   // TRUE: the registry row and its generation are still on disk, and re-running
   // the verb is the whole remedy.
-  'purge-refused':
+  'purge-refused': // @anchor lc-word-purge-refused
     'The registry row could not be removed: this session\'s compaction lock was unavailable. Whatever the verb had already done is done; the row and its generation are still there. Re-run once the compaction settles.',
   // D-2605, and the WHOLE POINT is that it is not the sentence above. A single
   // token for both conditions told an operator to wait for a compaction that
@@ -8563,7 +8644,7 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // ran to its end: re-running the verb finds nothing to do and will not clear
   // what is left, so the remedy is a hand and not a retry. The journal row's
   // `detail` names the pathname; this sentence must not pretend to know it.
-  'purge-incomplete':
+  'purge-incomplete': // @anchor lc-word-purge-incomplete
     'The registry row was removed, but something beside it would not delete and is still on disk. The verb itself finished — re-running it will not clear the leftover; the journal entry names what is still there.',
   // D-2605 fix round 3, and it is the THIRD sentence for a reason the first two
   // make: `_reg_purge` answers 1 for a contended lock and 2 for a box that
@@ -8576,7 +8657,7 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // names the cause instead, and its remedy is the PATH — never a wait. The
   // journal row's `detail` carries the per-verb remedy; this one must not,
   // because one map entry serves four callers.
-  'purge-mechanism-absent':
+  'purge-mechanism-absent': // @anchor lc-word-purge-mechanism-absent
     'The registry row could not be removed: this box cannot take the session\'s compaction lock at all — flock, mktemp or link is missing from the PATH ccd ran with — and the session still has a live generation, so ccrc refused rather than race a compaction it has no way to serialise against. Whatever the verb had already done is done; the row and its generation are still there. Waiting will not help: re-run from a PATH that resolves those tools.',
   // Child reclamation, wave 3. ws-reclaim's pin phase — the WIP commit and the
   // attic pins, or the settle's re-pin once the session is stopped — failed, so
@@ -11953,8 +12034,8 @@ export const SECRET_MASK = '‹secret masked›';
  *  check fails closed, so no run is ever passed through unchecked (D-5513). */
 export const SECRET_MASK_TOO_LARGE = '‹output too large to check, masked›';
 
-/* D-6048 (ARCH-12): the derived runtime lists, kept at the end of the file so adding them moves no line that other
- * files cite by number. */
+/* D-6048 (ARCH-12): the derived runtime lists. They sat at the end of the file so adding them moved no line that other
+ * files cite by number; citations are anchors now (D-6928), so a derived list goes beside its type. */
 /** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom): a member added
  *  to the union with no key here fails to compile. `server/test/rings/wire-totality.test.ts` holds every exported
  *  literal union in `shared/` to that. */
@@ -12149,3 +12230,19 @@ export interface DriftLine {
   readonly sessionId: string | null;
   readonly runId: number | null;
 }
+
+/** Which death: the registry never listed the id, or one of the lifecycle words `lifecycleIsDead` names. The ONE
+ *  definition (ARCH-47, #782), in L0 so `server/src/sessionReading.ts` and `server/src/deadCoordinator.ts` both import it
+ *  without either importing the other: `deadCoordinator.ts`'s `ClaimantDeadCause` and `CLAIMANT_DEAD_CAUSES` are these,
+ *  so a new word lands in both. `DEAD_LIFECYCLES` is its other half; it sits at the file's end rather than beside that
+ *  list so no line citation into this file moves. `coord-reclaim.test.ts` holds it equal to
+ *  `['absent', ...DEAD_LIFECYCLES]`. */
+export const DEAD_CAUSES = ['absent', 'stopped', 'orphan', 'never-started'] as const satisfies
+  readonly ('absent' | SessionLifecycle)[];
+export type DeadCause = typeof DEAD_CAUSES[number];
+
+/** The answer of a successful `POST /api/runs/:id/advance`. `checksMail` is the capability token of PR landing in ccrc
+ *  (stage 1, spec §3.7): present only on an advance to `merging` whose episode was decided `live`, so a coordinator that
+ *  reads it knows the server will mail the checks and may end its turn. Its one reader is the coordinator, through the
+ *  answer `ccrc-api runs advance` prints. */
+export interface AdvanceOk { ok: true; run: RunSummary; checksMail?: typeof CHECKS_MAIL_TOKEN }

@@ -20,7 +20,7 @@ import { pathToFileURL } from 'node:url';
 /**
  * @typedef {{ index: number, total: number, files: string[], vitestShard: string|null, workers: number }} Shard
  * @typedef {Shard[]} ShardPlan
- * @typedef {{ targetMs: number, min: number, max: number, workers: number, defaultMs: number, scale?: number }} ShardProfile
+ * @typedef {{ targetMs: number, min: number, max: number, workers: number, defaultMs: number, scale?: number, budgetMs?: number }} ShardProfile
  */
 
 /**
@@ -31,7 +31,12 @@ import { pathToFileURL } from 'node:url';
  * vitest's own collection overhead (spec §7.1's planner budget), added
  * once here so every caller of the resulting map already carries it.
  *
- * @param {{ testResults: Array<{ name: string, startTime: number, endTime: number }> }} report
+ * A report written by `file-times-reporter.mjs` carries `wallMs` per file: the whole time the file held a worker
+ * (environment, collection, hooks and tests). It is preferred as is, with no extra 500ms. `endTime - startTime`
+ * spans only the first test's start to the last test's end, so it drops `beforeAll` and collection time (a file
+ * whose cost is all in its hooks came out at ~0); it stays as the fallback for an artifact an older run left.
+ *
+ * @param {{ testResults: Array<{ name: string, startTime: number, endTime: number, wallMs?: number }> }} report
  * @param {string} repoRoot
  * @returns {Record<string, number>}
  */
@@ -40,7 +45,7 @@ export function durationsFromVitestJson(report, repoRoot) {
   const out = {};
   for (const result of report.testResults ?? []) {
     const rel = path.relative(repoRoot, result.name).split(path.sep).join('/');
-    out[rel] = (result.endTime - result.startTime) + 500;
+    out[rel] = typeof result.wallMs === 'number' ? result.wallMs : (result.endTime - result.startTime) + 500;
   }
   return out;
 }
@@ -50,8 +55,38 @@ export const PROFILES = {
   linux: { targetMs: 240_000, min: 1, max: 12, workers: 2, defaultMs: 5000 },
   macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 2, defaultMs: 5000, scale: 1.5 },
   macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 2, defaultMs: 5000, scale: 1.5 },
-  trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6 },
+  // `budgetMs`: what ONE trace shard may be planned to take. The job's own timeout is 60 minutes; a refresh plans to
+  // 45 and defers the rest (planTraceBatch), because a shard that hits the timeout is cancelled, leaves no records,
+  // and the map is not published at all.
+  trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6, budgetMs: 2_700_000 },
 };
+
+/** The median of the known durations; `defaultMs` when none are known. */
+function medianMs(durations, defaultMs) {
+  const known = durations != null ? Object.values(durations).sort((a, b) => a - b) : [];
+  const mid = known.length >> 1;
+  return known.length === 0 ? defaultMs : known.length % 2 === 1 ? known[mid] : (known[mid - 1] + known[mid]) / 2;
+}
+
+/**
+ * `files` longest recorded duration first (ties by path ascending); a file with no recorded duration takes the
+ * median of the known ones, so it lands mid-order. Returns a new array. Used by the vitest sequencer
+ * (`server/vitest.select.config.ts`) to start a shard's longest file first.
+ *
+ * @param {string[]} files
+ * @param {Record<string, number>} durations
+ * @returns {string[]}
+ */
+export function orderLongestFirst(files, durations) {
+  const fallback = medianMs(durations, 0);
+  const durationOf = (f) => durations[f] ?? fallback;
+  return [...files].sort((a, b) => {
+    const da = durationOf(a);
+    const db = durationOf(b);
+    if (db !== da) return db - da;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+}
 
 function clamp(n, lo, hi) {
   return Math.min(Math.max(n, lo), hi);
@@ -79,9 +114,7 @@ export function planShards(files, durations, { targetMs, min, max, workers, defa
 
   // A file with no duration is given the MEDIAN of the known ones (spec §7.1); `defaultMs` only when none are
   // known — an empty table, or none at all.
-  const known = durations != null ? Object.values(durations).sort((a, b) => a - b) : [];
-  const mid = known.length >> 1;
-  const fallback = known.length === 0 ? defaultMs : known.length % 2 === 1 ? known[mid] : (known[mid - 1] + known[mid]) / 2;
+  const fallback = medianMs(durations, defaultMs);
   const durationOf = (f) => (durations != null ? (durations[f] ?? fallback) : defaultMs);
   const total = files.reduce((sum, f) => sum + durationOf(f), 0) * scale;
   const raw = Math.ceil(total / workers / targetMs);
@@ -121,6 +154,45 @@ export function planShards(files, durations, { targetMs, min, max, workers, defa
     vitestShard: null,
     workers,
   }));
+}
+
+/**
+ * A BOUNDED trace plan (the test-map refresh). The map refresh used to trace everything the merges since the last map
+ * affected, in at most 8 shards, however long that took; a stale map selects more, so each refresh outgrew its 60-minute
+ * shards, was cancelled, and none was ever published. This takes `files` in the order given — most important first —
+ * and plans as many as fit: a file goes to the least-loaded shard if its cost still keeps that shard within
+ * `budgetMs`, and is DEFERRED if it fits none (a later, smaller file may still fit). A shard's load is what
+ * planShards counts: Σ duration · scale / workers, with a file of no known duration costing the median of the known
+ * ones (`defaultMs` when none are). Never plans a shard past the budget. Shards come out numbered 1..n of n, the
+ * empty ones dropped; the matrix shape is `toMatrix`'s.
+ *
+ * @param {string[]} files repo-relative test files, in priority order
+ * @param {Record<string, number>} durations repo-relative path -> ms
+ * @param {{ shards: number, budgetMs: number, workers: number, scale: number, defaultMs: number }} limits
+ * @returns {{ plan: ShardPlan, batch: string[], deferred: string[] }} `batch` in the order given
+ */
+export function planTraceBatch(files, durations, { shards, budgetMs, workers, scale, defaultMs }) {
+  const known = Object.values(durations).sort((a, b) => a - b);
+  const mid = known.length >> 1;
+  const fallback = known.length === 0 ? defaultMs : known.length % 2 === 1 ? known[mid] : (known[mid - 1] + known[mid]) / 2;
+  const costOf = (f) => ((durations[f] ?? fallback) * scale) / workers;
+  const loads = new Array(shards).fill(0);
+  /** @type {string[][]} */
+  const buckets = Array.from({ length: shards }, () => []);
+  /** @type {Set<string>} */
+  const taken = new Set();
+  for (const f of files) {
+    const cost = costOf(f);
+    let idx = 0;
+    for (let i = 1; i < shards; i++) if (loads[i] < loads[idx]) idx = i;
+    if (loads[idx] + cost > budgetMs) continue;
+    buckets[idx].push(f);
+    loads[idx] += cost;
+    taken.add(f);
+  }
+  const used = buckets.filter((b) => b.length > 0);
+  const plan = used.map((b, i) => ({ index: i + 1, total: used.length, files: b, vitestShard: null, workers }));
+  return { plan, batch: files.filter((f) => taken.has(f)), deferred: files.filter((f) => !taken.has(f)) };
 }
 
 function toServerRelative(repoRelPath) {

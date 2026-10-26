@@ -49,6 +49,13 @@ export const COLLECT_LOOSE_LIVE_MARKER = 'collect-loose-live';
 export const NESTED_RESCUE_LIVE_MARKER = 'nested-rescue-live';
 /** `$REG/dead-coordinator-lane-live`: arms the dead-coordinator lane's act. */
 export const DEAD_COORDINATOR_LANE_LIVE_MARKER = 'dead-coordinator-lane-live';
+/** `$REG/child-stale-reclaim-live`: arms the child reclaim's stale arm (D-6639): a kept child idle for seven days is
+ *  reclaimed. Absent, the lane records "child would be reclaimed (stale)" and acts on nothing. */
+export const CHILD_STALE_RECLAIM_LIVE_MARKER = 'child-stale-reclaim-live';
+/** `$REG/child-superseded-reclaim-live`: arms the child reclaim's superseded-review release (D-6922):
+ *  an earlier review child is reclaimed once a later review of the same run has closed, though the reviewed run is open.
+ *  Absent, the lane records "review report would be reclaimed (superseded)" and acts on nothing. */
+export const CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER = 'child-superseded-reclaim-live';
 /** `$REG/idle-compact-nudge-disabled`: the idle-compaction nudge's kill switch. */
 export const IDLE_NUDGE_DISABLED_MARKER = 'idle-compact-nudge-disabled';
 /** `$REG/mail-gate-strict`: the mail gate's pre-wave-1 rule. */
@@ -57,6 +64,9 @@ export const MAIL_GATE_STRICT_MARKER = 'mail-gate-strict';
 export const MAIL_GATE_BUSY_MARKER = 'mail-gate-busy';
 /** `$REG/mail-gate-busy-shadow`: the mail gate's first hand-armed step. */
 export const MAIL_GATE_BUSY_SHADOW_MARKER = 'mail-gate-busy-shadow';
+/** `$REG/coordinator-roster-card-live`: arms the session hook's roster card (durability D4, #757). Unarmed, the card goes
+ *  to a shadow log only. No writer in the tree. */
+export const COORDINATOR_ROSTER_CARD_LIVE_MARKER = 'coordinator-roster-card-live';
 /** `$REG/landing-disabled`: the PR-landing checks lane's kill switch; it wins over the live marker. */
 export const LANDING_DISABLED_MARKER = 'landing-disabled';
 /** `$REG/landing-checks-live`: arms NEW episodes of the checks lane live (otherwise they run in shadow). */
@@ -184,7 +194,17 @@ export const SWITCHES = {
   },
   [CHILD_RECLAIM_DISABLED_MARKER]: {
     storage: { marker: CHILD_RECLAIM_DISABLED_MARKER }, default: 'absent: child reclaim runs', owner: 'C4',
-    meaning: 'Meant to switch off child reclaim alone, leaving expiry, collect and the coordinator reclaim running. Nothing reads it yet: touching it stops nothing until the child-spent reason moves (ARCH-44).',
+    meaning: 'Switches off child reclaim alone: the sweep and the close hand-off queue none, and the executor refuses to act. Expiry, collect, the dead-coordinator lane and stop-done keep running; reclaim-paused stops those too.',
+    writer: 'hand-only',
+  },
+  [CHILD_STALE_RECLAIM_LIVE_MARKER]: {
+    storage: { marker: CHILD_STALE_RECLAIM_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would reclaim',
+    owner: 'C4', meaning: 'The stale arm acts: a kept child idle for seven days is reclaimed, its work pinned to the attic.',
+    writer: 'hand-only',
+  },
+  [CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER]: {
+    storage: { marker: CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would reclaim',
+    owner: 'C4', meaning: 'An earlier review child is reclaimed once a later review of the same run has closed, though the reviewed run is still open.',
     writer: 'hand-only',
   },
   [IDLE_NUDGE_DISABLED_MARKER]: {
@@ -203,6 +223,11 @@ export const SWITCHES = {
   [MAIL_GATE_BUSY_SHADOW_MARKER]: {
     storage: { marker: MAIL_GATE_BUSY_SHADOW_MARKER }, default: 'absent: the shell mode', owner: 'C5',
     meaning: 'The gate decides busy as the busy mode would, delivers nothing more, and logs what it would have sent.',
+    writer: 'hand-only',
+  },
+  [COORDINATOR_ROSTER_CARD_LIVE_MARKER]: {
+    storage: { marker: COORDINATOR_ROSTER_CARD_LIVE_MARKER }, default: 'absent: shadow, the card goes to ~/.ccrc/roster-card-shadow.log', owner: 'C5',
+    meaning: 'A coordinator\'s first context after a compaction, resume or clear carries the open runs it claims.',
     writer: 'hand-only',
   },
   [LANDING_DISABLED_MARKER]: {

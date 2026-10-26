@@ -60,7 +60,7 @@ export interface OpenRunFacts {
    *  `programHome`, whose null answers both "no row" and "row, NULL home". */
   readonly programKnown: (slug: string) => boolean;
   readonly programHome: (slug: string) => string | null;
-  /** `CoordStore.openClaimantsOf`: every coordinator this session is currently
+  /** `claimantsOfSession` (coord/bindingReads.ts): every coordinator this session is currently
    *  the worker of, newest first. */
   readonly openClaimantsOf: (sessionId: string) => readonly string[];
   /** D-5298: whether the fleet box's `ccrc-api` attributes `runs open`

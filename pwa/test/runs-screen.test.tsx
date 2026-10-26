@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { StrictMode } from 'react';
-import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { RUN_STATES, SPAWN_STALL_MS, type ChildReclaimStatus, type CoordCapsView, type FleetSession, type RunSpend, type RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { RunsScreen } from '../src/screens/RunsScreen';
@@ -41,7 +41,7 @@ const r = (over: Partial<RunSummary> = {}): RunSummary => ({
   // predates the warn row and must keep rendering exactly as it did.
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, childReclaim: null, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, ...over,
 });
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'ccrc-pwa-clear-cove', project: 'ccrc-pwa', workspace: 'clear-cove', branch: 'ws/clear-cove', bucket: 'working', ...over }));
@@ -1826,5 +1826,29 @@ describe('the run board on the page scaffold (D-5102)', () => {
     expect(h1).toHaveLength(1);
     expect(h1[0]).toHaveAccessibleName('Runs');
     expect(container.querySelector('[data-page-body]')?.className.split(/\s+/)).toContain('max-w-(--page-max-wide)');
+  });
+});
+
+// D-6911: the board's "Waiting on you" band sits above the groups, and its button opens the lift sheet.
+describe('the review cap band on the run board', () => {
+  it('lists a waiting run above the programme groups, and Lift cap opens the sheet', async () => {
+    const store = makeStore();
+    const waiting = r({ id: 12, reviewCap: { rounds: 3, cap: 3, askedAt: Date.now() - 60_000, liftedAt: null } });
+    act(() => { store.setState({ runs: [waiting], runsFrameSeen: true }); });
+    vi.spyOn(api, 'reviewCap').mockReturnValue(new Promise(() => {}));
+    render(<RunsScreen loadCaps={NO_CAPS} loadSpend={NO_SPEND} store={store} loadRuns={vi.fn().mockResolvedValue({ runs: [] })} />);
+    const band = screen.getByRole('group', { name: /waiting on you/i });
+    const group = screen.getByRole('group', { name: /^program /i });
+    expect(band.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(within(band).getByRole('button', { name: /lift cap/i }));
+    expect(await screen.findByText('Lift the review cap?')).toBeInTheDocument();
+    expect(api.reviewCap).toHaveBeenCalledWith(12);
+  });
+
+  it('shows no band when no run waits on its cap', () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
+    render(<RunsScreen loadCaps={NO_CAPS} loadSpend={NO_SPEND} store={store} loadRuns={vi.fn().mockResolvedValue({ runs: [] })} />);
+    expect(screen.queryByRole('group', { name: /waiting on you/i })).toBeNull();
   });
 });

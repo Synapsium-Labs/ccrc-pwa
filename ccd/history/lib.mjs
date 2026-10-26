@@ -219,6 +219,32 @@ export const RUN_BUDGET_BYTES = 512 * 1024 * 1024;
  *  generation never starves capture; bytes are compressed, as the backfill charges them. */
 export const REDERIVE_SLICE_MS = 20_000;
 export const REDERIVE_SLICE_BYTES = 128 * 1024 * 1024;
+/** CP-39 (D-6935, D-6939): the derivation's shares of the ONE run budget, per mille of its limits, in tick order (chosen).
+ *  One set of numbers serves the ladder of ceilings (budgetRungs) and the floors (budgetFloors). Measured on the fleet box:
+ *  every budget-gated derivation starved while ingest owned the whole budget, and under load the sweep unit (shipped at
+ *  Nice=19 with idle I/O) got 0.1-0.17 of a core, so 90 s of wall clock was about 9-15 s of CPU. The FTS backfill takes
+ *  the largest share, being the largest backlog by count (at most about 486,000 blobs owed) and the one every grep
+ *  waits on; the leaves and the census 10% each (the census builds one
+ *  file clock, a stat per recorded file, before its first chunk, over about 1.14 million blobs); the card step 5% (a few
+ *  cards a tick in steady state). Ingest keeps 60%, which still drains a backlog over ticks (§9.2 step 7). */
+export const DERIVE_SHARES = Object.freeze({ fts: 150, nodes: 100, card: 50, census: 100 });
+const RUNG_ORDER = Object.freeze(['fts', 'nodes', 'card', 'census']);
+const perMille = (max, k) => Math.floor(max * k / 1000);
+/** D-6935: each ceiling admits one unit whenever the run's own limit is at least 1 (P1). */
+const ceilingOf = (max, k) => (max >= 1 ? Math.max(1, perMille(max, k)) : 0);
+/** D-6935: the ceilings, as limits of the same run budget: ingest's is the budget less every share; each step's is the
+ *  budget less the shares of the steps after it; the census's is the budget itself. */
+export function budgetRungs({ maxMs, maxBytes }, shares = DERIVE_SHARES) {
+  const at = (after) => ({ maxMs: ceilingOf(maxMs, 1000 - after), maxBytes: ceilingOf(maxBytes, 1000 - after) });
+  const sumOf = (keys) => keys.reduce((n, k) => n + shares[k], 0);
+  const out = { ingest: at(sumOf(RUNG_ORDER)) };
+  RUNG_ORDER.forEach((k, i) => { out[k] = at(sumOf(RUNG_ORDER.slice(i + 1))); });
+  return out;
+}
+/** D-6939: each step's floor is its share of the run's limits, rounded down, with no minimum. */
+export function budgetFloors({ maxMs, maxBytes }, shares = DERIVE_SHARES) {
+  return Object.fromEntries(RUNG_ORDER.map((k) => [k, { maxMs: perMille(maxMs, shares[k]), maxBytes: perMille(maxBytes, shares[k]) }]));
+}
 export const CAP_DEFAULT_GB = 50;
 export const CAP_WARN_PCT = 80;
 export const FLOOR_GIB = 15;
@@ -3564,6 +3590,257 @@ export function linkSidecar(name, candidates) {
     for (const c of candidates) if (c.toolUseIds.includes(stem)) return c.entryId;
   }
   return null;
+}
+
+/** CP-39 (D-6930): every asked name a text holds, in ONE pass over the text however many names are asked (the walk asked
+ *  `text.includes(name)` once per wanted name, rows x names, and one transcript of 24,450 user rows and about 6,270 unlinked
+ *  sidecars cost about 4 minutes of CPU per pass). Aho-Corasick over UTF-16 units, so the answer is exactly includes'
+ *  answer: the names n with text.includes(n), in the order first given, each once. namesIn costs O(text + hits): its
+ *  stamp array is the matcher's, made once, never one sized to the names per call (P20). A directory entry is never empty. */
+export function sidecarNameMatcher(names) {
+  const list = [...new Set(names)].filter((n) => typeof n === 'string' && n.length > 0);
+  const next = new Map();           // state * 65536 + unit -> state
+  const unit = [0];                 // the unit that enters each state
+  const kid = [-1];                 // each state's first child; `sib` links the rest, for the breadth-first pass
+  const sib = [-1];
+  const fail = [0];
+  const term = [-1];                // the name index ending exactly here, or -1
+  const dict = [-1];                // the nearest proper suffix state that ends a name, or -1
+  list.forEach((n, i) => {
+    let s = 0;
+    for (let k = 0; k < n.length; k += 1) {
+      const key = s * 65536 + n.charCodeAt(k);
+      let t = next.get(key);
+      if (t === undefined) {
+        t = fail.length;
+        next.set(key, t);
+        sib.push(kid[s]); kid[s] = t; kid.push(-1);
+        unit.push(n.charCodeAt(k)); fail.push(0); term.push(-1); dict.push(-1);
+      }
+      s = t;
+    }
+    term[s] = i;
+  });
+  const step = (s0, u) => {
+    for (let s = s0; ; s = fail[s]) {
+      const t = next.get(s * 65536 + u);
+      if (t !== undefined) return t;
+      if (s === 0) return 0;
+    }
+  };
+  const queue = [];
+  for (let t = kid[0]; t !== -1; t = sib[t]) queue.push(t);
+  for (let qi = 0; qi < queue.length; qi += 1) {
+    const s = queue[qi];
+    for (let t = kid[s]; t !== -1; t = sib[t]) {
+      const f = step(fail[s], unit[t]);
+      fail[t] = f;
+      dict[t] = term[f] >= 0 ? f : dict[f];
+      queue.push(t);
+    }
+  }
+  const seen = new Uint32Array(list.length);
+  let stamp = 0;
+  const namesIn = (text) => {
+    if (stamp === 0xffffffff) { seen.fill(0); stamp = 0; }
+    stamp += 1;
+    const hits = [];
+    let s = 0;
+    for (let k = 0; k < text.length; k += 1) {
+      s = step(s, text.charCodeAt(k));
+      for (let o = term[s] >= 0 ? s : dict[s]; o !== -1; o = dict[o]) {
+        const i = term[o];
+        if (seen[i] !== stamp) { seen[i] = stamp; hits.push(i); }
+      }
+    }
+    hits.sort((a, b) => a - b);
+    return hits.map((i) => list[i]);
+  };
+  return { namesIn, states: fail.length };
+}
+
+/** CP-39 (D-6931). The meta key prefix of a transcript's walk state: one spelling for the sweep that writes it and the
+ *  status read that skips it (D-6940). */
+export const SIDECAR_WALK_META = 'sidecar_walk:';
+
+/** CP-39 (D-6931). The most UTF-16 units of names one walk state holds, done and in progress together (chosen): twice the
+ *  largest backlog measured on the fleet box (about 6,270 unlinked names, most near 40 units). It bounds the automaton's
+ *  states (about 517,000 at the cap, 49 MiB of heap, measured in scratch) and the persisted state, so a walk's memory stays
+ *  inside O20's RSS bound (pinned by the RSS case, P22). */
+export const SIDECAR_WALK_CHARS_MAX = 524_288;
+
+/** The most characters a persisted walk state may hold and still be parsed (D-6931): beyond it the state is read as absent. */
+const SIDECAR_WALK_TEXT_MAX = 64 * 1024 * 1024;
+
+/** The `toolu_` stem a sidecar name is matched by: the name with its last extension dropped (linkSidecar's own). */
+const sidecarStemOf = (name) => name.replace(/\.[^.]*$/, '');
+
+/** CP-39 (D-6931). The names an extension walk takes: `unseen` less `covered`, each once; `first` (the name that asked)
+ *  always, then the rest in sorted order while their units fit `room`; answered sorted. */
+export function walkNames(unseen, first, covered = [], room = SIDECAR_WALK_CHARS_MAX) {
+  const held = new Set(covered);
+  const rest = [...new Set(unseen)].filter((n) => typeof n === 'string' && n.length > 0 && n !== first && !held.has(n)).sort();
+  const out = [first];
+  let left = room - first.length;
+  for (const n of rest) {
+    if (n.length > left) break;
+    left -= n.length;
+    out.push(n);
+  }
+  return out.sort();
+}
+
+/** A pair list's checked form, or null: `[key, entryId]` pairs, each key held by `keys` once, each entry id a positive integer. */
+function checkedPairs(pairs, keys) {
+  if (!Array.isArray(pairs)) return null;
+  const seen = new Set();
+  const out = [];
+  for (const p of pairs) {
+    if (!Array.isArray(p) || p.length !== 2) return null;
+    const [k, id] = p;
+    if (typeof k !== 'string' || !keys.has(k) || seen.has(k)) return null;
+    if (!Number.isSafeInteger(id) || id < 1) return null;
+    seen.add(k);
+    out.push([k, id]);
+  }
+  return out;
+}
+
+/** One part of a walk state, checked, or null: unique non-empty string names, a text pair only for a held name, a toolu pair
+ *  only for a stem some held name has. `apart` are the names the other part holds, which this one must not. */
+function checkedWalkPart(part, apart) {
+  if (part === null || typeof part !== 'object' || !Array.isArray(part.names)) return null;
+  const names = new Set();
+  for (const n of part.names) {
+    if (typeof n !== 'string' || n.length === 0 || names.has(n) || apart.has(n)) return null;
+    names.add(n);
+  }
+  const text = checkedPairs(part.text, names);
+  const toolu = checkedPairs(part.toolu, new Set(part.names.map(sidecarStemOf)));
+  if (text === null || toolu === null) return null;
+  return { names: part.names.slice(), text, toolu };
+}
+
+/** CP-39 (D-6931). A transcript's walk state, meta `sidecar_walk:<transcript_pk>`:
+ *  {"v":1,"done":{"names":[…],"text":[[name,entryId]…],"toolu":[[stem,entryId]…]},
+ *         "walk":null|{"names":[…],"after":<int>,"text":[…],"toolu":[…]}}.
+ *  `done` holds the names finished walks cover, with their first matches; `walk` is the extension in progress, over names
+ *  `done` does not hold. Pairs, never object keys, so no file name can reach a prototype. Anything else, or a malformed
+ *  field (a name in both parts, a duplicate, a pair for a name or stem its part does not hold, an entry id that is not a
+ *  positive integer, an `after` that is not a non-negative one, a text over 64 MiB), is null: the walk starts again from
+ *  row 0, which costs work and loses nothing. */
+export function parseSidecarWalk(text) {
+  if (typeof text !== 'string' || text.length > SIDECAR_WALK_TEXT_MAX) return null;
+  let o;
+  try { o = JSON.parse(text); } catch { return null; }
+  if (o === null || typeof o !== 'object' || o.v !== 1) return null;
+  const done = checkedWalkPart(o.done, new Set());
+  if (done === null) return null;
+  if (o.walk === null) return { v: 1, done, walk: null };
+  if (o.walk === undefined || typeof o.walk !== 'object') return null;
+  const walk = checkedWalkPart(o.walk, new Set(done.names));
+  if (walk === null || !Number.isSafeInteger(o.walk.after) || o.walk.after < 0) return null;
+  return { v: 1, done, walk: { names: walk.names, after: o.walk.after, text: walk.text, toolu: walk.toolu } };
+}
+
+/** CP-39 (D-6931). The state's text; keys in the order v, done, walk. */
+export function formatSidecarWalk(state) {
+  const { names, text, toolu } = state.done;
+  const w = state.walk;
+  return JSON.stringify({
+    v: 1,
+    done: { names, text, toolu },
+    walk: w === null ? null : { names: w.names, after: w.after, text: w.text, toolu: w.toolu },
+  });
+}
+
+/** CP-39 (D-6931). A walk state with nothing done and no walk. */
+export function emptySidecarWalk() {
+  return { v: 1, done: { names: [], text: [], toolu: [] }, walk: null };
+}
+
+/** CP-39 (D-6931). Starts an extension walk at row 0 over walkNames(unseen, first, done.names, room). First it prunes from
+ *  `done` every name not in `unseen` (that sidecar is seen, its link decided) with its pairs, so `room` is
+ *  SIDECAR_WALK_CHARS_MAX less the units `done` keeps. */
+export function startSidecarWalk(state, unseen, first) {
+  const still = new Set(unseen);
+  const names = state.done.names.filter((n) => still.has(n));
+  const stems = new Set(names.map(sidecarStemOf));
+  state.done = {
+    names,
+    text: state.done.text.filter(([n]) => still.has(n)),
+    toolu: state.done.toolu.filter(([stem]) => stems.has(stem)),
+  };
+  const room = SIDECAR_WALK_CHARS_MAX - names.reduce((n, s) => n + s.length, 0);
+  state.walk = { names: walkNames(still, first, names, room), after: 0, text: [], toolu: [] };
+}
+
+/** CP-39 (D-6931). Folds toolResultCandidates' candidates (in entry order) into the walk in progress: a name or stem it
+ *  already holds keeps its entry. A candidate's `text` is its matched names NUL-joined; an empty text names nothing. */
+export function foldWalkCandidates(state, candidates) {
+  const w = state.walk;
+  const text = new Map(w.text);
+  const toolu = new Map(w.toolu);
+  for (const c of candidates) {
+    if (c.text !== '') for (const n of c.text.split('\0')) if (!text.has(n)) text.set(n, c.entryId);
+    for (const id of c.toolUseIds) if (!toolu.has(id)) toolu.set(id, c.entryId);
+  }
+  w.text = [...text];
+  w.toolu = [...toolu];
+}
+
+/** CP-39 (D-6931). Merges the finished walk into `done` (a name or stem `done` already holds keeps its entry) and clears `walk`. */
+export function finishSidecarWalk(state) {
+  const w = state.walk;
+  const text = new Map(state.done.text);
+  const toolu = new Map(state.done.toolu);
+  for (const [n, id] of w.text) if (!text.has(n)) text.set(n, id);
+  for (const [stem, id] of w.toolu) if (!toolu.has(stem)) toolu.set(stem, id);
+  state.done = { names: [...state.done.names, ...w.names], text: [...text], toolu: [...toolu] };
+  state.walk = null;
+}
+
+/** CP-39 (D-6931). For a name `done` holds, the candidates linkSidecar reads: the first text match, then the first toolu
+ *  match of its stem, each only when held, so linkSidecar answers what it answers over the full candidate list. */
+export function walkCandidates(state, name) {
+  const out = [];
+  const hit = state.done.text.find(([n]) => n === name);
+  if (hit !== undefined) out.push({ entryId: hit[1], text: name, toolUseIds: [] });
+  const stem = sidecarStemOf(name);
+  const answered = state.done.toolu.find(([s]) => s === stem);
+  if (answered !== undefined) out.push({ entryId: answered[1], text: '', toolUseIds: [stem] });
+  return out;
+}
+
+/** CP-39 (D-6938). The sidecar scan's cursor, meta `scan_sidecars_at`: {"v":1,"dir":"<home>/projects/<project>/<uuid>"|null,
+ *  "taken":<int>,"left":<int>,"held":<bool>}. `dir` is the last uuid directory, in walk order, whose sidecars this wrap
+ *  examined or deferred in full; `taken` counts the sidecars this wrap took, and `left` every sidecar it LEFT UNSEEN in the
+ *  directories it passed: too large, refused (by admission or a read error) or deferred. A deferred sidecar is not
+ *  `examined` (ingestSidecars' progress count) and IS counted here: the backlog is what the figure shows. `held` says a
+ *  read error or a deferral met in this wrap holds the mark. No row (null) is a clean wrap from the start. Anything else is a
+ *  HELD wrap from the start, so a lost cursor costs one more wrap and never marks a scan it did not finish. */
+export function parseSidecarScanAt(text) {
+  const held = { v: 1, dir: null, taken: 0, left: 0, held: true };
+  if (text === null || text === undefined) return { v: 1, dir: null, taken: 0, left: 0, held: false };
+  if (typeof text !== 'string') return held;
+  let o;
+  try { o = JSON.parse(text); } catch { return held; }
+  if (o === null || typeof o !== 'object' || o.v !== 1) return held;
+  if (o.dir !== null && typeof o.dir !== 'string') return held;
+  if (!Number.isSafeInteger(o.taken) || o.taken < 0 || !Number.isSafeInteger(o.left) || o.left < 0) return held;
+  if (typeof o.held !== 'boolean') return held;
+  return { v: 1, dir: o.dir, taken: o.taken, left: o.left, held: o.held };
+}
+
+/** CP-39 (D-6938). The cursor's text; keys in the order v, dir, taken, left, held. */
+export function formatSidecarScanAt(at) {
+  return JSON.stringify({ v: 1, dir: at.dir, taken: at.taken, left: at.left, held: at.held });
+}
+
+/** CP-39 (D-6938). What a wrap that reached its end records: `unseen` (taken + left) always, as meta `sidecars_unseen`; the
+ *  mark only when nothing held the wrap. */
+export function sidecarWrapClose(at) {
+  return { unseen: at.taken + at.left, mark: !at.held };
 }
 
 /** How one secret-bearing file is read (§8.3 layer 1):

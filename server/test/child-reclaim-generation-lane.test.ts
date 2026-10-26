@@ -258,7 +258,7 @@ describe('the reads are gathered before the loop, so the loop stays synchronous 
     expect(entry).toContain("await this.runLane('childReclaim', () => this.childReclaimPass(coord, records, names));");
     expect([...entry.matchAll(/\bawait\b/g)], 'the entry awaits the lane alone').toHaveLength(1);
     const body = codeOnly(sourceOfSymbol(path.join(srcDir, 'watch.ts'), 'FleetWatcher.childReclaimPass'));
-    const gather = body.indexOf('await this.childReclaimGatherGenerations(records)');
+    const gather = body.indexOf('await Promise.all([\n      this.childReclaimGatherGenerations(records)');
     const decisionClock = body.indexOf('const asked = this.childReclaimLaneNow();');
     const restamp = body.indexOf("this.restamp('childReclaim', mono);");
     const loop = body.indexOf('for (const r of records) {');

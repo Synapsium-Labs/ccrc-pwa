@@ -131,6 +131,9 @@ export const CHILD_RECLAIM_SWEEP_MS = 60_000;
  *  takes it as an argument (it imports no L4 constant). EXPORTED for its suite; `watch.ts` re-exports it. */
 export const COLLECT_OBSERVE_INTERVAL_MS = CHILD_RECLAIM_SWEEP_MS;
 
+/** The checks lane's beat (PR landing in ccrc, stage 1): the fastest a project's read cadence goes. */
+export const LANDING_CHECKS_BEAT_MS = 30_000;
+
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
 
@@ -140,10 +143,10 @@ export type LaneClock = 'mono' | 'wall';
 export type LaneFlight = 'skip' | 'join' | 'join-rerun' | 'none';
 
 export type LaneName =
-  | 'caps' | 'catalogue' | 'inventory' | 'serverCaps'
+  | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'serverCaps'
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
-  | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator';
+  | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -177,6 +180,13 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     warnKey: 'ccrc-server: the catalogue poller rejected — this is a bug, poll() should never reject',
   },
   { name: 'inventory', cadenceMs: UPDATE_INVENTORY_MS, derivedFrom: null, clock: 'mono', flight: 'join-rerun', warnKey: null },
+  // PR landing in ccrc, stage 1 (spec §3.5): the checks lane looks every 30 s; each project's own read cadence (30 s
+  // while an episode is unsettled or red, 120 s otherwise) is the lane's own memory. A pass still running after five
+  // minutes (a hung ccd call is bounded by its own timeout) is abandoned, never allowed to hold the lane shut.
+  {
+    name: 'landingChecks', cadenceMs: LANDING_CHECKS_BEAT_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
+    staleAfterMs: 5 * 60_000, warnKey: 'ccrc-server: the landing checks lane failed',
+  },
   { name: 'serverCaps', cadenceMs: SERVER_CAPS_WRITE_MS, derivedFrom: null, clock: 'mono', flight: 'join', warnKey: null },
   { name: 'tasks', cadenceMs: TASK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   { name: 'usage', cadenceMs: USAGE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
@@ -222,6 +232,20 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   {
     name: 'deadCoordinator', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'mono', flight: 'join', warnKey: null,
     derivedFrom: { name: 'childReclaim', reason: 'a sibling of the child lane on the same tick, under the same switch' },
+  },
+  // The orphan-worktree lane (fleet disk retention, D-6631): the fifth of the same-tick siblings, its beat moved here from a
+  // `lastOrphanTreeSweep` field of the watcher (GitHub #1279) with the clock, cadence and flight it had: monotonic, one pass a
+  // cadence, passes may overlap (`OrphanTreeSweep` refuses its own second), and its failure reaches `tick`'s own catch.
+  {
+    name: 'orphanTrees', cadenceMs: CHILD_RECLAIM_SWEEP_MS, clock: 'mono', flight: 'none', warnKey: null,
+    derivedFrom: { name: 'childReclaim', reason: 'a sibling of the child lane on the same tick, shadow until its own switch' },
+  },
+  // The delegation lane (wave 3): the census's cadence, followed by reference. One pass at a time (a call beside a running pass
+  // is refused); the lane catches its own failures with sentences of its own, so no row warns. It spends the cadence only once
+  // it has a census to read (`kick` hands it back otherwise), which is why the lane, not `run`, decides what a throttled call is.
+  {
+    name: 'delegation', cadenceMs: DIVERGENCE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
+    derivedFrom: { name: 'DIVERGENCE_SWEEP_MS', reason: 'the lane reads each census pass once, so it follows the census\'s own beat' },
   },
 ];
 

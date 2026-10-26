@@ -198,6 +198,14 @@ function sweepStubs(home: string, units: Array<{ unit: string; isActive: string[
   return bin;
 }
 
+/** What the pair installer publishes for the tree's ccd: its line-2 placeholder swapped, in place, for the
+ *  marker `markGenerated` writes (install-time stamping; server/test/ccd-install-stamp.test.ts owns the rule). */
+const stampedCcd = (dir: string): Buffer => {
+  const lines = readFileSync(path.join(dir, 'ccd'), 'utf8').split('\n');
+  if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
+  return Buffer.from(markGenerated(lines.join('\n')));
+};
+
 describe('deploy.sh agent verifies the restart it just performed', () => {
   it('passes when the unit is active with a MainPID that does not move', () => {
     const r = runVerify(stubs({ isActive: ['active', 'active'], mainPid: ['4242', '4242'] }));
@@ -1760,7 +1768,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       const shebang = readFileSync(entry, 'utf8').split('\n')[0]!;
       expect(shebang, 'an absolute isolated-python shebang').toMatch(/^#!\/\S+ -IS$/);
       expect([entry, bodyPath].map((p) => (statSync(p).mode & 0o777).toString(8)), 'launcher 0755, body 0644').toEqual(['755', '644']);
-      expect(readFileSync(bodyPath).equals(readFileSync(path.join(repoCcd, 'ccd'))), 'the body is the tree\'s ccd').toBe(true);
+      expect(readFileSync(bodyPath).equals(stampedCcd(repoCcd)), 'the body is the tree\'s ccd').toBe(true);
       const digest = /^BODY_SHA256 = '([0-9a-f]{64})'$/m.exec(readFileSync(entry, 'utf8'))?.[1];
       const want = spawnSync('python3', ['-IS', '-c', `import hashlib;print(hashlib.sha256(open(${JSON.stringify(bodyPath)},'rb').read()).hexdigest())`],
         { encoding: 'utf8' }).stdout.trim();
@@ -1777,7 +1785,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       const refused = run(home);
       expect(refused.status, 'a directory at the launcher\'s path aborts the deploy').not.toBe(0);
       expect(String(refused.stderr)).toContain('is a directory');
-      expect(readFileSync(bodyPath).equals(readFileSync(path.join(repoCcd, 'ccd'))), 'nothing moved').toBe(true);
+      expect(readFileSync(bodyPath).equals(stampedCcd(repoCcd)), 'nothing moved').toBe(true);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

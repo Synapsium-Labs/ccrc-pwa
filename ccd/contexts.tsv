@@ -729,6 +729,7 @@ _ws_loose_idle	C4
 _ws_loose_floor	C4
 _ws_loose_registered	C4
 _ws_loose_slug_held	C4
+_ws_loose_rows_file	C4
 _ws_loose_rows	C4
 _ws_loose_rec_dir	C4
 _ws_loose_records_of	C4
@@ -754,6 +755,7 @@ _ws_loose_collect	C4
 _ws_reap_leaf_ok	C4
 _ws_reclaim_mirror	C4
 _ws_reap_crumb_unread	C4
+_turn_reading	C3
 _ws_child_ignored_count	C4
 _authdead_cred_src	C1
 _authdead_cred_changed	C1

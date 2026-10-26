@@ -3763,3 +3763,80 @@ describe('the check re-arms when a segment it saw is gone (W5h-1 Task 4; D-5636 
     expect(strandedBlobs(box)).toEqual([]);
   }, 120_000);
 });
+
+describe('CP-39 Task 5: the export census checks its budget before the file clock and takes a chunk once it is built (D-6937)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  interface C5 { exportCensus(db: X9Db, nowMs: number, budget: Record<string, unknown>): boolean; newBudget(now?: () => number, limits?: { maxMs?: number }): Record<string, unknown> }
+  const DAY = 86_400_000;
+  /** One transcript whose one file was last written 200 days ago under a 30-day home, one row and its blob: due. */
+  const seeded = (prefix: string): { box: ReturnType<typeof x9H.makeHistoryBox>; db: X9Db; file: string } => {
+    const box = x9H.makeHistoryBox(prefix);
+    x9Store.createStore(box.home);
+    const home = box.homes[0]!;
+    const file = x9Path.join(home, 'projects', '-home-u-tree-demo', 'cp39-census.jsonl');
+    x9Fs.mkdirSync(x9Path.dirname(file), { recursive: true });
+    x9Fs.writeFileSync(file, '{}\n');
+    const old = Math.floor((Date.now() - 200 * DAY) / 1000);
+    x9Fs.utimesSync(file, old, old);
+    const db = x9Store.openWriter(x9Lib.historyPaths(box.home).dbFile);
+    const t = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)').run('39393939-0000-4000-8000-000000000001').lastInsertRowid);
+    const f = Number(db.prepare("INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, status, parser_version) VALUES (1, 2, '', ?, 'live', 1)").run(t).lastInsertRowid);
+    db.prepare('INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES (?, ?, ?)').run(file, f, Date.now());
+    const text = 'cp39 a due row';
+    const b = Number(db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?)')
+      .run(x9Hash('sha256').update(text).digest(), x9Store.CODEC, x9Store.brotli(Buffer.from(text)), Buffer.byteLength(text)).lastInsertRowid);
+    db.prepare("INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'operator', 1, 1, ?, ?, ?)")
+      .run('39393939-0000-4000-8000-0000000000a1', t, f, b, Date.now() - 200 * DAY);
+    db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('export-census', 1, ?, NULL)")
+      .run(JSON.stringify({ last: 0, due: 0, overdue: 0, homeDays: { [home]: 30 }, startMs: Date.now(), dueOldest: null }));
+    return { box, db, file };
+  };
+  const cursorOf = (db: X9Db): { last: number; due: number } =>
+    JSON.parse((db.prepare("SELECT cursor FROM derivation_state WHERE step = 'export-census'").get() as { cursor: string }).cursor);
+  /** Counts statSync calls on `p` from sweep.mjs: node:fs's DEFAULT export patched, carried to sweep.mjs's named import. */
+  const countingStat = (p: string): { n: () => number; restore: () => void } => {
+    const real = fs.statSync;
+    let n = 0;
+    (fs as { statSync: unknown }).statSync = Object.assign(function statSync(q: unknown, ...rest: unknown[]): unknown {
+      if (q === p) n += 1;
+      return (real as (...a: unknown[]) => unknown)(q, ...rest);
+    }, real);
+    syncBuiltinESMExports();
+    return { n: () => n, restore: () => { (fs as { statSync: unknown }).statSync = real; syncBuiltinESMExports(); } };
+  };
+
+  it('CONTROL: the counter sees the file clock stat the recorded file, and an ample budget completes the census', async () => {
+    const sw = (await import('../../ccd/history/sweep.mjs')) as unknown as C5;
+    const { db, file } = seeded('ccrc-hist-cp39-c5c-');
+    const c = countingStat(file);
+    try {
+      expect(sw.exportCensus(db, Date.now(), sw.newBudget()), 'complete').toBe(true);
+      expect(c.n(), 'the file clock stat the recorded file').toBeGreaterThan(0);
+    } finally { c.restore(); x9Store.closeWriter(db); }
+  });
+
+  it("a budget spent before the census builds no file clock: no recorded file is stat'd, the cursor stands", async () => {
+    const sw = (await import('../../ccd/history/sweep.mjs')) as unknown as C5;
+    const { db, file } = seeded('ccrc-hist-cp39-c5a-');
+    const c = countingStat(file);
+    try {
+      expect(sw.exportCensus(db, Date.now(), sw.newBudget(() => 0, { maxMs: 0 })), 'spent: not complete').toBe(false);
+      expect(c.n(), 'the file clock was never built').toBe(0);
+      expect(cursorOf(db).last).toBe(0);
+    } finally { c.restore(); x9Store.closeWriter(db); }
+  });
+
+  it('a budget that ends while the clock is built still takes one chunk: the due blob is counted and the cursor moves', async () => {
+    const sw = (await import('../../ccd/history/sweep.mjs')) as unknown as C5;
+    const { db, file } = seeded('ccrc-hist-cp39-c5b-');
+    const c = countingStat(file);
+    try {
+      // Within the budget until the file clock stats the file; spent from then on, whatever the order of calls.
+      const budget = sw.newBudget(() => (c.n() > 0 ? 10_000 : 0), { maxMs: 1_000 });
+      expect(sw.exportCensus(db, Date.now(), budget), 'stopped after one chunk').toBe(false);
+      expect(c.n(), 'CONTROL: the clock was built').toBeGreaterThan(0);
+      expect(cursorOf(db), 'one chunk taken: the due blob counted, the cursor past it').toMatchObject({ due: 1 });
+      expect(cursorOf(db).last).toBeGreaterThan(0);
+    } finally { c.restore(); x9Store.closeWriter(db); }
+  });
+});

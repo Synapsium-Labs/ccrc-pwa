@@ -8,7 +8,7 @@
 // volume pages as plainly as a full one.
 import {
   DISK_CLEAR_MARGIN_PCT, DISK_CRITICAL_PCT, DISK_WARN_PCT,
-  type DiskExpectedMount, type DiskFilesystem, type DiskFilesystemLevel, type DiskLevel, type DiskMeasured,
+  type DiskExpectedMount, type DiskFilesystem, type DiskFilesystemLevel, type DiskHealth, type DiskLevel, type DiskMeasured,
 } from '../../shared/disk.js';
 
 /** A filesystem's held level and the one differing level seen once, awaiting its second sighting. */
@@ -202,5 +202,33 @@ export function diskNotice(prev: DiskVerdict | null, next: DiskVerdict): DiskNot
     mode: 'push', title: `Fleet disk ${usedPct(worst)}% full · ${gib(worst.availBytes)} free`,
     body: `Holds ${worst.roots.join(', ')}${others > 0 ? `, and ${others} more filesystem${others === 1 ? '' : 's'} at ${next.level}` : ''}.${downText} ${limits}`,
     dedupeKey: `disk:${worst.dev}:${next.level}:${episode}`, dev: worst.dev,
+  };
+}
+
+/** The block `GET /api/fleet/health` serves for a verdict (D-6615): the pending sightings dropped, pressure when critical,
+ *  `holders` empty (the tmp census's five largest are overlaid by whoever serves the block). */
+export function diskBlockOf(v: DiskVerdict): DiskHealth {
+  return {
+    at: v.at,
+    level: v.level,
+    filesystems: v.filesystems.map(({ pending: _pending, ...fs }) => fs),
+    expectedMounts: v.expectedMounts,
+    pressure: v.level === 'critical',
+    holders: [],
+  };
+}
+
+/** The block after a read that could not be taken (an older agent, a fault on the link): the held block's facts stay, and
+ *  the level stays a standing `warn` or `critical`, else reads `unmeasured`, never `ok`, so the one alarm does not go dark
+ *  exactly when a full box stalls. */
+export function unmeasuredDiskBlock(held: DiskHealth | null, nowMs: number): DiskHealth {
+  const standing = held !== null && (held.level === 'warn' || held.level === 'critical');
+  return {
+    at: held?.at ?? nowMs,
+    level: standing ? held.level : 'unmeasured',
+    filesystems: held?.filesystems ?? [],
+    expectedMounts: held?.expectedMounts ?? [],
+    pressure: held?.pressure ?? false,
+    holders: [],
   };
 }

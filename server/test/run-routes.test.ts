@@ -29,8 +29,9 @@ import {
   WORK_ITEM_MAX,
   WORK_ITEM_TITLE_MAX,
   isSkillState,
+  type RunSummary,
 } from '../../shared/api.js';
-import { okRun, okRuns } from './coordReadHelpers.js';
+import { okRun, okRuns, parentOfSession } from './coordReadHelpers.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { NotifyLog } from '../src/notifylog.js';
 
@@ -438,6 +439,23 @@ describe('POST /api/runs', () => {
     expect(res.statusCode).toBe(200);
   });
 
+  // ARCH-62 slice 2, ruling (a): the gate reads the worker rows as `openClaimantsOf` did, proving no integers, so a done
+  // worker run beyond 2^53 is no reason to answer 500 there. Red on b05c06373 (500 from claimantsOfSession). Past the
+  // gate, minting an id after that row is refused on its own terms, which is not this pin's business.
+  it('a coordinator that is the worker of a done run beyond 2^53 gets past the worker gate, never a 500', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' });
+    tx(w.coord.db, () => {
+      w.coord.db.prepare("UPDATE runs SET state = 'done', id = ? WHERE id = ?").run(2n ** 53n + 1n, first.json().id);
+    });
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Later', claimedBy: 'demo-existing' });
+    expect(res.statusCode).not.toBe(500);
+    expect(JSON.stringify(res.json())).not.toContain('claimantsOfSession');
+  });
+
   it('admits a SELF-claimed run\'s session — it is its own worker, not somebody\'s', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-self');
@@ -480,7 +498,7 @@ describe('POST /api/runs', () => {
     // this door used to make answers the session's OWN id here, which the
     // self-claim admission then waves through — `demo-existing` is still
     // `other-coordinator`'s worker on the older open run the whole time.
-    expect(w.coord.parentOfSession('demo-existing')).toBe('demo-existing');
+    expect(parentOfSession(w.coord, 'demo-existing')).toBe('demo-existing');
     const res = await postOpen(app, { ...OPEN_BODY, program: 'build5-third', title: 'A worker coordinating',
       claimedBy: 'demo-existing' });
     expect(res.statusCode).toBe(409);
@@ -4082,6 +4100,20 @@ describe('the run routes refuse an unreadable run rather than acting on it (D-25
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable' });
   });
+
+  // D-6912: the review cap's read says a failed store read as 503, never the 404 that would say "not a work run".
+  it('GET /api/coord/review-cap/:id answers 503, and the absent run still answers 404', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const id = plantWideWave(w.coord, 13);
+    const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${id}` });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable' });
+    const absent = await app.inject({ method: 'GET', url: '/api/coord/review-cap/4242' });
+    expect(absent.statusCode).toBe(404);
+    expect(absent.json()).toMatchObject({ ok: false, error: 'not-found' });
+  });
 });
 
 describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
@@ -4261,6 +4293,32 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
       expect(w.coord.reviewRounds(workId)).toBe(4);
     });
 
+    // Review 960 F1: the refusal's `ask` takes the same cut as the GET, so a key the summary's cut falls inside goes
+    // out as no part of itself (the cut drops the whole token), even with no masker that knows the key.
+    it("the 409's ask sends no part of a key that the summary's 600-character cut falls inside", async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      const key = ['cmp', '0a1b2c3d4e', '5f6a7b8c9d', 'e0f1a2b3c4'].join('.');
+      const words = 'word '.repeat(118); // 590 characters, so the key spans character 600
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: ids[2]!,
+        kind: 'status', subject: 'review-done', body: `{"reviewedTip":"x"}\n${words}${key} tail`, artifacts: [] });
+      const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
+      expect(refused.statusCode).toBe(409);
+      for (let i = 0; i + 8 <= key.length; i++) expect(refused.body, key.slice(i, i + 8)).not.toContain(key.slice(i, i + 8));
+      expect((refused.json() as { ask: { lastReview: { summary: string } } }).ask.lastReview.summary).toBe(words.trimEnd());
+    });
+
+    // Review 960 V1: `REVIEW_CAP_REFUSAL_TEXT`'s `not-configured` word has a route row behind it, one per cap route.
+    it.each([['GET', '/api/coord/review-cap/7'], ['POST', '/api/coord/review-cap']] as const)(
+      '%s %s answers 501 not-configured without a coordination store', async (method, url) => {
+        const home = mkTmp('ccrc-runs-');
+        app = await buildServer(testDeps(home));   // no `coord` key at all
+        const res = await app.inject({ method, url, ...(method === 'POST' ? { payload: { run: 7 } } : {}) });
+        expect(res.statusCode).toBe(501);
+        expect(res.json()).toMatchObject({ ok: false, error: 'not-configured' });
+      });
+
     it('the lift refuses a body with no run, and an id that is not a work run', async () => {
       const home = mkTmp('ccrc-runs-');
       const { w, workId } = await capApp(home);
@@ -4268,6 +4326,105 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
       expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: {} })).statusCode).toBe(400);
       expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: r1 } })).statusCode).toBe(404);
       expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: 9999 } })).statusCode).toBe(404);
+    });
+
+    // D-6909: every run row carries the cap's state, so the console can show it without a second read.
+    it("GET /api/runs carries the cap's state: rounds, the cap, and when its ask was raised and lifted", async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      const capOf = async (id: number) => {
+        // `closed=1`: the three rounds are failed, so only the archive half lists them.
+        const res = await app.inject({ method: 'GET', url: '/api/runs?closed=1', headers: tokenHeaders(TOKEN) });
+        expect(res.statusCode).toBe(200);
+        return ((res.json() as { runs: RunSummary[] }).runs.find((r) => r.id === id))!.reviewCap;
+      };
+      expect(await capOf(workId)).toEqual({ rounds: 3, cap: 3, askedAt: null, liftedAt: null });
+      for (const id of ids) expect(await capOf(id)).toBeNull();
+      const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
+      expect(refused.statusCode).toBe(409);
+      // One round predicate (D-6909): the refusal's `by` is the row's `reviewCap.rounds` for the same run.
+      expect((refused.json() as { by: string }).by).toBe(String((await capOf(workId))!.rounds));
+      const asked = await capOf(workId);
+      expect(asked).toMatchObject({ rounds: 3, cap: 3, liftedAt: null });
+      expect(typeof asked!.askedAt).toBe('number');
+      expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: workId } })).statusCode).toBe(200);
+      const lifted = await capOf(workId);
+      expect(lifted!.askedAt).toBe(asked!.askedAt);
+      expect(typeof lifted!.liftedAt).toBe('number');
+      // `coord.runs()` is what the live `runs` frame ships, and `coord.run()` the advance echo: the same object.
+      expect(okRuns(w.coord.runs()).find((r) => r.id === workId)!.reviewCap).toEqual(lifted);
+      expect(okRun(w.coord.run(workId))!.reviewCap).toEqual(lifted);
+    });
+
+    // D-6910: the operator's sheet reads the refusal's own ask, through the one helper both compose it with.
+    it("GET /api/coord/review-cap/:id answers the refusal's own ask, with when it was raised and lifted", async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      const reportPath = path.join(home, 'review-3.md');
+      writeFileSync(reportPath, '# Review\n\n## Findings\n- **F1 (tests, minor)** `b.ts#case` — no case.\n');
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: ids[2]!,
+        kind: 'status', subject: 'review-done', body: '{"reviewedTip":"x"}\n1 finding', artifacts: [reportPath] });
+      const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
+      expect(refused.statusCode).toBe(409);
+      const { ask } = refused.json() as { ask: unknown };
+      const read = async () => app.inject({ method: 'GET', url: `/api/coord/review-cap/${workId}` });
+      const before = await read();
+      expect(before.statusCode).toBe(200);
+      const view = before.json() as { ok: boolean; ask: unknown; askedAt: unknown; liftedAt: unknown };
+      expect(view.ok).toBe(true);
+      expect(view.ask).toEqual(ask);
+      expect((view.ask as { lastReview: { findings: unknown } }).lastReview.findings)
+        .toEqual({ state: 'read', lines: ['**F1 (tests, minor)** `b.ts#case` — no case.'] });
+      expect(typeof view.askedAt).toBe('number');
+      expect(view.liftedAt).toBeNull();
+      expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: workId } })).statusCode).toBe(200);
+      const after = (await read()).json() as { askedAt: unknown; liftedAt: unknown };
+      expect(after.askedAt).toBe(view.askedAt);
+      expect(typeof after.liftedAt).toBe('number');
+      // The report deleted: the same read says so, in the findings' own word.
+      rmSync(reportPath);
+      expect(((await read()).json() as { ask: { lastReview: { findings: unknown } } }).ask.lastReview.findings)
+        .toEqual({ state: 'absent' });
+    });
+
+    it('GET /api/coord/review-cap/:id says unnamed when no review has reported, and nulls before any ask', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { workId } = await capApp(home);
+      const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${workId}` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true, askedAt: null, liftedAt: null, ask: {
+        run: workId, rounds: 0, cap: 3,
+        lastReview: { reviewRunId: null, summary: null, report: null, findings: { state: 'unnamed' } } } });
+    });
+
+    it('GET /api/coord/review-cap/:id says unnamed for a review that reported with no report artifact on its mail', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const r1 = await round(w, workId, 1);
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: r1,
+        kind: 'status', subject: 'review-done', body: '{"reviewedTip":"x"}\nno findings', artifacts: [] });
+      const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${workId}` });
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as { ask: unknown }).ask).toEqual({ run: workId, rounds: 1, cap: 3,
+        lastReview: { reviewRunId: r1, summary: 'no findings', report: null, findings: { state: 'unnamed' } } });
+    });
+
+    it('GET /api/coord/review-cap/:id answers 404 for a review run or no run, and 400 for a bad id', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const r1 = await round(w, workId, 1);
+      for (const id of [String(r1), '999999']) {
+        const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${id}` });
+        expect(res.statusCode, id).toBe(404);
+        expect(res.json()).toMatchObject({ ok: false, error: 'not-found' });
+      }
+      for (const id of ['0', '01', 'abc']) {
+        const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${id}` });
+        expect(res.statusCode, id).toBe(400);
+        expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+      }
     });
 
     it('counts every state: a failed or abandoned round still spent one', async () => {

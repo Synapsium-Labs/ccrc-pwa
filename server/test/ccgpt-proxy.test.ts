@@ -2,7 +2,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { type ChildProcess } from 'node:child_process';
 import { createServer, request as httpRequest, type Server } from 'node:http';
-import { connect as netConnect, type AddressInfo } from 'node:net';
+import { connect as netConnect } from 'node:net';
 import { writeFileSync, mkdirSync, utimesSync, chmodSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { gzipSync, gunzipSync, deflateSync, inflateSync } from 'node:zlib';
@@ -12,6 +12,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { cpSync, existsSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
 import { createServer as createNetServer, type Server as NetServer } from 'node:net';
 import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
+import { freePort } from './codexLaneFixture.js';
 import { BRIDGE_AUTH_LIB, BRIDGE_DIR, BRIDGE_MODELS, fakeResponses, plantBridgeLane } from './codexBridgeFixture.js';
 
 const PROXY_PORT = 45010;
@@ -1716,18 +1717,11 @@ describe.skipIf(!PY)('ccgpt-proxy: a refused upstream connection is waited out, 
   }
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-  /** A port nothing listens on: bound at 0 so the kernel picks it, read, and
-   *  closed again. Each refused-connection case takes its OWN, so the fixed
-   *  `UPSTREAM_PORT` is never left unbound for one of them to be refused on,
-   *  where any other process (or a sibling suite) that bound it would turn a
-   *  "refused" case into a connected one. */
-  async function freePort(): Promise<number> {
-    const s = createServer();
-    await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()));
-    const port = (s.address() as AddressInfo).port;
-    await new Promise<void>((r) => s.close(() => r()));
-    return port;
-  }
+  // A port nothing listens on comes from the codex-lane fixture's `freePort`
+  // (D-6856), below the kernel's ephemeral range: a refused-connection case
+  // binds its upstream LATER (`listenUpstream`), and a sibling suite's port-0
+  // bind could otherwise take it in between. Each case takes its OWN, so the
+  // fixed `UPSTREAM_PORT` is never left unbound for one of them to be refused on.
   /** `startPair` with nothing listening upstream yet, on a port of its own. */
   async function startRefusedPair(
     home: string, handler: (req: any, body: Buffer, res: any) => void, env: Record<string, string> = {},

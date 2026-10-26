@@ -14,6 +14,7 @@ import { installVersionedTree } from './installTreeFixture.js';
 import { } from './codexLaneFixture.js';
 import {
   REPO,
+  REAL_NODE,
   BASH,
   allowCurlPort,
   curlFrontPassed,
@@ -1241,6 +1242,54 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     r = runUpdate(home, ['--allow-unsigned']);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/--allow-unsigned does not apply to a bundle that FAILS/);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  // D-6842: the REAL verifier, not the node shim: a hostile release host serves
+  // the right SHA256SUMS and tarball and, as the bundle, a file whose second
+  // line is terminal control. Node's JSON.parse error quotes about the first ten
+  // characters of a long bad line (the whole of a short one), so the first case
+  // is the review's line and the other two put the title set and the OSC 52
+  // write where that quote reaches them. `refuse` prints each byte outside
+  // printable ASCII as `?`; nothing raw reaches stderr, stdout or update.json.
+  const ESC = '\x1b';
+  const BEL = '\x07';
+  const CLEAR = `${ESC}[2J`;
+  const HOME_CURSOR = `${ESC}[H`;
+  const TITLE = `${ESC}]0;title${BEL}`;
+  const OSC52 = `${ESC}]52;c;aGVsbG8=${BEL}`;
+  it.each([
+    ['clear screen, cursor home, a title set and an OSC 52 write', `${CLEAR}${HOME_CURSOR}${TITLE}${OSC52}`, '?[2J?[H?]0'],
+    ['a title set alone', TITLE, '?]0;title?'],
+    ['an OSC 52 clipboard write alone', OSC52, '?]52;c;aGVsbG8=?'],
+    // Not only C0: DEL, a C1 CSI (two UTF-8 bytes) and a multibyte letter are each outside printable ASCII too.
+    ['a DEL, a C1 CSI and a multibyte letter', '\x7f\u009béx', '"?????x"'],
+  ])('a hostile bundle (%s) is refused by the real verifier, and its refusal line carries no raw escape byte (D-6842)', (_what, line, shown) => {
+    const home = freshUpdateBox('ccrc-update-prov-escape-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const before = treeDigest(join(home, 'ccrc'));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'releases', 'latest', 'download', 'ccrc-v2.0.0.tar.gz.sigstore.json'), `{"a":1}\n${line}\n`);
+    // A `node` ahead of the shim on PATH, so `_upd_fetch` runs the checkout's
+    // own deploy/verify-provenance.mjs; the shim execs this same node for
+    // every other invocation.
+    const realBin = join(home, 'real-node-bin');
+    mkdirSync(realBin, { recursive: true });
+    writeFileSync(join(realBin, 'node'), `#!/bin/sh\nexec '${REAL_NODE}' "$@"\n`);
+    chmodSync(join(realBin, 'node'), 0o755);
+    const r = runUpdate(home, [], { PATH: `${realBin}:${updateEnv(home)['PATH']}` });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(existsSync(join(home, 'verify-argv')), 'the shim answered, not the real verifier').toBe(false);
+    expect(r.stderr).toMatch(/^verify-provenance: Unexpected token '\?', .* is not valid JSON$/m);
+    expect(r.stderr).toMatch(/provenance verification FAILED for ccrc-v2\.0\.0\.tar\.gz .* refusing to extract or install/);
+    expect(r.stderr).toContain(shown);
+    const report = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
+    for (const [where, text] of [['stderr', r.stderr], ['stdout', r.stdout], ['update.json', report]] as const) {
+      expect(text.includes(ESC), `${where} holds a raw ESC`).toBe(false);
+      expect(text.includes(BEL), `${where} holds a raw BEL`).toBe(false);
+      for (const seq of [CLEAR, HOME_CURSOR, `${ESC}]0;`, `${ESC}]52;`]) expect(text.includes(seq), `${where} holds ${JSON.stringify(seq)}`).toBe(false);
+    }
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
   });
 

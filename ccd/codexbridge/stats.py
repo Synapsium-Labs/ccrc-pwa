@@ -29,9 +29,12 @@ A RESTART LOSES NOTHING THE READERS NEED: construction loads a valid version-1 f
 refusals (the hourly refresh may not have read them yet, Task 15), each route's ratio, request count and largest
 prompt (D24's calibration), the names, the unexplained list, the outcomes and `since` (the 7-day watch's counters).
 Any other file (unreadable, another version, another lane) starts fresh and counts `stats:reset`. At load, and at
-every `name()`, a name `known.explained` now covers leaves `unexplained`; when the load changed what it carried, the
-constructor flushes at once, so the file the doctor reads changes at the restart (Task 17's WARN clears on an idle
-lane too).
+every `name()`, a name `known.explained` now covers leaves `unexplained`. The load also drops the two markers,
+UNRECOGNISED and OVERFLOW, from `unexplained` (the Stage 2 wave 3 whole-wave fix round, Z1): neither is a name known.py
+could ever explain, so a carried one would hold Task 17's WARN for good; each comes back only when the bridge meets
+such a name again. The `names` counters are carried whole, so a family already at NAMES_MAX maps its next new name
+to OVERFLOW again, which is new drift. When the load changed what it carried, the constructor flushes at once, so the
+file the doctor reads changes at the restart (Task 17's WARN clears on an idle lane too).
 
 One writer per lane (the lane's one bridge process); every method takes one lock, so handler threads share one Stats.
 A flush is tmp (`<path>.tmp`, one name, so a killed writer's leftover is overwritten, never left) + fchmod 0600 +
@@ -192,8 +195,8 @@ class Stats:
             os.close(fd)
 
     def _load(self) -> bool:
-        """Carry what a valid file of this lane holds; True when the carried data changed (a reset, or an explained
-        name dropped), so the constructor writes the file at once."""
+        """Carry what a valid file of this lane holds; True when the carried data changed (a reset, an explained name
+        or a marker dropped), so the constructor writes the file at once."""
         try:
             old = self._read()
         except ValueError:
@@ -240,6 +243,9 @@ class Stats:
             if not isinstance(held, list):
                 continue
             kept = sorted({n for n in held if isinstance(n, str) and _bounded(n) == n})
+            if UNRECOGNISED in kept or OVERFLOW in kept:  # markers, never carried (the module docstring)
+                changed = True
+                kept = [n for n in kept if n not in (UNRECOGNISED, OVERFLOW)]
             still = [n for n in kept if not known.explained(family, n)]
             if len(still) != len(kept):
                 changed = True

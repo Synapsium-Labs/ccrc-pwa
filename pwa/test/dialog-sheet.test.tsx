@@ -826,6 +826,26 @@ describe('DialogSheet (hook envelope)', () => {
     ).toBeInTheDocument();
   });
 
+  it('a Deny refused background-only names the background work and says the request already resolved (ARCH-13a)', async () => {
+    vi.spyOn(api, 'interrupt').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'background-only', count: 2, kinds: ['workflow'] }));
+    renderWithAsk(APPROVAL_ASK, yesNoDialog());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+    expect(await screen.findByText(
+      'The request already resolved; 2 background tasks (workflow) are still running.')).toBeInTheDocument();
+  });
+
+  it('a Deny refused background-only with no count still names the background work', async () => {
+    vi.spyOn(api, 'interrupt').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'background-only', count: null, kinds: [] }));
+    renderWithAsk(APPROVAL_ASK, yesNoDialog());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+    expect(await screen.findByText(
+      'The request already resolved; a background shell or monitor is still running.')).toBeInTheDocument();
+  });
+
   // — the three envelope arms nothing reached (measured: statements 75, 193
   // and 204 and branches 75#0, 198#1, 364#1 of `EnvelopeSheet.tsx`) —
 

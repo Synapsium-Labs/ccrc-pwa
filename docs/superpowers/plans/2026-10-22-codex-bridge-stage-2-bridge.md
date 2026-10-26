@@ -285,7 +285,9 @@ never put in the environment.
 (0600, the bridge's only non-secret output), `store` = `reasoning.sqlite` (0600, plus sqlite's `-wal`/`-shm`),
 `recordings` = `recordings/` (0700, written only while `record-streams` exists in the lane directory, Task 18).
 Markers with no writer in the tree: `bridge-instructions` (send `system` as top-level `instructions`, D11's per-lane
-switch) and `record-streams`; and Task 18's `liveprobe-allowed` and `liveprobe.count`. Removal reaps all four.
+switch) and `record-streams`; and Task 18's `liveprobe-allowed`. Task 18's probe writes `liveprobe.count` (through
+`liveprobe.count.tmp`, renamed over it). Removal reaps those four files, and `liveprobe.count.tmp` and the stats file's
+`.tmp`, which a killed write leaves.
 
 **Routes** (Task 8): `POST /v1/messages` (with or without `?beta=true`), `POST /v1/messages/count_tokens`,
 `GET /v1/models`, `GET /ccgpt/lane` (no key). The bridge's lane answer is `{"lane": <id>, "mode": "direct"}`, never
@@ -1198,12 +1200,13 @@ unsupported media, and moves no item (`core/src/context_manager/history.rs:600-6
 switch`, the hourly auto-advance on a `direct` lane, the doctor's mode-aware rows, the poller's direct arm, D25, and
 the docs.
 **PR boundary:** cut after wave 1 and Stage 1 wave 2 merged; ends when Task 16 is green.
-**Effect on a live box:** the install spine re-renders each codex lane's files once (every `lane.json` gains
-`bridge`, `upstream` and `bridgeFiles`, Task 11's `_inst_codex_lanes`), under the lane-files lock and before the
-doctor runs, so the update's doctor stays clean (without it every lane's `lane.json` would read stale, the doctor
-would FAIL each one, and `ccrc update` would exit 3). The re-render also rewrites each lane's settings env block, TSV
-and effort file from unchanged inputs. Nothing else changes until an operator runs `ccrc codex switch <id> direct`:
-every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's rows for a `litellm` lane are today's.
+**Effect on a live box:** the install spine re-renders, once, the files of each codex lane whose `lane.json` reads stale
+(every `lane.json` from before this wave gains `bridge`, `upstream` and `bridgeFiles`, Task 11's `_inst_codex_lanes`; a
+lane with no `lane.json` is left for its first start, D-6872), under the lane-files lock and before the doctor runs, so
+the update's doctor stays clean (without it every lane's `lane.json` would read stale, the doctor would FAIL each one,
+and `ccrc update` would exit 3). The re-render also rewrites each lane's settings env block, TSV and effort file from
+unchanged inputs. Nothing else changes until an operator runs `ccrc codex switch <id> direct`: every lane's
+`exec.bridge` is absent, which reads `litellm`. A `litellm` lane's usage rows are today's, word for word; two `lane.json` FAIL sentences, the `stale` one and the class-registry one, are reworded (the whole-wave fix round, Y7); and the bridge files' 0600 row is asked in either mode (D-6887).
 
 ### Task 10: `exec.bridge` and `exec.upstream`, and `lane.json`
 
@@ -1312,7 +1315,8 @@ every lane's `exec.bridge` is absent, which reads `litellm`, and the doctor's ro
     without the interpreter (as the litellm `want` leaves it out, `:12315`; `ps` may print `/usr/bin/python3`). A
     build from before this plan wants `<shim file> --ccrc-lane=<id>` (`:12316`), which that argv does not contain, so
     it never proves the bridge's pid as its shim's either. Its record is `bridge.started` = `{"interpreter", "code"
-    (the shim's sha256), "bridge" (the digest), "mode": "direct"}`, its pidfile `bridge.pid`.
+    (the sha256 of the shim, then the auth library, D-6874), "bridge" (the digest), "mode": "direct"}`, its pidfile
+    `bridge.pid`; `interpreter` is recorded but not compared (D-6875).
   - `_codex_start_tier <id> bridge` spawns with the contract's environment and, as pairs, `CCGPT_BRIDGE_UPSTREAM_BASE`
     and `CCRC_CODEX_AUTH_BASE` each ONLY when the caller has it set (a tier's environment is never the caller's,
     `:1218-1222`); both readers refuse a non-loopback value. It refuses `auth-library-absent` (remedy `ccrc update`)
@@ -1549,6 +1553,8 @@ starts a tier.
   it makes today's request, sending `originator: ccrc` (on a `direct` lane only; a `litellm` lane keeps
   `codex_cli_rs`, Stage 1's D-6373) and the account id. It is still the only writer of
   `~/.cc-limits/<id>.json`, and its five header names stay spelled once, in `_build_row`.
+- The doctor's staleness bound for that row follows the lane's mode: a `direct` lane's bound is 3600 s, and a
+  `litellm` lane keeps 2700 s (D-6898).
 - [ ] **Step 1: Write the failing tests** — `'a direct lane with fresh bridge headers publishes with no request'`;
   `'stale headers fall back to one request, originator ccrc'`; `'a litellm lane is unchanged'`; `'an unreadable stats
   file falls back to the request'`.
@@ -1592,7 +1598,8 @@ starts a tier.
      (`shared/models.mjs:497-500`, "this file TOLERATES them, at the top level"), and `clear-window` keeps one: it
      edits a clone of the raw file (`deploy/models-op.mjs:1359`), deletes only the model's entry (`:1370`), and
      removes the file only when `windows` is empty and no other top-level key exists (`:1376`), else writes it back
-     (D-5161). `set-window` writes the same clone, and `lower-windows` writes through it too (`writeWindows`).
+     (D-5161). `set-window` writes the same clone, less the refusal's `source` and `refusedTokensEstimate` (D-6905),
+     and `lower-windows` writes through it too (`writeWindows`).
   Every refusal the pass decides at steps 1-6 is recorded the same way, `refusalsApplied["<upstream>/<model>"] = at`,
   whether it lowered the window or was skipped (`below-minimum`, `not-a-lane-model`, `not-lower`, `older-than-entry`),
   in the pass's one write, so each refusal is read once: a refusal skipped `older-than-entry` or `not-lower` is not
@@ -1794,7 +1801,10 @@ waves 1 and 2; `ccrc doctor` is clean for it; its access token is fresh (`ccrc c
 .auth`), because the live probe never refreshes in `litellm` mode.
 
 **2. The first live step: at most six tiny requests** (D27; spec §5). `touch ~/.ccrc/codex/lane-b/liveprobe-allowed`,
-then `python3 -I ~/ccrc/ccd/codexbridge/liveprobe.py --lane lane-b --step <n>`, one at a time:
+then `CCGPT_CCRC_VERSION="$(ccrc version | sed -n 's/^version //p')" python3 -I ~/ccrc/ccd/codexbridge/liveprobe.py --lane lane-b
+--step <n>`, one at a time. The prefix gives the probe the version the bridge's start sends, so step 1 measures the
+flip's User-Agent: `ccrc version` prints a `version` line only when the box's stamp names one, and without it the probe
+sends `dev`, as the bridge does:
 1. a one-word reply: `originator: ccrc` accepted, developer-first with no `instructions`, the usage fields, the
    response header names (`x-codex-*`, `openai-model`, `x-request-id`);
 2. two parallel tool calls with `parallel_tool_calls: true` and top-level tools;
@@ -1888,8 +1898,9 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
 
 ## Deviations found
 
-Every entry carries the number the controller issued (D-6410 to D-6431 at plan time, D-6804 to D-6839 for wave 1). A
-further departure found while executing is written `D-TBD-<slug>` and named in the task's report.
+Every entry carries the number the controller issued (D-6410 to D-6431 at plan time, D-6804 to D-6839 for wave 1,
+D-6862 to D-6907 and D-6921 for wave 2, D-6944 to D-6963 for wave 3). A further departure found while executing is
+written `D-TBD-<slug>` and named in the task's report.
 
 ### D-6410 — `end_turn:false` is continued upstream, never `pause_turn`
 
@@ -2578,3 +2589,928 @@ further departure found while executing is written `D-TBD-<slug>` and named in t
   `lastUpstreamRequestId` (`ccd/codexbridge/server.py:547-561`). Task 6's interface now reads so.
 - **Why:** The stats file's request id is bounded as Stage 1's status file bounds its own (whole-wave finding WS-2).
 - **Cost if wrong:** A caller that read the bool, of which there was none.
+
+### D-6862 — `readRoster` keeps the parse in a WeakMap keyed by the raw row
+
+- **Departs from:** Task 10's Interfaces (plan :1228-1232): `readRoster` keeps the parsed result, and
+  `laneManifest(account, registry)` takes `bridge` and `upstream` from the parsed account. The plan does not say how the
+  parsed account reaches it.
+- **What changed:** `PARSED_OF`, a module-level WeakMap from each raw row to `rosterFromJson`'s projection of it, is
+  filled by `readRoster` (`deploy/models-op.mjs:214`, :250). `laneManifest` reads it and throws for an account that did
+  not come through `readRoster` (:918-919); its signature and both callers (:968, :1279) are unchanged.
+- **Why:** Threading a new argument through `materialise`, `materialFiles` and their call sites would change every
+  signature between the dispatcher and `laneManifest`. The WeakMap leaves the raw JSON exactly as it was read.
+- **Cost if wrong:** A future caller that builds an account row by hand, not through `readRoster`, gets a thrown error
+  rather than a rendered lane.json. Task 15's `lowerWindowsOp` reads the same map (:1518).
+
+### D-6863 — the lane-word readers answer a malformed id rc 1, not usage
+
+- **Departs from:** Task 10's bash reader contract (plan :1233-1236), which gives `_codex_lane_mode` and
+  `_codex_lane_upstream` exactly two outcomes, rc 0 with the word or rc 1 with the refusal. It is silent on a malformed
+  id, which `_codex_row` answers as usage at rc 2.
+- **What changed:** `_codex_lane_word` refuses an id that fails `WRAPPER_ID_RE` with rc 1 and the reader's own code,
+  `lane-mode-unreadable` or `lane-upstream-unreadable` (`ccd/ccrc:12488-12491`).
+- **Why:** Every caller branches on rc 1 (Task 11's install, stop and start). A third code would need a third arm in
+  each of them.
+- **Cost if wrong:** A caller cannot tell a mistyped id from an unreadable lane.json by rc alone. The refusal sentence
+  names the id.
+
+### D-6864 — `codexLaneFixture.ts` plants no lane.json to extend
+
+- **Departs from:** Task 10's Files (plan :1217): "`server/test/codexLaneFixture.ts` (its planted `lane.json` gains the
+  three keys)".
+- **What changed:** The fixture plants no lane.json: its lanes are rendered by the real writer, so they gain `bridge`,
+  `upstream` and `bridgeFiles` with no edit, and it only reads lane.json back (`server/test/codexLaneFixture.ts:1721`).
+  Task 11 added only the optional `bridge` and `upstream` on `CodexLaneRow` (:90, :92).
+- **Why:** The file the plan names has nothing to edit. The hand-planted lane.json files live in other suites, and none
+  of them reaches `_codex_lane_json_state`.
+- **Cost if wrong:** None at run time. A suite that hand-plants a lane.json from before the bridge reads `stale`
+  wherever it reaches `_codex_lane_json_state`.
+
+### D-6865 — `bad-exec-bridge` and `bad-exec-upstream` are test labels, not refusal codes
+
+- **Departs from:** Task 10's Interfaces (plan :1226-1227): a present value outside the set is "REFUSED by both
+  validators (`bad-exec-bridge`, `bad-exec-upstream`)".
+- **What changed:** Both validators throw prose naming `exec.<field>` and the allowed words, with a remedy
+  (`shared/roster.ts:674-688`, and its mirror in `shared/roster-json.mjs:370-376`). The two words appear only in test
+  titles and REJECT row labels (`server/test/roster.test.ts:381`, :392; `server/test/gen-accounts.test.ts:635-638`).
+- **Why:** Neither validator has a code vocabulary. Each throws a sentence, as every other roster refusal does.
+- **Cost if wrong:** A reader that greps output for `bad-exec-bridge` finds nothing. It has to match the `exec.bridge`
+  sentence instead.
+
+### D-6866 — lane.json's presence check wants non-empty `bridgeFiles` names, and any key set
+
+- **Departs from:** Task 10's Interfaces (plan :1243-1246): `_codex_lane_json_state` checks `bridgeFiles` for presence,
+  "an object of three strings".
+- **What changed:** The check wants `stats`, `store` and `recordings` to be non-empty strings, as the `units` check
+  does. It does not pin the object's key set, and it reads the file as exactly one JSON document
+  (`ccd/ccrc:12444-12465`).
+- **Why:** An empty name is no file. An open key set lets Task 18 add a key without editing this line.
+- **Cost if wrong:** A lane.json with an extra `bridgeFiles` key reads `current`. A missing or empty one reads `stale`
+  and is re-rendered.
+
+### D-6867 — `_codex_stop_lane` prints its words in one fixed order
+
+- **Departs from:** Task 11's Step 1 (plan :1372-1373): "stop ends
+  `bridge stopped, shim not running, litellm not running`". The Interfaces (plan :1337) give the opposite order,
+  `litellm <w>, shim <w>, bridge <w>`.
+- **What changed:** The stop walks `_codex_stop_order` (`ccd/ccrc:12129-12139`, bridge first on a direct lane), but its
+  line is always `litellm <w>, shim <w>, bridge <w>` (:13939-13950). The tests assert that order
+  (`server/test/ccrc-codex-bridge.test.ts:169`, :292).
+- **Why:** The plan contradicts itself, and the code follows the Interfaces. A litellm lane's line keeps its old prefix,
+  with `, bridge <w>` appended.
+- **Cost if wrong:** The printed order no longer shows the stop order. Mutation row L12 still reds a wrong stop order,
+  because the shim measured first reads foreign.
+
+### D-6868 — `_codex_tier_is_other_mode` reads a per-shell cache and has three forms
+
+- **Departs from:** Task 11's Interfaces (plan :1301-1310), which name one predicate,
+  `_codex_tier_is_other_mode <id> <tier> <rc>`, called directly after `_codex_tier_ours` with the own mode tier measured
+  first, and say nothing of a lane whose mode cannot be read.
+- **What changed:** `_codex_tier_ours` now wraps `_codex_tier_measure` and records every answer in `CX_TIER_SEEN`
+  (`ccd/ccrc:12898-12917`, :12927), and the predicate reads the mate's last answer from that record. It also has a
+  `--mate-now <id> <tier>` form that measures the mate in a subshell (on an unreadable mode, in start's own-tier `2)`
+  arm and in the doctor's direct walk) and a `--mate <tier>` form that prints the mapping only (:13054-13111).
+- **Why:** With no readable mode there is no "other mode", so the counterpart front tier has to be measured on the spot;
+  otherwise a mode-blind stop would call a running shim a foreign bridge. The forms live in one function because the
+  install and uninstall harnesses load it by name (`server/test/ccrc-installFixture.ts:1613`,
+  `server/test/ccrc-uninstall.test.ts:2121`).
+- **Cost if wrong:** `CX_TIER_SEEN` is per shell, so a command substitution keeps its own copy. A caller that asks the
+  predicate without first measuring the own tier in the same shell reads foreign, which is why `_codex_stop_lane` asks
+  its front tier again in its own shell since the whole-wave fix round (`ccd/ccrc:13946`).
+
+### D-6869 — a stranger on the shared port reads foreign on both front tiers
+
+- **Departs from:** Task 11's Interfaces (plan :1289-1290), which put the bridge on the shim's port and unit. They do
+  not say how a foreign listener or unit there is reported.
+- **What changed:** `_codex_tier_port` maps `shim` and `bridge` to the same `CX_PROXY` (`ccd/ccrc:12299`), and the
+  bridge runs under `units.shim`, so a foreign holder reads foreign on both tiers: status shows two FOREIGN lines, and
+  stop says `shim foreign, bridge foreign` (`server/test/ccrc-codex-lifecycle.test.ts:987`, :1933). Since the
+  whole-wave fix round, account removal's re-measure names a finding on that port or unit once, not again for its mate
+  (`ccd/ccrc:9214-9218`).
+- **Why:** Each tier is measured on its own terms against one port and one unit.
+- **Cost if wrong:** Status and stop name one stranger twice. Nothing is stopped or adopted.
+
+### D-6870 — two more refusals: `python-absent` and `bridge-absent`
+
+- **Departs from:** Task 11's Interfaces: `_codex_python` is "refused `python-too-old` below 3.9" (plan :1285), and the
+  bridge start refuses `auth-library-absent` (plan :1320-1321).
+- **What changed:** `_codex_python` also refuses `python-absent` when there is no python3, or when it does not report
+  its version (`ccd/ccrc:12162-12180`). `_codex_bridge_prepare` refuses `bridge-absent` when the package is missing or
+  cannot be hashed (`ccd/ccrc:13791`, :13795), and start's own prerequisite loop says the same (:14073).
+- **Why:** An interpreter that is missing and one that is too old have different remedies, and so do a missing package
+  and a missing library. No refusal word should cover two conditions.
+- **Cost if wrong:** Two refusal words that neither the plan nor the README lists (the README names `python-too-old`
+  only, `README.md:2202`).
+
+### D-6871 — install walks a lane with no lane.json mode-blind
+
+- **Departs from:** Task 10's rule (plan :1238-1240), "on rc 1, install prints one `NOT measured` line for the lane and
+  skips its tiers", and Task 11's rule (plan :1286-1288) that every loop a mode decides walks `_codex_mode_tiers`.
+- **What changed:** `_inst_codex_tiers` walks `_codex_mode_tiers` of a readable mode. A lane whose lane.json is ABSENT
+  is walked over `$CODEX_TIERS`, as before the bridge, and only a present lane.json with no readable mode gets the NOT
+  measured line (`ccd/ccrc:18045-18055`).
+- **Why:** A lane ccrc never started has never been rendered. Two existing real-spine cases, a lazy lane and a foreign
+  listener on a never-initialised lane, would otherwise turn into NOT measured lines.
+- **Cost if wrong:** A never-started lane is asked about all three tiers. Its bridge tier reads not running, and nothing
+  is started.
+
+### D-6872 — `_inst_codex_lanes` leaves an absent lane.json for the first start
+
+- **Departs from:** Task 11's Interfaces (plan :1363-1366), "for each codex lane, `_codex_lane_json_ensure <id>`", which
+  renders an absent file too.
+- **What changed:** The step re-renders only a `stale` lane.json; `current` and `absent` are both kept
+  (`ccd/ccrc:17896-17898`). The Wave 2 header's "Effect on a live box" now says so.
+- **Why:** A lane never initialised has no class registry, so rendering it would fail and degrade every install.
+- **Cost if wrong:** A lane is rendered at its first `ccrc codex start` rather than at install, which was already the
+  case before the bridge.
+
+### D-6873 — the mode is read under the lane lock
+
+- **Departs from:** Task 10's rule that every caller captures the mode and its rc first (plan :1238-1239), and Task 11's
+  walks "with the mode captured first" (plan :1286-1287), which put the mode read ahead of everything else a caller
+  does.
+- **What changed:** `ccrc codex start` (`ccd/ccrc:14012`, :14024-14044), `_inst_codex_tiers` (:18024, :18045-18055) and
+  `_uninst_codex` (:26257, :26263) read the mode, and everything chosen from it, only after `_codex_lock`; a start's
+  `_codex_lane_json_ensure` stays before the lock (:13977). The lock order is stated at `_codex_lock` (:13391-13405),
+  and every taker keeps it, the switch included (:14304-14318).
+- **Why:** A `ccrc codex switch` moves lane.json to the other mode and starts that mode's tiers while it holds the lane
+  lock, so a mode read before the lock can be the one the switch replaced, and the walk would call the tier the switch
+  brought up retired or foreign (whole-wave finding LB-1). The case 'a start that waits on the lane lock acts on the
+  mode its holder left, and adopts the bridge it brought up' (`server/test/ccrc-codex-bridge.test.ts:771`) is red
+  without it.
+- **Cost if wrong:** On a refused lock, install's failed count and uninstall's not-stopped list still read the mode
+  without the lock (:18028, :26259), only to say which tiers were not handled, so a switch in flight can make that line
+  name the other mode's tiers. In start, the credential refusals (`not-logged-in`, `credential-unusable`, `needs-signin`
+  and `auth-status-unreadable`, :13991-14011) now come before the mode and upstream refusals (`lane-mode-unreadable`,
+  `lane-upstream-unreadable` and `upstream-unsupported`, :14024-14033), so a direct `siwc` lane with no credential is
+  first told to sign in, and only then refused `upstream-unsupported`.
+
+### D-6874 — the bridge's start record hashes the auth library
+
+- **Departs from:** Task 11's start record (plan :1315-1317), whose `code` was the shim's sha256 alone; that sentence
+  now reads so.
+- **What changed:** The bridge arm of `_codex_started_json` hashes `files=("$(_codex_shim_file)" "$(_codex_auth_lib)")`,
+  the shim and then the auth library, in the litellm arm's form (`ccd/ccrc:13135-13151`). The stale-bridge WARN and its
+  "cannot be told" twin name the library (`ccd/ccrc-doctor-checks:7494`, :7498), and so do `_fix_codex`'s comments
+  (:6887-6901, :6990-6994).
+- **Why:** The bridge is a direct lane's refresher and loads the library once for its whole life, so a changed library
+  must read as stale and `_inst_codex_tiers` restart the running bridge onto it, as the litellm tier's record already
+  does (whole-wave finding L2). The case 'a changed auth library makes a running bridge stale'
+  (`server/test/ccrc-codex-bridge.test.ts:258`) is red without it.
+- **Cost if wrong:** Every update that changes the library restarts a running bridge, which cuts a stream longer than
+  `DRAIN_S` (Review Focus 3). No live box runs a bridge yet.
+
+### D-6875 — the bridge's interpreter is recorded but not compared
+
+- **Departs from:** Task 11's start record (plan :1315-1317), which `_codex_tier_stale` compared whole, as it compares
+  every tier's record, and whose `interpreter` is `_codex_python` (plan :1325-1326); that sentence now says it is not
+  compared.
+- **What changed:** `_codex_tier_stale` drops `interpreter` from both sides of a bridge's comparison and compares the
+  rest (`ccd/ccrc:13191-13194`, its reason at :13175-13181); the record still stores it. The doctor's bridge-record case
+  reads a record that differs in its interpreter alone as current (`server/test/ccrc-doctor-codex.test.ts:5119-5130`),
+  as does 'a bridge record that names another interpreter, with the same code and package, reads current'
+  (`server/test/ccrc-codex-bridge.test.ts:271`).
+- **Why:** `_codex_python` resolves `python3` on the caller's PATH, so a launcher's start, an ssh `ccrc update` and an
+  interactive `ccrc doctor` can each name another path for the same healthy bridge, which would read stale in one of
+  them and be restarted on every update (whole-wave finding L5).
+- **Cost if wrong:** A bridge still running after the box's python3 changes reads current, and keeps the old interpreter
+  until its next start.
+
+### D-6876 — the drain-wait case imports the package's constants itself
+
+- **Departs from:** Task 11's Step 1 (plan :1381-1383): the case "reads `_codex_stop_wait_s bridge` and the package's
+  two constants through the driver".
+- **What changed:** The case reads `server.DRAIN_S + server.STOP_MARGIN_S` with a `python3 -I -c` import of
+  `codexbridge.server`, with `sys.dont_write_bytecode = True` (`server/test/ccrc-codex-bridge.test.ts:319-329`),
+  and compares the sum with `_codex_stop_wait_s` (`ccd/ccrc:13815-13817`).
+- **Why:** The driver has no op that prints those constants, and the driver file is not in Task 11's files.
+- **Cost if wrong:** None: the comparison reads the shipped constants either way.
+
+### D-6877 — the third tier rewrites existing install and uninstall cases
+
+- **Departs from:** Task 11's Step 1 and Step 5 (plan :1369-1407), which name only new cases and predict mutation counts
+  from them.
+- **What changed:** In `server/test/ccrc-uninstall.test.ts`, nine isolation call lists gain a
+  `_codex_tier_ours <lane> bridge` call (for example :2200, :2211, :2297), the `(shim litellm)` pin becomes 'the
+  front-first tier order is _codex_stop_order's …' (:2250), and `runUninstCodex` gains a `modes` knob (:2063). On the
+  install side `runTiersStep` gains `modes` and `modeStub` and the spine pin gains `_inst_codex_lanes`, both now in
+  main's split files (D-6878), and existing ccrc-codex assertions gain `, bridge <w>` and the new status keys.
+- **Why:** With `CODEX_TIERS` at three tiers and `_uninst_codex` reading `_codex_stop_order`, the old assertions
+  describe behaviour that no longer exists.
+- **Cost if wrong:** Merge conflicts with any open PR that edits those harnesses. The measured mutation counts run
+  higher than the plan predicted.
+
+### D-6878 — the install and doctor cases live in main's split suites
+
+- **Departs from:** The plan's test files: `server/test/ccrc-install.test.ts` (plan :257, :1276, :1387) and
+  `server/test/ccrc-doctor.test.ts` (plan :258, :1277, :1522).
+- **What changed:** Main's #1300 split `ccrc-install.test.ts`, and this branch's merge of main (`d4ae75109`) moved Task
+  11's six hunks to where their context went: the spine line to `server/test/ccrc-install-versioned.test.ts:105`,
+  `modeStub` (now exported) and `runTiersStep`'s `modes` option to `server/test/ccrc-installFixture.ts:1468` and :1566,
+  and the cases to `server/test/ccrc-install-codex.test.ts:490`, :501, :512 (retitled by the whole-wave fix round) and
+  :982-989. Because #1293 split the doctor suite, Task 13's cases are in `server/test/ccrc-doctor-codex.test.ts:5057`
+  and its helpers in `server/test/ccrc-doctorFixture.ts:1905`, imported on their own line
+  (`ccrc-doctor-codex.test.ts:19`). Task 17's drift cases are in `server/test/ccrc-doctor-codex.test.ts:5466` (ruling
+  W3-R1). After the second merge of main, Tasks 11 and 12's bridge-tier describe moved
+  unchanged to `server/test/ccrc-codex-bridge.test.ts:30`, and the helpers the split files share moved, exported, to
+  `server/test/ccrcCodexFixture.ts`. Plan 2b-2's lifecycle and login describes, with the fixture-contract describe
+  before them, moved unchanged to `server/test/ccrc-codex-lifecycle.test.ts:108` and :2039, so `ccrc-codex.test.ts`
+  keeps the library's describes.
+- **Why:** The files the plan names no longer exist on `main`. Apart from exporting `modeStub`, the ported text is
+  unchanged. The bridge-tier and lifecycle cases live in files of their own because D-6856's allocator issues at most
+  500 ports to one test file, and the merged `ccrc-codex.test.ts` needed 623 (measured: 350 for the library's
+  describes, 175 for the lifecycle and login, 98 for the bridge tier); the fixture contract moved with the lifecycle
+  because a file that ends on its last case fails the run's leftover-process check, its fake unit's supervisor
+  lingering 3 s.
+- **Cost if wrong:** None at run time. CI's selection must list the split files for a PR to run these cases, and a later
+  task that cites the plan's file names (Task 17's doctor rows) must use the split ones.
+
+### D-6879 — the advance step reads the mode through a bounded child
+
+- **Departs from:** Task 11b's Interfaces (plan :1454-1455): "the step captures `_codex_lane_mode <id>` first".
+- **What changed:** A new read phase, `mode`, runs `_models_adv_body_mode` in the step's fixed child under
+  `MODELS_NODE_BOUND_S` (`ccd/ccrc:11470-11476`, :11507, :11549-11553). `_models_advance_mode` sets `ADV_MODE` only from
+  a whole answer (:11649-11659), and the step returns with no event when it fails (:11759).
+- **Why:** The step's header contract runs every external stage under `_plat_timeout_strict`, and `_codex_lane_mode`
+  runs `jq`. The word and its rc 1 are unchanged.
+- **Cost if wrong:** One more admitted child, up to `MODELS_NODE_BOUND_S` plus the grace, before readiness.
+
+### D-6880 — the canary has its own reason for an unknown mode, and a third copy of the words
+
+- **Departs from:** Task 11b's canary interface (plan :1459-1462): an absent or unknown `bridge` is `unavailable` with
+  no keyed request.
+- **What changed:** `laneInputs` refuses with its own sentence,
+  `lane.json names no bridge mode this canary knows (litellm or direct)`, after the proxyPort check
+  (`deploy/models-canary.mjs:148-150`). The mode-to-tier names are `PROBE_TIER` (:133), whose keys a source test pins to
+  `CODEX_BRIDGE_MODES` (`server/test/models-canary.test.ts:538`).
+- **Why:** The canary cannot import `shared/roster.ts` at run time. The port check runs first, so the existing
+  port-reason rows keep their reason.
+- **Cost if wrong:** Another copy of the mode words, held to the roster's only by a test.
+
+### D-6881 — `siwc` is refused, and FAILs, only on a direct lane
+
+- **Departs from:** Task 12's step 1 (plan :1490), "refuse `upstream-unsupported` for `siwc`", and Task 13 (plan :1532),
+  "a FAIL for `exec.upstream: siwc`". Both are unqualified.
+- **What changed:** `switch` refuses only a move TO `direct` on an upstream other than `backend`
+  (`ccd/ccrc:14320-14326`), and the doctor FAILs only a direct lane on such an upstream
+  (`ccd/ccrc-doctor-checks:7307-7313`), matching start's own direct-only refusal (`ccd/ccrc:14027-14033`). Since the
+  whole-wave fix round all three remedies name `ccrc doctor --fix`, which re-renders lane.json once the roster is set
+  back.
+- **Why:** A litellm lane never reads its upstream. A move to `litellm` is the way back for a hand-edited `siwc` and
+  `direct` row, and a FAIL on a working litellm lane would make `ccrc update` exit 3.
+- **Cost if wrong:** A litellm lane that names `siwc` carries an inert word with no finding, until someone switches it
+  to direct.
+
+### D-6882 — step 3 decides a half-up lane in its own mode, and a case the plan does not list pins it
+
+- **Departs from:** Task 12's steps 1-3 (plan :1490-1494), which answer `already` only when the lane is in that mode
+  with its tiers up, and are silent on a lane in the target mode that is half up. None of the plan's nine test titles
+  reaches step 3.
+- **What changed:** A lane in the target mode that is not fully up runs steps 2-5, and step 3 (`ccd/ccrc:14370-14390`)
+  refuses it `switch-stopped`, naming the running tier; the `already` loop measures every mode tier, with no `break`
+  (:14330-14334). Two cases are added: 'a tier still running after the stop stops the switch before anything is written'
+  (`server/test/ccrc-codex-bridge.test.ts:714`, row W2) and 'a half-up lane switched to its own mode is refused as
+  running, never as foreign' (:945).
+- **Why:** Step 3 is literal (every tier not running), and that same path lets the step-6 remedy re-record and restart
+  after a step-4 failure.
+- **Cost if wrong:** A half-up lane is not healed by `switch` to its own mode. The refusal names `ccrc codex stop <id>`.
+
+### D-6883 — the switch's unconditional render is a helper split out of the ensure
+
+- **Departs from:** Task 12's step 4 (plan :1495-1497), "re-render `lane.json` UNCONDITIONALLY
+  (`_models_node_locked <id> materialise`, not `_codex_lane_json_ensure`)".
+- **What changed:** The ensure's render half moved into `_codex_lane_json_render` (`ccd/ccrc:12539-12557`), which runs
+  `_models_node_locked <id> materialise` unconditionally with the ensure's own sentences. `_codex_lane_json_ensure`
+  (:12514-12528) calls it when the file does not read current.
+- **Why:** One copy of the materialise answer handling, never a second inline one. Row W6 still reds a switch that calls
+  the ensure instead.
+- **Cost if wrong:** None found. The ensure's lock refusals stayed green in `ccrc-models-lock`.
+
+### D-6884 — `already` is not "nothing touched"
+
+- **Departs from:** Task 12's step 1 (plan :1490-1491): "`already` (rc 0, nothing touched) when the lane is already in
+  that mode and its tiers are up".
+- **What changed:** Step 1 runs `_codex_lane_json_ensure` before the `siwc` refusal and the `already` answer, because
+  the old mode is read from a current lane.json (`ccd/ccrc:14318-14319`). The `already` arm then runs `codex-mode`
+  (which writes only when the roster names the other mode), re-renders lane.json and reads the mode back, each with its
+  own `switch-stopped` line (:14336-14347).
+- **Why:** After a failed step-4 read-back, the roster names the new mode and lane.json the old. A bare `already` would
+  answer `switch <id> <old>`, the remedy the switch prints, without bringing the roster back.
+- **Cost if wrong:** On an agreeing lane the roster is untouched, but lane.json and the lane's other model files get a
+  new mtime. The ensure may render files even when the switch then refuses `siwc`.
+
+### D-6885 — the switch takes the roster writers' lock first
+
+- **Departs from:** Task 12's Interfaces (plan :1489): the switch runs "under `_codex_lock` from start to end". The plan
+  lists no other lock, and so no refusal for one.
+- **What changed:** A step 0 takes `$_SVC_REG/.account-placement.lock`, the file `_acct_marker_lock` uses, before
+  `_codex_lock`, with a bounded `flock -w` (`ccd/ccrc:14304-14317`). It refuses `roster-unwritable` when the file cannot
+  be opened and `roster-busy` on the timeout, and it closes the fd before step 5 (:14408).
+- **Why:** The account verbs write the roster under that lock, and the switch writes the roster too. `_acct_marker_lock`
+  itself is outside this wave's cleared region, and its refusals are the account verbs' JSON envelope.
+- **Cost if wrong:** The lock path is spelled twice in `ccd/ccrc`'s code (:8034 and :14306). Each spelling is pinned to
+  the same literal path by its own cases: the switch's by 'switch takes the roster writers' lock before it stops a tier,
+  and lets go of it before it starts one' (`server/test/ccrc-codex-bridge.test.ts:871`, with the roster-unwritable and
+  roster-busy cases at :983 and :998), and `_acct_marker_lock`'s by `server/test/ccrc-account.test.ts:7101` and
+  :7612-7613. So moving either one alone reds a suite, but no single assertion ties the two together. Switches of
+  different lanes serialise on this one box-wide file.
+
+### D-6886 — `codex-mode` writes nothing when the row already resolves to the mode
+
+- **Departs from:** Task 12's `codex-mode` interface (plan :1486-1489): it "DELETES the key for `litellm`", unqualified.
+- **What changed:** The op returns 0 without writing when the row's resolved mode (an absent key reads
+  `CODEX_BRIDGE_MODES[0]`) is the one requested (`deploy/account-op.mjs:2363-2369`); the delete runs only on a change of
+  mode (:2370-2375). The describe header says so (`server/test/account-ops.test.ts:340-346`).
+- **Why:** The roster is the operator's file. A rewrite for no change would reformat a hand-edited roster and reorder
+  its keys.
+- **Cost if wrong:** A hand-written `"bridge": "litellm"` is kept on `switch <id> litellm`. Every reader resolves it
+  exactly as it resolves an absent key.
+
+### D-6887 — the bridge files' 0600 row is asked in either mode
+
+- **Departs from:** Task 13's Interfaces (plan :1531-1532), which list "a FAIL when the stats file or the store is not
+  0600 or not a regular file" among a direct lane's rows.
+- **What changed:** `_dr_cx_lane` calls `_dr_cx_bridge_files` on every codex lane, whatever its mode
+  (`ccd/ccrc-doctor-checks:7314`). An absent file is no finding (:7604-7645, the test at :7621).
+- **Why:** A lane switched back to litellm keeps the files until removal reaps them, and the stats file names upstream
+  request ids.
+- **Cost if wrong:** A litellm lane can FAIL on a file it no longer writes. The remedy is a `chmod`.
+
+### D-6888 — the half-up rows are gated `mode != direct`
+
+- **Departs from:** Task 13's Interfaces (plan :1529-1530): the half-up FAILs and the LiteLLM-down WARN apply "only on a
+  `litellm` lane".
+- **What changed:** The gate is `[ "$mode" != direct ]` (`ccd/ccrc-doctor-checks:7556`), so a lane whose lane.json names
+  no readable mode keeps today's rows.
+- **Why:** A lane.json from before this plan has no `bridge` and is a litellm lane. Task 11's mode-blind walk treats it
+  the same way.
+- **Cost if wrong:** An unreadable-mode lane can carry a half-up FAIL beside its lane.json FAIL.
+
+### D-6889 — a retired shim on a direct lane is named once
+
+- **Departs from:** Task 13's Interfaces (plan :1525-1528), which add the retired-refresher FAIL beside the bridge
+  tier's foreign row and do not say what happens when both describe one listener.
+- **What changed:** When the bridge reads `listener-other-mode` or `unit-unproven` and `--mate-now` proves a shim, the
+  shim is recorded as retired and the bridge's row reads "not running (its port is held by its shim tier)", with no
+  foreign row (`ccd/ccrc-doctor-checks:7468-7477`).
+- **Why:** One listener should produce one finding, and the retired row is the one that names the remedy.
+- **Cost if wrong:** None: the lane still FAILs.
+
+### D-6890 — a stale running bridge is a WARN, which no fixer reaches
+
+- **Departs from:** Task 13's Interfaces (plan :1532-1533): "`--fix` restarts a stale running bridge through
+  `_inst_codex_tiers` and never starts a stopped one".
+- **What changed:** `_fix_codex` is unchanged: its step 4 re-runs `_inst_codex_tiers` only when the same run replaced
+  the shim, the runtime CLI or the auth library (`ccd/ccrc-doctor-checks:7070-7079`). The bridge-stale row is a
+  `_dr_cx_warn` (:7494-7495), `cmd_doctor` calls a fixer only on a FAIL, and the row's remedy names `ccrc update`, which
+  on a converged box returns before any install step; the README says what the code does (`README.md:2251-2255`).
+- **Why:** The restart already exists as a side effect of a replaced shim or library, and `_inst_codex_tiers` walks the
+  lane's mode tiers since Task 11.
+- **Cost if wrong:** On a converged box the WARN's remedy does nothing without `--force`, and `--fix` restarts a stale
+  bridge only when it re-places the shim or the library for another finding. The cure is `ccrc update --force`, or stop
+  then start.
+
+### D-6891 — the retired pass WARNs on another-mode tier it cannot measure
+
+- **Departs from:** Task 13's Interfaces (plan :1525-1529), which name only the retired-refresher FAIL for the other
+  mode's tiers on a direct lane.
+- **What changed:** A 3 from `_codex_tier_ours` on litellm or shim in the retired pass is the walk's generic unmeasured
+  WARN, through the one helper `_dr_cx_tier_unmeasured` (`ccd/ccrc-doctor-checks:7540-7544`, :7589-7592).
+- **Why:** Start refuses on the same 3 (`3) exit 1`, `ccd/ccrc:14127`). Without the WARN, a tier the doctor cannot
+  measure would read as not running.
+- **Cost if wrong:** No new WARN text, but one more place where the doctor WARNs.
+
+### D-6892 — the doctor's retired row counts `listener-other-process`, and start does not
+
+- **Departs from:** Task 13's Interfaces (plan :1526-1528), which define the retired-refresher FAIL by Task 11's
+  per-tier identity (0 or 4), as start counts it.
+- **What changed:** The retired pass also counts the 2 that `_codex_tier_is_our_handle` reads as this lane's own process
+  (`ccd/ccrc-doctor-checks:7539`, :7545; comments at :7445-7447 and :7522-7529). Start's other-tiers loop still counts
+  only 0 or 4 (`ccd/ccrc:14123-14130`, `*) ;;`).
+- **Why:** A tier of this lane's own, alive by its command line while another process holds its port, still refreshes
+  the credential, and `ccrc codex stop` ends it through that handle.
+- **Cost if wrong:** Start can start a bridge beside such a tier, and the doctor then FAILs the lane as retired.
+  Bringing start into line is a Task 11 change that is still open.
+
+### D-6893 — a bridge file whose mode cannot be measured FAILs
+
+- **Departs from:** Task 13's Interfaces (plan :1531-1532), which name a FAIL for a file that is not 0600 or not
+  regular, and say nothing of a mode that cannot be measured.
+- **What changed:** When `_plat_mode` answers nothing (no `stat`, or a failing one), `_dr_cx_bridge_files` FAILs
+  `has mode unreadable`, with a remedy to check `stat` on PATH and the file's directory, never `chmod`
+  (`ccd/ccrc-doctor-checks:7627-7638`).
+- **Why:** The file's own rule: a false FAIL costs a sentence, a false pass costs the secret. An unmeasured WARN would
+  pass a file that might be world-readable.
+- **Cost if wrong:** A box with a broken `stat` FAILs every bridge file until it is fixed.
+
+### D-6894 — a fresh snapshot is published before the probe model and the credential are read
+
+- **Departs from:** Task 14's Interfaces (plan :1549-1550): a fresh snapshot is published "with no request". The plan
+  does not say whether the probe model or the credential is read first.
+- **What changed:** On a direct lane, `main` reads `_bridge_headers` first and publishes from it before `_probe_model`
+  and `_require_logged_in` (`ccd/ccgpt-usage.py:772-788`). The behaviour is pinned
+  (`server/test/ccgpt-usage.test.ts:1487`).
+- **Why:** The bridge measured those figures on real traffic within 15 minutes, which needs neither a probe model nor a
+  credential read.
+- **Cost if wrong:** A lane with haiku unassigned, or a credential that now reads needs-signin, still publishes. Those
+  refusals surface only when the lane idles and the fallback request runs.
+
+### D-6895 — a snapshot counts only when it is this lane's, current and complete
+
+- **Departs from:** Task 14's Interfaces (plan :1549-1550), which name freshness (`at` within `BRIDGE_FRESH_S`) as the
+  only test.
+- **What changed:** `_bridge_headers` takes a snapshot only from a regular, bounded, non-symlink file named by a bare
+  `bridgeFiles.stats`. The document must be version 1 and this lane's, its stamp parseable and not in the future, every
+  value a string, and the primary figure present; otherwise it answers None (`ccd/ccgpt-usage.py:619-674`).
+- **Why:** A snapshot with no primary figure would publish a `seven` of 0 that nothing measured, the rule
+  `_fetch_headers` already applies to a 429. Another lane's file, or a future-stamped one, is not this lane's
+  measurement.
+- **Cost if wrong:** None on a healthy lane. Each refused file costs one request.
+
+### D-6896 — the poller reads only the exact word `direct` as direct
+
+- **Departs from:** Task 10's bash rule that a mode reader never defaults (plan :1233-1235), as Task 14 inherits it.
+  Task 14's Interfaces (plan :1549) key the arm on `lane.json`'s `bridge`.
+- **What changed:** `_lane_mode` answers `direct` for the exact word and `litellm` for anything else, an absent key or
+  an unknown word included (`ccd/ccgpt-usage.py:607-616`). Pinned at `server/test/ccgpt-usage.test.ts:1510`.
+- **Why:** The bash reader chooses tiers and must not guess. This reader only chooses where a measurement comes from,
+  and a refusal would stop the lane publishing.
+- **Cost if wrong:** A direct lane whose lane.json lost its `bridge` key polls with `codex_cli_rs` until the doctor
+  re-renders the file.
+
+### D-6897 — the direct fallback request keeps the Codex CLI user-agent
+
+- **Departs from:** Task 14's Interfaces (plan :1551-1552), which change only `originator` (to `ccrc`) on a direct lane.
+- **What changed:** The fallback request pairs `originator: ccrc` (`_ORIGINATOR`, `ccd/ccgpt-usage.py:191`) with the
+  user-agent every lane sends, `codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown` (:586-589), not the bridge's own
+  `ccrc/<version> (codex-bridge; …)`. Pinned at `server/test/ccgpt-usage.test.ts:1458`.
+- **Why:** The poller runs under `-I` from `~/.local/bin`, so it cannot import the package. It also has no ccrc version,
+  and spelling the bridge's format a second time would add a second mechanism.
+- **Cost if wrong:** The upstream sees a mixed identity on a direct lane's fallback polls. The pairing is pinned, so the
+  first live step can check it.
+
+### D-6898 — a direct row's `ts` is its measurement time, and a direct lane's staleness bound is 3600 s
+
+- **Departs from:** Task 14's Interfaces (plan :1549-1550), "builds and publishes the row from those values", and its
+  Files (plan :1544-1546), which name only `ccd/ccgpt-usage.py` and its test. Task 14's text now gives both bounds (plan
+  :1554-1555).
+- **What changed:** A direct-arm row carries the bridge's stamp as `ts` (`ccd/ccgpt-usage.py:778-780`). The doctor keeps
+  `_DR_CODEX_USAGE_STALE_S=2700` and adds `_DR_CODEX_USAGE_STALE_DIRECT_S=3600`, three cycles plus `BRIDGE_FRESH_S`,
+  chosen by the lane's mode (`ccd/ccrc-doctor-checks:6480-6496`, :6562-6563): a direct lane's WARN says "last measured",
+  rounds the age up and counts no polls (:6590-6593), and a litellm lane, or one whose mode cannot be read, keeps 2700 s
+  and its wording from before this wave, byte for byte (:6594-6597). Pinned at
+  `server/test/ccrc-doctor-codex.test.ts:1505-1523` and :1664.
+- **Why:** A row stamped with the poll time would look younger than its figures, and at 2700 s a direct lane would WARN
+  after a single missed poll. A litellm lane's row is stamped when its poll writes it, so its bound has no reason to
+  move (the whole-wave fix round).
+- **Cost if wrong:** A direct lane's never-published WARN also waits 60 minutes, against 45 on a litellm lane. The
+  edited doctor lines are outside Task 14's Files and the doctor region the wave was cleared to edit, so their holder
+  must confirm the change.
+
+### D-6899 — a first entry on a lane with no window is capped at the client default
+
+- **Departs from:** Task 15's step 5 (plan :1590-1591): "`to` is capped at the lane's current
+  `contextWindowFor(...).tokens`".
+- **What changed:** When `contextWindowFor` yields `tokens: null`, the cap is `CLIENT_DEFAULT_CONTEXT_TOKENS`, the
+  window Claude Code uses for an unknown model (`deploy/models-op.mjs:1549`). A `to` that falls below `WINDOW_MIN` after
+  the cap is skipped `below-minimum` (:1587-1588).
+- **Why:** Null cannot serve as a cap, and the window the client actually uses is the one that must never rise.
+- **Cost if wrong:** A lane whose models have no catalogue context gets a first entry of at most 200000
+  (`shared/modelenv.mjs:65`).
+
+### D-6900 — an unreadable refusal entry is skipped `refusal-invalid` and not recorded
+
+- **Departs from:** Task 15's steps 0-6 and skip list (plan :1579-1604), which assume every refusal has `tokens` and
+  `at`, and record every decided refusal in `refusalsApplied`.
+- **What changed:** An entry that is not an object, has a model part that is not a model id, has no ISO `at`, or has
+  `tokens` that is not a positive integer is skipped `refusal-invalid` and not recorded
+  (`deploy/models-op.mjs:1560-1564`), so each pass reads it again.
+- **Why:** Such an entry cannot be applied, and three of the four shapes have no trustworthy `at` to record.
+- **Cost if wrong:** A skip word the plan does not list, and a malformed entry that is re-read on every refresh.
+
+### D-6901 — an entry with no readable `setAt` is never lowered
+
+- **Departs from:** Task 15's step 4 (plan :1588-1589): lower only when the refusal's `at` is later than the entry's
+  `setAt`.
+- **What changed:** An entry whose `setAt` is missing or unparseable is skipped `older-than-entry`
+  (`deploy/models-op.mjs:1583-1584`).
+- **Why:** Such an entry was written by hand, and a hand-set window is never undone.
+- **Cost if wrong:** A lane with a hand-written entry that lacks `setAt` is never lowered by a refusal until
+  `set-window` or `clear-window` replaces the entry.
+
+### D-6902 — `lower-windows` answers with `op`, `id` and `stats`
+
+- **Departs from:** Task 15's answer (plan :1575-1576),
+  `{ok: true, lowered: [{model, from, to, refused}], skipped: [{model, why}]}`.
+- **What changed:** The answer adds `op`, `id` and `stats: 'read'|'absent'` (`deploy/models-op.mjs:1536`, :1612), and
+  `from` is null for a first entry (:1581). A lowered entry keeps the unknown keys of the entry it replaces
+  (:1590-1591), as `set-window` keeps all but a refusal's two (D-6905).
+- **Why:** An absent stats file and a file read with nothing to do are two different conditions and must not share one
+  answer.
+- **Cost if wrong:** A reader that expects only the plan's three keys must tolerate three more.
+
+### D-6903 — the refresh row reports a lowering as `lowered` or `lowerFailed`
+
+- **Departs from:** Task 15's refresh pass (plan :1605-1606), which does not say how the pass reports.
+- **What changed:** `_models_lower_lane` prints `{"lowered":[…]}`, `{"lowerFailed":"<detail>"}` or nothing, and always
+  returns rc 0 (`ccd/ccrc:11791-11817`). The refresh merges that into the lane's row without changing its `ok`
+  (:11892-11899, :11987).
+- **Why:** A failed lowering must be visible on the row, and it must never fail the refresh.
+- **Cost if wrong:** Two new row keys for the PWA and the README to read.
+
+### D-6904 — three halves of the not-a-codex-lane guard have no red row
+
+- **Departs from:** The Global Constraints' mutation discipline (plan :169): every guard ships with a row that goes red
+  when it is removed.
+- **What changed:** The guard's `!isObj(account.exec)`, `account.exec.kind !== 'codex'` and `parsed === undefined`
+  halves cannot hold for an account `readRoster` accepted; only `typeof parsed.upstream !== 'string'` decides
+  (`deploy/models-op.mjs:1519-1526`). Rows M7a, M20 and M21 survive, and the comment says a simplification may drop any
+  of the three, never the `parsed.upstream` test.
+- **Why:** They were kept as belt-and-braces, with the reason written down, for a ruling on keeping or removing them.
+- **Cost if wrong:** Three conditions no test can tell apart from the fourth.
+
+### D-6905 — a `set-window` drops a refusal's two fields
+
+- **Departs from:** Task 15's step 6 (plan :1592-1594), whose `source: "refusal"` marks an entry a refusal wrote, and
+  "`set-window` writes the same clone" (plan :1599); that sentence now reads so.
+- **What changed:** `set-window` writes the previous entry less `refusedTokensEstimate` and a `source` of `"refusal"`,
+  with every other key kept (`deploy/models-op.mjs:1408-1412`), so a window set by hand over a lowered one carries
+  neither; any other `source` stays, as Stage 0's 'PRESERVES keys this build does not know, at the top level and inside
+  an entry' pins. The case 'a set-window over a lowered entry drops source and refusedTokensEstimate, and keeps any
+  other key' reads the windows file and `show` (`server/test/models-op.test.ts:4616-4633`), and restoring the plain
+  `...prev` reds it.
+- **Why:** `show --json` reports both fields since the whole-wave fix round (Y6, `windowsReport`,
+  `deploy/models-op.mjs:372-386`), and a window set by hand is not a refusal's. Left in place, the windows file and
+  `show` would label it as one.
+- **Cost if wrong:** The next `set-window` loses the record of what the refusal estimated. `refusalsApplied` still holds
+  the refusal, so it is never applied again.
+
+### D-6906 — the README withdraws an older claim about running sessions
+
+- **Departs from:** Task 16's Files and Interfaces (plan :1636-1644), which add the D25 text and do not name the
+  existing "context window" paragraph.
+- **What changed:** The sentence "A running session keeps its window until it restarts or swaps" (`README.md:1924`
+  before this wave) now reads "A new window reaches sessions started after it; whether a session already running
+  re-reads `settings.json` has not been measured" (`README.md:1926-1927`).
+- **Why:** Nothing in the tree measured the old claim, and the plan calls it unmeasured (plan :1644, :1840).
+- **Cost if wrong:** None at run time: the README now claims less.
+
+### D-6907 — ccd/ccrc grows past the growth limit, waived
+
+- **Departs from:** The growth check's limit: a listed file grows by at most `GROWTH_LIMIT`, 40 net code lines, against
+  the merge-base (`server/test/growthCheck.ts:46`), unless a waiver naming a defined D-number covers it. The plan names
+  no growth for `ccd/ccrc`.
+- **What changed:** Measured by `server/test/growth-check.test.ts` (`GROWTH_CHECK=1`) against the merge-base
+  `282e7c595`, `ccd/ccrc` grows from 11641 to 12181 code lines, +540, and every other listed file by 0. One entry is
+  appended to `server/test/growth-waivers.json` (:81-87): `ccd/ccrc`, `maxDelta` 550 (the measured delta plus 10 of
+  headroom), `D-6907`, added 2026-10-25; no other entry is touched.
+- **Why:** Wave 2's lane work is bash that lives beside the codex library in `ccd/ccrc`: the lane.json mode and upstream
+  readers, the bridge tier in start, stop and status, `ccrc codex switch`, the install and uninstall walks over a mode's
+  tiers, the advance step's bounded mode read and the hourly refresh's lowering pass. None of it has another home in
+  this stage.
+- **Cost if wrong:** The waiver caps `ccd/ccrc` at +550 for this branch, so a later fix round that adds more than 10
+  code lines reds the growth check until a waiver covers the new delta, and the debt stands until consolidation W5 pays
+  it down (the file's `payer`). A merge-base that moves can change the measured delta.
+
+### D-6921 — the settings census classes the bridge start's forwarded auth endpoint
+
+- **Departs from:** Main's settings census (centralised update wave 24, #1237, D-6598), which reds its C5 row on any
+  `${CCRC_…:-}` read in `ccd/ccrc` that its `ENV_ONLY` table does not class
+  (`server/test/ccrc-settings-census.test.ts`). The plan predates the census and names no entry for Task 11.
+- **What changed:** Task 11's `_codex_bridge_prepare` (`ccd/ccrc:13803`) reads `${CCRC_CODEX_AUTH_BASE:-}`, to forward
+  it to a direct lane's bridge only when its caller set it. `ENV_ONLY` gains one `fixture-path` entry for that name;
+  the class's comment now reads "a path, endpoint or permission", and the file's two counts name D-6921's one beside
+  D-6588's 42. No other row changes.
+- **Why:** The name is Stage 1's test endpoint for the auth library (`ccd/ccgpt-auth.py`'s `auth_base`, loopback
+  only). A test points it at a loopback fake and a live box never sets it, so it is a fixture's value, never a box's
+  setting, which is what `ENV_ONLY` holds. The census reached this branch with #1237 in the second merge of main, after
+  the wave's gate list was drawn, and the pull request's test selection ran it.
+- **Cost if wrong:** If a live box ever needs another auth endpoint, the class is wrong and the name moves to
+  `CCRC_SETTINGS` with a `_ccrc_knob` read. Until then the entry names one read the census now sees, and C5 still reds
+  the next name nobody classed.
+
+### D-6944 — a restart clears the unrecognised and overflow markers
+
+- **Departs from:** Task 5's `Stats` load (plan :834-840), which carries `unexplained` across a restart and drops from
+  it only a name `known.KNOWN` now covers.
+- **What changed:** `_load` also drops `unrecognised` and `overflow` from each carried family and marks the load
+  changed, so the constructor rewrites the file at the restart (`ccd/codexbridge/stats.py:246-248`, module docstring
+  :32-37). The `names` counters are carried whole, so a family already at NAMES_MAX maps its next new name to
+  `overflow` again (`_slot`, :259-263), and either marker comes back only when the bridge meets such a name again. The
+  case is at `server/test/codex-bridge-count-stats.test.ts:396`, with row Z1.
+- **Why:** Neither marker is a name a change to known.py could ever explain, so a carried one held Task 17's WARN for
+  good, and the 7-day watch's "no unexplained new name" could never read clean again after one.
+- **Cost if wrong:** A restart forgets that a marker was met until the bridge meets such a name again, so a WARN read
+  only after a rollout can miss it. The `names` counters still hold the markers' counts.
+
+### D-6945 — the drift WARN carries a remedy line, with a clause for each marker by family
+
+- **Departs from:** Task 17's Interfaces (plan :1668-1672) give the WARN as one sentence with no remedy, but every
+  doctor finding is a sentence plus a remedy line. The plan says nothing of the `unrecognised` and `overflow` markers
+  a list can hold.
+- **What changed:** The WARN line is the plan's sentence, verbatim (`ccd/ccrc-doctor-checks:7759`), and its remedy
+  (:7756) says to read each name in the upstream source and explain it in `ccd/codexbridge/known.py` in a reviewed
+  change. When the list holds a marker, `_dr_cx_drift_marker` (:7779-7797) adds a clause per kind of family it was met
+  in (:7742-7748): an event, item, error-code or incomplete-reason name is read in a recording made while
+  `record-streams` is in the lane directory; a responseHeader name the same way, but only a 2xx answer's head is
+  recorded; and a request-side or unknown family's name from the client's request, never from `record-streams`; each
+  clause ends by saying the bridge's restart clears the marker, and a marker is never added to known.py. The clauses
+  are pinned at `server/test/ccrc-doctor-codex.test.ts:5497-5502`, with cases at :5582, :5737, :5773 and :5796 (row
+  Z2).
+- **Why:** A marker is what the bridge writes for a name outside NAME_RE or past NAMES_MAX
+  (`ccd/codexbridge/stats.py:65`, :70), so adding it to known.py would explain nothing. The bridge records only a 2xx
+  answer's stream and head (`ccd/codexbridge/server.py:776-777`), and request-side names come from Claude Code's
+  request (`inbound.py`, `server.py:629`), which no recording holds, so a remedy that always sent the operator to
+  `record-streams` would point at a file that cannot show the name.
+- **Cost if wrong:** Only remedy text changes, pinned in one describe block, and a rename of `record-streams` must
+  update the clauses too. The family split is spelled in the doctor's own `case` (:7742-7746), unpinned against
+  known.KNOWN, so a new family falls to the request-side clause, the direction that never sends the operator to a
+  recording.
+
+### D-6946 — the drift list counts distinct pairs and prints the first 32
+
+- **Departs from:** Task 17's WARN, `<n> name(s) … <family>:<name>, …` (plan :1668), which says neither whether a
+  repeated pair is counted twice nor how long the list may grow.
+- **What changed:** A repeated `<family>:<name>` is listed once, including several names that each print as
+  `unrecognised`, and `<n>` counts distinct pairs (`ccd/ccrc-doctor-checks:7749-7751`; the header says so at
+  :7680-7682). The line prints the first `shown=32` (:7697, :7754), then `, … and <n-32> more` (:7755). Cases are at
+  `server/test/ccrc-doctor-codex.test.ts:5582` and :5773.
+- **Why:** A real `Stats` file never repeats a pair; only a hand-made file can, and there collapsed sentinels would
+  otherwise read as many names. The bridge caps each family at NAMES_MAX names plus `overflow`, so without a cap one
+  lane's line could carry about 2,570 names.
+- **Cost if wrong:** 32 is the doctor's own number, with no counterpart in stats.py, so the operator sees the rest
+  only as a count and reads the stats file for them. A different cap is a one-line change, pinned by row CQ4-cap.
+
+### D-6947 — a stats file the row cannot read is the drift row's unmeasured WARN
+
+- **Departs from:** The Global Constraints' "Two new WARNs" (plan :181-183) and Task 17's single WARN (plan :1668),
+  neither of which says what happens when a stats file is present but cannot be read as the bridge's.
+- **What changed:** The drift row WARNs `… cannot be told: its stats file <p> cannot be read as the bridge's (<why>) —
+  unmeasured, never read as no unexplained name` for a regular stats file whose size cannot be measured, that is
+  larger than READ_MAX, that this user cannot open, that lists more names than a bridge writes, or that is not one
+  version-1 JSON document of this lane with an `unexplained` object (`ccd/ccrc-doctor-checks:7707-7737`); it prints
+  whatever else the codex check finds, and an absent file is still no finding (:7706). Each why has its own remedy: a
+  `stat` check (:7729); make the file readable by the user the bridge and doctor run as, chowning it first if another
+  user owns it, then `chmod 600` (:7731); or stop, move aside and start (:7733). Cases are at
+  `server/test/ccrc-doctor-codex.test.ts:5651-5772`.
+- **Why:** Without this WARN, a broken stats file reads the same as "no unexplained name", which is exactly the
+  question the 7-day watch asks (plan :1670-1671). The WARN is one row in two forms, the way Task 13's bridge-tier
+  stale row has its "cannot be told" form, so it stays inside the two-WARN limit if that limit counts rows.
+- **Cost if wrong:** If the limit counts sentences, the same why and remedy move to `_dr_cx_fail` with no other
+  change, and a broken stats file then fails the codex check.
+
+### D-6948 — the drift row reads within the bridge's own bounds, pinned to stats.py
+
+- **Departs from:** Task 17 (plan :1666-1676), which names NAME_RE as the only bound on what the row reads.
+- **What changed:** The row never runs jq on a file larger than `read_max=$(( 16 * 2**20 ))`, and it calls a file that
+  lists more than `families * (names_max + 1)` names (10 x 257) unmeasured without walking it
+  (`ccd/ccrc-doctor-checks:7697`, :7710, :7715-7717). Three pin cases hold the doctor's NAME_RE, READ_MAX, NAMES_MAX
+  and family count equal to `ccd/codexbridge/stats.py:65`, :84, :70 and known.KNOWN
+  (`server/test/ccrc-doctor-codex.test.ts:5811`, :5819, :5828), and the case at :5737 walks a file at exactly the
+  bound.
+- **Why:** The doctor then reads exactly the files a real `Stats` writes. A hand-made file cannot make it parse an
+  unbounded document or walk an unbounded list in bash.
+- **Cost if wrong:** Three numbers are spelled in bash beside their Python owner, and the pins go red when either side
+  moves, so a change costs one edit on each side. The row is stricter than the bridge: a file the bridge would still
+  load, with too many names, reads as unmeasured.
+
+### D-6949 — `make_streams.py --from-recording` waits for the first recording
+
+- **Departs from:** Task 18's scrubber (plan :1694-1695): "Its output is a corpus stream (Task 3's format), with its
+  expectation written by `make_streams.py`'s `--from-recording`."
+- **What changed:** Ruling W3-R2: the flag is not built, and `server/test/fixtures/codexbridge/make_streams.py` is
+  unchanged. Instead, the case at `server/test/codex-bridge-live-tools.test.ts:519` feeds the scrubber's output to the
+  replay suite's reader (the driver's `reduce` op, in 13-byte chunks) and asserts a whole parse, and
+  `ccd/codexbridge/record.py:31-32` says a recording's `expect.json` is written by hand in the reviewed change that
+  adds it.
+- **Why:** No recording exists before the first live step. The runbook already scrubs recordings into the corpus "in a
+  reviewed change" (plan :1817-1818), which is where a generator can be measured against a real stream, and
+  make_streams.py is not in Task 18's Files.
+- **Cost if wrong:** A small follow-up at the live step: either the first recording's expectation is written by hand,
+  or the flag is built then.
+
+### D-6950 — a recording holds its head, and the bridge records only a 2xx answer
+
+- **Departs from:** Task 18 (plan :1687-1688): "the bridge writes each upstream response's raw bytes", at most
+  RECORD_MAX files. It does not say whether the head is part of those bytes, which answers are recorded, or how the
+  cap is counted.
+- **What changed:** A recording is `HTTP/1.1 <status>`, one `name: value` line per header, a blank line, then the raw
+  body (`ccd/codexbridge/record.py:104-107`), and the bridge records only a 2xx answer
+  (`ccd/codexbridge/server.py:776-777`, :792-801). The cap counts the bridge's own `<utc>-<n>.sse` files on disk
+  (`record.py:62`, :145-168). The probe names its recordings `liveprobe-<step>-<utc>-<n>.sse`
+  (`ccd/codexbridge/liveprobe.py:429`), which never match that pattern, so they never count against the cap.
+- **Why:** The head lets runbook step 3 read the cache headers from a recording, and it is what the scrubber's "drops
+  every header line" removes. An error answer is a JSON body read by `backend.error_of`, not a stream, and counting
+  files on disk makes the cap hold across restarts.
+- **Cost if wrong:** The bridge never keeps a non-2xx answer; the probe's recording keeps any status, so the operator
+  studies one there. A recording carries header values raw, so it stays 0600 in a 0700 directory and is never
+  committed unscrubbed.
+
+### D-6951 — the scrubber rewrites every string but a few structural ones
+
+- **Departs from:** Task 18's scrubber (plan :1692-1694), "every text with a fixed synthetic string of the same
+  structure", which says neither what the structure is nor which values count as text.
+- **What changed:** Every string is rewritten unless its key is kept: ids become `<prefix>_fx<n>`, `encrypted_content`
+  becomes `ENC-<n>`, a call's `arguments` that parse as JSON keep their keys, numbers and shape with every string
+  rewritten, and every tool or function `name` becomes `tool_fx<n>`, one per distinct name in a stream
+  (`ccd/codexbridge/record.py:287-308`, :265-285). Only `type`, `status`, `role`, `phase` and `object` are kept
+  anywhere, `reason` only in `incomplete_details`, and `code` or a bare-string `error` only in an error object or an
+  `error` event (:211-221, :305-307; the closing round's K1, so `errors.classify_failed` gives a scrubbed bare-string
+  error the row it gave the original). Each kept string is kept only in a code's shape, lower-cased under
+  `errors.CODE_RE` as `errors._names` reads a code, and any other there is content (:306; K5, from the commit security
+  review). Every other string, an id-shaped one under another key and `model` included, keeps each non-alphanumeric
+  character and has each letter or digit replaced by `x` (:237-239, :308), and a `data:` line that is not JSON becomes
+  the fixed `MALFORMED_LINE` (:222, :330-331). Cases are at `server/test/codex-bridge-live-tools.test.ts:344`, :419,
+  :440, :502 and :519, with rows Z3a, Z3b, Z3c, K1 and K5.
+- **Why:** A string under a key the scrubber has never heard of, such as a web search's query, an image's revised
+  prompt, a tool schema's enum or a code interpreter's source, then never reaches the public corpus, and the kept keys
+  are only what `sse.SseParser` and `reducer.Reducer` need to parse and replay a stream. A text that keeps its length,
+  whitespace and punctuation still joins its live deltas to its done text, and one synthetic name per tool keeps a
+  call matched to its tool.
+- **Cost if wrong:** Object keys are kept everywhere, argument keys and schema property names included, as are
+  code-shaped values under the kept keys, and the residue check catches ids, JWTs, keys and encrypted content there
+  but not plain words; so a recording still needs a human read before it enters the corpus, which the runbook's
+  reviewed change already requires. An id-shaped string under a key outside ID_KEYS no longer matches the item it
+  names, and a kept-key value outside a code's shape (a free-text `error`, say) replays as the synthetic text, not as
+  the original row.
+
+### D-6952 — the bridge start requires `bridgeFiles.recordings`, read by field name
+
+- **Departs from:** D-6832, under which `config_from_env` requires only `bridgeFiles.stats` and `.store`; and Task 18
+  (plan :1682), which adds a recording hook to server.py without saying how the recordings name is read.
+- **What changed:** `_BridgeFiles` (`ccd/codexbridge/server.py:130-137`) declares the three keys as NamedTuple fields,
+  and `read_manifest` walks `_BridgeFiles._fields` and requires each value to be a file name (:200-205), so a
+  lane.json without `recordings` refuses at start (case `server/test/codex-bridge-live-tools.test.ts:301`).
+  `BridgeConfig.recordings_path` defaults to `""`, which records nothing (:127).
+- **Why:** `recordings` is both a key and its own file name, and single-definition's Task 10 row allows exactly one
+  quoted spelling of each file name, in `laneManifest` (`server/test/single-definition.test.ts:9245`); the presence
+  check already wants all three keys (D-6866). The field has a default because the driver's refresher op builds a
+  BridgeConfig by keyword without it (`server/test/fixtures/codexbridge/driver.py:794`).
+- **Cost if wrong:** A lane.json rendered without `recordings` refuses to start a direct bridge. The refusal names the
+  field (`lane.json's bridgeFiles.recordings is not a file name`) and no remedy; `ccrc update` re-renders the file.
+
+### D-6953 — the probe's six steps, model, effort and session
+
+- **Departs from:** Task 18's probe (plan :1696-1701) and the runbook's step list (plan :1804-1815), where step 3 is
+  replayed "with and without its rs_ id, if step 3 is refused with it", and step 6 is "spare".
+- **What changed:** Step 6 is step 3 with each reasoning item sent without its `rs_` id, and re-running any step is
+  that step again, counted (`ccd/codexbridge/liveprobe.py:8-20`). Steps 3 and 6 rebuild step 2's reply from its latest
+  recording through the bridge's reducer and `stream.fold`, each call under `toolu_01` plus 22 hex of a hash of its
+  call id (:179-181, :199-246); the model is the lane catalogue's first id (:251-255), effort is `low` (:74), and the
+  session id is `uuid5(NAMESPACE_URL, "ccrc-liveprobe:<lane>")` (:136), so steps 1 and 5 share their `session-id` and
+  `prompt_cache_key`. `--dry-run` still needs the marker and still refuses past six, but reads no credential and
+  counts nothing (:392-401).
+- **Why:** A fixed step 6 keeps the without-id request inside the six-request cap without a flag. Rebuilding step 3
+  from step 2's own recording sends back what the upstream actually answered, and a fixed per-lane session id is what
+  lets step 5 measure the cache.
+- **Cost if wrong:** If step 3 is accepted with its id, step 6 spends one of the six requests on a variant the runbook
+  would not have needed, and a step that has to be re-run then uses the count's last spare.
+
+### D-6954 — the probe spells its lane, catalogue and auth-library paths itself
+
+- **Departs from:** The Global Constraints' "One definition of every name" (plan :143-145) and the contract under
+  which the bridge receives its lane directory (`CCGPT_LANE_DIR`), catalogue (`CCGPT_CATALOGUE`) and library
+  (`CCRC_CODEX_AUTH_LIB`) from its tier environment (plan :270-274). Task 18 (plan :1696) gives the probe only `--lane
+  <id>`.
+- **What changed:** `lane_files` spells `~/.ccrc/codex/<lane>` and `~/.ccrc/models/<lane>.json`
+  (`ccd/codexbridge/liveprobe.py:125`, :138-139), mirroring their owners `_codex_lane_dir` (`ccd/ccrc:12145`) and the
+  bridge environment's `CCGPT_CATALOGUE` (`ccd/ccrc:13801`), and comments name each owner (:122-124, :137).
+  `credential` loads `CCRC_CODEX_AUTH_LIB` when it is set, else the contract's `~/.local/bin/ccgpt-auth.py` (:75,
+  :279), through `server.load_auth_lib`.
+- **Why:** The probe is an operator CLI run with no tier environment, so it has no owner environment to receive the
+  paths from. It is a separate process, not a second reader inside the bridge.
+- **Cost if wrong:** If an owner's path moves, the probe looks in the old place and refuses until its spelling
+  follows: a moved lane directory with `no-marker` or `lane-unknown` (`ccd/codexbridge/liveprobe.py:126-127`,
+  :132-133), a moved catalogue with `no-catalogue` (:251-253), and a moved auth library, when `CCRC_CODEX_AUTH_LIB` is
+  unset, with `auth-library-absent` (:279-283, `ccd/codexbridge/errors.py:79`). No test pins the spellings equal.
+
+### D-6955 — the probe refuses a lane.json the bridge would refuse
+
+- **Departs from:** Task 18's probe (plan :1696-1701), whose only refusals are the missing marker, the count past six,
+  and an expired or absent credential.
+- **What changed:** `lane_files` reads lane.json through the bridge's own `server.read_manifest`
+  (`ccd/codexbridge/liveprobe.py:130`; `ccd/codexbridge/server.py:184-207`), so a missing, foreign or malformed
+  lane.json refuses `lane-unknown`, or `lane-malformed` naming the field (:131-135). That covers a missing or
+  non-HOME-relative `authDir` or `configDir`, and any `bridgeFiles` name that is not a file name; cases are at
+  `server/test/codex-bridge-live-tools.test.ts:693`.
+- **Why:** One reader keeps the probe and the bridge from disagreeing about a lane. It also means a recordings name
+  such as `../x` can never place the probe's raw recording outside the lane directory.
+- **Cost if wrong:** A lane whose lane.json is stale, even with a good `authDir`, cannot be probed until `ccrc update`
+  re-renders the file.
+
+### D-6956 — the probe names a failure by its class, with exit codes
+
+- **Departs from:** Task 18's probe (plan :1696-1701), which lists what the probe prints for an answer and its
+  refusals, but spells no failure line and no exit codes.
+- **What changed:** A failure before the send prints `liveprobe: failed <class>; nothing was sent` and exits 1
+  (`ccd/codexbridge/liveprobe.py:415-417`); one in the send or while the answer is read prints `transport <class>` or
+  `transport timeout-<phase>` and exits 3 (:419-425, :332-338); and one opening or heading the answer's recording, or
+  escaping its report, prints `recording <class>` and exits 3 (:438-443). Exit 0 is a 2xx answer read to its end and
+  recorded whole, 2 a usage error, and the count is raised before the post, so a request that never left is still
+  charged (docstring :39-45; :411). Cases are at `server/test/codex-bridge-live-tools.test.ts:713`, :724, :743, :810
+  and :824.
+- **Why:** An exception's text can carry a value: http.client formats a header it refuses with `%r`, which would
+  include the token, so only the class is printed. Raising the count before the post keeps the six-request cap true
+  whatever fails.
+- **Cost if wrong:** The operator sees a class name, not a cause, and must look on the box for the rest. A request
+  that http.client refuses in `putheader` still spends one of the six.
+
+### D-6957 — a probe answer whose recording fails says so and exits 3
+
+- **Departs from:** Task 18's probe (plan :1700-1701), which "records the raw stream" and "prints only" the answer's
+  names, and says nothing of a recording that cannot be made or is cut short.
+- **What changed:** `Recording` sets `failed` when a write raises (`ccd/codexbridge/record.py:76`, :87-89). After the
+  answer's lines, a recording that was not made (`ensure_dir` False or `open_file` None) or was cut short prints
+  `liveprobe: recording unwritten` and exits 3, whatever the status, and the request still counts
+  (`ccd/codexbridge/liveprobe.py:428-437`, docstring :37-43). Cases are at
+  `server/test/codex-bridge-live-tools.test.ts:839` and :862, with rows Z4a and Z4b.
+- **Why:** Before, a 200 whose recording failed exited 0 with no recording, so the operator lost the answer the step
+  was spent on without being told, and step 3 could rebuild from an older step-2 recording unseen.
+- **Cost if wrong:** A request whose answer was good but whose recording failed is spent, so re-running that step uses
+  one of the six. The line names no cause; the operator checks the recordings directory on the box.
+
+### D-6958 — account removal reaps the probe count's and the stats file's tmp
+
+- **Departs from:** Task 11's reap list (plan :1360-1362), which names the four markers (`liveprobe.count` among
+  them), the stats file and the store, and no tmp file. The ledger commit amended the contract's reap sentence (plan
+  :287-290) to match, so it now names both tmp files.
+- **What changed:** `_codex_reap_files` also removes `liveprobe.count.tmp` and `<bridgeFiles.stats>.tmp`, the second
+  derived from the stats name lane.json carries (`ccd/ccrc:13217-13220`, :13246). The removal case lists both
+  leftovers (`server/test/ccrc-codex-bridge.test.ts:357`, :362), with rows Z11a and Z11b.
+- **Why:** The probe writes its count beside itself and renames it (`ccd/codexbridge/liveprobe.py:156-167`), and the
+  stats flush does the same with `<path>.tmp` (`ccd/codexbridge/stats.py:385`), so a killed writer leaves a file the
+  removal would otherwise leave in the lane directory.
+- **Cost if wrong:** Two more names in the reap list, one edit to drop. A tmp name a later writer adopts must be added
+  here too, or removal leaves it behind.
+
+### D-6959 — the runbook gives the probe the bridge's version
+
+- **Departs from:** The contract's `CCGPT_CCRC_VERSION` ("the box's stamp, or `dev`", plan :273-274) and the probe's
+  own docstring, which says it sends the bridge's User-Agent (`ccd/codexbridge/liveprobe.py:10`); the probe derives no
+  version and reads `CCGPT_CCRC_VERSION` from its environment, else `dev` (:408), while the bridge's start takes the
+  stamp's version through `_box_build_fields` (`ccd/ccrc:13796-13797`).
+- **What changed:** The probe is unchanged: the runbook's step 2 runs it with `CCGPT_CCRC_VERSION` set from `ccrc
+  version`'s `version` line, which `cmd_version` prints from the same `_box_build_fields` only when the stamp names
+  one (`ccd/ccrc:3013-3032`). With no such line the variable is empty and the probe sends `dev`, which is the bridge's
+  fallback too.
+- **Why:** The build stamp has no Python reader to import: its bash readers are pinned at exactly two
+  (`server/test/single-definition.test.ts:1358`) and its field checks live in one file (:1263), so a probe-side parser
+  would be a third reader that could accept a stamp `_box_build_fields` rejects, the drift this was meant to close.
+- **Cost if wrong:** An operator who runs the probe without the runbook's prefix sends `ccrc/dev`, so step 1 measures
+  a User-Agent other than the one the flip uses, and nothing checks it. A later `ccrc`-side launcher that passes the
+  version it already derives would retire the prefix.
+
+### D-6960 — a fifth finding family, the endpoint literal
+
+- **Departs from:** Task 19's Interfaces (plan :1721-1722), where findings name a request-struct field, event literal,
+  error-code literal or header literal. The plan's own test, "it reports the removal of the compaction endpoint
+  constant" (plan :1735-1737), needs an endpoint family.
+- **What changed:** `FAMILIES` gains `endpoint literal` (`.github/ci/codex-wire-watch.mjs:54`), which covers a URL, a
+  path literal that is not a media type, and any printable literal on a `const …ENDPOINT|PATH|ROUTE|URL` line
+  (:276-278). Cases are at `server/test/codex-wire-watch.test.ts:61` and :67.
+- **Why:** Without this family, the compaction-endpoint case (the 0.155.0 shape, D-6424) cannot go red first. A
+  removed or added route is also a wire change the bridge must follow.
+- **Cost if wrong:** Some noise in an issue, for example a renamed URL constant or a path that is not a route.
+
+### D-6961 — the request-struct family covers sent enums and serde wire names
+
+- **Departs from:** Task 19's "request-struct field" (plan :1721), which names struct fields only.
+- **What changed:** Each enum that derives `Serialize` adds `Enum::Variant` and `Enum::Variant.field`
+  (`.github/ci/codex-wire-watch.mjs:258-265`). A serde `rename` adds the wire name (`Struct.field=wire`,
+  `Enum::Variant=wire`), and a container's serde `tag` and `rename_all` become members (`Type#tag=v`,
+  `Type#rename_all=v`) (:184-197, :240-243). Cases are at `server/test/codex-wire-watch.test.ts:117` and :151, with
+  rows G8 and G17.
+- **Why:** Codex's input items are one sent enum (`protocol/src/models.rs`), so a struct-only scan misses a new or
+  removed item type. A serde rename changes the JSON on the wire while the Rust name stays the same.
+- **Cost if wrong:** More names are reported. `rename(serialize = …)`, `content = …` and a container-level `rename`
+  are not read, so a change there is caught only by someone reading the release.
+
+### D-6962 — the walk reads only the workflow's own issues
+
+- **Departs from:** Task 19 (plan :1723-1726): one state issue, `codex wire: state`, and a pair's issue "skipped when
+  that title exists".
+- **What changed:** `ownIssues` lists `state=all&creator=github-actions[bot]`, keeps only issues whose `user.login` is
+  `BOT_LOGIN`, and drops pull requests (`.github/ci/codex-wire-watch.mjs:45`, :509-514); both the state and the
+  "already opened" check read that list. The case is at `server/test/codex-wire-watch.test.ts:399`, with row G5.
+- **Why:** This repository is public, so anyone can open an issue with either title. A forged state issue would move
+  the walk past releases, and a forged pair title would suppress a finding.
+- **Cost if wrong:** An operator who sets the state by hand must edit the workflow's own state issue, not open a new
+  one, because a state issue the workflow did not open is ignored.
+
+### D-6963 — with no state yet, a failing newest pair still seeds the state
+
+- **Departs from:** Task 19 (plan :1728-1732): the state is left at the last pair compared, never past the one that
+  failed, and with no state issue yet the walk starts at the second-newest stable tag. On a first run where no pair is
+  compared, that names no tag to write.
+- **What changed:** `runWatch` writes `reached = walked ?? (state === null ? pairs[0]?.[0] ?? null : null)`
+  (`.github/ci/codex-wire-watch.mjs:442-443`), so with no state yet a newest pair that fails still creates the state
+  at its older tag, where the walk began, and the job exits non-zero. The module header (:12-13) and the workflow's
+  comment (`.github/workflows/codex-wire-watch.yml:7-9`) say so, and the case is at
+  `server/test/codex-wire-watch.test.ts:331`, with row G12.
+- **Why:** Otherwise a failing first run writes nothing, and the next run starts again at a newer newest pair and
+  skips the one that failed. That breaks "every release between two runs is compared, never skipped" (plan
+  :1732-1733).
+- **Cost if wrong:** The first scheduled run creates the state issue in this public repository even when its only pair
+  fails. The state then names the older tag of a pair that was never compared, which by the plan's own rule is where
+  the walk starts.

@@ -75,6 +75,7 @@ import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
+import { openRunsClaimedBy } from './coord/bindingReads.js';
 import { buildInfoOfRow } from './update/inventory.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
@@ -205,7 +206,7 @@ export const WRITE_ANSWER_EXEMPT = /^\/api\/(?:auth\/|token\/|sessions\/:id\/upl
 export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/fleet', '/api/digest', '/api/sessions/:id/pr', '/api/sessions/:id/workspace/audit', '/api/coord/stall-watch',
   '/api/runs', '/api/runs/:id', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/asks',
-  '/api/approvals/:id',
+  '/api/approvals/:id', '/api/coord/review-cap/:id',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -1795,7 +1796,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const read = await readSessionRecord(deps.io, deps.cfg, id);
       switch (read.kind) {
         case 'found': break;
-        case 'absent': case 'unlistable': return null;
+        case 'absent': case 'unmeasurable': case 'unlistable': return null;
         // Masked on both of its paths (spec §2.3): `knownId` refuses a
         // non-registry id on `POST /api/sessions/:id/ask`, and on
         // `POST /api/asks/:id/answer` `freshAskAt`'s own `bad-id` answers
@@ -2362,7 +2363,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     switch (read.kind) {
       case 'found': break;
       case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
-      case 'absent': return refuseRoute(reply, 'unknown-session');
+      case 'absent': case 'unmeasurable': return refuseRoute(reply, 'unknown-session');
       // An id `isRegistryId` refuses (spec §2.3) is a malformed request, never an unknown session: 400 in
       // this file's request-shape word, the one `isSafeSessionId` above answers.
       case 'bad-id': return refuseRoute(reply, 'bad-session-id');
@@ -2663,10 +2664,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/interrupt', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    // D-5236: what Escape would interrupt, from the RAW live word (never `liveStatus()`'s collapse, which reads `shell`
+    // D-5236: what Escape would interrupt, from the RAW live word (never `liveSessionStatus()`'s collapse, which reads `shell`
     // and `waiting` busy) and the frame's row with its hook stamp — the turn reads' one home, `turnverdict.ts`.
     // `interruptVerdict` holds the rule. A row that cannot be found, or a word that cannot be read, is `not-busy`, as
-    // `liveStatus()` answered it (D-115); with an unmeasured identity no row is read, so any non-idle word sends Escape.
+    // the old interrupt reader answered it (D-115); with an unmeasured identity no row is read, so any non-idle word sends Escape.
     const res = await interrupt(sendDeps, id, async (): Promise<InterruptVerdict> => {
       const read = await readSessionRecord(deps.io, deps.cfg, id);
       // `bad-id` is masked here (spec §2.3): `knownId` above refuses a non-registry id before this read. Were it ever
@@ -3456,7 +3457,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // route that answered 404 for both would be reopening the exact
       // overloaded-null this 502 gate exists to close, one branch over.
       case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
-      case 'absent': return refuseRoute(reply, 'unknown-session');
+      case 'absent': case 'unmeasurable': return refuseRoute(reply, 'unknown-session');
       // This read is the ONLY gate in front of `stopArgvFor` (spec §2.3), so an id `isRegistryId` refuses
       // is refused here, before any argv: 400, this file's request-shape word, never a proven absence's 404.
       case 'bad-id': return refuseRoute(reply, 'bad-session-id');
@@ -3619,7 +3620,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     switch (read.kind) {
       case 'found': break;
       case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
-      case 'absent': return refuseRoute(reply, 'unknown-session');
+      case 'absent': case 'unmeasurable': return refuseRoute(reply, 'unknown-session');
       // The ordinary arm's id gate (spec §2.3): an id `isRegistryId` refuses is a malformed request.
       case 'bad-id': return refuseRoute(reply, 'bad-session-id');
       default: {
@@ -3855,7 +3856,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       ? await decideArchive(null, id, flags, measure)
       : await coordRoutes.withAbandon(coord, (abandon, abandonRefusal) => decideArchive({
         openRunsForSession: (sid) => coord.openRunsForSession(sid),
-        openRunsClaimedBy: (sid) => coord.openRunsClaimedBy(sid),
+        openRunsClaimedBy: (sid) => openRunsClaimedBy(coord, sid),
         abandonRefusal,
         abandon,
       }, id, flags, measure));

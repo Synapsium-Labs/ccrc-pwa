@@ -115,3 +115,68 @@ describe('telemetry "openrouter" in both parsers (D-5521)', () => {
     }
   });
 });
+
+/** codex-bridge Stage 2, Task 10 (spec D20): `exec.bridge` and `exec.upstream`'s closed sets, declared once in each
+ *  parser, compared IN ORDER — the first entry of each is the default an absent key reads, so a reordering is a change
+ *  of default and must red here, not only in a behaviour row. */
+function codexWordsIn(file: string, name: 'CODEX_BRIDGE_MODES' | 'CODEX_UPSTREAMS'): string[] {
+  const src = readFileSync(path.join(root, file), 'utf8');
+  const m = src.match(new RegExp(`${name}[^=]*=\\s*(?:Object\\.freeze\\()?\\[([^\\]]*)\\]`));
+  if (m === null) throw new Error(`no ${name} declaration found in ${file} - re-read it`);
+  return [...m[1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!);
+}
+
+describe('CODEX_BRIDGE_MODES and CODEX_UPSTREAMS parity between the parser and its bare-Node mirror', () => {
+  it('both files declare both sets, the default first', () => {
+    for (const f of ['shared/roster.ts', 'shared/roster-json.mjs']) {
+      expect(codexWordsIn(f, 'CODEX_BRIDGE_MODES'), f).toEqual(['litellm', 'direct']);
+      expect(codexWordsIn(f, 'CODEX_UPSTREAMS'), f).toEqual(['backend', 'siwc']);
+    }
+  });
+
+  // The bash readers of a rendered lane.json (`_codex_lane_mode`, `_codex_lane_upstream` in ccd/ccrc) carry a third
+  // spelling of both sets, as one quoted space-separated list each. A word added to roster.ts alone would render into
+  // lane.json and then read `lane-*-unreadable` in bash for a valid roster, so the two lines are pinned here, in order.
+  it.each([
+    ['_codex_lane_mode', 'CODEX_BRIDGE_MODES'],
+    ['_codex_lane_upstream', 'CODEX_UPSTREAMS'],
+  ] as const)('ccd/ccrc\'s %s carries exactly roster.ts\'s %s, in order', (fn, name) => {
+    const src = readFileSync(path.join(root, 'ccd/ccrc'), 'utf8');
+    const lines = src.split('\n').filter((l) => l.startsWith(`${fn}() `));
+    expect(lines, `one ${fn} definition line in ccd/ccrc`).toHaveLength(1);
+    const m = lines[0]!.match(/^\S+\(\)\s*\{\s*_codex_lane_word\s+"\$\{1:-\}"\s+\S+\s+\S+\s+"([^"]*)";\s*\}$/);
+    if (m === null) throw new Error(`${fn}'s line in ccd/ccrc is not the one-line _codex_lane_word call - re-read it`);
+    expect(m[1]!.split(' ')).toEqual(codexWordsIn('shared/roster.ts', name));
+  });
+
+  const rosterWith = (exec: Record<string, unknown>) => ({
+    version: 1,
+    accounts: [
+      { id: 'lane-a', label: 'lane-a', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'lane-c', label: 'lane-c', configDirSuffix: '.claude-lane-c',
+        exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+          authDir: '.local/share/ccrc/codex/lane-c', ...exec },
+        homeAble: false, hue: 'violet', telemetry: 'codex' },
+    ],
+  });
+
+  it.each([
+    ['a row with neither key', {}, { bridge: 'litellm', upstream: 'backend' }],
+    ['a row with both keys', { bridge: 'direct', upstream: 'siwc' }, { bridge: 'direct', upstream: 'siwc' }],
+  ] as const)('the resolved bridge and upstream defaults are equal in roster.ts and roster-json (%s)', async (_why, exec, want) => {
+    const { parseRoster } = await import('../../shared/roster.js');
+    const { rosterFromJson } = await import('../../shared/roster-json.mjs');
+    const ts = parseRoster(rosterWith(exec)).byId.get('lane-c')!.exec as { bridge?: unknown; upstream?: unknown };
+    const mjs = rosterFromJson(rosterWith(exec)).accounts.find((a) => a.id === 'lane-c')!;
+    expect({ bridge: ts.bridge, upstream: ts.upstream }).toEqual(want);
+    expect({ bridge: mjs.bridge, upstream: mjs.upstream }).toEqual(want);
+  });
+
+  it('a non-codex row carries neither resolved field from the mirror', async () => {
+    const { rosterFromJson } = await import('../../shared/roster-json.mjs');
+    const up = rosterFromJson(rosterWith({})).accounts.find((a) => a.id === 'lane-a')!;
+    expect(Object.prototype.hasOwnProperty.call(up, 'bridge')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(up, 'upstream')).toBe(false);
+  });
+});

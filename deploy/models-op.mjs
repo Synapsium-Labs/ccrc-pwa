@@ -72,8 +72,8 @@ import {
   WINDOW_MAX, WINDOW_MIN, availableFor, deriveModels, parseCatalogue, parseRegistry, parseWindows,
 } from '../shared/models.mjs';
 import {
-  MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor, effortFile, mergeSettingsEnv,
-  modelEnvBlock, readRegular,
+  CLIENT_DEFAULT_CONTEXT_TOKENS, MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor,
+  effortFile, mergeSettingsEnv, modelEnvBlock, readRegular,
 } from '../shared/modelenv.mjs';
 import {
   AdvanceInvalid, REASON_MAX, backfillAdvance, canaryEffort, chooseCandidate, familyOf, parseAdvance,
@@ -205,10 +205,21 @@ function refuseRegistry(e, id) {
  *  `clearSettingsEnv` read through the same type test. Its docstring there
  *  says why a FIFO must never be opened by name. */
 
+/** Each raw roster row `readRoster` returned, mapped to `rosterFromJson`'s
+ *  validated projection of it (codex-bridge spec D20, Stage 2 Task 10). Keyed
+ *  by the row OBJECT, so the projection travels with the very account every op
+ *  already passes down (`findAccount` returns an element of `json.accounts`)
+ *  and no signature between the dispatcher and `laneManifest` changes. A
+ *  WeakMap, not a field on the row: the raw JSON stays exactly what was read. */
+const PARSED_OF = new WeakMap();
+
 /** THE ONE ROSTER READ, and it is READ-ONLY. Absent and unreadable are two
  *  codes: the remedies differ. Type-tested (`readRegular`, Plan 3b Task A6):
  *  every op reads the roster before anything else, so a FIFO here used to
- *  hang every verb; it is `roster-unreadable` now, through the same arm. */
+ *  hang every verb; it is `roster-unreadable` now, through the same arm.
+ *  The validator's result is KEPT (it used to be discarded): `rosterFromJson`
+ *  returns its accounts in declaration order, so row `i` of the raw file is
+ *  account `i` of the parse, and `PARSED_OF` records the pair. */
 function readRoster(file) {
   let raw;
   try {
@@ -229,12 +240,14 @@ function readRoster(file) {
   } catch (e) {
     return { err: ['roster-invalid', `${file} is not valid JSON: ${e.message}`] };
   }
+  let parsed;
   try {
-    rosterFromJson(json);
+    parsed = rosterFromJson(json);
   } catch (e) {
     const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
     return { err: ['roster-invalid', `${file}: ${e.message}${remedy}`] };
   }
+  json.accounts.forEach((raw, i) => { PARSED_OF.set(raw, parsed.accounts[i]); });
   return { json };
 }
 
@@ -309,7 +322,9 @@ function readRegistry(id, catalogue) {
  *   - `{ state: 'ok', windows, raw }`: `windows` is `parseWindows`' frozen map;
  *     `raw` is the parsed JSON as it was on disk, unknown keys and all, which
  *     `set-window`/`clear-window` edit and write back, so a key this build does
- *     not know survives (spec §2.7: the file is forward-compatible).
+ *     not know survives (spec §2.7: the file is forward-compatible). The one
+ *     exception: `set-window` leaves out a refusal's `source: "refusal"` and
+ *     `refusedTokensEstimate` on the entry it writes (D-6905).
  *   - `{ state: 'unreadable', reason }`: a file that exists and cannot be read,
  *     is not JSON, or is not a windows file. `materialise`, the hourly refresh
  *     (which runs `materialise`) and the drift check treat it as NO windows,
@@ -349,14 +364,23 @@ function readWindowsFile(id) {
 const windowsOf = (reading) => (reading.state === 'ok' ? reading.windows : null);
 
 /** `show`'s report of a reading: each measured window with its `setAt` (null
- *  when the entry carries none), or the reason the file could not be read. */
+ *  when the entry carries none), or the reason the file could not be read. A
+ *  window a refusal lowered (`lower-windows`) also carries its `source` and its
+ *  `refusedTokensEstimate`, each only when the entry holds it in that shape (a
+ *  string, a finite number), so an entry without them reports exactly as before
+ *  (the whole-wave fix round, L3: additive). */
 function windowsReport(reading) {
   if (reading.state === 'absent') return { state: 'absent' };
   if (reading.state === 'unreadable') return { state: 'unreadable', reason: reading.reason };
   const byModel = {};
   for (const id of Object.keys(reading.windows)) {
-    const setAt = reading.raw.windows[id].setAt;
+    const entry = reading.raw.windows[id];
+    const setAt = entry.setAt;
     byModel[id] = { tokens: reading.windows[id], setAt: typeof setAt === 'string' ? setAt : null };
+    if (typeof entry.source === 'string') byModel[id].source = entry.source;
+    if (typeof entry.refusedTokensEstimate === 'number' && Number.isFinite(entry.refusedTokensEstimate)) {
+      byModel[id].refusedTokensEstimate = entry.refusedTokensEstimate;
+    }
   }
   return { state: 'ok', byModel };
 }
@@ -886,14 +910,30 @@ function laneManifest(account, registry) {
   if (!isObj(account.exec) || account.exec.kind !== 'codex') return null;
   const { id } = account;
   const probeModel = registry.classes.haiku;
+  // `bridge` and `upstream` are the PARSED account's (codex-bridge spec D20):
+  // `rosterFromJson` resolves an absent key to its set's default, so the
+  // default is spelled in the two validators and nowhere here. A row with no
+  // projection never came through `readRoster`, which is a defect in this
+  // file, not a roster to render a guess for.
+  const parsed = PARSED_OF.get(account);
+  if (parsed === undefined) throw new Error(`laneManifest: account "${id}" was not read through readRoster`);
   return {
     id,
     configDir: account.configDirSuffix,
     authDir: account.exec.authDir,
     proxyPort: account.exec.proxyPort,
     litellmPort: account.exec.litellmPort,
+    bridge: parsed.bridge,
+    upstream: parsed.upstream,
     ...(probeModel === null ? {} : { probeModel }),
     units: { litellm: `ccgpt-${id}-litellm.service`, shim: `ccgpt-${id}-shim.service` },
+    // The bridge's three file names, spelled HERE and nowhere else in shipped
+    // code (`single-definition.test.ts` pins that): `bash` and the bridge read
+    // them from `lane.json`. `stats` is the bridge's one non-secret output,
+    // `store` the reasoning store (sqlite adds its `-wal`/`-shm` beside it),
+    // `recordings` a directory written only while the lane's `record-streams`
+    // marker exists.
+    bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings' },
   };
 }
 
@@ -1198,6 +1238,9 @@ const OPS = {
   // WINDOW_MAX here, never in bash.
   'set-window': { keys: ['file', 'id', 'model', 'tokens'], required: ['file', 'id', 'model', 'tokens'], writes: true },
   'clear-window': { keys: ['file', 'id', 'model'], required: ['file', 'id', 'model'], writes: true },
+  // Codex-bridge D25 (Stage 2 Task 15): the hourly refresh's lowering pass on a `direct` lane, from the refusals the
+  // lane's bridge recorded in its stats file (`lowerWindowsOp`). It writes the windows file and re-materialises.
+  'lower-windows': { keys: ['file', 'id', 'stats'], required: ['file', 'id', 'stats'], writes: true },
   discovery: { keys: ['file', 'id', 'action', 'model', 'endpoints'], required: ['file', 'id', 'action'], writes: true },
   // `check` is OPTIONAL (Plan 3a Task 4): `--check true` is the check-only
   // form, which writes nothing and answers `changed`; omitted, the op writes,
@@ -1363,6 +1406,9 @@ function windowOp(opName, a, account, registry, catalogue, reading) {
     const previous = reading.state === 'ok' && Object.prototype.hasOwnProperty.call(reading.windows, a.model)
       ? reading.windows[a.model] : null;
     const prev = isObj(raw.windows[a.model]) ? raw.windows[a.model] : {};
+    // D-6905: a hand-set window drops a refusal's `refusedTokensEstimate` and `source: "refusal"` (from the clone).
+    delete prev.refusedTokensEstimate;
+    if (prev.source === 'refusal') delete prev.source;
     raw.windows[a.model] = { ...prev, tokens, setAt: new Date().toISOString() };
     extra = { model: a.model, tokens, previous };
   } else {
@@ -1404,6 +1450,166 @@ function windowOp(opName, a, account, registry, catalogue, reading) {
     return refuse(1, mat.err[0], detail);
   }
   out({ ok: true, op: opName, ...extra, ...describe(account, registry, catalogue, next) });
+  return 0;
+}
+
+/** A refusal at R tokens lowers its model's window to R × 9/10, rounded down to 1k (codex-bridge D25). Integer
+ *  arithmetic: `380000 * 0.9` is 341999.99999999994 in a double, which would round down to 341000. */
+const REFUSAL_KEEP_NUM = 9;
+const REFUSAL_KEEP_DEN = 10;
+const WINDOW_ROUND = 1000;
+
+/** The bridge's stats file (codex-bridge Stage 2 Task 5, `bridge.stats.json`), as EXACTLY ONE of three answers:
+ *  `{ stats: null }` when it is absent (a lane whose bridge has not flushed yet: nothing to lower); `{ stats }`, the
+ *  parsed version-1 object of THIS lane, its `refusals` and `routes` objects (each `{}` when absent); or
+ *  `{ err: [word, detail] }` for a file that exists and cannot be read (`stats-unreadable`, a FIFO included), or is
+ *  not a version-1 stats file of this lane (`stats-invalid`). The bridge is its one writer; this op only reads it. */
+function readStats(p, id) {
+  let text;
+  try {
+    text = readRegular(p);
+  } catch (e) {
+    if (e.code === 'ENOENT') return { stats: null };
+    return { err: ['stats-unreadable', `${p} could not be read: ${e.message}. Nothing was written.`] };
+  }
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    return { err: ['stats-invalid', `${p} is not valid JSON: ${e.message}. Nothing was written.`] };
+  }
+  const why = !isObj(json) ? 'it is not a JSON object'
+    : json.version !== 1 ? `its version is ${JSON.stringify(json.version)}, and this build reads version 1`
+      : json.lane !== id ? `it is lane ${JSON.stringify(json.lane)}'s, not "${id}"'s`
+        : (json.refusals !== undefined && !isObj(json.refusals)) ? 'its refusals is not an object'
+          : (json.routes !== undefined && !isObj(json.routes)) ? 'its routes is not an object' : null;
+  if (why !== null) {
+    return { err: ['stats-invalid', `${p} is not a bridge stats file this build reads: ${why}. Nothing was written.`] };
+  }
+  return { stats: { refusals: json.refusals ?? {}, routes: json.routes ?? {} } };
+}
+
+const own = (o, k) => isObj(o) && Object.prototype.hasOwnProperty.call(o, k);
+const timeOf = (v) => (typeof v === 'string' && Number.isFinite(Date.parse(v)) ? Date.parse(v) : null);
+
+/** `lower-windows --stats <abs path>` (codex-bridge D25, Stage 2 Task 15): the hourly refresh's own pass on a
+ *  `direct` lane, BEFORE its probe (`ccd/ccrc`'s `_models_lower_lane`), under the lane-files lock. It reads the
+ *  lane's upstream from the PARSED roster row (Task 10) and takes only `refusals["<upstream>/<model>"]` and
+ *  `routes["<upstream>/<model>"]`, so a refusal on one route never lowers another. Per refusal:
+ *   0. Applied once: an `at` not later than the windows file's top-level `refusalsApplied["<upstream>/<model>"]` is
+ *      skipped `already-applied`, so after `clear-window` undoes a lowering the same refusal never lowers again.
+ *   1. `to` = tokens × 9/10, rounded down to 1k; below `WINDOW_MIN`, skipped `below-minimum`.
+ *   2. The floor of real usage (D-6428): `to` is raised to the route and model's `promptTokensMax`, rounded up to
+ *      1k, the largest prompt the model accepted, because the refused size is the bridge's estimate (D24).
+ *   3. A model no class names and the catalogue does not list: skipped `not-a-lane-model`.
+ *   4. With an entry: only a refusal later than the entry's `setAt` (`older-than-entry` otherwise, and for an entry
+ *      with no readable `setAt`, which a hand wrote), and only a smaller `to` (`not-lower` otherwise), so a
+ *      deliberate `set-window` after a refusal is never undone.
+ *   5. With no entry: `to` is capped at the lane's current window (`contextWindowFor`, or the client's default when
+ *      the rule yields none), so the lane's window never rises (D-6421); below `WINDOW_MIN`, `below-minimum`.
+ *   6. Writes `{tokens: to, setAt: now, source: "refusal", refusedTokensEstimate: tokens}` over the entry.
+ *  Every refusal decided at steps 1 to 6, lowered or skipped, is recorded in `refusalsApplied` in the pass's one
+ *  write, so each is read once. A refusal entry this build cannot read (not an object, no positive integer
+ *  `tokens`, no ISO `at`, or a key whose model part is not a model id) is skipped `refusal-invalid` and NOT recorded,
+ *  so each pass reads it again. The windows file keeps every key it does not know (`writeWindows` writes the edited
+ *  clone); one re-materialise follows when anything was lowered. An absent stats file answers `stats: "absent"` and
+ *  writes nothing; an unreadable windows file is refused, as the two window verbs refuse it. */
+function lowerWindowsOp(a, account, registry, catalogue, reading) {
+  const parsed = PARSED_OF.get(account);
+  // Three of these four halves are belt-and-braces over the fourth, `typeof parsed.upstream !== 'string'`:
+  // `rosterFromJson` (shared/roster-json.mjs) refuses a row whose `exec` is not an object, so `!isObj(account.exec)`
+  // never holds for an account `readRoster` accepted; `readRoster` records a projection for every account it accepted
+  // (`PARSED_OF`), so `parsed === undefined` never holds either; and the projection sets `upstream` only on a
+  // codex-kind row (`codexTopology`), so the kind test refuses nothing the `parsed.upstream` test does not. No test can
+  // tell the three apart from it. To simplify, drop any of the three, never the `parsed.upstream` test.
+  if (!isObj(account.exec) || account.exec.kind !== 'codex' || parsed === undefined
+    || typeof parsed.upstream !== 'string') {
+    return refuse(1, 'not-a-codex-lane',
+      `account "${a.id}" is not a codex-kind lane, so no bridge records refusals for it. Nothing was written.`);
+  }
+  if (!path.isAbsolute(a.stats)) {
+    return refuse(2, 'bad-argv', `--stats takes an absolute path (got ${JSON.stringify(a.stats)}).`, 'stats');
+  }
+  const st = readStats(a.stats, a.id);
+  if (st.err !== undefined) return refuse(1, st.err[0], st.err[1]);
+  if (st.stats === null) {
+    out({ ok: true, op: 'lower-windows', id: a.id, stats: 'absent', lowered: [], skipped: [] });
+    return 0;
+  }
+  if (reading.state === 'unreadable') {
+    return refuse(1, 'windows-unreadable',
+      `${reading.reason} — lower-windows rewrites that file and will not overwrite one it cannot read. Fix it by `
+      + `hand, or delete it to drop every measured window on account "${a.id}". Nothing was written.`);
+  }
+  const unroutable = renderRefusal(registry, catalogue, windowsOf(reading));
+  if (unroutable !== null) return refuse(1, 'unroutable-lane', `${unroutable} No window was written.`);
+
+  const raw = reading.state === 'ok' ? JSON.parse(JSON.stringify(reading.raw)) : { windows: {} };
+  const applied = isObj(raw.refusalsApplied) ? { ...raw.refusalsApplied } : {};
+  const laneWindow = contextWindowFor(registry, catalogue, windowsOf(reading)).tokens ?? CLIENT_DEFAULT_CONTEXT_TOKENS;
+  const laneModel = (m) => CLASSES.some((c) => registry.classes[c] === m)
+    || (catalogue !== null && catalogue.models.some((row) => row.id === m));
+  const prefix = `${parsed.upstream}/`;
+  const at0 = now();
+  const lowered = [];
+  const skipped = [];
+  let recorded = false;
+  for (const [key, ref] of Object.entries(st.stats.refusals)) {
+    if (!key.startsWith(prefix)) continue;
+    const model = key.slice(prefix.length);
+    const at = isObj(ref) ? timeOf(ref.at) : null;
+    if (!MODEL_ID_RE.test(model) || at === null || !Number.isInteger(ref.tokens) || ref.tokens < 1) {
+      skipped.push({ model, why: 'refusal-invalid' });
+      continue;
+    }
+    const prior = own(applied, key) ? timeOf(applied[key]) : null;
+    if (prior !== null && at <= prior) {
+      skipped.push({ model, why: 'already-applied' });
+      continue;
+    }
+    applied[key] = ref.at;
+    recorded = true;
+    let to = Math.floor((ref.tokens * REFUSAL_KEEP_NUM) / (REFUSAL_KEEP_DEN * WINDOW_ROUND)) * WINDOW_ROUND;
+    if (to < WINDOW_MIN) { skipped.push({ model, why: 'below-minimum' }); continue; }
+    const route = own(st.stats.routes, key) ? st.stats.routes[key] : null;
+    const accepted = isObj(route) ? route.promptTokensMax : null;
+    if (typeof accepted === 'number' && Number.isFinite(accepted) && accepted > 0) {
+      to = Math.max(to, Math.ceil(accepted / WINDOW_ROUND) * WINDOW_ROUND);
+    }
+    if (!laneModel(model)) { skipped.push({ model, why: 'not-a-lane-model' }); continue; }
+    const hasEntry = reading.state === 'ok' && own(reading.windows, model);
+    const from = hasEntry ? reading.windows[model] : null;
+    if (hasEntry) {
+      const setAt = timeOf(raw.windows[model].setAt);
+      if (setAt === null || at <= setAt) { skipped.push({ model, why: 'older-than-entry' }); continue; }
+      if (to >= from) { skipped.push({ model, why: 'not-lower' }); continue; }
+    } else {
+      to = Math.min(to, laneWindow);
+      if (to < WINDOW_MIN) { skipped.push({ model, why: 'below-minimum' }); continue; }
+    }
+    const prev = isObj(raw.windows[model]) ? raw.windows[model] : {};
+    raw.windows[model] = { ...prev, tokens: to, setAt: at0, source: 'refusal', refusedTokensEstimate: ref.tokens };
+    lowered.push({ model, from, to, refused: ref.tokens });
+  }
+
+  let next = reading;
+  if (recorded) {
+    raw.refusalsApplied = applied;
+    // The map the rule reads, built from the very object about to be written: every entry was read through
+    // `parseWindows` or written above inside WINDOW_MIN..WINDOW_MAX, so it cannot refuse it here.
+    const windows = parseWindows(raw);
+    const w = writeWindows(a.id, raw);
+    if (w !== null) return refuse(1, w[0], w[1]);
+    next = { state: 'ok', windows, raw };
+  }
+  if (lowered.length > 0) {
+    const mat = materialise(account, registry, catalogue, windowsOf(next));
+    if (mat.err !== undefined) {
+      return refuse(1, mat.err[0], `${mat.err[1]} (${windowsPath(a.id)} itself was already updated: the lane's `
+        + 'settings.json takes the new window at the next materialise that succeeds.)');
+    }
+  }
+  out({ ok: true, op: 'lower-windows', id: a.id, stats: 'read', lowered, skipped });
   return 0;
 }
 
@@ -2066,6 +2272,7 @@ function main(argv) {
   if (opName === 'set-window' || opName === 'clear-window') {
     return windowOp(opName, a, account, registry, catalogue, win);
   }
+  if (opName === 'lower-windows') return lowerWindowsOp(a, account, registry, catalogue, win);
   if (opName === 'advance-backfill') return backfillOp(a, account, registry);
   if (opName === 'hold' || opName === 'release' || opName === 'revert') {
     if (!CLASSES.includes(a.class)) {

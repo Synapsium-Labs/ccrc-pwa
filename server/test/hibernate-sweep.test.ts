@@ -51,8 +51,7 @@ const mark = (ageMs: number, o: Partial<HibernateMark> = {}): HibernateMark =>
 const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-hib-'), '.ccrc', 'coord.db')));
 /** The store port the sweep declares, over a real store, with any read overridden. */
 const port = (s: CoordStore, o: Partial<NonNullable<HibernateSweepDeps['coord']>> = {}): NonNullable<HibernateSweepDeps['coord']> => ({
-  openRunsForSession: (id) => s.openRunsForSession(id),
-  openRunsClaimedBy: (id) => s.openRunsClaimedBy(id),
+  openRunsForSession: (...a) => s.openRunsForSession(...a),
   activeClaims: () => s.activeClaims(),
   outstandingMailFor: (id, n) => s.outstandingMailFor(id, n),
   ...o,
@@ -211,7 +210,7 @@ describe('hibernatePass: the store reads, on a real store', () => {
   it('a claimant read that fails holds runs-unreadable; so does a worker read, and a store read that throws', async () => {
     const f = fake();
     const bad = { ok: false as const, kind: 'run-unreadable' as const, detail: 'fixture' };
-    for (const over of [{ openRunsClaimedBy: () => bad }, { openRunsForSession: () => bad },
+    for (const over of [{ openRunsForSession: (id: string, e?: number, i?: undefined, role?: 'worker' | 'claimant') => (role === 'claimant' ? bad : f.coord.openRunsForSession(id, e, i, role)) }, { openRunsForSession: () => bad },
       { activeClaims: () => { throw new Error('db gone'); } }, { outstandingMailFor: () => { throw new Error('db gone'); } }]) {
       const out = await hibernatePass({ ...f.deps, coord: port(f.coord, over) }, mem(), [row(ID)], [rec(ID)], []);
       expect(out[0]!.verdict).toEqual({ act: 'hold', reason: 'runs-unreadable' });
@@ -397,9 +396,10 @@ describe('hibernatePass: the store and presence are read again after the live re
     const real = f.deps.coord!;
     const coord: NonNullable<HibernateSweepDeps['coord']> = {
       ...real,
-      openRunsForSession: (id) => {
+      openRunsForSession: (id, e, i, role) => {
+        if (role === 'claimant') return real.openRunsForSession(id, e, i, role);
         calls += 1;
-        return calls > 1 ? { ok: true, siblings: [{ id: 1, program: 'program-a', wave: 1, waveOf: 1 }] } : real.openRunsForSession(id);
+        return calls > 1 ? { ok: true, siblings: [{ id: 1, program: 'program-a', wave: 1, waveOf: 1 }] } : real.openRunsForSession(id, e, i, role);
       },
     } as NonNullable<HibernateSweepDeps['coord']>;
     const out = await pass({ ...f, deps: { ...f.deps, coord } });

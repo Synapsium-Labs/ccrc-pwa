@@ -19,8 +19,8 @@ import { STOP_DONE_DISABLED_MARKER } from '../src/stopDone.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER } from '../src/turnidle.js';
 import { isMarkerState } from '../../shared/api.js';
 import {
-  ASKS_DISABLED_MARKER, CHILD_RECLAIM_DISABLED_MARKER, COLLECT_LOOSE_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER, NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER,
-  ORPHAN_TREE_RESCUE_LIVE_MARKER, SWITCHES, markerSwitchNames, readSwitches,
+  ASKS_DISABLED_MARKER, CHILD_RECLAIM_DISABLED_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, COLLECT_LOOSE_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER,
+  NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, SWITCHES, markerSwitchNames, readSwitches,
 } from '../../shared/switches.js';
 
 /** Today's marker values, typed once here as the table the switchboard must equal. `asks-disabled` is `watch.ts`'s
@@ -40,6 +40,8 @@ const TODAY: Record<string, string> = {
   ORPHAN_TREE_LIVE_MARKER: 'orphan-tree-live',
   ORPHAN_TREE_RESCUE_LIVE_MARKER: 'orphan-tree-rescue-live',
   NESTED_RESCUE_LIVE_MARKER: 'nested-rescue-live',
+  CHILD_STALE_RECLAIM_LIVE_MARKER: 'child-stale-reclaim-live',
+  CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER: 'child-superseded-reclaim-live',
   IDLE_NUDGE_DISABLED_MARKER: 'idle-compact-nudge-disabled',
   MAIL_GATE_STRICT_MARKER: 'mail-gate-strict',
   MAIL_GATE_BUSY_MARKER: 'mail-gate-busy',
@@ -50,7 +52,8 @@ describe('characterization: every exported marker constant keeps its value (D-58
   const EXPORTED: Record<string, string> = {
     MAIL_DISABLED_MARKER, COORDINATOR_PAUSE_MARKER, RECLAIM_PAUSE_MARKER, STOP_DONE_DISABLED_MARKER,
     HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER, EXPIRE_LANE_LIVE_MARKER, EXPIRE_CHILD_LIVE_MARKER, STALE_ARCHIVE_LIVE_MARKER, COLLECT_LANE_LIVE_MARKER,
-    DEAD_COORDINATOR_LANE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, NESTED_RESCUE_LIVE_MARKER, IDLE_NUDGE_DISABLED_MARKER, MAIL_GATE_STRICT_MARKER, MAIL_GATE_BUSY_MARKER,
+    DEAD_COORDINATOR_LANE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, NESTED_RESCUE_LIVE_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER,
+    IDLE_NUDGE_DISABLED_MARKER, MAIL_GATE_STRICT_MARKER, MAIL_GATE_BUSY_MARKER,
     MAIL_GATE_BUSY_SHADOW_MARKER,
   };
 
@@ -73,7 +76,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(DRIFT_PUSH_LIVE_MARKER).toBe('drift-push-live');
     // ARCH-77 (#812): child reclaim's own off switch, a hand-touched row with no writer in the tree.
     expect(CHILD_RECLAIM_DISABLED_MARKER).toBe('child-reclaim-disabled');
-    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled'].sort());
+    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live'].sort());
     expect([...markerSwitchNames].sort()).toEqual(markers.sort());
   });
 
@@ -82,8 +85,9 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(row.writer).toBe('hand-only');
     expect(row.owner).toBe('C4');
     expect(row.default).toMatch(/^absent: /);
-    // No reader yet (the child-spent reader lands with ARCH-44): the operator sentence must not claim the switch acts today.
-    expect(row.meaning).toMatch(/Nothing reads it yet/);
+    // The reader landed ahead of ARCH-44 by operator need: the sentence says what it stops and what it leaves running.
+    expect(row.meaning).toMatch(/Switches off child reclaim alone/);
+    expect(row.meaning).toMatch(/Expiry, collect, the dead-coordinator lane and stop-done keep running/);
     // Absence changes nothing: a listing without the marker reads 'clear' for it and leaves every other row as it was.
     const without = readSwitches(['mail-disabled']);
     const withIt = readSwitches(['mail-disabled', CHILD_RECLAIM_DISABLED_MARKER]);

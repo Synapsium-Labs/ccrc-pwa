@@ -9,6 +9,7 @@ import {
   CCD_ARGV, COLLECT_CAP, COLLECT_LOOSE_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec,
 } from '../ccdargv.js';
 import type { CoordStore } from './store.js';
+import { openRunsClaimedBy } from './bindingReads.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { COLLECT_LOOSE_LIVE_MARKER, readSwitches } from '../../../shared/switches.js';
 import { CHILD_BIRTH_SKEW_MS } from './childSpent.js';
@@ -151,7 +152,7 @@ export interface CollectControlDeps {
  *  `observeIntervalMs` is the lane's `COLLECT_OBSERVE_INTERVAL_MS`, passed in, as the L1 licence takes it. `runCcd` is
  *  the lane's stamping wrapper (Task 7), which reads `argv[0]` to tell this job's audit from its act. */
 export interface CollectTempRootDeps {
-  coord: Pick<CoordStore, 'run' | 'openRunsForSession' | 'openRunsClaimedBy'>;
+  coord: Pick<CoordStore, 'run' | 'openRunsForSession'>;
   io: Pick<FleetIO, 'readdirMeasured'>;
   cfg: Pick<CcrcConfig, 'registryDir'>;
   runCcd: RunCcd;
@@ -689,7 +690,7 @@ export function collectOpenRunHold(
     }
     const worker = coord.openRunsForSession(id);
     if (!worker.ok) return held('store-unreadable', `which open runs name ${id} as their session could not be read (${worker.detail})`);
-    const claims = coord.openRunsClaimedBy(id);
+    const claims = openRunsClaimedBy(coord, id);
     if (!claims.ok) return held('store-unreadable', `which open runs ${id} coordinates could not be read (${claims.detail})`);
     const naming = [...new Set([...worker.siblings, ...claims.siblings].map((r) => r.id))].sort((a, b) => a - b);
     if (naming.length > 0) {

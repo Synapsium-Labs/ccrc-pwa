@@ -136,7 +136,9 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  gated by `server/test/ownership.test.ts:139-153`, so that ccrc's own shipped
  *  `ccd` reports `ccrc-unmodified` and the installer may therefore replace it
  *  on a box). Marked, id-shaped, in the bin dir, claimed by no account: five
- *  for five against the orphan predicate.
+ *  for five against the orphan predicate. (Since install-time stamping the marker
+ *  is written by `ccd/ccd-entry-install.py` into the installed BODY under
+ *  `~/.local/libexec/ccrc`, not committed; the list stays as the defence.)
  *
  *  MEASURED CONSEQUENCE, which is why this list exists (D-93): every `ccrc
  *  install` printed `ORPHAN ccd: … remedy: … or remove $HOME/.local/bin/ccd by

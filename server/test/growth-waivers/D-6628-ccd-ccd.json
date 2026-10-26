@@ -1,0 +1,7 @@
+{
+  "file": "ccd/ccd",
+  "maxDelta": 310,
+  "d": "D-6628",
+  "reason": "fleet disk retention DR-16: the read-only orphan census and the fourteen-rung ladder in ccd/ccd, whose shared rungs ws-gc --prune also calls (measured +237 net code lines against the DR-7 tip, +302 against the merge-base while DR-7 is unmerged)",
+  "added": "2026-10-23"
+}

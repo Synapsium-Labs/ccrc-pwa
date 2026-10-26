@@ -246,7 +246,7 @@ describe('cmd_ws_add places by class and stamps the rung it took', () => {
     const id = 'demo-quiet-mesa';
     expect(h.reg(id, 'wrapper')).toBe('claude-b');
     expect([h.reg(id, 'class'), h.reg(id, 'effort'), h.reg(id, 'subagent'), h.reg(id, 'workflow')])
-      .toEqual(['opus', 'ultracode', 'sonnet', 'on']);
+      .toEqual(['opus', 'high', 'sonnet', 'on']);
     expect(h.reg(id, 'degraded')).toBeNull();
     const rows = eventsOf(h.home, 'route');
     expect(rows).toHaveLength(4);
@@ -257,7 +257,7 @@ describe('cmd_ws_add places by class and stamps the rung it took', () => {
     // journal count above is what says no rung was taken.
     expect(routeLog(id)).toEqual([
       `route ${id}: class ∅ -> opus [actor=spawn] (coordinator row (default))`,
-      `route ${id}: effort ∅ -> ultracode [actor=spawn] (coordinator row (default))`,
+      `route ${id}: effort ∅ -> high [actor=spawn] (coordinator row (default))`,
       `route ${id}: subagent ∅ -> sonnet [actor=spawn] (coordinator row (default))`,
       `route ${id}: workflow ∅ -> on [actor=spawn] (coordinator row (default))`,
     ]);

@@ -40,6 +40,8 @@ import {
   programmeTitle, runsByProgram, waveLabel,
 } from '../fleet/runWords';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
+import { LiftCapSheet } from '../fleet/LiftCapSheet';
+import { ReviewCapBand } from '../fleet/ReviewCapBand';
 import { CoordBanner } from '../fleet/CoordBanner';
 import { ChildReclaimBanner } from '../fleet/ChildReclaimBanner';
 import { CapsControl } from '../fleet/CapsControl';
@@ -116,6 +118,10 @@ export function RunsScreen({
   // Spec §7.3: which run's ResumeSheet is open, or `null`. ONE sheet at screen
   // level, reused across rows — `abandonTarget`'s own shape, one line up.
   const [resumeTarget, setResumeTarget] = useState<RunSummary | null>(null);
+
+  // D-6911: which run's LiftCapSheet is open, or `null`. ONE sheet at screen level, on `abandonTarget`'s idiom; the
+  // "Waiting on you" band opens it.
+  const [liftTarget, setLiftTarget] = useState<RunSummary | null>(null);
 
   // Task 13, spec §4.4: the run board's own door onto a new program. ONE
   // door, rendered unconditionally below — including at zero runs, the same
@@ -337,6 +343,10 @@ export function RunsScreen({
         Start a program
       </Button>
 
+      {/* D-6911: every open work run whose review cap waits on the operator, above the groups. Reads `active`, so a
+          closed run never waits; renders nothing when no run does. */}
+      <ReviewCapBand runs={active} nowMs={now} onLift={setLiftTarget} />
+
       {noSignalYet ? (
         // Review finding 19: neither source has answered yet, so this is not
         // "no runs" — it is "no answer". `coldState === 'error'` only after
@@ -436,6 +446,9 @@ export function RunsScreen({
           the program, terminal ones included (contract R1), and the finished
           half of this board has no source but the cold read. */}
       <ResumeSheet run={resumeTarget} onClose={() => setResumeTarget(null)} onDone={() => { void loadCold(); }} />
+      {/* D-6911: the live `runs` frame carries the lift on the watcher's next tick; `loadCold()` re-reads the board
+          for a session with no frame yet. */}
+      <LiftCapSheet run={liftTarget} onClose={() => setLiftTarget(null)} onDone={() => { void loadCold(); }} />
       <StartProgramSheet open={startOpen} onClose={() => setStartOpen(false)} fleet={store}
         openRunProjects={openRunProjects} />
     </PageScaffold>

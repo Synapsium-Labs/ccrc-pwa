@@ -772,8 +772,10 @@ whole time, which is the only prevention this ordering rule buys.
    prove the merge with `gh pr view <pr> --json state,headRefOid`, answering
    MERGED with `headRefOid` equal to it — the coordinator lands every PR with
    `--match-head-commit <handoffCommit>`, by the route §5b reads from the
-   repository's own rules, for exactly this reason — and on a native-queue
-   project it lands with the same binding, as
+   repository's own rules, for exactly this reason (`--admin` and GitHub API
+   merge or enqueue calls are governed by the repository's external policy
+   authority; until that authority answers (wave 2b), a coordinator never uses
+   them) — and on a native-queue project it lands with the same binding, as
    "Landing on a native-queue project" below says. An UNMARKED producer —
    every workspace minted without a marker: by a box whose ccd did not yet
    mark children, or by a dispatch that journaled `child-omitted` (§2) — is
@@ -825,7 +827,11 @@ whole time, which is the only prevention this ordering rule buys.
    reports.
    Then, from your own session, enqueue its PR with
    `gh pr merge <pr> --match-head-commit <handoffCommit>`: no `--squash`,
-   because the queue's merge method applies, and never `--admin`. Prove it
+   because the queue's merge method applies, and never `--admin`. The same
+   enqueue is what an unattended lander does (ruling R5 as amended
+   2026-10-25: the queue re-tests the combined code, the required checks gate
+   the enqueue, the head is bound): it needs no human present, and a worker
+   still never enqueues its own PR. Prove it
    is IN the queue before you rely on the server:
    `gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr> -f query='query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }'`
    gives one of four answers. A queued PR answers a non-null
@@ -1727,3 +1733,18 @@ operator has the prompt. Any other caller is `403 not-parent`, wherever it sits.
 three routes of the lane are the child's hook's and the install's, never yours:
 `POST /api/approvals` (the hook's request), `GET /api/approvals/:id/ruling` (the hook's wait,
 by its nonce) and `GET /api/approvals/key` (the public key a fleet box pins).
+
+## Mutation testing — through the helper, never by hand
+
+`references/mutation-run.py` (stdlib-only Python 3; `--help` shows the rest) is the way a
+guard's test is proven to go red. It compiles each mutant in memory, so no mutant file exists;
+runs the tests in a per-mutant temp directory under a RAM-backed root that it removes after
+every mutant, even on failure or interrupt; runs only the tests that execute the mutated lines
+(from one traced baseline); and, given the previous round's `--out` file and a `--diff`,
+re-runs only mutants on changed lines. Output is one line per mutant and a summary.
+
+- Never write a mutant to disk and never leave a per-run temp tree behind: a round of
+  thousands of mutants once filled most of a fleet volume's inodes with directories nobody
+  removed.
+- A heavy round (hundreds of mutants, or a slow suite) belongs in a child workspace, not in
+  this session's scratch: dispatch it as a wave, and take its result line, not its files.

@@ -766,7 +766,7 @@ export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     `[ "$1" = -IS ] && [ "$2" = "$HOME/.local/bin/ccgpt-auth.py" ] && exec '${PYTHON3}' "$@"`,
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
-  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
+  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT', 'CCRC_VERSIONS_KEEP', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_UPDATE_HEALTH_S', 'CCRC_UPDATE_DEADLINE_MS', 'CCRC_RELEASE_BASE_URL', 'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   // `verify-service.sh`'s own knobs, at the values its header says a test uses:
   // the production defaults sleep 3 + 5 seconds per call, and `_inst_enable`
   // makes one call per install. Zeroed here rather than per test, for the
@@ -1463,6 +1463,18 @@ export const RUNTIME_CLI_DEF = (): string => ccrcLine(/^_codex_runtime_cli\(\) \
 export const CODEX_TIERS_DEF = (): string => ccrcLine(/^CODEX_TIERS=.*$/m, 'CODEX_TIERS=');
 
 export const LANE_DIR_DEF = (): string => ccrcLine(/^_codex_lane_dir\(\) +\{.*\}$/m, '_codex_lane_dir');
+/** `_codex_lane_mode`, stubbed by table (codex bridge Stage 2, Task 11): each id's word, `litellm` when unnamed, and
+ *  `null` the refusal a lane.json naming no readable mode gets, in the real function's code and shape. */
+export const modeStub = (modes: Readonly<Record<string, 'litellm' | 'direct' | null>>): string => [
+  '_codex_lane_mode() {',
+  '  case "${1:-}" in',
+  ...Object.entries(modes).map(([id, m]) => (m === null
+    ? `    ${id}) echo "ccrc codex: lane-mode-unreadable: fixture: ${id}'s lane.json names no bridge" >&2; return 1 ;;`
+    : `    ${id}) printf '%s\\n' ${m} ;;`)),
+  "    *) printf 'litellm\\n' ;;",
+  '  esac',
+  '}',
+].join('\n');
 
 /** The requirement the stub builder DECLARES, in the placed builder's own
  *  assignment shape. A fixture value, never the real one: the real-spine case
@@ -1548,9 +1560,19 @@ export function runTiersStep(c: {
   // Closing fix round, D-6691: `"<id> <tier>"` -> the generation directory's
   // name that the planted `<tier>.started` record names; the skip reads it.
   startedGen?: Readonly<Record<string, string>>;
+  // Codex bridge Stage 2, Task 11: the lane's mode, per id, which the step reads
+  // through `_codex_lane_mode` first (`litellm` when unnamed); `null` is a
+  // lane.json that names no readable mode (rc 1, its refusal line).
+  modes?: Readonly<Record<string, 'litellm' | 'direct' | null>>;
 }): StepRun {
   const home = mkTmp('ccrc-codex-tiers-step-');
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  // A lane.json is THERE for a mode the stub refuses: one that is absent is a lane ccrc never started, asked mode-blind.
+  for (const [id, m] of Object.entries(c.modes ?? {})) {
+    if (m !== null) continue;
+    mkdirSync(join(home, '.ccrc', 'codex', id), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'codex', id, 'lane.json'), '{"fixture": "no bridge"}\n');
+  }
   for (const [key, gen] of Object.entries(c.startedGen ?? {})) {
     const [id, tier] = key.split(' ');
     mkdirSync(join(home, '.ccrc', 'codex', id), { recursive: true });
@@ -1586,6 +1608,9 @@ export function runTiersStep(c: {
     CODEX_TIERS_DEF(),
     RUNTIME_CLI_DEF(),
     LANE_DIR_DEF(),
+    modeStub(c.modes ?? {}),
+    ccrcFunction('_codex_mode_tiers'),
+    ccrcFunction('_codex_tier_is_other_mode'),
     ccrcFunction('_codex_ready_secs'),
     // Real, unstubbed (review round 2, N2/N3): `_inst_codex_tiers` now calls
     // this on a 2, the same helper the identity gate above it already used.
@@ -1776,7 +1801,9 @@ export const PROVISIONED_BOX_TOKEN =
  *  each is PASS at every stage. So was the next, which added `update-sweep`
  *  and the four `approval-*` checks: each is SKIP at every stage. Accounts plan A11b added the three backups checks:
  *  `filevault` and `secrets-backup-excluded` SKIP at every stage (darwin's), and `snapshot-posture` SKIPs on the fresh
- *  box (no lane secret) and PASSes on the provisioned one, whose `fleetFiles` state `none`. */
+ *  box (no lane secret) and PASSes on the provisioned one, whose `fleetFiles` state `none`.
+ *  Wave 24 added `box-settings` (D-6599): PASS at every stage, re-measured from both box-token cases' own failing diff
+ *  (a fresh box's ccrc.env sets none of ccrc's settings). */
 export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "accounts": "PASS",
   "approval-digest-mismatch": "SKIP",
@@ -1784,6 +1811,7 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "approval-key-colocated": "SKIP",
   "approval-verifier-runnable": "SKIP",
   "auth": "SKIP",
+  "box-settings": "PASS",
   "box-token": "PASS",
   "build": "PASS",
   "caddy": "SKIP",

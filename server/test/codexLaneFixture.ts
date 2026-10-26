@@ -5,10 +5,10 @@
 // file that imports it.
 //
 // CONTAINMENT, stated once for everything below:
-//  - Every listener binds 127.0.0.1 on a port the KERNEL chose (`freePort`, or
-//    a listener told port 0). No constant port appears in this file: the fleet
-//    box's live Codex lanes hold fixed ports, and a fixture that bound one would
-//    answer as a live lane.
+//  - Every listener binds 127.0.0.1 on a port the KERNEL chose (a listener told
+//    port 0) or one `freePort` probed free below the ephemeral range. This file
+//    binds no fixed port: the fleet box's live Codex lanes hold fixed
+//    ports, and a fixture that bound one would answer as a live lane.
 //  - Direct children are tracked by the fixture HOME they serve, and
 //    `killLaneProcesses` ends them through their current-run ChildProcess
 //    handles — never by name or pattern. Node reaps a child only after it exits,
@@ -46,27 +46,87 @@ const REPO = path.resolve(here, '..', '..');
 
 // ── ports ────────────────────────────────────────────────────────────────
 
-/** A port nothing was listening on a moment ago: listen on 0, read, close. A
- *  window remains between the close and whoever binds it next; a caller that
- *  needs the port HELD passes 0 to {@link spawnListener} instead. */
-export function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
+// A port the fixture hands out is bound LATER — by a listener a case spawns, or by
+// a tier ccrc starts — so between the probe and that bind any other process on the
+// machine can take it (D-6856). Three kinds of taker, three rules:
+//  - other tests binding port 0: the kernel serves those from its ephemeral range
+//    (Linux starts at 32768, macOS higher), so every port here is BELOW it;
+//  - the one fixed-port suite in the tree: `shutdown-seal.test.ts` binds
+//    `26000 + pid % 3000`, so 26000-28999 is left out;
+//  - a parallel vitest worker running this same allocator: each worker draws from
+//    its OWN slice, keyed by `VITEST_POOL_ID` (unique among the workers alive at
+//    once), so two workers can never issue one port. Within a slice the walk
+//    starts at a random point, for two vitest runs on one machine.
+const PORT_FLOOR = 12_000;
+const PORT_CEILING = 32_000; // exclusive; under the lowest ephemeral port of any supported kernel
+/** `shutdown-seal.test.ts`'s fixed `26000 + pid % 3000`, [start, end). */
+export const SEAL_PORTS = [26_000, 29_000] as const;
+export const PORT_SLICE = 500;
+/** Every slice, in order: whole PORT_SLICE-wide runs of [PORT_FLOOR, PORT_CEILING)
+ *  that never touch SEAL_PORTS. */
+export const PORT_SLICES: readonly (readonly [number, number])[] = (() => {
+  const out: [number, number][] = [];
+  for (let lo = PORT_FLOOR; lo + PORT_SLICE <= PORT_CEILING; lo += PORT_SLICE) {
+    const hi = lo + PORT_SLICE;
+    if (hi > SEAL_PORTS[0] && lo < SEAL_PORTS[1]) continue;
+    out.push([lo, hi]);
+  }
+  return out;
+})();
+
+function probeFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
     const srv = createServer();
-    srv.once('error', reject);
-    srv.listen(0, '127.0.0.1', () => {
-      const addr = srv.address();
-      if (addr === null || typeof addr === 'string') {
-        srv.close();
-        reject(new Error('freePort: the listener reported no port'));
-        return;
-      }
-      srv.close(() => resolve(addr.port));
-    });
+    srv.once('error', () => resolve(false));
+    srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(true)));
   });
 }
 
-/** `n` DISTINCT free ports — the roster refuses two lanes sharing one, and two
- *  sequential `freePort()` calls may legitimately return the same number. */
+/** The worker's slot: `VITEST_POOL_ID` (1-based), else `VITEST_WORKER_ID`, else 0.
+ *  More live workers than slices wraps, sharing a slice (each still starts at its
+ *  own random point) — at `maxWorkers: '40%'` that takes a box over 80 cores. */
+export function poolSlot(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.VITEST_POOL_ID ?? env.VITEST_WORKER_ID;
+  const n = raw === undefined ? NaN : Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? (n - 1) % PORT_SLICES.length : 0;
+}
+
+/** One allocator over one slot's slice. `probe` and `random` exist for the
+ *  allocator's own suite; the fixture's instance uses the real ones. */
+export function portAllocator(opts: {
+  slot: number;
+  probe?: (port: number) => Promise<boolean>;
+  random?: () => number;
+}): () => Promise<number> {
+  const [lo, hi] = PORT_SLICES[opts.slot % PORT_SLICES.length]!;
+  const probe = opts.probe ?? probeFree;
+  const issued = new Set<number>();
+  let cursor = lo + Math.floor((opts.random ?? Math.random)() * (hi - lo));
+  return async () => {
+    for (let tries = 0; tries < hi - lo; tries++) {
+      const port = cursor;
+      cursor = cursor + 1 >= hi ? lo : cursor + 1;
+      if (issued.has(port)) continue;
+      if (await probe(port)) { issued.add(port); return port; }
+    }
+    throw new Error(`freePort: no free port left in ${lo}-${hi - 1}`);
+  };
+}
+
+const allocate = portAllocator({ slot: poolSlot() });
+
+/** A port nothing was listening on a moment ago, from this worker's slice — below
+ *  the kernel's ephemeral range, outside the fixed-port suite's band, disjoint
+ *  from every other live worker's, and never handed out twice by this process. A
+ *  window remains between the probe and whoever binds it next, but no other
+ *  taker named above can land in it; a caller that needs the port HELD passes 0
+ *  to {@link spawnListener} instead. */
+export function freePort(): Promise<number> {
+  return allocate();
+}
+
+/** `n` DISTINCT free ports — the roster refuses two lanes sharing one. `freePort`
+ *  never repeats within a process, so the set is belt and braces. */
 export async function freePorts(n: number): Promise<number[]> {
   const out = new Set<number>();
   while (out.size < n) out.add(await freePort());
@@ -86,6 +146,10 @@ export interface CodexLaneRow {
   /** Default `codex`. `none` exists so a suite can build a roster on which the
    *  telemetry-keyed `CCRC_CODEX_BACKEND` and `exec.kind` disagree. */
   telemetry?: 'codex' | 'none';
+  /** `exec.bridge` (codex bridge Stage 2, Task 10); absent unless a case names it, so every older roster is unchanged. */
+  bridge?: 'litellm' | 'direct';
+  /** `exec.upstream` (Task 10); absent unless a case names it. */
+  upstream?: 'backend' | 'siwc';
 }
 
 /** Writes `~/.ccrc/accounts.json` — the upstream `claude` row, one
@@ -116,6 +180,8 @@ export function codexRoster(
         exec: {
           kind: 'codex', provider: 'openai',
           proxyPort: l.proxyPort, litellmPort: l.litellmPort, authDir: codexAuthDir(l.id),
+          ...(l.bridge !== undefined ? { bridge: l.bridge } : {}),
+          ...(l.upstream !== undefined ? { upstream: l.upstream } : {}),
         },
         homeAble: false, telemetry: l.telemetry ?? 'codex',
       })),
@@ -528,6 +594,12 @@ d="$HOME/fake-systemd"
 up() { [ -f "$d/user-manager" ] && [ "$(<"$d/user-manager")" = up ]; }
 # A spawned unit's state is written by its retained Python supervisor. This
 # reader has no PID-liveness or signal path: pid files are observations only.
+# Test-only knob: CCRC_FIXTURE_WRITE_GAP_MS widens the window between two
+# writes so a reader that races them reds deterministically.
+gap() {
+  [ "\${CCRC_FIXTURE_WRITE_GAP_MS:-0}" -gt 0 ] 2>/dev/null || return 0
+  sleep "$(awk -v ms="$CCRC_FIXTURE_WRITE_GAP_MS" 'BEGIN { print ms / 1000 }')"
+}
 valid_unit() {
   [[ "\${1:-}" =~ ^[A-Za-z0-9@._:-]+$ ]] && [ "$1" != . ] && [ "$1" != .. ]
 }
@@ -583,8 +655,10 @@ case "\${1:-}" in
       else
         # A seeded fakeUnit has no exact-child supervisor. It becomes inactive
         # without treating its observed PID as signal authority.
-        printf 'inactive\\n' > "$unit/state"
-        printf '0\\n' > "$unit/pid"
+        # pid first, state last, each whole-file: state marks the commit.
+        printf '0\\n' > "$unit/pid.tmp" && mv "$unit/pid.tmp" "$unit/pid"
+        gap
+        printf 'inactive\\n' > "$unit/state.tmp" && mv "$unit/state.tmp" "$unit/state"
       fi
     done
     exit "$rc" ;;
@@ -789,8 +863,8 @@ PY
 # Every state write the launcher makes lands BEFORE the fork. From the fork on,
 # only the supervisor writes this unit's state and pid, so a launcher that is
 # descheduled after it can never overwrite the supervisor's \`active\` and pid.
-printf '0\\n' > "$u/pid"
-printf 'starting\\n' > "$u/state"
+printf '0\\n' > "$u/pid.tmp" && mv "$u/pid.tmp" "$u/pid"
+printf 'starting\\n' > "$u/state.tmp" && mv "$u/state.tmp" "$u/state"
 : > "$u/spawned"
 ( cd "$wd" || exit 1; exec env -i "PATH=$PATH" "PYTHONPATH=\${PYTHONPATH:-}" "PYTHONNOUSERSITE=\${PYTHONNOUSERSITE:-}" "PYTHONDONTWRITEBYTECODE=\${PYTHONDONTWRITEBYTECODE:-}" "\${envs[@]}" "\${fenv[@]}" "$py" -B "$u/supervisor.py" "$u" "$wd" "\${out:-/dev/null}" "\${err:-/dev/null}" "$@" ) \\
   </dev/null >/dev/null 2>&1 &
@@ -932,7 +1006,8 @@ export async function spawnFakeLitellm(
   const log = path.join(fakeProcs(home), `litellm-${o.port}.log`);
   const argv = ['-B', script, '-m', 'litellm.proxy.proxy_cli', '--config', o.config,
     '--host', '127.0.0.1', '--port', String(o.port)];
-  const env = { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home, PYTHONDONTWRITEBYTECODE: '1' };
+  const env: NodeJS.ProcessEnv = { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home, PYTHONDONTWRITEBYTECODE: '1' };
+  if (process.env['CCRC_FIXTURE_WRITE_GAP_MS'] !== undefined) env['CCRC_FIXTURE_WRITE_GAP_MS'] = process.env['CCRC_FIXTURE_WRITE_GAP_MS'];
   let pid: number;
   let owner: ChildProcess;
   if (o.reparent === true) {
@@ -974,8 +1049,11 @@ export async function spawnFakeLitellm(
       '    signal.signal(sig, finish)',
       'with open(log, "ab", buffering=0) as stream:',
       '    proc = subprocess.Popen(argv, cwd=os.getcwd(), env=os.environ.copy(), stdin=subprocess.DEVNULL, stdout=stream, stderr=stream)',
-      '    with open(pidfile, "w") as out:',
+      '    tmp = pidfile + ".tmp"',
+      '    with open(tmp, "w") as out:',
+      '        time.sleep(float(os.environ.get("CCRC_FIXTURE_WRITE_GAP_MS", "0")) / 1000)',
       '        out.write(str(proc.pid) + "\\n")',
+      '    os.replace(tmp, pidfile)',
       '    while proc.poll() is None:',
       '        time.sleep(0.05)',
       '    if not finishing:',
@@ -1091,8 +1169,9 @@ export function registerLaneCleanup(
  *  body at status 500; `text` is the OTHER repository's shim (`text/plain`, the
  *  bare id); `404` answers every path with a JSON 404, as a LiteLLM proxy
  *  would. One mode per clause of `_codex_lane_answer`'s shape, so deleting any
- *  one clause reds exactly one case. */
-export type ListenerAnswer = 'json' | 'json-extra' | 'json-as-text' | 'json-500' | 'text' | '404';
+ *  one clause reds exactly one case. `direct` is the bridge's shape
+ *  (`{"lane": <lane>, "mode": "direct"}`, codex bridge Stage 2, Task 13). */
+export type ListenerAnswer = 'json' | 'json-extra' | 'json-as-text' | 'json-500' | 'text' | '404' | 'direct';
 
 /** EXPORTED for ccrc-codex.test.ts' no-reverse-lookup pin. Its `Server` is
  *  `fakeLitellmSource`'s: no `socket.getfqdn` between bind and listen. */
@@ -1126,6 +1205,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, "application/json", json.dumps({"lane": LANE}).encode())
             if ANSWER == "text":
                 return self._send(200, "text/plain", LANE.encode())
+            if ANSWER == "direct":
+                return self._send(200, "application/json", json.dumps({"lane": LANE, "mode": "direct"}).encode())
         return self._send(404, "application/json", b'{"error": "not found"}')
 class Server(ThreadingHTTPServer):
     def server_bind(self):
@@ -1989,7 +2070,9 @@ export const stateCallsNaming = (argv: readonly string[], unit: RegExp): string[
 // A python child like every listener in this file, bound to 127.0.0.1 on a
 // port the kernel chose. It answers the shim's lane probe, `GET /ccgpt/lane`,
 // as the lane it was started for (or as another lane, or 404, by a `lane` file
-// in its record directory), and `POST /v1/messages` the way the lane's shim and
+// in its record directory), in the shim's shape or, by a `lane-shape` file, the
+// bridge's direct shape (codex bridge Stage 2, Task 11b), and
+// `POST /v1/messages` the way the lane's shim and
 // LiteLLM can, by a MODE FILE there (`mode.<model>` first, then `mode`, default
 // `ok`). It records every POST (its path, its header NAMES and VALUES, its
 // Authorization VALUE once more on its own, and its body) to `req.<n>.json`,
@@ -2039,6 +2122,13 @@ def lane_answer():
             v = f.read().strip()
         return None if v == "-" else v
     return LANE
+def lane_shape(lane):
+    p = os.path.join(REC, "lane-shape")
+    if os.path.isfile(p):
+        with open(p) as f:
+            if f.read().strip() == "direct":
+                return {"lane": lane, "mode": "direct"}
+    return {"lane": lane}
 def lane_mode():
     p = os.path.join(REC, "lane-mode")
     if os.path.isfile(p):
@@ -2109,7 +2199,7 @@ class Handler(BaseHTTPRequestHandler):
         if lane is None:
             return self._json(404, {"error": "not found"})
         if mode == "pad":
-            return self._body(200, "application/json", b" " * 5000 + json.dumps({"lane": lane}).encode())
+            return self._body(200, "application/json", b" " * 5000 + json.dumps(lane_shape(lane)).encode())
         if mode == "hang":
             time.sleep(60)
             return
@@ -2124,7 +2214,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 return
-        return self._json(200, {"lane": lane})
+        return self._json(200, lane_shape(lane))
     def do_POST(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         try:
@@ -2252,9 +2342,14 @@ export function laneProxyMode(p: FakeLaneProxy, mode: LaneProxyMode, model?: str
   writeFileSync(join(p.rec, model === undefined ? 'mode' : `mode.${model}`), `${mode}\n`);
 }
 
-/** Which lane the fake's lane probe answers as from now on; null: a 404. */
-export function laneProxyAnswersAs(p: FakeLaneProxy, lane: string | null): void {
+/** Which lane the fake's lane probe answers as from now on; null: a 404. `shape` is the answer's shape: `shim`, today's
+ *  shim's `{"lane": <id>}` (the default), or `direct`, the bridge's `{"lane": <id>, "mode": "direct"}` (codex bridge
+ *  Stage 2, Task 11b). */
+export function laneProxyAnswersAs(p: FakeLaneProxy, lane: string | null, shape: 'shim' | 'direct' = 'shim'): void {
   writeFileSync(join(p.rec, 'lane'), `${lane ?? '-'}\n`);
+  const file = join(p.rec, 'lane-shape');
+  if (shape === 'shim') fs.rmSync(file, { force: true });
+  else writeFileSync(file, `${shape}\n`);
 }
 
 /** How the fake's lane probe answers: a stalled, padded or endless response. */

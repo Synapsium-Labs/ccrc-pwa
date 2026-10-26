@@ -197,7 +197,7 @@ export const survivorOf = (s: readonly OpenSibling[]): OpenSibling | null => s[s
 
 /**
  * The two SYSTEM MAIL senders. Neither is a registry row: both are fixed ROLE
- * identities, the same way `resolveCoordinator`'s own docstring already treats
+ * identities, the same way `coordinatorOfRun`'s own docstring already treats
  * `toId:'coordinator'`. Enumerated once, here, and DERIVED into `MAIL_ROLE_IDS`
  * below rather than hand-listed twice — `watch.ts` is the second reader and a
  * second copy is exactly the drift `single-definition.test.ts` exists to refuse.
@@ -209,7 +209,7 @@ export const survivorOf = (s: readonly OpenSibling[]): OpenSibling | null => s[s
  * is sent BY the operator TO the session that is about to become the
  * coordinator — a mail from `'coordinator'` to the coordinator-to-be would be a
  * false statement on the face of its own envelope, and, worse, would send
- * `tellSender` through `resolveCoordinator(null)`, whose answer is whichever
+ * `tellSender` through `soleActiveCoordinator()`, whose answer is whichever
  * program happens to be the single active one.
  *
  * WIDENED BY THE ASK LANE (whole-branch review M4). `'operator'`'s gloss below

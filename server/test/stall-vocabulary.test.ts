@@ -296,14 +296,18 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
     expect(code(), 'stall.ts answers HTTP').not.toMatch(/\breply\s*\.|\bFastify|\bapp\s*\./);
     expect(code(), 'stall.ts reaches the store').not.toMatch(/CoordStore|\bcoord\s*\.|\bstore\s*\.|\bdb\s*\.|\.prepare\s*\(/);
   });
-  it('imports values only from shared/api.ts (L0); anything else is a type import', () => {
+  it('imports values only from shared/api.ts (L0) and stallWatchSays from sessionReading (L1, which imports only L0); anything else is a type import', () => {
     const c = code();
     expect(c, 'a side-effect import').not.toMatch(SIDE_EFFECT_IMPORT);
     expect(c, 'a dynamic import').not.toMatch(/\bimport\s*\(/);
     expect(c, 'a re-export').not.toMatch(RE_EXPORT);
     for (const spec of valueImportSpecifiers(c)) {
-      expect(spec, `stall.ts takes a value import from ${spec}`).toBe('../../../shared/api.js');
+      expect(['../../../shared/api.js', '../sessionReading.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
     }
+    // From sessionReading, `stallWatchSays` ALONE, and on exactly this one line: a second name, or a second import
+    // from the module, would let the lane reach the policy table or `turnSays` and spell a policy name of its own.
+    const fromReading = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/sessionReading\.js\1;?$/gm)].map((m) => m[0].trim());
+    expect(fromReading, 'the one import from sessionReading').toEqual([`import { stallWatchSays } from '../sessionReading.js';`]);
   });
 });
 

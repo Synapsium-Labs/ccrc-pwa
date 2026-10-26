@@ -384,6 +384,14 @@ leave a wave undispatchable pending a ruling below.
   run is terminal the review child is reclaimed like any other. Wave 3 DROPS its coordinator step-6
   "copy the report before closing" change and restores the step's text and pins. Wave 5's row for such a child
   answers `pending` with a sentence saying it is kept while the run it reviewed is open.
+  - **Amended by review-report-superseded (D-6922).** "Lives until the run it reviewed is terminal" is no longer
+    all of it: an EARLIER review child is released while the reviewed run is still open once a LATER review of the
+    same run (`runs.reviews`, a higher run id) has itself closed `done`, because the coordinator now cites that newer
+    report. A later review still open, or one that ended `failed` or abandoned, supersedes nothing, and the newest
+    review child is never released this way. Every other keep still answers first. The release ships shadow-first
+    behind the hand-only marker `$REG/child-superseded-reclaim-live`: absent, the verdict keeps the child as before
+    and the lane records "review report would be reclaimed (superseded)" once per pair, only when the verdict with
+    the marker standing would answer eligible (or `hold-retired`).
 - **R17 — an archive request on an eligible child is overruled: ACCEPTED** (wave 3's
   `child-archive-overruled`). For an eligible child, `state:'failed', archive:true` takes the release arm and
   the child is reclaimed; a non-child's archive is unchanged. Rule 4: an archived child would wait on a human.
@@ -559,6 +567,10 @@ leave a wave undispatchable pending a ruling below.
   - `not-finished` splits into three words at the seam: undated, unmeasurable, and merge-commit. The sweep and
     wave 5's chip act on them differently, so one word would be an overloaded null.
   - Wave 3 is unchanged; it holds, which is the safe side.
+  - **Amended by the stale arm (D-6639).** "The sweep as planned skips held children" is no longer all of it: a held
+    child idle for seven days is taken by the stale arm (R34's amendment). Writing or renewing a hold is activity: the
+    idle clock restarts at the hold file's write time, so a child just held is never taken until seven days after the
+    hold, and a hold whose write time cannot be read keeps its child. Never a child that has coordinated (R37, R40).
 - **R33 — a child's birth is the FIRST dispatch stamp** (wave 3's wave-done, open item 2, 2026-09-25).
   `markDispatchStarted` rewrites `dispatchStartedAt` on every attempt. A workspace minted by one attempt and adopted
   by a later one therefore gets a late birth. PRs opened in between would then read `inherited`, and a bind could
@@ -587,6 +599,11 @@ and A1 to A15. These four rulings are the cross-wave ones.
   - R32's three words are spelled `not-finished-undated`, `not-finished-unmeasured` and `not-finished-merge-commit`.
     Plain `not-finished` stays for an unspent hand-over.
   - Residual, accepted: a hold written in the sub-second window between the job's re-read and ccd's unlink is lost.
+  - **Amended by the stale arm (D-6639).** A hold also stops protecting a child after seven idle days, a hand hold
+    included (the operator's ruling, fleet disk retention §9.1 item 10). `--stale held --hold-digest <sha256>` makes
+    ccd's rung 4 pass only the hold whose bytes hash to the digest the server saw, so a hold that changed meanwhile
+    still refuses `held`. The coordinator is mailed the hold's text. The five conditions above stand for the release
+    path; this is a second, idle-gated path beside it, shadowed until the operator creates the marker.
 - **R35 — R33 is built as a write-once birth per bound session** (`runs.sessionBornAt`, server-only).
   - The fresh dispatch arm binds with its own stamp. An adopted winner binds with null, because it may be an earlier
     attempt's workspace. A null birth is unplaceable, which is fail-closed.
@@ -981,6 +998,12 @@ citations are to `334fb722a`. They are hints, so locate code by content.
       is recorded, never pushed. A child that leaves the registry listing is forgotten, so a recycled id is a new
       child.
 
+  - **Amended by the stale arm (D-6639, fleet disk retention §2.7.3).** The kept list keeps every word: none is
+    removed. `minting-run-absent` and `review-report-stale` now lapse, as does the `held` word, and their sentences say
+    when: once nothing has touched the workspace for seven days and `$REG/child-stale-reclaim-live` exists, the stale
+    arm reclaims the child. The stale step is a second answer BESIDE the verdict (`childReclaimStaleVerdict`), so the
+    banner keeps listing the kept word until the child is gone. `coordinating`, `not-a-workspace`,
+    `minting-run-postdates-child` and `reviewed-run-absent` never lapse.
 - **R42 — the ten close words are not stored.**
   - They are close-time snapshots (`ChildReclaimNotWhy`, `server/src/coord/childReclaim.ts:307`). They ride only
     `CloseOutcome.childReclaimWhy`, and they go stale.
@@ -3053,9 +3076,11 @@ composes when a gate forbids it, and 9 more items (three silent-wedge paths amon
     - **`unmeasured`, BOX-WIDE (`platform`, `mv`, `flock`, `witness`, `floor`, `clock`, `eval`, `quarantine`):** a
       deferral. ONE box-wide line (R88), never one per id. `platform`, `mv`, `floor` and a `quarantine` of the wrong
       owner or mode never heal by themselves.
-    - **`unmeasured`, PER-LEAF and DETERMINISTIC (`idle:cap`, `idle:unreadable`, `mode`, `device`):** the failing run,
-      entered at once, with attention at once. R68 names these "so that wave 9 raises attention rather than retrying
-      silently". `device` is never read as transient (R89).
+    - **`unmeasured`, PER-LEAF and DETERMINISTIC (`idle:cap`, `idle:unreadable`, `mode`, `device`, `aside`,
+      `checkouts-cap`):** the failing run, entered at once, with attention at once. R68 names these "so that wave 9
+      raises attention rather than retrying silently". `device` is never read as transient (R89). `aside` is TR6's
+      word (`aside-probe-word`). `checkouts-cap` (D-6860) is a leaf holding more `.git` entries that are not
+      directories than the checkout scan examines; a scan that did not finish in time stays `checkouts`.
     - **`unmeasured`, LOAD-SENSITIVE** (`idle:timeout`, `idle:walk-failed`, `in-use`, `checkouts`, `rows`, `registry`,
       `identity`, `leaf`, `slot`, `records`, `token`, `lock`, and any unknown probe word): the failing run.
       - `lock` is per id: a non-file at `$REG/.reap-<id>.lock`, or an id too long for that name, answers it for one id

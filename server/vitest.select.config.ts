@@ -22,7 +22,12 @@
 // reassigned explicitly, after the merge, to avoid exactly that.
 import { defineConfig, mergeConfig } from 'vitest/config';
 import type { ViteUserConfig as UserConfig } from 'vitest/config';
+import { BaseSequencer } from 'vitest/node';
+import type { TestSpecification } from 'vitest/node';
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { orderLongestFirst } from '../.github/ci/shards.mjs';
 import base from './vitest.config.js';
 
 /** Reads `CCRC_TEST_LIST`: one server-relative test path per line, blank lines ignored. Throws a clear error
@@ -45,12 +50,46 @@ export function readTestList(file: string): string[] {
   return lines;
 }
 
+/** Starts a shard's longest file first, so a 400 s file cannot start last and stretch the shard. Vitest runs
+ *  files in an arbitrary order by default (its own cache of past durations, which a fresh CI runner lacks).
+ *  The order is the recorded durations in `CCRC_TEST_TIMES` (the `testtimes.json` artifact; repo-relative keys)
+ *  when that names a file, else the order of `CCRC_TEST_LIST`, which the shard planner emits longest first. A
+ *  file in neither sorts at the median. `shard()` is vitest's own, so WHICH files run is unchanged. When the plan
+ *  had no durations (the `--shard` fallback: every shard gets the whole list, in no meaningful order) and no
+ *  `CCRC_TEST_TIMES` is set, the order is `BaseSequencer`'s default. The specifications are sorted with a
+ *  comparator, so two that share a `moduleId` both stay. */
+class LongestFirstSequencer extends BaseSequencer {
+  override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
+    const durations = loadDurations(this.ctx?.config?.shard != null);
+    if (durations === null) return super.sort(files);
+    const serverDir = path.dirname(fileURLToPath(import.meta.url));
+    const key = (f: TestSpecification) => 'server/' + path.relative(serverDir, f.moduleId).split(path.sep).join('/');
+    const rank = new Map(orderLongestFirst([...new Set(files.map(key))], durations).map((k, i) => [k, i]));
+    return [...files].sort((a, b) => rank.get(key(a))! - rank.get(key(b))!);
+  }
+}
+
+/** The durations to order by, or `null` for vitest's default order: recorded times when `CCRC_TEST_TIMES` is
+ *  set, else the list's own order, except under `--shard`, where the list is not longest first. */
+function loadDurations(sharded: boolean): Record<string, number> | null {
+  const timesFile = process.env.CCRC_TEST_TIMES;
+  if (timesFile) return JSON.parse(readFileSync(timesFile, 'utf8')) as Record<string, number>;
+  const list = process.env.CCRC_TEST_LIST;
+  if (!list || sharded) return null;
+  const lines = readTestList(list);
+  return Object.fromEntries(lines.map((line, i) => ['server/' + line, lines.length - i]));
+}
+
 const listFile = process.env.CCRC_TEST_LIST;
 
 const merged: UserConfig = mergeConfig(base, defineConfig({}));
 
 if (listFile) {
-  merged.test = { ...merged.test, include: readTestList(listFile) };
+  merged.test = {
+    ...merged.test,
+    include: readTestList(listFile),
+    sequence: { ...merged.test?.sequence, sequencer: LongestFirstSequencer },
+  };
 }
 
 export default merged;

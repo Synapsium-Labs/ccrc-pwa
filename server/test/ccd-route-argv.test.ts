@@ -235,8 +235,9 @@ describe('--route on ws-add (routing spec §5.3, the dispatch wave)', () => {
     const id = 'demo-quiet-mesa';
     // `opus`, not the top class: operator instruction 2026-09-22 — the class
     // a human has to ask for cannot be what a session gets when nobody asked
-    // for anything. The other three fields of the row are unchanged.
-    expect(record(id)).toEqual(['opus', 'ultracode', 'sonnet', 'on']);
+    // for anything. `high`, not `ultracode`: operator ruling 2026-10-25
+    // (coordinator clause 19) ends standing workflow orchestration as a default.
+    expect(record(id)).toEqual(['opus', 'high', 'sonnet', 'on']);
     const rows = routeRows();
     expect(rows).toHaveLength(4);
     expect(decOf(rows[0]!)).toMatchObject({ actor: 'spawn', reason: 'coordinator row (default)' });
@@ -248,12 +249,15 @@ describe('--route on ws-add (routing spec §5.3, the dispatch wave)', () => {
     // default rather than an argv.
     expect(routeLog(id)).toEqual([
       `route ${id}: class ∅ -> opus [actor=spawn] (coordinator row (default))`,
-      `route ${id}: effort ∅ -> ultracode [actor=spawn] (coordinator row (default))`,
+      `route ${id}: effort ∅ -> high [actor=spawn] (coordinator row (default))`,
       `route ${id}: subagent ∅ -> sonnet [actor=spawn] (coordinator row (default))`,
       `route ${id}: workflow ∅ -> on [actor=spawn] (coordinator row (default))`,
     ]);
     expect(composed(newSessions()[0]!))
-      .toContain(`--model opus --settings '{"enableWorkflows":true,"ultracode":true}' --effort ultracode`);
+      .toContain(`--model opus --settings '{"enableWorkflows":true}' --effort high`);
+    // Coordinator clause 19: the default spawn keeps workflows ENABLED, so a short clause-19 review can launch,
+    // but never standing orchestration — no ultracode key on the argv.
+    expect(composed(newSessions()[0]!)).not.toContain('ultracode');
   });
 
   it('an explicit --route on an operator ws-add wins over the coordinator row, and the DECLARED actor is the one journaled', () => {
@@ -375,7 +379,7 @@ describe('--route on start and enable (routing spec §5.3)', () => {
     seedAccountsSh(h.home, GPT_PLACEABLE);
     install('gpt');
     h.sh(`${START_SPAWNLESS} cmd_start gpt demo`);
-    expect(record('gpt-demo')).toEqual(['opus', 'ultracode', 'sonnet', 'on']);
+    expect(record('gpt-demo')).toEqual(['opus', 'high', 'sonnet', 'on']);
     const seeded = routeRows();
     expect(seeded).toHaveLength(4);
     expect(decOf(seeded[0]!)).toMatchObject({ actor: 'spawn', reason: 'coordinator row (default)' });
@@ -386,7 +390,7 @@ describe('--route on start and enable (routing spec §5.3)', () => {
     expect(routeRows()).toHaveLength(4);
     // Slice 1's non-Anthropic arm, widened by slice 6 Task 3: the THREE fields this
     // backend cannot apply are stamped by NAME rather than silently dropped. The
-    // coordinator row seeds all three (`ultracode`, `sonnet`, `on`), and the argv
+    // coordinator row seeds all three (`high`, `sonnet`, `on`), and the argv
     // assertion below is the other half — none of them reaches the command line.
     expect(h.reg('gpt-demo', 'inert')).toBe('effort,workflow,subagent');
     const line = composed(newSessions()[0]!);

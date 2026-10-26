@@ -155,6 +155,12 @@ const ifNoPaneFlag = (opts: { readonly ifNoPane?: boolean } | null): readonly st
 const childOfFlags = (childOf: number | undefined): readonly string[] => (childOf === undefined ? [] : ['--child-of', String(childOf)]);
 const deferFlags = (deferExpired: boolean): readonly string[] => (deferExpired ? ['--defer-expired'] : []);
 
+/** The stale arm's two flags (D-6639): the word, and for `held` the digest of the hold the server saw. Nothing for an
+ *  ordinary reclaim, so its argv is what it always was. */
+type StaleFlags = { readonly word: string; readonly holdDigest: string | null };
+const staleFlags = (stale: StaleFlags | undefined): readonly string[] =>
+  stale === undefined ? [] : ['--stale', stale.word, ...(stale.holdDigest === null ? [] : ['--hold-digest', stale.holdDigest])];
+
 /**
  * `decFlags`' own `--actor`/`--reason` half, WITHOUT `--surface` — for
  * `route`, the one dec-carrying verb below that never touches a pane and
@@ -538,6 +544,19 @@ export const CCD_ARGV = {
                    ...(slug === null ? [] : [slug]), ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
+  /** D-6784: the checks lane's read. One call names 1 to 16 `<id>:<pr>` pairs (ccd refuses more, and refuses the
+   *  whole call), each id a registry id (no comma, no colon: they delimit the pairs; no leading dash; no repeat) and
+   *  each pr a positive integer with no leading zero. The builder refuses all of these itself, so a bad pair throws
+   *  here instead of failing every pair in the call; the caller still chunks into calls of at most 16. */
+  prLanding: (p: string, sessions: readonly { readonly id: string; readonly pr: number | string }[]) => {
+               if (sessions.length < 1 || sessions.length > 16) throw new Error('CCD_ARGV.prLanding: one call names 1 to 16 sessions');
+               if (new Set(sessions.map(({ id }) => id)).size !== sessions.length) throw new Error('CCD_ARGV.prLanding: a session id appears once per call');
+               return argv(['pr-landing', '--project', p, '--sessions', sessions.map(({ id, pr }) => {
+                 if (!/^[A-Za-z0-9._][A-Za-z0-9._-]*$/.test(id)) throw new Error('CCD_ARGV.prLanding: a session id is letters, digits, dot, dash and underscore only, and does not start with a dash');
+                 if (!/^[1-9][0-9]{0,8}$/.test(String(pr))) throw new Error('CCD_ARGV.prLanding: a pr number is a positive integer with no leading zero');
+                 return `${id}:${String(pr)}`;
+               }).join(',')]);
+             },
   prOpen:    (id: string, t: string, b64: string, draft: boolean) =>
                argv(['pr-open', '--session', id, '--title', t, '--body-b64', b64, '--draft', draft ? 'true' : 'false']),
   /** `opts.ifNoPane` (D-6642/D-6643, `ARCHIVE_IF_NO_PANE_CAP`): ccd refuses `live` before anything is written when a pane or
@@ -552,8 +571,8 @@ export const CCD_ARGV = {
    *  verb and the SAME granted prefix as `wsAudit` — `['ws-audit','--session']`
    *  — with the mode flag AFTER the id, the order `cmd_ws_audit`'s fixed-arity
    *  parse reads. No grant of its own: the audit destroys nothing. */
-  wsReclaimAudit: (id: string, deferExpired: boolean) =>
-    argv(['ws-audit', '--session', id, '--reclaim', ...deferFlags(deferExpired)]),
+  wsReclaimAudit: (id: string, deferExpired: boolean, stale?: StaleFlags) =>
+    argv(['ws-audit', '--session', id, '--reclaim', ...deferFlags(deferExpired), ...staleFlags(stale)]),
   /** `ws-reclaim` — the ONE destructive argv this server composes with no human
    *  in the path (spec §5.5). `childOf` is the run the SERVER holds as having
    *  minted the workspace — the second authority, which ccd compares to the
@@ -562,9 +581,10 @@ export const CCD_ARGV = {
    *  The confirmation token LEADS (`['ws-reclaim','--expect']` is the grant);
    *  `--defer-expired` and the dec trail, and ccd strips both before it binds a
    *  positional. */
-  wsReclaim: (token: string, childOf: number, id: string, deferExpired: boolean, dec: ActorFlags | null) =>
+  wsReclaim: (token: string, childOf: number, id: string, deferExpired: boolean, dec: ActorFlags | null,
+              stale?: StaleFlags) =>
     argv(['ws-reclaim', '--expect', token, '--child-of', String(childOf), '--session', id,
-          ...deferFlags(deferExpired), ...decFlags(dec)]),
+          ...deferFlags(deferExpired), ...staleFlags(stale), ...decFlags(dec)]),
   /** `ws-audit --expire` (workspace lifecycle, spec 2026-09-24 §5.3): the SAME verb and granted prefix as
    *  `wsAudit` — `['ws-audit','--session']` — with the mode flag after the id, the order `cmd_ws_audit` reads. No
    *  grant of its own, and no `--defer-expired`: an expiry never skips its presence rungs. */
@@ -1040,6 +1060,13 @@ export const WIN_SIZE_CAP = 'win-size-v1';
  *  simply defers every child as `unsupported` — nothing is lost, nothing early. */
 export const RECLAIM_CAP = 'reclaim-v1';
 
+/** The `ccd caps` token that says this box's `ws-reclaim` and `ws-audit --reclaim` take `--stale <word>
+ *  [--hold-digest <sha256>]` (DR-26, D-6638): the stale arm of child reclaim (D-6639). Spelled ONCE in `server/src`;
+ *  ccd's `echo reclaim-stale-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two spellings.
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`: a box that does not prove it must never be sent the flag, for
+ *  an older ccd would read it as a positional and refuse in words the lane cannot tell from a real refusal. */
+export const RECLAIM_STALE_CAP = 'reclaim-stale-v1';
+
 /** The `ccd caps` token that says this box has `ccd reclaim-pause` — the
  *  writer of `$REG/reclaim-paused` (child-reclamation wave 4). Spelled ONCE in
  *  `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's own
@@ -1258,6 +1285,7 @@ export const CCD_CAN = {
   // flag tokens (`WS_TITLE_CAP`, `WS_WRAPPER_CAP`) with `capSupported`. `ws-title` is a verb `ccd caps` lists by name.
   wsAddNamed: 'none', wsTitle: verbRow(WS_TITLE_VERB),
   prStateSession: verbRow('pr-state'), prStateProject: verbRow('pr-state'), prOpen: verbRow('pr-open'),
+  prLanding: capRow('pr-landing-v1'),
   wsArchive: verbRow('ws-archive'), wsRestore: verbRow('ws-restore'),
   wsAudit: verbRow('ws-audit'), wsReap: verbRow('ws-reap'),
   wsReclaimAudit: verbRow('ws-audit'), wsReclaim: capRow(RECLAIM_CAP),

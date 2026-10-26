@@ -24,8 +24,9 @@ export const TMP_SWEEP_CENSUS_CAP_BYTES = 8 * 1024 * 1024;
 
 export interface TmpSweepMoved {
   readonly seq: number;
-  readonly id: string;
-  readonly uuid: string;
+  /** The session the row was moved from; `null` when no session owns it (a `test-run` row, D-6854). */
+  readonly id: string | null;
+  readonly uuid: string | null;
   readonly name: string;
   readonly kind: string;
   readonly bytes: number;
@@ -51,6 +52,21 @@ export interface TmpSweepSession {
   readonly budget: TmpSweepBudgetState;
   /** The session's largest top-level entries, when the writer carries them. Optional on the wire: absent reads `[]`. */
   readonly top: readonly { readonly name: string; readonly bytes: number }[];
+  /** Distinct inodes under the session's scratch (#1411); `null` when a walk did not finish; absent from an older sweep. */
+  readonly inodes?: number | null;
+  /** What the walks reached: the count when every walk finished, otherwise a lower bound. */
+  readonly inodesAtLeast?: number;
+  /** The session's largest top-level entries by inodes (a lower bound each when its walk did not finish). */
+  readonly inodeTop?: readonly { readonly name: string; readonly inodes: number }[];
+  readonly inodeBudget?: TmpSweepInodeBudgetState;
+}
+
+export interface TmpSweepInodeBudgetState {
+  /** `ok`, `over`, `unmeasured`, or `growing`: unfinished three passes running with a lower bound that grew each time (D-6920). */
+  readonly state: string;
+  readonly overSince: number | null;
+  /** The budget the sweep applied, in inodes; absent reads as "the inode budget" in the words. */
+  readonly limit?: number;
 }
 
 export interface TmpSweepCensus {
@@ -71,9 +87,17 @@ const str = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 function parseMoved(v: unknown): TmpSweepMoved | null {
   if (!isObj(v)) return null;
   const { seq, id, uuid, name, kind, bytes, at, shadow, quarantine } = v;
-  if (!nat(seq) || !str(id) || !str(uuid) || !str(name) || !str(kind) || !nat(bytes) || !nat(at) || typeof shadow !== 'boolean') return null;
+  if (!nat(seq) || !str(name) || !str(kind) || !nat(bytes) || !nat(at) || typeof shadow !== 'boolean') return null;
   if (quarantine !== null && quarantine !== undefined && typeof quarantine !== 'string') return null;
-  return { seq, id, uuid, name, kind, bytes, at, shadow, quarantine: typeof quarantine === 'string' ? quarantine : null };
+  // D-6854: the test-run arm (`ccd/ccd-tmp-sweep`'s `test_run_arm`) writes `'id': ''` and `'uuid': ''`, because no
+  // session owns a test-run root. Only that kind, and only both empty together, reads as `null` ("no session"); every
+  // other emptiness stays malformed.
+  const sessionless = kind === 'test-run' && id === '' && uuid === '';
+  if (!sessionless && (!str(id) || !str(uuid))) return null;
+  return {
+    seq, id: sessionless ? null : id as string, uuid: sessionless ? null : uuid as string, name, kind, bytes, at, shadow,
+    quarantine: typeof quarantine === 'string' ? quarantine : null,
+  };
 }
 
 function parseBudget(v: unknown): TmpSweepBudgetState | null {
@@ -107,7 +131,38 @@ function parseSession(v: unknown): TmpSweepSession | null {
       top.push({ name: t['name'], bytes: t['bytes'] });
     }
   }
-  return { id, uuid, bytes, budget, top };
+  const inode = parseInodes(v);
+  if (inode === null) return null;
+  return { id, uuid, bytes, budget, top, ...inode };
+}
+
+/** The optional inode fields of a session row (#1411): each absent stays absent; any malformed one is `null`. */
+function parseInodes(v: Obj): Partial<TmpSweepSession> | null {
+  const out: { -readonly [K in keyof TmpSweepSession]?: TmpSweepSession[K] } = {};
+  if (v['inodes'] !== undefined) {
+    if (v['inodes'] !== null && !nat(v['inodes'])) return null;
+    out.inodes = v['inodes'];
+  }
+  if (v['inodesAtLeast'] !== undefined) {
+    if (!nat(v['inodesAtLeast'])) return null;
+    out.inodesAtLeast = v['inodesAtLeast'];
+  }
+  if (v['inodeTop'] !== undefined) {
+    if (!Array.isArray(v['inodeTop'])) return null;
+    const rows: { name: string; inodes: number }[] = [];
+    for (const t of v['inodeTop']) {
+      if (!isObj(t) || !str(t['name']) || !nat(t['inodes'])) return null;
+      rows.push({ name: t['name'], inodes: t['inodes'] });
+    }
+    out.inodeTop = rows;
+  }
+  const b = v['inodeBudget'];
+  if (b !== undefined) {
+    if (!isObj(b) || !str(b['state']) || (b['overSince'] !== null && !nat(b['overSince']))) return null;
+    if (b['limit'] !== undefined && !nat(b['limit'])) return null;
+    out.inodeBudget = { state: b['state'], overSince: b['overSince'] as number | null, ...(b['limit'] === undefined ? {} : { limit: b['limit'] as number }) };
+  }
+  return out;
 }
 
 /** The ONE reader of the census. `null` for anything that is not exactly its shape (the whole file, not a salvaged
@@ -173,13 +228,14 @@ function fitLines(lines: readonly string[], limit: number, used: number): string
  * already passed are not mailed (the entry is gone; telling the session to move it back would be false). `mailed`
  * returns as the census's own `seq`, shadow passes included. The body lists each entry, its size and its quarantine
  * path, the sentence "move it back before <time> to keep it", and the entries the budget kept, with why, within
- * MAIL_BODY_MAX_BYTES; what does not fit is one line pointing at the census.
+ * MAIL_BODY_MAX_BYTES; what does not fit is one line pointing at the census. A row no session owns is never mailed.
  */
 export function tmpSweepReceipts(census: TmpSweepCensus, _mailed: number): { mails: TmpSweepReceiptMail[]; mailed: number } {
   const grace = census.pressure ? TMP_QUARANTINE_GRACE_PRESSURE_MS : TMP_QUARANTINE_GRACE_MS;
   const byPass = new Map<string, { id: string; at: number; rows: TmpSweepMoved[] }>();
   for (const r of census.moved) {
-    if (r.shadow || r.at + grace <= census.at) continue;
+    // A row no session owns (D-6854) has no one to tell.
+    if (r.id === null || r.shadow || r.at + grace <= census.at) continue;
     const key = `${r.id}\u0000${r.at}`;
     const g = byPass.get(key);
     if (g === undefined) byPass.set(key, { id: r.id, at: r.at, rows: [r] }); else g.rows.push(r);
@@ -247,9 +303,56 @@ export function tmpSweepBudget(census: TmpSweepCensus, noticed: ReadonlySet<stri
   return out;
 }
 
-/** `disk.holders` from the census: the five largest sessions, by bytes. `null` (unmeasured) names none. */
+/**
+ * One notice per over-inode-budget episode (#1411), keyed on the row's `inodeBudget.overSince`, in its own key space
+ * (`<uuid>:inodes:<overSince>`) so it never collides with the byte budget's. A session whose walk did not finish and which is over on
+ * a lower bound alone is told "at least", and so is one whose unfinished count kept growing (`growing`, D-6920), which is not
+ * called over. Like the byte notice it deletes nothing, shadow or live: the sweep
+ * does not remove anything for inodes, and the words say so.
+ */
+export function tmpSweepInodeBudget(census: TmpSweepCensus, noticed: ReadonlySet<string>): TmpSweepBudgetNotice[] {
+  const out: TmpSweepBudgetNotice[] = [];
+  for (const s of census.sessions) {
+    const overSince = s.inodeBudget?.overSince ?? null;
+    if (overSince === null) continue;
+    const key = `${s.uuid}:inodes:${overSince}`;
+    if (noticed.has(key)) continue;
+    const count = s.inodes ?? null;
+    const held = count !== null ? `${num(count)} inodes` : `at least ${num(s.inodesAtLeast ?? 0)} inodes, could not finish counting`;
+    const limit = s.inodeBudget?.limit;
+    const budget = `${limit === undefined ? '' : `${num(limit)}-inode `}inode budget`;
+    const growing = s.inodeBudget?.state === 'growing';
+    const top = [...(s.inodeTop ?? [])].sort((a, b) => b.inodes - a.inodes || (a.name < b.name ? -1 : 1)).slice(0, TMP_NOTICE_TOP);
+    const largest = top.length > 0 ? `Its largest entries by inodes: ${top.map((t) => `${t.name} (${num(t.inodes)})`).join(', ')}. ` : '';
+    const standing = growing ? `; the count has grown three passes running and may be past the ${budget}` : `, over the ${budget}`;
+    const body = `Your scratch and task output hold ${held}${standing}. ${largest}` +
+      'Many small files can fill the disk\'s inode table long before its bytes; delete or move the trees you no longer need ' +
+      '(build and test scratch is the usual cause). Nothing is removed for inodes: this is a notice only.';
+    out.push({
+      sessionId: s.id, key, subject: `tmp-sweep: ${s.id} ${growing ? 'inode count growing' : 'over inode budget'} (since ${stamp(overSince)})`, body,
+      coordinatorBody: `Session ${s.id}: ${body}`,
+    });
+  }
+  return out;
+}
+
+const num = (n: number): string => n.toLocaleString('en-US');
+
+/** `disk.holders` from the census: the five largest sessions by bytes, then any of the five holding the most inodes that
+ *  those did not name. A session carries its inodes when the sweep counted them (`inodesPartial` when only a lower bound).
+ *  `null` (unmeasured) names none. */
 export function tmpSweepHolders(census: TmpSweepCensus | null): DiskHolder[] {
   if (census === null) return [];
-  return [...census.sessions].sort((a, b) => b.bytes - a.bytes || (a.id < b.id ? -1 : 1)).slice(0, TMP_HOLDERS_MAX)
-    .map((s) => ({ label: s.id, bytes: s.bytes }));
+  const holder = (s: TmpSweepSession): DiskHolder => {
+    const inodes = s.inodes ?? s.inodesAtLeast;
+    return {
+      label: s.id, bytes: s.bytes,
+      ...(inodes === undefined ? {} : { inodes }), ...(s.inodes === null && inodes !== undefined ? { inodesPartial: true as const } : {}),
+    };
+  };
+  const byBytes = [...census.sessions].sort((a, b) => b.bytes - a.bytes || (a.id < b.id ? -1 : 1)).slice(0, TMP_HOLDERS_MAX);
+  const byInodes = [...census.sessions].filter((s) => (s.inodes ?? s.inodesAtLeast ?? 0) > 0)
+    .sort((a, b) => (b.inodes ?? b.inodesAtLeast ?? 0) - (a.inodes ?? a.inodesAtLeast ?? 0) || (a.id < b.id ? -1 : 1)).slice(0, TMP_HOLDERS_MAX)
+    .filter((s) => !byBytes.includes(s));
+  return [...byBytes, ...byInodes].map(holder);
 }

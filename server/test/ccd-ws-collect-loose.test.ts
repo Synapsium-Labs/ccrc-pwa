@@ -232,6 +232,21 @@ describe.skipIf(!LINUX)('the audit: ws-audit --loose-hex <hex> --collect', () =>
     expect(verdictOf('stray-dir', clockAfter(p, 49))).toBe('containment-unproven');
   }, 60_000);
 
+  it('a loose directory of many fixture clones is collectable; more `.git` files than the cap (lowered to 64 here) is unmeasured `checkouts-cap`', () => {
+    const p = mkLoose('stray-dir');
+    for (let i = 0; i < 70; i++) fs.mkdirSync(path.join(p, `repo-${i}`, '.git'), { recursive: true });
+    expect(verdictOf('stray-dir', `${clockAfter(p, 49)} WS_LEAF_CHECKOUTS_CAP=64;`), 'clones are not counted against the cap')
+      .toBe('collectable');
+    fs.mkdirSync(path.join(p, 'inner'));
+    for (let i = 0; i < 65; i++) {
+      fs.mkdirSync(path.join(p, `w${i}`));
+      fs.writeFileSync(path.join(p, `w${i}`, '.git'), `gitdir: ${path.join(p, 'inner')}\n`);
+    }
+    const d = docFor(audit('stray-dir', `${clockAfter(p, 49)} WS_LEAF_CHECKOUTS_CAP=64;`));
+    expect(d['verdict']).toBe('unmeasured');
+    expect(d['collect']).toMatchObject({ unmeasured: 'checkouts-cap' });
+  }, 60_000);
+
   it('pause answers paused, last', () => {
     const p = mkLoose('stray-dir');
     fs.writeFileSync(path.join(regDir(), 'reclaim-paused'), '');

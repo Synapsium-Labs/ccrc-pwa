@@ -11,6 +11,14 @@ export function nestedWouldRescueCount(doc: Record<string, unknown>): number {
   return Array.isArray(would) ? would.filter((p) => typeof p === 'string' && p !== '').length : 0;
 }
 
+/** The paths themselves, for the durable shadow journal (D-6861): the same filter as the count. */
+export function nestedWouldRescuePaths(doc: Record<string, unknown>): string[] {
+  const n = doc.nestedRescue;
+  if (typeof n !== 'object' || n === null) return [];
+  const would = (n as { wouldRescue?: unknown }).wouldRescue;
+  return Array.isArray(would) ? would.filter((p): p is string => typeof p === 'string' && p !== '') : [];
+}
+
 /** The title of the one shadow row a child (or archive) earns. */
 export const NESTED_RESCUE_SHADOW_TITLE = 'a nested repository would be rescued';
 

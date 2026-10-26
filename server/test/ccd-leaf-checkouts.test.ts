@@ -38,15 +38,15 @@ const ROOT_USER = process.getuid?.() === 0;
 const rootOf = (): string => path.join(h.home, 'root');
 const leafOf = (): string => path.join(rootOf(), ID);
 
-interface Answer { rc: string; why: string }
-/** The predicate's own answer: its rc and `_WS_CHECKOUTS_WHY`. */
+interface Answer { rc: string; why: string; capped: string }
+/** The predicate's own answer: its rc, `_WS_CHECKOUTS_WHY` and whether the entry cap was why (`_WS_CHECKOUTS_CAPPED`). */
 const ask = (leaf: string, pre = ''): Answer => {
-  const [rc = '', why = ''] = h.sh(`${pre} _ws_leaf_checkouts "${leaf}"; rc=$?;`
-    + ' printf \'%s\\x1f%s\' "$rc" "$_WS_CHECKOUTS_WHY"').split('\x1f');
-  return { rc, why };
+  const [rc = '', why = '', capped = ''] = h.sh(`${pre} _ws_leaf_checkouts "${leaf}"; rc=$?;`
+    + ' printf \'%s\\x1f%s\\x1f%s\' "$rc" "$_WS_CHECKOUTS_WHY" "${_WS_CHECKOUTS_CAPPED-}"').split('\x1f');
+  return { rc, why, capped };
 };
 /** The removal helper's answer: its rc and `_WS_LEAF_WHY`. */
-const remove = (root: string, id: string, pre = ''): Answer => {
+const remove = (root: string, id: string, pre = ''): Omit<Answer, 'capped'> => {
   const [rc = '', why = ''] = h.sh(`${pre} _ws_leaf_remove "${root}" "${id}"; rc=$?;`
     + ' printf \'%s\\x1f%s\' "$rc" "$_WS_LEAF_WHY"').split('\x1f');
   return { rc, why };
@@ -115,6 +115,24 @@ describe('_ws_leaf_checkouts — refused: rc 1, a checkout git records elsewhere
     expect(a.why).toContain('no longer exists');
   }, 60_000);
 
+  it('a MISSING git dir spelled OUTSIDE the leaf is refused, even when it shares the leaf as a string prefix', () => {
+    const wt = path.join(leafOf(), 'wt');
+    fs.mkdirSync(wt, { recursive: true });
+    fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${leafOf()}-x/repo/.git/worktrees/wt\n`);
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('no longer exists');
+  }, 60_000);
+
+  it('a MISSING relative git dir that climbs out of the leaf is refused', () => {
+    const wt = path.join(leafOf(), 'wt');
+    fs.mkdirSync(wt, { recursive: true });
+    fs.writeFileSync(path.join(wt, '.git'), 'gitdir: ../../elsewhere/repo/.git/worktrees/wt\n');
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('no longer exists');
+  }, 60_000);
+
   it('an admin dir with NO back-link file at all is refused', () => {
     const { admin } = movedTree(path.join(leafOf(), 'parked', 'still-harbor'));
     fs.rmSync(path.join(admin, 'gitdir'));
@@ -177,6 +195,58 @@ describe('_ws_leaf_checkouts — refused: rc 1, a checkout git records elsewhere
 });
 
 describe('_ws_leaf_checkouts — passes: rc 0, the leaf’s own scratch', () => {
+  // A fixture worktree INSIDE the leaf whose git directory was pruned or removed: the
+  // `.git` file names a path that is spelled inside the leaf, and nothing stands there. Git
+  // can record the tree nowhere else, and the removal takes the leaf whole, so it is the
+  // leaf's own scratch, not a tree git records elsewhere.
+  const fixtureWorktree = (): { repo: string; wt: string; admin: string } => {
+    const g = path.join(leafOf(), 'scratchpad', 'gitx');
+    const repo = path.join(g, 'repo');
+    cloneAt(repo);
+    const wt = path.join(g, 'wt');
+    h.git(repo, 'worktree', 'add', '-q', '-b', 'side', wt);
+    const admin = h.git(wt, 'rev-parse', '--absolute-git-dir');
+    const moved = path.join(g, 'wt-moved');
+    fs.renameSync(wt, moved);
+    return { repo, wt: moved, admin };
+  };
+
+  it('a moved fixture worktree whose admin dir inside the leaf was PRUNED passes', () => {
+    const { repo } = fixtureWorktree();
+    h.git(repo, 'worktree', 'prune');
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('0');
+  }, 60_000);
+
+  it('a fixture worktree whose whole repository inside the leaf is gone passes', () => {
+    const { repo } = fixtureWorktree();
+    fs.rmSync(repo, { recursive: true, force: true });
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('0');
+  }, 60_000);
+
+  it('a RELATIVE gitdir naming an absent dir refuses: a --relative-paths worktree of an outside repo moved into the leaf is not the leaf\'s', () => {
+    const main = h.makeRepo('demo2');
+    const wt = path.join(leafOf(), 'x', 'side');
+    fs.mkdirSync(wt, { recursive: true });
+    // what `git worktree add --relative-paths` writes for a sibling of the repo, spelled from where the tree was
+    fs.mkdirSync(path.join(main, '.git', 'worktrees', 'side'), { recursive: true });
+    fs.writeFileSync(path.join(wt, '.git'), 'gitdir: ../demo2/.git/worktrees/side\n');
+    fs.writeFileSync(path.join(wt, 'precious.txt'), 'uncommitted');
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('no longer exists');
+  }, 60_000);
+
+  it('a RELATIVE gitdir with no dot segment naming an absent dir under the tree refuses: only an absolute spelling is claimed', () => {
+    const wt = path.join(leafOf(), 'x', 'side');
+    fs.mkdirSync(wt, { recursive: true });
+    fs.writeFileSync(path.join(wt, '.git'), 'gitdir: gone/.git/worktrees/side\n');
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('no longer exists');
+  }, 60_000);
+
   it('an empty leaf, and a leaf with no `.git` anywhere', () => {
     fs.mkdirSync(path.join(leafOf(), 'cdk.out', 'deep'), { recursive: true });
     fs.writeFileSync(path.join(leafOf(), 'cdk.out', 'manifest.json'), '{}');
@@ -301,13 +371,78 @@ describe('_ws_leaf_checkouts — unmeasured: rc 2, never "nothing there"', () =>
     expect(a.rc, a.why).toBe('2');
   }, 60_000);
 
-  it('more than 64 `.git` entries is unmeasured; 64 is examined', () => {
-    for (let i = 0; i < 64; i++) fs.mkdirSync(path.join(leafOf(), `c${i}`, '.git'), { recursive: true });
-    expect(ask(leafOf()).rc, 'the CONTROL: 64 clones, each examined').toBe('0');
-    fs.mkdirSync(path.join(leafOf(), 'c64', '.git'), { recursive: true });
-    const a = ask(leafOf());
+  it('any number of `.git` DIRECTORIES passes: a clone needs no examination, so it is not counted against the cap', () => {
+    for (let i = 0; i < 70; i++) fs.mkdirSync(path.join(leafOf(), `c${i}`, '.git'), { recursive: true });
+    const a = ask(leafOf(), 'WS_LEAF_CHECKOUTS_CAP=64;');   // 70 directories against a cap of 64
+    expect(a.rc, a.why).toBe('0');
+    expect(a.capped, 'a pass is not a cap').toBe('');
+  }, 60_000);
+
+  // The cap is lowered to 64 in the cases below so they stay fast; its shipped value is pinned on its own.
+  const CAP64 = 'WS_LEAF_CHECKOUTS_CAP=64;';
+  const plantFiles = (leaf: string, from: number, to: number): void => {
+    fs.mkdirSync(path.join(leaf, 'inner'), { recursive: true });
+    for (let i = from; i < to; i++) {
+      fs.mkdirSync(path.join(leaf, `w${i}`), { recursive: true });
+      fs.writeFileSync(path.join(leaf, `w${i}`, '.git'), `gitdir: ${path.join(leaf, 'inner')}\n`);
+    }
+  };
+
+  it('more `.git` FILES than the cap is unmeasured and says it was the cap; the cap itself is examined', () => {
+    fs.mkdirSync(leafOf(), { recursive: true });
+    const leaf = fs.realpathSync(leafOf());
+    plantFiles(leaf, 0, 64);
+    expect(ask(leaf, CAP64).rc, 'the CONTROL: 64 file entries, each examined').toBe('0');
+    plantFiles(leaf, 64, 65);
+    const a = ask(leaf, CAP64);
     expect(a.rc, a.why).toBe('2');
     expect(a.why).toContain('more than 64');
+    expect(a.capped, 'the cap is named, apart from a load failure').toBe('1');
+  }, 60_000);
+
+  it('the shipped cap is 1024 (D-6860): measured at ~20 ms an entry, under the scan bound it shares', () => {
+    expect(h.sh('printf %s "$WS_LEAF_CHECKOUTS_CAP"')).toBe('1024');
+  });
+
+  it('a LARGE but finite leaf (200 `.git` files, as many `git worktree add` temp dirs) is examined whole and passes', () => {
+    fs.mkdirSync(leafOf(), { recursive: true });
+    const leaf = fs.realpathSync(leafOf());
+    plantFiles(leaf, 0, 200);
+    const a = ask(leaf);
+    expect(a.rc, a.why).toBe('0');
+    expect(a.capped).toBe('');
+  }, 120_000);
+
+  it('an examination that outruns REAP_SCAN_SECONDS is unmeasured, and is NOT the cap (a fact of load, not of the leaf)', () => {
+    fs.mkdirSync(leafOf(), { recursive: true });
+    const leaf = fs.realpathSync(leafOf());
+    plantFiles(leaf, 0, 3);
+    // Each entry's examination is slowed past the 1 s bound; the walk itself still finishes well inside it.
+    const slow = 'REAP_SCAN_SECONDS=1; _ws_leaf_checkout_one() { sleep 1.2; return 0; };';
+    const a = ask(leaf, slow);
+    expect(a.rc, a.why).toBe('2');
+    expect(a.why).toContain('did not finish within 1s');
+    expect(a.capped, 'a timed-out examination is not the cap').toBe('');
+  }, 60_000);
+
+  it('the cap flag is the LAST ask\'s: a leaf asked after a capped one does not inherit it', () => {
+    fs.mkdirSync(leafOf(), { recursive: true });
+    const leaf = fs.realpathSync(leafOf());
+    plantFiles(leaf, 0, 65);
+    const clean = path.join(rootOf(), 'clean-leaf');
+    fs.mkdirSync(clean, { recursive: true });
+    const [r1, c1, r2, c2] = h.sh(`${CAP64} _ws_leaf_checkouts "${leaf}"; printf '%s|%s|' "$?" "$_WS_CHECKOUTS_CAPPED";`
+      + ` _ws_leaf_checkouts "${clean}"; printf '%s|%s' "$?" "$_WS_CHECKOUTS_CAPPED"`).split('|');
+    expect([r1, c1, r2, c2]).toEqual(['2', '1', '0', '']);
+  }, 60_000);
+
+  it('a clone-heavy leaf with ONE foreign file entry still refuses that entry: dirs are skipped, files are not', () => {
+    for (let i = 0; i < 70; i++) fs.mkdirSync(path.join(leafOf(), `c${i}`, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(leafOf(), 'wt'), { recursive: true });
+    fs.writeFileSync(path.join(leafOf(), 'wt', '.git'), `gitdir: ${path.join(h.home, 'gone', '.git', 'worktrees', 'wt')}\n`);
+    const a = ask(leafOf(), CAP64);
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('no longer exists');
   }, 60_000);
 
   it('a walk that outruns a lowered REAP_SCAN_SECONDS is unmeasured — a real `find` that hangs, killed by the bound', () => {

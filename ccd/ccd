@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8978d3c653c1f70c12495c98049485e3a5d5f2ce4d72e7c5a3f607727fa01789
+# ccrc:stamp-at-install — written into the installed copy by ccd/ccd-entry-install.py; never committed
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1519,9 +1519,9 @@ SUBSTRATE_PROBE_DEADLINE_S=8    # bound on ONE has-session probe. Healthy answer
                                 # an unbounded probe turns a wedge into a silent supervisor hang.
 SUBSTRATE_BACKOFF_S=30          # unknown-tick interval once the fault is established
 SUBSTRATE_BACKOFF_AFTER=3       # consecutive unknowns before backing off 5s -> 30s
-SPAWN_EFFORT="ultracode"        # /effort sent at settle to a session with NO routing record
-                                # ("" disables) — a pre-slice-1 session, exactly today's
-                                # behaviour. A session WITH a record never gets this keystroke:
+SPAWN_EFFORT="high"             # /effort sent at settle to a session with NO routing record ("" disables):
+                                # the coordinator row's effort, never ultracode (coordinator clause 19,
+                                # pinned by routing-references.test.ts). A session WITH a record never gets this keystroke:
                                 # its own effort field rides `--effort`/`--settings` on the
                                 # spawn argv instead (`_spawn_start`, routing spec §5.2).
                                 # ultracode DOES have `--settings` keys (measured Claude Code
@@ -1579,8 +1579,8 @@ READER_MIN_COLS=120
 STALE_RESUME_GRACE=30            # D-2443 — seconds after a fresh $REG/<id>.stalepress stamp during which _session_hard_blocked's transcript arm stands down, so the same-tick rescue (_auto_swap_check, _tick_strand_undecidable) cannot swap out the continuation the stale-press Enter just submitted before Claude Code has appended the resumed turn's row
 TRANSCRIPT_ARM_INTERVAL=30       # D-2444 — seconds a session's positive or negative transcript verdict is reused; the final review measured an uncached arm at ~36 ms, ~14x the pane classifier and mostly in _transcript_path, so this bounds the full scan to once per interval while each positive still rechecks the draft
 # Proactive auto-/compact: when an IDLE session's context passes ITS threshold, send /compact
-# so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context, so this is
-# non-destructive on both the Anthropic and gpt lanes). Only at a clean turn boundary; kill-switch
+# so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context and, armed, a coordinator's runs,
+# yet a compaction is NOT lossless on either lane, D4 #757). Only at a clean turn boundary; kill-switch
 # via AUTOCOMPACT_DISABLE_FILE.
 COMPACT_THRESHOLD=50            # own context % at/above which an idle session auto-compacts, for a
                                 # session whose routing record hands `_route_get` no `compact` value —
@@ -5234,7 +5234,7 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   # unrelated prose; `_pr_py`'s own comment states the reason: a line number
   # goes stale the moment anything above it grows), which is likewise
   # `[[ "$st" == "idle" ]]` and stops on anything else.
-  local id="$1" wrapper cfg pid sf st
+  local id="$1" wrapper cfg pid
   wrapper=$(_reg_get "$id" wrapper); [[ -n "$wrapper" ]] || return 1
   cfg=$(_cfg_dir "$wrapper");        [[ -n "$cfg" ]]     || return 1
   # `idle` here is a claim about a session this function LOOKED AT. When the
@@ -5249,7 +5249,6 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   esac
   pid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  sf="$cfg/sessions/$pid.json"
   # D-2379: the one unguarded reader of this path family — `_sync_uuid`
   # (`-f`), `_auto_swap_check` (`-f`) and `_auto_compact_check` (a three-rung
   # ladder) each type-test `$sf` before opening it; this one did not, and
@@ -5262,10 +5261,11 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   # every unreadable/unrecognised shape to the same non-zero `[[ -n "$st" ]]
   # || return 1` lands on, so a mode-000 `$sf` is unaffected either way —
   # measured, not assumed.
-  [[ -f "$sf" ]] || return 1
-  st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
-  [[ -n "$st" ]] || return 1
-  [[ "$st" == idle ]] || { echo busy; return 0; }
+  # ARCH-50 (K4): the file is read once, by `_turn_reading`, which owns the `-f` rung and the grep above. Only the
+  # word `idle` is idle here; every other word, `shell` included, answers busy, and an unreadable file answers non-zero.
+  # (Placed far below this function, with the other late helpers, so no line above it moves.)
+  _turn_reading "$cfg" "$pid" || return 1
+  [[ "$TR_WORD" == idle ]] || { echo busy; return 0; }
   echo idle
 }
 
@@ -20812,9 +20812,9 @@ _route_bytes() {   # value -> its length in BYTES (controller ruling S1-R2).
 # be the one thing that has to be re-edited on every release — see
 # `settings-aliases.test.ts`, which reds on exactly that.
 #
-# The other three fields are unchanged: an operator spawn still orchestrates at
-# `ultracode` with `sonnet` subagents and workflows on.
-ROUTE_COORDINATOR_ROW="class=opus effort=ultracode subagent=sonnet workflow=on"   # spec §3's coordinator row: the default for an OPERATOR spawn (§4)
+# Effort is `high`, never `ultracode` (standing workflow orchestration; coordinator clause 19, 2026-10-25);
+# `workflow=on` stays so a clause-19 review can launch. routing-references.test.ts pins this row to the matrix.
+ROUTE_COORDINATOR_ROW="class=opus effort=high subagent=sonnet workflow=on"   # spec §3's coordinator row: the default for an OPERATOR spawn (§4)
 
 _route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the byte count (never the bytes)
   # BEFORE ANY SIDE EFFECT. Every caller runs this above its first write — above
@@ -21206,7 +21206,7 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # those means GO LOOK AT THE BOX; `status=busy` means WAIT. So each gets its own slug, and the
   # detail carries the path/status that says which flavour it is.
   [[ -n "$spid" ]] || { KS_WHY=no-pane-pid; KS_DETAIL="tmux list-panes named no pane pid${ctxnote:+, $ctxnote}"; return 1; }
-  _cfg_dir_to sf "$wrapper"; sf="$sf/sessions/$spid.json"   # tick-diet spec §6.2: memoised per wrapper — an exact memo, no D-number (Task 5)
+  _cfg_dir_to sf "$wrapper"   # tick-diet spec §6.2: memoised per wrapper — an exact memo, no D-number (Task 5); `sf` holds the config dir until `_turn_reading` names the file
   # `-f` BEFORE THE GREP — same rung and same reason as `_auto_swap_check`'s
   # copy above, but NOT the same arm, and the difference is the whole point.
   # That lane has two answers here (idle / not) and folds every failure into a
@@ -21238,14 +21238,14 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # `-e` PAIRED WITH `-L` IN ONE STATEMENT, for D-1848's reason one lane over: a
   # DANGLING SYMLINK is not absence, and reporting it as "no status in" would
   # send the operator looking for a file that is not the problem.
-  if [[ ! -e "$sf" && ! -L "$sf" ]]; then
-    KS_WHY=status-unreadable; KS_DETAIL="no status in $sf${ctxnote:+, $ctxnote}"; return 1
-  elif [[ ! -f "$sf" ]]; then
-    KS_WHY=status-unreadable; KS_DETAIL="not a regular file: $sf${ctxnote:+, $ctxnote}"; return 1
+  # ARCH-50: the file is read once, by `_turn_reading`; the two failure sentences and this lane's policy line stay here.
+  if ! _turn_reading "$sf" "$spid"; then
+    KS_WHY=status-unreadable; KS_DETAIL="no status in $TR_SF${ctxnote:+, $ctxnote}"
+    [[ "$TR_WHY" == not-regular ]] && KS_DETAIL="not a regular file: $TR_SF${ctxnote:+, $ctxnote}"
+    return 1
   fi
-  st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
-  [[ -n "$st" ]] || { KS_WHY=status-unreadable; KS_DETAIL="no status in $sf${ctxnote:+, $ctxnote}"; return 1; }
-  [[ "$st" == "idle" ]] || { KS_WHY=not-idle; KS_DETAIL="status=$st${ctxnote:+ $ctxnote}"; return 1; }
+  sf="$TR_SF"; st="$TR_RAW"
+  [[ "$TR_WORD" == idle ]] || { KS_WHY=not-idle; KS_DETAIL="status=$st${ctxnote:+ $ctxnote}"; return 1; }
   # Quiet gate: only compact a session idle a beat — not the instant it goes idle, nor one just
   # touched from any surface (statusUpdatedAt ms ticks on every busy<->idle transition). Same
   # split for the same reason: a MISSING `statusUpdatedAt` is not "someone just touched it", and
@@ -21265,8 +21265,8 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
 }
 
 _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a session whose own context has
-  # grown past ITS threshold (the record's `compact` field, else COMPACT_THRESHOLD) so it stays lean. Non-destructive: the SessionStart(compact) hook
-  # restores git/plan/handoff context (Anthropic + gpt lanes). Kill-switch: AUTOCOMPACT_DISABLE_FILE.
+  # grown past ITS threshold (the record's `compact` field, else COMPACT_THRESHOLD) so it stays lean. The SessionStart(compact) hook restores git/plan/handoff
+  # context and, armed, a coordinator's runs, yet a compaction is NOT lossless on either lane (D4, #757). Kill-switch: AUTOCOMPACT_DISABLE_FILE.
   #
   # D-2013 — WHICH REFUSALS ARE NOTED, AND WHICH ARE NOT. Two of the three gates above the pane
   # read (kill-switch, lastcompact cooldown) say nothing, and so does the below-threshold return:
@@ -34967,7 +34967,7 @@ _WS_PHYS=''
 _WS_PHYS_WHY=''
 _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_PHYS_WHY (and _WS_PHYS '')
   #                         when it cannot be entered, its read lacks the sentinel, or the path holds a newline
-  # THE ONE PHYSICAL RESOLUTION its thirteen callers share: a directory a removal
+  # THE ONE PHYSICAL RESOLUTION its fourteen callers share: a directory a removal
   # or an in-use probe acts under, or a leaf a placement or a checkout question
   # is asked of. The three newline sites: `_ws_leaf_remove`'s root,
   # `_ws_path_users`' parent and `_ws_expire_cwd_users`' parent. The four
@@ -34990,10 +34990,13 @@ _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_
   # directory it is asked is resolved here, a fourth newline site (path-identity spec §4.6).
   # The thirteenth is the tail's re-ask, `_ws_reclaim_reask`, which resolves the child's own
   # tree afresh for the second proof of a nested checkout's path (review 790 F7).
+  # The fourteenth is the loose arm's file rung, `_ws_loose_rows_file`: the root a loose
+  # regular file stands in is resolved here, so a row spelled under that root's physical
+  # path is compared with the file's own (D-6858).
   # A bare `$(cd -- "$d" && pwd -P)` dropped EVERY
   # trailing newline: a root resolving to `<vol>\n` read as `<vol>`, so the
   # removal took `<vol>/<id>` and both probes answered "nobody". This speaks
-  # for its thirteen callers only. Bare captures stand elsewhere, and the ones
+  # for its fourteen callers only. Bare captures stand elsewhere, and the ones
   # named here are examples, not a census. Some fail closed: the tail's
   # `wdreal` and `_ws_reclaim_nested_proven`'s `real` (a truncated root makes
   # the containment proof refuse), and `_ws_leaf_remove`'s `lreal` (it must
@@ -35813,7 +35816,11 @@ _ws_leaf_uid() {   # path -> the uid that owns the path ITSELF (`ls -dn`: numeri
   printf '%s' "$u"
 }
 # ── does a leaf hold a checkout git records ELSEWHERE (child reclamation wave 6, spec §5.5, §5.6) ──
-WS_LEAF_CHECKOUTS_CAP=64   # the most `.git` entries one leaf's scan examines; more is unmeasured
+WS_LEAF_CHECKOUTS_CAP=1024   # the most `.git` entries one leaf's scan examines (a directory is not one: it needs no examination); more is
+#                                unmeasured. Measured (D-6860): ~20 ms an entry on the worst path (an outside admin directory with its
+#                                back-link), so 1024 is ~21 s; the examination is bounded by REAP_SCAN_SECONDS as well, so a slower box
+#                                stops unmeasured rather than overrunning it
+_WS_CHECKOUTS_CAPPED=''     # '1' when `_ws_leaf_checkouts` answered 2 because of that cap (a fixed fact of the leaf), else ''
 _WS_SMALL=''; _WS_SMALL_NUL=''
 _ws_leaf_read_small() {   # file -> 0 with _WS_SMALL = its bytes, each NUL read as a newline, and _WS_SMALL_NUL
   #                            = `inner` (a NUL stands before a byte that is not NUL, CR or LF), `trailing` (every
@@ -35868,7 +35875,7 @@ _ws_leaf_checkout_accepted() {   # admin back-link -> appends `<admin>=<back-lin
 }
 _ws_leaf_checkout_one() {   # leaf-physical .git-entry [alias accepted] -> 0 the leaf's own; 1 refused; 2 unmeasured (_WS_CHECKOUTS_WHY)
   # ONE `.git` entry, asked without following it (`_ws_leaf_checkouts` says why).
-  local lp="$1" f="$2" d="${2%/.git}" alias="${3-}" accepted="${4-}" buf gd rest adp rec rc pre
+  local lp="$1" f="$2" d="${2%/.git}" alias="${3-}" accepted="${4-}" buf gd rest lex adp rec rc pre
   if [[ -L "$f" ]]; then
     _WS_CHECKOUTS_WHY="$f is a symbolic link — git follows a .git link and ccd never does, so the tree at $d may be a checkout git records elsewhere"
     return 1
@@ -35894,9 +35901,12 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry [alias accepted] -> 0 the
   # after any other component — and any `..` in an absolute one — does not (a
   # link before it sends the kernel and a logical `cd` to two places), so it is
   # unmeasured rather than resolved one way and believed.
-  rest="$gd"
+  rest="$gd"; lex=''; spelled_rel=0
   if [[ "$gd" != /* ]]; then
-    while [[ "$rest" == ../* || "$rest" == ./* ]]; do rest="${rest#*/}"; done
+    spelled_rel=1
+    while [[ "$rest" == ../* || "$rest" == ./* ]]; do
+      rest="${rest#*/}"
+    done
     [[ "$rest" != .. && "$rest" != . ]] || rest=''
     gd="$d/$gd"
   fi
@@ -35918,8 +35928,21 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry [alias accepted] -> 0 the
     (( rc != 1 )) || { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, in the leaf's pre-move spelling, where something stands again — not the leaf's own"; return 1; }
     gd="${lp%/}${gd#"${alias%/}"}"
   fi
+  # Only an ABSOLUTE spelling (git's default) names a place the leaf can claim when its directory is absent; a
+  # relative one (--relative-paths) may be another session's tree moved in, so an absent one still refuses.
+  (( spelled_rel )) || lex="$gd"   # after the alias, the leaf's new place
   _ws_reclaim_absent "$gd"; rc=$?
-  (( rc != 0 )) || { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, which no longer exists — git no longer records the tree at $d"; return 1; }
+  if (( rc == 0 )); then
+    # A git directory SPELLED inside the leaf (no `.`/`..` segment, so the spelling is the place) and absent
+    # is the leaf's own fixture worktree whose admin dir was pruned or removed: no repository outside the
+    # leaf records the tree, and the removal takes the leaf whole. Outside it, absent still refuses.
+    case "/$lex/" in
+      */../*|*/./*|//) ;;
+      *) [[ "$lex/" != "${lp%/}/"?* ]] || return 0 ;;
+    esac
+    _WS_CHECKOUTS_WHY="$f names $gd as its git directory, which no longer exists — git no longer records the tree at $d"
+    return 1
+  fi
   (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — where $f's git directory stands was never asked"; return 2; }
   _ws_dir_physical "$gd" \
     || { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, which cannot be resolved ($_WS_PHYS_WHY)"; return 2; }
@@ -35993,13 +36016,17 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
   # not read hides what is under it) is unmeasured. Not pruned at a `.git`
   # directory: a tree can be parked inside a clone's `.git` as anywhere else,
   # and the removal takes it too; the bound, not a prune, caps the walk.
-  # At most `WS_LEAF_CHECKOUTS_CAP` entries are examined: more is unmeasured.
+  # At most `WS_LEAF_CHECKOUTS_CAP` entries are examined: more is unmeasured, and says
+  # so (`_WS_CHECKOUTS_CAPPED`, a fixed fact of the leaf). The examination itself is
+  # bounded by `REAP_SCAN_SECONDS` too: one that does not finish in time is unmeasured,
+  # a fact of the box's load, not of the leaf, so the cap flag stays unset.
   # EACH `.git`, by `-L`, `-d`, `-f`, never followed: a link refuses (git
   # would follow it, ccd never does); a directory passes (a full clone, the
   # leaf's own); a regular file is read AS A FILE (never by running git inside
   # the leaf) and must be one `gitdir: <path>` line, else unmeasured; the
   # directory it names resolved physically — absent refuses (git no longer
-  # records the tree), unresolvable is unmeasured, inside the leaf passes;
+  # records the tree) unless it is SPELLED inside the leaf, where it passes (a
+  # fixture worktree whose admin dir was pruned: nothing outside records it), unresolvable is unmeasured, inside the leaf passes;
   # outside it passes only as a linked worktree whose admin `gitdir` names
   # this `.git` back (literally, or by its directory's physical path; a
   # back-link with a NUL inside the path it names is refused, since git never
@@ -36014,9 +36041,9 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
   # absolutely inside the pre-move leaf is read at the leaf's new place while
   # nothing stands at that spelling. Every other caller passes neither, and
   # nothing it is answered changes.
-  local lp outf errf err rc f why='' n=0 alias="${2-}" accepted="${3-}"
+  local lp outf errf err rc f why='' n=0 deadline alias="${2-}" accepted="${3-}"
   local -a gits=()
-  _WS_CHECKOUTS_WHY=''; _WS_CHECKOUTS_ACCEPTED=''
+  _WS_CHECKOUTS_WHY=''; _WS_CHECKOUTS_ACCEPTED=''; _WS_CHECKOUTS_CAPPED=''
   if [[ -n "$alias" ]]; then
     [[ "$alias" == /* && "$alias" != *$'\n'* ]] \
       || { _WS_CHECKOUTS_WHY="the leaf's pre-move spelling '$alias' is not an absolute path, so no back-link is compared with it"; return 2; }
@@ -36041,13 +36068,17 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
     return 2
   fi
   while IFS= read -r -d '' f; do
+    [[ -d "$f" && ! -L "$f" ]] && continue   # a full clone passes unread (`_ws_leaf_checkout_one`'s rule), so a fixture-heavy leaf is not capped
     gits+=("$f"); n=$(( n + 1 ))
     (( n <= WS_LEAF_CHECKOUTS_CAP )) || break
   done < "$outf"
   rm -f "$outf"
   (( n <= WS_LEAF_CHECKOUTS_CAP )) \
-    || { _WS_CHECKOUTS_WHY="$lp holds more than $WS_LEAF_CHECKOUTS_CAP entries named .git, so not every checkout in it was examined"; return 2; }
+    || { _WS_CHECKOUTS_CAPPED=1; _WS_CHECKOUTS_WHY="$lp holds more than $WS_LEAF_CHECKOUTS_CAP entries named .git that are not directories, so not every checkout in it was examined"; return 2; }
+  deadline=$(( SECONDS + REAP_SCAN_SECONDS ))
   for f in ${gits[@]+"${gits[@]}"}; do
+    (( SECONDS < deadline )) \
+      || { _WS_CHECKOUTS_WHY="the examination of the .git entries in $lp did not finish within ${REAP_SCAN_SECONDS}s, so not every checkout in it was examined"; return 2; }
     _ws_leaf_checkout_one "$lp" "$f" "$alias" "$accepted"; rc=$?
     (( rc != 1 )) || return 1
     (( rc == 0 )) || [[ -n "$why" ]] || why="$_WS_CHECKOUTS_WHY"
@@ -39388,7 +39419,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   (( rc != 2 )) || { _ws_collect_unmeasured in-use "${_WS_PATH_USERS_WHY-}"; return 1; }
   (( rc != 1 )) || { _ws_collect_refuse in-use "a process of this uid still uses $leaf (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
   _ws_leaf_checkouts "$leaf"; rc=$?
-  (( rc != 2 )) || { _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
+  (( rc != 2 )) || { [[ -z "${_WS_CHECKOUTS_CAPPED-}" ]] || { _ws_collect_unmeasured checkouts-cap "${_WS_CHECKOUTS_WHY-}"; return 1; }; _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
   (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_CHECKOUTS_WHY-}"; return 1; }
   _ws_collect_rows_clear "$id" "$leaf"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured rows "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
@@ -40891,9 +40922,30 @@ _ws_loose_slug_held() {   # name -> 0 free (or not slug-shaped); 1 a registry fi
   _ws_slug_free "${n%-*}" "${n##*-}" || { _WS_LOOSE_WHY="a registry file of the id $n stands — the entry is no longer loose"; return 1; }
 }
 
+_ws_loose_rows_file() {   # file -> 0 no registry row names it or a path below it; 1 one does; 2 unmeasured (_WS_LOOSE_WHY)
+  #                            A standing regular file cannot be a session's workdir or hold one, so each row's spelling is
+  #                            read against the file's own, as written and under the root's physical path; nothing is resolved.
+  #                            (D-6858)
+  local p="${1-}" root phys='' f o w rc held='' unread=''
+  root="${p%/*}"; _ws_dir_physical "$root" && phys="${_WS_PHYS%/}/${p##*/}"
+  [[ -n "$phys" ]] || { _WS_LOOSE_WHY="${_WS_PHYS_WHY:-the root of the entry could not be resolved}, so a row spelled by its physical path was never compared"; return 2; }
+  f=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) || { _WS_LOOSE_WHY="could not list $REG"; return 2; }
+  while IFS= read -r o; do
+    [[ -n "$o" ]] || continue
+    o="${o##*/}"; o="${o%.workdir}"
+    w=$(_reg_read "$o" workdir); rc=$?
+    (( rc == 1 )) && continue   # gone between the listing and the read
+    (( rc == 0 )) || { unread+="${unread:+, }$o"; continue; }
+    [[ "$w" == "$p" || "$w" == "$p"/* || "$w" == "$phys" || "$w" == "$phys"/* ]] && held+="${held:+, }$o"
+  done <<< "$f"
+  [[ -z "$held" ]] || { _WS_LOOSE_WHY="registry row(s) lie at or through the entry — $held"; return 1; }
+  [[ -z "$unread" ]] || { _WS_LOOSE_WHY="registry row(s) $unread could not be read, so whether one names the entry was never asked"; return 2; }
+  return 0
+}
 _ws_loose_rows() {   # name path -> 0 no registry row lies at, inside or through path; 1 one does; 2 unmeasured (_WS_LOOSE_WHY)
   local n="${1-}" p="${2-}" rc
   _WS_LOOSE_WHY=''
+  [[ ! -f "$p" || -L "$p" ]] || { _ws_loose_rows_file "$p"; return; }   # a file is no workdir: the shared rung resolves its path as one
   _ws_reclaim_workdir_shared "$n" "$p" keep-own; rc=$?   # a row named for the entry itself is not skipped as its own
   if (( rc == 0 )); then
     [[ -z "$_WS_SHARED_ROWS$_WS_NESTED_ROWS$_WS_THROUGH_ROWS" ]] && return 0
@@ -41008,7 +41060,7 @@ _ws_loose_eval() {   # name hex -> the FRESH rungs: REAP_VERDICT `collectable` (
   _WS_CHECKOUTS_ACCEPTED=''
   if [[ "$_WS_LOOSE_TYPE" == d ]]; then
     _ws_leaf_checkouts "$path"; rc=$?
-    (( rc != 2 )) || { _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
+    (( rc != 2 )) || { [[ -z "${_WS_CHECKOUTS_CAPPED-}" ]] || { _ws_collect_unmeasured checkouts-cap "${_WS_CHECKOUTS_WHY-}"; return 1; }; _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
     (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_CHECKOUTS_WHY-}"; return 1; }
   fi
   _WS_LOOSE_ACCEPTED="${_WS_CHECKOUTS_ACCEPTED-}"
@@ -41394,6 +41446,24 @@ _ws_reap_crumb_unread() {   # id breadcrumb-as-read -> rc 0, having printed ws-r
 # fourteen). `wsaudit.test.ts` harvests the whole file, so both words are found.
 # ── end ws-reap's mirror ─────────────────────────────────────────────────── MIRROR-END ──
 
+_turn_reading() {   # config-dir pid -> TR_WHY ok|absent|not-regular|no-status, TR_WORD, TR_RAW, TR_SF; 0 iff why=ok
+  # ARCH-50 (K4): the ONE read of a session's status file, `<cfg>/sessions/<pid>.json`, for `_ws_status` and
+  # `_idle_for_keystroke`. It answers the same four words as the server's `turnWordOf` (`idle`, `busy`, `shell`, else
+  # `unknown`) and keeps the word as read in TR_RAW. Each caller keeps its own policy line over the result and its
+  # own failure vocabulary over TR_WHY. `_swap_idle_gate` is NOT a caller (D-5240, D-5349): it keeps its own verdict.
+  # `-e` paired with `-L` for D-1848's reason: a dangling symlink is not absence. `-f` before the grep for D-2379:
+  # `grep FILE` opens by name, and a FIFO with no writer would block for ever.
+  local sf="$1/sessions/$2.json" st
+  TR_SF="$sf"; TR_RAW=""; TR_WORD=unknown
+  if [[ ! -e "$sf" && ! -L "$sf" ]]; then TR_WHY=absent; return 1
+  elif [[ ! -f "$sf" ]]; then TR_WHY=not-regular; return 1
+  fi
+  st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
+  [[ -n "$st" ]] || { TR_WHY=no-status; return 1; }
+  TR_WHY=ok; TR_RAW="$st"
+  case "$st" in idle|busy|shell) TR_WORD="$st" ;; esac
+  return 0
+}
 # ── ws-reap's ignored read of a nested child (spec 2026-09-22 §1, §5.5) ────────
 # `_ws_reap_eval`'s per-child descent and `_ws_reap_locked`'s children-phase
 # resume each call this right after the child's `status` read, and each call

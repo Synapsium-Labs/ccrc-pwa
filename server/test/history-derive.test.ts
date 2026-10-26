@@ -13,7 +13,7 @@ import {
 } from './historyHelpers.js';
 import { compactionSequence, steeredBlock, userRow, type Row } from './historyFixtures.js';
 import {
-  leafId, historyPaths, NODE_PARSER_VERSION, GIST_MAX, NATIVE_GIST_MAX, TOPIC_CHARS, beltWidth, makePairIndex, secretPairs,
+  leafId, historyPaths, NODE_PARSER_VERSION, GIST_MAX, NATIVE_GIST_MAX, TOPIC_CHARS, beltWidth, makePairIndex, secretPairs, cardLine, displayPrefixes,
 } from '../../ccd/history/lib.mjs';
 import { createStore, openWriter, closeWriter, withTx, getStep, setStep } from '../../ccd/history/store.mjs';
 
@@ -1611,5 +1611,154 @@ describe('F13: deriveLeaves steps its scans one row at a time under the budget, 
       expect(ample.stepped.forks, 'CONTROL: an ample budget steps every candidate').toBe(CANDIDATES);
       expect(ample.all, 'CONTROL: still no all()').toEqual({ todo: 0, forks: 0 });
     } finally { closeWriter(db); }
+  }, 240_000);
+});
+
+// ── CP-39 Task 4 (D-6935, D-6939): every derivation step advances, whatever ingest and its discovery spent ─────────────────
+describe('CP-39 Task 4: every derivation step advances in a pass whose ingest or discovery spent the run (D-6935, D-6939)', () => {
+  const ID = 'claude-cp39-starve';
+  const U = '0189abcd-1234-4678-9abc-0000000039a1';
+  const SIDECARS = 150;
+  interface Budget { startMs: number; now: () => number }
+  interface SW {
+    passCtx(o: Record<string, unknown>): Record<string, unknown> & { budget: Budget };
+    idsFromFiles(P: unknown): { storeId: string; writer: string } | null;
+    tick(db: unknown, ctx: unknown): Promise<void>;
+    periodicCensus(db: unknown, ctx: unknown): void;
+    resetFtsPending(db: unknown): void;
+  }
+  /** A settled store (three spawned passes) whose leaves are wiped and whose every indexed blob is owed to the FTS backfill
+   *  again, a REAL card prediction on disk (the line the card step predicts for U's next compaction), and SIDECARS
+   *  unlinked sidecars: the backlog shape measured on the fleet box. */
+  const starve = (prefix: string): { box: HistoryBox; owed: number[]; settledAt: number; cardFile: string } => {
+    const box = makeHistoryBox(prefix);
+    const seq = compactionSequence({ n: 6, trigger: 'manual', seed: 0x39, sessionId: U, startMs: T0 });
+    plant(box, ID, U, seq.rows);
+    settle(box);
+    const settledAt = Date.now();
+    const w = openWriter(historyPaths(box.home).dbFile);
+    let owed: number[] = [];
+    try {
+      withTx(w, 'NORMAL', () => {
+        w.prepare('DELETE FROM node_refs').run();
+        w.prepare('DELETE FROM nodes_fts').run();
+        w.prepare('DELETE FROM nodes').run();
+        w.prepare("DELETE FROM derivation_state WHERE step = 'leaves'").run();
+        // The census's completion and W1-k's dates, which settle's passes wrote: the census asserted below is this pass's alone (P17).
+        w.prepare("DELETE FROM meta WHERE k IN ('export_census_ms', 'oldest_row_ms', 'first_due_ms', 'first_deletion_ms')").run();
+        owed = (w.prepare('SELECT blob_id FROM blobs WHERE fts_indexed = 1 ORDER BY blob_id').all() as { blob_id: number }[]).map((r) => r.blob_id);
+        for (const id of owed) {
+          w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(id);
+          w.prepare('UPDATE blobs SET fts_indexed = 0 WHERE blob_id = ?').run(id);
+        }
+      });
+    } finally { closeWriter(w); }
+    const dir = path.join(box.accountHome['claude']!, 'projects', SLUG, U, 'tool-results');
+    fs.mkdirSync(dir, { recursive: true });
+    for (let k = 0; k < SIDECARS; k += 1) fs.writeFileSync(path.join(dir, `cp39-${String(k).padStart(3, '0')}.txt`), `cp39 unlinked body ${k}\n`);
+    const cardFile = path.join(box.root, 'card', ID, `${U}.txt`);
+    fs.mkdirSync(path.dirname(cardFile), { recursive: true });
+    // A REAL card line (P1), never placeholder text: a card step that may not write deletes a file that is no card line
+    // (lib decideCardFile), and the withdrawal after it would find nothing to count. This is the line for U's next
+    // compaction: its leaf starts at the last boundary's head (lib predictedSpanStart), with no parent (six leaves make no
+    // fan-in group and no condensed node). Should the pass's own prediction print it otherwise (a parent, a longer prefix),
+    // decideCardFile's same-leaf arm still keeps it whenever the step may not write.
+    const leaf = leafId(ID, U, seq.headUuids[5]!);
+    fs.writeFileSync(cardFile, `${cardLine({ leaf: displayPrefixes([leaf]).get(leaf)!, parent: null })}\n`);
+    return { box, owed, settledAt, cardFile };
+  };
+  /** One in-process scheduled pass, past SCAN_INTERVAL_MS after the settle (every scan and the census are due) and inside the
+   *  export pass's hour (it waits). `limits`, when given, are the run's (deps.budget). Answers how far the budget's clock
+   *  moved from the run's start. */
+  const pass = async (box: HistoryBox, settledAt: number, jumpMs = 0, limits?: { maxMs?: number; maxBytes?: number }, at = '/tool-results'): Promise<number> => {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as SW;
+    const { syncBuiltinESMExports } = await import('node:module');
+    const P = historyPaths(box.home);
+    let t = settledAt + 40 * 60_000;
+    const ctx = S.passCtx({
+      home: box.home, P, ids: S.idsFromFiles(P), now: () => t, out: () => undefined,
+      parsed: { homes: box.homes, secrets: [], unanswered: [], rosterUnreadable: false },
+      deps: { managedSettings: [], ...(limits === undefined ? {} : { budget: limits }) }, pause: null, ingest: true,
+    });
+    ctx.budget.now = () => (t += 1_000);   // the budget's `now` seam: only budget reads move the clock
+    const realReaddir = fs.readdirSync;
+    let listed = false;
+    let jumped = false;
+    (fs as { readdirSync: unknown }).readdirSync = function readdirSync(p: unknown, ...rest: unknown[]): unknown {
+      if (String(p).endsWith(at)) {
+        listed = true;
+        if (!jumped && jumpMs > 0) { jumped = true; t += jumpMs; }
+      }
+      return (realReaddir as (...a: unknown[]) => unknown).call(fs, p, ...rest);
+    };
+    syncBuiltinESMExports();
+    const db = openWriter(P.dbFile);
+    try {
+      S.resetFtsPending(db);
+      await S.tick(db, ctx);
+      S.periodicCensus(db, ctx);
+    } finally {
+      (fs as { readdirSync: unknown }).readdirSync = realReaddir;
+      syncBuiltinESMExports();
+      closeWriter(db);
+    }
+    expect(listed, `CONTROL: a listing of ${at} ran`).toBe(true);
+    if (jumpMs > 0) expect(jumped, 'CONTROL: the jump was taken inside the first such listing').toBe(true);
+    return t - ctx.budget.startMs;
+  };
+  const seenOf = (box: HistoryBox): number => q<{ n: number }>(box, 'SELECT count(*) AS n FROM sidecar_seen')[0]!.n;
+  const indexedOf = (box: HistoryBox, owed: number[]): number =>
+    q<{ n: number }>(box, `SELECT count(*) AS n FROM blobs WHERE fts_indexed = 1 AND blob_id IN (${owed.join(',')})`)[0]!.n;
+
+  it('an ingest that overran its ceiling: the FTS backfill and the leaves advance in the same pass, and the pass ends near the run budget', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const { box, owed, settledAt } = starve('ccrc-hist-cp39-starve-a-');
+    expect(owed.length, 'CONTROL: more owed blobs than the FTS step can take in one pass, so it runs to its limit').toBeGreaterThan(30);
+    const spent = await pass(box, settledAt);
+    expect(seenOf(box), 'CONTROL: the budget cut the ingest, sidecars left').toBeLessThan(SIDECARS);
+    const indexed = indexedOf(box, owed);
+    expect(indexed, 'the FTS backfill indexed owed blobs in the same pass').toBeGreaterThan(0);
+    expect(indexed, 'CONTROL: the backlog outlasted the FTS step').toBeLessThan(owed.length);
+    expect(leavesOf(box, U).length, 'the leaves were derived in the same pass').toBeGreaterThan(0);
+    // Ingest ended at its ceiling, so the steps after it shared what the run had left and the pass ended near RUN_BUDGET_MS.
+    // An ingest on the whole run would leave each step only its floor past it: about RUN_BUDGET_MS plus the floors' 36 s.
+    expect(spent, 'the pass ended within the run budget plus half the floors\' sum').toBeLessThanOrEqual(lib.RUN_BUDGET_MS + 18_000);
+  }, 240_000);
+
+  it('a discovery that overran the whole run before any derivation step: the FTS backfill, the leaves, the card step and the export census each still advance, on its own floor (P13)', async () => {
+    const { box, owed, settledAt, cardFile } = starve('ccrc-hist-cp39-starve-b-');
+    const metaOf = (k: string): string | null => q<{ v: string }>(box, 'SELECT v FROM meta WHERE k = ?', k)[0]?.v ?? null;
+    expect(metaOf('export_census_ms'), 'CONTROL: no census completion stands before the pass').toBeNull();
+    expect(fs.existsSync(cardFile), 'CONTROL: a prediction stands before the pass').toBe(true);
+    await pass(box, settledAt, 100_000);   // past the 70 s the ruling names, and past the whole 90 s run
+    expect(seenOf(box), 'CONTROL: the discovery overran and the ingest was cut').toBeLessThan(SIDECARS);
+    expect(indexedOf(box, owed), 'the FTS backfill indexed owed blobs on its floor').toBeGreaterThan(0);
+    expect(leavesOf(box, U).length, 'the leaves were derived on their floor').toBeGreaterThan(0);
+    expect(counters(box)['card_withdrawn:budget'], 'the card step ran on its floor: no prediction withdrawn for budget').toBeUndefined();
+    expect(fs.existsSync(cardFile), 'the prediction stands: the card step kept it, and no withdrawal took it').toBe(true);
+    const after = metaOf('export_census_ms');
+    expect(after, 'the census completed in this pass, on its floor').not.toBeNull();
+    expect(Number(after), 'a census of this pass, after the settle').toBeGreaterThanOrEqual(settledAt + 40 * 60_000);
+    for (const k of ['oldest_row_ms', 'first_due_ms', 'first_deletion_ms']) expect(metaOf(k), `${k} recorded`).not.toBeNull();
+  }, 240_000);
+
+  it("the card step's own floor, positive and spent before its first check: the prediction left is withdrawn, counted card_withdrawn:budget (P1)", async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const { box, settledAt, cardFile } = starve('ccrc-hist-cp39-starve-c-');
+    // A run of 18 s, injected through deps.budget, the seam the floors are derived from (DERIVE_SHARES of the run's limits).
+    const limits = { maxMs: 18_000 };
+    // The card's floor, read from lib (never hand-copied arithmetic): positive, and under the clock's 1 s step.
+    const cardFloor = lib.budgetFloors({ maxMs: limits.maxMs, maxBytes: lib.RUN_BUDGET_BYTES }).card.maxMs;
+    expect(cardFloor, "CONTROL: the card's floor is positive").toBeGreaterThan(0);
+    expect(cardFloor, "CONTROL: the card's floor is under the 1 s the clock moves between the slice's start and its first check").toBeLessThan(1_000);
+    expect(fs.existsSync(cardFile), 'CONTROL: a prediction stands before the pass').toBe(true);
+    // The jump puts the card step past its 16.2 s ceiling (budgetRungs: 18 s less the census's 100 per mille), so its slice
+    // is its floor alone, from its own start; the slice's first check is 1 s later, past its floor. It is taken in the first
+    // listing of a projects/ directory, not of tool-results/: an 18 s run's ingest ceiling (10.8 s, at a 1 s step a budget read)
+    // is spent in discovery before any tool-results/ listing, so that listing never runs in this arm.
+    await pass(box, settledAt, 100_000, limits, '/projects');
+    expect(seenOf(box), 'CONTROL: the discovery overran and the ingest was cut').toBeLessThan(SIDECARS);
+    expect(counters(box)['card_withdrawn:budget'], "the card step's own positive floor was spent: its prediction withdrawn, counted for budget").toBe(1);
+    expect(fs.existsSync(cardFile), 'the prediction is gone').toBe(false);
   }, 240_000);
 });

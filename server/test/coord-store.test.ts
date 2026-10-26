@@ -28,7 +28,8 @@ import {
 } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { redactCommand } from '../src/coord/redact.js';
-import { okRun, okRuns, okSiblings } from './coordReadHelpers.js';
+import { okRun, okRuns, okSiblings, parentOfSession } from './coordReadHelpers.js';
+import { claimantsOfSession, coordinatorOfRun } from '../src/coord/bindingReads.js';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   DelegationModelError, delegationActivityCodec, delegationAttemptCodec, delegationEventCodec, delegationIntentKey, delegationLeaseCodec, delegationLineageCodec,
@@ -1755,7 +1756,7 @@ describe('CoordStore: programs', () => {
   it('writes programs.state through a real setter, and unwedges resolveCoordinator once a finished program is retired (found in a later Task 3 review, D-26)', () => {
     // Before this fix `programs.state` had no writer beyond `openRun`'s
     // hardcoded 'active' at first open — so once a SECOND program opened,
-    // `resolveCoordinator(null)` (the shipped ingress's `toId:'coordinator'`
+    // `soleActiveCoordinator()` (the shipped ingress's `toId:'coordinator'`
     // resolution) died permanently: two 'active' rows is `ambiguous`, and
     // nothing in the build could ever move the first one out of `active`,
     // even after every one of its runs was done. This is the failure
@@ -1763,15 +1764,15 @@ describe('CoordStore: programs', () => {
     const s = store();
     s.openRun({ program: 'p1', title: 'Program one', project: 'ccrc-pwa',
                 wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordA' });
-    expect(s.resolveCoordinator(null)).toBe('ccrc-pwa-coordA');
+    expect(s.soleActiveCoordinator()).toBe('ccrc-pwa-coordA');
 
     s.openRun({ program: 'p2', title: 'Program two', project: 'ccrc-pwa',
                 wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordB' });
-    expect(s.resolveCoordinator(null)).toBeNull();          // two active programs: ambiguous
+    expect(s.soleActiveCoordinator()).toBeNull();          // two active programs: ambiguous
 
     s.setProgramState('p1', 'done');
     expect(s.programs()).toContainEqual({ slug: 'p1', title: 'Program one', state: 'done' });
-    expect(s.resolveCoordinator(null)).toBe('ccrc-pwa-coordB');   // unwedged: p2 is the sole active program
+    expect(s.soleActiveCoordinator()).toBe('ccrc-pwa-coordB');   // unwedged: p2 is the sole active program
   });
 
   it('resolves \'coordinator\' to the NAMED RUN\'s own claim when a runId is given (fix-round finding 6) — zero coverage anywhere in the tree before this', () => {
@@ -1788,9 +1789,9 @@ describe('CoordStore: programs', () => {
       wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordA' }) as { id: number };
     const b = s.openRun({ program: 'pB', title: 'B', project: 'ccrc-pwa',
       wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordB' }) as { id: number };
-    expect(s.resolveCoordinator(a.id)).toBe('ccrc-pwa-coordA');
-    expect(s.resolveCoordinator(b.id)).toBe('ccrc-pwa-coordB');
-    expect(s.resolveCoordinator(4242)).toBeNull();   // no such run — absent, not ambiguous
+    expect(coordinatorOfRun(s, a.id)).toBe('ccrc-pwa-coordA');
+    expect(coordinatorOfRun(s, b.id)).toBe('ccrc-pwa-coordB');
+    expect(coordinatorOfRun(s, 4242)).toBeNull();   // no such run — absent, not ambiguous
   });
 
   it('setDeliveryEnvelope overwrites a delivery\'s stored envelope in place, without touching mailId/toId/state', () => {
@@ -2786,10 +2787,10 @@ describe('CoordStore.openClaimantsOf — every coordinator a session currently w
       wave: 1, waveOf: null, claimedBy: 'coord-2' }) as { id: number };
     s.setSession(newer.id, 'demo-alpha');
     expect(older.id).toBeLessThan(newer.id);
-    expect(s.openClaimantsOf('demo-alpha')).toEqual(['coord-2', 'coord-1']);
+    expect(claimantsOfSession(s, 'demo-alpha')).toEqual(['coord-2', 'coord-1']);
     // …and THIS is the difference the doors needed: the same fixture through
     // the newest-only read hides `coord-1` entirely.
-    expect(s.parentOfSession('demo-alpha')).toBe('coord-2');
+    expect(parentOfSession(s, 'demo-alpha')).toBe('coord-2');
   });
 
   it('excludes a TERMINAL run\'s claimant — a finished worker is not a worker', () => {
@@ -2803,7 +2804,7 @@ describe('CoordStore.openClaimantsOf — every coordinator a session currently w
     const open = s.openRun({ program: 'prog-b', title: 'B', project: 'p',
       wave: 1, waveOf: null, claimedBy: 'coord-2' }) as { id: number };
     s.setSession(open.id, 'demo-alpha');
-    expect(s.openClaimantsOf('demo-alpha')).toEqual(['coord-2']);
+    expect(claimantsOfSession(s, 'demo-alpha')).toEqual(['coord-2']);
   });
 
   it('an OWNERLESS open row contributes nothing — there is no id to name (D-3012)', () => {
@@ -2813,14 +2814,14 @@ describe('CoordStore.openClaimantsOf — every coordinator a session currently w
     s.setSession(orphan.id, 'demo-alpha');
     // The shape `reconstruct` writes and `openRun`'s D-12 clause skips.
     tx(s.db, () => { s.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(orphan.id); });
-    expect(s.openClaimantsOf('demo-alpha')).toEqual([]);
+    expect(claimantsOfSession(s, 'demo-alpha')).toEqual([]);
     // NOT `[null]` and not a hole in the list: the guard reads ids, and the
     // admission for an ownerless run is the doors' ruling, not this read's.
-    expect(s.openClaimantsOf('demo-alpha').every((c) => typeof c === 'string')).toBe(true);
+    expect(claimantsOfSession(s, 'demo-alpha').every((c) => typeof c === 'string')).toBe(true);
   });
 
   it('answers [] for a session no run names at all', () => {
-    expect(store().openClaimantsOf('demo-nobody')).toEqual([]);
+    expect(claimantsOfSession(store(), 'demo-nobody')).toEqual([]);
   });
 });
 
@@ -3061,7 +3062,7 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
     // reach first, and a rewrite that skipped it leaves them on the corpse.
     expect(okRun(s.run(ids[0]!))!.state).toBe('done');
     expect(ids.map((id) => okRun(s.run(id))!.claimedBy)).toEqual([LIVE, LIVE, LIVE, LIVE, LIVE]);
-    expect(s.resolveCoordinator(null)).toBe(LIVE);
+    expect(s.soleActiveCoordinator()).toBe(LIVE);
     expect(openRun(s, { wave: 6, waveOf: 6, claimedBy: LIVE })).toMatchObject({ state: 'planned' });
   });
 
@@ -3287,7 +3288,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const s = store();
     const ids = waves(s);
     // Reachable, not hypothetical: `POST /api/mail` accepts `{toId:'coordinator',
-    // runId:null}` and resolves it through `resolveCoordinator(null)`'s
+    // runId:null}` and resolves it through `soleActiveCoordinator()`'s
     // single-active-program arm. Once queued, nothing on the row records WHICH
     // program the sender meant — the resolution is spent — so repointing it would
     // be a guess on a door whose whole discipline is refusing to guess. The inner

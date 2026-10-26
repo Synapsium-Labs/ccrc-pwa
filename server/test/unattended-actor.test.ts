@@ -226,7 +226,7 @@ const SITES: readonly Site[] = [
   // trigger and the sweep — so the label carries the trigger, and the minting
   // run the `--child-of` names.
   { file: 'coord/childReclaim.ts', what: 'the child-reclaim act (one executor, both triggers)',
-    find: /CCD_ARGV\.wsReclaim\(token, req\.runId, req\.sessionId, req\.deferExpired,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\)/,
+    find: /CCD_ARGV\.wsReclaim\(token, req\.runId, req\.sessionId, req\.deferExpired,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\), req\.stale\)/,
     label: '`run:${req.runId} reclaim ${req.trigger}`' },
   // The hold-release job: a SEPARATE `wsRelease` site from `close.ts`'s five
   // and `dispatch.ts`'s one — this one runs from the sweep, with no human in

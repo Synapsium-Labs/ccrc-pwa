@@ -188,6 +188,36 @@ describe('summarizeReplay: not-proven failures stay out of recall', () => {
   });
 });
 
+describe('a multi-stamp map (a bounded refresh carries old records): replay and runtimeShare use the stale change sets', () => {
+  const SHA_OLD = 'b'.repeat(40);
+  const map: TestMap = {
+    format: 1, sha: SHA_A, baseline: emptyDep(),
+    tests: {
+      'server/test/fresh.test.ts': rec({ read: ['server/src/fresh.ts'], tracedAt: SHA_A }),
+      'server/test/carried.test.ts': rec({ read: ['server/src/carried.ts'], tracedAt: SHA_OLD }),
+    },
+  };
+  const durations = { 'server/test/fresh.test.ts': 100, 'server/test/carried.test.ts': 300 };
+  const miss = new Map([[SHA_OLD, [{ status: 'M' as const, path: 'docs/unrelated.md', symlink: false }]]]);
+  const hit = new Map([[SHA_OLD, [{ status: 'M' as const, path: 'server/src/carried.ts', symlink: false }]]]);
+
+  it('selects per file when the stale range does not touch the carried test', () => {
+    const r = replayCase({ map, changedFiles: ['server/src/fresh.ts'], failingTestFiles: ['server/test/fresh.test.ts'], existsAt: () => true, staleChanges: miss });
+    expect(r).toEqual({ selected: ['server/test/fresh.test.ts'], missed: [], notProven: [], mode: 'selected' });
+    expect(runtimeShare({ map, changedFiles: ['server/src/fresh.ts'], existsAt: () => true, durations, staleChanges: miss })).toBeCloseTo(0.25);
+  });
+
+  it('answers full when the stale range touches the carried test', () => {
+    const r = replayCase({ map, changedFiles: ['server/src/fresh.ts'], failingTestFiles: [], existsAt: () => true, staleChanges: hit });
+    expect(r.mode).toBe('full');
+    expect(runtimeShare({ map, changedFiles: ['server/src/fresh.ts'], existsAt: () => true, durations, staleChanges: hit })).toBe(1);
+  });
+
+  it('without a change set for the stamp the carried record is uncertain, so full', () => {
+    expect(replayCase({ map, changedFiles: ['server/src/fresh.ts'], failingTestFiles: [], existsAt: () => true }).mode).toBe('full');
+  });
+});
+
 describe('runtimeShare: the selected share of server RUNTIME (spec §11.3), not of file count', () => {
   const map: TestMap = {
     format: 1, sha: SHA_A, baseline: emptyDep(),

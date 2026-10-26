@@ -121,9 +121,10 @@ describe('ccd journals its own keystrokes in $REG/<id>.typed', () => {
   it('the settle journals its /effort before it types it', () => {
     seed();
     h.sh(`${STUBS} _inject_spawn_effort cc-${ID}`, { PANE_TEXT: READY });
-    expect(h.calls()).toContain(`tmux send-keys -t =cc-${ID}: -l /effort ultracode`);
+    // The box default is `high` since coordinator clause 19 (operator ruling 2026-10-25).
+    expect(h.calls()).toContain(`tmux send-keys -t =cc-${ID}: -l /effort high`);
     expect(typedRows()).toHaveLength(1);
-    expect(typedRows()[0]).toMatch(/^\d{10} effort ultracode$/);
+    expect(typedRows()[0]).toMatch(/^\d{10} effort high$/);
   });
 
   it('a session whose record carries an effort types nothing and journals nothing', () => {
@@ -547,7 +548,7 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     h.sh(`sleep() { :; }; tmux() { ${WIDE_PANE} case "\${1:-}" in capture-pane) printf '? for shortcuts\\n❯ \\n' ;; esac; return 0; };
       _pane_box_draft() { printf ''; }; _inject_spawn_effort cc-${ID}`);
     const t = now() + 2;
-    writeTranscript([cmd(t, 'effort', 'ultracode'), ack(t, ULTRACODE_ACK)]);
+    writeTranscript([cmd(t, 'effort', 'high'), ack(t, EFFORT_ACK('high'))]);   // the box default the settle typed
     keep();
     expect(h.reg(ID, 'effort'), 'the box default became an operator choice').toBeNull();
   });

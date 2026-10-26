@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseRoster, RosterError, POOL_NAME_RE } from '../../shared/roster.js';
+import { parseRoster, RosterError, POOL_NAME_RE, CODEX_BRIDGE_MODES, CODEX_UPSTREAMS } from '../../shared/roster.js';
 
 const one = (over: Record<string, unknown> = {}) => ({
   version: 1,
@@ -332,7 +332,69 @@ describe('parseRoster', () => {
       kind: 'codex', provider: 'openai',
       proxyPort: 45010, litellmPort: 45011,
       authDir: '.local/share/ccrc/codex/codex-a',
+      bridge: 'litellm', upstream: 'backend',
     });
+  });
+
+  // ── exec.bridge and exec.upstream (codex-bridge Stage 2, Task 10; spec D20) ──
+  // Additive: a roster written before the bridge has neither key, and it must
+  // keep meaning what it meant — a LiteLLM lane on the backend route. The
+  // default is the FIRST entry of each set, spelled nowhere else.
+  it('the two sets are the spec\'s words, the default first', () => {
+    expect([...CODEX_BRIDGE_MODES]).toEqual(['litellm', 'direct']);
+    expect([...CODEX_UPSTREAMS]).toEqual(['backend', 'siwc']);
+  });
+
+  it('a codex lane with neither key reads bridge litellm and upstream backend', () => {
+    const e = parseRoster(withCodex()).byId.get('codex-a')!.exec;
+    if (e.kind !== 'codex') throw new Error('expected the codex arm');
+    expect(e.bridge).toBe('litellm');
+    expect(e.upstream).toBe('backend');
+  });
+
+  it.each([
+    ['direct', 'backend'], ['litellm', 'siwc'], ['direct', 'siwc'],
+  ] as const)('a codex lane may name bridge %s and upstream %s, and keeps both', (bridge, upstream) => {
+    const e = parseRoster(withCodex({ bridge, upstream })).byId.get('codex-a')!.exec;
+    if (e.kind !== 'codex') throw new Error('expected the codex arm');
+    expect(e.bridge).toBe(bridge);
+    expect(e.upstream).toBe(upstream);
+  });
+
+  it('naming either key draws no unknown-key warning on a codex lane', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      parseRoster(withCodex({ bridge: 'direct', upstream: 'backend' }));
+      expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => /bridge|upstream/.test(m))).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // A present value outside the set is REFUSED, never read as the default: a
+  // typo of `direct` that quietly ran the lane on LiteLLM would be a switch the
+  // operator asked for and never got. A written `null` is refused too (absence
+  // is the default, a null is a half-edit), as `pool` refuses one.
+  it.each([
+    ['an unknown word', 'proxy'], ['a near miss', 'Direct'], ['a written null', null],
+    ['a number', 1], ['an empty string', ''], ['a name Object.prototype carries', 'toString'],
+  ])('refuses exec.bridge as %s (bad-exec-bridge)', (_why, bridge) => {
+    let caught: unknown;
+    try { parseRoster(withCodex({ bridge })); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(RosterError);
+    expect((caught as RosterError).message).toMatch(/account "codex-a" has an invalid exec\.bridge/);
+    expect((caught as RosterError).remedy).toMatch(/"litellm" or "direct"/);
+  });
+
+  it.each([
+    ['an unknown word', 'chatgpt'], ['a near miss', 'Backend'], ['a written null', null],
+    ['a number', 0], ['an empty string', ''], ['a name Object.prototype carries', 'constructor'],
+  ])('refuses exec.upstream as %s (bad-exec-upstream)', (_why, upstream) => {
+    let caught: unknown;
+    try { parseRoster(withCodex({ upstream })); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(RosterError);
+    expect((caught as RosterError).message).toMatch(/account "codex-a" has an invalid exec\.upstream/);
+    expect((caught as RosterError).remedy).toMatch(/"backend" or "siwc"/);
   });
 
   it('a codex lane may carry a secretsFile, like every other kind', () => {

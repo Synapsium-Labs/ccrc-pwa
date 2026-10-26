@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 47 id-taking calls across 13 files.
+// THE CLAIM: 48 id-taking calls across 14 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -49,7 +49,11 @@ const ID_BUILDERS = {
   ensure: 'id', stopId: 'id', stopPair: 'id', forget: 'id', swap: 'id', swapCross: 'id',
   swapInterrupt: 'id', swapCrossInterrupt: 'id', hibernate: 'id',
   wsAdd: 'no-id', wsAddNamed: 'no-id', wsAddWorker: 'no-id',
-  prStateSession: 'id', prStateProject: 'no-id', prOpen: 'id',
+  prStateSession: 'id', prStateProject: 'no-id',
+  // D-6784: `prLanding`'s ids ride inside `<id>:<pr>` pairs the builder validates itself, never as a bare argv word.
+  // The lane's ids come from the registry listing (the project's own sessions), never from a request body; the
+  // call site PL-4 adds must keep it so, since this row is not checked for a gate over where its ids come from.
+  prLanding: 'no-id', prOpen: 'id',
   wsArchive: 'id', wsRestore: 'id', wsAudit: 'id', wsReap: 'id',
   wsReclaimAudit: 'id', wsReclaim: 'id', wsExpireAudit: 'id', wsExpire: 'id',
   wsCollectAudit: 'id', wsCollect: 'id', wsAttic: 'id',
@@ -340,6 +344,12 @@ const GATES = {
     file: 'coord/staleArchive.ts', scope: 'act',
     re: /deps\.rowNow\(rec\)[\s\S]*?capSupported\(deps\.fleetState, ARCHIVE_IF_NO_PANE_CAP\)/,
   },
+  /** The stale arm's mail step refuses a non-registry id before its `ws-attic` argv (it also runs behind the executor's
+   *  `readSessionRecord` `bad-id` deferral). */
+  'stale-told-guard': {
+    file: 'coord/childReclaimStale.ts', scope: 'childReclaimStaleTold',
+    re: /ask === undefined \|\| !isRegistryId\(req\.sessionId\)\) return;/,
+  },
   /** Expiry's step 0, before its capability read. */
   'expiry-step-0': { file: 'coord/expireArchived.ts', scope: 'expireArchived', re: EXPIRY_STEP_0 },
   /** The learning audit's own step 0, before its capability read. */
@@ -403,6 +413,7 @@ const CENSUS: readonly CensusRow[] = [
   // coord/childReclaim.ts: the close path's child gate (masked by close's gates) and the sweep both reach the one executor.
   { file: 'coord/childReclaim.ts', scope: 'childReclaimAudit', builder: 'wsReclaimAudit', id: 'req.sessionId', origin: ['stored', 'registry'], gate: ['child-reclaim-outcome'] },
   { file: 'coord/childReclaim.ts', scope: 'childReclaimAct', builder: 'wsReclaim', id: 'req.sessionId', origin: ['stored', 'registry'], gate: ['child-reclaim-outcome'] },
+  { file: 'coord/childReclaimStale.ts', scope: 'childReclaimStaleTold', builder: 'wsAttic', id: 'req.sessionId', origin: ['stored', 'registry'], gate: ['stale-told-guard'] },
   { file: 'coord/childReclaim.ts', scope: 'releaseRetiredChildHold', builder: 'wsRelease', id: 'sessionId', origin: ['registry'], gate: ['readSessionRecord'], entry: /\breadSessionRecord\(deps\.io, deps\.cfg, sessionId\)/ },
   // coord/childSpent.ts: `rec` is a FOUND row of `readSessionRecord` (childBindGate, childGateAtClose). The read is in
   // the callers, so the row has no `entry`: the callers case below pins who calls `childSpent` and `childSpentLive`, and
@@ -478,9 +489,11 @@ const CENSUS: readonly CensusRow[] = [
 const GATE_FILES = [
   'server.ts', 'registry.ts', 'watch.ts',
   'coord/routes.ts', 'coord/route.ts', 'coord/openRun.ts', 'coord/advance.ts', 'coord/dispatchDecide.ts', 'coord/closeDecide.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
-  'coord/expireArchived.ts',
+  'coord/expireArchived.ts', 'coord/childReclaimStale.ts',
   // orphanTreeLane.ts (D-6635): the orphan census's `inside` id is vetted by the predicate before the lane reads that row.
   'orphanTreeLane.ts',
+  // coord/siblingRead.ts (D-6923): a sibling run's `claimedBy` is vetted by the predicate before the registry read.
+  'coord/siblingRead.ts',
 ] as const;
 
 const IMPORTS_PREDICATE = /import\s*\{[^}]*\bisRegistryId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/;
@@ -521,7 +534,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     }
   });
 
-  it('the header claim, "47 id-taking calls across 13 files", matches the scan', () => {
+  it('the header claim, "48 id-taking calls across 14 files", matches the scan', () => {
     const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
     const claim = /^\/\/ THE CLAIM: (\d+) id-taking calls across (\d+) files\b/m.exec(self);
     expect(claim, 'the census claim was removed or reworded without its guard').not.toBeNull();
