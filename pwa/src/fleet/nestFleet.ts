@@ -34,7 +34,9 @@
 // it and re-inserts it one line below its parent. Nothing here re-sorts the
 // top level — a child's position is a fact about the programme, everyone
 // else's is a fact about the fleet, and the two orders must not contend.
-import type { FleetSession, RunSummary } from '../../../shared/api';
+import type {
+  DelegationActivityWire, DelegationLeaseWire, DelegationUnownedWire, FleetSession, RunSummary,
+} from '../../../shared/api';
 import { isDispatchPending, workerOf } from './runWords';
 
 /** How deep a row sits. ONE level, deliberately — see `nestFleet`'s rule 4. */
@@ -47,8 +49,24 @@ export type RowDepth = 0 | 1;
  *  "this row is a phantom" and "this row's session could not be read" the same
  *  value at the seam. */
 export type FleetRow =
-  | { kind: 'session'; depth: RowDepth; session: FleetSession }
-  | { kind: 'pending'; depth: RowDepth; run: RunSummary };
+  | { kind: 'session'; depth: RowDepth; session: FleetSession; delegated?: readonly DelegationActivityWire[] }
+  | { kind: 'pending'; depth: RowDepth; run: RunSummary }
+  | { kind: 'activity'; depth: 1; activity: DelegationActivityWire; group: DelegationGroupKind | null }
+  | { kind: 'lease'; depth: 1; lease: DelegationLeaseWire; via: string | null; group: DelegationGroupKind | null }
+  | { kind: 'unowned'; depth: 1; item: DelegationUnownedWire; group: 'unowned' }
+  | { kind: 'delegation-group'; depth: 0; group: DelegationGroupKind; count: number };
+
+/** The two groups a card's delegation rows can sit in when no listed session is their parent (rules 9 and 10). */
+export type DelegationGroupKind = 'offline-coordinator' | 'unowned';
+
+/** One card's slice of the `delegation` frame, routed by `fleetTree` (delegation broker wave 4). `null` = the
+ *  projection is unavailable, which is NOT an empty slice: only a slice adds delegation rows. */
+export interface CardDelegation {
+  readonly card: string;
+  readonly activities: readonly DelegationActivityWire[];
+  readonly leases: readonly DelegationLeaseWire[];
+  readonly unowned: readonly DelegationUnownedWire[];
+}
 
 /** PROGRAMME ORDER, the base comparator — `attentionFirst` below puts ONE key
  *  ahead of it (spec §6, wave 2; D-3008): wave ascending, then run id
@@ -118,10 +136,30 @@ const attentionFirst =
  *     row the run has already bound, since two rows for one spawn is worse
  *     than none. With no parent on this list it renders at top level rather
  *     than vanishing: the operator still needs to know a spawn is happening.
+ *
+ * Rules 6 to 11 are the delegation broker's rows (wave 4, spec §5.8), drawn from the card's slice of the
+ * `delegation` frame by {@link delegationPass} after the five rules above have decided every session row:
+ *
+ *  6. ABSENCE PERMITS. With no slice the code path is today's exactly, and an empty slice adds nothing either.
+ *  7. DELEGATION EDGES NEVER SHAPE THE PROGRAMME TREE. No activity or worktree makes a parent or places a child, and a
+ *     worktree whose path is a listed session's `workdir` is not drawn: that session's row, bracketed by its run, is
+ *     the honest row. A re-check beside the server's own precedence, legitimately different: the `fleet` and
+ *     `delegation` frames arrive separately, so the session can be here before the next frame drops the worktree.
+ *  8. ONE LEVEL, AS THE SERVER DECIDED IT. A worktree goes under its display parent (`parentId`) with the wire's
+ *     `via`; a worktree whose parent sits at depth 1 here (the frames skew) goes under that worker's bracket parent,
+ *     `via` the worker. An activity placed `chip`, or whose parent sits at depth 1, is no row: it rides its parent's
+ *     session row as `delegated` (R9). Any other activity is a depth-1 row. Activities first (`openedAt`, then id),
+ *     then worktrees (`firstObservedAt`, then id), after the parent's settled and pending children.
+ *  9. THE OFFLINE COORDINATOR. A row the server filed `offline-coordinator`, or whose parent is not on this list (gone,
+ *     archived, released, or the frames skew), goes under one `offline-coordinator` header: worktrees, then activities.
+ * 10. UNOWNED WORK. Every unowned item goes under one `unowned` header, after the offline group.
+ * 11. LINEAGE OUTLIVES ITS RUN. Nothing here reads `runs` for a delegation row, and no liveness or workspace word hides
+ *     one: hiding a row is the server's decision.
  */
 export function nestFleet(
   sessions: readonly FleetSession[],
   runs: readonly RunSummary[],
+  delegation: CardDelegation | null = null,
 ): FleetRow[] {
   const byId = new Map(sessions.map((s) => [s.id, s] as const));
   const onList = (id: string | null): boolean => id !== null && byId.has(id);
@@ -187,5 +225,77 @@ export function nestFleet(
   // and `sortFleet` has no opinion about it — so it goes last rather than
   // displacing a row whose position is already decided.
   rows.push(...orphanSpawns);
-  return rows;
+  return delegation === null ? rows : delegationPass(rows, sessions, delegation);
+}
+
+const byOpened = (a: DelegationActivityWire, b: DelegationActivityWire): number =>
+  a.openedAt.localeCompare(b.openedAt) || a.activityId.localeCompare(b.activityId);
+const byObserved = (a: DelegationLeaseWire, b: DelegationLeaseWire): number =>
+  a.firstObservedAt.localeCompare(b.firstObservedAt) || a.leaseId.localeCompare(b.leaseId);
+
+/** Each listed session's depth as the five rules decided it, and a depth-1 worker's bracket parent. */
+function depthOf(rows: readonly FleetRow[]): { depth: ReadonlyMap<string, RowDepth>; bracket: ReadonlyMap<string, string> } {
+  const depth = new Map<string, RowDepth>();
+  const bracket = new Map<string, string>();
+  let top: string | null = null;
+  for (const r of rows) {
+    if (r.kind !== 'session') continue;
+    depth.set(r.session.id, r.depth);
+    if (r.depth === 0) top = r.session.id;
+    else if (top !== null) bracket.set(r.session.id, top);
+  }
+  return { depth, bracket };
+}
+
+/** Rules 7 to 9: which parent row each activity and worktree goes under, the R9 chips, and the offline group. */
+function delegationChildren(
+  rows: readonly FleetRow[], sessions: readonly FleetSession[], d: CardDelegation,
+): { under: Map<string, FleetRow[]>; chips: Map<string, DelegationActivityWire[]>; offline: FleetRow[] } {
+  const { depth, bracket } = depthOf(rows);
+  const workdirs = new Set(sessions.map((s) => s.workdir));
+  const under = new Map<string, FleetRow[]>();
+  const chips = new Map<string, DelegationActivityWire[]>();
+  const push = <T>(m: Map<string, T[]>, k: string, v: T): void => { m.set(k, [...(m.get(k) ?? []), v]); };
+  const offAct: FleetRow[] = [];
+  const offLease: FleetRow[] = [];
+  for (const a of [...d.activities].sort(byOpened)) {
+    const at = depth.get(a.parentId);
+    if (a.group !== 'parent' || at === undefined) offAct.push({ kind: 'activity', depth: 1, activity: a, group: 'offline-coordinator' });
+    else if (a.placement === 'chip' || at === 1) push(chips, a.parentId, a);
+    else push(under, a.parentId, { kind: 'activity', depth: 1, activity: a, group: null });
+  }
+  for (const l of [...d.leases].sort(byObserved)) {
+    if (workdirs.has(l.canonicalPath)) continue;                              // rule 7: the session row is the honest row
+    const at = depth.get(l.parentId);
+    if (l.group !== 'parent' || at === undefined) offLease.push({ kind: 'lease', depth: 1, lease: l, via: l.via, group: 'offline-coordinator' });
+    else if (at === 1) push(under, bracket.get(l.parentId)!, { kind: 'lease', depth: 1, lease: l, via: l.parentId, group: null });
+    else push(under, l.parentId, { kind: 'lease', depth: 1, lease: l, via: l.via, group: null });
+  }
+  // Activities before worktrees under one parent, whatever order the two loops above filled it in.
+  for (const [k, list] of under) under.set(k, [...list.filter((r) => r.kind === 'activity'), ...list.filter((r) => r.kind === 'lease')]);
+  return { under, chips, offline: [...offLease, ...offAct] };
+}
+
+/** A group's header and its members, or nothing for an empty group (rule 6: an empty slice adds no header). */
+const groupRows = (group: DelegationGroupKind, members: readonly FleetRow[]): FleetRow[] =>
+  members.length === 0 ? [] : [{ kind: 'delegation-group', depth: 0, group, count: members.length }, ...members];
+
+/** Rules 6 to 11 over the rows the five rules produced: splice each parent's delegation children in after its last
+ *  existing child, attach the R9 chips (a new row object, never a mutation), then append the two groups. */
+function delegationPass(rows: readonly FleetRow[], sessions: readonly FleetSession[], d: CardDelegation): FleetRow[] {
+  const { under, chips, offline } = delegationChildren(rows, sessions, d);
+  const out: FleetRow[] = [];
+  let open: string | null = null;                                             // the depth-0 session whose children are being read
+  const close = (): void => { if (open !== null) out.push(...(under.get(open) ?? [])); open = null; };
+  for (const r of rows) {
+    if (r.depth === 0) close();
+    if (r.kind === 'session') {
+      const mine = chips.get(r.session.id);
+      out.push(mine === undefined ? r : { ...r, delegated: mine });
+      if (r.depth === 0) open = r.session.id;
+    } else out.push(r);
+  }
+  close();
+  const unowned: FleetRow[] = d.unowned.map((item) => ({ kind: 'unowned', depth: 1, item, group: 'unowned' }));
+  return [...out, ...groupRows('offline-coordinator', offline), ...groupRows('unowned', unowned)];
 }

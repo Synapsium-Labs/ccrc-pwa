@@ -37,7 +37,8 @@ const card = (cards: ReadonlyMap<string, CardRollup>, project: string): CardRoll
 
 /** `[what, depth]` per row: a session by id, a spawn by run, the summary line by its text. */
 const shape = (rows: readonly RolledRow[]): [string, number][] => rows.map((r) =>
-  r.kind === 'session' ? [r.session.id, r.depth] : r.kind === 'pending' ? [`spawn:${r.run.id}`, r.depth] : [`» ${r.text}`, r.depth]);
+  r.kind === 'session' ? [r.session.id, r.depth] : r.kind === 'pending' ? [`spawn:${r.run.id}`, r.depth]
+    : r.kind === 'summary' ? [`» ${r.text}`, r.depth] : [r.kind, r.depth]);
 
 describe('rollup — projects (rule 2)', () => {
   it('rolls up an inactive project: nothing working, nobody waiting, no change in 30 minutes', () => {
