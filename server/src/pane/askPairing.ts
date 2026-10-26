@@ -16,19 +16,10 @@
 // The normalize-and-prefix rule (`pairMatches`) lives here: THE server's one rule for "this scraped row and this
 // structured option are the same option". `transcript/ask.ts` re-exports it, so its importers (`inject/ask.ts`'s menu
 // identity gate, `askkey.ts`) keep their imports, `alignAsk` keeps calling it, and the server keeps one definition.
-import type { Dialog, HookAskQuestion } from '../../../shared/api.js';
+import type { AskPairing, Dialog, HookAskQuestion } from '../../../shared/api.js';
 import { reviewRows } from '../../../shared/ask-menu.js';
 
-/** The pairing of one question envelope with one pane reading: `shownQuestion`'s four facts, `askScreen`, and
- *  `questionCorresponds` per question. */
-export interface AskPairing {
-  readonly live: number | null;
-  readonly named: number | null;
-  readonly shown: number;
-  readonly placed: number | null;
-  readonly screen: string | null;
-  readonly corresponds: readonly boolean[];
-}
+export type { AskPairing };
 
 /** The questions of an AskUserQuestion envelope (`HookAsk`'s question arm). */
 export interface AskPairingQuestions {

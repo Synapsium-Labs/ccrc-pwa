@@ -4465,6 +4465,23 @@ export interface DialogAsk extends Omit<AskQuestion, 'options'> {
   options: (AskOption | null)[];
 }
 
+/** D-7031 (ARCH-58, server half): which of the hook envelope's questions the pane is painting, computed on the server
+ *  (`server/src/pane/askPairing.ts#pairEnvelope`) from the envelope and the dialog this stream last sent. Facts of
+ *  position only, never text. `live`: the question the pane's rows correspond to (the title breaks a label tie), else
+ *  null; `named`: the one question the pane's title names, else null; `shown`: `live ?? named ?? 0`, a display;
+ *  `placed`: `live ?? named`, where the pane IS; `screen`: `review`, `q<i>`, or null for a screen that cannot be
+ *  placed; `corresponds`: per question, whether its options line up with the pane's rows by position. Rides the `ask`
+ *  and `dialog` frames as an optional TOP-LEVEL field, never inside `dialog`. ADDITIVE, absence-permits: no reader
+ *  before W7, which gates on the `ask-pairing-v1` cap word. */
+export interface AskPairing {
+  readonly live: number | null;
+  readonly named: number | null;
+  readonly shown: number;
+  readonly placed: number | null;
+  readonly screen: string | null;
+  readonly corresponds: readonly boolean[];
+}
+
 export interface Dialog {
   id: string;               // sha1 of the option block text
   title: string;            // nearest non-empty line above the options
@@ -4571,7 +4588,7 @@ export type SessionStreamMsg =
       foreignAccount?: string | null; searchComplete?: boolean; fileMeasured?: boolean }
   | { type: 'events'; uuid: string; events: ChatEvent[]; offset: number }
   | { type: 'status'; status: SessionStatus; statusUpdatedAt: number | null }
-  | { type: 'dialog'; dialog: Dialog }            // a pane menu is awaiting an answer
+  | { type: 'dialog'; dialog: Dialog; pairing?: AskPairing }   // a pane menu is awaiting an answer; pairing: D-7031
   | { type: 'dialog_cleared' }
   /** The hook-sourced envelope: `~/.cc-sessions/<id>.hookstate.json`'s `ask`,
    *  reported by `session-hook.sh` rather than scraped off the pane. It
@@ -4581,7 +4598,7 @@ export type SessionStreamMsg =
    *  one is right and sends both exactly as read. The CLIENT is where the
    *  preference lives: it prefers this envelope over the scraped `dialog`
    *  when both are present. */
-  | { type: 'ask'; ask: HookAsk; key: string | null }   // key: answerable via POST /api/sessions/:id/ask; null for approval envelopes
+  | { type: 'ask'; ask: HookAsk; key: string | null; pairing?: AskPairing }   // key: answerable via POST /api/sessions/:id/ask; null for approval envelopes; pairing: D-7031, never on an approval
   | { type: 'ask_cleared' }                       // the hook's ask went null, stale, or its hookstate file is gone
   | { type: 'tasks'; tasks: TaskItem[];          // the session's task list changed (or first read)
       /** D-5372: the newest task file `mtimeMs`, epoch ms. OPTIONAL: absent when
