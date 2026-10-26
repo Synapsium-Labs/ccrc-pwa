@@ -11306,6 +11306,9 @@ describe('W2-5b2 Task 6: README states the replay driver once, after the headles
     for (const t of ['`open --draft`', '`open --finalize`', '`open --amend`', '`--record`', '`--record-sha256`', '`gate_code`',
       '`code-changed`', '`--allow-code-change`', '`--accept-failed-pilot`', '`--settings-mode fallback`', '`verdict.json`',
       '`sha256 <hex>`', '`not-run`']) expect(paragraph, t).toContain(t);
+    expect(paragraph, 'K29, D-6694: fidelity reads its source lines, so the pilot runs while they are on disk').toContain(
+      "`fidelity` reads each boundary's original-side usage from its source transcript line, so the pilot must run while its boundaries' sources are on disk: a boundary whose source file has passed its home's retention, or was rewritten, answers unmeasured."
+    );
     expect(paragraph, 'K22 (c): a failed re-pilot and its remedy')
       .toContain("A re-pilot that fails refuses `pilot-failed` and cannot be amended: no flag overrides it, and the operator rules whether that node's window stands.");
     expect(paragraph, 'K25: approximate exposure, not a hard cap').toContain(
@@ -11368,6 +11371,7 @@ the Q18 decision. The pilot, on one fresh `--out`: `headless-on` written by hand
 then `verify --section pilot`, `step0b`, `fidelity`, the usage pilot (`arms --section pilot`, then
 `judge --section pilot`) and `pilot-result`, and the marker removed. Every pilot act writes its file and prints
 its sha first, and a check that fails then refuses `pilot-failed`, which halts W2 for the operator.
+`fidelity` reads each boundary's original-side usage from its source transcript line, so the pilot must run while its boundaries' sources are on disk: a boundary whose source file has passed its home's retention, or was rewritten, answers unmeasured.
 A `step0b` that finds the skill missing under `--restricted` halts so: the operator re-runs it with
 `--settings-mode fallback`, then runs every later pilot act with `--step0b` and `--step0b-sha256` naming the
 result that passed, so each runs in that mode; if fidelity or the usage pilot already ran in part 1's mode,
@@ -11382,7 +11386,7 @@ the `recall-off` lines `marker --section ab` prints, `headless-on` written from 
 the next batch. A version move is measured first: after a `claude-version-moved` stop the operator re-pilots
 that node on a fresh `--out` (`step0b --section quiz`, `fidelity --section quiz` and
 `pilot-result --section quiz`), passes the re-pilot result and its sha to `open --amend --kind version-move`
-as `--repilot`, and posts the printed record's sha; `arms` then re-runs both arms of every question left
+as `--repilot` with its `--repilot-sha256`, and posts the printed record's sha; `arms` then re-runs both arms of every question left
 half-done on another version. A re-pilot that fails refuses `pilot-failed` and cannot be amended: no flag
 overrides it, and the operator rules whether that node's window stands. A freeze exception that installed a
 release names it with `--release-tag`, which the window's `--allow-code-change` admits on that node, stamped.
@@ -11490,6 +11494,7 @@ M = {
     'RM9': ('README.md', inpara('Its report-only per-arm figures', 'Its report-only per-arm figures (see port :1234)')),
     'RM10': ('README.md', inpara('`open --amend` after a version move', 'open --amend after a version move')),
     'RM11': ('README.md', inpara("A re-pilot that fails refuses `pilot-failed` and cannot be amended: no flag\noverrides it, and the operator rules whether that node's window stands. ", '')),
+    'RM12': ('README.md', inpara('or was rewritten, answers unmeasured.', 'or was rewritten, answers zero.')),
     'bound-disclosure': ('README.md', inpara('This is not a strict bound.', 'This is a strict bound.')),
 }
 path, fn = M[name]
@@ -11523,6 +11528,7 @@ and likewise `t RM2` … `t RM11`, then `t bound-disclosure`, one per tool call.
 | RM9 | a `:1234` port-like token added | `1 failed`: the port case |
 | RM10 | `open --amend` no longer a code span | `1 failed`: the record-forms case, `` `open --amend` `` |
 | RM11 | the failed re-pilot's remedy removed (K22 (c)) | `1 failed`: the record-forms case, `K22 (c): a failed re-pilot and its remedy` |
+| RM12 | the K29 sentence's last word becomes `zero` (D-6694) | `1 failed`: the record-forms case, `K29, D-6694: fidelity reads its source lines, so the pilot runs while they are on disk` |
 | bound-disclosure | `This is not a strict bound.` becomes `This is a strict bound.` (K25) | `1 failed`: the record-forms case, `K25: approximate exposure, not a hard cap` |
 
 A mutant that stays green means the pin does not read what it claims: fix the pin in this task, before the commit, and re-run every mutant. After a call that timed out or was cut off, restore both files with `cp` from the copies and `cmp` before anything else. Close the block in a last call of its own:
@@ -11534,6 +11540,8 @@ cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5
 ```
 
 Expected: `restored`, then `6 passed`.
+
+Measured at Task 6 (over the predictions above): Step 1 red `6 failed` as predicted, `W5B26_ORDER` equal to `HANDLERS`' sixteen keys. The paragraph and the pin carry two facts the prediction predates, both from committed code: the K29 sentence (D-6694: fidelity's original side reads its source transcript line, so the pilot must run while its boundaries' sources are on disk; pinned in the record-forms case, mutant RM12) and the `--repilot-sha256` flag beside `--repilot`. RM1 to RM12 and the bound-disclosure mutant each red as the table predicts; Step 2's pin is `6 passed` after, with the neighbours' README cases `4 passed` and `6 passed`.
 
 - [ ] **Step 3: Write the errata script, and run its CONTROL.** From the repository root, write the script as a quoted heredoc, so nothing in it expands. It edits in memory and writes once, at the end, so a failed anchor writes nothing; `--check` writes nothing at all:
 

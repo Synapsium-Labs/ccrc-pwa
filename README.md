@@ -6251,11 +6251,60 @@ id, or the answer is `asof-invalid`; and a family whose generation the marker do
 `headless-unlisted`. The family and its generation come from that boundary, never from the registry or
 `CCRC_SESSION_GENERATION`. Then the family answers exit 8 when its recall is
 switched off, and `control` answers exit 8 too. Under `treatment` every verb reads the store as of the
-boundary: rows, nodes and epochs after it are absent; `--project`, `--workspace` and `--session` still
+boundary, by time and by position (D-5766): an entry is visible only when it is stamped at or before the
+boundary's instant and is not a row after the boundary in the boundary's own holding copy, or when it is the
+boundary, its summary or a kept member of it; every other entry is absent, an unstamped one included, and
+nodes and epochs follow their entries; `--project`, `--workspace` and `--session` still
 widen the scope, the cut applies to every family in it, and a family with nothing visible is left out;
 `--workspace` anchors on the working directory of the boundary's epoch; and a family whose stored
 project is not the session's answers exit 2 `cross-project`. A call is counted only once its family is
 admitted, and its counter line carries the arm; under `~/.ccrc/history-off` nothing is counted.
+
+**The replay driver (W2's eval).** `deploy/history-replay.mjs` runs W2's replay eval, and it is the operator's
+alone: nothing in ccrc runs it. Every act below is run by hand on a named node, from a shell outside tmux, once
+W2's final release is rolled onto every named node with its update intent off or pinned to that tag. Its
+shebang is `#!/usr/bin/env -S node --no-warnings`, because loading `node:sqlite` prints Node's
+experimental-feature warning before any module body runs: run the file itself, or `node --no-warnings` on it.
+Each subcommand writes only under its own `--out`, which it creates 0700 and refuses inside a git tree, prints
+`sha256 <hex>` of its output on stderr, and answers a refusal as `ccrc history-replay: <word>: <detail>` with
+exit 2. Every Claude Code run it spawns goes through the account's own launcher under one fixed contract, after
+the account's limits row and the token budget in force are read; a stop leaves the questions it did not run
+`not-run`, and the same command resumes them once the stop clears. Every subcommand that reads the signed open
+record (`--record` with `--record-sha256`) re-checks the record's `gate_code` hashes before anything else and
+refuses `code-changed`; after window start, `--allow-code-change` stamps every output and the verdict instead.
+The disclosed node exposure is approximately twice its signed share (the pilot uses `pilot_budget`), plus the token cost of soft-stop overshoot already in flight: at most `limits.concurrency` arm runs and `CONCURRENCY_MAX` judge runs may be in flight, but concurrency is not a per-run token cap. This is not a strict bound. The flow, in order: `probe`, a box-mode check of the taught spellings, may run first; `step0a` on each node,
+`pilot-source` on the one pilot node, then `open --draft`, which prints part 1 of the open record for the
+operator to save 0600 off-repo and post its sha; each node's census and `verify --registry`, then `power` and
+the Q18 decision. The pilot, on one fresh `--out`: `headless-on` written by hand from `marker --section pilot`,
+then `verify --section pilot`, `step0b`, `fidelity`, the usage pilot (`arms --section pilot`, then
+`judge --section pilot`) and `pilot-result`, and the marker removed. Every pilot act writes its file and prints
+its sha first, and a check that fails then refuses `pilot-failed`, which halts W2 for the operator.
+`fidelity` reads each boundary's original-side usage from its source transcript line, so the pilot must run while its boundaries' sources are on disk: a boundary whose source file has passed its home's retention, or was rewritten, answers unmeasured.
+A `step0b` that finds the skill missing under `--restricted` halts so: the operator re-runs it with
+`--settings-mode fallback`, then runs every later pilot act with `--step0b` and `--step0b-sha256` naming the
+result that passed, so each runs in that mode; if fidelity or the usage pilot already ran in part 1's mode,
+fidelity, the usage pilot and `pilot-result` all run again on a fresh `--out`, each with `--step0b`, because
+`pilot-result` reads them from one `--out`. `open --finalize` refuses a failed pilot unless
+`--accept-failed-pilot` records the ruling, and then prints the pilot's failures. Then `quiz-source`, `freeze`
+and `open --finalize`, which prints part 2 with a spend budget it derives from the pilot's extrapolation and
+refuses one given otherwise. Before window start:
+the `recall-off` lines `marker --section ab` prints, `headless-on` written from `marker --section quiz`, then
+`verify --section ab` and `verify --section quiz`. During the window, per node: `arms --section quiz`, then
+`judge --section quiz`, and `open --amend` after a version move, a freeze exception or a forced act, before
+the next batch. A version move is measured first: after a `claude-version-moved` stop the operator re-pilots
+that node on a fresh `--out` (`step0b --section quiz`, `fidelity --section quiz` and
+`pilot-result --section quiz`), passes the re-pilot result and its sha to `open --amend --kind version-move`
+as `--repilot` with its `--repilot-sha256`, and posts the printed record's sha; `arms` then re-runs both arms of every question left
+half-done on another version. A re-pilot that fails refuses `pilot-failed` and cannot be amended: no flag
+overrides it, and the operator rules whether that node's window stands. A freeze exception that installed a
+release names it with `--release-tag`, which the window's `--allow-code-change` admits on that node, stamped.
+After any amendment the operator
+re-runs `arms`, `judge` and both `verify` sections on each node under the new record; each resumes and spawns
+nothing already settled. Then `handcheck` writes the blinded sheet, which the operator alone labels, and
+after window end `report` reads every node's files, each with its sha, calls the gate and writes
+`verdict.json`; it decides nothing itself. Its report-only per-arm figures leave out every family whose
+`verify --section ab` state is not `ok`, each state listed apart: `control-absent`,
+`control-mismatch`, `treatment-named` and `unreadable`.
 
 ---
 

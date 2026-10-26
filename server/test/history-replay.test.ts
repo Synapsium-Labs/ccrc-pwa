@@ -22781,3 +22781,94 @@ b2t5Describe('W2-5b2 Task 5: the F1 carry, the judge input\'s answer field over 
       .toEqual([`const LINE_BREAK = /${B2T5_GATE_LINE_BREAK.source}/${B2T5_GATE_LINE_BREAK.flags};`]);
   });
 });
+
+// ── W2-5b2 Task 6: README states the replay driver (S1; the ledger's W2-5a carry; V1, V5, U15) ────────────────────────
+// Prose pins over README, read as W2-2b's seam case in history-cli.test.ts reads its paragraph: by its lead, once, inside
+// "Session history", after the headless-seam paragraph (V5), so never in the gap W2-6's counters paragraph holds between
+// the card-line and box-verbs paragraphs (U15). The shebang is read from the driver's own first line, the subcommands
+// from HANDLERS and the dropped verify states from AB_STATES, so a value that moves in the driver reds here until README
+// follows. Pure: it reads README.md and the driver's first line, and the driver's exports; it spawns nothing.
+const W5B26_LEAD = "**The replay driver (W2's eval).**";
+/** Every HANDLERS key, in the order decisions section 5's acts first run it. Predicted from Tasks 1 to 5 (a prediction
+ *  the worker measures): its sorted copy must equal HANDLERS' sorted keys. */
+const W5B26_ORDER = ['probe', 'step0a', 'pilot-source', 'open', 'verify', 'power', 'marker', 'step0b', 'fidelity', 'arms',
+  'judge', 'pilot-result', 'quiz-source', 'freeze', 'handcheck', 'report'] as const;
+
+/** The Session history section, the driver paragraph's offset in it, and the paragraph with whitespace (line breaks
+ *  included) collapsed to single spaces. Each expectation reds with its own message. */
+function w5b26Readme(): { section: string; at: number; paragraph: string } {
+  const readme = readFileSync(join(REPO, 'README.md'), 'utf8');
+  const from = readme.indexOf('### Session history: lossless recall');
+  expect(from, 'README has no Session history section').toBeGreaterThan(-1);
+  const to = readme.indexOf('\n---\n', from);
+  expect(to, 'the Session history section has no end').toBeGreaterThan(from);
+  const section = readme.slice(from, to);
+  const at = section.indexOf(W5B26_LEAD);
+  expect(at, 'README has no replay driver paragraph in Session history').toBeGreaterThan(-1);
+  expect(readme.split(W5B26_LEAD).length - 1, 'the replay driver paragraph is written more than once').toBe(1);
+  const end = section.indexOf('\n\n', at);
+  return { section, at, paragraph: (end < 0 ? section.slice(at) : section.slice(at, end)).replace(/\s+/g, ' ') };
+}
+
+/** The offset of the first code span whose text is `name` or begins with `name` and a space (`open --draft` names
+ *  `open`), or -1. */
+function w5b26First(p: string, name: string): number {
+  const m = new RegExp('`' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[` ]').exec(p);
+  return m === null ? -1 : m.index;
+}
+
+describe('W2-5b2 Task 6: README states the replay driver once, after the headless seam, with its --no-warnings shebang and every subcommand (S1, V1, V5, U15)', () => {
+  it('is written once, inside Session history, after the headless seam paragraph, so outside the gap W2-6 keeps (V5, U15)', () => {
+    const { section, at } = w5b26Readme();
+    const box = section.indexOf('**Box verbs and operator verbs.**');
+    const seam = section.indexOf('**The headless seam');
+    expect([box, seam].every((i) => i > -1), 'CONTROL: both neighbours are in the section').toBe(true);
+    expect(at, 'the driver paragraph sits after the box-verbs paragraph').toBeGreaterThan(box);
+    expect(at, 'the driver paragraph sits after the seam paragraph').toBeGreaterThan(seam);
+  });
+
+  it("names the driver's own shebang, read from its first line, and its --no-warnings form", () => {
+    const first = readFileSync(SCRIPT, 'utf8').split('\n')[0]!;
+    expect(first, 'CONTROL: the driver runs under --no-warnings').toMatch(/^#!.* --no-warnings$/);
+    const { paragraph } = w5b26Readme();
+    expect(paragraph).toContain('`deploy/history-replay.mjs`');
+    expect(paragraph).toContain(`\`${first}\``);
+    expect(paragraph).toContain('`node --no-warnings`');
+  });
+
+  it("names every subcommand the driver registers, in the order the operator first runs it (decisions section 5)", () => {
+    expect([...W5B26_ORDER].sort(), 'the order list is HANDLERS, no more and no less').toEqual([...replay.HANDLERS.keys()].sort());
+    const { paragraph } = w5b26Readme();
+    const at = W5B26_ORDER.map((k) => w5b26First(paragraph, k));
+    expect(W5B26_ORDER.filter((_, i) => at[i]! < 0), 'a subcommand README does not name').toEqual([]);
+    expect([...at].sort((a, b) => a - b), 'README names the subcommands out of the operator order').toEqual(at);
+  });
+
+  it('states the record forms, the gate_code re-check, the flags that are rules, the non-hard exposure disclosure and a failed re-pilot remedy (W2-D24, W2-D90, Q23, Q26, Q27, K22, K25)', () => {
+    const { paragraph } = w5b26Readme();
+    for (const t of ['`open --draft`', '`open --finalize`', '`open --amend`', '`--record`', '`--record-sha256`', '`gate_code`',
+      '`code-changed`', '`--allow-code-change`', '`--accept-failed-pilot`', '`--settings-mode fallback`', '`verdict.json`',
+      '`sha256 <hex>`', '`not-run`']) expect(paragraph, t).toContain(t);
+    expect(paragraph, 'K29, D-6694: fidelity reads its source lines, so the pilot runs while they are on disk').toContain(
+      "`fidelity` reads each boundary's original-side usage from its source transcript line, so the pilot must run while its boundaries' sources are on disk: a boundary whose source file has passed its home's retention, or was rewritten, answers unmeasured."
+    );
+    expect(paragraph, 'K22 (c): a failed re-pilot and its remedy')
+      .toContain("A re-pilot that fails refuses `pilot-failed` and cannot be amended: no flag overrides it, and the operator rules whether that node's window stands.");
+    expect(paragraph, 'K25: approximate exposure, not a hard cap').toContain(
+      'The disclosed node exposure is approximately twice its signed share (the pilot uses `pilot_budget`), plus the token cost of soft-stop overshoot already in flight: at most `limits.concurrency` arm runs and `CONCURRENCY_MAX` judge runs may be in flight, but concurrency is not a per-run token cap. This is not a strict bound.'
+    );
+  });
+
+  it("lists every verify state but ok as a family the report's per-arm figures leave out, each state apart (V1)", () => {
+    expect(replay.AB_STATES[0], 'CONTROL: the kept state is first').toBe('ok');
+    const { paragraph } = w5b26Readme();
+    expect(paragraph).toContain('`verify --section ab` state is not `ok`');
+    for (const s of replay.AB_STATES.slice(1)) expect(paragraph, s).toContain(`\`${s}\``);
+  });
+
+  it('holds no port-like :<digits> token', () => {
+    const PORTISH = /:\d/;
+    expect('a port :1234', 'CONTROL: the matcher sees one').toMatch(PORTISH);
+    expect(w5b26Readme().paragraph).not.toMatch(PORTISH);
+  });
+});
