@@ -1086,8 +1086,8 @@ const IX_RSS_PRELOAD = path.join(__dirname, 'fixtures', 'history', 'preload-rss.
  *  task 23 indexes inline. Node 24.14.1 measured 216676 to 270240 KiB for the same pass under load, more after task 23, and
  *  smaller chunks do not bring it under 256 MiB, so any other interpreter is held to 512 MiB, half the carrier's
  *  MemoryMax=1G (D-4244). DM47 (task 21) uses the same bound.
- *  Every figure above was read with the preload's inherited maxRSS, which on Linux included the test worker's size at spawn
- *  (D-6964). With the preload's own peak (VmHWM) Node 24.14.1 measured this pass at 314756 KiB (299488 KiB read the old way in a separate run;
+ *  Every figure above was read with the preload's inherited maxRSS, max(the test worker's size at spawn, the sweep's own peak) on
+ *  Linux (D-6964); no case measured since had a worker larger than its sweep. With the preload's own peak (VmHWM) Node 24.14.1 measured this pass at 314756 KiB (299488 KiB read the old way in a separate run;
  *  the worker was not the larger here, so the two agree within run noise), DM47 at 227648 KiB (230940 old) and CP-39's walk-cap case at 311052 KiB (319320 old).
  *  The 22.16.0 figures are the node-floor CI leg's and stay as read then. */
 const IX_RSS_BOUND_KIB = process.version === 'v22.16.0' ? 256 * 1024 : 512 * 1024;

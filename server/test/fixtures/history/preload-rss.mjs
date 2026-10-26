@@ -3,8 +3,8 @@
 // size on stderr when the process exits. O20 and DM47 can then bound the real sweep's memory,
 // SQLite's page cache included, and never the test runner's.
 // It reads VmHWM from /proc/self/status, the process's OWN peak, and falls back to maxRSS only where that is unreadable:
-// on Linux `process.resourceUsage().maxRSS` is inherited from the spawning parent across fork+exec, so it measured the
-// test runner's size, not the sweep's (D-6964). The reader is rss-peak.mjs (D-6965 names this one static import).
+// on Linux `process.resourceUsage().maxRSS` is inherited from the spawning parent across fork+exec, so it could report the
+// test runner's size when the runner was the larger, not the sweep's (D-6964). The reader is rss-peak.mjs (D-6965 names this one static import).
 import { readFileSync } from 'node:fs';
 import { ownPeakKiB } from './rss-peak.mjs';
 
