@@ -978,8 +978,9 @@ if [ "$standing" = true ]; then
 fi
 
 # Read 2: every rule of every active ruleset on that base. A type this block does not know is a stop. The fields the
-# approval licence weighs are typed here, where they are read (a present count is a non-negative safe integer, a present
-# thread resolution a boolean; a missing one keeps its default), and every required-check entry must be a named object.
+# approval check weighs are typed here, where they are read (a present count is a non-negative safe integer; a missing
+# one keeps its default), and every required-check entry must be a named object. A present thread resolution is still
+# typed as a boolean, though nothing reads it now: a malformed answer stays a stop.
 rules=$(gh api --paginate "repos/{owner}/{repo}/rules/branches/$base" | jq -sc '
   def cnt: type == "number" and . == floor and . >= 0 and . <= 9007199254740991;
   def typed($k; f): (has($k) | not) or (.[$k] | f);
@@ -1002,9 +1003,10 @@ unk=$(jq -c '[.[].type] - ["pull_request", "merge_queue", "required_status_check
 [ "$unk" = "[]" ] || stop "unknown-rule-type: $(jq -r "$shown" <<<"$unk")"
 
 # Read 3: classic protection. A 404 is "not protected" only with exactly that message; a 401 or 403 goes to read 3b.
-# A 200 body is typed where the licence and the required set read it (the review count, the conversation switch's
-# `enabled`, the names of the required checks): a missing field keeps its default, a wrong type is a stop, and the body is
-# exactly one value (`-s` slurps the answer: an empty body, or two or more values, is a stop here). The names
+# A 200 body is typed where the approval check and the required set read it (the review count, the names of the required
+# checks; the conversation switch's `enabled`, which nothing reads now, stays typed): a missing field keeps its default,
+# a wrong type is a stop, and the body is exactly one value (`-s` slurps the answer: an empty body, or two or more
+# values, is a stop here). The names
 # are one predicate, `classic_names`, which read 3b's projection of the same checks uses too: a missing or null
 # container or list is no entries, a present one is an object or an array, and every entry has a non-empty string name.
 # The call's exit status is kept apart from the text it printed (`rc3`, read on the line after the call): text that says
@@ -1152,46 +1154,23 @@ case "$w" in
   *) stop "unreadable: read 5" ;;
 esac
 
-# The route (§5.7.4), and the approval licence on a direct route only. A request that stands (and was ignored)
-# licenses nothing: while one stands the licence is never weighed, so admin stays never.
+# The route (§5.7.4). No route uses --admin: --admin and GitHub API merge or enqueue calls are governed by the
+# repository's external policy authority, and until that authority answers (wave 2b) a coordinator never uses them
+# (spec §11, the amendment of 2026-10-25, ruling 5, which supersedes the approval licence). So a direct route that
+# needs an approval the fleet cannot give, and finds it missing, stops here, whether or not a request stands: without
+# --admin that merge could only be refused, or pass over the approval by a bypass no authority has granted.
 if [ "$route" != Q ]; then
   if [ "$req" != "[]" ] || [ -n "$gates" ]; then route=G; else route=U; fi
 fi
-admin=never
-need=$(jq -nr --argjson r "$rules" --argjson p "$prot" --argjson pr "$r1" --arg standing "$standing" '
-  if $standing == "true" then "no"
-  elif (any($r[]; .type == "pull_request" and (.parameters.required_approving_review_count // 0) > 0)
+missing=$(jq -nr --argjson r "$rules" --argjson p "$prot" --argjson pr "$r1" '
+  if (any($r[]; .type == "pull_request" and (.parameters.required_approving_review_count // 0) > 0)
       or ($p.required_pull_request_reviews.required_approving_review_count // 0) > 0) | not then "no"
   elif $pr.reviewDecision == "REVIEW_REQUIRED" then "yes"
   else "no" end') || stop "unreadable: the approval"
-if [ "$route" != Q ] && [ "$need" = yes ]; then
-  [ "$via" = 3b ] && stop "read-3b-unknowable: an approval is missing and read 3 answered $c3"
-  [ -z "$gates" ] || stop "licence-fails: an approval is missing and --admin could skip $gates"
-  jq -ne --argjson r "$rules" --argjson p "$prot" 'any($r[]; .type == "pull_request"
-      and .parameters.required_review_thread_resolution == true)
-    or ($p.required_conversation_resolution.enabled == true and $p.enforce_admins.enabled != true) | not' >/dev/null \
-    || stop "licence-fails: an approval is missing and --admin could skip conversation resolution"
-  jq -e '((.required_status_checks.checks // []) + (.required_status_checks.contexts // []) | length) == 0
-    or .enforce_admins.enabled == true' <<<"$prot" >/dev/null \
-    || stop "licence-fails: an approval is missing and enforce_admins is off over the classic checks"
-  # Read 6 for every ruleset carrying required checks. A rule naming no ruleset cannot be asked: able to bypass.
-  ids=$(jq -r '[.[] | select(.type == "required_status_checks") | .ruleset_id]
-    | if all(.[]; type == "number") then unique | .[] else error("no ruleset id") end' <<<"$rules") \
-    || stop "licence-fails: an approval is missing and a required_status_checks rule names no ruleset"
-  # The licence is the answer as GitHub sent it: exactly one value, whose current_user_can_bypass is exactly the string
-  # "never", compared in jq (`jq -r` and a command substitution would drop a trailing newline from "never" plus one).
-  # Anything else counts as able to bypass, a failed call or an unreadable answer included. The stop shows what was
-  # found: a plain word as it is and any other value in JSON notation, so a value that is not "never" never reads as it.
-  for id in $ids; do
-    r6=$(gh api "repos/{owner}/{repo}/rulesets/$id") || r6=
-    jq -se 'length == 1 and .[0].current_user_can_bypass == "never"' <<<"$r6" >/dev/null && continue
-    by=$(jq -sr 'if length == 1 then .[0].current_user_can_bypass else error("not exactly one value") end
-      | if type == "string" and test("\\A[A-Za-z0-9_-]+\\z") then . else tojson end' <<<"$r6") || by=unreadable
-    stop "licence-fails: an approval is missing and ruleset $id answers $by"
-  done
-  admin=licensed
+if [ "$route" != Q ] && [ "$missing" = yes ]; then
+  stop "approval-missing: route $route needs an approval the fleet cannot give, and --admin is never used"
 fi
-say "ROUTE $route method=$method admin=$admin strict=$strict"
+say "ROUTE $route method=$method admin=never strict=$strict"
 )
 ```
 
@@ -1203,15 +1182,14 @@ decides what this session does, and nothing else does:
   as "Landing on a native-queue project" (step 3) says, with no method flag
   and never `--admin`, the read-back and the disarm rule included, and the
   checks gate with its four exits, which a `ROUTE Q` answer does not waive.
-- `ROUTE G method=<m> admin=<a>` — a gated direct merge: every required check
+- `ROUTE G method=<m> admin=never` — a gated direct merge: every required check
   has passed on the head. Merge from your own session with exactly
   `gh pr merge <pr> --<method> --match-head-commit <handoffCommit>`, `<method>`
   being the line's `<m>`; on a merge-commits-only repository that is exactly
   `gh pr merge <pr> --merge --match-head-commit <handoffCommit>`.
-- `ROUTE U method=<m> admin=<a>` — an ungated direct merge: nothing is
+- `ROUTE U method=<m> admin=never` — an ungated direct merge: nothing is
   required and nothing waits. The same spelling as route G.
-- `admin=never` — no `--admin`. `admin=licensed`, on a direct route only — the
-  approval licence holds (below), and the spelling gains `--admin`.
+- `admin=never` — no `--admin`, on every route (**No `--admin`**, below).
 - `strict=yes` — a strict-protection repository: clause 15's land-sync applies
   as it does today. `strict=no` — it does not. `strict=unknown` comes only under
   read 3b: on a direct route the verdict has already stopped on a head behind
@@ -1310,36 +1288,29 @@ when another required name becomes missing or pending. The operator's ignore
 answer permits only the complete fresh verdict with the exact `CR_IGNORE` key,
 inside the current attempt: it neither replenishes nor consumes a waiting phase,
 and when the bound is spent that run uses `BOUND_S=0`, a `WAIT` it prints is
-reported with no watch, and `admin` stays never over a standing request. A
+reported with no watch. A
 different required name, a returned route, a rerun, the clock, an account or
 session resumption and a repeated mail are not resets. Outside these two doors,
 only an explicit operator instruction to start another attempt authorizes one:
 never infer it from an ignore answer or from automation, and no report, rerun,
 fresh route or passage of time is one.
 
-**The approval licence.** `--admin` is licensed on a direct route only, and
-only when all three hold, each read fresh for this landing: an approval the
-fleet cannot give is required and missing (a `pull_request` rule's, or classic
-protection's, `required_approving_review_count` above 0, and `reviewDecision`
-is `REVIEW_REQUIRED`), with no request for changes standing, an ignored one
-included; every required check has passed on the head; and `--admin`
-cannot skip a gate — no other gate applies, no review conversation must be
-resolved that an admin could skip (a `pull_request` rule's
-`required_review_thread_resolution`, or classic
-`required_conversation_resolution` without `enforce_admins`), classic required
-checks carry `enforce_admins`, and every ruleset carrying required checks
-answers `current_user_can_bypass` with exactly `never` (any other answer, an
-unreadable answer, or a rule that names no ruleset counting as able to
-bypass). The verdict weighs all three: it answers `admin=licensed`, and only
-then the spelling is
-`gh pr merge <pr> --<method> --admin --match-head-commit <handoffCommit>`, or it stops `licence-fails`.
-
-Without a missing approval `--admin` is never passed; under read 3b it is
-never used; while a request for changes stands, ignored or not, it is never
-licensed; and it is never a fallback: a fallback is `--admin` after a
-refusal, and this licence is decided before the merge, from reads. An approval
-kept in classic protection with `enforce_admins` on binds an admin too, so
-`--admin` does not help there, and GitHub's refusal is the stop.
+**No `--admin`.** `--admin` and GitHub API merge or enqueue calls are governed
+by the repository's external policy authority; until that authority answers
+(wave 2b), a coordinator never uses them (spec §11, the amendment of 2026-10-25,
+ruling 5). That ruling supersedes the approval licence of spec §5.7.4 and §11
+item 10, so no answer read here licenses `--admin`: not a missing approval, not
+`enforce_admins`, and not a ruleset's `current_user_can_bypass`, which the
+verdict no longer reads. A direct route that needs an approval the fleet cannot
+give, and finds it missing (a `pull_request` rule's, or classic protection's,
+`required_approving_review_count` above 0, and `reviewDecision` is
+`REVIEW_REQUIRED`), stops `approval-missing` before any merge, whether or not a
+request for changes stands, an ignored one included: without `--admin` that
+merge could only be refused, or pass over the approval by a bypass the external
+authority has not granted. Under read 3b classic protection's approvals cannot
+be read, so there GitHub's refusal is the stop, `github-refused`. Route Q is
+unchanged: its enqueue never passes `--admin`. And `--admin` is never a
+fallback: a fallback is `--admin` after a refusal.
 
 **On every route** the merge is proven as step 3 proves it: MERGED, with
 `headRefOid` equal to `handoffCommit`. A refused merge on route G or U is
@@ -1379,9 +1350,9 @@ the verdict prints is unchanged; a changed key is a new ask. A key whose `review
 request, can never be ignored: inspect the PR's reviews, read the verdict again
 and report to the operator. Only a fresh `ROUTE` result permits the normal
 landing steps. Never merge, enqueue or pass `--admin` on a `changes-requested`
-line. While any request stands the verdict never answers `admin=licensed`,
-ignored or not. Ignore cannot evade GitHub's refusal of a missing required
-approval: a direct refusal is `github-refused`; on route Q, if gh only arms
+line. Ignore cannot evade a missing required approval: on a direct route the
+verdict stops `approval-missing` (**No `--admin`**, above), and a refusal it
+could not foresee is `github-refused`; on route Q, if gh only arms
 auto-merge, follow step 3's read-back and disarm rule, then stop
 `github-refused`, and never leave it armed on the operator's ignore.
 
@@ -1401,7 +1372,7 @@ in your turn's text which stop fired and what it read, for the operator:
 every stop goes to the operator, never to another route. The verdict stops with one of these reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`,
 `unknown-rule-type`, `method-set-empty`, `rebase-only`,
 `queue-method-not-allowed`, `two-queue-methods`, `auto-merge-off`,
-`unverifiable`, `not-reported`, `changes-requested`, `licence-fails`. A
+`unverifiable`, `not-reported`, `changes-requested`, `approval-missing`. A
 `changes-requested` stop is read before `WAIT` and `RED` on every route and is
 the operator's to decide, as **A requested change** above says. Four stops no
 read decides are yours to name: `red-unreachable` (above), `verdict-unread`

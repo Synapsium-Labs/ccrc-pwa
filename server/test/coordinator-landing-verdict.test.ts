@@ -1,7 +1,8 @@
 // Landing-order wave 3e (spec 2026-09-23 §5.7): the coordinator lands a PR by the route the repository's own rules
 // give, read fresh before each landing. `references/wave-lifecycle.md` §5b carries ONE fenced bash block, the landing
-// verdict: it makes reads 1 to 6 with gh (read 1 including the PR's reviews) and prints exactly one line, a route with
-// its method and its licence, a wait, a red, a merged PR to prove, or a stop with its reason. It never merges.
+// verdict: it makes reads 1 to 5 with gh (read 1 including the PR's reviews) and prints exactly one line, a route with
+// its method and `admin=never` (no route uses `--admin`), a wait, a red, a merged PR to prove, or a stop with its reason. It
+// never merges.
 //
 // This file extracts that block and RUNS it, against a stub gh that answers fixture JSON per read, with one case per
 // route and per stop the reads decide (§5.7.5). The fixture every case starts from is this repository as measured on
@@ -202,6 +203,10 @@ const classicAny = ok({ required_status_checks: { strict: false, contexts: ['leg
   enforce_admins: { enabled: false }, required_linear_history: { enabled: false }, required_signatures: { enabled: false } });
 const via3b = with_(bare, { protection: fail(403, 'Resource not accessible by integration'),
   branch: ok({ name: 'main', protection: { enabled: false } }), compare: ok({ behind_by: 0, ahead_by: 1 }) });
+/** The one line a direct route prints when an approval it needs is missing (spec §11, the amendment of 2026-10-25, ruling 5:
+ *  no route uses `--admin`, so such a merge could only be refused or pass over the approval by a bypass nobody granted). */
+const approvalMissing = (route: 'G' | 'U'): string =>
+  `STOP approval-missing: route ${route} needs an approval the fleet cannot give, and --admin is never used`;
 
 const ROUTES: Case[] = [
   ['route Q: this repository as measured (§5.7.7), the four classic checks gating the enqueue', measured,
@@ -211,8 +216,8 @@ const ROUTES: Case[] = [
     'ROUTE Q method=squash admin=never strict=no'],
   ['route G: merge commits only and a third-party App check in a ruleset (the motivating repository)', thirdParty,
     'ROUTE G method=merge admin=never strict=no'],
-  ['route G: the pre-queue configuration lands under the approval licence (§5.7.7)', preQueue,
-    'ROUTE G method=squash admin=licensed strict=no'],
+  ['route G: the pre-queue configuration stops approval-missing, since no route uses --admin (§5.7.7)', preQueue,
+    approvalMissing('G')],
   ['route G: an approval that is given licenses nothing', with_(preQueue, (f) => ({ ...f,
     pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'APPROVED' }) })),
     'ROUTE G method=squash admin=never strict=no'],
@@ -236,11 +241,11 @@ const ROUTES: Case[] = [
   ['route G: a classic check that names no App (app_id -1) passes on a check run from any App', with_(bare, {
     protection: classicAny, checkruns: runs(run('legacy/ci', 'success', 'completed', OTHER_APP)) }),
     'ROUTE G method=squash admin=never strict=no'],
-  ['route U: an approval kept in classic protection alone, with enforce_admins on, is licensed (Pre-flight 10(c))', with_(bare, {
+  ['route U: an approval kept in classic protection alone, with enforce_admins on, stops approval-missing (Pre-flight 10(c))', with_(bare, {
     protection: ok({ enforce_admins: { enabled: true }, required_pull_request_reviews: { required_approving_review_count: 1 },
       required_linear_history: { enabled: false }, required_signatures: { enabled: false } }),
     pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'REVIEW_REQUIRED' }) }),
-    'ROUTE U method=squash admin=licensed strict=no'],
+    approvalMissing('U')],
   ['route G: an approval is required and the reviewDecision is empty, so nothing is licensed', with_(preQueue, (f) => ({ ...f,
     pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: '' }) })),
     'ROUTE G method=squash admin=never strict=no'],
@@ -331,10 +336,10 @@ const STOPS: Case[] = [
     'STOP read-3b-unknowable: read 3 answered 403 and the method is merge'],
   ['read 3b leaves the route unknowable: the head is behind the base', with_(via3b, { compare: ok({ behind_by: 2 }) }),
     'STOP read-3b-unknowable: read 3 answered 403 and the head is 2 behind the base'],
-  ['read 3b leaves the route unknowable: the admin licence would be weighed', with_(via3b, (f) => ({ ...f,
+  ['read 3b: a ruleset approval is required and missing, so the direct route stops approval-missing', with_(via3b, (f) => ({ ...f,
     ...rules(pull({ required_approving_review_count: 1 })),
     pr: ok({ baseRefName: 'main', headRefOid: HC, state: 'OPEN', reviewDecision: 'REVIEW_REQUIRED' }) })),
-    'STOP read-3b-unknowable: an approval is missing and read 3 answered 403'],
+    approvalMissing('U')],
   ['the PR is not at the reviewed head', with_(measured, {
     pr: ok({ baseRefName: 'main', headRefOid: 'f'.repeat(40), state: 'OPEN', reviewDecision: '' }) }),
     `STOP not-at-head: the PR head is ${'f'.repeat(40)}`],
@@ -363,40 +368,30 @@ const STOPS: Case[] = [
     checkruns: runs(run('test (agent)'), run('test (pwa)'), run('build-pwa')),
     status: ok({ state: 'success', statuses: [{ context: 'test (server)', state: 'success' }] }) }),
     'STOP unverifiable: test (server) shows only as a commit status'],
-  ['the approval licence fails: another gate an admin could skip', with_(preQueue, (f) => ({ ...f,
+  ['approval-missing: another gate (code scanning) applies: the stop is the same', with_(preQueue, (f) => ({ ...f,
     ...rules(pull({ required_approving_review_count: 1 }), { type: 'code_scanning', ruleset_id: 9, parameters: {} }) })),
-    'STOP licence-fails: an approval is missing and --admin could skip code_scanning'],
-  ['the approval licence fails: classic signatures are another gate', with_(preQueue, (f) => ({ ...f,
+    approvalMissing('G')],
+  ['approval-missing: classic signatures are another gate: the stop is the same', with_(preQueue, (f) => ({ ...f,
     protection: ok({ ...(measured().protection as Answer).body as object, required_signatures: { enabled: true } }) })),
-    'STOP licence-fails: an approval is missing and --admin could skip classic required_signatures'],
-  ['the approval licence fails: enforce_admins is off over the classic checks', with_(preQueue, (f) => ({ ...f,
+    approvalMissing('G')],
+  ['approval-missing: enforce_admins is off over the classic checks: the stop is the same', with_(preQueue, (f) => ({ ...f,
     protection: ok({ ...(measured().protection as Answer).body as object, enforce_admins: { enabled: false } }) })),
-    'STOP licence-fails: an approval is missing and enforce_admins is off over the classic checks'],
-  ['the approval licence fails: a ruleset with required checks the login may bypass', with_(preQueue, (f) => ({ ...f,
-    ...rules(pull({ required_approving_review_count: 1 }), rsc([{ context: 'build-pwa', integration_id: 15368 }], 21)),
-    ruleset: ok({ id: 21, current_user_can_bypass: 'pull_requests_only' }) })),
-    'STOP licence-fails: an approval is missing and ruleset 21 answers pull_requests_only'],
-  ['the approval licence fails: an unreadable read 6 counts as able to bypass', with_(preQueue, (f) => ({ ...f,
-    ...rules(pull({ required_approving_review_count: 1 }), rsc([{ context: 'build-pwa', integration_id: 15368 }], 21)),
-    ruleset: fail(404, 'Not Found') })),
-    'STOP licence-fails: an approval is missing and ruleset 21 answers unreadable'],
-  ['the approval licence fails: a required_status_checks rule that names no ruleset has no read 6, so counts as able to bypass',
-    with_(preQueue, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }), { type: 'required_status_checks',
-      parameters: { strict_required_status_checks_policy: false, required_status_checks: [{ context: 'build-pwa', integration_id: 15368 }] } }),
-    ruleset: ok({ id: 21, current_user_can_bypass: 'never' }) })),
-    'STOP licence-fails: an approval is missing and a required_status_checks rule names no ruleset'],
-  ['the approval licence fails: a ruleset requires review threads resolved, which the bypass skips with the approval',
-    with_(preQueue, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1, required_review_thread_resolution: true })) })),
-    'STOP licence-fails: an approval is missing and --admin could skip conversation resolution'],
-  ['the approval licence fails: classic conversation resolution without enforce_admins', with_(preQueue, (f) => ({ ...f,
+    approvalMissing('G')],
+  ['approval-missing: a ruleset requires review threads resolved: the stop is the same', with_(preQueue, (f) => ({ ...f,
+    ...rules(pull({ required_approving_review_count: 1, required_review_thread_resolution: true })) })),
+    approvalMissing('G')],
+  ['approval-missing: classic conversation resolution without enforce_admins: the stop is the same', with_(preQueue, (f) => ({ ...f,
     protection: ok({ required_conversation_resolution: { enabled: true }, enforce_admins: { enabled: false },
       required_linear_history: { enabled: false }, required_signatures: { enabled: false } }) })),
-    'STOP licence-fails: an approval is missing and --admin could skip conversation resolution'],
+    approvalMissing('U')],
 ];
 
-const LICENSED_NEVER: Case = ['the approval licence holds: every ruleset with required checks answers never', with_(preQueue, (f) => ({ ...f,
-  ...rules(pull({ required_approving_review_count: 1 }), rsc([{ context: 'build-pwa', integration_id: 15368 }], 21)),
-  ruleset: ok({ id: 21, current_user_can_bypass: 'never' }) })), 'ROUTE G method=squash admin=licensed strict=no'];
+/** What read 6 used to weigh: an approval missing beside a ruleset that carries a required check. Read 6 is gone, so nothing asks
+ *  the ruleset anything and the line is the approval check's alone. */
+const APPROVAL_WITH_RULESET: Case = ['route G: an approval is missing beside a ruleset that carries required checks: approval-missing, no ruleset is asked',
+  with_(preQueue, (f) => ({ ...f,
+    ...rules(pull({ required_approving_review_count: 1 }), rsc([{ context: 'build-pwa', integration_id: 15368 }], 21)),
+    ruleset: ok({ id: 21, current_user_can_bypass: 'never' }) })), approvalMissing('G')];
 
 // ---- Requested changes on every route, and the operator's bounded ignore (fix round 1) ----
 // The shapes: a PR with a decision word, reviews with ids and users, the key the stop prints.
@@ -480,9 +475,9 @@ const REQUESTS: Case[] = [
     run('test (agent)'), run('test (pwa)'), run('build-pwa')) }), askLine(false, 7)],
   ['the early stop comes before an unknown rule type', with_(measured, (f) => ({ ...f, reviews: ok([rev(7, CR)]),
     ...rules(pull({}), queue('SQUASH'), { type: 'file_path_restriction', ruleset_id: 3, parameters: {} }) })), askLine(false, 7)],
-  ['the early stop comes before read 3b stops the licence, so it is not read-3b-unknowable',
+  ['the early stop comes before the approval is weighed under read 3b, so it is not approval-missing',
     with_(via3b, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 })), pr: prWith(CR) })), askLine(true)],
-  ['the early stop comes before the licence is weighed: another gate does not turn it into licence-fails',
+  ['the early stop comes before the approval is weighed: another gate does not turn it into approval-missing',
     with_(preQueue, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }), { type: 'code_scanning', ruleset_id: 9, parameters: {} }),
       pr: prWith(CR) })), askLine(true)],
   ['an already MERGED PR goes to its proof even with a request standing', with_(measured, { pr: prWith(CR, { state: 'MERGED' }),
@@ -593,8 +588,8 @@ const IGNORES: Case[] = [
   ['ignore: a matching key does not excuse unreadable reviews', with_(measured, { reviews: fail(502) }), gStop, keyFor(false, 7)],
   ['ignore: a key supplied with empty reviews stdout still stops unreadable', with_(measured, { reviews: { code: 200, raw: '' } }), gStop,
     keyFor(false)],
-  ['ignore: REVIEW_REQUIRED, a request in the list, a required approval and the matching key still give admin never',
-    with_(preQueue, { reviews: ok([rev(7, CR)]) }), 'ROUTE G method=squash admin=never strict=no', keyFor(false, 7)],
+  ['ignore: REVIEW_REQUIRED, a request in the list, a required approval and the matching key still stop approval-missing',
+    with_(preQueue, { reviews: ok([rev(7, CR)]) }), approvalMissing('G'), keyFor(false, 7)],
   ['ignore: the summary says changes requested, an approval is required, and the matching key gives admin never',
     with_(preQueue, { pr: prWith(CR), reviews: ok([rev(7, CR)]) }), 'ROUTE G method=squash admin=never strict=no', keyFor(true, 7)],
   ['ignore: a matching key does not bypass a red required check', with_(measured, { reviews: ok([rev(7, CR)]),
@@ -611,17 +606,17 @@ const IGNORES: Case[] = [
   ['ignore: a matching key does not bypass a head that is not handoffCommit', with_(measured, { reviews: ok([rev(7, CR)]),
     pr: ok({ baseRefName: 'main', headRefOid: 'f'.repeat(40), state: 'OPEN', reviewDecision: '' }) }),
     `STOP not-at-head: the PR head is ${'f'.repeat(40)}`, keyFor(false, 7)],
-  ['ignore: a matching key never reaches the licence: another gate an admin could skip gives admin never, not licence-fails',
+  ['ignore: a matching key, a missing approval and another gate (code scanning) still stop approval-missing',
     with_(preQueue, (f) => ({ ...f, reviews: ok([rev(7, CR)]),
       ...rules(pull({ required_approving_review_count: 1 }), { type: 'code_scanning', ruleset_id: 9, parameters: {} }) })),
-    'ROUTE G method=squash admin=never strict=no', keyFor(false, 7)],
+    approvalMissing('G'), keyFor(false, 7)],
 ];
 
-// The approval licence, its count half and its route-Q half.
+// The approval check, its count half and its route-Q half.
 const LICENCE: Case[] = [
   ['route U: no approval is required, the decision is REVIEW_REQUIRED and no request stands: nothing is licensed',
     with_(bare, { pr: prWith('REVIEW_REQUIRED') }), 'ROUTE U method=squash admin=never strict=no'],
-  ['route Q: an approval is required and missing, REVIEW_REQUIRED, no request: the queue route is never licensed',
+  ['route Q: an approval is required and missing, REVIEW_REQUIRED, no request: the queue route is never stopped for it',
     with_(measured, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }), queue('SQUASH')), pr: prWith('REVIEW_REQUIRED') })),
     GOOD_Q],
 ];
@@ -673,7 +668,7 @@ const MALFORMED: Case[] = [
     'ROUTE U method=squash admin=never strict=no'],
 ];
 
-// ---- Fix round 2: the sources a verdict reads fail closed (read 5, the licence's fields, the required-check entries) ----
+// ---- Fix round 2: the sources a verdict reads fail closed (read 5, the approval check's fields, the required-check entries) ----
 // An empty answer is not an empty list. GitHub's real zero-result answer is an object whose array is empty, so a call
 // that printed no page, a page that is not an object, a field that is not an array and an entry that is not an object
 // are each `STOP unreadable: read 5`, never "no checks"; a genuine empty array is a successful zero-result answer.
@@ -759,8 +754,9 @@ const MIXED: Case[] = [
       status: [ok({ state: 'pending', statuses: [] }), raw200('')] }), R5, { BOUND_S: '30', POLL_S: '1' }],
 ];
 
-// The licence reads two numbers and a boolean. jq orders a string above every number, so a count of "0" would be an
-// approval required and a thread-resolution of "true" a value to test; each field is typed at the read that owns it.
+// The approval check reads two numbers (the review counts). jq orders a string above every number, so a count of "0" would be
+// an approval required; each field is typed at the read that owns it. The thread-resolution boolean is no longer read by any
+// decision since ruling 5 retired the licence, and its type check stays: a malformed answer still stops, fail closed.
 const countRule = (v: unknown, decision = 'REVIEW_REQUIRED'): (() => Fixture) =>
   with_(bare, { ...rules(pull({ required_approving_review_count: v })), pr: prWith(decision) });
 const REJECTED_COUNTS: [string, unknown][] = [
@@ -778,21 +774,21 @@ const classicCount = (reviews?: unknown): (() => Fixture) => with_(bare, { prote
 const FIELDS: Case[] = [
   ...REJECTED_COUNTS.flatMap(([what, v]): Case[] => [
     [`unreadable: read 2: a pull_request rule's required_approving_review_count is ${what}`, countRule(v), 'STOP unreadable: read 2'],
-    [`unreadable: read 2: ${what} as the count is refused though a queue would avoid licensing admin`,
+    [`unreadable: read 2: ${what} as the count is refused though a queue would avoid the approval check`,
       with_(measured, (f) => ({ ...f, ...rules(pull({ required_approving_review_count: v }), queue('SQUASH')) })), 'STOP unreadable: read 2'],
     [`unreadable: read 3: classic required_approving_review_count is ${what}`, classicCount({ required_approving_review_count: v }),
       'STOP unreadable: read 3'],
   ]),
   ...REJECTED_THREADS.flatMap(([what, v]): Case[] => [
-    [`unreadable: read 2: required_review_thread_resolution is ${what}, on a licence that would weigh it`,
+    [`unreadable: read 2: required_review_thread_resolution is ${what}, beside an approval that is required`,
       with_(preQueue, rules(pull({ required_approving_review_count: 1, required_review_thread_resolution: v }))), 'STOP unreadable: read 2'],
-    [`unreadable: read 2: required_review_thread_resolution is ${what}, where no licence is weighed`,
+    [`unreadable: read 2: required_review_thread_resolution is ${what}, where no approval is required`,
       with_(bare, rules(pull({ required_review_thread_resolution: v }))), 'STOP unreadable: read 2'],
   ]),
   ...[['a string', 'x'], ['an array', []], ['a number', 7], ['the boolean true', true], ['the boolean false', false], ['an empty string', ''],
     ['zero', 0]].map(([what, v]): Case =>
     [`unreadable: read 3: required_pull_request_reviews is ${what as string}, not an object`, classicCount(v), 'STOP unreadable: read 3']),
-  ['unreadable: read 3: a non-object required_pull_request_reviews is refused on route Q too, where the licence is never weighed',
+  ['unreadable: read 3: a non-object required_pull_request_reviews is refused on route Q too, where the approval is never weighed',
     with_(measured, (f) => ({ ...f, protection: ok({ ...(measured().protection as Answer).body as object, required_pull_request_reviews: [] }) })),
     'STOP unreadable: read 3'],
   // What stays valid: absence, zero, safe integers, booleans, and the sparse classic shapes.
@@ -800,22 +796,22 @@ const FIELDS: Case[] = [
   ['a missing count defaults to 0 and licenses nothing (read 2)',
     with_(bare, { ...rules({ type: 'pull_request', ruleset_id: 11, parameters: {} }), pr: prWith('REVIEW_REQUIRED') }),
     'ROUTE U method=squash admin=never strict=no'],
-  ['the largest safe integer is a count above 0: with the licence holding, admin is licensed (read 2)',
-    with_(preQueue, rules(pull({ required_approving_review_count: 9007199254740991 }))), 'ROUTE G method=squash admin=licensed strict=no'],
-  ['a boolean false thread resolution waives nothing: the licence holds (read 2)',
+  ['the largest safe integer is a count above 0: the approval is required and missing, so the stop is approval-missing (read 2)',
+    with_(preQueue, rules(pull({ required_approving_review_count: 9007199254740991 }))), approvalMissing('G')],
+  ['a boolean false thread resolution changes nothing: the stop is approval-missing (read 2)',
     with_(preQueue, rules(pull({ required_approving_review_count: 1, required_review_thread_resolution: false }))),
-    'ROUTE G method=squash admin=licensed strict=no'],
-  ['a boolean true thread resolution still fails the licence (read 2)',
+    approvalMissing('G')],
+  ['a boolean true thread resolution changes nothing either: the stop is approval-missing (read 2)',
     with_(preQueue, rules(pull({ required_approving_review_count: 1, required_review_thread_resolution: true }))),
-    'STOP licence-fails: an approval is missing and --admin could skip conversation resolution'],
+    approvalMissing('G')],
   ['classic required_pull_request_reviews absent: no classic review configuration', classicCount(), 'ROUTE U method=squash admin=never strict=no'],
   ['classic required_pull_request_reviews null: no classic review configuration', classicCount(null), 'ROUTE U method=squash admin=never strict=no'],
   ['classic required_pull_request_reviews an object without a count: a sparse shape stays valid', classicCount({}),
     'ROUTE U method=squash admin=never strict=no'],
   ['classic required_approving_review_count 0 licenses nothing', classicCount({ required_approving_review_count: 0 }),
     'ROUTE U method=squash admin=never strict=no'],
-  ['classic required_approving_review_count 2 is a missing approval: licensed', classicCount({ required_approving_review_count: 2 }),
-    'ROUTE U method=squash admin=licensed strict=no'],
+  ['classic required_approving_review_count 2 is a missing approval: approval-missing', classicCount({ required_approving_review_count: 2 }),
+    approvalMissing('U')],
 ];
 
 // A required-check entry is a name. An entry that names nothing would become a requirement called null.
@@ -851,9 +847,10 @@ const ENTRIES: Case[] = [
     ...rules(rsc([{ context: ' padded name ' }])), checkruns: runs(run('padded name')) }), 'WAIT not-reported:  padded name '],
 ];
 
-// Classic protection's conversation-resolution switch, and the names of its required checks. The licence tests the
-// switch with `== true`, so a string "true" reads as not set and silently waives the conversation gate; a nameless
-// check becomes a requirement with an empty label, or is satisfied by a nameless status.
+// Classic protection's conversation-resolution switch, and the names of its required checks. No decision reads the switch
+// any more (ruling 5 retired the licence that did), but a malformed one is still a stop: a string "true" is not a boolean,
+// and the type check stays, fail closed. A nameless check becomes a requirement with an empty label, or is satisfied by a
+// nameless status.
 const classicBody = (extra: Record<string, unknown>, enforce = true): Answer => ok({ enforce_admins: { enabled: enforce },
   required_pull_request_reviews: { required_approving_review_count: 1 }, required_linear_history: { enabled: false },
   required_signatures: { enabled: false }, ...extra });
@@ -873,19 +870,18 @@ const CONV: Case[] = [
   ]),
   ...BAD_CONV_CONTAINERS.map(([what, v]): Case => [`unreadable: read 3: required_conversation_resolution is ${what}, not an object`,
     convFx(v, false), 'STOP unreadable: read 3']),
-  ['unreadable: read 3: a malformed conversation switch is refused on route Q too, where the licence is never weighed',
+  ['unreadable: read 3: a malformed conversation switch is refused on route Q too, where the approval is never weighed',
     with_(measured, (f) => ({ ...f, protection: ok({ ...(measured().protection as Answer).body as object,
       required_conversation_resolution: { enabled: 'true' } }) })), 'STOP unreadable: read 3'],
-  ['classic required_conversation_resolution absent: the gate is not set', convFx(undefined, false), 'ROUTE U method=squash admin=licensed strict=no'],
-  ['classic required_conversation_resolution null: the gate is not set', convFx(null, false), 'ROUTE U method=squash admin=licensed strict=no'],
-  ['classic required_conversation_resolution an object without enabled: a sparse shape stays valid', convFx({}, false),
-    'ROUTE U method=squash admin=licensed strict=no'],
-  ['classic required_conversation_resolution false waives nothing', convFx({ enabled: false }, false),
-    'ROUTE U method=squash admin=licensed strict=no'],
-  ['classic required_conversation_resolution true with enforce_admins on binds an admin too: licensed', convFx({ enabled: true }, true),
-    'ROUTE U method=squash admin=licensed strict=no'],
-  ['classic required_conversation_resolution true without enforce_admins still fails the licence', convFx({ enabled: true }, false),
-    'STOP licence-fails: an approval is missing and --admin could skip conversation resolution'],
+  ['classic required_conversation_resolution absent: the stop is approval-missing', convFx(undefined, false), approvalMissing('U')],
+  ['classic required_conversation_resolution null: the stop is approval-missing', convFx(null, false), approvalMissing('U')],
+  ['classic required_conversation_resolution an object without enabled: a sparse shape stays valid, and the stop is approval-missing',
+    convFx({}, false), approvalMissing('U')],
+  ['classic required_conversation_resolution false: the stop is approval-missing', convFx({ enabled: false }, false), approvalMissing('U')],
+  ['classic required_conversation_resolution true with enforce_admins on: the stop is approval-missing', convFx({ enabled: true }, true),
+    approvalMissing('U')],
+  ['classic required_conversation_resolution true without enforce_admins: the stop is approval-missing, the switch is no longer read',
+    convFx({ enabled: true }, false), approvalMissing('U')],
 ];
 
 const classicChecks = (rsc: unknown, extra: Record<string, unknown> = {}): Answer => ok({ enforce_admins: { enabled: false },
@@ -1000,7 +996,7 @@ const NAMES: Case[] = [
 // ---- Fix round 3: nothing is lost before a route is chosen (an empty queue method, an empty rule type, a source of many values) ----
 // A value that prints as nothing is still a value. The block used to join the queue methods, and the unknown rule types,
 // into one text and ask whether that text was empty. A queue method of "" or a rule type of "" joins to nothing, so the
-// queue (or the unknown type) was treated as absent, and a direct route, even a licensed `--admin` one, could be chosen
+// queue (or the unknown type) was treated as absent, and a direct route could be chosen
 // over a rule this block does not understand. Now every decision is made on the arrays of values, and the joined text
 // is only what a stop prints: an empty value shows as `""`, every other value as it is. A source that is one object
 // (read 3's body, read 3b's branch view) is exactly one value, not zero and not several.
@@ -1021,7 +1017,7 @@ const LOSS: Case[] = [
   // F1: the queue methods are values; a queue rule is present when there is one, whatever its method prints as.
   ['an empty queue method is a queue, not no queue: the reproduction (approval missing, bare repository) never routes direct',
     bareApproval(queueRule({ merge_method: '' })), bareNotAllowed(EMPTY)],
-  ['an empty queue method is a queue: the same stop with the licence not in play (nothing required, auto-merge off)',
+  ['an empty queue method is a queue: the same stop with no approval in play (nothing required, auto-merge off)',
     with_(bare, rules(queueRule({ merge_method: '' }))), bareNotAllowed(EMPTY)],
   ['an empty queue method on this repository as measured: the method is not in the set, whatever auto-merge says',
     with_(measured, (f) => ({ ...f, ...rules(pull({}), queue('')) })), bareNotAllowed(EMPTY, '["squash"]')],
@@ -1119,14 +1115,50 @@ const LOSS: Case[] = [
   ['read 3b answers with one sparse enabled=true projection: still readable (control)', b3b(undefined), 'ROUTE U method=squash admin=never strict=unknown'],
 ];
 
+// ---- Fix round 5: no route uses --admin, and a direct route that needs a missing approval stops (spec §11, ruling 5) ----
+// The approval is missing when a pull_request rule's, or classic protection's, required_approving_review_count is above 0 and the
+// reviewDecision is REVIEW_REQUIRED. The stop is `approval-missing`, on route G and route U alike, whether or not a request for
+// changes stands (an ignored one included), under read 3b too, and never on route Q, whose enqueue the queue gates itself.
+const missingG = with_(routeFixtures[1]![2], { pr: prWith('REVIEW_REQUIRED') });
+const missingU = bareApproval();
+const missingClassic = with_(routeFixtures[2]![2], { pr: prWith('REVIEW_REQUIRED') });
+const APPROVAL: Case[] = [
+  ['route G: a ruleset requires an approval (count 1) and the decision is REVIEW_REQUIRED: approval-missing, route G', missingG, approvalMissing('G')],
+  ['route U: nothing else is required, a ruleset requires an approval and it is missing: approval-missing, route U', missingU, approvalMissing('U')],
+  ['route U: classic protection alone requires an approval (count 1) and it is missing: approval-missing', missingClassic, approvalMissing('U')],
+  ['route G: an approval is required and the decision is APPROVED: the route stands, admin never', with_(missingG, { pr: prWith('APPROVED') }),
+    'ROUTE G method=merge admin=never strict=no'],
+  ['route U: a classic approval is required and the decision is APPROVED: the route stands, admin never', with_(missingClassic, { pr: prWith('APPROVED') }),
+    'ROUTE U method=squash admin=never strict=no'],
+  ['route U: an ignored request does not skip the approval check, a ruleset approval missing and the exact key given', with_(missingU, { reviews: ok([rev(7, CR)]) }),
+    approvalMissing('U'), keyFor(false, 7)],
+  ['route G: an ignored request does not skip the approval check, a ruleset approval missing and the exact key given', with_(missingG, { reviews: ok([rev(7, CR)]) }),
+    approvalMissing('G'), keyFor(false, 7)],
+  ['route U: an ignored request does not skip the approval check, a classic approval missing and the exact key given', with_(missingClassic, { reviews: ok([rev(7, CR)]) }),
+    approvalMissing('U'), keyFor(false, 7)],
+  ['route Q: a ruleset approval required and missing is still the queue route, admin never', with_(routeFixtures[0]![2], { pr: prWith('REVIEW_REQUIRED') }),
+    GOOD_Q],
+  ['route Q: the same with an ignored request and the exact key given', with_(routeFixtures[0]![2], { pr: prWith('REVIEW_REQUIRED'), reviews: ok([rev(7, CR)]) }),
+    GOOD_Q, keyFor(false, 7)],
+  ['read 3b: a direct route G with a ruleset approval required and missing: approval-missing, route G', with_(via3b, (f) => ({ ...f,
+    ...rules(pull({ required_approving_review_count: 1 }), rsc([{ context: 'build-pwa', integration_id: 15368 }], 21)),
+    checkruns: runs(run('build-pwa')), pr: prWith('REVIEW_REQUIRED') })), approvalMissing('G')],
+  ['read 3b: a direct route U with a ruleset approval required and missing: approval-missing, route U', with_(via3b, (f) => ({ ...f,
+    ...rules(pull({ required_approving_review_count: 1 })), pr: prWith('REVIEW_REQUIRED') })), approvalMissing('U')],
+  ['read 3b: route Q with a ruleset approval required and missing is still the queue route', with_(via3b, (f) => ({ ...f,
+    ...rules(pull({ required_approving_review_count: 1 }), queue('SQUASH')), ...settings(true, false, false, true),
+    pr: prWith('REVIEW_REQUIRED') })), 'ROUTE Q method=squash admin=never strict=unknown'],
+];
+
 // ---- Fix round 4: read 1, read 3 and read 6 judge the value GitHub sent, not the text a shell makes of it ----
 // A command substitution drops the trailing newlines of what it captures, and `jq -r` prints a missing, null, numeric or
-// boolean field as the text `null`, `123` or `true`. So a base, a state, a head, a 404 message or a bypass answer that was
-// never the value the contract names could pass for it, and a direct route (even a licensed `--admin` one) was chosen over a
-// source that was unusable; and read 3's exit status was thrown away, so HTTP 200 text from a gh that failed was believed.
+// boolean field as the text `null`, `123` or `true`. So a base, a state, a head or a 404 message that was
+// never the value the contract names could pass for it, and a direct route was chosen over a source that was unusable; and
+// read 3's exit status was thrown away, so HTTP 200 text from a gh that failed was believed.
 // Each is now judged on the JSON as gh sent it, and the exit status as gh gave it. The reproduction is the bare repository
-// with an approval missing and REVIEW_REQUIRED, which a coerced or normalised value turns into `admin=licensed`.
-const LICENSED_U = 'ROUTE U method=squash admin=licensed strict=no';
+// with an approval missing and REVIEW_REQUIRED: a usable read 1 reaches the approval check and stops there, whatever a
+// coerced or normalised value would have done (since ruling 5 no such value reaches `--admin`: no route uses it).
+const APPROVAL_MISSING_U = approvalMissing('U');
 const NO_BASE = 'STOP unreadable: read 1 gave no usable base';
 const UNREAD1 = 'STOP unreadable: read 1';
 const OTHER_HEAD = 'f'.repeat(40);
@@ -1158,7 +1190,7 @@ const BAD_HEADS: [string, unknown][] = [
   ['an array holding handoffCommit', [HC]], ['an empty object', {}],
 ];
 const READ1: Case[] = [
-  ['control: read 1 as the reproduction has it routes direct and licensed', read1({}), LICENSED_U],
+  ['control: read 1 as the reproduction has it reaches the approval check and stops approval-missing', read1({}), APPROVAL_MISSING_U],
   ...BAD_BASES.map(([what, v]): Case => [`unreadable: read 1: the base is ${what}`, read1({ baseRefName: v }), NO_BASE]),
   ...BAD_STATES.map(([what, v]): Case => [`unreadable: read 1: the state is ${what}`, read1({ state: v }), UNREAD1]),
   ['control: the state MERGED on the exact head prints the MERGED line with that head', read1({ state: 'MERGED' }), `MERGED head=${HC}`],
@@ -1201,7 +1233,7 @@ const READ1_SOURCE: [name: string, raw: string, line: string, atRead1: boolean][
   ['read 1 source: one value, an array holding the usable object', `[${prText('OPEN')}]`, UNREAD1, true],
   ['read 1 source: one value, true', 'true', UNREAD1, true],
   ['read 1 source: one value, null', 'null', UNREAD1, true],
-  ['read 1 source: control: one usable OPEN object reaches the route', prText('OPEN'), LICENSED_U, false],
+  ['read 1 source: control: one usable OPEN object reaches the approval check', prText('OPEN'), APPROVAL_MISSING_U, false],
   ['read 1 source: control: one usable CLOSED object stops as closed', prText('CLOSED'), 'STOP not-at-head: the PR is CLOSED', false],
   ['read 1 source: control: one usable MERGED object prints the MERGED line with its head', prText('MERGED'), `MERGED head=${HC}`, false],
 ];
@@ -1217,23 +1249,23 @@ const msg404 = (message: unknown): Answer => ({ code: 404, body: { message } });
 const on3 = (a: Answer): (() => Fixture) => with_(bareApproval(), { protection: a });
 /** The same usable HTTP 200 on stdout from gh exiting 0, 1 and 2: only the first is a success. */
 const exitCases = (what: string, build: (exit: number) => Fixture, good: string): Case[] => [
-  [`${what}: HTTP 200 on stdout and gh exits 0 routes as it always did`, () => build(0), good],
+  [`${what}: HTTP 200 on stdout and gh exits 0 is read as it always was`, () => build(0), good],
   [`unreadable: read 3: ${what}: the same HTTP 200 on stdout, but gh exits 1`, () => build(1), R3],
   [`unreadable: read 3: ${what}: the same HTTP 200 on stdout, but gh exits 2`, () => build(2), R3],
 ];
 const READ3: Case[] = [
-  ...exitCases('an empty object', (x) => with_(bareApproval(), { protection: exiting(prot200('{}'), x) })(), LICENSED_U),
-  ...exitCases('a sparse valid object', (x) => with_(bareApproval(), { protection: exiting(prot200(JSON.stringify(SPARSE_PROT)), x) })(), LICENSED_U),
+  ...exitCases('an empty object', (x) => with_(bareApproval(), { protection: exiting(prot200('{}'), x) })(), APPROVAL_MISSING_U),
+  ...exitCases('a sparse valid object', (x) => with_(bareApproval(), { protection: exiting(prot200(JSON.stringify(SPARSE_PROT)), x) })(), APPROVAL_MISSING_U),
   ...exitCases('this repository\'s full protection', (x) => with_(measured, { protection: exiting(measured().protection as Answer, x) })(), GOOD_Q),
-  ['control: the exact 404 is no protection, gh exiting 1 as it does', on3(exiting(fail(404, NP), 1)), LICENSED_U],
+  ['control: the exact 404 is no protection, gh exiting 1 as it does', on3(exiting(fail(404, NP), 1)), APPROVAL_MISSING_U],
   ['control: a 403 goes to read 3b, gh exiting 1 as it does',
     with_(via3b, { protection: exiting(fail(403, 'Resource not accessible by integration'), 1) }), 'ROUTE U method=squash admin=never strict=unknown'],
   ['control: a 401 goes to read 3b, gh exiting 1 as it does',
     with_(via3b, { protection: exiting(fail(401, 'Bad credentials'), 1) }), 'ROUTE U method=squash admin=never strict=unknown'],
   // The 404's message is the original JSON value, exactly one value, exactly the words.
-  ['control: a 404 whose message is exactly Branch not protected is no protection', on3(msg404(NP)), LICENSED_U],
+  ['control: a 404 whose message is exactly Branch not protected is no protection', on3(msg404(NP)), APPROVAL_MISSING_U],
   ['control: that message in the body gh prints, with the status and the documentation link', on3(prot404(
-    JSON.stringify({ message: NP, documentation_url: 'https://example.test/d', status: '404' }))), LICENSED_U],
+    JSON.stringify({ message: NP, documentation_url: 'https://example.test/d', status: '404' }))), APPROVAL_MISSING_U],
   ['unreadable: read 3 answers 404 with the message and one trailing newline', on3(msg404(`${NP}\n`)), R3_404],
   ['unreadable: read 3 answers 404 with the message and two trailing newlines', on3(msg404(`${NP}\n\n`)), R3_404],
   ['unreadable: read 3 answers 404 with a leading newline before the message', on3(msg404(`\n${NP}`)), R3_404],
@@ -1257,50 +1289,12 @@ const READ3: Case[] = [
   ['unreadable: read 3 answers 404 with a body that is an array holding the object', on3(prot404(`[{"message":"${NP}"}]`)), R3_404],
 ];
 
-// Read 6: the licence is the one value of the ruleset's answer, and its `current_user_can_bypass` is exactly "never". The
-// stop line shows what was found: a plain word as it is, every other value in JSON notation, so a value that is not exactly
-// `never` never reads as a bare `never`.
+// Read 6 is retired (ruling 5): no route uses `--admin`, so no ruleset is asked what the login may bypass. The fixture stays, for the
+// test below that the block never asks: an approval missing beside a ruleset that carries required checks, with whatever answer.
 const ruleset6 = (a: Answer | Answer[]): (() => Fixture) => with_(bareApproval(), (f) => ({ ...f,
   ...rules(pull({ required_approving_review_count: 1 }), rsc([{ context: 'build-pwa', integration_id: 15368 }], 21)),
   checkruns: runs(run('build-pwa')), ruleset: a }));
 const bypass = (v: unknown): Answer => ok({ id: 21, current_user_can_bypass: v });
-const answers = (shown: string, id = 21): string => `STOP licence-fails: an approval is missing and ruleset ${id} answers ${shown}`;
-const raw6 = (...vs: unknown[]): Answer => ({ code: 200, raw: vs.map((v) => JSON.stringify({ current_user_can_bypass: v })).join('\n') });
-const LICENSED_G = 'ROUTE G method=squash admin=licensed strict=no';
-const BYPASSES: [string, unknown, string][] = [
-  ['the string "always"', 'always', 'always'], ['the string "pull_requests_only"', 'pull_requests_only', 'pull_requests_only'],
-  ['the string "exempt"', 'exempt', 'exempt'], ['never with a trailing newline', 'never\n', '"never\\n"'],
-  ['never with two trailing newlines', 'never\n\n', '"never\\n\\n"'], ['never with a leading space', ' never', '" never"'],
-  ['never with a trailing space', 'never ', '"never "'], ['never in capitals', 'NEVER', 'NEVER'], ['an empty string', '', '""'],
-  ['null', null, 'null'], ['the number 7', 7, '7'], ['the boolean true', true, 'true'], ['an array holding never', ['never'], '["never"]'],
-  ['an empty object', {}, '{}'],
-];
-const READ6: Case[] = [
-  ['control: a ruleset answering exactly "never" licenses --admin', ruleset6(bypass('never')), LICENSED_G],
-  ['control: that answer from gh exiting 0 is the same', ruleset6(exiting(bypass('never'), 0)), LICENSED_G],
-  ...BYPASSES.map(([what, v, shown]): Case => [`the approval licence fails: read 6 answers ${what}`, ruleset6(bypass(v)), answers(shown)]),
-  ['the approval licence fails: read 6 answers with no current_user_can_bypass at all', ruleset6(ok({ id: 21 })), answers('null')],
-  ['the approval licence fails: read 6 answers null', ruleset6({ code: 200, raw: 'null' }), answers('null')],
-  ['the approval licence fails: read 6 answers two values, never and then always', ruleset6(raw6('never', 'always')), answers('unreadable')],
-  ['the approval licence fails: read 6 answers two values, always and then never', ruleset6(raw6('always', 'never')), answers('unreadable')],
-  ['the approval licence fails: read 6 answers two values that are both never', ruleset6(raw6('never', 'never')), answers('unreadable')],
-  ['the approval licence fails: read 6 answers two values back to back', ruleset6({ code: 200,
-    raw: '{"current_user_can_bypass":"never"}{"current_user_can_bypass":"never"}' }), answers('unreadable')],
-  ['the approval licence fails: read 6 answers with empty stdout and gh exits 0', ruleset6({ code: 200, raw: '' }), answers('unreadable')],
-  ['the approval licence fails: read 6 answers with a malformed body', ruleset6({ code: 200, raw: '{' }), answers('unreadable')],
-  ['the approval licence fails: read 6 answers with a body that is the word as a JSON string', ruleset6({ code: 200, raw: '"never"' }),
-    answers('unreadable')],
-  ['the approval licence fails: read 6 prints a never answer but gh exits 1', ruleset6(exiting(bypass('never'), 1)), answers('unreadable')],
-  ['the approval licence fails: read 6 fails', ruleset6(fail(404, 'Not Found')), answers('unreadable')],
-  ['the approval licence fails at the second ruleset: the first answers never, the second never with a newline',
-    with_(bareApproval(), (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }),
-      rsc([{ context: 'build-pwa', integration_id: 15368 }], 21), rsc([{ context: 'build-pwa', integration_id: 15368 }], 22)),
-      checkruns: runs(run('build-pwa')), ruleset: [bypass('never'), bypass('never\n')] })), answers('"never\\n"', 22)],
-  ['the approval licence holds when two rulesets both answer exactly "never"',
-    with_(bareApproval(), (f) => ({ ...f, ...rules(pull({ required_approving_review_count: 1 }),
-      rsc([{ context: 'build-pwa', integration_id: 15368 }], 21), rsc([{ context: 'build-pwa', integration_id: 15368 }], 22)),
-      checkruns: runs(run('build-pwa')), ruleset: [bypass('never'), bypass('never')] })), LICENSED_G],
-];
 
 /** Every argv the block may send: its reads (read 1 with its reviews, and the compare under read 3b), as GETs. */
 const READ = /^(pr view 42 --json baseRefName,headRefOid,state,reviewDecision|api (--paginate |-i )?repos\/\{owner\}\/\{repo\}(\/[^\s]*)?)$/;
@@ -1373,7 +1367,7 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
   it('reads and never writes: every gh the block spells is one of the reads, with no GraphQL and no rm', () => {
     expect(blocks).toHaveLength(1);
     const b = blocks[0]!;
-    expect(ghSpelled(b).length, 'the block spells fewer gh reads than its ten').toBeGreaterThanOrEqual(10);
+    expect(ghSpelled(b).length, 'the block spells fewer gh reads than its nine (read 6 is retired)').toBeGreaterThanOrEqual(9);
     expect(ghOffenders(b), 'the block spells a gh that is not one of the reads').toEqual([]);
     expect(b).not.toContain('graphql');
     expect(b).not.toMatch(/\brm\s/);
@@ -1569,8 +1563,8 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
       .toEqual([`api repos/{owner}/{repo}/compare/main...${HC}`]);
   });
 
-  it.each([...ROUTES, ...CHECKS, ...STOPS, LICENSED_NEVER, ...REQUESTS, ...IGNORES, ...LICENCE, ...MALFORMED,
-  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES, ...ORDER, ...LOSS, ...READ1, ...READ3, ...READ6])('%s', (_name, fx, line, env) => {
+  it.each([...ROUTES, ...CHECKS, ...STOPS, APPROVAL_WITH_RULESET, ...REQUESTS, ...IGNORES, ...LICENCE, ...APPROVAL, ...MALFORMED,
+  ...READ5, ...MIXED, ...FIELDS, ...ENTRIES, ...CONV, ...NAMES, ...ORDER, ...LOSS, ...READ1, ...READ3])('%s', (_name, fx, line, env) => {
     expect(blocks).toHaveLength(1);
     const r = verdict(fx(), env);
     expect(r.out, `stderr: ${r.stderr}`).toBe(`${line}\n`);
@@ -1592,7 +1586,7 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
 
   it.each(['null', '123'])('a base that is the STRING "%s" is a legitimate branch name: it routes as main does, and the reads ask about it', (name) => {
     const control = verdict(read1({})());
-    expect(control.out).toBe(`${LICENSED_U}\n`);
+    expect(control.out).toBe(`${APPROVAL_MISSING_U}\n`);
     const r = verdict(read1({ baseRefName: name })());
     expect(r.out, `stderr: ${r.stderr}`).toBe(control.out);
     expect(r.stderr).toBe('');
@@ -1615,10 +1609,43 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
     }
   });
 
-  it('a read 6 that fails the licence is still one GET per ruleset: the stop line shows the answer already in hand', () => {
-    for (const a of [bypass('never\n'), raw6('never', 'always'), fail(404, 'Not Found')]) {
-      expect(verdict(ruleset6(a)()).calls.filter((c) => c.includes('/rulesets/'))).toEqual(['api repos/{owner}/{repo}/rulesets/21']);
+  it('asks no ruleset what the login may bypass: whatever read 6 would have answered, the line is approval-missing and no call names rulesets/', () => {
+    for (const a of [bypass('never'), bypass('always'), bypass('never\n'), fail(404, 'Not Found'), { code: 200, raw: '' }] as Answer[]) {
+      const r = verdict(ruleset6(a)());
+      expect(r.out, `stderr: ${r.stderr}`).toBe(`${approvalMissing('G')}\n`);
+      expect(r.calls.filter((c) => c.includes('rulesets')), 'the block asked a ruleset by id').toEqual([]);
     }
+  });
+
+  it('never prints admin=licensed or a --admin spelling, and never sends one: every fixture of the approval cases answers admin=never or the one stop', () => {
+    const fixtures = [preQueue, missingG, missingU, missingClassic, ruleset6(bypass('never')), measured, thirdParty, bare, via3b,
+      with_(preQueue, { reviews: ok([rev(7, CR)]) })];
+    for (const fx of fixtures) {
+      const r = verdict(fx(), keyFor(false, 7));
+      const [line, ...rest] = r.out.split('\n').filter(Boolean);
+      expect(rest, 'the verdict printed more than one line').toEqual([]);
+      expect(line, 'a line that names admin=licensed').not.toContain('admin=licensed');
+      // The one line allowed to name --admin is the stop that says it is never used.
+      if (line!.startsWith('ROUTE')) expect(line).not.toContain('--admin');
+      else if (line!.includes('--admin')) expect(line).toMatch(/^STOP approval-missing: route [GU] needs an approval the fleet cannot give, and --admin is never used$/);
+      for (const c of r.calls) {
+        expect(c, 'a call carries --admin').not.toContain('--admin');
+        expect(c, 'a call names a ruleset by id').not.toContain('rulesets');
+      }
+    }
+  });
+
+  it('the block text has no read 6, no licence line and no --admin spelling: no rulesets/ call, no admin=licensed, no current_user_can_bypass', () => {
+    const b = blocks[0]!;
+    expect(b).not.toContain('rulesets/');
+    expect(b).not.toContain('admin=licensed');
+    expect(b).not.toContain('licence-fails');
+    expect(b).not.toContain('current_user_can_bypass');
+    // The only code line that spells --admin is the stop that says it is never used (comment lines are dropped).
+    expect(codeLines(b).filter((l) => l.includes('--admin')).map((l) => l.trim())).toEqual([
+      'stop "approval-missing: route $route needs an approval the fleet cannot give, and --admin is never used"']);
+    expect(b).toContain('stop "approval-missing: route $route needs an approval the fleet cannot give, and --admin is never used"');
+    expect(b).toContain('say "ROUTE $route method=$method admin=never strict=$strict"');
   });
 
   it('reads the head\'s checks only once read 1 has shown the head is handoffCommit', () => {
@@ -1661,11 +1688,10 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
     expect(r.out.trim().split('\n')).toHaveLength(1);
   });
 
-  it('weighs read 6 only for the licence, and only for a ruleset that carries required checks', () => {
+  it('reads no ruleset by id, for any configuration: the pre-queue one, this repository as measured and a ruleset carrying required checks', () => {
     expect(verdict(preQueue()).calls.filter((c) => c.includes('/rulesets/'))).toEqual([]);
     expect(verdict(measured()).calls.filter((c) => c.includes('/rulesets/'))).toEqual([]);
-    expect(verdict(LICENSED_NEVER[1]()).calls.filter((c) => c.includes('/rulesets/')))
-      .toEqual(['api repos/{owner}/{repo}/rulesets/21']);
+    expect(verdict(APPROVAL_WITH_RULESET[1]()).calls.filter((c) => c.includes('/rulesets/'))).toEqual([]);
   });
 
   it('re-reads only read 5 while it waits within the bound', () => {

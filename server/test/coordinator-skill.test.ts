@@ -324,7 +324,7 @@ describe('the coordinator skill: its contract', () => {
       .toBe(licensed);
   });
 
-  it('binds the exact SHA in every `gh pr merge` it spells, with at most one method flag, and --admin only in the licence (landing-order waves 2 and 3e)', () => {
+  it('binds the exact SHA in every `gh pr merge` it spells, with at most one method flag, and no --admin at all (landing-order waves 2 and 3e)', () => {
     // DERIVED: every backtick code span in the whole corpus that runs
     // `gh pr merge`. #178 put `--match-head-commit <handoffCommit>` into the
     // coordinator's merge "for exactly this reason" — the exact-SHA merge proof
@@ -352,15 +352,8 @@ describe('the coordinator skill: its contract', () => {
     expect(spans).toContain('gh pr merge <pr> --merge --match-head-commit <handoffCommit>');
     // #178's fixed squash is gone: a squash is whatever the method set gives, never a spelling of its own.
     expect(spans.filter((s) => s.includes('--squash')), 'a gh pr merge spelling fixes --squash').toEqual([]);
-    // `--admin` is spelled once, as the approval licence's direct spelling, inside the licence paragraph alone.
-    expect(spans.filter((s) => s.includes('--admin')), 'a gh pr merge spelling carries --admin outside the licence')
-      .toEqual(['gh pr merge <pr> --<method> --admin --match-head-commit <handoffCommit>']);
-    const wl = refs('wave-lifecycle.md');
-    const lic = wl.indexOf('**The approval licence.**');
-    expect(lic, 'wave-lifecycle.md lost the approval licence paragraph').toBeGreaterThanOrEqual(0);
-    const at = wl.indexOf('`gh pr merge <pr> --<method> --admin --match-head-commit <handoffCommit>`');
-    expect(at, 'the licensed spelling is not inside the approval licence paragraph').toBeGreaterThan(lic);
-    expect(at).toBeLessThan(wl.indexOf('\n\n', lic));
+    // No route uses `--admin` (spec §11, the amendment of 2026-10-25, ruling 5): no `gh pr merge` spelling in the corpus carries it.
+    expect(spans.filter((s) => s.includes('--admin')), 'a gh pr merge spelling carries --admin').toEqual([]);
   });
 
   it('lands before it closes on a native-queue project — the last wave too — enqueues only a green PR and proves the entry, and names the landing notices by the server\'s own subjects (landing-order wave 2)', () => {
@@ -3017,12 +3010,13 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(words.sort()).toEqual(['MERGED', 'RED', 'ROUTE', 'STOP', 'WAIT not-reported', 'WAIT pending']);
     for (const w of words.filter((x) => x !== 'ROUTE')) expect(prose, `§5b never says what \`${w}\` means`).toContain('`' + w);
     for (const r of routes) expect(prose, `§5b never says what \`ROUTE ${r}\` means`).toContain('`ROUTE ' + r);
-    // The licence words: the block's own literals, and the prose's handling of each. Strictness has its own test below,
-    // which slices the block's computation so each of its three values is pinned in the block AND in the prose.
-    for (const [a, src] of [['admin=licensed', 'admin=licensed'], ['admin=never', 'admin=never']] as const) {
-      expect(block, `the block never prints ${a}`).toContain(src);
-      expect(prose, `§5b never says what \`${a}\` means`).toContain('`' + a + '`');
-    }
+    // The admin word: no route uses --admin (spec §11, the amendment of 2026-10-25, ruling 5), so `admin=never` is the one
+    // the block prints and the prose explains, and `admin=licensed` is in neither. Strictness has its own test below, which
+    // slices the block's computation so each of its three values is pinned in the block AND in the prose.
+    expect(block, 'the block never prints admin=never').toContain('admin=never');
+    expect(prose, '§5b never says what `admin=never` means').toContain('`admin=never`');
+    expect(block, 'the block prints admin=licensed again').not.toContain('admin=licensed');
+    expect(prose, '§5b names admin=licensed again').not.toContain('admin=licensed');
   });
 
   it('computes strictness in three values, and the prose handles each of the three (the strictness pins)', () => {
@@ -3048,7 +3042,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(i, '§5b no longer lists the verdict\'s stops').toBeGreaterThanOrEqual(0);
     const listed = [...prose.slice(i + lead.length, prose.indexOf('.', i)).matchAll(/`([a-z0-9-]+)`/g)].map((m) => m[1]!).sort();
     expect(listed).toEqual(printed);
-    expect(printed).toEqual(['auto-merge-off', 'changes-requested', 'licence-fails', 'method-set-empty', 'not-at-head',
+    expect(printed).toEqual(['approval-missing', 'auto-merge-off', 'changes-requested', 'method-set-empty', 'not-at-head',
       'not-reported', 'queue-method-not-allowed', 'read-3b-unknowable', 'rebase-only', 'two-queue-methods',
       'unknown-rule-type', 'unreadable', 'unverifiable']);
     expect(prose).toContain('Four stops no read decides are yours to name: `red-unreachable` (above), `verdict-unread` (above), `checks-gate-unread` (step 3) and `github-refused`, a merge GitHub refused for a rule it enforces at merge and this session does not verify — reviews, signatures, deployments, code scanning, required workflows — which this session never works around.');
@@ -3109,17 +3103,19 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(block, 'a full POLL_S sleep is back').not.toContain('sleep "$POLL_S"');
   });
 
-  it('licenses --admin narrowly, never as a fallback, and never retries a refused merge (spec §5.7.4)', () => {
-    expect(prose).toContain('`--admin` is licensed on a direct route only');
-    expect(prose).toContain('Without a missing approval `--admin` is never passed; under read 3b it is never used');
-    expect(prose).toContain('a fallback is `--admin` after a refusal, and this licence is decided before the merge, from reads');
+  it('never uses --admin on any route, never as a fallback, and never retries a refused merge (spec §11, the amendment of 2026-10-25, ruling 5)', () => {
+    expect(prose).toContain('**No `--admin`.** `--admin` and GitHub API merge or enqueue calls are governed by the repository\'s external policy authority; until that authority answers (wave 2b), a coordinator never uses them (spec §11, the amendment of 2026-10-25, ruling 5).');
+    expect(prose).toContain('That ruling supersedes the approval licence of spec §5.7.4 and §11 item 10, so no answer read here licenses `--admin`');
+    expect(prose).toContain('And `--admin` is never a fallback: a fallback is `--admin` after a refusal.');
     expect(prose).toContain('never retried with another method, with `--admin` or with `--auto`');
     expect(prose).toContain('This session writes no setting to make a route work');
-    // Ruling 82's condition 1: only REVIEW_REQUIRED is a missing approval, and never while a request for changes stands.
-    // The old direct-route-only sentence ("an approval is required and a review requests changes") is superseded by the
-    // operator's ask on every route (the `A requested change` test below), so its pin is retired with it.
-    expect(prose).toContain('`required_approving_review_count` above 0, and `reviewDecision` is `REVIEW_REQUIRED`), with no request for changes standing, an ignored one included;');
-    expect(prose).toContain('Without a missing approval `--admin` is never passed; under read 3b it is never used; while a request for changes stands, ignored or not, it is never licensed; and it is never a fallback:');
+    // Only REVIEW_REQUIRED is a missing approval, and a direct route that needs one stops `approval-missing` before any merge,
+    // whether or not a request for changes stands, an ignored one included (the old `$standing` short-circuit is retired).
+    expect(prose).toContain('`required_approving_review_count` above 0, and `reviewDecision` is `REVIEW_REQUIRED`), stops `approval-missing` before any merge, whether or not a request for changes stands, an ignored one included');
+    // No licence is left in the prose: no licensed line, no licence stop, no licence paragraph.
+    expect(prose).not.toContain('admin=licensed');
+    expect(prose).not.toContain('licence-fails');
+    expect(prose).not.toContain('**The approval licence.**');
     expect(prose, 'the superseded direct-route changes-requested sentence is back').not.toContain('someone must answer or dismiss that review');
     // Today's sentence, read literally, passed --admin over a required check an admin may skip: withdrawn.
     expect(allSkillText).not.toContain('where the repository\'s ruleset requires it');
@@ -3131,9 +3127,9 @@ describe('the landing route from the repository\'s own rules (landing-order wave
   it('pins the action text of every verdict line, whole (the action pins)', () => {
     const actions = [
       '- `ROUTE Q method=<m> admin=never` — the native queue, merging by `<m>`: land as "Landing on a native-queue project" (step 3) says, with no method flag and never `--admin`, the read-back and the disarm rule included, and the checks gate with its four exits, which a `ROUTE Q` answer does not waive.',
-      '- `ROUTE G method=<m> admin=<a>` — a gated direct merge: every required check has passed on the head. Merge from your own session with exactly `gh pr merge <pr> --<method> --match-head-commit <handoffCommit>`, `<method>` being the line\'s `<m>`; on a merge-commits-only repository that is exactly `gh pr merge <pr> --merge --match-head-commit <handoffCommit>`.',
-      '- `ROUTE U method=<m> admin=<a>` — an ungated direct merge: nothing is required and nothing waits. The same spelling as route G.',
-      '- `admin=never` — no `--admin`. `admin=licensed`, on a direct route only — the approval licence holds (below), and the spelling gains `--admin`.',
+      '- `ROUTE G method=<m> admin=never` — a gated direct merge: every required check has passed on the head. Merge from your own session with exactly `gh pr merge <pr> --<method> --match-head-commit <handoffCommit>`, `<method>` being the line\'s `<m>`; on a merge-commits-only repository that is exactly `gh pr merge <pr> --merge --match-head-commit <handoffCommit>`.',
+      '- `ROUTE U method=<m> admin=never` — an ungated direct merge: nothing is required and nothing waits. The same spelling as route G.',
+      '- `admin=never` — no `--admin`, on every route (**No `--admin`**, below).',
       '- `strict=yes` — a strict-protection repository: clause 15\'s land-sync applies as it does today.',
       '- `MERGED head=<sha>` — the PR already landed: prove it as step 3 does (MERGED, `headRefOid` equal to `handoffCommit`). It is not a stop; a different head fails the proof, and that is reported, never closed on.',
       '- `WAIT pending: <names>` — a reported required check is still running. Wait in the foreground, `gh pr checks <pr> --required --watch`, again if the call times out while a reported required check is still pending, then run the verdict again — never by ending your turn: no mail comes when checks finish. Once this landing attempt\'s bounded wait is spent, which a `BOUND_S=300` run that ends on this very line spends too (**After a bounded wait**, below), do not wait: report the line to the operator and leave the landing stopped.',
@@ -3244,16 +3240,13 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(para.match(/enqueue it anyway/g), 'the withdrawn no-checks exception is back').toBeNull();
   });
 
-  it('pins the whole approval licence, its no-fallback paragraph and the proof paragraph that forbids a retry with --admin, so no condition, gate or sentence can change unseen (the licence action pin)', () => {
-    const from = prose.indexOf('**The approval licence.**');
+  it('pins the whole No --admin paragraph and the proof paragraph that forbids a retry with --admin, so no condition, gate or sentence can change unseen (the licence action pin)', () => {
+    const from = prose.indexOf('**No `--admin`.**');
     const to = prose.indexOf('**A requested change.**');
-    expect(from, 'the approval licence paragraph is gone').toBeGreaterThanOrEqual(0);
-    expect(to, 'the licence and the proof paragraph lost the requested-change section that follows them').toBeGreaterThan(from);
+    expect(from, 'the No --admin paragraph is gone').toBeGreaterThanOrEqual(0);
+    expect(to, 'the No --admin paragraph and the proof paragraph lost the requested-change section that follows them').toBeGreaterThan(from);
     const whole = [
-      '**The approval licence.** `--admin` is licensed on a direct route only, and only when all three hold, each read fresh for this landing: an approval the fleet cannot give is required and missing (a `pull_request` rule\'s, or classic protection\'s, `required_approving_review_count` above 0, and `reviewDecision` is `REVIEW_REQUIRED`), with no request for changes standing, an ignored one included; every required check has passed on the head; and `--admin` cannot skip a gate — no other gate applies, no review conversation must be resolved that an admin could skip (a `pull_request` rule\'s `required_review_thread_resolution`, or classic `required_conversation_resolution` without `enforce_admins`), classic required checks carry `enforce_admins`, and every ruleset carrying required checks answers `current_user_can_bypass` with exactly `never` (any other answer, an unreadable answer, or a rule that names no ruleset counting as able to bypass).',
-      'The verdict weighs all three: it answers `admin=licensed`, and only then the spelling is `gh pr merge <pr> --<method> --admin --match-head-commit <handoffCommit>`, or it stops `licence-fails`.',
-      'Without a missing approval `--admin` is never passed; under read 3b it is never used; while a request for changes stands, ignored or not, it is never licensed; and it is never a fallback: a fallback is `--admin` after a refusal, and this licence is decided before the merge, from reads.',
-      'An approval kept in classic protection with `enforce_admins` on binds an admin too, so `--admin` does not help there, and GitHub\'s refusal is the stop.',
+      '**No `--admin`.** `--admin` and GitHub API merge or enqueue calls are governed by the repository\'s external policy authority; until that authority answers (wave 2b), a coordinator never uses them (spec §11, the amendment of 2026-10-25, ruling 5). That ruling supersedes the approval licence of spec §5.7.4 and §11 item 10, so no answer read here licenses `--admin`: not a missing approval, not `enforce_admins`, and not a ruleset\'s `current_user_can_bypass`, which the verdict no longer reads. A direct route that needs an approval the fleet cannot give, and finds it missing (a `pull_request` rule\'s, or classic protection\'s, `required_approving_review_count` above 0, and `reviewDecision` is `REVIEW_REQUIRED`), stops `approval-missing` before any merge, whether or not a request for changes stands, an ignored one included: without `--admin` that merge could only be refused, or pass over the approval by a bypass the external authority has not granted. Under read 3b classic protection\'s approvals cannot be read, so there GitHub\'s refusal is the stop, `github-refused`. Route Q is unchanged: its enqueue never passes `--admin`. And `--admin` is never a fallback: a fallback is `--admin` after a refusal.',
       '**On every route** the merge is proven as step 3 proves it: MERGED, with `headRefOid` equal to `handoffCommit`.',
       'A refused merge on route G or U is read, reported and stopped on, and never retried with another method, with `--admin` or with `--auto`.',
       'This session writes no setting to make a route work: no ruleset, no branch protection, no merge-method or auto-merge setting (clause 15).',
@@ -3302,9 +3295,9 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     const list = [
       'Run it once the review is clean and the run is at `merging` (§4), in the order step 3 gives for route Q, and again after every wait. Its first word decides what this session does, and nothing else does:',
       '- `ROUTE Q method=<m> admin=never` — the native queue, merging by `<m>`: land as "Landing on a native-queue project" (step 3) says, with no method flag and never `--admin`, the read-back and the disarm rule included, and the checks gate with its four exits, which a `ROUTE Q` answer does not waive.',
-      '- `ROUTE G method=<m> admin=<a>` — a gated direct merge: every required check has passed on the head. Merge from your own session with exactly `gh pr merge <pr> --<method> --match-head-commit <handoffCommit>`, `<method>` being the line\'s `<m>`; on a merge-commits-only repository that is exactly `gh pr merge <pr> --merge --match-head-commit <handoffCommit>`.',
-      '- `ROUTE U method=<m> admin=<a>` — an ungated direct merge: nothing is required and nothing waits. The same spelling as route G.',
-      '- `admin=never` — no `--admin`. `admin=licensed`, on a direct route only — the approval licence holds (below), and the spelling gains `--admin`.',
+      '- `ROUTE G method=<m> admin=never` — a gated direct merge: every required check has passed on the head. Merge from your own session with exactly `gh pr merge <pr> --<method> --match-head-commit <handoffCommit>`, `<method>` being the line\'s `<m>`; on a merge-commits-only repository that is exactly `gh pr merge <pr> --merge --match-head-commit <handoffCommit>`.',
+      '- `ROUTE U method=<m> admin=never` — an ungated direct merge: nothing is required and nothing waits. The same spelling as route G.',
+      '- `admin=never` — no `--admin`, on every route (**No `--admin`**, below).',
       '- `strict=yes` — a strict-protection repository: clause 15\'s land-sync applies as it does today. `strict=no` — it does not. `strict=unknown` comes only under read 3b: on a direct route the verdict has already stopped on a head behind the base, and route Q needs no strictness, since the queue tests the merged group itself.',
       '- `MERGED head=<sha>` — the PR already landed: prove it as step 3 does (MERGED, `headRefOid` equal to `handoffCommit`). It is not a stop; a different head fails the proof, and that is reported, never closed on.',
       '- `WAIT pending: <names>` — a reported required check is still running. Wait in the foreground, `gh pr checks <pr> --required --watch`, again if the call times out while a reported required check is still pending, then run the verdict again — never by ending your turn: no mail comes when checks finish. Once this landing attempt\'s bounded wait is spent, which a `BOUND_S=300` run that ends on this very line spends too (**After a bounded wait**, below), do not wait: report the line to the operator and leave the landing stopped.',
@@ -3339,8 +3332,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       'A key whose `reviews` is empty, a summary-only request, can never be ignored: inspect the PR\'s reviews, read the verdict again and report to the operator.',
       'Only a fresh `ROUTE` result permits the normal landing steps.',
       'Never merge, enqueue or pass `--admin` on a `changes-requested` line.',
-      'While any request stands the verdict never answers `admin=licensed`, ignored or not.',
-      'Ignore cannot evade GitHub\'s refusal of a missing required approval: a direct refusal is `github-refused`; on route Q, if gh only arms auto-merge, follow step 3\'s read-back and disarm rule, then stop `github-refused`, and never leave it armed on the operator\'s ignore.',
+      'Ignore cannot evade a missing required approval: on a direct route the verdict stops `approval-missing` (**No `--admin`**, above), and a refusal it could not foresee is `github-refused`; on route Q, if gh only arms auto-merge, follow step 3\'s read-back and disarm rule, then stop `github-refused`, and never leave it armed on the operator\'s ignore.',
     ].join(' ');
     expect(prose.slice(from, to).trim()).toBe(whole);
   });
@@ -3352,7 +3344,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     const whole = [
       '**A stop.** A stop leaves the run where it is (at `merging` or `awaiting-review`), enqueues nothing, merges nothing and changes nothing.',
       'Say in your turn\'s text which stop fired and what it read, for the operator: every stop goes to the operator, never to another route.',
-      'The verdict stops with one of these reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`, `unknown-rule-type`, `method-set-empty`, `rebase-only`, `queue-method-not-allowed`, `two-queue-methods`, `auto-merge-off`, `unverifiable`, `not-reported`, `changes-requested`, `licence-fails`.',
+      'The verdict stops with one of these reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`, `unknown-rule-type`, `method-set-empty`, `rebase-only`, `queue-method-not-allowed`, `two-queue-methods`, `auto-merge-off`, `unverifiable`, `not-reported`, `changes-requested`, `approval-missing`.',
       'A `changes-requested` stop is read before `WAIT` and `RED` on every route and is the operator\'s to decide, as **A requested change** above says.',
       'Four stops no read decides are yours to name: `red-unreachable` (above), `verdict-unread` (above), `checks-gate-unread` (step 3) and `github-refused`, a merge GitHub refused for a rule it enforces at merge and this session does not verify — reviews, signatures, deployments, code scanning, required workflows — which this session never works around.',
       'Not a stop: a required check red on the head that is the PR\'s own; that goes to the fix-round rule, on route G exactly as on route Q.',
@@ -3396,9 +3388,9 @@ describe('the landing route from the repository\'s own rules (landing-order wave
   // spends nothing a second time: a fresh WAIT is reported and the landing stays stopped, never sent back to a watch or a bound.
   it('discards the route a bounded wait prints and runs the complete verdict afresh without a bound; a fresh WAIT stops the landing (the fresh-verdict pins)', () => {
     const from = prose.indexOf('**After a bounded wait.**');
-    const to = prose.indexOf('**The approval licence.**');
+    const to = prose.indexOf('**No `--admin`.**');
     expect(from, '§5b lost its paragraph on the route a bounded wait prints').toBeGreaterThanOrEqual(0);
-    expect(to, 'the paragraph lost the approval licence that follows it').toBeGreaterThan(from);
+    expect(to, 'the paragraph lost the No --admin paragraph that follows it').toBeGreaterThan(from);
     const parts = [
       '**After a bounded wait.**',
       // The explanation of the internal snapshot, and no claim that it is watched.
@@ -3422,7 +3414,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       'The budget is spent once this landing attempt has run its `BOUND_S=300` verdict, also when that run ends early on a name that started running.',
       'It stays spent for the rest of the attempt, whichever arm leads back to the verdict (the checks gate\'s exit `1`, the one rerun a `RED` allows, the `CR_IGNORE` run).',
       'Every later run of the verdict uses `BOUND_S=0`, and any later `WAIT`, pending or not-reported, including the `WAIT pending` the bounded run itself prints, is reported the same way and leaves the landing stopped: no watch, and no renewal when another required name becomes missing or pending.',
-      'The operator\'s ignore answer permits only the complete fresh verdict with the exact `CR_IGNORE` key, inside the current attempt: it neither replenishes nor consumes a waiting phase, and when the bound is spent that run uses `BOUND_S=0`, a `WAIT` it prints is reported with no watch, and `admin` stays never over a standing request.',
+      'The operator\'s ignore answer permits only the complete fresh verdict with the exact `CR_IGNORE` key, inside the current attempt: it neither replenishes nor consumes a waiting phase, and when the bound is spent that run uses `BOUND_S=0`, a `WAIT` it prints is reported with no watch.',
       'A different required name, a returned route, a rerun, the clock, an account or session resumption and a repeated mail are not resets.',
       'Outside these two doors, only an explicit operator instruction to start another attempt authorizes one: never infer it from an ignore answer or from automation, and no report, rerun, fresh route or passage of time is one.',
     ];
@@ -3449,7 +3441,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       'A later run of the verdict for the same landing, after a wait or with `BOUND_S`, sets it again the same way only while the key the verdict prints is unchanged; a changed key is a new ask.',
       'A key whose `reviews` is empty, a summary-only request, can never be ignored: inspect the PR\'s reviews, read the verdict again and report to the operator.',
       'Only a fresh `ROUTE` result permits the normal landing steps. Never merge, enqueue or pass `--admin` on a `changes-requested` line.',
-      'While any request stands the verdict never answers `admin=licensed`, ignored or not. Ignore cannot evade GitHub\'s refusal of a missing required approval: a direct refusal is `github-refused`; on route Q, if gh only arms auto-merge, follow step 3\'s read-back and disarm rule, then stop `github-refused`, and never leave it armed on the operator\'s ignore.',
+      'Ignore cannot evade a missing required approval: on a direct route the verdict stops `approval-missing` (**No `--admin`**, above), and a refusal it could not foresee is `github-refused`; on route Q, if gh only arms auto-merge, follow step 3\'s read-back and disarm rule, then stop `github-refused`, and never leave it armed on the operator\'s ignore.',
       'This session reads again before each enqueue, direct merge and re-enqueue, and after each wait, as a complete verdict (**After a bounded wait**, above). It cannot atomically prevent a request submitted after that last read or while an already-enqueued PR merges, and nothing here claims review enforcement at queue time.',
       'If it observes a request on a queued PR, it stops that landing attempt, disarms it as step 3 does if it is only armed, asks the operator to dequeue it if it is in the queue, asks address or ignore, and never enqueues again silently. Watching a queued PR continuously is a server follow-up, not this skill\'s.',
     ];
