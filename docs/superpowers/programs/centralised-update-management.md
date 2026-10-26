@@ -6294,6 +6294,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   no lane path.
   `STATUS 2026-10-26T04:25:45Z fleet=v0.0.702 server=v0.0.702 health=v0.0.702 newest=v0.0.719 intent=*:dev/auto=off`
   `pin=None link=<versions>/v0.0.702 backups=fleet:165M/server:9341M disk=fleet:99G/work:499G/server:21G`
+- **2026-10-26 05:25 UTC — v0.0.720 released (#1549, the history sweep's forward progress); no move yet; no anomaly.**
+  The history programme's coordinator is asking the operator to move the fleet box to it. The broker's coordinator ruled
+  that its history backfill waits for the #1399 evidence window to close if the server moves onto v0.0.713 or later.
+  `STATUS 2026-10-26T05:25:40Z fleet=v0.0.702 server=v0.0.702 health=v0.0.702 newest=v0.0.720 intent=*:dev/auto=off`
+  `pin=None link=<versions>/v0.0.702 backups=fleet:165M/server:9341M disk=fleet:99G/work:499G/server:21G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
