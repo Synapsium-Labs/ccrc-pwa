@@ -1,6 +1,9 @@
 import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../../shared/api.js';
 import { HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER } from '../../../shared/switches.js';
 import { turnSays, turnWordOf } from '../sessionReading.js';
+import {
+  SLEEP_HELD_RULES, SLEEP_POLICY_NAMES, SLEEP_QUIET_BOUNDARIES, SLEEP_RUN_CLOCKS, type SleepInput, type SleepPolicy,
+} from '../sleep.js';
 
 /**
  * HIBERNATE LONG-IDLE SESSIONS (D-5242, `hibernate-long-idle-sessions`, spec §5.11): the server's pure verdict.
@@ -180,6 +183,38 @@ export type HibernateVerdict =
   | { readonly act: 'measure' }
   | { readonly act: 'hold'; readonly reason: HibernateHold };
 
+/** The `idle-hours` policy row (D-7040; ARCH-43): hibernation's every difference from `run-done` that the one ladder
+ *  (`decideSleep`, `sleep.ts`) reads. Any session; bucket `archived` holds `archived` and a dead pane `pane`; any hold
+ *  holds; no run clock; no verb hold (the act asks it beside the argv); no turn verdict; quiet is measured up to and
+ *  including N. Its name and kebab values are `sleep.ts`'s constants, so this file spells no new kebab word. */
+export const IDLE_HOURS_POLICY: SleepPolicy<HibernateHold> = {
+  name: SLEEP_POLICY_NAMES[1],
+  holds: HIBERNATE_HOLDS,
+  entry: { child: false, archivedBucket: true, paneDead: true, stopped: false },
+  held: SLEEP_HELD_RULES.anyHolds,
+  runClock: { kind: SLEEP_RUN_CLOCKS.none },
+  verbBeforeMeasure: false,
+  turnVerdict: false,
+  liveWord: 'sleep',
+  quiet: { boundary: SLEEP_QUIET_BOUNDARIES.atMost, parkedMs: null },
+};
+
+/** The one dead-pane compare, shared by the old ladder and the builder until the ladder delegates (C4b's move commit). */
+const paneDeadOf = (r: HibernateRow): boolean => r.status === 'dead';
+
+/** The one ladder's facts, from hibernation's input. The dead-pane compare is this lane's (`paneDead`); the child
+ *  marker, the stop stamp, the verb and the turn are not read (`null`), the store carries no run, and no hold is
+ *  classified (`heldPasses: false`). `afterMs` is N. */
+export function hibernateSleepInput(i: HibernateInput, now: number, afterMs: number): SleepInput {
+  const r = i.row;
+  return {
+    row: r, child: null, paneDead: paneDeadOf(r), stopped: null, heldPasses: false, optedOut: i.optedOut,
+    store: i.store.ok ? { ...i.store, last: null, parkedWorker: false } : i.store,
+    viewer: i.viewer, sinceStartMs: i.sinceStartMs, viewerOpenTtlMs: PRESENCE_OPEN_TTL_MS, verb: null,
+    live: i.live.kind === 'read' ? { ...i.live, turn: null } : i.live, now, quietMs: afterMs,
+  };
+}
+
 /**
  * Put this session to sleep? The holds run cheapest first and the live reads come last: `measure` asks the sweep to
  * read them for a row nothing else holds. Every read the verdict could not make HOLDS — never an unmeasured sleep.
@@ -189,7 +224,7 @@ export function hibernateVerdict(i: HibernateInput, now: number, afterMs: number
   const hold = (reason: HibernateHold): HibernateVerdict => ({ act: 'hold', reason });
   const r = i.row;
   if (r.archivedAt !== null || r.bucket === 'archived') return hold('archived');
-  if (r.status === 'dead') return hold('pane');
+  if (paneDeadOf(r)) return hold('pane');
   if (r.unmeasured.length > 0 || r.statusUnmeasured) return hold('unmeasured');
   if (i.optedOut) return hold('opted-out');
   if (r.held !== null) return hold('held');

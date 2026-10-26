@@ -1,4 +1,7 @@
 import { IDLE_RUN_STATES, TERMINAL_RUN_STATES, type FleetSession } from '../../shared/api.js';
+import {
+  SLEEP_HELD_RULES, SLEEP_POLICY_NAMES, SLEEP_QUIET_BOUNDARIES, SLEEP_RUN_CLOCKS, type SleepInput, type SleepPolicy,
+} from './sleep.js';
 
 /**
  * STOP A FINISHED RUN'S WORKER (D-5370, `stop-worker-at-run-done`): the pure verdict.
@@ -199,6 +202,34 @@ export type StopDoneVerdict =
   }
   | { readonly act: 'measure' }
   | { readonly act: 'hold'; readonly reason: StopDoneHold };
+
+/** The `run-done` policy row (D-7040; ARCH-43): this lane's every difference from `idle-hours` that the one ladder
+ *  (`decideSleep`, `sleep.ts`) reads. Only dispatched children, a stop stamp holds; a workspace hold passes with
+ *  `hibernate-hold-ok`; the run's close is the clock (with the parked states' own); `no-verb` before `measure`; the
+ *  turn verdict is read; quiet is measured strictly below the grace, or `STOP_DONE_PARKED_IDLE_MS` for a parked run. */
+export const RUN_DONE_POLICY: SleepPolicy<StopDoneHold> = {
+  name: SLEEP_POLICY_NAMES[0],
+  holds: STOP_DONE_HOLDS,
+  entry: { child: true, archivedBucket: false, paneDead: false, stopped: true },
+  held: SLEEP_HELD_RULES.workspacePasses,
+  runClock: { kind: SLEEP_RUN_CLOCKS.runClose, parkedStates: STOP_DONE_PARKED_STATES },
+  verbBeforeMeasure: true,
+  turnVerdict: true,
+  liveWord: 'sleep',
+  quiet: { boundary: SLEEP_QUIET_BOUNDARIES.below, parkedMs: STOP_DONE_PARKED_IDLE_MS },
+};
+
+/** The one ladder's facts, from this lane's input. The pane's death is not read (`paneDead: null`; the row does not
+ *  count it). D-6091: a programme hold, or one naming a terminal run, guards the workspace, not its sleep — it passes
+ *  only where ccd can pass it too; every other kind, a kind the sweep did not classify included, holds. */
+export function stopDoneSleepInput(i: StopDoneInput): SleepInput {
+  return {
+    row: i.row, child: i.row.child, paneDead: null, stopped: i.row.stoppedBy !== null,
+    heldPasses: i.holdOkVerb && (i.heldKind === 'programme' || i.heldKind === 'run-terminal'),
+    optedOut: i.optedOut, store: i.store, viewer: i.viewer, sinceStartMs: i.sinceStartMs,
+    viewerOpenTtlMs: i.viewerOpenTtlMs, verb: i.verb, live: i.live, now: i.now, quietMs: i.graceMs,
+  };
+}
 
 /**
  * Put this worker to sleep? The holds run cheapest first, and the live reads come last: `measure` asks the sweep to read
