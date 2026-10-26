@@ -697,3 +697,10 @@ export const ONCE_WARN_ALLOWED: ReadonlyArray<{ readonly file: string; readonly 
   // tmp-sweep-mail.test.ts's characterization: a key that comes back after another key or a clean pass stays silent.
   { file: 'server/src/tmpSweepLane.ts', reason: 'once-ever, not a change latch, D-6991' },
 ];
+
+// W8's census split (the 2026-10-26 consolidation W8 plan, Task C8-0): each of W8's three chains keeps its queries in
+// its own module under `census-w8/`, so no two of its PRs append to this tail. Re-exported here, so every count still
+// comes from this module's named queries.
+export * from './census-w8/cadence.js';
+export * from './census-w8/spawn.js';
+export * from './census-w8/journal.js';
