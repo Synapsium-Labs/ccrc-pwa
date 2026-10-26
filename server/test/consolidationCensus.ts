@@ -719,13 +719,6 @@ export const ONCE_WARN_ALLOWED: ReadonlyArray<{ readonly file: string; readonly 
   { file: 'server/src/tmpSweepLane.ts', reason: 'once-ever, not a change latch, D-6991' },
 ];
 
-// W8's census split (the 2026-10-26 consolidation W8 plan, Task C8-0): each of W8's three chains keeps its queries in
-// its own module under `census-w8/`, so no two of its PRs append to this tail. Re-exported here, so every count still
-// comes from this module's named queries.
-export * from './census-w8/cadence.js';
-export * from './census-w8/spawn.js';
-export * from './census-w8/journal.js';
-
 // ARCH-43 (spec 2026-10-19 K1; plan C4a): the sleep lanes' two censuses. Both read parsed symbols (`scan/symbols.ts`, over
 // `scan/parse.ts`), never a line regex, and both REPORT until their series reaches its target: `sleepVerdictLadders` 2 -> 1
 // at C4b (`decideSleep`), `hibernateActSites` 2 -> 1 at C4d (one sleep executor), each pinned in the commit that reaches it.
