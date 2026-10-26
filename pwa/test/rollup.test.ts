@@ -2,12 +2,23 @@
 // the open session and the per-device preferences. Both skins' lists render its answer
 // (`fleet-rollup-render.test.tsx` pins that), so a restyle that drops a rule goes red here AND there.
 import { describe, expect, it } from 'vitest';
-import type { FleetSession, RunSummary } from '../../shared/api';
+import type { DelegationProjectionWire, FleetSession, RunSummary } from '../../shared/api';
 import { fleetTree } from '../src/fleet/fleetTree';
 import {
-  NO_ROLLUP_PREFS, ROLLUP_RECENT_MS, nextRollupBoundary, operatorAsk, prunePrefs, rollupFleet, toggleChildren, toggleProject,
-  type CardRollup, type RolledRow, type RollupPrefs,
+  NO_ROLLUP_PREFS, ROLLUP_RECENT_MS, nextRollupBoundary, operatorAsk, prunePrefs, rollupCard, rollupFleet as rollupFleetOf,
+  toggleChildren, toggleProject, type CardRollup, type RolledRow, type RollupPrefs,
 } from '../src/fleet/rollup';
+import { fingerprint, type Recorded } from './characterise';
+import { activity, frame, lease } from './delegationFixture';
+
+/** W4-U0: every card each `rollupFleet` call of this file's cases rolls up, recorded as `rollupCard`'s own answer
+ *  (see `characterise.ts`). */
+const cardCalls: Recorded<Parameters<typeof rollupCard>>[] = [];
+const rollupFleet = (...args: Parameters<typeof rollupFleetOf>): ReturnType<typeof rollupFleetOf> => {
+  const [groups, prefs, now, selectedId] = args;
+  for (const g of groups) cardCalls.push({ args: [g, prefs, now, selectedId], json: JSON.stringify(rollupCard(g, prefs, now, selectedId)) });
+  return rollupFleetOf(...args);
+};
 import {
   HOUR, MIN, NOW, answeredByCoordinator, asking, coordinatorFleet, heldByCoordinator, run, sess,
 } from './rollupFixture';
@@ -25,7 +36,8 @@ const card = (cards: ReadonlyMap<string, CardRollup>, project: string): CardRoll
 
 /** `[what, depth]` per row: a session by id, a spawn by run, the summary line by its text. */
 const shape = (rows: readonly RolledRow[]): [string, number][] => rows.map((r) =>
-  r.kind === 'session' ? [r.session.id, r.depth] : r.kind === 'pending' ? [`spawn:${r.run.id}`, r.depth] : [`» ${r.text}`, r.depth]);
+  r.kind === 'session' ? [r.session.id, r.depth] : r.kind === 'pending' ? [`spawn:${r.run.id}`, r.depth]
+    : r.kind === 'summary' ? [`» ${r.text}`, r.depth] : [r.kind, r.depth]);
 
 describe('rollup — projects (rule 2)', () => {
   it('rolls up an inactive project: nothing working, nobody waiting, no change in 30 minutes', () => {
@@ -218,5 +230,96 @@ describe('rollup — the fixes after review (D-6088)', () => {
     const b = sess('b1', 'project-b', { statusUpdatedAt: NOW - 10 * MIN, bucketSince: NOW - 10 * MIN });
     expect(nextRollupBoundary([a, b], NOW)).toBe(NOW - 29 * MIN + ROLLUP_RECENT_MS);
     expect(nextRollupBoundary([sess('q', 'project-q')], NOW)).toBeNull();
+  });
+});
+
+// Delegation broker wave 4, PR2 Task 2.6: delegated work is counted beside workers, and never folds a worker away.
+// Every case calls the UNRECORDED `rollupFleetOf`, so W4-U0's fingerprints below stay exactly what main produced.
+describe('rollup — delegation rows under a coordinator (delegation broker wave 4)', () => {
+  const coordFleet = (workers: number) => {
+    const coord = sess('coord', 'project-c', { role: 'coordinator', status: 'busy', bucket: 'working', bucketSince: NOW - 4 * HOUR });
+    const kids = Array.from({ length: workers }, (_, i) => sess(`w${i + 1}`, 'project-c', { role: 'child', status: 'busy', bucket: 'working' }));
+    return { sessions: [coord, ...kids], runs: kids.map((k, i) => run(10 + i, 'coord', k.id)) };
+  };
+  const rolled = (sessions: FleetSession[], runs: RunSummary[], w: DelegationProjectionWire, prefs: RollupPrefs = NO_ROLLUP_PREFS) =>
+    card(rollupFleetOf(fleetTree(sessions, [], runs, {}, w), prefs, NOW, null).cards, 'project-c');
+  const kinds = (rows: readonly RolledRow[]): [string, number][] => rows.map((r) =>
+    r.kind === 'session' ? [r.session.id, r.depth] : r.kind === 'summary' ? [`» ${r.text}`, r.depth]
+      : r.kind === 'activity' ? [`activity:${r.activity.activityId}`, r.depth]
+        : r.kind === 'lease' ? [`lease:${r.lease.leaseId}`, r.depth] : [r.kind, r.depth]);
+
+  it('W4-U24: one worker and one worktree are not folded; the worker stays visible, as it does today', () => {
+    const { sessions, runs } = coordFleet(1);
+    const c = rolled(sessions, runs, frame({ leases: [lease({ leaseId: 'l1', parentId: 'coord', project: 'project-c' })] }));
+    expect(kinds(c.rows)).toEqual([['coord', 0], ['w1', 1], ['lease:l1', 1]]);
+  });
+
+  it('W4-U25: one worker and two live activities: the line counts both, and folded the worker stays while the activities hide', () => {
+    const { sessions, runs } = coordFleet(1);
+    const w = frame({ activities: [activity({ activityId: 'a1', parentId: 'coord' }), activity({ activityId: 'a2', parentId: 'coord' })] });
+    const folded = rolled(sessions, runs, w);
+    expect(kinds(folded.rows)).toEqual([['coord', 0], ['» 1 worker · 1 working · 2 delegated', 1], ['w1', 1]]);
+    const open = rolled(sessions, runs, w, toggleChildren(NO_ROLLUP_PREFS, 'coord'));
+    expect(kinds(open.rows)).toEqual([['coord', 0], ['» 1 worker · 1 working · 2 delegated', 1], ['w1', 1], ['activity:a1', 1], ['activity:a2', 1]]);
+  });
+
+  it('W4-U26: a card whose only change is a live activity stays inactive (the class never reads a delegation row)', () => {
+    const quiet = sess('coord', 'project-c', { role: 'coordinator' });
+    const c = rolled([quiet], [], frame({ activities: [activity({ parentId: 'coord', lastEventAt: new Date(NOW).toISOString() })] }));
+    expect(kinds(c.rows)).toEqual([['coord', 0], ['activity:act-1', 1]]);
+    expect(c.cls).toBe('inactive');
+    expect(c.lastActive).toBe(NOW - 5 * HOUR);
+  });
+});
+
+describe('W4-U0: today\'s rollup, characterised before delegation rows (delegation broker wave 4)', () => {
+  it('every card above rolls up to the JSON captured on main', () => {
+    expect(cardCalls.length).toBeGreaterThan(0);
+    expect(cardCalls.map((c) => fingerprint(c.json))).toMatchInlineSnapshot(`
+      [
+        "5e227a56f4fb8064",
+        "b280f9f88ce75651",
+        "d3c83324dc0fddf5",
+        "1cda656f88dbb539",
+        "647710cd2222be3c",
+        "9776f6bbca72d34f",
+        "5fd1117967c3f1a9",
+        "364914c073897ea7",
+        "be59ca88319a0c52",
+        "676f1cd2dec03876",
+        "56349adea02747bf",
+        "be59ca88319a0c52",
+        "086fbe1f899c4921",
+        "5ecff61045db7317",
+        "b8e41d0eed25a799",
+        "181bbfc7336ed419",
+        "a18cfaf3af23fe06",
+        "5497a74e9edc9733",
+        "5497a74e9edc9733",
+        "a18cfaf3af23fe06",
+        "a40f84f02a369ab7",
+        "a18cfaf3af23fe06",
+        "a40f84f02a369ab7",
+        "b4cff09895543e35",
+        "a18cfaf3af23fe06",
+        "a40f84f02a369ab7",
+        "676f1cd2dec03876",
+        "a18cfaf3af23fe06",
+        "676f1cd2dec03876",
+        "43ea7903a98a687f",
+        "cf06284294026f31",
+        "1af475a327c467bf",
+        "a18cfaf3af23fe06",
+        "298806a85633a5c4",
+      ]
+    `);
+  });
+
+  it('W4-U23: with no delegation rows, every card above rolls up to the identical JSON', () => {
+    expect(cardCalls.length).toBeGreaterThan(0);
+    for (const c of cardCalls) {
+      expect(c.args[0].rows.filter((r) => r.kind !== 'session' && r.kind !== 'pending')).toEqual([]);
+      expect(JSON.stringify(rollupCard(...c.args))).toBe(c.json);
+    }
   });
 });

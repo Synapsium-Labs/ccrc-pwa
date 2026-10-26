@@ -10,6 +10,7 @@ import { createFleetStore } from '../src/stores/fleet';
 import { setUpdater } from '../src/lib/swupdate';
 import { saveFleetSnapshot } from '../src/lib/offline';
 import { TEST_ROSTER } from './rosterFixture';
+import { frame as delegationFrame, lease as delegationLease, unowned as delegationUnowned } from './delegationFixture';
 
 // — fixtures —
 
@@ -2121,6 +2122,104 @@ describe('fleet store', () => {
       // stays false), so it could never catch the guard's absence.
       lastSocket().message(JSON.stringify({ type: 'hello', proto: '1', min: '2' }));
       expect(store.getState().blocked).toBe(false);
+      store.getState().disconnect();
+    });
+  });
+
+  // Delegation broker wave 4, PR2 (Task 2.1). The `delegation` frame, held per connection: `null` is the not-seen
+  // state AND the withdrawn one, and a reconnect clears it, so an older server (or a lane with no value yet) reads
+  // "unavailable", never the last connection's rows. Envelope only here; members are `readDelegation`'s to tolerate.
+  describe('the `delegation` frame', () => {
+    const connected = () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      return store;
+    };
+    const wire = delegationFrame({ leases: [delegationLease({ sourceKind: 'raw' })], unowned: [delegationUnowned()] });
+
+    it('W4-U1: starts null, and a well-formed frame is held whole', () => {
+      // Before `connect()` too: a cold start renders from the initial state before any socket opens.
+      expect(createFleetStore({ makeSocket }).getState().delegation).toBeNull();
+      const store = connected();
+      expect(store.getState().delegation).toBeNull();
+      lastSocket().message(JSON.stringify({ type: 'delegation', delegation: wire }));
+      expect(store.getState().delegation).toEqual(wire);
+      store.getState().disconnect();
+    });
+
+    it('W4-U2: a malformed envelope is dropped silently and leaves the slot null', () => {
+      const store = connected();
+      const bad: unknown[] = [
+        { type: 'delegation' },
+        { type: 'delegation', delegation: [] },
+        { type: 'delegation', delegation: { asOf: wire.asOf, leases: [], unowned: [] } },
+        { type: 'delegation', delegation: { asOf: wire.asOf, activities: [], unowned: [] } },
+        { type: 'delegation', delegation: { asOf: wire.asOf, activities: [], leases: [] } },
+        { type: 'delegation', delegation: { asOf: wire.asOf, activities: {}, leases: [], unowned: [] } },
+        { type: 'delegation', delegation: { asOf: wire.asOf, activities: [], leases: 'x', unowned: [] } },
+        { type: 'delegation', delegation: { asOf: wire.asOf, activities: [], leases: [], unowned: {} } },
+        { type: 'delegation', delegation: { asOf: 7, activities: [], leases: [], unowned: [] } },
+        { type: 'delegation', delegation: { activities: [], leases: [], unowned: [] } },
+      ];
+      for (const m of bad) {
+        expect(() => lastSocket().message(JSON.stringify(m))).not.toThrow();
+        expect(store.getState().delegation, JSON.stringify(m)).toBeNull();
+      }
+      store.getState().disconnect();
+    });
+
+    it('W4-U2b: a `delegation: null` frame withdraws the held frame', () => {
+      const store = connected();
+      lastSocket().message(JSON.stringify({ type: 'delegation', delegation: wire }));
+      expect(store.getState().delegation).toEqual(wire);
+      lastSocket().message(JSON.stringify({ type: 'delegation', delegation: null }));
+      expect(store.getState().delegation).toBeNull();
+      store.getState().disconnect();
+    });
+
+    it('W4-U3: a reconnect clears the slot before any new frame', () => {
+      vi.useFakeTimers();
+      const store = connected();
+      lastSocket().message(JSON.stringify({ type: 'delegation', delegation: wire }));
+      expect(store.getState().delegation).toEqual(wire);
+      const first = lastSocket();
+      first.onclose?.(new Event('close') as CloseEvent);
+      vi.advanceTimersByTime(60_000);
+      expect(lastSocket()).not.toBe(first);
+      lastSocket().open();
+      expect(store.getState().delegation).toBeNull();
+      store.getState().disconnect();
+    });
+
+    it("W4-U4: origin/main's server sequence leaves the slot null, and the offline snapshot names no delegation key", () => {
+      saveFleetSnapshot([fleetSession('s0', 'claude')]);
+      const cold = createFleetStore({ makeSocket });
+      expect(cold.getState().sessions.map((x) => x.id)).toEqual(['s0']);   // hydrated from the snapshot ...
+      expect(cold.getState().delegation).toBeNull();                       // ... which never carries this slot
+      const store = connected();
+      const s = lastSocket();
+      s.message(JSON.stringify({ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO }));
+      s.message(JSON.stringify({ type: 'fleet', sessions: [fleetSession('s1', 'claude')] }));
+      s.message(JSON.stringify({ type: 'runs', runs: [] }));
+      s.message(JSON.stringify({ type: 'coord', coord: { pause: 'clear', mail: 'clear' } }));
+      s.message(JSON.stringify({ type: 'pools', pools: { listed: false, enforcement: 'enforced' } }));
+      s.message(JSON.stringify({ type: 'divergence', divergences: [] }));
+      expect(store.getState().sessions.map((x) => x.id)).toEqual(['s1']);
+      expect(store.getState().delegation).toBeNull();
+      lastSocket().message(JSON.stringify({ type: 'delegation', delegation: wire }));
+      s.message(JSON.stringify({ type: 'fleet', sessions: [fleetSession('s1', 'claude')] }));
+      const raw = window.localStorage.getItem('ccrc.fleet-snapshot.v1');
+      expect(raw).not.toBeNull();
+      expect(raw).not.toMatch(/delegation/);
+      store.getState().disconnect();
+    });
+
+    it('W4-U5: an unknown top-level key and an unknown member word are accepted whole at the envelope', () => {
+      const store = connected();
+      const odd = { ...wire, futureMember: { n: 1 }, leases: [{ ...wire.leases[0], group: 'future-word' }] };
+      lastSocket().message(JSON.stringify({ type: 'delegation', delegation: odd }));
+      expect(store.getState().delegation).toEqual(odd);
       store.getState().disconnect();
     });
   });

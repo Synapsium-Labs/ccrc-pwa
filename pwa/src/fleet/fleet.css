@@ -2048,7 +2048,8 @@ button.proj-card-pool::before {
    open — the same call RunsScreen makes when it leaves the in-flight run row
    inert. It still clears the row height the settled rows keep, so a spawn
    arriving does not make the card jump. */
-.proj-pending {
+.proj-pending,
+.proj-work {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
@@ -2078,6 +2079,37 @@ button.proj-card-pool::before {
   font-family: var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
+}
+
+/* Delegated work and its worktrees (delegation broker wave 4): a nested line of words, in the pending row's own rule
+   above (the same inert line: never a tap surface, and nothing in wave 4 acts on one). The chips are words in a
+   currentColor frame, the .sess-workson idiom, so nothing is read out of colour. Neutral class names: this sheet names
+   no broker word. */
+.proj-nest > .proj-work {
+  flex: 1;
+  min-width: 0;
+}
+.proj-work-parts {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.proj-work-parts > *:not(:first-child)::before {
+  content: '·';
+  margin: 0 var(--sp-1);
+  color: var(--ink-tertiary);
+}
+.proj-work-chip {
+  flex: none;
+  padding: 0 var(--sp-1);
+  border: 1px solid currentColor;
+  border-radius: var(--r-sm);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  color: var(--ink-secondary);
 }
 
 /* F4 (cross-repo): the sentence under a rule-3 orphan. NOT a tap surface and
@@ -2136,7 +2168,8 @@ button.proj-card-pool::before {
 /* D-6088: a coordinator's folded workers (`.proj-children-toggle`) are the same disclosure a third time. */
 .proj-released-toggle,
 .proj-archived-toggle,
-.proj-children-toggle {
+.proj-children-toggle,
+.proj-group-toggle {
   display: flex;
   align-items: center;
   gap: var(--sp-1);

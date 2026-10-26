@@ -163,6 +163,10 @@ export function SessionMeta({
           {glance.marker !== null && glance.marker.key !== 'spawn' && (
             <Marker fact={glance.marker} full={false} />
           )}
+          {/* R9 (delegation broker wave 4): a programme worker's live delegated work, one chip after the marker. */}
+          {glance.delegated !== null && (
+            <span className="sess-meta-chip" title={glance.delegated.title}>{glance.delegated.text}</span>
+          )}
         </span>
         {context !== null && <span className="sess-meta sess-meta--context" style={metaStyle}>{context}</span>}
       </>
@@ -208,6 +212,8 @@ export function SessionMeta({
           ⑂ {subagentList.length} subagent{subagentList.length === 1 ? '' : 's'}
         </button>
       )}
+      {/* R9 (delegation broker wave 4): the card's chip, the same text, so the header stays a superset (D-5545). */}
+      {f.delegated !== null && <span className="sess-meta-chip" title={f.delegated.title}>{f.delegated.text}</span>}
       {/* Every marker, in full — but the last spawn and the restart, which the header already draws (the spawn chip
           above, the header's own restart chip). */}
       {markers(f).filter((m) => m.key !== 'spawn' && m.key !== 'restarted').map((m) => (

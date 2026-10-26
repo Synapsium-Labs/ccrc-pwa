@@ -850,9 +850,22 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the emptied card's own sentence about where its work went (spec §6, board-placement wave 2), same ground and register as .proj-abroad-line above — both sit directly on .proj-card-body's ground. Its selector names no ancestor, so no route could ground it",
   },
-  '.proj-released-toggle, .proj-archived-toggle, .proj-children-toggle': {
+  // ── delegated work and its worktrees on a project card (delegation broker wave 4, PR2) ──────────────────────
+  '.proj-pending, .proj-work': {
     under: ['var(--bg-surface)'],
-    why: "the card's fold toggles (workspace lifecycle spec §5.1), and since D-6088 the coordinator's folded-workers line, which sits in .proj-card-body on the same card ground; rekeyed when that selector joined the rule. Siblings of .proj-card-body inside the card, on the card's own ground. ONE rule since both became <BareRow>: they had declared the same seven declarations as each other as well as the six the component carries, and this key moved with them — a rule key is `<basename> <selector>`, so merging two selectors rekeys, which the gate said out loud rather than passing quietly. Neither sets a background of its own and the selector names no ancestor, so no route could ground it",
+    why: "the pending spawn's row and, since delegation broker wave 4, a delegated activity's, worktree's or unowned tree's line: one rule, the same inert nested line in .proj-nest inside .proj-card-body, on the card ground. Neither is ever a selected row, and the selector names no ancestor, so no route could ground it. Registered when the second selector joined the rule (`.proj-pending` alone had been a grandfathered blind spot)",
+  },
+  '.proj-work-parts > *:not(:first-child)::before': {
+    under: ['var(--bg-surface)'],
+    why: "the middot between the cells of a .proj-work line, the .proj-pending-meta separator's twin on the same card ground. Registered separately for the reason the .auth-block-sub entry states",
+  },
+  '.proj-work-chip': {
+    under: ['var(--bg-surface)'],
+    why: "the inferred chip and the creating Bash call's chip on a raw worktree's line (D-6999), words in a currentColor frame like .sess-workson, on the same card ground; it paints no background of its own",
+  },
+  '.proj-released-toggle, .proj-archived-toggle, .proj-children-toggle, .proj-group-toggle': {
+    under: ['var(--bg-surface)'],
+    why: "the card's fold toggles (workspace lifecycle spec §5.1), and since D-6088 the coordinator's folded-workers line, which sits in .proj-card-body on the same card ground; rekeyed when that selector joined the rule. Siblings of .proj-card-body inside the card, on the card's own ground. Rekeyed again when the delegation broker's two group headers (wave 4) joined it: the same disclosure, on the same ground. ONE rule since both became <BareRow>: they had declared the same seven declarations as each other as well as the six the component carries, and this key moved with them — a rule key is `<basename> <selector>`, so merging two selectors rekeys, which the gate said out loud rather than passing quietly. Neither sets a background of its own and the selector names no ancestor, so no route could ground it",
   },
   '.proj-released-heading, .proj-released-note': {
     under: ['var(--bg-surface)'],

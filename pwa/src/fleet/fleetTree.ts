@@ -50,10 +50,14 @@
 //   • missing from the fleet — the same: the coordinator's project while the
 //     stamp answers, top level, with the orphan marker; once nothing answers,
 //     the child's own project. It keeps its indicator wherever it lands.
-import { boardHome, type ChildMark, type FleetSession, type RunSummary } from '../../../shared/api';
+import {
+  boardHome, type ChildMark, type DelegationActivityWire, type DelegationLeaseWire, type DelegationProjectionWire,
+  type DelegationUnownedWire, type FleetSession, type RunSummary,
+} from '../../../shared/api';
 import type { Acks } from '../lib/seen';
 import { groupFleet, type FleetGroup } from './groupFleet';
-import { nestFleet, type FleetRow } from './nestFleet';
+import { nestFleet, type CardDelegation, type FleetRow } from './nestFleet';
+import { readDelegation } from './delegationWords';
 import { programmeWave, runCard, runForSession, runHomeProject, runSentence, type ChildRunContext } from './runWords';
 import { hibernatedSince } from './hibernated';
 import { STATE_WORD } from './sessionFacts';
@@ -117,20 +121,57 @@ export interface FleetTreeGroup extends FleetGroup {
   readonly abroad: readonly RunSummary[];
 }
 
-/** The fleet as cards of nested rows. `runs` is the ACTIVE runs. Pure. */
+/** THE CARD RULE for the `delegation` frame (delegation broker wave 4, spec §5.8): a row renders on its parent's
+ *  card when the fleet carries the parent (cross-repo work nests on the coordinator's card); otherwise a worktree
+ *  renders on its own `project`, and an activity on NO card, because the wire gives an activity no project (it is
+ *  counted by `unplacedActivities` instead, never dropped silently). Unowned work renders on its `project`. Each
+ *  slice is keyed by its card; the caller adds every key to the card list, so every placed row lands on a card. */
+function delegationSlices(
+  w: DelegationProjectionWire, cards: ReadonlyMap<string, string>,
+): Map<string, CardDelegation> {
+  type Slot = { activities: DelegationActivityWire[]; leases: DelegationLeaseWire[]; unowned: DelegationUnownedWire[] };
+  const out = new Map<string, Slot>();
+  const slot = (card: string): Slot => {
+    const got = out.get(card) ?? { activities: [], leases: [], unowned: [] };
+    out.set(card, got);
+    return got;
+  };
+  for (const a of w.activities) {
+    const card = cards.get(a.parentId);
+    if (card !== undefined) slot(card).activities.push(a);
+  }
+  for (const l of w.leases) slot(cards.get(l.parentId) ?? l.project).leases.push(l);
+  for (const u of w.unowned) slot(u.project).unowned.push(u);
+  return new Map([...out].map(([card, d]) => [card, { card, ...d }] as const));
+}
+
+/** How many of the frame's activities no card draws (`delegationSlices`' card rule): their parent is not in the
+ *  fleet, and an activity carries no project of its own. 0 when the projection is unavailable. */
+export function unplacedActivities(sessions: readonly FleetSession[], delegation: DelegationProjectionWire | null): number {
+  if (delegation === null) return 0;
+  const ids = new Set(sessions.map((s) => s.id));
+  return readDelegation(delegation).activities.filter((a) => !ids.has(a.parentId)).length;
+}
+
+/** The fleet as cards of nested rows. `runs` is the ACTIVE runs. `delegation` is the `delegation` frame, or `null`
+ *  when it is unavailable, which draws today's tree exactly (`nestFleet`'s rule 6). Pure. */
 export function fleetTree(
   sessions: FleetSession[], projects: readonly string[], runs: readonly RunSummary[], acks: Acks = {},
+  delegation: DelegationProjectionWire | null = null,
 ): FleetTreeGroup[] {
   const cards = cardsOf(sessions);
   const byId = new Map(sessions.map((s) => [s.id, s] as const));
-  return groupFleet(sessions, projects, acks).map((g) => {
+  const slices = delegation === null ? null : delegationSlices(readDelegation(delegation), cards);
+  const known = slices === null ? projects : [...projects, ...slices.keys()];
+  return groupFleet(sessions, known, acks).map((g) => {
     const mine = runs.filter((r) => runCard(r, cards) === g.project);
     return {
       ...g,
       // Rule 1, ONE parent: the bracket reads only each session's LATEST active
       // run (`runForSession`, the run the label and header name), so a worker
       // two claimants' runs both name nests under the one its label says.
-      rows: nestFleet(g.sessions, latestPerSession(mine, byId)),
+      rows: nestFleet(g.sessions, latestPerSession(mine, byId),
+        slices === null ? null : slices.get(g.project) ?? { card: g.project, activities: [], leases: [], unowned: [] }),
       runs: mine,
       // A run homed here and working elsewhere, minus one whose worker renders
       // on this very card — that run is a bracketed row here already (spec §6).

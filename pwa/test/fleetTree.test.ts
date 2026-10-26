@@ -3,9 +3,15 @@
 import { describe, expect, it } from 'vitest';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { cardsOf, coordinationLine, coordinationOf, fleetTree, workingOn } from '../src/fleet/fleetTree';
+import { cardsOf, coordinationLine, coordinationOf, fleetTree as fleetTreeOf, unplacedActivities, workingOn } from '../src/fleet/fleetTree';
+import { fingerprint, recording, type Recorded } from './characterise';
 import { STATE_WORD } from '../src/fleet/sessionFacts';
 import { childOfRunLabel } from '../src/fleet/runWords';
+import { activity, frame, lease, unowned } from './delegationFixture';
+
+/** W4-U0: every `fleetTree` call this file's cases make, recorded (see `characterise.ts`). */
+const treeCalls: Recorded<Parameters<typeof fleetTreeOf>>[] = [];
+const fleetTree = recording(fleetTreeOf, treeCalls);
 
 const COORD = 'lane-a-project-a';
 
@@ -45,7 +51,7 @@ const runs = [
 /** `[card, [[id, depth], …]]` per card, in display order. */
 const shape = (sessions: FleetSession[], rs: RunSummary[] = runs) =>
   fleetTree(sessions, [], rs).map((g) => [g.project, g.rows.map((r) =>
-    r.kind === 'session' ? [r.session.id, r.depth] : [`spawn:${r.run.id}`, r.depth])] as const);
+    r.kind === 'session' ? [r.session.id, r.depth] : r.kind === 'pending' ? [`spawn:${r.run.id}`, r.depth] : [r.kind, r.depth])] as const);
 
 describe('fleetTree — a coordinator\'s workspaces nest under it across projects (D-5527)', () => {
   it('a cross-project child nests under its coordinator, on the coordinator\'s card, when the server placed it there', () => {
@@ -257,5 +263,86 @@ describe('the header title for a review run', () => {
     const review = run({ id: 42, kind: 'review', reviews: 41, sessionId: 'lane-b-project-b-quiet-river' });
     const c = coordinationOf(crossChild('project-a'), [coordinator, crossChild('project-a')], [review])!;
     expect(coordinationLine(c).title).toMatch(/^this workspace reviews one wave of Port the API/);
+  });
+});
+
+// Delegation broker wave 4, PR2 Task 2.5: each delegation row on ONE card. Every case calls the UNRECORDED
+// `fleetTreeOf`, so W4-U0's fingerprints below stay exactly what main produced.
+describe('fleetTree — delegation rows land on their parent\'s card (delegation broker wave 4)', () => {
+  const coordA = fleetSession({ id: 'coord-a', project: 'project-a', workspace: null, workdir: '/work/project-a' });
+  const mainB = fleetSession({ id: 'main-b', project: 'project-b', workspace: null, workdir: '/work/project-b' });
+  /** `[card, [row ids]]`, in group order. */
+  const ids = (groups: ReturnType<typeof fleetTreeOf>) => groups.map((g) => [g.project, g.rows.map((r) =>
+    r.kind === 'session' ? r.session.id : r.kind === 'lease' ? `lease:${r.lease.leaseId}` : r.kind === 'activity'
+      ? `activity:${r.activity.activityId}` : r.kind === 'unowned' ? `unowned:${r.item.adminRecord}`
+        : r.kind === 'delegation-group' ? `group:${r.group}` : r.kind)] as const);
+  const count = (groups: ReturnType<typeof fleetTreeOf>, pred: (r: (typeof groups)[number]['rows'][number]) => boolean) =>
+    groups.reduce((n, g) => n + g.rows.filter(pred).length, 0);
+
+  it('W4-U20: a worktree in project-b whose parent lives in project-a lands on project-a\'s card, nested', () => {
+    const w = frame({ leases: [lease({ leaseId: 'l-b', project: 'project-b', parentId: 'coord-a',
+      canonicalPath: '/work/project-b/.claude/worktrees/agent-b1' })] });
+    const tree = ids(fleetTreeOf([coordA, mainB], [], [], {}, w));
+    expect(tree).toEqual([['project-a', ['coord-a', 'lease:l-b']], ['project-b', ['main-b']]]);
+  });
+
+  it('W4-U21: an unowned tree of a project nothing else names creates that project\'s card, holding only the group', () => {
+    const w = frame({ unowned: [unowned({ project: 'project-c', adminRecord: 'u-c' })] });
+    const tree = ids(fleetTreeOf([coordA], [], [], {}, w));
+    expect(tree).toEqual([['project-a', ['coord-a']], ['project-c', ['group:unowned', 'unowned:u-c']]]);
+  });
+
+  it('W4-U22: one worktree is drawn on exactly one card', () => {
+    const w = frame({ leases: [
+      lease({ leaseId: 'l-b', project: 'project-b', parentId: 'coord-a' }),
+      lease({ leaseId: 'l-gone', project: 'project-b', parentId: 'coord-gone' }),
+      lease({ leaseId: 'l-a', project: 'project-a', parentId: 'main-b' }),
+    ] });
+    const groups = fleetTreeOf([coordA, mainB], ['project-a', 'project-b'], [], {}, w);
+    for (const id of ['l-b', 'l-gone', 'l-a']) {
+      expect(count(groups, (r) => r.kind === 'lease' && r.lease.leaseId === id), id).toBe(1);
+    }
+    // A parent the fleet does not carry: the worktree renders on its own project, in the offline group.
+    expect(ids(groups).find(([p]) => p === 'project-b')![1]).toEqual(['main-b', 'lease:l-a', 'group:offline-coordinator', 'lease:l-gone']);
+  });
+
+  it('W4-U36: an activity whose parent the fleet does not carry is on no card (the wire gives it no project)', () => {
+    const w = frame({ activities: [activity({ activityId: 'a-gone', parentId: 'coord-gone' })] });
+    const groups = fleetTreeOf([coordA, mainB], [], [], {}, w);
+    expect(count(groups, (r) => r.kind === 'activity')).toBe(0);
+    expect(unplacedActivities([coordA, mainB], w)).toBe(1);
+    expect(unplacedActivities([coordA, mainB], null)).toBe(0);
+    expect(unplacedActivities([coordA], frame({ activities: [activity({ parentId: 'coord-a' })] }))).toBe(0);
+  });
+});
+
+describe('W4-U0: today\'s tree, characterised before delegation rows (delegation broker wave 4)', () => {
+  it('every fixture set above renders the JSON captured on main', () => {
+    expect(treeCalls.length).toBeGreaterThan(0);
+    expect(treeCalls.map((c) => fingerprint(c.json))).toMatchInlineSnapshot(`
+      [
+        "a48a8a8944dabac1",
+        "f2685f37d215bc28",
+        "8457bcecc0f9c082",
+        "cc5408b98de706a9",
+        "cc5408b98de706a9",
+        "523eb05d61046d4f",
+        "f2741f3537ed80ce",
+        "724f9bb16da4d414",
+        "c10bc21bac898d22",
+        "28200fa61fabf297",
+        "8e821b08d9c119a7",
+        "b54c0f53a983c56c",
+        "bdaf767594fe78fc",
+      ]
+    `);
+  });
+
+  it('W4-U19 (rule 6): every input above with no frame renders the identical JSON', () => {
+    expect(treeCalls.length).toBeGreaterThan(0);
+    for (const c of treeCalls) {
+      const [sessions, projects, runs, acks] = c.args;
+      expect(JSON.stringify(fleetTreeOf(sessions, projects, runs, acks, null))).toBe(c.json);
+    }
   });
 });

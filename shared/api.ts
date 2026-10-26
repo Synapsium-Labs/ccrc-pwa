@@ -4072,7 +4072,11 @@ export type FleetMsg =
    *  a `FleetSession` — and keeping it off `FleetSession` is what keeps
    *  `reviveFleetSession` from becoming a second producer of it. The PWA
    *  derives a session's project pool from this frame by `s.project`. */
-  | { type: 'pools'; pools: ProjectPoolsWire };
+  | { type: 'pools'; pools: ProjectPoolsWire }
+  /** Delegation broker wave 4 (spec §5.8). Additive on the same terms as `pools`: an already-deployed PWA drops an
+   *  unknown frame type silently, so NO `FLEET_PROTO` bump. FLEET-LEVEL, never a `FleetSession` field, so
+   *  `reviveFleetSession` stays the rows' only reviver. Sent only once the server holds a projection; `null` withdraws it. */
+  | { type: 'delegation'; delegation: DelegationProjectionWire | null };
 
 /**
  * What a registry MARKER file was measured to be. One type covers both markers
@@ -11262,6 +11266,114 @@ export const DELEGATION_ATTEMPT_VERDICTS = [
   'linked', 'unresolved', 'conflicting', 'unmeasured',
 ] as const;
 export type DelegationAttemptVerdict = (typeof DELEGATION_ATTEMPT_VERDICTS)[number];
+
+// ── Delegation projection: the `delegation` frame (delegation broker wave 4, spec §5.8; D-6999, D-7002) ──────────────
+// Declared ONCE, here; the server decides every word (`server/src/coord/delegation-projection.ts`) and a reader renders
+// it. Each closed set has a sibling `Record<X, true>` map and a list derived from it. This block imports nothing (L0).
+
+/** How delegated work reads NOW, decided at projection time and never stored. `live`: running, and its parent is alive
+ *  in the incarnation that started it. `stale`: recorded as running, but its parent is gone, dead or in another
+ *  incarnation (its stop was not seen). `ended`: its terminal evidence was seen. `unmeasured`: its execution state is
+ *  `unknown`, or its parent's incarnation was not measured. */
+export type DelegationLiveness = 'live' | 'stale' | 'ended' | 'unmeasured';
+const DELEGATION_LIVENESS_MAP: Record<DelegationLiveness, true> = { live: true, stale: true, ended: true, unmeasured: true };
+export const DELEGATION_LIVENESS: readonly DelegationLiveness[] = Object.keys(DELEGATION_LIVENESS_MAP) as DelegationLiveness[];
+export function isDelegationLiveness(v: unknown): v is DelegationLiveness {
+  return typeof v === 'string' && (DELEGATION_LIVENESS as readonly string[]).includes(v);
+}
+
+/** Where a row sits: under its display parent, or in its project's "offline coordinator" group when the registry
+ *  lists no session by that id (spec §5.8, "Missing parent"). */
+export type DelegationRowGroup = 'parent' | 'offline-coordinator';
+const DELEGATION_ROW_GROUP_MAP: Record<DelegationRowGroup, true> = { parent: true, 'offline-coordinator': true };
+export const DELEGATION_ROW_GROUPS: readonly DelegationRowGroup[] = Object.keys(DELEGATION_ROW_GROUP_MAP) as DelegationRowGroup[];
+export function isDelegationRowGroup(v: unknown): v is DelegationRowGroup {
+  return typeof v === 'string' && (DELEGATION_ROW_GROUPS as readonly string[]).includes(v);
+}
+
+/** An activity's own row under its parent, or a chip on its parent's row when the parent is a programme worker (R9). */
+export type DelegationActivityPlacement = 'row' | 'chip';
+const DELEGATION_ACTIVITY_PLACEMENT_MAP: Record<DelegationActivityPlacement, true> = { row: true, chip: true };
+export const DELEGATION_ACTIVITY_PLACEMENTS: readonly DelegationActivityPlacement[] =
+  Object.keys(DELEGATION_ACTIVITY_PLACEMENT_MAP) as DelegationActivityPlacement[];
+export function isDelegationActivityPlacement(v: unknown): v is DelegationActivityPlacement {
+  return typeof v === 'string' && (DELEGATION_ACTIVITY_PLACEMENTS as readonly string[]).includes(v);
+}
+
+/** Who created a rung-4 (`raw`) lease: the Bash call whose before and after listings added its record, or
+ *  `unmeasured` when the checkpoint holds no activity for the lease. */
+export type DelegationCreatorKind = 'bash-call' | 'unmeasured';
+const DELEGATION_CREATOR_KIND_MAP: Record<DelegationCreatorKind, true> = { 'bash-call': true, unmeasured: true };
+export const DELEGATION_CREATOR_KINDS: readonly DelegationCreatorKind[] = Object.keys(DELEGATION_CREATOR_KIND_MAP) as DelegationCreatorKind[];
+export function isDelegationCreatorKind(v: unknown): v is DelegationCreatorKind {
+  return typeof v === 'string' && (DELEGATION_CREATOR_KINDS as readonly string[]).includes(v);
+}
+
+export type DelegationCreatorWire = { kind: 'bash-call'; toolUseId: string } | { kind: 'unmeasured' };
+/** D-6999: the marker on every rung-4 lease. A rung-4 link rests on negative evidence (no other listing window was
+ *  seen), so it is shown nested and labelled, and nothing acts on it by itself. */
+export interface DelegationInferredWire { creator: DelegationCreatorWire }
+
+export interface DelegationActivityWire {
+  activityId: string;
+  /** The session that started it. Never re-parented: a programme worker's activity is a chip on the worker's row. */
+  parentId: string;
+  group: DelegationRowGroup;
+  placement: DelegationActivityPlacement;
+  sourceKind: Exclude<DelegationActivitySourceKind, 'bash-worktree'>;
+  /** The agent id, or the workflow run id (a worker's is `<runId>-<index>`), so a reader can group a run's workers. */
+  upstreamId: string;
+  /** Free text from the session's own events: the server masks the frame. */
+  displayName: string | null;
+  /** Never `ended`: an ended activity is not a row (spec §5.8, one level deep). */
+  liveness: Exclude<DelegationLiveness, 'ended'>;
+  openedAt: string;
+  lastEventAt: string;
+}
+
+export interface DelegationLeaseWire {
+  leaseId: string;
+  /** The display parent: the lease's own parent, or, for a programme worker's lease, that run's coordinator (R9). */
+  parentId: string;
+  /** R9: the worker the lineage belongs to when `parentId` is its coordinator; null when `parentId` is the lease's own. */
+  via: string | null;
+  group: DelegationRowGroup;
+  project: string;
+  adminRecord: string;
+  canonicalPath: string;
+  sourceKind: DelegationLeaseSourceKind;
+  /** Never `absent`: a lease whose workspace is measured gone, with no cleanup obligation, is not a row. */
+  workspace: Exclude<DelegationWorkspaceState, 'none' | 'provisioning' | 'absent'>;
+  /** Its activity's; `unmeasured` when the checkpoint holds no activity for it. */
+  liveness: DelegationLiveness;
+  /** Non-null exactly when `sourceKind` is `raw` (D-6999). */
+  inferred: DelegationInferredWire | null;
+  firstObservedAt: string;
+}
+
+export interface DelegationUnownedWire {
+  project: string;
+  adminRecord: string;
+  canonicalPath: string | null;
+  verdict: Extract<DelegationAttemptVerdict, 'unresolved' | 'conflicting'>;
+  /** The correlation reason; `isUnownedWorkReason` (server/src/coord/delegation-policy.ts) holds for it. */
+  reason: string;
+  rung: 1 | 2 | 3 | 4 | null;
+  workspace: Exclude<DelegationWorkspaceState, 'none' | 'provisioning' | 'absent'>;
+  attemptedAt: string;
+}
+
+/** The `delegation` frame's payload. ABSENCE MEANS UNAVAILABLE, never "no delegated work" (spec §5.8, §5.13).
+ *  No `backlog` (D-7002). No `lineage` member: wave 4's only edges are the ones leases open, carried as each lease's
+ *  display parent. `asOf` is the census instant this content was first decided from; the frame is sent only on a
+ *  change, so a reader never ages it; when the lane can no longer project, the server sends `delegation: null` once
+ *  (the frame is WITHDRAWN: unavailable again). */
+export interface DelegationProjectionWire {
+  asOf: string;
+  activities: DelegationActivityWire[];
+  leases: DelegationLeaseWire[];
+  unowned: DelegationUnownedWire[];
+}
 
 /** The keys every spool line carries. A line is evidence and never authority; the hook decides nothing about
  *  parentage. `truncated` marks a line whose optional fields were dropped to fit its size bound. */
