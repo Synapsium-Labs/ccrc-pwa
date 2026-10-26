@@ -1315,6 +1315,27 @@ describe('a crossing between the phone and the desk carries no fence (R102)', ()
     expect(answer, 'a digit answers').toHaveBeenCalledTimes(2);
     expect(answer).toHaveBeenLastCalledWith(ID, 'dlg-a2', 2);
   });
+
+  it('(c) an ARROW-engaged keyboard, a crossing below 900 and back: the card carries no fence, Tab in and a digit answers (R115)', async () => {
+    // R115 joins the screen to the desk identity only, so a crossing changes the identity string; a change that leaves no
+    // inline card showing raises no fence, and the keyboard's engagement simply ends there.
+    const w = crossing();
+    w.cross(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive } = mount();
+    await frame();
+    arrive(2);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    key(first, 'ArrowDown'); // engaged
+    w.cross(false);
+    expect(cards(), 'premise: no card below 900').toHaveLength(0);
+    w.cross(true);
+    const row = opt(card(), /^Redis/);
+    act(() => row.focus()); // as Tab would
+    key(row, '1');
+    expect(answer, 'a digit answers once').toHaveBeenCalledTimes(1);
+  });
 });
 
 // R102, R106 (review A1): the raise's eligibility is read in render, and `locked` (render state) can already read false while
@@ -1579,6 +1600,53 @@ describe('a screen change this client did not send fences the card at the desk; 
     act(() => row.focus());
     key(row, '1');
     expect(answer, 'an operator who was not in the card is not fenced').toHaveBeenCalledTimes(1);
+  });
+
+  it('an ask that ENDS while the keyboard is engaged leaves no fence for the next one: Tab into it, then a digit, answers', async () => {
+    // The fence protects keys on a screen that is showing; a clear shows none. The next ask arrives with focus outside it.
+    media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(2);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    key(first, 'ArrowDown'); // engaged
+    act(() => store.getState().apply({ type: 'dialog_cleared' }));
+    await frame();
+    expect(cards(), 'premise: the ask ended and its card left').toHaveLength(0);
+    act(() => store.getState().apply({ type: 'dialog', dialog: otherAgedAsk() }));
+    await frame();
+    expect(card().contains(document.activeElement), 'premise: the new ask took no focus').toBe(false);
+    const row = opt(card(), /^Postgres/);
+    act(() => row.focus()); // as Tab would
+    key(row, '1');
+    expect(answer, 'the new ask answers: nothing was fenced for it').toHaveBeenCalledTimes(1);
+    expect(answer).toHaveBeenLastCalledWith(ID, 'dlg-other-ask', 1);
+  });
+
+  it('a hooked ask whose pane menu vanishes for one poll fences an engaged keyboard (the accepted cost, pinned)', async () => {
+    // R115 joins the screen to the desk identity, and a hooked screen the pane does not show (no menu) is no screen, so the
+    // flap is a change: an arrow-engaged keyboard is released and fenced, and a click re-enters. Not a residual: the safe side.
+    media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { arrive, store } = mount();
+    await frame();
+    arrive(1);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    key(first, 'ArrowDown');
+    act(() => store.getState().apply({ type: 'dialog_cleared' }));
+    act(() => store.getState().apply({ type: 'dialog', dialog: askFixture(1).dialog! }));
+    await frame();
+    expect(within(card()).getByText(QUESTION), 'premise: question 1 is up again').toBeInTheDocument();
+    const row = opt(card(), /^Redis/);
+    act(() => row.focus());
+    key(row, '1');
+    expect(answer, 'fenced: a digit sends nothing').not.toHaveBeenCalled();
+    fireEvent.pointerDown(row);
+    key(row, '1');
+    expect(answer, 'after a pointer press a digit answers once').toHaveBeenCalledTimes(1);
   });
 
   it('the phone keeps its Sheet\'s behaviour: the same change leaves the reused row\'s keys live (a guard, green before and after)', async () => {
