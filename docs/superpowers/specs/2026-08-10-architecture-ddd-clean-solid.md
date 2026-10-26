@@ -20,7 +20,7 @@ structural difference between them.
 | transition table | `RUN_TRANSITIONS`, one place | none |
 | writers | one (`advanceInner`) | nine, across eight methods |
 | defects | D-9, D-64 — both about the table's *content*, both one-line fixes, neither able to recur silently | the same terminality guard forgotten and re-added **four times**: finding 22 → D-62 → D-66 → D-67 |
-| status | closed | **one gap left** (ARCH-15, #532) |
+| status | closed | closed (ARCH-15, #532) |
 
 When this was written (2026-08-10), `bumpReplayCount` and `markIngested` wrote with a bare
 `WHERE id = ?` while `markDelivered`/`rejectDelivery`/`backOff` carried
@@ -33,11 +33,14 @@ Re-verified on `main` for ARCH-02a (D-6000), cited by symbol:
   `markDelivered`, `rejectDelivery`, `backOff`) carry `state NOT IN ${TERMINAL_DELIVERY_SQL}`,
   built from L0's `TERMINAL_DELIVERY_STATES` (`shared/api.ts`). `bumpReplayCount` answers
   `{ state: 'counted'; replayCount } | { state: 'terminal' }`, and its one caller,
-  `FleetWatcher.sweepMail` (`watch.ts`), consumes it: it rejects at the ceiling only when
+  the mail lane (`FleetWatcher.mailPass`, `watch.ts`; `sweepMail` when this was written), consumes it: it rejects at the ceiling only when
   `bumped.state === 'counted'`, so a row a park closed is no longer counted.
-- **Still open:** `markDelivered` still returns `void`, so its caller in `sweepMail` cannot
-  see that its write was refused. One guarded writer primitive whose outcome reaches every
-  caller is ARCH-15 (#532).
+- **Closed since, by ARCH-15 (#532; D-5997):** every one-row delivery writer
+  (`markDelivered`, `markIngested`, `backOff`, `rejectDelivery`) goes through one private
+  guarded primitive, `CoordStore`'s `writeDelivery`, and answers `DeliveryWrite`
+  (`{ changed, state }`, `coord/store.ts`). `FleetWatcher.mailPass` reads each answer through
+  `FleetWatcher.landed`, so a write the guard refused is seen, not assumed. Held by
+  `mail-deliveries-writer.test.ts` (refreshed for ARCH-02a, D-6992).
 
 The invariant with a home costs one line to fix and cannot regress. The identical
 invariant with no home cost four review rounds and was still not finished when this was
@@ -270,18 +273,18 @@ reaches and a row that names no file are both red.
    result-returning read alongside `readFile`. → rides Build 5/6 remote work.
 7. **The watcher gets a narrow guarded store port.** → rides Build 6, which adds lane six.
 
-**Status per increment** (measured on `main` for ARCH-02a, D-6000; a row names the test that
-holds it, or the ARCH ticket that finishes it):
+**Status per increment** (measured on `main` for ARCH-02a, D-6000, and refreshed for ARCH-02a,
+D-6992; a row names the test that holds it, or the ARCH ticket that finishes it):
 
 | # | Status | Held by, or finished by |
 |---|---|---|
 | 1 | done | the roster is runtime data (`shared/roster.ts`'s `parseRoster`): `roster.test.ts` and single-definition's "the account roster — runtime data, no compile-time copies"; the registry read tells its facts apart through `readRegistryMeasured`: `registry-refused.test.ts` |
 | 2 | done | `install-session-hooks.test.ts`, "install-session-hooks.sh default homes are the roster, behaviourally" |
 | 3 | done | `RunRefuseCode` with its derived `RUN_REFUSE_CODES` (`shared/api.ts`): `mail-routes.test.ts`, "every declared RunRefuseCode (run-route refusals) is emitted somewhere in server/src/coord"; statuses from ARCH-11a's `REFUSAL_STATUS`: `refusal-status.test.ts` |
-| 4 | partly | `openRun`'s preconditions are L1 (`coord/openRun.ts`, ARCH-21, `open-run-preconditions.test.ts`); `dispatchRun` decides through `decideDispatch` (`coord/dispatchDecide.ts`, ARCH-22 (#553), `dispatch-decide.test.ts`) and acts through its deps, `sendClear` included; `closeRun` decides through `decideClose` (`coord/closeDecide.ts`, ARCH-35 (#556), `close-decide.test.ts`) and acts in `abandonRun` and `closeWorkRun` |
-| 5 | partly | every writer carries the terminal guard and the pair is spelled once (single-definition's "spells the delivery terminal pair ONCE"); `markDelivered`'s `void` is finished by ARCH-15 (#532) |
-| 6 | done, migrating | `FleetIO`'s `readFileMeasured`, `readdirMeasured`, `statMeasured` and kin (`io.test.ts`); the remaining catch-to-null folds move with ARCH-08b (#534) |
-| 7 | open | the watcher still takes the whole `CoordStore`; consumer-side ports are ARCH-03 (#541) |
+| 4 | done | `openRun`'s preconditions are L1 (`coord/openRun.ts`, ARCH-21, `open-run-preconditions.test.ts`); `dispatchRun` decides through `decideDispatch` (`coord/dispatchDecide.ts`, ARCH-22 (#553), `dispatch-decide.test.ts`) and acts through its deps, `sendClear` included; `closeRun` decides through `decideClose` (`coord/closeDecide.ts`, ARCH-35 (#556), `close-decide.test.ts`) and acts in `abandonRun` and `closeWorkRun` |
+| 5 | done | every writer carries the terminal guard and the pair is spelled once (single-definition's "spells the delivery terminal pair ONCE"); one guarded primitive answers `DeliveryWrite` to every caller (ARCH-15, #532, closed): `mail-deliveries-writer.test.ts` |
+| 6 | done | `FleetIO`'s `readFileMeasured`, `readdirMeasured`, `statMeasured` and kin (`io.test.ts`); the catch-to-null folds moved with ARCH-08b (#534, closed) |
+| 7 | partly | consumer-side ports landed with ARCH-03 (#541, closed): `coord/ports.ts` and the type-only `deps.ts`, held by `rings/host-imports.test.ts`; that ticket moved declarations and narrowed nothing, so the watcher still takes the whole `CoordStore` (`Deps.coord`, `deps.ts`), and no open ARCH ticket narrows it |
 
 ## Enforcement — mechanisms, not intentions
 
@@ -293,19 +296,20 @@ that goes red when it is deleted *and* when it is reordered); **ratchet budgets*
 `watch.ts` and `coord/routes.ts` at current line counts, may-only-shrink; scanner-coverage
 pins asserting each walk visited a non-zero minimum; docstring-claim rule.
 
-**Status per enforcement item** (measured on `main` for ARCH-02a, D-6000):
+**Status per enforcement item** (measured on `main` for ARCH-02a, D-6000, and refreshed for ARCH-02a,
+D-6992):
 
 | Item | Status | Held by, or finished by |
 |---|---|---|
-| Import-direction test | partly | per-ring pins in `single-definition.test.ts` ("the coord ring …", "the update ring …", "the docs ring …"); the repo-wide scanner over the rules above is ARCH-04 (#545), stages 1 to 4, one rule per file under `server/test/rings/` (stage 1, D-6045: `shared-imports.test.ts` holds L0's `shared/*.ts` to `./` imports and `mjs-node.test.ts` the `.mjs` carve-out; stage 2, D-6045: `outward-edges.test.ts` holds every `server/src` runtime edge inward of the rules above, `ring.ts` deciding each file's ring, with the outward edges on the tree in an exemption set that may only shrink, and `exemption-age.test.ts` reds an exemption set unchanged for more than 60 days without a re-dated reason, deviation-refs' `GRANDFATHERED` included; stage 3, D-6118: `pwa-rings.test.ts` holds a `pwa/src` L1 module's runtime edges off `.tsx` files, stores and `lib/api.ts`, each file's ring decided by `ring.ts`'s `pwaRing` from the PWA rules above, with the edges on the tree in an exemption set that may only shrink, and holds `ui/src` to no import of `pwa/` in any form; stage 4, D-6734: `totality.test.ts` gives every non-test `server/src` and `pwa/src` file one ring and one context from the table above, over a walk of at least 400 files), and its exemptions drain in ARCH-05 (#551); no file below L4 imports `server.ts` or `watch.ts`, even for a type: `rings/host-imports.test.ts` (D-6003, folded onto the ring classifier by D-6045; none pending since `Deps` moved to `deps.ts`) |
+| Import-direction test | partly | per-ring pins in `single-definition.test.ts` ("the coord ring …", "the update ring …", "the docs ring …"); the repo-wide scanner over the rules above is ARCH-04 (#545), stages 1 to 4, one rule per file under `server/test/rings/` (stage 1, D-6045: `shared-imports.test.ts` holds L0's `shared/*.ts` to `./` imports and `mjs-node.test.ts` the `.mjs` carve-out; stage 2, D-6045: `outward-edges.test.ts` holds every `server/src` runtime edge inward of the rules above, `ring.ts` deciding each file's ring, with the outward edges on the tree in an exemption set that may only shrink, and `exemption-age.test.ts` reds an exemption set unchanged for more than 60 days without a re-dated reason, deviation-refs' `GRANDFATHERED` included; stage 3, D-6118: `pwa-rings.test.ts` holds a `pwa/src` L1 module's runtime edges off `.tsx` files, stores and `lib/api.ts`, each file's ring decided by `ring.ts`'s `pwaRing` from the PWA rules above, with the edges on the tree in an exemption set that may only shrink, and holds `ui/src` to no import of `pwa/` in any form; stage 4, D-6734: `totality.test.ts` gives every non-test `server/src` and `pwa/src` file one ring and one context from the table above, over a walk of at least 400 files); ARCH-04 and ARCH-05 (#551), which drained the first exemptions, are closed, and the entries left in `OUTWARD_EDGE_EXEMPTIONS` and `PWA_L1_EXEMPTIONS` (`server/test/rings/`) may only shrink; no file below L4 imports `server.ts` or `watch.ts`, even for a type: `rings/host-imports.test.ts` (D-6003, folded onto the ring classifier by D-6045; none pending since `Deps` moved to `deps.ts`) |
 | No `reply` below L4 | done | `server/test/rings/fastify-l4.test.ts` (ARCH-04 stage 1, D-6045): `fastify` and every `Fastify*` name only in an exact L4 allowlist |
 | `single-definition` over the account roster | done | single-definition's "the account roster — runtime data, no compile-time copies" and "the account roster — config dir is data, joined in one place" |
 | Cross-language fixture test (ccd's bash copies against the roster) | done | `wrapper-roster-fixture.test.ts`, `roster-exec-parity.test.ts` |
-| Totality test for every wire union | open | ARCH-12 (#552) |
+| Totality test for every wire union | done | `rings/wire-totality.test.ts` (ARCH-12, #552; D-6048): every exported literal union in `shared/*.ts` has a sibling `Record<X, true>` map or an `is X` guard |
 | Mutant duty in `coord/` | review rule | CLAUDE.md's mutation-table discipline; every PR body carries its table. No test can see a missing mutant |
 | Ratchet budgets on `watch.ts` and `coord/routes.ts` | done | `growth-check.test.ts` (ARCH-01, #526; D-5848): net growth against the merge-base, not an absolute line count; armed by the operator on 2026-10-21 (OA-C2, D-6178), so growth past the limit fails CI |
 | Scanner-coverage pins | done, per walk | each walk's own "visits the whole directory" or "covers the directory" row in `single-definition.test.ts` |
-| Docstring-claim rule | partly | single-definition's "store.ts docstrings that describe their own callers"; doc-coupling pins are ARCH-07 (#558) |
+| Docstring-claim rule | done | single-definition's "store.ts docstrings that describe their own callers"; the doc-coupling pins landed with ARCH-07 (#558, closed): `citations.test.ts` refuses new numeric line citations, and `readmeSizeClaim.ts` keeps CLAUDE.md free of a README size |
 
 ## Rejected, so nobody relitigates it
 
