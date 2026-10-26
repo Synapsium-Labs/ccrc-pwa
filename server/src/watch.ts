@@ -116,12 +116,12 @@ import { redactCommand } from './coord/redact.js';
 import {
   BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
-  stallFailedVerdict, stallRestartedVerdicts, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
+  stallCoordBlockedPushText, stallCoordBlockedStep, stallFailedVerdict, stallRestartedVerdicts, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
   stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
   stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
   stallReactivation, stallVerdict, stallW2ReportMail, turnMarkStale,
   type AskRowFact, type HookAskFact, type HookRawFact, type LiveWordRead, type StallArming,
-  type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
+  type StallCoordEpisode, type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
   type StallVerdict, type StallWorker, type TurnMarkRead,
 } from './coord/stall.js';
 import {
@@ -1049,6 +1049,8 @@ export class FleetWatcher {
   private stallAbsentSince = new Map<string, number>();
   private stallDeadSince = new Map<string, number>();
   private stallMarkUnreadableSince = new Map<string, number>();
+  /** coord-blocked's open episode per coordinator (D-6942), L1's `stallCoordBlockedStep` answer kept for the next sweep. */
+  private stallCoordEpisodes = new Map<string, StallCoordEpisode>();
   /** When the lane last FINISHED judging its candidates, or null before the first judged sweep: the gap rule's anchor
    *  (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)). Stamped at the end of a sweep whose candidates read, never on an
    *  early return, so a slow sweep's own duration is never counted as a gap. */
@@ -6444,6 +6446,14 @@ export class FleetWatcher {
     for (const sv of [stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, project, sv, now);
     }
+    // coord-blocked (D-6942): the same session facts, with the claimant's child marker from this tick's rows
+    // (`unlisted` when none), the active runs it claims and the episode remembered from the last sweep. L1 decides
+    // the verdict and the next episode; this only keeps the episode and applies the verdict, run-less.
+    const rec = tick.records.find((x) => x.id === id);
+    const blocked = { session: si, child: rec === undefined ? { kind: 'unlisted' as const } : rec.child, runs: c.runs, episode: this.stallCoordEpisodes.get(id) ?? null };
+    const step = stallCoordBlockedStep(blocked, now);
+    if (step.episode === null) this.stallCoordEpisodes.delete(id); else this.stallCoordEpisodes.set(id, step.episode);
+    this.applyStallSession(store, si, project, step.verdict, now, (n) => stallCoordBlockedPushText(blocked, n, now));
   }
 
   /** A registry row that is no run's worker or coordinator: orphan D only (spec §5.2, "Candidates are the registry
@@ -6625,7 +6635,7 @@ export class FleetWatcher {
    *  their session is in the registry. A latch entry carries its session id, so the prune never parses a tag. */
   private pruneStallMemory(workers: ReadonlySet<string>, judged: ReadonlySet<string>, known: ReadonlySet<string>): void {
     for (const m of [this.stallAbsentSince, this.stallDeadSince]) for (const id of [...m.keys()]) if (!workers.has(id)) m.delete(id);
-    for (const id of [...this.stallMarkUnreadableSince.keys()]) if (!judged.has(id)) this.stallMarkUnreadableSince.delete(id);
+    for (const m of [this.stallMarkUnreadableSince, this.stallCoordEpisodes]) for (const id of [...m.keys()]) if (!judged.has(id)) m.delete(id);
     for (const [tag, id] of [...this.stallLatch]) if (!known.has(id)) this.stallLatch.delete(tag);
     for (const key of [...this.stallWarned]) if (!known.has(key.slice(0, key.indexOf('|')))) this.stallWarned.delete(key);
   }
@@ -6698,7 +6708,10 @@ export class FleetWatcher {
    *    memory (`stallLatch`, slug `run-less-push-latches-are-in-memory` (D-3751)), so a restart re-pushes it, a coordinator's
    *    failed rung 2 included, and a marker-unreadable push re-keys on each side of a clock drop. L1's
    *    `stallPushRoute` names the push's kind and tag, which is also the latch key. */
-  private applyStallSession(store: CoordStore, si: StallSessionInput, project: string, v: StallVerdict, now: number): void {
+  /** `pushText` words an operator push whose arm reads more than the session's facts (coord-blocked's claimed runs);
+   *  absent, `stallSessionPushText` does. */
+  private applyStallSession(store: CoordStore, si: StallSessionInput, project: string, v: StallVerdict, now: number,
+    pushText: (n: StallNotify) => { readonly title: string; readonly body: string } = (n) => stallSessionPushText(si, n, now)): void {
     const id = si.sessionId;
     if (v.act === 'hold' && v.why === 'failed-unknown') {
       const stopAt = si.mark.ok ? si.mark.stopAt : null;
@@ -6732,7 +6745,7 @@ export class FleetWatcher {
     if (run !== null) {
       const obs = store.recordStallObservation(run.id, detail, now);
       if (!obs.recorded) return;
-      const text = stallSessionPushText(si, v, now);
+      const text = pushText(v);
       this.pushOne({
         kind: route.kind, sessionId: id, project, title: text.title, body: text.body,
         runId: run.id, tag: route.tag, recordAlways: true,
@@ -6741,7 +6754,7 @@ export class FleetWatcher {
     }
     if (this.stallLatch.has(route.tag)) return;
     this.stallLatch.set(route.tag, id);
-    const text = stallSessionPushText(si, v, now);
+    const text = pushText(v);
     this.pushOne({
       kind: route.kind, sessionId: id, project, title: text.title, body: text.body,
       tag: route.tag, recordAlways: true,

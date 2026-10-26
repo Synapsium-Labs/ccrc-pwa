@@ -1,5 +1,5 @@
-import { ACTIVE_RUN_STATES, MAIL_REPLAY_MS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT, isRunState, isSessionLifecycle, lifecycleIsDead } from '../../../shared/api.js';
-import type { MailGate, RunState } from '../../../shared/api.js';
+import { ACTIVE_RUN_STATES, MAIL_REPLAY_MS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT, isRunState, isSessionLifecycle, lifecycleIsDead, sessionRoleOf } from '../../../shared/api.js';
+import type { ChildMark, MailGate, RunState } from '../../../shared/api.js';
 import type { MailTurnMode } from '../turnidle.js';
 import { stallWatchSays } from '../sessionReading.js';
 /**
@@ -67,6 +67,7 @@ const STALL_ARM_MAP = {
   'coord-deaf': 'the worker passed the ball to its coordinator and that mail sat unacked COORD_DEAF_MS from its first delivery, or DELEGATE_CAP_MS + COORD_DEAF_MS from its queue while it stays queued behind the gate: one operator push',
   'mail-stuck': 'a delivery to the session stayed queued MAIL_STUCK_MS after its main loop went idle (a live idle or shell word in every mode, the strict mode included, an accepted residual; or a finished turn under a live busy, which the `busy` mode delivers on only while the strict mode is absent), or behind a registry gate: one operator push per delivery',
   'marker-unreadable': 'the turn marker read unmeasured or malformed for MARKER_UNREADABLE_MS: one operator push per episode',
+  'coord-blocked': 'mail to a coordinator (no child marker, claiming an open run) still queued COORD_BLOCKED_HELD_MS from its queue time, whatever word it reads: one operator push per episode naming the gate reason, rung 2 at a COORD_BLOCKED_STRETCH_MS busy or waiting stretch or a COORD_BLOCKED_OLD_MS old mail; it only reports (D-6942)',
 } as const;
 export type StallArm = keyof typeof STALL_ARM_MAP;
 export const STALL_ARMS = Object.keys(STALL_ARM_MAP) as StallArm[];
@@ -77,7 +78,7 @@ function isStallArm(v: string): v is StallArm {
  *  (`stallNotifyDelivery`; planning departure `w2-arms-ship-dark` (D-3605)). Total over the arms, so a new arm is a compile
  *  error until it is placed. */
 const STALL_ARM_WAVE: Record<StallArm, 1 | 2> = {
-  quiet: 1, 'limit-cap': 1, 'dialog-cap': 1, 'coord-ball': 1,
+  quiet: 1, 'limit-cap': 1, 'dialog-cap': 1, 'coord-ball': 1, 'coord-blocked': 1,
   'orphan-d': 2, restarted: 2, 'orphan-e': 2, failed: 2, frozen: 2, dead: 2, 'coord-deaf': 2, 'mail-stuck': 2, 'marker-unreadable': 2,
 };
 
@@ -367,6 +368,26 @@ export const STALL_BACKOFF_CEILING_MS = BACKLOG_HORIZON_MS - 2 * (STALL_BOUND_MS
 export const ORPHAN_PUSH_MS = 30 * 60_000;
 /** marker-unreadable: the marker read `unmeasured` or `malformed` this long on a candidate. *Chosen*. */
 export const MARKER_UNREADABLE_MS = 3_600_000;
+/** coord-blocked's thresholds (operator ruling 2026-10-25, D-6942), *measured*. The basis is a 14-day census of the
+ *  fleet's mail (2026-10-11 to 10-25: 19 coordinators, 2,743 mails addressed to a coordinator). Delivery lag: median
+ *  0.2 min, p90 4.1 min, p95 20.9 min, p99 510 min; 158 mails (5.8 %) waited 15 min or more, so 15 min is noise. The
+ *  census span is an UPPER BOUND on a hold: it runs from a mail's creation to the coordinator's next nudge or its own
+ *  read, whichever came first, so a true hold is at most that long. No strict circular wait was found. The 33 episodes
+ *  of mail held more than an hour were an open operator question (20, about 102 h, three of them over 10 h overnight),
+ *  the coordinator's own long busy stretch, a background workflow with no turn running, and an idle coordinator not
+ *  receiving mail (unsent input text, an account limit), so the arm reads the server's held mail and never requires a
+ *  busy word, which would miss the last kind. Held mail is the reading of "queued or gate-held": only a delivery still
+ *  `queued` counts, timed from its mail's queue time (`mail.at`). A delivered row's gated replay is mail already
+ *  received and is outside it; it never counts. Mail queued COORD_BLOCKED_HELD_MS flags; a COORD_BLOCKED_STRETCH_MS
+ *  busy or waiting stretch, or a COORD_BLOCKED_OLD_MS old mail, escalates. The shipped rule flags at 30 min in ANY
+ *  state, so it corresponds to the census row WITHOUT the busy condition: about 77 coordinator-hours flagged in 14 days,
+ *  roughly 5 a day. The flag sits below
+ *  MAIL_STUCK_MS, so held mail is named before the generic stuck push would be. Constants first: the stall-watch
+ *  settings row stores the level and the quiet time only, so a tunable form is a settings-row column of its own (a
+ *  migration). */
+export const COORD_BLOCKED_HELD_MS = 30 * 60_000;
+export const COORD_BLOCKED_STRETCH_MS = 60 * 60_000;
+export const COORD_BLOCKED_OLD_MS = 2 * 60 * 60_000;
 
 // ── StopFailure's error tokens (§5.2) ────────────────────────────────────────────────────────────────────────
 /** 2.1.277–2.1.284's own StopFailure matcher list, identical in every installed lane, in §5.2's three classes.
@@ -600,9 +621,9 @@ export type StallNotify =
   | { readonly act: 'notify'; readonly arm: 'limit-cap' | 'dialog-cap' | 'coord-ball'; readonly rung: 1; readonly key: number; readonly to: 'operator' }
   | { readonly act: 'notify'; readonly arm: 'frozen' | 'dead'; readonly rung: 1; readonly key: number; readonly to: 'coordinator'; readonly coordinatorId: string; readonly because: StallW2Cause }
   | { readonly act: 'notify'; readonly arm: 'frozen' | 'dead'; readonly rung: 1; readonly key: number; readonly to: 'operator'; readonly because: StallW2Cause }
-  | { readonly act: 'notify'; readonly arm: 'coord-deaf' | 'mail-stuck' | 'marker-unreadable'; readonly rung: 1; readonly key: number; readonly to: 'operator' }
+  | { readonly act: 'notify'; readonly arm: 'coord-deaf' | 'mail-stuck' | 'marker-unreadable' | 'coord-blocked'; readonly rung: 1; readonly key: number; readonly to: 'operator' }
   | { readonly act: 'notify'; readonly arm: 'orphan-d' | 'orphan-e'; readonly rung: 1; readonly key: number; readonly to: 'worker' }
-  | { readonly act: 'notify'; readonly arm: 'orphan-d'; readonly rung: 2; readonly key: number; readonly to: 'operator' }
+  | { readonly act: 'notify'; readonly arm: 'orphan-d' | 'coord-blocked'; readonly rung: 2; readonly key: number; readonly to: 'operator' }
   | { readonly act: 'notify'; readonly arm: 'restarted'; readonly rung: 1; readonly key: number; readonly to: 'worker' }
   | { readonly act: 'notify'; readonly arm: 'restarted'; readonly rung: 2; readonly key: number; readonly to: 'coordinator'; readonly coordinatorId: string }
   | { readonly act: 'notify'; readonly arm: 'failed'; readonly rung: 1; readonly key: number; readonly to: 'worker'; readonly err: string }
@@ -805,7 +826,7 @@ function rungDueAt(rungAt: number, liveSince: number, gap: number): number {
 const STALL_RUNG_RECIPIENTS: Record<StallArm, readonly StallRecipient[]> = {
   quiet: ['worker', 'coordinator', 'operator'],
   'limit-cap': ['operator'], 'dialog-cap': ['operator'], 'coord-ball': ['operator'],
-  'coord-deaf': ['operator'], 'mail-stuck': ['operator'], 'marker-unreadable': ['operator'],
+  'coord-deaf': ['operator'], 'mail-stuck': ['operator'], 'marker-unreadable': ['operator'], 'coord-blocked': ['operator', 'operator'],
   'orphan-d': ['worker', 'operator'],
   restarted: ['worker', 'coordinator'],
   'orphan-e': ['worker'],
@@ -1520,6 +1541,8 @@ export function stallPushText(input: StallInput, facts: StallFacts, n: StallNoti
     case 'mail-stuck':
     case 'marker-unreadable':
       return stallW2SessionPush(stallRunWho(input), n, now);
+    case 'coord-blocked':
+      throw new RangeError('stallPushText: coord-blocked is a coordinator\'s arm, never a run worker\'s; stallCoordBlockedPushText owns its text');
   }
 }
 
@@ -1940,6 +1963,163 @@ export function stallSessionMarkerVerdict(input: StallSessionInput, now: number)
   return stallMailDisabledHold(stallSessionMarkerInner(input, now), input.arming);
 }
 
+// ── coord-blocked (operator ruling 2026-10-25, D-6942) ───────────────────────────────────────────────────────────
+// Mail addressed to a coordinator that the server still holds. The arm is keyed on the server's own mail state, never
+// on the word the coordinator reads: the census found mail held behind an open operator question, the coordinator's
+// own long busy stretch, a background workflow with no turn running, and an idle coordinator that was not receiving
+// mail, and a rule requiring `busy` misses the first and the last. It only reports: one operator push per rung per
+// episode, never a keystroke, a kill or a reroute.
+
+/** The coordinator's registry row as this arm reads it: the row's `ChildMark`, or `unlisted` when this tick's
+ *  records hold no row for it. `unlisted` is its own word, never folded into `none`: a row nobody read is not proven
+ *  a coordinator. */
+export type StallChildFact = ChildMark | { readonly kind: 'unlisted' };
+/** One episode: a stretch in which some mail to the coordinator stays held, unbroken. `since` is the oldest held
+ *  item's start when the lane first saw one; `rung` is the highest rung reached in it (0 = not yet due), which never
+ *  falls, so an escalation is never followed by a lower push. The lane keeps it in memory, like its other first-seen
+ *  clocks, so a server restart re-opens a standing episode and pushes it once more. */
+export interface StallCoordEpisode { readonly since: number; readonly rung: 0 | 1 | 2 }
+/** The arm's input: the coordinator's session facts (role `coordinator`), its child marker, the ACTIVE runs it claims
+ *  (`stallCoordinatorSubjects`' group), whose workers are the children a held mail may come from, and the episode the
+ *  lane remembers from its last sweep. */
+export interface StallCoordBlockedInput {
+  readonly session: StallSessionInput; readonly child: StallChildFact; readonly runs: readonly StallRunRow[];
+  readonly episode: StallCoordEpisode | null;
+}
+/** One held item: a delivery to the coordinator still `queued`, held since its mail's queue time, whatever gate holds
+ *  it. A delivered row is never held: the coordinator has received it, and `dueDeliveries` replays an unacked one every
+ *  MAIL_REPLAY_MS, so a busy or waiting coordinator gates each replay while `noteGate` keeps `gateSince` unbroken.
+ *  Counting those would flag every unacked mail of an ordinary busy stretch, outside the census's creation-to-first-seen
+ *  definition; an unacked delivered mail is coord-deaf's case. */
+interface StallCoordHeld { readonly delivery: StallDeliveryRow; readonly mail: StallMailRow; readonly since: number }
+
+/** Why the mail is held, read from the coordinator's live word and turn marker. Each is one of the census's holds, and
+ *  `STALL_COORD_GATE_TEXT` words it for the operator. Declared once here: `isStallCoordGate` admits these words to
+ *  mail-routes.test.ts's kebab census, and the type derives from the tuple. */
+export const STALL_COORD_GATES = ['waiting', 'background', 'busy', 'busy-unread', 'idle'] as const;
+export type StallCoordGate = (typeof STALL_COORD_GATES)[number];
+const STALL_COORD_GATE_SET: ReadonlySet<string> = new Set<string>(STALL_COORD_GATES);
+/** True for every coord-blocked gate reason. It is derived from `STALL_COORD_GATES`, never a hand list. */
+export function isStallCoordGate(token: string): token is StallCoordGate {
+  return STALL_COORD_GATE_SET.has(token);
+}
+const STALL_COORD_GATE_TEXT: Record<StallCoordGate, (children: number) => string> = {
+  waiting: (k) => `the coordinator is waiting on you (an open question); ${k === 1 ? '1 child mail is' : `${stallInt(k)} child mails are`} queued behind it`,
+  background: () => 'held behind a background workflow',
+  busy: () => 'its own long busy stretch',
+  'busy-unread': () => 'busy (its turn state could not be read)',
+  idle: () => 'idle but not receiving mail (input text or account limit)',
+};
+
+/** `waiting` is a live `waiting` word OR a pending dialog (2b's `dialogPending`, whatever the word reads): an open
+ *  operator question is the commonest long hold the census measured, so it outranks every other reason. `busy` over a
+ *  CURRENT working marker is the coordinator's own turn; `busy` over a CURRENT finished (`done` or `failed`) marker is a
+ *  main loop idling over background work; `busy` over a marker that is not current (stale, absent, malformed, foreign)
+ *  proves neither, so it reads `busy-unread`. Idle or shell is at rest. Null when the word is unmeasured or one the
+ *  watch reads as doubt; the arm still flags such a word at rung 1, worded as unreadable (`stallCoordRungNow`). */
+export function stallCoordGate(input: StallSessionInput): StallCoordGate | null {
+  const live = stallSessionLive(input);
+  if (live === null) return null;
+  if (live.word === 'waiting' || (input.worker.present === true && input.worker.dialogPending)) return 'waiting';
+  if (isIdleWord(live.word)) return 'idle';
+  if (live.word !== 'busy') return null;
+  const m = stallCurrentMark(input);
+  if (m === null) return 'busy-unread';
+  return m.state === 'working' ? 'busy' : 'background';
+}
+
+/** When the coordinator's busy or waiting stretch began, or null when it is at rest or unmeasured: the escalation's
+ *  stretch clock. A current `working` marker carries the turn's own start across busy↔waiting flips and compactions;
+ *  otherwise the live stamp is the start. */
+export function stallCoordBusySince(input: StallSessionInput): number | null {
+  const live = stallSessionLive(input);
+  if (live === null || (live.word !== 'busy' && live.word !== 'waiting')) return null;
+  const m = stallCurrentMark(input);
+  return m !== null && m.state === 'working' && m.turnAt !== null && m.turnAt < live.since ? m.turnAt : live.since;
+}
+
+/** Every queued delivery to the coordinator whose mail this read holds, longest held first. */
+function stallCoordHeld(input: StallSessionInput): StallCoordHeld[] {
+  const out: StallCoordHeld[] = [];
+  for (const d of input.deliveries) {
+    if (d.toId !== input.sessionId) continue;
+    if (d.state !== 'queued') continue;
+    const mail = input.mail.find((m) => m.id === d.mailId);
+    if (mail !== undefined) out.push({ delivery: d, mail, since: mail.at });
+  }
+  return out.sort((a, b) => a.since - b.since || a.mail.id - b.mail.id);
+}
+
+/** The rung due now: 0 below COORD_BLOCKED_HELD_MS, 2 at a COORD_BLOCKED_STRETCH_MS stretch or a COORD_BLOCKED_OLD_MS
+ *  old mail, else 1. No word silences it: a measured word the watch cannot name (`stallCoordGate` null; an unmeasured
+ *  one is held before this) still flags rung 1 at the held threshold, worded as unreadable, and has no stretch. */
+function stallCoordRungNow(si: StallSessionInput, oldest: StallCoordHeld, now: number): 0 | 1 | 2 {
+  if (now - oldest.since < COORD_BLOCKED_HELD_MS) return 0;
+  const stretch = stallCoordBusySince(si);
+  return now - oldest.since >= COORD_BLOCKED_OLD_MS || (stretch !== null && now - stretch >= COORD_BLOCKED_STRETCH_MS) ? 2 : 1;
+}
+
+function stallCoordBlockedInner(input: StallCoordBlockedInput, now: number): { readonly verdict: StallVerdict; readonly episode: StallCoordEpisode | null } {
+  const si = input.session;
+  const closed = { verdict: VERDICT_NONE, episode: null };
+  if (si.role !== 'coordinator' || input.runs.length === 0) return closed;
+  if (input.child.kind === 'unlisted' || sessionRoleOf(input.child) !== 'coordinator') return closed;
+  const oldest = stallCoordHeld(si)[0];
+  if (oldest === undefined) return closed;   // recovery: nothing held closes the episode
+  const prev: StallCoordEpisode = input.episode ?? { since: oldest.since, rung: 0 };
+  // Holds 1 only, keeping the episode: never the dialog hold or the limit hold, because an open question and an
+  // account limit are two of the holds this arm reports.
+  const held = stallSessionHolds(si, now, false);
+  if (held !== null && !(held.act === 'hold' && held.why === 'limit')) return { verdict: held, episode: prev };
+  const rung = Math.max(prev.rung, stallCoordRungNow(si, oldest, now)) as 0 | 1 | 2;
+  const episode: StallCoordEpisode = { since: prev.since, rung };
+  return {
+    verdict: rung === 0 ? VERDICT_NONE : rung === 1
+      ? { act: 'notify', arm: 'coord-blocked', rung: 1, key: prev.since, to: 'operator' }
+      : { act: 'notify', arm: 'coord-blocked', rung: 2, key: prev.since, to: 'operator' },
+    episode,
+  };
+}
+
+/** The arm's verdict, through the mail-disabled filter like every session verdict (an operator push passes it), and the
+ *  episode the lane keeps for its next sweep. Run-less: the lane latches the push on `stallPushRoute`'s tag, which the
+ *  rung and the episode's start key, so an episode is one push per rung and new held mail after recovery is a new one. */
+export function stallCoordBlockedStep(input: StallCoordBlockedInput, now: number): { readonly verdict: StallVerdict; readonly episode: StallCoordEpisode | null } {
+  const r = stallCoordBlockedInner(input, now);
+  return { verdict: stallMailDisabledHold(r.verdict, input.session.arming), episode: r.episode };
+}
+
+/** The arm's push. Sanitised ids, integers, kinds and server-formatted UTC only: never a subject or a body. */
+export function stallCoordBlockedPushText(input: StallCoordBlockedInput, n: StallNotify, now: number): { readonly title: string; readonly body: string } {
+  if (n.arm !== 'coord-blocked') throw new RangeError(`stallCoordBlockedPushText: ${n.arm} is not coord-blocked`);
+  const si = input.session;
+  const who = stallSessionWho(si);
+  const held = stallCoordHeld(si);
+  const childIds = new Set(input.runs.map((r) => r.sessionId));
+  const gate = stallCoordGate(si);
+  const reason = gate === null ? 'its state could not be read this sweep' : STALL_COORD_GATE_TEXT[gate](held.filter((h) => childIds.has(h.mail.fromId)).length);
+  const oldest = held[0];
+  const items = held.length === 1 ? '1 item addressed to it is held' : `${stallInt(held.length)} items addressed to it are held`;
+  const head = oldest === undefined ? `${items}.`
+    : `${items}; the oldest, mail #${stallInt(oldest.mail.id)} ${stallSafe(oldest.mail.kind)} from ${stallSafe(oldest.mail.fromId)}, was queued at ${stallUtc(oldest.mail.at)} (${stallSpan(now - oldest.mail.at)} ago).`;
+  const senders = new Set(held.map((h) => h.mail.fromId));
+  // One row per child worker, its lowest run id: a Map keyed by the worker keeps the first run it meets.
+  const firstRunOf = new Map<string, StallRunRow>();
+  for (const r of [...input.runs].sort((a, b) => a.id - b.id)) if (senders.has(r.sessionId) && !firstRunOf.has(r.sessionId)) firstRunOf.set(r.sessionId, r);
+  const children = [...firstRunOf.values()];
+  const waiting = children.length === 0 ? 'No run worker of it is among the senders.'
+    : `Children waiting: ${children.map((r) => `${stallSafe(r.sessionId)} (run ${stallInt(r.id)})`).join(', ')}.`;
+  const stretch = stallCoordBusySince(si);
+  const escalated = n.rung !== 2 ? ''
+    : stretch === null ? 'Escalated: the oldest held mail is past its limit.'
+      : `Escalated: busy or waiting since ${stallUtc(stretch)} (${stallSpan(now - stretch)}).`;
+  return {
+    title: n.rung === 2 ? `⚠ coordinator blocked (escalated) › ${who.ws}` : `⚠ coordinator blocked › ${who.ws}`,
+    body: stallSentences(`${who.lead}: ${reason}.`, head, waiting, escalated,
+      'It only reports: nothing was interrupted, killed or rerouted. Look at its pane for a question to answer or a turn that should end.'),
+  };
+}
+
 // ── wave 2's notice texts (§5.2; plan Task 13) ───────────────────────────────────────────────────────────────
 // Wave 1's text rules hold here. A text carries sanitised ids, integers, kinds and server-formatted UTC only. It never
 // carries a subject, a transcript, or a task's name, description or command. The marker's reader already validated
@@ -2270,6 +2450,8 @@ function stallW2SessionPush(who: StallPushWho, n: StallNotify, now: number): { r
         body: `${who.lead}: its turn marker has read ${reason} since ${stallUtc(since)} (${stallSpan(now - since)}). The busy gate and the wave-2 arms fall back to wave 1 for it until the marker reads again.`,
       };
     }
+    case 'coord-blocked':
+      throw new RangeError('stall push: coord-blocked reads the runs its coordinator claims, and stallCoordBlockedPushText owns its text');
     default:
       throw new RangeError(`stall push: ${n.arm} is a run arm, and stallPushText owns its text`);
   }

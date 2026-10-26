@@ -5379,6 +5379,31 @@ in Settings, or on the fleet box touch `mail-gate-strict` (busy delivery) or
 `ccrc uninstall` leaves `stall-watch-w2-live`, `mail-gate-busy` and
 `mail-gate-busy-shadow` in place, as it leaves every other operator switch.
 
+**The stall watch, coordinator blocked.** The mail gate holds mail for a session
+that cannot take it now, so a held coordinator holds every child's question,
+status and done claim. A coordinator (a claimant of an active run with no child
+marker) with mail the server still holds for 30 min (a delivery still `queued`,
+timed from its queue time; a delivered mail's gated replay never counts),
+whatever word it reads, draws one `⚠ coordinator blocked` push per episode
+(D-6942). The push names the reason in
+plain words: waiting on you (an open question: a `waiting` word or a pending
+dialog), with the child mails queued behind it; held behind a background
+workflow (`busy` over a finished turn); its own long busy stretch (`busy` with a
+turn); busy with its turn state unreadable; or idle but not receiving mail
+(input text or an account limit). A word it cannot name still flags, worded as
+unreadable, so no word silences it. It names how many items are held, the oldest
+and its age, and which of its run workers sent them. A busy or waiting stretch
+of 60 min, or a held mail 2 h old, raises one `(escalated)` push in the same
+episode. An episode runs while any mail to the coordinator stays held, so once
+everything goes through, new held mail is a new episode. It is a wave-1 arm, so
+it follows the Stall watch level with no marker of its own: Alert and above
+push, Log only and Check record one run-less `stall-watch shadow` line. It only
+reports: it never types into the pane, interrupts, kills or reroutes. The
+episode and the push latch are in memory like the other run-less pushes, so a
+server restart while the episode stands pushes it once more. The thresholds and
+their measured basis are in `COORD_BLOCKED_HELD_MS`'s comment in
+`server/src/coord/stall.ts`.
+
 **The honest boundary.** The coordinator acts through this server's HTTP
 API — one recorded chokepoint for every irreversible act (dispatch, close,
 mail) — and that chokepoint is what makes the caps and the pause file real
