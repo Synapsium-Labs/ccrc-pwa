@@ -18,6 +18,7 @@ import { substrateFault, type FleetSession } from '../../../shared/api';
 import type { FleetRow } from './nestFleet';
 import type { FleetTreeGroup } from './fleetTree';
 import { rowStateWord } from './sessionFacts';
+import { delegationParts } from './delegationWords';
 
 /** A project whose last change is younger than this is active (rule 2). */
 export const ROLLUP_RECENT_MS = 30 * 60_000;
@@ -85,9 +86,16 @@ export function nextRollupBoundary(sessions: readonly FleetSession[], now: numbe
   return next;
 }
 
+/** A coordinator's worker children (W) and its delegation children (D: delegated work and worktrees,
+ *  delegation broker wave 4). */
+type WorkerRow = Extract<FleetRow, { kind: 'session' | 'pending' }>;
+type DelegatedRow = Extract<FleetRow, { kind: 'activity' | 'lease' }>;
+const isWorker = (r: FleetRow): r is WorkerRow => r.kind === 'session' || r.kind === 'pending';
+const isDelegated = (r: FleetRow): r is DelegatedRow => r.kind === 'activity' || r.kind === 'lease';
+
 /** A child's word in the summary line: the row's own state word (`rowStateWord`), `needs you` for an
- *  operator-facing ask. */
-const childWord = (row: FleetRow): string => {
+ *  operator-facing ask. Asked of W only. */
+const childWord = (row: WorkerRow): string => {
   if (row.kind === 'pending') return 'spawning';
   const s = row.session;
   return operatorAsk(s) ? 'needs you' : rowStateWord(s);
@@ -97,7 +105,7 @@ const childWord = (row: FleetRow): string => {
  *  one a narrow column pushes to a second line; the rest in the bucket order. */
 const WORD_ORDER = ['needs you', 'working', 'waiting', 'done', 'idle', 'merged', 'asleep', 'exited', 'archived', 'spawning'];
 
-function summaryParts(children: readonly FleetRow[]): SummaryPart[] {
+function workerParts(children: readonly WorkerRow[]): SummaryPart[] {
   const counts = new Map<string, number>();
   for (const c of children) counts.set(childWord(c), (counts.get(childWord(c)) ?? 0) + 1);
   const parts = [...counts].sort(([a], [b]) => WORD_ORDER.indexOf(a) - WORD_ORDER.indexOf(b)).map(([word, n]) => ({ n, word }));
@@ -105,7 +113,13 @@ function summaryParts(children: readonly FleetRow[]): SummaryPart[] {
 }
 
 /** Rules 6 and 7 over one card's rows: each coordinator with `CHILD_FOLD_MIN` children or more gets one summary line;
- *  folded, only its operator-facing children and the open session stay under it. */
+ *  folded, only its operator-facing children and the open session stay under it.
+ *
+ *  Delegation broker wave 4: W is a head's worker children and D its delegation children. It folds when EITHER
+ *  reaches `CHILD_FOLD_MIN`, so worktrees appearing beside a lone worker never hide that worker: folded, W keeps
+ *  today's filter only when W itself would have folded, else all of W stays, and D hides. The line is today's worker
+ *  counts (only when W is non-empty), then `n delegated` and `n worktree(s)`, never sorted into `WORD_ORDER`. A
+ *  delegation group header is not a session head, so its members pass through unfolded. */
 function foldChildren(rows: readonly FleetRow[], open: ReadonlySet<string>, selectedId: string | null): RolledRow[] {
   const out: RolledRow[] = [];
   let i = 0;
@@ -115,15 +129,19 @@ function foldChildren(rows: readonly FleetRow[], open: ReadonlySet<string>, sele
     i += 1;
     const kids: FleetRow[] = [];
     while (i < rows.length && rows[i]!.depth === 1) kids.push(rows[i++]!);
-    if (head.kind !== 'session' || kids.length < CHILD_FOLD_MIN) {
+    const w = kids.filter(isWorker);
+    const d = kids.filter(isDelegated);
+    if (head.kind !== 'session' || (w.length < CHILD_FOLD_MIN && d.length < CHILD_FOLD_MIN)) {
       out.push(...kids);
       continue;
     }
     const expanded = open.has(head.session.id);
-    const parts = summaryParts(kids);
+    const parts = [...(w.length > 0 ? workerParts(w) : []), ...delegationParts(d)];
     const text = parts.map((p) => `${p.n} ${p.word}`).join(' · ');
     out.push({ kind: 'summary', depth: 1, parentId: head.session.id, expanded, total: kids.length, parts, text });
-    out.push(...(expanded ? kids : kids.filter((k) => k.kind === 'session' && (operatorAsk(k.session) || k.session.id === selectedId))));
+    const kept = w.length < CHILD_FOLD_MIN ? w
+      : w.filter((k) => k.kind === 'session' && (operatorAsk(k.session) || k.session.id === selectedId));
+    out.push(...(expanded ? kids : kept));
   }
   return out;
 }
