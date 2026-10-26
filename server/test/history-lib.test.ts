@@ -11874,3 +11874,86 @@ describe('CP-39 Task 1: sidecarNameMatcher answers every asked name a text holds
     expect(m.namesIn('…/tool-results/out10.txt and …/out1.txt')).toEqual(['out1.txt', 'out10.txt']);
   });
 });
+
+describe('CP-39 Task 2: the walk state, its extension and its first-match fold (D-6931)', () => {
+  type Pair = [string, number];
+  interface Part { names: string[]; text: Pair[]; toolu: Pair[] }
+  interface State { v: 1; done: Part; walk: (Part & { after: number }) | null }
+  const state = (over: Partial<State> = {}): State => ({ v: 1, done: { names: [], text: [], toolu: [] }, walk: null, ...over });
+
+  it('round-trips, with pairs and never object keys', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const s = state({
+      done: { names: ['__proto__', 'a name.txt', 'toolu_01A.json'], text: [['__proto__', 3], ['a name.txt', 3]], toolu: [['toolu_01A', 5]] },
+      walk: { names: ['late.txt'], after: 2 ** 31, text: [], toolu: [] },
+    });
+    expect(lib.parseSidecarWalk(lib.formatSidecarWalk(s))).toEqual(s);
+    expect(lib.parseSidecarWalk(lib.formatSidecarWalk(state({ walk: { names: ['x.txt'], after: 0, text: [], toolu: [] } })))?.walk?.after).toBe(0);
+    expect(lib.formatSidecarWalk(lib.emptySidecarWalk()), 'the empty state, keys in order').toBe('{"v":1,"done":{"names":[],"text":[],"toolu":[]},"walk":null}');
+  });
+
+  it('anything malformed is null, so the walk starts again from row 0', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const ok = state({ done: { names: ['a.txt'], text: [['a.txt', 3]], toolu: [] }, walk: { names: ['b.txt'], after: 7, text: [], toolu: [] } });
+    expect(lib.parseSidecarWalk(JSON.stringify(ok)), 'CONTROL: a well-formed state parses').toEqual(ok);
+    const w = ok.walk!;
+    const bad: unknown[] = [
+      '', '{}', 'not json', { ...ok, v: 2 },
+      { ...ok, walk: { ...w, after: -1 } }, { ...ok, walk: { ...w, after: 1.5 } }, { ...ok, walk: { ...w, after: '7' } },
+      { ...ok, done: { ...ok.done, names: 'a.txt' } }, { ...ok, done: { ...ok.done, names: [7] } },
+      { ...ok, done: { ...ok.done, text: [['a.txt']] } }, { ...ok, done: { ...ok.done, text: [['a.txt', 0]] } },
+      { ...ok, done: { ...ok.done, names: ['a.txt', 'a.txt'] } },
+      { ...ok, walk: { ...w, names: ['a.txt'] } },                     // a name both parts hold
+      { ...ok, done: { ...ok.done, text: [['zz.txt', 3]] } },          // a pair for a name its part does not hold
+      { ...ok, done: { ...ok.done, toolu: [['toolu_01Z', 3]] } },      // a stem no name of its part has
+    ];
+    for (const b of bad) expect(lib.parseSidecarWalk(typeof b === 'string' ? b : JSON.stringify(b)), JSON.stringify(b)).toBeNull();
+    expect(lib.parseSidecarWalk(`{"v":1,"done":{"names":["${'q'.repeat(64 * 1024 * 1024)}"],"text":[],"toolu":[]},"walk":null}`), 'over 64 MiB, refused before parsing').toBeNull();
+  });
+
+  it('the fold keeps the first entry; finishing merges into done, which keeps its entry for a stem both parts hold', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const s = state({ done: { names: ['toolu_01A.json'], text: [], toolu: [['toolu_01A', 2]] }, walk: { names: ['a.txt', 'data.txt', 'toolu_01A.txt'], after: 0, text: [], toolu: [] } });
+    lib.foldWalkCandidates(s, [
+      { entryId: 3, text: 'data.txt\0a.txt', toolUseIds: ['toolu_01A'] },
+      { entryId: 5, text: 'a.txt', toolUseIds: ['toolu_01A'] },
+    ]);
+    expect(s.walk).toMatchObject({ text: [['data.txt', 3], ['a.txt', 3]], toolu: [['toolu_01A', 3]] });
+    lib.finishSidecarWalk(s);
+    expect(s.walk).toBeNull();
+    expect([...s.done.names].sort()).toEqual(['a.txt', 'data.txt', 'toolu_01A.json', 'toolu_01A.txt']);
+    expect(s.done.toolu, 'done keeps its own entry for the shared stem').toEqual([['toolu_01A', 2]]);
+  });
+
+  it('walkCandidates offers linkSidecar what it would pick from the full candidate list', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const full = [
+      { entryId: 2, text: '', toolUseIds: ['toolu_01A'] },              // answers toolu_01A
+      { entryId: 3, text: 'data.txt\0a.txt', toolUseIds: [] },
+      { entryId: 4, text: 'toolu_01A.json', toolUseIds: [] },           // names toolu_01A.json AFTER the row that answers it
+      { entryId: 6, text: 'a.txt', toolUseIds: ['toolu_01Z'] },
+    ];
+    const names = ['a.txt', 'data.txt', 'toolu_01A.json', 'toolu_01Z.txt', 'zz.txt'];
+    const s = state({ walk: { names, after: 0, text: [], toolu: [] } });
+    lib.foldWalkCandidates(s, full);
+    lib.finishSidecarWalk(s);
+    for (const n of names) expect(lib.linkSidecar(n, lib.walkCandidates(s, n)), n).toBe(lib.linkSidecar(n, full));
+  });
+
+  it('walkNames: the uncovered unseen names, sorted, each once, within the room, and always the name that asked', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.walkNames(['c.txt', 'a.txt', 'c.txt', 'b.txt'], 'c.txt', ['b.txt'])).toEqual(['a.txt', 'c.txt']);
+    const big = Array.from({ length: 600 }, (_, i) => `${String(i).padStart(4, '0')}${'q'.repeat(996)}`);   // 1,000 units each
+    expect(lib.walkNames(big, big[0]!), '524 names of 1,000 units fit 524,288').toHaveLength(524);
+    const huge = 'h'.repeat(lib.SIDECAR_WALK_CHARS_MAX + 1);
+    expect(lib.walkNames([huge, 'a.txt'], huge), 'the asking name alone, over the room').toEqual([huge]);
+  });
+
+  it('startSidecarWalk prunes done to the names still unseen and starts an extension at row 0 over the uncovered ones', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const s = state({ done: { names: ['a.txt', 'b.txt', 'toolu_01A.json'], text: [['a.txt', 3], ['b.txt', 4]], toolu: [['toolu_01A', 2]] } });
+    lib.startSidecarWalk(s, new Set(['b.txt', 'late.txt', 'later.txt']), 'late.txt');
+    expect(s.done, "a seen name's pairs go; an unseen covered name keeps its state").toEqual({ names: ['b.txt'], text: [['b.txt', 4]], toolu: [] });
+    expect(s.walk).toEqual({ names: ['late.txt', 'later.txt'], after: 0, text: [], toolu: [] });
+  });
+});

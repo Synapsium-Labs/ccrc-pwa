@@ -376,6 +376,21 @@ export const SIDECAR_WHOLE_MAX: 67108864;
 export const SIDECAR_MAX_BYTES: 134217728;
 export function linkSidecar(name: string, candidates: ReadonlyArray<{ entryId: number; text: string; toolUseIds: readonly string[] }>): number | null;
 export function sidecarNameMatcher(names: Iterable<string>): { namesIn(text: string): string[]; states: number };
+/** CP-39 (D-6931): a transcript's link-walk state, meta `sidecar_walk:<transcript_pk>`. */
+export const SIDECAR_WALK_META: 'sidecar_walk:';
+export const SIDECAR_WALK_CHARS_MAX: 524288;
+export interface WalkPart { names: string[]; text: [string, number][]; toolu: [string, number][] }
+export interface WalkProgress extends WalkPart { after: number }
+export interface WalkState { v: 1; done: WalkPart; walk: WalkProgress | null }
+export interface WalkCandidate { entryId: number; text: string; toolUseIds: string[] }
+export function walkNames(unseen: Iterable<string>, first: string, covered?: Iterable<string>, room?: number): string[];
+export function parseSidecarWalk(text: string | null): WalkState | null;
+export function formatSidecarWalk(state: WalkState): string;
+export function emptySidecarWalk(): WalkState;
+export function startSidecarWalk(state: WalkState, unseen: Iterable<string>, first: string): void;
+export function foldWalkCandidates(state: WalkState, candidates: ReadonlyArray<{ entryId: number; text: string; toolUseIds: readonly string[] }>): void;
+export function finishSidecarWalk(state: WalkState): void;
+export function walkCandidates(state: WalkState, name: string): WalkCandidate[];
 export function secretKindOf(source: object | null, path: string): 'sessions' | 'env-identifier' | 'env' | 'token' | 'json';
 export function ftsPhrase(value: string): string;
 /** D-5748: the op marker, `<verb> <pid> <start_ms> <proc_start> <boot_id>`; a legacy three-field marker has procStart and bootId null. */

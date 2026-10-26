@@ -3633,6 +3633,159 @@ export function sidecarNameMatcher(names) {
   return { namesIn, states: fail.length };
 }
 
+/** CP-39 (D-6931). The meta key prefix of a transcript's walk state: one spelling for the sweep that writes it and the
+ *  status read that skips it (D-6940). */
+export const SIDECAR_WALK_META = 'sidecar_walk:';
+
+/** CP-39 (D-6931). The most UTF-16 units of names one walk state holds, done and in progress together (chosen): twice the
+ *  largest backlog measured on the fleet box (about 6,270 unlinked names, most near 40 units). It bounds the automaton's
+ *  states (about 517,000 at the cap, 49 MiB of heap, measured in scratch) and the persisted state, so a walk's memory stays
+ *  inside O20's RSS bound (pinned by the RSS case, P22). */
+export const SIDECAR_WALK_CHARS_MAX = 524_288;
+
+/** The most characters a persisted walk state may hold and still be parsed (D-6931): beyond it the state is read as absent. */
+const SIDECAR_WALK_TEXT_MAX = 64 * 1024 * 1024;
+
+/** The `toolu_` stem a sidecar name is matched by: the name with its last extension dropped (linkSidecar's own). */
+const sidecarStemOf = (name) => name.replace(/\.[^.]*$/, '');
+
+/** CP-39 (D-6931). The names an extension walk takes: `unseen` less `covered`, each once; `first` (the name that asked)
+ *  always, then the rest in sorted order while their units fit `room`; answered sorted. */
+export function walkNames(unseen, first, covered = [], room = SIDECAR_WALK_CHARS_MAX) {
+  const held = new Set(covered);
+  const rest = [...new Set(unseen)].filter((n) => typeof n === 'string' && n.length > 0 && n !== first && !held.has(n)).sort();
+  const out = [first];
+  let left = room - first.length;
+  for (const n of rest) {
+    if (n.length > left) break;
+    left -= n.length;
+    out.push(n);
+  }
+  return out.sort();
+}
+
+/** A pair list's checked form, or null: `[key, entryId]` pairs, each key held by `keys` once, each entry id a positive integer. */
+function checkedPairs(pairs, keys) {
+  if (!Array.isArray(pairs)) return null;
+  const seen = new Set();
+  const out = [];
+  for (const p of pairs) {
+    if (!Array.isArray(p) || p.length !== 2) return null;
+    const [k, id] = p;
+    if (typeof k !== 'string' || !keys.has(k) || seen.has(k)) return null;
+    if (!Number.isSafeInteger(id) || id < 1) return null;
+    seen.add(k);
+    out.push([k, id]);
+  }
+  return out;
+}
+
+/** One part of a walk state, checked, or null: unique non-empty string names, a text pair only for a held name, a toolu pair
+ *  only for a stem some held name has. `apart` are the names the other part holds, which this one must not. */
+function checkedWalkPart(part, apart) {
+  if (part === null || typeof part !== 'object' || !Array.isArray(part.names)) return null;
+  const names = new Set();
+  for (const n of part.names) {
+    if (typeof n !== 'string' || n.length === 0 || names.has(n) || apart.has(n)) return null;
+    names.add(n);
+  }
+  const text = checkedPairs(part.text, names);
+  const toolu = checkedPairs(part.toolu, new Set(part.names.map(sidecarStemOf)));
+  if (text === null || toolu === null) return null;
+  return { names: part.names.slice(), text, toolu };
+}
+
+/** CP-39 (D-6931). A transcript's walk state, meta `sidecar_walk:<transcript_pk>`:
+ *  {"v":1,"done":{"names":[…],"text":[[name,entryId]…],"toolu":[[stem,entryId]…]},
+ *         "walk":null|{"names":[…],"after":<int>,"text":[…],"toolu":[…]}}.
+ *  `done` holds the names finished walks cover, with their first matches; `walk` is the extension in progress, over names
+ *  `done` does not hold. Pairs, never object keys, so no file name can reach a prototype. Anything else, or a malformed
+ *  field (a name in both parts, a duplicate, a pair for a name or stem its part does not hold, an entry id that is not a
+ *  positive integer, an `after` that is not a non-negative one, a text over 64 MiB), is null: the walk starts again from
+ *  row 0, which costs work and loses nothing. */
+export function parseSidecarWalk(text) {
+  if (typeof text !== 'string' || text.length > SIDECAR_WALK_TEXT_MAX) return null;
+  let o;
+  try { o = JSON.parse(text); } catch { return null; }
+  if (o === null || typeof o !== 'object' || o.v !== 1) return null;
+  const done = checkedWalkPart(o.done, new Set());
+  if (done === null) return null;
+  if (o.walk === null) return { v: 1, done, walk: null };
+  if (o.walk === undefined || typeof o.walk !== 'object') return null;
+  const walk = checkedWalkPart(o.walk, new Set(done.names));
+  if (walk === null || !Number.isSafeInteger(o.walk.after) || o.walk.after < 0) return null;
+  return { v: 1, done, walk: { names: walk.names, after: o.walk.after, text: walk.text, toolu: walk.toolu } };
+}
+
+/** CP-39 (D-6931). The state's text; keys in the order v, done, walk. */
+export function formatSidecarWalk(state) {
+  const { names, text, toolu } = state.done;
+  const w = state.walk;
+  return JSON.stringify({
+    v: 1,
+    done: { names, text, toolu },
+    walk: w === null ? null : { names: w.names, after: w.after, text: w.text, toolu: w.toolu },
+  });
+}
+
+/** CP-39 (D-6931). A walk state with nothing done and no walk. */
+export function emptySidecarWalk() {
+  return { v: 1, done: { names: [], text: [], toolu: [] }, walk: null };
+}
+
+/** CP-39 (D-6931). Starts an extension walk at row 0 over walkNames(unseen, first, done.names, room). First it prunes from
+ *  `done` every name not in `unseen` (that sidecar is seen, its link decided) with its pairs, so `room` is
+ *  SIDECAR_WALK_CHARS_MAX less the units `done` keeps. */
+export function startSidecarWalk(state, unseen, first) {
+  const still = new Set(unseen);
+  const names = state.done.names.filter((n) => still.has(n));
+  const stems = new Set(names.map(sidecarStemOf));
+  state.done = {
+    names,
+    text: state.done.text.filter(([n]) => still.has(n)),
+    toolu: state.done.toolu.filter(([stem]) => stems.has(stem)),
+  };
+  const room = SIDECAR_WALK_CHARS_MAX - names.reduce((n, s) => n + s.length, 0);
+  state.walk = { names: walkNames(still, first, names, room), after: 0, text: [], toolu: [] };
+}
+
+/** CP-39 (D-6931). Folds toolResultCandidates' candidates (in entry order) into the walk in progress: a name or stem it
+ *  already holds keeps its entry. A candidate's `text` is its matched names NUL-joined; an empty text names nothing. */
+export function foldWalkCandidates(state, candidates) {
+  const w = state.walk;
+  const text = new Map(w.text);
+  const toolu = new Map(w.toolu);
+  for (const c of candidates) {
+    if (c.text !== '') for (const n of c.text.split('\0')) if (!text.has(n)) text.set(n, c.entryId);
+    for (const id of c.toolUseIds) if (!toolu.has(id)) toolu.set(id, c.entryId);
+  }
+  w.text = [...text];
+  w.toolu = [...toolu];
+}
+
+/** CP-39 (D-6931). Merges the finished walk into `done` (a name or stem `done` already holds keeps its entry) and clears `walk`. */
+export function finishSidecarWalk(state) {
+  const w = state.walk;
+  const text = new Map(state.done.text);
+  const toolu = new Map(state.done.toolu);
+  for (const [n, id] of w.text) if (!text.has(n)) text.set(n, id);
+  for (const [stem, id] of w.toolu) if (!toolu.has(stem)) toolu.set(stem, id);
+  state.done = { names: [...state.done.names, ...w.names], text: [...text], toolu: [...toolu] };
+  state.walk = null;
+}
+
+/** CP-39 (D-6931). For a name `done` holds, the candidates linkSidecar reads: the first text match, then the first toolu
+ *  match of its stem, each only when held, so linkSidecar answers what it answers over the full candidate list. */
+export function walkCandidates(state, name) {
+  const out = [];
+  const hit = state.done.text.find(([n]) => n === name);
+  if (hit !== undefined) out.push({ entryId: hit[1], text: name, toolUseIds: [] });
+  const stem = sidecarStemOf(name);
+  const answered = state.done.toolu.find(([s]) => s === stem);
+  if (answered !== undefined) out.push({ entryId: answered[1], text: '', toolUseIds: [stem] });
+  return out;
+}
+
 /** How one secret-bearing file is read (§8.3 layer 1):
  *  - `sessions`: sessions.json's idHash records, loaded as (43, sha256) pairs and never as values;
  *  - `env-identifier`: a file the frozen list reads for its identifier-pattern keys only

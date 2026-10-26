@@ -4676,3 +4676,318 @@ describe('CP-39 Task 1: the link walk decodes each row once and asks every name 
     } finally { dec.restore(); db.close(); }
   });
 });
+
+describe('CP-39 Task 2: the link walk keeps its place across passes and is never restarted (D-6931, D-6932)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  interface T2 {
+    ingestSidecars(db: DatabaseSync, ctx: IxCtx, b: IxBudget, uuids: Iterable<string>, opts?: { from?: string | null }): Promise<Record<string, unknown> & { bytes: number; complete: boolean }>;
+    importSidecars(db: DatabaseSync, ctx: Record<string, unknown>, uuids: string[]): Promise<string>;
+  }
+  type S2 = Omit<IxSweep, 'ingestSidecars'> & T2;
+  const PLENTY = async (): Promise<{ bsize: number; bavail: number; blocks: number }> => ({ bsize: 1, bavail: 4 * 2 ** 40, blocks: 8 * 2 ** 40 });
+  /** CP39's transcript ingested by the transcript half alone (a one-byte budget: the sidecar half then takes nothing),
+   *  and its ROWS sidecars out<k>.txt on disk, bodies distinct. */
+  const fixture = async (prefix: string) => {
+    const { sweep } = await IX.api();
+    const S = sweep as unknown as S2;
+    const box = IX.newBox(prefix);
+    const p = IX.plantCopy(box.homes[0]!, IX.U, CP39.rows());
+    const dir = CP39.sideDir(box.homes[0]!);
+    for (let k = 1; k <= CP39.ROWS; k += 1) fs.writeFileSync(path.join(dir, `out${k}.txt`), `body ${k}\n`);
+    const { db, ids } = await IX.openFixtureStore(box);
+    await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget(Date.now, { maxBytes: 1 }));
+    expect(IX.count(db, 'sidecar_seen'), 'CONTROL: the transcript only').toBe(0);
+    const ctx = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 180_000, ids);
+    const pk = CP39.pkOf(db);
+    return { S, box, p, dir, db, ids, ctx, pk, rowIds: CP39.userIds(db, pk) };
+  };
+  const lateRow = (): string => IX.jsonl([IX.user(IX.uuidN(400), IX.uuidN(200 + CP39.ROWS), [{ type: 'tool_result', tool_use_id: 'toolu_cp39late', content: 'saved to: /home/u/x/tool-results/late.txt' }], 400)]);
+  const walkRows = (db: DatabaseSync): number => IX.count(db, 'meta', "k LIKE 'sidecar\\_walk:%' ESCAPE '\\'");
+  /** tool-results/ listings, counted outside the sweep: node:fs's DEFAULT readdirSync patched, carried to sweep.mjs by
+   *  syncBuiltinESMExports. */
+  const countListings = (): { n: () => number; restore: () => void } => {
+    const real = fs.readdirSync;
+    let n = 0;
+    (fs as { readdirSync: unknown }).readdirSync = function readdirSync(p: unknown, ...rest: unknown[]): unknown {
+      if (String(p).endsWith('/tool-results')) n += 1;
+      return (real as (...a: unknown[]) => unknown).call(fs, p, ...rest);
+    };
+    syncBuiltinESMExports();
+    return { n: () => n, restore: () => { (fs as { readdirSync: unknown }).readdirSync = real; syncBuiltinESMExports(); } };
+  };
+  /** An import window's limits whose `maxMs` getter counts the windows: newBudget reads it once a window, and nothing else
+   *  reads it, so the case reads the window count directly. Past 40 windows each window is spent at its first check (no
+   *  progress, so the import ends): a loop without end stops, and the count shows it. */
+  const countedWindows = (): { n: () => number; limits: { readonly maxMs: number } } => {
+    let n = 0;
+    return { n: () => n, limits: { get maxMs() { n += 1; return n > 40 ? 0 : 1_000; } } };
+  };
+
+  it('a pass whose budget ends inside the walk reads no sidecar byte and keeps the walk; the next pass resumes at the persisted cursor and links as an uncut pass links', async () => {
+    const { S, dir, db, ctx, pk, rowIds } = await fixture('ccrc-hist-cp39-t2a-');
+    try {
+      const dec = await CP39.countDecodes();
+      const reads = CP39.countReads(dir);
+      let cut: Record<string, unknown>;
+      try {
+        // Within the budget until the tenth row decode; spent from then on, whatever else reads the clock.
+        cut = await S.ingestSidecars(db, ctx, S.newBudget(() => (dec.n() >= 10 ? 10_000 : 0), { maxMs: 1_000 }), [IX.U]);
+      } finally { reads.restore(); dec.restore(); }
+      expect(cut, 'cut inside the walk: incomplete, nothing read, ten rows walked').toEqual({ bytes: 0, complete: false, paused: false, walked: 10 });
+      expect(reads.n(), 'no sidecar byte was read before its link was known').toBe(0);
+      expect(IX.count(db, 'sidecar_seen')).toBe(0);
+      const st = CP39.walkState(db, pk);
+      expect(st?.walk?.after, 'the walk is kept at its cursor, the tenth user row').toBe(rowIds[9]);
+      expect(st?.walk?.names, 'it asks every unseen name').toHaveLength(CP39.ROWS);
+      const dec2 = await CP39.countDecodes();
+      let rest: { complete: boolean };
+      try { rest = await S.ingestSidecars(db, ctx, S.newBudget(), [IX.U]); } finally { dec2.restore(); }
+      expect(rest.complete).toBe(true);
+      expect(dec2.n(), 'the next pass decoded only the rows after the persisted cursor').toBe(CP39.ROWS + 1 - 10);
+      expect(CP39.sidecarRows(db), 'every sidecar links to the row that names it').toEqual(CP39.linked(CP39.upTo(CP39.ROWS)));
+      expect(walkRows(db), 'a walk whose group was examined in full is deleted').toBe(0);
+    } finally { db.close(); }
+  });
+
+  it('a name outside a walk in progress waits (deferred) and the half reports incomplete; once the walk is done the name is linked', async () => {
+    const { S, p, dir, db, ctx, pk, rowIds } = await fixture('ccrc-hist-cp39-t2b-');
+    try {
+      const dec = await CP39.countDecodes();
+      try { await S.ingestSidecars(db, ctx, S.newBudget(() => (dec.n() >= 10 ? 10_000 : 0), { maxMs: 1_000 }), [IX.U]); } finally { dec.restore(); }
+      // A new sidecar, and the row naming it, appended and ingested by the transcript half alone.
+      fs.writeFileSync(path.join(dir, 'late.txt'), 'late body\n');
+      fs.appendFileSync(p, lateRow());
+      await S.ingestPath(db, ctx, { path: p, uuid: IX.U, home: ctx.homes[0]! }, S.newBudget());
+      const dec2 = await CP39.countDecodes();
+      let cut: Record<string, unknown>;
+      try { cut = await S.ingestSidecars(db, ctx, S.newBudget(() => (dec2.n() >= 5 ? 10_000 : 0), { maxMs: 1_000 }), [IX.U]); } finally { dec2.restore(); }
+      expect(cut, 'late.txt (sorted first) waited; the walk advanced five rows').toEqual({ bytes: 0, complete: false, paused: false, walked: 5 });
+      expect(CP39.walkState(db, pk)?.walk?.names, 'the walk in progress did not take the new name').not.toContain('late.txt');
+      expect(CP39.walkState(db, pk)?.walk?.after).toBe(rowIds[14]);
+      const full = await S.ingestSidecars(db, ctx, S.newBudget(), [IX.U]);
+      expect(full.complete, 'late.txt waited again while the walk finished').toBe(false);
+      expect(IX.count(db, 'sidecar_seen'), 'every out<k>.txt, and not late.txt').toBe(CP39.ROWS);
+      expect((await S.ingestSidecars(db, ctx, S.newBudget(), [IX.U])).complete).toBe(true);
+      expect(CP39.sidecarRows(db).find((r) => r.name === 'late.txt'), 'late.txt links to the row that names it').toEqual({ name: 'late.txt', uuid: IX.uuidN(400) });
+      expect(walkRows(db)).toBe(0);
+    } finally { db.close(); }
+  });
+
+  it('a new name once a walk is done gets an extension over the uncovered names alone; the done names still unseen keep their state and are never walked again (P9)', async () => {
+    const { S, p, dir, db, ctx, pk, rowIds } = await fixture('ccrc-hist-cp39-t2c-');
+    try {
+      // The walk finishes inside the first sidecar's link; that sidecar's read then spends the budget: one taken, a done walk kept.
+      const reads = CP39.countReads(dir);
+      try { await S.ingestSidecars(db, ctx, S.newBudget(() => (reads.n() >= 1 ? 10_000 : 0), { maxMs: 1_000 }), [IX.U]); } finally { reads.restore(); }
+      expect(IX.count(db, 'sidecar_seen'), 'CONTROL: one sidecar taken').toBe(1);
+      expect(CP39.walkState(db, pk)?.walk, 'CONTROL: the walk is done, and kept').toBeNull();
+      fs.writeFileSync(path.join(dir, 'late.txt'), 'late body\n');
+      fs.appendFileSync(p, lateRow());
+      await S.ingestPath(db, ctx, { path: p, uuid: IX.U, home: ctx.homes[0]! }, S.newBudget());
+      const dec = await CP39.countDecodes();
+      try { await S.ingestSidecars(db, ctx, S.newBudget(() => (dec.n() >= 1 ? 10_000 : 0), { maxMs: 1_000 }), [IX.U]); } finally { dec.restore(); }
+      const st = CP39.walkState(db, pk);
+      expect(st?.walk?.names, 'the extension asks only the uncovered name').toEqual(['late.txt']);
+      expect(st?.walk?.after, 'with its own cursor, from the first row').toBe(rowIds[0]);
+      expect(st?.done.names, 'the done names still unseen keep their state').toEqual(CP39.upTo(CP39.ROWS).slice(1).map((k) => `out${k}.txt`).sort());
+      const dec2 = await CP39.countDecodes();
+      try { expect((await S.ingestSidecars(db, ctx, S.newBudget(), [IX.U])).complete).toBe(true); } finally { dec2.restore(); }
+      expect(dec2.n(), 'only the extension went on: the rows after its cursor, once').toBe(CP39.ROWS + 2 - 1);
+      expect(CP39.sidecarRows(db)).toEqual([{ name: 'late.txt', uuid: IX.uuidN(400) }, ...CP39.linked(CP39.upTo(CP39.ROWS))]);
+    } finally { db.close(); }
+  });
+
+  it('the sidecar half takes the uuids in the order it is given them, so a hinted session goes before a backlog', async () => {
+    const { sweep } = await IX.api();
+    const S = sweep as unknown as S2;
+    const box = IX.newBox('ccrc-hist-cp39-t2d-');
+    plantSession(box, 'claude-demo2', { uuid: IX.U2, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+    IX.plantCopy(box.homes[0]!, IX.U, CP39.rows());
+    // U2's transcript is ONE user row, whose tool_result names its one sidecar, so its walk is one decode (P19).
+    IX.plantCopy(box.homes[0]!, IX.U2, IX.jsonl([IX.user(IX.uuidN(301), null, [{ type: 'tool_result', tool_use_id: 'toolu_cp39u2', content: 'saved to: /home/u/x/tool-results/u2.txt' }], 301, { sessionId: IX.U2 })]));
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());   // both transcripts, no sidecar yet
+      for (let k = 1; k <= CP39.ROWS; k += 1) fs.writeFileSync(path.join(CP39.sideDir(box.homes[0]!), `out${k}.txt`), `body ${k}\n`);
+      fs.writeFileSync(path.join(CP39.sideDir(box.homes[0]!, IX.U2), 'u2.txt'), 'the hinted body\n');
+      // One byte: U2's one-row walk and its sidecar fit, then the budget is spent; U's walk, had it gone first, would be cut at its second row.
+      const r = await S.ingestSidecars(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 180_000, ids), S.newBudget(Date.now, { maxBytes: 1 }), [IX.U2, IX.U]);
+      expect(CP39.sidecarRows(db), "exactly one sidecar is taken, and it is U2's").toEqual([{ name: 'u2.txt', uuid: IX.uuidN(301) }]);
+      expect(r.complete).toBe(false);
+    } finally { db.close(); }
+  });
+
+  it('import: each window resumes after the last sidecar the previous one examined, and a window that walked or examined is progress, so the import links every sidecar, from ONE listing (D-6932)', async () => {
+    const { S, box, db, ids, pk } = await fixture('ccrc-hist-cp39-t2e-');
+    try {
+      let t = 0;
+      // The window counter, read directly (P3). An injected statfs that threw would be swallowed: statfsWithDeadline reads a
+      // throw as {state:'threw'}, planRun reads that as low-disk, and the import would answer 'paused'.
+      const w = countedWindows();
+      const opCtx = {
+        home: box.home, homes: box.homes, paths: historyPaths(box.home), ids, now: () => (t += 100), out: () => {},
+        deps: { statfs: PLENTY, budget: w.limits },
+      };
+      const l = countListings();
+      let ended: string;
+      try { ended = await S.importSidecars(db, opCtx, [IX.U]); } finally { l.restore(); }
+      expect(ended).toBe('done');
+      expect(w.n(), 'each window resumed: the import ended in a bounded number of windows').toBeLessThan(40);
+      expect(l.n(), 'the sidecars were listed once for the whole import, never once a window').toBe(1);
+      expect(IX.count(db, 'sidecar_seen')).toBe(CP39.ROWS);
+      expect(CP39.sidecarRows(db), 'every sidecar links to the row that names it').toEqual(CP39.linked(CP39.upTo(CP39.ROWS)));
+      expect(CP39.walkState(db, pk), 'the walk retired').toBeNull();
+    } finally { db.close(); }
+  });
+
+  it('import: a window that re-examined only seen sidecars is progress, and the next resumes past them, so the sidecars a tick left are taken (D-6932, P3)', async () => {
+    const { S, box, dir, db, ids, ctx } = await fixture('ccrc-hist-cp39-t2j-');
+    try {
+      // A scheduled call takes twenty: its walk finishes first (no read), then the budget is spent after the twentieth read.
+      const reads = CP39.countReads(dir);
+      try { await S.ingestSidecars(db, ctx, S.newBudget(() => (reads.n() >= 20 ? 10_000 : 0), { maxMs: 1_000 }), [IX.U]); } finally { reads.restore(); }
+      expect(IX.count(db, 'sidecar_seen'), 'CONTROL: twenty seen before the import').toBe(20);
+      let t = 0;
+      const w = countedWindows();
+      const opCtx = {
+        home: box.home, homes: box.homes, paths: historyPaths(box.home), ids, now: () => (t += 100), out: () => {},
+        deps: { statfs: PLENTY, budget: w.limits },
+      };
+      // About nine sidecars fit a window (a check per sidecar at 100 ms of a 1,000 ms window), so the first windows examine seen sidecars only.
+      expect(await S.importSidecars(db, opCtx, [IX.U])).toBe('done');
+      expect(IX.count(db, 'sidecar_seen'), 'the import took the ten left, past the twenty seen').toBe(CP39.ROWS);
+      expect(w.n()).toBeLessThan(40);
+    } finally { db.close(); }
+  });
+
+  it('a walk an import window started is resumed by a scheduled tick from its persisted cursor, and links as one uncut walk', async () => {
+    const { S, box, db, ids, pk, rowIds } = await fixture('ccrc-hist-cp39-t2f-');
+    try {
+      const dec = await CP39.countDecodes();
+      let t = 0;
+      // The clock creeps until the fifth row decode, then leaps: the first window is cut there, and the second is spent at its first check.
+      const opCtx = {
+        home: box.home, homes: box.homes, paths: historyPaths(box.home), ids, now: () => (t += dec.n() >= 5 ? 2_000 : 1), out: () => {},
+        deps: { statfs: PLENTY, budget: { maxMs: 1_000 } },
+      };
+      let ended: string;
+      try { ended = await S.importSidecars(db, opCtx, [IX.U]); } finally { dec.restore(); }
+      expect(ended, 'a window spent before its first check is no progress: the import ends').toBe('done');
+      expect(IX.count(db, 'sidecar_seen'), 'CONTROL: the import took no sidecar').toBe(0);
+      expect(CP39.walkState(db, pk)?.walk?.after, 'it left its walk at the fifth user row').toBe(rowIds[4]);
+      const dec2 = await CP39.countDecodes();
+      try { await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 3_000_000, ids), S.newBudget()); } finally { dec2.restore(); }
+      expect(dec2.n(), 'the tick resumed the walk: only the rows after the fifth').toBe(CP39.ROWS + 1 - 5);
+      expect(CP39.sidecarRows(db), 'and linked as one uncut walk links').toEqual(CP39.linked(CP39.upTo(CP39.ROWS)));
+    } finally { db.close(); }
+  });
+
+  it("a uuid's sidecars under two homes are one group: one walk links both homes' copies, a same-name pair to one entry", async () => {
+    const { sweep } = await IX.api();
+    const S = sweep as unknown as S2;
+    const box = IX.newBox('ccrc-hist-cp39-t2g-');
+    IX.plantCopy(box.homes[0]!, IX.U, CP39.rows());
+    const zero = CP39.sideDir(box.homes[0]!);
+    const one = CP39.sideDir(box.homes[1]!);   // a home with no <uuid>.jsonl, as _swap_carry_sidecars leaves one
+    for (const k of [1, 2, 3]) fs.writeFileSync(path.join(zero, `out${k}.txt`), `home zero ${k}\n`);
+    for (const k of [3, 4]) fs.writeFileSync(path.join(one, `out${k}.txt`), `home one ${k}\n`);
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget(Date.now, { maxBytes: 1 }));   // the transcript only
+      const dec = await CP39.countDecodes();
+      try { expect((await S.ingestSidecars(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 180_000, ids), S.newBudget(), [IX.U])).complete).toBe(true); } finally { dec.restore(); }
+      expect(dec.n(), 'the rows were walked once, for both homes').toBe(CP39.ROWS + 1);
+      expect(CP39.sidecarRows(db)).toEqual(CP39.linked([1, 2, 3, 3, 4]));
+    } finally { db.close(); }
+  });
+
+  it('the walk state is parsed once per pass however many sidecars link from it (P10)', async () => {
+    const { S, dir, db, ctx, pk } = await fixture('ccrc-hist-cp39-t2h-');
+    try {
+      const reads = CP39.countReads(dir);
+      try { await S.ingestSidecars(db, ctx, S.newBudget(() => (reads.n() >= 1 ? 10_000 : 0), { maxMs: 1_000 }), [IX.U]); } finally { reads.restore(); }
+      expect(CP39.walkState(db, pk)?.done.names, 'CONTROL: a done walk is kept for the next pass').toHaveLength(CP39.ROWS);
+      const realParse = JSON.parse;
+      let parses = 0;
+      JSON.parse = function parse(text: string, ...rest: unknown[]): unknown {
+        if (typeof text === 'string' && text.startsWith('{"v":1,"done":')) parses += 1;
+        return (realParse as (...a: unknown[]) => unknown)(text, ...rest);
+      } as typeof JSON.parse;
+      let r: { complete: boolean };
+      try { r = await S.ingestSidecars(db, ctx, S.newBudget(), [IX.U]); } finally { JSON.parse = realParse; }
+      expect(r.complete).toBe(true);
+      expect(IX.count(db, 'sidecar_seen'), 'CONTROL: the other 29 sidecars linked from the one state').toBe(CP39.ROWS);
+      expect(parses, 'one parse for the group, none per sidecar: no walk advanced in this pass').toBeLessThanOrEqual(1);
+    } finally { db.close(); }
+  });
+
+  it("O20 at the walk's cap: a walk of SIDECAR_WALK_CHARS_MAX units of names beside a 64 MiB sidecar, captured by the real sweep under O20's bound (P22)", async () => {
+    const { lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-cp39-t2i-');
+    try {
+      IX.plantCopy(box.homes[0]!, IX.U, CP39.rows());
+      const dir = CP39.sideDir(box.homes[0]!);
+      // 2,100 names of 250 units: more than the cap holds, so the first walk is built at it (CONTROL below).
+      const many = Array.from({ length: 2_100 }, (_, i) => `cp39-${String(i).padStart(4, '0')}-${'q'.repeat(236)}.txt`);
+      for (const n of many) fs.writeFileSync(path.join(dir, n), 'x\n');
+      const fd = fs.openSync(path.join(dir, 'whole64.txt'), 'w');
+      try { for (let at = 0, k = 1; at < 67_108_864; k += 1) { const piece = Buffer.from(IX.words(4000, k)).subarray(0, 67_108_864 - at); fs.writeSync(fd, piece); at += piece.length; } } finally { fs.closeSync(fd); }
+      const first = lib.walkNames([...many, 'whole64.txt'], many[0]!);
+      expect(first.reduce((n, s) => n + s.length, 0), 'CONTROL: the first walk is built at the cap').toBeGreaterThan(lib.SIDECAR_WALK_CHARS_MAX - 250);
+      let peak = 0;
+      for (let pass = 0; pass < 4; pass += 1) {
+        const r = runSweep(box, [], { preloads: [IX_RSS_PRELOAD] });
+        expect(r.code, r.stderr).toBe(0);
+        peak = Math.max(peak, Number(/history-test-maxrss-kib=(\d+)/.exec(r.stderr)?.[1] ?? 'NaN'));
+        const db = openStoreRO(box);
+        let seen = 0;
+        try { seen = IX.count(db, 'sidecar_seen'); } finally { db.close(); }
+        if (seen === many.length + 1) break;
+      }
+      const db = openStoreRO(box);
+      try { expect(IX.count(db, 'sidecar_seen'), 'every sidecar was taken').toBe(many.length + 1); } finally { db.close(); }
+      console.log(`CP-39 walk-cap peak RSS ${peak} KiB on ${process.version}`);
+      expect(peak).toBeLessThan(IX_RSS_BOUND_KIB);
+    } finally {
+      fs.rmSync(box.home, { recursive: true, force: true });   // a 64 MiB sidecar plus its store: never left for afterAll alone
+    }
+  }, 300_000);
+
+  it("a group an import window skips whole through opts.from keeps its walk state: only a group the call took up retires (D-6931)", async () => {
+    const { S, p, dir, db, ctx, pk, rowIds } = await fixture('ccrc-hist-cp39-t2k-');
+    try {
+      const dec = await CP39.countDecodes();
+      try { await S.ingestSidecars(db, ctx, S.newBudget(() => (dec.n() >= 10 ? 10_000 : 0), { maxMs: 1_000 }), [IX.U]); } finally { dec.restore(); }
+      expect(CP39.walkState(db, pk)?.walk?.after, 'CONTROL: a walk in progress').toBe(rowIds[9]);
+      // A name the walk in progress does not cover waits, so the group is not examined in full and keeps its state.
+      fs.writeFileSync(path.join(dir, 'late.txt'), 'late body\n');
+      fs.appendFileSync(p, lateRow());
+      await S.ingestPath(db, ctx, { path: p, uuid: IX.U, home: ctx.homes[0]! }, S.newBudget());
+      const first = await S.ingestSidecars(db, ctx, S.newBudget(), [IX.U]);
+      expect(first.complete, 'CONTROL: window 1 deferred late.txt').toBe(false);
+      expect(IX.count(db, 'sidecar_seen'), 'CONTROL: every out<k>.txt taken').toBe(CP39.ROWS);
+      expect(walkRows(db), 'CONTROL: the group kept its state').toBe(1);
+      // Window 2 resumes after the group's last sidecar, so it takes up none of it.
+      const second = await S.ingestSidecars(db, ctx, S.newBudget(), [IX.U], { from: path.join(dir, 'out9.txt') });
+      expect(second, 'window 2 examined nothing').toEqual({ bytes: 0, complete: true, paused: false });
+      expect(walkRows(db), 'a group the call skipped whole keeps its state').toBe(1);
+    } finally { db.close(); }
+  });
+
+  it('a group whose every sidecar is already seen retires a walk state kept beside it, found by its uuid (D-6931)', async () => {
+    const { S, db, ctx, pk } = await fixture('ccrc-hist-cp39-t2l-');
+    try {
+      expect((await S.ingestSidecars(db, ctx, S.newBudget(), [IX.U])).complete, 'CONTROL: every sidecar taken').toBe(true);
+      expect(IX.count(db, 'sidecar_seen'), 'CONTROL').toBe(CP39.ROWS);
+      expect(walkRows(db), 'CONTROL: taking them retired the walk').toBe(0);
+      const { lib } = await IX.api();
+      const kept = lib.emptySidecarWalk();
+      kept.done.names.push('out1.txt');
+      db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)').run(`sidecar_walk:${pk}`, lib.formatSidecarWalk(kept));
+      expect(walkRows(db), 'CONTROL: a state kept beside a seen group').toBe(1);
+      // No sidecar reaches its link, so the group never learns its transcript: the retire finds it by uuid.
+      expect((await S.ingestSidecars(db, ctx, S.newBudget(), [IX.U])).complete).toBe(true);
+      expect(walkRows(db), 'the kept state is gone').toBe(0);
+    } finally { db.close(); }
+  });
+});

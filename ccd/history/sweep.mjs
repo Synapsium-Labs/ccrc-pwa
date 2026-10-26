@@ -48,6 +48,7 @@ import {
   SQLITE_CODES, decideDrainFailure, blobOverDecodeCap, CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, sidecarNameMatcher, ftsTextOf,
+  SIDECAR_WALK_META, parseSidecarWalk, formatSidecarWalk, emptySidecarWalk, startSidecarWalk, foldWalkCandidates, finishSidecarWalk, walkCandidates,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
   FTS_STEP, INDEXED_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, entryIndexText, HEALTH_COUNTERS, RETENTION_STATE_META,
   makeProbeIndex, parseRederiveState, formatRederiveState, rederivePlan, phraseValues,
@@ -5329,6 +5330,9 @@ function sideStmts(db) {
       JOIN transcripts t ON t.transcript_pk = f.transcript_pk JOIN file_paths p ON p.file_id = f.file_id
       WHERE t.cc_session_uuid = ?
         AND f.source_key = '' AND f.status = 'live' AND (f.size IS NULL OR f.size > f.offset)`),
+    // D-6931: the walk is keyed by the transcript row with no agent id (ensureTranscript's), never a subagent's.
+    pkOfUuid: db.prepare("SELECT transcript_pk AS pk FROM transcripts WHERE cc_session_uuid = ? AND agent_id = ''"),
+    walkDelete: db.prepare('DELETE FROM meta WHERE k = ?'),
     toolResults: db.prepare(`SELECT e.entry_id AS entry_id, b.z AS z, b.raw_len AS raw_len FROM entries e JOIN blobs b ON b.blob_id = e.blob_id
       WHERE e.transcript_pk = ? AND e.entry_id > ? AND e.type = 'user' AND b.z IS NOT NULL ORDER BY e.entry_id`),
   };
@@ -5422,17 +5426,63 @@ export function toolResultCandidates(db, transcriptPk, names, walk = null) {
   return out;
 }
 
-/** The candidates for one sidecar's transcript, cached per transcript for the tick: the small index
- *  toolResultCandidates returns (never a row's text), asked for every sidecar name the tick found under
- *  that uuid so the rows are read once. A name the cached index was not built for rebuilds it. */
-function candidatesFor(db, cache, transcriptPk, s) {
-  const hit = cache.byPk.get(transcriptPk);
-  if (hit !== undefined && hit.names.has(s.name)) return hit.candidates;
-  const names = new Set(cache.wanted.get(s.uuid) ?? []);
-  names.add(s.name);
-  const candidates = toolResultCandidates(db, transcriptPk, names);
-  cache.byPk.set(transcriptPk, { names, candidates });
-  return candidates;
+/** CP-39 (D-6931). The names of g's sidecars whose (size, mtime_ns) has no sidecar_seen row, lstat'd once per call and cached
+ *  on `g`: the names a link walk has still to cover. A file that cannot be stat'd is gone and names nothing. */
+function unseenOf(db, g) {
+  if (g.unseen !== undefined) return g.unseen;
+  const q = sideStmts(db);
+  const out = new Set();
+  for (const s of g.list) {
+    let ls;
+    try { ls = lstatSync(s.path, { bigint: true }); } catch { continue; }
+    if (q.seenSame.get(s.path, ls.size, ls.mtimeNs) === undefined) out.add(s.name);
+  }
+  g.unseen = out;
+  return out;
+}
+
+/** Whether a walk state's finished part holds a name: a Set kept beside the state, rebuilt whenever `done` is replaced. */
+function doneHolds(w, name) {
+  if (w.doneSet === null) w.doneSet = new Set(w.state.done.names);
+  return w.doneSet.has(name);
+}
+
+/** CP-39 (D-6931). The link candidates for sidecar `s` of group `g` (one uuid's sidecars this call). The transcript's walk
+ *  state is parsed ONCE per call, on the group's first need, and cached on `g` (P10); every advance updates it in place and
+ *  writes it through to meta in one NORMAL transaction; nothing else writes it. Answers {ready: true, candidates},
+ *  {ready: false} (the budget ended the walk), or {ready: false, deferred: true} (a walk in progress covers other names
+ *  still unseen; this one waits for it). A walk never restarts: it resumes at its persisted cursor, and a name that
+ *  arrives once a walk is done gets an extension over the names `done` does not cover (P9). The walk charges the run's
+ *  budget for the rows it takes (toolResultCandidates), so a pass that ends inside it has read no sidecar byte. */
+function linkCandidates(db, g, transcriptPk, s, budget) {
+  if (g.walk === undefined) {
+    const key = SIDECAR_WALK_META + transcriptPk;
+    g.walk = { key, state: parseSidecarWalk(getMeta(db, key)) ?? emptySidecarWalk(), doneSet: null };
+  }
+  const w = g.walk;
+  const answer = () => ({ ready: true, candidates: walkCandidates(w.state, s.name) });
+  if (doneHolds(w, s.name)) return answer();
+  const extend = () => {
+    startSidecarWalk(w.state, unseenOf(db, g), s.name);
+    w.doneSet = null;
+  };
+  if (w.state.walk === null) {
+    extend();
+  } else if (!w.state.walk.names.includes(s.name)) {
+    const unseen = unseenOf(db, g);
+    if (w.state.walk.names.some((n) => unseen.has(n))) return { ready: false, deferred: true };
+    // Every name the walk holds is seen or gone: its files will never ask for it, so it is dropped and this name's extension starts.
+    w.state.walk = null;
+    extend();
+  }
+  const walk = { budget, after: w.state.walk.after, advanced: 0, complete: false };
+  const candidates = toolResultCandidates(db, transcriptPk, w.state.walk.names, walk);
+  foldWalkCandidates(w.state, candidates);
+  w.state.walk.after = walk.after;
+  if (walk.complete) { finishSidecarWalk(w.state); w.doneSet = null; }
+  g.walked += walk.advanced;
+  if (walk.advanced > 0 || walk.complete) withTx(db, 'NORMAL', () => { setMeta(db, w.key, formatSidecarWalk(w.state)); });
+  return doneHolds(w, s.name) ? answer() : { ready: false };
 }
 
 function countSidecarTooLarge(db) {
@@ -5451,8 +5501,10 @@ function countSidecarTooLarge(db) {
  *  - The `sidecars` row and the `sidecar_seen` mark commit in one transaction.
  *  - A file that has to be read is one ingest unit for §9.3's floor: the probe runs before it, as
  *    before an ingest chunk, and anything but `ok` stops the run's sidecars (`floor`).
+ *  - CP-39 (D-6931): its link is known BEFORE a byte is read (`linkCandidates`, over group `g`'s walk state), so a walk the
+ *    budget ends reads no sidecar: `{bytes: 0, cut: true}`; a name a walk in progress does not cover waits: `{bytes: 0, deferred: true}`.
  *  Returns null when the file was not taken. */
-export async function ingestSidecar(db, ctx, s, budget, cache) {
+export async function ingestSidecar(db, ctx, s, budget, g) {
   const q = sideStmts(db);
   let ls;
   try { ls = lstatSync(s.path, { bigint: true }); } catch { countAdmission(db, 'missing'); return null; }
@@ -5473,6 +5525,12 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
     const st = fstatSync(a.fd, { bigint: true });
     const size = Number(st.size);
     if (size > SIDECAR_MAX_BYTES) { countSidecarTooLarge(db); return null; }   // grew between the lstat and the open (D-4310)
+    // CP-39 (D-6931): the link before any byte is read, so a walk the budget cuts reads no sidecar.
+    const transcriptPk = withTx(db, 'NORMAL', () => ensureTranscript(db, s.uuid));
+    g.pk = transcriptPk;
+    const link = linkCandidates(db, g, transcriptPk, s, budget);
+    if (!link.ready) return link.deferred === true ? { bytes: 0, deferred: true } : { bytes: 0, cut: true };
+    const entryId = linkSidecar(s.name, link.candidates);
     let sha;
     let make;   // the body to store, made only when no live blob holds this sha (D-4589's one probe, below)
     let z = null;
@@ -5501,9 +5559,6 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
     }
     // D-4589: one probe for both arms, so the streamed arm (over SIDECAR_WHOLE_MAX) is pinned by the same case as the whole one.
     if (stmts(db).blobLive.get(sha) === undefined) z = make();
-    // Task 18's ensureTranscript expects its caller's transaction (bindFile's); here it gets its own.
-    const transcriptPk = withTx(db, 'NORMAL', () => ensureTranscript(db, s.uuid));
-    const entryId = linkSidecar(s.name, candidatesFor(db, cache, transcriptPk, s));
     withTx(db, 'NORMAL', () => {
       const fresh = z !== null && storeBlob(db, sha, z, size);
       const blobId = stmts(db).blobId.get(sha).blob_id;
@@ -5546,36 +5601,92 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
 /** The sidecars of the given uuids whose transcript copies are all caught up. A sidecar is linked
  *  by the text of a tool_result the store already holds, so one taken early would stay unlinked
  *  for good. Bounded by the run's budget; `complete` is false when the budget, history-off or the
- *  free-space floor cut it short, and `paused` says it was the floor; `floor` names the probe's word when the floor stopped it. */
-export async function ingestSidecars(db, ctx, budget, uuids) {
+ *  free-space floor cut it short, and `paused` says it was the floor; `floor` names the probe's word when the floor stopped it.
+ *  CP-39 (D-6931, D-6932): the sidecars are taken a uuid at a time, in the order `uuids` is given, each uuid's sidecars as
+ *  one group over one link walk (`linkCandidates`) that a spent budget keeps and the next call resumes. The result gains,
+ *  each spread only when it carries something: `walked: <rows the walks' cursors moved past>` (above 0), `examined:
+ *  <sidecars examined, seen or new; a deferred one is not>` (above 0) and `resume: <the path of the last sidecar examined>`.
+ *  `opts.from` (an import window's resume point) skips the sidecars up to and including that path in this call's order, and
+ *  `opts.found` (the import's one listing, in discoverSidecars' shape and order) is this call's found sidecars, less those
+ *  of the uuids notCaughtUp holds back; the call then lists nothing. A group whose every sidecar was examined, none
+ *  deferred or faulted, retires its walk state. A deferred sidecar (a name a walk in progress does not cover) makes the
+ *  call incomplete. */
+export async function ingestSidecars(db, ctx, budget, uuids, opts = {}) {
   const due = [...uuids].filter((u) => !notCaughtUp(db, ctx.homes, u));
-  const found = discoverSidecars(ctx.homes, due);
-  const cache = { byPk: new Map(), wanted: new Map() };
-  for (const s of found) {
-    const names = cache.wanted.get(s.uuid);
-    if (names === undefined) cache.wanted.set(s.uuid, new Set([s.name])); else names.add(s.name);
+  const dueSet = new Set(due);
+  const found = opts.found !== undefined ? opts.found.filter((s) => dueSet.has(s.uuid)) : discoverSidecars(ctx.homes, due);
+  // One group per uuid, its keys in the caller's order, its list in discovery order (every home's copies together).
+  const groups = new Map();
+  for (const u of due) if (!groups.has(u)) groups.set(u, { list: [], walked: 0 });
+  for (const s of found) groups.get(s.uuid).list.push(s);
+  const order = [...groups.values()].flatMap((g) => g.list);
+  let skip = 0;
+  if (opts.from !== undefined && opts.from !== null) {
+    const at = order.findIndex((s) => s.path === opts.from);
+    if (at >= 0) skip = at + 1;
   }
   let bytes = 0;
   let unreadable = false;
-  for (const s of found) {
-    if (!budgetLeft(budget) || ctx.historyOff()) return { bytes, complete: false, paused: false, ...(unreadable ? { unreadable } : {}) };
-    let r;
-    try {
-      r = await ingestSidecar(db, ctx, s, budget, cache);
-    } catch (e) {
-      // D-4340 (history-ingest-read-error-skips-file): as for a transcript, one sidecar's failed read is counted and
-      // skipped (no sidecar_seen mark, so a later tick whose candidate uuids hold its uuid takes it again), and the
-      // rest are tried.
-      if (!isFsError(e)) throw e;
-      countAdmission(db, 'unreadable');
-      unreadable = true;
-      continue;
+  let deferred = false;
+  let examined = 0;
+  let resume = null;
+  let at = 0;
+  const tail = () => {
+    let walked = 0;
+    for (const g of groups.values()) walked += g.walked;
+    return {
+      ...(unreadable ? { unreadable } : {}), ...(walked > 0 ? { walked } : {}),
+      ...(examined > 0 ? { examined } : {}), ...(resume !== null ? { resume } : {}),
+    };
+  };
+  for (const g of groups.values()) {
+    if (g.list.length === 0) continue;
+    let whole = true;   // every sidecar of the group this call took up examined: none deferred, none faulted
+    let ran = false;
+    for (const s of g.list) {
+      at += 1;
+      if (at <= skip) continue;
+      if (!budgetLeft(budget) || ctx.historyOff()) return { bytes, complete: false, paused: false, ...tail() };
+      ran = true;
+      let r;
+      try {
+        r = await ingestSidecar(db, ctx, s, budget, g);
+      } catch (e) {
+        // D-4340 (history-ingest-read-error-skips-file): as for a transcript, one sidecar's failed read is counted and
+        // skipped (no sidecar_seen mark, so a later tick whose candidate uuids hold its uuid takes it again), and the
+        // rest are tried.
+        if (!isFsError(e)) throw e;
+        countAdmission(db, 'unreadable');
+        unreadable = true;
+        whole = false;
+        examined += 1;
+        resume = s.path;
+        continue;
+      }
+      if (r !== null && r.cut === true) return { bytes, complete: false, paused: false, ...tail() };
+      if (r !== null && r.deferred === true) { whole = false; deferred = true; continue; }
+      // A floor-stopped sidecar was never admitted: it is not examined, and the window resumes at it.
+      if (r !== null && r.floor !== undefined) return { bytes, complete: false, paused: true, floor: r.floor, ...tail() };
+      examined += 1;
+      resume = s.path;
+      if (r === null) continue;
+      bytes += r.bytes;
     }
-    if (r === null) continue;
-    bytes += r.bytes;
-    if (r.floor !== undefined) return { bytes, complete: false, paused: true, floor: r.floor, ...(unreadable ? { unreadable } : {}) };
+    // D-6931: a group this call took up no sidecar of keeps its state (an earlier window's deferred or faulted group).
+    if (whole && ran) retireSidecarWalk(db, g, g.list[0].uuid);
   }
-  return { bytes, complete: true, paused: false, ...(unreadable ? { unreadable } : {}) };
+  return { bytes, complete: !deferred, paused: false, ...tail() };
+}
+
+/** CP-39 (D-6931). A group examined in full has no walk left to keep: its state is deleted, in one NORMAL transaction, and
+ *  the cached copy dropped. The transcript is `g.pk` when a sidecar of the group reached its link, else looked up by uuid;
+ *  a group that never had a state costs a read and no write. */
+function retireSidecarWalk(db, g, uuid) {
+  const pk = g.pk ?? sideStmts(db).pkOfUuid.get(uuid)?.pk;
+  if (pk === undefined) return;
+  const key = SIDECAR_WALK_META + pk;
+  if (getMeta(db, key) !== null) withTx(db, 'NORMAL', () => { sideStmts(db).walkDelete.run(key); });
+  delete g.walk;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -6806,18 +6917,27 @@ export async function importFile(db, ctx, filePath, uuid) {
  *  by Task 21's ingestSidecars, called again with a FRESH budget while it reports incomplete, as importFile calls
  *  ingestPath: the sidecar_seen marks are its cursor, so a later window skips what an earlier one took. importRoom
  *  re-measures the cap and the floor before each window; inside a window each sidecar's own floor probe runs
- *  (ingestSidecar). The journal half runs between windows (D-4232). A window that took nothing and is still
- *  incomplete (history-off, or a budget spent on nothing) ends it. Answers 'done' or 'paused'. */
-async function importSidecars(db, ctx, uuids) {
+ *  (ingestSidecar). The journal half runs between windows (D-4232). The sidecars are listed once per import and the list
+ *  handed to every window. A window that examined no sidecar and advanced no link walk, and is still incomplete (history-off,
+ *  or a budget spent on nothing), ends it; each window resumes after the last sidecar the previous one examined (D-6932).
+ *  Exported for its in-process cases; `ctx.deps.budget` limits each window (tests only), as passCtx's does.
+ *  Answers 'done' or 'paused'. */
+export async function importSidecars(db, ctx, uuids) {
   if (uuids.length === 0) return 'done';
   const say = (word) => ctx.out(`history-sweep: ${word}: sidecar ingest stopped; the scheduled ticks take the rest`);
+  // D-6932: no window re-lists the tool-results directories; Task 3 moves this listing under the windows' budgets.
+  const found = discoverSidecars(ctx.homes, uuids);
+  let from = null;
   for (;;) {
     if (await importPaused(db, ctx, say)) return 'paused';
     const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir, ctx.deps.statfs));
-    const r = await ingestSidecars(db, ictx, newBudget(ctx.now), uuids);
+    const r = await ingestSidecars(db, ictx, newBudget(ctx.now, ctx.deps?.budget ?? {}), uuids, { from, found });
     if (runJournalHalf(ctx.home, ctx.ids, ctx.now)) throw new JournalError('append-failed');
     if (r.paused) { say(floorStopWord(r.floor)); return 'paused'; }
-    if (r.complete || r.bytes === 0) return 'done';
+    // CP-39 (D-6932): a window that examined a sidecar (seen or new) or advanced a walk made progress, even when it read no byte;
+    // the next window resumes after the last sidecar this one examined, so seen sidecars never fill a window.
+    if (r.complete || (r.examined === undefined && r.walked === undefined)) return 'done';
+    if (r.resume !== undefined) from = r.resume;
   }
 }
 
