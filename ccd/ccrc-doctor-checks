@@ -7660,11 +7660,24 @@ _dr_cx_bridge_files() {   # <id>
 # is printed only when it matches `name_re`, else `unrecognised`. `name_re` is
 # stats.py's NAME_RE, the bound the bridge writes every name under, in the same
 # pattern text (ccrc-doctor-codex.test.ts pins the two equal), matched under
-# LC_ALL=C so a range never reaches past ASCII. An absent file, or one that is
-# not a version-1 document with an `unexplained` object, has no drift row.
+# LC_ALL=C so a range never reaches past ASCII (under a UTF-8 locale bash's
+# `[A-Za-z]` accepts letters such as `ë`, measured). The line prints the first
+# `shown` names and counts the rest, so one file cannot make it unbounded.
+# WHAT THE BRIDGE READS, THIS ROW READS: a file is the bridge's only when it is
+# one version-1 document of THIS lane (`.lane`) with an `unexplained` object,
+# no larger than stats.py's READ_MAX (same arithmetic text, pinned equal too);
+# the bridge resets any other at its next start. An absent file has no drift
+# row (no bridge has served yet). A regular file this row could not read as
+# the bridge's (unparseable, unreadable, too large, another version or another
+# lane's) is never read as "no unexplained name": it adds "drift unread" to the
+# lane's words, `models`' "model state unread" rule. `unrecognised` and
+# `overflow` (more names in a family than the bridge counts) are markers, not
+# names, and the remedy says so whenever the list holds one: neither is ever
+# explained in known.py.
 _dr_cx_drift() {   # <id>
-  local id="$1" dir lj sf p i fam name LC_ALL=C
+  local id="$1" dir lj sf p i fam name sz list fix LC_ALL=C unrec=0 over=0
   local name_re='^[A-Za-z0-9_.:/-]{1,64}$'
+  local read_max=$(( 16 * 2**20 )) shown=32
   local -a got=() listed=()
   local -A seen=()
   dir="$(_codex_lane_dir "$id")"; lj="$dir/lane.json"
@@ -7674,22 +7687,31 @@ _dr_cx_drift() {   # <id>
   [[ "$sf" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$sf" != . ] && [ "$sf" != .. ] || return 0
   p="$dir/$sf"
   [ -f "$p" ] && [ ! -L "$p" ] || return 0
-  mapfile -t got < <(jq -r 'def line: if type == "string" and (explode | all(. >= 32 and . != 127)) then . else "" end;
-      if type == "object" and .version == 1 and (.unexplained | type) == "object"
-      then .unexplained | to_entries[] | (.key | line) as $f
-        | (.value | if type == "array" then .[] else empty end) | $f, line
-      else empty end' "$p" 2>/dev/null)
-  for (( i = 0; i + 1 < ${#got[@]}; i += 2 )); do
+  sz="$(_plat_size -- "$p" 2>/dev/null)" || sz=''
+  if [[ ! "$sz" =~ ^[0-9]+$ ]] || [ "$sz" -gt "$read_max" ]; then DRX_LANE_WORDS+=", drift unread"; return 0; fi
+  mapfile -t got < <(jq -rs --arg id "$id" 'def line: if type == "string" and (explode | all(. >= 32 and . != 127)) then . else "" end;
+      if length == 1 and (.[0] | type == "object" and .version == 1 and .lane == $id and (.unexplained | type) == "object")
+      then "v1", (.[0].unexplained | to_entries[] | (.key | line) as $f
+        | (.value | if type == "array" then .[] else empty end) | $f, line)
+      else "other" end' "$p" 2>/dev/null)
+  if [ "${got[0]:-}" != v1 ]; then DRX_LANE_WORDS+=", drift unread"; return 0; fi
+  for (( i = 1; i + 1 < ${#got[@]}; i += 2 )); do
     fam="${got[$i]}"; name="${got[$((i + 1))]}"
     [[ "$fam" =~ $name_re ]] || fam=unrecognised
     [[ "$name" =~ $name_re ]] || name=unrecognised
+    [ "$fam" != unrecognised ] && [ "$name" != unrecognised ] || unrec=1
+    [ "$name" != overflow ] || over=1
     [ -z "${seen[$fam:$name]:-}" ] || continue
     seen[$fam:$name]=1
     listed+=("$fam:$name")
   done
   [ "${#listed[@]}" -gt 0 ] || return 0
-  _dr_cx_warn "$id: the bridge met ${#listed[@]} name(s) it does not know: $(_dr_cx_join ', ' "${listed[@]}") (names only, never content). Each is a protocol change to read; it is explained by adding it to ccd/codexbridge/known.py in a reviewed change." \
-    "read what each name is in the upstream Codex source (openai/codex), then explain it by adding it to ccd/codexbridge/known.py in a reviewed change; the rollout of that change restarts the bridge, whose start drops an explained name from the list, and this line clears — ccrc never explains a name for you"
+  list="$(_dr_cx_join ', ' "${listed[@]:0:$shown}")"
+  [ "${#listed[@]}" -le "$shown" ] || list+=", … and $(( ${#listed[@]} - shown )) more"
+  fix="read what each name is in the upstream Codex source (openai/codex), then explain it by adding it to ccd/codexbridge/known.py in a reviewed change; the rollout of that change restarts the bridge, whose start drops an explained name from the list, and this line clears — ccrc never explains a name for you"
+  [ "$unrec" -eq 0 ] || fix+="; unrecognised is not a name: it stands for one outside the bound the bridge writes every name under (NAME_RE in ccd/codexbridge/stats.py), so read that name in a recording of the lane's stream, and never add unrecognised to known.py"
+  [ "$over" -eq 0 ] || fix+="; overflow is not a name: it stands for more distinct names in that family than the bridge counts (NAMES_MAX in ccd/codexbridge/stats.py), so read the names past it in a recording of the lane's stream, and never add overflow to known.py"
+  _dr_cx_warn "$id: the bridge met ${#listed[@]} name(s) it does not know: $list (names only, never content). Each is a protocol change to read; it is explained by adding it to ccd/codexbridge/known.py in a reviewed change." "$fix"
   return 0
 }
 
