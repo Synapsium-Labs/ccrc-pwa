@@ -215,6 +215,8 @@ export const TREE_FILES = [
   'ccd/compact-card.mjs',
   // The transcript reader ccd and the doctor load with `jq -L` (ARCH-65); `_inst_files` places it under `.cc-sessions/lib`.
   'ccd/lib/transcript.jq',
+  // `ccd carry-dedupe`'s program (#317); `_inst_files` places it beside the reader above.
+  'ccd/lib/carry-dedupe.py',
   // The approval verifier (coordinator-first routing, plan Task 14, D-5297): `_inst_files` places it beside the hook
   // and before it, as the card's helper above, so a tree without it dies the same way.
   'ccd/approval-verify.mjs',

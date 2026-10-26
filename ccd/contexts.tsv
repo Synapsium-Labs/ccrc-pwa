@@ -456,6 +456,7 @@ _carry_slot_take	C1
 _swap_carry_merge_walk	C1
 _carry_link_route	C1
 _carry_py	C1
+cmd_carry_dedupe	C1
 _swap_carry_sidecars	C1
 _swap_beat	C1
 _swap_beat_stop	C1
