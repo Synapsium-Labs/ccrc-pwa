@@ -1144,7 +1144,7 @@ describe('ci.yml: dependencies are installed once per run, and handed to the job
     for (const st of saves) expect(st, 'a save that runs without save: true').toMatch(/if: .*inputs\.save == 'true'/);
     expect(a, 'actions/cache itself would save on every caller').not.toMatch(/uses: actions\/cache@/);
     const callers = [...jobs(read(CI))].filter(([, b]) => /^ {6}- uses: \.\/\.github\/actions\/server-deps$/m.test(b));
-    expect(callers.map(([id]) => id).sort()).toEqual(['deps', 'node-floor', 'pwa-shard', 'pwa-static', 'server-shard', 'test-macos', 'trace-shard']);
+    expect(callers.map(([id]) => id).sort()).toEqual(['deps', 'node-floor', 'pwa-shard', 'pwa-static', 'server-perf', 'server-shard', 'test-macos', 'trace-shard']);
     for (const [id, b] of callers) {
       const saves = /save: 'true'/.test(b);
       expect(saves, `${id}: only deps may save`).toBe(id === 'deps');
@@ -1405,5 +1405,57 @@ describe('ci.yml: the light pull-request rule for the agent, pwa and browser tes
     for (const id of ['pwa-static', 'build-pwa', 'server-typecheck']) {
       expect(job(id), id).not.toContain('steps.reach');
     }
+  });
+});
+
+// ── D-6929: the hook's wall-clock budgets run in a perf job of their own ────
+describe('ci.yml: the session-hook budgets run in `perf (server)`, which is not required yet (D-6929)', () => {
+  const HOOK_TEST = 'server/test/session-hook.test.ts';
+
+  it('is one job, named `perf (server)`, gated like the server shards, with a deadline and no part in the required summaries', () => {
+    const b = job('server-perf');
+    expect(jobKey(b, 'name')).toBe('perf (server)');
+    expect(needs(b)).toEqual(['deps', 'select']);
+    expect(jobKey(b, 'if')).toBe(jobKey(job('server-shard'), 'if'));
+    expect(jobKey(b, 'timeout-minutes')).toBe('20');
+    // NOT REQUIRED for two weeks (operator ruling 2026-10-25): no required summary or aggregate reads it.
+    for (const id of ['server', 'full-suite']) expect(needs(job(id)), `${id} must not wait on the perf job`).not.toContain('server-perf');
+    expect(b, 'continue-on-error would hide a red from the day it becomes required').not.toMatch(/continue-on-error/);
+  });
+
+  it('runs only the hook test file, one worker, no file parallelism, with CCRC_PERF=1, and selects the budget rows by title', () => {
+    const t = step(job('server-perf'), 'Budgets');
+    expect(t).toMatch(/^ {10}CCRC_PERF: '1'$/m);
+    expect(runScript(t)).toBe(
+      "./node_modules/.bin/vitest run test/session-hook.test.ts --maxWorkers=1 --no-file-parallelism -t 'p95 of 40|costs no more than 4\\.2x|costs no more than 4x the cheap|spool.s increment'\n");
+  });
+
+  it('every title the job selects is a row that exists, gated on CCRC_PERF, the compaction serve\'s 4x ratio among them, and no ungated row reads a clock around the hook', () => {
+    const src = read(HOOK_TEST);
+    const gate = "process.env['CCRC_PERF'] === '1'";
+    // The budget rows: the file's wall-clock assertions, each under the gate, with the thresholds the rows always had.
+    for (const title of ["it.runIf(%G)('p95 of 40 runs stays under the budget", "it.runIf(%G)('SessionStart costs no more than 4.2x", "it.runIf(%G)('the spool\\'s increment: 40 realistic",
+      "it.runIf(%G)('costs no more than 4x the cheap PostToolUse arm with a card present",
+      "describe.runIf(%G)('the hot-path budget through the shell prefix", "describe.runIf(%G)('the PostToolUse budget holds for agent payloads"]) {
+      expect(src, title).toContain(title.replace('%G', gate));
+    }
+    expect((src.match(/toBeLessThan\(150\)/g) ?? []).length, 'three absolute 150 ms pins, thresholds unchanged').toBe(3);
+    expect(src).toContain('toBeLessThan(4.2)');
+    expect(src).toContain('.toBeLessThan(1.5)');
+    expect(src, 'the compaction serve keeps its own bound, 4 on Linux').toContain('const bound = IS_DARWIN ? 8 : 4;');
+    // NO WALL CLOCK IN A REQUIRED CHECK (operator principle 2026-10-25): every `process.hrtime` read sits in a row that is
+    // gated itself or sits in a gated describe. The nearest `it(`/`describe(` header above each read decides.
+    const header = /^ *(?:describe|it|itLinux)(?:\.(?:runIf|skipIf)\([^\n]*?\))?\('/gm;
+    const heads = [...src.matchAll(header)].map((m) => ({ at: m.index!, text: m[0], indent: m[0].search(/\S/) }));
+    for (const clock of src.matchAll(/process\.hrtime/g)) {
+      const above = heads.filter((h) => h.at < clock.index!);
+      const row = above.at(-1)!;
+      const outer = [...above].reverse().find((h) => h.indent < row.indent && h.text.trimStart().startsWith('describe'));
+      const gated = (h: { text: string } | undefined): boolean => h !== undefined && h.text.includes(`runIf(${gate})`);
+      const line = src.slice(0, clock.index!).split('\n').length;
+      expect(gated(row) || gated(outer), `session-hook.test.ts:${line} reads a clock in an ungated row: ${row.text.trim()}`).toBe(true);
+    }
+    // Every `Date.now() - t0` timing in the three p95 rows is under the gate: no ungated row reads times[37].
+    expect((src.match(/expect\(times\[37\]\)\.toBeLessThan\(150\)/g) ?? []).length).toBe(3);
   });
 });

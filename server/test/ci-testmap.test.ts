@@ -441,7 +441,8 @@ describe('the floor: repo-wide guards must come out repo-wide (spec §5.2)', () 
   it('names the floor exactly as the spec does', () => {
     expect(GIT_FLOOR).toEqual(['source-bytes', 'topology-clean', 'deviation-refs', 'dtbd', 'providers',
       'modelenv-single-writer', 'install-census', 'gitignore-secrets'].map((n) => `server/test/${n}.test.ts`));
-    expect(WALK_FLOOR).toEqual(['single-definition', 'typecheck-tests'].map((n) => `server/test/${n}.test.ts`));
+    expect(WALK_FLOOR).toEqual([...['advance-switches', 'ask-digest', 'child-reclaim', 'core-vocab', 'docs-l0', 'docs-ring', 'late-census', 'roster-bash', 'switches-history', 'update-stall', 'vocabularies'].map((n) => `server/test/single-definition/${n}.test.ts`),
+      'server/test/typecheck-tests.test.ts']);
   });
 
   it('a build writes a git-floor test with git false as unknown, why FLOOR_GIT, and keeps its record and every other entry', () => {
@@ -467,14 +468,14 @@ describe('the floor: repo-wide guards must come out repo-wide (spec §5.2)', () 
 
   it('a build writes a walk-floor test that lists nothing (once the baseline is subtracted) as unknown, why FLOOR_WALK', () => {
     const r = records({ root: { listed: ['server/test'] } }, {
-      'server/test/single-definition.test.ts': split({ listed: ['server/test'] }, {}),
+      'server/test/single-definition/core-vocab.test.ts': split({ listed: ['server/test'] }, {}),
     });
     expect(FLOOR_WALK).toBe('floor: lists nothing');
-    expect(buildMap(SHA_A, r).tests['server/test/single-definition.test.ts']).toMatchObject({ unknown: true, why: FLOOR_WALK });
+    expect(buildMap(SHA_A, r).tests['server/test/single-definition/core-vocab.test.ts']).toMatchObject({ unknown: true, why: FLOOR_WALK });
     const ok = records({ root: { listed: ['server/test'] } }, {
-      'server/test/single-definition.test.ts': split({ listed: ['server/test'] }, { listed: ['server/test'] }),
+      'server/test/single-definition/core-vocab.test.ts': split({ listed: ['server/test'] }, { listed: ['server/test'] }),
     });
-    expect(buildMap(SHA_A, ok).tests['server/test/single-definition.test.ts'].listed).toEqual(['server/test']);
+    expect(buildMap(SHA_A, ok).tests['server/test/single-definition/core-vocab.test.ts'].listed).toEqual(['server/test']);
   });
 
   it('a refresh marks a freshly traced floor violation unknown, and does not re-judge a carried entry', () => {

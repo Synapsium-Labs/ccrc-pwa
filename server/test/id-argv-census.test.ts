@@ -492,6 +492,8 @@ const GATE_FILES = [
   'coord/expireArchived.ts', 'coord/childReclaimStale.ts',
   // orphanTreeLane.ts (D-6635): the orphan census's `inside` id is vetted by the predicate before the lane reads that row.
   'orphanTreeLane.ts',
+  // coord/siblingRead.ts (D-6923): a sibling run's `claimedBy` is vetted by the predicate before the registry read.
+  'coord/siblingRead.ts',
 ] as const;
 
 const IMPORTS_PREDICATE = /import\s*\{[^}]*\bisRegistryId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/;

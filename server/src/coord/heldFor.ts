@@ -24,8 +24,9 @@
 import { ASK_OPERATOR_PRINCIPAL, type AskMintReleaseReason, type ChildMark } from '../../../shared/api.js';
 import type { SessionRecord } from '../registry.js';
 import { childBirthOf } from './childSpent.js';
-import { childParentOf, incarnationOf } from './runBinding.js';
+import { bindingOf, hasOwnerlessUndecidedOpen, incarnationOf } from './runBinding.js';
 import { claimantMeasuredDead, measureClaimant, type ReclaimDeps } from './reclaim.js';
+import { childParentRead } from './bindingReads.js';
 
 export type HeldFor =
   | { readonly kind: 'not-a-child' }
@@ -43,11 +44,10 @@ export async function heldFor(
   // workspace name never inherits a run opened for the occupant before it, so no ghost coordinator is the parent.
   const minting = coord.run(mark.runId);
   const incarnation = incarnationOf(childId, childBirthOf(minting, childId));
-  const proven = coord.parentOfSession(childId, incarnation);
   // An unstamped run opened before the birth and then bound to it is undecidable, not a ghost: the minting run's own
-  // claimant keeps the hold (the dup arm, a wave N >= 2 run planned before wave 1 was dispatched).
-  const parent = proven !== null || !minting.ok || minting.run === null ? proven
-    : childParentOf(proven, coord.bindingRunsOf(childId), minting.run.claimedBy, incarnation);
+  // claimant keeps the hold (the dup arm, a wave N >= 2 run planned before wave 1 was dispatched). A series this process
+  // cannot represent still yields the parent its open binding proves, or none, as before the fold (ruling (a)).
+  const { parent, series } = childParentRead(coord, childId, minting.ok && minting.run !== null ? minting.run.claimedBy : null, incarnation);
   if (parent === childId) return notAChild;
   // D-5362: the binding is "the parent is the claimant of the run the mark names", not "the mark names the newest
   // open run": a wave N >= 2 run resumes the same workspace, whose `.child` still names wave 1.
@@ -59,7 +59,11 @@ export async function heldFor(
     // No claimant on the newest open run naming the child — or no open run at all, which is not a child (spec §4).
     const sib = coord.openRunsForSession(childId, undefined, incarnation);
     if (!sib.ok) throw new Error(`heldFor: ${sib.detail}`);
-    if (sib.siblings.length === 0) return notAChild;
+    if (sib.siblings.length === 0) {
+      // An ownerless open run the binding cannot place (a wave N >= 2 planned before the birth, bound without a stamp)
+      // still counts as a sibling: the ruling on ARCH-62 slice 1 keeps today's `run-unclaimed` for it.
+      if (!series.ok || !hasOwnerlessUndecidedOpen(bindingOf(series.runs, incarnation))) return notAChild;
+    }
     return nobody('run-unclaimed');
   }
   if (minting.run.claimedBy === null) return nobody('run-unclaimed');

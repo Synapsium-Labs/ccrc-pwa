@@ -138,7 +138,7 @@ export type HibernateStoreRead =
     readonly ok: true;
     /** `openRunsForSession`: a run outside the terminal set names it as worker. */
     readonly openWorker: boolean;
-    /** `openRunsClaimedBy`: it claims a run outside the terminal set. */
+    /** `openRunsClaimedBy` (coord/bindingReads.ts): it claims a run outside the terminal set. */
     readonly openClaimant: boolean;
     readonly claim: boolean;
     readonly mail: boolean;

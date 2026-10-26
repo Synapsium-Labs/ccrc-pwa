@@ -10,7 +10,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { CCD } from './ccdWsHelpers.js';
 import { tl, GRAPH, type GraphContent } from './compactCardFixtures.js';
 import { isScratchSlug } from './scratchSlugs.js';
-import { itLinux, IS_DARWIN } from './platformFixtures.js';
+import { itLinux, IS_DARWIN } from './platformFixtures.js'; import { anchorCites } from './anchors.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const realTool = (name: string): string => execFileSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).trim();
@@ -570,16 +570,16 @@ describe('the fleet gate and failure polarity', () => {
     expect(s.ask).toBeNull();
     expect(fs.statSync(stateFile()).size).toBeLessThan(65536);
   });
-  it('p95 of 20 runs stays under the budget (150ms CI allowance; 50ms target)', () => {
-    const times: number[] = [];
-    for (let i = 0; i < 20; i++) {
+  it.runIf(process.env['CCRC_PERF'] === '1')('p95 of 40 runs stays under the budget (150ms CI allowance; 50ms target)', () => {
+    const times: number[] = []; run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });   // one warm-up, discarded; CCRC_PERF=1 only (the perf job, D-6929)
+    for (let i = 0; i < 40; i++) {
       const t0 = Date.now();
       run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
       times.push(Date.now() - t0);
     }
     times.sort((a, b) => a - b);
-    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
-  }, 30000);
+    expect(times[37]).toBeLessThan(150);   // p95 of 40 = the third-largest (times[37]); the threshold is unchanged
+  }, 60000);
   // R1 FIX (D-1898): an absolute ms budget was tried first and rejected — see the
   // measurement below for why. This asserts a RATIO of SessionStart's median to
   // PostToolUse's median, both measured IN THE SAME RUN (interleaved, same
@@ -623,7 +623,7 @@ describe('the fleet gate and failure polarity', () => {
   // silently and with the suite green. The absolute p95 budget in the test above
   // is what still binds the cheap arm; if that budget is ever raised, this ratio's
   // masking window widens with it, and the two must be re-argued together.
-  it('SessionStart costs no more than 4.2x the cheap PostToolUse arm, on a 200-row registry', () => {
+  it.runIf(process.env['CCRC_PERF'] === '1')('SessionStart costs no more than 4.2x the cheap PostToolUse arm, on a 200-row registry (40 pairs after a warm-up pair; perf job only, D-6929)', () => {
     const reg = path.join(home, '.cc-sessions');
     const now = Math.floor(Date.now() / 1000);
     for (let i = 0; i < 200; i++) {
@@ -643,8 +643,8 @@ describe('the fleet gate and failure polarity', () => {
     plantGraph(tree, { built: 'deadbee' });
 
     const cheapTimes: number[] = [];
-    const mainTimes: number[] = []; run({ hook_event_name: 'UserPromptSubmit' }); run({ hook_event_name: 'SubagentStart', agent_id: 'a-1', agent_type: 'general-purpose' });   // a-1 is JOINED, so the cheap arm stays a subagent's (delegation broker wave 3)
-    for (let i = 0; i < 20; i++) {
+    const mainTimes: number[] = []; run({ hook_event_name: 'UserPromptSubmit' }); run({ hook_event_name: 'SubagentStart', agent_id: 'a-1', agent_type: 'general-purpose' }); run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a-1' }); run({ hook_event_name: 'SessionStart', cwd: tree, source: 'startup' });   // the last two are the discarded warm-up pair; a-1 is JOINED, so the cheap arm stays a subagent's (delegation broker wave 3)
+    for (let i = 0; i < 40; i++) {
       const t0 = process.hrtime.bigint();
       run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a-1' });
       cheapTimes.push(Number(process.hrtime.bigint() - t0) / 1e6);
@@ -658,7 +658,7 @@ describe('the fleet gate and failure polarity', () => {
     };
     const ratio = median(mainTimes) / median(cheapTimes);   // ratio-row-reads-the-median (D-3704) (above)
     expect(ratio).toBeLessThan(4.2);
-  });
+  }, 120000);
 });
 
 // ── The fork fallback: attribution with no pane at all ─────────────────────
@@ -3254,7 +3254,7 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     expect(cardMax + compactMax).toBeLessThan(HARNESS_CONTEXT_SPILL_CHARS);
   });
 
-  it('costs no more than 4x the cheap PostToolUse arm with a card present, on a 200-row registry — its OWN ratio', () => {
+  it.runIf(process.env['CCRC_PERF'] === '1')('costs no more than 4x the cheap PostToolUse arm with a card present, on a 200-row registry — its OWN ratio (perf job only, D-6929)', () => {
     // D-1898's method (see the startup-arm test above for why an absolute ms
     // number is the wrong shape): the compact arm interleaved with the cheap
     // arm in ONE run, its own array, its own p95 — SUPERSEDED to median below
@@ -4608,7 +4608,7 @@ describe('the compaction card — the sentences D-2605 falsifies (spec §3.4)', 
     expect(src).toContain('bashRoots');
     // AND THE MEASUREMENT THE SENTENCE NOW RESTS ON, re-derived here rather
     // than quoted: the bash corpus really does carry both files by name.
-    const sd = fs.readFileSync(path.resolve(__dirname, 'single-definition.test.ts'), 'utf8');
+    const sd = ['helpers.ts', ...fs.readdirSync(path.resolve(__dirname, 'single-definition')).filter((f) => f.endsWith('.test.ts'))].map((f) => fs.readFileSync(path.resolve(__dirname, 'single-definition', f), 'utf8')).join('\n');
     expect(sd).toContain('bashRoots');
     expect(sd).toContain('ccd/session-hook.sh');
     expect(sd).toContain('ccd/ccd');
@@ -6935,7 +6935,7 @@ const rejoinStrace = (raw: string): { lines: string[]; unparsed: string[] } => {
 
 /** The children the hook's own shell took inside the first held section, named by
  *  the first command each one's subtree execs (`(subshell)` for none). */
-const forkCensus = (raw: string): { forks: string[]; unparsed: string[] } => {
+const forkCensus = (raw: string, whole = false): { forks: string[]; unparsed: string[] } => {
   const { lines, unparsed } = rejoinStrace(raw);
 
   // PARSE. Two shapes matter: a `clone` that returns a child pid, and a
@@ -6979,14 +6979,14 @@ const forkCensus = (raw: string): { forks: string[]; unparsed: string[] } => {
   // child after the release) or, on an arm that releases and returns, at the
   // end of the trace. `_hook_compact_pre` is the last statement in the file,
   // so "end of trace" really is "end of the arm".
-  const flockAt = events.findIndex((e) => e.kind === 'exec' && e.name === 'flock');
+  const flockAt = whole ? 0 : events.findIndex((e) => e.kind === 'exec' && e.name === 'flock');   // `whole`: every child of the run, no window
   expect(flockAt, 'the arm took the row mutex').toBeGreaterThan(-1);
   // THE END IS THE CLONE, NOT ITS EXEC. `timeout`'s `execve` happens in the
   // child, i.e. AFTER the parent's `clone` line, so a window ending at the
   // exec swallows the helper fork itself — measured, that was this pin's
   // first draft and it reported a seventh member.
   const ENDERS = ['timeout', 'gtimeout', 'node', 'flock'];
-  const endAt = events.findIndex((e, k) => k > flockAt && e.kind === 'clone' && e.pid === root
+  const endAt = whole ? -1 : events.findIndex((e, k) => k > flockAt && e.kind === 'clone' && e.pid === root
     && ENDERS.includes(under(e.child!) ?? ''));
   const last = endAt === -1 ? events.length : endAt;
 
@@ -7727,7 +7727,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // (an empty walk gives 0, and `resolved`'s own 400 keeps the population
     // honest).
     expect(anchored, 'and references some quotation of theirs actually anchors')
-      .toBeGreaterThanOrEqual(100);
+      .toBeGreaterThanOrEqual(96); // 100 -> 96, the measured value: four references into server/test/single-definition.test.ts left the walk when that file split by area (D-6928)
     // FACT ONE — the docstring's "the whole of what this floor lets through".
     // `toks` is already `usable`-filtered, so this set cannot contain a token
     // the floor refuses; what it CAN contain, and what this asserts it does
@@ -8780,7 +8780,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // edits in that file shift the frozen `plan:3236 :1319-1323` and
       // `spec:1347 :1319-1323` sites back onto lines that carry their quote:
       // two coincidental passes gained, not repairs; Task 11 still owns them.
-      'server/test/single-definition.test.ts': 11,
+      // single-definition.test.ts: 11 -> gone, the file was split into single-definition/<area>.test.ts (D-6928)
       // RE-MEASURED on the session-workflows view (D-5560; base = origin/main,
       // tip = this branch merged onto it): `shared/api.ts` 0 -> 1, nothing
       // else moved. This branch adds 11 lines to the cited file (one type
@@ -8980,7 +8980,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // Measured from the same dump as the map, never retyped. No D-number.
     // 204 -> 202 at disk retention DR-26 (D-6638): the census's own arithmetic, ccd/ccd 151 -> 149 and nothing else moved. S6-R11.
     // 202 -> 199 at the hook-helpers refactor (ARCH-74): the census's own arithmetic, ccd/ccd 149 -> 146 and nothing else moved. S6-R11.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(199);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(188); // 199 -> 188: the 11 references into the split single-definition.test.ts left the census (D-6928)
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -9074,15 +9074,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       'a README anchor stopped naming what its own sentence quotes').toEqual([]);
     // NON-VACUITY, and it is mandatory here for the same reason as everywhere
     // else: an equality with empty proves nothing if the document is not being
-    // read. The final current-main composition resolves and checks SEVEN README
-    // references. (`pwa/src/session/HistoryTab.tsx:17` and `:61` are NOT among
-    // them — `FILE_RE` admits no `.tsx`, so they resolve to no file and no pass
-    // in this describe reaches them. That grammar gap is recorded rather than
-    // widened, because doing so would be a rule change no finding authorised.)
-    const readmeOnly = audit([['readme', fs.readFileSync(path.join(REPO, 'README.md'), 'utf8')]]);
-    expect(readmeOnly.resolved, 'README references resolved to a tracked source file').toBe(7);
-    expect(readmeOnly.checked, 'and every one is CHECKED — the rule really applies to them').toBe(7);
-    expect(readmeOnly.failures, 'and none of them is stale').toEqual([]);
+    // read. D-6928: the seven numeric README references this once
+    // counted (two of them `.tsx`, outside `FILE_RE`) are anchors now, which
+    // `anchors.test.ts` resolves over the whole tree, so no numeric reference
+    // is left here to check or to find stale. The last number is the
+    // non-vacuity that matters now: README names nine anchors, so the
+    // paragraph really is cited, not merely emptied. `FILE_RE` is unchanged.
+    const readmeText = fs.readFileSync(path.join(REPO, 'README.md'), 'utf8'); const readmeOnly = audit([['readme', readmeText]]);
+    expect([readmeOnly.resolved, readmeOnly.checked, readmeOnly.failures.length, anchorCites(readmeText).length],
+      'README: line references resolved, checked, stale; anchor citations').toEqual([0, 0, 0, 9]);
   });
 
   it('CONTROL: the **Files:** pass takes neither exemption, and looks only at **Files:** lists', () => {
@@ -9228,7 +9228,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/session-hook.sh:1175-1177',
         // ENTERS at the design-system wave, on this branch's one added import
         // line in the cited file — see the note above this assertion.
-        'server/test/single-definition.test.ts:32-37',
+        // single-definition.test.ts line 32-37 left the census: the file was split by area (D-6928)
         'deploy/deploy.sh:560',
         // LEFT at box-token-lifecycle wave 2 B7 (removed `ship_secret` from deploy.sh): `deploy/deploy.sh:629` now holds
         // a comment naming `install_atomic`, which its clause quotes. Coincidence, not repair; see D2849_INVISIBLE_SINCE_PR136.
@@ -9914,8 +9914,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // drifted anchors were RE-POINTED by content (the dead-reg intent x2, the purge loop, the generation-read link, the
         // slug-residue body, the add refusal and its comment) and five entries left as genuine fixes; none entered. S6-R11.
         'ccd/ccd:203',
-        'server/test/single-definition.test.ts:1274',
-        'server/test/single-definition.test.ts:1319-1320',
+        // single-definition.test.ts line 1274 left the census: the file was split by area (D-6928)
+        // single-definition.test.ts line 1319-1320 left the census: the file was split by area (D-6928)
         'server/test/ccd-ws-reap.test.ts:344',
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'ccd/ccd' + ':3038',
@@ -10175,8 +10175,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // FROM THE SAME RUN as the row-pass set above: nothing entered or left. S6-R11, no D-number.
       // LOWERED at disk retention DR-26 (D-6638), 38 -> 36, FROM THE SAME RUN as the row-pass set above: both
       // dead-reg intent sites (spec 2123 and 2210) were re-pointed by content and left; none entered. S6-R11.
-        'spec:308 server/test/single-definition.test.ts:1274',
-        'spec:308 server/test/single-definition.test.ts:1319-1320',
+        // spec:308 server/test/single-definition.test.ts line 1274 left the census: the file was split by area (D-6928)
+        // spec:308 server/test/single-definition.test.ts line 1319-1320 left the census: the file was split by area (D-6928)
         // ENTERS at model-class auto-advance W2 (S6-R11), spelled in two parts (the note above this assertion).
         'spec:2124 ccd/ccd' + ':3038',
         'spec:2125 ccd/ccd:5797',
@@ -10967,7 +10967,7 @@ describe('the delegation spool leaves the hook\'s other writers alone', () => {
   // 2026-10-22 it read 164 ms in a merge-queue run on a slow runner and ejected an unrelated docs-only pull request; its three
   // 150 ms siblings (the pin above, the `ccd-tool-adj` row and the agent PostToolUse row) have failed full runs at 150-233 ms.
   // An absolute ms number is the wrong shape here for D-1898's reason (above), so this asserts its method instead: a RATIO of two
-  // arms timed IN THE SAME RUN, interleaved one present then one absent, 20 pairs after a warm-up of one of each, read as
+  // arms timed IN THE SAME RUN, interleaved one present then one absent, 40 pairs after a warm-up of one of each, read as
   // median over median (ratio-row-reads-the-median, D-3704). The present arm is the payload with the owner directory and the
   // generation present; the absent arm is the same payload shape with the directory moved aside (outside the timed region), so
   // the gate's `-d` fails, the spool's text is never compiled and the arm is the parse alone.
@@ -10988,7 +10988,7 @@ describe('the delegation spool leaves the hook\'s other writers alone', () => {
   // that pin's budget is ever raised, this window widens with it, and the two must be re-argued together. And below the
   // window, with no masking at all: one extra jq fork of the spool (mutant 1.463-1.628 against shipped 1.160-1.285, ~7% best
   // margin) does not separate, so the smallest spool regression this row can see is two forks.
-  it('the spool\'s increment: 20 realistic Bash PostToolUse runs with the spool present cost under 1.5x the same runs without it (median/median), each writing its line', () => {
+  it.runIf(process.env['CCRC_PERF'] === '1')('the spool\'s increment: 40 realistic Bash PostToolUse runs with the spool present cost under 1.5x the same runs without it (median/median), each writing its line', () => {
     const payload = (toolUseId: string): object => ({
       session_id: SID, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${SID}.jsonl`, cwd: '/rig/repo', prompt_id: 'd9a6fd11-6f0f-41f3-8c1b-0932efbc04a6',
       permission_mode: 'default', effort: { level: 'medium' }, hook_event_name: 'PostToolUse', tool_name: 'Bash',
@@ -11006,14 +11006,14 @@ describe('the delegation spool leaves the hook\'s other writers alone', () => {
         return t;
       } finally { fs.renameSync(aside, SPOOL()); }
     };
-    const ids = (arm: string): string[] => Array.from({ length: 20 }, (_, i) => `toolu_01${arm}${String(i).padStart(2, '0')}AAAAAAAAAAAAAAAA`);
+    const ids = (arm: string): string[] => Array.from({ length: 40 }, (_, i) => `toolu_01${arm}${String(i).padStart(2, '0')}AAAAAAAAAAAAAAAA`);
     const presentIds = ids('Pin');
     const absentIds = ids('Abs');
     const WARM = 'toolu_01WarmPresentAAAAAAAAAAAAAA';
     ms(payload(WARM)); absent(payload('toolu_01WarmAbsentAAAAAAAAAAAAAAA'));
     const present: number[] = [];
     const without: number[] = [];
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 40; i++) {
       present.push(ms(payload(presentIds[i]!)));
       without.push(absent(payload(absentIds[i]!)));
     }
@@ -11021,7 +11021,7 @@ describe('the delegation spool leaves the hook\'s other writers alone', () => {
     expect(lines.map((l) => l.toolUseId).sort(), 'the warm-up and every present run wrote one line each, and no absent run wrote any')
       .toEqual([WARM, ...presentIds].sort());
     expect(lines.map((l) => `${l.eventKind}:${l.toolName}`), 'every one of those lines is the Bash PostToolUse it was sent')
-      .toEqual(Array(21).fill('PostToolUse:Bash'));
+      .toEqual(Array(41).fill('PostToolUse:Bash'));
     const median = (xs: number[]): number => {
       const s = [...xs].sort((a, b) => a - b);
       return (s[Math.floor((s.length - 1) / 2)]! + s[Math.floor(s.length / 2)]!) / 2;
@@ -11029,7 +11029,7 @@ describe('the delegation spool leaves the hook\'s other writers alone', () => {
     const ratio = median(present) / median(without);   // the-spool-cost-pin-reads-a-same-run-ratio (D-6321) (above)
     expect(ratio, `R=${ratio.toFixed(4)} (present ${median(present).toFixed(1)} ms, absent ${median(without).toFixed(1)} ms) against a bound of 1.5`)
       .toBeLessThan(1.5);
-  }, 60000);
+  }, 120000);
 });
 
 // ── The tmux question's BOUND (slice-0 carry) ──────────────────────────────
@@ -12093,7 +12093,7 @@ describe('ccrc history: the recall CLI is not search-gated (spec 2026-10-05 §8.
   });
 });
 
-describe('the hot-path budget through the shell prefix (D-5241)', () => {
+describe.runIf(process.env['CCRC_PERF'] === '1')('the hot-path budget through the shell prefix (D-5241)', () => {
   // AT THE END OF THIS FILE, not beside the PostToolUse pin it mirrors: this file's lines are cited
   // by number (the citation census above), and an insertion above them moves that census.
   // D-5241: on Linux every hook command runs through `CLAUDE_CODE_SHELL_PREFIX`
@@ -12103,42 +12103,42 @@ describe('the hot-path budget through the shell prefix (D-5241)', () => {
   // and one `bash -c`. Measured 2026-10-17 on a workstation (macOS), 20 runs
   // each, the two tests in one run: this PostToolUse hook 56 ms a run bare, 58
   // ms through the prefix (a bare `bash -c true` 6.1 ms p50, 17.9 ms through it).
-  it('p95 of 20 runs through the ccd-tool-adj prefix stays under the same budget (D-5241)', () => {
+  it('p95 of 40 runs through the ccd-tool-adj prefix stays under the same budget (D-5241)', () => {
     const prefix = path.resolve(__dirname, '../../ccd/ccd-tool-adj');
     const times: number[] = [];
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 41; i++) {   // the first run is a warm-up, discarded (CCRC_PERF=1 only: the perf job, D-6929)
       const t0 = Date.now();
       execFileSync(prefix, [`bash ${sh(HOOK)}`], {
         input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash' }),
         encoding: 'utf8', env: hookEnv(),
       });
-      times.push(Date.now() - t0);
+      if (i > 0) times.push(Date.now() - t0);
     }
     times.sort((a, b) => a - b);
-    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
-  }, 30000);
+    expect(times[37]).toBeLessThan(150);   // p95 of 40 = times[37]; the threshold is unchanged
+  }, 60000);
 });
 
 // The hot-path budget for an agent payload (D-5232). APPENDED at the very end, so no line a citation anchors moves.
-describe('the PostToolUse budget holds for agent payloads (D-5232)', () => {
+describe.runIf(process.env['CCRC_PERF'] === '1')('the PostToolUse budget holds for agent payloads (D-5232)', () => {
   // D-5232 (plan 2026-10-16 Task 2): the same budget for an AGENT PostToolUse behind the server's word
   // `hook-main-state-v1`, which reads `~/.ccrc/server-caps` with builtins and takes the one fresh read to carry the
   // main state. The file to carry is a Stop's `done`, written first.
-  it('p95 of 20 agent PostToolUse runs behind hook-main-state-v1 stays under the same 150 ms budget (D-5232)', () => {
+  it('p95 of 40 agent PostToolUse runs behind hook-main-state-v1 stays under the same 150 ms budget (D-5232)', () => {
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     fs.writeFileSync(path.join(home, '.ccrc', 'server-caps'),
       `at ${Math.floor(Date.now() / 1000)}\ncaps dispatch-live-gate-v1 hook-main-state-v1\nend\n`);
     run({ hook_event_name: 'Stop', background_tasks: [] });
     const times: number[] = [];
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 41; i++) {   // the first run is a warm-up, discarded (CCRC_PERF=1 only: the perf job, D-6929)
       const t0 = Date.now();
       run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a0000000000000001', agent_type: 'general-purpose' });
-      times.push(Date.now() - t0);
+      if (i > 0) times.push(Date.now() - t0);
     }
     expect(readState().state, 'the carry ran: the Stop\'s done stands').toBe('done');
     times.sort((a, b) => a - b);
-    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
-  }, 30000);
+    expect(times[37]).toBeLessThan(150);   // p95 of 40 = times[37]; the threshold is unchanged
+  }, 60000);
 });
 // ── ccrc history: the PreCompact scope marker (history spec 2026-10-05 §5.1, §5.5 S16; W1-B3 task 8) ──
 // APPENDED, with NO new import line: the citation census cites this file by line.
@@ -13393,4 +13393,40 @@ describe('history card reserve: the compact card renders HISTORY_CARD_MAX + 1 ch
     expect(set, 'no PreCompact-gated set').toBeGreaterThan(reset);
     expect(set, 'the reserve must be set before the card renders').toBeLessThan(src.indexOf('\nunset CS_SCOPE\n'));
   });
+});
+
+// ── The cheap PostToolUse arm's fork count: a load-independent cost pin (D-6929) ──
+// APPENDED, with NO new import line: the citation census cites this file by line.
+// The wall-clock budgets (150 ms, 4.2x, 4x, 1.5x) run in the `perf` CI job only (`CCRC_PERF=1`); this is what the required
+// suite keeps of the hook's cost: how many children the arm forks, counted under strace, which a loaded runner cannot move.
+// MEASURED on main at ece3dfbee (linux, bash 5.2, strace -f -e trace=clone,clone3,fork,vfork,execve, a fixture HOME with
+// the stub tmux, the p95 row's payload `{PostToolUse, Bash}`): the whole-run census came to EXPECTED_FORKS below (measured in a linux container, vitest on this file; the
+// first run, against an empty expectation, was the red: it printed this table).
+describe('the cheap PostToolUse arm forks exactly this (D-6929)', () => {
+  const HOOK_PATH = (): string => process.env['CCRC_HOOK_UNDER_PIN'] ?? HOOK;
+  const forksOf = (): Record<string, number> => {
+    const trace = path.join(home, 'cheap-trace.txt');
+    const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=clone,clone3,fork,vfork,execve', 'bash', HOOK_PATH()], {
+      input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash' }), encoding: 'utf8', env: hookEnv(),
+    });
+    expect(r.status, `the hook exits 0 under strace. stderr: ${r.stderr}`).toBe(0);
+    const { forks, unparsed } = forkCensus(fs.readFileSync(trace, 'utf8'), true);
+    expect(unparsed, 'every split strace line was rejoined to its other half').toEqual([]);
+    const out: Record<string, number> = {};
+    for (const f of forks.slice().sort()) out[f] = (out[f] ?? 0) + 1;
+    return out;
+  };
+  const EXPECTED_FORKS: Record<string, number> = { '(subshell)': 1, cat: 1, jq: 4, mv: 2, timeout: 1 };
+  itLinux('the real hook forks the measured children and no more', () => {
+    expect(forksOf()).toEqual(EXPECTED_FORKS);
+  }, 60_000);
+  itLinux('a copy of the hook with one more `$(true)` on that arm adds exactly one (subshell), so the pin above goes red on it', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const copy = path.join(home, 'session-hook-mutant.sh');
+    const marker = '\n  PostToolUse)\n    state="working"\n';   // the PostToolUse case arm itself, after its state=working line
+    expect(src.split(marker).length, 'the anchor the mutant is spliced at exists, once').toBe(2);
+    fs.writeFileSync(copy, src.replace(marker, marker + '    _pin_probe=$(true)\n'));
+    process.env['CCRC_HOOK_UNDER_PIN'] = copy;
+    try { expect(forksOf()).toEqual({ ...EXPECTED_FORKS, '(subshell)': EXPECTED_FORKS['(subshell)']! + 1 }); } finally { delete process.env['CCRC_HOOK_UNDER_PIN']; }
+  }, 60_000);
 });

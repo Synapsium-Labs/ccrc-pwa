@@ -4,6 +4,7 @@ import { lifecycleInputFor } from '../fleet.js';
 import type { FleetIO } from '../io.js';
 import { fieldMeasured, readSessionRecord } from '../registry.js';
 import type { CoordStore } from './store.js';
+import { claimantsOfSession } from './bindingReads.js';
 import { isRegistryId, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
 import { readSession, type SessionFacts } from '../sessionReading.js';
 import type { ClaimantDeadCause } from '../deadCoordinator.js';
@@ -396,7 +397,7 @@ export async function reclaimRun(
     //
     // `by` is the FIRST offender, and the list is newest-first, so the operator
     // is sent to the most recent binding rather than the oldest.
-    const heirWorkerOf = deps.coord.openClaimantsOf(to).find((c) => c !== to && c !== from);
+    const heirWorkerOf = claimantsOfSession(deps.coord, to).find((c) => c !== to && c !== from);
     if (heirWorkerOf !== undefined) {
       return { ok: false, kind: 'heir-is-a-worker', by: heirWorkerOf };
     }

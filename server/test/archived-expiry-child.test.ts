@@ -160,6 +160,17 @@ describe('the lane: an archived child past its instant (D-6641)', () => {
     expect(expireArgv(f, 'ws-audit')[0]).toEqual(['ws-audit', '--session', 'demo-a', '--expire', '--child-of', '7']);
     expect(expireArgv(f, 'ws-expire')).toEqual([]);
     expect(f.feed().filter(([, t]) => t.includes('child'))).toHaveLength(1);
+    // The durable shadow journal (D-6861): the lane is live and only the child arm holds it back.
+    expect(f.coord.shadowVerdicts({ lane: null, subject: null, limit: 10 }, Date.now()))
+      .toMatchObject([{ lane: 'expire-child', subject: 'demo-a', rung: 'child-shadow' }]);
+  });
+
+  it('with neither marker: the feed row stands, and the shadow journal does not call it the child arm’s (D-6861)', async () => {
+    const f = await fixture();
+    f.plant('demo-a', OLD, { child: '7' });
+    await threePasses(f); f.next(); await f.pass();
+    expect(f.feed().filter(([, t]) => t.includes('child'))).toHaveLength(1);
+    expect(f.coord.shadowVerdicts({ lane: null, subject: null, limit: 10 }, Date.now())).toEqual([]);
   });
 
   it('with the child marker but not the lane’s: the executor answers would-expire and composes nothing', async () => {
@@ -168,6 +179,7 @@ describe('the lane: an archived child past its instant (D-6641)', () => {
     await threePasses(f);
     expect(expireArgv(f, 'ws-expire')).toEqual([]);
     expect(f.feed().some(([id, t]) => id === 'demo-a' && t.includes('would be cleaned up'))).toBe(true);
+    expect(f.coord.shadowVerdicts({ lane: null, subject: null, limit: 10 }, Date.now())).toEqual([]);
   });
 
   it('armed on both: ws-expire carries --child-of and the run', async () => {
@@ -263,8 +275,15 @@ describe('the executor re-asks both gates at the act (D-6641)', () => {
   };
   it('the lane’s marker alone does not arm a child: would-expire, no verb', async () => {
     const { result, calls } = await exec({ childCap: true, markers: [EXPIRE_LANE_LIVE_MARKER] });
-    expect(result.kind).toBe('would-expire');
+    expect(result).toMatchObject({ kind: 'would-expire', childArmHeld: true });
     expect(calls.filter((c) => c[0] === 'ws-expire')).toEqual([]);
+  });
+  it('an unarmed lane holds a child too, and that is not the child arm’s hold (D-6861)', async () => {
+    for (const markers of [[], [EXPIRE_CHILD_LIVE_MARKER]]) {
+      const { result } = await exec({ childCap: true, markers });
+      expect(result.kind, markers.join()).toBe('would-expire');
+      expect(result.childArmHeld, markers.join()).toBeUndefined();
+    }
   });
   it('a box without expire-child-v1 gets no call at all for a child', async () => {
     const { result, calls } = await exec({ childCap: false, markers: [EXPIRE_LANE_LIVE_MARKER, EXPIRE_CHILD_LIVE_MARKER] });

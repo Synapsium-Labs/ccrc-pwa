@@ -33,7 +33,7 @@ import type { ChildReclaimDeps, ChildReclaimRequest } from './childReclaim.js';
  *  throws reaches the pass's per-child catch, which keeps the child. */
 export function childReclaimReviewedRun(
   coord: Pick<CoordStore, 'laterReviewClosedFor'>, reviewRunId: number, reviewedId: number, state: RunState, names: readonly string[],
-): ChildReclaimReviewedRunRead {
+): Extract<ChildReclaimReviewedRunRead, { kind: 'run' }> {
   if (isTerminalRunState(state)) return { kind: 'run', state };
   const by = coord.laterReviewClosedFor(reviewedId, reviewRunId);
   if (by === null) return { kind: 'run', state };

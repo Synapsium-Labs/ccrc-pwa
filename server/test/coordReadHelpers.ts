@@ -39,3 +39,17 @@ export const okAsks = (r: AsksReadResult): AskRow[] =>
 
 export const okAsksByChild = (r: AsksByChildResult): Map<string, AskRow> =>
   r.ok ? r.asks : refused('ask map', r.detail);
+
+// ARCH-62 (#797), slice 2: the store's `parentOfSession`, `openClaimantsOf` and `openRunsClaimedBy` readers were folded into
+// `bindingRunsOf` / `openRunsForSession` / `runsNamingSession` (the census pins the four that remain). The tests that
+// characterise them assert the PRODUCTION answers: `claimantsOfSession` and `openRunsClaimedBy` (coord/bindingReads.ts)
+// are imported directly; the parent is `childParentOf` (coord/runBinding.ts, heldFor's and the drift lane's decider) over
+// `bindingRunsOf`, with no minter, which is `parentOf` of the open binding.
+import { childParentOf, unbornIncarnation, type Incarnation } from '../src/coord/runBinding.js';
+import type { CoordStore } from '../src/coord/store.js';
+
+/** The claimant of the session's open binding (`null`: none, or the open run is ownerless), as production decides it. */
+export const parentOfSession = (s: Pick<CoordStore, 'bindingRunsOf'>, id: string, inc?: Incarnation): string | null => {
+  const series = s.bindingRunsOf(id);
+  return childParentOf(series.ok ? series.runs : refused('run series', series.detail), null, inc ?? unbornIncarnation(id, 'not-a-child'));
+};

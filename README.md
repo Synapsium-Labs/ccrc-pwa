@@ -5773,16 +5773,16 @@ things at that moment: it builds a SECOND card — the files this context was wo
 community and dependents read out of the same graph — and it MEASURES the compaction, writing one line to a
 per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them opens a new output
 channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
-arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3198`), which appends the second
-subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`:97`) before the single `jq -cn` print (`:103-105`) — and `PreCompact` and
+arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh#@compact-arm-emit-call`), which appends the second
+subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`ccd/session-hook.sh#@emit-context-compact-ceiling`) before the single `jq -cn` print (`ccd/session-hook.sh#@emit-context-print`) — and `PreCompact` and
 `PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
 working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8526-8528`), each with an operator sentence of its own at `:8578`,
-`:8586` and `:8599`, which the session History tab renders through `lcRefusalWord`
-(`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
+`purge-mechanism-absent` (`shared/api.ts#@purge-refusal-union`), each with an operator sentence of its own at `shared/api.ts#@lc-word-purge-refused`,
+`shared/api.ts#@lc-word-purge-incomplete` and `shared/api.ts#@lc-word-purge-mechanism-absent`, which the session History tab renders through `lcRefusalWord`
+(`pwa/src/session/HistoryTab.tsx#@history-refusal-import`, rendered at `pwa/src/session/HistoryTab.tsx#@history-refusal-render`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
 - **What lands on the fleet box.** Four dot-free registry files per session id, beside the
