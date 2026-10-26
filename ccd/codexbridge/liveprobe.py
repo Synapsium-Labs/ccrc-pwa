@@ -31,9 +31,12 @@ never a header value, a text, an id or an encrypted content. The answer is recor
 recordings directory as `liveprobe-<step>-<utc>-<n>.sse` (0600, directory 0700; `n` the request's count, so a bridge
 recording's cap never counts it), for the operator to scrub into the corpus (`record.py scrub`) in a reviewed change.
 A refusal is one stderr line, `liveprobe: refused <word>: <sentence>`; any other failure before the send is
-`liveprobe: failed <class>; nothing was sent`, and one after it `liveprobe: transport <class>`: an exception is named
-by its class only, never its text (http.client formats a header value it refuses with %r). Exit 0 answered 2xx, 1
-refused or failed (nothing sent), 2 usage, 3 attempted and counted but not answered 2xx: the count is raised before
+`liveprobe: failed <class>; nothing was sent`, one in the send or while the answer is read
+`liveprobe: transport <class>`, and one opening the answer's recording, before its status is printed,
+`liveprobe: recording <class>`: an exception is named by its class only, never its text (http.client formats a header
+value it refuses with %r). Exit 0 a 2xx answer read to its end, 1 refused or failed (nothing sent), 2 usage, 3
+attempted and counted, but no whole 2xx answer was read: a non-2xx status, or a transport or recording failure before
+the answer ended, so a 200 whose stream fails partway, or whose recording fails, is 3 too. The count is raised before
 the post, so a request that never left (a header http.client refuses in putheader, before endheaders writes a byte; a
 refused connection) is charged too.
 
@@ -112,9 +115,9 @@ def _name(value: object) -> str:
 def lane_files(lane: str) -> LaneFiles:
     """The lane's directory, which must hold ALLOW_MARKER before anything else is read, then its `lane.json`."""
     home = os.path.expanduser("~")
-    # Spelled here, not received: the bridge gets this path as CCGPT_LANE_DIR from ccd/ccrc's bridge environment, and
-    # deploy/models-op.mjs's laneManifest writes the lane.json in it, but the probe is an operator CLI run with no tier
-    # environment, so it has no owner to receive the path from.
+    # Spelled here, not received: this mirrors ccd/ccrc's _codex_lane_dir, the path's owner, which the bridge gets as
+    # CCGPT_LANE_DIR in ccd/ccrc's bridge environment, and deploy/models-op.mjs's laneManifest writes the lane.json in
+    # it, but the probe is an operator CLI run with no tier environment, so it has no owner to receive the path from.
     lane_dir = os.path.join(home, ".ccrc", "codex", lane)
     if not os.path.exists(os.path.join(lane_dir, ALLOW_MARKER)):
         raise Refused("no-marker", "the lane directory holds no " + ALLOW_MARKER + " marker; the operator touches it "
@@ -424,9 +427,10 @@ def main(argv: List[str]) -> int:
         if rec is not None:
             rec.write(record.head(up.status, up.headers))
         return report(up, rec)
-    except Exception as e:  # its class only, as above: a failure recording the answer, or in report() outside its
-        # own catch (the recording-failure case pins it)
-        _out("transport " + _name(type(e).__name__))
+    except Exception as e:  # its class only, as above. A failure opening or heading the recording, which runs before
+        # report() prints the status (the recording-failure case pins it); report()'s own lines outside its catch only
+        # print and read the request id. The answer was sent and may have been 2xx, so it is 3, not a transport line
+        _out("recording " + _name(type(e).__name__))
         return 3
     finally:
         if rec is not None:

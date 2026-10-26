@@ -733,8 +733,8 @@ describe.skipIf(!PY)('the live probe: the first live step, bounded (codex-bridge
     touch(path.join(lane.laneDir, 'liveprobe-allowed'));
     const r = probeFaked(home, 'raise-head');
     expect(r.status, r.stderr).toBe(0);
-    // main's catch around the recording and report block
-    expect(r.stdout).toBe('liveprobe: transport ValueError\n');
+    // main's catch around the recording and report block: a local recording failure, not a transport one
+    expect(r.stdout).toBe('liveprobe: recording ValueError\n');
     expect(r.stderr).toBe('driver rc=3 closed=1\n');
     expect(r.stdout + r.stderr).not.toContain(SENTINEL);
   });
