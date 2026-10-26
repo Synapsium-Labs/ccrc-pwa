@@ -2103,8 +2103,10 @@ export function stallCoordBlockedPushText(input: StallCoordBlockedInput, n: Stal
   const head = oldest === undefined ? `${items}.`
     : `${items}; the oldest, mail #${stallInt(oldest.mail.id)} ${stallSafe(oldest.mail.kind)} from ${stallSafe(oldest.mail.fromId)}, was queued at ${stallUtc(oldest.mail.at)} (${stallSpan(now - oldest.mail.at)} ago).`;
   const senders = new Set(held.map((h) => h.mail.fromId));
-  const children = [...input.runs].sort((a, b) => a.id - b.id).filter((r, i, rs) => senders.has(r.sessionId)
-    && rs.findIndex((x) => x.sessionId === r.sessionId) === i);
+  // One row per child worker, its lowest run id: a Map keyed by the worker keeps the first run it meets.
+  const firstRunOf = new Map<string, StallRunRow>();
+  for (const r of [...input.runs].sort((a, b) => a.id - b.id)) if (senders.has(r.sessionId) && !firstRunOf.has(r.sessionId)) firstRunOf.set(r.sessionId, r);
+  const children = [...firstRunOf.values()];
   const waiting = children.length === 0 ? 'No run worker of it is among the senders.'
     : `Children waiting: ${children.map((r) => `${stallSafe(r.sessionId)} (run ${stallInt(r.id)})`).join(', ')}.`;
   const stretch = stallCoordBusySince(si);

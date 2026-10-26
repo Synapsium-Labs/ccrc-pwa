@@ -157,6 +157,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "a mail row or delivery addressed to the session under judgement: the mail ledger's recipient, no run is read" },
   { file: 'server/src/coord/stall.ts', text: 'd.toId === input.sessionId',
     why: "a mail row or delivery addressed to the session under judgement: the mail ledger's recipient, no run is read" },
+  { file: 'server/src/coord/stall.ts', text: 'd.toId !== input.sessionId',
+    why: "a delivery not addressed to the coordinator under judgement is skipped (the coord-blocked arm's held mail): the mail ledger's recipient, no run is read" },
   { file: 'server/src/coord/stall.ts', text: 'x.toId === who.sessionId',
     why: "a mail row or delivery addressed to the session under judgement: the mail ledger's recipient, no run is read" },
   { file: 'server/src/coord/store.ts', text: 'existing.claimedBy !== input.claimedBy',
