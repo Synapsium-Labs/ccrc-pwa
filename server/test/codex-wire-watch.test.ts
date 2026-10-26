@@ -1,13 +1,15 @@
 // D1 (codex bridge spec §2.9; Stage 2 plan, Task 19): the Codex source watch, `.github/ci/codex-wire-watch.mjs`.
 // Offline: `wireReport` and `nextPairs` run over synthetic Rust excerpts in `fixtures/codex-wire/` (D-6424: shaped
 // like the two upstream changes D1 names, the 0.162.0 move of `instructions` out of the request struct and the
-// 0.155.0 removal of the compaction endpoint constant; no upstream source is copied here), and the walk runs through
-// the module's own GitHub layer with `fetch` injected, so nothing here opens a socket. The workflow reads the real
-// files at run time. Mutation rows G1-G4, and G5-G9 (the author filter, the missing-file refusal, the test-module
-// cut, the enum scan and the printable-name bound), are measured in the commit body of Task 19; G10-G19 (fix round
-// 1: the CLI's exit codes, the first-run state seed, the release flags and paging, the body's length cap, the serde
-// names and the printable-name class and length) in the fix round's. The CLI cases run the script as a child process
-// against a fake served on loopback, with a synthetic token and nothing of this environment passed on.
+// 0.155.0 removal of the compaction endpoint constant; no upstream source is copied here). The walk cases run through
+// the module's own GitHub layer with `fetch` injected, so they open no socket; the CLI cases run the script as a child
+// process against the same fake served on loopback, with a synthetic token, nothing of this environment passed on, and
+// a preloaded guard that refuses any request off 127.0.0.1. The workflow reads the real files at run time. Mutation
+// rows G1-G4, and G5-G9 (the author filter, the missing-file refusal, the test-module cut, the enum scan and the
+// printable-name bound), are measured in the commit body of Task 19; G10-G19 (fix round 1: the CLI's exit codes, the
+// first-run state seed, the release flags and paging, the body's length cap, the serde names and the printable-name
+// class and length) in fix round 1's; G20-G24 (fix round 2: the first-run paging stop, `<`, `>` and whitespace each
+// alone, and the CLI's API base) in fix round 2's.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -105,6 +107,8 @@ describe('wireReport over the nine contract files', () => {
       .replace('const RESPONSES_ENDPOINT: &str = "/responses";',
         'const RESPONSES_ENDPOINT: &str = "/responses";\nconst DOCS_URL: &str = "https://example.invalid/`x`";\nconst HELP_URL: &str = "ask @someone";'
         + '\nconst TEAM_URL: &str = "@team-a";\nconst MARKUP_URL: &str = "<b>x</b>";'
+        // One literal per excluded character, so each exclusion is pinned alone: `<`, `>` and whitespace.
+        + '\nconst OPEN_URL: &str = "<team-a";\nconst CLOSE_URL: &str = "team-a>";\nconst SPACED_URL: &str = "team a";'
         + `\nconst LONG_PATH: &str = "/${'a'.repeat(200)}";`);
     expect(wireReport(BASE, after).findings).toEqual([]);
   });
@@ -362,6 +366,17 @@ describe('the walk', () => {
     expect(gh.patched()).toEqual([`7=${tag(163)}`]);
   });
 
+  it('with no state yet, a first page holding one stable tag pages on to the second for the newest pair', async () => {
+    const alphas = (minor: number, n: number): Release[] =>
+      Array.from({ length: n }, (_, k) => ({ tag: `rust-v0.${minor}.0-alpha.${n - k}`, prerelease: true }));
+    const tags: Release[] = [tag(163), ...alphas(163, 130), tag(162), tag(161), tag(160), ...alphas(160, 16)];
+    const gh = fakeGitHub({ tags, files: { [tag(162)]: BASE, [tag(163)]: BASE }, issues: [] });
+    expect(await runWatch(gh.io)).toBe(0);
+    expect(gh.walkedPairs()).toEqual([`${tag(162)}..${tag(163)}`]);
+    expect(gh.posted()).toEqual([STATE_TITLE]);
+    expect(gh.issues.find((i) => i.title === STATE_TITLE)?.body).toBe(tag(163));
+  });
+
   it('a pair whose issue already exists is walked and not opened twice', async () => {
     const gh = fakeGitHub({
       tags: [tag(161), tag(160)], files: { [tag(160)]: BASE, [tag(161)]: overlay('instructions-moved') },
@@ -401,9 +416,14 @@ describe('the walk', () => {
   });
 });
 
+/** Preloaded into the child: its global `fetch` refuses any URL off 127.0.0.1, so a regression in how the CLI picks
+ *  its API base fails the case instead of sending the synthetic token to a live endpoint. */
+const LOOPBACK_ONLY = 'data:text/javascript,const f=globalThis.fetch;globalThis.fetch=(u,i)=>{const s=String(u instanceof Request?u.url:u);'
+  + 'return new URL(s).hostname==="127.0.0.1"?f(u,i):Promise.reject(new Error("off loopback: "+s))};';
+
 /** Serve one fake on loopback and run the CLI against it as a child process, with a synthetic token and no other
- *  environment than PATH: its exit status. */
-async function runCli(build: (api: string) => ReturnType<typeof fakeGitHub>, env: Record<string, string> = { GITHUB_TOKEN: 'synthetic-token' }): Promise<number | null> {
+ *  environment than PATH: its exit status, and the fake, whose `calls` show the walk reached it. */
+async function runCli(build: (api: string) => ReturnType<typeof fakeGitHub>, env: Record<string, string> = { GITHUB_TOKEN: 'synthetic-token' }): Promise<{ code: number | null, gh: ReturnType<typeof fakeGitHub> }> {
   let gh: ReturnType<typeof fakeGitHub> | undefined;
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -424,10 +444,11 @@ async function runCli(build: (api: string) => ReturnType<typeof fakeGitHub>, env
   const api = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   gh = build(api);
   try {
-    const child = spawn(process.execPath, [SCRIPT, '--repo', REPO], {
+    const child = spawn(process.execPath, ['--import', LOOPBACK_ONLY, SCRIPT, '--repo', REPO], {
       env: { PATH: process.env.PATH ?? '', GITHUB_API_URL: api, ...env }, stdio: ['ignore', 'ignore', 'ignore'],
     });
-    return await new Promise<number | null>((resolve, reject) => { child.on('error', reject); child.on('close', (code) => resolve(code)); });
+    const code = await new Promise<number | null>((resolve, reject) => { child.on('error', reject); child.on('close', (c) => resolve(c)); });
+    return { code, gh };
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -436,21 +457,23 @@ const SCRIPT = path.join(HERE, '..', '..', '.github', 'ci', 'codex-wire-watch.mj
 
 describe('the CLI', () => {
   it('exits 0 on a walk that compared every pair', async () => {
-    const code = await runCli((api) => fakeGitHub({ api, tags: [tag(161), tag(160)], files: { [tag(160)]: BASE, [tag(161)]: BASE }, issues: [] }));
+    const { code, gh } = await runCli((api) => fakeGitHub({ api, tags: [tag(161), tag(160)], files: { [tag(160)]: BASE, [tag(161)]: BASE }, issues: [] }));
     expect(code).toBe(0);
+    expect(gh.calls.length).toBeGreaterThan(0);
   }, 30_000);
 
   it('exits non-zero on a pair that could not be compared', async () => {
-    const code = await runCli((api) => fakeGitHub({
+    const { code, gh } = await runCli((api) => fakeGitHub({
       api, tags: [tag(162), tag(161), tag(160)],
       files: { [tag(160)]: BASE, [tag(161)]: BASE, [tag(162)]: 500 },
       issues: [{ number: 7, title: STATE_TITLE, body: tag(160), user: bot }],
     }));
     expect(code).toBe(1);
+    expect(gh.calls.length).toBeGreaterThan(0);
   }, 30_000);
 
   it('exits 2 when it cannot start the walk', async () => {
-    const code = await runCli((api) => fakeGitHub({ api, tags: [], files: {}, issues: [] }), {});
+    const { code } = await runCli((api) => fakeGitHub({ api, tags: [], files: {}, issues: [] }), {});
     expect(code).toBe(2);
   }, 30_000);
 });
