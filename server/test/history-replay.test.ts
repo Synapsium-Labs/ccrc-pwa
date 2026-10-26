@@ -12750,6 +12750,135 @@ w6cDescribe('W2-6 Task 3: combine, the nodes\' reports summed into one arm compa
   });
 });
 
+// ── W2-6 Task 4: README's counters paragraph and spec erratum E25 (W2-D86, W2-D87, W2-D88; decisions section 6) ─────
+// Prose pins over two tracked files, as W2-1's README case in history-cli.test.ts reads its own. Each reads only W2-6's
+// own lines: the README paragraph by its lead, the two spec bullets by their heads, never a neighbour, so W2-5b2's errata
+// and driver paragraph cannot red them (Q29). The counter names come from the gate's COUNTERS_DEF_V1 (W6C_NAMES).
+const W6C_T4_LEAD = '**The W2 counters.**';
+const W6C_T4_SPEC = 'docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md';
+const W6C_T4_CITE = "signed defaults, `counters_def: 'v1'`)";
+/** The paragraph whose first line starts with `lead`, to the next blank line, whitespace collapsed; null when no line
+ *  starts with it. */
+function w6cParagraph(text: string, lead: string): string | null {
+  const lines = text.split('\n');
+  const i = lines.findIndex((l) => l.startsWith(lead));
+  if (i < 0) return null;
+  let j = i;
+  while (j < lines.length && lines[j]!.trim() !== '') j += 1;
+  return lines.slice(i, j).join(' ').replace(/\s+/g, ' ');
+}
+/** How many lines start with `lead`. */
+const w6cLeadCount = (text: string, lead: string): number => text.split('\n').filter((l) => l.startsWith(lead)).length;
+
+w6cDescribe('W2-6 Task 4: README states the report-only counters once, in their own paragraph (W2-D86, W2-D87, W2-D88; U13, V1, V4)', () => {
+  const readme = w6cFs.readFileSync(w6cPath.join(W6C_REPO, 'README.md'), 'utf8');
+
+  w6cIt('CONTROL: the reader takes one paragraph to its blank line, answers null without the lead, and counts line starts only', () => {
+    w6cExpect(w6cParagraph(`a\n\n${W6C_T4_LEAD} one\ntwo\n\n**Next.** three`, W6C_T4_LEAD)).toBe(`${W6C_T4_LEAD} one two`);
+    w6cExpect(w6cParagraph('a\n\n**Other.** one', W6C_T4_LEAD)).toBeNull();
+    w6cExpect(w6cLeadCount(`${W6C_T4_LEAD} a\n\n${W6C_T4_LEAD} b\nx ${W6C_T4_LEAD}`, W6C_T4_LEAD)).toBe(2);
+  });
+
+  w6cIt('the paragraph is opened once', () => {
+    w6cExpect(w6cLeadCount(readme, W6C_T4_LEAD)).toBe(1);
+  });
+
+  w6cIt('it names the entry, the signed definitions and every counter COUNTERS_DEF_V1 freezes, and no flag (U13)', () => {
+    const p = w6cParagraph(readme, W6C_T4_LEAD);
+    w6cExpect(p, 'the paragraph').not.toBeNull();
+    for (const n of W6C_NAMES) w6cExpect(p, n).toContain(`\`${n}\``);
+    for (const s of ['`deploy/history-counters.mjs`', '`COUNTERS_DEF_V1`', '`counters_def`', '`openReader`', '`verify --section ab`']) w6cExpect(p, s).toContain(s);
+    for (const f of ['--record', '--measure', '--verify-ab', '--store', '--out', '--node-report', '--allow-code-change']) {
+      w6cExpect(p, `${f}: the module's usage text is the one spelling of its argv`).not.toContain(f);
+    }
+  });
+
+  w6cIt('it states the report-only rules: never the gate, never the counters table, unmeasured never 0, a gap never repaired, both drops with every dropped state (V1), the verify re-run (V4), its own sha', () => {
+    const p = w6cParagraph(readme, W6C_T4_LEAD) ?? '';
+    for (const s of [
+      'never feed the gate',
+      'never reads the node-wide `counters` table',
+      '`unmeasured`, never 0',
+      'is reported, never repaired',
+      'reported and never compared',
+      'is anything but `ok`',
+      'dropped from the arm comparison only',
+      'tallied apart by arm and by producer',
+      'has seen the newest recall-off write',
+      're-runs `verify --section ab` on each node before counting',
+      'names its own sha256',
+      'after the window ends',
+      'sums the nodes\' reports',
+    ]) w6cExpect(p, s).toContain(s);
+    for (const st of (w6cDrv.AB_STATES as string[]).slice(1)) w6cExpect(p, `the dropped state ${st} (V1)`).toContain(`\`${st}\``);
+  });
+});
+
+w6cDescribe('W2-6 Task 4: spec erratum E25, amended in place in the live A/B list (W2-D86, W2-D87; D-6561, D-6562; U11, U14, V1)', () => {
+  const lines = w6cFs.readFileSync(w6cPath.join(W6C_REPO, W6C_T4_SPEC), 'utf8').split('\n');
+  const A_HEAD = `- re-discovery (W2-6, D-6561; ${W6C_T4_CITE}: per window, `;
+  const B_HEAD = `- compliance, echo hits, lag, \`card_served\` and \`card_id_mismatch\` (W2-6, D-6562; ${W6C_T4_CITE}, `;
+  const OLD = [
+    '- re-discovery: the same file re-read within 10 assistant turns of a compaction (*chosen*);',
+    '- compliance, echo hits, lag, `card_served`, `card_id_mismatch`;',
+  ];
+  const at = (head: string): number[] => lines.flatMap((l, i) => (l.startsWith(head) ? [i] : []));
+
+  w6cIt('the two rev 3.6 bullets are gone', () => {
+    for (const o of OLD) w6cExpect(lines.filter((l) => l === o).length, o).toBe(0);
+  });
+
+  w6cIt('each new bullet is one line, there once, the two adjacent, inside "The live A/B" before "What the analysis counts"', () => {
+    const a = at(A_HEAD);
+    const b = at(B_HEAD);
+    w6cExpect(a.length, 'the re-discovery line').toBe(1);
+    w6cExpect(b.length, 'the five counters line').toBe(1);
+    w6cExpect(b[0], 'the five counters follow re-discovery').toBe(a[0]! + 1);
+    const ab = lines.findIndex((l) => l.startsWith('**The live A/B.**'));
+    const counts = lines.findIndex((l) => l.startsWith('- **What the analysis counts**'));
+    w6cExpect(ab, 'the live A/B paragraph').toBeGreaterThan(-1);
+    w6cExpect(a[0]!).toBeGreaterThan(ab);
+    w6cExpect(b[0]!).toBeLessThan(counts);
+  });
+
+  w6cIt('re-discovery states its unit: turns 1 to 10, a Read against the five tools, notebook_path, both sides made absolute, by arm and producer, Bash not counted (D-6561, U11)', () => {
+    const l = lines[at(A_HEAD)[0] ?? -1] ?? '';
+    for (const s of [
+      "the window's turns 1 to 10",
+      "made absolute against the epoch's cwd",
+      'a Read, Edit, MultiEdit, Write or NotebookEdit `tool_use`',
+      "in leaf N's span, also made absolute",
+      "`NotebookEdit`'s `notebook_path`",
+      'an indicator and a distinct-path count',
+      'by arm and by producer',
+      'is not counted',
+    ]) w6cExpect(l, s).toContain(s);
+  });
+
+  w6cIt('the five counters name their sources, per window by arm and producer, both drops with every dropped state, and none of them feeds the gate (D-6562, V1)', () => {
+    const l = lines[at(B_HEAD)[0] ?? -1] ?? '';
+    for (const s of [
+      'each per window of a listed family, by arm and by producer',
+      'none read from the node-wide `counters` table',
+      '`nodes.status` (`PARSE_STATUS`)',
+      '`recall-echo` rows',
+      'beside the window\'s `recall_calls` count',
+      'never repaired',
+      '`unmeasured` when there is none',
+      '`decideCardDelivery`',
+      '`CARD_MEASURE_ROWS`',
+      'never compared',
+      '`verify --section ab`',
+      'is anything but `ok`',
+      'dropped from the arm comparison only',
+      'tallied apart by arm and by producer',
+      '`deploy/history-counters.mjs`',
+      'none of them feeds the gate',
+    ]) w6cExpect(l, s).toContain(s);
+    for (const st of (w6cDrv.AB_STATES as string[]).slice(1)) w6cExpect(l, `the dropped state ${st} (V1)`).toContain(`\`${st}\``);
+  });
+});
+
 // ── end of W2-6's region (Q29): later W2-6 tasks insert their describes directly above this line ──────────────────────
 
 // ── W2-5b1 Task 1: w5b1-prefixed bindings, so none collides with a binding above. Pure cases read the driver in

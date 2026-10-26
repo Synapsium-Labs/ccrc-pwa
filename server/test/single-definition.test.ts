@@ -9302,3 +9302,43 @@ describe('codex bridge Stage 2 Task 10: the bridge file names and the lane mode 
     expect(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8')).toMatch(/^_codex_lane_mode\(\)\s+\{/m);
   });
 });
+
+// W2-6 Task 4 (W2-D86, U12): turnsOf, the gate's turn rule, is declared once, in the gate, and only the gate and the
+// report-only counter name it, the counter calling it on one code line (its windowCtx), so the driver builds no turns and
+// no third turn rule exists. APPENDED after the file's last describe, for the reason the CCRC HISTORY block above states
+// (session-hook.test.ts's citation audit cites this file by line); no import line is added. ALL_MJS, stallCode,
+// stallCodeText and rel are that block's. KNOWN WIDTH: a code line that names turnsOf after a trailing comment marker
+// still counts, and a name assembled from pieces is not seen.
+describe('ccrc history W2-6 Task 4: turnsOf is declared in the gate alone, and the gate and the counter are its only callers (W2-D86, U12)', () => {
+  const DECLARES = /^\s*(?:export\s+)?(?:function\s+turnsOf\s*\(|(?:const|let|var)\s+turnsOf\s*=)/;
+  const NAMES_IT = /\bturnsOf\b/;
+  const CALLS_IT = /\bturnsOf\s*\(/;
+  const lines = (f: string): string[] => stallCode(f).split('\n');
+  const definers = (): string[] => ALL_MJS.filter((f) => lines(f).some((l) => DECLARES.test(l))).map(rel).sort();
+  const namers = (): string[] => ALL_MJS.filter((f) => lines(f).some((l) => NAMES_IT.test(l) && !DECLARES.test(l))).map(rel).sort();
+  const COUNTER = path.join(ccrcRoot, 'deploy', 'history-counters.mjs');
+
+  it('CONTROL: the patterns see a declaration, a call, an import and a member read, and never a comment or a longer name', () => {
+    expect(DECLARES.test('export function turnsOf(rows) {')).toBe(true);
+    expect(DECLARES.test('const turnsOf = (rows) => rows;')).toBe(true);
+    expect(DECLARES.test('  const turns = turnsOf(copy.rows);')).toBe(false);
+    for (const l of ['  const turns = turnsOf(copy.rows);', "import { K, turnsOf } from './history-gate.mjs';", 'const t = g.turnsOf;']) expect(NAMES_IT.test(l), l).toBe(true);
+    expect(NAMES_IT.test('const n = turnsOfCopy(c);')).toBe(false);
+    expect(CALLS_IT.test('  const turns = turnsOf (copy.rows);')).toBe(true);
+    expect(CALLS_IT.test("import { turnsOf } from './history-gate.mjs';")).toBe(false);
+    expect(stallCodeText("// W2-6 imports turnsOf for its frame.\n *  deploy/history-gate.mjs's turnsOf imports it")).not.toMatch(NAMES_IT);
+    expect(ALL_MJS.map(rel)).toEqual(expect.arrayContaining(['deploy/history-gate.mjs', 'deploy/history-replay.mjs', 'deploy/history-counters.mjs']));
+  });
+
+  it('the gate is the one .mjs under ccd/, deploy/ and shared/ that declares turnsOf', () => {
+    expect(definers()).toEqual(['deploy/history-gate.mjs']);
+  });
+
+  it('the gate and the counter are the only files that name turnsOf on a code line: the driver builds no turns of its own', () => {
+    expect(namers()).toEqual(['deploy/history-counters.mjs', 'deploy/history-gate.mjs']);
+  });
+
+  it('the counter calls turnsOf on exactly one code line, so its turns are the gate\'s, never a grouping of its own', () => {
+    expect(lines(COUNTER).filter((l) => CALLS_IT.test(l))).toHaveLength(1);
+  });
+});
