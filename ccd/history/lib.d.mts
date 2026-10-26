@@ -375,6 +375,7 @@ export function lagOfTick(i: { tickStartMs: number; newEntries: number; minNewTs
 export const SIDECAR_WHOLE_MAX: 67108864;
 export const SIDECAR_MAX_BYTES: 134217728;
 export function linkSidecar(name: string, candidates: ReadonlyArray<{ entryId: number; text: string; toolUseIds: readonly string[] }>): number | null;
+export function sidecarNameMatcher(names: Iterable<string>): { namesIn(text: string): string[]; states: number };
 export function secretKindOf(source: object | null, path: string): 'sessions' | 'env-identifier' | 'env' | 'token' | 'json';
 export function ftsPhrase(value: string): string;
 /** D-5748: the op marker, `<verb> <pid> <start_ms> <proc_start> <boot_id>`; a legacy three-field marker has procStart and bootId null. */

@@ -47,7 +47,7 @@ import {
   heavyVersionsBetween, passOutcome, planFileRead, planMigration, planRun, storeVersionDamaged, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
   SQLITE_CODES, decideDrainFailure, blobOverDecodeCap, CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
-  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
+  toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, sidecarNameMatcher, ftsTextOf,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
   FTS_STEP, INDEXED_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, entryIndexText, HEALTH_COUNTERS, RETENTION_STATE_META,
   makeProbeIndex, parseRederiveState, formatRederiveState, rederivePlan, phraseValues,
@@ -5330,7 +5330,7 @@ function sideStmts(db) {
       WHERE t.cc_session_uuid = ?
         AND f.source_key = '' AND f.status = 'live' AND (f.size IS NULL OR f.size > f.offset)`),
     toolResults: db.prepare(`SELECT e.entry_id AS entry_id, b.z AS z, b.raw_len AS raw_len FROM entries e JOIN blobs b ON b.blob_id = e.blob_id
-      WHERE e.transcript_pk = ? AND e.type = 'user' AND b.z IS NOT NULL ORDER BY e.entry_id`),
+      WHERE e.transcript_pk = ? AND e.entry_id > ? AND e.type = 'user' AND b.z IS NOT NULL ORDER BY e.entry_id`),
   };
   SIDE_STMTS.set(db, q);
   return q;
@@ -5384,15 +5384,28 @@ export function discoverSidecars(homes, uuids) {
  *  and its `toolUseIds` only the asked `toolu_` stems it answers. Each asked name is tested against the
  *  row's full text on its own, so linkSidecar's two rules (a text that names the file, else the tool_use
  *  the name is the id of) pick the same entry as over the full text. A row answering none of the asked
- *  names is not a candidate. */
-export function toolResultCandidates(db, transcriptPk, names) {
+ *  names is not a candidate. CP-39 (D-6930): every name is asked of a row's text in one pass of one automaton
+ *  (`sidecarNameMatcher`), not one `includes` per name. `walk`, when given (`{budget, after, advanced, complete}`),
+ *  makes the call a budgeted, resumable walk over the rows after `walk.after`: see the checks in the body. Without
+ *  it the call is the unbudgeted pass over every row. */
+export function toolResultCandidates(db, transcriptPk, names, walk = null) {
+  const asked = [...names];
   const stems = new Set();
-  for (const n of names) {
+  for (const n of asked) {
     const stem = n.replace(/\.[^.]*$/, '');
     if (stem.startsWith('toolu_')) stems.add(stem);
   }
+  // CP-39 (D-6930): one pass of one automaton over each row's text, never one includes per asked name.
+  const matcher = sidecarNameMatcher(asked);
   const out = [];
-  for (const r of sideStmts(db).toolResults.iterate(transcriptPk)) {
+  for (const r of sideStmts(db).toolResults.iterate(transcriptPk, walk === null ? 0 : walk.after)) {
+    if (walk !== null) {
+      if (!budgetLeft(walk.budget)) { walk.complete = false; return out; }
+      // D-6930: the cursor moves past every row the walk takes, decoded or passed over, and its compressed bytes are charged.
+      walk.after = r.entry_id;
+      walk.advanced += 1;
+      walk.budget.bytes += r.z.length;
+    }
     // D-4346: ENTRY_UPSERT promotes a collided entry's type to 'user' but keeps its first blob_id, so this entry's current blob can be a
     // raw-only line-too-long blob of unbounded raw_len; it is never decompressed whole, and names no sidecar.
     if (blobOverDecodeCap(r.raw_len)) continue;
@@ -5401,11 +5414,11 @@ export function toolResultCandidates(db, transcriptPk, names) {
     const ids = toolResultIdsOf(body);
     if (ids.length === 0) continue;
     const text = ftsTextOf(body, 'entry');
-    const named = [];
-    for (const n of names) if (text.includes(n)) named.push(n);
+    const named = matcher.namesIn(text);
     const answered = ids.filter((id) => stems.has(id));
     if (named.length > 0 || answered.length > 0) out.push({ entryId: r.entry_id, text: named.join('\0'), toolUseIds: answered });
   }
+  if (walk !== null) walk.complete = true;
   return out;
 }
 

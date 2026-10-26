@@ -3566,6 +3566,73 @@ export function linkSidecar(name, candidates) {
   return null;
 }
 
+/** CP-39 (D-6930): every asked name a text holds, in ONE pass over the text however many names are asked (the walk asked
+ *  `text.includes(name)` once per wanted name, rows x names, and one transcript of 24,450 user rows and about 6,270 unlinked
+ *  sidecars cost about 4 minutes of CPU per pass). Aho-Corasick over UTF-16 units, so the answer is exactly includes'
+ *  answer: the names n with text.includes(n), in the order first given, each once. namesIn costs O(text + hits): its
+ *  stamp array is the matcher's, made once, never one sized to the names per call (P20). A directory entry is never empty. */
+export function sidecarNameMatcher(names) {
+  const list = [...new Set(names)].filter((n) => typeof n === 'string' && n.length > 0);
+  const next = new Map();           // state * 65536 + unit -> state
+  const unit = [0];                 // the unit that enters each state
+  const kid = [-1];                 // each state's first child; `sib` links the rest, for the breadth-first pass
+  const sib = [-1];
+  const fail = [0];
+  const term = [-1];                // the name index ending exactly here, or -1
+  const dict = [-1];                // the nearest proper suffix state that ends a name, or -1
+  list.forEach((n, i) => {
+    let s = 0;
+    for (let k = 0; k < n.length; k += 1) {
+      const key = s * 65536 + n.charCodeAt(k);
+      let t = next.get(key);
+      if (t === undefined) {
+        t = fail.length;
+        next.set(key, t);
+        sib.push(kid[s]); kid[s] = t; kid.push(-1);
+        unit.push(n.charCodeAt(k)); fail.push(0); term.push(-1); dict.push(-1);
+      }
+      s = t;
+    }
+    term[s] = i;
+  });
+  const step = (s0, u) => {
+    for (let s = s0; ; s = fail[s]) {
+      const t = next.get(s * 65536 + u);
+      if (t !== undefined) return t;
+      if (s === 0) return 0;
+    }
+  };
+  const queue = [];
+  for (let t = kid[0]; t !== -1; t = sib[t]) queue.push(t);
+  for (let qi = 0; qi < queue.length; qi += 1) {
+    const s = queue[qi];
+    for (let t = kid[s]; t !== -1; t = sib[t]) {
+      const f = step(fail[s], unit[t]);
+      fail[t] = f;
+      dict[t] = term[f] >= 0 ? f : dict[f];
+      queue.push(t);
+    }
+  }
+  const seen = new Uint32Array(list.length);
+  let stamp = 0;
+  const namesIn = (text) => {
+    if (stamp === 0xffffffff) { seen.fill(0); stamp = 0; }
+    stamp += 1;
+    const hits = [];
+    let s = 0;
+    for (let k = 0; k < text.length; k += 1) {
+      s = step(s, text.charCodeAt(k));
+      for (let o = term[s] >= 0 ? s : dict[s]; o !== -1; o = dict[o]) {
+        const i = term[o];
+        if (seen[i] !== stamp) { seen[i] = stamp; hits.push(i); }
+      }
+    }
+    hits.sort((a, b) => a - b);
+    return hits.map((i) => list[i]);
+  };
+  return { namesIn, states: fail.length };
+}
+
 /** How one secret-bearing file is read (§8.3 layer 1):
  *  - `sessions`: sessions.json's idHash records, loaded as (43, sha256) pairs and never as values;
  *  - `env-identifier`: a file the frozen list reads for its identifier-pattern keys only

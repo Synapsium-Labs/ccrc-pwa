@@ -4497,3 +4497,182 @@ describe('W5h-2 Task 2: a store stamped BELT_VERSION 1 re-derives under the wide
     } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
   }, 120_000);
 });
+
+// ── CP-39: the kit Tasks 1-4 share: the fixture rows, and counters that observe the work from outside the code under test ──
+interface Cp39Walk { budget: IxBudget; after: number; advanced: number; complete: boolean }
+const CP39 = (() => {
+  const ROWS = 30;
+  /** One plain user row, then ROWS tool_result rows; row k's text names tool-results/out<k>.txt and answers toolu_cp39<k>. */
+  const rows = (): string => {
+    const out: IxRow[] = [IX.user(IX.uuidN(1), null, 'go', 1)];
+    for (let k = 1; k <= ROWS; k += 1) {
+      const id = `toolu_cp39${String(k).padStart(3, '0')}`;
+      out.push(IX.assistant(IX.uuidN(100 + k), IX.uuidN(k === 1 ? 1 : 200 + k - 1), [{ type: 'tool_use', id, name: 'Bash', input: { command: 'make' } }], 2 * k));
+      out.push(IX.user(IX.uuidN(200 + k), IX.uuidN(100 + k), [{ type: 'tool_result', tool_use_id: id, content: `saved to: /home/u/x/tool-results/out${k}.txt` }], 2 * k + 1));
+    }
+    return IX.jsonl(out);
+  };
+  const names = (n = 40): string[] => Array.from({ length: n }, (_, i) => `out${i + 1}.txt`);
+  const sideDir = (home: string, uuid = IX.U): string => {
+    const d = path.join(home, 'projects', IX.SLUG, uuid, 'tool-results');
+    fs.mkdirSync(d, { recursive: true });
+    return d;
+  };
+  const pkOf = (db: DatabaseSync, uuid = IX.U): number =>
+    (db.prepare('SELECT transcript_pk AS pk FROM transcripts WHERE cc_session_uuid = ?').get(uuid) as { pk: number }).pk;
+  const userIds = (db: DatabaseSync, pk: number): number[] =>
+    (db.prepare("SELECT entry_id FROM entries WHERE transcript_pk = ? AND type = 'user' ORDER BY entry_id").all(pk) as { entry_id: number }[]).map((r) => r.entry_id);
+  const walkOf = (budget: IxBudget, after = 0): Cp39Walk => ({ budget, after, advanced: 0, complete: false });
+  /** Successful row decodes, counted outside the walk: a decode that throws (an undecodable blob) is not counted. */
+  const countDecodes = async (): Promise<{ n: () => number; restore: () => void }> => {
+    const zlib = (await import('node:zlib')).default;
+    const real = zlib.brotliDecompressSync;
+    let n = 0;
+    (zlib as { brotliDecompressSync: unknown }).brotliDecompressSync = function brotliDecompressSync(...a: unknown[]): unknown {
+      const out = (real as (...x: unknown[]) => unknown)(...a);
+      n += 1;
+      return out;
+    };
+    syncBuiltinESMExports();
+    return { n: () => n, restore: () => { (zlib as { brotliDecompressSync: unknown }).brotliDecompressSync = real; syncBuiltinESMExports(); } };
+  };
+  /** String.prototype.includes calls whose search string is one of `asked`, for the call only. */
+  const countIncludes = (asked: readonly string[]): { n: () => number; restore: () => void } => {
+    const real = String.prototype.includes;
+    const want = new Set(asked);
+    let n = 0;
+    String.prototype.includes = function includes(this: string, s: string, at?: number): boolean {
+      if (want.has(s)) n += 1;
+      return real.call(this, s, at);
+    };
+    return { n: () => n, restore: () => { String.prototype.includes = real; } };
+  };
+  /** readSync calls on a descriptor whose file lies under `dir`: a sidecar's bytes being read. */
+  const countReads = (dir: string): { n: () => number; restore: () => void } => {
+    const real = fs.readSync;
+    const under = `${fs.realpathSync(dir)}/`;
+    let n = 0;
+    (fs as { readSync: unknown }).readSync = function readSync(fd: number, ...rest: unknown[]): number {
+      if (fs.readlinkSync(`/proc/self/fd/${fd}`).startsWith(under)) n += 1;
+      return (real as (...a: unknown[]) => number)(fd, ...rest);
+    };
+    syncBuiltinESMExports();
+    return { n: () => n, restore: () => { (fs as { readSync: unknown }).readSync = real; syncBuiltinESMExports(); } };
+  };
+  /** The persisted walk state of `pk`, parsed here (never by the code under test), or null. */
+  const walkState = (db: DatabaseSync, pk: number): { v: number; done: { names: string[] }; walk: { names: string[]; after: number } | null } | null => {
+    const v = (db.prepare('SELECT v FROM meta WHERE k = ?').get(`sidecar_walk:${pk}`) as { v: string } | undefined)?.v;
+    return v === undefined ? null : JSON.parse(v);
+  };
+  const sidecarRows = (db: DatabaseSync): { name: string; uuid: string | null }[] =>
+    (db.prepare(`SELECT s.name AS name, e.uuid AS uuid FROM sidecars s LEFT JOIN entries e ON e.entry_id = s.entry_id
+      ORDER BY s.name, s.blob_id`).all() as { name: string; uuid: string | null }[]).map((r) => ({ name: r.name, uuid: r.uuid }));
+  /** What every out<k>.txt of `ks` links to, in sidecarRows' order (SQLite's BINARY order is the default sort's here). */
+  const linked = (ks: number[]): { name: string; uuid: string }[] =>
+    ks.map((k) => ({ k, name: `out${k}.txt` })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+      .map(({ k, name }) => ({ name, uuid: IX.uuidN(200 + k) }));
+  const upTo = (n: number): number[] => Array.from({ length: n }, (_, i) => i + 1);
+  return { ROWS, rows, names, sideDir, pkOf, userIds, walkOf, countDecodes, countIncludes, countReads, walkState, sidecarRows, linked, upTo };
+})();
+
+describe('CP-39 Task 1: the link walk decodes each row once and asks every name at once (D-6930)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  interface Cand { entryId: number; text: string; toolUseIds: string[] }
+  interface T1 { toolResultCandidates(db: DatabaseSync, pk: number, names: Iterable<string>, walk?: Cp39Walk): Cand[] }
+  const names = CP39.names();
+  /** A store holding CP39's rows, ingested; answers the store, the transcript's pk and its user rows' ids. */
+  const ingested = async (prefix: string): Promise<{ S: IxSweep & T1; db: DatabaseSync; pk: number; ids: number[] }> => {
+    const { sweep } = await IX.api();
+    const S = sweep as unknown as IxSweep & T1;
+    const box = IX.newBox(prefix);
+    IX.plantCopy(box.homes[0]!, IX.U, CP39.rows());
+    const { db, ids } = await IX.openFixtureStore(box);
+    await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());
+    const pk = CP39.pkOf(db);
+    return { S, db, pk, ids: CP39.userIds(db, pk) };
+  };
+
+  it('rows x names: each user row is decoded once and no asked name is tested by includes, however many names are asked', async () => {
+    const { S, db, pk, ids } = await ingested('ccrc-hist-cp39-t1a-');
+    try {
+      const walk = CP39.walkOf(S.newBudget());
+      const dec = await CP39.countDecodes();
+      const inc = CP39.countIncludes(names);
+      let got: Cand[];
+      try { got = S.toolResultCandidates(db, pk, names, walk); } finally { inc.restore(); dec.restore(); }
+      expect(dec.n(), 'CONTROL: the decode counter sees the walk, once per user row').toBe(CP39.ROWS + 1);
+      expect(inc.n(), 'no asked name was tested by String.prototype.includes').toBe(0);
+      expect(walk.complete, 'the walk reached the last row').toBe(true);
+      expect(walk.advanced, 'the cursor moved past every user row').toBe(CP39.ROWS + 1);
+      expect(walk.after, 'the cursor names the last user row').toBe(ids.at(-1));
+      expect(got, 'CONTROL: the walk answers what the walk-less call answers').toEqual(S.toolResultCandidates(db, pk, names));
+      expect(got.map((c) => c.text)).toEqual(CP39.upTo(CP39.ROWS).map((k) => `out${k}.txt`));
+    } finally { db.close(); }
+  });
+
+  it('a budget spent inside the walk stops it at a row boundary, and a walk resumed from its cursor decodes only the rest', async () => {
+    const { S, db, pk, ids } = await ingested('ccrc-hist-cp39-t1b-');
+    const dec = await CP39.countDecodes();
+    try {
+      // Within the budget until the tenth row decode; spent from then on, whatever else reads the clock.
+      const cut = CP39.walkOf(S.newBudget(() => (dec.n() >= 10 ? 10_000 : 0), { maxMs: 1_000 }));
+      const first = S.toolResultCandidates(db, pk, names, cut);
+      expect(cut.complete, 'the budget ended the walk').toBe(false);
+      expect(dec.n(), 'ten rows decoded before the check that failed').toBe(10);
+      expect(cut.advanced).toBe(10);
+      expect(cut.after, 'the cursor is the tenth user row').toBe(ids[9]);
+      const before = dec.n();
+      const rest = CP39.walkOf(S.newBudget(), cut.after);
+      const second = S.toolResultCandidates(db, pk, names, rest);
+      expect(rest.complete).toBe(true);
+      expect(dec.n() - before, 'the resumed walk decodes only the rows left').toBe(CP39.ROWS + 1 - 10);
+      expect([...first, ...second], 'CONTROL: the two halves are the uncut walk').toEqual(S.toolResultCandidates(db, pk, names));
+    } finally { dec.restore(); db.close(); }
+  });
+
+  it('a budget spent before the first row takes nothing: the cursor stands, nothing is decoded, the walk is incomplete', async () => {
+    const { S, db, pk } = await ingested('ccrc-hist-cp39-t1c-');
+    const dec = await CP39.countDecodes();
+    try {
+      const walk = CP39.walkOf(S.newBudget(() => 0, { maxMs: 0 }));
+      expect(S.toolResultCandidates(db, pk, names, walk)).toEqual([]);
+      expect(dec.n(), 'nothing decoded').toBe(0);
+      expect(walk, 'the cursor stands').toMatchObject({ after: 0, advanced: 0, complete: false });
+    } finally { dec.restore(); db.close(); }
+  });
+
+  it('an over-cap row and an undecodable row: the cursor moves past both, neither is decoded, and the walk answers the rest', async () => {
+    const { S, db, pk, ids } = await ingested('ccrc-hist-cp39-t1d-');
+    const { lib } = await IX.api();
+    const blobOf = (entryId: number): number => (db.prepare('SELECT blob_id AS b FROM entries WHERE entry_id = ?').get(entryId) as { b: number }).b;
+    // As the D-4346 cases plant them: ids[3] answers out3.txt, ids[4] answers out4.txt.
+    db.prepare('UPDATE blobs SET raw_len = ? WHERE blob_id = ?').run(lib.BLOB_DECODE_MAX + 1, blobOf(ids[3]!));   // over the cap: never decoded
+    db.prepare('UPDATE blobs SET raw_len = 1 WHERE blob_id = ?').run(blobOf(ids[4]!));                          // undecodable: its decode throws
+    const dec = await CP39.countDecodes();
+    try {
+      const walk = CP39.walkOf(S.newBudget());
+      const got = S.toolResultCandidates(db, pk, names, walk);
+      expect(walk.complete).toBe(true);
+      expect(walk.advanced, 'the cursor moved past every row, the two passed over included').toBe(CP39.ROWS + 1);
+      expect(walk.after).toBe(ids.at(-1));
+      expect(dec.n(), 'neither passed-over row was decoded').toBe(CP39.ROWS + 1 - 2);
+      expect(got.map((c) => c.text), 'the two passed-over rows name nothing').toEqual(CP39.upTo(CP39.ROWS).filter((k) => k !== 3 && k !== 4).map((k) => `out${k}.txt`));
+    } finally { dec.restore(); db.close(); }
+  });
+
+  it('complete only when the rows ran out: a budget spent right after the last row still completes; one spent before it does not', async () => {
+    const { S, db, pk, ids } = await ingested('ccrc-hist-cp39-t1e-');
+    const dec = await CP39.countDecodes();
+    try {
+      const all = CP39.ROWS + 1;
+      const atEnd = CP39.walkOf(S.newBudget(() => (dec.n() >= all ? 10_000 : 0), { maxMs: 1_000 }));
+      S.toolResultCandidates(db, pk, names, atEnd);
+      expect(atEnd.complete, 'the iterator ended: no check after the last row').toBe(true);
+      const base = dec.n();
+      const short = CP39.walkOf(S.newBudget(() => (dec.n() - base >= all - 1 ? 10_000 : 0), { maxMs: 1_000 }));
+      S.toolResultCandidates(db, pk, names, short);
+      expect(short.complete, 'a check that failed before the last row').toBe(false);
+      expect(short.after).toBe(ids.at(-2));
+    } finally { dec.restore(); db.close(); }
+  });
+});

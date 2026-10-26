@@ -11838,3 +11838,39 @@ describe('W2-2b review fix (D-6445): decideScope\'s workspace arm keeps the env 
     }), 'env: the project refusal stays').toEqual(refused);
   });
 });
+
+describe('CP-39 Task 1: sidecarNameMatcher answers every asked name a text holds, in one pass (D-6930)', () => {
+  it('answers exactly what String.prototype.includes answers, in the order asked, each once', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const astral = String.fromCharCode(0xd83d, 0xde00);
+    const names = ['data.txt', 'a.txt', 'toolu_01EEE.json', 'zz-orphan.txt', 'ata.t', 'b7k2q9z1x.txt', 'aaa', 'aa', `${astral}x`];
+    const texts = [
+      'saved to: /home/u/x/tool-results/data.txt',
+      'Output too large. Full output saved to: /home/u/x/tool-results/b7k2q9z1x.txt and aaaa',
+      'names toolu_01EEE.json twice toolu_01EEE.json',
+      '', 'no name here', 'a.tx', `${astral}a.txt ${astral}x`, `${String.fromCharCode(0xd83d)}x`,
+    ];
+    const m = lib.sidecarNameMatcher(names);
+    for (const t of texts) expect(m.namesIn(t), JSON.stringify(t)).toEqual(names.filter((n) => t.includes(n)));
+  });
+  it('agrees with includes over 400 generated texts and 60 generated, overlapping names', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    let x = 0x39;
+    const rnd = (k: number): number => { x = (x * 1103515245 + 12345) % 2147483648; return x % k; };
+    const word = (len: number): string => Array.from({ length: len }, () => 'ab.t'[rnd(4)]).join('');
+    const names = Array.from({ length: 60 }, () => word(1 + rnd(5)));
+    const m = lib.sidecarNameMatcher(names);
+    const asked = [...new Set(names)];
+    for (let i = 0; i < 400; i += 1) {
+      const t = word(rnd(80));
+      expect(m.namesIn(t), t).toEqual(asked.filter((n) => t.includes(n)));
+    }
+  });
+  it('holds at most one state per name unit plus the root, and a duplicate name is answered once', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const names = ['out1.txt', 'out10.txt', 'out1.txt', 'toolu_01A.json'];
+    const m = lib.sidecarNameMatcher(names);
+    expect(m.states).toBeLessThanOrEqual(1 + [...new Set(names)].reduce((n, s) => n + s.length, 0));
+    expect(m.namesIn('…/tool-results/out10.txt and …/out1.txt')).toEqual(['out1.txt', 'out10.txt']);
+  });
+});
