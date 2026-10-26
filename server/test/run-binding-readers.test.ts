@@ -129,6 +129,23 @@ describe('the readers take the worker\'s incarnation (ARCH-62)', () => {
     const after = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: w1 } as never, [], BORN + 5000);
     expect(after).toEqual({ kind: 'not-a-child' });
   });
+
+  it('heldFor fails closed, as on the merge base, when an ownerless open run naming the child stores a wave this build cannot represent', async () => {
+    // The count comes from the series the parent was read from, which checks only the run id; the store's own reader
+    // still runs and checks `wave` and `waveOf` (#1573 round 6, P8: without it the answer was released / run-unclaimed).
+    const s = store();
+    const m = open(s, 'prog-m', 'coord-a');
+    s.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(BORN - 100, m);
+    s.db.prepare('UPDATE runs SET dispatchStartedAt = ? WHERE id = ?').run(BORN, m);
+    s.setSession(m, 'demo-w', BORN);
+    finish(s, m);
+    const l = open(s, 'prog-l', 'coord-b');
+    s.db.prepare('UPDATE runs SET openedAt = ?, claimedBy = NULL WHERE id = ?').run(BORN + 1000, l);
+    s.setSession(l, 'demo-w');
+    s.db.prepare("UPDATE runs SET wave = '1.5' WHERE id = ?").run(l);
+    await expect(heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: m } as never, [], BORN + 5000))
+      .rejects.toThrow(/^heldFor: .*wave/);
+  });
 });
 
 describe('the folded readers, asked through bindingReads (ARCH-62 slice 2)', () => {
