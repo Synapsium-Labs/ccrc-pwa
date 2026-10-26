@@ -2,15 +2,19 @@
 // the licence (two unchanged tokens at least an hour apart), pacing, the arming markers, the pause, the feed and the
 // health counts. Every case drives the real lane (`OrphanTreeSweep`, the L3 executor and the L1 folds) over a fake ccd and
 // a fake registry listing; nothing here runs a verb on a box.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { collectOrphanTree } from '../src/coord/collectOrphanTree.js';
 import { OrphanTreeSweep, type OrphanSweepDeps } from '../src/orphanTreeSweep.js';
-import { ORPHAN_LICENCE_MS, ORPHAN_CENSUS_MS, orphanInsideVerdict, orphanLicence, orphanCoordinatorSet, parseOrphanAudit, parseOrphanCensus } from '../src/orphanTreeLane.js';
+import {
+  ORPHAN_LICENCE_MS, ORPHAN_CENSUS_MS, ORPHAN_CENSUS_PRESSURE_MS, ORPHAN_RETRY_MS, orphanCensusRetryMono, orphanInsideVerdict, orphanLicence,
+  orphanCoordinatorSet, orphanTruncatedRow, orphanTruncatedWaitMs, parseOrphanAudit, parseOrphanCensus,
+} from '../src/orphanTreeLane.js';
 import { readDiskHealth } from '../../shared/disk.js';
 import { ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, RECLAIM_PAUSE_MARKER } from '../../shared/switches.js';
 import type { CcdResult } from '../src/lifecycle.js';
 
 const HOUR = ORPHAN_LICENCE_MS;
+const MIN = 60_000;
 const hexOf = (p: string): string => Buffer.from(p).toString('hex');
 const tok = (c: string): string => c.repeat(64);
 
@@ -27,6 +31,8 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
   const feed: Array<{ title: string; body: string }> = [];
   let mono = 1_000_000;
   let truncated = false;
+  let garbled = false;
+  let censusTakesMs = 0;
   const coordinators = new Set<string>();
   let coordsReadable = true;
   // Registry rows by id: true = workspace (the default), false = plain session / main checkout, null = unreadable, 'throw' = the read throws.
@@ -39,6 +45,8 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
       const a = [...argv];
       calls.push(a);
       if (a[0] === 'ws-audit' && a[1] === '--orphans') {
+        mono += censusTakesMs;
+        if (garbled) return ok('not a census');
         return ok(JSON.stringify({ mode: 'orphans', truncated, rows: [...trees].map(([hex, t]) => ({ pathHex: hex, class: t.cls, ...(t.inside === undefined ? {} : { inside: t.inside }) })) }));
       }
       if (a[0] === 'ws-audit' && a[1] === '--orphan-hex') {
@@ -68,10 +76,14 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
     add: (p: string, cls: string, audit: Record<string, unknown>): string => { const h = hexOf(p); trees.set(h, { cls, audit }); return h; },
     advance: (ms: number): void => { mono += ms; },
     truncate: (v: boolean): void => { truncated = v; },
+    garbled: (v: boolean): void => { garbled = v; },
+    censusTakes: (ms: number): void => { censusTakesMs = ms; },
     coordinators, wsKinds, unreadable: (v: boolean): void => { coordsReadable = !v; },
     addInside: (p: string, cls: string, audit: Record<string, unknown>, inside: string): string => { const h = hexOf(p); trees.set(h, { cls, audit, inside }); return h; },
   };
 }
+
+const censuses = (r: ReturnType<typeof rig>): number => r.calls.filter((c) => c[1] === '--orphans').length;
 
 describe('L1: the readers and the licence', () => {
   it('one observation never licenses; the same token an hour later does; a different token restarts', () => {
@@ -91,6 +103,13 @@ describe('L1: the readers and the licence', () => {
     expect(parseOrphanAudit(doc, '2f61').kind).toBe('token');
     expect(parseOrphanAudit(doc, '2f62').kind).toBe('unreadable');
     expect(parseOrphanAudit(JSON.stringify({ mode: 'orphan', pathHex: '2f61', verdict: 'token', token: 'short' }), '2f61').kind).toBe('unreadable');
+  });
+
+  it('the back-off doubles from ORPHAN_RETRY_MS and stops at the pass cadence; the retry instant is the wait after now', () => {
+    expect([1, 2, 3, 4, 5, 6, 7, 40].map((s) => orphanTruncatedWaitMs(s, ORPHAN_CENSUS_MS) / MIN)).toEqual([15, 30, 60, 120, 240, 360, 360, 360]);
+    expect([1, 2, 3, 4].map((s) => orphanTruncatedWaitMs(s, ORPHAN_CENSUS_PRESSURE_MS) / MIN)).toEqual([15, 30, 60, 60]);
+    expect(orphanCensusRetryMono(10 * HOUR, ORPHAN_CENSUS_MS, ORPHAN_RETRY_MS)).toBe(10 * HOUR - ORPHAN_CENSUS_MS + ORPHAN_RETRY_MS);
+    expect(orphanCensusRetryMono(10 * HOUR, HOUR, 30 * MIN)).toBe(9 * HOUR + 30 * MIN);
   });
 });
 
@@ -231,6 +250,81 @@ describe('gates', () => {
     expect(r.calls.filter((c) => c[1] === '--orphan-hex')).toEqual([]);
   });
 
+  // #1565 (D-6987): a truncated census is asked again on a back-off, not after the full cadence.
+  it('a truncated census is asked again on a back-off: 15, 30, 60, 120 and 240 min, then 6 h', async () => {
+    const r = rig();
+    r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+    r.truncate(true);
+    await r.sweep.pass();
+    expect(censuses(r)).toBe(1);
+    let n = 1;
+    for (const wait of [15, 30, 60, 120, 240, 360, 360]) {
+      r.advance(wait * MIN - 1); await r.sweep.pass();
+      expect(censuses(r), `before ${wait} min`).toBe(n);
+      r.advance(1); await r.sweep.pass(); n += 1;
+      expect(censuses(r), `at ${wait} min`).toBe(n);
+    }
+  });
+
+  it('a whole census resets the back-off', async () => {
+    const r = rig();
+    r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+    r.truncate(true);
+    await r.sweep.pass(); r.advance(15 * MIN); await r.sweep.pass(); r.advance(30 * MIN); await r.sweep.pass();
+    r.truncate(false); r.advance(60 * MIN); await r.sweep.pass();
+    expect(censuses(r)).toBe(4);
+    r.truncate(true); r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(censuses(r)).toBe(5);
+    r.advance(ORPHAN_RETRY_MS - 1); await r.sweep.pass();
+    expect(censuses(r), 'the streak started over').toBe(5);
+    r.advance(1); await r.sweep.pass();
+    expect(censuses(r)).toBe(6);
+  });
+
+  // D-6989: an unreadable census keeps its flat retry.
+  it('an unreadable census is asked again after ORPHAN_RETRY_MS, and not before', async () => {
+    const r = rig();
+    r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+    r.garbled(true);
+    await r.sweep.pass();
+    expect(censuses(r)).toBe(1);
+    for (let i = 2; i <= 4; i += 1) {
+      r.advance(ORPHAN_RETRY_MS - 1); await r.sweep.pass();
+      expect(censuses(r), `before retry ${i}`).toBe(i - 1);
+      r.advance(1); await r.sweep.pass();
+      expect(censuses(r), `at retry ${i}`).toBe(i);
+    }
+    expect(r.feed).toEqual([]);
+  });
+
+  it('an unreadable census between truncated ones neither resets nor extends the back-off', async () => {
+    const r = rig();
+    r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+    r.truncate(true);
+    await r.sweep.pass(); r.advance(15 * MIN); await r.sweep.pass();
+    r.garbled(true); r.advance(30 * MIN); await r.sweep.pass(); r.garbled(false);
+    r.advance(ORPHAN_RETRY_MS); await r.sweep.pass();
+    expect(censuses(r)).toBe(4);
+    r.advance(60 * MIN - 1); await r.sweep.pass();
+    expect(censuses(r), 'the third truncated census in a row waits 60 min').toBe(4);
+    r.advance(1); await r.sweep.pass();
+    expect(censuses(r)).toBe(5);
+  });
+
+  it('a truncated census keeps the memory it learned before, and audits nothing that pass', async () => {
+    const r = rig();
+    r.add('/p/.claude/worktrees/a', 'claude', refused('dirty'));
+    await r.sweep.pass();
+    const before = r.sweep.health();
+    const audits = r.calls.filter((c) => c[1] === '--orphan-hex').length;
+    r.add('/p/.claude/worktrees/b', 'claude', clean('b'));
+    r.truncate(true); r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(r.sweep.health()).toEqual(before);
+    expect(r.calls.filter((c) => c[1] === '--orphan-hex'), 'a due tree in memory is not audited either').toHaveLength(audits);
+    r.truncate(false); r.advance(ORPHAN_RETRY_MS); await r.sweep.pass();
+    expect(r.feed.filter((f) => f.title === 'orphan worktree left')).toHaveLength(1);
+  });
+
   it('the classes ccd reports and the lane never audits stay unaudited', async () => {
     const r = rig();
     r.add('/elsewhere/tree', 'other', clean('a'));
@@ -269,6 +363,36 @@ describe('the feed and the health block', () => {
     expect(readDiskHealth({ disk: block })!.orphanTrees).toEqual(h);
     expect(readDiskHealth({ disk: { ...block, orphanTrees: { byClass: {}, byOutcome: {} } } })!.orphanTrees, 'malformed drops alone').toBeUndefined();
     expect(readDiskHealth({ disk: { ...block, orphanTrees: undefined } })!.orphanTrees).toBeUndefined();
+  });
+
+  // #1565 (D-6988): one row and one log line per truncated census, naming the rows seen, the time taken and the wait.
+  it('each truncated census writes one feed row and one log line with the rows it saw, the time it took and the wait', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const said = (): number => warn.mock.calls.filter((c) => String(c[0]).startsWith('ccrc-server: orphan census truncated')).length;
+    try {
+      const r = rig();
+      r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+      r.add('/p/.claude/worktrees/b', 'claude', clean('b'));
+      r.truncate(true); r.censusTakes(59_700);
+      await r.sweep.pass(); await r.sweep.pass();
+      expect(r.feed, 'a pass with no census due writes nothing').toEqual([orphanTruncatedRow(2, 59_700, ORPHAN_RETRY_MS)]);
+      expect(r.feed[0]!.title).toBe('orphan census truncated');
+      expect(r.feed[0]!.body).toContain('after 2 rows in 59.7 s');
+      expect(r.feed[0]!.body).toContain('asked again in 15 min');
+      expect(said()).toBe(1);
+      r.advance(ORPHAN_RETRY_MS); await r.sweep.pass();
+      expect(r.feed).toHaveLength(2);
+      expect(r.feed[1]!.body).toContain('asked again in 30 min');
+      expect(said()).toBe(2);
+    } finally { warn.mockRestore(); }
+  });
+
+  it('a truncated census leaves health unknown before the first whole census', async () => {
+    const r = rig();
+    r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+    r.truncate(true);
+    await r.sweep.pass();
+    expect(r.sweep.health()).toBeNull();
   });
 });
 
