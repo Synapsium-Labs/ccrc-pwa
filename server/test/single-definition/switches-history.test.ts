@@ -667,10 +667,12 @@ describe('ccrc history: no .mjs writes a switch through its symbolic spelling (s
 
 // W2-6 Task 4 (W2-D86, U12): turnsOf, the gate's turn rule, is declared once, in the gate, and only the gate and the
 // report-only counter name it, the counter calling it on one code line (its windowCtx), so the driver builds no turns and
-// no third turn rule exists. APPENDED after the file's last describe, for the reason the CCRC HISTORY block above states
-// (session-hook.test.ts's citation audit cites this file by line); no import line is added. ALL_MJS, stallCode,
-// stallCodeText and rel are that block's. KNOWN WIDTH: a code line that names turnsOf after a trailing comment marker
-// still counts, and a name assembled from pieces is not seen.
+// no third turn rule exists under that name. Placed after this file's last describe, in the history area file, as D-6928's
+// rule puts a history guard. The CCRC HISTORY block that defines ALL_MJS is helpers.ts's, not this file's; stallCode,
+// stallCodeText and rel are defined above that block there, and stallCodeText was added to the existing ./helpers.js import
+// line (no import line is added). KNOWN WIDTH: the pin matches the name turnsOf only, so a turn rule re-spelled under
+// another name is out of its reach; a code line that names turnsOf after a trailing comment marker still counts; and a
+// name assembled from pieces is not seen.
 describe('ccrc history W2-6 Task 4: turnsOf is declared in the gate alone, and the gate and the counter are its only callers (W2-D86, U12)', () => {
   const DECLARES = /^\s*(?:export\s+)?(?:function\s+turnsOf\s*\(|(?:const|let|var)\s+turnsOf\s*=)/;
   const NAMES_IT = /\bturnsOf\b/;
