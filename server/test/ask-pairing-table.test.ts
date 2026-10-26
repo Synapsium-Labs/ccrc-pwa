@@ -1,4 +1,4 @@
-// W3's ask-pairing table (D-TBD-question-census; Task Q3a, ARCH-58 (#793)'s first commit; plan
+// W3's ask-pairing table (slug question-census; Task Q3a, ARCH-58 (#793)'s first commit; plan
 // 2026-10-26-consolidation-w3-questions.md). Today the envelope-to-dialog pairing (which of the hook envelope's questions
 // the pane is painting) is computed only in the PWA, by `pwa/src/session/askLive.ts`. Q3g ports it to the server
 // (`pane/askPairing.ts`) and holds the port equal to this table; W7 then deletes the PWA's copy. So the table is TODAY'S
@@ -55,7 +55,7 @@ const dialogOf = (row: Row): Dialog | null => {
 };
 const label = (r: Row): string => `${r.pane ?? '(no pane)'} x ${r.envelope}${r.why === undefined ? '' : ` (${r.why})`}`;
 
-describe('the ask-pairing table: askLive.ts over the corpus (D-TBD-question-census)', () => {
+describe('the ask-pairing table: askLive.ts over the corpus (slug question-census)', () => {
   it('the corpus is whole: every row names an envelope and a recorded pane, and the synthetic rows are present', () => {
     expect(CORPUS.rows.length).toBeGreaterThan(0);
     for (const r of CORPUS.rows) {

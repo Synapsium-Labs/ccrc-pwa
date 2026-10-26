@@ -698,7 +698,7 @@ export const ONCE_WARN_ALLOWED: ReadonlyArray<{ readonly file: string; readonly 
   { file: 'server/src/tmpSweepLane.ts', reason: 'once-ever, not a change latch, D-6991' },
 ];
 
-// ── W3: operator questions (D-TBD-question-census; Task Q3a; ARCH-56 (#791), ARCH-57 (#792), ARCH-58 (#793)) ─────────
+// ── W3: operator questions (slug question-census; Task Q3a; ARCH-56 (#791), ARCH-57 (#792), ARCH-58 (#793)) ─────────
 // W3's counted exits (plan docs/superpowers/plans/2026-10-26-consolidation-w3-questions.md). Every query is read from
 // the syntax tree (`scan/symbols.ts`, over `scan/parse.ts`), and every one REPORTS: nothing below is ratcheted here.
 // Each may-only-shrink pin lands in the commit that reaches its wave target (spec §5.1 rule 3), in Q3c to Q3f.
@@ -745,7 +745,7 @@ export function questionHoldCarriers(root: string = REPO): QuestionCarrierSite[]
   return out;
 }
 
-/** The pane-edge maps: what the pane showed, per session. Not question state (D-TBD-question-census): reported, never
+/** The pane-edge maps: what the pane showed, per session. Not question state (slug question-census): reported, never
  *  ratcheted. */
 export const QUESTION_PANE_EDGE_NAMES: readonly string[] = ['dialogIds', 'actionlessAsks', 'settlingAsks'];
 
@@ -894,7 +894,7 @@ export function questionDoorIns(root: string = REPO): DoorInSite[] {
   });
 }
 
-/** The `CoordStore` question methods, a CLOSED list (D-TBD-question-census): every public `CoordStore` method whose
+/** The `CoordStore` question methods, a CLOSED list (slug question-census): every public `CoordStore` method whose
  *  name says ask, approval or question is on it, or on `NOT_QUESTION_STORE_METHODS`, and the census test reds on a
  *  method on neither (`coordStoreQuestionShapedMethods`). 32. */
 export const QUESTION_STORE_METHODS: readonly string[] = [
@@ -927,7 +927,7 @@ export function coordStoreQuestionShapedMethods(root: string = REPO): string[] {
 }
 
 /** The one question-store call W3 leaves where it is, by name: the hook's poll is on the signing path, which no W3 diff
- *  touches (D-TBD-question-census). */
+ *  touches (slug question-census). */
 export const QUESTION_STORE_EXCLUDED: ReadonlyArray<{ readonly file: string; readonly symbol: string; readonly method: string }> = [
   { file: 'server/src/coord/routes.ts', symbol: 'GET /api/approvals/:id/ruling', method: 'approvalById' },
 ];

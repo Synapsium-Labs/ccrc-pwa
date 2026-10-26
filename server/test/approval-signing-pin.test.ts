@@ -1,4 +1,4 @@
-// W3's approval signing pin (D-TBD-question-census; Task Q3a; plan 2026-10-26-consolidation-w3-questions.md, §What W3
+// W3's approval signing pin (slug question-census; Task Q3a; plan 2026-10-26-consolidation-w3-questions.md, §What W3
 // must not change; spec 2026-10-19 §5.6's W3 gate: "A pin holds `approval-verify.mjs`'s SHA and a signed-ruling
 // fixture"). No W3 task edits `ccd/approval-verify.mjs` or `server/src/coord/approvalsign.ts`, and the signed ruling's
 // bytes do not change: this file holds both. A later change to the verifier (coordinator-first round 2) updates this pin

@@ -1,4 +1,4 @@
-// W3's question-door characterization pin (D-TBD-question-census; Task Q3a, ARCH-57 (#792)'s first commit; plan
+// W3's question-door characterization pin (slug question-census; Task Q3a, ARCH-57 (#792)'s first commit; plan
 // 2026-10-26-consolidation-w3-questions.md, §What W3 must not change). Every old answer door keeps its status code
 // and body bytes for every refusal and every success, its side effects (row state, watcher door-in, feed row, mail,
 // keys pressed) and its auth posture. Q3e moves `POST /api/approvals`'s ladder and Q3f turns the eight answer doors
@@ -1281,7 +1281,7 @@ const EXPECTED: Record<string, Outcome> = {
     {"status": 200, "body": "sha256:c3e9784426c5dc343d0be146f5483ee8d96e47668fad89f2943ff1f28ebcecf5", "effects": {"keys": []}},
 };
 
-describe('question-doors pin: every old door\'s refusals and successes (D-TBD-question-census)', () => {
+describe('question-doors pin: every old door\'s refusals and successes (slug question-census)', () => {
   it('every row has an expectation, and every expectation a row', () => {
     expect(Object.keys(EXPECTED).sort()).toEqual(ALL_ROWS.map(([n]) => n).sort());
     expect(new Set(ALL_ROWS.map(([n]) => n)).size, 'row names are unique').toBe(ALL_ROWS.length);

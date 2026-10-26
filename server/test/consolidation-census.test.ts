@@ -606,11 +606,11 @@ describe('onceWarnDefinitions: `warn…Once` helpers defined outside changeLatch
   });
 });
 
-// W3, operator questions (D-TBD-question-census; Task Q3a; plan 2026-10-26-consolidation-w3-questions.md). Every query
+// W3, operator questions (slug question-census; Task Q3a; plan 2026-10-26-consolidation-w3-questions.md). Every query
 // REPORTS: the base counts below are what the PR body prints, and each may-only-shrink pin lands later, in the commit
 // that reaches its wave target (Q3c to Q3f). The REAL rows hold what is true at every step of the series (every door
 // tagged, every counted store call owned, the closed method list against the class), never a count.
-describe('W3 question census (D-TBD-question-census)', () => {
+describe('W3 question census (slug question-census)', () => {
   const tree = (files: Record<string, string>): string => {
     const t = mkdtempSync(path.join(tmpdir(), 'w3-census-'));
     for (const [rel, body] of Object.entries(files)) {

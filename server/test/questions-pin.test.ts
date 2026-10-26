@@ -1,4 +1,4 @@
-// W3's question lifecycle pin (D-TBD-question-census; Task Q3a, ARCH-56 (#791)'s first commit; plan
+// W3's question lifecycle pin (slug question-census; Task Q3a, ARCH-56 (#791)'s first commit; plan
 // 2026-10-26-consolidation-w3-questions.md, §What W3 must not change and Review focus 1 and 2). Both lanes, the ask and
 // the approval, through a fixture `FleetWatcher` and its public surface only: `tick`, the two sweep halves `tick`
 // dispatches (`sweepAsks`, `sweepApprovals`, public so a test can await them) and the four door-ins the routes call.
@@ -554,7 +554,7 @@ const ALL_ROWS: Row[] = [...ASK_ROWS, ...APPROVAL_ROWS, ...RETENTION_ROWS];
  *  re-recorded to make a change pass: a changed trace is a behaviour change, and its PR says so in a commit of its own. */
 const EXPECTED = JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'questions-pin', 'expected.json'), 'utf8')) as Record<string, unknown[]>;
 
-describe('the question lifecycle pin (D-TBD-question-census)', () => {
+describe('the question lifecycle pin (slug question-census)', () => {
   it('every row has an expectation, and every expectation a row', () => {
     expect(Object.keys(EXPECTED).sort()).toEqual(ALL_ROWS.map(([n]) => n).sort());
     expect(new Set(ALL_ROWS.map(([n]) => n)).size, 'row names are unique').toBe(ALL_ROWS.length);
