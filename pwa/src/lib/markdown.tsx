@@ -87,8 +87,9 @@ export function openExternal(e: React.MouseEvent, href: string | undefined): voi
 }
 
 /** highlight.js's `xml` grammar (registered as `xml`, with `html` and `svg` and every alias xml declares: xhtml, rss, atom, xjb, xsd, xsl, plist and wsf) with the `subLanguage` removed from the two modes
- *  that carry one that costs: the `<script>` mode (`["javascript","handlebars","xml"]`) and the `<style>` mode
- *  (`["css","xml"]`), the `starts` of the two tag modes. Those are the only modes of the stock definition with a
+ *  that carry one that costs: the `<script>` mode (`'javascript'`; `["javascript","handlebars","xml"]` through 11.11) and
+ *  the `<style>` mode (`'css'`; `["css","xml"]` through 11.11), the `starts` of the two tag modes. highlight.js 11.12
+ *  narrowed both from a list to a single name, so the walk below matches either shape. Those are the only modes of the stock definition with a
  *  `subLanguage`; each keeps its `end` and `returnEnd`, so the contents run to the closing tag as ONE plain run.
  *  Why (review 450 F1): the grammar is quadratic on those regions whatever they embed (`<script>` repeated one per line, no
  *  closer: 1, 2, 4 and 8 KiB cost 66, 308, 1 729 and 7 918 ms; `<style>{` per line, 8 KiB 2.4 s with no javascript
@@ -121,9 +122,8 @@ const xmlWithoutSubLanguages: LanguageFn = (h) => {
     if (seen.has(mode)) continue;
     seen.add(mode);
     const m = mode as { subLanguage?: unknown; contains?: unknown; variants?: unknown; starts?: unknown };
-    if (Array.isArray(m.subLanguage) && (m.subLanguage.includes('javascript') || m.subLanguage.includes('css'))) {
-      delete m.subLanguage;
-    }
+    const subs = typeof m.subLanguage === 'string' ? [m.subLanguage] : Array.isArray(m.subLanguage) ? m.subLanguage : [];
+    if (subs.includes('javascript') || subs.includes('css')) delete m.subLanguage;
     for (const list of [m.contains, m.variants]) {
       if (Array.isArray(list)) for (const child of list) if (typeof child === 'object' && child !== null) stack.push(child);
     }
