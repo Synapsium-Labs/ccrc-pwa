@@ -23,7 +23,7 @@
 //   | the `<$0.01` arm deleted                     | cost reads as US dollars…                   |
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import ts from 'typescript-api';
 import { describe, expect, it } from 'vitest';
 import type { FleetSession, SessionUsage } from '../../shared/api';
 import {

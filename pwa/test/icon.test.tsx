@@ -31,7 +31,7 @@ import { render } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import ts from 'typescript';
+import ts from 'typescript-api';
 import { Icon, MAIL_GLYPH, SETTINGS_GLYPH, WARN_GLYPH } from '@ccrc/ui';
 import { ICONS, LUCIDE_VERSION } from '../../ui/src/icons/lucide';
 

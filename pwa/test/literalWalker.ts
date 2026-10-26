@@ -2,7 +2,7 @@
 // are written twice) and `plain-words.test.ts` (which words an operator reads). A helper module, not a test file, so
 // importing it registers no tests in the importer.
 import { readFileSync } from 'node:fs';
-import ts from 'typescript';
+import ts from 'typescript-api';
 
 /** An import/export specifier, or a `import()` argument — the three positions
  *  where a string names a MODULE rather than saying something. Excluded by

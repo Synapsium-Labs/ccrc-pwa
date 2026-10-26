@@ -2,7 +2,7 @@
 // invariants. `command-layer.test.tsx` drives the palette and the keys.
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import ts from 'typescript-api';
 import { describe, expect, it } from 'vitest';
 import {
   available, COMMAND_FIELD_WORDS, rankCommands, SEARCH_EMPTY, SEARCH_MIN, type Command, type CommandContext,

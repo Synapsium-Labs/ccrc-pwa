@@ -22,7 +22,7 @@
 // The five direct dependencies the closure rests on are pinned exactly, in `package.json` and in the lock's root.
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import ts from 'typescript-api';
 import { describe, expect, it } from 'vitest';
 
 const PWA = path.join(import.meta.dirname, '..');
