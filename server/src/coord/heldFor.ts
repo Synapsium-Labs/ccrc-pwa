@@ -41,7 +41,7 @@ export type HeldFor =
 function openBindingCount(
   coord: ReclaimDeps['coord'], childId: string, incarnation: Incarnation, series: ReturnType<typeof childParentRead>['series'],
 ): number {
-  const sib = coord.openRunsForSession(childId, undefined, incarnation);
+  const sib = coord.bindingsOf(childId).worker({ incarnation });
   if (!sib.ok) throw new Error(`heldFor: ${sib.detail}`);
   return series.ok ? boundRunsOf(series.runs, incarnation, 'open').length : sib.siblings.length;
 }
