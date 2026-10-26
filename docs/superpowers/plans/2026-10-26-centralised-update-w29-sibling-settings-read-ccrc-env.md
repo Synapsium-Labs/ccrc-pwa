@@ -642,6 +642,8 @@ The coordinator read the readings, the critique and the task list, and rules as 
 
 Issued to this wave: D-6979 to D-6986. Each is defined below as the decision it names is made; an unused one is recorded as spare.
 
+- **D-6979 — the settings reader the sweeps source is a generated copy of ccrc's, never a move and never a second hand-kept reader** (Task 1, Reading 1). `deploy/gen-settings-lib.mjs` slices the `BOX_ENV_FILE=` line, the `CCRC_SETTINGS=` line and the eight functions of `_ccrc_knob`'s closure whole out of `ccd/ccrc` into `ccd/lib/ccrc-settings.sh`; `ccd/ccrc` keeps its reader where it is and never sources the file. `server/test/ccrc-settings-lib.test.ts` holds the committed file byte-equal to the generator's output (W29-L1), the slice closed over what it calls (W29-L2), the file inert when sourced (W29-L3) and the two readers' answers equal over fifteen fixture files (W29-L4).
+
 ## As built
 
 **The coordinator's rulings, applied (second commit).** The first commit is the plan as the coordinator wrote it, byte for byte. The second applied the rulings section above:
