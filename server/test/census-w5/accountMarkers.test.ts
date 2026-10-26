@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
-import { ccdFunctionDefinitions, CCD_FUNCTION_DEF, REPO } from '../consolidationCensus.js';
+import { ccdFunctionDefinitions, CCD_FUNCTION_DEF, ccdLauncherIn } from '../consolidationCensus.js';
 import {
   accountMarkerWriters, bashBodies, disabledProjectionWriters, shippedBashPrograms, type AccountMarkerWriter,
 } from './accountMarkers.js';
@@ -37,7 +37,7 @@ describe('W5 account-marker census (D-7048)', () => {
   const region = (body: string): string =>
     `# ── BEGIN GENERATED ACCOUNT HELPERS (fixture) ──\n# ccrc:generated 1 sha256=${'0'.repeat(64)}\n${body}\n# ── END GENERATED ACCOUNT HELPERS ──\n`;
   const generatedTree = (wb: string): string => tree({
-    'ccd/ccd': `${SH}${W_A}\n${W_B}\n_reader() { [[ -f "$REG/$1-authdead" ]]; }\n`,
+    'ccd/ccd': `${SH}${W_A}\n${W_B}\nreader_fx() { [[ -f "$REG/$1-authdead" ]]; }\n`,
     'ccd/sibling': `${SH}${region(`${W_A}\n${wb}`)}main() {\n  w_a "$1"\n}\n`,
   });
 
@@ -153,13 +153,13 @@ describe('W5 account-marker census (D-7048)', () => {
       'shared/read.ts': "const off = existsSync(join(reg, `${id}-disabled`));\n",
     });
     try {
-      expect(disabledProjectionWriters(t).map((s) => s.name)).toEqual(['deploy/converge.sh#converge', 'deploy/gen.mjs:1', 'shared/project.py:1']);
+      expect(disabledProjectionWriters(t).map((s) => s.name)).toEqual(['deploy/converge.sh#converge', 'deploy/gen.mjs#L1', 'shared/project.py#L1']);
     } finally { rmSync(t, { recursive: true, force: true }); }
   });
 
   it('REAL: the body splitter finds every ccd/ccd function ccdFunctionDefinitions finds, in order', () => {
     const want = ccdFunctionDefinitions().map((d) => CCD_FUNCTION_DEF.exec(d.text)![1]!);
-    const got = bashBodies(readFileSync(path.join(REPO, 'ccd', 'ccd'), 'utf8')).filter((b) => b.fn).map((b) => b.name);
+    const got = bashBodies(readFileSync(ccdLauncherIn(), 'utf8')).filter((b) => b.fn).map((b) => b.name);
     expect(got).toEqual(want);
   });
 

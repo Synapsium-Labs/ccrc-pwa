@@ -14,7 +14,7 @@
 // is never read as a write; a `$(…)` inside double quotes is code.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { bashCodeOf, codeOf, esc, REPO, type CensusSite } from '../consolidationCensus.js';
+import { bashCodeOf, ccdLauncherIn, codeOf, esc, REPO, type CensusSite } from '../consolidationCensus.js';
 
 /** The two per-lane account markers ARCH-72 gives one write primitive each (spec K16). */
 export type AccountMarker = 'authdead' | 'disabled';
@@ -203,7 +203,7 @@ function firstWrite(body: BashBody, suffix: RegExp): { line: number; raw: string
 
 /** `ccd/ccd`'s function texts by name under `root` (the generated regions' source), first definition wins. */
 function ccdFunctionTexts(root: string): Map<string, string> {
-  const ccdPath = path.join(root, 'ccd', 'ccd');
+  const ccdPath = ccdLauncherIn(root);
   const out = new Map<string, string>();
   if (existsSync(ccdPath)) for (const b of bashBodies(readFileSync(ccdPath, 'utf8'))) if (b.fn && !out.has(b.name)) out.set(b.name, b.text);
   return out;
@@ -260,7 +260,7 @@ function projectionFiles(root: string): string[] {
 /** "No roster projection", statically (spec K16; D-7048): every writer of a `<lane>-disabled` path under `deploy/`,
  *  `shared/` or `ccd/` that is NOT one of the bodies `accountMarkerWriters('disabled')` names. A bash body (an
  *  extensionless shebang'd program or a `.sh`, by the census's own rule), a `.mjs`/`.ts`/`.js`/`.cjs` line whose `fs`
- *  write call names the suffix, or a `.py` line whose file write names it. 0 at base, and pinned there: the switch's
+ *  write call names the suffix, or a `.py` line whose file write names it (a line site is named `<file>#L<n>`). 0 at base, and pinned there: the switch's
  *  writer set is already at its target, so no generator, converge or verb derives it from the roster's kind fields. */
 export function disabledProjectionWriters(root: string = REPO): AccountMarkerWriter[] {
   const suffix = markerSuffixRe('disabled');
@@ -281,7 +281,7 @@ export function disabledProjectionWriters(root: string = REPO): AccountMarkerWri
     if (!js && !py) continue;
     src.split('\n').forEach((text, i) => {
       const code = js ? codeOf(text) : bashCodeOf(text);
-      if (suffix.test(code) && (js ? JS_FS_WRITE : PY_FS_WRITE).test(code)) out.push({ name: `${file}:${i + 1}`, file, line: i + 1, text });
+      if (suffix.test(code) && (js ? JS_FS_WRITE : PY_FS_WRITE).test(code)) out.push({ name: `${file}#L${i + 1}`, file, line: i + 1, text });
     });
   }
   return out;

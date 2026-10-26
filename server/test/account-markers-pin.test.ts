@@ -243,7 +243,7 @@ describe('auth-dead, the expiry (`_authdead_expired`): pinned by `ccd-authdead.t
   ];
   it('every cited row still stands in ccd-authdead.test.ts under its title', () => {
     const src = fs.readFileSync(path.join(REPO, 'server', 'test', 'ccd-authdead.test.ts'), 'utf8');
-    for (const t of CITED) expect(src, t).toContain(`it('${t.replace(/'/g, "\\'")}'`);
+    for (const t of CITED) expect(src, t).toContain(`it('${t.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`);
   });
 });
 
