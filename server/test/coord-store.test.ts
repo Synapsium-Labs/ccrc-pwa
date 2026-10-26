@@ -1733,9 +1733,10 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
     expect(s.readDelegationProjection()).toEqual(projectionViewOfDelegationCheckpoint(cp));
   });
 
-  it('adds exactly six delegation methods: no health reader, no intent writer, and the compare-and-swap delta projection as the one per-row updater', () => {
+  it('adds exactly seven delegation methods: no health reader, no intent writer, the compare-and-swap delta projection as the one per-row updater, and wave 4\'s one run read', () => {
+    // wave 4 (PR1 Task 1.3): `delegationRunStamps` reads RUNS (the frame's R9 stamps), never a delegation table
     expect(Object.getOwnPropertyNames(CoordStore.prototype).filter((n) => /delegation/i.test(n)).sort())
-      .toEqual(['delegationEventStats', 'insertDelegationEvent', 'insertDelegationEvents', 'projectDelegationCheckpoint', 'projectDelegationCheckpointChanges', 'readDelegationProjection']);
+      .toEqual(['delegationEventStats', 'delegationRunStamps', 'insertDelegationEvent', 'insertDelegationEvents', 'projectDelegationCheckpoint', 'projectDelegationCheckpointChanges', 'readDelegationProjection']);
   });
 });
 
