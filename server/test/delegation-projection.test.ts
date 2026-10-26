@@ -236,6 +236,15 @@ describe('projectDelegation: programme ownership, the inferred marker and unowne
     expect(out.unowned, 'the session project-a-other owns /real/project-a/other').toEqual([]);
   });
 
+  it('W4-P18 (D-7006): a path that names no ccd id is owned by nobody: an Agent-tool lease keeps its row beside a listed workspace', () => {
+    const out = projectDelegation(input({
+      leases: [lease({ leaseId: 'l1', adminRecord: 'agent-x', canonicalPath: '/root/project-a/.claude/worktrees/agent-x' })],
+      census: census({ [PROJECT]: [record('agent-x', { canonicalPath: '/root/project-a/.claude/worktrees/agent-x' })] }),
+      sessions: [alive('p'), alive('project-a-slug')],
+    }));
+    expect(out.leases.map((l) => [l.leaseId, l.parentId, l.workspace])).toEqual([['l1', 'p', 'present']]);
+  });
+
   it('W4-P10 (D-6999): every raw lease carries inferred; an agent lease does not', () => {
     const out = projectDelegation(input({
       activities: [activity({ activityId: 'a-bash', sourceKind: 'bash-worktree', upstreamId: 'toolu_wt1', executionState: 'ended' })],
