@@ -92,6 +92,7 @@ import { redactedStored } from './redact.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import { approvalNudgeSubject } from './rundefs.js';
 import { heldFor } from './heldFor.js';
+import { openFor } from './questions.js';
 import { noticeSink, type NoticeSink } from '../notice.js';
 import {
   APPROVALS_DISABLED_FILE, loadOrCreateApprovalSigner, rulingsAllowedHere, serverApprovalsDisabled, type ApprovalSigner,
@@ -4041,7 +4042,7 @@ export function registerCoordRoutes(
       if (!(await requireAttribution(reply, parent, q.fromUuid, 'fromUuid'))) return;
     }
 
-    const read = coord.asksForParent(parent, state);
+    const read = openFor(coord, parent, state);
     // D-2545, ALL-OR-FAILURE: the parent's entire evidentiary surface is this
     // list, so a partial one is worse than none — it looks complete.
     if (!read.ok) {
