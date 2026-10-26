@@ -3567,10 +3567,17 @@ export function lagOfTick({ tickStartMs, newEntries, minNewTsMs }) {
   return Math.max(0, tickStartMs - minNewTsMs);
 }
 
-/** The largest sidecar read whole (§9.2 step 4). Of 103,068 sidecars on the reference box the
- *  largest was exactly 67,108,864 bytes (M, review). A larger one is streamed through Brotli
- *  and a streaming sha256 rather than refused, up to SIDECAR_MAX_BYTES (D-4310). */
+/** The largest sidecar measured (§9.2 step 4). Of 103,068 sidecars on the reference box the
+ *  largest was exactly 67,108,864 bytes (M, review). It no longer decides the ingest arm (SIDECAR_READ_WHOLE_MAX
+ *  does, D-6971). It remains expand's one-call decode bound, the oversize decode refusal's sidecar arm and the base
+ *  of SIDECAR_MAX_BYTES; a sidecar past SIDECAR_READ_WHOLE_MAX is streamed through Brotli and a streaming sha256
+ *  rather than refused, up to SIDECAR_MAX_BYTES (D-4310). */
 export const SIDECAR_WHOLE_MAX = 67108864;
+
+/** The largest sidecar the ingest reads whole (8 MiB, *chosen*, D-6971). A larger one, up to SIDECAR_MAX_BYTES, is
+ *  streamed through compressFdRange, so that the sweep never holds a large sidecar whole beside the walk phase's
+ *  heap (O20). */
+export const SIDECAR_READ_WHOLE_MAX = 8388608;
 
 /** The largest sidecar captured at all (D-4310, history-sidecar-size-cap): twice the largest measured
  *  (SIDECAR_WHOLE_MAX). A larger one is decided from its stat, never opened, and counted
