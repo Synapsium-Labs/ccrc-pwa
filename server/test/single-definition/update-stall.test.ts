@@ -227,7 +227,7 @@ describe('the update control plane — one definition per vocabulary and wire ty
   // also scores. Measured zero holders for every vocabulary at d759c914; if
   // such a tuple ever lands legitimately it is a hand-typed SQL list of THAT
   // vocabulary, which its own scan should be refusing.
-  const esc = (w: string): string => w.replace(/[-]/g, '\\-');
+  const esc = (w: string): string => w.replace(/[\\.*+?^${}()|[\]\-]/g, '\\$&');
   const tupleOf = (members: readonly string[]): RegExp => {
     const alt = `(?:${members.map(esc).join('|')})`;
     return new RegExp(`\\(\\s*['"]${alt}['"]\\s*(?:,\\s*['"]${alt}['"]\\s*)+\\)`);
@@ -651,7 +651,7 @@ describe('the dispatcher refusal words and the dispatch order are declared once,
     'unknown-tag', 'not-newer', 'refused-by-node', 'stamp-unread', 'floor-unread', 'no-detach-cap',
     'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet', 'no-bundle',
   ];
-  const alt = `(?:${WORDS.map((w) => w.replace(/-/g, '\\-')).join('|')})`;
+  const alt = `(?:${WORDS.map((w) => w.replace(/[\\.*+?^${}()|[\]\-]/g, '\\$&')).join('|')})`;
   const item = `\\s*['"]${alt}['"]\\s*`;
   const LIST = new RegExp(`\\(${item}(?:,${item})+,?\\s*\\)|\\[${item}(?:,${item})+,?\\s*\\]`);
   const DEF = /^\s*(?:export\s+)?(?:declare\s+)?(?:type\s+DispatchRefusal\b\s*(?:<[^>\n]*>)?\s*=|interface\s+DispatchRefusal\b)/m;
