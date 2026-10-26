@@ -55,10 +55,14 @@ const rid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart
 const row = (n: number, text: string, agoMs: number): Record<string, unknown> =>
   userRow({ uuid: rid(n), ts: new Date(Date.now() - agoMs).toISOString(), text, sessionId: U, cwd: WORK });
 
-/** The one stderr line a pass the run's budget held writes (D-5394): it names BOTH limits of the budget, the time and the bytes, since
- *  either holds a pass, so a hold by the bytes does not read as one by the clock. */
+/** The one stderr line a pass held by its slice of the run's budget writes (D-5394, D-6976): it names BOTH limits of the slice the pass
+ *  ran on, the time and the bytes, since either holds a pass, so a hold by the bytes does not read as one by the clock. */
 const heldLine = (maxMs: number, maxBytes: number): string =>
-  `history-sweep: the export pass was held by the run's budget (${maxMs} ms, ${maxBytes} bytes) before it wrote a due row; it tries again at its next interval\n`;
+  `history-sweep: the export pass was held by its slice of the run's budget (${maxMs} ms, ${maxBytes} bytes) before it wrote a due row; it tries again at its next interval\n`;
+/** An export slice's floor seam (`exportSliceFloor` or `exportCheckSliceFloor`) at zero, so the slice is what the run has left, the budget before CP-39c (D-6976). */
+const ZERO_FLOOR = { maxMs: 0, maxBytes: 0 };
+/** The one typed access to a context's budget: `exportCtx` returns `Record<string, unknown>`, so `c.budget` is `unknown` under strict mode. */
+const budgetOf = (c: Record<string, unknown>) => c['budget'] as { bytes: number; maxMs: number; maxBytes: number; now: () => number; startMs: number };
 
 interface PassResult { state: string; segment: string | null; rows: number; blobs: number; bytes: number; complete: boolean }
 /** The slice of sweep.mjs these tests call. It grows task by task; every member is a real export. */
@@ -70,6 +74,10 @@ interface SweepExport {
   checkSegmentMarks(db: DatabaseSync, ctx: Record<string, unknown>, record: string): { cleared: number; segments: string[]; stopped: string | null };
   makeIngestCtx(home: string, homes: string[], nowMs: number, ids: { storeId: string; writer: string }): Record<string, unknown>;
   ingestSidecars(db: DatabaseSync, ctx: Record<string, unknown>, budget: Record<string, unknown>, uuids: string[]): Promise<{ bytes: number; complete: boolean }>;
+  passCtx(o: Record<string, unknown>): Record<string, unknown> & { budget: { startMs: number; now: () => number } };
+  idsFromFiles(P: unknown): { storeId: string; writer: string } | null;
+  tick(db: unknown, ctx: unknown): Promise<void>;
+  budgetLeft(budget: Record<string, unknown>): boolean;
 }
 let SW: SweepExport;
 beforeAll(async () => { SW = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepExport; });
@@ -2222,11 +2230,12 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
   }, 300_000);
 
   // The export is the tick's last step and shares the run's 90 s / 512 MiB budget with ingest, the FTS backfill, nodes and
-  // cards, so on a node with a backlog it starts on a budget the earlier steps already spent. That pass is held before it
-  // selects anything, and it records its attempt and says so like the two holds above, so the next step waits its interval
-  // instead of re-running the bind-check read, the mkdir, the temp sweep and the statfs every tick, silently (D-5394).
+  // cards, so on a node with a backlog it starts on a budget the earlier steps already spent. Before CP-39c that pass was held before
+  // it selected anything, and it recorded its attempt and said so like the two holds above, so the next step waited its interval
+  // instead of re-running the bind-check read, the mkdir, the temp sweep and the statfs every tick, silently (D-5394). The pass now
+  // runs on its own slice (D-6974), so through the step only a zero floor (the exportSliceFloor seam) over a spent run reaches this hold.
   for (const spent of ['bytes', 'clock'] as const) {
-    it(`(c) an export step that starts on a budget already spent (${spent}) records its attempt and says so once, so the next step waits its interval; a step with a budget that lasts then writes the rows and clears the record`, async () => {
+    it(`(c) an export step whose slice starts spent (a zero floor over a spent run: ${spent}) records its attempt and says so once, so the next step waits its interval; a step with a budget that lasts then writes the rows and clears the record`, async () => {
       const { box, ids } = ingestedBox(`ccrc-history-export-held-early-${spent}-`, [row(1, 'one', 2 * DAY), row(2, 'two', DAY)]);
       const T = Date.now() + 2 * HOUR;   // past the store's first hour: the cadence runs a pass here
       // The budget is spent as the pass starts: no byte of the run's allowance is left, or no millisecond of its clock.
@@ -2235,7 +2244,7 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
       let r: PassResult | null;
       let lines: string[];
       try {
-        r = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T, { deps: { statfs: roomy }, limits })));
+        r = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T, { deps: { statfs: roomy, exportSliceFloor: ZERO_FLOOR }, limits })));
         lines = err.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('history-sweep:'));
       } finally {
         err.mockRestore();
@@ -2280,7 +2289,7 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
       });
       expect(counters(box)['export_segment_missing'], 'the check ran in its own step and cleared the marks').toBe(1);
       const T = NOW + 2 * HOUR;
-      const r = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T, { deps: { statfs: roomy }, limits: { maxBytes } })));
+      const r = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => T, { deps: { statfs: roomy, exportSliceFloor: ZERO_FLOOR }, limits: { maxBytes } })));
       expect(r, 'the row went into the second segment, and nothing was left behind').toMatchObject({ state: 'written', segment: `2.${ids.writer}.db`, rows: 1, complete: true });
       expect(marks(box)).toEqual({ [rid(1)]: `2.${ids.writer}.db` });
       expect(metaOf(box, HEALTH_META.exportSegmentMissing), 'the pass left no due row behind, so the WARN resets at this pass').toBe('0');
@@ -3839,4 +3848,128 @@ describe('CP-39 Task 5: the export census checks its budget before the file cloc
       expect(cursorOf(db).last).toBeGreaterThan(0);
     } finally { c.restore(); x9Store.closeWriter(db); }
   });
+});
+
+// ── CP-39c Task 1 (D-6974, D-6976): the pass runs on its own slice of the run budget ─────────────────────────────────
+describe('CP-39c: the export pass runs on its own slice of the run budget (D-6974)', () => {
+  const roomy = async (): Promise<{ bsize: number; bavail: number; blocks: number }> => ({ bsize: 1, bavail: 4 * TIB, blocks: 8 * TIB });
+  const T = Date.now() + 2 * HOUR;   // past the store's first hour: the cadence runs a pass here
+  /** The box's own export directory for its store. */
+  const tempExists = (box: HistoryBox, ids: { storeId: string }): boolean => {
+    const dir = path.join(box.root, 'export', ids.storeId);
+    return fs.existsSync(dir) && fs.readdirSync(dir).some((n) => n.endsWith('.tmp'));
+  };
+
+  it('(a) the pass floor is 180 s and the segment bound, and DERIVE_SHARES has no export share', () => {
+    expect(x9Lib.EXPORT_SLICE_MS).toBe(180_000);
+    expect(x9Lib.EXPORT_SLICE_BYTES).toBe(x9Lib.EXPORT_SEGMENT_MAX_BYTES);
+    expect(x9Lib.DERIVE_SHARES, 'CONTROL: no export share, which would cut ingest on every tick').toEqual({ fts: 150, nodes: 100, card: 50, census: 100 });
+  });
+
+  for (const spent of ['bytes', 'clock'] as const) {
+    it(`(b) a step that starts on a run already spent (${spent}) writes its rows on its own slice, and every byte the slice charged is the run's`, async () => {
+      const { box, ids } = ingestedBox(`ccrc-history-cp39c-spent-${spent}-`, [row(1, 'one', 2 * DAY), row(2, 'two', DAY)]);
+      const limits = spent === 'bytes' ? { maxBytes: 0 } : { maxMs: 0 };
+      const c = exportCtx(box, ids, () => T, { deps: { statfs: roomy }, limits });
+      expect(SW.budgetLeft(budgetOf(c) as unknown as Record<string, unknown>), 'CONTROL: the run is spent as the step starts').toBe(false);
+      const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      let r: PassResult | null;
+      let lines: string[];
+      try {
+        r = await onStore(box, (db) => SW.exportStep(db, c));
+        lines = err.mock.calls.map((x) => String(x[0])).filter((l) => l.startsWith('history-sweep:'));
+      } finally {
+        err.mockRestore();
+      }
+      expect(r).toMatchObject({ state: 'written', rows: 2, complete: true });
+      expect(lines.filter((l) => l.includes('export pass was held')), 'no hold line').toEqual([]);
+      expect(metaOf(box, HEALTH_META.exportPassMs)).toBe(String(T));
+      expect(metaOf(box, 'export_attempt_ms')).toBeNull();
+      expect(r!.bytes, 'CONTROL: the pass wrote bytes').toBeGreaterThan(0);
+      expect(budgetOf(c).bytes, 'every byte the slice charged is the run\'s').toBe(r!.bytes);
+    }, 300_000);
+  }
+
+  it('(c) a waiting step makes no slice: it reads the run\'s clock not once; an admitted step reads it', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-cp39c-wait-', [row(1, 'one', 2 * DAY), row(2, 'two', DAY)]);
+    expect(metaOf(box, 'export_marks_checked_listing'), 'CONTROL: no check is owed').not.toBeNull();
+    const reads = (limits: { maxMs?: number; maxBytes?: number }) => {
+      const c = exportCtx(box, ids, () => T, { deps: { statfs: roomy }, limits });
+      const b = budgetOf(c);
+      const real = b.now;
+      let n = 0;
+      b.now = () => { n += 1; return real(); };
+      return { c, n: () => n };
+    };
+    await onStore(box, (db) => { setMeta(db, HEALTH_META.exportPassMs, String(T - 10 * MIN)); });
+    const w = reads({ maxMs: 0 });
+    expect(await onStore(box, (db) => SW.exportStep(db, w.c)), 'the cadence waits').toBeNull();
+    expect(w.n(), 'a waiting step makes no slice').toBe(0);
+    await onStore(box, (db) => { setMeta(db, HEALTH_META.exportPassMs, String(T - 2 * HOUR)); });
+    const a = reads({ maxMs: 0 });
+    await onStore(box, (db) => SW.exportStep(db, a.c));
+    expect(a.n(), 'CONTROL: an admitted step reads the clock').toBeGreaterThanOrEqual(1);
+  }, 300_000);
+
+  it('(d) the slice runs out inside the pass: held, naming the slice\'s own limits, with the attempt recorded', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-cp39c-out-', [row(1, 'one', 2 * DAY), row(2, 'two', DAY)]);
+    let flipped = false;
+    const clock = (): number => {
+      if (tempExists(box, ids)) { flipped = true; return T + x9Lib.EXPORT_SLICE_MS; }
+      return T;
+    };
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let r: PassResult | null;
+    let lines: string[];
+    try {
+      r = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, clock, { deps: { statfs: roomy }, limits: { maxMs: 0, maxBytes: 0 } })));
+      lines = err.mock.calls.map((x) => String(x[0])).filter((l) => l.startsWith('history-sweep:'));
+    } finally {
+      err.mockRestore();
+    }
+    expect(r).toEqual({ state: 'held', segment: null, rows: 0, blobs: 0, bytes: 0, complete: false });
+    expect(flipped, 'CONTROL: the pass reached its writer').toBe(true);
+    expect(lines).toEqual([heldLine(x9Lib.EXPORT_SLICE_MS, x9Lib.EXPORT_SLICE_BYTES)]);
+    expect(metaOf(box, 'export_attempt_ms')).toBe(String(T));
+    expect(metaOf(box, HEALTH_META.exportPassMs)).toBeNull();
+    expect(segmentsOf(box)).toEqual([]);
+    expect(marks(box)).toEqual({ [rid(1)]: null, [rid(2)]: null });
+  }, 300_000);
+
+  it('(e) on a run with time left the slice holds what the run has left, not just its floor', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-cp39c-left-', [row(1, 'one', 2 * DAY), row(2, 'two', DAY)]);
+    expect(x9Lib.EXPORT_SLICE_MS + 1_000, 'CONTROL: the late clock is inside the run').toBeLessThan(2 * x9Lib.EXPORT_SLICE_MS);
+    let flipped = false;
+    const clock = (): number => {
+      if (tempExists(box, ids)) { flipped = true; return T + x9Lib.EXPORT_SLICE_MS + 1_000; }
+      return T;
+    };
+    const r = await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, clock, { deps: { statfs: roomy }, limits: { maxMs: 2 * x9Lib.EXPORT_SLICE_MS } })));
+    expect(flipped, 'CONTROL: the pass reached its writer').toBe(true);
+    expect(r).toMatchObject({ state: 'written', rows: 2, complete: true });
+  }, 300_000);
+
+  it('(f) the measured defect, through tick(): a run spent before step 1 still publishes at step 23', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-cp39c-tick-', [row(1, 'one', 2 * DAY), row(2, 'two', DAY)]);
+    const P = historyPaths(box.home);
+    const ctx = SW.passCtx({
+      home: box.home, P, ids: SW.idsFromFiles(P), now: () => T, out: () => undefined,
+      parsed: { homes: box.homes, secrets: [], unanswered: [], rosterUnreadable: false },
+      deps: { managedSettings: [], statfs: roomy }, pause: null, ingest: true,
+    });
+    ctx.budget.startMs = T - (RUN_BUDGET_MS + 10_000);
+    expect(SW.budgetLeft(ctx.budget as unknown as Record<string, unknown>), 'CONTROL: the run is spent before the tick').toBe(false);
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let lines: string[];
+    try {
+      await onStore(box, (db) => SW.tick(db, ctx));
+      lines = err.mock.calls.map((x) => String(x[0])).filter((l) => l.startsWith('history-sweep:'));
+    } finally {
+      err.mockRestore();
+    }
+    expect(segmentsOf(box)).toEqual([`1.${ids.writer}.db`]);
+    expect(metaOf(box, HEALTH_META.exportPassMs)).toBe(String(T));
+    expect(lines.filter((l) => l.includes('export pass was held'))).toEqual([]);
+    expect(marks(box)).toEqual({ [rid(1)]: `1.${ids.writer}.db`, [rid(2)]: `1.${ids.writer}.db` });
+  }, 300_000);
 });

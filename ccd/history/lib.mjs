@@ -219,6 +219,16 @@ export const RUN_BUDGET_BYTES = 512 * 1024 * 1024;
  *  generation never starves capture; bytes are compressed, as the backfill charges them. */
 export const REDERIVE_SLICE_MS = 20_000;
 export const REDERIVE_SLICE_BYTES = 128 * 1024 * 1024;
+/** CP-39c (D-6974): the export pass runs on its own slice of the ONE run budget, made with CP-39's stepSlice when the pass starts, on
+ *  a step whose cadence and preflight admitted it. These are the slice's floor. Neither is a DERIVE_SHARES entry: a share cuts ingest's
+ *  ceiling on every tick, for a step that runs at most once an hour.
+ *  The time, 180 s, is *chosen* from a measurement: the pass's fixed cost before the writer's first budget check is about 8-11 s of CPU
+ *  plus cold IO, which is about 20-110 s of wall clock at the sweep unit's measured share of a core (Nice=19, idle I/O), and 180 s leaves
+ *  about 70 s of writing at 0.1 of a core. The floor's overrun is paid on at most one tick in 30.
+ *  The bytes, the segment bound, are derived: a slice then never cuts a segment below its bound, and the preflight (planExportRoom)
+ *  already admits the home filesystem for exactly that size. */
+export const EXPORT_SLICE_MS = 180_000;
+export const EXPORT_SLICE_BYTES = EXPORT_SEGMENT_MAX_BYTES;
 /** CP-39 (D-6935, D-6939): the derivation's shares of the ONE run budget, per mille of its limits, in tick order (chosen).
  *  One set of numbers serves the ladder of ceilings (budgetRungs) and the floors (budgetFloors). Measured on the fleet box:
  *  every budget-gated derivation starved while ingest owned the whole budget, and under load the sweep unit (shipped at

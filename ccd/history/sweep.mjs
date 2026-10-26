@@ -55,7 +55,7 @@ import {
   makeProbeIndex, parseRederiveState, formatRederiveState, rederivePlan, phraseValues,
   makeBelt, beltUnits, BELT_META, BELT_NODES_STEP, BELT_COUNTERS, REDACT_SOURCES_META, normalizeRedactSources, parseBeltState, formatBeltState,
   decideBelt, beltAfterGeneration, BELT_VERSION, beltWitnessMoved,
-  REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES, budgetRungs, budgetFloors,
+  REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES, EXPORT_SLICE_MS, EXPORT_SLICE_BYTES, budgetRungs, budgetFloors,
   REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, formatOpMarker, decideOpLive, formatPassMarker, parsePassMarker, decidePassLive, parsePassDied, formatPassDied, procStartOf, bootIdOf, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
   HARNESS_TABLE, exportDates, dueTranscriptKeys, shortestRetentionHome, planExport, exportDueOldestMeta, retentionLowered, parseJournalRecord,
   decideRecallOff, decideRecallOffWrite, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
@@ -3677,7 +3677,7 @@ export async function bindingPass(home, P, op, args, deps, out) {
  * 21. `collectPurgedHistoryFiles`: at a due scan, the scope markers and card directories of purged sessions,
  *     7 days on (card.mjs; W1-B3 Task 7);
  * 22. `markScan`: a due scan is marked done, unless the roster was unreadable;
- * 23. `exportStep`: §9.2 step 6, last (W1-B4): the export pass, at most once an hour, with a writer token only,
+ * 23. `exportStep`: §9.2 step 6, last (W1-B4): the export pass, at most once an hour, on its own slice of the run's ONE budget (D-6974), with a writer token only,
  *     outside the ingest gate, behind its own floor on the home filesystem;
  * 24. `ensureHistoryDirs`: last, below the spool/ line the next sentence names, scope/ and card/ made 0700, a link
  *     or a file there refused and counted (card.mjs; W1-B3 Task 5).
@@ -3721,7 +3721,8 @@ export async function tick(db, ctx) {
   beltNodesStep(db, ictx, slice);
   // CP-39 (D-6935, D-6939): ingest stops at its ceiling of the ONE budget; each derivation step runs on its own slice from its own start.
   // The one run budget's rule as amended (D-6936): on a scheduled tick ingest, its discovery and its sidecars included, leaves the
-  // derivation its reserve, and a pass may overrun the budget by at most the floors' sum plus one unit per step.
+  // derivation its reserve, and a pass may overrun the budget by at most the floors' sum plus one unit per step, and, on a step whose
+  // export runs, the export's floors, the pass's unbudgeted spans and the check's unbudgeted prefix (D-6974, D-6975).
   const rungs = runRungs(ctx.budget);
   // Step 1, the drain: journal first, then the FULL drain transaction, then its verdicts, then the unlink (§9.14).
   // runPass never ticks without both binding names: a missing store.writer is a hold there (§9.10 "Writer token").
@@ -8884,13 +8885,13 @@ export async function recoverReindex(db, ctx, cur, budget) {
 //      segment holds. A crash before it leaves rows the next segment repeats, which replay absorbs (§9.15 "Mark").
 // The pass reads no segment and appends no journal record. It decides nothing: lib's planSegment and nextSegmentSeq do.
 // Its stops stay apart: 'written', 'nothing-due', 'no-horizon' (no rostered home to read a retention from), 'held'
-// (history-off, or the run's budget, before a row was published) and 'failed' (a throw, counted export_write_failed).
+// (history-off, or its slice of the run's budget, before a row was published) and 'failed' (a throw, counted export_write_failed).
 
 /** Rows per page of the selection: a bound on one statement's work, not a rule. */
 const EXPORT_PAGE_ROWS = 256;
 /** meta: the last segment number this store published. The next is past it AND past every name on disk (§9.15 "Write"). */
 const EXPORT_SEQ_META = 'export_seq';
-/** meta: when a pass last failed with a CAUGHT error, or was held by the run's budget before it wrote a segment (D-5394
+/** meta: when a pass last failed with a CAUGHT error, or was held by its slice of the run's budget before it wrote a segment (D-5394
  *  (history-export-select-due-transcripts); lib budgetHeldPass). exportStep's cadence counts it as a pass, so a pass that keeps failing or
  *  holding that way retries hourly, never every tick; doctor's last-pass clock (HEALTH_META.exportPassMs) does not, so
  *  it still reads stale. A pass that ran to its end deletes it (noteExportPassDone), so a clock dated in the future (the
@@ -9318,15 +9319,16 @@ function noteExportPassDone(db, nowMs, complete) {
   if (complete && (getMeta(db, HEALTH_META.exportSegmentMissing) ?? '0') !== '0') setMeta(db, HEALTH_META.exportSegmentMissing, '0');
 }
 
-/** A pass the run's budget held before it wrote a segment (lib budgetHeldPass: nothing taken, because the selection ran out of
+/** A pass its slice of the run's budget held before it wrote a segment (D-6974; lib budgetHeldPass: nothing taken, because the selection ran out of
  *  budget or never began on a budget already spent, or rows taken and none written;
  *  D-5394 (history-export-select-due-transcripts)): one stderr line, and the attempt clock in the small transaction a failure
  *  records it in, so exportStep's cadence waits its interval. It is not a pass: doctor's last-pass clock does not move. A
  *  record that meets busy or a full disk is left: the next tick tries sooner, and nothing is lost. */
 function noteExportPassHeld(db, ctx, nowMs) {
-  // The run's budget is a time limit and a byte limit, and either holds a pass (lib budgetHeldPass is told only that the budget
-  // did): the line names both, so a hold by the bytes does not read as one by the clock.
-  process.stderr.write(`history-sweep: the export pass was held by the run's budget (${ctx.budget.maxMs} ms, ${ctx.budget.maxBytes} bytes) before it wrote a due row; it tries again at its next interval\n`);
+  // The pass runs on its own slice of the run's budget (D-6974), which is a time limit and a byte limit, and either holds a pass (lib
+  // budgetHeldPass is told only that the budget did): the line names the slice's limits, both of them, so a hold by the bytes does not
+  // read as one by the clock (D-6976).
+  process.stderr.write(`history-sweep: the export pass was held by its slice of the run's budget (${ctx.budget.maxMs} ms, ${ctx.budget.maxBytes} bytes) before it wrote a due row; it tries again at its next interval\n`);
   try {
     withTx(db, 'NORMAL', () => { setMeta(db, EXPORT_ATTEMPT_META, String(nowMs)); });
   } catch { /* busy or full: the next tick retries sooner, nothing is lost */ }
@@ -9370,8 +9372,8 @@ export async function exportPass(db, ctx) {
     // A stale temp (a killed pass's) is removed by Task 6's exportStep before its preflight, so a pause never keeps it.
     const room = Math.min(EXPORT_SEGMENT_MAX_BYTES, ctx.budget.maxBytes - ctx.budget.bytes);
     if (room <= 0 || !budgetLeft(ctx.budget)) {
-      // The run's budget is already spent as the export starts (it is the tick's last step and shares the budget with ingest,
-      // the FTS backfill, nodes and cards): the selection never begins, which is a selection that did not run to its end, so
+      // The pass's slice is already spent as the export starts. Through exportStep (D-6974) this branch is reached only by a zero floor
+      // (the exportSliceFloor seam) over a spent run, and otherwise only by a direct caller on the run's budget: the selection never begins, which is a selection that did not run to its end, so
       // lib's budgetHeldPass says the same as for one the budget ended (nothing taken, `selectionComplete` false). The pass
       // records its attempt and says so once, so the next step waits its interval and not the next tick, and a node with a
       // standing backlog does not re-run the bind-check read, the mkdir, the temp sweep and the statfs every tick in silence
@@ -9381,7 +9383,7 @@ export async function exportPass(db, ctx) {
     }
     const sel = exportSelect(db, ctx, nowMs, exportHomeDays(db, ctx.homes), room);
     if (sel.taken.length === 0) {
-      // The run's budget ended the selection before it took a row (lib budgetHeldPass; never history-off, which stops the
+      // Its slice of the run's budget ended the selection before it took a row (lib budgetHeldPass; never history-off, which stops the
       // writer, and never a busy, which throws): the pass records its attempt like a failed one, so the next step waits its
       // interval and not the next tick, and says so once (D-5394 (history-export-select-due-transcripts)).
       if (budgetHeldPass({ taken: 0, selectionComplete: sel.complete, written: 0, writeStopped: null })) {
@@ -9468,6 +9470,21 @@ export async function exportPass(db, ctx) {
 
 // ── W1-B4 Task 6: the export in the tick (spec §9.2 step 6, §9.15 "Preflight") ─────────────────────────────────────
 
+/** `seam` when it is a floor an in-process test set (D-4247): a non-null object whose `maxMs` and `maxBytes` are both safe integers `>= 0`;
+ *  else `floor`, lib's. A zero floor is the run's remainder, the budget before CP-39c (D-6974). */
+function sliceFloor(seam, floor) {
+  return seam !== null && typeof seam === 'object' && Number.isSafeInteger(seam.maxMs) && seam.maxMs >= 0
+    && Number.isSafeInteger(seam.maxBytes) && seam.maxBytes >= 0 ? seam : floor;
+}
+
+/** The export pass's slice of the run's ONE budget (D-6974), made when the pass starts. Its ceiling is the run's own limits, as the
+ *  census's is, so on a run with time left it holds what the run has left; its floor is lib's EXPORT_SLICE_MS and EXPORT_SLICE_BYTES, or
+ *  `ctx.deps.exportSliceFloor`. Every byte charged to it is the run's (stepSlice's accessor, O5). */
+function exportPassSlice(ctx) {
+  return stepSlice(ctx.budget, { maxMs: ctx.budget.maxMs, maxBytes: ctx.budget.maxBytes },
+    sliceFloor(ctx.deps?.exportSliceFloor, { maxMs: EXPORT_SLICE_MS, maxBytes: EXPORT_SLICE_BYTES }));
+}
+
 /** §9.2 step 6, last (W1-B4): the export pass, at most once an hour by its own clock, anchored on the store's first tick
  *  (lib decideExportPass; D-4755 (history-export-cadence-from-first-tick)), behind a preflight on the HOME filesystem (§9.15
  *  "Preflight"): statfs on ~/.ccrc/history/export under STATFS_DEADLINE_MS, then lib planExportRoom, which is planCopy
@@ -9476,8 +9493,8 @@ export async function exportPass(db, ctx) {
  *  A refusal, or a probe that does not settle, skips the pass: counted export_paused_low_disk and kept in meta for doctor
  *  (HEALTH_META.exportPaused, planExportRoom's word) until a preflight admits. Capture is unaffected, and the next tick
  *  retries: a pause is not a pass. A stale temp is removed before the probe, so a pause never keeps one. A pass that
- *  fails with a caught error counts for the cadence (Task 5's attempt clock), so it retries hourly; so does a pass the
- *  run's budget held before it wrote a segment, whether it started on a budget already spent, took no row or took rows and wrote none (lib budgetHeldPass;
+ *  fails with a caught error counts for the cadence (Task 5's attempt clock), so it retries hourly; so does a pass its
+ *  slice of the run's budget (D-6974) held before it wrote a segment, whether it started on a budget already spent, took no row or took rows and wrote none (lib budgetHeldPass;
  *  D-5394 (history-export-select-due-transcripts)), while history-off, a pause and a busy leave the clock as it was; and a
  *  pass that ran to its end (written, or nothing due) deletes the attempt clock. First of all, and
  *  outside the cadence, the step checks the export marks against the segments on this box once per new bind fact
@@ -9567,7 +9584,10 @@ export async function exportStep(db, ctx) {
   }
   // An admitting preflight ends a pause, whatever the pass then answers (held, failed or no-horizon included).
   if ((getMeta(db, HEALTH_META.exportPaused) ?? '') !== '') withTx(db, 'NORMAL', () => { setMeta(db, HEALTH_META.exportPaused, ''); });
-  return exportPass(db, ctx);
+  // D-6974: the pass runs on its own slice of the run's ONE budget, made fresh here at the pass's start, on a step whose cadence and
+  // preflight admitted it. Every byte charged to it is the run's; a step that waits or pauses makes none. Handed on through a spread
+  // context, so every ctx.budget read inside exportPass reads the slice.
+  return exportPass(db, { ...ctx, budget: exportPassSlice(ctx) });
 }
 
 // ── W1-B4 Task 8: the marks after a bind (spec §9.15 "After a bind"; D-4226) ───────────────
