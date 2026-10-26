@@ -1357,6 +1357,85 @@ describe('after a send the keys in the card are fenced in real Chrome (R102)', (
   }, 90_000);
 });
 
+// R115 in real Chrome: a DIFFERENT aged ask arrives over the socket with no clear (review 939's F3, the external path). Aged
+// rows are keyed by position, so the second ask reuses the row node that holds focus, enabled, with no focus event. Native key
+// phases matter here: Chrome activates a focused button at Enter's keydown and at Space's keyup, so a Space pressed on the
+// first ask and released on the second would click the second ask's row unless the fence stops that keyup.
+const OTHER_Q = 'Which database should the service use?';
+const OTHER_AGED = (): Dialog => {
+  const options = [{ label: 'Postgres', description: 'A server.' }, { label: 'SQLite', description: 'A file.' }, { label: 'Neither' }];
+  return {
+    ...askFixture(2).dialog!, id: 'dlg-other-ask', title: OTHER_Q, body: OTHER_Q, selectedIndex: 1,
+    options: [...options.map((o, n) => ({ index: n + 1, label: o.label, description: o.description })),
+      { index: options.length + 1, label: 'Type something.' }, { index: options.length + 2, label: 'Chat about this' }],
+    ask: { question: OTHER_Q, header: 'Database', multiSelect: false, options: options.map((o) => ({ ...o })) },
+  };
+};
+
+describe('a screen change this client did not send fences the card in real Chrome (R115)', () => {
+  /** Option 1 focused, ArrowDown engages and moves focus to option 2 (remembered as `__row`); `before` runs on it; then the
+   *  other aged ask arrives on the socket. The reused node still holds focus, enabled, and nothing moved focus. */
+  async function otherAsk(a: Aged, before: () => Promise<void> = async () => {}): Promise<void> {
+    await a.first.focus();
+    await a.page.keyboard.press('ArrowDown');
+    await a.page.evaluate(() => { const w = window as unknown as Probe; w.__row = document.activeElement; });
+    await before();
+    await a.mark();
+    a.send([{ type: 'dialog', dialog: OTHER_AGED() }]);
+    await a.page.getByText(OTHER_Q).first().waitFor({ timeout: 10_000 });
+    await a.page.waitForTimeout(300);
+    const s = await a.snap();
+    expect(s.rowConnected && !s.rowDisabled, 'premise: the other ask reused the row node, enabled').toBe(true);
+    expect(s.activeIsRow, 'focus is still on the reused node: nothing moved it').toBe(true);
+    expect(s.focusins, 'no focusin inside the card').toEqual([]);
+  }
+
+  it('a digit, Enter and Space on the reused, focused row send nothing and click nothing; a click in the card, then a digit, answers once', async () => {
+    await withAged(async (a) => {
+      await otherAsk(a);
+      await a.page.keyboard.press('1');
+      await a.page.keyboard.press('Enter');
+      await a.page.keyboard.press('Space');
+      await a.page.waitForTimeout(400);
+      const s = await a.snap();
+      expect(s.posts, 'no request').toBe(0);
+      expect(s.clicks, 'no click on the reused node').toBe(0);
+      await a.page.locator(`${CARD} .ask-inline-title`).click();
+      await a.page.keyboard.press('1');
+      await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(1);
+    });
+  }, 90_000);
+
+  it('Space held across the change: down on the first ask, up on the second gives no click and no request', async () => {
+    await withAged(async (a) => {
+      await otherAsk(a, async () => { await a.page.keyboard.down('Space'); });
+      await a.page.keyboard.up('Space');
+      await a.page.waitForTimeout(400);
+      const s = await a.snap();
+      expect(s.clicks, 'zero clicks: the keyup that would activate the reused node was stopped').toBe(0);
+      expect(s.posts, 'no request').toBe(0);
+    });
+  }, 90_000);
+
+  it('Tab moves focus without unlocking; Go to question then unlocks and a digit answers once', async () => {
+    await withAged(async (a) => {
+      await otherAsk(a);
+      await a.page.evaluate((c) => document.querySelector<HTMLElement>(c)!.focus(), CARD);
+      await a.page.keyboard.press('Tab');
+      const into = await a.snap();
+      expect(into.inCard && into.activeTag === 'BUTTON', `Tab moved focus to a control in the card (${into.activeTag})`).toBe(true);
+      await a.page.keyboard.press('2');
+      await a.page.waitForTimeout(300);
+      expect((await a.snap()).posts, 'a digit after Tab sends nothing').toBe(0);
+      await a.page.focus(GTQ);
+      await a.page.keyboard.press('Enter');
+      await a.page.waitForTimeout(300);
+      await a.page.keyboard.press('2');
+      await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(1);
+    });
+  }, 90_000);
+});
+
 describe('re-entry in real Chrome (R105, R106)', () => {
   it('a pointer click in the card unlocks: a digit then answers once', async () => {
     await withAged(async (a) => {
