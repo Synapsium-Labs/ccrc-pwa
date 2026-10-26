@@ -121,13 +121,24 @@ describe('coord-blocked: the gate reason (stallCoordGate), one per measured hold
   it('waiting: an open dialog, the operator question (the commonest long hold measured)', () => {
     expect(stallCoordGate(input({ worker: liveAt('waiting', STRETCH_AT) }).session)).toBe('waiting');
   });
+  it('waiting: a pending dialog is the open question whatever the word reads, ahead of every other reason', () => {
+    for (const word of ['busy', 'idle', 'shell']) {
+      expect(stallCoordGate(input({ worker: liveAt(word, STRETCH_AT, { dialogPending: true }) }).session), word).toBe('waiting');
+    }
+    expect(stallCoordGate(input({ worker: liveAt('busy', STRETCH_AT, { dialogPending: true }), mark: WORKING() }).session)).toBe('waiting');
+  });
   it('busy with no turn running: a finished marker under a busy word, the background workflow', () => {
     expect(stallCoordGate(input().session)).toBe('background');
   });
   it('busy with a turn running: a current working marker, its own long busy stretch', () => {
     expect(stallCoordGate(input({ mark: WORKING() }).session)).toBe('busy');
-    // A working marker older than the live process is stale: no turn is proven running, so the word is over background work.
-    expect(stallCoordGate(input({ mark: mark({ state: 'working', at: NOW - 40 * H, turnAt: NOW - 41 * H, stopAt: null }) }).session)).toBe('background');
+  });
+  it('busy over a marker that is not current proves neither a turn nor background work: busy-unread', () => {
+    // A marker older than the live process is stale, working or finished alike; background needs a CURRENT done or failed.
+    expect(stallCoordGate(input({ mark: mark({ state: 'working', at: NOW - 40 * H, turnAt: NOW - 41 * H, stopAt: null }) }).session)).toBe('busy-unread');
+    expect(stallCoordGate(input({ mark: mark({ at: NOW - 40 * H, turnAt: NOW - 41 * H, stopAt: NOW - 40 * H }) }).session)).toBe('busy-unread');
+    expect(stallCoordGate(input({ mark: { ok: false, reason: 'absent' } }).session)).toBe('busy-unread');
+    expect(stallCoordGate(input({ mark: mark({ state: 'failed' }) }).session)).toBe('background');
   });
   it('idle (or shell) but undelivered: unsent input text or an account limit', () => {
     for (const word of ['idle', 'shell']) expect(stallCoordGate(input({ worker: liveAt(word, STRETCH_AT) }).session), word).toBe('idle');
@@ -152,12 +163,14 @@ describe('coord-blocked: the stretch (stallCoordBusySince)', () => {
   });
 });
 
-describe('coord-blocked: each of the four gate reasons flags at the held threshold', () => {
+describe('coord-blocked: each gate reason, and an unnamed word, flags at the held threshold', () => {
   const cases: readonly [string, Over][] = [
     ['waiting (an open question)', { worker: liveAt('waiting', STRETCH_AT) }],
     ['busy with no turn (a background workflow)', {}],
     ['busy with a turn (its own long busy stretch)', { mark: WORKING() }],
     ['idle but undelivered', { worker: liveAt('idle', STRETCH_AT) }],
+    ['busy over a stale marker (its turn state unreadable)', { mark: mark({ at: NOW - 40 * H, turnAt: NOW - 41 * H, stopAt: NOW - 40 * H }) }],
+    ['a measured word it cannot name: no word silences the detector', { worker: liveAt('unknown', STRETCH_AT) }],
     ['idle under an account limit: a limit is one of the holds it reports, never one it waits out', { worker: liveAt('idle', STRETCH_AT, { stranded: true }) }],
   ];
   it.each(cases)('%s', (_label, over) => {
@@ -307,6 +320,16 @@ describe('coord-blocked: the push text names the gate reason in operator words',
   });
   it('busy with a turn: its own long busy stretch', () => {
     expect(stallCoordBlockedPushText(input({ ...held, mark: WORKING() }), n(), NOW).body).toContain(`coordinator ${COORD}: its own long busy stretch.`);
+  });
+  it('busy over a stale marker: busy, its turn state unreadable', () => {
+    const stale = mark({ at: NOW - 40 * H, turnAt: NOW - 41 * H, stopAt: NOW - 40 * H });
+    expect(stallCoordBlockedPushText(input({ ...held, mark: stale }), n(), NOW).body)
+      .toContain(`coordinator ${COORD}: busy (its turn state could not be read).`);
+  });
+  it('a measured word it cannot name: flagged at rung 1, its state could not be read', () => {
+    const i = input({ ...held, worker: liveAt('unknown', STRETCH_AT) });
+    expect(verdict(i)).toEqual(fire(MAIL_AT, 1));
+    expect(stallCoordBlockedPushText(i, n(), NOW).body).toContain(`coordinator ${COORD}: its state could not be read this sweep.`);
   });
   it('idle: idle but not receiving mail', () => {
     expect(stallCoordBlockedPushText(input({ ...held, worker: liveAt('idle', STRETCH_AT) }), n(), NOW).body)

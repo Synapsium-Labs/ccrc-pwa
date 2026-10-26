@@ -29,7 +29,7 @@ import {
 } from '../src/coord/stall.js';
 import { parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock, type StallBoxArming, type StallSettingsPatch } from '../src/coord/stallsettings.js';
 import type { PushPayload } from '../src/push.js';
-import { MAIL_REPLAY_MS, STALL_LEVELS, WAVE_DONE_SUBJECT, type FleetSession } from '../../shared/api.js';
+import { MAIL_REPLAY_MS, STALL_LEVELS, WAVE_DONE_SUBJECT, type FleetSession, type MailKind } from '../../shared/api.js';
 import { tmuxTarget } from '../../shared/tmux-target.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -2447,7 +2447,7 @@ describe('sweepStalls: coord-blocked (D-6942)', () => {
   });
   const sessions = [fleetRow(WORKER), fleetRow(COORD)];
   const blockedPushes = (sent: readonly PushPayload[]): PushPayload[] => sent.filter((p) => p.tag?.includes('-coord-blocked-') === true);
-  const queue = (coord: CoordStore, kind = 'question'): void => {
+  const queue = (coord: CoordStore, kind: MailKind = 'question'): void => {
     const m = coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId: null, kind, subject: 'q', body: 'b', artifacts: [] });
     coord.queueDelivery(m.id, COORD, 'envelope');
   };
@@ -2456,6 +2456,8 @@ describe('sweepStalls: coord-blocked (D-6942)', () => {
     seedRegistry(r.h.home, COORD, COORD_UUID);
     seedRun(r.coord, { program: 'demo-program' });
     seedCoordLive(r.h, word, BUSY_AT);
+    // A current finished turn: `busy` over it is the background workflow, never a turn whose state cannot be read.
+    seedTurnMark(r.h.home, COORD, { sessionId: COORD_UUID });
     at(BUSY_AT);
     choose(r.coord, { level });
     if (withMail) { at(MAIL_AT); queue(r.coord); }

@@ -370,19 +370,21 @@ export const ORPHAN_PUSH_MS = 30 * 60_000;
 export const MARKER_UNREADABLE_MS = 3_600_000;
 /** coord-blocked's thresholds (operator ruling 2026-10-25, D-6942), *measured*. The basis is a 14-day census of the
  *  fleet's mail (2026-10-11 to 10-25: 19 coordinators, 2,743 mails addressed to a coordinator). Delivery lag: median
- *  0.2 min, p90 4.1 min, p95 20.9 min, p99 510 min; 158 mails (5.8 %) waited 15 min or more, so 15 min is noise. No
- *  strict circular wait was found. The 33 episodes of mail held more than an hour were an open operator question (20,
- *  about 102 h, three of them over 10 h overnight), the coordinator's own long busy stretch, a background workflow
- *  with no turn running, and an idle coordinator not receiving mail (unsent input text, an account limit), so the
- *  arm reads the server's held mail and never requires a busy word, which would miss the last kind. Held mail is a
- *  delivery still `queued`, timed from its mail's queue time: the census's own span, creation to the coordinator first
- *  receiving it, so the replay below measures this definition. A delivered row's gated replay is mail already received
- *  and is outside it; it never counts. Mail queued COORD_BLOCKED_HELD_MS flags; a COORD_BLOCKED_STRETCH_MS busy or waiting stretch, or a COORD_BLOCKED_OLD_MS old mail,
- *  escalates. Replayed over the census these thresholds give about 32 flags in 14 days (about 2.3 a day), 18 of them
- *  operator questions; a 60 min held threshold alone gives about 4 a day, and 2 h / 60 min about 1.4. The flag sits
- *  below MAIL_STUCK_MS, so held mail is named before the generic stuck push would be. Constants first: the
- *  stall-watch settings row stores the level and the quiet time only, so a tunable form is a settings-row column of
- *  its own (a migration). */
+ *  0.2 min, p90 4.1 min, p95 20.9 min, p99 510 min; 158 mails (5.8 %) waited 15 min or more, so 15 min is noise. The
+ *  census span is an UPPER BOUND on a hold: it runs from a mail's creation to the coordinator's next nudge or its own
+ *  read, whichever came first, so a true hold is at most that long. No strict circular wait was found. The 33 episodes
+ *  of mail held more than an hour were an open operator question (20, about 102 h, three of them over 10 h overnight),
+ *  the coordinator's own long busy stretch, a background workflow with no turn running, and an idle coordinator not
+ *  receiving mail (unsent input text, an account limit), so the arm reads the server's held mail and never requires a
+ *  busy word, which would miss the last kind. Held mail is the reading of "queued or gate-held": only a delivery still
+ *  `queued` counts, timed from its mail's queue time (`mail.at`). A delivered row's gated replay is mail already
+ *  received and is outside it; it never counts. Mail queued COORD_BLOCKED_HELD_MS flags; a COORD_BLOCKED_STRETCH_MS
+ *  busy or waiting stretch, or a COORD_BLOCKED_OLD_MS old mail, escalates. The shipped rule flags at 30 min in ANY
+ *  state, so it corresponds to the census row WITHOUT the busy condition: about 77 coordinator-hours flagged in 14 days,
+ *  roughly 5 a day. The flag sits below
+ *  MAIL_STUCK_MS, so held mail is named before the generic stuck push would be. Constants first: the stall-watch
+ *  settings row stores the level and the quiet time only, so a tunable form is a settings-row column of its own (a
+ *  migration). */
 export const COORD_BLOCKED_HELD_MS = 30 * 60_000;
 export const COORD_BLOCKED_STRETCH_MS = 60 * 60_000;
 export const COORD_BLOCKED_OLD_MS = 2 * 60 * 60_000;
@@ -1993,25 +1995,30 @@ interface StallCoordHeld { readonly delivery: StallDeliveryRow; readonly mail: S
 
 /** Why the mail is held, read from the coordinator's live word and turn marker. Each is one of the census's holds, and
  *  `STALL_COORD_GATE_TEXT` words it for the operator. */
-export type StallCoordGate = 'waiting' | 'background' | 'busy' | 'idle';
+export type StallCoordGate = 'waiting' | 'background' | 'busy' | 'busy-unread' | 'idle';
 const STALL_COORD_GATE_TEXT: Record<StallCoordGate, (children: number) => string> = {
   waiting: (k) => `the coordinator is waiting on you (an open question); ${k === 1 ? '1 child mail is' : `${stallInt(k)} child mails are`} queued behind it`,
   background: () => 'held behind a background workflow',
   busy: () => 'its own long busy stretch',
+  'busy-unread': () => 'busy (its turn state could not be read)',
   idle: () => 'idle but not receiving mail (input text or account limit)',
 };
 
-/** `waiting` is a dialog (an AskUserQuestion open); `busy` over a CURRENT working marker is the coordinator's own turn,
- *  and `busy` over anything else is a main loop idling over background work; idle or shell is at rest. Null when the
- *  word is unmeasured or one the watch reads as doubt. */
+/** `waiting` is a live `waiting` word OR a pending dialog (2b's `dialogPending`, whatever the word reads): an open
+ *  operator question is the commonest long hold the census measured, so it outranks every other reason. `busy` over a
+ *  CURRENT working marker is the coordinator's own turn; `busy` over a CURRENT finished (`done` or `failed`) marker is a
+ *  main loop idling over background work; `busy` over a marker that is not current (stale, absent, malformed, foreign)
+ *  proves neither, so it reads `busy-unread`. Idle or shell is at rest. Null when the word is unmeasured or one the
+ *  watch reads as doubt; the arm still flags such a word at rung 1, worded as unreadable (`stallCoordRungNow`). */
 export function stallCoordGate(input: StallSessionInput): StallCoordGate | null {
   const live = stallSessionLive(input);
   if (live === null) return null;
-  if (live.word === 'waiting') return 'waiting';
+  if (live.word === 'waiting' || (input.worker.present === true && input.worker.dialogPending)) return 'waiting';
   if (isIdleWord(live.word)) return 'idle';
   if (live.word !== 'busy') return null;
   const m = stallCurrentMark(input);
-  return m !== null && m.state === 'working' ? 'busy' : 'background';
+  if (m === null) return 'busy-unread';
+  return m.state === 'working' ? 'busy' : 'background';
 }
 
 /** When the coordinator's busy or waiting stretch began, or null when it is at rest or unmeasured: the escalation's
@@ -2037,9 +2044,10 @@ function stallCoordHeld(input: StallSessionInput): StallCoordHeld[] {
 }
 
 /** The rung due now: 0 below COORD_BLOCKED_HELD_MS, 2 at a COORD_BLOCKED_STRETCH_MS stretch or a COORD_BLOCKED_OLD_MS
- *  old mail, else 1. A word the watch cannot read raises nothing. */
+ *  old mail, else 1. No word silences it: a measured word the watch cannot name (`stallCoordGate` null; an unmeasured
+ *  one is held before this) still flags rung 1 at the held threshold, worded as unreadable, and has no stretch. */
 function stallCoordRungNow(si: StallSessionInput, oldest: StallCoordHeld, now: number): 0 | 1 | 2 {
-  if (stallCoordGate(si) === null || now - oldest.since < COORD_BLOCKED_HELD_MS) return 0;
+  if (now - oldest.since < COORD_BLOCKED_HELD_MS) return 0;
   const stretch = stallCoordBusySince(si);
   return now - oldest.since >= COORD_BLOCKED_OLD_MS || (stretch !== null && now - stretch >= COORD_BLOCKED_STRETCH_MS) ? 2 : 1;
 }

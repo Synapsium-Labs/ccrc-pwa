@@ -5386,10 +5386,12 @@ marker) with mail the server still holds for 30 min (a delivery still `queued`,
 timed from its queue time; a delivered mail's gated replay never counts),
 whatever word it reads, draws one `⚠ coordinator blocked` push per episode
 (D-6942). The push names the reason in
-plain words: waiting on you (an open question), with the child mails queued
-behind it; held behind a background workflow (`busy` with no turn running); its
-own long busy stretch (`busy` with a turn); or idle but not receiving mail
-(input text or an account limit). It names how many items are held, the oldest
+plain words: waiting on you (an open question: a `waiting` word or a pending
+dialog), with the child mails queued behind it; held behind a background
+workflow (`busy` over a finished turn); its own long busy stretch (`busy` with a
+turn); busy with its turn state unreadable; or idle but not receiving mail
+(input text or an account limit). A word it cannot name still flags, worded as
+unreadable, so no word silences it. It names how many items are held, the oldest
 and its age, and which of its run workers sent them. A busy or waiting stretch
 of 60 min, or a held mail 2 h old, raises one `(escalated)` push in the same
 episode. An episode runs while any mail to the coordinator stays held, so once
