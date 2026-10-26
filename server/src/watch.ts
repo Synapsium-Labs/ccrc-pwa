@@ -10326,9 +10326,13 @@ const laneInstantMs = (iso: string): number | null => {
 /** D-6967 (§3.2): whether `state` holds a MEASURED (id, incarnation, hour) row recorded before the hour's close, the CARRIER a transient
  *  read failure may wait on. Read from the durable state, so a row staged in this pass and not yet flushed never counts; a row whose
  *  instant does not parse is none (the immediate gap, the safe direction). */
-const laneCarries = (state: DeepReadonly<DelegationRecoveryState>, id: string, inc: string, hourMs: number): boolean =>
-  state.checkpoint.observationIntervals.some((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === formatDelegationInstant(hourMs)
-    && r.state === 'measured' && (laneInstantMs(r.recordedAt) ?? Infinity) < laneCloseAt(hourMs));
+const laneCarries = (state: DeepReadonly<DelegationRecoveryState>, id: string, inc: string, hourMs: number): boolean => {
+  const r = laneIntervalOf(state, id, inc, hourMs);
+  return r?.state === 'measured' && (laneInstantMs(r.recordedAt) ?? Infinity) < laneCloseAt(hourMs);
+};
+/** The checkpoint's interval row for (id, incarnation, hour), if it holds one: `noteGap`'s prior and `laneCarries`' carrier. */
+const laneIntervalOf = (state: DeepReadonly<DelegationRecoveryState>, id: string, inc: string, hourMs: number) =>
+  state.checkpoint.observationIntervals.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === formatDelegationInstant(hourMs));
 
 /** The census, flat: every project whose delegation census was a MEASURED success contributes its records, each (project, adminRecord)
  *  once. A project whose view was null is left OUT of `censused` and contributes nothing: an empty list would read as "every tree is gone"
@@ -11686,7 +11690,7 @@ class DelegationLane {
   /** An hour recorded as a gap without a bucket to read: written once. True when the row is already on file (nothing staged). */
   private async noteGap(pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, detail: string): Promise<boolean> {
     const hour = formatDelegationInstant(hourMs);
-    const prior = durable.state().checkpoint.observationIntervals.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === hour);
+    const prior = laneIntervalOf(durable.state(), id, inc, hourMs);
     // R90: an unmeasured hour is written once, unless this is a loss word over a carve-out word
     if (prior !== undefined && prior.state === 'unmeasured' && !laneLossOverCarveOut(prior.detail, detail)) { this.skipped += 1; return true; }
     if (pass.signal.aborted) return false;
