@@ -1734,8 +1734,9 @@ ccrc account add …                   # connect a lane by verb rather than by h
   if the map ever comes back.
 
 **`/accounts`** (one of the app's top-level routes, reached from the labelled **Account** button in the fleet
-header, or by tapping the compact `AccountsStrip` — a bar across the top on a wide screen, inside the fleet
-list on a phone) shows every account ccd knows about, not just the ones with headroom.
+header, or from the `AccountsStrip` — a row of lane cards below the bar on a wide screen in either skin, inside the
+fleet list on a phone: each card opens the screen at its account, and **All accounts** opens the full screen) shows
+every account ccd knows about, not just the ones with headroom.
 It rides the existing `GET /api/accounts` pipeline — no new route, no new
 whitelist grant — with its own 20 s poller. Per account:
 
@@ -1753,9 +1754,10 @@ whitelist grant — with its own 20 s poller. Per account:
   telemetry keepalive" below).
 - A disabled lane (`~/.cc-sessions/<wrapper>-disabled` present) renders
   **greyed with "disabled on the fleet host" — shown as switched off, never
-  hidden.** The compact strip still hides a disabled lane entirely (right for
-  an always-on bar); the screen's whole job is "show me my accounts", so
-  hiding one here would be the wrong call in the other direction.
+  hidden.** The `AccountsStrip` still hides a disabled lane entirely (right
+  for an always-on row of cards), though it keeps a lane whose sign-in expired,
+  last in the row with its fills greyed; the screen's whole job is "show me my
+  accounts", so hiding one here would be the wrong call in the other direction.
 - A lane whose credential the health probe measured dead (`~/.cc-sessions/<wrapper>-authdead`) renders
   greyed with **"sign-in expired on the fleet host"** — both notes when it is also disabled, because the two
   are cleared by different acts. `GET /api/accounts` carries them as two flags, `disabled` and `authDead`,
