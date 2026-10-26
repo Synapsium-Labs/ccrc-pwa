@@ -53,11 +53,13 @@ import {
   encodeDelegationNaturalKey,
   formatDelegationInstant,
   isDelegationHourCarveOut,
+  isDelegationWorkerIndex,
   isLowerHex64,
   leaseSourceKindOfActivity,
   parseDelegationInstant,
   planDelegationCursorRetention,
   sortedProjectionRows,
+  upkeepDelegationIntervals,
   WAVE3_LEASE_SOURCE_KINDS,
   type DeepReadonly,
   type DelegationActivityRow,
@@ -79,6 +81,7 @@ import {
   type DelegationSessionRow,
 } from './delegation-model.js';
 import {
+  DELEGATION_CARRIED_FILE,
   DELEGATION_JOURNAL_ERROR_CODES,
   DELEGATION_JOURNAL_FILE,
   DELEGATION_TORN_DIR,
@@ -95,18 +98,26 @@ import {
   planDelegationJournalAppend,
   planDelegationPruning,
   readDelegationJournalRecords,
+  readDelegationRetainedRecords,
   nodeDelegationFilePort,
   type DelegationAppendItem,
   type DelegationAppendPlan,
   type DelegationFilePort,
   type DelegationJournalCoverage,
   type DelegationFileHandle,
+  type DelegationReadHandle,
   type DelegationJournalPosition,
   type DelegationJournalTail,
   type DelegationLeaseView,
   type DelegationPruningPlan,
   type DelegationTailHealPlan,
 } from './delegation-journal.js';
+import {
+  DelegationCompactionPlanner,
+  type DelegationCompactionPlan,
+  type DelegationCompactionSkipReason,
+  type DelegationRecordNaming,
+} from './delegation-compaction.js';
 
 /** The checkpoint's file name under the coordination directory (`~/.ccrc`). */
 export const DELEGATION_CHECKPOINT_FILE = 'delegation-checkpoint.json';
@@ -617,8 +628,19 @@ function duePop(h: DueEntry[]): DueEntry | undefined {
 }
 
 /** The listing a Bash PreToolUse or PostToolUse carries; undefined when it was unmeasured, shed, or not triggered. */
-const bashListingOf = (e: DelegationEventEnvelopeV1): readonly string[] | undefined =>
+export const bashListingOf = (e: DelegationEventEnvelopeV1): readonly string[] | undefined =>
   (e.eventKind === 'PreToolUse' || e.eventKind === 'PostToolUse') && e.toolName === 'Bash' && Array.isArray(e.listing) ? e.listing : undefined;
+
+/** What a record names, as the fold reads it: the compaction planner's port (`delegation-compaction.ts`), built from the fold's own naming
+ *  code, so the planner never names a key differently from the fold. */
+export const delegationRecordNaming: DelegationRecordNaming = {
+  naturalKeysOf: (e) => namedAgentsOf(e).map((na) => ({
+    encoded: encodeDelegationNaturalKey({ parentId: e.sessionId, parentIncarnation: e.parentIncarnation, sourceKind: na.sourceKind, upstreamId: na.upstreamId }),
+    sourceKind: na.sourceKind,
+  })),
+  bashListingOf,
+  workflowLaunchRunId,
+};
 
 // ── The builder: the one fold from journal records to checkpoint rows ───────────────────────────────────────────────
 
@@ -677,13 +699,13 @@ export type DelegationMetaOpenResult =
 
 /** D-6269: what a retained Workflow launch response says of its run, keyed by the launch's (session, incarnation, tool-use id). Builder
  *  state only: never persisted, never a row, rebuilt from the retained records like the candidates. */
-interface DelegationWorkflowLaunchFact { runEncoded: string; runId: string; taskId: string }
-
-/** D-6269: a worker index is the canonical decimal of a non-negative safe integer (the spelling `openWorkflowWorkerFromMeta` mints
- *  `<runId>-<index>` with). The ONE definition, for a number (the meta's) and for the string after a run's id (a row's). */
-function isWorkerIndex(v: unknown): boolean {
-  if (typeof v === 'number') return Number.isSafeInteger(v) && v >= 0;
-  return typeof v === 'string' && /^(0|[1-9][0-9]*)$/.test(v) && Number.isSafeInteger(Number(v));
+interface DelegationWorkflowLaunchFact {
+  runEncoded: string;
+  runId: string;
+  taskId: string;
+  /** The launch record's position, so a compaction that cuts it drops the entry with it (D-7021). */
+  sequence: number;
+  journalId: string;
 }
 
 const sameActivity = (a: DelegationActivityRow, b: DelegationActivityRow): boolean =>
@@ -715,6 +737,8 @@ export class DelegationCheckpointBuilder {
   private bashDue: DueEntry[] = [];                                 // D-6267: a due heap over the 'pre' entries
   private stopDue: DueEntry[] = [];                                 // D-6270: a due heap over the stop-only candidates
   private workflowLaunches = new Map<string, DelegationWorkflowLaunchFact>();   // D-6269: first launch per (session, incarnation, tool-use id) wins
+  /** D-7021: the sequence of the PreToolUse behind each 'equal' Bash-call fact, so a compaction that cuts that record drops the fact. */
+  private equalPreSequence = new Map<string, number>();
   private coveredEnds = 0;                                          // D-6269: rows a covered task notification changed in this builder's life
   private appliedSequence = 0;
   private appliedJournalId: string | null = null;
@@ -759,7 +783,7 @@ export class DelegationCheckpointBuilder {
     b.cursors = new Map(this.cursors); b.intervals = new Map(this.intervals); b.candidates = new Map(this.candidates);
     b.leaseFacts = new Map(this.leaseFacts); b.leaseByIdentity = new Map(this.leaseByIdentity); b.leaseByPath = new Map(this.leaseByPath);
     b.bashCalls = new Map(this.bashCalls); b.bashDue = [...this.bashDue]; b.stopDue = [...this.stopDue];
-    b.workflowLaunches = new Map(this.workflowLaunches); b.coveredEnds = this.coveredEnds;
+    b.workflowLaunches = new Map(this.workflowLaunches); b.equalPreSequence = new Map(this.equalPreSequence); b.coveredEnds = this.coveredEnds;
     b.appliedSequence = this.appliedSequence; b.appliedJournalId = this.appliedJournalId; b.appliedDigest = this.appliedDigest;
     b.revisionNo = this.revisionNo;
     return b;
@@ -826,7 +850,7 @@ export class DelegationCheckpointBuilder {
     const at = parseDelegationInstant(record.acceptedAt);
     this.ageStopCandidates(at);             // D-6270: BEFORE naming, so a join accepted at exactly the horizon opens from its own record (D-SC4)
     if (replay) this.touchSession(e);
-    this.indexWorkflowLaunch(e);            // D-6269: before the naming loop, so a launch is indexed whether or not its join opens or refuses
+    this.indexWorkflowLaunch(record, e);    // D-6269: before the naming loop, so a launch is indexed whether or not its join opens or refuses
     this.foldNotification(e, replay);       // D-6269
     for (const na of namedAgentsOf(e)) {
       const key: DelegationActivityNaturalKey = { parentId: e.sessionId, parentIncarnation: e.parentIncarnation, sourceKind: na.sourceKind, upstreamId: na.upstreamId };
@@ -866,14 +890,14 @@ export class DelegationCheckpointBuilder {
 
   /** D-6269: indexes a Workflow launch response by its tool-use id. The first launch under a key wins. The guard is `namedAgentsOf`'s own
    *  (`workflowLaunchRunId`), so an indexed launch is always a qualifying join: it opened its run in replay, or refused in observe. */
-  private indexWorkflowLaunch(e: DelegationEventEnvelopeV1): void {
+  private indexWorkflowLaunch(record: DelegationJournalRecordV1, e: DelegationEventEnvelopeV1): void {
     const runId = workflowLaunchRunId(e);
     if (runId === null || e.eventKind !== 'PostToolUse' || e.toolName !== 'Workflow' || e.launch === null) return;
     const k = JSON.stringify([e.sessionId, e.parentIncarnation, e.toolUseId]);
     if (this.workflowLaunches.has(k)) return;
     this.workflowLaunches.set(k, {
       runEncoded: encodeDelegationNaturalKey({ parentId: e.sessionId, parentIncarnation: e.parentIncarnation, sourceKind: 'workflow', upstreamId: runId }),
-      runId, taskId: e.launch.taskId,
+      runId, taskId: e.launch.taskId, sequence: record.sequence, journalId: record.journalId,
     });
   }
 
@@ -902,7 +926,7 @@ export class DelegationCheckpointBuilder {
       const prefix = `${run.upstreamId}-`;
       for (const w of this.activities.values()) {
         if (w.sourceKind !== 'workflow' || w.parentId !== run.parentId || w.parentIncarnation !== run.parentIncarnation || w.executionState === 'ended') continue;
-        if (!w.upstreamId.startsWith(prefix) || !isWorkerIndex(w.upstreamId.slice(prefix.length))) continue;
+        if (!w.upstreamId.startsWith(prefix) || !isDelegationWorkerIndex(w.upstreamId.slice(prefix.length))) continue;
         changed.push({ ...w, executionState: 'ended', endedAt: maxInstant(e.observedAt, w.openedAt), lastEventAt: maxInstant(w.lastEventAt, e.observedAt) });
       }
     }
@@ -955,9 +979,11 @@ export class DelegationCheckpointBuilder {
     }
     if (f.kind === 'pre' && e.eventKind === 'PostToolUse' && listing !== undefined && delegationListingsEqual(f.listing, listing)) {
       this.bashCalls.set(encoded, { kind: 'equal', preJournalId: f.journalId });
+      this.equalPreSequence.set(encoded, f.sequence);
       return;
     }
     this.bashCalls.delete(encoded);      // spoiled: a second Pre, an unmeasured or differing Post, any record after the decision
+    this.equalPreSequence.delete(encoded);
   }
 
   /** D-6270: forgets every stop-only candidate named last at least DELEGATION_STOP_CANDIDATE_HORIZON_MS before this record's acceptance.
@@ -1050,7 +1076,7 @@ export class DelegationCheckpointBuilder {
    * exists only in this builder and must not escape until a checkpoint holding it has been atomically replaced (O1).
    */
   openWorkflowWorkerFromMeta(parentId: string, parentIncarnation: string, runId: string, workerIndex: number): DelegationMetaOpenResult {
-    if (typeof workerIndex !== 'number' || !isWorkerIndex(workerIndex)) {
+    if (typeof workerIndex !== 'number' || !isDelegationWorkerIndex(workerIndex)) {
       refuse('bad-shape', `a workflow worker index is a non-negative safe integer, not ${String(workerIndex)}`);
     }
     const worker: DelegationActivityNaturalKey = { parentId, parentIncarnation, sourceKind: 'workflow', upstreamId: `${runId}-${workerIndex}` };
@@ -1107,6 +1133,15 @@ export class DelegationCheckpointBuilder {
     this.intervals.set(k, mergeDelegationObservationInterval(this.intervals.get(k), interval));
   }
 
+  /** The interval upkeep (retention, and the hour that was never closed), decided on THIS builder's own rows: the ONE place interval rows are
+   *  replaced (wave 4, Task 3.1). True iff a row left or changed. */
+  upkeepIntervals(nowMs: number): boolean {
+    const up = upkeepDelegationIntervals([...this.intervals.values()], nowMs);
+    if (!up.changed) return false;
+    this.intervals = new Map(up.intervals.map((r) => [intervalKeyOf(r), r] as const));
+    return true;
+  }
+
   /**
    * Retires the cursor rows `planDelegationCursorRetention` drops (R58, D-4654), decided on THIS builder's own rows: its cursors and
    * its intervals, as they stand under the applier's lock. It is the only place a cursor row is removed, and it never edits one.
@@ -1140,11 +1175,57 @@ export class DelegationCheckpointBuilder {
   /** D-6268: the activity IDs of the mapped Bash calls the door would retire now (read only). */
   retirableZeroDeltaBash(): string[] { return this.retirableZeroDeltaEntries().map(([, id]) => id); }
 
-  /** D-6268: the ONE builder code that deletes from the mapping or the activities. Row, map entry and fact leave together. */
+  /** D-6268: the first builder code that deletes from the mapping or the activities. Row, map entry and fact leave together. */
   retireZeroDeltaBash(): number {
     const list = this.retirableZeroDeltaEntries();
-    for (const [encoded, id] of list) { delete this.mapping[encoded]; this.activities.delete(id); this.bashCalls.delete(encoded); }
+    for (const [encoded, id] of list) {
+      delete this.mapping[encoded]; this.activities.delete(id); this.bashCalls.delete(encoded); this.equalPreSequence.delete(encoded);
+    }
     return list.length;
+  }
+
+  /**
+   * C1 (D-7001, D-7024): the second builder code that deletes from the mapping or the activities. It retires the activities the compaction
+   * planner found retirable behind the cut (`DelegationCompactionPlan.retirable`): row, natural-key mapping, Bash-call fact and every Workflow
+   * launch-index entry whose run it names leave together, so a late task notification of a retired run finds no launch and is ignored. The
+   * planner decided on the durable checkpoint under the same lock; a row that has since become active, or that a lease or lineage row names,
+   * is refused (`change-refused`) and nothing is retired.
+   */
+  retireBehindCut(activityIds: readonly string[]): number {
+    const ids = new Set(activityIds);
+    const named = new Set<string>();
+    for (const l of this.leases.values()) named.add(l.activityId);
+    for (const n of this.lineage.values()) if (n.activityId !== null) named.add(n.activityId);
+    for (const id of ids) {
+      const a = this.activities.get(id);
+      if (a === undefined) continue;
+      if (a.executionState !== 'ended' || named.has(id)) refuse('change-refused', `activity ${id} is not retirable behind the cut: it has not ended, or a lease or lineage row names it`);
+    }
+    const runs = new Set<string>();
+    for (const [encoded, id] of Object.entries(this.mapping)) {
+      if (!ids.has(id)) continue;
+      if (this.activities.get(id)?.sourceKind === 'workflow') runs.add(encoded);
+      delete this.mapping[encoded]; this.bashCalls.delete(encoded); this.equalPreSequence.delete(encoded);
+    }
+    let n = 0;
+    for (const id of ids) if (this.activities.delete(id)) n++;
+    for (const [k, L] of this.workflowLaunches) if (runs.has(L.runEncoded)) this.workflowLaunches.delete(k);
+    return n;
+  }
+
+  /**
+   * D-7021, the compaction's `memory-prune`: drops every journal-derived fact whose source record the cut removed (at or below `cutThrough`
+   * and not carried), so this builder equals what a recovery over the compacted set rebuilds: a Bash-call fact (its PreToolUse), a Workflow
+   * launch-index entry (its launch). A candidate needs no rule: every record naming a held key is carried (K2), and every candidate is held.
+   * Lease facts need none either: every lease is unreleased, so its creating record is carried (K1).
+   */
+  dropCutFacts(cutThrough: number, carriedJournalIds: ReadonlySet<string>): void {
+    const cut = (sequence: number | undefined, journalId: string): boolean => sequence !== undefined && sequence <= cutThrough && !carriedJournalIds.has(journalId);
+    for (const [encoded, f] of [...this.bashCalls]) {
+      const gone = f.kind === 'pre' ? cut(f.sequence, f.journalId) : cut(this.equalPreSequence.get(encoded), f.preJournalId);
+      if (gone) { this.bashCalls.delete(encoded); this.equalPreSequence.delete(encoded); }
+    }
+    for (const [k, L] of [...this.workflowLaunches]) if (cut(L.sequence, L.journalId)) this.workflowLaunches.delete(k);
   }
 
   /** D-6268: whether this row's call is a zero-delta Bash call (its fact is 'equal'): such a call created no worktree and is never a lease activity. */
@@ -1257,6 +1338,9 @@ export type DelegationOwnFailureCode = 'not-recovered' | 'recovering' | 'no-fact
 export interface DelegationEvidenceCounts {
   readonly total: number;
   countAtOrBelow(sequence: number): number;
+  /** The evidence sequences at or below one, in order: below the journal's first sequence, the carried ones (few), which bound the gaps the
+   *  repair's step 0 deletes in (D-7021). */
+  sequencesAtOrBelow(sequence: number): readonly number[];
 }
 
 /** The evidence records' sequences, in order (8 bytes each). A lease-created record is not evidence and is not counted. */
@@ -1294,6 +1378,14 @@ export class DelegationEvidenceIndex implements DelegationEvidenceCounts {
       if ((this.sequences[mid] ?? Number.POSITIVE_INFINITY) <= sequence) lo = mid + 1; else hi = mid;
     }
     return lo;
+  }
+  sequencesAtOrBelow(sequence: number): readonly number[] { return this.sequences.slice(0, this.countAtOrBelow(sequence)); }
+  /** D-7021, the compaction's `memory-prune`: forgets every sequence at or below `cutThrough` except the carried ones. */
+  dropThrough(cutThrough: number, carried: readonly number[]): void {
+    const keep = new Set(carried);
+    const kept = this.sequences.filter((s) => s > cutThrough || keep.has(s));
+    this.sequences.length = 0;
+    for (const s of kept) this.sequences.push(s);
   }
 }
 
@@ -1348,6 +1440,8 @@ export class DelegationRecovery {
   private replayed = 0;
   private scanned = 0;
   private applied = 0;
+  /** D-7021: the last carried line accepted, or null before the first. */
+  private lastCarried: number | null = null;
 
   constructor(checkpointBytes: Uint8Array | null) {
     try {
@@ -1388,6 +1482,9 @@ export class DelegationRecovery {
     try {
       this.phase = 'journal-validate';
       const firstRecord = this.chain.firstRecord() === null;
+      if (firstRecord && this.lastCarried !== null && record.sequence <= this.lastCarried) {
+        throw new DelegationJournalError('carried-past-journal', `the journal begins at ${record.sequence}, not past the carried line at ${this.lastCarried}`);
+      }
       this.chain.accept(record);
       if (firstRecord && record.sequence > this.applied + 1) {
         throw new DelegationJournalError('sequence-gap', `the retained journal begins at ${record.sequence}, past the sequence after the checkpoint's ${this.applied}`);
@@ -1405,6 +1502,37 @@ export class DelegationRecovery {
         this.builder.foldRecord(record);
         this.replayed++;
       }
+    } catch (err) {
+      this.record(err);
+    }
+  }
+
+  /**
+   * D-7021: a line of the carried file, which the retained reader hands over BEFORE the journal and only below the journal's first sequence.
+   * It must increase (`carried-order`), lie below the journal (`carried-past-journal`, checked again when the journal's first record arrives)
+   * and lie at or below the applied position (`carried-past-applied`): every carried record is one the checkpoint already covers, so it is
+   * OBSERVED, never folded, exactly like a covered journal record, and it releases a hold and counts in the event IDs and the evidence index.
+   * It is not on the chain (the carried file has none) and is not `scanned` (journal records only).
+   */
+  acceptCarried(record: DelegationJournalRecordV1): void {
+    if (this.failureNow !== null || this.chain === null || this.builder === null) return;
+    try {
+      this.phase = 'journal-validate';
+      if (this.lastCarried !== null && record.sequence <= this.lastCarried) {
+        throw new DelegationJournalError('carried-order', `carried sequence ${record.sequence} follows ${this.lastCarried}`);
+      }
+      if (this.chain.firstRecord() !== null) throw new DelegationJournalError('carried-past-journal', `carried sequence ${record.sequence} arrived after the journal began`);
+      if (record.sequence > this.applied) {
+        throw new DelegationJournalError('carried-past-applied', `carried sequence ${record.sequence} is past the checkpoint's applied ${this.applied}`);
+      }
+      this.lastCarried = record.sequence;
+      this.held.delete(record.journalId);
+      if (record.entry.kind === 'evidence-accepted') {
+        this.eventIds.add(record.entry.event.eventId);
+        this.evidenceIndex.add(record.sequence);
+      }
+      this.phase = 'identity-evidence';
+      this.builder.observeRecord(record);
     } catch (err) {
       this.record(err);
     }
@@ -1468,8 +1596,9 @@ export function recoverDelegationState(checkpointBytes: Uint8Array | null, retai
 // IMPURE SHELL: from here down the module reads and writes files (through the injected port), calls the injected clock and
 // randomness, and drives SQLite through the synchronous store. Nothing above does any of it.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-/** Reads both files and recovers (an active restore marker refuses first). A journal read that fails (an unreadable chunk, a record that does
- *  not validate, a torn tail the checkpoint names) is a recovery failure. A torn tail that nothing names is not: it is a successful recovery of
+/** Reads the checkpoint and the retained set (the carried file's lines, then the journal: `readDelegationRetainedRecords`) and recovers (an
+ *  active restore marker refuses first). A read that fails (an unreadable chunk, a record that does not validate, a torn tail the checkpoint
+ *  names, any torn tail of the carried file, a carried line out of order or not in the journal) is a recovery failure. A torn tail that nothing names is not: it is a successful recovery of
  *  the complete records that carries `tailHeal`, the plan `DelegationDurability` carries out (D-4655). */
 export async function recoverDelegationFromFiles(port: DelegationFilePort, dir: string): Promise<DelegationRecoveryReport> {
   // An active restore marker comes FIRST: the files below may be half replaced, so none of them is read (a refusal, not a repair).
@@ -1483,7 +1612,9 @@ export async function recoverDelegationFromFiles(port: DelegationFilePort, dir: 
   // A tail is NOT failed on the way in (D-4655): the complete records are recovered first, and the tail is judged against the result.
   const found: { tail: DelegationJournalTail | null } = { tail: null };
   try {
-    for await (const record of readDelegationJournalRecords(port, path.join(dir, DELEGATION_JOURNAL_FILE), undefined, (t) => { found.tail = t; })) recovery.accept(record);
+    for await (const line of readDelegationRetainedRecords(port, path.join(dir, DELEGATION_CARRIED_FILE), path.join(dir, DELEGATION_JOURNAL_FILE), (t) => { found.tail = t; })) {
+      if (line.source === 'carried') recovery.acceptCarried(line.record); else recovery.accept(line.record);
+    }
   } catch (err) {
     if (err instanceof DelegationJournalError) recovery.fail('journal-validate', err.code, err.message);
     else throw err;
@@ -1532,6 +1663,12 @@ export interface DelegationProjectionPort {
   /** ONE transaction for the whole list. A conflict is reported, not thrown, and does not abort the others. */
   insertEvents(rows: readonly DelegationEventRow[]): DelegationInsertEventsResult;
   eventStats(): { count: number; maxSequence: number | null };
+  /** D-7021: `delegation_events` rows at or below a journal sequence (`CoordStore.countDelegationEventsAtOrBelow`). Absent on a port built
+   *  before the compaction: the repair then has no step 0, and the compaction marks the projection stale instead of deleting. */
+  countEventsAtOrBelow?(sequence: number): number;
+  /** D-7021: deletes at most `limit` rows with `afterExclusive < journalSequence <= throughInclusive`, in one statement and one transaction,
+   *  and answers how many it deleted (`CoordStore.deleteDelegationEventsBetween`). */
+  deleteEventsBetween?(afterExclusive: number, throughInclusive: number, limit: number): number;
 }
 
 export interface DelegationProjectionRepairReport {
@@ -1553,6 +1690,9 @@ export interface DelegationProjectionRepairReport {
    *  every count is then 0, and `resumedAfter` is SQLite's max). Every full repair carries false: a reader tells the two apart by this,
    *  never by the zeros. */
   skipped: boolean;
+  /** D-7021: the rows step 0 deleted below the journal's first retained sequence (a compaction that died between its journal rename and its
+   *  SQLite delete, or whose delete failed): deleted in the gaps between the carried evidence, never a wipe. */
+  prunedBelow: number;
 }
 
 /** D-5836: a full repair runs at least this often (one hour) even when the per-pass repair finds the projection known current, so
@@ -1560,6 +1700,33 @@ export interface DelegationProjectionRepairReport {
 export const DELEGATION_REPAIR_FULL_MS = 60 * 60_000;
 
 const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve); });
+
+/** D-7021: how many `delegation_events` rows one delete statement takes; the loop gets a turn between two. */
+export const DELEGATION_EVENTS_DELETE_CHUNK = 5000;
+
+/**
+ * D-7021: deletes SQLite's evidence rows at or below `through` in the gaps between the carried evidence sequences (which are kept), in chunks of
+ * `chunk` rows with the loop yielded after each. The ONE walk, used by the compaction's `events-delete` and the repair's step 0. Answers how
+ * many rows it deleted. A store failure throws; the caller decides what it means.
+ */
+async function deleteEventsInGaps(projection: DelegationProjectionPort, through: number, carried: readonly number[], chunk: number): Promise<number> {
+  const remove = projection.deleteEventsBetween;
+  if (remove === undefined) throw new Error('the projection port cannot delete delegation events');
+  let deleted = 0;
+  let after = 0;
+  for (const bound of [...carried.filter((c) => c <= through), through + 1]) {
+    if (bound - 1 > after) {
+      for (;;) {
+        const n = remove.call(projection, after, bound - 1, chunk);
+        deleted += n;
+        await yieldToEventLoop();
+        if (n < chunk) break;
+      }
+    }
+    after = Math.max(after, bound);
+  }
+  return deleted;
+}
 
 /** The checkpoint without some sessions and everything that names them: projecting it deletes those sessions' events (the
  *  projection deletes the events of a LEAVING session), and projecting the whole checkpoint again re-adds the sessions. */
@@ -1599,14 +1766,27 @@ export async function repairDelegationProjection(input: {
   heal?: readonly { sessionId: string; incarnation: string }[];
   /** Recovery's count of the journal's evidence records, to skip or shorten the passes. */
   evidence?: DelegationEvidenceCounts;
+  /** D-7021: the journal's first sequence (null: no journal). Rows below it that are not carried evidence are deleted first (step 0). */
+  retainedFrom?: number | null;
+  /** D-7021: the rows one step-0 delete statement takes (`DELEGATION_EVENTS_DELETE_CHUNK`). */
+  deleteChunk?: number;
 }): Promise<DelegationProjectionRepairReport> {
   const { projection, checkpoint } = input;
   const chunkSize = input.chunkSize ?? 500;
+  // STEP 0 (D-7021): SQLite's rows below the journal's first retained sequence that are not carried evidence are what a compaction cut and did
+  // not get to delete (it died between its journal rename and its delete, or the delete failed). They are deleted in the gaps between the
+  // carried evidence, as the compaction would have; today's steps then run unchanged, and the wipe stays the last resort for a real conflict.
+  let prunedBelow = 0;
+  const retainedFrom = input.retainedFrom ?? null;
+  if (retainedFrom !== null && input.evidence !== undefined && projection.countEventsAtOrBelow !== undefined && projection.deleteEventsBetween !== undefined
+    && projection.countEventsAtOrBelow(retainedFrom - 1) !== input.evidence.countAtOrBelow(retainedFrom - 1)) {
+    prunedBelow = await deleteEventsInGaps(projection, retainedFrom - 1, input.evidence.sequencesAtOrBelow(retainedFrom - 1), input.deleteChunk ?? DELEGATION_EVENTS_DELETE_CHUNK);
+  }
   projection.project(checkpoint);
   const stats = projection.eventStats();
   const resume = stats.maxSequence ?? 0;
   const report: DelegationProjectionRepairReport = {
-    resumedAfter: resume, inserted: 0, duplicate: 0, healedSessions: 0, fullReplay: false, wipedAll: false, journalPasses: 0, skipped: false,
+    resumedAfter: resume, inserted: 0, duplicate: 0, healedSessions: 0, fullReplay: false, wipedAll: false, journalPasses: 0, skipped: false, prunedBelow,
   };
   const conflicted = new Map<string, { sessionId: string; incarnation: string }>();
   for (const k of input.heal ?? []) conflicted.set(sessionKeyOf(k.sessionId, k.incarnation), k);
@@ -1690,7 +1870,28 @@ export async function repairDelegationProjection(input: {
 export const DELEGATION_DURABILITY_EDGES = [
   'journal-write', 'journal-fsync', 'build', 'checkpoint-write', 'checkpoint-fsync', 'checkpoint-rename', 'directory-fsync', 'project',
 ] as const;
-export type DelegationDurabilityEdge = (typeof DELEGATION_DURABILITY_EDGES)[number];
+/** D-7021: the journal compaction's edges, in order (`compactJournal`). Each is made durable before the next. */
+export const DELEGATION_COMPACTION_EDGES = ['compact-plan', 'carried-write', 'carried-fsync', 'carried-rename', 'carried-directory-fsync',
+  'writer-close', 'journal-copy', 'journal-copy-fsync', 'journal-rename', 'journal-directory-fsync', 'writer-reopen', 'memory-prune',
+  'events-delete'] as const;
+export type DelegationDurabilityEdge = (typeof DELEGATION_DURABILITY_EDGES)[number] | (typeof DELEGATION_COMPACTION_EDGES)[number];
+
+/** What one compaction did (`DelegationDurability.compactJournal`). */
+export type DelegationCompactionOutcome =
+  | { kind: 'skipped'; reason: DelegationCompactionSkipReason; plan: DelegationCompactionPlan | null }
+  | { kind: 'compacted'; plan: DelegationCompactionPlan; eventsDeleted: number; retired: number; ms: number };
+
+/** Task 3.1: what the lane asks of the upkeep door in one pass. */
+export interface DelegationUpkeepRequest { nowMs: number; intervals: boolean; cursors: boolean; zeroDelta: boolean }
+export interface DelegationUpkeepOutcome {
+  intervalsChanged: boolean;
+  cursorsDropped: number;
+  /** The kept cursor rows whose bucket names no hour, counted whether or not anything was due (the lane warns once on them). */
+  cursorsUnparseable: number;
+  retired: number;
+  /** Null when no requested part had anything to do: no clone, no build, no encode, no write. */
+  applied: DelegationApplyOutcome | null;
+}
 
 export interface DelegationDurabilityDeps {
   /** The coordination directory (`~/.ccrc`; a fixture directory in a test). */
@@ -1709,6 +1910,8 @@ export interface DelegationDurabilityDeps {
   onEdge?: (edge: DelegationDurabilityEdge, when: 'before' | 'after') => void | Promise<void>;
   /** Server log line sink (`console.warn('ccrc-server: …')` in production). */
   warn?: (message: string) => void;
+  /** D-7021: the rows one `delegation_events` delete statement takes (`DELEGATION_EVENTS_DELETE_CHUNK`; a test seam). */
+  eventsDeleteChunk?: number;
 }
 
 /** Why the applier refuses to apply anything until it re-recovers. */
@@ -1771,8 +1974,11 @@ const nowInstant = (ms: number): string => formatDelegationInstant(ms);
 export class DelegationDurability {
   private readonly port: DelegationFilePort;
   private readonly journalPath: string;
+  private readonly carriedPath: string;
   private readonly checkpointPath: string;
   private readonly tempPath: string;
+  /** D-7021: the journal's first sequence (what the repair's step 0 deletes below), or null when there is no journal. */
+  private retainedFrom: number | null = null;
   private queue: Promise<unknown> = Promise.resolve();
   private writer: DelegationJournalWriter;
   private builder = DelegationCheckpointBuilder.from(emptyDelegationCheckpoint());
@@ -1809,6 +2015,7 @@ export class DelegationDurability {
   private constructor(private readonly deps: DelegationDurabilityDeps) {
     this.port = deps.port ?? nodeDelegationFilePort;
     this.journalPath = path.join(deps.dir, DELEGATION_JOURNAL_FILE);
+    this.carriedPath = path.join(deps.dir, DELEGATION_CARRIED_FILE);
     this.checkpointPath = path.join(deps.dir, DELEGATION_CHECKPOINT_FILE);
     this.tempPath = `${this.checkpointPath}.tmp`;
     this.writer = new DelegationJournalWriter(this.port, this.journalPath, deps.dir);
@@ -1903,6 +2110,7 @@ export class DelegationDurability {
       this.builder = report.facts.builder;
       this.eventIds = report.facts.eventIds;
       this.head = report.facts.head;
+      this.retainedFrom = report.journal?.firstSequence ?? null;
       this.current = report.state;
       this.evidence = report.facts.evidence;
       // Recovery is the one moment the in-memory state may be ahead of the file: persist it through the same replacement. A
@@ -2065,11 +2273,12 @@ export class DelegationDurability {
         && this.fullClock() - this.lastFullAt < DELEGATION_REPAIR_FULL_MS) {
         const stats = projection.eventStats();
         if (stats.count === this.evidence.total && stats.maxSequence === this.evidence.last) {
-          return { resumedAfter: stats.maxSequence ?? 0, inserted: 0, duplicate: 0, healedSessions: 0, fullReplay: false, wipedAll: false, journalPasses: 0, skipped: true };
+          return { resumedAfter: stats.maxSequence ?? 0, inserted: 0, duplicate: 0, healedSessions: 0, fullReplay: false, wipedAll: false, journalPasses: 0, skipped: true, prunedBelow: 0 };
         }
       }
       const report = await repairDelegationProjection({
-        projection, checkpoint: this.current.checkpoint, journal: () => readDelegationJournalRecords(this.port, this.journalPath), heal: [...this.drifted.values()], evidence: this.evidence,
+        projection, checkpoint: this.current.checkpoint, journal: () => this.retainedRecords(), heal: [...this.drifted.values()], evidence: this.evidence,
+        retainedFrom: this.retainedFrom, deleteChunk: this.deps.eventsDeleteChunk,
       });
       this.projectionStale = false;
       this.drifted.clear();
@@ -2099,8 +2308,13 @@ export class DelegationDurability {
   visitRetainedRecords(visit: (record: DelegationJournalRecordV1) => void): Promise<void> {
     return this.enqueue(async () => {
       this.requireReady();                                  // a reconstructing or failed applier streams nothing: its journal is not yet folded
-      for await (const record of readDelegationJournalRecords(this.port, this.journalPath)) visit(record);
+      for await (const record of this.retainedRecords()) visit(record);
     });
+  }
+
+  /** The retained set as records, through the one reader (`readDelegationRetainedRecords`): the carried lines, then the journal. */
+  private async *retainedRecords(): AsyncGenerator<DelegationJournalRecordV1, void, undefined> {
+    for await (const line of readDelegationRetainedRecords(this.port, this.carriedPath, this.journalPath)) yield line.record;
   }
 
   /** The pruning plan right now. Streams the journal once for the held records' positions; deletes and rewrites nothing. */
@@ -2305,6 +2519,200 @@ export class DelegationDurability {
   }
 
   /**
+   * THE UPKEEP DOOR (wave 4, Task 3.1): the interval upkeep, the cursor retention and the zero-delta retirement as ONE commit, instead of the
+   * hourly whole-checkpoint replace that `applyCheckpointChange` made for the intervals. It decides read-only on the live builder's own rows,
+   * under the lock (as `retireZeroDeltaBashActivities` does): when no requested part has anything to do it answers `applied: null` and makes
+   * no clone, build or encode. Otherwise it makes one `commitLocked` whose `mutate` runs `upkeepIntervals`, `dropBucketCursors` and
+   * `retireZeroDeltaBash`, in that order, with `rowsChanged`, since a due part always changes a row. No `verifyDecodable` and no
+   * `structuredClone`: the rows are the builder's own, as in `pruneBucketCursors`.
+   */
+  upkeep(req: DelegationUpkeepRequest): Promise<DelegationUpkeepOutcome> {
+    return this.enqueue(async () => {
+      this.requireReady();
+      const cp = this.current.checkpoint;
+      const up = req.intervals ? upkeepDelegationIntervals(cp.observationIntervals, req.nowMs) : { intervals: cp.observationIntervals, changed: false };
+      const cursorPlan = req.cursors ? planDelegationCursorRetention(cp.bucketCursors, up.intervals, req.nowMs) : null;
+      const out: DelegationUpkeepOutcome = { intervalsChanged: false, cursorsDropped: 0, cursorsUnparseable: cursorPlan?.unparseable.length ?? 0, retired: 0, applied: null };
+      const zeroDue = req.zeroDelta && this.builder.retirableZeroDeltaBash().length > 0;
+      if (!up.changed && (cursorPlan === null || cursorPlan.drop.length === 0) && !zeroDue) return out;   // idle: no clone, build, encode or write
+      out.applied = await this.commitLocked({
+        items: [],
+        mutate: (b) => {
+          if (req.intervals) out.intervalsChanged = b.upkeepIntervals(req.nowMs);
+          if (req.cursors) { const r = b.dropBucketCursors(req.nowMs); out.cursorsDropped = r.dropped; out.cursorsUnparseable = r.unparseable; }
+          if (req.zeroDelta) out.retired = b.retireZeroDeltaBash();
+        },
+        force: false,
+        rowsChanged: true,
+      });
+      return out;
+    });
+  }
+
+  /**
+   * JOURNAL COMPACTION (wave 4, D-7000, D-7001, D-6999, D-7021; armed on landing, D-7022). Inside the queue, on a ready applier, each step made
+   * durable before the next:
+   *   1. `compact-plan`: the retained set (carried file, then journal) through `DelegationCompactionPlanner`; stop on `nothing-to-cut` or
+   *      `below-share`;
+   *   2. `carried-write`, `carried-fsync`: `delegation-carried.log.tmp` holds the plan's carried lines, copied verbatim from their files;
+   *   3. `carried-rename`, `carried-directory-fsync`;
+   *   4. `writer-close`: nothing can append, the queue is held;
+   *   5. `journal-copy`, `journal-copy-fsync`: the journal's bytes from record S+1 to its end into `delegation-events.log.tmp`;
+   *   6. `journal-rename`, `journal-directory-fsync`;
+   *   7. `memory-prune`: the event IDs, the evidence index and the builder's facts of the cut records leave, so the live state equals what a
+   *      recovery over the compacted set rebuilds;
+   *   8. `writer-reopen`;
+   *   9. `events-delete` (SQLite's cut rows, in the gaps between the carried evidence), then the retirement commit (C1, `retireBehindCut`).
+   * The carried file is renamed FIRST: a crash between the two renames leaves it beside the uncut journal, its lines at or above the journal's
+   * first sequence copies of journal lines that every reader matches and skips; renamed second, such a crash would lose the carried records.
+   * A failure before the journal's rename leaves the journal byte-identical: both temps are removed (best effort), the writer is replaced,
+   * nothing in memory has changed, and the applier stays ready; the outcome is a rejection. A failure at or after the rename fails the applier,
+   * which then re-recovers from whichever files the rename left (both are valid). A SQLite failure at `events-delete` fails nothing: it marks
+   * the projection stale, and the repair's step 0 finishes the job.
+   */
+  compactJournal(nowMs: number, floorMs: number): Promise<DelegationCompactionOutcome> {
+    return this.enqueue(async () => {
+      if (!this.pruningEnabled()) return { kind: 'skipped', reason: 'not-ready', plan: null };
+      const started = this.fullClock();
+      const carriedTemp = `${this.carriedPath}.tmp`;
+      const journalTemp = `${this.journalPath}.tmp`;
+      let renamed = false;
+      try {
+        const plan = await this.edge('compact-plan', () => this.planCompactionLocked(nowMs, floorMs));
+        if (plan.cutThrough === 0) return { kind: 'skipped', reason: 'nothing-to-cut', plan };
+        if (!plan.worthwhile) return { kind: 'skipped', reason: 'below-share', plan };
+        await this.writeCarriedLocked(plan, carriedTemp);
+        await this.edge('carried-rename', () => this.port.rename(carriedTemp, this.carriedPath));
+        await this.edge('carried-directory-fsync', () => this.port.fsyncDir(this.deps.dir));
+        await this.edge('writer-close', () => this.writer.close());
+        await this.copySuffixLocked(plan.suffixOffset, journalTemp);
+        await this.deps.onEdge?.('journal-rename', 'before');
+        renamed = true;                                     // from here on the journal may be the copy: a failure re-recovers
+        await this.port.rename(journalTemp, this.journalPath);
+        await this.deps.onEdge?.('journal-rename', 'after');
+        await this.edge('journal-directory-fsync', () => this.port.fsyncDir(this.deps.dir));
+        await this.edge('memory-prune', () => {
+          for (const id of plan.cutEvidenceEventIds) this.eventIds.delete(id);
+          this.evidence.dropThrough(plan.cutThrough, plan.carriedEvidenceSequences);
+          this.builder.dropCutFacts(plan.cutThrough, new Set(plan.carried.map((l) => l.journalId)));
+          this.retainedFrom = plan.cutThrough + 1;
+        });
+        await this.edge('writer-reopen', () => { this.writer = new DelegationJournalWriter(this.port, this.journalPath, this.deps.dir); });
+        const eventsDeleted = await this.edge('events-delete', () => this.deleteCutEventsLocked(plan));
+        const retired = await this.retireBehindCutLocked(plan);
+        return { kind: 'compacted', plan, eventsDeleted, retired, ms: Math.max(0, this.fullClock() - started) };
+      } catch (err) {
+        if (renamed) { if (this.failureNow === null) this.fail(err); throw err; }
+        await this.port.removeTemp(carriedTemp).catch(() => undefined);
+        await this.port.removeTemp(journalTemp).catch(() => undefined);
+        await this.writer.close().catch(() => undefined);
+        this.writer = new DelegationJournalWriter(this.port, this.journalPath, this.deps.dir);
+        throw err;
+      }
+    });
+  }
+
+  /** Step 1: the plan, from one stream of the retained set. */
+  private async planCompactionLocked(nowMs: number, floorMs: number): Promise<DelegationCompactionPlan> {
+    const planner = new DelegationCompactionPlanner({ checkpoint: this.current.checkpoint, ready: this.pruningEnabled(), nowMs, floorMs, naming: delegationRecordNaming });
+    let journalBytes = 0;
+    for await (const line of readDelegationRetainedRecords(this.port, this.carriedPath, this.journalPath)) {
+      if (line.source === 'carried') { planner.addCarried(line.record, line); continue; }
+      planner.add(line.record, line);
+      journalBytes = line.offset + line.length;
+    }
+    return planner.finish(journalBytes);
+  }
+
+  /** Step 2: the carried lines, copied verbatim from their files by position (adjacent lines of one file in one read), into the temp. */
+  private async writeCarriedLocked(plan: DelegationCompactionPlan, temp: string): Promise<void> {
+    const held: { out: DelegationFileHandle | null; carried: DelegationReadHandle | null; journal: DelegationReadHandle | null } = { out: null, carried: null, journal: null };
+    try {
+      await this.edge('carried-write', async () => {
+        held.out = await this.port.createTemp(temp);
+        let planned = 0;
+        let written = 0;
+        for (let i = 0; i < plan.carried.length;) {
+          const first = plan.carried[i]!;
+          let end = first.offset + first.length;
+          let j = i + 1;
+          while (j < plan.carried.length && plan.carried[j]!.source === first.source && plan.carried[j]!.offset === end) { end += plan.carried[j]!.length; j++; }
+          const src = first.source === 'carried'
+            ? (held.carried ??= await this.port.openRead(this.carriedPath))
+            : (held.journal ??= await this.port.openRead(this.journalPath));
+          const bytes = src === null ? new Uint8Array(0) : await src.read(first.offset, end - first.offset);
+          planned += end - first.offset;
+          if (bytes.length !== end - first.offset || bytes[bytes.length - 1] !== 0x0a) break;
+          written += await held.out.write(bytes);
+          i = j;
+        }
+        if (written !== planned || planned !== plan.carriedBytes) throw new DelegationJournalError('short-copy', `the carried file got ${written} of the ${plan.carriedBytes} bytes planned`);
+      });
+      await this.edge('carried-fsync', async () => { await held.out?.sync(); });
+    } finally {
+      await held.out?.close().catch(() => undefined);
+      await held.carried?.close().catch(() => undefined);
+      await held.journal?.close().catch(() => undefined);
+    }
+  }
+
+  /** Step 5: the journal's bytes from `offset` (record S+1) to its end as measured now, in 256 KiB chunks, into the temp. */
+  private async copySuffixLocked(offset: number, temp: string): Promise<void> {
+    const held: { out: DelegationFileHandle | null; src: DelegationReadHandle | null } = { out: null, src: null };
+    try {
+      await this.edge('journal-copy', async () => {
+        held.src = await this.port.openRead(this.journalPath);
+        if (held.src === null) throw new DelegationJournalError('short-copy', 'the journal vanished before its copy');
+        const size = await held.src.size();
+        held.out = await this.port.createTemp(temp);
+        let written = 0;
+        let lastByte = -1;
+        for (let at = offset; at < size;) {
+          const chunk = await held.src.read(at, Math.min(1 << 18, size - at));
+          if (chunk.length === 0) break;
+          at += chunk.length;
+          lastByte = chunk[chunk.length - 1]!;
+          written += await held.out.write(chunk);
+        }
+        if (written !== size - offset) throw new DelegationJournalError('short-copy', `the journal copy wrote ${written} of ${size - offset} bytes`);
+        if (lastByte !== 0x0a) throw new DelegationJournalError('torn-tail', 'the journal copy does not end in LF');
+      });
+      await this.edge('journal-copy-fsync', async () => { await held.out?.sync(); });
+    } finally {
+      await held.out?.close().catch(() => undefined);
+      await held.src?.close().catch(() => undefined);
+    }
+  }
+
+  /** Step 9, the first half: SQLite's cut evidence rows. A store failure marks the projection stale and warns; it never fails the applier. */
+  private async deleteCutEventsLocked(plan: DelegationCompactionPlan): Promise<number> {
+    const projection = this.deps.projection;
+    if (projection === null) return 0;
+    try {
+      return await deleteEventsInGaps(projection, plan.cutThrough, plan.carriedEvidenceSequences, this.deps.eventsDeleteChunk ?? DELEGATION_EVENTS_DELETE_CHUNK);
+    } catch (err) {
+      this.projectionStale = true;
+      this.projectedRevision = null;
+      this.deps.warn?.(`ccrc-server: delegation compaction: the delegation_events delete failed, the repair finishes it: ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    }
+  }
+
+  /** Step 9, the second half (Task 3.5): one commit retiring what the plan found retirable, after the cut is durable. A refusal or failure is
+   *  warned and counts 0: the cut stands, and the next day's compaction retires them (a row the journal no longer names is valid, O4). */
+  private async retireBehindCutLocked(plan: DelegationCompactionPlan): Promise<number> {
+    if (plan.retirable.length === 0) return 0;
+    const box = { retired: 0 };
+    try {
+      await this.commitLocked({ items: [], mutate: (b) => { box.retired = b.retireBehindCut(plan.retirable); }, force: false, rowsChanged: true });
+      return box.retired;
+    } catch (err) {
+      this.deps.warn?.(`ccrc-server: delegation compaction: the retirement of ended activities failed: ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    }
+  }
+
+  /**
    * The serialized journal adapter for a lease. It DEDUPLICATES first (an unreleased identity already held answers
    * `duplicate`; a canonical path held by another identity is REFUSED, since nothing releases a lease in wave 3 and the
    * active-path index would otherwise fail every later projection), and only then calls the injected `randomUUID`, exactly once.
@@ -2384,6 +2792,9 @@ export class DelegationDurability {
     /** True when rows came from a caller (a checkpoint-only change) rather than the fold: the bytes are then read back through the
      *  strict decoder BEFORE anything is written, so a checkpoint recovery could not read is never made durable. */
     verifyDecodable?: boolean;
+    /** Task 3.1: the caller's door removed or replaced a row (it decided so on the live builder, under this lock), so the no-op compare is
+     *  skipped. Like the `appends` skip it can only cause a write, never suppress one. */
+    rowsChanged?: true;
   }): Promise<DelegationApplyOutcome> {
     const plan = planDelegationJournalAppend({ head: this.head, eventIds: this.eventIds, leases: this.builder.leaseView(), items: args.items });
     // What `evidence` MEANS: the count of evidence records the retained JOURNAL holds, so the repair can set SQLite's (count, max)
@@ -2408,8 +2819,9 @@ export class DelegationDurability {
     // from the caller's word (the items it handed over may all dedupe away). And a skip can only ever cause a write, never suppress one:
     // a change that replaces or removes rows without appending always runs the compare.
     const appends = checkpoint.appliedJournalSequence !== prior.appliedJournalSequence;
-    if (!appends) this.measuredEncodes += 2;
-    const sameAsPrior = !appends && canonicalDelegationJson({ ...checkpoint, revision: 0 }) === canonicalDelegationJson({ ...prior, revision: 0 });
+    const known = appends || args.rowsChanged === true;
+    if (!known) this.measuredEncodes += 2;
+    const sameAsPrior = !known && canonicalDelegationJson({ ...checkpoint, revision: 0 }) === canonicalDelegationJson({ ...prior, revision: 0 });
     if (plan.records.length === 0 && sameAsPrior && !args.force) {
       return { state: this.current, appended: [], skipped: plan.skipped, openedActivities: [], durable: false, projection: { status: 'unprojected' } };
     }
@@ -2441,6 +2853,7 @@ export class DelegationDurability {
     this.current = { checkpoint, phase: 'ready' };
     const last = plan.records[plan.records.length - 1];
     if (last !== undefined) this.head = { sequence: last.sequence, journalId: last.journalId, digest: last.digest };
+    this.retainedFrom ??= plan.records[0]?.sequence ?? null;
     for (const r of plan.records) if (r.entry.kind === 'evidence-accepted') this.eventIds.add(r.entry.event.eventId);
     this.evidence.extend(evidenceSequences);
     const rows = plan.records.filter((r) => r.entry.kind === 'evidence-accepted').map(delegationEventRowOfRecord);
@@ -2564,6 +2977,6 @@ export function isDelegationCheckpointKebab(v: string): boolean {
   return own(DELEGATION_CHECKPOINT_ERROR_CODES) || own(DELEGATION_OWN_FAILURE_CODES) || own(DELEGATION_LEASE_REFUSAL_REASONS)
     || own(DELEGATION_META_OPEN_KINDS) || own(DELEGATION_FAILURE_PHASES) || own(DELEGATION_JOURNAL_ERROR_CODES)
     || own(DELEGATION_JOURNAL_ENTRY_KINDS) || own(DELEGATION_PRUNING_HOLD_REASONS)
-    || v === DELEGATION_RESTORE_IN_PROGRESS || listed(DELEGATION_DURABILITY_EDGES)
+    || v === DELEGATION_RESTORE_IN_PROGRESS || listed(DELEGATION_DURABILITY_EDGES) || listed(DELEGATION_COMPACTION_EDGES)
     || listed(DELEGATION_ACTIVITY_SOURCE_KINDS) || listed(DELEGATION_CLEANUP_STATES) || listed(DELEGATION_CLEANUP_POPULATIONS);
 }

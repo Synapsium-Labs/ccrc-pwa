@@ -86,6 +86,7 @@ import * as checkpointNs from '../src/coord/delegation-checkpoint.js';
 import type { DelegationApplyOutcome } from '../src/coord/delegation-checkpoint.js';
 import * as modelNs from '../src/coord/delegation-model.js';
 import { oldRuleCheckpoint } from './delegationOldRuleFixture.js';
+import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
 
 // A pass-through of the journal's append planner that a test can switch to "skip everything". `createLease` calls the planner after its
 // own checks, so no real input makes the planner skip the entry it was handed; this is the only way to reach that branch (fix round 1, M6).
@@ -577,6 +578,7 @@ function spyPort(log: string[], inner: DelegationFilePort = nodeDelegationFilePo
     // MUST 1's boot report: two reads of the tail quarantine, not logged (no read is), so every write-order row is unchanged
     listDir: (d) => inner.listDir(d),
     statFile: (p) => inner.statFile(p),
+    removeTemp: async (p) => { log.push(`removeTemp:${path.basename(p)}`); await inner.removeTemp(p); },
     openRead: async (p) => {
       const h = await inner.openRead(p);
       if (h === null) return null;
@@ -1750,6 +1752,7 @@ describe('D-4655: a torn journal tail heals itself (the one named exception to t
         openRead: async (p) => { read(`openRead:${path.basename(p)}`); return inner.openRead(p); },
         listDir: async (d) => { read(`listDir:${path.basename(d)}`); return inner.listDir(d); },
         statFile: async (p) => { read(`statFile:${path.basename(p)}`); return inner.statFile(p); },
+        removeTemp: async (p) => { mutate(`removeTemp:${path.basename(p)}`); await inner.removeTemp(p); },
       };
       return { port, ops, count: () => n };
     }
@@ -2056,7 +2059,7 @@ describe('D-4655: a torn journal tail heals itself (the one named exception to t
       return {
         openAppend: alive(inner.openAppend), createTemp: alive(inner.createTemp), rename: alive(inner.rename), fsyncDir: alive(inner.fsyncDir),
         readFile: alive(inner.readFile), openRead: alive(inner.openRead), mkdirp: alive(inner.mkdirp), fsyncFile: alive(inner.fsyncFile),
-        listDir: alive(inner.listDir), statFile: alive(inner.statFile),
+        listDir: alive(inner.listDir), statFile: alive(inner.statFile), removeTemp: alive(inner.removeTemp),
         truncate: alive(async (p: string, len: number) => { await inner.truncate(p, len); dead = true; throw new SimulatedCrash('killed after the cut'); }),
       };
     };
@@ -3133,7 +3136,12 @@ describe('no-compaction / hold table (W3-M38): holds are computed and tested, an
     // outside the heal, or a rename of anything but the two temp files each turn them red.
     it('the journal module has no method that could rewrite it: its ONLY truncate is the port member the tail heal calls, and the writer has none', () => {
       const j = code('delegation-journal.ts');
-      expect(j).not.toMatch(/ftruncate|\bunlink\(|\brm\(|\.writeFile\(|\bcreateWriteStream\(|O_TRUNC\b.*journal/i);
+      expect(j).not.toMatch(/ftruncate|\brm\(|\.writeFile\(|\bcreateWriteStream\(|O_TRUNC\b.*journal/i);
+      // wave 4 (D-7021): the ONE unlink is the port's `removeTemp` adapter, which refuses any name that is not a `.tmp` (the compaction's
+      // two temps); read from the parse (ARCH-06), not from the text
+      const journalCalls = parsedFile('server/src/coord/delegation-journal.ts').calls;
+      expect(journalCalls.filter((c) => c.name === 'unlink').map((c) => `${c.callee}(${c.args.map((a) => a.text).join(', ')})`), 'one unlink: removeTemp\'s node adapter').toEqual(['fsp.unlink(p)']);
+      expect(journalCalls.filter((c) => c.callee === 'p.endsWith').map((c) => c.args.map((a) => a.text)), 'and its guard').toEqual([['.tmp']]);
       expect(j.match(/\btruncate\b/g), 'the port member, its node adapter and the adapter\'s fsp call: three words, no more').toHaveLength(3);
       expect(j).toMatch(/^  truncate\(path: string, length: number\): Promise<void>;$/m);
       expect(j).toMatch(/^  truncate: \(p, length\) => fsp\.truncate\(p, length\),$/m);
@@ -3144,9 +3152,20 @@ describe('no-compaction / hold table (W3-M38): holds are computed and tested, an
     });
     it('the checkpoint module cuts the journal in ONE place (the heal, at the plan\'s offset), renames only its two temp files, and opens the journal only for append or read', () => {
       const c = code('delegation-checkpoint.ts');
-      expect(c.match(/\.rename\(/g), 'the checkpoint temp file and the quarantine temp file').toEqual(['.rename(', '.rename(']);
+      // wave 4 (D-7021): the compaction's two renames join the checkpoint's and the quarantine's, each of a temp onto its own file, the carried
+      // file's FIRST (a crash between them leaves a valid retained set)
+      expect(c.match(/\.rename\(/g), 'the checkpoint, quarantine, carried and journal temp files').toEqual(['.rename(', '.rename(', '.rename(', '.rename(']);
       expect(c).toMatch(/this\.port\.rename\(this\.tempPath, this\.checkpointPath\)/);
       expect(c).toMatch(/this\.port\.rename\(temp, kept\)/);
+      // the compaction's renames and temp removals, read from the parse by symbol (ARCH-06): the carried file's rename comes first, and
+      // `removeTemp` names the two temps and nothing else (W4-CM16)
+      const CHECKPOINT_TS = 'server/src/coord/delegation-checkpoint.ts';
+      const compact = symbolOf(CHECKPOINT_TS, 'DelegationDurability.compactJournal');
+      const argsOf = (callee: string): string[] => callsIn(compact).filter((x) => x.callee === callee).map((x) => x.args.map((a) => a.text).join(', '));
+      expect(argsOf('this.port.rename'), 'the carried file, then the journal').toEqual(['carriedTemp, this.carriedPath', 'journalTemp, this.journalPath']);
+      expect(argsOf('this.port.removeTemp')).toEqual(['carriedTemp', 'journalTemp']);
+      expect(parsedFile(CHECKPOINT_TS).bindings.filter((b) => b.start >= compact.start && b.end <= compact.end && /Temp$/.test(b.name)).map((b) => `${b.name} = ${b.init}`))
+        .toEqual(['carriedTemp = `${this.carriedPath}.tmp`', 'journalTemp = `${this.journalPath}.tmp`']);
       expect(c).toMatch(/const temp = `\$\{kept\}\.tmp`;/);
       expect(c).toMatch(/const kept = path\.join\(this\.deps\.dir, DELEGATION_TORN_DIR, plan\.name\);/);
       expect(c).not.toMatch(/unlink|\.writeFile\(|rmSync/);
@@ -3209,7 +3228,7 @@ describe('the pure/impure split is explicit, and nothing pure mints an ID or rea
       const imports = [...pure.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map((m) => m[1]);
       expect(imports.sort()).toEqual(file === 'delegation-journal.ts'
         ? ['../../../shared/api.js', './delegation-model.js']
-        : ['../../../shared/api.js', './delegation-journal.js', './delegation-model.js', 'node:path']);
+        : ['../../../shared/api.js', './delegation-compaction.js', './delegation-journal.js', './delegation-model.js', 'node:path']);
     });
     it(`${file}: no randomness and no clock anywhere in the module (they are injected)`, () => {
       const src = strip(readFileSync(path.join(dir, file), 'utf8'));
@@ -4624,7 +4643,7 @@ describe('run 762: the zero-delta Bash retirement door, its lease guard and its 
 
   // ── RB18: the one code that deletes ─────────────────────────────────────────────────────────────────────────────────
 
-  it('RB18: the builder\'s only code that deletes a mapping entry or an activity row is retireZeroDeltaBash (a census of code lines, by enclosing method)', () => {
+  it('RB18: the builder\'s only code that deletes a mapping entry or an activity row is retireZeroDeltaBash, and since wave 4 retireBehindCut (C1, D-7001) (a census of code lines, by enclosing method)', () => {
     const file = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord', 'delegation-checkpoint.ts');
     let method = '(file)';
     let inClass = false;
@@ -4640,7 +4659,7 @@ describe('run 762: the zero-delta Bash retirement door, its lease guard and its 
       if (/delete this\.mapping\[|this\.activities\.delete\(/.test(l)) hits.push(method);
       if (/^}/.test(l)) { inClass = false; method = '(file)'; }
     }
-    expect([...new Set(hits)], 'the methods whose code deletes from the mapping or the activities').toEqual(['retireZeroDeltaBash']);
+    expect([...new Set(hits)], 'the methods whose code deletes from the mapping or the activities').toEqual(['retireZeroDeltaBash', 'retireBehindCut']);
   });
 
   // ── RB20: the fault matrix ──────────────────────────────────────────────────────────────────────────────────────────

@@ -7,10 +7,13 @@
 //   - the incremental hash-chain verifier and the anchor triple;
 //   - deduplication planning (a duplicate evidence `eventId` and a duplicate or path-held lease identity are not appended);
 //   - retention PLANNING (`DelegationPruningHold`): computed and tested, and the only thing a caller may do with it is read it.
-//     NO production caller rewrites, truncates, renames or deletes `delegation-events.log` (physical compaction is deferred
-//     until a separately approved plan specifies a crash-safe rewrite), WITH ONE NAMED EXCEPTION (D-4655): the server's tail heal,
-//     which cuts a torn tail off the end after keeping the bytes (`delegationTailHealPlan` is its rule; `DelegationDurability` carries
-//     it out through the port's `truncate`, the only one);
+//     NO production caller rewrites, truncates, renames or deletes `delegation-events.log`, WITH TWO NAMED EXCEPTIONS: the server's
+//     tail heal (D-4655), which cuts a torn tail off the end after keeping the bytes (`delegationTailHealPlan` is its rule;
+//     `DelegationDurability` carries it out through the port's `truncate`, the only one), and the journal compaction (wave 4, D-7021),
+//     `DelegationDurability.compactJournal`, which writes the records still needed into `delegation-carried.log` and then renames a copy
+//     of the journal's suffix over it, each made durable before the next (the planner is `delegation-compaction.ts`);
+//   - the ONE reader of the retained set (`readDelegationRetainedRecords`): the carried lines below the journal's first sequence, then
+//     the journal, so no reader of what is retained ever sees the journal alone;
 //   - the serialized writer: `O_APPEND`, ONE complete write of record plus LF, then `fsync`.
 //
 // THE SPLIT. Everything above the `IMPURE SHELL` banner is pure: no fs, no clock, no randomness, no SQLite. A test pins that
@@ -40,6 +43,9 @@ import {
 
 /** The journal's file name under the coordination directory (`~/.ccrc`). */
 export const DELEGATION_JOURNAL_FILE = 'delegation-events.log';
+/** D-7021: the records at or below the compaction's cut point that a carry rule still needs, verbatim, in increasing sequence and every
+ *  one below the journal's first sequence, with no chain between them. Only the compactor writes it; absent means none. */
+export const DELEGATION_CARRIED_FILE = 'delegation-carried.log';
 
 // ── Refusals ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -72,7 +78,11 @@ export type DelegationJournalErrorCode =
   | 'anchor-missing'         // no retained record at the anchor's sequence
   | 'held-evidence-missing'  // a record a pruning hold names is not retained
   | 'short-write'            // a write that wrote fewer bytes than it was given
-  | 'writer-unusable';       // an earlier write or fsync failed; the tail of the file is unknown
+  | 'writer-unusable'        // an earlier write or fsync failed; the tail of the file is unknown
+  | 'short-copy'             // a compaction copy wrote other than the bytes it planned (D-7021)
+  | 'carried-order'          // a carried line that does not follow the one before it
+  | 'carried-past-journal'   // a carried line at or above the journal's first sequence that the journal does not hold byte for byte
+  | 'carried-past-applied';  // a carried line below the journal past the checkpoint's applied position
 
 export class DelegationJournalError extends Error {
   constructor(readonly code: DelegationJournalErrorCode, detail: string, readonly where?: { line?: number; offset?: number }) {
@@ -94,7 +104,8 @@ export const DELEGATION_JOURNAL_ERROR_CODES: Readonly<Record<DelegationJournalEr
   'duplicate-key': true, 'unknown-key': true, 'bad-field': true, 'invalid-domain': true, noncanonical: true, 'sequence-domain': true,
   'sequence-start': true, 'sequence-duplicate': true, 'sequence-descent': true, 'sequence-gap': true, 'previous-digest': true,
   'journal-id-mismatch': true, 'digest-mismatch': true, 'anchor-sequence': true, 'anchor-journal-id': true, 'anchor-digest': true,
-  'anchor-missing': true, 'held-evidence-missing': true, 'short-write': true, 'writer-unusable': true,
+  'anchor-missing': true, 'held-evidence-missing': true, 'short-write': true, 'writer-unusable': true, 'short-copy': true,
+  'carried-order': true, 'carried-past-journal': true, 'carried-past-applied': true,
 };
 
 /** Why an append plan skipped an item, as a TOTAL table over `DelegationAppendSkipReason`. */
@@ -677,8 +688,10 @@ export function planDelegationJournalAppend(input: {
 /** The reasons a hold exists, derived from the model's one declaration so a new reason cannot be added in two places. */
 export type DelegationPruningHoldReason = DelegationPruningHold['reason'];
 
-/** The wave-3 retention floor the spec proposes: at least 30 days. Wave 3 prunes nothing, so this only bounds the plan. */
-export const DELEGATION_RETENTION_FLOOR_MS = 30 * 24 * 60 * 60 * 1000;
+/** D-7000: the journal's retention floor is 10 days (the operator's ruling of 2026-10-26; the spec proposed 30). It must exceed the lane's
+ *  evidence horizon, `DELEGATION_INTERVAL_RETENTION_HOURS` plus `DELEGATION_EVIDENCE_MARGIN_MS`, which a row in
+ *  `delegation-compaction.test.ts` pins: the evidence a cut removes is then evidence the lane no longer reads. */
+export const DELEGATION_RETENTION_FLOOR_MS = 10 * 24 * 60 * 60 * 1000;
 
 /** What a plan needs to know about the retained journal, collected in one pass without keeping the records. */
 export interface DelegationRetentionView {
@@ -793,6 +806,9 @@ export interface DelegationFilePort {
   listDir(dir: string): Promise<string[] | null>;
   /** A file's size and modification time, or null when it does not exist (a proven ENOENT); any other failure throws. */
   statFile(path: string): Promise<{ size: number; mtimeMs: number } | null>;
+  /** Removes one of the compaction's two temp files (`<carried>.tmp`, `<journal>.tmp`) after a failure before the journal's rename, best
+   *  effort; an absent file is not an error. It refuses any name that is not a `.tmp`, and its one caller passes those two names only. */
+  removeTemp(path: string): Promise<void>;
 }
 
 const isEnoent = (err: unknown): boolean => typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ENOENT';
@@ -840,6 +856,10 @@ export const nodeDelegationFilePort: DelegationFilePort = {
   statFile: async (p) => {
     try { const st = await fsp.stat(p); return { size: st.size, mtimeMs: st.mtimeMs }; } catch (err) { if (isEnoent(err)) return null; throw err; }
   },
+  removeTemp: async (p) => {
+    if (!p.endsWith('.tmp')) throw new Error(`removeTemp removes a compaction temp file only, not ${p}`);
+    try { await fsp.unlink(p); } catch (err) { if (!isEnoent(err)) throw err; }
+  },
 };
 
 /**
@@ -852,23 +872,33 @@ export async function delegationBytesSha256(bytes: Uint8Array): Promise<string> 
   return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/** One validated record and where its line sits in its file: `offset` is its first byte, `length` includes its LF, and `bytes` is the line
+ *  without its LF (a view, valid until the next line is read). */
+export interface DelegationJournalLine {
+  record: DelegationJournalRecordV1;
+  offset: number;
+  length: number;
+  bytes: Uint8Array;
+}
+
 /**
- * Reads a journal file as validated records, a bounded chunk at a time, so recovery over a journal of millions of records holds
- * one chunk and one partial line, never the file. Each record is individually validated (the grammar, both hashes); the chain
- * is the consumer's (`DelegationJournalChain`). An absent file yields nothing. Bytes after the last LF throw
- * `torn-tail` / `missing-final-lf` AFTER every complete record has been yielded, unless the caller passes `onTail`: then they are handed
- * to it instead (offset, bytes, SHA-256 and the code the strict reader would have thrown) and nothing throws. Only recovery passes one
- * (D-4655); every other reader of the journal stays strict.
+ * Reads a journal file as validated records with their positions, a bounded chunk at a time, so recovery over a journal of millions of
+ * records holds one chunk and one partial line, never the file. Each record is individually validated (the grammar, both hashes); the
+ * chain is the consumer's (`DelegationJournalChain`). An absent file yields nothing. Bytes after the last LF throw `torn-tail` /
+ * `missing-final-lf` AFTER every complete record has been yielded, unless the caller passes `onTail`: then they are handed to it instead
+ * (offset, bytes, SHA-256 and the code the strict reader would have thrown) and nothing throws. Only recovery passes one, for the journal
+ * (D-4655); every other reader, and every reader of the carried file, stays strict. The ONE splitter: every reader below delegates here.
  */
-export async function* readDelegationJournalRecords(
+export async function* readDelegationJournalLines(
   port: DelegationFilePort, path: string, chunkBytes = 1 << 18, onTail?: (tail: DelegationJournalTail) => void,
-): AsyncGenerator<DelegationJournalRecordV1, void, undefined> {
+): AsyncGenerator<DelegationJournalLine, void, undefined> {
   const handle = await port.openRead(path);
   if (handle === null) return;
   try {
     const splitter = new DelegationJournalLineSplitter();
     const size = await handle.size();
     let position = 0;
+    let lineStart = 0;
     let lineNo = 0;
     while (position < size) {
       const chunk = await handle.read(position, Math.min(chunkBytes, size - position));
@@ -876,7 +906,9 @@ export async function* readDelegationJournalRecords(
       position += chunk.length;
       for (const line of splitter.push(chunk)) {
         lineNo++;
-        yield decodeDelegationJournalLine(line, { line: lineNo });
+        const record = decodeDelegationJournalLine(line, { line: lineNo });
+        yield { record, offset: lineStart, length: line.length + 1, bytes: line };
+        lineStart += line.length + 1;
       }
     }
     const tail = splitter.leftover();
@@ -890,6 +922,63 @@ export async function* readDelegationJournalRecords(
     }
   } finally {
     await handle.close();
+  }
+}
+
+/** A journal file as validated records: `readDelegationJournalLines` without the positions. */
+export async function* readDelegationJournalRecords(
+  port: DelegationFilePort, path: string, chunkBytes = 1 << 18, onTail?: (tail: DelegationJournalTail) => void,
+): AsyncGenerator<DelegationJournalRecordV1, void, undefined> {
+  for await (const line of readDelegationJournalLines(port, path, chunkBytes, onTail)) yield line.record;
+}
+
+/** A retained record, and which file it was read from. */
+export interface DelegationRetainedLine extends DelegationJournalLine {
+  source: 'carried' | 'journal';
+}
+
+/**
+ * THE ONE READER OF THE RETAINED SET (D-7021): the carried file's lines below the journal's first sequence J, then the journal's records.
+ * Recovery, the projection repair and `visitRetainedRecords` all read through it, so no reader of the retained set sees the journal alone.
+ * The journal's first record is read first (one peek), so J is known before the carried file streams. The carried file is strict: its
+ * lines must increase (`carried-order`) and a torn tail refuses (`torn-tail`, never healed). A carried line at or above J is not yielded: it
+ * exists only between a compaction's two renames, as a copy of a journal line, so the journal line at its sequence must equal it byte for
+ * byte, and a mismatch, or a sequence the journal never reaches, refuses `carried-past-journal`. `onTail` is the journal's (recovery's).
+ */
+export async function* readDelegationRetainedRecords(
+  port: DelegationFilePort, carriedPath: string, journalPath: string, onTail?: (tail: DelegationJournalTail) => void,
+): AsyncGenerator<DelegationRetainedLine, void, undefined> {
+  const journal = readDelegationJournalLines(port, journalPath, undefined, onTail);
+  try {
+    const first = await journal.next();
+    const J = first.done === true ? null : first.value.record.sequence;
+    // the peeked line's bytes are a view into a chunk the reader may replace, so it is kept by value until it is yielded
+    const firstLine = first.done === true ? null : { ...first.value, bytes: new Uint8Array(first.value.bytes) };
+    const pending = new Map<number, Uint8Array>();
+    let last: number | null = null;
+    for await (const line of readDelegationJournalLines(port, carriedPath)) {
+      const seq = line.record.sequence;
+      if (last !== null && seq <= last) refuse('carried-order', `carried sequence ${seq} follows ${last}`);
+      last = seq;
+      if (J === null || seq < J) yield { ...line, source: 'carried' };
+      else pending.set(seq, new Uint8Array(line.bytes));
+    }
+    const matched = (line: DelegationJournalLine): void => {
+      const copy = pending.get(line.record.sequence);
+      if (copy === undefined) return;
+      if (copy.length !== line.bytes.length || !copy.every((b, i) => b === line.bytes[i])) {
+        refuse('carried-past-journal', `the carried line at sequence ${line.record.sequence} is not the journal's line there`);
+      }
+      pending.delete(line.record.sequence);
+    };
+    if (firstLine !== null) { matched(firstLine); yield { ...firstLine, source: 'journal' }; }
+    for (let next = await journal.next(); next.done !== true; next = await journal.next()) {
+      matched(next.value);
+      yield { ...next.value, source: 'journal' };
+    }
+    if (pending.size > 0) refuse('carried-past-journal', `${pending.size} carried line(s) at or above the journal's first sequence ${J ?? '(none)'} are not in the journal, first ${[...pending.keys()][0]}`);
+  } finally {
+    await journal.return(undefined);
   }
 }
 
