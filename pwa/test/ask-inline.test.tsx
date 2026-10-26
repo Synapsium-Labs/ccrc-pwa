@@ -929,6 +929,30 @@ describe('the keys in the card are fenced after a send and re-enter only deliber
     return m;
   }
 
+  // R115 fences at the reply above too, since question 2 is a new identity. A REFUSED answer leaves the same screen up and
+  // unlocked, with no identity change, so there only the release this client's send made stops the next digit (the R102
+  // cost: after a refused answer the operator re-enters).
+  it('an answer refused on the same screen: a digit on the same row then sends nothing (R102, under R115)', async () => {
+    media(true);
+    const answer = vi.spyOn(api, 'answerDialog').mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'stale-dialog' }))
+      .mockReturnValue(new Promise(() => {}));
+    const { arrive } = mount({ events: [...EVENTS, ASK_CALL] });
+    await frame();
+    arrive(2);
+    const first = opt(card(), /^Redis/);
+    act(() => first.focus());
+    const w = watchCardFocus();
+    await act(async () => { key(first, '1'); });
+    await frame();
+    expect(answer, 'premise: the digit sent').toHaveBeenCalledTimes(1);
+    expect(within(card()).getByText(QUESTION), 'premise: the same question is still up').toBeInTheDocument();
+    expect(first.isConnected && document.activeElement === first, 'premise: the same row node holds focus').toBe(true);
+    expect(first, 'premise: and it is enabled').toBeEnabled();
+    expect(w.seen(), 'premise: no focus was assigned').toEqual([]);
+    key(first, '2');
+    expect(answer, 'no second request').toHaveBeenCalledTimes(1);
+  });
+
   it('a digit on a reused, re-enabled row node after the reply sends nothing', async () => {
     const m = await answeredAged();
     key(document.activeElement!, '2');
@@ -1619,6 +1643,52 @@ describe('a send claimed after an eligible raise renders and before its effect r
       expect(answer, 'premise: the digit sent once').toHaveBeenCalledTimes(1);
       expect(within(host).getByText(HOOK_QUESTIONS[1]!.question), 'premise: the reply brought question 2').toBeInTheDocument();
       expect(document.activeElement, 'premise: question 2 reused the focused row node').toBe(first);
+      press('2');
+      await sleep(150);
+      expect(answer, 'the second digit sends nothing: the release stood').toHaveBeenCalledTimes(1);
+    } finally {
+      env.IS_REACT_ACT_ENVIRONMENT = before;
+      root.unmount();
+      host.remove();
+    }
+  });
+
+  // R115 masks the case above: its reply brings question 2, a new identity, so the fence rises at the reply whatever the
+  // raise did. Here the answer is REFUSED: the same screen stays up, unlocked, with no identity change, so only the release,
+  // and its winning over the earlier raise, can stop the second digit.
+  it('the same with the answer refused on the same screen: the second digit sends nothing (R102, under R115)', async () => {
+    media(true);
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const before = env.IS_REACT_ACT_ENVIRONMENT;
+    const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+    const answer = vi.spyOn(api, 'answerDialog').mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'stale-dialog' }))
+      .mockReturnValue(new Promise(() => {}));
+    const store = createSessionStore(ID, { makeSocket: fakeSocket });
+    for (const f of askFixture(2).frames) store.getState().apply(f);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const press = (k: string): void => {
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+    };
+    // The sibling: its layout effect runs in the raise's commit, after the sheet's own, and before any passive effect.
+    function Presser({ n }: { n: number }): null {
+      useLayoutEffect(() => { if (n !== 0) press('1'); }, [n]);
+      return null;
+    }
+    const show = (raise: number): void => root.render(<><DialogSheet id={ID} store={store} raise={raise} /><Presser n={raise} /></>);
+    try {
+      env.IS_REACT_ACT_ENVIRONMENT = false;
+      show(0);
+      await sleep(150);
+      const first = within(host).getByRole('button', { name: /^Redis/ });
+      first.focus();
+      show(1); // an ELIGIBLE raise; its layout-phase sibling then claims a send
+      await sleep(400);
+      expect(answer, 'premise: the digit sent once').toHaveBeenCalledTimes(1);
+      expect(within(host).getByText(QUESTION), 'premise: the same question is still up').toBeInTheDocument();
+      expect(document.activeElement, 'premise: the same row node holds focus').toBe(first);
+      expect(first, 'premise: and it is enabled').toBeEnabled();
       press('2');
       await sleep(150);
       expect(answer, 'the second digit sends nothing: the release stood').toHaveBeenCalledTimes(1);
