@@ -403,6 +403,31 @@ describe('SwapSheet does not rank an account on an inferred zero', () => {
     expect(shown).toEqual(['—']);
     expect(row).toHaveTextContent('44%');
   });
+
+  it('prints a measured window rounded and clamped, once, with its track filled', async () => {
+    // The measured arm through the real row: `37.6` rounds to 38 and `140` clamps to 100, each printed once in its
+    // own reading node (shown and spoken agree, so no `sr-only` twin and no `aria-hidden` glyphs), both tracks filled.
+    stubAccounts([acct({ wrapper: 'claude9', five: 37.6, seven: 140 })]);
+    renderSwap();
+    const row = await screen.findByRole('button', { name: /team·alt/ });
+    await waitFor(() => expect(row).toHaveTextContent('38%'));
+    const readings = [...row.querySelectorAll('.acct-gauge-pct')];
+    expect(readings.map((n) => n.textContent)).toEqual(['38%', '100%']);
+    for (const n of readings) {
+      expect(n.querySelector('.sr-only')).toBeNull();
+      expect(n.querySelector('[aria-hidden="true"]')).toBeNull();
+    }
+    expect(row.querySelectorAll('.limit-fill')).toHaveLength(2);
+  });
+
+  it('leaves the track empty for a window nobody measured, flag or no flag', async () => {
+    // Beside the case above: the never-measured half draws no fill, so only the measured half (44) does.
+    stubAccounts([acct({ wrapper: 'claude9', five: null, seven: 44, fiveRolledOver: true })]);
+    renderSwap();
+    const row = await screen.findByRole('button', { name: /team·alt/ });
+    await waitFor(() => expect(row).toHaveTextContent('not measured'));
+    expect(row.querySelectorAll('.limit-fill')).toHaveLength(1);
+  });
 });
 
 // THE RULING, AND THE NINE-MUTATION TABLE THIS REPLACES.
