@@ -10,7 +10,7 @@ import type {
   AgentReady,
   AgentReq,
   CapsReq,
-  DiskReq,
+  DiskReq, PressureReq,
   ExecReq,
   PtyData,
   PtyExit,
@@ -35,7 +35,7 @@ import type {
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
 import {
-  ACCOUNT_OP, CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP, DISK_OP,
+  ACCOUNT_OP, CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP, DISK_OP, PRESSURE_OP,
   TOKEN_SYNC_SPAWN_TIMEOUT_MS, UPDATE_OP, UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, decideKilledSpawn, firstStderrLine,
   inFlightBusyDetail, isClaimCode, isReadFromRange, isUpdateLockHeldLine, lockHeldBusyDetail, tokenSyncSpawnArgv, updateLauncherPath,
   updateSpawnArgv, updateWriterMayLive,
@@ -43,6 +43,7 @@ import {
 } from '../../shared/agent-protocol.js';
 import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
 import { measureDisk, type DiskSeams } from './disk.js';
+import { measurePressure, type PressureSeams } from './pressure.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import {
@@ -88,6 +89,7 @@ export interface AgentOpts {
   spawnTokenSync?: TokenSyncSpawn; // default makeTokenSyncSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `token-sync` op's ONLY spawn
   spawnAccount?: AccountOpSpawn; // default makeAccountOpSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `account` op's ONLY spawn
   diskSeams?: Partial<DiskSeams>; // default realDiskSeams() — tests inject the statfs/stat/mountinfo reads; the `disk` op's ONLY disk reads
+  pressureSeams?: Partial<PressureSeams>; // default: the two /proc/pressure files — tests inject the text (#1170)
 }
 
 export interface RunningAgent {
@@ -534,6 +536,7 @@ interface ConnCtx {
   tokenSyncGate: TokenSyncGate;
   spawnAccount: AccountOpSpawn;
   diskSeams: Partial<DiskSeams>;
+  pressureSeams: Partial<PressureSeams>;
 }
 
 async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: VerbCache): Promise<void> {
@@ -769,6 +772,12 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       send(ws, ok(req.id, { ...await measureDisk(ctx.cfg.home, ctx.diskSeams) }));
       return;
     }
+    case 'pressure': {
+      // #1170. No argument (`validateReq` refuses a frame that carries one); two fixed kernel files. A file that cannot
+      // be read or parsed throws into the envelope's `.catch`, an error the server reads as unmeasured, never as calm.
+      send(ws, ok(req.id, { ...measurePressure(ctx.pressureSeams) }));
+      return;
+    }
     case 'token-sync': {
       // Box-token lifecycle spec 4.4. The second wire-triggered spawn outside the exec whitelist (agent/CLAUDE.md).
       // `validateReq` has already refused a code that fails `isClaimCode`; it is checked AGAIN here, and a caller bug
@@ -962,6 +971,11 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | Acco
       // `bad-request`, the word an agent that predates the op also answers), and nothing is measured.
       if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op')) return null;
       return { t: 'req', id, op: 'disk' } satisfies DiskReq;
+    }
+    case 'pressure': {
+      // #1170: no argument, the `disk` op's rule. Any extra field is malformed (`bad-request`), and nothing is read.
+      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op')) return null;
+      return { t: 'req', id, op: 'pressure' } satisfies PressureReq;
     }
     case 'token-sync': {
       // The ONE code guard (`isClaimCode`, never a regex here). A missing, non-string or malformed code is a
@@ -1289,6 +1303,7 @@ function handleConnection(
     tokenSyncGate,
     spawnAccount: opts.spawnAccount,
     diskSeams: opts.diskSeams,
+    pressureSeams: opts.pressureSeams,
   };
 
   const helloTimer = setTimeout(() => {
@@ -1336,7 +1351,7 @@ function handleConnection(
       // (fleet disk retention spec §2.5, D-6614: it takes no field). It is
       // required in `ReadyFrame`, so it cannot be dropped silently.
       const frame: ReadyFrame = {
-        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP],
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP],
       };
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
@@ -1433,6 +1448,7 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     // The `account` op's port gets the same explicit environment, from the same configured home (spec §13.2).
     spawnAccount: rawOpts.spawnAccount ?? makeAccountOpSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
     diskSeams: rawOpts.diskSeams ?? {},
+    pressureSeams: rawOpts.pressureSeams ?? {},
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
   const verbCache: VerbCache = {

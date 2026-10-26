@@ -6119,9 +6119,17 @@ killed and nothing logged.
 
 `deploy.sh agent` also lands `zz-no-memoryhigh.conf` (it sorts last, so neither a stale `limits.conf` nor a
 runtime `set-property` drop-in can reinstate one), checks the value systemd actually enforces with
-`deploy/assert-slice-policy.sh` after `daemon-reload`, and gives `ccrc-agent.service` `MemoryMin=192M`,
-`MemoryLow=384M`, `CPUWeight=5000` (`ccrc-agent.service.d/protect.conf`) so the control plane still
-answers under pressure; `ccrc install` and `ccrc update` place only the two `limits.conf` files (and the two
+`deploy/assert-slice-policy.sh` after `daemon-reload`, and gives `ccrc-agent.service` `MemoryMin=512M`,
+`MemoryLow=768M`, `MemorySwapMax=0`, `IOWeight=1000`, `CPUWeight=5000` (`ccrc-agent.service.d/protect.conf`) so
+the control plane still answers under pressure. `IOWeight` acts only with the io controller delegated (the root-owned
+`user@<uid>.service` drop-in adds `Delegate=… io`) and a device on io.cost or BFQ; the gate below reads the enforced
+`io.weight` and says `enforced` or `inert`. That protection holds only when every ancestor declares at least as
+much (#1170: under `memory_recursiveprot` a parent's protection caps its child's), so it also lands
+`app.slice.d/50-ccrc-agent-protect.conf`, and after the restart `deploy/assert-protect-chain.sh` reads the enforced
+`memory.min` along the agent's cgroup chain. The three ancestors above `app.slice` (`user.slice`,
+`user-<uid>.slice`, `user@<uid>.service`) are root-owned: their drop-ins ship in `deploy/systemd-root/`, the gate
+prints the exact root step to place them, and every agent deploy says `PENDING ROOT STEP` until it is done. The
+agent's `OOMScoreAdjust` stays at the user manager's (a user manager can only raise it). `ccrc install` and `ccrc update` place only the two `limits.conf` files (and the two
 victim-policy drop-ins below) — none of the three above. The numbers were sized for a 30 GB fleet host — tune them to yours with a drop-in of your
 own that sorts after `limits.conf` (an install or update rewrites `limits.conf` itself); leave the slice's
 `MemoryHigh` at `infinity`, which `deploy.sh agent` refuses to deploy over; the pane values are literals in

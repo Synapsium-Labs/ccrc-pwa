@@ -140,8 +140,9 @@ describe('the placement must land in the fleet slice, or the ceiling stops apply
    *  getting it wrong means systemd silently never reads the drop-in. */
   const fleetSlice = (): string => {
     const dirs = fs.readdirSync(path.resolve(__dirname, '../../deploy/systemd'))
-      .filter((d) => d.endsWith('.slice.d'));
-    expect(dirs, 'deploy/systemd must carry exactly one slice drop-in for this to be derivable')
+      // `app.slice.d` is the agent's protection chain (#1170), not a fleet slice: the fleet's are `app-<name>.slice`.
+      .filter((d) => d.endsWith('.slice.d') && d !== 'app.slice.d');
+    expect(dirs, 'deploy/systemd must carry exactly one fleet slice drop-in for this to be derivable')
       .toHaveLength(1);
     const m = /^app-(.+)\.slice\.d$/.exec(dirs[0]!);
     expect(m, `unexpected slice drop-in directory name: ${dirs[0]}`).toBeTruthy();

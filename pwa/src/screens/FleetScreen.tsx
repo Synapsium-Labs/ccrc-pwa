@@ -13,6 +13,8 @@ import { FleetHostBanner, fleetHostBannerShows } from '../fleet/FleetHostBanner'
 import { HaltBanner, haltBannerShows } from '../fleet/HaltBanner';
 import { DiskBanner } from '../fleet/DiskBanner';
 import { diskBannerShows } from '../fleet/diskWords';
+import { PressureBanner } from '../fleet/PressureBanner';
+import { pressureBannerShows } from '../fleet/pressureWords';
 import { UpdateIndicator } from '../fleet/UpdateIndicator';
 import { UPDATES_STALE_TEXT } from '../fleet/useUpdatesView';
 import { SubstrateBanner, substrateBannerShows } from '../fleet/SubstrateBanner';
@@ -408,6 +410,8 @@ export function FleetBanners(): ReactNode {
           shows: fleetHostBannerShows(fleetHealth),
           node: <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} stale={stale} />,
         },
+        // The host's pressure (#1170), from the same health poll.
+        { id: 'pressure', shows: pressureBannerShows(fleetHealth), node: <PressureBanner health={fleetHealth} /> },
         // The disk alarm (D-6617), from the same health poll as the fleet-host banner above.
         { id: 'disk', shows: diskBannerShows(fleetHealth), node: <DiskBanner health={fleetHealth} /> },
         // The halt, with each halting node's Ack in place (programme wave 14, R15(a)). Re-polls on every Ack. The

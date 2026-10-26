@@ -826,6 +826,8 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf ~/.config/systemd/user/tmux-spawn-.scope.d/50-oom-continue.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf ~/.config/systemd/user/ccrc-tmux-server.scope.d/50-oom-continue.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/protect.conf \
+    && mkdir -p ~/.config/systemd/user/app.slice.d \
+    && _unit_atomic ~/ccrc/deploy/systemd/app.slice.d/50-ccrc-agent-protect.conf ~/.config/systemd/user/app.slice.d/50-ccrc-agent-protect.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/.config/systemd/user/ccd-cap-scopes.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.service ~/.config/systemd/user/ccd-pool-sync.service \
@@ -987,6 +989,12 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # check. Because it is the last link of an `&&` chain, its exit status is
   # the ssh exit status, and `set -e` at the top of this file aborts the
   # deploy on it.
+  # #1170: after the restart, assert-protect-chain.sh reads the enforced
+  # memory.min along the agent's cgroup chain. A short agent or app.slice
+  # (exit 1) fails the deploy: this lane installs both. Short root-owned
+  # ancestors (exit 2) print the exact root step and let the lane finish,
+  # so the user-manager half still lands; the gate keeps printing the step on
+  # every deploy until the operator has applied it. It never runs sudo.
   AGENT_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && systemctl --user daemon-reload && bash ~/ccrc/deploy/assert-slice-policy.sh && systemctl --user enable --now ccrc-agent.service \
     && systemctl --user enable --now ccd-cap-scopes.timer \
@@ -1000,6 +1008,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && systemctl --user enable --now ccd-history-sweep.timer \
     && systemctl --user enable --now ccd-scope-sweep.timer \
     && systemctl --user restart ccrc-agent.service \
+    && { bash ~/ccrc/deploy/assert-protect-chain.sh || [ $? -eq 2 ]; } \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
   "${SSH[@]}" "$BOX" "$AGENT_CMD"
   # THE SUPERVISOR SWEEP. Every claude-session@ unit is a LONG-LIVED `ccd
