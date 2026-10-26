@@ -32,13 +32,17 @@ recordings directory as `liveprobe-<step>-<utc>-<n>.sse` (0600, directory 0700; 
 recording's cap never counts it), for the operator to scrub into the corpus (`record.py scrub`) in a reviewed change.
 A refusal is one stderr line, `liveprobe: refused <word>: <sentence>`; any other failure before the send is
 `liveprobe: failed <class>; nothing was sent`, one in the send or while the answer is read
-`liveprobe: transport <class>`, and one opening the answer's recording, before its status is printed,
-`liveprobe: recording <class>`: an exception is named by its class only, never its text (http.client formats a header
-value it refuses with %r). Exit 0 a 2xx answer read to its end, 1 refused or failed (nothing sent), 2 usage, 3
-attempted and counted, but no whole 2xx answer was read: a non-2xx status, or a transport or recording failure before
-the answer ended, so a 200 whose stream fails partway, or whose recording fails, is 3 too. The count is raised before
-the post, so a request that never left (a header http.client refuses in putheader, before endheaders writes a byte; a
-refused connection) is charged too.
+`liveprobe: transport <class>`, and one raised while the answer's recording is opened and headed (before the status is
+printed) or that escapes the answer's report, `liveprobe: recording <class>`: an exception is named by its class only,
+never its text (http.client formats a header value it refuses with %r). A recording that could not be made (its
+directory or its file refused, as `record.ensure_dir` and `record.open_file` answer) or was cut short (a write that
+failed, `record.Recording.failed`) is `liveprobe: recording unwritten`, after the answer's lines. Exit 0 a 2xx answer
+read to its end and recorded whole, 1 refused or failed (nothing sent), 2 usage, 3 attempted and counted, but no whole
+2xx answer was read and recorded: a non-2xx status, a transport failure before the answer ended, a recording failure
+that raised, or a recording unwritten, so a 200 whose stream fails partway, or whose recording fails or is cut short, is
+3 too (and step 3 never replays an older step-2 recording unseen). The count is raised before the post, so a request
+that never left (a header http.client refuses in putheader, before endheaders writes a byte; a refused connection) is
+charged too.
 
 The CLI runs only under `__main__` (the block below), so importing the module through `load_all()` does nothing.
 """
@@ -426,10 +430,15 @@ def main(argv: List[str]) -> int:
             rec = record.open_file(files.rec_dir, name)
         if rec is not None:
             rec.write(record.head(up.status, up.headers))
-        return report(up, rec)
-    except Exception as e:  # its class only, as above. A failure opening or heading the recording, which runs before
-        # report() prints the status (the recording-failure case pins it); report()'s own lines outside its catch only
-        # print and read the request id. The answer was sent and may have been 2xx, so it is 3, not a transport line
+        rc = report(up, rec)
+        if rec is None or rec.failed:  # not made (ensure_dir False, open_file None), or cut short by a failed write
+            _out("recording unwritten")
+            return 3
+        return rc
+    except Exception as e:  # its class only, as above. It catches a failure opening or heading the recording, which
+        # runs before report() prints the status (the recording-failure case pins it), and anything that escapes
+        # report(): its lines outside its own catch print, read the request id and walk the terminal's usage, none of
+        # which raises on a parsed answer. The answer was sent and may have been 2xx, so it is 3, not a transport line
         _out("recording " + _name(type(e).__name__))
         return 3
     finally:

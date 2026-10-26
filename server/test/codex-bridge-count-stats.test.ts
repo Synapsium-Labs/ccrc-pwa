@@ -389,6 +389,28 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     expect(doc.unexplained).toEqual({ eventType: ['response.fx_new_event'] });
     expect(doc.since).toBe('2026-01-01T00:00:00.000Z');
   });
+
+  // The whole-wave fix round, Z1 (D-TBD-markers-clear-on-restart): `unrecognised` and `overflow` are markers, which
+  // no change to known.py can explain, so the load carries neither in `unexplained`; each comes back only when the
+  // bridge meets such a name again. A real unexplained name, and every `names` counter, is carried as before.
+  it('a restart clears the unrecognised and overflow markers, and carries a real unexplained name', async () => {
+    const { home, file } = lane('cb-stats-markers-');
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: {},
+      names: { eventType: { unrecognised: 2, 'response.fx_new_event': 1 }, responseHeader: { overflow: 3 } },
+      unexplained: { eventType: ['response.fx_new_event', 'unrecognised'], responseHeader: ['overflow'] },
+      usageHeaders: null, lastUpstreamRequestId: null,
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o, , snap] = await run(home, [open(file), call('name', ['eventType', 'x'.repeat(65)]), { op: 'stats-snapshot' }]);
+    expect(o.doc.unexplained).toEqual({ eventType: ['response.fx_new_event'] });
+    expect(o.doc.names).toEqual(planted.names);
+    // The load changed what it carried, so the file the doctor reads changed at the restart, with no flush call.
+    expect(readDoc(file).unexplained).toEqual({ eventType: ['response.fx_new_event'] });
+    // Met again, the marker is listed again.
+    expect(snap.doc.unexplained).toEqual({ eventType: ['response.fx_new_event', 'unrecognised'] });
+  });
 });
 
 // Review fix round 1 (Task 5): a case for each guard the task added beyond the plan's list, each with a measured

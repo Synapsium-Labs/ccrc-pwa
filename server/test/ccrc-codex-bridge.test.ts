@@ -359,6 +359,7 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     const d = laneDir(home, 'codex-a');
     const files = ['bridge.started', 'bridge.pid', 'bridge-instructions', 'record-streams', 'liveprobe-allowed',
       'liveprobe.count', 'bridge.stats.json', 'reasoning.sqlite', 'reasoning.sqlite-wal', 'reasoning.sqlite-shm'];
+    files.push('liveprobe.count.tmp', 'bridge.stats.json.tmp');   // a killed write_count's or stats flush's tmp (Z11)
     for (const f of files) fs.writeFileSync(join(d, f), 'fixture\n');
     fs.mkdirSync(join(d, 'recordings', 'nested'), { recursive: true, mode: 0o700 });
     fs.writeFileSync(join(d, 'recordings', 'nested', 'r1.sse'), 'event: fixture\n\n');

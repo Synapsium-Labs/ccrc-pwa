@@ -367,9 +367,10 @@ describe.skipIf(!PY)('the scrubber: a recording becomes a corpus stream (codex-b
     expect(existsSync(path.join(BRIDGE_DIR, '__pycache__')), 'a __pycache__ in ccd/codexbridge').toBe(false);
   });
 
-  // A field the scrubber does not know keeps its value, so each value below survives the rewrite, and the residue
-  // check refuses it by the one pattern it matches. Each value is fixed (never random), so no other pattern can match
-  // it by chance: the JWT is built from fixed segments.
+  // A structural key's value is kept as it is (the whole-wave fix round, Z3: every other string is rewritten), so each
+  // value below, under `status`, survives the rewrite, and the residue check refuses it by the one pattern it matches.
+  // Each value is fixed (never random), so no other pattern can match it by chance: the JWT is built from fixed
+  // segments.
   const b64 = (o: object | string): string => Buffer.from(typeof o === 'string' ? o : JSON.stringify(o)).toString('base64url');
   const FIXED_JWT = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ sub: 'fixture', exp: 1 })}.${b64('fixture-signature')}`;
   for (const [pattern, value] of [
@@ -381,7 +382,7 @@ describe.skipIf(!PY)('the scrubber: a recording becomes a corpus stream (codex-b
       const home = mkTmp('cb-live-scrub-refuse-');
       const inFile = path.join(home, 'in.sse');
       const outFile = path.join(home, 'out.sse');
-      writeFileSync(inFile, textReply('fine') + ev('response.note', { trace_blob: value }));
+      writeFileSync(inFile, textReply('fine') + ev('response.note', { status: value }));
       const r = await runCli(home, RECORD_PY, ['scrub', inFile, outFile]);
       expect(r.status).toBe(1);
       expect(r.stderr).toBe(`record: refused: the output still matches ${pattern}; nothing written\n`);
@@ -426,6 +427,55 @@ describe.skipIf(!PY)('the scrubber: a recording becomes a corpus stream (codex-b
     const out = readFileSync(outFile, 'utf8');
     expect(out).toContain('"delta":"xx_xxxxxxxx"');
     expect(out).toContain('"text":"xx_xxxxxxxx xx"');
+  });
+
+  // The whole-wave fix round, Z3: every string is rewritten except under a structural key, so a value under a key the
+  // scrubber has never heard of cannot reach the public corpus. Each sentinel sits under a key outside the old content
+  // list: a web search's query, an image generation's revised prompt and result, a tools echo's enum and default, a
+  // code interpreter's source under `code` (kept only in an error), and a tool's name, which maps to one `tool_fx<n>`
+  // in the echo and in the call alike, so the call still names its tool. An error event's code is kept.
+  it('the scrubber rewrites every string but a structural one, and gives a tool one synthetic name', async () => {
+    const home = mkTmp('cb-live-scrub-every-');
+    const inFile = path.join(home, 'in.sse');
+    const outFile = path.join(home, 'out.sse');
+    const tool = 'mcp__fxsentinelproj__deploy';
+    const tools = [{
+      type: 'function', name: tool, description: 'Deploy one target.', strict: false,
+      parameters: {
+        type: 'object', required: ['target'],
+        properties: { target: { type: 'string', enum: ['SentinelEnumAlpha', 'SentinelEnumBeta'], default: 'SentinelDefault' } },
+      },
+    }];
+    writeFileSync(inFile, ev('response.created', { response: { id: 'resp_fx1', object: 'response', status: 'in_progress', tools, output: [] } })
+      + ev('response.output_item.done', { output_index: 0, item: { type: 'web_search_call', id: 'ws_fx1', status: 'completed',
+        action: { type: 'search', query: 'SentinelQuery payroll', queries: ['SentinelQueryTwo'] } } })
+      + ev('response.output_item.done', { output_index: 1, item: { type: 'image_generation_call', id: 'ig_fx1', status: 'completed',
+        revised_prompt: 'SentinelPrompt of a private brief', result: 'SentinelResultiVBORw0KGgo' } })
+      + ev('response.output_item.done', { output_index: 2, item: { type: 'function_call', id: 'fc_fx1', call_id: 'call_fx1', name: tool,
+        arguments: '{"target":"SentinelEnumAlpha"}', status: 'completed' } })
+      + ev('response.output_item.done', { output_index: 3, item: { type: 'code_interpreter_call', id: 'ci_fx1', status: 'completed',
+        code: 'print("SentinelCode")' } })
+      + ev('response.completed', { response: { id: 'resp_fx1', object: 'response', status: 'completed', tools, usage: usage() } })
+      + ev('error', { code: 'server_is_overloaded', message: 'SentinelMessage' }));
+    const r = await runCli(home, RECORD_PY, ['scrub', inFile, outFile]);
+    expect(r.status, r.stderr).toBe(0);
+    const out = readFileSync(outFile, 'utf8');
+    for (const s of ['Sentinel', 'payroll', 'private brief', 'iVBORw0KGgo', 'fxsentinelproj', 'deploy']) {
+      expect(out, `the output still holds ${s}`).not.toContain(s);
+    }
+    const data = out.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)) as Json);
+    // the structure the corpus reader needs is kept: event, item and part types, statuses, the response object
+    expect(data.map((d) => d.type)).toEqual(['response.created', 'response.output_item.done', 'response.output_item.done',
+      'response.output_item.done', 'response.output_item.done', 'response.completed', 'error']);
+    expect(data.slice(1, 5).map((d) => [d.item.type, d.item.status])).toEqual([['web_search_call', 'completed'],
+      ['image_generation_call', 'completed'], ['function_call', 'completed'], ['code_interpreter_call', 'completed']]);
+    expect(data[0].response.object).toBe('response');
+    expect(data[0].response.tools[0].parameters.properties.target.type).toBe('string');
+    expect(data[6].code).toBe('server_is_overloaded');
+    // one synthetic name for the tool, in both echoes and in the call
+    const names = [data[0].response.tools[0].name, data[3].item.name, data[5].response.tools[0].name];
+    expect(names[0]).toMatch(/^tool_fx[0-9]+$/);
+    expect(names).toEqual([names[0], names[0], names[0]]);
   });
 
   it("the scrubber's output is a corpus stream: the replay suite's reader parses it", async () => {
@@ -676,10 +726,13 @@ describe.skipIf(!PY)('the live probe: the first live step, bounded (codex-bridge
   /** `liveprobe.main` for step 1 in the fixture `home`, imported directly with `backend.post` replaced by one that
    *  sends nothing and answers 200 with `x-request-id: req-fx1` and the body `mode` names: `raise-mid-stream` yields a
    *  completed event and then raises, `raise-head` streams a completed event but has `record.head` raise. Both
-   *  raise a ValueError carrying SENTINEL. The script's last stderr line is `driver rc=<n> closed=<0|1>`, written
-   *  only when main returns. */
+   *  raise a ValueError carrying SENTINEL. `fsize` streams the completed event whole under a file-size limit of
+   *  FSIZE bytes (RLIMIT_FSIZE; Python ignores SIGXFSZ, so the recording's write past it raises EFBIG): the recording's
+   *  head fits, its body does not. The script's last stderr line is `driver rc=<n> closed=<0|1>`, written only when
+   *  main returns. */
   const SENTINEL = 'SENTINELRAISED';
-  function probeFaked(home: string, mode: 'raise-mid-stream' | 'raise-head'): Run {
+  const FSIZE = 48;
+  function probeFaked(home: string, mode: 'raise-mid-stream' | 'raise-head' | 'fsize'): Run {
     const completed = ev('response.completed', { response: { status: 'completed', end_turn: true, usage: { input_tokens: 1 } } });
     const script = [
       'import json, sys',
@@ -699,6 +752,9 @@ describe.skipIf(!PY)('the live probe: the first live step, bounded (codex-bridge
       '    def bad_head(status, headers):',
       '        raise ValueError(sentinel)',
       '    record.head = bad_head',
+      'if mode == "fsize":',
+      '    import resource',
+      `    resource.setrlimit(resource.RLIMIT_FSIZE, (${FSIZE}, resource.getrlimit(resource.RLIMIT_FSIZE)[1]))`,
       'rc = liveprobe.main(["--lane", lane, "--step", "1"])',
       'sys.stdout.flush()',
       'sys.stderr.write("driver rc=%d closed=%d\\n" % (rc, 1 if closed else 0))',
@@ -739,6 +795,47 @@ describe.skipIf(!PY)('the live probe: the first live step, bounded (codex-bridge
     expect(r.stdout + r.stderr).not.toContain(SENTINEL);
   });
 
+  // The whole-wave fix round, Z4: a counted 2xx whose recording could not be made, or was cut short, is no whole
+  // recorded answer, so the probe says `recording unwritten` after the answer's lines and exits 3; the request still
+  // counts. Step 3 then never replays an older step-2 recording unseen (`_latest_step2` takes the newest that exists).
+  it('a 200 whose recording cannot be made says so and exits 3, and the request still counts', async () => {
+    const home = mkTmp('cb-live-probe-recpath-');
+    const lane = plantBridgeLane(home, LANE);
+    touch(path.join(lane.laneDir, 'liveprobe-allowed'));
+    const planted = recordingsDir(lane);
+    writeFileSync(planted, 'planted\n', { mode: 0o600 });
+    const up = await fakeResponses([{ status: 200, sse: textReply('ok'), headers: { 'x-request-id': 'req-fx1' } }]);
+    try {
+      const r = await probe(home, 1, { CCGPT_BRIDGE_UPSTREAM_BASE: up.base });
+      expect(r.status, r.stderr).toBe(3);
+      expect(up.requests).toHaveLength(1);
+      const lines = r.stdout.split('\n').filter(Boolean);
+      expect(lines[0]).toBe('liveprobe: status 200');
+      expect(lines).toContain('liveprobe: end_turn absent');
+      expect(lines.at(-1)).toBe('liveprobe: recording unwritten');
+      expect(lines.filter((l) => l.startsWith('liveprobe: recording'))).toHaveLength(1);
+      expect(readFileSync(planted, 'utf8'), 'the planted file is never written').toBe('planted\n');
+      expect(readFileSync(path.join(lane.laneDir, 'liveprobe.count'), 'utf8')).toBe('1\n');
+    } finally {
+      await up.close();
+    }
+  });
+
+  it('a 200 whose recording is cut short says so and exits 3', () => {
+    const home = mkTmp('cb-live-probe-recshort-');
+    const lane = plantBridgeLane(home, LANE);
+    touch(path.join(lane.laneDir, 'liveprobe-allowed'));
+    const r = probeFaked(home, 'fsize');
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toBe(['status 200', 'request-id req-fx1', 'header x-request-id', 'event response.completed',
+      'end_turn true', 'usage input_tokens 1', 'recording unwritten'].map((l) => `liveprobe: ${l}\n`).join(''));
+    expect(r.stderr).toBe('driver rc=3 closed=1\n');
+    const files = readdirSync(recordingsDir(lane));
+    expect(files).toHaveLength(1);
+    expect(statSync(path.join(recordingsDir(lane), files[0])).size, 'the recording stopped at the limit').toBe(FSIZE);
+    expect(readFileSync(path.join(lane.laneDir, 'liveprobe.count'), 'utf8')).toBe('1\n');
+  });
+
   it('--dry-run prints the body it would send, and sends and counts nothing', async () => {
     const home = mkTmp('cb-live-probe-dry-');
     const lane = plantBridgeLane(home, LANE, { credential: false });
@@ -766,5 +863,65 @@ describe.skipIf(!PY)('the live probe: the first live step, bounded (codex-bridge
     expect(lines[0].loaded).toEqual(expect.arrayContaining(['codexbridge.record', 'codexbridge.liveprobe']));
     expect(r.stderr).toBe('');
     expect(readdirSync(home), 'importing the package wrote into its HOME').toEqual([]);
+  });
+});
+
+// ── the consent markers: no writer in the tree (the whole-wave fix round, Z12) ──────────────────────────────────────
+// `liveprobe-allowed` lets the live probe send, and `record-streams` lets the bridge record raw upstream bytes. Each is
+// the operator's alone, touched and removed by hand: liveprobe.py's ALLOW_MARKER and record.py's RECORD_MARKER say "no
+// writer in the tree", and this pins it. Modelled on single-definition.test.ts's stall-watch row ("no writer in the
+// tree"), but by the shape of a write, since these names are also read, reaped and named in prose: no code line of
+// shipped code (ccd, shared, deploy, server/src, agent/src) that names either marker, or the Python constant that
+// spells it, writes it (a touch, a `>` redirect, a copy, move or link onto it, an open for writing, a writeFile). The
+// two constants' definitions and their reads pass. KNOWN WIDTH: a write whose path was built on another line, or a name
+// assembled from pieces, is not seen; the bar is the ordinary write.
+describe('the consent markers have no writer in the tree (codex-bridge Task 18, the whole-wave fix round)', () => {
+  const REPO_ROOT = path.dirname(CCD_DIR);
+  const ROOTS = ['ccd', 'shared', 'deploy', path.join('server', 'src'), path.join('agent', 'src')];
+  const NAMES = /liveprobe-allowed|record-streams|\bALLOW_MARKER\b|\bRECORD_MARKER\b/;
+  const MARK = '(?:liveprobe-allowed|record-streams|ALLOW_MARKER|RECORD_MARKER)';
+  const WRITE = new RegExp([
+    String.raw`(?:^|[^\w.-])(?:touch|tee|cp|mv|ln|install|truncate)(?:\s|["'],)`,   // a command, or an argv's head
+    String.raw`(?<![=\-<>])>>?\|?\s*[^\s<>|;&()]*` + MARK,                              // a redirect onto it
+    String.raw`\bopen(?:Sync)?\s*\(.*,\s*["'][rbt]*[wxa+]`,                              // an open for writing
+    String.raw`\bO_(?:CREAT|WRONLY|RDWR|APPEND|TRUNC)\b`,
+    String.raw`\b(?:writeFile|appendFile|createWriteStream|copyFile|symlink|link|rename|outputFile)(?:Sync)?\s*\(`,
+    String.raw`\.(?:touch|write_text|write_bytes)\s*\(|\bos\.(?:mknod|replace|rename|link|symlink)\s*\(|\bshutil\.\w+\s*\(`,
+  ].join('|'));
+  const SKIP = new Set(['node_modules', '__pycache__', 'dist']);
+  const walk = (dir: string): string[] => readdirSync(dir).flatMap((e) => {
+    const p = path.join(dir, e);
+    if (statSync(p).isDirectory()) return SKIP.has(e) ? [] : walk(p);
+    return [p];
+  });
+  /** A file's lines with their numbers, comment lines (`#`, `//`, `/*`, `*`) dropped: prose is no writer. */
+  const codeLines = (f: string): Array<[number, string]> => readFileSync(f, 'utf8').split('\n')
+    .map((l, i): [number, string] => [i + 1, l]).filter(([, l]) => !/^\s*(?:#|\/\/|\/\*|\*)/.test(l));
+  const rel = (f: string): string => path.relative(REPO_ROOT, f).split(path.sep).join('/');
+  const shipped = (): string[] => ROOTS.flatMap((r) => walk(path.join(REPO_ROOT, r)));
+
+  it('CONTROL: the scan walks the shipped roots, and its write shapes catch a writer and pass a reader', () => {
+    const named = shipped().filter((f) => codeLines(f).some(([, l]) => NAMES.test(l))).map(rel);
+    expect(named).toEqual(expect.arrayContaining(['ccd/ccrc', 'ccd/codexbridge/liveprobe.py', 'ccd/codexbridge/record.py']));
+    for (const w of [
+      'touch "$dir/record-streams"', ': > "$d/liveprobe-allowed"', 'printf x >>"$d"/record-streams',
+      'cp /dev/null "$d/record-streams"', 'open(os.path.join(lane_dir, ALLOW_MARKER), "w").close()',
+      'fd = os.open(os.path.join(d, RECORD_MARKER), os.O_CREAT | os.O_WRONLY)', 'pathlib.Path(d, RECORD_MARKER).touch()',
+      'subprocess.run(["touch", os.path.join(d, ALLOW_MARKER)])', "writeFileSync(join(dir, 'record-streams'), '')",
+      "await fs.promises.writeFile(path.join(d, 'liveprobe-allowed'), '')",
+    ]) expect(NAMES.test(w) && WRITE.test(w), w).toBe(true);
+    for (const r of [
+      'if not os.path.exists(os.path.join(lane_dir, ALLOW_MARKER)):', 'ALLOW_MARKER = "liveprobe-allowed"',
+      'RECORD_MARKER = "record-streams"', '[ -e "$dir/record-streams" ] || return 0',
+      'rm -f -- "$dir/record-streams" 2>/dev/null', "const armed = (n: string) => n === 'record-streams';",
+      'raise Refused("no-marker", "the lane directory holds no " + ALLOW_MARKER + " marker; the operator touches it "',
+      'with open(os.path.join(lane_dir, RECORD_MARKER), "rb") as f:',
+    ]) expect(NAMES.test(r) && !WRITE.test(r), r).toBe(true);
+  });
+
+  it('no code line of shipped code writes liveprobe-allowed or record-streams', () => {
+    const found = shipped().flatMap((f) => codeLines(f)
+      .filter(([, l]) => NAMES.test(l) && WRITE.test(l)).map(([n, l]) => `${rel(f)}:${n}: ${l.trim()}`));
+    expect(found).toEqual([]);
   });
 });

@@ -10,7 +10,7 @@
 // first-run state seed, the release flags and paging, the body's length cap, the serde names and the printable-name
 // class and length) in fix round 1's; G20-G25 and G20b (fix round 2: the first-run paging stop, `<`, `>` and
 // whitespace each alone, the CLI's API base and that the CLI walk reached the fake) in fix round 2's; G26-G27 (fix
-// round 3: each arm of the release paging stop set never to stop) in fix round 3's.
+// round 3: each arm of the release paging stop set never to stop) in the whole-wave fix round's commit body.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -455,7 +455,12 @@ async function runCli(build: (api: string) => ReturnType<typeof fakeGitHub>, env
     const child = spawn(process.execPath, ['--import', LOOPBACK_ONLY, SCRIPT, '--repo', REPO], {
       env: { PATH: process.env.PATH ?? '', GITHUB_API_URL: api, ...env }, stdio: ['ignore', 'ignore', 'ignore'],
     });
-    const code = await new Promise<number | null>((resolve, reject) => { child.on('error', reject); child.on('close', (c) => resolve(c)); });
+    const code = await new Promise<number | null>((resolve, reject) => {
+      // A child that hangs is killed under the case's 30 s bound, so it never outlives its case (the live-tools runCli's rule).
+      const timer = setTimeout(() => child.kill('SIGKILL'), 25_000);
+      child.on('error', (e) => { clearTimeout(timer); reject(e); });
+      child.on('close', (c) => { clearTimeout(timer); resolve(c); });
+    });
     return { code, gh };
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -491,7 +496,7 @@ describe('the workflow', () => {
   const wf = parseYaml(src) as {
     on: { schedule?: Array<{ cron: string }>, workflow_dispatch?: unknown },
     permissions: Record<string, string>,
-    jobs: Record<string, { permissions: Record<string, string>, steps: Array<{ uses?: string, run?: string, env?: Record<string, string> }> }>,
+    jobs: Record<string, { permissions: Record<string, string>, steps: Array<{ name?: string, uses?: string, with?: Record<string, unknown>, run?: string, env?: Record<string, string> }> }>,
   };
 
   it('runs daily and by hand, with the job\'s token only: contents read, issues write, no secrets', () => {
@@ -506,5 +511,11 @@ describe('the workflow', () => {
     const run = wf.jobs.watch!.steps.find((s) => s.run !== undefined)!;
     expect(run.run).toBe('node .github/ci/codex-wire-watch.mjs --repo "$REPO"');
     expect(run.env).toEqual({ GITHUB_TOKEN: '${{ github.token }}', REPO: '${{ github.repository }}' });
+    // The whole-wave fix round, Z9: the job's steps exactly, so the checkout keeps no credential and no step or action
+    // is added unseen.
+    expect(wf.jobs.watch!.steps).toEqual([
+      { uses: 'actions/checkout@v7', with: { 'persist-credentials': false } },
+      { name: 'Walk the stable Codex releases since the last walk', env: run.env, run: run.run },
+    ]);
   });
 });

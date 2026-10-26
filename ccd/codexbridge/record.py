@@ -14,15 +14,21 @@ that cannot be written is dropped; the stream it would have recorded is never to
 
 THE SCRUBBER (`python3 -I <tree>/ccd/codexbridge/record.py scrub <in.sse> <out.sse>`) writes a corpus stream (Task 3's
 format, `make_streams.py`'s `Stream.add`: `event: <name>`, `data: <compact JSON>`, a blank line): the head is dropped
-(every header line), as are `:` comments and the SSE `id:`/`retry:` fields; every id becomes `<prefix>_fx<n>` (one
-number per distinct id and prefix, so an item's id and a delta's `item_id` still agree); every `encrypted_content`
-becomes `ENC-<n>`; every text becomes a synthetic string of the same structure: each letter or digit becomes `x` and
-every other character is kept, so a text keeps its length, its whitespace and its punctuation, and the live deltas of
-a message still join to its done text. A function call's `arguments` that parse as JSON keep their keys, numbers and
-shape, and only their strings are rewritten. A `data:` line that is not JSON becomes a fixed malformed line. Then the
-output is checked against SCRUB_PATTERNS (an unscrubbed id, a JWT, an encrypted content that is not `ENC-<n>`, a key,
-a line that is not an `event:` or `data:` line): any match refuses (rc 1) and writes nothing. Its expectation in
-`expect.json` is written by hand in the reviewed change that adds it (make_streams.py's rule).
+(every header line), as are `:` comments and the SSE `id:`/`retry:` fields; every id (ID_KEYS) becomes `<prefix>_fx<n>`
+(one number per distinct id and prefix, so an item's id and a delta's `item_id` still agree); every `encrypted_content`
+becomes `ENC-<n>`; every tool or function `name` becomes `tool_fx<n>` (one number per distinct name, so a call still
+names the tool its echo declares); and EVERY OTHER STRING, under any key but the few the corpus reader needs to parse
+and replay a stream (STRUCTURAL_KEYS, and TERMINAL_KEYS in a terminal's place), becomes a synthetic string of the same
+structure: each letter or digit becomes `x` and every other character is kept, so a text keeps its length, its
+whitespace and its punctuation, and the live deltas of a message still join to its done text (the whole-wave fix round,
+Z3: a string under a key this module has never heard of, such as a web search's query, an image's revised prompt or a
+tool schema's enum, never reaches the public corpus). A function call's `arguments` that parse as JSON keep their keys,
+numbers and shape, and only their strings are rewritten. Object KEYS are kept everywhere (an argument's or a schema
+property's name included), so a recording still needs a human read before it enters the corpus. A `data:` line that is
+not JSON becomes a fixed malformed line. Then the output is checked against SCRUB_PATTERNS (an unscrubbed id, a JWT, an
+encrypted content that is not `ENC-<n>`, a key, a line that is not an `event:` or `data:` line), which a structural
+key's value can still match: any match refuses (rc 1) and writes nothing. Its expectation in `expect.json` is written by
+hand in the reviewed change that adds it (make_streams.py's rule).
 
 The module's CLI runs only under `__main__` (the block below), so importing it through `load_all()` does nothing.
 """
@@ -60,12 +66,13 @@ _LOCK = threading.Lock()  # one recording is reserved at a time, so two streams 
 
 # ── the recording ────────────────────────────────────────────────────────────────────────────────────────────────
 class Recording:
-    """One open recording file. `write` and `close` may be called from two threads; a write that fails closes it,
-    and a write after the close is dropped."""
+    """One open recording file. `write` and `close` may be called from two threads; a write that fails closes it and
+    sets `failed` (the recording is cut short; the live probe says so), and a write after the close is dropped."""
 
     def __init__(self, fd: int) -> None:
         self._fd = fd  # type: Optional[int]
         self._lock = threading.Lock()
+        self.failed = False
 
     def write(self, data: bytes) -> None:
         with self._lock:
@@ -77,6 +84,7 @@ class Recording:
                     n = os.write(self._fd, view)
                     view = view[n:]
             except OSError:
+                self.failed = True
                 self._close_locked()
 
     def _close_locked(self) -> None:
@@ -197,15 +205,17 @@ def split_head(data: bytes) -> Tuple[Optional[int], bytes]:
 # ── the scrubber ─────────────────────────────────────────────────────────────────────────────────────────────────
 ID_KEYS = frozenset({"id", "item_id", "call_id", "response_id", "previous_response_id", "tool_call_id"})
 ENCRYPTED_KEY = "encrypted_content"
-# The keys whose string values are content (texts, a model id, the request the response echoes): each is rewritten
-# character by character (`_synthetic`).
-TEXT_KEYS = frozenset({
-    "text", "delta", "refusal", "input", "instructions", "message", "description", "obfuscation", "model", "url",
-    "title", "prompt_cache_key", "safety_identifier", "user", "summary", "output",
-})
 ARGUMENTS_KEY = "arguments"
-# An id anywhere: a lower-case prefix, `_`, then at least 8 letters, digits or `-` of which one is a digit.
-_ID_VALUE_RE = re.compile(r"^([a-z]{1,8})_(?=[A-Za-z0-9-]*[0-9])[A-Za-z0-9-]{8,}$")
+NAME_KEY = "name"  # a tool's or a function call's name: `tool_fx<n>`, one per distinct name
+# The only string values kept as they are: what Task 3's corpus reader (`sse.SseParser`, whose event type is
+# `data.type`, and `reducer.Reducer`) needs to parse and replay a stream. STRUCTURAL_KEYS anywhere: `type` names the
+# event, the item and each part; `status`, `role` and `phase` the item and the message; `object` the response.
+# TERMINAL_KEYS only in a terminal's place: `reason` in `incomplete_details` (`reducer`'s incomplete reason) and
+# `code` in an `error` object or a top-level `error` event (`errors.classify_failed`), because a `code` elsewhere can
+# be content (a code interpreter call's source). Every other string is rewritten (`_synthetic`), whatever its key.
+STRUCTURAL_KEYS = frozenset({"type", "status", "role", "phase", "object"})
+# Each TERMINAL_KEYS key maps to the one object it is kept in.
+TERMINAL_KEYS = {"reason": "incomplete_details", "code": "error"}  # type: Dict[str, str]
 MALFORMED_LINE = 'data: {"malformed"'
 
 # What a scrubbed stream must not hold. Each pattern is searched in the whole output text. `encrypted-content` and
@@ -231,6 +241,7 @@ class _Scrubber:
         self.ids = {}  # type: Dict[str, str]
         self.per_prefix = {}  # type: Dict[str, int]
         self.encrypted = {}  # type: Dict[str, str]
+        self.tools = {}  # type: Dict[str, str]
 
     def id_of(self, value: str) -> str:
         if value in self.ids:
@@ -247,6 +258,11 @@ class _Scrubber:
         if value not in self.encrypted:
             self.encrypted[value] = "ENC-%d" % (len(self.encrypted) + 1)
         return self.encrypted[value]
+
+    def tool_of(self, value: str) -> str:
+        if value not in self.tools:
+            self.tools[value] = "tool_fx%d" % (len(self.tools) + 1)
+        return self.tools[value]
 
     def arguments(self, value: str) -> str:
         try:
@@ -265,11 +281,14 @@ class _Scrubber:
             return {k: self.strings(v) for k, v in value.items()}
         return value
 
-    def value(self, key: Optional[str], value: object) -> object:
+    def value(self, key: Optional[str], value: object, within: Optional[str] = None) -> object:
+        """`value`, found under `key` in an object that sits under `within` (None at an event's top level)."""
         if isinstance(value, dict):
-            return {k: self.value(k, v) for k, v in value.items()}
+            # an `error` event's own fields are its error object's (`errors._error_object`)
+            here = key if key is not None else ("error" if value.get("type") == "error" else None)
+            return {k: self.value(k, v, here) for k, v in value.items()}
         if isinstance(value, list):
-            return [self.value(key, v) for v in value]
+            return [self.value(key, v, within) for v in value]
         if not isinstance(value, str):
             return value
         if key == ENCRYPTED_KEY:
@@ -278,11 +297,11 @@ class _Scrubber:
             return self.id_of(value)
         if key == ARGUMENTS_KEY:
             return self.arguments(value)
-        if key in TEXT_KEYS:  # before the id shape: a text that looks like an id keeps its length, so deltas join
-            return _synthetic(value)
-        if _ID_VALUE_RE.fullmatch(value):
-            return self.id_of(value)
-        return value
+        if key == NAME_KEY:
+            return self.tool_of(value)
+        if key in STRUCTURAL_KEYS or (key in TERMINAL_KEYS and TERMINAL_KEYS[key] == within):
+            return value
+        return _synthetic(value)  # a text that looks like an id keeps its length too, so deltas join
 
 
 def _dumps(value: object) -> str:

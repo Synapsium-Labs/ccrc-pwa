@@ -5490,8 +5490,16 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
     return file;
   };
   // Fix round 2, R6: a recording exists only while the operator's `record-streams` marker is in the lane directory.
-  const UNREC_CLAUSE = (dir: string): string => `; unrecognised is not a name: it stands for one outside the bound the bridge writes every name under (NAME_RE in ccd/codexbridge/stats.py), so put the operator's record-streams marker in ${dir} (the bridge records the lane's stream only while it is there), read that name in the recording when the bridge meets it again, and never add unrecognised to known.py`;
-  const OVER_CLAUSE = (dir: string): string => `; overflow is not a name: it stands for more distinct names in that family than the bridge counts (NAMES_MAX in ccd/codexbridge/stats.py), so put the operator's record-streams marker in ${dir} (the bridge records the lane's stream only while it is there), read the names past it in the recording when the bridge meets them again, and never add overflow to known.py`;
+  // The whole-wave fix round, Z2: each marker clause says, by family, what can show the name behind it, and that the
+  // bridge's restart clears the marker (Z1). `classes` holds the kinds of family the marker was listed in: `s` an
+  // event, item, error-code or incomplete-reason family (read from a 2xx stream), `h` responseHeader, `r` a
+  // request-side family or any other.
+  const MARKER_WHERE = (dir: string, classes: string, what: string, them: string): string =>
+    (classes.includes('s') ? `; for an event, item, error-code or incomplete-reason name, put the operator's record-streams marker in ${dir} (the bridge records the lane's stream only while it is there) and read ${what} in the recording when the bridge meets ${them} again` : '')
+    + (classes.includes('h') ? `; for a responseHeader name, put the operator's record-streams marker in ${dir} and read ${what} in the recording when the bridge meets ${them} again on a 2xx answer: only a 2xx answer's head is recorded` : '')
+    + (classes.includes('r') ? `; for a requestField, unsupportedField, betaValue, contextEdit, modelSubstitution or other name, no recording holds ${what}: those families' names come from Claude Code's request, and the bridge records only the upstream's answers, so read ${what} from the client's request, for example from Claude Code's release notes or a reviewed diagnostic` : '');
+  const UNREC_CLAUSE = (dir: string, classes: string): string => `; unrecognised is not a name: it stands for one outside the bound the bridge writes every name under (NAME_RE in ccd/codexbridge/stats.py)${MARKER_WHERE(dir, classes, 'that name', 'it')}; the bridge's restart clears unrecognised from the list, and it comes back when the bridge meets such a name again; never add unrecognised to known.py`;
+  const OVER_CLAUSE = (dir: string, classes: string): string => `; overflow is not a name: it stands for more distinct names in that family than the bridge counts (NAMES_MAX in ccd/codexbridge/stats.py)${MARKER_WHERE(dir, classes, 'the names past it', 'them')}; the bridge's restart clears overflow from the list but keeps that family's counted names, so the next name in it that the bridge has not counted is overflow again, which is new drift; never add overflow to known.py`;
   // Fix round 2, M1: a stats file the row cannot read as the bridge's is the drift row's own unmeasured WARN, so it
   // is printed whatever else the codex check finds (a lane word reached output only on the PASS line).
   const UNMEASURED = (id: string, file: string, why: string): string =>
@@ -5591,7 +5599,7 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
     const list = 'eventType:response.fx_ok, eventType:unrecognised, unrecognised:response.fx_two';
     const re = new RegExp(`^${reEsc(DRIFT('codex-a', 3, list))}$`, 'm');
     expect(r.stdout, r.stdout).toMatch(re);
-    expect(remedyAfter(r.stdout, re)).toBe(`${DRIFT_FIX}${UNREC_CLAUSE(laneDir(home, 'codex-a'))}`);
+    expect(remedyAfter(r.stdout, re)).toBe(`${DRIFT_FIX}${UNREC_CLAUSE(laneDir(home, 'codex-a'), 'sr')}`);
     expect(r.stdout).not.toMatch(/sentinel|s\u00ebntinel|forged/);
     noRunnerBugLine(r.stdout, 'codex');
   });
@@ -5615,7 +5623,7 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
     const r = runDoctor(home, ['doctor'], { LC_ALL: undefined, LANG: utf8 as string });
     const re = new RegExp(`^${reEsc(DRIFT('codex-a', 2, 'eventType:response.fx_ok, eventType:unrecognised'))}$`, 'm');
     expect(r.stdout, r.stdout).toMatch(re);
-    expect(remedyAfter(r.stdout, re)).toBe(`${DRIFT_FIX}${UNREC_CLAUSE(laneDir(home, 'codex-a'))}`);
+    expect(remedyAfter(r.stdout, re)).toBe(`${DRIFT_FIX}${UNREC_CLAUSE(laneDir(home, 'codex-a'), 's')}`);
     expect(r.stdout).not.toMatch(/fx-s.ntinel|elvin/);
   });
 
@@ -5741,7 +5749,7 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
     const shown = first.slice(0, 32).map((n) => `${families[0]}:${n}`).join(', ');
     const re = new RegExp(`^${reEsc(DRIFT('codex-a', total, `${shown}, … and ${total - 32} more`))}$`, 'm');
     expect(r.stdout).toMatch(re);
-    expect(remedyAfter(r.stdout, re)).toBe(`${DRIFT_FIX}${OVER_CLAUSE(laneDir(home, 'codex-a'))}`);
+    expect(remedyAfter(r.stdout, re)).toBe(`${DRIFT_FIX}${OVER_CLAUSE(laneDir(home, 'codex-a'), 'shr')}`);
     noRunnerBugLine(r.stdout, 'codex');
   });
 
@@ -5755,7 +5763,7 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
     const r = runDoctor(home);
     expect(r.stdout, r.stdout).not.toMatch(/the bridge met \d/);
     expectUnmeasured(r.stdout, 'codex-a', file, 'it could not be opened for reading',
-      `  remedy: make ${file} readable by the user doctor runs as, its owner (chmod 600 ${file}, the mode the bridge keeps it at), then re-run doctor`);
+      `  remedy: make ${file} readable by the user the bridge and doctor run as: if another user owns it, chown it to that user; then chmod 600 ${file} (the mode the bridge keeps it at), and re-run doctor`);
     expect(r.stdout).toMatch(new RegExp(`^FAIL codex: codex-a's bridge stats file ${reEsc(file)} has mode `, 'm'));
   });
 
@@ -5774,11 +5782,27 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
     const r = runDoctor(home);
     const reA = new RegExp(`^${reEsc(DRIFT('codex-a', 1, 'eventType:unrecognised'))}$`, 'm');
     expect(r.stdout, r.stdout).toMatch(reA);
-    expect(remedyAfter(r.stdout, reA)).toBe(`${DRIFT_FIX}${UNREC_CLAUSE(laneDir(home, 'codex-a'))}`);
+    expect(remedyAfter(r.stdout, reA)).toBe(`${DRIFT_FIX}${UNREC_CLAUSE(laneDir(home, 'codex-a'), 's')}`);
     const shown = ['eventType:overflow', ...many.slice(0, 31).map((n) => `eventType:${n}`)].join(', ');
     const reB = new RegExp(`^${reEsc(DRIFT('codex-b', 257, `${shown}, … and 225 more`))}$`, 'm');
     expect(r.stdout).toMatch(reB);
-    expect(remedyAfter(r.stdout, reB)).toBe(`${DRIFT_FIX}${OVER_CLAUSE(laneDir(home, 'codex-b'))}`);
+    expect(remedyAfter(r.stdout, reB)).toBe(`${DRIFT_FIX}${OVER_CLAUSE(laneDir(home, 'codex-b'), 's')}`);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // The whole-wave fix round, Z2: a request-side family's names come from Claude Code's request, which no recording
+  // holds, so its marker's remedy never sends the operator to the record-streams marker. The name is a real `Stats`
+  // one, 65 characters, so the bridge lists it as `requestField:unrecognised`.
+  it('a request-side marker is never sent to record-streams, and its clause says a restart clears it', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-drift-reqmarker-', ['codex-a']);
+    plantDirectLane(home, 'codex-a');
+    await writeStats(home, 'codex-a', [['requestField', `fx_${'x'.repeat(62)}`]]);
+    const r = runDoctor(home);
+    const re = new RegExp(`^${reEsc(DRIFT('codex-a', 1, 'requestField:unrecognised'))}$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    const fix = remedyAfter(r.stdout, re);
+    expect(fix).toBe(`${DRIFT_FIX}${UNREC_CLAUSE(laneDir(home, 'codex-a'), 'r')}`);
+    expect(fix).not.toContain('record-streams');
     noRunnerBugLine(r.stdout, 'codex');
   });
 

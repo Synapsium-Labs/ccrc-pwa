@@ -13214,10 +13214,10 @@ _codex_tier_stale() {   # <id> <tier>
 # handle lost for good.
 _codex_reap_files() {   # <id>
   local id="${1:-}" dir f t rc=0 had_nullglob=0 rec=''
-  # The bridge's markers (codex-bridge Stage 2, Task 11): files no ccrc code
-  # writes, which an operator touches in the lane directory.
+  # The bridge's markers (codex-bridge Stage 2, Task 11), which an operator touches and no ccrc code writes; then
+  # liveprobe.count and its tmp, and the stats file's tmp (below), which a killed write_count or stats flush leaves.
   local -a names=(lane.json runtime.env litellm.yaml litellm.yaml.prev .lock
-                  bridge-instructions record-streams liveprobe-allowed liveprobe.count)
+                  bridge-instructions record-streams liveprobe-allowed liveprobe.count liveprobe.count.tmp)
   local -a tmps=() bf=()
   _codex_shape || return 1
   if ! [[ "$id" =~ $WRAPPER_ID_RE ]]; then
@@ -13243,7 +13243,7 @@ _codex_reap_files() {   # <id>
     for t in 0 1 2; do
       [[ "${bf[$t]}" =~ ^[A-Za-z0-9._-]+$ ]] && [ "${bf[$t]}" != . ] && [ "${bf[$t]}" != .. ] || bf[$t]=''
     done
-    [ -z "${bf[0]}" ] || names+=("${bf[0]}")
+    [ -z "${bf[0]}" ] || names+=("${bf[0]}" "${bf[0]}.tmp")
     [ -z "${bf[1]}" ] || names+=("${bf[1]}" "${bf[1]}-wal" "${bf[1]}-shm")
     rec="${bf[2]}"
   fi
