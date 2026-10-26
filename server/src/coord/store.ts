@@ -64,6 +64,10 @@ import { bodyDigest } from '../../../shared/mark.mjs';
 // Fix round 1, item 5 (ruling A): the same tag comparator every other
 // ordering in this design uses — never `publishedAt` — for `newestUnyankedStable`.
 import { newestTag } from '../../../shared/semver.js';
+import {
+  SHADOW_JOURNAL_MAX_AGE_MS, SHADOW_JOURNAL_MAX_ROWS, isShadowLane, shadowVerdictKey,
+  type ShadowLane, type ShadowVerdictInput, type ShadowVerdictRow,
+} from '../../../shared/shadowJournal.js';
 // Centralised-update wave 19 (R24(d)): `rowHalts` asks the dispatcher's own halt rule rather than restating it.
 import { isHaltingUpdate } from '../../../shared/update-move.js';
 import {
@@ -5014,6 +5018,37 @@ export class CoordStore {
     const r = this.db.prepare("SELECT COUNT(*) AS n FROM drift_findings WHERE pushedVia = 'item' AND pushedAt >= ?")
       .get(dayStartMs) as { n: unknown };
     return Number(r.n);
+  }
+
+  // ── the unarmed disk lanes' shadow journal (D-6861): one writer, `recordShadowVerdict` ────────
+
+  /** Once per key (`INSERT OR IGNORE`, so a restart does not write it twice), then prune by age and keep the newest
+   *  `SHADOW_JOURNAL_MAX_ROWS`. Answers whether a new row landed. `detail` and `path` pass `redactCommand`, and the key
+   *  is built from the REDACTED path, so nothing redaction removes reaches the file through `key`. */
+  recordShadowVerdict(v: ShadowVerdictInput, now: number): boolean {
+    return tx(this.db, () => {
+      const storedPath = v.path === null ? null : redactCommand(v.path);
+      const put = this.db.prepare(
+        'INSERT OR IGNORE INTO shadow_journal (key, lane, subject, path, rung, bytes, inodes, detail, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(shadowVerdictKey({ ...v, path: storedPath }), v.lane, v.subject, storedPath, v.rung, v.bytes, v.inodes,
+        redactCommand(v.detail), now);
+      this.db.prepare('DELETE FROM shadow_journal WHERE at < ?').run(now - SHADOW_JOURNAL_MAX_AGE_MS);
+      this.db.prepare('DELETE FROM shadow_journal WHERE key IN (SELECT key FROM shadow_journal ORDER BY at DESC, rowid DESC LIMIT -1 OFFSET ?)')
+        .run(SHADOW_JOURNAL_MAX_ROWS);
+      return Number(put.changes) === 1;
+    });
+  }
+
+  /** Newest first, and none older than `SHADOW_JOURNAL_MAX_AGE_MS` at `now` (the prune runs only on a write, and the
+   *  lanes may stop writing). A row whose lane this build cannot name (a later build wrote it) is skipped, never a
+   *  failed read. */
+  shadowVerdicts(q: { readonly lane: ShadowLane | null; readonly subject: string | null; readonly limit: number }, now: number): ShadowVerdictRow[] {
+    const rows = this.db.prepare(
+      'SELECT key, lane, subject, path, rung, bytes, inodes, detail, at FROM shadow_journal WHERE (?1 IS NULL OR lane = ?1) ' +
+      'AND (?2 IS NULL OR subject = ?2) AND at >= ?4 ORDER BY at DESC, rowid DESC LIMIT ?3',
+    ).all(q.lane, q.subject, q.limit, now - SHADOW_JOURNAL_MAX_AGE_MS) as { key: string; lane: string; subject: string;
+      path: string | null; rung: string; bytes: number | null; inodes: number | null; detail: string; at: number }[];
+    return rows.flatMap((r): ShadowVerdictRow[] => (isShadowLane(r.lane) ? [{ ...r, lane: r.lane }] : []));
   }
 
   /** The runs and deliveries a stall OPERATOR rung already told the operator about, in mode `live` (a `shadow` row never

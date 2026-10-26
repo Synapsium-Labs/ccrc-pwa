@@ -52,7 +52,7 @@ describe('both audit parsers read nestedRescue.wouldRescue', () => {
     const doc = (extra: Record<string, unknown>): string => JSON.stringify({ id: ID, mode: 'reclaim', childOf: 7,
       verdict: 'containment-unproven', detail: 'd', ...extra });
     expect(parseChildReclaimAudit(ID, doc({ nestedRescue: { wouldRescue: ['/x/a', '/x/b'], rescue: [] } })))
-      .toEqual({ kind: 'refused', token: 'containment-unproven', detail: 'd', wouldRescue: 2 });
+      .toEqual({ kind: 'refused', token: 'containment-unproven', detail: 'd', wouldRescue: 2, wouldRescuePaths: ['/x/a', '/x/b'] });
     expect(parseChildReclaimAudit(ID, doc({}))).toEqual({ kind: 'refused', token: 'containment-unproven', detail: 'd' });
     expect(parseChildReclaimAudit(ID, doc({ nestedRescue: { wouldRescue: [], rescue: [] } })))
       .toEqual({ kind: 'refused', token: 'containment-unproven', detail: 'd' });
@@ -65,6 +65,7 @@ describe('both audit parsers read nestedRescue.wouldRescue', () => {
       expiresAt: 9, sensitive: [], verdict: 'containment-unproven', detail: 'd', ...extra });
     const withKey = parseExpireAudit(ID, true, doc({ nestedRescue: { wouldRescue: ['/x/a'], rescue: [] } }));
     expect(withKey).toMatchObject({ kind: 'document', nestedWouldRescue: 1 });
+    expect(withKey).toMatchObject({ nestedWouldRescuePaths: ['/x/a'] });
     const without = parseExpireAudit(ID, true, doc({}));
     expect(without.kind).toBe('document');
     expect('nestedWouldRescue' in without).toBe(false);
@@ -117,6 +118,10 @@ describe('the reclaim lane records one "would rescue" row per refused child', ()
     expect(shadow[0]!.body).toMatch(/not armed|shadow/);
     expect(shadow[0]!.body).not.toContain('/secret/path');
     expect(s.rows().filter((e) => e.title !== SHADOW_TITLE), 'the refusal keeps its own row').toHaveLength(1);
+    expect(s.deps.coord.shadowVerdicts({ lane: 'nested-rescue', subject: null, limit: 10 }, Date.now()).map((r) => r.path).sort(),
+      'the journal names each path the audit named').toEqual(['/secret/path/a', '/secret/path/b']);
+    expect(s.deps.coord.shadowVerdicts({ lane: 'nested-rescue', subject: null, limit: 10 }, Date.now()).map((r) => r.rung),
+      'the reclaim ladder refused it (D-6861)').toEqual(['reclaim:rescue', 'reclaim:rescue']);
   });
 
   it('the same refusal asked again for the same child writes no second shadow row', async () => {
@@ -168,6 +173,10 @@ describe('the expiry lane records one "would rescue" row per refused archive', (
     expect(shadow).toHaveLength(1);
     expect(shadow[0]!.body).toContain('1 nested repository ');
     expect(shadow[0]!.body).not.toContain('/secret/path');
+    expect(s.deps.coord.shadowVerdicts({ lane: 'nested-rescue', subject: null, limit: 10 }, Date.now()).map((r) => r.path).sort(),
+      'the journal names each path the audit named').toEqual(['/secret/path/a']);
+    expect(s.deps.coord.shadowVerdicts({ lane: 'nested-rescue', subject: null, limit: 10 }, Date.now()).map((r) => r.rung),
+      'the expiry ladder refused it (D-6861)').toEqual(['expire:rescue']);
   });
 
   it('asked again for the same archive writes no second row', async () => {

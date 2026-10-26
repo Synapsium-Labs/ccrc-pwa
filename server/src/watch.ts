@@ -178,7 +178,7 @@ import {
   rankArchivedHeld, type ArchivedExpiryEntry, type ArchivedExpiryVerdict,
   type ExpiryStoreRead,
 } from './archivedExpiry.js';
-import { childEverCoordinated, expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
+import { childEverCoordinated, expireArchived, expireLaneLive, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
 import {
   deadAnchorNext, deadCoordinatorNewEpisode, deadCoordinatorAttention, deadCoordinatorBreaker,
   deadCoordinatorBreakerHeldKey, deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal, deadCoordinatorJournalSpawnedAt,
@@ -5418,7 +5418,7 @@ export class FleetWatcher {
         identityMeasured: r.unmeasured.length === 0, held: r.held, store: read, expiresAt: entry.expiresAt, nowMs: now, childArm,
       });
       entry = archivedExpirySighted(entry, v, r.held, now);
-      entry = this.recordChildShadow(coord, r, v, entry);
+      entry = this.recordChildShadow(coord, r, v, entry, expireLaneLive(names));
       this.archivedExpiryState.set(r.id, entry);
       if (!v.eligible && v.why === 'expiry-unknown' && now >= entry.nextAskAt) learn.push(r.id);
       if (archivedExpiryDue(entry, now)) due.push(r.id);
@@ -5473,10 +5473,11 @@ export class FleetWatcher {
 
   /** A marked child the verdict would take but for `expire-child-live` (D-6641): ONE feed row per archive, "would be
    *  cleaned up (child)", so the operator sees the arm's population before arming it. Nothing is composed. */
-  private recordChildShadow(coord: CoordStore, r: SessionRecord, v: ArchivedExpiryVerdict, entry: ArchivedExpiryEntry): ArchivedExpiryEntry {
+  private recordChildShadow(coord: CoordStore, r: SessionRecord, v: ArchivedExpiryVerdict, entry: ArchivedExpiryEntry,
+    laneLive: boolean): ArchivedExpiryEntry {
     if (v.eligible || v.why !== 'child-shadow' || entry.expiresAt === null || entry.lastOutcome === CHILD_SHADOW_OUTCOME) return entry;
     recordExpireFeed({ coord, notifyLog: this.deps.notifyLog }, { kind: 'would-expire', sensitive: 0, child: true,
-      sessionId: r.id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt }, false);
+      sessionId: r.id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt, ...(laneLive ? { childArmHeld: true } : {}) }, false);
     return { ...entry, lastOutcome: CHILD_SHADOW_OUTCOME };
   }
 

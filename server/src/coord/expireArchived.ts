@@ -20,6 +20,8 @@ import { isRegistryId } from '../../../shared/api.js';
 import { notify } from '../notice.js';
 import { notRanSentence } from '../unmeasured.js';
 import { recordNestedRescueShadow } from './nestedRescueShadow.js';
+import { journalShadowVerdict } from './shadowJournal.js';
+import { SHADOW_LANE, SHADOW_RUNG } from '../../../shared/shadowJournal.js';
 
 /**
  * THE EXPIRY LANE'S ONE EXECUTOR (workspace lifecycle spec 2026-09-24 §5.3, wave 3b): `ws-audit --expire`, then
@@ -75,6 +77,9 @@ export type ExpireArchivedResult = ArchivedExpiryOutcome & {
   readonly wip?: string | null | 'unreadable'; readonly secretsDropped?: number | 'unreadable';
   /** The row is an archived child (D-6641): its shadow row says so. */
   readonly child?: true;
+  /** `expire-lane-live` stands and only `expire-child-live` holds this child back (D-6861): the one case the shadow
+   *  journal records as `expire-child`. A child held because the lane itself is unarmed is not that arm's verdict. */
+  readonly childArmHeld?: true;
 };
 
 /** What both executor entries answer for a session id that is not a registry id (spec §2.3): refused here, before
@@ -123,7 +128,7 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
   if (audit.verdict.kind === 'refused') {
     const { token, detail } = audit.verdict;
     recordNestedRescueShadow(deps, { sessionId, runId: null, key: String(archivedAt), who: `${sessionId} (archived ${archivedAt})`,
-      count: audit.nestedWouldRescue ?? 0 });
+      count: audit.nestedWouldRescue ?? 0, paths: audit.nestedWouldRescuePaths ?? [], rung: SHADOW_RUNG.expireRescue });
     return EXPIRE_TOKEN_KIND[token] === 'gone' ? answer({ kind: 'gone' })
       : answer({ kind: 'refused', token, detail, inUse: audit.inUse,
         auditExpiresAt: audit.expiresAt.kind === 'at' ? audit.expiresAt.at : null });
@@ -137,7 +142,8 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
   const last = await expirySwitches(deps);
   if (last.kind === 'paused') return answer({ kind: 'deferred', why: 'paused-at-server', detail: last.detail });
   // 7 — shadow stops here: the lane records it, and nothing is composed.
-  if (!last.live || (childOf !== undefined && !last.childLive)) return answer({ kind: 'would-expire', sensitive: audit.sensitive });
+  if (!last.live) return answer({ kind: 'would-expire', sensitive: audit.sensitive });
+  if (childOf !== undefined && !last.childLive) return answer({ kind: 'would-expire', sensitive: audit.sensitive }, { childArmHeld: true });
   const verb = await expireAct(deps, sessionId, audit.verdict.token, childOf);
   if (verb === 'unsupported') {
     return answer({ kind: 'deferred', why: 'unsupported', detail: `the fleet host does not advertise ${EXPIRE_CAP}` });
@@ -169,8 +175,11 @@ async function expirySwitches(deps: ExpireArchivedDeps): Promise<{ kind: 'paused
   if (readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set') {
     return { kind: 'paused', detail: `${RECLAIM_PAUSE_MARKER} is raised: cleanup is paused fleet-wide` };
   }
-  return { kind: 'clear', live: names.includes(EXPIRE_LANE_LIVE_MARKER), childLive: names.includes(EXPIRE_CHILD_LIVE_MARKER) };
+  return { kind: 'clear', live: expireLaneLive(names), childLive: names.includes(EXPIRE_CHILD_LIVE_MARKER) };
 }
+
+/** Whether `expire-lane-live` stands in a registry listing: the one reading, for the executor and the lane's child shadow. */
+export const expireLaneLive = (names: readonly string[]): boolean => names.includes(EXPIRE_LANE_LIVE_MARKER);
 
 /** THE REVIEW CONJUNCT for one row (spec §5.3, #166 R16): is `id` the `sessionId` of a REVIEW run whose reviewed
  *  run is not terminal? An unreadable or absent reviewed run is doubt, and doubt keeps (`reviewKeeps`). Shared by the
@@ -335,6 +344,12 @@ export function expireFeedBody(r: ExpireArchivedResult, standing = false): strin
 export function recordExpireFeed(deps: Pick<ExpireArchivedDeps, 'coord' | 'notifyLog'>, r: ExpireArchivedResult, standing = false): void {
   // Through the funnel (`notice.ts`, D-5859), `'record-only'`: recorded whatever the presence, never pushed.
   const title = r.child === true && r.kind === 'would-expire' ? 'archived child workspace would be cleaned up' : FEED_TITLE[r.kind];
+  // The durable journal beside the feed row (D-6861): a marked child the verdict would take but for its arm, and only
+  // that (`childArmHeld`: the expiry lane is live and the child arm is not).
+  if (r.kind === 'would-expire' && r.child === true && r.childArmHeld === true) {
+    journalShadowVerdict(deps.coord, { lane: SHADOW_LANE.expireChild, subject: r.sessionId, path: null, epoch: String(r.archivedAt),
+      rung: SHADOW_RUNG.childShadow, bytes: null, inodes: null, detail: expireFeedBody(r, standing) });
+  }
   notify(deps, { kind: 'run', sessionId: r.sessionId, runId: null, title, body: expireFeedBody(r, standing) },
     'record-only', { degraded: `archived expiry ${r.kind}, feed archive degraded` });
 }

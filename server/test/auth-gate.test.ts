@@ -275,7 +275,9 @@ describe('the scanner is looking at something', () => {
     // 43 since `POST /api/coord/review-cap` (D-6795): SESSION_ONLY like the caps dial, NOT EXEMPT, no box token.
     // 44 since `GET /api/mail/inbox` (mail inbox MI-5, D-6778): box-token gated and attribution-checked, EXEMPT.
     // 45 on the merge with `GET /api/runs/:id` (D-6799, the run plus its spend): box-token or session, EXEMPT.
-    expect(scanRoutes('coord/routes.ts').length).toBe(45);
+    // 46 since `GET /api/coord/shadow-journal` (D-6861, the unarmed disk lanes' shadow journal): a read, session-gated,
+    // NOT EXEMPT, no box token, its rows masked.
+    expect(scanRoutes('coord/routes.ts').length).toBe(46);
     // 5 in `update/routes.ts` (update-management W2, design 2026-09-20 §12):
     // `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`
     // and `POST /api/updates/ack`, session-only and NOT EXEMPT, plus the
@@ -412,7 +414,9 @@ describe('the scanner is looking at something', () => {
     // the HTTP half 119, the exempt-HTTP count 40 -> 41.
     // 123 since `GET /api/runs/:id` (D-6799, the run plus its spend; box-token or session, EXEMPT-BUT-AUTHENTICATED):
     // 60 + 45 + 7 + 2 + 4 + 5 = 123, the HTTP half 120, the gated count stays 78, the exempt-HTTP count 41 -> 42.
-    expect(ROUTES.length).toBe(123);
+    // 124 since `GET /api/coord/shadow-journal` (D-6861), session-gated, NOT EXEMPT, no box token:
+    // 60 + 46 + 7 + 2 + 4 + 5 = 124, the HTTP half 121, the gated count 78 -> 79, the exempt-HTTP count stays 42.
+    expect(ROUTES.length).toBe(124);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -437,6 +441,7 @@ describe('the scanner is looking at something', () => {
       'POST /api/coord/reclaim-pause',
       'GET /api/coord/stall-watch', 'POST /api/coord/stall-watch',
       'GET /api/coord/collect-lane', 'POST /api/coord/collect-lane',
+      'GET /api/coord/shadow-journal',
       'POST /api/sessions/:id/prompt', 'GET /ws/fleet', 'GET /ws/pty/:id',
       'POST /api/auth/login', 'POST /api/auth/logout', 'GET /api/auth/status',
       // Task 8's four, which split TWO ways under the gate: the register pair is
@@ -560,7 +565,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 123 scanned + the static wildcard when the bundle is built.
+    // 124 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1122,7 +1127,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 120 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 121 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1186,7 +1191,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 120 HTTP routes, not the 42 exempt.
+          //    is not itself flag-aware — the assertion that covers all 121 HTTP routes, not the 42 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)
