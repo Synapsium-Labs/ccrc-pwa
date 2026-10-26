@@ -23,7 +23,7 @@ import { CHILD_RECLAIM_TOKEN_KIND, childReclaimTokenKind, isChildReclaimToken, p
 import { COLLECT_REFUSAL_CLASS, COLLECT_REFUSAL_WORDS, collectRefusalClass } from '../src/collectLane.js';
 import {
   WORKSPACE_TRANSITIONS, WORKSPACE_VERBS, WORKSPACE_STATES, WORKSPACE_REFUSALS_BY_VERB, isWorkspaceRefusal,
-  isWorkspaceVerb, isWorkspaceState, workspaceEdge,
+  isWorkspaceVerb, isWorkspaceState, workspaceEdge, WORKSPACE_POST_ACT_WORDS,
 } from '../../shared/workspaceTransitions.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -52,12 +52,14 @@ export const WORKSPACE_REFUSAL_CENSUS: readonly CensusEdge[] = [
   e('restore', 'live|stopped|asleep', 'not-archived', 'ccd', 'no archive stamp stands for the session'),
   e('restore', 'archived', 'worktree-missing', 'ccd', 'the recorded worktree directory is gone'),
   e('restore', 'archived', 'in-progress', 'ccd', 'an expiry or reclaim breadcrumb of the workspace stands'),
+  e('restore', 'rowless', 'no-such-session', 'ccd', 'no registry row names the id'),
   // forget: a non-workspace row -> removed.
   e('forget', 'workspace', 'is-a-workspace', 'ccd', 'the row is a workspace, whose removal is audited and confirmed'),
   e('forget', 'held', 'held', 'ccd', 'a program holds the row'),
   e('forget', 'asleep', 'hibernated', 'ccd', 'the row is asleep, not gone'),
   e('forget', 'live', 'session-live', 'ccd', 'the session is still running'),
   e('forget', 'live', 'session-verdict-unknown', 'ccd', 'tmux did not answer, so liveness is unproven'),
+  e('forget', 'rowless', 'no-such-session', 'ccd', 'no registry row names the id'),
   // reap (ws-reap, ws-rm): archived -> retired, with a proof ladder every rung of which is a refusal.
   e('reap', 'rowless', 'no-such-session', 'ccd', 'no registry row names the id'),
   e('reap', 'main', 'not-a-workspace', 'ccd', 'the row is a main checkout'),
@@ -102,13 +104,26 @@ export const WORKSPACE_REFUSAL_CENSUS: readonly CensusEdge[] = [
   e('reap', 'archived', 'reaping-phase-unknown', 'ccd', 'a cleanup breadcrumb stands but cannot be read, so reap never takes its fresh arm over it'),
   e('reap', 'archived', 'child-branch-unmerged-locally', 'ccd', 'a nested checkout is merged at origin but not reachable from the project checkout, a probe that touches nothing'),
   e('reap', 'archived', 'branch-moved', 'ccd', 'the resumed cleanup has no tombstone tip, or the branch moved after it was pinned; nothing further is deleted'),
-  // expire (ws-expire): archived -> retired after the seven-day window; its other refusals are reap's.
+  // expire (ws-expire): archived -> retired after the seven-day window; it runs reclaim's ladder (`_ws_reclaim_ladder`).
   e('expire', 'live|stopped|asleep', 'not-archived', 'ccd', 'the workspace is not archived'),
   e('expire', 'archived', 'not-expired', 'ccd', 'archived less than seven days ago'),
   e('expire', 'archived', 'child', 'ccd', 'a run-created workspace is cleaned up when its run closes'),
   e('expire', 'archived', 'live', 'ccd', 'a pane or a service that would start one stands'),
   e('expire', 'archived', 'in-use', 'ccd', 'a process has its working directory inside the workspace'),
   e('expire', 'archived', 'in-progress', 'ccd', 'another cleanup holds the lock'),
+  e('expire', 'rowless', 'no-such-session', 'ccd', 'no registry row names the id'),
+  e('expire', 'main', 'not-a-workspace', 'ccd', 'the row is a main checkout'),
+  e('expire', 'archived', 'branch-elsewhere', 'ccd', 'the branch is checked out somewhere else'),
+  e('expire', 'archived', 'tree-unreadable', 'ccd', 'the worktree could not be read'),
+  e('expire', 'archived', 'containment-unproven', 'ccd', 'the tree at the path is not proven the workspace’s own'),
+  e('expire', 'archived', 'no-worktree-record', 'ccd', 'git has no worktree record for the directory'),
+  e('expire', 'archived', 'paused', 'ccd', 'reclamation is paused fleet-wide'),
+  e('expire', 'archived', 'held', 'ccd', 'a program holds the workspace'),
+  e('expire', 'archived', 'attached', 'ccd', 'a terminal is attached'),
+  e('expire', 'archived', 'tree-busy', 'ccd', 'a git operation or an index lock stands in the tree'),
+  e('expire', 'archived', 'state-changed', 'ccd', 'the workspace changed since the audit the token fingerprints'),
+  e('expire', 'archived', 'reap-in-progress', 'ccd', 'an interrupted reap breadcrumb stands; expiry never finishes it'),
+  e('expire', 'archived', 'reclaim-in-progress', 'ccd', 'an interrupted reclaim breadcrumb stands; expiry never finishes it'),
   // reclaim (ws-reclaim): live|asleep child -> retired.
   e('reclaim', 'rowless', 'no-such-session', 'ccd', 'no registry row names the id'),
   e('reclaim', 'main', 'not-a-workspace', 'ccd', 'the row is a main checkout'),
@@ -121,12 +136,21 @@ export const WORKSPACE_REFUSAL_CENSUS: readonly CensusEdge[] = [
   e('reclaim', 'live|asleep', 'containment-unproven', 'ccd', 'the tree at the path is not proven the child’s own'),
   e('reclaim', 'live|asleep', 'in-progress', 'ccd', 'another cleanup holds the lock'),
   e('reclaim', 'live|asleep', 'reap-in-progress', 'ccd', 'an interrupted reap breadcrumb stands; reclaim never finishes it'),
+  e('reclaim', 'live|asleep', 'branch-elsewhere', 'ccd', 'the branch is checked out somewhere else'),
+  e('reclaim', 'live|asleep', 'tree-unreadable', 'ccd', 'the worktree could not be read'),
+  e('reclaim', 'live|asleep', 'no-worktree-record', 'ccd', 'git has no worktree record for the directory'),
+  e('reclaim', 'live|asleep', 'state-changed', 'ccd', 'the child changed since the audit the token fingerprints'),
   // collect (ws-collect): a rowless, witnessed temp root -> quarantined.
   e('collect', 'rowless', 'not-witnessed', 'ccd', 'no witness and no quarantine record names the id'),
   e('collect', 'rowless', 'registered', 'ccd', 'a registry row or what one left behind still stands'),
   e('collect', 'rowless', 'changed-recently', 'ccd', 'the newest change is younger than the idle floor'),
   e('collect', 'rowless', 'witness-mismatch', 'ccd', 'the directory is not the one its witness names'),
   e('collect', 'rowless', 'quarantine-kept', 'ccd', 'a quarantine record or slot cannot be read, proved or cleared'),
+  e('collect', 'rowless', 'containment-unproven', 'ccd', 'the temp root is not proven the witnessed directory’s own'),
+  e('collect', 'rowless', 'state-changed', 'ccd', 'the temp root changed since the audit the token fingerprints'),
+  e('collect', 'rowless', 'in-use', 'ccd', 'a process has its working directory inside the temp root'),
+  e('collect', 'rowless', 'in-progress', 'ccd', 'another collection holds the lock'),
+  e('collect', 'rowless', 'paused', 'ccd', 'collection is paused fleet-wide'),
 ];
 
 const CCD = read('ccd/ccd');
@@ -142,8 +166,8 @@ describe('workspace refusal census (ARCH-41, #776): today’s client-read refusa
   it('pins the per-verb edge counts exactly (a verb gaining or losing a refusal is a decision, not drift)', () => {
     const counts: Record<string, number> = {};
     for (const x of WORKSPACE_REFUSAL_CENSUS) counts[x.verb] = (counts[x.verb] ?? 0) + 1;
-    expect(counts).toEqual({ archive: 7, restore: 3, forget: 5, reap: 43, expire: 6, reclaim: 11, collect: 5 });
-    expect(WORKSPACE_REFUSAL_CENSUS.length).toBe(80);
+    expect(counts).toEqual({ archive: 7, restore: 4, forget: 6, reap: 43, expire: 19, reclaim: 15, collect: 10 });
+    expect(WORKSPACE_REFUSAL_CENSUS.length).toBe(104);
   });
 
   it('every edge’s code is read by a client: an archive wire word, a SENTENCES key or an LC_REFUSAL_WORD key', () => {
@@ -192,6 +216,53 @@ describe('workspace refusal census (ARCH-41, #776): today’s client-read refusa
     expect(unaccounted).toEqual([]);
     for (const k of Object.keys(EXCLUDED)) expect(codes.has(k), `${k} is both a census edge and excluded`).toBe(false);
     for (const k of Object.keys(EXCLUDED)) expect(k in SENTENCES || k in LC_REFUSAL_WORD, `${k} is stale`).toBe(true);
+  });
+
+  // Per verb, not just per word (ARCH-41 fix round 3): each verb's census codes equal the words that verb's own ccd-pinned
+  // set holds, less the named exclusions. Expire, reclaim and collect: the lane sets the server already holds equal to
+  // ccd's text in both directions (`archived-expiry-policy.test.ts`, `child-reclaim.test.ts`, `collect-readers.test.ts`),
+  // less WORKSPACE_POST_ACT_WORDS. Restore, forget and reap have no server set, so their words are harvested from ccd's
+  // own refusal sites here, less EXCLUDED. A word one verb emits and another does not is therefore pinned to the verb.
+  const censusOf = (v: Verb): string[] => [...new Set(WORKSPACE_REFUSAL_CENSUS.filter((x) => x.verb === v).map((x) => x.code))].sort();
+  const less = (ws: Iterable<string>, out: readonly string[]): string[] => [...new Set([...ws].filter((w) => !out.includes(w)))].sort();
+  it('expire, reclaim and collect: each verb’s codes equal its lane set, less the post-act words', () => {
+    expect(WORKSPACE_POST_ACT_WORDS.every((w) => EXCLUDED[w] === 'post-act'), 'a post-act word is an EXCLUDED post-act word').toBe(true);
+    expect(censusOf('expire')).toEqual(less(Object.keys(EXPIRE_TOKEN_KIND), WORKSPACE_POST_ACT_WORDS));
+    expect(censusOf('reclaim')).toEqual(less(Object.keys(CHILD_RECLAIM_TOKEN_KIND), WORKSPACE_POST_ACT_WORDS));
+    expect(censusOf('collect')).toEqual(less(COLLECT_REFUSAL_WORDS, WORKSPACE_POST_ACT_WORDS));
+  });
+
+  const nonComment = (t: string): string => t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  const bodyOf = (name: string): string => {
+    const from = CCD.indexOf(`\n${name}() {`);
+    expect(from, `${name} is in ccd`).toBeGreaterThan(-1);
+    return nonComment(CCD.slice(from, CCD.indexOf('\n}\n', from)));
+  };
+  const lcRefused = (t: string, act: string): string[] =>
+    [...t.matchAll(new RegExp(`_lc_refuse ${act} (?:"[^"]*"|\\S+) ([a-z][a-z-]*)`, 'g'))].map((m) => m[1]!);
+  const excluded = Object.keys(EXCLUDED);
+  it('restore and forget: each verb’s codes equal what its ccd verb refuses with, less EXCLUDED', () => {
+    const restore = lcRefused(bodyOf('cmd_ws_restore'), 'restore');
+    const forget = lcRefused(bodyOf('cmd_forget'), 'forget');
+    expect(restore.length, 'guards the guard: an empty harvest').toBeGreaterThan(5);
+    expect(forget.length, 'guards the guard: an empty harvest').toBeGreaterThan(5);
+    expect(censusOf('restore')).toEqual(less(restore, excluded));
+    expect(censusOf('forget')).toEqual(less(forget, excluded));
+  });
+  it('reap: its codes equal what ws-reap and ws-rm refuse with, less EXCLUDED', () => {
+    const from = CCD.indexOf('\ncmd_ws_reap() {');
+    const span = nonComment(CCD.slice(from, CCD.indexOf('\n# ── reclamation ──', from)));
+    const mirror = nonComment(CCD.slice(CCD.indexOf('MIRROR-BEGIN'), CCD.indexOf('MIRROR-END')));
+    expect(from).toBeGreaterThan(-1);
+    expect(mirror.length).toBeGreaterThan(0);
+    const harvested = [
+      ...[...bodyOf('_ws_reap_eval').matchAll(/_reap_refuse ([a-z][a-z-]*)/g)].map((m) => m[1]!),
+      ...[...(span + mirror).matchAll(/"refused":"([a-z][a-z-]*)"/g)].map((m) => m[1]!),
+      ...lcRefused(nonComment(CCD), 'reap'),
+      ...lcRefused(bodyOf('cmd_ws_rm'), '[a-z]+'),
+    ];
+    expect(new Set(harvested).size, 'guards the guard: an empty harvest').toBeGreaterThan(30);
+    expect(censusOf('reap')).toEqual(less(harvested, excluded));
   });
 
   it('every archive wire word is a census edge (the door has no refusal the census missed)', () => {

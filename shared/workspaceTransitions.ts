@@ -4,7 +4,7 @@
  *
  * `WORKSPACE_TRANSITIONS` is `RUN_TRANSITIONS`'s sibling for a session's workspace: each row is one edge a client reads
  * as a refusal today, taken from the verb's own refusal and pinned by `server/test/workspace-refusal-census.test.ts`
- * (80 edges, well past the spec's ~10-edge test). A row is (verb, the states the verb is refused in, the refusal code,
+ * (104 edges, well past the spec's ~10-edge test). A row is (verb, the states the verb is refused in, the refusal code,
  * who enforces it, the precondition). The codes are the three vocabularies clients already read, unrenamed:
  * `ARCHIVE_REFUSALS` (the archive door's wire words), `SENTENCES` (`server/src/wsaudit.ts`) and `LC_REFUSAL_WORD`
  * (`./api.ts`); this table adds the missing half of each word, WHICH state refuses WHICH verb and WHY.
@@ -68,11 +68,13 @@ export const WORKSPACE_TRANSITIONS: readonly WorkspaceTransition[] = [
   { verb: 'restore', from: ['live', 'stopped', 'asleep'], refusal: 'not-archived', by: 'ccd', precondition: 'no archive stamp stands for the session' },
   { verb: 'restore', from: ['archived'], refusal: 'worktree-missing', by: 'ccd', precondition: 'the recorded worktree directory is gone' },
   { verb: 'restore', from: ['archived'], refusal: 'in-progress', by: 'ccd', precondition: 'an expiry or reclaim breadcrumb of the workspace stands' },
+  { verb: 'restore', from: ['rowless'], refusal: 'no-such-session', by: 'ccd', precondition: 'no registry row names the id' },
   { verb: 'forget', from: ['workspace'], refusal: 'is-a-workspace', by: 'ccd', precondition: 'the row is a workspace, whose removal is audited and confirmed' },
   { verb: 'forget', from: ['held'], refusal: 'held', by: 'ccd', precondition: 'a program holds the row' },
   { verb: 'forget', from: ['asleep'], refusal: 'hibernated', by: 'ccd', precondition: 'the row is asleep, not gone' },
   { verb: 'forget', from: ['live'], refusal: 'session-live', by: 'ccd', precondition: 'the session is still running' },
   { verb: 'forget', from: ['live'], refusal: 'session-verdict-unknown', by: 'ccd', precondition: 'tmux did not answer, so liveness is unproven' },
+  { verb: 'forget', from: ['rowless'], refusal: 'no-such-session', by: 'ccd', precondition: 'no registry row names the id' },
   { verb: 'reap', from: ['rowless'], refusal: 'no-such-session', by: 'ccd', precondition: 'no registry row names the id' },
   { verb: 'reap', from: ['main'], refusal: 'not-a-workspace', by: 'ccd', precondition: 'the row is a main checkout' },
   { verb: 'reap', from: ['live', 'stopped', 'asleep'], refusal: 'not-archived', by: 'ccd', precondition: 'archive is the staging step and has not happened' },
@@ -122,6 +124,19 @@ export const WORKSPACE_TRANSITIONS: readonly WorkspaceTransition[] = [
   { verb: 'expire', from: ['archived'], refusal: 'live', by: 'ccd', precondition: 'a pane or a service that would start one stands' },
   { verb: 'expire', from: ['archived'], refusal: 'in-use', by: 'ccd', precondition: 'a process has its working directory inside the workspace' },
   { verb: 'expire', from: ['archived'], refusal: 'in-progress', by: 'ccd', precondition: 'another cleanup holds the lock' },
+  { verb: 'expire', from: ['rowless'], refusal: 'no-such-session', by: 'ccd', precondition: 'no registry row names the id' },
+  { verb: 'expire', from: ['main'], refusal: 'not-a-workspace', by: 'ccd', precondition: 'the row is a main checkout' },
+  { verb: 'expire', from: ['archived'], refusal: 'branch-elsewhere', by: 'ccd', precondition: 'the branch is checked out somewhere else' },
+  { verb: 'expire', from: ['archived'], refusal: 'tree-unreadable', by: 'ccd', precondition: 'the worktree could not be read' },
+  { verb: 'expire', from: ['archived'], refusal: 'containment-unproven', by: 'ccd', precondition: 'the tree at the path is not proven the workspace’s own' },
+  { verb: 'expire', from: ['archived'], refusal: 'no-worktree-record', by: 'ccd', precondition: 'git has no worktree record for the directory' },
+  { verb: 'expire', from: ['archived'], refusal: 'paused', by: 'ccd', precondition: 'reclamation is paused fleet-wide' },
+  { verb: 'expire', from: ['archived'], refusal: 'held', by: 'ccd', precondition: 'a program holds the workspace' },
+  { verb: 'expire', from: ['archived'], refusal: 'attached', by: 'ccd', precondition: 'a terminal is attached' },
+  { verb: 'expire', from: ['archived'], refusal: 'tree-busy', by: 'ccd', precondition: 'a git operation or an index lock stands in the tree' },
+  { verb: 'expire', from: ['archived'], refusal: 'state-changed', by: 'ccd', precondition: 'the workspace changed since the audit the token fingerprints' },
+  { verb: 'expire', from: ['archived'], refusal: 'reap-in-progress', by: 'ccd', precondition: 'an interrupted reap breadcrumb stands; expiry never finishes it' },
+  { verb: 'expire', from: ['archived'], refusal: 'reclaim-in-progress', by: 'ccd', precondition: 'an interrupted reclaim breadcrumb stands; expiry never finishes it' },
   { verb: 'reclaim', from: ['rowless'], refusal: 'no-such-session', by: 'ccd', precondition: 'no registry row names the id' },
   { verb: 'reclaim', from: ['main'], refusal: 'not-a-workspace', by: 'ccd', precondition: 'the row is a main checkout' },
   { verb: 'reclaim', from: ['live', 'asleep'], refusal: 'not-a-child', by: 'ccd', precondition: 'the child marker and the run id do not agree' },
@@ -133,12 +148,29 @@ export const WORKSPACE_TRANSITIONS: readonly WorkspaceTransition[] = [
   { verb: 'reclaim', from: ['live', 'asleep'], refusal: 'containment-unproven', by: 'ccd', precondition: 'the tree at the path is not proven the child’s own' },
   { verb: 'reclaim', from: ['live', 'asleep'], refusal: 'in-progress', by: 'ccd', precondition: 'another cleanup holds the lock' },
   { verb: 'reclaim', from: ['live', 'asleep'], refusal: 'reap-in-progress', by: 'ccd', precondition: 'an interrupted reap breadcrumb stands; reclaim never finishes it' },
+  { verb: 'reclaim', from: ['live', 'asleep'], refusal: 'branch-elsewhere', by: 'ccd', precondition: 'the branch is checked out somewhere else' },
+  { verb: 'reclaim', from: ['live', 'asleep'], refusal: 'tree-unreadable', by: 'ccd', precondition: 'the worktree could not be read' },
+  { verb: 'reclaim', from: ['live', 'asleep'], refusal: 'no-worktree-record', by: 'ccd', precondition: 'git has no worktree record for the directory' },
+  { verb: 'reclaim', from: ['live', 'asleep'], refusal: 'state-changed', by: 'ccd', precondition: 'the child changed since the audit the token fingerprints' },
   { verb: 'collect', from: ['rowless'], refusal: 'not-witnessed', by: 'ccd', precondition: 'no witness and no quarantine record names the id' },
   { verb: 'collect', from: ['rowless'], refusal: 'registered', by: 'ccd', precondition: 'a registry row or what one left behind still stands' },
   { verb: 'collect', from: ['rowless'], refusal: 'changed-recently', by: 'ccd', precondition: 'the newest change is younger than the idle floor' },
   { verb: 'collect', from: ['rowless'], refusal: 'witness-mismatch', by: 'ccd', precondition: 'the directory is not the one its witness names' },
   { verb: 'collect', from: ['rowless'], refusal: 'quarantine-kept', by: 'ccd', precondition: 'a quarantine record or slot cannot be read, proved or cleared' },
+  { verb: 'collect', from: ['rowless'], refusal: 'containment-unproven', by: 'ccd', precondition: 'the temp root is not proven the witnessed directory’s own' },
+  { verb: 'collect', from: ['rowless'], refusal: 'state-changed', by: 'ccd', precondition: 'the temp root changed since the audit the token fingerprints' },
+  { verb: 'collect', from: ['rowless'], refusal: 'in-use', by: 'ccd', precondition: 'a process has its working directory inside the temp root' },
+  { verb: 'collect', from: ['rowless'], refusal: 'in-progress', by: 'ccd', precondition: 'another collection holds the lock' },
+  { verb: 'collect', from: ['rowless'], refusal: 'paused', by: 'ccd', precondition: 'collection is paused fleet-wide' },
 ];
+
+/** The words the reclaim and expiry acts print on their `failed` document after the act began (the nested rescue,
+ *  D-6633). Their lanes read them beside the refusals, but no state of the workspace refuses with them, so they are not
+ *  edges: named here once, as the one exclusion a lane's word set adds to its verb's table refusals. */
+export const WORKSPACE_POST_ACT_WORDS = ['nested-rescue-too-large', 'nested-rescue-failed'] as const;
+export type WorkspacePostActWord = (typeof WORKSPACE_POST_ACT_WORDS)[number];
+export const isWorkspacePostActWord = (v: unknown): v is WorkspacePostActWord =>
+  typeof v === 'string' && (WORKSPACE_POST_ACT_WORDS as readonly string[]).includes(v);
 
 /** The refusal codes a verb can answer, derived from the table in row order (never a second list). */
 const refusalsOf = (v: WorkspaceVerb): readonly string[] =>
