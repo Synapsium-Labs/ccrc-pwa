@@ -1877,6 +1877,10 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
   is caught on the first macOS box that runs it.
 - **The systemd stop's bound is the manager's default.** A box whose user manager sets `DefaultTimeoutStopSec`
   below `DRAIN_S + STOP_MARGIN_S` (10 s) cuts the drain early; nothing measures it.
+- **An idle lane's stats file can lag its counts (D-6998).** The bridge has no trailing flush: counts made while a
+  write was in flight, or within `FLUSH_S` of the last write, stay in memory until the next request or a graceful
+  stop's drain, and a SIGKILL or an OOM kill drops them. The 7-day watch reads its counters after a request, or after
+  a restart's drain, never from an idle lane's file alone.
 
 ## Open questions
 
@@ -1899,8 +1903,9 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
 ## Deviations found
 
 Every entry carries the number the controller issued (D-6410 to D-6431 at plan time, D-6804 to D-6839 for wave 1,
-D-6862 to D-6907 and D-6921 for wave 2, D-6944 to D-6963 for wave 3). A further departure found while executing is
-written `D-TBD-<slug>` and named in the task's report.
+D-6862 to D-6907 and D-6921 for wave 2, D-6944 to D-6963 for wave 3, D-6994 to D-6998 for the follow-up to the
+suite's macOS failures). A further departure found while executing is written `D-TBD-<slug>` and named in the task's
+report.
 
 ### D-6410 — `end_turn:false` is continued upstream, never `pause_turn`
 
@@ -3514,3 +3519,97 @@ written `D-TBD-<slug>` and named in the task's report.
 - **Cost if wrong:** The first scheduled run creates the state issue in this public repository even when its only pair
   fails. The state then names the older tag of a pair that was never compared, which by the plan's own rule is where
   the walk starts.
+
+### D-6994 — the three unit-arm bridge-tier cases are Linux-only, with nohup and recorder twins on both platforms
+
+- **Departs from:** Task 11's Step 1 (plan :1371-1372, :1387-1388) and Task 12's Step 1 (plan :1509-1510), which list
+  `'a direct lane starts the bridge tier only, on the shim's port and unit, with the key read in process'`, `'a
+  bridge started through ccrc codex start under ghContainedEnv gets both bases'` (the fake `systemd-run` records the
+  pairs) and `'a tier that will not stop leaves the lane down and named'` with no platform, though Task 11 says a macOS
+  box runs the nohup arm (plan :1355-1356).
+- **What changed:** The three cases are `itLinux`, each with a `PLATFORM-ONLY:` comment that names its reason
+  (`server/test/ccrc-codex-bridge.test.ts:96-98`, :421-424, :750-753); their bodies are unchanged. Two cases run on
+  both platforms: `'a direct lane starts the bridge tier only under nohup, its pid recorded and the key read in
+  process'` (:140-174) pins the `(nohup <pid>)` line, `bridge.pid`, no unit, the argv's tail
+  ` -I <shim> --ccrc-bridge=direct --ccrc-lane=codex-a` in `ps`, no key in `ps`, the in-process key read and the
+  `bridge.started` record, whose interpreter it takes from the record (an absolute path), never from `ps`; and `'with
+  both bases set, the bridge arm forwards both'` (:455-468) asks `_codex_start_tier` alone through the `SVC_BRIDGE`
+  recorder. Row: the two base forwards in `_codex_start_tier` (`ccd/ccrc:13803-13804`) deleted, the recorder case reds.
+- **Why:** `_svc_have_user_manager` answers 1 on darwin by design (`ccd/ccrc:1179-1180`, D-3483), so a macOS box never
+  asks the fake systemd: it printed `(nohup <pid>)`, recorded no `systemd-run` argv, and stopped the nohup tier that
+  `failUnitStop` could not hold, so every macOS full run failed the three. The nohup arm is darwin's product path and no
+  both-platform case pinned it whole. `ps` may print another spelling of a framework python3, so the twin compares
+  only the argv's tail.
+- **Cost if wrong:** Only macOS CI proves the twins there: whether its `ps -ww -o args=` keeps ` -I <shim>` in the
+  tail, and whether its nohup tier binds within the readiness bound. The start verb's forward of the bases (that
+  `ccrc codex start` does not scrub them before `_codex_start_tier`) is still proven on Linux only.
+
+### D-6995 — the too-deep plants nest 2,000,000 levels, behind a measured precondition
+
+- **Departs from:** Task 8's cases as wave 1 shipped them, whose three too-deep documents (a `settings.json`, a
+  catalogue and a `lane.json`) nest 100000 levels on the comment "json.loads raises RecursionError, not a
+  ValueError". The plan gives no depth.
+- **What changed:** `UNDECODABLE_DEPTH = 2_000_000` and `tooDeep()` (`server/test/codex-bridge-server.test.ts:46-53`)
+  build all three plants (:403, :910, :937). The `lane.json` case first asks the same python3, `-I`, to `json.loads`
+  the document on its main thread and asserts it raises RecursionError (`pythonRefusesDecode`, :54-60; the
+  precondition at :938-939), so a python3 that decodes it reds by that name. The `settings.json` and catalogue
+  plants are hardening: neither failed. Rows: `RecursionError` removed from `read_manifest`'s except tuple
+  (`ccd/codexbridge/server.py:191`), the `lane.json` case reds on Linux (a traceback); the precondition's document made
+  10 deep, the case reds as the precondition.
+- **Why:** 3.9 to 3.13 count the depth (3.12.3 refuses at 9998), but 3.14 and later check the real C stack, and a
+  macOS build links python's main thread with a 16 MiB stack. The macOS runner's python3 (3.15.0, from the runner
+  image's software list) decoded 100000 levels, so read_manifest met a list and answered "names another lane". The
+  2e6 document builds, writes and is refused in about 60 ms on this box (3.12.3).
+- **Cost if wrong:** Whether 2e6 levels overflow the macOS main thread's stack is inference (at least 32 MB at a
+  16-byte frame) until a macOS full run shows it. If it does not, the precondition reds there with its own message and
+  the constant must rise. The precondition measures the main thread, not the handler thread the other two plants are
+  read in.
+
+### D-6996 — the ping cases ask for two pings in their silence, the first silence 2 s
+
+- **Departs from:** Task 8's `'pings through a silence, then the live text'` (plan :1118-1119), "the fake holds 1 s
+  between events: at least three `ping` frames", and the continuation case's `>= 3` pings while the next head is held.
+- **What changed:** The silence is 2000 ms (`server/test/codex-bridge-server.test.ts:426`), and the pings before the
+  first text are `>= 2` (:440), with the margin in the comment (:435-439): ping k lands at about T0 + k*(PING_S + L),
+  so `>= 3` in 1.2 s allowed a per-ping overshoot L of about 75 ms, and `>= 2` in 2.0 s allows about 433 ms. The pings
+  between the two texts stay `>= 3` (:442), which the 2 s gap allows up to about 467 ms. The continuation case asks for
+  `>= 2` while the head is held 1000 ms (:717-720): `>= 3` allowed about 133 ms, `>= 2` allows about 300 ms. No time
+  upper bound is added. Rows: the `_reduce` ping (`ccd/codexbridge/server.py:841`) deleted, the silence case reds (0
+  pings); the `_waiting` ping (:758) deleted, the continuation case reds (0 pings).
+- **Why:** Each ping is due PING_S after the bridge's last write (`server.py:840-841`, :757-758), so the per-ping
+  wake-up overshoot adds up from ping to ping, while the fake's silence is one timer. On macOS it exceeded the 75 and
+  133 ms the old counts allowed (`expected 2 to be greater than or equal to 3`). Its mechanism is unmeasured.
+- **Cost if wrong:** A mutation that halves the cadence (a ping every 2 PING_S) now passes both counts. The old `>= 3`
+  caught it only through the slack that caused the failure.
+
+### D-6997 — two cases read the stats file after the drain, not by polling
+
+- **Departs from:** Task 8's `'a 401 on a token issued within FRESH_TOKEN_S is not refreshed'` (plan :1134-1135) and
+  `'a tool round trip …'` (plan :1105), as wave 1 wrote them: each polled the stats file (`statsWhen`, at most 3 s)
+  for counts of two answers sent back to back.
+- **What changed:** Both cases stop the bridge (SIGTERM), assert it exits `{ code: 0, signal: null }`, then read the
+  file once: the 401 case asserts `4xx` 2 and `refresh-skipped-fresh-token` 2
+  (`server/test/codex-bridge-server.test.ts:1057-1063`), and the round trip `2xx` 2 (:322-327). `statsWhen`'s docstring
+  says which cases it is for (:184-186). Row: the fresh-token branch's `outcome("refresh-skipped-fresh-token")`
+  (`ccd/codexbridge/server.py:782`) deleted, the 401 case reds on the new assertion (`expected undefined to be 2`).
+- **Why:** An unforced flush that meets a write in flight leaves its counts dirty (`ccd/codexbridge/stats.py:404-408`,
+  pinned at `server/test/codex-bridge-count-stats.test.ts:624`), and nothing flushes an idle lane again until the next
+  request's flush (`server.py:930`, :948) or the drain's forced flush (:1033). A Linux shard met that once: the second
+  answer's counts stayed in memory and the poll returned the stale file at its 3 s bound.
+- **Cost if wrong:** Both cases now lean on the drain's forced flush, as the drain cases already do, and each pays
+  the drain's shutdown poll, about 0.5 s.
+
+### D-6998 — an idle lane's stats file can lag its counts until the next request or a drain
+
+- **Departs from:** Task 5's `flush` (plan :853-854), "at most every `FLUSH_S = 10.0`", which says nothing of a count
+  that no later flush writes.
+- **What changed:** Nothing in the bridge. The limit is recorded in Known limits and Later (plan :1880-1883); the
+  cases that met it read after the drain (D-6997).
+- **Why:** The bridge has no trailing flush: it flushes only in a request's `finally` (`ccd/codexbridge/server.py:930`,
+  :948) and in the drain (:1033), and an unforced flush writes nothing while another write is in flight
+  (`ccd/codexbridge/stats.py:404-408`). So on an idle lane, counts made while a write was in flight, or within
+  `FLUSH_S` of the last write, stay in memory until the next request or a graceful stop, and a SIGKILL or an OOM kill
+  drops them. A periodic flush, for example from the refresher's tick, would close it without changing the in-flight
+  rule, and needs a ruling.
+- **Cost if wrong:** The 7-day watch could read a count short. It reads its counters after a request, or after a
+  restart's drain, and a killed bridge's last `FLUSH_S` of counts is lost.
