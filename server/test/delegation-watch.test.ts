@@ -70,6 +70,9 @@ const HOUR10 = '2026-10-15T10:00:00.000Z';
 const BUCKET10 = '2026101510';
 const BUCKET09 = '2026101509';
 const iso = (ms: number): string => formatDelegationInstant(ms);
+// The four rows that ran past the 20 s default under the fleet box's load (R88 through X1, R104, R103, R89's cut pass) take a load-sized
+// bound: measured alone at 1.2 to 3.8 s each (wave 4 PR4 Task 4.3), so 120 s is more than four times the worst. A bound, not a guard.
+const LOAD_ROW_MS = 120_000;
 const srcRoot = path.resolve(__dirname, '../src');
 const watchSrc = (): string => readFileSync(path.join(srcRoot, 'watch.ts'), 'utf8');
 
@@ -4023,7 +4026,7 @@ describe('R88 (W1 a, coordinator 5512): the lane never links across a stretch it
     // R104: the window ends the skew after the ready instant, and the bracket starts the margin and the skew before that census
     expect(await outcome(22), '22 minutes after the ready instant: the bracket reaches the window').toEqual([]);
     expect(await outcome(23), '23 minutes after: rung 3 links').toEqual([['raw-tree', 'agent', 'demo-b']]);
-  });
+  }, LOAD_ROW_MS);
 
   it('R104 (review F4): a call stamped within the clock skew AFTER the ready instant is held (a fleet clock ahead of the server\'s may have stamped a call made before it)', async () => {
     const w = world();
@@ -4033,7 +4036,7 @@ describe('R88 (W1 a, coordinator 5512): the lane never links across a stretch it
     for (let i = 1; i < 5; i++) await censusPass(w, at(i), WITH_TREE);
     expect(leasesOf(w.home), 'within the skew of the ready instant').toEqual([]);
     expect(w.watcher.delegationReport().lostEvidence.forced, 'held by lost evidence: the full evidence links it').toBe(1);
-  });
+  }, LOAD_ROW_MS);
 
   it('R103 (review F3): a registry tick() cannot list marks the lane not ready: a call made while that lasted, beside a session no census listed, is held', async () => {
     const w = world();
@@ -4046,7 +4049,7 @@ describe('R88 (W1 a, coordinator 5512): the lane never links across a stretch it
     expect(w.calls.listings, 'no census ever listed demo-y').not.toContain('demo-y');
     expect(leasesOf(w.home), 'the stretch the lane could not list holds the call').toEqual([]);
     expect(w.watcher.delegationReport().lostEvidence.forced).toBe(1);
-  });
+  }, LOAD_ROW_MS);
 });
 
 // D-6471: `cutAt` (from the R89 rows) and `cutWhile` (from the R107 rows) are hoisted to file scope, unchanged, for D-6471's R-D, R-E and R-I.
@@ -4100,7 +4103,7 @@ describe('R89 (W1 b, coordinator 5512): an owner a pass listed is read once befo
     expect(attemptsOf(w.home).filter((a) => a.verdict === 'linked')).toEqual([]);
     const raw = corr.mock.calls.flatMap((c, i) => (c[0].record.adminRecord === 'raw-tree' ? [corr.mock.results[i]!.value] : []));
     expect(raw.at(-1), 'the overlap rule decides it, as with the full evidence').toMatchObject({ kind: 'unresolved', reason: 'overlapping-listing-window' });
-  });
+  }, LOAD_ROW_MS);
 
   it('R89: an owner whose read fails until the hour it was listed in leaves the read horizon: until then that hour vetoes, and then it is recorded as a LOSS (never a carve-out word) that goes on vetoing', async () => {
     const w = world();

@@ -10500,8 +10500,8 @@ describe('history scope marker: PreCompact records whose context is compacting (
     const fnLines = fnCode.split('\n');
     const w = fnLines.findIndex((l) => l.includes('> "$f"; } 2>/dev/null'));
     expect(w, 'no marker write').toBeGreaterThan(0);
-    expect(fnLines[w - 1]!.trim(), 'the regular-file test sits directly above the write, builtins only')
-      .toBe('[[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0');
+    expect(fnLines[w - 1]!.trim(), 'the regular-file test sits directly above the write, builtins only (D-5434\'s positive form, W4)')
+      .toBe('if [[ -L "$f" || -d "$f" || -p "$f" || -S "$f" || -b "$f" || -c "$f" ]]; then return 0; fi');
     // Either spelling of the directory: Task 9 re-points these lines to its HISTORY_SCOPE_DIR constant.
     const notLinkedScope = /&& ! -L "(?:\$HOME\/\.ccrc\/history\/scope|\$HISTORY_SCOPE_DIR)" \]\]/;
     expect(gate, 'the gate refuses a symlinked scope/').toMatch(notLinkedScope);
@@ -11458,4 +11458,37 @@ describe('the cheap PostToolUse arm forks exactly this (D-6929)', () => {
     process.env['CCRC_HOOK_UNDER_PIN'] = copy;
     try { expect(forksOf()).toEqual({ ...EXPECTED_FORKS, '(subshell)': EXPECTED_FORKS['(subshell)']! + 1 }); } finally { delete process.env['CCRC_HOOK_UNDER_PIN']; }
   }, 60_000);
+});
+// ── W4-H6, W4-H7 (delegation broker wave 4, PR4 Task 4.1): the scope marker's guard refuses only a POSITIVE non-regular
+// type, as D-5434's form in `_hook_join_record`. APPENDED, with NO new import line (the citation census cites this file by
+// line): the seam is loaded by a dynamic import, and the helpers are this describe's own, over the module-level fixture.
+describe('W4-H: the scope marker\'s guard refuses only a positive non-regular type (D-5434\'s form)', () => {
+  const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+  const marker = (): string => path.join(home, '.ccrc', 'history', 'scope', 'demo-quiet-basin');
+  const plant = (): void => {
+    fs.mkdirSync(path.dirname(marker()), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(home, '.ccrc', 'compact-card-off'), '');
+  };
+  const pre = (transcript: string): object => ({ ...preCompact(home, transcript, 'manual'), session_id: SID });
+
+  it('W4-H6: a marker created between any two of the guard\'s reads is still written: main <psid> <ms>', async () => {
+    const { seamHook, seamEnv, seamCount } = await import('./hookGuardSeam.js');
+    plant();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const { file, reads } = seamHook(home, '_hook_history_scope', 'f');
+    for (let k = 1; k <= reads; k += 1) {
+      fs.rmSync(marker(), { force: true }); fs.rmSync(path.join(home, 'w4-seam-n'), { force: true });
+      const r = spawnSync('bash', [file], {
+        input: JSON.stringify(pre(transcript)), encoding: 'utf8', env: hookEnv({ ...HISTORY_HOOK_SCRUB, ...seamEnv(home, k, 'create') }), timeout: 60_000,
+      });
+      expect(r.status, `k=${k}: exit 0`).toBe(0);
+      expect(seamCount(home), `k=${k}: the seam fired at read ${k}`).toBeGreaterThanOrEqual(k);
+      expect(fs.readFileSync(marker(), 'utf8'), `k=${k}: the marker reads main <psid> <ms>`).toMatch(new RegExp(`^main ${SID} \\d+\\n$`));
+    }
+  }, 120_000);
+
+  it('W4-H7: the scope guard tests a positive type (-L -d -p -S -b -c) and returns 0; no two-read shape stands before the write', async () => {
+    const { guardPin } = await import('./hookGuardSeam.js');
+    expect(guardPin('_hook_history_scope', 'f', 'return 0', '>')).toEqual([]);
+  });
 });

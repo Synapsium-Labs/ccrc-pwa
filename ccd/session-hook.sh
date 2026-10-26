@@ -3572,9 +3572,9 @@ fi
 # PRUNE: the first write of an hour (the bucket did not exist) removes this owner's regular `<10 digits>.spool` files older than the
 # cutoff hour (24 hours before now) from THIS directory and nothing else, by exact names it listed from it. That is at most once an
 # hour per owner without any state to keep; two first writers racing both prune, harmlessly. It is the one fork on this path (one
-# `rm`, and only when a stale bucket exists). THE HOOK PRUNES ONLY A LIVE OWNER, FROM ITS OWN WRITE: a removed owner, or one whose
-# session never runs again, keeps its last 24 to 25 hourly buckets for good, because nothing in wave 3 removes them (no ccd purge,
-# no server delete); the plan's "hooks retain only their own 24-hour buckets" holds for an owner that keeps writing.
+# `rm`, and only when a stale bucket exists). THE HOOK PRUNES ONLY A LIVE OWNER, FROM ITS OWN WRITE: a removed owner's last 24 to 25
+# hourly buckets and its directory stand until a later spawn of any session removes them, once its registry row is gone and every
+# bucket is past its day (ccd's `_delegation_spool_prune_absent`, which states the rule); the server never deletes them.
 #
 # SessionStart `compact` is recorded here, before the hook's one early exit below (it used to exit in its arm; `sessend` carries it).
 DSP_LIST_NAMES=256 DSP_NAME_BYTES=64
@@ -3641,7 +3641,9 @@ _hook_spool_append() {   # $dsp_line, with $dsp_bucket $dsp_cut $dsp_cwd from th
   [[ "$g2" == "$dsp_gen" ]] || return 1
   [[ -d "$dsp_dir" && ! -L "$dsp_dir" ]] || return 1
   f="$dsp_dir/$dsp_bucket.spool"
-  [[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 1
+  # Refuses only a POSITIVE non-regular type, as `_hook_join_record`'s entry guard (D-5434): "absent or regular" is two reads, and a
+  # sibling's first `>>` lands between them, so that form refused a plain append and the caller's `|| true` hid the lost line.
+  if [[ -L "$f" || -d "$f" || -p "$f" || -S "$f" || -b "$f" || -c "$f" ]]; then return 1; fi
   [[ -e "$f" ]] || fresh=1
   { printf '%s\n' "$dsp_line" >> "$f"; } 2>/dev/null || return 1
   [[ -z "$fresh" ]] || _hook_spool_prune "$dsp_dir" "$dsp_cut" || true
@@ -5424,7 +5426,10 @@ if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi
 # A REGULAR FILE OR NOTHING, as the spool block's append (its D-4418 rule;
 # spec §5.1): the line DIRECTLY above the write
 # refuses a symlink, dangling or not, a FIFO and any other node, so a FIFO that
-# stands at scope/<id> when the test runs never blocks the `>` open. The tests
+# stands at scope/<id> when the test runs never blocks the `>` open. It names
+# each refused type POSITIVELY, as `_hook_join_record`'s entry guard (D-5434):
+# "absent or regular" is two reads, and a marker created or removed between
+# them made that form refuse a plain write. The tests
 # are builtin, here and on the early line below the event `case`, and bash has
 # no O_NOFOLLOW or O_NONBLOCK redirection, so what is left is a node swapped in
 # AFTER the test: it is opened, a link followed, a FIFO blocking until Claude
@@ -5448,7 +5453,7 @@ _hook_history_scope() {   # -> scope/<id> = "<scope> <psid> <ms>" when decided; 
   scope="${CS_SCOPE-}"
   [[ -n "$scope" ]] || return 0
   ms=$(_hook_epoch_ms)
-  [[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0
+  if [[ -L "$f" || -d "$f" || -p "$f" || -S "$f" || -b "$f" || -c "$f" ]]; then return 0; fi
   { printf '%s %s %s\n' "$scope" "$psid" "$ms" > "$f"; } 2>/dev/null
   return 0
 }

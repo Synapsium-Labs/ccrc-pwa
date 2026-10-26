@@ -24049,8 +24049,18 @@ _child_tmpdir() {   # id -> rc 0 + path on stdout | 1 not a child | 2 child, lea
 # THE ID is the registry's own shape and never dot-leading: `.` and `..` would name the spool root or the registry itself,
 # and a dot-leading name is one the hook refuses to write for. Mode is set with `chmod -- 0700 <dir>` (the operand last
 # after `--`, D-3510), so a directory an older ccd or an operator widened is private again at the next spawn.
-# NOTHING PURGES IT in this wave: the hook prunes only a LIVE owner's own buckets (at its next write), so a removed owner, or one whose
-# session never runs again, keeps its last 24 to 25 hourly buckets and this directory for good; the spool is evidence the server may not have read yet.
+# A SPAWN PRUNES ABSENT OWNERS (operator ruling 2026-10-14; `_delegation_spool_prune_absent`, called right after this function): the
+# hook prunes only a LIVE owner's own buckets (at its next write), so a removed owner's last 24 to 25 hourly buckets and directory stand
+# until a spawn of ANY session removes them, at most DSP_PRUNE_MAX directories a spawn. A directory goes only when the registry is
+# readable and searchable and no link stands at `$REG/delegation` or the spool root; its id is in the spawn grammar and is not the
+# spawning id; NO `$REG/<id>.*` entry of any type stands (a partly purged row, an orphaned `joined` field and a dotted sibling id all
+# keep it); and it holds only regular, non-link `<10 digits>.spool` buckets, each older than the cutoff hour (now minus 24 h, UTC, compared
+# as the hook's `_hook_spool_prune` compares) by name and 24 h old by mtime, or, holding none, is itself 24 h old by mtime. It is renamed
+# to `.prune.<id>.<pid>`, checked again, and only then emptied by name (`rm -f --` each bucket, `rmdir --` the directory: never a `-r`);
+# a check that now fails moves it back when `<id>` is absent, or leaves it, and the next spawn takes a leftover `.prune.<id>.<pid>`
+# under the same rules (a dot-leading name is never an owner: this function refuses one). THE WINDOW LEFT: a purged id respawned
+# between the rename and the move back skips that instant's events (the census backstops them), and a move back that failed leaves
+# a running session with no spool directory, which the doctor's WARN for that case reports.
 _delegation_spool_dir() {   # id -> 0 the owner's directory stands, private | 1 not made (warned, or refused for the id): a failure never fails a spawn
   local LC_ALL=C id="${1-}" base="$REG/delegation" d
   [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
@@ -24061,6 +24071,39 @@ _delegation_spool_dir() {   # id -> 0 the owner's directory stands, private | 1 
     echo "ccd: warn: $id's delegation spool directory $d could not be made a private directory — spawning without it; the delegation hook skips until a later spawn makes it" >&2
     return 1
   fi
+}
+DSP_PRUNE_MAX=8   # owner directories removed per spawn, at most; the rest wait for the next spawn
+_dsp_old_absent() {   # <id> <dir> <cutoff YYYYMMDDHH> <now s> -> 0 iff the owner's row is gone and the dir holds only
+                      #   regular <10 digits>.spool buckets, each older than the cutoff by name and 24 h by mtime; sets DSP_OLD=(paths)
+  local LC_ALL=C id="$1" d="$2" cut="$3" now="$4" e b m=""; DSP_OLD=()
+  [[ -d "$d" && ! -L "$d" ]] || return 1
+  e=("$REG/$id".*); (( ${#e[@]} == 0 )) || return 1
+  for e in "$d"/*; do
+    b="${e##*/}"
+    [[ "$b" =~ ^[0-9]{10}\.spool$ && -f "$e" && ! -L "$e" ]] && (( 10#${b%.spool} < 10#$cut )) || return 1
+    DSP_OLD+=("$e")
+  done
+  if (( ${#DSP_OLD[@]} )); then m=$(_plat_mtime "${DSP_OLD[@]}" 2>/dev/null) || return 1; else m=$(_plat_mtime "$d" 2>/dev/null) || return 1; fi
+  for b in $m; do [[ "$b" =~ ^[0-9]+$ ]] && (( now - b >= 86400 )) || return 1; done
+}
+_delegation_spool_prune_absent() {   # <spawning id> -> rc 0 always; removes up to DSP_PRUNE_MAX absent owners' spool dirs
+  local LC_ALL=C self="${1-}" root="$REG/delegation/spool" now="" cut="" d b id t n=0 dg=0 ng=0
+  [[ -d "$REG" && -r "$REG" && -x "$REG" && ! -L "$REG/delegation" && ! -L "$root" && -d "$root" ]] || return 0
+  shopt -q dotglob && dg=1; shopt -q nullglob && ng=1; shopt -s dotglob nullglob
+  for d in "$root"/*; do
+    (( n < DSP_PRUNE_MAX )) || break; b="${d##*/}"; id="$b"; t="$root/.prune.$b.$$"
+    [[ "$b" =~ ^\.prune\.(.+)\.[0-9]+$ ]] && { id="${BASH_REMATCH[1]}"; t="$d"; }
+    [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && "$id" != "$self" ]] || continue
+    [[ -n "$now" ]] || { _now_s_to now; TZ=UTC0 printf -v cut '%(%Y%m%d%H)T' "$(( now - 86400 ))"; }
+    if _dsp_old_absent "$id" "$d" "$cut" "$now" && { [[ "$t" == "$d" ]] || _plat_mv_notdir "$d" "$t" 2>/dev/null; } \
+       && _dsp_old_absent "$id" "$t" "$cut" "$now"; then
+      (( ${#DSP_OLD[@]} == 0 )) || rm -f -- "${DSP_OLD[@]}" 2>/dev/null
+      rmdir -- "$t" 2>/dev/null && n=$(( n + 1 ))
+    elif [[ -d "$t" && ! -L "$t" && ! -e "$root/$id" && ! -L "$root/$id" ]]; then
+      _plat_mv_notdir "$t" "$root/$id" 2>/dev/null
+    fi
+  done
+  (( dg )) || shopt -u dotglob; (( ng )) || shopt -u nullglob   # rc 0 on both arms: the function's rc 0
 }
 
 # ── THE CHILD'S SPAWN RECORD (spec §6.6, plan Task 15, D-5299, D-5391) ─────
@@ -24723,6 +24766,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # THE OWNER'S DELEGATION SPOOL DIRECTORY (delegation broker wave 3, `_delegation_spool_dir`): made here, once per spawn, for every
   # session and not only a child; a failure has already warned and never refuses the spawn.
   _delegation_spool_dir "$id" || true
+  _delegation_spool_prune_absent "$id" || true   # the absent-owner prune (ruling 2026-10-14): rc 0 always, silent
   # D-5241: the tool-child priority, on both spawn lines for `$tmpenv`'s reason.
   local adjenv; adjenv=$(_tool_adj_env)
   # D-6636: the session's OWN temp root, exported on both spawn lines (they splice `$resenv`) so an agent that later
