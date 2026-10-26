@@ -22,7 +22,7 @@
 // `programmeBoxes.ts`'s; this maps over it with the one row renderer below. A box's movement readout ticks itself.
 import { Fragment, memo } from 'react';
 import type { ReactNode } from 'react';
-import { BareRow, Button, Icon, useNow } from '@ccrc/ui';
+import { BareRow, Button, useNow } from '@ccrc/ui';
 import type {
   DelegationActivityWire, FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary,
 } from '../../../shared/api';
@@ -40,7 +40,7 @@ import {
   cardAbroad, cardBoxes, fleetHues, foldedCard, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView, type SummaryRow,
 } from './programmeBoxes';
 import { ProgrammeBox } from './ProgrammeBox';
-import { SessionLine } from './SessionLine';
+import { SessionLine, WorksOnChip } from './SessionLine';
 import { sameCardProps } from './lineProps';
 import { OPEN_RUNS } from './openers';
 import { sessionLabel } from './sessionLabel';
@@ -424,13 +424,7 @@ function ProjectCardView({
       // D-6999: the chips are words, never colour alone, and nothing here acts on the row.
       const chips = [inferredChip(row.lease), creatorChip(row.lease)];
       return workLine(w.parts, w.title, <>
-        {w.sourceProject !== null && (
-          <span className="sess-workson" data-project={w.sourceProject} title={`works on ${w.sourceProject}’s code`}>
-            <Icon name="folder-code" />
-            <span className="sr-only">works on </span>
-            <span className="sess-workson-name">{w.sourceProject}</span>
-          </span>
-        )}
+        {w.sourceProject !== null && <WorksOnChip project={w.sourceProject} />}
         {chips.map((c, i) => c === null ? null : <span key={i} className="proj-work-chip" title={c.title}>{c.text}</span>)}
       </>);
     }
