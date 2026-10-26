@@ -1,13 +1,14 @@
 // Delegation broker wave 4, PR1 Task 1.2: the `delegation` frame, DECIDED (spec §5.8, §8.4; D-6999, D-7002, D-7023).
 //
-// THIS MODULE IS L1. It imports the shared wire, the pure model, the policy's one classifier of unowned work and the correlation
-// module's tree key, and nothing else: no filesystem, no store, no clock, no census adapter (`gitref.ts` is L3, so the census shape is
+// THIS MODULE IS L1. It imports the shared wire, the pure model, the policy's one classifier of unowned work, the correlation
+// module's tree key and the binding's R9 decider, and nothing else: no filesystem, no store, no clock, no census adapter (`gitref.ts` is L3, so the census shape is
 // declared structurally below; `DelegationCensusPass` and the lane's `absences` values are assignable to it as they are). It makes no
 // durable write. The watcher (L4) gathers the inputs after a pass and broadcasts what this returns.
 //
-// R9 here is legitimately different from `foldCoordPlacements` (`coord/placement.ts`): placement answers "the newest stamp for this
-// session" to put a card on a project; R9 asks "whose run was live at THIS instant", because one ccd session id works several runs over
-// time, sometimes for different coordinators, and the placement stamps do not carry a run's interval.
+// R9 is decided by the binding module (`claimantAt`, `coord/runBinding.ts`), the one place a run is told to bind a session. It is
+// legitimately different from `foldCoordPlacements` (`coord/placement.ts`): placement answers "the newest stamp for this session" to put
+// a card on a project; R9 asks "whose run was live at THIS instant", because one ccd session id works several runs over time,
+// sometimes for different coordinators, and the placement stamps do not carry a run's interval.
 import {
   isDelegationActivityPlacement,
   isDelegationCreatorKind,
@@ -33,6 +34,7 @@ import {
 } from './delegation-model.js';
 import { isUnownedWorkReason } from './delegation-policy.js';
 import { delegationTreeKey } from './delegation-correlation.js';
+import { claimantAt } from './runBinding.js';
 
 /** How many newest closed runs the R9 mapping reads (L4 passes it to the store's narrow read). A worker whose run is older than
  *  that window falls back to its own row: the rider's store read by `sessionId` removes the bound. */
@@ -71,7 +73,7 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
   const activities = new Map(checkpoint.activities.map((a) => [a.activityId, a]));
   const absent = new Set(input.absences.map((a) => delegationTreeKey(a.project, a.adminRecord)));
   const groupOf = (id: string): DelegationRowGroup => (sessions.has(id) ? 'parent' : 'offline-coordinator');
-  const coordinatorOf = (id: string, at: string): string | null => coordinatorAt(input.runs, id, parseDelegationInstant(at));
+  const coordinatorOf = (id: string, at: string): string | null => claimantAt(input.runs, id, parseDelegationInstant(at));
   const presence = (project: string, adminRecord: string): Presence => presenceOf(census.projects, absent, project, adminRecord);
   const liveness = (a: DelegationActivityRow): DelegationLiveness => livenessOf(a, sessions, census.incarnations);
 
@@ -136,18 +138,6 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
     leases: leaseRows.sort(bySortKey((r) => [r.parentId, r.firstObservedAt, r.leaseId])),
     unowned: unownedRows.sort(bySortKey((r) => [r.project, r.adminRecord])),
   };
-}
-
-/** R9, one level: the `claimedBy` of the run `id` worked (claimed by someone else) whose interval holds `at`; the greatest run id when
- *  several do. A closed run still answers inside its interval (lineage outlives its run). Never applied to its own answer. */
-function coordinatorAt(runs: readonly DelegationProjectionRun[], id: string, at: number): string | null {
-  let best: DelegationProjectionRun | null = null;
-  for (const r of runs) {
-    if (r.sessionId !== id || r.claimedBy === null || r.claimedBy === id) continue;
-    if (r.openedAt > at || (r.closedAt !== null && r.closedAt < at)) continue;
-    if (best === null || r.id > best.id) best = r;
-  }
-  return best?.claimedBy ?? null;
 }
 
 function livenessOf(
