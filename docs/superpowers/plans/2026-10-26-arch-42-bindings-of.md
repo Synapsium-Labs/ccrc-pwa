@@ -27,8 +27,9 @@ parsed-symbol scanner `server/test/scan/symbols.ts` names it) that CALLS one of 
 
 A unit counts once however many readers it calls. The readers' own definitions are the readers, not sites. The query is
 the module `server/test/census-w4/bindings.ts` (`boundBySites`), held two ways in `bindings.test.ts`: a FIXTURE row (it
-counts what it claims and passes over what it must not) and a REAL row (a may-only-shrink ceiling, lowered by the commit
-that moves each site, and every reader still defined where it lives, so a rename cannot empty the census).
+counts what it claims and passes over what it must not) and a REAL row (the count pinned exactly, a ceiling that is also a
+floor, lowered by the commit that moves each site; every reader still defined where it lives, so a rename cannot empty the
+census; and, at the end, the one site left named: `bindingsOver`).
 
 Not readers, by this rule:
 
@@ -98,13 +99,26 @@ itself.
 
 ## Commits
 
-1. The census (this note, `census-w4/bindings.ts`, `bindings.test.ts`). No production byte changes. Ceiling 23.
-2. The query: `SessionBindings`, `bindingsOver`, `CoordStore.bindingsOf`. Ceiling 24 (the query is a site).
-3. to 25. One site per commit, in the table's order, each moved onto `bindingsOf` with the same reads; the ceiling drops
-   by one each time and ends at 1, pinned to `bindingsOver`.
+1. The census (this note, `census-w4/bindings.ts`, `bindings.test.ts`). No production byte changes. 23.
+2. The query: `SessionBindings`, `bindingsOver`, `CoordStore.bindingsOf`, and `bindings-of.test.ts` (each answer equals
+   its reader; nothing is read until asked). 24: the query is a site.
+3. The archive door: `decideArchive` and its wiring in `buildServer` move together, because the port's type joins them
+   (24 to 22). From here the REAL row pins the count exactly.
+4. to 22. One site per commit, in the table's order otherwise (close's three units, the temp-root hold, the spent-child
+   refusal, the drift lane, ending a dead coordinator, the expiry act, heldFor's count and its parent, the reclaim heir
+   check, the open route, the child's sibling read, the fleet card, the hibernate sweep, the tmp sweep, then the five
+   `FleetWatcher` units), each moved onto `bindingsOf` with the same reads; the count drops by one each time and ends
+   at **1**, pinned to `bindingsOver`.
+
+Test doubles that answered the readers get the store's own view over them (`server/test/bindingsFake.ts`,
+`withBindingsOf`), whose method reads its receiver's readers, so a double spread with an overridden reader keeps its
+override. A double that patches or spies on a real store's reader needs nothing: `bindingsOf` reads `this`.
 
 The regression bar on every commit: `server/test/run-binding-probe-corpus.test.ts` (53 shapes) green and unedited, plus
 each moved site's own suites, `tsc --noEmit` over `server/` and over `test/tsconfig.tests.json`.
+
+Measured on this Mac and not caused here: `child-reclaim-paused-at-server.test.ts`'s "round-trips an EMPTY from" case
+is red with this branch's changes stashed too (a NUL-leading `claimedBy` through `node:sqlite`); CI is the arbiter.
 
 ## Decisions
 

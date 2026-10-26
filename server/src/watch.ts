@@ -137,7 +137,7 @@ import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/le
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
 import { incarnationsOfSessions, withChildIds } from './coord/runWire.js';
-import { coordinatorOfRun, openRunsClaimedBy, readCoordinatorOfRun } from './coord/bindingReads.js';
+import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import type { PushPayload } from './push.js';
 import { notify, noticeSink } from './notice.js';
 import { runDriftPass } from './coord/driftLane.js';
@@ -5911,7 +5911,7 @@ export class FleetWatcher {
       if (key !== this.deadCoordinatorBreakerCommittedKey) {
         if (next.length === 0 && this.deadCoordinatorBreakerHeldRunId !== null) record.push(this.deadCoordinatorBreakerHeldRunId);
         for (const id of [...next.map((m) => m.id), ...before.map((m) => m.id), ...ids]) {
-          const open = openRunsClaimedBy(coord, id);
+          const open = coord.bindingsOf(id).claimant();
           if (open.ok && open.siblings.length > 0) { record.push(open.siblings[0]!.id); break; }
         }
       }

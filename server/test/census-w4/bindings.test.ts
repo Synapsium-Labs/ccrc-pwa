@@ -12,7 +12,7 @@ import { BOUND_BY_READERS, boundByCalls, boundBySites, type BoundBySite } from '
 
 /** The real tree's site count, pinned exactly (a ceiling that is also a floor, `run-session-census.test.ts`'s rule): each
  *  move onto `bindingsOf` lowers it in the same commit, and a new site is red until it is moved or justified. */
-const BOUND_BY_CEILING = 2;
+const BOUND_BY_CEILING = 1;
 
 /** Where each reader is defined, by its qualified name: a rename moves the reader out of the census, and this row says so. */
 const READER_HOMES: Readonly<Record<string, readonly [string, string]>> = {
@@ -74,6 +74,10 @@ describe('ARCH-42 bound-by census (D-TBD-bound-by-census)', () => {
     const sites = boundBySites(REPO);
     show(sites);
     expect(sites.length).toBe(BOUND_BY_CEILING);
+  });
+
+  it('REAL: the one site left is the query itself, bindingsOver (CoordStore.bindingsOf\'s body)', () => {
+    expect(boundBySites(REPO).map((s) => `${s.file} ${s.owner}`)).toEqual(['server/src/coord/bindingReads.ts bindingsOver']);
   });
 
   it('REAL: every reader is still defined where the census looks for it', () => {
