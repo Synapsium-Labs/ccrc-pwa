@@ -40,7 +40,7 @@ Re-verified on `main` for ARCH-02a (D-6000), cited by symbol:
   guarded primitive, `CoordStore`'s `writeDelivery`, and answers `DeliveryWrite`
   (`{ changed, state }`, `coord/store.ts`). `FleetWatcher.mailPass` reads each answer through
   `FleetWatcher.landed`, so a write the guard refused is seen, not assumed. Held by
-  `mail-deliveries-writer.test.ts` (refreshed for ARCH-02a, D-TBD-spec-status-refresh).
+  `mail-deliveries-writer.test.ts` (refreshed for ARCH-02a, D-6992).
 
 The invariant with a home costs one line to fix and cannot regress. The identical
 invariant with no home cost four review rounds and was still not finished when this was
@@ -274,7 +274,7 @@ reaches and a row that names no file are both red.
 7. **The watcher gets a narrow guarded store port.** → rides Build 6, which adds lane six.
 
 **Status per increment** (measured on `main` for ARCH-02a, D-6000, and refreshed for ARCH-02a,
-D-TBD-spec-status-refresh; a row names the test that holds it, or the ARCH ticket that finishes it):
+D-6992; a row names the test that holds it, or the ARCH ticket that finishes it):
 
 | # | Status | Held by, or finished by |
 |---|---|---|
@@ -297,7 +297,7 @@ that goes red when it is deleted *and* when it is reordered); **ratchet budgets*
 pins asserting each walk visited a non-zero minimum; docstring-claim rule.
 
 **Status per enforcement item** (measured on `main` for ARCH-02a, D-6000, and refreshed for ARCH-02a,
-D-TBD-spec-status-refresh):
+D-6992):
 
 | Item | Status | Held by, or finished by |
 |---|---|---|
