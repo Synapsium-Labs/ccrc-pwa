@@ -11356,7 +11356,7 @@ w6cDescribe('W2-6 Task 1: the counter module, its frame and its pins (W2-D86, W2
     'node:url': '{ fileURLToPath, pathToFileURL }',
     '../ccd/history/lib.mjs': '{ BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, sha256Hex }',
     '../ccd/history/store.mjs': '{ StoreError, openReader, userVersion }',
-    '../ccd/history/derive.mjs': '{ holdingCopyOf }',
+    '../ccd/history/derive.mjs': '{ epochOfUuid, holdingCopyOf }',
     '../ccd/history/recall.mjs': '{ expandEntryBody }',
     './history-gate.mjs': '{ ASSIGNMENT_ARMS, COUNTERS_DEF_V1, COUNTERS_DEF_V1_SHA256, K, K_UNIT, assembleReports, buildWindows, changedFamilies, familyKey, turnsOf, windowCopyOf, windowOf }',
     './history-replay.mjs': '{ AB_STATES, DriverRefusal, VERIFY_AB_KIND, loadFinalRecord, loadInput, parseArgs, prepareOut, refuse }',
@@ -12344,6 +12344,409 @@ w6cDescribe('W2-6 Task 2: the five spec counters over fixture stores (W2-D87, W2
       .toMatchObject({ measured: 1, summary: { ok_degraded: { num: 1, den: 1 } } });
     w6cExpect(out.dropped_strata.changed.control.all.windows, 'no changed control family here (V3)').toBe(0);
     w6cExpect([out.strata.treatment.anthropic.windows, out.strata.treatment.other.windows]).toEqual([1, 0]);
+  });
+});
+
+// ── W2-6 Task 3: re-discovery (W2-D86; D-6561), and combine over the nodes' reports (U2, W2-D88) ────────────────────
+// In-process only: no case spawns a child, runs measure-history.py or reaches claude, ccrc or gh. Each store is made by
+// store.mjs's createStore under a mkTmp HOME, planted through openWriter in one transaction, closed, and read through
+// openReader. Bodies are canonical JSON block lists stored as br5 blobs (store.mjs's CODEC and brotli), so recall.mjs's
+// expandEntryBody reads them as it reads the sweep's. Each boundary's W2-D13 frame is built by hand from the planted
+// rows, never by running Python, and the measure is asked through Task 1's windowCtx. Paths are synthetic under
+// /home/u/tree. The combine cases build their node reports with Task 1's fixtures.
+type W6cT3Block = Record<string, unknown>;
+type W6cT3RawRow = [number, number | null, string | null, string | null, string, string | null];
+interface W6cT3Copy { file_id: number; source_key: string; boundary_line: number; after_count: number; summary_line: number | null;
+  next_boundary_line: number | null; next_boundary_ts_ms: number | null; last_ts_ms: number | null; rows: W6cT3RawRow[];
+  models: Array<string | null>; truncated: boolean }
+interface W6cT3Frame { boundary_uuid: string; ts_ms: number; copies: W6cT3Copy[] }
+interface W6cT3CsT { db: W6cDb; storeId: string; version: number; schema: unknown; close: () => void }
+type W6cT3Result = { state: 'measured'; value: { hit: boolean; distinct_paths: number; reads: number; sources: number; unresolved: number } }
+  | { state: 'unmeasured'; why: string };
+interface W6cT3Api {
+  REDISCOVERY_READ_TOOL: string;
+  REDISCOVERY_PATH_FIELD: Readonly<Record<string, string>>;
+  REDISCOVERY_SOURCE_TOOLS: readonly string[];
+  COUNTER_UNMEASURED: readonly string[];
+  COUNTER_MEASURES: Record<string, W6cR>;
+  COUNTER_SUBCOMMANDS: readonly string[];
+  COMPLIANCE: W6cR; ECHO_HITS: W6cR; LAG: W6cR; CARD_SERVED: W6cR; CARD_ID_MISMATCH: W6cR; REDISCOVERY: W6cR;
+  COUNTERS_COMBINED_KIND: string;
+  COUNTERS_COMBINED_FILE: string;
+  windowCtx(o: W6cR): W6cR;
+  stratify(rows: W6cR[], measures: W6cR): W6cR;
+  toolPathsOf(body: unknown, tools: readonly string[]): string[];
+  absolutePath(raw: string, cwd: string | null): string | null;
+  rediscoveryVerdict(o: { reads: string[]; sources: string[]; cwd: string | null }): W6cT3Result;
+  boundaryLeafOf(cs: W6cT3CsT, uuid: string): W6cR;
+  leafSpanRowsOf(cs: W6cT3CsT, nodeId: string): { state: string; rows?: unknown[] };
+  rediscoveryAt(ctx: W6cR): W6cT3Result;
+  foldRediscovery(values: unknown[]): W6cR;
+  combineReports(nodes: Array<{ sha256: string; value: unknown }>, o?: W6cR): W6cR;
+  combineCommand(flags: W6cR): number;
+}
+const W6C_T3 = w6cCtrMod as unknown as W6cT3Api;
+const W6C_T3_MODEL = 'claude-fixture-4';
+const W6C_T3_CWD = '/home/u/tree';
+const W6C_T3_T0 = 1_760_000_000_000;
+/** A uuid in the fixture shape: a fixed 8-hex prefix, then a 12-hex counter. */
+const w6cT3Uid = (n: number): string => `c3c30000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+const W6C_T3_FAMILY = Object.freeze({ key: 'fam-a', store_id: 'store-a', ccrc_id: 'demo-a', generation: w6cT3Uid(0xfff1), arm: 'treatment' });
+const w6cT3Use = (id: string, name: string, input: Record<string, unknown>): W6cT3Block => ({ type: 'tool_use', id, name, input });
+const w6cT3Read = (id: string, p: string): W6cT3Block => w6cT3Use(id, 'Read', { file_path: p });
+/** One planted row. `msg` is an assistant row's msg_id (default: its own key's, so each assistant row is one turn). */
+interface W6cT3PRow { key: string; type: 'user' | 'assistant' | 'system'; provenance: string; model?: string | null; msg?: string; content: W6cT3Block[]; summary?: boolean }
+const w6cT3Op = (key: string): W6cT3PRow => ({ key, type: 'user', provenance: 'operator', content: [{ type: 'text', text: `go ${key}` }] });
+const w6cT3Res = (key: string, id: string): W6cT3PRow => ({ key, type: 'user', provenance: 'tool', content: [{ type: 'tool_result', tool_use_id: id, content: `ok ${key}` }] });
+const w6cT3Asst = (key: string, blocks: W6cT3Block[], o: { msg?: string; model?: string | null } = {}): W6cT3PRow => ({
+  key, type: 'assistant', provenance: 'model', model: o.model === undefined ? W6C_T3_MODEL : o.model, msg: o.msg ?? `msg-${key}`,
+  content: blocks.length > 0 ? blocks : [{ type: 'text', text: `say ${key}` }],
+});
+const w6cT3Bnd = (key: string): W6cT3PRow => ({ key, type: 'system', provenance: 'harness', content: [{ type: 'text', text: `compacted ${key}` }] });
+const w6cT3Sum = (key: string): W6cT3PRow => ({ key, type: 'user', provenance: 'summary', content: [{ type: 'text', text: `summary ${key}` }], summary: true });
+/** `n` assistant turns, each its own msg_id, an operator row before each; `at` maps a turn (1-based) to its blocks. */
+function w6cT3Turns(n: number, at: Record<number, W6cT3Block[]> = {}): W6cT3PRow[] {
+  const rows: W6cT3PRow[] = [];
+  for (let i = 1; i <= n; i += 1) { rows.push(w6cT3Op(`o${i}`)); rows.push(w6cT3Asst(`a${i}`, at[i] ?? [])); }
+  return rows;
+}
+interface W6cT3Plant {
+  rows: W6cT3PRow[]; boundary: string; summary: string; span: string[];
+  files?: Array<{ fileId: number; sourceKey?: string; keys: string[] }>;
+  cwd?: string | null; tombstone?: string[]; noLeaf?: boolean;
+}
+const W6C_T3_A = `${W6C_T3_CWD}/src/a.ts`;
+/** Leaf N's span (p1 an operator row, p2 an Edit of `spanBlocks`' file, default src/a.ts, p3 its result), boundary N,
+ *  its summary, then `after`, the window's rows. `pre` rows go before the span, outside it. */
+function w6cT3Story(after: W6cT3PRow[], o: { spanBlocks?: W6cT3Block[]; pre?: W6cT3PRow[] } = {}): W6cT3Plant {
+  const span = [w6cT3Op('p1'), w6cT3Asst('p2', o.spanBlocks ?? [w6cT3Use('t-p2', 'Edit', { file_path: W6C_T3_A, old_string: 'x', new_string: 'y' })]), w6cT3Res('p3', 't-p2')];
+  return { rows: [...(o.pre ?? []), ...span, w6cT3Bnd('n'), w6cT3Sum('s'), ...after], boundary: 'n', summary: 's', span: span.map((r) => r.key) };
+}
+interface W6cT3Fx { home: string; dbFile: string; uuid: Record<string, string>; ts: Record<string, number>; entry: Record<string, number> }
+/** A store made by store.mjs's createStore under a fresh mkTmp HOME, planted in one transaction and closed: one session
+ *  (ccrc id demo-a) with one confirmed epoch (cwd `cwd`, default W6C_T3_CWD), one main transcript, the files given
+ *  (default: file 1, live, holding every row in order), one entry per row stamped 1 s apart, boundary N (ord 1) anchored
+ *  on its summary, and, unless `noLeaf`, N's depth-0 leaf whose node_sources are `span` in order. A `tombstone` row's blob
+ *  has no z and a pruned_ms, which expandEntryBody reads as 'tombstone'. */
+function w6cT3PlantStore(p: W6cT3Plant): W6cT3Fx {
+  const home = w6cMkTmp('ccrc-counters-w6c-t3-');
+  w6cStore.createStore(home);
+  const dbFile = w6cLib.historyPaths(home).dbFile as string;
+  const db = w6cStore.openWriter(dbFile) as W6cDb;
+  const fx: W6cT3Fx = { home, dbFile, uuid: {}, ts: {}, entry: {} };
+  try {
+    db.exec('BEGIN');
+    db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, 'demo-a', ?, 'demo', 1)").run(w6cT3Uid(0xfff1));
+    db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, cwd, confirmed_ms) VALUES (1, 1, ?, 'startup', 'hook', ?, 1)")
+      .run(w6cT3Uid(0xfff2), p.cwd === undefined ? W6C_T3_CWD : p.cwd);
+    db.prepare("INSERT INTO transcripts (transcript_pk, cc_session_uuid, agent_id) VALUES (1, ?, '')").run(w6cT3Uid(0xfff2));
+    const files = p.files ?? [{ fileId: 1, keys: p.rows.map((r) => r.key) }];
+    const file = db.prepare("INSERT INTO ingest_files (file_id, dev, ino, source_key, transcript_pk, status, parser_version) VALUES (?, 1, ?, ?, 1, 'live', 1)");
+    for (const f of files) file.run(f.fileId, 7000 + f.fileId, f.sourceKey ?? '');
+    const blob = db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, ?, ?, ?, ?) RETURNING blob_id');
+    const ent = db.prepare('INSERT INTO entries (uuid, transcript_pk, type, model, msg_id, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms, is_compact_summary) '
+      + 'VALUES (?, 1, ?, ?, ?, ?, 1, ?, 1, ?, ?, ?) RETURNING entry_id');
+    p.rows.forEach((r, i) => {
+      const bytes = Buffer.from(w6cLib.canonicalJson(r.content) as string);
+      const dead = (p.tombstone ?? []).includes(r.key);
+      const b = blob.get(w6cHash('sha256').update(`${r.key}\0`).update(bytes).digest(), w6cStore.CODEC, dead ? null : w6cStore.brotli(bytes), bytes.length, dead ? 1 : null) as { blob_id: number | bigint };
+      fx.uuid[r.key] = w6cT3Uid(i + 1);
+      fx.ts[r.key] = W6C_T3_T0 + 1000 * (i + 1);
+      const asst = r.type === 'assistant';
+      fx.entry[r.key] = Number((ent.get(fx.uuid[r.key]!, r.type, asst ? (r.model ?? null) : null, asst ? (r.msg ?? null) : null, r.provenance, i,
+        Number(b.blob_id), fx.ts[r.key]!, r.summary === true ? 1 : 0) as { entry_id: number | bigint }).entry_id);
+    });
+    const mem = db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
+    for (const f of files) f.keys.forEach((k, i) => { mem.run(f.fileId, fx.entry[k]!, i + 1); });
+    db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, anchor_uuid) VALUES (?, 1, 1, ?)').run(fx.entry[p.boundary]!, fx.uuid[p.summary]!);
+    if (p.noLeaf !== true) {
+      db.prepare("INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, boundary_entry_id, parser_version, created_ms) "
+        + "VALUES ('Lc3', 1, 1, 1, 'native_leaf', 0, 'ok', ?, 1, 1)").run(fx.entry[p.boundary]!);
+      const src = db.prepare("INSERT INTO node_sources (node_id, entry_id, ord) VALUES ('Lc3', ?, ?)");
+      p.span.forEach((k, i) => { src.run(fx.entry[k]!, i + 1); });
+    }
+    db.exec('COMMIT');
+  } finally {
+    w6cStore.closeWriter(db);
+  }
+  return fx;
+}
+/** N's W2-D13 frame as measure-history.py prints it for these one-boundary fixtures: every file holding N; per file, its
+ *  assistant rows after the summary row (or after N) in file order, up to `rowCap`; `models` every such row's model in
+ *  first-appearance order. No fixture has a next boundary. */
+function w6cT3Frame(p: W6cT3Plant, fx: W6cT3Fx, rowCap = 400): W6cT3Frame {
+  const byKey = new Map(p.rows.map((r) => [r.key, r]));
+  const files = p.files ?? [{ fileId: 1, keys: p.rows.map((r) => r.key) }];
+  const copies = files.filter((f) => f.keys.includes(p.boundary)).map((f): W6cT3Copy => {
+    const bi = f.keys.indexOf(p.boundary);
+    const si = f.keys.indexOf(p.summary);
+    const opens = si > bi ? si : bi;
+    const after = f.keys.slice(opens + 1).map((k, j) => ({ r: byKey.get(k)!, line: opens + 2 + j })).filter((x) => x.r.type === 'assistant');
+    const rows: W6cT3RawRow[] = after.map(({ r, line }) => [line, fx.ts[r.key]!, r.msg ?? null, null, fx.uuid[r.key]!, r.model ?? null]);
+    return {
+      file_id: f.fileId, source_key: f.sourceKey ?? '', boundary_line: bi + 1, after_count: f.keys.length - bi - 1,
+      summary_line: si > bi ? si + 1 : null, next_boundary_line: null, next_boundary_ts_ms: null,
+      last_ts_ms: fx.ts[f.keys[f.keys.length - 1]!]!, rows: rows.slice(0, rowCap),
+      models: [...new Set(after.map(({ r }) => r.model ?? null))], truncated: rows.length > rowCap,
+    };
+  });
+  return { boundary_uuid: fx.uuid[p.boundary]!, ts_ms: fx.ts[p.boundary]!, copies };
+}
+/** Task 1's CounterStore, opened here on the planted store: openReader's read-only handle and expandEntryBody's rc. */
+function w6cT3Cs(fx: W6cT3Fx): W6cT3CsT {
+  const db = w6cStore.openReader(fx.dbFile) as W6cDb;
+  return { db, storeId: 'store-a', version: w6cStore.userVersion(db) as number, schema: w6cLib.SCHEMA_ADDED, close: () => db.close() };
+}
+/** The WindowCtx Task 1's frame hands the measure: the gate's own window over the frame. */
+const w6cT3Ctx = (cs: W6cT3CsT, frame: W6cT3Frame): W6cR =>
+  W6C_T3.windowCtx({ rs: cs, family: W6C_T3_FAMILY, boundary: frame, window: w6cGate.windowOf(frame, []), calls: [], nowMs: 0 });
+/** Plant, frame, open and measure one story; the handle is closed before the answer is returned. */
+function w6cT3Measure(p: W6cT3Plant, edit?: (frame: W6cT3Frame) => void, rowCap?: number): W6cT3Result {
+  const fx = w6cT3PlantStore(p);
+  const frame = w6cT3Frame(p, fx, rowCap);
+  edit?.(frame);
+  const cs = w6cT3Cs(fx);
+  try { return W6C_T3.rediscoveryAt(w6cT3Ctx(cs, frame)); } finally { cs.close(); }
+}
+const w6cT3Hit = (hit: boolean, distinct: number, reads: number, sources: number, unresolved = 0): W6cT3Result =>
+  ({ state: 'measured', value: { hit, distinct_paths: distinct, reads, sources, unresolved } });
+/** A node report as it comes back from a file: canonical JSON, parsed. */
+const w6cT3AsRead = (r: W6cR): W6cR => JSON.parse(w6cLib.canonicalJson(r) as string);
+/** The other node's report: its one family, F_O (control), one measured window of two turns, over Task 1's fixtures. */
+const w6cT3NodeB = (ctr: W6cR, measures?: W6cR): W6cR => w6cFrame(ctr, {
+  report: w6cReport({ families: [w6cFam(W6C_F_O, true, [], [{ boundary_uuid: w6cGen(207), ts_ms: W6C_B1, copies: [w6cCopyOf(W6C_B1, 2)] }])], recall_off: [] }, { store_id: W6C_OTHER }),
+  ab: w6cAbOf({}, {}, W6C_OTHER), rs: { ...W6C_RS, storeId: W6C_OTHER }, measures,
+});
+
+w6cDescribe('W2-6 Task 3: re-discovery (W2-D86; D-6561, U11)', () => {
+  w6cIt('toolPathsOf reads file_path from Read, Edit, MultiEdit and Write, and NotebookEdit\'s notebook_path (D-6561)', () => {
+    const body = [
+      { type: 'text', text: 'reading' },
+      w6cT3Read('r1', '/r'), w6cT3Use('e1', 'Edit', { file_path: '/e' }), w6cT3Use('m1', 'MultiEdit', { file_path: '/m', edits: [] }),
+      w6cT3Use('w1', 'Write', { file_path: '/w', content: 'x' }), w6cT3Use('n1', 'NotebookEdit', { notebook_path: '/n.ipynb', new_source: 'x' }),
+      w6cT3Use('g1', 'Glob', { path: '/g' }), w6cT3Use('q1', 'Grep', { path: '/q', pattern: 'x' }), w6cT3Use('b1', 'Bash', { command: 'cat /r' }),
+      w6cT3Use('n2', 'NotebookEdit', { file_path: '/not-its-field.ipynb' }), w6cT3Use('r2', 'Read', {}),
+    ];
+    w6cExpect(W6C_T3.toolPathsOf(body, W6C_T3.REDISCOVERY_SOURCE_TOOLS)).toEqual(['/r', '/e', '/m', '/w', '/n.ipynb']);
+    w6cExpect(W6C_T3.toolPathsOf(body, [W6C_T3.REDISCOVERY_READ_TOOL])).toEqual(['/r']);
+    w6cExpect(W6C_T3.REDISCOVERY_SOURCE_TOOLS).toEqual(['Read', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
+    w6cExpect(W6C_T3.toolPathsOf('raw text', W6C_T3.REDISCOVERY_SOURCE_TOOLS), 'a body that is no block list holds no tool_use').toEqual([]);
+  });
+
+  w6cIt('absolutePath resolves against the cwd and normalises, and answers null where it cannot (U11)', () => {
+    w6cExpect(W6C_T3.absolutePath('/home/u/tree/src/./x/../a.ts', null)).toBe(W6C_T3_A);
+    w6cExpect(W6C_T3.absolutePath('src/a.ts', W6C_T3_CWD)).toBe(W6C_T3_A);
+    w6cExpect(W6C_T3.absolutePath('./src//a.ts', W6C_T3_CWD)).toBe(W6C_T3_A);
+    w6cExpect(W6C_T3.absolutePath('~/a.ts', W6C_T3_CWD), 'no shell expands it').toBeNull();
+    w6cExpect(W6C_T3.absolutePath('src/a.ts', null)).toBeNull();
+    w6cExpect(W6C_T3.absolutePath('src/a.ts', 'tree'), 'a relative cwd is no cwd').toBeNull();
+  });
+
+  w6cIt('rediscoveryVerdict: a Read of a span path is a hit, a path counts once, an unresolvable path is unmeasured, never a miss, and never hides a hit already found', () => {
+    w6cExpect(W6C_T3.rediscoveryVerdict({ reads: [W6C_T3_A, 'src/a.ts', '/home/u/tree/b.ts'], sources: ['src/a.ts', '/home/u/tree/c.ts'], cwd: W6C_T3_CWD }))
+      .toEqual(w6cT3Hit(true, 1, 3, 2));
+    w6cExpect(W6C_T3.rediscoveryVerdict({ reads: ['/home/u/tree/b.ts'], sources: [W6C_T3_A], cwd: W6C_T3_CWD })).toEqual(w6cT3Hit(false, 0, 1, 1));
+    w6cExpect(W6C_T3.rediscoveryVerdict({ reads: [W6C_T3_A], sources: ['src/a.ts'], cwd: null }), 'an unresolved span path is unmeasured, never a miss')
+      .toEqual({ state: 'unmeasured', why: 'path-unresolved' });
+    w6cExpect(W6C_T3.rediscoveryVerdict({ reads: ['src/b.ts'], sources: ['src/a.ts'], cwd: null }), 'CONTROL: two unresolved paths never match as two nulls')
+      .toEqual({ state: 'unmeasured', why: 'path-unresolved' });
+    w6cExpect(W6C_T3.rediscoveryVerdict({ reads: [W6C_T3_A, 'src/b.ts'], sources: [W6C_T3_A], cwd: null }), 'a hit found stays measured, the unresolved read beside it')
+      .toEqual(w6cT3Hit(true, 1, 2, 1, 1));
+  });
+
+  w6cIt('a Read in turn 10 of a file the span edited is a re-discovery; CONTROL: the same Read in turn 11 is not', () => {
+    w6cExpect(w6cT3Measure(w6cT3Story(w6cT3Turns(11, { 10: [w6cT3Read('r10', W6C_T3_A)] })))).toEqual(w6cT3Hit(true, 1, 1, 1));
+    w6cExpect(w6cT3Measure(w6cT3Story(w6cT3Turns(11, { 11: [w6cT3Read('r11', W6C_T3_A)] })))).toEqual(w6cT3Hit(false, 0, 0, 1));
+  });
+
+  w6cIt('three rows sharing one msg_id are one turn and a <synthetic> row is no turn: a Read in the thirteenth assistant row is still turn 10', () => {
+    const after = [
+      w6cT3Op('o1'), w6cT3Asst('a1a', [], { msg: 'm1' }), w6cT3Asst('a1b', [], { msg: 'm1' }), w6cT3Asst('a1c', [], { msg: 'm1' }),
+      w6cT3Asst('syn', [], { msg: 'msyn', model: '<synthetic>' }),
+      ...w6cT3Turns(9, { 9: [w6cT3Read('r9', W6C_T3_A)] }).map((r) => ({ ...r, key: `x${r.key}`, msg: r.msg === undefined ? undefined : `x${r.msg}` })),
+    ];
+    w6cExpect(w6cT3Measure(w6cT3Story(after))).toMatchObject({ state: 'measured', value: { hit: true, distinct_paths: 1 } });
+  });
+
+  w6cIt('the span is what derivation recorded: a file written before the span is not a re-discovery; CONTROL: the span\'s file is', () => {
+    const pre = [w6cT3Op('q1'), w6cT3Asst('q2', [w6cT3Use('t-q2', 'Write', { file_path: `${W6C_T3_CWD}/old.ts`, content: 'x' })]), w6cT3Res('q3', 't-q2')];
+    w6cExpect(w6cT3Measure(w6cT3Story(w6cT3Turns(3, { 1: [w6cT3Read('r1', `${W6C_T3_CWD}/old.ts`)] }), { pre }))).toEqual(w6cT3Hit(false, 0, 1, 1));
+    w6cExpect(w6cT3Measure(w6cT3Story(w6cT3Turns(3, { 1: [w6cT3Read('r1', W6C_T3_A)] }), { pre }))).toMatchObject({ state: 'measured', value: { hit: true } });
+  });
+
+  w6cIt('an Edit, a Bash cat and a Grep of the span\'s file in turns 1 to 10 are not a re-discovery (the Bash-reads residual); CONTROL: a Read is', () => {
+    const not = { 2: [w6cT3Use('e2', 'Edit', { file_path: W6C_T3_A, old_string: 'y', new_string: 'z' })], 3: [w6cT3Use('b3', 'Bash', { command: `cat ${W6C_T3_A}` })],
+      4: [w6cT3Use('g4', 'Grep', { path: W6C_T3_A, pattern: 'y' })] };
+    w6cExpect(w6cT3Measure(w6cT3Story(w6cT3Turns(5, not)))).toEqual(w6cT3Hit(false, 0, 0, 1));
+    w6cExpect(w6cT3Measure(w6cT3Story(w6cT3Turns(5, { ...not, 5: [w6cT3Read('r5', W6C_T3_A)] })))).toMatchObject({ state: 'measured', value: { hit: true, distinct_paths: 1 } });
+  });
+
+  w6cIt('paths compare made absolute on both sides (U11): a relative span Edit and two other spellings of one file are one path', () => {
+    const p = w6cT3Story(w6cT3Turns(4, { 1: [w6cT3Read('r1', '/home/u/tree/src/./a.ts')], 2: [w6cT3Read('r2', '/home/u/tree/lib/../src/a.ts')] }),
+      { spanBlocks: [w6cT3Use('t-p2', 'Edit', { file_path: 'src/a.ts', old_string: 'x', new_string: 'y' })] });
+    w6cExpect(w6cT3Measure(p)).toEqual(w6cT3Hit(true, 1, 2, 1));
+  });
+
+  w6cIt('the Reads are read in the window\'s copy (W1\'s longest, W2-D15), never the producer\'s copy', () => {
+    const p = w6cT3Story(w6cT3Turns(3, { 3: [w6cT3Read('r3', W6C_T3_A)] }));
+    const keys = p.rows.map((r) => r.key);
+    const shortTo = keys.indexOf('a1') + 1;
+    // file 1, live (source_key ''), stops after turn 1: pickHoldingCopy's copy. file 2, a retired copy, holds all three turns.
+    p.files = [{ fileId: 1, keys: keys.slice(0, shortTo) }, { fileId: 2, sourceKey: 'retired-1', keys }];
+    w6cExpect(w6cT3Measure(p)).toMatchObject({ state: 'measured', value: { hit: true, distinct_paths: 1 } });
+  });
+
+  w6cIt.each([
+    ['window-unmeasured', (): W6cT3Result => w6cT3Measure(w6cT3Story(w6cT3Turns(12, { 2: [w6cT3Read('r2', W6C_T3_A)] })), undefined, 5)],
+    ['boundary-absent', (): W6cT3Result => w6cT3Measure(w6cT3Story(w6cT3Turns(2)), (f) => { f.boundary_uuid = w6cT3Uid(0xdead); })],
+    ['leaf-absent', (): W6cT3Result => w6cT3Measure({ ...w6cT3Story(w6cT3Turns(2)), noLeaf: true })],
+    ['row-moved', (): W6cT3Result => w6cT3Measure(w6cT3Story(w6cT3Turns(2)), (f) => { f.copies[0]!.rows[1]![4] = w6cT3Uid(0xbeef); })],
+    ['body-tombstone', (): W6cT3Result => w6cT3Measure({ ...w6cT3Story(w6cT3Turns(3)), tombstone: ['a2'] })],
+    ['body-tombstone', (): W6cT3Result => w6cT3Measure({ ...w6cT3Story(w6cT3Turns(3)), tombstone: ['p2'] })],
+    ['path-unresolved', (): W6cT3Result => w6cT3Measure({ ...w6cT3Story(w6cT3Turns(2, { 1: [w6cT3Read('r1', W6C_T3_A)] }),
+      { spanBlocks: [w6cT3Use('t-p2', 'Edit', { file_path: 'src/a.ts', old_string: 'x', new_string: 'y' })] }), cwd: null })],
+  ] as Array<[string, () => W6cT3Result]>)('unmeasured, never 0: %s', (why, run) => {
+    w6cExpect(run()).toMatchObject({ state: 'unmeasured', why });
+    w6cExpect(W6C_T3.COUNTER_UNMEASURED).toContain(why);
+  });
+
+  w6cIt('CONTROL for the tombstone rows: a tombstoned user row in the span (a tool result) leaves the window measured', () => {
+    w6cExpect(w6cT3Measure({ ...w6cT3Story(w6cT3Turns(3, { 1: [w6cT3Read('r1', W6C_T3_A)] })), tombstone: ['p3'] })).toMatchObject({ state: 'measured', value: { hit: true } });
+  });
+
+  w6cIt('the counter\'s leaf span, read through boundaryLeafOf\'s node, equals the driver\'s spanRowsOf over the same store (one recorded span and one leaf rule, spelled twice)', () => {
+    const p = w6cT3Story(w6cT3Turns(2), { pre: [w6cT3Op('q1')] });
+    const fx = w6cT3PlantStore(p);
+    const cs = w6cT3Cs(fx);
+    const rs = w6cDrv.openReplayStore(fx.home);
+    try {
+      const leaf = W6C_T3.boundaryLeafOf(cs, fx.uuid.n!);
+      w6cExpect(leaf, 'CONTROL: the counter finds the one leaf the fixture plants').toMatchObject({ state: 'leaf', node_id: 'Lc3' });
+      const mine = W6C_T3.leafSpanRowsOf(cs, leaf.node_id as string);
+      const theirs = w6cDrv.spanRowsOf(rs, fx.entry.n!);
+      w6cExpect([mine.state, theirs.state]).toEqual(['span', 'span']);
+      w6cExpect(mine.rows).toEqual(theirs.rows);
+      w6cExpect((mine.rows as Array<{ uuid: string }>).map((r) => r.uuid), 'CONTROL: the span, not the copy before N').toEqual(['p1', 'p2', 'p3'].map((k) => fx.uuid[k]));
+    } finally { cs.close(); rs.close(); }
+  });
+
+  w6cIt('foldRediscovery counts windows with a hit, sums the distinct and the unresolved paths, and names the Bash residual; it never folds nothing', () => {
+    w6cExpect(W6C_T3.foldRediscovery([{ hit: true, distinct_paths: 2, reads: 3, sources: 4, unresolved: 1 }, { hit: false, distinct_paths: 0, reads: 1, sources: 1, unresolved: 0 }]))
+      .toEqual({ with_hit: 1, distinct_paths: 2, reads: 4, sources: 5, unresolved: 1, bash_reads: 'uncounted' });
+    w6cExpect(() => W6C_T3.foldRediscovery([]), 'the frame never folds an empty stratum').toThrow(/a fold over no measured window is a defect/);
+  });
+
+  w6cIt('W2-D86: the counter takes its turns and its window copy from the gate and spells no turn key or copy rule of its own; CONTROL: the patterns see each', () => {
+    const TURN_KEY = /\bmsg_id\s*\?\?|\[2\]\s*\?\?\s*\w+\[3\]/;
+    // W1's longest-copy rule reads after_count; the card counters' pickHoldingCopy (W2-D87, Task 2) is lib's, not a rule here.
+    const COPY_RULE = /\bafter_count\b/;
+    w6cExpect(TURN_KEY.test('const key = row.msg_id ?? row.request_id ?? row.uuid;')).toBe(true);
+    w6cExpect(TURN_KEY.test('return row[2] ?? row[3] ?? row[4];')).toBe(true);
+    w6cExpect(COPY_RULE.test('const most = Math.max(...copies.map((c) => c.after_count));')).toBe(true);
+    w6cExpect(w6cCode(W6C_SRC).filter((l) => TURN_KEY.test(l) || COPY_RULE.test(l))).toEqual([]);
+    const gateLine = w6cFs.readFileSync(W6C_SRC, 'utf8').split('\n').find((l) => /^import \{[^}]*\} from '\.\/history-gate\.mjs';$/.test(l)) ?? '';
+    for (const n of ['K', 'turnsOf', 'windowCopyOf', 'COUNTERS_DEF_V1', 'COUNTERS_DEF_V1_SHA256']) w6cExpect(gateLine, n).toMatch(new RegExp(`[{ ,]${n}[ ,}]`));
+  });
+
+  w6cIt('the six specs composed (W2-D87): COUNTER_MEASURES holds Tasks 2 and 3\'s specs in COUNTERS_DEF_V1\'s order, no PENDING or pending is left, and re-discovery names its residual', () => {
+    const specs = [W6C_T3.COMPLIANCE, W6C_T3.ECHO_HITS, W6C_T3.LAG, W6C_T3.CARD_SERVED, W6C_T3.CARD_ID_MISMATCH, W6C_T3.REDISCOVERY];
+    w6cExpect(Object.keys(W6C_T3.COUNTER_MEASURES)).toEqual(W6C_NAMES);
+    specs.forEach((s, k) => w6cExpect(W6C_T3.COUNTER_MEASURES[W6C_NAMES[k]!], W6C_NAMES[k]).toBe(s));
+    w6cExpect(W6C_T3.COUNTER_UNMEASURED).not.toContain('pending');
+    w6cExpect(w6cCode(W6C_SRC).filter((l) => /\bPENDING\b|'pending'/.test(l))).toEqual([]);
+    const SIX = ['row-moved', 'body-unparseable', 'body-tombstone', 'body-over-cap', 'body-undecodable', 'path-unresolved'];
+    w6cExpect(W6C_T3.COUNTER_UNMEASURED.slice(-SIX.length)).toEqual(SIX);
+    w6cExpect(Object.isFrozen(W6C_T3.REDISCOVERY)).toBe(true);
+    w6cExpect(W6C_T3.REDISCOVERY.source).toMatch(/Bash reads \(cat, sed, rg\) are not counted/);
+  });
+});
+
+w6cDescribe('W2-6 Task 3: combine, the nodes\' reports summed into one arm comparison (U2, W2-D88)', () => {
+  w6cIt('combineReports re-folds the nodes\' rows through stratify: every stratum\'s windows are the nodes\' sums, every summary refolded, the lists merged, and a node no report covers named', async () => {
+    const ctr = await w6cLoad();
+    const A = w6cT3AsRead(w6cFrame(ctr));
+    const B = w6cT3AsRead(w6cT3NodeB(ctr));
+    const c = W6C_T3.combineReports([{ sha256: 'a1'.repeat(32), value: A }, { sha256: 'b2'.repeat(32), value: B }], { measures: w6cProbe() });
+    w6cExpect([c.kind, c.v, c.record_sha256, c.window, c.code_changed, c.script_sha256]).toEqual([W6C_T3.COUNTERS_COMBINED_KIND, 1, W6C_RECORD_SHA, W6C_WINDOW, false, A.script_sha256]);
+    w6cExpect(c.nodes.map((n: W6cR) => [n.store_id, n.sha256])).toEqual([[W6C_STORE, 'a1'.repeat(32)], [W6C_OTHER, 'b2'.repeat(32)]]);
+    w6cExpect(c.windows).toHaveLength(A.windows.length + B.windows.length);
+    for (const arm of w6cGate.ASSIGNMENT_ARMS as string[]) {
+      for (const p of [...w6cLib.BACKENDS, ctr.ALL_PRODUCERS]) w6cExpect(c.strata[arm][p].windows, `${arm}/${p}`).toBe(A.strata[arm][p].windows + B.strata[arm][p].windows);
+    }
+    w6cExpect(c.strata.control.all.counters[W6C_NAMES[0]!].summary, 'refolded over both nodes, never copied').toEqual({ n: 2, sum: 4 });
+    w6cExpect(c.strata).toEqual(W6C_T3.stratify(c.windows, w6cProbe()).strata);
+    // V3: the dropped tallies carry the arm level too, and add across the nodes cell by cell.
+    for (const kind of ['changed', 'unrealised']) {
+      w6cExpect(Object.keys(c.dropped_strata[kind]), kind).toEqual([...w6cGate.ASSIGNMENT_ARMS]);
+      for (const arm of w6cGate.ASSIGNMENT_ARMS as string[]) {
+        for (const p of [...w6cLib.BACKENDS, ctr.ALL_PRODUCERS]) {
+          w6cExpect(c.dropped_strata[kind][arm][p].windows, `${kind}/${arm}/${p}`).toBe(A.dropped_strata[kind][arm][p].windows + B.dropped_strata[kind][arm][p].windows);
+        }
+      }
+    }
+    w6cExpect([c.dropped_strata.changed.treatment.anthropic.windows, c.dropped_strata.changed.control.all.windows], 'F_X, node A\'s, under its own arm').toEqual([1, 0]);
+    w6cExpect(c.dropped_strata).toEqual(W6C_T3.stratify(c.windows, w6cProbe()).dropped_strata);
+    w6cExpect([c.excluded.not_found, c.dropped.changed, c.excluded.unmeasured.count]).toEqual([[w6cKeyOf(W6C_F_N)], [w6cKeyOf(W6C_F_X)], 1]);
+    w6cExpect([c.record_nodes, c.nodes_missing], 'both of the record\'s nodes reported').toEqual([[W6C_STORE, W6C_OTHER].sort(), []]);
+    const alone = W6C_T3.combineReports([{ sha256: 'a1'.repeat(32), value: A }], { measures: w6cProbe() });
+    w6cExpect(alone.nodes_missing, 'a node of the record with no report is named, never left out unseen (U2)').toEqual([W6C_OTHER]);
+  });
+
+  w6cIt('combineReports refuses, each input-invalid with its own word: another kind, other definitions, another record, another counter, a store twice, a row off the shape', async () => {
+    const ctr = await w6cLoad();
+    const A = w6cT3AsRead(w6cFrame(ctr));
+    const B = w6cT3AsRead(w6cT3NodeB(ctr));
+    const n = (value: W6cR): { sha256: string; value: W6cR } => ({ sha256: 'a1'.repeat(32), value });
+    const word = (nodes: Array<{ sha256: string; value: W6cR }>, o: W6cR = {}): string | undefined => {
+      const r = w6cRefusalOf(() => W6C_T3.combineReports(nodes, { measures: w6cProbe(), ...o }));
+      w6cExpect(r?.word ?? 'input-invalid').toBe('input-invalid');
+      return r?.detail.split(':')[0];
+    };
+    w6cExpect(word([n(A), n(B)]), 'CONTROL').toBeUndefined();
+    w6cExpect(word([n({ ...A, kind: 'ccrc-history-w2-verify-ab' }), n(B)])).toBe('counters-shape');
+    w6cExpect(word([n(A), n({ ...B, counters_def: { id: 'v1', sha256: '0'.repeat(64) } })])).toBe('counters-def-mismatch');
+    w6cExpect(word([n(A), n({ ...B, record_sha256: 'cd'.repeat(32) })])).toBe('node-mismatch');
+    w6cExpect(word([n(A), n(B)], { ownSha256: '0'.repeat(64) })).toBe('script-mismatch');
+    const twoScripts = w6cRefusalOf(() => W6C_T3.combineReports([n(A), n({ ...B, script_sha256: '0'.repeat(64) })], { measures: w6cProbe() }));
+    w6cExpect(twoScripts, 'node reports counted by two counter scripts (V4)').toEqual({ word: 'input-invalid', detail: "node-mismatch: node report 1's script_sha256 is not node report 0's" });
+    w6cExpect(word([n(A), n(A)])).toBe('store-duplicate');
+    w6cExpect(word([n(A), n({ ...A, record_sha256: 'cd'.repeat(32) })]), 'the order: another record before a store twice').toBe('node-mismatch');
+    w6cExpect(word([n(A), n({ ...B, windows: [{ ...B.windows[0], arm: 'unassigned' }] })])).toBe('counters-shape');
+    const nullAnswer = { ...B.windows[0], measures: { ...B.windows[0].measures, [W6C_NAMES[0]!]: { state: 'measured', value: null } } };
+    w6cExpect(word([n(A), n({ ...B, windows: [nullAnswer] })]), 'an answer Task 1 would never write').toBe('counters-shape');
+    w6cExpect(w6cRefusalOf(() => W6C_T3.combineReports([]))).toEqual({ word: 'args-invalid', detail: 'node-report-required' });
+  });
+
+  w6cIt('combine writes one report under a fresh --out, its sha the one stderr line; its paired list flags must pair, and a flag outside its form is args-invalid', async () => {
+    const ctr = await w6cLoad();
+    const quiet = Object.fromEntries(W6C_NAMES.map((name) => [name, { source: `fixture: ${name}`, measure: (): W6cR => ({ state: 'unmeasured', why: 'window-unmeasured' }),
+      fold: (): never => { throw new Error('fold called on nothing'); } }]));
+    const dir = w6cMkTmp('ccrc-w2-6-t3-combine-');
+    const save = (name: string, value: W6cR): { p: string; sha: string } => {
+      const text = `${w6cLib.canonicalJson(value)}\n`;
+      const p = w6cPath.join(dir, name);
+      w6cFs.writeFileSync(p, text, { mode: 0o600 });
+      return { p, sha: w6cLib.sha256Hex(text) as string };
+    };
+    const a = save('a.json', w6cFrame(ctr, { measures: quiet }));
+    const b = save('b.json', w6cT3NodeB(ctr, quiet));
+    const out = w6cPath.join(w6cMkTmp('ccrc-w2-6-t3-out-'), 'out');
+    const flags = { 'node-report': [a.p, b.p], 'node-report-sha256': [a.sha, b.sha], out };
+    const r = w6cInProcess(() => W6C_T3.combineCommand(flags));
+    w6cExpect([r.code, r.refusal]).toEqual([0, null]);
+    const file = w6cPath.join(out, W6C_T3.COUNTERS_COMBINED_FILE);
+    const bytes = w6cFs.readFileSync(file);
+    w6cExpect(r.stderr).toBe(`sha256 ${w6cLib.sha256Hex(bytes)}\n`);
+    w6cExpect(w6cFs.readdirSync(out).sort()).toEqual([w6cDrv.OUT_MARKER, W6C_T3.COUNTERS_COMBINED_FILE].sort());
+    w6cExpect(w6cFs.statSync(file).mode & 0o7777).toBe(0o600);
+    const doc = JSON.parse(bytes.toString('utf8'));
+    w6cExpect([doc.kind, doc.nodes.map((x: W6cR) => x.sha256), doc.strata.control.all.windows]).toEqual([W6C_T3.COUNTERS_COMBINED_KIND, [a.sha, b.sha], 3]);
+    const unpaired = w6cInProcess(() => W6C_T3.combineCommand({ ...flags, 'node-report-sha256': [a.sha], out: `${out}-2` }));
+    w6cExpect(unpaired.refusal).toEqual({ word: 'args-invalid', detail: '--node-report given 2 times, and --node-report-sha256 1' });
+    const foreign = w6cInProcess(() => W6C_T3.combineCommand({ ...flags, store: '/home/u/x.db', out: `${out}-3` }));
+    w6cExpect(foreign.refusal).toEqual({ word: 'args-invalid', detail: '--store is not a combine flag' });
+    w6cExpect([w6cFs.existsSync(`${out}-2`), w6cFs.existsSync(`${out}-3`)]).toEqual([false, false]);
+    w6cExpect([...W6C_T3.COUNTER_SUBCOMMANDS]).toEqual(['count', 'combine']);
   });
 });
 

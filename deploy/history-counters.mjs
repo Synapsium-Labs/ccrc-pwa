@@ -33,7 +33,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, sha256Hex } from '../ccd/history/lib.mjs';
 import { StoreError, openReader, userVersion } from '../ccd/history/store.mjs';
-import { holdingCopyOf } from '../ccd/history/derive.mjs';
+import { epochOfUuid, holdingCopyOf } from '../ccd/history/derive.mjs';
 import { expandEntryBody } from '../ccd/history/recall.mjs';
 import { ASSIGNMENT_ARMS, COUNTERS_DEF_V1, COUNTERS_DEF_V1_SHA256, K, K_UNIT, assembleReports, buildWindows, changedFamilies, familyKey, turnsOf, windowCopyOf, windowOf } from './history-gate.mjs';
 import { AB_STATES, DriverRefusal, VERIFY_AB_KIND, loadFinalRecord, loadInput, parseArgs, prepareOut, refuse } from './history-replay.mjs';
@@ -47,7 +47,6 @@ export const COUNTER_NAMES = Object.freeze(COUNTERS_DEF_V1.map((c) => c.name));
  *  task appends its own words here, in place. */
 export const COUNTER_UNMEASURED = Object.freeze([
   'window-unmeasured',   // the window itself is unmeasured (W2-D14), and the counter needs it
-  'pending',             // the stand-in every counter answers until its own measure lands (removed by W2-6 Task 3)
   'boundary-absent',     // the store holds no boundary row with this uuid
   'boundary-moved',      // the store holds the boundary at another line of the window copy's file than the measure printed
   'leaf-absent',         // the boundary has no depth-0 leaf: no status, and no leaf id for a card line to name
@@ -55,6 +54,12 @@ export const COUNTER_UNMEASURED = Object.freeze([
   'boundary-uncopied',   // no copy holds the boundary (holdingCopyOf answered null), which card.mjs reads as none (D-6562)
   'no-measured-tick',    // no ticks row at or before the boundary has a measured lag
   'card-wait',           // the card's delivery window was still open at the read instant
+  'row-moved',           // a window row's line no longer holds the uuid measure-history.py printed (re-discovery)
+  'body-unparseable',    // a turn or span body expandEntryBody answered unparseable (D-6238): it could hide a path
+  'body-tombstone',      // the same, tombstone
+  'body-over-cap',       // the same, over-cap
+  'body-undecodable',    // the same, undecodable
+  'path-unresolved',     // a path on either side could not be made absolute against N's epoch cwd (U11), and none resolved hits
 ]);
 
 /** @typedef {{ state: 'measured', value: unknown } | { state: 'unmeasured', why: string }} Measure */
@@ -372,6 +377,7 @@ export const COUNTER_FLAG_SPECS = Object.freeze({
   record: 'string', 'record-sha256': 'string', part1: 'string', 'part1-sha256': 'string', frozen: 'string', 'frozen-sha256': 'string',
   supersedes: 'string', 'supersedes-sha256': 'string', measure: 'string', 'measure-sha256': 'string',
   'verify-ab': 'string', 'verify-ab-sha256': 'string', store: 'string', out: 'string', 'allow-code-change': 'bool',
+  'node-report': 'list', 'node-report-sha256': 'list',
 });
 /** Each subcommand's flags, required and optional, and its entry. A flag outside both lists is args-invalid. */
 export const COUNTER_FORMS = Object.freeze({
@@ -380,6 +386,11 @@ export const COUNTER_FORMS = Object.freeze({
       'verify-ab', 'verify-ab-sha256', 'store', 'out']),
     optional: Object.freeze(['supersedes', 'supersedes-sha256', 'allow-code-change']),
     run: (flags, deps) => countCommand(flags, deps),
+  }),
+  combine: Object.freeze({
+    required: Object.freeze(['node-report', 'node-report-sha256', 'out']),
+    optional: Object.freeze([]),
+    run: (flags) => combineCommand(flags),
   }),
 });
 export const COUNTER_SUBCOMMANDS = Object.freeze(Object.keys(COUNTER_FORMS));
@@ -720,13 +731,249 @@ const CARD_SOURCE = 'lib decideCardDelivery over cardIdsIn of the attachments in
 export const CARD_SERVED = Object.freeze({ source: CARD_SOURCE, measure: cardAt, fold: foldCardFor('served') });
 export const CARD_ID_MISMATCH = Object.freeze({ source: CARD_SOURCE, measure: cardAt, fold: foldCardFor('mismatch') });
 
-// ── the measures, composed (W2-D87): every counter's spec, in COUNTER_NAMES' order ──────────────────────────────────
-/** The stand-in every counter is until its own task lands. @type {CounterSpec} */
-const PENDING = Object.freeze({
-  source: 'none yet: this counter\'s measure has not landed',
-  measure: () => unmeasured('pending'),
-  fold: () => { throw new Error('PENDING.fold: a pending counter measures nothing, so nothing is folded'); },
+// ── W2-6 Task 3: re-discovery (W2-D86), the sixth counter ───────────────────────────────────────────────────────────
+// Re-discovery, per window of a listed family (W2-D86): a Read tool_use in turns 1 to K of the window whose file path,
+// made absolute, is the file path of a Read, Edit, MultiEdit, Write or NotebookEdit tool_use in leaf N's span. The turns
+// are Task 1's ctx.turns, the gate's turnsOf over the copy the gate's windowCopyOf chooses (W2-D14, W2-D15): this file
+// spells no turn rule and no copy rule. The span is what derivation recorded, node_sources of N's depth-0 node (Task 2's
+// boundaryLeafOf) in ord order, never a rule over the copy; the driver's spanRowsOf reads the same rows, and a parity pin
+// holds the two spellings equal. Every body is recall.mjs's expandEntryBody over Task 1's openReader handle (W2-D74,
+// W2-D86); nothing here decodes a blob. Paths on both sides are made absolute against N's epoch's cwd (derive.mjs's
+// epochOfUuid) and compared as strings (U11). Per window an indicator and counts, folded by Task 1's frame by arm and by
+// producer. Unmeasured, never 0: each condition that could hide a re-discovery is its own word.
+// RESIDUAL (W2-D86, decisions §7): a Bash read of a file (cat, sed, rg) is not counted; the source and every fold say so.
+
+/** The tool whose call is a re-discovery's read (W2-D86). */
+export const REDISCOVERY_READ_TOOL = 'Read';
+/** The tools whose file a re-discovery re-reads, each with the input field that names its file (W2-D86): file_path, and
+ *  NotebookEdit's notebook_path, the field Claude Code's NotebookEdit carries (D-6561). */
+export const REDISCOVERY_PATH_FIELD = Object.freeze({ Read: 'file_path', Edit: 'file_path', MultiEdit: 'file_path', Write: 'file_path', NotebookEdit: 'notebook_path' });
+/** The span side's tools, derived from the field map, never listed twice. */
+export const REDISCOVERY_SOURCE_TOOLS = Object.freeze(Object.keys(REDISCOVERY_PATH_FIELD));
+
+/** The raw file paths of one body's tool_use blocks whose name is in `tools`, in block order, each read from its tool's
+ *  field. A matching block whose field is not a non-empty string names no file and is skipped; a body that is not a
+ *  block list holds no tool_use. Pure.  @param {unknown} body  @param {readonly string[]} tools  @returns {string[]} */
+export function toolPathsOf(body, tools) {
+  if (!Array.isArray(body)) return [];
+  const out = [];
+  for (const b of body) {
+    if (b === null || typeof b !== 'object' || b.type !== 'tool_use' || !tools.includes(b.name)) continue;
+    const v = b.input !== null && typeof b.input === 'object' ? b.input[REDISCOVERY_PATH_FIELD[b.name]] : undefined;
+    if (typeof v === 'string' && v !== '') out.push(v);
+  }
+  return out;
+}
+
+/** A tool's path made absolute (W2-D86, U11): an absolute path normalised, a relative one resolved against N's epoch's
+ *  cwd, by path.posix.resolve; null for a `~`-led path (no shell expands a tool's input) or a relative path with no
+ *  absolute cwd. Pure.  @param {string} raw  @param {string | null} cwd  @returns {string | null} */
+export function absolutePath(raw, cwd) {
+  if (raw.startsWith('~')) return null;
+  if (raw.startsWith('/')) return path.posix.resolve(raw);
+  if (typeof cwd !== 'string' || !cwd.startsWith('/')) return null;
+  return path.posix.resolve(cwd, raw);
+}
+
+/** One window's re-discovery from its raw paths (W2-D86). Pure. `reads` are the Read paths in turns 1 to K, `sources`
+ *  the span's Read, Edit, MultiEdit, Write and NotebookEdit paths. A path either side cannot make absolute could be the
+ *  re-discovery, so with no hit among the resolved paths the window is unmeasured (path-unresolved, a bare word: the
+ *  frame's answerOf keeps no count on an unmeasured answer), never a miss; an unresolved path can add a hit, never
+ *  remove one, so with a hit found the window is measured, `unresolved` beside it and its distinct count a lower bound.
+ *  @param {{reads: string[], sources: string[], cwd: string | null}} o */
+export function rediscoveryVerdict({ reads, sources, cwd }) {
+  const r = reads.map((p) => absolutePath(p, cwd));
+  const s = sources.map((p) => absolutePath(p, cwd));
+  const unresolved = r.filter((p) => p === null).length + s.filter((p) => p === null).length;
+  const span = new Set(s.filter((p) => p !== null));
+  const hits = new Set(r.filter((p) => p !== null && span.has(p)));
+  if (hits.size === 0 && unresolved > 0) return unmeasured('path-unresolved');
+  return measured({ hit: hits.size > 0, distinct_paths: hits.size, reads: r.length, sources: span.size, unresolved });
+}
+
+/** The statements re-discovery reads with, prepared once per handle. They read no body. */
+const REDISCOVERY_STMTS = new WeakMap();
+/** @param {object} db */
+function rediscoveryStmts(db) {
+  let s = REDISCOVERY_STMTS.get(db);
+  if (s === undefined) {
+    s = {
+      span: db.prepare(`SELECT e.entry_id AS entry_id, e.uuid AS uuid, e.type AS type, e.model AS model, e.provenance AS provenance,
+          e.ts_ms AS ts_ms, e.blob_id AS blob_id
+        FROM node_sources s JOIN entries e ON e.entry_id = s.entry_id
+        WHERE s.node_id = ?
+        ORDER BY s.ord`),
+      row: db.prepare('SELECT e.entry_id AS entry_id, e.uuid AS uuid, e.blob_id AS blob_id FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? AND m.line = ?'),
+      transcript: db.prepare('SELECT cc_session_uuid FROM transcripts WHERE transcript_pk = ?'),
+      cwd: db.prepare('SELECT cwd FROM epochs WHERE session_pk = ? AND seq = ?'),
+    };
+    REDISCOVERY_STMTS.set(db, s);
+  }
+  return s;
+}
+
+/** Leaf N's span (W2-D86): the rows derivation recorded as leaf N's sources (node_sources of N's depth-0 node), in their
+ *  recorded order, with the columns the driver's spanRowsOf reads (the parity pin compares them whole). A leaf with no
+ *  source is leaf-absent, as spanRowsOf words it. The node is boundaryLeafOf's, already found and checked unambiguous,
+ *  so the leaf-of-boundary rule is spelled once in this file (counterStmts' leaves).
+ *  @param {CounterStore} rs  @param {string} nodeId */
+export function leafSpanRowsOf(rs, nodeId) {
+  const rows = rediscoveryStmts(rs.db).span.all(nodeId);
+  return rows.length === 0 ? unmeasured('leaf-absent') : { state: 'span', rows };
+}
+
+/** An entry's body as expand picks it (W2-D74; D-6238): 'body' carries the parsed pick; each other word is unmeasured as
+ *  body-<word>, kept apart. A word expandEntryBody gains later throws in unmeasured rather than reach a wordless answer
+ *  (D-6301's rule).  @param {CounterStore} rs  @param {{entry_id: number, blob_id: number}} row */
+function bodyFor(rs, row) {
+  const k = expandEntryBody(rs, { entry_id: Number(row.entry_id), blob_id: Number(row.blob_id) });
+  return k.state === 'body' ? { state: 'body', body: k.body } : unmeasured(`body-${k.state}`);
+}
+
+/** One window's re-discovery (W2-D86). In order: window-unmeasured; boundaryLeafOf's words; a leaf with no source; the
+ *  window side (the frame's turns, each row found by its line in ctx.copy and checked by uuid: row-moved; its body:
+ *  body-<word>); the span side (its assistant rows' bodies: body-<word>); then rediscoveryVerdict over N's epoch's cwd.
+ *  @param {WindowCtx} ctx */
+export function rediscoveryAt(ctx) {
+  if (ctx.turns === null) return unmeasured('window-unmeasured');
+  const leaf = boundaryLeafOf(ctx.rs, ctx.boundary.boundary_uuid);
+  if (leaf.state !== 'leaf') return leaf;
+  const span = leafSpanRowsOf(ctx.rs, leaf.node_id);
+  if (span.state !== 'span') return span;
+  const s = rediscoveryStmts(ctx.rs.db);
+  const reads = [];
+  for (const raw of ctx.turns.flatMap((t) => t.rows)) {
+    const row = s.row.get(ctx.copy.file_id, raw[0]);
+    if (row === undefined || row.uuid !== raw[4]) return unmeasured('row-moved');
+    const k = bodyFor(ctx.rs, row);
+    if (k.state !== 'body') return k;   // a lost turn body could hide the Read
+    reads.push(...toolPathsOf(k.body, [REDISCOVERY_READ_TOOL]));
+  }
+  const sources = [];
+  for (const row of span.rows) {
+    if (row.type !== 'assistant') continue;   // a tool_use lives only in an assistant row
+    const k = bodyFor(ctx.rs, row);
+    if (k.state !== 'body') return k;   // a lost span body could hide the source
+    sources.push(...toolPathsOf(k.body, REDISCOVERY_SOURCE_TOOLS));
+  }
+  const t = s.transcript.get(leaf.transcript_pk);
+  const ep = t === undefined ? null : epochOfUuid(ctx.rs.db, t.cc_session_uuid);
+  const e = ep === null ? undefined : s.cwd.get(ep.session_pk, ep.seq);
+  return rediscoveryVerdict({ reads, sources, cwd: typeof e?.cwd === 'string' ? e.cwd : null });
+}
+
+/** Re-discovery over one stratum's measured windows: the windows with a hit, their distinct paths summed, the reads and
+ *  sources seen, the paths left unresolved beside a hit; `bash_reads: 'uncounted'` names the residual in every fold. */
+export function foldRediscovery(values) {
+  const out = { with_hit: 0, distinct_paths: 0, reads: 0, sources: 0, unresolved: 0, bash_reads: 'uncounted' };
+  for (const v of nonEmpty('foldRediscovery', values)) {
+    out.with_hit += v.hit ? 1 : 0;
+    out.distinct_paths += v.distinct_paths;
+    out.reads += v.reads;
+    out.sources += v.sources;
+    out.unresolved += v.unresolved;
+  }
+  return out;
+}
+
+/** The sixth counter's spec, in Task 1's shape (W2-D86, W2-D87). */
+export const REDISCOVERY = Object.freeze({
+  source: 'Read tool_use paths in the window\'s turns 1 to K against the Read, Edit, MultiEdit, Write and NotebookEdit paths of leaf N\'s node_sources span, both made absolute against N\'s epoch cwd, bodies through recall.mjs expandEntryBody; Bash reads (cat, sed, rg) are not counted (W2-D86)',
+  measure: rediscoveryAt, fold: foldRediscovery,
 });
+
+// ── W2-6 Task 3: combine, the nodes' reports summed into one arm comparison (W2-D88; U2) ─────────────────────────────
+// count reports one node; combine sums the nodes' reports, each counters.json passed with its sha, so the cross-node arm
+// comparison stays W2-6's (U2). The nodes must agree on the record, the window, the definitions, K and the counter that
+// ran, and that counter must be this one: the strata are re-folded from the concatenated per-window rows through Task 1's
+// stratify and this file's own folds, so counts add and no summary is ever added to another. A node report is data: a
+// row or an answer off Task 1's shapes is refused, never folded.
+
+export const COUNTERS_COMBINED_KIND = 'ccrc-history-w2-counters-combined';
+export const COUNTERS_COMBINED_FILE = 'counters-combined.json';
+/** The node-report fields every node must share, and the combined report carries once. */
+const COMBINE_SAME = Object.freeze(['counters_def', 'k', 'k_unit', 'record_nodes', 'record_sha256', 'script_sha256', 'window']);
+
+/** One node report's row, checked against Task 1's row shape, each answer re-checked by answerOf. */
+function combineRow(w) {
+  if (w === null || typeof w !== 'object' || !ASSIGNMENT_ARMS.includes(w.arm) || !BACKENDS.includes(w.producer)
+    || typeof w.changed !== 'boolean' || typeof w.unrealised !== 'boolean' || (w.state !== 'measured' && w.state !== 'unmeasured')) {
+    throw new TypeError(`combine: a row off the counter's shape: ${JSON.stringify(w ?? null).slice(0, 200)}`);
+  }
+  return { ...w, measures: Object.fromEntries(COUNTER_NAMES.map((n) => [n, answerOf(n, w.measures?.[n])])) };
+}
+
+/** The nodes' reports summed (U2). Each node is {sha256, value}. Refused input-invalid, in this order: a value that is
+ *  no counter report (counters-shape); definitions other than v1 (counters-def-mismatch); a COMBINE_SAME field other than
+ *  the first node's (node-mismatch); a counter other than this one (script-mismatch); a store twice (store-duplicate);
+ *  a row, an answer or a list off its shape (counters-shape). The record's stores no node report covers are named in
+ *  nodes_missing, never refused: the comparison says it is over fewer nodes than the record assigned (U2). measures and
+ *  ownSha256 are injectable for tests. */
+export function combineReports(nodes, { measures = COUNTER_MEASURES, ownSha256 = scriptSha256() } = {}) {
+  const bad = (what) => refuse('input-invalid', what);
+  if (nodes.length === 0) refuse('args-invalid', 'node-report-required');
+  nodes.forEach(({ value: r }, i) => {
+    if (r === null || typeof r !== 'object' || r.kind !== COUNTERS_KIND || r.v !== 1 || !Array.isArray(r.windows) || !Array.isArray(r.record_nodes)) bad(`counters-shape: node report ${i} is no ${COUNTERS_KIND} v1`);
+    if (r.counters_def?.id !== 'v1' || r.counters_def?.sha256 !== COUNTERS_DEF_V1_SHA256) bad(`counters-def-mismatch: node report ${i} names ${JSON.stringify(r.counters_def ?? null)}`);
+  });
+  const first = nodes[0].value;
+  nodes.forEach(({ value: r }, i) => {
+    for (const k of COMBINE_SAME) if (canonicalJson(r[k] ?? null) !== canonicalJson(first[k] ?? null)) bad(`node-mismatch: node report ${i}'s ${k} is not node report 0's`);
+  });
+  if (first.script_sha256 !== ownSha256) bad(`script-mismatch: the nodes ran counter ${first.script_sha256}, and this counter is ${ownSha256}: a combine re-folds with the code that counted`);
+  const stores = nodes.map(({ value: r }) => r.store_id);
+  const dup = stores.find((s, i) => stores.indexOf(s) !== i);
+  if (dup !== undefined) bad(`store-duplicate: store ${dup} is reported twice`);
+  const list = (x, what) => {
+    if (!Array.isArray(x)) throw new TypeError(`combine: ${what} is not a list`);
+    return x;
+  };
+  const sorted = (xs) => [...xs].sort();
+  try {
+    const reps = nodes.map(({ value: r }) => r);
+    const rows = reps.flatMap((r) => r.windows.map(combineRow));
+    return {
+      kind: COUNTERS_COMBINED_KIND, v: 1, counters_def: first.counters_def, k: first.k, k_unit: first.k_unit,
+      record_sha256: first.record_sha256, script_sha256: first.script_sha256, window: first.window,
+      code_changed: reps.some((r) => r.code_changed === true),
+      nodes: nodes.map(({ sha256, value: r }) => ({ store_id: r.store_id, sha256, user_version: r.user_version, read_ms: r.read_ms, code_changed: r.code_changed === true })),
+      record_nodes: first.record_nodes,
+      nodes_missing: first.record_nodes.filter((st) => !stores.includes(st)),
+      sources: first.sources,
+      excluded: {
+        not_found: sorted(reps.flatMap((r) => list(r.excluded.not_found, 'excluded.not_found'))),
+        zero_windows: sorted(reps.flatMap((r) => list(r.excluded.zero_windows, 'excluded.zero_windows'))),
+        unmeasured: { count: reps.reduce((n, r) => n + r.excluded.unmeasured.count, 0), keys: sorted(reps.flatMap((r) => list(r.excluded.unmeasured.keys, 'excluded.unmeasured.keys'))) },
+        not_listed: sorted(reps.flatMap((r) => list(r.excluded.not_listed, 'excluded.not_listed'))),
+      },
+      dropped: {
+        changed: sorted(reps.flatMap((r) => list(r.dropped.changed, 'dropped.changed'))),
+        unrealised: Object.fromEntries(AB_STATES.filter((st) => st !== AB_OK).map((st) => [st, sorted(reps.flatMap((r) => list(r.dropped.unrealised[st], `dropped.unrealised.${st}`)))])),
+      },
+      recall_off_gaps: reps.flatMap((r) => list(r.recall_off_gaps, 'recall_off_gaps'))
+        .sort((a, b) => (a.store_id < b.store_id ? -1 : a.store_id > b.store_id ? 1 : a.ts_ms - b.ts_ms)),
+      windows: rows,
+      ...stratify(rows, measures),
+    };
+  } catch (e) {
+    if (e instanceof TypeError) bad(`counters-shape: ${e.message}`);
+    throw e;
+  }
+}
+
+/** combine: the paired node-report flags, a fresh --out, each node report sha-checked before it is parsed, the sum built
+ *  in memory, and only then --out, with counters-combined.json written once. Every refusal comes before --out exists. */
+export function combineCommand(flags) {
+  checkFormFlags('combine', flags);
+  const paths = flags['node-report'];
+  const shas = flags['node-report-sha256'];
+  if (paths.length !== shas.length) refuse('args-invalid', `--node-report given ${paths.length} times, and --node-report-sha256 ${shas.length}`);
+  refuseUnlessFresh(flags.out);
+  const nodes = paths.map((p, i) => loadInput('node-report', p, shas[i], undefined, MEASURE_CAP));
+  return writeReport(flags.out, COUNTERS_COMBINED_FILE, combineReports(nodes));
+}
+
+// ── the measures, composed (W2-D87): every counter's spec, in COUNTER_NAMES' order ──────────────────────────────────
 
 /** One CounterSpec per counter, keyed and ordered as COUNTER_NAMES (countersReport throws on anything else). Each
  *  counter's task replaces its own line and declares its spec above this block. */
@@ -736,7 +983,7 @@ export const COUNTER_MEASURES = Object.freeze({
   lag: LAG,
   card_served: CARD_SERVED,
   card_id_mismatch: CARD_ID_MISMATCH,
-  rediscovery: PENDING,
+  rediscovery: REDISCOVERY,
 });
 
 /** The entry: the umask first (W2-D53), then the driver's grammar with this file's specs and subcommands. */

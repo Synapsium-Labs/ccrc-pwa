@@ -3645,6 +3645,8 @@ cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t 'expa
 
 Expected: green. `single-definition` runs whole, because its O14 corpus scans `deploy/`: this section declares no `VOCABS` name and no second `FACT_KINDS` or `LABELS`. `dtbd`: the departure is cited by its issued number. `history-recall -t 'expandEntryBody'`: the W2-1 export this task reads is unchanged; if the filter selects nothing, run the file whole.
 
+*Measured over predicted (Task 3, U17):* Steps 3 and 5 measured as predicted (25 failed and 45 passed red, the two Task 1 reds the import CONTROL's "the counter itself" line and the import pin; 70 passed green). Every mutant M1 to M20 measured red on the predicted cases (M3, M6, M10 and M14 two failures each, the rest one). The whole-file run measured 1201 passed and one failure, W2-5b1's D-6482 spawn-timing case, which passed alone (2 passed); the task report records a later whole-file run. `typecheck-tests` 12 passed and `deviation-refs` 31 passed. No prediction needed correcting.
+
 - [ ] **Step 8: Commit.**
 
 ```bash
