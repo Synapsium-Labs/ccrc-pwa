@@ -1994,8 +1994,15 @@ export interface StallCoordBlockedInput {
 interface StallCoordHeld { readonly delivery: StallDeliveryRow; readonly mail: StallMailRow; readonly since: number }
 
 /** Why the mail is held, read from the coordinator's live word and turn marker. Each is one of the census's holds, and
- *  `STALL_COORD_GATE_TEXT` words it for the operator. */
-export type StallCoordGate = 'waiting' | 'background' | 'busy' | 'busy-unread' | 'idle';
+ *  `STALL_COORD_GATE_TEXT` words it for the operator. Declared once here: `isStallCoordGate` admits these words to
+ *  mail-routes.test.ts's kebab census, and the type derives from the tuple. */
+export const STALL_COORD_GATES = ['waiting', 'background', 'busy', 'busy-unread', 'idle'] as const;
+export type StallCoordGate = (typeof STALL_COORD_GATES)[number];
+const STALL_COORD_GATE_SET: ReadonlySet<string> = new Set<string>(STALL_COORD_GATES);
+/** True for every coord-blocked gate reason. It is derived from `STALL_COORD_GATES`, never a hand list. */
+export function isStallCoordGate(token: string): token is StallCoordGate {
+  return STALL_COORD_GATE_SET.has(token);
+}
 const STALL_COORD_GATE_TEXT: Record<StallCoordGate, (children: number) => string> = {
   waiting: (k) => `the coordinator is waiting on you (an open question); ${k === 1 ? '1 child mail is' : `${stallInt(k)} child mails are`} queued behind it`,
   background: () => 'held behind a background workflow',
