@@ -159,4 +159,3 @@ describe('W29: the usage sweep reads its days from ~/.ccrc/ccrc.env through ccrc
     expect(existsSync(path.join(h, 'scanner-argv'))).toBe(false);
   });
 });
-

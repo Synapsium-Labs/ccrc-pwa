@@ -847,4 +847,3 @@ describe('W29: the keepalive reads its settings from ~/.ccrc/ccrc.env through cc
     expect(turns()).toEqual([]);
   });
 });
-

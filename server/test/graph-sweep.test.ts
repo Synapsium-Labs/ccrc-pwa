@@ -2072,4 +2072,3 @@ describe('W29: the sweep reads its settings from ~/.ccrc/ccrc.env through ccrc\'
     expect(reboot(placedSweep).status, 'the placed reader is found where the install puts it').toBe(0);
   });
 });
-
