@@ -1,6 +1,7 @@
 // ARCH-60 follow-up (#1407, part of #795): which birth is the occupant's of a session id. The read (`anchoredIncarnation`)
-// takes only the birth the worker's OWN minting run recorded; the write (`CoordStore.stampOccupantBirth`) stamps the newest
-// birth on record unless the name was adopted since. They agree on a live worker, and bindingOf, claimantsOf, boundRunsOf,
+// takes only the birth the worker's OWN minting run recorded, and only while no newer birth is on record for the id; the
+// write (`CoordStore.stampOccupantBirth`) stamps the newest birth on record unless the name was adopted since. They agree
+// on a live worker, and bindingOf, claimantsOf, boundRunsOf,
 // openRunsForSession, sessionRunRead and withChildIds answer about the same occupant.
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -57,7 +58,7 @@ describe('the occupant\'s birth: one rule for the stamp and the anchor', () => {
     expect(stamped.sessionBornAt).toBe(expected);
     const raw = markedBy(s, minting);
     expect(raw).toMatchObject({ kind: 'unborn', why: 'unplaceable', recordedAt: BORN });
-    expect(anchoredIncarnation(raw)).toMatchObject({ kind: 'born', bornAt: expected });
+    expect(anchoredIncarnation(series(s, 'demo-w'), raw)).toMatchObject({ kind: 'born', bornAt: expected });
   });
 
   it('an unplaceable incarnation whose minting run recorded no birth of its own is never anchored to a birth another run recorded', () => {
@@ -65,7 +66,20 @@ describe('the occupant\'s birth: one rule for the stamp and the anchor', () => {
     reusedName(s);
     const bare = unbornIncarnation('demo-w', 'unplaceable');
     expect(occupantBirthOf(series(s, 'demo-w'), 'demo-w')).toBe(BORN);
-    expect(anchoredIncarnation(bare)).toBe(bare);
+    expect(anchoredIncarnation(series(s, 'demo-w'), bare)).toBe(bare);
+  });
+
+  it('a minting run\'s own birth is no anchor once the series records a NEWER birth for the id: the id-string rule, as the stamp then disagrees', () => {
+    const s = store();
+    const { minting } = reusedName(s);
+    const later = open(s, 'prog-later', 'coord-x', BORN + 100);
+    s.setSession(later, 'demo-w', BORN + 500);
+    const raw = markedBy(s, minting);
+    expect(raw).toMatchObject({ kind: 'unborn', why: 'unplaceable', recordedAt: BORN });
+    expect(occupantBirthOf(series(s, 'demo-w'), 'demo-w')).toBe(BORN + 500);
+    const anchored = anchoredIncarnation(series(s, 'demo-w'), raw);
+    expect(anchored).toMatchObject({ kind: 'unborn', why: 'unplaceable' });
+    expect(anchored).not.toHaveProperty('recordedAt');
   });
 
   it('the stamp reads the same run set as the anchor: a run an older build rebound away keeps a birth for the id, and neither half reads it', () => {

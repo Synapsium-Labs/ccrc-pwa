@@ -54,10 +54,13 @@ export type ChildBirth =
   | { readonly kind: 'unplaceable'; readonly detail: string;
       /** Set on ONE arm only, the re-stamped dispatch: the minting run still records a birth for THIS session id
        *  (`sessionBornFor === sessionId`), but its `dispatchStartedAt` moved, so no PR row is placed against it. It is
-       *  still the birth the occupant's own minting run recorded, and the run binding reads it
-       *  (`runBinding.anchoredIncarnation`, D-5920). After a cross-build rollback and a same-id redraw it is the earlier
-       *  occupant's birth on that SAME run; the binding then counts that run's history as this occupant's, as the
-       *  id-string rule did already. Every other arm has no birth of the occupant's own run to give. */
+       *  still the birth the occupant's own minting run recorded, and the run binding anchors to it while it is the newest
+       *  birth the worker's series records for the id (`runBinding.anchoredIncarnation`, D-5920). After a cross-build
+       *  rollback and a same-id redraw it is an earlier occupant's birth on that SAME run. While it is still the newest,
+       *  the stamp writes it on the live occupant's waves too, and the binding counts that run's history as this
+       *  occupant's, as the id-string rule did already. When a newer birth is on record, the live occupant's waves carry
+       *  that one instead, so the binding does not anchor and keeps the id-string rule. Every other arm has no birth of
+       *  the occupant's own run to give. */
       readonly recorded?: number };
 
 /** The clock-skew allowance either side of a birth, in ms. The birth is the

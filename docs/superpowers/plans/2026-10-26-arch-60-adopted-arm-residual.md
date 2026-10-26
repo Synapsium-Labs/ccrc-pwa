@@ -35,16 +35,23 @@ bind sites go to 0" is met for every site except that one, which is named below.
   an earlier occupant that is still open also names the id. Without a birth the columns cannot tell it apart, so
   `claimantsOf` still lists its claimant after the adopting one.
   Neither half borrows a birth that another run recorded for the id:
-  - **The read.** `anchoredIncarnation` (`server/src/coord/runBinding.ts`, applied by `bindsRun`) anchors an
+  - **The read.** `anchoredIncarnation` (`server/src/coord/runBinding.ts`, applied over the worker's series by
+    `bindingOf`, `claimantsOf` and `boundRunsOf`, and by `runWire.incarnationsOfSessions` for `childrenOf`) anchors an
     `unplaceable` worker only to the birth its OWN minting run recorded for it. That is the re-stamped arm of
     `childBirthOf`, which carries the birth as `recorded`. An adopted worker's minting run records none, so it is never
     dated to an earlier occupant. The first anchor of this PR (`0d1b8ead5`) took the newest birth on record for the id
-    and made the earlier occupant's open run the parent, the D6 ghost (D-5920).
+    and made the earlier occupant's open run the parent, the D6 ghost (D-5920). The anchor also holds only while that
+    birth is the newest the series records for the id, which is what the stamp writes. After a cross-build rollback
+    with a same-id redraw, a newer birth is on record, the live occupant's new-build waves carry it, and the worker
+    keeps the id-string rule, as on the merge base. Pinned in `run-binding-bind-records.test.ts` ("the stamp and the
+    anchor agree after a cross-build rollback"), red at `b974fc5e7`.
   - **The write.** `occupantBirthOf`, the stamp's source, answers no birth when a run of the series names the id,
     records no birth, and was dispatched after the newest birth on record. That shape is an adoption, because every
     fresh spawn records its birth as its own `dispatchStartedAt`. So a later wave bound to an adopted worker records
     nothing, and it too reads by the id-string rule.
   The adopted read-back case in `server/test/run-binding-bind-records.test.ts` pins both halves: an earlier occupant's
   run still open, the name adopted, then a later wave. `childParentOf`, `claimantsOf` and `sessionRunRead` answer the
-  adopting run's claimant, and the later wave records no birth. That case is red at `0d1b8ead5`. The census pins the arm
+  adopting run's claimant, and the later wave records no birth. The read half is red at `0d1b8ead5` and green on the
+  merge base (`ccba6f9b6`). The stamp half is red on the merge base, whose placeable-only stamp gave the later wave the
+  earlier occupant's birth. The census pins the arm
   by name, so a change that makes it record a birth, or a new arm that records none, reds the suite.

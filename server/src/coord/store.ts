@@ -3059,8 +3059,8 @@ export class CoordStore {
   /** Stamp run `runId` (just bound to `sessionId`, with no birth of its own) with the occupant's birth: `occupantBirthOf`
    *  (`coord/runBinding.ts`, the one rule) over the session's series as `bindingRunsOf` reads it
    *  (`run-binding-occupant-birth.test.ts` pins a rebound run's birth outside the series). Placement of the minting run plays
-   *  no part, so a worker whose `dispatchStartedAt` moved is stamped with the birth its own minting run recorded, the one
-   *  `anchoredIncarnation` reads for it. Write-once: a run that carries a birth keeps it. A session with no birth on record
+   *  no part, so a worker whose `dispatchStartedAt` moved is stamped with the newest birth on record; `anchoredIncarnation`
+   *  anchors to its minting run's birth only when it is that one, else keeps the id-string rule. Write-once: a run that carries a birth keeps it. A session with no birth on record
    *  (a coordinator, a manual workspace), one whose series ADOPTED the name after the newest birth on record (D-6993: that
    *  birth may be an earlier occupant's, never the adopted worker's own), or whose series cannot be read stays unstamped
    *  and keeps the id-string rule. On a worker alive across migration 16 the newest birth can be a
