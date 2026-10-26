@@ -9,11 +9,18 @@
 # chain, never a drop-in file, the slice-policy gate's rule from #84) and fails
 # loudly when any ancestor's protection is below the agent's own.
 #
+# It reads the agent's enforced io.weight the same way. No io.weight file means
+# the io controller is not delegated to the user manager (stock user@.service
+# delegates pids memory cpu only), so IOWeight=1000 is dropped: that is part of
+# the root step. A weight only acts on a device running io.cost or BFQ, so the
+# green line says "enforced (io.cost|bfq)" or "set but inert", never more.
+#
 # Exit 0: every ancestor protects at least the agent's memory.min.
-# Exit 1: the agent's own protection, or a user-manager-owned ancestor
-#         (app.slice), is short or unreadable. deploy.sh installs those, so
+# Exit 1: the agent's own protection or io.weight, or a user-manager-owned
+#         ancestor (app.slice), is short or unreadable. deploy.sh installs those, so
 #         this is a broken deploy and it fails.
-# Exit 2: only root-owned ancestors (user@<uid>.service and above) are short.
+# Exit 2: only root-owned ancestors (user@<uid>.service and above) are short,
+#         or io is not delegated to user@<uid>.service.
 #         The exact root step is printed; this gate never runs sudo itself, and
 #         it keeps reporting until the step is done.
 #
@@ -63,6 +70,16 @@ done
 case "$cg" in */user-[0-9]*.slice/*) uid="${cg#*/user-}"; uid="${uid%%.slice/*}" ;; esac
 uid="${uid:-$(id -u)}"
 
+# io.weight reads `default <n>` plus per-device lines; its absence is the
+# missing delegation, not a broken deploy.
+io_pending="" io_bad=""
+if [ -r "$root$cg/io.weight" ]; then
+  w="$(awk '$1 == "default" { print $2; exit }' "$root$cg/io.weight" 2>/dev/null || true)"
+  [ "$w" = 1000 ] || io_bad="${w:-<none>}"
+else
+  io_pending="IOWeight not enforced: the io controller is not delegated to user@${uid}.service (ccrc-agent.service has no io.weight)."
+fi
+
 # The agent's own counters: `low` counts reclaims below memory.low, `oom_kill`
 # the kills. The kernel keeps no counter for a memory.min breach.
 events="$(grep -E '^(low|oom|oom_kill) ' "$root$cg/memory.events" 2>/dev/null | tr '\n' ' ' || true)"
@@ -72,16 +89,34 @@ if [ -n "$user_short" ]; then
   echo "deploy: protect-chain: FAILED — user-manager ancestors below the agent's memory.min (${want}):${user_short}. Check ~/.config/systemd/user/app.slice.d/50-ccrc-agent-protect.conf and run systemctl --user daemon-reload." >&2
   exit 1
 fi
-if [ -n "$root_short" ]; then
+if [ -n "$io_bad" ]; then
+  echo "deploy: protect-chain: FAILED — ccrc-agent.service enforces io.weight default=${io_bad}, not 1000. Check ~/.config/systemd/user/ccrc-agent.service.d/protect.conf and run systemctl --user daemon-reload." >&2
+  exit 1
+fi
+if [ -n "$root_short" ] || [ -n "$io_pending" ]; then
   src="$HOME/ccrc/deploy/systemd-root"
   {
-    echo "deploy: protect-chain: PENDING ROOT STEP — root-owned ancestors below the agent's memory.min (${want}):${root_short}."
-    echo "  Until it is done the agent's memory protection is 0 under a thrash (#1170). As root on this box:"
+    if [ -n "$root_short" ]; then
+      echo "deploy: protect-chain: PENDING ROOT STEP — root-owned ancestors below the agent's memory.min (${want}):${root_short}."
+      echo "  Until it is done the agent's memory protection is 0 under a thrash (#1170)."
+    fi
+    [ -z "$io_pending" ] || echo "deploy: protect-chain: PENDING ROOT STEP — ${io_pending}"
+    echo "  As root on this box:"
     echo "    sudo install -D -m 644 $src/user.slice.d/50-ccrc-agent-protect.conf /etc/systemd/system/user.slice.d/50-ccrc-agent-protect.conf"
     echo "    sudo install -D -m 644 $src/user-UID.slice.d/50-ccrc-agent-protect.conf /etc/systemd/system/user-${uid}.slice.d/50-ccrc-agent-protect.conf"
     echo "    sudo install -D -m 644 $src/user@UID.service.d/50-ccrc-agent-protect.conf /etc/systemd/system/user@${uid}.service.d/50-ccrc-agent-protect.conf"
     echo "    sudo systemctl daemon-reload"
+    [ -z "$io_pending" ] || echo "  The next agent deploy re-reads IOWeight; while io.weight is still missing the gate keeps saying so (a running user manager may need restarting to pick up Delegate=, which stops every session)."
   } >&2
   exit 2
 fi
 echo "deploy: protect-chain: every ancestor protects at least ${want} (enforced values verified)"
+# io.cost.qos lives on the root cgroup only; io.bfq.weight appears when BFQ is
+# the scheduler of a device the io controller covers.
+if grep -qs 'enable=1' "$root/io.cost.qos"; then
+  echo "deploy: protect-chain: io.weight=1000 enforced (io.cost)"
+elif [ -e "$root$cg/io.bfq.weight" ]; then
+  echo "deploy: protect-chain: io.weight=1000 enforced (bfq)"
+else
+  echo "deploy: protect-chain: io.weight=1000 is set but inert: no device runs io.cost and the agent has no io.bfq.weight (mq-deadline or none), so its I/O is not prioritised"
+fi

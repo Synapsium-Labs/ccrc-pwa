@@ -6121,7 +6121,9 @@ killed and nothing logged.
 runtime `set-property` drop-in can reinstate one), checks the value systemd actually enforces with
 `deploy/assert-slice-policy.sh` after `daemon-reload`, and gives `ccrc-agent.service` `MemoryMin=512M`,
 `MemoryLow=768M`, `MemorySwapMax=0`, `IOWeight=1000`, `CPUWeight=5000` (`ccrc-agent.service.d/protect.conf`) so
-the control plane still answers under pressure. That protection holds only when every ancestor declares at least as
+the control plane still answers under pressure. `IOWeight` acts only with the io controller delegated (the root-owned
+`user@<uid>.service` drop-in adds `Delegate=… io`) and a device on io.cost or BFQ; the gate below reads the enforced
+`io.weight` and says `enforced` or `inert`. That protection holds only when every ancestor declares at least as
 much (#1170: under `memory_recursiveprot` a parent's protection caps its child's), so it also lands
 `app.slice.d/50-ccrc-agent-protect.conf`, and after the restart `deploy/assert-protect-chain.sh` reads the enforced
 `memory.min` along the agent's cgroup chain. The three ancestors above `app.slice` (`user.slice`,
