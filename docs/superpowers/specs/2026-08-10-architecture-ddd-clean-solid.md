@@ -259,6 +259,11 @@ reaches and a row that names no file are both red.
 
 ## Increments — each rides queued work, none is a standalone refactor PR
 
+**Amended by the operator on 2026-10-19 (ARCH-02b, #537):** a series may land standalone when its
+first commit is a characterization pin and its exit criteria are counted; everything else still rides
+queued work. The ruling and the series it names are recorded under "Rejected, so nobody relitigates it"
+below.
+
 1. **"An account" becomes a type with one home**, and the registry read stops answering
    `null` for four different facts. → rides the in-flight `fix/registry-read-storm`.
 2. **The hooks install lane derives its homes from the roster**, closing the silent mail
@@ -335,4 +340,29 @@ D-6992):
   `Deps` literals across 7 test files.
 - **Splitting `CCD_ARGV` per context** — `whitelist-subset.test.ts` depends on one flat
   table with exhaustive `Object.keys`.
-- **Decomposing `FleetWatcher` into a lane interface.**
+- **Decomposing `FleetWatcher` into a lane interface.** Re-affirmed by the operator on
+  2026-10-19 (ARCH-02b, #537), when it had grown to about 20 lanes: the lanes stay methods driven by
+  one `LANE_SCHEDULE` table and a `runLane` helper on the same class, and the deciders leave for L1
+  modules (DECIDE, #521). A per-context scheduler class would reopen this item.
+
+**Rulings recorded for ARCH-02b (#537).** The operator ruled the first three on 2026-10-19 ("answers
+locked", in the consolidation-wave spec, `2026-10-19-ccrc-consolidation-wave-design.md`, decisions O2,
+O4 and O9) and confirmed the two proposed rejections on 2026-10-26. Each is settled; reopening one
+needs a new operator ruling, not a PR.
+
+- **Kept: one lane schedule table, not lane classes** (operator, 2026-10-19, O4 (a)). The entry
+  above; one table and one helper keep "no lane interface" and still let the deciders move to L1.
+- **Allowed: standalone PRs for a series that starts with a characterization pin** (operator,
+  2026-10-19, O9 (a)). The pin proves the move changed no behaviour, so the series needs no feature
+  to ride; its exit criteria must be counted, and everything else still rides queued work. It extends
+  the enforcement-only allowance this ticket proposed for ARCH-00, ARCH-01, ARCH-04 stage 1, ARCH-06,
+  ARCH-12, ARCH-23 and the defect fixes ARCH-08 and ARCH-13a.
+- **Rejected: compiling policy across languages** (operator, 2026-10-19, O2 (b)). One rule set is
+  written once and called, never generated into a second language; a single `.mjs` that bash calls is
+  one implementation, not a compiled one, so the docs redactor's move to `redact.mjs` is not this.
+- **Rejected: runtime-sourced ccd siblings** (operator, 2026-10-26). ccd never loads sibling scripts
+  chosen at run time; it loads only fixed, digest-checked libraries (the #1404 model), so what runs on
+  the box stays auditable. Splitting `ccd/ccd` waits on ARCH-34's manifest (#536).
+- **Rejected: moving ccd's rotation and reap decisions to the server** (operator, 2026-10-26). They
+  stay in ccd on the box, next to the files they touch, so they still work when the server is down;
+  the server only shows and arms them (CCD, #522).
