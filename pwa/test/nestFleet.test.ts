@@ -13,7 +13,12 @@
 import { describe, it, expect } from 'vitest';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { nestFleet, type FleetRow } from '../src/fleet/nestFleet';
+import { nestFleet as nestFleetOf, type FleetRow } from '../src/fleet/nestFleet';
+import { fingerprint, recording, type Recorded } from './characterise';
+
+/** W4-U0: every `nestFleet` call this file's cases make, recorded (see `characterise.ts`). */
+const nestCalls: Recorded<Parameters<typeof nestFleetOf>>[] = [];
+const nestFleet = recording(nestFleetOf, nestCalls);
 
 const sess = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
   fleetSession({ id, project: 'ccrc-pwa', workspace: id, ...over });
@@ -294,5 +299,38 @@ describe('nestFleet — the top-level order is never re-sorted', () => {
     const sessions = [sess('other'), sess('w1'), sess('coord'), sess('unrelated')];
     const rows = nestFleet(sessions, [run({ id: 10, sessionId: 'w1', claimedBy: 'coord' })]);
     expect(shape(rows)).toEqual([['other', 0], ['coord', 0], ['w1', 1], ['unrelated', 0]]);
+  });
+});
+
+describe('W4-U0: today\'s tree, characterised before delegation rows (delegation broker wave 4)', () => {
+  it('every fixture set above renders the JSON captured on main', () => {
+    expect(nestCalls.length).toBeGreaterThan(0);
+    expect(nestCalls.map((c) => fingerprint(c.json))).toMatchInlineSnapshot(`
+      [
+        "2bffe5950fff5163",
+        "43a1169adfa5e2d8",
+        "8df4817c8092272a",
+        "8df4817c8092272a",
+        "b94765633b4d3566",
+        "98537a41a199f760",
+        "b94765633b4d3566",
+        "ef5e0ac0b4114dca",
+        "77e3dcf05707c9c8",
+        "77e3dcf05707c9c8",
+        "aa9c24856df817c5",
+        "57332bdbe06e0ed7",
+        "870918a8489edb77",
+        "ce7ca936c311b189",
+        "40ef9e66f94b067b",
+        "6ec5fc10479b31f1",
+        "82e2586d2f8138f8",
+        "6ec5fc10479b31f1",
+        "b1a41047b1c626cd",
+        "d2291ee3d9e4430e",
+        "82e2586d2f8138f8",
+        "09799459a9caf788",
+        "59b98ddf71241c8a",
+      ]
+    `);
   });
 });

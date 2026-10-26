@@ -3,7 +3,12 @@
 import { describe, expect, it } from 'vitest';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { cardsOf, coordinationLine, coordinationOf, fleetTree, workingOn } from '../src/fleet/fleetTree';
+import { cardsOf, coordinationLine, coordinationOf, fleetTree as fleetTreeOf, workingOn } from '../src/fleet/fleetTree';
+import { fingerprint, recording, type Recorded } from './characterise';
+
+/** W4-U0: every `fleetTree` call this file's cases make, recorded (see `characterise.ts`). */
+const treeCalls: Recorded<Parameters<typeof fleetTreeOf>>[] = [];
+const fleetTree = recording(fleetTreeOf, treeCalls);
 import { STATE_WORD } from '../src/fleet/sessionFacts';
 import { childOfRunLabel } from '../src/fleet/runWords';
 
@@ -257,5 +262,28 @@ describe('the header title for a review run', () => {
     const review = run({ id: 42, kind: 'review', reviews: 41, sessionId: 'lane-b-project-b-quiet-river' });
     const c = coordinationOf(crossChild('project-a'), [coordinator, crossChild('project-a')], [review])!;
     expect(coordinationLine(c).title).toMatch(/^this workspace reviews one wave of Port the API/);
+  });
+});
+
+describe('W4-U0: today\'s tree, characterised before delegation rows (delegation broker wave 4)', () => {
+  it('every fixture set above renders the JSON captured on main', () => {
+    expect(treeCalls.length).toBeGreaterThan(0);
+    expect(treeCalls.map((c) => fingerprint(c.json))).toMatchInlineSnapshot(`
+      [
+        "a48a8a8944dabac1",
+        "f2685f37d215bc28",
+        "8457bcecc0f9c082",
+        "cc5408b98de706a9",
+        "cc5408b98de706a9",
+        "523eb05d61046d4f",
+        "f2741f3537ed80ce",
+        "724f9bb16da4d414",
+        "c10bc21bac898d22",
+        "28200fa61fabf297",
+        "8e821b08d9c119a7",
+        "b54c0f53a983c56c",
+        "bdaf767594fe78fc",
+      ]
+    `);
   });
 });
