@@ -26,7 +26,7 @@ import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
-import { claimantsOfSession, coordinatorOfRun, runsTouching, workerOfRun } from './bindingReads.js';
+import { coordinatorOfRun, runsTouching, workerOfRun } from './bindingReads.js';
 import { readSessionSpendMeasured } from '../shares.js';
 import { boundSessionsOf, joinRunSpend } from './runSpend.js';
 import { pageInbox, renderEnvelope, renderInboxEntry } from './envelope.js';
@@ -1476,7 +1476,7 @@ export function registerCoordRoutes(
       // two conditions the verdict handles differently (design §3 F2).
       programKnown: (slug) => coord.programs().some((p) => p.slug === slug),
       programHome: (slug) => coord.programHome(slug),
-      openClaimantsOf: (s) => claimantsOfSession(coord, s),
+      openClaimantsOf: (s) => coord.bindingsOf(s).claimants(),
       // D-5298 (coordinator-first Task 11b, spec §6.4): the three registry
       // facts, each read only by the gate that needs it. The switch-over reads
       // this box's role (as `config.ts`'s `deriveRole` decided it), its own
