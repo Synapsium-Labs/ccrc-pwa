@@ -3,12 +3,15 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
 **Goal:** Ship the pilot and the verdict of W2's replay eval in ONE PR on `main`. This is the second of the two serial PRs the coordinator split the deploy lane's W2-5b into (S1). W2-5b1, "the arms and the judge", shipped `marker`, `verify --section pilot|quiz`, `arms --section pilot|quiz` and `judge --section pilot|quiz`. This PR ships `step0b`, `fidelity`, `pilot-result`, `open --amend`, `handcheck --sheet` and `report`; edits `open --finalize`; and carries README's driver paragraph and the spec errata W2-5b owes. It is the scoping study's Tasks 6 to 11. It runs after W2-5b1 merges, on a base that holds W2-2b (#1154), W2-5a (#1134) and W2-2a (#1126). It turns W2-5b1's engine and judge into the acts the operator runs at the pilot, at part 2, during the window and at the verdict (decisions §5, acts 14, 17, 21, 22 and 24). Nothing here runs a real model: every spawn in the tests reaches W2-4's recording stub. Task by task:
-- **Task 1 (W2-D57, W2-D58, W2-D56, W2-D78, W2-D24, W2-D50, W2-D59; Q10, Q11, Q23, Q24, Q25, Q26, Q31; R1; K1, K3, K4).** `step0b --section pilot` has two parts. The box batch is W2-4's `step0bMechanics`: its turn bound now counts main-thread messages through W2-5b1's `facts.messages` (`mainThreadTurns`, R1), and its persistence check is guarded so that an unreadable `projects/` is `unmeasured`, never clean and never an exit 1 after `--out` (`persistenceMeasured`). The arm part is seven treatment-arm runs on the first usage question in qid order, each run's stdin the card line, one blank line, then the probe: each taught spelling admitted, three denial probes over a synthetic transcript path that does not exist, and one Agent call whose subagent's tool list is recorded as inferred (Q11). Every arm run's init event must show exactly the arm argv's tools, no MCP server, no plugin, and the `ccrc-history` skill. Every check is `pass`, `fail` or `unmeasured`, never folded. The result is written under `--out` and its sha printed, and a pilot that did not pass then refuses with the one new driver word, `pilot-failed`, classified once as a refusal (Q24). Run names and the result path carry the settings mode, so Q26's `--settings-mode fallback` re-run lands beside the restricted one. Q25's refusal is declared here once, `refusePilotSourceOut` (K4), and the seams Task 3's re-pilot extends are built here (K1).
-- **Task 2 (W2-D76, W2-D55, W2-D64, W2-D82, W2-D56, W2-D24; Q6 to Q10, Q25, Q26, Q27; K2, K3, K13 to K15, K21; D-6280, D-6644; review 811's F2 to F5).** `fidelity --section pilot` runs in box mode with no marker (Q8), checked against part 1's pilot through `--pilot`/`--pilot-sha256` (Q9). It reads the original side from the store (`fidelityOriginalOf`), spawns three box-mode runs per boundary behind `preflightSpawn` (`fidelityBoundariesOf`, the one per-boundary measurement), and compares exactly in integers against part 1's tolerance. W2-5b1's `arms` and `judge` pilot forms, and `fidelity`, take `--step0b`/`--step0b-sha256` and then run in a passed step 0b result's settings mode (K2, `step0bModeOf`). `pilot-result --section pilot` writes the producer contract W2-5a's `pilotResultError` reads (now exported and tightened). Its contents: Q6's extrapolation with its formula and inputs (margin 5/4), W2-D64's absent rate per arm, W2-D82's `is_error` reading with D-6644's third reading `unseen` (in part 2 at `pilot_result.usage_extrapolation.uptake.quiz_uptake`, read through `quizUptakeReadingOf`, K15), both spend readings and their measured relation (Q7), step 0b's sha and settings mode, and every failure (Q10, K13). Every pilot act writes its file and prints its sha, then refuses `pilot-failed` on a failure (K3). `open --finalize` refuses a pilot result written under another part 1, naming both shas (K21), derives `spend_budget` exactly, in BigInt, and refuses an echo that differs (closing D-6280). It also refuses a failed pilot `pilot-failed` unless `--accept-failed-pilot` is given, which prints the file's failures (Q27, K14). The ledger's review-811 carries land here: `settings_mode` refused before `--out` through one row, `settingsModeRow` (F4); the threshold and `max_age_ms` rows red on the `--out` hazard (F2); the precedence pin (F3); the unit case's title (F5).
-- **Task 3 (W2-D90, W2-D56, W2-D6, W2-D7, W2-D24; Q8, Q12, Q13, Q14, Q23; R30; K1, K3, K6, K7, K13, K22).** The mid-window re-pilot (Q12, K1): `step0b --section quiz` on this node's first frozen quiz question, `fidelity --section quiz` in box mode over its first `n_fidelity` distinct frozen quiz boundaries, and `pilot-result --section quiz`, which writes `quiz/repilot-result.json`, recording the re-pilot's own spend (K22), and prints its sha; each preflight compares with the version the re-pilot measures, pinned once per `--out`. `open --amend` prints a superseding part 2 that appends exactly one amendment in the validator's shape. Its detail follows Q13's schemas as K6 amends them: `version-move` `{claude_code_version, repilot_sha256}` with `--node-label` and a passed re-pilot result of this record, node and version required, `freeze-exception` `{surface, ruling, release_tag?}`, `forced-act` `{act, at_ms}`. A freeze exception's release is admitted on its node under `--allow-code-change`, stamped `code-changed` (K6). It reads part 2 through `loadFinalRecord`, re-checking `gate_code` first. It checks its output through the validator and the part 2 ranges before printing, writes nothing, and prints the sha on stderr. The version preflight is round-tripped on its output. W2-D56's both-arms re-run lands here: a question half-done on another version (read from W2-5b1's per-batch manifests, Q14) moves to the node's newest move, and both of its arms re-run under `<arm>.m<i>.a<n>`, starting at attempt 1 (K7). With no move, every run name and behaviour stays W2-5b1's byte for byte.
+- **Task 1 (W2-D57, W2-D58, W2-D56, W2-D78, W2-D24, W2-D50, W2-D59; Q10, Q11, Q23, Q24, Q25, Q26, Q31; R1; K1, K3, K4, K26, K28).** `step0b --section pilot` has two parts. The box batch is W2-4's `step0bMechanics`: its turn bound now counts main-thread messages through W2-5b1's `facts.messages` (`mainThreadTurns`, R1), and its persistence check is guarded so that an unreadable `projects/` is `unmeasured`, never clean and never an exit 1 after `--out` (`persistenceMeasured`). The arm part is seven treatment-arm runs on the first usage question in qid order, each run's stdin the card line, one blank line, then the probe: each taught spelling admitted, three denial probes over a synthetic transcript path that does not exist, and one Agent call whose subagent's tool list is recorded as inferred (Q11). Every arm run's init event must show exactly the arm argv's tools, no MCP server, no plugin, and the `ccrc-history` skill. Every check is `pass`, `fail` or `unmeasured`, never folded. The result is written under `--out` and its sha printed, and a pilot that did not pass then refuses with the one new driver word, `pilot-failed`, classified once as a refusal (Q24). Run names and the result path carry the settings mode, so Q26's `--settings-mode fallback` re-run lands beside the restricted one. Q25's refusal is declared here once, `refusePilotSourceOut` (K4), and the seams Task 3's re-pilot extends are built here (K1). K28 factors W2-5b1's two all-readings-agree loops (`armBatchPreflight`'s and `judgeCommand`'s) into one module-private `maskingAgreementOf`, in place and byte for byte, and step 0b's card preflight calls it before `--out` and before every arm batch, refusing `input-invalid` `masking-snapshots-disagree step0b` when a pair learned between preflights makes the retained readings disagree (K26).
+- **Task 2 (W2-D76, W2-D55, W2-D64, W2-D82, W2-D56, W2-D24; Q5 to Q10, Q25, Q26, Q27; K2, K3, K13 to K15, K21, K25, K26, K28; D-6280, D-6644, D-6723; review 811's F2 to F5).** `fidelity --section pilot` runs in box mode with no marker (Q8), checked against part 1's pilot through `--pilot`/`--pilot-sha256` (Q9). It reads the original side from the store (`fidelityOriginalOf`), builds each boundary's three stdins under every retained reading of the pair index, which must agree (K26, K28), then spawns them behind `preflightSpawn` (`fidelityBoundariesOf`, the one per-boundary measurement), and compares exactly in integers against part 1's tolerance. W2-5b1's `arms` and `judge` pilot forms, and `fidelity`, take `--step0b`/`--step0b-sha256` and then run in a passed step 0b result's settings mode (K2, `step0bModeOf`). `pilot-result --section pilot` writes the producer contract W2-5a's `pilotResultError` reads (now exported and tightened). Its contents: Q6's extrapolation with its formula and inputs (margin 5/4), W2-D64's absent rate per arm, W2-D82's `is_error` reading with D-6644's third reading `unseen` (in part 2 at `pilot_result.usage_extrapolation.uptake.quiz_uptake`, read through `quizUptakeReadingOf`, K15), both spend readings and their measured relation (Q7), step 0b's sha and settings mode, and every failure (Q10, K13). Every pilot act writes its file and prints its sha, then refuses `pilot-failed` on a failure (K3). `open --finalize` refuses a pilot result written under another part 1, naming both shas (K21), derives `spend_budget` exactly, in BigInt, and refuses an echo that differs (closing D-6280). It also refuses a failed pilot `pilot-failed` unless `--accept-failed-pilot` is given, which prints the file's failures (Q27, K14). The ledger's review-811 carries land here: `settings_mode` refused before `--out` through one row, `settingsModeRow` (F4); the threshold and `max_age_ms` rows red on the `--out` hazard (F2); the precedence pin (F3); the unit case's title (F5). K25 adds `SPEND_SCOPES = Object.freeze(['all', 'judge'])`, pure `judgeSpentOf`, and optional `batchGate` scope. All scope retains `spentSoFar(out)` over the whole parsed ledger. Judge scope parses that same full ledger first, then sums only exact `<section>/judge/` names for both `ARM_SECTIONS`; unknown scope is a `TypeError` and unsafe totals refuse. Only `openJudge` selects judge scope; its `node.budget`, preflights, and `judged.json.spend: spentSoFar(out)` remain unchanged. Arms stay all scope, judge rows included. Task 2 goes red first with descriptive cases for arm-spend-tolerant judging, malformed non-judge rows refusing before filtering, both kinds of rows counted by arms, exact prefix and overflow, unknown scope, and `judged.json.spend` retaining the whole ledger. JG1, JG2t, JG2f, JG2o, JG3j, JG3a, JG4p, JG4s, JG4o, JG4u, JG5, JG6 and JG7 respectively cover all-versus-judge scope, parse-after-filter, omitted rows, prefix broadening, zero sum, overflow, unknown scope and a scoped `judged.json.spend`; each restores byte-for-byte and re-runs its CONTROL.
+
+- **Task 3 (W2-D90, W2-D56, W2-D6, W2-D7, W2-D24; Q8, Q12, Q13, Q14, Q23; R30; K1, K3, K6, K7, K13, K22, K26, K27, K28).** The mid-window re-pilot (Q12, K1): `step0b --section quiz` on this node's first frozen quiz question, `fidelity --section quiz` in box mode over its first `n_fidelity` distinct frozen quiz boundaries, and `pilot-result --section quiz`, which writes `quiz/repilot-result.json`, recording the re-pilot's own spend (K22), and prints its sha; each preflight compares with the version the re-pilot measures, pinned once per `--out`. `open --amend` prints a superseding part 2 that appends exactly one amendment in the validator's shape. Its detail follows Q13's schemas as K6 amends them: `version-move` `{claude_code_version, repilot_sha256}` with `--node-label` and a passed re-pilot result of this record, node and version required, `freeze-exception` `{surface, ruling, release_tag?}`, `forced-act` `{act, at_ms}`. A freeze exception's release is admitted on its node under `--allow-code-change`, stamped `code-changed` (K6). It reads part 2 through `loadFinalRecord`, re-checking `gate_code` first. It checks its output through the validator and the part 2 ranges before printing, writes nothing, and prints the sha on stderr. The version preflight is round-tripped on its output. W2-D56's both-arms re-run lands here: a question half-done on another version (read from W2-5b1's per-batch manifests, Q14) moves to the node's newest move, and both of its arms re-run under `<arm>.m<i>.a<n>`, starting at attempt 1 (K7). With no move, every run name and behaviour stays W2-5b1's byte for byte. K26: the quiz step 0b, quiz fidelity and re-pilot arm seams reach Task 1's and Task 2's agreement over W2-5b1's retained readings (K28's one `maskingAgreementOf`) before any spawn or input persistence, and refuse `masking-snapshots-disagree <site>` rather than choosing the newest mask. K27 builds both version-move replacement arms from one fresh preflight after resetting old-attempt linkage, so that pair is never treated as an owed arm against an old sibling and cannot enter the sibling-drift exclusion. Its red-first cases cover linkage reset, attempt one, and a genuine payload-change exclusion reported as `run-failed` with its qid (W2-5b1's build departure; re-anchor at W2-5b1's merged code).
+
 - **Task 4 (W2-D81, W2-D54, W2-D24, W2-D79, W2-D18; Q2, Q18, Q19, Q23; K8 to K10, K19; D-6645).** `handcheck --sheet` runs on the reporting node over every node's gathered `quiz/judged.json`, each with its sha. Each file is held to this record, the frozen list and the judge map, which is recomputed and never read. The sample comes from the gate's `handcheckSample` at the signed share. The sheet is blinded: no arm, no judge label, judge-failed items shown like any other, the judge's own masked input per item (D-6645), bound by form (K10). A manifest names every input by sha, and both files are pinned under `--out`. The label reader is strict (Q19): a missing sampled judged label refuses, and a missing judge-failed label leaves decideGate's `incomplete` hold reachable. The override and the agreement come only through the gate's `applyHandcheck` and `handcheckAgreement`.
-- **Task 5 (W2-D85, W2-D89, W2-D22, W2-D23, W2-D82, W2-D24, W2-D34; S2's C15 and C21; Q2, Q15, Q16, Q23, Q28; V1; K8, K11, K12, K23, K24; D-6646).** `report --record <final>` runs after window end. It reads every node's arms summary, judged file, `verify --section quiz` and `--section ab` outputs, `quiz-source` output and `measure-history.py --families` report, plus the label file, each sha-checked before a byte is parsed, every refusal before `--out`; the answer records are held byte for byte to the sha-checked summary and judged file (D-6646), and a verify output whose presence record is stale refuses (K11). It holds them to the record and to each other, then gathers decideGate's inputs keyed by `familyKey`, with the operator's labels over the judge's and the agreement by arm, through Task 4's one hand-check plan (K4). It calls `decideGate` exactly once and writes its answer whole into `verdict.json`, once, with the sha on stderr. The report-only figures follow W2-D85's list. V1's state set and W2-D23's changed families leave every per-arm figure, each listed under its own word; quiz uptake by arm is marked `aggregate-only` when such a drop takes a quiz family, because the node summaries pin uptake only as per-arm sums (K24). RP6-e2e and RP7-e2e run through the report, including one end-to-end walk of W2-5b1's arms and judge on the stub.
-- **Task 6 (W2-D3; S1, V1, U15, W2-6's V5; K16 to K18, K22 (c)).** README's own paragraph, `**The replay driver (W2's eval).**`, sits after W2-2b's headless-seam paragraph and is pinned red-first (K17); W2-2b's seam sentence on the as-of cut is reworded in place to agree with E11 (K16). The twelve errata W2-5b owes (E2, E7 to E11, E19 to E24) are amended in place as eighteen single-line replacements, each citing its number. Then the departures, the whole-PR checks, the Q29 disjointness from W2-6 hunk by hunk, the PR body and the PR.
+- **Task 5 (W2-D85, W2-D89, W2-D22, W2-D23, W2-D82, W2-D24, W2-D34; S2's C15 and C21; Q2, Q15, Q16, Q23, Q28; V1; K8, K11, K12, K23, K24, K27; D-6646).** `report --record <final>` runs after window end. It reads every node's arms summary, judged file, `verify --section quiz` and `--section ab` outputs, `quiz-source` output and `measure-history.py --families` report, plus the label file, each sha-checked before a byte is parsed, every refusal before `--out`; the answer records are held byte for byte to the sha-checked summary and judged file (D-6646), and a verify output whose presence record is stale refuses (K11). It holds them to the record and to each other, then gathers decideGate's inputs keyed by `familyKey`, with the operator's labels over the judge's and the agreement by arm, through Task 4's one hand-check plan (K4). It calls `decideGate` exactly once and writes its answer whole into `verdict.json`, once, with the sha on stderr. The report-only figures follow W2-D85's list. V1's state set and W2-D23's changed families leave every per-arm figure, each listed under its own word; quiz uptake by arm is marked `aggregate-only` when such a drop takes a quiz family, because the node summaries pin uptake only as per-arm sums (K24). RP6-e2e and RP7-e2e run through the report, including one end-to-end walk of W2-5b1's arms and judge on the stub. K27 additionally holds a genuine `arm-payload-changed` exclusion as `run-failed`, counted to W2-D89 and qid-listed among report-only figures (W2-5b1's build departure; re-anchor at W2-5b1's merged code). The existing generic `run-failed` mutation remains the gate-accounting pin; no K27-specific gate-input mutant is added because that asserted seam is refuted.
+
+- **Task 6 (W2-D3; S1, V1, U15, W2-6's V5; K16 to K18, K22 (c), K25 to K27).** README's own paragraph, `**The replay driver (W2's eval).**`, sits after W2-2b's headless-seam paragraph and is pinned red-first (K17); W2-2b's seam sentence on the as-of cut is reworded in place to agree with E11 (K16). The twelve errata W2-5b owes (E2, E7 to E11, E19 to E24) are amended in place as eighteen single-line replacements, each citing its number. Then the departures, the whole-PR checks, the Q29 disjointness from W2-6 hunk by hunk, the PR body and the PR.
 
 Sessions see no change in behaviour. No hook, unit, timer, store, schema, wire or `ccd/**` file changes. The driver opens every store read-only and never writes the headless-on marker or a recall-off file. Running any subcommand on a real node is the operator's (decisions §5), after W2's final release is rolled out (W2-D6), and never the worker's.
 
@@ -19,13 +22,13 @@ Sessions see no change in behaviour. No hook, unit, timer, store, schema, wire o
 Inside the file, decisions stay pure functions over values, and the measuring functions call them:
 - **Pure:**
   - Task 1: `mainThreadTurns`, `turnBoundCheckOf`, `persistenceCheckOf`, `admissionCheckOf`, `denialCheckOf`, `initChecksOf`, `subagentToolsOf`, `step0bVerdictOf`, `step0bFailureDetail`, `armToolsOf`, `step0bProbesOf`, `step0bStdinOf`, `step0bRunName`, `step0bRel`.
-  - Task 2: `decimalOf`, `fidelityRunName`, `fidelityPassOf`, `pilotSourceMismatchOf`, `absentRateCheckOf`, `uptakeReadingOf`, `quizUptakeReadingOf`, `extrapolationError`, `spendBudgetOf`, `spendReadingsOf`, `pilotFailuresOf`, `pilotResultOf`, `settingsModeRow`.
+  - Task 2: `SPEND_SCOPES`, `judgeSpentOf`, `decimalOf`, `fidelityRunName`, `fidelityPassOf`, `pilotSourceMismatchOf`, `absentRateCheckOf`, `uptakeReadingOf`, `quizUptakeReadingOf`, `extrapolationError`, `spendBudgetOf`, `spendReadingsOf`, `pilotFailuresOf`, `pilotResultOf`, `settingsModeRow`.
   - Task 3: `amendmentOf`, `amendedFinal`, `nodeMovesOf`, `nodeExceptionOf`, `runVersionsOf`, `versionSplitOf`, `moveAfterSplit`, `repilotBoundariesOf`, `repilotResultOf`, `repilotResultError`.
   - Task 4: `handcheckPlanOf`, `judgeInputFault`, `handcheckSheetText`, `parseHandcheckLabels`, `handcheckResultOf`.
   - Task 5: `shareOf`, `droppedOf`, `liveUptakeOf`, `firstCallOf`, `quizUptakeOf`, `sameMsHitsOf`, `gateRefusalOf`, `judgeTallyOf`, `gateInputsOf`, `judgedOf`.
 - **Measuring or acting:**
-  - Task 1: `persistenceMeasured`, `step0bMechanics` (edited), `refusePilotSourceOut` (Q25's one refusal, K4) and `step0bCommand`.
-  - Task 2: `spendLinesOf` (the ledger's one reader, which `spentSoFar` now sums), `boundaryEntryIdOf`, `fidelityOriginalOf`, `fidelityBoundariesOf`, `step0bOf`, `step0bModeOf`, `pilotResultError` (exported, tightened), `fidelityCommand`, `pilotResultCommand`, `openFinalize` (edited) and W2-5b1's `loadArmRun` (its pilot branch, K2).
+  - Task 1: `persistenceMeasured`, `step0bMechanics` (edited), `refusePilotSourceOut` (Q25's one refusal, K4), `maskingAgreementOf` (module-private, K28: W2-5b1's `armBatchPreflight` and `judgeCommand` loops factored through it in place, and `step0bCardOf`'s agreement) and `step0bCommand`.
+  - Task 2: `spendLinesOf` (the ledger's one reader, which `spentSoFar` now sums), W2-4's `batchGate` (K25's scope edit) and W2-5b1's `openJudge` gate call (K25's sole judge-scope caller), `boundaryEntryIdOf`, `fidelityOriginalOf`, `fidelityBoundariesOf`, `step0bOf`, `step0bModeOf`, `pilotResultError` (exported, tightened), `fidelityCommand`, `pilotResultCommand`, `openFinalize` (edited) and W2-5b1's `loadArmRun` (its pilot branch, K2).
   - Task 3: `readArmManifests`, `openAmend`, `armStatesOf`, `questionMoveOf`, `repilotExpectedOf`, `fidelityRepilotCommand`, `repilotResultCommand` and `preflightFiles` (edited, K6).
   - Task 4: `loadInputBytes` (factored out of `loadInput`, whose signature W2-6 imports unchanged), `loadHandcheckPlan`, `handcheckSheetOf`, `readHandcheckLabels` and `handcheckCommand`.
   - Task 5: `readAnswerRecords` (`readArmAnswers` becomes its projection), `readInstantOf` and `reportCommand`.
@@ -40,10 +43,10 @@ Every refusal is still W2-4's `DriverRefusal(word, detail)` with a word in `DRIV
 
 *`server/test/history-replay.test.ts`* gains, per task, describes titled `W2-5b2 Task <N>: …`, each with its own prefixed module-level names (`b2t1`, `b2t2`, `b23`, `b2t4`, `b2t5`, `w5b26`). They are placed as follows:
 - Tasks 2 and 3 each nest one describe inside W2-5a Task 7's outer `r7describe`, directly before its closing `});`, which comes before `// ── W2-5a fix wave …`. They go in task order after W2-5b1's nested describes, to reuse its signed fixtures.
-- Every other W2-5b2 describe is appended at the very end of the file, after W2-5b1's last appended block (its Task 6 walk), in task order. Task 6's README pin goes last.
+- Every other W2-5b2 describe is appended at the very end of the file, after W2-5b1's last appended block, in task order. At W2-5b1's final head (`0de4cc990`) that block is `describe('W2-5b1 Task 4: correction Phase A, bounded snapshot helper contract')` (about :15797 to the file's end at :16546), not its Task 6 walk (about :13729-13766), which W2-5b1 Task 4's final fix-wave blocks (about :13768-15795) follow. Task 6's README pin goes last.
 - No W2-5b2 line lands in W2-6's region (Q29 table below).
 
-In-place edits of earlier cases are listed under Global Constraints, licensed by K5.
+In-place edits of earlier cases are listed under Global Constraints, licensed by K5. K25 extends that licence for exactly two code edits only: W2-4's `batchGate` scope and W2-5b1's `openJudge` gate call. It creates no second ledger and edits no W2-5b1 case. K28 extends it by one more: W2-5b1's two all-readings-agree loops (`armBatchPreflight`'s and `judgeCommand`'s) factored into Task 1's `maskingAgreementOf`, behaviour byte for byte; it edits no W2-5b1 case either. The one W2-5b1 case K5 licenses editing (CP-20) is W2-5b1 Task 5's `JUDGE_OUTCOMES are driver-local report words, disjoint from DRIVER_REASONS and GATE_REASONS`: its `HANDLERS.keys()` `.slice(-2)` line, which W2-5b2's first registration after `judge` would red, is re-pinned by Task 1 to `indexOf('judge') === indexOf('arms') + 1`, so it keeps W2-5b1's invariant through every later W2-5b2 registration.
 
 *`README.md`* gains one paragraph, and W2-2b's seam sentence on the as-of cut is reworded in place (K16). *The spec* gains eighteen in-place line replacements (Task 6).
 
@@ -55,7 +58,7 @@ In-place edits of earlier cases are listed under Global Constraints, licensed by
   - Task 3's: `requireListed`, `VERIFY_HEADLESS_KIND` and `verifyHeadlessReport`;
   - Task 4's: `loadArmRun`, `armNodeOf`, `readArmAnswers`, `refuseSpawnAdmission`, `preflightSpawn`, `expectedForNode`, `armRunName`, the batch manifests, `ARMS_SUMMARY_KIND`, `armsSummaryOf`, `streamEventsOf` and `errorFieldsOf`;
   - Task 5's: `JUDGE_DIR`, `JUDGED_FILE`, `JUDGED_KIND`, `judgeMapOf`, `judgeMapText`, `judgePairKey` and `pinOutBytes`.
-- W2-4's driver core: `runBatch`, `launchRun`, `spawnArgv`, `spawnEnv`, `admitAccount`, `batchGate`, `preflight`, `preflightFiles`, `prepareOut`, `claimOut`, `step0bMechanics`, `turnBoundHeld`, `persistenceLeft` and `probeFindingOf`.
+- W2-4's driver core: `runBatch`, `launchRun`, `spawnArgv`, `spawnEnv`, `admitAccount`, `batchGate` (K25's scope extension), `preflight`, `preflightFiles`, `prepareOut`, `claimOut`, `step0bMechanics`, `turnBoundHeld`, `persistenceLeft` and `probeFindingOf`.
 - W2-5a's pieces: `originalSideOf`, `fidelityStdins`, `fidelityFigures`, `entryBodyOf`, `openReplayStore`, `loadRecordInput`, `loadInput`, `pairedInputs`, `familyKeyOf`, `AB_STATES`, `VERIFY_AB_KIND`, `pilotResultError`, `openFinalize` and `buildFinal`.
 - `deploy/history-gate.mjs` as W2-3 shipped it, imported and never edited: `decideGate`, `assembleReports`, `changedFamilies`, `splitAtFirstExit8`, `familyKey`, `handcheckSample`, `applyHandcheck`, `handcheckAgreement`, `LABELS`, `RUBRICS`, `AMENDMENT_KINDS`, `ANSWER_STATES`, `frac` and `cmpFrac`.
 - vitest 4 in `server/`. Exported functions run in-process over hand-built stores (`createStore` under `mkTmp`). Subcommands run as spawned `node --no-warnings`, as the operator runs them. W2-4's recording stub and W2-5b1's arm stub stand in for every Claude Code spawn. W2-5a's `historyHelpers` boxes back Task 2's original-side case.
@@ -68,7 +71,7 @@ In-place edits of earlier cases are listed under Global Constraints, licensed by
 - "The live A/B" (about :2739) and its bullets (about :2740 to :2743) are W2-6's (E25 at :2741-:2742, buffers :2740 and :2743). Read, never written.
 
 **Base:** `main` after W2-5b1 merges. That holds W2-2b (#1154, `92dac5764`), W2-5a (#1134), W2-2a (#1126), W2-1 (#1105), W2-3 (#856) and W2-4 (#826), plus W2-5b1. W2-6 may or may not have merged when W2-5b2 dispatches (Q29).
-- **Where the anchors come from.** Base anchors are measured at `92dac5764` and written "(about :NNN at 92dac5764)". Anchors into W2-5b1's code come from its converged plan, `docs/superpowers/plans/2026-10-22-ccrc-history-w2-5b1-arms-and-judge.md`, and are written "(W2-5b1 Task N's `<name>`; re-anchor at W2-5b1's merged head)". The worker re-anchors every edit by its quoted content at W2-5b1's merged head and reports each drift in the task's commit note.
+- **Where the anchors come from.** Base anchors are measured at `92dac5764` and written "(about :NNN at 92dac5764)". Anchors into W2-5b1's code come from its converged plan, `docs/superpowers/plans/2026-10-22-ccrc-history-w2-5b1-arms-and-judge.md`, and are written "(W2-5b1 Task N's `<name>`; re-anchor at W2-5b1's merged head)". The worker re-anchors every edit by its quoted content at W2-5b1's merged head and reports each drift in the task's commit note. **Re-measured at W2-5b1's final head (CP-20).** W2-5b1's final head is `0de4cc990`, merged to `main` as `66c8bfa84`. The measured hints below, and every anchor the CP-20 re-verify found drifted, give that head's lines, written "(about :NNN at 0de4cc990)"; an anchor still written "at 92dac5764" is a base hint the re-verify found unmoved in content. Every test title a `-t` filter names is quoted as it reads at `0de4cc990`, where W2-5b1's fix rounds renamed several (`W2-5b1 Task 4: fix wave, the pair index across arm batches`, `W2-5b1 Task 4: correction Phase A, bounded snapshot helper contract`, `W2-5b1 Task 4: C04 consumer, …`, `W2-5b1 Task 4: C04 CONTROL, …`).
 - **Step 0 of Task 1 stops before any edit** unless all of these hold:
   - `HANDLERS.set('arms'` and `HANDLERS.set('judge'` each appear once;
   - W2-5b1's names are exported with their planned shapes: `loadArmRun`, `armNodeOf`, `recheckBatch`, `armPayloads`, `prependCard`, `requireListed`, `driverWordClass`, `readStreamJson`'s `messages`, and `DRIVER_REASONS`/`DRIVER_STOPS`/`DRIVER_REFUSALS` at 29/16/13;
@@ -76,19 +79,20 @@ In-place edits of earlier cases are listed under Global Constraints, licensed by
 
   A missing W2-5b1 name is a gap in its owning W2-5b1 task (R8), never defined here.
 - **Measured anchors** (hints; re-anchor each by its quoted content):
-  - `deploy/history-replay.mjs` (5,801 lines at `92dac5764`, before W2-5b1):
-    - `DRIVER_REASONS` (about :69) and the gate import statement (about :42);
-    - `FLAG_SPECS` (about :110-130), `spentSoFar` (about :1060), `preflightFiles` (about :2077);
-    - `turnBoundHeld` (about :2529), `persistenceLeft` (about :2571), `step0bMechanics` (about :2594);
-    - `originalSideOf` (about :4478), `SUBCOMMAND_FLAGS` (about :4811, its `'open --finalize'` form about :4820), `loadInput` (about :4856);
-    - `pilotResultError` (about :5383), `refuseOutOfRangeValues` (about :5405), `refuseWriterAdmission` (about :5435), quiz-source's call (about :5528-5529);
-    - `openFinalize` (about :5663), its `buildFinal` call (about :5693) and `printWithSha(final)` (about :5699);
-    - the entry-guard comment (about :5796).
-  - `server/test/history-replay.test.ts` (10,678 lines at `92dac5764`):
-    - W2-4 Task 1's `DRIVER_REASONS` case (about :165-170) and `FLAG_SPECS declares exactly …` (about :199-214);
-    - W2-4 Task 9's `HANDLERS` key line (about :4822-4824);
-    - W2-5a Task 7's `r7describe` (about :8934), `chain7`'s pilot result (about :9151-9152), `RANGE_ROWS` (about :10145-10186), the D-6309 unit case (about :10195), the window case (about :10424), and `r7describe`'s close (about :10502);
-    - `describe('W2-5a fix wave: the review\'s minors', …)`'s closing lines (about :10676-10678), after which W2-6's region begins.
+  - `deploy/history-replay.mjs` (5,801 lines at `92dac5764`, before W2-5b1; 7,592 lines at `0de4cc990`, whose lines these are):
+    - `DRIVER_REASONS` (about :72) and the gate import statement (about :45);
+    - `FLAG_SPECS` (about :153-176, its last entry `'allow-code-change': 'bool',` about :175), `spentSoFar` (about :1134; its JSDoc about :1125), `preflightFiles` (about :2161);
+    - `turnBoundHeld` (about :2613), `persistenceLeft` (about :2655), `step0bMechanics` (about :2678);
+    - `originalSideOf` (about :4781), `SUBCOMMAND_FLAGS` (about :5106, its `'open --finalize'` form about :5114-5115, its closing `});` about :5131), `loadInput` (about :5164);
+    - `pilotResultError` (about :5718), `refuseOutOfRangeValues` (about :5756), `refuseWriterAdmission` (about :5789), quiz-source's call (about :5893-5894);
+    - `openFinalize` (about :6028), its `buildFinal` call (about :6056) and `printWithSha(final)` (about :6064);
+    - the entry-guard comment (about :7587), directly after `HANDLERS.set('judge', …)` (about :7585).
+  - `server/test/history-replay.test.ts` (10,678 lines at `92dac5764`; 16,546 lines at `0de4cc990`, whose lines these are):
+    - W2-4 Task 1's `DRIVER_REASONS` case (about :165-170) and `FLAG_SPECS declares exactly …` (about :199-215);
+    - W2-4 Task 9's `HANDLERS` key line (about :4846, its two comment lines about :4844-4845);
+    - W2-5b1 Task 5's case `JUDGE_OUTCOMES are driver-local report words, disjoint from DRIVER_REASONS and GATE_REASONS` and its `HANDLERS.keys()` line (about :13718 and :13725), the second `HANDLERS` pin, which Task 1 re-pins (K5, CP-20);
+    - W2-5a Task 7's `r7describe` (about :8957), `chain7`'s pilot result (about :9174-9175), `RANGE_ROWS` (about :10166-10212, the type and the literal's first five lines, about :10171-10176), the D-6309 unit case (about :10221), the window case `a window shorter than planned_days…` (about :10448, its `--spend-budget` on about :10450), and `r7describe`'s close (about :10953, after W2-5b1's nested describes about :10531-10952);
+    - `describe('W2-5a fix wave: the review\'s minors', …)` (about :11108) and its closing lines (about :11127-11129), after which W2-6's region begins; W2-5b1's first appended block, `// ── W2-5b1 Task 1: w5b1-prefixed bindings`, starts about :11131.
   - `deploy/history-gate.mjs` (never edited): `ASSIGNMENT_ARMS` (about :70), `GATE_CODE_FILES` (about :145), `changedFamilies` (about :539), `assembleReports` (about :592), `handcheckSample` (about :1607), `applyHandcheck` (about :1646), `handcheckAgreement` (about :1666), `decideGate` (about :1772), the validator's `amendments` shape (about :2220) and rules (about :2564-2575), `handcheck.share`'s range rule (about :2378).
   - `README.md` (6,964 lines at `92dac5764`): `**The card line.**` (about :5832) to its last line (about :5839), `**Box verbs and operator verbs.**` (about :5841), W2-2b's `**The headless seam (W2's replay eval).**` (about :5868 to :5896), and the `---` that closes "Session history" (about :5898).
 
@@ -108,14 +112,14 @@ In-place edits of earlier cases are listed under Global Constraints, licensed by
 The ledger is the coordinator's file. No task edits it.
 
 **Authority:** in order:
-1. The coordinator's W2-5b2 rulings, K1 to K20 at drafting, K21 to K23 after integration and K24 after the convergence pass, and the three departures issued at planning, D-6644, D-6645 and D-6646 (all in the Decisions table and "## Deviations found"). Then the coordinator's rulings for W2-5b (S1, S2, Q1 to Q31, and R1 to R32 from W2-5b1's drafting and plan review), plus the rulings carried from W2-6's plan: V1 (the state set), U15 (the keep-off list) and V5 (README's driver paragraph after the seam paragraph). Also the scoping study's sections A to E; W2-5b2 is its Tasks 6 to 11.
+1. The coordinator's W2-5b2 rulings, K1 to K20 at drafting, K21 to K23 after integration and K24 after the convergence pass, and the four departures issued at planning, D-6644, D-6645, D-6646 and D-6723; K25 to K27 after W2-5b1's whole-branch review and K28 at K26's re-anchor (all in the Decisions table and "## Deviations found"). Then the coordinator's rulings for W2-5b (S1, S2, Q1 to Q31, and R1 to R32 from W2-5b1's drafting and plan review), plus the rulings carried from W2-6's plan: V1 (the state set), U15 (the keep-off list) and V5 (README's driver paragraph after the seam paragraph). Also the scoping study's sections A to E; W2-5b2 is its Tasks 6 to 11.
 2. `docs/superpowers/plans/2026-10-19-ccrc-history-w2-decisions.md` (the W2 decisions document): §2's "W2-5b (deploy)" entry, split by S1 and not changed; the decisions in the table below; §4's part 2 `pilot_result` and `spend_budget`; §5's acts 14, 17, 21, 22 and 24; §6's errata; §7's carries and residuals.
 3. The spec.
 4. The ledger.
-5. The W2-5b1 plan (house style, its rulings, and its numbers D-6467, D-6468, D-6469 and D-6470 cited, never redefined); the W2-5a, W2-2b, W2-4, W2-3 and W2-1 plans (W2-1's Task 6 for the errata script).
+5. The W2-5b1 plan (house style, its rulings, and its numbers D-6467, D-6468, D-6469, D-6470, D-6481 and D-6482 cited, never redefined); the W2-5a, W2-2b, W2-4, W2-3 and W2-1 plans (W2-1's Task 6 for the errata script).
 6. The merged code at the base.
 
-The decisions document was written at `bd363a76b` and amended in place since: every line it cites is a hint, and "Drifts since the decisions document" below lists what moved and what that changes. Where this plan and that document differ, the document wins and the worker reports the difference, except where a ruling (S, Q, R, V, U) or a departure below says otherwise. A plan text is never ground truth: re-read the merged code before editing it. **W2-5b2 defines no decisions-document number.** The three departures found while planning were issued by the coordinator, D-6644, D-6645 and D-6646, and this plan defines them in "## Deviations found"; the other planning findings were ruled readings, with no number (K6, K7).
+The decisions document was written at `bd363a76b` and amended in place since: every line it cites is a hint, and "Drifts since the decisions document" below lists what moved and what that changes. Where this plan and that document differ, the document wins and the worker reports the difference, except where a ruling (S, Q, R, V, U) or a departure below says otherwise. A plan text is never ground truth: re-read the merged code before editing it. **W2-5b2 defines no decisions-document number.** The four departures found while planning were issued by the coordinator, D-6644, D-6645, D-6646 and D-6723, and this plan defines them in "## Deviations found"; the other planning findings were ruled readings, with no number (K6, K7).
 
 **The split (S1): what W2-5b1 already shipped.** These pieces are all on the base, and W2-5b2 consumes them by their owners' names:
 - `marker --section pilot|quiz|ab` and `verify --section pilot|quiz`, with `readHeadlessOn` and `requireListed` (W2-D84, W2-D78 (i));
@@ -157,7 +161,7 @@ W2-6 (the report-only counters) may build beside this PR (Q29, W2-D3); its plan 
 |---|---|---|---|
 | `deploy/history-counters.mjs` | none; never named on a driver line (Task 5's scan) | the whole file | W2-5b2 never names it; the driver never loads it |
 | `deploy/history-replay.mjs` | Tasks 1 to 5's edits and sections. W2-6 edits no line of this file | The names W2-6 imports keep their signatures: `AB_STATES`, `VERIFY_AB_KIND`, `abStateOf`, `loadFinalRecord`, `loadInput` (Task 4 factors its body into `loadInputBytes`, signature and words unchanged), `parseArgs`, `prepareOut`, `refuse` and `DriverRefusal`. In tests W2-6 also reads `DRIVER_REASONS` (Task 1 appends one word), `OUT_MARKER`, `FLAG_SPECS` (flags appended, `allow-code-change`'s kind unchanged), `openReplayStore`, `spanRowsOf` and `verifyAbReport`. No driver line names `turnsOf` | W2-6 edits no driver line, and K20's checks above find no pin of W2-6's that a W2-5b2 addition reds |
-| `server/test/history-replay.test.ts` | Three groups. **In place:** W2-4's `DRIVER_REASONS` case (about :165-170; Task 1), `FLAG_SPECS` pin (about :199-214; Tasks 2 to 5) and `HANDLERS` line (about :4822-4824; Tasks 1, 2, 4 and 5). **Inside `r7describe`, all before about :10502:** W2-5a Task 7 cases (about :9151-9152, about :10145-10195, about :10424, and the open-modes case), and Tasks 2 and 3's nested describes directly before its closing `});` (about :10502). **At the file's end:** Tasks 1 to 6's appended blocks, after W2-5b1's last appended block | W2-6's contiguous region, which begins directly after `describe('W2-5a fix wave: the review\'s minors', …)`'s closing lines (about :10676-10678) and ends at its marker `// ── end of W2-6's region (Q29) ──…`, plus the first line of W2-5b1's first appended block (the region's trailing context) | W2-5a's fix-wave describes, about 170 unchanged lines, lie between W2-5b2's last interior edit and W2-6's insertion. W2-5b1's appended blocks lie between W2-6's region and W2-5b2's appended blocks |
+| `server/test/history-replay.test.ts` | Four groups (line hints at W2-5b1's final head `0de4cc990`). **In place:** W2-4's `DRIVER_REASONS` case (about :165-170; Task 1), `FLAG_SPECS` pin (about :199-215; Tasks 2 to 5) and `HANDLERS` line (about :4846; Tasks 1, 2, 4 and 5). **Inside `r7describe`, all before about :10953:** W2-5a Task 7 cases (about :9174-9175, about :10171-10221, about :10448, and the open-modes case about :9267-9269), and Tasks 2 and 3's nested describes directly before its closing `});` (about :10953). **In W2-5b1's appended blocks, one line:** Task 1's re-pin of W2-5b1 Task 5's `HANDLERS.keys()` order line (about :13725, K5, CP-20), inside W2-5b1's blocks, about 2,590 lines below W2-5b1's first appended block's first line (about :11131). **At the file's end:** Tasks 1 to 6's appended blocks, after W2-5b1's last appended block | W2-6's contiguous region, which begins directly after `describe('W2-5a fix wave: the review\'s minors', …)`'s closing lines (about :11127-11129) and ends at its marker `// ── end of W2-6's region (Q29) ──…`, plus the first line of W2-5b1's first appended block (the region's trailing context) | W2-5a's fix-wave describes, about 170 unchanged lines, lie between W2-5b2's last interior edit and W2-6's insertion. W2-5b1's appended blocks lie between W2-6's region and W2-5b2's appended blocks; Task 1's one re-pin line inside them is about 2,590 unchanged lines past W2-6's trailing context |
 | `server/test/single-definition.test.ts` | none | W2-6's describe at the file's end and its buffer line | W2-5b2 never edits the file; it only re-runs it |
 | `README.md` | Two hunks. K16's rewording inside W2-2b's seam paragraph: its two lines on the as-of cut (about :5891-:5892), which become five. And one paragraph and its blank line after the seam paragraph's last line (`admitted, and its counter line carries the arm; under `~/.ccrc/history-off` nothing is counted.`, about :5896) and before the `---` that closes "Session history" (about :5898), as W2-6's V5 places it | The card-line paragraph (about :5832 to :5839), W2-6's gap and its paragraph, and the box-verbs paragraph's first line (about :5841) | The box-verbs paragraph and the head of the seam paragraph, about 49 unchanged lines (about :5842 to :5890), lie between W2-6's insertion and K16's hunk; the driver paragraph lies below that |
 | the spec | Eighteen single-line replacements: E8 (about :1509, :1514), E9 (about :1525, :1527, :2307), E10 (about :1529), E11 (about :1531), E2 (about :1671), E7 (about :2171), E22 (about :2644, :2718, :2719, :2721), E19 (about :2663), E20 (about :2667), E21 (about :2695), E23 (about :2735), E24 (about :2881). The line count is unchanged | E25's two lines (about :2741, :2742) and their buffers, the uptake bullet (about :2740) and the stratification bullet (about :2743) | Lines about :2736 to :2739 are unchanged by both PRs. Task 6's script asserts the lines from the uptake bullet to the stratification bullet are byte-identical before and after its edit, and never asserts E25's text |
@@ -187,20 +191,27 @@ W2-6 (the report-only counters) may build beside this PR (Q29, W2-D3); its plan 
 - **W2-5b1's code is edited only where a task names the edit, with every W2-5b1 pin green byte for byte:**
   - Task 1: `DRIVER_REFUSALS` (+`pilot-failed`);
   - Task 2: `part2RangeChecks`' settings row, `loadArmRun`'s pilot settings line and `armsCommand`'s Q25 line, each through one spelling; `refuseOutOfRangeValues`' and `refuseWriterAdmission`'s `settings` parameter; and K2's extension: the `'arms --section pilot'` and `'judge --section pilot'` forms take `--step0b`/`--step0b-sha256`, and `loadArmRun`'s pilot `return` reads step 0b's mode through `step0bModeOf` (`ArmRun`'s shape unchanged);
-  - Task 3: `armRunName`'s `move` parameter, `armJob`, `armAttemptsOf`, `questionArmsOf`, `reportArmsStop`, `armsCommand`, and `expectedForNode` read through `nodeMovesOf` and `nodeExceptionOf` (K6's `exception_stamp`, only when a node has one); W2-4's `preflightFiles` admits that stamp under `--allow-code-change`;
+  - Task 3: `armRunName`'s `move` parameter, `armJob`, `armAttemptsOf`, `questionArmsOf`, `reportArmsStop`, `armsCommand`, and `expectedForNode` read through `nodeMovesOf` and `nodeExceptionOf` (K6's `exception_stamp`, only when a node has one); W2-4's `preflightFiles` admits that stamp under `--allow-code-change`; and W2-4's `refuseIfStopping` JSDoc, as W2-5b1's fix round rewrote it, names `repilotExpectedOf` as its ninth call site (Task 3 (k); its body and refusal detail unchanged);
   - Task 5: `readArmAnswers` as `readAnswerRecords`' projection.
+  - K25's exactly two earlier-code edits are W2-4's `batchGate` and W2-5b1's `openJudge` gate call; arms, `judged.json.spend`, and every other ledger reader retain whole-ledger semantics.
+  - Task 1 (K28, K26): W2-5b1's two all-readings-agree loops (`armBatchPreflight`'s, site `arms`; `judgeCommand`'s, site `judge`) become calls of one module-private `maskingAgreementOf(snapshots, site, build, agree)`, behaviour byte for byte, each caller's `const snapshots = maskingSnapshotsOf(…);` admission line kept where W2-5b1 put it. `step0bCardOf` (site `step0b`) and `fidelityBoundariesOf` (site `fidelity`) call it before any spawn or input persistence; Task 3's re-pilot reaches it only through those two and `armBatchPreflight`. A disagreement refuses `input-invalid` `masking-snapshots-disagree <site>`, never the newest mask. No task adds a pair reader, snapshot store, refresh or latest-index fallback, and no code line calls `refreshPairIndex` outside W2-5b1's `maskingSnapshotsOf` (Task 1's K28 scan).
+  - K27: Task 3 resets old-attempt linkage before one fresh both-arm version re-run preflight; Task 5 reports genuine payload-change exclusions as W2-D89 `run-failed` with qids (W2-5b1's build departure; re-anchor at W2-5b1's merged code).
 - **In-place edits of earlier cases, each named in its commit and in the PR body (licensed by K5):**
   - W2-4's three pins: the `DRIVER_REASONS` case (Task 1), the `FLAG_SPECS` pin (Tasks 2 to 5) and the `HANDLERS` key line (Tasks 1, 2, 4 and 5);
   - Task 2's four W2-5a Task 7 edits: `chain7`'s pilot result re-pinned to the producer's shape; the window case's `--spend-budget` set to the derived figure; `RANGE_ROWS`' threshold and `max_age_ms` rows, with `quizRun7`'s fresh limits option (review 811 F2); the D-6309 unit case's title losing "and writes nothing" (F5);
   - Task 3's one W2-5a Task 7 edit: the open-modes case's sentence names four modes.
+  - K25's exactly two further licences: W2-4's `batchGate` gains its scope parameter and W2-5b1's `openJudge` gate call selects judge scope. No other W2-5b1 case, persistence shape or ledger is edited.
+  - K28's one further licence: W2-5b1's `armBatchPreflight` and `judgeCommand` agreement loops become calls of Task 1's `maskingAgreementOf`, behaviour byte for byte. No W2-5b1 case is edited for it; W2-5b1's arms and judge agreement cases and its Phase A helper cases pin it unchanged (Task 1 Step 7).
+  - W2-5b1's one `HANDLERS` pin (CP-20, licensed under K5): in W2-5b1 Task 5's case `JUDGE_OUTCOMES are driver-local report words, disjoint from DRIVER_REASONS and GATE_REASONS` (about :13725 at 0de4cc990), Task 1 replaces the line `expect([...W5B5.HANDLERS.keys()].slice(-2), 'judge is registered right after arms').toEqual(['arms', 'judge']);` with `expect([...W5B5.HANDLERS.keys()].indexOf('judge'), 'judge is registered right after arms').toBe([...W5B5.HANDLERS.keys()].indexOf('arms') + 1);`. It no longer reads the tail: `judge` is registered immediately after `arms`, W2-5b1's invariant, which every later W2-5b2 registration (`step0b`, `fidelity`, `pilot-result`, `handcheck`, `report`) keeps. No later task touches the line. With W2-4 Task 9's line, it is the second of the two `HANDLERS.keys()` pins.
 
-  No other W2-4 or W2-5a case and no W2-5b1 case is edited (R23 as R27 narrows it, carried by K5); K2's extension of W2-5b1's two pilot forms moves none of W2-5b1's cases (Task 2 Step 1 measures it). Each owning task adds its own W2-D24 rows under W2-5a's title phrases.
+  No other W2-4 or W2-5a case and no other W2-5b1 case is edited (R23 as R27 narrows it, carried by K5); K2's extension of W2-5b1's two pilot forms moves none of W2-5b1's cases (Task 2 Step 1 measures it). Each owning task adds its own W2-D24 rows under W2-5a's title phrases.
 - **The gate's order stands (S2's C9).** `ASSIGNMENT_ARMS` stays `['treatment', 'control']`, because `handcheckSample` iterates it. The gate is never edited and gains no import. The driver's gate names are added inside its one existing statement.
 - **No schema change, read-only stores.** There is no table, column, index or `SCHEMA_ADDED` entry (W2-D10). Every store read opens through `openReader` (W2-D51). No `deploy/history-*.mjs` spells a `node:sqlite` specifier.
 - **Must-holds (the scoping study's section C, W2-5b2):**
   - A failed step 0b, fidelity or absent-rate check halts and is recorded, never folded. The result is written and its sha printed before the halt, and failed and unmeasured are listed apart (Tasks 1, 2 and 3; K3's one halt rule, `pilot-failed`).
   - Unmeasured is never 0: a fidelity boundary, an absent rate with no answered question, quiz uptake, a read instant, persistence.
   - `spend_budget` is derived exactly, `ceil(5 × n × total / (4 × pilot_questions))` in BigInt, and a mismatched `--spend-budget` echo is refused `args-invalid` (Task 2, D-6280).
+  - K25's disclosure is approximate rather than a strict bound: a node can expose about twice its signed share (the pilot uses `pilot_budget`) plus token cost of in-flight soft-stop overshoot. `limits.concurrency` and `CONCURRENCY_MAX` describe runs in flight, not a per-run token cap.
   - `open --amend` only appends, and a version move needs its node label and a passed re-pilot result of this record, node and version (Task 3, K1).
   - The sheet is blinded and the label reader strict (Task 4).
   - `report` decides nothing (`decideGate` does, on exactly one driver line), sha-checks every input, keys families by `familyKey`, and runs RP6-e2e and RP7-e2e (Task 5).
@@ -208,6 +219,7 @@ W2-6 (the report-only counters) may build beside this PR (Q29, W2-D3); its plan 
   - Every `--record` consumer re-checks `gate_code` before any other input (W2-D24): `step0b` and `fidelity` (through `loadArmRun`'s or part 1's re-check), `pilot-result`, `open --amend`, `handcheck` and `report` (through `loadFinalRecord`), and the re-pilot's three quiz forms.
   - A data case after `--out` never exits INTERNAL (D-6309's rule). A refusal that needs no store and no spawn answers before `prepareOut` makes `--out` (W2-5a's R10).
   - The driver never spells an arm word.
+  - Every masked spawn input of W2-5b2 agrees over every retained reading of the pair index before it spawns or persists (K26, K28: one `maskingAgreementOf`; a disagreement refuses `masking-snapshots-disagree <site>`, never the newest mask). K27's replacement pair starts both attempts at one from one fresh preflight after old linkage resets; a genuine sibling-drift exclusion remains `run-failed`, W2-D89-counted and qid-listed (W2-5b1's build departure; re-anchor at W2-5b1's merged code).
 - **V1's state set, exactly.** The report's per-arm figures (live uptake, the first-call difference, quiz uptake, the judge tallies by arm) drop every family whose `verify --section ab` state is not `AB_STATES[0]` (`ok`), each state listed apart:
   - `control-absent` and `control-mismatch` (W2-D23's assignment-unrealised);
   - `treatment-named` (Q15);
@@ -233,9 +245,10 @@ W2-6 (the report-only counters) may build beside this PR (Q29, W2-D3); its plan 
   - one Q25 refusal (`refusePilotSourceOut`, declared in Task 1, used by `step0b`, `arms`, `fidelity`, `pilot-result` and the re-pilot's forms; K4);
   - one step 0b reader (`step0bOf`) and one settings-mode source for the pilot acts (`step0bModeOf`, K2);
   - one per-boundary fidelity measurement (`fidelityBoundariesOf`, the pilot's and the re-pilot's);
+  - one masking agreement (`maskingAgreementOf`, K28: W2-5b1's arms and judge, step 0b's card and fidelity's boundaries; its `masking-snapshots-disagree` detail spelled once);
   - one quiz-uptake reader (`quizUptakeReadingOf`, K15);
   - one settings-mode row (`settingsModeRow`) for part 1's mode and part 2's `pilot_result.settings_mode`;
-  - one spend-ledger reader (`spendLinesOf`);
+  - one spend-ledger reader (`spendLinesOf`), one scope vocabulary (`SPEND_SCOPES`) and one judge-only pure sum (`judgeSpentOf`);
   - one budget derivation (`spendBudgetOf`);
   - one selection of a node's version moves (`nodeMovesOf`, which `expectedForNode` reads);
   - one manifest reader (`readArmManifests`, with `runVersionsOf`; any later reader goes through them, K4);
@@ -244,7 +257,7 @@ W2-6 (the report-only counters) may build beside this PR (Q29, W2-D3); its plan 
   - one answer-record reader (`readAnswerRecords`);
   - one `decideGate(` call.
 
-  The gate's `handcheckSample`, `applyHandcheck`, `handcheckAgreement`, `assembleReports`, `changedFamilies`, `splitAtFirstExit8` and `decideGate`, and W2-5b1's `judgeMapOf`, `armsSummaryOf`, `versionMoveChecks` and `refuseRangeRows`, are imported or called, never re-spelled (R30 carried).
+  The gate's `handcheckSample`, `applyHandcheck`, `handcheckAgreement`, `assembleReports`, `changedFamilies`, `splitAtFirstExit8` and `decideGate`, and W2-5b1's `judgeMapOf`, `armsSummaryOf`, `versionMoveChecks` and `refuseRangeRows`, are imported or called, never re-spelled (R30 carried). Every recorded second spelling of a gate rule is pinned, and there are three, each of a module-private gate rule that cannot be imported because the gate is a signed `GATE_CODE_FILES` member: Task 2's `decimalOf`, a driver copy of the gate's private `decimalFrac`, parity-pinned against the validator; W2-5b1's `ANSWER_FIELD_LINE_BREAK`, a driver copy of the gate's private `LINE_BREAK`, already merged and now pinned by Task 5 Step 8a (one case per gate line break, and mutant F1C); and Task 5's test-side scan of `LINE_BREAK`, whose hand copy is held to the gate's own declaration line (the departure with no number, in the PR body's Departures).
 - **Live safety.**
   - Every test builds its `HOME` with `mkTmp` and writes its own roster, limits row, secrets file and stub Claude Code at `$HOME/.local/bin/<id>`. Every spawned run gets W2-4's `spawnEnv` with the poisoned `gh` first on its `PATH`. A refused account, and every pre-`--out`, W2-D78 or W2-D24 refusal, is asserted by the stub's log being absent.
   - No case runs `cli.mjs`, the shim, `ccd`, `ccrc`, `claude`, `sweep.mjs` outside W2-5a's helpers, `deploy/history-gate.mjs` or `deploy/measure-history.py`. None reads `~/.ccrc`, `~/.cc-sessions`, `~/.cc-limits` or an account home. Step 0b's synthetic transcript path lies under `/nonexistent/` and is measured absent.
@@ -266,22 +279,22 @@ W2-6 (the report-only counters) may build beside this PR (Q29, W2-D3); its plan 
 - **macOS.** `test-macos` is advisory, but a `history-replay` red there once blocked a stable promotion (D-6122). Paths come from `mkTmp`, and nothing assumes `/proc`. The describes that spawn W2-5b1's arm stub or run W2-5a's sweep boxes skip on darwin (`skipIf(process.platform === 'darwin')`): Task 1's stub describe, Task 2's stub describes, Task 3's stub cases and Task 5's walk. Pure and in-process describes run everywhere.
 - **D-numbers.**
   - W2-5b2 defines no decisions-document number (W2-D4) and no W2-5b1 or W2-6 number.
-  - This plan defines three numbers, issued by the coordinator at planning: D-6644 (Task 2), D-6645 (Task 4) and D-6646 (Task 5), each defined in "## Deviations found" at the end of this plan, in em-dash form, and first cited in its task. A number issued during the build is defined there too, by the commit that first cites it.
-  - Earlier numbers are cited bare and never defined here: D-5765, D-5766, D-5767, D-5768, D-5769, D-5770, D-5776, D-5777, D-5778, D-5779, D-5780, D-5781, D-5787, D-5814, D-5893, D-5983, D-5984, D-5985, D-5986, D-6122, D-6178, D-6211, D-6223, D-6280, D-6284, D-6305, D-6307, D-6308, D-6309, D-6311, D-6445, D-6467, D-6468, D-6469 and D-6470. Each was measured defined in a plan at `92dac5764`.
+  - This plan defines four numbers, issued by the coordinator at planning: D-6644 (Task 2), D-6645 (Task 4), D-6646 (Task 5) and D-6723 (Task 2), each defined in "## Deviations found" at the end of this plan, in em-dash form, and first cited in its task. A number issued during the build is defined there too, by the commit that first cites it.
+  - Earlier numbers are cited bare and never defined here: D-5765, D-5766, D-5767, D-5768, D-5769, D-5770, D-5776, D-5777, D-5778, D-5779, D-5780, D-5781, D-5787, D-5814, D-5893, D-5983, D-5984, D-5985, D-5986, D-6122, D-6178, D-6211, D-6223, D-6280, D-6284, D-6305, D-6307, D-6308, D-6309, D-6311, D-6445, D-6467, D-6468, D-6469, D-6470, D-6481 and D-6482. Each but the last two was measured defined in a plan at `92dac5764`. D-6481 and D-6482 are W2-5b1's, defined in its plan on `main` by its build (`docs/superpowers/plans/2026-10-22-ccrc-history-w2-5b1-arms-and-judge.md`, measured in its final-head copy), not at `92dac5764`.
   - A departure found while executing takes the next unused number from the run's block named in the brief; otherwise it is reported, never invented. Never write a number that was not issued, and never write a range.
   - Before the PR: `git fetch origin main`, then `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts`.
 - **Peers.** Before the first edit of each file, read `GET /api/claims?project=ccrc-pwa`.
 
 ## Decisions
 
-Every S, Q, R, V, U and K row is the coordinator's ruling in the operator's place under the directive of 2026-10-19. V1, U15 and V5 are carried from W2-6's plan; R-rows are the W2-5b1 rulings this PR inherits; K1 to K24 are the coordinator's rulings for this PR: K1 to K20 at drafting, K21 to K23 after integration and K24 after the convergence pass (2026-10-23).
+Every S, Q, R, V, U and K row is the coordinator's ruling in the operator's place under the directive of 2026-10-19. V1, U15 and V5 are carried from W2-6's plan; R-rows are the W2-5b1 rulings this PR inherits; K1 to K28 are the coordinator's rulings for this PR: K1 to K20 at drafting, K21 to K23 after integration, K24 after the convergence pass, K25 to K27 after W2-5b1's whole-branch review (2026-10-23), and K28 at K26's re-anchor on W2-5b1's code (2026-10-25).
 
 | # | Decision | Status | Task(s) |
 |---|---|---|---|
 | W2-D3 | **Claims and the spec path.** W2-5b holds the spec for W2-2a's, W2-2b's, W2-5a's and its own errata, amended in place, each citing its number. W2-6 runs beside it only on a line-disjoint plan. | coordinator ruling (W2 decisions document) | 6 |
 | W2-D6 | **The build freeze.** No pilot act takes `--allow-code-change` (the remedy is a re-pilot). A freeze exception after part 2 is an amendment. `tree-moved` stays in every batch's preflight; after window start, under `--allow-code-change`, a node's stamp equal to its newest freeze exception's `release_tag` is admitted and stamped `code-changed`, as W2-D6 says (K6). | coordinator ruling | 1, 2, 3, 6 (E24) |
 | W2-D7 | **The maintenance freeze.** A forced act is recorded with `open --amend`, and the next arm batch's re-check (W2-D78 (iii)) must pass, pinned on an amended record. | coordinator ruling | 3, 6 (E24) |
-| W2-D12 | **Deploy-local vocabularies and one spelling:** `settingsModeRow`, `refusePilotSourceOut`, `step0bModeOf`, `fidelityBoundariesOf`, `spendLinesOf`, `nodeMovesOf`, `readArmManifests`, `loadInputBytes`, `loadHandcheckPlan`, one `decideGate(` line; report words driver-local. | coordinator ruling | 1 to 5 |
+| W2-D12 | **Deploy-local vocabularies and one spelling:** `settingsModeRow`, `refusePilotSourceOut`, `step0bModeOf`, `fidelityBoundariesOf`, `maskingAgreementOf` (K28), `spendLinesOf`, `nodeMovesOf`, `readArmManifests`, `loadInputBytes`, `loadHandcheckPlan`, one `decideGate(` line; report words driver-local. | coordinator ruling | 1 to 5 |
 | W2-D22 | **`assembleReports`** checks the measure reports. Its refusals are mapped to driver words (`gateRefusalOf`), never folded. | coordinator ruling | 5 |
 | W2-D23 (as V1 extends it) | **Changed and unrealised families** leave the reported per-arm comparisons only, each listed apart. Criterion 3 is untouched. | coordinator ruling | 5, 6 (README) |
 | W2-D24 | **`gate_code` re-check first** in each of this PR's `--record` consumers: `step0b`, `fidelity`, `pilot-result` (each in both sections), `open --amend`, `handcheck` and `report`. Each owning task adds its own rows under W2-5a's title phrases (R23). | coordinator ruling | 1 to 5 |
@@ -299,7 +312,7 @@ Every S, Q, R, V, U and K row is the coordinator's ruling in the operator's plac
 | W2-D76 | **The fidelity pilot:** 5 boundaries from pilot-source, box mode, the payload net of fixed overhead within part 1's tolerance, compared exactly; E21 in the spec. | open-record default | 2, 6 |
 | W2-D78 | **Arm-batch preflights (i), (ii), (iii) and the card** before `--out` and before every step 0b arm batch. (iii) is re-asked before the next quiz batch after an amendment. | coordinator ruling | 1, 3 |
 | W2-D79, W2-D18 | **The judge map** is recomputed from the record's seed and frozen list, never read from a node (R18). Ids are global, and the sheet uses them. | open-record default | 4, 5 |
-| W2-D80 | **Failed runs:** `run-failed` is excluded from both arms; a settled question is never re-run; a summary still owing a re-run is refused (R20). A version move's re-run restarts the attempts, a reading of W2-D56 with no number (K7). | coordinator ruling | 3, 5 |
+| W2-D80 | **Failed runs:** `run-failed` is excluded from both arms; a settled question is never re-run; a summary still owing a re-run is refused (R20). A version move's re-run restarts the attempts, resets old sibling linkage before the new pair and leaves a genuine payload-change exclusion reportable as W2-D89 `run-failed` (K7, K27; W2-5b1's build departure; re-anchor at W2-5b1's merged code). | coordinator ruling | 3, 5 |
 | W2-D81 | **The hand-check:** the gate's sampler at the signed share, every judge-failed item added; the sheet blinded; the operator's labels replace the judge's; the verdict waits on every judge-failed label; agreement by arm. | open-record default (share) | 4, 5 |
 | W2-D82 | **Quiz uptake:** the pilot's `is_error` reading of the control exit 8 (`is-error`, `not-error`, `unseen`); quiz uptake `unmeasured` unless measured, never a failure (Q10; D-6644). The report reads it from part 2's `pilot_result` through `quizUptakeReadingOf` (K15). | coordinator ruling | 2, 5 |
 | W2-D84 | **Never fold:** an unmeasured persistence (Task 1), a run version no manifest records (Task 3's arm engine, the one version check; the report reads no manifest), an `unreadable` verify state (Task 5); `verify` outputs read as data, every state apart. | coordinator ruling | 1, 3, 5 |
@@ -340,7 +353,7 @@ Every S, Q, R, V, U and K row is the coordinator's ruling in the operator's plac
 | K2 | **The usage pilot runs in step 0b's settings mode.** `fidelity`, `arms` and `judge --section pilot` take an optional `--step0b`/`--step0b-sha256` and then run in that passed result's mode (`pilot-failed` for a failed result, `input-invalid` for another record's); without it, part 1's. W2-5b1's two pilot forms are extended in place (K5). `pilot-result` still records any surface run in another mode as a failure. README names the fallback flow. | the coordinator's ruling in the operator's place under the directive of 2026-10-19 | 2, 6 |
 | K3 | **One halt rule.** Every pilot act whose check fails writes its file, prints its sha, then refuses `pilot-failed`: `step0b`, `fidelity` and `pilot-result`, in both sections. `open --finalize` refuses `pilot-failed` unless `--accept-failed-pilot`. | the coordinator's ruling in the operator's place under the directive of 2026-10-19 | 1, 2, 3 |
 | K4 | **The owning task's names win at assembly (R8 carried).** `step0bOf` reads Task 1's `passed`/`failed`/`unmeasured`; `refusePilotSourceOut` is declared once, in Task 1; quiz uptake is read from part 2 through Task 2's `quizUptakeReadingOf`; Task 5 uses Task 4's `loadHandcheckPlan`, `readHandcheckLabels` and `handcheckResultOf`; `judged`/`judged-sha256` are declared by Task 4; manifests through Task 3's `readArmManifests` and `runVersionsOf`; `W5B26_ORDER` follows the registered `HANDLERS` keys; each `FLAG_SPECS` name declared once. | the coordinator's ruling in the operator's place under the directive of 2026-10-19 | all |
-| K5 | **In-place edits of earlier cases licensed** (R27's rule carried): W2-4's three pins, Task 2's W2-5a Task 7 edits (the finalize re-pin and review 811's F2, F3 and F5), Task 3's open-modes edit, and K2's extension of W2-5b1's two pilot forms. Each is named in its commit and the PR body; no other W2-4, W2-5a or W2-5b1 case is edited. | the coordinator's ruling in the operator's place under the directive of 2026-10-19 | 1 to 5 |
+| K5 | **In-place edits of earlier cases licensed** (R27's rule carried): W2-4's three pins, Task 2's W2-5a Task 7 edits (the finalize re-pin and review 811's F2, F3 and F5), Task 3's open-modes edit, K2's extension of W2-5b1's two pilot forms, and (CP-20) Task 1's re-pin of W2-5b1 Task 5's `HANDLERS.keys()` order line in `JUDGE_OUTCOMES are driver-local report words, disjoint from DRIVER_REASONS and GATE_REASONS` (about :13725 at 0de4cc990) from `.slice(-2)` equal to `['arms', 'judge']` to `indexOf('judge') === indexOf('arms') + 1`. Each is named in its commit and the PR body; no other W2-4, W2-5a or W2-5b1 case is edited. | the coordinator's ruling in the operator's place under the directive of 2026-10-19 | 1 to 5 |
 | K6 | **A freeze exception follows W2-D6, with no departure.** Its detail is `{surface, ruling, release_tag?}`, amending Q13's schema. With `--allow-code-change`, after window start, the tree preflight admits a node stamp equal to that node's newest freeze-exception `release_tag` and stamps the outputs `code-changed`; without the flag, `tree-moved`, naming the remedy. The gate is not touched. | the coordinator's ruling in the operator's place under the directive of 2026-10-19 | 3 |
 | K7 | **A version move's re-run resets the attempts,** a reading of W2-D56 ("re-run on the new version") with no number; the old move's attempts stay under `--out` as evidence. | the coordinator's ruling in the operator's place under the directive of 2026-10-19 | 3 |
 | K8 | **Node outputs must name the current record.** After an amendment the sheet and the report take only outputs naming the current record's sha; README tells the operator to re-run `arms`, `judge` and both `verify` sections on each node, which resume and spawn nothing finished. | the coordinator's ruling in the operator's place under the directive of 2026-10-19 | 4, 5, 6 |
@@ -360,6 +373,10 @@ Every S, Q, R, V, U and K row is the coordinator's ruling in the operator's plac
 | K22 | **The re-pilot's own choices are accepted,** each named in the PR body's residuals where it limits the operator: (a) its spend charged on its own `--out` ledger, and the re-pilot result records it (`spend`, that ledger's total); (b) the `quiz/repilot-version.json` pin, one re-pilot per `--out`; (c) no override flag for a failed re-pilot: it cannot be amended, and README names the remedy (the operator rules whether that node's window stands); (d) a re-pilot on a node whose release a freeze exception moved refuses `tree-moved`, since pilot forms take no `--allow-code-change` (Q23), a residual; (e) "the node's newest freeze-exception amendment carrying a `release_tag`" is the reading K6 means. | the coordinator's ruling in the operator's place under the directive of 2026-10-19 (after integration, 2026-10-23) | 3, 6 |
 | K23 | **The walk's verify output.** Task 5's end-to-end walk builds its `verify --section ab` outputs with `verifyAbReport`, because its fixture stores hold no presence record: a fixture choice and a prediction (R32's rule), named in the PR body's residuals. | the coordinator's ruling in the operator's place under the directive of 2026-10-19 (after integration, 2026-10-23) | 5 |
 | K24 | **D-6646 states the residual as it is.** `armsSummaryOf` pins per-question uptake (`calls`, `via_agent`, `errored`) and answer-field values only as per-arm sums for each node. So D-6646's entry, Task 5's "answer records are held to their summary" choice, `nodeAnswersOf`'s doc comment and the PR body's residuals say this: every gate input stays pinned, and the report-only quiz uptake by arm is exactly pinned only when V1 drops no quiz family. `quizUptakeOf` marks its `by_arm` figure with the driver-local word `aggregate-only` (`QUIZ_UPTAKE_AGGREGATE_ONLY`, pinned disjoint from `DRIVER_REASONS` and `GATE_REASONS`, S2's C21) when `dropped.keys` meets a quiz family: a pure case, a CONTROL and a mutant (Task 5's M46). W2-5b1's summary shape is not changed (a per-question uptake in the summary is refused: it moves W2-5b1's producer for a figure no gate input reads). | the coordinator's ruling in the operator's place under the directive of 2026-10-19 (after the convergence pass, 2026-10-23) | 5 |
+| K25 | **The judge's spend gate counts only the judge's own spend.** `batchGate` gains optional `scope = 'all'` from `SPEND_SCOPES = Object.freeze(['all', 'judge'])`: all keeps the parsed whole ledger; judge parses that whole ledger then `judgeSpentOf` sums exact `<section>/judge/` rows for both `ARM_SECTIONS`, rejecting unknown scope and unsafe totals. Only `openJudge` selects judge scope. Arms, `judged.json.spend`, Q5's share, Q6's `spend_budget` and `pilot_result` stay whole-ledger. The disclosure is approximate: twice share (pilot: twice `pilot_budget`) plus token cost of in-flight soft-stop overshoot, never a strict bound. D-6723 departs from W2-D55 and Q5 for this judge gate only. | coordinator ruling after W2-5b1 whole-branch review | 2, 6 |
+| K26 | **D-6481 carried: every W2-5b2 act that masks spawned text agrees over W2-5b1's retained readings.** Step 0b's card preflight (before `--out` and before every arm batch, pilot and quiz), fidelity's per-boundary stdins (pilot and quiz) and the re-pilot's both-arms re-run (W2-5b1's `armBatchPreflight`) build their spawned text under every reading `maskingSnapshotsOf(rs, home)` admits, through K28's one `maskingAgreementOf`. All readings must agree before any spawn or input persistence; a disagreement refuses `input-invalid` `masking-snapshots-disagree <site>` rather than choosing the newest mask, and a newly learned pair may instead make an index-sensitive re-check refuse with its own word. No local snapshot store, second pair reader, direct `refreshPairIndex` call or latest-index fallback is added. | coordinator ruling after W2-5b1 whole-branch review; D-6481 acceptance; re-anchored by K28 | 1, 2, 3 |
+| K27 | **A version-move both-arm re-run resets old-attempt linkage.** Both replacement arms arise from one fresh preflight and begin at attempt one; neither is an owed arm against an old answered sibling. A genuine payload-change exclusion remains `run-failed`, counts to W2-D89 and lists its qid in the report (W2-5b1's build departure; re-anchor at W2-5b1's merged code). | coordinator ruling after W2-5b1 whole-branch review | 3, 5, 6 |
+| K28 | **One agreement function re-anchors K26 at W2-5b1's code.** Task 1 factors the all-readings-agree loop W2-5b1 writes inline twice (`armBatchPreflight` and `judgeCommand`, measured at W2-5b1's tip `554df82f0` and again at its final head `0de4cc990`, where both blocks are byte-identical: `armBatchPreflight`'s loop about :6949-:6964, from `let baseline = null;`, with its admission line about :6945; `judgeCommand`'s about :7550-:7557, with its admission line about :7549; `masking-snapshots-disagree` occurs exactly twice, about :6962 and :7555; re-anchor at its merged head) into one module-private `async function maskingAgreementOf(snapshots, site, build, agree)`. Contract: `snapshots` is what the caller's own `const snapshots = maskingSnapshotsOf(rs, home);` answered in the same preflight, so W2-5b1's admission refusals (`input-invalid` `masking-snapshot-belt-overflow`, `masking-snapshots-count-cap`, `masking-snapshots-material-cap`, `masking-snapshot-invalid`, `masking-snapshot-refresh-failed`) come before any build; it calls `build(idx)` (sync or async; its own refusals and throws pass through unchanged) once per retained reading in retained order, compares each later build with the first through `agree` (every text through `sameMaskingText`) as soon as it is built, and on the first disagreement refuses `input-invalid` `` `masking-snapshots-disagree ${site}` ``, `site` being the literal `arms`, `judge`, `step0b` or `fidelity`, so the detail names a site and never a value; it answers the first reading's build (agreeing readings are byte-equal; no newest-reading mask is ever chosen) and never refreshes, reads the store, writes or spawns. `armBatchPreflight` (site `arms`: the full original batch's re-check and both payloads per reading, compared question by question, arm by arm) and `judgeCommand` (site `judge`: the ordered jobs, compared by count, then id and canonical input with its newline, job by job) keep their admission lines where W2-5b1 put them and their refusal words and details byte for byte. That is one further in-place edit of W2-5b1 code, licensed under K5; it edits no W2-5b1 case, and both callers' existing cases pin it unchanged: the arms and judge cases of W2-5b1's describe `W2-5b1 Task 4: fix wave, the pair index across arm batches` (the two `D-6481` pairs and `C03`, `C05` to `C15`), `W2-5b1 Task 4: C04 consumer, …` and `W2-5b1 Task 4: C04 CONTROL, …`, and, for the admission, W2-5b1's fix-round consumers of `armBatchPreflight`'s admission-before-build order: `W2-5b1 Task 4: F2 consumer, a failed refresh refuses before the next batch effects` (about test:14061), `W2-5b1 Task 4: F2 consumer, nine distinct readings refuse the ninth batch at the count cap` (about test:14082), with `W2-5b1 Task 4: correction Phase A, bounded snapshot helper contract` (about test:15798); and, as consumers of D-6482's exclusion, which runs after the agreement and which the factoring leaves unchanged, `W2-5b1 Task 4: F3 existing ordinary owed record refuses without overwrite` (about test:15642) and its CONTROL `W2-5b1 Task 4: F3 CONTROL excludes the owed arm and runs the independent question` (about test:15667) (titles as W2-5b1's fix round renamed them, measured at 0de4cc990). `step0bCardOf` (site `step0b`: before `--out` and before every arm batch, both sections) and `fidelityBoundariesOf` (site `fidelity`: each measurable boundary, before its preflight, both sections) call it before any spawn or input persistence; the re-pilot's forms and its both-arms re-run reach it only through those two and `armBatchPreflight`. Pins: Task 1's K28 scan and its card-seam and later-arm-batch cases, Task 2's fidelity agreement case, Task 3's quiz re-pilot fidelity and step 0b cases, each learned case beside a no-learning CONTROL; mutants K28a, K28b and K28c (Task 1), K26F (Task 2), P15 and P16 (Task 3). A re-run of step 0b or fidelity on the same `--out` after a disagreement refusal would reuse finished runs built under the earlier reading; the remedy is a fresh `--out`, K28. | coordinator ruling at K26's re-anchor (2026-10-25) | 1, 2, 3 |
 
 ## Review Focus
 
@@ -394,16 +411,21 @@ These five inputs follow from the decisions and the rulings. Each would bite the
    - Pinned by **Task 5**.
 
 Beyond the five:
+6. **A scope, freshness, or version-rerun defect that changes evaluation inputs.**
+   - Inputs: arm spend already above share before judge; a malformed non-judge ledger row; a judge row before arms; prefix near-misses; unknown scope; unsafe totals; a pair learned between two card preflights, two arm batches or two fidelity boundaries (pilot and quiz); and a half-done question across a version move.
+   - Expected: only judge scope ignores arm spend after full-ledger parsing; arms and `judged.json.spend` stay whole-ledger. Every masked spawn input agrees over every retained reading through K28's one `maskingAgreementOf` before it spawns or persists, refusing `masking-snapshots-disagree <site>` on a disagreement, never the newest mask (K26); one moved pair resets linkage, shares one preflight and cannot enter sibling drift. A genuine payload-change exclusion stays W2-D89 `run-failed` with its qid (W2-5b1's build departure; re-anchor at W2-5b1's merged code).
+   - Pinned by Task 2's descriptive scope cases, Task 1's K28 scan, the K26 agreement cases of Tasks 1 to 3 with their CONTROLs (mutants K28a to K28c, K26F, P15, P16), Task 3's linked-rerun cases, Task 5's exclusion-report case, and Task 6's non-hard disclosure pin.
+
 - README's facts must match Tasks 1 to 5's names, forms and flags, and V1's drop must be stated as report-only; K16's seam sentence must match E11. Each erratum text must match the shipped code: E9 against lib's `parseHeadlessList`, E11 against the cut, E22 against the gate's labeller and rubric ids, E23 against the record's fields (**Task 6**).
 - The Q29 hunks must not touch W2-6's lines (**Task 6** Step 10).
-- `git diff <W2-5b1's merge> -- server/test/history-replay.test.ts` must show no removed or changed line outside the in-place edits Global Constraints lists.
+- `git diff <W2-5b1's merge> -- server/test/history-replay.test.ts` must show no removed or changed line outside the in-place edits Global Constraints lists. Its W2-5b1 exemption is exactly one line: Task 1's re-pin of W2-5b1 Task 5's `HANDLERS.keys()` order line (about :13725 at 0de4cc990, K5, CP-20).
 
 ## File Structure
 
 | Path | Action | Responsibility | Ring | Task(s) |
 |---|---|---|---|---|
-| `deploy/history-replay.mjs` | modify | **Task 1:** `DRIVER_REASONS` and `DRIVER_REFUSALS` (+`pilot-failed`); `mainThreadTurns` and `turnBoundHeld` through it; `persistenceMeasured`; `step0bMechanics`' `name` and persistence; the `'step0b --section pilot'` form; the step 0b section (`STEP0B_*`, `HISTORY_SKILL`, the check functions, `refusePilotSourceOut`, `step0bCommand`); `HANDLERS.set('step0b', …)`. **Task 2:** `cmpFrac` and `frac` in the gate statement; `FLAG_SPECS` (+`step0b`, `step0b-sha256`, `accept-failed-pilot`); the `'fidelity --section pilot'` and `'pilot-result --section pilot'` forms, `open --finalize`'s optional flag and W2-5b1's two pilot forms' `--step0b` pair (K2); `spendLinesOf` under `spentSoFar`; `pilotResultError` exported and tightened; `refuseOutOfRangeValues`' and `refuseWriterAdmission`'s `settings`; quiz-source's call; `openFinalize`'s derived budget and Q27; W2-5b1's settings lines through `settingsModeRow`, `loadArmRun`'s pilot `return` through `step0bModeOf`, and `armsCommand`'s Q25 line through `refusePilotSourceOut`; the fidelity and pilot-result section (`fidelityBoundariesOf`, `step0bOf`, `step0bModeOf`, `quizUptakeReadingOf` among it); two `HANDLERS.set` lines. **Task 3:** `AMENDMENT_KINDS` in the gate statement; `FLAG_SPECS` (+twelve flags); `AMEND_FLAGS`, `AMEND_DETAILS` and the four forms (`'step0b --section quiz'`, `'fidelity --section quiz'`, `'pilot-result --section quiz'`, `'open --amend'`); `openCommand`'s fourth mode; `'quiz'` in the three section lists and one dispatch line each in `step0bCommand`, `fidelityCommand` and `pilotResultCommand`; the re-pilot and amendment section; W2-5b1's `armRunName`, `armJob`, `armAttemptsOf`, `questionArmsOf`, `reportArmsStop`, `armsCommand` and `expectedForNode` for the move and the exception's stamp, and W2-4's `preflightFiles` (K6). **Task 4:** the gate names the sheet needs; `FLAG_SPECS` (+`sheet`, `judged`, `judged-sha256`); `loadInputBytes` under `loadInput`; the `'handcheck --sheet'` form; the hand-check section; `HANDLERS.set('handcheck', …)`. **Task 5:** the gate names the report needs; `FLAG_SPECS` (+ten flags); the `report` form; `readAnswerRecords` under `readArmAnswers`; the report section; `HANDLERS.set('report', …)`. Every block above the entry guard. | L4 (operator script) | 1–5 |
-| `server/test/history-replay.test.ts` | modify | **Task 1:** two appended describes (`b2t1`); in place W2-4's `DRIVER_REASONS` case and `HANDLERS` line. **Task 2:** one nested describe in `r7describe`, six appended describes (`b2t2`); in place W2-4's two pins and W2-5a's four edits. **Task 3:** one nested describe in `r7describe` and three appended describes (`b23`); in place W2-4's `FLAG_SPECS` pin and W2-5a's open-modes case. **Task 4:** five appended describes (`b2t4`); in place W2-4's two pins. **Task 5:** three appended describes (`b2t5`), the end-to-end walk last; in place W2-4's two pins. **Task 6:** one appended describe and its helpers (`w5b26`), last in the file. | test | 1–6 |
+| `deploy/history-replay.mjs` | modify | **Task 1:** `DRIVER_REASONS` and `DRIVER_REFUSALS` (+`pilot-failed`); `mainThreadTurns` and `turnBoundHeld` through it; `persistenceMeasured`; `step0bMechanics`' `name` and persistence; the `'step0b --section pilot'` form; the step 0b section (`STEP0B_*`, `HISTORY_SKILL`, the check functions, `refusePilotSourceOut`, `step0bCommand`); `HANDLERS.set('step0b', …)`; K28's module-private `maskingAgreementOf`, W2-5b1's `armBatchPreflight` and `judgeCommand` agreement loops through it (in place, K5), and `step0bCardOf`'s agreement (K26). **Task 2:** `SPEND_SCOPES`, `judgeSpentOf`, W2-4's `batchGate` scope and W2-5b1's `openJudge` gate call (K25); `cmpFrac` and `frac` in the gate statement; `FLAG_SPECS` (+`step0b`, `step0b-sha256`, `accept-failed-pilot`); the `'fidelity --section pilot'` and `'pilot-result --section pilot'` forms, `open --finalize`'s optional flag and W2-5b1's two pilot forms' `--step0b` pair (K2); `spendLinesOf` under `spentSoFar`; `pilotResultError` exported and tightened; `refuseOutOfRangeValues`' and `refuseWriterAdmission`'s `settings`; quiz-source's call; `openFinalize`'s derived budget and Q27; W2-5b1's settings lines through `settingsModeRow`, `loadArmRun`'s pilot `return` through `step0bModeOf`, and `armsCommand`'s Q25 line through `refusePilotSourceOut`; the fidelity and pilot-result section (`fidelityBoundariesOf`, with its per-boundary K28 agreement, `step0bOf`, `step0bModeOf`, `quizUptakeReadingOf` among it); two `HANDLERS.set` lines. **Task 3:** K27's linked-pair reset, the moved pair agreeing through `armBatchPreflight`'s K28 call (K26; W2-5b1's build departure; re-anchor at W2-5b1's merged code); `AMENDMENT_KINDS` in the gate statement; `FLAG_SPECS` (+twelve flags); `AMEND_FLAGS`, `AMEND_DETAILS` and the four forms (`'step0b --section quiz'`, `'fidelity --section quiz'`, `'pilot-result --section quiz'`, `'open --amend'`); `openCommand`'s fourth mode; `'quiz'` in the three section lists and one dispatch line each in `step0bCommand`, `fidelityCommand` and `pilotResultCommand`; the re-pilot and amendment section; W2-5b1's `armRunName`, `armJob`, `armAttemptsOf`, `questionArmsOf`, `reportArmsStop`, `armsCommand` and `expectedForNode` for the move and the exception's stamp, and W2-4's `preflightFiles` (K6). **Task 4:** the gate names the sheet needs; `FLAG_SPECS` (+`sheet`, `judged`, `judged-sha256`); `loadInputBytes` under `loadInput`; the `'handcheck --sheet'` form; the hand-check section; `HANDLERS.set('handcheck', …)`. **Task 5:** K27's report-only payload-change exclusion projection, counted as W2-D89 `run-failed` with qids (W2-5b1's build departure; re-anchor at W2-5b1's merged code); the gate names the report needs; `FLAG_SPECS` (+ten flags); the `report` form; `readAnswerRecords` under `readArmAnswers`; the report section; `HANDLERS.set('report', …)`. Every block above the entry guard. | L4 (operator script) | 1–5 |
+| `server/test/history-replay.test.ts` | modify | **Task 1:** two appended describes (`b2t1`); in place W2-4's `DRIVER_REASONS` case and `HANDLERS` line, and W2-5b1 Task 5's `HANDLERS.keys()` order line in its `JUDGE_OUTCOMES …` case (K5, CP-20). **Task 2:** one nested describe in `r7describe`, six appended describes (`b2t2`); in place W2-4's two pins and W2-5a's four edits. **Task 3:** one nested describe in `r7describe` and three appended describes (`b23`); in place W2-4's `FLAG_SPECS` pin and W2-5a's open-modes case. **Task 4:** five appended describes (`b2t4`); in place W2-4's two pins. **Task 5:** four appended describes (`b2t5`): the end-to-end walk, then the F1 carry's (Step 8a); in place W2-4's two pins. **Task 6:** one appended describe and its helpers (`w5b26`), last in the file. | test | 1–6 |
 | `README.md` | modify | **Task 6:** one paragraph, `**The replay driver (W2's eval).**`, after W2-2b's seam paragraph, before the section's `---`; and the seam paragraph's two lines on the as-of cut reworded in place (K16). | docs | 6 |
 | `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md` | modify | **Task 6:** eighteen single-line replacements (E2, E7, E8 ×2, E9 ×3, E10, E11, E19, E20, E21, E22 ×4, E23, E24); line count unchanged. | docs | 6 |
 | `docs/superpowers/plans/2026-10-23-ccrc-history-w2-5b2-pilot-and-verdict.md` | modify (only for an issued number or a corrected prediction) | this plan | docs | any |
@@ -468,7 +490,7 @@ The decisions document was written at `bd363a76b`. The base is `92dac5764` plus 
 | W2-D42: the arm-word scan covers the driver | The gate spells an arm word on four code lines outside `ASSIGNMENT_ARMS` (`armOf`, `handcheckAgreement`, `decideGate`, `recValidate`) | A named residual in the PR body; the gate is never edited | 6 |
 | README's seam paragraph: "rows, nodes and epochs after it are absent" | The cut is D-5766's time cut plus positional hide, as E11 now states | K16: its two lines reworded in place to agree with E11, inside the seam paragraph, line-disjoint from W2-6 | 6 |
 | The W2-6 plan was read from a scratch copy while drafting | It is on `main` (#1174, `35c436e58`) | K20: its pins re-checked against this PR's additions; none reds (the Q29 table) | 6 |
-| The brief's line hints (`step0bMechanics` :2594, `DRIVER_REASONS` :69, `HANDLERS` :4824, `pilotResultError` :5383, `openFinalize` :5663, `handcheckSample` :1607, …) | Measured at `92dac5764`: as hinted. W2-5b1 moves the test anchors, and its `DRIVER_STOPS` tail duplicates `DRIVER_REASONS`' tail | Every edit anchored by quoted content; Task 1's `DRIVER_REASONS` edit anchors on the `'input-invalid'` line followed by `'code-unmeasured'`, so it stays unique | all |
+| The brief's line hints (`step0bMechanics` :2594, `DRIVER_REASONS` :69, `HANDLERS` :4824, `pilotResultError` :5383, `openFinalize` :5663, `handcheckSample` :1607, …) | Measured at `92dac5764`: as hinted. W2-5b1 moved the driver anchors as well as the test ones: at its final head `0de4cc990`, `step0bMechanics` :2678, `DRIVER_REASONS` :72, `pilotResultError` :5718, `openFinalize` :6028, and the test's `HANDLERS` key line :4846 (comment :4844-4845); only `handcheckSample` (gate :1607) is unmoved, and every gate anchor on the header's gate line holds exactly. And its `DRIVER_STOPS` tail duplicates `DRIVER_REASONS`' tail | Every edit anchored by quoted content; Task 1's `DRIVER_REASONS` edit anchors on the `'input-invalid'` line followed by `'code-unmeasured'`, so it stays unique | all |
 
 ## Not in this plan
 
@@ -476,6 +498,7 @@ The decisions document was written at `bd363a76b`. The base is `92dac5764` plus 
 - **The gate validator's range checks** (review 795 F1, and `spend_budget` and `settings_mode` with them) stay in the ledger's "Later". Until then, the driver refuses out-of-range values before `--out` (D-6309's rule, S2's C22).
 - **R8's ref-survival decider moved into lib** (S2's C8) also stays in "Later".
 - **lib's `redactField` glued-prefix limit (R-3)** is a residual named in the PR body (S2's C23).
+- **D-6481's retained-snapshot admission.** `refreshPairIndex`, `maskingSnapshotsOf`, `sameMaskingText`, the snapshot caps and their refusals stay as W2-5b1 merged them. K28 moves only the two all-readings-agree loops into one function, behaviour byte for byte; any change to what a reading is, how many are kept or how they are charged is W2-5b1's, never this PR's.
 - **A `.py` read-instant field** is a W2-3 follow-up (S2's C15); the report records a labelled mtime proxy.
 - **The rollout.** It goes through the release lane only, as part of W2's final release, rolled onto every named node before part 1 (W2-D6). That is the coordinator's or the operator's, never the worker's.
 - **The window and the operator's acts** (decisions §4 and §5): step 0a, the pilot, `rm` of headless-on, part 1 and part 2, the marker and recall-off writes, the arm and judge batches, the re-pilot and its amendment, labelling the sheet, the report, the gate decision and close. None is the worker's, and no step runs a subcommand on a real node or account.
@@ -484,12 +507,12 @@ The decisions document was written at `bd363a76b`. The base is `92dac5764` plus 
 ## The PR
 
 **PR:** One PR against `main`, on this workspace's own branch, executed in task order, with one commit per task (six, unless a task finds nothing to commit, which its report says):
-1. `feat(history-replay): step0b --section pilot, step 0b's turn bound, persistence, arm init and treatment-arm assertions, recorded and halting with pilot-failed (W2-5b2 Task 1; W2-D57, W2-D58; Q10, Q11, Q23, Q25, Q26, Q31; R1; K3, K4)`
-2. `feat(history-replay): fidelity and pilot-result --section pilot, the usage pilot in step 0b's settings mode, and open --finalize's derived spend budget (W2-5b2 Task 2; W2-D76, W2-D55, W2-D64, W2-D82; Q6 to Q10, Q25, Q27; K2, K3, K13, K14, K15; D-6280, D-6644)`
-3. `feat(history-replay): version moves: the mid-window re-pilot (step0b, fidelity and pilot-result --section quiz), open --amend, a freeze exception's release, and the both-arms re-run (W2-5b2 Task 3; W2-D90, W2-D56, W2-D6, W2-D7, W2-D24; Q8, Q12, Q13, Q14, Q23; K1, K3, K6, K7)`
+1. `feat(history-replay): step0b --section pilot, step 0b's turn bound, persistence, arm init and treatment-arm assertions, recorded and halting with pilot-failed (W2-5b2 Task 1; W2-D57, W2-D58; Q10, Q11, Q23, Q25, Q26, Q31; R1; K3, K4, K26, K28)`
+2. `feat(history-replay): fidelity and pilot-result --section pilot, the usage pilot in step 0b's settings mode, and open --finalize's derived spend budget (W2-5b2 Task 2; W2-D76, W2-D55, W2-D64, W2-D82; Q5 to Q10, Q25, Q27; K2, K3, K13, K14, K15, K25, K26, K28; D-6280, D-6644, D-6723)`
+3. `feat(history-replay): version moves: the mid-window re-pilot (step0b, fidelity and pilot-result --section quiz), open --amend, a freeze exception's release, and the both-arms re-run (W2-5b2 Task 3; W2-D90, W2-D56, W2-D6, W2-D7, W2-D24; Q8, Q12, Q13, Q14, Q23; K1, K3, K6, K7, K26, K27, K28)`
 4. `feat(history-replay): handcheck --sheet over every node's judged file, blinded, and the strict label reader (W2-5b2 Task 4; W2-D81, W2-D54, W2-D24; Q2, Q18, Q19, Q23; K8, K9, K10, K19; D-6645)`
-5. `feat(history-replay): report, every node's gathered outputs sha-checked into decideGate's inputs, verdict.json and the report-only figures (W2-5b2 Task 5; W2-D85, W2-D89, W2-D23, W2-D82, W2-D24; S2, Q15, Q23, Q28, V1; K8, K11, K12, K24; D-6646)`
-6. `docs(history): README's replay-driver paragraph and its pin, the seam sentence on the as-of cut, and the W2-5b spec errata in place (W2-5b2 Task 6; W2-D3, S1, V1, V5, U15, K16, K17, K18; D-5765, D-5766, D-5767, D-5768, D-5769, D-5776, D-5777, D-5778, D-5779, D-5780, D-5781)`
+5. `feat(history-replay): report, every node's gathered outputs sha-checked into decideGate's inputs, verdict.json and the report-only figures (W2-5b2 Task 5; W2-D85, W2-D89, W2-D23, W2-D82, W2-D24; S2, Q15, Q23, Q28, V1; K8, K11, K12, K24, K27; D-6646)`
+6. `docs(history): README's replay-driver paragraph and its pin, the seam sentence on the as-of cut, and the W2-5b spec errata in place (W2-5b2 Task 6; W2-D3, S1, V1, V5, U15, K16, K17, K18, K25 to K27; D-5765, D-5766, D-5767, D-5768, D-5769, D-5776, D-5777, D-5778, D-5779, D-5780, D-5781)`
 
 **Fixes and numbers.** A fix that one of Task 6's checks calls for is a correction commit under the owning task's number, made before the push. A number issued during the build is defined in this plan's "Deviations found" by the commit that first cites it.
 
@@ -499,7 +522,7 @@ The decisions document was written at `bd363a76b`. The base is `92dac5764` plus 
 - Task 3 needs Tasks 1 and 2: its re-pilot extends their section lists and commands and calls `step0bOf`, `fidelityBoundariesOf` and `pilotFailuresOf`.
 - Task 4 needs W2-5b1's judge; it runs fourth so the `FLAG_SPECS` and `HANDLERS` pins grow in one order.
 - Task 5 needs Task 2 (`quizUptakeReadingOf`) and Task 4 (the hand-check plan, its reader and the `judged` flags).
-- Task 6 runs last.
+- Task 6 runs last and records K25's approximate non-hard disclosure plus the K26/K27 residuals and checks.
 
 **CI.** This PR changes no `.github/` file, so CI runs its selection. The PR body asks the coordinator to check that the `select tests` summary lists `history-replay`, `lifecycle`, `single-definition`, `history-cli` and `history-skill`.
 
@@ -519,24 +542,25 @@ The decisions document was written at `bd363a76b`. The base is `92dac5764` plus 
 
 It opens ready for review (not a draft), titled **"ccrc history wave W2-5b2: the pilot and the verdict"**, with the body Task 6 Step 15 gives. If W2-6 merged first, this PR merges `main` before the push (never a rebase), keeps both sides, and re-runs Step 10.
 
-The plan's `## Deviations found` comes at its end, after Task 6. It holds one entry per number this plan defines, each naming the first task section that cites it: D-6644 (Task 2), D-6645 (Task 4) and D-6646 (Task 5), issued at planning, and any number issued during the build.
+The plan's `## Deviations found` comes at its end, after Task 6. It holds one entry per number this plan defines, each naming the first task section that cites it: D-6644 (Task 2), D-6645 (Task 4), D-6646 (Task 5) and D-6723 (Task 2), issued at planning, and any number issued during the build.
 
 ---
 
-### Task 1: `step0b --section pilot`: the turn bound and persistence, the arm's init event and the treatment-arm assertions, recorded and halting on a failure; and `pilot-failed`, the halt word the pilot tasks share (W2-D57, W2-D58; Q10, Q11, Q23, Q25, Q26, Q31; R1)
+### Task 1: `step0b --section pilot`: the turn bound and persistence, the arm's init event and the treatment-arm assertions, recorded and halting on a failure; `pilot-failed`, the halt word the pilot tasks share; and the one masking agreement every W2-5b2 spawn shares (W2-D57, W2-D58, D-6481; Q10, Q11, Q23, Q25, Q26, Q31; R1, K26, K28)
 
 This task ships the first act the operator runs after part 1 (W2 decisions §5, act 14: "Run step 0b: the turn bound, persistence, the arm init, and the treatment-arm assertions"), on the pilot node, in the pilot's fresh `--out` (Q25), after `headless-on` lists the pilot pairs (act 13). It is the scoping study's Task 6. It owns two things:
 - **The `step0b` subcommand, `--section pilot` form (W2-D57, W2-D58).** Two kinds of batch, each behind W2-D56's preflight:
   - **the box batch:** W2-4's `step0bMechanics`, one box-mode run of `TURN_PROBE_PROMPT`. Its turn bound is read by `turnBoundHeld`, which now counts the run's main-thread turns through W2-5b1 Task 1's `facts.messages` (R1). Its persistence half is guarded so that an unreadable `projects/` directory is recorded as unmeasured, never clean and never an exit 1 after `--out` (D-6309's rule);
   - **the arm batches:** seven treatment-arm runs on the first usage question in qid order (Q11), each run's stdin the question's card line, one blank line, then the run's prompt, so the treatment arm is driven through the card and the shipped skill (W2-D58). The seven runs are: each taught spelling once (admitted); three denial probes over a synthetic transcript path that does not exist (Q11): a chained `cat`, a `$(…)` substitution and an `rg` (denied); and one Agent call, whose subagent's tool list is recorded as its observed tool_use names through `parentToolUseId`, labelled inferred (Q11). Every arm run's init event must show exactly the tools the arm argv grants (Bash and Agent), no MCP server, no plugin, and the `ccrc-history` skill (W2-D57's "the arm's init event", W2-D58).
   
-  W2-D78 (i), (ii) and (iii) and the card are asked before `--out` and again before every arm batch (W2-5b1's `requireListed`, `refuseRecallOff`, `recheckBatch` and `armPayloads`, D-6469). Each check is `pass`, `fail` or `unmeasured`, never folded: a pilot passes only when every check passes (Q10, fail-closed), and the failed and the unmeasured are listed apart. The result is written under `--out` whatever it shows, and `sha256 <hex>` is printed on stderr (D-5983). A pilot that did not pass then refuses `pilot-failed`, naming what failed (W2-D57: "A failure halts W2 for an operator ruling"). A skill missing under `--restricted` is one such failure: the detail tells the operator to re-run with `--settings-mode fallback` (Q26), and that re-run's runs and result live beside the restricted ones on the same `--out`, never over them. Every run's `error` fields are recorded (Q31). The form takes no `--allow-code-change` (Q23).
+  W2-D78 (i), (ii) and (iii) and the card are asked before `--out` and again before every arm batch (W2-5b1's `requireListed`, `refuseRecallOff`, `recheckBatch` and `armPayloads`, D-6469). Each of those card preflights admits the store's retained readings and builds the re-check and the card under every one of them, which must agree (K26, K28: W2-5b1's `maskingSnapshotsOf`, then `maskingAgreementOf`); a disagreement refuses `input-invalid` `masking-snapshots-disagree step0b` before any spawn or persistence, never masking with the newest reading. Each check is `pass`, `fail` or `unmeasured`, never folded: a pilot passes only when every check passes (Q10, fail-closed), and the failed and the unmeasured are listed apart. The result is written under `--out` whatever it shows, and `sha256 <hex>` is printed on stderr (D-5983). A pilot that did not pass then refuses `pilot-failed`, naming what failed (W2-D57: "A failure halts W2 for an operator ruling"). A skill missing under `--restricted` is one such failure: the detail tells the operator to re-run with `--settings-mode fallback` (Q26), and that re-run's runs and result live beside the restricted ones on the same `--out`, never over them. Every run's `error` fields are recorded (Q31). The form takes no `--allow-code-change` (Q23).
 - **The shared foundation the later W2-5b2 tasks need first: one driver word, `pilot-failed`.** It is appended to `DRIVER_REASONS` and classified once, as a refusal, in W2-5b1 Task 1's partition (`DRIVER_REFUSALS`; Q24's "each word classified once"). It is the halt word for every pilot check this PR records (K3): step 0b's here, Task 2's fidelity and pilot result (the absent rate among its failures), and Task 3's re-pilot. Each of those reuses it and adds no word of its own.
   
   This task takes no other foundation:
   - no import changes. Every name it calls is already in the driver: W2-5b1 imported `RECALL_ARMS` and the gate's names. So `EXACT_NAMES` (D-5814) is not touched, and the gate names that `handcheck` and `report` import are those later tasks' own, added in their own commits;
   - no new `FLAG_SPECS` entry: `--section` and `--settings-mode` exist;
   - one Q25 refusal, `refusePilotSourceOut(out, who)`, declared here at its first need (K4). Task 2 makes `arms`, `fidelity` and `pilot-result` its other callers, and Task 3 the re-pilot's forms;
+  - one agreement function, `maskingAgreementOf` (K28), factored in place out of W2-5b1's `armBatchPreflight` and `judgeCommand`. Step 0b's card preflight calls it here, Task 2's `fidelityBoundariesOf` calls it, and Task 3's re-pilot reaches it through those two and `armBatchPreflight`;
   - one output kind, `STEP0B_KIND`. Its file shape (Produces) is the producer contract that Task 2's `pilot-result` reads, as `step0b_sha256`, and Task 3's re-pilot reads for the quiz section.
 
 The mid-window re-pilot form, `step0b --section quiz` on a listed quiz family (Q12), is Task 3's (K1). It must record a moved version rather than refuse it as `claude-version-moved`, so its preflight compares with the version it measures. Task 3 adds `'quiz'` to `STEP0B_SECTIONS` and one line below each of two of this task's lines, so this task builds those seams: `STEP0B_SECTIONS` declared on one line; the section refusal's detail built from that list; the expected values every `preflightSpawn` compares against held in one `let expected` binding; the range call's budget field named by section, as W2-5b1's `armsCommand` names it; and the Q25 refusal one statement. None changes a Task 1 behaviour or pin.
@@ -546,23 +570,26 @@ The mid-window re-pilot form, `step0b --section quiz` on a listed quiz family (Q
 - W2-D58 (the treatment-arm assertions through the shipped skill and card: each taught spelling admitted, `…; cat <transcript>`, `$(…)` and an `rg` of the transcript path denied, only Bash and Agent, no MCP, no plugin, a subagent's tool list recorded, the skill listed; the fallback mode recorded before the full run);
 - W2-D56 (W2-5b1's `preflightSpawn` before every batch, the box batch included), W2-D78 (i), (ii) and (iii) before every arm batch and before `--out`, W2-D24 (the `gate_code` re-check first, through W2-5b1's `loadArmRun`), W2-D50 (the arm env's real values), W2-D55 (part 1's `pilot_budget`, the limits stop), W2-D53 (a resumed run is read back, never respawned), W2-D59 (the driver's words; its owner PR adds its own), W2-D84's never-fold for an unmeasured value;
 - Q10 (fail-closed, as the scoping study lists it: the turn bound not `true`, persistence left, tools not exactly Bash and Agent, an MCP server or a plugin, the skill missing, a taught spelling denied, or a denial not seen. The subagent's tool list is recorded and is not a check), Q11, Q23, Q25, Q26, Q31, R1, S2's C21 (`STEP0B_STATES` driver-local, pinned disjoint), R23 (its own W2-D24 row under W2-5a's title).
+- K26 and K28 (D-6481 carried): `step0bCardOf` admits the store's retained readings (W2-5b1's `maskingSnapshotsOf`) and builds the re-check and the card under every one through `maskingAgreementOf`, the one agreement function K28 factors out of W2-5b1's `armBatchPreflight` and `judgeCommand` in place (K5); a disagreement refuses `input-invalid` `masking-snapshots-disagree step0b` before `--out` exists or any arm spawns, never masking with the newest reading. Task 3's quiz re-pilot reuses this seam unchanged.
 
-It cites, each bare: D-5983 (the printed sha), D-5985 (the claim), D-5986 (plain I/O under `--out`), D-6307, D-6311 and D-6309 (refusals before `--out`, the range check, and the rule that a data case after `--out` never exits 1), D-6469 (W2-5b1's payload-discard clause) and D-5814 (the import pin, untouched). It defines no number and finds no departure from the decisions document or the spec.
+It cites, each bare: D-5983 (the printed sha), D-5985 (the claim), D-5986 (plain I/O under `--out`), D-6307, D-6311 and D-6309 (refusals before `--out`, the range check, and the rule that a data case after `--out` never exits 1), D-6469 (W2-5b1's payload-discard clause), D-6481 (W2-5b1's retained-snapshot departure, whose two agreement loops K28 factors into `maskingAgreementOf`) and D-5814 (the import pin, untouched). It defines no number and finds no departure from the decisions document or the spec.
 
 **Files:**
 - Modify: `deploy/history-replay.mjs`. Every anchor below is a hint: about `:NNN` at `92dac5764` for base text, or "(W2-5b1 Task N's <name>; re-anchor at W2-5b1's merged head)" for W2-5b1's text. Re-anchor each by its quoted content.
-  - (a) `DRIVER_REASONS` (about :69 at 92dac5764; W2-5b1 leaves it alone, by its R11): its JSDoc's last line, ` *  store-read-failed), so reconstruction never reads an absent store as an empty one. */` (about :68), gains two sentences. The literal's last five lines, from `  'args-invalid', 'in-pane', 'roster-invalid', 'account-refused', 'input-invalid',` to `]);`, gain `  'pilot-failed',` as the last member.
+  - (a) `DRIVER_REASONS` (about :72 at W2-5b1's final head 0de4cc990; W2-5b1 leaves it alone, by its R11): its JSDoc's last line, ` *  store-read-failed), so reconstruction never reads an absent store as an empty one. */` (about :71), gains two sentences. The literal's last five lines, from `  'args-invalid', 'in-pane', 'roster-invalid', 'account-refused', 'input-invalid',` to `]);`, gain `  'pilot-failed',` as the last member.
   - (b) `DRIVER_REFUSALS` (W2-5b1 Task 1's `DRIVER_REFUSALS`; re-anchor at W2-5b1's merged head): its last two lines, `  'args-invalid', 'in-pane', 'roster-invalid', 'account-refused', 'input-invalid',` and `]);`, gain `  'pilot-failed',` between them. Its JSDoc's last line, ` *  are spelled, so a word added to DRIVER_REASONS reds history-replay.test.ts's "exactly once" pin until it is classified. */`, gains one sentence.
-  - (c) `turnBoundHeld` (about :2522-2536 at 92dac5764): its JSDoc's two lines ` *  the max-turns limit stopped the run (its subtype is MAX_TURNS_STOP_SUBTYPE) AND the run made at most maxTurns` and ` *  assistant turns (readStreamJson's assistantMessages). More than maxTurns assistant turns is false: the bound did` are reworded. Its body line `  const turns = facts.assistantMessages;` becomes a call of the new `mainThreadTurns`, declared directly above the JSDoc (R1).
-  - (d) `persistenceLeft` (about :2571): `persistenceMeasured` is added directly after its closing `}`.
-  - (e) `step0bMechanics` (about :2588-2604): its JSDoc gains one sentence. Its signature line `export async function step0bMechanics({ launch, out, model, settingsMode, lang, gate, claim }) {` gains `name = STEP0B_TURN_RUN`, and its body answers persistence through `persistenceMeasured`.
-  - (f) `const SUBCOMMAND_FLAGS = Object.freeze({` (about :4811): one form, `'step0b --section pilot'`, inserted as the last entry, directly before the `});` that closes the object. That is after W2-5b1 Task 5's `'judge --section quiz'` entry (W2-5b1 Task 5's `SUBCOMMAND_FLAGS` forms; re-anchor at W2-5b1's merged head).
-  - (Step 6) One new section, `// ── W2-5b2 Task 1: step 0b`, directly above the comment line `// The entry guard stays the LAST block of this file` (about :5796 at 92dac5764), after W2-5b1 Task 5's `HANDLERS.set('judge', …)` (re-anchor at W2-5b1's merged head). It ends with `HANDLERS.set('step0b', …)`.
+  - (c) `turnBoundHeld` (about :2522-2536 at 92dac5764; about :2606-2622 at 0de4cc990, the function :2613, the `turns` line :2615): its JSDoc's two lines ` *  the max-turns limit stopped the run (its subtype is MAX_TURNS_STOP_SUBTYPE) AND the run made at most maxTurns` and ` *  assistant turns (readStreamJson's assistantMessages). More than maxTurns assistant turns is false: the bound did` are reworded. Its body line `  const turns = facts.assistantMessages;` becomes a call of the new `mainThreadTurns`, declared directly above the JSDoc (R1).
+  - (d) `persistenceLeft` (about :2655 at 0de4cc990; its closing `}` about :2670, after the `return { left: sessionId === null || …` line about :2669): `persistenceMeasured` is added directly after its closing `}`.
+  - (e) `step0bMechanics` (about :2672-2687 at 0de4cc990, the signature :2678): its JSDoc gains one sentence. Its signature line `export async function step0bMechanics({ launch, out, model, settingsMode, lang, gate, claim }) {` gains `name = STEP0B_TURN_RUN`, and its body answers persistence through `persistenceMeasured`.
+  - (f) `const SUBCOMMAND_FLAGS = Object.freeze({` (about :5106 at 0de4cc990; its closing `});` about :5131, directly after `'judge --section quiz'` about :5130): one form, `'step0b --section pilot'`, inserted as the last entry, directly before the `});` that closes the object. That is after W2-5b1 Task 5's `'judge --section quiz'` entry (W2-5b1 Task 5's `SUBCOMMAND_FLAGS` forms; re-anchor at W2-5b1's merged head).
+  - (g) K28, in place under K5: one module-private function, `maskingAgreementOf`, inserted directly above W2-5b1 Task 4's `armBatchPreflight` JSDoc (`/** W2-D78 and W2-D56 before one arm batch, composed once. Read-only first:`); `armBatchPreflight`'s inline loop (from `  let baseline = null;` to the loop's closing `  }`) and W2-5b1 Task 5's `judgeCommand` loop (from `      let jobs = null;` to its closing `      }`) each become one call of it (W2-5b1's tip 554df82f0; at its final head 0de4cc990 the loops are about :6949-:6964 and :7550-:7557, byte-identical, under admission lines about :6945 and :7549; re-anchor at W2-5b1's merged head). Each caller's `const snapshots = maskingSnapshotsOf(…);` line stays where it is.
+  - (Step 6) One new section, `// ── W2-5b2 Task 1: step 0b`, directly above the comment line `// The entry guard stays the LAST block of this file` (about :7587 at 0de4cc990), after W2-5b1 Task 5's `HANDLERS.set('judge', …)` (about :7585 at 0de4cc990). It ends with `HANDLERS.set('step0b', …)`.
 - Modify: `server/test/history-replay.test.ts`.
   - In place (W2-4's cases, which W2-5b1 also edited in place):
     - W2-4 Task 1's case `DRIVER_REASONS is frozen, duplicate-free, and exactly W2-D59's sixteen words in order, …` (about :165-170 at 92dac5764): one constant line `W2_5B2`, its title's tail and its `toEqual` line;
-    - W2-4 Task 9's registration line `expect([...t9Driver.HANDLERS.keys()]).toEqual([...]);` and the two comment lines above it (about :4822-4824 at 92dac5764, as W2-5b1 Tasks 3 to 5 left them): `'step0b'` appended.
-  - Appended: one import group (prefix `b2t1`), its module-level fixtures and two describes. They go at the END of the file, after W2-5b1's last appended describe (W2-5b1 Task 6's walk; re-anchor at W2-5b1's merged head). They never go inside W2-6's region, which sits at an interior anchor before W2-5b1's first appended block, ending at `// ── end of W2-6's region (Q29) ──` (W2-6's U4; U15 keeps W2-5b2 off it). So the two PRs' hunks are line-disjoint whichever merges first.
+    - W2-4 Task 9's registration line `expect([...t9Driver.HANDLERS.keys()]).toEqual([...]);` and the two comment lines above it (about :4844-4846 at 0de4cc990, as W2-5b1 Tasks 3 to 5 left them): `'step0b'` appended.
+  - In place (W2-5b1's case, licensed under K5 at CP-20): in W2-5b1 Task 5's case `JUDGE_OUTCOMES are driver-local report words, disjoint from DRIVER_REASONS and GATE_REASONS` (about :13718, its line about :13725 at 0de4cc990), the one line `expect([...W5B5.HANDLERS.keys()].slice(-2), 'judge is registered right after arms').toEqual(['arms', 'judge']);` becomes the order-independent `indexOf` form (Step 2 (c)). `HANDLERS.set('step0b', …)` is declared after `judge` (Step 6), so the `.slice(-2)` form would read `['judge', 'step0b']` and red at this commit.
+  - Appended: one import group (prefix `b2t1`), its module-level fixtures and two describes. They go at the END of the file, after W2-5b1's last appended describe: at 0de4cc990 that is `describe('W2-5b1 Task 4: correction Phase A, bounded snapshot helper contract')` (about :15797 to the file's end at :16546), not W2-5b1 Task 6's walk (about :13729), which W2-5b1 Task 4's final fix-wave blocks follow. They never go inside W2-6's region, which sits at an interior anchor before W2-5b1's first appended block, ending at `// ── end of W2-6's region (Q29) ──` (W2-6's U4; U15 keeps W2-5b2 off it). So the two PRs' hunks are line-disjoint whichever merges first.
 - Not edited: `ccd/**`, `shared/**`, `deploy/history-gate.mjs`, `deploy/measure-history.py`, `.github/**`, `README.md` (the driver paragraph is a later task's) and the spec (the errata are a later task's). `single-definition.test.ts` is re-run, never edited, and so is every other test file.
 
 **Interfaces:**
@@ -576,16 +603,18 @@ It cites, each bare: D-5983 (the printed sha), D-5985 (the claim), D-5986 (plain
     - `prependCard(line: string, payload: string): string`, the card line, one blank line, then the payload;
     - `armPayloads(rs, boundaryEntryId, question, cut): { state: 'payloads', plain, carded, card: { state: 'card', line: string, leafId, parentId, parent }, counts } | { state: 'discard', why }`;
     - `recheckBatch(rs, entries, { configDirs }): Promise<Map<qid, { ok: true, boundaryEntryId, cut }>>`, which refuses `quiz-unanswerable` `<qid> clause (<a|b|c>) <why>`.
+  - **W2-5b1's D-6481 seam (K28; at W2-5b1's tip 554df82f0, re-anchor at its merged head):** the module-private `maskingSnapshotsOf(rs, home): Array<{ idx, material }>`, W2-5b1's retained readings (the seed and up to seven structurally distinct later readings, admitted through `refreshPairIndex`, which refuses `input-invalid` `masking-snapshot-belt-overflow`, `masking-snapshots-count-cap`, `masking-snapshots-material-cap`, `masking-snapshot-invalid` or `masking-snapshot-refresh-failed`), consumed only through `maskingSnapshotsOf`, never by a direct `refreshPairIndex` call; and the module-private `sameMaskingText(a, b): boolean` (byte equality). Step 0 counts both.
   - **W2-5b1 Task 3:** `requireListed(home, storeId, families: Array<{ store_id, ccrc_id, generation }>): void`, which refuses `family-unlisted`.
   - **W2-5b1 Task 4:**
     - `loadArmRun(flags, section, { nowMs }): ArmRun`, where `ArmRun = { section, record, recordSha256, frozen: { sha256, list: { entries } }, settingsMode, allowCodeChange: boolean, codeStamps: string[] }`. For `'pilot'` it reads part 1 through `loadRecordInput(flags, 'draft')`, then `recheckCode` (no flag, Q23), then the pilot frozen list against part 1's `pilot.frozen_sha256`, then part 1's `settings_mode`, which must be a `SETTINGS_MODES` word or `record-invalid` `settings_mode out-of-range`;
     - `armNodeOf(run, storeId): ArmNode`, where `ArmNode = { questions, nAll, account, expected, budget: number, limits, settingsMode }`; the questions come in frozen qid order;
     - the module-private `refuseSpawnAdmission({ home, accountId, limits, expected, allowCodeChange = false })`;
     - the module-private `preflightSpawn({ launch, home, out, lang, gate, expected, allowCodeChange = false }): Promise<{ version: string, stamps: string[] }>`;
-    - `streamEventsOf(text): object[]` and `errorFieldsOf(events): string[]`.
+    - `streamEventsOf(text): object[]` and `errorFieldsOf(events): string[]`;
+    - the module-private `armBatchPreflight(ctx, pending)`, whose all-readings-agree loop K28 replaces in place (Step 5 (g)); its admission line `  const snapshots = maskingSnapshotsOf(ctx.rs, ctx.home);` stays its first line.
     
     Test side, module-level in the test file, which W2-5b1 Task 4 appended: `w5b4Home(store)`, `w5b4Pilot(home, { n, over, shas, marker })` (returning `{ entries, fz, draft, d, out, argv }`), `W5B4_FAKE` (`recheck`, `now`), `w5b4Version`, `w5b4Inp`, `w5b4Json`, `w5b4Shas`, `w5b4Hex`, `W5B4_STORE_A`, `W5B4_TREATMENT`, `W5B4_ARM_MODEL` and `W5B4_LANG`.
-  - **W2-5b1 Task 5:** nothing but the anchors: its `SUBCOMMAND_FLAGS` forms and `HANDLERS.set('judge', …)`.
+  - **W2-5b1 Task 5:** the anchors (its `SUBCOMMAND_FLAGS` forms and `HANDLERS.set('judge', …)`), and `judgeCommand`'s all-readings-agree loop, which K28 replaces in place (Step 5 (g)); its admission line `      const snapshots = maskingSnapshotsOf(rs, home);` stays.
 - Consumes (base, `92dac5764`):
   - W2-4's pieces:
     - `step0bMechanics`, `turnBoundHeld(facts, maxTurns = MAX_TURNS): { held: true | false | 'unmeasured', turns, num_turns, subtype }` and `persistenceLeft({ configDir, sessionId, cwd }): { left, transcripts, projectDir }`, which throws on an lstat or readdir failure;
@@ -624,10 +653,11 @@ It cites, each bare: D-5983 (the printed sha), D-5985 (the claim), D-5986 (plain
     - `persistenceMeasured({ configDir, sessionId, cwd }): { left, transcripts, project_dir } | { left: true, transcripts: [], project_dir: null, unmeasured: <errno> }`;
     - `step0bMechanics({ …, name = STEP0B_TURN_RUN })`, whose persistence half is `persistenceMeasured`'s;
     - `step0bCommand(flags, driverEnv, deps = { recheck: recheckBatch, payloads: armPayloads, now: () => Date.now() })`, registered as `step0b`. Its test seams are `deps.recheck`, `deps.payloads`, `deps.now`, `deps.timeoutMs` and `deps.syntheticTranscript`; no flag takes any of them.
-  - Module-private: `STEP0B_RUNS`, `step0bNameOk`, `foldStates`, `skillNamed`, `sameSet`, `agentPromptOf`, `refuseSyntheticPresent`, `step0bCardOf` and `step0bRunOf`; and `refusePilotSourceOut(out, who)`, Q25's one refusal, `out-refused` with the detail `` `${PILOT_SOURCE_FILE} is here: ${who} on a fresh --out, never pilot-source's` `` (K4). Called here as `refusePilotSourceOut(out, 'step0b runs')`, so step 0b's detail is the draft's, byte for byte.
+  - Module-private: `STEP0B_RUNS`, `step0bNameOk`, `foldStates`, `skillNamed`, `sameSet`, `agentPromptOf`, `refuseSyntheticPresent`, `step0bCardOf` and `step0bRunOf`; and `refusePilotSourceOut(out, who)`, Q25's one refusal, `out-refused` with the detail `` `${PILOT_SOURCE_FILE} is here: ${who} on a fresh --out, never pilot-source's` `` (K4). `step0bCardOf(ctx)` admits the retained readings (`maskingSnapshotsOf`), asks W2-D78 (i) and (ii), then builds the re-check and the card under every reading through `maskingAgreementOf(snapshots, 'step0b', …, sameMaskingText)` and answers the agreed card line (K26, K28); an index-sensitive newly learned pair may instead make the ordinary re-check refuse with its own word. Called here as `refusePilotSourceOut(out, 'step0b runs')`, so step 0b's detail is the draft's, byte for byte.
+  - Module-private (K28): `maskingAgreementOf(snapshots, site, build, agree): Promise<the first reading's build>`, the one all-readings-agree loop (K28's row holds its contract). Its callers: W2-5b1's `armBatchPreflight` (site `arms`) and `judgeCommand` (site `judge`), each edited in place, this task's `step0bCardOf` (site `step0b`) and Task 2's `fidelityBoundariesOf` (site `fidelity`). Each passes the `snapshots` its own `maskingSnapshotsOf(rs, home)` line answered in the same preflight.
   - **The result file**, the producer contract Task 2's `pilot-result` and Task 3's re-pilot read (`section`, `record_sha256`, `store_id`, `settings_mode`, `batches[].claude_code_version`, `passed`, `failed`, `unmeasured`), at `<section>/step0b/<settings mode>.json` under `--out`. It is canonical JSON and one newline:
     `{ kind: STEP0B_KIND, v: 1, section, record_sha256, store_id, measured_ms, account, model, settings_mode, record_settings_mode, question: { qid, ccrc_id, generation, boundary_uuid }, synthetic_transcript, batches: [{ claude_code_version, runs: [name] }], checks: { <STEP0B_CHECKS member>: { state, … } }, subagent, persistence: [{ name, left, transcripts, project_dir[, unmeasured] }], runs: [{ name, mode: 'box' | 'arm', code, signal, tokens, session_id, subtype, is_error, main_turns, messages, error_fields }], passed, failed, unmeasured, budget, spend }`.
-- Produces (test side): the describes `W2-5b2 Task 1: the step 0b checks and the pilot-failed word, pure …` and `W2-5b2 Task 1: step0b --section pilot on the stub …`. The module-level bindings `B2T1_STUB`, `B2T1_CARD`, `B2T1_DIR`, `B2T1_FAKE`, `b2t1Stream`, `b2t1PassStream`, `b2t1Put`, `b2t1PlantAll`, `b2t1Home`, `b2t1Pilot`, `b2t1Run`, `b2t1PrintRuns`, `b2t1Versions` and `b2t1Result` may be reused by later W2-5b2 tasks: Task 2's pilot result and Task 3's re-pilot.
+- Produces (test side): the describes `W2-5b2 Task 1: the step 0b checks and the pilot-failed word, pure ...` and `W2-5b2 Task 1: step0b --section pilot on the stub ...`. The module-level bindings `B2T1_STUB`, `B2T1_CARD`, `B2T1_DIR`, `B2T1_LEARNED`, `B2T1_LEARNED_CARD`, `B2T1_FAKE`, `b2t1Stream`, `b2t1PassStream`, `b2t1Put`, `b2t1PlantAll` (its optional fourth argument the card line the arm stdins are keyed over), `b2t1Home`, `b2t1Pilot`, `b2t1Run`, `b2t1PrintRuns`, `b2t1Versions`, `b2t1Result`, `b2t1Learn` and `b2t1IndexPayloads` may be reused by later W2-5b2 tasks: Task 2's pilot result and Task 3's re-pilot. Task 3's quiz step 0b agreement cases reuse `b2t1IndexPayloads` and `B2T1_LEARNED_CARD` on the same `step0bCardOf` seam.
 
 **Spec:** §10.2 "Flags" (`--restricted` and the fallback, about :2686 at 92dac5764) and "Tools" (the pilot's assertions, about :2689-2691). Line numbers are hints; this task amends no spec text.
 
@@ -645,7 +675,7 @@ It cites, each bare: D-5983 (the printed sha), D-5985 (the claim), D-5986 (plain
 | The W2-3 plan's C17: `authentication_failed` is "verified by W2-5b's step 0b, which sees a real refused run first" | No step 0b run fails authentication by design (the scoping study's E19) | Every run's `error` fields are recorded (Q31); the spelling stays a named residual |
 | W2-D57: the `error_max_turns` spelling "is unmeasured until step 0b's turn-bound run first reaches the bound" | `turnBoundHeld` answers `unmeasured` for any other subtype | The turn-bound check is unmeasured, the pilot halts, and the detail names the subtype read, which is the coordinator's ruling (C16) |
 | W2-D24's consumer list: "pilot batches" | No subcommand was named `step0b` | `step0b` re-checks `gate_code` first, through W2-5b1's `loadArmRun` |
-| Q12: a re-pilot is "step 0b on a listed quiz family" | After a version move, W2-D56's preflight would refuse the moved version this re-pilot exists to measure | Task 3's (K1): `STEP0B_SECTIONS` is `['pilot']` here; Task 3 adds `'quiz'` and replaces the version in `expected` with the one it measures |
+| Q12: a re-pilot is "step 0b on a listed quiz family" | After a version move, W2-D56's preflight would refuse the moved version this re-pilot exists to measure | Task 3's (K1): `STEP0B_SECTIONS` is `['pilot']` here; Task 3 adds `'quiz'` and replaces the version in `expected` with the one it measures. Its card preflight is `step0bCardOf`, whose agreement (K28) the quiz section reuses unchanged. |
 
 **Choices this task makes:**
 - **One word for every pilot halt.** The fidelity pilot and the absent-rate check halt the same way, for the same ruling, so `pilot-failed` is added once, here, where it is first needed. It is a refusal: its remedy is the operator's ruling on a recorded finding, never a wait (W2-5b1 Task 1's partition rule). Its detail names the check: here `step0b <settings mode>: …`.
@@ -676,6 +706,9 @@ It cites, each bare: D-5983 (the printed sha), D-5985 (the claim), D-5986 (plain
 grep -c "^HANDLERS.set('arms'" deploy/history-replay.mjs
 grep -c "^HANDLERS.set('judge'" deploy/history-replay.mjs
 grep -cE '^(async function preflightSpawn\(\{|function refuseSpawnAdmission\(\{|function finishedOutcome\(job\) \{|function probeFindingOf\(facts, command\) \{|function probePromptOf\(command\) \{|function probeCommandOf\(spelling\) \{)' deploy/history-replay.mjs
+grep -cE '^(function maskingSnapshotsOf\(rs, home\) \{ refreshPairIndex\(rs, home\); return rs\.maskingSnapshots\.snapshots; \}|const sameMaskingText = \(a, b\) => Buffer\.from\(a\)\.equals\(Buffer\.from\(b\)\);)$' deploy/history-replay.mjs
+grep -c 'masking-snapshots-disagree' deploy/history-replay.mjs
+grep -c 'maskingAgreementOf' deploy/history-replay.mjs
 node --no-warnings --input-type=module -e "
 const d = await import('./deploy/history-replay.mjs'); const l = await import('./ccd/history/lib.mjs');
 const fns = ['loadArmRun', 'armNodeOf', 'recheckBatch', 'armPayloads', 'prependCard', 'requireListed', 'refuseRecallOff', 'errorFieldsOf', 'streamEventsOf', 'driverWordClass', 'step0bMechanics', 'turnBoundHeld', 'persistenceLeft', 'readStreamJson', 'rosterConfigDirs', 'familiesOf'];
@@ -693,6 +726,7 @@ ls deploy/history-counters.mjs 2>/dev/null; grep -c "end of W2-6's region" serve
 Expected:
 - `1`, `1`: W2-5b1's `arms` and `judge` are registered, so W2-5b1 has merged;
 - `6`: W2-5b1 Task 4's two module-private functions and W2-4's four;
+- `2`, `2`, `0`: W2-5b1's admission (`maskingSnapshotsOf`) and comparison (`sameMaskingText`), as K28 reads them at W2-5b1's tip 554df82f0 and again at its final head 0de4cc990 (measured `2`, `2`, `0` there); its two inline agreement loops, one `masking-snapshots-disagree` literal each; and no agreement function yet (`grep -c` printing 0 exits 1, which is expected). Any other count is a stop: report the drift, and never re-implement or rename W2-5b1's admission here (K28).
 - `W2-5b1 on this base`. On `STOP`, make no edit and report: a missing name is a gap in its owning W2-5b1 task (R8 of the W2-5b1 plan), never defined here;
 - every driver name in the first loop counts 0. A name already declared is reported, never renamed here;
 - every test name in the second loop counts 1, at column 0, so it is module-level and reusable. A 0 means W2-5b1 renamed or scoped it: re-read W2-5b1's merged test file, use its spelling, and say so in the commit's task note;
@@ -717,10 +751,17 @@ checks = [
   (D, "const SUBCOMMAND_FLAGS = Object.freeze({\n"),
   (D, "HANDLERS.set('judge', "),
   (D, "// The entry guard stays the LAST block of this file"),
+  (D, "/** W2-D78 and W2-D56 before one arm batch, composed once. Read-only first:\n"),
+  (D, "  const snapshots = maskingSnapshotsOf(ctx.rs, ctx.home);\n  const qs = pending.map((s) => s.q);\n"),
+  (D, "  let baseline = null;\n  for (const snapshot of snapshots) {\n    const view = { ...ctx.rs, idx: snapshot.idx };\n"),
+  (D, "      if (!sameMaskingText(baseline.get(s.q.qid).get(arm), built.get(s.q.qid).get(arm))) refuse('input-invalid', 'masking-snapshots-disagree arms');\n    }\n  }\n  const stdins = new Map();\n"),
+  (D, "      const snapshots = maskingSnapshotsOf(rs, home);\n      let jobs = null;\n      for (const snapshot of snapshots) {\n        const built = judgeJobsOf({ items: picked.items, map, idx: snapshot.idx });\n"),
+  (D, "          refuse('input-invalid', 'masking-snapshots-disagree judge');\n        }\n      }\n      const judge = await openJudge({"),
   (T, "  const W2_5A = ['store-unreadable'];   // W2-5a Task 1: a store this node cannot open or read (W2-D59, its owner PR's word)\n"),
   (T, "  it('DRIVER_REASONS is frozen, duplicate-free, and exactly W2-D59\\'s sixteen words in order, then W2-4\\'s nine, then fix round 1\\'s three, then W2-5a\\'s', () => {\n"),
   (T, "    expect([...replay.DRIVER_REASONS]).toEqual([...W2_D59, ...PLAN_CHOSEN, ...FIX_ROUND_1, ...W2_5A]);\n"),
   (T, "    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify', 'marker', 'arms', 'judge']);\n"),
+  (T, "    expect([...W5B5.HANDLERS.keys()].slice(-2), 'judge is registered right after arms').toEqual(['arms', 'judge']);\n"),
 ]
 for f, s in checks:
     n = open(f).read().count(s)
@@ -731,9 +772,9 @@ grep -n "'judge --section quiz'" deploy/history-replay.mjs
 grep -n "HANDLERS.keys()" server/test/history-replay.test.ts
 ```
 
-Expected: every count `1`. The first two `grep -n`s locate the insertion points: Step 5 (f) and Step 6. If the `HANDLERS` line reads another array, because W2-5b1's build changed it, Step 2 appends `'step0b'` to that array, and the commit's task note says so. A count of 0 elsewhere is a drift: find the line by its content, use what is there, and report it.
+Expected: every count `1`. The first two `grep -n`s locate the insertion points: Step 5 (f) and Step 6. The `HANDLERS.keys()` grep prints two lines (measured at 0de4cc990: about :4846, W2-4 Task 9's array, and about :13725, W2-5b1 Task 5's `.slice(-2)` order line); Step 2 (b) re-pins the first and Step 2 (c) the second. If the `HANDLERS` line reads another array, because W2-5b1's build changed it, Step 2 appends `'step0b'` to that array, and the commit's task note says so. A count of 0 elsewhere is a drift: find the line by its content, use what is there, and report it.
 
-- [ ] **Step 2: Re-pin the two W2-4 cases in place.** In `server/test/history-replay.test.ts`:
+- [ ] **Step 2: Re-pin the two W2-4 cases and W2-5b1's one `HANDLERS` pin in place.** In `server/test/history-replay.test.ts`:
 
 (a) In W2-4 Task 1's describe `history-replay W2-4 Task 1: the driver words (W2-D59, W2-D12; D-5774)`, replace
 
@@ -768,6 +809,20 @@ and, in that case, `    expect([...replay.DRIVER_REASONS]).toEqual([...W2_D59, .
 
 If Step 1 found another array, use it with `'step0b'` appended, keeping its comment's first sentence and adding `and W2-5b2's`.
 
+(c) In W2-5b1 Task 5's case `JUDGE_OUTCOMES are driver-local report words, disjoint from DRIVER_REASONS and GATE_REASONS` (in `describe('W2-5b1 Task 5: the judge subcommand')`; about :13725 at 0de4cc990), licensed under K5 (CP-20), replace the one line
+
+```ts
+    expect([...W5B5.HANDLERS.keys()].slice(-2), 'judge is registered right after arms').toEqual(['arms', 'judge']);
+```
+
+with
+
+```ts
+    expect([...W5B5.HANDLERS.keys()].indexOf('judge'), 'judge is registered right after arms').toBe([...W5B5.HANDLERS.keys()].indexOf('arms') + 1);
+```
+
+W2-5b1's invariant is that `judge` is registered right after `arms`. Its `.slice(-2)` form reads the tail, so it reds as soon as any handler registers after `judge`: Step 6's `HANDLERS.set('step0b', …)` makes the tail `['judge', 'step0b']` at this commit, and Tasks 2, 4 and 5 move it again. The `indexOf` form holds the same order through every later registration, so no later task touches the line. The rest of the case, its title and its message are unchanged.
+
 - [ ] **Step 3: Write the failing tests.** Append at the END of `server/test/history-replay.test.ts`, after W2-5b1's last appended describe (never inside W2-6's region):
 
 ```ts
@@ -776,12 +831,16 @@ If Step 1 found another array, use it with `'step0b'` appended, keeping its comm
 // first appended block (W2-6's U4; U15). The pure describe builds its facts with readStreamJson. The subcommand describe
 // runs step0b in-process on W2-5b1 Task 4's fixture node (w5b4Home: up-a, a fresh limits row, a tagged stamp, a
 // createStore store) with its launcher replaced by the step 0b stub below, the pilot record, frozen list and headless-on
-// from w5b4Pilot, and W2-5b1 Task 2's question re-check and payload injected (Task 2 pins its own). No case spawns a real
-// model, reads the live HOME, or writes outside its own mkTmp trees. The test may spell the arm words; the driver never does.
+// from w5b4Pilot, and W2-5b1 Task 2's question re-check and payload injected (Task 2 pins its own). The K26/K28 cases
+// learn a pair into that fixture store between card builds and inject a payload reader whose card line is masked through
+// each retained reading's own index, so a pair learned between preflights makes the readings disagree, which step0b must
+// refuse, never masking with the newest reading. No case spawns a real model, reads the live HOME, or writes outside its
+// own mkTmp trees. The test may spell the arm words; the driver never does.
 import { describe as b2t1Describe, expect as b2t1Expect, it as b2t1It, vi as b2t1Vi } from 'vitest';
 import * as b2t1Drv from '../../deploy/history-replay.mjs';
 import * as b2t1Gate from '../../deploy/history-gate.mjs';
 import * as b2t1Lib from '../../ccd/history/lib.mjs';
+import { closeWriter as b2t1CloseWriter, openWriter as b2t1OpenWriter } from '../../ccd/history/store.mjs';
 
 type B2t1R = Record<string, any>;
 type B2t1Result = { code: unknown; stdout: string; stderr: string; refusal: { word: string; detail: string } | null };
@@ -790,6 +849,10 @@ const D21 = b2t1Drv as unknown as B2t1R;
 const B2T1_CARD = 'fixture card line for step 0b';
 /** The stub's per-run controls live under $HOME/<B2T1_DIR>, keyed by b2t1Key. */
 const B2T1_DIR = 'stub-0b';
+/** K26: a value no fixture text holds, assembled at runtime so it can be learned as a redaction pair. */
+const B2T1_LEARNED = ['zq', 'step0b', 'k26', 'widened01'].join('');
+/** K26, K28: the card line the index-sensitive payload reader masks: one line, holding B2T1_LEARNED. */
+const B2T1_LEARNED_CARD = `${B2T1_CARD}: I tried ${B2T1_LEARNED} first.`;
 
 /** W2-4's recording stub, reshaped for step 0b: the same log line (so stubLog reads it). A print-mode run is keyed by the
  *  sha256 of its settings mode (`--restricted` in its argv, else fallback), a newline and its stdin, and prints
@@ -887,10 +950,11 @@ function b2t1Put(home: string, mode: string, stdin: string, ext: string, text: s
 }
 const b2t1Probes = (home: string): B2t1R[] => D21.step0bProbesOf(home, D21.STEP0B_SYNTHETIC_TRANSCRIPT) as B2t1R[];
 const b2t1Stdin = (p: B2t1R): string => D21.step0bStdinOf(B2T1_CARD, p) as string;
-/** Plant every step 0b run's stream for `mode`: the passing ones, each replaced by `over[<probe or turn-bound>]`. */
-function b2t1PlantAll(home: string, mode: string, over: Record<string, string> = {}): void {
+/** Plant every step 0b run's stream for `mode`: the passing ones, each replaced by `over[<probe or turn-bound>]`. The arm
+ *  runs are keyed by their stdin over `card`: B2T1_CARD, or the card line a K26/K28 case's payload reader answers. */
+function b2t1PlantAll(home: string, mode: string, over: Record<string, string> = {}, card: string = B2T1_CARD): void {
   b2t1Put(home, mode, D21.TURN_PROBE_PROMPT as string, '.jsonl', over['turn-bound'] ?? b2t1Turn());
-  for (const p of b2t1Probes(home)) b2t1Put(home, mode, b2t1Stdin(p), '.jsonl', over[p.probe as string] ?? b2t1PassStream(p));
+  for (const p of b2t1Probes(home)) b2t1Put(home, mode, D21.step0bStdinOf(card, p) as string, '.jsonl', over[p.probe as string] ?? b2t1PassStream(p));
 }
 /** A W2-5b1 Task 4 fixture node whose launcher is the step 0b stub. */
 function b2t1Home(store: string | null = W5B4_STORE_A): string {
@@ -914,6 +978,27 @@ const B2T1_FAKE: B2t1R = {
     carded: `${B2T1_CARD}\n\nfixture payload ${cut.qid as string}\n`, card: { state: 'card', line: B2T1_CARD } }),
   now: W5B4_FAKE.now,
 };
+/** K26: the store learns `value` as a redaction pair, as the sweep's recordPairs does between preflights (W2-5b1's own
+ *  D-6481 case writes it the same way), through the fixture HOME's store writer. */
+function b2t1Learn(home: string, value: string): void {
+  const db = b2t1OpenWriter(b2t1Lib.historyPaths(home).dbFile);
+  try {
+    db.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, 1)').run(value.length, Buffer.from(b2t1Lib.sha256Hex(value), 'hex'));
+  } finally {
+    b2t1CloseWriter(db);
+  }
+}
+/** K26, K28: W2-5b1 Task 2's armPayloads stood in, index-sensitive. Its card line is B2T1_LEARNED_CARD masked through the
+ *  pair index of the reading it is built under; each build records in `seen` whether that masked B2T1_LEARNED (true), and
+ *  right after build `learnAt` (1-based; null never) the store learns B2T1_LEARNED, as the sweep's recordPairs would. */
+function b2t1IndexPayloads(home: string, learnAt: number | null, seen: boolean[]): (rs: B2t1R, id: number, question: string, cut: B2t1R) => B2t1R {
+  return (rs, id, question, cut) => {
+    const line = b2t1Lib.redactField(B2T1_LEARNED_CARD, rs.idx) as string;
+    seen.push(!line.includes(B2T1_LEARNED));
+    if (seen.length === learnAt) b2t1Learn(home, B2T1_LEARNED);
+    return { ...(B2T1_FAKE.payloads(rs, id, question, cut) as B2t1R), card: { state: 'card', line } };
+  };
+}
 /** `step0b` in-process, as main runs it (parseArgs, then the handler), with B2T1_FAKE's deps under `deps`: stdout and
  *  stderr captured, a refusal answered as {word, detail}; any other throw is the case's failure (D-6309's rule). */
 async function b2t1Run(home: string, argv: string[], deps: B2t1R = {}): Promise<B2t1Result> {
@@ -1085,6 +1170,26 @@ b2t1Describe('W2-5b2 Task 1: the step 0b checks and the pilot-failed word, pure 
     }
     b2t1Expect(() => D21.persistenceMeasured({ configDir: 'rel', sessionId: 's', cwd: '/tmp/run-a' })).toThrow(TypeError);
   });
+
+  // K28 (D-6481 carried): one agreement function, its refusal detail spelled once and naming a site, never a value; every
+  // call agrees the readings its own preflight admitted; and no pair index is refreshed outside W2-5b1's admission. A code
+  // line is one whose trimmed text does not open a comment. Task 2 adds the fidelity call; the assertions hold either way.
+  b2t1It('K28: maskingAgreementOf is declared once, its masking-snapshots-disagree detail is spelled once with a literal site, each call has its own maskingSnapshotsOf admission, and refreshPairIndex is called only inside maskingSnapshotsOf (K26, D-6481 carried)', () => {
+    const code = readFileSync(join(W5B4_REPO, 'deploy', 'history-replay.mjs'), 'utf8').split('\n')
+      .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).map((l) => l.trim());
+    b2t1Expect(code.filter((l) => l.startsWith('async function maskingAgreementOf(')), 'declared once').toEqual(['async function maskingAgreementOf(snapshots, site, build, agree) {']);
+    b2t1Expect(code.filter((l) => l.includes('masking-snapshots-disagree')), 'the detail spelled once').toEqual(["else if (!agree(agreed, built)) refuse('input-invalid', `masking-snapshots-disagree ${site}`);"]);
+    const siteOf = (l: string): string => /maskingAgreementOf\(snapshots, '([a-z0-9]+)', /.exec(l)?.[1] ?? l;
+    const sites = code.filter((l) => l.includes('maskingAgreementOf(') && !l.startsWith('async function ')).map(siteOf);
+    b2t1Expect(sites.filter((s) => !['arms', 'judge', 'step0b', 'fidelity'].includes(s)), 'every call passes its admitted snapshots and a literal site').toEqual([]);
+    for (const s of ['arms', 'judge', 'step0b']) b2t1Expect(sites.filter((x) => x === s), `one ${s} call`).toHaveLength(1);
+    b2t1Expect(code.filter((l) => l.startsWith('const snapshots = maskingSnapshotsOf(')), 'one admission per call').toHaveLength(sites.length);
+    b2t1Expect(code.filter((l) => l.includes('refreshPairIndex(')), 'no refresh outside the admission')
+      .toEqual(['function refreshPairIndex(rs, home) {', 'function maskingSnapshotsOf(rs, home) { refreshPairIndex(rs, home); return rs.maskingSnapshots.snapshots; }']);
+    // CONTROL: the site needle reads a planted literal call, and answers a call with a computed site whole, so it is caught.
+    b2t1Expect(siteOf("return maskingAgreementOf(snapshots, 'step0b', async (idx) => {")).toBe('step0b');
+    b2t1Expect(siteOf('const x = await maskingAgreementOf(snapshots, who, build, agree);')).toBe('const x = await maskingAgreementOf(snapshots, who, build, agree);');
+  });
 });
 
 // The subcommand describe spawns the step 0b stub; it skips on darwin, as W2-5b1 Task 4's stub describes do (this task's
@@ -1235,6 +1340,58 @@ b2t1Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 1: step0b --sect
     b2t1Expect(existsSync(join(fx2.out, 'pilot', 'step0b', 'restricted.json')), 'a refusal mid-way writes no result').toBe(false);
   }, 120_000);
 
+  // K26, K28 (D-6481 carried): every card preflight builds the re-check and the card under every retained reading of the
+  // pair index (W2-5b1's maskingSnapshotsOf) and refuses when their card lines disagree, never masking with the newest
+  // reading. The injected payload reader masks B2T1_LEARNED_CARD through each reading's own index; the store learns the
+  // value right after one build, so the next preflight's admission holds the old reading and the new one.
+  b2t1It('K26 card seam: a pair learned after the before-out card preflight makes the arm batch\'s two readings disagree, refused input-invalid masking-snapshots-disagree step0b before the arm batch\'s --version, never the newest mask (K28, D-6481 carried)', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    b2t1PlantAll(home, 'restricted', {}, B2T1_LEARNED_CARD);
+    const seen: boolean[] = [];
+    const r = await b2t1Run(home, fx.argv(), { payloads: b2t1IndexPayloads(home, 1, seen) });
+    b2t1Expect(r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree step0b' });
+    b2t1Expect(seen, 'before --out: one reading; the arm batch: the old reading, then the new one').toEqual([false, false, true]);
+    b2t1Expect([b2t1Versions(home), b2t1PrintRuns(home).length], 'the box batch ran; the arm batch spawned nothing, not even --version').toEqual([1, 1]);
+    b2t1Expect(existsSync(join(fx.out, 'pilot', 'step0b', 'restricted.json')), 'a refusal mid-way writes no result').toBe(false);
+  }, 60_000);
+  b2t1It('K26 card seam CONTROL: with no pair learned every card preflight holds one reading, the value stays visible on every arm run\'s card, and the pilot passes (K28)', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    b2t1PlantAll(home, 'restricted', {}, B2T1_LEARNED_CARD);
+    const seen: boolean[] = [];
+    const r = await b2t1Run(home, fx.argv(), { payloads: b2t1IndexPayloads(home, null, seen) });
+    b2t1Expect(r.refusal, r.stderr).toBeNull();
+    b2t1Expect(r.code).toBe(0);
+    b2t1Expect(seen, 'one reading at each of the two card preflights, neither masking').toEqual([false, false]);
+    const arms = b2t1PrintRuns(home).slice(1);
+    b2t1Expect(arms).toHaveLength(7);
+    for (const e of arms) b2t1Expect((e.stdin as string).startsWith(`${B2T1_LEARNED_CARD}\n\n`), 'the agreed card drives every arm run').toBe(true);
+  }, 60_000);
+  b2t1It('K28 later arm batch: a pair learned after the first arm batch\'s card preflight lets its four runs stand and refuses the second arm batch input-invalid masking-snapshots-disagree step0b before its --version (K26, D-6481 carried)', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home, { over: { limits: { batch_max: 4 } } });
+    b2t1PlantAll(home, 'restricted', {}, B2T1_LEARNED_CARD);
+    const seen: boolean[] = [];
+    const r = await b2t1Run(home, fx.argv(), { payloads: b2t1IndexPayloads(home, 2, seen) });
+    b2t1Expect(r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree step0b' });
+    b2t1Expect(seen, 'before --out and the first arm batch: one reading each; the second arm batch: old, then new').toEqual([false, false, false, true]);
+    b2t1Expect([b2t1Versions(home), b2t1PrintRuns(home).length], 'the box batch and the first arm batch ran; the second spawned nothing').toEqual([2, 5]);
+    for (const e of b2t1PrintRuns(home).slice(1)) b2t1Expect((e.stdin as string).startsWith(`${B2T1_LEARNED_CARD}\n\n`), 'the first arm batch ran under the agreed card').toBe(true);
+    b2t1Expect(existsSync(join(fx.out, 'pilot', 'step0b', 'restricted.json')), 'a refusal mid-way writes no result').toBe(false);
+  }, 120_000);
+  b2t1It('K28 later arm batch CONTROL: with no pair learned no card preflight masks the value, both arm batches run, and the pilot passes (K26)', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home, { over: { limits: { batch_max: 4 } } });
+    b2t1PlantAll(home, 'restricted', {}, B2T1_LEARNED_CARD);
+    const seen: boolean[] = [];
+    const r = await b2t1Run(home, fx.argv(), { payloads: b2t1IndexPayloads(home, null, seen) });
+    b2t1Expect(r.code, r.stderr).toBe(0);
+    b2t1Expect(seen.length > 0 && seen.every((masked) => !masked), 'no reading masked the value').toBe(true);
+    b2t1Expect(b2t1Versions(home), 'one --version per batch').toBe(3);
+    b2t1Expect(b2t1Result(fx.out).batches.map((b: B2t1R) => b.runs.length)).toEqual([1, 4, 3]);
+  }, 120_000);
+
   // A matcher is a RegExp, or a function building one at run time: an export read while the describe is collected would
   // throw before Step 5 and fail the whole file, so every row reads D21 inside its own case.
   const BEFORE_OUT: Array<[string, string, RegExp | (() => RegExp), (h: string) => { fx: B2t1R; argv: string[]; deps?: B2t1R }]> = [
@@ -1342,14 +1499,16 @@ b2t1Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 1: step0b --sect
 (cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5b2 Task 1|W2-4 Task 1: the driver words|three box-mode spawns, one per taught spelling|step 0b mechanics without the seam|every driver word is a stop or a refusal')
 ```
 
-Expected (predicted, not measured): 32 failed (2 + 11 + 19) and the rest passed, the root-only skip aside.
+Expected (predicted, not measured): 37 failed (2 + 12 + 23) and the rest passed, the root-only skip aside.
 - Both in-place cases fail: `DRIVER_REASONS` lacks `'pilot-failed'`, and `HANDLERS` lacks `'step0b'`.
-- All 11 cases of the pure describe fail:
+- All 12 cases of the pure describe fail:
   - the `pilot-failed` case on the last word, `'store-unreadable'`;
   - the R1 case on `D21.mainThreadTurns is not a function`. Its first, CONTROL, assertion (`assistantMessages` 15) passes;
-  - the other nine on `… is not a function`, or on reading an undefined export.
-- All 19 cases of the stub describe fail on `D21.step0bProbesOf is not a function` (in `b2t1PlantAll`) or `D21.step0bCommand is not a function`. These are `TypeError`s that `b2t1Run` rethrows; nine of them are the `BEFORE_OUT` rows, each failing on its own because the section row's matcher reads `STEP0B_SECTIONS` inside its case, and one is the W2-D24 row's CONTROL. The file collects: no row reads a Task 1 export while the describe is collected.
+  - the other nine on `… is not a function`, or on reading an undefined export;
+  - the K28 scan at its first assertion: the driver declares no `maskingAgreementOf` yet (`[]` against its one declaration line).
+- All 23 cases of the stub describe fail, and the count stays 23. The cases that plant first (through `b2t1PlantAll`) fail on the `D21.step0bProbesOf is not a function` `TypeError`; the others fail on the refusal `args-invalid` `unknown subcommand "step0b"`, which `b2t1Run` returns rather than rethrows. Nine of them are the `BEFORE_OUT` rows, each failing on its own because the section row's matcher reads `STEP0B_SECTIONS` inside its case, one is the W2-D24 row's CONTROL, and four are the K26 card-seam and K28 later-arm-batch cases and their CONTROLs (each reaches `D21.step0bProbesOf` through `b2t1PlantAll`). The file collects: no row reads a Task 1 export while the describe is collected.
 - W2-4 Task 9's step 0b mechanics cases and W2-5b1 Task 1's partition cases pass.
+- W2-5b1's re-pinned `JUDGE_OUTCOMES …` case is not selected by this filter. Its `indexOf` form passes on the unedited driver too (`judge` directly follows `arms`); Step 7 runs it.
 
 - [ ] **Step 5: Extend the shared pieces.** In `deploy/history-replay.mjs`:
 
@@ -1522,6 +1681,101 @@ On a readable tree `persistenceMeasured` answers exactly the object the old body
   'step0b --section pilot': { required: ['section', 'out', ...DRAFT_INPUT, 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT, 'settings-mode'] },
 ```
 
+(g) K28 (D-6481 carried; K26), in place under K5: the one all-readings-agree loop, out of W2-5b1's two inline copies. Each block below matches exactly once (Step 1 counted its anchors at W2-5b1's tip 554df82f0, and CP-20's re-verify measured both replaced blocks byte-identical at W2-5b1's final head 0de4cc990: the first about :6949-:6964, under the admission line about :6945, the second about :7550-:7557, under the admission line about :7549; re-anchor at W2-5b1's merged head by content and report any drift). First insert, directly above W2-5b1 Task 4's line `/** W2-D78 and W2-D56 before one arm batch, composed once. Read-only first:`, so the function sits outside the `armBatchPreflight` and `judgeCommand` regions W2-5b1's `c04Variant` rewrites and outside the Phase A helper slice that ends at `/** A failed open`:
+
+```js
+/** K28 (W2-5b2 Task 1; D-6481 carried, K26): the one all-readings-agree loop, factored out of W2-5b1's armBatchPreflight
+ *  and judgeCommand without a change of behaviour, and called by step 0b's card preflight and fidelity's per-boundary
+ *  measurement too. `snapshots` is what maskingSnapshotsOf(rs, home) answered in the caller's same preflight, so its
+ *  admission refusals (belt overflow, count cap, material cap, invalid, refresh failed) come before any build; this
+ *  function never refreshes, reads the store, writes or spawns. `build(idx)` builds the caller's spawned text from one
+ *  retained reading's pair index (it may be async; its own refusals and throws pass through unchanged); `agree(first,
+ *  built)` compares a later reading's build with the first's through sameMaskingText. Readings are built in retained
+ *  order, each compared as soon as it is built; the first disagreement refuses input-invalid
+ *  `masking-snapshots-disagree <site>`, `site` one of the literal words arms, judge, step0b and fidelity, so the detail
+ *  names a site and never a value. Answers the first reading's build: agreeing readings are byte-equal, and no
+ *  newest-reading mask is ever chosen.
+ *  @param {Array<{ idx: unknown }>} snapshots  @param {string} site  @param {(idx: any) => any} build
+ *  @param {(first: any, built: any) => boolean} agree  @returns {Promise<any>} */
+async function maskingAgreementOf(snapshots, site, build, agree) {
+  let agreed;
+  for (let i = 0; i < snapshots.length; i += 1) {
+    const built = await build(snapshots[i].idx);
+    if (i === 0) agreed = built;
+    else if (!agree(agreed, built)) refuse('input-invalid', `masking-snapshots-disagree ${site}`);
+  }
+  return agreed;
+}
+
+```
+
+Then, in W2-5b1 Task 4's `armBatchPreflight`, replace
+
+```js
+  let baseline = null;
+  for (const snapshot of snapshots) {
+    const view = { ...ctx.rs, idx: snapshot.idx };
+    const verdicts = await ctx.deps.recheck(view, qs, { configDirs: ctx.configDirs });   // every retained reading must permit the full original batch
+    const built = new Map();
+    for (const s of pending) {
+      const v = verdicts.get(s.q.qid);
+      const p = ctx.deps.payloads(view, v.boundaryEntryId, s.q.question, v.cut);
+      if (p.state !== 'payloads') refuse('quiz-unanswerable', `${s.q.qid} payload ${p.why}`);   // D-6469
+      built.set(s.q.qid, new Map([[CONTROL_ARM, p.plain], [TREATMENT_ARM, p.carded]]));
+    }
+    if (baseline === null) { baseline = built; continue; }
+    for (const s of pending) for (const arm of RECALL_ARMS) {
+      if (!sameMaskingText(baseline.get(s.q.qid).get(arm), built.get(s.q.qid).get(arm))) refuse('input-invalid', 'masking-snapshots-disagree arms');
+    }
+  }
+```
+
+with
+
+```js
+  // K28 (W2-5b2 Task 1): every retained reading builds both payloads of the full original batch, and they must agree.
+  const baseline = await maskingAgreementOf(snapshots, 'arms', async (idx) => {
+    const view = { ...ctx.rs, idx };
+    const verdicts = await ctx.deps.recheck(view, qs, { configDirs: ctx.configDirs });   // every retained reading must permit the full original batch
+    const built = new Map();
+    for (const s of pending) {
+      const v = verdicts.get(s.q.qid);
+      const p = ctx.deps.payloads(view, v.boundaryEntryId, s.q.question, v.cut);
+      if (p.state !== 'payloads') refuse('quiz-unanswerable', `${s.q.qid} payload ${p.why}`);   // D-6469
+      built.set(s.q.qid, new Map([[CONTROL_ARM, p.plain], [TREATMENT_ARM, p.carded]]));
+    }
+    return built;
+  }, (first, built) => pending.every((s) => RECALL_ARMS.every((arm) => sameMaskingText(first.get(s.q.qid).get(arm), built.get(s.q.qid).get(arm)))));
+```
+
+and, in W2-5b1 Task 5's `judgeCommand`, replace
+
+```js
+      let jobs = null;
+      for (const snapshot of snapshots) {
+        const built = judgeJobsOf({ items: picked.items, map, idx: snapshot.idx });
+        if (jobs === null) { jobs = built; continue; }
+        if (jobs.length !== built.length || jobs.some((job, i) => job.id !== built[i].id || !sameMaskingText(canonicalJson(job.input) + '\n', canonicalJson(built[i].input) + '\n'))) {
+          refuse('input-invalid', 'masking-snapshots-disagree judge');
+        }
+      }
+```
+
+with
+
+```js
+      // K28 (W2-5b2 Task 1): every retained reading builds the ordered jobs; their count, ids and canonical inputs agree.
+      const jobs = await maskingAgreementOf(snapshots, 'judge', (idx) => judgeJobsOf({ items: picked.items, map, idx }), (first, built) => {
+        if (first.length !== built.length) return false;
+        for (let i = 0; i < first.length; i += 1) {
+          if (first[i].id !== built[i].id || !sameMaskingText(canonicalJson(first[i].input) + '\n', canonicalJson(built[i].input) + '\n')) return false;
+        }
+        return true;
+      });
+```
+
+The admission line above each block (`  const snapshots = maskingSnapshotsOf(ctx.rs, ctx.home);`, `      const snapshots = maskingSnapshotsOf(rs, home);`) stays as W2-5b1 wrote it, and nothing else in either function changes. Behaviour is W2-5b1's, byte for byte: each reading's re-check, payloads and jobs are built in the same order, compared with the first reading's at once, with the same short-circuit order and the same number of `sameMaskingText` calls (C13 counts 0, 0, 1 and 4), refusing the same two details; `baseline` and `jobs` are the first reading's build, as before. The judge's `agree` is a `for` loop, never `some`: C15's canonical-comparison case reads `judgeCommand` in the reply getter's stack, and a `some` callback would push it to the tenth frame, `Error.stackTraceLimit`'s edge (a standalone probe of the same frame shape on node v24.14.1 put it eighth with the loop). W2-5b1's `c04Variant` anchors (C09's acquisition line, C12's snapshot line, C14's `      const snapshots = ` prefix, and its `judgeJobsOf(`, `sameMaskingText(`, `maskingSnapshotsOf(` and `openJudge(` routings) stay inside their regions, so no W2-5b1 case is edited.
+
 - [ ] **Step 6: Write the section.** In `deploy/history-replay.mjs`, directly above the comment line `// The entry guard stays the LAST block of this file`, after W2-5b1 Task 5's `HANDLERS.set('judge', …)`, insert:
 
 ```js
@@ -1537,7 +1791,9 @@ On a readable tree `persistenceMeasured` answers exactly the object the old body
 //     whose subagent's tool_use names, read through parentToolUseId, are recorded as its tool list, labelled inferred.
 //     Every arm run's init event must show exactly the tools its argv grants, no MCP server, no plugin, and the
 //     ccrc-history skill (W2-D57, W2-D58). W2-D78 (i), (ii) and (iii) and the card are asked before --out and before
-//     every arm batch (W2-5b1's requireListed, refuseRecallOff, recheckBatch and armPayloads; D-6469).
+//     every arm batch (W2-5b1's requireListed, refuseRecallOff, recheckBatch and armPayloads; D-6469), each time under
+//     every retained reading of the store's pair index (W2-5b1's maskingSnapshotsOf), whose card lines must agree
+//     (maskingAgreementOf, K28) or the preflight refuses masking-snapshots-disagree step0b, never the newest mask (K26).
 // Each check is pass, fail or unmeasured, never folded (W2-D84's rule for an unmeasured value); a pilot passes only when
 // every check passes (Q10, fail-closed). The result is written under --out whatever it shows and `sha256 <hex>` printed
 // on stderr (D-5983); a pilot that did not pass then refuses `pilot-failed`, naming the failed and the unmeasured checks
@@ -1716,14 +1972,22 @@ function refuseSyntheticPresent(p) {
 }
 /** W2-D78 (i), (ii) and (iii) for step 0b's one question, then its card line, through W2-5b1's requireListed,
  *  refuseRecallOff, recheckBatch (over the roster's config dirs) and armPayloads; a payload that no longer reconstructs
- *  refuses quiz-unanswerable `<qid> payload <word>` (D-6469). Spawns nothing. */
+ *  refuses quiz-unanswerable `<qid> payload <word>` (D-6469). K26, K28 (D-6481 carried): the store's retained readings are
+ *  admitted first (W2-5b1's maskingSnapshotsOf), and the re-check and the card are built under every one of them; their
+ *  card lines must agree (maskingAgreementOf, site step0b), or the preflight refuses input-invalid
+ *  `masking-snapshots-disagree step0b` before any spawn or persistence, never masking with the newest reading. Answers
+ *  the agreed card line. Called before --out and before every arm batch, for the pilot and the quiz section alike. */
 async function step0bCardOf(ctx) {
+  const snapshots = maskingSnapshotsOf(ctx.rs, ctx.home);
   requireListed(ctx.home, ctx.storeId, familiesOf([ctx.q]));   // W2-D78 (i)
   refuseRecallOff(ctx.home, [ctx.q.ccrc_id]);   // W2-D78 (ii)
-  const v = (await ctx.deps.recheck(ctx.rs, [ctx.q], { configDirs: ctx.configDirs })).get(ctx.q.qid);   // W2-D78 (iii)
-  const p = ctx.deps.payloads(ctx.rs, v.boundaryEntryId, ctx.q.question, v.cut);
-  if (p.state !== 'payloads') refuse('quiz-unanswerable', `${ctx.q.qid} payload ${p.why}`);   // D-6469
-  return p.card.line;
+  return maskingAgreementOf(snapshots, 'step0b', async (idx) => {
+    const view = { ...ctx.rs, idx };
+    const v = (await ctx.deps.recheck(view, [ctx.q], { configDirs: ctx.configDirs })).get(ctx.q.qid);   // W2-D78 (iii), under every retained reading
+    const p = ctx.deps.payloads(view, v.boundaryEntryId, ctx.q.question, v.cut);
+    if (p.state !== 'payloads') refuse('quiz-unanswerable', `${ctx.q.qid} payload ${p.why}`);   // D-6469
+    return p.card.line;
+  }, sameMaskingText);
 }
 /** One run as the result records it: its outcome's code, signal and charge, its init session, its result subtype, its
  *  main-thread and total messages (R1), and every error field its events carried (Q31; W2-5b1 Task 4's errorFieldsOf). */
@@ -1852,16 +2116,18 @@ HANDLERS.set('step0b', (flags, env) => step0bCommand(flags, env));
 - [ ] **Step 7: Run them and see them pass, then the typecheck.** In the foreground, with a timeout of at least 600000 ms:
 
 ```bash
-(cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5b2 Task 1|W2-4 Task 1: the driver words|three box-mode spawns, one per taught spelling|step 0b mechanics without the seam|every driver word is a stop or a refusal|no violation, and the entry guard')
+(cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5b2 Task 1|W2-4 Task 1: the driver words|three box-mode spawns, one per taught spelling|step 0b mechanics without the seam|every driver word is a stop or a refusal|no violation, and the entry guard|JUDGE_OUTCOMES are driver-local report words')
+(cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5b1 Task 4: fix wave, the pair index across arm batches|W2-5b1 Task 4: correction Phase A, bounded snapshot helper contract|W2-5b1 Task 4: C04 consumer, retained old recheck refuses before effects|W2-5b1 Task 4: C04 CONTROL, unrelated fact without source reaches effects|W2-5b1 Task 4: F2 consumer')
 (cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts)
 ```
 
 Expected (predicted, not measured): green.
 - Every case of the two describes passes. On darwin the stub describe is skipped and the pure one runs; as root the `persistenceMeasured` case and the second half of the persistence case are skipped.
-- The two re-pinned W2-4 cases pass, and W2-4 Task 9's `step0bMechanics` cases are unchanged: their streams carry no subagent message, and their trees are readable.
+- The two re-pinned W2-4 cases pass, and so does W2-5b1's re-pinned `JUDGE_OUTCOMES …` case: `judge`'s index is `arms`' plus one, with `'step0b'` registered after both. W2-4 Task 9's `step0bMechanics` cases are unchanged: their streams carry no subagent message, and their trees are readable.
 - W2-5b1 Task 1's partition cases pass: `pilot-failed` is in `DRIVER_REFUSALS`, and their `STOPS` list is unchanged.
 - W2-4 Task 5's env scan (`no violation, and the entry guard…`) finds no `, env,` on a code line: the handler names its parameter `driverEnv`, and the `HANDLERS.set('step0b', (flags, env) => …)` line has W2-5a's spelling.
 - `typecheck-tests` is green. A red on a `D21.*` call is fixed with a cast at the call site, never by loosening the driver's JSDoc.
+- The second command is K28's pin on W2-5b1's two callers, by the titles W2-5b1's fix round gave them (each alternative measured to match at 0de4cc990): every case of `W2-5b1 Task 4: fix wave, the pair index across arm batches` (about :14103; the arms and judge `D-6481` pairs, `C03`, `C05` to `C15`, the `N2` readers, the F3 pair, about :15642 and :15667, and the all-excluded SIGINT pair, about :15710 and :15721), `W2-5b1 Task 4: C04 consumer, …` (about :14036) and its CONTROL (about :14052), the two `W2-5b1 Task 4: F2 consumer, …` cases (about :14061 and :14082: a failed refresh, and nine distinct readings refused at the count cap, both refusals before any build), and `W2-5b1 Task 4: correction Phase A, bounded snapshot helper contract` (about :15798), all passing unchanged and none edited. On darwin the fix-wave describe, the C04 CONTROL and both F2 cases are skipped (`skipIf(darwin)`), and the C04 consumer and Phase A run, so the filter still selects. Each `masking-snapshots-disagree arms` and `… judge` case still refuses with that detail; C13 still counts 0, 0, 1 and 4 comparisons; C15's identities and stacks hold. A red here is a byte-for-byte break of the factoring: fix the factoring, never a W2-5b1 case.
 
 Record the measured pass count in the commit's task note. If a fixture assumption fails (for example, the stub's key or the `w5b4Pilot` options), fix the fixture, never the guard, and record the measured value over the prediction in a `docs(plan): … (W2-5b2 Task 1)` commit.
 
@@ -2047,11 +2313,33 @@ t 'refuses before --out, with the stub log absent: a section outside'
 # Expected RED: 1 failed: a TypeError reading the unknown form's flag spec (checkFlags reads spec.required of an
 # undefined SUBCOMMAND_FLAGS entry), rethrown by b2t1Run, where the section refusal was expected.
 
-# M30 (D-6469): a payload that no longer reconstructs is spawned. Anchored on step0bCardOf's whole line: W2-5b1's
-# armBatchPreflight carries the same refusal at four spaces, which holds the two-space prefix.
+# M30 (D-6469): a payload that no longer reconstructs is spawned. Anchored on its `ctx.q.qid` spelling, which only
+# step0bCardOf's build carries (W2-5b1's armBatchPreflight build spells `s.q.qid`); its two-space prefix matches inside
+# that build's four.
 mut "$F" "  if (p.state !== 'payloads') refuse('quiz-unanswerable', \`\${ctx.q.qid} payload \${p.why}\`);   // D-6469" "  if (false) refuse('quiz-unanswerable', \`\${ctx.q.qid} payload \${p.why}\`);   // D-6469"
 t 'refuses before --out, with the stub log absent: D-6469'
 # Expected RED: 1 failed: a TypeError on the discarded payloads, or a spawn, where quiz-unanswerable was expected.
+
+# K28a (K26, K28): the newest reading's mask wins. A later disagreeing reading replaces the agreed build instead of refusing.
+# One line of maskingAgreementOf, no newline in the anchor (EX2), and `&&` so a missed anchor never runs unchanged code.
+mut "$F" "    else if (!agree(agreed, built)) refuse('input-invalid', \`masking-snapshots-disagree \${site}\`);" "    else if (!agree(agreed, built)) agreed = built;" && t 'K26 card seam|K28 later arm batch|C05 arms old-only rotation refuses|C05 judge old-only rotation refuses|C05 arms rotation keeps unaffected inputs equal|C05 judge rotation keeps unaffected inputs equal'
+# Expected RED: 4 failed, 4 passed. Failed: the two learned step 0b cases (their refusal is not input-invalid
+# masking-snapshots-disagree step0b: the masked card spawns, its stdins unplanted, and the result refuses pilot-failed),
+# and W2-5b1's C05 arms old-only and judge old-only (no masking-snapshots-disagree refusal at all). Passed: the two
+# step 0b CONTROLs and the two C05 rotation CONTROLs (one reading, or readings that agree, never reach the mutant).
+
+# K28b (K26, K28): the first arm batch keeps its card agreement and every later batch reuses that card unasked.
+mut "$F" "      for (let i = 0; i < probes.length; i += node.limits.batch_max) {
+        const cardLine = await step0bCardOf(ctx);" "      let firstCard = null;
+      for (let i = 0; i < probes.length; i += node.limits.batch_max) {
+        const cardLine = firstCard ??= await step0bCardOf(ctx);" && t 'K28 later arm batch'
+# Expected RED: 1 failed, 1 passed: the learned case exits 0 (the second batch spawns under the first batch's card), where
+# masking-snapshots-disagree step0b was expected; its CONTROL passes (no build count is asserted there). M12 differs: it
+# reuses the before-out card for every batch, and its own case catches that through the removed headless-on.
+
+# K28c (K26, K28): only the first retained reading is built; later readings are never compared.
+mut "$F" "    if (i === 0) agreed = built;" "    if (i === 0) return built;" && t 'K26 card seam|K28 later arm batch|C05 arms old-only rotation refuses|C05 judge old-only rotation refuses|C05 arms rotation keeps unaffected inputs equal|C05 judge rotation keeps unaffected inputs equal'
+# Expected RED: 4 failed, 4 passed: the same four as K28a (the oldest reading's text spawns unchecked), the same CONTROLs green.
 ```
 
 Then, in a last call:
@@ -2066,6 +2354,8 @@ Two refusals have no case of their own, by design:
 - `step0bRunOf`'s `out-refused` `run-stream-changed <name>` re-reads a stream that `launchRun` has just written, or that `finishedOutcome` has just matched against its recorded sha, in the same stretch. No single-process case reaches it, and it is defence behind those checks, as W2-5b1 Task 4's `armAttemptsOf` re-read is.
 - `refuseSyntheticPresent`'s `unmeasured <code>` branch: no fixture makes an lstat of an absolute path fail with anything but ENOENT, ENOTDIR or success without root tricks. Its `exists` branch is pinned (M14).
 
+`maskingAgreementOf` answering the first reading's build rather than a later agreeing one has no mutant, by design: agreeing readings are byte-equal under `sameMaskingText`, so no case can tell them apart (an equivalent mutant). Its admission refusals are W2-5b1's, pinned by Phase A and C14, unchanged.
+
 - [ ] **Step 9: Run the neighbours that read the driver.** In the foreground, with a timeout of at least 600000 ms. If a file goes red, re-run it alone before calling it a break (CLAUDE.md's load flakes; `typecheck-tests` is one):
 
 ```bash
@@ -2076,7 +2366,7 @@ Two refusals have no case of their own, by design:
 ```
 
 Expected: green (predicted).
-- **`history-replay`:** every earlier case, the two re-pinned W2-4 cases, and this task's.
+- **`history-replay`:** every earlier case, the two re-pinned W2-4 cases, W2-5b1's re-pinned `JUDGE_OUTCOMES …` case, and this task's.
   - W2-5b1 Task 1's arm-word scan finds no arm word: this task's code names the arm only as `TREATMENT_ARM`, and its comments sit on their own lines.
   - W2-5b1 Task 1's partition pins classify every word once, `pilot-failed` among the refusals.
   - W2-5a's and W2-5b1's subcommand cases are unchanged: no shared function changes behaviour on readable inputs.
@@ -2090,18 +2380,21 @@ Expected: green (predicted).
 ```bash
 git add deploy/history-replay.mjs server/test/history-replay.test.ts
 CO_AUTHORED_BY='<the Co-Authored-By line the attribution reminder gives>'
-git commit -m "feat(history-replay): step0b --section pilot, step 0b's turn bound, persistence, arm init and treatment-arm assertions, recorded and halting with pilot-failed (W2-5b2 Task 1; W2-D57, W2-D58; Q10, Q11, Q23, Q25, Q26, Q31; R1; K3, K4)" \
-  -m "In-place edits of earlier cases (K5): W2-4 Task 1's DRIVER_REASONS case (+W2_5B2, its title's tail) and W2-4 Task 9's HANDLERS key line (+'step0b'). Q25's refusal declared once, refusePilotSourceOut (K4)." \
+git commit -m "feat(history-replay): step0b --section pilot, step 0b's turn bound, persistence, arm init and treatment-arm assertions, recorded and halting with pilot-failed (W2-5b2 Task 1; W2-D57, W2-D58; Q10, Q11, Q23, Q25, Q26, Q31; R1; K3, K4, K26, K28)" \
+  -m "In-place edits of earlier cases (K5): W2-4 Task 1's DRIVER_REASONS case (+W2_5B2, its title's tail) and W2-4 Task 9's HANDLERS key line (+'step0b'); W2-5b1 Task 5's 'JUDGE_OUTCOMES are driver-local report words, disjoint from DRIVER_REASONS and GATE_REASONS' re-pins its HANDLERS order line from slice(-2) equal to ['arms', 'judge'] to indexOf('judge') === indexOf('arms') + 1 (licensed under K5, CP-20), so every later registration keeps it green. Q25's refusal declared once, refusePilotSourceOut (K4). K26: step0bCardOf admits the retained readings and agrees the re-check and card over every one (masking-snapshots-disagree step0b), never the newest mask; Task 3 reuses that seam." \
+  -m "In-place edit of W2-5b1 code (K28, licensed under K5): armBatchPreflight's and judgeCommand's all-readings-agree loops become calls of one module-private maskingAgreementOf, behaviour byte for byte (details masking-snapshots-disagree arms and judge unchanged; every W2-5b1 case green, none edited for it)." \
   -m "$CO_AUTHORED_BY"
 ```
 
-### Task 2: fidelity, the usage pilot's result, and open --finalize's derived spend budget (W2-D76, W2-D55, W2-D64, W2-D82; Q6 to Q10, Q25, Q27; K2, K3, K13, K14, K15, K21; D-6280, D-6644; review 811's F2 to F5)
+### Task 2: fidelity, the usage pilot's result, and open --finalize's derived spend budget (W2-D76, W2-D55, W2-D64, W2-D82; Q6 to Q10, Q25, Q27; K2, K3, K13, K14, K15, K21, K25, K26, K28; D-6280, D-6644, D-6723; review 811's F2 to F5)
 
 This task is the scoping study's Task 7 (scope.md section B). After it, the operator's pilot (W2 decisions §5, act 14) has every subcommand it needs but step 0b (W2-5b2 Task 1's): `fidelity --section pilot` measures the fidelity boundaries, W2-5b1's `arms --section pilot` and `judge --section pilot` run the usage pilot, and `pilot-result --section pilot` writes the file `open --finalize` reads (act 17). It adds two subcommands, `fidelity` and `pilot-result`, each with one section, `pilot` (Task 3 adds the `quiz` sections, K1). It extends W2-5b1's two pilot forms in place for step 0b's settings mode (K2, licensed under K5), edits `open --finalize`, and carries review 811's four range carries from the ledger ("For W2-5b2's plan"):
 
-- **The original side from the store.** `fidelityOriginalOf(rs, boundaryEntryId)` reads boundary N's epoch rows (N's own transcript's rows in N's holding copy, before N, in file order) and N's holding copy's rows, each body read lazily through W2-5a's `entryBodyOf`, and hands them to W2-5a's pure `originalSideOf` (about :4478 at 92dac5764). A body lost to a tombstone, a cap or a decode is `unmeasured` with its own word, never a 0. `boundaryEntryIdOf(rs, uuid)` resolves pilot-source's `boundary_uuid` to N's entry.
+- **The original side from the store.** `fidelityOriginalOf(rs, boundaryEntryId)` reads boundary N's epoch rows (N's own transcript's rows in N's holding copy, before N, in file order) and N's holding copy's rows, each body read lazily through W2-5a's `entryBodyOf`, and hands them to W2-5a's pure `originalSideOf` (about :4781 at 0de4cc990). A body lost to a tombstone, a cap or a decode is `unmeasured` with its own word, never a 0. `boundaryEntryIdOf(rs, uuid)` resolves pilot-source's `boundary_uuid` to N's entry.
 - **Step 0b's settings mode (K2, Q26).** `fidelity --section pilot`, `arms --section pilot` and `judge --section pilot` take an optional `--step0b`/`--step0b-sha256`: step 0b's result (W2-5b2 Task 1's file, `<section>/step0b/<settings mode>.json`), its sha checked before a byte is parsed (`loadInput`). Given, the act runs under that result's `settings_mode`, and the result must be a `step0b --section pilot` result for this part 1 (`input-invalid` otherwise) that passed (`pilot-failed` otherwise). Absent, the act runs under part 1's `settings_mode`, as W2-5b1 ships. One reader, `step0bModeOf`, inside W2-5b1's `loadArmRun` (so `arms` and `judge` share it) and in `fidelity`. So the fallback flow (Q26) is: step 0b again with `--settings-mode fallback`, then every pilot act with `--step0b` naming the passed result (README, Task 6).
-- **`fidelity --section pilot` (W2-D76; Q8, Q9, Q25).** Box mode: the arm argv with no seam env, so it needs no marker (Q8). Before `--out`: part 1 and its `gate_code` (W2-D24, first), the ranges (D-6309's rule: the budget, the limits, the batch shape, part 1's settings mode and `pilot.tolerance`), step 0b's result when given (K2), pilot-source's output with its sha, checked against part 1 for seed, frozen sha, families, `n_fidelity` and store (Q9), the store and the node, and W2-5b1 Task 4's `refuseSpawnAdmission`. Then a fresh `--out` that holds no `pilot-source.json` (Q25, Task 1's `refusePilotSourceOut`), and per fidelity boundary: the original side, W2-5a's `fidelityStdins`, W2-5b1 Task 4's `preflightSpawn` (W2-D56 before every batch), three box-mode spawns (`payload`, `empty`, `user-text`) in one batch, W2-5a's `fidelityFigures`, and the verdict against part 1's tolerance, exactly in integers. A boundary whose original side or stdins are unmeasured spawns nothing; a run that failed makes its boundary unmeasured. `fidelity.json` is written and its sha printed on stderr; then, when a boundary did not pass or fewer than `n_fidelity` were measured (K13), it refuses `pilot-failed` (K3).
+- **`fidelity --section pilot` (W2-D76; Q8, Q9, Q25).** Box mode: the arm argv with no seam env, so it needs no marker (Q8). Before `--out`: part 1 and its `gate_code` (W2-D24, first), the ranges (D-6309's rule: the budget, the limits, the batch shape, part 1's settings mode and `pilot.tolerance`), step 0b's result when given (K2), pilot-source's output with its sha, checked against part 1 for seed, frozen sha, families, `n_fidelity` and store (Q9), the store and the node, and W2-5b1 Task 4's `refuseSpawnAdmission`. Then a fresh `--out` that holds no `pilot-source.json` (Q25, Task 1's `refusePilotSourceOut`), and per fidelity boundary: the original side, W2-5a's `fidelityStdins` built under every retained reading of the pair index, which must agree (K26, K28; a disagreement refuses `input-invalid` `masking-snapshots-disagree fidelity` before the boundary's preflight), W2-5b1 Task 4's `preflightSpawn` (W2-D56 before every batch), three box-mode spawns (`payload`, `empty`, `user-text`) in one batch, W2-5a's `fidelityFigures`, and the verdict against part 1's tolerance, exactly in integers. A boundary whose original side or stdins are unmeasured spawns nothing; a run that failed makes its boundary unmeasured. `fidelity.json` is written and its sha printed on stderr; then, when a boundary did not pass or fewer than `n_fidelity` were measured (K13), it refuses `pilot-failed` (K3).
+- **The judge-only gate (K25, D-6723).** One fully validated `spend.jsonl`, not a second ledger or a reserve: `batchGate` defaults to whole-ledger scope `all`; `openJudge` alone passes `scope: 'judge'`, still with `budget: node.budget`. The pure `judgeSpentOf` counts only exact `<section>/${JUDGE_DIR}/` prefixes for `ARM_SECTIONS`, after the entire ledger has been parsed. `judged.json.spend` remains `spentSoFar(out)` (whole ledger), and arms still count every row, including judge rows. Q5's share and printed line, `armNodeOf`, Q6's extrapolation and `spend_budget`, and `pilot_result`'s five fields are untouched. Both pilot and quiz are pinned here.
+- **Agreed masking at each fidelity boundary (K26, K28).** The shared `fidelityBoundariesOf` takes `home`; for each boundary whose original side is measured it admits the store's retained readings (`const snapshots = maskingSnapshotsOf(rs, home);`) and builds `deps.stdins` under every one through Task 1's `maskingAgreementOf(snapshots, 'fidelity', …)`: the readings must agree run by run (or on one unmeasured word), else the boundary refuses `input-invalid` `masking-snapshots-disagree fidelity` before W2-D56's spawn preflight, so nothing of that boundary spawns or persists and `fidelity.json` is not written. Task 3's quiz fidelity calls this same loop with `home`.
 - **The usage pilot (W2-D55, Q6).** It is W2-5b1's `arms --section pilot` and then `judge --section pilot` (the judge on the usage pilot's non-correct answers, Q6), in the same `--out`, each with `--step0b` when the fallback flow is in force (K2). This task adds no spawn for it: `pilot-result` reads what they wrote.
 - **`pilot-result --section pilot` (C4; Q6, Q7, Q10; W2-D64, W2-D82; K3, K13, K15).** It reads part 1 (`gate_code` first), step 0b's result with its sha (Task 1's `passed`, `failed` and `unmeasured`, through `step0bOf`), and from `--out` the fidelity output, the usage pilot's arms summary, its judged file, the spend ledger and every recorded run's `run.json`. It writes the producer contract W2-5a's `pilotResultError` reads, `{kind: 'ccrc-history-w2-pilot-result', v: 1, fidelity, usage_extrapolation, step0b_sha256, settings_mode, absent_rate}`, plus `record_sha256` and `failures`, prints its sha, and then refuses `pilot-failed` when `failures` is not empty (K3):
   - `usage_extrapolation` records Q6's formula and its inputs: the margin 5/4, the pilot's question count, and the usage pilot's spend, arms and judge, read from the ledger by run name. It also records the extrapolation at part 1's `quiz.target`, the is_error reading (W2-D82, D-6644) at `usage_extrapolation.uptake`, and both spend readings with their measured relation (Q7). Part 2 copies it whole, so W2-D82's reading lives in part 2 at `pilot_result.usage_extrapolation.uptake.quiz_uptake` (K15), read through one exported reader, `quizUptakeReadingOf`, which W2-5b2's report calls;
@@ -2120,33 +2413,35 @@ The driver never spells an arm word: every per-arm value is keyed by `RECALL_ARM
 - W2-D56 (the preflight before every fidelity batch), W2-D24 (`fidelity` and `pilot-result` re-check `gate_code` first), W2-D6 (no `--allow-code-change` on a pilot act), W2-D53 (a resumed `fidelity` reuses its finished runs);
 - W2-D57 and W2-D58 only as consumed: step 0b's result, whose failed and unmeasured checks `pilot-result` records, and whose settings mode the pilot acts run under when it passed (W2-5b2 Task 1's file; Q26, W2-D58's "the fallback settings mode is recorded in part 2 before the full run");
 - §4 part 2's `pilot_result` and `spend_budget` rows; §5 acts 14 and 17;
-- the coordinator's drafting rulings K2 (the usage pilot runs in step 0b's settings mode), K3 (one halt rule: write, print the sha, refuse `pilot-failed`), K4 (Task 1's names for step 0b's result and `refusePilotSourceOut`), K5 (the in-place edits listed below), K13 (fidelity short and a settings-mode mismatch both failures), K14 (part 2 keeps `pilot_result`'s five fields; `--accept-failed-pilot` prints the file's failures), K15 (W2-D82's reading in part 2, read through one exported reader) and K21 (`open --finalize` binds the pilot result to part 1, its red-first case, CONTROL and mutant here; the residual withdrawn);
+- the coordinator's drafting rulings K2 (the usage pilot runs in step 0b's settings mode), K3 (one halt rule: write, print the sha, refuse `pilot-failed`), K4 (Task 1's names for step 0b's result and `refusePilotSourceOut`), K5 (the in-place edits listed below), K13 (fidelity short and a settings-mode mismatch both failures), K14 (part 2 keeps `pilot_result`'s five fields; `--accept-failed-pilot` prints the file's failures), K15 (W2-D82's reading in part 2, read through one exported reader) and K21 (`open --finalize` binds the pilot result to part 1, its red-first case, CONTROL and mutant here; the residual withdrawn); K25 (judge-scoped gate only, D-6723; P1, P1p, P2, P3, P4 and P5 below) K26 (D-6481 carried: each fidelity boundary's stdins agreed over every retained reading) and K28 (that agreement through Task 1's `maskingAgreementOf`, site `fidelity`);
 - S1 (this PR's files), S2's C22 (D-6309's driver-side ranges, here `pilot.tolerance` and the settings mode; `halts.absent_rate_max` the validator already ranges, `value-outside-set`, the driver's row behind it defence), Q1, Q6, Q7, Q8, Q9, Q10, Q23, Q25, Q26 (the settings mode step 0b records is the result's), Q27; the carried V1 does not bite here (no per-arm figure of the quiz is computed in this task; the report's per-arm uptake is Task 5's).
 
-It cites, bare: D-6280 (closed here), D-6309 (the range rule and its review-811 carries), D-6307 and D-6311 (refusals before `--out`), D-5983 (the printed sha), D-5986 (plain I/O under `--out`), D-5984, D-6305 (a failed run is a failed attempt, read here for a fidelity run), D-6467 (the larger-reading charge whose two readings Q7's relation reports), D-5776 (the answer protocol the empty-question run carries). It first cites D-6644, issued at planning, which this plan defines in its "## Deviations found". It defines no other number.
+It cites, bare: D-6280 (closed here), D-6309 (the range rule and its review-811 carries), D-6307 and D-6311 (refusals before `--out`), D-5983 (the printed sha), D-5986 (plain I/O under `--out`), D-5984, D-6305 (a failed run is a failed attempt, read here for a fidelity run), D-6467 (the larger-reading charge whose two readings Q7's relation reports), D-5776 (the answer protocol the empty-question run carries). It first cites D-6644, issued at planning, which this plan defines in its "## Deviations found". It also cites D-6723 (K25), whose new definition belongs to the header/docs editor in this plan's tail, not to this fragment. It defines no other number.
 
 **Files:**
 - Modify: `deploy/history-replay.mjs`. Every anchor is a hint at 92dac5764 or into W2-5b1's code; re-anchor by the quoted content and report each drift.
-  - (a) The gate's import statement (`import { ANSWER_PROTOCOL, … } from './history-gate.mjs';`, about :42 at 92dac5764, as W2-5b1 Task 1, Task 4 and Task 5 left it): add `cmpFrac` and `frac`, each in code-unit order inside the braces. No statement is added.
-  - (b) `FLAG_SPECS` (about :110-130 at 92dac5764): directly before the `}));` that closes `export const FLAG_SPECS = Object.freeze(/** @type {Record<string, FlagKind>} */ ({`, after the last entry W2-5b1 and W2-5b2 Task 1 added, three flags.
-  - (c) `SUBCOMMAND_FLAGS` (about :4811): the `'open --finalize'` form's `optional: [...PRED_INPUT, 'prior-final', 'prior-final-sha256'] },` (about :4820) gains `'accept-failed-pilot'`; W2-5b1 Task 4's `'arms --section pilot'` and W2-5b1 Task 5's `'judge --section pilot'` forms (each `{ required: ['section', 'out', ...DRAFT_INPUT, 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },`; re-anchor at W2-5b1's merged head) each gain `'step0b', 'step0b-sha256'` in `optional` (K2, in place under K5); two forms, `'fidelity --section pilot'` and `'pilot-result --section pilot'`, inserted directly before the `});` that closes the object, after every earlier task's forms.
-  - (d) `spentSoFar` (about :1050-1080, from its doc comment's first line ` /** The cumulative spend under `out` (W2-D55): every line summed, a repeated name included (never de-duplicated:` to its closing `}`): factored into `spendLinesOf` and a `spentSoFar` over it, its refusals byte for byte.
-  - (e) `pilotResultError` (about :5383, `function pilotResultError(o) {` to its closing `}`): exported and tightened to the producer's shape.
-  - (f) `refuseOutOfRangeValues` (about :5405, as W2-5b1 Tasks 1 and 4 left it, `export function refuseOutOfRangeValues({ budget, budgetField = 'pilot_budget', limits, quotas, part2 = null, batch = false }) {`): a `settings = null` parameter and its row, last.
-  - (g) `refuseWriterAdmission` (as W2-5b1 Task 4 left it, `function refuseWriterAdmission({ home, accountId, budget, limits, quotas, expected }) {`): a `settings = null` parameter passed to the range check; `quizSourceCommand`'s call (about :5528-5529) passes `settings: { mode: rec.record.settings_mode }`. `pilotSourceCommand`'s call is unchanged: its step 0a output's shape already holds the mode to `SETTINGS_MODES` (`step0aShapeError`, about :2113).
-  - (h) `openFinalize` (about :5663): after the `pilot-result shape` check (about :5687), K21's record binding; after the `q18-decision` check (about :5689), Q27's two checks and the derived budget; in its `buildFinal({` call (about :5693), `spendBudget: flags['spend-budget'],` becomes `spendBudget,`; before `  return printWithSha(final);` (about :5699), the `--accept-failed-pilot` line.
+  - (a) The gate's import statement (`import { ANSWER_PROTOCOL, … } from './history-gate.mjs';`, about :45 at W2-5b1's final head 0de4cc990, as W2-5b1 Task 1, Task 4 and Task 5 left it): add `cmpFrac` and `frac`, each in code-unit order inside the braces. No statement is added.
+  - (b) `FLAG_SPECS` (about :153-176 at 0de4cc990, its closing `}));` about :176): directly before the `}));` that closes `export const FLAG_SPECS = Object.freeze(/** @type {Record<string, FlagKind>} */ ({`, after the last entry W2-5b1 and W2-5b2 Task 1 added, three flags.
+  - (c) `SUBCOMMAND_FLAGS` (about :5106 at 0de4cc990): the `'open --finalize'` form's `optional: [...PRED_INPUT, 'prior-final', 'prior-final-sha256'] },` (about :5115; the form is about :5114-5115) gains `'accept-failed-pilot'`; W2-5b1 Task 4's `'arms --section pilot'` and W2-5b1 Task 5's `'judge --section pilot'` forms (each `{ required: ['section', 'out', ...DRAFT_INPUT, 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },`; re-anchor at W2-5b1's merged head) each gain `'step0b', 'step0b-sha256'` in `optional` (K2, in place under K5); two forms, `'fidelity --section pilot'` and `'pilot-result --section pilot'`, inserted directly before the `});` that closes the object (about :5131 at 0de4cc990, before Task 1's form), after every earlier task's forms. W2-5b1's two pilot forms are about :5126 and :5129.
+  - (d) `spentSoFar` (about :1125-1153 at 0de4cc990, the function :1134, from its doc comment's first line ` /** The cumulative spend under `out` (W2-D55): every line summed, a repeated name included (never de-duplicated:` to its closing `}`): factored into `spendLinesOf` and a `spentSoFar` over it, its refusals byte for byte.
+  - (d1) W2-4's `batchGate`: its signature `export function batchGate({ out, home, accountId, budget, limits, now = Date.now }) {` gains optional `scope = 'all'`; `SPEND_SCOPES` is declared immediately before its JSDoc, and the ledger selection is the one new expression in the gate. Existing budget/limits guards and comments remain. K25's first of exactly two newly licensed K5 in-place code edits.
+  - (d2) W2-5b1's `openJudge`: only its gate line gains `scope: 'judge'`, anchored by `// RP3-judge` on the admission line immediately above it. K25's second newly licensed K5 edit; no other caller is scoped. `judgeCommand`'s `budget: node.budget` and `spend: spentSoFar(out)` stay byte for byte.
+  - (e) `pilotResultError` (about :5718-5725 at 0de4cc990, `function pilotResultError(o) {` to its closing `}`): exported and tightened to the producer's shape.
+  - (f) `refuseOutOfRangeValues` (about :5756 at 0de4cc990, as W2-5b1 Tasks 1 and 4 left it, `export function refuseOutOfRangeValues({ budget, budgetField = 'pilot_budget', limits, quotas, part2 = null, batch = false }) {`): a `settings = null` parameter and its row, last.
+  - (g) `refuseWriterAdmission` (about :5789 at 0de4cc990, as W2-5b1 Task 4 left it, `function refuseWriterAdmission({ home, accountId, budget, limits, quotas, expected }) {`): a `settings = null` parameter passed to the range check; `quizSourceCommand`'s call (about :5893-5894 at 0de4cc990) passes `settings: { mode: rec.record.settings_mode }`. `pilotSourceCommand`'s call is unchanged: its step 0a output's shape already holds the mode to `SETTINGS_MODES` (`step0aShapeError`, about :2189 at 0de4cc990).
+  - (h) `openFinalize` (about :6028 at 0de4cc990): after the `pilot-result shape` check (about :6052), K21's record binding; after the `q18-decision` check (about :6054), Q27's two checks and the derived budget; in its `buildFinal({` call (about :6056; the `spendBudget: flags['spend-budget'],` line about :6058), `spendBudget: flags['spend-budget'],` becomes `spendBudget,`; before `  return printWithSha(final);` (about :6064), the `--accept-failed-pilot` line.
   - (i) W2-5b1 Task 1's `part2RangeChecks`: its line `    ['pilot_result.settings_mode', SETTINGS_MODES.includes(r?.pilot_result?.settings_mode)],` (W2-5b1 Task 1's `part2RangeChecks`; re-anchor at W2-5b1's merged head).
   - (j) W2-5b1 Task 4's `loadArmRun`, its pilot branch (W2-5b1 Task 4's `loadArmRun`; re-anchor at W2-5b1's merged head): the line `    if (!SETTINGS_MODES.includes(rec.record.settings_mode)) refuse('record-invalid', 'settings_mode out-of-range');` goes through `settingsModeRow`, and the branch's `return` line, `    return { section, record: rec.record, recordSha256: rec.sha256, frozen: fz, settingsMode: rec.record.settings_mode, allowCodeChange: false, codeStamps };`, reads step 0b's mode through `step0bModeOf` (K2, in place under K5). Its JSDoc's pilot clause gains one sentence. `ArmRun`'s shape is unchanged.
   - (k) W2-5b1 Task 4's `armsCommand`: its line ``    if (lstatOrNull(out, PILOT_SOURCE_FILE) !== null) refuse('out-refused', `${PILOT_SOURCE_FILE} is here: arms run on a fresh --out, never pilot-source's`);`` (W2-5b1 Task 4's `armsCommand`; re-anchor at W2-5b1's merged head) becomes a call of W2-5b2 Task 1's `refusePilotSourceOut` (K4: Task 1 declares it at its first need, `step0bCommand`; this task makes `arms` its second caller). If Step 1 finds `armsCommand` already calling it, Task 1 made this edit: skip it and say so in the task note.
-  - (l) One new section, `// ── W2-5b2 Task 2: …`, directly above the comment line `// The entry guard stays the LAST block of this file` (about :5796 at 92dac5764), after W2-5b2 Task 1's section. It ends with the two `HANDLERS.set` lines.
+  - (l) One new section, `// ── W2-5b2 Task 2: …`, directly above the comment line `// The entry guard stays the LAST block of this file` (about :7587 at 0de4cc990), after W2-5b2 Task 1's section. It ends with the two `HANDLERS.set` lines.
 - Modify: `server/test/history-replay.test.ts`.
   - The in-place edits of earlier cases listed under "In-place edits (K5)" below, each named in the commit and under the PR body's "In-place edits of earlier cases".
-  - One nested describe inside W2-5a Task 7's outer `r7describe('W2-5a Task 7: the record subcommands', () => {` (about :8934), directly before its closing `});` (about :10502 at 92dac5764), after W2-5b1 Task 3's nested describe and W2-5b2 Task 1's, if Task 1 nests one.
-  - One appended block at the end of the file, after W2-5b2 Task 1's appended block: its import lines, its module-level `b2t2`-prefixed fixtures and six describes.
-  - **Line-disjoint from W2-6 (U15, Q29):** W2-6's whole test region sits directly after `describe('W2-5a fix wave: the review\'s minors', …)` closes (about :10676-10678) and before W2-5b1's first appended block. This task's edits are inside `r7describe` (above :10502), on W2-4's two pins (about :199 and :4824), and at the file's end, after W2-5b1's and W2-5b2 Task 1's blocks. None touches W2-6's region or its marker line.
+  - One nested describe inside W2-5a Task 7's outer `r7describe('W2-5a Task 7: the record subcommands', () => {` (about :8957 at 0de4cc990), directly before its closing `});` (about :10953 at 0de4cc990), after W2-5b1 Task 3's nested describe and W2-5b2 Task 1's, if Task 1 nests one.
+  - One appended block at the end of the file, after W2-5b2 Task 1's appended block: its import lines, its module-level `b2t2`-prefixed fixtures and eight describes (the existing six, plus K25 pure and integration describes; K26 and K28 add two cases inside the fidelity describe, the learned refusal and its CONTROL).
+  - **Line-disjoint from W2-6 (U15, Q29):** W2-6's whole test region sits directly after `describe('W2-5a fix wave: the review\'s minors', …)` closes (about :11127-11129 at 0de4cc990; W2-5b1's first appended block starts about :11131) and before W2-5b1's first appended block. This task's edits are inside `r7describe` (above about :10953), on W2-4's two pins (about :199 and :4846), and at the file's end, after W2-5b1's and W2-5b2 Task 1's blocks. None touches W2-6's region or its marker line.
 - Not edited: `ccd/**`, `shared/**`, `deploy/history-gate.mjs`, `deploy/measure-history.py`, `.github/**`, README.md and the spec (both W2-5b2's later task's), `single-definition.test.ts` and every other test file, W2-6's regions. No file is created.
 
-**In-place edits (K5).** Every edit this task makes to an earlier task's case, each named in the commit (Step 10) and under the PR body's "In-place edits of earlier cases". No other W2-4, W2-5a or W2-5b1 case is edited.
+**In-place edits (K5).** K25 extends the code-edit licence in exactly two places: W2-4's `batchGate` and W2-5b1's `openJudge` gate line, named in Step 5 and the commit/PR body. W2-4's existing `batchGate` cases, W2-5b1's arms-share case, and J30 (`quiz: the judge spends under this node's spend share, and budget-exhausted stops its re-run (Q5, W2-D55)`) remain unchanged; J30 still sees only its own judge charge of 65 against 60. Every edit this task makes to an earlier task's case, each named in the commit (Step 10) and under the PR body's "In-place edits of earlier cases". No other W2-4, W2-5a or W2-5b1 case is edited.
 - W2-4 Task 1's `FLAG_SPECS declares exactly W2-4's seven flags, W2-5a Task 7's and W2-5b1 Task 1's, frozen` (W2-5b1 Task 1's title; its title is left as the last task left it; Step 2 (a)): the expected object gains `step0b`, `step0b-sha256` and `accept-failed-pilot` as its last entries.
 - W2-4 Task 9's `three box-mode spawns, one per taught spelling, and a denial for one spelling is recorded for that one only; exit 0` (Step 2 (b)): its registration line gains `'fidelity', 'pilot-result'` at its end.
 - W2-5a Task 7's helper `chain7`, read by every W2-5a open finalize case (Step 2 (e1); C5's "re-pin W2-5a's case"): its pilot result re-pinned to the producer's shape, `uptake` (K15), `failures` and `record_sha256` (K21, part 1's sha) included.
@@ -2162,36 +2457,40 @@ It cites, bare: D-6280 (closed here), D-6309 (the range rule and its review-811 
   - lib: `canonicalJson`, `UUID_RE`, `RECALL_ARMS`; the gate (W2-3): `frac(num, den) -> {num, den}` (a `RangeError` off safe integers or `den < 1`), `cmpFrac(a, b) -> -1 | 0 | 1` (exact in BigInt past 2^53); tests also read `GATE_REASONS`, `validateOpenRecord`, `LABELLER`, `WRITER_PROMPT_SHA256`, `ANSWER_PROTOCOL_SHA256`.
 - Consumes (W2-5b1, by its owners' names, R8; each "(W2-5b1 Task N's <name>; re-anchor at W2-5b1's merged head)"). Step 1 checks every name and shape; a missing or differently shaped one is a gap in its owning task, reported, never defined here:
   - Task 1: `CONTROL_ARM` (`RECALL_ARMS[0]`); `positiveInt(v)`, module-private; `refuseRangeRows(checks: Array<[string, boolean]>)`, module-private (`record-invalid`, each failing path `<path> out-of-range`, joined by `; `); `part2RangeChecks(r)`, module-private; `refuseOutOfRangeValues({budget, budgetField = 'pilot_budget', limits, quotas, part2 = null})`; each `<name>.run.json` carries `usage_result_tokens: number | null` and `usage_assistant_tokens: number` beside `tokens` (D-6467).
-  - Task 4: `refuseOutOfRangeValues`' `batch = false` (Task 1's `batchShapeChecks` rows); `refuseSpawnAdmission({home, accountId, limits, expected, allowCodeChange = false})` and `preflightSpawn({launch, home, out, lang, gate, expected, allowCodeChange = false}) -> Promise<{version: string, stamps: string[]}>`, both module-private; `expectedForNode(record, storeId) -> {expected: {claude_code_version, release_stamp, wrapper_sha256, code_shas}, from}` (on part 1 it reads `amendments ?? []`); `ARMS_SUMMARY_KIND = 'ccrc-history-w2-arms-summary'`; `armsSummaryRel(section) -> '<section>/arms/summary.json'`; `armRunName(section, qid, arm, attempt) -> '<section>/arms/<qid>/<arm>.a<attempt>'`; `armsSummaryOf({section, recordSha256, storeId, budget, spend, batches, stop, stamps, questions})` and the summary it writes, `{kind: ARMS_SUMMARY_KIND, v: 1, section, record_sha256, store_id, budget, spend, batches, stop: null | {word, kind, detail}, stamps, counts: {questions, answered, run_failed, rerun_owed, not_run}, arms: {<arm>: {answered, value, unknown, absent, correct, uptake_questions, uptake_calls, via_agent, errored}}, absent_rate: {<arm>: {num, den}}, questions}`; `loadArmRun(flags, section, {nowMs}) -> ArmRun` (`{section, record, recordSha256, frozen, settingsMode, allowCodeChange, codeStamps}`) and its pilot branch (its settings-mode line and its `return` line, edit (j)), the one loader `arms` and `judge` share, whose `settingsMode` reaches every arm and judge job through `armNodeOf`; the `'arms --section pilot'` form (edit (c)); `armsCommand`'s Q25 line (edit (k)). Before this task, `arms --section pilot` runs under part 1's `settings_mode`.
-  - Task 5: `JUDGE_DIR = 'judge'`, `JUDGED_FILE = 'judged.json'`, `JUDGED_KIND = 'ccrc-history-w2-judged'`; the judged file `<section>/judged.json`, `{kind: JUDGED_KIND, v: 1, section, store_id, record_sha256, frozen_sha256, map_sha256, judge_model, rubric_id, rubric_sha256, settings_mode, reply_max_bytes, items, counts, budget, spend, stamps}`; judge runs named `<section>/judge/<id>-<attempt>`; `judgeCommand`, which loads through Task 4's `loadArmRun`; the `'judge --section pilot'` form (edit (c)).
-  - Test side (module-level after W2-5b1 merges): `w5b4Home`, `w5b4Node`, `w5b4Pilot`, `w5b4Draft`, `w5b4Save`, `w5b4Inp`, `w5b4Out`, `w5b4Act`, `w5b4Stream`, `w5b4Arms`, `w5b4Runs`, `w5b4Versions`, `w5b4Shas`, `w5b4Version`, `w5b4Gen`, `w5b4Hex`, `w5b4MkTmp`, `w5b4CreateStore`, `w5b4Vi`, `w5b4Lib`, `w5b4Gate`, `W5B4_ARM_STUB`, `W5B4_ARMS`, `W5B4_CONTROL`, `W5B4_TREATMENT`, `W5B4_PILOT`, `W5B4_STORE_A`, `W5B4_STORE_B`, `W5B4_OPUS`, `W5B4_ARM_MODEL`, `W5B4_STAMP`, `W5B4_LANG`, `W5b4R`, `W5b4Saved`; `W5B5`, `W5B5_LABELLED`, `W5B5_ENV`, `w5b5InProcess`.
+  - Task 4: `refuseOutOfRangeValues`' `batch = false` (Task 1's `batchShapeChecks` rows); `refuseSpawnAdmission({home, accountId, limits, expected, allowCodeChange = false})` and `preflightSpawn({launch, home, out, lang, gate, expected, allowCodeChange = false}) -> Promise<{version: string, stamps: string[]}>`, both module-private; `expectedForNode(record, storeId) -> {expected: {claude_code_version, release_stamp, wrapper_sha256, code_shas}, from}` (on part 1 it reads `amendments ?? []`); `ARMS_SUMMARY_KIND = 'ccrc-history-w2-arms-summary'`; `armsSummaryRel(section) -> '<section>/arms/summary.json'`; `armRunName(section, qid, arm, attempt) -> '<section>/arms/<qid>/<arm>.a<attempt>'`; `armsSummaryOf({section, recordSha256, storeId, budget, spend, batches, stop, stamps, questions, payloadChanged = []})` (about :6799 at 0de4cc990) and the summary it writes, `{kind: ARMS_SUMMARY_KIND, v: 1, section, record_sha256, store_id, budget, spend, batches, stop: null | {word, kind, detail}, stamps, counts: {questions, answered, run_failed, rerun_owed, not_run}, arms: {<arm>: {answered, value, unknown, absent, correct, uptake_questions, uptake_calls, via_agent, errored}}, absent_rate: {<arm>: {num, den}}, questions}`, plus `payload_changed: {count, qids}` only when `payloadChanged` is non-empty (D-6482); `loadArmRun(flags, section, {nowMs}) -> ArmRun` (`{section, record, recordSha256, frozen, settingsMode, allowCodeChange, codeStamps}`) and its pilot branch (its settings-mode line and its `return` line, edit (j)), the one loader `arms` and `judge` share, whose `settingsMode` reaches every arm and judge job through `armNodeOf`; the `'arms --section pilot'` form (edit (c)); `armsCommand`'s Q25 line (edit (k)). Before this task, `arms --section pilot` runs under part 1's `settings_mode`.
+  - The K28 agreement seam: W2-5b1's module-private `maskingSnapshotsOf(rs, home)` (the retained readings, admitted) and `sameMaskingText(a, b)`, and Task 1's module-private `maskingAgreementOf(snapshots, site, build, agree)`. Consume them as they are; never call `refreshPairIndex` directly, copy `pairIndexOf` or add a refresh seam.
+  - Task 5: `openJudge(o)`, `ARM_SECTIONS = ['pilot', 'quiz']`, `JUDGE_DIR = 'judge'`, `JUDGED_FILE = 'judged.json'`, `JUDGED_KIND = 'ccrc-history-w2-judged'`; the judged file `<section>/judged.json`, `{kind: JUDGED_KIND, v: 1, section, store_id, record_sha256, frozen_sha256, map_sha256, judge_model, rubric_id, rubric_sha256, settings_mode, reply_max_bytes, items, counts, budget, spend, stamps}`; judge runs named `<section>/judge/<id>-<attempt>`; `judgeCommand`, which loads through Task 4's `loadArmRun`; the `'judge --section pilot'` form (edit (c)).
+  - Test side (module-level after W2-5b1 merges): `w5b4Home`, `w5b4Node`, `w5b4Pilot`, `w5b4Quiz`, `w5b4Draft`, `w5b4Save`, `w5b4Inp`, `w5b4Out`, `w5b4Act`, `w5b4Stream`, `w5b4Arms`, `w5b4Runs`, `w5b4Versions`, `w5b4Shas`, `w5b4Version`, `w5b4Gen`, `w5b4Hex`, `w5b4MkTmp`, `w5b4CreateStore`, `w5b4Vi`, `w5b4Lib`, `w5b4Gate`, `W5B4_ARM_STUB`, `W5B4_ARMS`, `W5B4_CONTROL`, `W5B4_TREATMENT`, `W5B4_PILOT`, `W5B4_STORE_A`, `W5B4_STORE_B`, `W5B4_OPUS`, `W5B4_ARM_MODEL`, `W5B4_STAMP`, `W5B4_LANG`, `W5b4R`, `W5b4Saved`; `W5B5`, `W5B5_LABELLED`, `W5B5_ENV`, `w5b5InProcess`, `w5b5Answer`; `W5B4_T0`, `W5B4_DAY`; `b1t2Lib`. The K26 fidelity agreement cases also consume `fwLearn(home, value)` and `b1t2Lib` (W2-5b1's test-only store writer and lib handle).
 - Consumes (W2-5b2 Task 1, by its owner's names, K4): `'pilot-failed'` (`DRIVER_REASONS`' last member, classified a refusal; consumed, never added here); `STEP0B_KIND = 'ccrc-history-w2-step0b'`, `STEP0B_CHECKS`, `STEP0B_SECTIONS` and `step0bRel(section, settingsMode) -> '<section>/step0b/<settings mode>.json'`; the module-private `refusePilotSourceOut(out, who)`, whose detail is `` `${PILOT_SOURCE_FILE} is here: ${who} on a fresh --out, never pilot-source's` `` (Task 1 declares it for `step0bCommand`, K4); and the result file step 0b writes, of which `step0bOf` reads exactly eight fields: `{kind: STEP0B_KIND, v: 1, section: 'pilot', record_sha256: <part 1's sha>, settings_mode: <a SETTINGS_MODES word>, passed: boolean, failed: string[], unmeasured: string[]}` (`failed` and `unmeasured` hold `STEP0B_CHECKS` members, apart, `passed` true exactly when both are empty; Task 1's `step0bVerdictOf`). Every other field of the file (its checks, runs, persistence, budget and spend) is Task 1's record and is not read here.
 - Produces (`deploy/history-replay.mjs`, exported unless marked):
-  - Constants: `FIDELITY_KIND = 'ccrc-history-w2-fidelity'`, `FIDELITY_FILE = 'fidelity.json'`, `PILOT_RESULT_FILE = 'pilot-result.json'`, `USAGE_MARGIN = {num: 5, den: 4}` (frozen), `USAGE_EXTRAPOLATION_FORMULA = 'ceil(margin.num x n_questions x pilot_spend.total / (margin.den x pilot_questions))'`, `UPTAKE_READINGS = ['is-error', 'not-error', 'unseen']` (frozen; driver-local report words, disjoint from `DRIVER_REASONS` and `GATE_REASONS`), `USAGE_PILOT_PREFIXES = {arms: 'pilot/arms/', judge: 'pilot/judge/'}` (frozen, `judge` built from `JUDGE_DIR`), `FIDELITY_SECTIONS = ['pilot']` and `PILOT_RESULT_SECTIONS = ['pilot']` (frozen, each on one line; each form's section refusal builds its detail from its list, before `checkFlags`; Task 3 adds `'quiz'` to each in place and one dispatch line below each refusal, K1); module-private `FIDELITY_RUN_DIR = 'fidelity'`, `nonNegativeInt`, `FIDELITY_STMTS`.
-  - Pure: `decimalOf(x) -> {num, den} | null` (a finite number in [0, 1] whose `String` has at most six places: the gate's private `decimalFrac` rule, spelled again with a parity pin against the validator); `fidelityRunName(boundaryUuid, run) -> 'fidelity/<uuid>/<run>'` (a `TypeError` for a non-UUID or a run outside `FIDELITY_RUNS`); `fidelityPassOf(figures, tolerance: {num, den}) -> boolean`; `pilotSourceMismatchOf(pilot, record, storeId) -> string | null`; `absentRateCheckOf(rates, max: {num, den}) -> {arms: {<arm>: {num, den} | null}, max, over: string[], unmeasured: string[], pass: boolean}`; `uptakeReadingOf({calls, errored}) -> {reading, quiz_uptake: 'measured' | 'unmeasured', control_calls, control_errored}`; `quizUptakeReadingOf(pilotResult) -> 'measured' | 'unmeasured'` (K15: part 2's `pilot_result`, or the pilot-result file, read at `usage_extrapolation.uptake`; `measured` only for an uptake whose reading `uptakeReadingOf` gives from its own two counts and is `is-error`; anything else, an absent or malformed one included, `unmeasured`; the reader W2-5b2 Task 5 calls through its `REPORT_DEPS.uptakeReading`); `extrapolationError(ux) -> null | 'v' | 'formula' | 'margin' | 'pilot_questions' | 'pilot_spend'`; `spendBudgetOf(ux, nQuestions) -> number | null`; `spendReadingsOf(rows: Array<{name, run: null | {result: number | null, assistant: number, charged: number}}>) -> {runs, unrecorded, result_absent, result_below_assistant, equal, result_above_assistant, result_tokens, assistant_tokens, charged_tokens}`; `pilotFailuresOf({boundaries, nFidelity, absent, step0bFailures, settingsMismatches}) -> string[]` (sorted, unique; `step0bFailures` are `<check> failed` and `<check> unmeasured`, each listed `step0b <check> failed|unmeasured`); `pilotResultOf({recordSha256, boundaries, extrapolation, step0bSha256, settingsMode, absent, failures})`; module-private `settingsModeRow(rowPath, mode) -> [string, boolean]` and `uptakeShapeOk(u) -> boolean` (the one spelling `pilotResultError` and `quizUptakeReadingOf` share).
-  - Measuring and acting: `spendLinesOf(out) -> Array<{name, tokens}>` (the ledger's one reader; `spentSoFar(out)` sums it); `boundaryEntryIdOf(rs, uuid) -> number | null`; `fidelityOriginalOf(rs, boundaryEntryId)` (originalSideOf's answer, or `{state: 'unmeasured', why}` with a `RECON_DISCARDS` word, `summary-absent` or `body-<word>`); `pilotResultError(o) -> string | null` (W2-5a's, now exported and tightened, the uptake included); `fidelityCommand(flags, driverEnv, deps = {resolve: boundaryEntryIdOf, original: fidelityOriginalOf, stdins: fidelityStdins})` registered as `fidelity` (`deps.timeoutMs`, optional, is a test seam, never a flag); `pilotResultCommand(flags, env)` registered as `pilot-result`; module-private `step0bOf(loaded, recordSha256, section) -> {sha256, section, settingsMode, passed, failed, unmeasured}` (step 0b's result read for `section`; `input-invalid` for a shape, section or record mismatch; Task 3 calls it with `'quiz'`), `step0bModeOf(flags, recordSha256) -> null | <step0bOf's answer>` (K2: null without `--step0b`; a result that did not pass refuses `pilot-failed`), `pilotOut(outArg)`, `pilotOutFile(out, rel, kind, recordSha256, writer)`, `runUsageOf(out, name) -> null | {result, assistant, charged, settingsMode}`, `fidelityStmts(db)`, and `fidelityBoundariesOf({rs, heads, deps, tolerance, spawnPre, jobOf, gate, claim, concurrency}) -> Promise<{boundaries, version}>`: the per-boundary measurement, one function, which `fidelity --section pilot` calls and Task 3's re-pilot form calls too (`heads` `{store_id, ccrc_id, generation, boundary_uuid}`; `deps` its `resolve`, `original`, `stdins`; `spawnPre()` W2-D56's preflight for one batch, answering `{version}`; `jobOf(boundaryUuid, run, stdin)` one box job; `boundaries` in `heads`' order in `fidelity.json`'s boundary shape; `version` the last batch's, or null when nothing spawned).
+  - Shared gate contract: `SPEND_SCOPES = Object.freeze(['all', 'judge'])`; `batchGate({out, home, accountId, budget, limits, now = Date.now, scope = 'all'}) -> () => void`, unknown scope a `TypeError` at construction before any read; `judgeSpentOf(rows: Array<{name: string, tokens: number}>) -> number` exported and pure, exact section/`JUDGE_DIR`/ prefix only, duplicates counted and safe-integer overflow a `RangeError`. Rows are already validated by `spendLinesOf`; whole-ledger overflow still refuses `out-refused spend.jsonl malformed` before filtering.
+  - Constants: `FIDELITY_KIND = 'ccrc-history-w2-fidelity'`, `FIDELITY_FILE = 'fidelity.json'`, `PILOT_RESULT_FILE = 'pilot-result.json'`, `USAGE_MARGIN = {num: 5, den: 4}` (frozen), `USAGE_EXTRAPOLATION_FORMULA = 'ceil(margin.num x n_questions x pilot_spend.total / (margin.den x pilot_questions))'`, `UPTAKE_READINGS = ['is-error', 'not-error', 'unseen']` (frozen; driver-local report words, disjoint from `DRIVER_REASONS` and `GATE_REASONS`), `USAGE_PILOT_PREFIXES = {arms: 'pilot/arms/', judge: 'pilot/judge/'}` (frozen, `judge` built from `JUDGE_DIR`), `FIDELITY_SECTIONS = ['pilot']` and `PILOT_RESULT_SECTIONS = ['pilot']` (frozen, each on one line; each form's section refusal builds its detail from its list, before `checkFlags`; Task 3 adds `'quiz'` to each in place and one dispatch line below each refusal, K1); module-private `FIDELITY_RUN_DIR = 'fidelity'`, `nonNegativeInt`, `usageReadingOk` (a non-negative integer, safe or not: a run.json usage reading as W2-5b1 writes it), `chargedReading(n)` (W2-5b1's `spendTokens` over a usage of `n`: the driver's one clamp at Number.MAX_SAFE_INTEGER, reused, never re-spelled; D-6467, D-6309's rule), `FIDELITY_STMTS`.
+  - Pure: `decimalOf(x) -> {num, den} | null` (a finite number in [0, 1] whose `String` has at most six places: the gate's private `decimalFrac` rule, spelled again with a parity pin against the validator); `fidelityRunName(boundaryUuid, run) -> 'fidelity/<uuid>/<run>'` (a `TypeError` for a non-UUID or a run outside `FIDELITY_RUNS`); `fidelityPassOf(figures, tolerance: {num, den}) -> boolean`; `pilotSourceMismatchOf(pilot, record, storeId) -> string | null`; `absentRateCheckOf(rates, max: {num, den}) -> {arms: {<arm>: {num, den} | null}, max, over: string[], unmeasured: string[], pass: boolean}`; `uptakeReadingOf({calls, errored}) -> {reading, quiz_uptake: 'measured' | 'unmeasured', control_calls, control_errored}`; `quizUptakeReadingOf(pilotResult) -> 'measured' | 'unmeasured'` (K15: part 2's `pilot_result`, or the pilot-result file, read at `usage_extrapolation.uptake`; `measured` only for an uptake whose reading `uptakeReadingOf` gives from its own two counts and is `is-error`; anything else, an absent or malformed one included, `unmeasured`; the reader W2-5b2 Task 5 calls through its `REPORT_DEPS.uptakeReading`); `extrapolationError(ux) -> null | 'v' | 'formula' | 'margin' | 'pilot_questions' | 'pilot_spend'`; `spendBudgetOf(ux, nQuestions) -> number | null`; `spendReadingsOf(rows: Array<{name, run: null | {rawResult: number | null, rawAssistant: number, charged: number}}>) -> {runs, unrecorded, result_absent, result_below_assistant, equal, result_above_assistant, result_tokens, assistant_tokens, charged_tokens}` (the relation read on the raw readings, only the sums saturated at the clamp); `pilotFailuresOf({boundaries, nFidelity, absent, step0bFailures, settingsMismatches}) -> string[]` (sorted, unique; `step0bFailures` are `<check> failed` and `<check> unmeasured`, each listed `step0b <check> failed|unmeasured`); `pilotResultOf({recordSha256, boundaries, extrapolation, step0bSha256, settingsMode, absent, failures})`; module-private `settingsModeRow(rowPath, mode) -> [string, boolean]` and `uptakeShapeOk(u) -> boolean` (the one spelling `pilotResultError` and `quizUptakeReadingOf` share).
+  - Measuring and acting: `spendLinesOf(out) -> Array<{name, tokens}>` (the ledger's one reader; `spentSoFar(out)` sums it); `boundaryEntryIdOf(rs, uuid) -> number | null`; `fidelityOriginalOf(rs, boundaryEntryId)` (originalSideOf's answer, or `{state: 'unmeasured', why}` with a `RECON_DISCARDS` word, `summary-absent` or `body-<word>`); `pilotResultError(o) -> string | null` (W2-5a's, now exported and tightened, the uptake included); `fidelityCommand(flags, driverEnv, deps = {resolve: boundaryEntryIdOf, original: fidelityOriginalOf, stdins: fidelityStdins})` registered as `fidelity` (`deps.timeoutMs`, optional, is a test seam, never a flag); `pilotResultCommand(flags, env)` registered as `pilot-result`; `runUsageOf(out, name) -> null | {result, assistant, rawResult, rawAssistant, charged, settingsMode}`, exported for its own unit case (the raw readings as run.json carries them, beside each read through `chargedReading`, so one past the safe range reads Number.MAX_SAFE_INTEGER there and is never refused; the clamp covers a run.json read on its own, while a pilot --out whose run charged such a reading refuses `out-refused` `spend.jsonl malformed` at the ledger first, D-6309's fail-closed rule); module-private `step0bOf(loaded, recordSha256, section) -> {sha256, section, settingsMode, passed, failed, unmeasured}` (step 0b's result read for `section`; `input-invalid` for a shape, section or record mismatch; Task 3 calls it with `'quiz'`), `step0bModeOf(flags, recordSha256) -> null | <step0bOf's answer>` (K2: null without `--step0b`; a result that did not pass refuses `pilot-failed`), `pilotOut(outArg)`, `pilotOutFile(out, rel, kind, recordSha256, writer)`, `fidelityStmts(db)`, and `fidelityBoundariesOf({rs, home, heads, deps, tolerance, spawnPre, jobOf, gate, claim, concurrency}) -> Promise<{boundaries, version}>`: the per-boundary measurement, one function, which `fidelity --section pilot` calls and Task 3's re-pilot form calls too (`home` the handler's fixture/operator HOME, required; for each measurable boundary the loop admits the retained readings, `maskingSnapshotsOf(rs, home)`, and builds `deps.stdins` under every one through Task 1's `maskingAgreementOf(snapshots, 'fidelity', …)`, before `spawnPre`, refusing `input-invalid` `masking-snapshots-disagree fidelity` on a disagreement (K26, K28). Task 3 passes `home` in its quiz call, without a new helper. `heads` `{store_id, ccrc_id, generation, boundary_uuid}`; `deps` its `resolve`, `original`, `stdins`; `spawnPre()` W2-D56's preflight for one batch, answering `{version}`; `jobOf(boundaryUuid, run, stdin)` one box job; `boundaries` in `heads`' order in `fidelity.json`'s boundary shape; `version` the last batch's, or null when nothing spawned).
   - Flags: `FLAG_SPECS` gains `step0b: 'string'`, `'step0b-sha256': 'string'`, `'accept-failed-pilot': 'bool'` (each declared once, here; Task 3's `pilot-result --section quiz` reuses `step0b`). Forms: `'fidelity --section pilot'` (required `section`, `out`, `record`, `record-sha256`, `pilot`, `pilot-sha256`; optional `supersedes`, `supersedes-sha256`, `step0b`, `step0b-sha256`), `'pilot-result --section pilot'` (required `section`, `out`, `record`, `record-sha256`, `step0b`, `step0b-sha256`; optional `supersedes`, `supersedes-sha256`); W2-5b1's `'arms --section pilot'` and `'judge --section pilot'` gain the optional `step0b`, `step0b-sha256` (K2); and `'open --finalize'` gains the optional `accept-failed-pilot`.
   - Files under the pilot's `--out`: `fidelity.json`, `{kind: FIDELITY_KIND, v: 1, record_sha256, pilot_sha256, step0b_sha256: string | null, store_id, settings_mode, model, claude_code_version: string | null, tolerance: {num, den}, n_fidelity, boundaries: [{store_id, ccrc_id, generation, boundary_uuid, state: 'measured' | 'unmeasured', why: string | null, figures: {original_payload, replay_payload, original_overhead, replay_overhead, user_text_tokens} | null, pass}], budget, spend}`; the runs `fidelity/<uuid>/<run>.{jsonl,run.json}`; and `pilot-result.json`, `{kind: PILOT_RESULT_KIND, v: 1, record_sha256, fidelity: <fidelity.json's boundaries>, usage_extrapolation: {v: 1, formula, margin: {num: 5, den: 4}, pilot_questions, pilot_spend: {arms, judge, total}, at_target: {n_questions, spend_budget: number | null}, uptake: {reading, quiz_uptake, control_calls, control_errored}, spend_readings: {…}}, step0b_sha256, settings_mode, absent_rate: {arms, max, over, unmeasured, pass}, failures: string[]}`. `settings_mode` in `fidelity.json` is the mode its runs ran under (step 0b's under `--step0b`, else part 1's); in `pilot-result.json` it is step 0b's (Q26). Part 2 copies the five fields `buildFinal` copies, so `record.pilot_result.usage_extrapolation.uptake.quiz_uptake` is where W2-D82's reading lives (K15), and `quizUptakeReadingOf` is how W2-5b2's report reads it.
-- Produces (test side): the nested describe `W2-5b2 Task 2: open finalize derives the spend budget and holds a failed pilot, and the range carries of review 811`; the appended describes `W2-5b2 Task 2: the pilot pure parts`, `W2-5b2 Task 2: step 0b's settings mode for the pilot acts (K2)`, `W2-5b2 Task 2: the original side read from a swept store`, `W2-5b2 Task 2: fidelity on the stub`, `W2-5b2 Task 2: pilot-result over one pilot out`, `W2-5b2 Task 2: the usage pilot walk under step 0b's fallback, arms then judge then fidelity then pilot-result`; the module-level `B2T2_STUB`, `B2T2_B`, `B2T2_ORIGINAL`, `B2T2_NOT_PASSED`, `b2t2Box`, `b2t2Plant`, `b2t2PlantPass`, `b2t2Home`, `b2t2PilotSource`, `b2t2Step0b`, `b2t2Deps`, `b2t2Fidelity`, `b2t2PilotOut`, `b2t2RunPilot`, `b2t2ResultOf`, `b2t2Summary`, `b2t2Ans`, `b2t2Bnd`, `b2t2Call`, `b2t2Flags`, `B2T2_ENV`, which later W2-5b2 tasks may reuse.
+- Produces (test side): the nested describe `W2-5b2 Task 2: open finalize derives the spend budget and holds a failed pilot, and the range carries of review 811`; the appended describes `W2-5b2 Task 2: the pilot pure parts`, `W2-5b2 Task 2: K25 pure scoped spend`, `W2-5b2 Task 2: K25 the judge scope and whole-ledger arms`, `W2-5b2 Task 2: step 0b's settings mode for the pilot acts (K2)`, `W2-5b2 Task 2: the original side read from a swept store`, `W2-5b2 Task 2: fidelity on the stub`, `W2-5b2 Task 2: pilot-result over one pilot out`, `W2-5b2 Task 2: the usage pilot walk under step 0b's fallback, arms then judge then fidelity then pilot-result`; the module-level `b2t2JudgeFixture`, `B2T2_STUB`, `B2T2_B`, `B2T2_ORIGINAL`, `B2T2_NOT_PASSED`, `b2t2Box`, `b2t2Plant`, `b2t2PlantPass`, `b2t2Home`, `b2t2PilotSource`, `b2t2Step0b`, `b2t2Deps`, `b2t2Fidelity`, `b2t2PilotOut`, `b2t2RunPilot`, `b2t2ResultOf`, `b2t2Summary`, `b2t2Ans`, `b2t2Bnd`, `b2t2Call`, `b2t2Flags`, `B2T2_ENV`, which later W2-5b2 tasks may reuse.
 
 **Re-anchored drift (the documents against 92dac5764 and W2-5b1's plan):**
 
 | The document says | The code says | What this task does |
 |---|---|---|
-| The ledger (C4): the pilot-result shape `{kind, v: 1, fidelity, usage_extrapolation, step0b_sha256, settings_mode, absent_rate}` is W2-5b2's producer contract | `pilotResultError` (about :5383) checks those five fields loosely (`usage_extrapolation` any object, no verdict); W2-5a's `chain7` fixture writes `usage_extrapolation: {tokens_per_question: 1000}` | the five fields kept; the file also carries `record_sha256` and `failures`; the reader is tightened (the extrapolation's inputs, a boolean `pass` per boundary and on `absent_rate`, `failures` sorted and consistent) and exported; `chain7`'s result re-pinned (e1) |
-| §4 part 2 / D-6280: `spend_budget` is "the extrapolation for the frozen list × 1.25", operator-approved | `open --finalize` copies `--spend-budget` into `buildFinal` (about :5693) | derived by `spendBudgetOf` over the frozen list's entry count; the flag an echo, refused on a mismatch (D-6280 closed) |
+| The ledger (C4): the pilot-result shape `{kind, v: 1, fidelity, usage_extrapolation, step0b_sha256, settings_mode, absent_rate}` is W2-5b2's producer contract | `pilotResultError` (about :5718 at 0de4cc990) checks those five fields loosely (`usage_extrapolation` any object, no verdict); W2-5a's `chain7` fixture writes `usage_extrapolation: {tokens_per_question: 1000}` | the five fields kept; the file also carries `record_sha256` and `failures`; the reader is tightened (the extrapolation's inputs, a boolean `pass` per boundary and on `absent_rate`, `failures` sorted and consistent) and exported; `chain7`'s result re-pinned (e1) |
+| §4 part 2 / D-6280: `spend_budget` is "the extrapolation for the frozen list × 1.25", operator-approved | `open --finalize` copies `--spend-budget` into `buildFinal` (about :6056 at 0de4cc990) | derived by `spendBudgetOf` over the frozen list's entry count; the flag an echo, refused on a mismatch (D-6280 closed) |
 | Q6: the extrapolation recorded with its formula and inputs | the frozen list's size is unknown when the pilot runs (act 14 precedes act 16) | `usage_extrapolation` records the per-question inputs and the formula; `open --finalize` applies it to the frozen count; `at_target` records it at part 1's `quiz.target`, a forecast |
-| scope.md E6: no store reader for the fidelity original side | `originalSideOf` (about :4478) takes rows | `fidelityOriginalOf`, with one new statement for N's own transcript's rows in N's holding copy, bodies read lazily |
-| scope.md E7 / Q9: part 1 does not pin `pilot-source.json` or its fidelity list | `buildDraft` copies `pilot.seed`, `frozen_sha256`, `families`, `n_fidelity` (about :5307) | `fidelity` takes `--pilot`/`--pilot-sha256` and refuses any of the four, or a store not this node's, before `--out` |
-| pilot-source's `fidelity` list | `[{store_id, ccrc_id, generation, boundary_uuid}]`, no entry id (about :4718) | `boundaryEntryIdOf` resolves the uuid through `boundaries` joined to `entries`; an absent boundary is `unmeasured` `boundary-absent`, nothing spawned |
+| scope.md E6: no store reader for the fidelity original side | `originalSideOf` (about :4781 at 0de4cc990) takes rows | `fidelityOriginalOf`, with one new statement for N's own transcript's rows in N's holding copy, bodies read lazily |
+| scope.md E7 / Q9: part 1 does not pin `pilot-source.json` or its fidelity list | `buildDraft` copies `pilot.seed`, `frozen_sha256`, `families`, `n_fidelity` (about :5642 at 0de4cc990, in `buildDraft` about :5629) | `fidelity` takes `--pilot`/`--pilot-sha256` and refuses any of the four, or a store not this node's, before `--out` |
+| pilot-source's `fidelity` list | `[{store_id, ccrc_id, generation, boundary_uuid}]`, no entry id (about :5012 at 0de4cc990; its `fidelity: copyJson(sourced.fidelity)` output line about :5855) | `boundaryEntryIdOf` resolves the uuid through `boundaries` joined to `entries`; an absent boundary is `unmeasured` `boundary-absent`, nothing spawned |
 | Part 1's `pilot.tolerance` (±25%) and `halts.absent_rate_max` | the validator ranges `halts.*` with the gate's private `decimalFrac` (gate about :2446), and types `pilot.tolerance` as a bare number | `decimalOf`, the same rule spelled again with a parity pin; `pilot.tolerance` and `absent_rate_max` refused `record-invalid` before `--out`, the first by the driver's row, the second by the validator's `value-outside-set` (`loadRecordInput` runs `validateOpenRecord` first), the driver's row behind it defence |
 | W2-D82: "the control arm's exit-8 call must surface as an error" | W2-5b1 Task 4's `uptakeOf` counts an is_error history call as `errored`, any other paired one as a call; a control arm may make no call | three readings (`is-error`, `not-error`, `unseen`), the last two both `unmeasured` (D-6644); the reading in part 2 at `pilot_result.usage_extrapolation.uptake` (K15), read through `quizUptakeReadingOf` |
 | Q26: arms read part 2's `pilot_result.settings_mode`; step 0b may switch to `fallback` | W2-5b1 Task 4's `loadArmRun('pilot')` reads part 1's `settings_mode`, so `arms` and `judge --section pilot` run under it | K2: `fidelity`, `arms` and `judge --section pilot` take `--step0b`/`--step0b-sha256` and run under a passed result's mode (`step0bModeOf`, in `loadArmRun`'s pilot branch and in `fidelity`); `pilot-result`'s `settings_mode` is step 0b's, and any surface that ran under another mode is still a recorded failure (K13) |
 | The arms summary records no settings mode (W2-5b1 Task 4's `armsSummaryOf`) | each `run.json` records its `settings_mode` (W2-4's `launchRun`; `finishedOutcome` holds a resumed run to it) | `pilot-result` reads each surface's modes from its runs' `run.json` (through `runUsageOf`), with `fidelity.json`'s and the judged file's own `settings_mode`; W2-5b1's shapes are unchanged |
 | Task 2's draft read step 0b's output as `{…, settings_mode, failures}` | Task 1 writes `{kind: STEP0B_KIND, v: 1, section, record_sha256, …, settings_mode, …, passed, failed, unmeasured, …}` at `<section>/step0b/<settings mode>.json` | K4: `step0bOf` reads Task 1's names: `section` must be the asked section, `passed` must agree with `failed` and `unmeasured`, and each failed or unmeasured check is listed `step0b <check> failed` or `step0b <check> unmeasured` |
-| review 811 F4: `settings_mode` throws after `--out` | quiz-source's `openWriter` throws a `TypeError` for a mode outside `SETTINGS_MODES` (about :4328) after `prepareOut` | the row in `refuseOutOfRangeValues` before `--out`; one spelling `settingsModeRow` shared with W2-5b1's two (edits (i), (j)) |
+| review 811 F4: `settings_mode` throws after `--out` | quiz-source's `openWriter` throws a `TypeError` for a mode outside `SETTINGS_MODES` (about :4636 at 0de4cc990) after `prepareOut` | the row in `refuseOutOfRangeValues` before `--out`; one spelling `settingsModeRow` shared with W2-5b1's two (edits (i), (j)) |
 | Q25's refusal spelled in W2-5b1 Task 4's `armsCommand` | one inline line; Task 1 declares `refusePilotSourceOut(out, who)` for `step0bCommand` (K4) | `arms`' line becomes a call of Task 1's function, its detail byte for byte; `fidelity` and `pilot-result` call it too |
-| W2-4's ledger has one reader, `spentSoFar` | it sums as it reads | `spendLinesOf` returns the lines (its refusals byte for byte), `spentSoFar` sums them, `pilot-result` sums by run name |
+| W2-4's ledger has one reader, `spentSoFar` | it sums as it reads | `spendLinesOf` returns the lines (its refusals byte for byte), `spentSoFar` sums them, `pilot-result` sums by run name; K25 adds `judgeSpentOf` after complete validation, never pre-filtering raw lines |
+| K25's gate scope | `batchGate` always reads `spentSoFar`, and `openJudge` passes only the original options | `scope` defaults to `all`, only `openJudge` passes `judge`, while the output and arms stay whole-ledger (D-6723) |
+| K26's agreement | W2-5b1 admits the retained readings (`maskingSnapshotsOf`) and agrees them inline at arm preflight and judge input build; Task 1 factors that loop into `maskingAgreementOf` (K28) | fidelity calls it per measurable boundary, site `fidelity`, pilot and quiz through one loop |
 
 **Choices (each the plan's reading of a ruling, measured by this task's cases):**
 - **The fidelity verdict.** A measured boundary passes when `|replay_payload − original_payload| × tolerance.den ≤ tolerance.num × original_payload`, in BigInt (spec §10.2's ±25%, of the original). An unmeasured boundary never passes and is never a 0.
@@ -2199,7 +2498,8 @@ It cites, bare: D-6280 (closed here), D-6309 (the range rule and its review-811 
 - **The epoch rows.** "Its epoch's first call" is read as the first non-synthetic assistant row of N's own transcript (`entries.transcript_pk` = N's) in N's holding copy, before N. A row a resume copied in from another epoch is another transcript's and is not read.
 - **Bodies read lazily.** `originalSideOf` reads a body only for the rows it inspects; a lost body there makes the side `unmeasured` `body-<word>` (the word `entryBodyOf` answers), never an empty text.
 - **The usage pilot's spend is the ledger's.** Every line under `pilot/arms/` and `pilot/judge/`, a re-spawn's included (W2-D55's over-count is the budget's safe direction), read through `spendLinesOf`. A zero total refuses `input-invalid`: an extrapolation over no spend is never a 0.
-- **Q7's relation.** For each run name under `fidelity/`, `pilot/arms/` and `pilot/judge/` the ledger names, its `run.json`'s two readings are compared: result usage absent, below the assistant sum, equal, or above. A charged run with no `run.json` (stopped in flight) is `unrecorded`. Report-only.
+- **K25 is not a hard token cap.** The approximate exposure is twice the node's share (pilot: twice `pilot_budget`) plus the token cost of in-flight soft-stop overshoot from up to `limits.concurrency` arm runs and `CONCURRENCY_MAX` judge runs. Concurrency bounds the number of concurrent runs, not each run's token cost; no strict total bound is asserted. Task 6 carries this disclosure and the PR residual. A judge exhausting its own share writes no `judged.json`; arms stopped on budget leave the node incomplete. Earlier ledger rows still count after a version move.
+- **Q7's relation.** For each run name under `fidelity/`, `pilot/arms/` and `pilot/judge/` the ledger names, its `run.json`'s two raw readings are compared: result usage absent, below the assistant sum, equal, or above. A charged run with no `run.json` (stopped in flight) is `unrecorded`. Report-only. Only the sums saturate at the driver's clamp; the relation is never read on clamped readings, so two unequal readings past the safe range are never `equal`.
 - **One halt rule (K3).** `fidelity` and `pilot-result` each write their file and print its sha on stderr first, so what failed is always recorded; then a failed check refuses `pilot-failed` (exit 2, Task 1's word), its detail naming every failure. `fidelity` fails on a boundary that did not pass and on fewer measured boundaries than `n_fidelity` (K13); `pilot-result` on any entry of `failures`. A re-run over the same `--out` reuses every finished run, writes the same bytes and refuses again. The operator's ruling on a failed pilot is `open --finalize --accept-failed-pilot` (Q27), which prints the file's failures (K14).
 - **Step 0b's settings mode (K2).** One reader, `step0bModeOf`, called after part 1's own settings-mode row and before any store, spawn or `--out`: in `loadArmRun`'s pilot branch (after the pilot frozen list) for `arms` and `judge`, and in `fidelity` after the ranges. Without the pair it answers null and part 1's mode stands. With it, the result is read through `loadInput` (sha before parse), then `step0bOf` (`input-invalid` for a shape, a section other than `pilot` or another part 1), then `passed` (`pilot-failed` otherwise: a pilot act never runs under a step 0b that did not pass). `pilot-result` reads step 0b's result through `step0bOf` alone: a failed one is recorded, never refused on read, because recording it is the act's job.
 - **A settings-mode mismatch is read from the runs (K13).** For each surface, the modes are the distinct `settings_mode` of its runs' `run.json` (`pilot/arms/`, `pilot/judge/`, `fidelity/`), plus `fidelity.json`'s and the judged file's own. Each mode that is not step 0b's is one failure, `settings-mode <surface> ran under <mode>, step 0b under <mode>`, so an arm batch run before the fallback switch is caught even though the arms summary names no mode.
@@ -2214,6 +2514,7 @@ It cites, bare: D-6280 (closed here), D-6309 (the range rule and its review-811 
 - The `not-error` reading counts any non-error control history call, a `ccrc history` call that never reaches the CLI (a `--help`) included.
 - The relation over a stopped run is `unrecorded`; its charge stays in `pilot_spend`.
 - `step0bModeOf` does not compare step 0b's `store_id` with the node's: the pilot runs on its one node, and `pilot-result` records a surface whose runs' mode differs.
+- K25's separate judge-scoped stop may add approximately another share plus in-flight token overshoot; it does not make an incomplete arms node judgeable. Expected-spend extrapolation, all signed budget values and part 2's shape remain unchanged.
 - A surface run under part 1's mode and then re-run with `--step0b` naming another mode on the same `--out` refuses `out-refused` `run-json-mismatch` (W2-4's `finishedOutcome`): those acts re-run on a fresh `--out`, `--step0b` naming the passed result where it lies (README, Task 6).
 
 - [ ] **Step 1: Confirm the earlier tasks' names and the anchors.** From the repository root:
@@ -2232,13 +2533,19 @@ grep -cF "export function refuseOutOfRangeValues({ budget, budgetField = 'pilot_
 grep -cF "function refuseWriterAdmission({ home, accountId, budget, limits, quotas, expected }) {" deploy/history-replay.mjs
 grep -cF "power: powerIn.value, powerSha256: powerIn.sha256, frozen, pilotResult, spendBudget: flags['spend-budget']," deploy/history-replay.mjs
 grep -c "refusePilotSourceOut(out, 'arms run')" deploy/history-replay.mjs
-for n in FIDELITY_KIND FIDELITY_FILE PILOT_RESULT_FILE USAGE_MARGIN USAGE_EXTRAPOLATION_FORMULA UPTAKE_READINGS USAGE_PILOT_PREFIXES FIDELITY_SECTIONS PILOT_RESULT_SECTIONS FIDELITY_RUN_DIR FIDELITY_STMTS fidelityStmts nonNegativeInt decimalOf fidelityRunName fidelityPassOf pilotSourceMismatchOf absentRateCheckOf uptakeReadingOf uptakeShapeOk quizUptakeReadingOf extrapolationError spendBudgetOf spendReadingsOf pilotFailuresOf pilotResultOf settingsModeRow boundaryEntryIdOf fidelityOriginalOf fidelityBoundariesOf spendLinesOf step0bOf step0bModeOf pilotOut pilotOutFile runUsageOf fidelityCommand pilotResultCommand; do printf '%s:%s ' "$n" "$(grep -cE "^(export )?(async )?(function|const) $n\b" deploy/history-replay.mjs)"; done; echo
+for n in SPEND_SCOPES judgeSpentOf FIDELITY_KIND FIDELITY_FILE PILOT_RESULT_FILE USAGE_MARGIN USAGE_EXTRAPOLATION_FORMULA UPTAKE_READINGS USAGE_PILOT_PREFIXES FIDELITY_SECTIONS PILOT_RESULT_SECTIONS FIDELITY_RUN_DIR FIDELITY_STMTS fidelityStmts nonNegativeInt usageReadingOk chargedReading decimalOf fidelityRunName fidelityPassOf pilotSourceMismatchOf absentRateCheckOf uptakeReadingOf uptakeShapeOk quizUptakeReadingOf extrapolationError spendBudgetOf spendReadingsOf pilotFailuresOf pilotResultOf settingsModeRow boundaryEntryIdOf fidelityOriginalOf fidelityBoundariesOf spendLinesOf step0bOf step0bModeOf pilotOut pilotOutFile runUsageOf fidelityCommand pilotResultCommand; do printf '%s:%s ' "$n" "$(grep -cE "^(export )?(async )?(function|const) $n\b" deploy/history-replay.mjs)"; done; echo
 grep -n "HANDLERS.keys()" server/test/history-replay.test.ts
-grep -cE '^(async )?function (w5b4Home|w5b4Node|w5b4Pilot|w5b4Draft|w5b4Save|w5b4Act|w5b4Stream|w5b4Arms|w5b5InProcess)\(' server/test/history-replay.test.ts
+grep -cE '^(async )?function (w5b4Home|w5b4Node|w5b4Pilot|w5b4Quiz|w5b4Draft|w5b4Save|w5b4Act|w5b4Stream|w5b4Arms|w5b5InProcess)\(' server/test/history-replay.test.ts
 grep -cE '^const (W5B4_ARM_STUB|W5B4_ARMS|W5B4_CONTROL|W5B4_TREATMENT|W5B4_PILOT|W5B5_LABELLED|W5B5|W5B5_ENV)[ :]' server/test/history-replay.test.ts
 grep -n "r7describe('W2-5b1 Task 3: marker and verify section pilot and quiz'" server/test/history-replay.test.ts
 grep -n "spentSoFar\b" server/test/history-replay.test.ts | grep -v "spentSoFar(" | head
 grep -n "'--step0b'\|step0b-sha256" server/test/history-replay.test.ts | head
+grep -cE '^(async function maskingAgreementOf\(snapshots, site, build, agree\)|function maskingSnapshotsOf\(rs, home\)) \{' deploy/history-replay.mjs
+grep -cF "export function batchGate({ out, home, accountId, budget, limits, now = Date.now }) {" deploy/history-replay.mjs
+grep -cF "const launch = admitAccount(json, roster, accountId, home);   // RP3-judge: every refusal here lands before any spawn" deploy/history-replay.mjs
+grep -cF "if (pending.length === 0) break;" deploy/history-replay.mjs
+grep -cE '^function fwLearn\(|^const w5b5Answer = |^const b1t2Lib = ' server/test/history-replay.test.ts
+grep -cF "  return Math.min(Number.MAX_SAFE_INTEGER, Math.max(usageTokens(facts.resultUsage), usageTokens(facts.assistantUsage)));" deploy/history-replay.mjs
 grep -c "b2t2\|B2T2" server/test/history-replay.test.ts
 ```
 
@@ -2248,11 +2555,13 @@ Expected (R8's rule carried, K4: every name is its owner's):
 - `10` (W2-5b1 Task 1's `refuseRangeRows`, `batchShapeChecks` and `part2RangeChecks`, Task 4's two, W2-4's and W2-5a's four, and W2-5b2 Task 1's `refusePilotSourceOut`; K4);
 - `1` (W2-5b1 Task 1's `positiveInt`), then `1` for each of the next nine anchors: edits (k), (j) (two lines), (c) (the two W2-5b1 pilot forms), (i), (f), (g) and (h). A `0` means the owning task's text moved: re-anchor by meaning and report the drift. For (k), a `0` with the next count `1` means Task 1 already routed `arms` through `refusePilotSourceOut`: skip edit (k) and say so in the task note; the next count is otherwise `0`;
 - every name in the loop counts `0`. A collision is reported, never renamed here;
-- one `HANDLERS.keys()` line, the array W2-5b2 Task 1 left;
-- `9` and `8`: W2-5b1's helpers this task's tests reuse;
+- two `HANDLERS.keys()` lines (at 0de4cc990 about :4846 and :13725): W2-4 Task 9's array as W2-5b2 Task 1 left it, which Step 2 (b) extends, and W2-5b1 Task 5's `JUDGE_OUTCOMES …` case's order line in the `indexOf` form Task 1 re-pinned it to, which no edit here touches (registering `fidelity` and `pilot-result` after `judge` keeps `judge` directly after `arms`);
+- `10` and `8`: W2-5b1's helpers this task's tests reuse (the extra function is `w5b4Quiz`);
 - one line: the nested describe this task's goes after (W2-5b2 Task 1's nested describe, if it has one, follows it);
 - no line from the `spentSoFar` grep but call sites: no pin reads `spentSoFar`'s source text. If one does, stop before any edit and report it to the coordinator: K5 licenses no edit of that case, so its re-pin needs a ruling;
 - no line from the `--step0b` grep: no earlier case passes the flag, so K2's extension moves no W2-5b1 case (the K5 list). A line is reported and its case named in the K5 list before any edit;
+- `2` for the K28 seam (Task 1's `maskingAgreementOf` and W2-5b1's `maskingSnapshotsOf`), then `1` for each of the three other extra driver anchors, then `3` for the extra test helpers (W2-5b1's `fwLearn`, `w5b5Answer` and `b1t2Lib`). A missing seam is a gap in Task 1 or a moved W2-5b1 anchor: stop and report it, never reimplement it.
+- `1`: W2-5b1's `spendTokens` carries its F9 clamp (about :845 at 0de4cc990), the one clamp `chargedReading` reuses (D-6467, D-6309's rule). A `0` means the clamp moved or was re-spelled: stop and report it, never spell it here.
 - `0`: no `b2t2` name exists yet (a `grep -c` that prints 0 exits 1, which is expected).
 
 - [ ] **Step 2: Re-pin the two pins, and make W2-5a's four in-place edits.** In `server/test/history-replay.test.ts`:
@@ -2274,7 +2583,7 @@ Leave the title as the previous task left it. Tasks 3, 4 and 5 extend the object
 
 If Task 1 left another array, use that array with the two names appended, and say so in the commit's task note.
 
-(e1) In `chain7` (W2-5a Task 7, about :9151-9152 at 92dac5764), replace
+(e1) In `chain7` (W2-5a Task 7, about :9174-9175 at 0de4cc990), replace
 
 ```ts
     const pilotResult = save7({ kind: r7drv.PILOT_RESULT_KIND, v: 1, fidelity: [{ boundary_uuid: gen(901), pass: true }],
@@ -2296,9 +2605,9 @@ with
 
 `failedResult` (Step 3) inherits `record_sha256` through its spread, and every W2-5a finalize case reads `chain7`'s result, so K21's check reds none of them. A W2-5a case that writes its own pilot result is reported before any edit (K5).
 
-(e2) In the `it` titled `a window shorter than planned_days is refused by the validator (W2-D25)` (about :10424), replace `rest: ['--spend-budget', '1', '--window-start', String(T0 + DAY), '--window-end', String(T0 + 14 * DAY), '--q18-decision', 'keep']` with `rest: ['--spend-budget', '30000000', '--window-start', String(T0 + DAY), '--window-end', String(T0 + 14 * DAY), '--q18-decision', 'keep']`. (The derived budget is now checked before the validator; the case still pins the validator's window refusal.)
+(e2) In the `it` titled `a window shorter than planned_days is refused by the validator (W2-D25)` (about :10448 at 0de4cc990, its `--spend-budget` on about :10450), replace `rest: ['--spend-budget', '1', '--window-start', String(T0 + DAY), '--window-end', String(T0 + 14 * DAY), '--q18-decision', 'keep']` with `rest: ['--spend-budget', '30000000', '--window-start', String(T0 + DAY), '--window-end', String(T0 + 14 * DAY), '--q18-decision', 'keep']`. (The derived budget is now checked before the validator; the case still pins the validator's window refusal.)
 
-(e3) Review 811 F2. Replace the four lines
+(e3) Review 811 F2. Replace the six lines (the `RangeRow` type, `const RANGE_ROWS`, the `pilot_budget` row, the `threshold_pct` row, the comment line and the `max_age_ms` row; measured identical to about :10171-10176 at 0de4cc990)
 
 ```ts
     type RangeRow = { field: string; path: string[]; bad: number[]; edge: number; after?: { word: string; made: boolean } };
@@ -2309,7 +2618,7 @@ with
       { field: 'limits.max_age_ms', path: ['limits', 'max_age_ms'], bad: [0, -1], edge: 1, after: { word: 'limits-stale', made: false } },
 ```
 
-with
+with these ten (the same five code lines, three of them edited, and five comment lines in place of the one):
 
 ```ts
     type RangeRow = { field: string; path: string[]; bad: number[]; edge: number; after?: { word: string; made: boolean }; fresh?: boolean };
@@ -2351,7 +2660,7 @@ and, inside the `it.each` titled `D-6309: quiz-source, a signed record with %s o
 
 - [ ] **Step 3: Write the failing tests.**
 
-(A) The nested describe. Insert it directly before the `});` that closes `r7describe('W2-5a Task 7: the record subcommands', () => {` (about :10502 at 92dac5764), after W2-5b1 Task 3's nested describe (and W2-5b2 Task 1's, if it nests one):
+(A) The nested describe. Insert it directly before the `});` that closes `r7describe('W2-5a Task 7: the record subcommands', () => {` (about :10953 at 0de4cc990, after W2-5b1 Task 3's nested describe, which opens about :10611), after W2-5b1 Task 3's nested describe (and W2-5b2 Task 1's, if it nests one):
 
 ```ts
 
@@ -2679,6 +2988,143 @@ type B2t2Pilot = ReturnType<typeof b2t2PilotOut>;
 const b2t2RunPilot = async (p: B2t2Pilot) => b2t2Call(() => B2.pilotResultCommand(b2t2Flags(p.argv()), B2T2_ENV(w5b4MkTmp('ccrc-b2t2-env-'))));
 const b2t2ResultOf = (p: B2t2Pilot): B2t2R => JSON.parse(readFileSync(join(p.out, 'pilot-result.json'), 'utf8')) as B2t2R;
 
+/** Real loaders/node reader, one non-correct answer, and a labelled one-run judge stub. The quiz fixture has node A's
+ *  three of five questions (share 60 of 100); the pilot fixture's pilot_budget is 100. Save the stream before the records
+ *  so their measured version agrees with the stub's --version reply. No existing W2-5b1 case or fixture is edited. */
+function b2t2JudgeFixture(section: 'pilot' | 'quiz') {
+  const home = w5b4Home();
+  writeFileSync(join(home, STUB_STREAM), W5B5_LABELLED);
+  const fx = (section === 'quiz' ? w5b4Quiz(home, { spendBudget: 100 }) : w5b4Pilot(home, { over: { pilot_budget: 100 } })) as B2t2R;
+  const own = (section === 'quiz' ? fx.mine : fx.entries) as B2t2R[];
+  const wrong = own[0]!;
+  const answers = own.flatMap((q) => W5B4_ARMS.map((arm) => w5b5Answer(q.qid as string, arm, 'answered',
+    q === wrong && arm === W5B4_CONTROL ? 'ANSWER: UNKNOWN' : `ANSWER: ${q.fact as string}`, !(q === wrong && arm === W5B4_CONTROL))));
+  const out = B2.prepareOut(fx.out) as string;
+  const argv = section === 'quiz' ? fx.argv() as string[] : fx.argv as string[];
+  const call = () => b2t2Call(() => B2.judgeCommand(b2t2Flags(['judge', ...argv.slice(1)]), B2T2_ENV(home), {
+    loadArmRun: B2.loadArmRun, armNodeOf: B2.armNodeOf, readArmAnswers: () => answers, now: () => W5B4_T0 + 2 * W5B4_DAY,
+  }));
+  const result = (): B2t2R => JSON.parse(readFileSync(join(out, section, 'judged.json'), 'utf8')) as B2t2R;
+  return { home, fx, out, call, result };
+}
+
+b2t2Describe('W2-5b2 Task 2: K25 pure scoped spend', () => {
+  b2t2It('P4: judgeSpentOf counts exact section/JUDGE_DIR/ prefixes, duplicates and both sections; CONTROL: whole-ledger inputs remain untouched; overflow throws', () => {
+    b2t2Expect(B2.SPEND_SCOPES).toEqual(['all', 'judge']);
+    b2t2Expect(Object.isFrozen(B2.SPEND_SCOPES)).toBe(true);
+    const rows = [
+      { name: 'pilot/judge/j0001-1', tokens: 5 }, { name: 'quiz/judge/j0002-1', tokens: 7 }, { name: 'quiz/judge/j0002-1', tokens: 7 },
+      ...['quiz/judgex/j0001-1', 'pilot/judge', 'quiz/judge-other/j0001-1', 'other/judge/j0001-1',
+        'quiz/arms/q1/control.a1', 'step0b/turn-bound', 'pilot/step0b/restricted/turn-bound'].map((name) => ({ name, tokens: 100 })),
+    ];
+    const before = JSON.stringify(rows);
+    b2t2Expect(B2.judgeSpentOf(rows)).toBe(19);
+    b2t2Expect(JSON.stringify(rows), 'pure: never filters the caller array in place').toBe(before);
+    b2t2Expect(B2.judgeSpentOf([]), 'CONTROL: no judge spend is 0').toBe(0);
+    b2t2Expect(B2.judgeSpentOf([{ name: 'quiz/judge/j0001-1', tokens: Number.MAX_SAFE_INTEGER }]), 'CONTROL: safe edge').toBe(Number.MAX_SAFE_INTEGER);
+    b2t2Expect(() => B2.judgeSpentOf([{ name: 'pilot/judge/j0001-1', tokens: Number.MAX_SAFE_INTEGER }, { name: 'quiz/judge/j0002-1', tokens: 1 }])).toThrow(RangeError);
+  });
+
+  b2t2It('P4: batchGate rejects unknown scope at construction before any read; CONTROL: default all and judge construct', () => {
+    const args = { out: '/home/u/not-read/out', home: '/home/u/not-read', accountId: 'up-a', budget: 60, limits: B2.LIMITS_DEFAULTS };
+    for (const scope of ['arms', '', null, 0]) b2t2Expect(() => B2.batchGate({ ...args, scope }), String(scope)).toThrow(TypeError);
+    b2t2Expect(typeof B2.batchGate(args), 'CONTROL: default scope').toBe('function');
+    for (const scope of B2.SPEND_SCOPES) b2t2Expect(typeof B2.batchGate({ ...args, scope }), `CONTROL: ${scope}`).toBe('function');
+  });
+});
+
+b2t2Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 2: K25 the judge scope and whole-ledger arms', () => {
+  b2t2It('P1: quiz arms charged 130 against share 60 do not block the judge; judged.json and its sha include whole-ledger spend; CONTROL: no arm rows', async () => {
+    for (const armSpend of [0, 130]) {
+      const p = b2t2JudgeFixture('quiz');
+      if (armSpend > 0) B2.recordSpend(p.out, 'quiz/arms/fixture/control.a1', armSpend);
+      const r = await p.call();
+      b2t2Expect([r.refusal, r.code, r.stdout], r.stderr).toEqual([null, 0, '']);
+      b2t2Expect(w5b4Runs(p.home), 'one labelled judge attempt').toHaveLength(1);
+      const text = readFileSync(join(p.out, 'quiz', 'judged.json'), 'utf8');
+      b2t2Expect(r.stderr, 'sha of the whole judged file').toBe(`sha256 ${sha256Hex(text)}\n`);
+      const rows = readFileSync(join(p.out, 'spend.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { name: string; tokens: number });
+      const own = rows.filter((row) => row.name.startsWith('quiz/judge/')).reduce((sum, row) => sum + row.tokens, 0);
+      b2t2Expect(own).toBeGreaterThan(0);
+      b2t2Expect(p.result()).toMatchObject({ budget: 60, spend: armSpend + own, counts: { judged: 1 } });
+      b2t2Expect(p.result().spend, 'whole ledger, never the scoped gate reading').toBe(B2.spentSoFar(p.out));
+    }
+  }, 120_000);
+
+  b2t2It('P1p: pilot step0b, fidelity and arms already consumed pilot_budget; the judge still runs under that same budget; CONTROL: no prior rows', async () => {
+    for (const seed of [false, true]) {
+      const p = b2t2JudgeFixture('pilot');
+      if (seed) {
+        B2.recordSpend(p.out, 'pilot/step0b/restricted/turn-bound', 40);
+        B2.recordSpend(p.out, `fidelity/${B2T2_B[0]!}/payload`, 30);
+        B2.recordSpend(p.out, 'pilot/arms/fixture/control.a1', 60);
+      }
+      const r = await p.call();
+      b2t2Expect([r.refusal, r.code, r.stdout], r.stderr).toEqual([null, 0, '']);
+      b2t2Expect(w5b4Runs(p.home)).toHaveLength(1);
+      const text = readFileSync(join(p.out, 'pilot', 'judged.json'), 'utf8');
+      b2t2Expect(r.stderr).toBe(`sha256 ${sha256Hex(text)}\n`);
+      const rows = readFileSync(join(p.out, 'spend.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { name: string; tokens: number });
+      const own = rows.filter((row) => row.name.startsWith('pilot/judge/')).reduce((sum, row) => sum + row.tokens, 0);
+      b2t2Expect(own, 'the judge charged its own attempt').toBeGreaterThan(0);
+      b2t2Expect(p.result()).toMatchObject({ budget: 100, spend: (seed ? 130 : 0) + own });
+      b2t2Expect(p.result().spend).toBe(B2.spentSoFar(p.out));
+    }
+  }, 120_000);
+
+  b2t2It.each(['torn', 'foreign', 'overflow'])('P2: a %s non-judge ledger row refuses out-refused before any spawn; CONTROL: a valid over-share arm row is admissible', async (bad) => {
+    const control = b2t2JudgeFixture('quiz');
+    B2.recordSpend(control.out, 'quiz/arms/fixture/control.a1', 130);
+    b2t2Expect((await control.call()).code, 'CONTROL: valid non-judge rows do not count toward judge gate').toBe(0);
+    const p = b2t2JudgeFixture('quiz');
+    if (bad === 'torn') writeFileSync(join(p.out, 'spend.jsonl'), '{"name":"quiz/arms/fixture/control.a1","tokens":1');
+    if (bad === 'foreign') writeFileSync(join(p.out, 'spend.jsonl'), '{"kind":"foreign","name":"quiz/arms/fixture/control.a1","tokens":1,"ts_ms":1}\n');
+    if (bad === 'overflow') {
+      B2.recordSpend(p.out, 'quiz/arms/fixture/control.a1', Number.MAX_SAFE_INTEGER);
+      B2.recordSpend(p.out, 'quiz/arms/fixture/treatment.a1', 1);
+    }
+    const r = await p.call();
+    b2t2Expect(r.refusal).toEqual({ word: 'out-refused', detail: 'spend.jsonl malformed' });
+    b2t2Expect(stubLog(p.home), 'no spawn, not even --version').toBeNull();
+    b2t2Expect(existsSync(join(p.out, 'quiz', 'judged.json'))).toBe(false);
+  }, 120_000);
+
+  b2t2It('P3: arms count all rows including judge rows and non-judge rows; CONTROL: sub-share judge-only spend admits an arm', async () => {
+    for (const [judge, arms] of [[65, 0], [35, 30]]) {
+      const home = w5b4Home();
+      const fx = w5b4Quiz(home, { spendBudget: 100 });
+      const out = B2.prepareOut(fx.out) as string;
+      B2.recordSpend(out, 'quiz/judge/j0000-1', judge);
+      if (arms! > 0) B2.recordSpend(out, 'quiz/arms/fixture/control.a1', arms);
+      const r = await w5b4Arms(home, fx.argv());
+      b2t2Expect(r.refusal).toEqual({ word: 'budget-exhausted', detail: 'spent 65 of 60' });
+      b2t2Expect(w5b4Runs(home), 'neither mixed-ledger half alone reaches share, but the whole ledger does').toHaveLength(0);
+    }
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { spendBudget: 100, over: { limits: { concurrency: 1 } } });
+    B2.recordSpend(B2.prepareOut(fx.out), 'quiz/judge/j0000-1', 35);
+    await w5b4Arms(home, fx.argv());
+    b2t2Expect(w5b4Runs(home), 'CONTROL: a pending arm is really admitted below share').toHaveLength(1);
+  }, 120_000);
+
+  b2t2It('P5: finished arms resume past budget after judge spend with zero spawns or preflight; CONTROL: finished resume before judge spend also spawns nothing', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home);
+    b2t2Expect((await w5b4Arms(home, fx.argv())).code).toBe(0);
+    const before = stubLog(home);
+    b2t2Expect(w5b4Runs(home)).toHaveLength(6);
+    b2t2Expect((await w5b4Arms(home, fx.argv())).code, 'CONTROL: no pending work').toBe(0);
+    b2t2Expect(stubLog(home)).toEqual(before);
+    B2.recordSpend(fx.out, 'quiz/judge/j0000-1', 600_001);
+    const r = await w5b4Arms(home, fx.argv());
+    b2t2Expect([r.refusal, r.code], r.stderr).toEqual([null, 0]);
+    b2t2Expect(stubLog(home), 'no new --version or print-mode spawn').toEqual(before);
+    b2t2Expect(JSON.parse(readFileSync(join(fx.out, 'quiz', 'arms', 'summary.json'), 'utf8'))).toMatchObject({
+      spend: B2.spentSoFar(fx.out), stop: null, counts: { questions: 3, answered: 3 },
+    });
+  }, 120_000);
+});
+
 b2t2Describe('W2-5b2 Task 2: the pilot pure parts', () => {
   b2t2It('decimalOf reads a record decimal exactly, and the validator signs exactly what it reads below 1 (the gate private decimalFrac, spelled again)', () => {
     b2t2Expect(B2.decimalOf(0.25)).toEqual({ num: 25, den: 100 });
@@ -2770,10 +3216,17 @@ b2t2Describe('W2-5b2 Task 2: the pilot pure parts', () => {
   });
 
   b2t2It('spendReadingsOf counts each run by the relation of its two usage readings, a run with no run.json apart (Q7)', () => {
-    const run = (result: number | null, assistant: number): B2t2R => ({ result, assistant, charged: Math.max(result ?? 0, assistant) });
+    const run = (result: number | null, assistant: number): B2t2R =>
+      ({ result, assistant, rawResult: result, rawAssistant: assistant, charged: Math.max(result ?? 0, assistant) });
     b2t2Expect(B2.spendReadingsOf([{ name: 'a', run: run(10, 10) }, { name: 'b', run: run(8, 10) }, { name: 'c', run: run(12, 10) },
       { name: 'd', run: run(null, 10) }, { name: 'e', run: null }]))
       .toEqual({ runs: 5, unrecorded: 1, result_absent: 1, result_below_assistant: 1, equal: 1, result_above_assistant: 1, result_tokens: 30, assistant_tokens: 40, charged_tokens: 42 });
+    // Two unequal readings past the safe range (2 ** 53 + 2 and 2 ** 53, each exact as a double): the relation is read on the
+    // raw readings, so it is above, never equal, though both clamp to Number.MAX_SAFE_INTEGER; only the sums saturate.
+    const over = Number.MAX_SAFE_INTEGER + 1;
+    const max = Number.MAX_SAFE_INTEGER;
+    b2t2Expect(B2.spendReadingsOf([{ name: 'f', run: { result: max, assistant: max, rawResult: over + 2, rawAssistant: over, charged: max } }]), 'raw relation, saturated sums')
+      .toEqual({ runs: 1, unrecorded: 0, result_absent: 0, result_below_assistant: 0, equal: 0, result_above_assistant: 1, result_tokens: max, assistant_tokens: max, charged_tokens: max });
   });
 
   b2t2It('pilotFailuresOf lists every failed check once, sorted (Q10)', () => {
@@ -3009,6 +3462,48 @@ b2t2Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 2: fidelity on t
     b2t2Expect((JSON.parse(text) as B2t2R).boundaries.map((b: B2t2R) => [b.boundary_uuid, b.state, b.pass])).toEqual(B2T2_B.map((u) => [u, 'measured', true]));
   }, 120_000);
 
+  // K26, K28 (D-6481 carried): each measurable boundary builds its three stdins under every retained reading of the pair
+  // index, which must agree before its preflight or any run spawns. The injected stdins append a value masked through the
+  // reading's own index; the store learns it while boundary 1 builds, so boundary 2's admission holds the old reading and
+  // the new one, and fidelity refuses rather than masking with either. The CONTROL learns nothing.
+  const k26Fidelity = async (learn: boolean): Promise<{ r: Awaited<ReturnType<typeof b2t2Call>>; home: string; out: string; value: string; seen: Array<[number, boolean]> }> => {
+    const value = ['fixture', '-pair-', 'late-boundary'].join('');
+    const home = b2t2Home();
+    b2t2PlantPass(home, [1, 2]);
+    const fx = b2t2Fidelity(home, { source: b2t2PilotSource({ boundaries: B2T2_B.slice(0, 2) }) });
+    const deps = b2t2Deps();
+    const base = deps.stdins as (rs: B2t2R, id: number) => B2t2R;
+    const seen: Array<[number, boolean]> = [];
+    deps.stdins = (rs: B2t2R, id: number): B2t2R => {
+      const made = base(rs, id);
+      const masked = b1t2Lib.redactField(value, rs.idx) as string;
+      seen.push([id, !masked.includes(value)]);
+      if (learn && id === 1) fwLearn(home, value);   // W2-5b1's test-only store writer, right after boundary 1's one build
+      return { ...made, stdins: Object.fromEntries(Object.entries(made.stdins as Record<string, string>).map(([key, text]) => [key, `${text}${masked}\n`])) };
+    };
+    const r = await b2t2Call(() => B2.fidelityCommand(b2t2Flags(fx.argv), B2T2_ENV(home), deps));
+    return { r, home, out: fx.out as string, value, seen };
+  };
+  b2t2It('K26 fidelity agreement: a pair learned while boundary 1 builds makes boundary 2\'s readings disagree, refused input-invalid masking-snapshots-disagree fidelity before its preflight, boundary 1\'s runs kept and no fidelity.json written (K28, D-6481 carried)', async () => {
+    const c = await k26Fidelity(true);
+    b2t2Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree fidelity' });
+    b2t2Expect(c.seen, 'boundary 1: one reading; boundary 2: the old reading, then the new one').toEqual([[1, false], [2, false], [2, true]]);
+    const runs = w5b4Runs(c.home);
+    b2t2Expect(runs.map((x) => (x.stdin as string).split('\n')[0]).sort(), 'boundary 1 only').toEqual(['b2t2-1-empty', 'b2t2-1-payload', 'b2t2-1-user-text']);
+    for (const x of runs) b2t2Expect(x.stdin as string, 'boundary 1 ran under its one, unmasked reading').toContain(c.value);
+    b2t2Expect(w5b4Versions(c.home), 'boundary 2 reached no preflight').toBe(1);
+    b2t2Expect(existsSync(join(c.out, 'fidelity.json')), 'no fidelity output').toBe(false);
+  }, 120_000);
+  b2t2It('K26 fidelity agreement CONTROL: with no pair learned each boundary holds one reading, both measure, and the value stays visible in every stdin (K28)', async () => {
+    const c = await k26Fidelity(false);
+    b2t2Expect(c.r.refusal, 'two measured boundaries, then the short halt').toEqual({ word: 'pilot-failed', detail: 'fidelity failed (1): fidelity short 2 of 5' });
+    b2t2Expect(c.seen).toEqual([[1, false], [2, false]]);
+    const runs = w5b4Runs(c.home);
+    b2t2Expect(runs).toHaveLength(6);
+    for (const x of runs) b2t2Expect(x.stdin as string).toContain(c.value);
+    b2t2Expect((JSON.parse(readFileSync(join(c.out, 'fidelity.json'), 'utf8')) as B2t2R).boundaries.map((b: B2t2R) => [b.state, b.pass])).toEqual([['measured', true], ['measured', true]]);
+  }, 120_000);
+
   const Q9: Array<[string, (h: string) => ReturnType<typeof b2t2Fidelity>, string]> = [
     ['a seed that is not part 1 seed', (h) => b2t2Fidelity(h, { source: b2t2PilotSource({ over: { seed: w5b4Hex('another seed') } }) }), 'pilot seed-mismatch'],
     ['a frozen sha that is not part 1 one', (h) => b2t2Fidelity(h, { source: b2t2PilotSource({ over: { frozen_sha256: w5b4Hex('another list') } }) }), 'pilot frozen_sha256-mismatch'],
@@ -3103,6 +3598,30 @@ b2t2Describe('W2-5b2 Task 2: pilot-result over one pilot out', () => {
     b2t2Expect([r.refusal, r.code], r.stderr).toEqual([null, 0]);
     const doc = b2t2ResultOf(p);
     b2t2Expect([doc.settings_mode, doc.step0b_sha256, doc.failures]).toEqual(['fallback', p.s0.sha, []]);
+  });
+
+  // A run whose reading passed Number.MAX_SAFE_INTEGER, as the driver leaves it: W2-5b1's F9 clamps only the charge, so
+  // run.json carries both readings unclamped and tokens at the clamp, and recordSpend wrote that same clamped charge.
+  // 2 ** 53 is the first integer past the safe range, exact as a double and in JSON; 2 ** 53 + 2 is the next.
+  const B2T2_OVER = Number.MAX_SAFE_INTEGER + 1;
+  const b2t2Saturated = (): B2t2Pilot => b2t2PilotOut(w5b4Home(), {
+    ledger: (n) => [[n.a[0]!, Number.MAX_SAFE_INTEGER], ...n.a.slice(1).map((x) => [x, 1000] as [string, number]), [n.judge, 500], [n.fidelity, 300], ['pilot/step0b/restricted/turn-bound', 50]],
+    runs: (n) => ({ [n.a[0]!]: { usage_result_tokens: B2T2_OVER + 2, usage_assistant_tokens: B2T2_OVER, tokens: Number.MAX_SAFE_INTEGER, settings_mode: 'restricted' } }) });
+
+  b2t2It('a pilot out whose run charged a usage reading past Number.MAX_SAFE_INTEGER refuses out-refused spend.jsonl malformed at the ledger, before any run.json is read (D-6467, D-6309\'s rule)', async () => {
+    // The ledger row carries the saturated charge, so the next line sums past the safe range: spendLinesOf's sum check
+    // (W2-5b1's spentSoFar, carried byte for byte) refuses, D-6309's fail-closed rule. runUsageOf's clamp is not reached.
+    const p = b2t2Saturated();
+    const r = await b2t2RunPilot(p);
+    b2t2Expect(r.refusal, r.stderr).toEqual({ word: 'out-refused', detail: 'spend.jsonl malformed' });
+    b2t2Expect(existsSync(join(p.out, 'pilot-result.json')), 'nothing written').toBe(false);
+  });
+
+  b2t2It('runUsageOf reads a run.json usage reading past Number.MAX_SAFE_INTEGER raw and at the driver\'s one clamp, never refused (D-6467, D-6309\'s rule)', () => {
+    // The clamp's own case: a run.json read on its own, without the ledger, where the clamp is the only guard.
+    const p = b2t2Saturated();
+    b2t2Expect(B2.runUsageOf(p.out, p.names.a[0]!)).toEqual({ result: Number.MAX_SAFE_INTEGER, assistant: Number.MAX_SAFE_INTEGER,
+      rawResult: B2T2_OVER + 2, rawAssistant: B2T2_OVER, charged: Number.MAX_SAFE_INTEGER, settingsMode: 'restricted' });
   });
 
   b2t2It.each([
@@ -3207,7 +3726,7 @@ b2t2Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 2: the usage pil
 });
 ```
 
-The fixture values are predictions no planning step measured (R32, carried): the swept store's provenance for the user row (`operator`) and its stored usage; `w5b4Pilot`'s two questions and W2-5b1's walk streams with what the judge makes of them; the stub's `stub-box` branch; that W2-5b1's arm and judge stubs answer the walk's streams the same under the fallback argv; and that a resumed `fidelity` spawns only its `--version` lines. If one does not hold, fix the fixture, never a guard or the code under it, and record measured over predicted in a `docs(plan): … (W2-5b2 Task 2)` commit touching only this plan.
+The fixture values are predictions no planning step measured (R32, carried). K25's streams, exact spawn counts and the K26 learned-pair fixture (the value masked through each reading's own index, learned while boundary 1 builds) are predictions too, not a claim that this task's planner ran tests. K26 consumes W2-5b1's `maskingSnapshotsOf` and Task 1's `maskingAgreementOf` (K28). The other predictions are: the swept store's provenance for the user row (`operator`) and its stored usage; `w5b4Pilot`'s two questions and W2-5b1's walk streams with what the judge makes of them; the stub's `stub-box` branch; that W2-5b1's arm and judge stubs answer the walk's streams the same under the fallback argv; and that a resumed `fidelity` spawns only its `--version` lines. If one does not hold, fix the fixture, never a guard or the code under it, and record measured over predicted in a `docs(plan): … (W2-5b2 Task 2)` commit touching only this plan.
 
 - [ ] **Step 4: Run them and see them fail (predicted).** In the foreground, with a timeout of at least 600000 ms:
 
@@ -3217,7 +3736,8 @@ cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5
 
 Expected (predicted, not measured):
 - red: the `FLAG_SPECS` pin (three flags missing) and the registration line (two handlers missing);
-- red: every appended `W2-5b2 Task 2` case, each on `B2.<name> is not a function` (`decimalOf`, `fidelityPassOf`, `fidelityRunName`, `absentRateCheckOf`, `uptakeReadingOf`, `quizUptakeReadingOf`, `spendBudgetOf`, `extrapolationError`, `spendReadingsOf`, `pilotFailuresOf`, `boundaryEntryIdOf`, `fidelityCommand`, `pilotResultCommand`) or on `B2.USAGE_PILOT_PREFIXES` / `B2.UPTAKE_READINGS` undefined; the settings-mode pure case, because `refuseOutOfRangeValues` ignores `settings`. `b2t2PilotOut` builds before the throw, so a throw inside it is a fixture defect to fix before Step 5;
+- K25 red: P1 and P1p refuse `budget-exhausted` on pre-existing non-judge spend; P4 lacks `SPEND_SCOPES`/`judgeSpentOf` and accepts unknown scope. P2's invalid-row half already refuses before the scope edit but its valid over-share CONTROL is red until K25. P3/P5 are green before the edit; their guard's red is the targeted mutation in Step 8, not a fabricated baseline failure. K26's two fidelity agreement cases fail at their first assertion, the refusal being `args-invalid` `unknown subcommand "fidelity"` from `parseArgs` inside `b2t2Flags`, before the handler is called.
+- red: the other appended `W2-5b2 Task 2` cases, each on `B2.<name> is not a function` (`decimalOf`, `fidelityPassOf`, `fidelityRunName`, `absentRateCheckOf`, `uptakeReadingOf`, `quizUptakeReadingOf`, `spendBudgetOf`, `extrapolationError`, `spendReadingsOf`, `runUsageOf`, `pilotFailuresOf`, `boundaryEntryIdOf`, `fidelityCommand`, `pilotResultCommand`) or on `B2.USAGE_PILOT_PREFIXES` / `B2.UPTAKE_READINGS` undefined; the settings-mode pure case, because `refuseOutOfRangeValues` ignores `settings`. `b2t2PilotOut` builds before the throw, so a throw inside it is a fixture defect to fix before Step 5;
 - red in the K2 describe: every case at its first `--step0b`, on `args-invalid` `unknown flag "--step0b"` from `parseArgs` (the flag is not declared yet; the loader case's CONTROL expectation, without the flag, passes first), and the `--step0b-sha256`-only expectation on `unknown flag "--step0b-sha256"`; the walk on the same word at its `arms` call;
 - red in the nested describe: the derived-budget case (`--spend-budget 29999999` exits 0), the failed-pilot case (part 2 printed), K21's three rows (part 2 printed: the base neither binds the pilot result to part 1 nor holds a failed pilot), the no-safe-budget case (part 2 printed under the echoed `30000000`), every reader row, the two uptake rows included (the base reader accepts each), the F4 case (a `TypeError: openWriter: settings mode "bogus" …` thrown after `--out`), and the four W2-D24 rows and their CONTROL (`args-invalid` for an unknown subcommand);
 - green at once: the F3 case (D-6309's fix already put the range check first; this is its precedence pin, measured by mutant M22); W2-5a's re-pinned `D-6309: quiz-source` rows (the range check exists; mutant M34 below measures the new red), its retitled unit case, its open finalize cases (the re-pinned `chain7` result is accepted by the base reader, and the window case's `30000000` changes nothing yet).
@@ -3312,6 +3832,68 @@ export function spentSoFar(out) {
   return spendLinesOf(out).reduce((a, l) => a + l.tokens, 0);
 }
 ```
+
+(d1) K25, D-6723: directly above W2-4's existing `batchGate` JSDoc, add the one vocabulary declaration:
+
+```js
+/** The ledger reading a spawn gate applies; only the judge selects its own rows (K25, D-6723). */
+export const SPEND_SCOPES = Object.freeze(['all', 'judge']);
+```
+
+Preserve W2-4's soft-stop JSDoc verbatim and append: `K25: scope defaults to the whole ledger; only openJudge selects judge rows, after the entire ledger is validated. The limits half and its order are unchanged.` Replace the signature and the budget-read line as follows; all other guards, limits code and the returned gate remain in place:
+
+```js
+export function batchGate({ out, home, accountId, budget, limits, now = Date.now, scope = 'all' }) {
+```
+
+Immediately after that opening line:
+
+```js
+  if (!SPEND_SCOPES.includes(scope)) throw new TypeError(`batchGate: scope ${JSON.stringify(scope)} is not one of ${SPEND_SCOPES.join(', ')}`);
+```
+
+Replace the single `    const spent = decideBudget(spentSoFar(out), budget);` with:
+
+```js
+    const spend = scope === 'judge' ? judgeSpentOf(spendLinesOf(out)) : spentSoFar(out);
+    const spent = decideBudget(spend, budget);
+```
+
+Add after `spentSoFar` (same ledger section, no new import):
+
+```js
+/** The judge's own spend over already validated ledger rows (K25, D-6723), both sections and every repeated name.
+ *  Prefixes are section/JUDGE_DIR/, not substrings: judgex and another section never count. Pure; never reads or filters
+ *  raw ledger bytes. spendLinesOf validates every row and the whole sum before the gate calls this function.
+ *  @param {Array<{name: string, tokens: number}>} rows  @returns {number} */
+export function judgeSpentOf(rows) {
+  let sum = 0;
+  for (const row of rows) {
+    if (!ARM_SECTIONS.some((section) => row.name.startsWith(`${section}/${JUDGE_DIR}/`))) continue;
+    sum += row.tokens;
+    if (!Number.isSafeInteger(sum)) throw new RangeError('judgeSpentOf: spend past safe-integer range');
+  }
+  return sum;
+}
+```
+
+`ARM_SECTIONS` and `JUDGE_DIR` already exist in W2-5b1's section and are initialized before any handler calls this function. Unknown `scope` is rejected at construction, not folded into `all`. `spendLinesOf` stays the only byte reader: a torn/foreign non-judge row and whole-ledger overflow refuse before any row is selected. No scope is added to arms, fidelity, step0b or other callers.
+
+(d2) K25's only other newly licensed K5 in-place code edit is `openJudge`'s gate line. Match this two-line context exactly once (the bare `const gate` line occurs in another writer):
+
+```js
+  const launch = admitAccount(json, roster, accountId, home);   // RP3-judge: every refusal here lands before any spawn
+  const gate = batchGate({ out, home, accountId: launch.accountId, budget, limits });
+```
+
+Replace only its second line:
+
+```js
+  const launch = admitAccount(json, roster, accountId, home);   // RP3-judge: every refusal here lands before any spawn
+  const gate = batchGate({ out, home, accountId: launch.accountId, budget, limits, scope: 'judge' });
+```
+
+Do not change the `openJudge` interface, `preflightNow`, either `runBatch` gate, `judgeCommand`'s `budget: node.budget`, its `spend: spentSoFar(out)`, or `armNodeOf`. The two licensed edits appear in Step 10 and the PR body's in-place edits. Existing batchGate cases, arms-share and J30 are not re-pinned.
 
 (e) Replace `pilotResultError`, from `function pilotResultError(o) {` through its closing `}`, with:
 
@@ -3470,6 +4052,15 @@ export const PILOT_RESULT_SECTIONS = Object.freeze(['pilot']);
 const FIDELITY_RUN_DIR = 'fidelity';
 /** A count a driver file under --out carries: a non-negative safe integer. */
 const nonNegativeInt = (v) => Number.isSafeInteger(v) && /** @type {number} */ (v) >= 0;
+/** A usage reading as W2-5b1's launchRun writes it into run.json: a non-negative integer, which may pass
+ *  Number.MAX_SAFE_INTEGER (W2-5b1's F9 clamps only `tokens`; the two readings are written unclamped). A non-integer, a
+ *  negative or a non-number is not one, and refuses as before. */
+const usageReadingOk = (v) => Number.isInteger(v) && /** @type {number} */ (v) >= 0;
+/** One usage figure as the driver charges it (D-6467, D-6309's rule): W2-5b1's spendTokens over a usage of exactly `n`
+ *  tokens, so a figure past Number.MAX_SAFE_INTEGER saturates there through the driver's one clamp, never a second
+ *  spelling of it. `n` is a non-negative integer, safe or not.
+ *  @param {number} n  @returns {number} */
+const chargedReading = (n) => spendTokens(/** @type {any} */ ({ resultUsage: null, assistantUsage: { input: n, cacheCreation: 0, cacheRead: 0, output: 0 } }));
 
 // ── pure ──
 /** A record decimal as an exact fraction, or null: a finite number in [0, 1] whose String has at most six places. The
@@ -3589,20 +4180,24 @@ export function spendBudgetOf(ux, nQuestions) {
   return v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : null;
 }
 
-/** Q7's measured relation, report-only: each run by its run.json's two readings (D-6467: the charge is the larger), the
- *  result usage absent, below the assistant-message sum, equal, or above; a charged run with no run.json `unrecorded`.
- *  @param {Array<{name: string, run: null | {result: number | null, assistant: number, charged: number}}>} rows */
+/** Q7's measured relation, report-only: each run by its run.json's two RAW readings (runUsageOf's rawResult and
+ *  rawAssistant; D-6467: the charge is the larger, saturated at Number.MAX_SAFE_INTEGER, D-6309's rule), the result usage
+ *  absent, below the assistant-message sum, equal, or above; a charged run with no run.json `unrecorded`. The relation is
+ *  never read on clamped readings, so two unequal readings past the safe range are never `equal`. Only the sums saturate,
+ *  through the driver's one clamp (`chargedReading`), so a total past the safe range reads Number.MAX_SAFE_INTEGER, never
+ *  an unsafe or rounded figure.
+ *  @param {Array<{name: string, run: null | {rawResult: number | null, rawAssistant: number, charged: number}}>} rows */
 export function spendReadingsOf(rows) {
   const c = { runs: rows.length, unrecorded: 0, result_absent: 0, result_below_assistant: 0, equal: 0, result_above_assistant: 0,
     result_tokens: 0, assistant_tokens: 0, charged_tokens: 0 };
   for (const { run } of rows) {
     if (run === null) { c.unrecorded += 1; continue; }
-    c.assistant_tokens += run.assistant;
-    c.charged_tokens += run.charged;
-    if (run.result === null) { c.result_absent += 1; continue; }
-    c.result_tokens += run.result;
-    if (run.result < run.assistant) c.result_below_assistant += 1;
-    else if (run.result === run.assistant) c.equal += 1;
+    c.assistant_tokens = chargedReading(c.assistant_tokens + run.rawAssistant);
+    c.charged_tokens = chargedReading(c.charged_tokens + run.charged);
+    if (run.rawResult === null) { c.result_absent += 1; continue; }
+    c.result_tokens = chargedReading(c.result_tokens + run.rawResult);
+    if (run.rawResult < run.rawAssistant) c.result_below_assistant += 1;
+    else if (run.rawResult === run.rawAssistant) c.equal += 1;
     else c.result_above_assistant += 1;
   }
   return c;
@@ -3747,10 +4342,16 @@ function pilotOutFile(out, rel, kind, recordSha256, writer) {
   return v;
 }
 
-/** One run's two usage readings, its charge and its settings mode, from its run.json (W2-5b1 Task 1's fields, D-6467;
- *  W2-4's settings_mode, which K13's mismatch reads), or null when the run has none (a run the ledger charged that was
- *  stopped in flight). A run.json that does not read refuses out-refused. */
-function runUsageOf(out, name) {
+/** One run's two usage readings, raw and clamped, its charge and its settings mode, from its run.json (W2-5b1 Task 1's
+ *  fields, D-6467; W2-4's settings_mode, which K13's mismatch reads), or null when the run has none (a run the ledger
+ *  charged that was stopped in flight). A run.json that does not read refuses out-refused. A usage reading past
+ *  Number.MAX_SAFE_INTEGER is the driver's own record (W2-5b1's F9 clamps only `tokens`), so it is not refused here:
+ *  `rawResult` and `rawAssistant` carry it as written, for Q7's relation, and `result` and `assistant` read it at the
+ *  driver's clamp (`chargedReading`). The clamp covers a run.json read on its own, without the ledger (a fidelity or
+ *  report path). On a pilot --out such a run's charge is MAX_SAFE_INTEGER on the ledger too, and the next line sums
+ *  past the safe range, so pilot-result refuses `out-refused` `spend.jsonl malformed` at spendLinesOf before any
+ *  run.json is read (D-6309's fail-closed rule). A non-integer, negative or non-number reading still refuses. */
+export function runUsageOf(out, name) {
   const read = readPlain(path.join(out, `${name}.run.json`), OUT_JSON_CAP);
   if (read.state === 'absent') return null;
   if (read.state === 'bad') refuse('out-refused', `run-json-invalid ${name} ${badWord(read)}`);
@@ -3760,20 +4361,24 @@ function runUsageOf(out, name) {
   } catch {
     refuse('out-refused', `run-json-invalid ${name}`);
   }
-  if (!plainObject(j) || j.kind !== RUN_KIND || j.name !== name || !(j.usage_result_tokens === null || nonNegativeInt(j.usage_result_tokens))
-    || !nonNegativeInt(j.usage_assistant_tokens) || !nonNegativeInt(j.tokens) || !SETTINGS_MODES.includes(j.settings_mode)) refuse('out-refused', `run-json-invalid ${name}`);
-  return { result: j.usage_result_tokens, assistant: j.usage_assistant_tokens, charged: j.tokens, settingsMode: j.settings_mode };
+  if (!plainObject(j) || j.kind !== RUN_KIND || j.name !== name || !(j.usage_result_tokens === null || usageReadingOk(j.usage_result_tokens))
+    || !usageReadingOk(j.usage_assistant_tokens) || !nonNegativeInt(j.tokens) || !SETTINGS_MODES.includes(j.settings_mode)) refuse('out-refused', `run-json-invalid ${name}`);
+  return { result: j.usage_result_tokens === null ? null : chargedReading(j.usage_result_tokens), assistant: chargedReading(j.usage_assistant_tokens),
+    rawResult: j.usage_result_tokens, rawAssistant: j.usage_assistant_tokens, charged: j.tokens, settingsMode: j.settings_mode };
 }
 
 /** The fidelity measurement, boundary by boundary (W2-D76, spec §10.2): one function for `fidelity --section pilot` and
  *  the re-pilot's quiz form (W2-5b2 Task 3, K1). For each head in order: the boundary's entry (`deps.resolve`), its
- *  original side (`deps.original`) and its three stdins (`deps.stdins`); then W2-D56's preflight (`spawnPre`) and one batch
+ *  original side (`deps.original`), and its three stdins (`deps.stdins`) built under every retained reading of the pair
+ *  index (W2-5b1's maskingSnapshotsOf, then Task 1's maskingAgreementOf, site fidelity: they must agree, or the boundary
+ *  refuses input-invalid `masking-snapshots-disagree fidelity` before its preflight; K26, K28);
+ *  then W2-D56's preflight (`spawnPre`) and one batch
  *  of FIDELITY_RUNS box-mode jobs (`jobOf(boundaryUuid, run, stdin)`); then W2-5a's figures and the verdict against
  *  `tolerance`. A boundary whose original side or stdins are unmeasured spawns nothing; a run that failed (a non-zero
  *  exit, a signal, no result event; D-6305's rule read for a fidelity run) leaves its boundary unmeasured, never a 0.
  *  Answers the boundaries in `heads`' order, each in fidelity.json's boundary shape, and the last batch's measured
- *  version, or null when nothing was spawned. */
-async function fidelityBoundariesOf({ rs, heads, deps, tolerance, spawnPre, jobOf, gate, claim, concurrency }) {
+ *  version, or null when nothing was spawned. The quiz caller passes home too: no second admission or agreement. */
+async function fidelityBoundariesOf({ rs, home, heads, deps, tolerance, spawnPre, jobOf, gate, claim, concurrency }) {
   const boundaries = [];
   let version = null;
   for (const head of heads) {
@@ -3782,7 +4387,11 @@ async function fidelityBoundariesOf({ rs, heads, deps, tolerance, spawnPre, jobO
     if (id === null) { unmeasured('boundary-absent'); continue; }
     const original = deps.original(rs, id);
     if (original.state !== 'measured') { unmeasured(original.why); continue; }
-    const made = deps.stdins(rs, id, original.userRows);
+    // K26, K28 (D-6481 carried): this boundary's retained readings, admitted now, each building the three stdins; they
+    // agree run by run (or on one unmeasured word) before W2-D56's preflight or any run of the boundary spawns.
+    const snapshots = maskingSnapshotsOf(rs, home);
+    const made = await maskingAgreementOf(snapshots, 'fidelity', (idx) => deps.stdins({ ...rs, idx }, id, original.userRows),
+      (first, built) => first.state === built.state && (first.state === 'stdins' ? FIDELITY_RUNS.every((run) => sameMaskingText(first.stdins[run], built.stdins[run])) : first.why === built.why));
     if (made.state !== 'stdins') { unmeasured(made.why); continue; }
     const pre = await spawnPre();   // W2-D56 before every batch
     version = pre.version;
@@ -3806,7 +4415,7 @@ async function fidelityBoundariesOf({ rs, heads, deps, tolerance, spawnPre, jobO
  *  this part 1 and whose settings mode the runs then take (K2); pilot-source's output with its sha, its shape, and
  *  against part 1 (Q9); the store, once, this node named, and W2-5b1 Task 4's refuseSpawnAdmission; all before
  *  prepareOut. Then a fresh --out (Q25), the claim, the account, the gate (part 1's pilot_budget, W2-D55), and per
- *  boundary: the original side, the three stdins, W2-D56's preflight, one batch of three box-mode runs, the figures and
+ *  boundary: the original side, its three stdins agreed over every retained reading (K26, K28), W2-D56's preflight, one batch of three box-mode runs, the figures and
  *  the verdict. A boundary whose original side or stdins are unmeasured spawns nothing; a run that failed (a non-zero
  *  exit, a signal, no result event) leaves its boundary unmeasured. fidelity.json is written and its sha printed on
  *  stderr, stdout empty (D-5983); then a boundary that did not pass, or fewer than n_fidelity, refuses pilot-failed (K3,
@@ -3845,7 +4454,7 @@ export async function fidelityCommand(flags, driverEnv, deps = { resolve: bounda
       const gate = batchGate({ out, home, accountId: launch.accountId, budget: r.pilot_budget, limits: r.limits });
       const lang = driverEnv.LANG;
       const heads = pilot.value.fidelity.map((b) => ({ store_id: b.store_id, ccrc_id: b.ccrc_id, generation: b.generation, boundary_uuid: b.boundary_uuid }));
-      const { boundaries, version } = await fidelityBoundariesOf({ rs, heads, deps, tolerance, gate, claim, concurrency: r.limits.concurrency,
+      const { boundaries, version } = await fidelityBoundariesOf({ rs, home, heads, deps, tolerance, gate, claim, concurrency: r.limits.concurrency,
         spawnPre: () => preflightSpawn({ launch, home, out, lang, gate, expected }),   // W2-D56 against part 1's expected, before every batch
         jobOf: (boundaryUuid, run, stdin) => {
           const job = { launch, mode: 'box', model: r.arm_model, settingsMode, stdin, out, name: fidelityRunName(boundaryUuid, run), lang };
@@ -3943,22 +4552,35 @@ HANDLERS.set('fidelity', (flags, env) => fidelityCommand(flags, env));
 HANDLERS.set('pilot-result', (flags, env) => pilotResultCommand(flags, env));
 ```
 
+Task 3's exact helper handoff is `fidelityBoundariesOf({ rs, home, heads, deps, tolerance, spawnPre, jobOf, gate, claim, concurrency }) -> Promise<{ boundaries, version }>`; add `home` to its quiz call, never a second admission or agreement outside the shared loop. `maskingSnapshotsOf` is W2-5b1's and `maskingAgreementOf` is Task 1's (K28); if either is absent at execution, stop and report the drift, never reimplement it here.
+
 `STEP0B_KIND`, `STEP0B_CHECKS` and `refusePilotSourceOut` are W2-5b2 Task 1's (K4), `JUDGE_DIR`, `JUDGED_FILE` and `JUDGED_KIND` are W2-5b1 Task 5's, and `armsSummaryRel` and `ARMS_SUMMARY_KIND` are W2-5b1 Task 4's: module-level bindings declared above this section, so they are initialised when it is evaluated. `pilotResultError` (edit (e)) calls `extrapolationError` and `uptakeShapeOk`, and `loadArmRun` (edit (j)) calls `step0bModeOf`, each a hoisted declaration in this section; the `const`s they read (`USAGE_MARGIN`, `USAGE_EXTRAPOLATION_FORMULA`, `nonNegativeInt`) are read only at run time.
 
 - [ ] **Step 7: Run them and see them pass, then the typecheck.** In the foreground, with a timeout of at least 600000 ms, one suite per tool call:
 
 ```bash
-(cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5b2 Task 2|FLAG_SPECS declares exactly|three box-mode spawns, one per taught spelling|D-6309: quiz-source|D-6309: refuseOutOfRangeValues takes only|W2-5a Task 7: open finalize|an --out holding pilot-source.json is refused|W2-5b1 Task 1: loadFinalRecord|no violation, and the entry guard|arm words|pilot: part 1|re-checks the code it runs under|takes only its form')
+(cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5b2 Task 2|FLAG_SPECS declares exactly|three box-mode spawns, one per taught spelling|D-6309: quiz-source|D-6309: refuseOutOfRangeValues takes only|W2-5a Task 7: open finalize|an --out holding pilot-source.json is refused|W2-5b1 Task 1: loadFinalRecord|no violation, and the entry guard|arm words|pilot: part 1|re-checks the code it runs under|takes only its form|K28: maskingAgreementOf is declared once')
 (cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts)
 ```
 
 Expected (predicted, not measured): green.
 - Every W2-5b2 Task 2 case passes; on darwin the K2, store, fidelity and walk describes are skipped.
+- K25's P1, P1p, P2 (torn, foreign and overflow), P3, P4 and P5, and K26's two fidelity agreement cases pass (the learned one refused `masking-snapshots-disagree fidelity` at boundary 2, its CONTROL measuring both boundaries); all fixture and mutation outcomes here are predictions until execution. The K25 describes add nine concrete cases (three P2 rows and the unknown-scope case included), JG7 proves each seeded `judged.json.spend` remains whole-ledger, and K26 adds two. Run unchanged J30 and the older budget cases explicitly at this green checkpoint too:
+```bash
+(cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'quiz: the judge spends under this node|batchGate|spend share')
+```
+
 - W2-5b1's pilot cases pass unchanged (K2 moves none of them, the K5 list): R31's `pilot: part 1's settings mode is ranged before --out…` reads the same row and, without `--step0b`, part 1's mode; both W2-D24 rows `re-checks the code it runs under: arms|judge --section pilot`; and the two forms' `--allow-code-change is not a … flag` refusals. A red here is a moved case: re-pin it in place, add it to the K5 list and the commit, and report it.
 - W2-5a's open finalize cases pass on the derived budget; its D-6309 rows pass (101 first, the stamped-ahead row's CONTROL goes through); W2-5b1's Q25 case reads `refusePilotSourceOut`'s byte-identical detail; W2-5b1 Task 1's loader and part 2 range cases read `settingsModeRow`'s unchanged detail.
 - W2-4 Task 5's env scan (`no violation, and the entry guard…`) finds no `, env,` on a code line: `fidelityCommand` names its parameter `driverEnv`; `pilotResultCommand` takes no deps.
 - W2-5b1 Task 1's arm-word scan finds no arm word: every per-arm value here is `RECALL_ARMS`-keyed or `CONTROL_ARM`.
 - `typecheck-tests` is green. A red on a `B2.*` or `r7drv.*` call's inferred type is fixed with a cast at the call site, never by loosening the driver's JSDoc.
+
+Check every new production binding is defined once, without widening single-definition.test.ts's vocabulary list:
+
+```bash
+for n in SPEND_SCOPES judgeSpentOf; do test "$(grep -cE "^(export )?(async )?(function|const) $n\b" deploy/history-replay.mjs)" = 1 || exit 1; done
+```
 
 Record the measured pass count in the commit's task note.
 
@@ -4084,7 +4706,7 @@ t 'a failed pilot refuses pilot-failed'
 # Expected RED: 1 failed; the last run exits 0 and prints the accept line with an empty list.
 
 # M20 (Q7): the relation swapped.
-mut "$F" "    if (run.result < run.assistant) c.result_below_assistant += 1;" "    if (run.result < run.assistant) c.result_above_assistant += 1;"
+mut "$F" "    if (run.rawResult < run.rawAssistant) c.result_below_assistant += 1;" "    if (run.rawResult < run.rawAssistant) c.result_above_assistant += 1;"
 t 'spendReadingsOf counts each run|a passed pilot'
 # Expected RED: 2 failed (the pure counts and the base result's spend_readings).
 
@@ -4325,10 +4947,109 @@ mut "$F" "    if (spend.arms + spend.judge === 0) refuse('input-invalid', 'the u
 t 'refuses a usage pilot that charged nothing'
 # Expected RED: 1 failed: the result is written.
 
+# JG1 (K25 P1/P1p): scope at the judge gate regresses to the whole ledger. Judge-only RP3 context matches once.
+mut "$F" "  const launch = admitAccount(json, roster, accountId, home);   // RP3-judge: every refusal here lands before any spawn
+  const gate = batchGate({ out, home, accountId: launch.accountId, budget, limits, scope: 'judge' });" "  const launch = admitAccount(json, roster, accountId, home);   // RP3-judge: every refusal here lands before any spawn
+  const gate = batchGate({ out, home, accountId: launch.accountId, budget, limits, scope: 'all' });"
+t 'P1: quiz arms charged|P1p: pilot step0b'
+# Expected RED: both seeded cases refuse budget-exhausted before the judge; no-row CONTROLS pass. Restore before JG2t.
+
+# JG2t (K25 P2): discard an unterminated line before any parse, as a raw-prefix prefilter would do to a torn arm row.
+mut "$F" "  if (rows.pop() !== '') refuse('out-refused', \`\${SPEND_LEDGER} malformed\`);   // the last line was torn" "  rows.pop();   // MUTANT: discard a torn non-judge line before validation"
+t 'P2: a torn non-judge'
+# Expected RED: the torn row is hidden at the initial gate and --version/print runs spawn. Appending may still make the
+# later whole-spend read refuse malformed, but the no-spawn assertion is now red. Valid-row CONTROL stays admissible. Restore.
+
+# JG2f (K25 P2): non-judge bytes filtered before spendRow validates their canonical ledger shape.
+mut "$F" "  for (const line of rows) {
+    const row = spendRow(line);" "  for (const line of rows) {
+    if (line.includes('quiz/arms/')) continue;   // MUTANT: raw non-judge filter before parse
+    const row = spendRow(line);"
+t 'P2: a foreign non-judge'
+# Expected RED: a foreign arm row is hidden and judge spawns. Restore before JG2o.
+
+# JG2o (K25 P2): per-row safe integers must not let a whole-ledger overflow disappear in judge scope.
+mut "$F" "    if (!Number.isSafeInteger(sum)) refuse('out-refused', \`\${SPEND_LEDGER} malformed\`);   // D-5986: lines that each read but sum past the safe range
+" ""
+t 'P2: a overflow non-judge'
+# Expected RED: MAX_SAFE_INTEGER + 1 in non-judge rows is no longer refused before judge spawn. Restore before JG3j.
+
+# JG3j (K25 P3): real omitted-row mutant: whole-ledger arms accidentally drop judge rows.
+mut "$F" "    const spend = scope === 'judge' ? judgeSpentOf(spendLinesOf(out)) : spentSoFar(out);" "    const spend = scope === 'judge' ? judgeSpentOf(spendLinesOf(out)) : spendLinesOf(out).filter((row) => !ARM_SECTIONS.some((section) => row.name.startsWith(\`\${section}/\${JUDGE_DIR}/\`))).reduce((sum, row) => sum + row.tokens, 0);"
+t 'P3: arms count all rows'
+# Expected RED: seeded 65 judge tokens disappear, an arm spawns; the below-share CONTROL still admits work. Restore.
+
+# JG3a (K25 P3): all accidentally omits non-judge rows. The mixed fixture 35 judge + 30 arm kills this mutant.
+mut "$F" "    const spend = scope === 'judge' ? judgeSpentOf(spendLinesOf(out)) : spentSoFar(out);" "    const spend = scope === 'judge' ? judgeSpentOf(spendLinesOf(out)) : judgeSpentOf(spendLinesOf(out));"
+t 'P3: arms count all rows'
+# Expected RED: judge-only 65 row still stops, but mixed total 65 is read as 35 and an arm spawns. Restore.
+# Panel adaptation: setting arms to scope judge alone cannot prove judge rows are included; it still counts those rows.
+# P3 therefore has BOTH the judge-only row and a mixed row, with actual omitted-row mutants in each direction.
+
+# JG4p (K25 P4): missing trailing slash admits quiz/judgex and quiz/judge-other.
+mut "$F" '    if (!ARM_SECTIONS.some((section) => row.name.startsWith(`${section}/${JUDGE_DIR}/`))) continue;' '    if (!ARM_SECTIONS.some((section) => row.name.startsWith(`${section}/${JUDGE_DIR}`))) continue;'
+t 'P4: judgeSpentOf'
+# Expected RED: 19 is overcounted by lookalike prefixes. Restore before JG4s.
+
+# JG4s (K25 P4): another section's judge row must not count.
+mut "$F" '    if (!ARM_SECTIONS.some((section) => row.name.startsWith(`${section}/${JUDGE_DIR}/`))) continue;' '    if (!row.name.includes(`/${JUDGE_DIR}/`)) continue;'
+t 'P4: judgeSpentOf'
+# Expected RED: other/judge/j0001-1 now counts. Restore before JG4o.
+
+# JG4o (K25 P4): pure selected-row summation overflow guard removed.
+mut "$F" "    if (!Number.isSafeInteger(sum)) throw new RangeError('judgeSpentOf: spend past safe-integer range');
+" ""
+t 'P4: judgeSpentOf'
+# Expected RED: selected MAX_SAFE_INTEGER + 1 does not throw. Safe-edge CONTROL still passes. Restore before JG4u.
+
+# JG4u (K25 P4): unknown scope silently falls back to all.
+mut "$F" "  if (!SPEND_SCOPES.includes(scope)) throw new TypeError(\`batchGate: scope \${JSON.stringify(scope)} is not one of \${SPEND_SCOPES.join(', ')}\`);
+" ""
+t 'P4: batchGate rejects unknown scope'
+# Expected RED: first unknown-scope construction returns a gate; default/known CONTROLS still construct. Restore.
+
+# JG5 (K25 P4 and unchanged J30): selected judge rows are ignored.
+mut "$F" '    if (!ARM_SECTIONS.some((section) => row.name.startsWith(`${section}/${JUDGE_DIR}/`))) continue;' '    if (true) continue;   // MUTANT: judge spend is zero'
+t 'P4: judgeSpentOf|quiz: the judge spends under this node'
+# Expected RED: pure sum is 0, and J30 no longer stops its malformed-answer re-run at own spend 65 of 60. Restore.
+
+# JG7 (K25 P1/P1p): judged.json must disclose the fully parsed ledger, not the judge-scoped gate subtotal. The two seeded
+# cases exercise quiz and pilot respectively, and each starts above its judge budget only through non-judge rows.
+mut "$F" "        budget: node.budget, spend: spentSoFar(out), stamps: [...new Set([...run.codeStamps, ...judge.stamps()])].sort()," "        budget: node.budget, spend: judgeSpentOf(spendLinesOf(out)), stamps: [...new Set([...run.codeStamps, ...judge.stamps()])].sort(),"
+t 'P1: quiz arms charged|P1p: pilot step0b'
+# Expected RED: the judge still runs (scope is correct), but each seeded result's spend is its judge-only subtotal, not
+# spentSoFar(out); the P1/P1p whole-ledger assertions fail. The no-prior-row CONTROLS still pass. Restore before JG6.
+
+# JG6 (K25 P5): incorrectly gate an invocation with no pending work.
+mut "$F" "          if (pending.length === 0) break;" "          if (pending.length === 0) { gate(); break; }"
+t 'P5: finished arms resume'
+# Expected RED: after judge spend reaches the share, finished resume stops budget-exhausted instead of exiting 0.
+# Below-share finished-resume CONTROL still spawns nothing. Restore before K26F.
+
+# K26F (K26, K28): fidelity's per-boundary agreement bypassed: only the newest retained reading builds the stdins. One line,
+# no newline in the anchor, and `&&` so a missed anchor never runs unchanged code (EX2's rule).
+mut "$F" "    const made = await maskingAgreementOf(snapshots, 'fidelity', (idx) => deps.stdins({ ...rs, idx }, id, original.userRows)," "    const made = await maskingAgreementOf(snapshots.slice(-1), 'fidelity', (idx) => deps.stdins({ ...rs, idx }, id, original.userRows)," && t 'K26 fidelity agreement'
+# Expected RED: 1 failed, 1 passed: the learned case's refusal is pilot-failed "fidelity failed (1): fidelity short 2 of 5"
+# (boundary 2 spawned its masked stdins; B2T2_STUB keys a box run by its first line), not input-invalid
+# masking-snapshots-disagree fidelity. Its CONTROL (one reading per boundary, which the slice keeps) passes. t restores.
+
+# M64 (D-6467, D-6309's rule): the clamp dropped from the usage readings and their sums. One whole line, no newline.
+# Measured on the isolated cases where the clamp is the only guard: runUsageOf's own case and spendReadingsOf's over-safe
+# row. The pilot case over a saturated out refuses at spendLinesOf's sum check before runUsageOf runs, so it cannot see
+# this mutant and is not in the filter.
+mut "$F" "const chargedReading = (n) => spendTokens(/** @type {any} */ ({ resultUsage: null, assistantUsage: { input: n, cacheCreation: 0, cacheRead: 0, output: 0 } }));" "const chargedReading = (n) => n;"
+t 'runUsageOf reads a run.json usage reading|spendReadingsOf counts each run'
+# Expected RED: 2 failed. runUsageOf's case reads result 9007199254740994 and assistant 9007199254740992 where
+# Number.MAX_SAFE_INTEGER was expected (no refusal: the readings still pass usageReadingOk; the raw fields match).
+# spendReadingsOf's case passes its small rows and fails its over-safe row: the sums read [9007199254740994,
+# 9007199254740992, 9007199254740991] for result, assistant and charged where three Number.MAX_SAFE_INTEGER were
+# expected (charged is the run.json's tokens, already at the clamp); the relation still reads result_above_assistant 1.
+# The base pilot's spend_readings are small and unchanged. t restores.
+
 cmp "$F" "$SCRATCH/replay.t2.orig" && echo restored && rm -f "$SCRATCH/replay.t2.orig"
 ```
 
-`spendLinesOf` is a refactor of W2-4's reader, not a guard: W2-4's D-5986 ledger cases, unchanged, pin its refusals byte for byte (Step 9).
+`spendLinesOf` preserves W2-4's validation before any K25 selection; P2 and JG2t/JG2f/JG2o pin that ordering. JG7 separately holds the persisted `judged.json.spend` to `spentSoFar(out)`, so the judge's scoped admission gate cannot silently narrow its whole-ledger disclosure. Its original refusal vocabulary is not changed: W2-4's D-5986 ledger cases, unchanged, pin its refusals byte for byte (Step 9).
 
 One guard has no mutant of its own, by design: `pilotResultCommand`'s `halts.absent_rate_max` row (`refuseRangeRows([['halts.absent_rate_max', absentMax !== null]])`) is defence behind the validator. `loadRecordInput` runs `validateOpenRecord` first, and the gate already refuses an `absent_rate_max` outside its private `decimalFrac` (gate about :2446) as `halts.absent_rate_max value-outside-set`, so no record reaches the driver's row out of range and deleting it changes no case. The red-first case "refuses a part 1 whose halts.absent_rate_max is out of range" pins the validator's word. M55 is retired for this reason; its number is not reused.
 
@@ -4351,22 +5072,25 @@ Expected: green (predicted).
 
 ```bash
 git add deploy/history-replay.mjs server/test/history-replay.test.ts
-CO_AUTHORED_BY='<the Co-Authored-By line the attribution reminder gives>'
-git commit -m "feat(history-replay): fidelity and pilot-result --section pilot, the usage pilot in step 0b's settings mode, and open --finalize's derived spend budget over a pilot result bound to part 1 (W2-5b2 Task 2; W2-D76, W2-D55, W2-D64, W2-D82; Q6 to Q10, Q25, Q27; K2, K3, K13, K14, K15, K21; D-6280, D-6644)" \
+CO_AUTHORED_BY='Co-Authored-By: Claude Code <noreply@anthropic.com>'
+git commit -m "feat(history-replay): fidelity and pilot-result --section pilot, judge-scoped gate, boundary masking agreed over every retained reading and finalized spend budget (W2-5b2 Task 2; W2-D76, W2-D55, W2-D64, W2-D82; Q6 to Q10, Q25, Q27; K2, K3, K13, K14, K15, K21, K25, K26, K28; D-6280, D-6644, D-6723)" \
   -m "In-place edits of earlier cases (K5): W2-4 Task 1's 'FLAG_SPECS declares exactly W2-4's seven flags, W2-5a Task 7's and W2-5b1 Task 1's, frozen' gains step0b, step0b-sha256 and accept-failed-pilot; W2-4 Task 9's 'three box-mode spawns, one per taught spelling, and a denial for one spelling is recorded for that one only; exit 0' registers fidelity and pilot-result; W2-5a Task 7's chain7 pilot result re-pinned to the producer's shape, its uptake, failures and part 1's record_sha256 included (C5, D-6280, K15, K21); 'a window shorter than planned_days is refused by the validator (W2-D25)' echoes the derived 30000000; 'D-6309: quiz-source, a signed record with %s out of range refuses record-invalid before --out and any spawn; CONTROL: the boundary value passes the range check' asks 101 first and runs its max_age_ms row on a limits row stamped 30 s ahead, quizRun7 gaining that option (review 811 F2); 'D-6309: refuseOutOfRangeValues takes only positive safe integers (a float, a string, NaN and an absent value are out of range) and writes nothing' loses 'and writes nothing' (review 811 F5). No W2-5b1 case is edited." \
   -m "In-place extensions of W2-5b1 code (K2, licensed under K5): the 'arms --section pilot' and 'judge --section pilot' forms take --step0b/--step0b-sha256, and loadArmRun's pilot branch runs under a passed step 0b result's settings mode through step0bModeOf (part 1's without the pair); its settings-mode line goes through settingsModeRow, part2RangeChecks' pilot_result.settings_mode row too, and armsCommand's Q25 line through W2-5b2 Task 1's refusePilotSourceOut (K4)." \
+  -m "In-place code edits (K25's extension of K5, D-6723): W2-4's batchGate gains default scope all with unknown-scope TypeError and fully validated judge selection; W2-5b1's openJudge gate line alone selects scope judge, still at node.budget. Arms gates, Q5 share/printed line, armNodeOf, Q6/pilot_result and judged.json.spend remain unchanged. Existing batchGate cases, arms-share and J30 remain unchanged." \
+  -m "K26, K28: fidelityBoundariesOf takes home, admits each measurable boundary's retained readings (maskingSnapshotsOf) and builds its three stdins under every one through Task 1's maskingAgreementOf (site fidelity), refusing masking-snapshots-disagree fidelity before the boundary's preflight; the quiz extension shares this loop. P1/P1p/P2/P3/P4/P5 and K26 have CONTROLS; record mutation results after execution. Residual: approximate exposure is twice share (pilot: twice pilot_budget) plus in-flight soft-stop token overshoot, not a strict token cap; earlier rows still count after a version move." \
+  -m "D-6467 at W2-5b1's F9 clamp (D-6309's rule): runUsageOf, exported for its own unit case, returns a run.json usage reading past Number.MAX_SAFE_INTEGER (launchRun writes the readings unclamped beside the clamped tokens) raw, beside the same reading at the driver's one clamp (chargedReading, over W2-5b1's spendTokens), never refusing it; the clamp covers a run.json read on its own, without the ledger. spendReadingsOf classifies Q7's report-only relation on the raw readings and saturates only its sums, so two unequal over-safe readings read above, never equal. A pilot --out whose run charged such a reading is not reached there: recordSpend wrote MAX_SAFE_INTEGER, the next ledger line sums past the safe range, and pilot-result refuses out-refused spend.jsonl malformed at spendLinesOf (W2-5b1's spentSoFar check, carried byte for byte; D-6309's fail-closed rule, unchanged), which a case pins. A non-integer, negative or non-number reading still refuses run-json-invalid; mutant M64 measured on the two isolated cases." \
   -m "$CO_AUTHORED_BY"
 ```
 
-If Step 1 found edit (k) already made by Task 1, the third message drops its last clause. This task defines no number of its own. D-6280 is closed by it, cited bare. D-6644 was issued at planning for the departure this task found (W2-D82's third reading); this plan defines it in its "## Deviations found".
+If Step 1 found edit (k) already made by Task 1, the third message drops its last clause. This task defines no number of its own. D-6280 is closed by it, cited bare. D-6644 was issued at planning for the departure this task found (W2-D82's third reading); this plan defines it in its "## Deviations found". D-6723 (K25) is cited here and defined by the header/docs editor in the tail. Do not define W2-5b1's build departures here.
 
-### Task 3: version moves: the mid-window re-pilot, open --amend, and the both-arms re-run (W2-D90, W2-D56, W2-D6, W2-D7, W2-D24; Q8, Q12, Q13, Q14, Q23; K1, K3, K4, K5, K6, K7, K13, K22)
+### Task 3: version moves: the mid-window re-pilot, open --amend, and the both-arms re-run (W2-D90, W2-D56, W2-D6, W2-D7, W2-D24; Q8, Q12, Q13, Q14, Q23; K1, K3, K4, K5, K6, K7, K13, K22, K26, K27, K28)
 
 Part 2 is frozen at window start. After that, W2-D90 lets it change in one way only: a superseding part 2 that appends amendments. This task adds the act that measures a version move before it is recorded (the mid-window re-pilot, Q12), the subcommand that prints an amendment, and the arm engine's handling of the one amendment kind that changes what a batch does, the version move. It covers the scoping study's Task 8 (scope.md B), its carries C19 and C20, and the decisions document's §5 act 21: "After a `claude-version-moved` stop, re-pilot, run `open --amend` (`version-move`), and post its sha256 before the next batch. Any forced frozen act or freeze exception is recorded with `open --amend`, and the next batch's re-check must pass."
 
 - **The mid-window re-pilot (Q12, K1).** Step 0b on a listed quiz family plus fidelity in box mode, on a named node during the window. No marker is swapped, and no usage pilot is re-run (Q12). Three section forms, each the `quiz` section of a W2-5b2 subcommand, all on one `--out` of the re-pilot's own:
   - **`step0b --section quiz`.** This task adds `'quiz'` to Task 1's `STEP0B_SECTIONS`, so Task 1's `step0bCommand` runs on this node's first frozen quiz question in qid order (`armNodeOf`'s first question). Its family is listed in the quiz marker, which W2-D78 (i) asks before `--out` and before every arm batch, as for the pilot. Part 2 is read through W2-5b1's `loadArmRun('quiz')`, with no `--allow-code-change` (Q23: the form does not list it). W2-D56's preflight runs before every batch with `expected.claude_code_version` replaced by the version this re-pilot measures (`repilotExpectedOf`), so the move is recorded while the stamp, wrapper and code checks hold. The settings mode is part 2's `pilot_result.settings_mode`, the one the arms run under: the form takes no `--settings-mode`.
-  - **`fidelity --section quiz`.** Box mode (Q8), over this node's first `n_fidelity` distinct frozen quiz boundaries in qid order (`repilotBoundariesOf`), through Task 2's per-boundary measurement, comparison, figures and tolerance (`fidelityBoundariesOf`, `fidelityPassOf`, part 2's copy of part 1's `pilot.tolerance`). It writes `quiz/fidelity.json` and prints its sha, then refuses `pilot-failed` when a boundary did not pass or fewer than `n_fidelity` were measured (K3, K13).
+  - **`fidelity --section quiz`.** Box mode (Q8), over this node's first `n_fidelity` distinct frozen quiz boundaries in qid order (`repilotBoundariesOf`), through Task 2's per-boundary measurement, comparison, figures and tolerance (`fidelityBoundariesOf`, `fidelityPassOf`, part 2's copy of part 1's `pilot.tolerance`). Each measurable boundary's three stdins are built under every retained reading and must agree (K26, K28: `fidelityBoundariesOf`'s `maskingAgreementOf` call, site `fidelity`) before its preflight or any run spawns; a disagreement refuses `input-invalid` `masking-snapshots-disagree fidelity` and writes no `quiz/fidelity.json`. It writes `quiz/fidelity.json` and prints its sha, then refuses `pilot-failed` when a boundary did not pass or fewer than `n_fidelity` were measured (K3, K13).
   - **`pilot-result --section quiz --step0b … --fidelity …`.** It reads part 2 (W2-D24 first), step 0b's result and the quiz fidelity output, each with its sha, and writes the re-pilot result `quiz/repilot-result.json`: `{kind: 'ccrc-history-w2-repilot-result', v: 1, record_sha256, store_id, node_label, claude_code_version (measured), step0b_sha256, fidelity_sha256, fidelity, passed, failed, spend}`, `spend` being what the re-pilot charged on its own `--out`'s ledger (K22 (a)). Its `--out` is the re-pilot's own and must exist: an absent one refuses `input-invalid` and is never made (W2-5a's R10), and one holding `pilot-source.json` refuses `out-refused` through Task 1's `refusePilotSourceOut` (Q25, K4). It prints the sha, then refuses `pilot-failed` when `failed` is not empty (K3).
   - **One version per re-pilot.** The first of these acts to spawn measures `--version` once and pins it in `quiz/repilot-version.json` under the re-pilot's `--out`. Every later batch on that `--out`, a resumed one included, compares against the pin, so a version that moves during a re-pilot stops `claude-version-moved` and never mixes two versions in one re-pilot. A pin of another record or node refuses `out-refused`: one re-pilot per `--out`. A finished re-pilot (`quiz/repilot-result.json` present) refuses every re-pilot act on that `--out`.
 - **`open --amend --record <final> --record-sha256 H --kind <kind> …`** prints a superseding part 2. It differs from the record it reads only in three fields: `supersedes` (H), `finalized_ms` (now), and `amendments`, which gains one entry appended in the validator's fixed shape `{kind, node_label_ref, at_ms, detail_sha256, detail}`. That shape is the gate's at about :2220 at 92dac5764, and its rules are at about :2564-2575 (W2-D90).
@@ -4384,6 +5108,7 @@ Part 2 is frozen at window start. After that, W2-D90 lets it change in one way o
   - The engine reads the node's version moves (`nodeMovesOf`, the one selection of a node's moves, which `expectedForNode` now reads too).
   - It reads the per-batch manifests (`readArmManifests`, `runVersionsOf`: the version each run was spawned under, from the last manifest that names it). Both are exported, so any later reader of the manifests goes through them (K4); Task 5's report reads none (an answer record carries its run).
   - A question that is not settled and has an arm answered under a version other than the one the preflight now expects is half-done on another version (`versionSplitOf`). That question moves to the node's newest move (`moveAfterSplit`), and both of its arms owe a first attempt there: the re-run starts at attempt 1 (K7).
+  - The moved question presents both arms as a new two-arm pending unit to `armBatchPreflight`; that one fresh preflight admits the retained readings and builds both payloads under every one, which must agree (K28's `maskingAgreementOf`, site `arms`), before it checks any recorded sibling SHA (K26, K27; W2-5b1's build departure; re-anchor at W2-5b1's merged code). Because neither new-version arm is owed beside a sibling payload from the old attempt, D-6482's `arm-payload-changed` exclusion is not evaluated for this pair. It is not a relaxation of D-6482: unchanged non-move owed-arm resumes still compare their rebuilt sibling stdin against the old manifest and exclude on drift.
   - Run names gain the move inside the last segment: `<section>/arms/<qid>/<arm>.m<i>.a<n>`, where `i` is the amendment's index. A re-run therefore never overwrites, and is never read as, the run it supersedes. With no move, every name is W2-5b1's, byte for byte.
 - **W2-D7 and W2-D6 after an amendment.** A forced act or a freeze exception moves no version. Arms read the amended record as they read any part 2, and W2-5b1's batch preflight re-checks every question (W2-D78 (iii)) before any spawn of the next batch: the re-check act 21 asks for, pinned on an amended record. A freeze exception that installed a release on a node (K6): after window start, with `--allow-code-change`, the tree preflight admits that node's stamp when it equals the node's newest freeze-exception `release_tag`, and stamps the outputs `code-changed`, as W2-D6 says. Without the flag it refuses `tree-moved`, and the detail names the remedy. Any other moved stamp is `tree-moved` as before.
 
@@ -4399,6 +5124,8 @@ Part 2 is frozen at window start. After that, W2-D90 lets it change in one way o
 - W2-D12: one selection of a node's moves; one part 2 loader; one spelling of the version-move ranges; one fidelity measurement and one failure list, Task 2's.
 - W2-D80: a settled question is never re-run. A run-failed question stays excluded from both arms.
 - W2-D84: never fold. An answered run whose version no manifest records refuses; its version is never read as either.
+- K26 (D-6481 carried), as K28 re-anchors it: every re-pilot input that becomes spawned masked text agrees over every retained reading before it spawns or persists, through the one `maskingAgreementOf`: quiz step 0b through Task 1's `step0bCardOf`, quiz fidelity through Task 2's `fidelityBoundariesOf`, and the moved pair through W2-5b1's `armBatchPreflight`.
+- K27, carrying W2-5b1's D-6482: a version-move rerun builds both fresh arms from one preflight and does not compare either with an old sibling payload; an ordinary owed arm still gets D-6482's run-failed exclusion and remains counted by Task 5 toward W2-D89.
 
 Rulings:
 - Q8 (fidelity in box mode). Q12 (the re-pilot and its sha; no marker swap). Q13 (the three detail schemas, as K6 amends the freeze exception's). Q14 (the manifests name each run's version). Q23 (no `--allow-code-change` on `open --amend` or on any re-pilot form).
@@ -4410,6 +5137,8 @@ Rulings:
 - K7: the attempt reset is a reading of W2-D56; no departure.
 - K13: the fidelity-short failure, kept for the re-pilot.
 - K22: the re-pilot's own choices accepted, each limiting one a residual below: (a) its spend on its own `--out`, recorded in the result as `spend`; (b) the version pin, one re-pilot per `--out`; (c) no override for a failed re-pilot; (d) `tree-moved` on a node whose release an exception moved; (e) K6's reading of the newest exception's `release_tag`.
+- K26, K28: Task 3 adds no agreement call, pair reader, snapshot store, refresh or latest-reading fallback of its own; each re-pilot path reaches K28's `maskingAgreementOf` through the seam its pilot form already uses.
+- K27: the both-arms rerun is a fresh pair at the new move, so it does not take D-6482's owed-versus-old-sibling drift branch; unchanged ordinary resumes do (W2-5b1's build departure; re-anchor at W2-5b1's merged code).
 - R30, W2-5b1's ruling: the version-move ranges are spelled once. `open --amend` reaches them through `refuseOutOfRangeValues`' `part2` and adds no line naming `versionMoveChecks(`.
 - R8, W2-5b1's ruling, carried by K4: the owning task's names. Every W2-5b1, Task 1 and Task 2 name below is its owner's.
 - U15 (W2-6's carry): line-disjoint from W2-6. See Files.
@@ -4421,32 +5150,34 @@ It cites, each bare, without defining it:
 - D-5814: the import pin. The gate's names are not in `EXACT_NAMES`.
 - D-6307 and D-6311: refusals before `--out`.
 - D-5893: no numeric line citation in code or tests (Step 7's `citations`).
+- D-6481: W2-5b1's retained-snapshot departure, whose one agreement (Task 1's `maskingAgreementOf`, K28) the re-pilot reaches (K26).
 
 It defines no number and finds no departure.
 
 **In-place edits (K5).** Each is named in the commit and listed under the PR body's "In-place edits of earlier cases":
 - W2-4 Task 1's case titled `FLAG_SPECS declares exactly …` (about :199-214 at 92dac5764, its title as the last task left it): its expected object gains this task's twelve flags. One of K5's W2-4 pins.
-- W2-5a Task 7's case `open wants exactly one mode, and verify exactly one of --registry and --section ab` (about :9244-9246 at 92dac5764): its two lines expecting `'open wants exactly one of --draft, --finalize and --template'` expect the four-mode sentence. K5's "Task 3's open-modes edit". Nothing else in it changes.
+- W2-5a Task 7's case `open wants exactly one mode, and verify exactly one of --registry and --section ab` (about :9267-9269 at 0de4cc990): its two lines expecting `'open wants exactly one of --draft, --finalize and --template'` expect the four-mode sentence. K5's "Task 3's open-modes edit". Nothing else in it changes.
 
 No other case of any task is edited. No W2-5b1 case moves: `preflightFiles` and `expectedForNode` answer what they answered for every record without a freeze-exception `release_tag`, and W2-5b1's pure `expectedForNode` case (whose first assertion is a `toEqual`) carries none. No W2-5b2 Task 1 or Task 2 case moves either: their section refusals name a word in neither section, and no case of theirs pins `'quiz'` as refused (the seams below).
 
 **The seams Tasks 1 and 2 build for this task (K4).** Each is in its owner's commit, by its owner's names (R8, carried by K4), so no step here depends on a later task; this task's Step 0 counts each anchor, and a missing one stops the task:
 - **Task 1:** `STEP0B_SECTIONS` declared on one line, `export const STEP0B_SECTIONS = Object.freeze(['pilot']);`, which this task replaces with `['pilot', 'quiz']`; `step0bCommand`'s section refusal built from that list, ``refuse('args-invalid', `step0b wants --section ${STEP0B_SECTIONS.join(' or --section ')}, not ${JSON.stringify(section ?? null)}`)``, whose two Task 1 cases name `usage`, a word in neither section, the refusal row's expected detail built from `STEP0B_SECTIONS` too, so `'quiz'` reds neither; the expected values every `preflightSpawn` compares against held in one binding, `      let expected = node.expected;   // W2-D56's values for every batch; the re-pilot replaces the version (W2-5b2 Task 3)`, directly above `const spawnPre = …`, which passes `expected` (`refuseSpawnAdmission` before `--out` keeps `node.expected`); the range call's `budgetField: section === 'pilot' ? 'pilot_budget' : 'spend_budget'`; Q25's refusal as the one statement `    refusePilotSourceOut(out, 'step0b runs');` (K4); and the step 0b result's `section`, `store_id` and `batches[].claude_code_version` (each batch's measured version). This task inserts one line below the `let` and one below the Q25 statement.
-- **Task 2:** `FIDELITY_SECTIONS` and `PILOT_RESULT_SECTIONS`, each `Object.freeze(['pilot'])` on one line, and each form's section refusal built from its list before `checkFlags`, with no Task 2 case pinning `'quiz'` as refused. This task appends `'quiz'` to each and inserts one dispatch line directly below each refusal. The per-boundary loop is Task 2's module-private `fidelityBoundariesOf({ rs, heads, deps, tolerance, spawnPre, jobOf, gate, claim, concurrency })`, answering `{ boundaries, version }`, which the pilot form calls, so Task 2's cases pin it. `fidelity.json`'s field names are Task 2's Produces; the re-pilot's `quiz/fidelity.json` uses the same names, plus `section`, with `frozen_sha256` in place of `pilot_sha256`.
+- **Task 2:** `FIDELITY_SECTIONS` and `PILOT_RESULT_SECTIONS`, each `Object.freeze(['pilot'])` on one line, and each form's section refusal built from its list before `checkFlags`, with no Task 2 case pinning `'quiz'` as refused. This task appends `'quiz'` to each and inserts one dispatch line directly below each refusal. The per-boundary loop is Task 2's module-private `fidelityBoundariesOf({ rs, home, heads, deps, tolerance, spawnPre, jobOf, gate, claim, concurrency })`, answering `{ boundaries, version }`, which the pilot form calls, so Task 2's cases pin it. Each measurable boundary admits its retained readings and agrees its three stdins over every one (K28's `maskingAgreementOf`, site `fidelity`) before its preflight or any run spawns (K26). Task 3 passes `home` unchanged and declares no pair reader, snapshot store or refresher of its own. `fidelity.json`'s field names are Task 2's Produces; the re-pilot's `quiz/fidelity.json` uses the same names, plus `section`, with `frozen_sha256` in place of `pilot_sha256`.
 - **Task 2's readers, as Task 2 ships them (K4).** `step0bOf(loaded, recordSha256, section)` is called with `'quiz'`: it refuses `input-invalid` `step0b section <s>, wanted quiz` for a result of another section and answers `{ sha256, section, settingsMode, passed, failed, unmeasured }`. This task lists the failures as Task 2's `pilot-result` does: each `failed` check as `<check> failed`, then each `unmeasured` one as `<check> unmeasured`. `pilotFailuresOf({ boundaries, nFidelity, absent, step0bFailures, settingsMismatches })` is called with no absent rate (`NO_ABSENT`); Task 2 ships no fidelity-only helper, and `fidelityCommand` itself calls `pilotFailuresOf` the same way.
 
 **Files:** anchors are hints. W2-5b1's are "(W2-5b1 Task N's <name>; re-anchor at W2-5b1's merged head)", W2-5b2's "(Task N's <name>)", and base hints "(about :NNN at 92dac5764)". Re-anchor every edit by its quoted content, and report each drift in the commit's task note.
 - Modify: `deploy/history-replay.mjs`:
-  - (a) The gate's import statement, `import { ANSWER_PROTOCOL, … } from './history-gate.mjs';` (about :42 at 92dac5764, with W2-5b1's and Task 2's names added): `AMENDMENT_KINDS` is added inside the braces as its first name (code-unit order). No statement is added (D-5814; the header's `Imports:` sentence names modules only).
-  - (b) `FLAG_SPECS` (about :110-130 at 92dac5764): one block after its last entry, whatever entry W2-5b2 Tasks 1 and 2 left last.
-  - (c) `const NODE_INPUTS = Object.freeze(['census', 'census-sha256', 'verify', 'verify-sha256']);` (about :4809 at 92dac5764): `AMEND_FLAGS` is added directly below it.
-  - (d) `const SUBCOMMAND_FLAGS = Object.freeze({` (about :4811 at 92dac5764): four forms, `'step0b --section quiz'`, `'fidelity --section quiz'`, `'pilot-result --section quiz'` and `'open --amend'`, as the last entries, directly before the `});` that closes the object, after every form W2-5b1 and W2-5b2 Tasks 1 and 2 added.
-  - (e) `openCommand` (about :5703-5714 at 92dac5764): three lines and its doc comment.
+  - (a) The gate's import statement, `import { ANSWER_PROTOCOL, … } from './history-gate.mjs';` (about :45 at W2-5b1's final head 0de4cc990, with W2-5b1's and Task 2's names added): `AMENDMENT_KINDS` is added inside the braces as its first name (code-unit order). No statement is added (D-5814; the header's `Imports:` sentence names modules only).
+  - (b) `FLAG_SPECS` (about :153-176 at 0de4cc990, its last entry `'allow-code-change': 'bool',` about :175): one block after its last entry, whatever entry W2-5b2 Tasks 1 and 2 left last.
+  - (c) `const NODE_INPUTS = Object.freeze(['census', 'census-sha256', 'verify', 'verify-sha256']);` (about :5104 at 0de4cc990): `AMEND_FLAGS` is added directly below it.
+  - (d) `const SUBCOMMAND_FLAGS = Object.freeze({` (about :5106 at 0de4cc990; its closing `});` about :5131, after `'judge --section quiz'` about :5130): four forms, `'step0b --section quiz'`, `'fidelity --section quiz'`, `'pilot-result --section quiz'` and `'open --amend'`, as the last entries, directly before the `});` that closes the object, after every form W2-5b1 and W2-5b2 Tasks 1 and 2 added.
+  - (e) `openCommand` (about :6067-6076 at 0de4cc990: the doc comment :6067, the function :6068, the `const modes` line :6069, the refusal :6070, the `return modes[0]` line :6076): three lines and its doc comment.
   - (f) W2-5b1 Task 4's section: `armRunName`, `armJob`, `armAttemptsOf`, `questionArmsOf`, `expectedForNode`, `reportArmsStop` and `armsCommand` (W2-5b1 Task 4's names; re-anchor at W2-5b1's merged head).
-  - (g) W2-4's `preflightFiles` (about :2077-2088 at 92dac5764): its `tree-moved` line and its no-code-move return (K6).
+  - (g) W2-4's `preflightFiles` (about :2161-2171 at 0de4cc990: the `tree-moved` line :2164, the no-code-move return :2170): its `tree-moved` line and its no-code-move return (K6).
   - (h) Task 1's section: the `STEP0B_SECTIONS` line and its JSDoc; in `step0bCommand`, one line below `let expected = node.expected;` and one below `refusePilotSourceOut(out, 'step0b runs');`.
   - (i) Task 2's section: the `FIDELITY_SECTIONS` and `PILOT_RESULT_SECTIONS` lines and one dispatch line in each of `fidelityCommand` and `pilotResultCommand`.
   - (j) One new section, `// ── W2-5b2 Task 3: …`, directly above the comment line `// The entry guard stays the LAST block of this file`, after Task 2's section.
+  - (k) W2-4's `refuseIfStopping` JSDoc, as W2-5b1's fix round left it (about :317-324 at 0de4cc990: "Eight call sites", ending with `preflightSpawn after measureClaudeVersion` and the all-excluded arms batch): the count becomes nine and the list names (j)'s `repilotExpectedOf` after its `measureClaudeVersion`, the ninth direct call, in this task's commit. No test pins the sentence (measured: the final-head test file has no `call sites` or `refuseIfStopping` text), so this is a stale-comment fix, never a red.
 - Modify: `server/test/history-replay.test.ts`:
   - The two in-place edits above (K5).
   - One describe nested inside W2-5a Task 7's outer `r7describe('W2-5a Task 7: the record subcommands', () => {`, so it reuses `chain7`, `home7`, `save7`, `saveText7`, `inp`, `run7`, `tree7`, `hex`, `envOf`, `T0`, `DAY`, `SEED`, `STORE_A`, `STORE_B` and `refusalLine`.
@@ -4454,7 +5185,7 @@ No other case of any task is edited. No W2-5b1 case moves: `preflightFiles` and 
     - That `});` comes after W2-5b1 Task 3's nested describe and after any describe an earlier W2-5b2 task nested there (task order).
   - One import line, module-level `b23` fixtures and three describes appended at the end of the file, after every earlier task's appended block (W2-5b2 Task 2's last).
 - Line-disjoint from W2-6 (Q29, U15). This task edits none of W2-6's lines:
-  - W2-6's test region sits after the `});` closing `describe('W2-5a fix wave: the review\'s minors', …)` (about :10676-10678 at 92dac5764) and before W2-5b1's first appended block, ending at `// ── end of W2-6's region (Q29) ──`. This task's nested describe sits inside `r7describe`, about 170 unchanged lines above that region, and its appended block sits at the file's end, after W2-5b1's and W2-5b2 Tasks 1 and 2's blocks.
+  - W2-6's test region sits after the `});` closing `describe('W2-5a fix wave: the review\'s minors', …)` (about :11127-11129 at 0de4cc990; the describe opens about :11108, and W2-5b1's first appended block starts about :11131) and before W2-5b1's first appended block, ending at `// ── end of W2-6's region (Q29) ──`. This task's nested describe sits inside `r7describe`, about 170 unchanged lines above that region (measured at 0de4cc990: `r7describe` closes about :10953, the fix-wave header is about :10955, and 176 lines run to :11129), and its appended block sits at the file's end, after W2-5b1's and W2-5b2 Tasks 1 and 2's blocks.
   - No README, spec, `single-definition.test.ts` or `history-counters.mjs` line is touched.
   - The driver names W2-6 imports keep their signatures: `AB_STATES`, `VERIFY_AB_KIND`, `loadFinalRecord`, `loadInput`, `parseArgs`, `prepareOut`, `refuse` and `DriverRefusal`.
   - K20: W2-6's plan reads the driver's `FLAG_SPECS` only at `'allow-code-change'`, so the twelve flags this task adds red no W2-6 pin (the Q29 table); this task adds no `DRIVER_REASONS` word and no `HANDLERS` key.
@@ -4483,6 +5214,8 @@ No other case of any task is edited. No W2-5b1 case moves: `preflightFiles` and 
     - The module-private `refuseSpawnAdmission({home, accountId, limits, expected, allowCodeChange = false})` and `preflightSpawn({launch, home, out, lang, gate, expected, allowCodeChange = false}): Promise<{version, stamps}>`.
     - The module-private `armJob(ctx, q, arm, attempt, stdin)`, `armAttemptsOf(ctx, q, arm): {attempts: Array<{name, class, …}>, state, next}`, `answeredAttempt(a)`, `questionArmsOf(ctx, q): {q, arms, state, next}`, `reportArmsStop(ctx, questions, e)`, `armBatchDir(section)`, `ARM_BATCH_FILE_RE`, `armSectionOk(who, section)`.
     - `ARM_BATCH_KIND = 'ccrc-history-w2-arm-batch'`, and the manifest `{kind, v: 1, section, record_sha256, store_id, batch, claude_code_version, stamps, preflight_ms, runs: [{name, qid, arm, attempt, stdin_sha256}]}`, written after each batch's preflight and before its first spawn. A run's version is the last manifest that names it.
+  - **K26, K28:** Task 3 calls no agreement of its own: the moved pair reaches `armBatchPreflight`'s `maskingAgreementOf(snapshots, 'arms', …)`, the call Task 1's K28 factoring makes of W2-5b1's inline loop (W2-5b1's final head has no `maskingAgreementOf`; Step 0 counts Task 1's call), and the quiz forms reach Task 1's `step0bCardOf` and Task 2's `fidelityBoundariesOf`; it adds no pair reader, snapshot store or refresh.
+  - D-6482's existing `armBatchPreflight` only invokes its sibling-SHA exclusion for a pending arm beside an answered sibling at the same question move. Task 3 must preserve this condition while submitting both arms of a moved question as fresh `m<i>.a1` pending work (K27; W2-5b1's build departure; re-anchor at W2-5b1's merged code).
     - `expectedForNode(record, storeId): {expected: {claude_code_version, release_stamp, wrapper_sha256, code_shas}, from}` (edited, (f)).
     - `armsCommand(flags, driverEnv, deps)`, whose ctx carries `section`, `out`, `expected` and `stamps`.
   - **Task 4 test fixtures** (module scope; W2-5b1 Task 4's w5b4 block; re-anchor at W2-5b1's merged head):
@@ -4491,8 +5224,8 @@ No other case of any task is edited. No W2-5b1 case moves: `preflightFiles` and 
     - Imported bindings: `w5b4Drv`, `w5b4Gate`, `w5b4Lib`, `w5b4MkTmp`.
     - Fixture builders: `w5b4Home`, `w5b4Quiz`, `w5b4Draft`, `w5b4Entry`, `w5b4Marker`, `w5b4Save`, `w5b4SaveText`, `w5b4Inp`, `w5b4Out`, `w5b4Move`, `w5b4Hex`, `w5b4Gen`, `w5b4Shas`.
     - Runners and readers: `w5b4Arms`, `w5b4Act`, `w5b4Stream`, `w5b4Limits`, `w5b4LimitsRow`, `w5b4Version`, `w5b4Runs`, `w5b4Json`, `w5b4Manifests`, `w5b4Answer`, `w5b4Summary`, `w5b4Names`.
-    - Module-level helpers used beside them: `stubLog`, `STUB_STREAM`, `T5_STREAM`, `refusalLine`.
-- Consumes (W2-5b2 Task 1, by its names, with the seams above): `STEP0B_SECTIONS`, `STEP0B_KIND`, `step0bCommand(flags, driverEnv, deps)` (registered as `step0b`), `step0bRunName`, `step0bRel`, `refusePilotSourceOut(out, who)`, the result's `section`, `store_id`, `settings_mode`, `batches[].claude_code_version`, `passed`, `failed` and `unmeasured`, and the word `pilot-failed`. Test side: `B2T1_STUB`, `B2T1_FAKE`, `b2t1Home`, `b2t1PlantAll`, `b2t1Put`, `b2t1Run`, `b2t1PrintRuns`.
+    - Module-level helpers used beside them: `stubLog`, `STUB_STREAM`, `T5_STREAM`, `refusalLine`, and W2-5b1's `fwLearn` and `b1t2Lib` (the K26 agreement cases' store writer and lib handle).
+- Consumes (W2-5b2 Task 1, by its names, with the seams above): `STEP0B_SECTIONS`, `STEP0B_KIND`, `step0bCommand(flags, driverEnv, deps)` (registered as `step0b`), `step0bRunName`, `step0bRel`, `refusePilotSourceOut(out, who)`, the result's `section`, `store_id`, `settings_mode`, `batches[].claude_code_version`, `passed`, `failed` and `unmeasured`, and the word `pilot-failed`. Test side: `B2T1_STUB`, `B2T1_FAKE`, `B2T1_LEARNED_CARD`, `b2t1Home`, `b2t1PlantAll` (its card argument), `b2t1IndexPayloads`, `b2t1Put`, `b2t1Run`, `b2t1PrintRuns`.
 - Consumes (W2-5b2 Task 2, by its names, with the seams above): `FIDELITY_SECTIONS`, `PILOT_RESULT_SECTIONS`, `FIDELITY_KIND`, `FIDELITY_FILE`, `fidelityCommand(flags, driverEnv, deps)` (registered as `fidelity`), `pilotResultCommand(flags, env)` (registered as `pilot-result`), `fidelityBoundariesOf`, `fidelityRunName(boundaryUuid, run)`, `fidelityPassOf`, `decimalOf`, `pilotFailuresOf`, `step0bOf`, `boundaryEntryIdOf`, `fidelityOriginalOf` and W2-5a's `fidelityStdins` (`fidelityCommand`'s default deps). Test side: `B2T2_ORIGINAL`, `b2t2Box`, `b2t2Call`, `b2t2Flags`, `B2T2_ENV`.
 - Produces (`deploy/history-replay.mjs`):
   - `export const AMEND_FLAGS = Object.freeze(['node-label', 'claude-code-version', 'repilot', 'repilot-sha256', 'surface', 'ruling', 'release-tag', 'act', 'act-ms'])`: the detail flags the `open --amend` form takes, decided per kind by `AMEND_DETAILS`.
@@ -4518,7 +5251,7 @@ No other case of any task is edited. No W2-5b1 case moves: `preflightFiles` and 
   - `expectedForNode`'s `expected` gains `exception_stamp: {release_tag, from}` only when this node has a freeze exception with a `release_tag`; `preflightFiles` reads it (K6).
   - The forms. In `SUBCOMMAND_FLAGS`: `'step0b --section quiz'` and `'fidelity --section quiz'` (required `section`, `out`, `record`, `record-sha256`, `part1`, `part1-sha256`, `frozen`, `frozen-sha256`; optional `supersedes`, `supersedes-sha256`); `'pilot-result --section quiz'` (the same, plus required `step0b`, `step0b-sha256`, `fidelity`, `fidelity-sha256`); `'open --amend'` (required `amend`, `kind`, `record`, `record-sha256`, `part1`, `part1-sha256`, `frozen` and `frozen-sha256`; optional `supersedes`, `supersedes-sha256` and `AMEND_FLAGS`). In `FLAG_SPECS`: `amend: 'bool'`, `kind`, `'claude-code-version'`, `repilot`, `'repilot-sha256'`, `surface`, `ruling`, `'release-tag'`, `act`, `fidelity`, `'fidelity-sha256'` (each `'string'`) and `'act-ms': 'int'`. `openCommand`'s modes are `--draft`, `--finalize`, `--template` and `--amend`. `STEP0B_SECTIONS`, `FIDELITY_SECTIONS` and `PILOT_RESULT_SECTIONS` each end in `'quiz'`.
   - Files under the re-pilot's `--out`: `quiz/step0b/<settings mode>.json` and its runs (Task 1's, section `quiz`); `quiz/repilot-version.json`, `{kind: REPILOT_VERSION_KIND, v: 1, record_sha256, store_id, claude_code_version}`; `quiz/fidelity.json`, `{kind: FIDELITY_KIND, v: 1, section: 'quiz', record_sha256, frozen_sha256, store_id, settings_mode, model, claude_code_version, tolerance, n_fidelity, boundaries, budget, spend}`, and its runs `quiz/fidelity/<uuid>/<run>`; `quiz/repilot-result.json`.
-  - Module-private: `AMEND_TEXT_FLAGS`, `REPILOT_RESULT_FIELDS`, `NO_ABSENT`, `openAmend(flags, driverEnv, deps)`, `armStatesOf(ctx, questions)`, `questionMoveOf(ctx, q): {move, arms}`, `repilotFidelityError(o, recordSha256, storeId)`, `readRepilotPin(out, recordSha256, storeId)`, `refuseRepilotDone(out, who)` and `repilotExpectedOf(o)`. The arms ctx gains `moves` (`nodeMovesOf`'s answer for this node) and `runVersions`. `questionArmsOf` answers `{q, move, arms, state, next}`, and the planned job carries `s.move`.
+  - Module-private: `AMEND_TEXT_FLAGS`, `REPILOT_RESULT_FIELDS`, `NO_ABSENT`, `openAmend(flags, driverEnv, deps)`, `armStatesOf(ctx, questions)`, `questionMoveOf(ctx, q): {move, arms}`, `repilotFidelityError(o, recordSha256, storeId)`, `readRepilotPin(out, recordSha256, storeId)`, `refuseRepilotDone(out, who)` and `repilotExpectedOf(o)`. The arms ctx gains `moves` (`nodeMovesOf`'s answer for this node) and `runVersions`. `questionArmsOf` answers `{q, move, arms, state, next}`, and the planned job carries `s.move`. For a changed move it gives one state with both fresh pending arms, not an old answered sibling plus one owed arm. Its one batch preflight, `armBatchPreflight`, agrees both new-version payloads over every retained reading (K26, K28, site `arms`) before either persists or spawns; the unchanged D-6482 sibling-SHA check remains for ordinary owed arms only (K27; W2-5b1's build departure; re-anchor at W2-5b1's merged code).
 - Produces (K4): `readArmManifests` and `runVersionsOf`, exported, so any later reader of the manifests goes through them and never re-spells them. Task 5's report reads no manifest (its Interfaces say why), so the arm engine is the one version check.
 - Produces for Task 6 (README and the PR body): README's sentences on act 21: the re-pilot's three forms on a fresh `--out` (one re-pilot per `--out`), the re-pilot result and its sha passed to `open --amend --kind version-move --repilot`, the posted record sha, and `arms` re-running both arms of a question half-done on another version under `<arm>.m<i>.a<n>`; and a freeze exception's `--release-tag` with the window's `--allow-code-change`. The PR body drops W2-5b1's residual "a resume after a version-move amendment spawns the missing arm only", and lists this task's two in-place edits under "In-place edits of earlier cases".
 
@@ -4530,9 +5263,9 @@ No other case of any task is edited. No W2-5b1 case moves: `preflightFiles` and 
 | Gate, about :2220-2226 at 92dac5764: `node_label_ref` is a nullable string. Q13 requires it for `version-move` | W2-5b1 Task 1's `versionMoveChecks` refuses a version move whose label names no node; another kind is not ranged | `version-move` requires `--node-label`. The other two kinds take it optionally (`null` without it), checked against the record's labels when given; a freeze exception's `--release-tag` requires it (K6) |
 | Q12: the re-pilot is step 0b on a listed quiz family plus fidelity | Task 1's `step0bCommand` compares every batch with W2-D56's expected version, which a moved version fails (`claude-version-moved`); W2-4's `finishedOutcome` reads a recorded run back without its version | `repilotExpectedOf`: the version measured once per `--out`, pinned, and every batch compared with the pin; one re-pilot per `--out` |
 | Q12: "fidelity in box mode" | Task 2's `fidelity` reads pilot-source's fidelity list, which has no quiz boundary | `repilotBoundariesOf`: this node's first `n_fidelity` distinct frozen quiz boundaries in qid order (K1) |
-| scope.md B Task 8: "half-done questions re-run both arms on the new version (from Task 4's manifests)" | W2-5b1 Task 4's `armRunName` names attempts 1 and 2 only (`<arm>.a<n>`). W2-4's `RUN_NAME_RE` (about :1128 at 92dac5764) admits at most four segments, and `quiz/arms/<qid>/<arm>.a<n>` already has four | The move goes inside the last segment, `<arm>.m<i>.a<n>`. With no move, every name is W2-5b1's |
+| scope.md B Task 8: "half-done questions re-run both arms on the new version (from Task 4's manifests)" | W2-5b1 Task 4's `armRunName` names attempts 1 and 2 only (`<arm>.a<n>`). W2-4's `RUN_NAME_RE` (about :1203 at 0de4cc990) admits at most four segments, and `quiz/arms/<qid>/<arm>.a<n>` already has four | The move goes inside the last segment, `<arm>.m<i>.a<n>`. With no move, every name is W2-5b1's |
 | W2-D7: "Before the next arm batch, the answerability re-check (W2-D78) must then pass" | W2-5b1 Task 4's `armBatchPreflight` re-checks every question of every batch (W2-D78 (iii)) before its `--version` spawn | No new mechanism. The rule is pinned on a record `open --amend` amended |
-| W2-D6: after window start, an exception's outputs are "stamped `code-changed`" | `preflightFiles` (about :2077 at 92dac5764) refuses `tree-moved` on a moved stamp with no stamp option, and Q13's freeze-exception detail names no release | K6: the detail carries `release_tag?`; `expectedForNode` hands this node's newest one to `preflightFiles`, which admits it under `--allow-code-change` and stamps `code-changed` |
+| W2-D6: after window start, an exception's outputs are "stamped `code-changed`" | `preflightFiles` (about :2161 at 0de4cc990) refuses `tree-moved` on a moved stamp with no stamp option, and Q13's freeze-exception detail names no release | K6: the detail carries `release_tag?`; `expectedForNode` hands this node's newest one to `preflightFiles`, which admits it under `--allow-code-change` and stamps `code-changed` |
 | W2-5a Task 7: "open wants exactly one of --draft, --finalize and --template" | A fourth mode | The refusal's sentence names four modes. W2-5a's case is re-pinned in place (two lines, K5) |
 
 **Choices:**
@@ -4543,13 +5276,14 @@ No other case of any task is edited. No W2-5b1 case moves: `preflightFiles` and 
 - **One re-pilot per `--out`, one version per re-pilot.** The first re-pilot act to spawn (step 0b, or fidelity if it runs first) measures `--version` after the wrapper's sha and the gate, as `preflightSpawn` orders them, and pins it. Every batch of every re-pilot act on that `--out` then runs `preflightSpawn` against the pin. A version that moves mid-re-pilot stops `claude-version-moved`, and the operator starts again on a fresh `--out`. A pin of another record or node, or a finished re-pilot's result, refuses `out-refused`. The pin is what makes W2-D53's read-back safe here: a recorded run is never relabelled with a later version.
 - **The re-pilot's settings mode is part 2's.** Its arms will run under part 2's `pilot_result.settings_mode` (Q26), so the re-pilot measures that mode: the quiz forms take no `--settings-mode`. A step 0b or fidelity output of another mode passed to `pilot-result --section quiz` is a recorded failure (K13's settings-mode mismatch).
 - **The re-pilot's failures are Task 2's.** `pilot-result --section quiz` lists them through `pilotFailuresOf` with no absent rate: each fidelity boundary outside the tolerance or unmeasured, fewer boundaries than `n_fidelity` (K13), each step 0b check failed or unmeasured, and each settings-mode mismatch. Its files' versions must be the pin's (`input-invalid` `repilot version-split`): a step 0b or fidelity output from another re-pilot is never mixed in.
+- **Every masked re-pilot input is agreed over every retained reading (K26, K28).** `step0b --section quiz` reaches Task 1's `step0bCardOf` before `--out` and before every arm batch, and `fidelity --section quiz` reaches Task 2's `fidelityBoundariesOf` per measurable boundary; each builds its spawned text under every reading `maskingSnapshotsOf` admits and refuses `masking-snapshots-disagree <site>` before any persistence or spawn when they disagree. Task 3 writes no wrapper, second pair reader or local snapshot mechanism.
 - **The version move's clock.** The amendment's `at_ms` and the record's `finalized_ms` are the same `deps.now()`. A clock before the record it supersedes is the validator's `finalized_ms chain-mismatch`. A forced act's own `at_ms` (`--act-ms`) is the act's time, and an act after now is refused.
 - **The freeze exception's release (K6).** "That node's newest freeze-exception `release_tag`" is read as the `release_tag` of the newest freeze exception naming this node that carries one: an exception about a surface with no install leaves the installed release as it was. The admission rides on `allowCodeChange`, which `loadFinalRecord` grants at window start or later only (Q23), so before window start a moved stamp stays `tree-moved` (W2-D6: the remedy there is a re-pilot). Every spawning subcommand that reads `expectedForNode` gets it: `arms` and `judge`, whose quiz forms take the flag. The pilot forms take no flag, so a re-pilot on a node whose release moved refuses `tree-moved`, naming the remedy it cannot take (residual below).
-- **The re-run is read from disk, every batch.** `armStatesOf` reads the manifests once per pass when this node has a move (the batch loop's top and `reportArmsStop`), so a pass after a batch sees that batch's manifest. A question's move is the newest of this node's moves under which any arm has a recorded first attempt (an `lstat` of its `run.json`, W2-4's record of a spawned run), or null.
+- **The re-run is read from disk, every batch.** `armStatesOf` reads the manifests once per pass when this node has a move (the batch loop's top and `reportArmsStop`), so a pass after a batch sees that batch's manifest. A question's move is the newest of this node's moves under which any arm has a recorded first attempt (an `lstat` of its `run.json`, W2-4's record of a spawned run), or null. The changed-move branch reads only its fresh move attempts and returns both arms owing attempt 1; it does not carry an old answered sibling into the D-6482 compare.
   - A question half-done there on another version moves to the newest move.
   - A settled question never moves, so its answer records, written once, stay as they were.
   - With no move for this node (every pilot run, and every quiz run before an amendment) nothing is read and nothing changes: W2-5b1's behaviour, byte for byte.
-- **"Only one arm done" is read against the expected version.** A half-done question whose answered arm ran under the version the preflight now expects (it was spawned after the move) is not re-run. Its missing arm completes on the same version. A question split at the newest move cannot come from runs the preflight admitted, so it refuses `out-refused` instead of mixing versions. Its CONTROL is a move naming the version the answered arm ran under.
+- **"Only one arm done" is read against the expected version.** A half-done question whose answered arm ran under the version the preflight now expects (it was spawned after the move) is not re-run. Its missing arm completes on the same version. A question split at the newest move cannot come from runs the preflight admitted, so it refuses `out-refused` instead of mixing versions. Its CONTROL is a move naming the version the answered arm ran under. The K27 integration case changes the rebuilt payload between versions and nevertheless asserts both fresh arm run logs, no `payload_changed` summary field and zero run-failed questions; its E0 mutant carries old arms to prove this is not an accidental green D-6482 case.
 - **Superseded runs stay.** A re-run question's old runs stay under `--out` with their stream files and their charge in the ledger. Its answer records name only the new move's attempts and run (K7).
 
 **Residuals, named:**
@@ -4571,7 +5305,7 @@ git merge-base --is-ancestor 92dac5764 HEAD && echo base-ok
 node --no-warnings --input-type=module -e "const d = await import('./deploy/history-replay.mjs'); console.log(['armRunName','expectedForNode','armsCommand','loadFinalRecord','loadArmRun','armNodeOf','refuseOutOfRangeValues','openCommand','parseArgs','loadInput','readArmAnswers','preflightFiles','measureClaudeVersion','wrapperSha','step0bCommand','step0bRunName','fidelityCommand','pilotResultCommand','fidelityRunName','fidelityPassOf','decimalOf','pilotFailuresOf','boundaryEntryIdOf','fidelityOriginalOf'].map((n) => n + ':' + typeof d[n]).join(' ')); console.log(d.VERSION_MOVE_KIND, d.ARM_BATCH_KIND, d.FLAG_SPECS['allow-code-change'], ['amend','kind','claude-code-version','repilot','repilot-sha256','surface','ruling','release-tag','act','act-ms','fidelity','fidelity-sha256'].filter((k) => k in d.FLAG_SPECS).join(',') || 'no-task-3-flag', Object.keys(d.FLAG_SPECS).at(-1)); console.log(JSON.stringify([d.STEP0B_SECTIONS, d.FIDELITY_SECTIONS, d.PILOT_RESULT_SECTIONS, d.STEP0B_KIND, d.FIDELITY_KIND, d.FIDELITY_FILE, d.HANDLERS.has('step0b'), d.HANDLERS.has('fidelity'), d.HANDLERS.has('pilot-result')])); console.log(d.armRunName('quiz', '0123456789abcdef', 'control', 1))"
 grep -cE '^function (armJob\(ctx, q, arm, attempt, stdin\)|armAttemptsOf\(ctx, q, arm\)|questionArmsOf\(ctx, q\)|reportArmsStop\(ctx, questions, e\)) \{$' deploy/history-replay.mjs
 grep -cE '^const (answeredAttempt = \(a\) => |armBatchDir = \(section\) => |ARM_BATCH_FILE_RE = )' deploy/history-replay.mjs
-grep -cE '^(async )?function (refuseSpawnAdmission|preflightSpawn|refuseRangeRows|preflightVersion|refuseIfStopping|step0bOf|refusePilotSourceOut|fidelityBoundariesOf)\(' deploy/history-replay.mjs
+grep -cE '^(async )?function (refuseSpawnAdmission|preflightSpawn|refuseRangeRows|preflightVersion|refuseIfStopping|step0bOf|refusePilotSourceOut|fidelityBoundariesOf|maskingAgreementOf)\(' deploy/history-replay.mjs
 grep -cF "    if (a.kind !== VERSION_MOVE_KIND || a.node_label_ref !== node.label) return;" deploy/history-replay.mjs
 grep -cF "    code_shas: record.gate_code.files }, from };" deploy/history-replay.mjs
 grep -cF "          states = questions.map((q) => questionArmsOf(ctx, q));" deploy/history-replay.mjs
@@ -4593,12 +5327,15 @@ grep -cF "  return modes[0] === 'draft' ? openDraft(flags, driverEnv, deps) : op
 grep -cF "const NODE_INPUTS = Object.freeze(['census', 'census-sha256', 'verify', 'verify-sha256']);" deploy/history-replay.mjs
 grep -c "^import { ANSWER_PROTOCOL, " deploy/history-replay.mjs
 grep -c "AMENDMENT_KINDS" deploy/history-replay.mjs
+grep -cF "while the stopping flag is set. Eight call sites: each runBatch lane iteration" deploy/history-replay.mjs
+grep -cF " *  returns, and an arms batch after every pending question was excluded. So no spawn starts after the handler has run" deploy/history-replay.mjs
+grep -cF "  const baseline = await maskingAgreementOf(snapshots, 'arms', async (idx) => {" deploy/history-replay.mjs
 for n in AMEND_FLAGS AMEND_DETAILS AMEND_TEXT_FLAGS FREEZE_EXCEPTION_KIND REPILOT_RESULT_KIND REPILOT_RESULT_REL REPILOT_VERSION_KIND REPILOT_VERSION_REL REPILOT_FIDELITY_REL REPILOT_RESULT_FIELDS NO_ABSENT amendmentOf amendedFinal nodeMovesOf nodeExceptionOf runVersionsOf versionSplitOf moveAfterSplit repilotBoundariesOf repilotResultOf repilotResultError repilotFidelityError readRepilotPin refuseRepilotDone repilotExpectedOf readArmManifests armStatesOf questionMoveOf fidelityRepilotCommand repilotResultCommand openAmend; do printf '%s:%s ' "$n" "$(grep -cE "^(export )?(async )?(function|const) $n\b" deploy/history-replay.mjs)"; done; echo
 grep -cF "r7describe('W2-5a Task 7: the record subcommands', () => {" server/test/history-replay.test.ts
 grep -cF "// ── W2-5a fix wave (the whole-branch review's items A to F): fw-prefixed helpers, one describe per item" server/test/history-replay.test.ts
 grep -cF "open wants exactly one of --draft, --finalize and --template" server/test/history-replay.test.ts
 grep -cE "^(function w5b4(Home|Quiz|Draft|Entry|Marker|Save|SaveText|Move|Act|Stream|Limits)\(|async function w5b4Arms\(|const w5b4(Inp|Out|Version|Runs|Json|Manifests|Answer|Summary|Names|Hex|Gen|Shas|LimitsRow) = |const (W5B4_HEAD|W5B4_ARM_STUB|W5B4_FAKE)[: =])" server/test/history-replay.test.ts
-grep -cE "^(const (B2T1_STUB|B2T1_FAKE|B2T2_ORIGINAL|b2t1PrintRuns|b2t2Flags|B2T2_ENV)[: =]|(async )?function (b2t1Home|b2t1PlantAll|b2t1Put|b2t1Run|b2t2Box|b2t2Call)\()" server/test/history-replay.test.ts
+grep -cE "^(const (B2T1_STUB|B2T1_FAKE|B2T1_LEARNED_CARD|B2T2_ORIGINAL|b2t1PrintRuns|b2t2Flags|B2T2_ENV)[: =]|(async )?function (b2t1Home|b2t1PlantAll|b2t1IndexPayloads|b2t1Put|b2t1Run|b2t2Box|b2t2Call)\(|function fwLearn\(|const b1t2Lib = )" server/test/history-replay.test.ts
 grep -c "W2-5b2 Task 3" server/test/history-replay.test.ts
 ```
 
@@ -4610,18 +5347,19 @@ Expected (R8: every name is its owner's; a gap stops the task, never defined her
 - `quiz/arms/0123456789abcdef/control.a1`.
 - `4`: W2-5b1 Task 4's four functions, with these signatures.
 - `3`: its three helpers.
-- `8`: W2-5b1 Task 4's `refuseSpawnAdmission` and `preflightSpawn`, its Task 1's `refuseRangeRows`, W2-4's `preflightVersion` and `refuseIfStopping`, Task 2's `step0bOf` and `fidelityBoundariesOf`, Task 1's `refusePilotSourceOut` (K4).
+- `9`: W2-5b1 Task 4's `refuseSpawnAdmission` and `preflightSpawn`, its Task 1's `refuseRangeRows`, W2-4's `preflightVersion` and `refuseIfStopping`, Task 2's `step0bOf` and `fidelityBoundariesOf`, Task 1's `refusePilotSourceOut` (K4) and `maskingAgreementOf` (K28).
 - `1` for each of the next eight anchors (W2-5b1 Task 4's six lines and W2-4's two `preflightFiles` lines).
 - `1` for each of the three section lists and the two `step0bCommand` lines (Tasks 1 and 2), and `2` or more for the budget-field spelling (`armsCommand`'s and Task 1's).
 - Three lines from the `grep -n`: Task 1's refusal built from `STEP0B_SECTIONS` and Task 2's two section checks.
 - `1` for each of the three `openCommand` lines and for `NODE_INPUTS`.
 - `1`: the gate's statement opens with `ANSWER_PROTOCOL`. If a name sorts before `AMENDMENT_KINDS` there, add it in code-unit order and say so in the commit's task note.
 - `0`: the driver does not import `AMENDMENT_KINDS` yet.
+- `1`, `1` and `1`: `refuseIfStopping`'s JSDoc as W2-5b1's fix round left it, its "Eight call sites" line and its fourth line (about :317 and :320 at 0de4cc990), which Step 3 (k) extends; and Task 1's K28 call in `armBatchPreflight`, `maskingAgreementOf(snapshots, 'arms', …)`, which the moved pair reaches. W2-5b1's final head declares no `maskingAgreementOf` (measured: grep count 0); it exists only after Task 1's K28 factoring, so a `0` here is a gap in Task 1's commit (R8).
 - `0` for every name in the loop. A collision is reported, never renamed here.
 - `1`, then `1`: the two test anchors.
 - `2`: W2-5a's two expected lines.
 - `28`: W2-5b1 Task 4's fixtures, at module scope. A missing one is a gap in W2-5b1's merged head: stop and report it.
-- `12`: Task 1's and Task 2's fixtures this task reuses.
+- `16`: Task 1's and Task 2's fixtures this task reuses (K26's `B2T1_LEARNED_CARD` and `b2t1IndexPayloads` among them), and W2-5b1's `fwLearn` and `b1t2Lib` (the K26 agreement cases' store writer and lib handle).
 - `0`: no W2-5b2 Task 3 title yet.
 
 Any other count is a drift: re-anchor by content and record the measured anchor in the commit's task note.
@@ -4924,11 +5662,11 @@ const b23Exc = (label: string | null, tag?: string): W5b4R => {
 };
 /** w5b4Quiz's shape with five questions on node A's family, so node A has n_fidelity (5) distinct boundaries for the
  *  re-pilot's fidelity (K1), and one on node B's. Part 2 through the driver's own buildFinal; headless-on lists A's family. */
-function b23Quiz(home: string): W5b4R {
+function b23Quiz(home: string, over: W5b4R = {}): W5b4R {
   const famA: W5b4Ref = { store_id: W5B4_STORE_A, ccrc_id: 'quiz-a', generation: w5b4Gen(410) };
   const famB: W5b4Ref = { store_id: W5B4_STORE_B, ccrc_id: 'quiz-b', generation: w5b4Gen(420) };
   const made = [21, 22, 23, 24, 25].map((n) => w5b4Entry(famA, n)).concat([w5b4Entry(famB, 26)]);
-  const draft = w5b4Draft(home, { stores: [W5B4_STORE_A, W5B4_STORE_B] });
+  const draft = w5b4Draft(home, { stores: [W5B4_STORE_A, W5B4_STORE_B], ...over });
   const d = w5b4Save(draft, 'part1.json');
   const fz = w5b4SaveText(D4.frozenListText('quiz', W5B4_HEAD, made) as string, 'frozen.json');
   const final = D4.buildFinal({ draft, draftSha256: d.sha,
@@ -4936,7 +5674,13 @@ function b23Quiz(home: string): W5b4R {
     assignment: { list: [], sha256: w5b4Gate.assignmentSha256([]) },
     power: { headline: null, at_power_80: null, at_rho_0: null, rho_hat: null, n_f: {}, coverage: {}, pre_window_uptake: {} }, powerSha256: w5b4Hex('power'),
     frozen: { sha256: fz.sha, list: fz.value, families: D4.familiesOf(fz.value.entries) },
-    pilotResult: { fidelity: [], usage_extrapolation: {}, step0b_sha256: w5b4Hex('step0b'), settings_mode: 'restricted', absent_rate: { num: 0, den: 10 } },
+    // Task 2's tightened reader requires the pilot producer's full file contract even though this fixture only drives part 2.
+    pilotResult: { kind: D4.PILOT_RESULT_KIND, v: 1, record_sha256: d.sha, fidelity: [],
+      usage_extrapolation: { v: 1, formula: 'ceil(margin.num x n_questions x pilot_spend.total / (margin.den x pilot_questions))', margin: { num: 5, den: 4 }, pilot_questions: 5,
+        pilot_spend: { arms: 1, judge: 1, total: 2 }, at_target: { n_questions: 5, spend_budget: 3 },
+        uptake: { reading: 'is-error', quiz_uptake: 'measured', control_calls: 0, control_errored: 1 }, spend_readings: {} },
+      step0b_sha256: w5b4Hex('step0b'), settings_mode: 'restricted',
+      absent_rate: { arms: {}, max: { num: 5, den: 100 }, over: [], unmeasured: [], pass: true }, failures: [] },
     spendBudget: 1_000_000, window: { start: W5B4_T0 + W5B4_DAY, end: W5B4_T0 + 15 * W5B4_DAY }, decision: 'keep', nowMs: W5B4_T0 }) as W5b4R;
   const f = w5b4Save(final, 'part2.json');
   w5b4Marker(home, W5B4_STORE_A, [famA]);
@@ -4957,6 +5701,22 @@ const b23FidDeps = (heads: W5b4R[]): W5b4R => ({
     stdins: { payload: `b23-${id}-payload\nthe payload\n`, empty: `b23-${id}-empty\n`, 'user-text': `b23-${id}-user-text\n` } }),
   now: W5B4_FAKE.now,
 });
+/** K26, K28: b23FidDeps whose stdins append `value` masked through the pair index of the reading each build runs under,
+ *  recording [entry, masked] per build in `seen`; with `learn`, the store learns `value` (W2-5b1's fwLearn) right after
+ *  boundary 1's first build. */
+const b23IndexFreshDeps = (heads: W5b4R[], home: string, learn: boolean, value: string, seen: Array<[number, boolean]>): W5b4R => {
+  const deps = b23FidDeps(heads);
+  const base = deps.stdins as (rs: W5b4R, id: number) => W5b4R;
+  let learned = false;
+  deps.stdins = (rs: W5b4R, id: number): W5b4R => {
+    const made = base(rs, id) as W5b4R;
+    const masked = b1t2Lib.redactField(value, rs.idx) as string;
+    seen.push([id, !masked.includes(value)]);
+    if (learn && id === 1 && !learned) { fwLearn(home, value); learned = true; }
+    return { ...made, stdins: Object.fromEntries(Object.entries(made.stdins).map(([key, text]) => [key, `${String(text)}${masked}\n`])) };
+  };
+  return deps;
+};
 /** Plant the re-pilot's fidelity streams for `n` boundaries: B2T2_ORIGINAL's arithmetic nets payload 25000 to 16000 against
  *  18200 (within ±25%); `payload(id)` replaces a boundary's payload (40000 nets 31000: outside). */
 function b23PlantFidelity(home: string, n: number, payload: (id: number) => number = () => 25000): void {
@@ -4966,21 +5726,31 @@ function b23PlantFidelity(home: string, n: number, payload: (id: number) => numb
     b2t1Put(home, 'restricted', `b23-${id}-user-text\n`, '.jsonl', b2t2Box(9200));
   }
 }
+/** K26, K28: the re-pilot's fidelity streams for `n` boundaries whose stdins end in `value` on a line of its own, as
+ *  b23IndexFreshDeps builds them when no learned pair masks it: every boundary passes, as b23PlantFidelity's do. */
+function b23PlantFidelityWith(home: string, n: number, value: string): void {
+  for (let id = 1; id <= n; id += 1) {
+    b2t1Put(home, 'restricted', `b23-${id}-payload\nthe payload\n${value}\n`, '.jsonl', b2t2Box(25000));
+    b2t1Put(home, 'restricted', `b23-${id}-empty\n${value}\n`, '.jsonl', b2t2Box(9000));
+    b2t1Put(home, 'restricted', `b23-${id}-user-text\n${value}\n`, '.jsonl', b2t2Box(9200));
+  }
+}
 /** A file under a re-pilot --out, saved as the operator passes it: its path, its sha and its value. */
 function b23Saved(p: string): W5b4Saved {
   const text = readFileSync(p, 'utf8');
   return { path: p, sha: w5b4Lib.sha256Hex(text) as string, value: JSON.parse(text) as W5b4R };
 }
-const b23Step0b = (fx: W5b4R, rout: string): Promise<W5b4Result> => b2t1Run(fx.home as string, ['step0b', '--section', 'quiz', '--out', rout, ...fx.rec()]);
-const b23Fidelity = (fx: W5b4R, rout: string): Promise<W5b4Result> => b2t2Call(() => D4.fidelityCommand(b2t2Flags(['fidelity', '--section', 'quiz', '--out', rout,
-  ...fx.rec()]), B2T2_ENV(fx.home as string), b23FidDeps(fx.heads as W5b4R[])));
+const b23Step0b = (fx: W5b4R, rout: string, deps: W5b4R = {}, rec: W5b4Saved = fx.f): Promise<W5b4Result> => b2t1Run(fx.home as string,
+  ['step0b', '--section', 'quiz', '--out', rout, ...fx.rec(rec)], deps);
+const b23Fidelity = (fx: W5b4R, rout: string, deps: W5b4R = b23FidDeps(fx.heads as W5b4R[])): Promise<W5b4Result> => b2t2Call(() => D4.fidelityCommand(b2t2Flags(['fidelity', '--section', 'quiz', '--out', rout,
+  ...fx.rec()]), B2T2_ENV(fx.home as string), deps));
 const b23Result = (fx: W5b4R, rout: string, s0: W5b4Saved, fid: W5b4Saved): Promise<W5b4Result> => b2t2Call(() => D4.repilotResultCommand(b2t2Flags(['pilot-result',
   '--section', 'quiz', '--out', rout, ...fx.rec(), ...w5b4Inp('step0b', s0), ...w5b4Inp('fidelity', fid)]), B2T2_ENV(fx.home as string), { now: W5B4_FAKE.now }));
 /** A step 0b node (B2T1_STUB as up-a) with b23Quiz's records, every step 0b stream planted for restricted and the
  *  re-pilot's fidelity streams planted. */
-function b23RepilotNode(payload?: (id: number) => number): W5b4R {
+function b23RepilotNode(payload?: (id: number) => number, over: W5b4R = {}): W5b4R {
   const home = b2t1Home();
-  const fx = { ...b23Quiz(home), home };
+  const fx = { ...b23Quiz(home, over), home };
   b2t1PlantAll(home, 'restricted');
   b23PlantFidelity(home, 5, payload);
   return fx;
@@ -5166,34 +5936,51 @@ b23Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 3: open --amend t
     b23Expect(w5b4Manifests(fx.out, 'quiz').map((m) => m.claude_code_version)).toEqual([w5b4Version(home)]);
   }, 180_000);
 
-  b23It('after a version move, both arms of the question with one arm done re-run on the new version under the move\'s names, from attempt 1; a settled question never re-runs; a second move moves a question half-done again (W2-D56, Q14, K7)', async () => {
+  b23It('after a version move, both arms of the question with one arm done re-run from one fresh preflight on the new version under the move\'s names, from attempt 1, with no old-sibling payload exclusion; a settled question never re-runs; a second move moves a question half-done again (W2-D56, Q14, K7, K27)', async () => {
     const home = w5b4Home();
     const fx = w5b4Quiz(home, { over: { limits: { concurrency: 1 } } });
     const [q1, q2, q3] = fx.mine as [W5b4R, W5b4R, W5b4R];
     b23Answers(home, fx.mine);
     b23HalfDone(home, q2, W5B4_TREATMENT, 1);   // run 1: q2's treatment fails, and the gate stops q3
     b23HalfDone(home, q3, W5B4_TREATMENT, 1);   // run 2: q3's treatment fails, and the gate stops its re-run
+    // This is a payload revision, independent of the version. A faulty re-run that retains q2's old answered sibling enters
+    // W2-5b1's D-6482 branch and excludes its owed arm; the correct new-move state has two fresh arms and runs both.
+    const payloadsFor = (tag: string) => (_rs: unknown, _id: number, _question: string, cut: W5b4R): W5b4R => ({ state: 'payloads',
+      plain: `fixture payload ${tag} ${cut.qid as string} ${W5B4_CONTROL}\n`, carded: `fixture payload ${tag} ${cut.qid as string} ${W5B4_TREATMENT}\n` });
     const v0 = w5b4Version(home);
-    const r1 = await w5b4Arms(home, fx.argv());
+    const initialStart = w5b4Runs(home).length;
+    const r1 = await w5b4Arms(home, fx.argv(), { payloads: payloadsFor('version-a') });
     b23Expect(r1.refusal?.word).toBe('limits-threshold');
+    const initialRuns = w5b4Runs(home).slice(initialStart);
     const q1Records = W5B4_ARMS.map((arm) => readFileSync(join(fx.out, 'quiz', 'answers', `${q1.qid as string}.${arm}.json`), 'utf8'));
     w5b4Limits(home, 10);
     b23SetVersion(home, 'fixture-version-b');
     const a1 = await b23Amend(fx, fx.f, null, b23Move('fixture-version-b', fx.f));
-    const r2 = await w5b4Arms(home, fx.argv(a1, w5b4Inp('supersedes', fx.f)));
+    const versionBStart = w5b4Runs(home).length;
+    const r2 = await w5b4Arms(home, fx.argv(a1, w5b4Inp('supersedes', fx.f)), { payloads: payloadsFor('version-b') });
     b23Expect(r2.refusal?.word, 'q3 is left half-done on version b').toBe('limits-threshold');
+    const versionBRuns = w5b4Runs(home).slice(versionBStart);
     w5b4Limits(home, 10);
     b23SetVersion(home, 'fixture-version-c');
     const a2 = await b23Amend(fx, a1, fx.f, b23Move('fixture-version-c', a1), B23_NOW + 1000);
-    const r3 = await w5b4Arms(home, fx.argv(a2, w5b4Inp('supersedes', a1)));
+    const versionCStart = w5b4Runs(home).length;
+    const r3 = await w5b4Arms(home, fx.argv(a2, w5b4Inp('supersedes', a1)), { payloads: payloadsFor('version-c') });
     b23Expect(r3.refusal).toBeNull();
+    const versionCRuns = w5b4Runs(home).slice(versionCStart);
     const ms = w5b4Manifests(fx.out, 'quiz');
     b23Expect(ms.map((m) => [m.claude_code_version, (m.runs as W5b4R[]).map((x) => x.name)])).toEqual([
       [v0, w5b4Names('quiz', fx.mine)],
       ['fixture-version-b', [b23Name(q2, W5B4_CONTROL, 0), b23Name(q2, W5B4_TREATMENT, 0), b23Name(q3, W5B4_CONTROL, null), b23Name(q3, W5B4_TREATMENT, null)]],
       ['fixture-version-c', [b23Name(q3, W5B4_CONTROL, 1), b23Name(q3, W5B4_TREATMENT, 1)]],
     ]);
-    b23Expect((ms[1]!.runs as W5b4R[])[0]!.stdin_sha256, 'the re-run carries the same payload').toBe((ms[0]!.runs as W5b4R[])[2]!.stdin_sha256);
+    const q2Moved = (ms[1]!.runs as W5b4R[]).filter((x) => [b23Name(q2, W5B4_CONTROL, 0), b23Name(q2, W5B4_TREATMENT, 0)].includes(x.name as string));
+    b23Expect(q2Moved.map((x) => x.name), 'K27: one fresh batch preflight planned both new-version arms').toEqual([b23Name(q2, W5B4_CONTROL, 0), b23Name(q2, W5B4_TREATMENT, 0)]);
+    b23Expect(q2Moved.map((x) => x.stdin_sha256), 'both payloads are pinned from that one fresh preflight').toHaveLength(2);
+    b23Expect((ms[1]!.runs as W5b4R[])[0]!.stdin_sha256, 'the new-move payload is rebuilt at its fresh preflight, not reused from the old attempt')
+      .not.toBe((ms[0]!.runs as W5b4R[])[2]!.stdin_sha256);
+    b23Expect(initialRuns.filter((x) => x.env.CCRC_RECALL_ASOF === q2.boundary_uuid).map((x) => x.env.CCRC_RECALL_ARM), 'initial slice: q2 starts with its one completed arm').toEqual([W5B4_CONTROL]);
+    b23Expect(versionBRuns.filter((x) => x.env.CCRC_RECALL_ASOF === q2.boundary_uuid).map((x) => x.env.CCRC_RECALL_ARM), 'version-b slice: both replacement arms spawn, never D-6482-excluded').toEqual([W5B4_CONTROL, W5B4_TREATMENT]);
+    b23Expect(versionCRuns.filter((x) => x.env.CCRC_RECALL_ASOF === q3.boundary_uuid).map((x) => x.env.CCRC_RECALL_ARM), 'version-c slice: both replacement arms spawn, never D-6482-excluded').toEqual([W5B4_CONTROL, W5B4_TREATMENT]);
     W5B4_ARMS.forEach((arm, i) => b23Expect(readFileSync(join(fx.out, 'quiz', 'answers', `${q1.qid as string}.${arm}.json`), 'utf8'),
       'q1 settled on the first version: never re-run, its records untouched').toBe(q1Records[i]));
     for (const arm of W5B4_ARMS) {
@@ -5203,8 +5990,9 @@ b23Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 3: open --amend t
       b23Expect(w5b4Answer(fx.out, 'quiz', q3, arm)).toMatchObject({ question_state: 'answered', run: b23Name(q3, arm, 1) });
     }
     b23Expect(existsSync(join(fx.out, `${b23Name(q2, W5B4_CONTROL, null)}.run.json`)), 'the superseded run stays under --out').toBe(true);
-    b23Expect(w5b4Runs(home), '4 + 4 + 2 spawns').toHaveLength(10);
+    // The full recording log is append-only. Its total is intentionally not asserted here: each move's own slice above is the K27 proof.
     b23Expect(w5b4Summary(fx.out, 'quiz')).toMatchObject({ stop: null, counts: { questions: 3, answered: 3, run_failed: 0, rerun_owed: 0, not_run: 0 } });
+    b23Expect(Object.hasOwn(w5b4Summary(fx.out, 'quiz'), 'payload_changed'), 'K27: no old-attempt sibling drift exclusion').toBe(false);
   }, 240_000);
 
   b23It('CONTROL: a move naming the version the answered arm ran under re-runs nothing; the half-done question completes its missing arm as attempt 2 (W2-D56, W2-D80)', async () => {
@@ -5341,6 +6129,63 @@ b23Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 3: the mid-window
     b23Expect(w5b4Summary(fx.out, 'quiz')).toMatchObject({ stop: null, counts: { questions: 5, answered: 5 } });
   }, 300_000);
 
+  // K26, K28 (D-6481 carried): the re-pilot's masked inputs agree over every retained reading of the pair index through the
+  // pilot's own seams, Task 1's step0bCardOf and Task 2's fidelityBoundariesOf, before they spawn or persist. A pair
+  // learned between two boundaries, or after the first quiz arm batch, makes the next admission hold two readings that
+  // disagree, and the act refuses rather than masking with either; each learned case has its own no-learning CONTROL.
+  const b23K28Fidelity = async (learn: boolean): Promise<{ r: W5b4Result; seen: Array<[number, boolean]>; home: string; rout: string; value: string }> => {
+    const fx = b23RepilotNode();
+    const home = fx.home as string;
+    const value = ['fixture', '-quiz-', 'fidelity-late'].join('');
+    b23PlantFidelityWith(home, 5, value);
+    const seen: Array<[number, boolean]> = [];
+    const rout = w5b4Out();
+    const r = await b23Fidelity(fx, rout, b23IndexFreshDeps(fx.heads as W5b4R[], home, learn, value, seen));
+    return { r, seen, home, rout, value };
+  };
+  const b23K28Step0b = async (learnAt: number | null): Promise<{ r: W5b4Result; seen: boolean[]; home: string; rout: string }> => {
+    const fx = b23RepilotNode(undefined, { over: { limits: { batch_max: 4 } } });
+    const home = fx.home as string;
+    b2t1PlantAll(home, 'restricted', {}, B2T1_LEARNED_CARD);
+    const seen: boolean[] = [];
+    const rout = w5b4Out();
+    const r = await b23Step0b(fx, rout, { payloads: b2t1IndexPayloads(home, learnAt, seen) });
+    return { r, seen, home, rout };
+  };
+  b23It('K28 quiz re-pilot fidelity: a pair learned while boundary 1 builds makes boundary 2\'s readings disagree, refused input-invalid masking-snapshots-disagree fidelity before its runs spawn or quiz/fidelity.json is written (K26, D-6481 carried)', async () => {
+    const c = await b23K28Fidelity(true);
+    b23Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree fidelity' });
+    b23Expect(c.seen, 'boundary 1: one reading; boundary 2: the old reading, then the new one').toEqual([[1, false], [2, false], [2, true]]);
+    const boxes = b2t1PrintRuns(c.home).filter((e) => (e.stdin as string).startsWith('b23-'));
+    b23Expect(boxes.map((e) => (e.stdin as string).split('\n')[0]).sort(), 'only boundary 1 spawned').toEqual(['b23-1-empty', 'b23-1-payload', 'b23-1-user-text']);
+    for (const e of boxes) b23Expect(e.stdin as string, 'boundary 1 ran under its one, unmasked reading').toContain(c.value);
+    b23Expect(existsSync(join(c.rout, 'quiz', 'fidelity.json')), 'no fidelity output is written').toBe(false);
+  }, 300_000);
+  b23It('K28 quiz re-pilot fidelity CONTROL: with no pair learned each boundary holds one reading, all five measure inside the tolerance, and the value stays visible in every stdin (K26)', async () => {
+    const c = await b23K28Fidelity(false);
+    b23Expect(c.r.refusal, c.r.stderr).toBeNull();
+    b23Expect(c.seen).toEqual([1, 2, 3, 4, 5].map((id) => [id, false]));
+    const boxes = b2t1PrintRuns(c.home).filter((e) => (e.stdin as string).startsWith('b23-'));
+    b23Expect(boxes).toHaveLength(15);
+    for (const e of boxes) b23Expect(e.stdin as string).toContain(c.value);
+    b23Expect((w5b4Json(join(c.rout, 'quiz', 'fidelity.json')).boundaries as W5b4R[]).map((b) => [b.state, b.pass])).toEqual(Array(5).fill(['measured', true]));
+  }, 300_000);
+  b23It('K28 quiz re-pilot step 0b: a pair learned after the first quiz arm batch\'s card preflight lets that batch\'s four runs stand and refuses the second arm batch input-invalid masking-snapshots-disagree step0b before it spawns (K26, D-6481 carried)', async () => {
+    const c = await b23K28Step0b(2);
+    b23Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree step0b' });
+    b23Expect(c.seen, 'before --out and the first arm batch: one reading each; the second arm batch: old, then new').toEqual([false, false, false, true]);
+    const prints = b2t1PrintRuns(c.home);
+    b23Expect(prints, 'the box run and the first arm batch only').toHaveLength(5);
+    for (const e of prints.slice(1)) b23Expect((e.stdin as string).startsWith(`${B2T1_LEARNED_CARD}\n\n`), 'the first arm batch ran under the agreed card').toBe(true);
+    b23Expect(existsSync(join(c.rout, 'quiz', 'step0b', 'restricted.json')), 'a refusal mid-way writes no result').toBe(false);
+  }, 300_000);
+  b23It('K28 quiz re-pilot step 0b CONTROL: with no pair learned no card preflight masks the value and both quiz arm batches run (K26)', async () => {
+    const c = await b23K28Step0b(null);
+    b23Expect(c.r.refusal, c.r.stderr).toBeNull();
+    b23Expect(c.seen.length > 0 && c.seen.every((masked) => !masked), 'no reading masked the value').toBe(true);
+    b23Expect((w5b4Json(join(c.rout, 'quiz', 'step0b', 'restricted.json')).batches as W5b4R[]).map((b) => (b.runs as string[]).length)).toEqual([1, 4, 3]);
+  }, 300_000);
+
   b23It('one re-pilot per --out, one version per re-pilot: a resume reads its runs back under the same version; a version that moves mid-re-pilot stops claude-version-moved against the pin, in step 0b and in fidelity; a pin of another record refuses before any spawn; a finished re-pilot refuses step 0b and fidelity (K1, W2-D53)', async () => {
     const fx = b23RepilotNode();
     const home = fx.home as string;
@@ -5429,11 +6274,11 @@ b23Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 3: the mid-window
 cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5b2 Task 3|FLAG_SPECS declares exactly|open wants exactly one mode'
 ```
 
-Expected (predicted): 71 failed, 0 passed:
+Expected (predicted): 75 failed, 0 passed.
 - The 14 pure cases. `D4.AMEND_DETAILS` is undefined (`Object.keys` throws); `amendmentOf`, `nodeMovesOf`, `nodeExceptionOf`, `runVersionsOf`, `versionSplitOf`, `moveAfterSplit`, `repilotBoundariesOf` and `repilotResultOf` are not functions; `preflightFiles` refuses the excepted stamp `tree-moved` with the plain detail; `armRunName` ignores its fifth argument (`….a1` against `….m0.a1`); the scan finds no `.m${` line and no `FREEZE_EXCEPTION_KIND` line; the three section lists are `['pilot']`; the form row's commands refuse `step0b wants --section pilot, not "quiz"` and the like, not the flag.
-- The 4 printing cases, the 29 refusal rows and the 8 re-check rows: `parseArgs` refuses `unknown flag "--amend"` (or `"--fidelity"`), or the quiz section is refused `args-invalid`. The 4 CONTROLs: the same refusals, which their patterns exclude.
+- The 4 printing cases, the 29 refusal rows and the 12 re-check rows: `parseArgs` refuses `unknown flag "--amend"` (or `"--fidelity"`), or the quiz section is refused `args-invalid`. The 4 unchanged-tree CONTROLs run those same forms, and the eight code-changed/code-unmeasured rows are their own assertions.
 - The 6 arms stub cases: `b23Amend`'s refusal is not null.
-- The 4 re-pilot stub cases: the quiz sections are refused `args-invalid`.
+- The 8 re-pilot stub cases (the four K26/K28 quiz agreement cases and their CONTROLs among them): the quiz sections are refused `args-invalid`.
 - The 2 re-pinned cases. `FLAG_SPECS` lacks the twelve flags, and the refusal still names three modes.
 
 A case that fails any other way is the fixture's to fix before any code is written (R32's practice). The likeliest are: `w5b4Quiz`'s `over: { limits: { concurrency: 1 } }` merging into part 1's limits; the stubs' `--version` reading `STUB_STREAM`; `b23Quiz`'s copy of `w5b4Quiz`'s `buildFinal` call against W2-5b1's merged fixture; `step0bOf`'s reading of a hand-edited step 0b result (Task 2's reader may check more fields, which the rows then keep as they are); and `B2T1_STUB` keying a box-mode run by its settings mode and stdin.
@@ -5687,6 +6532,8 @@ with
 ```js
           states = armStatesOf(ctx, questions);
 ```
+
+`armStatesOf` keeps `questionMoveOf`'s moved result as one new two-arm state: after a move change, both `m<i>.a1` arms are pending and neither has an answered sibling at that move. K26, K28: that pair reaches the one `armBatchPreflight`, whose `maskingAgreementOf(snapshots, 'arms', …)` (Task 1's K28 factoring of W2-5b1's inline loop, at its admission line `const snapshots = maskingSnapshotsOf(ctx.rs, ctx.home);`) builds both fresh payloads under every retained reading, which must agree before either payload persists or spawns; it then never enters D-6482's old-sibling SHA branch. No version-move exception is added to that branch, and no second pair reader or local snapshot mechanism (K27; W2-5b1's build departure; re-anchor at W2-5b1's merged code).
 
 and replace
 
@@ -6114,7 +6961,8 @@ async function fidelityRepilotCommand(flags, driverEnv, deps) {
       const gate = batchGate({ out, home, accountId: launch.accountId, budget: node.budget, limits: node.limits });
       const lang = driverEnv.LANG;
       const expected = await repilotExpectedOf({ out, recordSha256: run.recordSha256, storeId: rs.storeId, launch, lang, gate, expected: node.expected });
-      const { boundaries } = await fidelityBoundariesOf({ rs, heads, deps, tolerance, gate, claim, concurrency: node.limits.concurrency,
+      const { boundaries } = await fidelityBoundariesOf({ rs, home, heads, deps, tolerance, gate, claim, concurrency: node.limits.concurrency,
+        // K26, K28: fidelityBoundariesOf admits each boundary's retained readings and agrees its stdins over every one.
         spawnPre: () => preflightSpawn({ launch, home, out, lang, gate, expected }),   // W2-D56 against the pin, before every batch
         jobOf: (boundaryUuid, runName, stdin) => {
           const job = { launch, mode: 'box', model: r.arm_model, settingsMode: node.settingsMode, stdin, out,
@@ -6248,6 +7096,33 @@ async function openAmend(flags, driverEnv, deps) {
 
 No `HANDLERS.set` line: `open`, `step0b`, `fidelity` and `pilot-result` are already registered, and their handlers dispatch to this section's functions. `FIDELITY_FILE`, `FIDELITY_KIND`, `fidelityBoundariesOf`, `fidelityRunName`, `pilotFailuresOf`, `decimalOf` and `step0bOf` are Task 2's, and `refusePilotSourceOut` is Task 1's: module-level bindings and hoisted declarations above this section, so `REPILOT_FIDELITY_REL` is initialised when it is evaluated. `repilotExpectedOf` and `refuseRepilotDone`, which Task 1's `step0bCommand` calls, and `fidelityRepilotCommand` and `repilotResultCommand`, which Task 2's handlers call, are hoisted function declarations, called only at run time.
 
+(k) W2-4's `refuseIfStopping` JSDoc (about :317-324 at 0de4cc990, as W2-5b1's fix round left it). (j)'s `repilotExpectedOf` calls `refuseIfStopping();` directly after `measureClaudeVersion`, a ninth direct call site, so the JSDoc's enumeration is extended in this commit. Replace
+
+```js
+/** Refuse `interrupted` while the stopping flag is set. Eight call sites: each runBatch lane iteration (after a yield and the
+```
+
+with
+
+```js
+/** Refuse `interrupted` while the stopping flag is set. Nine call sites: each runBatch lane iteration (after a yield and the
+```
+
+and
+
+```js
+ *  returns, and an arms batch after every pending question was excluded. So no spawn starts after the handler has run, and after the handler has run no
+```
+
+with
+
+```js
+ *  returns, an arms batch after every pending question was excluded, and the re-pilot's repilotExpectedOf after its
+ *  measureClaudeVersion (W2-5b2 Task 3). So no spawn starts after the handler has run, and after the handler has run no
+```
+
+The function body and its refusal detail are unchanged. Each old line matches exactly once (Step 0 counted them).
+
 - [ ] **Step 4: Run them and see them pass, then the typecheck.** In the foreground, with a timeout of at least 600000 ms, one suite per tool call:
 
 ```bash
@@ -6263,7 +7138,7 @@ cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts
 ```
 
 Expected (predicted):
-- First: 71 passed. On darwin the 10 stub cases skip, so 61.
+- First: 75 passed. On darwin the 14 stub cases skip, so 61. These are predictions: no suite was run while this amendment was reconciled.
 - Second: green. W2-5b1's engine with no version move is unchanged. `expectedForNode`'s pure case reads the same `from`, versions and four keys through `nodeMovesOf` and `nodeExceptionOf`, and its R30 scan still counts `versionMoveChecks(` on 3 code lines and no second refusal row. The version-preflight stub case is green. Task 1's and Task 2's cases are green: their pilot sections are unchanged, and none pins `'quiz'` as refused (the seams Tasks 1 and 2 built).
 - `typecheck-tests`: green. Every driver export is reached through `D4` or `DRV3`, both cast through `unknown`.
 
@@ -6415,6 +7290,14 @@ t 'W2-5b2 Task 3'
 # Expected RED: 44 failed: every case that runs open --amend: 4 printing, the 29 refusal rows (an --amend-only argv
 # refuses the four-mode sentence; 'a second mode' reaches openFinalize), the open --amend re-check rows and CONTROL (3),
 # the 6 arms stub cases, and the 2 re-pilot stub cases that amend. The pure cases pass.
+
+# E0 (K27, real old-sibling mutant): carry the old arms into a new move instead of resetting both to m<i>.a1. The payload changes
+# between versions in the K27 integration case, so the mutated state enters W2-5b1's D-6482 branch and emits arm-payload-changed;
+# CONTROL: ordinary same-version resumes still retain their old arm state and remain covered by W2-5b1's own D-6482 case.
+mut "$F" "  return next === move ? { move, arms } : { move: next, arms: at(next) };" "  return next === move ? { move, arms } : { move: next, arms };"
+t 'both arms of the question with one arm done re-run from one fresh preflight'
+# Expected RED: 1 failed. q2's carried answered control is compared against its version-c rebuilt stdin; D-6482 excludes q2's
+# owed treatment as arm-payload-changed, so no q2 m0 run logs or manifest pair exists, summary.run_failed is 1 and payload_changed appears.
 
 # E1 (W2-D56): no question ever moves (W2-5b1's residual back).
 mut "$F" "  if (ctx.moves.length === 0) return { move: null, arms: at(null) };   // no version move for this node: W2-5b1's names" "  return { move: null, arms: at(null) };"
@@ -6576,6 +7459,23 @@ mut "$F" "  if (labels.length > 1) refuse('args-invalid', \`--node-label is give
 t 'open --amend refuses, printing nothing: two nodes'
 # Expected RED: 1 failed: one of the two labels is read, so a record is printed or a later word answers.
 
+# P15 (K26, K28): the quiz fidelity form reaches the shared per-boundary agreement. The quiz path has no agreement call of
+# its own (it calls Task 2's fidelityBoundariesOf with its HOME: no second masking loop), so a quiz-only bypass has no
+# anchor; the quiz path's mechanism is that one call, measured here against the quiz cases: only the newest retained
+# reading builds, and the readings never meet.
+mut "$F" "    const made = await maskingAgreementOf(snapshots, 'fidelity', (idx) => deps.stdins({ ...rs, idx }, id, original.userRows)," "    const made = await maskingAgreementOf(snapshots.slice(-1), 'fidelity', (idx) => deps.stdins({ ...rs, idx }, id, original.userRows)," && t 'K28 quiz re-pilot fidelity'
+# Expected RED: 1 failed, 1 passed: the learned case's refusal is not input-invalid masking-snapshots-disagree fidelity
+# (boundaries 2 to 5 spawn their masked stdins, which nothing planted, and the act ends pilot-failed or measured otherwise);
+# its CONTROL (one reading per boundary, which the slice keeps) passes.
+
+# P16 (K26, K28): the first quiz arm batch keeps its card agreement and every later batch reuses that card unasked.
+mut "$F" "      for (let i = 0; i < probes.length; i += node.limits.batch_max) {
+        const cardLine = await step0bCardOf(ctx);" "      let firstCard = null;
+      for (let i = 0; i < probes.length; i += node.limits.batch_max) {
+        const cardLine = firstCard ??= await step0bCardOf(ctx);" && t 'K28 quiz re-pilot step 0b'
+# Expected RED: 1 failed, 1 passed: the learned case's second quiz arm batch spawns under the first batch's card, so the
+# refusal is null where masking-snapshots-disagree step0b was expected; its CONTROL passes (no build count is asserted).
+
 # P11 (K1, Q8): the re-pilot's fidelity not dispatched (the quiz section run as the pilot's).
 mut "$F" "  if (section === 'quiz') return fidelityRepilotCommand(flags, driverEnv, deps);   // W2-5b2 Task 3 (K1)" ""
 t 'act 21 end to end|re-checks the code it runs under|code-unmeasured, never|row reaches the read'
@@ -6628,7 +7528,7 @@ Expected (predicted):
 ```bash
 git add deploy/history-replay.mjs server/test/history-replay.test.ts
 CO_AUTHORED_BY='<the Co-Authored-By line the attribution reminder gives>'
-git commit -m "feat(history-replay): version moves: the mid-window re-pilot (step0b, fidelity and pilot-result --section quiz), open --amend, a freeze exception's release, and the both-arms re-run (W2-5b2 Task 3; W2-D90, W2-D56, W2-D6, W2-D7, W2-D24; Q8, Q12, Q13, Q14, Q23; K1, K3, K6, K7, K22)" -m "In place (K5): W2-4 Task 1's 'FLAG_SPECS declares exactly …' gains this task's twelve flags; W2-5a Task 7's 'open wants exactly one mode, and verify exactly one of --registry and --section ab' expects the four-mode sentence in its two lines (the --amend mode). Task 1's and Task 2's code extended at the seams they built for it (the section lists, one line below Task 1's expected binding and Q25 line, one dispatch line in each of Task 2's two commands); no case of theirs edited." -m "$CO_AUTHORED_BY"
+git commit -m "feat(history-replay): version moves: the mid-window re-pilot (step0b, fidelity and pilot-result --section quiz), open --amend, a freeze exception's release, and the both-arms re-run (W2-5b2 Task 3; W2-D90, W2-D56, W2-D6, W2-D7, W2-D24; Q8, Q12, Q13, Q14, Q23; K1, K3, K6, K7, K22, K26, K27, K28)" -m "In place (K5): W2-4 Task 1's 'FLAG_SPECS declares exactly …' gains this task's twelve flags; W2-5a Task 7's 'open wants exactly one mode, and verify exactly one of --registry and --section ab' expects the four-mode sentence in its two lines (the --amend mode). Task 1's and Task 2's code extended at the seams they built for it (the section lists, one line below Task 1's expected binding and Q25 line, one dispatch line in each of Task 2's two commands); no case of theirs edited." -m "K26, K28: the re-pilot's step 0b and fidelity reach Task 1's and Task 2's agreement seams unchanged and the moved pair reaches armBatchPreflight's; the quiz agreement cases (fidelity across boundaries, step 0b across arm batches) and their CONTROLs measured red under P15 and P16." -m "W2-4's refuseIfStopping JSDoc, as W2-5b1's fix round left it, names its ninth call site, repilotExpectedOf after its measureClaudeVersion (Eight becomes Nine; body and refusal detail unchanged)." -m "$CO_AUTHORED_BY"
 ```
 
 This task found no departure and defines no number.
@@ -6649,14 +7549,14 @@ Nothing here spawns anything: the sheet is pure file work over gathered files, a
 
 **Files:**
 - Modify: `deploy/history-replay.mjs`.
-  - The gate import statement, `import { ANSWER_PROTOCOL, … } from './history-gate.mjs';` (about :42 at 92dac5764, widened by W2-5b1 Task 1; re-anchor at W2-5b1's merged head): merge in whichever of `LABELS`, `RUBRICS`, `RUBRIC_IDS`, `RUBRIC_SHA256`, `applyHandcheck`, `handcheckAgreement` and `handcheckSample` Step 1 finds missing, keeping one statement and the names in code-unit order. No import line is added; the header's `Imports:` sentence names modules, not names, and is unchanged.
-  - `FLAG_SPECS` (anchored by `export const FLAG_SPECS = Object.freeze(`, about :110 at 92dac5764): three flags appended after its last entry (W2-5b1 Task 1's `'allow-code-change': 'bool'` and whatever W2-5b2 Tasks 1 to 3 added after it), before the `}));` that closes it.
-  - `loadInput` (anchored by `export function loadInput(label, p, sha256, words = INPUT_WORDS, cap = OUT_JSON_CAP) {`, about :4856 at 92dac5764): its read and sha check become the module-private `loadInputBytes`, and `loadInput` calls it; behaviour and words unchanged (W2-6 imports `loadInput`, whose signature stays).
-  - `SUBCOMMAND_FLAGS` (anchored by `const SUBCOMMAND_FLAGS = Object.freeze({`, about :4811 at 92dac5764): one form, `'handcheck --sheet'`, directly before the `});` that closes the object (after W2-5b1's two `judge` forms and any form W2-5b2 Tasks 1 to 3 added).
-  - One new section, directly above the comment line `// The entry guard stays the LAST block of this file` (about :5796 at 92dac5764) and after the previous W2-5b2 task's section, ending with its registration `HANDLERS.set('handcheck', (flags, env) => handcheckCommand(flags, env));`.
+  - The gate import statement, `import { ANSWER_PROTOCOL, … } from './history-gate.mjs';` (about :42 at 92dac5764, about :45 at 0de4cc990, widened by W2-5b1 Task 1; re-anchor at W2-5b1's merged head): merge in whichever of `LABELS`, `RUBRICS`, `RUBRIC_IDS`, `RUBRIC_SHA256`, `applyHandcheck`, `handcheckAgreement` and `handcheckSample` Step 1 finds missing, keeping one statement and the names in code-unit order. No import line is added; the header's `Imports:` sentence names modules, not names, and is unchanged.
+  - `FLAG_SPECS` (anchored by `export const FLAG_SPECS = Object.freeze(`, about :153 at 0de4cc990; its last entry `'allow-code-change': 'bool',` about :175 and its closing `}));` about :176 there): three flags appended after its last entry (W2-5b1 Task 1's `'allow-code-change': 'bool'` and whatever W2-5b2 Tasks 1 to 3 added after it), before the `}));` that closes it.
+  - `loadInput` (anchored by `export function loadInput(label, p, sha256, words = INPUT_WORDS, cap = OUT_JSON_CAP) {`, about :5164 at 0de4cc990, its doc comment about :5159-5163; the body about :5165-5181 reads as quoted in Step 5 (c), word for word): its read and sha check become the module-private `loadInputBytes`, and `loadInput` calls it; behaviour and words unchanged (W2-6 imports `loadInput`, whose signature stays).
+  - `SUBCOMMAND_FLAGS` (anchored by `const SUBCOMMAND_FLAGS = Object.freeze({`, about :5106 at 0de4cc990; its closing `});` about :5131, directly after W2-5b1's `judge --section pilot` and `judge --section quiz` forms about :5129-5130): one form, `'handcheck --sheet'`, directly before the `});` that closes the object (after W2-5b1's two `judge` forms and any form W2-5b2 Tasks 1 to 3 added).
+  - One new section, directly above the comment line `// The entry guard stays the LAST block of this file` (about :7587 at 0de4cc990, after `HANDLERS.set('judge', …)` about :7585) and after the previous W2-5b2 task's section, ending with its registration `HANDLERS.set('handcheck', (flags, env) => handcheckCommand(flags, env));`.
 - Modify: `server/test/history-replay.test.ts`.
-  - W2-4 Task 1's case `FLAG_SPECS declares exactly …` (about :199 at 92dac5764): its expected object gains `sheet: 'bool', judged: 'list', 'judged-sha256': 'list'` after the last pair the earlier tasks left.
-  - W2-4 Task 9's case `three box-mode spawns, one per taught spelling, …`, its line `expect([...t9Driver.HANDLERS.keys()]).toEqual([` (about :4824 at 92dac5764): the array gains `'handcheck'` as its last element.
+  - W2-4 Task 1's case `FLAG_SPECS declares exactly …` (about :199 at 0de4cc990): its expected object gains `sheet: 'bool', judged: 'list', 'judged-sha256': 'list'` after the last pair the earlier tasks left.
+  - W2-4 Task 9's case `three box-mode spawns, one per taught spelling, …`, its line `expect([...t9Driver.HANDLERS.keys()]).toEqual([` (about :4846 at 0de4cc990): the array gains `'handcheck'` as its last element.
   - One block appended at the end of the file, after W2-5b2 Task 3's last describe: module-level `B2T4`/`b2t4`-prefixed fixtures and five describes titled `W2-5b2 Task 4: …`. It adds no import statement: it reuses the module-level imports and W2-5b1's `w5b5Lib`, `w5b5Gate`, `w5b5Entry`, `w5b5InProcess`, `W5B5`, `w5b4Quiz`, `w5b4Home` and the rest (Step 1 checks each). W2-6's region (U4: one contiguous region after `describe('W2-5a fix wave: the review\'s minors', …)`, ending at its `// ── end of W2-6's region (Q29) ──` marker) lies far above, with W2-5b1's appended blocks between: the two insertions share no line (U15).
 - Not edited: every other file. No file is created. README.md and the spec are untouched by this task (Task 6 carries README's driver paragraph and E22's "judge-failed goes to the operator"); `single-definition.test.ts` is re-run, never edited; W2-6's README paragraph, its E25 rows and its describes are not approached.
 
@@ -6930,7 +7830,7 @@ describe('W2-5b2 Task 4: the hand-check plan over every node\'s judged file (W2-
     expect(rows, 'eight of the ten pairs reached the judge').toHaveLength(8);
     expect(plan.items).toEqual(rows.map((r) => ({ id: r.id, qid: r.qid, arm: r.arm, store_id: r.store_id,
       outcome: b2t4Outcome(r.e, r.a)!.outcome, judge: b2t4Outcome(r.e, r.a)!.label })));
-    const want = w5b5Gate.handcheckSample(W5B5_SEED, rows.map((r) => ({ id: r.id, arm: r.arm,
+    const want = w5b5Gate.handcheckSample(W5B5_SEED, rows.map((r) => ({ id: r.id, arm: r.arm as 'treatment' | 'control',
       judged: b2t4Outcome(r.e, r.a)!.outcome === 'judged', judgeFailed: b2t4Outcome(r.e, r.a)!.outcome === 'judge-failed' })), 0.5) as string[];
     expect(plan.sampled).toEqual(want);
     const failed = rows.filter((r) => b2t4Outcome(r.e, r.a)!.outcome === 'judge-failed').map((r) => r.id);
@@ -7772,8 +8672,8 @@ git diff --numstat -- deploy/history-replay.mjs server/test/history-replay.test.
 Expected (predicted):
 - The first filter is green, `53 passed`, on every platform: nothing spawns, so no case is skipped on darwin.
 - The `FLAG_SPECS` case and the W2-4 Task 9 case are green with the three flags and `'handcheck'` last.
-- The whole file is green: every earlier case plus these 53, including W2-5b1 Task 1's arm-word scan of the driver (this section spells no arm word and indexes no `RECALL_ARMS`), its import subset pin, W2-4 Task 5's env scan (the handler's env parameter is `driverEnv`; its registration line passes `(flags, env)`), and every W2-5a case that reads an input through `loadInput` (its words unchanged by the factoring).
-- tsc prints nothing. A line that names only `agent/src/` or a module that is not installed comes from the worktree's install, not from this task.
+- The whole file is green: every earlier case plus these 53, including W2-5b1 Task 5's `JUDGE_OUTCOMES …` case, in the `indexOf` form Task 1 re-pinned it to (`handcheck` registers after `judge`, so `judge` still directly follows `arms`), and W2-5b1 Task 1's arm-word scan of the driver (this section spells no arm word and indexes no `RECALL_ARMS`), its import subset pin, W2-4 Task 5's env scan (the handler's env parameter is `driverEnv`; its registration line passes `(flags, env)`), and every W2-5a case that reads an input through `loadInput` (its words unchanged by the factoring).
+- tsc prints nothing. The sample case's `handcheckSample` call casts each item's `arm` to `'treatment' | 'control'`, the type the gate's JSDoc gives `items` (about :1603 of `deploy/history-gate.mjs` at 0de4cc990): `b2t4Rows` answers the driver's `arm: string`, which tsc refuses there (TS2345, as CP-20's re-verify reproduced it on a scratch copy against the gate at 0de4cc990 under the server's compiler options); the `as string[]` cast covers only the result. A line that names only `agent/src/` or a module that is not installed comes from the worktree's install, not from this task.
 - `nul 0`, and both `--numstat` rows show two numbers, never `-\t-`. The carriage return and the tab in the label cases are built with `String.fromCharCode`, never written as escapes.
 
 - [ ] **Step 7: Measure every new guard red, then green.** From the repository root. Each block makes one exact replacement, which must match exactly once, runs one filter and shows it red, then restores the file with `cp`. The python body is a quoted heredoc. The "Expected RED" lines are predicted: measure each one; if a measurement differs, record the corrected prediction in a separate `docs(plan): … (W2-5b2 Task 4)` commit touching only this plan (R25 carried). Run the block one mutant per tool call (the plan's "One mutant per tool call"): the preamble once, `cp` of the original included; then each mutant as its own call, repeating the preamble's definitions without its `cp`, ending with `cmp` of the driver against the copy, which must print nothing.
@@ -8068,7 +8968,7 @@ git commit -m "feat(history-replay): handcheck --sheet over every node's judged 
 
 D-6645 was issued at planning for the departure this task first cites; this plan defines it in its "## Deviations found".
 
-### Task 5: `report --record <final>`: every node's gathered outputs, each sha-checked, into decideGate's inputs; verdict.json; the report-only figures (W2-D85, W2-D89, W2-D23, W2-D82, W2-D24; S2's C15 and C21, Q2, Q15, Q16, Q23, Q28, V1)
+### Task 5: `report --record <final>`: every node's gathered outputs, each sha-checked, into decideGate's inputs; verdict.json; the report-only figures (W2-D85, W2-D89, W2-D23, W2-D82, W2-D24; S2's C15 and C21, Q2, Q15, Q16, Q23, Q28, V1, K27)
 
 This task ships W2's verdict act (decisions §5, act 24): one subcommand, `report`, run on the reporting node after window end over the files act 24 gathers there. It decides nothing. It checks every input, gathers `decideGate`'s inputs, calls `decideGate` once, and writes its answer whole into `--out/verdict.json`, printing that file's sha on stderr (W2-D85, W2-D89; D-5983):
 
@@ -8083,7 +8983,8 @@ This task ships W2's verdict act (decisions §5, act 24): one subcommand, `repor
 - **Every input held to the record and to the others.**
   - The summaries, judged files and verify outputs name this record's sha. An answer record is written once, so it keeps the record that was in force when its question settled.
   - Every question is settled (W2-D80).
-  - The answer records match the summary byte for byte through W2-5b1's own `armsSummaryOf`.
+  - The answer records match the summary byte for byte through W2-5b1's own `armsSummaryOf`. This includes its `payload_changed` summary field: `nodeAnswersOf` derives sorted, deduplicated qids from the records, then supplies them back to `armsSummaryOf`; it never trusts that field as a second source.
+  - K27 (W2-5b1's build departure; re-anchor at W2-5b1's merged code): a record whose `question_state` is `run-failed` and whose own optional `reason` equals `ARM_PAYLOAD_CHANGED` identifies a payload-drift exclusion. Its answered sibling also carries `question_state: 'run-failed'`, but has `arm_state: 'answered'` and no `reason`; the reader therefore scans every record, selects the reason-bearing record only, and deduplicates and sorts its qid. That question continues through the existing `run-failed` path into `decideGate`, including W2-D89's threshold; no new driver reason or answer-state vocabulary is introduced.
   - The judged items are exactly the non-correct answers of answered questions. The judge map's sha is recomputed from the record's seed over the frozen list (R18).
   - `assembleReports` checks the measure reports (W2-D22), and `changedFamilies` reads their presence rows (W2-D23).
 - **decideGate's inputs (W2-D89).**
@@ -8100,6 +9001,7 @@ This task ships W2's verdict act (decisions §5, act 24): one subcommand, `repor
   - the judge's labels and the hand-check, by arm;
   - `asof_same_ms_hits`;
   - D-6284's over-hide count per node;
+  - payload-drift exclusions: `{count, qids}`, derived from the reason-bearing `run-failed` answer records in deterministic qid order (K27; W2-5b1's build departure; re-anchor at W2-5b1's merged code). It is report-only, while those same questions remain in `quiz_counts` and W2-D89's `run_failed` count;
   - the read instant: each measure-history file's mtime as a labelled proxy, beside the report's own instant (S2's C15).
 
   V1 applies to every per-arm figure: a family whose verify state is `control-absent`, `control-mismatch`, `treatment-named` or `unreadable`, or which changed in the window (W2-D23), leaves every per-arm figure and is listed under its own word. These are the same families W2-6's counters drop.
@@ -8112,7 +9014,7 @@ Nothing here reads a HOME, opens a store or spawns a run, so every refusal answe
 - W2-D22: `assembleReports`, its refusals mapped to the driver's words.
 - W2-D23, as V1 extends it: the changed and unrealised drops apply to the reported arm comparisons only. Criterion 3 is untouched, and its pin (a changed treatment family still counts in criterion 3) runs through the report.
 - W2-D24, W2-D25, W2-D6, through `loadFinalRecord`; Q23 (`--allow-code-change` after window start only, the verdict stamped).
-- W2-D80: run-failed questions are excluded from both arms; a summary with a question still owing a re-run or not run is refused.
+- W2-D80: run-failed questions are excluded from both arms; a summary with a question still owing a re-run or not run is refused. K27's `ARM_PAYLOAD_CHANGED` is one existing-record reason for that state (W2-5b1's build departure; re-anchor at W2-5b1's merged code), not a new state or a driver reason.
 - W2-D81: the operator's labels replace the judge's on the sample; agreement by arm; the hold.
 - W2-D82: quiz uptake by arm with `via_agent`, unmeasured when the pilot says so, and marked `aggregate-only` when a quiz family is dropped (K24).
 - W2-D34: `asof_same_ms_hits` gathered.
@@ -8122,24 +9024,24 @@ Nothing here reads a HOME, opens a store or spawns a run, so every refusal answe
 - W2-D42: no arm word in the driver.
 - W2-D53: `verdict.json` is written once.
 - W2-D86 and W2-D88: W2-6's counters stay their own entry's.
-- Rulings: S2's C15 (read instant) and C21 (report words); Q2, Q15, Q16, Q23, Q28; V1 (the state set) and U15 (line-disjoint from W2-6); R18 (map global across nodes) and R20 (settledness), both W2-5b1's, read here; and the coordinator's rulings K4 (Task 2's and Task 4's names, and Task 4's `judged` flags), K8 (node outputs name the current record), K11 (a stale presence record refused, as W2-6's V2), K12 (V1 reaches every per-arm figure, quiz uptake and the judge tallies by arm included, and not the hand-check sample), K23 (the walk's `verify --section ab` outputs built with `verifyAbReport`, its fixture stores holding no presence record: a fixture choice and a prediction, R32's rule) and K24 (D-6646's residual stated as it is: the node summaries pin uptake and answer-field values only as per-arm sums, so quiz uptake by arm is marked `aggregate-only` when a quiz family is dropped).
+- Rulings: S2's C15 (read instant) and C21 (report words); Q2, Q15, Q16, Q23, Q28; V1 (the state set) and U15 (line-disjoint from W2-6); R18 (map global across nodes) and R20 (settledness), both W2-5b1's, read here; and the coordinator's rulings K4 (Task 2's and Task 4's names, and Task 4's `judged` flags), K8 (node outputs name the current record), K11 (a stale presence record refused, as W2-6's V2), K12 (V1 reaches every per-arm figure, quiz uptake and the judge tallies by arm included, and not the hand-check sample), K23 (the walk's `verify --section ab` outputs built with `verifyAbReport`, its fixture stores holding no presence record: a fixture choice and a prediction, R32's rule), K24 (D-6646's residual stated as it is: the node summaries pin uptake and answer-field values only as per-arm sums, so quiz uptake by arm is marked `aggregate-only` when a quiz family is dropped), and K27: an `ARM_PAYLOAD_CHANGED` reason on exactly one run-failed arm record makes that question a report-only payload-drift exclusion while the existing W2-D89 run-failed count keeps it (W2-5b1's build departure; re-anchor at W2-5b1's merged code).
 
 It cites D-5983 (the sha line), D-5986 (the plain I/O under `--out`), D-6307 and D-6309's rule (refusals before `--out`, a data case never INTERNAL), D-6284 (the over-hide count), D-5787 (decideGate's cluster order) and D-5770 (the window in Node), each bare. It first cites one departure found while planning, **D-6646** (`history-w2-report-answers-held-to-summary`; Choices), issued by the coordinator at planning and defined in this plan's "## Deviations found". It also cites D-6644 (Task 2's `unseen` reading, read through `quizUptakeReadingOf`) and D-6645 (Task 4's sheet), bare.
 
 **Files:**
 - Modify: `deploy/history-replay.mjs`:
-  - (a) the gate's import statement, `import { ANSWER_PROTOCOL, … } from './history-gate.mjs';` (about :42 at 92dac5764, as W2-5b1 Task 1 and W2-5b2's earlier tasks left it): add whichever of `ANSWER_STATES`, `applyHandcheck`, `assembleReports`, `changedFamilies`, `decideGate`, `handcheckAgreement` and `splitAtFirstExit8` Step 1 finds missing, in code-unit order. No statement is added. `buildWindows`, `windowTotals` and `familyKey` are already there at 92dac5764;
-  - (b) `FLAG_SPECS`: after its last entry (W2-5b1 Task 1's `  'allow-code-change': 'bool',`, about :131 once W2-5b1 merges, or whatever an earlier W2-5b2 task appended after it) and before the `}));` that closes it, the ten flags of (Step 5); `judged` and `judged-sha256` are Task 4's (K4);
-  - (c) `const SUBCOMMAND_FLAGS = Object.freeze({` (about :4811): the `report` form, inserted as its last entry, directly before the `});` that closes the object;
+  - (a) the gate's import statement, `import { ANSWER_PROTOCOL, … } from './history-gate.mjs';` (about :45 at 0de4cc990, as W2-5b1 Task 1 and W2-5b2's earlier tasks left it): add whichever of `ANSWER_STATES`, `applyHandcheck`, `assembleReports`, `changedFamilies`, `decideGate`, `handcheckAgreement` and `splitAtFirstExit8` Step 1 finds missing, in code-unit order. No statement is added. `buildWindows`, `windowTotals` and `familyKey` are already there at 92dac5764;
+  - (b) `FLAG_SPECS`: after its last entry (W2-5b1 Task 1's `  'allow-code-change': 'bool',`, about :175 at 0de4cc990, before the closing `}));` about :176, or whatever an earlier W2-5b2 task appended after it) and before the `}));` that closes it, the ten flags of (Step 5); `judged` and `judged-sha256` are Task 4's (K4);
+  - (c) `const SUBCOMMAND_FLAGS = Object.freeze({` (about :5106 at 0de4cc990; its closing `});` about :5131, after `'judge --section quiz'` about :5130): the `report` form, inserted as its last entry, directly before the `});` that closes the object;
   - (d) W2-5b1 Task 4's `readArmAnswers` (re-anchor at W2-5b1's merged head; `export function readArmAnswers(out, section) {`): its body becomes `readAnswerRecords`, which answers the whole records with their file names and shas, and `readArmAnswers` becomes its projection. Its words, its order and every W2-5b1 pin stay byte for byte;
-  - (e) one new section, `// ── W2-5b2 Task 5: report …`, directly above the comment line `// The entry guard stays the LAST block of this file` (about :5796 at 92dac5764), after W2-5b2 Task 4's section. It ends with `HANDLERS.set('report', …)`.
+  - (e) one new section, `// ── W2-5b2 Task 5: report …`, directly above the comment line `// The entry guard stays the LAST block of this file` (about :7587 at 0de4cc990, after `HANDLERS.set('judge', …)` about :7585), after W2-5b2 Task 4's section. It ends with `HANDLERS.set('report', …)`.
 - Modify: `server/test/history-replay.test.ts`:
-  - re-pin W2-4 Task 1's case whose title begins `FLAG_SPECS declares exactly` (W2-5b1 Task 1's title, left as the last task left it) (about :199-214): its object gains the ten flags (Step 2);
-  - re-pin W2-4 Task 9's registration line `expect([...t9Driver.HANDLERS.keys()]).toEqual([...]);` (about :4824): the array the previous W2-5b2 task left gains `'report'` at its end;
-  - one block appended at the very end of the file, after W2-5b2 Task 4's block: its own import lines (prefix `b2t5`), module-level fixtures, and three describes titled `W2-5b2 Task 5: …`.
+  - re-pin W2-4 Task 1's case whose title begins `FLAG_SPECS declares exactly` (W2-5b1 Task 1's title, left as the last task left it) (about :199-215 at 0de4cc990): its object gains the ten flags (Step 2);
+  - re-pin W2-4 Task 9's registration line `expect([...t9Driver.HANDLERS.keys()]).toEqual([...]);` (about :4846 at 0de4cc990): the array the previous W2-5b2 task left gains `'report'` at its end;
+  - one block appended at the very end of the file, after W2-5b2 Task 4's block: its own import lines (prefix `b2t5`), module-level fixtures, and four describes titled `W2-5b2 Task 5: …`, the last the F1 carry's (Step 8a), appended after the walk.
 - Line-disjoint from W2-6 (Q29, U15):
   - W2-6's test region is interior: directly after W2-5a's last describe and before W2-5b1's first appended block, ending at `// ── end of W2-6's region (Q29) ──`. This task's block is appended at the end of the file, after every W2-5b1 and W2-5b2 block, so W2-5b1's appended blocks lie between the two insertions.
-  - The two re-pinned lines (about :199-214 and :4824) are W2-4's, far above W2-6's region, and W2-6 edits no existing line.
+  - The two re-pinned lines (about :199-215 and :4846 at 0de4cc990) are W2-4's, far above W2-6's region, and W2-6 edits no existing line.
   - This task touches no README line, no spec line, no erratum row and no line of `single-definition.test.ts`.
   - It never names `deploy/history-counters.mjs` or `counters.json`, and a scan pins that.
 - Not edited: `ccd/**`, `shared/**`, `deploy/history-gate.mjs`, `deploy/measure-history.py`, `.github/**`, README.md, the spec, `single-definition.test.ts`, and every other test file. No file is created.
@@ -8156,10 +9058,10 @@ It cites D-5983 (the sha line), D-5986 (the plain I/O under `--out`), D-6307 and
 - Consumes (W2-5b1, by its owners' names; each "(W2-5b1 Task N's <name>; re-anchor at W2-5b1's merged head)"):
   - Task 1's: `CONTROL_ARM` and `TREATMENT_ARM`; `loadFinalRecord(flags, {nowMs, root}) -> {record, sha256, frozen: {sha256, list: {entries}, families}, stamps: string[]}`. Its refusals: `loadRecordInput`'s, then `args-invalid`, `code-unmeasured` or `code-changed`, then `record-invalid` ranges. `FLAG_SPECS['allow-code-change'] === 'bool'`;
   - Task 3's: `VERIFY_HEADLESS_KIND`; `verifyHeadlessReport({recordSha256, storeId, section, expectedSha256, found, overHide})`, `{kind, v: 1, record_sha256, store_id, section, expected_sha256, found: {state, sha256, missing, extra}, ok, over_hide: {cut, binds, leaves, hidden, hidden_ids, hidden_ids_max} | null}`;
-  - Task 4's: `ARMS_SUMMARY_KIND`, `ANSWER_KIND`, `armsSummaryRel(section)`, `questionCountsOf(states)`, `armAnswerOf(entry, facts, shaMinPrefix)` (test side), the module-private `armSectionOk`, and `readArmAnswers(out, section)`, refactored in (d);
-  - Task 4's `armsSummaryOf({section, recordSha256, storeId, budget, spend, batches, stop, stamps, questions: Array<{qid, state, arms: Array<{arm, answer: {answer_field, correct, uptake, …} | null}>}>})`. It is pure, and its output is the summary file's object, which `writeArmsSummary` writes as `canonicalJson(summary) + '\n'`;
-  - Task 4's answer record `{kind: ANSWER_KIND, v: 1, section, record_sha256, store_id, qid, arm, ccrc_id, generation, boundary_uuid, fact_kind, question_state, arm_state, attempts, run, answer_field: {state, value?} | null, correct, absent, reply, uptake: {calls, via_agent, errored} | null, stamps}` at `<section>/answers/<qid>.<arm>.json`;
-  - Task 4's summary `{kind: ARMS_SUMMARY_KIND, v: 1, section, record_sha256, store_id, budget, spend, batches, stop, stamps, counts, arms, absent_rate, questions}` at `<section>/arms/summary.json`, whose sha `arms` prints on success;
+  - Task 4's: `ARMS_SUMMARY_KIND`, `ANSWER_KIND`, `armsSummaryRel(section)`, `questionCountsOf(states)`, `armAnswerOf(entry, facts, shaMinPrefix)` (test side), the module-private `armSectionOk`, and `readArmAnswers(out, section)`, refactored in (d); and `ARM_PAYLOAD_CHANGED = 'arm-payload-changed'` (W2-5b1's build departure; re-anchor at W2-5b1's merged code).
+  - Task 4's `armsSummaryOf({section, recordSha256, storeId, budget, spend, batches, stop, stamps, questions: Array<{qid, state, arms: Array<{arm, answer: {answer_field, correct, uptake, …} | null}>}>, payloadChanged = []})` (about :6799 at 0de4cc990; `payloadChanged`, D-6482's qids excluded for a changed payload, adds `payload_changed: {count, qids}` to the summary only when non-empty; this task's `b2t5World` and `nodeAnswersOf` pass it). It is pure, and its output is the summary file's object, which `writeArmsSummary` writes as `canonicalJson(summary) + '\n'`;
+  - Task 4's answer record `{kind: ANSWER_KIND, v: 1, section, record_sha256, store_id, qid, arm, ccrc_id, generation, boundary_uuid, fact_kind, question_state, arm_state, reason?: ARM_PAYLOAD_CHANGED, attempts, run, answer_field: {state, value?} | null, correct, absent, reply, uptake: {calls, via_agent, errored} | null, stamps}` at `<section>/answers/<qid>.<arm>.json`; `reason` is optional and only the excluded owed arm has it, while its answered sibling has the same `question_state` without the field (K27; W2-5b1's build departure; re-anchor at W2-5b1's merged code).
+  - Task 4's summary `{kind: ARMS_SUMMARY_KIND, v: 1, section, record_sha256, store_id, budget, spend, batches, stop, stamps, counts, arms, absent_rate, questions, payload_changed?: {count, qids}}` at `<section>/arms/summary.json`, whose sha `arms` prints on success. The optional field is reproduced from records with the `ARM_PAYLOAD_CHANGED` reason, not trusted independently (K27; W2-5b1's build departure; re-anchor at W2-5b1's merged code);
   - Task 5's: `JUDGED_KIND`; `judgeMapOf(seedHex, entries, arms) -> Array<{id, qid, arm}>`; `judgeMapText(section, frozenSha256, map) -> string`; the module-private `judgePairKey(qid, arm)`;
   - Task 5's judged file `{kind: JUDGED_KIND, v: 1, section, store_id, record_sha256, frozen_sha256, map_sha256, judge_model, rubric_id, rubric_sha256, settings_mode, reply_max_bytes, items: Array<{id, outcome: 'judged' | 'judge-failed', label: 'uncertain' | 'fabricated' | null, attempts}>, counts, budget, spend, stamps}`.
 - Consumes (W2-5b2's earlier tasks, by their owners' names. Step 1 checks each name. A missing or differently shaped one is reconciled to its owner's spelling at assembly, as W2-5b1's R8 ruled, and never defined here):
@@ -8184,9 +9086,11 @@ It cites D-5983 (the sha line), D-5986 (the plain I/O under `--out`), D-6307 and
     - `judgeTallyOf(items, sampled, operator, dropped) -> Record<arm, {judged, judge_failed, uncertain, fabricated, sampled, judge_failed_unlabelled}>`, a dropped family (V1, W2-D23) counted in `sampled` alone (K12);
     - `gateInputsOf({record, entries, answers, judgedByPair, labels, agreement, live, changed, abStates, stamps, reportOnly}) -> decideGate's inputs`;
     - `judgedOf({judged, storeId, recordSha256, record, frozenSha256, mapSha256, map, answers}) -> Map<pairKey, {id, qid, arm, outcome, label}>`. It refuses `input-invalid` or `quiz-sha-mismatch`.
+    - `payloadChangedOf(records: Iterable<{record: {qid, question_state, reason?}}>) -> {count: number, qids: string[]}`: accepts only a record with `question_state === 'run-failed'` and `reason === ARM_PAYLOAD_CHANGED`; returns unique qids in `cmpUnit` order. It throws `TypeError` for any reason-bearing record whose state is not `run-failed`, so a malformed record cannot make an exclusion disappear. The actual `nodeAnswersOf` reader rejects that malformed record as `input-invalid` before `decideGate`; the exported pure seam exists for red-first coverage. This is K27's report reader over W2-5b1's build departure; re-anchor at W2-5b1's merged code.
   - Measuring: `readAnswerRecords(out, section) -> Array<{rel, sha256, record}>`, readArmAnswers' one read, which keeps its words; `readInstantOf(measures, nowMs, stat = lstatSync) -> {proxy, by_store: Record<store, {state: 'measured', mtime_ms} | {state: 'unmeasured', code}>, report_ms}`.
   - The command: `REPORT_DEPS = Object.freeze({now, root: TREE_ROOT, uptakeReading: quizUptakeReadingOf})`; `reportCommand(flags, driverEnv, deps = REPORT_DEPS) -> Promise<number>`, registered as `report`. `deps` is a test seam and no flag takes it.
   - Module-private: `REPORT_QUIZ_INPUTS`, `REPORT_NODE_INPUTS`, `inputsByStore`, `nodeAnswersOf`, `verifyQuizOf`, `verifyAbOf`, `sourcedOf`, `liveOf`.
+  - Report-only extension: `gate.report_only.payload_changed = {count, qids}`. It is omitted when no reason-bearing record exists, matching W2-5b1's summary convention; it neither adds a `DRIVER_REASONS` word nor modifies the gate input schema.
   - The `report` form: required `out`, `record`, `record-sha256`, `part1`, `part1-sha256`, `frozen`, `frozen-sha256`, and per node (list flags, paired by position with their `-sha256`) `arms-summary`, `judged`, `verify-quiz`, `sourced`, `verify-ab`, `measure`, plus `labels` and `labels-sha256`; optional `supersedes`, `supersedes-sha256` and `allow-code-change`.
   - The file under `--out`, `verdict.json`:
 
@@ -8195,7 +9099,7 @@ It cites D-5983 (the sha line), D-5986 (the plain I/O under `--out`), D-6307 and
      inputs: {'arms-summary', judged, 'verify-quiz', sourced, 'verify-ab', measure: [{store_id, sha256}], labels: sha256,
               answers: [{store_id, rel, sha256}]},
      families: {quiz: familyKey[], live: [{key, arm}]},   // decideGate's own input keys
-     gate: decideGate's answer, whole (report_only inside it),
+     gate: decideGate's answer, whole (report_only includes optional payload_changed: {count, qids}),
      report_ms}
     ```
 
@@ -8216,7 +9120,7 @@ It cites D-5983 (the sha line), D-5986 (the plain I/O under `--out`), D-6307 and
 | W2-6's V2: a verify output whose `seen_after_write` is not true is refused | `verifyAbReport` answers the presence record's freshness as `seen_after_write` | K11: `report` refuses such an output `input-invalid` (`verify-ab <store> presence-stale: …`), after the output's own checks, as W2-6's V2 does: one input, one rule. One row, one mutant (M44) |
 | W2-D89, amended 2026-10-19: `decideGate` refuses `question-not-run` | `report` refuses an unsettled summary first (W2-D80, R20), so a not-run question cannot reach the gate from consistent inputs | `decideGate`'s refusal is still mapped (`input-invalid` `question-not-run: …`), never folded |
 | W2-D84: verify outputs are printed, not written | The operator saves stdout; the sha is the printed one | Each is passed as `--verify-ab` or `--verify-quiz` with that sha |
-| Line hints (`FLAG_SPECS` about :129, `SUBCOMMAND_FLAGS` about :4811, the gate import about :42, the entry-guard comment about :5796, the test's `HANDLERS` line about :4824 and the `FLAG_SPECS` pin about :199) | Measured at 92dac5764; W2-5b1 and W2-5b2's earlier tasks move them | Every edit is anchored by quoted content; the worker reports each moved anchor |
+| Line hints (`FLAG_SPECS` about :153-176, its last entry about :175, `SUBCOMMAND_FLAGS` about :5106, closing about :5131, the gate import about :45, the entry-guard comment about :7587, the test's `HANDLERS` line about :4846 and the `FLAG_SPECS` pin about :199) | Measured at W2-5b1's final head `0de4cc990` (at 92dac5764 they were :129, :4811, :42, :5796, :4824 and :199); W2-5b2's earlier tasks move them | Every edit is anchored by quoted content; the worker reports each moved anchor |
 
 **Choices this task makes:**
 - **The answer records are held to their summary, not passed one by one** (**D-6646**). Q2 and W2-D85 have the report read "each passed with its sha". An answer record is one file per (qid, arm) with no printed sha, and an operator cannot copy hundreds of shas by hand. So the record files are read from the node's gathered `--out`, located by the sha-checked arms summary, which must sit at that `--out`'s `quiz/arms/summary.json`. W2-5b1's own `armsSummaryOf`, run over them, must reproduce the summary's bytes, sha included. That pins, for each node, the per-arm sums the summary holds: answered; the answer-field states value, unknown and absent (the absent rate is a gate input); correct; and uptake (the questions with a call, `calls`, `via_agent` and `errored`). A question's uptake and its answer-field value are pinned only through those per-arm sums, never question by question (K24). The sha-checked judged file pins which answers are non-correct, question by question, because its items must be exactly those. Every gate input taken from an answer record therefore stays fixed by a sha-checked file. Two things are left free, and no gate input reads either: the order of non-correct answer states between questions of one arm; and how a node's per-arm uptake sums divide between its questions. The second reaches only the report-only quiz uptake by arm, and only when V1 or W2-D23 drops a quiz family. With no quiz family dropped, that figure sums every answered question, equals the summaries' sums and is exactly pinned. With one dropped, `quizUptakeOf` marks it `aggregate-only` (K24). Each record's own sha goes into `verdict.json`.
@@ -8235,7 +9139,7 @@ It cites D-5983 (the sha line), D-5986 (the plain I/O under `--out`), D-6307 and
 - **Families are keyed by `familyKey`.** Both the quiz clusters (`familyKeyOf`, W2-5a's, over the gate's `familyKey`) and the live families (`assembleReports`' keys). `verdict.json` carries the keys `decideGate` was given, so RP7 is read through the report.
 - **The read instant** is the measure file's mtime. A copy that does not keep mtimes moves it later. It is labelled a proxy, and a `.py` read-instant field stays a W2-3 follow-up (S2's C15).
 
-**Residuals, named:** the answer records' non-correct states can be permuted between questions of one arm without a red, because no gate input reads that order. A node's per-arm uptake sums can be moved between its questions without a red (K24): every gate input stays pinned, and the report-only quiz uptake by arm is exactly pinned only when V1 drops no quiz family; when one is dropped it is marked `aggregate-only`. The read instant is a proxy. `authentication_failed` is still unmeasured (W2-5b1's Q31 residual). The judge's and the sheet's reply text can reveal the arm (decisions §7), and agreement is reported by arm.
+**Residuals, named:** the answer records' non-correct states can be permuted between questions of one arm without a red, because no gate input reads that order. A node's per-arm uptake sums can be moved between its questions without a red (K24): every gate input stays pinned, and the report-only quiz uptake by arm is exactly pinned only when V1 drops no quiz family; when one is dropped it is marked `aggregate-only`. K27's qid list exposes only the existing W2-5b1 payload-drift exclusion reason; it does not identify an arm beyond what the gathered answer records already disclose and does not distinguish an otherwise ordinary run-failed question in any gate input. The read instant is a proxy. `authentication_failed` is still unmeasured (W2-5b1's Q31 residual). The judge's and the sheet's reply text can reveal the arm (decisions §7), and agreement is reported by arm.
 
 - [ ] **Step 1: Confirm the earlier names before using them.** From the repository root:
 
@@ -8262,7 +9166,7 @@ Expected:
 - The gate names: `buildWindows`, `familyKey` and `windowTotals` at least. Step 5 merges every name of the seven this task adds that is absent.
 - `0`: no earlier task declared these ten flags; then `list list`: Task 4 declared `judged` and `judged-sha256` (K4), which this task lists in its form and never declares again.
 - `1`: W2-5b1 Task 4's `readArmAnswers`, the one (d) refactors.
-- One `HANDLERS.keys()` line: the array the previous W2-5b2 task left.
+- Two `HANDLERS.keys()` lines (at 0de4cc990 about :4846 and :13725; later tasks' appended blocks move neither): first W2-4 Task 9's array as the previous W2-5b2 task left it, which Step 2 re-pins, then W2-5b1 Task 5's `JUDGE_OUTCOMES …` case's order line in the `indexOf` form Task 1 re-pinned it to, which this task leaves alone.
 - `0` or `1`: W2-6's region marker, present only if W2-6 merged first. Either way this task appends at the end of the file.
 - `1`: W2-5b1 Task 4's `w5b4Quiz`, which the walk reuses.
 
@@ -8304,6 +9208,8 @@ type B2t5Opts = {
   soloQuiz?: boolean;
   answer?: (e: B2t5R, arm: string) => { text: string; calls?: B2t5Call[] };
   runFailed?: (e: B2t5R) => boolean;
+  /** K27 fixture: the control arm is the excluded owed arm; its answered sibling remains answer-bearing. */
+  payloadChanged?: (e: B2t5R) => boolean;
   judgeLabel?: (qid: string, arm: string) => 'uncertain' | 'fabricated' | null;
   operator?: (id: string, judge: string | null) => string | null;
   ab?: (f: B2t5R) => string;
@@ -8363,6 +9269,13 @@ function b2t5Failed(recordSha: string, e: B2t5R, arm: string): B2t5R {
     attempts: names.map((name) => ({ name, class: 'infra-failed', code: 1, signal: null, tokens: 0, error_fields: [] })),
     run: null, answer_field: null, correct: null, absent: null, reply: null, uptake: null, stamps: [] };
 }
+/** K27's actual W2-5b1 departure shape: only the owed arm has the reason; its answered sibling retains its answer but shares
+ * question_state run-failed, so the report must select the reason-bearing record and deduplicate qids rather than count states.
+ * (W2-5b1's build departure; re-anchor at W2-5b1's merged code.) */
+function b2t5PayloadChanged(recordSha: string, e: B2t5R, arm: string, a: { text: string; calls?: B2t5Call[] }): B2t5R {
+  if (arm !== B2T5_C) return b2t5Answered(recordSha, e, arm, a, 'run-failed');
+  return { ...b2t5Failed(recordSha, e, arm), reason: B2T5.ARM_PAYLOAD_CHANGED };
+}
 /** measure-history.py's --families report for one listed family, in its documented shape: one boundary per window inside the
  *  window, one copy each holding no assistant row and ending 1 s after it, so each window is measured with an inclusive end.
  *  A treatment family has three windows, each with one call; a control family two, the first with one call. */
@@ -8416,17 +9329,21 @@ function b2t5World(o: B2t5Opts = {}) {
     const recs: B2t5R[] = [];
     const questions = mine.map((e) => {
       const failed = o.runFailed?.(e) === true;
+      const payloadChanged = o.payloadChanged?.(e) === true;
       const arms = B2T5_ARMS.map((arm) => {
-        const r = failed && arm === B2T5_C ? b2t5Failed(f.sha, e, arm) : b2t5Answered(f.sha, e, arm, answerOf(e, arm), failed ? 'run-failed' : 'answered');
+        const r = payloadChanged ? b2t5PayloadChanged(f.sha, e, arm, answerOf(e, arm))
+          : failed && arm === B2T5_C ? b2t5Failed(f.sha, e, arm)
+          : b2t5Answered(f.sha, e, arm, answerOf(e, arm), failed ? 'run-failed' : 'answered');
         recs.push(r);
         return { arm, answer: r.run === null ? null : { answer_field: r.answer_field, correct: r.correct, absent: r.absent, reply: r.reply, uptake: r.uptake } };
       });
-      return { qid: e.qid as string, state: failed ? 'run-failed' : 'answered', arms };
+      return { qid: e.qid as string, state: failed || payloadChanged ? 'run-failed' : 'answered', arms };
     });
     for (const r of recs) writeFileSync(join(root, 'quiz', 'answers', `${r.qid as string}.${r.arm as string}.json`), `${b2t5Lib.canonicalJson(r) as string}\n`, { mode: 0o600 });
     const summary = B2T5.armsSummaryOf({ section: 'quiz', recordSha256: f.sha, storeId: s,
       budget: { in_force: 600_000, spend_budget: 1_000_000, n_node: mine.length, n_all: entries.length }, spend: 130 * mine.length, batches: 1,
-      stop: null, stamps: o.summaryStamps ?? [], questions }) as B2t5R;
+      stop: null, stamps: o.summaryStamps ?? [], questions,
+      payloadChanged: [...new Set(recs.filter((r) => r.reason === B2T5.ARM_PAYLOAD_CHANGED).map((r) => r.qid as string))].sort() }) as B2t5R;
     const summaryPath = join(root, 'quiz', 'arms', 'summary.json');
     const summaryText = `${b2t5Lib.canonicalJson(summary) as string}\n`;
     writeFileSync(summaryPath, summaryText, { mode: 0o600 });
@@ -8536,6 +9453,7 @@ const b2t5RecordOf = (w: B2t5R, s: string, arm: string): string => join(w.nodes[
 const B2T5_DRV_TEXT = readFileSync(join(W5B4_REPO, 'deploy', 'history-replay.mjs'), 'utf8');
 const b2t5Code = (l: string): boolean => { const t = l.trim(); return t !== '' && !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*'); };
 const B2T5_SECTION = B2T5_DRV_TEXT.slice(B2T5_DRV_TEXT.indexOf(' W2-5b2 Task 5: report, the verdict from every node'), B2T5_DRV_TEXT.indexOf("HANDLERS.set('report'"));
+const b2t5PayloadEntry = (w: B2t5R): B2t5R => w.nodes[B2T5_S1]!.mine[0] as B2t5R;
 
 b2t5Describe('W2-5b2 Task 5: report, pure parts', () => {
   b2t5It('the report words are driver-local and disjoint from DRIVER_REASONS and GATE_REASONS (S2 C21, Q28)', () => {
@@ -8625,6 +9543,22 @@ b2t5Describe('W2-5b2 Task 5: report, pure parts', () => {
       [B2T5_T]: { questions: 2, with_call: 2, calls: 6, via_agent: 1, errored: 1 } } });
     b2t5Expect(Object.keys(control), 'CONTROL: no mark key at all, the figure as before').toEqual(['reading', 'by_arm']);
     b2t5Expect(B2T5.quizUptakeOf('measured', qs, new Set()), 'CONTROL: nothing dropped').toEqual(control);
+  });
+
+  b2t5It('K27: payloadChangedOf selects only reason-bearing run-failed records and returns deterministic deduplicated qids (W2-5b1 build departure; re-anchor at W2-5b1 merged code)', () => {
+    const excludedA = { qid: 'q-a', question_state: 'run-failed', reason: B2T5.ARM_PAYLOAD_CHANGED };
+    const excludedADuplicate = { ...excludedA };
+    const siblingA = { qid: 'q-a', question_state: 'run-failed', arm_state: 'answered' };
+    const excludedB = { qid: 'q-b', question_state: 'run-failed', reason: B2T5.ARM_PAYLOAD_CHANGED };
+    b2t5Expect(B2T5.payloadChangedOf([{ record: excludedB }, { record: siblingA }, { record: excludedA }, { record: excludedADuplicate }]))
+      .toEqual({ count: 2, qids: ['q-a', 'q-b'] });
+    b2t5Expect(() => B2T5.payloadChangedOf([{ record: { ...excludedA, question_state: 'answered' } }])).toThrow(TypeError);
+  });
+
+  b2t5It('K27 CONTROL: a reasonless sibling and an ordinary run failure add no payload-drift qid', () => {
+    const sibling = { qid: 'q-a', question_state: 'run-failed', arm_state: 'answered' };
+    const ordinary = { qid: 'q-c', question_state: 'run-failed' };
+    b2t5Expect(B2T5.payloadChangedOf([{ record: sibling }, { record: ordinary }])).toEqual({ count: 0, qids: [] });
   });
 
   b2t5It('sameMsHitsOf gathers each node asof_same_ms_hits for its frozen questions; one it does not count is unmeasured (W2-D34)', () => {
@@ -8979,6 +9913,31 @@ b2t5Describe('W2-5b2 Task 5: report over gathered node outputs', () => {
     b2t5Expect(v.gate.report_only.quiz_uptake.by_arm[B2T5_T].questions).toBe(2);
   });
 
+  b2t5It('K27: a W2-5b1 payload-drift exclusion is run-failed for W2-D89 and is reported once by qid, while its answered sibling keeps no reason (W2-5b1 build departure; re-anchor at W2-5b1 merged code)', async () => {
+    const first = b2t5World();
+    const qid = b2t5PayloadEntry(first).qid as string;
+    const w = b2t5World({ payloadChanged: (e) => e.qid === qid });
+    b2t5Expect((await b2t5Report(w.argv())).refusal).toBeNull();
+    const v = b2t5Verdict(w.out);
+    b2t5Expect(v.gate.counts, 'the existing W2-D89 input counts the question, not a new reason vocabulary').toMatchObject({ Q: 2, run_failed: 1 });
+    b2t5Expect(v.gate.halts).toContain('run-failed');
+    b2t5Expect(v.gate.report_only.payload_changed).toEqual({ count: 1, qids: [qid] });
+    const excluded = JSON.parse(readFileSync(b2t5RecordOf(w, B2T5_S1, B2T5_C), 'utf8')) as B2t5R;
+    const sibling = JSON.parse(readFileSync(b2t5RecordOf(w, B2T5_S1, B2T5_T), 'utf8')) as B2t5R;
+    b2t5Expect(excluded).toMatchObject({ qid, question_state: 'run-failed', arm_state: 'run-failed', reason: B2T5.ARM_PAYLOAD_CHANGED });
+    b2t5Expect(sibling, 'the sibling shares question_state but retains its answer and never owns the reason').toMatchObject({ qid, question_state: 'run-failed', arm_state: 'answered' });
+    b2t5Expect(Object.hasOwn(sibling, 'reason')).toBe(false);
+    b2t5Expect(B2T5.payloadChangedOf([{ record: excluded }, { record: sibling }]), 'both records carry question_state, but only the reason-bearing record is selected').toEqual({ count: 1, qids: [qid] });
+  });
+
+  b2t5It('K27 CONTROL: an infrastructure run failure has no payload-drift report-only field', async () => {
+    const first = b2t5World();
+    const qid = b2t5PayloadEntry(first).qid as string;
+    const control = b2t5World({ runFailed: (e) => e.qid === qid });
+    b2t5Expect((await b2t5Report(control.argv())).refusal).toBeNull();
+    b2t5Expect(Object.hasOwn(b2t5Verdict(control.out).gate.report_only, 'payload_changed')).toBe(false);
+  });
+
   b2t5It('W2-D82, Q10: quiz uptake read unmeasured is null, never 0, and moves no verdict; the default reading is W2-5b2 Task 2 own', async () => {
     b2t5Expect(B2T5.REPORT_DEPS.uptakeReading).toBe(B2T5.quizUptakeReadingOf);
     const w = b2t5World();
@@ -9157,8 +10116,8 @@ b2t5Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 5: the end-to-en
 cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5b2 Task 5|FLAG_SPECS declares exactly|three box-mode spawns, one per taught spelling'
 ```
 
-Expected (predicted): 75 failed (74 on darwin, where the walk is skipped):
-- the 73 new cases: 12 pure (K24's `aggregate-only` case among them), 60 subcommand and 1 walk. The pure ones fail on `… is not a function` or an undefined constant, and the scan case finds no `decideGate(` line. The subcommand ones fail on `args-invalid` `unknown subcommand "report"`;
+Expected (predicted): 79 failed (78 on darwin, where the walk is skipped):
+- the 77 new cases, counted from Step 3's block: 14 pure (the K27 `payloadChangedOf` reader and K24's `aggregate-only` case among them), 62 subcommand (18 single cases, the two K27 cases among them, and `.each` rows of 2, 1, 10, 27 and 4) and 1 walk. The pure ones fail on `… is not a function` or an undefined constant, and the scan case finds no `decideGate(` line. The subcommand ones fail on `args-invalid` `unknown subcommand "report"`;
 - the two re-pinned cases, on their new flags and their `'report'` key.
 
 - [ ] **Step 5: Extend the shared pieces.** In `deploy/history-replay.mjs`:
@@ -9361,6 +10320,25 @@ export function quizUptakeOf(reading, questions, dropped) {
   return { reading, by_arm: byArm };
 }
 
+/** K27: W2-5b1 writes ARM_PAYLOAD_CHANGED on the excluded owed arm only; its answered sibling shares question_state
+ * run-failed without a reason. Select the reason-bearing record, validate that it is run-failed, and deduplicate qids so
+ * the report exposes one exclusion per question. This is report-only: nodeAnswersOf still feeds the existing run-failed
+ * question state to decideGate and its W2-D89 threshold. Pure. (W2-5b1's build departure; re-anchor at W2-5b1's merged code.)
+ * @param {Iterable<{record: {qid: string, question_state: string, reason?: string}}>} records */
+export function payloadChangedOf(records) {
+  const qids = new Set();
+  for (const { record } of records) {
+    if (record.reason === undefined) continue;
+    if (record.reason !== ARM_PAYLOAD_CHANGED) continue;
+    if (record.question_state !== 'run-failed') {
+      throw new TypeError(`payloadChangedOf: ${record.qid} has ${ARM_PAYLOAD_CHANGED} but question_state ${JSON.stringify(record.question_state)}`);
+    }
+    qids.add(record.qid);
+  }
+  const ordered = [...qids].sort(cmpUnit);
+  return { count: ordered.length, qids: ordered };
+}
+
 /** W2-D34's asof_same_ms_hits, gathered from each quiz node's quiz-source output for its frozen questions: per store the
  *  questions counted, those with a hit, and the hits; a frozen question its output does not count is unmeasured, never 0. Pure.
  *  @param {Array<{qid: string, store_id: string}>} entries  @param {Map<string, any>} sourcedByStore */
@@ -9535,8 +10513,12 @@ function inputsByStore(name, inputs, want, record) {
  *  questions with a call, calls, via_agent and errored) are the ones the summary's sha pins. A question's uptake and
  *  answer-field value are pinned only through those sums, never one by one (K24): every gate input stays pinned, and the
  *  report-only quiz uptake by arm is exactly pinned only when V1 drops no quiz family (quizUptakeOf marks it
- *  aggregate-only otherwise). A record's own record_sha256 is not compared: it is written once, under the record in force when its question
- *  settled, and amendments only append (W2-D90). Answers the records by qid, their files' shas and their stamps. */
+ *  aggregate-only otherwise). K27's `ARM_PAYLOAD_CHANGED` is a reason on the excluded owed arm's `run-failed` record only;
+ *  its answered sibling shares the question state and has no reason. payloadChangedOf reads the record collection whole,
+ *  derives one sorted qid per reason-bearing record, and armsSummaryOf must reproduce that optional summary field byte for
+ *  byte (W2-5b1's build departure; re-anchor at W2-5b1's merged code). A record's own record_sha256 is not compared: it is
+ *  written once, under the record in force when its question settled, and amendments only append (W2-D90). Answers the
+ *  records by qid, their files' shas and their stamps. */
 function nodeAnswersOf({ summary, storeId, recordSha256, entries }) {
   const s = summary.value;
   const at = `arms-summary ${storeId}`;
@@ -9554,8 +10536,10 @@ function nodeAnswersOf({ summary, storeId, recordSha256, entries }) {
   const mine = new Map(entries.map((e) => [e.qid, e]));
   const recs = new Map();
   const files = [];
+  const records = [];
   const stamps = new Set();
-  for (const { rel, sha256, record: r } of readAnswerRecords(root, 'quiz')) {
+  for (const item of readAnswerRecords(root, 'quiz')) {
+    const { rel, sha256, record: r } = item;
     const e = mine.get(r.qid);
     if (e === undefined || !RECALL_ARMS.includes(r.arm) || r.store_id !== storeId || r.ccrc_id !== e.ccrc_id || r.generation !== e.generation
       || r.boundary_uuid !== e.boundary_uuid || r.fact_kind !== e.kind) {
@@ -9567,7 +10551,15 @@ function nodeAnswersOf({ summary, storeId, recordSha256, entries }) {
     }
     recs.set(judgePairKey(r.qid, r.arm), r);
     files.push({ rel, sha256 });
+    records.push(item);
     for (const st of r.stamps) stamps.add(st);
+  }
+  let payloadChanged;
+  try {
+    payloadChanged = payloadChangedOf(records);
+  } catch (e) {
+    if (!(e instanceof TypeError)) throw e;
+    refuse('input-invalid', `${at} ${e.message}`);
   }
   const answers = new Map();
   const questions = [];
@@ -9591,14 +10583,14 @@ function nodeAnswersOf({ summary, storeId, recordSha256, entries }) {
   let again;
   try {
     again = armsSummaryOf({ section: 'quiz', recordSha256: s.record_sha256, storeId: s.store_id, budget: s.budget, spend: s.spend,
-      batches: s.batches, stop: s.stop, stamps: s.stamps, questions });
+      batches: s.batches, stop: s.stop, stamps: s.stamps, questions, payloadChanged: payloadChanged.qids });
   } catch (e) {
     if (!(e instanceof TypeError)) throw e;
     refuse('input-invalid', `${at} ${e.message}`);
   }
   if (sha256Hex(`${canonicalJson(again)}\n`) !== summary.sha256) refuse('input-invalid', `${at} does not match its answer records: armsSummaryOf over them gives other bytes`);
   for (const st of s.stamps) stamps.add(st);
-  return { answers, files, stamps };
+  return { answers, files, stamps, payloadChanged };
 }
 
 /** One quiz node's verify --section quiz output (W2-D84, Q16): this record's, its headless-on state and over-hide count. */
@@ -9714,6 +10706,7 @@ export async function reportCommand(flags, driverEnv, deps = REPORT_DEPS) {
   const mapSha256 = sha256Hex(judgeMapText('quiz', run.frozen.sha256, map));
   const answers = new Map();
   const answerFiles = [];
+  const payloadChangedQids = new Set();
   const judgedByPair = new Map();
   const overHide = {};
   const headlessOn = {};
@@ -9722,6 +10715,7 @@ export async function reportCommand(flags, driverEnv, deps = REPORT_DEPS) {
     const mine = entries.filter((e) => e.store_id === s);
     const node = nodeAnswersOf({ summary: by['arms-summary'].get(s), storeId: s, recordSha256: run.sha256, entries: mine });
     for (const [qid, a] of node.answers) answers.set(qid, a);
+    for (const qid of node.payloadChanged.qids) payloadChangedQids.add(qid);
     for (const f of node.files) answerFiles.push({ store_id: s, ...f });
     for (const st of node.stamps) stamps.add(st);
     const j = by.judged.get(s).value;
@@ -9757,8 +10751,10 @@ export async function reportCommand(flags, driverEnv, deps = REPORT_DEPS) {
   const dropped = droppedOf(live.changed.changed, abStates);
   const questions = entries.map((e) => ({ key: familyKeyOf(e), state: answers.get(e.qid).state, arms: answers.get(e.qid).arms }));
   const liveFamilies = live.assembled.families;
+  const payloadChanged = { qids: [...payloadChangedQids].sort(cmpUnit) };
   const reportOnly = {
     quiz_counts: questionCountsOf(questions.map((q) => q.state)),
+    ...(payloadChanged.qids.length === 0 ? {} : { payload_changed: { count: payloadChanged.qids.length, qids: payloadChanged.qids } }),
     quiz_uptake: quizUptakeOf(deps.uptakeReading(record.pilot_result), questions, dropped.keys),
     live_uptake: liveUptakeOf(liveFamilies, dropped.keys),
     first_call: firstCallOf(liveFamilies.map((f) => ({ key: f.key, arm: f.arm, report: live.raw.get(f.key) })), dropped.keys),
@@ -9817,11 +10813,11 @@ cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts
 ```
 
 Expected (predicted):
-- First run: 75 passed (74 and 1 skipped on darwin).
-- Second run: W2-5b1's arm-word scan, its partition and import pins, and its arms, judge and walk cases are green unchanged. (d) keeps `readArmAnswers`' answer and every refusal word; W2-D42's scan sees no arm word in the new section; the `RECALL_ARMS[` indexing count stays at two.
+- First run: 79 passed (78 and 1 skipped on darwin).
+- Second run: W2-5b1's arm-word scan, its partition and import pins, and its arms, judge and walk cases are green unchanged, with W2-5b1 Task 5's `JUDGE_OUTCOMES …` case green in the `indexOf` form Task 1 re-pinned it to (`report` registers last, after `judge`; the old `.slice(-2)` form would read `['handcheck', 'report']`). (d) keeps `readArmAnswers`' answer and every refusal word; K27 consumes `ARM_PAYLOAD_CHANGED` as W2-5b1's existing report-only reason rather than extending the driver or answer-state vocabulary; W2-D42's scan sees no arm word in the new section; the `RECALL_ARMS[` indexing count stays at two.
 - typecheck green.
 
-Every count and outcome in this step and in Step 8 is a prediction. This includes the fixture assumptions no planning step measured: `b2t5World`'s passing set, the walk's two nodes on W2-5b1's stubs and its `halt`/`empty-arm` verdict, the bootstrap's `point` of `6/6`, and the sample sizes. If one does not hold, fix the fixture, never the guard, and record the measured value over the predicted one in a `docs(plan): … (W2-5b2 Task 5)` commit touching only this plan (as W2-5b1's R25 and R32 read it). Scratch goes under `.superpowers/sdd/history-w2-5b2/` (gitignored), never `git stash`.
+Every count and outcome in this step and in Step 8 is a prediction. This includes the fixture assumptions no planning step measured: `b2t5World`'s passing set, the K27 two-record shape (one reason-bearing excluded arm and one answered sibling), the walk's two nodes on W2-5b1's stubs and its `halt`/`empty-arm` verdict, the bootstrap's `point` of `6/6`, and the sample sizes. If one does not hold, fix the fixture, never the guard, and record the measured value over the predicted one in a `docs(plan): … (W2-5b2 Task 5)` commit touching only this plan (as W2-5b1's R25 and R32 read it). Scratch goes under `.superpowers/sdd/history-w2-5b2/` (gitignored), never `git stash`.
 
 - [ ] **Step 8: Measure every guard red, then green.** From the repository root.
   1. Write the mutant table as a quoted heredoc, so nothing in it expands, then copy the driver aside. Run this preamble once:
@@ -9899,6 +10895,14 @@ M = {
 """, r""""""),
   'M46': (r"""  if (questions.some((q) => dropped.has(q.key))) return { reading, by_arm: byArm, by_arm_pinned: QUIZ_UPTAKE_AGGREGATE_ONLY };   // K24
 """, r""""""),
+  'K27a': (r"""    qids.add(record.qid);
+""", r"""    if (false) qids.add(record.qid);
+"""),
+  'K27b': (r"""  const qids = new Set();
+  for (const { record } of records) {
+""", r"""  const qids = { values: [], add(qid) { this.values.push(qid); }, [Symbol.iterator]() { return this.values[Symbol.iterator](); } };
+  for (const { record } of records) {
+"""),
 }
 p = 'deploy/history-replay.mjs'
 old, new = M[sys.argv[1]]
@@ -9941,7 +10945,7 @@ python3 "$S/t5-mutants.py" M1 && (cd server && ./node_modules/.bin/vitest run te
 | M18 | a stamp on a gathered output carried | `stamp on a gathered output` | 1 failed |
 | M19 | first-call split on the control arm only | `firstCallOf` | 1 failed: the treatment family is cut to 1 |
 | M20 | unmeasured never 0 | `quizUptakeOf\|quiz uptake read unmeasured` | 2 failed |
-| M21 | every refusal before `--out` | `W2-5b2 Task 5: report over gathered node outputs` | 42 failed \| 18 passed: every row asserting no `--out` (10 sha, 27 refusal, 3 W2-D24, window-open, `--allow-code-change`) |
+| M21 | every refusal before `--out` | `W2-5b2 Task 5: report over gathered node outputs` | 42 failed \| 20 passed (of its 62): every row asserting no `--out` (10 sha, 27 refusal, 3 W2-D24, window-open, `--allow-code-change`) |
 | M22 | verdict.json never replaced | `written once` | 1 failed |
 | M23 | the report decides nothing | `W2-5b2 Task 5: report (pure parts\|over gathered node outputs)` | 5 failed: the decides-nothing scan; the fail, hold, override and run-failed cases |
 | M24 | the report words disjoint from the reasons | `report words\|droppedOf\|W2-D23: a treatment family` | 3 failed |
@@ -9967,10 +10971,119 @@ python3 "$S/t5-mutants.py" M1 && (cd server && ./node_modules/.bin/vitest run te
 | M44 | K11: a stale presence record refused, as W2-6's V2 | `refused before --out` | 1 failed: the presence-stale row reaches `--out` |
 | M45 | V1 in the judge tallies by arm | `judgeTallyOf` | 1 failed: the dropped family's judge-failed items are counted |
 | M46 | K24: quiz uptake by arm marked `aggregate-only` when a quiz family is dropped | `quizUptakeOf` | 2 failed: K24's case and the per-arm `quizUptakeOf` case, each dropping a quiz family with no mark left; K24's CONTROL lines pass under the mutant |
+| K27a | K27: a reason-bearing W2-5b1 payload-drift record reaches the report-only qid list | `K27: payloadChangedOf\|K27: a W2-5b1 payload-drift exclusion` | 2 failed test cases: the pure reader fails at its first qid assertion, and the integration case fails first at `gate.report_only.payload_changed`; later assertions in either case are intentionally unrun. The separate reasonless-sibling and ordinary-run-failure CONTROLS are outside this filter and remain independent. |
+| K27b | K27: duplicate qualifying reason-bearing records yield one sorted qid | `K27: payloadChangedOf selects only reason-bearing` | 1 failed test case: the pure reader receives two qualifying `q-a` records, so the append-only collection returns a duplicate qid where the expected unique list is `['q-a', 'q-b']`. The no-reason CONTROL is independent and unrun. Its anchor is two lines, `  const qids = new Set();` then `  for (const { record } of records) {`: W2-5b1's final head already holds the first line once, in `freezeCommand` (about :5935 at 0de4cc990), so the one-line form would count 2 and `t5-mutants.py K27b` would stop on its assertion; the two-line form counts exactly 1, in `payloadChangedOf`. |
 
   4. In a last call of its own, `cmp deploy/history-replay.mjs .superpowers/sdd/history-w2-5b2/scratch/replay.t5.orig && rm -f .superpowers/sdd/history-w2-5b2/scratch/replay.t5.orig` prints nothing. Then re-run Step 7's first command: green.
 
-  5. Two guards have no mutant of their own. The quiz uptake's V1 drop of an assigned quiz family is unreachable here, because no fixture quiz family is assigned; the pure case pins it. `decideGate`'s `question-not-run` refusal is unreachable through a settled summary (W2-D80). Both are named in the PR body. K24's `aggregate-only` mark, which that drop brings, is likewise reached only by the pure cases, but it has a mutant of its own, M46.
+  5. Two guards have no mutant of their own. The quiz uptake's V1 drop of an assigned quiz family is unreachable here, because no fixture quiz family is assigned; the pure case pins it. `decideGate`'s `question-not-run` refusal is unreachable through a settled summary (W2-D80). Both are named in the PR body. K24's `aggregate-only` mark, which that drop brings, is likewise reached only by the pure cases, but it has a mutant of its own, M46. K27 keeps K27a as its omitted-row mutant, while K27b independently proves deduplication among two qualifying records (named K27a and K27b, never M47 and M48, which are Task 2's). (K27b was M48, AK-3's fold) The claimed K27-specific gate-input mutant is withdrawn: `gateInputsOf` consumes normalized answers, and generic M26 already proves the run-failed gate path.
+
+- [ ] **Step 8a: The F1 carry: the judge input's answer field over every gate line break (D-6470; review 958's F1).** W2-5b1's fix rounds after `554df82f0` read `answer_field` from the complete masked reply and give it the mask mark when whole-block masking swallowed a raw ANSWER line. It decides that by counting ANSWER lines over the driver's module-private `ANSWER_FIELD_LINE_BREAK` (W2-5b1 Task 5's; about :7316 at 0de4cc990, read by the two `.split(ANSWER_FIELD_LINE_BREAK)` counts about :7337-7338), which mirrors the gate's module-private `LINE_BREAK` (about :1382 of `deploy/history-gate.mjs` at 0de4cc990, `const LINE_BREAK = /\r\n|[\n\r\p{Zl}\p{Zp}]/u;`). W2-5b1 pinned it on `\n` only (its case `an ANSWER line swallowed by a PEM mask carries the same mark as the complete reply`, about test:13165 at 0de4cc990, joins its reproduction with `'\n'`). This step pins the other three gate line breaks and CRLF, on W2-5b1's own reproduction (review 958's F1: one case per line break, and the measured mutant). The guard is W2-5b1's and already merged, so these cases are green on arrival: their red is the measured mutant F1C, never a red-first run. Nothing spawns, so the describe runs on every platform. It runs after Step 8's closing `cmp`, so none of Step 8's filters selects it.
+
+  1. Append, at the end of the file directly after this task's walk describe (until now the last describe of Task 5's block; Task 6's block still comes after this one):
+
+```ts
+// ── W2-5b2 Task 5: the F1 carry, judgeInputOf's answer field over every gate line break (D-6470) ─────────────────────
+// W2-5b1's fix round reads the judge input's answer_field from the masked reply and gives it the mask mark when a
+// raw ANSWER line was swallowed, counting ANSWER lines over the driver's module-private ANSWER_FIELD_LINE_BREAK, which
+// mirrors the gate's module-private LINE_BREAK. One case per gate line break on W2-5b1's two-line reproduction: a
+// surviving first ANSWER line, then an OPENSSH private-key block whose own lines, the last ANSWER line among them, are
+// split by that same break, so a splitter that misses the break reads both raw ANSWER lines as one. Every separator and
+// the backslash come from String.fromCharCode, so no escape in this block can be decoded by a write.
+const B2T5_BS = String.fromCharCode(0x5c);
+/** A hand copy of history-gate.mjs's private LINE_BREAK. The gate is a signed GATE_CODE_FILES member and is never
+ *  edited, so the splitter is not imported; the scan case below holds this copy to the gate's own declaration line. */
+const B2T5_GATE_LINE_BREAK = new RegExp(`${B2T5_BS}r${B2T5_BS}n|[${B2T5_BS}n${B2T5_BS}r${B2T5_BS}p{Zl}${B2T5_BS}p{Zp}]`, 'u');
+const B2T5_BREAKS: Array<[string, string]> = [
+  ['CR', String.fromCharCode(13)], ['CRLF', String.fromCharCode(13, 10)],
+  ['U+2028', String.fromCharCode(0x2028)], ['U+2029', String.fromCharCode(0x2029)],
+];
+const B2T5_F1_FACT = 'npm run fixture-lint';
+const B2T5_F1_BODY = ['QyNTUxOQ', 'AAACDx3B', 'q9yC2mT0', 'm4w5'].join('');
+/** W2-5b1's reproduction with `br` between every line: the surviving ANSWER line, then the key block holding the last. */
+const b2t5F1Reply = (br: string): string => {
+  const edge = (word: string): string => [['-----', word].join(''), ['OPEN', 'SSH', 'PRIVATE', 'KEY-----'].join(' ')].join(' ');
+  return [`ANSWER: ${B2T5_F1_FACT}`, edge('BEGIN'), B2T5_F1_BODY, `ANSWER: ${B2T5_F1_BODY}`, edge('END')].join(br);
+};
+
+b2t5Describe('W2-5b2 Task 5: the F1 carry, the judge input\'s answer field over every gate line break (D-6470)', () => {
+  b2t5It.each(B2T5_BREAKS)('a surviving first ANSWER line and a key block swallowing the last, split by %s, give answer_field the mask mark', (_name, br) => {
+    b2t5Expect(`a${br}b`.split(B2T5_GATE_LINE_BREAK), 'CONTROL: the gate\'s line rule reads this break as one line break').toEqual(['a', 'b']);
+    const reply = b2t5F1Reply(br);
+    b2t5Expect(w5b5Gate.parseAnswerField(reply), 'CONTROL: the raw last ANSWER is inside the key block').toMatchObject({ state: 'value', value: B2T5_F1_BODY });
+    const input = W5B5.judgeInputOf(w5b5Entry(B2T5_F1_FACT), reply, t4Lib.makePairIndex([]));
+    b2t5Expect(input.reply, 'CONTROL: the whole block is masked and the first ANSWER line survives').toBe(`ANSWER: ${B2T5_F1_FACT}${br}${t4Lib.REDACTED_MARK}`);
+    b2t5Expect(w5b5Gate.parseAnswerField(input.reply), 'CONTROL: the masked reply alone would answer the surviving fact').toMatchObject({ state: 'value', value: B2T5_F1_FACT });
+    b2t5Expect(input.answer_field, 'the swallowed last ANSWER line carries the mark, never the surviving fact').toBe(t4Lib.REDACTED_MARK);
+    b2t5Expect(w5b5Lib.canonicalJson(input)).not.toContain(B2T5_F1_BODY);
+  });
+
+  b2t5It('ANSWER_FIELD_LINE_BREAK is declared once and read by both of judgeInputOf\'s counts, and the hand copy is the gate\'s LINE_BREAK', () => {
+    const code = (file: string): string[] => readFileSync(join(W5B4_REPO, 'deploy', file), 'utf8').split('\n').filter(b2t5Code).map((l) => l.trim());
+    const drv = code('history-replay.mjs');
+    b2t5Expect(drv.filter((l) => l.startsWith('const ANSWER_FIELD_LINE_BREAK = ')), 'declared once').toHaveLength(1);
+    b2t5Expect(drv.filter((l) => l.includes('.split(ANSWER_FIELD_LINE_BREAK)')), 'the raw and the masked counts').toHaveLength(2);
+    b2t5Expect(code('history-gate.mjs').filter((l) => l.startsWith('const LINE_BREAK = ')), 'the gate\'s one private splitter, as the copy spells it')
+      .toEqual([`const LINE_BREAK = /${B2T5_GATE_LINE_BREAK.source}/${B2T5_GATE_LINE_BREAK.flags};`]);
+  });
+});
+```
+
+  The names it reuses are module-level: W2-5b1 Task 5's `W5B5`, `w5b5Entry` (kind `command` by default), `w5b5Gate` and `w5b5Lib`; W2-4's `t4Lib`; W2-5b1 Task 4's `W5B4_REPO`; the file's `readFileSync` and `join`; and this task's `b2t5Code`, `b2t5Describe`, `b2t5It` and `b2t5Expect`.
+
+  2. Run it, in the foreground, with a timeout of at least 600000 ms:
+
+```bash
+cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5b2 Task 5: the F1 carry'
+```
+
+  Expected (predicted): 5 passed on every platform: the four line-break rows and the scan. A red at a CONTROL is a fixture fact, never the guard's. For example, lib's whole-block PEM mask may not leave exactly `ANSWER: <fact><br>[redacted]` under one of the breaks. Fix the fixture, and record the measured value over the predicted one in a `docs(plan): … (W2-5b2 Task 5)` commit.
+
+  3. Measure the guard red: one mutant, F1C, narrowing the driver's class to `\n` alone. Run the preamble once:
+
+```bash
+S=.superpowers/sdd/history-w2-5b2; mkdir -p "$S/scratch"
+cp deploy/history-replay.mjs "$S/scratch/replay.t5f1.orig"
+cat > "$S/t5-f1.py" <<'EOF'
+import sys
+OLD = r"""const ANSWER_FIELD_LINE_BREAK = new RegExp(`\\r\\n|[\\n\\r${String.fromCharCode(0x2028, 0x2029)}]`, 'u');"""
+NEW = r"""const ANSWER_FIELD_LINE_BREAK = /\n/u;"""
+p = 'deploy/history-replay.mjs'
+s = open(p).read()
+assert s.count(OLD) == 1, ('F1C', s.count(OLD))
+open(p, 'w').write(s.replace(OLD, NEW))
+EOF
+```
+
+  Then the mutant as its own tool call:
+
+```bash
+S=.superpowers/sdd/history-w2-5b2; F=deploy/history-replay.mjs
+python3 "$S/t5-f1.py" && (cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-5b2 Task 5: the F1 carry'); cp "$S/scratch/replay.t5f1.orig" "$F"; cmp "$F" "$S/scratch/replay.t5f1.orig"
+```
+
+  Expected RED (predicted): 3 failed, 2 passed.
+  - Failed: the `CR`, `U+2028` and `U+2029` rows, each at `the swallowed last ANSWER line carries the mark, never the surviving fact` (expected `[redacted]`, received `npm run fixture-lint`). With no `\n` in the reply, the narrowed class sees one line on each side. The gate's `parseAnswerField` finds one ANSWER in each, so no line reads as swallowed, and the masked reply's surviving value stands.
+  - Passed: the `CRLF` row (its `\n` still splits the two raw ANSWER lines apart) and the scan (the declaration line still begins `const ANSWER_FIELD_LINE_BREAK = `).
+  - The `cmp` prints nothing.
+
+  Record each red title as vitest prints it, for example `… split by CR, give answer_field the mask mark`. Then, in a last call of its own:
+
+```bash
+S=.superpowers/sdd/history-w2-5b2; cmp deploy/history-replay.mjs "$S/scratch/replay.t5f1.orig" && rm -f "$S/scratch/replay.t5f1.orig" "$S/t5-f1.py"
+```
+
+  It prints nothing. Re-run item 2's command: 5 passed.
+
+  Then the test typecheck, in the foreground, with a timeout of at least 600000 ms, as its own tool call. Step 7's typecheck ran before this describe existed, so this is the one that reads it, and it runs before Step 10 commits:
+
+```bash
+cd server && ./node_modules/.bin/tsc -p test/tsconfig.tests.json --noEmit
+```
+
+  Expected (predicted): exit 0, no output. A type error in the appended describe is the fixture's to fix, as item 2's rule says. Step 7's first command, whose filter `W2-5b2 Task 5` also selects this describe's five cases, would now read 84 passed (83 and 1 skipped on darwin) if re-run after this step, not Step 7's 79; Step 9's whole-file run reads them too.
+
+  4. Record the measured counts and red titles in the commit's task note (Step 10's F1 clause). The second spelling of the gate's line rule is recorded in the PR body's `### Departures` as a departure with no number. The reason, briefly: `deploy/history-gate.mjs` is a signed gate file in `GATE_CODE_FILES`, hashed into part 1's `gate_code` and re-checked first by every `--record` consumer (W2-D24), and it is outside every W2 build plan. So its private splitter is neither exported nor imported, and the hand copy is held to its declaration line instead.
 
 - [ ] **Step 9: Run the neighbours that read the driver.** In the foreground, with a timeout of at least 600000 ms, one suite per tool call. A red file is re-run alone before it is called a break (CLAUDE.md's load flakes; `typecheck-tests` is one):
 
@@ -10001,13 +11114,13 @@ Expected: each green.
 ```bash
 git add deploy/history-replay.mjs server/test/history-replay.test.ts
 CO_AUTHORED_BY='<the Co-Authored-By line the attribution reminder gives>'
-git commit -m "feat(history-replay): report, every node's gathered outputs sha-checked into decideGate's inputs, verdict.json and the report-only figures (W2-5b2 Task 5; W2-D85, W2-D89, W2-D23, W2-D82, W2-D24; S2, Q15, Q23, Q28, V1; K8, K11, K12, K24; D-6646)" -m "In-place edits of earlier cases (K5): W2-4 Task 1's FLAG_SPECS pin gains report's ten flags (judged and judged-sha256 are Task 4's, K4); W2-4 Task 9's HANDLERS line gains 'report'. W2-5b1 Task 4's readArmAnswers becomes readAnswerRecords' projection, its words unchanged. The hand-check through Task 4's loadHandcheckPlan, readHandcheckLabels and handcheckResultOf (K4); a stale presence record refused (K11); quiz uptake by arm marked aggregate-only when a quiz family is dropped (K24). Red first: <Step 4's measured failed count> failed then green; mutants M1 to M46 measured as Step 8 recorded them (<each measured over predicted, or: each as predicted>), the driver restored by cmp." -m "$CO_AUTHORED_BY"
+git commit -m "feat(history-replay): report, every node's gathered outputs sha-checked into decideGate's inputs, verdict.json and the report-only figures (W2-5b2 Task 5; W2-D85, W2-D89, W2-D23, W2-D82, W2-D24; S2, Q15, Q23, Q28, V1; K8, K11, K12, K24, K27; D-6646)" -m "In-place edits of earlier cases (K5): W2-4 Task 1's FLAG_SPECS pin gains report's ten flags (judged and judged-sha256 are Task 4's, K4); W2-4 Task 9's HANDLERS line gains 'report'. W2-5b1 Task 4's readArmAnswers becomes readAnswerRecords' projection, its words unchanged. The hand-check through Task 4's loadHandcheckPlan, readHandcheckLabels and handcheckResultOf (K4); a stale presence record refused (K11); quiz uptake by arm marked aggregate-only when a quiz family is dropped (K24). K27 reads W2-5b1's existing ARM_PAYLOAD_CHANGED record reason as a deduped report-only qid list while W2-D89 keeps the question run-failed. Red first: <Step 4's measured failed count> failed then green; mutants M1 to M46, K27a and K27b measured as Step 8 recorded them (<each measured over predicted, or: each as predicted>), the driver restored by cmp. The F1 carry (D-6470, review 958's F1, Step 8a): judgeInputOf's answer field over CR, CRLF, U+2028 and U+2029, against a pinned hand copy of the gate's private LINE_BREAK (a departure with no number, in the PR body); <its measured passed count> passed, mutant F1C measured (<its red titles>), the driver restored by cmp." -m "$CO_AUTHORED_BY"
 ```
 
 ### Task 6: README's replay-driver paragraph and its pin, the spec errata in place, the departures, the whole-PR checks and the PR
 
 Tasks 1 to 5 ship W2-5b2's code and pins: `step0b` (Task 1), `fidelity`, the usage pilot through W2-5b1's `arms` and `judge`, `pilot-result` and `open --finalize`'s derived budget (Task 2), `open --amend` and W2-D56's half-done re-run (Task 3), `handcheck --sheet` and the label reader (Task 4), and `report` (Task 5). This task adds no driver code and no driver guard. It writes the two documents W2-5b owes beside them (decisions §2's "W2-5b (deploy)" entry, split by S1, gives both to W2-5b2):
-- **README's driver paragraph** (the ledger's carry from W2-5a: "README's driver paragraph names the driver's `--no-warnings` shebang"; decisions §2: "README's driver paragraph and the W2 operator flow"), one paragraph of its own, `**The replay driver (W2's eval).**`, placed after W2-2b's headless-seam paragraph and before the rule that closes "Session history" (V5), so it is line-disjoint from W2-6's paragraph, which sits between the card-line and box-verbs paragraphs (U15, Q29). It names the shebang, the operator flow from step 0a through the pilot and the window to the report, and V1's dropped verify states, and holds no `:<digits>` token. One describe pins it, red first, with eleven mutants.
+- **README's driver paragraph** (the ledger's carry from W2-5a: "README's driver paragraph names the driver's `--no-warnings` shebang"; decisions §2: "README's driver paragraph and the W2 operator flow"), one paragraph of its own, `**The replay driver (W2's eval).**`, placed after W2-2b's headless-seam paragraph and before the rule that closes "Session history" (V5), so it is line-disjoint from W2-6's paragraph, which sits between the card-line and box-verbs paragraphs (U15, Q29). It names the shebang, the operator flow from step 0a through the pilot and the window to the report, V1's dropped verify states, and K25's approximate non-hard exposure disclosure: approximately twice the signed share (the pilot uses `pilot_budget`) plus token cost of in-flight soft-stop overshoot; concurrency is not a per-run token cap. It holds no `:<digits>` token. One describe pins it, red first, with its README mutants and the named bound-disclosure mutant.
 - **The spec errata W2-5b owns** (decisions §6: E2, E7, E8, E9, E10, E11, E19, E20, E21, E22, E23 and E24), amended in place in one script run, eighteen single-line replacements, each citing its number where §6 gives one, with W2-1's Task 6 rule: the old sentence stood once, the new stands once, and the line count does not move. None of them touches W2-6's E25 lines or their buffers (U15).
 
 It commits those three files once, then measures what the PR holds against what W2-5b2 may hold (S1): the departures, the file list, the carries and must-holds by content and by title, the Q29 disjointness from W2-6 hunk by hunk, the PR's own suite whole, the whole-PR checks one per tool call, the private-name, host and home-path counts, a clean tree, the PR body, and the PR with its review threads.
@@ -10059,6 +11172,7 @@ It commits those three files once, then measures what the PR holds against what 
 - **One commit for the documents and their pin.** README, the spec and the describe land together, so the suite is green at the commit and the pin never reads a README it does not describe. Every later step reads; a check that finds a defect sends the fix to the task that owns the code, as that task's correction commit, and a number issued during the build or a corrected prediction is recorded in this plan by a `docs(plan)` commit (S1 as W2-5b1's R25 reads it).
 - **README is pinned by a test; the errata by the script.** README's paragraph is operator guidance that names values the driver owns (its shebang, its subcommands, `AB_STATES`), so a moved value must red until README follows, as W2-2b's seam paragraph is held in `history-cli.test.ts` and W2-6's counters paragraph in its own region. The pin lives in `history-replay.test.ts`, the one test file W2-5b2 may edit (W2-D5). The errata are dated design text, checked once by W2-1's script shape (the old sentence stood once, the new stands once, every line kept), as W2-1 Task 6 did: no test reads the spec's errata sentences at `92dac5764` (the nine history test files that name the spec do so in header comments only), and W2-6's E25 pin reads only its own two lines.
 - **The paragraph sits after W2-2b's seam paragraph (V5).** That is where the W2-6 plan's Q29 table tells W2-5b2 to put it: the box-verbs paragraph and the seam paragraph, about 56 unchanged lines, then lie between W2-6's insertion and this one, so git merges the two cleanly in either order. The pin asserts the placement (after the seam and box-verbs leads), so a paragraph moved into W2-6's gap reds (mutant RM3).
+- **K25's README disclosure is deliberately non-hard.** It says the ledger exposure is approximately twice the signed share (the pilot substitutes `pilot_budget`) plus token cost of soft-stop overshoot already in flight: `limits.concurrency` arm runs and `CONCURRENCY_MAX` judge runs can overlap, but concurrency is not a per-run token cap. It never asserts a strict bound. The pin holds the complete wording and its bound-disclosure mutant changes the final sentence to a strict promise, which must red.
 - **README names the subcommands, the record forms and the rules, not every flag.** The flags are each subcommand's to refuse (`checkFlags`), and the paragraph would rot on every flag a task adds. It names the forms the operator runs (`open --draft`, `--finalize`, `--amend`, `verify --registry`, `--section pilot|quiz|ab`, `marker`'s three sections, `arms` and `judge`'s two) and the three flags whose meaning is a rule: `--record`/`--record-sha256`, `--allow-code-change` and `--accept-failed-pilot`, plus `--settings-mode fallback` for Q26's re-run.
 - **The order pin is the operator's order.** The subcommands are named in the order decisions §5's acts first run them; the pin derives the names from `HANDLERS` and holds their first mentions in that order, so a subcommand added without a README sentence, or a flow written out of order, reds (mutants RM6, RM7).
 - **No `:<digits>` token.** A port-like token in README is a topology hazard and a citation shape; the pin refuses any `:` followed by a digit in the paragraph (mutant RM9). The paragraph spells modes as `0700` and `0600` and no time of day.
@@ -10168,13 +11282,16 @@ describe('W2-5b2 Task 6: README states the replay driver once, after the headles
     expect([...at].sort((a, b) => a - b), 'README names the subcommands out of the operator order').toEqual(at);
   });
 
-  it('states the record forms, the gate_code re-check, the flags that are rules and a failed re-pilot remedy (W2-D24, W2-D90, Q23, Q26, Q27, K22)', () => {
+  it('states the record forms, the gate_code re-check, the flags that are rules, the non-hard exposure disclosure and a failed re-pilot remedy (W2-D24, W2-D90, Q23, Q26, Q27, K22, K25)', () => {
     const { paragraph } = w5b26Readme();
     for (const t of ['`open --draft`', '`open --finalize`', '`open --amend`', '`--record`', '`--record-sha256`', '`gate_code`',
       '`code-changed`', '`--allow-code-change`', '`--accept-failed-pilot`', '`--settings-mode fallback`', '`verdict.json`',
       '`sha256 <hex>`', '`not-run`']) expect(paragraph, t).toContain(t);
     expect(paragraph, 'K22 (c): a failed re-pilot and its remedy')
       .toContain("A re-pilot that fails refuses `pilot-failed` and cannot be amended: no flag overrides it, and the operator rules whether that node's window stands.");
+    expect(paragraph, 'K25: approximate exposure, not a hard cap').toContain(
+      'The disclosed node exposure is approximately twice its signed share (the pilot uses `pilot_budget`), plus the token cost of soft-stop overshoot already in flight: at most `limits.concurrency` arm runs and `CONCURRENCY_MAX` judge runs may be in flight, but concurrency is not a per-run token cap. This is not a strict bound.'
+    );
   });
 
   it("lists every verify state but ok as a family the report's per-arm figures leave out, each state apart (V1)", () => {
@@ -10225,7 +11342,7 @@ the account's limits row and the token budget in force are read; a stop leaves t
 `not-run`, and the same command resumes them once the stop clears. Every subcommand that reads the signed open
 record (`--record` with `--record-sha256`) re-checks the record's `gate_code` hashes before anything else and
 refuses `code-changed`; after window start, `--allow-code-change` stamps every output and the verdict instead.
-The flow, in order: `probe`, a box-mode check of the taught spellings, may run first; `step0a` on each node,
+The disclosed node exposure is approximately twice its signed share (the pilot uses `pilot_budget`), plus the token cost of soft-stop overshoot already in flight: at most `limits.concurrency` arm runs and `CONCURRENCY_MAX` judge runs may be in flight, but concurrency is not a per-run token cap. This is not a strict bound. The flow, in order: `probe`, a box-mode check of the taught spellings, may run first; `step0a` on each node,
 `pilot-source` on the one pilot node, then `open --draft`, which prints part 1 of the open record for the
 operator to save 0600 off-repo and post its sha; each node's census and `verify --registry`, then `power` and
 the Q18 decision. The pilot, on one fresh `--out`: `headless-on` written by hand from `marker --section pilot`,
@@ -10354,6 +11471,7 @@ M = {
     'RM9': ('README.md', inpara('Its report-only per-arm figures', 'Its report-only per-arm figures (see port :1234)')),
     'RM10': ('README.md', inpara('`open --amend` after a version move', 'open --amend after a version move')),
     'RM11': ('README.md', inpara("A re-pilot that fails refuses `pilot-failed` and cannot be amended: no flag\noverrides it, and the operator rules whether that node's window stands. ", '')),
+    'bound-disclosure': ('README.md', inpara('This is not a strict bound.', 'This is a strict bound.')),
 }
 path, fn = M[name]
 edit(path, fn)
@@ -10371,7 +11489,7 @@ t() { python3 -I .superpowers/sdd/history-w2-5b2/t6-mut.py "$1" && (cd server &&
 t RM1
 ```
 
-and likewise `t RM2` … `t RM11`, one per tool call. Expected, each predicted (`applied <name> <path>`, then the vitest summary, then nothing from either `cmp`):
+and likewise `t RM2` … `t RM11`, then `t bound-disclosure`, one per tool call. Expected, each predicted (`applied <name> <path>`, then the vitest summary, then nothing from either `cmp`):
 
 | Mutant | The edit | Expected RED |
 |---|---|---|
@@ -10386,6 +11504,7 @@ and likewise `t RM2` … `t RM11`, one per tool call. Expected, each predicted (
 | RM9 | a `:1234` port-like token added | `1 failed`: the port case |
 | RM10 | `open --amend` no longer a code span | `1 failed`: the record-forms case, `` `open --amend` `` |
 | RM11 | the failed re-pilot's remedy removed (K22 (c)) | `1 failed`: the record-forms case, `K22 (c): a failed re-pilot and its remedy` |
+| bound-disclosure | `This is not a strict bound.` becomes `This is a strict bound.` (K25) | `1 failed`: the record-forms case, `K25: approximate exposure, not a hard cap` |
 
 A mutant that stays green means the pin does not read what it claims: fix the pin in this task, before the commit, and re-run every mutant. After a call that timed out or was cut off, restore both files with `cp` from the copies and `cmp` before anything else. Close the block in a last call of its own:
 
@@ -10561,7 +11680,7 @@ Expected: `Test Files  1 passed (1)`; every case passed or skipped (Step 11 reco
 ```bash
 git add README.md docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md server/test/history-replay.test.ts
 CO_AUTHORED_BY='<the Co-Authored-By line the attribution reminder gives>'
-git commit -m "docs(history): README's replay-driver paragraph and its pin, the seam sentence on the as-of cut, and the W2-5b spec errata in place (W2-5b2 Task 6; W2-D3, S1, V1, V5, U15, K16, K17, K18; D-5765, D-5766, D-5767, D-5768, D-5769, D-5776, D-5777, D-5778, D-5779, D-5780, D-5781)" -m "Errata E2, E7, E8, E9, E10, E11, E19, E20, E21, E22, E23 and E24, eighteen lines replaced in place, the line count unchanged; README's seam sentence on the as-of cut reworded to agree with E11 (K16, D-5766); the pin red-first (<Step 1's measured failed count> failed), mutants RM1 to RM11 measured as Step 2 recorded them (<each measured over predicted, or: each as predicted>), then green." -m "$CO_AUTHORED_BY"
+git commit -m "docs(history): README's replay-driver paragraph and its pin, the seam sentence on the as-of cut, and the W2-5b spec errata in place (W2-5b2 Task 6; W2-D3, S1, V1, V5, U15, K16, K17, K18; D-5765, D-5766, D-5767, D-5768, D-5769, D-5776, D-5777, D-5778, D-5779, D-5780, D-5781)" -m "Errata E2, E7, E8, E9, E10, E11, E19, E20, E21, E22, E23 and E24, eighteen lines replaced in place, the line count unchanged; README's seam sentence on the as-of cut reworded to agree with E11 (K16, D-5766); the pin red-first (<Step 1's measured failed count> failed), mutants RM1 to RM11 and the named bound-disclosure mutant measured as Step 2 recorded them (<each measured over predicted, or: each as predicted>), then green." -m "$CO_AUTHORED_BY"
 ```
 
 - [ ] **Step 6: The departures.** Write the checker as a quoted heredoc (W2-5b1 Task 6's, the plan path changed):
@@ -10598,7 +11717,7 @@ DEC=docs/superpowers/plans/2026-10-19-ccrc-history-w2-decisions.md
 node .superpowers/sdd/history-w2-5b2/t6-dnum.mjs "$PLAN" "$DEC"
 ```
 
-Expected: `deviations-section 1`; `plan-defines 3 D-6644 D-6645 D-6646` (the three numbers the coordinator issued at planning), followed by any number issued during the build, each in the order its entry stands; then one line per number, each `defined 1`, `agree 1` and `in-decisions 0`: `D-6644` with slug `history-w2-uptake-unseen-unmeasured`, entry-task and first-citing `2`; `D-6645`, `history-w2-handcheck-sheet-shows-judge-input`, `4`; `D-6646`, `history-w2-report-answers-held-to-summary`, `5`. W2-5b2 defines no decisions-document number (W2-D4), none of W2-5b1's (D-6467, D-6468, D-6469 and D-6470, cited bare) and none of W2-6's.
+Expected: `deviations-section 1`; `plan-defines 4 D-6644 D-6645 D-6646 D-6723` (the four numbers the coordinator issued at planning), followed by any number issued during the build, each in the order its entry stands; then one line per number, each `defined 1`, `agree 1` and `in-decisions 0`: `D-6644` with slug `history-w2-uptake-unseen-unmeasured`, entry-task and first-citing `2`; `D-6645`, `history-w2-handcheck-sheet-shows-judge-input`, `4`; `D-6646`, `history-w2-report-answers-held-to-summary`, `5`; `D-6723`, `history-w2-judge-gate-counts-judge-spend`, `2`. W2-5b2 defines no decisions-document number (W2-D4), none of W2-5b1's (D-6467, D-6468, D-6469 and D-6470, cited bare) and none of W2-6's.
 
 Then the CONTROL: the same checker on a copy that ends with a synthetic entry, built at runtime and appended twice, must count it twice. The synthetic number is assembled from parts, so no tracked file spells it:
 
@@ -10635,7 +11754,7 @@ d="D-$(date +%s)"; printf 'control %s\n' "$(git grep -l -E -e "^(- \*\*$d(\*\*| 
 Expected:
 - `defined-elsewhere scan done`, with no line before it. A planning-time number is defined by this plan on `main` only; a build-time number is on no plan on `main` yet.
 - `cited <c>`: copy it into the PR body.
-- `bare-citation scan done`, with no line before it: every number cited bare has a definition in some plan, in the em-dash, dated or heading form. This task's own bare citations and where each is defined: D-5765 and D-5766 (W2-2a's plan), D-5767, D-5768, D-5769 and D-6445 (W2-2b's), D-5776, D-5777, D-5778, D-5779 and D-5781 (W2-3's), D-5780, D-6280 and D-6309 (W2-5a's), D-6467, D-6468, D-6469 and D-6470 (W2-5b1's), D-5814 and D-6122 (W2-4's), and D-5893, D-6178, D-6211 and D-6223 (the citation, consolidation and growth-exemption plans). W2-6's numbers are not cited: Step 10 tells a merged W2-6 by its E25 text, not by its numbers, so this plan's bare citations hold whichever of the two plans reaches `main` first.
+- `bare-citation scan done`, with no line before it: every number cited bare has a definition in some plan, in the em-dash, dated or heading form. This task's own bare citations and where each is defined: D-5765 and D-5766 (W2-2a's plan), D-5767, D-5768, D-5769 and D-6445 (W2-2b's), D-5776, D-5777, D-5778, D-5779 and D-5781 (W2-3's), D-5780, D-6280 and D-6309 (W2-5a's), D-6467, D-6468, D-6469, D-6470, D-6481 and D-6482 (W2-5b1's), D-5814 and D-6122 (W2-4's), and D-5893, D-6178, D-6211 and D-6223 (the citation, consolidation and growth-exemption plans). W2-6's numbers are not cited: Step 10 tells a merged W2-6 by its E25 text, not by its numbers, so this plan's bare citations hold whichever of the two plans reaches `main` first.
 - `control 0`: the lookup answers 0 for a number no plan defines, so a printed `0` above is real.
 
 Then the placeholder tokens. A concrete placeholder departure token anywhere in the tree, the commit messages or the plan means a departure was never resolved into a number the coordinator issued:
@@ -10731,6 +11850,7 @@ const a = [...g.ASSIGNMENT_ARMS].sort().join(' ');
 const r = [...l.RECALL_ARMS].sort().join(' ');
 console.log('arm-sets', a === r ? 'equal' : 'differ', 'gate-order', g.ASSIGNMENT_ARMS.join(' '));
 console.log('ab-states', d.AB_STATES.join(' '));
+console.log('judge-spend-scopes', Array.isArray(d.SPEND_SCOPES) ? d.SPEND_SCOPES.join(' ') : '-', typeof d.judgeSpentOf);
 EOF
 node .superpowers/sdd/history-w2-5b2/t6-carries.mjs
 git show origin/main:deploy/history-replay.mjs | grep -oE "^import .* from '[^']+';$" | sed -E "s/.* from '([^']+)';$/\1/" | tr '\n' ' '; echo
@@ -10753,6 +11873,7 @@ From `t6-live.mjs`:
 - `flags <f> allow-code-change bool accept-failed-pilot bool`: copy `f` into the PR body;
 - `arm-sets equal gate-order treatment control` (S2's C9);
 - `ab-states ok control-absent control-mismatch treatment-named unreadable` (V1's set, the one README names).
+- `judge-spend-scopes all judge function`: K25's vocabulary is declared once and the pure judge-only reader is exportable for its Task 2 cases. Step 9 separately reads the named judge-scope and linked-rerun cases. K26 and K28 are not read here: `maskingAgreementOf` is module-private, so Task 1's K28 scan and Step 9's H22 titles (`masking-snapshots-disagree`) are their checks.
 
 Then the added lines. The block prints counts only:
 
@@ -10828,6 +11949,9 @@ H17|5b2|before --out
 H18|all|arm word
 H19|5b2|README
 H20|5b2|V1
+H21|5b2|judge spend
+H22|5b2|masking-snapshots-disagree
+H23|5b2|payload-change exclusions
 EOF
 ```
 
@@ -10847,6 +11971,9 @@ Expected: `titles <t> w2-5b2 <u>`, `u` at least 6; `task 1` to `task 6` each at 
 | H18 | the driver never spells an arm word (W2-5b1 Task 1's scan, kept green) | W2-D42 | W2-5b1 1 |
 | H19 | README names the `--no-warnings` shebang and the flow | the ledger's W2-5a carry; S1 | 6 |
 | H20 | the report's per-arm figures drop every non-`ok` verify state, each listed apart | V1 | 5, 6 |
+| H21 | the judge scope ignores only arm spend, parses the full ledger, and arms retain whole-ledger gating | K25, D-6723 | 2 |
+| H22 | every masked spawn input agrees over every retained reading of the pair index before persistence or spawn; a disagreement refuses `masking-snapshots-disagree <site>`, never the newest mask | K26, K28; D-6481 | 1, 2, 3 |
+| H23 | a real payload-change exclusion is `run-failed`, counted to W2-D89 and qid-listed; a version-move pair does not enter it | K27; W2-5b1's build departure; re-anchor at W2-5b1's merged code | 3, 5 |
 
 A row that reads `0` is not yet a finding (W2-5b1's R22 rule, read for this plan): read the owning task's cases for the pin. If it is there under other words, copy its title into the PR body's pins and say so. If no case pins it, report the row to the coordinator as a finding against the owning task; this task never adds a case. The errata are not a title row: Steps 3 and 4's script is their check, and its output goes into the PR body.
 
@@ -10897,7 +12024,7 @@ node .superpowers/sdd/history-w2-5b2/t6-q29.mjs
 Expected (W2-6 merged or not):
 - `README w2-6 <merged|not-merged> lines <c>-<b> hunks <n> meeting 0 nearest-gap <g>`, `g` at least 1: this task's two README hunks both lie below the box-verbs paragraph: K16's two-line rewording inside the seam paragraph, the nearer (`g` about 49), and the driver paragraph after it, so the box-verbs paragraph and the head of the seam paragraph lie between them and W2-6's gap (`c` the card-line paragraph's last line, `b` the box-verbs paragraph's first, about :5839 and :5841 before W2-6 merges; W2-6's paragraph between them once it has); `n` is 2 unless a task's correction touched README (none should: only this task holds README).
 - `spec w2-6 <merged|not-merged> lines <u>-<s> hunks 17 meeting 0 nearest-gap 4`: the eighteen replaced lines are seventeen `-U0` hunks (E22's :2718 and :2719 are one), none meets the uptake-to-stratification lines (about :2740 to :2743), and E23's line ends 4 unchanged lines above them (Step 3's `gap above 4`).
-- `test w2-6 merged lines <lo>-<hi> hunks <n> meeting 0 nearest-gap <g>` with `g` at least 1, or `test w2-6 not-merged range absent hunks <n>`: no W2-5b2 hunk (Tasks 1 to 5's in-place re-pins near the file's head and their appended blocks at its end, this task's included) meets W2-6's region, its opening line's predecessor or its marker's successor.
+- `test w2-6 merged lines <lo>-<hi> hunks <n> meeting 0 nearest-gap <g>` with `g` at least 1, or `test w2-6 not-merged range absent hunks <n>`: no W2-5b2 hunk (Tasks 1 to 5's in-place re-pins near the file's head, Task 1's one-line re-pin of W2-5b1 Task 5's `HANDLERS.keys()` order line inside W2-5b1's appended blocks, about 2,590 lines past W2-6's trailing context, and their appended blocks at its end, this task's included) meets W2-6's region, its opening line's predecessor or its marker's successor.
 
 Copy the three lines into the PR body's "How it ran beside W2-6". A `meeting` above 0, or a `nearest-gap` of 0, is reported to the coordinator before any push: the hunk is moved by its owning task, never W2-6's lines. When W2-6 has not merged, the coordinator re-runs this reader on whichever of the two PRs lands second (its merge of `main`); Steps 0 and 11 make the same check from this side.
 
@@ -11002,12 +12129,12 @@ W2's replay eval asks each frozen question of two arms and has a judge label eve
 
 ### What ships
 
-- **`step0b` (Task 1; W2-D57, W2-D58; Q11, Q26, R1 of W2-5b1).** The turn bound, counting main-thread messages through the stream's per-message attribution; persistence; the arm init; and the treatment-arm assertions (the taught spellings admitted, `…; cat <transcript>`, `$(…)` and an `rg` of a synthetic transcript path denied, only Bash and Agent, no MCP or plugin, an Agent subagent's tool list labelled inferred, the skill listed). It records `error_max_turns` and every `error` field (Q31), prints its sha, and a failed or unmeasured assertion halts and is recorded, never folded; a skill missing under `--restricted` halts for the operator's `--settings-mode fallback` re-run (Q26).
-- **`fidelity`, the usage pilot and `pilot-result` (Task 2; W2-D76, W2-D55, W2-D64, W2-D82; Q6 to Q10).** Fidelity in box mode, with no marker, checked against part 1's pilot (seed, frozen sha, families and store, Q9); the usage pilot through W2-5b1's `arms` and `judge`; `pilot-result`, the producer of the shape W2-5a reads, with the extrapolation ceil(1.25 × n_questions × the usage pilot's spend per question, arms and judge) and its inputs, the absent rate, the `is_error` reading (a control exit 8 that is not `is_error` makes uptake `unmeasured`, never a failure), the settings mode and step 0b's sha, and the pilot's measured relation between the two spend readings (Q7). `open --finalize` refuses a pilot result written under another part 1, naming both shas (K21), derives `spend_budget` and refuses a mismatch (D-6280 closed), and refuses a failed pilot without `--accept-failed-pilot`, whose use is printed (Q27).
-- **The mid-window re-pilot and `open --amend` (Task 3; W2-D90, W2-D56, W2-D6; Q12, Q13; K1, K6, K7).** The re-pilot (`step0b`, `fidelity` and `pilot-result`, each `--section quiz`) on a fresh `--out`, preflighted against the version it measures, pinned once per `--out`, writing a re-pilot result and its sha. `open --amend`: append-only, a `kind` in the gate's `AMENDMENT_KINDS`, the detail schemas Q13 sets (a freeze exception's optional `release_tag`, K6), a `version-move` refused without a passed re-pilot result of this record, node and version; a freeze exception's release admitted under `--allow-code-change` and stamped `code-changed`; and W2-D56's rule that after a version re-pilot both arms of every half-done question re-run on the new version, found through W2-5b1's per-batch manifests (Q14), closing W2-5b1's residual.
+- **`step0b` (Task 1; W2-D57, W2-D58; Q11, Q26, R1 of W2-5b1).** The turn bound, counting main-thread messages through the stream's per-message attribution; persistence; the arm init; and the treatment-arm assertions (the taught spellings admitted, `…; cat <transcript>`, `$(…)` and an `rg` of a synthetic transcript path denied, only Bash and Agent, no MCP or plugin, an Agent subagent's tool list labelled inferred, the skill listed). It records `error_max_turns` and every `error` field (Q31), prints its sha, and a failed or unmeasured assertion halts and is recorded, never folded; a skill missing under `--restricted` halts for the operator's `--settings-mode fallback` re-run (Q26). Its card preflights agree over every retained reading of the pair index through one `maskingAgreementOf`, factored in place out of W2-5b1's arms and judge loops (K26, K28).
+- **`fidelity`, the usage pilot and `pilot-result` (Task 2; W2-D76, W2-D55, W2-D64, W2-D82; Q5 to Q10; K25; D-6723).** Fidelity in box mode, with no marker, checked against part 1's pilot (seed, frozen sha, families and store, Q9); the usage pilot through W2-5b1's `arms` and `judge`; `pilot-result`, the producer of the shape W2-5a reads, with the extrapolation ceil(1.25 × n_questions × the usage pilot's spend per question, arms and judge) and its inputs, the absent rate, the `is_error` reading (a control exit 8 that is not `is_error` makes uptake `unmeasured`, never a failure), the settings mode and step 0b's sha, and the pilot's measured relation between the two spend readings (Q7). `open --finalize` refuses a pilot result written under another part 1, naming both shas (K21), derives `spend_budget` and refuses a mismatch (D-6280 closed), and refuses a failed pilot without `--accept-failed-pilot`, whose use is printed (Q27). K25 keeps one ledger: arms gate its whole spend, while `openJudge` reads only exact judge-named rows after the whole ledger parses; `judged.json.spend` remains whole-ledger. It discloses approximate exposure of twice the signed share (pilot: twice `pilot_budget`) plus token cost of in-flight soft-stop overshoot, not a strict bound because concurrency is not a per-run token cap.
+- **The mid-window re-pilot and `open --amend` (Task 3; W2-D90, W2-D56, W2-D6; Q12, Q13; K1, K6, K7, K26, K27).** The re-pilot (`step0b`, `fidelity` and `pilot-result`, each `--section quiz`) on a fresh `--out`, preflighted against the version it measures, pinned once per `--out`, writing a re-pilot result and its sha. `open --amend`: append-only, a `kind` in the gate's `AMENDMENT_KINDS`, the detail schemas Q13 sets (a freeze exception's optional `release_tag`, K6), a `version-move` refused without a passed re-pilot result of this record, node and version; a freeze exception's release admitted under `--allow-code-change` and stamped `code-changed`; and W2-D56's rule that after a version re-pilot both arms of every half-done question re-run on the new version, found through W2-5b1's per-batch manifests (Q14), closing W2-5b1's residual. Every masked re-pilot input agrees over W2-5b1's retained readings of the pair index before it spawns or persists, through the one agreement function K28 factors out of W2-5b1's arms and judge loops (K26); a disagreement refuses `masking-snapshots-disagree <site>`, never the newest mask. The new pair arises from one preflight after old-attempt linkage resets, so it cannot be rejected as owed-versus-sibling drift (W2-5b1's build departure; re-anchor at W2-5b1's merged code).
 - **`handcheck --sheet` and the label reader (Task 4; W2-D81; Q18, Q19; K9, K10; D-6645).** The seeded per-arm sample at the record's `handcheck.share`, every `judge-failed` item added; each item shown as the judge's own pinned input, masked at its node and cut at 16 KiB (D-6645, D-6470), with no arm and no judge label, under W2-5b1's positional judge ids; a manifest naming every input by sha; the strict label reader.
-- **`report` (Task 5; W2-D85, W2-D89, W2-D23 with V1; Q2, Q15, Q17, Q28; S2's C15, C21).** It sha-checks every gathered input, keys families by `familyKey`, calls `decideGate` and decides nothing, writes `verdict.json` and prints its sha; its report-only figures (driver-local labels, disjoint from the driver's and the gate's words) drop from every per-arm figure exactly the families W2-6's counters drop, every `verify --section ab` state but `ok`, each listed apart (V1), and quiz uptake by arm is marked `aggregate-only` when that drop takes a quiz family (K24); each measure-history file's mtime is recorded as a labelled read-instant proxy beside the report's own instant (C15). RP6-e2e and RP7-e2e run through it.
-- **README and the spec (Task 6).** README's own paragraph, `**The replay driver (W2's eval).**`, after the headless-seam paragraph (V5): the driver's `--no-warnings` shebang, its `--out` and refusal conventions, the `gate_code` re-check, and the operator flow from step 0a through the pilot and the window to the report, pinned by one describe red first (eleven mutants); and W2-2b's seam sentence on the as-of cut reworded to agree with E11 (K16). The spec's errata E2, E7, E8, E9, E10, E11 and E19 to E24, amended in place, below.
+- **`report` (Task 5; W2-D85, W2-D89, W2-D23 with V1; Q2, Q15, Q17, Q28; S2's C15, C21).** It sha-checks every gathered input, keys families by `familyKey`, calls `decideGate` and decides nothing, writes `verdict.json` and prints its sha; its report-only figures (driver-local labels, disjoint from the driver's and the gate's words) drop from every per-arm figure exactly the families W2-6's counters drop, every `verify --section ab` state but `ok`, each listed apart (V1), and quiz uptake by arm is marked `aggregate-only` when that drop takes a quiz family (K24); each measure-history file's mtime is recorded as a labelled read-instant proxy beside the report's own instant (C15). A genuine `arm-payload-changed` exclusion remains `run-failed` in W2-D89 inputs and lists its qid among report-only figures (K27; W2-5b1's build departure; re-anchor at W2-5b1's merged code). RP6-e2e and RP7-e2e run through it.
+- **README and the spec (Task 6).** README's own paragraph, `**The replay driver (W2's eval).**`, after the headless-seam paragraph (V5): the driver's `--no-warnings` shebang, its `--out` and refusal conventions, the `gate_code` re-check, K25's approximate non-hard spend disclosure, and the operator flow from step 0a through the pilot and the window to the report, pinned by one describe red first (the existing README mutants plus the named bound-disclosure mutant); and W2-2b's seam sentence on the as-of cut reworded to agree with E11 (K16). The spec's errata E2, E7, E8, E9, E10, E11 and E19 to E24, amended in place, below.
 - **W2-D24's re-check** before any other input, in each of this PR's `--record` consumers.
 
 Four files: `deploy/history-replay.mjs`, `server/test/history-replay.test.ts`, `README.md` and the spec, plus this wave's plan where a build-time number or a corrected prediction is recorded. No new file (W2-D5); no change to `ccd/**`, `shared/**`, `deploy/history-gate.mjs`, `deploy/measure-history.py`, `.github/**`, `single-definition.test.ts` or W2-6's files and regions (U15). Neither the driver nor README is a growth-check file (D-6178).
@@ -11041,9 +12168,11 @@ Each licensed by the coordinator's K5 and named in its task's commit:
 - W2-4 Task 1's `DRIVER_REASONS` case: `pilot-failed` appended (Task 1).
 - W2-4 Task 1's `FLAG_SPECS declares exactly …` pin: each task's flags appended (Tasks 2, 3, 4 and 5).
 - W2-4 Task 9's `HANDLERS` key line: `step0b` (Task 1), `fidelity` and `pilot-result` (Task 2), `handcheck` (Task 4), `report` (Task 5).
+- W2-5b1 Task 5's case `JUDGE_OUTCOMES are driver-local report words, disjoint from DRIVER_REASONS and GATE_REASONS` (Task 1, licensed under K5 at CP-20): its one `HANDLERS.keys()` line, `.slice(-2)` equal to `['arms', 'judge']`, re-pinned to `indexOf('judge') === indexOf('arms') + 1`, so W2-5b1's invariant (judge registered right after arms) holds through every later registration. The only W2-5b1 case line this PR changes.
 - W2-5a Task 7 (Task 2): `chain7`'s pilot result re-pinned to the producer's shape, part 1's `record_sha256` included (K21); the window case's `--spend-budget` set to the derived 30000000; `RANGE_ROWS`' threshold and `max_age_ms` rows with `quizRun7`'s fresh limits row (review 811 F2); the D-6309 unit case's title (F5).
 - W2-5a Task 7 (Task 3): the open-modes case expects the four-mode sentence.
-- W2-5b1's code, extended in place (K2, Task 2): its `arms` and `judge` pilot forms take `--step0b`/`--step0b-sha256`, and `loadArmRun`'s pilot branch reads step 0b's mode. No W2-5b1 case is edited.
+- K25's exactly two further code-edit licences: W2-4's `batchGate` scope and W2-5b1's `openJudge` gate call. No other W2-5b1 case, ledger or persisted shape changes.
+- W2-5b1's code, extended in place (K2, Task 2): its `arms` and `judge` pilot forms take `--step0b`/`--step0b-sha256`, and `loadArmRun`'s pilot branch reads step 0b's mode. No W2-5b1 case is edited for it.
 (any further in-place edit a task's commit names, from its message)
 
 ### Departures
@@ -11053,6 +12182,8 @@ Each is defined in the plan's `## Deviations found`:
 - **D-6644** (`history-w2-uptake-unseen-unmeasured`, Task 2): a pilot that sees no control history call reads `unseen`, and quiz uptake `unmeasured`: a third reading beside W2-D82's two, never a failure.
 - **D-6645** (`history-w2-handcheck-sheet-shows-judge-input`, Task 4): the sheet shows the judge's own pinned input, masked at its node and cut at 16 KiB, with kind, answer field and the signed rubric, because the reporting node cannot mask another node's raw reply.
 - **D-6646** (`history-w2-report-answers-held-to-summary`, Task 5): the answer records are held byte for byte to the sha-checked arms summary and judged file, each named by its own sha in `verdict.json`, instead of each being passed with its own sha. The summary pins uptake and answer-field values as per-arm sums, so every gate input stays pinned and quiz uptake by arm is marked `aggregate-only` when a quiz family is dropped (K24).
+- The issued D-6723 judge-gate departure (Task 2): the judge gate alone counts exact judge-named spend after parsing the whole ledger; arms and `judged.json.spend` remain whole-ledger. It departs from W2-D55 and Q5 only because arm spend otherwise prevents the judge from producing labels the verdict needs. The named Task 2 judge-scope, malformed-full-ledger, whole-ledger-arms and safe-prefix cases, with their CONTROLs and mutants, pin it; its sole definition is in this plan's `## Deviations found`.
+- **No number: Task 5's F1 carry spells the gate's line rule a second time, in a test.** Its scan case holds a hand copy of `deploy/history-gate.mjs`'s module-private `LINE_BREAK` to the gate's own declaration line, through the copy's `source` and `flags`, instead of importing the gate's splitter. The gate's private `LINE_BREAK` cannot be imported: `deploy/history-gate.mjs` is a signed gate file, in `GATE_CODE_FILES`, so its installed bytes are hashed into part 1's `gate_code` and re-checked first by every `--record` consumer (W2-D24), and every W2 build plan leaves it untouched (W2-3 shipped it; this PR never edits it). Exporting it would move that sha for a test's convenience. So W2-5b1's driver copy, `ANSWER_FIELD_LINE_BREAK`, stays a pinned copy: module-private, pinned by behaviour, one case per gate line break, and by the measured mutant F1C (review 958's F1). D-6470 covers the rule, so no number is issued.
 (any number issued during the build, from Step 6's checker)
 
 Cited bare, defined elsewhere:
@@ -11075,7 +12206,7 @@ Each is the coordinator's, under the operator's directive of 2026-10-19, and eac
 - From W2-5b1's rulings, read here: R1 (step 0b's main-thread count), R16 (the raw reply kept under `--out`, redacted at the sheet), R25 (plan-text commits for build-time numbers and corrected predictions).
 - From W2-6's plan: V1 (every non-`ok` verify state drops its family from the per-arm figures, each listed apart), U15 (this PR keeps off W2-6's README paragraph, its spec lines and buffers, its single-definition describe and its test region), V5 (README's driver paragraph after the seam paragraph).
 
-- The coordinator's rulings for this PR, K1 to K24 (K1 to K20 at drafting, K21 to K23 after integration, K24 after the convergence pass): the re-pilot is Task 3's (K1); the usage pilot runs in step 0b's settings mode through `--step0b` (K2); one halt rule, `pilot-failed` after the file and its sha (K3); the owners' names win (K4); the in-place edits above (K5); a freeze exception's `release_tag` admitted under `--allow-code-change`, stamped (K6); a version move's re-run restarts the attempts, a reading of W2-D56 (K7); node outputs name the current record (K8); `handcheck --sheet` takes `--allow-code-change` (K9); the sheet's judge inputs bound by form (K10); a stale presence record refused, as W2-6's V2 (K11); V1 reaches every per-arm figure, not the hand-check sample (K12); both extra pilot failures kept (K13); part 2 keeps `pilot_result`'s five fields (K14); W2-D82's reading lives in part 2 (K15); README's seam sentence reworded (K16); README's paragraph pinned by a test (K17); no §17 line (K18); no label template (K19); W2-6's pins checked against this PR's additions (K20); `open --finalize` binds the pilot result to part 1, refusing another record's `input-invalid` (K21); the re-pilot's own choices accepted, each limiting one named under the residuals below (K22); the walk's verify output built with `verifyAbReport`, a fixture choice and a prediction (K23); D-6646's residual stated as it is, quiz uptake by arm marked `aggregate-only` when a quiz family is dropped and W2-5b1's summary shape unchanged (K24).
+- The coordinator's rulings for this PR, K1 to K28 (K1 to K20 at drafting, K21 to K23 after integration, K24 after the convergence pass, K25 to K27 after W2-5b1's whole-branch review, K28 at K26's re-anchor): the re-pilot is Task 3's (K1); the usage pilot runs in step 0b's settings mode through `--step0b` (K2); one halt rule, `pilot-failed` after the file and its sha (K3); the owners' names win (K4); the in-place edits above (K5); a freeze exception's `release_tag` admitted under `--allow-code-change`, stamped (K6); a version move's re-run restarts the attempts, a reading of W2-D56 (K7); node outputs name the current record (K8); `handcheck --sheet` takes `--allow-code-change` (K9); the sheet's judge inputs bound by form (K10); a stale presence record refused, as W2-6's V2 (K11); V1 reaches every per-arm figure, not the hand-check sample (K12); both extra pilot failures kept (K13); part 2 keeps `pilot_result`'s five fields (K14); W2-D82's reading lives in part 2 (K15); README's seam sentence reworded (K16); README's paragraph pinned by a test (K17); no §17 line (K18); no label template (K19); W2-6's pins checked against this PR's additions (K20); `open --finalize` binds the pilot result to part 1, refusing another record's `input-invalid` (K21); the re-pilot's own choices accepted, each limiting one named under the residuals below (K22); the walk's verify output built with `verifyAbReport`, a fixture choice and a prediction (K23); D-6646's residual stated as it is, quiz uptake by arm marked `aggregate-only` when a quiz family is dropped and W2-5b1's summary shape unchanged (K24). K25 keeps judge spend scoped without a second ledger and documents only an approximate non-hard exposure; K26 carries D-6481's retained-snapshot agreement to step 0b, fidelity and the re-pilot; K28 factors that agreement into one module-private `maskingAgreementOf` out of W2-5b1's arms and judge loops, behaviour byte for byte, as one more in-place edit under K5; K27 resets old linkage for a version-move pair and retains genuine payload-change exclusions as W2-D89 `run-failed` with qids (W2-5b1's build departure; re-anchor at W2-5b1's merged code).
 (each ruling made while this plan was reviewed or during the build, one line each, with its date)
 
 ### Must-holds and their pins
@@ -11086,7 +12217,7 @@ Each is the coordinator's, under the operator's directive of 2026-10-19, and eac
 - The sheet is blinded; the label reader is strict.
 - `report` decides nothing, sha-checks every input, keys families by `familyKey`; RP6-e2e and RP7-e2e.
 - Every `--record` consumer re-checks `gate_code` first; a refusal that needs no store and no spawn answers before `--out`; a data case after `--out` never exits INTERNAL; the driver never spells an arm word.
-- The errata in place, each citing its number (the script's output above); README names the `--no-warnings` shebang and the flow (Task 6's pin, mutants RM1 to RM11).
+- The errata in place, each citing its number (the script's output above); README names the `--no-warnings` shebang, the flow and K25's approximate non-hard disclosure (Task 6's pin, RM1 to RM11 and the named bound-disclosure mutant).
 - Each guard a task's mutant step lists (Tasks 1, 2 and 5: Step 8; Task 3: Step 6; Task 4: Step 7; Task 6: Step 2) was measured red under its mutant, then green, as the task's commit note records; a refusal with no mutant is named under that task's "no mutant, by design" list.
 
 (the case titles Step 9 counted or found, one per must-hold, and the re-check rows)
@@ -11105,6 +12236,9 @@ Each is the coordinator's, under the operator's directive of 2026-10-19, and eac
 - **A failed re-pilot cannot be amended.** `open --amend` refuses it `pilot-failed`, and no override flag exists; the operator rules whether that node's window stands, as README says (K22 (c)).
 - **A re-pilot on a node whose installed release a freeze exception moved refuses `tree-moved`**, since no pilot form takes `--allow-code-change` (Q23, K22 (d)). The release a node's exception admits is its newest freeze-exception amendment carrying a `release_tag` (K22 (e), K6's reading).
 - **The end-to-end walk's `verify --section ab` outputs are built with `verifyAbReport`**, not run: the walk's fixture stores hold no presence record. That is a fixture choice and a prediction (K23, R32's rule); the report's own reading of a real verify output is pinned by Task 5's other cases.
+- **The judge can exhaust its own share.** It then stops `budget-exhausted` and writes no `judged.json`; the operator rules on that node. An arm side that stopped on its own whole-ledger budget remains incomplete (W2-D55). Earlier rows still count after a version move. K25's exposure sentence is an approximate disclosure, not a strict bound: token cost of in-flight soft-stop overshoot is additional, and concurrency is not a per-run token cap.
+- **K26's agreement can refuse a whole act.** A pair the sweep learns between two preflights (or two fidelity boundaries) makes the retained readings disagree, and the act refuses `input-invalid` `masking-snapshots-disagree <site>` rather than masking with either reading. The remedy is always a fresh `--out`, never the same one: a resume reads back finished runs built under the earlier reading (W2-D53), so one result would hold runs from two readings. A pair learned while a batch is spawning is first seen at the next preflight of the same act, if any; a pair learned after an act's last admission is not seen by that act (D-6481's own residual). The both-arm re-run separately resets linkage before one fresh preflight, while a genuine payload-change exclusion remains report-visible `run-failed` with its qid (K27; W2-5b1's build departure; re-anchor at W2-5b1's merged code).
+- **A disagreement refusal is re-run on a fresh `--out`.** A re-run of step 0b or fidelity on the same `--out` after a disagreement refusal would reuse finished runs built under the earlier reading; the remedy is a fresh `--out`, K28.
 - **The answer records are pinned to their node's summary as per-arm sums** (D-6646, K24). `armsSummaryOf` pins per-question uptake (`calls`, `via_agent`, `errored`) and answer-field values only as per-arm sums for each node, so those sums can move between a node's questions without a red. Every gate input stays pinned. The report-only quiz uptake by arm is exactly pinned only when V1 drops no quiz family; when one is dropped, the figure carries `by_arm_pinned: "aggregate-only"`. The order of non-correct answer states between questions of one arm is free too, and no gate input reads it.
 - **Same millisecond and clock steps outside the holding copy**, O13's known width, and the other residuals of decisions §7 stand as stated there.
 
@@ -11112,6 +12246,7 @@ Each is the coordinator's, under the operator's directive of 2026-10-19, and eac
 
 - Every guard red-first on the unguarded code, then each named mutant red after the guard landed, then green again; each task's commit message records its counts.
 - Every test drives the driver in a `mkTmp` fixture HOME with the scrubbed environment; every spawn reaches a recording stub, never a real Claude Code, with a poisoned `gh` first on `PATH`; stores are fixture stores. No step read a live store or home, or spawned a real model.
+- K25's Task 2 cases red first on judge-versus-arm spend, malformed rows, prefix/overflow and unknown scope; K26/K28's Task 1 to 3 cases red first (no agreement function, then a learned pair that must refuse `masking-snapshots-disagree <site>`), each beside a no-learning CONTROL, and their mutants (Task 1's K28a to K28c, Task 2's K26F, Task 3's P15 and P16) red under the newest-mask, later-batch and first-reading-only defects; K27's Task 3 and 5 cases red when linkage is retained or the exclusion leaves W2-D89. The Task 6 README pin holds the complete non-hard wording and its named bound-disclosure mutant red.
 - The driver was read as text for its must-holds (no quoted arm word, no `/headless-on`, no write verb paired with a switch, one recall-off line, the marker's one bounded read, no re-declared import, the module list unchanged, the shebang), and its handlers, partition, flags and verify states were read live.
 - The errata ran through one script that asserts each anchor once, each new text once, every line kept, and W2-6's lines untouched, with a moved-anchor CONTROL.
 - The added lines hold no numeric line citation (code or docs), no port-like README token, no shell, no new `process.env` read, no live-HOME read, no key-shaped literal, no backslash-u escape, no placeholder departure token and no D-number range (counts, all 0).
@@ -11174,12 +12309,12 @@ gh api -X PATCH "repos/$OWNER/$REPO/pulls/$PR" -F "body=@.superpowers/sdd/histor
 
 **Wave-done** needs all four: the PR open, its checks green, no open thread, and the branch tip equal to the PR head (`git rev-parse HEAD` against `gh pr view "$PR" --json headRefOid -q .headRefOid`). The wave-done report also names any number issued to this run and left unused (never written in the PR), and Step 10's three lines, so the coordinator can rule on W2-6's landing order. Merging, the merge queue, the rollout and every act in decisions §5 belong to the coordinator and the operator, never the worker.
 
-**Mutants.** This task adds one guard, README's pin (Step 1), with eleven mutants (Step 2: RM1 to RM11), each predicted red and measured. Its checks carry their own CONTROLs:
+**Mutants.** This task adds one guard, README's pin (Step 1), with RM1 to RM11 and the named bound-disclosure mutant in Step 2, each predicted red and measured. Its checks carry their own CONTROLs:
 - the pin's shebang CONTROL (the driver's first line holds `--no-warnings`), its neighbours CONTROL (the box-verbs and seam leads in the section), its `HANDLERS` equality, its `AB_STATES[0]` CONTROL and its port matcher CONTROL;
 - Step 3's errata script stops at a moved anchor (`rc 1`, nothing written) on a scratch copy, and asserts each new text once, the line count, the eighteen changed lines, W2-1's E1 words and W2-6's lines;
 - Step 6's checker answers `defined 2` for a synthetic entry appended twice, and its bare-citation lookup answers `0` for a number no plan defines;
 - Step 13's list CONTROL finds the list's own first name, and its home-path pattern counts a non-fixture home and admits the fixture ones;
-- the focused runs in Steps 2, 8, 9 and 11 each select their named cases, so none passes vacuously.
+- the focused runs in Steps 2, 8, 9 and 11 each select their named cases, including K25 judge-scope and K27 linked-rerun/report cases. K26/K28's agreement cases are selected by their `masking-snapshots-disagree` titles (H22), so none passes vacuously.
 
 Every other guard this PR adds is in Tasks 1 to 5, each with its own mutant list.
 
@@ -11187,10 +12322,12 @@ Every other guard this PR adds is in Tasks 1 to 5, each with its own mutant list
 - **A fix a check calls for** goes into the task that owns the code, as a correction commit in that task's form, `fix(history-replay): <what> (W2-5b2 Task <N>; W2-D<n>)`, defining in this plan's `## Deviations found` any number it first cites. It is committed before Step 16's push, and Steps 7 to 13 are re-run after it.
 - **A corrected prediction** (a figure in this plan that a step measured otherwise: a handler name in `W5B26_ORDER`, a paragraph fact, a count) is recorded in this plan by a commit named for the task whose prediction it was, `docs(plan): <what> (W2-5b2 Task <N>)`, touching only this plan's text.
 
+
 ## Deviations found
 
-Three numbers are defined here. D-6644, D-6645 and D-6646 were issued by the coordinator for the departures found while this plan was drafted, before dispatch. A number issued during the build is appended below by the commit that first cites it.
+Four numbers are defined here. D-6644, D-6645, D-6646 and D-6723 were issued by the coordinator for the departures found while this plan was drafted, before dispatch. A number issued during the build is appended below by the commit that first cites it.
 
 - **D-6644** — `history-w2-uptake-unseen-unmeasured` (Task 2; W2-D82, Q10, K15): W2-D82 names two outcomes of the pilot's `is_error` reading of the control arm's exit 8: it surfaces as an error, and quiz uptake is measured, or it does not, and quiz uptake is `unmeasured`. A pilot can also see no control history call at all, and then there is nothing to read. This plan adds that third reading, `unseen`, and reads quiz uptake `unmeasured` for it: never measured, and never a failure (fail-closed; an unmeasured value is never folded into a measured one, W2-D84). `uptakeReadingOf` gives the reading from the control arm's counts in the usage pilot's arms summary (`not-error` for any plain control history call, `is-error` for errored calls and no plain one, `unseen` for neither); `UPTAKE_READINGS = ['is-error', 'not-error', 'unseen']` is driver-local and disjoint from `DRIVER_REASONS` and `GATE_REASONS`. The reading lives in part 2 at `pilot_result.usage_extrapolation.uptake.quiz_uptake` (K15), held by `pilotResultError` to the reading its own counts give, and W2-5b2's report reads it through the one reader `quizUptakeReadingOf`, which answers `unmeasured` for anything else. Pins: Task 2's pure cases ("uptakeReadingOf: …" and "quizUptakeReadingOf reads part 2 pilot_result: …"), its pilot-result case "the is_error reading, %s, leaves quiz uptake unmeasured and is never a failure (W2-D82, Q10)", the walk's `unseen` reading, and the reader rows "no uptake reading" and "an uptake its counts do not give"; mutants M13, M14, M49 and M50 of Task 2.
 - **D-6645** — `history-w2-handcheck-sheet-shows-judge-input` (Task 4; W2-D81, W2-D54, R16, D-6470): the hand-check sheet shows, for each sampled item, the judge's own pinned input as W2-5b1's `judge` wrote it beside its node's `judged.json` (`judge/<id>.input.json`): the kind, the question, F as `expected`, the answer field and the reply, every string masked at its node before the judge saw it, the reply and the answer field cut at the judge's 16 KiB (D-6470), plus the signed rubric in the sheet's header. This departs from W2-D81's "the sheet shows the question, F and the redacted reply". The reporting node holds no other node's store, so it cannot mask another node's raw reply with that node's pair index (W2-D54), and the raw reply stays in the node's answer record (R16); the judge's input is already masked at its node and is exactly what the judge labelled, so the operator and the judge label the same text and agreement compares like with like. A reply longer than 16 KiB shows only its head. Each input is bound by form (`judgeInputFault`) and named by its sha in `sheet.json` (K10). Pins: Task 4's describe "W2-5b2 Task 4: the sheet is blinded and shows each item as the judge saw it (W2-D81, W2-D54)" and its `handcheck --sheet` describe; mutants H11 to H15 of Task 4.
 - **D-6646** — `history-w2-report-answers-held-to-summary` (Task 5; W2-D85, Q2, W2-D80, R14): the report reads each quiz node's answer records, which carry no printed sha, from that node's gathered `--out`, located by the sha-checked arms summary that must sit at its `quiz/arms/summary.json`, and holds them byte for byte to that summary through W2-5b1's `armsSummaryOf` and to the sha-checked judged file, whose items must be exactly the non-correct answers of answered questions; `verdict.json` names each record by its own sha. This replaces the scoping study's and W2-D85's reading that each answer record is passed by the operator with its own sha. An answer record is one file per (qid, arm) and an operator cannot copy hundreds of shas by hand. `armsSummaryOf` pins per-question uptake (`calls`, `via_agent`, `errored`) and answer-field values only as per-arm sums for each node (K24); the judged file pins correctness question by question. So every gate input an answer record carries (the per-arm counts, the absent rate and correctness) stays fixed by a sha-checked file. Two freedoms are left, both named residuals: the order of non-correct answer states between questions of one arm, which no gate input reads; and how a node's per-arm uptake sums divide between its questions, which no gate input reads either. The report-only quiz uptake by arm is therefore exactly pinned only when V1 drops no quiz family; when one is dropped, `quizUptakeOf` marks the figure with the driver-local word `aggregate-only` (K24). Re-spelling a sha list, or a per-question uptake, into W2-5b1's summary would move its producer's shape and pins for no gate-input gain, and W2-5b1's summary shape is not changed (K24). Pins: Task 5's "refused before --out" rows "an answer record its summary does not count", "an answer record of another family", "an answer record missing", "an arms summary outside its gathered --out" and "a judged file naming a correct answer", and its case "a passing set: verdict.json holds the decideGate answer whole, its sha is the one stderr line, and every input is named by its sha (W2-D85, W2-D89, D-5983)", and its pure case "quizUptakeOf: a dropped quiz family marks by_arm aggregate-only, …" with its CONTROL (K24); mutants M6, M7, M8, M35, M36 and M46 of Task 5.
+- **D-6723** — `history-w2-judge-gate-counts-judge-spend` (Task 2; W2-D55, Q5, K25): W2-D55 and Q5 make the node ledger's whole spend gate every writer, including arms and judge. This plan departs for the judge gate only: `batchGate` still parses the entire ledger, but its explicit judge scope sums only exact `<section>/judge/` rows for both `ARM_SECTIONS`; `openJudge` alone selects that scope. Arms stay on the all scope, judge rows included, and `judged.json.spend` stays `spentSoFar(out)`, so there is no second ledger, reserve or arms-side loosening. Why: arm spend must not prevent the judge from producing labels the verdict requires. The exposure disclosed to the operator is approximate, not a strict bound: about twice the signed share (the pilot uses `pilot_budget`) plus token cost of in-flight soft-stop overshoot; concurrency is not a per-run token cap. Pins: Task 2's P1 and P1p retain `judged.json.spend` as `spentSoFar(out)` over seeded arm, fidelity and step 0b rows as well as the judge row; P2 refuses a malformed non-judge ledger row before filtering; P3 counts seeded non-judge and judge rows at the arms gate; and P4 holds exact section/judge prefixes and safe sums. Each is red first with a CONTROL. Their named mutants cover all-versus-judge scope, parse-before-filter, omitted rows, prefix broadening, zero sum, overflow, unknown scope and a scoped `judged.json.spend` (JG7).
