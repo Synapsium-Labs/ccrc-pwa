@@ -151,10 +151,12 @@ import { refusalSentence } from './wsaudit.js';
 import {
   childMarkLeftListing, childReclaimBornAt, childReclaimGeneration, childReclaimGenerationRead, childReclaimLatest, childReclaimRowUuid,
   childReclaimSweepOutcomeOf, childReclaimTokenKind, isChildReclaimStuckToken, reclaimChild,
-  recordChildReclaimKeptFeed, recordChildReclaimLeafKeptFeed, releaseRetiredChildHold, type ChildReclaimOutcome, type ChildReclaimReleaseOutcome,
+  recordChildReclaimKeptFeed, recordChildReclaimKeptReason, recordChildReclaimLeafKeptFeed, releaseRetiredChildHold, type ChildReclaimOutcome, type ChildReclaimReleaseOutcome,
   type ChildReclaimReleaseRequest, type ChildReclaimRequest,
 } from './coord/childReclaim.js';
 import { childReclaimDisabledOf, childReclaimDisabledStops } from './coord/childReclaimDisabled.js';
+import { childSiblingsFromListing } from './coord/siblingRead.js';
+import { KeptReasonLimiter } from './coord/keptReason.js';
 import {
   childReclaimAskOrder, childReclaimAttention, childReclaimAttentionWithKept, childReclaimDeferExpired, childReclaimDue,
   childReclaimFeedQuiet, childReclaimFirstSighting, childReclaimHoldRead, childReclaimJournalRow, childReclaimKeptItems,
@@ -969,6 +971,8 @@ export class FleetWatcher {
    *  again with no pruning pass between. IN MEMORY ONLY: a restart feeds each kept child once more. */
   private childReclaimKeptReported =
     new Map<string, { readonly runId: number; readonly words: Set<ChildReclaimKeptWord> }>();
+  /** The kept reason's pacing (D-6923): one feed row per child, kind and run per day. IN MEMORY ONLY. */
+  private readonly childReclaimKeptReasons = new KeptReasonLimiter();
   /** The kept-leaf items (spec §5.6, §5.9), as the sweep's last successful kept-leaf read derived them.
    *  Kept, never erased, across a read that failed. `[]` until the first pass. Derived from the mirror on
    *  every pass that gets past the fail-shut try, so a restart rebuilds them on its first pass. */
@@ -4269,11 +4273,12 @@ export class FleetWatcher {
               const reviewed = coord.run(reviewedId);
               reviewedRun = !reviewed.ok ? { kind: 'unreadable', detail: reviewed.detail }
                 : reviewed.run === null ? { kind: 'absent' }
-                : childReclaimReviewedRun(coord, mintingRunFull.id, reviewedId, reviewed.run.state, names);
+                : { ...childReclaimReviewedRun(coord, mintingRunFull.id, reviewedId, reviewed.run.state, names),
+                    id: reviewedId, openedAt: reviewed.run.openedAt };
             }
           }
-          const sib = coord.openRunsForSession(r.id);
-          siblings = sib.ok ? { ok: true, open: sib.siblings.length } : { ok: false, detail: sib.detail };
+          // D-6923: the claimants are placed from this pass's listing, so the loop stays synchronous (spec §5.5).
+          siblings = childSiblingsFromListing(coord, r.id, now, records, names);
           // THE RUN-ID FENCE (spec §5.1: the marker's run id and the argv the
           // server composed are the two authorities, and neither alone
           // authorises anything): after a coordination-database loss,
@@ -4310,6 +4315,7 @@ export class FleetWatcher {
       };
       const v = childReclaimSweepVerdict(sweepIn);
       judged.set(r.id, v);
+      recordChildReclaimKeptReason({ coord, notifyLog: this.deps.notifyLog }, this.childReclaimKeptReasons, sweepIn, v);
       // D-6639: the stale arm judges BESIDE the verdict. An ask only when armed, on a box that proves the flag.
       const stale = this.childStale.judge({ coord, record: r, hold: staleHolds.get(r.id), input: sweepIn, verdict: v, names,
         fleetState: this.deps.fleetState, notifyLog: this.deps.notifyLog, nowMs: now });
@@ -4534,6 +4540,7 @@ export class FleetWatcher {
     for (const id of [...this.childReclaimHoldRetiredSeen.keys()]) {
       if (!seen.has(id)) this.childReclaimHoldRetiredSeen.delete(id);
     }
+    this.childReclaimKeptReasons.prune(seen);
     for (const id of [...this.childReclaimReleaseAnswered]) {
       if (!seen.has(id)) this.childReclaimReleaseAnswered.delete(id);
     }

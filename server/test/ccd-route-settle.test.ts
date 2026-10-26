@@ -20,7 +20,7 @@ const seed = (): void => { h.sh('_reg_set myid wrapper claude; _reg_set myid uui
 describe('_inject_spawn_effort reads the routing record (routing spec 2026-09-14 §5.2)', () => {
   it('no record: SPAWN_EFFORT, as today', () => {
     seed(); settle();
-    expect(typed()).toEqual(['tmux send-keys -t =cc-myid: -l /effort ultracode']);
+    expect(typed()).toEqual(['tmux send-keys -t =cc-myid: -l /effort high']);
   });
   it('a record with effort high: types nothing — the argv already carried it (controller ruling S1-R8, Lever B)', () => {
     seed(); h.sh('_reg_set myid class opus; _reg_set myid effort high'); settle();
@@ -47,14 +47,14 @@ describe('_inject_spawn_effort reads the routing record (routing spec 2026-09-14
     // class and no effort chose nothing about effort, so the box default is
     // still what applies — and a `class` field must not switch it off.
     seed(); h.sh('_reg_set myid class sonnet'); settle();
-    expect(typed()).toEqual(['tmux send-keys -t =cc-myid: -l /effort ultracode']);
+    expect(typed()).toEqual(['tmux send-keys -t =cc-myid: -l /effort high']);
   });
   it('a ccd-WRITTEN field alone never switches off the default: `degraded` is not a record of anybody\'s effort', () => {
     // Slice 3 stamps `degraded` itself, on a session whose operator chose
     // nothing. Under `_route_any` that stamp silently cancelled `SPAWN_EFFORT`
     // — a behaviour change with no writer and no channel (S1-R11).
     seed(); h.sh('_reg_set myid degraded opus'); settle();
-    expect(typed()).toEqual(['tmux send-keys -t =cc-myid: -l /effort ultracode']);
+    expect(typed()).toEqual(['tmux send-keys -t =cc-myid: -l /effort high']);
   });
   it('an EMPTY effort file still counts as present: a field somebody wrote is a field somebody meant', () => {
     seed(); h.sh('_reg_set myid effort ""'); settle();
@@ -133,12 +133,14 @@ describe('_inject_spawn_effort confirms ONLY a real switch dialog', () => {
     '  ❯ 1. Yes, switch to xhigh', '    2. No, go back'].join('\n');
   const QUOTED = ['⏺ The capture shows:', '  Change effort level?', '  ❯ 1. Yes, switch to xhigh', '    2. No, go back', IDLE].join('\n');
   /** tmux whose pane is a FILE, and whose first Enter swaps in `after` — the
-   *  screen Claude Code shows once `/effort ultracode` is submitted. */
+   *  screen Claude Code shows once `/effort ultracode` is submitted. The box
+   *  default is `high` now (coordinator clause 19), so the run pins
+   *  `SPAWN_EFFORT=ultracode` itself: the dialog is the one a level switch shows. */
   const run = (after: string): number => {
     seed();
     fs.writeFileSync(`${h.home}/pane.txt`, IDLE);
     fs.writeFileSync(`${h.home}/after.txt`, after);
-    h.sh(`sleep() { :; };
+    h.sh(`sleep() { :; }; SPAWN_EFFORT=ultracode;
       tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
         case "\${1:-}" in
           capture-pane) cat "$HOME/pane.txt" ;;
