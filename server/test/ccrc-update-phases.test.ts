@@ -1058,23 +1058,50 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
   // and update.json's detail; no fragment of the userinfo may appear in any of them.
   // The third: an invalid UTF-8 byte (from the environment, as the file reader refuses a non-ASCII line) under a UTF-8 locale,
   // where bash's `=~` matches characters and an invalid byte ended every run, until `_upd_redact` read bytes (LC_ALL=C).
-  for (const [label, from, pass] of [['<', 'file', 'S3cr<etTOKEN'], ['"', 'env', 'S3cr"etTOKEN'],
-    ['an invalid UTF-8 byte', 'env-bytes', 'S3cr\\377etTOKEN']] as const) {
-    it(`a scheme-less base whose password holds ${label} (${from === 'file' ? 'ccrc.env' : from === 'env' ? 'the environment' : 'the environment, a UTF-8 locale'}): the fetching line, the die line and update.json's detail carry no part of the userinfo (D-6748, fix round 3)`, () => {
-      const { r, home } = schemeless(`ccrc-redact-schemeless-${from}-`, { url: `fleetuser:${pass}@mirror.example/rel`, from });
-      const url = 'mirror.example/rel/download/v0.0.1/SHA256SUMS';
-      expect(r.stdout.split('\n'), r.stdout).toContain(`update: fetching ${url} …`);
-      const die = r.stderr.split('\n').filter((l) => l.includes('download failed:'));
-      expect(die, r.stderr).toHaveLength(1);
-      expect(die[0]).toContain(url);
-      const raw = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
-      const detail = String(JSON.parse(raw).detail ?? '');
-      expect(detail, raw).toContain(`download failed: ${url}`);
+  const schemelessMasked = (from: 'file' | 'env' | 'env-bytes', pass: string): void => {
+    const { r, home } = schemeless(`ccrc-redact-schemeless-${from}-`, { url: `fleetuser:${pass}@mirror.example/rel`, from });
+    const url = 'mirror.example/rel/download/v0.0.1/SHA256SUMS';
+    expect(r.stdout.split('\n'), r.stdout).toContain(`update: fetching ${url} …`);
+    const die = r.stderr.split('\n').filter((l) => l.includes('download failed:'));
+    expect(die, r.stderr).toHaveLength(1);
+    expect(die[0]).toContain(url);
+    const raw = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
+    const detail = String(JSON.parse(raw).detail ?? '');
+    expect(detail, raw).toContain(`download failed: ${url}`);
+    for (const [where, text] of [['stdout', r.stdout], ['stderr', r.stderr], ['update.json', raw]]) {
+      for (const part of ['fleetuser', 'S3cr', 'etTOKEN']) expect(text, `${where} carries ${part}`).not.toContain(part);
+    }
+  };
+  for (const [label, from, pass] of [['"', 'env', 'S3cr"etTOKEN'], ['an invalid UTF-8 byte', 'env-bytes', 'S3cr\\377etTOKEN']] as const) {
+    it(`a scheme-less base whose password holds ${label} (${from === 'env' ? 'the environment' : 'the environment, a UTF-8 locale'}): the fetching line, the die line and update.json's detail carry no part of the userinfo (D-6748, fix round 3)`, () => {
+      schemelessMasked(from, pass);
+    });
+  }
+  // The '<' row reads ccrc.env, and that file is read differently per platform. On Linux the line is a value and the mask runs
+  // through the '<'. On macOS the launchd job sources both env files with bash, so ccrc refuses a line bash would not read as a
+  // plain NAME=value (intended): it never fetches, and the refusal names the line, never its value. The '<' mask itself is
+  // still read there, through the environment, which macOS does not refuse.
+  platformContrast('a scheme-less base whose password holds < (ccrc.env)', {
+    linux: ['the fetching line, the die line and update.json\'s detail carry no part of the userinfo (D-6748, fix round 3)', () => {
+      schemelessMasked('file', 'S3cr<etTOKEN');
+    }],
+    darwin: ['ccrc refuses the line before any fetch, and no part of the userinfo reaches stdout, stderr or update.json (D-6748, fix round 3)', () => {
+      const { r, home } = schemeless('ccrc-redact-schemeless-file-', { url: 'fleetuser:S3cr<etTOKEN@mirror.example/rel', from: 'file' });
+      const refusal = r.stderr.split('\n').filter((l) => l.includes('cannot be measured:'));
+      expect(refusal, r.stderr).toHaveLength(1);
+      expect(refusal[0]).toContain('CCRC_RELEASE_BASE_URL cannot be measured: ~/.ccrc/ccrc.env line 1 is not a plain NAME=value line');
+      expect(r.stdout, r.stdout).not.toContain('update: fetching');
+      const json = join(home, '.ccrc', 'update.json');
+      const raw = existsSync(json) ? readFileSync(json, 'utf8') : '';
       for (const [where, text] of [['stdout', r.stdout], ['stderr', r.stderr], ['update.json', raw]]) {
         for (const part of ['fleetuser', 'S3cr', 'etTOKEN']) expect(text, `${where} carries ${part}`).not.toContain(part);
       }
-    });
-  }
+    }],
+  });
+  // PLATFORM-ONLY: macOS refuses the '<' line in ccrc.env (the contrast above), so there the '<' mask is read from the environment.
+  itDarwin('a scheme-less base whose password holds < (the environment, macOS): the fetching line, the die line and update.json\'s detail carry no part of the userinfo (D-6748, fix round 3)', () => {
+    schemelessMasked('env', 'S3cr<etTOKEN');
+  });
 
   // D-6748 (fix round 4, F1): a scheme followed by one slash (`http:/`) or by three (`https:///`): curl authenticates with
   // both, and `_upd_release_base` does not validate the scheme, so each reaches the three ways out, from ccrc.env and from
