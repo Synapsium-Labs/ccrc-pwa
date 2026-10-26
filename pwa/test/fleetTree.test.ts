@@ -50,7 +50,7 @@ const runs = [
 /** `[card, [[id, depth], …]]` per card, in display order. */
 const shape = (sessions: FleetSession[], rs: RunSummary[] = runs) =>
   fleetTree(sessions, [], rs).map((g) => [g.project, g.rows.map((r) =>
-    r.kind === 'session' ? [r.session.id, r.depth] : [`spawn:${r.run.id}`, r.depth])] as const);
+    r.kind === 'session' ? [r.session.id, r.depth] : r.kind === 'pending' ? [`spawn:${r.run.id}`, r.depth] : [r.kind, r.depth])] as const);
 
 describe('fleetTree — a coordinator\'s workspaces nest under it across projects (D-5527)', () => {
   it('a cross-project child nests under its coordinator, on the coordinator\'s card, when the server placed it there', () => {
