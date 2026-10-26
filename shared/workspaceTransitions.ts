@@ -9,13 +9,21 @@
  * `ARCHIVE_REFUSALS` (the archive door's wire words), `SENTENCES` (`server/src/wsaudit.ts`) and `LC_REFUSAL_WORD`
  * (`./api.ts`); this table adds the missing half of each word, WHICH state refuses WHICH verb and WHY.
  *
- * COUNTED EXIT, stated honestly: the 7 `server` edges are GUARDED (the archive door reads its status through `workspaceEdge`, and a
- * word with no row throws); the 73 `ccd` edges are RECORDED only, ccd stays their enforcement point (D-TBD-workspace-transitions).
+ * COUNTED EXIT (D-6978): refusal edges a TS reader answers other than from this table: 0. The archive door (7 `server`
+ * edges) reads its edge through `workspaceEdge` and its status from `REFUSAL_STATUS`; the expiry, reclaim and collect
+ * lanes (`server/src/archivedExpiry.ts`, `server/src/coord/childReclaim.ts`, `server/src/collectLane.ts`) type their words
+ * as `WorkspaceRefusal<verb>` (plus `WorkspacePostActWord` where the act prints one) and narrow them through
+ * `isWorkspaceRefusal`, so a word this table lacks does not compile there. The PWA and `wsaudit.ts` only render words
+ * (`SENTENCES`, `LC_REFUSAL_WORD`), held to the census by its completeness test. THE BASH SIDE: the 97 `ccd` edges are
+ * still ENFORCED in bash, which cannot read a TS table; the census holds each verb's codes to ccd's own text (the lane
+ * sets, pinned to ccd both ways, for expire, reclaim and collect; words harvested from ccd's refusal sites for restore,
+ * forget and reap), so ccd and this table cannot drift apart unseen, but ccd does not answer from it.
  *
  * WHO WRITES WHAT. `by: 'server'` rows are decided in TS (`server/src/coord/archiveDoor.ts`, which reads its edge from `workspaceEdge` and its
  * HTTP status from `REFUSAL_STATUS`, never spells them). `by: 'ccd'` rows are decided in bash, on the box, and re-proven
- * there at the act (the anti-corruption layer owns them: this table records them, it does not move them); the server only
- * renders their words. A row is added here first, then enforced.
+ * there at the act (the anti-corruption layer owns them: this table records them, it does not move them); the server
+ * renders their words, and its expire, reclaim and collect lanes narrow them through this table. A row is added here
+ * first, then enforced.
  *
  * States are facets the verb can be refused on, not a partition: `live`, `stopped`, `asleep` (hibernated), `archived`,
  * `main` (a project's main checkout, not a workspace), `workspace` (the row is a workspace), `held` (a program holds it)
@@ -57,7 +65,7 @@ export interface CcdWorkspaceEdge {
 }
 export type WorkspaceTransition = ServerWorkspaceEdge | CcdWorkspaceEdge;
 
-export const WORKSPACE_TRANSITIONS: readonly WorkspaceTransition[] = [
+const ROWS = [
   { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.statusUnknown, by: 'server', precondition: 'the turn could not be measured, whatever the consents' },
   { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.sessionBusy, by: 'server', precondition: 'the turn is in progress and `interrupt` was not given' },
   { verb: 'archive', from: ['live', 'stopped'], refusal: ARCHIVE_REFUSALS.worktreeGone, by: 'server', precondition: 'a workspace whose worktree the box proved gone' },
@@ -162,7 +170,13 @@ export const WORKSPACE_TRANSITIONS: readonly WorkspaceTransition[] = [
   { verb: 'collect', from: ['rowless'], refusal: 'in-use', by: 'ccd', precondition: 'a process has its working directory inside the temp root' },
   { verb: 'collect', from: ['rowless'], refusal: 'in-progress', by: 'ccd', precondition: 'another collection holds the lock' },
   { verb: 'collect', from: ['rowless'], refusal: 'paused', by: 'ccd', precondition: 'collection is paused fleet-wide' },
-];
+] as const satisfies readonly WorkspaceTransition[];
+export const WORKSPACE_TRANSITIONS: readonly WorkspaceTransition[] = ROWS;
+
+/** One verb's refusal words, as a TYPE derived from the rows: a TS reader of a verb's refusals types its vocabulary
+ *  with this (with `WorkspacePostActWord` beside it where its act prints one), so a word the table lacks, or a row its
+ *  reader lacks, is a compile error, never drift. */
+export type WorkspaceRefusal<V extends WorkspaceVerb> = Extract<(typeof ROWS)[number], { readonly verb: V }>['refusal'];
 
 /** The words the reclaim and expiry acts print on their `failed` document after the act began (the nested rescue,
  *  D-6633). Their lanes read them beside the refusals, but no state of the workspace refuses with them, so they are not
@@ -181,7 +195,7 @@ export const WORKSPACE_REFUSALS_BY_VERB: Readonly<Record<WorkspaceVerb, readonly
 };
 
 /** Is `code` an edge of `verb`'s? The one door a reader narrows a workspace refusal through. */
-export const isWorkspaceRefusal = (verb: WorkspaceVerb, code: unknown): boolean =>
+export const isWorkspaceRefusal = <V extends WorkspaceVerb>(verb: V, code: unknown): code is WorkspaceRefusal<V> =>
   typeof code === 'string' && (WORKSPACE_REFUSALS_BY_VERB[verb] as readonly string[]).includes(code);
 
 /** The archive door's edge for a refusal code: its precondition. Throws on a code with no row, so a

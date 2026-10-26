@@ -809,9 +809,10 @@ describe('wave 8\'s formula, imported: one definer', () => {
     const lane = codeOnly(readFileSync(path.join(srcRoot, 'collectLane.ts'), 'utf8'));
     const from = [...new Set([...lane.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]))].sort();
     // `shared/switches.js` is L0: the lane's live marker is spelled once there (D-5855). So is `shared/ccd-refusal.js`
-    // (ARCH-14, #560): the machine token's reader.
+    // (ARCH-14, #560): the machine token's reader. And `shared/workspaceTransitions.js` (ARCH-41, #776): its refusal words.
     expect(from, 'L1: L0 and the one L1 file whose formula it shares')
-      .toEqual(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js', './childReclaimSweep.js']);
+      .toEqual(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js',
+        '../../shared/workspaceTransitions.js', './childReclaimSweep.js']);
     const imported = /import\s*\{([^}]*)\}\s*from\s*'\.\/childReclaimSweep\.js'/.exec(lane)?.[1] ?? '';
     for (const name of ['childReclaimTierFrom', 'childReclaimTierPaceMs', 'childReclaimBackoffMs']) {
       expect(imported, name).toMatch(new RegExp(`\\b${name}\\b`));

@@ -20,6 +20,9 @@ import {
   type ChildReclaimSweepOutcome, type ChildStaleAsk, isChildReclaimPreLockToken, type ChildReclaimSweepInput,
 } from '../childReclaimSweep.js';
 import { readCcdRefusal, withoutCcdRefusal } from '../../../shared/ccd-refusal.js';
+import {
+  isWorkspacePostActWord, isWorkspaceRefusal, type WorkspacePostActWord, type WorkspaceRefusal,
+} from '../../../shared/workspaceTransitions.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { runNamesSession } from './runBinding.js';
@@ -66,15 +69,15 @@ import { SHADOW_RUNG } from '../../../shared/shadowJournal.js';
  */
 
 /** Every word `cmd_ws_reclaim`/`_ws_reclaim_eval` (and so `ws-audit
- *  --reclaim`) can refuse with — and NO other. `child-reclaim.test.ts` holds
- *  this set equal to what ccd's RECLAIM region actually emits, in both
+ *  --reclaim`) can refuse with — and NO other: the reclaim edges of
+ *  `WORKSPACE_TRANSITIONS` (ARCH-41) and the two post-act words the rescue
+ *  prints, DERIVED from that table, so `CHILD_RECLAIM_TOKEN_KIND` fails to
+ *  compile on a word the table lacks or a row it lacks. `child-reclaim.test.ts`
+ *  holds this set equal to what ccd's RECLAIM region actually emits, in both
  *  directions. `no-worktree-record` is `ws-reap`'s word, reused: a directory
  *  that exists but that git does not record as the project's worktree (spec
  *  §5.5) — ccd cannot tell what it would be deleting there. */
-export type ChildReclaimToken =
-  | 'no-such-session' | 'not-a-workspace' | 'not-a-child' | 'paused' | 'held' | 'attached' | 'tree-busy'
-  | 'branch-elsewhere' | 'tree-unreadable' | 'containment-unproven' | 'no-worktree-record' | 'state-changed'
-  | 'in-progress' | 'reap-in-progress' | 'nested-rescue-too-large' | 'nested-rescue-failed' | 'not-idle';
+export type ChildReclaimToken = WorkspaceRefusal<'reclaim'> | WorkspacePostActWord;
 
 /** What each word means to the server, spelled ONCE:
  *   - `gone`: the child is already not there. Never a feed row, never an
@@ -107,8 +110,9 @@ export const CHILD_RECLAIM_TOKEN_KIND: Readonly<Record<ChildReclaimToken, 'gone'
   'not-idle': 'retry',
 };
 
+/** Answered from `WORKSPACE_TRANSITIONS` (its reclaim edges) and the post-act words, never from a list of this lane's own. */
 export function isChildReclaimToken(v: unknown): v is ChildReclaimToken {
-  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_TOKEN_KIND, v);
+  return isWorkspaceRefusal('reclaim', v) || isWorkspacePostActWord(v);
 }
 
 /** `CHILD_RECLAIM_TOKEN_KIND` read TOTALLY: a token's classification, or null
@@ -123,9 +127,7 @@ export function isChildReclaimToken(v: unknown): v is ChildReclaimToken {
  *  (`watch.ts`) imports it and injects it into the L1 attention derivation as
  *  `kindOf`; wave 5's run chip imports it as-is and moves nothing. */
 export const childReclaimTokenKind = (token: string): 'gone' | 'terminal' | 'retry' | null =>
-  Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_TOKEN_KIND, token)
-    ? CHILD_RECLAIM_TOKEN_KIND[token as ChildReclaimToken]
-    : null;
+  isChildReclaimToken(token) ? CHILD_RECLAIM_TOKEN_KIND[token] : null;
 
 const CREATE_ACT: LifecycleAct = 'create';
 const CREATE_DONE: LifecycleOutcome = 'done';

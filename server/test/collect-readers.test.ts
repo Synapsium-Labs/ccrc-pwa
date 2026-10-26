@@ -439,7 +439,9 @@ describe('the collect readers are their own (spec §5.10)', () => {
     expect(specs).toContain('../../shared/api.js');
     // `shared/switches.js` is L0 too: the lane's live marker is spelled once there (D-5855).
     // ARCH-14 (#560): `shared/ccd-refusal.js` is L0 as well: the machine token's reader and the one spelling of the lock word.
-    const ALLOWED = new Set(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js', './childReclaimSweep.js']);
+    // ARCH-41 (#776): `shared/workspaceTransitions.js` is L0: the refusal words are typed and narrowed from its table.
+    const ALLOWED = new Set(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js',
+      '../../shared/workspaceTransitions.js', './childReclaimSweep.js']);
     expect(specs.filter((s) => !ALLOWED.has(s)), 'a specifier outside that pair')
       .toEqual([]);
     expect(code).not.toMatch(/\bimport\s*\(|\brequire\s*\(/);

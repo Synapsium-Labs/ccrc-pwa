@@ -342,6 +342,9 @@ describe('WORKSPACE_TRANSITIONS answers the census (ARCH-41, #776)', () => {
     const door = parseFile(path.join(ROOT, 'server/src/coord/archiveDoor.ts'));
     const fromTable = door.imports.filter((i) => /shared\/workspaceTransitions\.js$/.test(i.specifier)).flatMap((i) => i.names);
     expect(fromTable).toContain('workspaceEdge');
+    // `reply(` is called twice and only twice: inside `refuseEdge` (whose status is `edgeStatus`, the table read) and inside
+    // `unsupported` (a route-shape word). A refusal branch that calls `reply` itself bypasses the table, and turns this red.
+    expect([...DOOR.matchAll(/\breply\(([^,]*),/g)].map((x) => x[1])).toEqual(['edgeStatus(code)', '501']);
     // The only numeric statuses left: 200 (success and the partial outcome), 501 (`unsupported()`, a route-shape word) and 502.
     expect([...DOOR.matchAll(/\b(?:refuse|reply)\(\s*\d{3}\b|\bstatus:\s*\d{3}\b/g)].map((x) => x[0].replace(/\s+/g, ''))).toEqual(
       ['reply(501', 'status:200', 'status:200', 'status:502']);
@@ -407,5 +410,45 @@ describe('the expire, reclaim and collect lanes read refusals as they do today (
     expect(COLLECT_REFUSAL_WORDS).toEqual(Object.keys(COLLECT_CLASSES));
     for (const [w, c] of Object.entries(COLLECT_CLASSES)) expect(collectRefusalClass(w), w).toBe(c);
     for (const w of PROBES.filter((p) => !(p in COLLECT_CLASSES))) expect(collectRefusalClass(w), w).toBe('retry');
+  });
+});
+
+// ── COUNTED EXIT (ARCH-41, #776): refusal edges a TS reader answers other than from WORKSPACE_TRANSITIONS: 0. ─────────
+// The four TS deciders that read workspace-verb refusals each type their words from the table (`WorkspaceRefusal<verb>`,
+// with `WorkspacePostActWord` beside it on the two lanes whose act prints one) and narrow them through
+// `isWorkspaceRefusal`, so a word the table lacks does not compile there and is not narrowed at run time. The archive
+// door reads its edge through `workspaceEdge` (above). ccd's edges stay enforced in bash, which cannot read a TS table:
+// those are held to ccd's text per verb by the census above, not answered from the table.
+describe('counted exit: every TS reader of a workspace refusal answers from WORKSPACE_TRANSITIONS', () => {
+  const LANES = [
+    { file: 'server/src/archivedExpiry.ts', verb: 'expire', keys: Object.keys(EXPIRE_TOKEN_KIND), postAct: true,
+      narrows: (w: string) => expireTokenKind(w) !== null },
+    { file: 'server/src/coord/childReclaim.ts', verb: 'reclaim', keys: Object.keys(CHILD_RECLAIM_TOKEN_KIND), postAct: true,
+      narrows: (w: string) => isChildReclaimToken(w) },
+    { file: 'server/src/collectLane.ts', verb: 'collect', keys: [...COLLECT_REFUSAL_WORDS], postAct: false,
+      narrows: (w: string) => Object.prototype.hasOwnProperty.call(COLLECT_REFUSAL_CLASS, w) },
+  ] as const;
+  const ALL_WORDS = [...new Set([...WORKSPACE_TRANSITIONS.map((t) => t.refusal), ...Object.keys(SENTENCES),
+    ...Object.keys(LC_REFUSAL_WORD), 'toString', '__proto__', 'nope'])];
+
+  it('each lane imports its words and its guard from the table', () => {
+    for (const l of LANES) {
+      const names = parseFile(path.join(ROOT, l.file)).imports
+        .filter((i) => /shared\/workspaceTransitions\.js$/.test(i.specifier)).flatMap((i) => i.names);
+      expect(names, l.file).toEqual(expect.arrayContaining(['isWorkspaceRefusal', 'WorkspaceRefusal']));
+      if (l.postAct) expect(names, l.file).toEqual(expect.arrayContaining(['isWorkspacePostActWord', 'WorkspacePostActWord']));
+    }
+  });
+
+  it('counts 0 edges not answered from the table: each lane knows exactly its verb’s rows (plus the post-act words)', () => {
+    let unanswered = 0;
+    for (const l of LANES) {
+      const want = new Set<string>([...WORKSPACE_REFUSALS_BY_VERB[l.verb], ...(l.postAct ? WORKSPACE_POST_ACT_WORDS : [])]);
+      unanswered += l.keys.filter((k) => !want.has(k)).length + [...want].filter((w) => !(l.keys as readonly string[]).includes(w)).length;
+      // At run time too: the lane narrows a word iff the table (or the post-act list) holds it for the verb.
+      const narrowed = ALL_WORDS.filter((w) => l.narrows(w));
+      expect(narrowed.sort(), l.file).toEqual([...want].sort());
+    }
+    expect(unanswered).toBe(0);
   });
 });
