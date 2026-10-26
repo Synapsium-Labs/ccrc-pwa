@@ -4,10 +4,13 @@
  *
  * `WORKSPACE_TRANSITIONS` is `RUN_TRANSITIONS`'s sibling for a session's workspace: each row is one edge a client reads
  * as a refusal today, taken from the verb's own refusal and pinned by `server/test/workspace-refusal-census.test.ts`
- * (76 edges, well past the spec's ~10-edge test). A row is (verb, the states the verb is refused in, the refusal code,
+ * (80 edges, well past the spec's ~10-edge test). A row is (verb, the states the verb is refused in, the refusal code,
  * who enforces it, the precondition). The codes are the three vocabularies clients already read, unrenamed:
  * `ARCHIVE_REFUSALS` (the archive door's wire words), `SENTENCES` (`server/src/wsaudit.ts`) and `LC_REFUSAL_WORD`
  * (`./api.ts`); this table adds the missing half of each word, WHICH state refuses WHICH verb and WHY.
+ *
+ * COUNTED EXIT, stated honestly: the 7 `server` edges are GUARDED (the archive door reads its status through `workspaceEdge`, and a
+ * word with no row throws); the 73 `ccd` edges are RECORDED only, ccd stays their enforcement point (D-TBD-workspace-transitions).
  *
  * WHO WRITES WHAT. `by: 'server'` rows are decided in TS (`server/src/coord/archiveDoor.ts`, which reads its edge from `workspaceEdge` and its
  * HTTP status from `REFUSAL_STATUS`, never spells them). `by: 'ccd'` rows are decided in bash, on the box, and re-proven
@@ -109,6 +112,10 @@ export const WORKSPACE_TRANSITIONS: readonly WorkspaceTransition[] = [
   { verb: 'reap', from: ['archived'], refusal: 'in-progress', by: 'ccd', precondition: 'another cleanup of the workspace holds the lock' },
   { verb: 'reap', from: ['archived'], refusal: 'state-changed', by: 'ccd', precondition: 'the workspace changed since the audit the token fingerprints' },
   { verb: 'reap', from: ['archived'], refusal: 'reclaim-in-progress', by: 'ccd', precondition: 'an interrupted reclaim breadcrumb stands; reap never finishes it' },
+  { verb: 'reap', from: ['archived'], refusal: 'expire-in-progress', by: 'ccd', precondition: 'an interrupted expiry breadcrumb stands; reap never finishes it' },
+  { verb: 'reap', from: ['archived'], refusal: 'reaping-phase-unknown', by: 'ccd', precondition: 'a cleanup breadcrumb stands but cannot be read, so reap never takes its fresh arm over it' },
+  { verb: 'reap', from: ['archived'], refusal: 'child-branch-unmerged-locally', by: 'ccd', precondition: 'a nested checkout is merged at origin but not reachable from the project checkout, a probe that touches nothing' },
+  { verb: 'reap', from: ['archived'], refusal: 'branch-moved', by: 'ccd', precondition: 'the resumed cleanup has no tombstone tip, or the branch moved after it was pinned; nothing further is deleted' },
   { verb: 'expire', from: ['live', 'stopped', 'asleep'], refusal: 'not-archived', by: 'ccd', precondition: 'the workspace is not archived' },
   { verb: 'expire', from: ['archived'], refusal: 'not-expired', by: 'ccd', precondition: 'archived less than seven days ago' },
   { verb: 'expire', from: ['archived'], refusal: 'child', by: 'ccd', precondition: 'a run-created workspace is cleaned up when its run closes' },

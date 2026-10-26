@@ -15,7 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ARCHIVE_REFUSAL_CODES, LC_REFUSAL_WORD } from '../../shared/api.js';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
-import { decideArchive, refusedAtStop, archiveOutcome, type ArchiveMeasure } from '../src/coord/archiveDoor.js';
+import { decideArchive, refusedAtStop, archiveOutcome, edgeStatus, type ArchiveMeasure } from '../src/coord/archiveDoor.js';
 import { SENTENCES } from '../src/wsaudit.js';
 import { parseFile } from './scan/parse.js';
 import {
@@ -95,6 +95,10 @@ export const WORKSPACE_REFUSAL_CENSUS: readonly CensusEdge[] = [
   e('reap', 'archived', 'in-progress', 'ccd', 'another cleanup of the workspace holds the lock'),
   e('reap', 'archived', 'state-changed', 'ccd', 'the workspace changed since the audit the token fingerprints'),
   e('reap', 'archived', 'reclaim-in-progress', 'ccd', 'an interrupted reclaim breadcrumb stands; reap never finishes it'),
+  e('reap', 'archived', 'expire-in-progress', 'ccd', 'an interrupted expiry breadcrumb stands; reap never finishes it'),
+  e('reap', 'archived', 'reaping-phase-unknown', 'ccd', 'a cleanup breadcrumb stands but cannot be read, so reap never takes its fresh arm over it'),
+  e('reap', 'archived', 'child-branch-unmerged-locally', 'ccd', 'a nested checkout is merged at origin but not reachable from the project checkout, a probe that touches nothing'),
+  e('reap', 'archived', 'branch-moved', 'ccd', 'the resumed cleanup has no tombstone tip, or the branch moved after it was pinned; nothing further is deleted'),
   // expire (ws-expire): archived -> retired after the seven-day window; its other refusals are reap's.
   e('expire', 'live|stopped|asleep', 'not-archived', 'ccd', 'the workspace is not archived'),
   e('expire', 'archived', 'not-expired', 'ccd', 'archived less than seven days ago'),
@@ -135,8 +139,8 @@ describe('workspace refusal census (ARCH-41, #776): today’s client-read refusa
   it('pins the per-verb edge counts exactly (a verb gaining or losing a refusal is a decision, not drift)', () => {
     const counts: Record<string, number> = {};
     for (const x of WORKSPACE_REFUSAL_CENSUS) counts[x.verb] = (counts[x.verb] ?? 0) + 1;
-    expect(counts).toEqual({ archive: 7, restore: 3, forget: 5, reap: 39, expire: 6, reclaim: 11, collect: 5 });
-    expect(WORKSPACE_REFUSAL_CENSUS.length).toBe(76);
+    expect(counts).toEqual({ archive: 7, restore: 3, forget: 5, reap: 43, expire: 6, reclaim: 11, collect: 5 });
+    expect(WORKSPACE_REFUSAL_CENSUS.length).toBe(80);
   });
 
   it('every edge’s code is read by a client: an archive wire word, a SENTENCES key or an LC_REFUSAL_WORD key', () => {
@@ -156,6 +160,35 @@ describe('workspace refusal census (ARCH-41, #776): today’s client-read refusa
         expect(new RegExp(`[ "'|]${x.code}[ "'|\\\\]`).test(CCD), key(x)).toBe(true);
       }
     }
+  });
+
+  // Completeness (ARCH-41 fix round): ccd's emitted words reach clients through two vocabularies, `SENTENCES` and
+  // `LC_REFUSAL_WORD`. Every key of both is a census code or is named here, with the reason it is not a workspace-state
+  // edge. A new ccd refusal word therefore turns this red until it is a census edge or an explicit exclusion.
+  const EXCLUDED: Readonly<Record<string, string>> = {
+    // ws-rename's tokens: a rename is not a lifecycle verb of this table.
+    'registry-branch-drift': 'ws-rename', 'worktree-unregistered': 'ws-rename', 'worktree-foreign': 'ws-rename',
+    'detached': 'ws-rename', 'unchanged': 'ws-rename', 'has-upstream': 'ws-rename', 'bad-branch': 'ws-rename',
+    'name-taken-local': 'ws-rename', 'name-taken-origin': 'ws-rename',
+    // post-act tail failures: they report an act that began, not a refusal that touched nothing.
+    'tombstone-unwritable': 'post-act', 'worktree-remove-failed': 'post-act',
+    'nested-rescue-too-large': 'post-act', 'nested-rescue-failed': 'post-act',
+    // the reap-interrupted verdict, and copy for a rung ccd no longer emits.
+    'reap-interrupted': 'verdict', 'not-merged': 'copy-only, ccd emits no-bound-pr',
+    // flag parsing and route-shape words: no state of the workspace causes them.
+    'bad-args': 'flag-parsing', 'bad-session-id': 'route-shape',
+    // the lifecycle journal's operational words (an act that failed, not a precondition of state).
+    'scratch-unwritable': 'journal', 'tip-unreadable': 'journal', 'flock-unavailable': 'journal', 'lock-unopenable': 'journal',
+    'spawn-failed': 'journal', 'purge-refused': 'journal', 'purge-incomplete': 'journal', 'purge-mechanism-absent': 'journal',
+    'pin-failed': 'journal', 'unit-still-active': 'journal', 'branch-unmeasured': 'journal', 'probe-unmeasured': 'journal',
+    'token-malformed': 'journal', 'run-id-malformed': 'journal', 'containment-refuted': 'journal',
+  };
+  it('every client-read word is a census code or on the named exclusion list (a new ccd refusal turns this red)', () => {
+    const codes = new Set(WORKSPACE_REFUSAL_CENSUS.map((x) => x.code));
+    const unaccounted = [...Object.keys(SENTENCES), ...Object.keys(LC_REFUSAL_WORD)].filter((k) => !codes.has(k) && !(k in EXCLUDED));
+    expect(unaccounted).toEqual([]);
+    for (const k of Object.keys(EXCLUDED)) expect(codes.has(k), `${k} is both a census edge and excluded`).toBe(false);
+    for (const k of Object.keys(EXCLUDED)) expect(k in SENTENCES || k in LC_REFUSAL_WORD, `${k} is stale`).toBe(true);
   });
 
   it('every archive wire word is a census edge (the door has no refusal the census missed)', () => {
@@ -198,6 +231,10 @@ describe('WORKSPACE_TRANSITIONS answers the census (ARCH-41, #776)', () => {
     for (const code of ARCHIVE_REFUSAL_CODES) expect(workspaceEdge('archive', code).refusal, code).toBe(code);
     for (const t of WORKSPACE_TRANSITIONS) expect('status' in t, t.refusal).toBe(false);
     expect(() => workspaceEdge('archive', 'nope' as never)).toThrow(/no archive edge/);
+    // The door's status reads the table: a word with no row is never sent (deleting the table read turns this red).
+    expect(() => edgeStatus('nope' as never)).toThrow(/no archive edge/);
+    for (const code of ARCHIVE_REFUSAL_CODES) expect(edgeStatus(code), code).toBe(REFUSAL_STATUS[code]);
+    expect(isWorkspaceRefusal('reap', 'expire-in-progress')).toBe(true);
   });
 
   // COUNTED EXIT: refusal edges not answered from WORKSPACE_TRANSITIONS go to 0, and the status of each is

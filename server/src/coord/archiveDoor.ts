@@ -229,10 +229,7 @@ const reply = (status: number, error: ArchiveRefusal | 'unsupported', extra: Rec
 
 /** A refusal is an edge of `WORKSPACE_TRANSITIONS` (ARCH-41, #776) and its status is `REFUSAL_STATUS`'s, the one table
  *  the wire reads (ARCH-36): a word with no row throws rather than being sent, and no status is spelled here. */
-const edgeStatus = (code: ArchiveRefusal): number => {
-  workspaceEdge('archive', code);
-  return REFUSAL_STATUS[code];
-};
+export const edgeStatus = (code: ArchiveRefusal): number => REFUSAL_STATUS[workspaceEdge('archive', code).refusal];
 const refuseEdge = (code: ArchiveRefusal, extra: Record<string, unknown> = {}): ArchiveDecision =>
   reply(edgeStatus(code), code, extra);
 
