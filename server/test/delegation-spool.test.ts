@@ -1493,46 +1493,127 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       child.stdin.end(JSON.stringify(payload));
     });
 
-    it('sixteen hooks at once, then sixteen again: every line is whole, valid, and present exactly once', async () => {
-      for (let round = 0; round < 2; round += 1) {
-        const ids = Array.from({ length: 16 }, (_, i) => `toolu_r${round}_${i}`);
-        const codes = await Promise.all(ids.map((id) => racer(pre('Bash', { command: 'true' }, id))));
-        expect(codes.every((c) => c === 0)).toBe(true);
+    // SKIP OR LOSS (#1587). The hook has three honest degrades that exit 0 and write no line: the pane lookup times out at its
+    // 2 s bound, the one jq parse fails, or the parse yields no event. The census is their backstop. Under shard load the
+    // first one happened in CI and the row read it as a lost append, which is a different property: the append dropping
+    // or interleaving a line once the hook reached it. So the race rows count the degrades themselves: the stub tmux
+    // records each lookup it ANSWERED, and a jq shim records the status of each payload parse. A missing line is excused
+    // only while a recorded skip can explain it, and then it is replayed and must land; anything else is a lost append.
+    // Each record is one short `printf >>`, so the records cannot interleave either.
+    const TMUX_ANSWERED = (): string => path.join(home, 'tmux-answered');
+    const JQ_STATUS = (): string => path.join(home, 'jq-status');
+    /** Installs the counting tmux and jq. `slowOnce`: exactly one lookup (the first to take the lock) outlasts the 2 s bound. */
+    const instrumentRace = (slowOnce = false): void => {
+      // `exec`: the sleep IS the bounded child, so the hook's `timeout` kills it and no orphan outlives the row.
+      const slow = slowOnce ? `if mkdir '${home}/tmux-slow' 2>/dev/null; then exec sleep 3; fi\n` : '';
+      fs.writeFileSync(path.join(home, 'bin', 'tmux'),
+        `#!/bin/sh\n${slow}echo "cc-${OWNER}"\nprintf '%s\\n' answered >> '${TMUX_ANSWERED()}'\n`, { mode: 0o755 });
+      // The real jq by absolute path (resolved before PATH is prefixed), so the shim never finds itself. Only the payload
+      // parse (`jq -r --arg sid ...`) is recorded: it is the one call whose failure ends the hook with no line.
+      fs.writeFileSync(path.join(home, 'bin', 'jq'),
+        `#!/bin/sh\n'${REAL_JQ}' "$@"\nrc=$?\ncase "$1 $2 $3" in '-r --arg sid') printf '%s\\n' "$rc" >> '${JQ_STATUS()}' ;; esac\nexit $rc\n`, { mode: 0o755 });
+    };
+    const records = (f: string): string[] => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').slice(0, -1) : []);
+    type Landed = { raws: string[]; skips: number; replayed: string[] };
+    /**
+     * The race rows' one assertion. Every line whole, valid, LF-terminated, one of `ids` and present once; then
+     * missing = expected - lines against skips = (hooks run - lookups answered) + (failed parses). No missing line passes;
+     * up to `skips` missing lines are replayed serially and must each land exactly one line; any other missing line throws
+     * "lost append, not an identity skip".
+     */
+    const assertLanded = (ids: string[], payloadOf: (id: string) => object, check: (raw: string) => void, env: Record<string, string> = {}): Landed => {
+      const raws = rawLines();
+      for (const raw of raws) { check(raw); expect(validate(JSON.parse(raw)), raw.slice(0, 300)).toEqual([]); }
+      const got = raws.map((r) => String(JSON.parse(r).toolUseId));
+      expect(got.length, 'no toolUseId twice: a duplicate is never a skip').toBe(new Set(got).size);
+      expect(got.filter((g) => !ids.includes(g)), 'no line this race did not run').toEqual([]);
+      const missing = ids.filter((id) => !got.includes(id));
+      const answered = records(TMUX_ANSWERED()).length;
+      const parses = records(JQ_STATUS());
+      const failedParses = parses.filter((rc) => rc !== '0').length;
+      const skips = (ids.length - answered) + failedParses;
+      if (missing.length === 0) return { raws, skips, replayed: [] };
+      if (missing.length > skips) {
+        throw new Error(`lost append, not an identity skip: ${missing.length} line(s) missing (${missing.join(', ')}) and only ${skips} skip(s) to explain them `
+          + `(${ids.length} hooks, ${answered} lookups answered, ${parses.length} parses, ${failedParses} failed)`);
       }
-      const ls = lines();
-      expect(ls).toHaveLength(32);
-      for (const l of ls) expect(validate(l)).toEqual([]);
-      expect(new Set(ls.map((l) => l.toolUseId)).size).toBe(32);
+      console.info(`delegation-spool race: ${skips} identity skip(s) recorded, replaying ${missing.length} missing line(s): ${missing.join(', ')}`);
+      for (const id of missing) {
+        const l = one(payloadOf(id), env);
+        expect(l.toolUseId, 'the replay lands the missing line').toBe(id);
+      }
+      return { raws, skips, replayed: missing };
+    };
+    const SIXTEEN_TWICE = [0, 1].flatMap((round) => Array.from({ length: 16 }, (_, i) => `toolu_r${round}_${i}`));
+    const bashPre = (id: string): object => pre('Bash', { command: 'true' }, id);
+    const sixteenTwice = async (): Promise<void> => {
+      for (let round = 0; round < 2; round += 1) {
+        const codes = await Promise.all(SIXTEEN_TWICE.slice(round * 16, round * 16 + 16).map((id) => racer(bashPre(id))));
+        expect(codes.every((c) => c === 0), 'every hook exits 0').toBe(true);
+      }
+    };
+    const plainLine = (raw: string): void => { expect(bytes(raw) + 1).toBeLessThan(capOf({})); };
+
+    it('sixteen hooks at once, then sixteen again: every line is whole, valid, and present exactly once', async () => {
+      instrumentRace();
+      await sixteenTwice();
+      assertLanded(SIXTEEN_TWICE, bashPre, plainLine);
+    }, 180_000);
+
+    it('one pane lookup that outlasts its 2 s bound is an identity skip, not a lost append: it is counted, and its replay lands (#1587)', async () => {
+      instrumentRace(true);
+      await sixteenTwice();
+      expect(fs.existsSync(path.join(home, 'tmux-slow')), 'the slow lookup happened').toBe(true);
+      // Shard load can time out a second lookup on its own; that one is a skip too, and counted, so the exact count holds
+      // whenever the stub answered every other lookup (always, off load).
+      const answered = records(TMUX_ANSWERED()).length;
+      expect(answered, 'the slow lookup was not answered').toBeLessThanOrEqual(31);
+      const before = rawLines().length;
+      expect(before, 'the premise: the slow hook wrote no line').toBeLessThanOrEqual(31);
+      const r = assertLanded(SIXTEEN_TWICE, bashPre, plainLine);
+      expect(r.skips, 'the slow lookup, and any other the load timed out').toBe(32 - answered);
+      if (answered === 31) expect(r.skips, 'exactly the one slow lookup').toBe(1);
+      expect(r.replayed).toHaveLength(32 - before);
+      expect(rawLines(), 'all 32 are there after the replay').toHaveLength(32);
+    }, 180_000);
+
+    it('control: with every lookup answered, a line taken out of the bucket is a lost append (the skip count cannot excuse it)', async () => {
+      instrumentRace();
+      await sixteenTwice();
+      expect(records(TMUX_ANSWERED()), 'every lookup answered').toHaveLength(32);
+      expect(records(JQ_STATUS()), 'the shim saw every payload parse, and each one succeeded').toEqual(Array(32).fill('0'));
+      expect(assertLanded(SIXTEEN_TWICE, bashPre, plainLine).skips).toBe(0);
+      const [bucket] = bucketFiles();
+      const f = path.join(ownerDir(), bucket!);
+      fs.writeFileSync(f, fs.readFileSync(f, 'utf8').split('\n').slice(1).join('\n'));
+      expect(() => assertLanded(SIXTEEN_TWICE, bashPre, plainLine)).toThrow(/lost append, not an identity skip/);
     }, 180_000);
 
     // A line is one write(2) only while it fits bash's stdout buffer (D-5436): on darwin these 3.9 KiB lines were four writes each
     // and one red in four runs interleaved two of them, so the 4096 arm runs only where this bash picks 4096.
     it.skipIf(!!NO_GLIBC_ARM)(`lines near the 4096 cap do not interleave: twelve hooks at once, each writing ~3.9 KiB${NO_GLIBC_ARM ? ` (skipped: ${NO_GLIBC_ARM})` : ''}`, async () => {
+      instrumentRace();
       const filler = (n: number): string => '\u0001'.repeat(300).padEnd(300 + n, 'x');
       const ids = Array.from({ length: 12 }, (_, i) => `toolu_big${i}`);
-      const codes = await Promise.all(ids.map((id, i) => racer(pre('Agent', {}, id, { cwd: `/${filler(i)}`, transcript_path: `/${filler(i)}` }))));
+      const big = (id: string): object => { const i = ids.indexOf(id); return pre('Agent', {}, id, { cwd: `/${filler(i)}`, transcript_path: `/${filler(i)}` }); };
+      const codes = await Promise.all(ids.map((id) => racer(big(id))));
       expect(codes.every((c) => c === 0)).toBe(true);
-      const raws = rawLines();
-      expect(raws).toHaveLength(12);
-      for (const raw of raws) { expect(bytes(raw) + 1).toBeLessThan(4096); expect(validate(JSON.parse(raw))).toEqual([]); }
-      expect(new Set(raws.map((r) => JSON.parse(r).toolUseId)).size).toBe(12);
+      assertLanded(ids, big, (raw) => { expect(bytes(raw) + 1).toBeLessThan(4096); });
     }, 180_000);
 
     it('lines near the small cap do not interleave: twelve hooks at once, each writing just under 1008 bytes, on every platform (D-5436)', async () => {
+      instrumentRace();
       // Two 54-control-character paths (325 bytes serialized each) and a short tail per hook: about 960 to 990 bytes a line, kept whole.
       const filler = (n: number): string => '\u0001'.repeat(54).padEnd(54 + n, 'x');
       const ids = Array.from({ length: 12 }, (_, i) => `toolu_near${i}`);
-      const codes = await Promise.all(ids.map((id, i) => racer(pre('Agent', {}, id, { cwd: `/${filler(i)}`, transcript_path: `/${filler(i)}` }), SMALL)));
+      const near = (id: string): object => { const i = ids.indexOf(id); return pre('Agent', {}, id, { cwd: `/${filler(i)}`, transcript_path: `/${filler(i)}` }); };
+      const codes = await Promise.all(ids.map((id) => racer(near(id), SMALL)));
       expect(codes.every((c) => c === 0)).toBe(true);
-      const raws = rawLines();
-      expect(raws).toHaveLength(12);
-      for (const raw of raws) {
+      assertLanded(ids, near, (raw) => {
         expect(bytes(raw) + 1).toBeLessThan(B.lineBytesBelowSmall);
         expect(bytes(raw) + 1, 'the premise: the line is near the cap').toBeGreaterThan(900);
-        expect(validate(JSON.parse(raw))).toEqual([]);
         expect('truncated' in JSON.parse(raw), 'and kept whole').toBe(false);
-      }
-      expect(new Set(raws.map((r) => JSON.parse(r).toolUseId)).size).toBe(12);
+      }, SMALL);
     }, 180_000);
 
     it('the bucket is named by the UTC hour of observedAt: YYYYMMDDHH.spool', () => {
