@@ -26,20 +26,20 @@ import type { SessionRecord } from '../registry.js';
 import { childBirthOf } from './childSpent.js';
 import { bindingOf, boundRunsOf, hasOwnerlessUndecidedOpen, incarnationOf, type Incarnation } from './runBinding.js';
 import { claimantMeasuredDead, measureClaimant, type ReclaimDeps } from './reclaim.js';
-import { childParentRead } from './bindingReads.js';
+import type { SessionBindings } from './bindingReads.js';
 
 export type HeldFor =
   | { readonly kind: 'not-a-child' }
   | { readonly kind: 'held'; readonly parent: string; readonly runId: number }
   | { readonly kind: 'released'; readonly parent: string; readonly runId: number; readonly reason: AskMintReleaseReason };
 
-/** How many open runs bind the child's incarnation: over `series` (the read `childParentRead` decided the parent from)
+/** How many open runs bind the child's incarnation: over `series` (the read `bindingsOf(id).parent` decided the parent from)
  *  when it is readable, else the store's proven reader. The store's reader runs either way and a failed read throws, as
  *  every store read here does: it checks each open run's `wave` and `waveOf` (`bindingRunsOf` checks only the id), so an
  *  open run whose stored wave this build cannot represent still fails the hold closed, as it did before the count moved
  *  onto the series. */
 function openBindingCount(
-  coord: ReclaimDeps['coord'], childId: string, incarnation: Incarnation, series: ReturnType<typeof childParentRead>['series'],
+  coord: ReclaimDeps['coord'], childId: string, incarnation: Incarnation, series: ReturnType<SessionBindings['parent']>['series'],
 ): number {
   const sib = coord.bindingsOf(childId).worker({ incarnation });
   if (!sib.ok) throw new Error(`heldFor: ${sib.detail}`);
@@ -60,7 +60,7 @@ export async function heldFor(
   // An unstamped run opened before the birth and then bound to it is undecidable, not a ghost: the minting run's own
   // claimant keeps the hold (the dup arm, a wave N >= 2 run planned before wave 1 was dispatched). A series this process
   // cannot represent still yields the parent its open binding proves, or none, as before the fold (ruling (a)).
-  const { parent, series } = childParentRead(coord, childId, minting.ok && minting.run !== null ? minting.run.claimedBy : null, incarnation);
+  const { parent, series } = coord.bindingsOf(childId).parent(minting.ok && minting.run !== null ? minting.run.claimedBy : null, incarnation);
   if (parent === childId) return notAChild;
   // D-5362: the binding is "the parent is the claimant of the run the mark names", not "the mark names the newest
   // open run": a wave N >= 2 run resumes the same workspace, whose `.child` still names wave 1.

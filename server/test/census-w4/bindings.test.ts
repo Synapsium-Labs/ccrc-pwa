@@ -12,7 +12,7 @@ import { BOUND_BY_READERS, boundByCalls, boundBySites, type BoundBySite } from '
 
 /** The real tree's site count, pinned exactly (a ceiling that is also a floor, `run-session-census.test.ts`'s rule): each
  *  move onto `bindingsOf` lowers it in the same commit, and a new site is red until it is moved or justified. */
-const BOUND_BY_CEILING = 13;
+const BOUND_BY_CEILING = 12;
 
 /** Where each reader is defined, by its qualified name: a rename moves the reader out of the census, and this row says so. */
 const READER_HOMES: Readonly<Record<string, readonly [string, string]>> = {
