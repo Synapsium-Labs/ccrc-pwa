@@ -550,7 +550,7 @@ describe('ARCH-52: SessionStream polls and dialog frame producers', () => {
       mkdirSync(path.join(tree, 'server/src'), { recursive: true });
       writeFileSync(path.join(tree, 'server/src/a.ts'), "bus.emit('session:x', { type: 'dialog', dialog });\nsend({ type: 'dialog_cleared' });\n");
       writeFileSync(path.join(tree, 'server/src/b.ts'), "// { type: 'dialog' } in prose\nif (m.type === 'dialog') return;\n");
-      expect(dialogFrameProducers(tree).map((s) => `${s.file}:${s.line}`)).toEqual(['server/src/a.ts:1']);
+      expect(dialogFrameProducers(tree).map((s) => ({ file: s.file, line: s.line }))).toEqual([{ file: 'server/src/a.ts', line: 1 }]);
     } finally {
       rmSync(tree, { recursive: true, force: true });
     }
