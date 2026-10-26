@@ -130,10 +130,16 @@ DEST="$HOME/.ccrc/update-intent"
 TIMEOUT="${CCRC_UPDATE_SYNC_TIMEOUT:-20}"
 
 # `redact <text>` -- what NO line this script prints may carry verbatim
-# (review 155 C18, fix round 1 item 11): a URL's userinfo
-# (scheme://user:pass@host -> scheme://host) and this box's own absolute
-# home directory (-> ~), the same two rules ccd/ccrc's `_upd_redact`
-# applies for its language. Called from `say` alone -- the ONE place every
+# (review 155 C18, fix round 1 item 11): a URL's userinfo and this box's own
+# absolute home directory (-> ~). It applies all three of ccd/ccrc's
+# `_upd_redact` rules (wave 29, R45, D-6984): the scheme rule, after one slash
+# or two (scheme://user:pass@host -> scheme://host; scheme:/user:pass@host ->
+# scheme:/host, which curl also authenticates with); the rule for a base with
+# no scheme (user:pass@host, which curl takes as http, and which nothing here
+# refuses in agent.env -> host); and the home rule. One difference, on
+# purpose: this script strips the base's trailing '/' and closes its exit-6
+# clause with ')', so a scheme-less host here may also end at ')' or at the
+# text's end, where `_upd_redact` wants '/', '?' or '#'. Called from `say` alone -- the ONE place every
 # line this script prints (to stderr, which a `--user` unit's journal
 # carries) is assembled -- so no `say` call site here, present or future,
 # has to remember to redact its own sentence. Before this fix, `$AGENT_ENV`
@@ -153,6 +159,11 @@ redact() {
   # round 1, N2 (ccd/ccrc's own copy): '?' and '#' also end the authority --
   # excluded so the class stops at the first of '/', '?' or '#'.
   s="${s//:\/\/+([^\/@?#[:space:]])@/:\/\/}"
+  s="${s//:\/+([^\/@?#[:space:]])@/:\/}"   # one slash: the two-slash form is already masked, so its `/` never starts a match
+  # No scheme: every '@'-ended run from a token's start (the text's, or after whitespace, '"' or '<'), `_upd_redact`'s
+  # class, whose host ends at '/', '?', '#', ')' or the text's end; prose's `user@host` with nothing after it is masked too.
+  local re='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)+)([^/@?#[:space:])]+([/?#)]|$))'
+  while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[4]}"}"; done
   [ "$had_extglob" -eq 1 ] || shopt -u extglob
   # The replacement side of a bash `${..//pattern/string}` substitution
   # undergoes TILDE EXPANSION -- a bare `~` there expands to the CURRENT

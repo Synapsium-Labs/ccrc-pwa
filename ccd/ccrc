@@ -2747,7 +2747,7 @@ EOF
 # `_upd_rollback_no_restore` and `_upd_restore` inherit it as `$reason`);
 # `$UPD_GATE_WHY` directly (`_upd_gate`'s two echoes, `cmd_update`'s exit-4
 # echo). `ccd/ccd-update-sync`, another executable, redacts at its own `say`
-# with the home rule and the `://` scheme rule alone: it prints no release base.
+# with its own copy of all three rules (wave 29, R45, D-6984; its header says how).
 _upd_redact() {
   local s="${1:-}" LC_ALL=C
   # The userinfo strip is bounded to characters a URL authority allows

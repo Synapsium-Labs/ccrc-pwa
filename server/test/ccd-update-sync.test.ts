@@ -482,6 +482,47 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
   });
 });
 
+// wave 29 (R45, D-6984): curl authenticates with a scheme followed by one slash (`https:/u:p@h`), so the mask takes
+// the userinfo there too, and the header says which of `_upd_redact`'s rules this script applies.
+describe('W29: the sync never prints a URL\'s userinfo', () => {
+  const failingSync = (url: string) => {
+    const home = box('upd-sync-w29-userinfo-', { url });
+    answer(home, intentDoc());
+    writeFileSync(join(home, 'fixture-curl-rc'), '6\n');   // exit 6's line is the one that names the URL
+    return sync(home);
+  };
+
+  it('W29-Y1: a one-slash base loses its userinfo', () => {
+    const r = failingSync('https:/u:hunter2@127.0.0.1:9/');
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).not.toContain('hunter2');
+    expect(r.stderr).toContain('could not resolve host in https:/127.0.0.1:9)');
+  });
+
+  it('W29-Y2: the two-slash base still does (the control)', () => {
+    const r = failingSync('https://u:hunter2@127.0.0.1:9/');
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).not.toContain('hunter2');
+    expect(r.stderr).toContain('could not resolve host in https://127.0.0.1:9)');
+  });
+
+  it('W29-Y4: a base with no scheme, which curl takes as http, loses its userinfo too (the coordinator\'s ruling on R45)', () => {
+    const r = failingSync('u:hunter2@127.0.0.1:9');
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).not.toContain('hunter2');
+    expect(r.stderr).toContain('could not resolve host in 127.0.0.1:9)');
+  });
+
+  it('W29-Y3: the header above redact() names the rules it applies, not "the same two rules"', () => {
+    const src = readFileSync(SYNC, 'utf8');
+    const at = src.indexOf('\nredact() {');
+    const header = src.slice(src.lastIndexOf('\n\n', at), at);
+    expect(header).toContain('`redact <text>`');
+    expect(header).not.toContain('the same two rules');
+    expect(header.replace(/\n# ?/g, ' ')).toMatch(/all three of ccd\/ccrc's `_upd_redact` rules/);
+  });
+});
+
 describe('ccd-update-sync: the projection is whole-or-nothing (spec §18)', () => {
   // Pass 2 — the whole-document `DOC.fullmatch` and the byte cap — is the
   // ONLY check that counts lines or looks for `end`. Each of the first four
