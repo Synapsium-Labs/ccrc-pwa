@@ -3118,36 +3118,96 @@ describe('history ingest: the FTS index (plan task 23)', () => {
         fs.rmSync(box.home, { recursive: true, force: true });
       }
     }, 300_000);
-    it('(f) a compressor error rejects compressFdRange and leaves no unhandled rejection (D-6973)', async () => {
-      const { store } = await IX.api();
+    /** node:zlib's `createBrotliCompress` replaced by `make` (its exports are configurable, not writable); `restore` puts it back. */
+    const stubBrotli = async (make: () => Transform): Promise<() => void> => {
       const zlib = (await import('node:zlib')).default;
-      const real = Object.getOwnPropertyDescriptor(zlib, 'createBrotliCompress')!;   // node:zlib's exports are configurable, not writable
+      const real = Object.getOwnPropertyDescriptor(zlib, 'createBrotliCompress')!;
+      Object.defineProperty(zlib, 'createBrotliCompress', { ...real, value: make });
+      syncBuiltinESMExports();
+      return () => { Object.defineProperty(zlib, 'createBrotliCompress', real); syncBuiltinESMExports(); };
+    };
+
+    it('(f) a compressor error, in either shape zlib reports it, rejects compressFdRange and leaves no unhandled rejection (D-6973)', async () => {
+      const { store } = await IX.api();
       const box = IX.newBox('ccrc-hist-cp39b-f-');
       const seen: unknown[] = [];
       const onUnhandled = (e: unknown): void => { seen.push(e); };
       const boom = new Error('cp39b-f: the compressor failed on its second write');
       process.on('unhandledRejection', onUnhandled);
       let fd = -1;
+      let timer: NodeJS.Timeout | undefined;
+      let restore: (() => void) | undefined;
       try {
         const file = path.join(box.home, 'range.bin');
         fs.writeFileSync(file, Buffer.alloc(3 * (1 << 20), 0x61));   // three RANGE_PIECE pieces
         fd = fs.openSync(file, 'r');
-        Object.defineProperty(zlib, 'createBrotliCompress', {
-          ...real,
-          value: function createBrotliCompress(): Transform {
+        // 'native': zlib's own error path destroys the stream with the error and never runs the in-flight write's callback.
+        // 'callback': the write callback itself carries the error.
+        for (const shape of ['native', 'callback'] as const) {
+          restore = await stubBrotli(() => {
             let writes = 0;
-            return new Transform({ transform(chunk: Buffer, _enc, cb) { writes += 1; if (writes === 2) cb(boom); else cb(null, chunk); } });
-          },
+            return new Transform({
+              transform(chunk: Buffer, _enc, cb) {
+                writes += 1;
+                if (writes !== 2) cb(null, chunk);
+                else if (shape === 'native') this.destroy(boom);
+                else cb(boom);
+              },
+            });
+          });
+          const outcome = await Promise.race([
+            store.compressFdRange(fd, 0, 3 * (1 << 20)).then(() => ({ kind: 'resolved' as const }), (e: unknown) => ({ kind: 'rejected' as const, e })),
+            new Promise<{ kind: 'timeout' }>((res) => { timer = setTimeout(() => res({ kind: 'timeout' }), 5000); }),
+          ]);
+          clearTimeout(timer);
+          restore(); restore = undefined;
+          expect(outcome.kind === 'timeout', `${shape}: compressFdRange did not settle within 5 s`).toBe(false);
+          expect(outcome, `${shape}: it rejects`).toMatchObject({ kind: 'rejected' });
+          expect((outcome as { e: unknown }).e, `${shape}: with the compressor's error`).toBe(boom);
+          await new Promise((r) => setTimeout(r, 0));
+          await new Promise((r) => setImmediate(r));
+          expect(seen, `${shape}: no rejection was left unhandled`).toEqual([]);
+        }
+      } finally {
+        clearTimeout(timer);
+        restore?.();
+        process.off('unhandledRejection', onUnhandled);
+        if (fd >= 0) fs.closeSync(fd);
+        fs.rmSync(box.home, { recursive: true, force: true });
+      }
+    }, 60_000);
+
+    it('(g) a read error mid-range rejects compressFdRange and destroys the encoder (D-6973)', async () => {
+      const { store } = await IX.api();
+      const box = IX.newBox('ccrc-hist-cp39b-g-');
+      const boom = new Error('cp39b-g: the read failed on its second piece');
+      const made: Transform[] = [];
+      const realRead = fs.readSync;
+      let fd = -1;
+      let restoreBrotli: (() => void) | undefined;
+      try {
+        const file = path.join(box.home, 'range.bin');
+        fs.writeFileSync(file, Buffer.alloc(3 * (1 << 20), 0x61));
+        fd = fs.openSync(file, 'r');
+        restoreBrotli = await stubBrotli(() => {
+          const t = new Transform({ transform(chunk: Buffer, _enc, cb) { cb(null, chunk); } });
+          made.push(t);
+          return t;
         });
+        let reads = 0;
+        (fs as { readSync: unknown }).readSync = function readSync(rfd: number, ...rest: unknown[]): number {
+          if (rfd === fd) { reads += 1; if (reads === 2) throw boom; }
+          return (realRead as (...a: unknown[]) => number)(rfd, ...rest);
+        };
         syncBuiltinESMExports();
         await expect(store.compressFdRange(fd, 0, 3 * (1 << 20))).rejects.toBe(boom);
-        await new Promise((r) => setTimeout(r, 0));
-        await new Promise((r) => setImmediate(r));
-        expect(seen, 'no rejection was left unhandled').toEqual([]);
+        expect(reads, 'CONTROL: the second read is the one that threw').toBe(2);
+        expect(made.length, 'CONTROL: the stub encoder was the one used').toBe(1);
+        expect(made[0]!.destroyed, 'the encoder was destroyed').toBe(true);
       } finally {
-        Object.defineProperty(zlib, 'createBrotliCompress', real);
+        (fs as { readSync: unknown }).readSync = realRead;
         syncBuiltinESMExports();
-        process.off('unhandledRejection', onUnhandled);
+        restoreBrotli?.();
         if (fd >= 0) fs.closeSync(fd);
         fs.rmSync(box.home, { recursive: true, force: true });
       }

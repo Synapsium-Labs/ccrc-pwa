@@ -48,7 +48,7 @@ The streamed arm already exists. `compressFdRange` (store.mjs) reads 1 MiB piece
 2. **The boundary and the reused piece.** A sidecar of exactly `SIDECAR_READ_WHOLE_MAX` bytes is read whole, and one byte more is streamed through one reused buffer. Both are stored byte for byte, and the streamed one's blob decodes to its bytes, so no piece was overwritten before the compressor took it. **Task 1, case (b).**
 3. **Incompressible bytes.** A random sidecar over the threshold is stored with its sha256 and `raw_len`, and its blob decodes to the same bytes. **Task 1, case (d).**
 4. **Duplicates in the streamed arm.** Two names with the same over-threshold bytes give one blob and two `sidecars` rows. **Task 1, case (e).**
-5. **Both GC modes.** The walk-cap and DM47 cases stay under 262,144 KiB on Node 22.16.0, both alone and pinned to one CPU, with at least a 5% margin (249,000 KiB). **Task 2.**
+5. **Both GC modes.** The walk-cap and DM47 cases stay under 262,144 KiB on Node 22.16.0, both alone and pinned to one CPU. A 5% margin (249,000 KiB) was the trigger for a look, not a bound: the coordinator accepted 4.6% (see Task 2 Step 2's Ruling bullet). **Task 2.**
 
 ## Files
 
@@ -57,8 +57,8 @@ The streamed arm already exists. `compressFdRange` (store.mjs) reads 1 MiB piece
 | `ccd/history/lib.mjs` | `export const SIDECAR_READ_WHOLE_MAX = 8388608;` beside `SIDECAR_WHOLE_MAX`, with its doc. `SIDECAR_WHOLE_MAX`'s doc is reworded to its remaining meanings, because it no longer decides the ingest arm. |
 | `ccd/history/lib.d.mts` | `export const SIDECAR_READ_WHOLE_MAX: 8388608;` |
 | `ccd/history/sweep.mjs` | The lib import names `SIDECAR_READ_WHOLE_MAX` in place of `SIDECAR_WHOLE_MAX` (the arm was its only code use). `ingestSidecar` reads whole when `size <= SIDECAR_READ_WHOLE_MAX`, else streams. The header bullet (about :5629) and the D-4589 comment (about :5693) name the new constant. |
-| `ccd/history/store.mjs` | `compressFdRange` reads into one reused `RANGE_PIECE` buffer, awaiting each write's callback before the next read, and its doc says "a sidecar over SIDECAR_READ_WHOLE_MAX" (D-6973). |
-| `server/test/history-ingest.test.ts` | A new describe for cases (a)-(e). In place (D-6972): DM47's 64 MiB case title (about :1746), S6's streamed-arm case title (about :2864), and FPM6's comment (about :2925). |
+| `ccd/history/store.mjs` | `compressFdRange` reads into one reused `RANGE_PIECE` buffer, awaiting each piece as the race of its write callback and `finished`, a try/catch that destroys the encoder on any throw out of the loop, and its doc says "a sidecar over SIDECAR_READ_WHOLE_MAX" (D-6973). |
+| `server/test/history-ingest.test.ts` | A new describe for cases (a)-(g), and the `Transform` import (`node:stream`) that (f) and (g) need. In place (D-6972): DM47's 64 MiB case title (about :1746), S6's streamed-arm case title (about :2864), and FPM6's comment (about :2925). |
 | `docs/superpowers/plans/2026-10-26-ccrc-history-cp39b-streamed-sidecar.md` | This plan, then its Measured section. |
 
 ## Not in this plan
@@ -88,7 +88,7 @@ The streamed arm already exists. `compressFdRange` (store.mjs) reads 1 MiB piece
 
 - [ ] **Step 1: Write the failing cases.** In `history-ingest.test.ts`, add `describe('CP-39b: a sidecar over SIDECAR_READ_WHOLE_MAX is captured by the streamed arm (D-6971, D-6973)')`.
   - Nest the describe INSIDE the FTS describe ("the FTS index (plan task 23)"), after the D-4312 describe. There it reaches `hex`, `matches`, `ftsBytes` and `secretFile`, and inherits that describe's darwin skip, which (b)'s `/proc/self/fd` read needs.
-  - Prefix each case title with its letter, "(a)" to "(e)", so a `-t` filter can select one case.
+  - Prefix each case title with its letter, "(a)" to "(g)", so a `-t` filter can select one case. Cases (f) and (g) need `import { Transform } from 'node:stream'`.
   - Cases (b), (d) and (e) plant one transcript under `box.homes[0]`, built as the Interfaces say. Each writes its sidecars to `path.join(box.homes[0]!, 'projects', IX.SLUG, IX.U, 'tool-results')`, made with `mkdirSync(…, { recursive: true })`, and runs `S.ingestSidecars(db, ctx, S.newBudget(), [IX.U])` once.
   - Cases (b)-(e) remove `box.home` with `fs.rmSync(box.home, { recursive: true, force: true })` in a `finally`, as DM47 does: about 16 MiB per case.
   - (b) runs under a spy. For each sidecar name, keyed by the descriptor's `/proc/self/fd` link, the spy records the largest `length` argument a `readSync` call asks for, and the set of buffer objects passed. Restore the spy in a `finally`.
@@ -111,17 +111,20 @@ The streamed arm already exists. `compressFdRange` (store.mjs) reads 1 MiB piece
     No spy is needed here: (b) pins the arm.
   - (d) `rand.bin` holds `randomBytes(SIDECAR_READ_WHOLE_MAX + 4096)`. Its row's sha256 and `raw_len` match the bytes, and `brotliDecompressSync` of the stored `z` equals them.
   - (e) `a.txt` and `b.txt` hold the same `SIDECAR_READ_WHOLE_MAX + 4096` bytes. Expect one `blobs` row for that sha256 and two `sidecars` rows naming it.
+  - (f) `node:zlib`'s `createBrotliCompress` is replaced (`Object.defineProperty`, because the export is configurable but not writable, then `syncBuiltinESMExports()`, restored in a `finally`) by a stub Transform that fails on its SECOND write, in two shapes: `native` (`this.destroy(boom)`, the write callback never called, as zlib's own error path does) and `callback` (`cb(boom)`). `compressFdRange` runs on a 3 MiB file (three `RANGE_PIECE` pieces), raced against the case's own 5 s timer. For both shapes expect: it settles in time, rejects with `boom`, and a `process.on('unhandledRejection')` listener, added before and removed in the `finally`, saw nothing after a `setTimeout(0)` and a `setImmediate` tick.
+  - (g) The same stub swap, with a pass-through Transform, and `fs.readSync` replaced (module object, `syncBuiltinESMExports()`, restored in a `finally`) so that the second read of the case's descriptor throws. Expect `compressFdRange` rejects with that error, and the stub encoder's `destroyed` is `true`.
 
 - [ ] **Step 2: Run, and record the reds.**
   `./node_modules/.bin/vitest run test/history-ingest.test.ts -t "CP-39b"` (from `server/`, foreground, timeout at least 600000).
   Predicted: (a)-(d) are red on the undefined export (every size is NaN), and (e) may pass on empty files. Record what is measured.
-  - Measured: all five were red, (e) included, not four. (a) failed with `expected undefined to be 8388608`. (b) failed with `The "size" argument must be of type number. Received undefined`. (c), (d) and (e) failed with `The value of "size" is out of range ... Received NaN`, so (e) did not pass on empty files: its files are sized from the undefined export, and the write throws first.
+  - Measured: all five were red, (e) included, not four. (a) failed with `expected undefined to be 8388608`. (b) failed with `The "size" argument must be of type number. Received undefined`. (c), (d) and (e) failed with `The value of "size" is out of range ... Received NaN`, so (e) did not pass on empty files: its red is `Buffer.alloc(NaN)` in `wordBytes`, before any write.
 
 - [ ] **Step 3a: The constant alone.** Add the lib.mjs export and the lib.d.mts line only, and re-run the same filter. Predicted:
   - (a) is green.
   - (b) is red, because `over.txt`'s largest read is `SIDECAR_READ_WHOLE_MAX + 1` (the whole arm).
   - (c)-(e) are green on the whole arm; they are the arm-independence pins.
   Record what is measured.
+  - Measured: as predicted. `Tests  1 failed | 4 passed`; only (b) was red, `AssertionError: expected 8388609 to be less than or equal to 1048576`.
 
 - [ ] **Step 3b: The arm and the reused piece.**
   - lib.mjs: the new constant's doc says that 8 MiB is *chosen*, and that a larger sidecar, up to `SIDECAR_MAX_BYTES`, is streamed so that the sweep never holds a large sidecar whole beside the walk phase's heap (O20, D-6971).
@@ -131,9 +134,10 @@ The streamed arm already exists. `compressFdRange` (store.mjs) reads 1 MiB piece
     - allocate one `RANGE_PIECE` buffer before the loop;
     - read each piece into it (the last one sliced to its length);
     - `hash.update` the piece;
-    - replace the existing `drain` wait with `await new Promise((res, rej) => enc.write(chunk, (e) => (e ? rej(e) : res())))`, and await nothing else. Node emits `'drain'` BEFORE it runs the write callback, so a drain wait kept after the callback would hang for good. The callback fires only once zlib has consumed the piece, so it is then safe to overwrite, and a write error now rejects instead of writing on into a destroyed stream.
+    - replace the existing `drain` wait with `await Promise.race([new Promise((res, rej) => enc.write(chunk, (e) => (e ? rej(e) : res()))), finished])`, and await no drain. (The first version awaited the write callback alone; zlib's native error path destroys the encoder and never runs an in-flight write's callback, so the race on `finished`, which cannot resolve before `enc.end()`, is what makes a compressor failure reject the call: D-6973, case (f).) Node emits `'drain'` BEFORE it runs the write callback, so a drain wait kept after the callback would hang for good. The callback fires only once zlib has consumed the piece, so it is then safe to overwrite, and a write error now rejects instead of writing on into a destroyed stream.
+    - run the loop, `enc.end()` and the final `await finished` inside a try whose catch calls `enc.destroy()` and rethrows, so a read or compressor error rejects the call with the encoder destroyed;
     Keep the null return on a short read, and update the doc (D-6973).
-  Re-run the filter: all five green.
+  Re-run the filter: all seven green.
 
 - [ ] **Step 4: Run green.** Run the CP-39b filter, then the whole `history-ingest.test.ts`, `history-lib.test.ts`, `history-recall.test.ts`, `history-export.test.ts`, the test typecheck (`./node_modules/.bin/tsc -p test/tsconfig.tests.json --noEmit`), and the `single-definition/*` area files.
 
@@ -145,12 +149,22 @@ The streamed arm already exists. `compressFdRange` (store.mjs) reads 1 MiB piece
 
 - [ ] **Step 6: Mutants.** Each must go red, and each is restored byte for byte, with `cmp` silent, before the next.
   - M1: sweep.mjs's import and arm test both read `SIDECAR_WHOLE_MAX` again. Expect (b) red.
+    - Measured: (b) red, `expected 8388609 to be less than or equal to 1048576`.
   - M2: `<` in place of `<=`. Expect (b) red at `at.txt`.
+    - Measured: (b) red, `expected 1048576 to be 8388608`.
   - M3: lib.mjs's constant set to `SIDECAR_WHOLE_MAX`. Expect (a) red. Run (a) alone (`-t "CP-39b.*\\(a\\)"`), because (b)-(e) size themselves from the constant by design.
+    - Measured: (a) red, `expected 67108864 to be 8388608`.
   - M4: `compressFdRange` allocates a fresh piece per read again. Expect (b) red on the one-buffer assertion.
+    - Measured: (b) red, `every read of over.txt passed one buffer object: expected 9 to be 1`.
   - M5: `enc.write(chunk)` with neither the callback nor `drain` awaited. Expect (b) red on the decode. Measured in a standalone script on Node 24.14.1 (a 20 MiB patterned file, one reused 1 MiB piece): corrupt every time, while the callback await and a drain-only wait both decode correctly.
-  - M6: drop only the handler on `finished` (`finished.catch(() => {})`). Expect (f) red on the unhandled rejection.
-    - Measured: (f) red with `AssertionError: no rejection was left unhandled: expected [ …(1) ] to deeply equal []`. At the base code (28d4ab3a5) (f) was red with the same line, before the fix.
+    - Measured: (b) red on the decode, `expected false to be true`.
+  - M6: drop only the `finished.catch(() => {})` handler (the first version of the D-6973 follow-up). Expect (f) red on the unhandled rejection.
+    - Measured on that version: (f) red with `AssertionError: no rejection was left unhandled: expected [ …(1) ] to deeply equal []`. At the base code (28d4ab3a5) (f) was red with the same line, before the follow-up.
+    - Retired at fix round 1: once each piece's race subscribes to `finished` from the first write, the handler guards nothing. With the line dropped the whole CP-39b filter stayed green (`Tests  7 passed | 200 skipped`), so the line was removed (no guard without a red test) and M6 retired.
+  - M7: back to awaiting only the write callback (no race on `finished`). Expect (f)'s native shape red, on the case's own timer.
+    - Measured: (f) red, `native: compressFdRange did not settle within 5 s: expected true to be false`. At the code before the race the native shape was red with the same line, before the fix.
+  - M8: delete the catch's `enc.destroy()`. Expect (g) red.
+    - Measured: (g) red, `the encoder was destroyed: expected false to be true`. Before (g), all six cases stayed green with this deletion.
 
 - [ ] **Step 7: Commit.** `feat(history): a sidecar over 8 MiB is captured by the streamed arm, through one reused piece (CP-39b Task 1; D-6971, D-6972, D-6973)`
 
@@ -164,7 +178,7 @@ The streamed arm already exists. `compressFdRange` (store.mjs) reads 1 MiB piece
   - The walk-cap case: `<node22>/bin/node ./node_modules/vitest/vitest.mjs run test/history-ingest.test.ts -t "O20 at the walk.s cap"`
   - DM47's 64 MiB case: the same command with `-t "DM47: a 64 MiB sidecar"`.
   Do 5 runs alone, and 5 pinned to one CPU (`taskset -c <one cpu>`), for each case. Record each printed `peak RSS <n> KiB` line. The figure is the own peak (`VmHWM`), through CP-38's preload, which Step 0 confirmed is on your base.
-  Expected: every "after" run is below 249,000 KiB, a 5% margin under 262,144. Report the largest and its margin. If any run is above 249,000 KiB, stop and mail the coordinator with every figure. Also run the box's Node, 3 runs alone per case.
+  Expected: every "after" run is below 249,000 KiB, a 5% margin under 262,144 (a trigger for a look, not a bound: the Ruling bullet below accepted 4.6%). Report the largest and its margin. If any run is above 249,000 KiB, stop and mail the coordinator with every figure. Also run the box's Node, 3 runs alone per case.
   - Measured: two of the five pinned walk-cap runs were over 249,000 KiB: 250,176 and 249,996. The largest is 11,968 KiB under 262,144, a 4.6% margin. Every other run was under 249,000. The worker stopped and mailed every figure.
   - Ruling (coordinator): the 249,000 KiB line was a trigger for a look, not a bound. It was met at 4.6%, and the coordinator accepted that margin.
 
@@ -217,6 +231,8 @@ The largest reading is 250,176 (walk-cap, pinned): 11,968 KiB, or 4.6%, under 26
 - What remains of the pinned walk-cap peak is the walk phase's own heap. Lowering it is a Later item; the margin is 4.6%.
 - An incompressible sidecar near 64 MiB still costs about twice its compressed size in the streamed arm: `out[]` plus `Buffer.concat`. Measured in a standalone script on Node 24.14.1, random 64 MiB grew peak RSS by 206,476 KiB whole, 156,900 KiB streamed with a fresh piece, and 143,884 KiB with the reused piece. Beside the walk phase's heap that is over O20's bound. O20 is evidenced here for compressible content only; a bound or design decision for incompressible sidecars is the operator's (Later).
 - `SIDECAR_WHOLE_MAX`'s name now describes only the decode bound.
+- The short-read arm's `enc.destroy()` (a file that shrinks under the read, the null return) is pinned by no test. Without it, the encoder's native state is held until GC.
+- The two arms' index text was traced equal by reading in review (`sidecarIndexText(buf)` against `ftsTextOfBlob` through the bounded prefix decoder, both cut to the same window: identical for any file over 576 KiB). Case (c) pins three properties of the streamed arm, not an equality of the two arms' index text on the same bytes (Later).
 
 ## Deviations found
 
@@ -228,6 +244,6 @@ The largest reading is 250,176 (walk-cap, pinned): 11,968 KiB, or 4.6%, under 26
   - DM47's 64 MiB case is retitled, because its 64 MiB sidecar is now streamed like the larger one. Both are still checked byte for byte, under O20's bound.
   - S6's streamed-arm title and FPM6's comment name the new threshold.
   The arm boundary itself is pinned by CP-39b's cases at `SIDECAR_READ_WHOLE_MAX`.
-- **D-6973** — `history-compress-range-one-piece` (Task 1; O20). `compressFdRange` reads into one reused `RANGE_PIECE` buffer, awaiting each write's callback before refilling it, in place of a fresh 1 MiB buffer per read whose dead copies wait for a GC. Measured in a standalone script on Node 24.14.1, for 64 MiB of word text, as peak RSS growth: 85,896 KiB whole, 57,788 KiB streamed with a fresh piece, 23,976 KiB with one reused piece. `compressFdRange` observes its `finished` promise's rejection from creation and destroys the encoder on any throw out of the loop, so a compressor or read error rejects the call and never leaves an unhandled rejection (pinned by CP-39b case (f), mutant M6).
+- **D-6973** — `history-compress-range-one-piece` (Task 1; O20). `compressFdRange` reads into one reused `RANGE_PIECE` buffer, awaiting each write's callback before refilling it, in place of a fresh 1 MiB buffer per read whose dead copies wait for a GC. Measured in a standalone script on Node 24.14.1, for 64 MiB of word text, as peak RSS growth: 85,896 KiB whole, 57,788 KiB streamed with a fresh piece, 23,976 KiB with one reused piece. `compressFdRange` awaits each piece as the race of its write callback and `finished`, because zlib's native error path destroys the encoder and never runs an in-flight write's callback. Each piece's race and the final await observe `finished`, and the encoder is destroyed on any throw out of the loop, so a compressor or read error, in either shape, rejects the call: no hang and no unhandled rejection. Pinned by CP-39b case (f) (both shapes; mutant M7), and case (g) (a read error destroys the encoder; mutant M8), so the catch's destroy is pinned. The short-read arm's `enc.destroy()` (the null return) is pinned by no test. The first version's `finished.catch(() => {})` and its mutant M6 are retired: with the race in place the line guards nothing, and M6 stayed green.
   - The pieces, their order, the sha256 and the decoded bytes are unchanged.
   - The capture of a transcript line longer than `LINE_MAX` takes the same path, and gains the same saving.
