@@ -1758,7 +1758,7 @@ It cites D-5770 and D-5771 (W2-3's window and copy rules) and D-6238 (`expandEnt
 - **An echo row is in the window by the gate's rule, never by a second one.** The rows are taken from `ctx.copy` in file order, after the boundary line and before the next main boundary's line, the positional range measure-history.py's raw rows use; each is placed in time by `windowOf` over one synthetic call at its `ts_ms`, so the inclusive start and the exclusive or inclusive end are spelled once, in the gate (W2-D14). A row with a null `ts_ms` is counted `untimed` over the whole positional range (U10).
 - **A boundary the store does not hold is unmeasured for every counter** (`boundary-absent`), never 0 echo hits: the store answers for a boundary measure-history.py reported only if it holds it. The coordinator confirmed this for echo hits (V4).
 - **A boundary no copy holds is `boundary-uncopied`, not `none`.** card.mjs's `deliveryOf` reads it `none` (no copy, so not live, so the window reads complete). That never moves a served or mismatch count, so the parity CONTROL stays exact; but "no copy" is not a measured delivery (D-6562).
-- **The card's copy is `holdingCopyOf` over the store, not the gate's `producerCopyOf` over Python's copies.** Both apply lib's `pickHoldingCopy`; only the store's row carries the `eof_ms` `eofAfterBoundary` needs. `live` is card.mjs's: `source_key === ''` and `ingest_files.status === 'live'`. The boundary's time is `ctx.boundary.ts_ms`, and the wait is `ctx.nowMs` less the leaf's `created_ms`.
+- **The card's copy is `holdingCopyOf` over the store, not the gate's `producerCopyOf` over Python's copies.** Both apply lib's `pickHoldingCopy`; only the store's row carries the `eof_ms` `eofAfterBoundary` needs. `live` is card.mjs's: `source_key === ''` and `ingest_files.status === 'live'`. The boundary's time is the store's, card.mjs's `stampAt` spelled again (the newest stamped row at or before the boundary's line in the holding copy, `null` when none, D-6563), and the wait is `ctx.nowMs` less the leaf's `created_ms`.
 - **Compliance, lag and the card are measured for every boundary, an unmeasured window included (U5).** Echo hits need the window's bounds, so an unmeasured window answers `window-unmeasured`.
 - **The folds divide nothing.** The ok+degraded share is `{num, den}`; a fold is never called on an empty list (Task 1 answers `null` there), so `den` is never 0. Lag is the sorted list of measured values; no p95 or median that `COUNTERS_DEF_V1` does not define.
 - **The card verdict per boundary is computed once and projected twice.** Both card specs measure with `cardAt`, memoised on the frozen `ctx` Task 1 hands every measure of one row; `card_served`'s fold counts `served`, `card_id_mismatch`'s counts `mismatch`, and each carries the whole distribution.
@@ -1999,6 +1999,7 @@ const w6cT2Ctx = (cs: W6cT2Cs, p: W6cT2Part, nowMs = W6C_T2_NOW): W6cR =>
 const W6C_T2_LEAF = {
   A1: w6cT2Leaf(0xa1), H1: w6cT2Leaf(0x91), H2: w6cT2Leaf(0x92), B: w6cT2Leaf(0xb1), C1: w6cT2Leaf(0xc1), D: w6cT2Leaf(0xd1),
   E: w6cT2Leaf(0xe1), F: w6cT2Leaf(0xf1), G: w6cT2Leaf(0x61), U: w6cT2Leaf(0x71), X: w6cT2Leaf(0xfff),
+  EA: w6cT2Leaf(0xea), EB: w6cT2Leaf(0xeb), RT: w6cT2Leaf(0x77),
 };
 
 /** Store 1: compliance, echo hits and lag. Transcript A (file 1) holds two boundaries: A1 (line 3, ts 10000), whose
@@ -2073,7 +2074,10 @@ function w6cT2EchoStore() {
  *  meets C2's boundary before C1's line, which sits after C2 (none). D has two copies: the live one (file 3, the holding
  *  copy) names D, the retired one (file 4, more rows after the boundary, so the WINDOW copy) names another leaf
  *  (served). E's only attachment is past CARD_ATTACHMENT_MAX_BYTES by its stored raw_len (none, one unread). F's line is
- *  the 41st row after its boundary (none). C2 has no leaf. */
+ *  the 41st row after its boundary (none). C2 has no leaf. EA, EB and RT (D-6563) each have a live-looking window that is
+ *  still open by rows and by the leaf's age, closed by something else: EA's file ends a grace after the boundary's own
+ *  stamp (none); EB's boundary row has no stamp, so the store's stamp is the newest stamped row before it, and the report
+ *  names a later time that would leave the window open (none); RT's copy has source_key '' but its file is retired (none). */
 function w6cT2CardStore() {
   const u = (seed: number) => (n: number): string => w6cT2Uid(seed, n);
   const [uB, uC, uD, uE, uF] = [u(0xb), u(0xc), u(0xd), u(0xe), u(0xf)];
@@ -2089,6 +2093,10 @@ function w6cT2CardStore() {
   const F = [w6cT2Op(uF(1), 99000), w6cT2Asst(uF(2), 99500), w6cT2Bnd(uF(3), 100000), w6cT2Sum(uF(4), 100001),
     ...Array.from({ length: 39 }, (_, i) => w6cT2Asst(uF(5 + i), 100100 + i)),          // lines 5 to 43
     w6cT2Att(uF(44), 101000, w6cT2Line(W6C_T2_LEAF.F))];                                // line 44: the 41st row after line 3
+  const [uEA, uEB, uRT] = [u(0x11), u(0x12), u(0x13)];
+  const EA = [w6cT2Op(uEA(1), 109000), w6cT2Asst(uEA(2), 109500), w6cT2Bnd(uEA(3), 110000), w6cT2Sum(uEA(4), 110001), w6cT2Asst(uEA(5), 110100)];
+  const EB = [w6cT2Op(uEB(1), 119000), w6cT2Asst(uEB(2), 119500), { ...w6cT2Bnd(uEB(3), 0), ts: null }, w6cT2Sum(uEB(4), 120001), w6cT2Asst(uEB(5), 120100)];
+  const RT = [w6cT2Op(uRT(1), 129000), w6cT2Asst(uRT(2), 129500), w6cT2Bnd(uRT(3), 130000), w6cT2Sum(uRT(4), 130001), w6cT2Asst(uRT(5), 130100)];
   const all = (rows: W6cT2Row[]): string[] => rows.map((r) => r.uuid);
   const st = w6cT2Plant({
     transcripts: [
@@ -2100,6 +2108,11 @@ function w6cT2CardStore() {
       ] },
       { pk: 4, ccUuid: w6cT2Uid(0xcd, 4), rows: E, files: [{ fileId: 5, uuids: all(E) }] },
       { pk: 5, ccUuid: w6cT2Uid(0xcd, 5), rows: F, files: [{ fileId: 6, uuids: all(F) }] },
+      // EA: the file ends RAW_LEAF_GRACE_MS after the boundary's stamp. EB: it ends that long after the stamp of the row
+      // before the (unstamped) boundary. RT: the only copy has source_key '' and a retired file.
+      { pk: 6, ccUuid: w6cT2Uid(0xcd, 6), rows: EA, files: [{ fileId: 7, eofMs: 110000 + w6cLib.RAW_LEAF_GRACE_MS, uuids: all(EA) }] },
+      { pk: 7, ccUuid: w6cT2Uid(0xcd, 7), rows: EB, files: [{ fileId: 8, eofMs: 119500 + w6cLib.RAW_LEAF_GRACE_MS, uuids: all(EB) }] },
+      { pk: 8, ccUuid: w6cT2Uid(0xcd, 8), rows: RT, files: [{ fileId: 9, status: 'retired', uuids: all(RT) }] },
     ],
     nodes: [
       { id: W6C_T2_LEAF.B, boundary: uB(3), status: 'not-requested', createdMs: 41000 },
@@ -2107,11 +2120,18 @@ function w6cT2CardStore() {
       { id: W6C_T2_LEAF.D, boundary: uD(3), status: 'not-requested', createdMs: 71000 },
       { id: W6C_T2_LEAF.E, boundary: uE(3), status: 'not-requested', createdMs: 81000 },
       { id: W6C_T2_LEAF.F, boundary: uF(3), status: 'not-requested', createdMs: 101000 },
+      { id: W6C_T2_LEAF.EA, boundary: uEA(3), status: 'not-requested', createdMs: W6C_T2_NOW - 1000 },
+      { id: W6C_T2_LEAF.EB, boundary: uEB(3), status: 'not-requested', createdMs: W6C_T2_NOW - 1000 },
+      { id: W6C_T2_LEAF.RT, boundary: uRT(3), status: 'not-requested', createdMs: W6C_T2_NOW - 1000 },
     ],
   });
   const M = W6C_T2_MODEL;
   return {
     ...st,
+    fEA: w6cT2Part(w6cT2Rep(uEA(3), 110000, [w6cT2Copy({ file_id: 7, boundary_line: 3, after_count: 3, summary_line: 4, last_ts_ms: 110100 })])),
+    // The report names 120000 for EB's boundary: with that time the file's end is short of a grace, which the old reading took.
+    fEB: w6cT2Part(w6cT2Rep(uEB(3), 120000, [w6cT2Copy({ file_id: 8, boundary_line: 3, after_count: 3, summary_line: 4, last_ts_ms: 120100 })])),
+    fRT: w6cT2Part(w6cT2Rep(uRT(3), 130000, [w6cT2Copy({ file_id: 9, boundary_line: 3, after_count: 3, summary_line: 4, last_ts_ms: 130100 })])),
     fB: w6cT2Part(w6cT2Rep(uB(3), 40000, [w6cT2Copy({ file_id: 1, boundary_line: 3, after_count: 3, summary_line: 4, last_ts_ms: 40100, rows: [[6, 40100, null, null, uB(6), M]] })])),
     fC1: w6cT2Part(w6cT2Rep(uC(3), 50000, [w6cT2Copy({ file_id: 2, boundary_line: 3, after_count: 5, summary_line: 4, next_boundary_line: 6, next_boundary_ts_ms: 60000, last_ts_ms: 60002, rows: [[5, 50100, null, null, uC(5), M]] })])),
     fC2: w6cT2Part(w6cT2Rep(uC(6), 60000, [w6cT2Copy({ file_id: 2, boundary_line: 6, after_count: 2, summary_line: 7, last_ts_ms: 60002 })])),
@@ -2283,17 +2303,20 @@ w6cDescribe('W2-6 Task 2: the five spec counters over fixture stores (W2-D87, W2
       w6cExpect(card(st.fD), 'the holding copy, not the window copy').toEqual(verdict('served'));
       w6cExpect(card(st.fE), 'skipped unread past CARD_ATTACHMENT_MAX_BYTES, as card.mjs skips it').toEqual(verdict('none', 1));
       w6cExpect(card(st.fF), 'the line is the 41st row after the boundary').toEqual(verdict('none'));
+      w6cExpect(card(st.fEA), 'a live window short of rows and of age, closed by the file ending a grace after the boundary\'s stamp').toEqual(verdict('none'));
+      w6cExpect(card(st.fEB), 'the boundary row has no stamp: the store\'s stamp is the row before it, not the report\'s time (D-6563)').toEqual(verdict('none'));
+      w6cExpect(card(st.fRT), 'source_key is empty but the file is retired, so the copy is not live and the window is closed').toEqual(verdict('none'));
     });
   });
 
-  w6cIt('card parity CONTROL (D-6562): card.mjs\'s own measureCardDelivery, over the same store, measures the same five leaves with the same served and mismatch counts (each leaf\'s verdict is the card case\'s)', () => {
+  w6cIt('card parity CONTROL (D-6562): card.mjs\'s own measureCardDelivery, over the same store, measures the same eight leaves with the same served and mismatch counts (each leaf\'s verdict is the card case\'s)', () => {
     const st = w6cT2CardStore();
-    const ours = w6cT2With(st.dbFile, (cs) => [st.fB, st.fC1, st.fD, st.fE, st.fF].map((p) => W6C_T2.cardAt(w6cT2Ctx(cs, p))));
+    const ours = w6cT2With(st.dbFile, (cs) => [st.fB, st.fC1, st.fD, st.fE, st.fF, st.fEA, st.fEB, st.fRT].map((p) => W6C_T2.cardAt(w6cT2Ctx(cs, p))));
     const w = w6cStore.openWriter(st.dbFile);
     try {
       w6cStore.withTx(w, 'NORMAL', () => { w6cStore.setStep(w, 'card-measure', 1, '0', null); });
       const theirs = (w6cCardMod as unknown as W6cR).measureCardDelivery(w, { nowMs: W6C_T2_NOW, budgetLeft: () => true }, { bytes: 0 });
-      w6cExpect(theirs).toEqual({ measured: 5, served: 1, mismatch: 1, waiting: 0 });
+      w6cExpect(theirs).toEqual({ measured: 8, served: 1, mismatch: 1, waiting: 0 });
     } finally {
       w6cStore.closeWriter(w);
     }
@@ -2400,8 +2423,8 @@ import { ASSIGNMENT_ARMS, COUNTERS_DEF_V1, COUNTERS_DEF_V1_SHA256, K, K_UNIT, as
 //   card_served,      per boundary, one verdict projected twice: lib's decideCardDelivery over cardIdsIn of the
 //   card_id_mismatch  attachments in the first CARD_MEASURE_ROWS rows after the boundary in its holding copy (derive.mjs
 //                     holdingCopyOf, lib's pickHoldingCopy), with cardWindowComplete: the functions card.mjs's measure
-//                     calls. The glue around them (the rows read, `live`, the attachment size bound, the wait) is card.mjs's
-//                     deliveryOf, module-private, spelled a second time here (D-6562).
+//                     calls. The glue around them (the rows read, `live`, the attachment size bound, the boundary's time,
+//                     the wait) is card.mjs's deliveryOf, module-private, spelled a second time here (D-6562, D-6563).
 
 const COUNTER_STMTS = new WeakMap();
 
@@ -2423,6 +2446,8 @@ function counterStmts(db) {
       ORDER BY m.line`),
     lineOf: db.prepare('SELECT line FROM memberships WHERE file_id = ? AND entry_id = ?'),
     fileStatus: db.prepare('SELECT status FROM ingest_files WHERE file_id = ?'),
+    stampAt: db.prepare(`SELECT e.ts_ms AS ts_ms FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+      WHERE m.file_id = ? AND m.line <= ? AND e.ts_ms IS NOT NULL ORDER BY m.line DESC LIMIT 1`),
     cardRows: db.prepare(`SELECT e.entry_id AS entry_id, e.type AS type, e.blob_id AS blob_id, bl.raw_len AS raw_len,
         CASE WHEN b.entry_id IS NULL THEN 0 ELSE 1 END AS is_boundary
       FROM memberships m JOIN entries e ON e.entry_id = m.entry_id LEFT JOIN boundaries b ON b.entry_id = e.entry_id
@@ -2571,7 +2596,8 @@ export function cardAt(ctx) {
  *  its holding copy, stopping at the next boundary, with lib's cardWindowComplete. An attachment whose stored raw_len
  *  passes CARD_ATTACHMENT_MAX_BYTES is skipped unread, as card.mjs skips it, and so is one expandEntryBody cannot give;
  *  each is counted in `attachments_unread`. A window still open at the read instant is card-wait; a boundary no copy
- *  holds is boundary-uncopied. The glue is card.mjs's deliveryOf, spelled a second time (D-6562).
+ *  holds is boundary-uncopied. The glue is card.mjs's deliveryOf, spelled a second time (D-6562), the boundary's time
+ *  included (the store's stampAt, D-6563).
  *  @param {WindowCtx} ctx */
 function cardVerdictOf(ctx) {
   const leaf = boundaryLeafOf(ctx.rs, ctx.boundary.boundary_uuid);
@@ -2605,7 +2631,12 @@ function cardVerdictOf(ctx) {
     }
     ids.push(...cardIdsIn(k.primary));
   }
-  const eofAfter = eofAfterBoundary({ eofMs: holding.eof_ms === null ? null : Number(holding.eof_ms), boundaryTsMs: ctx.boundary.ts_ms });
+  // The boundary's time is the store's, as card.mjs's stampAt reads it: the newest stamped row at or before the boundary's
+  // line in the holding copy, null when none is stamped. The report's time can differ (D-6563).
+  const stamp = s.stampAt.get(fileId, line);
+  const eofAfter = eofAfterBoundary({
+    eofMs: holding.eof_ms === null ? null : Number(holding.eof_ms), boundaryTsMs: stamp === undefined ? null : Number(stamp.ts_ms),
+  });
   const windowComplete = cardWindowComplete({ live, rowsSeen, nextBoundary, eofAfter, waitedMs: ctx.nowMs - leaf.created_ms });
   const verdict = decideCardDelivery({ ids, leafId: leaf.node_id, windowComplete });
   if (verdict === 'wait') return unmeasured('card-wait');
@@ -2700,6 +2731,9 @@ Expected (predicted): 46 passed (Task 1's 31 and this task's 15; 45 and 1 skippe
 | M27 | a stale `tool` row is read (U9) | `(e.provenance = 'tool' AND e.prov_version <> ?)` → `(e.provenance = 'tool' AND e.prov_version <> ? AND 0)` | 1: echo case, `prov_stale` 1 (line 17 unseen) |
 | M28 | two leaves are leaf-ambiguous | delete the line `if (leaves.length > 1) return unmeasured('leaf-ambiguous');` | 1: compliance case, H3 measured `ok` (and its card measured) |
 | M29 | the boundary at its reported line | delete the line `if (at === undefined \|\| Number(at.line) !== ctx.copy.boundary_line) return unmeasured('boundary-moved');` | 1: echo unmeasured case, A1 read from line 2 is measured |
+| M30 | the boundary's time is the store's (D-6563) | `boundaryTsMs: stamp === undefined ? null : Number(stamp.ts_ms),` → `boundaryTsMs: ctx.boundary.ts_ms,` | 2: card case (EB answers `card-wait`), parity CONTROL (ours not all measured) |
+| M31 | the file's end closes a live window | `const eofAfter = eofAfterBoundary({` → `const eofAfter = false && eofAfterBoundary({` | 2: card case (EA answers `card-wait`), parity CONTROL |
+| M32 | `live` needs the file's status | `const live = holding.source_key === '' && s.fileStatus.get(fileId)?.status === 'live';` → `const live = holding.source_key === '';` | 2: card case (RT answers `card-wait`), parity CONTROL |
 
 M24 and M25 are behaviour-preserving on these fixtures; only the module scan sees them, which is the point: the scan pins where each rule lives, not what it answers. A mutant that stays green is reported with its measured output, and the guard is strengthened, never the CONTROL weakened. After the last mutant, `cmp .superpowers/sdd/history-w2-6/counters.task2.mjs deploy/history-counters.mjs` prints nothing.
 
@@ -2716,7 +2750,7 @@ cd server && ./node_modules/.bin/vitest run test/dtbd.test.ts
 
 Expected: all green. In `history-replay` that includes W2-4's `node:sqlite` scan, W2-5a's W2-D74 decode scan over `deploy/*.mjs`, and Task 1's pins on the counter module (import list, names, node-wide scan). `single-definition` passes because no O14 `VOCABS` name is declared in `deploy/`: `PARSE_STATUS` and `BACKENDS` are imported, never declared, and `COMPLIANCE` and its siblings are not lib names. `dtbd` passes because the departure is cited by its issued number.
 
-*Measured over predicted (Task 2, U17):* Steps 3 and 5 measured as predicted (17 failed and 29 passed red; 46 passed green, the whole file 1178 passed). Every mutant M1 to M29 measured red, M1 with 3 failures where 2 were predicted (see its row). `typecheck-tests` was red once, which the plan did not predict: the frame case's `{ rows, ...W6C_T2.stratify(rows, measures) }` is typed as `{ rows }` alone, because spreading a `Record<string, any>` adds no keys, so `out.strata` and `out.dropped_strata` were `TS2339` errors. The literal now ends `as W6cR`, in the case's text above; the guard and every assertion are unchanged, and the suite then measured 12 passed.
+*Measured over predicted (Task 2, U17):* Steps 3 and 5 measured as predicted (17 failed and 29 passed red; 46 passed green, the whole file 1178 passed). Every mutant M1 to M29 measured red, M1 with 3 failures where 2 were predicted (see its row). `typecheck-tests` was red once, which the plan did not predict: the frame case's `{ rows, ...W6C_T2.stratify(rows, measures) }` is typed as `{ rows }` alone, because spreading a `Record<string, any>` adds no keys, so `out.strata` and `out.dropped_strata` were `TS2339` errors. The literal now ends `as W6cR`, in the case's text above; the guard and every assertion are unchanged, and the suite then measured 12 passed. *Fix round 1 (U17, D-6563):* the card's boundary time is the store's `stampAt`, as card.mjs reads it, where this plan first took the report's `ts_ms`; the card store gained leaves EA, EB and RT, and the parity CONTROL measures eight leaves where five were written. Run on the old line, the card case and the parity CONTROL were red (EB answered `card-wait`; EA and RT passed on the old code, since the report's time equals the store's for EA and the old `live` already read the file's status for RT; they pin M31 and M32); M30 to M32 measured red, 2 failed each.
 
 - [ ] **Step 8: Commit.**
 
@@ -4475,3 +4509,5 @@ Two numbers are defined here. D-6561 and D-6562 were issued by the coordinator f
 
 - **D-6561** — `history-w2-counters-notebook-path` (Task 3; W2-D86, and `COUNTERS_DEF_V1`'s signed `rediscovery` text): re-discovery reads a `NotebookEdit` tool_use's file from its `notebook_path` field, where W2-D86 and the signed text say "the `file_path` of a … NotebookEdit tool_use". Claude Code's `NotebookEdit` input names its file `notebook_path`, as lib's `toolUseInputPath`, derive's card fields and W2-5a's `MINE_PATH_FIELDS` read it, so the literal text would make `NotebookEdit` never match and a notebook re-read never count. The signed text cannot change here: editing it moves `COUNTERS_DEF_V1_SHA256` and touches `deploy/history-gate.mjs`, which W2-6 never touches, and part 1 signs that sha. So the code departs from the letter, the module's comment and E25's in-place line (Task 4) state the field, and a correction of the signed text is a later PR's. Pins: Task 3's `toolPathsOf` case (a `NotebookEdit` with `notebook_path` counts, one with `file_path` does not) and mutant M1 of Task 3; Task 4's E25 content case and its mutant M10.
 - **D-6562** — `history-w2-counters-card-glue-respelled` (Task 2; W2-D87, "the same functions the sweep's card measure uses, so no rule is spelled again"): `card_served` and `card_id_mismatch` call lib's shared `cardIdsIn`, `cardWindowComplete` and `decideCardDelivery`, once each and declared nowhere in the counter, but the glue around them is spelled a second time in the counter's `cardVerdictOf`: the rows after the boundary up to the next boundary, at most `CARD_MEASURE_ROWS`; `live` (`source_key === ''` and `ingest_files.status === 'live'`); the `CARD_ATTACHMENT_MAX_BYTES` skip; and `waitedMs`. card.mjs's `deliveryOf`, which holds that glue, is module-private, and W2-6 never touches `ccd/**`, so the counter cannot import it. A boundary no copy holds answers unmeasured `boundary-uncopied` in the counter, where card.mjs answers `none`: that never moves a served or mismatch count, and W2-D87 never reports an unmeasured value as a count. Moving the glue into lib, so both callers import it, is a later `ccd/**` follow-up. Pins: Task 2's parity CONTROL (card.mjs's own `measureCardDelivery`, over the same fixture store, measures the same five leaves with the same served and mismatch counts; each leaf's verdict is pinned by the card case's own expectations), its module scan (each lib function called once, declared nowhere here), its card and wait cases, and mutants M17 to M22 and M24 of Task 2.
+
+- **D-6563** — `history-w2-counters-card-boundary-stamp` (Task 2; W2-D87, D-6562): the plan's `cardVerdictOf` took `eofAfterBoundary`'s boundary time from the measure report's `ts_ms`. card.mjs's `deliveryOf` takes the store's newest stamped row at or before the boundary's line in the holding copy (its `stampAt` statement), and `null` when none is stamped. The two differ when the boundary row has no timestamp, or whenever the report's time is not the store's, which can move a window between `card-wait` and `none`. The counter now spells `stampAt` again with card.mjs's SQL and parameters, the fifth piece of D-6562's re-spelled glue (beside the rows read, `live`, the size bound and `waitedMs`). Pins: Task 2's card fixture store holds three more leaves, EA (a live window short of rows and of age that the file's end closes), EB (the boundary row has no stamp and the report names a later time, so only the store's stamp closes the window) and RT (`source_key` empty, file retired, so not live), each answering `none` in the card case and in the parity CONTROL against `measureCardDelivery` (eight leaves measured); mutants M30 to M32 of Task 2 (the report's time, no end-of-file test, `live` without the file's status).

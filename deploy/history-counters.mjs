@@ -467,8 +467,8 @@ export function countCommand(flags, deps = COUNT_DEPS) {
 //   card_served,      per boundary, one verdict projected twice: lib's decideCardDelivery over cardIdsIn of the
 //   card_id_mismatch  attachments in the first CARD_MEASURE_ROWS rows after the boundary in its holding copy (derive.mjs
 //                     holdingCopyOf, lib's pickHoldingCopy), with cardWindowComplete: the functions card.mjs's measure
-//                     calls. The glue around them (the rows read, `live`, the attachment size bound, the wait) is card.mjs's
-//                     deliveryOf, module-private, spelled a second time here (D-6562).
+//                     calls. The glue around them (the rows read, `live`, the attachment size bound, the boundary's time,
+//                     the wait) is card.mjs's deliveryOf, module-private, spelled a second time here (D-6562, D-6563).
 
 const COUNTER_STMTS = new WeakMap();
 
@@ -490,6 +490,8 @@ function counterStmts(db) {
       ORDER BY m.line`),
     lineOf: db.prepare('SELECT line FROM memberships WHERE file_id = ? AND entry_id = ?'),
     fileStatus: db.prepare('SELECT status FROM ingest_files WHERE file_id = ?'),
+    stampAt: db.prepare(`SELECT e.ts_ms AS ts_ms FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+      WHERE m.file_id = ? AND m.line <= ? AND e.ts_ms IS NOT NULL ORDER BY m.line DESC LIMIT 1`),
     cardRows: db.prepare(`SELECT e.entry_id AS entry_id, e.type AS type, e.blob_id AS blob_id, bl.raw_len AS raw_len,
         CASE WHEN b.entry_id IS NULL THEN 0 ELSE 1 END AS is_boundary
       FROM memberships m JOIN entries e ON e.entry_id = m.entry_id LEFT JOIN boundaries b ON b.entry_id = e.entry_id
@@ -638,7 +640,8 @@ export function cardAt(ctx) {
  *  its holding copy, stopping at the next boundary, with lib's cardWindowComplete. An attachment whose stored raw_len
  *  passes CARD_ATTACHMENT_MAX_BYTES is skipped unread, as card.mjs skips it, and so is one expandEntryBody cannot give;
  *  each is counted in `attachments_unread`. A window still open at the read instant is card-wait; a boundary no copy
- *  holds is boundary-uncopied. The glue is card.mjs's deliveryOf, spelled a second time (D-6562).
+ *  holds is boundary-uncopied. The glue is card.mjs's deliveryOf, spelled a second time (D-6562), the boundary's time
+ *  included (the store's stampAt, D-6563).
  *  @param {WindowCtx} ctx */
 function cardVerdictOf(ctx) {
   const leaf = boundaryLeafOf(ctx.rs, ctx.boundary.boundary_uuid);
@@ -672,7 +675,12 @@ function cardVerdictOf(ctx) {
     }
     ids.push(...cardIdsIn(k.primary));
   }
-  const eofAfter = eofAfterBoundary({ eofMs: holding.eof_ms === null ? null : Number(holding.eof_ms), boundaryTsMs: ctx.boundary.ts_ms });
+  // The boundary's time is the store's, as card.mjs's stampAt reads it: the newest stamped row at or before the boundary's
+  // line in the holding copy, null when none is stamped. The report's time can differ (D-6563).
+  const stamp = s.stampAt.get(fileId, line);
+  const eofAfter = eofAfterBoundary({
+    eofMs: holding.eof_ms === null ? null : Number(holding.eof_ms), boundaryTsMs: stamp === undefined ? null : Number(stamp.ts_ms),
+  });
   const windowComplete = cardWindowComplete({ live, rowsSeen, nextBoundary, eofAfter, waitedMs: ctx.nowMs - leaf.created_ms });
   const verdict = decideCardDelivery({ ids, leafId: leaf.node_id, windowComplete });
   if (verdict === 'wait') return unmeasured('card-wait');
