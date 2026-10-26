@@ -47,9 +47,33 @@ plan file itself carries the literal placeholders, so the plan PR meets the same
 
 - **Private question fields read by cast:** `ask-restart.test.ts`, `asks-routes.test.ts`, `asks-sweep.test.ts`,
   `fleet-listing-characterization.test.ts` (`asksDisabled`).
-- **Literal source pins:** `registry-refused-census.test.ts`'s "tick() passes registryRead to sweepAsks(";
-  `lane-schedule.test.ts`'s `FleetWatcher.sweepApprovals` and `approvalPrune` rows; `single-definition/ask-digest.test.ts`'s
-  "both answer routes read their body with readAskAnswer and neither respells the index check" (its two slices).
+- **Literal source pins** (every `stallCode`, `sourceOfSymbol`, `between` or regex read of `watch.ts`,
+  `coord/routes.ts` and `server.ts` over the question region, measured on the base; each with the task that rewrites
+  the text it reads):
+  - `registry-refused-census.test.ts`'s "tick() passes registryRead to sweepAsks(" (Q3c re-points it);
+  - `lane-schedule.test.ts`'s `FleetWatcher.sweepApprovals` and `approvalPrune` rows (Q3c, which keeps the method's
+    name and body, so they stay green unedited);
+  - `single-definition/ask-digest.test.ts`'s "both answer routes read their body with readAskAnswer and neither
+    respells the index check" (its two slices, `server.ts`'s `POST /api/sessions/:id/ask` and `coord/routes.ts`'s
+    `POST /api/asks/:id/answer`; Q3f, whose aliases keep their front ladders, so it stays green unedited);
+  - `single-definition/ask-digest.test.ts`'s block "one tryHold decides every ask hold (D-5290)": `tryHold` defined in
+    `watch.ts` and nowhere else; inside `tryHold`, one `this.hold(` and a `heldFor(` call, with no `this.hold(` and no
+    `.bindingRunsOf(` outside it; and three `this.tryHold(` calls (Q3d: its raise replaces `tryHold`,
+    `tryHoldApproval` and `hold`, and the mint moves into `coord/questions.ts`);
+  - `single-definition/ask-digest.test.ts`'s "watch.ts's ask raise sites call askPushBody, and no body there reads
+    dialog.title": the `askPushBody` import from `./askbody.js`, `body: askPushBody(` x2, `ev = askHoldPayload(` x2,
+    `ev: askHoldPayload(` x2 in `watch.ts` (Q3d);
+  - `single-definition/ask-digest.test.ts`'s "askNotifyAt is defined in server/src/askwindow.ts alone; the hold reads
+    it once for both uses, the restart re-seed once from the row": `askNotifyAt(` x2 in `watch.ts`,
+    `renderAskBrief(… until)`, `return { until, askId,` and `until: askNotifyAt(row.at)` (Q3d);
+  - `single-definition/ask-digest.test.ts`'s "untrustedBlock and its preface live in server/src/coord/untrusted.ts
+    alone, and the brief calls it": `untrustedBlock(asked, UNTRUSTED_CAP_BYTES,` in `watch.ts` (Q3d);
+  - `single-definition/ask-digest.test.ts`'s "the one claimant decision lives in coord/heldFor.ts, and the hold and
+    the mint both read it": the `heldFor(` holders, exactly `coord/heldFor.ts`, `coord/routes.ts` and `watch.ts`
+    (Q3d moves the hold, Q3e the raise ladder; either changes the list).
+
+  The other reads of `watch.ts` in that file (`claimantMeasuredDead` in the dead-coordinator sweep,
+  `MAIL_WAKE_FLOOR_MS`, `wakeAdmit`) are outside the question region, and no other suite reads its text.
 - **Inventory rows naming a question route or symbol:** `routes.test.ts`'s canonical-id census (the asks and approvals
   `:id` rows) and its `knownId` census (the four operator answer doors and `/dialog/tab`; 22 routes, 18 POST and 4 GET);
   `auth-gate.test.ts`'s `scanRoutes('coord/routes.ts')` count (47), `ROUTES.length` (125), the sorted `EXEMPT` keys, the
