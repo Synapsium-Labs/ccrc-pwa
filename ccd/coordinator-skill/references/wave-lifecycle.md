@@ -106,7 +106,6 @@ with the run now `dispatched`, or a refusal:
 | `paused` | `$REG/coordinator-paused` exists | stop, report, touch nothing |
 | `mail-disabled` | `$REG/mail-disabled` exists | stop, report, touch nothing |
 | `cap-concurrency` | `maxConcurrentWorkers` is full | stop, name the cap, wait |
-| `cap-daily` | `maxSessionsPerDay` is used up | stop, name the cap, wait |
 | `ambiguous-dispatch` | wave 1's spawn found 0 or >1 candidate workspaces | stop and report; the operator resolves it |
 | `worker-busy` | wave ≥ 2's session is observably mid-turn — at the gate, or at the act: the server reads the live file again just before the `/clear`, and a refusal there can leave this run's own hold and route arming in place, which the next dispatch rewrites (D-5238) | wait and retry; do not force it |
 | `hookstate-unmeasurable` | wave ≥ 2's session has a hookstate file the server could not READ — so whether it is mid-turn was never measured at all | retry once: nothing was spawned, the run is untouched and still `planned`, and the workspace was only resumed. If it repeats, stop and report — a file on the fleet host needs a human, and this refusal will stand until it is readable |
@@ -123,13 +122,11 @@ undispatched consumer, and a run parked IDLE at `awaiting-review`, `merging` or
 `closing` all consume no running-worker slot. **An idle run gives its slot back
 WITHOUT closing** (D-2803); before wave 6 of review-runs it held one until it
 reached a terminal state, and prose written against that older rule is wrong
-rather than merely imprecise. Each actual dispatch still consumes daily budget,
-and a dispatched run consumes one concurrency slot for as long as it stays
-active. Each refusal's own numbers are the authority, and the two
-carry DIFFERENT ones: `cap-concurrency` carries `limit` and `running`, while
-`cap-daily` carries `limit` and `used` — it never carries `running`, so a
-coordinator refused `cap-daily` that goes looking for one is reading a field
-the frame does not have.
+rather than merely imprecise. A dispatched run consumes one concurrency slot
+for as long as it stays active, and that is the only cap: there is no daily
+dispatch count, so a review or a warm resume costs nothing beyond its slot.
+The refusal's own numbers are the authority: `cap-concurrency` carries `limit`
+and `running`.
 
 **`worker-busy` and `hookstate-unmeasurable` are not two words for one
 answer.** `worker-busy` is a MEASUREMENT: the server read the session's

@@ -509,7 +509,9 @@ describe('CoordStore: runs', () => {
 });
 
 describe('CoordStore: caps', () => {
-  it('counts running runs and 24h dispatches from the rows, not from a counter', () => {
+  // The rolling 24 h dispatch count is retired with the daily brake (D-7068): `capsUsage` counts
+  // running runs only, and takes no clock.
+  it('counts running runs from the rows, not from a counter', () => {
     const s = store();
     const now = 1_000_000_000_000;
     const a = openRun(s) as { id: number };
@@ -523,8 +525,8 @@ describe('CoordStore: caps', () => {
     // of resting on `state` staying `planned`.
     expect(s.advance(a.id, 'dispatched', 'coordinator').ok).toBe(true);
     expect(s.advance(b.id, 'dispatched', 'coordinator').ok).toBe(true);
-    expect(s.capsUsage(now)).toEqual({ running: 2, dispatchedIn24h: 1 });
-    expect(s.caps()).toEqual({ maxConcurrentWorkers: 3, maxSessionsPerDay: 12 });
+    expect(s.capsUsage()).toEqual({ running: 2 });
+    expect(s.caps()).toEqual({ maxConcurrentWorkers: 3 });
   });
 
   it('does not count a `planned` run that never dispatched — a botched dispatch must not wedge the cap (D-13)', () => {
@@ -541,7 +543,7 @@ describe('CoordStore: caps', () => {
     s.markDispatched(dispatched.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
     // See the previous test's comment: mirror `dispatchRun`'s pairing.
     expect(s.advance(dispatched.id, 'dispatched', 'coordinator').ok).toBe(true);
-    expect(s.capsUsage(now)).toEqual({ running: 1, dispatchedIn24h: 1 });
+    expect(s.capsUsage()).toEqual({ running: 1 });
   });
 
   it('does not count a run advanced to `dispatched` with no `dispatchedAt` — D-13\'s clause, now that `planned` is excluded by state too (spec §7.1 review, Important 1)', () => {
@@ -557,7 +559,7 @@ describe('CoordStore: caps', () => {
     const now = 1_000_000_000_000;
     const a = openRun(s) as { id: number };
     expect(s.advance(a.id, 'dispatched', 'test').ok).toBe(true);
-    expect(s.capsUsage(now).running).toBe(0);
+    expect(s.capsUsage().running).toBe(0);
   });
 
   it('stops counting a run the moment it reaches an IDLE state, and counts it again at working (spec §7.1)', () => {
@@ -572,22 +574,20 @@ describe('CoordStore: caps', () => {
     // Mirrored here explicitly, matching every other `advance(id,
     // 'dispatched', ...)` call site in this file.
     expect(s.advance(a.id, 'dispatched', 'test').ok).toBe(true);
-    expect(s.capsUsage(now).running).toBe(1);                 // dispatched: active
+    expect(s.capsUsage().running).toBe(1);                 // dispatched: active
     expect(s.advance(a.id, 'working', 'test').ok).toBe(true);
-    expect(s.capsUsage(now).running).toBe(1);                 // working: active
+    expect(s.capsUsage().running).toBe(1);                 // working: active
     expect(s.advance(a.id, 'awaiting-review', 'test').ok).toBe(true);
-    expect(s.capsUsage(now).running).toBe(0);                 // the worker is idle by contract
+    expect(s.capsUsage().running).toBe(0);                 // the worker is idle by contract
     expect(s.advance(a.id, 'working', 'test').ok).toBe(true); // a send-back
-    expect(s.capsUsage(now).running).toBe(1);
+    expect(s.capsUsage().running).toBe(1);
     expect(s.advance(a.id, 'awaiting-review', 'test').ok).toBe(true);
     expect(s.advance(a.id, 'merging', 'test').ok).toBe(true);
-    expect(s.capsUsage(now).running).toBe(0);                 // merging: the coordinator's wait
+    expect(s.capsUsage().running).toBe(0);                 // merging: the coordinator's wait
     expect(s.advance(a.id, 'closing', 'test').ok).toBe(true);
-    expect(s.capsUsage(now).running).toBe(0);
+    expect(s.capsUsage().running).toBe(0);
     expect(s.advance(a.id, 'done', 'test').ok).toBe(true);
-    expect(s.capsUsage(now).running).toBe(0);
-    // `dispatchedIn24h` is untouched by state: one dispatch happened.
-    expect(s.capsUsage(now).dispatchedIn24h).toBe(1);
+    expect(s.capsUsage().running).toBe(0);
   });
 
   it('still counts an `unknown`-state row — a state this build cannot name must wedge, not over-dispatch', () => {
@@ -597,21 +597,7 @@ describe('CoordStore: caps', () => {
     s.markDispatched(a.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
     // The one way such a row exists: written by a newer build. Planted raw.
     s.db.prepare("UPDATE runs SET state = 'x-from-a-newer-build' WHERE id = ?").run(a.id);
-    expect(s.capsUsage(now).running).toBe(1);
-  });
-
-  it('excludes a dispatch exactly 24h old — the window is `>`, not `>=` (D-59)', () => {
-    // Discriminates `capsUsage`: `>` -> `>=`. The only prior fixtures were
-    // `now` and `now - 25h`/`now - 23h` — nothing landed exactly on the
-    // boundary, so the mutant reproduced every assertion in both
-    // coord-store.test.ts and run-routes.test.ts unchanged.
-    const s = store();
-    const now = 1_000_000_000_000;
-    const a = openRun(s) as { id: number };
-    s.markDispatched(a.id, 'ccrc-pwa-boundary', 'boundary', 'ws/boundary', false, now - 24 * 3600_000);
-    // See the caps describe's first test comment: mirror `dispatchRun`'s pairing.
-    expect(s.advance(a.id, 'dispatched', 'coordinator').ok).toBe(true);
-    expect(s.capsUsage(now)).toEqual({ running: 1, dispatchedIn24h: 0 });
+    expect(s.capsUsage().running).toBe(1);
   });
 });
 

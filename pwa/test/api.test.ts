@@ -316,8 +316,8 @@ describe('coordPause (Task 11, spec §4.2)', () => {
     // The component tests always inject, so without a fetch-level block here a
     // new client method has NO coverage at all — measured for `coordPause`,
     // which is why this describe exists.
-    const view = { caps: { maxConcurrentWorkers: 3, maxSessionsPerDay: 12 },
-                   usage: { running: 1, dispatchedIn24h: 4 } };
+    const view = { caps: { maxConcurrentWorkers: 3 },
+                   usage: { running: 1 } };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, view));
     const api = createApi(fetchImpl as unknown as typeof fetch);
 
@@ -358,8 +358,8 @@ describe('coordPause (Task 11, spec §4.2)', () => {
   });
 
   it('POSTs only the given fields as JSON to /api/coord/caps', async () => {
-    const view = { caps: { maxConcurrentWorkers: 5, maxSessionsPerDay: 12 },
-                   usage: { running: 1, dispatchedIn24h: 4 } };
+    const view = { caps: { maxConcurrentWorkers: 5 },
+                   usage: { running: 1 } };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, view));
     const api = createApi(fetchImpl as unknown as typeof fetch);
 

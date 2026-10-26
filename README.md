@@ -3879,10 +3879,11 @@ what it cannot.
    proceeds), `404 unknown-session` for an heir this box has no row for, and
    `409 heir-is-a-worker` (below).
 5. **The caps dial.** Beside the pause banner, `CapsControl` reads
-   `GET /api/coord/caps` and shows each cap beside its current use — running
-   workers, and dispatches in the rolling 24 h. A save (`POST /api/coord/caps`)
-   sends only the dial you moved, and afterwards the dial shows what the server
-   stored, not what you typed.
+   `GET /api/coord/caps` and shows the concurrency cap beside its current use,
+   the running workers. A save (`POST /api/coord/caps`) sends the dial only when
+   you moved it, and afterwards the dial shows what the server stored, not what
+   you typed. There is no daily dial: the daily dispatch brake is retired
+   (operator ruling 2026-10-26).
 6. **What a run warns about.** Under an open run's row, one line names trouble
    the server measured: mail to the run that gave up retrying (`N parked`), a
    delivery replayed many times (`replayed N×`), a dispatch that queued no brief
@@ -4221,10 +4222,11 @@ non-terminal ones, so a run parked IDLE at `awaiting-review`, `merging` or
 `closing` gives its slot back without closing; it does not count held
 workspaces. A terminal producer whose
 workspace remains retained uses no running-worker slot, and a planned,
-undispatched consumer uses no running-worker slot. Each actual producer or
-consumer dispatch still consumes the rolling daily dispatch budget. A
-`cap-concurrency` or `cap-daily` refusal remains authoritative when that measured
-counter is exhausted; it is not inferred from the number of live workspaces.
+undispatched consumer uses no running-worker slot. There is no daily dispatch
+count: each producer or consumer dispatch costs its running-worker slot and
+nothing more (the daily brake is retired, operator ruling 2026-10-26). A
+`cap-concurrency` refusal remains authoritative when that measured counter is
+exhausted; it is not inferred from the number of live workspaces.
 `$REG/coordinator-paused` is global but narrow: it refuses every dispatch on
 that box and stops nothing else — mail keeps flowing, and `$REG/mail-disabled`
 is the mail switch. The hold reason still names programme, wave and run id and
@@ -4923,16 +4925,15 @@ ACTIVE state, `dispatched`, `working` or `unknown` (and any state token this bui
 cannot name — the safe direction for a cap, D-2803); a worker at `awaiting-review`,
 `merging` or `closing` is idle by contract and holds no slot — design
 2026-09-14 §7.1; the one edge back into `working` is cap-checked on
-`POST /api/runs/:id/advance`) and `maxSessionsPerDay` (default 12 —
-dispatches inside a rolling 24h window, not a calendar day), both checked at
-`POST /api/runs/:id/dispatch` before anything else is touched. **Review runs
-are dispatches**, so a programme that made N dispatches per wave now makes
-about 2N; the seed `maxSessionsPerDay` of 12 covers roughly 6 waves a day,
-not 12 — raise the dial through `POST /api/coord/caps` when a programme
-runs hot rather than discovering `cap-daily` mid-wave (§7.3). Both are an
-operator control: `GET`/`POST /api/coord/caps` reads them beside their current
-usage and writes either or both, bounds-checked, and the `/runs` board renders
-the dial. (For a stretch of this build's history there was no route at all and
+`POST /api/runs/:id/advance`), checked at `POST /api/runs/:id/dispatch` before
+anything else is touched. It is the only cap. The daily dispatch brake,
+`maxSessionsPerDay`, is retired (operator ruling 2026-10-26): it counted every
+dispatch alike, reviews and warm resumes included, refused a coordinator with
+nothing to wake it, and never measured memory. Its column stays in the row,
+unread, and a caps write that still carries the field is accepted and the field
+ignored. The cap is an operator control: `GET`/`POST /api/coord/caps` reads it
+beside its current usage and writes it, bounds-checked, and the `/runs` board
+renders the dial. (For a stretch of this build's history there was no route at all and
 an operator edited the row with `sqlite3` — hence `CoordStore.setCaps` having no
 caller in the server for as long as it did.) Like every other same-origin PWA
 write the caps route carries **no box token**; unlike the operator doors named

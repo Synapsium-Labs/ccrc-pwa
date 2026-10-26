@@ -164,7 +164,7 @@ Every write route answers JSON, on success and on refusal alike. A `4xx`
 `$code` is a normal **answer**, not a command failure — but the field the
 code rides on is NOT the same on every route, and `ok:false` is the only
 field always present: `POST /api/runs`/`/dispatch`/`/:id/close` put it on
-`refused` (`paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`,
+`refused` (`paused`, `mail-disabled`, `cap-concurrency`,
 `ambiguous-dispatch`, `worker-busy`, `hookstate-unmeasurable`,
 `claimed-by-another`, `not-dispatched`, `prhistory-unreadable`,
 `workspace-spent`, `spent-unmeasured`); those same
@@ -177,7 +177,7 @@ $body.reject?.code` (in that order costs nothing, since a body only ever
 populates one) rather than assuming a fixed field, and never branch on the
 client's exit status — it reports whether a response HAPPENED, never what the
 response said. The refusals you will actually meet are
-`paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`, `ambiguous-dispatch`,
+`paused`, `mail-disabled`, `cap-concurrency`, `ambiguous-dispatch`,
 `worker-busy`, `hookstate-unmeasurable`, `status-unmeasurable`,
 `worker-starting`, `claimed-by-another`,
 `project-mismatch`, `home-mismatch`, `claimant-is-a-worker`, `workspace-spent`,
@@ -481,10 +481,10 @@ fault.** The cap rule is exact: concurrency counts dispatched runs in an ACTIVE
 state, not held workspaces and not merely non-terminal ones. A terminal producer
 retained on a hold and a planned undispatched consumer consume no running-worker
 slot, and neither does a run parked IDLE at `awaiting-review`, `merging` or
-`closing` — it gives its slot back without closing (D-2803) — while each actual
-dispatch still consumes daily budget and a dispatched run consumes one
-concurrency slot for as long as it stays active. `cap-concurrency`
-or `cap-daily` remains authoritative — stop, say which cap, and wait to be woken,
+`closing` — it gives its slot back without closing (D-2803) — while a
+dispatched run consumes one concurrency slot for as long as it stays active.
+There is no daily dispatch count: concurrency is the only cap.
+`cap-concurrency` remains authoritative — stop, say so, and wait to be woken,
 exactly as you would for any other run.
 
 **Every brief for a foreign-repo wave carries the three immutable-plan
@@ -535,8 +535,8 @@ is never read by this session.
 
 - **A dispatch is refused `paused`.** Stop. Report to the operator. Do not
   touch the file.
-- **A dispatch is refused `cap-concurrency` or `cap-daily`.** Stop, say which
-  cap, and wait to be woken.
+- **A dispatch is refused `cap-concurrency`.** Stop, say so, and wait to be
+  woken.
 - **A worker has gone dead mid-wave.** The run says so. Re-dispatch fresh into
   the held workspace — that is the recovery the hold exists for.
 - **Your own run row disagrees with the ledger.** The run row is the machine's

@@ -1054,7 +1054,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    w.coord.setCaps({ maxConcurrentWorkers: 0, maxSessionsPerDay: 0 });
+    w.coord.setCaps({ maxConcurrentWorkers: 0 });
     const opened = (await postOpen(app)).json() as { id: number };
     writeFileSync(path.join(home, '.cc-sessions', 'coordinator-paused'), '');
     const res = await postDispatch(app, opened.id);
@@ -1091,7 +1091,7 @@ describe('POST /api/runs/:id/dispatch', () => {
       wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-other' }) as { id: number };
     w.coord.markDispatched(blocker.id, 'demo-blocker', 'blocker', 'ws/blocker', false);
     expect(w.coord.advance(blocker.id, 'dispatched', 'coordinator').ok).toBe(true);
-    w.coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
+    w.coord.setCaps({ maxConcurrentWorkers: 1 });
 
     const opened = (await postOpen(app)).json() as { id: number };
     const res = await postDispatch(app, opened.id);
@@ -1100,38 +1100,8 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(calls).toEqual([]);
   });
 
-  it('refuses at maxSessionsPerDay over a rolling 24h, not a calendar day', async () => {
-    // D-59 (Task 11 review): the original fixture used a bare `Date.now() -
-    // 23h` — a calendar-day count agrees with the rolling-24h answer
-    // whenever the real wall clock is within the last hour of the local
-    // day, so the mutant this case exists to kill only died 23 hours out of
-    // every 24. Fake timers pin `now` at a fixed local NOON, so `now - 23h`
-    // lands on the PREVIOUS calendar date deterministically, regardless of
-    // when this suite actually runs (assumes a UTC/UTC-like test host, the
-    // same assumption `mail-sweep.test.ts`/`pr-sweep.test.ts` already make
-    // with their own fixed `vi.setSystemTime` epochs).
-    const NOW = new Date('2024-06-15T12:00:00.000Z').getTime();
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(NOW);
-    try {
-      const home = mkTmp('ccrc-runs-');
-      const { run } = makeRunner(home);
-      const w = await openApp(home, run); app = w.app;
-      const blocker = w.coord.openRun({ program: 'other', title: 'Other', project: PROJECT,
-        wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-other' }) as { id: number };
-      // Dispatched 23h ago — inside the rolling 24h window (counts), but on
-      // the PREVIOUS calendar date (a calendar-day count would not).
-      w.coord.markDispatched(blocker.id, 'demo-blocker', 'blocker', 'ws/blocker', false, NOW - 23 * 3600_000);
-      w.coord.setCaps({ maxConcurrentWorkers: 12, maxSessionsPerDay: 1 });
-
-      const opened = (await postOpen(app)).json() as { id: number };
-      const res = await postDispatch(app, opened.id);
-      expect(res.statusCode).toBe(409);
-      expect(res.json()).toMatchObject({ ok: false, refused: 'cap-daily', limit: 1, used: 1 });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+  // The daily brake's rolling-24h case lived here; the brake is retired (D-7068) and
+  // `retire-daily-brake.test.ts` pins that a dispatch past the old count is admitted.
 
   it('runs ws-add for wave 1 and learns the id from the registry, not from ccd\'s sentence', async () => {
     const home = mkTmp('ccrc-runs-');
@@ -3114,7 +3084,7 @@ describe('dispatch/close serialise concurrent requests for the same run (review 
       return { ran: true as const, code: 0, stdout: '', stderr: '' };
     };
     const w = await openApp(home, run); app = w.app;
-    w.coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
+    w.coord.setCaps({ maxConcurrentWorkers: 1 });
     const a = (await postOpen(app, OPEN_BODY)).json() as { id: number };
     const b = (await postOpen(app, { ...OPEN_BODY, wave: 2 })).json() as { id: number };
 
@@ -3273,7 +3243,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: ['demo-reentry'] });
     const w = await openApp(home, run); app = w.app;
-    w.coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
+    w.coord.setCaps({ maxConcurrentWorkers: 1 });
     const opened = (await postOpen(app)).json() as { id: number };
     await postDispatch(app, opened.id);                       // running = 1 (dispatched)
     expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
@@ -3298,7 +3268,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: ['demo-start'] });
     const w = await openApp(home, run); app = w.app;
-    w.coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
+    w.coord.setCaps({ maxConcurrentWorkers: 1 });
     const opened = (await postOpen(app)).json() as { id: number };
     await postDispatch(app, opened.id);                       // running = 1 = the cap, and it is THIS run
     const res = await postAdvance(app, opened.id,

@@ -258,7 +258,6 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       const extra: Record<string, number> = {};
       if (r.limit !== undefined) extra.limit = r.limit;
       if (r.running !== undefined) extra.running = r.running;
-      if (r.used !== undefined) extra.used = r.used;
       if (r.candidates !== undefined) extra.candidates = r.candidates;
       // The `by` spread, not `by: r.by` — the same discipline the
       // `registry-unmeasurable` arm below states for `stderr`: an L4 adapter may
@@ -2125,10 +2124,11 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, requested: body.state });
   });
 
-  /** `GET`/`POST /api/coord/caps` — the two coordination caps become an
+  /** `GET`/`POST /api/coord/caps` — the coordination cap becomes an
    *  OPERATOR DIAL. Before this, `CoordStore.setCaps` had no caller anywhere in
-   *  `server/src`: the only way to change `maxConcurrentWorkers` or
-   *  `maxSessionsPerDay` was to hand-edit `coord.db` (D-1164).
+   *  `server/src`: the only way to change a cap was to hand-edit `coord.db`
+   *  (D-1164). There were two caps then; the daily dispatch brake is retired
+   *  (D-7068), and `maxConcurrentWorkers` is the one left.
    *
    *  NOT BOX-TOKEN, AND NOT `UNGATED` EITHER — two different facts, and this is
    *  the first route in the tree that needs them apart (D-1240). The box token
@@ -2159,9 +2159,7 @@ export function registerCoordRoutes(
    *  own, but only for a child that currently needs the operator's attention,
    *  a cached list rather than a value re-derived on every tick. Caps are
    *  deliberately NOT added to that frame: `emitCoord` states it needs no
-   *  try/catch precisely because it touches no `node:sqlite`, and
-   *  `dispatchedIn24h` moves with the clock, so the frame's byte-equality guard
-   *  would let it re-emit on nearly every two-second tick.
+   *  try/catch precisely because it touches no `node:sqlite`.
    *
    *  THE REPLY IS THE CONFIRMATION, unlike the pause toggle one door up. That
    *  toggle refuses to be optimistic because a `{type:'coord'}` frame exists to
@@ -2227,6 +2225,9 @@ export function registerCoordRoutes(
     // This is a shape probe only — the merge that is actually written is
     // recomputed under the lock below, so the caps it reads here do not matter.
     const shape = decideCaps(coord.caps(), req.body ?? {});
+    // AN OLDER PWA'S SAVE OF A RETIRED DIAL (D-7068): accepted, written nowhere and recorded
+    // nowhere — no cap that still exists moved. The answer is the current view, so that PWA settles on it.
+    if (shape.ok === 'retired') return reply.code(200).send({ ok: true, ...capsView(coord) });
     if (!shape.ok) {
       return reply.code(400).send({ ok: false, error: 'bad-request', detail: shape.detail });
     }
@@ -2256,7 +2257,9 @@ export function registerCoordRoutes(
       // `decideCaps`'s verdict depends on the BODY alone — `current` only
       // supplies the untouched fields. Thrown rather than swallowed, so if that
       // ever stops being true it is a 500 that says so and not a silent 200.
-      if (!merged.ok) throw new Error(`caps decision changed under the lock: ${merged.detail}`);
+      if (merged.ok !== true) {
+        throw new Error(`caps decision changed under the lock: ${merged.ok === false ? merged.detail : merged.ok}`);
+      }
       // D-1169: the moment is L4's to supply — read INSIDE the mutex, so the
       // timestamp belongs to the write that actually won the lock.
       coord.setCaps(merged.next, Date.now());
@@ -2274,8 +2277,7 @@ export function registerCoordRoutes(
     notice({
       kind: 'coord', sessionId: '',
       title: 'caps changed',
-      body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}, ` +
-            `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
+      body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}`,
       runId: null,
     }, 'record-only', { degraded: 'caps written, feed archive degraded' });
     return reply.code(200).send({ ok: true, ...view });
