@@ -58,7 +58,7 @@ the fact passes for whatever the code happens to do; one that has never been red
 been shown to measure anything.
 
 **A value with one meaning is spelled once.** Runtime lists derive from the type that
-defines them rather than being re-typed beside it, and `server/test/single-definition.test.ts`
+defines them rather than being re-typed beside it, and `server/test/single-definition/*.test.ts`
 text-scans four roots and fails the build when a second copy appears. If you find yourself
 keeping two lists in agreement by hand, that is the defect.
 

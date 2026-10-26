@@ -69,7 +69,7 @@ describe('server/src runtime imports never point outward (ARCH-04 stage 2, D-604
   });
 
   it('CONTROL: the docs ring pin\'s role table, a declaration by the spec, is single-definition\'s copy', () => {
-    const sd = parseFile(path.join(REPO, 'server/test/single-definition.test.ts'));
+    const sd = parseFile(path.join(REPO, 'server/test/single-definition/docs-ring.test.ts'));
     const init = sd.bindings.find((b) => b.name === 'DOCS_RING_ROLES')?.init ?? '';
     const pinned = Object.fromEntries([...init.matchAll(/'([\w.]+)':\s*'(L[0-5])'/g)].map((m) => [m[1], m[2]]));
     expect(pinned).toEqual(DOCS_RING_ROLES);

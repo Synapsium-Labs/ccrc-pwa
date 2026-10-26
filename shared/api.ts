@@ -8523,7 +8523,7 @@ export type LcRefusalToken =
   | 'session-live'             // forget, on a running session
   | 'session-verdict-unknown' | 'hibernated'  // tmux did not answer: fail-shut, nothing removed; `hibernated` (D-5242): forget on a sleeping row, wake or stop it first
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
-  | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands
+  | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands // @anchor purge-refusal-union
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
   | 'purge-mechanism-absent'  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
   | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): ccrc could not keep the child's work — the pin phase, or one of the tail's per-deletion keeps — so the verb stopped before deleting anything further
@@ -8575,7 +8575,7 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // sentence must not say "nothing happened". What it says is what is still
   // TRUE: the registry row and its generation are still on disk, and re-running
   // the verb is the whole remedy.
-  'purge-refused':
+  'purge-refused': // @anchor lc-word-purge-refused
     'The registry row could not be removed: this session\'s compaction lock was unavailable. Whatever the verb had already done is done; the row and its generation are still there. Re-run once the compaction settles.',
   // D-2605, and the WHOLE POINT is that it is not the sentence above. A single
   // token for both conditions told an operator to wait for a compaction that
@@ -8583,7 +8583,7 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // ran to its end: re-running the verb finds nothing to do and will not clear
   // what is left, so the remedy is a hand and not a retry. The journal row's
   // `detail` names the pathname; this sentence must not pretend to know it.
-  'purge-incomplete':
+  'purge-incomplete': // @anchor lc-word-purge-incomplete
     'The registry row was removed, but something beside it would not delete and is still on disk. The verb itself finished — re-running it will not clear the leftover; the journal entry names what is still there.',
   // D-2605 fix round 3, and it is the THIRD sentence for a reason the first two
   // make: `_reg_purge` answers 1 for a contended lock and 2 for a box that
@@ -8596,7 +8596,7 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // names the cause instead, and its remedy is the PATH — never a wait. The
   // journal row's `detail` carries the per-verb remedy; this one must not,
   // because one map entry serves four callers.
-  'purge-mechanism-absent':
+  'purge-mechanism-absent': // @anchor lc-word-purge-mechanism-absent
     'The registry row could not be removed: this box cannot take the session\'s compaction lock at all — flock, mktemp or link is missing from the PATH ccd ran with — and the session still has a live generation, so ccrc refused rather than race a compaction it has no way to serialise against. Whatever the verb had already done is done; the row and its generation are still there. Waiting will not help: re-run from a PATH that resolves those tools.',
   // Child reclamation, wave 3. ws-reclaim's pin phase — the WIP commit and the
   // attic pins, or the settle's re-pin once the session is stopped — failed, so
@@ -11973,8 +11973,8 @@ export const SECRET_MASK = '‹secret masked›';
  *  check fails closed, so no run is ever passed through unchecked (D-5513). */
 export const SECRET_MASK_TOO_LARGE = '‹output too large to check, masked›';
 
-/* D-6048 (ARCH-12): the derived runtime lists, kept at the end of the file so adding them moves no line that other
- * files cite by number. */
+/* D-6048 (ARCH-12): the derived runtime lists. They sat at the end of the file so adding them moved no line that other
+ * files cite by number; citations are anchors now (D-6928), so a derived list goes beside its type. */
 /** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom): a member added
  *  to the union with no key here fails to compile. `server/test/rings/wire-totality.test.ts` holds every exported
  *  literal union in `shared/` to that. */
