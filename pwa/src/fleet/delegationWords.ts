@@ -10,12 +10,13 @@
 // nothing on the page acts on it. `inferredChip` keys on `sourceKind === 'raw'` as well as on `inferred`, so a raw row
 // whose marker went missing still says so.
 //
-// Imports only `shared/api` (never `./fleetTree`, which imports `readDelegation` from here: that would be a cycle).
+// Imports only `shared/api` and `lib/wire` (never `./fleetTree`, which imports `readDelegation` from here: that would be a cycle).
 import {
   DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS,
   type DelegationActivityWire, type DelegationLeaseSourceKind, type DelegationLeaseWire, type DelegationLiveness,
   type DelegationProjectionWire, type DelegationUnownedWire,
 } from '../../../shared/api';
+import { isRecord } from '../lib/wire';
 
 /** The chip every raw worktree wears (D-6999). */
 export const INFERRED_WORD = 'inferred';
@@ -71,8 +72,6 @@ export const VERDICT_WORD: Readonly<Record<DelegationUnownedWire['verdict'], str
 const wordOf = (table: Readonly<Record<string, string>>, key: string): string =>
   Object.hasOwn(table, key) ? table[key]! : UNRECOGNISED_WORD;
 
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-
 const groupOf = (g: unknown): DelegationActivityWire['group'] =>
   (DELEGATION_ROW_GROUPS as readonly unknown[]).includes(g) ? g as DelegationActivityWire['group'] : 'offline-coordinator';
 const placementOf = (p: unknown): DelegationActivityWire['placement'] =>
@@ -84,8 +83,8 @@ const workspaceOf = (w: unknown): DelegationLeaseWire['workspace'] =>
 /** A marker this build cannot read is still a marker: it keeps the chip, with an unmeasured creator. */
 const inferredOf = (i: unknown): DelegationLeaseWire['inferred'] => {
   if (i === null || i === undefined) return null;
-  const c = isObject(i) ? i.creator : undefined;
-  if (isObject(c) && c.kind === 'bash-call' && typeof c.toolUseId === 'string') return { creator: { kind: 'bash-call', toolUseId: c.toolUseId } };
+  const c = isRecord(i) ? i.creator : undefined;
+  if (isRecord(c) && c.kind === 'bash-call' && typeof c.toolUseId === 'string') return { creator: { kind: 'bash-call', toolUseId: c.toolUseId } };
   return { creator: { kind: 'unmeasured' } };
 };
 
@@ -96,7 +95,7 @@ const inferredOf = (i: unknown): DelegationLeaseWire['inferred'] => {
  * carries nothing to draw and no key, and is the one thing left out.)
  */
 export function readDelegation(w: DelegationProjectionWire): DelegationProjectionWire {
-  const activities = w.activities.filter(isObject).map((a): DelegationActivityWire => {
+  const activities = w.activities.filter(isRecord).map((a): DelegationActivityWire => {
     const liveness = livenessOf(a.liveness);
     return {
       ...a, group: groupOf(a.group), placement: placementOf(a.placement),
@@ -104,11 +103,11 @@ export function readDelegation(w: DelegationProjectionWire): DelegationProjectio
       liveness: liveness === 'ended' ? 'unmeasured' : liveness,
     };
   });
-  const leases = w.leases.filter(isObject).map((l): DelegationLeaseWire => ({
+  const leases = w.leases.filter(isRecord).map((l): DelegationLeaseWire => ({
     ...l, group: groupOf(l.group), liveness: livenessOf(l.liveness), workspace: workspaceOf(l.workspace),
     via: typeof l.via === 'string' ? l.via : null, inferred: inferredOf(l.inferred),
   }));
-  const unowned = w.unowned.filter(isObject).map((u): DelegationUnownedWire => ({ ...u, workspace: workspaceOf(u.workspace) }));
+  const unowned = w.unowned.filter(isRecord).map((u): DelegationUnownedWire => ({ ...u, workspace: workspaceOf(u.workspace) }));
   return { ...w, activities, leases, unowned };
 }
 
