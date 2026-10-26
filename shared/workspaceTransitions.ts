@@ -9,8 +9,8 @@
  * `ARCHIVE_REFUSALS` (the archive door's wire words), `SENTENCES` (`server/src/wsaudit.ts`) and `LC_REFUSAL_WORD`
  * (`./api.ts`); this table adds the missing half of each word, WHICH state refuses WHICH verb and WHY.
  *
- * WHO WRITES WHAT. `by: 'server'` rows are decided in TS (`server/src/coord/archiveDoor.ts`, which reads its code and
- * HTTP status from `workspaceEdge`, never spells them). `by: 'ccd'` rows are decided in bash, on the box, and re-proven
+ * WHO WRITES WHAT. `by: 'server'` rows are decided in TS (`server/src/coord/archiveDoor.ts`, which reads its edge from `workspaceEdge` and its
+ * HTTP status from `REFUSAL_STATUS`, never spells them). `by: 'ccd'` rows are decided in bash, on the box, and re-proven
  * there at the act (the anti-corruption layer owns them: this table records them, it does not move them); the server only
  * renders their words. A row is added here first, then enforced.
  *
@@ -36,13 +36,12 @@ export const WORKSPACE_STATES: readonly WorkspaceState[] = Object.keys(WORKSPACE
 export const isWorkspaceState = (v: unknown): v is WorkspaceState =>
   typeof v === 'string' && (WORKSPACE_STATES as readonly string[]).includes(v);
 
-/** An edge the server decides: its code is an `ARCHIVE_REFUSALS` word and its HTTP status rides the row. */
+/** An edge the server decides: its code is an `ARCHIVE_REFUSALS` word; its HTTP status is `REFUSAL_STATUS`'s (shared/refusal.ts), declared once there, never on a row. */
 export interface ServerWorkspaceEdge {
   readonly verb: 'archive';
   readonly from: readonly WorkspaceState[];
   readonly refusal: ArchiveRefusal;
   readonly by: 'server';
-  readonly status: number;
   readonly precondition: string;
 }
 /** An edge ccd decides on the box; the server renders its word. */
@@ -56,13 +55,13 @@ export interface CcdWorkspaceEdge {
 export type WorkspaceTransition = ServerWorkspaceEdge | CcdWorkspaceEdge;
 
 export const WORKSPACE_TRANSITIONS: readonly WorkspaceTransition[] = [
-  { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.statusUnknown, by: 'server', status: 409, precondition: 'the turn could not be measured, whatever the consents' },
-  { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.sessionBusy, by: 'server', status: 409, precondition: 'the turn is in progress and `interrupt` was not given' },
-  { verb: 'archive', from: ['live', 'stopped'], refusal: ARCHIVE_REFUSALS.worktreeGone, by: 'server', status: 409, precondition: 'a workspace whose worktree the box proved gone' },
-  { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.runOpen, by: 'server', status: 409, precondition: 'the session is the worker of a non-terminal run and `force` was not given' },
-  { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.coordinatorHasOpenRuns, by: 'server', status: 409, precondition: 'the session claims a non-terminal run and `programme:end` was not given, or the store is unreadable' },
-  { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.programmePartlyEnded, by: 'server', status: 409, precondition: 'ending the programme was refused or threw part-way, so nothing is stopped or archived' },
-  { verb: 'archive', from: ['live', 'stopped'], refusal: ARCHIVE_REFUSALS.manifestUnbuildable, by: 'server', status: 409, precondition: 'ccd could not build the archive manifest (ccd refuses; the door reads its answer, ccdArchiveRefusal)' },
+  { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.statusUnknown, by: 'server', precondition: 'the turn could not be measured, whatever the consents' },
+  { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.sessionBusy, by: 'server', precondition: 'the turn is in progress and `interrupt` was not given' },
+  { verb: 'archive', from: ['live', 'stopped'], refusal: ARCHIVE_REFUSALS.worktreeGone, by: 'server', precondition: 'a workspace whose worktree the box proved gone' },
+  { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.runOpen, by: 'server', precondition: 'the session is the worker of a non-terminal run and `force` was not given' },
+  { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.coordinatorHasOpenRuns, by: 'server', precondition: 'the session claims a non-terminal run and `programme:end` was not given, or the store is unreadable' },
+  { verb: 'archive', from: ['live'], refusal: ARCHIVE_REFUSALS.programmePartlyEnded, by: 'server', precondition: 'ending the programme was refused or threw part-way, so nothing is stopped or archived' },
+  { verb: 'archive', from: ['live', 'stopped'], refusal: ARCHIVE_REFUSALS.manifestUnbuildable, by: 'server', precondition: 'ccd could not build the archive manifest (ccd refuses; the door reads its answer, ccdArchiveRefusal)' },
   { verb: 'restore', from: ['live', 'stopped', 'asleep'], refusal: 'not-archived', by: 'ccd', precondition: 'no archive stamp stands for the session' },
   { verb: 'restore', from: ['archived'], refusal: 'worktree-missing', by: 'ccd', precondition: 'the recorded worktree directory is gone' },
   { verb: 'restore', from: ['archived'], refusal: 'in-progress', by: 'ccd', precondition: 'an expiry or reclaim breadcrumb of the workspace stands' },
@@ -146,7 +145,7 @@ export const WORKSPACE_REFUSALS_BY_VERB: Readonly<Record<WorkspaceVerb, readonly
 export const isWorkspaceRefusal = (verb: WorkspaceVerb, code: unknown): boolean =>
   typeof code === 'string' && (WORKSPACE_REFUSALS_BY_VERB[verb] as readonly string[]).includes(code);
 
-/** The archive door's edge for a refusal code: its precondition and HTTP status. Throws on a code with no row, so a
+/** The archive door's edge for a refusal code: its precondition. Throws on a code with no row, so a
  *  refusal the table does not know cannot be sent. */
 export function workspaceEdge(verb: 'archive', code: ArchiveRefusal): ServerWorkspaceEdge {
   const edge = WORKSPACE_TRANSITIONS.find((t): t is ServerWorkspaceEdge => t.verb === verb && t.by === 'server' && t.refusal === code);

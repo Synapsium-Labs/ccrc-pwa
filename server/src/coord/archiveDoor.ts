@@ -33,6 +33,7 @@
 import {
   ARCHIVE_REFUSALS, archiveInterrupts, type ArchiveBody, type ArchiveRefusal, type FleetSession,
 } from '../../../shared/api.js';
+import { REFUSAL_STATUS } from '../../../shared/refusal.js';
 import { workspaceEdge } from '../../../shared/workspaceTransitions.js';
 import type { MeasuredStat } from '../io.js';
 import { turnSays, turnWordOf } from '../sessionReading.js';
@@ -226,10 +227,14 @@ export type ArchiveDecision =
 const reply = (status: number, error: ArchiveRefusal | 'unsupported', extra: Record<string, unknown>): ArchiveDecision =>
   ({ ok: false, reply: { status, body: { ok: false, error, ...extra } } });
 
-/** A refusal is an edge of `WORKSPACE_TRANSITIONS` (ARCH-41, #776): its status rides the table's row, and a word with no
- *  row throws rather than being sent. */
+/** A refusal is an edge of `WORKSPACE_TRANSITIONS` (ARCH-41, #776) and its status is `REFUSAL_STATUS`'s, the one table
+ *  the wire reads (ARCH-36): a word with no row throws rather than being sent, and no status is spelled here. */
+const edgeStatus = (code: ArchiveRefusal): number => {
+  workspaceEdge('archive', code);
+  return REFUSAL_STATUS[code];
+};
 const refuseEdge = (code: ArchiveRefusal, extra: Record<string, unknown> = {}): ArchiveDecision =>
-  reply(workspaceEdge('archive', code).status, code, extra);
+  reply(edgeStatus(code), code, extra);
 
 /** A box whose ccd predates the verb: a route-shape word (no state of the workspace causes it), so no table row. */
 const unsupported = (): ArchiveDecision => reply(501, 'unsupported', {});
@@ -324,7 +329,7 @@ export async function decideArchive(
  */
 export function refusedAtStop(verdict: 'busy' | 'unmeasured', ended: readonly OpenSibling[]): ArchiveReply {
   const error = verdict === 'busy' ? ARCHIVE_REFUSALS.sessionBusy : ARCHIVE_REFUSALS.statusUnknown;
-  return { status: 409, body: { ok: false, error, ...(ended.length > 0 ? { ended } : {}) } };
+  return { status: edgeStatus(error), body: { ok: false, error, ...(ended.length > 0 ? { ended } : {}) } };
 }
 
 /**
@@ -359,6 +364,6 @@ export function archiveOutcome(
   const detail = res.stderr.trim();
   if (stopped) return { status: 200, body: { ok: true, archived: false, stopped: true, ended, refusal, detail } };
   const endedSpread = ended.length > 0 ? { ended } : {};
-  if (refusal !== null) return { status: 409, body: { ok: false, error: refusal, detail, ...endedSpread } };
+  if (refusal !== null) return { status: edgeStatus(refusal), body: { ok: false, error: refusal, detail, ...endedSpread } };
   return { status: 502, body: { ok: false, stderr: res.stderr, ...endedSpread } };
 }

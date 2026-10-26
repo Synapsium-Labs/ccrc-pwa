@@ -14,6 +14,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ARCHIVE_REFUSAL_CODES, LC_REFUSAL_WORD } from '../../shared/api.js';
+import { REFUSAL_STATUS } from '../../shared/refusal.js';
+import { decideArchive, refusedAtStop, archiveOutcome, type ArchiveMeasure } from '../src/coord/archiveDoor.js';
 import { SENTENCES } from '../src/wsaudit.js';
 import { parseFile } from './scan/parse.js';
 import {
@@ -193,18 +195,44 @@ describe('WORKSPACE_TRANSITIONS answers the census (ARCH-41, #776)', () => {
   });
 
   it('workspaceEdge answers each archive wire word and throws on a word with no row', () => {
-    for (const code of ARCHIVE_REFUSAL_CODES) expect(workspaceEdge('archive', code).status, code).toBe(409);
+    for (const code of ARCHIVE_REFUSAL_CODES) expect(workspaceEdge('archive', code).refusal, code).toBe(code);
+    for (const t of WORKSPACE_TRANSITIONS) expect('status' in t, t.refusal).toBe(false);
     expect(() => workspaceEdge('archive', 'nope' as never)).toThrow(/no archive edge/);
   });
 
-  // COUNTED EXIT: refusal edges not answered from WORKSPACE_TRANSITIONS go to 0. The archive door is the one TS decider
-  // of an edge (ccd's bash enforcement is the anti-corruption layer's and is pinned by the census); it must take each
-  // refusal's code and status from the table, spelling neither.
-  it('archiveDoor.ts takes every refusal from workspaceEdge: no literal status at a refuse() site', () => {
+  // COUNTED EXIT: refusal edges not answered from WORKSPACE_TRANSITIONS go to 0, and the status of each is
+  // REFUSAL_STATUS's (ARCH-36), declared once. Asserted behaviourally: every refusal the door can send, through all three
+  // functions that send one, carries REFUSAL_STATUS[word]; and no numeric status literal is left beside a refusal word.
+  it('archiveDoor.ts answers every refusal from the table and REFUSAL_STATUS, through all three senders', async () => {
+    const m = (o: Partial<ArchiveMeasure>): ArchiveMeasure => ({ workspace: true, turn: 'idle', worktree: 'present', verbSupported: true, ...o });
+    const flags = { force: false, interrupt: false, programmeEnd: false };
+    const idle = { ok: true as const, siblings: [] };
+    const open = { ok: true as const, siblings: [{ id: 1 } as never] };
+    const port = (o: object) => ({ openRunsForSession: () => idle, openRunsClaimedBy: () => idle, abandonRefusal: () => null, abandon: async () => ({ ok: true }) as never, ...o });
+    const decided = [
+      await decideArchive(null, 's', flags, m({ turn: 'unmeasured' })),
+      await decideArchive(null, 's', flags, m({ turn: 'busy' })),
+      await decideArchive(null, 's', flags, m({ worktree: 'absent' })),
+      await decideArchive(port({ openRunsForSession: () => open }), 's', flags, m({})),
+      await decideArchive(port({ openRunsClaimedBy: () => open }), 's', flags, m({})),
+      await decideArchive(port({ openRunsClaimedBy: () => open, abandonRefusal: () => ({ ok: false, kind: 'x' }) as never }), 's', { ...flags, programmeEnd: true }, m({})),
+    ];
+    expect(decided.map((d) => !d.ok && d.reply.body.error)).toEqual(
+      ['status-unknown', 'session-busy', 'worktree-gone', 'run-open', 'coordinator-has-open-runs', 'programme-partly-ended']);
+    for (const d of decided) if (!d.ok) expect(d.reply.status, String(d.reply.body.error)).toBe(REFUSAL_STATUS[d.reply.body.error as keyof typeof REFUSAL_STATUS]);
+    for (const v of ['busy', 'unmeasured'] as const) {
+      const r = refusedAtStop(v, []);
+      expect(r.status).toBe(REFUSAL_STATUS[r.body.error as keyof typeof REFUSAL_STATUS]);
+    }
+    const stderrs = ['ccd: session-busy', 'ccd: status-unknown', 'ccd: worktree is gone: /w', 'ccd: empty archive manifest for s — nothing was touched'];
+    const words = stderrs.map((stderr) => archiveOutcome(false, [], { ok: false, stderr, ran: true }));
+    expect(words.map((r) => r.body.error)).toEqual(['session-busy', 'status-unknown', 'worktree-gone', 'manifest-unbuildable']);
+    for (const r of words) expect(r.status, String(r.body.error)).toBe(REFUSAL_STATUS[r.body.error as keyof typeof REFUSAL_STATUS]);
     const door = parseFile(path.join(ROOT, 'server/src/coord/archiveDoor.ts'));
     const fromTable = door.imports.filter((i) => /shared\/workspaceTransitions\.js$/.test(i.specifier)).flatMap((i) => i.names);
     expect(fromTable).toContain('workspaceEdge');
-    // The only literal status left is `unsupported()`'s 501, a route-shape word with no state behind it.
-    expect([...DOOR.matchAll(/\b(?:refuse|reply)\(\s*\d{3}\b/g)].map((m) => m[0].replace(/\s+/g, ''))).toEqual(['reply(501']);
+    // The only numeric statuses left: 200 (success and the partial outcome), 501 (`unsupported()`, a route-shape word) and 502.
+    expect([...DOOR.matchAll(/\b(?:refuse|reply)\(\s*\d{3}\b|\bstatus:\s*\d{3}\b/g)].map((x) => x[0].replace(/\s+/g, ''))).toEqual(
+      ['reply(501', 'status:200', 'status:200', 'status:502']);
   });
 });
