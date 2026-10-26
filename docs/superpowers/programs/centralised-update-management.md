@@ -6285,6 +6285,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   shadow journal for the unarmed disk lanes) and #1516. The soak treats them as daily-only.
   `STATUS 2026-10-26T02:43:23Z fleet=v0.0.702 server=v0.0.702 health=v0.0.702 newest=v0.0.715 intent=*:dev/auto=off`
   `pin=None link=<versions>/v0.0.702 backups=fleet:165M/server:9341M disk=fleet:98G/work:495G/server:21G`
+- **2026-10-26 03:33 UTC — v0.0.716 to v0.0.718 released; no move; no anomaly.** #1528 cites code by named anchor and
+  splits single-definition by area. Its only change to the session hook is three trailing anchor comments. #1537
+  (skills) and #1530 (routing slice 4) are the others. The soak treats all three as daily-only.
+  `STATUS 2026-10-26T03:33:42Z fleet=v0.0.702 server=v0.0.702 health=v0.0.702 newest=v0.0.718 intent=*:dev/auto=off`
+  `pin=None link=<versions>/v0.0.702 backups=fleet:165M/server:9341M disk=fleet:98G/work:495G/server:21G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
