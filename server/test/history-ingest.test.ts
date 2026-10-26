@@ -1087,8 +1087,8 @@ const IX_RSS_PRELOAD = path.join(__dirname, 'fixtures', 'history', 'preload-rss.
  *  smaller chunks do not bring it under 256 MiB, so any other interpreter is held to 512 MiB, half the carrier's
  *  MemoryMax=1G (D-4244). DM47 (task 21) uses the same bound.
  *  Every figure above was read with the preload's inherited maxRSS, max(the test worker's size at spawn, the sweep's own peak) on
- *  Linux (D-6964); no case measured since had a worker larger than its sweep. With the preload's own peak (VmHWM) Node 24.14.1 measured this pass at 314756 KiB (299488 KiB read the old way in a separate run;
- *  the worker was not the larger here, so the two agree within run noise), DM47 at 227648 KiB (230940 old) and CP-39's walk-cap case at 311052 KiB (319320 old).
+ *  Linux (D-6964); the worker's size at spawn was not measured; one run per side differs by a few percent either way. With the preload's own peak (VmHWM) Node 24.14.1 measured this pass at 314756 KiB (299488 KiB read the old way in a separate run),
+ *  DM47 at 227648 KiB (230940 old) and CP-39's walk-cap case at 311052 KiB (319320 old).
  *  The 22.16.0 figures are the node-floor CI leg's and stay as read then. */
 const IX_RSS_BOUND_KIB = process.version === 'v22.16.0' ? 256 * 1024 : 512 * 1024;
 /** half the carrier's MemoryMax=1G, D-4244's bound family; the heaviest STRUCTURED line measured 389,508 and 356,032 KiB whole-pass on Node 24.14.1 (D-4345), and since D-4419's window the heaviest plain-text line measured, an ESC 7-dense one, 372,204 KiB in a 1 GiB scope (the whole-pass readings were read with the inherited maxRSS, D-6964; the scoped reading stays as recorded). With the preload's own peak, Node 24.14.1 measured the D-4345 case at 331912 KiB (315656 KiB read the old way) and the D-4419 case at 364268 KiB (363324 old). */

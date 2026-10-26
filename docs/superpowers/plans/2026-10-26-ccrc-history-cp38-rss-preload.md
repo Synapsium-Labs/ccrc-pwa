@@ -143,6 +143,7 @@ On Linux, a spawned child's `process.resourceUsage().maxRSS` inherits the parent
 - Bounds unchanged; a consumer whose figure is now far under its bound is a Later decision (O20's is the operator's).
 - macOS (no /proc) keeps maxRSS.
 - Sites that bound a child's maxRSS without the preload keep the inherited figure: history-replay's child `peakMiB` (W2-5b2's file) and history-lib's two 512 MiB child bounds.
+- history-recall's case "a --full page of an ESC-, backslash- and &-dense summary redacts one window, not one per shrink step" bounds the vitest worker's OWN whole-lifetime maxRSS below 1 GiB, not the spawned-child mechanism.
 
 ### Tests run
 <the suites, with counts>
@@ -163,7 +164,7 @@ Each consumer case was run once alone per side on Node v24.14.1 (Linux 6.8): "Be
 | CP-39 walk-cap | 319,320 | 311,052 | 524,288 | v24.14.1 |
 | history-recall expand | 276,416 | 276,744 | 1,048,576 | v24.14.1 |
 
-On this run the two sides differ by a few percent either way, which is run-to-run noise: the vitest worker was not the larger of the two here. No measured consumer case had a worker larger than its sweep; the spawn guard's ballast is the one demonstration.
+The worker's size at spawn was not measured; one run per side differs by a few percent either way. The spawn guard's ballast is the one demonstration.
 
 The node floor (22.16.0) leg, from this PR's CI (run 40284966953), own peak:
 
@@ -177,5 +178,5 @@ The node floor (22.16.0) leg, from this PR's CI (run 40284966953), own peak:
 
 ## Deviations found
 
-- **D-6964** — `history-test-rss-own-peak` (Task 1; spec §10.1, O20, DM47): the RSS preload's figure is the process's own peak (`VmHWM`) where `/proc/self/status` exists, not `process.resourceUsage().maxRSS`. On Linux, maxRSS carries the spawning parent's resident size across fork and exec, so a consumer's figure was max(the test worker at spawn, the sweep's own peak) rather than the sweep's; the spawn guard measures that (a parent at 480,720 KiB: the child read 416,940 KiB with the inherited figure and 47,936 KiB with VmHWM, Node 24.14.1). This contradicted the preload's own header ("never the test runner's"). It did not change the node floor's red: CP-39's walk-cap case reads 272,028 KiB with the own-peak preload (22.16.0, CI run 40284966953) and 271,508 / 271,180 KiB with the inherited one on main (3a0bd0ad1, 98fd13dad), against 262,144 KiB, so the sweep's own peak there is over the bound. The same walk-cap case read 219,376 KiB at fa25c9ee6 with the inherited figure (a CI re-run of the node floor job on 2026-10-26), and the difference is not diagnosed here. No consumer case measured here had a worker larger than its sweep. Without `/proc` the figure stays maxRSS, named by the source line.
+- **D-6964** — `history-test-rss-own-peak` (Task 1; spec §10.1, O20, DM47): the RSS preload's figure is the process's own peak (`VmHWM`) where `/proc/self/status` exists, not `process.resourceUsage().maxRSS`. On Linux, maxRSS carries the spawning parent's resident size across fork and exec, so a consumer's figure was max(the test worker at spawn, the sweep's own peak) rather than the sweep's; the spawn guard measures that (Node 24.14.1: with the inherited figure, a parent at 480,940 KiB and its child at 416,612 KiB; with VmHWM, a parent at 481,100 KiB and its child at 48,700 KiB). This contradicted the preload's own header ("never the test runner's"). It did not change the node floor's red: CP-39's walk-cap case reads 272,028 KiB with the own-peak preload (22.16.0, CI run 40284966953) and 271,508 / 271,180 KiB with the inherited one on main (3a0bd0ad1, 98fd13dad), against 262,144 KiB, so the sweep's own peak there is over the bound. The same walk-cap case read 219,376 KiB at fa25c9ee6 with the inherited figure (a CI re-run of the node floor job on 2026-10-26), and the difference is not diagnosed here. For the consumer cases, the worker's size at spawn was not measured; one run per side differs by a few percent either way. Without `/proc` the figure stays maxRSS, named by the source line.
 - **D-6965** — `history-fixture-ring-rss-peak` (Task 1; D-6964): `history-lib.test.ts`'s `FIXTURE_RING` lets a `preload-*.mjs` fixture import only `node:*`. CP-38 needs one exception: `preload-rss.mjs` imports `./rss-peak.mjs`, a fixture with no imports of its own, so the measurement is a pure, testable function. The widening is one exact per-file allowance, `{ 'preload-rss.mjs': ['./rss-peak.mjs'] }`, in the style of `LAZY_IMPORTS`, with `rss-peak.mjs` given a ring that forbids every import. Every other fixture's ring is unchanged. Pinned by mutants M4 and M5.

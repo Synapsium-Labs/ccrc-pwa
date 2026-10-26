@@ -4,8 +4,8 @@
 // preload that calls it.
 //
 // Why not `process.resourceUsage().maxRSS`: on Linux a forked-then-exec'd child inherits the resident size of the parent that
-// spawned it (the kernel carries the high-water mark across the exec), so a sweep spawned by a fat test runner reported the
-// runner's size, not its own. `VmHWM` in /proc/self/status is the process's own peak, in kB as the kernel prints it. Where that
+// spawned it (the kernel carries the high-water mark across the exec), so a sweep spawned by a fat test runner could report the
+// runner's size when the runner was the larger, not its own. `VmHWM` in /proc/self/status is the process's own peak, in kB as the kernel prints it. Where that
 // file is absent (macOS), unreadable, or has no parseable positive `VmHWM` line, the answer is maxRSS (KiB on Linux, and the
 // only figure the platform offers elsewhere), truncated to an integer of at least 1, and 1 when it is not finite.
 export function ownPeakKiB(readStatus, fallbackKiB) {

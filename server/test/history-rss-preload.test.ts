@@ -6,12 +6,14 @@
 // without an environment seam (spec §10.1).
 //
 // ISOLATION: the spawn guard runs `node --import <preload> -e 0` with an argv array, never through a shell, and touches no
-// HOME, no registry and no fixture path. It holds one 400 MiB allocation for the length of the case.
+// HOME, no registry and no fixture path. Its env is scrubbedEnv() (§10.1, every new test scrubs), which also drops NODE_OPTIONS
+// and HISTORY_TEST_*, so only the guard's own --import loads. It holds one 400 MiB allocation for the length of the case.
 import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, it, expect } from 'vitest';
+import { scrubbedEnv } from './historyHelpers.js';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const PRELOAD = join(HERE, 'fixtures', 'history', 'preload-rss.mjs');
@@ -28,7 +30,7 @@ describe('the RSS preload prints the process\'s own peak, never the spawning par
     const ballast = Buffer.alloc(400 * 1024 * 1024, 1);
     // CONTROL: the parent really holds the allocation at spawn, or the guard measures nothing.
     expect(process.memoryUsage().rss, 'the parent does not hold the ballast').toBeGreaterThan(380 * MIB_KIB * 1024);
-    const r = spawnSync(process.execPath, ['--import', pathToFileURL(PRELOAD).href, '-e', '0'], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, ['--import', pathToFileURL(PRELOAD).href, '-e', '0'], { encoding: 'utf8', env: scrubbedEnv() });
     const m = /^history-test-maxrss-kib=(\d+)$/m.exec(r.stderr);
     expect(m, `no key line in stderr: ${r.stderr}`).not.toBeNull();
     const kib = Number(m![1]);
