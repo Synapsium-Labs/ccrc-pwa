@@ -610,10 +610,32 @@ describe('the size budget', () => {
     expect(s.budget.state, 'the 2 kept entries are under the budget: the episode ended').toBe('ok');
   }, 120_000);
 
+  /** The env every fixture git runs with: a fixed identity, and auto-maintenance and auto-gc off (see the case below). */
+  const GIT_ENV = (): NodeJS.ProcessEnv => ({
+    ...h.env(), GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x',
+    GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'maintenance.auto', GIT_CONFIG_VALUE_0: 'false', GIT_CONFIG_KEY_1: 'gc.auto', GIT_CONFIG_VALUE_1: '0',
+  });
+
+  // A fixture's commits must not start git's auto-maintenance: it runs DETACHED, so it outlives the commit and
+  // creates and removes `.git/objects/maintenance.lock` while `setTimes` walks the entry (readdir names the lock,
+  // the lstat after it finds it gone: ENOENT). Nothing in the fixture git env may leave it on.
+  it('the fixture git env never starts auto-maintenance (a detached maintenance.lock would race setTimes)', () => {
+    const r = path.join(h.home, 'no-maint');
+    fs.mkdirSync(r);
+    const trace = path.join(h.home, 'no-maint.trace');
+    const env = { ...GIT_ENV(), GIT_TRACE: trace };
+    execFileSync('git', ['-C', r, 'init', '-q'], { env, stdio: 'ignore' });
+    fs.writeFileSync(path.join(r, 'w'), 'x');
+    execFileSync('git', ['-C', r, 'add', '-A'], { env, stdio: 'ignore' });
+    execFileSync('git', ['-C', r, 'commit', '-q', '-m', 'w'], { env, stdio: 'ignore' });
+    const spawned = fs.readFileSync(trace, 'utf8').split('\n').filter((l) => /run_command: git (maintenance run|gc) --auto/.test(l));
+    expect(spawned).toEqual([]);
+  });
+
   it('an entry holding a repository with an unpushed commit is kept as git-work-unrescued (before DR-20)', () => {
     liveSession();
     const [a] = sizes([['repo', 200, 6 * 24], ['b', 400, 5 * 24], ['c', 400, 4 * 24], ['d', 400, 3 * 24]]) as [string];
-    const gitEnv = { ...h.env(), GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x' };
+    const gitEnv = GIT_ENV();
     execFileSync('git', ['-C', a, 'init', '-q'], { env: gitEnv });
     execFileSync('git', ['-C', a, 'add', '-A'], { env: gitEnv });
     execFileSync('git', ['-C', a, 'commit', '-q', '-m', 'work'], { env: gitEnv });
@@ -629,7 +651,7 @@ describe('the size budget', () => {
   it('a repository whose work every remote has is taken like any entry', () => {
     liveSession();
     const [a] = sizes([['repo', 200, 6 * 24], ['b', 400, 5 * 24], ['c', 400, 4 * 24], ['d', 400, 3 * 24]]) as [string];
-    const gitEnv = { ...h.env(), GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x' };
+    const gitEnv = GIT_ENV();
     const remote = path.join(h.home, 'remote.git');
     execFileSync('git', ['init', '-q', '--bare', remote], { env: gitEnv });
     execFileSync('git', ['-C', a, 'init', '-q'], { env: gitEnv });
@@ -645,7 +667,6 @@ describe('the size budget', () => {
     expect(exists(a)).toBe(false);
   }, 120_000);
 
-  const GIT_ENV = (): NodeJS.ProcessEnv => ({ ...h.env(), GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x' });
   const git = (cwd: string, ...a: string[]): void => { execFileSync('git', ['-C', cwd, ...a], { env: GIT_ENV(), stdio: 'ignore' }); };
   /** A `git` that first touches one file's atime to the sweep's own clock, as a relatime mount does for a real read. */
   function touchingGit(file: string, whenS: () => number): string {
