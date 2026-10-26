@@ -11149,6 +11149,10 @@ import * as w6cLibMod from '../../ccd/history/lib.mjs';
 import * as w6cStoreMod from '../../ccd/history/store.mjs';
 import { mkTmp as w6cMkTmp } from './tmpHelpers.js';
 import { REPO as W6C_REPO, scrubbedEnv as w6cScrubbed } from './historyHelpers.js';
+// W2-6 Task 2 (W2-D87): the counter, statically now that Task 1 made it, card.mjs for one parity CONTROL, and the blob key.
+import * as w6cCtrMod from '../../deploy/history-counters.mjs';
+import * as w6cCardMod from '../../ccd/history/card.mjs';
+import { createHash as w6cHash } from 'node:crypto';
 
 type W6cR = Record<string, any>;
 type W6cRefusal = { word: string; detail: string } | null;
@@ -11344,14 +11348,17 @@ w6cDescribe('W2-6 Task 1: the counter module, its frame and its pins (W2-D86, W2
 
   // The counter's import block, pinned as D-5814 pins the driver's: exactly its modules, each with exactly its names.
   // A later W2-6 task that adds a name inside a module's braces updates that module's entry here in the same commit.
-  const W6C_EXPECTED_IMPORTS = ['node:fs', 'node:path', 'node:url', '../ccd/history/lib.mjs', '../ccd/history/store.mjs', './history-gate.mjs', './history-replay.mjs'];
+  const W6C_EXPECTED_IMPORTS = ['node:fs', 'node:path', 'node:url', '../ccd/history/lib.mjs', '../ccd/history/store.mjs', '../ccd/history/derive.mjs',
+    '../ccd/history/recall.mjs', './history-gate.mjs', './history-replay.mjs'];
   const W6C_EXACT_NAMES: Record<string, string> = {
     'node:fs': '{ lstatSync, readFileSync, realpathSync, writeFileSync }',
     'node:path': 'path',
     'node:url': '{ fileURLToPath, pathToFileURL }',
-    '../ccd/history/lib.mjs': '{ BACKENDS, EXIT, SCHEMA_ADDED, UUID_RE, canonicalJson, sha256Hex }',
+    '../ccd/history/lib.mjs': '{ BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, sha256Hex }',
     '../ccd/history/store.mjs': '{ StoreError, openReader, userVersion }',
-    './history-gate.mjs': '{ ASSIGNMENT_ARMS, COUNTERS_DEF_V1, COUNTERS_DEF_V1_SHA256, K, K_UNIT, assembleReports, buildWindows, changedFamilies, familyKey, turnsOf, windowCopyOf }',
+    '../ccd/history/derive.mjs': '{ holdingCopyOf }',
+    '../ccd/history/recall.mjs': '{ expandEntryBody }',
+    './history-gate.mjs': '{ ASSIGNMENT_ARMS, COUNTERS_DEF_V1, COUNTERS_DEF_V1_SHA256, K, K_UNIT, assembleReports, buildWindows, changedFamilies, familyKey, turnsOf, windowCopyOf, windowOf }',
     './history-replay.mjs': '{ AB_STATES, DriverRefusal, VERIFY_AB_KIND, loadFinalRecord, loadInput, parseArgs, prepareOut, refuse }',
   };
   const importViolations = (text: string): string[] => {
@@ -11819,6 +11826,501 @@ w6cDescribe('W2-6 Task 1: the counter module, its frame and its pins (W2-D86, W2
     w6cExpect(w6cFs.existsSync(n.out)).toBe(false);
     const other = w6cSpawnSync(process.execPath, ['--no-warnings', W6C_SRC, 'report'], opts);
     w6cExpect([other.status, other.stdout, other.stderr]).toEqual([2, '', 'ccrc history-counters: args-invalid: unknown subcommand "report"\n']);
+  });
+});
+
+// ── W2-6 Task 2: the five spec counters (W2-D87, W2-D86, W2-D15; spec §10.2's live A/B counters, §6.2) ─────────────
+// In-process only: no case spawns a child or reads a live home. Every model is the synthetic claude-fixture-4 (lib reads
+// it anthropic); leaf ids are 'L' and 20 hex digits; every card line comes from lib's cardLine, never typed here. Each
+// measure is asked through Task 1's windowCtx, so the copy and the turns it is handed are the frame's. W6C_T2_NOW is
+// the read instant every card case passes.
+type W6cT2Value = { state: string; why?: string; value?: any };
+type W6cT2RawRow = [number, number | null, string | null, string | null, string, string | null];
+interface W6cT2Copy {
+  file_id: number; source_key: string; boundary_line: number; after_count: number; summary_line: number | null;
+  next_boundary_line: number | null; next_boundary_ts_ms: number | null; last_ts_ms: number | null;
+  rows: W6cT2RawRow[]; models: Array<string | null>; truncated: boolean;
+}
+interface W6cT2Boundary { boundary_uuid: string; ts_ms: number; copies: W6cT2Copy[] }
+interface W6cT2Part {
+  family: { key: string; store_id: string; ccrc_id: string; generation: string; arm: string };
+  boundary: W6cT2Boundary; calls: Array<[number, number, string]>; window: W6cR;
+}
+interface W6cT2Cs { db: unknown; storeId: string; version: number; schema: unknown; close(): void }
+interface W6cT2Api {
+  COUNTER_UNMEASURED: readonly string[];
+  COUNTER_MEASURES: Record<string, W6cR>;
+  COMPLIANCE: W6cR; ECHO_HITS: W6cR; LAG: W6cR; CARD_SERVED: W6cR; CARD_ID_MISMATCH: W6cR;
+  windowCtx(o: W6cR): W6cR;
+  windowRow(o: W6cR): W6cR;
+  stratify(rows: W6cR[], measures: W6cR): W6cR;
+  boundaryLeafOf(cs: W6cT2Cs, uuid: string): W6cR;
+  complianceAt(ctx: W6cR): W6cT2Value;
+  echoAt(ctx: W6cR): W6cT2Value;
+  lagAt(ctx: W6cR): W6cT2Value;
+  cardAt(ctx: W6cR): W6cT2Value;
+  foldCompliance(values: unknown[]): W6cR;
+  foldEcho(values: unknown[]): W6cR;
+  foldLag(values: unknown[]): W6cR;
+  foldCardFor(verdict: string): (values: unknown[]) => W6cR;
+}
+const W6C_T2 = w6cCtrMod as unknown as W6cT2Api;
+const W6C_T2_MODEL = 'claude-fixture-4';
+const W6C_T2_NOW = 200_000;
+const w6cT2Uid = (seed: number, n: number): string => `${seed.toString(16).padStart(8, '0')}-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+const W6C_T2_GEN = w6cT2Uid(0x626, 0);
+const w6cT2Leaf = (n: number): string => `L${n.toString(16).padStart(20, '0')}`;
+const w6cT2NodeId = (n: number): string => `N${n.toString(16).padStart(20, '0')}`;
+/** A SessionStart context naming `leaf`, after a standing card, as the hook joins them with one space. */
+const w6cT2Line = (leaf: string): string => `Graph: fixture card. ${w6cLib.cardLine({ leaf })}`;
+/** A user row's stored body holding one tool_result; `isError` undefined leaves the key out. */
+const w6cT2Result = (isError?: boolean): unknown[] =>
+  [{ type: 'tool_result', tool_use_id: 'toolu_fixture', content: 'fixture output', ...(isError === undefined ? {} : { is_error: isError }) }];
+
+interface W6cT2Row {
+  uuid: string; type: string; provenance: string; ts: number | null; body?: unknown; model?: string | null;
+  tombstone?: boolean; rawLen?: number; provVersion?: number; boundary?: boolean; summary?: boolean;
+}
+const w6cT2Op = (uuid: string, ts: number): W6cT2Row => ({ uuid, type: 'user', provenance: 'operator', ts, body: [{ type: 'text', text: 'fixture prompt' }] });
+const w6cT2Asst = (uuid: string, ts: number): W6cT2Row => ({ uuid, type: 'assistant', provenance: 'model', ts, model: W6C_T2_MODEL, body: [{ type: 'text', text: 'fixture reply' }] });
+const w6cT2Bnd = (uuid: string, ts: number): W6cT2Row => ({ uuid, type: 'system', provenance: 'harness', ts, boundary: true, body: 'fixture boundary' });
+const w6cT2Sum = (uuid: string, ts: number): W6cT2Row => ({ uuid, type: 'user', provenance: 'summary', ts, summary: true, body: 'fixture summary' });
+const w6cT2Echo = (uuid: string, ts: number | null, o: Partial<W6cT2Row> = {}): W6cT2Row =>
+  ({ uuid, type: 'user', provenance: 'recall-echo', ts, body: w6cT2Result(), ...o });
+const w6cT2Att = (uuid: string, ts: number, text: string, o: Partial<W6cT2Row> = {}): W6cT2Row =>
+  ({ uuid, type: 'attachment', provenance: 'harness', ts, body: { type: 'hook_additional_context', hookName: 'SessionStart', content: [text] }, ...o });
+
+interface W6cT2File { fileId: number; sourceKey?: string; status?: string; eofMs?: number | null; uuids: string[] }
+interface W6cT2Transcript { pk: number; ccUuid: string; rows: W6cT2Row[]; files: W6cT2File[] }
+interface W6cT2Plan {
+  transcripts: W6cT2Transcript[];
+  nodes: Array<{ id: string; boundary: string; status: string; createdMs: number; depth?: number }>;
+  ticks?: Array<[number, number, number | null]>;
+}
+/** A store made by store.mjs's createStore under a fresh mkTmp HOME, planted in one transaction, and closed. One
+ *  session (generation W6C_T2_GEN) holds one confirmed epoch per transcript. Each row is one entry with its own blob:
+ *  brotli of its JSON body, `raw_len` its byte length unless `rawLen` says otherwise, or a tombstone (z NULL, pruned).
+ *  A file's memberships are its `uuids` at lines 1, 2 and on; a boundary row gets the next `ord` of its transcript.
+ *  `ticks` rows are [tick_id, ts_ms, lag_ms]. */
+function w6cT2Plant(plan: W6cT2Plan): { home: string; dbFile: string } {
+  const home = w6cMkTmp('ccrc-counters-w6c-t2-');
+  w6cStore.createStore(home);
+  const dbFile = w6cLib.historyPaths(home).dbFile as string;
+  const db = w6cStore.openWriter(dbFile);
+  try {
+    db.exec('BEGIN');
+    db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, 'fx-counters', ?, 'demo', 1)").run(W6C_T2_GEN);
+    const ep = db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (1, ?, ?, 'startup', 'hook', 1)");
+    const tr = db.prepare("INSERT INTO transcripts (transcript_pk, cc_session_uuid, agent_id) VALUES (?, ?, '')");
+    const file = db.prepare('INSERT INTO ingest_files (file_id, dev, ino, source_key, transcript_pk, status, eof_ms, parser_version) VALUES (?, 1, ?, ?, ?, ?, ?, 1)');
+    const blob = db.prepare("INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, 'br5', ?, ?, ?)");
+    const ent = db.prepare(`INSERT INTO entries (uuid, transcript_pk, type, model, provenance, prov_version, struct_rank_ns,
+      struct_file_id, blob_id, ts_ms, is_compact_summary) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)`);
+    const mem = db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
+    const bnd = db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord) VALUES (?, ?, ?)');
+    const node = db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status,
+      boundary_entry_id, parser_version, created_ms) VALUES (?, 1, 1, ?, ?, ?, ?, ?, 1, ?)`);
+    const tick = db.prepare('INSERT INTO ticks (tick_id, ts_ms, lag_ms, bytes, files_behind, bytes_behind) VALUES (?, ?, ?, 0, 0, 0)');
+    const idOf = new Map<string, { id: number; pk: number }>();
+    plan.transcripts.forEach((t, i) => {
+      ep.run(i + 1, t.ccUuid);
+      tr.run(t.pk, t.ccUuid);
+      for (const f of t.files) file.run(f.fileId, 9000 + f.fileId, f.sourceKey ?? '', t.pk, f.status ?? 'live', f.eofMs ?? null);
+      let ord = 0;
+      for (const r of t.rows) {
+        const bytes = Buffer.from(JSON.stringify(r.body ?? null));
+        const tomb = r.tombstone === true;
+        const blobId = Number(blob.run(w6cHash('sha256').update(r.uuid).digest(), tomb ? null : w6cStore.brotli(bytes),
+          r.rawLen ?? bytes.length, tomb ? 1 : null).lastInsertRowid);
+        const id = Number(ent.run(r.uuid, t.pk, r.type, r.model ?? null, r.provenance, r.provVersion ?? w6cLib.PROV_VERSION,
+          blobId, r.ts, r.summary === true ? 1 : 0).lastInsertRowid);
+        idOf.set(r.uuid, { id, pk: t.pk });
+        if (r.boundary === true) {
+          ord += 1;
+          bnd.run(id, t.pk, ord);
+        }
+      }
+      for (const f of t.files) f.uuids.forEach((u, k) => { mem.run(f.fileId, idOf.get(u)!.id, k + 1); });
+    });
+    for (const n of plan.nodes) {
+      const b = idOf.get(n.boundary)!;
+      const depth = n.depth ?? 0;
+      node.run(n.id, b.pk, depth === 0 ? 'native_leaf' : 'condensed', depth, n.status, b.id, n.createdMs);
+    }
+    for (const [id, ts, lag] of plan.ticks ?? []) tick.run(id, ts, lag);
+    db.exec('COMMIT');
+  } finally {
+    w6cStore.closeWriter(db);
+  }
+  return { home, dbFile };
+}
+/** A read handle in Task 1's CounterStore shape: openReader, its user_version and SCHEMA_ADDED. */
+function w6cT2Open(dbFile: string): W6cT2Cs {
+  const db = w6cStore.openReader(dbFile);
+  return { db, storeId: 'fixture-store', version: w6cStore.userVersion(db) as number, schema: w6cLib.SCHEMA_ADDED, close: () => db.close() };
+}
+function w6cT2With<T>(dbFile: string, fn: (cs: W6cT2Cs) => T): T {
+  const cs = w6cT2Open(dbFile);
+  try { return fn(cs); } finally { cs.close(); }
+}
+/** One copy in measure-history.py's shape (W2-D13), defaults filled. */
+const w6cT2Copy = (o: Partial<W6cT2Copy> & { file_id: number; boundary_line: number }): W6cT2Copy => ({
+  source_key: '', after_count: 1, summary_line: null, next_boundary_line: null, next_boundary_ts_ms: null, last_ts_ms: null,
+  rows: [], models: [W6C_T2_MODEL], truncated: false, ...o,
+});
+const w6cT2Rep = (boundary_uuid: string, ts_ms: number, copies: W6cT2Copy[]): W6cT2Boundary => ({ boundary_uuid, ts_ms, copies });
+/** One boundary of a family as Task 1's frame sees it: the family and its arm, the boundary report, the family's calls,
+ *  and the gate's own windowOf over them. */
+function w6cT2Part(boundary: W6cT2Boundary, o: { calls?: Array<[number, number, string]>; arm?: string } = {}): W6cT2Part {
+  const calls = o.calls ?? [];
+  return {
+    family: { key: w6cGate.familyKey('fixture-store', 'fx-counters', W6C_T2_GEN) as string, store_id: 'fixture-store', ccrc_id: 'fx-counters', generation: W6C_T2_GEN, arm: o.arm ?? 'treatment' },
+    boundary, calls, window: w6cGate.windowOf(boundary, calls) as W6cR,
+  };
+}
+/** The WindowCtx Task 1's frame hands every measure of this boundary, at read instant `nowMs`. */
+const w6cT2Ctx = (cs: W6cT2Cs, p: W6cT2Part, nowMs = W6C_T2_NOW): W6cR =>
+  W6C_T2.windowCtx({ rs: cs, family: p.family, boundary: p.boundary, window: p.window, calls: p.calls, nowMs });
+const W6C_T2_LEAF = {
+  A1: w6cT2Leaf(0xa1), H1: w6cT2Leaf(0x91), H2: w6cT2Leaf(0x92), B: w6cT2Leaf(0xb1), C1: w6cT2Leaf(0xc1), D: w6cT2Leaf(0xd1),
+  E: w6cT2Leaf(0xe1), F: w6cT2Leaf(0xf1), G: w6cT2Leaf(0x61), U: w6cT2Leaf(0x71), X: w6cT2Leaf(0xfff),
+};
+
+/** Store 1: compliance, echo hits and lag. Transcript A (file 1) holds two boundaries: A1 (line 3, ts 10000), whose
+ *  window is [10000, 30000) over three turns, and A2 (line 18, ts 30000). The rows between them are one of each echo
+ *  shape the counter tells apart. Transcript H (file 2) holds H1, H2 and H3: H1's and H2's leaves carry `degraded` and a
+ *  status outside PARSE_STATUS, and two depth-0 leaves name H3. A1 also has a depth-1 node naming it, which the depth-0
+ *  rule must leave out. */
+function w6cT2EchoStore() {
+  const uA = (n: number): string => w6cT2Uid(0xa, n);
+  const uH = (n: number): string => w6cT2Uid(0x9, n);
+  const A: W6cT2Row[] = [
+    w6cT2Op(uA(1), 1000),                                                        // 1
+    w6cT2Asst(uA(2), 2000),                                                      // 2
+    w6cT2Bnd(uA(3), 10000),                                                      // 3  A1
+    w6cT2Sum(uA(4), 10001),                                                      // 4
+    w6cT2Att(uA(5), 10002, w6cT2Line(W6C_T2_LEAF.A1)),                           // 5  A1's card line
+    w6cT2Asst(uA(6), 10100),                                                     // 6  turn 1
+    w6cT2Echo(uA(7), 10200),                                                     // 7  a hit (is_error absent)
+    w6cT2Asst(uA(8), 10300),                                                     // 8  turn 2
+    w6cT2Echo(uA(9), 10400, { body: w6cT2Result(true) }),                        // 9  an error
+    w6cT2Asst(uA(10), 10500),                                                    // 10 turn 3
+    { ...w6cT2Echo(uA(11), 10600), provenance: 'tool' },                         // 11 a plain tool result: no echo
+    w6cT2Echo(uA(12), null),                                                     // 12 untimed
+    w6cT2Echo(uA(13), 10800, { tombstone: true }),                               // 13 unreadable: tombstone
+    w6cT2Echo(uA(14), 10900, { provVersion: 0 }),                                // 14 another provenance version
+    w6cT2Echo(uA(15), 9000),                                                     // 15 stamped before the window opens
+    w6cT2Echo(uA(16), 11000, { body: [{ type: 'text', text: 'fixture' }] }),     // 16 an echo row with no tool_result
+    { ...w6cT2Echo(uA(19), 11100), provenance: 'tool', provVersion: 0 },         // 17 a tool row under another version: stale
+    w6cT2Bnd(uA(17), 30000),                                                     // 18 A2, the next main boundary
+    w6cT2Echo(uA(18), 12000),                                                    // 19 past A2, stamped inside A1's window
+  ];
+  const H: W6cT2Row[] = [w6cT2Op(uH(1), 500), w6cT2Bnd(uH(2), 600), w6cT2Sum(uH(3), 601), w6cT2Bnd(uH(4), 700), w6cT2Sum(uH(5), 701),
+    w6cT2Bnd(uH(6), 800), w6cT2Sum(uH(7), 801)];
+  const st = w6cT2Plant({
+    transcripts: [
+      { pk: 1, ccUuid: w6cT2Uid(0xcc, 1), rows: A, files: [{ fileId: 1, uuids: A.map((r) => r.uuid) }] },
+      { pk: 2, ccUuid: w6cT2Uid(0xcc, 2), rows: H, files: [{ fileId: 2, uuids: H.map((r) => r.uuid) }] },
+    ],
+    nodes: [
+      { id: W6C_T2_LEAF.A1, boundary: uA(3), status: 'not-requested', createdMs: 10500 },
+      { id: w6cT2NodeId(0xa1), boundary: uA(3), status: 'ok', createdMs: 10600, depth: 1 },
+      { id: W6C_T2_LEAF.H1, boundary: uH(2), status: 'degraded', createdMs: 650 },
+      { id: W6C_T2_LEAF.H2, boundary: uH(4), status: 'fixture-status', createdMs: 750 },
+      { id: w6cT2Leaf(0x93), boundary: uH(6), status: 'ok', createdMs: 850 },     // two depth-0 leaves name H3
+      { id: w6cT2Leaf(0x94), boundary: uH(6), status: 'ok', createdMs: 851 },
+    ],
+    // [tick_id, ts_ms, lag_ms]: tick_id order is NOT ts order (ids 2 and 5), and one tick has no measured lag.
+    ticks: [[1, 5000, 700], [5, 9500, 1200], [3, 9800, null], [2, 10000, 50], [4, 10001, 9]],
+  });
+  const M = W6C_T2_MODEL;
+  const a1Copy = w6cT2Copy({
+    file_id: 1, boundary_line: 3, after_count: 16, summary_line: 4, next_boundary_line: 18, next_boundary_ts_ms: 30000, last_ts_ms: 12000,
+    rows: [[6, 10100, null, null, uA(6), M], [8, 10300, null, null, uA(8), M], [10, 10500, null, null, uA(10), M]],
+  });
+  const calls: Array<[number, number, string]> = [[10150, 0, 'grep'], [10350, 0, 'describe'], [10450, 8, 'grep'], [31000, 0, 'grep']];
+  return {
+    ...st, uA, uH,
+    fA1: w6cT2Part(w6cT2Rep(uA(3), 10000, [a1Copy]), { calls }),
+    fA1Cut: w6cT2Part(w6cT2Rep(uA(3), 10000, [{ ...a1Copy, truncated: true }]), { calls }),
+    fA1Moved: w6cT2Part(w6cT2Rep(uA(3), 10000, [{ ...a1Copy, boundary_line: 2 }]), { calls }),
+    fA2: w6cT2Part(w6cT2Rep(uA(17), 30000, [w6cT2Copy({ file_id: 1, boundary_line: 18, last_ts_ms: 12000 })]), { calls, arm: 'control' }),
+    fH1: w6cT2Part(w6cT2Rep(uH(2), 600, [w6cT2Copy({ file_id: 2, boundary_line: 2, after_count: 3, summary_line: 3, next_boundary_line: 4, next_boundary_ts_ms: 700, last_ts_ms: 701 })])),
+    fH2: w6cT2Part(w6cT2Rep(uH(4), 700, [w6cT2Copy({ file_id: 2, boundary_line: 4, after_count: 3, summary_line: 5, next_boundary_line: 6, next_boundary_ts_ms: 800, last_ts_ms: 801 })])),
+    fH3: w6cT2Part(w6cT2Rep(uH(6), 800, [w6cT2Copy({ file_id: 2, boundary_line: 6, summary_line: 7, last_ts_ms: 801 })])),
+    fGhost: w6cT2Part(w6cT2Rep(w6cT2Uid(0x99, 1), 5000, [w6cT2Copy({ file_id: 1, boundary_line: 99 })]), { arm: 'control' }),
+    fGhostMeasured: w6cT2Part(w6cT2Rep(w6cT2Uid(0x99, 2), 11000, [w6cT2Copy({ file_id: 1, boundary_line: 99, last_ts_ms: 11000 })])),
+    at: (ts: number): W6cT2Part => w6cT2Part(w6cT2Rep(w6cT2Uid(0x98, ts), ts, [w6cT2Copy({ file_id: 1, boundary_line: 99 })])),
+  };
+}
+
+/** Store 2: one card verdict each, every delivery window closed. B names only another leaf (mismatch). C1's window
+ *  meets C2's boundary before C1's line, which sits after C2 (none). D has two copies: the live one (file 3, the holding
+ *  copy) names D, the retired one (file 4, more rows after the boundary, so the WINDOW copy) names another leaf
+ *  (served). E's only attachment is past CARD_ATTACHMENT_MAX_BYTES by its stored raw_len (none, one unread). F's line is
+ *  the 41st row after its boundary (none). C2 has no leaf. */
+function w6cT2CardStore() {
+  const u = (seed: number) => (n: number): string => w6cT2Uid(seed, n);
+  const [uB, uC, uD, uE, uF] = [u(0xb), u(0xc), u(0xd), u(0xe), u(0xf)];
+  const B = [w6cT2Op(uB(1), 39000), w6cT2Asst(uB(2), 39500), w6cT2Bnd(uB(3), 40000), w6cT2Sum(uB(4), 40001),
+    w6cT2Att(uB(5), 40002, w6cT2Line(W6C_T2_LEAF.X)), w6cT2Asst(uB(6), 40100)];
+  const C = [w6cT2Op(uC(1), 49000), w6cT2Asst(uC(2), 49500), w6cT2Bnd(uC(3), 50000), w6cT2Sum(uC(4), 50001), w6cT2Asst(uC(5), 50100),
+    w6cT2Bnd(uC(6), 60000), w6cT2Sum(uC(7), 60001), w6cT2Att(uC(8), 60002, w6cT2Line(W6C_T2_LEAF.C1))];
+  const D = [w6cT2Op(uD(1), 69000), w6cT2Asst(uD(2), 69500), w6cT2Bnd(uD(3), 70000), w6cT2Sum(uD(4), 70001),
+    w6cT2Att(uD(5), 70002, w6cT2Line(W6C_T2_LEAF.D)), w6cT2Att(uD(6), 70003, w6cT2Line(W6C_T2_LEAF.X)),
+    w6cT2Asst(uD(7), 70100), w6cT2Asst(uD(8), 70200), w6cT2Asst(uD(9), 70300)];
+  const E = [w6cT2Op(uE(1), 79000), w6cT2Asst(uE(2), 79500), w6cT2Bnd(uE(3), 80000), w6cT2Sum(uE(4), 80001),
+    w6cT2Att(uE(5), 80002, w6cT2Line(W6C_T2_LEAF.E), { rawLen: w6cLib.CARD_ATTACHMENT_MAX_BYTES + 1 }), w6cT2Bnd(uE(6), 90000)];
+  const F = [w6cT2Op(uF(1), 99000), w6cT2Asst(uF(2), 99500), w6cT2Bnd(uF(3), 100000), w6cT2Sum(uF(4), 100001),
+    ...Array.from({ length: 39 }, (_, i) => w6cT2Asst(uF(5 + i), 100100 + i)),          // lines 5 to 43
+    w6cT2Att(uF(44), 101000, w6cT2Line(W6C_T2_LEAF.F))];                                // line 44: the 41st row after line 3
+  const all = (rows: W6cT2Row[]): string[] => rows.map((r) => r.uuid);
+  const st = w6cT2Plant({
+    transcripts: [
+      { pk: 1, ccUuid: w6cT2Uid(0xcd, 1), rows: B, files: [{ fileId: 1, uuids: all(B) }] },
+      { pk: 2, ccUuid: w6cT2Uid(0xcd, 2), rows: C, files: [{ fileId: 2, uuids: all(C) }] },
+      { pk: 3, ccUuid: w6cT2Uid(0xcd, 3), rows: D, files: [
+        { fileId: 3, uuids: [1, 2, 3, 4, 5, 7].map(uD) },
+        { fileId: 4, sourceKey: 'fixture-retired', status: 'retired', uuids: [1, 2, 3, 4, 6, 7, 8, 9].map(uD) },
+      ] },
+      { pk: 4, ccUuid: w6cT2Uid(0xcd, 4), rows: E, files: [{ fileId: 5, uuids: all(E) }] },
+      { pk: 5, ccUuid: w6cT2Uid(0xcd, 5), rows: F, files: [{ fileId: 6, uuids: all(F) }] },
+    ],
+    nodes: [
+      { id: W6C_T2_LEAF.B, boundary: uB(3), status: 'not-requested', createdMs: 41000 },
+      { id: W6C_T2_LEAF.C1, boundary: uC(3), status: 'not-requested', createdMs: 51000 },
+      { id: W6C_T2_LEAF.D, boundary: uD(3), status: 'not-requested', createdMs: 71000 },
+      { id: W6C_T2_LEAF.E, boundary: uE(3), status: 'not-requested', createdMs: 81000 },
+      { id: W6C_T2_LEAF.F, boundary: uF(3), status: 'not-requested', createdMs: 101000 },
+    ],
+  });
+  const M = W6C_T2_MODEL;
+  return {
+    ...st,
+    fB: w6cT2Part(w6cT2Rep(uB(3), 40000, [w6cT2Copy({ file_id: 1, boundary_line: 3, after_count: 3, summary_line: 4, last_ts_ms: 40100, rows: [[6, 40100, null, null, uB(6), M]] })])),
+    fC1: w6cT2Part(w6cT2Rep(uC(3), 50000, [w6cT2Copy({ file_id: 2, boundary_line: 3, after_count: 5, summary_line: 4, next_boundary_line: 6, next_boundary_ts_ms: 60000, last_ts_ms: 60002, rows: [[5, 50100, null, null, uC(5), M]] })])),
+    fC2: w6cT2Part(w6cT2Rep(uC(6), 60000, [w6cT2Copy({ file_id: 2, boundary_line: 6, after_count: 2, summary_line: 7, last_ts_ms: 60002 })])),
+    fD: w6cT2Part(w6cT2Rep(uD(3), 70000, [
+      w6cT2Copy({ file_id: 3, boundary_line: 3, after_count: 3, summary_line: 4, last_ts_ms: 70100, rows: [[6, 70100, null, null, uD(7), M]] }),
+      w6cT2Copy({ file_id: 4, source_key: 'fixture-retired', boundary_line: 3, after_count: 5, summary_line: 4, last_ts_ms: 70300,
+        rows: [[6, 70100, null, null, uD(7), M], [7, 70200, null, null, uD(8), M], [8, 70300, null, null, uD(9), M]] }),
+    ])),
+    fE: w6cT2Part(w6cT2Rep(uE(3), 80000, [w6cT2Copy({ file_id: 5, boundary_line: 3, after_count: 3, summary_line: 4, next_boundary_line: 6, next_boundary_ts_ms: 90000, last_ts_ms: 90000 })])),
+    fF: w6cT2Part(w6cT2Rep(uF(3), 100000, [w6cT2Copy({ file_id: 6, boundary_line: 3, after_count: 41, summary_line: 4, last_ts_ms: 101000 })])),
+  };
+}
+
+/** Store 3: G's delivery window is still open at W6C_T2_NOW (live, two rows, no next boundary, no end-of-file, its
+ *  leaf 1 s old); U's boundary row is a member of no file. */
+function w6cT2WaitStore() {
+  const uG = (n: number): string => w6cT2Uid(0x6, n);
+  const uU = (n: number): string => w6cT2Uid(0x7, n);
+  const G = [w6cT2Op(uG(1), 149000), w6cT2Asst(uG(2), 149500), w6cT2Bnd(uG(3), 150000), w6cT2Sum(uG(4), 150001), w6cT2Asst(uG(5), 150100)];
+  const U = [w6cT2Op(uU(1), 159000), w6cT2Bnd(uU(2), 160000)];
+  const st = w6cT2Plant({
+    transcripts: [
+      { pk: 1, ccUuid: w6cT2Uid(0xce, 1), rows: G, files: [{ fileId: 1, uuids: G.map((r) => r.uuid) }] },
+      { pk: 2, ccUuid: w6cT2Uid(0xce, 2), rows: U, files: [{ fileId: 2, uuids: [uU(1)] }] },
+    ],
+    nodes: [
+      { id: W6C_T2_LEAF.G, boundary: uG(3), status: 'not-requested', createdMs: W6C_T2_NOW - 1000 },
+      { id: W6C_T2_LEAF.U, boundary: uU(2), status: 'not-requested', createdMs: 161000 },
+    ],
+  });
+  return {
+    ...st,
+    fG: w6cT2Part(w6cT2Rep(uG(3), 150000, [w6cT2Copy({ file_id: 1, boundary_line: 3, after_count: 2, summary_line: 4, last_ts_ms: 150100 })])),
+    fU: w6cT2Part(w6cT2Rep(uU(2), 160000, [w6cT2Copy({ file_id: 2, boundary_line: 2 })])),
+  };
+}
+
+w6cDescribe('W2-6 Task 2: the five spec counters, their folds and their place (W2-D87, W2-D15)', () => {
+  w6cIt('COUNTER_UNMEASURED gains this task\'s seven words, together, in place; COUNTER_MEASURES\' first five entries are this task\'s specs (U7)', () => {
+    const L = [...W6C_T2.COUNTER_UNMEASURED];
+    const SEVEN = ['boundary-absent', 'boundary-moved', 'leaf-absent', 'leaf-ambiguous', 'boundary-uncopied', 'no-measured-tick', 'card-wait'];
+    const i = L.indexOf(SEVEN[0]!);
+    w6cExpect(L.slice(i, i + SEVEN.length)).toEqual(SEVEN);
+    w6cExpect(L[0]).toBe('window-unmeasured');
+    const specs = [W6C_T2.COMPLIANCE, W6C_T2.ECHO_HITS, W6C_T2.LAG, W6C_T2.CARD_SERVED, W6C_T2.CARD_ID_MISMATCH];
+    specs.forEach((s, k) => {
+      w6cExpect(W6C_T2.COUNTER_MEASURES[W6C_NAMES[k]!], W6C_NAMES[k]).toBe(s);
+      w6cExpect(Object.isFrozen(s), W6C_NAMES[k]).toBe(true);
+    });
+    w6cExpect(W6C_T2.CARD_SERVED.measure, 'one verdict, projected twice').toBe(W6C_T2.CARD_ID_MISMATCH.measure);
+  });
+
+  w6cIt('foldCompliance: every PARSE_STATUS word counted, a status outside it apart, ok plus degraded over every measured window', () => {
+    const t = W6C_T2.foldCompliance(['not-requested', 'ok', 'degraded', 'invalid', 'fixture-status']);
+    w6cExpect(t).toEqual({
+      status: { ok: 1, degraded: 1, invalid: 1, absent: 0, 'not-requested': 1, 'parse-failed': 0 },
+      out_of_vocabulary: 1, ok_degraded: { num: 2, den: 5 },
+    });
+    w6cExpect(Object.keys(t.status as object), 'the distribution is keyed by lib\'s PARSE_STATUS, all of it').toEqual([...w6cLib.PARSE_STATUS]);
+  });
+
+  w6cIt('every fold refuses nothing: the frame never folds an empty stratum (its summary is null), so no share is 0/0 and no sum is a measured 0', () => {
+    const folds: Array<[string, (v: unknown[]) => unknown]> = [['compliance', W6C_T2.foldCompliance], ['echo', W6C_T2.foldEcho], ['lag', W6C_T2.foldLag],
+      ['served', W6C_T2.foldCardFor('served')], ['mismatch', W6C_T2.foldCardFor('mismatch')]];
+    for (const [label, fold] of folds) w6cExpect(() => fold([]), label).toThrow(/a fold over no measured window is a defect/);
+  });
+
+  w6cIt('foldEcho: sums over measured windows, unreadable merged word by word, gap = recall_calls - hits', () => {
+    w6cExpect(W6C_T2.foldEcho([
+      { hits: 1, errors: 1, untimed: 1, unreadable: { tombstone: 1 }, prov_stale: 0, recall_calls: 3, gap: 2 },
+      { hits: 2, errors: 0, untimed: 0, unreadable: { tombstone: 1, 'no-tool-result': 2 }, prov_stale: 1, recall_calls: 1, gap: -1 },
+    ])).toEqual({ hits: 3, errors: 1, untimed: 1, unreadable: { tombstone: 2, 'no-tool-result': 2 }, prov_stale: 1, recall_calls: 4, gap: 1 });
+  });
+
+  w6cIt('foldLag: the measured lags, ascending', () => {
+    w6cExpect(W6C_T2.foldLag([{ lag_ms: 50, tick_ts_ms: 10 }, { lag_ms: 7, tick_ts_ms: 9 }])).toEqual({ lag_ms: [7, 50] });
+  });
+
+  w6cIt('foldCardFor: served and mismatch each count their own verdict over one shared distribution; any other word throws', () => {
+    const vs = [{ verdict: 'served', attachments_unread: 0 }, { verdict: 'mismatch', attachments_unread: 0 },
+      { verdict: 'mismatch', attachments_unread: 0 }, { verdict: 'none', attachments_unread: 1 }];
+    const common = { verdicts: { served: 1, mismatch: 2, none: 1 }, attachments_unread: 1 };
+    w6cExpect(W6C_T2.foldCardFor('served')(vs)).toEqual({ ...common, n: 1 });
+    w6cExpect(W6C_T2.foldCardFor('mismatch')(vs)).toEqual({ ...common, n: 2 });
+    w6cExpect(() => W6C_T2.foldCardFor('none')).toThrow(TypeError);
+    w6cExpect(() => W6C_T2.foldCardFor('served')([{ verdict: 'wait', attachments_unread: 0 }]), 'a wait is unmeasured, never folded').toThrow(TypeError);
+  });
+
+  w6cIt('the card verdict is lib\'s, the window rule is the gate\'s, and the counters table is never read (module scan; CONTROL: each pattern sees a planted line)', () => {
+    const callOf = (name: string): RegExp => new RegExp(`\\b${name}\\(`);
+    const declOf = (name: string): RegExp => new RegExp(`\\bfunction\\s+${name}\\b|\\b(?:const|let|var)\\s+${name}\\b`);
+    w6cExpect(callOf('cardIdsIn').test('    ids.push(...cardIdsIn(k.primary));'), 'CONTROL').toBe(true);
+    w6cExpect(declOf('decideCardDelivery').test('function decideCardDelivery({ ids }) {'), 'CONTROL').toBe(true);
+    w6cExpect(/\bend_inclusive\s*\?/.test('const inside = w.end_inclusive ? ts <= e : ts < e;'), 'CONTROL').toBe(true);
+    w6cExpect(/\bFROM\s+counters\b/i.test("db.prepare('SELECT n FROM counters WHERE name = ?')"), 'CONTROL').toBe(true);
+    const code = w6cCode(W6C_SRC);
+    for (const f of ['decideCardDelivery', 'cardIdsIn', 'cardWindowComplete']) {
+      w6cExpect(code.filter((l) => callOf(f).test(l)), `${f}: called once`).toHaveLength(1);
+      w6cExpect(code.filter((l) => declOf(f).test(l)), `${f}: never declared here`).toEqual([]);
+    }
+    w6cExpect(code.filter((l) => /\bend_inclusive\s*\?/.test(l)), 'the inclusion rule is spelled once, in the gate (W2-D14)').toEqual([]);
+    w6cExpect(code.filter((l) => /\bFROM\s+counters\b/i.test(l)), 'the node-wide counters table is never read (W2-D87)').toEqual([]);
+    w6cExpect(code.filter((l) => l.includes(w6cLib.CARD_PREFIX)), 'no card line text is spelled here').toEqual([]);
+  });
+});
+
+w6cDescribe('W2-6 Task 2: the five spec counters over fixture stores (W2-D87, W2-D86, U9, U10)', () => {
+  w6cIt('compliance: the depth-0 leaf\'s status, verbatim; no boundary, no leaf and two leaves are their own words (CONTROL: a depth-1 node names A1 too)', () => {
+    const st = w6cT2EchoStore();
+    w6cT2With(st.dbFile, (cs) => {
+      w6cExpect(W6C_T2.boundaryLeafOf(cs, st.uA(3))).toMatchObject({ state: 'leaf', transcript_pk: 1, node_id: W6C_T2_LEAF.A1, status: 'not-requested', created_ms: 10500 });
+      const c = (p: W6cT2Part): W6cT2Value => W6C_T2.complianceAt(w6cT2Ctx(cs, p));
+      w6cExpect(c(st.fA1)).toEqual({ state: 'measured', value: 'not-requested' });
+      w6cExpect(c(st.fH1)).toEqual({ state: 'measured', value: 'degraded' });
+      w6cExpect(c(st.fH2), 'outside PARSE_STATUS: reported as stored, never folded').toEqual({ state: 'measured', value: 'fixture-status' });
+      w6cExpect(c(st.fA2)).toEqual({ state: 'unmeasured', why: 'leaf-absent' });
+      w6cExpect(c(st.fGhost)).toEqual({ state: 'unmeasured', why: 'boundary-absent' });
+      w6cExpect(c(st.fH3), 'two depth-0 leaves name H3').toEqual({ state: 'unmeasured', why: 'leaf-ambiguous' });
+      w6cExpect(W6C_T2.cardAt(w6cT2Ctx(cs, st.fH3)), 'the card reads the same leaf rule').toEqual({ state: 'unmeasured', why: 'leaf-ambiguous' });
+      const nodes = (cs.db as { prepare(s: string): { all(...a: unknown[]): unknown[] } })
+        .prepare('SELECT depth FROM nodes n JOIN entries e ON e.entry_id = n.boundary_entry_id WHERE e.uuid = ? ORDER BY depth').all(st.uA(3));
+      w6cExpect(nodes, 'CONTROL: two nodes name A1, at depth 0 and depth 1').toEqual([{ depth: 0 }, { depth: 1 }]);
+    });
+  });
+
+  w6cIt('lag: the newest tick at or before the boundary with a measured lag, by ts_ms then tick_id; none is no-measured-tick', () => {
+    const st = w6cT2EchoStore();
+    w6cT2With(st.dbFile, (cs) => {
+      const l = (p: W6cT2Part): W6cT2Value => W6C_T2.lagAt(w6cT2Ctx(cs, p));
+      w6cExpect(l(st.fA1), 'the tick AT the boundary\'s ts counts').toEqual({ state: 'measured', value: { lag_ms: 50, tick_ts_ms: 10000 } });
+      w6cExpect(l(st.at(9900)), 'the null-lag tick at 9800 is passed over').toEqual({ state: 'measured', value: { lag_ms: 1200, tick_ts_ms: 9500 } });
+      w6cExpect(l(st.fA2)).toEqual({ state: 'measured', value: { lag_ms: 9, tick_ts_ms: 10001 } });
+      w6cExpect(l(st.at(4000))).toEqual({ state: 'unmeasured', why: 'no-measured-tick' });
+    });
+  });
+
+  w6cIt('echo hits: by stored provenance and the first tool_result, inside the window by the gate\'s rule, before the next boundary; every other shape counted apart (U9, U10)', () => {
+    const st = w6cT2EchoStore();
+    w6cExpect(st.fA1.window, 'CONTROL: A1\'s window is measured, [10000, 30000) exclusive, with three of the four calls')
+      .toMatchObject({ state: 'measured', start_ms: 10000, end_ms: 30000, end_inclusive: false, calls: 3, producer: 'anthropic' });
+    w6cT2With(st.dbFile, (cs) => {
+      w6cExpect(W6C_T2.echoAt(w6cT2Ctx(cs, st.fA1))).toEqual({ state: 'measured', value: {
+        hits: 1, errors: 1, untimed: 1, unreadable: { tombstone: 1, 'no-tool-result': 1 }, prov_stale: 2, recall_calls: 3, gap: 2,
+      } });
+    });
+  });
+
+  w6cIt('echo hits: an unmeasured window is window-unmeasured, a boundary the store does not hold is boundary-absent, and one it holds at another line is boundary-moved, never 0 hits (CONTROLs: the row cap cut; a measured window)', () => {
+    const st = w6cT2EchoStore();
+    w6cExpect([st.fA1Cut.window.state, st.fGhostMeasured.window.state], 'CONTROL').toEqual(['unmeasured', 'measured']);
+    w6cT2With(st.dbFile, (cs) => {
+      w6cExpect(W6C_T2.echoAt(w6cT2Ctx(cs, st.fA1Cut))).toEqual({ state: 'unmeasured', why: 'window-unmeasured' });
+      w6cExpect(W6C_T2.complianceAt(w6cT2Ctx(cs, st.fA1Cut)), 'compliance needs no window: still measured (U5)').toEqual({ state: 'measured', value: 'not-requested' });
+      w6cExpect(W6C_T2.echoAt(w6cT2Ctx(cs, st.fGhostMeasured))).toEqual({ state: 'unmeasured', why: 'boundary-absent' });
+      w6cExpect(W6C_T2.echoAt(w6cT2Ctx(cs, st.fA1Moved)), 'the store holds A1 at line 3, and the measure reported line 2').toEqual({ state: 'unmeasured', why: 'boundary-moved' });
+    });
+  });
+
+  w6cIt('card: served, mismatch and none by lib\'s decideCardDelivery; the holding copy, the next-boundary stop, the 40-row cap and the size bound each decide one case', () => {
+    const st = w6cT2CardStore();
+    w6cExpect((w6cGate.windowCopyOf(st.fD.boundary.copies) as W6cR).file_id, 'CONTROL: D\'s WINDOW copy is the retired file 4').toBe(4);
+    w6cExpect((w6cGate.producerCopyOf(st.fD.boundary.copies) as W6cR).file_id, 'CONTROL: D\'s holding copy is the live file 3').toBe(3);
+    w6cT2With(st.dbFile, (cs) => {
+      const card = (p: W6cT2Part): W6cT2Value => W6C_T2.cardAt(w6cT2Ctx(cs, p));
+      const verdict = (v: string, unread = 0): W6cT2Value => ({ state: 'measured', value: { verdict: v, attachments_unread: unread } });
+      w6cExpect(card(st.fB), 'B names only another leaf').toEqual(verdict('mismatch'));
+      w6cExpect(card(st.fC1), 'C1\'s line sits past C2\'s boundary').toEqual(verdict('none'));
+      w6cExpect(card(st.fC2)).toEqual({ state: 'unmeasured', why: 'leaf-absent' });
+      w6cExpect(card(st.fD), 'the holding copy, not the window copy').toEqual(verdict('served'));
+      w6cExpect(card(st.fE), 'skipped unread past CARD_ATTACHMENT_MAX_BYTES, as card.mjs skips it').toEqual(verdict('none', 1));
+      w6cExpect(card(st.fF), 'the line is the 41st row after the boundary').toEqual(verdict('none'));
+    });
+  });
+
+  w6cIt('card parity CONTROL (D-6562): card.mjs\'s own measureCardDelivery, over the same store, measures the same five leaves with the same served and mismatch counts (each leaf\'s verdict is the card case\'s)', () => {
+    const st = w6cT2CardStore();
+    const ours = w6cT2With(st.dbFile, (cs) => [st.fB, st.fC1, st.fD, st.fE, st.fF].map((p) => W6C_T2.cardAt(w6cT2Ctx(cs, p))));
+    const w = w6cStore.openWriter(st.dbFile);
+    try {
+      w6cStore.withTx(w, 'NORMAL', () => { w6cStore.setStep(w, 'card-measure', 1, '0', null); });
+      const theirs = (w6cCardMod as unknown as W6cR).measureCardDelivery(w, { nowMs: W6C_T2_NOW, budgetLeft: () => true }, { bytes: 0 });
+      w6cExpect(theirs).toEqual({ measured: 5, served: 1, mismatch: 1, waiting: 0 });
+    } finally {
+      w6cStore.closeWriter(w);
+    }
+    w6cExpect(ours.every((v) => v.state === 'measured')).toBe(true);
+    w6cExpect(ours.filter((v) => v.value.verdict === 'served')).toHaveLength(1);
+    w6cExpect(ours.filter((v) => v.value.verdict === 'mismatch')).toHaveLength(1);
+  });
+
+  w6cIt('card: a window still open at the read instant is card-wait, never none; a boundary no copy holds is boundary-uncopied (CONTROL: the same G past CARD_MEASURE_MAX_WAIT_MS is none)', () => {
+    const st = w6cT2WaitStore();
+    w6cT2With(st.dbFile, (cs) => {
+      w6cExpect(W6C_T2.cardAt(w6cT2Ctx(cs, st.fG))).toEqual({ state: 'unmeasured', why: 'card-wait' });
+      w6cExpect(W6C_T2.cardAt(w6cT2Ctx(cs, st.fG, W6C_T2_NOW + w6cLib.CARD_MEASURE_MAX_WAIT_MS)), 'CONTROL')
+        .toEqual({ state: 'measured', value: { verdict: 'none', attachments_unread: 0 } });
+      w6cExpect(W6C_T2.cardAt(w6cT2Ctx(cs, st.fU))).toEqual({ state: 'unmeasured', why: 'boundary-uncopied' });
+    });
+  });
+
+  w6cIt('the five specs through Task 1\'s frame: windowRow asks each, stratify folds each; one card verdict per boundary, projected twice; a changed family tallied apart (U5, U8)', () => {
+    const st = w6cT2EchoStore();
+    const STUB = { source: 'fixture: the sixth counter is not this task\'s', measure: (): W6cR => ({ state: 'unmeasured', why: 'window-unmeasured' }),
+      fold: (): never => { throw new Error('fold called on nothing'); } };
+    const measures = { ...W6C_T2.COUNTER_MEASURES, [W6C_NAMES[5]!]: STUB };
+    const out = w6cT2With(st.dbFile, (cs) => {
+      const row = (p: W6cT2Part, changed = false): W6cR => W6C_T2.windowRow({ ctx: w6cT2Ctx(cs, p), changed, abState: w6cDrv.AB_STATES[0], measures });
+      const rows = [row(st.fA1), row(st.fA2), row(st.fH1, true), row(st.fGhost)];
+      return { rows, ...W6C_T2.stratify(rows, measures) } as W6cR;
+    });
+    const [C, E, L, S, M] = W6C_NAMES;
+    w6cExpect(out.rows[0].measures[S!]).toEqual({ state: 'measured', value: { verdict: 'served', attachments_unread: 0 } });
+    w6cExpect(out.rows[0].measures[M!].value, 'one verdict object, projected twice').toBe(out.rows[0].measures[S!].value);
+    const ta = out.strata.treatment.anthropic.counters;
+    w6cExpect(ta[C!]).toMatchObject({ measured: 1, summary: { ok_degraded: { num: 0, den: 1 } } });
+    w6cExpect(ta[E!]).toMatchObject({ measured: 1, summary: { hits: 1, errors: 1, recall_calls: 3, gap: 2 } });
+    w6cExpect(ta[S!]).toMatchObject({ summary: { n: 1, verdicts: { served: 1, mismatch: 0, none: 0 } } });
+    const ca = out.strata.control.anthropic.counters;
+    w6cExpect(ca[C!]).toEqual({ measured: 0, unmeasured: 2, unmeasured_by: { 'boundary-absent': 1, 'leaf-absent': 1 }, summary: null });
+    w6cExpect(ca[L!]).toMatchObject({ measured: 2, summary: { lag_ms: [9, 700] } });
+    w6cExpect(out.dropped_strata.changed.treatment.anthropic.counters[C!], 'H1, a changed treatment family: out of the arm cells, tallied apart under its arm (U8, V3)')
+      .toMatchObject({ measured: 1, summary: { ok_degraded: { num: 1, den: 1 } } });
+    w6cExpect(out.dropped_strata.changed.control.all.windows, 'no changed control family here (V3)').toBe(0);
+    w6cExpect([out.strata.treatment.anthropic.windows, out.strata.treatment.other.windows]).toEqual([1, 0]);
   });
 });
 

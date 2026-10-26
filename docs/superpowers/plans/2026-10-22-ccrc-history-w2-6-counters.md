@@ -2320,7 +2320,7 @@ w6cDescribe('W2-6 Task 2: the five spec counters over fixture stores (W2-D87, W2
     const out = w6cT2With(st.dbFile, (cs) => {
       const row = (p: W6cT2Part, changed = false): W6cR => W6C_T2.windowRow({ ctx: w6cT2Ctx(cs, p), changed, abState: w6cDrv.AB_STATES[0], measures });
       const rows = [row(st.fA1), row(st.fA2), row(st.fH1, true), row(st.fGhost)];
-      return { rows, ...W6C_T2.stratify(rows, measures) };
+      return { rows, ...W6C_T2.stratify(rows, measures) } as W6cR;
     });
     const [C, E, L, S, M] = W6C_NAMES;
     w6cExpect(out.rows[0].measures[S!]).toEqual({ state: 'measured', value: { verdict: 'served', attachments_unread: 0 } });
@@ -2671,7 +2671,7 @@ Expected (predicted): 46 passed (Task 1's 31 and this task's 15; 45 and 1 skippe
 
 | # | Guard | Edit (old → new) | Predicted red |
 |---|---|---|---|
-| M1 | compliance: the depth-0 rule | `WHERE boundary_entry_id = ? AND depth = 0 ORDER BY node_id` → `WHERE boundary_entry_id = ? ORDER BY node_id` | 2: compliance case (A1 answers `leaf-ambiguous`), frame case |
+| M1 | compliance: the depth-0 rule | `WHERE boundary_entry_id = ? AND depth = 0 ORDER BY node_id` → `WHERE boundary_entry_id = ? ORDER BY node_id` | 3: compliance case (A1 answers `leaf-ambiguous`), frame case, and the echo unmeasured case, whose compliance CONTROL on the cut A1 is then unmeasured (measured; predicted 2) |
 | M2 | the ok+degraded share | `num: status.ok + status.degraded,` → `num: status.ok + status.degraded + status.invalid,` | 1: foldCompliance case, `num` 3 |
 | M3 | a status outside PARSE_STATUS kept apart | `else outOfVocabulary += 1;` → `else status.absent += 1;` | 1: foldCompliance case, `absent` 1, `out_of_vocabulary` 0 |
 | M4 | the error test | `if (block.is_error === true) v.errors += 1;` → `if (block.is_error !== false) v.errors += 1;` | 2: echo case (hits 0, errors 2), frame case |
@@ -2715,6 +2715,8 @@ cd server && ./node_modules/.bin/vitest run test/dtbd.test.ts
 ```
 
 Expected: all green. In `history-replay` that includes W2-4's `node:sqlite` scan, W2-5a's W2-D74 decode scan over `deploy/*.mjs`, and Task 1's pins on the counter module (import list, names, node-wide scan). `single-definition` passes because no O14 `VOCABS` name is declared in `deploy/`: `PARSE_STATUS` and `BACKENDS` are imported, never declared, and `COMPLIANCE` and its siblings are not lib names. `dtbd` passes because the departure is cited by its issued number.
+
+*Measured over predicted (Task 2, U17):* Steps 3 and 5 measured as predicted (17 failed and 29 passed red; 46 passed green, the whole file 1178 passed). Every mutant M1 to M29 measured red, M1 with 3 failures where 2 were predicted (see its row). `typecheck-tests` was red once, which the plan did not predict: the frame case's `{ rows, ...W6C_T2.stratify(rows, measures) }` is typed as `{ rows }` alone, because spreading a `Record<string, any>` adds no keys, so `out.strata` and `out.dropped_strata` were `TS2339` errors. The literal now ends `as W6cR`, in the case's text above; the guard and every assertion are unchanged, and the suite then measured 12 passed.
 
 - [ ] **Step 8: Commit.**
 

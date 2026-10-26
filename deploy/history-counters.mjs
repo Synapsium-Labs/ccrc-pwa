@@ -31,9 +31,11 @@
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { BACKENDS, EXIT, SCHEMA_ADDED, UUID_RE, canonicalJson, sha256Hex } from '../ccd/history/lib.mjs';
+import { BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, sha256Hex } from '../ccd/history/lib.mjs';
 import { StoreError, openReader, userVersion } from '../ccd/history/store.mjs';
-import { ASSIGNMENT_ARMS, COUNTERS_DEF_V1, COUNTERS_DEF_V1_SHA256, K, K_UNIT, assembleReports, buildWindows, changedFamilies, familyKey, turnsOf, windowCopyOf } from './history-gate.mjs';
+import { holdingCopyOf } from '../ccd/history/derive.mjs';
+import { expandEntryBody } from '../ccd/history/recall.mjs';
+import { ASSIGNMENT_ARMS, COUNTERS_DEF_V1, COUNTERS_DEF_V1_SHA256, K, K_UNIT, assembleReports, buildWindows, changedFamilies, familyKey, turnsOf, windowCopyOf, windowOf } from './history-gate.mjs';
 import { AB_STATES, DriverRefusal, VERIFY_AB_KIND, loadFinalRecord, loadInput, parseArgs, prepareOut, refuse } from './history-replay.mjs';
 
 // ── the counters' names, the unmeasured words and the answers (W2-D87) ─────────────────────────────────────────────
@@ -46,6 +48,13 @@ export const COUNTER_NAMES = Object.freeze(COUNTERS_DEF_V1.map((c) => c.name));
 export const COUNTER_UNMEASURED = Object.freeze([
   'window-unmeasured',   // the window itself is unmeasured (W2-D14), and the counter needs it
   'pending',             // the stand-in every counter answers until its own measure lands (removed by W2-6 Task 3)
+  'boundary-absent',     // the store holds no boundary row with this uuid
+  'boundary-moved',      // the store holds the boundary at another line of the window copy's file than the measure printed
+  'leaf-absent',         // the boundary has no depth-0 leaf: no status, and no leaf id for a card line to name
+  'leaf-ambiguous',      // more than one depth-0 leaf names the boundary
+  'boundary-uncopied',   // no copy holds the boundary (holdingCopyOf answered null), which card.mjs reads as none (D-6562)
+  'no-measured-tick',    // no ticks row at or before the boundary has a measured lag
+  'card-wait',           // the card's delivery window was still open at the read instant
 ]);
 
 /** @typedef {{ state: 'measured', value: unknown } | { state: 'unmeasured', why: string }} Measure */
@@ -440,6 +449,269 @@ export function countCommand(flags, deps = COUNT_DEPS) {
   return writeReport(flags.out, COUNTERS_FILE, report);
 }
 
+// ── W2-6 Task 2: the five spec counters (W2-D87, W2-D86, W2-D15; spec §10.2's live A/B counters, §6.2) ─────────────
+// Report-only: nothing here feeds decideGate. Each spec is Task 1's shape: a measure of one window (Task 1's WindowCtx)
+// and a fold of one stratum's measured values, never handed none. Each reads its own named source through the run's one
+// read handle (ctx.rs, store.mjs openReader); the node-wide `counters` table is never read. No blob is decoded here: an
+// entry's body is recall.mjs's expandEntryBody, W2-1's export (W2-D86). A value that could not be measured is
+// unmeasured with a COUNTER_UNMEASURED word, never a 0.
+//   compliance        `nodes`: the status of the depth-0 leaf whose boundary opens the window, as stored, folded over lib's
+//                     PARSE_STATUS with the ok plus degraded share. Expected: not-requested throughout (W3's baseline, and
+//                     a check that nothing was steered).
+//   echo_hits         `entries` of the window copy (ctx.copy, the gate's windowCopyOf), after the boundary and before the
+//                     next main boundary, whose stored provenance is recall-echo (lib provenanceOf's structural rule, as
+//                     ingest applied it under PROV_VERSION) and whose first tool_result is not an error, inside the window
+//                     by the gate's own rule (windowOf). Beside the window's recall_calls count; the gap between the two is
+//                     reported, never repaired.
+//   lag               `ticks`: the lag_ms of the newest row at or before the boundary's ts_ms with a measured lag.
+//   card_served,      per boundary, one verdict projected twice: lib's decideCardDelivery over cardIdsIn of the
+//   card_id_mismatch  attachments in the first CARD_MEASURE_ROWS rows after the boundary in its holding copy (derive.mjs
+//                     holdingCopyOf, lib's pickHoldingCopy), with cardWindowComplete: the functions card.mjs's measure
+//                     calls. The glue around them (the rows read, `live`, the attachment size bound, the wait) is card.mjs's
+//                     deliveryOf, module-private, spelled a second time here (D-6562).
+
+const COUNTER_STMTS = new WeakMap();
+
+/** The counters' statements on one read handle, prepared once per handle. Every one is a SELECT. */
+function counterStmts(db) {
+  let s = COUNTER_STMTS.get(db);
+  if (s !== undefined) return s;
+  s = {
+    boundary: db.prepare(`SELECT b.entry_id AS entry_id, b.transcript_pk AS transcript_pk
+      FROM entries e JOIN boundaries b ON b.entry_id = e.entry_id WHERE e.uuid = ?`),
+    leaves: db.prepare('SELECT node_id, status, created_ms FROM nodes WHERE boundary_entry_id = ? AND depth = 0 ORDER BY node_id'),
+    tick: db.prepare(`SELECT tick_id, ts_ms, lag_ms FROM ticks WHERE ts_ms <= ? AND lag_ms IS NOT NULL
+      ORDER BY ts_ms DESC, tick_id DESC LIMIT 1`),
+    echoRows: db.prepare(`SELECT m.line AS line, e.entry_id AS entry_id, e.blob_id AS blob_id, e.ts_ms AS ts_ms,
+        e.prov_version AS prov_version
+      FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+      WHERE m.file_id = ? AND m.line > ? AND (? IS NULL OR m.line < ?)
+        AND (e.provenance = 'recall-echo' OR (e.provenance = 'tool' AND e.prov_version <> ?))
+      ORDER BY m.line`),
+    lineOf: db.prepare('SELECT line FROM memberships WHERE file_id = ? AND entry_id = ?'),
+    fileStatus: db.prepare('SELECT status FROM ingest_files WHERE file_id = ?'),
+    cardRows: db.prepare(`SELECT e.entry_id AS entry_id, e.type AS type, e.blob_id AS blob_id, bl.raw_len AS raw_len,
+        CASE WHEN b.entry_id IS NULL THEN 0 ELSE 1 END AS is_boundary
+      FROM memberships m JOIN entries e ON e.entry_id = m.entry_id LEFT JOIN boundaries b ON b.entry_id = e.entry_id
+      LEFT JOIN blobs bl ON bl.blob_id = e.blob_id
+      WHERE m.file_id = ? AND m.line > ? ORDER BY m.line LIMIT ?`),
+  };
+  COUNTER_STMTS.set(db, s);
+  return s;
+}
+
+/** The boundary with this uuid and the one depth-0 leaf that names it (the leaf derivation minted for it, the row
+ *  card.mjs's measure reads). Unmeasured when the store holds no such boundary, when no leaf names it, or when two do.
+ *  Task 3's re-discovery reads it too.  @param {CounterStore} rs  @param {string} boundaryUuid */
+export function boundaryLeafOf(rs, boundaryUuid) {
+  const s = counterStmts(rs.db);
+  const b = s.boundary.get(boundaryUuid);
+  if (b === undefined) return unmeasured('boundary-absent');
+  const leaves = s.leaves.all(b.entry_id);
+  if (leaves.length === 0) return unmeasured('leaf-absent');
+  if (leaves.length > 1) return unmeasured('leaf-ambiguous');
+  const [l] = leaves;
+  return {
+    state: 'leaf', entry_id: Number(b.entry_id), transcript_pk: Number(b.transcript_pk), node_id: String(l.node_id),
+    status: String(l.status), created_ms: Number(l.created_ms),
+  };
+}
+
+/** Compliance for one window: the status of the leaf whose boundary opens it, as stored, so a word outside
+ *  PARSE_STATUS is reported, never folded into another (W2-D87).  @param {WindowCtx} ctx */
+export function complianceAt(ctx) {
+  const leaf = boundaryLeafOf(ctx.rs, ctx.boundary.boundary_uuid);
+  return leaf.state === 'leaf' ? measured(leaf.status) : leaf;
+}
+
+/** Compliance over one stratum's measured statuses: lib's whole PARSE_STATUS distribution, a status outside it counted
+ *  apart, and the ok plus degraded share as {num, den}. Nothing is divided out. */
+export function foldCompliance(values) {
+  const status = Object.fromEntries(PARSE_STATUS.map((w) => [w, 0]));
+  let outOfVocabulary = 0;
+  for (const v of nonEmpty('foldCompliance', values)) {
+    if (Object.hasOwn(status, v)) status[v] += 1;
+    else outOfVocabulary += 1;
+  }
+  return { status, out_of_vocabulary: outOfVocabulary, ok_degraded: { num: status.ok + status.degraded, den: values.length } };
+}
+
+/** Lag for one window: the newest ticks row at or before the boundary's ts_ms whose lag was measured (W2-D87). Two
+ *  windows on one node near one instant share a reading (decisions §7).  @param {WindowCtx} ctx */
+export function lagAt(ctx) {
+  const t = counterStmts(ctx.rs.db).tick.get(ctx.boundary.ts_ms);
+  return t === undefined ? unmeasured('no-measured-tick') : measured({ lag_ms: Number(t.lag_ms), tick_ts_ms: Number(t.ts_ms) });
+}
+
+/** Lag over one stratum: the measured lags, ascending. No statistic COUNTERS_DEF_V1 does not define is added here. */
+export function foldLag(values) {
+  return { lag_ms: nonEmpty('foldLag', values).map((v) => v.lag_ms).sort((a, b) => a - b) };
+}
+
+/** Is `ts` inside the window? The gate's windowOf, over one synthetic call at `ts`, counts it or not, so the rule
+ *  (inclusive start, exclusive or inclusive end, W2-D14) is spelled once, in the gate.
+ *  @param {WindowCtx} ctx  @param {number} ts */
+function insideWindow(ctx, ts) {
+  return windowOf(ctx.boundary, [[ts, 0, 'echo']]).calls === 1;
+}
+
+/** The first tool_result block of a stored user body: the block provenanceOf paired (lib toolResultIdsOf reads the
+ *  blocks in this order). Null when the body holds none. */
+function firstToolResult(body) {
+  if (!Array.isArray(body)) return null;
+  return body.find((b) => b !== null && typeof b === 'object' && b.type === 'tool_result') ?? null;
+}
+
+/** Echo hits for one window (W2-D87, U9, U10): the window copy's rows between the boundary and the next main boundary,
+ *  each timed one placed in the window by the gate's rule. The store must hold the boundary at the line the report
+ *  printed (boundary-moved otherwise). A row classified under another PROV_VERSION, stored as recall-echo or as tool, is
+ *  `prov_stale`; of the current recall-echo rows, one with no ts is `untimed`; a body expandEntryBody cannot give, or one
+ *  with no tool_result, is counted under its own word in `unreadable`; of the rest, an `is_error: true` first tool_result
+ *  is an error and any other a hit. `gap` is the window's recall_calls minus its hits, reported, never repaired.
+ *  @param {WindowCtx} ctx */
+export function echoAt(ctx) {
+  if (ctx.copy === null) return unmeasured('window-unmeasured');
+  const s = counterStmts(ctx.rs.db);
+  const b = s.boundary.get(ctx.boundary.boundary_uuid);
+  if (b === undefined) return unmeasured('boundary-absent');
+  // The rows are read by the lines measure-history.py printed: a moved line or a renumbered file would read another
+  // window's rows, so the boundary must sit at its reported line of its reported file.
+  const at = s.lineOf.get(ctx.copy.file_id, b.entry_id);
+  if (at === undefined || Number(at.line) !== ctx.copy.boundary_line) return unmeasured('boundary-moved');
+  const v = { hits: 0, errors: 0, untimed: 0, unreadable: {}, prov_stale: 0, recall_calls: ctx.window.calls, gap: 0 };
+  const next = ctx.copy.next_boundary_line;
+  for (const r of s.echoRows.all(ctx.copy.file_id, ctx.copy.boundary_line, next, next, PROV_VERSION)) {
+    if (r.ts_ms !== null && !insideWindow(ctx, Number(r.ts_ms))) continue;
+    // Stale whatever it was stored as: under another PROV_VERSION a stored tool row may be an echo (U9).
+    if (Number(r.prov_version) !== PROV_VERSION) {
+      v.prov_stale += 1;
+      continue;
+    }
+    if (r.ts_ms === null) {
+      v.untimed += 1;
+      continue;
+    }
+    const k = expandEntryBody(ctx.rs, { entry_id: Number(r.entry_id), blob_id: Number(r.blob_id) });
+    const block = k.state === 'body' ? firstToolResult(k.body) : null;
+    const word = k.state !== 'body' ? k.state : block === null ? 'no-tool-result' : null;
+    if (word !== null) {
+      v.unreadable[word] = (v.unreadable[word] ?? 0) + 1;
+      continue;
+    }
+    if (block.is_error === true) v.errors += 1;
+    else v.hits += 1;
+  }
+  v.gap = v.recall_calls - v.hits;
+  return measured(v);
+}
+
+/** Echo hits over one stratum: the measured windows' counts summed, `unreadable` merged word by word, and the gap of the
+ *  sums (recall_calls - hits). */
+export function foldEcho(values) {
+  const t = { hits: 0, errors: 0, untimed: 0, unreadable: {}, prov_stale: 0, recall_calls: 0, gap: 0 };
+  for (const v of nonEmpty('foldEcho', values)) {
+    t.hits += v.hits;
+    t.errors += v.errors;
+    t.untimed += v.untimed;
+    t.prov_stale += v.prov_stale;
+    t.recall_calls += v.recall_calls;
+    for (const [w, n] of Object.entries(v.unreadable)) t.unreadable[w] = (t.unreadable[w] ?? 0) + n;
+  }
+  t.gap = t.recall_calls - t.hits;
+  return t;
+}
+
+/** Each row's card verdict, computed once: Task 1 hands every measure of one row the same frozen ctx. */
+const CARD_VERDICTS = new WeakMap();
+
+/** The card verdict for one boundary (W2-D87), projected by both card counters.  @param {WindowCtx} ctx */
+export function cardAt(ctx) {
+  let v = CARD_VERDICTS.get(ctx);
+  if (v === undefined) {
+    v = cardVerdictOf(ctx);
+    CARD_VERDICTS.set(ctx, v);
+  }
+  return v;
+}
+
+/** lib's decideCardDelivery over cardIdsIn of the attachments in the first CARD_MEASURE_ROWS rows after the boundary in
+ *  its holding copy, stopping at the next boundary, with lib's cardWindowComplete. An attachment whose stored raw_len
+ *  passes CARD_ATTACHMENT_MAX_BYTES is skipped unread, as card.mjs skips it, and so is one expandEntryBody cannot give;
+ *  each is counted in `attachments_unread`. A window still open at the read instant is card-wait; a boundary no copy
+ *  holds is boundary-uncopied. The glue is card.mjs's deliveryOf, spelled a second time (D-6562).
+ *  @param {WindowCtx} ctx */
+function cardVerdictOf(ctx) {
+  const leaf = boundaryLeafOf(ctx.rs, ctx.boundary.boundary_uuid);
+  if (leaf.state !== 'leaf') return leaf;
+  const holding = holdingCopyOf(ctx.rs.db, { entry_id: leaf.entry_id, transcript_pk: leaf.transcript_pk });
+  if (holding === null) return unmeasured('boundary-uncopied');
+  const s = counterStmts(ctx.rs.db);
+  const fileId = Number(holding.file_id);
+  const line = Number(s.lineOf.get(fileId, leaf.entry_id).line);
+  const live = holding.source_key === '' && s.fileStatus.get(fileId)?.status === 'live';
+  /** @type {string[]} */
+  const ids = [];
+  let rowsSeen = 0;
+  let nextBoundary = false;
+  let unread = 0;
+  for (const r of s.cardRows.all(fileId, line, CARD_MEASURE_ROWS)) {
+    if (r.is_boundary === 1) {
+      nextBoundary = true;
+      break;
+    }
+    rowsSeen += 1;
+    if (r.type !== 'attachment') continue;
+    if (r.raw_len === null || Number(r.raw_len) > CARD_ATTACHMENT_MAX_BYTES) {
+      unread += 1;
+      continue;
+    }
+    const k = expandEntryBody(ctx.rs, { entry_id: Number(r.entry_id), blob_id: Number(r.blob_id) });
+    if (k.state !== 'body') {
+      unread += 1;
+      continue;
+    }
+    ids.push(...cardIdsIn(k.primary));
+  }
+  const eofAfter = eofAfterBoundary({ eofMs: holding.eof_ms === null ? null : Number(holding.eof_ms), boundaryTsMs: ctx.boundary.ts_ms });
+  const windowComplete = cardWindowComplete({ live, rowsSeen, nextBoundary, eofAfter, waitedMs: ctx.nowMs - leaf.created_ms });
+  const verdict = decideCardDelivery({ ids, leafId: leaf.node_id, windowComplete });
+  if (verdict === 'wait') return unmeasured('card-wait');
+  return measured({ verdict, attachments_unread: unread });
+}
+
+/** One card counter's fold: `n` counts its own verdict (card_served counts served, card_id_mismatch counts mismatch)
+ *  over the verdict distribution both share.  @param {'served'|'mismatch'} verdict */
+export function foldCardFor(verdict) {
+  if (verdict !== 'served' && verdict !== 'mismatch') throw new TypeError(`history-counters: a card counter counts served or mismatch, not ${verdict}`);
+  return (values) => {
+    const verdicts = { served: 0, mismatch: 0, none: 0 };
+    let unread = 0;
+    for (const v of nonEmpty(`foldCardFor(${verdict})`, values)) {
+      if (!Object.hasOwn(verdicts, v.verdict)) throw new TypeError(`history-counters: not a card verdict: ${v.verdict}`);
+      verdicts[v.verdict] += 1;
+      unread += v.attachments_unread;
+    }
+    return { n: verdicts[verdict], verdicts, attachments_unread: unread };
+  };
+}
+
+/** The five spec counters, each Task 1's CounterSpec with its source named (W2-D87). */
+export const COMPLIANCE = Object.freeze({
+  source: 'nodes.status of the depth-0 leaf whose boundary opens the window (lib PARSE_STATUS), with the ok plus degraded share',
+  measure: complianceAt, fold: foldCompliance,
+});
+export const ECHO_HITS = Object.freeze({
+  source: 'entries.provenance recall-echo (lib provenanceOf, stored under PROV_VERSION) in the window copy, the first tool_result through recall.mjs expandEntryBody, beside the window\'s recall_calls',
+  measure: echoAt, fold: foldEcho,
+});
+export const LAG = Object.freeze({
+  source: 'ticks.lag_ms of the newest tick at or before the boundary with a measured lag',
+  measure: lagAt, fold: foldLag,
+});
+const CARD_SOURCE = 'lib decideCardDelivery over cardIdsIn of the attachments in the first CARD_MEASURE_ROWS rows after the boundary in its holding copy (derive.mjs holdingCopyOf), with cardWindowComplete; the glue spelled again from card.mjs (D-6562)';
+export const CARD_SERVED = Object.freeze({ source: CARD_SOURCE, measure: cardAt, fold: foldCardFor('served') });
+export const CARD_ID_MISMATCH = Object.freeze({ source: CARD_SOURCE, measure: cardAt, fold: foldCardFor('mismatch') });
+
 // ── the measures, composed (W2-D87): every counter's spec, in COUNTER_NAMES' order ──────────────────────────────────
 /** The stand-in every counter is until its own task lands. @type {CounterSpec} */
 const PENDING = Object.freeze({
@@ -451,11 +723,11 @@ const PENDING = Object.freeze({
 /** One CounterSpec per counter, keyed and ordered as COUNTER_NAMES (countersReport throws on anything else). Each
  *  counter's task replaces its own line and declares its spec above this block. */
 export const COUNTER_MEASURES = Object.freeze({
-  compliance: PENDING,
-  echo_hits: PENDING,
-  lag: PENDING,
-  card_served: PENDING,
-  card_id_mismatch: PENDING,
+  compliance: COMPLIANCE,
+  echo_hits: ECHO_HITS,
+  lag: LAG,
+  card_served: CARD_SERVED,
+  card_id_mismatch: CARD_ID_MISMATCH,
   rediscovery: PENDING,
 });
 
