@@ -1,7 +1,7 @@
 // Delegation broker wave 4, PR1 Task 1.2: the `delegation` frame, DECIDED (spec §5.8, §8.4; D-6999, D-7002, D-7023).
 //
 // THIS MODULE IS L1. It imports the shared wire, the pure model, the policy's one classifier of unowned work, the correlation
-// module's tree key and the binding's R9 decider, and nothing else: no filesystem, no store, no clock, no census adapter (`gitref.ts` is L3, so the census shape is
+// module's tree key, the binding's R9 decider and the divergence sweep's ccd identity of a worktree, and nothing else: no filesystem, no store, no clock, no census adapter (`gitref.ts` is L3, so the census shape is
 // declared structurally below; `DelegationCensusPass` and the lane's `absences` values are assignable to it as they are). It makes no
 // durable write. The watcher (L4) gathers the inputs after a pass and broadcasts what this returns.
 //
@@ -35,12 +35,13 @@ import {
 import { isUnownedWorkReason } from './delegation-policy.js';
 import { delegationTreeKey } from './delegation-correlation.js';
 import { claimantAt } from './runBinding.js';
+import { ccdIdForWorktree } from '../divergence.js';
 
 /** How many newest closed runs the R9 mapping reads (L4 passes it to the store's narrow read). A worker whose run is older than
  *  that window falls back to its own row: the rider's store read by `sessionId` removes the bound. */
 export const DELEGATION_PROJECTION_CLOSED_RUNS = 200;
 
-export interface DelegationProjectionSession { id: string; status: SessionStatus; workdir?: string }
+export interface DelegationProjectionSession { id: string; status: SessionStatus }
 /** One run's stamp, from the narrow read `delegationRunStamps`, never the full `runs()` hydration. */
 export type DelegationProjectionRun = Pick<RunSummary, 'id' | 'sessionId' | 'claimedBy' | 'openedAt' | 'closedAt'>;
 export interface DelegationProjectionInput {
@@ -69,7 +70,12 @@ const bySortKey = <T>(key: (x: T) => readonly string[]) => (a: T, b: T): number 
 export function projectDelegation(input: DelegationProjectionInput): DelegationProjectionWire {
   const { checkpoint, census } = input;
   const sessions = new Map(input.sessions.map((s) => [s.id, s]));
-  const owned = ownedPaths(input.sessions);
+  // Programme ownership wins (D-7006): a listed session owns a tree when its id is the tree's ccd id (`ccdIdForWorktree`, the
+  // divergence sweep's identity), never by comparing path spellings. A path that names no ccd id, or no path, is owned by nobody.
+  const owns = (project: string, path: string | null): boolean => {
+    const id = path === null ? null : ccdIdForWorktree(project, path);
+    return id !== null && sessions.has(id);
+  };
   const activities = new Map(checkpoint.activities.map((a) => [a.activityId, a]));
   const absent = new Set(input.absences.map((a) => delegationTreeKey(a.project, a.adminRecord)));
   const groupOf = (id: string): DelegationRowGroup => (sessions.has(id) ? 'parent' : 'offline-coordinator');
@@ -106,7 +112,7 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
   const leaseRows: DelegationLeaseWire[] = [];
   for (const l of unreleased) {
     const k = delegationTreeKey(l.project, l.adminRecord);
-    if (owned.has(l.canonicalPath) || (conflicting.has(k) && l.sourceKind !== 'raw')) continue;
+    if (owns(l.project, l.canonicalPath) || (conflicting.has(k) && l.sourceKind !== 'raw')) continue;
     const workspace = presence(l.project, l.adminRecord);
     if (workspace === 'absent') continue;
     const coordinator = coordinatorOf(l.parentId, l.firstObservedAt);
@@ -123,7 +129,7 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
 
   const unownedRows: DelegationUnownedWire[] = [];
   for (const [k, a] of newest) {
-    if ((leasedTrees.has(k) && a.verdict !== 'conflicting') || (a.canonicalPath !== null && owned.has(a.canonicalPath))) continue;
+    if ((leasedTrees.has(k) && a.verdict !== 'conflicting') || owns(a.project, a.canonicalPath)) continue;
     const workspace = presence(a.project, a.adminRecord);
     if (workspace === 'absent') continue;
     unownedRows.push({
@@ -165,11 +171,6 @@ function presenceOf(
   if (records === null) return 'unmeasured';
   if (records.some((r) => r.adminRecord === adminRecord && r.state === 'present')) return 'present';
   return absent.has(delegationTreeKey(project, adminRecord)) ? 'absent' : 'unmeasured';
-}
-
-/** Programme ownership wins: the workdirs of the listed sessions. */
-function ownedPaths(sessions: readonly DelegationProjectionSession[]): ReadonlySet<string> {
-  return new Set(sessions.flatMap((s) => (s.workdir === undefined ? [] : [s.workdir])));
 }
 
 /** The projection's closed words, for the mail-routes kebab census: derived from `shared/api.ts`'s four tables, never re-spelled. */

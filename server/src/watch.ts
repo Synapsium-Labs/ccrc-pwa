@@ -10285,7 +10285,7 @@ export interface DelegationLaneStall {
 /** `hibernatedAt` optional (D-5242): absent reads as not asleep, the old behaviour, so a caller that never knew the field
  *  is unchanged; the tick hands the assembled rows, which always carry it. `stoppedBy` and `archivedAt` are optional for the same
  *  reason: absent reads as no stop evidence (D-5433). */
-type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt' | 'stoppedBy' | 'archivedAt' | 'workdir'>>;
+type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt' | 'stoppedBy' | 'archivedAt'>>;
 type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'>;
 type DelegationVerdictCounts = { unresolved: number; conflicting: number; unmeasured: number };
 

@@ -224,6 +224,18 @@ describe('projectDelegation: programme ownership, the inferred marker and unowne
     expect(out.unowned).toEqual([]);
   });
 
+  it('W4-P17 (D-7006): ownership is the ccd id of the tree, never the spelling of a path: a symlinked workdir still owns its tree', () => {
+    const out = projectDelegation(input({
+      leases: [lease({ leaseId: 'l1', adminRecord: 'slug', canonicalPath: '/real/project-a/slug' })],
+      attempts: [attempt({ attemptId: 'x1', adminRecord: 'other', canonicalPath: '/real/project-a/other' })],
+      census: census({ [PROJECT]: [record('slug', { canonicalPath: '/real/project-a/slug' }), record('other', { canonicalPath: '/real/project-a/other' })] }),
+      // the registry spells these sessions' workdirs `/link/project-a/...` (unresolved); the id join never reads them
+      sessions: [alive('p'), alive('project-a-slug'), alive('project-a-other')],
+    }));
+    expect(out.leases, 'the session project-a-slug owns /real/project-a/slug').toEqual([]);
+    expect(out.unowned, 'the session project-a-other owns /real/project-a/other').toEqual([]);
+  });
+
   it('W4-P10 (D-6999): every raw lease carries inferred; an agent lease does not', () => {
     const out = projectDelegation(input({
       activities: [activity({ activityId: 'a-bash', sourceKind: 'bash-worktree', upstreamId: 'toolu_wt1', executionState: 'ended' })],
