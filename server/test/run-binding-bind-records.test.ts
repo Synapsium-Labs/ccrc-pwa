@@ -1,6 +1,6 @@
 // ARCH-60 follow-up (#1407, part of #795): every bind records the incarnation it binds to. This file pins, by name, what
 // `CoordStore.bindSession` writes for the bound incarnation, and the two gaps #1407 names. Red on the merge base
-// (ce7b94dab: GAP 2, the census arms and the measured allow-list fail) and green after. GAP 1 (unplaceable) is an
+// (GAP 2, the census arms and the measured allow-list fail) and green after. GAP 1 (unplaceable) is an
 // inherited residual since round 5 of #1573 (the readers keep the merge base's id-string rule for every unplaceable
 // worker), pinned at the merge base's answer. The adopted read-back case at the end had its read half red on an earlier
 // round of this PR (the first anchor, which borrowed an earlier occupant's birth); the rollback case was red on another
@@ -261,9 +261,10 @@ describe('every bind site records an incarnation, or is named (ARCH-60 follow-up
   // occupant's birth would date it to. The read half was red on an earlier round of this PR (every unplaceable worker
   // anchored to the newest recorded birth of its id: childParentOf/claimantsOf/sessionRunRead answered coord-gone) and is
   // green on the merge base. The stamp is the merge base's: wave 2 records the earlier occupant's placeable birth
-  // (OLD_BIRTH), and no reader of the adopted worker reads it, because the worker is unplaceable (round 6 of #1573: a
-  // veto on the adopted shape took a placeable worker's birth away from its later waves, and helped no reader).
-  it('an adopted worker under a recycled name whose earlier occupant\'s run is still open reads the ADOPTING run\'s claimant, and its later wave\'s stamp changes no answer', async () => {
+  // (OLD_BIRTH), and while the adopted worker stays unplaceable no reader of it takes a birth from that stamp (round 6 of
+  // #1573: a veto on the adopted shape took a placeable worker's birth away from its later waves). A stamp IS read once a
+  // worker becomes placeable, which is why `occupantBirthOf`'s fallback must be unambiguous (round 7).
+  it('an adopted worker under a recycled name whose earlier occupant\'s run is still open reads the ADOPTING run\'s claimant, and its later wave carries the merge base\'s stamp', async () => {
     const T0 = 1_700_000_000_000;
     const OLD_BIRTH = T0 + 5000;
     let earlier = 0;

@@ -31,10 +31,11 @@ import type { ChildBirth } from './childSpent.js';
  *     ghost coordinator), and is never dropped: `bindingOf` lists it in `undecided`. Since ARCH-62 slice 4 (#1407)
  *     `CoordStore.bindSession` records the occupant's birth on a later wave it binds (`stampOccupantBirth`), so a run
  *     bound to the live worker is `bound` and a run bound to an earlier occupant is `unbound`, whatever its `openedAt`;
- *     the undecidable arm is left for rows bound before the stamp. The stamp's birth is `occupantBirthOf`'s: the newest
- *     PLACEABLE birth the session's series records for the id (the merge base's rule), else, when none can be placed,
- *     the newest birth recorded for it. No row vetoes the stamp (D-6993: the adopted arm's row cannot be told from an
- *     older build's rebind of a failed spawn). An `unborn` session keeps the id-string rule, whatever its runs record
+ *     the undecidable arm is left for rows bound before the stamp. The stamp's birth is `occupantBirthOf`'s, over every
+ *     run recording a birth for the id (the merge base's rows): the newest PLACEABLE birth (the merge base's rule), else,
+ *     when none can be placed, the one birth every row agrees on; no stamp when they disagree, or when that birth would
+ *     make the stamped run itself placeable. No row vetoes the stamp (D-6993: the adopted arm's row cannot be told from
+ *     an older build's rebind of a failed spawn). An `unborn` session keeps the id-string rule, whatever its runs record
  *     (gap 1 of #1407, tracked in #1532): no birth on record is provably the live occupant's own when `childBirthOf`
  *     cannot place it, so no reader anchors to one. One LEGACY exception, accepted and pinned
  *     (`run-binding-bound-birth.test.ts`): migration 16's backfill dated every bound run to its OWN `dispatchStartedAt`,
@@ -81,9 +82,6 @@ export interface BindingRun {
   readonly openedAt: number;
   readonly sessionBornAt: number | null;
   readonly sessionBornFor: string | null;
-  /** When the run's fresh-spawn dispatch began (`CoordStore.markDispatchStarted`), or `null`. Read by `occupantBirthOf`
-   *  alone, to tell a placeable birth from one it cannot place. */
-  readonly dispatchStartedAt: number | null;
 }
 
 /** Whether `run` binds `incarnation`: yes, no, or `'undecidable'` (an unstamped run opened before the birth). */
@@ -118,25 +116,39 @@ export interface SessionBinding {
 
 const byIdDesc = (a: BindingRun, b: BindingRun): number => b.id - a.id;
 
-/** The birth a LATER wave bound to `sessionId` records (`CoordStore.stampOccupantBirth` writes it, over `bindingRunsOf`'s
- *  series). When some run recorded a PLACEABLE birth for the id (the birth equals that run's `dispatchStartedAt`, the
- *  shape `childBirthOf` places), the newest such birth: the merge base's rule, so a `born` worker's later wave is dated to
- *  the birth its readers place, whatever other rows the series holds. Only when no birth for the id can be placed, the
- *  newest birth any run recorded for it, so a moved `dispatchStartedAt` on the minting run (the re-stamped arm, a
- *  cross-build redraw) does not stop the stamp; no reader is `born` then, so that stamp changes no answer it reads. `null`,
- *  and no stamp, when no run recorded a birth for the id.
+/** A run's recorded birth as `occupantBirthOf` reads it: the birth columns and when the run's fresh-spawn dispatch began
+ *  (`CoordStore.markDispatchStarted`), which tells a birth `childBirthOf` places from one it cannot. */
+export interface RecordedBirth {
+  readonly sessionBornAt: number | null;
+  readonly sessionBornFor: string | null;
+  readonly dispatchStartedAt: number | null;
+}
+
+/** The birth a LATER wave bound to `sessionId` records (`CoordStore.stampOccupantBirth` writes it), over the merge base's
+ *  rows: every run recording a birth for the id, whatever its `sessionId` now names. `placeable` says which arm chose it.
+ *
+ *  - Some row recorded a PLACEABLE birth for the id (the birth equals that row's `dispatchStartedAt`, the shape
+ *    `childBirthOf` places): the newest such birth, `placeable: true`. The merge base's rule over the merge base's rows,
+ *    so a `born` worker's later wave is dated to the birth its readers place.
+ *  - None is placeable, and every recorded birth for the id is the same instant: that instant, `placeable: false` (gap 2:
+ *    a moved `dispatchStartedAt` on the minting run, the re-stamped arm or a cross-build redraw, does not stop the stamp).
+ *    The fallback stamp IS read if the worker later becomes placeable (a same-id redraw moves the minting run's
+ *    `dispatchStartedAt` onto the birth), which is why it must be unambiguous: two different births on record mean the
+ *    columns cannot say which is the live occupant's, and a wrong one would make the wave read `unbound` then.
+ *  - Otherwise `null`, and no stamp (the merge base's result).
  *
  *  No row vetoes the stamp. The adopted arm of `dispatch.ts#spawnFresh` (D-6993) records no birth, and neither does a run
  *  whose fresh spawn failed and that an older build later rebound to the worker; the columns cannot tell the two apart,
- *  and live databases hold the second (every build before the stamp cleared the births on an occupant change). A worker
- *  minted by the adopted arm is `unplaceable` (its mark names the adopting run, which records no birth), so its readers
- *  keep the id-string rule and never read the stamp; refusing the stamp on that shape only took a placeable worker's
- *  birth away from its later waves. */
-export function occupantBirthOf(runs: readonly BindingRun[], sessionId: string): number | null {
-  const recorded = runs.filter((r) => r.sessionBornFor === sessionId && r.sessionBornAt !== null);
+ *  and live databases hold the second (every build before the stamp cleared the births on an occupant change). */
+export function occupantBirthOf(
+  rows: readonly RecordedBirth[], sessionId: string,
+): { readonly at: number; readonly placeable: boolean } | null {
+  const recorded = rows.filter((r) => r.sessionBornFor === sessionId && r.sessionBornAt !== null);
   if (recorded.length === 0) return null;
   const placeable = recorded.filter((r) => r.sessionBornAt === r.dispatchStartedAt);
-  return Math.max(...(placeable.length > 0 ? placeable : recorded).map((r) => r.sessionBornAt as number));
+  if (placeable.length > 0) return { at: Math.max(...placeable.map((r) => r.sessionBornAt as number)), placeable: true };
+  const distinct = new Set(recorded.map((r) => r.sessionBornAt));
+  return distinct.size === 1 ? { at: recorded[0]!.sessionBornAt as number, placeable: false } : null;
 }
 
 export function bindingOf(runs: readonly BindingRun[], incarnation: Incarnation): SessionBinding {

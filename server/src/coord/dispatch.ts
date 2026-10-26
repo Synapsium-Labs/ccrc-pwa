@@ -444,8 +444,8 @@ async function spawnFresh(
   // `childBirthOf` refuses to date any PR row against it, `childBindGate` refuses on any PR evidence, and the close
   // holds rather than guessing which attempt this workspace's history belongs to. The one bind that records no
   // incarnation (D-6993): the adopted worker's mark names this run, which records no birth, so the worker is
-  // `unplaceable` and reads by the id-string rule; it never reads the stamp a later wave records
-  // (`runBinding.occupantBirthOf`).
+  // `unplaceable` and reads by the id-string rule, taking no birth from the stamp a later wave records
+  // (`runBinding.occupantBirthOf`), whose fallback never writes a birth that would make this run placeable.
   coord.setSession(run.id, winner.id, adopted ? null : startedAt);
   // Routing spec §6 "Arms": the `arm:` record, only when routing was actually seeded onto the argv, and gated on the
   // dispatch BINDING a session, never on `res.ok` (an adopted spawn reaches here with `res.ok === false`).

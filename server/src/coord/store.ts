@@ -13,7 +13,7 @@ import { decideAllocation } from './ledger.js';
 // nothing else, so the shape it returns is the policy's to define.
 import type { CoordPlacementStamp } from './placement.js';
 import type { LastRun } from './released.js';
-import { occupantBirthOf, type BindingRun, type Incarnation } from './runBinding.js';
+import { occupantBirthOf, type BindingRun, type Incarnation, type RecordedBirth } from './runBinding.js';
 import { boundRows, openRows, type SeriesRow } from './bindingRows.js';
 // Stall watch wave 1: the stall lane's row shapes are declared by their CONSUMER,
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
@@ -1952,7 +1952,7 @@ export class CoordStore {
       if (!n.ok) return { ok: false, kind: 'run-unreadable', detail: n.detail };
       runs.push({ id: n.value, sessionId: r.sessionId, claimedBy: r.claimedBy,
         state: isRunState(r.state) ? r.state : 'unknown', openedAt: r.openedAt,
-        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor, dispatchStartedAt: r.dispatchStartedAt });
+        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor });
     }
     return { ok: true, runs };
   }
@@ -1968,7 +1968,7 @@ export class CoordStore {
     return this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
       'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state, sessionId, claimedBy, ' +
-      `openedAt, sessionBornAt, sessionBornFor, dispatchStartedAt FROM runs WHERE ${where} ORDER BY id`,
+      `openedAt, sessionBornAt, sessionBornFor FROM runs WHERE ${where} ORDER BY id`,
     ).all(...(column === 'either' ? [id, id] : [id])) as unknown as SeriesRow[];
   }
 
@@ -3041,9 +3041,9 @@ export class CoordStore {
       this.db.prepare('UPDATE runs SET sessionBornAt = NULL, sessionBornFor = NULL WHERE id = ?').run(runId);
     }
     // The bound incarnation (ARCH-62, #1407): a bind that names no birth of its own (a later wave bound to a worker that
-    // already exists) records the birth of the occupant it binds to (`stampOccupantBirth`: the newest placeable birth the
-    // session's series recorded for it, else the newest recorded one), so `bindsRun` answers it exactly. No stamp, and
-    // the id-string rule, where no run of the series ever recorded a birth for the session.
+    // already exists) records the birth of the occupant it binds to (`stampOccupantBirth`: the newest placeable birth on
+    // record for the id, else the one birth every row records for it), so `bindsRun` answers it exactly. No stamp, and the
+    // id-string rule, where no run records a birth for the id, or the births on record disagree and none is placeable.
     // Only when the bind changes the occupant: a same-session re-statement (markDispatched after an adopted bind's
     // explicit null) must not date the run to an earlier occupant's birth.
     if (bornAt === undefined && changesOccupant) this.stampOccupantBirth(runId, sessionId);
@@ -3056,19 +3056,29 @@ export class CoordStore {
   }
 
   /** Stamp run `runId` (just bound to `sessionId`, with no birth of its own) with the occupant's birth: `occupantBirthOf`
-   *  (`coord/runBinding.ts`, the one rule) over the session's series as `bindingRunsOf` reads it
-   *  (`run-binding-occupant-birth.test.ts` pins a rebound run's birth outside the series). The newest placeable birth on
-   *  record, as the merge base stamped; only when none can be placed (a worker whose `dispatchStartedAt` moved), the newest
-   *  birth on record. Write-once: a run that carries a birth keeps it. A session with no birth on record (a coordinator, a
-   *  manual workspace), or whose series cannot be read, stays unstamped and keeps the id-string rule. On a worker alive
-   *  across migration 16 the newest placeable birth can be a backfilled wave-N row, not the minting run: the legacy
-   *  exception `runBinding.ts` names (WHICH RUNS BIND A BORN INCARNATION). */
+   *  (`coord/runBinding.ts`, the one rule) over the merge base's rows, every run recording a birth for the id whatever
+   *  its `sessionId` now names (a placeable birth an older build left on a run it moved away still dates the worker, and
+   *  the worker is born at it again once that run is moved back). The newest placeable birth, as the merge base stamped;
+   *  only when none can be placed, the one birth every row agrees on. That fallback never re-places the stamped run: when
+   *  it equals the run's OWN `dispatchStartedAt` (the dup arm rebinding the minting run back to the worker, its birth
+   *  read off a later wave's copy) the stamp would make the run placeable and re-date every pre-planned wave the merge
+   *  base left unstamped, so nothing is written, the merge base's result. Write-once: a run that carries a birth keeps
+   *  it. A session with no birth on record (a coordinator, a manual workspace) stays unstamped and keeps the id-string
+   *  rule. On a worker alive across migration 16 the newest placeable birth can be a backfilled wave-N row, not the
+   *  minting run: the legacy exception `runBinding.ts` names (WHICH RUNS BIND A BORN INCARNATION). */
   private stampOccupantBirth(runId: number, sessionId: string): void {
-    const series = this.bindingRunsOf(sessionId);
-    const at = series.ok ? occupantBirthOf(series.runs, sessionId) : null;
-    if (at === null) return;
+    const rows = this.db.prepare(
+      'SELECT sessionBornAt, sessionBornFor, dispatchStartedAt FROM runs WHERE sessionBornFor = ? AND sessionBornAt IS NOT NULL',
+    ).all(sessionId) as unknown as RecordedBirth[];
+    const birth = occupantBirthOf(rows, sessionId);
+    if (birth === null) return;
+    if (!birth.placeable) {
+      const own = this.db.prepare('SELECT dispatchStartedAt FROM runs WHERE id = ?').get(runId) as
+        { dispatchStartedAt: number | null } | undefined;
+      if (own?.dispatchStartedAt === birth.at) return;
+    }
     this.db.prepare('UPDATE runs SET sessionBornAt = ?, sessionBornFor = ? WHERE id = ? AND sessionBornAt IS NULL')
-      .run(at, sessionId, runId);
+      .run(birth.at, sessionId, runId);
   }
 
   /**

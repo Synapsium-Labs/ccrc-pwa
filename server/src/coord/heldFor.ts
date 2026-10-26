@@ -34,14 +34,16 @@ export type HeldFor =
   | { readonly kind: 'released'; readonly parent: string; readonly runId: number; readonly reason: AskMintReleaseReason };
 
 /** How many open runs bind the child's incarnation: over `series` (the read `childParentRead` decided the parent from)
- *  when it is readable, else the store's proven reader. A failed read throws, as every store read here does. */
+ *  when it is readable, else the store's proven reader. The store's reader runs either way and a failed read throws, as
+ *  every store read here does: it checks each open run's `wave` and `waveOf` (`bindingRunsOf` checks only the id), so an
+ *  open run whose stored wave this build cannot represent still fails the hold closed, as it did before the count moved
+ *  onto the series. */
 function openBindingCount(
   coord: ReclaimDeps['coord'], childId: string, incarnation: Incarnation, series: ReturnType<typeof childParentRead>['series'],
 ): number {
-  if (series.ok) return boundRunsOf(series.runs, incarnation, 'open').length;
   const sib = coord.openRunsForSession(childId, undefined, incarnation);
   if (!sib.ok) throw new Error(`heldFor: ${sib.detail}`);
-  return sib.siblings.length;
+  return series.ok ? boundRunsOf(series.runs, incarnation, 'open').length : sib.siblings.length;
 }
 
 export async function heldFor(
