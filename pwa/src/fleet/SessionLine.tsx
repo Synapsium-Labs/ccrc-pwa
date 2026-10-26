@@ -50,6 +50,19 @@ let stamped: HTMLElement | null = null;
 
 
 
+/** D-5527: whose code a row works on, when its card is another project's — an icon beside a WORD, with a hidden lead
+ *  that makes the accessible name a sentence. One spelling for a session row and a worktree row (delegation broker
+ *  wave 4, `ProjectCard`). */
+export function WorksOnChip({ project }: { project: string }): ReactNode {
+  return (
+    <span className="sess-workson" data-project={project} title={`works on ${project}’s code`}>
+      <Icon name="folder-code" />
+      <span className="sr-only">works on </span>
+      <span className="sess-workson-name">{project}</span>
+    </span>
+  );
+}
+
 export function SessionLine({
   session,
   onOpen,
@@ -218,13 +231,7 @@ export function SessionLine({
           {/* D-5527: whose code this row works on, when its card is another
               project's. An icon beside a WORD (nothing is read out of shape
               alone); the hidden lead makes the accessible name a sentence. */}
-          {workingOn !== null && (
-            <span className="sess-workson" data-project={workingOn} title={`works on ${workingOn}’s code`}>
-              <Icon name="folder-code" />
-              <span className="sr-only">works on </span>
-              <span className="sess-workson-name">{workingOn}</span>
-            </span>
-          )}
+          {workingOn !== null && <WorksOnChip project={workingOn} />}
           {/* D-5545: the repo label (spec §6, R3) and the role badge (D-5301) are header facts now — a row whose
               repo differs from its card's always carries the cross-project chip above, which already keeps two
               same-slug rows' accessible names apart. */}

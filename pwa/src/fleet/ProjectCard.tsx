@@ -14,7 +14,7 @@
 // without touching localStorage.
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
-import { BareRow, Button, Icon } from '@ccrc/ui';
+import { BareRow, Button } from '@ccrc/ui';
 import type {
   DelegationActivityWire, FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary,
 } from '../../../shared/api';
@@ -29,7 +29,7 @@ import { childRunContext, workingOnCard, type FleetTreeGroup } from './fleetTree
 import { ProjectCardHead } from './ProjectCardHead';
 import type { CardRollup, RolledRow } from './rollup';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, dispatchWindow, runForSession, waveLabel } from './runWords';
-import { SessionLine } from './SessionLine';
+import { SessionLine, WorksOnChip } from './SessionLine';
 import { sessionLabel } from './sessionLabel';
 import { GROUP_WORDS, activityLine, creatorChip, inferredChip, unownedLine, worktreeLine } from './delegationWords';
 import { actionDoor } from '../command/door';
@@ -373,13 +373,7 @@ export function ProjectCard({
       // D-6999: the chips are words, never colour alone, and nothing here acts on the row.
       const chips = [inferredChip(row.lease), creatorChip(row.lease)];
       return workLine(w.parts, w.title, <>
-        {w.sourceProject !== null && (
-          <span className="sess-workson" data-project={w.sourceProject} title={`works on ${w.sourceProject}’s code`}>
-            <Icon name="folder-code" />
-            <span className="sr-only">works on </span>
-            <span className="sess-workson-name">{w.sourceProject}</span>
-          </span>
-        )}
+        {w.sourceProject !== null && <WorksOnChip project={w.sourceProject} />}
         {chips.map((c, i) => c === null ? null : <span key={i} className="proj-work-chip" title={c.title}>{c.text}</span>)}
       </>);
     }
