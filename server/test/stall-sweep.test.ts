@@ -25,7 +25,7 @@ import {
   BACKLOG_HORIZON_MS, DEAD_GRACE_MS, FAILED_IDLE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS,
   FROZEN_NO_EVENT_MS, ORPHAN_PUSH_MS, STALL_FAILED_PREFIX, stallFailedSubject,
   STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_ORPHANED_PREFIX, STALL_RESTARTED_PREFIX, STALL_QUIET_MS, STALL_REPORT_PREFIX,
-  parseStallDetail, stallArmingOf, stallDetail, COORD_DEAF_MS, COORD_BLOCKED_HELD_MS, COORD_BLOCKED_STRETCH_MS, STALL_MARKERS, type StallArming,
+  parseStallDetail, stallArmingOf, stallDetail, COORD_DEAF_MS, COORD_BLOCKED_HELD_MS, COORD_BLOCKED_OLD_MS, COORD_BLOCKED_STRETCH_MS, STALL_MARKERS, type StallArming,
 } from '../src/coord/stall.js';
 import { parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock, type StallBoxArming, type StallSettingsPatch } from '../src/coord/stallsettings.js';
 import type { PushPayload } from '../src/push.js';
@@ -2514,6 +2514,20 @@ describe('sweepStalls: coord-blocked (D-6942)', () => {
     await sweepThrough(w, sessions, [], tickWith(), MAIL2, MAIL2 + COORD_BLOCKED_HELD_MS + STALL_SWEEP_MS);
     expect(blockedPushes(sent).map((p) => p.tag))
       .toEqual([`stall-${COORD}-coord-blocked-1-${MAIL_AT}`, `stall-${COORD}-coord-blocked-1-${MAIL2}`]);
+  });
+
+  it('a delivered mail whose replays a busy coordinator gates is never held: no push through the escalation window', async () => {
+    // The coordinator has seen it: the mail lane delivered it, and every MAIL_REPLAY_MS replay of the unacked row is
+    // gated while the coordinator stays busy, with `noteGate` keeping `gateSince` unbroken across the repeats.
+    const { coord, w, sent } = await setup('alert', false);
+    const m = coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId: null, kind: 'question', subject: 'q', body: 'b', artifacts: [] });
+    const d = coord.queueDelivery(m.id, COORD, 'envelope');
+    coord.markDelivered(d.id, MAIL_AT + 60_000);
+    const GATE_AT = MAIL_AT + 60_000 + MAIL_REPLAY_MS;
+    coord.noteGate(d.id, 'not-idle', GATE_AT, false, null);
+    for (let k = 1; k <= 12; k++) coord.noteGate(d.id, 'not-idle', GATE_AT + k * MAIL_REPLAY_MS, true, GATE_AT);
+    await sweepThrough(w, sessions, [], tickWith(), GATE_AT + COORD_BLOCKED_HELD_MS, ESCALATE_AT + COORD_BLOCKED_OLD_MS);
+    expect(blockedPushes(sent)).toEqual([]);
   });
 
   it('below the Alert level it records shadow only: one run-less shadow line, no push', async () => {

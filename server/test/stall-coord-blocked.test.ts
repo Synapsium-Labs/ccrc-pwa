@@ -1,5 +1,5 @@
 // The stall watch's coordinator-blocked arm (operator ruling 2026-10-25, D-6942): mail addressed to a coordinator that
-// the server still holds (a delivery `queued`, or a delivered one whose replay a gate holds) for COORD_BLOCKED_HELD_MS,
+// the server still holds (a delivery still `queued`, timed from its mail's queue time) for COORD_BLOCKED_HELD_MS,
 // whatever word the coordinator reads. The push names the gate reason in operator words: an open question
 // (`waiting`), a background workflow (`busy` with no turn), the coordinator's own long busy stretch (`busy` with a
 // turn), or idle but not receiving mail. It rises to rung 2 (escalated) when the busy or waiting stretch reaches
@@ -173,13 +173,25 @@ describe('coord-blocked: what counts as held', () => {
     expect(verdict(input({ mail: [mailRow(501, MAIL_AT, PEER, 'finding')] }))).toEqual(fire(MAIL_AT));
     expect(verdict(input({ mail: [mailRow(501, MAIL_AT, 'operator', 'question')] }))).toEqual(fire(MAIL_AT));
   });
-  it('a delivered row whose replay a gate holds counts from the gate\'s own stamp', () => {
+  it('a delivered row whose replay a gate holds is mail the coordinator already received: never held, however long the gate', () => {
+    // `dueDeliveries` replays a delivered, unacked row every MAIL_REPLAY_MS, a busy or waiting coordinator gates each
+    // replay, and `noteGate` keeps `gateSince` across repeats of the same gate. Counting such a row would flag every
+    // unacked mail of an ordinary busy stretch, outside the census's creation-to-first-seen definition.
     const gated = (gateSince: number): Over => ({
       mail: [mailRow(501, NOW - 5 * H, WORKER, 'question', 67)],
-      deliveries: [delivery(901, 501, { state: 'delivered', deliveredAt: NOW - 5 * H, lastGate: 'not-idle', gateSince })],
+      deliveries: [delivery(901, 501, { state: 'delivered', deliveredAt: NOW - 5 * H, lastGate: 'not-idle', gateSince, replayCount: 3 })],
     });
-    expect(verdict(input(gated(NOW - COORD_BLOCKED_HELD_MS)))).toEqual(fire(NOW - COORD_BLOCKED_HELD_MS));
-    expect(verdict(input(gated(NOW - COORD_BLOCKED_HELD_MS + MIN)))).toEqual(NONE);
+    expect(verdict(input(gated(NOW - COORD_BLOCKED_HELD_MS)))).toEqual(NONE);
+    expect(verdict(input(gated(NOW - COORD_BLOCKED_OLD_MS)))).toEqual(NONE);
+    expect(verdict(input(gated(NOW - 5 * H + MIN)))).toEqual(NONE);
+  });
+  it('a queued row a gate holds counts from its mail\'s queue time, never from the gate\'s own stamp', () => {
+    const queuedGated = (at: number, gateSince: number): Over => ({
+      mail: [mailRow(501, at, WORKER, 'question', 67)],
+      deliveries: [delivery(901, 501, { lastGate: 'not-idle', gateSince })],
+    });
+    expect(verdict(input(queuedGated(NOW - COORD_BLOCKED_HELD_MS, NOW - MIN)))).toEqual(fire(NOW - COORD_BLOCKED_HELD_MS));
+    expect(verdict(input(queuedGated(NOW - COORD_BLOCKED_HELD_MS + MIN, NOW - 5 * H)))).toEqual(NONE);
   });
   it('nothing held: no flag (no mail, a delivery through without a gate, acked or rejected, or mail to someone else)', () => {
     expect(verdict(input({ mail: [], deliveries: [] }))).toEqual(NONE);
