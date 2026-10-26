@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,8 +33,16 @@ function home(): string {
 }
 /** `CCRC_TREE` points the runner's `node` read of FAMILY_TOKENS at THIS checkout,
  *  where `~/ccrc` would be on a deployed box. */
+/** The sweep settings `_ccrc_knob` reads (wave 29): a shell export of one must not move a row, so none is inherited. */
+const SWEEP_SETTINGS = ['CCRC_GRAPH_BUDGET', 'CCRC_GRAPH_MAX_WORKERS', 'CCRC_KEEPALIVE_MODEL', 'CCRC_KEEPALIVE_PROMPT',
+  'CCRC_KEEPALIVE_FRESH', 'CCRC_USAGE_SWEEP_DAYS'];
+const inherited = (): NodeJS.ProcessEnv => {
+  const env = { ...process.env };
+  for (const k of SWEEP_SETTINGS) delete env[k];
+  return env;
+};
 const run = (h: string, env: Record<string, string> = {}): { code: number; out: string; err: string } => {
-  const r = spawnSync('bash', [RUNNER], { encoding: 'utf8', env: { ...process.env, HOME: h, CCRC_TREE: REPO,
+  const r = spawnSync('bash', [RUNNER], { encoding: 'utf8', env: { ...inherited(), HOME: h, CCRC_TREE: REPO,
     PATH: `${path.join(h, '.local', 'bin')}:${process.env['PATH'] ?? ''}`, ...env } });
   return { code: r.status ?? -1, out: r.stdout ?? '', err: r.stderr ?? '' };
 };
@@ -78,3 +86,77 @@ describe('ccd-usage-sweep (the runner)', () => {
     expect(existsSync(path.join(h, '.cc-sessions', 'usage', 'sweep', 'latest.json'))).toBe(false);
   });
 });
+
+// ── wave 29 (D-6981): the runner reads its days from ~/.ccrc/ccrc.env through ccrc's reader ─────────────────────
+// `env -i` models the user manager after a reboot: no CCRC_ name, so the tree is found where the install puts it
+// (`~/ccrc`, a link to this checkout) and the days can only arrive from the file. The scanner is a shim that records
+// its argv and writes a latest.json, so a row reads what the runner handed it.
+describe('W29: the usage sweep reads its days from ~/.ccrc/ccrc.env through ccrc\'s reader', () => {
+  const rebootHome = (): string => {
+    const h = home();
+    symlinkSync(REPO, path.join(h, 'ccrc'));
+    mkdirSync(path.join(h, 'tmp'), { recursive: true });
+    writeFileSync(path.join(h, '.local', 'bin', 'ccd-usage-sweep.py'), [
+      'import json, sys, os',
+      'a = sys.argv[1:]',
+      'open(os.path.join(os.environ["HOME"], "scanner-argv"), "w").write("\\n".join(a) + "\\n")',
+      'json.dump({"scan": {"records": 0}}, open(a[a.index("--out") + 1], "w"))',
+    ].join('\n') + '\n');
+    return h;
+  };
+  const reboot = (h: string) => {
+    const r = spawnSync('bash', [RUNNER], { encoding: 'utf8',
+      env: { HOME: h, PATH: `${path.join(h, '.local', 'bin')}:${process.env['PATH'] ?? ''}`, TMPDIR: path.join(h, 'tmp') } });
+    return { code: r.status ?? -1, out: r.stdout ?? '', err: r.stderr ?? '' };
+  };
+  const ccrcEnv = (h: string, text: string): void => writeFileSync(path.join(h, '.ccrc', 'ccrc.env'), text, { mode: 0o600 });
+  const daysHanded = (h: string): string | undefined => {
+    const argv = readFileSync(path.join(h, 'scanner-argv'), 'utf8').split('\n');
+    return argv[argv.indexOf('--days') + 1];
+  };
+
+  it('W29-U1: days written only in ccrc.env reach the scanner (the reboot case)', () => {
+    const h = rebootHome();
+    ccrcEnv(h, 'CCRC_USAGE_SWEEP_DAYS=3\n');
+    const r = reboot(h);
+    expect(r.code, r.err).toBe(0);
+    expect(daysHanded(h)).toBe('3');
+    expect(r.out).toContain('in the last 3 days');
+  });
+
+  it('W29-U2: no ccrc.env reads the default', () => {
+    const h = rebootHome();
+    expect(reboot(h).code).toBe(0);
+    expect(daysHanded(h)).toBe('7');
+  });
+
+  it('W29-U3: a ccrc.env that is a dangling link stops the pass before the scanner runs', () => {
+    const h = rebootHome();
+    symlinkSync(path.join(h, 'nowhere'), path.join(h, '.ccrc', 'ccrc.env'));
+    const r = reboot(h);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/^usage-sweep: CCRC_USAGE_SWEEP_DAYS cannot be measured: ~\/\.ccrc\/ccrc\.env is there but cannot be read — nothing was swept$/m);
+    expect(existsSync(path.join(h, 'scanner-argv')), 'the scanner ran').toBe(false);
+  });
+
+  it('W29-U4: a paused sweep stays paused, exit 0, even when ccrc.env is faulted (the pause check comes first)', () => {
+    const h = rebootHome();
+    symlinkSync(path.join(h, 'nowhere'), path.join(h, '.ccrc', 'ccrc.env'));
+    writeFileSync(path.join(h, '.ccrc', 'usage-sweep-paused'), '');
+    const r = reboot(h);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain('paused');
+    expect(r.err).toBe('');
+    expect(existsSync(path.join(h, 'scanner-argv'))).toBe(false);
+  });
+
+  it('W29-U5: days that are not a whole number from 1 to 999 stop the pass, naming where they came from', () => {
+    const h = rebootHome();
+    ccrcEnv(h, 'CCRC_USAGE_SWEEP_DAYS=0\n');
+    const r = reboot(h);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("usage-sweep: CCRC_USAGE_SWEEP_DAYS must be a whole number from 1 to 999 — got '0', as set in ~/.ccrc/ccrc.env; nothing was swept");
+    expect(existsSync(path.join(h, 'scanner-argv'))).toBe(false);
+  });
+});
+

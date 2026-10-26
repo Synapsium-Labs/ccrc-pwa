@@ -528,7 +528,8 @@ per lane. macOS gets the role's one LaunchAgent, a launchd job per session, and 
 
 **One of those timers spends account usage, on purpose.** `ccd-telemetry-keepalive` takes one
 minimal turn on an idle `telemetry: "anthropic"` account — the seeded default account is one — so its
-usage reading stays fresh, at most once per `CCRC_KEEPALIVE_FRESH` (1800 s) per account.
+usage reading stays fresh, at most once per `CCRC_KEEPALIVE_FRESH` (1800 s; a `~/.ccrc/ccrc.env` line, or the
+environment) per account.
 `touch ~/.ccrc/keepalive-paused` stops it and `rm` resumes it; that file survives an update, which
 re-enables the timer. What it costs and what it never touches: "Account health and the telemetry
 keepalive", below.
@@ -1309,7 +1310,13 @@ reads `ccrc.env` alone and names a line the reader refuses (D-6599). Eight more 
 containment**): `CCRC_TEST_SLICE_MEMORY_MAX`, `CCRC_TEST_SLICE_SWAP_MAX`, `CCRC_TEST_SLICE_CPU_WEIGHT`,
 `CCRC_TEST_SLICE_CPU_QUOTA`, `CCRC_TEST_SLICE_IO_WEIGHT`, `CCRC_TEST_HEAVY_SLOTS` and `CCRC_TEST_WIDE_FILES` hold for
 the whole box, so they are read from `ccrc.env` alone (the reader's `file` mode), and `CCRC_TEST_PRESSURE_MAX` the same
-way as the rest; a value that is not its shape keeps its default and warns.
+way as the rest; a value that is not its shape keeps its default and warns. The fleet box's ccd-* sweeps read their settings the
+same way (wave 29, D-6981): `CCRC_GRAPH_BUDGET` and `CCRC_GRAPH_MAX_WORKERS` (`ccd-graph-sweep`), `CCRC_KEEPALIVE_MODEL`,
+`CCRC_KEEPALIVE_PROMPT` and `CCRC_KEEPALIVE_FRESH` (`ccd-telemetry-keepalive`) and `CCRC_USAGE_SWEEP_DAYS`
+(`ccd-usage-sweep`). Their units have no shell and no `EnvironmentFile=`, so each sweep sources
+`ccd/lib/ccrc-settings.sh`, ccrc's own reader generated from `ccd/ccrc` and placed at `~/.local/libexec/ccrc`, and a line
+in `ccrc.env` survives a reboot. A line that reader refuses, or a value a sweep cannot use, stops that sweep's pass with a
+line naming the setting, where it came from and what was refused; a server-role box runs none of these sweeps.
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
@@ -3007,8 +3014,8 @@ per day, throttled on the attempt rather than the success. It never touches an a
 registered session is sitting on (a live pane or a fresh supervisor heartbeat; unmeasurable reads as occupied),
 and after `CCRC_KEEPALIVE_BACKOFF_AFTER` (3) failures in a row it waits a window that doubles from 1 h to 24 h.
 The last ten passes' rows land in `~/.ccrc/keepalive.json`, with `fiveBefore`/`fiveAfter` so the cost is a
-measurement rather than an estimate. Raise `CCRC_KEEPALIVE_FRESH` in a drop-in
-(`systemctl --user edit ccd-telemetry-keepalive.service`) to spend less; `touch ~/.ccrc/keepalive-paused` stops it
+measurement rather than an estimate. Raise it with a `CCRC_KEEPALIVE_FRESH=` line in `~/.ccrc/ccrc.env` to spend less
+(a drop-in or an `environment.d` line that sets it still wins over the file); `touch ~/.ccrc/keepalive-paused` stops it
 entirely, and `rm` resumes it.
 
 ### ccd compacts an idle session before Claude Code has to
@@ -3163,7 +3170,8 @@ nothing places even then, an explicit `--route class=` refuses rather than land 
 the coordinator row's class, which nobody typed, falls back to class-blind placement.
 
 **The usage sweep** (`ccd-usage-sweep.timer`, every four hours on a Linux box of any role but `server`) is what
-measures the Fable share: it reads every rostered account's transcripts for the last `CCRC_USAGE_SWEEP_DAYS` (7),
+measures the Fable share: it reads every rostered account's transcripts for the last `CCRC_USAGE_SWEEP_DAYS` (7; a
+`~/.ccrc/ccrc.env` line, or the environment),
 read-only, de-duplicates the records by message id and writes `~/.cc-sessions/usage/sweep/latest.json`, which ccd
 and the server (`server/src/shares.ts`) both read as each account's share; a census of its last ten passes goes to
 `~/.ccrc/usage-sweep.json`. `touch ~/.ccrc/usage-sweep-paused` stops it, and an empty roster projection is a
@@ -6054,7 +6062,8 @@ project-graph-store class's own ruling).
 
 **Bumping the pin.** Edit `GRAPHIFY_PIN` in `ccd/ccrc`, run `ccrc install` (or `update`) on the fleet
 box, and expect every tree to re-stamp stale on the next sweep pass — a full-fleet rebuild over
-roughly 8 passes at the sweep's own budget (`CCRC_GRAPH_BUDGET=8` builds/pass). Re-verify the
+roughly 8 passes at the sweep's own budget (`CCRC_GRAPH_BUDGET=8` builds/pass; a `~/.ccrc/ccrc.env` line, or the
+environment). Re-verify the
 shrink-refusal literal the build discriminator greps for (the comment at its check in
 `ccd/ccd-graph-sweep`) against the new version's installed `watch.py`/`export.py` before shipping —
 the message has already moved once between minor versions.

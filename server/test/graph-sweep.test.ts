@@ -132,9 +132,17 @@ done < "$HOME/fixture-corpus"; } | tee "$HOME/seen-corpus"
 exit 0
 `, { mode: 0o755 });
 }
+/** The sweep settings `_ccrc_knob` reads (wave 29): a shell export of one must not move a row, so none is inherited. */
+const SWEEP_SETTINGS = ['CCRC_GRAPH_BUDGET', 'CCRC_GRAPH_MAX_WORKERS', 'CCRC_KEEPALIVE_MODEL', 'CCRC_KEEPALIVE_PROMPT',
+  'CCRC_KEEPALIVE_FRESH', 'CCRC_USAGE_SWEEP_DAYS'];
+const inherited = (): NodeJS.ProcessEnv => {
+  const env = { ...process.env };
+  for (const k of SWEEP_SETTINGS) delete env[k];
+  return env;
+};
 function runSweep(env: NodeJS.ProcessEnv = {}) {
   return spawnSync('bash', [SWEEP], { encoding: 'utf8',
-    env: { ...process.env, HOME: home, CCRC_GRAPH_BUILD_TIMEOUT: '5', ...env } });
+    env: { ...inherited(), HOME: home, CCRC_GRAPH_BUILD_TIMEOUT: '5', ...env } });
 }
 const census = () => JSON.parse(fs.readFileSync(j('.ccrc', 'graph-sweep.json'), 'utf8'));
 const lastPass = () => census().passes.at(-1);
@@ -1984,3 +1992,84 @@ describe('graph-sweep: real-engine integration (venv-gated; quiet-box CI is the 
     expect(log).toMatch(/\[1 workers?\]/);       // graphify logs "[N workers]"
   });
 });
+
+// ── wave 29 (D-6981): the sweep reads its settings from ~/.ccrc/ccrc.env through ccrc's reader ──────────────────
+// A unit with no shell and no EnvironmentFile= hands the sweep only what the user manager holds, and after a reboot
+// that is no CCRC_ name at all: `env -i` models it, so a value can only arrive from the file.
+describe('W29: the sweep reads its settings from ~/.ccrc/ccrc.env through ccrc\'s reader', () => {
+  const ccrcEnv = (text: string): void => fs.writeFileSync(j('.ccrc', 'ccrc.env'), text, { mode: 0o600 });
+  const reboot = (script = SWEEP, extra: Record<string, string> = {}) => {
+    fs.mkdirSync(j('tmp'), { recursive: true });
+    return spawnSync('bash', [script], { encoding: 'utf8',
+      env: { HOME: home, PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: j('tmp'), ...extra } });
+  };
+  const rowOf = (tree: string) => lastPass().trees.find((t: { path: string }) => t.path === tree);
+
+  it('W29-G1: a budget written only in ccrc.env reaches a pass whose environment names no CCRC_ (the reboot case)', () => {
+    const repoA = makeRepo('alpha'); const repoB = makeRepo('beta'); plantEngine();
+    ccrcEnv('CCRC_GRAPH_BUDGET=1\n');
+    const r = reboot();
+    expect(r.status, r.stderr).toBe(0);
+    const rows = [rowOf(repoA), rowOf(repoB)];
+    expect(rows.filter((t) => t.outcome === 'skipped-budget').map((t) => t.reason)).toEqual(['pass budget 1 reached']);
+    expect(rows.filter((t) => t.outcome === 'never-built')).toHaveLength(1);
+  });
+
+  it('W29-G2: a set environment wins over the file', () => {
+    const repoA = makeRepo('alpha'); const repoB = makeRepo('beta'); plantEngine();
+    ccrcEnv('CCRC_GRAPH_BUDGET=1\n');
+    expect(reboot(SWEEP, { CCRC_GRAPH_BUDGET: '2' }).status).toBe(0);
+    expect([outcomeOf(repoA), outcomeOf(repoB)]).toEqual(['never-built', 'never-built']);
+  });
+
+  it('W29-G3: a line the reader does not take stops the pass, naming it, before anything runs', () => {
+    makeRepo('alpha'); plantEngine();
+    ccrcEnv('export CCRC_GRAPH_BUDGET=1\n');
+    const r = reboot();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/^graph-sweep: CCRC_GRAPH_BUDGET cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take .* — nothing was swept$/m);
+    expect(fs.existsSync(j('.ccrc', 'graph-sweep.json')), 'a census was written').toBe(false);
+    expect(fs.existsSync(j('engine-calls')), 'the engine ran').toBe(false);
+  });
+
+  it('W29-G4: a budget that is not a whole number from 0 to 999 stops the pass, naming where it came from', () => {
+    makeRepo('alpha'); plantEngine();
+    ccrcEnv('CCRC_GRAPH_BUDGET=8x\n');
+    const r = reboot();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("graph-sweep: CCRC_GRAPH_BUDGET must be a whole number from 0 to 999 — got '8x', as set in ~/.ccrc/ccrc.env; nothing was swept");
+    expect(fs.existsSync(j('engine-calls'))).toBe(false);
+    fs.rmSync(j('.ccrc', 'ccrc.env'));
+    const env = reboot(SWEEP, { CCRC_GRAPH_MAX_WORKERS: '0' });
+    expect(env.status).toBe(1);
+    expect(env.stderr).toContain("CCRC_GRAPH_MAX_WORKERS must be a whole number from 1 to 99 — got '0', as set in the environment; nothing was swept");
+  });
+
+  it('W29-G5: the workers written in ccrc.env reach the engine', () => {
+    makeRepo('alpha'); plantEngine();
+    ccrcEnv('CCRC_GRAPH_MAX_WORKERS=2\n');
+    expect(reboot().status).toBe(0);
+    expect(fs.readFileSync(j('engine-calls'), 'utf8')).toMatch(/WORKERS=2$/m);
+  });
+
+  it('W29-G6: with no reader beside it or in ~/.local/libexec/ccrc, the placed sweep refuses and does nothing', () => {
+    makeRepo('alpha'); plantEngine();
+    fs.mkdirSync(j('.local', 'bin'), { recursive: true });
+    const placedSweep = j('.local', 'bin', 'ccd-graph-sweep');
+    fs.copyFileSync(SWEEP, placedSweep);
+    const r = reboot(placedSweep);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/^ccd-graph-sweep: the settings reader is missing or broken \(~\/\.local\/libexec\/ccrc\/ccrc-settings\.sh\) — this pass did nothing; 'ccrc update --force' places it$/m);
+    expect(fs.existsSync(j('.ccrc', 'graph-sweep.json')), 'a census was written').toBe(false);
+    expect(fs.existsSync(j('engine-calls'))).toBe(false);
+    // …and an empty file there is a broken one, not a reader (the loader's `declare -F _ccrc_knob`).
+    fs.mkdirSync(j('.local', 'libexec', 'ccrc'), { recursive: true });
+    fs.writeFileSync(j('.local', 'libexec', 'ccrc', 'ccrc-settings.sh'), '');
+    const broken = reboot(placedSweep);
+    expect(broken.status).toBe(1);
+    expect(broken.stderr).toMatch(/^ccd-graph-sweep: the settings reader is missing or broken /m);
+    fs.copyFileSync(path.resolve(__dirname, '../../ccd/lib/ccrc-settings.sh'), j('.local', 'libexec', 'ccrc', 'ccrc-settings.sh'));
+    expect(reboot(placedSweep).status, 'the placed reader is found where the install puts it').toBe(0);
+  });
+});
+

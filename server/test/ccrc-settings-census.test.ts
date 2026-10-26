@@ -3,11 +3,12 @@
 //
 // THE SCOPE, STATED. It reads `ccd/ccrc`, `ccd/ccrc-doctor-checks` (which
 // `cmd_doctor` sources) and `deploy/ccrc.env.example`, plus README's
-// `**ccrc's own settings.**` paragraph. It does not read the ccd-* sibling
-// scripts, `ccd/ccgpt-runtime`, `ccd/ccrc-models-probe`, `ccd/ccrc-codex` or
-// the `deploy/*.mjs` helpers ccrc runs: the wave-24 plan's "Not in this wave"
-// names each of their CCRC_ reads with a class. C6 alone also knows
-// `CCRC_SIGSTORE_TRUSTED_ROOT` by name, so the example never offers it.
+// `**ccrc's own settings.**` paragraph. Since wave 29 (D-6981) the ccd-* sweeps
+// read six of the settings through the same reader, sourced from
+// ccd/lib/ccrc-settings.sh, so the defaults (C2) and the takers (C4) are read
+// from `SIBLING_FILES` too; the W29 describe below reads those files whole and
+// the node helpers ccrc runs. C6 alone also knows `CCRC_SIGSTORE_TRUSTED_ROOT`
+// by name, so the example never offers it.
 //
 // WHAT IT DERIVES, AND WHAT IT HOLDS BY HAND. The settings come from the one
 // `CCRC_SETTINGS=(…)` line of ccd/ccrc, never from a second list here, and
@@ -78,6 +79,11 @@ const CODE: Record<CodeFile, string> = {
   'ccd/ccrc': codeOf(read('ccd/ccrc')),
   'ccd/ccrc-doctor-checks': codeOf(read('ccd/ccrc-doctor-checks')),
 };
+/** The ccd-* sweeps that read settings through ccd/lib/ccrc-settings.sh (wave 29), as code. */
+const SIBLING_FILES = ['ccd/ccd-graph-sweep', 'ccd/ccd-telemetry-keepalive', 'ccd/ccd-usage-sweep'] as const;
+const SIBLING_CODE: Record<string, string> = Object.fromEntries(SIBLING_FILES.map((f) => [f, codeOf(read(f))]));
+/** Every file whose literal `_ccrc_knob`/`_keep_knob` calls C2 and C4 read. */
+const KNOB_CODE = (): string[] => [...FILES.map((f) => CODE[f]), ...SIBLING_FILES.map((f) => SIBLING_CODE[f]!)];
 const EXAMPLE = read('deploy/ccrc.env.example');
 const README = read('README.md');
 
@@ -208,8 +214,8 @@ function envReads(code: string): Set<string> {
  *  not the argument (`… 900000; else`, `… 3; then`). */
 function defaultsOf(): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
-  for (const f of FILES)
-    for (const m of CODE[f].matchAll(/\b(?:_ccrc_knob|_keep_knob) (CCRC_[A-Z0-9_]+) ("[^"]*"|[^\s;&|)]+)/g)) {
+  for (const code of KNOB_CODE())
+    for (const m of code.matchAll(/\b(?:_ccrc_knob|_keep_knob) (CCRC_[A-Z0-9_]+) ("[^"]*"|[^\s;&|)]+)/g)) {
       if (m[2] === '""') continue;
       if (!out.has(m[1])) out.set(m[1], new Set());
       out.get(m[1])!.add(m[2]);
@@ -355,8 +361,8 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
   it('C4: _ccrc_knob and _keep_knob take a setting by its literal name, every setting is taken somewhere, and only two calls pass a name in a variable', () => {
     const literal = new Set<string>();
     const variable: string[] = [];
+    for (const code of KNOB_CODE()) for (const m of code.matchAll(/\b(?:_ccrc_knob|_keep_knob) (CCRC_[A-Z0-9_]+)/g)) literal.add(m[1]);
     for (const f of FILES) {
-      for (const m of CODE[f].matchAll(/\b(?:_ccrc_knob|_keep_knob) (CCRC_[A-Z0-9_]+)/g)) literal.add(m[1]);
       // Quoted or not: `_ccrc_knob $name 5` passes a name in a variable as surely as `"$name"`, so quotes are dropped from what is listed.
       for (const m of CODE[f].matchAll(/\b(?:_ccrc_knob|_keep_knob) "?\$[^\s"]*"?/g))
         variable.push(`${m[0].replace(/"/g, '')} in ${ownerOf(CODE[f], m.index!)}`);
