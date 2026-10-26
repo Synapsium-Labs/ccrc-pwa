@@ -6183,7 +6183,7 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * sent again (the only way a spawn slower than the wait completes).
  */
 export type RunRefuseCode =
-  | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
+  | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency'
   | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
   | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight'
@@ -6193,7 +6193,7 @@ export type RunRefuseCode =
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
-  'cap-daily': true, 'ambiguous-dispatch': true, 'worker-busy': true,
+  'ambiguous-dispatch': true, 'worker-busy': true,
   'hookstate-unmeasurable': true, 'not-dispatched': true,
   'prhistory-unreadable': true, 'bad-transition': true, 'unknown-item': true, 'item-terminal': true,
   'project-mismatch': true, 'home-mismatch': true, 'hold-oversize': true, 'hold-invalid': true,
@@ -7297,11 +7297,21 @@ export interface MailSummary {
   parkedAt?: number | null;
 }
 
-/** The two enforced caps (spec:199-201). The two COUNTS are queries over
- *  `runs`, never stored beside these — see `CoordStore.capsUsage`. */
-export interface CoordCaps { maxConcurrentWorkers: number; maxSessionsPerDay: number }
+/** The enforced cap (spec:199-201). The COUNT is a query over `runs`, never
+ *  stored beside it — see `CoordStore.capsUsage`.
+ *
+ *  ONE cap since D-TBD-retire-daily-brake (operator ruling 2026-10-26): the
+ *  daily dispatch brake, `maxSessionsPerDay`, is retired, and with it the
+ *  rolling 24 h count `dispatchedIn24h` and the `cap-daily` refusal. Both
+ *  fields are DROPPED from the wire rather than kept deprecated-optional: the
+ *  only reader of this view is the PWA the same server serves, and an older
+ *  cached PWA that still reads them gets `undefined` for a dial it no longer
+ *  has any use for. The write side is the half the wire rule binds — an older
+ *  PWA's body that still carries `maxSessionsPerDay` is accepted and the field
+ *  ignored (`decideCaps`, `RETIRED_CAP_FIELDS`). */
+export interface CoordCaps { maxConcurrentWorkers: number }
 
-/** The two counts `CoordStore.capsUsage` DERIVES from `runs` — never stored
+/** The count `CoordStore.capsUsage` DERIVES from `runs` — never stored
  *  beside the limits, for the reason that method's own docstring gives (a
  *  stored counter is a second copy of what `runs` already knows, and the copy
  *  is always the one that drifts).
@@ -7312,7 +7322,7 @@ export interface CoordCaps { maxConcurrentWorkers: number; maxSessionsPerDay: nu
  *
  *  `running` counts ACTIVE runs only since design 2026-09-14 §7.1 — see
  *  `ACTIVE_RUN_STATES`. */
-export interface CoordCapsUsage { running: number; dispatchedIn24h: number }
+export interface CoordCapsUsage { running: number }
 
 /** What `GET`/`POST /api/coord/caps` answer. The limits and the counts travel
  *  TOGETHER, in one shape and one round trip: a cap without its usage is a

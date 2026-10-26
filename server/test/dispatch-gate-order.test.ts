@@ -135,23 +135,18 @@ describe('dispatchRun runs its gates in a fixed order (ARCH-22)', () => {
 
   it('mail-disabled, then caps: the marker with a cap at zero answers mail-disabled', async () => {
     const f = fixture();
-    f.coord.setCaps({ maxConcurrentWorkers: 0, maxSessionsPerDay: 0 });
+    f.coord.setCaps({ maxConcurrentWorkers: 0 });
     f.mark(MAIL_DISABLED_MARKER);
     expect(await dispatchRun(f.deps, f.open(), 'go', undefined)).toEqual({ ok: false, kind: 'refused', code: 'mail-disabled' });
   });
 
-  it('concurrency cap, then daily cap: both at zero answers cap-concurrency', async () => {
+  // The daily cap that once followed this gate is retired (D-TBD-retire-daily-brake): the concurrency cap is the last
+  // admission gate, so this row names it alone.
+  it('concurrency cap: at zero answers cap-concurrency', async () => {
     const f = fixture();
-    f.coord.setCaps({ maxConcurrentWorkers: 0, maxSessionsPerDay: 0 });
+    f.coord.setCaps({ maxConcurrentWorkers: 0 });
     const out: DispatchOutcome = await dispatchRun(f.deps, f.open(), 'go', undefined);
     expect(out).toMatchObject({ ok: false, kind: 'refused', code: 'cap-concurrency', limit: 0, running: 0 });
     expect(f.calls).toEqual([]);
-  });
-
-  it('daily cap alone answers cap-daily', async () => {
-    const f = fixture();
-    f.coord.setCaps({ maxConcurrentWorkers: 5, maxSessionsPerDay: 0 });
-    expect(await dispatchRun(f.deps, f.open(), 'go', undefined))
-      .toEqual({ ok: false, kind: 'refused', code: 'cap-daily', limit: 0, used: 0 });
   });
 });

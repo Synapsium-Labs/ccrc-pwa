@@ -2214,8 +2214,10 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
     // caught it and this one did not.
     ['the running-worker cap counts dispatched ACTIVE runs, not merely non-terminal ones',
       'concurrency counts dispatched runs in an ACTIVE state'],
-    ['the daily cap counts each actual dispatch',
-      'each actual dispatch still consumes daily budget'],
+    // The daily brake is retired (D-TBD-retire-daily-brake): the pin that it counted every dispatch became the pin
+    // that there is no such count.
+    ['concurrency is the only cap; no daily dispatch count',
+      'There is no daily dispatch count: concurrency is the only cap.'],
     ['homeProject on every open',
       'Every `POST /api/runs` for this programme carries `homeProject`'],
     ['the brief carries the immutable-plan source tuple',
@@ -2418,9 +2420,10 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
     }
     // And the caps it warns about are the real ones, spelled as the codes the
     // dispatch actually answers with.
-    for (const cap of ['cap-concurrency', 'cap-daily']) {
-      expect(section, `the crossing section never names ${cap}`).toContain(cap);
-    }
+    expect(section, 'the crossing section never names cap-concurrency').toContain('cap-concurrency');
+    // The daily brake is retired (D-TBD-retire-daily-brake): the section may not warn about a refusal the server
+    // no longer sends.
+    expect(section, 'the crossing section still names the retired cap-daily').not.toContain('cap-daily');
   });
 
   // D-5523 (#601; the operator's ruling of 2026-10-18): a coordinator may sit
@@ -2465,22 +2468,21 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
     for (const text of [section, lane]) expect(text).not.toMatch(/parent-project-mismatch/);
   });
 
-  // D-2686's caps paragraph tells a refused coordinator which numbers to read.
-  // It named `running` for BOTH codes for one round, and only `cap-concurrency`
-  // carries one â€” so the sentence sent a `cap-daily` reader after a field its
-  // frame does not have. HARVESTED from the two refusal frames rather than
-  // typed, so renaming a field, or adding a third cap, reds here.
-  const capRefusalFields = (code: string): string[] => {
+  // D-2686's caps paragraph tells a refused coordinator which numbers to read. It once had to tell two refusal
+  // frames apart (`cap-daily` carried `used`, never `running`); the daily brake is retired
+  // (D-TBD-retire-daily-brake), so one frame is left. HARVESTED from the refusal frame rather than typed, so
+  // renaming a field, or adding a cap, reds here.
+  const capRefusalFields = (code: string): string[] | null => {
     // ARCH-22 (#553): the refusal frames moved with the admit step into the decider (`refused({ ... })`).
     const src = readFileSync(path.join(root, 'server/src/coord/dispatchDecide.ts'), 'utf8');
     const at = src.indexOf(`code: '${code}',`);
-    if (at < 0) throw new Error(`dispatchDecide.ts sends no ${code} refusal â€” this harvest is stale`);
+    if (at < 0) return null;
     const frame = src.slice(at, src.indexOf('});', at));
     return [...new Set([...frame.matchAll(/(\w+):/g)].map((m) => m[1]!))]
       .filter((f) => f !== 'code').sort();
   };
 
-  it('tells a refused coordinator the fields its OWN cap frame carries', () => {
+  it('tells a refused coordinator the fields its cap frame carries, and names no retired cap', () => {
     const caps = refs('wave-lifecycle.md');
     // Anchor follows the heading D-2803 corrected: the paragraph is no longer
     // "runs, not holds" but "ACTIVE runs, not holds and not merely non-terminal".
@@ -2490,28 +2492,16 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
     const para = flat(caps.slice(start, caps.indexOf('\n\n**', start + 1)));
 
     const concurrency = capRefusalFields('cap-concurrency');
-    const daily = capRefusalFields('cap-daily');
     expect(concurrency, 'cap-concurrency no longer carries limit and running')
       .toEqual(['limit', 'running']);
-    expect(daily, 'cap-daily no longer carries limit and used').toEqual(['limit', 'used']);
-
-    for (const field of concurrency) {
+    for (const field of concurrency!) {
       expect(para, `the caps paragraph never names cap-concurrency's \`${field}\``)
         .toContain(`\`${field}\``);
     }
-    for (const field of daily) {
-      expect(para, `the caps paragraph never names cap-daily's \`${field}\``)
-        .toContain(`\`${field}\``);
-    }
-    // The whole point: the field `cap-daily` does NOT carry must be said to be
-    // absent from it, not left for the reader to discover on a live refusal.
-    const missing = concurrency.filter((f) => !daily.includes(f));
-    expect(missing, 'the two cap frames no longer differ, so this pin is moot')
-      .not.toEqual([]);
-    for (const field of missing) {
-      expect(para, `the paragraph does not say cap-daily never carries \`${field}\``)
-        .toMatch(new RegExp(`cap-daily[^.]{0,160}never carries \`${field}\``));
-    }
+    expect(capRefusalFields('cap-daily'), 'dispatchDecide.ts sends the retired cap-daily refusal again').toBeNull();
+    expect(para, 'the caps paragraph still teaches the retired cap-daily').not.toContain('cap-daily');
+    expect(para, 'the caps paragraph does not say there is no daily dispatch count')
+      .toMatch(/there is no daily\s+dispatch count/i);
   });
 
   it('does not let the crossing section teach a second /clear writer or a reap', () => {

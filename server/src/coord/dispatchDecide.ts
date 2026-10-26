@@ -185,16 +185,15 @@ function decideAdmit(f: AdmitFacts): DispatchDecision<null> {
   // Refusing outright (rather than skipping the `/clear`) leaves the run `planned`, so the retry after the operator
   // lifts the marker is a genuinely fresh dispatch.
   if (f.names.includes(MAIL_DISABLED_MARKER)) return refused({ ok: false, kind: 'refused', code: 'mail-disabled' });
-  // 2: caps. The refusal carries the numbers: a cap that refuses without saying what it is reads as a bug.
-  const { caps, usage, overConcurrency } = f.caps();
+  // 2: the concurrency cap. The refusal carries the numbers: a cap that refuses without saying what it is reads as a
+  // bug. It is the ONLY cap: the daily dispatch brake that followed it is retired (D-TBD-retire-daily-brake, operator
+  // ruling 2026-10-26). It counted reviews and warm resumes as if they were fresh workspaces, refused a coordinator
+  // with nothing that would wake it, and measured neither memory nor processes.
+  const { overConcurrency } = f.caps();
   if (overConcurrency !== null) {
     // Fields spelled, not spread: coordinator-skill.test.ts harvests this frame's names.
     return refused({ ok: false, kind: 'refused', code: 'cap-concurrency',
       limit: overConcurrency.limit, running: overConcurrency.running });
-  }
-  if (usage.dispatchedIn24h >= caps.maxSessionsPerDay) {
-    return refused({ ok: false, kind: 'refused', code: 'cap-daily',
-      limit: caps.maxSessionsPerDay, used: usage.dispatchedIn24h });
   }
   return go(null);
 }

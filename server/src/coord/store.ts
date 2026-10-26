@@ -121,7 +121,7 @@ import {
   APPROVAL_INPUT_RETENTION_DAYS, ASK_OPERATOR_PRINCIPAL, isApprovalReleaseReason, isApprovalState,
   type ApprovalMintReleaseReason, type ApprovalReleaseReason, type ApprovalState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
-  type CoordCaps, type DeviationAllocation, type DeviationAllocState,
+  type CoordCaps, type CoordCapsUsage, type DeviationAllocation, type DeviationAllocState,
   type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome,
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
@@ -4749,16 +4749,20 @@ export class CoordStore {
 
   // ── caps ───────────────────────────────────────────────────────────────────
 
+  /** THE RETIRED COLUMN (D-TBD-retire-daily-brake, operator ruling 2026-10-26). `coordinator_state` still carries
+   *  `maxSessionsPerDay`, the daily dispatch brake's limit: migration 1 created it `NOT NULL` and seeded it, and it
+   *  STAYS — no destructive migration drops a column a rollback to an older build would read. Nothing here reads or
+   *  writes it any more: `caps()` selects the concurrency cap alone, and `setCaps` updates that column and
+   *  `updatedAt`, so the stored daily value keeps whatever it last held and governs nothing. */
   caps(): CoordCaps {
     const row = this.db.prepare(
-      'SELECT maxConcurrentWorkers, maxSessionsPerDay FROM coordinator_state WHERE id = 1',
-    ).get() as { maxConcurrentWorkers: number; maxSessionsPerDay: number };
-    return { maxConcurrentWorkers: row.maxConcurrentWorkers, maxSessionsPerDay: row.maxSessionsPerDay };
+      'SELECT maxConcurrentWorkers FROM coordinator_state WHERE id = 1',
+    ).get() as { maxConcurrentWorkers: number };
+    return { maxConcurrentWorkers: row.maxConcurrentWorkers };
   }
 
   /** D-1169. `at` IS THE CALLER'S NOW, the rule `recordRunEvent` states in full
-   *  and `markDispatched`/`capsUsage` — the method directly below this one —
-   *  already follow: the caller owns the moment being recorded. `setCaps` was the
+   *  and `markDispatched` already follows: the caller owns the moment being recorded. `setCaps` was the
    *  lone exception in its own neighbourhood, and the cost was concrete rather
    *  than aesthetic: a fixture that needed to pin a caps timestamp could not.
    *
@@ -4769,8 +4773,8 @@ export class CoordStore {
    *  parameter inside `decideCaps`, which this is not. */
   setCaps(next: CoordCaps, at: number = Date.now()): void {
     this.db.prepare(
-      'UPDATE coordinator_state SET maxConcurrentWorkers = ?, maxSessionsPerDay = ?, updatedAt = ? WHERE id = 1',
-    ).run(next.maxConcurrentWorkers, next.maxSessionsPerDay, at);
+      'UPDATE coordinator_state SET maxConcurrentWorkers = ?, updatedAt = ? WHERE id = 1',
+    ).run(next.maxConcurrentWorkers, at);
   }
 
   /** D-1169's read half. `coordinator_state.updatedAt` has been written since
@@ -4789,15 +4793,19 @@ export class CoordStore {
   }
 
   /**
-   * The two COUNTS, derived. `spec:201` says "rows in `coordinator_state`",
+   * The COUNT, derived. `spec:201` says "rows in `coordinator_state`",
    * and the limits ARE rows there — but a stored counter beside them would be a
    * second copy of what `runs` already knows, and the copy is always the one
    * that drifts (`server/src/limits.ts:34-40` states the same lesson about
    * mirroring `_ws_least_loaded`: "put the authority in one place and let the
    * other predict"). Here there is no second box to predict for, so there is no
    * excuse for a second copy at all.
+   *
+   * ONE count since D-TBD-retire-daily-brake: the rolling 24 h dispatch count, `dispatchedIn24h`, existed only for
+   * the daily brake, and nothing else read it, so it is no longer computed. With it went the clock parameter, which
+   * only that count's window used: `running` is a property of the runs' states, not of the time of asking.
    */
-  capsUsage(now: number = Date.now()): { running: number; dispatchedIn24h: number } {
+  capsUsage(): CoordCapsUsage {
     // `dispatchedAt IS NOT NULL` (deviation D-13, found in Task 3 review):
     // a bare "state is not terminal" predicate alone also matched `planned` —
     // the state `openRun` writes and Task 9's `ambiguous-dispatch` refusal
@@ -4822,10 +4830,7 @@ export class CoordStore {
     const running = (this.db.prepare(
       `SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
     ).get() as { c: number }).c;
-    const dispatchedIn24h = (this.db.prepare(
-      'SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND dispatchedAt > ?',
-    ).get(now - 24 * 3600_000) as { c: number }).c;
-    return { running, dispatchedIn24h };
+    return { running };
   }
 
   // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────
@@ -6567,7 +6572,7 @@ export class CoordStore {
    * `dispatchedAt` for `working`. A `done` or `failed` wave stays
    * `dispatchedAt = null`: it holds no live session for the cap to count,
    * and stamping the reconstruction time on a wave that in reality
-   * dispatched long ago would falsify `dispatchedIn24h` for it too.
+   * dispatched long ago would falsify its dispatch time.
    *
    * A FIFTH thing this does NOT carry (D-2352): `programs.homeProject`. None of the
    * three artefacts this rebuilds from names a

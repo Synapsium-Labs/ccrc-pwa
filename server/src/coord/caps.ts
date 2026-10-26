@@ -14,7 +14,7 @@ import type { CoordCaps } from '../../../shared/api.js';
  * reader from looking.
  *
  * This module exists because `setCaps` validates NOTHING and returns `void`
- * (`store.ts:1357`, D-1164): it binds both fields straight into an UPDATE, so
+ * (`store.ts:1357`, D-1164): it binds the caps straight into an UPDATE, so
  * 0, -5, 1.5 and 1e9 all persist. Nothing in `server/src` had ever called it,
  * so the absence never showed — the caps changed by hand-editing sqlite.
  *
@@ -34,9 +34,10 @@ export const CAP_MIN = 1;
 
 /** A fat-finger ceiling, not a claim about fleet size. The box these caps
  *  govern runs about twenty live sessions, so sixty-four is far above any real
- *  setting and far below the range where `640` could read as deliberate. ONE
- *  ceiling for both fields, on `MAIL_QUIET_MS`'s own stated principle: two
- *  numbers for one policy is two numbers to get out of step. */
+ *  setting and far below the range where `640` could read as deliberate. It
+ *  once bounded the daily brake too, on `MAIL_QUIET_MS`'s stated principle (two
+ *  numbers for one policy is two numbers to get out of step); that brake is
+ *  retired (D-TBD-retire-daily-brake), so it bounds the concurrency cap alone. */
 export const CAP_MAX = 64;
 
 /** The two members are what a route must tell apart, so they carry different
@@ -44,7 +45,13 @@ export const CAP_MAX = 64;
  *  success has caps to write, and neither is the other's absence. */
 export type CapsDecision =
   | { readonly ok: true; readonly next: CoordCaps }
-  | { readonly ok: false; readonly detail: string };
+  | { readonly ok: false; readonly detail: string }
+  /** The body asked for nothing BUT retired dials: an older PWA's save of the
+   *  dial it still renders. Its own member rather than an `ok: true` whose
+   *  `next` is the current caps, because the route acts on the two differently:
+   *  a write stamps `updatedAt` and records a feed row, and this writes nothing
+   *  and records nothing — the operator moved no cap that still exists. */
+  | { readonly ok: 'retired'; readonly retired: readonly string[] };
 
 /** The FULL conjunction, and the lower bound is not optional — D-1151 is the
  *  recorded case of borrowing this shape one term short, on the kickoff route,
@@ -53,13 +60,21 @@ const wellFormed = (v: unknown): v is number =>
   typeof v === 'number' && Number.isInteger(v) && v >= CAP_MIN && v <= CAP_MAX;
 
 /** The settable fields, enumerated ONCE — the route, the refusal detail and the
- *  merge below all read this rather than each spelling the pair again. */
-const FIELDS = ['maxConcurrentWorkers', 'maxSessionsPerDay'] as const;
+ *  merge below all read this rather than each spelling the list again. */
+const FIELDS = ['maxConcurrentWorkers'] as const;
+
+/** Dials that no longer exist, accepted and IGNORED on the wire (the wire rule:
+ *  absence permits, and a legacy field must not 400). `maxSessionsPerDay` is
+ *  the daily dispatch brake, retired by the operator on 2026-10-26
+ *  (D-TBD-retire-daily-brake): an older cached PWA still sends it with every
+ *  save that touched its row, and refusing that save would break the workers
+ *  dial beside it. Its value is never read, so it is never validated either:
+ *  an out-of-range legacy value is as meaningless as an in-range one. */
+export const RETIRED_CAP_FIELDS = ['maxSessionsPerDay'] as const;
 
 /**
- * `body` is a PARTIAL: an omitted field keeps its current value, so an operator
- * moving one dial does not have to restate the other and cannot clobber it with
- * a stale reading.
+ * `body` is a PARTIAL: an omitted field keeps its current value, so a dial added
+ * later never has to be restated, and cannot be clobbered with a stale reading.
  *
  * An unknown extra key is IGNORED, not refused — a newer client's third field
  * must not be a 400 from an older server (the wire rule, absence-permits, read
@@ -74,6 +89,8 @@ export function decideCaps(current: CoordCaps, body: unknown): CapsDecision {
   const b = body as Record<string, unknown>;
   const asked = FIELDS.filter((k) => b[k] !== undefined);
   if (asked.length === 0) {
+    const retired = RETIRED_CAP_FIELDS.filter((k) => b[k] !== undefined);
+    if (retired.length > 0) return { ok: 'retired', retired };
     return { ok: false,
       detail: `at least one of ${FIELDS.join(' or ')} must be given` };
   }
