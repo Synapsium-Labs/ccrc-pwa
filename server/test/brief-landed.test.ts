@@ -311,6 +311,34 @@ describe('the wave brief is confirmed taken (D-5841)', () => {
     expect(literalSends(h.calls)).toEqual([]);
   }, 30_000);
 
+  it('a run whose row cannot be read at the notice is retried, never the row alone: the claimant is mailed once it reads', async () => {
+    const st = { box: 'a human line', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { push } = pushSpy();
+    const w = await primed(h, coord, push);
+    seedWorker(h.home);
+    const { runId } = dispatched(coord);
+    const realRun = coord.run.bind(coord);
+    let broken = false;
+    vi.spyOn(coord, 'run').mockImplementation((id) => (broken && id === runId
+      ? { ok: false as const, kind: 'run-unreadable' as const, detail: 'fixture' } : realRun(id)));
+    for (let t = 0; t < BRIEF_NOTICE_MS; t += 60_000) { await w.sweepMail(); advance(60_000); }
+    expect(notices(coord)).toEqual([]);
+    broken = true;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await w.sweepMail();
+    expect(briefRows(coord, runId, 'brief-not-taken'), 'an unreadable run was recorded as "nobody to mail"').toBe(0);
+    expect(notices(coord)).toEqual([]);
+    broken = false;
+    advance(60_000);
+    await w.sweepMail();
+    const n = notices(coord);
+    expect(n).toHaveLength(1);
+    expect(n[0]!.toId).toBe(COORD);
+    warn.mockRestore();
+  }, 30_000);
+
   it('a parked brief noticed at 10 minutes absorbs the lane\'s own park escalation: one brief push over 30 minutes, no park push', async () => {
     const st = { box: 'a human line', enterWorks: false };
     const h = liveHarness(st);

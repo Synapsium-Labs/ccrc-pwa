@@ -26,7 +26,7 @@ import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
-import { claimantsOfSession, runsTouching } from './bindingReads.js';
+import { claimantsOfSession, coordinatorOfRun, runsTouching, workerOfRun } from './bindingReads.js';
 import { readSessionSpendMeasured } from '../shares.js';
 import { boundSessionsOf, joinRunSpend } from './runSpend.js';
 import { pageInbox, renderEnvelope, renderInboxEntry } from './envelope.js';
@@ -957,8 +957,8 @@ export function registerCoordRoutes(
     // Ambiguous or absent → unknown-recipient, recorded — no guessing: an
     // agent-to-agent message delivered to the wrong session is worse than one
     // refused with a reason.
-    const resolvedToId = toId === 'coordinator' ? coord.resolveCoordinator(runId)
-      : toId === 'worker' ? (runId === null ? null : coord.resolveWorker(runId))
+    const resolvedToId = toId === 'coordinator' ? (runId === null ? coord.soleActiveCoordinator() : coordinatorOfRun(coord, runId))
+      : toId === 'worker' ? (runId === null ? null : workerOfRun(coord, runId))
       : toId;
     if (resolvedToId === null) {
       // ONE SHAPE, TWO SENTENCES. The status and code are the coordinator
@@ -1409,7 +1409,7 @@ export function registerCoordRoutes(
     const res = await deps.runCcd(argv);
     if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
     tx(coord.db, () => {
-      const predecessor = coord.resolveWorker(opened.id);
+      const predecessor = workerOfRun(coord, opened.id);
       const bound = coord.setSession(opened.id, sessionId);
       if (bound.rebound) {
         // `bindSession` reports a rebound only when its pre-read found a
@@ -1714,7 +1714,7 @@ export function registerCoordRoutes(
    * `POST /api/claims/:id/break` frees the claim a dead holder still holds.
    * None of them can hand a LIVE program to a new session once the old
    * claimant is a corpse — `openRun`'s one-coordinator guard and
-   * `resolveCoordinator` both read the same lowest-id `claimedBy` with no
+   * `coordinatorOfRun` both read the same lowest-id `claimedBy` with no
    * state predicate, so until this door existed the dead name answered both
    * for ever and every later wave opened onto a grave.
    *

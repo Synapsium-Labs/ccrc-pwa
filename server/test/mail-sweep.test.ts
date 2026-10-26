@@ -2003,7 +2003,7 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
   });
 
   it('says NOTHING rather than guessing when the coordinator role cannot be resolved', async () => {
-    // No run, so `resolveCoordinator(null)` has no single active program to
+    // No run, so `soleActiveCoordinator()` has no single active program to
     // read and answers null. Degrade, never guess: inventing a session id
     // would tag and presence-gate against a row nothing carries.
     const h = harness({ panes: NOTICE_PANES });
@@ -2026,7 +2026,7 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
   // directions at once, which is why the sender vocabulary and this resolution
   // are one change:
   //
-  //   * sent as `'coordinator'`, it would reach `resolveCoordinator(null)`,
+  //   * sent as `'coordinator'`, it would reach `soleActiveCoordinator()`,
   //     whose answer is whichever program happens to be the SINGLE active one —
   //     so an unrelated program's coordinator would be told a kickoff it never
   //     sent, for a session it has nothing to do with, and could do nothing
@@ -2064,7 +2064,7 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
     openRunClaimedBy(coord, 'demo-the-coordinator');
     queueFrom(coord, 'coordinator', null);
 
-    // `resolveCoordinator(null)` WOULD answer here — that is what it is for, on
+    // `soleActiveCoordinator()` WOULD answer here — that is what it is for, on
     // the addressing side, where `toId:'coordinator'` with no run is the
     // documented recovery for a retired program. As SENDER attribution it is a
     // guess: a mail that belongs to no run cannot be inferred to belong to the

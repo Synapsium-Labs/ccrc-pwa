@@ -134,7 +134,7 @@ import {
 import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/ledger.js';
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
-import { openRunsClaimedBy } from './coord/bindingReads.js';
+import { coordinatorOfRun, openRunsClaimedBy, readCoordinatorOfRun } from './coord/bindingReads.js';
 import type { PushPayload } from './push.js';
 import { notify, noticeSink } from './notice.js';
 import { runDriftPass } from './coord/driftLane.js';
@@ -3047,7 +3047,7 @@ export class FleetWatcher {
    * exactly one role (D-1040). `'coordinator'` is the only role that can
    * ever be resolved to a session, and only through the RUN it names:
    * the run's `claimedBy` is the fact, and a mail that names no run
-   * carries no such fact. `resolveCoordinator(null)`'s answer — whichever
+   * carries no such fact. `soleActiveCoordinator()`'s answer — whichever
    * program happens to be the single active one — is exactly right on the
    * ADDRESSING side, where `toId:'coordinator'` with no run is the
    * documented recovery for a retired program, and is a guess here: a
@@ -3068,7 +3068,7 @@ export class FleetWatcher {
     const senderId = !MAIL_ROLE_IDS.has(origin.fromId)
       ? origin.fromId
       : origin.fromId === 'coordinator' && origin.runId !== null
-        ? store.resolveCoordinator(origin.runId)
+        ? coordinatorOfRun(store, origin.runId)
         : null;
     return senderId === null ? null : { senderId, origin };
   }
@@ -3145,7 +3145,13 @@ export class FleetWatcher {
       }
       const reason = briefNotTakenReason(b);
       const subject = briefNotTakenSubject(b.toId, b.runId, reason);
-      const coordinator = store.resolveCoordinator(b.runId);
+      // An unreadable run is not "no claimant": the row alone would end the lane with nobody mailed. Retry next sweep.
+      const c = readCoordinatorOfRun(store, b.runId);
+      if (!c.ok) {
+        console.warn(`ccrc-server: brief-not-taken notice for run ${b.runId} deferred (run row unreadable: ${c.detail})`);
+        continue;
+      }
+      const coordinator = c.id;
       const told = coordinator !== null && coordinator !== b.toId
         ? queueStallNotice(store, { id: b.runId, program: b.program, wave: b.wave, waveOf: b.waveOf }, {
           detail: BRIEF_NOTICE_DETAIL, at: now, toId: coordinator, kind: 'status', subject,
@@ -8282,7 +8288,7 @@ export class FleetWatcher {
    *    workspace — who re-enqueues or sends a fix round — and a `queue` FEED
    *    record, always (`recordAlways`: a removal is a fact about the
    *    programme whether or not anyone is watching this pane). With no open
-   *    run there is nobody to tell without guessing (`resolveCoordinator(null)`
+   *    run there is nobody to tell without guessing (`soleActiveCoordinator()`
    *    answers whichever programme is the single active one, `tellSender`'s
    *    reason), so the record is the whole notice. A NEW kind rather than
    *    `merged` or `mail`: a dequeue is the one PR outcome that is not a
@@ -8370,9 +8376,11 @@ export class FleetWatcher {
               facts.runs = sib.ok ? { ok: true, run } : { ok: false, detail: sib.detail };
               break;
             }
-            case 'coordinator':
-              facts.coordinator = coord.resolveCoordinator(s.runId);
+            case 'coordinator': {
+              const c = readCoordinatorOfRun(coord, s.runId);
+              facts.coordinator = c.ok ? c.id : c;
               break;
+            }
             case 'runState': {
               const read = coord.run(s.runId);
               facts.runState = read.ok ? { ok: true, state: read.run?.state ?? null } : { ok: false, detail: read.detail };
@@ -8608,7 +8616,10 @@ export class FleetWatcher {
     if (!m.live || (act.act === 'left' && act.phase === 'merged')) {
       answer = coord.recordObservation(m.run.id, detail, nowAt, when);
     } else {
-      const to = coord.resolveCoordinator(m.run.id);
+      // An unreadable run row holds exactly as no coordinator does: nothing written, nothing latched, the next pass re-reads.
+      const c = readCoordinatorOfRun(coord, m.run.id);
+      if (!c.ok) console.warn(`ccrc-server: checks notice for run ${m.run.id} held (run row unreadable: ${c.detail})`);
+      const to = c.ok ? c.id : null;
       if (mailHeld || to === null) return;
       answer = queueLandingNotice(coord, m.run, {
         detail, at: nowAt, episode: m.ep.e, toId: to,
@@ -8642,7 +8653,9 @@ export class FleetWatcher {
     });
     if (!gone && mailIdx >= 0 && ask !== null) {
       const w = fold.write[mailIdx]!;
-      const to = coord.resolveCoordinator(m.run.id);
+      const c = readCoordinatorOfRun(coord, m.run.id);
+      if (!c.ok) console.warn(`ccrc-server: checks notice for run ${m.run.id} held (run row unreadable: ${c.detail})`);
+      const to = c.ok ? c.id : null;
       if (mailHeld || to === null) held = true;
       else {
         const q = queueLandingNotice(coord, m.run, {

@@ -7,42 +7,21 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  ATTRIBUTE_READS, NOT_BINDING_SITES, RUN_KEYED_READS, RUN_NAMES_SESSION_CALLERS, runNamesSessionCallers, runNamesSessionCallsOf, countsByFile, equalitySites, equalitySitesOf, REPO, storeBindingReaders, unroutedSites,
+  ATTRIBUTE_READS, FOLDED_RUN_KEYED_READS, NOT_BINDING_SITES, RUN_NAMES_SESSION_CALLERS, runNamesSessionCallers, runNamesSessionCallsOf, runNamesSessionEscapes, runNamesSessionEscapesOf, countsByFile, equalitySites, equalitySitesOf, REPO, storeBindingReaders, unroutedSites,
 } from './runSessionCensus.js';
 import { BINDING_WRITER_VERBS } from '../src/coord/runBinding.js';
+import { coordinatorOfRun, workerOfRun } from '../src/coord/bindingReads.js';
 
-/** The pinned count per file: the sites of the tree at this commit. Lower a number as its file's sites are routed. */
-const SITES: Record<string, number> = {
-  'server/src/archivedExpiry.ts': 2,
-  'server/src/collectLane.ts': 2,
-  'server/src/coord/childSpent.ts': 2,
-  'server/src/coord/claims.ts': 1,
-  'server/src/coord/close.ts': 1,
-  'server/src/coord/delegation-correlation.ts': 4,
-  'server/src/coord/delegation-ingest.ts': 2,
-  'server/src/coord/delegation-model.ts': 1,
-  'server/src/coord/fingerprint.ts': 1,
-  'server/src/coord/heldFor.ts': 1,
-  'server/src/coord/runBinding.ts': 4,
-  'server/src/coord/stall.ts': 8,
-  'server/src/coord/store.ts': 14,
-  'server/src/hookstate.ts': 1,
-  'server/src/stopDoneSweep.ts': 1,
-  'server/src/tmpSweepLane.ts': 1,
-  'server/src/transcript/parse.ts': 1,
-  'server/src/turnmark.ts': 1,
-  'server/src/watch.ts': 10,
-};
-const SITES_TOTAL = 58;
+/** The pinned count per file: the sites that still decide a binding by hand, at this commit. ARCH-62 slice 4 routed the last
+ *  of them or named it in `NOT_BINDING_SITES` (with its reason), so no file holds one: the counted exit's first number. */
+const SITES: Record<string, number> = {};
+const SITES_TOTAL = 0;
 
 /** The store's session-keyed binding readers at this commit, by name (the raw detector's count, writers and attribute
  *  reads named apart). */
 const READERS: readonly string[] = ['bindingRunsOf', 'lastRunBySession', 'openRunsForSession', 'runsNamingSession'];
-/** The store's binding readers as the spec (K10) counts them at this commit: the four above plus the two run-keyed ones
- *  (`RUN_KEYED_READS`, `resolveCoordinator` and `resolveWorker`), which slice 4 folds onto `run(id)`. */
-const COUNTED_READERS = 6;
-/** The counted exit's number (spec §5.9): open-only, any state, last-closed, and the series the binding decides over. Met
- *  once slice 4 folds the run-keyed readers; not met at this commit (6 > 4). */
+/** The counted exit's number (spec §5.9): open-only, any state, last-closed, and the series the binding decides over. The
+ *  run-keyed readers (`resolveCoordinator`, `resolveWorker`) are folded onto `run(id)` (slice 4), so this is the whole count. */
 const READERS_CEILING = 4;
 
 describe('the equality-site query (ARCH-62 census)', () => {
@@ -125,6 +104,28 @@ describe('the callers of runNamesSession (an id-string decision behind a name; A
     const src = "import { runNamesSession } from './runBinding.js';\nif (runNamesSession(r, id)) {}\n";
     expect(runNamesSessionCallsOf(src, 'x.ts')).toBe(1);
   });
+
+  it('counts a call through an aliased import or a namespace import', () => {
+    const aliased = "import { runNamesSession as names } from './coord/runBinding.js';\nif (names(r, id)) {}\n";
+    expect(runNamesSessionCallsOf(aliased, 'x.ts')).toBe(1);
+    const spaced = "import {\n  bindingOf,\n  runNamesSession  as  n2,\n} from './runBinding.js';\nn2(r, id); n2(q, id);\n";
+    expect(runNamesSessionCallsOf(spaced, 'x.ts')).toBe(2);
+    const ns = "import * as rb from './runBinding.js';\nif (rb.runNamesSession(r, id)) {}\n";
+    expect(runNamesSessionCallsOf(ns, 'x.ts')).toBe(1);
+  });
+
+  it('names every use of the helper that is neither its import nor a call (a re-export, a copy, a value passed on)', () => {
+    expect(runNamesSessionEscapesOf("import { runNamesSession } from './runBinding.js';\nrunNamesSession(r, id);\n", 'x.ts')).toEqual([]);
+    expect(runNamesSessionEscapesOf("export { runNamesSession as names } from './coord/runBinding.js';\n", 'x.ts')).toHaveLength(1);
+    expect(runNamesSessionEscapesOf("import { runNamesSession } from './runBinding.js';\nexport { runNamesSession as names };\n", 'x.ts')).toHaveLength(1);
+    expect(runNamesSessionEscapesOf("import { runNamesSession } from './runBinding.js';\nconst f = runNamesSession;\nf(r, id);\n", 'x.ts')).toHaveLength(1);
+    expect(runNamesSessionEscapesOf("import { runNamesSession as n } from './runBinding.js';\nruns.filter(n);\n", 'x.ts')).toHaveLength(1);
+    expect(runNamesSessionEscapesOf("import * as rb from './runBinding.js';\nconst { runNamesSession: g } = rb;\nconst h = rb.runNamesSession;\n", 'x.ts')).toHaveLength(2);
+  });
+
+  it('has no such use under server/src, so the pinned calls are every way the helper is reached', () => {
+    expect(runNamesSessionEscapes()).toEqual([]);
+  });
 });
 
 describe('the store binding readers (ARCH-62 census)', () => {
@@ -134,9 +135,7 @@ describe('the store binding readers (ARCH-62 census)', () => {
     expect(found).toEqual([...READERS].sort());
   });
 
-  it('count six with the run-keyed readers: the exit ceiling is four, pending slice 4', () => {
-    expect(found.length + RUN_KEYED_READS.length).toBe(COUNTED_READERS);
-    // What slice 4 must reach: with `resolveCoordinator`/`resolveWorker` folded onto `run(id)`, only these remain.
+  it('count four, the exit ceiling, with the run-keyed readers folded onto run(id) (slice 4)', () => {
     expect(found.length).toBeLessThanOrEqual(READERS_CEILING);
   });
 
@@ -150,12 +149,12 @@ describe('the store binding readers (ARCH-62 census)', () => {
 describe('the run-keyed binding readers the spec counts (ARCH-62 census; folded onto run(id) in slice 4)', () => {
   const text = readFileSync(`${REPO}/server/src/coord/store.ts`, 'utf8');
 
-  it('are exactly resolveCoordinator and resolveWorker, still on the store, each read by run id', () => {
-    expect(RUN_KEYED_READS).toEqual(['resolveCoordinator', 'resolveWorker']);
-    for (const n of RUN_KEYED_READS) expect(text).toMatch(new RegExp(`^  ${n}\\(runId: `, 'm'));
+  it('are gone from the store: neither resolveCoordinator nor resolveWorker is a method of CoordStore', () => {
+    expect(FOLDED_RUN_KEYED_READS).toEqual(['resolveCoordinator', 'resolveWorker']);
+    for (const n of FOLDED_RUN_KEYED_READS) expect(text).not.toMatch(new RegExp(`^  ${n}\\(`, 'm'));
   });
 
-  it('are counted by name, not by the raw detector, which sees only session-keyed queries', () => {
-    expect(storeBindingReaders(text).filter((n) => RUN_KEYED_READS.includes(n))).toEqual([]);
+  it('are answered by the two functions over run(id), which read one run and no series', () => {
+    expect([typeof coordinatorOfRun, typeof workerOfRun]).toEqual(['function', 'function']);
   });
 });

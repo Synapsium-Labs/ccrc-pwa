@@ -685,7 +685,7 @@ function stallCoordinatorIds(runs: readonly StallRunRow[]): ReadonlySet<string> 
   return ids;
 }
 
-/** The role id the mail route resolves to a run's own worker (`routes.ts` check 7, `resolveWorker(runId)`), as
+/** The role id the mail route resolves to a run's own worker (`routes.ts` check 7, `workerOfRun(runId)`), as
  *  `stallCoordinatorIds`' `coordinator` is the coordinator's. */
 const STALL_WORKER_ROLE = 'worker';
 

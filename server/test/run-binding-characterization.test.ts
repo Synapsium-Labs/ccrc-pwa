@@ -10,7 +10,7 @@ import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okSiblings, parentOfSession } from './coordReadHelpers.js';
-import { claimantsOfSession, openRunsClaimedBy } from '../src/coord/bindingReads.js';
+import { claimantsOfSession, coordinatorOfRun, openRunsClaimedBy, workerOfRun } from '../src/coord/bindingReads.js';
 
 const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-binding-char-'), '.ccrc', 'coord.db')));
@@ -133,9 +133,9 @@ describe('the other session-keyed readers as they answer before ARCH-62', () => 
   it('resolveWorker and resolveCoordinator read one run\'s own columns', () => {
     const s = store();
     const a = open(s, 'prog-a', 'coord-1');
-    expect(s.resolveWorker(a)).toBeNull();
+    expect(workerOfRun(s, a)).toBeNull();
     s.setSession(a, 'demo-w');
-    expect(s.resolveWorker(a)).toBe('demo-w');
-    expect(s.resolveCoordinator(a)).toBe('coord-1');
+    expect(workerOfRun(s, a)).toBe('demo-w');
+    expect(coordinatorOfRun(s, a)).toBe('coord-1');
   });
 });

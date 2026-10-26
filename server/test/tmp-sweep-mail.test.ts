@@ -444,6 +444,26 @@ describe('runTmpSweepCensusLane', () => {
     expect(r.mailTo(COORD)).toHaveLength(2);
   });
 
+  it('a coordinator whose worker\'s run row cannot be read this pass is not latched as told: the next pass mails it', async () => {
+    const r = laneRig(json(census({ sessions: [overBudget()] })));
+    workerOfCoordinator(r.coord);
+    const real = r.coord.run.bind(r.coord);
+    const read = vi.spyOn(r.coord, 'run').mockImplementationOnce(() => ({ ok: false, kind: 'run-unreadable', detail: 'wave past 2^53' }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+      expect(r.mailTo(WORKER), 'the session itself is told on the first pass').toHaveLength(1);
+      expect(r.mailTo(COORD), 'an unreadable run is not "nobody to tell"').toEqual([]);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('wave past 2^53'))).toBe(true);
+      read.mockImplementation(real);
+      await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+      expect(r.mailTo(COORD)).toHaveLength(1);
+      expect(r.mailTo(WORKER), 'the retry does not re-tell the session').toHaveLength(1);
+      await runTmpSweepCensusLane(r.deps, r.state, KNOWN);
+      expect(r.mailTo(COORD), 'once told, latched').toHaveLength(1);
+    } finally { warn.mockRestore(); read.mockRestore(); }
+  });
+
   it('a malformed census is unmeasured: no mail, no holders', async () => {
     const r = laneRig('{"v":1,');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);

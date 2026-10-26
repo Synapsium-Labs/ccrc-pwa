@@ -23,16 +23,21 @@ import type { ChildBirth } from './childSpent.js';
  *
  * WHICH RUNS BIND A BORN INCARNATION. A run names the session, and
  *   - carries a birth: it binds iff that birth is THIS incarnation's (same instant, recorded for this session id);
- *   - carries none (a later wave opened on a worker that already exists, which `bindSession` leaves unstamped): opened
- *     at or after the birth it binds; opened BEFORE the birth it is UNDECIDABLE, a third answer and not `false`. Two
- *     histories produce that row and the columns cannot tell them apart: a ghost (#746, #758: the run was opened for an
- *     earlier occupant of a reused name) and a live binding (`openRun`'s dup arm returns the planned run with its
- *     original `openedAt`, and the open route then binds it, so a run opened before the occupant was born is bound to
- *     it). Deviation from #758: the rule is not "a run opened before the birth cannot bind". An undecidable run is
- *     never a parent, a claimant or a child (no ghost coordinator), and is never dropped: `bindingOf` lists it in
- *     `undecided`, so a reader says "unknown" and not "coordinator gone". The exact answer needs the bind to record
- *     the incarnation it bound (a bound-birth column written by `bindSession`); that migration is #1407, which also
- *     closes the `unborn` gap above (an unborn session that reuses a name keeps the id-string rule).
+ *   - carries none (a run bound before this build's stamp, or to a session that never had a placeable birth): opened at or
+ *     after the birth it binds; opened BEFORE the birth it is UNDECIDABLE, a third answer and not `false`. Two histories
+ *     produce that row and the columns cannot tell them apart: a ghost (#746, #758: the run was opened for an earlier
+ *     occupant of a reused name) and a live binding (`openRun`'s dup arm returns the planned run with its original
+ *     `openedAt`, and the open route then binds it). An undecidable run is never a parent, a claimant or a child (no
+ *     ghost coordinator), and is never dropped: `bindingOf` lists it in `undecided`. Since ARCH-62 slice 4 (#1407)
+ *     `CoordStore.bindSession` records the occupant's birth on a later wave it binds (`stampOccupantBirth`), so a run
+ *     bound to the live worker is `bound` and a run bound to an earlier occupant is `unbound`, whatever its `openedAt`;
+ *     the undecidable arm is left for rows bound before the stamp. An `unborn` session that reuses a name keeps the
+ *     id-string rule (gap 1 of #1407, tracked in #1532). One LEGACY exception, accepted and pinned
+ *     (`run-binding-bound-birth.test.ts`): migration 16's backfill dated every bound run to its OWN `dispatchStartedAt`,
+ *     later waves included, so for a worker alive across that migration the newest placeable birth of its id can be a
+ *     backfilled wave-N row rather than its minting run. A wave bound after this build is then stamped with that
+ *     wave-N instant and reads `unbound` for the live occupant, as the backfilled wave-N row itself already does. The
+ *     columns cannot tell a backfilled wave-N row from a minting run, so the stamp does not guess; such workers age out.
  *
  * TWO QUERIES, NAMED. `newest` is the newest run that binds the incarnation in ANY state (the card's `session.run`);
  * `open` is the newest that is not terminal (`session.openRun`). A state this build cannot name counts as open, as

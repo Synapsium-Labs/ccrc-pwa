@@ -544,7 +544,7 @@ describe('reclaimRun — the order is the guard', () => {
     const w1 = seedRun(s, DEAD, 1);
     const w2 = seedRun(s, DEAD, 2);
     // Wave 1 has finished. It is the row `openRun`'s guard (store.ts:381-383) and
-    // `resolveCoordinator(null)` both read FIRST — `ORDER BY id LIMIT 1`, with no
+    // `soleActiveCoordinator()` both read FIRST — `ORDER BY id LIMIT 1`, with no
     // state predicate — so a terminal-sparing rewrite leaves both readers still
     // answering the corpse, and the wedge survives the reclaim.
     s.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(w1);
