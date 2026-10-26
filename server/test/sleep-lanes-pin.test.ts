@@ -1116,3 +1116,113 @@ describe('C4b: one row per SleepPolicy field, each value answering the old verdi
     expect(Object.keys(HB.store).includes('parkedWorker'), 'idle-hours\' store read carries no parked run').toBe(false);
   });
 });
+
+// ── C4b (D-7040; ARCH-43): the one ladder, `decideSleep`, through both policy rows ──────────────────────────────────────
+// APPENDED by C4b's red commit. The whole decision matrix above, run through `decideSleep(…, RUN_DONE_POLICY)` and
+// `decideSleep(…, IDLE_HOURS_POLICY)` over each policy's own input builder, must answer what the matrix names (the rung's
+// word, the higher rung of a pair) and what the policy's verdict answers, row for row. Once the verdicts delegate, the
+// rung words keep the rows from reading their answers back.
+// Imports sit here, beside the rows that read them, so the head of the file stays as C4a left it.
+import { SLEEP_POLICY_NAMES, decideSleep, type SleepInput, type SleepVerdict } from '../src/sleep.js';
+import { RUN_DONE_POLICY, stopDoneSleepInput } from '../src/stopDone.js';
+import { IDLE_HOURS_POLICY, hibernateSleepInput } from '../src/coord/hibernate.js';
+
+const rd = (i: StopDoneInput): SleepVerdict<StopDoneHold> => decideSleep(stopDoneSleepInput(i), RUN_DONE_POLICY);
+const ih = (i: HibernateInput, afterMs = N): SleepVerdict<HibernateHold> => decideSleep(hibernateSleepInput(i, NOW, afterMs), IDLE_HOURS_POLICY);
+const dword = (v: SleepVerdict<string>): string => (v.act === 'hold' ? v.reason : v.act);
+const rdw = (i: StopDoneInput): string => dword(rd(i));
+const ihw = (i: HibernateInput, afterMs = N): string => dword(ih(i, afterMs));
+
+/** Every input of run-done's matrix: the clear one, each rung alone (live read and unread), and every pair. */
+const RD_MATRIX: ReadonlyArray<readonly [string, StopDoneInput, string]> = [
+  ['clear', SD, 'hibernate'],
+  ['clear, unread', { ...SD, live: { kind: 'unread' } }, 'measure'],
+  ...[...RUN_DONE, ...RUN_DONE_ALSO].map((r) => [`alone: ${r.name}`, r.set(SD), r.word] as const),
+  ...RUN_DONE.filter((r) => !r.live).map((r) => [`unread: ${r.name}`, r.set({ ...SD, live: { kind: 'unread' } }), r.word] as const),
+  ...pairsOf(RUN_DONE).map(([a, b]) => [`pair: ${a.name} + ${b.name}`, b.set(a.set(SD)), a.word] as const),
+];
+const IH_MATRIX: ReadonlyArray<readonly [string, HibernateInput, string]> = [
+  ['clear', HB, 'hibernate'],
+  ['clear, unread', { ...HB, live: { kind: 'unread' } }, 'measure'],
+  ...[...IDLE_HOURS, ...IDLE_HOURS_ALSO].map((r) => [`alone: ${r.name}`, r.set(HB), r.word] as const),
+  ...IDLE_HOURS.filter((r) => !r.live).map((r) => [`unread: ${r.name}`, r.set({ ...HB, live: { kind: 'unread' } }), r.word] as const),
+  ...pairsOf(IDLE_HOURS).map(([a, b]) => [`pair: ${a.name} + ${b.name}`, b.set(a.set(HB)), a.word] as const),
+];
+
+describe('C4b: decideSleep, one ladder, answers each policy\'s word for the whole decision matrix', () => {
+  it('the two rows are named by SLEEP_POLICY_NAMES and answer in their own map\'s words', () => {
+    expect([RUN_DONE_POLICY.name, IDLE_HOURS_POLICY.name]).toEqual([...SLEEP_POLICY_NAMES]);
+    expect([...SLEEP_POLICY_NAMES]).toEqual(['run-done', 'idle-hours']);
+    expect([...RUN_DONE_POLICY.holds].sort()).toEqual([...STOP_DONE_HOLDS].sort());
+    expect([...IDLE_HOURS_POLICY.holds].sort()).toEqual([...HIBERNATE_HOLDS].sort());
+  });
+
+  it('run-done: every row answers the matrix\'s word and stopDoneVerdict\'s, row for row', () => {
+    const wrong = RD_MATRIX.filter(([, i, want]) => rdw(i) !== want || rdw(i) !== sdv(i)).map(([n, i, want]) => `${n}: ${rdw(i)} (want ${want}, verdict ${sdv(i)})`);
+    expect(RD_MATRIX.length).toBeGreaterThan(400);
+    expect(wrong).toEqual([]);
+  });
+
+  it('idle-hours: every row answers the matrix\'s word and hibernateVerdict\'s, row for row', () => {
+    const wrong = IH_MATRIX.filter(([, i, want]) => ihw(i) !== want || ihw(i) !== hbv(i)).map(([n, i, want]) => `${n}: ${ihw(i)} (want ${want}, verdict ${hbv(i)})`);
+    expect(IH_MATRIX.length).toBeGreaterThan(200);
+    expect(wrong).toEqual([]);
+  });
+
+  it('every word a row answers is in its policy\'s own hold list', () => {
+    const rdHolds: readonly string[] = RUN_DONE_POLICY.holds;
+    const ihHolds: readonly string[] = IDLE_HOURS_POLICY.holds;
+    expect(RD_MATRIX.map(([, i]) => rd(i)).filter((v) => v.act === 'hold' && !rdHolds.includes(v.reason))).toEqual([]);
+    expect(IH_MATRIX.map(([, i]) => ih(i)).filter((v) => v.act === 'hold' && !ihHolds.includes(v.reason))).toEqual([]);
+  });
+
+  it('the sleep answer carries what the verdicts carry: run-done its run and hold-ok text, idle-hours no run', () => {
+    expect(rd(SD)).toStrictEqual({ act: 'hibernate', idleMs: 7 * HOUR, runId: 7 });
+    expect(rd({ ...SD, heldKind: 'run-terminal', row: { ...SD.row, held: PROGRAMME_HOLD } }))
+      .toStrictEqual({ act: 'hibernate', idleMs: 7 * HOUR, runId: 7, holdOk: PROGRAMME_HOLD });
+    expect(ih(HB)).toStrictEqual({ act: 'hibernate', idleMs: 7 * HOUR, runId: null });
+  });
+
+  it('the boundary rows: idle-hours holds at N and sleeps at N + 1; run-done sleeps at its grace and holds one ms less', () => {
+    expect([ihw(hbMark(quiet(N))(HB)), ihw(hbMark(quiet(N + 1))(HB))]).toEqual(['recent', 'hibernate']);
+    expect([ihw(hbMark(quiet(HOUR))(HB), HOUR), ihw(hbMark(quiet(HOUR + 1))(HB), HOUR)]).toEqual(['recent', 'hibernate']);
+    expect([rdw(sdMark(quiet(GRACE - 1))(SD)), rdw(sdMark(quiet(GRACE))(SD))]).toEqual(['recent', 'hibernate']);
+    expect([rdw(sdLast({ closedAt: NOW - GRACE + 1 })(SD)), rdw(sdLast({ closedAt: NOW - GRACE })(SD))]).toEqual(['grace', 'hibernate']);
+    for (const state of STOP_DONE_PARKED_STATES) {
+      const parked = sdLast({ state, closedAt: null })(SD);
+      expect([rdw(sdMark(quiet(STOP_DONE_PARKED_IDLE_MS - 1))(parked)), rdw(sdMark(quiet(STOP_DONE_PARKED_IDLE_MS))(parked))], state)
+        .toEqual(['recent', 'hibernate']);
+    }
+    expect(rdw(sdMark(quiet(GRACE + 1))(sdStore({ parkedWorker: true })(SD)))).toBe('recent');
+    expect(rdw(sdLast({ state: 'failed' })(SD))).toBe('hibernate');
+  });
+
+  it('the live-word rows: both rows read the sleep turn policy, and agree on the whole corpus', () => {
+    const rests = WORDS.map((w) => (w === 'idle' ? 'hibernate' : 'live-word'));
+    expect(WORDS.map((w) => rdw(sdLive({ word: { ok: true, word: w } })(SD)))).toEqual(rests);
+    expect(WORDS.map((w) => ihw(hbLive({ word: { ok: true, word: w } })(HB)))).toEqual(rests);
+    expect([RUN_DONE_POLICY.liveWord, IDLE_HOURS_POLICY.liveWord]).toEqual(['sleep', 'sleep']);
+  });
+
+  it('idle-hours holds any hold, even one its input says may pass: the held rule is the row\'s, never the input\'s', () => {
+    const input: SleepInput = { ...hibernateSleepInput(hbRow({ held: PROGRAMME_HOLD })(HB), NOW, N), heldPasses: true };
+    expect(dword(decideSleep(input, IDLE_HOURS_POLICY))).toBe('held');
+    expect(dword(decideSleep(input, { ...IDLE_HOURS_POLICY, held: RUN_DONE_POLICY.held }))).toBe('hibernate');
+  });
+
+  it('a fact the input did not read holds wherever a row reads it (null is never a pass)', () => {
+    const base = hibernateSleepInput(HB, NOW, N);
+    const reads = { ...IDLE_HOURS_POLICY, entry: RUN_DONE_POLICY.entry, verbBeforeMeasure: true, turnVerdict: true };
+    expect(dword(decideSleep(base, reads))).toBe('child-unreadable');
+    expect(dword(decideSleep({ ...base, child: { kind: 'child', runId: 1 } } as SleepInput, reads))).toBe('stopped');
+    expect(dword(decideSleep(stopDoneSleepInput(SD), { ...RUN_DONE_POLICY, entry: { ...RUN_DONE_POLICY.entry, paneDead: true } }))).toBe('pane');
+    expect(dword(decideSleep({ ...base, child: { kind: 'child', runId: 1 }, stopped: false } as SleepInput, reads))).toBe('no-verb');
+  });
+
+  it('the name is never read: each row renamed to the other answers the same for every input', () => {
+    const asIdle = { ...RUN_DONE_POLICY, name: SLEEP_POLICY_NAMES[1] };
+    const asRunDone = { ...IDLE_HOURS_POLICY, name: SLEEP_POLICY_NAMES[0] };
+    expect(RD_MATRIX.filter(([, i]) => dword(decideSleep(stopDoneSleepInput(i), asIdle)) !== rdw(i)).map(([n]) => n)).toEqual([]);
+    expect(IH_MATRIX.filter(([, i]) => dword(decideSleep(hibernateSleepInput(i, NOW, N), asRunDone)) !== ihw(i)).map(([n]) => n)).toEqual([]);
+  });
+});
