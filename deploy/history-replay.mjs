@@ -42,7 +42,7 @@ import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/histor
 import { asOfCutOf, expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf } from '../ccd/history/recall.mjs';
 import { pairIndexOf } from '../ccd/history/cli.mjs';
 import { admitFile, ftsTextOfBlob, readRegPresence } from '../ccd/history/sweep.mjs';
-import { AMENDMENT_KINDS, ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ANSWER_STATES, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, LABELS, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, applyHandcheck, assembleReports, assignArms, assignmentSha256, buildWindows, changedFamilies, checkGateCode, classifyRun, cmpFrac, collapseWs, decideGate, expectedWindows, familyKey, frac, handcheckAgreement, handcheckSample, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, splitAtFirstExit8, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
+import { AMENDMENT_KINDS, ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ANSWER_STATES, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, LABELS, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, applyHandcheck, assembleReports, assignArms, assignmentSha256, buildWindows, changedFamilies, checkGateCode, classifyRun, cmpFrac, collapseWs, decideGate, expectedWindows, familyKey, frac, handcheckAgreement, handcheckSample, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, spendBudgetInForce, splitAtFirstExit8, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -7034,16 +7034,18 @@ export function loadArmRun(flags, section, { nowMs }) {
 }
 
 /** This node's values for an arm run (R26; Q2, Q5, W2-D56): the node named in the record (W2-D84's rule), this node's
- *  questions in frozen qid order, the budget in force (part 1's pilot_budget, or this node's share of spend_budget, Q5),
+ *  questions in frozen qid order, the budget in force (part 1's pilot_budget, or this node's share of part 2's budget in
+ *  force, the gate's spendBudgetInForce, Q5, D-7063), and that part 2 figure as spendBudget (null for the pilot),
  *  W2-D56's expected values (expectedForNode), the account, the limits and the settings mode. Refuses before --out. */
 export function armNodeOf(run, storeId) {
   const r = run.record;
   requireNamedNode(r, storeId);
   const questions = nodeQuestions(run.section, run.frozen.list.entries, storeId);
   const nAll = run.frozen.list.entries.length;
-  const budget = run.section === 'pilot' ? r.pilot_budget : spendShareOf(r.spend_budget, questions.length, nAll);
+  const spendBudget = run.section === 'pilot' ? null : spendBudgetInForce(r);   // W2-7 (D-7063): the budget in force, the one reader
+  const budget = run.section === 'pilot' ? r.pilot_budget : spendShareOf(spendBudget, questions.length, nAll);
   const { expected } = expectedForNode(r, storeId);
-  return { questions, nAll, account: r.account, expected, budget, limits: r.limits, settingsMode: run.settingsMode };
+  return { questions, nAll, account: r.account, expected, budget, spendBudget, limits: r.limits, settingsMode: run.settingsMode };
 }
 /** One arm run (W2-D50): the family's id as CCRC_RECALL_SESSION, the arm, and boundary N as CCRC_RECALL_ASOF. */
 function armJob(ctx, q, arm, attempt, stdin, move = null) {
@@ -7404,7 +7406,7 @@ export async function armsCommand(flags, driverEnv, deps = { recheck: recheckBat
     refuseSpawnAdmission({ home, accountId: node.account, limits: node.limits, expected: node.expected, allowCodeChange: run.allowCodeChange });   // arms: W2-5a's R10, D-6307, D-6311
     requireListed(home, storeId, familiesOf(questions));
     refuseRecallOff(home, [...new Set(questions.map((q) => q.ccrc_id))]);
-    if (section === 'quiz') process.stderr.write(`ccrc history-replay: spend share ${budget} = ceil(${record.spend_budget} x ${questions.length} / ${nAll})\n`);
+    if (section === 'quiz') process.stderr.write(`ccrc history-replay: spend share ${budget} = ceil(${node.spendBudget} x ${questions.length} / ${nAll})\n`);
     const out = prepareOut(flags.out);
     refuseColonInRealOut(out);
     refusePilotSourceOut(out, 'arms run');   // Q25, one spelling (W2-5b2 Task 1's, K4)
@@ -7417,7 +7419,7 @@ export async function armsCommand(flags, driverEnv, deps = { recheck: recheckBat
         section, home, out, rs, storeId, launch, gate, expected: node.expected, allowCodeChange: run.allowCodeChange, deps,
         configDirs: rosterConfigDirs(roster, home), model: record.arm_model, settingsMode: node.settingsMode,
         lang: driverEnv.LANG, timeoutMs: deps.timeoutMs, recordSha256: run.recordSha256, shaMinPrefix: record.labeller.sha_min_prefix,
-        budget: { in_force: budget, spend_budget: section === 'quiz' ? record.spend_budget : null, n_node: questions.length, n_all: nAll },
+        budget: { in_force: budget, spend_budget: node.spendBudget, n_node: questions.length, n_all: nAll },
         stamps: new Set(run.codeStamps),
         // W2-5b2 Task 3 (W2-D56, Q14): this node's version moves, and each run's version from the manifests (armStatesOf)
         moves: nodeMovesOf(record, record.nodes.find((n) => n.store_id === storeId).label), runVersions: new Map(),

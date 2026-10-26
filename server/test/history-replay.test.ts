@@ -24426,3 +24426,63 @@ w27Describe('W2-7 Task 1: open --amend --kind budget-raise appends one raise of 
     w27Expect(r.stdout).toBe('');
   }, 120_000);
 });
+
+// ── W2-7 Task 2: every reader spends under the budget in force (R-B1, D-7063) ─────────────────────────────────────────
+// armNodeOf reads the budget in force through the gate's one reader and carries it as spendBudget; armsCommand prints and
+// records that figure, so a node stopped for a spent budget resumes on its own --out under a raise, at the raised share.
+
+w27Describe('W2-7 Task 2: armNodeOf takes the budget in force through the one reader, and no other driver line reads the signed figure (R-B1, D-7063)', () => {
+  const fx = w5b4Quiz(w5b4Home());
+  const run = (rec: W5b4Saved): W5b4R => ({ section: 'quiz', record: rec.value, recordSha256: rec.sha, frozen: { sha256: fx.fz.sha, list: fx.fz.value },
+    settingsMode: 'restricted', allowCodeChange: false, codeStamps: [] });
+
+  w27It('T2-NODE: armNodeOf\'s quiz budget is this node\'s share of the budget in force, and spendBudget is that figure', async () => {
+    w27Expect(D4.armNodeOf(run(fx.f), W5B4_STORE_A), 'CONTROL: the unamended record').toMatchObject({ budget: 600_000, spendBudget: 1_000_000, nAll: 5 });
+    const a1 = await b23Amend(fx, fx.f, null, ['--kind', 'budget-raise', '--spend-budget', '1500000']);
+    w27Expect(D4.armNodeOf(run(a1), W5B4_STORE_A)).toMatchObject({ budget: 900_000, spendBudget: 1_500_000 });
+    const a2 = await b23Amend(fx, a1, fx.f, ['--kind', 'budget-raise', '--spend-budget', '2000000'], B23_NOW + 1000);
+    w27Expect(D4.armNodeOf(run(a2), W5B4_STORE_A)).toMatchObject({ budget: 1_200_000, spendBudget: 2_000_000 });
+    w27Expect(D4.armNodeOf(run(a1), W5B4_STORE_B), 'node B, two questions, under the first raise').toMatchObject({ budget: 600_000, spendBudget: 1_500_000 });
+  }, 120_000);
+
+  w27It('T2-PILOT: the pilot\'s spendBudget is null and its budget part 1\'s pilot_budget', () => {
+    const p = w5b4Pilot(w5b4Home());
+    w27Expect(D4.armNodeOf({ section: 'pilot', record: p.draft, recordSha256: p.d.sha, frozen: { sha256: p.fz.sha, list: p.fz.value },
+      settingsMode: 'restricted', allowCodeChange: false, codeStamps: [] }, W5B4_STORE_A)).toMatchObject({ budget: p.draft.pilot_budget, spendBudget: null });
+  });
+
+  w27It('T2-SCAN: the driver reads the signed spend_budget only in the two range checks, calls the one reader once, and spells the kind once', () => {
+    const lines = readFileSync(join(REPO, 'deploy', 'history-replay.mjs'), 'utf8').split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
+    const reads = lines.filter((l) => /\.spend_budget\b/.test(l));
+    w27Expect(reads, 'the signed field is read in two lines').toHaveLength(2);
+    for (const l of reads) w27Expect(l.trim().startsWith('refuseOutOfRangeValues({ budget: '), l).toBe(true);
+    w27Expect(reads.filter((l) => l.includes('r.spend_budget'))).toHaveLength(1);
+    w27Expect(reads.filter((l) => l.includes('amended.spend_budget'))).toHaveLength(1);
+    const calls = lines.filter((l) => l.includes('spendBudgetInForce('));
+    w27Expect(calls, 'the one reader is called once').toHaveLength(1);
+    w27Expect(calls[0]).toContain('const spendBudget = ');
+    const kinds = lines.filter((l) => l.includes("'budget-raise'"));
+    w27Expect(kinds, 'the kind is spelled once').toHaveLength(1);
+    w27Expect(kinds[0].trim().startsWith("'budget-raise': Object.freeze(")).toBe(true);
+  });
+});
+
+w27Describe.skipIf(process.platform === 'darwin')('W2-7 Task 2: a budget-exhausted quiz node resumes on the same --out under a budget raise, at the raised share (R-B1, D-7063)', () => {
+  w27It('T2-RESUME: budget-exhausted at the signed share, still exhausted on a re-run under the same record, then resumed under a raise at the raised share, every question answered and the first run read back', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { spendBudget: 100, over: { limits: { concurrency: 1 } } });
+    const r1 = await w5b4Arms(home, fx.argv());
+    w27Expect(r1.refusal, r1.stderr).toEqual({ word: 'budget-exhausted', detail: 'spent 65 of 60' });
+    w27Expect(w5b4Runs(home)).toHaveLength(1);
+    const r1b = await w5b4Arms(home, fx.argv());
+    w27Expect(r1b.refusal, 'CONTROL: a re-run is no remedy').toEqual({ word: 'budget-exhausted', detail: 'spent 65 of 60' });
+    w27Expect(w5b4Runs(home), 'CONTROL: nothing respawned').toHaveLength(1);
+    const a1 = await b23Amend(fx, fx.f, null, ['--kind', 'budget-raise', '--spend-budget', '1000000']);
+    const r2 = await w5b4Arms(home, fx.argv(a1, w5b4Inp('supersedes', fx.f)));
+    w27Expect([r2.refusal, r2.code], r2.stderr).toEqual([null, 0]);
+    w27Expect(r2.stderr.startsWith('ccrc history-replay: spend share 600000 = ceil(1000000 x 3 / 5)\n'), r2.stderr).toBe(true);
+    w27Expect(w5b4Json(join(fx.out, 'quiz', 'arms', 'summary.json'))).toMatchObject({ record_sha256: a1.sha, stop: null,
+      budget: { in_force: 600_000, spend_budget: 1_000_000, n_node: 3, n_all: 5 }, counts: { questions: 3, answered: 3, not_run: 0 } });
+    w27Expect(w5b4Runs(home), 'three questions, two arms, the first run read back and never respawned (W2-D53)').toHaveLength(6);
+  }, 120_000);
+});
