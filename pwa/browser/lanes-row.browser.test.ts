@@ -16,6 +16,8 @@
 //     pointer media feature, measured) every card and All accounts is at least 44 px tall, at a desk and on a phone.
 //  4. New session ends at the bar line's content edge (its right edge less the header's gutter, +-1 px): the lanes row
 //     under the line must not move it.
+//  5. The meter's inset ring (D-6329) reaches the session screen: the Workflows strip draws a `Meter` per row, and each
+//     track wears the 1 px inset ring in the tertiary ink (review 940 O5).
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/lanes-row.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -23,6 +25,8 @@ import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { fleetSession } from '../test/fleetFixture';
+import type { WorkflowView } from '../../shared/workflows';
 
 const THEMES = [PHOSPHOR, 'light'];
 const SKINS = [REFINED, INSTRUMENT];
@@ -441,6 +445,62 @@ describe('on /accounts at 1280, in both skins, opened from a card, the document 
         expect(found.scrollHeight, 'the document is as tall as the viewport').toBe(found.viewport);
         expect(found.scrollY, 'the document has not scrolled').toBe(0);
         expect(found.headerTop, "the header's top stays at 0").toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+// Review 940 O5's reach: the meter track's ring is an inset box-shadow (no layout), and `WorkflowStrip` on the session screen
+// draws a `Meter` per workflow row, which nothing had rendered. Its rows come from the session socket's `workflows` frame.
+const RING_SESSION = fleetSession({ id: 'project-a-lanes-ring', wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workdir: '/w/project-a', workspace: 'lanes-ring', status: 'busy', bucket: 'working' });
+const RING_FIXTURE: AppFixture = { ...FIXTURE, fleetFrames: [{ type: 'fleet', sessions: [RING_SESSION] }] };
+const workflow = (id: string, name: string, done: number): WorkflowView => ({
+  id, name, state: 'running', done, failed: 0, total: 4, phase: null, phases: null, startedAt: null, endedAt: null,
+  tokens: null, tokensUnmeasured: 0, agents: [], agentsOmitted: 0,
+});
+/** One empty meter (0 of 4, the case the ring exists for) and one part-filled (2 of 4). */
+const WORKFLOWS = [workflow('wf_ring_empty', 'workflow-a', 0), workflow('wf_ring_part', 'workflow-b', 2)];
+const RING_VIEWS: AppView[] = [
+  ...SKINS.flatMap((skin) => THEMES.map((theme) => ({ skin, theme, width: 1280 }))),
+  ...SKINS.map((skin) => ({ skin, theme: PHOSPHOR, width: 390 })),
+];
+
+describe("the meter's inset ring reaches WorkflowStrip on the session screen", () => {
+  for (const view of RING_VIEWS) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, RING_FIXTURE);
+      try {
+        await ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+          ws.send(JSON.stringify({ type: 'backlog', uuid: 'u-1', events: [], offset: 1, file: '/w/t.jsonl', missing: false, searchComplete: true, fileMeasured: true }));
+          ws.send(JSON.stringify({ type: 'workflows', workflows: WORKFLOWS }));
+        });
+        await page.goto(`${server!.origin}/s/${RING_SESSION.id}`);
+        const reached = await page.waitForSelector('.workflow-line .limit-track', { timeout: 20_000 }).then(() => true, () => false);
+        expect(reached, "the Workflows strip drew no meter: the session socket's workflows frame did not reach WorkflowStrip").toBe(true);
+        await page.waitForTimeout(300);
+        const found = await page.evaluate(() => {
+          const probe = document.body.appendChild(document.createElement('i'));
+          probe.style.color = 'var(--ink-tertiary)';
+          const ink = getComputedStyle(probe).color;
+          probe.remove();
+          const tracks = [...document.querySelectorAll<HTMLElement>('.workflow-line .limit-track')];
+          const faults: string[] = [];
+          for (const [i, t] of tracks.entries()) {
+            const r = t.getBoundingClientRect();
+            const shadow = getComputedStyle(t).boxShadow;
+            // A computed box-shadow lists every layer; the ring is the layer with the tertiary ink, inset, 0 0 0 1px.
+            const layers = shadow.split(/,(?![^(]*\))/).map((l) => l.trim());
+            const ring = layers.some((l) => l.includes(ink) && /(^|\s)inset(\s|$)/.test(l) && l.replace(ink, '').replace(/inset/, '').trim().split(/\s+/).join(' ') === '0px 0px 0px 1px');
+            if (!ring) faults.push(`track ${i} wears no 1px inset ring in ${ink}: box-shadow "${shadow}"`);
+            if (r.width < 1 || r.height < 1) faults.push(`track ${i} has no box (${r.width} x ${r.height})`);
+          }
+          return { count: tracks.length, ink, faults };
+        });
+        expect(found.count, 'both workflow rows draw a meter').toBe(WORKFLOWS.length);
+        expect(found.faults).toEqual([]);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
