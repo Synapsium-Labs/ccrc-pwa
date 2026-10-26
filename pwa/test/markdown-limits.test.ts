@@ -9,7 +9,7 @@
 // declarations of the name and are not seen here.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import ts from 'typescript-api';
 import { describe, expect, it } from 'vitest';
 import * as limits from '../src/lib/markdownLimits';
 

@@ -34,7 +34,7 @@
 // composer says when an ask is up (read, not edited: they already pass).
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
-import ts from 'typescript';
+import ts from 'typescript-api';
 import { isSpecifier, parseTs } from './literalWalker';
 
 const SESSION = path.join(import.meta.dirname, '..', 'src', 'session');

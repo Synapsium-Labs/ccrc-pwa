@@ -40,7 +40,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import ts from 'typescript-api';
 
 const APP_SRC = path.join(import.meta.dirname, '..', 'src');
 

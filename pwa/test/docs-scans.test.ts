@@ -18,7 +18,7 @@
 import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import ts from 'typescript';
+import ts from 'typescript-api';
 import { afterAll, describe, expect, it } from 'vitest';
 
 const PWA = path.join(import.meta.dirname, '..');

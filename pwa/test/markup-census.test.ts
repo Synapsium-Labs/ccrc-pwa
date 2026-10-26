@@ -80,7 +80,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import ts from 'typescript-api';
 import { ALL_CHIP_TONES, chipTone, metaChipTone } from '../src/session/chipTones';
 
 const PKG = path.join(import.meta.dirname, '..', '..');
