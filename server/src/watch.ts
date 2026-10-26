@@ -9974,8 +9974,8 @@ function renderAskBrief(
 //       hour"; `waits` on the pending owner of a real incarnation). Only `directory-unreadable` and `range-unreadable` wait, and only while
 //       the DURABLE state holds a measured (session, I, hour) row recorded before the hour's close (`laneCarries`: never a row this pass
 //       staged); every other word, and a first read with no such row, is today's immediate gap. A wait stages nothing: the hour joins the
-//       entry's `hours` (a lost window through `pendingWindows`, where an entry whose hours all wait adds no R106 hour, review 976 F1)
-//       with its word beside it in `waits`, the two removed together on every path,
+//       entry's `hours` (a lost window through `pendingWindows`, R106 included: a delay, D-6967's residue) with its word beside it in
+//       `waits`, the two removed together on every path,
 //       recorded only after the read's abort check (so a cut pass never records or rewords one; a later failure rewords it), and `listedBy`
 //       never lowered (R107). `forgetRead` never drops a waiting hour unless THIS observation ended its wait, under R101's gate and R107's:
 //       an applicable result that is not a carve-out (a measured read, the no-op skip, or any loss, which lands its own word) is a read; a
@@ -11472,16 +11472,12 @@ class DelegationLane {
 
   /** R89: the hours of every owner a pass listed and no completed observation has read, as lost windows (on every repository). R106
    *  (review F6): and every hour of it the checkpoint holds MEASURED and not yet closed (recorded before its close): lines may have
-   *  landed there after its last read (an owner read at 10:59:30 whose read throws at 11:00:30 is listed in hour 11 only). D-6967 (review
-   *  976 F1): R106 applies only to an entry holding at least one hour that is NOT waiting. An entry whose hours all wait is left only by
-   *  a completed, durable pass whose `forgetRead` removed every other hour, so every other measured, unclosed hour of it was read whole
-   *  in that pass, which is when, with no wait, the lane would have forgotten the entry and listed no window: it adds its own hours only.
-   *  A cut, a failed flush, an R82 refusal or an R107 skip leaves a hour not waiting in `hours`, so R106 applies there as before. */
+   *  landed there after its last read (an owner read at 10:59:30 whose read throws at 11:00:30 is listed in hour 11 only). */
   private pendingWindows(state: DeepReadonly<DelegationRecoveryState>): DelegationListingWindow[] {
     const out: DelegationListingWindow[] = [];
     for (const p of this.pendingOwners.values()) {
       const hours = new Set(p.hours);
-      if (p.incarnation !== null && [...p.hours].some((h) => p.waits?.has(h) !== true)) {
+      if (p.incarnation !== null) {
         for (const r of state.checkpoint.observationIntervals) {
           if (r.sessionId !== p.id || r.parentIncarnation !== p.incarnation || r.state !== 'measured') continue;
           const at = laneInstantMs(r.utcHour);

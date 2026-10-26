@@ -5826,11 +5826,10 @@ describe('D-6967 (wave-3 follow-up 10): a transient bucket-read failure waits fo
     expect(intervalFor(w.home, 'demo-a'), 'hour 10\'s waited loss').toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^range-unreadable/) });
   });
 
-  it('D-6967 R-R (M22, M23): a pending entry that holds only waiting hours adds no other hour as a lost window; one that holds a hour not waiting keeps R106', async () => {
+  it('D-6967 R-R (M23b, the residue): while a hour of (session, I) waits, R106 makes its other measured, unclosed hours lost windows too, hour 11 read whole included', async () => {
     const h11 = H + DELEGATION_HOUR_MS;
-    const h12 = h11 + DELEGATION_HOUR_MS;
-    /** demo-a's hour 10 measured from one line; then, with `fault`, a standing range fault on hour 10's bucket alone. */
-    const start = async (fault: boolean): Promise<World> => {
+    for (const fault of [true, false]) {
+      // demo-a's hour 10 measured from one line; then, with `fault`, a standing range fault on hour 10's bucket alone
       const w = world();
       writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a'));
       await passAt(w, at(0), live('demo-a'));
@@ -5838,20 +5837,48 @@ describe('D-6967 (wave-3 follow-up 10): a transient bucket-read failure waits fo
       if (fault) w.io.readFileFromBytesMeasured = async (p, o, m, t, sig) => (p.endsWith(`${BUCKET10}.spool`) ? { ok: false, reason: 'unreadable' } : realRange(p, o, m, t, sig));
       for (const t of [h11 + 30_000, h11 + 90_000]) await passAt(w, t, live('demo-a'));             // two passes in hour 11, which reads (an empty hour)
       expect(intervalFor(w.home, 'demo-a', HOUR11), 'hour 11 is measured, and not closed').toMatchObject({ state: 'measured' });
-      return w;
-    };
-    const w = await start(true);
-    expect(waitOf(w, 'demo-a'), 'hour 10 waits').toMatch(/^range-unreadable/);
-    expect(await windowOf(w, 'demo-a', H), 'the waiting hour is a lost window').toBe(true);
-    expect(await windowOf(w, 'demo-a', h11), 'hour 11, read whole, is not: the entry holds only waiting hours').toBe(false);
-    const control = await start(false);
-    expect(await windowOf(control, 'demo-a', H), 'CONTROL').toBe(false);
-    expect(await windowOf(control, 'demo-a', h11), 'CONTROL').toBe(false);
-    // a pass cut on demo-a's listing leaves its own hour 12 in the entry, not waiting: R106 is kept, so hour 11 (measured, not closed) is listed
-    await cutAt(w, h12 + 30_000, { demo: [] }, [sessionOf('demo-a')], live('demo-a'), 'demo-a');
-    expect(await windowOf(w, 'demo-a', h12), 'the cut pass\'s own hour').toBe(true);
-    expect(await windowOf(w, 'demo-a', h11), 'R106 kept for an entry with a hour not waiting').toBe(true);
-    expect(await windowOf(w, 'demo-a', H), 'hour 10 still waits').toBe(true);
+      expect(waitOf(w, 'demo-a'), `${fault}: hour 10 waits`).toEqual(fault ? expect.stringMatching(/^range-unreadable/) : undefined);
+      expect(await windowOf(w, 'demo-a', H), `${fault}: the waiting hour is a lost window`).toBe(fault);
+      expect(await windowOf(w, 'demo-a', h11), `${fault}: hour 11, read whole, is one through R106 while hour 10 waits (a delay, never a link)`).toBe(fault);
+    }
+  });
+
+  it('D-6967 R-S (M22\'): the OPEN hour waits, then a pass whose observation throws or is refused (R82): the measured, unclosed hour 10 it did not read stays a lost window', async () => {
+    const h11 = H + DELEGATION_HOUR_MS;
+    const BUCKET11 = '2026101511';
+    for (const then of ['throw', 'refuse'] as const) {
+      for (const fault of [true, false]) {
+        const w = world();
+        writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a'));
+        await passAt(w, at(0), live('demo-a'));
+        writeBucket(w, 'demo-a', BUCKET11, startLine('demo-a', '2026-10-15T11:00:05.000Z'));
+        await passAt(w, h11 + 10_000, live('demo-a'));                                           // 11:00:10: hour 11 measured; hour 10 (unclosed) read again
+        expect(intervalFor(w.home, 'demo-a', HOUR11), `${then} ${fault}: hour 11`).toMatchObject({ state: 'measured' });
+        appendBucket(w, 'demo-a', BUCKET11, bashPre('demo-a', 'toolu_s1', ['old-tree'], '2026-10-15T11:00:20.000Z'));
+        const realRange = w.io.readFileFromBytesMeasured;
+        if (fault) w.io.readFileFromBytesMeasured = async (p, o, m, t, sig) => (p.endsWith(`${BUCKET11}.spool`) ? { ok: false, reason: 'unreadable' } : realRange(p, o, m, t, sig));
+        await passAt(w, h11 + 70_000, live('demo-a'));                                           // 11:01:10: hour 10 read whole; with the fault the OPEN hour 11 waits
+        expect(waitOf(w, 'demo-a', h11), `${then} ${fault}: hour 11 waits`).toEqual(fault ? expect.stringMatching(/^range-unreadable/) : undefined);
+        appendBucket(w, 'demo-a', BUCKET10, bashPre('demo-a', 'toolu_s2', ['old-tree'], '2026-10-15T10:59:50.000Z'));   // a late line in hour 10, after its last read
+        quiet();
+        if (then === 'throw') {
+          const dropped = Promise.reject(new Error('agent socket dropped'));
+          dropped.catch(() => undefined);
+          w.faults.holdRange.set('demo-a', dropped);                                             // every range read of demo-a throws: no observation completes
+        } else {
+          const real = DelegationDurability.prototype.applyAcceptedBatch;                        // the read of hour 10's late line is refused before writing
+          vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch').mockImplementation(function (this: DelegationDurability, batches) {
+            return real.call(this, batches.map((b) => (b.cursor !== null && b.cursor.sessionId === 'demo-a'
+              ? { ...b, cursor: { ...b.cursor, anchor: { start: b.cursor.cursor + 1, sha256: 'a'.repeat(64) } } } : b)));
+          });
+        }
+        await passAt(w, h11 + 130_000, live('demo-a'));                                          // 11:02:10 (hour 10 recorded before its close: unclosed for R106)
+        if (then === 'refuse') expect((await w.watcher.delegationApplier())!.failure(), 'a pre-write refusal: the applier is not failed').toBeNull();
+        expect(await windowOf(w, 'demo-a', H), `${then} ${fault}: hour 10, measured and unclosed, unread in that pass`).toBe(true);
+        w.faults.holdRange.delete('demo-a');
+        vi.restoreAllMocks();
+      }
+    }
   });
 
   it('D-6967 R-Q (M17, R107): a cut pass\'s late flush of a read never ends a wait a NEWER pass recorded on a non-live owner', async () => {
