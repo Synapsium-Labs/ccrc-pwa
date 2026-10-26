@@ -818,7 +818,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/prstate.ts': 2,
       'server/src/remote/io.ts': 1,
       'server/src/remote/runner.ts': 1,
-      'server/src/stopDoneSweep.ts': 5,
+      'server/src/stopDoneSweep.ts': 3,
       'server/src/turnidle.ts': 9,
       'server/src/update/converge.ts': 12,
       'server/src/update/dispatch.ts': 8,
