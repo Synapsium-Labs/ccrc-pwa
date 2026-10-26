@@ -7680,17 +7680,23 @@ const EXPORT_HOLDERS_SQL = 'SELECT t.transcript_pk AS pk, '
  *  count the due blobs and, among them, the overdue ones; on completion record them with the W1-k dates. Due-ness is
  *  planExport's default, the per-copy rule since W1-B2 (D-4735 (history-export-due-per-copy)), and the candidate scan
  *  keeps exactly the blobs with a referrer in a transcript that rule makes due (lib's dueTranscriptKeys).
+ *  It checks the budget before it builds the file clock, and takes at least one chunk once it has (D-6937); on a
+ *  scheduled pass its budget is its own floor slice (D-6939).
  *  Returns true when complete (or when no census is in progress). */
 export function exportCensus(db, nowMs, budget) {
   const state = stepCursorGet(db, 'export-census');
   if (state === null) return true;
+  // CP-39 (D-6937): checked before the file clock, which stats every recorded file; a spent budget builds nothing.
+  if (!budgetLeft(budget)) return false;
   // The file clock and every transcript (a file-less one included: no clock, due at once), shared with the export pass.
   const { files, filesOf, transcripts } = exportFileClock(db, state.homeDays);
   const dueKeys = JSON.stringify(dueTranscriptKeys({ nowMs, homeRetentionDays: state.homeDays, transcripts }));
   const candidates = db.prepare(EXPORT_CANDIDATES_SQL);
   const referrers = db.prepare(EXPORT_REFERRERS_SQL);
+  let chunks = 0;
   for (;;) {
-    if (!budgetLeft(budget)) {
+    // D-6937: once the clock is built, one chunk is always taken, so a census that builds its clock moves.
+    if (chunks > 0 && !budgetLeft(budget)) {
       stepCursorSet(db, 'export-census', state);
       return false;
     }
@@ -7717,6 +7723,7 @@ export function exportCensus(db, nowMs, budget) {
     state.dueOldest = plan.oldestDueSinceMs === null ? prevOldest : (prevOldest === null ? plan.oldestDueSinceMs : Math.min(prevOldest, plan.oldestDueSinceMs));
     state.last = ids[ids.length - 1].blob_id;
     stepCursorSet(db, 'export-census', state);
+    chunks += 1;
   }
   // W1-k: the oldest unexported row, and the two dates lib's exportDates decides: the first due date over the
   // holders, by the default rule, and the file clock's first deletion date over every measured file.
