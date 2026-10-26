@@ -328,6 +328,7 @@ describe('the reconstruction drill', () => {
       health: true,
       childReclaim: true,
       reviewCap: true,
+      childIds: true,
     };
     // Bumped 22 -> 24: `kind`/`reviews` (design 2026-09-14 §5.1, task 3).
     // Bumped 24 -> 25: `childReclaim` (child-reclamation wave 5). It is NOT in
@@ -344,7 +345,9 @@ describe('the reconstruction drill', () => {
     // only what the registry and the sweep show now, never a mirror answer for
     // an instant nobody can place.
     // Bumped 25 -> 26: `reviewCap` (D-6909), named in UNRECOVERABLE above.
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(26);
+    // Bumped 26 -> 27: `childIds` (ARCH-61, #796). Like `childReclaim` it is NOT in UNRECOVERABLE: nothing stores it, the
+    // live runs frame derives it on every tick (`childrenOf`, `coord/runWire.ts`) from the runs and the fleet's marks.
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(27);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {

@@ -75,6 +75,7 @@ import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
+import { incarnationsOfSessions, withChildIds } from './coord/runWire.js';
 import { openRunsClaimedBy } from './coord/bindingReads.js';
 import { buildInfoOfRow } from './update/inventory.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
@@ -1587,7 +1588,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           if (!read.ok) {
             console.warn(`ccrc-server: /ws/fleet cold-start runs() refused (${read.detail}) — no runs frame for this socket`);
           } else {
-            onRuns(read.runs.map(toRunSummary));
+            // ARCH-61 (#796): `childIds` against the fleet this socket's frame carries; with no listable registry there is
+            // no reading of the sessions to decide against, so the frame goes without it (absence permits).
+            const summaries = read.runs.map(toRunSummary);
+            onRuns(sessions === null ? summaries : withChildIds(deps.coord, summaries, incarnationsOfSessions(deps.coord, sessions), (c, d) => console.warn(`ccrc-server: /ws/fleet cold-start could not read the series of ${c} (${d}) — childIds absent for its runs`)));
           }
         }
         catch (err) {
