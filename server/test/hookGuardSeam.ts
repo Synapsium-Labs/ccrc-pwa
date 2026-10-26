@@ -94,3 +94,23 @@ export function guardPin(fn: string, v: string, ret: string, op: '>>' | '>'): st
   }
   return bad;
 }
+
+/** A BASH_ENV file whose top-level DEBUG trap (no functrace, so it fires only for top-level commands) appends
+ *  "$W4_TAG" to $HOME/w4-reached when $BASH_COMMAND is exactly `_hook_spool_append`. $? is preserved. */
+export function reachProbe(home: string): string {
+  const file = path.join(home, 'w4-reach-probe.bash');
+  fs.writeFileSync(file, [
+    // Bash restores $? after a DEBUG trap (measured on 5.2: a trap running `false` leaves `$?` as the command left it), so the
+    // probe never changes a branch the hook takes. Builtins only: the probe adds no fork.
+    'trap \'if [[ "$BASH_COMMAND" == _hook_spool_append ]]; then { printf "%s\\n" "${W4_TAG-}" >> "$HOME/w4-reached"; } 2>/dev/null; fi\' DEBUG',
+    '',
+  ].join('\n'));
+  return file;
+}
+
+export type AppendFate = 'appended' | 'lost-append' | 'identity-skip';
+/** For each tag: 'appended' if a line carries it; else 'lost-append' if it reached the call; else 'identity-skip'
+ *  (the event ended before the spool call: D-4662's silent exits, the bounded tmux lookup included). */
+export function fates(tags: string[], present: Set<string>, reached: Set<string>): Map<string, AppendFate> {
+  return new Map(tags.map((t): [string, AppendFate] => [t, present.has(t) ? 'appended' : reached.has(t) ? 'lost-append' : 'identity-skip']));
+}

@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { makeCcdHarness, WIDE_PANE_IF_UP, type CcdHarness } from './ccdWsHelpers.js';
-import { seamHook, seamEnv, seamCount, guardPin } from './hookGuardSeam.js';
+import { seamHook, seamEnv, seamCount, guardPin, reachProbe, fates } from './hookGuardSeam.js';
 import { DELEGATION_SPOOL_BOUNDS, type DelegationEventKind } from '../../shared/api.js';
 import { parseDelegationSpoolLine } from '../src/coord/delegation-ingest.js';
 
@@ -1494,12 +1494,46 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       child.stdin.end(JSON.stringify(payload));
     });
 
+    /** The tags the reach probe recorded: hooks that got as far as the spool append's call. */
+    const reached = (): Set<string> => {
+      const f = path.join(home, 'w4-reached');
+      return new Set(fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter((l) => l !== '') : []);
+    };
+
+    it('W4-H5a: a directory at the bucket\'s name is a reached call that wrote nothing: the fate reads lost-append', () => {
+      fs.mkdirSync(path.join(ownerDir(), `${new Date().toISOString().slice(0, 13).replace(/[-T]/g, '')}.spool`));
+      run(pre('Agent', {}, 'toolu_h5a'), { BASH_ENV: reachProbe(home), W4_TAG: 'toolu_h5a' });
+      expect(fates(['toolu_h5a'], new Set(), reached()).get('toolu_h5a')).toBe('lost-append');
+    });
+
+    it('W4-H5b: a tmux that names no session ends the event before the spool call: the fate reads identity-skip', () => {
+      fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      run(pre('Agent', {}, 'toolu_h5b'), { BASH_ENV: reachProbe(home), W4_TAG: 'toolu_h5b' });
+      expect(fs.existsSync(path.join(home, 'w4-reached')), 'the probe recorded no reach').toBe(false);
+      expect(fates(['toolu_h5b'], new Set(), reached()).get('toolu_h5b')).toBe('identity-skip');
+      expect(fates(['toolu_x'], new Set(['toolu_x']), new Set()).get('toolu_x'), 'a present line is appended, whatever the probe saw').toBe('appended');
+    });
+
+    /** W4 Task 4.2: a missing line's fate, asserted BEFORE the count, so a red names its cause: a hook that reached the spool
+     *  append and wrote nothing (a lost append), or an event that ended before the spool call (D-4662's silent exits). */
+    const probed = (id: string, env: Record<string, string> = {}): Record<string, string> => ({ ...env, BASH_ENV: reachProbe(home), W4_TAG: id });
+    const noMissing = (ids: string[]): void => {
+      const f = fates(ids, new Set(rawLines().map((l) => JSON.parse(l).toolUseId as string)), reached());
+      const lost = ids.filter((t) => f.get(t) === 'lost-append');
+      const skipped = ids.filter((t) => f.get(t) === 'identity-skip');
+      expect(lost, 'a hook reached the spool append and wrote nothing: a lost append').toEqual([]);
+      expect(skipped, 'an event ended before the spool call (identity or parse, D-4662): not this guard').toEqual([]);
+    };
+
     it('sixteen hooks at once, then sixteen again: every line is whole, valid, and present exactly once', async () => {
+      const all: string[] = [];
       for (let round = 0; round < 2; round += 1) {
         const ids = Array.from({ length: 16 }, (_, i) => `toolu_r${round}_${i}`);
-        const codes = await Promise.all(ids.map((id) => racer(pre('Bash', { command: 'true' }, id))));
+        all.push(...ids);
+        const codes = await Promise.all(ids.map((id) => racer(pre('Bash', { command: 'true' }, id), probed(id))));
         expect(codes.every((c) => c === 0)).toBe(true);
       }
+      noMissing(all);
       const ls = lines();
       expect(ls).toHaveLength(32);
       for (const l of ls) expect(validate(l)).toEqual([]);
@@ -1511,8 +1545,9 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
     it.skipIf(!!NO_GLIBC_ARM)(`lines near the 4096 cap do not interleave: twelve hooks at once, each writing ~3.9 KiB${NO_GLIBC_ARM ? ` (skipped: ${NO_GLIBC_ARM})` : ''}`, async () => {
       const filler = (n: number): string => '\u0001'.repeat(300).padEnd(300 + n, 'x');
       const ids = Array.from({ length: 12 }, (_, i) => `toolu_big${i}`);
-      const codes = await Promise.all(ids.map((id, i) => racer(pre('Agent', {}, id, { cwd: `/${filler(i)}`, transcript_path: `/${filler(i)}` }))));
+      const codes = await Promise.all(ids.map((id, i) => racer(pre('Agent', {}, id, { cwd: `/${filler(i)}`, transcript_path: `/${filler(i)}` }), probed(id))));
       expect(codes.every((c) => c === 0)).toBe(true);
+      noMissing(ids);
       const raws = rawLines();
       expect(raws).toHaveLength(12);
       for (const raw of raws) { expect(bytes(raw) + 1).toBeLessThan(4096); expect(validate(JSON.parse(raw))).toEqual([]); }
@@ -1523,8 +1558,9 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       // Two 54-control-character paths (325 bytes serialized each) and a short tail per hook: about 960 to 990 bytes a line, kept whole.
       const filler = (n: number): string => '\u0001'.repeat(54).padEnd(54 + n, 'x');
       const ids = Array.from({ length: 12 }, (_, i) => `toolu_near${i}`);
-      const codes = await Promise.all(ids.map((id, i) => racer(pre('Agent', {}, id, { cwd: `/${filler(i)}`, transcript_path: `/${filler(i)}` }), SMALL)));
+      const codes = await Promise.all(ids.map((id, i) => racer(pre('Agent', {}, id, { cwd: `/${filler(i)}`, transcript_path: `/${filler(i)}` }), probed(id, SMALL))));
       expect(codes.every((c) => c === 0)).toBe(true);
+      noMissing(ids);
       const raws = rawLines();
       expect(raws).toHaveLength(12);
       for (const raw of raws) {
