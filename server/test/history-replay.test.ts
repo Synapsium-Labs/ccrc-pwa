@@ -11128,6 +11128,702 @@ describe('W2-5a fix wave: the review\'s minors', () => {
   });
 });
 
+// ── W2-6: the report-only counters (W2-D86, W2-D87, W2-D88; Q29) ─────────────────────────────────────────────────────
+// W2-6's one region of this file (Q29, U4): whole describes inserted between W2-5a's last describe and W2-5b1's first
+// appended block, so W2-5b2's appends at the end of the file never share a hunk with it. No line outside the region is
+// edited. Every module-scope binding the region declares, its imports included, is w6c-prefixed and declared here,
+// never in the file's top import block; each W2-6 task adds its own top-level describe, `W2-6 Task <N>: ...`, directly above the
+// region's closing marker. Task 1's cases load the counter through w6cLoad (a dynamic import), so while
+// deploy/history-counters.mjs is absent only they are red, never the whole file. Every store is a createStore store
+// under a mkTmp HOME; every record, measure, verify output and node report is a fixture under a mkTmp directory; nothing
+// spawns a model, reads the live HOME or writes outside its own trees.
+import * as w6cFs from 'node:fs';
+import * as w6cPath from 'node:path';
+import { spawnSync as w6cSpawnSync } from 'node:child_process';
+import { pathToFileURL as w6cUrl } from 'node:url';
+import { DatabaseSync as W6cDb } from 'node:sqlite';
+import { describe as w6cDescribe, expect as w6cExpect, it as w6cIt, vi as w6cVi } from 'vitest';
+import * as w6cGateMod from '../../deploy/history-gate.mjs';
+import * as w6cDrvMod from '../../deploy/history-replay.mjs';
+import * as w6cLibMod from '../../ccd/history/lib.mjs';
+import * as w6cStoreMod from '../../ccd/history/store.mjs';
+import { mkTmp as w6cMkTmp } from './tmpHelpers.js';
+import { REPO as W6C_REPO, scrubbedEnv as w6cScrubbed } from './historyHelpers.js';
+
+type W6cR = Record<string, any>;
+type W6cRefusal = { word: string; detail: string } | null;
+const w6cGate = w6cGateMod as unknown as W6cR;
+const w6cDrv = w6cDrvMod as unknown as W6cR;
+const w6cLib = w6cLibMod as unknown as W6cR;
+const w6cStore = w6cStoreMod as unknown as W6cR;
+const W6C_SRC = w6cPath.join(W6C_REPO, 'deploy', 'history-counters.mjs');
+const W6C_DRIVER = w6cPath.join(W6C_REPO, 'deploy', 'history-replay.mjs');
+const W6C_GATE = w6cPath.join(W6C_REPO, 'deploy', 'history-gate.mjs');
+const w6cLoad = async (): Promise<W6cR> => (await import('../../deploy/history-counters.mjs')) as unknown as W6cR;
+/** The counter names, from the gate's frozen text: this region spells none of them either. */
+const W6C_NAMES: string[] = (w6cGate.COUNTERS_DEF_V1 as Array<{ name: string }>).map((c) => c.name);
+const w6cIsComment = (l: string): boolean => /^\s*(\*|\/\/|\/\*)/.test(l);
+const w6cCode = (p: string): string[] => w6cFs.readFileSync(p, 'utf8').split('\n').filter((l) => !w6cIsComment(l));
+/** A driver refusal: the statically imported driver's class, or the one a module graph loaded after an earlier case's
+ *  vi.resetModules() carries (w6cLoad imports the counter dynamically, so its driver is then a fresh copy). */
+const w6cIsRefusal = (e: unknown): boolean => e instanceof w6cDrv.DriverRefusal || (e instanceof Error && e.name === 'DriverRefusal');
+/** A call's driver refusal as {word, detail}, null when it returns; any other throw passes through. */
+function w6cRefusalOf(fn: () => unknown): W6cRefusal {
+  try {
+    fn();
+    return null;
+  } catch (e) {
+    if (w6cIsRefusal(e)) return { word: (e as W6cR).word, detail: (e as W6cR).detail };
+    throw e;
+  }
+}
+/** An in-process call with stderr captured; a refusal answered as {word, detail}. */
+function w6cInProcess(fn: () => unknown): { code: unknown; stderr: string; refusal: W6cRefusal } {
+  const lines: string[] = [];
+  const spy = w6cVi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { lines.push(String(s)); return true; }) as typeof process.stderr.write);
+  try {
+    return { code: fn(), stderr: lines.join(''), refusal: null };
+  } catch (e) {
+    if (w6cIsRefusal(e)) return { code: null, stderr: lines.join(''), refusal: { word: (e as W6cR).word, detail: (e as W6cR).detail } };
+    throw e;
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+// ── fixtures: one node's store, five listed families on it, and a sixth on another node ─────────────────────────────
+const W6C_STORE = '00000000-0000-4000-8000-0000000006c1';
+const W6C_OTHER = '00000000-0000-4000-8000-0000000006c2';
+const W6C_T0 = 1_800_000_000_000;
+const W6C_DAY = 86_400_000;
+const W6C_WINDOW = { start_ms: W6C_T0, end_ms: W6C_T0 + 14 * W6C_DAY };
+/** The read instant every frame case passes: window end exactly, which the half-open window puts after it. */
+const W6C_AFTER = W6C_WINDOW.end_ms;
+const W6C_RECORD_SHA = 'ab'.repeat(32);
+const W6C_SCRIPT_SHA = w6cLib.sha256Hex('w2-6 task 1 fixture: measure-history.py') as string;
+const w6cGen = (n: number): string => `0189abcd-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const w6cRef = (id: string, n: number, store = W6C_STORE): W6cR => ({ store_id: store, ccrc_id: id, generation: w6cGen(n) });
+const W6C_F_T = w6cRef('w6c-t', 1);          // treatment: two measured windows, an anthropic and an other producer
+const W6C_F_C = w6cRef('w6c-c', 2);          // control: one measured window, unknown producer (null-model rows stay turns)
+const W6C_F_X = w6cRef('w6c-x', 3);          // treatment: its recall-off file changed inside the window
+const W6C_F_U = w6cRef('w6c-u', 4);          // control: one window the row cap cut before turn 11, so unmeasured (zero_windows)
+const W6C_F_N = w6cRef('w6c-n', 5);          // treatment: found false
+const W6C_F_O = w6cRef('w6c-o', 6, W6C_OTHER);   // control, on the other node: never this node's run's
+const w6cKeyOf = (f: W6cR): string => w6cGate.familyKey(f.store_id, f.ccrc_id, f.generation) as string;
+const W6C_B1 = W6C_T0 + W6C_DAY;
+const W6C_B2 = W6C_T0 + 2 * W6C_DAY;
+const W6C_BC = W6C_T0 + 3 * W6C_DAY;
+const W6C_BX = W6C_T0 + 4 * W6C_DAY;
+const W6C_BU = W6C_T0 + 5 * W6C_DAY;
+const W6C_CHANGE_TS = W6C_T0 + 6 * W6C_DAY;
+const W6C_GAP_TS = W6C_T0 + 7 * W6C_DAY;
+/** One assistant row as measure-history.py prints it, [line, ts_ms, msg_id, request_id, uuid, model]. Every msg_id is
+ *  distinct, so every row is one turn. */
+const w6cArow = (line: number, ts: number, model: string | null): unknown[] => [line, ts, `msg-${line}-${ts}`, null, w6cGen(100_000 + line), model];
+/** One copy holding a boundary at `ts`: `n` one-row turns 1000 ms apart from ts + 100, a summary row, no next boundary. */
+function w6cCopyOf(ts: number, n: number, o: { model?: string | null; models?: Array<string | null>; truncated?: boolean; fileId?: number; sourceKey?: string; after?: number } = {}): W6cR {
+  const model = o.model === undefined ? 'claude-fixture-1' : o.model;
+  const rows = Array.from({ length: n }, (_, i) => w6cArow(10 + i, ts + 100 + i * 1000, model));
+  return { file_id: o.fileId ?? 1, source_key: o.sourceKey ?? '', boundary_line: 1, after_count: o.after ?? n + 1, summary_line: 2,
+    next_boundary_line: null, next_boundary_ts_ms: null, last_ts_ms: n === 0 ? null : ts + 100 + (n - 1) * 1000, rows,
+    models: o.models ?? ['claude-fixture-1'], truncated: o.truncated ?? false };
+}
+const w6cFam = (f: W6cR, found: boolean, calls: unknown[], boundaries: W6cR[]): W6cR =>
+  ({ ccrc_id: f.ccrc_id, generation: f.generation, found, merged_generations: [], calls, boundaries });
+const w6cFamilies = (): W6cR[] => [
+  w6cFam(W6C_F_T, true, [[W6C_B1 + 500, 0, 'grep']], [
+    { boundary_uuid: w6cGen(201), ts_ms: W6C_B1, copies: [w6cCopyOf(W6C_B1, 3)] },
+    { boundary_uuid: w6cGen(202), ts_ms: W6C_B2, copies: [w6cCopyOf(W6C_B2, 11, { model: 'gpt-fixture-1', models: ['gpt-fixture-1'] })] },
+  ]),
+  w6cFam(W6C_F_C, true, [], [{ boundary_uuid: w6cGen(203), ts_ms: W6C_BC, copies: [w6cCopyOf(W6C_BC, 2, { model: null, models: [] })] }]),
+  w6cFam(W6C_F_X, true, [], [{ boundary_uuid: w6cGen(204), ts_ms: W6C_BX, copies: [w6cCopyOf(W6C_BX, 1)] }]),
+  w6cFam(W6C_F_U, true, [], [{ boundary_uuid: w6cGen(205), ts_ms: W6C_BU, copies: [w6cCopyOf(W6C_BU, 4, { model: null, models: [], truncated: true })] }]),
+  w6cFam(W6C_F_N, false, [], []),
+];
+/** The presence record's raw rows (W2-D30): one change row for F_X's id inside the window, one gap row, one seen row. */
+const w6cRecallOffRows = (): Array<[string, string]> => [
+  [`${w6cLib.RECALL_OFF_KEYS.change}${W6C_CHANGE_TS}:w6c-x`, w6cLib.canonicalJson({ from: null, to: w6cGen(3), prev_seen_ms: W6C_CHANGE_TS - 60_000 }) as string],
+  [`${w6cLib.RECALL_OFF_KEYS.gap}${W6C_GAP_TS}`, w6cLib.canonicalJson({ from: W6C_GAP_TS - 3_600_000, to: W6C_GAP_TS }) as string],
+  [w6cLib.RECALL_OFF_KEYS.seen as string, String(W6C_GAP_TS)],
+];
+/** measure-history.py --families' report for W6C_STORE, as a file's bytes would hold it, with a planted node-wide row. */
+const w6cPlainReport = (w2: W6cR = {}, top: W6cR = {}): W6cR => ({
+  store_id: W6C_STORE, user_version: 2, script_sha256: W6C_SCRIPT_SHA, counters: { 'card_served:anthropic': 7 },
+  w2: { row_cap: w6cGate.ROW_CAP, window_start_ms: W6C_WINDOW.start_ms, window_end_ms: W6C_WINDOW.end_ms, families: w6cFamilies(), recall_off: w6cRecallOffRows(), ...w2 },
+  ...top,
+});
+/** The same report in process, its node-wide counters row a getter that throws: W2-D87's "never read", measured. */
+const w6cReport = (w2: W6cR = {}, top: W6cR = {}): W6cR => {
+  const r: W6cR = w6cPlainReport(w2, top);
+  Object.defineProperty(r, 'counters', { enumerable: true, get() { throw new Error('the node-wide counters row was read (W2-D87)'); } });
+  return r;
+};
+/** The part 2 fields the frame reads. The loader validates a whole record; the frame is handed one. */
+const w6cRecordOf = (over: W6cR = {}): W6cR => ({
+  nodes: [{ label: 'node-a', store_id: W6C_STORE }, { label: 'node-b', store_id: W6C_OTHER }],
+  assignment: [{ ...W6C_F_T, arm: 'treatment' }, { ...W6C_F_C, arm: 'control' }, { ...W6C_F_X, arm: 'treatment' }, { ...W6C_F_U, arm: 'control' },
+    { ...W6C_F_N, arm: 'treatment' }, { ...W6C_F_O, arm: 'control' }],
+  gate_code: { release_tag: 'v9.9.7', files: { 'deploy/measure-history.py': W6C_SCRIPT_SHA } },
+  window: { ...W6C_WINDOW }, counters_def: { id: 'v1', sha256: w6cGate.COUNTERS_DEF_V1_SHA256 }, ...over,
+});
+/** The presence record's two instants a verify output reports (W2-D84): the newest recall-off write, a day before window
+ *  start, and the sweep's seen_ms a minute after it, so the record has seen the write (V2). */
+const W6C_AB_WRITE = W6C_T0 - W6C_DAY;
+const W6C_AB_SEEN = W6C_AB_WRITE + 60_000;
+/** One node's verify --section ab output for `store`: its assigned families at their arms, each AB_STATES[0] (realised)
+ *  unless `states` names another state by ccrc id; its presence record has seen the newest write (seen_ms after
+ *  newest_write, seen_after_write true), as the driver's verifyAbReport answers for those two values (V2's CONTROL). */
+function w6cAbOf(states: Record<string, string> = {}, top: W6cR = {}, store = W6C_STORE): W6cR {
+  const families = (w6cRecordOf().assignment as W6cR[]).filter((a) => a.store_id === store)
+    .map((a) => ({ ccrc_id: a.ccrc_id, generation: a.generation, arm: a.arm, state: states[a.ccrc_id] ?? w6cDrv.AB_STATES[0] }));
+  return { kind: w6cDrv.VERIFY_AB_KIND, v: 1, record_sha256: W6C_RECORD_SHA, store_id: store, families, counts: {},
+    newest_write: { state: 'value', ms: W6C_AB_WRITE }, seen_ms: W6C_AB_SEEN, seen_after_write: true,
+    ok: families.every((f) => f.state === w6cDrv.AB_STATES[0]), ...top };
+}
+const W6C_RS = Object.freeze({ storeId: W6C_STORE, version: 2, schema: null, db: null, close: (): void => undefined });
+const W6C_INPUTS = { part1_sha256: 'cd'.repeat(32), frozen_sha256: 'ef'.repeat(32), supersedes_sha256: null, measure_sha256: '12'.repeat(32), verify_ab_sha256: '34'.repeat(32) };
+/** A spec for every counter: it answers the number of turns it was handed, or window-unmeasured without them, and folds
+ *  to {n, sum}. Its fold throws on an empty list, so a summary of nothing is never folded. `seen` collects every ctx. */
+const w6cProbe = (seen: W6cR[] = []): W6cR => Object.fromEntries(W6C_NAMES.map((n) => [n, {
+  source: `fixture: ${n}`,
+  measure: (ctx: W6cR): W6cR => {
+    seen.push(ctx);
+    return ctx.turns === null ? { state: 'unmeasured', why: 'window-unmeasured' } : { state: 'measured', value: ctx.turns.length };
+  },
+  fold: (vs: number[]): W6cR => {
+    if (vs.length === 0) throw new Error('fold called on nothing');
+    return { n: vs.length, sum: vs.reduce((a, b) => a + b, 0) };
+  },
+}]));
+/** countersReport over the fixtures; every input overridable. */
+const w6cFrame = (ctr: W6cR, o: W6cR = {}): W6cR => ctr.countersReport({
+  record: o.record ?? w6cRecordOf(), recordSha256: o.recordSha256 ?? W6C_RECORD_SHA, inputs: W6C_INPUTS, report: o.report ?? w6cReport(),
+  ab: o.ab ?? w6cAbOf(), rs: o.rs ?? W6C_RS, measures: o.measures ?? w6cProbe(), nowMs: o.nowMs ?? W6C_AFTER,
+  stamps: o.stamps ?? [], allowCodeChange: o.allowCodeChange ?? false,
+});
+const w6cMeasuredAs = (v: number): W6cR => Object.fromEntries(W6C_NAMES.map((n) => [n, { state: 'measured', value: v }]));
+const w6cUnmeasuredAs = (why: string): W6cR => Object.fromEntries(W6C_NAMES.map((n) => [n, { state: 'unmeasured', why }]));
+/** One node for `count`: a createStore store under a fresh HOME, the measure and verify files for it, the answer the
+ *  part 2 loader would give, and a fresh --out. `final` is overridable. */
+function w6cNode(o: { recordOver?: W6cR; final?: W6cR } = {}): W6cR {
+  const home = w6cMkTmp('ccrc-w2-6-t1-home-');
+  w6cStore.createStore(home, { storeId: W6C_STORE });
+  const dbFile = w6cLib.historyPaths(home).dbFile as string;
+  const dir = w6cMkTmp('ccrc-w2-6-t1-in-');
+  const save = (name: string, value: unknown): { path: string; sha: string } => {
+    const text = `${JSON.stringify(value)}\n`;
+    const p = w6cPath.join(dir, name);
+    w6cFs.writeFileSync(p, text, { mode: 0o600 });
+    return { path: p, sha: w6cLib.sha256Hex(text) as string };
+  };
+  const measure = save('measure.json', w6cPlainReport());
+  const ab = save('verify-ab.json', w6cAbOf());
+  const final = o.final ?? { record: w6cRecordOf(o.recordOver ?? {}), sha256: W6C_RECORD_SHA, frozen: { sha256: 'ef'.repeat(32) }, stamps: [] };
+  const out = w6cPath.join(w6cMkTmp('ccrc-w2-6-t1-out-'), 'out');
+  const flags = { record: w6cPath.join(dir, 'unused-part2.json'), 'record-sha256': W6C_RECORD_SHA, part1: w6cPath.join(dir, 'unused-part1.json'),
+    'part1-sha256': 'cd'.repeat(32), frozen: w6cPath.join(dir, 'unused-frozen.json'), 'frozen-sha256': 'ef'.repeat(32),
+    measure: measure.path, 'measure-sha256': measure.sha, 'verify-ab': ab.path, 'verify-ab-sha256': ab.sha, store: dbFile, out };
+  return { home, dbFile, final, flags, out, measureSha: measure.sha, abSha: ab.sha };
+}
+
+w6cDescribe('W2-6 Task 1: the counter module, its frame and its pins (W2-D86, W2-D87, W2-D88)', () => {
+  // ── the module's shape and its pins ─────────────────────────────────────────────────────────────────────────────────
+  w6cIt('standalone entry: its shebang passes --no-warnings, its mode is executable, and importing it runs nothing (W2-D88)', () => {
+    w6cExpect(w6cFs.readFileSync(W6C_SRC, 'utf8').split('\n')[0]).toBe('#!/usr/bin/env -S node --no-warnings');
+    w6cExpect(w6cFs.statSync(W6C_SRC).mode & 0o111, 'mode 755, like the driver').not.toBe(0);
+    const r = w6cSpawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', `await import(${JSON.stringify(w6cUrl(W6C_SRC).href)});`],
+      { encoding: 'utf8', timeout: 60_000, env: { ...w6cScrubbed(process.env), HOME: w6cMkTmp('ccrc-w2-6-t1-import-') } });
+    w6cExpect([r.status, r.stdout, r.stderr]).toEqual([0, '', '']);
+  });
+
+  w6cIt.skipIf(process.platform === 'darwin')('run as a file, the shebang keeps the experimental warning off stderr; no subcommand refuses args-invalid', () => {
+    const env = { ...w6cScrubbed(process.env), HOME: w6cMkTmp('ccrc-w2-6-t1-exec-'), PATH: `${w6cPath.dirname(process.execPath)}:${process.env['PATH'] ?? ''}` };
+    const r = w6cSpawnSync(W6C_SRC, [], { encoding: 'utf8', timeout: 60_000, env });
+    w6cExpect([r.status, r.stdout, r.stderr]).toEqual([2, '', 'ccrc history-counters: args-invalid: no subcommand\n']);
+  });
+
+  // The counter's import block, pinned as D-5814 pins the driver's: exactly its modules, each with exactly its names.
+  // A later W2-6 task that adds a name inside a module's braces updates that module's entry here in the same commit.
+  const W6C_EXPECTED_IMPORTS = ['node:fs', 'node:path', 'node:url', '../ccd/history/lib.mjs', '../ccd/history/store.mjs', './history-gate.mjs', './history-replay.mjs'];
+  const W6C_EXACT_NAMES: Record<string, string> = {
+    'node:fs': '{ lstatSync, readFileSync, realpathSync, writeFileSync }',
+    'node:path': 'path',
+    'node:url': '{ fileURLToPath, pathToFileURL }',
+    '../ccd/history/lib.mjs': '{ BACKENDS, EXIT, SCHEMA_ADDED, UUID_RE, canonicalJson, sha256Hex }',
+    '../ccd/history/store.mjs': '{ StoreError, openReader, userVersion }',
+    './history-gate.mjs': '{ ASSIGNMENT_ARMS, COUNTERS_DEF_V1, COUNTERS_DEF_V1_SHA256, K, K_UNIT, assembleReports, buildWindows, changedFamilies, familyKey, turnsOf, windowCopyOf }',
+    './history-replay.mjs': '{ AB_STATES, DriverRefusal, VERIFY_AB_KIND, loadFinalRecord, loadInput, parseArgs, prepareOut, refuse }',
+  };
+  const importViolations = (text: string): string[] => {
+    const found: string[] = [];
+    const froms = [...text.matchAll(/^import\s+([^;]*?)\s*from\s*'([^']+)';/gms)];
+    if (JSON.stringify(froms.map((m) => m[2])) !== JSON.stringify(W6C_EXPECTED_IMPORTS)) found.push(`imports ${froms.map((m) => m[2]).join(', ')}`);
+    for (const m of froms) if (m[1]!.trim() !== W6C_EXACT_NAMES[m[2]!]) found.push(`${m[2]} brings in ${m[1]}`);
+    for (const l of text.split('\n')) {
+      if (w6cIsComment(l)) continue;
+      if (/^import\s*['"]/.test(l) || /\bimport\s*\(/.test(l) || /\brequire\s*\(/.test(l)) found.push(`side-effect or dynamic load ${l.trim()}`);
+      if (/\bprocess\.env\b/.test(l)) found.push(`environment read ${l.trim()}`);
+    }
+    return found;
+  };
+
+  w6cIt('CONTROL: the counter import scan sees an extra module, an extra name, a missing module, a dynamic load and an environment read', () => {
+    const real = w6cFs.readFileSync(W6C_SRC, 'utf8');
+    w6cExpect(importViolations(real), 'the counter itself').toEqual([]);
+    const variants: Array<[string, string]> = [
+      ['derive', real.replace('import { StoreError', "import { keptOf } from '../ccd/history/derive-extra.mjs';\nimport { StoreError")],
+      ['openWriter', real.replace('{ StoreError, openReader, userVersion }', '{ StoreError, openReader, openWriter, userVersion }')],
+      ['missing', real.replace("import { fileURLToPath, pathToFileURL } from 'node:url';\n", '')],
+      ['dynamic', `${real}\nconst m = await import('node:zlib');\n`],
+      ['env', real.replace('process.exitCode = main(process.argv.slice(2));', 'process.exitCode = main(process.argv.slice(2), process.env);')],
+    ];
+    for (const [label, text] of variants) {
+      w6cExpect(text, `${label}: the variant differs from the counter`).not.toBe(real);
+      w6cExpect(importViolations(text), label).not.toEqual([]);
+    }
+  });
+
+  w6cIt('the counter imports exactly its modules, each with exactly its pinned names, and reads no environment', () => {
+    w6cExpect(importViolations(w6cFs.readFileSync(W6C_SRC, 'utf8'))).toEqual([]);
+  });
+
+  /** A quoted specifier that names the counter: a static import, a dynamic import or a template specifier all quote it. */
+  const LOADS_COUNTER = /(['"`])[^'"`\n]*history-counters(?:\.mjs)?\1/;
+
+  w6cIt('CONTROL: the counter-load needle sees a static import, a dynamic import and a template specifier, and not prose', () => {
+    for (const l of ["import { countersReport } from './history-counters.mjs';", "const m = await import('./history-counters.mjs');",
+      'const m = () => import(`../deploy/history-counters.mjs`);']) w6cExpect(LOADS_COUNTER.test(l), l).toBe(true);
+    w6cExpect(LOADS_COUNTER.test('// history-counters.mjs imports this file, never the reverse')).toBe(false);
+    w6cExpect(w6cCode(W6C_DRIVER).length, 'the driver is read').toBeGreaterThan(1000);
+  });
+
+  w6cIt('neither the driver nor the gate loads the counter, and gate_code does not hash it (W2-D88)', () => {
+    w6cExpect(w6cCode(W6C_DRIVER).filter((l) => LOADS_COUNTER.test(l)), 'history-replay.mjs').toEqual([]);
+    w6cExpect(w6cCode(W6C_GATE).filter((l) => LOADS_COUNTER.test(l)), 'history-gate.mjs').toEqual([]);
+    w6cExpect([...w6cGate.GATE_CODE_FILES]).not.toContain('deploy/history-counters.mjs');
+  });
+
+  w6cIt('COUNTER_NAMES and COUNTER_MEASURES are COUNTERS_DEF_V1\'s names, derived, in order; no counter name is spelled as a string (W2-D87)', async () => {
+    const ctr = await w6cLoad();
+    w6cExpect([...ctr.COUNTER_NAMES]).toEqual(W6C_NAMES);
+    w6cExpect(Object.isFrozen(ctr.COUNTER_NAMES)).toBe(true);
+    w6cExpect(Object.keys(ctr.COUNTER_MEASURES)).toEqual(W6C_NAMES);
+    w6cExpect(Object.isFrozen(ctr.COUNTER_MEASURES)).toBe(true);
+    w6cExpect(w6cCode(W6C_SRC).filter((l) => /^export const COUNTER_NAMES = Object\.freeze\(COUNTERS_DEF_V1\.map\(/.test(l))).toHaveLength(1);
+    const quoted = new RegExp(`(['"\`])(?:${W6C_NAMES.join('|')})\\1`);
+    w6cExpect(w6cCode(W6C_SRC).filter((l) => quoted.test(l))).toEqual([]);
+    for (const n of W6C_NAMES) {
+      const s = ctr.COUNTER_MEASURES[n];
+      w6cExpect([typeof s.source, s.source.length > 0, typeof s.measure, typeof s.fold], n).toEqual(['string', true, 'function', 'function']);
+    }
+    w6cExpect(ctr.COUNTER_UNMEASURED[0]).toBe('window-unmeasured');
+    w6cExpect(new Set(ctr.COUNTER_UNMEASURED).size).toBe(ctr.COUNTER_UNMEASURED.length);
+    w6cExpect(Object.isFrozen(ctr.COUNTER_UNMEASURED)).toBe(true);
+  });
+
+  /** The node-wide counters table, or measure-history.py's copy of it, read: a property read, a bracket read, a table read. */
+  const NODE_WIDE = /\.counters\b|\[\s*(['"`])counters\1\s*\]|\b(?:FROM|JOIN)\s+counters\b/i;
+
+  w6cIt('CONTROL: the node-wide needle sees a property read, a bracket read and a table read, and never counters_def', () => {
+    for (const l of ['const n = report.counters;', "const n = r['counters'];", "db.prepare('SELECT name, n FROM counters').all();"]) w6cExpect(NODE_WIDE.test(l), l).toBe(true);
+    for (const l of ['if (record.counters_def?.sha256 !== COUNTERS_DEF_V1_SHA256)', 'COUNTERS_DEF_V1.map((c) => c.name)', '    counters: Object.fromEntries(']) w6cExpect(NODE_WIDE.test(l), l).toBe(false);
+  });
+
+  w6cIt('the node-wide counters table is never read: no code line of the counter names it (W2-D87)', () => {
+    w6cExpect(w6cCode(W6C_SRC).filter((l) => NODE_WIDE.test(l))).toEqual([]);
+  });
+
+  // ── the frame ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+  w6cIt('the frame: one row per boundary of every found family of this store, with the gate\'s window, arm, producer and turns (W2-D86, W2-D15, U5)', async () => {
+    const ctr = await w6cLoad();
+    const out = w6cFrame(ctr);
+    const pick = (r: W6cR): W6cR => ({ family: r.family, arm: r.arm, changed: r.changed, unrealised: r.unrealised, boundary_uuid: r.boundary_uuid,
+      producer: r.producer, state: r.state, turns: r.turns, recall_calls: r.recall_calls, measures: r.measures });
+    w6cExpect(out.windows.map(pick)).toEqual([
+      { family: w6cKeyOf(W6C_F_T), arm: 'treatment', changed: false, unrealised: false, boundary_uuid: w6cGen(201), producer: 'anthropic', state: 'measured', turns: 3, recall_calls: 1, measures: w6cMeasuredAs(3) },
+      { family: w6cKeyOf(W6C_F_T), arm: 'treatment', changed: false, unrealised: false, boundary_uuid: w6cGen(202), producer: 'other', state: 'measured', turns: 10, recall_calls: 0, measures: w6cMeasuredAs(10) },
+      { family: w6cKeyOf(W6C_F_C), arm: 'control', changed: false, unrealised: false, boundary_uuid: w6cGen(203), producer: 'unknown', state: 'measured', turns: 2, recall_calls: 0, measures: w6cMeasuredAs(2) },
+      { family: w6cKeyOf(W6C_F_X), arm: 'treatment', changed: true, unrealised: false, boundary_uuid: w6cGen(204), producer: 'anthropic', state: 'measured', turns: 1, recall_calls: 0, measures: w6cMeasuredAs(1) },
+      { family: w6cKeyOf(W6C_F_U), arm: 'control', changed: false, unrealised: false, boundary_uuid: w6cGen(205), producer: 'unknown', state: 'unmeasured', turns: null, recall_calls: null, measures: w6cUnmeasuredAs('window-unmeasured') },
+    ]);
+    w6cExpect(out.windows.map((r: W6cR) => [r.store_id, r.ts_ms, r.ab_state])).toEqual([W6C_B1, W6C_B2, W6C_BC, W6C_BX, W6C_BU].map((ts) => [W6C_STORE, ts, w6cDrv.AB_STATES[0]]));
+    // CONTROL: the gate's own windows for F_T, so the frame adds no window rule of its own.
+    w6cExpect((w6cGate.buildWindows(w6cFamilies()[0]) as W6cR[]).map((w) => [w.turns, w.calls, w.producer])).toEqual([[3, 1, 'anthropic'], [10, 0, 'other']]);
+  });
+
+  w6cIt('excluded is assembleReports\' answer over this node\'s families only (W2-D22, U2)', async () => {
+    const ctr = await w6cLoad();
+    const unmeasuredKey = w6cLib.canonicalJson([W6C_STORE, W6C_F_U.ccrc_id, W6C_F_U.generation, w6cGen(205)]) as string;
+    w6cExpect(w6cFrame(ctr).excluded).toEqual({ not_found: [w6cKeyOf(W6C_F_N)], zero_windows: [w6cKeyOf(W6C_F_U)], unmeasured: { count: 1, keys: [unmeasuredKey] }, not_listed: [] });
+    // CONTROL: over the whole record's assignment, the other node's family reads as listed by no report.
+    w6cExpect((w6cGate.assembleReports([w6cReport()], w6cRecordOf()) as W6cR).excluded.not_listed).toEqual([w6cKeyOf(W6C_F_O)]);
+  });
+
+  w6cIt('a changed family is dropped from the arm comparison only: its row stays, flagged, tallied apart by arm and by producer; gap rows are reported (W2-D86, W2-D23, U8, V3)', async () => {
+    const ctr = await w6cLoad();
+    const out = w6cFrame(ctr);
+    w6cExpect(out.dropped.changed).toEqual([w6cKeyOf(W6C_F_X)]);
+    w6cExpect(out.recall_off_gaps).toEqual([{ store_id: W6C_STORE, ts_ms: W6C_GAP_TS, from: W6C_GAP_TS - 3_600_000, to: W6C_GAP_TS }]);
+    w6cExpect(out.windows.filter((r: W6cR) => r.changed).map((r: W6cR) => r.boundary_uuid)).toEqual([w6cGen(204)]);
+    w6cExpect([out.strata.treatment.anthropic.windows, out.strata.treatment.all.windows], 'F_X is in no arm stratum').toEqual([1, 2]);
+    const dc = out.dropped_strata.changed;
+    w6cExpect([dc.treatment.anthropic.windows, dc.treatment.other.windows, dc.treatment.all.windows, dc.control.all.windows],
+      'F_X, a treatment family, tallied under its own arm and producer (V3)').toEqual([1, 0, 1, 0]);
+    w6cExpect(dc.treatment.all.counters[W6C_NAMES[0]!].summary, 'tallied with the arms\' own fold').toEqual({ n: 1, sum: 1 });
+    // CONTROL: with no change row, F_X is compared like any other treatment family.
+    const still = w6cFrame(ctr, { report: w6cReport({ recall_off: w6cRecallOffRows().slice(1) }) });
+    w6cExpect([still.dropped.changed, still.strata.treatment.anthropic.windows, still.dropped_strata.changed.treatment.all.windows]).toEqual([[], 2, 0]);
+  });
+
+  w6cIt('a family verify --section ab did not confirm is dropped from the arm comparison only, under its own state word: every state but ok, each listed apart (W2-D23 as extended by Q15 and W2-D84; V1, U3, V3)', async () => {
+    const ctr = await w6cLoad();
+    const AB = w6cDrv.AB_STATES as string[];
+    w6cExpect(w6cDrv.abStateOf('control', W6C_F_C.generation, { state: 'value', value: W6C_F_C.generation }), 'CONTROL: the realised answer is AB_STATES[0]').toBe(AB[0]);
+    w6cExpect(AB.slice(1), 'CONTROL: the four states V1 drops').toEqual(['control-absent', 'control-mismatch', 'treatment-named', 'unreadable']);
+    const base = w6cFrame(ctr);
+    for (const s of AB.slice(1)) w6cExpect(base.sources.frame.unrealised, `the frame's source names ${s}`).toContain(s);
+    w6cExpect(base.sources.frame.unrealised).toContain('W2-D23 as extended by Q15 and W2-D84');
+    // Each state on a family of the arm it belongs to: W2-D23's two on the control family F_C, Q15's treatment-named on
+    // the treatment family F_T (two windows, two producers), and unreadable on F_C.
+    const cases: Array<[string, W6cR, string, string]> = [[AB[1]!, W6C_F_C, 'control', 'treatment'], [AB[2]!, W6C_F_C, 'control', 'treatment'],
+      [AB[3]!, W6C_F_T, 'treatment', 'control'], [AB[4]!, W6C_F_C, 'control', 'treatment']];
+    for (const [s, f, arm, other] of cases) {
+      const out = w6cFrame(ctr, { ab: w6cAbOf({ [f.ccrc_id]: s }) });
+      w6cExpect(out.dropped.unrealised, s).toEqual(Object.fromEntries(AB.slice(1).map((t) => [t, t === s ? [w6cKeyOf(f)] : []])));
+      const mine = out.windows.filter((r: W6cR) => r.family === w6cKeyOf(f));
+      w6cExpect(mine.length, `${s}: the family's rows stay`).toBeGreaterThan(0);
+      w6cExpect(mine.map((r: W6cR) => [r.unrealised, r.ab_state, r.changed]), s).toEqual(mine.map(() => [true, s, false]));
+      const du = out.dropped_strata.unrealised;
+      w6cExpect([out.strata[arm].all.windows, du[arm].all.windows, du[other].all.windows], `${s}: out of ${arm}'s cells, tallied under ${arm} alone (V3)`)
+        .toEqual([base.strata[arm].all.windows - mine.length, mine.length, 0]);
+      for (const r of mine) w6cExpect(du[arm][r.producer].windows, `${s}: ${r.producer}`).toBeGreaterThan(0);
+    }
+    // CONTROL: every family realised drops none.
+    w6cExpect([Object.values(base.dropped.unrealised).flat(), base.strata.control.unknown.windows, base.dropped_strata.unrealised.control.all.windows,
+      base.dropped_strata.unrealised.treatment.all.windows]).toEqual([[], 2, 0, 0]);
+  });
+
+  w6cIt('strata: by arm, by the boundary\'s producer and pooled; an empty sum is null, never 0, and nothing is folded from nothing (W2-D87, W2-D15)', async () => {
+    const ctr = await w6cLoad();
+    const out = w6cFrame(ctr);
+    const s = out.strata;
+    w6cExpect(Object.keys(s)).toEqual([...w6cGate.ASSIGNMENT_ARMS]);
+    for (const arm of w6cGate.ASSIGNMENT_ARMS as string[]) w6cExpect(Object.keys(s[arm]), arm).toEqual([...w6cLib.BACKENDS, ctr.ALL_PRODUCERS]);
+    w6cExpect(Object.keys(out.dropped_strata)).toEqual(['changed', 'unrealised']);
+    for (const kind of ['changed', 'unrealised']) {
+      w6cExpect(Object.keys(out.dropped_strata[kind]), `${kind}: keyed by arm first (V3)`).toEqual([...w6cGate.ASSIGNMENT_ARMS]);
+      for (const arm of w6cGate.ASSIGNMENT_ARMS as string[]) w6cExpect(Object.keys(out.dropped_strata[kind][arm]), `${kind}/${arm}`).toEqual([...w6cLib.BACKENDS, ctr.ALL_PRODUCERS]);
+    }
+    const tally = (windows: number, measured: number, turns: number | null, calls: number | null, summary: W6cR | null, by: W6cR = {}): W6cR => ({
+      windows, measured_windows: measured, unmeasured_windows: windows - measured, turns, recall_calls: calls,
+      counters: Object.fromEntries(W6C_NAMES.map((n) => [n, { measured, unmeasured: windows - measured, unmeasured_by: by, summary }])),
+    });
+    const none = tally(0, 0, null, null, null);
+    w6cExpect(s.treatment).toEqual({ anthropic: tally(1, 1, 3, 1, { n: 1, sum: 3 }), other: tally(1, 1, 10, 0, { n: 1, sum: 10 }),
+      unknown: none, all: tally(2, 2, 13, 1, { n: 2, sum: 13 }) });
+    const ctl = tally(2, 1, 2, 0, { n: 1, sum: 2 }, { 'window-unmeasured': 1 });
+    w6cExpect(s.control).toEqual({ anthropic: none, other: none, unknown: ctl, all: ctl });
+  });
+
+  w6cIt('every counter the frame emits is named in COUNTERS_DEF_V1, and none is missing; the report names its definitions, its script and its read instant (W2-D87, W2-D88)', async () => {
+    const ctr = await w6cLoad();
+    const out = w6cFrame(ctr);
+    for (const r of out.windows) w6cExpect(Object.keys(r.measures), r.boundary_uuid).toEqual(W6C_NAMES);
+    const tallies = [...(Object.values(out.strata) as W6cR[]).flatMap((a) => Object.values(a)),
+      ...(Object.values(out.dropped_strata) as W6cR[]).flatMap((k) => (Object.values(k) as W6cR[]).flatMap((a) => Object.values(a)))];
+    w6cExpect(tallies, 'two arms of four tallies, then two dropped kinds of two arms of four (V3)').toHaveLength(2 * 4 + 2 * 2 * 4);
+    for (const t of tallies as W6cR[]) w6cExpect(Object.keys(t.counters)).toEqual(W6C_NAMES);
+    w6cExpect(Object.keys(out.sources.counters)).toEqual(W6C_NAMES);
+    w6cExpect(Object.keys(out.sources.frame).sort()).toEqual(['arm', 'changed', 'excluded', 'producer', 'recall_calls', 'recall_off_gaps', 'record_nodes', 'unrealised', 'windows']);
+    w6cExpect(out.record_nodes, 'the record\'s stores: a combine names a node no report covers (U2)').toEqual([W6C_STORE, W6C_OTHER].sort());
+    w6cExpect(out.counters_def).toEqual({ id: 'v1', sha256: w6cGate.COUNTERS_DEF_V1_SHA256 });
+    w6cExpect([out.kind, out.v, out.k, out.k_unit, out.window, out.store_id, out.record_sha256, out.inputs, out.read_ms, out.code_changed])
+      .toEqual([ctr.COUNTERS_KIND, 1, w6cGate.K, w6cGate.K_UNIT, W6C_WINDOW, W6C_STORE, W6C_RECORD_SHA, W6C_INPUTS, W6C_AFTER, false]);
+    w6cExpect(out.script_sha256, 'the counter names its own bytes: gate_code does not hash it').toBe(w6cLib.sha256Hex(w6cFs.readFileSync(W6C_SRC)));
+    w6cExpect(ctr.scriptSha256()).toBe(out.script_sha256);
+  });
+
+  w6cIt('a measure is handed the gate\'s window copy and its first K turns, never the producer\'s copy (W2-D15, D-5771)', async () => {
+    const ctr = await w6cLoad();
+    const live = w6cCopyOf(W6C_B1, 2, { fileId: 2, sourceKey: '', after: 3, model: 'gpt-fixture-1', models: ['gpt-fixture-1'] });
+    const retired = w6cCopyOf(W6C_B1, 11, { fileId: 1, sourceKey: 'retired-1', after: 30 });
+    const boundary = { boundary_uuid: w6cGen(206), ts_ms: W6C_B1, copies: [live, retired] };
+    w6cExpect([(w6cGate.windowCopyOf(boundary.copies) as W6cR).file_id, (w6cGate.producerCopyOf(boundary.copies) as W6cR).file_id], 'CONTROL: the two rules disagree here').toEqual([1, 2]);
+    const seen: W6cR[] = [];
+    const out = w6cFrame(ctr, { report: w6cReport({ families: [w6cFam(W6C_F_T, true, [], [boundary])] }), measures: w6cProbe(seen) });
+    w6cExpect(out.windows.map((r: W6cR) => [r.producer, r.turns])).toEqual([['other', 10]]);
+    w6cExpect(seen.map((c) => [c.copy.file_id, c.turns.length, c.window.turns])).toEqual(W6C_NAMES.map(() => [1, 10, 10]));
+    w6cExpect(Object.isFrozen(seen[0])).toBe(true);
+    w6cExpect(seen[0]!.turns[0].rows[0]).toEqual(retired.rows[0]);
+    w6cExpect([seen[0]!.family.arm, seen[0]!.rs.storeId, seen[0]!.calls, seen[0]!.nowMs]).toEqual(['treatment', W6C_STORE, [], W6C_AFTER]);
+  });
+
+  w6cIt('the measures contract: COUNTERS_DEF_V1\'s names in order, each a source, a measure and a fold; an answer measured with a value or unmeasured with a listed word (a defect is a TypeError)', async () => {
+    const ctr = await w6cLoad();
+    w6cExpect(() => w6cFrame(ctr), 'CONTROL').not.toThrow();
+    const missing = w6cProbe();
+    delete missing[W6C_NAMES[2]!];
+    const extra = { ...w6cProbe(), uptake: w6cProbe()[W6C_NAMES[0]!] };
+    const reordered = Object.fromEntries(Object.entries(w6cProbe()).reverse());
+    for (const [label, m] of [['missing', missing], ['extra', extra], ['reordered', reordered]] as Array<[string, W6cR]>) {
+      w6cExpect(() => w6cFrame(ctr, { measures: m }), label).toThrow(/^countersReport: measures are /);
+    }
+    const noSource = { ...w6cProbe(), [W6C_NAMES[0]!]: { ...w6cProbe()[W6C_NAMES[0]!], source: '' } };
+    w6cExpect(() => w6cFrame(ctr, { measures: noSource })).toThrow(/needs a source, a measure and a fold/);
+    const answering = (a: W6cR): W6cR => ({ ...w6cProbe(), [W6C_NAMES[1]!]: { source: 'fixture', measure: (): W6cR => a, fold: (): null => null } });
+    for (const a of [{ state: 'unmeasured', why: 'no-such-word' }, { state: 'measured', value: null }, { state: 'measured' }, { state: 'zero', value: 0 }]) {
+      w6cExpect(() => w6cFrame(ctr, { measures: answering(a) }), JSON.stringify(a)).toThrow(/a measure answers measured with a value or unmeasured with a COUNTER_UNMEASURED word/);
+    }
+  });
+
+  w6cIt('W2-D88\'s run checks refuse in one order, before any window is built: window open, counters_def, the store, the measure\'s store, the verify output (CONTROL: a run at window end exactly is after it)', async () => {
+    const ctr = await w6cLoad();
+    const end = W6C_WINDOW.end_ms;
+    const zero = '0'.repeat(64);
+    w6cExpect(w6cRefusalOf(() => w6cFrame(ctr, { nowMs: end - 1 })))
+      .toEqual({ word: 'input-invalid', detail: `window-open: now ${end - 1} is before window.end_ms ${end}: the counters run after window end (W2-D88)` });
+    w6cExpect(w6cRefusalOf(() => w6cFrame(ctr, { nowMs: end })), 'CONTROL: the window is half-open').toBeNull();
+    const badDef = { id: 'v1', sha256: zero };
+    w6cExpect(w6cRefusalOf(() => w6cFrame(ctr, { record: w6cRecordOf({ counters_def: badDef }) })))
+      .toEqual({ word: 'record-invalid', detail: `counters_def ${JSON.stringify(badDef)} is not v1 ${w6cGate.COUNTERS_DEF_V1_SHA256}` });
+    w6cExpect(w6cRefusalOf(() => w6cFrame(ctr, { record: w6cRecordOf({ nodes: [{ label: 'node-b', store_id: W6C_OTHER }] }) })))
+      .toEqual({ word: 'input-invalid', detail: `store ${W6C_STORE} is not one of the record's nodes` });
+    w6cExpect(w6cRefusalOf(() => w6cFrame(ctr, { report: w6cReport({}, { store_id: W6C_OTHER }) })))
+      .toEqual({ word: 'input-invalid', detail: `measure-store-mismatch: the measure names store "${W6C_OTHER}", and --store holds ${W6C_STORE}` });
+    const abWord = (ab: W6cR): string | undefined => w6cRefusalOf(() => w6cFrame(ctr, { ab }))?.detail.split(':')[0];
+    w6cExpect(abWord(w6cAbOf({}, { kind: 'ccrc-history-w2-verify-registry' }))).toBe('verify-ab-shape');
+    w6cExpect(abWord(w6cAbOf({}, { record_sha256: zero }))).toBe('verify-ab-record-mismatch');
+    w6cExpect(abWord(w6cAbOf({}, { store_id: W6C_OTHER }))).toBe('verify-ab-store-mismatch');
+    const short = w6cAbOf();
+    short.families = short.families.slice(1);
+    w6cExpect(abWord(short)).toBe('verify-ab-families-mismatch');
+    const armed = w6cAbOf();
+    armed.families[0].arm = 'control';
+    w6cExpect(abWord(armed), 'a family at another arm').toBe('verify-ab-families-mismatch');
+    w6cExpect(abWord(w6cAbOf({ 'w6c-t': 'no-such-state' }))).toBe('verify-ab-shape');
+    const twice = w6cAbOf();
+    twice.families.push({ ...twice.families[1], state: w6cDrv.AB_STATES[1] });
+    w6cExpect(abWord(twice), 'a family listed twice, realised and then not').toBe('verify-ab-shape');
+    // The order: everything wrong at once refuses the window first, then the definitions.
+    const wrong = { record: w6cRecordOf({ counters_def: badDef, nodes: [] }), report: w6cReport({}, { store_id: W6C_OTHER }), ab: w6cAbOf({}, { record_sha256: zero }) };
+    w6cExpect(w6cRefusalOf(() => w6cFrame(ctr, { ...wrong, nowMs: end - 1 }))?.detail.split(':')[0]).toBe('window-open');
+    w6cExpect(w6cRefusalOf(() => w6cFrame(ctr, wrong))?.word).toBe('record-invalid');
+  });
+
+  w6cIt('a verify output whose presence record has not seen the newest recall-off write is refused, after the verify output\'s own checks (V2, W2-D84; CONTROL: the driver\'s own verdict over the fixture\'s instants)', async () => {
+    const ctr = await w6cLoad();
+    const fx = w6cAbOf();
+    const verdict = (seen: number | null, newest: W6cR): unknown => (w6cDrv.verifyAbReport({ recordSha256: W6C_RECORD_SHA, storeId: W6C_STORE,
+      families: fx.families, newest, seen }) as W6cR).seen_after_write;
+    w6cExpect(verdict(fx.seen_ms, fx.newest_write), 'CONTROL: the fixture is what the driver answers for its two instants').toBe(fx.seen_after_write);
+    w6cExpect([fx.seen_after_write, verdict(W6C_AB_WRITE - 1, fx.newest_write), verdict(null, { state: 'absent' }),
+      verdict(W6C_AB_SEEN, { state: 'unmeasured', code: 'EACCES' })], 'CONTROL: seen before the write, never, or beside an unmeasured write, is stale')
+      .toEqual([true, false, false, false]);
+    w6cExpect(w6cRefusalOf(() => w6cFrame(ctr)), 'CONTROL: a presence record that saw the newest write is counted').toBeNull();
+    const stale = w6cAbOf({}, { seen_ms: W6C_AB_WRITE - 1, seen_after_write: false, ok: false });
+    w6cExpect(w6cRefusalOf(() => w6cFrame(ctr, { ab: stale }))).toEqual({ word: 'input-invalid',
+      detail: `verify-ab-presence-stale: seen_after_write false, seen_ms ${W6C_AB_WRITE - 1}, newest_write ${JSON.stringify({ state: 'value', ms: W6C_AB_WRITE })}: `
+        + 'the presence record has not been seen after the newest recall-off write, or that write is unmeasured, so a control file written since is '
+        + 'unconfirmed; re-run verify --section ab once the newest write measures and status\'s recall_off.seen_ms is later than it (W2-D84)' });
+    const word = (top: W6cR): string | undefined => w6cRefusalOf(() => w6cFrame(ctr, { ab: w6cAbOf({}, top) }))?.detail.split(':')[0];
+    const absent = w6cAbOf();
+    delete absent.seen_after_write;
+    w6cExpect(w6cRefusalOf(() => w6cFrame(ctr, { ab: absent }))?.detail.split(':')[0], 'an absent verdict').toBe('verify-ab-presence-stale');
+    w6cExpect(word({ seen_after_write: 'true' }), 'only true passes, never a string').toBe('verify-ab-presence-stale');
+    w6cExpect(word({ seen_after_write: 1 }), 'only true passes, never a number').toBe('verify-ab-presence-stale');
+    w6cExpect(word({ seen_after_write: false, newest_write: { state: 'unmeasured', code: 'EACCES' } }), 'an unmeasured newest write').toBe('verify-ab-presence-stale');
+    // The order: the verify output's own checks come first, so a stale output of another record, or missing a family, names that.
+    w6cExpect(word({ seen_after_write: false, record_sha256: '0'.repeat(64) })).toBe('verify-ab-record-mismatch');
+    w6cExpect(word({ seen_after_write: false, families: [] })).toBe('verify-ab-families-mismatch');
+  });
+
+  w6cIt('assembleReports\' words: the two code words stay themselves, every other is input-invalid naming it (W2-D22, W2-D24)', async () => {
+    const ctr = await w6cLoad();
+    const cap = w6cRefusalOf(() => w6cFrame(ctr, { report: w6cReport({ row_cap: w6cGate.ROW_CAP - 1 }) }));
+    w6cExpect([cap?.word, cap?.detail.startsWith('row-cap-mismatch: ')]).toEqual(['input-invalid', true]);
+    const win = w6cRefusalOf(() => w6cFrame(ctr, { report: w6cReport({ window_end_ms: W6C_WINDOW.end_ms + 1 }) }));
+    w6cExpect([win?.word, win?.detail.startsWith('window-mismatch: ')]).toEqual(['input-invalid', true]);
+    w6cExpect(w6cRefusalOf(() => w6cFrame(ctr, { report: w6cReport({}, { script_sha256: '1'.repeat(64) }) }))?.word).toBe('code-changed');
+  });
+
+  w6cIt('the recall-off rows: absent is refused, never "nothing changed"; a row off W2-D30\'s grammar is refused; CONTROL: an empty list changes nothing (W2-D23)', async () => {
+    const ctr = await w6cLoad();
+    const absent = w6cReport();
+    delete absent.w2.recall_off;
+    const r1 = w6cRefusalOf(() => w6cFrame(ctr, { report: absent }));
+    w6cExpect([r1?.word, r1?.detail.startsWith('measure w2.recall_off is not a list')]).toEqual(['input-invalid', true]);
+    const r2 = w6cRefusalOf(() => w6cFrame(ctr, { report: w6cReport({ recall_off: [['recall_off:change:12x:w6c-x', '{}']] }) }));
+    w6cExpect([r2?.word, r2?.detail.startsWith('measure w2.recall_off: ')]).toEqual(['input-invalid', true]);
+    w6cExpect(w6cFrame(ctr, { report: w6cReport({ recall_off: [] }) }).dropped.changed, 'CONTROL').toEqual([]);
+  });
+
+  w6cIt('--allow-code-change (Q23, U6): the part 2 loader\'s stamp, or a measure script the flag lets through, stamps code_changed; CONTROL: neither leaves it false', async () => {
+    const ctr = await w6cLoad();
+    w6cExpect(w6cFrame(ctr).code_changed, 'CONTROL').toBe(false);
+    w6cExpect(w6cFrame(ctr, { stamps: ['code-changed'] }).code_changed).toBe(true);
+    const moved = w6cReport({}, { script_sha256: '1'.repeat(64) });
+    w6cExpect(w6cRefusalOf(() => w6cFrame(ctr, { report: moved }))?.word, 'without the flag').toBe('code-changed');
+    w6cExpect(w6cFrame(ctr, { report: moved, allowCodeChange: true }).code_changed).toBe(true);
+  });
+
+  // ── the command, its inputs and its --out ───────────────────────────────────────────────────────────────────────────
+  w6cIt('count writes one report under a fresh --out, its sha the one stderr line, at the clock\'s instant, and leaves the store\'s bytes as they were (W2-D53, W2-D51)', async () => {
+    const ctr = await w6cLoad();
+    const n = w6cNode();
+    const before = w6cLib.sha256Hex(w6cFs.readFileSync(n.dbFile)) as string;
+    const loads: unknown[][] = [];
+    const stdout: string[] = [];
+    const so = w6cVi.spyOn(process.stdout, 'write').mockImplementation(((s: string | Uint8Array) => { stdout.push(String(s)); return true; }) as typeof process.stdout.write);
+    let r: ReturnType<typeof w6cInProcess>;
+    try {
+      r = w6cInProcess(() => ctr.countCommand(n.flags, { loadFinal: (...a: unknown[]) => { loads.push(a); return n.final; }, now: () => W6C_AFTER }));
+    } finally {
+      so.mockRestore();
+    }
+    w6cExpect([r.code, r.refusal, stdout.join('')]).toEqual([0, null, '']);
+    w6cExpect(loads, 'the part 2 loader is handed the flags and the clock').toEqual([[n.flags, { nowMs: W6C_AFTER }]]);
+    const file = w6cPath.join(n.out, ctr.COUNTERS_FILE);
+    const bytes = w6cFs.readFileSync(file);
+    w6cExpect(r.stderr).toBe(`sha256 ${w6cLib.sha256Hex(bytes)}\n`);
+    w6cExpect(w6cFs.readdirSync(n.out).sort()).toEqual([w6cDrv.OUT_MARKER, ctr.COUNTERS_FILE].sort());
+    w6cExpect([w6cFs.statSync(n.out).mode & 0o7777, w6cFs.statSync(file).mode & 0o7777]).toEqual([0o700, 0o600]);
+    const doc = JSON.parse(bytes.toString('utf8'));
+    w6cExpect(bytes.toString('utf8')).toBe(`${w6cLib.canonicalJson(doc)}\n`);
+    w6cExpect([doc.kind, doc.store_id, doc.record_sha256, doc.read_ms, doc.code_changed, doc.inputs]).toEqual([ctr.COUNTERS_KIND, W6C_STORE, W6C_RECORD_SHA, W6C_AFTER, false,
+      { part1_sha256: 'cd'.repeat(32), frozen_sha256: 'ef'.repeat(32), supersedes_sha256: null, measure_sha256: n.measureSha, verify_ab_sha256: n.abSha }]);
+    w6cExpect(doc.windows.map((w: W6cR) => w.boundary_uuid)).toEqual([201, 202, 203, 204, 205].map(w6cGen));
+    w6cExpect(Number.isSafeInteger(doc.user_version)).toBe(true);
+    w6cExpect(bytes.toString('utf8'), 'the planted node-wide row is not copied').not.toContain('card_served:anthropic');
+    w6cExpect(w6cLib.sha256Hex(w6cFs.readFileSync(n.dbFile))).toBe(before);
+  });
+
+  w6cIt('count takes --allow-code-change to the part 2 loader and writes its stamp (Q23, U6); a flag outside the form is args-invalid', async () => {
+    const ctr = await w6cLoad();
+    const n = w6cNode({ final: { record: w6cRecordOf(), sha256: W6C_RECORD_SHA, frozen: { sha256: 'ef'.repeat(32) }, stamps: ['code-changed'] } });
+    const flags = { ...n.flags, 'allow-code-change': true };
+    const handed: W6cR[] = [];
+    const r = w6cInProcess(() => ctr.countCommand(flags, { loadFinal: (f: W6cR) => { handed.push(f); return n.final; }, now: () => W6C_AFTER }));
+    w6cExpect([r.refusal, handed.map((f) => f['allow-code-change'])]).toEqual([null, [true]]);
+    w6cExpect(JSON.parse(w6cFs.readFileSync(w6cPath.join(n.out, ctr.COUNTERS_FILE), 'utf8')).code_changed).toBe(true);
+    const bad = w6cInProcess(() => ctr.countCommand({ ...w6cNode().flags, 'node-label': 'node-a' }, { loadFinal: () => n.final, now: () => W6C_AFTER }));
+    w6cExpect(bad.refusal).toEqual({ word: 'args-invalid', detail: '--node-label is not a count flag' });
+    w6cExpect(ctr.COUNTER_FLAG_SPECS['allow-code-change'], 'the driver\'s kind for the same flag').toBe(w6cDrv.FLAG_SPECS['allow-code-change']);
+  });
+
+  w6cIt('the count flag guards refuse before anything is read: a required flag missing, --supersedes without its sha, a relative --out', async () => {
+    const ctr = await w6cLoad();
+    const n = w6cNode();
+    let loads = 0;
+    const deps = { loadFinal: (): W6cR => { loads += 1; return n.final; }, now: () => W6C_AFTER };
+    const noMeasure: W6cR = { ...n.flags };
+    delete noMeasure.measure;
+    const cases: Array<[W6cR, W6cRefusal]> = [
+      [noMeasure, { word: 'args-invalid', detail: 'measure-required' }],
+      [{ ...n.flags, supersedes: '/home/u/part2-old.json' }, { word: 'args-invalid', detail: '--supersedes and --supersedes-sha256 go together' }],
+      [{ ...n.flags, out: 'relative/out' }, { word: 'out-refused', detail: 'relative' }],
+    ];
+    for (const [flags, want] of cases) w6cExpect(w6cInProcess(() => ctr.countCommand(flags, deps)).refusal, JSON.stringify(want)).toEqual(want);
+    w6cExpect([loads, w6cFs.existsSync(n.out)], 'nothing was read and no --out was made').toEqual([0, false]);
+  });
+
+  w6cIt('the frame refuses what it cannot place: an arm, a producer or a verify state outside its list and a window of another boundary are defects; a measure report assembleReports cannot read is input-invalid', async () => {
+    const ctr = await w6cLoad();
+    const f = w6cFamilies()[0]!;
+    const ws = w6cGate.buildWindows(f) as W6cR[];
+    const fam = { key: w6cKeyOf(W6C_F_T), store_id: W6C_STORE, ccrc_id: W6C_F_T.ccrc_id, generation: W6C_F_T.generation, arm: 'treatment' };
+    const ctxOf = (o: W6cR = {}): W6cR => ctr.windowCtx({ rs: W6C_RS, family: { ...fam, ...(o.family ?? {}) }, boundary: o.boundary ?? f.boundaries[0],
+      window: o.window ?? ws[0], calls: f.calls, nowMs: W6C_AFTER });
+    const rowOf = (ctx: W6cR, abState: string = w6cDrv.AB_STATES[0]): W6cR => ctr.windowRow({ ctx, changed: false, abState, measures: w6cProbe() });
+    w6cExpect(rowOf(ctxOf()).boundary_uuid, 'CONTROL: the same row, placed').toBe(w6cGen(201));
+    w6cExpect(() => rowOf(ctxOf({ family: { arm: 'unassigned' } }))).toThrow(/has arm "unassigned"/);
+    w6cExpect(() => rowOf(ctxOf({ window: { ...ws[0], producer: 'nobody' } }))).toThrow(/has producer "nobody"/);
+    w6cExpect(() => rowOf(ctxOf(), 'no-such-state')).toThrow(/has verify state "no-such-state"/);
+    w6cExpect(() => ctxOf({ boundary: f.boundaries[1] }), 'B1\'s window handed B2\'s boundary').toThrow(/is not boundary/);
+    const r = w6cRefusalOf(() => w6cFrame(ctr, { report: w6cReport({ families: 'not-a-list' }) }));
+    w6cExpect([r?.word, r?.detail.startsWith('measure shape: ')]).toEqual(['input-invalid', true]);
+  });
+
+  w6cIt('an --out that exists is refused before the record, the measure or the store is read, and is left as it was', async () => {
+    const ctr = await w6cLoad();
+    const n = w6cNode();
+    w6cFs.mkdirSync(n.out, { mode: 0o700 });
+    let loads = 0;
+    const absentStore = w6cPath.join(n.home, 'absent.db');
+    const deps = { loadFinal: (): W6cR => { loads += 1; return n.final; }, now: () => W6C_AFTER };
+    const r = w6cInProcess(() => ctr.countCommand({ ...n.flags, store: absentStore }, deps));
+    w6cExpect([r.refusal, loads, w6cFs.readdirSync(n.out)]).toEqual([{ word: 'out-refused', detail: 'exists: a counter report goes under a fresh --out' }, 0, []]);
+    // CONTROL: the same flags with a fresh --out read the record and reach the store, and refuse there.
+    const fresh = w6cInProcess(() => ctr.countCommand({ ...n.flags, out: `${n.out}-fresh`, store: absentStore }, deps));
+    w6cExpect([fresh.refusal, loads, w6cFs.existsSync(`${n.out}-fresh`)]).toEqual([{ word: 'store-unreadable', detail: 'store-missing' }, 1, false]);
+  });
+
+  w6cIt('a refusal after the inputs are read leaves no --out: a store that is not one of the record\'s nodes', async () => {
+    const ctr = await w6cLoad();
+    const n = w6cNode({ recordOver: { nodes: [{ label: 'node-b', store_id: W6C_OTHER }] } });
+    const r = w6cInProcess(() => ctr.countCommand(n.flags, { loadFinal: () => n.final, now: () => W6C_AFTER }));
+    w6cExpect([r.refusal, w6cFs.existsSync(n.out)]).toEqual([{ word: 'input-invalid', detail: `store ${W6C_STORE} is not one of the record's nodes` }, false]);
+  });
+
+  w6cIt('a refusal after the inputs are read leaves no --out: a verify output of another part 2 (Q15)', async () => {
+    const ctr = await w6cLoad();
+    const other = 'ac'.repeat(32);
+    const n = w6cNode({ final: { record: w6cRecordOf(), sha256: other, frozen: { sha256: 'ef'.repeat(32) }, stamps: [] } });
+    const r = w6cInProcess(() => ctr.countCommand(n.flags, { loadFinal: () => n.final, now: () => W6C_AFTER }));
+    w6cExpect([r.refusal, w6cFs.existsSync(n.out)]).toEqual([{ word: 'input-invalid',
+      detail: `verify-ab-record-mismatch: it names record "${W6C_RECORD_SHA}", and --record is ${other}` }, false]);
+  });
+
+  w6cIt('the store opener refuses as the driver\'s does, word for word; CONTROL: a store opens with its own id and expandEntryBody\'s rc (W2-D51)', async () => {
+    const ctr = await w6cLoad();
+    const same = (home: string): W6cRefusal => {
+      const mine = w6cRefusalOf(() => ctr.openCounterStore(w6cLib.historyPaths(home).dbFile));
+      w6cExpect(mine, home).not.toBeNull();
+      w6cExpect(mine).toEqual(w6cRefusalOf(() => w6cDrv.openReplayStore(home)));
+      return mine;
+    };
+    const edit = (home: string, sql: string): void => {
+      const db = new W6cDb(w6cLib.historyPaths(home).dbFile as string);
+      try { db.exec(sql); } finally { db.close(); }
+    };
+    w6cExpect(same(w6cMkTmp('ccrc-w2-6-t1-none-'))).toEqual({ word: 'store-unreadable', detail: 'store-missing' });
+    const noId = w6cMkTmp('ccrc-w2-6-t1-noid-');
+    w6cStore.createStore(noId, { storeId: W6C_STORE });
+    edit(noId, "DELETE FROM meta WHERE k = 'store_id'");
+    w6cExpect(same(noId)?.detail).toBe('store-id-absent');
+    const badId = w6cMkTmp('ccrc-w2-6-t1-badid-');
+    w6cStore.createStore(badId, { storeId: W6C_STORE });
+    edit(badId, "UPDATE meta SET v = 'not-a-uuid' WHERE k = 'store_id'");
+    w6cExpect(same(badId)?.detail).toBe('store-id-unreadable');
+    const ok = w6cMkTmp('ccrc-w2-6-t1-ok-');
+    w6cStore.createStore(ok, { storeId: W6C_STORE });
+    const rs = ctr.openCounterStore(w6cLib.historyPaths(ok).dbFile);
+    try {
+      w6cExpect([rs.storeId, Number.isSafeInteger(rs.version), rs.schema]).toEqual([W6C_STORE, true, w6cLib.SCHEMA_ADDED]);
+    } finally {
+      rs.close();
+    }
+    w6cExpect(w6cRefusalOf(() => ctr.openCounterStore('relative/history.db'))).toEqual({ word: 'args-invalid', detail: '--store names no absolute path' });
+  });
+
+  w6cIt('run as the operator runs it: the driver\'s part 2 loader refuses a record sha mismatch on one stderr line, exit 2, stdout empty, and no --out', () => {
+    const n = w6cNode();
+    const dir = w6cMkTmp('ccrc-w2-6-t1-spawn-');
+    const recText = '{"part":"final"}\n';
+    const rec = w6cPath.join(dir, 'part2.json');
+    w6cFs.writeFileSync(rec, recText, { mode: 0o600 });
+    const zero = '0'.repeat(64);
+    const argv = ['count', ...Object.entries({ ...n.flags, record: rec, 'record-sha256': zero }).flatMap(([k, v]) => [`--${k}`, String(v)])];
+    const opts = { encoding: 'utf8' as const, timeout: 60_000, env: { ...w6cScrubbed(process.env), HOME: n.home } };
+    const r = w6cSpawnSync(process.execPath, ['--no-warnings', W6C_SRC, ...argv], opts);
+    w6cExpect([r.status, r.stdout, r.stderr]).toEqual([2, '', `ccrc history-counters: record-sha-mismatch: record: expected ${zero}, measured ${w6cLib.sha256Hex(recText)}\n`]);
+    w6cExpect(w6cFs.existsSync(n.out)).toBe(false);
+    const other = w6cSpawnSync(process.execPath, ['--no-warnings', W6C_SRC, 'report'], opts);
+    w6cExpect([other.status, other.stdout, other.stderr]).toEqual([2, '', 'ccrc history-counters: args-invalid: unknown subcommand "report"\n']);
+  });
+});
+
+// ── end of W2-6's region (Q29): later W2-6 tasks insert their describes directly above this line ──────────────────────
+
 // ── W2-5b1 Task 1: w5b1-prefixed bindings, so none collides with a binding above. Pure cases read the driver in
 // process; RP1-arm and the run case spawn W2-4's recording stub in a t5Box fixture HOME (W2-4 Task 5's harness).
 import * as w5b1Fs from 'node:fs';

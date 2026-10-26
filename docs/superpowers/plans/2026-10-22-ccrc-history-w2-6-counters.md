@@ -373,13 +373,16 @@ const w6cLoad = async (): Promise<W6cR> => (await import('../../deploy/history-c
 const W6C_NAMES: string[] = (w6cGate.COUNTERS_DEF_V1 as Array<{ name: string }>).map((c) => c.name);
 const w6cIsComment = (l: string): boolean => /^\s*(\*|\/\/|\/\*)/.test(l);
 const w6cCode = (p: string): string[] => w6cFs.readFileSync(p, 'utf8').split('\n').filter((l) => !w6cIsComment(l));
+/** A driver refusal: the statically imported driver's class, or the one a module graph loaded after an earlier case's
+ *  vi.resetModules() carries (w6cLoad imports the counter dynamically, so its driver is then a fresh copy). */
+const w6cIsRefusal = (e: unknown): boolean => e instanceof w6cDrv.DriverRefusal || (e instanceof Error && e.name === 'DriverRefusal');
 /** A call's driver refusal as {word, detail}, null when it returns; any other throw passes through. */
 function w6cRefusalOf(fn: () => unknown): W6cRefusal {
   try {
     fn();
     return null;
   } catch (e) {
-    if (e instanceof w6cDrv.DriverRefusal) return { word: (e as W6cR).word, detail: (e as W6cR).detail };
+    if (w6cIsRefusal(e)) return { word: (e as W6cR).word, detail: (e as W6cR).detail };
     throw e;
   }
 }
@@ -390,7 +393,7 @@ function w6cInProcess(fn: () => unknown): { code: unknown; stderr: string; refus
   try {
     return { code: fn(), stderr: lines.join(''), refusal: null };
   } catch (e) {
-    if (e instanceof w6cDrv.DriverRefusal) return { code: null, stderr: lines.join(''), refusal: { word: (e as W6cR).word, detail: (e as W6cR).detail } };
+    if (w6cIsRefusal(e)) return { code: null, stderr: lines.join(''), refusal: { word: (e as W6cR).word, detail: (e as W6cR).detail } };
     throw e;
   } finally {
     spy.mockRestore();
@@ -735,8 +738,8 @@ w6cDescribe('W2-6 Task 1: the counter module, its frame and its pins (W2-D86, W2
     const ctr = await w6cLoad();
     const out = w6cFrame(ctr);
     for (const r of out.windows) w6cExpect(Object.keys(r.measures), r.boundary_uuid).toEqual(W6C_NAMES);
-    const tallies = [...Object.values(out.strata).flatMap((a: W6cR) => Object.values(a)),
-      ...Object.values(out.dropped_strata).flatMap((k: W6cR) => Object.values(k).flatMap((a: W6cR) => Object.values(a)))];
+    const tallies = [...(Object.values(out.strata) as W6cR[]).flatMap((a) => Object.values(a)),
+      ...(Object.values(out.dropped_strata) as W6cR[]).flatMap((k) => (Object.values(k) as W6cR[]).flatMap((a) => Object.values(a)))];
     w6cExpect(tallies, 'two arms of four tallies, then two dropped kinds of two arms of four (V3)').toHaveLength(2 * 4 + 2 * 2 * 4);
     for (const t of tallies as W6cR[]) w6cExpect(Object.keys(t.counters)).toEqual(W6C_NAMES);
     w6cExpect(Object.keys(out.sources.counters)).toEqual(W6C_NAMES);
@@ -1541,6 +1544,8 @@ cd server && ./node_modules/.bin/vitest run test/history-replay.test.ts -t 'W2-6
 
 Expected GREEN (predicted): 31 passed on linux (30 passed and 1 skipped on darwin). If a frame case is red, re-derive its number from the fixture with the gate's `buildWindows` on the same family, as the case's own CONTROL does; a wrong prediction is corrected in this plan's text in the same commit (U17). The guard is never weakened to match a number.
 
+*Measured over predicted (Task 1, U17):* Step 3 measured as predicted (28 failed, 3 passed). Step 5's filtered run measured 31 passed, but the whole file did not: an earlier case of the file calls `vi.resetModules()` (D-6301's), so `w6cLoad`'s dynamic import loads a fresh driver whose `DriverRefusal` is not the statically imported class, and 13 W2-6 cases failed the `instanceof` test in `w6cRefusalOf` and `w6cInProcess` although the word and detail were right. The helpers now test `w6cIsRefusal` (the class, or an `Error` named `DriverRefusal`), and the word and detail are still asserted in full. The emission pin's `tallies` expression also failed the server test project's typecheck (`Object.values` of an `any` read as `unknown[]`), so it casts to `W6cR[]` first. Both corrections are in the code above. The whole file then measured 1163 passed.
+
 - [ ] **Step 6: Measure every new guard red, then green.** From the repository root. Each mutant is one or more exact replacements, each asserted to match once. The mutant table is written through a quoted heredoc, so no shell expansion touches the code. Every run restores the touched files with `cp`.
 
 ```bash
@@ -1627,7 +1632,7 @@ Then one call per mutant, `bash .superpowers/sdd/history-w2-6/scratch/r6t1.sh <m
 | M10 | `the recall-off rows` | 1 failed: no refusal for an absent list |
 | M11 | `two code words` | 1 failed: `input-invalid` where `code-changed` was expected |
 | M12 | `an --out that exists` | 1 failed: `store-unreadable` and loads 1, where `out-refused` and 0 were expected |
-| M13 | `leaves no --out\|an --out that exists` | 3 failed: an `--out` exists after each refusal |
+| M13 | `leaves no --out\|an --out that exists` | 3 failed: an `--out` exists after each refusal (measured: the filter selects 20 cases, 3 failed and 17 passed) |
 | M14 | `count writes one report` | 1 failed: the stderr sha is of the bytes without their newline |
 | M15 | `refuses as the driver` | 1 failed: `store-id-unreadable` where the driver says `store-id-absent` |
 | M16 | `standalone entry\|run as a file` | 2 failed on linux (the shebang text; stderr starts `(node:<pid>) ExperimentalWarning`), 1 on darwin |
@@ -1642,7 +1647,7 @@ Then one call per mutant, `bash .superpowers/sdd/history-w2-6/scratch/r6t1.sh <m
 | M25 | `the frame: one row per boundary` | 1 failed: F_U's `turns` 0 where `null` was expected |
 | M26 | `allow-code-change \(Q23\|count takes --allow-code-change` | 2 failed: `code_changed` false under the loader's stamp |
 | M27 | `allow-code-change \(Q23` | 1 failed: the flagged run refuses `code-changed` |
-| M28 | `run checks refuse in one order` | 1 failed: a verify output missing a family, or a family at another arm, is accepted |
+| M28 | `run checks refuse in one order` | 1 failed: a verify output missing a family, or a family at another arm, is accepted (measured: the frame then throws `windowRow: family … has verify state undefined`, a `TypeError`, so the case fails on that throw) |
 | M29 | `count takes --allow-code-change` | 1 failed: `--node-label` is accepted (the run then succeeds) |
 | M30 | `count writes one report` | 1 failed: the loader is handed `{}` where `{nowMs: <the clock>}` was expected |
 | M31 | `the count flag guards` | 1 failed: a missing `--measure` is not refused `measure-required` before the record is read |
@@ -1652,7 +1657,7 @@ Then one call per mutant, `bash .superpowers/sdd/history-w2-6/scratch/r6t1.sh <m
 | M35 | `the frame refuses what it cannot place` | 1 failed: producer `nobody` makes a row |
 | M36 | `the frame refuses what it cannot place` | 1 failed: verify state `no-such-state` makes a row |
 | M37 | `the frame refuses what it cannot place` | 1 failed: the throw is the turn count's (`counts 3 turns, and its copy gives 10`), not `is not boundary` |
-| M38 | `the frame refuses what it cannot place` | 1 failed: the gate's `TypeError` escapes unrefused |
+| M38 | `the frame refuses what it cannot place` | 1 failed: the gate's `TypeError` escapes unrefused (measured: `assembleReports: report 0: w2 is no object holding a families array`) |
 | M39 | `run checks refuse in one order` | 1 failed: a family listed twice is accepted, its last state kept |
 | M40 | `presence record has not seen` | 1 failed: the stale verify output is counted (refusal null where `verify-ab-presence-stale` was expected; V2) |
 | M41 | `presence record has not seen` | 1 failed: the presence check runs before the verify output's own checks (detail `verify-ab-presence-stale: checked first` where the full detail was expected; V2's order) |
