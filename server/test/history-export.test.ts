@@ -2858,7 +2858,8 @@ describe('the check after a bind runs in bounded, resumable batches (W5h-1 Task 
   it('a check the run budget stops resumes on the next step: no batch starts on a spent budget; the stop records its first time and the marks cleared so far; exportSegmentMissing accumulates; the done stamp comes after the last batch; the counter is bumped once; the end state is one uninterrupted check\'s', async () => {
     const NOW = Date.now();
     const at = (ms: number) => (): number => NOW + ms;
-    const step = { deps: { exportBindBytes: 2000 }, limits: { maxBytes: 2000 } };   // two 1000-byte blobs a batch, one batch a step
+    // D-6976: a zero check floor keeps the run's budget as the check's, so the run's 2000 bytes still stop it after one batch
+    const step = { deps: { exportBindBytes: 2000, exportCheckSliceFloor: ZERO_FLOOR }, limits: { maxBytes: 2000 } };   // two 1000-byte blobs a batch, one batch a step
     const a = await lostBox('ccrc-history-export-bindstep-', { lost: 6, zBytes: 1000 });
     const b = await lostBox('ccrc-history-export-bindwhole-', { lost: 6, zBytes: 1000 });
     for (const x of [a, b]) await bind(x.box, NOW + MIN);
@@ -2888,7 +2889,8 @@ describe('the check after a bind runs in bounded, resumable batches (W5h-1 Task 
   it('a segment that arrives and one moved aside between two steps of one unfinished check: each step recomputes the missing set, what an earlier step cleared stays cleared, marks naming the arrived segment stand, the moved-aside segment\'s marks clear, D-5395 holds after every step, and the done stamp covers a bind fact written mid-check', async () => {
     const NOW = Date.now();
     const at = (ms: number) => (): number => NOW + ms;
-    const step = { deps: { exportBindBytes: 2000 }, limits: { maxBytes: 2000 } };   // two 1000-byte blobs a batch, one batch a step
+    // D-6976: a zero check floor keeps the run's budget as the check's, so the run's 2000 bytes still stop it after one batch
+    const step = { deps: { exportBindBytes: 2000, exportCheckSliceFloor: ZERO_FLOOR }, limits: { maxBytes: 2000 } };   // two 1000-byte blobs a batch, one batch a step
     const x = await lostBox('ccrc-history-export-bindmove-', { lost: 6, zBytes: 1000 });
     const lost = q(x.box, 'SELECT blob_id FROM blobs WHERE exported_seg = ? ORDER BY blob_id', x.S1).map((r) => Number(r['blob_id']));
     expect(lost, 'CONTROL: six lost blobs, marked with the segment this box lacks').toHaveLength(6);
@@ -3181,6 +3183,55 @@ describe('the check after a bind runs in bounded, resumable batches (W5h-1 Task 
     expect(marks(box)).toEqual({ [rid(1)]: s2, [rid(2)]: s3 });
     expect(strandedBlobs(box)).toEqual([]);
   }, 300_000);
+
+  // CP-39c Task 2 (D-6975): the check after a bind makes a slice of its own, only on a step that owes a check, just before it.
+  describe('CP-39c: the check after a bind runs on its own slice of the run budget (D-6975)', () => {
+    it('(a) a check on a spent run clears its marks on its own slice, ends where a roomy run\'s does, and charges every cleared byte to the run', async () => {
+      const NOW = Date.now();
+      const at = (ms: number) => (): number => NOW + ms;
+      const a = await lostBox('ccrc-history-cp39c-bind-', { lost: 6, zBytes: 1000 });
+      const b = await lostBox('ccrc-history-cp39c-bindctl-', { lost: 6, zBytes: 1000 });
+      for (const x of [a, b]) await bind(x.box, NOW + MIN);
+      // both steps fall inside the store's first hour, so neither runs a pass
+      const c = exportCtx(a.box, a.ids, at(2 * MIN), { deps: { exportBindBytes: 2000 }, limits: { maxMs: 0, maxBytes: 0 } });
+      await onStore(a.box, (db) => SW.exportStep(db, c));
+      await onStore(b.box, (db) => SW.exportStep(db, exportCtx(b.box, b.ids, at(2 * MIN), { deps: { exportBindBytes: 2000 } })));
+      expect(endState(b), 'CONTROL: one uninterrupted check').toMatchObject({ missing: '13', stop: null, counted: null, counter: 1 });
+      expect(endState(a), 'the check ran to its done stamp in one step, on its own slice').toEqual(endState(b));
+      expect(budgetOf(c).bytes, 'the cleared blobs\' stored bytes were charged to the run').toBeGreaterThanOrEqual(6000);
+    }, 300_000);
+
+    it('(b) a check that spends its own slice leaves the pass a fresh slice that writes', async () => {
+      const x = await lostBox('ccrc-history-cp39c-bindown-', { lost: 6, zBytes: 1000 });
+      const NOW = Date.now();
+      await bind(x.box, NOW + MIN);
+      const T = NOW + 2 * HOUR;   // past the store's first hour: the cadence admits a pass
+      let t = T;
+      const c = exportCtx(x.box, x.ids, () => t, {
+        deps: { statfs: roomy, exportBindBytes: 2000, exportCheckSliceFloor: { maxMs: 3_000, maxBytes: 1 << 30 } }, limits: { maxMs: 0, maxBytes: 0 } });
+      budgetOf(c).now = () => (t += 1_000);   // only budget reads move the clock, as CP-39's helper does
+      const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      let r: PassResult | null;
+      let lines: string[];
+      try {
+        r = await onStore(x.box, (db) => SW.exportStep(db, c));
+        lines = err.mock.calls.map((l) => String(l[0])).filter((l) => l.startsWith('history-sweep:'));
+      } finally {
+        err.mockRestore();
+      }
+      expect(metaOf(x.box, HEALTH_META.exportMarksCheck), 'the check cleared marks, then its own slice ran out').toMatch(/^budget [0-9]+ [1-9][0-9]*$/);
+      expect(r, 'the pass ran on a fresh slice of its own').toMatchObject({ state: 'written' });
+      expect(r!.rows, 'CONTROL: the pass wrote rows').toBeGreaterThan(0);
+      expect(lines.filter((l) => l.includes('export pass was held')), 'no hold line').toEqual([]);
+      expect(metaOf(x.box, HEALTH_META.exportPassMs)).not.toBeNull();
+      expect(metaOf(x.box, 'export_attempt_ms')).toBeNull();
+    }, 300_000);
+
+    it('(c) the check floor is 20 s and 128 MiB', () => {
+      expect(x9Lib.EXPORT_CHECK_SLICE_MS).toBe(20_000);
+      expect(x9Lib.EXPORT_CHECK_SLICE_BYTES).toBe(128 * 1024 * 1024);
+    });
+  });
 });
 
 // ── W5h-1 Task 2: status reads the check's stop record, and doctor's two words come from it (D-5633) ───────────────
@@ -3520,7 +3571,8 @@ describe('a carried segment counts only when it is whole and this store\'s (W5h-
       await onStore(box, async (db) => {
         setMeta(db, `bound:${at(HOUR + MIN)()}`, 'adopt');
         // a spent run budget (0 bytes): the check stops at markCheckStop before its first batch
-        await SW.exportStep(db, exportCtx(box, ids, at(HOUR + 2 * MIN), { limits: { maxBytes: 0 } }));
+        // D-6976: a zero check floor keeps the run's budget as the check's
+        await SW.exportStep(db, exportCtx(box, ids, at(HOUR + 2 * MIN), { deps: { exportCheckSliceFloor: ZERO_FLOOR }, limits: { maxBytes: 0 } }));
       });
     } finally {
       err.mockRestore();
@@ -3696,7 +3748,8 @@ describe('the check re-arms when a segment it saw is gone (W5h-1 Task 4; D-5636 
     const dir = exportDirOf(box);
     fs.rmSync(path.join(dir, s1));   // gone outside any bind: only the listing owes the check
     // one blob a batch and a one-byte run budget: the re-armed check stops at the budget after its first batch
-    await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(3 * MIN), { deps: { exportBindBytes: 1 }, limits: { maxBytes: 1 } })));
+    // D-6976: a zero check floor keeps the run's budget as the check's
+    await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(3 * MIN), { deps: { exportBindBytes: 1, exportCheckSliceFloor: ZERO_FLOOR }, limits: { maxBytes: 1 } })));
     expect(metaOf(box, HEALTH_META.exportMarksCheck), 'CONTROL: the vanish-owed check stopped at the budget').toBe(`budget ${NOW + 3 * MIN} 2`);
     expect(Object.values(marks(box)).filter((v) => v === s1), 'CONTROL: one mark still names the gone segment').toHaveLength(1);
     fs.renameSync(dir, `${dir}.kept`);

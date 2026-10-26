@@ -55,7 +55,7 @@ import {
   makeProbeIndex, parseRederiveState, formatRederiveState, rederivePlan, phraseValues,
   makeBelt, beltUnits, BELT_META, BELT_NODES_STEP, BELT_COUNTERS, REDACT_SOURCES_META, normalizeRedactSources, parseBeltState, formatBeltState,
   decideBelt, beltAfterGeneration, BELT_VERSION, beltWitnessMoved,
-  REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES, EXPORT_SLICE_MS, EXPORT_SLICE_BYTES, budgetRungs, budgetFloors,
+  REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES, EXPORT_SLICE_MS, EXPORT_SLICE_BYTES, EXPORT_CHECK_SLICE_MS, EXPORT_CHECK_SLICE_BYTES, budgetRungs, budgetFloors,
   REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, formatOpMarker, decideOpLive, formatPassMarker, parsePassMarker, decidePassLive, parsePassDied, formatPassDied, procStartOf, bootIdOf, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
   HARNESS_TABLE, exportDates, dueTranscriptKeys, shortestRetentionHome, planExport, exportDueOldestMeta, retentionLowered, parseJournalRecord,
   decideRecallOff, decideRecallOffWrite, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
@@ -3678,7 +3678,7 @@ export async function bindingPass(home, P, op, args, deps, out) {
  *     7 days on (card.mjs; W1-B3 Task 7);
  * 22. `markScan`: a due scan is marked done, unless the roster was unreadable;
  * 23. `exportStep`: §9.2 step 6, last (W1-B4): the export pass, at most once an hour, on its own slice of the run's ONE budget (D-6974), with a writer token only,
- *     outside the ingest gate, behind its own floor on the home filesystem;
+ *     outside the ingest gate, behind its own floor on the home filesystem; a check after a bind runs first, on a slice of its own (D-6975);
  * 24. `ensureHistoryDirs`: last, below the spool/ line the next sentence names, scope/ and card/ made 0700, a link
  *     or a file there refused and counted (card.mjs; W1-B3 Task 5).
  *  Then spool/ is made unless something that is not a directory stands there (FU8) (the hook's gate is that directory, and
@@ -9485,6 +9485,15 @@ function exportPassSlice(ctx) {
     sliceFloor(ctx.deps?.exportSliceFloor, { maxMs: EXPORT_SLICE_MS, maxBytes: EXPORT_SLICE_BYTES }));
 }
 
+/** The check after a bind's slice of the run's ONE budget (D-6975), made in exportStep only on a step that owes a check, just before it,
+ *  and never the pass's. Its ceiling is the run's own limits, as the pass's is, so on a run with time left it holds what the run has
+ *  left; its floor is lib's EXPORT_CHECK_SLICE_MS and EXPORT_CHECK_SLICE_BYTES, or `ctx.deps.exportCheckSliceFloor`. Every byte charged
+ *  to it is the run's (stepSlice's accessor, O5). */
+function exportCheckSlice(ctx) {
+  return stepSlice(ctx.budget, { maxMs: ctx.budget.maxMs, maxBytes: ctx.budget.maxBytes },
+    sliceFloor(ctx.deps?.exportCheckSliceFloor, { maxMs: EXPORT_CHECK_SLICE_MS, maxBytes: EXPORT_CHECK_SLICE_BYTES }));
+}
+
 /** §9.2 step 6, last (W1-B4): the export pass, at most once an hour by its own clock, anchored on the store's first tick
  *  (lib decideExportPass; D-4755 (history-export-cadence-from-first-tick)), behind a preflight on the HOME filesystem (§9.15
  *  "Preflight"): statfs on ~/.ccrc/history/export under STATFS_DEADLINE_MS, then lib planExportRoom, which is planCopy
@@ -9498,7 +9507,8 @@ function exportPassSlice(ctx) {
  *  D-5394 (history-export-select-due-transcripts)), while history-off, a pause and a busy leave the clock as it was; and a
  *  pass that ran to its end (written, or nothing due) deletes the attempt clock. First of all, and
  *  outside the cadence, the step checks the export marks against the segments on this box once per new bind fact
- *  (checkSegmentMarks; §9.15 "After a bind"). Null when the cadence waits. */
+ *  (checkSegmentMarks; §9.15 "After a bind"), on a slice of the run's budget of its own (D-6975), made only on a step that owes
+ *  a check and never the pass's: the pass makes a fresh one after. Null when the cadence waits. */
 export async function exportStep(db, ctx) {
   // §9.15 "After a bind": first, and outside the cadence, on the first step after an adopt, a restore or a rebuild. lib
   // decideMarkCheck decides it from WHICH bind facts the last check covered, never their clocks (RD2). A check that
@@ -9511,7 +9521,9 @@ export async function exportStep(db, ctx) {
   const vanished = segmentListingVanished({ recorded: getMeta(db, EXPORT_MARKS_CHECKED_LISTING_META), measured: listing });
   const markCheck = decideMarkCheck({ metaKeys: bindFactKeys(db), checkedRecord: getMeta(db, EXPORT_MARKS_CHECKED_BINDS_META), vanished });
   if (markCheck.check) {
-    try { checkSegmentMarks(db, ctx, markCheck.record, listing); } catch (e) {
+    // D-6975: the check's own slice, made only on a step that owes a check, just before it. The pass never reads it: it makes its own
+    // fresh slice after (D-6974), so a check that spends this one cannot hold the pass.
+    try { checkSegmentMarks(db, { ...ctx, budget: exportCheckSlice(ctx) }, markCheck.record, listing); } catch (e) {
       if (isBusy(e)) throw e;
       process.stderr.write(`history-sweep: the export marks could not be checked against ${exportDirFor(ctx.paths, ctx.ids.storeId)}: ${e && e.message ? e.message : String(e)}\n`);
       // D-5632 (history-export-bind-check-batched): counted, and the check's stop recorded beside the count (HEALTH_META.exportMarksCheck),
@@ -9773,11 +9785,11 @@ function remeasureDamagedSegments(db, ctx) {
  *  references one of those blobs (the four referrer statements, D-5395 (history-export-mark-needs-its-blobs), pruned blobs
  *  included, D-5396 (history-export-bind-clears-pruned-referrers)) and THEN the blobs' own marks, so no commit leaves a live
  *  blob unmarked under marked entries. An entry batch clears the marks naming a missing segment on the entries themselves.
- *  Each batch adds its count to HEALTH_META.exportSegmentMissing and its stored bytes to the run's budget, and is followed by
+ *  Each batch adds its count to HEALTH_META.exportSegmentMissing and its stored bytes to its slice of the run's budget, and so to the run, and is followed by
  *  a TRUNCATE checkpoint that a reader may answer busy. Before each batch lib markCheckStop decides whether it may start:
  *  history-off (`off`), a WAL the last checkpoint could not truncate past EXPORT_BIND_WAL_CEILING (`wal-held`) or a spent
- *  run budget (`budget`) stops the check, recorded in HEALTH_META.exportMarksCheck, with no done stamp, so the next step
- *  checks again. After the last batch, one transaction stamps export_marks_checked_ms and `record` (the bind facts lib
+ *  slice of the run budget (`budget`) stops the check, recorded in HEALTH_META.exportMarksCheck, with no done stamp, so the next step
+ *  checks again. exportStep hands it a slice of its own (D-6975), never the pass's; a direct caller (a test) runs it on `ctx.budget`. After the last batch, one transaction stamps export_marks_checked_ms and `record` (the bind facts lib
  *  decideMarkCheck says this check covers) and deletes the stop record and the once-a-check flag.
  *
  *  Outside db/'s free-space floor, as the export pass is (D-4762 (history-export-outside-capture-pause)): one batch's WAL is

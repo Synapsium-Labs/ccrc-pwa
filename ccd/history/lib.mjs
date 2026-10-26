@@ -229,6 +229,12 @@ export const REDERIVE_SLICE_BYTES = 128 * 1024 * 1024;
  *  already admits the home filesystem for exactly that size. */
 export const EXPORT_SLICE_MS = 180_000;
 export const EXPORT_SLICE_BYTES = EXPORT_SEGMENT_MAX_BYTES;
+/** CP-39c (D-6975): the check after a bind runs on its own slice of the ONE run budget, never the pass's, made only on a step that owes a
+ *  check, just before it. The figures are D-4344's REDERIVE_SLICE_* ones, *chosen*, as named constants of their own. A step that owes a
+ *  check pays 20 s, plus the check's unbudgeted prefix (the listing, the whole-and-own reads, the two marked-name scans and the first WAL
+ *  truncate, which the slice's clock pays before the first batch), plus one batch, until the check is done. */
+export const EXPORT_CHECK_SLICE_MS = 20_000;
+export const EXPORT_CHECK_SLICE_BYTES = 128 * 1024 * 1024;
 /** CP-39 (D-6935, D-6939): the derivation's shares of the ONE run budget, per mille of its limits, in tick order (chosen).
  *  One set of numbers serves the ladder of ceilings (budgetRungs) and the floors (budgetFloors). Measured on the fleet box:
  *  every budget-gated derivation starved while ingest owned the whole budget, and under load the sweep unit (shipped at

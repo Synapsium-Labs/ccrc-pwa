@@ -49,6 +49,8 @@ export const REDERIVE_SLICE_MS: number;
 export const REDERIVE_SLICE_BYTES: number;
 export const EXPORT_SLICE_MS: number;
 export const EXPORT_SLICE_BYTES: number;
+export const EXPORT_CHECK_SLICE_MS: number;
+export const EXPORT_CHECK_SLICE_BYTES: number;
 export const DERIVE_SHARES: Readonly<{ fts: number; nodes: number; card: number; census: number }>;
 export function budgetRungs(
   run: { maxMs: number; maxBytes: number },
