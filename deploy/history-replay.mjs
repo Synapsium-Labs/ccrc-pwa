@@ -42,7 +42,7 @@ import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/histor
 import { asOfCutOf, expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf } from '../ccd/history/recall.mjs';
 import { pairIndexOf } from '../ccd/history/cli.mjs';
 import { admitFile, ftsTextOfBlob, readRegPresence } from '../ccd/history/sweep.mjs';
-import { AMENDMENT_KINDS, ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, assignArms, assignmentSha256, buildWindows, checkGateCode, classifyRun, cmpFrac, collapseWs, expectedWindows, familyKey, frac, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
+import { AMENDMENT_KINDS, ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, LABELS, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, applyHandcheck, assignArms, assignmentSha256, buildWindows, checkGateCode, classifyRun, cmpFrac, collapseWs, expectedWindows, familyKey, frac, handcheckAgreement, handcheckSample, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -185,6 +185,8 @@ export const FLAG_SPECS = Object.freeze(/** @type {Record<string, FlagKind>} */ 
   amend: 'bool', kind: 'string', 'claude-code-version': 'string', repilot: 'string', 'repilot-sha256': 'string',
   surface: 'string', ruling: 'string', 'release-tag': 'string', act: 'string', 'act-ms': 'int',
   fidelity: 'string', 'fidelity-sha256': 'string',
+  // W2-5b2 Task 4 (W2-D81, Q2): `handcheck --sheet`, and every node's judged file with its sha, paired by position.
+  sheet: 'bool', judged: 'list', 'judged-sha256': 'list',
 }));
 
 /** The subcommands, by name. Empty until Tasks 8 and 9 register `step0a` and `probe`, so every subcommand is
@@ -5230,6 +5232,9 @@ const SUBCOMMAND_FLAGS = Object.freeze({
   // W2-5b2 Task 3 (W2-D90; Q12, Q13, Q23): part 2 read as every part 2 consumer reads it (its part 1, its frozen list, and the
   // final it supersedes when it is itself amended), one kind and its detail flags; no --allow-code-change.
   'open --amend': { required: ['amend', 'kind', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT, ...AMEND_FLAGS] },
+  // W2-5b2 Task 4 (Q2, Q23): the reporting node's hand-check sheet, over every node's judged file and the part 2 chain.
+  'handcheck --sheet': { required: ['sheet', 'out', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256', 'judged', 'judged-sha256'],
+    optional: [...PRED_INPUT, 'allow-code-change'] },
 });
 
 const copyJson = (v) => JSON.parse(JSON.stringify(v));
@@ -5259,11 +5264,12 @@ function pairedInputs(flags, name) {
   return paths.map((p, i) => [p, shas[i]]);
 }
 
-/** One JSON input: outside any git tree, its bytes' sha256 checked BEFORE they are parsed (W2-D25, W2-D59), as loadStep0a
- *  checks step 0a's. `words` names the two refusals (a record's, a frozen list's or any other input's).
+/** One input's bytes, as loadInput reads them: outside any git tree, read whole through readPlain, the bytes' sha256 checked
+ *  BEFORE anything reads them (W2-D25, W2-D59). Factored out of loadInput unchanged (W2-5b2 Task 4), so the hand-check's
+ *  label file, which is not JSON, is read by the same rule (W2-D12).
  *  @param {string} label  @param {string} p  @param {string} sha256
- *  @returns {{path: string, sha256: string, value: any}} */
-export function loadInput(label, p, sha256, words = INPUT_WORDS, cap = OUT_JSON_CAP) {
+ *  @returns {{path: string, sha256: string, bytes: Buffer}} */
+function loadInputBytes(label, p, sha256, words = INPUT_WORDS, cap = OUT_JSON_CAP) {
   if (typeof sha256 !== 'string' || !SHA256_RE.test(sha256)) refuse('args-invalid', `--${label}-sha256 is not 64 lowercase hex`);
   if (typeof p !== 'string' || p === '') refuse('args-invalid', `--${label} names no path`);
   const abs = path.resolve(p);
@@ -5275,9 +5281,17 @@ export function loadInput(label, p, sha256, words = INPUT_WORDS, cap = OUT_JSON_
   if (read.state === 'bad') refuse(words.invalid, read.why === 'unreadable' ? `${label} unreadable ${read.code}` : `${label} ${read.why}`);
   const got = sha256Hex(read.bytes);
   if (got !== sha256) refuse(words.sha, `${label}: expected ${sha256}, measured ${got}`);
+  return { path: abs, sha256: got, bytes: read.bytes };
+}
+/** One JSON input: outside any git tree, its bytes' sha256 checked BEFORE they are parsed (W2-D25, W2-D59), as loadStep0a
+ *  checks step 0a's. `words` names the two refusals (a record's, a frozen list's or any other input's).
+ *  @param {string} label  @param {string} p  @param {string} sha256
+ *  @returns {{path: string, sha256: string, value: any}} */
+export function loadInput(label, p, sha256, words = INPUT_WORDS, cap = OUT_JSON_CAP) {
+  const { path: abs, sha256: got, bytes } = loadInputBytes(label, p, sha256, words, cap);
   let value;
   try {
-    value = JSON.parse(read.bytes.toString('utf8'));
+    value = JSON.parse(bytes.toString('utf8'));
   } catch {
     refuse(words.invalid, `${label} not-json`);
   }
@@ -9153,6 +9167,293 @@ async function openAmend(flags, driverEnv, deps) {
   refuseOutOfRangeValues({ budget: amended.spend_budget, budgetField: 'spend_budget', limits: amended.limits, quotas: null, part2: amended });   // loadFinalRecord's ranges (S2's C22, R30); defence
   return printWithSha(amended);
 }
+
+// ── W2-5b2 Task 4: the hand-check sheet and the label reader (W2-D81, W2-D54; Q2, Q18, Q19, Q23) ───────────────────
+// On the reporting node, over every node's quiz/judged.json gathered into it (act 24), each passed with its sha (Q2):
+// the part 2 record first (W2-D24's re-check, through loadFinalRecord), then the judge map recomputed from the record's
+// seed and frozen list (W2-5b1 Task 5's judgeMapOf and judgeMapText, the bytes every node pinned), and each judged file
+// held to this record, this frozen list, this map, this judge and one named node, its items to that node's questions
+// (Q18, R18). The sample is the gate's handcheckSample at the record's share over every judged item, its arm read from
+// the map, then every judge-failed item (W2-D81). The sheet shows each sampled item's judge input (masked at its node
+// before the judge saw it, the reply and the answer field cut at the judge's cap: W2-D54, D-6470) under its positional
+// id, with no arm and no judge label; the manifest beside it names each input by sha. The label reader (Q19) takes
+// `<id> uncertain|fabricated` lines and `#` comments, each sheet id at most once and every sampled judged id exactly
+// once; a judge-failed id left unlabelled is not refused: its label stays null and decideGate holds the verdict at
+// incomplete. The override and agreement are the gate's applyHandcheck and handcheckAgreement (W2-D81). This file never
+// spells an arm word: every arm comes from the map, RECALL_ARMS' values (W2-D42).
+
+/** Under the reporting node's --out: the sheet the operator labels, and the manifest naming its inputs. */
+export const HANDCHECK_DIR = 'handcheck';
+export const HANDCHECK_SHEET_FILE = 'sheet.txt';
+export const HANDCHECK_MANIFEST_FILE = 'sheet.json';
+export const HANDCHECK_SHEET_KIND = 'ccrc-history-w2-handcheck-sheet';
+/** The hand-check is the quiz's (W2-D81); the pilot has none. */
+export const HANDCHECK_SECTION = 'quiz';
+/** The two words an operator may write (W2-D79's labels); `correct` is the string match's alone (W2-D63). */
+export const HANDCHECK_LABELS = Object.freeze(LABELS.filter((l) => l !== 'correct'));
+/** One label line (Q19): an id, spaces or tabs, one word, and nothing after but spaces or tabs. */
+const LABEL_FILE_LINE_RE = /^(\S+)[ \t]+(\S+)[ \t]*$/;
+
+/** @typedef {{ id: string, qid: string, arm: string, store_id: string, outcome: 'judged'|'judge-failed',
+ *    judge: 'uncertain'|'fabricated'|null }} HandcheckItem */
+/** @typedef {{ share: number, mapSha256: string, judged: Array<{ store_id: string, sha256: string, dir: string }>,
+ *    items: HandcheckItem[], sampled: string[], required: string[], stamps: string[] }} HandcheckPlan */
+
+/** The hand-check plan over every node's judged file (W2-D81, Q2, Q18). Each file, by its 1-based position k: W2-5b1's
+ *  kind, section quiz, this record's sha (a file made under a predecessor is refused, naming the remedy), this frozen
+ *  list's, this judge map's, this record's judge (model, rubric id and rubric sha) and the judge's reply cap, one of the
+ *  record's nodes and only once; its items each a judge id of the map, named once across every file, whose question is on
+ *  that node, `judged` with one of HANDCHECK_LABELS or `judge-failed` with none. A node that holds frozen questions and
+ *  passes no file is refused. Then the gate's handcheckSample over every item, the arm read from the map. Pure: every
+ *  refusal is `input-invalid` (data, never a TypeError: D-6309's rule).
+ *  @param {{ record: any, recordSha256: string, frozenSha256: string, entries: Array<{ qid: string, store_id: string }>,
+ *    map: Array<{ id: string, qid: string, arm: string }>, mapSha256: string,
+ *    judged: Array<{ path: string, sha256: string, value: any }> }} o
+ *  @returns {HandcheckPlan} */
+export function handcheckPlanOf({ record, recordSha256, frozenSha256, entries, map, mapSha256, judged }) {
+  const nodes = new Set(record.nodes.map((n) => n.store_id));
+  const storeOfQid = new Map(entries.map((e) => [e.qid, e.store_id]));
+  const mapById = new Map(map.map((m) => [m.id, m]));
+  const judge = [record.judge_model, record.rubric_id, RUBRIC_SHA256[record.rubric_id]];
+  const seenStore = new Map();
+  /** @type {Map<string, HandcheckItem>} */
+  const items = new Map();
+  const files = [];
+  const stamps = new Set();
+  judged.forEach((j, n) => {
+    const k = n + 1;
+    const d = j.value;
+    const bad = (what) => refuse('input-invalid', `judged ${k} ${what}`);
+    if (!plainObject(d) || d.kind !== JUDGED_KIND || d.v !== 1) bad('is not a judged file');
+    if (d.section !== HANDCHECK_SECTION) bad(`section ${JSON.stringify(d.section ?? null)}, wanted ${HANDCHECK_SECTION}`);
+    if (d.record_sha256 !== recordSha256) bad(`record ${JSON.stringify(d.record_sha256 ?? null)}, not this record's ${recordSha256}: run judge on that node under this record`);
+    if (d.frozen_sha256 !== frozenSha256) bad(`frozen ${JSON.stringify(d.frozen_sha256 ?? null)}, not this record's ${frozenSha256}`);
+    if (d.map_sha256 !== mapSha256) bad(`map ${JSON.stringify(d.map_sha256 ?? null)}, not this record's judge map ${mapSha256}`);
+    if (!nodes.has(d.store_id)) bad(`store ${JSON.stringify(d.store_id ?? null)} is not one of the record's nodes`);
+    if (seenStore.has(d.store_id)) bad(`store ${d.store_id} repeats judged ${seenStore.get(d.store_id)}`);
+    seenStore.set(d.store_id, k);
+    const theirs = [d.judge_model, d.rubric_id, d.rubric_sha256];
+    if (theirs.some((v, i) => v !== judge[i])) bad(`judge ${JSON.stringify(theirs)} is not the record's ${JSON.stringify(judge)}`);
+    if (d.reply_max_bytes !== JUDGE_REPLY_MAX_BYTES) bad(`reply_max_bytes ${JSON.stringify(d.reply_max_bytes ?? null)}, not ${JUDGE_REPLY_MAX_BYTES}`);
+    if (!Array.isArray(d.stamps) || !d.stamps.every((s) => typeof s === 'string')) bad('stamps is not a list of words');
+    if (!Array.isArray(d.items)) bad('items is not a list');
+    for (const it of d.items) {
+      if (!plainObject(it) || typeof it.id !== 'string' || !JUDGE_ID_RE.test(it.id)) bad(`item ${JSON.stringify(plainObject(it) ? it.id ?? null : null)} is not a judge id`);
+      const m = mapById.get(it.id);
+      if (m === undefined) bad(`item ${it.id} is not in the judge map`);
+      if (items.has(it.id)) bad(`item ${it.id} repeats`);
+      if (storeOfQid.get(m.qid) !== d.store_id) bad(`item ${it.id} names a question of another node`);
+      if (it.outcome !== 'judged' && it.outcome !== 'judge-failed') bad(`item ${it.id} outcome ${JSON.stringify(it.outcome ?? null)}`);
+      const labelled = it.outcome === 'judged' ? HANDCHECK_LABELS.includes(it.label) : it.label === null;
+      if (!labelled) bad(`item ${it.id} ${it.outcome} with label ${JSON.stringify(it.label ?? null)}`);
+      items.set(it.id, { id: it.id, qid: m.qid, arm: m.arm, store_id: d.store_id, outcome: it.outcome, judge: it.label });
+    }
+    for (const s of d.stamps) stamps.add(s);
+    files.push({ store_id: d.store_id, sha256: j.sha256, dir: path.dirname(j.path) });
+  });
+  const missing = [...new Set(entries.map((e) => e.store_id))].filter((s) => !seenStore.has(s)).sort(cmpUnit);
+  if (missing.length > 0) refuse('input-invalid', `judged-missing ${missing.length} node(s) (first ${missing[0]}): pass every node's judged.json that holds frozen questions`);
+  const list = [...items.values()].sort((x, y) => cmpUnit(x.id, y.id));
+  const pool = list.map((i) => ({ id: i.id, arm: i.arm, judged: i.outcome === 'judged', judgeFailed: i.outcome === 'judge-failed' }));
+  const sampled = handcheckSample(record.bootstrap.seed, pool, record.handcheck.share);   // W2-D81: the gate's sampler at the signed share
+  const judgedIds = new Set(list.filter((i) => i.outcome === 'judged').map((i) => i.id));
+  return { share: record.handcheck.share, mapSha256, judged: files.sort((x, y) => cmpUnit(x.store_id, y.store_id)), items: list,
+    sampled, required: sampled.filter((id) => judgedIds.has(id)), stamps: [...stamps].sort(cmpUnit) };
+}
+
+/** Q2: the plan over every `--judged` file, each read by its sha (loadInput), against the judge map recomputed from the
+ *  record's seed and frozen list (W2-5b1 Task 5's judgeMapOf and judgeMapText: the bytes every node pinned). It writes
+ *  nothing and takes no --out, so its caller runs it before prepareOut (W2-5a's R10). `fin` is loadFinalRecord's answer.
+ *  @param {Flags} flags  @param {{ record: any, sha256: string, frozen: any, stamps: string[] }} fin  @returns {HandcheckPlan} */
+export function loadHandcheckPlan(flags, fin) {
+  const r = fin.record;
+  const map = judgeMapOf(r.bootstrap.seed, fin.frozen.list.entries, RECALL_ARMS);
+  const mapSha256 = sha256Hex(judgeMapText(HANDCHECK_SECTION, fin.frozen.sha256, map));
+  const judged = pairedInputs(flags, 'judged').map(([p, h]) => loadInput('judged', p, h));
+  return handcheckPlanOf({ record: r, recordSha256: fin.sha256, frozenSha256: fin.frozen.sha256, entries: fin.frozen.list.entries, map, mapSha256, judged });
+}
+
+/** A judge input file's fault, or null (W2-D79, D-6470): exactly W2-5b1's six keys, v 1, the four strings (the answer
+ *  field a string or null), the frozen entry's kind, the reply and the answer field within JUDGE_REPLY_MAX_BYTES, and the
+ *  bytes exactly canonicalJson of what they parse to and one newline (so an invalid UTF-8 byte is a fault). Pure.
+ *  @param {unknown} v  @param {{ kind: string }} entry  @param {Buffer} bytes
+ *  @returns {null | 'keys' | 'version' | 'field-type' | 'kind' | 'over-cap' | 'not-canonical'} */
+export function judgeInputFault(v, entry, bytes) {
+  if (!plainObject(v) || Object.keys(v).sort(cmpUnit).join(',') !== JUDGE_INPUT_KEYS.join(',')) return 'keys';
+  if (v.v !== 1) return 'version';
+  if (typeof v.question !== 'string' || typeof v.expected !== 'string' || typeof v.reply !== 'string'
+    || (v.answer_field !== null && typeof v.answer_field !== 'string')) return 'field-type';
+  if (v.kind !== entry.kind) return 'kind';
+  const over = (s) => s !== null && Buffer.byteLength(s, 'utf8') > JUDGE_REPLY_MAX_BYTES;
+  if (over(v.reply) || over(v.answer_field)) return 'over-cap';
+  if (!Buffer.from(`${canonicalJson(v)}\n`, 'utf8').equals(bytes)) return 'not-canonical';
+  return null;
+}
+
+/** One sampled item's judge input, as judge pinned it beside its node's judged.json (`judge/<id>.input.json`), read
+ *  through readPlain (D-5986: a link or a FIFO is never followed or waited on) and held to judgeInputFault; every failure
+ *  is `input-invalid`, naming the node and the path. */
+function readJudgeInputFile(dir, storeId, id, entry) {
+  const where = `judged ${storeId} ${JUDGE_DIR}/${id}.input.json`;
+  const read = readPlain(path.join(dir, JUDGE_DIR, `${id}.input.json`), OUT_JSON_CAP);
+  if (read.state === 'absent') refuse('input-invalid', `${where} unreadable ENOENT`);
+  if (read.state === 'bad') refuse('input-invalid', `${where} ${badWord(read)}`);
+  let v;
+  try {
+    v = JSON.parse(read.bytes.toString('utf8'));
+  } catch {
+    refuse('input-invalid', `${where} not-json`);
+  }
+  const why = judgeInputFault(v, entry, read.bytes);
+  if (why !== null) refuse('input-invalid', `${where} ${why}`);
+  return { input: v, sha256: sha256Hex(read.bytes) };
+}
+
+/** The sheet's text (W2-D81): a header naming the record and the frozen list, the item count, the labelling rule and the
+ *  signed rubric the judge was given (as `#` lines), then one block per item in the order given: `== <id> ==`, its kind,
+ *  and its question, F (`expected`), answer field and reply, each line of a field quoted `| ` (an empty line `|`), so no
+ *  reply line can open a block. It takes an id and an input per item and nothing else: no arm, no judge label, no judge
+ *  outcome reaches it. Pure.
+ *  @param {{ recordSha256: string, frozenSha256: string, rubricId: string, items: Array<{ id: string, input: any }> }} o
+ *  @returns {string} */
+export function handcheckSheetText({ recordSha256, frozenSha256, rubricId, items }) {
+  if (!RUBRIC_IDS.includes(rubricId)) throw new TypeError(`handcheckSheetText: rubric ${JSON.stringify(rubricId)} is not one of ${RUBRIC_IDS.join(', ')}`);
+  const quote = (text) => text.split('\n').map((l) => (l === '' ? '|' : `| ${l}`));
+  const lines = [
+    '# ccrc history W2 hand-check sheet (W2-D81): one block per item, in id order.',
+    `# record ${recordSha256}`,
+    `# frozen ${frozenSha256}`,
+    `# items ${items.length}`,
+    '# Label every item in a separate file, one line per item: "<id> uncertain" or "<id> fabricated".',
+    '# A line that starts with "#" is a comment. Neither the arm nor the judge\'s label is shown here.',
+    `# The rubric the judge was given (${rubricId}):`,
+    ...RUBRICS[rubricId].split('\n').map((l) => `#   ${l}`),
+  ];
+  for (const { id, input } of items) {
+    lines.push('', `== ${id} ==`, `kind: ${input.kind}`, 'question:', ...quote(input.question), 'expected:', ...quote(input.expected),
+      ...(input.answer_field === null ? ['answer field: (none)'] : ['answer field:', ...quote(input.answer_field)]),
+      'reply:', ...quote(input.reply));
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/** The sheet and its manifest for a plan (W2-D81): each sampled item's input read from beside its node's judged file
+ *  (readJudgeInputFile), the sheet over {id, input} alone, and the manifest naming the record, the frozen list, the map,
+ *  the rubric, the share, each judged file by store and sha, each input by sha, the sheet by sha, and the stamps (the
+ *  record's and every judged file's). Neither names an arm, a judge label or a judge outcome. It reads, never writes.
+ *  @param {{ record: any, sha256: string, frozen: any, stamps: string[] }} fin  @param {HandcheckPlan} plan
+ *  @returns {{ sheetText: string, manifestText: string }} */
+export function handcheckSheetOf(fin, plan) {
+  const entryOf = new Map(fin.frozen.list.entries.map((e) => [e.qid, e]));
+  const dirOf = new Map(plan.judged.map((j) => [j.store_id, j.dir]));
+  const byId = new Map(plan.items.map((i) => [i.id, i]));
+  const read = plan.sampled.map((id) => {
+    const it = byId.get(id);
+    return { id, ...readJudgeInputFile(dirOf.get(it.store_id), it.store_id, id, entryOf.get(it.qid)) };
+  });
+  const sheetText = handcheckSheetText({ recordSha256: fin.sha256, frozenSha256: fin.frozen.sha256, rubricId: fin.record.rubric_id,
+    items: read.map(({ id, input }) => ({ id, input })) });
+  const manifestText = `${canonicalJson({
+    kind: HANDCHECK_SHEET_KIND, v: 1, section: HANDCHECK_SECTION, record_sha256: fin.sha256, frozen_sha256: fin.frozen.sha256,
+    map_sha256: plan.mapSha256, rubric_id: fin.record.rubric_id, share: plan.share,
+    judged: plan.judged.map(({ store_id, sha256 }) => ({ store_id, sha256 })),
+    items: read.map(({ id, sha256 }) => ({ id, input_sha256: sha256 })),
+    sheet_sha256: sha256Hex(sheetText), stamps: [...new Set([...fin.stamps, ...plan.stamps])].sort(cmpUnit),
+  })}\n`;
+  return { sheetText, manifestText };
+}
+
+/** The operator's label file (Q19), against the plan's sheet: blank lines and lines that start with `#` are skipped;
+ *  every other line is `<id>`, spaces or tabs, one of HANDCHECK_LABELS, and nothing after but spaces or tabs. An id must
+ *  be on the sheet and given once; every sampled judged id (`required`) must be labelled. A judge-failed id may be left
+ *  out: decideGate then holds the verdict at incomplete (W2-D81). Every refusal is `input-invalid`. Pure.
+ *  @param {string} text  @param {HandcheckPlan} plan  @returns {Map<string, string>} */
+export function parseHandcheckLabels(text, plan) {
+  if (typeof text !== 'string') throw new TypeError('parseHandcheckLabels: text is a string');
+  const sheet = new Set(plan.sampled);
+  /** @type {Map<string, string>} */
+  const labels = new Map();
+  text.split('\n').forEach((line, i) => {
+    const n = i + 1;
+    if (/^[ \t]*$/.test(line) || line.startsWith('#')) return;
+    const m = line.match(LABEL_FILE_LINE_RE);   // String#match, not the RegExp method: W2-4 Task 5's no-shell scan reds on a code line spelling exec
+    if (m === null || !JUDGE_ID_RE.test(m[1])) refuse('input-invalid', `labels line ${n} is not "<id> ${HANDCHECK_LABELS.join('|')}"`);
+    if (!HANDCHECK_LABELS.includes(m[2])) refuse('input-invalid', `labels line ${n} label ${JSON.stringify(m[2])} is not one of ${HANDCHECK_LABELS.join(', ')}`);
+    if (!sheet.has(m[1])) refuse('input-invalid', `labels line ${n} id ${m[1]} is not on the sheet`);
+    if (labels.has(m[1])) refuse('input-invalid', `labels line ${n} repeats ${m[1]}`);
+    labels.set(m[1], m[2]);
+  });
+  const absent = plan.required.filter((id) => !labels.has(id));
+  if (absent.length > 0) refuse('input-invalid', `labels-missing ${absent.length} sampled id(s) (first ${absent[0]}): label every sampled item`);
+  return labels;
+}
+
+/** The label file by its sha, as every input is read (loadInputBytes: outside any git tree, the sha before a byte is
+ *  decoded), decoded as strict UTF-8 (`labels not-utf8`), then parseHandcheckLabels. Task 5's report calls it.
+ *  @param {string} p  @param {string} sha256  @param {HandcheckPlan} plan  @returns {Map<string, string>} */
+export function readHandcheckLabels(p, sha256, plan) {
+  const { bytes } = loadInputBytes('labels', p, sha256);
+  let text;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    refuse('input-invalid', 'labels not-utf8');
+  }
+  return parseHandcheckLabels(text, plan);
+}
+
+/** W2-D81's effect, through the gate's two rules: the operator's label replaces the judge's on every item the operator
+ *  labelled (applyHandcheck), every other judged item keeps the judge's, and a judge-failed item the operator left out
+ *  keeps no label (decideGate's incomplete); agreement is handcheckAgreement over every sampled judged item (a judge-failed
+ *  item has no judge label, so it is no pair), answered as the gate answers it, by arm. Pure. An operator id that is not
+ *  on the sheet is a TypeError: parseHandcheckLabels never answers one.
+ *  @param {HandcheckPlan} plan  @param {Map<string, string>} operator */
+export function handcheckResultOf(plan, operator) {
+  if (!(operator instanceof Map)) throw new TypeError('handcheckResultOf: the operator labels are a Map');
+  const onSheet = new Set(plan.sampled);
+  for (const id of operator.keys()) if (!onSheet.has(id)) throw new TypeError(`handcheckResultOf: ${id} is not on the sheet`);
+  const byId = new Map(plan.items.map((i) => [i.id, i]));
+  const judgeLabels = new Map(plan.items.filter((i) => i.outcome === 'judged').map((i) => [i.id, i.judge]));
+  const labels = applyHandcheck(judgeLabels, operator);
+  const pairs = plan.required.map((id) => ({ arm: byId.get(id).arm, judge: byId.get(id).judge, operator: operator.get(id) }));
+  const agreement = handcheckAgreement(pairs);
+  const items = plan.items.map((i) => {
+    const failed = i.outcome === 'judge-failed';
+    return { id: i.id, qid: i.qid, arm: i.arm, label: labels.get(i.id) ?? null, judgeFailed: failed, operator: operator.get(i.id) ?? null };
+  });
+  return { items, agreement, unlabelled: items.filter((i) => i.judgeFailed && i.label === null).map((i) => i.id) };
+}
+
+/** `handcheck --sheet` (W2 decisions §5 act 22; W2-D81; Q2): on the reporting node. In order: the form's flags; the part 2
+ *  record through loadFinalRecord, which re-checks gate_code before any other input (W2-D24) and answers
+ *  --allow-code-change as a stamp after window start only (Q23); every node's judged file and the plan; every sampled
+ *  item's input and the two texts, all before --out exists (W2-5a's R10); then --out, its claim, and the sheet and its
+ *  manifest pinned (pinOutBytes: a sheet the operator may be labelling never changes under them). Prints only
+ *  `sha256 <hex>` of the manifest on stderr (D-5983).
+ *  @param {Flags} flags  @param {DriverEnv} driverEnv
+ *  @param {{ loadFinal: typeof loadFinalRecord, now: () => number }} [deps] */
+export async function handcheckCommand(flags, driverEnv, deps = { loadFinal: loadFinalRecord, now: () => Date.now() }) {
+  if (flags.sheet !== true) refuse('args-invalid', 'handcheck wants --sheet');
+  checkFlags('handcheck --sheet', flags);
+  const fin = deps.loadFinal(flags, { nowMs: deps.now() });   // W2-D24: gate_code before any other input
+  const plan = loadHandcheckPlan(flags, fin);   // Q2: every node's judged file by its sha, held to this record and its map
+  const sheet = handcheckSheetOf(fin, plan);   // every sampled item's input, read before --out exists (W2-5a's R10)
+  const out = prepareOut(flags.out);
+  const claim = claimOut(out);
+  try {
+    ensurePlainDir(out, HANDCHECK_DIR);
+    const sheetRel = `${HANDCHECK_DIR}/${HANDCHECK_SHEET_FILE}`;
+    pinOutBytes(out, sheetRel, sheet.sheetText, 'handcheck-sheet');
+    const rel = `${HANDCHECK_DIR}/${HANDCHECK_MANIFEST_FILE}`;
+    pinOutBytes(out, rel, sheet.manifestText, 'handcheck-manifest');
+    process.stderr.write(`sha256 ${shaOfPlain(out, rel)}\n`);   // D-5983: stderr; stdout stays empty
+    return EXIT.OK;
+  } finally {
+    claim.release();
+  }
+}
+
+HANDLERS.set('handcheck', (flags, env) => handcheckCommand(flags, env));
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised
 // when main runs. Importing the module (the tests do) runs nothing. The exit code is set, never forced, so stderr drains.

@@ -8124,7 +8124,9 @@ describe('W2-5b2 Task 4: the operator\'s label replaces the judge\'s, and agreem
 
   it('an operator label for an id that is not on the sheet is a defect the reader never lets through: TypeError', () => {
     const x = b2t4Ready();
-    expect(() => B2T4.handcheckResultOf(x.plan, new Map([[x.notDrawn, 'uncertain']]))).toThrow(TypeError);
+    // Every sheet id is labelled besides, so the gate's agreement over the sampled pairs has nothing to refuse and the off-sheet id is the only fault.
+    const sheetOwn = x.plan.sampled.map((id): [string, string] => [id, 'uncertain']);
+    expect(() => B2T4.handcheckResultOf(x.plan, new Map([...sheetOwn, [x.notDrawn, 'uncertain']]))).toThrow(TypeError);
     expect(() => B2T4.handcheckResultOf(x.plan, new Map(x.plan.sampled.map((id): [string, string] => [id, 'uncertain']))), 'CONTROL: the sheet\'s own ids').not.toThrow();
   });
 });
@@ -8980,6 +8982,8 @@ git commit -m "feat(history-replay): handcheck --sheet over every node's judged 
 ```
 
 D-6645 was issued at planning for the departure this task first cites; this plan defines it in its "## Deviations found".
+
+Measured at the base 6801fb9a7 (Task 4), recorded over the predictions above. Step 1: every count and name as predicted (`undefined,undefined,undefined true false false bool`; `2`, `3`; `RUBRIC_IDS`, `RUBRICS`, `RUBRIC_SHA256` already imported, so edit (a) added `LABELS`, `applyHandcheck`, `handcheckAgreement` and `handcheckSample`; `1`, `1`, `4`, `12`, `4`, `2`, `0`, `0`). Step 4: 53 failed, 0 passed, as predicted: 15 cases on `B2T4.loadHandcheckPlan is not a function` and 2 on `B2T4.handcheckSheetText is not a function`, the rest through the other missing names; the `FLAG_SPECS` and W2-4 Task 9 cases failed on the predicted three keys and `handcheck`. Step 6: 53 passed on the first run, the whole file 1502 passed, tsc silent, `nul 0`. One fixture was corrected, because its mutant stayed green: the `handcheckResultOf` case for an id not on the sheet (H29) passed with the guard removed, since the operator map named the off-sheet id alone, so the gate's `handcheckAgreement` threw its own `TypeError` on the sampled pairs' missing operator labels; the case now labels every sheet id as well (the block above is the corrected text), and the mutant reds it (`expected function to throw an error, but it didn't`). Step 7: 47 mutants, each red as predicted in the case it names, with these measured differences. H2 and H3 fail at `expect(plan.sampled).toEqual(want)`, the gate's own answer, before the later `judge-failed … is always on the sheet` and per-arm count lines. H4 selects two tests (an earlier describe also carries `another record refuses`); the Task 4 row is the red one. H11, H12 and H35 select earlier-describe cases too (`blinded` four more passing, `CONTROL: under the tree` and `before --out is made` twelve more), all of them green; the Task 4 cases are the reds. H26 and H27 fail the rows predicted (5 and 2). H44 fails on `TypeError: Cannot read properties of undefined (reading 'qid')`, as predicted; H47 on `not-json` where `not-regular` was expected, as predicted. The stub describe's whole-file SIGKILL hazard (Task 1) did not apply: no Task 4 case spawns a stub, and the grammar case's child refuses before any read, so no `beforeAll` wait was added.
 
 ### Task 5: `report --record <final>`: every node's gathered outputs, each sha-checked, into decideGate's inputs; verdict.json; the report-only figures (W2-D85, W2-D89, W2-D23, W2-D82, W2-D24; S2's C15 and C21, Q2, Q15, Q16, Q23, Q28, V1, K27)
 

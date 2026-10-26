@@ -219,7 +219,9 @@ describe('history-replay W2-4 Task 1: the argument grammar', () => {
       // W2-5b2 Task 3 (W2-D90; Q12, Q13; K1, K6): open --amend's mode, its kind and the three kinds' detail flags, and the re-pilot's fidelity input
       amend: 'bool', kind: 'string', 'claude-code-version': 'string', repilot: 'string', 'repilot-sha256': 'string',
       surface: 'string', ruling: 'string', 'release-tag': 'string', act: 'string', 'act-ms': 'int',
-      fidelity: 'string', 'fidelity-sha256': 'string' });
+      fidelity: 'string', 'fidelity-sha256': 'string',
+      // W2-5b2 Task 4 (W2-D81, Q2): the hand-check sheet's mode flag and every node's judged file, paired by position
+      sheet: 'bool', judged: 'list', 'judged-sha256': 'list' });
   });
 
   it('a subcommand, a string, an int and a bool parse to {sub, flags}', () => {
@@ -4851,7 +4853,7 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     ]);
     // The driver's whole subcommand set, in registration order: W2-4's two, W2-5a Task 7's six, then W2-5b1's and
     // W2-5b2's, in task order (Task 1's grammar cases use an unregistered name).
-    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify', 'marker', 'arms', 'judge', 'step0b', 'fidelity', 'pilot-result']);
+    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe', 'pilot-source', 'quiz-source', 'freeze', 'power', 'open', 'verify', 'marker', 'arms', 'judge', 'step0b', 'fidelity', 'pilot-result', 'handcheck']);
   });
 
   // D-5983: the sha256 line is on stderr (as open and freeze print it), exactly one line, and stdout is empty.
@@ -21206,4 +21208,603 @@ b23Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 3: the mid-window
     b23Expect(existsSync(join(rout, 'quiz', 'repilot-result.json')), 'no refused row wrote a result').toBe(false);
     b23Expect((await b23Result(fx, rout, s0, fid)).refusal, 'CONTROL: the intact inputs').toBeNull();
   }, 300_000);
+});
+
+// ── W2-5b2 Task 4: the hand-check sheet and the label reader (W2-D81, W2-D54; Q2, Q18, Q19, Q23) ───────────────
+// Live safety: nothing here spawns a model or a stub. The plan, the sheet and the label reader run in-process over
+// judged files and judge inputs this block writes under mkTmp trees, each input built by W2-5b1 Task 5's own judgeInputOf
+// and each id by its judgeMapOf; the subcommand cases inject the part 2 loader, except the W2-D24 row, its CONTROL and
+// the --allow-code-change case, which read W2-5b1 Task 4's fixture records (mkTmp files) through the real
+// loadFinalRecord. The grammar case runs the driver as a child, which refuses before any read. No case reads a real
+// record or the live HOME. Arm values are RECALL_ARMS' own (W5B5_ARMS), never spelled here.
+type B2t4Item = { id: string; qid: string; arm: string; store_id: string; outcome: string; judge: string | null };
+type B2t4Plan = { share: number; mapSha256: string; judged: Array<{ store_id: string; sha256: string; dir: string }>;
+  items: B2t4Item[]; sampled: string[]; required: string[]; stamps: string[] };
+type B2t4Frac = { num: number; den: number } | null;
+type B2t4Result = { items: Array<{ id: string; qid: string; arm: string; label: string | null; judgeFailed: boolean; operator: string | null }>;
+  agreement: Record<string, B2t4Frac>; unlabelled: string[] };
+type B2t4Fin = { record: Record<string, any>; sha256: string; frozen: { sha256: string; list: { entries: W5b5Entry[] } }; stamps: string[] };
+/** The driver's hand-check surface, typed once here, so no case needs its own cast. */
+type B2t4Drv = {
+  HANDCHECK_DIR: string; HANDCHECK_SHEET_FILE: string; HANDCHECK_MANIFEST_FILE: string; HANDCHECK_SHEET_KIND: string;
+  HANDCHECK_SECTION: string; HANDCHECK_LABELS: readonly string[]; JUDGED_KIND: string; JUDGE_REPLY_MAX_BYTES: number;
+  loadHandcheckPlan(flags: Record<string, unknown>, fin: B2t4Fin): B2t4Plan;
+  judgeInputFault(v: unknown, entry: { kind: string }, bytes: Buffer): string | null;
+  handcheckSheetText(o: { recordSha256: string; frozenSha256: string; rubricId: string; items: Array<{ id: string; input: W5b5Input }> }): string;
+  handcheckSheetOf(fin: B2t4Fin, plan: B2t4Plan): { sheetText: string; manifestText: string };
+  parseHandcheckLabels(text: string, plan: B2t4Plan): Map<string, string>;
+  readHandcheckLabels(p: string, sha256: string, plan: B2t4Plan): Map<string, string>;
+  handcheckResultOf(plan: B2t4Plan, labels: Map<string, string>): B2t4Result;
+  handcheckCommand(flags: Record<string, unknown>, env: Record<string, unknown>, deps?: Record<string, unknown>): Promise<number>;
+};
+const B2T4 = replay as unknown as B2t4Drv;
+const B2T4_A = W5B5_STORE;
+const B2T4_B = W5B5_OTHER_STORE;
+const B2T4_RECORD_SHA = sha256Hex('w2-5b2 task 4 fixture: record');
+const B2T4_FROZEN_SHA = sha256Hex('w2-5b2 task 4 fixture: frozen');
+const B2T4_OTHER = sha256Hex('w2-5b2 task 4 fixture: another');
+const B2T4_NOWHERE = '00000000-0000-4000-8000-0000000b2f40';
+const B2T4_RUBRIC_SHA = (w5b5Gate.RUBRIC_SHA256 as Record<string, string>)['v1']!;
+const B2T4_MALFORMED = (n: number): string => `labels line ${n} is not "<id> uncertain|fabricated"`;
+/** Five frozen questions, three on node A and two on node B (W2-5b1 Task 5's w5b5Entry): ten (qid, arm) pairs. */
+const B2T4_ENTRIES: W5b5Entry[] = [
+  ...[0, 1, 2].map((k) => w5b5Entry(`npm run b2t4-step-${k} --workspace pkg-a`, B2T4_A)),
+  ...[3, 4].map((k) => w5b5Entry(`npm run b2t4-step-${k} --workspace pkg-b`, B2T4_B)),
+];
+/** loadFinalRecord's answer, as the hand-check reads it: the record's nodes, judge, seed and share; the frozen list. */
+function b2t4Fin(o: { share?: number; record?: Record<string, unknown>; stamps?: string[] } = {}): B2t4Fin {
+  return {
+    record: { nodes: [{ label: 'node-0', store_id: B2T4_A }, { label: 'node-1', store_id: B2T4_B }], judge_model: W6_MODEL, rubric_id: 'v1',
+      bootstrap: { seed: W5B5_SEED }, handcheck: { share: o.share ?? 0.5 }, ...(o.record ?? {}) },
+    sha256: B2T4_RECORD_SHA, frozen: { sha256: B2T4_FROZEN_SHA, list: { entries: B2T4_ENTRIES } }, stamps: o.stamps ?? [],
+  };
+}
+/** The sha of the judge map every node pinned for `fin` (W2-5b1 Task 5's judgeMapOf and judgeMapText). */
+const b2t4MapSha = (fin: B2t4Fin): string =>
+  sha256Hex(W5B5.judgeMapText('quiz', fin.frozen.sha256, W5B5.judgeMapOf(fin.record.bootstrap.seed as string, fin.frozen.list.entries, W5B5_ARMS)));
+type B2t4Row = { id: string; qid: string; arm: string; e: number; a: number; store_id: string };
+/** The judge map's rows, each with its entry index, its arm's index in W5B5_ARMS and its node. */
+function b2t4Rows(fin: B2t4Fin): B2t4Row[] {
+  const entries = fin.frozen.list.entries;
+  return W5B5.judgeMapOf(fin.record.bootstrap.seed as string, entries, W5B5_ARMS).map((m) => {
+    const e = entries.findIndex((x) => x.qid === m.qid);
+    return { ...m, e, a: W5B5_ARMS.indexOf(m.arm), store_id: entries[e]!.store_id };
+  });
+}
+type B2t4Outcome = (e: number, a: number) => { outcome: string; label: string | null } | null;
+/** Two pairs correct (they never reach the judge), two judge-failed, six judged: three per arm. */
+const b2t4Outcome: B2t4Outcome = (e, a) => {
+  if ((e === 0 && a === 1) || (e === 3 && a === 0)) return null;
+  if ((e === 1 && a === 0) || (e === 4 && a === 1)) return { outcome: 'judge-failed', label: null };
+  return { outcome: 'judged', label: (e + a) % 2 === 0 ? 'fabricated' : 'uncertain' };
+};
+const b2t4Reply = (e: number, a: number): string => `I think it was this one.\nANSWER: npm run b2t4-other-${e}-${a}`;
+type B2t4Write = { judged: string; sha: string; dir: string; doc: Record<string, any> };
+/** `doc` saved as `<dir>/judged.json`, canonical JSON and one newline, as judge writes it. */
+function b2t4Save(dir: string, doc: Record<string, any>): B2t4Write {
+  const text = `${w5b5Lib.canonicalJson(doc) as string}\n`;
+  writeFileSync(join(dir, 'judged.json'), text, { mode: 0o600 });
+  return { judged: join(dir, 'judged.json'), sha: sha256Hex(text), dir, doc };
+}
+/** One node's gathered quiz files as W2-5b1 Task 5's judge left them in its --out: `<root>/<store>/quiz/judged.json`, and
+ *  `judge/<id>.input.json` for every item that reached the judge, each input built by judgeInputOf. */
+function b2t4Write(root: string, storeId: string, o: { fin?: B2t4Fin; over?: Record<string, unknown>; outcome?: B2t4Outcome; reply?: (e: number, a: number) => string } = {}): B2t4Write {
+  const fin = o.fin ?? b2t4Fin();
+  const dir = join(root, storeId, 'quiz');
+  mkdirSync(join(dir, 'judge'), { recursive: true });
+  const items: Array<Record<string, unknown>> = [];
+  for (const r of b2t4Rows(fin).filter((x) => x.store_id === storeId).sort((x, y) => (x.id < y.id ? -1 : 1))) {
+    const oc = (o.outcome ?? b2t4Outcome)(r.e, r.a);
+    if (oc === null) continue;
+    const input = W5B5.judgeInputOf(fin.frozen.list.entries[r.e]!, (o.reply ?? b2t4Reply)(r.e, r.a), W6_IDX);
+    writeFileSync(join(dir, 'judge', `${r.id}.input.json`), `${w5b5Lib.canonicalJson(input) as string}\n`, { mode: 0o600 });
+    items.push({ id: r.id, outcome: oc.outcome, label: oc.label, attempts: [] });
+  }
+  return b2t4Save(dir, {
+    kind: B2T4.JUDGED_KIND, v: 1, section: 'quiz', store_id: storeId, record_sha256: fin.sha256, frozen_sha256: fin.frozen.sha256,
+    map_sha256: b2t4MapSha(fin), judge_model: fin.record.judge_model, rubric_id: fin.record.rubric_id,
+    rubric_sha256: (w5b5Gate.RUBRIC_SHA256 as Record<string, string>)[fin.record.rubric_id as string], settings_mode: 'restricted',
+    reply_max_bytes: B2T4.JUDGE_REPLY_MAX_BYTES, items, counts: {}, budget: 100_000, spend: 0, stamps: [], ...(o.over ?? {}),
+  });
+}
+/** `w` saved again with the first item `pick` selects patched. */
+function b2t4Patch(w: B2t4Write, pick: (i: Record<string, any>) => boolean, patch: Record<string, unknown>): B2t4Write {
+  const items = w.doc.items as Array<Record<string, any>>;
+  const at = items.findIndex(pick);
+  expect(at, 'the fixture holds such an item').toBeGreaterThanOrEqual(0);
+  return b2t4Save(w.dir, { ...w.doc, items: items.map((i, k) => (k === at ? { ...i, ...patch } : i)) });
+}
+const b2t4IdWhere = (w: B2t4Write, pick: (i: Record<string, any>) => boolean): string =>
+  (w.doc.items as Array<Record<string, any>>).find(pick)!.id as string;
+/** --judged and --judged-sha256, by position. */
+const b2t4Flags = (ws: B2t4Write[]): Record<string, unknown> => ({ judged: ws.map((w) => w.judged), 'judged-sha256': ws.map((w) => w.sha) });
+/** Both nodes' files under a fresh root, and the plan over them. */
+function b2t4Both(prefix: string, fin: B2t4Fin = b2t4Fin(), o: { outcome?: B2t4Outcome } = {}): { root: string; a: B2t4Write; b: B2t4Write; plan: B2t4Plan } {
+  const root = mkTmp(prefix);
+  const a = b2t4Write(root, B2T4_A, { fin, ...o });
+  const b = b2t4Write(root, B2T4_B, { fin, ...o });
+  return { root, a, b, plan: B2T4.loadHandcheckPlan(b2t4Flags([a, b]), fin) };
+}
+/** A refusal as {word, detail}, null when none; any other throw is the case's failure. */
+function b2t4Refusal(fn: () => unknown): { word: string; detail: string } | null {
+  try {
+    fn();
+    return null;
+  } catch (e) {
+    if (e instanceof DriverRefusal) return { word: e.word, detail: e.detail };
+    throw e;
+  }
+}
+/** A labels file's text: the lines and one newline. */
+const b2t4Text = (lines: string[]): string => `${lines.join('\n')}\n`;
+/** One line per sheet id, in sheet order: the judge's own word, `uncertain` for a judge-failed id. */
+const b2t4Agree = (plan: B2t4Plan): string[] => plan.sampled.map((id) => `${id} ${plan.items.find((i) => i.id === id)!.judge ?? 'uncertain'}`);
+type B2t4Ready = { plan: B2t4Plan; failed: string[]; notDrawn: string };
+/** The share-0.5 plan, its judge-failed ids, and one judged id the sample did not draw. */
+function b2t4Ready(): B2t4Ready {
+  const { plan } = b2t4Both('ccrc-w2-5b2-t4-labels-');
+  return { plan, failed: plan.items.filter((i) => i.outcome === 'judge-failed').map((i) => i.id),
+    notDrawn: plan.items.find((i) => i.outcome === 'judged' && !plan.sampled.includes(i.id))!.id };
+}
+/** decideGate's inputs over the fixture's five questions: a pair the judge never saw is correct, every other carries the
+ *  hand-check result's label and judge-failed flag; no live family (criterion 3 is not this task's). */
+function b2t4GateInputs(rs: B2t4Result): Record<string, unknown> {
+  const families = [B2T4_A, B2T4_B].map((store) => ({
+    key: `fixture-family-${store}`,
+    questions: B2T4_ENTRIES.filter((e) => e.store_id === store).map((e) => ({
+      qid: e.qid, runFailed: false,
+      ...Object.fromEntries(W5B5_ARMS.map((arm) => {
+        const it = rs.items.find((i) => i.qid === e.qid && i.arm === arm);
+        return [arm, it === undefined ? { label: 'correct', answerState: 'value', judgeFailed: false }
+          : { label: it.label, answerState: 'value', judgeFailed: it.judgeFailed }];
+      })),
+    })),
+  }));
+  return { seedHex: W5B5_SEED, B: 20, halts: w5b5Gate.HALT_DEFAULTS, codeChanged: false, quiz: { families }, live: { families: [] },
+    handcheck: { agreement: rs.agreement } };
+}
+
+describe('W2-5b2 Task 4: the hand-check plan over every node\'s judged file (W2-D81; Q2, Q18)', () => {
+  it('the sample is the gate\'s handcheckSample over every node\'s judged items at the record\'s share, arms from the judge map, then every judge-failed item', () => {
+    const fin = b2t4Fin();
+    const { a, b, plan } = b2t4Both('ccrc-w2-5b2-t4-plan-', fin);
+    const rows = b2t4Rows(fin).filter((r) => b2t4Outcome(r.e, r.a) !== null).sort((x, y) => (x.id < y.id ? -1 : 1));
+    expect(rows, 'eight of the ten pairs reached the judge').toHaveLength(8);
+    expect(plan.items).toEqual(rows.map((r) => ({ id: r.id, qid: r.qid, arm: r.arm, store_id: r.store_id,
+      outcome: b2t4Outcome(r.e, r.a)!.outcome, judge: b2t4Outcome(r.e, r.a)!.label })));
+    const want = w5b5Gate.handcheckSample(W5B5_SEED, rows.map((r) => ({ id: r.id, arm: r.arm as 'treatment' | 'control',
+      judged: b2t4Outcome(r.e, r.a)!.outcome === 'judged', judgeFailed: b2t4Outcome(r.e, r.a)!.outcome === 'judge-failed' })), 0.5) as string[];
+    expect(plan.sampled).toEqual(want);
+    const failed = rows.filter((r) => b2t4Outcome(r.e, r.a)!.outcome === 'judge-failed').map((r) => r.id);
+    expect(failed).toHaveLength(2);
+    for (const id of failed) expect(plan.sampled, `judge-failed ${id} is always on the sheet`).toContain(id);
+    expect(plan.required).toEqual(want.filter((id) => !failed.includes(id)));
+    for (const arm of W5B5_ARMS) {
+      const pool = rows.filter((r) => r.arm === arm && b2t4Outcome(r.e, r.a)!.outcome === 'judged').map((r) => r.id);
+      expect(pool, arm).toHaveLength(3);
+      expect(plan.required.filter((id) => pool.includes(id)), `ceil(0.5 x 3) of ${arm}'s judged items`).toHaveLength(2);
+    }
+    expect(plan.share).toBe(0.5);
+    expect(plan.mapSha256).toBe(b2t4MapSha(fin));
+    expect(plan.judged).toEqual([{ store_id: B2T4_A, sha256: a.sha, dir: a.dir }, { store_id: B2T4_B, sha256: b.sha, dir: b.dir }]);
+    expect(plan.stamps).toEqual([]);
+  });
+
+  it('CONTROL: at share 1 every judged and every judge-failed item is on the sheet, the files\' order moves nothing, and every node\'s stamps are carried', () => {
+    const fin = b2t4Fin({ share: 1 });
+    const root = mkTmp('ccrc-w2-5b2-t4-plan-all-');
+    const a = b2t4Write(root, B2T4_A, { fin, over: { stamps: ['code-changed'] } });
+    const b = b2t4Write(root, B2T4_B, { fin });
+    const plan = B2T4.loadHandcheckPlan(b2t4Flags([a, b]), fin);
+    expect(plan.sampled).toEqual(plan.items.map((i) => i.id));
+    expect(plan.required).toEqual(plan.items.filter((i) => i.outcome === 'judged').map((i) => i.id));
+    expect(plan.stamps).toEqual(['code-changed']);
+    expect(B2T4.loadHandcheckPlan(b2t4Flags([b, a]), fin)).toEqual(plan);
+  });
+
+  it('a judged file is read by its sha before a byte is parsed (input-sha-mismatch), as every input is', () => {
+    const root = mkTmp('ccrc-w2-5b2-t4-plan-sha-');
+    const a = b2t4Write(root, B2T4_A);
+    const b = b2t4Write(root, B2T4_B);
+    expect(b2t4Refusal(() => B2T4.loadHandcheckPlan(b2t4Flags([{ ...a, sha: B2T4_OTHER }, b]), b2t4Fin())))
+      .toEqual({ word: 'input-sha-mismatch', detail: `judged: expected ${B2T4_OTHER}, measured ${a.sha}` });
+  });
+
+  const w = b2t4Write;
+  it.each([
+    ['a file of another kind', (r: string) => [w(r, B2T4_A, { over: { kind: 'ccrc-history-w2-other' } }), w(r, B2T4_B)], () => 'judged 1 is not a judged file'],
+    ['the pilot section', (r: string) => [w(r, B2T4_A), w(r, B2T4_B, { over: { section: 'pilot' } })], () => 'judged 2 section "pilot", wanted quiz'],
+    ['another record', (r: string) => [w(r, B2T4_A), w(r, B2T4_B, { over: { record_sha256: B2T4_OTHER } })],
+      () => `judged 2 record "${B2T4_OTHER}", not this record's ${B2T4_RECORD_SHA}: run judge on that node under this record`],
+    ['another frozen list', (r: string) => [w(r, B2T4_A, { over: { frozen_sha256: B2T4_OTHER } }), w(r, B2T4_B)],
+      () => `judged 1 frozen "${B2T4_OTHER}", not this record's ${B2T4_FROZEN_SHA}`],
+    ['another judge map', (r: string) => [w(r, B2T4_A, { over: { map_sha256: B2T4_OTHER } }), w(r, B2T4_B)],
+      () => `judged 1 map "${B2T4_OTHER}", not this record's judge map ${b2t4MapSha(b2t4Fin())}`],
+    ['a store that is no node', (r: string) => [w(r, B2T4_A, { over: { store_id: B2T4_NOWHERE } }), w(r, B2T4_B)],
+      () => `judged 1 store "${B2T4_NOWHERE}" is not one of the record's nodes`],
+    ['one node twice', (r: string) => { const a = w(r, B2T4_A); return [a, a, w(r, B2T4_B)]; }, () => `judged 2 store ${B2T4_A} repeats judged 1`],
+    ['another judge model', (r: string) => [w(r, B2T4_A, { over: { judge_model: 'claude-opus-9-2' } }), w(r, B2T4_B)],
+      () => `judged 1 judge ${JSON.stringify(['claude-opus-9-2', 'v1', B2T4_RUBRIC_SHA])} is not the record's ${JSON.stringify([W6_MODEL, 'v1', B2T4_RUBRIC_SHA])}`],
+    ['another reply cap', (r: string) => [w(r, B2T4_A, { over: { reply_max_bytes: 1024 } }), w(r, B2T4_B)], () => 'judged 1 reply_max_bytes 1024, not 16384'],
+    ['stamps that are not words', (r: string) => [w(r, B2T4_A, { over: { stamps: [1] } }), w(r, B2T4_B)], () => 'judged 1 stamps is not a list of words'],
+    ['an item that is no judge id', (r: string) => {
+      const a = w(r, B2T4_A);
+      return [b2t4Save(a.dir, { ...a.doc, items: [...a.doc.items, { id: 'k0001', outcome: 'judged', label: 'uncertain', attempts: [] }] }), w(r, B2T4_B)];
+    }, () => 'judged 1 item "k0001" is not a judge id'],
+    ['an item outside the map', (r: string) => {
+      const a = w(r, B2T4_A);
+      return [b2t4Save(a.dir, { ...a.doc, items: [...a.doc.items, { id: 'j0099', outcome: 'judged', label: 'uncertain', attempts: [] }] }), w(r, B2T4_B)];
+    }, () => 'judged 1 item j0099 is not in the judge map'],
+    ['an item two files carry', (r: string) => {
+      const a = w(r, B2T4_A);
+      const b = w(r, B2T4_B);
+      return [a, b2t4Save(b.dir, { ...b.doc, items: [...b.doc.items, a.doc.items[0]] })];
+    }, (ws: B2t4Write[]) => `judged 2 item ${ws[0]!.doc.items[0].id as string} repeats`],
+    ['an item of another node', (r: string) => {
+      const a = w(r, B2T4_A);
+      const b = w(r, B2T4_B);
+      return [b2t4Save(a.dir, { ...a.doc, items: [...a.doc.items, b.doc.items[0]] }), b];
+    }, (ws: B2t4Write[]) => `judged 1 item ${ws[1]!.doc.items[0].id as string} names a question of another node`],
+    ['an outcome outside the two', (r: string) => [b2t4Patch(w(r, B2T4_A), (i) => i.outcome === 'judged', { outcome: 'skipped' }), w(r, B2T4_B)],
+      (ws: B2t4Write[]) => `judged 1 item ${b2t4IdWhere(ws[0]!, (i) => i.outcome === 'skipped')} outcome "skipped"`],
+    ['a judged item with no label', (r: string) => [b2t4Patch(w(r, B2T4_A), (i) => i.outcome === 'judged', { label: null }), w(r, B2T4_B)],
+      (ws: B2t4Write[]) => `judged 1 item ${b2t4IdWhere(ws[0]!, (i) => i.outcome === 'judged' && i.label === null)} judged with label null`],
+    ['a judge-failed item with a label', (r: string) => [b2t4Patch(w(r, B2T4_A), (i) => i.outcome === 'judge-failed', { label: 'uncertain' }), w(r, B2T4_B)],
+      (ws: B2t4Write[]) => `judged 1 item ${b2t4IdWhere(ws[0]!, (i) => i.outcome === 'judge-failed')} judge-failed with label "uncertain"`],
+    ['a judged item labelled correct', (r: string) => [b2t4Patch(w(r, B2T4_A), (i) => i.outcome === 'judged', { label: 'correct' }), w(r, B2T4_B)],
+      (ws: B2t4Write[]) => `judged 1 item ${b2t4IdWhere(ws[0]!, (i) => i.label === 'correct')} judged with label "correct"`],
+    ['a node holding questions with no judged file', (r: string) => [w(r, B2T4_A)],
+      () => `judged-missing 1 node(s) (first ${B2T4_B}): pass every node's judged.json that holds frozen questions`],
+  ] as Array<[string, (root: string) => B2t4Write[], (ws: B2t4Write[]) => string]>)('%s refuses input-invalid, naming the file by its position', (_name, setup, detail) => {
+    const ws = setup(mkTmp('ccrc-w2-5b2-t4-refuse-'));
+    expect(b2t4Refusal(() => B2T4.loadHandcheckPlan(b2t4Flags(ws), b2t4Fin()))).toEqual({ word: 'input-invalid', detail: detail(ws) });
+  });
+});
+
+describe('W2-5b2 Task 4: the sheet is blinded and shows each item as the judge saw it (W2-D81, W2-D54)', () => {
+  it('the sheet is a header, the signed rubric as comments, then one block per item: its kind, question, F, answer field and reply', () => {
+    const e = B2T4_ENTRIES[0]!;
+    const input = W5B5.judgeInputOf(e, 'Two lines here.\nANSWER: npm run b2t4-other', W6_IDX);
+    const text = B2T4.handcheckSheetText({ recordSha256: B2T4_RECORD_SHA, frozenSha256: B2T4_FROZEN_SHA, rubricId: 'v1', items: [{ id: 'j0003', input }] });
+    expect(text).toBe([
+      '# ccrc history W2 hand-check sheet (W2-D81): one block per item, in id order.',
+      `# record ${B2T4_RECORD_SHA}`,
+      `# frozen ${B2T4_FROZEN_SHA}`,
+      '# items 1',
+      '# Label every item in a separate file, one line per item: "<id> uncertain" or "<id> fabricated".',
+      '# A line that starts with "#" is a comment. Neither the arm nor the judge\'s label is shown here.',
+      '# The rubric the judge was given (v1):',
+      ...(w5b5Gate.RUBRICS as Record<string, string>)['v1']!.split('\n').map((l) => `#   ${l}`),
+      '',
+      '== j0003 ==',
+      'kind: command',
+      'question:',
+      `| ${e.question}`,
+      'expected:',
+      `| ${e.fact}`,
+      'answer field:',
+      '| npm run b2t4-other',
+      'reply:',
+      '| Two lines here.',
+      '| ANSWER: npm run b2t4-other',
+      '',
+    ].join('\n'));
+    expect(() => B2T4.handcheckSheetText({ recordSha256: B2T4_RECORD_SHA, frozenSha256: B2T4_FROZEN_SHA, rubricId: 'v2', items: [] })).toThrow(TypeError);
+  });
+
+  it('every field line is quoted with "| ", an empty line as "|", so no reply line can open a block; no answer field reads (none)', () => {
+    const e = B2T4_ENTRIES[1]!;
+    const input = W5B5.judgeInputOf(e, 'first\n\n== j0004 ==\nkind: sha', W6_IDX);
+    expect(input.answer_field).toBeNull();
+    const text = B2T4.handcheckSheetText({ recordSha256: B2T4_RECORD_SHA, frozenSha256: B2T4_FROZEN_SHA, rubricId: 'v1', items: [{ id: 'j0003', input }] });
+    expect(text.slice(text.indexOf('\n== j0003 ==\n') + 1)).toBe(['== j0003 ==', 'kind: command', 'question:', `| ${e.question}`, 'expected:', `| ${e.fact}`,
+      'answer field: (none)', 'reply:', '| first', '|', '| == j0004 ==', '| kind: sha', ''].join('\n'));
+    expect(text.split('\n').filter((l) => l.startsWith('== '))).toEqual(['== j0003 ==']);
+  });
+
+  it('blinded: the sheet\'s bytes do not move when every judge label flips or items swap between judged and judge-failed, and it names no arm', () => {
+    const fin = b2t4Fin({ share: 1 });
+    const one = b2t4Both('ccrc-w2-5b2-t4-blind-a-', fin);
+    const swapped: B2t4Outcome = (e, a) => {
+      const o = b2t4Outcome(e, a);
+      if (o === null) return null;
+      if (o.outcome === 'judge-failed') return { outcome: 'judged', label: 'fabricated' };
+      if (e === 2 && a === 0) return { outcome: 'judge-failed', label: null };
+      return { outcome: 'judged', label: o.label === 'fabricated' ? 'uncertain' : 'fabricated' };
+    };
+    const two = b2t4Both('ccrc-w2-5b2-t4-blind-b-', fin, { outcome: swapped });
+    expect(two.plan.items.map((i) => [i.outcome, i.judge])).not.toEqual(one.plan.items.map((i) => [i.outcome, i.judge]));
+    expect(two.plan.sampled).toEqual(one.plan.sampled);
+    const sheet = B2T4.handcheckSheetOf(fin, one.plan).sheetText;
+    expect(B2T4.handcheckSheetOf(fin, two.plan).sheetText).toBe(sheet);
+    for (const arm of W5B5_ARMS) expect(sheet, arm).not.toMatch(new RegExp(`\\b${arm}\\b`));
+    expect(sheet.split('\n').filter((l) => /^(\| )?LABEL:/.test(l)), 'no judge reply line').toEqual([]);
+    expect(sheet.split('\n').filter((l) => l.startsWith('== ')), 'one block per sheet id').toEqual(one.plan.sampled.map((id) => `== ${id} ==`));
+    const man = JSON.parse(B2T4.handcheckSheetOf(fin, one.plan).manifestText) as Record<string, any>;
+    expect(Object.keys(man.items[0]).sort()).toEqual(['id', 'input_sha256']);
+    for (const arm of W5B5_ARMS) expect(JSON.stringify(man), `manifest: ${arm}`).not.toMatch(new RegExp(`\\b${arm}\\b`));
+  });
+
+  it('judgeInputFault holds an input to its six keys, v 1, its strings, the entry\'s kind, the 16 KiB cap and its canonical bytes', () => {
+    const e = B2T4_ENTRIES[0]!;
+    const good = W5B5.judgeInputOf(e, b2t4Reply(0, 0), W6_IDX) as unknown as Record<string, unknown>;
+    const bytesOf = (v: unknown): Buffer => Buffer.from(`${w5b5Lib.canonicalJson(v) as string}\n`, 'utf8');
+    const fault = (v: Record<string, unknown>, bytes: Buffer = bytesOf(v)): string | null => B2T4.judgeInputFault(v, e, bytes);
+    const max = B2T4.JUDGE_REPLY_MAX_BYTES;
+    expect(fault(good)).toBeNull();
+    expect(fault({ ...good, arm: 'x' }), 'a seventh key').toBe('keys');
+    expect(fault(Object.fromEntries(Object.entries(good).filter(([k]) => k !== 'reply'))), 'no reply').toBe('keys');
+    expect(fault({ ...good, v: 2 })).toBe('version');
+    expect(fault({ ...good, reply: 7 })).toBe('field-type');
+    expect(fault({ ...good, answer_field: 7 })).toBe('field-type');
+    expect(fault({ ...good, kind: 'sha' })).toBe('kind');
+    expect(fault({ ...good, reply: 'x'.repeat(max + 1) })).toBe('over-cap');
+    expect(fault({ ...good, answer_field: 'x'.repeat(max + 1) })).toBe('over-cap');
+    expect(fault({ ...good, reply: 'x'.repeat(max) }), 'CONTROL: at the cap').toBeNull();
+    expect(fault(good, Buffer.from(`${JSON.stringify(good, null, 1)}\n`)), 'indented').toBe('not-canonical');
+    const raw = bytesOf(good);
+    expect(fault(good, raw.subarray(0, raw.length - 1)), 'no final newline').toBe('not-canonical');
+    const at = raw.indexOf(Buffer.from('I think'));
+    const bad = Buffer.concat([raw.subarray(0, at), Buffer.from([0xff]), raw.subarray(at + 1)]);
+    expect(fault(JSON.parse(bad.toString('utf8')) as Record<string, unknown>, bad), 'an invalid UTF-8 byte').toBe('not-canonical');
+  });
+
+  it('each sampled item\'s input is read as judge left it: a missing file, a link or another kind refuses input-invalid, naming its node and path', () => {
+    const fin = b2t4Fin({ share: 1 });
+    const x = b2t4Both('ccrc-w2-5b2-t4-inputs-', fin);
+    const [i0, i1] = (x.a.doc.items as Array<Record<string, any>>).map((i) => i.id as string);
+    expect(B2T4.handcheckSheetOf(fin, x.plan).sheetText, 'CONTROL').toContain(`\n== ${i0!} ==\n`);
+    const p0 = join(x.a.dir, 'judge', `${i0!}.input.json`);
+    const keep = readFileSync(p0);
+    const where = `judged ${B2T4_A} judge/${i0!}.input.json`;
+    rmSync(p0);
+    expect(b2t4Refusal(() => B2T4.handcheckSheetOf(fin, x.plan))).toEqual({ word: 'input-invalid', detail: `${where} unreadable ENOENT` });
+    symlinkSync(join(x.a.dir, 'judge', `${i1!}.input.json`), p0);
+    expect(b2t4Refusal(() => B2T4.handcheckSheetOf(fin, x.plan))).toEqual({ word: 'input-invalid', detail: `${where} not-regular` });
+    rmSync(p0);
+    writeFileSync(p0, `${w5b5Lib.canonicalJson({ ...(JSON.parse(keep.toString('utf8')) as Record<string, unknown>), kind: 'sha' }) as string}\n`);
+    expect(b2t4Refusal(() => B2T4.handcheckSheetOf(fin, x.plan))).toEqual({ word: 'input-invalid', detail: `${where} kind` });
+  });
+});
+
+describe('W2-5b2 Task 4: the label reader is strict (Q19)', () => {
+  it('comments, blank lines, and spaces or tabs between an id and its word are read; each sheet id answers its word, in file order', () => {
+    const { plan } = b2t4Ready();
+    expect(plan.sampled).toHaveLength(6);
+    const [x, y, ...rest] = plan.sampled;
+    const tab = String.fromCharCode(9);
+    const text = b2t4Text(['# the operator\'s labels', '', `${x!}${tab}uncertain`, `${y!}   fabricated ${tab}`, '#', ...rest.map((id) => `${id} fabricated`)]);
+    expect([...B2T4.parseHandcheckLabels(text, plan).entries()]).toEqual([[x, 'uncertain'], [y, 'fabricated'], ...rest.map((id) => [id, 'fabricated'])]);
+    expect(B2T4.HANDCHECK_LABELS).toEqual(['uncertain', 'fabricated']);
+  });
+
+  it.each([
+    ['an id alone', (l: string[]) => [l[0]!.split(' ')[0]!, ...l.slice(1)], () => B2T4_MALFORMED(1)],
+    ['a space before the id', (l: string[]) => [` ${l[0]!}`, ...l.slice(1)], () => B2T4_MALFORMED(1)],
+    ['a comment after the word', (l: string[]) => [`${l[0]!} # sure`, ...l.slice(1)], () => B2T4_MALFORMED(1)],
+    ['a carriage return after the word', (l: string[]) => [`${l[0]!}${String.fromCharCode(13)}`, ...l.slice(1)], () => B2T4_MALFORMED(1)],
+    ['an id that is no judge id', (l: string[]) => ['x0001 uncertain', ...l], () => B2T4_MALFORMED(1)],
+    ['the word correct', (l: string[]) => [`${l[0]!.split(' ')[0]!} correct`, ...l.slice(1)], () => 'labels line 1 label "correct" is not one of uncertain, fabricated'],
+    ['a capitalised word', (l: string[]) => [`${l[0]!.split(' ')[0]!} Uncertain`, ...l.slice(1)], () => 'labels line 1 label "Uncertain" is not one of uncertain, fabricated'],
+    ['an id not on the sheet', (l: string[], x: B2t4Ready) => [...l, `${x.notDrawn} uncertain`],
+      (x: B2t4Ready) => `labels line ${x.plan.sampled.length + 1} id ${x.notDrawn} is not on the sheet`],
+    ['an id twice', (l: string[]) => [...l, l[0]!], (x: B2t4Ready) => `labels line ${x.plan.sampled.length + 1} repeats ${x.plan.sampled[0]!}`],
+    ['a sampled judged id with no line', (l: string[], x: B2t4Ready) => l.filter((s) => s.split(' ')[0] !== x.plan.required[0]),
+      (x: B2t4Ready) => `labels-missing 1 sampled id(s) (first ${x.plan.required[0]!}): label every sampled item`],
+  ] as Array<[string, (l: string[], x: B2t4Ready) => string[], (x: B2t4Ready) => string]>)('%s refuses input-invalid', (_name, edit, detail) => {
+    const x = b2t4Ready();
+    expect(B2T4.parseHandcheckLabels(b2t4Text(b2t4Agree(x.plan)), x.plan).size, 'CONTROL: the unedited file reads').toBe(x.plan.sampled.length);
+    expect(b2t4Refusal(() => B2T4.parseHandcheckLabels(b2t4Text(edit(b2t4Agree(x.plan), x)), x.plan))).toEqual({ word: 'input-invalid', detail: detail(x) });
+  });
+
+  it('a judge-failed id left unlabelled is read: its label stays null, it is named unlabelled, and the gate\'s verdict waits (incomplete)', () => {
+    const { plan, failed } = b2t4Ready();
+    expect(failed).toHaveLength(2);
+    const labels = B2T4.parseHandcheckLabels(b2t4Text(b2t4Agree(plan).filter((l) => !failed.includes(l.split(' ')[0]!))), plan);
+    expect(labels.size).toBe(plan.required.length);
+    const res = B2T4.handcheckResultOf(plan, labels);
+    expect(res.unlabelled).toEqual(failed);
+    for (const id of failed) expect(res.items.find((i) => i.id === id), id).toMatchObject({ label: null, judgeFailed: true, operator: null });
+    const verdict = (rs: B2t4Result): string => (w5b5Gate.decideGate(b2t4GateInputs(rs) as never) as { verdict: string }).verdict;
+    expect(verdict(res)).toBe('incomplete');
+    const all = B2T4.handcheckResultOf(plan, B2T4.parseHandcheckLabels(b2t4Text(b2t4Agree(plan)), plan));
+    expect(all.unlabelled).toEqual([]);
+    expect(verdict(all), 'CONTROL: every judge-failed item labelled').not.toBe('incomplete');
+  });
+
+  it('readHandcheckLabels checks the file\'s sha before a byte is read, and refuses bytes that are not UTF-8', () => {
+    const { plan } = b2t4Ready();
+    const dir = mkTmp('ccrc-w2-5b2-t4-labels-file-');
+    const text = b2t4Text(b2t4Agree(plan));
+    const p = join(dir, 'labels.txt');
+    writeFileSync(p, text, { mode: 0o600 });
+    expect(B2T4.readHandcheckLabels(p, sha256Hex(text), plan).size, 'CONTROL').toBe(plan.sampled.length);
+    expect(b2t4Refusal(() => B2T4.readHandcheckLabels(p, B2T4_OTHER, plan)))
+      .toEqual({ word: 'input-sha-mismatch', detail: `labels: expected ${B2T4_OTHER}, measured ${sha256Hex(text)}` });
+    const bad = Buffer.concat([Buffer.from('# the operator\'s labels '), Buffer.from([0xff]), Buffer.from(`\n${text}`)]);
+    const q = join(dir, 'labels-bad.txt');
+    writeFileSync(q, bad, { mode: 0o600 });
+    expect(b2t4Refusal(() => B2T4.readHandcheckLabels(q, sha256Hex(bad), plan))).toEqual({ word: 'input-invalid', detail: 'labels not-utf8' });
+  });
+});
+
+describe('W2-5b2 Task 4: the operator\'s label replaces the judge\'s, and agreement is by arm (W2-D81)', () => {
+  it('sampled items take the operator\'s word, the rest keep the judge\'s, a labelled judge-failed item is no pair, and agreement is the gate\'s per arm', () => {
+    const { plan } = b2t4Both('ccrc-w2-5b2-t4-override-');
+    const byId = new Map(plan.items.map((i) => [i.id, i]));
+    const flip = (l: string | null): string => (l === 'fabricated' ? 'uncertain' : 'fabricated');
+    const flipped = W5B5_ARMS.map((arm) => plan.required.find((id) => byId.get(id)!.arm === arm)!);
+    const operator = new Map(plan.sampled.map((id): [string, string] => {
+      const i = byId.get(id)!;
+      return [id, i.outcome === 'judge-failed' ? 'fabricated' : flipped.includes(id) ? flip(i.judge) : i.judge!];
+    }));
+    const res = B2T4.handcheckResultOf(plan, operator);
+    expect(res.items.map((r) => r.id)).toEqual(plan.items.map((i) => i.id));
+    for (const r of res.items) {
+      const i = byId.get(r.id)!;
+      expect(r, r.id).toEqual({ id: i.id, qid: i.qid, arm: i.arm, label: operator.get(r.id) ?? i.judge, judgeFailed: i.outcome === 'judge-failed',
+        operator: operator.get(r.id) ?? null });
+    }
+    const pairs = plan.required.map((id) => ({ arm: byId.get(id)!.arm, judge: byId.get(id)!.judge, operator: operator.get(id) }));
+    expect(res.agreement).toEqual(w5b5Gate.handcheckAgreement(pairs as never));
+    for (const arm of W5B5_ARMS) expect(res.agreement[arm], `${arm}: one of its two sampled items agrees`).toEqual(w5b5Gate.frac(1, 2));
+    expect(res.unlabelled).toEqual([]);
+  });
+
+  it('an operator label for an id that is not on the sheet is a defect the reader never lets through: TypeError', () => {
+    const x = b2t4Ready();
+    // Every sheet id is labelled besides, so the gate's agreement over the sampled pairs has nothing to refuse and the off-sheet id is the only fault.
+    const sheetOwn = x.plan.sampled.map((id): [string, string] => [id, 'uncertain']);
+    expect(() => B2T4.handcheckResultOf(x.plan, new Map([...sheetOwn, [x.notDrawn, 'uncertain']]))).toThrow(TypeError);
+    expect(() => B2T4.handcheckResultOf(x.plan, new Map(x.plan.sampled.map((id): [string, string] => [id, 'uncertain']))), 'CONTROL: the sheet\'s own ids').not.toThrow();
+  });
+});
+
+describe('W2-5b2 Task 4: handcheck --sheet (W2-D81, W2-D24; Q2, Q23)', () => {
+  /** Flags that pass `handcheck --sheet`'s grammar; the record inputs are placeholders the injected loader never reads. */
+  function b2t4SheetFlags(out: string, ws: B2t4Write[], extra: Record<string, unknown> = {}): Record<string, unknown> {
+    const sha = 'a'.repeat(64);
+    const input = '/home/u/fixture-input.json';
+    return { sheet: true, out, record: input, 'record-sha256': sha, part1: input, 'part1-sha256': sha, frozen: input, 'frozen-sha256': sha, ...b2t4Flags(ws), ...extra };
+  }
+  const b2t4Deps = (fin: B2t4Fin): Record<string, unknown> => ({ loadFinal: () => fin, now: () => Date.now() });
+  const B2T4_MOVED = (): Record<string, string> => ({ ...w5b4Shas(), 'deploy/measure-history.py': w5b4Hex('moved') });
+  /** `handcheck --sheet` over W2-5b1 Task 4's quiz fixture, with the judged files given. */
+  const b2t4Argv = (fx: { out: string; f: W5b4Saved; d: W5b4Saved; fz: W5b4Saved }, judged: string[], shas: string[], extra: string[] = []): string[] =>
+    ['handcheck', '--sheet', '--out', fx.out, ...w5b4Inp('record', fx.f), ...w5b4Inp('part1', fx.d), ...w5b4Inp('frozen', fx.fz),
+      ...judged.flatMap((p, i) => ['--judged', p, '--judged-sha256', shas[i]!]), ...extra];
+
+  it('handcheck takes --sheet and only its form\'s flags', () => {
+    const home = mkTmp('ccrc-w2-5b2-t4-grammar-');
+    const out = join(home, 'report-out');
+    const sha = 'a'.repeat(64);
+    const said = (argv: string[]): [unknown, string] => { const r = runDriver(home, argv); return [r.code, r.stderr]; };
+    expect(said(['handcheck', '--out', out])).toEqual([2, refusalLine('args-invalid', 'handcheck wants --sheet')]);
+    expect(said(['handcheck', '--sheet', '--out', out, '--section', 'quiz'])).toEqual([2, refusalLine('args-invalid', '--section is not a handcheck --sheet flag')]);
+    expect(said(['handcheck', '--sheet', '--out', out, '--record', '/home/u/r.json', '--record-sha256', sha, '--part1', '/home/u/p.json', '--part1-sha256', sha,
+      '--frozen', '/home/u/f.json', '--frozen-sha256', sha])).toEqual([2, refusalLine('args-invalid', 'judged-required')]);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it('writes the sheet and its manifest under --out, prints only the manifest\'s sha on stderr, and a re-run over the same inputs changes nothing', async () => {
+    const fin = b2t4Fin();
+    const { root, a, b, plan } = b2t4Both('ccrc-w2-5b2-t4-cmd-', fin);
+    const out = join(root, 'report-out');
+    const r = await w5b5InProcess(() => B2T4.handcheckCommand(b2t4SheetFlags(out, [a, b]), { HOME: root }, b2t4Deps(fin)));
+    expect(r.refusal).toBeNull();
+    expect(r.code).toBe(0);
+    const sheetPath = join(out, B2T4.HANDCHECK_DIR, B2T4.HANDCHECK_SHEET_FILE);
+    const manPath = join(out, B2T4.HANDCHECK_DIR, B2T4.HANDCHECK_MANIFEST_FILE);
+    expect([sheetPath, manPath].map((p) => p.slice(out.length))).toEqual(['/handcheck/sheet.txt', '/handcheck/sheet.json']);
+    const sheet = readFileSync(sheetPath, 'utf8');
+    const manText = readFileSync(manPath, 'utf8');
+    expect(r.stderr).toBe(`sha256 ${sha256Hex(manText)}\n`);
+    expect(sheet).toBe(B2T4.handcheckSheetOf(fin, plan).sheetText);
+    const man = JSON.parse(manText) as Record<string, any>;
+    expect(manText).toBe(`${w5b5Lib.canonicalJson(man) as string}\n`);
+    expect(Object.keys(man).sort()).toEqual(['frozen_sha256', 'items', 'judged', 'kind', 'map_sha256', 'record_sha256', 'rubric_id', 'section', 'share',
+      'sheet_sha256', 'stamps', 'v']);
+    expect(man).toMatchObject({ kind: B2T4.HANDCHECK_SHEET_KIND, v: 1, section: 'quiz', record_sha256: B2T4_RECORD_SHA, frozen_sha256: B2T4_FROZEN_SHA,
+      map_sha256: b2t4MapSha(fin), rubric_id: 'v1', share: 0.5, sheet_sha256: sha256Hex(sheet), stamps: [] });
+    expect(man.judged).toEqual([{ store_id: B2T4_A, sha256: a.sha }, { store_id: B2T4_B, sha256: b.sha }]);
+    expect(man.items).toEqual(plan.sampled.map((id) => {
+      const dir = plan.items.find((i) => i.id === id)!.store_id === B2T4_A ? a.dir : b.dir;
+      return { id, input_sha256: sha256Hex(readFileSync(join(dir, 'judge', `${id}.input.json`))) };
+    }));
+    for (const p of [sheetPath, manPath]) expect(statSync(p).mode & 0o777, p).toBe(0o600);
+    const again = await w5b5InProcess(() => B2T4.handcheckCommand(b2t4SheetFlags(out, [a, b]), { HOME: root }, b2t4Deps(fin)));
+    expect(again.code).toBe(0);
+    expect(again.stderr).toBe(r.stderr);
+    expect(readFileSync(sheetPath, 'utf8')).toBe(sheet);
+    expect(readFileSync(manPath, 'utf8')).toBe(manText);
+  });
+
+  it('an --out already holding another sheet refuses out-refused, and the sheet the operator may be labelling stays byte for byte', async () => {
+    const fin = b2t4Fin({ share: 1 });
+    const { root, a, b, plan } = b2t4Both('ccrc-w2-5b2-t4-pin-', fin);
+    const out = join(root, 'report-out');
+    expect((await w5b5InProcess(() => B2T4.handcheckCommand(b2t4SheetFlags(out, [a, b]), { HOME: root }, b2t4Deps(fin)))).code).toBe(0);
+    const sheetPath = join(out, 'handcheck', 'sheet.txt');
+    const before = readFileSync(sheetPath, 'utf8');
+    const id = plan.sampled[0]!;
+    const p = join(plan.items.find((i) => i.id === id)!.store_id === B2T4_A ? a.dir : b.dir, 'judge', `${id}.input.json`);
+    writeFileSync(p, `${w5b5Lib.canonicalJson({ ...(JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>), reply: 'ANSWER: npm run b2t4-changed' }) as string}\n`);
+    const r = await w5b5InProcess(() => B2T4.handcheckCommand(b2t4SheetFlags(out, [a, b]), { HOME: root }, b2t4Deps(fin)));
+    expect(r.refusal).toEqual({ word: 'out-refused', detail: 'handcheck-sheet-changed handcheck/sheet.txt' });
+    expect(readFileSync(sheetPath, 'utf8')).toBe(before);
+  });
+
+  type B2t4Ctx = { root: string; a: B2t4Write; b: B2t4Write; plan: B2t4Plan; fin: B2t4Fin };
+  it.each([
+    ['the part 2 loader, first', 'code-changed', (out: string, x: B2t4Ctx) => ({
+      flags: b2t4SheetFlags(out, [{ ...x.a, judged: join(x.root, 'no-such-judged.json') }, x.b]),
+      deps: { loadFinal: () => W5B5.refuse('code-changed', 'changed deploy/history-gate.mjs'), now: () => Date.now() } })],
+    ['a judged file whose sha differs', 'input-sha-mismatch', (out: string, x: B2t4Ctx) => ({ flags: b2t4SheetFlags(out, [{ ...x.a, sha: B2T4_OTHER }, x.b]), deps: b2t4Deps(x.fin) })],
+    ['a judged file of another record', 'input-invalid', (out: string, x: B2t4Ctx) => ({
+      flags: b2t4SheetFlags(out, [b2t4Save(x.a.dir, { ...x.a.doc, record_sha256: B2T4_OTHER }), x.b]), deps: b2t4Deps(x.fin) })],
+    ['a sampled item\'s input that is missing', 'input-invalid', (out: string, x: B2t4Ctx) => {
+      rmSync(join(x.a.dir, 'judge', `${x.a.doc.items[0].id as string}.input.json`));
+      return { flags: b2t4SheetFlags(out, [x.a, x.b]), deps: b2t4Deps(x.fin) };
+    }],
+    ['--judged given twice and its sha once', 'args-invalid', (out: string, x: B2t4Ctx) => ({
+      flags: b2t4SheetFlags(out, [x.a, x.b], { 'judged-sha256': [x.a.sha] }), deps: b2t4Deps(x.fin) })],
+  ] as Array<[string, string, (out: string, x: B2t4Ctx) => { flags: Record<string, unknown>; deps: Record<string, unknown> }]>)('%s: refused %s before --out is made', async (_name, word, setup) => {
+    const fin = b2t4Fin({ share: 1 });
+    const x = { ...b2t4Both('ccrc-w2-5b2-t4-pre-', fin), fin };
+    const out = join(x.root, 'report-out');
+    const { flags, deps } = setup(out, x);
+    const r = await w5b5InProcess(() => B2T4.handcheckCommand(flags, { HOME: x.root }, deps));
+    expect(r.refusal?.word).toBe(word);
+    expect(existsSync(out), 'no --out').toBe(false);
+  });
+
+  // W2-D24 (R23 carried: W2-5a's title phrase): handcheck re-checks the code it runs under before any other input, through
+  // the real loadFinalRecord over W2-5b1 Task 4's quiz fixture signed with a code sha this tree does not have; the judged
+  // file read next does not exist, so a re-check that ran after it would answer input-invalid.
+  it.each([
+    ['handcheck --sheet', (home: string): { out: string; argv: string[] } => {
+      const fx = w5b4Quiz(home, { shas: B2T4_MOVED() });
+      return { out: fx.out, argv: b2t4Argv(fx, [join(home, 'no-such-judged.json')], [w5b4Hex('judged')]) };
+    }],
+  ] as Array<[string, (home: string) => { out: string; argv: string[] }]>)('code-changed before any other input is read, re-checks the code it runs under: %s', async (_sub, setup) => {
+    const home = w5b4Home(null);
+    const { out, argv } = setup(home);
+    const flags = (replay.parseArgs(argv) as { flags: Record<string, unknown> }).flags;
+    const r = await w5b5InProcess(() => B2T4.handcheckCommand(flags, { HOME: home }));
+    expect(r.refusal).toEqual({ word: 'code-changed', detail: 'changed deploy/measure-history.py' });
+    expect(existsSync(out), 'no --out').toBe(false);
+  });
+
+  it('CONTROL: under the tree\'s own code shas the same argv reaches the judged file it was built to fail, still before --out', async () => {
+    const home = w5b4Home(null);
+    const fx = w5b4Quiz(home);
+    const flags = (replay.parseArgs(b2t4Argv(fx, [join(home, 'no-such-judged.json')], [w5b4Hex('judged')])) as { flags: Record<string, unknown> }).flags;
+    const r = await w5b5InProcess(() => B2T4.handcheckCommand(flags, { HOME: home }));
+    expect(r.refusal).toEqual({ word: 'input-invalid', detail: 'judged unreadable ENOENT' });
+    expect(existsSync(fx.out), 'no --out').toBe(false);
+  });
+
+  it('--allow-code-change after window start stamps the manifest; before window start args-invalid; without it code-changed (Q23, W2-D24)', async () => {
+    const home = w5b4Home(null);
+    const fx = w5b4Quiz(home, { shas: B2T4_MOVED() });
+    const fin = { record: fx.final, sha256: fx.f.sha, frozen: { sha256: fx.fz.sha, list: { entries: fx.entries } }, stamps: [] } as unknown as B2t4Fin;
+    const root = mkTmp('ccrc-w2-5b2-t4-allow-');
+    const ws = [W5B4_STORE_A, W5B4_STORE_B].map((s) => b2t4Write(root, s, { fin, outcome: () => null }));
+    const flagsOf = (extra: string[]): Record<string, unknown> =>
+      (replay.parseArgs(b2t4Argv(fx, ws.map((w) => w.judged), ws.map((w) => w.sha), extra)) as { flags: Record<string, unknown> }).flags;
+    const deps = (nowMs: number): Record<string, unknown> => ({ loadFinal: replay.loadFinalRecord, now: () => nowMs });
+    const after = W5B4_T0 + 2 * W5B4_DAY;
+    const plain = await w5b5InProcess(() => B2T4.handcheckCommand(flagsOf([]), { HOME: home }, deps(after)));
+    expect(plain.refusal?.word, 'without the flag').toBe('code-changed');
+    const early = await w5b5InProcess(() => B2T4.handcheckCommand(flagsOf(['--allow-code-change']), { HOME: home }, deps(W5B4_T0)));
+    expect(early.refusal?.word, 'before window start (W2-5b1 Task 1\'s rule)').toBe('args-invalid');
+    expect(existsSync(fx.out), 'neither made --out').toBe(false);
+    const r = await w5b5InProcess(() => B2T4.handcheckCommand(flagsOf(['--allow-code-change']), { HOME: home }, deps(after)));
+    expect(r.refusal).toBeNull();
+    expect(r.code).toBe(0);
+    const man = JSON.parse(readFileSync(join(fx.out, 'handcheck', 'sheet.json'), 'utf8')) as Record<string, any>;
+    expect(man.stamps, 'Q23: the measured change is a stamp on the manifest').toEqual(['code-changed']);
+    expect(man.items, 'every answer correct on both nodes: nothing to hand-check').toEqual([]);
+    expect(readFileSync(join(fx.out, 'handcheck', 'sheet.txt'), 'utf8')).toContain('\n# items 0\n');
+  });
 });
