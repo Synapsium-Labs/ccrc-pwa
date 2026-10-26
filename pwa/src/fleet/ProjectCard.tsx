@@ -23,7 +23,9 @@
 import { Fragment, memo } from 'react';
 import type { ReactNode } from 'react';
 import { BareRow, Button, Icon, useNow } from '@ccrc/ui';
-import type { FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary } from '../../../shared/api';
+import type {
+  DelegationActivityWire, FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary,
+} from '../../../shared/api';
 import { orphanNote, type OrphanNote } from './orphanWords';
 import { addWorkspaceLabel, poolOfPlacement, type ProjectPlacementRead } from './placementWords';
 import { formatElapsed } from './formatReset';
@@ -308,6 +310,9 @@ function ProjectCardView({
   const folded = collapsed ? foldedCard(ranked, prog.elsewhere, prog.lone) : null;
   const shownAbroad = cardAbroad(abroad, prog.boxes);
   const rowKey = fleetRowKey;
+  // R9 (delegation broker wave 4): each session row's attached activities, by session id, off the tree's own rows.
+  const delegatedOf = new Map(tree.flatMap((r) =>
+    (r.kind === 'session' && r.delegated !== undefined ? [[r.session.id, r.delegated] as const] : [])));
   // Delegation broker wave 4: a group's members render only while the operator holds it open; the header always does.
   const groupOpen: Readonly<Record<DelegationGroupKind, boolean>> = { 'offline-coordinator': offlineOpen, unowned: unownedOpen };
   const memberOf = (row: RolledRow): DelegationGroupKind | null =>
@@ -376,7 +381,9 @@ function ProjectCardView({
    *  written out three times — here, in the released fold and in the archived
    *  fold — which is three places that have to agree about what a row on THIS
    *  card knows: its pool, its run door and whether its repo needs saying. */
-  const line = (s: FleetSession, note: OrphanNote | null = null): ReactNode => (
+  const line = (
+    s: FleetSession, note: OrphanNote | null = null, delegated?: readonly DelegationActivityWire[],
+  ): ReactNode => (
     <SessionLine
       key={s.id}
       session={s}
@@ -390,6 +397,7 @@ function ProjectCardView({
       childRun={childRunContext(s, runs, coordOf)}
       coordinator={note?.presence ?? null}
       {...(note === null ? {} : { coordinatorTitle: note.title })}
+      {...(delegated === undefined ? {} : { delegated })}
     />
   );
 
@@ -444,7 +452,10 @@ function ProjectCardView({
         </BareRow>
       );
     }
-    return row.kind === 'session' ? line(row.session, noteFor(row)) : <PendingSpawn run={row.run} nowMs={nowMs} />;
+    // R9: the chip rides the row `nestFleet` attached it to; a box draws its coordinator's row itself, so that row's
+    // activities are read back off the tree by id.
+    return row.kind === 'session' ? line(row.session, noteFor(row), row.delegated ?? delegatedOf.get(row.session.id))
+      : <PendingSpawn run={row.run} nowMs={nowMs} />;
   };
 
   /** D-6088 rule 6 outside a box (delegation broker wave 4): a head's folded children as one line, the Released
