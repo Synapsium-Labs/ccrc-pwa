@@ -3068,10 +3068,10 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       fs.mkdirSync(dir, { recursive: true });
       try {
         const size = lib.SIDECAR_READ_WHOLE_MAX + 4096;
-        const body = Buffer.alloc(size, 0x20);
+        const body = wordBytes(size);   // real words over the whole index window; zqhead and zqfarword are tokens IX.words never makes
         const head = Buffer.from(`zqhead\nZQ_SIDE_VALUE=${tok}\n`);
         head.copy(body, 0);
-        Buffer.from('zqfarword\n').copy(body, lib.SIDECAR_FTS_BYTES + lib.SIDECAR_REDACT_MARGIN + 1024);
+        Buffer.from('\nzqfarword\n').copy(body, lib.SIDECAR_FTS_BYTES + lib.SIDECAR_REDACT_MARGIN + 1024);
         fs.writeFileSync(path.join(dir, 'over.txt'), body);
         IX.sweepTwice(box);
         const db = openStoreRO(box);
