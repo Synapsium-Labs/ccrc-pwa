@@ -233,7 +233,7 @@ The largest reading is 250,176 (walk-cap, pinned): 11,968 KiB, or 4.6%, under 26
 | Walk-cap | 246,808 · 249,008 · 225,300 |
 | DM47's 64 MiB case | 189,416 · 193,452 · 188,840 |
 
-The largest is 249,008 (walk-cap): 13,136 KiB, or 5.0%, under 262,144, and under the fix round's 252,000 KiB stop line. Every run passed.
+The largest is 249,008 (walk-cap): 13,136 KiB, or 5.0%, under 262,144. It is 8 KiB over the 249,000 trigger line, which the coordinator's 4.6% ruling covers, and under 252,000 KiB, the fix round's own stop line: any run over it, in either case, would have stopped the worker, who mails the coordinator every figure, as Task 2 Step 2 does at 249,000. Every run passed.
 
 ## Residuals named
 
