@@ -9,7 +9,7 @@
 # link EXDEV refused it asks ccd's own `_carry_link_route` (#338, D-4500), once
 # per tree pair, by sourcing the ccd that ran it: the one mount-table reader and
 # its inode proof stay in one place.
-import errno, fcntl, glob, hashlib, json, os, re, stat, subprocess, sys, time
+import errno, fcntl, glob, hashlib, json, os, re, stat, subprocess, sys, tempfile, time
 
 # The refusals: a closed vocabulary, spelled once, here (`ccd-carry-dedupe.test.ts`
 # pins it, and that every word a case produced is in it).
@@ -39,6 +39,47 @@ reg, apply, only, cutoff, CCD = sys.argv[1], sys.argv[2] == '1', sys.argv[3], ti
 TMP_DD = '.ccd-carry-dedupe-'
 UUID = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 sys.stdout.reconfigure(errors='backslashreplace')
+SWAP_LOG = os.path.join(reg, 'swap.log')
+
+
+def fs_now():
+    """The filesystem clock's now: a fresh inode's ctime (a file's ctime lags the fine clock by up to a tick)."""
+    try:
+        with tempfile.TemporaryFile(dir=reg) as fh:
+            return os.fstat(fh.fileno()).st_ctime_ns
+    except OSError:
+        return time.time_ns()
+
+
+def log_uuids(tail=None):
+    """Every uuid a swap.log line names, this verb's own lines aside: timestamped at or after the cutoff, or, with
+    `tail` (a byte offset), every line written past it — the whole log, should it have shrunk since."""
+    found = set()
+    try:
+        with open(SWAP_LOG, 'rb') as fh:
+            if tail is not None and os.fstat(fh.fileno()).st_size >= tail:
+                fh.seek(tail)
+            for raw in fh:
+                line = raw.decode('utf-8', 'replace')
+                m = re.match(r'(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (?!carry-dedupe )', line)
+                if m and (tail is not None or time.mktime(time.strptime(m.group(1), '%Y-%m-%d %H:%M:%S')) >= cutoff):
+                    found.update(re.findall(UUID, line))
+    except FileNotFoundError:
+        pass
+    return found
+
+
+# THE START SNAPSHOT: the clock, the log's length, then the log, before stdin's
+# registry rows are read (the shell may have gathered them a moment earlier; a
+# swap in that moment logged inside the window, so `recent` holds it). A
+# transcript carry takes no lock and its `cp -p` keeps the source's old mtime, so
+# each uuid's turn re-checks against this snapshot: the log's tail, then `changed`.
+START_NS = fs_now()
+try:
+    LOG_AT = os.path.getsize(SWAP_LOG)
+except OSError:
+    LOG_AT = 0
+recent = log_uuids()
 accts, live, rows, seen_root = [], {}, {}, set()
 for line in sys.stdin:
     f = line.rstrip('\n').split('\t')
@@ -59,16 +100,10 @@ for acct, cfg in accts:
         kind = 't' if b.endswith('.jsonl') and stat.S_ISREG(st.st_mode) else 's' if stat.S_ISDIR(st.st_mode) else None
         if kind:
             held.setdefault(u, {}).setdefault(acct, {'t': [], 's': []})[kind].append(p)
-recent = set()
-try:
-    with open(os.path.join(reg, 'swap.log'), 'rb') as fh:
-        for raw in fh:
-            line = raw.decode('utf-8', 'replace')
-            m = re.match(r'(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (?!carry-dedupe )', line)
-            if m and time.mktime(time.strptime(m.group(1), '%Y-%m-%d %H:%M:%S')) >= cutoff:
-                recent.update(re.findall(UUID, line))
-except FileNotFoundError:
-    pass
+
+def changed(st):
+    """Inside the window by mtime, or its inode changed after the start snapshot: a copy made since (`cp -p`) or still written."""
+    return st.st_mtime_ns >= cutoff * 1e9 or st.st_ctime_ns > START_NS
 
 def same_prefix(a, b, n):
     with open(a, 'rb') as fa, open(b, 'rb') as fb:
@@ -172,7 +207,7 @@ def sidecars(k, by, out):
                         continue
                     if fn.startswith('.ccd-carry-') or not (stat.S_ISREG(ns.st_mode) and stat.S_ISREG(ks.st_mode)) \
                             or (ns.st_dev, ns.st_ino) == (ks.st_dev, ks.st_ino) or ns.st_size != ks.st_size \
-                            or ns.st_mtime_ns >= cutoff * 1e9 or sha(np) != sha(kp):
+                            or changed(ns) or sha(np) != sha(kp):
                         continue
                     if apply:
                         link_same(kd, nd, rel, memo, out)
@@ -189,6 +224,11 @@ def one(u, by, out):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return LOCKED
+        # The start snapshot (the keeper's registry rows) is stale for this uuid when a
+        # swap.log line naming it landed since: every carry logs before the registry
+        # moves. A copy replaced since is `changed` in the proof below.
+        if u in log_uuids(LOG_AT):
+            return RECENT
         k, why = keeper(u, by)
         if not k:
             return why
@@ -202,7 +242,7 @@ def one(u, by, out):
                 st = os.lstat(p)
                 if (st.st_dev, st.st_ino) in kinos or os.path.realpath(p) == os.path.realpath(kp):
                     continue
-                if st.st_mtime_ns >= cutoff * 1e9:
+                if changed(st):
                     refused = refused or RECENT
                 elif proven(p, st, kp, kst, memo):
                     plan.setdefault((st.st_dev, st.st_ino), []).append((p, st))

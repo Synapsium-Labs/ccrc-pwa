@@ -12,7 +12,8 @@
  * nothing and prices the reclaim; `--apply` unlinks only a non-keeper copy whose
  * bytes are a prefix of the keeper's or whose message uuids the keeper holds;
  * a tie, a divergence, a recent carry and a held carry slot each refuse by
- * name; identical sidecar files become one inode through the #338 link route,
+ * name, and so does a carry that lands while the run is going (a swap.log line
+ * past the start, or a `cp -p` copy: old mtime, new ctime); identical sidecar files become one inode through the #338 link route,
  * and with no route they are left and counted; the live session's transcript
  * is never touched. The refusal words are a closed vocabulary, spelled once.
  *
@@ -233,6 +234,73 @@ describe('ccd carry-dedupe: the keeper and the transcript proof', () => {
     expect(refusal(done.out)).toBe('-');
     expect(fs.existsSync(transcript('.claude'))).toBe(true);
     expect(dedupeLines()[0]).toMatch(/ unlinked=0 bytes=0 /);
+  });
+
+  /**
+   * A swap DURING the run. The program reads swap.log and the registry rows once,
+   * at its start, and a transcript carry takes no lock, so a carry that lands
+   * after that snapshot but before the uuid's turn is invisible to it. The hook
+   * is a test-only `sitecustomize.py` that runs a bash snippet the first time the
+   * program takes `.carry.lock` — the moment it starts on the uuid, after every
+   * snapshot it took at start.
+   */
+  const midRun = (snippet: string): Record<string, string> => {
+    const dir = path.join(h.home, 'py-hook');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'sitecustomize.py'), [
+      '# TEST-ONLY (ccd-carry-dedupe.test.ts): run DEDUPE_ON_LOCK once, when the program first takes a lock.',
+      'import fcntl, os, subprocess',
+      '_flock = fcntl.flock',
+      'def flock(fd, op):',
+      '    r = _flock(fd, op)',
+      "    if os.environ.pop('DEDUPE_ON_LOCK_ARMED', None):",
+      "        subprocess.run(['bash', '-c', os.environ['DEDUPE_ON_LOCK']], check=True)",
+      '    return r',
+      'fcntl.flock = flock',
+      '',
+    ].join('\n'));
+    return { PYTHONPATH: dir, DEDUPE_ON_LOCK: snippet, DEDUPE_ON_LOCK_ARMED: '1' };
+  };
+
+  it('(h) swapped B -> A mid-run: A\'s fresh `cp -p` copy keeps B\'s old mtime but is not unlinked (refused recent)', () => {
+    put(transcript('.claude-d'), lines(ids(6)));
+    put(transcript('.claude'), lines(ids(4)));
+    row('sess-b', 'claude-d');   // the snapshot: live on B
+    // The real carry's order: the copy (a new inode, the source's old mtime), then the registry, then the log line —
+    // which this hook stops short of, the window between the copy and its line.
+    const env = midRun(`sleep 0.1; rm -f '${transcript('.claude')}'; cp -p '${transcript('.claude-d')}' '${transcript('.claude')}'; `
+      + `printf claude > "$HOME/.cc-sessions/sess-b.wrapper"`);
+    const done = run('--apply', { live: 'sess-b', env });
+    expect(done.rc, done.out).toBe(0);
+    expect(fs.statSync(transcript('.claude')).mtimeMs, 'cp -p kept the old mtime').toBeLessThan((OLD + 1) * 1000);
+    expect(refusal(done.out)).toBe('recent');
+    expect(fs.existsSync(transcript('.claude')), 'the session\'s new home keeps its transcript').toBe(true);
+    expect(fs.existsSync(transcript('.claude-d'))).toBe(true);
+  });
+
+  it('(h2) a swap.log line naming the uuid written after the program started: refused recent, nothing unlinked', () => {
+    put(transcript('.claude'), lines(ids(3)));
+    put(transcript('.claude-d'), lines(ids(6)));
+    row('sess-b', 'claude-d');
+    const env = midRun(`echo "$(date '+%F %T') swap sess-b: claude-d -> claude (uuid ${UUID})" >> "$HOME/.cc-sessions/swap.log"`);
+    const done = run('--apply', { env });
+    expect(done.rc, done.out).toBe(0);
+    expect(refusal(done.out)).toBe('recent');
+    expect(fs.existsSync(transcript('.claude'))).toBe(true);
+  });
+
+  it('(h3) a sidecar file `cp -p`-carried onto A mid-run is left as it is, not linked to the keeper\'s', () => {
+    const R = 'tool-results/r.json';
+    put(transcript('.claude'), lines(ids(2)));
+    put(transcript('.claude-d'), lines(ids(4)));
+    put(sidecar('.claude', R), 'RESULT-BODY\n');
+    put(sidecar('.claude-d', R), 'RESULT-BODY\n');
+    row('sess-b', 'claude-d');
+    const env = midRun(`sleep 0.1; rm -f '${sidecar('.claude', R)}'; cp -p '${sidecar('.claude-d', R)}' '${sidecar('.claude', R)}'`);
+    const done = run('--apply', { env });
+    expect(done.rc, done.out).toBe(0);
+    expect(ino(sidecar('.claude', R))).not.toBe(ino(sidecar('.claude-d', R)));
+    expect(dedupeLines()[0]).toMatch(/ linked=0$/);
   });
 
   it('--uuid limits the run to one uuid, and a malformed one is refused before anything is read', () => {

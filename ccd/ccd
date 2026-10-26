@@ -27424,9 +27424,9 @@ cmd_carry_dedupe() {   # [--apply] [--uuid U] [--min-age-hours H] — reclaim th
   #   1. RECENT: any swap.log line in the last `--min-age-hours` (24) that names
   #      the uuid, other than this verb's own, skips it — a swap line carries
   #      `(uuid U)` and every carry's `carry U:`/`sidecar U` lines name it.
-  #   2. LOCKED: the carry's own box-wide slot, `$REG/.carry.lock`, taken
-  #      non-blocking for the uuid (flock(2), the same lock `_carry_slot_take`
-  #      takes), so no dedupe runs beside a carry. Never unlinked.
+  #   2. LOCKED: `$REG/.carry.lock`, non-blocking (flock(2)); only a sidecar
+  #      merge takes it, a transcript carry never does. Never unlinked. Then a
+  #      swap.log line naming the uuid written since the start is `recent` too.
   #   3. THE KEEPER, an account: the one account a LIVE registry row for the uuid
   #      is on; else the one account its registry rows' `wrapper` names; else the
   #      account whose largest copy is STRICTLY the largest and STRICTLY the
@@ -27439,14 +27439,14 @@ cmd_carry_dedupe() {   # [--apply] [--uuid U] [--min-age-hours H] — reclaim th
   #      of the keeper's largest copy (streamed, 1 MiB chunks), OR every message
   #      `uuid` in it is in the keeper and every line without one appears in the
   #      keeper verbatim (a sanitized carry rewrites text, never uuids).
-  #      Otherwise `diverged`, and it stays. A name sharing the keeper's inode,
-  #      or resolving to the keeper's path, is never unlinked; a name whose
-  #      mtime is inside the window is `recent` (something may still write it).
+  #      Otherwise `diverged`. A name on the keeper's inode or path is never
+  #      unlinked; one whose mtime is in the window, or ctime after the start (a
+  #      `cp -p` carry since: old mtime, new inode), is `recent`.
   #      An inode's bytes count as reclaimed only when every one of its names is
   #      unlinked. Each name is re-stat'ed just before its unlink.
   #   5. SIDECARS: for each non-keeper sidecar tree, a regular file equal to the
-  #      keeper's at the same relpath (size, then sha256) and older than the
-  #      window is replaced by a hardlink to the keeper's (temp name, then
+  #      keeper's at the same relpath (size, then sha256) and not `recent` (4.)
+  #      is replaced by a hardlink to the keeper's (temp name, then
   #      rename). A link EXDEV refused asks `_carry_link_route`'s route (#338,
   #      D-4500, inode-proved) once per tree pair; with no route the file is left
   #      and counted `copy: <CARRY_CAUSES word>`. macOS has no table, so it
