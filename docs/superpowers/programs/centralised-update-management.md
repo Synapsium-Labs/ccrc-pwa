@@ -6299,6 +6299,22 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   that its history backfill waits for the #1399 evidence window to close if the server moves onto v0.0.713 or later.
   `STATUS 2026-10-26T05:25:40Z fleet=v0.0.702 server=v0.0.702 health=v0.0.702 newest=v0.0.720 intent=*:dev/auto=off`
   `pin=None link=<versions>/v0.0.702 backups=fleet:165M/server:9341M disk=fleet:99G/work:499G/server:21G`
+- **2026-10-26 06:25 UTC — a tenth console move: both boxes onto v0.0.720; v0.0.721 released; no anomaly.** One
+  console tap moved the fleet box (05:37:08 to 05:38:24) and then the server box: its record reads from `pwa`, started
+  05:38:37, done 05:48:24, sweep `ok`. The server restarted at 05:42:08. The boot cut 8 passes at the 45 s budget, from
+  05:43:19 to 05:50:42, and the first full pass came at 05:51:36. This is the server's first move onto v0.0.713 or
+  later, so the broker's evidence window for #1399 runs to 07:50:42.
+  - **The backfill overlapped it.** The history programme's coordinator ran a backfill on the fleet box from 05:54:28
+    to 06:08:01, inside that window. Both of us believed the server box was still held. The coordinator passed that on
+    without measuring it, and the broker's coordinator was told at 06:28.
+  - **Readings at 06:26.** Cadence is normal: no minute held two passes, and the only gap over 2 min is the boot's. No
+    pass was cut outside the boot. The ordinary-pass block's median and p90 were 5,288 and 6,114 ms before, and 5,250
+    and 5,996 ms after. Five attempt filings ran since the boot, four of them at the backfill's end. Each hour has been
+    fully measured.
+  - **v0.0.721** is #1547 (the history counters, report-only). It touches no lane path, so the soak treats it as
+    daily-only.
+  `STATUS 2026-10-26T06:25:39Z fleet=v0.0.720 server=v0.0.720 health=v0.0.720 newest=v0.0.721 intent=*:dev/auto=off`
+  `pin=None link=<versions>/v0.0.720 backups=fleet:146M/server:9513M disk=fleet:98G/work:503G/server:20G`
 - **2026-10-23 21:40 UTC — review 886 on wave 26's first fix round: the hole is closed; into the merge queue.** The
   panel and a security lens reproduced the escape under the old action and its containment under v7 from each
   version's own bundle, then attacked v7 with absolute paths, mid-path `..`, backslashes, symlinks, odd names,
