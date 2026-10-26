@@ -7,10 +7,13 @@
 // Three halves, all pure and on fixtures; nothing here reads the real /sys/fs/cgroup or runs systemctl:
 //  1. THE DROP-INS the deploy installs (and the root-owned ones it prints) declare, at every ancestor from user.slice
 //     down to the agent, at least the agent's MemoryMin and MemoryLow.
-//  2. THE AGENT UNIT keeps its anon resident and wins I/O, and keeps CPUWeight=5000; no file in the chain sets
-//     MemoryHigh (#72, #84).
+//  2. THE AGENT UNIT keeps its anon resident, declares IOWeight=1000 and keeps CPUWeight=5000; no file in the chain
+//     sets MemoryHigh (#72, #84). The root-owned user@<uid>.service drop-in delegates the io controller, without
+//     which the user manager cannot apply IOWeight at all.
 //  3. THE GATE (`deploy/assert-protect-chain.sh`) reads memory.min along a FIXTURE cgroup chain: green on full
-//     protection, red on a chain missing any one ancestor, and deploy.sh runs it after the restart.
+//     protection, red on a chain missing any one ancestor, and deploy.sh runs it after the restart. It also reads the
+//     agent's enforced io.weight: missing (io not delegated) is part of the pending root step, and with no io.cost
+//     and no BFQ it says IOWeight is inert rather than claiming the I/O half holds.
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -79,10 +82,28 @@ describe('the protection chain the deploy declares (#1170)', () => {
     }
   });
 
-  it('the agent keeps its anon resident, wins I/O, and keeps CPUWeight=5000', () => {
+  it('the agent keeps its anon resident, declares IOWeight=1000, and keeps CPUWeight=5000', () => {
     expect(directive(AGENT_DROPIN, 'MemorySwapMax')).toBe('0');
     expect(directive(AGENT_DROPIN, 'IOWeight')).toBe('1000');
     expect(directive(AGENT_DROPIN, 'CPUWeight')).toBe('5000');
+  });
+
+  it('the root-owned user@<uid>.service drop-in delegates io on top of the stock pids, memory and cpu', () => {
+    // Stock user@.service (systemd 252+) delegates `pids memory cpu` only: without io the user manager has no
+    // io.weight to write, and the agent's IOWeight=1000 is silently dropped.
+    const file = CHAIN.find((c) => c.unit === 'user@<uid>.service')!.file;
+    const delegate = directive(file, 'Delegate');
+    expect(delegate, `${file}: no Delegate=, so the io controller never reaches the user manager`).not.toBeNull();
+    expect(delegate!.split(/\s+/).sort()).toEqual(['cpu', 'io', 'memory', 'pids']);
+  });
+
+  it('protect.conf and the README do not claim the I/O priority unconditionally', () => {
+    const conf = readFileSync(path.join(deployDir, AGENT_DROPIN), 'utf8');
+    expect(conf).not.toContain("puts its refaults ahead of the sessions' I/O");
+    expect(conf).toMatch(/io\.cost/);
+    expect(conf).toMatch(/BFQ/);
+    const readme = readFileSync(path.join(deployDir, '..', 'README.md'), 'utf8');
+    expect(readme).not.toMatch(/wins I\/O/);
   });
 
   it('deploy.sh installs the user-manager half, and the gate prints an install for every root-owned file', () => {
@@ -121,8 +142,11 @@ describe('the protection chain the deploy declares (#1170)', () => {
 const AGENT_CG = '/user.slice/user-1000.slice/user@1000.service/app.slice/ccrc-agent.service';
 const MIN = 512 * 2 ** 20;
 
+/** The agent's io files in a fixture: `io.weight` (null leaves it out: io not delegated), BFQ, and the root's io.cost. */
+interface IoFixture { weight?: string | null; bfq?: boolean; costQos?: string }
+
 /** A fixture cgroup tree holding the agent's chain, with `memory.min` per level (`over` replaces a level's value). */
-function fixtureTree(over: Record<string, string> = {}): string {
+function fixtureTree(over: Record<string, string> = {}, io: IoFixture = {}): string {
   const root = mkTmp('ccrc-protect-chain-');
   let p = '';
   for (const seg of AGENT_CG.split('/').slice(1)) {
@@ -131,6 +155,10 @@ function fixtureTree(over: Record<string, string> = {}): string {
     writeFileSync(path.join(root, p, 'memory.min'), `${over[seg] ?? String(MIN)}\n`);
   }
   writeFileSync(path.join(root, AGENT_CG, 'memory.events'), 'low 3\nhigh 0\nmax 0\noom 0\noom_kill 0\n');
+  const weight = io.weight === undefined ? 'default 1000' : io.weight;
+  if (weight !== null) writeFileSync(path.join(root, AGENT_CG, 'io.weight'), `${weight}\n`);
+  if (io.bfq === true) writeFileSync(path.join(root, AGENT_CG, 'io.bfq.weight'), 'default 100\n');
+  if (io.costQos !== undefined) writeFileSync(path.join(root, 'io.cost.qos'), `${io.costQos}\n`);
   return root;
 }
 
@@ -187,5 +215,46 @@ describe('assert-protect-chain.sh on a fixture tree (#1170)', () => {
     });
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('cannot read ccrc-agent.service');
+  });
+});
+
+describe('assert-protect-chain.sh reads the agent\'s enforced io.weight (#1170)', () => {
+  it('pending root step (exit 2) when the agent has no io.weight: io is not delegated to user@<uid>.service', () => {
+    const r = runGate(fixtureTree({}, { weight: null }));
+    expect(r.status, r.stderr).toBe(2);
+    expect(r.stderr).toContain('PENDING ROOT STEP');
+    expect(r.stderr).toContain('IOWeight not enforced: the io controller is not delegated to user@1000.service');
+    expect(r.stderr).toContain('/etc/systemd/system/user@1000.service.d/50-ccrc-agent-protect.conf');
+    expect(r.stderr).toContain('sudo systemctl daemon-reload');
+    expect(r.stdout).not.toContain('every ancestor protects at least');
+  });
+
+  it('a user-manager memory gap still outranks the missing io controller (exit 1)', () => {
+    expect(runGate(fixtureTree({ 'app.slice': '0' }, { weight: null })).status).toBe(1);
+  });
+
+  it('red (exit 1) when io.weight exists but is not 1000: protect.conf did not land', () => {
+    const r = runGate(fixtureTree({}, { weight: 'default 100' }));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('io.weight default=100');
+    expect(r.stderr).toContain('ccrc-agent.service.d/protect.conf');
+  });
+
+  it('green but says IOWeight is inert when no device runs io.cost and the agent has no BFQ weight', () => {
+    const r = runGate(fixtureTree());
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain('io.weight=1000 is set but inert');
+    expect(r.stdout).not.toContain('io.weight=1000 enforced');
+  });
+
+  it('reports the I/O half enforced only when io.cost is enabled on a device, or BFQ is in use', () => {
+    const cost = runGate(fixtureTree({}, { costQos: '252:0 enable=1 ctrl=auto rpct=0.00 rlat=250000 wpct=0.00 wlat=250000 min=1.00 max=10000.00' }));
+    expect(cost.status, cost.stderr).toBe(0);
+    expect(cost.stdout).toContain('io.weight=1000 enforced (io.cost)');
+    const bfq = runGate(fixtureTree({}, { bfq: true }));
+    expect(bfq.status, bfq.stderr).toBe(0);
+    expect(bfq.stdout).toContain('io.weight=1000 enforced (bfq)');
+    const off = runGate(fixtureTree({}, { costQos: '252:0 enable=0 ctrl=auto rpct=0.00 rlat=250000 wpct=0.00 wlat=250000 min=1.00 max=10000.00' }));
+    expect(off.stdout).toContain('io.weight=1000 is set but inert');
   });
 });
