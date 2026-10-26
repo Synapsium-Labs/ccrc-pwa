@@ -213,12 +213,12 @@ describe('projectDelegation: R9, one level, bound to the run live at the instant
 });
 
 describe('projectDelegation: programme ownership, the inferred marker and unowned work', () => {
-  it('W4-P8: a tree on a listed session\'s workdir is neither a lease row nor an unowned row', () => {
+  it('W4-P8: a tree whose ccd id is a listed session (ccd\'s layout, `<root>/<project>/<slug>`) is neither a lease row nor an unowned row', () => {
     const out = projectDelegation(input({
-      leases: [lease({ leaseId: 'l1', adminRecord: 't1' })],
-      attempts: [attempt({ attemptId: 'x1', adminRecord: 't2' })],
-      census: census({ [PROJECT]: [record('t1'), record('t2')] }),
-      sessions: [alive('p'), alive('ws-1', { workdir: '/fixture/t1' }), alive('ws-2', { workdir: '/fixture/t2' })],
+      leases: [lease({ leaseId: 'l1', adminRecord: 't1', canonicalPath: '/root/project-a/t1' })],
+      attempts: [attempt({ attemptId: 'x1', adminRecord: 't2', canonicalPath: '/root/project-a/t2' })],
+      census: census({ [PROJECT]: [record('t1', { canonicalPath: '/root/project-a/t1' }), record('t2', { canonicalPath: '/root/project-a/t2' })] }),
+      sessions: [alive('p'), alive('project-a-t1'), alive('project-a-t2')],
     }));
     expect(out.leases).toEqual([]);
     expect(out.unowned).toEqual([]);

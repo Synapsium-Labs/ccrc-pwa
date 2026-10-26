@@ -5,7 +5,7 @@
 // lane withholds a projection until two reconciles, a listed registry and a ready applier, and a lane that can no longer project
 // WITHDRAWS a frame it sent (one `null`). W4-W7 and W4-W8 drive the lane directly (`sweepDelegation`, an unlisted registry noted by
 // hand); W4-W10 drives `tick()`, which returns on an unlistable registry before any lane runs and withdraws there. Rows W4-W1 to
-// W4-W10; mutants W4-M05, W4-M02b, W4-M20, W4-M24, W4-M10, W4-M12, W4-M17, W4-M18, W4-M26.
+// W4-W10; mutants W4-M05, W4-M02b, W4-M20, W4-M10, W4-M12, W4-M17, W4-M18, W4-M26 (W4-M24 retired with `workdir`, D-7006).
 //
 // THE RIG IS COPIED, minimally, from `delegation-watch.test.ts` (`world`, `setCensus`, `censusPass`, `primed`, `rawTreeWorld`, `bashPre`,
 // `bashPost`), which is follow-up 10's file and is not edited here; `bus` is kept on the `World`. Folding the two into one shared helper is
@@ -54,8 +54,8 @@ interface World {
   unlisted: boolean;
 }
 
-const sessionOf = (id: string, status: 'idle' | 'busy' | 'dead' = 'idle', project = 'demo', workdir?: string) =>
-  ({ id, project, status, stoppedBy: null as FleetSession['stoppedBy'], archivedAt: null as FleetSession['archivedAt'], ...(workdir === undefined ? {} : { workdir }) });
+const sessionOf = (id: string, status: 'idle' | 'busy' | 'dead' = 'idle', project = 'demo') =>
+  ({ id, project, status, stoppedBy: null as FleetSession['stoppedBy'], archivedAt: null as FleetSession['archivedAt'] });
 const recordOf = (id: string, project = 'demo') => ({ id, project, child: { kind: 'none' as const } });
 type Sess = ReturnType<typeof sessionOf>;
 
@@ -118,9 +118,9 @@ const measured = (): ParentIncarnation => ({ kind: 'measured', incarnation: INC 
 const sweep = (w: World, sessions: readonly Sess[]): Promise<void> =>
   w.watcher.sweepDelegation(sessions as never, sessions.map((s) => recordOf(s.id, s.project)) as never);
 /** One whole pass at `t`, with a census taken at `t`. */
-const censusPass = async (w: World, t: number, sessions: readonly Sess[] = [sessionOf('demo-a')]): Promise<void> => {
+const censusPass = async (w: World, t: number, sessions: readonly Sess[] = [sessionOf('demo-a')], census = CENSUS): Promise<void> => {
   setNow(t);
-  setCensus(w, CENSUS, Object.fromEntries(sessions.map((s) => [s.id, measured()])), t);
+  setCensus(w, census, Object.fromEntries(sessions.map((s) => [s.id, measured()])), t);
   await sweep(w, sessions);
 };
 const primed = async (w: World): Promise<World> => {
@@ -139,9 +139,9 @@ async function rawTreeWorld(): Promise<World> {
   return primed(w);
 }
 /** W4-W1's three passes: the raw tree is waited on twice, then leased. */
-async function leasedWorld(sessions: readonly Sess[] = [sessionOf('demo-a')]): Promise<World> {
+async function leasedWorld(sessions: readonly Sess[] = [sessionOf('demo-a')], census = CENSUS): Promise<World> {
   const w = await rawTreeWorld();
-  for (const n of [0, 1, 2]) await censusPass(w, at(n), sessions);
+  for (const n of [0, 1, 2]) await censusPass(w, at(n), sessions, census);
   return w;
 }
 const EMPTY = { activities: [], leases: [], unowned: [] };
@@ -268,8 +268,13 @@ describe('the delegation frame: projected after a pass that ran, broadcast on a 
     expect({ ...w.frames[3]!, asOf: '' }).toEqual({ ...sent!, asOf: '' });
   });
 
-  it('W4-W9 (programme ownership on the L4 path): a listed session whose workdir is the raw tree removes its lease row', async () => {
-    const w = await leasedWorld([sessionOf('demo-a'), sessionOf('demo-w', 'idle', 'demo', RAW.canonicalPath!)]);
+  it('W4-W9 (programme ownership on the L4 path): a listed session whose id is the raw tree\'s ccd id removes its lease row', async () => {
+    // ccd's layout: the tree at `<root>/demo/raw-tree` is the workspace `demo-raw-tree` (D-7006's id join). The lane never leases a
+    // tree whose ccd workspace is listed (`ccd-workspace-not-a-lease`), so the session is listed only once the lease exists.
+    const ccdTree = { ...RAW, canonicalPath: '/w/worktrees/demo/raw-tree' };
+    const w = await leasedWorld([sessionOf('demo-a')], { demo: [OLD, ccdTree] });
+    expect(w.watcher.currentDelegation()!.leases.map((l) => l.adminRecord)).toEqual(['raw-tree']);
+    await censusPass(w, at(3), [sessionOf('demo-a'), sessionOf('demo-raw-tree')], { demo: [OLD, ccdTree] });
     expect(w.watcher.currentDelegation()!.leases).toEqual([]);
     expect(w.coord.readDelegationProjection().leases).toHaveLength(1);
   });
