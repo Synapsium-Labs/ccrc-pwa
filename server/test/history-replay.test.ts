@@ -215,7 +215,11 @@ describe('history-replay W2-4 Task 1: the argument grammar', () => {
       // W2-5b1 Task 1 (W2-D24, Q23): a part 2 consumer's stamp, taken at or after window start only
       'allow-code-change': 'bool',
       // W2-5b2 Task 2 (K2, Q27): the pilot acts read step 0b's result with its sha; open --finalize takes the ruling on a failed pilot
-      step0b: 'string', 'step0b-sha256': 'string', 'accept-failed-pilot': 'bool' });
+      step0b: 'string', 'step0b-sha256': 'string', 'accept-failed-pilot': 'bool',
+      // W2-5b2 Task 3 (W2-D90; Q12, Q13; K1, K6): open --amend's mode, its kind and the three kinds' detail flags, and the re-pilot's fidelity input
+      amend: 'bool', kind: 'string', 'claude-code-version': 'string', repilot: 'string', 'repilot-sha256': 'string',
+      surface: 'string', ruling: 'string', 'release-tag': 'string', act: 'string', 'act-ms': 'int',
+      fidelity: 'string', 'fidelity-sha256': 'string' });
   });
 
   it('a subcommand, a string, an int and a bool parse to {sub, flags}', () => {
@@ -9282,8 +9286,8 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
     });
 
     r7it('open wants exactly one mode, and verify exactly one of --registry and --section ab', () => {
-      r7expect(run7(null, null, ['open']).stderr).toBe(refusalLine('args-invalid', 'open wants exactly one of --draft, --finalize and --template'));
-      r7expect(run7(null, null, ['open', '--draft', '--template']).stderr).toBe(refusalLine('args-invalid', 'open wants exactly one of --draft, --finalize and --template'));
+      r7expect(run7(null, null, ['open']).stderr).toBe(refusalLine('args-invalid', 'open wants exactly one of --draft, --finalize, --template and --amend'));
+      r7expect(run7(null, null, ['open', '--draft', '--template']).stderr).toBe(refusalLine('args-invalid', 'open wants exactly one of --draft, --finalize, --template and --amend'));
       r7expect(run7(null, null, ['verify']).stderr).toBe(refusalLine('args-invalid', 'verify wants exactly one of --registry and --section'));
       r7expect(run7(null, null, ['verify', '--registry', '--section', 'ab']).stderr).toBe(refusalLine('args-invalid', 'verify wants exactly one of --registry and --section'));
       // W2-5b1 Task 3: verify reads ab, pilot and quiz; any other section is refused before its flags are read (edited in place, R27).
@@ -11134,6 +11138,194 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       const tree = tree7();
       const want = ['input-invalid: pilot unreadable ENOENT', 'input-invalid: step0b unreadable ENOENT'];
       rows24.forEach(([sub, argv], i) => r7expect(run7(tree, home, argv(c)).stderr, sub).toBe(`ccrc history-replay: ${want[i]}\n`));
+    });
+  });
+
+  // ── W2-5b2 Task 3: open --amend (W2-D90, W2-D24, W2-D6, W2-D7; Q12, Q13, Q23; K1, K3, K6) ────────────────────────────
+  r7describe('W2-5b2 Task 3: open --amend', () => {
+    const DRV3 = r7drv as unknown as R7;
+    const AFTER3 = T0 + 2 * DAY;   // after chain7's window start (T0 + DAY): the post-start rule applies
+    type Run3 = { code: unknown; stdout: string; stderr: string; refusal: { word: string; detail: string } | null };
+    /** open in-process as main runs it (parseArgs, then the handler), its clock injected: stdout and stderr captured, a
+     *  refusal answered as {word, detail}; any other throw fails the case (D-6309's rule). */
+    async function amend3(argv: string[], nowMs: number = AFTER3): Promise<Run3> {
+      const err: string[] = [];
+      const out: string[] = [];
+      const e1 = r7vi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write);
+      const o1 = r7vi.spyOn(process.stdout, 'write').mockImplementation(((s: string | Uint8Array) => { out.push(String(s)); return true; }) as typeof process.stdout.write);
+      try {
+        const { flags } = DRV3.parseArgs(argv) as { flags: R7 };
+        const code = await DRV3.openCommand(flags, envOf(r7MkTmp('ccrc-w2-5b2-t3-home-')), { seed: () => SEED, now: () => nowMs });
+        return { code, stdout: out.join(''), stderr: err.join(''), refusal: null };
+      } catch (e) {
+        if (e instanceof r7drv.DriverRefusal) return { code: null, stdout: out.join(''), stderr: err.join(''), refusal: { word: (e as R7).word, detail: (e as R7).detail } };
+        throw e;
+      } finally {
+        e1.mockRestore();
+        o1.mockRestore();
+      }
+    }
+    /** open --amend's argv over a chain: `rec` the part 2 it amends, `pred` the final `rec` supersedes when `rec` is itself
+     *  an amended record (W2-D25: a link at a time). */
+    const argv3 = (c: R7, kindArgs: string[], rec: Saved = c.f, pred: Saved | null = null): string[] =>
+      ['open', '--amend', ...kindArgs, ...inp('record', rec), ...(pred === null ? [] : inp('supersedes', pred)), ...inp('part1', c.d), ...inp('frozen', c.fz)];
+    /** A re-pilot result as pilot-result --section quiz writes it (K1), passed, for node-a under the record `rec`; `o`
+     *  replaces any field. */
+    const repilot3 = (rec: Saved, o: R7 = {}): Saved => save7({ kind: DRV3.REPILOT_RESULT_KIND, v: 1, record_sha256: rec.sha, store_id: STORE_A,
+      node_label: 'node-a', claude_code_version: 'v-b', step0b_sha256: hex('step0b'), fidelity_sha256: hex('fidelity'), fidelity: [],
+      passed: true, failed: [], spend: 0, ...o }, 'repilot.json');
+    const move3 = (rp: Saved, o: { version?: string; label?: string } = {}): string[] =>
+      ['--kind', 'version-move', '--node-label', o.label ?? 'node-a', '--claude-code-version', o.version ?? 'v-b', ...inp('repilot', rp)];
+    const FREEZE3 = ['--kind', 'freeze-exception', '--surface', 'deploy/history-replay.mjs', '--ruling', 'fixture ruling 1'];
+    const FORCED3 = ['--kind', 'forced-act', '--act', 'prune --apply', '--act-ms', String(AFTER3 - 60_000)];
+    const frozen3 = (c: R7): { families: Array<{ store_id: string; ccrc_id: string; generation: string }>; n_questions: number } => ({ families: c.frozen.families, n_questions: 5 });
+
+    r7it('a version move: part 2 superseding the record, one amendment appended in the validator\'s shape with its node and the re-pilot result\'s sha, its sha on stderr; nothing else moves (W2-D90, Q12, Q13, K1)', async () => {
+      const c = chain7(home7(null));
+      const rp = repilot3(c.f);
+      const r = await amend3(argv3(c, move3(rp)));
+      r7expect(r.refusal).toBeNull();
+      r7expect(r.code).toBe(0);
+      const rec = JSON.parse(r.stdout) as R7;
+      r7expect(r.stdout, 'canonical JSON and one newline, as every record is printed').toBe(`${r7Canon(rec)}\n`);
+      r7expect(r.stderr, 'the sha the operator posts (act 21)').toBe(`sha256 ${r7gate.recordSha256(rec) as string}\n`);
+      const detail = { claude_code_version: 'v-b', repilot_sha256: rp.sha };
+      r7expect(rec.amendments).toEqual([{ kind: 'version-move', node_label_ref: 'node-a', at_ms: AFTER3, detail_sha256: r7Sha(r7Canon(detail)), detail }]);
+      r7expect([rec.supersedes, rec.finalized_ms]).toEqual([c.f.sha, AFTER3]);
+      r7expect(r7Canon({ ...rec, supersedes: c.final.supersedes, finalized_ms: c.final.finalized_ms, amendments: c.final.amendments }),
+        'W2-D90: only supersedes, finalized_ms and amendments move').toBe(r7Canon(c.final));
+      r7expect(r7gate.validateOpenRecord(rec, { draft: c.draft, predecessor: c.final, frozen: frozen3(c) })).toEqual({ ok: true });
+      r7expect(DRV3.expectedForNode(rec, STORE_A)).toMatchObject({ from: 'amendments[0]', expected: { claude_code_version: 'v-b' } });
+      r7expect(DRV3.expectedForNode(rec, STORE_B).from, 'another node keeps its step 0a version').toBe('step0a');
+    });
+
+    r7it('a second amendment appends after the first, which stays byte for byte; the amended record is read beside the final it supersedes, and refused without it (W2-D90, W2-D25)', async () => {
+      const c = chain7(home7(null));
+      const first = await amend3(argv3(c, move3(repilot3(c.f))));
+      r7expect(first.refusal).toBeNull();
+      const a1 = saveText7(first.stdout, 'part2-a1.json');
+      const r = await amend3(argv3(c, FORCED3, a1, c.f), AFTER3 + 1000);
+      r7expect(r.refusal).toBeNull();
+      const rec = JSON.parse(r.stdout) as R7;
+      r7expect(rec.amendments).toHaveLength(2);
+      r7expect(r7Canon(rec.amendments[0]), 'the first amendment, byte for byte').toBe(r7Canon(a1.value.amendments[0]));
+      r7expect(rec.amendments[1]).toMatchObject({ kind: 'forced-act', node_label_ref: null, at_ms: AFTER3 + 1000, detail: { act: 'prune --apply', at_ms: AFTER3 - 60_000 } });
+      r7expect([rec.supersedes, rec.finalized_ms]).toEqual([a1.sha, AFTER3 + 1000]);
+      r7expect(r7gate.validateOpenRecord(rec, { draft: c.draft, predecessor: a1.value, frozen: frozen3(c) })).toEqual({ ok: true });
+      const bare = await amend3(argv3(c, FORCED3, a1), AFTER3 + 1000);
+      r7expect(bare.refusal?.word, 'CONTROL: the amended record read with no --supersedes').toBe('record-invalid');
+      r7expect(bare.refusal?.detail).toContain('supersedes chain-mismatch');
+      r7expect(bare.stdout).toBe('');
+    });
+
+    r7it('a freeze exception and a forced act: their details (Q13), the node optional and kept when given; neither moves the version (W2-D6, W2-D7)', async () => {
+      const c = chain7(home7(null));
+      const fd = { surface: 'deploy/history-replay.mjs', ruling: 'fixture ruling 1' };
+      const f = await amend3(argv3(c, FREEZE3));
+      r7expect((JSON.parse(f.stdout) as R7).amendments).toEqual([{ kind: 'freeze-exception', node_label_ref: null, at_ms: AFTER3, detail_sha256: r7Sha(r7Canon(fd)), detail: fd }]);
+      const fb = await amend3(argv3(c, [...FREEZE3, '--node-label', 'node-b']));
+      r7expect((JSON.parse(fb.stdout) as R7).amendments[0].node_label_ref).toBe('node-b');
+      const ad = { act: 'prune --apply', at_ms: AFTER3 - 60_000 };
+      const a = await amend3(argv3(c, [...FORCED3, '--node-label', 'node-a']));
+      const arec = JSON.parse(a.stdout) as R7;
+      r7expect(arec.amendments).toEqual([{ kind: 'forced-act', node_label_ref: 'node-a', at_ms: AFTER3, detail_sha256: r7Sha(r7Canon(ad)), detail: ad }]);
+      r7expect(DRV3.expectedForNode(arec, STORE_A).from, 'neither kind moves the version').toBe('step0a');
+    });
+
+    r7it('a freeze exception that installed a release names it on its node: the detail carries release_tag, and that node\'s expected values carry it as the exception stamp; another node\'s carry none (W2-D6, K6)', async () => {
+      const c = chain7(home7(null));
+      const fd = { surface: 'deploy/history-replay.mjs', ruling: 'fixture ruling 1', release_tag: 'v9.9.9' };
+      const r = await amend3(argv3(c, [...FREEZE3, '--node-label', 'node-a', '--release-tag', 'v9.9.9']));
+      r7expect(r.refusal).toBeNull();
+      const rec = JSON.parse(r.stdout) as R7;
+      r7expect(rec.amendments).toEqual([{ kind: 'freeze-exception', node_label_ref: 'node-a', at_ms: AFTER3, detail_sha256: r7Sha(r7Canon(fd)), detail: fd }]);
+      r7expect(r7gate.validateOpenRecord(rec, { draft: c.draft, predecessor: c.final, frozen: frozen3(c) }), 'K6: the gate types no release_tag').toEqual({ ok: true });
+      r7expect(DRV3.expectedForNode(rec, STORE_A).expected.exception_stamp).toEqual({ release_tag: 'v9.9.9', from: 'amendments[0]' });
+      r7expect(Object.hasOwn(DRV3.expectedForNode(rec, STORE_B).expected, 'exception_stamp'), 'CONTROL: another node').toBe(false);
+    });
+
+    /** Each refusal, before anything is printed: [why, the argv over a chain (and its clock), the refusal]. */
+    const notJson3 = (): Saved => {
+      const p = r7path.join(r7MkTmp('ccrc-w2-5b2-t3-in-'), 'repilot.json');
+      r7fs.writeFileSync(p, 'not json', { mode: 0o600 });
+      return { path: p, sha: r7Sha('not json'), value: {} };
+    };
+    const rows3: Array<[string, (c: R7) => { argv: string[]; now?: number; want: [string, string] }]> = [
+      ['an unknown kind', (c) => ({ argv: argv3(c, ['--kind', 'version-bump']), want: ['args-invalid', 'kind "version-bump" is not one of version-move, freeze-exception, forced-act'] })],
+      ['another kind\'s detail flag', (c) => ({ argv: argv3(c, [...move3(repilot3(c.f)), '--surface', 's']), want: ['args-invalid', '--surface is not a version-move flag'] })],
+      ['a re-pilot on a freeze exception', (c) => ({ argv: argv3(c, [...FREEZE3, ...inp('repilot', repilot3(c.f))]), want: ['args-invalid', '--repilot is not a freeze-exception flag'] })],
+      ['a release tag on a forced act', (c) => ({ argv: argv3(c, [...FORCED3, '--release-tag', 'v9.9.9']), want: ['args-invalid', '--release-tag is not a forced-act flag'] })],
+      ['a version move with no re-pilot (Q12)', (c) => ({ argv: argv3(c, ['--kind', 'version-move', '--node-label', 'node-a', '--claude-code-version', 'v-b']), want: ['args-invalid', 'repilot-required'] })],
+      ['a version move with no node (Q13)', (c) => ({ argv: argv3(c, ['--kind', 'version-move', '--claude-code-version', 'v-b', ...inp('repilot', repilot3(c.f))]), want: ['args-invalid', 'node-label-required'] })],
+      ['a freeze exception with no ruling', (c) => ({ argv: argv3(c, ['--kind', 'freeze-exception', '--surface', 's']), want: ['args-invalid', 'ruling-required'] })],
+      ['a forced act with no time', (c) => ({ argv: argv3(c, ['--kind', 'forced-act', '--act', 'prune --apply']), want: ['args-invalid', 'act-ms-required'] })],
+      ['an empty surface', (c) => ({ argv: argv3(c, ['--kind', 'freeze-exception', '--surface', '', '--ruling', 'r']), want: ['args-invalid', '--surface is empty'] })],
+      ['an empty ruling', (c) => ({ argv: argv3(c, ['--kind', 'freeze-exception', '--surface', 's', '--ruling', '']), want: ['args-invalid', '--ruling is empty'] })],
+      ['an empty release tag', (c) => ({ argv: argv3(c, [...FREEZE3, '--node-label', 'node-a', '--release-tag', '']), want: ['args-invalid', '--release-tag is empty'] })],
+      ['an empty act', (c) => ({ argv: argv3(c, ['--kind', 'forced-act', '--act', '', '--act-ms', '1']), want: ['args-invalid', '--act is empty'] })],
+      ['a release tag with no node (K6)', (c) => ({ argv: argv3(c, [...FREEZE3, '--release-tag', 'v9.9.9']), want: ['args-invalid', '--release-tag needs --node-label: a freeze exception installs a release on one node (W2-D6)'] })],
+      ['an act after now', (c) => ({ argv: argv3(c, ['--kind', 'forced-act', '--act', 'reparse', '--act-ms', String(AFTER3 + 1)]), want: ['args-invalid', `--act-ms ${AFTER3 + 1} is after now, ${AFTER3}`] })],
+      ['two nodes', (c) => ({ argv: argv3(c, [...FREEZE3, '--node-label', 'node-a', '--node-label', 'node-b']), want: ['args-invalid', '--node-label is given 2 times; open --amend names one node'] })],
+      ['a freeze exception on no node of the record', (c) => ({ argv: argv3(c, [...FREEZE3, '--node-label', 'node-z']), want: ['args-invalid', '--node-label node-z names no node of the record'] })],
+      ['a version move on no node of the record', (c) => ({ argv: argv3(c, move3(repilot3(c.f), { label: 'node-z' })), want: ['args-invalid', '--node-label node-z names no node of the record'] })],
+      ['a re-pilot whose bytes are not its sha', (c) => {
+        const rp = repilot3(c.f);
+        return { argv: argv3(c, [...move3(rp).slice(0, -1), hex('another re-pilot')]), want: ['input-sha-mismatch', `repilot: expected ${hex('another re-pilot')}, measured ${rp.sha}`] };
+      }],
+      ['a re-pilot that is not JSON', (c) => ({ argv: argv3(c, move3(notJson3())), want: ['input-invalid', 'repilot not-json'] })],
+      ['a re-pilot that is no re-pilot result', (c) => ({ argv: argv3(c, move3(save7({ kind: 'fixture-repilot', claude_code_version: 'v-b' }, 'repilot.json'))), want: ['input-invalid', 'repilot shape fields'] })],
+      ['a re-pilot of another record (K1)', (c) => ({ argv: argv3(c, move3(repilot3(c.d))), want: ['input-invalid', `repilot record-mismatch: re-piloted under ${c.d.sha as string}, amending ${c.f.sha as string}`] })],
+      ['a re-pilot of another node (K1)', (c) => ({ argv: argv3(c, move3(repilot3(c.f, { node_label: 'node-b', store_id: STORE_B }))),
+        want: ['input-invalid', `repilot node-mismatch: re-piloted node-b (${STORE_B}), amending node-a (${STORE_A})`] })],
+      ['a re-pilot that measured another version (K1)', (c) => ({ argv: argv3(c, move3(repilot3(c.f, { claude_code_version: 'v-c' }))), want: ['input-invalid', 'repilot version-mismatch: measured "v-c", amending to "v-b"'] })],
+      ['an empty version: the re-pilot measured another (K1)', (c) => ({ argv: argv3(c, move3(repilot3(c.f), { version: '' })), want: ['input-invalid', 'repilot version-mismatch: measured "v-b", amending to ""'] })],
+      ['a re-pilot that failed (K1, K3)', (c) => ({ argv: argv3(c, move3(repilot3(c.f, { passed: false, failed: ['fidelity short 3 of 5'] }))), want: ['pilot-failed', 'repilot node-a: fidelity short 3 of 5'] })],
+      ['a clock before the record it supersedes (the validator\'s chain)', (c) => ({ argv: argv3(c, move3(repilot3(c.f))), now: T0 - 1, want: ['record-invalid', 'finalized_ms chain-mismatch'] })],
+      ['--allow-code-change (Q23)', (c) => ({ argv: argv3(c, [...FREEZE3, '--allow-code-change']), want: ['args-invalid', '--allow-code-change is not a open --amend flag'] })],
+      ['part 1 given as the record', (c) => ({ argv: ['open', '--amend', ...FREEZE3, ...inp('record', c.d), ...inp('part1', c.d), ...inp('frozen', c.fz)], want: ['record-invalid', 'record part "draft", wanted final'] })],
+      ['a second mode', () => ({ argv: ['open', '--amend', '--finalize'], want: ['args-invalid', 'open wants exactly one of --draft, --finalize, --template and --amend'] })],
+    ];
+    r7it.each(rows3)('open --amend refuses, printing nothing: %s', async (_why, row) => {
+      const c = chain7(home7(null));
+      const { argv, now, want } = row(c);
+      const r = await amend3(argv, now);
+      r7expect(r.refusal).toEqual({ word: want[0], detail: want[1] });
+      r7expect(r.stdout).toBe('');
+    });
+
+    // W2-D24 (R23's practice): W2-5a's re-check titles, a row per form this task adds. open --amend's and pilot-result
+    // --section quiz's next input is a file that is not there, so a re-check made after that read would answer its word
+    // instead; step0b and fidelity --section quiz read the store next, which home7(null) has not.
+    const out3 = (): string => r7path.join(r7MkTmp('ccrc-w2-5b2-t3-out-'), 'out');
+    const quiz3 = (c: R7): string[] => [...inp('record', c.f), ...inp('part1', c.d), ...inp('frozen', c.fz)];
+    const recheckRows3: Array<[string, (c: R7) => string[], RegExp]> = [
+      ['open --amend', (c) => argv3(c, ['--kind', 'version-move', '--node-label', 'node-a', '--claude-code-version', 'v-b',
+        '--repilot', '/nowhere/r', '--repilot-sha256', hex('repilot')]), /^ccrc history-replay: input-invalid: repilot unreadable ENOENT\n$/],
+      ['step0b --section quiz', (c) => ['step0b', '--section', 'quiz', '--out', out3(), ...quiz3(c)], /^ccrc history-replay: (?!code-|args-invalid)[a-z-]+: /],
+      ['fidelity --section quiz', (c) => ['fidelity', '--section', 'quiz', '--out', out3(), ...quiz3(c)], /^ccrc history-replay: (?!code-|args-invalid)[a-z-]+: /],
+      ['pilot-result --section quiz', (c) => ['pilot-result', '--section', 'quiz', '--out', out3(), ...quiz3(c),
+        '--step0b', '/nowhere/s', '--step0b-sha256', hex('step0b'), '--fidelity', '/nowhere/f', '--fidelity-sha256', hex('fidelity')],
+      /^ccrc history-replay: input-invalid: step0b unreadable ENOENT\n$/],
+    ];
+    r7it.each(recheckRows3)('code-changed before any other input is read, re-checks the code it runs under: %s', (_sub, argv) => {
+      const home = home7(null);
+      const c = chain7(home);
+      const r = run7(tree7({ edit: 'deploy/measure-history.py' }), home, argv(c));
+      r7expect(r.code).toBe(2);
+      r7expect(r.stderr).toBe(refusalLine('code-changed', 'changed deploy/measure-history.py'));
+      r7expect(r.stdout).toBe('');
+    });
+    r7it.each(recheckRows3)('code-unmeasured, never code-changed, for a gate_code file that cannot be read: %s', (_sub, argv) => {
+      const home = home7(null);
+      const c = chain7(home);
+      r7expect(run7(tree7({ drop: 'deploy/measure-history.py' }), home, argv(c)).stderr).toBe(refusalLine('code-unmeasured', 'deploy/measure-history.py is absent'));
+    });
+    r7it.each(recheckRows3)('CONTROL: under an unchanged copy of the tree, the row reaches the read after the re-check, its form accepted: %s', (_sub, argv, after) => {
+      const home = home7(null);
+      const c = chain7(home);
+      const r = run7(tree7(), home, argv(c));
+      r7expect(r.code).toBe(2);
+      r7expect(r.stderr).toMatch(after);
     });
   });
 });
@@ -20337,4 +20529,681 @@ b2t2Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 2: the usage pil
     b2t2Expect(doc.failures, 'no settings-mode failure: every surface ran under step 0b mode').toEqual([`absent-rate ${W5B4_TREATMENT} over`, 'fidelity short 1 of 5']);
     b2t2Expect(B2.pilotResultError(doc), 'the producer writes the shape open --finalize reads (C4)').toBeNull();
   }, 240_000);
+});
+
+// ── W2-5b2 Task 3: version moves: the mid-window re-pilot, open --amend, and the both-arms re-run (W2-D90, W2-D56, W2-D6,
+// W2-D7, W2-D84; Q8, Q12, Q13, Q14; K1, K3, K6, K7) ──────────────────────────────────────────────────────────────────────
+// Reuses W2-5b1 Task 4's module-scope fixtures (w5b4Home, w5b4Quiz, w5b4Arms, w5b4Act, w5b4Stream, w5b4Manifests, …), and
+// W2-5b2 Task 1's and Task 2's (b2t1Home, b2t1PlantAll, b2t1Run, b2t2Box, b2t2Call, …) for the re-pilot. open --amend runs
+// in-process with its clock injected; its stdout is saved as the operator saves a record. Every stub's --version prints
+// STUB_STREAM's first line, so rewriting that file is the version move; every print-mode run here has a stream of its own,
+// so the rewrite reaches --version alone. Every HOME is a fixture; no case spawns a real model, reads the live HOME, or
+// writes outside its own mkTmp trees. The test may spell the arm words; the driver never does (W2-D42).
+import { describe as b23Describe, expect as b23Expect, it as b23It, vi as b23Vi } from 'vitest';
+
+const B23_NOW = W5B4_T0 + 2 * W5B4_DAY;   // after w5b4Quiz's window start (T0 + 1 day), and W5B4_FAKE's arms clock
+/** open in-process, as main runs it, its clock injected: stdout and stderr captured, a refusal answered as {word, detail}. */
+async function b23Open(argv: string[], nowMs: number = B23_NOW): Promise<W5b4Result> {
+  const err: string[] = [];
+  const out: string[] = [];
+  const e1 = b23Vi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write);
+  const o1 = b23Vi.spyOn(process.stdout, 'write').mockImplementation(((s: string | Uint8Array) => { out.push(String(s)); return true; }) as typeof process.stdout.write);
+  try {
+    const { flags } = D4.parseArgs(argv) as { flags: W5b4R };
+    const code = await D4.openCommand(flags, { HOME: w5b4MkTmp('ccrc-b23-home-'), TMUX_PANE: undefined, LANG: W5B4_LANG }, { seed: () => W5B4_SEED, now: () => nowMs });
+    return { code, stdout: out.join(''), stderr: err.join(''), refusal: null };
+  } catch (e) {
+    if (e instanceof w5b4Drv.DriverRefusal) return { code: null, stdout: out.join(''), stderr: err.join(''), refusal: { word: (e as W5b4R).word, detail: (e as W5b4R).detail } };
+    throw e;
+  } finally {
+    e1.mockRestore();
+    o1.mockRestore();
+  }
+}
+/** A version move for node-0 (store A) to `version` over the record `rec`, with a re-pilot result in the producer's shape
+ *  (K1), passed and saved, as the operator passes it. */
+function b23Move(version: string, rec: W5b4Saved): string[] {
+  const rp = w5b4Save({ kind: D4.REPILOT_RESULT_KIND, v: 1, record_sha256: rec.sha, store_id: W5B4_STORE_A, node_label: 'node-0',
+    claude_code_version: version, step0b_sha256: w5b4Hex('step0b'), fidelity_sha256: w5b4Hex('fidelity'), fidelity: [], passed: true, failed: [], spend: 0 }, 'repilot.json');
+  return ['--kind', 'version-move', '--node-label', 'node-0', '--claude-code-version', version, ...w5b4Inp('repilot', rp)];
+}
+/** open --amend over a quiz fixture (`rec` the part 2 it amends, `pred` the final `rec` supersedes when amended), its
+ *  stdout saved as printed. */
+async function b23Amend(fx: W5b4R, rec: W5b4Saved, pred: W5b4Saved | null, detail: string[], nowMs: number = B23_NOW): Promise<W5b4Saved> {
+  const r = await b23Open(['open', '--amend', ...detail, ...w5b4Inp('record', rec), ...(pred === null ? [] : w5b4Inp('supersedes', pred)),
+    ...w5b4Inp('part1', fx.d as W5b4Saved), ...w5b4Inp('frozen', fx.fz as W5b4Saved)], nowMs);
+  b23Expect(r.refusal, 'open --amend').toBeNull();
+  return w5b4SaveText(r.stdout, 'part2-amended.json');
+}
+/** A freeze exception (W2-D6, K6) for `label`, naming the release it installed when `tag` is not null. */
+const b23Exception = (label: string, tag: string | null): string[] => ['--kind', 'freeze-exception', '--surface', 'deploy/history-replay.mjs',
+  '--ruling', 'fixture ruling 1', '--node-label', label, ...(tag === null ? [] : ['--release-tag', tag])];
+/** The stub's --version, moved: measureClaudeVersion reads STUB_STREAM's first line. */
+const b23SetVersion = (home: string, version: string): void => writeFileSync(join(home, STUB_STREAM), `${version}\n`);
+/** The installed release stamp, moved (W2-D6). */
+const b23SetStamp = (home: string, tag: string): void => writeFileSync(join(home, '.ccrc', 'build.json'),
+  JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-10-23T00:00:00Z', dirty: false, version: tag }));
+/** Every run of every (question, arm) answers with its fact, unless a k-th run is told otherwise. */
+function b23Answers(home: string, qs: W5b4R[]): void {
+  for (const q of qs) for (const arm of W5B4_ARMS) w5b4Act(home, q, arm, '.jsonl', w5b4Stream({ text: `ANSWER: ${q.fact as string}` }));
+}
+/** The k-th run of (q, arm) fails as infrastructure (no result, exit 1) and, before it exits, pushes the limits row past the
+ *  threshold, so the gate stops the next spawn limits-threshold: the question is left with its other arm done. */
+function b23HalfDone(home: string, q: W5b4R, arm: string, k: number): void {
+  w5b4Act(home, q, arm, '.jsonl', w5b4Stream({ text: 'x', result: false }), k);
+  w5b4Act(home, q, arm, '.exit', '1', k);
+  w5b4Act(home, q, arm, '.limits', w5b4LimitsRow(90), k);
+}
+const b23Name = (q: W5b4R, arm: string, move: number | null, n = 1): string => `quiz/arms/${q.qid as string}/${arm}${move === null ? '' : `.m${move}`}.a${n}`;
+const b23Refused = (fn: () => unknown): unknown => { try { fn(); return null; } catch (e) { return [(e as W5b4R).word, (e as W5b4R).detail]; } };
+const b23ByQid = (a: W5b4R, b: W5b4R): number => ((a.qid as string) < (b.qid as string) ? -1 : (a.qid as string) > (b.qid as string) ? 1 : 0);
+const b23Exc = (label: string | null, tag?: string): W5b4R => {
+  const detail = tag === undefined ? { surface: 's', ruling: 'r' } : { surface: 's', ruling: 'r', release_tag: tag };
+  return { kind: 'freeze-exception', node_label_ref: label, at_ms: W5B4_T0 + W5B4_DAY + 1, detail_sha256: w5b4Lib.sha256Hex(w5b4Lib.canonicalJson(detail)) as string, detail };
+};
+/** w5b4Quiz's shape with five questions on node A's family, so node A has n_fidelity (5) distinct boundaries for the
+ *  re-pilot's fidelity (K1), and one on node B's. Part 2 through the driver's own buildFinal; headless-on lists A's family. */
+function b23Quiz(home: string, over: W5b4R = {}): W5b4R {
+  const famA: W5b4Ref = { store_id: W5B4_STORE_A, ccrc_id: 'quiz-a', generation: w5b4Gen(410) };
+  const famB: W5b4Ref = { store_id: W5B4_STORE_B, ccrc_id: 'quiz-b', generation: w5b4Gen(420) };
+  const made = [21, 22, 23, 24, 25].map((n) => w5b4Entry(famA, n)).concat([w5b4Entry(famB, 26)]);
+  const draft = w5b4Draft(home, { stores: [W5B4_STORE_A, W5B4_STORE_B], ...over });
+  const d = w5b4Save(draft, 'part1.json');
+  const fz = w5b4SaveText(D4.frozenListText('quiz', W5B4_HEAD, made) as string, 'frozen.json');
+  const final = D4.buildFinal({ draft, draftSha256: d.sha,
+    assembled: { nodes: [W5B4_STORE_A, W5B4_STORE_B].map((s) => ({ store_id: s, census_sha256: w5b4Hex(`census ${s}`), report: { census: { as_of_ms: W5B4_T0 } } })), drops: [] },
+    assignment: { list: [], sha256: w5b4Gate.assignmentSha256([]) },
+    power: { headline: null, at_power_80: null, at_rho_0: null, rho_hat: null, n_f: {}, coverage: {}, pre_window_uptake: {} }, powerSha256: w5b4Hex('power'),
+    frozen: { sha256: fz.sha, list: fz.value, families: D4.familiesOf(fz.value.entries) },
+    // Task 2's tightened reader requires the pilot producer's full file contract even though this fixture only drives part 2.
+    pilotResult: { kind: D4.PILOT_RESULT_KIND, v: 1, record_sha256: d.sha, fidelity: [],
+      usage_extrapolation: { v: 1, formula: 'ceil(margin.num x n_questions x pilot_spend.total / (margin.den x pilot_questions))', margin: { num: 5, den: 4 }, pilot_questions: 5,
+        pilot_spend: { arms: 1, judge: 1, total: 2 }, at_target: { n_questions: 5, spend_budget: 3 },
+        uptake: { reading: 'is-error', quiz_uptake: 'measured', control_calls: 0, control_errored: 1 }, spend_readings: {} },
+      step0b_sha256: w5b4Hex('step0b'), settings_mode: 'restricted',
+      absent_rate: { arms: {}, max: { num: 5, den: 100 }, over: [], unmeasured: [], pass: true }, failures: [] },
+    spendBudget: 1_000_000, window: { start: W5B4_T0 + W5B4_DAY, end: W5B4_T0 + 15 * W5B4_DAY }, decision: 'keep', nowMs: W5B4_T0 }) as W5b4R;
+  const f = w5b4Save(final, 'part2.json');
+  w5b4Marker(home, W5B4_STORE_A, [famA]);
+  const out = w5b4Out();
+  const entries = fz.value.entries as W5b4R[];
+  const mine = entries.filter((e) => e.store_id === W5B4_STORE_A);
+  return { entries, mine, heads: [...mine].sort(b23ByQid), draft, d, fz, final, f, out,
+    rec: (): string[] => [...w5b4Inp('record', f), ...w5b4Inp('part1', d), ...w5b4Inp('frozen', fz)],
+    argv: (rec: W5b4Saved = f, extra: string[] = []): string[] =>
+      ['arms', '--section', 'quiz', '--out', out, ...w5b4Inp('record', rec), ...w5b4Inp('part1', d), ...w5b4Inp('frozen', fz), ...extra] };
+}
+/** fidelity's three store reads for the re-pilot, injected: head i (qid order) is entry i + 1; every stdin's first line is
+ *  `b23-<entry>-<run>`, and B2T1_STUB keys its stream by the settings mode and the whole stdin. W5B4_FAKE's clock. */
+const b23FidDeps = (heads: W5b4R[]): W5b4R => ({
+  resolve: (_rs: unknown, uuid: string): number | null => { const i = heads.findIndex((h) => h.boundary_uuid === uuid); return i < 0 ? null : i + 1; },
+  original: (): W5b4R => B2T2_ORIGINAL,
+  stdins: (_rs: unknown, id: number): W5b4R => ({ state: 'stdins',
+    stdins: { payload: `b23-${id}-payload\nthe payload\n`, empty: `b23-${id}-empty\n`, 'user-text': `b23-${id}-user-text\n` } }),
+  now: W5B4_FAKE.now,
+});
+/** K26, K28: b23FidDeps whose stdins append `value` masked through the pair index of the reading each build runs under,
+ *  recording [entry, masked] per build in `seen`; with `learn`, the store learns `value` (W2-5b1's fwLearn) right after
+ *  boundary 1's first build. */
+const b23IndexFreshDeps = (heads: W5b4R[], home: string, learn: boolean, value: string, seen: Array<[number, boolean]>): W5b4R => {
+  const deps = b23FidDeps(heads);
+  const base = deps.stdins as (rs: W5b4R, id: number) => W5b4R;
+  let learned = false;
+  deps.stdins = (rs: W5b4R, id: number): W5b4R => {
+    const made = base(rs, id) as W5b4R;
+    const masked = b1t2Lib.redactField(value, rs.idx) as string;
+    seen.push([id, !masked.includes(value)]);
+    if (learn && id === 1 && !learned) { fwLearn(home, value); learned = true; }
+    return { ...made, stdins: Object.fromEntries(Object.entries(made.stdins).map(([key, text]) => [key, `${String(text)}${masked}\n`])) };
+  };
+  return deps;
+};
+/** Plant the re-pilot's fidelity streams for `n` boundaries: B2T2_ORIGINAL's arithmetic nets payload 25000 to 16000 against
+ *  18200 (within ±25%); `payload(id)` replaces a boundary's payload (40000 nets 31000: outside). */
+function b23PlantFidelity(home: string, n: number, payload: (id: number) => number = () => 25000): void {
+  for (let id = 1; id <= n; id += 1) {
+    b2t1Put(home, 'restricted', `b23-${id}-payload\nthe payload\n`, '.jsonl', b2t2Box(payload(id)));
+    b2t1Put(home, 'restricted', `b23-${id}-empty\n`, '.jsonl', b2t2Box(9000));
+    b2t1Put(home, 'restricted', `b23-${id}-user-text\n`, '.jsonl', b2t2Box(9200));
+  }
+}
+/** K26, K28: the re-pilot's fidelity streams for `n` boundaries whose stdins end in `value` on a line of its own, as
+ *  b23IndexFreshDeps builds them when no learned pair masks it: every boundary passes, as b23PlantFidelity's do. */
+function b23PlantFidelityWith(home: string, n: number, value: string): void {
+  for (let id = 1; id <= n; id += 1) {
+    b2t1Put(home, 'restricted', `b23-${id}-payload\nthe payload\n${value}\n`, '.jsonl', b2t2Box(25000));
+    b2t1Put(home, 'restricted', `b23-${id}-empty\n${value}\n`, '.jsonl', b2t2Box(9000));
+    b2t1Put(home, 'restricted', `b23-${id}-user-text\n${value}\n`, '.jsonl', b2t2Box(9200));
+  }
+}
+/** A file under a re-pilot --out, saved as the operator passes it: its path, its sha and its value. */
+function b23Saved(p: string): W5b4Saved {
+  const text = readFileSync(p, 'utf8');
+  return { path: p, sha: w5b4Lib.sha256Hex(text) as string, value: JSON.parse(text) as W5b4R };
+}
+const b23Step0b = (fx: W5b4R, rout: string, deps: W5b4R = {}, rec: W5b4Saved = fx.f): Promise<W5b4Result> => b2t1Run(fx.home as string,
+  ['step0b', '--section', 'quiz', '--out', rout, ...fx.rec(rec)], deps);
+const b23Fidelity = (fx: W5b4R, rout: string, deps: W5b4R = b23FidDeps(fx.heads as W5b4R[])): Promise<W5b4Result> => b2t2Call(() => D4.fidelityCommand(b2t2Flags(['fidelity', '--section', 'quiz', '--out', rout,
+  ...fx.rec()]), B2T2_ENV(fx.home as string), deps));
+const b23Result = (fx: W5b4R, rout: string, s0: W5b4Saved, fid: W5b4Saved): Promise<W5b4Result> => b2t2Call(() => D4.repilotResultCommand(b2t2Flags(['pilot-result',
+  '--section', 'quiz', '--out', rout, ...fx.rec(), ...w5b4Inp('step0b', s0), ...w5b4Inp('fidelity', fid)]), B2T2_ENV(fx.home as string), { now: W5B4_FAKE.now }));
+/** A step 0b node (B2T1_STUB as up-a) with b23Quiz's records, every step 0b stream planted for restricted and the
+ *  re-pilot's fidelity streams planted. */
+function b23RepilotNode(payload?: (id: number) => number, over: W5b4R = {}): W5b4R {
+  const home = b2t1Home();
+  const fx = { ...b23Quiz(home, over), home };
+  b2t1PlantAll(home, 'restricted');
+  b23PlantFidelity(home, 5, payload);
+  return fx;
+}
+
+b23Describe('W2-5b2 Task 3: the re-pilot, open --amend and the version re-run, pure', () => {
+  b23It('AMEND_DETAILS holds the gate\'s AMENDMENT_KINDS as a set, its flags are exactly AMEND_FLAGS, each declared, and each kind builds Q13\'s detail as K6 amends it', () => {
+    b23Expect(Object.keys(D4.AMEND_DETAILS).sort()).toEqual([...(w5b4Gate.AMENDMENT_KINDS as readonly string[])].sort());
+    b23Expect(w5b4Gate.AMENDMENT_KINDS as readonly string[]).toContain(D4.FREEZE_EXCEPTION_KIND);
+    const named = Object.values(D4.AMEND_DETAILS as Record<string, W5b4R>).flatMap((k) => [...k.required, ...k.optional]);
+    b23Expect([...new Set(named)].sort()).toEqual([...(D4.AMEND_FLAGS as string[])].sort());
+    for (const k of [...(D4.AMEND_FLAGS as string[]), 'amend', 'kind', 'fidelity', 'fidelity-sha256']) b23Expect(Object.hasOwn(D4.FLAG_SPECS, k), k).toBe(true);
+    b23Expect(D4.AMEND_DETAILS['version-move'].required, 'Q13: the node; Q12: the re-pilot result').toEqual(['node-label', 'claude-code-version', 'repilot', 'repilot-sha256']);
+    b23Expect([D4.AMEND_DETAILS['version-move'].optional, D4.AMEND_DETAILS['freeze-exception'].optional, D4.AMEND_DETAILS['forced-act'].optional])
+      .toEqual([[], ['node-label', 'release-tag'], ['node-label']]);
+    const H = w5b4Hex('repilot');
+    b23Expect(D4.AMEND_DETAILS['version-move'].detail({ 'claude-code-version': 'v-b' }, H)).toEqual({ claude_code_version: 'v-b', repilot_sha256: H });
+    b23Expect(D4.AMEND_DETAILS['freeze-exception'].detail({ surface: 's', ruling: 'r' }, null), 'no release: no key').toEqual({ surface: 's', ruling: 'r' });
+    b23Expect(D4.AMEND_DETAILS['freeze-exception'].detail({ surface: 's', ruling: 'r', 'release-tag': 'v9.9.9' }, null)).toEqual({ surface: 's', ruling: 'r', release_tag: 'v9.9.9' });
+    b23Expect(D4.AMEND_DETAILS['forced-act'].detail({ act: 'a', 'act-ms': 5 }, null)).toEqual({ act: 'a', at_ms: 5 });
+  });
+
+  b23It('amendmentOf builds the validator\'s five fields, detail_sha256 over the canonical detail; amendedFinal moves supersedes and finalized_ms and appends one entry, leaving its input as it was (W2-D90)', () => {
+    const H = w5b4Hex('repilot');
+    const detail = { repilot_sha256: H, claude_code_version: 'v-b' };   // not in key order: the sha is over the canonical form
+    const a = D4.amendmentOf({ kind: 'version-move', nodeLabelRef: 'node-0', atMs: 7, detail });
+    b23Expect(a).toEqual({ kind: 'version-move', node_label_ref: 'node-0', at_ms: 7,
+      detail_sha256: w5b4Lib.sha256Hex(w5b4Lib.canonicalJson({ claude_code_version: 'v-b', repilot_sha256: H })), detail });
+    b23Expect(Object.keys(a).sort(), 'exactly the validator\'s fields').toEqual(['at_ms', 'detail', 'detail_sha256', 'kind', 'node_label_ref']);
+    const e0 = { kind: 'forced-act', node_label_ref: null, at_ms: 1, detail_sha256: w5b4Hex('d'), detail: {} };
+    const rec = { part: 'final', seed: 'x', supersedes: w5b4Hex('old'), finalized_ms: 1, amendments: [e0] };
+    b23Expect(D4.amendedFinal(rec, w5b4Hex('rec'), a, 9)).toEqual({ part: 'final', seed: 'x', supersedes: w5b4Hex('rec'), finalized_ms: 9, amendments: [e0, a] });
+    b23Expect([rec.supersedes, rec.finalized_ms, rec.amendments], 'the input is not changed').toEqual([w5b4Hex('old'), 1, [e0]]);
+  });
+
+  b23It('nodeMovesOf: this node\'s version moves in array order, never another node\'s or another kind\'s; none on part 1 (W2-D56, W2-D90)', () => {
+    const r = { amendments: [w5b4Move('node-0', 'v-a', 1), w5b4Move('node-1', 'v-b', 2), b23Exc('node-0', 'v9.9.9'), w5b4Move('node-0', 'v-c', 3)] };
+    b23Expect(D4.nodeMovesOf(r, 'node-0')).toEqual([{ index: 0, version: 'v-a' }, { index: 3, version: 'v-c' }]);
+    b23Expect(D4.nodeMovesOf(r, 'node-1')).toEqual([{ index: 1, version: 'v-b' }]);
+    b23Expect(D4.nodeMovesOf(r, 'node-2'), 'a node with no move').toEqual([]);
+    b23Expect(D4.nodeMovesOf({ part: 'draft' }, 'node-0'), 'part 1 carries no amendments').toEqual([]);
+  });
+
+  b23It('nodeExceptionOf: this node\'s newest freeze exception that names a release; expectedForNode carries it as exception_stamp, and nothing new without one (W2-D6, K6)', () => {
+    const r = { amendments: [b23Exc('node-0', 'v9.9.9'), b23Exc('node-1', 'v9.9.7'), w5b4Move('node-0', 'v-a', 1), b23Exc('node-0'), b23Exc(null, 'v9.9.6')] };
+    b23Expect(D4.nodeExceptionOf(r, 'node-0'), 'the newest that names a release; one with none leaves it').toEqual({ index: 0, release_tag: 'v9.9.9' });
+    b23Expect(D4.nodeExceptionOf(r, 'node-1')).toEqual({ index: 1, release_tag: 'v9.9.7' });
+    b23Expect(D4.nodeExceptionOf(r, 'node-2'), 'CONTROL: an exception naming no node installs nothing on one').toBeNull();
+    b23Expect(D4.nodeExceptionOf({ amendments: [...r.amendments, b23Exc('node-0', 'v9.9.10')] }, 'node-0')).toEqual({ index: 5, release_tag: 'v9.9.10' });
+    b23Expect(D4.nodeExceptionOf({ part: 'draft' }, 'node-0')).toBeNull();
+    const home = w5b4MkTmp('ccrc-b23-pure-');
+    writeFileSync(join(home, STUB_STREAM), T5_STREAM);
+    const draft = w5b4Draft(home, { stores: [W5B4_STORE_A, W5B4_STORE_B] });
+    const withExc = D4.expectedForNode({ ...draft, amendments: r.amendments }, W5B4_STORE_A) as W5b4R;
+    b23Expect(withExc.expected.exception_stamp).toEqual({ release_tag: 'v9.9.9', from: 'amendments[0]' });
+    b23Expect(withExc.from, 'a freeze exception moves no version').toBe('amendments[2]');
+    b23Expect(Object.keys((D4.expectedForNode(draft, W5B4_STORE_A) as W5b4R).expected).sort(), 'CONTROL: no exception, W2-5b1\'s four keys')
+      .toEqual(['claude_code_version', 'code_shas', 'release_stamp', 'wrapper_sha256']);
+  });
+
+  b23It('preflightFiles: a stamp a freeze exception installed on this node is admitted under --allow-code-change and stamped code-changed; without the flag tree-moved names the remedy; any other stamp is tree-moved as before (W2-D6, K6)', () => {
+    const shas = w5b4Shas();
+    const base = { claude_code_version: 'v', release_stamp: 'v9.9.8', wrapper_sha256: null, code_shas: shas };
+    const exc = { ...base, exception_stamp: { release_tag: 'v9.9.9', from: 'amendments[3]' } };
+    const m = (tag: string): W5b4R => ({ stamp: { state: 'value', tag }, wrapperSha256: null, codeShas: { state: 'measured', files: shas } });
+    b23Expect(D4.preflightFiles(exc, m('v9.9.9'), { allowCodeChange: true })).toEqual({ ok: true, stamps: ['code-changed'] });
+    b23Expect(D4.preflightFiles(exc, m('v9.9.9'), {})).toEqual({ ok: false, word: 'tree-moved',
+      detail: 'recorded v9.9.8, measured v9.9.9; amendments[3] installed it under a freeze exception: --allow-code-change admits it after window start (W2-D6)' });
+    b23Expect(D4.preflightFiles(exc, m('v9.9.7'), { allowCodeChange: true }), 'CONTROL: another stamp').toEqual({ ok: false, word: 'tree-moved', detail: 'recorded v9.9.8, measured v9.9.7' });
+    b23Expect(D4.preflightFiles(base, m('v9.9.9'), { allowCodeChange: true }), 'CONTROL: no exception').toEqual({ ok: false, word: 'tree-moved', detail: 'recorded v9.9.8, measured v9.9.9' });
+    b23Expect(D4.preflightFiles(exc, m('v9.9.8'), {}), 'CONTROL: the recorded stamp').toEqual({ ok: true, stamps: [] });
+  });
+
+  b23It('runVersionsOf: a run\'s version is the last manifest that names it, a run planned in a stopped batch and planned again included (Q14)', () => {
+    const v = D4.runVersionsOf([{ claude_code_version: 'v-a', runs: [{ name: 'x' }, { name: 'y' }] }, { claude_code_version: 'v-b', runs: [{ name: 'y' }, { name: 'z' }] }]) as Map<string, string>;
+    b23Expect([...v.entries()]).toEqual([['x', 'v-a'], ['y', 'v-b'], ['z', 'v-b']]);
+    b23Expect((D4.runVersionsOf([]) as Map<string, string>).size).toBe(0);
+  });
+
+  b23It('versionSplitOf: half-done on another version only; settled, untouched or same-version questions are not split; an answered run no manifest names refuses (W2-D56, W2-D80, W2-D84)', () => {
+    const arm = (state: string, won: string | null = null): W5b4R => ({ state, attempts: won === null ? [] : [{ name: won, class: 'answered' }] });
+    const v = new Map([['c.a1', 'v-a'], ['t.a1', 'v-a'], ['c.m0.a1', 'v-b']]);
+    const rows: Array<[W5b4R[], string, boolean, string]> = [
+      [[arm('answered', 'c.a1'), arm('rerun')], 'v-b', true, 'one arm answered on v-a, the other owing a re-run'],
+      [[arm('answered', 'c.a1'), arm('not-run')], 'v-b', true, 'one arm answered on v-a, the other never run'],
+      [[arm('not-run'), arm('answered', 'c.a1')], 'v-b', true, 'either position'],
+      [[arm('answered', 'c.a1'), arm('rerun')], 'v-a', false, 'CONTROL: answered on the version now expected'],
+      [[arm('rerun'), arm('answered', 'c.m0.a1')], 'v-b', false, 'CONTROL: answered after the move'],
+      [[arm('answered', 'c.a1'), arm('answered', 't.a1')], 'v-b', false, 'CONTROL: settled, both answered: never re-run'],
+      [[arm('answered', 'c.a1'), arm('run-failed')], 'v-b', false, 'CONTROL: settled run-failed, excluded from both arms'],
+      [[arm('rerun'), arm('not-run')], 'v-b', false, 'CONTROL: no arm answered'],
+    ];
+    for (const [arms, version, want, why] of rows) b23Expect(D4.versionSplitOf(arms, v, version), why).toBe(want);
+    b23Expect(b23Refused(() => D4.versionSplitOf([arm('answered', 'x.a1'), arm('not-run')], v, 'v-b')), 'unmeasured, never read as either version')
+      .toEqual(['out-refused', 'run-version-unmeasured x.a1']);
+  });
+
+  b23It('moveAfterSplit: unsplit stays where it was read; split goes to the newest move; a split at the newest move refuses out-refused (W2-D56)', () => {
+    b23Expect(D4.moveAfterSplit({ qid: 'q', move: null, newest: 0, split: false })).toBeNull();
+    b23Expect(D4.moveAfterSplit({ qid: 'q', move: 0, newest: 2, split: false })).toBe(0);
+    b23Expect(D4.moveAfterSplit({ qid: 'q', move: null, newest: 2, split: true })).toBe(2);
+    b23Expect(D4.moveAfterSplit({ qid: 'q', move: 0, newest: 2, split: true })).toBe(2);
+    b23Expect(b23Refused(() => D4.moveAfterSplit({ qid: 'q', move: 2, newest: 2, split: true }))).toEqual(['out-refused', 'version-split q at amendments[2]']);
+  });
+
+  b23It('armRunName: a move puts .m<i> before the attempt inside the last segment; no move keeps W2-5b1\'s name byte for byte (Q4, W2-D56)', () => {
+    const qid = '0123456789abcdef';
+    b23Expect(D4.armRunName('quiz', qid, W5B4_CONTROL, 1, 0)).toBe(`quiz/arms/${qid}/${W5B4_CONTROL}.m0.a1`);
+    b23Expect(D4.armRunName('quiz', qid, W5B4_TREATMENT, 2, 12)).toBe(`quiz/arms/${qid}/${W5B4_TREATMENT}.m12.a2`);
+    b23Expect(D4.armRunName('quiz', qid, W5B4_CONTROL, 1, null)).toBe(`quiz/arms/${qid}/${W5B4_CONTROL}.a1`);
+    b23Expect((D4.armRunName('quiz', qid, W5B4_CONTROL, 1, 0) as string).split('/'), 'four segments: W2-4\'s run-name rule').toHaveLength(4);
+    for (const bad of [-1, 1.5, '0', Number.NaN]) b23Expect(() => D4.armRunName('quiz', qid, W5B4_CONTROL, 1, bad), String(bad)).toThrow(TypeError);
+  });
+
+  b23It('the driver selects a node\'s version moves on one code line and its freeze exceptions on one, and spells the move\'s name segment once (W2-D12)', () => {
+    const code = readFileSync(join(W5B4_REPO, 'deploy', 'history-replay.mjs'), 'utf8').split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
+    b23Expect(code.filter((l) => l.includes('VERSION_MOVE_KIND') && l.includes('node_label_ref')).map((l) => l.trim()), 'nodeMovesOf\'s one selection').toHaveLength(1);
+    b23Expect(code.filter((l) => l.includes('FREEZE_EXCEPTION_KIND') && l.includes('node_label_ref')).map((l) => l.trim()), 'nodeExceptionOf\'s one selection').toHaveLength(1);
+    b23Expect(code.filter((l) => l.includes('.m${')).map((l) => l.trim()), 'armRunName alone builds a move\'s name').toHaveLength(1);
+  });
+
+  b23It('repilotBoundariesOf: the first n distinct boundaries of the questions in qid order, each as fidelity\'s head (Q12, K1)', () => {
+    const q = (qid: string, b: number): W5b4R => ({ qid, store_id: W5B4_STORE_A, ccrc_id: 'quiz-a', generation: w5b4Gen(410), boundary_uuid: w5b4Gen(b), fact: 'x' });
+    const head = (b: number): W5b4R => ({ store_id: W5B4_STORE_A, ccrc_id: 'quiz-a', generation: w5b4Gen(410), boundary_uuid: w5b4Gen(b) });
+    const qs = [q('c3', 3), q('a1', 1), q('b1', 1), q('d4', 4), q('e2', 2)];   // not in qid order; b1 shares a1's boundary
+    b23Expect(D4.repilotBoundariesOf(qs, 3)).toEqual([head(1), head(3), head(4)]);
+    b23Expect(D4.repilotBoundariesOf(qs, 9), 'fewer distinct boundaries than n: all of them (fidelity short is the result\'s, K13)').toEqual([head(1), head(3), head(4), head(2)]);
+    b23Expect(qs.map((x) => x.qid), 'its input is not reordered').toEqual(['c3', 'a1', 'b1', 'd4', 'e2']);
+  });
+
+  b23It('repilotResultOf and repilotResultError: the producer\'s output reads back clean, passed exactly when failed is empty; each field off its shape is named (K1)', () => {
+    const o = { recordSha256: w5b4Hex('rec'), storeId: W5B4_STORE_A, nodeLabel: 'node-0', version: 'v-b', step0bSha256: w5b4Hex('s'), fidelitySha256: w5b4Hex('f'), fidelity: [{ boundary_uuid: w5b4Gen(1) }], spend: 1250 };
+    const ok = D4.repilotResultOf({ ...o, failed: [] }) as W5b4R;
+    b23Expect(ok).toEqual({ kind: 'ccrc-history-w2-repilot-result', v: 1, record_sha256: o.recordSha256, store_id: W5B4_STORE_A, node_label: 'node-0',
+      claude_code_version: 'v-b', step0b_sha256: o.step0bSha256, fidelity_sha256: o.fidelitySha256, fidelity: o.fidelity, passed: true, failed: [], spend: 1250 });
+    b23Expect(D4.repilotResultError(ok)).toBeNull();
+    const bad = D4.repilotResultOf({ ...o, failed: ['fidelity short 1 of 5'] }) as W5b4R;
+    b23Expect([bad.passed, D4.repilotResultError(bad)]).toEqual([false, null]);
+    const rows: Array<[unknown, string]> = [
+      [[1], 'not-object'], [{ ...ok, extra: 1 }, 'fields'], [{ ...ok, kind: 'x' }, 'kind'], [{ ...ok, v: 2 }, 'v'],
+      [{ ...ok, record_sha256: 'x' }, 'record_sha256'], [{ ...ok, fidelity_sha256: null }, 'fidelity_sha256'], [{ ...ok, node_label: '' }, 'node_label'],
+      [{ ...ok, claude_code_version: '' }, 'claude_code_version'], [{ ...ok, fidelity: [1] }, 'fidelity'], [{ ...ok, failed: [''] }, 'failed'],
+      [{ ...ok, spend: -1 }, 'spend'], [{ ...ok, spend: 1.5 }, 'spend'], [Object.fromEntries(Object.entries(ok).filter(([k]) => k !== 'spend')), 'fields'],
+      [{ ...ok, passed: false }, 'passed'], [{ ...bad, passed: true }, 'passed'],
+    ];
+    for (const [v, w] of rows) b23Expect(D4.repilotResultError(v), w).toBe(w);
+  });
+
+  b23It('the re-pilot\'s sections: step 0b, fidelity and pilot-result each end in quiz, and step 0b names its quiz runs and result under quiz/ (Q12, K1)', () => {
+    for (const s of [D4.STEP0B_SECTIONS, D4.FIDELITY_SECTIONS, D4.PILOT_RESULT_SECTIONS] as string[][]) b23Expect(s).toEqual(['pilot', 'quiz']);
+    b23Expect(D4.step0bRunName('quiz', 'restricted', 'agent')).toBe('quiz/step0b/restricted/agent');
+    b23Expect(D4.step0bRel('quiz', 'restricted')).toBe('quiz/step0b/restricted.json');
+    b23Expect([D4.REPILOT_RESULT_REL, D4.REPILOT_VERSION_REL, D4.REPILOT_FIDELITY_REL]).toEqual(['quiz/repilot-result.json', 'quiz/repilot-version.json', 'quiz/fidelity.json']);
+  });
+
+  b23It('the re-pilot forms take no --allow-code-change and step 0b\'s takes no --settings-mode: refused before any input is read (Q23, Q26)', async () => {
+    const env = B2T2_ENV(w5b4MkTmp('ccrc-b23-env-'));
+    const rec = ['--record', '/nowhere/r', '--record-sha256', w5b4Hex('r'), '--part1', '/nowhere/p', '--part1-sha256', w5b4Hex('p'), '--frozen', '/nowhere/f', '--frozen-sha256', w5b4Hex('f')];
+    const rows: Array<[string, () => Promise<unknown>, string]> = [
+      ['step0b', () => D4.step0bCommand(b2t2Flags(['step0b', '--section', 'quiz', '--out', '/nowhere/o', ...rec, '--allow-code-change']), env, B2T1_FAKE), '--allow-code-change is not a step0b --section quiz flag'],
+      ['step0b mode', () => D4.step0bCommand(b2t2Flags(['step0b', '--section', 'quiz', '--out', '/nowhere/o', ...rec, '--settings-mode', 'fallback']), env, B2T1_FAKE), '--settings-mode is not a step0b --section quiz flag'],
+      ['fidelity', () => D4.fidelityCommand(b2t2Flags(['fidelity', '--section', 'quiz', '--out', '/nowhere/o', ...rec, '--allow-code-change']), env, b23FidDeps([])), '--allow-code-change is not a fidelity --section quiz flag'],
+      ['pilot-result', () => D4.pilotResultCommand(b2t2Flags(['pilot-result', '--section', 'quiz', '--out', '/nowhere/o', ...rec, '--step0b', '/nowhere/s', '--step0b-sha256', w5b4Hex('s'),
+        '--fidelity', '/nowhere/f', '--fidelity-sha256', w5b4Hex('f'), '--allow-code-change']), env), '--allow-code-change is not a pilot-result --section quiz flag'],
+    ];
+    for (const [why, fn, detail] of rows) b23Expect((await b2t2Call(fn)).refusal, why).toEqual({ word: 'args-invalid', detail });
+  });
+});
+
+b23Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 3: open --amend through arms, and the both-arms re-run after a version move', () => {
+  b23It('the version preflight reads open --amend\'s own output: a move to another version stops claude-version-moved, a later move naming the measured version admits the batch (W2-D56, W2-D90)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home);
+    const a1 = await b23Amend(fx, fx.f, null, b23Move('fixture-version-moved', fx.f));
+    const r1 = await w5b4Arms(home, fx.argv(a1, w5b4Inp('supersedes', fx.f)));
+    b23Expect(r1.refusal).toEqual({ word: 'claude-version-moved', detail: `recorded fixture-version-moved, measured ${w5b4Version(home)}` });
+    b23Expect(w5b4Runs(home), 'no arm run').toHaveLength(0);
+    const a2 = await b23Amend(fx, a1, fx.f, b23Move(w5b4Version(home), a1), B23_NOW + 1000);
+    b23Expect((a2.value.amendments as W5b4R[]).map((a) => a.detail.claude_code_version)).toEqual(['fixture-version-moved', w5b4Version(home)]);
+    const r2 = await w5b4Arms(home, fx.argv(a2, w5b4Inp('supersedes', a1)));
+    b23Expect(r2.refusal, 'CONTROL: the newest move names the measured version').toBeNull();
+    b23Expect(w5b4Runs(home)).toHaveLength(6);
+    b23Expect(w5b4Manifests(fx.out, 'quiz').map((m) => m.claude_code_version)).toEqual([w5b4Version(home)]);
+  }, 180_000);
+
+  b23It('after a version move, both arms of the question with one arm done re-run from one fresh preflight on the new version under the move\'s names, from attempt 1, with no old-sibling payload exclusion; a settled question never re-runs; a second move moves a question half-done again (W2-D56, Q14, K7, K27)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { over: { limits: { concurrency: 1 } } });
+    const [q1, q2, q3] = fx.mine as [W5b4R, W5b4R, W5b4R];
+    b23Answers(home, fx.mine);
+    b23HalfDone(home, q2, W5B4_TREATMENT, 1);   // run 1: q2's treatment fails, and the gate stops q3
+    b23HalfDone(home, q3, W5B4_TREATMENT, 1);   // run 2: q3's treatment fails, and the gate stops its re-run
+    // This is a payload revision, independent of the version. A faulty re-run that retains q2's old answered sibling enters
+    // W2-5b1's D-6482 branch and excludes its owed arm; the correct new-move state has two fresh arms and runs both.
+    const payloadsFor = (tag: string) => (_rs: unknown, _id: number, _question: string, cut: W5b4R): W5b4R => ({ state: 'payloads',
+      plain: `fixture payload ${tag} ${cut.qid as string} ${W5B4_CONTROL}\n`, carded: `fixture payload ${tag} ${cut.qid as string} ${W5B4_TREATMENT}\n` });
+    const v0 = w5b4Version(home);
+    const initialStart = w5b4Runs(home).length;
+    const r1 = await w5b4Arms(home, fx.argv(), { payloads: payloadsFor('version-a') });
+    b23Expect(r1.refusal?.word).toBe('limits-threshold');
+    const initialRuns = w5b4Runs(home).slice(initialStart);
+    const q1Records = W5B4_ARMS.map((arm) => readFileSync(join(fx.out, 'quiz', 'answers', `${q1.qid as string}.${arm}.json`), 'utf8'));
+    w5b4Limits(home, 10);
+    b23SetVersion(home, 'fixture-version-b');
+    const a1 = await b23Amend(fx, fx.f, null, b23Move('fixture-version-b', fx.f));
+    const versionBStart = w5b4Runs(home).length;
+    const r2 = await w5b4Arms(home, fx.argv(a1, w5b4Inp('supersedes', fx.f)), { payloads: payloadsFor('version-b') });
+    b23Expect(r2.refusal?.word, 'q3 is left half-done on version b').toBe('limits-threshold');
+    const versionBRuns = w5b4Runs(home).slice(versionBStart);
+    w5b4Limits(home, 10);
+    b23SetVersion(home, 'fixture-version-c');
+    const a2 = await b23Amend(fx, a1, fx.f, b23Move('fixture-version-c', a1), B23_NOW + 1000);
+    const versionCStart = w5b4Runs(home).length;
+    const r3 = await w5b4Arms(home, fx.argv(a2, w5b4Inp('supersedes', a1)), { payloads: payloadsFor('version-c') });
+    b23Expect(r3.refusal).toBeNull();
+    const versionCRuns = w5b4Runs(home).slice(versionCStart);
+    const ms = w5b4Manifests(fx.out, 'quiz');
+    b23Expect(ms.map((m) => [m.claude_code_version, (m.runs as W5b4R[]).map((x) => x.name)])).toEqual([
+      [v0, w5b4Names('quiz', fx.mine)],
+      ['fixture-version-b', [b23Name(q2, W5B4_CONTROL, 0), b23Name(q2, W5B4_TREATMENT, 0), b23Name(q3, W5B4_CONTROL, null), b23Name(q3, W5B4_TREATMENT, null)]],
+      ['fixture-version-c', [b23Name(q3, W5B4_CONTROL, 1), b23Name(q3, W5B4_TREATMENT, 1)]],
+    ]);
+    const q2Moved = (ms[1]!.runs as W5b4R[]).filter((x) => [b23Name(q2, W5B4_CONTROL, 0), b23Name(q2, W5B4_TREATMENT, 0)].includes(x.name as string));
+    b23Expect(q2Moved.map((x) => x.name), 'K27: one fresh batch preflight planned both new-version arms').toEqual([b23Name(q2, W5B4_CONTROL, 0), b23Name(q2, W5B4_TREATMENT, 0)]);
+    b23Expect(q2Moved.map((x) => x.stdin_sha256), 'both payloads are pinned from that one fresh preflight').toHaveLength(2);
+    b23Expect((ms[1]!.runs as W5b4R[])[0]!.stdin_sha256, 'the new-move payload is rebuilt at its fresh preflight, not reused from the old attempt')
+      .not.toBe((ms[0]!.runs as W5b4R[])[2]!.stdin_sha256);
+    b23Expect(initialRuns.filter((x) => x.env.CCRC_RECALL_ASOF === q2.boundary_uuid).map((x) => x.env.CCRC_RECALL_ARM), 'initial slice: q2 spawns both arms, its control completing and its treatment failing as infrastructure').toEqual([W5B4_CONTROL, W5B4_TREATMENT]);
+    b23Expect(versionBRuns.filter((x) => x.env.CCRC_RECALL_ASOF === q2.boundary_uuid).map((x) => x.env.CCRC_RECALL_ARM), 'version-b slice: both replacement arms spawn, never D-6482-excluded').toEqual([W5B4_CONTROL, W5B4_TREATMENT]);
+    b23Expect(versionCRuns.filter((x) => x.env.CCRC_RECALL_ASOF === q3.boundary_uuid).map((x) => x.env.CCRC_RECALL_ARM), 'version-c slice: both replacement arms spawn, never D-6482-excluded').toEqual([W5B4_CONTROL, W5B4_TREATMENT]);
+    W5B4_ARMS.forEach((arm, i) => b23Expect(readFileSync(join(fx.out, 'quiz', 'answers', `${q1.qid as string}.${arm}.json`), 'utf8'),
+      'q1 settled on the first version: never re-run, its records untouched').toBe(q1Records[i]));
+    for (const arm of W5B4_ARMS) {
+      const a = w5b4Answer(fx.out, 'quiz', q2, arm);
+      b23Expect(a).toMatchObject({ question_state: 'answered', arm_state: 'answered', run: b23Name(q2, arm, 0) });
+      b23Expect((a.attempts as W5b4R[]).map((t) => t.name), 'read from its new runs only, from attempt 1 (K7)').toEqual([b23Name(q2, arm, 0)]);
+      b23Expect(w5b4Answer(fx.out, 'quiz', q3, arm)).toMatchObject({ question_state: 'answered', run: b23Name(q3, arm, 1) });
+    }
+    b23Expect(existsSync(join(fx.out, `${b23Name(q2, W5B4_CONTROL, null)}.run.json`)), 'the superseded run stays under --out').toBe(true);
+    // The full recording log is append-only. Its total is intentionally not asserted here: each move's own slice above is the K27 proof.
+    b23Expect(w5b4Summary(fx.out, 'quiz')).toMatchObject({ stop: null, counts: { questions: 3, answered: 3, run_failed: 0, rerun_owed: 0, not_run: 0 } });
+    b23Expect(Object.hasOwn(w5b4Summary(fx.out, 'quiz'), 'payload_changed'), 'K27: no old-attempt sibling drift exclusion').toBe(false);
+  }, 240_000);
+
+  b23It('CONTROL: a move naming the version the answered arm ran under re-runs nothing; the half-done question completes its missing arm as attempt 2 (W2-D56, W2-D80)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { over: { limits: { concurrency: 1 } } });
+    const [, q2, q3] = fx.mine as [W5b4R, W5b4R, W5b4R];
+    b23Answers(home, fx.mine);
+    b23HalfDone(home, q2, W5B4_TREATMENT, 1);
+    b23Expect((await w5b4Arms(home, fx.argv())).refusal?.word).toBe('limits-threshold');
+    w5b4Limits(home, 10);
+    const a1 = await b23Amend(fx, fx.f, null, b23Move(w5b4Version(home), fx.f));
+    const r = await w5b4Arms(home, fx.argv(a1, w5b4Inp('supersedes', fx.f)));
+    b23Expect(r.refusal).toBeNull();
+    b23Expect((w5b4Manifests(fx.out, 'quiz')[1]!.runs as W5b4R[]).map((x) => x.name))
+      .toEqual([b23Name(q2, W5B4_TREATMENT, null, 2), b23Name(q3, W5B4_CONTROL, null), b23Name(q3, W5B4_TREATMENT, null)]);
+    b23Expect(w5b4Answer(fx.out, 'quiz', q2, W5B4_CONTROL).run).toBe(b23Name(q2, W5B4_CONTROL, null));
+    b23Expect(w5b4Answer(fx.out, 'quiz', q2, W5B4_TREATMENT).run).toBe(b23Name(q2, W5B4_TREATMENT, null, 2));
+  }, 180_000);
+
+  b23It('a forced act amends part 2 and moves no version: the next batch re-checks every question before any spawn (W2-D7, W2-D78)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home);
+    const a1 = await b23Amend(fx, fx.f, null, ['--kind', 'forced-act', '--node-label', 'node-0', '--act', 'prune --apply', '--act-ms', String(B23_NOW - 60_000)]);
+    const q = (fx.mine as W5b4R[])[0]!;
+    const failing = { recheck: async (): Promise<never> => { throw new w5b4Drv.DriverRefusal('quiz-unanswerable', `${q.qid as string} clause (b) unanswerable`); } };
+    const r = await w5b4Arms(home, fx.argv(a1, w5b4Inp('supersedes', fx.f)), failing);
+    b23Expect(r.refusal).toEqual({ word: 'quiz-unanswerable', detail: `${q.qid as string} clause (b) unanswerable` });
+    b23Expect(stubLog(home), 'no spawn, not even --version, until the re-check passes').toBeNull();
+    const ok = await w5b4Arms(home, fx.argv(a1, w5b4Inp('supersedes', fx.f)));
+    b23Expect(ok.refusal, 'CONTROL: the re-check passes and the batch runs on the amended record').toBeNull();
+    b23Expect(w5b4Runs(home)).toHaveLength(6);
+  }, 180_000);
+
+  b23It('a freeze exception that installed a release on this node: without --allow-code-change the batch stops tree-moved naming the remedy, before --out; with it the stamp is admitted and the outputs stamped code-changed; another node\'s exception, one with no release, or one naming another release admits nothing (W2-D6, K6)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home);
+    b23Answers(home, fx.mine);
+    const a1 = await b23Amend(fx, fx.f, null, b23Exception('node-0', 'v9.9.9'));
+    b23SetStamp(home, 'v9.9.9');
+    const r1 = await w5b4Arms(home, fx.argv(a1, w5b4Inp('supersedes', fx.f)));
+    b23Expect(r1.refusal).toEqual({ word: 'tree-moved',
+      detail: 'recorded v9.9.8, measured v9.9.9; amendments[0] installed it under a freeze exception: --allow-code-change admits it after window start (W2-D6)' });
+    b23Expect(existsSync(fx.out as string), 'refused before --out').toBe(false);
+    b23Expect(stubLog(home)).toBeNull();
+    const r2 = await w5b4Arms(home, fx.argv(a1, [...w5b4Inp('supersedes', fx.f), '--allow-code-change']));
+    b23Expect(r2.refusal, 'W2-D6 after window start: the exception\'s release admitted').toBeNull();
+    b23Expect(w5b4Runs(home)).toHaveLength(6);
+    b23Expect(w5b4Summary(fx.out, 'quiz').stamps, 'stamped code-changed').toEqual(['code-changed']);
+    for (const [why, args] of [['another node\'s exception', b23Exception('node-1', 'v9.9.9')], ['an exception with no release', b23Exception('node-0', null)],
+      ['an exception naming another release', b23Exception('node-0', 'v9.9.7')]] as Array<[string, string[]]>) {
+      const h = w5b4Home();
+      const f2 = w5b4Quiz(h);
+      const a = await b23Amend(f2, f2.f, null, args);
+      b23SetStamp(h, 'v9.9.9');
+      const r = await w5b4Arms(h, f2.argv(a, [...w5b4Inp('supersedes', f2.f), '--allow-code-change']));
+      b23Expect(r.refusal, `CONTROL: ${why}`).toEqual({ word: 'tree-moved', detail: 'recorded v9.9.8, measured v9.9.9' });
+    }
+  }, 240_000);
+
+  b23It('under a version move the batch manifests are read: one that is not JSON, or not this section\'s, refuses out-refused, never a guessed version; CONTROL: intact, the resume re-runs the half-done question (Q14, W2-D84, D-6309\'s rule)', async () => {
+    const home = w5b4Home();
+    const fx = w5b4Quiz(home, { over: { limits: { concurrency: 1 } } });
+    const [, q2] = fx.mine as [W5b4R, W5b4R, W5b4R];
+    b23Answers(home, fx.mine);
+    b23HalfDone(home, q2, W5B4_TREATMENT, 1);
+    b23Expect((await w5b4Arms(home, fx.argv())).refusal?.word).toBe('limits-threshold');
+    w5b4Limits(home, 10);
+    b23SetVersion(home, 'fixture-version-b');
+    const a1 = await b23Amend(fx, fx.f, null, b23Move('fixture-version-b', fx.f));
+    const argv = fx.argv(a1, w5b4Inp('supersedes', fx.f));
+    const p = join(fx.out, 'quiz', 'arms', 'batches', '0001.json');
+    const orig = readFileSync(p);
+    writeFileSync(p, 'x');
+    b23Expect((await w5b4Arms(home, argv)).refusal).toEqual({ word: 'out-refused', detail: 'quiz/arms/batches/0001.json is not JSON' });
+    writeFileSync(p, `${w5b4Lib.canonicalJson({ ...(JSON.parse(orig.toString('utf8')) as W5b4R), section: 'pilot' }) as string}\n`);
+    b23Expect((await w5b4Arms(home, argv)).refusal).toEqual({ word: 'out-refused', detail: 'quiz/arms/batches/0001.json is not a batch manifest' });
+    b23Expect(w5b4Runs(home), 'nothing spawned by either refused resume').toHaveLength(4);
+    writeFileSync(p, orig);
+    b23Expect((await w5b4Arms(home, argv)).refusal, 'CONTROL: the intact manifest').toBeNull();
+    b23Expect((w5b4Manifests(fx.out, 'quiz')[1]!.runs as W5b4R[]).map((x) => x.name).slice(0, 2)).toEqual([b23Name(q2, W5B4_CONTROL, 0), b23Name(q2, W5B4_TREATMENT, 0)]);
+  }, 240_000);
+});
+
+b23Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 3: the mid-window re-pilot on the stub (Q12, Q8, W2-D56, W2-D57, W2-D76; K1, K3, K13)', () => {
+  b23It('act 21 end to end: the arms stop claude-version-moved; step 0b and fidelity on a listed quiz family record the moved version; pilot-result writes the re-pilot result; open --amend takes its sha; the next batch runs on the new version (W2-D56, W2-D90, Q12, K1)', async () => {
+    const fx = b23RepilotNode();
+    const home = fx.home as string;
+    const v0 = w5b4Version(home);
+    b23SetVersion(home, 'fixture-version-b');
+    const stop = await w5b4Arms(home, fx.argv());
+    b23Expect(stop.refusal).toEqual({ word: 'claude-version-moved', detail: `recorded ${v0}, measured fixture-version-b` });
+    const rout = w5b4Out();
+    // step 0b --section quiz: this node's first frozen quiz question, its family listed, the moved version recorded
+    const s0 = await b23Step0b(fx, rout);
+    b23Expect(s0.refusal, s0.stderr).toBeNull();
+    const s0Saved = b23Saved(join(rout, 'quiz', 'step0b', 'restricted.json'));
+    b23Expect(s0.stderr).toBe(`sha256 ${s0Saved.sha}\n`);
+    const q = (fx.heads as W5b4R[])[0]!;
+    b23Expect([s0Saved.value.section, s0Saved.value.record_sha256, s0Saved.value.store_id, s0Saved.value.settings_mode, s0Saved.value.passed])
+      .toEqual(['quiz', fx.f.sha, W5B4_STORE_A, 'restricted', true]);
+    b23Expect(s0Saved.value.question).toEqual({ qid: q.qid, ccrc_id: q.ccrc_id, generation: q.generation, boundary_uuid: q.boundary_uuid });
+    b23Expect((s0Saved.value.batches as W5b4R[]).map((b) => b.claude_code_version), 'the move recorded, never refused').toEqual(['fixture-version-b', 'fixture-version-b']);
+    b23Expect(w5b4Json(join(rout, 'quiz', 'repilot-version.json'))).toEqual({ kind: D4.REPILOT_VERSION_KIND, v: 1, record_sha256: fx.f.sha, store_id: W5B4_STORE_A, claude_code_version: 'fixture-version-b' });
+    // fidelity --section quiz: box mode over this node's first n_fidelity distinct boundaries, against the pin
+    const f = await b23Fidelity(fx, rout);
+    b23Expect(f.refusal, f.stderr).toBeNull();
+    const fSaved = b23Saved(join(rout, 'quiz', 'fidelity.json'));
+    b23Expect(f.stderr).toBe(`sha256 ${fSaved.sha}\n`);
+    b23Expect([fSaved.value.kind, fSaved.value.section, fSaved.value.record_sha256, fSaved.value.frozen_sha256, fSaved.value.store_id, fSaved.value.settings_mode,
+      fSaved.value.claude_code_version, fSaved.value.n_fidelity]).toEqual([D4.FIDELITY_KIND, 'quiz', fx.f.sha, fx.fz.sha, W5B4_STORE_A, 'restricted', 'fixture-version-b', 5]);
+    b23Expect((fSaved.value.boundaries as W5b4R[]).map((b) => [b.boundary_uuid, b.state, b.pass])).toEqual((fx.heads as W5b4R[]).map((h) => [h.boundary_uuid, 'measured', true]));
+    const boxes = b2t1PrintRuns(home).filter((e) => (e.stdin as string).startsWith('b23-'));
+    b23Expect(boxes, 'three box-mode runs per boundary').toHaveLength(15);
+    for (const e of boxes) b23Expect((e.envKeys as string[]).filter((k) => k.startsWith('CCRC_RECALL_')), 'box mode: no seam env (Q8)').toEqual([]);
+    b23Expect(existsSync(join(rout, 'quiz', 'fidelity', q.boundary_uuid as string, 'payload.run.json')), 'the run named under quiz/fidelity/').toBe(true);
+    // pilot-result --section quiz: the re-pilot result, its sha printed
+    const p = await b23Result(fx, rout, s0Saved, fSaved);
+    b23Expect(p.refusal, p.stderr).toBeNull();
+    const rp = b23Saved(join(rout, 'quiz', 'repilot-result.json'));
+    b23Expect(p.stderr).toBe(`sha256 ${rp.sha}\n`);
+    b23Expect(rp.value).toEqual({ kind: D4.REPILOT_RESULT_KIND, v: 1, record_sha256: fx.f.sha, store_id: W5B4_STORE_A, node_label: 'node-0',
+      claude_code_version: 'fixture-version-b', step0b_sha256: s0Saved.sha, fidelity_sha256: fSaved.sha, fidelity: fSaved.value.boundaries, passed: true, failed: [],
+      spend: D4.spentSoFar(rout) as number });
+    b23Expect(rp.value.spend as number, 'K22 (a): the re-pilot charged its step 0b and fidelity runs on its own --out').toBeGreaterThan(0);
+    b23Expect(existsSync(join(rout, 'pilot')), 'no usage pilot is re-run (Q12)').toBe(false);
+    // open --amend --kind version-move --repilot: the amendment names the result's sha; the next batch runs on version b
+    const a1 = await b23Amend(fx, fx.f, null, ['--kind', 'version-move', '--node-label', 'node-0', '--claude-code-version', 'fixture-version-b', ...w5b4Inp('repilot', rp)]);
+    b23Expect((a1.value.amendments as W5b4R[])[0]!.detail).toEqual({ claude_code_version: 'fixture-version-b', repilot_sha256: rp.sha });
+    writeFileSync(join(home, '.local', 'bin', 'up-a'), W5B4_ARM_STUB, { mode: 0o700 });
+    b23Answers(home, fx.mine);
+    const r = await w5b4Arms(home, fx.argv(a1, w5b4Inp('supersedes', fx.f)));
+    b23Expect(r.refusal, r.stderr).toBeNull();
+    b23Expect(w5b4Manifests(fx.out, 'quiz').map((m) => m.claude_code_version)).toEqual(['fixture-version-b']);
+    b23Expect(w5b4Summary(fx.out, 'quiz')).toMatchObject({ stop: null, counts: { questions: 5, answered: 5 } });
+  }, 300_000);
+
+  // K26, K28 (D-6481 carried): the re-pilot's masked inputs agree over every retained reading of the pair index through the
+  // pilot's own seams, Task 1's step0bCardOf and Task 2's fidelityBoundariesOf, before they spawn or persist. A pair
+  // learned between two boundaries, or after the first quiz arm batch, makes the next admission hold two readings that
+  // disagree, and the act refuses rather than masking with either; each learned case has its own no-learning CONTROL.
+  const b23K28Fidelity = async (learn: boolean): Promise<{ r: W5b4Result; seen: Array<[number, boolean]>; home: string; rout: string; value: string }> => {
+    const fx = b23RepilotNode();
+    const home = fx.home as string;
+    const value = ['fixture', '-quiz-', 'fidelity-late'].join('');
+    b23PlantFidelityWith(home, 5, value);
+    const seen: Array<[number, boolean]> = [];
+    const rout = w5b4Out();
+    const r = await b23Fidelity(fx, rout, b23IndexFreshDeps(fx.heads as W5b4R[], home, learn, value, seen));
+    return { r, seen, home, rout, value };
+  };
+  const b23K28Step0b = async (learnAt: number | null): Promise<{ r: W5b4Result; seen: boolean[]; home: string; rout: string }> => {
+    const fx = b23RepilotNode(undefined, { over: { limits: { batch_max: 4 } } });
+    const home = fx.home as string;
+    b2t1PlantAll(home, 'restricted', {}, B2T1_LEARNED_CARD);
+    const seen: boolean[] = [];
+    const rout = w5b4Out();
+    const r = await b23Step0b(fx, rout, { payloads: b2t1IndexPayloads(home, learnAt, seen) });
+    return { r, seen, home, rout };
+  };
+  b23It('K28 quiz re-pilot fidelity: a pair learned while boundary 1 builds makes boundary 2\'s readings disagree, refused input-invalid masking-snapshots-disagree fidelity before its runs spawn or quiz/fidelity.json is written (K26, D-6481 carried)', async () => {
+    const c = await b23K28Fidelity(true);
+    b23Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree fidelity' });
+    b23Expect(c.seen, 'boundary 1: one reading; boundary 2: the old reading, then the new one').toEqual([[1, false], [2, false], [2, true]]);
+    const boxes = b2t1PrintRuns(c.home).filter((e) => (e.stdin as string).startsWith('b23-'));
+    b23Expect(boxes.map((e) => (e.stdin as string).split('\n')[0]).sort(), 'only boundary 1 spawned').toEqual(['b23-1-empty', 'b23-1-payload', 'b23-1-user-text']);
+    for (const e of boxes) b23Expect(e.stdin as string, 'boundary 1 ran under its one, unmasked reading').toContain(c.value);
+    b23Expect(existsSync(join(c.rout, 'quiz', 'fidelity.json')), 'no fidelity output is written').toBe(false);
+  }, 300_000);
+  b23It('K28 quiz re-pilot fidelity CONTROL: with no pair learned each boundary holds one reading, all five measure inside the tolerance, and the value stays visible in every stdin (K26)', async () => {
+    const c = await b23K28Fidelity(false);
+    b23Expect(c.r.refusal, c.r.stderr).toBeNull();
+    b23Expect(c.seen).toEqual([1, 2, 3, 4, 5].map((id) => [id, false]));
+    const boxes = b2t1PrintRuns(c.home).filter((e) => (e.stdin as string).startsWith('b23-'));
+    b23Expect(boxes).toHaveLength(15);
+    for (const e of boxes) b23Expect(e.stdin as string).toContain(c.value);
+    b23Expect((w5b4Json(join(c.rout, 'quiz', 'fidelity.json')).boundaries as W5b4R[]).map((b) => [b.state, b.pass])).toEqual(Array(5).fill(['measured', true]));
+  }, 300_000);
+  b23It('K28 quiz re-pilot step 0b: a pair learned after the first quiz arm batch\'s card preflight lets that batch\'s four runs stand and refuses the second arm batch input-invalid masking-snapshots-disagree step0b before it spawns (K26, D-6481 carried)', async () => {
+    const c = await b23K28Step0b(2);
+    b23Expect(c.r.refusal).toEqual({ word: 'input-invalid', detail: 'masking-snapshots-disagree step0b' });
+    b23Expect(c.seen, 'before --out and the first arm batch: one reading each; the second arm batch: old, then new').toEqual([false, false, false, true]);
+    const prints = b2t1PrintRuns(c.home);
+    b23Expect(prints, 'the box run and the first arm batch only').toHaveLength(5);
+    for (const e of prints.slice(1)) b23Expect((e.stdin as string).startsWith(`${B2T1_LEARNED_CARD}\n\n`), 'the first arm batch ran under the agreed card').toBe(true);
+    b23Expect(existsSync(join(c.rout, 'quiz', 'step0b', 'restricted.json')), 'a refusal mid-way writes no result').toBe(false);
+  }, 300_000);
+  b23It('K28 quiz re-pilot step 0b CONTROL: with no pair learned no card preflight masks the value and both quiz arm batches run (K26)', async () => {
+    const c = await b23K28Step0b(null);
+    b23Expect(c.r.refusal, c.r.stderr).toBeNull();
+    b23Expect(c.seen.length > 0 && c.seen.every((masked) => !masked), 'no reading masked the value').toBe(true);
+    b23Expect((w5b4Json(join(c.rout, 'quiz', 'step0b', 'restricted.json')).batches as W5b4R[]).map((b) => (b.runs as string[]).length)).toEqual([1, 4, 3]);
+  }, 300_000);
+
+  b23It('one re-pilot per --out, one version per re-pilot: a resume reads its runs back under the same version; a version that moves mid-re-pilot stops claude-version-moved against the pin, in step 0b and in fidelity; a pin of another record refuses before any spawn; a finished re-pilot refuses step 0b and fidelity (K1, W2-D53)', async () => {
+    const fx = b23RepilotNode();
+    const home = fx.home as string;
+    const v0 = w5b4Version(home);
+    const rout = w5b4Out();
+    b23Expect((await b23Step0b(fx, rout)).refusal, 'CONTROL: a fresh --out').toBeNull();
+    const prints = b2t1PrintRuns(home).length;
+    b23Expect((await b23Step0b(fx, rout)).refusal, 'CONTROL: the same version, resumed').toBeNull();
+    b23Expect(b2t1PrintRuns(home).length, 'read back, nothing respawned (W2-D53)').toBe(prints);
+    b23SetVersion(home, 'fixture-version-c');
+    const moved = { word: 'claude-version-moved', detail: `recorded ${v0}, measured fixture-version-c` };
+    b23Expect((await b23Step0b(fx, rout)).refusal, 'step 0b resumed after a move: the pin holds').toEqual(moved);
+    b23Expect((await b23Fidelity(fx, rout)).refusal, 'fidelity on the same --out: the same pin').toEqual(moved);
+    b23Expect(b2t1PrintRuns(home).length, 'nothing spawned under the moved version').toBe(prints);
+    const pinPath = join(rout, 'quiz', 'repilot-version.json');
+    writeFileSync(pinPath, `${w5b4Lib.canonicalJson({ ...w5b4Json(pinPath), record_sha256: w5b4Hex('another record') }) as string}\n`);
+    const spawned = (stubLog(home) ?? []).length;
+    b23Expect((await b23Step0b(fx, rout)).refusal).toEqual({ word: 'out-refused',
+      detail: `quiz/repilot-version.json is another re-pilot's (record ${w5b4Hex('another record')}, store ${W5B4_STORE_A}): one re-pilot per --out, so run this one on a fresh --out` });
+    b23Expect((stubLog(home) ?? []).length, 'refused before --version').toBe(spawned);
+    writeFileSync(join(rout, 'quiz', 'repilot-result.json'), '{}\n');
+    const done = (who: string): W5b4R => ({ word: 'out-refused', detail: `quiz/repilot-result.json is here: ${who} on a fresh --out, one re-pilot per --out` });
+    b23Expect((await b23Step0b(fx, rout)).refusal).toEqual(done('step0b --section quiz runs'));
+    b23Expect((await b23Fidelity(fx, rout)).refusal).toEqual(done('fidelity --section quiz runs'));
+  }, 300_000);
+
+  b23It('a failed re-pilot halts at every act, each file written and its sha printed first: fidelity outside the tolerance refuses pilot-failed; pilot-result writes a failed result once and refuses pilot-failed; open --amend refuses it (K3, K13, W2-D76)', async () => {
+    const fx = b23RepilotNode((id) => (id === 2 ? 40000 : 25000));
+    const rout = w5b4Out();
+    b23Expect((await b23Step0b(fx, rout)).refusal).toBeNull();
+    const s0 = b23Saved(join(rout, 'quiz', 'step0b', 'restricted.json'));
+    const u2 = ((fx.heads as W5b4R[])[1]!.boundary_uuid) as string;
+    const f = await b23Fidelity(fx, rout);
+    const fSaved = b23Saved(join(rout, 'quiz', 'fidelity.json'));
+    b23Expect(f.stderr, 'K3: the sha printed before the halt').toBe(`sha256 ${fSaved.sha}\n`);
+    b23Expect(f.refusal).toEqual({ word: 'pilot-failed', detail: `fidelity quiz: fidelity ${u2} outside-tolerance` });
+    const p = await b23Result(fx, rout, s0, fSaved);
+    const rp = b23Saved(join(rout, 'quiz', 'repilot-result.json'));
+    b23Expect(p.stderr).toBe(`sha256 ${rp.sha}\n`);
+    b23Expect([rp.value.passed, rp.value.failed]).toEqual([false, [`fidelity ${u2} outside-tolerance`]]);
+    b23Expect(p.refusal).toEqual({ word: 'pilot-failed', detail: `repilot node-0: fidelity ${u2} outside-tolerance` });
+    b23Expect((await b23Result(fx, rout, s0, fSaved)).refusal, 'one result per re-pilot: never rewritten').toEqual({ word: 'out-refused',
+      detail: 'quiz/repilot-result.json is here: pilot-result --section quiz writes on a fresh --out, one re-pilot per --out' });
+    const am = await b23Open(['open', '--amend', '--kind', 'version-move', '--node-label', 'node-0', '--claude-code-version', w5b4Version(fx.home as string),
+      ...w5b4Inp('repilot', rp), ...fx.rec()]);
+    b23Expect([am.refusal, am.stdout]).toEqual([{ word: 'pilot-failed', detail: `repilot node-0: fidelity ${u2} outside-tolerance` }, '']);
+  }, 300_000);
+
+  b23It('pilot-result --section quiz refuses inputs that are not this re-pilot\'s: a step 0b of another section, a fidelity output of another record or store or section, versions split from the pin, no pin; CONTROL: the intact inputs pass (K1)', async () => {
+    const fx = b23RepilotNode();
+    const rout = w5b4Out();
+    b23Expect((await b23Step0b(fx, rout)).refusal).toBeNull();
+    b23Expect((await b23Fidelity(fx, rout)).refusal).toBeNull();
+    const s0 = b23Saved(join(rout, 'quiz', 'step0b', 'restricted.json'));
+    const fid = b23Saved(join(rout, 'quiz', 'fidelity.json'));
+    const v = s0.value.batches[0].claude_code_version as string;
+    const absent = w5b4Out();   // a path no act made
+    const madeOut = (pilotSource = false): string => {
+      const o = D4.prepareOut(w5b4Out()) as string;
+      if (pilotSource) writeFileSync(join(o, 'pilot-source.json'), '{}\n', { mode: 0o600 });
+      return o;
+    };
+    const rows: Array<[string, () => Promise<W5b4Result>, W5b4R]> = [
+      ['a step 0b of another section', () => b23Result(fx, rout, w5b4Save({ ...s0.value, section: 'pilot' }, 's0.json'), fid), { word: 'input-invalid', detail: 'step0b section pilot, wanted quiz' }],
+      ['a fidelity output of another record', () => b23Result(fx, rout, s0, w5b4Save({ ...fid.value, record_sha256: w5b4Hex('x') }, 'f.json')), { word: 'input-invalid', detail: 'fidelity record-mismatch' }],
+      ['a fidelity output of another store', () => b23Result(fx, rout, s0, w5b4Save({ ...fid.value, store_id: W5B4_STORE_B }, 'f.json')), { word: 'input-invalid', detail: 'fidelity store-mismatch' }],
+      ['a fidelity output of the pilot', () => b23Result(fx, rout, s0, w5b4Save({ ...fid.value, section: 'pilot' }, 'f.json')), { word: 'input-invalid', detail: 'fidelity section' }],
+      ['a step 0b of another re-pilot\'s version', () => b23Result(fx, rout, w5b4Save({ ...s0.value, batches: [{ ...s0.value.batches[0], claude_code_version: 'v-other' }, s0.value.batches[1]] }, 's0.json'), fid),
+        { word: 'input-invalid', detail: `repilot version-split: pinned ${v}, step0b v-other ${v}, fidelity ${v}` }],
+      ['no pin under --out', () => b23Result(fx, madeOut(), s0, fid), { word: 'input-invalid', detail: 'quiz/repilot-version.json absent: step0b --section quiz writes it first' }],
+      ['an --out that is not there', () => b23Result(fx, absent, s0, fid), { word: 'input-invalid', detail: '--out holds no re-pilot: step0b --section quiz writes quiz/repilot-version.json there first' }],
+      ['an --out holding pilot-source.json', () => b23Result(fx, madeOut(true), s0, fid),
+        { word: 'out-refused', detail: 'pilot-source.json is here: pilot-result --section quiz writes on a fresh --out, never pilot-source\'s' }],
+    ];
+    for (const [why, run, want] of rows) b23Expect((await run()).refusal, why).toEqual(want);
+    b23Expect(existsSync(absent), 'an absent --out is refused, never made (W2-5a\'s R10)').toBe(false);
+    b23Expect(existsSync(join(rout, 'quiz', 'repilot-result.json')), 'no refused row wrote a result').toBe(false);
+    b23Expect((await b23Result(fx, rout, s0, fid)).refusal, 'CONTROL: the intact inputs').toBeNull();
+  }, 300_000);
 });

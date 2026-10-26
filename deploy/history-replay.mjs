@@ -42,7 +42,7 @@ import { blobReadStmts, bodyOf, epochOfUuid, holdingCopyOf } from '../ccd/histor
 import { asOfCutOf, expandEntryBody, familiesOf as scopeFamiliesOf, transcriptsOf } from '../ccd/history/recall.mjs';
 import { pairIndexOf } from '../ccd/history/cli.mjs';
 import { admitFile, ftsTextOfBlob, readRegPresence } from '../ccd/history/sweep.mjs';
-import { ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, assignArms, assignmentSha256, buildWindows, checkGateCode, classifyRun, cmpFrac, collapseWs, expectedWindows, familyKey, frac, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
+import { AMENDMENT_KINDS, ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, assignArms, assignmentSha256, buildWindows, checkGateCode, classifyRun, cmpFrac, collapseWs, expectedWindows, familyKey, frac, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -180,6 +180,11 @@ export const FLAG_SPECS = Object.freeze(/** @type {Record<string, FlagKind>} */ 
   'allow-code-change': 'bool',
   // W2-5b2 Task 2 (K2, Q27): the pilot acts read step 0b's result with its sha; open --finalize takes the ruling on a failed pilot.
   step0b: 'string', 'step0b-sha256': 'string', 'accept-failed-pilot': 'bool',
+  // W2-5b2 Task 3 (W2-D90; Q12, Q13; K1, K6): open --amend's mode, its kind and the three kinds' detail flags (AMEND_DETAILS),
+  // and pilot-result --section quiz's fidelity input
+  amend: 'bool', kind: 'string', 'claude-code-version': 'string', repilot: 'string', 'repilot-sha256': 'string',
+  surface: 'string', ruling: 'string', 'release-tag': 'string', act: 'string', 'act-ms': 'int',
+  fidelity: 'string', 'fidelity-sha256': 'string',
 }));
 
 /** The subcommands, by name. Empty until Tasks 8 and 9 register `step0a` and `probe`, so every subcommand is
@@ -321,10 +326,11 @@ async function yieldToSignals() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
-/** Refuse `interrupted` while the stopping flag is set. Eight call sites: each runBatch lane iteration (after a yield and the
+/** Refuse `interrupted` while the stopping flag is set. Nine call sites: each runBatch lane iteration (after a yield and the
  *  re-read), runBatch's last act (after its lanes), launchRun before runChild, launchRun's post-close branch,
  *  measureClaudeVersion (after a yield), preflightSpawn after measureClaudeVersion, step 0a right after its `--version`
- *  returns, and an arms batch after every pending question was excluded. So no spawn starts after the handler has run, and after the handler has run no
+ *  returns, an arms batch after every pending question was excluded, and the re-pilot's repilotExpectedOf after its
+ *  measureClaudeVersion (W2-5b2 Task 3). So no spawn starts after the handler has run, and after the handler has run no
  *  run.json, step0a.json or probe.json is written. A run whose post-close stretch is under way when a signal arrives is
  *  recorded (its run.json is written), and the subcommand then refuses at its next check. A signal that arrives after
  *  runBatch's last check is not answered (the post-last-check window, named in the header above). A run stopped in
@@ -2192,18 +2198,26 @@ function preflightVersion(expected, measured) {
 /** The no-spawn half of the preflight (D-6311): the release stamp, the wrapper and the four code shas, in W2-D56's order.
  *  Each is a file read, so a caller that has measured them can ask before it spawns anything: refuseWriterAdmission asks it
  *  before --out exists, and `preflight` asks it again, after the version, at open. Pure. `measured` carries `stamp`,
- *  `wrapperSha256` and `codeShas`, no version.
+ *  `wrapperSha256` and `codeShas`, no version. A stamp the node's newest freeze exception installed (expected.exception_stamp,
+ *  W2-5b2 Task 3, K6) is admitted under allowCodeChange, stamped code-changed, as W2-D6 says; without the flag its tree-moved
+ *  detail names that remedy.
  *  @returns {{ ok: false, word: string, detail: string } | { ok: true, stamps: string[] }} */
 export function preflightFiles(expected, measured, opts = {}) {
   const s = measured.stamp;
   if (s.state !== 'value') return { ok: false, word: 'tree-unmeasured', detail: `the release stamp is ${s.state}${s.state === 'unreadable' ? ` (${s.code})` : ''}` };
-  if (s.tag !== expected.release_stamp) return { ok: false, word: 'tree-moved', detail: `recorded ${expected.release_stamp}, measured ${s.tag}` };
+  // W2-5b2 Task 3 (K6, W2-D6): a stamp a freeze exception installed on this node (expectedForNode's exception_stamp) is
+  // admitted under allowCodeChange (window start or later, Q23) and stamped code-changed; without it, tree-moved names the remedy.
+  const excepted = expected.exception_stamp !== undefined && s.tag === expected.exception_stamp.release_tag;
+  if (s.tag !== expected.release_stamp && !(excepted && opts.allowCodeChange === true)) {
+    return { ok: false, word: 'tree-moved', detail: `recorded ${expected.release_stamp}, measured ${s.tag}${excepted
+      ? `; ${expected.exception_stamp.from} installed it under a freeze exception: --allow-code-change admits it after window start (W2-D6)` : ''}` };
+  }
   if (measured.wrapperSha256 !== expected.wrapper_sha256) return { ok: false, word: 'wrapper-moved', detail: `recorded ${expected.wrapper_sha256 ?? 'no wrapper'}, measured ${measured.wrapperSha256 ?? 'no wrapper'}` };
   const c = measured.codeShas;
   if (c.state !== 'measured') return { ok: false, word: 'code-unmeasured', detail: `${c.path} is ${c.cause}` };
   const names = [...new Set([...CODE_SHA_FILES, ...Object.keys(expected.code_shas)])];
   const moved = names.filter((f) => c.files[f] !== expected.code_shas[f]);
-  if (moved.length === 0) return { ok: true, stamps: [] };
+  if (moved.length === 0) return { ok: true, stamps: s.tag === expected.release_stamp ? [] : ['code-changed'] };   // K6
   if (opts.allowCodeChange === true) return { ok: true, stamps: ['code-changed'] };
   return { ok: false, word: 'code-changed', detail: `changed ${moved.join(' ')}` };
 }
@@ -5170,6 +5184,9 @@ const PILOT_DERIVED = Object.freeze(['labeller.sha_min_prefix', 'quiz.writer_inp
 const DRAFT_INPUT = Object.freeze(['record', 'record-sha256']);
 const PRED_INPUT = Object.freeze(['supersedes', 'supersedes-sha256']);
 const NODE_INPUTS = Object.freeze(['census', 'census-sha256', 'verify', 'verify-sha256']);
+/** W2-5b2 Task 3 (Q13, K6): every detail flag open --amend's form takes; AMEND_DETAILS decides which a kind requires, may
+ *  take or refuses (its union is this list, pinned in history-replay.test.ts). Declared here because SUBCOMMAND_FLAGS reads it. */
+export const AMEND_FLAGS = Object.freeze(['node-label', 'claude-code-version', 'repilot', 'repilot-sha256', 'surface', 'ruling', 'release-tag', 'act', 'act-ms']);
 /** Each subcommand form's flags: a flag outside both lists is refused, a required one missing is refused. */
 const SUBCOMMAND_FLAGS = Object.freeze({
   'pilot-source': { required: ['out', 'account', 'budget', 'writer-model', 'step0a', 'step0a-sha256'], optional: ['sha-min-prefix', 'writer-input', 'n-fidelity', 'n-usage'] },
@@ -5204,6 +5221,15 @@ const SUBCOMMAND_FLAGS = Object.freeze({
   // Neither takes --allow-code-change (a pilot act's remedy is a re-pilot, W2-D6). Task 3 adds each one's quiz section (K1).
   'fidelity --section pilot': { required: ['section', 'out', ...DRAFT_INPUT, 'pilot', 'pilot-sha256'], optional: [...PRED_INPUT, 'step0b', 'step0b-sha256'] },
   'pilot-result --section pilot': { required: ['section', 'out', ...DRAFT_INPUT, 'step0b', 'step0b-sha256'], optional: [...PRED_INPUT] },
+  // W2-5b2 Task 3 (Q12, Q23, K1): the mid-window re-pilot's three acts, each reading part 2 as every part 2 consumer reads
+  // it; no --allow-code-change (a pilot act), and no --settings-mode (the re-pilot measures part 2's mode, the arms' mode).
+  'step0b --section quiz': { required: ['section', 'out', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },
+  'fidelity --section quiz': { required: ['section', 'out', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT] },
+  'pilot-result --section quiz': { required: ['section', 'out', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256',
+    'step0b', 'step0b-sha256', 'fidelity', 'fidelity-sha256'], optional: [...PRED_INPUT] },
+  // W2-5b2 Task 3 (W2-D90; Q12, Q13, Q23): part 2 read as every part 2 consumer reads it (its part 1, its frozen list, and the
+  // final it supersedes when it is itself amended), one kind and its detail flags; no --allow-code-change.
+  'open --amend': { required: ['amend', 'kind', ...DRAFT_INPUT, 'part1', 'part1-sha256', 'frozen', 'frozen-sha256'], optional: [...PRED_INPUT, ...AMEND_FLAGS] },
 });
 
 const copyJson = (v) => JSON.parse(JSON.stringify(v));
@@ -6170,15 +6196,16 @@ async function openFinalize(flags, driverEnv, deps) {
   return printWithSha(final);
 }
 
-/** `open --draft | --finalize | --template` (W2-D25): writes no file. */
+/** `open --draft | --finalize | --template | --amend` (W2-D25, W2-D90): writes no file. */
 export async function openCommand(flags, driverEnv, deps = { seed: drawSeedHex, now: () => Date.now() }) {
-  const modes = ['draft', 'finalize', 'template'].filter((m) => flags[m] === true);
-  if (modes.length !== 1) refuse('args-invalid', 'open wants exactly one of --draft, --finalize and --template');
+  const modes = ['draft', 'finalize', 'template', 'amend'].filter((m) => flags[m] === true);
+  if (modes.length !== 1) refuse('args-invalid', 'open wants exactly one of --draft, --finalize, --template and --amend');
   if (modes[0] === 'template') {
     checkFlags('open --template', flags);
     process.stdout.write(canonicalJson(openTemplate()) + '\n');
     return EXIT.OK;
   }
+  if (modes[0] === 'amend') return openAmend(flags, driverEnv, deps);   // W2-5b2 Task 3 (W2-D90)
   return modes[0] === 'draft' ? openDraft(flags, driverEnv, deps) : openFinalize(flags, driverEnv, deps);
 }
 
@@ -6761,12 +6788,16 @@ function armOk(who, arm) {
   if (!RECALL_ARMS.includes(arm)) throw new TypeError(`${who}: ${JSON.stringify(arm)} is not a RECALL_ARMS member`);
 }
 /** One arm run's name under --out (Q4): the attempt is part of it, so a re-run never overwrites the run it re-runs.
- *  @param {string} section  @param {string} qid  @param {string} arm  @param {number} attempt  @returns {string} */
-export function armRunName(section, qid, arm, attempt) {
+ *  A run made after a version move carries the move's amendment index (W2-5b2 Task 3, W2-D56), so a question re-run on a new
+ *  version never overwrites, and is never read as, the runs it supersedes.
+ *  @param {string} section  @param {string} qid  @param {string} arm  @param {number} attempt  @param {number | null} [move]  @returns {string} */
+export function armRunName(section, qid, arm, attempt, move = null) {
   armSectionOk('armRunName', section);
   armOk('armRunName', arm);
   if (!Number.isSafeInteger(attempt) || attempt < 1 || attempt > ARM_ATTEMPTS_MAX) throw new TypeError(`armRunName: attempt ${String(attempt)} is not 1 to ${ARM_ATTEMPTS_MAX}`);
-  return `${section}/arms/${qid}/${arm}.a${attempt}`;
+  if (move !== null && !(Number.isSafeInteger(move) && move >= 0)) throw new TypeError(`armRunName: move ${String(move)} is not an amendment index`);
+  // W2-5b2 Task 3 (W2-D56): a run on a version move's own name, inside the last segment (W2-4's run names hold four)
+  return move === null ? `${section}/arms/${qid}/${arm}.a${attempt}` : `${section}/arms/${qid}/${arm}.m${move}.a${attempt}`;
 }
 /** One (qid, arm)'s answer record under --out (W2-D82).  @returns {string} */
 export function answerRel(section, qid, arm) {
@@ -6876,22 +6907,22 @@ export function armAnswerOf(entry, facts, shaMinPrefix) {
  *  detail `{claude_code_version, repilot_sha256}`, node_label_ref required). Amendments are append-only, so the newest
  *  is the last in array order. A version-move naming no node, or whose detail holds no version, is a record the gate
  *  should not have signed: record-invalid, before --out, through W2-5b1 Task 1's versionMoveChecks and refuseRangeRows,
- *  the one spelling of those two ranges (R30, W2-D12), never a second one here. Pure.
+ *  the one spelling of those two ranges (R30, W2-D12), never a second one here. When a freeze exception on this node names
+ *  the release it installed (W2-5b2 Task 3's nodeExceptionOf, K6), the expected values carry it as exception_stamp, which
+ *  preflightFiles admits under allowCodeChange; with none they are W2-5b1's four. Pure.
  *  @param {Record<string, any>} record  @param {string} storeId */
 export function expectedForNode(record, storeId) {
   const node = record.nodes.find((n) => n.store_id === storeId);
   const entry = record.step0a.find((s) => s.store_id === storeId);
   if (node === undefined || entry === undefined) refuse('input-invalid', `store ${storeId} is not one of the record's nodes`);
   refuseRangeRows(versionMoveChecks(record));   // R30: Task 1's one spelling of the version-move ranges (W2-D12)
-  let version = entry.claude_code_version;
-  let from = 'step0a';
-  (record.amendments ?? []).forEach((a, i) => {
-    if (a.kind !== VERSION_MOVE_KIND || a.node_label_ref !== node.label) return;
-    version = a.detail.claude_code_version;
-    from = `amendments[${i}]`;
-  });
+  const newest = nodeMovesOf(record, node.label).at(-1);   // W2-5b2 Task 3: the one selection of a node's moves (W2-D12)
+  const version = newest === undefined ? entry.claude_code_version : newest.version;
+  const from = newest === undefined ? 'step0a' : `amendments[${newest.index}]`;
+  const exception = nodeExceptionOf(record, node.label);   // W2-5b2 Task 3 (K6, W2-D6): the release a freeze exception installed
   return { expected: { claude_code_version: version, release_stamp: record.gate_code.release_tag, wrapper_sha256: entry.wrapper_sha256,
-    code_shas: record.gate_code.files }, from };
+    code_shas: record.gate_code.files,
+    ...(exception === null ? {} : { exception_stamp: { release_tag: exception.release_tag, from: `amendments[${exception.index}]` } }) }, from };
 }
 
 /** The summary (Q30, W2-D64): the counts over every question, and per arm over the answered questions only (a run-failed
@@ -6982,18 +7013,18 @@ export function armNodeOf(run, storeId) {
   return { questions, nAll, account: r.account, expected, budget, limits: r.limits, settingsMode: run.settingsMode };
 }
 /** One arm run (W2-D50): the family's id as CCRC_RECALL_SESSION, the arm, and boundary N as CCRC_RECALL_ASOF. */
-function armJob(ctx, q, arm, attempt, stdin) {
+function armJob(ctx, q, arm, attempt, stdin, move = null) {
   const job = { launch: ctx.launch, mode: 'arm', model: ctx.model, settingsMode: ctx.settingsMode,
-    recall: { session: q.ccrc_id, arm, asof: q.boundary_uuid }, stdin, out: ctx.out, name: armRunName(ctx.section, q.qid, arm, attempt), lang: ctx.lang };
+    recall: { session: q.ccrc_id, arm, asof: q.boundary_uuid }, stdin, out: ctx.out, name: armRunName(ctx.section, q.qid, arm, attempt, move), lang: ctx.lang };
   return ctx.timeoutMs === undefined ? job : { ...job, timeoutMs: ctx.timeoutMs };
 }
 /** One arm's recorded attempts, each classified (W2-D80), its outcome and the attempt it owes next (null when settled).
  *  A recorded run is W2-4's finishedOutcome, which refuses a run recorded for another account, model or settings mode,
  *  or a changed stream; its exit code must be an integer or null, or classifyRun would throw (D-6309's rule). */
-function armAttemptsOf(ctx, q, arm) {
+function armAttemptsOf(ctx, q, arm, move = null) {
   const attempts = [];
   for (let n = 1; n <= ARM_ATTEMPTS_MAX; n += 1) {
-    const job = armJob(ctx, q, arm, n, '');
+    const job = armJob(ctx, q, arm, n, '', move);
     const done = finishedOutcome(job);
     if (done === null) break;
     if (!(done.code === null || Number.isInteger(done.code))) refuse('out-refused', `run-json-invalid ${job.name}`);
@@ -7031,12 +7062,13 @@ function excludedReasonOf(ctx, q, arm) {
 }
 const answeredAttempt = (a) => a.attempts.find((t) => t.class === 'answered') ?? null;
 /** One question's arms, its state, and the (arm, attempt) jobs it owes; a settled question owes none (a run-failed one
- *  is excluded from both arms, so its other arm's owed re-run is never spawned, W2-D80). */
+ *  is excluded from both arms, so its other arm's owed re-run is never spawned, W2-D80). The arms are read at the question's
+ *  move (W2-5b2 Task 3's questionMoveOf), so a question re-run after a version move is read from its new runs only. */
 function questionArmsOf(ctx, q) {
-  const arms = RECALL_ARMS.map((arm) => ({ arm, ...armAttemptsOf(ctx, q, arm) }));
+  const { move, arms } = questionMoveOf(ctx, q);   // W2-5b2 Task 3 (W2-D56): the arms at the question's move
   const state = questionStateOf(arms.map((a) => a.state));
   const settled = state === 'answered' || state === 'run-failed';
-  return { q, arms, state, next: settled ? [] : arms.filter((a) => a.next !== null).map((a) => ({ arm: a.arm, attempt: a.next })) };
+  return { q, move, arms, state, next: settled ? [] : arms.filter((a) => a.next !== null).map((a) => ({ arm: a.arm, attempt: a.next })) };
 }
 
 /** K28 (W2-5b2 Task 1; D-6481 carried, K26): the one all-readings-agree loop, factored out of W2-5b1's armBatchPreflight
@@ -7288,7 +7320,7 @@ function reportArmsStop(ctx, questions, e) {
   const kind = driverWordClass(e.word);
   let counted = 'not-run count unmeasured';
   try {
-    const states = questions.map((q) => questionArmsOf(ctx, q));
+    const states = armStatesOf(ctx, questions);
     const c = questionCountsOf(states.map((s) => s.state));
     counted = `${c.not_run} question(s) not run, ${c.rerun_owed} owing a re-run`;
     if (e.word !== 'interrupted') {
@@ -7342,12 +7374,14 @@ export async function armsCommand(flags, driverEnv, deps = { recheck: recheckBat
         lang: driverEnv.LANG, timeoutMs: deps.timeoutMs, recordSha256: run.recordSha256, shaMinPrefix: record.labeller.sha_min_prefix,
         budget: { in_force: budget, spend_budget: section === 'quiz' ? record.spend_budget : null, n_node: questions.length, n_all: nAll },
         stamps: new Set(run.codeStamps),
+        // W2-5b2 Task 3 (W2-D56, Q14): this node's version moves, and each run's version from the manifests (armStatesOf)
+        moves: nodeMovesOf(record, record.nodes.find((n) => n.store_id === storeId).label), runVersions: new Map(),
       };
       const perBatch = Math.floor(node.limits.batch_max / RECALL_ARMS.length);
       let states;
       try {
         for (;;) {
-          states = questions.map((q) => questionArmsOf(ctx, q));
+          states = armStatesOf(ctx, questions);
           settleAnswers(ctx, states);
           const pending = states.filter((s) => s.next.length > 0).slice(0, perBatch);
           if (pending.length === 0) break;
@@ -7358,7 +7392,7 @@ export async function armsCommand(flags, driverEnv, deps = { recheck: recheckBat
             continue;
           }
           const planned = pre.pending.flatMap((s) => s.next.map(({ arm, attempt }) => ({ qid: s.q.qid, arm, attempt,
-            job: armJob(ctx, s.q, arm, attempt, pre.stdins.get(`${s.q.qid} ${arm}`)) })));
+            job: armJob(ctx, s.q, arm, attempt, pre.stdins.get(`${s.q.qid} ${arm}`), s.move) })));
           writeArmManifest(ctx, pre.version, planned);
           await runBatch(planned.map((p) => p.job), { gate, claim, concurrency: record.limits.concurrency });
         }
@@ -7736,9 +7770,9 @@ HANDLERS.set('judge', (flags, env) => judgeCommand(flags, env));
 // them. Every error field each run's events carried is recorded (Q31). No --allow-code-change (Q23). The arm words are
 // never spelled here: the arm is TREATMENT_ARM (W2-D42).
 
-/** The sections step 0b runs for. This task ships the pilot's; the mid-window re-pilot on a listed quiz family (Q12) is
- *  a later W2-5b2 task's, which adds its section here. */
-export const STEP0B_SECTIONS = Object.freeze(['pilot']);
+/** The sections step 0b runs for: the pilot's (W2-5b2 Task 1) and the mid-window re-pilot's on a listed quiz family
+ *  (W2-5b2 Task 3; Q12, K1), whose preflight compares with the version it measures (repilotExpectedOf). */
+export const STEP0B_SECTIONS = Object.freeze(['pilot', 'quiz']);
 /** The kind word of `<section>/step0b/<settings mode>.json`. */
 export const STEP0B_KIND = 'ccrc-history-w2-step0b';
 /** The treatment-arm runs, in order (W2-D58; Q11): each taught spelling once, the three denial probes, the Agent call. */
@@ -7980,6 +8014,7 @@ export async function step0bCommand(flags, driverEnv, deps = { recheck: recheckB
     const out = prepareOut(flags.out);
     refuseColonInRealOut(out);
     refusePilotSourceOut(out, 'step0b runs');
+    if (section === 'quiz') refuseRepilotDone(out, 'step0b --section quiz runs');   // W2-5b2 Task 3 (K1): one re-pilot per --out
     const claim = claimOut(out);
     try {
       const { json, roster } = readRoster(home);
@@ -7989,6 +8024,8 @@ export async function step0bCommand(flags, driverEnv, deps = { recheck: recheckB
       const lang = driverEnv.LANG;
       const nameOf = (r) => step0bRunName(section, settingsMode, r);
       let expected = node.expected;   // W2-D56's values for every batch; the re-pilot replaces the version (W2-5b2 Task 3)
+      // W2-5b2 Task 3 (Q12, K1): the re-pilot's preflight compares with the version it measures, pinned once per --out
+      if (section === 'quiz') expected = await repilotExpectedOf({ out, recordSha256: run.recordSha256, storeId, launch, lang, gate, expected });
       const spawnPre = () => preflightSpawn({ launch, home, out, lang, gate, expected });
       const batches = [];
       // The box batch: W2-D56, then W2-4's mechanics under this mode's name (R1's main-thread turns; persistence).
@@ -8076,8 +8113,8 @@ export const UPTAKE_READINGS = Object.freeze(['is-error', 'not-error', 'unseen']
 /** The ledger's names for the usage pilot's spawns: W2-5b1 Task 4's arm runs and Task 5's judge runs, pilot section. */
 export const USAGE_PILOT_PREFIXES = Object.freeze({ arms: 'pilot/arms/', judge: `pilot/${JUDGE_DIR}/` });
 /** The sections `fidelity` and `pilot-result` take (K1, K2): the pilot here; Task 3 adds the mid-window re-pilot's quiz. */
-export const FIDELITY_SECTIONS = Object.freeze(['pilot']);
-export const PILOT_RESULT_SECTIONS = Object.freeze(['pilot']);
+export const FIDELITY_SECTIONS = Object.freeze(['pilot', 'quiz']);
+export const PILOT_RESULT_SECTIONS = Object.freeze(['pilot', 'quiz']);
 const FIDELITY_RUN_DIR = 'fidelity';
 /** A count a driver file under --out carries: a non-negative safe integer. */
 const nonNegativeInt = (v) => Number.isSafeInteger(v) && /** @type {number} */ (v) >= 0;
@@ -8532,6 +8569,7 @@ async function fidelityBoundariesOf({ rs, home, heads, deps, tolerance, spawnPre
 export async function fidelityCommand(flags, driverEnv, deps = { resolve: boundaryEntryIdOf, original: fidelityOriginalOf, stdins: fidelityStdins }) {
   const section = flags.section;
   if (!FIDELITY_SECTIONS.includes(section)) refuse('args-invalid', `fidelity wants --section ${FIDELITY_SECTIONS.join(' or --section ')}, not ${JSON.stringify(section ?? null)}`);
+  if (section === 'quiz') return fidelityRepilotCommand(flags, driverEnv, deps);   // W2-5b2 Task 3 (K1)
   checkFlags(`fidelity --section ${section}`, flags);
   const home = subcommandHome(driverEnv);
   const rec = loadRecordInput(flags, 'draft');
@@ -8598,6 +8636,7 @@ export async function fidelityCommand(flags, driverEnv, deps = { resolve: bounda
 export async function pilotResultCommand(flags, env) {
   const section = flags.section;
   if (!PILOT_RESULT_SECTIONS.includes(section)) refuse('args-invalid', `pilot-result wants --section ${PILOT_RESULT_SECTIONS.join(' or --section ')}, not ${JSON.stringify(section ?? null)}`);
+  if (section === 'quiz') return repilotResultCommand(flags, env);   // W2-5b2 Task 3 (K1)
   checkFlags(`pilot-result --section ${section}`, flags);
   const rec = loadRecordInput(flags, 'draft');
   recheckCode(rec.record);   // W2-D24 (pilot-result): gate_code before any other input
@@ -8659,6 +8698,461 @@ export async function pilotResultCommand(flags, env) {
 
 HANDLERS.set('fidelity', (flags, env) => fidelityCommand(flags, env));
 HANDLERS.set('pilot-result', (flags, env) => pilotResultCommand(flags, env));
+
+// ── W2-5b2 Task 3: version moves: the mid-window re-pilot, open --amend, and the both-arms re-run (W2-D90, W2-D56, W2-D6, W2-D7;
+// Q8, Q12 to Q14, Q23; K1, K3, K6, K7) ──
+// The re-pilot (Q12, K1): step0b, fidelity and pilot-result --section quiz, on one --out of their own, on a named node during
+// the window. Step 0b on this node's first frozen quiz question (its family listed in the quiz marker; no marker swap) and
+// fidelity in box mode over its first n_fidelity distinct frozen quiz boundaries, each preflight against the Claude Code
+// version this re-pilot measures, pinned once per --out (repilotExpectedOf): the move is recorded while the stamp, wrapper
+// and code checks hold, and one re-pilot never mixes two versions. pilot-result writes quiz/repilot-result.json and prints
+// its sha; every act whose check fails writes its file, prints its sha, then refuses pilot-failed (K3).
+// `open --amend --record <final> --record-sha256 H --kind <kind> …` prints a superseding part 2 that differs from the
+// record it reads only by supersedes, finalized_ms and one amendment appended in the validator's fixed shape (W2-D90).
+// It reads part 2 through W2-5b1 Task 1's loadFinalRecord (W2-D24's re-check first; no --allow-code-change, Q23), reads
+// no HOME, spawns nothing and writes no file; its output passes the gate's validator and the part 2 ranges
+// loadFinalRecord asks, so every record it prints is one its consumers load. A version move names its node and its
+// re-pilot result, checked against the record, the node and the version, and refused if failed (K1, K3); a freeze
+// exception may name the release it installed on its node (K6), which the tree preflight then admits under
+// --allow-code-change, stamped code-changed (preflightFiles). The arm engine reads this node's moves (nodeMovesOf) and the
+// per-batch manifests (Q14), and re-runs both arms of every question half-done on another version under the move's own
+// run names, from attempt 1 (W2-D56, K7).
+
+/** The freeze-exception amendment kind (W2-D6), one of the gate's AMENDMENT_KINDS (history-replay.test.ts pins it a
+ *  member): AMEND_DETAILS is keyed by it and nodeExceptionOf selects by it. */
+export const FREEZE_EXCEPTION_KIND = 'freeze-exception';
+/** Each amendment kind's detail flags and its detail (Q13, as K6 amends it): version-move `{claude_code_version,
+ *  repilot_sha256}`, its node required (W2-D56, Q12); freeze-exception `{surface, ruling, release_tag?}` (W2-D6, K6),
+ *  `release_tag` present only when given; forced-act `{act, at_ms}` (W2-D7); the node optional for the last two. Keyed by
+ *  the gate's AMENDMENT_KINDS, whose words it holds as a set, and its flags are exactly AMEND_FLAGS (history-replay.test.ts
+ *  pins both). */
+export const AMEND_DETAILS = Object.freeze({
+  [VERSION_MOVE_KIND]: Object.freeze({ required: Object.freeze(['node-label', 'claude-code-version', 'repilot', 'repilot-sha256']), optional: Object.freeze([]),
+    detail: (flags, repilotSha256) => ({ claude_code_version: flags['claude-code-version'], repilot_sha256: repilotSha256 }) }),
+  [FREEZE_EXCEPTION_KIND]: Object.freeze({ required: Object.freeze(['surface', 'ruling']), optional: Object.freeze(['node-label', 'release-tag']),
+    detail: (flags) => ({ surface: flags.surface, ruling: flags.ruling, ...(flags['release-tag'] === undefined ? {} : { release_tag: flags['release-tag'] }) }) }),
+  'forced-act': Object.freeze({ required: Object.freeze(['act', 'act-ms']), optional: Object.freeze(['node-label']),
+    detail: (flags) => ({ act: flags.act, at_ms: flags['act-ms'] }) }),
+});
+/** The detail texts that must say something: an empty one is refused. */
+const AMEND_TEXT_FLAGS = Object.freeze(['surface', 'ruling', 'release-tag', 'act']);
+/** K1: the re-pilot's files under its --out, each the quiz section's: the result, the version pin and the fidelity output. */
+export const REPILOT_RESULT_KIND = 'ccrc-history-w2-repilot-result';
+export const REPILOT_RESULT_REL = 'quiz/repilot-result.json';
+export const REPILOT_VERSION_KIND = 'ccrc-history-w2-repilot-version';
+export const REPILOT_VERSION_REL = 'quiz/repilot-version.json';
+export const REPILOT_FIDELITY_REL = `quiz/${FIDELITY_FILE}`;
+const REPILOT_RESULT_FIELDS = Object.freeze(['kind', 'v', 'record_sha256', 'store_id', 'node_label', 'claude_code_version',
+  'step0b_sha256', 'fidelity_sha256', 'fidelity', 'passed', 'failed', 'spend']);
+/** The re-pilot measures no usage, so pilotFailuresOf sees no absent rate. */
+const NO_ABSENT = Object.freeze({ over: Object.freeze([]), unmeasured: Object.freeze([]) });
+
+// ── pure ──
+/** One amendment in the validator's fixed shape (W2-D90): its detail_sha256 over the detail's canonical JSON, as the
+ *  validator recomputes it. Pure.
+ *  @param {{kind: string, nodeLabelRef: string | null, atMs: number, detail: object}} o */
+export function amendmentOf({ kind, nodeLabelRef, atMs, detail }) {
+  return { kind, node_label_ref: nodeLabelRef, at_ms: atMs, detail_sha256: sha256Hex(canonicalJson(detail)), detail };
+}
+
+/** The superseding part 2 (W2-D90): the record with `supersedes` its sha, `finalized_ms` now, and the amendment appended;
+ *  every other field as it was, and the input left as it was. Pure.
+ *  @param {Record<string, any>} record  @param {string} recordSha256  @param {object} amendment  @param {number} nowMs */
+export function amendedFinal(record, recordSha256, amendment, nowMs) {
+  return { ...record, supersedes: recordSha256, finalized_ms: nowMs, amendments: [...record.amendments, amendment] };
+}
+
+/** W2-D56, W2-D90: this node's version-move amendments, in array order (append-only, so the last is the newest), each as
+ *  its index and its Claude Code version; another node's move and another kind are not this node's, and a part 1 has
+ *  none. The one selection of a node's moves (W2-D12), read by W2-5b1 Task 4's expectedForNode and by the arm engine. The
+ *  ranges of a move's node and version are W2-5b1 Task 1's versionMoveChecks, asked before this is reached (R30). Pure.
+ *  @param {Record<string, any>} record  @param {string} label  @returns {Array<{index: number, version: string}>} */
+export function nodeMovesOf(record, label) {
+  /** @type {Array<{index: number, version: string}>} */
+  const moves = [];
+  (record.amendments ?? []).forEach((a, i) => {
+    if (a.kind === VERSION_MOVE_KIND && a.node_label_ref === label) moves.push({ index: i, version: a.detail.claude_code_version });
+  });
+  return moves;
+}
+
+/** W2-D6, K6: the release a freeze exception installed on this node: the newest freeze exception naming this node whose
+ *  detail carries a release_tag, as its index and that tag, or null. An exception with no release_tag installs nothing,
+ *  so it leaves the answer as it was; one naming no node installs on none. The one selection of a node's exceptions
+ *  (W2-D12), read by expectedForNode. Pure.
+ *  @param {Record<string, any>} record  @param {string} label  @returns {{index: number, release_tag: unknown} | null} */
+export function nodeExceptionOf(record, label) {
+  let newest = null;
+  (record.amendments ?? []).forEach((a, i) => {
+    if (a.kind === FREEZE_EXCEPTION_KIND && a.node_label_ref === label && plainObject(a.detail) && Object.hasOwn(a.detail, 'release_tag')) newest = { index: i, release_tag: a.detail.release_tag };
+  });
+  return newest;
+}
+
+/** Q14, W2-D56: each run name's Claude Code version, from the batch manifests in batch order. A run planned in a batch that
+ *  stopped before it spawned is planned again in a later one, so the last manifest naming a run is the one it was spawned
+ *  under (W2-5b1 Task 4's writeArmManifest rule). Read by the arm engine; exported for any later reader (K4). Pure.
+ *  @param {ReadonlyArray<{claude_code_version: string, runs: ReadonlyArray<{name: string}>}>} manifests  @returns {Map<string, string>} */
+export function runVersionsOf(manifests) {
+  const versions = new Map();
+  for (const m of manifests) for (const r of m.runs) versions.set(r.name, m.claude_code_version);
+  return versions;
+}
+
+/** W2-D56: whether a question is half-done on another Claude Code version: not settled (no arm run-failed, not every arm
+ *  answered, W2-D80), an arm answered, and that arm's answered run spawned under a version other than `version`, the one
+ *  the preflight now expects. An answered run no manifest names refuses out-refused: its version is unmeasured, never
+ *  read as either (W2-D84; D-6309's rule). Pure.
+ *  @param {ReadonlyArray<{state: string, attempts: ReadonlyArray<{name: string, class: string}>}>} arms
+ *  @param {ReadonlyMap<string, string>} runVersions  @param {string} version  @returns {boolean} */
+export function versionSplitOf(arms, runVersions, version) {
+  const states = arms.map((a) => a.state);
+  if (states.includes('run-failed') || states.every((s) => s === 'answered')) return false;
+  return arms.filter((a) => a.state === 'answered').some((a) => {
+    const won = answeredAttempt(a);
+    const spawnedUnder = runVersions.get(won.name);
+    if (spawnedUnder === undefined) refuse('out-refused', `run-version-unmeasured ${won.name}`);
+    return spawnedUnder !== version;
+  });
+}
+
+/** W2-D56: the move a question's arms are read and run under next. Unsplit, where they were read; split, the node's newest
+ *  move, where both arms owe a first attempt (K7: the re-run starts at attempt 1). A split at the newest move cannot come
+ *  from runs the preflight admitted (each was spawned under that move's version), so it refuses out-refused rather than
+ *  mix two versions in one question. Pure.
+ *  @param {{qid: string, move: number | null, newest: number, split: boolean}} o  @returns {number | null} */
+export function moveAfterSplit({ qid, move, newest, split }) {
+  if (!split) return move;
+  if (move === newest) refuse('out-refused', `version-split ${qid} at amendments[${newest}]`);
+  return newest;
+}
+
+/** Q12, K1: the re-pilot's fidelity boundaries: the first `n` distinct boundaries of this node's frozen quiz questions in
+ *  qid order (code units), each as fidelity's head. Fewer than `n` is all of them: the re-pilot result records the
+ *  shortfall (K13). Its input is not reordered. Pure.
+ *  @param {ReadonlyArray<{qid: string, store_id: string, ccrc_id: string, generation: string, boundary_uuid: string}>} questions  @param {number} n */
+export function repilotBoundariesOf(questions, n) {
+  const seen = new Set();
+  const heads = [];
+  for (const q of [...questions].sort((a, b) => (a.qid < b.qid ? -1 : a.qid > b.qid ? 1 : 0))) {
+    if (heads.length === n) break;
+    if (seen.has(q.boundary_uuid)) continue;
+    seen.add(q.boundary_uuid);
+    heads.push({ store_id: q.store_id, ccrc_id: q.ccrc_id, generation: q.generation, boundary_uuid: q.boundary_uuid });
+  }
+  return heads;
+}
+
+/** K1: the re-pilot result, passed exactly when nothing failed. Its sha is a version move's repilot_sha256. `spend` is
+ *  what the re-pilot charged on its own --out's ledger, recorded where the operator reads it (K22 (a)). Pure. */
+export function repilotResultOf({ recordSha256, storeId, nodeLabel, version, step0bSha256, fidelitySha256, fidelity, failed, spend }) {
+  return { kind: REPILOT_RESULT_KIND, v: 1, record_sha256: recordSha256, store_id: storeId, node_label: nodeLabel, claude_code_version: version,
+    step0b_sha256: step0bSha256, fidelity_sha256: fidelitySha256, fidelity, passed: failed.length === 0, failed, spend };
+}
+
+/** K1: the first field of a parsed re-pilot result that is not repilotResultOf's shape, or null: exactly its fields, its
+ *  kind and v, three shas, three non-empty texts, the boundaries and the failure words, the spend a non-negative safe
+ *  integer (K22 (a)), and `passed` exactly when `failed` is empty. Pinned against repilotResultOf's output. Pure.
+ *  @param {unknown} o  @returns {string | null} */
+export function repilotResultError(o) {
+  if (!plainObject(o)) return 'not-object';
+  if (Object.keys(o).sort().join(' ') !== [...REPILOT_RESULT_FIELDS].sort().join(' ')) return 'fields';
+  if (o.kind !== REPILOT_RESULT_KIND) return 'kind';
+  if (o.v !== 1) return 'v';
+  for (const k of ['record_sha256', 'step0b_sha256', 'fidelity_sha256']) if (typeof o[k] !== 'string' || !SHA256_RE.test(o[k])) return k;
+  for (const k of ['store_id', 'node_label', 'claude_code_version']) if (typeof o[k] !== 'string' || o[k] === '') return k;
+  if (!Array.isArray(o.fidelity) || !o.fidelity.every(plainObject)) return 'fidelity';
+  if (!Array.isArray(o.failed) || !o.failed.every((w) => typeof w === 'string' && w !== '')) return 'failed';
+  if (!nonNegativeInt(o.spend)) return 'spend';   // K22 (a): Task 2's count rule
+  if (o.passed !== (o.failed.length === 0)) return 'passed';
+  return null;
+}
+
+/** K1: the re-pilot's fidelity output as pilot-result --section quiz reads it, or the first word that is not: its kind, the
+ *  quiz section, this record and this node's store, a settings mode, a version, and boundaries pilotFailuresOf can read. */
+function repilotFidelityError(o, recordSha256, storeId) {
+  if (!plainObject(o) || o.kind !== FIDELITY_KIND || o.v !== 1) return 'shape kind';
+  if (o.section !== 'quiz') return 'section';
+  if (o.record_sha256 !== recordSha256) return 'record-mismatch';
+  if (o.store_id !== storeId) return 'store-mismatch';
+  if (!SETTINGS_MODES.includes(o.settings_mode)) return 'shape settings_mode';
+  if (typeof o.claude_code_version !== 'string' || o.claude_code_version === '') return 'shape claude_code_version';
+  const ok = (b) => plainObject(b) && typeof b.boundary_uuid === 'string' && ['measured', 'unmeasured'].includes(b.state) && typeof b.pass === 'boolean'
+    && (b.state === 'measured' || typeof b.why === 'string');
+  if (!Array.isArray(o.boundaries) || !o.boundaries.every(ok)) return 'shape boundaries';
+  return null;
+}
+
+// ── measuring and acting ──
+/** A section's batch manifests under --out, in batch order (Q14): each `<section>/arms/batches/NNNN.json` W2-5b1 Task 4's
+ *  writeArmManifest wrote; a name that is not NNNN.json is not a manifest (armBatchCount's rule), and no directory is no
+ *  manifest. A file it cannot read (a link, never followed, a directory, an unreadable file), bytes that are not JSON, or one
+ *  that is not this section's manifest of the batch its name gives, with a version and named runs, refuses out-refused
+ *  (D-5986, D-6309's rule): a run's version is never guessed. Read by the arm engine; exported for any later reader (K4).
+ *  @param {string} out  @param {'pilot' | 'quiz'} section */
+export function readArmManifests(out, section) {
+  armSectionOk('readArmManifests', section);
+  const rel = armBatchDir(section);
+  const st = lstatOrNull(out, rel);
+  if (st === null) return [];
+  if (!st.isDirectory()) refuse('out-refused', `${rel} is not a directory`);
+  let names;
+  try {
+    names = readdirSync(path.join(out, rel)).filter((n) => ARM_BATCH_FILE_RE.test(n)).sort();
+  } catch (e) {
+    refuse('out-refused', `${rel} unreadable ${errCode(e)}`);
+  }
+  return names.map((n) => {
+    const read = readPlain(path.join(out, rel, n), OUT_JSON_CAP);
+    if (read.state !== 'bytes') refuse('out-refused', `${rel}/${n} ${read.state === 'bad' ? badWord(read) : read.state}`);
+    let m;
+    try {
+      m = JSON.parse(read.bytes.toString('utf8'));
+    } catch {
+      refuse('out-refused', `${rel}/${n} is not JSON`);
+    }
+    const ok = plainObject(m) && m.kind === ARM_BATCH_KIND && m.section === section && `${String(m.batch).padStart(4, '0')}.json` === n
+      && typeof m.claude_code_version === 'string' && m.claude_code_version !== ''
+      && Array.isArray(m.runs) && m.runs.every((r) => plainObject(r) && typeof r.name === 'string');
+    if (!ok) refuse('out-refused', `${rel}/${n} is not a batch manifest`);
+    return m;
+  });
+}
+
+/** Every question's arms (questionArmsOf), with the manifests' run versions read once first when this node has a version
+ *  move (Q14), so a pass after a batch sees that batch's manifest. With no move nothing is read: W2-5b1's behaviour. */
+function armStatesOf(ctx, questions) {
+  ctx.runVersions = ctx.moves.length === 0 ? new Map() : runVersionsOf(readArmManifests(ctx.out, ctx.section));
+  return questions.map((q) => questionArmsOf(ctx, q));
+}
+
+/** W2-D56: a question's move and its arms there. With no version move for this node, the question stays where W2-5b1 runs
+ *  it (move null). Otherwise its move is the newest of this node's moves under which any arm has a recorded first attempt
+ *  (its run.json, W2-4's record of a spawned run), else null; if, there, it is half-done on another version than the one
+ *  the preflight now expects (versionSplitOf), it moves to the newest move, where both arms owe a first attempt. A settled
+ *  question never moves, so its answer records, written once, stay as they were. */
+function questionMoveOf(ctx, q) {
+  const at = (move) => RECALL_ARMS.map((arm) => ({ arm, ...armAttemptsOf(ctx, q, arm, move) }));
+  if (ctx.moves.length === 0) return { move: null, arms: at(null) };   // no version move for this node: W2-5b1's names
+  let move = null;
+  for (const m of ctx.moves) if (RECALL_ARMS.some((arm) => lstatOrNull(ctx.out, `${armRunName(ctx.section, q.qid, arm, 1, m.index)}.run.json`) !== null)) move = m.index;
+  const arms = at(move);
+  const split = versionSplitOf(arms, ctx.runVersions, ctx.expected.claude_code_version);
+  const next = moveAfterSplit({ qid: q.qid, move, newest: ctx.moves[ctx.moves.length - 1].index, split });
+  return next === move ? { move, arms } : { move: next, arms: at(next) };
+}
+
+/** K1: a finished re-pilot's --out hosts no other re-pilot act: its result is the one posted. */
+function refuseRepilotDone(out, who) {
+  if (lstatOrNull(out, REPILOT_RESULT_REL) !== null) refuse('out-refused', `${REPILOT_RESULT_REL} is here: ${who} on a fresh --out, one re-pilot per --out`);
+}
+
+/** K1: the re-pilot's pinned Claude Code version under --out, or null before its first spawn. A pin that does not read
+ *  (D-5986), is not JSON or not a pin refuses out-refused, and so does one of another record or node: one re-pilot per
+ *  --out, never two versions in one. */
+function readRepilotPin(out, recordSha256, storeId) {
+  const read = readPlain(path.join(out, REPILOT_VERSION_REL), OUT_JSON_CAP);
+  if (read.state === 'absent') return null;
+  if (read.state === 'bad') refuse('out-refused', `${REPILOT_VERSION_REL} ${badWord(read)}`);
+  let p;
+  try {
+    p = JSON.parse(read.bytes.toString('utf8'));
+  } catch {
+    refuse('out-refused', `${REPILOT_VERSION_REL} is not JSON`);
+  }
+  if (!plainObject(p) || p.kind !== REPILOT_VERSION_KIND || p.v !== 1 || typeof p.record_sha256 !== 'string' || typeof p.store_id !== 'string'
+    || typeof p.claude_code_version !== 'string' || p.claude_code_version === '') refuse('out-refused', `${REPILOT_VERSION_REL} is not a re-pilot version pin`);
+  if (p.record_sha256 !== recordSha256 || p.store_id !== storeId) {
+    refuse('out-refused', `${REPILOT_VERSION_REL} is another re-pilot's (record ${p.record_sha256}, store ${p.store_id}): one re-pilot per --out, so run this one on a fresh --out`);
+  }
+  return p.claude_code_version;
+}
+
+/** Q12, K1, W2-D56: the re-pilot's preflight values: this node's expected values with the Claude Code version replaced by
+ *  the one this re-pilot measures, so the move is recorded, never refused, while the stamp, wrapper and code checks hold.
+ *  Measured once per --out and pinned: the wrapper's sha, the gate (W2-D55), the `--version` spawn and the stop check, in
+ *  preflightSpawn's order; an unmeasured version refuses version-unmeasured through preflightVersion's one spelling.
+ *  Every later batch, a resumed act's and the re-pilot's other act's on the same --out, compares with the pin. */
+async function repilotExpectedOf({ out, recordSha256, storeId, launch, lang, gate, expected }) {
+  const pinned = readRepilotPin(out, recordSha256, storeId);
+  if (pinned !== null) return { ...expected, claude_code_version: pinned };
+  wrapperSha(launch);   // wrapper-unmeasured before any spawn
+  gate();
+  const version = await measureClaudeVersion(launch, out, lang);
+  refuseIfStopping();
+  const bad = preflightVersion({ claude_code_version: version.version }, { version });   // only version-unmeasured can answer
+  if (bad !== null) refuse(bad.word, bad.detail);
+  ensurePlainDir(out, 'quiz');
+  writePlain(out, REPILOT_VERSION_REL, canonicalJson({ kind: REPILOT_VERSION_KIND, v: 1, record_sha256: recordSha256, store_id: storeId,
+    claude_code_version: version.version }) + '\n');
+  return { ...expected, claude_code_version: version.version };
+}
+
+// A handler that takes deps after its env names that parameter driverEnv, never env (W2-4 Task 5's env scan).
+/** `fidelity --section quiz` (Q8, Q12, K1; W2-D76): the re-pilot's fidelity, on a named node during the window. In order:
+ *  its flags (no --allow-code-change, Q23); HOME; part 2 through loadArmRun('quiz') (gate_code first, W2-D24); the unusable
+ *  inputs and part 2's pilot.tolerance; the store, once, and armNodeOf (this node, its questions in qid order, its share of
+ *  spend_budget, W2-D56's expected); the ranges and refuseSpawnAdmission; this node's first n_fidelity distinct boundaries
+ *  (repilotBoundariesOf); all before prepareOut. Then the --out (never pilot-source's, never a finished re-pilot's), the
+ *  claim, the account, the gate, the pinned version (repilotExpectedOf), and Task 2's per-boundary measurement in box mode
+ *  under part 2's settings mode, each batch behind preflightSpawn against the pin. Writes quiz/fidelity.json and prints its
+ *  sha (D-5983); then a boundary that did not pass, or fewer than n_fidelity, refuses pilot-failed (K3, K13). */
+async function fidelityRepilotCommand(flags, driverEnv, deps) {
+  checkFlags('fidelity --section quiz', flags);
+  const home = subcommandHome(driverEnv);
+  const run = loadArmRun(flags, 'quiz', { nowMs: (deps.now ?? Date.now)() });   // W2-D24 (fidelity --section quiz): gate_code first
+  const r = run.record;
+  refuseUnusableInputs(home, flags.out, [['arm-model', r.arm_model]]);
+  const tolerance = decimalOf(r.pilot?.tolerance);
+  refuseRangeRows([['pilot.tolerance', tolerance !== null]]);
+  const rs = openReplayStore(home);   // the run's one store open, read-only, before --out (D-6311)
+  try {
+    const node = armNodeOf(run, rs.storeId);
+    refuseOutOfRangeValues({ budget: node.budget, budgetField: 'spend_budget', limits: node.limits, quotas: null, batch: true });
+    const heads = repilotBoundariesOf(node.questions, r.pilot.n_fidelity);
+    refuseSpawnAdmission({ home, accountId: node.account, limits: node.limits, expected: node.expected });   // D-6307, D-6311
+    const out = prepareOut(flags.out);
+    refuseColonInRealOut(out);
+    refusePilotSourceOut(out, 'fidelity --section quiz runs');   // Q25
+    refuseRepilotDone(out, 'fidelity --section quiz runs');   // K1
+    const claim = claimOut(out);
+    try {
+      const { json, roster } = readRoster(home);
+      const launch = admitAccount(json, roster, node.account, home);
+      const gate = batchGate({ out, home, accountId: launch.accountId, budget: node.budget, limits: node.limits });
+      const lang = driverEnv.LANG;
+      const expected = await repilotExpectedOf({ out, recordSha256: run.recordSha256, storeId: rs.storeId, launch, lang, gate, expected: node.expected });
+      const { boundaries } = await fidelityBoundariesOf({ rs, home, heads, deps, tolerance, gate, claim, concurrency: node.limits.concurrency,
+        // K26, K28: fidelityBoundariesOf admits each boundary's retained readings and agrees its stdins over every one.
+        spawnPre: () => preflightSpawn({ launch, home, out, lang, gate, expected }),   // W2-D56 against the pin, before every batch
+        jobOf: (boundaryUuid, runName, stdin) => {
+          const job = { launch, mode: 'box', model: r.arm_model, settingsMode: node.settingsMode, stdin, out,
+            name: `quiz/${fidelityRunName(boundaryUuid, runName)}`, lang };
+          return deps.timeoutMs === undefined ? job : { ...job, timeoutMs: deps.timeoutMs };
+        } });
+      ensurePlainDir(out, 'quiz');
+      writePlain(out, REPILOT_FIDELITY_REL, canonicalJson({ kind: FIDELITY_KIND, v: 1, section: 'quiz', record_sha256: run.recordSha256,
+        frozen_sha256: run.frozen.sha256, store_id: rs.storeId, settings_mode: node.settingsMode, model: r.arm_model,
+        claude_code_version: expected.claude_code_version, tolerance: { num: tolerance.num, den: tolerance.den }, n_fidelity: r.pilot.n_fidelity,
+        boundaries, budget: node.budget, spend: spentSoFar(out) }) + '\n');
+      process.stderr.write(`sha256 ${shaOfPlain(out, REPILOT_FIDELITY_REL)}\n`);   // D-5983: printed whatever it showed
+      const failures = pilotFailuresOf({ boundaries, nFidelity: r.pilot.n_fidelity, absent: NO_ABSENT, step0bFailures: [], settingsMismatches: [] });
+      if (failures.length > 0) refuse('pilot-failed', `fidelity quiz: ${failures.join('; ')}`);   // K3, K13
+      return EXIT.OK;
+    } finally {
+      claim.release();
+    }
+  } finally {
+    rs.close();
+  }
+}
+
+/** `pilot-result --section quiz` (Q12, K1, K3, K13): the re-pilot result. In order: its flags; part 2 (gate_code first,
+ *  W2-D24; no --allow-code-change, Q23); step 0b's result with its sha (Task 2's step0bOf, the quiz section; its node one of
+ *  the record's, its batches' versions); the quiz fidelity output with its sha, held to this record and node; then the
+ *  --out, which must exist (never made here) and be neither pilot-source's (Q25) nor a finished re-pilot's, the claim,
+ *  the pin, which every version must equal. The failures are Task 2's
+ *  pilotFailuresOf over the fidelity boundaries, n_fidelity, step 0b's failed and unmeasured checks and any settings mode
+ *  that is not part 2's. Writes quiz/repilot-result.json and prints its sha (D-5983); then a failed re-pilot refuses
+ *  pilot-failed (K3). Reads no HOME and spawns nothing. */
+export async function repilotResultCommand(flags, driverEnv, deps = { now: () => Date.now() }) {
+  checkFlags('pilot-result --section quiz', flags);
+  const rec = loadFinalRecord(flags, { nowMs: deps.now() });   // W2-D24 (pilot-result --section quiz): gate_code before any other input
+  const r = rec.record;
+  const s0 = loadInput('step0b', flags.step0b, flags['step0b-sha256']);
+  const step0b = step0bOf(s0, rec.sha256, 'quiz');   // Task 2's reader (K4), the re-pilot's section
+  const s0v = s0.value;
+  const node = r.nodes.find((n) => n.store_id === s0v.store_id);
+  if (node === undefined) refuse('input-invalid', `step0b store ${String(s0v.store_id)} is not one of the record's nodes`);
+  if (!Array.isArray(s0v.batches) || s0v.batches.length === 0 || !s0v.batches.every((b) => plainObject(b) && typeof b.claude_code_version === 'string')) {
+    refuse('input-invalid', 'step0b shape batches');
+  }
+  const fid = loadInput('fidelity', flags.fidelity, flags['fidelity-sha256']);
+  const fbad = repilotFidelityError(fid.value, rec.sha256, node.store_id);
+  if (fbad !== null) refuse('input-invalid', `fidelity ${fbad}`);
+  try {   // the re-pilot's --out is read, never made: its earlier acts wrote it (W2-5a's R10: no --out for a refusal)
+    if (typeof flags.out === 'string' && path.isAbsolute(flags.out)) lstatSync(path.resolve(flags.out));
+  } catch (e) {
+    if (e?.code === 'ENOENT') refuse('input-invalid', `--out holds no re-pilot: step0b --section quiz writes ${REPILOT_VERSION_REL} there first`);
+  }
+  const out = prepareOut(flags.out);
+  refuseColonInRealOut(out);
+  refusePilotSourceOut(out, 'pilot-result --section quiz writes');   // Q25, one spelling (Task 1's, K4)
+  refuseRepilotDone(out, 'pilot-result --section quiz writes');   // K1
+  const claim = claimOut(out);
+  try {
+    const pinned = readRepilotPin(out, rec.sha256, node.store_id);
+    if (pinned === null) refuse('input-invalid', `${REPILOT_VERSION_REL} absent: step0b --section quiz writes it first`);
+    const s0Versions = s0v.batches.map((b) => b.claude_code_version);
+    if (![...s0Versions, fid.value.claude_code_version].every((v) => v === pinned)) {
+      refuse('input-invalid', `repilot version-split: pinned ${pinned}, step0b ${s0Versions.join(' ')}, fidelity ${fid.value.claude_code_version}`);
+    }
+    const p2Mode = r.pilot_result.settings_mode;
+    const settingsMismatches = [['step0b', step0b.settingsMode], ['fidelity', fid.value.settings_mode]].filter(([, mode]) => mode !== p2Mode)
+      .map(([what, mode]) => `${what} ran under ${mode}, part 2 under ${p2Mode}`);   // K13
+    const failed = pilotFailuresOf({ boundaries: fid.value.boundaries, nFidelity: r.pilot.n_fidelity, absent: NO_ABSENT,
+      step0bFailures: [...step0b.failed.map((c) => `${c} failed`), ...step0b.unmeasured.map((c) => `${c} unmeasured`)], settingsMismatches });
+    const result = repilotResultOf({ recordSha256: rec.sha256, storeId: node.store_id, nodeLabel: node.label, version: pinned,
+      step0bSha256: step0b.sha256, fidelitySha256: fid.sha256, fidelity: fid.value.boundaries, failed,
+      spend: spentSoFar(out) });   // K22 (a): the re-pilot's charge on its own --out, under the claim
+    ensurePlainDir(out, 'quiz');
+    writePlain(out, REPILOT_RESULT_REL, canonicalJson(result) + '\n');
+    process.stderr.write(`sha256 ${shaOfPlain(out, REPILOT_RESULT_REL)}\n`);   // D-5983: the sha the version move names
+    if (!result.passed) refuse('pilot-failed', `repilot ${node.label}: ${failed.join('; ')}`);   // K3
+    return EXIT.OK;
+  } finally {
+    claim.release();
+  }
+}
+
+/** `open --amend` (W2-D90; Q12, Q13; K1, K3, K6; decisions §5 act 21). In order: the form's flags; the kind, one of the
+ *  gate's AMENDMENT_KINDS, and its detail flags (AMEND_DETAILS: another kind's refused, its own required, a text never
+ *  empty, a release tag only on a named node, one node at most, an act not after now); part 2 through loadFinalRecord (its
+ *  chain beside --part1, --frozen and, for an amended record, --supersedes; W2-D24's re-check first, before any other
+ *  input; its ranges); the node, one of the record's; for a version move, the re-pilot result, its sha checked before its
+ *  bytes are parsed, its shape, its record, its node, its version and its pass. Then the record with the amendment
+ *  appended, the gate's validator against part 1, the frozen list and the record it supersedes (after window start, an
+ *  append and nothing else), and the part 2 ranges (R30). Prints the record and its sha on stderr; reads no HOME, spawns
+ *  nothing, writes nothing. */
+async function openAmend(flags, driverEnv, deps) {
+  checkFlags('open --amend', flags);
+  const kind = flags.kind;
+  if (!AMENDMENT_KINDS.includes(kind)) refuse('args-invalid', `kind ${JSON.stringify(kind)} is not one of ${AMENDMENT_KINDS.join(', ')}`);
+  const spec = AMEND_DETAILS[kind];
+  for (const k of AMEND_FLAGS) if (flags[k] !== undefined && !spec.required.includes(k) && !spec.optional.includes(k)) refuse('args-invalid', `--${k} is not a ${kind} flag`);
+  for (const k of spec.required) if (flags[k] === undefined) refuse('args-invalid', `${k}-required`);
+  for (const k of AMEND_TEXT_FLAGS) if (flags[k] === '') refuse('args-invalid', `--${k} is empty`);
+  const labels = /** @type {string[]} */ (flags['node-label'] ?? []);
+  if (flags['release-tag'] !== undefined && labels.length === 0) refuse('args-invalid', '--release-tag needs --node-label: a freeze exception installs a release on one node (W2-D6)');
+  if (labels.length > 1) refuse('args-invalid', `--node-label is given ${labels.length} times; open --amend names one node`);
+  const nowMs = deps.now();
+  if (flags['act-ms'] !== undefined && flags['act-ms'] > nowMs) refuse('args-invalid', `--act-ms ${flags['act-ms']} is after now, ${nowMs}`);
+  const rec = loadFinalRecord(flags, { nowMs });   // W2-D24 (open --amend): gate_code before any other input (Q23: no flag)
+  const draft = loadInput('part1', flags.part1, flags['part1-sha256'], RECORD_WORDS).value;   // the validator's ctx; its sha checked again
+  const label = labels.length === 0 ? null : labels[0];
+  if (label !== null && !rec.record.nodes.some((n) => n.label === label)) refuse('args-invalid', `--node-label ${label} names no node of the record`);
+  let repilotSha256 = null;
+  if (kind === VERSION_MOVE_KIND) {   // Q12, K1: the re-pilot result; its sha is the amendment's repilot_sha256
+    const repilot = loadInput('repilot', flags.repilot, flags['repilot-sha256']);
+    const bad = repilotResultError(repilot.value);
+    if (bad !== null) refuse('input-invalid', `repilot shape ${bad}`);
+    const rp = repilot.value;
+    const node = rec.record.nodes.find((n) => n.label === label);
+    if (rp.record_sha256 !== rec.sha256) refuse('input-invalid', `repilot record-mismatch: re-piloted under ${rp.record_sha256}, amending ${rec.sha256}`);
+    if (rp.node_label !== label || rp.store_id !== node.store_id) refuse('input-invalid', `repilot node-mismatch: re-piloted ${rp.node_label} (${rp.store_id}), amending ${label} (${node.store_id})`);
+    if (rp.claude_code_version !== flags['claude-code-version']) {
+      refuse('input-invalid', `repilot version-mismatch: measured ${JSON.stringify(rp.claude_code_version)}, amending to ${JSON.stringify(flags['claude-code-version'])}`);
+    }
+    if (!rp.passed) refuse('pilot-failed', `repilot ${label}: ${rp.failed.join('; ')}`);   // K3
+    repilotSha256 = repilot.sha256;
+  }
+  const amendment = amendmentOf({ kind, nodeLabelRef: label, atMs: nowMs, detail: spec.detail(flags, repilotSha256) });
+  const amended = amendedFinal(rec.record, rec.sha256, amendment, nowMs);
+  const v = validateOpenRecord(amended, { draft, predecessor: rec.record, frozen: { families: rec.frozen.families, n_questions: rec.frozen.list.entries.length } });
+  if (!v.ok) refuse('record-invalid', v.errors.map((e) => `${e.path} ${e.word}`).join('; '));
+  refuseOutOfRangeValues({ budget: amended.spend_budget, budgetField: 'spend_budget', limits: amended.limits, quotas: null, part2: amended });   // loadFinalRecord's ranges (S2's C22, R30); defence
+  return printWithSha(amended);
+}
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised
 // when main runs. Importing the module (the tests do) runs nothing. The exit code is set, never forced, so stderr drains.

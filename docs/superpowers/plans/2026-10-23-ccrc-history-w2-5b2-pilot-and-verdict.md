@@ -5446,7 +5446,7 @@ EOF
       ['--kind', 'version-move', '--node-label', o.label ?? 'node-a', '--claude-code-version', o.version ?? 'v-b', ...inp('repilot', rp)];
     const FREEZE3 = ['--kind', 'freeze-exception', '--surface', 'deploy/history-replay.mjs', '--ruling', 'fixture ruling 1'];
     const FORCED3 = ['--kind', 'forced-act', '--act', 'prune --apply', '--act-ms', String(AFTER3 - 60_000)];
-    const frozen3 = (c: R7): R7 => ({ families: c.frozen.families, n_questions: 5 });
+    const frozen3 = (c: R7): { families: Array<{ store_id: string; ccrc_id: string; generation: string }>; n_questions: number } => ({ families: c.frozen.families, n_questions: 5 });
 
     r7it('a version move: part 2 superseding the record, one amendment appended in the validator\'s shape with its node and the re-pilot result\'s sha, its sha on stderr; nothing else moves (W2-D90, Q12, Q13, K1)', async () => {
       const c = chain7(home7(null));
@@ -5989,7 +5989,7 @@ b23Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 3: open --amend t
     b23Expect(q2Moved.map((x) => x.stdin_sha256), 'both payloads are pinned from that one fresh preflight').toHaveLength(2);
     b23Expect((ms[1]!.runs as W5b4R[])[0]!.stdin_sha256, 'the new-move payload is rebuilt at its fresh preflight, not reused from the old attempt')
       .not.toBe((ms[0]!.runs as W5b4R[])[2]!.stdin_sha256);
-    b23Expect(initialRuns.filter((x) => x.env.CCRC_RECALL_ASOF === q2.boundary_uuid).map((x) => x.env.CCRC_RECALL_ARM), 'initial slice: q2 starts with its one completed arm').toEqual([W5B4_CONTROL]);
+    b23Expect(initialRuns.filter((x) => x.env.CCRC_RECALL_ASOF === q2.boundary_uuid).map((x) => x.env.CCRC_RECALL_ARM), 'initial slice: q2 spawns both arms, its control completing and its treatment failing as infrastructure').toEqual([W5B4_CONTROL, W5B4_TREATMENT]);
     b23Expect(versionBRuns.filter((x) => x.env.CCRC_RECALL_ASOF === q2.boundary_uuid).map((x) => x.env.CCRC_RECALL_ARM), 'version-b slice: both replacement arms spawn, never D-6482-excluded').toEqual([W5B4_CONTROL, W5B4_TREATMENT]);
     b23Expect(versionCRuns.filter((x) => x.env.CCRC_RECALL_ASOF === q3.boundary_uuid).map((x) => x.env.CCRC_RECALL_ARM), 'version-c slice: both replacement arms spawn, never D-6482-excluded').toEqual([W5B4_CONTROL, W5B4_TREATMENT]);
     W5B4_ARMS.forEach((arm, i) => b23Expect(readFileSync(join(fx.out, 'quiz', 'answers', `${q1.qid as string}.${arm}.json`), 'utf8'),
@@ -7543,6 +7543,8 @@ git commit -m "feat(history-replay): version moves: the mid-window re-pilot (ste
 ```
 
 This task found no departure and defines no number.
+
+Measured at the base 77ccc4e12 (Task 3), recorded over the predictions above. Step 0: every count and name as predicted, with two reading notes. `AMENDMENT_KINDS` counted 1, not 0, because the base names it in a JSDoc comment on the version-move kind (the import itself was absent, so edit (a) was needed as written); and the section-refusal `grep -n` printed Task 2's two lines only, because its escaped pattern for Task 1's line did not match under the shell's quoting (the line is there, a `grep -n "step0b wants"` finds it). Step 2: 75 failed, 0 passed, as predicted. Step 4: 74 passed, 1 failed, not 75 passed. The prediction in the K27 integration case, that the initial slice spawns only q2's control (`[W5B4_CONTROL]`), did not hold: with concurrency 1 the first pass runs q2's control, which answers, and then q2's treatment, which fails as infrastructure and pushes the limits row past the threshold, so q3 is stopped. q2 therefore spawned both arms in that slice (`[W5B4_CONTROL, W5B4_TREATMENT]`), and the assertion and its message are corrected in the fixture above and in the test file; the case's later assertions (the manifest names, the two replacement arms of each move, the settled q1 untouched) held unchanged. The re-pilot's fidelity cases inject `original` through `b23FidDeps` (K29 reaches the pilot's real `fidelityOriginalOf`, which this task's quiz form calls only with its default deps), so no quiz fidelity case needed a rostered config dir or a transcript under the fixture HOME. Step 7's `typecheck-tests` was red on the first run, not green: `frozen3` was typed as a loose record, and `validateOpenRecord`'s `frozen` argument wants `{ families, n_questions }` (three TS2739 errors in the nested describe); it is now typed to that shape in the fixture above and in the test file, and the suite is green. Step 5: the whole file, 1449 passed. Step 6: all 53 mutants (M1 to M21, E0 to E10, X1 to X5, P1 to P16) were measured red with the failure counts predicted (M1 4, M2 13, M3 4, M4 2, M5 2, M6 1, M7 2, M8 1, M9 4, M10 1, M11 3, M12 4, M13 2, M14 1, M15 1, M16 1, M17 1, M18 2, M19 2, M20 44, M21 1, E0 1, E1 2, E2 2, E3 1, E4 1, E5 1, E6 1, E7 1, E8 5, E9 1, E10 4, X1 2, X2 2, X3 2, X4 4, X5 1, P1 2, P2 1, P3 1, P4 2, P5 1, P6 1, P7 1, P8 1, P9 1, P10 1, P11 3, P12 1, P13 1, P14 1, P15 1 with its CONTROL green, P16 1 with its CONTROL green); the driver was restored byte for byte after each (`cmp` silent). E0's red is the manifest assertion: the carried old sibling enters D-6482's branch, so q2's pair never runs on the new version.
 
 ### Task 4: `handcheck --sheet` over every node's judged file, blinded, and the strict label reader (W2-D81, W2-D54, W2-D24; Q2, Q18, Q19, Q23)
 
