@@ -23532,7 +23532,7 @@ b2t1Describe.skipIf(process.platform === 'darwin')('W2-5b2 Task 1 fix round 2: t
       b2t1Expect(r.refusal, JSON.stringify(bad)).toEqual({ word: 'args-invalid', detail: 'HOME is unset or not absolute' });
       b2t1Expect(existsSync(fx.out as string), `${JSON.stringify(bad)}: no --out`).toBe(false);
     }
-    for (const suffix of ['.claude', '/etc/claude', '../up', 'a/../../b']) b2t1Expect(path.isAbsolute(join(path.resolve(home), suffix)), suffix).toBe(true);
+    const { json, roster } = readRoster(home); const launch = admitAccount(json, roster, fx.draft.account as string, home); b2t1Expect([launch.configDir, path.isAbsolute(launch.configDir)], 'the configDir step 0b hands persistenceMeasured is the driver\'s join of the absolute HOME and the roster suffix').toEqual([join(home, '.claude'), true]);
     b2t1PlantAll(home, 'restricted');
     const ok = await b2t1Run(home, fx.argv());
     b2t1Expect([ok.refusal, ok.code], `CONTROL: ${ok.stderr}`).toEqual([null, 0]);
@@ -24564,4 +24564,108 @@ w27Describe('W2-7 Task 3: verifyAbOf names each defect of a family entry by its 
     w27Expect(await f4Refused(w)).toEqual({ word: 'input-invalid',
       detail: `verify-ab ${s1} lists ${JSON.stringify(f.ccrc_id)} under arm ${JSON.stringify(other(f.arm as string))}, not the record's ${JSON.stringify(f.arm)}` });
   });
+});
+
+// ── W2-7 Task 4: the realpath colon check at W2-5b2's five call sites (CP-27 F2, A9; D-5813) ──────────────────────────
+
+/** A directory `a:b` under a fresh base, and a symlink `link` to it: `link/out` spells no colon, its realpath holds one. */
+function w27Colon(): { base: string; link: string; real: string } {
+  const base = mkTmp('ccrc-w27-colon-');
+  mkdirSync(join(base, 'a:b'));
+  symlinkSync(join(base, 'a:b'), join(base, 'link'));
+  return { base, link: join(base, 'link', 'out'), real: join(base, 'a:b', 'out') };
+}
+/** The CONTROL: the same with a directory named `ab`, so the colon is the only difference. */
+function w27Plain(): { link: string; real: string } {
+  const base = mkTmp('ccrc-w27-plain-');
+  mkdirSync(join(base, 'ab'));
+  symlinkSync(join(base, 'ab'), join(base, 'link'));
+  return { link: join(base, 'link', 'out'), real: join(base, 'ab', 'out') };
+}
+const w27Out = (argv: string[], out: string): string[] => argv.map((v, i) => (i > 0 && argv[i - 1] === '--out' ? out : v));
+const COLON = { word: 'args-invalid', detail: "out contains ':'" };
+
+w27Describe.skipIf(process.platform === 'darwin')('W2-7 Task 4: an --out whose realpath holds a colon is refused args-invalid at each of W2-5b2\'s five call sites, before any spawn and any result (CP-27 F2, D-5813)', () => {
+  w27It('C-STEP0B: step0b --section pilot', async () => {
+    const home = b2t1Home();
+    const fx = b2t1Pilot(home);
+    b2t1PlantAll(home, 'restricted');
+    const c = w27Colon();
+    const r = await b2t1Run(home, w27Out(fx.argv(), c.link));
+    w27Expect(r.refusal, r.stderr).toEqual(COLON);
+    w27Expect(stubLog(home), 'nothing was spawned before the check').toBeNull();
+    w27Expect(existsSync(join(c.real, 'pilot', 'step0b')), 'no result was written').toBe(false);
+  }, 120_000);
+
+  w27It('C-FID: fidelity --section pilot', async () => {
+    const home = b2t2Home();
+    b2t2PlantPass(home);
+    const fx = b2t2Fidelity(home);
+    const c = w27Colon();
+    const r = await b2t2Call(() => B2.fidelityCommand(b2t2Flags(w27Out(fx.argv, c.link)), B2T2_ENV(home), b2t2Deps()));
+    w27Expect(r.refusal, r.stderr).toEqual(COLON);
+    w27Expect(stubLog(home), 'nothing was spawned before the check').toBeNull();
+    w27Expect(existsSync(join(c.real, 'fidelity.json')), 'no result was written').toBe(false);
+  }, 120_000);
+
+  w27It('C-RESULT: pilot-result --section pilot, over a real passing --out moved under the colon directory', async () => {
+    const home = b2t2Home();
+    const p = b2t2PilotOut(home);
+    const c = w27Colon();
+    w27Rename(p.out, c.real);
+    const r = await b2t2Call(() => B2.pilotResultCommand(b2t2Flags(w27Out(p.argv(), c.link)), B2T2_ENV(home)));
+    w27Expect(r.refusal, r.stderr).toEqual(COLON);
+    w27Expect(existsSync(join(c.real, 'pilot-result.json')), 'no result was written').toBe(false);
+    w27Expect(r.stderr, 'nothing was printed').toBe('');
+  }, 120_000);
+
+  w27It('C-RESULT-PLAIN: CONTROL, the same --out moved under a directory with no colon is read and answered', async () => {
+    const home = b2t2Home();
+    const p = b2t2PilotOut(home);
+    const c = w27Plain();
+    w27Rename(p.out, c.real);
+    const r = await b2t2Call(() => B2.pilotResultCommand(b2t2Flags(w27Out(p.argv(), c.link)), B2T2_ENV(home)));
+    w27Expect(r.refusal, r.stderr).toBeNull();
+    w27Expect(existsSync(join(c.real, 'pilot-result.json')), 'the result was written').toBe(true);
+  }, 120_000);
+
+  w27It('C-REFID: fidelity --section quiz', async () => {
+    const fx = b23RepilotNode();
+    const c = w27Colon();
+    const r = await b23Fidelity(fx, c.link);
+    w27Expect(r.refusal, r.stderr).toEqual(COLON);
+    w27Expect(stubLog(fx.home as string), 'nothing was spawned before the check').toBeNull();
+    w27Expect(existsSync(join(c.real, 'quiz', 'fidelity.json')), 'no result was written').toBe(false);
+  }, 300_000);
+
+  /** The re-pilot's step 0b and fidelity written under a plain --out, their two inputs COPIED out (never saved in place: the
+   *  --out moves, and repilotResultCommand loads both inputs before it reaches the colon check). */
+  const w27Repilot = async (): Promise<{ fx: W5b4R; s0: W5b4Saved; fid: W5b4Saved; rout: string }> => {
+    const fx = b23RepilotNode();
+    const rout = w5b4Out();
+    w27Expect((await b23Step0b(fx, rout)).refusal, 'step 0b').toBeNull();
+    w27Expect((await b23Fidelity(fx, rout)).refusal, 'fidelity').toBeNull();
+    const s0 = w5b4SaveText(readFileSync(join(rout, 'quiz', 'step0b', 'restricted.json'), 'utf8'), 'restricted.json');
+    const fid = w5b4SaveText(readFileSync(join(rout, 'quiz', 'fidelity.json'), 'utf8'), 'fidelity.json');
+    return { fx, s0, fid, rout };
+  };
+
+  w27It('C-RERES: pilot-result --section quiz, over a real passing --out moved under the colon directory', async () => {
+    const { fx, s0, fid, rout } = await w27Repilot();
+    const c = w27Colon();
+    w27Rename(rout, c.real);
+    const r = await b23Result(fx, c.link, s0, fid);
+    w27Expect(r.refusal, r.stderr).toEqual(COLON);
+    w27Expect(existsSync(join(c.real, 'quiz', 'repilot-result.json')), 'no result was written').toBe(false);
+    w27Expect(r.stderr, 'nothing was printed').toBe('');
+  }, 300_000);
+
+  w27It('C-RERES-PLAIN: CONTROL, the same --out moved under a directory with no colon is read and answered', async () => {
+    const { fx, s0, fid, rout } = await w27Repilot();
+    const c = w27Plain();
+    w27Rename(rout, c.real);
+    const r = await b23Result(fx, c.link, s0, fid);
+    w27Expect(r.refusal, r.stderr).toBeNull();
+    w27Expect(existsSync(join(c.real, 'quiz', 'repilot-result.json')), 'the result was written').toBe(true);
+  }, 300_000);
 });
