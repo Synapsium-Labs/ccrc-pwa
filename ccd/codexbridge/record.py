@@ -210,12 +210,12 @@ NAME_KEY = "name"  # a tool's or a function call's name: `tool_fx<n>`, one per d
 # The only string values kept as they are: what Task 3's corpus reader (`sse.SseParser`, whose event type is
 # `data.type`, and `reducer.Reducer`) needs to parse and replay a stream. STRUCTURAL_KEYS anywhere: `type` names the
 # event, the item and each part; `status`, `role` and `phase` the item and the message; `object` the response.
-# TERMINAL_KEYS only in a terminal's place: `reason` in `incomplete_details` (`reducer`'s incomplete reason) and
-# `code` in an `error` object or a top-level `error` event (`errors.classify_failed`), because a `code` elsewhere can
-# be content (a code interpreter call's source). Every other string is rewritten (`_synthetic`), whatever its key.
+# TERMINAL_KEYS, each only in the one object it maps to: `reason` in `incomplete_details` (`reducer`'s incomplete
+# reason), and `code` or a string `error` in an `error` object or a top-level `error` event (`errors.classify_failed`,
+# whose `_names` reads a string `error` when there is no `code`), because either key elsewhere can be content (a code
+# interpreter call's source); a dict under `error` is recursed into. Every other string is rewritten (`_synthetic`).
 STRUCTURAL_KEYS = frozenset({"type", "status", "role", "phase", "object"})
-# Each TERMINAL_KEYS key maps to the one object it is kept in.
-TERMINAL_KEYS = {"reason": "incomplete_details", "code": "error"}  # type: Dict[str, str]
+TERMINAL_KEYS = {"reason": "incomplete_details", "code": "error", "error": "error"}  # type: Dict[str, str]
 MALFORMED_LINE = 'data: {"malformed"'
 
 # What a scrubbed stream must not hold. Each pattern is searched in the whole output text. `encrypted-content` and

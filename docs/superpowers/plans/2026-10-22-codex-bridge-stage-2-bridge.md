@@ -3375,8 +3375,10 @@ written `D-TBD-<slug>` and named in the task's report.
   :279), through `server.load_auth_lib`.
 - **Why:** The probe is an operator CLI run with no tier environment, so it has no owner environment to receive the
   paths from. It is a separate process, not a second reader inside the bridge.
-- **Cost if wrong:** If an owner's path moves, the probe looks in the old place and refuses `no-marker` or
-  `lane-unknown` until its spelling follows. No test pins the two spellings equal.
+- **Cost if wrong:** If an owner's path moves, the probe looks in the old place and refuses until its spelling
+  follows: a moved lane directory with `no-marker` or `lane-unknown` (`ccd/codexbridge/liveprobe.py:126-127`,
+  :132-133), a moved catalogue with `no-catalogue` (:251-253), and a moved auth library, when `CCRC_CODEX_AUTH_LIB` is
+  unset, with `auth-library-absent` (:279-283, `ccd/codexbridge/errors.py:79`). No test pins the spellings equal.
 
 ### D-6955 — the probe refuses a lane.json the bridge would refuse
 
@@ -3425,8 +3427,9 @@ written `D-TBD-<slug>` and named in the task's report.
 
 ### D-6958 — account removal reaps the probe count's and the stats file's tmp
 
-- **Departs from:** The bridge's contract (plan :287-290), "Removal reaps all four" markers, and Task 11's reap list
-  (plan :1360-1362), which name no tmp file.
+- **Departs from:** Task 11's reap list (plan :1360-1362), which names the four markers (`liveprobe.count` among
+  them), the stats file and the store, and no tmp file. The ledger commit amended the contract's reap sentence (plan
+  :287-290) to match, so it now names both tmp files.
 - **What changed:** `_codex_reap_files` also removes `liveprobe.count.tmp` and `<bridgeFiles.stats>.tmp`, the second
   derived from the stats name lane.json carries (`ccd/ccrc:13217-13220`, :13246). The removal case lists both
   leftovers (`server/test/ccrc-codex-bridge.test.ts:357`, :362), with rows Z11a and Z11b.

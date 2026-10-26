@@ -433,7 +433,9 @@ describe.skipIf(!PY)('the scrubber: a recording becomes a corpus stream (codex-b
   // scrubber has never heard of cannot reach the public corpus. Each sentinel sits under a key outside the old content
   // list: a web search's query, an image generation's revised prompt and result, a tools echo's enum and default, a
   // code interpreter's source under `code` (kept only in an error), and a tool's name, which maps to one `tool_fx<n>`
-  // in the echo and in the call alike, so the call still names its tool. An error event's code is kept.
+  // in the echo and in the call alike, so the call still names its tool. An error event's code is kept, and so is a
+  // bare-string `error` code (errors._names reads it when there is no `code`), so the event classifies the same.
+  const BARE_ERROR = { error: 'usage_limit_reached', resets_in_seconds: 60 };
   it('the scrubber rewrites every string but a structural one, and gives a tool one synthetic name', async () => {
     const home = mkTmp('cb-live-scrub-every-');
     const inFile = path.join(home, 'in.sse');
@@ -456,7 +458,8 @@ describe.skipIf(!PY)('the scrubber: a recording becomes a corpus stream (codex-b
       + ev('response.output_item.done', { output_index: 3, item: { type: 'code_interpreter_call', id: 'ci_fx1', status: 'completed',
         code: 'print("SentinelCode")' } })
       + ev('response.completed', { response: { id: 'resp_fx1', object: 'response', status: 'completed', tools, usage: usage() } })
-      + ev('error', { code: 'server_is_overloaded', message: 'SentinelMessage' }));
+      + ev('error', { code: 'server_is_overloaded', message: 'SentinelMessage' })
+      + ev('error', BARE_ERROR));
     const r = await runCli(home, RECORD_PY, ['scrub', inFile, outFile]);
     expect(r.status, r.stderr).toBe(0);
     const out = readFileSync(outFile, 'utf8');
@@ -466,12 +469,29 @@ describe.skipIf(!PY)('the scrubber: a recording becomes a corpus stream (codex-b
     const data = out.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)) as Json);
     // the structure the corpus reader needs is kept: event, item and part types, statuses, the response object
     expect(data.map((d) => d.type)).toEqual(['response.created', 'response.output_item.done', 'response.output_item.done',
-      'response.output_item.done', 'response.output_item.done', 'response.completed', 'error']);
+      'response.output_item.done', 'response.output_item.done', 'response.completed', 'error', 'error']);
     expect(data.slice(1, 5).map((d) => [d.item.type, d.item.status])).toEqual([['web_search_call', 'completed'],
       ['image_generation_call', 'completed'], ['function_call', 'completed'], ['code_interpreter_call', 'completed']]);
     expect(data[0].response.object).toBe('response');
     expect(data[0].response.tools[0].parameters.properties.target.type).toBe('string');
     expect(data[6].code).toBe('server_is_overloaded');
+    expect(data[7].error).toBe('usage_limit_reached');
+    // the reducer's classifier gives the bare-string error the same row before and after the scrub
+    const script = [
+      'import json, sys',
+      'sys.dont_write_bytecode = True',
+      'sys.path.insert(0, sys.argv[1])',
+      'from codexbridge import errors',
+      'rows = [errors.classify_failed(e, now=0.0) for e in json.loads(sys.argv[2])]',
+      'print(json.dumps([[e.kind, e.code, e.status, e.etype, e.message, e.headers] for e in rows]))',
+    ].join('\n');
+    const c = spawnSync(PY!, ['-I', '-c', script, CCD_DIR, JSON.stringify([{ type: 'error', ...BARE_ERROR }, data[7]])], {
+      encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+    });
+    expect(c.status, c.stderr).toBe(0);
+    const [before, after] = JSON.parse(c.stdout) as unknown[][];
+    expect(before.slice(0, 2)).toEqual(['billing', 'usage_limit_reached']);
+    expect(after).toEqual(before);
     // one synthetic name for the tool, in both echoes and in the call
     const names = [data[0].response.tools[0].name, data[3].item.name, data[5].response.tools[0].name];
     expect(names[0]).toMatch(/^tool_fx[0-9]+$/);
@@ -873,8 +893,9 @@ describe.skipIf(!PY)('the live probe: the first live step, bounded (codex-bridge
 // tree"), but by the shape of a write, since these names are also read, reaped and named in prose: no code line of
 // shipped code (ccd, shared, deploy, server/src, agent/src) that names either marker, or the Python constant that
 // spells it, writes it (a touch, a `>` redirect, a copy, move or link onto it, an open for writing, a writeFile). The
-// two constants' definitions and their reads pass. KNOWN WIDTH: a write whose path was built on another line, or a name
-// assembled from pieces, is not seen; the bar is the ordinary write.
+// two constants' definitions and their reads pass. KNOWN WIDTH: a write whose path was built on another line, a name
+// assembled from pieces, an open whose mode is not a literal after a comma (`Path(...).open("w")`, a mode variable),
+// or one on a line shaped like a comment (`#`, `//`, `/*`, `* `, `*/`) is not seen; the bar is the ordinary write.
 describe('the consent markers have no writer in the tree (codex-bridge Task 18, the whole-wave fix round)', () => {
   const REPO_ROOT = path.dirname(CCD_DIR);
   const ROOTS = ['ccd', 'shared', 'deploy', path.join('server', 'src'), path.join('agent', 'src')];
@@ -883,7 +904,7 @@ describe('the consent markers have no writer in the tree (codex-bridge Task 18, 
   const WRITE = new RegExp([
     String.raw`(?:^|[^\w.-])(?:touch|tee|cp|mv|ln|install|truncate)(?:\s|["'],)`,   // a command, or an argv's head
     String.raw`(?<![=\-<>])>>?\|?\s*[^\s<>|;&()]*` + MARK,                              // a redirect onto it
-    String.raw`\bopen(?:Sync)?\s*\(.*,\s*["'][rbt]*[wxa+]`,                              // an open for writing
+    String.raw`\bopen(?:Sync)?\s*\(.*,\s*(?:mode\s*=\s*)?["'][rbt]*[wxa+]`,               // an open for writing
     String.raw`\bO_(?:CREAT|WRONLY|RDWR|APPEND|TRUNC)\b`,
     String.raw`\b(?:writeFile|appendFile|createWriteStream|copyFile|symlink|link|rename|outputFile)(?:Sync)?\s*\(`,
     String.raw`\.(?:touch|write_text|write_bytes)\s*\(|\bos\.(?:mknod|replace|rename|link|symlink)\s*\(|\bshutil\.\w+\s*\(`,
@@ -894,9 +915,10 @@ describe('the consent markers have no writer in the tree (codex-bridge Task 18, 
     if (statSync(p).isDirectory()) return SKIP.has(e) ? [] : walk(p);
     return [p];
   });
-  /** A file's lines with their numbers, comment lines (`#`, `//`, `/*`, `*`) dropped: prose is no writer. */
+  const COMMENT = /^\s*(?:#|\/\/|\/\*|\*(?:\s|\/|$))/;  // a JSDoc `*` line, never a shell `*)` case arm
+  /** A file's lines with their numbers, comment lines (`#`, `//`, `/*`, a JSDoc `*`) dropped: prose is no writer. */
   const codeLines = (f: string): Array<[number, string]> => readFileSync(f, 'utf8').split('\n')
-    .map((l, i): [number, string] => [i + 1, l]).filter(([, l]) => !/^\s*(?:#|\/\/|\/\*|\*)/.test(l));
+    .map((l, i): [number, string] => [i + 1, l]).filter(([, l]) => !COMMENT.test(l));
   const rel = (f: string): string => path.relative(REPO_ROOT, f).split(path.sep).join('/');
   const shipped = (): string[] => ROOTS.flatMap((r) => walk(path.join(REPO_ROOT, r)));
 
@@ -908,8 +930,9 @@ describe('the consent markers have no writer in the tree (codex-bridge Task 18, 
       'cp /dev/null "$d/record-streams"', 'open(os.path.join(lane_dir, ALLOW_MARKER), "w").close()',
       'fd = os.open(os.path.join(d, RECORD_MARKER), os.O_CREAT | os.O_WRONLY)', 'pathlib.Path(d, RECORD_MARKER).touch()',
       'subprocess.run(["touch", os.path.join(d, ALLOW_MARKER)])', "writeFileSync(join(dir, 'record-streams'), '')",
-      "await fs.promises.writeFile(path.join(d, 'liveprobe-allowed'), '')",
-    ]) expect(NAMES.test(w) && WRITE.test(w), w).toBe(true);
+      "await fs.promises.writeFile(path.join(d, 'liveprobe-allowed'), '')", '  *) touch "$d/record-streams" ;;',
+      'open(os.path.join(d, RECORD_MARKER), mode="w")',
+    ]) expect(!COMMENT.test(w) && NAMES.test(w) && WRITE.test(w), w).toBe(true);
     for (const r of [
       'if not os.path.exists(os.path.join(lane_dir, ALLOW_MARKER)):', 'ALLOW_MARKER = "liveprobe-allowed"',
       'RECORD_MARKER = "record-streams"', '[ -e "$dir/record-streams" ] || return 0',
