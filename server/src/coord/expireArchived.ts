@@ -7,7 +7,6 @@ import type { Viewers } from '../viewer.js';
 import type { NotifyLog } from '../notifylog.js';
 import { CCD_ARGV, EXPIRE_CAP, EXPIRE_CHILD_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import type { CoordStore } from './store.js';
-import { openRunsClaimedBy } from './bindingReads.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { childReclaimHasCoordinated } from './childReclaim.js';
 import { readSwitches } from '../../../shared/switches.js';
@@ -204,13 +203,14 @@ export function expiryReviewing(coord: Pick<CoordStore, 'runsNamingSession' | 'r
 }
 
 /** The store's conjuncts for ONE row, AT THE ACT — the destructive-grade reads child reclamation's executor takes at
- *  its own (`openRunsForSession`, `openRunsClaimedBy`), then the review rule. Any read that fails is the store's
+ *  its own (`bindingsOf`: the worker's and the claimant's open runs), then the review rule. Any read that fails is the store's
  *  failure: `ok:false`, and the act waits. */
 export function readExpiryStore(coord: CoordStore, id: string, child?: { readonly rowUuid: string | null }): ExpiryStoreRead {
   try {
-    const worker = coord.openRunsForSession(id);
+    const bound = coord.bindingsOf(id);
+    const worker = bound.worker();
     if (!worker.ok) return { ok: false, detail: worker.detail };
-    const claims = openRunsClaimedBy(coord, id);
+    const claims = bound.claimant();
     if (!claims.ok) return { ok: false, detail: claims.detail };
     const openWorker = worker.siblings.length > 0;
     const openClaimant = claims.siblings.length > 0;
