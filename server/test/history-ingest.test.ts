@@ -1085,15 +1085,21 @@ const IX_RSS_PRELOAD = path.join(__dirname, 'fixtures', 'history', 'preload-rss.
  *  (the node-floor CI leg's), where this pass measured 172884 KiB with 2 MiB chunks, and 247412 KiB with 4 MiB chunks once
  *  task 23 indexes inline. Node 24.14.1 measured 216676 to 270240 KiB for the same pass under load, more after task 23, and
  *  smaller chunks do not bring it under 256 MiB, so any other interpreter is held to 512 MiB, half the carrier's
- *  MemoryMax=1G (D-4244). DM47 (task 21) uses the same bound. */
+ *  MemoryMax=1G (D-4244). DM47 (task 21) uses the same bound.
+ *  Every figure above was read with the preload's inherited maxRSS, max(the test worker's size at spawn, the sweep's own peak) on
+ *  Linux (D-6964); the worker's size at spawn was not measured; one run per side differs by a few percent either way. With the preload's own peak (VmHWM) Node 24.14.1 measured this pass at 314756 KiB (299488 KiB read the old way in a separate run),
+ *  DM47 at 227648 KiB (230940 old) and CP-39's walk-cap case at 311052 KiB (319320 old).
+ *  The 22.16.0 figures are the node-floor CI leg's and stay as read then. */
 const IX_RSS_BOUND_KIB = process.version === 'v22.16.0' ? 256 * 1024 : 512 * 1024;
-/** half the carrier's MemoryMax=1G, D-4244's bound family; the heaviest STRUCTURED line measured 389,508 and 356,032 KiB whole-pass on Node 24.14.1 (D-4345), and since D-4419's window the heaviest plain-text line measured, an ESC 7-dense one, 372,204 KiB in a 1 GiB scope. */
+/** half the carrier's MemoryMax=1G, D-4244's bound family; the heaviest STRUCTURED line measured 389,508 and 356,032 KiB whole-pass on Node 24.14.1 (D-4345), and since D-4419's window the heaviest plain-text line measured, an ESC 7-dense one, 372,204 KiB in a 1 GiB scope (the whole-pass readings were read with the inherited maxRSS, D-6964; the scoped reading stays as recorded). With the preload's own peak, Node 24.14.1 measured the D-4345 case at 331912 KiB (315656 KiB read the old way) and the D-4419 case at 364268 KiB (363324 old). */
 const IX_LINE_RSS_BOUND_KIB = 512 * 1024;
 /** The old-space cap the D-4345 RSS case gives its child. It is TIGHTER than the ~256 MiB of old space a 1 GiB carrier's cgroup gives V8
  *  (about physical/4), chosen for margin, so the pass is held to a stricter heap than production: V8 paces its heap from the cgroup
  *  it sees, and an unflagged child on a 31 GiB box floated this pass to 535-559 MiB. Measured on Node 24.14.1 under load ~25, the peak of two passes per run,
  *  seven runs of 256 and of 192 MiB: 256 MiB gave 434,448 to 512,048 KiB, 192 MiB gave 413,976 to 442,004 KiB, 128 MiB gave 408,636 to 414,180 KiB,
  *  and the same line in a real `MemoryMax=1G` scope peaked at 401,540 KiB (the one scoped reading, recorded in the FU2 commit body, never enforced here).
+ *  The 256, 192 and 128 MiB figures were read with the inherited maxRSS (D-6964) and are kept as read, and the
+ *  re-measurement with the preload's own peak at 192 MiB is on the bound's comment above (D-4345 331912 and D-4419 364268 KiB, Node 24.14.1).
  *  The case sets no scope, so it never reaches a service manager. */
 const IX_LINE_HEAP_MIB = 192;
 
