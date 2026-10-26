@@ -5,15 +5,22 @@ import { bindingsOver, type BindingReadPort, type SessionBindings } from '../src
 
 type Readers = Pick<BindingReadPort, 'openRunsForSession'> & Partial<Pick<BindingReadPort, 'bindingRunsOf'>>;
 
-/** `fake` with a `bindingsOf` over its own readers, each looked up at the read, so a reader patched later is the one read.
- *  A double with no `bindingRunsOf` throws if an answer that reads the series is asked. */
+/** `fake` with a `bindingsOf` over its own readers. The method reads its RECEIVER's readers at each read, so a copy that
+ *  spreads the double and overrides a reader (`{ ...fake, openRunsForSession }`) is read through its override, and a
+ *  reader patched later is the one read. A double with no `bindingRunsOf` throws if an answer that reads the series is
+ *  asked. */
 export function withBindingsOf<T extends Readers>(fake: T): T & { bindingsOf(sessionId: string): SessionBindings } {
-  const port: Pick<BindingReadPort, 'openRunsForSession' | 'bindingRunsOf'> = {
-    openRunsForSession: (...a) => fake.openRunsForSession(...a),
-    bindingRunsOf: (...a) => {
-      if (fake.bindingRunsOf === undefined) throw new Error('withBindingsOf: this double has no bindingRunsOf');
-      return fake.bindingRunsOf(...a);
+  return Object.assign(fake, {
+    bindingsOf(this: Readers, sessionId: string): SessionBindings {
+      const self = this;
+      const port: Pick<BindingReadPort, 'openRunsForSession' | 'bindingRunsOf'> = {
+        openRunsForSession: (...a) => self.openRunsForSession(...a),
+        bindingRunsOf: (...a) => {
+          if (self.bindingRunsOf === undefined) throw new Error('withBindingsOf: this double has no bindingRunsOf');
+          return self.bindingRunsOf(...a);
+        },
+      };
+      return bindingsOver(port, sessionId);
     },
-  };
-  return Object.assign(fake, { bindingsOf: (sessionId: string): SessionBindings => bindingsOver(port, sessionId) });
+  });
 }
