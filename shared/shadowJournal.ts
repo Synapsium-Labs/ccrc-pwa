@@ -55,6 +55,9 @@ export const SHADOW_JOURNAL_MAX_ROWS = 5000;
 export const SHADOW_JOURNAL_DEFAULT_LIMIT = 200;
 export const SHADOW_JOURNAL_MAX_LIMIT = 1000;
 
-/** The durable once-only key of a verdict: the same lane, subject, path and epoch is the same row after a restart. */
+/** The durable once-only key of a verdict: the same lane, subject, path and epoch is the same row after a restart.
+ *  A JSON tuple, never a NUL-joined string: node:sqlite on Node 22 binds text only up to its first NUL, so every key
+ *  of a lane would be stored as the bare lane word and collide (measured on CI). JSON escapes a NUL inside a field,
+ *  so the tuple stays unambiguous. */
 export const shadowVerdictKey = (v: Pick<ShadowVerdictInput, 'lane' | 'subject' | 'path' | 'epoch'>): string =>
-  `${v.lane}\u0000${v.subject}\u0000${v.path ?? ''}\u0000${v.epoch}`;
+  JSON.stringify([v.lane, v.subject, v.path ?? '', v.epoch]);
