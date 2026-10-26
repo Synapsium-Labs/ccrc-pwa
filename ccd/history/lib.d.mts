@@ -391,6 +391,11 @@ export function startSidecarWalk(state: WalkState, unseen: Iterable<string>, fir
 export function foldWalkCandidates(state: WalkState, candidates: ReadonlyArray<{ entryId: number; text: string; toolUseIds: readonly string[] }>): void;
 export function finishSidecarWalk(state: WalkState): void;
 export function walkCandidates(state: WalkState, name: string): WalkCandidate[];
+/** CP-39 (D-6938): the sidecar scan's cursor, meta `scan_sidecars_at`. */
+export interface SidecarScanAt { v: number; dir: string | null; taken: number; left: number; held: boolean }
+export function parseSidecarScanAt(text: string | null): SidecarScanAt;
+export function formatSidecarScanAt(at: SidecarScanAt): string;
+export function sidecarWrapClose(at: SidecarScanAt): { unseen: number; mark: boolean };
 export function secretKindOf(source: object | null, path: string): 'sessions' | 'env-identifier' | 'env' | 'token' | 'json';
 export function ftsPhrase(value: string): string;
 /** D-5748: the op marker, `<verb> <pid> <start_ms> <proc_start> <boot_id>`; a legacy three-field marker has procStart and bootId null. */

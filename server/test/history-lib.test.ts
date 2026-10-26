@@ -11957,3 +11957,21 @@ describe('CP-39 Task 2: the walk state, its extension and its first-match fold (
     expect(s.walk).toEqual({ names: ['late.txt', 'later.txt'], after: 0, text: [], toolu: [] });
   });
 });
+
+describe('CP-39 Task 3: the sidecar scan cursor and what a finished wrap records (D-6938)', () => {
+  it('round-trips; no row is a clean wrap from the start; anything malformed is a held wrap from the start', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const at = { v: 1, dir: '/home/u/x/projects/-home-u-tree/6f1c2e3a-0b4d-4c5e-8f60-718293a4b5c6', taken: 3, left: 1, held: false };
+    expect(lib.parseSidecarScanAt(lib.formatSidecarScanAt(at))).toEqual(at);
+    expect(lib.parseSidecarScanAt(lib.formatSidecarScanAt({ ...at, dir: null }))).toEqual({ ...at, dir: null });
+    expect(lib.parseSidecarScanAt(null)).toEqual({ v: 1, dir: null, taken: 0, left: 0, held: false });
+    for (const b of ['', '{}', 'not json', JSON.stringify({ ...at, v: 2 }), JSON.stringify({ ...at, taken: -1 }), JSON.stringify({ ...at, left: 1.5 }), JSON.stringify({ ...at, held: 'no' }), JSON.stringify({ ...at, dir: 7 })]) {
+      expect(lib.parseSidecarScanAt(b), b).toEqual({ v: 1, dir: null, taken: 0, left: 0, held: true });
+    }
+  });
+  it('a finished wrap records its count always, and the mark only when nothing held it', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.sidecarWrapClose({ v: 1, dir: null, taken: 3, left: 2, held: false })).toEqual({ unseen: 5, mark: true });
+    expect(lib.sidecarWrapClose({ v: 1, dir: null, taken: 3, left: 2, held: true })).toEqual({ unseen: 5, mark: false });
+  });
+});

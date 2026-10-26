@@ -3786,6 +3786,37 @@ export function walkCandidates(state, name) {
   return out;
 }
 
+/** CP-39 (D-6938). The sidecar scan's cursor, meta `scan_sidecars_at`: {"v":1,"dir":"<home>/projects/<project>/<uuid>"|null,
+ *  "taken":<int>,"left":<int>,"held":<bool>}. `dir` is the last uuid directory, in walk order, whose sidecars this wrap
+ *  examined or deferred in full; `taken` counts the sidecars this wrap took, and `left` every sidecar it LEFT UNSEEN in the
+ *  directories it passed: too large, refused (by admission or a read error) or deferred. A deferred sidecar is not
+ *  `examined` (ingestSidecars' progress count) and IS counted here: the backlog is what the figure shows. `held` says a
+ *  read error or a deferral met in this wrap holds the mark. No row (null) is a clean wrap from the start. Anything else is a
+ *  HELD wrap from the start, so a lost cursor costs one more wrap and never marks a scan it did not finish. */
+export function parseSidecarScanAt(text) {
+  const held = { v: 1, dir: null, taken: 0, left: 0, held: true };
+  if (text === null || text === undefined) return { v: 1, dir: null, taken: 0, left: 0, held: false };
+  if (typeof text !== 'string') return held;
+  let o;
+  try { o = JSON.parse(text); } catch { return held; }
+  if (o === null || typeof o !== 'object' || o.v !== 1) return held;
+  if (o.dir !== null && typeof o.dir !== 'string') return held;
+  if (!Number.isSafeInteger(o.taken) || o.taken < 0 || !Number.isSafeInteger(o.left) || o.left < 0) return held;
+  if (typeof o.held !== 'boolean') return held;
+  return { v: 1, dir: o.dir, taken: o.taken, left: o.left, held: o.held };
+}
+
+/** CP-39 (D-6938). The cursor's text; keys in the order v, dir, taken, left, held. */
+export function formatSidecarScanAt(at) {
+  return JSON.stringify({ v: 1, dir: at.dir, taken: at.taken, left: at.left, held: at.held });
+}
+
+/** CP-39 (D-6938). What a wrap that reached its end records: `unseen` (taken + left) always, as meta `sidecars_unseen`; the
+ *  mark only when nothing held the wrap. */
+export function sidecarWrapClose(at) {
+  return { unseen: at.taken + at.left, mark: !at.held };
+}
+
 /** How one secret-bearing file is read (§8.3 layer 1):
  *  - `sessions`: sessions.json's idHash records, loaded as (43, sha256) pairs and never as values;
  *  - `env-identifier`: a file the frozen list reads for its identifier-pattern keys only

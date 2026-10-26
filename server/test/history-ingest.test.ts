@@ -1665,8 +1665,10 @@ describe('history ingest: sidecars (plan task 21)', () => {
       expect(IX.count(db, 'sidecars')).toBe(0);
       expect(IX.count(db, 'sidecar_seen')).toBe(0);              // a file the floor stopped is never marked seen
       expect(counterOf(db, 'capture_paused_low_disk')).toBe(1);   // the caught-up transcript never probes: this is the sidecar's own stop
-      // a sidecar half the floor cut short leaves the scan unmarked, so the next tick scans (and takes the sidecar) again
-      expect((db.prepare("SELECT v FROM meta WHERE k = 'scan_discover_ms'").get() as { v: string }).v).toBe(String(at(0)));
+      // a sidecar half the floor cut short leaves its own scan unmarked (D-6933), so the next tick's sidecar scan covers
+      // every known uuid again and takes the sidecar; the transcripts, done, have their own mark
+      expect((db.prepare("SELECT v FROM meta WHERE k = 'scan_sidecars_ms'").get() as { v: string }).v).toBe(String(at(0)));
+      expect((db.prepare("SELECT v FROM meta WHERE k = 'scan_discover_ms'").get() as { v: string }).v).toBe(String(at(1)));
       const unsettled = await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, at(2), ids, async () => 'unsettled'), S.newBudget());
       expect(unsettled.paused).toBe(true);
       expect(counterOf(db, 'capture_paused_low_disk')).toBe(1);   // an unsettled probe is uncounted
@@ -4988,6 +4990,453 @@ describe('CP-39 Task 2: the link walk keeps its place across passes and is never
       // No sidecar reaches its link, so the group never learns its transcript: the retire finds it by uuid.
       expect((await S.ingestSidecars(db, ctx, S.newBudget(), [IX.U])).complete).toBe(true);
       expect(walkRows(db), 'the kept state is gone').toBe(0);
+    } finally { db.close(); }
+  });
+});
+
+describe('CP-39 Task 3: each half of the ingest keeps its own scan mark, and discovery runs under the budget (D-6933, D-6934, D-6938)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const sideDir = (home: string, uuid = IX.U): string => CP39.sideDir(home, uuid);
+  const metaV = (db: DatabaseSync, k: string): string | null => (db.prepare('SELECT v FROM meta WHERE k = ?').get(k) as { v: string } | undefined)?.v ?? null;
+  const PLENTY = async (): Promise<{ bsize: number; bavail: number; blocks: number }> => ({ bsize: 1, bavail: 4 * 2 ** 40, blocks: 8 * 2 ** 40 });
+  const counterOf = (db: DatabaseSync, name: string): number | undefined =>
+    (db.prepare('SELECT n FROM counters WHERE name = ?').get(name) as { n: number } | undefined)?.n;
+  /** As the FR2-d describe's: node:fs's readSync faulted for the descriptors that name `bad`, carried to sweep.mjs by
+   *  syncBuiltinESMExports. */
+  const failReads = (bad: string, code = 'EIO'): { faulted: () => number; restore: () => void } => {
+    const realRead = fs.readSync;
+    let faulted = 0;
+    const err = Object.assign(new Error(`${code}: i/o error, read`), { code, errno: -5, syscall: 'read' });
+    (fs as { readSync: unknown }).readSync = function readSync(fd: number, ...rest: unknown[]): number {
+      if (fs.readlinkSync(`/proc/self/fd/${fd}`) === bad) { faulted += 1; throw err; }
+      return (realRead as (...a: unknown[]) => number)(fd, ...rest);
+    };
+    syncBuiltinESMExports();
+    return { faulted: () => faulted, restore: () => { (fs as { readSync: unknown }).readSync = realRead; syncBuiltinESMExports(); } };
+  };
+  /** The directories one call lists, counted outside the sweep: every readdirSync under a projects/ tree of the fixture
+   *  box (rooted at `root`, its home), and the uuid of every tool-results/ listed. */
+  const listings = (root: string): { projects: () => string[]; toolResults: () => string[]; restore: () => void } => {
+    const real = fs.readdirSync;
+    const projects: string[] = [];
+    const toolResults: string[] = [];
+    (fs as { readdirSync: unknown }).readdirSync = function readdirSync(p: unknown, ...rest: unknown[]): unknown {
+      const s = String(p);
+      if (s.startsWith(`${root}/`) && s.includes('/projects')) projects.push(s);
+      if (s.endsWith('/tool-results')) toolResults.push(path.basename(path.dirname(s)));
+      return (real as (...a: unknown[]) => unknown).call(fs, p, ...rest);
+    };
+    syncBuiltinESMExports();
+    return { projects: () => projects, toolResults: () => toolResults, restore: () => { (fs as { readdirSync: unknown }).readdirSync = real; syncBuiltinESMExports(); } };
+  };
+  /** Three known uuids under home 0, each a one-row transcript, ingested by a first tick over no sidecar (its wrap
+   *  completes); then one sidecar each, and the sidecar mark deleted so that ONLY the sidecar scan is due on the next ticks. */
+  const threeUuids = async (prefix: string) => {
+    const { sweep: S } = await IX.api();
+    const box = IX.newBox(prefix);
+    plantSession(box, 'claude-demo2', { uuid: IX.U2, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+    plantSession(box, 'claude-demo3', { uuid: IX.U3, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+    const uuids = [IX.U, IX.U2, IX.U3];   // their directories sort in this order
+    uuids.forEach((u, i) => IX.plantCopy(box.homes[0]!, u, IX.jsonl([IX.user(IX.uuidN(500 + i), null, 'go', 500 + i, { sessionId: u })])));
+    const { db, ids } = await IX.openFixtureStore(box);
+    const t0 = IX.tsMs(0) + 60_000;
+    await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, t0, ids), S.newBudget());
+    expect(metaV(db, 'scan_sidecars_ms'), 'CONTROL: the first wrap completed').toBe(String(t0));
+    uuids.forEach((u) => fs.writeFileSync(path.join(sideDir(box.homes[0]!, u), 'one.txt'), `the sidecar of ${u}\n`));
+    db.prepare("DELETE FROM meta WHERE k = 'scan_sidecars_ms'").run();
+    const tick = (k: number, budget: IxBudget) => S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, t0 + k * 60_000, ids), budget);
+    return { S, box, db, ids, t0, tick };
+  };
+
+  it('a sidecar half the budget cut leaves only its own mark unset: the transcripts are not rediscovered, and the next unhinted tick still takes the known uuid\'s sidecar', async () => {
+    const { sweep: S } = await IX.api();
+    const box = IX.newBox('ccrc-hist-cp39-t3a-');
+    const text = IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]);
+    IX.plantCopy(box.homes[0]!, IX.U, text);
+    fs.writeFileSync(path.join(sideDir(box.homes[0]!), 'a-first.txt'), 'first body\n');
+    fs.writeFileSync(path.join(sideDir(box.homes[0]!), 'b-second.txt'), 'second body\n');
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const at = IX.tsMs(0) + 60_000;
+      // The byte budget lets the transcript, its one-row walk and the first sidecar in, then holds the second.
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, at, ids), S.newBudget(Date.now, { maxBytes: Buffer.byteLength(text) + 1 }));
+      expect(IX.count(db, 'sidecar_seen'), 'CONTROL: the budget cut the sidecar half after one').toBe(1);
+      expect(metaV(db, 'scan_discover_ms'), 'the transcripts are done, so their scan is marked').toBe(String(at));
+      expect(metaV(db, 'scan_sidecars_ms'), 'the sidecar half is not').toBeNull();
+      // One minute on: no transcript scan is due, nothing is hinted, and the sidecar scan still covers the known uuid.
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, at + 60_000, ids), S.newBudget());
+      expect(IX.count(db, 'sidecar_seen'), 'the second sidecar is taken by the sidecar scan alone').toBe(2);
+      expect(metaV(db, 'scan_discover_ms'), 'the transcript scan was not re-run').toBe(String(at));
+      expect(metaV(db, 'scan_sidecars_ms')).toBe(String(at + 60_000));
+    } finally { db.close(); }
+  });
+
+  it('D-4340 narrowed: a sidecar read error holds only the sidecar mark; a transcript read error holds only the transcript mark (D-6934)', async () => {
+    const { sweep: S } = await IX.api();
+    const at = IX.tsMs(0) + 60_000;
+    // Arm (a): EIO on a sidecar. The transcripts are done, so their mark is set; the sidecar scan met the error, so its mark is held.
+    {
+      const box = IX.newBox('ccrc-hist-cp39-t3b1-');
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+      const dir = sideDir(box.homes[0]!);
+      const bad = path.join(fs.realpathSync(dir), 'a-bad.txt');
+      fs.writeFileSync(bad, 'unreadable body\n');
+      fs.writeFileSync(path.join(dir, 'b-good.txt'), 'readable body\n');
+      const { db, ids } = await IX.openFixtureStore(box);
+      try {
+        const f = failReads(bad);
+        try { await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, at, ids), S.newBudget()); } finally { f.restore(); }
+        expect(f.faulted(), 'CONTROL: arm (a), the fault fired').toBeGreaterThanOrEqual(1);
+        expect(counterOf(db, 'file_unreadable'), 'CONTROL: arm (a), counted once').toBe(1);
+        expect(IX.count(db, 'sidecars'), 'arm (a): the good sidecar was taken').toBe(1);
+        expect(metaV(db, 'scan_discover_ms'), 'arm (a): the transcript mark is set').toBe(String(at));
+        expect(metaV(db, 'scan_sidecars_ms'), 'arm (a): the sidecar mark is held').toBeNull();
+      } finally { db.close(); }
+    }
+    // Arm (b): EIO on a transcript. Its mark is held; the sidecar scan, complete over the other uuid, sets its own.
+    {
+      const box = IX.newBox('ccrc-hist-cp39-t3b2-');
+      plantSession(box, 'claude-demo2', { uuid: IX.U2, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+      const bad = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'unreadable', 1)]));
+      IX.plantCopy(box.homes[0]!, IX.U2, IX.jsonl([IX.user(IX.uuidN(21), null, 'readable', 21, { sessionId: IX.U2 })]));
+      fs.writeFileSync(path.join(sideDir(box.homes[0]!, IX.U2), 'c-u2.txt'), 'the readable session\'s sidecar\n');
+      const { db, ids } = await IX.openFixtureStore(box);
+      try {
+        const f = failReads(fs.realpathSync(bad));
+        try { await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, at, ids), S.newBudget()); } finally { f.restore(); }
+        expect(f.faulted(), 'CONTROL: arm (b), the fault fired').toBeGreaterThanOrEqual(1);
+        expect(counterOf(db, 'file_unreadable'), 'CONTROL: arm (b), counted once').toBe(1);
+        expect(IX.count(db, 'sidecars'), "arm (b): the other uuid's sidecar was taken").toBe(1);
+        expect(metaV(db, 'scan_discover_ms'), 'arm (b): the transcript mark is held').toBeNull();
+        expect(metaV(db, 'scan_sidecars_ms'), 'arm (b): the sidecar mark is set').toBe(String(at));
+      } finally { db.close(); }
+    }
+  });
+
+  it('the sidecar scan resumes from its uuid-directory cursor: a cut wrap goes on where it stopped, the mark waits for the whole wrap, and the wrap stamps sidecars_unseen (D-6938)', async () => {
+    const { S, box, db, t0, tick } = await threeUuids('ccrc-hist-cp39-t3c-');
+    try {
+      // One byte a tick: the listing and one sidecar (a one-row walk, then its read) fit, then the budget is spent.
+      const run = async (k: number, budget: IxBudget): Promise<string[]> => {
+        const l = listings(box.home);
+        try { await tick(k, budget); } finally { l.restore(); }
+        return l.toolResults();
+      };
+      expect(await run(1, S.newBudget(Date.now, { maxBytes: 1 })), 'tick 1 lists from the start').toEqual([IX.U, IX.U2, IX.U3]);
+      expect(IX.count(db, 'sidecar_seen')).toBe(1);
+      expect(JSON.parse(metaV(db, 'scan_sidecars_at')!).dir, "the cursor passed U's directory").toMatch(new RegExp(`/${IX.U}$`));
+      expect(metaV(db, 'scan_sidecars_ms'), 'the mark waits for the whole wrap').toBeNull();
+      expect(await run(2, S.newBudget(Date.now, { maxBytes: 1 })), 'tick 2 lists only after its cursor').toEqual([IX.U2, IX.U3]);
+      expect(IX.count(db, 'sidecar_seen')).toBe(2);
+      expect(metaV(db, 'scan_sidecars_ms'), 'still waiting').toBeNull();
+      expect(await run(3, S.newBudget()), 'tick 3 finishes the wrap').toEqual([IX.U3]);
+      expect(IX.count(db, 'sidecar_seen')).toBe(3);
+      expect(metaV(db, 'scan_sidecars_ms'), 'the wrap completed clean: the mark').toBe(String(t0 + 3 * 60_000));
+      expect(metaV(db, 'sidecars_unseen'), 'the wrap took three, over three ticks').toBe('3');
+      expect(metaV(db, 'scan_sidecars_at'), 'the cursor is reset for the next wrap').toBeNull();
+    } finally { db.close(); }
+  });
+
+  it('discovery runs under the budget: a spent budget lists nothing under projects/; one spent by a tool-results/ listing lists no further uuid directory (D-6938)', async () => {
+    const { S, box, db, tick } = await threeUuids('ccrc-hist-cp39-t3d-');
+    try {
+      // (1) Both scans due, the budget spent at entry: neither the transcript scan nor the sidecar scan lists a directory.
+      db.prepare("DELETE FROM meta WHERE k = 'scan_discover_ms'").run();
+      const l1 = listings(box.home);
+      try { await tick(1, S.newBudget(() => 0, { maxMs: 0 })); } finally { l1.restore(); }
+      expect(l1.projects(), 'a spent budget lists nothing under projects/').toEqual([]);
+      // (2) The budget is spent by the first tool-results/ listing: the check before the next uuid directory stops the listing.
+      const l2 = listings(box.home);
+      try { await tick(2, S.newBudget(() => (l2.toolResults().length >= 1 ? 10_000 : 0), { maxMs: 1_000 })); } finally { l2.restore(); }
+      expect(l2.toolResults(), 'one uuid directory listed, then the check failed').toEqual([IX.U]);
+      expect(IX.count(db, 'sidecar_seen'), 'the budget was spent before any sidecar').toBe(0);
+      expect(metaV(db, 'scan_sidecars_at'), 'no directory was examined: the cursor did not move').toBeNull();
+    } finally { db.close(); }
+  });
+
+  it("the group's lstats run under the budget: once it is spent, unseenOf lstats nothing and the sidecar waits (D-6938)", async () => {
+    const { sweep } = await IX.api();
+    const S = sweep as unknown as IxSweep;
+    const box = IX.newBox('ccrc-hist-cp39-t3e-');
+    IX.plantCopy(box.homes[0]!, IX.U, CP39.rows());
+    const dir = sideDir(box.homes[0]!);
+    for (let k = 1; k <= CP39.ROWS; k += 1) fs.writeFileSync(path.join(dir, `out${k}.txt`), `body ${k}\n`);
+    const { db, ids } = await IX.openFixtureStore(box);
+    const real = fs.lstatSync;
+    const under = [`${dir}/`, `${fs.realpathSync(dir)}/`];
+    let lstats = 0;
+    try {
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget(Date.now, { maxBytes: 1 }));   // the transcript only
+      (fs as { lstatSync: unknown }).lstatSync = function lstatSync(p: unknown, ...rest: unknown[]): unknown {
+        if (under.some((d) => String(p).startsWith(d))) lstats += 1;
+        return (real as (...a: unknown[]) => unknown)(p, ...rest);
+      };
+      syncBuiltinESMExports();
+      const r = await S.ingestSidecars(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 180_000, ids), S.newBudget(() => (lstats >= 1 ? 10_000 : 0), { maxMs: 1_000 }), [IX.U]);
+      expect(r, 'the sidecar waits: nothing read, nothing walked').toEqual({ bytes: 0, complete: false, paused: false });
+      expect(lstats, "only the sidecar's own lstat; none for its group").toBe(1);
+    } finally { (fs as { lstatSync: unknown }).lstatSync = real; syncBuiltinESMExports(); db.close(); }
+  });
+
+  /** An in-process import's context over the box, whose window limits count the windows at the read of `maxMs` (newBudget
+   *  reads it once a window, before the window's listing, and nothing else reads it); `onWindow` runs there too. Past 40 the
+   *  read throws, the one stop an import whose listing never ends has; the cases read the count directly. */
+  type ImportS = { importSidecars(db: DatabaseSync, ctx: Record<string, unknown>, uuids: string[]): Promise<string> };
+  const importCtx = (box: { home: string; homes: string[] }, ids: unknown, now: () => number, onWindow: () => void = () => {}) => {
+    let windows = 0;
+    const limits = { get maxMs() { windows += 1; onWindow(); if (windows > 40) throw new Error('more than 40 windows: the import does not end'); return 1_000; } };
+    return { windows: () => windows, ctx: { home: box.home, homes: box.homes, paths: historyPaths(box.home), ids, now, out: () => {}, deps: { statfs: PLENTY, budget: limits } } };
+  };
+
+  it('a walk whose names can no longer reach the link holds nothing back: its sidecar deleted, the sidecar over SIDECAR_MAX_BYTES beside it never in a walk, the new name is linked and the wrap completes with its mark (D-6938)', async () => {
+    const { sweep, lib } = await IX.api();
+    const S = sweep as unknown as IxSweep;
+    const box = IX.newBox('ccrc-hist-cp39-t3f-');
+    IX.plantCopy(box.homes[0]!, IX.U, CP39.rows());
+    const dir = sideDir(box.homes[0]!);
+    fs.writeFileSync(path.join(dir, 'out1.txt'), 'body 1\n');
+    const big = path.join(dir, 'big.txt');
+    fs.writeFileSync(big, '');
+    fs.truncateSync(big, lib.SIDECAR_MAX_BYTES + 1);   // sparse: over the cap by its stat, with no block written
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const t0 = IX.tsMs(0) + 60_000;
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, t0, ids), S.newBudget(Date.now, { maxBytes: 1 }));   // the transcript only
+      const pk = CP39.pkOf(db);
+      // out1.txt starts a walk, which the budget cuts at its fifth row.
+      const dec = await CP39.countDecodes();
+      try { await S.ingestSidecars(db, S.makeIngestCtx(box.home, box.homes, t0 + 60_000, ids), S.newBudget(() => (dec.n() >= 5 ? 10_000 : 0), { maxMs: 1_000 }), [IX.U]); } finally { dec.restore(); }
+      expect(CP39.walkState(db, pk)?.walk?.names, 'the walk takes only the names that can reach the link, never the sidecar over the cap').toEqual(['out1.txt']);
+      fs.rmSync(path.join(dir, 'out1.txt'));
+      fs.writeFileSync(path.join(dir, 'late.txt'), 'late body\n');
+      // Two minutes on: only the sidecar scan is due, and its wrap visits the group.
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, t0 + 120_000, ids), S.newBudget());
+      expect(CP39.sidecarRows(db).map((r) => r.name), 'the new name is taken in the same tick: no walk held it back').toEqual(['late.txt']);
+      expect(metaV(db, 'scan_sidecars_ms'), 'the wrap completed clean: its mark is written').toBe(String(t0 + 120_000));
+      expect(metaV(db, 'sidecars_unseen'), 'it took late.txt and left the sidecar over the cap unseen').toBe('2');
+      expect(IX.count(db, 'meta', "k LIKE 'sidecar\\_walk:%' ESCAPE '\\'"), 'the group was examined in full: the walk state retired').toBe(0);
+    } finally { db.close(); }
+  });
+
+  it('a walk that advanced no row over a whole visit of its group is retired, and the wrap counts every sidecar it left unseen, the deferred one included, in sidecars_unseen (D-6938)', async () => {
+    const { sweep } = await IX.api();
+    const S = sweep as unknown as IxSweep;
+    const box = IX.newBox('ccrc-hist-cp39-t3g-');
+    IX.plantCopy(box.homes[0]!, IX.U, CP39.rows());
+    const dir = sideDir(box.homes[0]!);
+    fs.writeFileSync(path.join(dir, 'out1.txt'), 'body 1\n');
+    fs.writeFileSync(path.join(dir, 'locked.txt'), 'never admitted\n');
+    const { db, ids } = await IX.openFixtureStore(box);
+    // locked.txt is a small regular file whose every open is refused (EACCES), so admission refuses it before its link on
+    // every pass: a name a walk can hold that never reaches the link. node:fs's DEFAULT openSync, carried to sweep.mjs.
+    const realOpen = fs.openSync;
+    try {
+      (fs as { openSync: unknown }).openSync = function openSync(p: unknown, ...rest: unknown[]): unknown {
+        if (String(p).endsWith('/locked.txt')) throw Object.assign(new Error(`EACCES: permission denied, open '${String(p)}'`), { code: 'EACCES' });
+        return (realOpen as (...a: unknown[]) => unknown).call(fs, p, ...rest);
+      };
+      syncBuiltinESMExports();
+      const t0 = IX.tsMs(0) + 60_000;
+      const tick = (k: number, budget: IxBudget) => S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, t0 + k * 60_000, ids), budget);
+      await tick(0, S.newBudget(Date.now, { maxBytes: 1 }));   // the transcript only
+      const pk = CP39.pkOf(db);
+      const dec = await CP39.countDecodes();
+      try { await S.ingestSidecars(db, S.makeIngestCtx(box.home, box.homes, t0 + 60_000, ids), S.newBudget(() => (dec.n() >= 5 ? 10_000 : 0), { maxMs: 1_000 }), [IX.U]); } finally { dec.restore(); }
+      expect(CP39.walkState(db, pk)?.walk?.names, 'CONTROL: a walk in progress holds locked.txt, which never reaches the link').toEqual(['locked.txt', 'out1.txt']);
+      fs.rmSync(path.join(dir, 'out1.txt'));
+      fs.writeFileSync(path.join(dir, 'late.txt'), 'late body\n');
+      // Tick 2: the scan's visit of the group defers late.txt (the walk holds locked.txt, still unseen), refuses locked.txt, and advances no row.
+      await tick(2, S.newBudget());
+      expect(CP39.walkState(db, pk)?.walk ?? null, "the walk that advanced no row over its group's whole visit is retired").toBeNull();
+      expect(metaV(db, 'sidecars_unseen'), 'the wrap left two unseen: late.txt deferred and locked.txt refused').toBe('2');
+      expect(metaV(db, 'scan_sidecars_ms'), 'a deferral holds the mark').toBeNull();
+      // Tick 3: a new wrap; late.txt starts an extension walk, which links it.
+      await tick(3, S.newBudget());
+      expect(CP39.sidecarRows(db).map((r) => r.name), 'late.txt is taken').toEqual(['late.txt']);
+      expect(metaV(db, 'scan_sidecars_ms'), 'the next wrap completed clean: its mark').toBe(String(t0 + 3 * 60_000));
+    } finally { (fs as { openSync: unknown }).openSync = realOpen; syncBuiltinESMExports(); db.close(); }
+  });
+
+  it('import: a window whose listing its budget cut resumes the listing from its own cursor in the next window, lists each uuid directory once, and ends done only with every sidecar seen (D-6932, D-6938)', async () => {
+    const { S, box, db, ids } = await threeUuids('ccrc-hist-cp39-t3h-');
+    try {
+      const l = listings(box.home);
+      let t = 0;
+      let leapt = false;
+      // The clock creeps, and leaps once, at its first read after the first tool-results/ listing: the first window's listing is cut there.
+      const now = (): number => { if (!leapt && l.toolResults().length >= 1) { leapt = true; t += 10_000; } return (t += 1); };
+      const im = importCtx(box, ids, now);
+      let ended: string;
+      try { ended = await (S as unknown as ImportS).importSidecars(db, im.ctx, [IX.U, IX.U2, IX.U3]); } finally { l.restore(); }
+      expect(leapt, 'CONTROL: the clock leapt inside the first listing').toBe(true);
+      expect(ended).toBe('done');
+      expect(IX.count(db, 'sidecar_seen'), 'done only with every sidecar seen').toBe(3);
+      expect(im.windows(), 'the cut listing ended its window, and the next resumed it').toBe(2);
+      expect(l.toolResults(), 'each uuid directory listed once over the import').toEqual([IX.U, IX.U2, IX.U3]);
+    } finally { db.close(); }
+  });
+
+  it('import: a listing cut before its first uuid directory lists the rest once with no budget, in the same window, and the next window ingests (D-6932)', async () => {
+    const { S, box, db, ids } = await threeUuids('ccrc-hist-cp39-t3i-');
+    try {
+      const l = listings(box.home);
+      let t = 0;
+      let windows = 0;
+      let leaptIn = 0;
+      let base = 0;
+      // The clock leaps at its first read after a window's first projects/ listing: every window's budgeted listing is cut
+      // before its first uuid directory, so only the retry can end it.
+      const now = (): number => { if (windows !== leaptIn && l.projects().length > base) { leaptIn = windows; t += 10_000; } return (t += 1); };
+      const im = importCtx(box, ids, now, () => { windows += 1; base = l.projects().length; });
+      let ended: string;
+      try { ended = await (S as unknown as ImportS).importSidecars(db, im.ctx, [IX.U, IX.U2, IX.U3]); } finally { l.restore(); }
+      expect(ended).toBe('done');
+      expect(IX.count(db, 'sidecar_seen'), 'done only with every sidecar seen').toBe(3);
+      expect(im.windows(), 'the retry ended the listing in the first window; the second ingested').toBe(2);
+      expect(l.toolResults(), 'each uuid directory listed once, by the retry').toEqual([IX.U, IX.U2, IX.U3]);
+    } finally { db.close(); }
+  });
+
+  it('a non-regular entry named like a sidecar, beside a walk whose sidecar is deleted, is never in a walk: the new name is linked and the wrap completes with its mark (D-6938)', async () => {
+    const { sweep } = await IX.api();
+    const S = sweep as unknown as IxSweep;
+    const box = IX.newBox('ccrc-hist-cp39-t3j-');
+    IX.plantCopy(box.homes[0]!, IX.U, CP39.rows());
+    const dir = sideDir(box.homes[0]!);
+    fs.writeFileSync(path.join(dir, 'out1.txt'), 'body 1\n');
+    fs.mkdirSync(path.join(dir, 'dir.txt'));   // a directory under a sidecar's name: its lstat is no regular file
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const t0 = IX.tsMs(0) + 60_000;
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, t0, ids), S.newBudget(Date.now, { maxBytes: 1 }));   // the transcript only
+      const pk = CP39.pkOf(db);
+      // out1.txt starts a walk, which the budget cuts at its fifth row.
+      const dec = await CP39.countDecodes();
+      try { await S.ingestSidecars(db, S.makeIngestCtx(box.home, box.homes, t0 + 60_000, ids), S.newBudget(() => (dec.n() >= 5 ? 10_000 : 0), { maxMs: 1_000 }), [IX.U]); } finally { dec.restore(); }
+      expect(CP39.walkState(db, pk)?.walk?.names, 'the walk takes only the names that can reach the link, never the entry that is not a regular file').toEqual(['out1.txt']);
+      fs.rmSync(path.join(dir, 'out1.txt'));
+      fs.writeFileSync(path.join(dir, 'late.txt'), 'late body\n');
+      // Two minutes on: only the sidecar scan is due, and its wrap visits the group.
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, t0 + 120_000, ids), S.newBudget());
+      expect(CP39.sidecarRows(db).map((r) => r.name), 'the new name is taken in the same tick: no walk held it back').toEqual(['late.txt']);
+      expect(metaV(db, 'scan_sidecars_ms'), 'the wrap completed clean: its mark is written').toBe(String(t0 + 120_000));
+      expect(IX.count(db, 'meta', "k LIKE 'sidecar\\_walk:%' ESCAPE '\\'"), 'the group was examined in full: the walk state retired').toBe(0);
+    } finally { db.close(); }
+  });
+
+  it("unseenOf leaves out a name whose lstat fails: a sidecar listed and then gone before its group's lstat holds nothing back and is no fault (D-6938)", async () => {
+    const { sweep } = await IX.api();
+    const S = sweep as unknown as IxSweep;
+    const box = IX.newBox('ccrc-hist-cp39-t3k-');
+    IX.plantCopy(box.homes[0]!, IX.U, CP39.rows());
+    const dir = sideDir(box.homes[0]!);
+    fs.writeFileSync(path.join(dir, 'gone.txt'), 'listed, then gone\n');
+    fs.writeFileSync(path.join(dir, 'out1.txt'), 'body 1\n');
+    const { db, ids } = await IX.openFixtureStore(box);
+    const real = fs.lstatSync;
+    let failed = 0;
+    try {
+      const t0 = IX.tsMs(0) + 60_000;
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, t0, ids), S.newBudget(Date.now, { maxBytes: 1 }));   // the transcript only
+      // gone.txt is listed (the listing reads names only), and every lstat of it answers ENOENT, the shape of a name deleted
+      // between the listing and the lstat: its own lstat (counted missing, as today) and its group's, in unseenOf, when
+      // out1.txt (sorted after it) asks for its link.
+      (fs as { lstatSync: unknown }).lstatSync = function lstatSync(p: unknown, ...rest: unknown[]): unknown {
+        if (String(p).endsWith('/tool-results/gone.txt')) {
+          failed += 1;
+          throw Object.assign(new Error(`ENOENT: no such file or directory, lstat '${String(p)}'`), { code: 'ENOENT', syscall: 'lstat' });
+        }
+        return (real as (...a: unknown[]) => unknown)(p, ...rest);
+      };
+      syncBuiltinESMExports();
+      const r = await S.ingestSidecars(db, S.makeIngestCtx(box.home, box.homes, t0 + 60_000, ids), S.newBudget(), [IX.U]);
+      expect(failed, "CONTROL: gone.txt's own lstat and its group's both failed").toBe(2);
+      expect(CP39.sidecarRows(db).map((x) => x.name), 'out1.txt is taken in the same call: the failed lstat left gone.txt out of the walk').toEqual(['out1.txt']);
+      expect((r as Record<string, unknown>).unreadable, 'a failed lstat in unseenOf is no read error').toBeUndefined();
+      expect(r.complete, 'the call completed').toBe(true);
+    } finally { (fs as { lstatSync: unknown }).lstatSync = real; syncBuiltinESMExports(); db.close(); }
+  });
+
+  it('a taken sidecar of zero bytes is counted as taken in the wrap, never as one already seen: the result says `taken` beside `bytes: 0` (D-6938)', async () => {
+    const { sweep } = await IX.api();
+    const S = sweep as unknown as IxSweep;
+    const box = IX.newBox('ccrc-hist-cp39-t3l-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+    fs.writeFileSync(path.join(sideDir(box.homes[0]!), 'empty.txt'), '');
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());
+      expect(IX.count(db, 'sidecar_seen'), 'CONTROL: the empty sidecar was taken').toBe(1);
+      expect(metaV(db, 'sidecars_unseen'), 'the wrap took one').toBe('1');
+    } finally { db.close(); }
+  });
+
+  it('a fault in the given share holds the wrap\'s mark: a hinted uuid\'s sidecar read error on a tick whose scan share closes the wrap leaves scan_sidecars_ms unset (D-6934)', async () => {
+    const { S, box, db, ids, t0 } = await threeUuids('ccrc-hist-cp39-t3m-');
+    try {
+      type Side = { ingestSidecars(db: DatabaseSync, ctx: unknown, b: IxBudget, uuids: string[], opts: { scan: Set<string> }): Promise<Record<string, unknown>> };
+      const bad = path.join(fs.realpathSync(sideDir(box.homes[0]!, IX.U)), 'one.txt');
+      const f = failReads(bad);
+      let r: Record<string, unknown>;
+      try {
+        // U is the given share (hinted); U2 and U3 are the scan's, and the scan completes its wrap over both.
+        r = await (S as unknown as Side).ingestSidecars(db, S.makeIngestCtx(box.home, box.homes, t0 + 60_000, ids), S.newBudget(), [IX.U], { scan: new Set([IX.U, IX.U2, IX.U3]) });
+      } finally { f.restore(); }
+      expect(f.faulted(), 'CONTROL: the fault fired').toBeGreaterThanOrEqual(1);
+      expect(counterOf(db, 'file_unreadable'), 'CONTROL: counted once').toBe(1);
+      expect(IX.count(db, 'sidecar_seen'), "CONTROL: the scan share took U2's and U3's").toBe(2);
+      expect(r['unreadable'], 'CONTROL: the call reports the fault').toBe(true);
+      expect(metaV(db, 'sidecars_unseen'), 'the wrap closed: two taken, none left').toBe('2');
+      expect(metaV(db, 'scan_sidecars_ms'), "the given share's fault holds the wrap's mark").toBeNull();
+    } finally { db.close(); }
+  });
+
+  it('a cursor naming a directory under a home no longer rostered, or one that does not parse, restarts the wrap from the start: every known uuid is listed and taken, never skipped (D-6938)', async () => {
+    for (const [i, dir] of [`/home/u/gone/projects/${IX.SLUG}/${IX.U2}`, 'not-a-directory'].entries()) {
+      const { S, box, db, t0, tick } = await threeUuids(`ccrc-hist-cp39-t3n${i}-`);
+      try {
+        db.prepare("INSERT INTO meta (k, v) VALUES ('scan_sidecars_at', ?)").run(JSON.stringify({ v: 1, dir, taken: 0, left: 0, held: false }));
+        const l = listings(box.home);
+        try { await tick(1, S.newBudget()); } finally { l.restore(); }
+        expect(l.toolResults(), `arm ${i}: the wrap restarted from the start`).toEqual([IX.U, IX.U2, IX.U3]);
+        expect(IX.count(db, 'sidecar_seen'), `arm ${i}: every sidecar taken`).toBe(3);
+        expect(metaV(db, 'scan_sidecars_ms'), `arm ${i}: the wrap closed clean`).toBe(String(t0 + 60_000));
+        expect(metaV(db, 'sidecars_unseen'), `arm ${i}`).toBe('3');
+      } finally { db.close(); }
+    }
+  });
+
+  it('a deferral in the given share holds the wrap\'s mark: a hinted uuid\'s sidecar deferred behind a walk in progress, on a tick whose scan share closes the wrap, leaves scan_sidecars_ms unset (D-6934)', async () => {
+    const { sweep } = await IX.api();
+    const S = sweep as unknown as IxSweep;
+    type Side = { ingestSidecars(db: DatabaseSync, ctx: unknown, b: IxBudget, uuids: string[], opts: { scan: Set<string> }): Promise<Record<string, unknown>> };
+    const box = IX.newBox('ccrc-hist-cp39-t3o-');
+    plantSession(box, 'claude-demo2', { uuid: IX.U2, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+    IX.plantCopy(box.homes[0]!, IX.U, CP39.rows());
+    IX.plantCopy(box.homes[0]!, IX.U2, IX.jsonl([IX.user(IX.uuidN(500), null, 'go', 500, { sessionId: IX.U2 })]));
+    const dir = sideDir(box.homes[0]!);
+    fs.writeFileSync(path.join(dir, 'out1.txt'), 'body 1\n');
+    fs.writeFileSync(path.join(sideDir(box.homes[0]!, IX.U2), 'one.txt'), 'the scan share\'s sidecar\n');
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const t0 = IX.tsMs(0) + 60_000;
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, t0, ids), S.newBudget(Date.now, { maxBytes: 1 }));   // the first transcript only
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, t0 + 1_000, ids), S.newBudget(Date.now, { maxBytes: 1 }));   // and the second
+      expect(IX.count(db, 'transcripts'), 'CONTROL: both transcripts are in').toBeGreaterThanOrEqual(2);
+      db.prepare("DELETE FROM meta WHERE k IN ('scan_sidecars_ms', 'scan_sidecars_at')").run();
+      const pk = CP39.pkOf(db);
+      // out1.txt starts a walk, which the budget cuts at its fifth row.
+      const dec = await CP39.countDecodes();
+      try { await S.ingestSidecars(db, S.makeIngestCtx(box.home, box.homes, t0 + 60_000, ids), S.newBudget(() => (dec.n() >= 5 ? 10_000 : 0), { maxMs: 1_000 }), [IX.U]); } finally { dec.restore(); }
+      expect(CP39.walkState(db, pk)?.walk?.names, 'CONTROL: a walk in progress holds out1.txt').toEqual(['out1.txt']);
+      // late.txt sorts before out1.txt: the given share defers it (the walk holds out1.txt, still unseen), then the walk resumes and links out1.txt.
+      fs.writeFileSync(path.join(dir, 'late.txt'), 'late body\n');
+      const r = await (S as unknown as Side).ingestSidecars(db, S.makeIngestCtx(box.home, box.homes, t0 + 120_000, ids), S.newBudget(), [IX.U], { scan: new Set([IX.U, IX.U2]) });
+      expect(r['unreadable'], 'CONTROL: no read error, so the hold is the deferral\'s').toBeUndefined();
+      expect(r.complete, 'CONTROL: the deferral leaves the call incomplete').toBe(false);
+      expect(CP39.sidecarRows(db).map((x) => x.name), "CONTROL: out1.txt (resumed walk) and U2's sidecar taken, late.txt deferred").toEqual(['one.txt', 'out1.txt']);
+      expect(metaV(db, 'sidecars_unseen'), 'the wrap closed over U2: one taken, none left').toBe('1');
+      expect(metaV(db, 'scan_sidecars_ms'), "the given share's deferral holds the wrap's mark").toBeNull();
     } finally { db.close(); }
   });
 });
