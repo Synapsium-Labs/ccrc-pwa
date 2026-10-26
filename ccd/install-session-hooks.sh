@@ -100,8 +100,17 @@ fi
 # check below intact (a single "next" computed per run, compared once).
 # The predicate is spelled ONCE and shared by both modes — `ccrc uninstall`
 # rides `--remove` precisely so that this line stays the single definition of
-# a managed entry.
-JQ_UNMANAGED='def unmanaged: map(select((.hooks // []) | any(.command | tostring | contains("/session-hook.sh")) | not));'
+# ccrc's entry.
+#
+# PER HOOK, NOT PER ENTRY (option B, 2026-10-15): `own` is ccrc's hook command
+# (filename match). A group holding one is rewritten without it, keeping its
+# `matcher`, its other keys and every foreign hook in order, and dropped only
+# when the sweep emptied it; a group holding none (a foreign group with an empty
+# `hooks` list included) is untouched. A non-object hook is foreign and kept.
+JQ_UNMANAGED='def own: type == "object" and ((.command // "") | tostring | contains("/session-hook.sh"));
+def unmanaged: map(if type == "object" and any((.hooks // [])[]?; own)
+                   then (.hooks |= map(select(own | not))) | select((.hooks | length) > 0)
+                   else . end);'
 JQ_PROGRAM="$JQ_UNMANAGED"'
 .hooks = ((.hooks // {})
   | with_entries(.value |= unmanaged)
