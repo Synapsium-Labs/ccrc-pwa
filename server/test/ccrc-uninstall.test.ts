@@ -53,7 +53,7 @@ import {
   registerLaneCleanup, trackChild, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms, spineSystemdRun, SPINE_CONTAINMENT_PROBE,
   managerCalls, spineRunCalls, isolationManagerStubs, assertIsolationWallFirst, strayManagerCalls, ccrcFunction,
   ccrcLine, recordingStub, lockStub, freeLanes, portAccepts, laneAnswer, eventually, authDirOf, plantLaneAuth,
-  plantLaneConfig, laneUnits, GPT_LANE_BINS, type StubRc, type LanePorts,
+  plantLaneConfig, laneUnits, alive, GPT_LANE_BINS, type StubRc, type LanePorts,
 } from './codexLaneFixture.js';
 import { psArgs } from './laneReaper.js';
 // #166 wave 10: the collector's generation journal's ONE name (path-identity spec 2026-10-12 §5.3).
@@ -2533,16 +2533,25 @@ describeLinux('ccrc uninstall: the codex lanes on a real lane (Plan 2b-2 Task 11
       `--unit=${units.litellm}`, '-p', `StandardOutput=append:${log}`, '-p', `StandardError=append:${log}`,
       '--', realPy(), '-m', 'http.server', String(lane!.litellmPort), '--bind', '127.0.0.1', '--directory', root],
     { env, encoding: 'utf8' });
-    expect(sd.status, `the fake user manager would not start the namesake unit:\n${sd.stderr}`).toBe(0);
-    await eventually(() => portAccepts(lane!.litellmPort), 'the namesake to bind', 5000);
-    const active = spawnSync(join(home, '.local', 'bin', 'systemctl'), ['--user', 'is-active', units.litellm], { env, encoding: 'utf8' });
-    expect(active.stdout.trim(), 'the fixture does not model a same-named ACTIVE unit, so this case would measure nothing').toBe('active');
-    rmSync(join(home, 'manager-calls'), { force: true });
-    const r = runVerb(home, 'uninstall', ['--force']);
-    expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout).toMatch(/^uninstall: codex: codex-a litellm: left alone — /m);
-    expect(stops(home).filter((l) => l.includes(units.litellm))).toEqual([]);
-    expect(await portAccepts(lane!.litellmPort)).toBe(true);
+    try {
+      expect(sd.status, `the fake user manager would not start the namesake unit:\n${sd.stderr}`).toBe(0);
+      await eventually(() => portAccepts(lane!.litellmPort), 'the namesake to bind', 5000);
+      const active = spawnSync(join(home, '.local', 'bin', 'systemctl'), ['--user', 'is-active', units.litellm], { env, encoding: 'utf8' });
+      expect(active.stdout.trim(), 'the fixture does not model a same-named ACTIVE unit, so this case would measure nothing').toBe('active');
+      rmSync(join(home, 'manager-calls'), { force: true });
+      const r = runVerb(home, 'uninstall', ['--force']);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toMatch(/^uninstall: codex: codex-a litellm: left alone — /m);
+      expect(stops(home).filter((l) => l.includes(units.litellm))).toEqual([]);
+      expect(await portAccepts(lane!.litellmPort)).toBe(true);
+    } finally {
+      // D-6941: the namesake is this case's own unit, and no fixture teardown tracks it. Stop it through the fake
+      // manager's stop path, then wait out its supervisor's linger, so nothing this case started outlives the run (D-3533).
+      const supPath = join(home, 'fake-systemd', 'units', units.litellm, 'supervisor-pid');
+      const sup = existsSync(supPath) ? Number(readFileSync(supPath, 'utf8').trim()) : NaN;
+      spawnSync(join(home, '.local', 'bin', 'systemctl'), ['--user', 'stop', units.litellm], { env, encoding: 'utf8' });
+      if (Number.isInteger(sup) && sup > 1) await eventually(() => !alive(sup), 'the namesake unit\'s supervisor to exit', 10_000);
+    }
   }, 120_000);
 
   // ── codex bridge Stage 2, Task 11: a direct lane's bridge, and a lane.json from before it ──
