@@ -112,7 +112,7 @@ describe('every bind site records an incarnation, or is named (ARCH-60 follow-up
     const found = sites().map((s) => `${s.where} ${s.call} -> ${s.kind.join('+')}`).sort();
     expect(found).toEqual([
       'coord/dispatch.ts#spawnFresh setSession -> explicit-birth+records-nothing',
-      'coord/routes.ts#holdAndBindSession setSession -> occupant-stamp',
+      'coord/routes.ts#registerCoordRoutes.holdAndBindSession setSession -> occupant-stamp',
       'coord/store.ts#CoordStore.dispatchRun markDispatched -> occupant-stamp',
       'coord/store.ts#CoordStore.markDispatched bindSession -> occupant-stamp',
       'coord/store.ts#CoordStore.setSession bindSession -> pass-through',
