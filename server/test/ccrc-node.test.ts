@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { mkTmp } from './tmpHelpers';
+import { mkTmp } from './tmpHelpers.js';
 
 const LIB = path.resolve(__dirname, '../../ccd/ccrc-node');
 
