@@ -4,7 +4,7 @@ import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import { redactCommand } from './redact.js';
-import { REVIEW_CAP_SUMMARY_MAX, reviewCapRefuses, type LastReviewReport } from './reviewcap.js';
+import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { decideAllocation } from './ledger.js';
@@ -134,7 +134,7 @@ import {
   type BusyUpdateState, type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type RequestKind,
   type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
   type AutoMode, type NotifyMode, type DriftFinding, isDriftKind,
-  type WorkItemState,
+  type WorkItemState, type LastReviewReport,
 } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
@@ -3320,7 +3320,8 @@ export class CoordStore {
     const m = measureRunNumbers(row);
     if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
     const measured: MeasuredRunRow = { row, nums: m.nums };
-    return { ok: true, run: this.hydrateRun(measured, this.healthFor([measured]).get(m.nums.id)!) };
+    return { ok: true, run: this.hydrateRun(measured, this.healthFor([measured]).get(m.nums.id)!,
+      this.reviewCapStates([m.nums.id])) };
   }
 
   /** Rows -> the whole answer, ALL-OR-FAILURE. The order is forced by the
@@ -3335,7 +3336,8 @@ export class CoordStore {
       measured.push({ row, nums: m.nums });
     }
     const health = this.healthFor(measured);
-    return { ok: true, runs: measured.map((m) => this.hydrateRun(m, health.get(m.nums.id)!)) };
+    const caps = this.reviewCapStates(measured.map((m) => m.nums.id));
+    return { ok: true, runs: measured.map((m) => this.hydrateRun(m, health.get(m.nums.id)!, caps)) };
   }
 
   /**
@@ -4285,11 +4287,30 @@ export class CoordStore {
     return isPositiveDecimalSafeInteger(id) ? id : null;
   }
 
-  /** D-6795: how many review runs name this work run, in any state (a failed or abandoned round still spent one). */
+  /** D-6795: how many review runs name this work run, in any state (a failed or abandoned round still spent one).
+   *  Read through `reviewCapStates`, so the round predicate is written once (D-6909). */
   reviewRounds(workRunId: number): number {
-    const row = this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE kind = 'review' AND reviews = ?")
-      .get(workRunId) as { n: number };
-    return Number(row.n);
+    return this.reviewCapStates([workRunId]).get(workRunId)?.rounds ?? 0;
+  }
+
+  /** D-6909: the review-cap state of a batch of runs, in two statements whatever its size (`healthFor`'s rule,
+   *  D-1299): review-run counts grouped by the run they review, and the `review_cap` rows. An id with neither has no
+   *  entry; `hydrateRun` reads that as zero rounds, nothing raised or lifted. */
+  reviewCapStates(ids: readonly number[]): Map<number, { rounds: number; askedAt: number | null; liftedAt: number | null }> {
+    const out = new Map<number, { rounds: number; askedAt: number | null; liftedAt: number | null }>();
+    if (ids.length === 0) return out; // `placeholders(0)` is an empty `IN ()`, a SQLite syntax error
+    const ph = placeholders(ids.length);
+    const counts = this.db.prepare(`SELECT reviews AS id, COUNT(*) AS n FROM runs WHERE kind = 'review' AND reviews IN (${ph}) `
+      + 'GROUP BY reviews').all(...ids) as { id: number; n: number }[];
+    for (const c of counts) out.set(Number(c.id), { rounds: Number(c.n), askedAt: null, liftedAt: null });
+    const rows = this.db.prepare(`SELECT workRunId AS id, askedAt, liftedAt FROM review_cap WHERE workRunId IN (${ph})`)
+      .all(...ids) as { id: number; askedAt: number | null; liftedAt: number | null }[];
+    for (const r of rows) {
+      const id = Number(r.id);
+      out.set(id, { rounds: out.get(id)?.rounds ?? 0, askedAt: r.askedAt === null ? null : Number(r.askedAt),
+        liftedAt: r.liftedAt === null ? null : Number(r.liftedAt) });
+    }
+    return out;
   }
 
   /** D-6795: whether the operator lifted the review-round cap for this work run. */
@@ -4327,7 +4348,7 @@ export class CoordStore {
     ).get(workRunId, REVIEW_DONE_SUBJECT) as { runId: number; body: string; artifacts: string } | undefined;
     if (row === undefined) return { reviewRunId: null, summary: null, report: null };
     const nl = row.body.indexOf('\n');
-    const text = (nl < 0 ? '' : row.body.slice(nl + 1)).trim();
+    const text = cutWhole(redactCommand((nl < 0 ? '' : row.body.slice(nl + 1)).trim()), REVIEW_CAP_SUMMARY_MAX);
     let report: string | null = null;
     try {
       const a: unknown = JSON.parse(row.artifacts);
@@ -4335,7 +4356,7 @@ export class CoordStore {
     } catch { /* an unreadable list names no report */ }
     return {
       reviewRunId: Number(row.runId),
-      summary: text === '' ? null : redactCommand(text).slice(0, REVIEW_CAP_SUMMARY_MAX),
+      summary: text === '' ? null : text,
       report,
     };
   }
@@ -4389,8 +4410,10 @@ export class CoordStore {
    *  It takes a MEASURED row rather than a raw one (D-2545) so that the four
    *  persisted integers cannot arrive here unproven: the proof is a
    *  precondition of the type, not a step a future caller could skip. */
-  private hydrateRun(m: MeasuredRunRow, health: RunHealth): RunRow {
+  private hydrateRun(m: MeasuredRunRow, health: RunHealth,
+    caps: ReadonlyMap<number, { rounds: number; askedAt: number | null; liftedAt: number | null }>): RunRow {
     const row = m.row;
+    const kind = isRunKind(row.kind) ? row.kind : 'unknown';
     return {
       // The four PROVEN integers (D-2545), never `Number(row.…)` here: this
       // method is handed a row whose id, wave, waveOf and reviews have already
@@ -4404,7 +4427,7 @@ export class CoordStore {
       wave: m.nums.wave, waveOf: m.nums.waveOf, project: row.project,
       sessionId: row.sessionId, workspace: row.workspace, branch: row.branch,
       state: isRunState(row.state) ? row.state : 'unknown',
-      kind: isRunKind(row.kind) ? row.kind : 'unknown',
+      kind,
       reviews: m.nums.reviews,
       // `runs.claimedBy` — TEXT, nullable — read straight through on
       // `sessionId`/`workspace`/`branch`'s idiom two lines up, with no guard
@@ -4447,6 +4470,9 @@ export class CoordStore {
       // every row it ships; every other emitter carries only non-terminal runs,
       // for which the derivation answers null as well.
       childReclaim: null,
+      // D-6909: from the batch's one read, passed in on `health`'s idiom and for its reason. REQUIRED, so no caller
+      // ships a row whose cap reads as never asked when it was.
+      reviewCap: reviewCapStatus(kind, caps.get(m.nums.id)?.rounds ?? 0, caps.get(m.nums.id)),
       prLineage: row.prLineage ? (JSON.parse(row.prLineage) as PrLineageEntry[]) : [],
       // Read straight through, on `homeProject`'s idiom: a free-form project
       // name stamped once at open time (migration 12), never re-derived here.

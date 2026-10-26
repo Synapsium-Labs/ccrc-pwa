@@ -6472,6 +6472,56 @@ export interface ChildReclaimStatus {
   readonly at: number | null;
 }
 
+/**
+ * A work run's review-round cap (D-6909, building on D-6795): how many review runs name it, the cap, and when the
+ * cap's ask was raised (the refused fourth open) and lifted (the operator's `POST /api/coord/review-cap`). Both times
+ * are epoch ms on the server's clock, and null until that event. Only a work run carries one.
+ */
+export interface ReviewCapStatus { rounds: number; cap: number; askedAt: number | null; liftedAt: number | null }
+
+/** The last review's report as the store reads it from its `review-done` mail; both fields are null when no review
+ *  has reported. `summary` is the mail body after its fingerprint line. Moved here from `server/src/coord/reviewcap.ts`
+ *  (D-6910) so the PWA reads the same type the refusal sends. */
+export interface LastReviewReport { reviewRunId: number | null; summary: string | null; report: string | null }
+
+/** What reading the last review's report gave; four answers, never three. `read` carries the open findings (possibly
+ *  none); `unnamed` is no report path on file; `absent` and `unreadable` are the two read failures `readFileMeasured`
+ *  keeps apart. Those two are `ReadFailure`'s words (`shared/agent-protocol.ts`). This file cannot import that type
+ *  (its type-only imports are pinned, `peers-claims-l0.test.ts`), so the states are DERIVED from this array, as
+ *  `STALL_STORED_STATES` does, and `review-cap.test.ts` holds the failure pair EQUAL to `ReadFailure` at compile time. */
+export const REVIEW_FINDINGS_STATES = ['read', 'unnamed', 'absent', 'unreadable'] as const;
+export type ReviewFindingsState = (typeof REVIEW_FINDINGS_STATES)[number];
+export type ReviewFindings =
+  | { state: 'read'; lines: string[] }
+  | { state: Exclude<ReviewFindingsState, 'read'> };
+
+/** What the cap's notice and the console's lift sheet say about the last review's report when it was not read
+ *  (D-6910, D-6911): spelled once, beside the type it words, and read by `reviewCapNotice`
+ *  (`server/src/coord/reviewcap.ts`) and `findingsWords` (`pwa/src/fleet/reviewCapWords.ts`), so the sheet says what the
+ *  notice said. Total over the states that are not `read`, so a new state is a compile error here. The notice stays
+ *  silent on `unnamed` (no report path; a review may still have reported), so only the sheet says that word. */
+export const REVIEW_FINDINGS_WORDS: Readonly<Record<Exclude<ReviewFindingsState, 'read'>, string>> = {
+  unnamed: 'No report is on file.',
+  absent: 'The report file is gone.',
+  unreadable: 'The report file could not be read.',
+};
+/** A report that was read and lists no open findings. */
+export const REVIEW_FINDINGS_NONE_OPEN = 'The report lists no open findings.';
+
+/** The structured ask the `cap-review-rounds` refusal answers with, the notice words, and
+ *  `GET /api/coord/review-cap/:id` reads back (D-6910). */
+export interface ReviewCapAsk {
+  run: number; rounds: number; cap: number;
+  lastReview: LastReviewReport & { findings: ReviewFindings };
+}
+
+/** `GET /api/coord/review-cap/:id`'s answer (D-6910): the ask, composed by the same helper as the refusal's, and when
+ *  it was raised and lifted (`ReviewCapStatus`'s two times). */
+export interface ReviewCapView { ok: true; ask: ReviewCapAsk; askedAt: number | null; liftedAt: number | null }
+
+/** `POST /api/coord/review-cap`'s answer (D-6795), typed once for the route's literal and the PWA's call. */
+export interface ReviewCapLiftAnswer { ok: true; run: number; rounds: number; cap: number; lifted: true }
+
 export interface RunSummary {
   id: number;
   program: string;              // slug
@@ -6626,6 +6676,17 @@ export interface RunSummary {
    * omits it and a `RunSummary` is cast, never revived.
    */
   childReclaim: ChildReclaimStatus | null;
+
+  /**
+   * D-6909: this run's review-round cap. A work run carries its `ReviewCapStatus`; a review run, or a run of unknown
+   * kind, carries `null`. Batch-read in `hydrateRun`, so every emitter carries it: `GET /api/runs`, the live
+   * `{type:'runs'}` frame and the advance echo.
+   *
+   * ADDITIVE; `FLEET_PROTO` is not bumped. REQUIRED here for `health`'s reason (`hydrateRun` returns a literal).
+   * OPTIONAL at the PWA's one reader, `reviewCapOf` (`pwa/src/fleet/reviewCapWords.ts`), because an older server
+   * omits it and a `RunSummary` is cast, never revived: absent reads as unmeasured, never as "not waiting".
+   */
+  reviewCap: ReviewCapStatus | null;
 }
 
 /** Speed and quality per run (routing spec 2026-09-14 §6), READ-ONLY, from the

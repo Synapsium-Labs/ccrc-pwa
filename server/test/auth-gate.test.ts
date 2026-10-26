@@ -277,7 +277,9 @@ describe('the scanner is looking at something', () => {
     // 45 on the merge with `GET /api/runs/:id` (D-6799, the run plus its spend): box-token or session, EXEMPT.
     // 46 since `GET /api/coord/shadow-journal` (D-6861, the unarmed disk lanes' shadow journal): a read, session-gated,
     // NOT EXEMPT, no box token, its rows masked.
-    expect(scanRoutes('coord/routes.ts').length).toBe(46);
+    // 47 on the merge with `GET /api/coord/review-cap/:id` (D-6910): the operator's read of the review cap's ask,
+    // session-gated like the lift, NOT EXEMPT, no box token.
+    expect(scanRoutes('coord/routes.ts').length).toBe(47);
     // 5 in `update/routes.ts` (update-management W2, design 2026-09-20 §12):
     // `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`
     // and `POST /api/updates/ack`, session-only and NOT EXEMPT, plus the
@@ -416,7 +418,9 @@ describe('the scanner is looking at something', () => {
     // 60 + 45 + 7 + 2 + 4 + 5 = 123, the HTTP half 120, the gated count stays 78, the exempt-HTTP count 41 -> 42.
     // 124 since `GET /api/coord/shadow-journal` (D-6861), session-gated, NOT EXEMPT, no box token:
     // 60 + 46 + 7 + 2 + 4 + 5 = 124, the HTTP half 121, the gated count 78 -> 79, the exempt-HTTP count stays 42.
-    expect(ROUTES.length).toBe(124);
+    // 125 on the merge with `GET /api/coord/review-cap/:id` (D-6910, session-gated, NOT EXEMPT, no box token):
+    // 60 + 47 + 7 + 2 + 4 + 5 = 125, the HTTP half 122, the gated count 79 -> 80, the exempt-HTTP count stays 42.
+    expect(ROUTES.length).toBe(125);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -565,7 +569,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 124 scanned + the static wildcard when the bundle is built.
+    // 125 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -919,6 +923,18 @@ describe('with the gate ARMED and no cookie', () => {
       expect(verdictOf(res)).toBe('no-session');
     });
 
+  // D-6910: the box token never reaches either review-cap route. A gated route ignores the header, so the token alone
+  // is refused exactly as no credential is: no machine lane composes the ask or lifts a cap. The cap's counts and times
+  // do reach a token holder, as `reviewCap` on `GET /api/runs` and `GET /api/runs/:id`; they hold no secret, so this
+  // gate is posture, not confidentiality.
+  it.each([['GET', '/api/coord/review-cap/7'], ['POST', '/api/coord/review-cap']] as const)(
+    '%s %s refuses the box token alone', async (method, url) => {
+      const w = await openApp(); app = w.app;
+      const res = await app.inject({ method, url, headers: tokenHeader, ...(method === 'POST' ? { payload: { run: 7 } } : {}) });
+      expect(gateRefused(res), `${method} ${url} answered ${res.statusCode}`).toBe(true);
+      expect(verdictOf(res)).toBe('no-session');
+    });
+
   it.each(WS_ROUTES)('the %s upgrade is refused before any socket exists', async (route) => {
     const w = await openApp(); app = w.app;
     // `injectWS` resolves only on a `101`; a non-101 rejects with the status in
@@ -1127,7 +1143,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 121 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 122 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1191,7 +1207,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 121 HTTP routes, not the 42 exempt.
+          //    is not itself flag-aware — the assertion that covers all 122 HTTP routes, not the 42 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)
