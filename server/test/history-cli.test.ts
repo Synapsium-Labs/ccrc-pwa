@@ -2692,3 +2692,27 @@ describe('README states the headless seam: its variables, the marker, the refusa
     expect(p).toContain('exit 8');
   });
 });
+
+describe('CP-39 Task 2: status never reads a link walk\'s state (D-6940)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  it('the meta statement status runs leaves out every sidecar_walk: row, and status answers as before beside one of several MB', () => {
+    const box = boundBox('ccrc-hist-cli-cp39-walk-');
+    const big = JSON.stringify({ v: 1, done: { names: Array.from({ length: 60_000 }, (_, i) => `n${i}-${'q'.repeat(60)}.txt`), text: [], toolu: [] }, walk: null });
+    expect(big.length, 'CONTROL: several MB').toBeGreaterThan(4 * 1024 * 1024);
+    const db = new DatabaseSync(dbFile(box));
+    try { db.prepare("INSERT INTO meta (k, v) VALUES ('sidecar_walk:7', ?)").run(big); } finally { db.close(); }
+    // The statement, read from the module itself in a child, as the cost case reads STATUS_SQL (importing it here would set this worker's umask).
+    const sql = spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e',
+      `const m = await import(${JSON.stringify(pathToFileURL(CLI).href)}); process.stdout.write(m.STATUS_SQL.meta);`], { encoding: 'utf8' });
+    expect(sql.status, sql.stderr).toBe(0);
+    const ro = new DatabaseSync(dbFile(box), { readOnly: true });
+    try {
+      const keys = (ro.prepare(sql.stdout).all() as { k: string }[]).map((r) => r.k);
+      expect(keys, 'CONTROL: the statement reads the other rows').toContain('store_id');
+      expect(keys.filter((k) => k.startsWith('sidecar_walk:')), 'no walk state reaches status').toEqual([]);
+    } finally { ro.close(); }
+    const r = status(box);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.env.store_id).toBe(storeIdOf(box));
+  });
+});

@@ -36,7 +36,7 @@ import { pathToFileURL } from 'node:url';
 import {
   EXIT, COVERAGE, SCHEMA_VERSION, UUID_RE, HARNESSES, CLI_STAT_DEADLINE_MS,
   historyPaths, readBoxEnvValue, decideCliStore, CONTROL_FILE_MAX, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
-  decideStatusReadFailure, RETENTION_STATE_META, decideGrepIndex, parsePassMarker, decidePassLive, parsePassDied, decideOpLive,
+  decideStatusReadFailure, RETENTION_STATE_META, SIDECAR_WALK_META, decideGrepIndex, parsePassMarker, decidePassLive, parsePassDied, decideOpLive,
 } from './lib.mjs';
 import { StoreError, measureStoreFacts, openReader, userVersion, measuredSize, readBounded, FTS_GATE_SQL, ftsGateFactsOn } from './store.mjs';
 // The health block's own imports (task 28). Namespace imports, so this block
@@ -72,7 +72,8 @@ process.umask(0o077);
 
 /** Every statement status prepares besides its PRAGMAs (the cost pin reads this object). */
 export const STATUS_SQL = Object.freeze({
-  meta: 'SELECT k, v FROM meta',
+  // CP-39 (D-6940): a link walk's state is the sweep's working memory, up to MBs a row; status reads none of it.
+  meta: `SELECT k, v FROM meta WHERE k NOT LIKE '${SIDECAR_WALK_META.replace('_', '\\_')}%' ESCAPE '\\'`,
   counters: 'SELECT name, n FROM counters',
   ticks: 'SELECT tick_id, ts_ms, lag_ms, bytes, files_behind, bytes_behind FROM ticks ORDER BY tick_id DESC LIMIT 3',
   recover: "SELECT version, cursor FROM derivation_state WHERE step = 'recover' AND completed_ms IS NULL ORDER BY version DESC LIMIT 1",
