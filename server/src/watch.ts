@@ -8275,7 +8275,7 @@ export class FleetWatcher {
       // sentence falls back to a GENERIC one naming no row detail: the reason
       // is display-only here, and a notification must not assert a run number,
       // a programme or a wave off a read that did not happen.
-      const sib = this.deps.coord?.openRunsForSession(r.id);
+      const sib = this.deps.coord?.bindingsOf(r.id).worker();
       const unreadable = sib !== undefined && !sib.ok;
       const openRuns = sib?.ok ? sib.siblings : [];
       const run = openRuns[openRuns.length - 1];
