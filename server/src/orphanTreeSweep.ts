@@ -3,9 +3,11 @@
 // `coord/collectOrphanTree.ts`'s. `watch.ts` owns one of these and calls `pass()` from its tick.
 //
 // One pass: read the switches (a pause clears every first sighting and ends the pass); take the census when it is due
-// (every 6 hours, hourly under pressure; a truncated one audits nothing new); then at most one act job for the ripest
-// tree and at most 2 learning audits (4 under pressure) for due trees, each on the lane's one `KeyedQueue` key so no two
-// calls of the lane overlap. A pass awaits only its own calls and is never overtaken (`sweeping`).
+// (every 6 hours, hourly under pressure; a truncated one audits nothing that pass, says so once in the feed and is
+// asked again on a back-off from 15 minutes up to the cadence, and an unreadable one after 15 minutes, #1565); then at
+// most one act job for the ripest tree and at most 2 learning audits (4 under pressure) for due trees, each on the
+// lane's one `KeyedQueue` key so no two calls of the lane overlap. A pass awaits only its own calls and is never
+// overtaken (`sweeping`).
 import type { FleetIO } from './io.js';
 import type { FleetState } from './fleetstate.js';
 import type { RunCcd } from './coord/ports.js';
@@ -14,7 +16,7 @@ import {
 } from './coord/collectOrphanTree.js';
 import {
   ORPHAN_AUDITS_PER_PASS, ORPHAN_AUDITS_PER_PASS_PRESSURE, ORPHAN_CENSUS_MS, ORPHAN_CENSUS_PRESSURE_MS, ORPHAN_QUEUE_KEY,
-  ORPHAN_RETRY_MS, isAuditedClass, orphanPathOfHex, orphanCensusDue, orphanGoesWithRow, orphanHeldBack, orphanInsideVerdict, orphanFeedRow, orphanFoldAudit, orphanFoldJob, orphanOffers, orphanPopulate,
+  ORPHAN_RETRY_MS, isAuditedClass, orphanPathOfHex, orphanCensusDue, orphanCensusRetryMono, orphanTruncatedRow, orphanTruncatedWaitMs, orphanGoesWithRow, orphanHeldBack, orphanInsideVerdict, orphanFeedRow, orphanFoldAudit, orphanFoldJob, orphanOffers, orphanPopulate,
   orphanRemember, orphanRescueArmed, orphanTreesHealth,
   type OrphanFold, type OrphanMemory, type OrphanRow, type OrphanTreeMemory,
 } from './orphanTreeLane.js';
@@ -50,6 +52,8 @@ export class OrphanTreeSweep {
   private rowUnreadableSaid = new Set<string>();
   private wsKinds = new Map<string, boolean | null>();
   private unreadableSaid = false;
+  /** Truncated censuses in a row (D-6987): a whole census resets it; an unreadable one leaves it. */
+  private truncatedStreak = 0;
 
   constructor(private readonly deps: OrphanSweepDeps) {}
 
@@ -117,12 +121,22 @@ export class OrphanTreeSweep {
     }
     const rescueArmed = orphanRescueArmed(sw);
     if (orphanCensusDue(this.lastCensus, d.mono(), pressure)) {
-      const c = await d.queue.run(ORPHAN_QUEUE_KEY, () => censusOrphans(this.ccd()));
+      let askedAt = 0;
+      const c = await d.queue.run(ORPHAN_QUEUE_KEY, () => { askedAt = d.mono(); return censusOrphans(this.ccd()); });
       if (c.kind === 'not-asked') return;
       const now = d.mono();
-      if (c.kind === 'unreadable') { this.lastCensus = now - censusMs + ORPHAN_RETRY_MS; return; }
+      if (c.kind === 'unreadable') { this.lastCensus = orphanCensusRetryMono(now, censusMs, ORPHAN_RETRY_MS); return; }
+      if (c.truncated) {
+        this.truncatedStreak += 1;
+        const waitMs = orphanTruncatedWaitMs(this.truncatedStreak, censusMs);
+        this.lastCensus = orphanCensusRetryMono(now, censusMs, waitMs);
+        const row = orphanTruncatedRow(c.rows.length, now - askedAt, waitMs);
+        console.warn(`ccrc-server: ${row.title}: ${row.body}`);
+        d.record(row.title, row.body);
+        return;
+      }
+      this.truncatedStreak = 0;
       this.lastCensus = now;
-      if (c.truncated) return;
       this.rows = c.rows;
       const coords = this.coordinators();
       await this.readWsKinds(c.rows);
