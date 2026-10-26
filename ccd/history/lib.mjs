@@ -219,6 +219,32 @@ export const RUN_BUDGET_BYTES = 512 * 1024 * 1024;
  *  generation never starves capture; bytes are compressed, as the backfill charges them. */
 export const REDERIVE_SLICE_MS = 20_000;
 export const REDERIVE_SLICE_BYTES = 128 * 1024 * 1024;
+/** CP-39 (D-6935, D-6939): the derivation's shares of the ONE run budget, per mille of its limits, in tick order (chosen).
+ *  One set of numbers serves the ladder of ceilings (budgetRungs) and the floors (budgetFloors). Measured on the fleet box:
+ *  every budget-gated derivation starved while ingest owned the whole budget, and under load the sweep unit (shipped at
+ *  Nice=19 with idle I/O) got 0.1-0.17 of a core, so 90 s of wall clock was about 9-15 s of CPU. The FTS backfill takes
+ *  the largest share, being the largest backlog by count (at most about 486,000 blobs owed) and the one every grep
+ *  waits on; the leaves and the census 10% each (the census builds one
+ *  file clock, a stat per recorded file, before its first chunk, over about 1.14 million blobs); the card step 5% (a few
+ *  cards a tick in steady state). Ingest keeps 60%, which still drains a backlog over ticks (§9.2 step 7). */
+export const DERIVE_SHARES = Object.freeze({ fts: 150, nodes: 100, card: 50, census: 100 });
+const RUNG_ORDER = Object.freeze(['fts', 'nodes', 'card', 'census']);
+const perMille = (max, k) => Math.floor(max * k / 1000);
+/** D-6935: each ceiling admits one unit whenever the run's own limit is at least 1 (P1). */
+const ceilingOf = (max, k) => (max >= 1 ? Math.max(1, perMille(max, k)) : 0);
+/** D-6935: the ceilings, as limits of the same run budget: ingest's is the budget less every share; each step's is the
+ *  budget less the shares of the steps after it; the census's is the budget itself. */
+export function budgetRungs({ maxMs, maxBytes }, shares = DERIVE_SHARES) {
+  const at = (after) => ({ maxMs: ceilingOf(maxMs, 1000 - after), maxBytes: ceilingOf(maxBytes, 1000 - after) });
+  const sumOf = (keys) => keys.reduce((n, k) => n + shares[k], 0);
+  const out = { ingest: at(sumOf(RUNG_ORDER)) };
+  RUNG_ORDER.forEach((k, i) => { out[k] = at(sumOf(RUNG_ORDER.slice(i + 1))); });
+  return out;
+}
+/** D-6939: each step's floor is its share of the run's limits, rounded down, with no minimum. */
+export function budgetFloors({ maxMs, maxBytes }, shares = DERIVE_SHARES) {
+  return Object.fromEntries(RUNG_ORDER.map((k) => [k, { maxMs: perMille(maxMs, shares[k]), maxBytes: perMille(maxBytes, shares[k]) }]));
+}
 export const CAP_DEFAULT_GB = 50;
 export const CAP_WARN_PCT = 80;
 export const FLOOR_GIB = 15;

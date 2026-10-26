@@ -55,7 +55,7 @@ import {
   makeProbeIndex, parseRederiveState, formatRederiveState, rederivePlan, phraseValues,
   makeBelt, beltUnits, BELT_META, BELT_NODES_STEP, BELT_COUNTERS, REDACT_SOURCES_META, normalizeRedactSources, parseBeltState, formatBeltState,
   decideBelt, beltAfterGeneration, BELT_VERSION, beltWitnessMoved,
-  REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
+  REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES, budgetRungs, budgetFloors,
   REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, formatOpMarker, decideOpLive, formatPassMarker, parsePassMarker, decidePassLive, parsePassDied, formatPassDied, procStartOf, bootIdOf, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
   HARNESS_TABLE, exportDates, dueTranscriptKeys, shortestRetentionHome, planExport, exportDueOldestMeta, retentionLowered, parseJournalRecord,
   decideRecallOff, decideRecallOffWrite, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
@@ -3654,22 +3654,22 @@ export async function bindingPass(home, P, op, args, deps, out) {
  *     location, each decided in its own FULL transaction;
  * 10. `registryBackfill`: only when `scanDue` says the periodic scan is due, every `$REG/<id>.uuid` that names no
  *     epoch becomes a registry mapping, committed before any ingest chunk can need it (D-4297);
- * 11. `ingestTick`: discovery, admission and the chunked read under the run's ONE budget, unless a cap or floor pause
+ * 11. `ingestTick`: discovery, admission and the chunked read within its ceiling of the run's ONE budget (D-6935), unless a cap or floor pause
  *     (`ctx.ingest` false) or an unreadable roster holds it; a busy database ends the tick here;
  * 12. `backfillEpochFacts`: launch facts an epoch chained after its transcript's first chunk missed, after an ingest;
  * 13. `resetFtsPending`: blobs this tick wrote but could not index re-open the completed FTS backfill;
- * 14. `deriveFts`: §9.1 derivation ('fts', 1)'s backfill within what is left of the budget, held with the ingest
+ * 14. `deriveFts`: §9.1 derivation ('fts', 1)'s backfill on its own slice of the run's ONE budget (D-6939), held with the ingest
  *     (D-4242) and when Task 19's per-chunk floor stopped it;
- * 15. `deriveNodes`: the leaves from the boundaries stored so far (§9.2 step 6; W1-B2 Task 8), held with the ingest
+ * 15. `deriveNodes`: on its own slice of the run's ONE budget (D-6939), the leaves from the boundaries stored so far (§9.2 step 6; W1-B2 Task 8), held with the ingest
  *     and the FTS backfill (a node grows db/, §9.3) and run after the backfill, so a new node's nodes_fts row is
  *     written in a tick whose tables exist;
- * 16. `cardStep`: §9.2 step 6 under the derivation's gate: the card delivery measure, then the card/ predictions
+ * 16. `cardStep`: §9.2 step 6 under the derivation's gate, on its own slice of the run's ONE budget (D-6939): the card delivery measure, then the card/ predictions
  *     consumed, deleted and written (card.mjs; W1-B3 Tasks 5 and 6);
  * 17. `withdrawCards`: every card/ prediction unlinked when this tick ran no card step over a caught-up ingest
  *     (ruling RC2: fail closed; lib decideCardWithdraw names the reason), and, on a pass that kept the rest, the
  *     predictions of the sessions whose transcript copy ingest skipped (a read error), admission refused or whose parse crashed this tick
  *     (D-5061 (history-card-withdraw-on-a-skipped-copy));
- * 18. `mergeSteps`: §6.2's merge steps, which run under any pause: they free space rather than take it;
+ * 18. `mergeSteps`: §6.2's merge steps, on the card step's slice, which run under any pause: they free space rather than take it;
  * 19. `recordRecallOff`: W2-D30's presence record (W2-1 Task 4): recall-off/ read once, at most RECALL_OFF_SCAN_MAX
  *     entries, outside the run budget; its meta rows and its change and gap records committed in one transaction through
  *     the outbox; only while no recovery step is registered (the recover arm never calls it, and replay never observes);
@@ -3719,6 +3719,10 @@ export async function tick(db, ctx) {
   // §6.2 "The belt": while ('nodes-belt', 1) is open, every node's stored fields re-redacted, in the slice the two
   // re-index steps share; it writes only the nodes the redaction changes (W1-B2 Task 29).
   beltNodesStep(db, ictx, slice);
+  // CP-39 (D-6935, D-6939): ingest stops at its ceiling of the ONE budget; each derivation step runs on its own slice from its own start.
+  // The one run budget's rule as amended (D-6936): on a scheduled tick ingest, its discovery and its sidecars included, leaves the
+  // derivation its reserve, and a pass may overrun the budget by at most the floors' sum plus one unit per step.
+  const rungs = runRungs(ctx.budget);
   // Step 1, the drain: journal first, then the FULL drain transaction, then its verdicts, then the unlink (§9.14).
   // runPass never ticks without both binding names: a missing store.writer is a hold there (§9.10 "Writer token").
   // F16: one transcript index and one first-row memory per tick, shared by the drain's location rule and the candidates' (confirmClear) below
@@ -3751,32 +3755,33 @@ export async function tick(db, ctx) {
   // held with ingest, and when Task 19's per-chunk floor stopped this run's ingest (ing.paused): it
   // grows db/, which a store at its cap or a volume at its floor must not take
   // (D-4242).
-  const ing = ctx.ingest && !ctx.rosterUnreadable ? await ingestTick(db, ictx, ctx.budget) : null;
+  const ing = ctx.ingest && !ctx.rosterUnreadable ? await ingestTick(db, ictx, rungs.ingest) : null;
   if (ing !== null && ing.busy) return;   // the write lock is another's: nothing more this tick
   // §6.2 epochs: launch facts an epoch chained after its transcript's first chunk missed (plan task 20).
   if (ing !== null) backfillEpochFacts(db, ictx);
   // Blobs this tick wrote but could not index (no FTS this tick) re-open the completed backfill.
   if (ing !== null && ing.bytes > 0 && ictx.fts !== true) resetFtsPending(db);
-  // §9.1 derivation ('fts', 1)'s backfill, within what is left of the ONE budget. It grows db/, so a cap or floor
+  // §9.1 derivation ('fts', 1)'s backfill, on its own slice of the run's ONE budget (D-6939). It grows db/, so a cap or floor
   // pause, or the per-chunk floor that stopped this run's ingest, holds it (D-4242).
-  if (ctx.ingest && !(ing !== null && ing.paused)) await deriveFts(db, ictx, ctx.budget);
+  if (ctx.ingest && !(ing !== null && ing.paused)) await deriveFts(db, ictx, rungs.slice('fts'));
   // Derive, nodes (W1-B2 Task 8): leaves from the boundaries stored so far, under the FTS backfill's gate, because a
   // node grows db/ (§9.3), and after it, so a new node's nodes_fts row is written in a tick whose tables exist.
   // A receipt file newly renamed in this tick is deliberately not read until the next one. A complete spool census
   // narrows its bounded candidate session UUIDs; an unmeasured census holds every leaf. deriveNodes is synchronous. D-4224
   ictx.pendingReceiptState = ctx.pendingReceiptState;
-  if (ctx.ingest && !(ing !== null && ing.paused)) deriveNodes(db, ictx, ctx.budget);
+  if (ctx.ingest && !(ing !== null && ing.paused)) deriveNodes(db, ictx, rungs.slice('nodes'));
   // §9.2 step 6, after the leaves and parents (W1-B3 Task 5): measure card delivery, then consume and write the
   // card/ predictions, under the derivation's gate. A tick that does not reach the card step over a caught-up ingest
   // (a cap or floor pause, a per-chunk floor stop, an ingest an unreadable roster skipped, a budget spent before the
   // step) withdraws every prediction instead, fail closed: lib decideCardWithdraw names the reason (ruling RC2). The
-  // budget is read here, before the step. D-4224 D-4740 (history-card-withdrawn-when-not-ticking)
-  const cardPass = { arm: 'run', pause: ctx.pause, floorStop: ing !== null && ing.paused, ingested: ing !== null, budgetLeft: budgetLeft(ctx.budget) };
-  if (ctx.ingest && !(ing !== null && ing.paused)) cardStep(db, ictx, ctx.budget);
+  // budget is read here, before the step (the card step's own slice, D-6939). D-4224 D-4740 (history-card-withdrawn-when-not-ticking)
+  const card = rungs.slice('card');
+  const cardPass = { arm: 'run', pause: ctx.pause, floorStop: ing !== null && ing.paused, ingested: ing !== null, budgetLeft: budgetLeft(card) };
+  if (ctx.ingest && !(ing !== null && ing.paused)) cardStep(db, ictx, card);
   withdrawCards(db, ctx.home, cardPass, ctx.out, ing === null ? undefined : ing.skipped);   // D-5061: and a skipped copy's session
   // §6.2's merge steps run under any pause (§9.2: only ingest pauses): they purge a late pair's deleted bytes and
   // free space rather than take it.
-  mergeSteps(db, ictx, ctx.budget);
+  mergeSteps(db, ictx, card);
   // W2-D30 (W2-1 Task 4): the recall-off presence record, immediately before the tick's row, on this normal pass only. It
   // returns at once while a recovery step is registered; recoverPass never calls it.
   recordRecallOff(db, ctx);
@@ -4365,6 +4370,45 @@ export function newBudget(now = Date.now, limits = {}) {
 /** Whether the run may start another chunk or file: lib's verdict on this budget. */
 export function budgetLeft(budget) {
   return withinBudget({ elapsedMs: budget.now() - budget.startMs, bytes: budget.bytes, maxMs: budget.maxMs, maxBytes: budget.maxBytes });
+}
+
+/** Ingest's ceiling rung of the run's ONE budget (CP-39, D-6935): its clock, start and byte count are the run's, shared
+ *  through accessors, under the rung's lower limits. Never a reset: bytes charged to a rung are charged to the run (O5). */
+export function budgetRung(budget, limits) {
+  return {
+    get startMs() { return budget.startMs; },
+    now: budget.now,
+    chunkBytes: budget.chunkBytes,
+    maxMs: Math.min(limits.maxMs, budget.maxMs),
+    maxBytes: Math.min(limits.maxBytes, budget.maxBytes),
+    get bytes() { return budget.bytes; },
+    set bytes(v) { budget.bytes = v; },
+  };
+}
+
+/** A derivation step's slice of the run's ONE budget (CP-39, D-6939): it starts at the step's own start, and holds the larger
+ *  of what is left of the step's ceiling and the step's floor, in ms and in bytes, as D-4344's rederiveSlice is a budget of
+ *  its own. Its byte count starts at 0, and every charge to it is a charge to the run. */
+export function stepSlice(budget, ceiling, floor) {
+  const startMs = budget.now();
+  const base = budget.bytes;
+  return {
+    startMs,
+    now: budget.now,
+    chunkBytes: budget.chunkBytes,
+    maxMs: Math.max(ceiling.maxMs - (startMs - budget.startMs), floor.maxMs),
+    maxBytes: Math.max(ceiling.maxBytes - base, floor.maxBytes),
+    get bytes() { return budget.bytes - base; },
+    set bytes(v) { budget.bytes = base + v; },
+  };
+}
+
+/** The tick's rungs (D-6935, D-6939): ingest's ceiling, and each derivation step's slice, made when the step starts. */
+export function runRungs(budget) {
+  const limits = { maxMs: budget.maxMs, maxBytes: budget.maxBytes };
+  const ceilings = budgetRungs(limits);
+  const floors = budgetFloors(limits);
+  return { ingest: budgetRung(budget, ceilings.ingest), slice: (step) => stepSlice(budget, ceilings[step], floors[step]) };
 }
 
 /** Up to `n` bytes at `pos`, fewer only at end-of-file. */
@@ -7852,7 +7896,8 @@ export function periodicCensus(db, ctx) {
     setMeta(db, 'census_ms', String(nowMs));
     journalAudit(db, ctx, nowMs);
   }
-  exportCensus(db, nowMs, ctx.budget);
+  // CP-39 (D-6939): on a scheduled pass the census runs on its own slice, so it moves even when the tick or the hourly export pass spent the run.
+  exportCensus(db, nowMs, runRungs(ctx.budget).slice('census'));
 }
 
 // ── prune (W1-B2 Task 20) ──────────────────────────────────────────────────────────────────────────

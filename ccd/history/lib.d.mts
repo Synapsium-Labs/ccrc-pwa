@@ -47,6 +47,15 @@ export const RUN_BUDGET_MS: number;
 export const RUN_BUDGET_BYTES: number;
 export const REDERIVE_SLICE_MS: number;
 export const REDERIVE_SLICE_BYTES: number;
+export const DERIVE_SHARES: Readonly<{ fts: number; nodes: number; card: number; census: number }>;
+export function budgetRungs(
+  run: { maxMs: number; maxBytes: number },
+  shares?: { fts: number; nodes: number; card: number; census: number },
+): Record<'ingest' | 'fts' | 'nodes' | 'card' | 'census', { maxMs: number; maxBytes: number }>;
+export function budgetFloors(
+  run: { maxMs: number; maxBytes: number },
+  shares?: { fts: number; nodes: number; card: number; census: number },
+): Record<'fts' | 'nodes' | 'card' | 'census', { maxMs: number; maxBytes: number }>;
 export const CAP_DEFAULT_GB: number;
 export const CAP_WARN_PCT: number;
 export const FLOOR_GIB: number;

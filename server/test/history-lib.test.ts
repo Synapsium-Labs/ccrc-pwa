@@ -11975,3 +11975,40 @@ describe('CP-39 Task 3: the sidecar scan cursor and what a finished wrap records
     expect(lib.sidecarWrapClose({ v: 1, dir: null, taken: 3, left: 2, held: true })).toEqual({ unseen: 5, mark: false });
   });
 });
+
+describe('CP-39 Task 4: the ladder of ceilings and the floors, from one set of shares (D-6935, D-6939)', () => {
+  it('the default budget: ingest ends at 54 s; each step\'s ceiling is the budget less the shares after it; each floor is its share; the floors sum to 36 s', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.DERIVE_SHARES).toEqual({ fts: 150, nodes: 100, card: 50, census: 100 });
+    const run = { maxMs: lib.RUN_BUDGET_MS, maxBytes: lib.RUN_BUDGET_BYTES };
+    const r = lib.budgetRungs(run);
+    expect(Object.fromEntries(Object.entries(r).map(([k, v]) => [k, v.maxMs]))).toEqual({ ingest: 54_000, fts: 67_500, nodes: 76_500, card: 81_000, census: 90_000 });
+    expect(r.ingest.maxBytes).toBe(Math.floor(lib.RUN_BUDGET_BYTES * 600 / 1000));
+    expect(r.census).toEqual(run);
+    const f = lib.budgetFloors(run);
+    expect(Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v.maxMs]))).toEqual({ fts: 13_500, nodes: 9_000, card: 4_500, census: 9_000 });
+    expect(f.fts.maxBytes).toBe(Math.floor(lib.RUN_BUDGET_BYTES * 150 / 1000));
+    expect(Object.values(f).reduce((n, x) => n + x.maxMs, 0), 'the overrun bound\'s time part').toBe(36_000);
+  });
+  it('a ceiling admits one unit whenever the run\'s own limit is at least 1; a floor rounds down to none (P1)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    for (const v of Object.values(lib.budgetRungs({ maxMs: 1, maxBytes: 1 }))) expect(v).toEqual({ maxMs: 1, maxBytes: 1 });
+    for (const v of Object.values(lib.budgetRungs({ maxMs: 0, maxBytes: 0 }))) expect(v).toEqual({ maxMs: 0, maxBytes: 0 });
+    for (const v of Object.values(lib.budgetFloors({ maxMs: 1, maxBytes: 1 }))) expect(v).toEqual({ maxMs: 0, maxBytes: 0 });
+  });
+  it('monotone, integral and never above the run\'s limits, for any budget a test injects', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    for (const b of [{ maxMs: 0, maxBytes: 0 }, { maxMs: 1, maxBytes: 1 }, { maxMs: 35, maxBytes: 1024 }, { maxMs: 1_000, maxBytes: 7 }]) {
+      const r = lib.budgetRungs(b);
+      const order = [r.ingest, r.fts, r.nodes, r.card, r.census];
+      for (let i = 1; i < order.length; i += 1) {
+        expect(order[i]!.maxMs).toBeGreaterThanOrEqual(order[i - 1]!.maxMs);
+        expect(order[i]!.maxBytes).toBeGreaterThanOrEqual(order[i - 1]!.maxBytes);
+      }
+      for (const x of [...order, ...Object.values(lib.budgetFloors(b))]) {
+        expect(Number.isInteger(x.maxMs) && x.maxMs <= b.maxMs).toBe(true);
+        expect(Number.isInteger(x.maxBytes) && x.maxBytes <= b.maxBytes).toBe(true);
+      }
+    }
+  });
+});

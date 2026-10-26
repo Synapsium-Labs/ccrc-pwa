@@ -5440,3 +5440,89 @@ describe('CP-39 Task 3: each half of the ingest keeps its own scan mark, and dis
     } finally { db.close(); }
   });
 });
+
+describe('CP-39 Task 4: a ceiling rung keeps the run\'s start; a step slice starts at its step and keeps its floor (D-6935, D-6939)', () => {
+  interface Lim { maxMs: number; maxBytes: number }
+  interface R4 { budgetRung(b: IxBudget, l: Lim): IxBudget; stepSlice(b: IxBudget, ceiling: Lim, floor: Lim): IxBudget; budgetLeft(b: IxBudget): boolean }
+  it('a ceiling rung: the run\'s start and bytes, shared; spent at its own maxMs and maxBytes while the run is live; never above the run', async () => {
+    const { sweep } = await IX.api();
+    const S = sweep as unknown as IxSweep & R4;
+    let t = 1_000;
+    const run = S.newBudget(() => t, { maxMs: 100, maxBytes: 100 });   // starts at 1000
+    t = 1_030;                                                           // the run has aged when the rung is made
+    const rung = S.budgetRung(run, { maxMs: 50, maxBytes: 60 });
+    expect(rung.startMs, "the rung keeps the run's start (O5), not the moment it was made").toBe(1_000);
+    t = 1_049;
+    expect(S.budgetLeft(rung), 'inside its maxMs').toBe(true);
+    t = 1_050;
+    expect(S.budgetLeft(rung), 'spent at its own maxMs').toBe(false);
+    expect(S.budgetLeft(run), 'CONTROL: the run is live').toBe(true);
+    const fresh = S.newBudget(() => 0, { maxMs: 100, maxBytes: 100 });
+    const byBytes = S.budgetRung(fresh, { maxMs: 50, maxBytes: 60 });
+    byBytes.bytes += 70;
+    expect(fresh.bytes, "a charge to the rung is the run's").toBe(70);
+    expect(S.budgetLeft(byBytes), 'spent at its own maxBytes').toBe(false);
+    expect(S.budgetLeft(fresh), 'CONTROL: the run is not').toBe(true);
+    const over = S.budgetRung(run, { maxMs: 999, maxBytes: 999 });
+    expect([over.maxMs, over.maxBytes], "never above the run's limits").toEqual([100, 100]);
+  });
+  it('a step slice: it starts at the step, takes the larger of what is left of its ceiling and its floor, and charges the run', async () => {
+    const { sweep } = await IX.api();
+    const S = sweep as unknown as IxSweep & R4;
+    let t = 1_000;
+    const run = S.newBudget(() => t, { maxMs: 100, maxBytes: 100 });
+    // Before its ceiling: what is left of the ceiling is more than the floor.
+    t = 1_020;
+    run.bytes = 30;
+    const early = S.stepSlice(run, { maxMs: 80, maxBytes: 80 }, { maxMs: 10, maxBytes: 20 });
+    expect([early.startMs, early.maxMs, early.maxBytes, early.bytes], "the step's start; 80 - 20 ms and 80 - 30 bytes left").toEqual([1_020, 60, 50, 0]);
+    // Past the run's time and past the ceiling's bytes (90 of 80): the floor, in ms and in bytes, from the step's own start.
+    t = 1_150;
+    run.bytes = 90;
+    expect(S.budgetLeft(run), 'CONTROL: the run is spent').toBe(false);
+    const late = S.stepSlice(run, { maxMs: 80, maxBytes: 80 }, { maxMs: 10, maxBytes: 20 });
+    expect([late.startMs, late.maxMs, late.maxBytes], 'the floor, counted from the step').toEqual([1_150, 10, 20]);
+    t = 1_159;
+    expect(S.budgetLeft(late), 'inside its floor though the run is spent').toBe(true);
+    late.bytes += 15;
+    expect(run.bytes, "a charge to the slice is the run's").toBe(105);
+    t = 1_160;
+    expect(S.budgetLeft(late), 'spent at its floor').toBe(false);
+  });
+});
+
+describe('CP-39 Task 4: the link walk charges its rows\' compressed bytes to the run, through an ingest rung (D-6930, D-6935)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  interface T4W {
+    ingestSidecars(db: DatabaseSync, ctx: IxCtx, b: IxBudget, uuids: Iterable<string>, opts?: { from?: string | null }): Promise<Record<string, unknown> & { bytes: number; complete: boolean }>;
+    budgetRung(b: IxBudget, l: { maxMs: number; maxBytes: number }): IxBudget;
+    budgetLeft(b: IxBudget): boolean;
+  }
+  it('a rung whose byte ceiling the walk\'s first row reaches stops the walk after that row, and the run holds exactly that row\'s compressed size', async () => {
+    const { sweep } = await IX.api();
+    const S = sweep as unknown as Omit<IxSweep, 'ingestSidecars'> & T4W;
+    const box = IX.newBox('ccrc-hist-cp39-t4w-');
+    IX.plantCopy(box.homes[0]!, IX.U, CP39.rows());
+    const dir = CP39.sideDir(box.homes[0]!);
+    for (let k = 1; k <= CP39.ROWS; k += 1) fs.writeFileSync(path.join(dir, `out${k}.txt`), `body ${k}\n`);
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      // The transcript half alone (a one-byte budget: the sidecar half then takes nothing).
+      await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget(Date.now, { maxBytes: 1 }));
+      expect(IX.count(db, 'sidecar_seen'), 'CONTROL: the transcript only').toBe(0);
+      const pk = CP39.pkOf(db);
+      const first = db.prepare(`SELECT length(b.z) AS n FROM entries e JOIN blobs b ON b.blob_id = e.blob_id
+        WHERE e.transcript_pk = ? AND e.type = 'user' AND b.z IS NOT NULL ORDER BY e.entry_id LIMIT 1`).get(pk) as { n: number };
+      expect(first.n, 'CONTROL: the first row has a compressed size to charge').toBeGreaterThan(0);
+      const ctx = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 180_000, ids);
+      // The run has room; its ingest rung's byte ceiling is one byte, which the first row's charge reaches.
+      const run = S.newBudget(() => 0, { maxMs: 1_000, maxBytes: 1_000_000 });
+      const rung = S.budgetRung(run, { maxMs: 1_000, maxBytes: 1 });
+      const cut = await S.ingestSidecars(db, ctx, rung, [IX.U]);
+      expect(cut, 'the walk took the first row, was spent by its bytes, and stopped; no sidecar byte was read').toEqual({ bytes: 0, complete: false, paused: false, walked: 1 });
+      expect(run.bytes, "the walk's charge reached the run through the rung: the first row's compressed size").toBe(first.n);
+      expect(S.budgetLeft(rung), 'the rung is spent').toBe(false);
+      expect(S.budgetLeft(run), 'CONTROL: the run itself still has room').toBe(true);
+    } finally { db.close(); }
+  });
+});
